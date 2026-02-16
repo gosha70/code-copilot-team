@@ -1,0 +1,42 @@
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors / IDEs
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-workspace
+*.sublime-project
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Languages / Runtimes
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+target/
+build/
+dist/
+*.class
+*.jar
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# Generated docs (keep source only)
+README.html
