@@ -1,5 +1,3 @@
----
-
 # **🎛️ Claude Code Setup Cookbook**
 
 *(Optimized for Multi-Phase SDLC \+ Token Economy \+ Shared Rules)*
