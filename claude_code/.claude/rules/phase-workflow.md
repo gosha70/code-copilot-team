@@ -1,59 +1,49 @@
-# Phase Workflow
+# Phase Workflow — Post-Phase Verification
 
-After completing each build phase or increment:
+Standardized steps to complete after each build phase, regardless of stack.
 
-1. **Type/lint check**: Run `tsc --noEmit` and `npm run lint` — zero errors required
+## Post-Phase Steps (Every Phase)
 
-2. **Build verification**: Run `npm run dev` to verify app compiles
-   - Catches missing runtime dependencies
-   - Verifies imports resolve correctly
-   - Detects configuration errors
-   - More thorough than type-check alone
+1. **Type/lint check.** Run the project's type checker and linter. Zero errors required before proceeding.
+   - Examples: `tsc --noEmit`, `mypy src/`, `mvn compile`, `go vet ./...`
+   - Examples: `npm run lint`, `ruff check .`, `mvn checkstyle:check`
 
-3. **Present summary**: Summarize changes to the user for **manual review** before proceeding
-   - What was built (files created/modified)
-   - Key decisions made
-   - Any deviations from original plan
+2. **Build verification.** Run the dev server or build command. This catches missing dependencies, import resolution issues, and config errors that static analysis misses.
+   - Examples: `npm run dev`, `python manage.py runserver`, `mvn spring-boot:run`, `go run .`
 
-4. **Manual testing gate**: Wait for the user to **manually test** the changes (if applicable)
-   - User verifies UI renders correctly
-   - User tests interactive features
-   - User confirms business logic works as expected
+3. **Present summary.** List files created/modified, key decisions made, and any deviations from the plan.
 
-5. **Dependency audit**: Check for missing runtime dependencies and install if needed
-   - Review console errors during `npm run dev`
-   - Check for "Module not found" errors
-   - Install peer dependencies explicitly
+4. **Manual testing gate.** User verifies UI, interactive features, and business logic. Automated tests don't replace human judgment on UX.
 
-6. **Commit gate**: Ask the user whether to **commit** (provide suggested commit message + description)
-   - Follow conventional commit format
-   - Include context on what changed and why
-   - List any breaking changes or migration steps
+5. **Dependency audit.** Review console output for errors. Check for missing runtime dependencies, unresolved peer dependencies, or deprecation warnings.
 
-7. **Wait for approval**: Do **not** start the next phase until the user confirms
-   - User may want to review code directly
-   - User may want to test more thoroughly
-   - User may have follow-up changes before moving forward
+6. **Commit gate.** Ask the user before committing. Suggest a conventional commit message with context:
+   ```
+   feat(phase-2): implement user service and auth routes
+
+   - Added user registration and login endpoints
+   - Integrated JWT token generation
+   - Connected to PostgreSQL via ORM
+   ```
+
+7. **Wait for approval.** Do not start the next phase until the user confirms this one is complete.
 
 ## Phase 1 Checklist (Scaffolding)
 
-Before delegating to parallel agents:
+- [ ] Package/dependency installation completes without errors
+- [ ] Type checker passes
+- [ ] Linter passes
+- [ ] Environment config created (`.env`, `application.yml`, etc.) from example/template
+- [ ] Dev server builds and runs successfully
+- [ ] All config files valid (build config, lint config, test config, etc.)
 
-- [ ] `npm install` completes without errors
-- [ ] `npx tsc --noEmit` passes
-- [ ] `npm run lint` passes
-- [ ] **`.env` file created** from `.env.example`
-- [ ] **`npm run dev` builds successfully** (even if some features are stubbed)
-- [ ] All config files valid (tsconfig, eslint, tailwind, etc.)
-
-## Phase N Checklist (General)
-
-After any phase with parallel agents:
+## Phase N Checklist (General Build Phase)
 
 - [ ] All agents completed successfully
-- [ ] `npx tsc --noEmit` passes across entire codebase
-- [ ] `npm run lint` passes
-- [ ] `npm run dev` builds and serves without crashes
+- [ ] Type checker passes across the entire codebase
+- [ ] Linter passes
+- [ ] Dev server builds and serves without crashes
 - [ ] Manual smoke test completed (if applicable)
-- [ ] All new dependencies installed
+- [ ] All new dependencies installed and verified
+- [ ] Integration between agents verified (e.g., frontend calls backend APIs)
 - [ ] Ready for commit

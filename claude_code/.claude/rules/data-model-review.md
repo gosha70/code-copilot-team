@@ -1,58 +1,54 @@
-# Data Model Review Protocol
+# Data Model Review Gate
 
-Before implementing a data model from a design doc (before Phase 2):
+Review gate checklist before implementing data models. This gate occurs after planning/scaffolding, before delegating build tasks to agents.
 
-## Review Gate Checklist
+## Review Checklist
 
-1. **Review entity relationships** with user:
-   - "Does Customer need an Address entity for delivery?"
-   - "Should we split `name` into `firstName`/`lastName`?"
-   - "Are there any missing entities or fields?"
-   - "Do we need audit trails (createdBy, updatedBy)?"
-   - "Which entities need soft delete (deletedAt)?"
+Before any agent writes entity code or migration scripts:
 
-2. **Confirm field granularity**:
-   - Full name vs first/last name split
-   - Single address line vs street/city/state/zip
-   - Phone number formatting (single field vs country code + number)
-   - Date vs datetime precision
+1. **Review entity relationships with user.**
+   - Are all entities identified? Are names unambiguous?
+   - Are missing fields accounted for (audit trails, soft deletes)?
+   - Have edge cases been discussed (nullable fields, optional relationships)?
 
-3. **Validate relationships**:
-   - One-to-many vs many-to-many
-   - Nullable foreign keys (optional relations)
-   - Cascade delete vs set null vs restrict
-   - Self-referential relationships (parent/child)
+2. **Confirm field granularity.**
+   - Name fields: single `fullName` vs split `firstName`/`lastName`?
+   - Address fields: flat on parent entity vs separate `Address` entity?
+   - Phone/contact: string vs structured (country code, type)?
+   - Date precision: date-only vs datetime vs datetime with timezone?
 
-4. **Standard fields on all entities**:
-   - `id` (cuid or uuid)
-   - `createdAt` (DateTime)
-   - `updatedAt` (DateTime)
-   - `deletedAt` (DateTime, nullable, for soft delete)
+3. **Validate relationships.**
+   - One-to-many vs many-to-many: confirmed with user?
+   - Nullable foreign keys: intentional or missing constraint?
+   - Cascade rules: what happens when parent is deleted?
+   - Self-referential relations: are they needed (e.g., categories, org charts)?
 
-5. **Update both Prisma schema AND system design doc in sync** when changes are made
-   - Never let schema drift from documentation
-   - System design doc is source of truth for stakeholders
-   - Prisma schema is source of truth for implementation
+4. **Standard fields on all entities.**
+   - `id` — primary key (UUID or auto-increment, per project convention)
+   - `createdAt` — timestamp, auto-set on creation
+   - `updatedAt` — timestamp, auto-set on modification
+   - `deletedAt` — nullable timestamp for soft delete (if applicable)
 
-6. **Prevent mid-phase schema changes** that ripple across multiple agents:
-   - Resolve ambiguities upfront
-   - Get user sign-off on data model
-   - Lock schema before delegating to parallel agents
-   - If changes are needed mid-phase, pause all agents and re-sync
+5. **Keep schema and design documentation in sync.**
+   - Schema file (ORM schema, SQL DDL, or migration scripts) must match the design doc.
+   - If one changes, the other must be updated before delegating further work.
+
+6. **Prevent mid-phase schema changes.**
+   - Once agents begin parallel work, schema changes ripple across all agents.
+   - If a schema change is unavoidable: pause all agents, update schema, regenerate ORM client, then resume.
 
 ## Common Data Model Pitfalls
 
-| Issue | Example | Solution |
-|-------|---------|----------|
-| **Ambiguous names** | `name` field without context | `firstName`/`lastName` or `fullName` with clear semantics |
-| **Missing address** | Customer without delivery address | Add `Address` entity with 1:N relationship |
-| **Flat structure** | All order data in one table | Normalize: `Order` + `OrderItem` + `InventoryBatch` |
-| **No audit trail** | Can't track who changed what | Add `createdBy`, `updatedBy`, or `AuditLog` entity |
-| **Hard delete** | Lost data when records deleted | Use soft delete with `deletedAt` timestamp |
-| **No indexes** | Slow queries on foreign keys | Add `@@index` on FK fields and filter columns |
+| Pitfall | Fix |
+|---------|-----|
+| Ambiguous names (`name`, `value`, `data`) | Use specific names: `firstName`, `productPrice`, `orderStatus` |
+| Missing address entity | Add `Address` entity with one-to-many relationship to parent |
+| Flat structure with too many fields | Normalize into separate entities connected by foreign keys |
+| No audit trail | Add `createdBy`, `updatedBy` fields, or a separate `AuditLog` entity |
+| Hard delete only | Use soft delete with `deletedAt` timestamp; filter in queries |
+| No indexes on foreign keys | Add indexes on all FK fields and commonly filtered/sorted columns |
+| Enum sprawl | Use a status/type table for values that change frequently |
 
 ## Timing
 
-This gate happens **after Phase 1 scaffolding, before delegating Phase 2 work**.
-
-Phase 1 sets up the project structure. Phase 2 implements the data model and routers. The review gate prevents wasted work and reduces thrash.
+This gate runs after Phase 1 (scaffolding/planning) and before Phase 2 (parallel agent delegation). Never skip it — mid-phase schema corrections cost more than upfront review.

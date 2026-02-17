@@ -20,9 +20,9 @@ Each agent spawned by the Task tool gets its own output file named by agent ID (
 ls -lh /private/tmp/claude-{session-id}/{project-path}/tasks/
 ```
 
-Example:
+Example (replace placeholders with your values):
 ```bash
-ls -lh /private/tmp/claude-501/-Users-gosha-dev-repo-bread-salt-bakery/tasks/
+ls -lh /private/tmp/claude-{uid}/-Users-yourname-dev-my-project/tasks/
 ```
 
 ### View a specific agent's full transcript
@@ -31,20 +31,10 @@ ls -lh /private/tmp/claude-501/-Users-gosha-dev-repo-bread-salt-bakery/tasks/
 cat /private/tmp/claude-{session-id}/{project-path}/tasks/{agentId}.output
 ```
 
-Example:
-```bash
-cat /private/tmp/claude-501/-Users-gosha-dev-repo-bread-salt-bakery/tasks/a0b6bdb.output
-```
-
 ### Search across all agents for a keyword
 
 ```bash
 grep -r "keyword" /private/tmp/claude-{session-id}/{project-path}/tasks/
-```
-
-Example:
-```bash
-grep -r "Prisma" /private/tmp/claude-501/-Users-gosha-dev-repo-bread-salt-bakery/tasks/
 ```
 
 ### Tail a running agent's output in real-time
@@ -52,6 +42,15 @@ grep -r "Prisma" /private/tmp/claude-501/-Users-gosha-dev-repo-bread-salt-bakery
 ```bash
 tail -f /private/tmp/claude-{session-id}/{project-path}/tasks/{agentId}.output
 ```
+
+## Finding Your Session ID
+
+The session ID is typically your Unix UID. Find it with:
+```bash
+ls /private/tmp/ | grep claude-
+```
+
+The project path is your working directory with `/` replaced by `-` and a leading `-`.
 
 ## Archiving Traces Permanently
 
@@ -64,21 +63,13 @@ To archive permanently:
 mkdir -p doc_internal/agent-traces
 
 # Copy all traces
-cp /private/tmp/claude-{session-id}/{project-path}/tasks/*.output doc_internal/agent-traces/
+cp /private/tmp/claude-{session-id}/{project-path}/tasks/*.output \
+   doc_internal/agent-traces/
 
 # Optionally rename with timestamps
 for f in doc_internal/agent-traces/*.output; do
-  mv "$f" "${f%.output}-$(date +%Y%m%d-%H%M%S).output"
+    mv "$f" "${f%.output}-$(date +%Y%m%d-%H%M%S).output"
 done
-```
-
-Or archive with context:
-
-```bash
-# Create a session archive
-mkdir -p doc_internal/agent-traces/session-$(date +%Y%m%d-%H%M%S)
-cp /private/tmp/claude-{session-id}/{project-path}/tasks/*.output \
-   doc_internal/agent-traces/session-$(date +%Y%m%d-%H%M%S)/
 ```
 
 ## What's in a Trace File
@@ -94,35 +85,15 @@ Each agent transcript includes:
 
 ## Use Cases
 
-### Debugging agent behavior
-
-When an agent produces unexpected output, review its trace to see:
-- What files it read
-- What assumptions it made
-- Where it diverged from instructions
-
-### Extracting generated code
-
-If you want to review code an agent wrote without checking git diffs:
-```bash
-grep -A 20 "Write tool" /path/to/agent.output
-```
-
-### Understanding agent reasoning
-
-Traces show the agent's internal thought process and decision-making.
-
-### Documenting architectural decisions
-
-Capture the rationale behind design choices made during agent execution.
-
-### Training and retrospectives
-
-Review traces after a session to understand what worked well and what didn't.
+- **Debugging agent behavior** — see what files it read, what assumptions it made, where it diverged from instructions.
+- **Extracting generated code** — review code an agent wrote without checking git diffs.
+- **Understanding agent reasoning** — traces show the agent's thought process and decision-making.
+- **Documenting architectural decisions** — capture the rationale behind design choices.
+- **Training and retrospectives** — review traces to understand what worked well and what didn't.
 
 ## Best Practices
 
-1. **Archive after major phases** — don't rely on temporary files
-2. **Include session metadata** — date, phase number, objective
-3. **Add to .gitignore if sensitive** — traces may contain credentials or PII
-4. **Review before sharing** — sanitize any secrets or sensitive data
+1. **Archive after major phases** — don't rely on temporary files.
+2. **Include session metadata** — date, phase number, objective.
+3. **Add to .gitignore if sensitive** — traces may contain credentials or PII.
+4. **Review before sharing** — sanitize any secrets or sensitive data.

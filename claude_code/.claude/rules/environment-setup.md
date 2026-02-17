@@ -1,114 +1,67 @@
 # Environment Setup Protocol
 
-## .env File Management
+Rules for managing environment variables, secrets, and local configuration across any stack.
 
-- **Always create `.env` from `.env.example`** at project start (Phase 1)
-- `.env` must exist before first `npm run dev` or services requiring env validation will crash
-- Add `.env` to `.gitignore` (verify it's excluded)
-- Validate `.env` completeness before running agents that depend on database/auth/email
+## Core Principle
+
+Every project should have a template/example config file checked into source control, and the actual config file (with real values) gitignored. The developer copies the template and fills in real values locally.
+
+## Common Patterns by Stack
+
+| Stack | Template File | Actual File | Gitignored |
+|---|---|---|---|
+| Node.js / Python | `.env.example` | `.env` | `.env` |
+| Java / Spring | `application-example.yml` | `application.yml` | `application.yml` |
+| Go | `config.example.yaml` | `config.yaml` | `config.yaml` |
+| Docker | `docker-compose.override.example.yml` | `docker-compose.override.yml` | `docker-compose.override.yml` |
 
 ## Phase 1: Initial Setup
 
-After scaffolding the project, immediately:
+During scaffolding, before the first build/run:
 
-1. Copy example file:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Fill in **minimum required values** for local development:
-   - `DATABASE_URL` — local PostgreSQL connection string
-   - `NEXTAUTH_SECRET` — generate with `openssl rand -base64 32`
-   - `NEXTAUTH_URL` — `http://localhost:3000` (or your dev port)
-   - Email vars can use placeholders initially if not testing auth
-
-3. Test that env validation passes:
-   ```bash
-   npm run dev
-   ```
-   If `env.ts` validation fails, add missing vars to `.env`
+1. **Copy the template** — `cp .env.example .env` (or equivalent for your stack).
+2. **Fill minimum required values** — database URL, secret keys, API credentials.
+3. **Verify .gitignore** — confirm the actual config file is excluded.
+4. **Test the build** — run the dev server to validate config is loaded correctly.
 
 ## Environment Variable Validation
 
-Use zod to validate env vars at startup:
+Always validate required environment variables at startup. Fail fast with clear error messages rather than crashing with cryptic errors later.
 
-```typescript
-// src/lib/env.ts
-import { z } from "zod";
+```
+# Pseudocode — adapt to your language/framework
 
-const envSchema = z.object({
-  DATABASE_URL: z.string().url(),
-  NEXTAUTH_URL: z.string().url(),
-  NEXTAUTH_SECRET: z.string().min(1),
-  ADMIN_EMAIL: z.string().email(),
-  EMAIL_SERVER: z.string().min(1),
-  EMAIL_FROM: z.string().min(1),
-});
+required_vars = ["DATABASE_URL", "SECRET_KEY", "API_BASE_URL"]
 
-export const env = envSchema.parse(process.env);
+for var in required_vars:
+    if var not set or empty:
+        raise Error("Missing required environment variable: {var}")
 ```
 
-This crashes fast with clear error messages if env vars are missing or invalid.
+Most frameworks have libraries for this (e.g., Zod + dotenv for Node, pydantic-settings for Python, Spring @ConfigurationProperties for Java).
 
 ## Security Best Practices
 
-### Local Development
+**Local development:**
+- Use real credentials for local services (database, SMTP, etc.).
+- Never commit the actual config file.
+- Use app-specific passwords where available (not your personal account password).
 
-- `.env` contains real credentials for your local database/email
-- Never commit `.env` to git (verify `.gitignore` includes `.env*`)
-- Use app-specific passwords (Gmail App Password, not your real password)
+**Production:**
+- Never use `.env` files in production. Use the platform's secret management (e.g., cloud provider secrets manager, Kubernetes secrets, CI/CD variables).
+- Rotate credentials periodically.
+- Use least-privilege service accounts.
 
-### Production Deployment
-
-- **Never put production secrets in `.env` files**
-- Use hosting platform environment variable UI (Vercel, AWS, Railway, etc.)
-- Rotate secrets regularly
-- Use different values per environment (dev/staging/production)
-
-### Sharing with Team
-
-- Keep `.env.example` updated with all required var names
-- Use placeholder values in `.env.example` (not real secrets)
-- Document where to get real values (e.g., "Get DATABASE_URL from team lead")
-
-## Common Environment Variables
-
-| Variable | Purpose | Example |
-|----------|---------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@localhost:5432/dbname` |
-| `NEXTAUTH_SECRET` | NextAuth JWT signing key | `openssl rand -base64 32` |
-| `NEXTAUTH_URL` | Public URL of your app | `http://localhost:3000` (dev) or `https://example.com` (prod) |
-| `ADMIN_EMAIL` | Admin user email for auth gate | `admin@example.com` |
-| `EMAIL_SERVER` | SMTP server for sending emails | `smtp://user:pass@smtp.gmail.com:587` |
-| `EMAIL_FROM` | Sender email address | `noreply@example.com` |
-
-## Gmail SMTP Setup
-
-For Gmail, use an App Password (not your regular password):
-
-1. Enable 2-Step Verification on your Google account
-2. Go to https://myaccount.google.com/apppasswords
-3. Create an App Password for "Mail"
-4. Use the 16-character password in `EMAIL_SERVER`:
-   ```
-   EMAIL_SERVER="smtp://your.email@gmail.com:APP_PASSWORD@smtp.gmail.com:587"
-   EMAIL_FROM="your.email@gmail.com"
-   ```
+**Team sharing:**
+- Keep the template file updated with all required variables (use placeholder values).
+- Document where to obtain each credential (e.g., "Get from team password manager" or "Generate at https://...").
+- Never share secrets via chat, email, or committed files.
 
 ## Troubleshooting
 
-### "Module not found" errors on startup
-
-- Missing runtime dependency (e.g., `nodemailer` for NextAuth email)
-- Install the missing package: `npm install <package>`
-
-### "Environment variable validation failed"
-
-- Missing var in `.env`
-- Add the missing var with a valid value
-
-### "Database connection refused"
-
-- PostgreSQL not running: `brew services start postgresql@16`
-- Wrong credentials in `DATABASE_URL`
-- Database doesn't exist: `createdb <dbname>`
+| Symptom | Likely Cause | Fix |
+|---------|-------------|-----|
+| App crashes on startup | Missing required env var | Check template file, add missing vars to local config |
+| "Connection refused" errors | Service not running or wrong credentials | Verify the service is running, check URL and credentials |
+| "Module not found" at runtime | Missing runtime dependency | Install the dependency (may not be caught by type checkers) |
+| Auth/login fails | Missing or incorrect secret key | Regenerate and set the secret key in local config |

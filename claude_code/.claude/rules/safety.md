@@ -18,27 +18,9 @@ Non-negotiable safety constraints for all sessions.
 
 ## Password Storage
 
-- **Never store plain passwords** in the database
-- Always hash passwords before storing using `bcrypt` or `argon2`:
-  ```typescript
-  import bcrypt from 'bcryptjs';
-
-  // On registration
-  const passwordHash = await bcrypt.hash(plainPassword, 10);
-
-  // On login
-  const isValid = await bcrypt.compare(plainPassword, storedHash);
-  ```
-- Use a salt rounds value of 10+ for bcrypt
-- Consider using NextAuth with email magic links to avoid password storage entirely
-
-## Environment Variables
-
-- `.env` files are safe for **local development only** (never committed to git)
-- **Production**: use hosting platform env var UI (Vercel, AWS, Railway, etc.)
-- App-specific passwords (Gmail App Password, OAuth tokens) are single-use and less sensitive than account passwords
-- Always validate env vars at startup with zod or similar
-- Use different secrets per environment (dev/staging/production)
+- Never store plain passwords in the database.
+- Always hash passwords before storing using bcrypt, argon2, or equivalent.
+- Consider passwordless auth (magic links, OAuth, passkeys) to avoid password storage entirely.
 
 ## Input Validation
 

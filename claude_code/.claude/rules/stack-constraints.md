@@ -1,37 +1,47 @@
 # Stack Constraints
 
-## Prisma Version Management
+Rules for managing dependency versions and technology choices across all project types.
 
-- **Use Prisma 6.x (stable)** — avoid 7.x until production-ready
-- Always use traditional `datasource` format:
-  ```prisma
-  datasource db {
-    provider = "postgresql"
-    url      = env("DATABASE_URL")
-  }
-  ```
-- Avoid early-access features that break CLI tooling
-- If Prisma 7 is installed, downgrade: `npm install prisma@6.9.0 @prisma/client@6.9.0`
+## Version Pinning Policy
+
+When starting a new project, prefer **stable, well-documented versions** over bleeding-edge:
+
+- **ORM / database tools** — use latest stable, not pre-release (e.g., avoid beta/canary/rc).
+- **Framework** — use LTS or latest stable release.
+- **Language runtime** — use latest stable (not beta/rc).
+- **UI libraries** — use latest stable release.
+
+Check package documentation for "stable" vs "experimental" badges before adopting.
 
 ## Dependency Installation Protocol
 
 When agents create code requiring new packages:
 
-1. **Agent should install dependencies as part of their task** (if they have Bash permission)
-2. **If agent lacks permission**, pause and install manually before continuing
-3. **Always test build after new dependencies**: run `npm run dev`, not just `tsc --noEmit`
-4. Common missing peer deps:
-   - `nodemailer` (NextAuth email provider)
-   - `bcrypt` / `bcryptjs` (password hashing)
-   - `@types/*` packages for TypeScript types
+1. **Agents should install dependencies as part of their task** — if they have Bash permission, they must install what they import.
+2. **If an agent lacks permission**, pause and instruct the user to install manually before continuing.
+3. **Always test the build after new dependencies** — run the dev server, not just the type checker. Static analysis doesn't catch missing runtime packages.
+4. **Check for peer dependency warnings** — these often surface as runtime crashes, not compile errors.
 
-## Technology Version Pinning
+## When to Downgrade
 
-When starting a new project, prefer stable, well-documented versions over bleeding-edge:
+Downgrade from a newer version to a stable one when:
 
-- **Prisma**: 6.x (not 7.x)
-- **Next.js**: LTS or latest stable (avoid canary unless required)
-- **React**: Stable release
-- **TypeScript**: Latest stable (not beta/rc)
+- CLI or build tooling breaks (common with major version bumps of ORMs, bundlers, and frameworks).
+- Runtime behavior changes unexpectedly from documented behavior.
+- Community plugins/extensions don't yet support the new version.
+- Error messages reference features marked "experimental" or "early access."
 
-Check package documentation for "stable" vs "experimental" badges before adopting.
+Document the version pin and the reason in the project CLAUDE.md or a `DECISIONS.md` so future contributors know why.
+
+## Stack-Specific Notes
+
+Add version constraints relevant to your project in the project-level CLAUDE.md. For example:
+
+```markdown
+## Stack Constraints
+- ORM: Prisma 6.x (7.x has breaking CLI changes as of Feb 2026)
+- Runtime: Node 20 LTS (not 22 — some deps don't support it yet)
+- Framework: Next.js 14 stable (not 15 canary)
+```
+
+This keeps global rules generic while allowing each project to pin its own versions.
