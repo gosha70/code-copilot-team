@@ -4,7 +4,13 @@ Reusable, opinionated configuration for AI-assisted coding with multi-agent team
 
 Built for **Claude Code** as the reference implementation, with portable conventions for Cursor, GitHub Copilot, Windsurf, Aider, and local LLMs.
 
+> 📖 **Deep dive:** [Stop Fighting AI Agents and Build a Reusable Multi-Agent Dev Environment](https://www.linkedin.com/pulse/stop-fighting-ai-agents-build-reusable-multi-agent-dev-george-ivan-mxwbe) — the full story behind this project, lessons learned from 13+ real build sessions, and why every rule exists.
+
 ---
+
+## Why This Exists
+
+Every rule in this repo is failure-driven — it exists because we hit the specific failure it prevents, often more than once. After analyzing 13 sessions of a real project build, we identified six recurring patterns: dependency breaks, agents ignoring conventions, context window exhaustion, schema drift during parallel builds, agents not asking clarifying questions, and commit granularity issues. This setup prevents all of them.
 
 ## What You Get
 
@@ -64,11 +70,20 @@ claude-code ~/projects/existing-api
 ```
 ~/.claude/CLAUDE.md              ← Global agent manifest (base)
 ~/.claude/rules/*.md             ← Global modular rules (always loaded)
-  ├── coding-standards.md
-  ├── safety.md
-  ├── token-efficiency.md
-  ├── copilot-conventions.md
-  └── agent-team-protocol.md
+  ├── agent-team-protocol.md     Three-phase workflow, delegation rules
+  ├── clarification-protocol.md  Ask before implementing ambiguous requirements
+  ├── coding-standards.md        SOLID, quality gates, prohibited patterns
+  ├── copilot-conventions.md     Cross-tool portable conventions
+  ├── data-model-review.md       Review gate before building data models
+  ├── environment-setup.md       Environment and config verification
+  ├── integration-testing.md     Test integration points early
+  ├── phase-workflow.md          Phase transition rules and boundaries
+  ├── pre-build-verification.md  Install → type-check → run after every change
+  ├── safety.md                  Destructive action guards, secrets policy
+  ├── session-splitting.md       One phase per session, context boundaries
+  ├── stack-constraints.md       Stack version and compatibility guards
+  ├── team-lead-efficiency.md    Limit agents, poll frequency, no re-work
+  └── token-efficiency.md        Diff-over-rewrite, context economy
 ./CLAUDE.md                      ← Project-level (overrides global)
 ./.claude/commands/*.md          ← Project slash commands
 ./CLAUDE.local.md                ← Personal overrides (gitignored)
@@ -103,20 +118,35 @@ The conventions in `~/.claude/rules/copilot-conventions.md` are tool-agnostic:
 ```
 README.md                                ← You are here
 LICENSE                                  ← MIT
+CONTRIBUTING.md                          ← PR guidelines
 claude_code/
   claude-code                            ← tmux launcher script
   claude-setup.sh                        ← One-time setup (creates ~/.claude/)
   .claude/
     CLAUDE.md                            ← Global agent manifest (reference copy)
-    rules/
-      coding-standards.md                ← SOLID, quality gates, prohibited patterns
-      safety.md                          ← Destructive action guards, secrets policy
-      token-efficiency.md                ← Diff-over-rewrite, context economy
-      copilot-conventions.md             ← Cross-tool conventions
+    rules/                               ← 14 modular rule files
       agent-team-protocol.md             ← Three-phase workflow, delegation rules
-  docs/
+      clarification-protocol.md          ← Ask before implementing ambiguity
+      coding-standards.md                ← SOLID, quality gates, prohibited patterns
+      copilot-conventions.md             ← Cross-tool conventions
+      data-model-review.md               ← Review gate for data models
+      environment-setup.md               ← Environment verification
+      integration-testing.md             ← Test integration points early
+      phase-workflow.md                  ← Phase transition boundaries
+      pre-build-verification.md          ← Verify after every change
+      safety.md                          ← Destructive action guards, secrets
+      session-splitting.md               ← Context boundaries, one phase per session
+      stack-constraints.md               ← Version and compatibility guards
+      team-lead-efficiency.md            ← Agent limits, poll frequency
+      token-efficiency.md                ← Diff-over-rewrite, context economy
+  docs/                                  ← 8 reference documents
+    agent-traces.md                      ← How to find and archive agent transcripts
     claude-code-setup-cookbook.md         ← Detailed cookbook
     claude-config-guide.md               ← Configuration reference
+    common-pitfalls.md                   ← Cross-cutting issues and fixes
+    delegation-best-practices.md         ← When and how to delegate to agents
+    error-reporting-template.md          ← Standardized error report format
+    phase-recap-template.md              ← End-of-phase handoff template
     session-management.md                ← Session commands cheat sheet
 ```
 
@@ -125,6 +155,11 @@ claude_code/
 - **[Setup Cookbook](claude_code/docs/claude-code-setup-cookbook.md)** — deep-dive into every configuration option
 - **[Config Guide](claude_code/docs/claude-config-guide.md)** — templates, agent teams, and workflow reference
 - **[Session Management](claude_code/docs/session-management.md)** — commands cheat sheet for daily use
+- **[Delegation Best Practices](claude_code/docs/delegation-best-practices.md)** — when and how to delegate to sub-agents
+- **[Common Pitfalls](claude_code/docs/common-pitfalls.md)** — cross-cutting issues and solutions
+- **[Agent Traces](claude_code/docs/agent-traces.md)** — locating, reading, and archiving agent transcripts
+- **[Error Reporting Template](claude_code/docs/error-reporting-template.md)** — standardized format for bug reports
+- **[Phase Recap Template](claude_code/docs/phase-recap-template.md)** — end-of-phase handoff checklist
 
 ## Contributing
 
