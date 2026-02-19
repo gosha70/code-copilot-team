@@ -98,14 +98,14 @@ Don't just test each agent's output in isolation. Verify integration points:
 # Pseudocode — adapt to your stack
 
 # Step 1: Define contract (you or architecture agent)
-CreateOrderInput:
-    items: list of {productId: string, quantity: number}
-    customerId: optional string
-    shippingAddressId: optional string
+CreateItemInput:
+    entries: list of {itemId: string, quantity: number}
+    ownerId: optional string
+    metadata: optional object
 
 # Step 2: Delegate
-Backend agent → implements orderService.createOrder(input)
-Frontend agent → implements order form calling the API
+Backend agent → implements service method matching the contract
+Frontend agent → implements form/UI calling the API
 
 # Step 3: Validate they work together
 ```

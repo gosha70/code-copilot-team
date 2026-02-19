@@ -12,9 +12,9 @@ Before any agent writes entity code or migration scripts:
    - Have edge cases been discussed (nullable fields, optional relationships)?
 
 2. **Confirm field granularity.**
-   - Name fields: single `fullName` vs split `firstName`/`lastName`?
-   - Address fields: flat on parent entity vs separate `Address` entity?
-   - Phone/contact: string vs structured (country code, type)?
+   - Compound values: single combined field vs split into components? (e.g., `displayName` vs separate parts)
+   - Nested data: flat fields on parent entity vs separate related entity?
+   - Contact/reference fields: plain string vs structured object (with type, label, metadata)?
    - Date precision: date-only vs datetime vs datetime with timezone?
 
 3. **Validate relationships.**
@@ -41,8 +41,8 @@ Before any agent writes entity code or migration scripts:
 
 | Pitfall | Fix |
 |---------|-----|
-| Ambiguous names (`name`, `value`, `data`) | Use specific names: `firstName`, `productPrice`, `orderStatus` |
-| Missing address entity | Add `Address` entity with one-to-many relationship to parent |
+| Ambiguous names (`name`, `value`, `data`) | Use specific, descriptive names: `accountBalance`, `taskStatus`, `eventDate` |
+| Flat structure needing normalization | Extract into a separate entity with one-to-many relationship to parent |
 | Flat structure with too many fields | Normalize into separate entities connected by foreign keys |
 | No audit trail | Add `createdBy`, `updatedBy` fields, or a separate `AuditLog` entity |
 | Hard delete only | Use soft delete with `deletedAt` timestamp; filter in queries |

@@ -27,7 +27,7 @@ Cross-cutting issues that arise during multi-agent builds, regardless of stack.
 | Mid-phase schema changes | Design doc missing entity details | Data model review gate before build phase | Pause agents, update schema, regenerate ORM client, resume |
 | Schema migration fails | Database doesn't exist or permissions wrong | Test connection before running migrations | Create database, fix credentials |
 | ORM/code generation fails | Schema syntax error or version incompatibility | Validate schema before generation | Fix schema errors, check tool version |
-| Ambiguous field names | Generic names like "name", "value", "data" | Review field granularity in data model gate | Use specific names: `firstName`, `productPrice`, `orderStatus` |
+| Ambiguous field names | Generic names like "name", "value", "data" | Review field granularity in data model gate | Use specific, descriptive names: `accountBalance`, `taskStatus`, `eventDate` |
 
 ## Agent Coordination
 
