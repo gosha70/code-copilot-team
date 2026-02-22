@@ -1269,10 +1269,28 @@ if [[ -d "$HOOKS_SOURCE" ]]; then
     cp "$HOOKS_SOURCE/notify.sh" "$HOOKS_TARGET/notify.sh"
     cp "$HOOKS_SOURCE/verify-after-edit.sh" "$HOOKS_TARGET/verify-after-edit.sh"
     cp "$HOOKS_SOURCE/verify-on-stop.sh" "$HOOKS_TARGET/verify-on-stop.sh"
+    cp "$HOOKS_SOURCE/auto-format.sh" "$HOOKS_TARGET/auto-format.sh"
+    cp "$HOOKS_SOURCE/protect-files.sh" "$HOOKS_TARGET/protect-files.sh"
     chmod +x "$HOOKS_TARGET"/*.sh
     echo "[done] Installed hooks to $HOOKS_TARGET"
 else
     echo "[skip] Hook scripts not found at $HOOKS_SOURCE"
+fi
+
+# ══════════════════════════════════════════════════════════════
+# 10b. GLOBAL AGENTS
+# ══════════════════════════════════════════════════════════════
+
+AGENTS_SOURCE="$(dirname "$0")/.claude/agents"
+AGENTS_TARGET="$CLAUDE_DIR/agents"
+
+mkdir -p "$AGENTS_TARGET"
+
+if [[ -d "$AGENTS_SOURCE" ]]; then
+    cp "$AGENTS_SOURCE"/*.md "$AGENTS_TARGET/" 2>/dev/null || true
+    echo "[done] Installed agents to $AGENTS_TARGET"
+else
+    echo "[skip] Agent definitions not found at $AGENTS_SOURCE"
 fi
 
 # ══════════════════════════════════════════════════════════════
@@ -1282,6 +1300,18 @@ fi
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 HOOKS_CONFIG='{
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/protect-files.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",
@@ -1302,6 +1332,11 @@ HOOKS_CONFIG='{
             "type": "command",
             "command": "~/.claude/hooks/verify-after-edit.sh",
             "timeout": 30000
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/auto-format.sh",
+            "timeout": 15000
           }
         ]
       }
@@ -1364,9 +1399,15 @@ echo "  claude-code init java-enterprise ~/projects/my-app"
 echo "  claude-code ~/projects/my-app                 # start Claude session"
 echo ""
 echo "Global hooks installed (active in all projects):"
-echo "  - verify-on-stop.sh   — runs tests when Claude finishes"
+echo "  - verify-on-stop.sh    — runs tests when Claude finishes"
 echo "  - verify-after-edit.sh — runs type checker after source edits"
+echo "  - auto-format.sh       — runs formatter after source edits"
+echo "  - protect-files.sh     — blocks edits to .env, *.lock, .git/, credentials"
 echo "  - notify.sh            — desktop notifications when Claude needs input"
+echo ""
+echo "Custom agents installed:"
+echo "  - code-simplifier      — post-build code cleanup (read + edit)"
+echo "  - verify-app           — end-to-end project verification (read + bash)"
 echo ""
 echo "Each project now includes:"
 echo "  - CLAUDE.md with stack, conventions, and Agent Team config"

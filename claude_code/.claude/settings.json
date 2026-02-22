@@ -1,5 +1,17 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/protect-files.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",
@@ -20,6 +32,11 @@
             "type": "command",
             "command": "~/.claude/hooks/verify-after-edit.sh",
             "timeout": 30000
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/auto-format.sh",
+            "timeout": 15000
           }
         ]
       }
