@@ -15,8 +15,9 @@ Every rule in this repo is failure-driven — it exists because we hit the speci
 ## What You Get
 
 - **Global rules** (`~/.claude/rules/`) — coding standards, safety guards, token efficiency, agent team protocol, and cross-tool conventions that load automatically in every session.
-- **6 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
-- **Three-phase workflow** — Plan (single agent, high-capability model) → Build (team delegation, fast model) → Review (single agent, high-capability model).
+- **Hooks** (`~/.claude/hooks/`) — shell scripts that run automatically on Claude Code lifecycle events: test verification on stop, type checking after edits, desktop notifications. Auto-detect your project's stack.
+- **7 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
+- **Three-phase workflow** — Plan (single agent, high-capability model) → Build (team delegation, fast model) → Review (single agent, high-capability model). Plus **Ralph Loop** for single-agent autonomous iteration.
 - **tmux launcher** (`claude-code`) — per-project sessions with git context display.
 
 ## Quick Start
@@ -35,7 +36,7 @@ cp claude_code/claude-code /usr/local/bin/
 chmod +x /usr/local/bin/claude-code
 ```
 
-That's it. Every Claude Code session now picks up the global rules automatically.
+That's it. Every Claude Code session now picks up the global rules and hooks automatically.
 
 ## Start a New Project
 
@@ -60,6 +61,7 @@ claude-code ~/projects/existing-api
 |---|---|---|
 | `ml-rag` | Python · FAISS/Chroma · Neo4j/NetworkX | Team Lead, RAG Engineer, KG Engineer, Data Analyst, QA |
 | `ml-langchain` | Python · LangChain/LangGraph/LangSmith | Team Lead, Agent Developer, Integration Engineer, QA & Eval |
+| `ml-app` | Python · FastAPI · LiteLLM · Next.js/React | Team Lead, Backend Dev, Frontend Dev, ML/AI Engineer, QA |
 | `ml-n8n` | Python · n8n · REST/webhooks | Team Lead, Workflow Designer, Python Developer, QA & DevOps |
 | `java-enterprise` | Spring Boot · Kafka · GraphQL · React | Team Lead, Backend Dev, Frontend Dev, Data & Messaging, QA, DevOps |
 | `web-static` | Astro/Next.js/Hugo · Tailwind | Team Lead, Frontend Dev, Content & SEO, QA |
@@ -79,11 +81,17 @@ claude-code ~/projects/existing-api
   ├── integration-testing.md     Test integration points early
   ├── phase-workflow.md          Phase transition rules and boundaries
   ├── pre-build-verification.md  Install → type-check → run after every change
+  ├── ralph-loop.md              Single-agent autonomous iteration loop
   ├── safety.md                  Destructive action guards, secrets policy
   ├── session-splitting.md       One phase per session, context boundaries
   ├── stack-constraints.md       Stack version and compatibility guards
   ├── team-lead-efficiency.md    Limit agents, poll frequency, no re-work
   └── token-efficiency.md        Diff-over-rewrite, context economy
+~/.claude/hooks/*.sh             ← Deterministic lifecycle hooks (always active)
+  ├── verify-on-stop.sh          Run test suite when Claude finishes responding
+  ├── verify-after-edit.sh       Run type checker after source file edits
+  └── notify.sh                  Desktop notifications (macOS + Linux)
+~/.claude/settings.json          ← Hooks wiring and global settings
 ./CLAUDE.md                      ← Project-level (overrides global)
 ./.claude/commands/*.md          ← Project slash commands
 ./CLAUDE.local.md                ← Personal overrides (gitignored)
@@ -97,9 +105,10 @@ Project-level rules override global rules. More specific always wins.
 |---|---|---|---|---|
 | **Plan** | Opus (highest) | High | None | Read codebase, design approach, get user approval |
 | **Build** | Sonnet (fast) | Medium | Yes | Team Lead delegates to specialist sub-agents |
+| **Build (loop)** | Sonnet (fast) | Medium | None | Ralph Loop: single agent iterates through stories autonomously |
 | **Review** | Opus (highest) | High | None | Holistic review, run tests, verify consistency |
 
-Planning must stay in one mind — sub-agents only see fragments and can't reason about the whole system. Delegation only happens during Build.
+Planning must stay in one mind — sub-agents only see fragments and can't reason about the whole system. Delegation only happens during Build. For smaller features, **Ralph Loop** provides a single-agent alternative: read PRD → implement next failing story → test → commit → repeat.
 
 ## Porting to Other Tools
 
@@ -124,7 +133,8 @@ claude_code/
   claude-setup.sh                        ← One-time setup (creates ~/.claude/)
   .claude/
     CLAUDE.md                            ← Global agent manifest (reference copy)
-    rules/                               ← 14 modular rule files
+    settings.json                        ← Hooks wiring (reference copy)
+    rules/                               ← 15 modular rule files
       agent-team-protocol.md             ← Three-phase workflow, delegation rules
       clarification-protocol.md          ← Ask before implementing ambiguity
       coding-standards.md                ← SOLID, quality gates, prohibited patterns
@@ -134,29 +144,41 @@ claude_code/
       integration-testing.md             ← Test integration points early
       phase-workflow.md                  ← Phase transition boundaries
       pre-build-verification.md          ← Verify after every change
+      ralph-loop.md                      ← Single-agent autonomous iteration loop
       safety.md                          ← Destructive action guards, secrets
       session-splitting.md               ← Context boundaries, one phase per session
       stack-constraints.md               ← Version and compatibility guards
       team-lead-efficiency.md            ← Agent limits, poll frequency
       token-efficiency.md                ← Diff-over-rewrite, context economy
-  docs/                                  ← 8 reference documents
+    hooks/                               ← 3 lifecycle hook scripts
+      verify-on-stop.sh                  ← Run test suite on Stop event
+      verify-after-edit.sh               ← Run type checker on Edit/Write
+      notify.sh                          ← Desktop notifications (macOS + Linux)
+  docs/                                  ← 11 reference documents
     agent-traces.md                      ← How to find and archive agent transcripts
     claude-code-setup-cookbook.md         ← Detailed cookbook
     claude-config-guide.md               ← Configuration reference
     common-pitfalls.md                   ← Cross-cutting issues and fixes
     delegation-best-practices.md         ← When and how to delegate to agents
+    enhancement-plan.md                  ← Phased enhancement roadmap
     error-reporting-template.md          ← Standardized error report format
+    hooks-guide.md                       ← Hook installation and customization guide
+    hooks-test-cases.md                  ← Manual test cases for hooks
     phase-recap-template.md              ← End-of-phase handoff template
     session-management.md                ← Session commands cheat sheet
+  tests/                                 ← Automated tests
+    test-hooks.sh                        ← 27 tests for hook scripts
 ```
 
 ## Documentation
 
 - **[Setup Cookbook](claude_code/docs/claude-code-setup-cookbook.md)** — deep-dive into every configuration option
 - **[Config Guide](claude_code/docs/claude-config-guide.md)** — templates, agent teams, and workflow reference
+- **[Hooks Guide](claude_code/docs/hooks-guide.md)** — hook installation, customization, and supported stacks
 - **[Session Management](claude_code/docs/session-management.md)** — commands cheat sheet for daily use
 - **[Delegation Best Practices](claude_code/docs/delegation-best-practices.md)** — when and how to delegate to sub-agents
 - **[Common Pitfalls](claude_code/docs/common-pitfalls.md)** — cross-cutting issues and solutions
+- **[Enhancement Plan](claude_code/docs/enhancement-plan.md)** — phased roadmap for rules, hooks, and sub-agents
 - **[Agent Traces](claude_code/docs/agent-traces.md)** — locating, reading, and archiving agent transcripts
 - **[Error Reporting Template](claude_code/docs/error-reporting-template.md)** — standardized format for bug reports
 - **[Phase Recap Template](claude_code/docs/phase-recap-template.md)** — end-of-phase handoff checklist
