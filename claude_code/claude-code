@@ -5,6 +5,7 @@
 #   - Project template initialization
 #   - Per-project tmux sessions (named after directory)
 #   - Working directory awareness
+#   - Session transcript logging (~/.claude/logs/)
 #
 # Usage:
 #   claude-code [path]                  Start/resume Claude session (default: current dir)
@@ -24,6 +25,7 @@
 set -e
 
 TEMPLATES_DIR="$HOME/.claude/templates"
+LOGS_DIR="$HOME/.claude/logs"
 CLAUDE_CMD="claude"
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -162,14 +164,25 @@ start_session() {
     echo "──────────────────────────────────────"
     echo ""
 
+    # Session transcript logging
+    mkdir -p "$LOGS_DIR"
+    local timestamp=$(date +%Y-%m-%d-%H%M%S)
+    local log_file="$LOGS_DIR/${dir_name}-${timestamp}.log"
+
     # Check if session already exists
     if tmux has-session -t "$session_name" 2>/dev/null; then
         echo "Session '$session_name' exists. Attaching..."
+        echo "  Log: $log_file"
+        # Start logging on the existing session (append to new log file)
+        tmux pipe-pane -t "$session_name" -o "sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> '$log_file'"
         tmux attach-session -t "$session_name"
     else
         echo "Creating session '$session_name'..."
-
-        tmux new-session -s "$session_name" -c "$project_dir" "$CLAUDE_CMD"
+        echo "  Log: $log_file"
+        # Create detached, set up logging, then attach
+        tmux new-session -d -s "$session_name" -c "$project_dir" "$CLAUDE_CMD"
+        tmux pipe-pane -t "$session_name" -o "sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> '$log_file'"
+        tmux attach-session -t "$session_name"
     fi
 }
 
