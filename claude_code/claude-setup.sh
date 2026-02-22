@@ -3,6 +3,8 @@
 #
 # Creates:
 #   ~/.claude/CLAUDE.md                    Global configuration
+#   ~/.claude/hooks/                       Global hook scripts (verify, notify)
+#   ~/.claude/settings.json                Global settings with hooks wired
 #   ~/.claude/templates/<type>/CLAUDE.md   Project templates (with Agent Team configs)
 #   ~/.claude/templates/<type>/commands/   Custom slash commands per type
 #   Installs claude-code launcher to ~/.local/bin/
@@ -1042,6 +1044,91 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
+# 9. GLOBAL HOOKS
+# ══════════════════════════════════════════════════════════════
+
+HOOKS_SOURCE="$(dirname "$0")/.claude/hooks"
+HOOKS_TARGET="$CLAUDE_DIR/hooks"
+
+mkdir -p "$HOOKS_TARGET"
+
+if [[ -d "$HOOKS_SOURCE" ]]; then
+    cp "$HOOKS_SOURCE/notify.sh" "$HOOKS_TARGET/notify.sh"
+    cp "$HOOKS_SOURCE/verify-after-edit.sh" "$HOOKS_TARGET/verify-after-edit.sh"
+    cp "$HOOKS_SOURCE/verify-on-stop.sh" "$HOOKS_TARGET/verify-on-stop.sh"
+    chmod +x "$HOOKS_TARGET"/*.sh
+    echo "[done] Installed hooks to $HOOKS_TARGET"
+else
+    echo "[skip] Hook scripts not found at $HOOKS_SOURCE"
+fi
+
+# ══════════════════════════════════════════════════════════════
+# 10. GLOBAL SETTINGS (hooks wiring)
+# ══════════════════════════════════════════════════════════════
+
+SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+HOOKS_CONFIG='{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/verify-on-stop.sh",
+            "timeout": 180000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/verify-after-edit.sh",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/notify.sh",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
+}'
+
+if [[ ! -f "$SETTINGS_FILE" ]]; then
+    echo "$HOOKS_CONFIG" > "$SETTINGS_FILE"
+    echo "[done] Created $SETTINGS_FILE with hooks"
+elif command -v jq &>/dev/null; then
+    # Check if hooks key already exists
+    HAS_HOOKS=$(jq 'has("hooks")' "$SETTINGS_FILE" 2>/dev/null)
+    if [[ "$HAS_HOOKS" == "true" ]]; then
+        echo "[skip] $SETTINGS_FILE already has hooks configured (not overwriting)"
+    else
+        # Add hooks key, preserve everything else (permissions, etc.)
+        EXISTING=$(cat "$SETTINGS_FILE")
+        MERGED=$(echo "$EXISTING" | jq --argjson hooks "$(echo "$HOOKS_CONFIG" | jq '.hooks')" '. + {hooks: $hooks}')
+        echo "$MERGED" > "$SETTINGS_FILE"
+        echo "[done] Added hooks to existing $SETTINGS_FILE"
+    fi
+else
+    echo "[WARN] $SETTINGS_FILE already exists and jq is not installed for safe merge."
+    echo "       Add the hooks configuration manually. See docs/hooks-guide.md"
+fi
+
+# ══════════════════════════════════════════════════════════════
 # SUMMARY
 # ══════════════════════════════════════════════════════════════
 
@@ -1062,6 +1149,11 @@ echo "Quick start:"
 echo "  claude-code list                              # see all templates"
 echo "  claude-code init java-enterprise ~/projects/my-app"
 echo "  claude-code ~/projects/my-app                 # start Claude session"
+echo ""
+echo "Global hooks installed (active in all projects):"
+echo "  - verify-on-stop.sh   — runs tests when Claude finishes"
+echo "  - verify-after-edit.sh — runs type checker after source edits"
+echo "  - notify.sh            — desktop notifications when Claude needs input"
 echo ""
 echo "Each project now includes:"
 echo "  - CLAUDE.md with stack, conventions, and Agent Team config"
