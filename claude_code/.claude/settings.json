@@ -52,6 +52,18 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/reinject-context.sh",
+            "timeout": 10000
+          }
+        ]
+      }
     ]
   }
 }

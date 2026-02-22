@@ -8,6 +8,9 @@ How to use and create custom agents for Claude Code.
 |-------|-------|-------|---------|
 | `code-simplifier` | Sonnet | Read, Grep, Glob, Edit | Post-build cleanup: removes dead code, simplifies conditionals, improves readability |
 | `verify-app` | Sonnet | Read, Grep, Glob, Bash | End-to-end verification: type checker, linter, tests, dev server smoke test |
+| `security-review` | Sonnet | Read, Grep, Glob | Scans for hardcoded secrets, injection risks, missing validation, exposed debug endpoints |
+| `doc-writer` | Sonnet | Read, Grep, Glob, Edit, Write | Updates README, adds docstrings for new functions, maintains CHANGELOG |
+| `phase-recap` | Sonnet | Read, Grep, Glob, Bash | Generates phase recap document summarizing what was built, decisions, and next steps |
 
 ## How Agents Work
 

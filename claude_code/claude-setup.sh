@@ -1271,6 +1271,7 @@ if [[ -d "$HOOKS_SOURCE" ]]; then
     cp "$HOOKS_SOURCE/verify-on-stop.sh" "$HOOKS_TARGET/verify-on-stop.sh"
     cp "$HOOKS_SOURCE/auto-format.sh" "$HOOKS_TARGET/auto-format.sh"
     cp "$HOOKS_SOURCE/protect-files.sh" "$HOOKS_TARGET/protect-files.sh"
+    cp "$HOOKS_SOURCE/reinject-context.sh" "$HOOKS_TARGET/reinject-context.sh"
     chmod +x "$HOOKS_TARGET"/*.sh
     echo "[done] Installed hooks to $HOOKS_TARGET"
 else
@@ -1352,6 +1353,18 @@ HOOKS_CONFIG='{
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/reinject-context.sh",
+            "timeout": 10000
+          }
+        ]
+      }
     ]
   }
 }'
@@ -1403,11 +1416,15 @@ echo "  - verify-on-stop.sh    — runs tests when Claude finishes"
 echo "  - verify-after-edit.sh — runs type checker after source edits"
 echo "  - auto-format.sh       — runs formatter after source edits"
 echo "  - protect-files.sh     — blocks edits to .env, *.lock, .git/, credentials"
+echo "  - reinject-context.sh  — re-injects project context on session start"
 echo "  - notify.sh            — desktop notifications when Claude needs input"
 echo ""
 echo "Custom agents installed:"
 echo "  - code-simplifier      — post-build code cleanup (read + edit)"
 echo "  - verify-app           — end-to-end project verification (read + bash)"
+echo "  - security-review      — vulnerability scanning (read-only)"
+echo "  - doc-writer           — documentation updates (read + edit + write)"
+echo "  - phase-recap          — phase recap generation (read + bash)"
 echo ""
 echo "Each project now includes:"
 echo "  - CLAUDE.md with stack, conventions, and Agent Team config"

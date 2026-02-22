@@ -2,12 +2,15 @@
 
 ## What Ships With This Configuration
 
-Three hook scripts that enforce rules deterministically instead of relying on the LLM to remember them.
+Six hook scripts that enforce rules deterministically instead of relying on the LLM to remember them.
 
 | Hook | Event | What It Does |
 |------|-------|-------------|
 | `verify-on-stop.sh` | Stop | Runs the project test suite when Claude finishes. If tests fail, feeds errors back so Claude continues fixing. |
 | `verify-after-edit.sh` | PostToolUse (Edit\|Write) | Runs the project type checker after source file edits. Feeds type errors back immediately. |
+| `auto-format.sh` | PostToolUse (Edit\|Write) | Runs the project formatter (Prettier, Black, gofmt, rustfmt) after source edits. Fire-and-forget. |
+| `protect-files.sh` | PreToolUse (Edit\|Write) | Blocks edits to `.env`, `*.lock`, `.git/`, credentials. Returns denial reason to Claude. |
+| `reinject-context.sh` | SessionStart | Re-injects project context (git status, Ralph Loop PRD, pending work) on session start/compaction. |
 | `notify.sh` | Notification | Sends desktop notifications (macOS/Linux) when Claude needs input. |
 
 All hooks auto-detect your project's stack — no configuration per language needed.
@@ -92,6 +95,9 @@ Each hook has a `timeout` field in settings.json (milliseconds):
 |------|---------|-----------------|
 | `verify-on-stop.sh` | 180000 (3 min) | Slow test suites |
 | `verify-after-edit.sh` | 30000 (30 sec) | Large TypeScript projects |
+| `auto-format.sh` | 15000 (15 sec) | Large files or slow formatters |
+| `protect-files.sh` | 5000 (5 sec) | Rarely needed |
+| `reinject-context.sh` | 10000 (10 sec) | Large repos with many context sources |
 | `notify.sh` | 10000 (10 sec) | Rarely needed |
 
 ### Blocking mode (opt-in)

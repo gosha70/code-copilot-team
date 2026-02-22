@@ -207,6 +207,26 @@ RC=$(run_hook protect-files.sh 'not json')
 assert_exit "invalid JSON" 0 "$RC"
 
 echo ""
+echo "=== reinject-context.sh ==="
+
+RC=$(run_hook reinject-context.sh '{}' CLAUDE_PROJECT_DIR=/tmp)
+assert_exit "empty project dir" 0 "$RC"
+
+RC=$(run_hook reinject-context.sh '' CLAUDE_PROJECT_DIR=/tmp)
+assert_exit "empty input" 0 "$RC"
+
+RC=$(run_hook reinject-context.sh 'not json' CLAUDE_PROJECT_DIR=/tmp)
+assert_exit "invalid JSON" 0 "$RC"
+
+RC=$(run_hook reinject-context.sh '{}' CLAUDE_PROJECT_DIR=/nonexistent)
+assert_exit "nonexistent project dir" 0 "$RC"
+
+# Test with a git repo (current repo)
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+RC=$(run_hook reinject-context.sh '{}' CLAUDE_PROJECT_DIR="$REPO_DIR")
+assert_exit "valid git repo" 0 "$RC"
+
+echo ""
 echo "========================================="
 printf "  Results: %d passed, %d failed\n" "$PASS" "$FAIL"
 echo "========================================="
