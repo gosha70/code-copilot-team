@@ -59,11 +59,31 @@ Sub-agents only see fragments (one file, one module). Planning requires a holist
 - **Point to files by path** rather than pasting large blocks into the prompt.
 - **Diff over rewrite.** Prefer targeted edits over regenerating entire files.
 
+## Single-Agent Loop Mode (Ralph Loop)
+
+An alternative to team delegation during Build. A single agent runs in a loop: read plan → implement next item → test → commit if passing → repeat.
+
+**When to use instead of team delegation:**
+- Task is sequential (each step depends on the previous)
+- Clear, testable completion criteria exist
+- No human design decisions needed mid-flight
+- Parallelism wouldn't help (single-domain work)
+
+**When to use team delegation instead:**
+- Multiple independent domains can be parallelized
+- Human judgment needed during implementation
+- No test suite to verify progress automatically
+
+The Team Lead can also use hybrid mode: delegate a Ralph Loop sub-agent for one bounded task during Build while handling other tasks directly.
+
+See `ralph-loop.md` for the full pattern, PRD format, and safety guards.
+
 ## Model & Effort Quick Reference
 
 | Phase    | Model Tier       | Effort | Delegation |
 |----------|------------------|--------|------------|
 | Plan     | Highest (Opus)   | High   | None       |
 | Build    | Fast (Sonnet)    | Medium | Yes        |
+| Build (loop) | Fast (Sonnet) | Medium | None — single agent loops |
 | Review   | Highest (Opus)   | High   | None       |
 | Quick fix| Fastest (Haiku)  | Low    | None       |

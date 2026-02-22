@@ -4,8 +4,8 @@ set -euo pipefail
 # verify-on-stop.sh — Stop hook
 #
 # When Claude finishes responding, auto-detects and runs the project's test
-# suite. If tests fail, exits 2 with failure output on stderr so Claude
-# continues working to fix the issue.
+# suite. By default, reports results without blocking (exit 0). Set
+# HOOK_STOP_BLOCK=true to make Claude continue fixing on failure (exit 2).
 #
 # Checks stop_hook_active to prevent infinite loops: if this hook already
 # triggered once in the current stop cycle, it exits immediately.
@@ -20,7 +20,7 @@ fi
 INPUT=$(cat)
 
 # --- Infinite-loop guard ---
-STOP_HOOK_ACTIVE=$(echo "$INPUT" | jq -r '.stop_hook_active // false')
+STOP_HOOK_ACTIVE=$(echo "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null) || exit 0
 if [[ "$STOP_HOOK_ACTIVE" == "true" ]]; then
   exit 0
 fi
@@ -28,8 +28,11 @@ fi
 # --- Resolve project directory ---
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"
 
-# --- Internal timeout (seconds). Override with HOOK_TEST_TIMEOUT env var. ---
+# --- Configuration ---
+# HOOK_TEST_TIMEOUT: max seconds for test runner (default 120)
+# HOOK_STOP_BLOCK:   set to "true" to block Claude on failure (default: report only)
 TIMEOUT="${HOOK_TEST_TIMEOUT:-120}"
+BLOCK="${HOOK_STOP_BLOCK:-false}"
 
 # --- Detect timeout command (GNU coreutils vs macOS Homebrew) ---
 TIMEOUT_CMD=""
@@ -48,7 +51,7 @@ detect_test_runner() {
   # Node.js / TypeScript
   if [[ -f "$dir/package.json" ]]; then
     local has_test
-    has_test=$(jq -r '.scripts.test // empty' "$dir/package.json" 2>/dev/null)
+    has_test=$(jq -r '.scripts.test // empty' "$dir/package.json" 2>/dev/null) || true
     if [[ -n "$has_test" ]]; then
       if [[ -f "$dir/pnpm-lock.yaml" ]]; then
         TEST_CMD="pnpm test"
@@ -63,13 +66,22 @@ detect_test_runner() {
     fi
   fi
 
-  # Python
+  # Python — check for poetry/pipenv/venv before bare pytest
   if [[ -f "$dir/pyproject.toml" || -f "$dir/setup.py" || -f "$dir/requirements.txt" ]]; then
-    if command -v pytest &>/dev/null; then
+    if [[ -f "$dir/poetry.lock" ]] && command -v poetry &>/dev/null; then
+      TEST_CMD="poetry run pytest --tb=short -q"
+      return
+    elif [[ -f "$dir/Pipfile.lock" ]] && command -v pipenv &>/dev/null; then
+      TEST_CMD="pipenv run pytest --tb=short -q"
+      return
+    elif [[ -x "$dir/.venv/bin/pytest" ]]; then
+      TEST_CMD="$dir/.venv/bin/pytest --tb=short -q"
+      return
+    elif command -v pytest &>/dev/null; then
       TEST_CMD="pytest --tb=short -q"
       return
     elif command -v python3 &>/dev/null; then
-      TEST_CMD="python3 -m unittest discover -s tests -q"
+      TEST_CMD="python3 -m pytest --tb=short -q 2>/dev/null || python3 -m unittest discover -s tests -q"
       return
     fi
   fi
@@ -126,9 +138,19 @@ if [[ $TEST_EXIT -eq 0 ]]; then
   exit 0
 fi
 
-# --- Tests failed: feed summary back to Claude (last 50 lines) ---
+# --- Tests failed ---
 SUMMARY=$(echo "$TEST_OUTPUT" | tail -n 50)
-echo "Tests failed. Fix the failures and try again." >&2
-echo "" >&2
-echo "$SUMMARY" >&2
-exit 2
+
+if [[ "$BLOCK" == "true" ]]; then
+  # Blocking mode: Claude continues fixing
+  echo "Tests failed. Fix the failures and try again." >&2
+  echo "" >&2
+  echo "$SUMMARY" >&2
+  exit 2
+else
+  # Report-only mode (default): show results, let Claude stop
+  echo "Tests failed (report only — set HOOK_STOP_BLOCK=true to auto-fix)." >&2
+  echo "" >&2
+  echo "$SUMMARY" >&2
+  exit 0
+fi

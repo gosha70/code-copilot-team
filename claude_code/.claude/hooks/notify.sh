@@ -16,8 +16,8 @@ fi
 # --- Read event JSON from stdin ---
 INPUT=$(cat)
 
-TITLE=$(echo "$INPUT" | jq -r '.title // "Claude Code"')
-MESSAGE=$(echo "$INPUT" | jq -r '.message // ""')
+TITLE=$(echo "$INPUT" | jq -r '.title // "Claude Code"' 2>/dev/null) || exit 0
+MESSAGE=$(echo "$INPUT" | jq -r '.message // ""' 2>/dev/null) || exit 0
 
 if [[ -z "$MESSAGE" ]]; then
   exit 0

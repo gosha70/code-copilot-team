@@ -4,8 +4,8 @@ set -euo pipefail
 # verify-after-edit.sh — PostToolUse hook (Edit|Write matcher)
 #
 # After a source file is edited, auto-detects and runs the project's type
-# checker. If the check fails, exits 2 with error output on stderr so Claude
-# receives feedback and can fix the issue.
+# checker. By default, reports errors without blocking (exit 0). Set
+# HOOK_EDIT_BLOCK=true to feed errors back to Claude for auto-fix (exit 2).
 #
 # Non-source files (.md, .json, .yaml, .env, etc.) are silently skipped.
 
@@ -18,7 +18,7 @@ fi
 # --- Read event JSON from stdin ---
 INPUT=$(cat)
 
-FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null) || exit 0
 if [[ -z "$FILE_PATH" ]]; then
   exit 0
 fi
@@ -41,6 +41,10 @@ if [[ "$IS_SOURCE" != "true" ]]; then
   exit 0
 fi
 
+# --- Configuration ---
+# HOOK_EDIT_BLOCK: set to "true" to block Claude on failure (default: report only)
+BLOCK="${HOOK_EDIT_BLOCK:-false}"
+
 # --- Resolve project directory ---
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"
 cd "$PROJECT_DIR"
@@ -54,7 +58,11 @@ if [[ "$EXT_LOWER" =~ ^(ts|tsx|js|jsx)$ ]]; then
   fi
 
 elif [[ "$EXT_LOWER" == "py" ]]; then
-  if command -v mypy &>/dev/null; then
+  if [[ -f "poetry.lock" ]] && command -v poetry &>/dev/null; then
+    CHECK_CMD="poetry run mypy --no-error-summary \"$FILE_PATH\" 2>/dev/null || poetry run pyright \"$FILE_PATH\" 2>/dev/null"
+  elif [[ -x ".venv/bin/mypy" ]]; then
+    CHECK_CMD=".venv/bin/mypy --no-error-summary \"$FILE_PATH\""
+  elif command -v mypy &>/dev/null; then
     CHECK_CMD="mypy --no-error-summary \"$FILE_PATH\""
   elif command -v pyright &>/dev/null; then
     CHECK_CMD="pyright \"$FILE_PATH\""
@@ -100,9 +108,19 @@ if [[ $CHECK_EXIT -eq 0 ]]; then
   exit 0
 fi
 
-# --- Failed: feed errors back to Claude (truncated to last 30 lines) ---
+# --- Failed ---
 SUMMARY=$(echo "$CHECK_OUTPUT" | tail -n 30)
-echo "Type check failed after editing ${FILE_PATH}. Fix the errors:" >&2
-echo "" >&2
-echo "$SUMMARY" >&2
-exit 2
+
+if [[ "$BLOCK" == "true" ]]; then
+  # Blocking mode: Claude auto-fixes
+  echo "Type check failed after editing ${FILE_PATH}. Fix the errors:" >&2
+  echo "" >&2
+  echo "$SUMMARY" >&2
+  exit 2
+else
+  # Report-only mode (default): show errors, let Claude proceed
+  echo "Type check failed after editing ${FILE_PATH} (report only — set HOOK_EDIT_BLOCK=true to auto-fix)." >&2
+  echo "" >&2
+  echo "$SUMMARY" >&2
+  exit 0
+fi

@@ -94,6 +94,22 @@ Each hook has a `timeout` field in settings.json (milliseconds):
 | `verify-after-edit.sh` | 30000 (30 sec) | Large TypeScript projects |
 | `notify.sh` | 10000 (10 sec) | Rarely needed |
 
+### Blocking mode (opt-in)
+
+By default, both verification hooks **report** failures without blocking Claude. This is safe for projects with pre-existing test failures.
+
+To make Claude automatically fix failures, opt in via environment variables:
+
+```bash
+# Make Claude continue fixing when tests fail on stop
+export HOOK_STOP_BLOCK=true
+
+# Make Claude auto-fix type errors after edits
+export HOOK_EDIT_BLOCK=true
+```
+
+Only enable blocking mode when your test suite and type checker are clean (all passing). Otherwise Claude will try to fix pre-existing failures unrelated to its work.
+
 ### Internal test timeout
 
 `verify-on-stop.sh` has its own internal timeout (default 120 seconds) that kills the test runner if it hangs. This is separate from the settings.json timeout. Override via environment variable:
