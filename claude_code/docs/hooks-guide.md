@@ -102,19 +102,28 @@ Each hook has a `timeout` field in settings.json (milliseconds):
 
 ### Blocking mode (opt-in)
 
-By default, both verification hooks **report** failures without blocking Claude. This is safe for projects with pre-existing test failures.
+Both verification hooks default to **blocking mode** (`HOOK_EDIT_BLOCK=true`, `HOOK_STOP_BLOCK=true`) as set in `~/.claude/settings.json` `env` section. In blocking mode, Claude sees errors and automatically tries to fix them.
 
-To make Claude automatically fix failures, opt in via environment variables:
+To switch to **report-only mode** (shows errors but doesn't interrupt Claude), override per-project in `.claude/settings.json`:
 
-```bash
-# Make Claude continue fixing when tests fail on stop
-export HOOK_STOP_BLOCK=true
-
-# Make Claude auto-fix type errors after edits
-export HOOK_EDIT_BLOCK=true
+```json
+{
+  "env": {
+    "HOOK_EDIT_BLOCK": "false",
+    "HOOK_STOP_BLOCK": "false"
+  }
+}
 ```
 
-Only enable blocking mode when your test suite and type checker are clean (all passing). Otherwise Claude will try to fix pre-existing failures unrelated to its work.
+Or override per-session via shell before launching Claude:
+
+```bash
+export HOOK_EDIT_BLOCK=false
+export HOOK_STOP_BLOCK=false
+claude
+```
+
+Use report-only mode for projects with pre-existing lint/test failures to avoid Claude trying to fix unrelated issues.
 
 ### Internal test timeout
 
@@ -144,7 +153,7 @@ The `matcher` field in settings.json is a regex that filters when the hook fires
 | Stack | Detected By | Command |
 |-------|-------------|---------|
 | Node.js | `package.json` with `scripts.test` | npm/yarn/pnpm/bun test |
-| Python | `pyproject.toml` / `setup.py` / `requirements.txt` | `pytest --tb=short -q` |
+| Python | `pyproject.toml` / `setup.py` / `requirements.txt` | `pytest --tb=short -q` (via poetry/uv/pipenv/venv/system) |
 | Go | `go.mod` | `go test ./...` |
 | Java (Maven) | `pom.xml` | `mvn test -q` |
 | Java (Gradle) | `build.gradle` / `build.gradle.kts` | `./gradlew test` |
@@ -152,12 +161,14 @@ The `matcher` field in settings.json is a regex that filters when the hook fires
 
 Package manager detection for Node.js: `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `bun.lockb` / `bun.lock` → bun, otherwise npm.
 
+Python tool detection priority: `poetry.lock` → poetry run, `uv.lock` → uv run, `.venv/bin/<tool>` → direct venv, system PATH → bare command. For type checking, tries mypy first, then ruff check, then pyright. For formatting, tries black first, then ruff format.
+
 ### verify-after-edit.sh — Type checkers
 
 | Extensions | Detected By | Command |
 |-----------|-------------|---------|
 | `.ts`, `.tsx`, `.js`, `.jsx` | `tsconfig.json` | `npx tsc --noEmit` |
-| `.py` | `mypy` or `pyright` on PATH | `mypy <file>` or `pyright <file>` |
+| `.py` | poetry/uv/venv/system mypy, ruff, or pyright | `mypy <file>`, `ruff check <file>`, or `pyright <file>` |
 | `.go` | `go.mod` | `go vet ./...` |
 | `.java` | `pom.xml` or `build.gradle` | `mvn compile -q` or `./gradlew compileJava -q` |
 | `.rs` | `Cargo.toml` | `cargo check` |

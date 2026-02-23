@@ -60,12 +60,23 @@ if [[ "$EXT_LOWER" =~ ^(ts|tsx|js|jsx)$ ]]; then
 elif [[ "$EXT_LOWER" == "py" ]]; then
   if [[ -f "poetry.lock" ]] && command -v poetry &>/dev/null; then
     CHECK_CMD="poetry run mypy --no-error-summary \"$FILE_PATH\" 2>/dev/null || poetry run pyright \"$FILE_PATH\" 2>/dev/null"
+  elif [[ -f "uv.lock" ]] && command -v uv &>/dev/null; then
+    # uv-managed project: try mypy via uv run, fall back to ruff check
+    if uv run mypy --version &>/dev/null 2>&1; then
+      CHECK_CMD="uv run mypy --no-error-summary \"$FILE_PATH\""
+    elif uv run ruff --version &>/dev/null 2>&1; then
+      CHECK_CMD="uv run ruff check \"$FILE_PATH\""
+    fi
   elif [[ -x ".venv/bin/mypy" ]]; then
     CHECK_CMD=".venv/bin/mypy --no-error-summary \"$FILE_PATH\""
+  elif [[ -x ".venv/bin/ruff" ]]; then
+    CHECK_CMD=".venv/bin/ruff check \"$FILE_PATH\""
   elif command -v mypy &>/dev/null; then
     CHECK_CMD="mypy --no-error-summary \"$FILE_PATH\""
   elif command -v pyright &>/dev/null; then
     CHECK_CMD="pyright \"$FILE_PATH\""
+  elif command -v ruff &>/dev/null; then
+    CHECK_CMD="ruff check \"$FILE_PATH\""
   fi
 
 elif [[ "$EXT_LOWER" == "go" ]]; then

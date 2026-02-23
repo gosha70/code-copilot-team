@@ -49,8 +49,16 @@ case "$EXT_LOWER" in
       elif poetry run ruff --version &>/dev/null 2>&1; then
         FORMAT_CMD="poetry run ruff format \"$FILE_PATH\""
       fi
+    elif [[ -f "uv.lock" ]] && command -v uv &>/dev/null; then
+      if uv run black --version &>/dev/null 2>&1; then
+        FORMAT_CMD="uv run black --quiet \"$FILE_PATH\""
+      elif uv run ruff --version &>/dev/null 2>&1; then
+        FORMAT_CMD="uv run ruff format \"$FILE_PATH\""
+      fi
     elif [[ -x ".venv/bin/black" ]]; then
       FORMAT_CMD=".venv/bin/black --quiet \"$FILE_PATH\""
+    elif [[ -x ".venv/bin/ruff" ]]; then
+      FORMAT_CMD=".venv/bin/ruff format \"$FILE_PATH\""
     elif command -v black &>/dev/null; then
       FORMAT_CMD="black --quiet \"$FILE_PATH\""
     elif command -v ruff &>/dev/null; then

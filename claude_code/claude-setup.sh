@@ -25,6 +25,68 @@ echo "============================================"
 echo ""
 
 # ══════════════════════════════════════════════════════════════
+# 0. DEPENDENCY CHECK: jq
+# ══════════════════════════════════════════════════════════════
+
+if ! command -v jq &>/dev/null; then
+    echo "[WARN] jq is not installed."
+    echo "       jq is required for all hook scripts (JSON parsing)."
+    echo "       Without it, hooks will silently skip — no type checking,"
+    echo "       no auto-formatting, no file protection, no test verification."
+    echo ""
+
+    INSTALL_CMD=""
+    case "$(uname -s)" in
+        Darwin)
+            if command -v brew &>/dev/null; then
+                INSTALL_CMD="brew install jq"
+            else
+                echo "       Install manually: https://jqlang.github.io/jq/download/"
+                echo "       (or install Homebrew first: https://brew.sh)"
+            fi
+            ;;
+        Linux)
+            if command -v apt-get &>/dev/null; then
+                INSTALL_CMD="sudo apt-get install -y jq"
+            elif command -v dnf &>/dev/null; then
+                INSTALL_CMD="sudo dnf install -y jq"
+            elif command -v pacman &>/dev/null; then
+                INSTALL_CMD="sudo pacman -S --noconfirm jq"
+            elif command -v apk &>/dev/null; then
+                INSTALL_CMD="apk add jq"
+            else
+                echo "       Install manually: https://jqlang.github.io/jq/download/"
+            fi
+            ;;
+        *)
+            echo "       Install manually: https://jqlang.github.io/jq/download/"
+            ;;
+    esac
+
+    if [[ -n "$INSTALL_CMD" ]]; then
+        echo -n "       Install jq now with '$INSTALL_CMD'? [Y/n] "
+        read -r REPLY
+        if [[ -z "$REPLY" || "$REPLY" =~ ^[Yy]$ ]]; then
+            echo ""
+            if $INSTALL_CMD; then
+                echo "[done] jq installed successfully"
+            else
+                echo "[FAIL] jq installation failed. Install it manually and re-run setup."
+                echo "       Setup will continue, but hooks will not work until jq is installed."
+            fi
+        else
+            echo ""
+            echo "[skip] Skipping jq installation."
+            echo "       IMPORTANT: All hooks will silently skip until jq is installed."
+            echo "       To install later: $INSTALL_CMD"
+        fi
+    fi
+    echo ""
+else
+    echo "[ok]   jq found: $(jq --version)"
+fi
+
+# ══════════════════════════════════════════════════════════════
 # 1. GLOBAL CLAUDE.md
 # ══════════════════════════════════════════════════════════════
 
@@ -1300,6 +1362,10 @@ fi
 
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 HOOKS_CONFIG='{
+  "env": {
+    "HOOK_EDIT_BLOCK": "true",
+    "HOOK_STOP_BLOCK": "true"
+  },
   "hooks": {
     "PreToolUse": [
       {

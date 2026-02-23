@@ -66,10 +66,13 @@ detect_test_runner() {
     fi
   fi
 
-  # Python — check for poetry/pipenv/venv before bare pytest
+  # Python — check for poetry/uv/pipenv/venv before bare pytest
   if [[ -f "$dir/pyproject.toml" || -f "$dir/setup.py" || -f "$dir/requirements.txt" ]]; then
     if [[ -f "$dir/poetry.lock" ]] && command -v poetry &>/dev/null; then
       TEST_CMD="poetry run pytest --tb=short -q"
+      return
+    elif [[ -f "$dir/uv.lock" ]] && command -v uv &>/dev/null; then
+      TEST_CMD="uv run pytest --tb=short -q"
       return
     elif [[ -f "$dir/Pipfile.lock" ]] && command -v pipenv &>/dev/null; then
       TEST_CMD="pipenv run pytest --tb=short -q"

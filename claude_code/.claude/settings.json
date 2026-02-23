@@ -1,4 +1,8 @@
 {
+  "env": {
+    "HOOK_EDIT_BLOCK": "true",
+    "HOOK_STOP_BLOCK": "true"
+  },
   "hooks": {
     "PreToolUse": [
       {
