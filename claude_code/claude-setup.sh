@@ -1357,43 +1357,6 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 10c. GLOBAL RULES
-# ══════════════════════════════════════════════════════════════
-
-RULES_SOURCE="$(dirname "$0")/.claude/rules"
-RULES_TARGET="$CLAUDE_DIR/rules"
-
-mkdir -p "$RULES_TARGET"
-
-if [[ -d "$RULES_SOURCE" ]]; then
-    # Remove legacy rules files (consolidated 15 → 4)
-    rm -f "$RULES_TARGET"/agent-team-protocol.md \
-          "$RULES_TARGET"/ralph-loop.md \
-          "$RULES_TARGET"/session-splitting.md \
-          "$RULES_TARGET"/team-lead-efficiency.md \
-          "$RULES_TARGET"/integration-testing.md \
-          "$RULES_TARGET"/phase-workflow.md \
-          "$RULES_TARGET"/clarification-protocol.md \
-          "$RULES_TARGET"/environment-setup.md \
-          "$RULES_TARGET"/data-model-review.md \
-          "$RULES_TARGET"/pre-build-verification.md \
-          "$RULES_TARGET"/stack-constraints.md \
-          "$RULES_TARGET"/coding-standards.md \
-          "$RULES_TARGET"/copilot-conventions.md \
-          "$RULES_TARGET"/safety.md \
-          "$RULES_TARGET"/token-efficiency.md
-
-    # Install consolidated rules
-    cp "$RULES_SOURCE"/workflow.md "$RULES_TARGET/"
-    cp "$RULES_SOURCE"/team-delegation.md "$RULES_TARGET/"
-    cp "$RULES_SOURCE"/quality-gates.md "$RULES_TARGET/"
-    cp "$RULES_SOURCE"/planning-protocol.md "$RULES_TARGET/"
-    echo "[done] Installed rules to $RULES_TARGET (4 consolidated files)"
-else
-    echo "[skip] Rules files not found at $RULES_SOURCE"
-fi
-
-# ══════════════════════════════════════════════════════════════
 # 11. GLOBAL SETTINGS (hooks wiring)
 # ══════════════════════════════════════════════════════════════
 
@@ -1401,7 +1364,7 @@ SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 HOOKS_CONFIG='{
   "env": {
     "HOOK_EDIT_BLOCK": "true",
-    "HOOK_STOP_BLOCK": "false"
+    "HOOK_STOP_BLOCK": "true"
   },
   "hooks": {
     "PreToolUse": [

@@ -100,28 +100,30 @@ Each hook has a `timeout` field in settings.json (milliseconds):
 | `reinject-context.sh` | 10000 (10 sec) | Large repos with many context sources |
 | `notify.sh` | 10000 (10 sec) | Rarely needed |
 
-### Blocking vs Report-Only Mode
+### Blocking mode (opt-in)
 
-Edit verification (`HOOK_EDIT_BLOCK`) defaults to **blocking** — type errors are fed back to Claude immediately after edits. Stop verification (`HOOK_STOP_BLOCK`) defaults to **report-only** — test results are shown but don't force Claude into a fix loop.
+Both verification hooks default to **blocking mode** (`HOOK_EDIT_BLOCK=true`, `HOOK_STOP_BLOCK=true`) as set in `~/.claude/settings.json` `env` section. In blocking mode, Claude sees errors and automatically tries to fix them.
 
-To enable **full blocking mode** (Claude automatically tries to fix test failures too), set per-project in `.claude/settings.json`:
+To switch to **report-only mode** (shows errors but doesn't interrupt Claude), override per-project in `.claude/settings.json`:
 
 ```json
 {
   "env": {
-    "HOOK_STOP_BLOCK": "true"
+    "HOOK_EDIT_BLOCK": "false",
+    "HOOK_STOP_BLOCK": "false"
   }
 }
 ```
 
-Or per-session via shell:
+Or override per-session via shell before launching Claude:
 
 ```bash
-export HOOK_STOP_BLOCK=true
+export HOOK_EDIT_BLOCK=false
+export HOOK_STOP_BLOCK=false
 claude
 ```
 
-Use full blocking mode only when the test suite is clean. For projects with pre-existing test failures, report-only (default) prevents Claude from looping on unrelated issues.
+Use report-only mode for projects with pre-existing lint/test failures to avoid Claude trying to fix unrelated issues.
 
 ### Internal test timeout
 
