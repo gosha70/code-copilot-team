@@ -1364,7 +1364,7 @@ SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 HOOKS_CONFIG='{
   "env": {
     "HOOK_EDIT_BLOCK": "true",
-    "HOOK_STOP_BLOCK": "true"
+    "HOOK_STOP_BLOCK": "false"
   },
   "hooks": {
     "PreToolUse": [

@@ -1,7 +1,7 @@
 {
   "env": {
     "HOOK_EDIT_BLOCK": "true",
-    "HOOK_STOP_BLOCK": "true"
+    "HOOK_STOP_BLOCK": "false"
   },
   "hooks": {
     "PreToolUse": [
