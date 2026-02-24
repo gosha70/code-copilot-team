@@ -11,25 +11,11 @@ These conventions ensure consistent behaviour regardless of which AI tool is dri
 4. Test everything — run linters and tests after code changes.
 5. Ask when uncertain — do not guess at ambiguous requirements.
 
-## Code Generation
-
-- Match existing code style in the file being edited.
-- Do not add comments, docstrings, or annotations to untouched code.
-- Do not create helper functions for one-time operations.
-- Do not generate placeholder implementations unless asked.
-
 ## Git Discipline
 
 - Commit messages: imperative mood, concise summary, optional body explaining "why".
 - One logical change per commit — do not mix refactors with features.
 - Branch naming: feature/, fix/, chore/, docs/ prefixes.
-
-## API Design
-
-- APIs must be modular, testable, and versioned.
-- Consistent error response formats across endpoints.
-- Document public APIs (OpenAPI for REST, protobuf for gRPC).
-- Rate limiting and input validation at the boundary.
 
 ## Project Structure Convention
 
