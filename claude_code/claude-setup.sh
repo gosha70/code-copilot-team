@@ -3,6 +3,9 @@
 #
 # Creates:
 #   ~/.claude/CLAUDE.md                    Global configuration
+#   ~/.claude/rules/                       Global rules (auto-loaded, 3 files)
+#   ~/.claude/rules-library/               Rules library (on-demand, 9 files)
+#   ~/.claude/agents/                      Global agents (5 utility + 4 phase)
 #   ~/.claude/hooks/                       Global hook scripts (verify, notify)
 #   ~/.claude/settings.json                Global settings with hooks wired
 #   ~/.claude/templates/<type>/CLAUDE.md   Project templates (with Agent Team configs)
@@ -10,13 +13,53 @@
 #   Installs claude-code launcher to ~/.local/bin/
 #
 # Run once, then use 'claude-code init <type> [path]' to scaffold projects.
+# Run with --sync to re-copy rules, rules-library, and agents from repo.
 
 set -e
 
 CLAUDE_DIR="$HOME/.claude"
 TEMPLATES_DIR="$CLAUDE_DIR/templates"
-LAUNCHER_SOURCE="$(dirname "$0")/claude-code"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
+LAUNCHER_SOURCE="$SCRIPT_DIR/claude-code"
 LAUNCHER_TARGET="$HOME/.local/bin/claude-code"
+
+# ══════════════════════════════════════════════════════════════
+# --sync: re-copy rules, rules-library, and agents from repo
+# ══════════════════════════════════════════════════════════════
+
+if [[ "${1:-}" == "--sync" ]]; then
+    echo "Syncing rules, rules-library, and agents from repo..."
+
+    # Global rules (3 files)
+    RULES_SOURCE="$SCRIPT_DIR/.claude/rules"
+    RULES_TARGET="$CLAUDE_DIR/rules"
+    mkdir -p "$RULES_TARGET"
+    if [[ -d "$RULES_SOURCE" ]]; then
+        cp "$RULES_SOURCE"/*.md "$RULES_TARGET/" 2>/dev/null || true
+        echo "[done] Synced rules to $RULES_TARGET"
+    fi
+
+    # Rules library (9 files)
+    LIBRARY_SOURCE="$SCRIPT_DIR/.claude/rules-library"
+    LIBRARY_TARGET="$CLAUDE_DIR/rules-library"
+    mkdir -p "$LIBRARY_TARGET"
+    if [[ -d "$LIBRARY_SOURCE" ]]; then
+        cp "$LIBRARY_SOURCE"/*.md "$LIBRARY_TARGET/" 2>/dev/null || true
+        echo "[done] Synced rules-library to $LIBRARY_TARGET"
+    fi
+
+    # Agents (9 files)
+    AGENTS_SOURCE="$SCRIPT_DIR/.claude/agents"
+    AGENTS_TARGET="$CLAUDE_DIR/agents"
+    mkdir -p "$AGENTS_TARGET"
+    if [[ -d "$AGENTS_SOURCE" ]]; then
+        cp "$AGENTS_SOURCE"/*.md "$AGENTS_TARGET/" 2>/dev/null || true
+        echo "[done] Synced agents to $AGENTS_TARGET"
+    fi
+
+    echo "Sync complete."
+    exit 0
+fi
 
 echo "============================================"
 echo "  Claude Code Project Template Setup v2"
@@ -1322,7 +1365,7 @@ fi
 # 10. GLOBAL HOOKS
 # ══════════════════════════════════════════════════════════════
 
-HOOKS_SOURCE="$(dirname "$0")/.claude/hooks"
+HOOKS_SOURCE="$SCRIPT_DIR/.claude/hooks"
 HOOKS_TARGET="$CLAUDE_DIR/hooks"
 
 mkdir -p "$HOOKS_TARGET"
@@ -1344,7 +1387,7 @@ fi
 # 10b. GLOBAL AGENTS
 # ══════════════════════════════════════════════════════════════
 
-AGENTS_SOURCE="$(dirname "$0")/.claude/agents"
+AGENTS_SOURCE="$SCRIPT_DIR/.claude/agents"
 AGENTS_TARGET="$CLAUDE_DIR/agents"
 
 mkdir -p "$AGENTS_TARGET"
@@ -1354,6 +1397,38 @@ if [[ -d "$AGENTS_SOURCE" ]]; then
     echo "[done] Installed agents to $AGENTS_TARGET"
 else
     echo "[skip] Agent definitions not found at $AGENTS_SOURCE"
+fi
+
+# ══════════════════════════════════════════════════════════════
+# 10c. GLOBAL RULES (auto-loaded, 3 files)
+# ══════════════════════════════════════════════════════════════
+
+RULES_SOURCE="$SCRIPT_DIR/.claude/rules"
+RULES_TARGET="$CLAUDE_DIR/rules"
+
+mkdir -p "$RULES_TARGET"
+
+if [[ -d "$RULES_SOURCE" ]]; then
+    cp "$RULES_SOURCE"/*.md "$RULES_TARGET/" 2>/dev/null || true
+    echo "[done] Installed global rules to $RULES_TARGET"
+else
+    echo "[skip] Rules not found at $RULES_SOURCE"
+fi
+
+# ══════════════════════════════════════════════════════════════
+# 10d. RULES LIBRARY (on-demand, 9 files)
+# ══════════════════════════════════════════════════════════════
+
+LIBRARY_SOURCE="$SCRIPT_DIR/.claude/rules-library"
+LIBRARY_TARGET="$CLAUDE_DIR/rules-library"
+
+mkdir -p "$LIBRARY_TARGET"
+
+if [[ -d "$LIBRARY_SOURCE" ]]; then
+    cp "$LIBRARY_SOURCE"/*.md "$LIBRARY_TARGET/" 2>/dev/null || true
+    echo "[done] Installed rules-library to $LIBRARY_TARGET"
+else
+    echo "[skip] Rules library not found at $LIBRARY_SOURCE"
 fi
 
 # ══════════════════════════════════════════════════════════════
@@ -1486,11 +1561,21 @@ echo "  - reinject-context.sh  — re-injects project context on session start"
 echo "  - notify.sh            — desktop notifications when Claude needs input"
 echo ""
 echo "Custom agents installed:"
+echo "  Utility agents:"
 echo "  - code-simplifier      — post-build code cleanup (read + edit)"
 echo "  - verify-app           — end-to-end project verification (read + bash)"
 echo "  - security-review      — vulnerability scanning (read-only)"
 echo "  - doc-writer           — documentation updates (read + edit + write)"
 echo "  - phase-recap          — phase recap generation (read + bash)"
+echo "  Phase agents:"
+echo "  - research             — codebase exploration, no code changes (opus)"
+echo "  - plan                 — clarification + implementation plans (opus)"
+echo "  - build                — team lead, delegates + integrates (sonnet)"
+echo "  - review               — holistic review, tests, integration (opus)"
+echo ""
+echo "Rules installed:"
+echo "  - ~/.claude/rules/          — 3 global rules (auto-loaded every session)"
+echo "  - ~/.claude/rules-library/  — 9 library rules (loaded on demand by agents)"
 echo ""
 echo "Each project now includes:"
 echo "  - CLAUDE.md with stack, conventions, and Agent Team config"
