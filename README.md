@@ -14,10 +14,11 @@ Every rule in this repo is failure-driven — it exists because we hit the speci
 
 ## What You Get
 
-- **Global rules** (`~/.claude/rules/`) — coding standards, safety guards, token efficiency, agent team protocol, and cross-tool conventions that load automatically in every session.
-- **Hooks** (`~/.claude/hooks/`) — shell scripts that run automatically on Claude Code lifecycle events: test verification on stop, type checking after edits, desktop notifications. Auto-detect your project's stack.
+- **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 9 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
+- **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
+- **Hooks** (`~/.claude/hooks/`) — 6 lifecycle scripts: test verification, type checking, auto-format, file protection, context re-injection, and desktop notifications. Auto-detect your project's stack.
 - **7 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
-- **Three-phase workflow** — Plan (single agent, high-capability model) → Build (team delegation, fast model) → Review (single agent, high-capability model). Plus **Ralph Loop** for single-agent autonomous iteration.
+- **Four-phase workflow** — Research → Plan → Build → Review. Plus **Ralph Loop** for single-agent autonomous iteration.
 - **tmux launcher** (`claude-code`) — per-project sessions with git context display.
 
 ## Quick Start
@@ -34,9 +35,12 @@ chmod +x claude_code/claude-setup.sh
 # 3. (Optional) Install the tmux launcher
 cp claude_code/claude-code /usr/local/bin/
 chmod +x /usr/local/bin/claude-code
+
+# Re-sync after pulling repo updates
+git pull && ./claude_code/claude-setup.sh --sync
 ```
 
-That's it. Every Claude Code session now picks up the global rules and hooks automatically.
+That's it. Every Claude Code session now picks up the global rules and hooks automatically. After `git pull`, run `claude-setup.sh --sync` to update your `~/.claude/` with any new or changed files.
 
 ## Start a New Project
 
@@ -70,45 +74,57 @@ claude-code ~/projects/existing-api
 ## How Configuration Layers Work
 
 ```
-~/.claude/CLAUDE.md              ← Global agent manifest (base)
-~/.claude/rules/*.md             ← Global modular rules (always loaded)
-  ├── agent-team-protocol.md     Three-phase workflow, delegation rules
-  ├── clarification-protocol.md  Ask before implementing ambiguous requirements
-  ├── coding-standards.md        SOLID, quality gates, prohibited patterns
-  ├── copilot-conventions.md     Cross-tool portable conventions
-  ├── data-model-review.md       Review gate before building data models
-  ├── environment-setup.md       Environment and config verification
-  ├── integration-testing.md     Test integration points early
-  ├── phase-workflow.md          Phase transition rules and boundaries
-  ├── pre-build-verification.md  Install → type-check → run after every change
-  ├── ralph-loop.md              Single-agent autonomous iteration loop
-  ├── safety.md                  Destructive action guards, secrets policy
-  ├── session-splitting.md       One phase per session, context boundaries
-  ├── stack-constraints.md       Stack version and compatibility guards
-  ├── team-lead-efficiency.md    Limit agents, poll frequency, no re-work
-  └── token-efficiency.md        Diff-over-rewrite, context economy
-~/.claude/hooks/*.sh             ← Deterministic lifecycle hooks (always active)
-  ├── verify-on-stop.sh          Run test suite when Claude finishes responding
-  ├── verify-after-edit.sh       Run type checker after source file edits
-  └── notify.sh                  Desktop notifications (macOS + Linux)
-~/.claude/settings.json          ← Hooks wiring and global settings
-./CLAUDE.md                      ← Project-level (overrides global)
-./.claude/commands/*.md          ← Project slash commands
-./CLAUDE.local.md                ← Personal overrides (gitignored)
+~/.claude/CLAUDE.md                ← Global agent manifest (base)
+~/.claude/rules/*.md               ← Global rules (always loaded, 3 files)
+  ├── coding-standards.md          SOLID, quality gates, prohibited patterns
+  ├── copilot-conventions.md       Cross-tool portable conventions
+  └── safety.md                    Destructive action guards, secrets policy
+~/.claude/rules-library/*.md       ← On-demand rules (loaded by phase agents, 9 files)
+  ├── agent-team-protocol.md       Three-phase workflow, delegation rules
+  ├── clarification-protocol.md    Ask before implementing ambiguous requirements
+  ├── environment-setup.md         Environment and config verification
+  ├── integration-testing.md       Test integration points early
+  ├── phase-workflow.md            Phase transition rules and boundaries
+  ├── ralph-loop.md                Single-agent autonomous iteration loop
+  ├── stack-constraints.md         Stack version and compatibility guards
+  ├── team-lead-efficiency.md      Limit agents, poll frequency, no re-work
+  └── token-efficiency.md          Diff-over-rewrite, context economy
+~/.claude/agents/*.md              ← Phase + utility agents (9 files)
+  ├── research.md                  Research phase agent
+  ├── plan.md                      Plan phase agent
+  ├── build.md                     Build phase agent
+  ├── review.md                    Review phase agent
+  ├── code-simplifier.md           Simplify recently changed code
+  ├── doc-writer.md                Generate and update documentation
+  ├── phase-recap.md               Summarize completed phase
+  ├── security-review.md           Scan for security vulnerabilities
+  └── verify-app.md                End-to-end project verification
+~/.claude/hooks/*.sh               ← Deterministic lifecycle hooks (always active, 6 files)
+  ├── verify-on-stop.sh            Run test suite when Claude finishes responding
+  ├── verify-after-edit.sh         Run type checker after source file edits
+  ├── auto-format.sh               Auto-format edited files
+  ├── protect-files.sh             Prevent edits to protected files
+  ├── reinject-context.sh          Re-inject session context on prompt submit
+  └── notify.sh                    Desktop notifications (macOS + Linux)
+~/.claude/settings.json            ← Hooks wiring and global settings
+./CLAUDE.md                        ← Project-level (overrides global)
+./.claude/commands/*.md            ← Project slash commands
+./CLAUDE.local.md                  ← Personal overrides (gitignored)
 ```
 
 Project-level rules override global rules. More specific always wins.
 
-## Three-Phase Workflow
+## Four-Phase Workflow
 
 | Phase | Model | Effort | Delegation | What Happens |
 |---|---|---|---|---|
-| **Plan** | Opus (highest) | High | None | Read codebase, design approach, get user approval |
+| **Research** | Opus (highest) | High | None | Explore codebase, summarize findings, identify constraints |
+| **Plan** | Opus (highest) | High | None | Design approach, get user approval |
 | **Build** | Sonnet (fast) | Medium | Yes | Team Lead delegates to specialist sub-agents |
 | **Build (loop)** | Sonnet (fast) | Medium | None | Ralph Loop: single agent iterates through stories autonomously |
 | **Review** | Opus (highest) | High | None | Holistic review, run tests, verify consistency |
 
-Planning must stay in one mind — sub-agents only see fragments and can't reason about the whole system. Delegation only happens during Build. For smaller features, **Ralph Loop** provides a single-agent alternative: read PRD → implement next failing story → test → commit → repeat.
+Each phase has a dedicated agent (`~/.claude/agents/`) that loads the relevant rules from the rules library. Planning and research must stay in one mind — sub-agents only see fragments and can't reason about the whole system. Delegation only happens during Build. For smaller features, **Ralph Loop** provides a single-agent alternative: read PRD → implement next failing story → test → commit → repeat.
 
 ## Porting to Other Tools
 
@@ -130,31 +146,44 @@ LICENSE                                  ← MIT
 CONTRIBUTING.md                          ← PR guidelines
 claude_code/
   claude-code                            ← tmux launcher script
-  claude-setup.sh                        ← One-time setup (creates ~/.claude/)
+  claude-setup.sh                        ← One-time setup (creates ~/.claude/); --sync to update
   .claude/
     CLAUDE.md                            ← Global agent manifest (reference copy)
     settings.json                        ← Hooks wiring (reference copy)
-    rules/                               ← 15 modular rule files
-      agent-team-protocol.md             ← Three-phase workflow, delegation rules
-      clarification-protocol.md          ← Ask before implementing ambiguity
+    rules/                               ← 3 global rules (always loaded)
       coding-standards.md                ← SOLID, quality gates, prohibited patterns
       copilot-conventions.md             ← Cross-tool conventions
-      data-model-review.md               ← Review gate for data models
+      safety.md                          ← Destructive action guards, secrets
+    rules-library/                       ← 9 on-demand rules (loaded by phase agents)
+      agent-team-protocol.md             ← Three-phase workflow, delegation rules
+      clarification-protocol.md          ← Ask before implementing ambiguity
       environment-setup.md               ← Environment verification
       integration-testing.md             ← Test integration points early
       phase-workflow.md                  ← Phase transition boundaries
-      pre-build-verification.md          ← Verify after every change
       ralph-loop.md                      ← Single-agent autonomous iteration loop
-      safety.md                          ← Destructive action guards, secrets
-      session-splitting.md               ← Context boundaries, one phase per session
       stack-constraints.md               ← Version and compatibility guards
       team-lead-efficiency.md            ← Agent limits, poll frequency
       token-efficiency.md                ← Diff-over-rewrite, context economy
-    hooks/                               ← 3 lifecycle hook scripts
+    agents/                              ← 9 agent definitions (4 phase + 5 utility)
+      research.md                        ← Research phase agent
+      plan.md                            ← Plan phase agent
+      build.md                           ← Build phase agent
+      review.md                          ← Review phase agent
+      code-simplifier.md                 ← Simplify recently changed code
+      doc-writer.md                      ← Generate and update documentation
+      phase-recap.md                     ← Summarize completed phase
+      security-review.md                 ← Scan for security vulnerabilities
+      verify-app.md                      ← End-to-end project verification
+    commands/                            ← Slash commands
+      ralph-start.md                     ← Start a Ralph Loop session
+    hooks/                               ← 6 lifecycle hook scripts
       verify-on-stop.sh                  ← Run test suite on Stop event
       verify-after-edit.sh               ← Run type checker on Edit/Write
+      auto-format.sh                     ← Auto-format edited files
+      protect-files.sh                   ← Prevent edits to protected files
+      reinject-context.sh                ← Re-inject session context on prompt submit
       notify.sh                          ← Desktop notifications (macOS + Linux)
-  docs/                                  ← 11 reference documents
+  docs/                                  ← 13 reference documents
     agent-traces.md                      ← How to find and archive agent transcripts
     claude-code-setup-cookbook.md         ← Detailed cookbook
     claude-config-guide.md               ← Configuration reference
@@ -165,7 +194,9 @@ claude_code/
     hooks-guide.md                       ← Hook installation and customization guide
     hooks-test-cases.md                  ← Manual test cases for hooks
     phase-recap-template.md              ← End-of-phase handoff template
+    ralph-loop-guide.md                  ← Ralph Loop usage guide
     session-management.md                ← Session commands cheat sheet
+    subagents-guide.md                   ← Sub-agent configuration and usage
   tests/                                 ← Automated tests
     test-hooks.sh                        ← 27 tests for hook scripts
 ```
@@ -182,6 +213,8 @@ claude_code/
 - **[Agent Traces](claude_code/docs/agent-traces.md)** — locating, reading, and archiving agent transcripts
 - **[Error Reporting Template](claude_code/docs/error-reporting-template.md)** — standardized format for bug reports
 - **[Phase Recap Template](claude_code/docs/phase-recap-template.md)** — end-of-phase handoff checklist
+- **[Ralph Loop Guide](claude_code/docs/ralph-loop-guide.md)** — Ralph Loop usage and configuration
+- **[Sub-Agents Guide](claude_code/docs/subagents-guide.md)** — sub-agent configuration and usage
 
 ## Contributing
 
