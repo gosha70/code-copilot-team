@@ -14,11 +14,12 @@ Every rule in this repo is failure-driven — it exists because we hit the speci
 
 ## What You Get
 
-- **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 9 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
+- **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 10 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
 - **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
 - **Hooks** (`~/.claude/hooks/`) — 6 lifecycle scripts: test verification, type checking, auto-format, file protection, context re-injection, and desktop notifications. Auto-detect your project's stack.
 - **7 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
 - **Four-phase workflow** — Research → Plan → Build → Review. Plus **Ralph Loop** for single-agent autonomous iteration.
+- **Optional GCC memory** — persistent cross-session context via the [GCC protocol](https://arxiv.org/abs/2508.00031), powered by Aline MCP (`aline-ai`). Install with `--gcc`.
 - **tmux launcher** (`claude-code`) — per-project sessions with git context display.
 
 ## Quick Start
@@ -35,6 +36,10 @@ chmod +x claude_code/claude-setup.sh
 # 3. (Optional) Install the tmux launcher
 cp claude_code/claude-code /usr/local/bin/
 chmod +x /usr/local/bin/claude-code
+
+# (Optional) Enable GCC memory — persistent cross-session context
+# Installs Aline MCP server (aline-ai), the implementation behind GCC protocol
+./claude_code/claude-setup.sh --gcc
 
 # Re-sync after pulling repo updates
 git pull && ./claude_code/claude-setup.sh --sync
@@ -79,7 +84,7 @@ claude-code ~/projects/existing-api
   ├── coding-standards.md          SOLID, quality gates, prohibited patterns
   ├── copilot-conventions.md       Cross-tool portable conventions
   └── safety.md                    Destructive action guards, secrets policy
-~/.claude/rules-library/*.md       ← On-demand rules (loaded by phase agents, 9 files)
+~/.claude/rules-library/*.md       ← On-demand rules (loaded by phase agents, 10 files)
   ├── agent-team-protocol.md       Three-phase workflow, delegation rules
   ├── clarification-protocol.md    Ask before implementing ambiguous requirements
   ├── environment-setup.md         Environment and config verification
@@ -88,7 +93,8 @@ claude-code ~/projects/existing-api
   ├── ralph-loop.md                Single-agent autonomous iteration loop
   ├── stack-constraints.md         Stack version and compatibility guards
   ├── team-lead-efficiency.md      Limit agents, poll frequency, no re-work
-  └── token-efficiency.md          Diff-over-rewrite, context economy
+  ├── token-efficiency.md          Diff-over-rewrite, context economy
+  └── gcc-protocol.md              GCC memory persistence (optional, Aline MCP)
 ~/.claude/agents/*.md              ← Phase + utility agents (9 files)
   ├── research.md                  Research phase agent
   ├── plan.md                      Plan phase agent
@@ -154,7 +160,7 @@ claude_code/
       coding-standards.md                ← SOLID, quality gates, prohibited patterns
       copilot-conventions.md             ← Cross-tool conventions
       safety.md                          ← Destructive action guards, secrets
-    rules-library/                       ← 9 on-demand rules (loaded by phase agents)
+    rules-library/                       ← 10 on-demand rules (loaded by phase agents)
       agent-team-protocol.md             ← Three-phase workflow, delegation rules
       clarification-protocol.md          ← Ask before implementing ambiguity
       environment-setup.md               ← Environment verification
@@ -164,6 +170,7 @@ claude_code/
       stack-constraints.md               ← Version and compatibility guards
       team-lead-efficiency.md            ← Agent limits, poll frequency
       token-efficiency.md                ← Diff-over-rewrite, context economy
+      gcc-protocol.md                    ← GCC memory persistence (optional, Aline MCP)
     agents/                              ← 9 agent definitions (4 phase + 5 utility)
       research.md                        ← Research phase agent
       plan.md                            ← Plan phase agent

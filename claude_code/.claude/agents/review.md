@@ -62,3 +62,7 @@ You are a review agent. Your job is to perform a holistic review of all changes 
 - **Be specific.** "Missing null check at `src/api/orders.ts:42`" not "some error handling could be improved."
 - **Check the browser console** for runtime errors — this catches issues static analysis misses.
 - **Work alone.** Do not delegate to sub-agents.
+
+## GCC Memory (optional)
+
+If the Aline MCP server is available, run **CONTEXT** at the start to load build results and plan context. After the review verdict, run **COMMIT** with the review summary (pass/fail, key findings, recommendations).

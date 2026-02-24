@@ -49,3 +49,7 @@ When delegating to a sub-agent, include:
 - **Fix integration issues yourself** — don't delegate another sub-agent for it.
 - **Don't busy-wait.** Launch independent agents in parallel, work on other tasks while waiting.
 - **Commit gate.** Ask the user before committing. One commit per phase.
+
+## GCC Memory (optional)
+
+If the Aline MCP server is available, run **CONTEXT** at the start to load the approved plan. After build verification passes, run **COMMIT** with a build summary (files changed, tests passing, key decisions).

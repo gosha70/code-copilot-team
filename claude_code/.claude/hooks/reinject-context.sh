@@ -63,6 +63,30 @@ if [[ -n "${LATEST_RECAP:-}" ]] && [[ -f "$LATEST_RECAP" ]]; then
   OUTPUT="${OUTPUT}## Latest Phase Recap (${LATEST_RECAP})\n${RECAP_HEADER}\n\n"
 fi
 
+# --- GCC memory (if present) ---
+if [[ -d ".gcc" ]]; then
+  GCC_OUTPUT=""
+  # Project roadmap from main.md
+  if [[ -f ".gcc/main.md" ]]; then
+    ROADMAP=$(head -n 20 .gcc/main.md 2>/dev/null)
+    if [[ -n "$ROADMAP" ]]; then
+      GCC_OUTPUT="${GCC_OUTPUT}### Roadmap (main.md)\n${ROADMAP}\n\n"
+    fi
+  fi
+  # Latest commit entry from the most recent branch
+  LATEST_COMMIT=$(ls -t .gcc/*/commit.md 2>/dev/null | head -1 || true)
+  if [[ -n "${LATEST_COMMIT:-}" ]] && [[ -f "$LATEST_COMMIT" ]]; then
+    # Get last commit entry (entries separated by blank lines with --- or ## headings)
+    LAST_ENTRY=$(tail -n 20 "$LATEST_COMMIT" 2>/dev/null)
+    if [[ -n "$LAST_ENTRY" ]]; then
+      GCC_OUTPUT="${GCC_OUTPUT}### Recent Progress (${LATEST_COMMIT})\n${LAST_ENTRY}\n\n"
+    fi
+  fi
+  if [[ -n "$GCC_OUTPUT" ]]; then
+    OUTPUT="${OUTPUT}## GCC Memory (auto-injected)\n${GCC_OUTPUT}"
+  fi
+fi
+
 # --- Output if we found anything ---
 if [[ -n "$OUTPUT" ]]; then
   echo "--- Session Context (auto-injected) ---"

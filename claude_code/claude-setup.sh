@@ -4,7 +4,7 @@
 # Creates:
 #   ~/.claude/CLAUDE.md                    Global configuration
 #   ~/.claude/rules/                       Global rules (auto-loaded, 3 files)
-#   ~/.claude/rules-library/               Rules library (on-demand, 9 files)
+#   ~/.claude/rules-library/               Rules library (on-demand, 10 files)
 #   ~/.claude/agents/                      Global agents (5 utility + 4 phase)
 #   ~/.claude/hooks/                       Global hook scripts (verify, notify)
 #   ~/.claude/settings.json                Global settings with hooks wired
@@ -14,6 +14,7 @@
 #
 # Run once, then use 'claude-code init <type> [path]' to scaffold projects.
 # Run with --sync to re-copy rules, rules-library, and agents from repo.
+# Run with --gcc to install optional GCC memory support (Aline MCP).
 
 set -e
 
@@ -39,7 +40,7 @@ if [[ "${1:-}" == "--sync" ]]; then
         echo "[done] Synced rules to $RULES_TARGET"
     fi
 
-    # Rules library (9 files)
+    # Rules library (10 files)
     LIBRARY_SOURCE="$SCRIPT_DIR/.claude/rules-library"
     LIBRARY_TARGET="$CLAUDE_DIR/rules-library"
     mkdir -p "$LIBRARY_TARGET"
@@ -58,6 +59,39 @@ if [[ "${1:-}" == "--sync" ]]; then
     fi
 
     echo "Sync complete."
+    exit 0
+fi
+
+# ══════════════════════════════════════════════════════════════
+# --gcc: install Aline MCP + GCC protocol rule (optional)
+# ══════════════════════════════════════════════════════════════
+
+if [[ "${1:-}" == "--gcc" ]]; then
+    echo "Installing GCC (Git Context Controller) support..."
+
+    # Install Aline MCP server
+    if command -v claude &>/dev/null; then
+        claude mcp add --scope user --transport stdio aline -- npx -y aline-ai@latest
+        echo "[done] Aline MCP server added (scope: user)"
+    else
+        echo "[WARN] 'claude' CLI not found. Install Aline MCP manually:"
+        echo "       claude mcp add --scope user --transport stdio aline -- npx -y aline-ai@latest"
+    fi
+
+    # Copy gcc-protocol rule to rules-library
+    LIBRARY_TARGET="$CLAUDE_DIR/rules-library"
+    GCC_RULE_SOURCE="$SCRIPT_DIR/.claude/rules-library/gcc-protocol.md"
+    mkdir -p "$LIBRARY_TARGET"
+    if [[ -f "$GCC_RULE_SOURCE" ]]; then
+        cp "$GCC_RULE_SOURCE" "$LIBRARY_TARGET/"
+        echo "[done] Copied gcc-protocol.md to $LIBRARY_TARGET"
+    else
+        echo "[WARN] gcc-protocol.md not found at $GCC_RULE_SOURCE"
+    fi
+
+    echo ""
+    echo "GCC setup complete. Phase agents will use GCC memory when Aline MCP is available."
+    echo "To verify: start a Claude session and check that the 'aline' MCP server is listed."
     exit 0
 fi
 
@@ -1575,7 +1609,7 @@ echo "  - review               — holistic review, tests, integration (opus)"
 echo ""
 echo "Rules installed:"
 echo "  - ~/.claude/rules/          — 3 global rules (auto-loaded every session)"
-echo "  - ~/.claude/rules-library/  — 9 library rules (loaded on demand by agents)"
+echo "  - ~/.claude/rules-library/  — 10 library rules (loaded on demand by agents)"
 echo ""
 echo "Each project now includes:"
 echo "  - CLAUDE.md with stack, conventions, and Agent Team config"
