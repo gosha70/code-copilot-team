@@ -44,3 +44,4 @@ yarn-debug.log*
 
 # Generated docs (keep source only)
 README.html
+/doc_internal
