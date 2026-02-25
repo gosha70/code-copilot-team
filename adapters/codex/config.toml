@@ -1,0 +1,11 @@
+# Codex CLI configuration
+# Installed to ~/.codex/config.toml by setup.sh
+
+# Maximum size for project documents (AGENTS.md)
+project_doc_max_bytes = 65536
+
+# Model to use (override with CODEX_MODEL env var)
+# model = "o4-mini"
+
+# Approval mode: "suggest" | "auto-edit" | "full-auto"
+# approval_mode = "suggest"
