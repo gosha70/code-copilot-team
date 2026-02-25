@@ -33,6 +33,7 @@ __pycache__/
 venv/
 target/
 build/
+!adapters/codex/.agents/skills/build/
 dist/
 *.class
 *.jar
