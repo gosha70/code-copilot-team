@@ -345,7 +345,115 @@ INSTALLED_INSTR=$(ls "$GH_TMP/.github/instructions"/*.instructions.md 2>/dev/nul
 assert "gh-copilot installed 10 instruction files ($INSTALLED_INSTR)" "[[ $INSTALLED_INSTR -eq 10 ]]"
 rm -rf "$GH_TMP"
 
-# ── Section 17: Idempotent generation ─────────────────────
+# ── Section 17: Windsurf rules.md ─────────────────────────
+
+echo ""
+echo "=== Windsurf rules.md ==="
+
+WINDSURF_RULES="$ADAPTERS/windsurf/.windsurf/rules"
+WINDSURF_MD="$WINDSURF_RULES/rules.md"
+
+assert "windsurf rules dir exists" "[[ -d '$WINDSURF_RULES' ]]"
+assert "rules.md exists" "[[ -f '$WINDSURF_MD' ]]"
+assert_contains "has Windsurf Rules header" "$WINDSURF_MD" "^# Windsurf Rules"
+assert_contains "has auto-generated notice" "$WINDSURF_MD" "Auto-generated from shared/rules/always"
+
+# Verify all always-on rules are included
+assert_contains "has Coding Standards" "$WINDSURF_MD" "^# Coding Standards"
+assert_contains "has Cross-Copilot Conventions" "$WINDSURF_MD" "^# Cross-Copilot Conventions"
+assert_contains "has Agent Safety Rules" "$WINDSURF_MD" "^# Agent Safety Rules"
+
+# Verify key content
+assert_contains "has lint errors: 0" "$WINDSURF_MD" "Lint errors: 0"
+assert_contains "has read before write" "$WINDSURF_MD" "Read before write"
+assert_contains "has destructive commands" "$WINDSURF_MD" "rm -rf"
+assert_contains "has password storage" "$WINDSURF_MD" "Password Storage"
+
+# ── Section 18: Windsurf setup.sh ─────────────────────────
+
+echo ""
+echo "=== Windsurf setup.sh ==="
+
+WINDSURF_SETUP="$ADAPTERS/windsurf/setup.sh"
+assert "windsurf setup.sh exists" "[[ -f '$WINDSURF_SETUP' ]]"
+assert "windsurf setup.sh is executable" "[[ -x '$WINDSURF_SETUP' ]]"
+assert_contains "windsurf setup.sh has shebang" "$WINDSURF_SETUP" "^#!/bin/bash"
+assert_contains "windsurf setup.sh supports --sync" "$WINDSURF_SETUP" "\-\-sync"
+assert_contains "windsurf setup.sh copies rules.md" "$WINDSURF_SETUP" "rules.md"
+
+# ── Section 19: Aider CONVENTIONS.md ──────────────────────
+
+echo ""
+echo "=== Aider CONVENTIONS.md ==="
+
+AIDER_MD="$ADAPTERS/aider/CONVENTIONS.md"
+
+assert "CONVENTIONS.md exists" "[[ -f '$AIDER_MD' ]]"
+assert_contains "has Aider Conventions header" "$AIDER_MD" "^# Aider Conventions"
+assert_contains "has auto-generated notice" "$AIDER_MD" "Auto-generated from shared/rules/always"
+
+# Verify all always-on rules are included
+assert_contains "has Coding Standards" "$AIDER_MD" "^# Coding Standards"
+assert_contains "has Cross-Copilot Conventions" "$AIDER_MD" "^# Cross-Copilot Conventions"
+assert_contains "has Agent Safety Rules" "$AIDER_MD" "^# Agent Safety Rules"
+
+# Verify key content
+assert_contains "has lint errors: 0" "$AIDER_MD" "Lint errors: 0"
+assert_contains "has read before write" "$AIDER_MD" "Read before write"
+assert_contains "has destructive commands" "$AIDER_MD" "rm -rf"
+assert_contains "has password storage" "$AIDER_MD" "Password Storage"
+
+# ── Section 20: Aider setup.sh ────────────────────────────
+
+echo ""
+echo "=== Aider setup.sh ==="
+
+AIDER_SETUP="$ADAPTERS/aider/setup.sh"
+assert "aider setup.sh exists" "[[ -f '$AIDER_SETUP' ]]"
+assert "aider setup.sh is executable" "[[ -x '$AIDER_SETUP' ]]"
+assert_contains "aider setup.sh has shebang" "$AIDER_SETUP" "^#!/bin/bash"
+assert_contains "aider setup.sh supports --sync" "$AIDER_SETUP" "\-\-sync"
+assert_contains "aider setup.sh copies CONVENTIONS.md" "$AIDER_SETUP" "CONVENTIONS.md"
+
+# ── Section 21: Windsurf setup.sh install test ────────────
+
+echo ""
+echo "=== Windsurf setup.sh install test ==="
+
+WINDSURF_TMP=$(mktemp -d)
+bash "$WINDSURF_SETUP" "$WINDSURF_TMP" >/dev/null 2>&1
+WINDSURF_INSTALL_RC=$?
+assert "windsurf install exits 0" "[[ $WINDSURF_INSTALL_RC -eq 0 ]]"
+assert "installed .windsurf/rules/rules.md" "[[ -f '$WINDSURF_TMP/.windsurf/rules/rules.md' ]]"
+rm -rf "$WINDSURF_TMP"
+
+# ── Section 22: Aider setup.sh install test ───────────────
+
+echo ""
+echo "=== Aider setup.sh install test ==="
+
+AIDER_TMP=$(mktemp -d)
+bash "$AIDER_SETUP" "$AIDER_TMP" >/dev/null 2>&1
+AIDER_INSTALL_RC=$?
+assert "aider install exits 0" "[[ $AIDER_INSTALL_RC -eq 0 ]]"
+assert "installed CONVENTIONS.md" "[[ -f '$AIDER_TMP/CONVENTIONS.md' ]]"
+rm -rf "$AIDER_TMP"
+
+# ── Section 23: Content parity across adapters ────────────
+
+echo ""
+echo "=== Content parity across adapters ==="
+
+# All concatenated adapters should contain the same always-on rule content.
+# Verify by checking that key phrases from each rule appear in all outputs.
+for target in "$WINDSURF_MD" "$AIDER_MD" "$COPILOT_MD"; do
+  name="$(basename "$target")"
+  assert_contains "$name: has Quality Gates" "$target" "Quality Gates"
+  assert_contains "$name: has Core Contract" "$target" "Core Contract"
+  assert_contains "$name: has Input Validation" "$target" "Input Validation"
+done
+
+# ── Section 24: Idempotent generation ─────────────────────
 
 echo ""
 echo "=== Idempotent generation ==="
@@ -354,13 +462,19 @@ echo "=== Idempotent generation ==="
 MD5_BEFORE_AGENTS=$(md5 -q "$AGENTS_MD" 2>/dev/null || md5sum "$AGENTS_MD" | cut -d' ' -f1)
 MD5_BEFORE_COPILOT=$(md5 -q "$COPILOT_MD" 2>/dev/null || md5sum "$COPILOT_MD" | cut -d' ' -f1)
 MD5_BEFORE_CURSOR=$(md5 -q "$CURSOR_RULES/coding-standards.mdc" 2>/dev/null || md5sum "$CURSOR_RULES/coding-standards.mdc" | cut -d' ' -f1)
+MD5_BEFORE_WINDSURF=$(md5 -q "$WINDSURF_MD" 2>/dev/null || md5sum "$WINDSURF_MD" | cut -d' ' -f1)
+MD5_BEFORE_AIDER=$(md5 -q "$AIDER_MD" 2>/dev/null || md5sum "$AIDER_MD" | cut -d' ' -f1)
 bash "$REPO_DIR/scripts/generate.sh" >/dev/null 2>&1
 MD5_AFTER_AGENTS=$(md5 -q "$AGENTS_MD" 2>/dev/null || md5sum "$AGENTS_MD" | cut -d' ' -f1)
 MD5_AFTER_COPILOT=$(md5 -q "$COPILOT_MD" 2>/dev/null || md5sum "$COPILOT_MD" | cut -d' ' -f1)
 MD5_AFTER_CURSOR=$(md5 -q "$CURSOR_RULES/coding-standards.mdc" 2>/dev/null || md5sum "$CURSOR_RULES/coding-standards.mdc" | cut -d' ' -f1)
+MD5_AFTER_WINDSURF=$(md5 -q "$WINDSURF_MD" 2>/dev/null || md5sum "$WINDSURF_MD" | cut -d' ' -f1)
+MD5_AFTER_AIDER=$(md5 -q "$AIDER_MD" 2>/dev/null || md5sum "$AIDER_MD" | cut -d' ' -f1)
 assert "Codex AGENTS.md is identical after re-generation" "[[ '$MD5_BEFORE_AGENTS' == '$MD5_AFTER_AGENTS' ]]"
 assert "GH Copilot copilot-instructions.md is identical" "[[ '$MD5_BEFORE_COPILOT' == '$MD5_AFTER_COPILOT' ]]"
 assert "Cursor coding-standards.mdc is identical" "[[ '$MD5_BEFORE_CURSOR' == '$MD5_AFTER_CURSOR' ]]"
+assert "Windsurf rules.md is identical" "[[ '$MD5_BEFORE_WINDSURF' == '$MD5_AFTER_WINDSURF' ]]"
+assert "Aider CONVENTIONS.md is identical" "[[ '$MD5_BEFORE_AIDER' == '$MD5_AFTER_AIDER' ]]"
 
 # ── Results ───────────────────────────────────────────────
 

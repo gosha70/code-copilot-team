@@ -162,13 +162,49 @@ ON_DEMAND_COUNT=$(ls "$GH_DIR/instructions"/*.instructions.md 2>/dev/null | wc -
 echo "[github-copilot] Generated $ON_DEMAND_COUNT on-demand instruction files"
 
 # ── Windsurf ─────────────────────────────────────────────────
-# TODO (Cycle 5): Generate rules.md from shared/rules/always/*
-echo "[windsurf] Stub — not yet implemented"
-mkdir -p "$ADAPTERS/windsurf"
+# Concatenate shared/rules/always/* into .windsurf/rules/rules.md
+echo "[windsurf] Generating rules.md..."
+WINDSURF_RULES="$ADAPTERS/windsurf/.windsurf/rules"
+mkdir -p "$WINDSURF_RULES"
+
+{
+  echo "# Windsurf Rules"
+  echo ""
+  echo "Auto-generated from shared/rules/always/. Do not edit directly."
+  echo "Regenerate with: ./scripts/generate.sh"
+  echo ""
+
+  for f in "$SHARED/always"/*.md; do
+    cat "$f"
+    echo ""
+    echo "---"
+    echo ""
+  done
+} > "$WINDSURF_RULES/rules.md"
+
+echo "[windsurf] Generated rules.md"
 
 # ── Aider ────────────────────────────────────────────────────
-# TODO (Cycle 5): Generate CONVENTIONS.md from shared/rules/always/*
-echo "[aider] Stub — not yet implemented"
-mkdir -p "$ADAPTERS/aider"
+# Concatenate shared/rules/always/* into CONVENTIONS.md
+echo "[aider] Generating CONVENTIONS.md..."
+AIDER_DIR="$ADAPTERS/aider"
+mkdir -p "$AIDER_DIR"
+
+{
+  echo "# Aider Conventions"
+  echo ""
+  echo "Auto-generated from shared/rules/always/. Do not edit directly."
+  echo "Regenerate with: ./scripts/generate.sh"
+  echo ""
+
+  for f in "$SHARED/always"/*.md; do
+    cat "$f"
+    echo ""
+    echo "---"
+    echo ""
+  done
+} > "$AIDER_DIR/CONVENTIONS.md"
+
+echo "[aider] Generated CONVENTIONS.md"
 
 echo "=== Done ==="
