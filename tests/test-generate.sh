@@ -210,16 +210,157 @@ assert_contains "setup.sh installs AGENTS.md" "$SETUP" "AGENTS.md"
 assert_contains "setup.sh installs skills" "$SETUP" "skills"
 assert_contains "setup.sh supports --sync" "$SETUP" "\-\-sync"
 
-# ── Section 10: Idempotent generation ─────────────────────
+# ── Section 10: Cursor .mdc files ─────────────────────────
+
+echo ""
+echo "=== Cursor .mdc files ==="
+
+CURSOR_RULES="$ADAPTERS/cursor/.cursor/rules"
+
+assert "cursor rules dir exists" "[[ -d '$CURSOR_RULES' ]]"
+
+# Verify 3 .mdc files (one per always-on rule)
+MDC_COUNT=$(ls "$CURSOR_RULES"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
+assert "exactly 3 .mdc files ($MDC_COUNT)" "[[ $MDC_COUNT -eq 3 ]]"
+
+assert "coding-standards.mdc exists" "[[ -f '$CURSOR_RULES/coding-standards.mdc' ]]"
+assert "copilot-conventions.mdc exists" "[[ -f '$CURSOR_RULES/copilot-conventions.mdc' ]]"
+assert "safety.mdc exists" "[[ -f '$CURSOR_RULES/safety.mdc' ]]"
+
+# Verify frontmatter structure
+for mdc in coding-standards copilot-conventions safety; do
+  MDC_FILE="$CURSOR_RULES/$mdc.mdc"
+  assert_contains "$mdc.mdc: has frontmatter start" "$MDC_FILE" "^---"
+  assert_contains "$mdc.mdc: has description field" "$MDC_FILE" "^description:"
+  assert_contains "$mdc.mdc: has alwaysApply: true" "$MDC_FILE" "^alwaysApply: true"
+done
+
+# Verify content from source rules is present
+assert_contains "coding-standards.mdc: has Quality Gates" "$CURSOR_RULES/coding-standards.mdc" "Quality Gates"
+assert_contains "copilot-conventions.mdc: has Core Contract" "$CURSOR_RULES/copilot-conventions.mdc" "Core Contract"
+assert_contains "safety.mdc: has Secrets & Credentials" "$CURSOR_RULES/safety.mdc" "Secrets & Credentials"
+
+# Verify descriptions match first headings
+assert_contains "coding-standards.mdc: description is Coding Standards" "$CURSOR_RULES/coding-standards.mdc" 'description: "Coding Standards"'
+assert_contains "copilot-conventions.mdc: description is Cross-Copilot" "$CURSOR_RULES/copilot-conventions.mdc" 'description: "Cross-Copilot Conventions"'
+assert_contains "safety.mdc: description is Agent Safety" "$CURSOR_RULES/safety.mdc" 'description: "Agent Safety Rules"'
+
+# ── Section 11: Cursor setup.sh ───────────────────────────
+
+echo ""
+echo "=== Cursor setup.sh ==="
+
+CURSOR_SETUP="$ADAPTERS/cursor/setup.sh"
+assert "cursor setup.sh exists" "[[ -f '$CURSOR_SETUP' ]]"
+assert "cursor setup.sh is executable" "[[ -x '$CURSOR_SETUP' ]]"
+assert_contains "cursor setup.sh has shebang" "$CURSOR_SETUP" "^#!/bin/bash"
+assert_contains "cursor setup.sh supports --sync" "$CURSOR_SETUP" "\-\-sync"
+assert_contains "cursor setup.sh copies .mdc files" "$CURSOR_SETUP" "\.mdc"
+
+# ── Section 12: GitHub Copilot copilot-instructions.md ────
+
+echo ""
+echo "=== GitHub Copilot copilot-instructions.md ==="
+
+GH_DIR="$ADAPTERS/github-copilot/.github"
+COPILOT_MD="$GH_DIR/copilot-instructions.md"
+
+assert "copilot-instructions.md exists" "[[ -f '$COPILOT_MD' ]]"
+assert_contains "has auto-generated notice" "$COPILOT_MD" "Auto-generated from shared/rules/always"
+assert_contains "has Copilot Instructions header" "$COPILOT_MD" "^# Copilot Instructions"
+
+# Verify all always-on rules are included
+assert_contains "has Coding Standards" "$COPILOT_MD" "^# Coding Standards"
+assert_contains "has Cross-Copilot Conventions" "$COPILOT_MD" "^# Cross-Copilot Conventions"
+assert_contains "has Agent Safety Rules" "$COPILOT_MD" "^# Agent Safety Rules"
+
+# Verify key content
+assert_contains "has lint errors: 0" "$COPILOT_MD" "Lint errors: 0"
+assert_contains "has read before write" "$COPILOT_MD" "Read before write"
+assert_contains "has destructive commands" "$COPILOT_MD" "rm -rf"
+
+# ── Section 13: GitHub Copilot on-demand instructions ─────
+
+echo ""
+echo "=== GitHub Copilot on-demand instructions ==="
+
+INSTRUCTIONS_DIR="$GH_DIR/instructions"
+assert "instructions dir exists" "[[ -d '$INSTRUCTIONS_DIR' ]]"
+
+# Verify all 10 on-demand rules become instruction files
+ON_DEMAND_COUNT=$(ls "$INSTRUCTIONS_DIR"/*.instructions.md 2>/dev/null | wc -l | tr -d ' ')
+assert "exactly 10 instruction files ($ON_DEMAND_COUNT)" "[[ $ON_DEMAND_COUNT -eq 10 ]]"
+
+# Verify each on-demand rule has a corresponding instruction file
+for f in "$SHARED/on-demand"/*.md; do
+  name="$(basename "$f" .md)"
+  INSTR="$INSTRUCTIONS_DIR/$name.instructions.md"
+  assert "$name.instructions.md exists" "[[ -f '$INSTR' ]]"
+  assert_contains "$name: has applyTo frontmatter" "$INSTR" "^applyTo:"
+  assert_contains "$name: has frontmatter delimiters" "$INSTR" "^---"
+done
+
+# Verify specific glob patterns for key rules
+assert_contains "environment-setup: has env glob" "$INSTRUCTIONS_DIR/environment-setup.instructions.md" '\.env'
+assert_contains "stack-constraints: has package.json glob" "$INSTRUCTIONS_DIR/stack-constraints.instructions.md" 'package.json'
+assert_contains "integration-testing: has tests glob" "$INSTRUCTIONS_DIR/integration-testing.instructions.md" 'tests'
+
+# ── Section 14: GitHub Copilot setup.sh ───────────────────
+
+echo ""
+echo "=== GitHub Copilot setup.sh ==="
+
+GH_SETUP="$ADAPTERS/github-copilot/setup.sh"
+assert "gh-copilot setup.sh exists" "[[ -f '$GH_SETUP' ]]"
+assert "gh-copilot setup.sh is executable" "[[ -x '$GH_SETUP' ]]"
+assert_contains "gh-copilot setup.sh has shebang" "$GH_SETUP" "^#!/bin/bash"
+assert_contains "gh-copilot setup.sh supports --sync" "$GH_SETUP" "\-\-sync"
+assert_contains "gh-copilot setup.sh copies copilot-instructions" "$GH_SETUP" "copilot-instructions"
+assert_contains "gh-copilot setup.sh copies instructions dir" "$GH_SETUP" "instructions"
+
+# ── Section 15: Cursor setup.sh install test ──────────────
+
+echo ""
+echo "=== Cursor setup.sh install test ==="
+
+CURSOR_TMP=$(mktemp -d)
+bash "$CURSOR_SETUP" "$CURSOR_TMP" >/dev/null 2>&1
+CURSOR_INSTALL_RC=$?
+assert "cursor install exits 0" "[[ $CURSOR_INSTALL_RC -eq 0 ]]"
+INSTALLED_MDC=$(ls "$CURSOR_TMP/.cursor/rules"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
+assert "cursor installed 3 .mdc files ($INSTALLED_MDC)" "[[ $INSTALLED_MDC -eq 3 ]]"
+rm -rf "$CURSOR_TMP"
+
+# ── Section 16: GitHub Copilot setup.sh install test ──────
+
+echo ""
+echo "=== GitHub Copilot setup.sh install test ==="
+
+GH_TMP=$(mktemp -d)
+bash "$GH_SETUP" "$GH_TMP" >/dev/null 2>&1
+GH_INSTALL_RC=$?
+assert "gh-copilot install exits 0" "[[ $GH_INSTALL_RC -eq 0 ]]"
+assert "installed copilot-instructions.md" "[[ -f '$GH_TMP/.github/copilot-instructions.md' ]]"
+INSTALLED_INSTR=$(ls "$GH_TMP/.github/instructions"/*.instructions.md 2>/dev/null | wc -l | tr -d ' ')
+assert "gh-copilot installed 10 instruction files ($INSTALLED_INSTR)" "[[ $INSTALLED_INSTR -eq 10 ]]"
+rm -rf "$GH_TMP"
+
+# ── Section 17: Idempotent generation ─────────────────────
 
 echo ""
 echo "=== Idempotent generation ==="
 
-# Run generator twice, verify identical output
-MD5_BEFORE=$(md5 -q "$AGENTS_MD" 2>/dev/null || md5sum "$AGENTS_MD" | cut -d' ' -f1)
+# Run generator twice, verify identical output across all adapters
+MD5_BEFORE_AGENTS=$(md5 -q "$AGENTS_MD" 2>/dev/null || md5sum "$AGENTS_MD" | cut -d' ' -f1)
+MD5_BEFORE_COPILOT=$(md5 -q "$COPILOT_MD" 2>/dev/null || md5sum "$COPILOT_MD" | cut -d' ' -f1)
+MD5_BEFORE_CURSOR=$(md5 -q "$CURSOR_RULES/coding-standards.mdc" 2>/dev/null || md5sum "$CURSOR_RULES/coding-standards.mdc" | cut -d' ' -f1)
 bash "$REPO_DIR/scripts/generate.sh" >/dev/null 2>&1
-MD5_AFTER=$(md5 -q "$AGENTS_MD" 2>/dev/null || md5sum "$AGENTS_MD" | cut -d' ' -f1)
-assert "AGENTS.md is identical after re-generation" "[[ '$MD5_BEFORE' == '$MD5_AFTER' ]]"
+MD5_AFTER_AGENTS=$(md5 -q "$AGENTS_MD" 2>/dev/null || md5sum "$AGENTS_MD" | cut -d' ' -f1)
+MD5_AFTER_COPILOT=$(md5 -q "$COPILOT_MD" 2>/dev/null || md5sum "$COPILOT_MD" | cut -d' ' -f1)
+MD5_AFTER_CURSOR=$(md5 -q "$CURSOR_RULES/coding-standards.mdc" 2>/dev/null || md5sum "$CURSOR_RULES/coding-standards.mdc" | cut -d' ' -f1)
+assert "Codex AGENTS.md is identical after re-generation" "[[ '$MD5_BEFORE_AGENTS' == '$MD5_AFTER_AGENTS' ]]"
+assert "GH Copilot copilot-instructions.md is identical" "[[ '$MD5_BEFORE_COPILOT' == '$MD5_AFTER_COPILOT' ]]"
+assert "Cursor coding-standards.mdc is identical" "[[ '$MD5_BEFORE_CURSOR' == '$MD5_AFTER_CURSOR' ]]"
 
 # ── Results ───────────────────────────────────────────────
 

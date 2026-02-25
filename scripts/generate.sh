@@ -86,14 +86,80 @@ fi
 echo "[codex] AGENTS.md generated ($SIZE bytes)"
 
 # ── Cursor ───────────────────────────────────────────────────
-# TODO (Cycle 4): Generate .mdc files with frontmatter from shared/rules/always/*
-echo "[cursor] Stub — not yet implemented"
-mkdir -p "$ADAPTERS/cursor"
+# Generate .mdc files with frontmatter from shared/rules/always/*
+echo "[cursor] Generating .mdc rules..."
+CURSOR_RULES="$ADAPTERS/cursor/.cursor/rules"
+mkdir -p "$CURSOR_RULES"
+
+for f in "$SHARED/always"/*.md; do
+  name="$(basename "$f" .md)"
+  # Extract first heading as description (strip leading #)
+  desc="$(head -1 "$f" | sed 's/^#* *//')"
+  {
+    echo "---"
+    echo "description: \"$desc\""
+    echo "alwaysApply: true"
+    echo "---"
+    echo ""
+    cat "$f"
+  } > "$CURSOR_RULES/$name.mdc"
+done
+
+CURSOR_COUNT=$(ls "$CURSOR_RULES"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
+echo "[cursor] Generated $CURSOR_COUNT .mdc files"
 
 # ── GitHub Copilot ───────────────────────────────────────────
-# TODO (Cycle 4): Generate copilot-instructions.md from shared/rules/always/*
-echo "[github-copilot] Stub — not yet implemented"
-mkdir -p "$ADAPTERS/github-copilot"
+# Generate copilot-instructions.md (always-on) + instructions/*.instructions.md (on-demand)
+echo "[github-copilot] Generating instructions..."
+GH_DIR="$ADAPTERS/github-copilot/.github"
+mkdir -p "$GH_DIR/instructions"
+
+# Always-on: concatenate into copilot-instructions.md
+{
+  echo "# Copilot Instructions"
+  echo ""
+  echo "Auto-generated from shared/rules/always/. Do not edit directly."
+  echo "Regenerate with: ./scripts/generate.sh"
+  echo ""
+
+  for f in "$SHARED/always"/*.md; do
+    cat "$f"
+    echo ""
+    echo "---"
+    echo ""
+  done
+} > "$GH_DIR/copilot-instructions.md"
+
+echo "[github-copilot] Generated copilot-instructions.md"
+
+# On-demand: each rule becomes an .instructions.md with applyTo frontmatter
+for f in "$SHARED/on-demand"/*.md; do
+  name="$(basename "$f" .md)"
+  # Map rules to reasonable glob patterns
+  case "$name" in
+    environment-setup)     glob="**/.env*,**/docker-compose*" ;;
+    stack-constraints)     glob="**/package.json,**/pyproject.toml,**/go.mod,**/Cargo.toml,**/pom.xml" ;;
+    integration-testing)   glob="**/tests/**,**/test/**,**/*test*,**/*spec*" ;;
+    phase-workflow)        glob="**" ;;
+    ralph-loop)            glob="**" ;;
+    gcc-protocol)          glob="**" ;;
+    clarification-protocol) glob="**" ;;
+    agent-team-protocol)   glob="**" ;;
+    team-lead-efficiency)  glob="**" ;;
+    token-efficiency)      glob="**" ;;
+    *)                     glob="**" ;;
+  esac
+  {
+    echo "---"
+    echo "applyTo: \"$glob\""
+    echo "---"
+    echo ""
+    cat "$f"
+  } > "$GH_DIR/instructions/$name.instructions.md"
+done
+
+ON_DEMAND_COUNT=$(ls "$GH_DIR/instructions"/*.instructions.md 2>/dev/null | wc -l | tr -d ' ')
+echo "[github-copilot] Generated $ON_DEMAND_COUNT on-demand instruction files"
 
 # ── Windsurf ─────────────────────────────────────────────────
 # TODO (Cycle 5): Generate rules.md from shared/rules/always/*
