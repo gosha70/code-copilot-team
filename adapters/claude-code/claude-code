@@ -1,0 +1,211 @@
+#!/bin/bash
+# claude-code - Smart Claude Code session launcher with tmux
+#
+# Enhances the basic tmux+claude workflow with:
+#   - Project template initialization
+#   - Per-project tmux sessions (named after directory)
+#   - Working directory awareness
+#   - Session transcript logging (~/.claude/logs/)
+#
+# Usage:
+#   claude-code [path]                  Start/resume Claude session (default: current dir)
+#   claude-code init <type> [path]      Initialize new project from template
+#   claude-code list                    List available project templates
+#   claude-code help                    Show usage
+#
+# Examples:
+#   claude-code                         Resume/start session in current directory
+#   claude-code ~/projects/my-api       Start session in existing project
+#   claude-code init ml-rag             Init ML RAG project in current directory
+#   claude-code init java-enterprise ~/projects/order-service
+#
+# Setup:
+#   Run claude-setup.sh first to create ~/.claude/templates/
+
+set -e
+
+TEMPLATES_DIR="$HOME/.claude/templates"
+LOGS_DIR="$HOME/.claude/logs"
+CLAUDE_CMD="claude"
+
+# ── Helpers ──────────────────────────────────────────────────
+
+show_help() {
+    cat << 'HELP'
+claude-code - Smart Claude Code session launcher
+
+USAGE:
+    claude-code [path]                  Start/resume Claude in tmux (default: .)
+    claude-code init <type> [path]      Initialize project from template
+    claude-code list                    List available templates
+    claude-code help                    Show this help
+
+PROJECT TYPES:
+    ml-rag              Python RAG + Knowledge Graph
+    ml-app              Python + Next.js full-stack LLM application
+    ml-langchain        Python LangChain/LangGraph/LangSmith
+    ml-n8n              Python + n8n workflow automation
+    java-enterprise     Full-stack Java (Spring Boot + React + GraphQL)
+    web-static          Static site (Astro/Next.js/Hugo)
+    web-dynamic         Dynamic web app (Next.js/Remix full-stack)
+
+WORKFLOW - New Project:
+    claude-code init ml-rag ~/projects/my-rag-app
+    claude-code ~/projects/my-rag-app
+
+WORKFLOW - Existing Project:
+    claude-code ~/projects/existing-app
+
+SETUP:
+    Run claude-setup.sh once to create templates in ~/.claude/templates/
+HELP
+}
+
+list_templates() {
+    echo "Available project templates:"
+    echo ""
+    if [[ -d "$TEMPLATES_DIR" ]]; then
+        for dir in "$TEMPLATES_DIR"/*/; do
+            if [[ -f "$dir/CLAUDE.md" ]]; then
+                type_name=$(basename "$dir")
+                # Extract first line after "# " as description
+                desc=$(head -1 "$dir/CLAUDE.md" | sed 's/^# //')
+                printf "  %-20s %s\n" "$type_name" "$desc"
+            fi
+        done
+    else
+        echo "  No templates found. Run claude-setup.sh first."
+    fi
+    echo ""
+}
+
+init_project() {
+    local type="$1"
+    local target="${2:-.}"
+
+    # Validate template exists
+    if [[ ! -d "$TEMPLATES_DIR/$type" ]]; then
+        echo "Error: Unknown project type '$type'"
+        echo ""
+        list_templates
+        exit 1
+    fi
+
+    # Create target directory if needed
+    mkdir -p "$target"
+    target=$(cd "$target" && pwd)
+
+    # Check if CLAUDE.md already exists
+    if [[ -f "$target/CLAUDE.md" ]]; then
+        echo "Warning: $target/CLAUDE.md already exists."
+        read -p "Overwrite? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            exit 0
+        fi
+    fi
+
+    # Copy template files
+    cp "$TEMPLATES_DIR/$type/CLAUDE.md" "$target/CLAUDE.md"
+
+    # Copy .claude directory contents if they exist
+    if [[ -d "$TEMPLATES_DIR/$type/.claude" ]]; then
+        mkdir -p "$target/.claude"
+        cp -r "$TEMPLATES_DIR/$type/.claude/"* "$target/.claude/" 2>/dev/null || true
+    fi
+
+    # Copy commands if they exist
+    if [[ -d "$TEMPLATES_DIR/$type/commands" ]]; then
+        mkdir -p "$target/.claude/commands"
+        cp -r "$TEMPLATES_DIR/$type/commands/"* "$target/.claude/commands/" 2>/dev/null || true
+    fi
+
+    echo "Initialized '$type' project at $target"
+    echo ""
+    echo "Created files:"
+    find "$target" -name "CLAUDE.md" -o -name "*.md" -path "*/.claude/*" | sort | while read f; do
+        echo "  ${f#$target/}"
+    done
+    echo ""
+    echo "Next steps:"
+    echo "  1. Edit $target/CLAUDE.md to customize for your project"
+    echo "  2. Run: claude-code $target"
+    echo ""
+}
+
+start_session() {
+    local project_dir="${1:-.}"
+
+    # Resolve to absolute path
+    if [[ ! -d "$project_dir" ]]; then
+        echo "Error: Directory '$project_dir' does not exist."
+        echo "To create a new project, use: claude-code init <type> $project_dir"
+        exit 1
+    fi
+    project_dir=$(cd "$project_dir" && pwd)
+
+    # Generate session name from directory (sanitize for tmux)
+    local dir_name=$(basename "$project_dir")
+    local session_name="claude-${dir_name//[^a-zA-Z0-9_-]/_}"
+
+    # Show project context summary
+    echo "──────────────────────────────────────"
+    echo "  Project: $dir_name"
+    if git -C "$project_dir" rev-parse --is-inside-work-tree &>/dev/null; then
+        local branch=$(git -C "$project_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+        local last_commit=$(git -C "$project_dir" log -1 --oneline 2>/dev/null)
+        local dirty=$(git -C "$project_dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+        echo "  Branch:  $branch"
+        echo "  Latest:  $last_commit"
+        [[ "$dirty" -gt 0 ]] && echo "  Status:  $dirty uncommitted change(s)"
+    fi
+    [[ -f "$project_dir/CLAUDE.md" ]] && echo "  Config:  CLAUDE.md found" || echo "  Config:  No CLAUDE.md (run 'claude-code init <type>')"
+    echo "──────────────────────────────────────"
+    echo ""
+
+    # Session transcript logging
+    mkdir -p "$LOGS_DIR"
+    local timestamp=$(date +%Y-%m-%d-%H%M%S)
+    local log_file="$LOGS_DIR/${dir_name}-${timestamp}.log"
+
+    # Check if session already exists
+    if tmux has-session -t "$session_name" 2>/dev/null; then
+        echo "Session '$session_name' exists. Attaching..."
+        echo "  Log: $log_file"
+        # Start logging on the existing session (append to new log file)
+        tmux pipe-pane -t "$session_name" -o "sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> '$log_file'"
+        tmux attach-session -t "$session_name"
+    else
+        echo "Creating session '$session_name'..."
+        echo "  Log: $log_file"
+        # Create detached, set up logging, then attach
+        tmux new-session -d -s "$session_name" -c "$project_dir" "$CLAUDE_CMD"
+        tmux pipe-pane -t "$session_name" -o "sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> '$log_file'"
+        tmux attach-session -t "$session_name"
+    fi
+}
+
+# ── Main ─────────────────────────────────────────────────────
+
+case "${1:-}" in
+    init)
+        if [[ -z "${2:-}" ]]; then
+            echo "Error: Missing project type."
+            echo "Usage: claude-code init <type> [path]"
+            echo ""
+            list_templates
+            exit 1
+        fi
+        init_project "$2" "${3:-}"
+        ;;
+    list)
+        list_templates
+        ;;
+    help|-h|--help)
+        show_help
+        ;;
+    *)
+        start_session "${1:-}"
+        ;;
+esac
