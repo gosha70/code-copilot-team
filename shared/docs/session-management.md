@@ -55,6 +55,45 @@ You do **not** need to run `/init` every time. `/init` is a one-time command to 
 - **Project session log** (`doc_internal/HISTORY.md`): Add to your project CLAUDE.md if you want it.
 - **Explicit memory requests**: Say `"remember that we use pnpm"` to save to auto-memory.
 
+## Parallel Development with Git Worktrees
+
+Git worktrees let you work on multiple branches simultaneously without stashing or switching. Each worktree is a separate checkout sharing the same `.git` directory.
+
+### When to Use
+
+- Running a long build/test on one branch while coding on another
+- Comparing behaviour between branches side-by-side
+- Keeping a stable branch checked out while experimenting
+
+### Quick Reference
+
+| Action | Command |
+|---|---|
+| Create worktree | `git worktree add ../feature-branch feature-branch` |
+| List worktrees | `git worktree list` |
+| Remove worktree | `git worktree remove ../feature-branch` |
+| Prune stale entries | `git worktree prune` |
+
+### Workflow with `claude-code` Launcher
+
+```bash
+# Create a worktree for a feature branch
+git worktree add ../my-feature feature/my-feature
+
+# Start a Claude session in the worktree
+claude-code ../my-feature
+
+# When done, clean up
+git worktree remove ../my-feature
+```
+
+### Tips
+
+- Worktrees share the object store — no extra clone needed, very fast to create.
+- Each worktree has its own index/staging area, so you can stage independently.
+- Avoid having the same branch checked out in two worktrees (Git prevents this by default).
+- Use `git worktree prune` periodically to clean up entries for deleted directories.
+
 ## All Slash Commands
 
 | Command | Purpose |

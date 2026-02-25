@@ -1,0 +1,24 @@
+{
+  "patterns": [
+    {
+      "match": "PrismaClientInitializationError",
+      "hint": "Prisma client not generated or DB unreachable. Run: npx prisma generate && npx prisma migrate dev"
+    },
+    {
+      "match": "NEXT_PUBLIC_",
+      "hint": "Client-side env vars must be prefixed with NEXT_PUBLIC_. Server-only vars should NOT have this prefix"
+    },
+    {
+      "match": "relation .* does not exist",
+      "hint": "Database schema out of date. Run: npx prisma migrate dev (or npx prisma db push for prototyping)"
+    },
+    {
+      "match": "Module not found.*@prisma/client",
+      "hint": "Run: npx prisma generate (regenerates the Prisma client after schema changes)"
+    },
+    {
+      "match": "NEXTAUTH_SECRET",
+      "hint": "NEXTAUTH_SECRET not set. Generate one: openssl rand -base64 32 (add to .env.local)"
+    }
+  ]
+}

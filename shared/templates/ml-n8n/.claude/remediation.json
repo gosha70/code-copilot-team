@@ -1,0 +1,24 @@
+{
+  "patterns": [
+    {
+      "match": "connection refused",
+      "hint": "Services not running. Start them: docker compose up -d"
+    },
+    {
+      "match": "n8n webhook.*not found",
+      "hint": "Webhook URL may have changed. Check n8n UI → Workflow → Webhook node for the current URL"
+    },
+    {
+      "match": "ECONNREFUSED.*:5678",
+      "hint": "n8n is not running. Start it: docker compose up -d n8n (default port: 5678)"
+    },
+    {
+      "match": "credential.*not found",
+      "hint": "Missing n8n credential. Open n8n UI → Settings → Credentials and configure the required service"
+    },
+    {
+      "match": "EXECUTIONS_DATA_PRUNE",
+      "hint": "Execution data growing. Set EXECUTIONS_DATA_PRUNE=true and EXECUTIONS_DATA_MAX_AGE=168 in n8n env"
+    }
+  ]
+}

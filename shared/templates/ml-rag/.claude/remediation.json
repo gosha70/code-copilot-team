@@ -1,0 +1,24 @@
+{
+  "patterns": [
+    {
+      "match": "No module named 'chromadb'",
+      "hint": "Run: poetry add chromadb (or pip install chromadb)"
+    },
+    {
+      "match": "ServiceUnavailable.*neo4j",
+      "hint": "Neo4j is not running. Start it: docker compose up -d neo4j"
+    },
+    {
+      "match": "No module named 'sentence_transformers'",
+      "hint": "Run: poetry add sentence-transformers (or pip install sentence-transformers)"
+    },
+    {
+      "match": "Connection refused.*:6333",
+      "hint": "Qdrant is not running. Start it: docker compose up -d qdrant"
+    },
+    {
+      "match": "OPENAI_API_KEY",
+      "hint": "Set your OpenAI API key: export OPENAI_API_KEY=sk-... (or add to .env)"
+    }
+  ]
+}

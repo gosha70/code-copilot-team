@@ -247,6 +247,10 @@ cp "$SHARED_DIR/templates/ml-rag/PROJECT.md" "$TEMPLATES_DIR/ml-rag/CLAUDE.md"
 if [[ -d "$SHARED_DIR/templates/ml-rag/commands" ]]; then
     cp "$SHARED_DIR/templates/ml-rag/commands/"*.md "$TEMPLATES_DIR/ml-rag/commands/" 2>/dev/null || true
 fi
+if [[ -d "$SHARED_DIR/templates/ml-rag/.claude" ]]; then
+    mkdir -p "$TEMPLATES_DIR/ml-rag/.claude"
+    cp -r "$SHARED_DIR/templates/ml-rag/.claude/"* "$TEMPLATES_DIR/ml-rag/.claude/" 2>/dev/null || true
+fi
 echo "[done] Created template: ml-rag"
 
 # ══════════════════════════════════════════════════════════════
@@ -257,6 +261,10 @@ mkdir -p "$TEMPLATES_DIR/ml-app/commands"
 cp "$SHARED_DIR/templates/ml-app/PROJECT.md" "$TEMPLATES_DIR/ml-app/CLAUDE.md"
 if [[ -d "$SHARED_DIR/templates/ml-app/commands" ]]; then
     cp "$SHARED_DIR/templates/ml-app/commands/"*.md "$TEMPLATES_DIR/ml-app/commands/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/ml-app/.claude" ]]; then
+    mkdir -p "$TEMPLATES_DIR/ml-app/.claude"
+    cp -r "$SHARED_DIR/templates/ml-app/.claude/"* "$TEMPLATES_DIR/ml-app/.claude/" 2>/dev/null || true
 fi
 echo "[done] Created template: ml-app"
 
@@ -269,6 +277,10 @@ cp "$SHARED_DIR/templates/ml-langchain/PROJECT.md" "$TEMPLATES_DIR/ml-langchain/
 if [[ -d "$SHARED_DIR/templates/ml-langchain/commands" ]]; then
     cp "$SHARED_DIR/templates/ml-langchain/commands/"*.md "$TEMPLATES_DIR/ml-langchain/commands/" 2>/dev/null || true
 fi
+if [[ -d "$SHARED_DIR/templates/ml-langchain/.claude" ]]; then
+    mkdir -p "$TEMPLATES_DIR/ml-langchain/.claude"
+    cp -r "$SHARED_DIR/templates/ml-langchain/.claude/"* "$TEMPLATES_DIR/ml-langchain/.claude/" 2>/dev/null || true
+fi
 echo "[done] Created template: ml-langchain"
 
 # ══════════════════════════════════════════════════════════════
@@ -279,6 +291,10 @@ mkdir -p "$TEMPLATES_DIR/ml-n8n/commands"
 cp "$SHARED_DIR/templates/ml-n8n/PROJECT.md" "$TEMPLATES_DIR/ml-n8n/CLAUDE.md"
 if [[ -d "$SHARED_DIR/templates/ml-n8n/commands" ]]; then
     cp "$SHARED_DIR/templates/ml-n8n/commands/"*.md "$TEMPLATES_DIR/ml-n8n/commands/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/ml-n8n/.claude" ]]; then
+    mkdir -p "$TEMPLATES_DIR/ml-n8n/.claude"
+    cp -r "$SHARED_DIR/templates/ml-n8n/.claude/"* "$TEMPLATES_DIR/ml-n8n/.claude/" 2>/dev/null || true
 fi
 echo "[done] Created template: ml-n8n"
 
@@ -291,6 +307,10 @@ cp "$SHARED_DIR/templates/java-enterprise/PROJECT.md" "$TEMPLATES_DIR/java-enter
 if [[ -d "$SHARED_DIR/templates/java-enterprise/commands" ]]; then
     cp "$SHARED_DIR/templates/java-enterprise/commands/"*.md "$TEMPLATES_DIR/java-enterprise/commands/" 2>/dev/null || true
 fi
+if [[ -d "$SHARED_DIR/templates/java-enterprise/.claude" ]]; then
+    mkdir -p "$TEMPLATES_DIR/java-enterprise/.claude"
+    cp -r "$SHARED_DIR/templates/java-enterprise/.claude/"* "$TEMPLATES_DIR/java-enterprise/.claude/" 2>/dev/null || true
+fi
 echo "[done] Created template: java-enterprise"
 
 # ══════════════════════════════════════════════════════════════
@@ -302,6 +322,10 @@ cp "$SHARED_DIR/templates/web-static/PROJECT.md" "$TEMPLATES_DIR/web-static/CLAU
 if [[ -d "$SHARED_DIR/templates/web-static/commands" ]]; then
     cp "$SHARED_DIR/templates/web-static/commands/"*.md "$TEMPLATES_DIR/web-static/commands/" 2>/dev/null || true
 fi
+if [[ -d "$SHARED_DIR/templates/web-static/.claude" ]]; then
+    mkdir -p "$TEMPLATES_DIR/web-static/.claude"
+    cp -r "$SHARED_DIR/templates/web-static/.claude/"* "$TEMPLATES_DIR/web-static/.claude/" 2>/dev/null || true
+fi
 echo "[done] Created template: web-static"
 
 # ══════════════════════════════════════════════════════════════
@@ -312,6 +336,10 @@ mkdir -p "$TEMPLATES_DIR/web-dynamic/commands"
 cp "$SHARED_DIR/templates/web-dynamic/PROJECT.md" "$TEMPLATES_DIR/web-dynamic/CLAUDE.md"
 if [[ -d "$SHARED_DIR/templates/web-dynamic/commands" ]]; then
     cp "$SHARED_DIR/templates/web-dynamic/commands/"*.md "$TEMPLATES_DIR/web-dynamic/commands/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/web-dynamic/.claude" ]]; then
+    mkdir -p "$TEMPLATES_DIR/web-dynamic/.claude"
+    cp -r "$SHARED_DIR/templates/web-dynamic/.claude/"* "$TEMPLATES_DIR/web-dynamic/.claude/" 2>/dev/null || true
 fi
 echo "[done] Created template: web-dynamic"
 

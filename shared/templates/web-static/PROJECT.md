@@ -44,6 +44,11 @@
 - Test at: 320px, 375px, 768px, 1024px, 1440px
 - No horizontal scrolling at any breakpoint
 
+## Testing
+- Visual regression: Playwright for screenshot comparison (if configured)
+- Performance: Lighthouse CI for performance budget validation
+- Accessibility: axe-core via Playwright or browser extension
+
 ## Commands
 ```bash
 npm install
@@ -51,6 +56,7 @@ npm run dev                  # local dev server
 npm run build                # production build
 npm run preview              # preview production build
 npx lighthouse http://localhost:4321 --view   # performance audit
+npx playwright test          # e2e/visual tests (if configured)
 ```
 
 ## Agent Team

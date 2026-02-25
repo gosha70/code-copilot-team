@@ -1,0 +1,24 @@
+{
+  "patterns": [
+    {
+      "match": "ModuleNotFoundError",
+      "hint": "Missing dependency. Run: pip install -e '.[all]' (or poetry install --all-extras)"
+    },
+    {
+      "match": "DockerException",
+      "hint": "Docker daemon is not running. Start Docker Desktop or: sudo systemctl start docker"
+    },
+    {
+      "match": "CUDA out of memory",
+      "hint": "GPU memory exhausted. Reduce batch size, use model.half(), or set CUDA_VISIBLE_DEVICES=\"\""
+    },
+    {
+      "match": "Connection refused.*:8000",
+      "hint": "API server not running. Start it: uvicorn app.main:app --reload (or docker compose up)"
+    },
+    {
+      "match": "No module named 'torch'",
+      "hint": "PyTorch not installed. Run: pip install torch torchvision (see pytorch.org for GPU builds)"
+    }
+  ]
+}

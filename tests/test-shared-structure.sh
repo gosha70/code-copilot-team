@@ -346,7 +346,7 @@ for f in "${HOOK_FILES[@]}"; do
 done
 
 # Claude-specific docs in adapter
-CLAUDE_DOCS=(hooks-guide.md subagents-guide.md claude-code-setup-cookbook.md claude-config-guide.md hooks-test-cases.md)
+CLAUDE_DOCS=(hooks-guide.md subagents-guide.md claude-code-setup-cookbook.md claude-config-guide.md hooks-test-cases.md permissions-guide.md recommended-mcp-servers.md)
 for f in "${CLAUDE_DOCS[@]}"; do
   assert_file_exists "adapter doc $f exists" "$ADAPTER_DIR/docs/$f"
 done
@@ -522,6 +522,74 @@ echo "=== harness engineering: post-build cleanup in build agent ==="
 rc=0
 grep -q 'Post-Build Cleanup' "$ADAPTER_DIR/.claude/agents/build.md" || rc=1
 assert_ok "build agent has Post-Build Cleanup section" "$rc"
+
+# ══════════════════════════════════════════════════════════════
+# 13. Remediation.json — validation per template
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== remediation.json: shared templates ==="
+
+for t in "${TEMPLATE_TYPES[@]}"; do
+  RFILE="$SHARED_DIR/templates/$t/.claude/remediation.json"
+  assert_file_exists "$t remediation.json exists" "$RFILE"
+  assert_nonempty "$t remediation.json non-empty" "$RFILE"
+
+  # Valid JSON
+  rc=0; jq empty "$RFILE" >/dev/null 2>&1 || rc=1
+  assert_ok "$t remediation.json is valid JSON" "$rc"
+
+  # At least 3 patterns
+  PATTERN_COUNT=$(jq '.patterns | length' "$RFILE" 2>/dev/null || echo "0")
+  rc=0; [[ "$PATTERN_COUNT" -ge 3 ]] || rc=1
+  assert_ok "$t remediation.json has >= 3 patterns ($PATTERN_COUNT found)" "$rc"
+
+  # Each pattern has match + hint
+  VALID_PATTERNS=$(jq '[.patterns[] | select(.match and .hint)] | length' "$RFILE" 2>/dev/null || echo "0")
+  rc=0; [[ "$VALID_PATTERNS" == "$PATTERN_COUNT" ]] || rc=1
+  assert_ok "$t all patterns have match + hint fields" "$rc"
+done
+
+# ══════════════════════════════════════════════════════════════
+# 14. setup.sh copies .claude/ directories from templates
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== setup.sh: .claude/ directory copy ==="
+
+rc=0; grep -q 'SHARED_DIR/templates/.*/\.claude' "$SETUP_SCRIPT" || rc=1
+assert_ok "setup.sh copies .claude/ from templates" "$rc"
+
+# ══════════════════════════════════════════════════════════════
+# 15. Installed templates have remediation.json
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== install output: remediation.json matches shared/ ==="
+
+for t in "${TEMPLATE_TYPES[@]}"; do
+  INSTALLED="$INSTALL_DIR/templates/$t/.claude/remediation.json"
+  SOURCE="$SHARED_DIR/templates/$t/.claude/remediation.json"
+  if [[ -f "$INSTALLED" ]]; then
+    rc=0; diff -q "$INSTALLED" "$SOURCE" >/dev/null 2>&1 || rc=1
+    assert_ok "installed $t remediation.json matches shared/" "$rc"
+  else
+    echo "  FAIL: installed $t/.claude/remediation.json not found (run setup.sh first)"
+    FAIL=$((FAIL + 1))
+  fi
+done
+
+# ══════════════════════════════════════════════════════════════
+# 16. Claude-specific docs — new docs exist
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== new Claude-specific docs ==="
+
+assert_file_exists "permissions-guide.md exists" "$ADAPTER_DIR/docs/permissions-guide.md"
+assert_nonempty "permissions-guide.md non-empty" "$ADAPTER_DIR/docs/permissions-guide.md"
+assert_file_exists "recommended-mcp-servers.md exists" "$ADAPTER_DIR/docs/recommended-mcp-servers.md"
+assert_nonempty "recommended-mcp-servers.md non-empty" "$ADAPTER_DIR/docs/recommended-mcp-servers.md"
 
 # ══════════════════════════════════════════════════════════════
 # SUMMARY

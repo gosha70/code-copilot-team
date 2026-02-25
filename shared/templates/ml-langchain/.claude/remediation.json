@@ -1,0 +1,24 @@
+{
+  "patterns": [
+    {
+      "match": "No module named 'langchain",
+      "hint": "Run: poetry add langchain langgraph langchain-openai (or pip install langchain langgraph)"
+    },
+    {
+      "match": "RecursionError",
+      "hint": "Graph recursion limit hit. Increase max_recursion_depth in your graph config or add a cycle-break condition"
+    },
+    {
+      "match": "OutputParserException",
+      "hint": "LLM output does not match expected format. Check your prompt template and output parser schema"
+    },
+    {
+      "match": "LANGCHAIN_API_KEY",
+      "hint": "Set your LangSmith API key: export LANGCHAIN_API_KEY=ls__... (or add to .env)"
+    },
+    {
+      "match": "Connection refused.*:8123",
+      "hint": "LangServe not running. Start it: langchain serve (or python app/server.py)"
+    }
+  ]
+}

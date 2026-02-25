@@ -69,6 +69,7 @@
 - Unit: Vitest for utilities and server logic
 - Component: React Testing Library
 - Integration: Playwright for critical user flows
+- Smoke: Playwright smoke project for critical-path validation
 - API: supertest or direct tRPC caller tests
 
 ## Commands
@@ -79,6 +80,7 @@ npm run build && npm start               # production
 npx prisma migrate dev                   # apply migrations
 npx prisma studio                        # DB GUI
 npx playwright test                      # e2e tests
+npx playwright test --project=smoke      # quick smoke tests only
 npm run test                             # unit + component tests
 ```
 

@@ -1,0 +1,24 @@
+{
+  "patterns": [
+    {
+      "match": "AstroError",
+      "hint": "Check astro.config.mjs for syntax errors or incompatible integration versions"
+    },
+    {
+      "match": "is not a valid MDX",
+      "hint": "MDX syntax error. Check for unclosed JSX tags, unescaped special characters, or invalid frontmatter"
+    },
+    {
+      "match": "Cannot find module",
+      "hint": "Missing dependency. Run: npm install (or check the import path for typos)"
+    },
+    {
+      "match": "Lighthouse.*performance.*[0-7][0-9]",
+      "hint": "Performance budget violated (< 80). Check image sizes, unused JS, and render-blocking resources"
+    },
+    {
+      "match": "ENOENT.*content/",
+      "hint": "Content file not found. Verify the file exists in content/ and the slug matches the filename"
+    }
+  ]
+}

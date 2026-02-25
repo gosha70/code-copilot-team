@@ -1,0 +1,24 @@
+{
+  "patterns": [
+    {
+      "match": "Bean.*not found",
+      "hint": "Spring bean not resolved. Verify @Component/@Service/@Repository annotation and component scan package"
+    },
+    {
+      "match": "relation .* does not exist",
+      "hint": "Database schema out of date. Run migrations: ./gradlew flywayMigrate (or ./mvnw flyway:migrate)"
+    },
+    {
+      "match": "java.lang.OutOfMemoryError",
+      "hint": "Increase JVM heap: export JAVA_OPTS=\"-Xmx2g\" (or set in gradle.properties/pom.xml)"
+    },
+    {
+      "match": "Connection refused.*:5432",
+      "hint": "PostgreSQL not running. Start it: docker compose up -d postgres"
+    },
+    {
+      "match": "Failed to configure a DataSource",
+      "hint": "Check application.yml datasource config. Ensure SPRING_DATASOURCE_URL is set (or DB is running)"
+    }
+  ]
+}
