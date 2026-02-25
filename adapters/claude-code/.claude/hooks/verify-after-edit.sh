@@ -122,16 +122,53 @@ fi
 # --- Failed ---
 SUMMARY=$(echo "$CHECK_OUTPUT" | tail -n 30)
 
+# --- Remediation hints ---
+HINTS=""
+
+# Check for project-specific remediation config
+REMEDIATION_FILE="${PROJECT_DIR}/.claude/remediation.json"
+if [[ -f "$REMEDIATION_FILE" ]] && command -v jq &>/dev/null; then
+  PATTERNS=$(jq -r '.patterns // [] | .[] | @base64' "$REMEDIATION_FILE" 2>/dev/null) || PATTERNS=""
+  for row in $PATTERNS; do
+    MATCH=$(echo "$row" | base64 -d 2>/dev/null | jq -r '.match // empty' 2>/dev/null) || continue
+    HINT=$(echo "$row" | base64 -d 2>/dev/null | jq -r '.hint // empty' 2>/dev/null) || continue
+    if [[ -n "$MATCH" && -n "$HINT" ]] && echo "$CHECK_OUTPUT" | grep -q "$MATCH"; then
+      HINTS="${HINTS}\n- ${HINT}"
+    fi
+  done
+fi
+
+# Generic per-language fallback if no project hints matched
+if [[ -z "$HINTS" ]]; then
+  case "$EXT_LOWER" in
+    ts|tsx|js|jsx) HINTS="\n- Check import paths. Verify type compatibility. Run npm install if modules missing." ;;
+    py)            HINTS="\n- Check type annotations. Verify imports resolve. Run pip install -e . if missing." ;;
+    go)            HINTS="\n- Check exported names. Verify interfaces. Run go mod tidy." ;;
+    java|kt)       HINTS="\n- Check visibility and return types. Verify build.gradle deps." ;;
+    rs)            HINTS="\n- Check ownership/borrowing. Verify trait impls. Run cargo update." ;;
+  esac
+fi
+
 if [[ "$BLOCK" == "true" ]]; then
   # Blocking mode: Claude auto-fixes
   echo "Type check failed after editing ${FILE_PATH}. Fix the errors:" >&2
   echo "" >&2
   echo "$SUMMARY" >&2
+  if [[ -n "$HINTS" ]]; then
+    echo "" >&2
+    echo "Remediation hints:" >&2
+    echo -e "$HINTS" >&2
+  fi
   exit 2
 else
   # Report-only mode (default): show errors, let Claude proceed
   echo "Type check failed after editing ${FILE_PATH} (report only — set HOOK_EDIT_BLOCK=true to auto-fix)." >&2
   echo "" >&2
   echo "$SUMMARY" >&2
+  if [[ -n "$HINTS" ]]; then
+    echo "" >&2
+    echo "Remediation hints:" >&2
+    echo -e "$HINTS" >&2
+  fi
   exit 0
 fi

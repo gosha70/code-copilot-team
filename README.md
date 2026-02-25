@@ -29,23 +29,27 @@ Every rule in this repo is failure-driven — it exists because we hit the speci
 git clone https://github.com/gosha70/code-copilot-team.git
 cd code-copilot-team
 
-# 2. Run the one-time setup (creates ~/.claude/ config + templates)
-chmod +x claude_code/claude-setup.sh
-./claude_code/claude-setup.sh
+# 2. Install for your tool(s)
+./scripts/setup.sh --claude-code                    # Claude Code → ~/.claude/
+./scripts/setup.sh --codex                          # OpenAI Codex → ~/.codex/
+./scripts/setup.sh --cursor ~/my-project            # Cursor → project/.cursor/
+./scripts/setup.sh --github-copilot ~/my-project    # GH Copilot → project/.github/
+./scripts/setup.sh --windsurf ~/my-project          # Windsurf → project/.windsurf/
+./scripts/setup.sh --aider ~/my-project             # Aider → project/CONVENTIONS.md
 
-# 3. (Optional) Install the tmux launcher
-cp claude_code/claude-code /usr/local/bin/
-chmod +x /usr/local/bin/claude-code
+# Or install everything at once
+./scripts/setup.sh --all ~/my-project
 
-# (Optional) Enable GCC memory — persistent cross-session context
-# Installs Aline MCP server (aline-ai), the implementation behind GCC protocol
+# (Optional) Enable GCC memory for Claude Code
 ./claude_code/claude-setup.sh --gcc
 
 # Re-sync after pulling repo updates
-git pull && ./claude_code/claude-setup.sh --sync
+git pull && ./scripts/setup.sh --sync --claude-code
 ```
 
-That's it. Every Claude Code session now picks up the global rules and hooks automatically. After `git pull`, run `claude-setup.sh --sync` to update your `~/.claude/` with any new or changed files.
+The legacy `./claude_code/claude-setup.sh` path still works — it delegates to the adapter.
+
+After `git pull`, run `--sync` to regenerate configs and re-install.
 
 ## Start a New Project
 
@@ -132,96 +136,67 @@ Project-level rules override global rules. More specific always wins.
 
 Each phase has a dedicated agent (`~/.claude/agents/`) that loads the relevant rules from the rules library. Planning and research must stay in one mind — sub-agents only see fragments and can't reason about the whole system. Delegation only happens during Build. For smaller features, **Ralph Loop** provides a single-agent alternative: read PRD → implement next failing story → test → commit → repeat.
 
-## Porting to Other Tools
+## Supported Tools
 
-The conventions in `~/.claude/rules/copilot-conventions.md` are tool-agnostic:
+All tools share the same rules from `shared/rules/always/`. Each adapter formats them for the target tool.
 
-| Tool | Config file |
-|---|---|
-| **Cursor** | `.cursorrules` |
-| **GitHub Copilot** | `.github/copilot-instructions.md` |
-| **Windsurf** | `.windsurfrules` |
-| **Aider** | `.aider.conf.yml` or `CONVENTIONS.md` |
-| **Local LLMs** | System prompt or context file |
+| Tool | Adapter Output | Install Location |
+|---|---|---|
+| **Claude Code** | agents, hooks, commands, settings | `~/.claude/` (global) |
+| **OpenAI Codex** | `AGENTS.md` + 5 skills | `~/.codex/` (global) |
+| **Cursor** | `.mdc` files with frontmatter | `project/.cursor/rules/` |
+| **GitHub Copilot** | `copilot-instructions.md` + per-rule instructions | `project/.github/` |
+| **Windsurf** | `rules.md` | `project/.windsurf/rules/` |
+| **Aider** | `CONVENTIONS.md` | `project/` |
 
 ## Repo Structure
 
 ```
-README.md                                ← You are here
-LICENSE                                  ← MIT
-CONTRIBUTING.md                          ← PR guidelines
-claude_code/
-  claude-code                            ← tmux launcher script
-  claude-setup.sh                        ← One-time setup (creates ~/.claude/); --sync to update
-  .claude/
-    CLAUDE.md                            ← Global agent manifest (reference copy)
-    settings.json                        ← Hooks wiring (reference copy)
-    rules/                               ← 3 global rules (always loaded)
-      coding-standards.md                ← SOLID, quality gates, prohibited patterns
-      copilot-conventions.md             ← Cross-tool conventions
-      safety.md                          ← Destructive action guards, secrets
-    rules-library/                       ← 10 on-demand rules (loaded by phase agents)
-      agent-team-protocol.md             ← Three-phase workflow, delegation rules
-      clarification-protocol.md          ← Ask before implementing ambiguity
-      environment-setup.md               ← Environment verification
-      integration-testing.md             ← Test integration points early
-      phase-workflow.md                  ← Phase transition boundaries
-      ralph-loop.md                      ← Single-agent autonomous iteration loop
-      stack-constraints.md               ← Version and compatibility guards
-      team-lead-efficiency.md            ← Agent limits, poll frequency
-      token-efficiency.md                ← Diff-over-rewrite, context economy
-      gcc-protocol.md                    ← GCC memory persistence (optional, Aline MCP)
-    agents/                              ← 9 agent definitions (4 phase + 5 utility)
-      research.md                        ← Research phase agent
-      plan.md                            ← Plan phase agent
-      build.md                           ← Build phase agent
-      review.md                          ← Review phase agent
-      code-simplifier.md                 ← Simplify recently changed code
-      doc-writer.md                      ← Generate and update documentation
-      phase-recap.md                     ← Summarize completed phase
-      security-review.md                 ← Scan for security vulnerabilities
-      verify-app.md                      ← End-to-end project verification
-    commands/                            ← Slash commands
-      ralph-start.md                     ← Start a Ralph Loop session
-    hooks/                               ← 6 lifecycle hook scripts
-      verify-on-stop.sh                  ← Run test suite on Stop event
-      verify-after-edit.sh               ← Run type checker on Edit/Write
-      auto-format.sh                     ← Auto-format edited files
-      protect-files.sh                   ← Prevent edits to protected files
-      reinject-context.sh                ← Re-inject session context on prompt submit
-      notify.sh                          ← Desktop notifications (macOS + Linux)
-  docs/                                  ← 13 reference documents
-    agent-traces.md                      ← How to find and archive agent transcripts
-    claude-code-setup-cookbook.md         ← Detailed cookbook
-    claude-config-guide.md               ← Configuration reference
-    common-pitfalls.md                   ← Cross-cutting issues and fixes
-    delegation-best-practices.md         ← When and how to delegate to agents
-    enhancement-plan.md                  ← Phased enhancement roadmap
-    error-reporting-template.md          ← Standardized error report format
-    hooks-guide.md                       ← Hook installation and customization guide
-    hooks-test-cases.md                  ← Manual test cases for hooks
-    phase-recap-template.md              ← End-of-phase handoff template
-    ralph-loop-guide.md                  ← Ralph Loop usage guide
-    session-management.md                ← Session commands cheat sheet
-    subagents-guide.md                   ← Sub-agent configuration and usage
-  tests/                                 ← Automated tests
-    test-hooks.sh                        ← 27 tests for hook scripts
+code-copilot-team/
+├── shared/                              ← Single source of truth
+│   ├── rules/always/                    3 global rules (always loaded)
+│   ├── rules/on-demand/                 10 rules loaded by phase agents
+│   ├── docs/                            6 tool-agnostic reference docs
+│   └── templates/                       7 stacks × PROJECT.md + commands/
+├── adapters/
+│   ├── claude-code/                     agents, hooks, commands, settings, setup.sh
+│   ├── codex/                           AGENTS.md, config.toml, 5 skills, setup.sh
+│   ├── cursor/                          .cursor/rules/*.mdc, setup.sh
+│   ├── github-copilot/                  .github/copilot-instructions.md, instructions/, setup.sh
+│   ├── windsurf/                        .windsurf/rules/rules.md, setup.sh
+│   └── aider/                           CONVENTIONS.md, setup.sh
+├── scripts/
+│   ├── generate.sh                      Builds adapter configs from shared/
+│   └── setup.sh                         Unified install entry point
+├── tests/
+│   ├── test-hooks.sh                    59 hook tests
+│   ├── test-generate.sh                 220 generation + adapter tests
+│   └── test-shared-structure.sh         230 structure + content tests
+├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
+├── .github/workflows/sync-check.yml     CI: adapter drift prevention
+├── README.md
+├── CONTRIBUTING.md
+└── LICENSE
 ```
+
+Rule content is written once in `shared/` and adapted per tool via `scripts/generate.sh`. Generated adapter configs are committed to the repo. CI verifies they never drift.
 
 ## Documentation
 
-- **[Setup Cookbook](claude_code/docs/claude-code-setup-cookbook.md)** — deep-dive into every configuration option
-- **[Config Guide](claude_code/docs/claude-config-guide.md)** — templates, agent teams, and workflow reference
-- **[Hooks Guide](claude_code/docs/hooks-guide.md)** — hook installation, customization, and supported stacks
-- **[Session Management](claude_code/docs/session-management.md)** — commands cheat sheet for daily use
-- **[Delegation Best Practices](claude_code/docs/delegation-best-practices.md)** — when and how to delegate to sub-agents
-- **[Common Pitfalls](claude_code/docs/common-pitfalls.md)** — cross-cutting issues and solutions
-- **[Enhancement Plan](claude_code/docs/enhancement-plan.md)** — phased roadmap for rules, hooks, and sub-agents
-- **[Agent Traces](claude_code/docs/agent-traces.md)** — locating, reading, and archiving agent transcripts
-- **[Error Reporting Template](claude_code/docs/error-reporting-template.md)** — standardized format for bug reports
-- **[Phase Recap Template](claude_code/docs/phase-recap-template.md)** — end-of-phase handoff checklist
-- **[Ralph Loop Guide](claude_code/docs/ralph-loop-guide.md)** — Ralph Loop usage and configuration
-- **[Sub-Agents Guide](claude_code/docs/subagents-guide.md)** — sub-agent configuration and usage
+**Claude Code specific:**
+- **[Setup Cookbook](adapters/claude-code/docs/claude-code-setup-cookbook.md)** — deep-dive into every configuration option
+- **[Config Guide](adapters/claude-code/docs/claude-config-guide.md)** — templates, agent teams, and workflow reference
+- **[Hooks Guide](adapters/claude-code/docs/hooks-guide.md)** — hook installation, customization, and supported stacks
+- **[Sub-Agents Guide](adapters/claude-code/docs/subagents-guide.md)** — sub-agent configuration and usage
+- **[Agent Traces](adapters/claude-code/docs/agent-traces.md)** — locating, reading, and archiving agent transcripts
+
+**Shared (all tools):**
+- **[Common Pitfalls](shared/docs/common-pitfalls.md)** — cross-cutting issues and solutions
+- **[Delegation Best Practices](shared/docs/delegation-best-practices.md)** — when and how to delegate to agents
+- **[Ralph Loop Guide](shared/docs/ralph-loop-guide.md)** — Ralph Loop usage and configuration
+- **[Session Management](shared/docs/session-management.md)** — session commands cheat sheet
+- **[Error Reporting Template](shared/docs/error-reporting-template.md)** — standardized format for bug reports
+- **[Phase Recap Template](shared/docs/phase-recap-template.md)** — end-of-phase handoff checklist
 
 ## Contributing
 

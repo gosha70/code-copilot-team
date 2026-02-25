@@ -36,6 +36,8 @@
 ```
 
 ## Architecture Rules
+> **Non-negotiable.** Violations must be flagged during review, not silently accepted.
+
 - Server Components by default; Client Components only when needed (interactivity)
 - Data fetching in Server Components or Route Handlers; never in Client Components
 - Business logic in src/server/services/; components should be thin

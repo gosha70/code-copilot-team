@@ -24,6 +24,15 @@
 └── tests/
 ```
 
+## Architecture Rules
+> **Non-negotiable.** Violations must be flagged during review, not silently accepted.
+
+- Every workflow exported to `workflows/` as JSON (version controlled)
+- Error handling: every workflow must have an error trigger node
+- Credentials via n8n credential store — never hardcoded in workflow JSON
+- Python services use FastAPI with typed request/response models
+- n8n → Python communication via HTTP Request nodes only
+
 ## n8n Conventions
 - Every workflow exported to `workflows/` as JSON (version controlled)
 - Workflow naming: `{domain}-{action}-{version}` (e.g., `orders-sync-v2`)

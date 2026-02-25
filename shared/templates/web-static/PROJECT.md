@@ -22,7 +22,9 @@
 └── astro.config.mjs
 ```
 
-## Conventions
+## Architecture Rules
+> **Non-negotiable.** Violations must be flagged during review, not silently accepted.
+
 - All content in Markdown/MDX with frontmatter metadata
 - Images: optimized at build time; use framework's image component
 - SEO: every page must have title, description, og:image meta tags

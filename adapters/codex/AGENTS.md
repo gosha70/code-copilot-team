@@ -42,6 +42,12 @@ These conventions ensure consistent behaviour regardless of which AI tool is dri
 4. Test everything — run linters and tests after code changes.
 5. Ask when uncertain — do not guess at ambiguous requirements.
 
+## Single Source of Truth
+
+- The repository is the only authoritative source for conventions and decisions.
+- Do not rely on external docs (Confluence, Notion, Google Docs), chat history, or assumed knowledge.
+- If information is needed but not in the repo, ask the user — then capture the answer in `doc_internal/` before proceeding.
+
 ## Git Discipline
 
 - Commit messages: imperative mood, concise summary, optional body explaining "why".

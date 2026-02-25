@@ -473,6 +473,57 @@ for t in "${TEMPLATE_TYPES[@]}"; do
 done
 
 # ══════════════════════════════════════════════════════════════
+# 12. Harness Engineering — Architecture Rules + Struggle Diagnosis
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== harness engineering: architecture rules in templates ==="
+
+for t in "${TEMPLATE_TYPES[@]}"; do
+  rc=0
+  grep -q '## .*Architecture Rules' "$SHARED_DIR/templates/$t/PROJECT.md" || rc=1
+  assert_ok "$t has Architecture Rules section" "$rc"
+done
+
+echo ""
+echo "=== harness engineering: struggle diagnosis in phase-recap ==="
+
+rc=0
+grep -q '### Struggle Diagnosis' "$SHARED_DIR/docs/phase-recap-template.md" || rc=1
+assert_ok "phase-recap-template has Struggle Diagnosis section" "$rc"
+
+echo ""
+echo "=== harness engineering: retro command ==="
+
+assert_file_exists "retro.md command exists" "$ADAPTER_DIR/.claude/commands/retro.md"
+assert_nonempty "retro.md command non-empty" "$ADAPTER_DIR/.claude/commands/retro.md"
+
+echo ""
+echo "=== harness engineering: remediation hints in verify-after-edit ==="
+
+rc=0
+grep -q 'Remediation hints' "$ADAPTER_DIR/.claude/hooks/verify-after-edit.sh" || rc=1
+assert_ok "verify-after-edit has remediation hints" "$rc"
+
+rc=0
+grep -q 'remediation.json' "$ADAPTER_DIR/.claude/hooks/verify-after-edit.sh" || rc=1
+assert_ok "verify-after-edit supports remediation.json config" "$rc"
+
+echo ""
+echo "=== harness engineering: visual smoke test in verify-app ==="
+
+rc=0
+grep -q 'Visual Smoke Test' "$ADAPTER_DIR/.claude/agents/verify-app.md" || rc=1
+assert_ok "verify-app has Visual Smoke Test section" "$rc"
+
+echo ""
+echo "=== harness engineering: post-build cleanup in build agent ==="
+
+rc=0
+grep -q 'Post-Build Cleanup' "$ADAPTER_DIR/.claude/agents/build.md" || rc=1
+assert_ok "build agent has Post-Build Cleanup section" "$rc"
+
+# ══════════════════════════════════════════════════════════════
 # SUMMARY
 # ══════════════════════════════════════════════════════════════
 

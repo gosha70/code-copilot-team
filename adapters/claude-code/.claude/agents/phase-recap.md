@@ -39,6 +39,7 @@ You are a phase recap agent. Your job is to generate a comprehensive recap docum
 ### Optional Sections (include if relevant)
 - **Manual Steps Required** — env setup, DB init, dependency installs
 - **Lessons Learned** — what went well, what could improve
+- **Struggle Diagnosis** — what was underspecified that caused rework; table with Struggle, Time Lost, Root Cause, Proposed Fix (see template)
 - **Metrics** — agents spawned, files created/modified, dependencies added
 
 3. **Write the recap** to the appropriate location:

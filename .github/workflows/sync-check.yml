@@ -1,0 +1,40 @@
+name: Adapter Sync Check
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'shared/**'
+      - 'scripts/generate.sh'
+      - 'adapters/**'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'shared/**'
+      - 'scripts/generate.sh'
+      - 'adapters/**'
+
+jobs:
+  sync-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run generator
+        run: bash scripts/generate.sh
+
+      - name: Check for drift
+        run: |
+          if ! git diff --exit-code adapters/; then
+            echo ""
+            echo "ERROR: Generated adapter configs are out of sync with shared/."
+            echo "Run './scripts/generate.sh' and commit the updated outputs."
+            exit 1
+          fi
+          echo "Adapters are in sync with shared/."
+
+      - name: Run generation tests
+        run: bash tests/test-generate.sh
+
+      - name: Run hook tests
+        run: bash tests/test-hooks.sh

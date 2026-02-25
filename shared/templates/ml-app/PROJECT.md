@@ -54,6 +54,8 @@ tests/
 ```
 
 ## Architecture Rules
+> **Non-negotiable.** Violations must be flagged during review, not silently accepted.
+
 - **Clean Architecture**: domain → application → infrastructure layers; dependencies flow inward
 - **Protocol-based abstractions**: LLM providers, strategies, storage all defined as protocols (interfaces)
 - **Provider-agnostic**: LLM clients pluggable via standardized protocol; auto-detect from env vars

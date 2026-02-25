@@ -113,6 +113,18 @@ Document any steps needed outside of code generation:
 
 ---
 
+### Struggle Diagnosis
+
+What was underspecified that caused rework or confusion?
+
+| Struggle | Time Lost | Root Cause | Proposed Fix |
+|----------|-----------|------------|-------------|
+| {description} | {estimate} | {missing context / wrong assumption / tooling gap} | {rule or doc change to prevent recurrence} |
+
+For each item, identify: should a rule in `shared/rules/` be updated? A template section added? A hook modified?
+
+---
+
 ### Metrics
 
 | Metric | Value |

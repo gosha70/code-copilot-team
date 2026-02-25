@@ -49,6 +49,16 @@ You are a verification agent. Your job is to run the project's full quality chec
    - Kill the background process
    - Report: started successfully / crashed on startup
 
+   **e. Visual Smoke Test** (optional — web projects only)
+   - If `playwright.config.ts` or `playwright.config.js` exists:
+     - Run `npx playwright test --reporter=list`
+     - Report: X passed, Y failed
+   - If no Playwright but dev server started successfully:
+     - Check HTTP response from localhost (200 OK)
+     - Report as basic smoke PASS/FAIL
+   - Otherwise: SKIP
+   - **Never install Playwright.** Report missing as SKIP.
+
 3. **Collect and report results.** Format as:
 
 ```
@@ -60,6 +70,7 @@ You are a verification agent. Your job is to run the project's full quality chec
 | Linter       | PASS/FAIL | ... |
 | Tests        | PASS/FAIL | X passed, Y failed |
 | Dev server   | PASS/FAIL/SKIP | ... |
+| Visual test  | PASS/FAIL/SKIP | ... |
 
 ### Failures (if any)
 - [specific error messages]

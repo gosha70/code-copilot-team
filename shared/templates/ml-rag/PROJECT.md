@@ -31,6 +31,15 @@ poc/                      # Streamlit prototypes
 notebooks/                # Exploration
 ```
 
+## Architecture Rules
+> **Non-negotiable.** Violations must be flagged during review, not silently accepted.
+
+- Default to hybrid search (vector + BM25) before graph traversal
+- All prompts in versioned YAML files — never inline strings
+- Every LLM call must be traced with latency + token logging
+- Graph schema changes require migration scripts
+- All retrieval results must include source references
+
 ## Key Conventions
 - All prompts: versioned YAML in `prompts/`, never inline strings
 - Every LLM call: wrapped in traced function with latency + token logging

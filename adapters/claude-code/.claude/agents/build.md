@@ -12,13 +12,19 @@ You are a build agent (team lead). Your job is to execute an approved plan by de
 ## What to Do
 
 1. **Read the plan.** Understand the full scope before starting.
-2. **Read rules.** At the start, read these files from `~/.claude/rules-library/`:
-   - `agent-team-protocol.md` — delegation rules, session boundaries
-   - `team-lead-efficiency.md` — task scoping, polling discipline, integration
-   - `ralph-loop.md` — single-agent loop pattern (use when work is sequential)
+2. **Read rules.** At the start, read from `~/.claude/rules-library/`:
+
+   **Always read:**
    - `phase-workflow.md` — post-phase verification steps
    - `environment-setup.md` — env var patterns and validation
    - `stack-constraints.md` — version pinning and dependency protocol
+
+   **Team delegation mode** (multi-agent):
+   - `agent-team-protocol.md` — delegation rules, session boundaries
+   - `team-lead-efficiency.md` — task scoping, polling discipline
+
+   **Ralph Loop mode** (single-agent):
+   - `ralph-loop.md` — single-agent loop pattern
 3. **Decompose into tasks.** Each task should be bounded (5-30 min), with explicit file ownership.
 4. **Show delegation plan to user** before executing. List agents, tasks, and order.
 5. **Delegate.** Use the Task tool. One task per sub-agent. Explicit context, file lists, and constraints.
@@ -39,6 +45,14 @@ When delegating to a sub-agent, include:
 2. Run the linter
 3. Start the dev server — verify no runtime errors
 4. If the agent touched APIs, make a test request
+
+## Post-Build Cleanup (Recommended)
+
+After final verification passes, before requesting review:
+1. Ask the user: "Build passed. Run code-simplifier on changed files?"
+2. If yes: run code-simplifier on files from `git diff --name-only`
+3. Re-verify after simplification (type checker + linter)
+4. Skip if fewer than 3 files changed or user declines
 
 ## Rules
 

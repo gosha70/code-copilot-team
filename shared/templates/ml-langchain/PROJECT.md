@@ -29,6 +29,8 @@ poc/
 ```
 
 ## Architecture Rules
+> **Non-negotiable.** Violations must be flagged during review, not silently accepted.
+
 - Use LangGraph for ANY multi-step workflow (not legacy AgentExecutor)
 - Every LangGraph graph: explicit TypedDict state schema, no Any types
 - All chains/graphs must be LangSmith-traceable (LANGCHAIN_TRACING_V2=true)

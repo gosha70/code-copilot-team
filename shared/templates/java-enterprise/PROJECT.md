@@ -47,6 +47,8 @@
 ```
 
 ## Hexagonal Architecture Rules
+> **Non-negotiable.** Violations must be flagged during review, not silently accepted.
+
 - Domain layer: ZERO framework dependencies (no Spring annotations)
 - Application layer: orchestrates domain; depends only on port interfaces
 - Adapters: implement ports; all framework coupling lives here
