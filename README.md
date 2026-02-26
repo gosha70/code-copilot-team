@@ -26,6 +26,11 @@ Evaluated against the two leading AI coding agent frameworks (February 2026):
 
 > **Sources:** [OpenAI Harness Engineering](https://openai.com/index/harness-engineering/) · [Claude Code Best Practice](https://github.com/shanraisshan/claude-code-best-practice)
 
+## Further Reading
+
+- [Spec-Driven Development vs Code Copilot Team](docs/sdd-vs-code-copilot-team.md) — Side-by-side comparison with GitHub's Spec Kit. TL;DR: SDD defines *what* to build; Code Copilot Team defines *how to behave* while building it. They're complementary, not competing.
+
+
 ## What You Get
 
 ![Configuration Layers](docs/images/configuration-layers.png)
