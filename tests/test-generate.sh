@@ -175,7 +175,16 @@ assert_contains "verify-app: detects project stack" "$VERIFY" "package.json\|pyp
 assert_contains "verify-app: has type checker" "$VERIFY" "Type [Cc]hecker"
 assert_contains "verify-app: has linter" "$VERIFY" "Linter"
 assert_contains "verify-app: has test suite" "$VERIFY" "Test Suite\|test.*suite"
+assert_contains "verify-app: has visual smoke test section" "$VERIFY" "Visual Smoke Test"
+assert_contains "verify-app: output includes visual test row" "$VERIFY" "Visual test"
 assert_contains "verify-app: no file modification" "$VERIFY" "[Nn]ever modify"
+
+# All skills must include machine-checkable completion criteria
+for skill in research plan build review verify-app; do
+  SKILL_FILE="$ADAPTERS/codex/.agents/skills/$skill/SKILL.md"
+  assert_contains "$skill: has Definition of Done section" "$SKILL_FILE" "Definition of Done"
+  assert_contains "$skill: has PASS/FAIL checklist markers" "$SKILL_FILE" "PASS/FAIL:"
+done
 
 # ── Section 7: No Claude-specific leakage ─────────────────
 

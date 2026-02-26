@@ -47,6 +47,15 @@ You are a verification agent. Your job is to run the project's full quality chec
    - Kill the background process
    - Report: started successfully / crashed on startup
 
+   **e. Visual Smoke Test** (optional — web projects only)
+   - If `playwright.config.ts` or `playwright.config.js` exists:
+     - Run `npx playwright test --reporter=list`
+     - Report: X passed, Y failed
+   - If no Playwright config but a dev server started:
+     - Probe local HTTP response and report basic UI smoke PASS/FAIL
+   - Otherwise report: SKIP
+   - **Never install Playwright** as part of this step.
+
 3. **Collect and report results.**
 
 ## Output Format
@@ -60,6 +69,7 @@ You are a verification agent. Your job is to run the project's full quality chec
 | Linter       | PASS/FAIL | ... |
 | Tests        | PASS/FAIL | X passed, Y failed |
 | Dev server   | PASS/FAIL/SKIP | ... |
+| Visual test  | PASS/FAIL/SKIP | ... |
 
 ### Failures (if any)
 - [specific error messages]
@@ -75,3 +85,11 @@ You are a verification agent. Your job is to run the project's full quality chec
 - **Timeout: 120 seconds per check.** If a check hangs, kill it and report as TIMEOUT.
 - **Report all findings honestly.** Don't minimize or hide failures.
 - **If no checks are detectable**, report that no project stack was detected.
+
+## Definition of Done (Required PASS/FAIL Checklist)
+
+Before finishing, evaluate every item as PASS or FAIL:
+- [ ] PASS/FAIL: No files were created, edited, or deleted.
+- [ ] PASS/FAIL: Type, lint, test, and dev-server checks have explicit statuses.
+- [ ] PASS/FAIL: Visual smoke test is reported as PASS, FAIL, or SKIP with reason.
+- [ ] PASS/FAIL: Failures include actionable next steps.

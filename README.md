@@ -195,7 +195,7 @@ code-copilot-team/
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    59 hook tests
-│   ├── test-generate.sh                 220 generation + adapter tests
+│   ├── test-generate.sh                 232 generation + adapter tests
 │   └── test-shared-structure.sh         301 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift prevention

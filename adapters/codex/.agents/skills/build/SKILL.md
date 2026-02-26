@@ -40,3 +40,11 @@ For each task in the plan, follow this loop:
 - **Fix immediately.** Don't leave broken code and move on.
 - **Commit gate.** Ask the user before committing. One commit per phase.
 - **Read `environment-setup` and `stack-constraints` rules** from your project's on-demand rules for env var patterns and dependency management.
+
+## Definition of Done (Required PASS/FAIL Checklist)
+
+Before finishing, evaluate every item as PASS or FAIL:
+- [ ] PASS/FAIL: All planned tasks were completed in sequence or explicitly deferred.
+- [ ] PASS/FAIL: Type checker, linter, and tests were run after significant changes.
+- [ ] PASS/FAIL: Any failing check was resolved or reported with concrete next action.
+- [ ] PASS/FAIL: Final report includes what changed and remaining risks.
