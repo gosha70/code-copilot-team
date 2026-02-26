@@ -12,14 +12,32 @@ Built for **Claude Code** as the reference implementation, with portable convent
 
 Every rule in this repo is failure-driven — it exists because we hit the specific failure it prevents, often more than once. After analyzing 13 sessions of a real project build, we identified six recurring patterns: dependency breaks, agents ignoring conventions, context window exhaustion, schema drift during parallel builds, agents not asking clarifying questions, and commit granularity issues. This setup prevents all of them.
 
+## Framework Compliance
+
+Evaluated against the two leading AI coding agent frameworks (February 2026):
+
+### OpenAI Harness Engineering — 5.0 / 5.0
+
+![OpenAI Harness Engineering Scorecard](docs/images/harness-engineering-scorecard.png)
+
+### Claude Code Best Practice — 10.0 / 10.0
+
+![Claude Code Best Practice Scorecard](docs/images/best-practice-scorecard.png)
+
+> **Sources:** [OpenAI Harness Engineering](https://openai.com/index/harness-engineering/) · [Claude Code Best Practice](https://github.com/shanraisshan/claude-code-best-practice)
+
 ## What You Get
+
+![Configuration Layers](docs/images/configuration-layers.png)
 
 - **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 10 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
 - **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
 - **Hooks** (`~/.claude/hooks/`) — 6 lifecycle scripts: test verification, type checking, auto-format, file protection, context re-injection, and desktop notifications. Auto-detect your project's stack.
 - **7 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
 - **Four-phase workflow** — Research → Plan → Build → Review. Plus **Ralph Loop** for single-agent autonomous iteration.
+![Three - Phase Agent Workflow](docs/images/three-phase-workflow.png)
 - **Optional GCC memory** — persistent cross-session context via the [GCC protocol](https://arxiv.org/abs/2508.00031), powered by Aline MCP (`aline-ai`). Install with `--gcc`.
+![Git Context Control](docs/images/gcc-operations-map.png)
 - **tmux launcher** (`claude-code`) — per-project sessions with git context display.
 
 ## Quick Start
@@ -69,6 +87,8 @@ claude-code ~/projects/existing-api
 ```
 
 ## Available Templates
+
+![Agent Team Delegation](docs/images/agent-team-roles.png)
 
 | Template | Stack | Agent Team |
 |---|---|---|
@@ -171,7 +191,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    59 hook tests
 │   ├── test-generate.sh                 220 generation + adapter tests
-│   └── test-shared-structure.sh         230 structure + content tests
+│   └── test-shared-structure.sh         301 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift prevention
 ├── README.md
@@ -185,10 +205,13 @@ Rule content is written once in `shared/` and adapted per tool via `scripts/gene
 
 **Claude Code specific:**
 - **[Setup Cookbook](adapters/claude-code/docs/claude-code-setup-cookbook.md)** — deep-dive into every configuration option
-- **[Config Guide](adapters/claude-code/docs/claude-config-guide.md)** — templates, agent teams, and workflow reference
+- **[Config Guide](adapters/claude-code/docs/claude-config-guide.md)** — templates, agent teams, output styles, and workflow reference
 - **[Hooks Guide](adapters/claude-code/docs/hooks-guide.md)** — hook installation, customization, and supported stacks
 - **[Sub-Agents Guide](adapters/claude-code/docs/subagents-guide.md)** — sub-agent configuration and usage
 - **[Agent Traces](adapters/claude-code/docs/agent-traces.md)** — locating, reading, and archiving agent transcripts
+- **[Debugging Strategies](adapters/claude-code/docs/debugging-strategies.md)** — /doctor, background tasks, Playwright MCP, trace debugging
+- **[Permissions Guide](adapters/claude-code/docs/permissions-guide.md)** — per-stack Allow/Deny wildcard patterns for /permissions
+- **[Recommended MCP Servers](adapters/claude-code/docs/recommended-mcp-servers.md)** — Context7, PostgreSQL, Filesystem, and Playwright MCP setup
 
 **Shared (all tools):**
 - **[Common Pitfalls](shared/docs/common-pitfalls.md)** — cross-cutting issues and solutions
