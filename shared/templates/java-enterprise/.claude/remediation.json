@@ -19,6 +19,18 @@
     {
       "match": "Failed to configure a DataSource",
       "hint": "Check application.yml datasource config. Ensure SPRING_DATASOURCE_URL is set (or DB is running)"
+    },
+    {
+      "match": "domain.*import.*javax.persistence",
+      "hint": "Hexagonal violation: JPA belongs in adapter layer, not domain. Domain must have ZERO framework dependencies. See PROJECT.md #Hexagonal Architecture Rules."
+    },
+    {
+      "match": "domain.*import.*org.springframework",
+      "hint": "Hexagonal violation: Spring annotations in domain layer. Domain must have ZERO framework dependencies. See PROJECT.md #Hexagonal Architecture Rules."
+    },
+    {
+      "match": "domain.*import.*adapter",
+      "hint": "Hexagonal violation: domain depends on adapter. Dependencies must flow inward: adapter → application → domain. See PROJECT.md #Hexagonal Architecture Rules."
     }
   ]
 }

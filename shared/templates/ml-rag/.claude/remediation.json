@@ -19,6 +19,18 @@
     {
       "match": "OPENAI_API_KEY",
       "hint": "Set your OpenAI API key: export OPENAI_API_KEY=sk-... (or add to .env)"
+    },
+    {
+      "match": "inline.*prompt|f['\"].*system.*message",
+      "hint": "Inline prompt detected. All prompts must be in versioned YAML files in prompts/. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "source.*missing|citation.*not found",
+      "hint": "Missing source references. All retrieval results must include source metadata for citation. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "graph.*schema.*change|migration.*graph",
+      "hint": "Graph schema change detected. Requires migration script. See PROJECT.md #Architecture Rules."
     }
   ]
 }

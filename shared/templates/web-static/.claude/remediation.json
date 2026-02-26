@@ -19,6 +19,18 @@
     {
       "match": "ENOENT.*content/",
       "hint": "Content file not found. Verify the file exists in content/ and the slug matches the filename"
+    },
+    {
+      "match": "frontmatter.*missing|missing.*title|missing.*description",
+      "hint": "Incomplete frontmatter. All pages need title + description + og:image. Blog posts also need date + tags. See PROJECT.md #Content Rules."
+    },
+    {
+      "match": "document\\.|window\\.|addEventListener",
+      "hint": "Client-side JS detected. No client-side JS unless absolutely necessary (progressive enhancement). See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "alt.*missing|img.*no alt",
+      "hint": "Image missing alt text. All images must have descriptive alt text. See PROJECT.md #Content Rules."
     }
   ]
 }

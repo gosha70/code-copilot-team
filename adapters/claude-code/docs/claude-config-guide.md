@@ -345,6 +345,9 @@ Read src/api/users.ts and generate tests for its exported functions.
 ```
 Claude loads only what's needed rather than carrying everything in context.
 
+### Permission patterns
+Configure `/permissions` to reduce confirmation prompts. See [permissions-guide.md](permissions-guide.md) for per-stack Allow/Deny patterns.
+
 ### Multiple Claude sessions
 The launcher creates separate tmux sessions per project directory. You can have multiple running:
 ```bash
@@ -357,6 +360,27 @@ claude-code ~/projects/medical-rag      # → tmux session: claude-medical-rag
 # List all sessions
 tmux list-sessions
 ```
+
+---
+
+## Output Styles
+
+Claude Code supports three output styles that control response verbosity:
+
+| Style | Behavior | Best for |
+|---|---|---|
+| **Concise** | Short answers, minimal explanation, code-focused | Build phase, quick fixes, experienced users |
+| **Normal** | Balanced explanation with code | General development, default for most sessions |
+| **Explanatory** | Detailed reasoning, trade-off discussion, alternatives | Plan/review phases, learning, architecture decisions |
+
+**How to configure:**
+- Run `/config` → select "Output style" → choose your preference
+- The setting persists across sessions
+
+**Phase recommendations:**
+- **Plan / Review:** Use Explanatory — you want reasoning and trade-offs visible
+- **Build:** Use Concise — faster iteration, less noise in context window
+- **Debug:** Use Normal — enough context to understand suggestions without overwhelming
 
 ---
 

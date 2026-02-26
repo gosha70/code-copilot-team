@@ -19,6 +19,18 @@
     {
       "match": "EXECUTIONS_DATA_PRUNE",
       "hint": "Execution data growing. Set EXECUTIONS_DATA_PRUNE=true and EXECUTIONS_DATA_MAX_AGE=168 in n8n env"
+    },
+    {
+      "match": "password.*hardcod|api_key.*plain|secret.*workflow",
+      "hint": "Hardcoded credential in workflow. Use n8n credential store, never hardcode in JSON. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "error.*trigger.*missing|no error.*handler",
+      "hint": "Workflow missing error handler. Every workflow must have an error trigger node. See PROJECT.md #n8n Conventions."
+    },
+    {
+      "match": "health.*endpoint.*missing|/health.*not found",
+      "hint": "Missing /health endpoint. Every FastAPI service needs one for Docker health checks. See PROJECT.md #Python Service Rules."
     }
   ]
 }

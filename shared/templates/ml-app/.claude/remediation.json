@@ -19,6 +19,18 @@
     {
       "match": "No module named 'torch'",
       "hint": "PyTorch not installed. Run: pip install torch torchvision (see pytorch.org for GPU builds)"
+    },
+    {
+      "match": "domain.*import.*infrastructure",
+      "hint": "Clean Architecture violation: domain must not depend on infrastructure. Dependencies flow inward. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "import openai|import anthropic",
+      "hint": "Direct provider SDK import. Use the protocol-based abstraction in llm/base.py instead. See PROJECT.md #LLM Provider Rules."
+    },
+    {
+      "match": "Incompatible type.*Any",
+      "hint": "mypy strict violation: Any type detected. Use explicit types for all public functions. See PROJECT.md #Key Conventions."
     }
   ]
 }

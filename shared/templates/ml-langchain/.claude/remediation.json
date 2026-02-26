@@ -19,6 +19,18 @@
     {
       "match": "Connection refused.*:8123",
       "hint": "LangServe not running. Start it: langchain serve (or python app/server.py)"
+    },
+    {
+      "match": "AgentExecutor",
+      "hint": "Legacy AgentExecutor detected. Use LangGraph for ALL multi-step workflows. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "Any.*State|TypedDict.*Any",
+      "hint": "LangGraph state must use explicit TypedDict with concrete types, no Any. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "missing.*docstring|no docstring",
+      "hint": "Tool missing docstring. All @tool functions need complete docstrings — LLM reads them for selection. See PROJECT.md #Architecture Rules."
     }
   ]
 }

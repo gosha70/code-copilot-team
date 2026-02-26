@@ -19,6 +19,18 @@
     {
       "match": "NEXTAUTH_SECRET",
       "hint": "NEXTAUTH_SECRET not set. Generate one: openssl rand -base64 32 (add to .env.local)"
+    },
+    {
+      "match": "use client.*fetch|fetch.*use client",
+      "hint": "Data fetching in Client Component. Must be in Server Components or Route Handlers only. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "process\\.env[^.]|process\\.env\\.",
+      "hint": "Raw process.env access. Validate all env vars with zod at startup. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "no-explicit-any|Type.*any.*not assignable",
+      "hint": "TypeScript strict: no 'any' types. Define proper interfaces. See PROJECT.md #Architecture Rules."
     }
   ]
 }

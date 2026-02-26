@@ -346,7 +346,7 @@ for f in "${HOOK_FILES[@]}"; do
 done
 
 # Claude-specific docs in adapter
-CLAUDE_DOCS=(hooks-guide.md subagents-guide.md claude-code-setup-cookbook.md claude-config-guide.md hooks-test-cases.md permissions-guide.md recommended-mcp-servers.md)
+CLAUDE_DOCS=(hooks-guide.md subagents-guide.md claude-code-setup-cookbook.md claude-config-guide.md hooks-test-cases.md permissions-guide.md recommended-mcp-servers.md debugging-strategies.md)
 for f in "${CLAUDE_DOCS[@]}"; do
   assert_file_exists "adapter doc $f exists" "$ADAPTER_DIR/docs/$f"
 done
@@ -590,6 +590,20 @@ assert_file_exists "permissions-guide.md exists" "$ADAPTER_DIR/docs/permissions-
 assert_nonempty "permissions-guide.md non-empty" "$ADAPTER_DIR/docs/permissions-guide.md"
 assert_file_exists "recommended-mcp-servers.md exists" "$ADAPTER_DIR/docs/recommended-mcp-servers.md"
 assert_nonempty "recommended-mcp-servers.md non-empty" "$ADAPTER_DIR/docs/recommended-mcp-servers.md"
+
+# ══════════════════════════════════════════════════════════════
+# 17. Remediation.json — architecture-violation patterns
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== remediation.json: architecture-violation patterns ==="
+
+for t in "${TEMPLATE_TYPES[@]}"; do
+  RFILE="$SHARED_DIR/templates/$t/.claude/remediation.json"
+  ARCH_HINTS=$(jq '[.patterns[] | select(.hint | test("violation|Architecture|architecture|layer|domain|Legacy|Clean|Hexagonal|Provider|inline|credential|docstring|frontmatter|Client Component|endpoint"))] | length' "$RFILE" 2>/dev/null || echo "0")
+  rc=0; [[ "$ARCH_HINTS" -ge 1 ]] || rc=1
+  assert_ok "$t has architecture-violation patterns ($ARCH_HINTS found)" "$rc"
+done
 
 # ══════════════════════════════════════════════════════════════
 # SUMMARY
