@@ -42,18 +42,26 @@ You are a verification agent. Your job is to run the project's full quality chec
    - Java: `mvn test -q` / `./gradlew test`
    - Rust: `cargo test`
 
-   **d. Dev Server Smoke Test** (optional — only if a dev server command is detectable)
+   **d. UI Smoke Test** (optional — only if a dev server command is detectable)
    - Start the dev server in the background
    - Wait a few seconds for startup
    - Check if the process is still running (didn't crash)
    - Kill the background process
    - Report: started successfully / crashed on startup
 
-   **e. Visual Smoke Test** (optional — web projects only)
+   **e. Runtime Observability** (optional — web projects only)
+   - **Console**
+     - Capture console errors/warnings during smoke flow (Playwright/browser logs)
+     - If not observable in current setup, report: SKIP with reason
+   - **Network**
+     - Capture failed/blocked requests (5xx, CORS, DNS, timeout)
+     - If not observable in current setup, report: SKIP with reason
+
+   **f. Visual Smoke Test** (optional — web projects only)
    - If `playwright.config.ts` or `playwright.config.js` exists:
      - Run `npx playwright test --reporter=list`
      - Report: X passed, Y failed
-   - If no Playwright but dev server started successfully:
+   - If no Playwright but dev server started successfully (`ui-smoke` PASS):
      - Check HTTP response from localhost (200 OK)
      - Report as basic smoke PASS/FAIL
    - Otherwise: SKIP
@@ -69,8 +77,10 @@ You are a verification agent. Your job is to run the project's full quality chec
 | Type checker | PASS/FAIL | ... |
 | Linter       | PASS/FAIL | ... |
 | Tests        | PASS/FAIL | X passed, Y failed |
-| Dev server   | PASS/FAIL/SKIP | ... |
-| Visual test  | PASS/FAIL/SKIP | ... |
+| UI smoke     | PASS/FAIL/SKIP | ... |
+| Console      | PASS/FAIL/SKIP | ... |
+| Network      | PASS/FAIL/SKIP | ... |
+| Visual       | PASS/FAIL/SKIP | ... |
 
 ### Failures (if any)
 - [specific error messages]

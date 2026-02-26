@@ -175,8 +175,12 @@ assert_contains "verify-app: detects project stack" "$VERIFY" "package.json\|pyp
 assert_contains "verify-app: has type checker" "$VERIFY" "Type [Cc]hecker"
 assert_contains "verify-app: has linter" "$VERIFY" "Linter"
 assert_contains "verify-app: has test suite" "$VERIFY" "Test Suite\|test.*suite"
+assert_contains "verify-app: has runtime observability section" "$VERIFY" "Runtime Observability"
+assert_contains "verify-app: output includes UI smoke row" "$VERIFY" "UI smoke"
+assert_contains "verify-app: output includes console row" "$VERIFY" "Console"
+assert_contains "verify-app: output includes network row" "$VERIFY" "Network"
 assert_contains "verify-app: has visual smoke test section" "$VERIFY" "Visual Smoke Test"
-assert_contains "verify-app: output includes visual test row" "$VERIFY" "Visual test"
+assert_contains "verify-app: output includes visual row" "$VERIFY" "Visual"
 assert_contains "verify-app: no file modification" "$VERIFY" "[Nn]ever modify"
 
 # All skills must include machine-checkable completion criteria

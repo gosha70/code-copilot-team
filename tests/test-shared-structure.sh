@@ -516,6 +516,29 @@ rc=0
 grep -q 'Visual Smoke Test' "$ADAPTER_DIR/.claude/agents/verify-app.md" || rc=1
 assert_ok "verify-app has Visual Smoke Test section" "$rc"
 
+rc=0
+grep -q 'Runtime Observability' "$ADAPTER_DIR/.claude/agents/verify-app.md" || rc=1
+assert_ok "verify-app has Runtime Observability section" "$rc"
+
+for field in "UI smoke" "Console" "Network" "Visual"; do
+  rc=0
+  grep -q "$field" "$ADAPTER_DIR/.claude/agents/verify-app.md" || rc=1
+  assert_ok "verify-app report includes $field field" "$rc"
+done
+
+echo ""
+echo "=== web template team-review observability fields ==="
+
+for cmd in \
+  "$SHARED_DIR/templates/web-dynamic/commands/team-review.md" \
+  "$SHARED_DIR/templates/web-static/commands/team-review.md"; do
+  for field in "ui-smoke" "console" "network" "visual"; do
+    rc=0
+    grep -q "$field" "$cmd" || rc=1
+    assert_ok "$(basename "$(dirname "$(dirname "$cmd")")") team-review includes $field" "$rc"
+  done
+done
+
 echo ""
 echo "=== harness engineering: post-build cleanup in build agent ==="
 
