@@ -365,22 +365,47 @@ tmux list-sessions
 
 ## Output Styles
 
-Claude Code supports three output styles that control response verbosity:
+Output styles modify Claude Code's system prompt to change how it responds. They go beyond verbosity — they can fundamentally change the interaction model.
+
+### Built-in styles
 
 | Style | Behavior | Best for |
 |---|---|---|
-| **Concise** | Short answers, minimal explanation, code-focused | Build phase, quick fixes, experienced users |
-| **Normal** | Balanced explanation with code | General development, default for most sessions |
-| **Explanatory** | Detailed reasoning, trade-off discussion, alternatives | Plan/review phases, learning, architecture decisions |
+| **Default** | Standard software engineering assistant — concise, code-focused | Everyday development, build phase, experienced users |
+| **Explanatory** | Adds educational "Insights" between coding tasks explaining implementation choices and codebase patterns | Plan/review phases, onboarding to a new codebase, architecture decisions |
+| **Learning** | Collaborative learn-by-doing — shares insights AND asks you to write small pieces of code yourself via `TODO(human)` markers | Coaching, pair programming, learning a new stack |
 
-**How to configure:**
-- Run `/config` → select "Output style" → choose your preference
-- The setting persists across sessions
+### How to configure
 
-**Phase recommendations:**
-- **Plan / Review:** Use Explanatory — you want reasoning and trade-offs visible
-- **Build:** Use Concise — faster iteration, less noise in context window
-- **Debug:** Use Normal — enough context to understand suggestions without overwhelming
+- Run `/output-style` to select from a menu (also accessible via `/config`)
+- Run `/output-style explanatory` to switch directly
+- Setting is saved per-project in `.claude/settings.local.json`
+- Can also set `"outputStyle": "Explanatory"` in any settings file
+
+### Custom output styles
+
+Create a Markdown file in `~/.claude/output-styles/` (user-level) or `.claude/output-styles/` (project-level):
+
+```markdown
+---
+name: My Custom Style
+description: Brief description shown in /output-style menu
+keep-coding-instructions: true
+---
+
+# Custom Instructions
+
+Your instructions here — these replace the default system prompt
+(unless keep-coding-instructions is true).
+```
+
+Set `keep-coding-instructions: true` to retain Claude Code's software engineering behavior alongside your custom instructions. Without it, the coding-specific parts of the system prompt are removed — useful for non-engineering agents.
+
+### Phase recommendations
+
+- **Plan / Review:** Use **Explanatory** — you want reasoning, trade-offs, and codebase pattern insights visible
+- **Build:** Use **Default** — faster iteration, less noise in context window
+- **Onboarding:** Use **Learning** — builds understanding of unfamiliar code through guided participation
 
 ---
 
