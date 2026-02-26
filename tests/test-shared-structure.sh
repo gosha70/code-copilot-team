@@ -648,6 +648,25 @@ for t in "${TEMPLATE_TYPES[@]}"; do
 done
 
 # ══════════════════════════════════════════════════════════════
+# 18. README claims — test-count lines are current
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== README test-count claims ==="
+
+rc=0
+grep -Eq 'test-hooks\.sh[[:space:]]+59 hook tests' "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 59 hook tests" "$rc"
+
+rc=0
+grep -Eq 'test-generate\.sh[[:space:]]+238 generation \+ adapter tests' "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 238 generation + adapter tests" "$rc"
+
+rc=0
+grep -Eq 'test-shared-structure\.sh[[:space:]]+324 structure \+ content tests' "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 324 structure + content tests" "$rc"
+
+# ══════════════════════════════════════════════════════════════
 # SUMMARY
 # ══════════════════════════════════════════════════════════════
 
