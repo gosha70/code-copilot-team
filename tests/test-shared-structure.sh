@@ -160,6 +160,7 @@ echo "=== shared/docs/ ==="
 assert_dir_exists "shared/docs/ exists" "$SHARED_DIR/docs"
 
 DOCS_FILES=(
+  alignment-maintenance.md
   common-pitfalls.md
   delegation-best-practices.md
   error-reporting-template.md
@@ -475,6 +476,24 @@ done
 # ══════════════════════════════════════════════════════════════
 # 12. Harness Engineering — Architecture Rules + Struggle Diagnosis
 # ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== alignment maintenance docs ==="
+
+assert_file_exists "alignment-maintenance.md exists" "$SHARED_DIR/docs/alignment-maintenance.md"
+assert_nonempty "alignment-maintenance.md non-empty" "$SHARED_DIR/docs/alignment-maintenance.md"
+
+rc=0
+grep -q 'bash tests/test-generate.sh' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance includes test-generate command" "$rc"
+
+rc=0
+grep -q 'bash tests/test-hooks.sh' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance includes test-hooks command" "$rc"
+
+rc=0
+grep -q 'bash tests/test-shared-structure.sh' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance includes test-shared-structure command" "$rc"
 
 echo ""
 echo "=== harness engineering: architecture rules in templates ==="

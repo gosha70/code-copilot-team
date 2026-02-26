@@ -48,6 +48,18 @@ shared/rules/on-demand/*.md                            (committed, CI-verified)
 - Always run `./scripts/generate.sh` after changing `shared/` content. CI will fail if generated outputs are stale.
 - One PR per concern. Don't mix a new template with a rule change.
 
+## Ongoing Alignment Checks
+
+To prevent instruction drift and outdated quality claims:
+
+1. Follow [shared/docs/alignment-maintenance.md](shared/docs/alignment-maintenance.md) for release and monthly health checks.
+2. Keep README test-count lines in sync with actual test output.
+3. If structure tests fail on installed template parity, refresh local install and rerun:
+   ```bash
+   bash adapters/claude-code/setup.sh
+   bash tests/test-shared-structure.sh
+   ```
+
 ## Questions?
 
 Open an issue. Happy to discuss design decisions or help with template development.

@@ -196,7 +196,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    59 hook tests
 │   ├── test-generate.sh                 238 generation + adapter tests
-│   └── test-shared-structure.sh         314 structure + content tests
+│   └── test-shared-structure.sh         321 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift prevention
 ├── README.md
@@ -219,6 +219,7 @@ Rule content is written once in `shared/` and adapted per tool via `scripts/gene
 - **[Recommended MCP Servers](adapters/claude-code/docs/recommended-mcp-servers.md)** — Context7, PostgreSQL, Filesystem, and Playwright MCP setup
 
 **Shared (all tools):**
+- **[Alignment Maintenance Checklist](shared/docs/alignment-maintenance.md)** — recurring governance checks to keep framework alignment healthy
 - **[Common Pitfalls](shared/docs/common-pitfalls.md)** — cross-cutting issues and solutions
 - **[Delegation Best Practices](shared/docs/delegation-best-practices.md)** — when and how to delegate to agents
 - **[Ralph Loop Guide](shared/docs/ralph-loop-guide.md)** — Ralph Loop usage and configuration
@@ -229,6 +230,10 @@ Rule content is written once in `shared/` and adapted per tool via `scripts/gene
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). PRs welcome for new templates, rule improvements, and ports to other tools.
+
+## Alignment Maintenance
+
+Use the recurring checklist in [shared/docs/alignment-maintenance.md](shared/docs/alignment-maintenance.md) to keep this repo aligned as rules, skills, and templates evolve.
 
 ## License
 
