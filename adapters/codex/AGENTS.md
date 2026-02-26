@@ -118,7 +118,7 @@ corresponding skill to apply them.
 
 | Rule | Used By |
 |------|---------|
-| `agent-team-protocol` | *(Claude-only, not used in Codex)* |
+| `agent-team-protocol` | build (optional team mode) |
 | `clarification-protocol` | plan |
 | `environment-setup` | build |
 | `gcc-protocol` | all (optional) |
@@ -126,6 +126,6 @@ corresponding skill to apply them.
 | `phase-workflow` | build |
 | `ralph-loop` | build |
 | `stack-constraints` | build |
-| `team-lead-efficiency` | *(Claude-only, not used in Codex)* |
+| `team-lead-efficiency` | build (optional team mode) |
 | `token-efficiency` | research |
 

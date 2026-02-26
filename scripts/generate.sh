@@ -59,6 +59,8 @@ mkdir -p "$CODEX_DIR"
     case "$name" in
       ralph-loop|environment-setup|stack-constraints|phase-workflow)
         skill="build" ;;
+      agent-team-protocol|team-lead-efficiency)
+        skill="build (optional team mode)" ;;
       clarification-protocol)
         skill="plan" ;;
       integration-testing)
@@ -67,8 +69,6 @@ mkdir -p "$CODEX_DIR"
         skill="research" ;;
       gcc-protocol)
         skill="all (optional)" ;;
-      agent-team-protocol|team-lead-efficiency)
-        skill="*(Claude-only, not used in Codex)*" ;;
       *)
         skill="—" ;;
     esac

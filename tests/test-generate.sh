@@ -106,12 +106,10 @@ for f in "$SHARED/on-demand"/*.md; do
   assert_contains "references on-demand rule: $name" "$AGENTS_MD" "$name"
 done
 
-# Verify Claude-only rules are marked
-assert_contains "agent-team-protocol marked Claude-only" "$AGENTS_MD" "agent-team-protocol.*Claude-only"
-assert_contains "team-lead-efficiency marked Claude-only" "$AGENTS_MD" "team-lead-efficiency.*Claude-only"
-
 # Verify skill mappings
 assert_contains "ralph-loop mapped to build" "$AGENTS_MD" "ralph-loop.*build"
+assert_contains "agent-team-protocol mapped to build optional team mode" "$AGENTS_MD" "agent-team-protocol.*build (optional team mode)"
+assert_contains "team-lead-efficiency mapped to build optional team mode" "$AGENTS_MD" "team-lead-efficiency.*build (optional team mode)"
 assert_contains "clarification-protocol mapped to plan" "$AGENTS_MD" "clarification-protocol.*plan"
 assert_contains "integration-testing mapped to review" "$AGENTS_MD" "integration-testing.*review"
 assert_contains "token-efficiency mapped to research" "$AGENTS_MD" "token-efficiency.*research"
@@ -161,6 +159,8 @@ assert_not_contains "build: no Task tool delegation" "$BUILD" "Task tool"
 assert_not_contains "build: no sub-agent reference" "$BUILD" "sub-agent"
 assert_contains "build: has sequential execution" "$BUILD" "[Ss]equential"
 assert_contains "build: has verification section" "$BUILD" "Verification"
+assert_contains "build: has team mode section" "$BUILD" "Team Mode"
+assert_contains "build: has delegation fallback guidance" "$BUILD" "[Ff]allback\\|delegation is unavailable"
 
 # Review skill
 REVIEW="$ADAPTERS/codex/.agents/skills/review/SKILL.md"
