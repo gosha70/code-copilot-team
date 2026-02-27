@@ -1,0 +1,35 @@
+---
+name: Bug report
+about: Report a reproducible defect in the project
+title: "[Bug]: "
+labels: bug
+assignees: ""
+---
+
+## Summary
+
+Describe the bug clearly and concisely.
+
+## Steps To Reproduce
+
+1. Go to "..."
+2. Run "..."
+3. Observe "..."
+
+## Expected Behavior
+
+Describe what you expected to happen.
+
+## Actual Behavior
+
+Describe what actually happened.
+
+## Environment
+
+- OS:
+- Shell:
+- Relevant versions:
+
+## Additional Context
+
+Add logs, screenshots, or related context if available.

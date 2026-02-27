@@ -968,6 +968,57 @@ assert_eq "sync-check triggers on CONTRIBUTING.md changes" "2" "$CONTRIB_PATH_CO
 WORKFLOW_PATH_COUNT=$(grep -Fc "'.github/workflows/sync-check.yml'" "$WORKFLOW_FILE")
 assert_eq "sync-check triggers on workflow file changes" "2" "$WORKFLOW_PATH_COUNT"
 
+# ══════════════════════════════════════════════════════════════
+# 22. GitHub community standards files
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== community standards files ==="
+
+assert_file_exists "CODE_OF_CONDUCT.md exists" "$REPO_DIR/CODE_OF_CONDUCT.md"
+assert_nonempty "CODE_OF_CONDUCT.md non-empty" "$REPO_DIR/CODE_OF_CONDUCT.md"
+
+rc=0
+grep -q '^## Our Standards' "$REPO_DIR/CODE_OF_CONDUCT.md" || rc=1
+assert_ok "CODE_OF_CONDUCT has Our Standards section" "$rc"
+
+rc=0
+grep -q '^## Enforcement' "$REPO_DIR/CODE_OF_CONDUCT.md" || rc=1
+assert_ok "CODE_OF_CONDUCT has Enforcement section" "$rc"
+
+assert_file_exists "SECURITY.md exists" "$REPO_DIR/SECURITY.md"
+assert_nonempty "SECURITY.md non-empty" "$REPO_DIR/SECURITY.md"
+
+rc=0
+grep -q '^## Supported Versions' "$REPO_DIR/SECURITY.md" || rc=1
+assert_ok "SECURITY has Supported Versions section" "$rc"
+
+rc=0
+grep -q '^## Reporting a Vulnerability' "$REPO_DIR/SECURITY.md" || rc=1
+assert_ok "SECURITY has Reporting a Vulnerability section" "$rc"
+
+assert_dir_exists ".github/ISSUE_TEMPLATE exists" "$REPO_DIR/.github/ISSUE_TEMPLATE"
+assert_file_exists "bug_report.md template exists" "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md"
+assert_nonempty "bug_report.md template non-empty" "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md"
+
+rc=0
+grep -q '^name: Bug report' "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md" || rc=1
+assert_ok "bug_report template has name field" "$rc"
+
+assert_file_exists "feature_request.md template exists" "$REPO_DIR/.github/ISSUE_TEMPLATE/feature_request.md"
+assert_nonempty "feature_request.md template non-empty" "$REPO_DIR/.github/ISSUE_TEMPLATE/feature_request.md"
+
+rc=0
+grep -q '^name: Feature request' "$REPO_DIR/.github/ISSUE_TEMPLATE/feature_request.md" || rc=1
+assert_ok "feature_request template has name field" "$rc"
+
+assert_file_exists "pull_request_template.md exists" "$REPO_DIR/.github/pull_request_template.md"
+assert_nonempty "pull_request_template.md non-empty" "$REPO_DIR/.github/pull_request_template.md"
+
+rc=0
+grep -q '^## Validation' "$REPO_DIR/.github/pull_request_template.md" || rc=1
+assert_ok "pull_request_template has Validation section" "$rc"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))
