@@ -764,29 +764,35 @@ rc=0
 grep -q 'bash tests/test-shared-structure.sh' "$WORKFLOW_FILE" || rc=1
 assert_ok "sync-check runs test-shared-structure.sh" "$rc"
 
+# Ensure setup.sh appears in the shared-structure step before test execution.
+SHARED_STEP=$(
+  awk '
+    /- name: Run shared structure tests/ {in_step=1; next}
+    /^      - name:/ && in_step {exit}
+    in_step {print}
+  ' "$WORKFLOW_FILE"
+)
+SETUP_LINE=$(echo "$SHARED_STEP" | nl -ba | awk '/bash adapters\/claude-code\/setup\.sh/{print $1; exit}')
+STRUCT_LINE=$(echo "$SHARED_STEP" | nl -ba | awk '/bash tests\/test-shared-structure\.sh/{print $1; exit}')
 rc=0
-grep -q 'bash adapters/claude-code/setup.sh' "$WORKFLOW_FILE" || rc=1
+[[ -n "$SETUP_LINE" && -n "$STRUCT_LINE" && "$SETUP_LINE" -lt "$STRUCT_LINE" ]] || rc=1
 assert_ok "sync-check runs setup.sh before structure tests" "$rc"
 
 rc=0
 grep -Eq 'HOME:[[:space:]]+\$\{\{ runner\.temp \}\}/cct-home' "$WORKFLOW_FILE" || rc=1
 assert_ok "sync-check uses isolated HOME for structure tests" "$rc"
 
-rc=0
-grep -Fq "'tests/**'" "$WORKFLOW_FILE" || rc=1
-assert_ok "sync-check triggers on tests/** changes" "$rc"
+TESTS_PATH_COUNT=$(grep -Fc "'tests/**'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on tests/** changes" "2" "$TESTS_PATH_COUNT"
 
-rc=0
-grep -q "'README.md'" "$WORKFLOW_FILE" || rc=1
-assert_ok "sync-check triggers on README.md changes" "$rc"
+README_PATH_COUNT=$(grep -Fc "'README.md'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on README.md changes" "2" "$README_PATH_COUNT"
 
-rc=0
-grep -q "'CONTRIBUTING.md'" "$WORKFLOW_FILE" || rc=1
-assert_ok "sync-check triggers on CONTRIBUTING.md changes" "$rc"
+CONTRIB_PATH_COUNT=$(grep -Fc "'CONTRIBUTING.md'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on CONTRIBUTING.md changes" "2" "$CONTRIB_PATH_COUNT"
 
-rc=0
-grep -q "'.github/workflows/sync-check.yml'" "$WORKFLOW_FILE" || rc=1
-assert_ok "sync-check triggers on workflow file changes" "$rc"
+WORKFLOW_PATH_COUNT=$(grep -Fc "'.github/workflows/sync-check.yml'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on workflow file changes" "2" "$WORKFLOW_PATH_COUNT"
 
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
