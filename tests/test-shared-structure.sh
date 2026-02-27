@@ -506,6 +506,16 @@ grep -q 'bash tests/test-shared-structure.sh' "$SHARED_DIR/docs/alignment-mainte
 assert_ok "alignment-maintenance includes test-shared-structure command" "$rc"
 
 rc=0
+grep -q 'bash adapters/claude-code/setup.sh' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance includes setup.sh command" "$rc"
+
+SETUP_DOC_LINE=$(grep -n 'bash adapters/claude-code/setup.sh' "$SHARED_DIR/docs/alignment-maintenance.md" | head -n 1 | cut -d: -f1)
+STRUCT_DOC_LINE=$(grep -n 'bash tests/test-shared-structure.sh' "$SHARED_DIR/docs/alignment-maintenance.md" | head -n 1 | cut -d: -f1)
+rc=0
+[[ -n "$SETUP_DOC_LINE" && -n "$STRUCT_DOC_LINE" && "$SETUP_DOC_LINE" -lt "$STRUCT_DOC_LINE" ]] || rc=1
+assert_ok "alignment-maintenance runs setup.sh before structure test" "$rc"
+
+rc=0
 grep -q 'tests/test-counts.env' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
 assert_ok "alignment-maintenance references test-counts source of truth" "$rc"
 

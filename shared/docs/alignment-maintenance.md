@@ -15,6 +15,7 @@ Run from repo root:
 ```bash
 bash tests/test-generate.sh
 bash tests/test-hooks.sh
+bash adapters/claude-code/setup.sh
 bash tests/test-shared-structure.sh
 ```
 
