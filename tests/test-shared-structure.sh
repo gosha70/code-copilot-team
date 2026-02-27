@@ -1190,10 +1190,10 @@ README_COMMUNITY_SECTION=$(
 )
 
 README_COMMUNITY_LINK_COUNT=$(echo "$README_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | wc -l | tr -d ' ')
-assert_eq "README community-standards section lists 5 links" "5" "$README_COMMUNITY_LINK_COUNT"
+assert_eq "README community-standards section lists 6 links" "6" "$README_COMMUNITY_LINK_COUNT"
 
 README_COMMUNITY_UNIQUE_LINK_COUNT=$(echo "$README_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | sort -u | wc -l | tr -d ' ')
-assert_eq "README community-standards section links are unique" "5" "$README_COMMUNITY_UNIQUE_LINK_COUNT"
+assert_eq "README community-standards section links are unique" "6" "$README_COMMUNITY_UNIQUE_LINK_COUNT"
 
 rc=0
 echo "$README_COMMUNITY_SECTION" | grep -Fq '[Code of Conduct](CODE_OF_CONDUCT.md)' || rc=1
@@ -1216,6 +1216,10 @@ echo "$README_COMMUNITY_SECTION" | grep -Fq '[Pull Request Template](.github/pul
 assert_ok "README community-standards includes Pull Request Template link" "$rc"
 
 rc=0
+echo "$README_COMMUNITY_SECTION" | grep -Fq '[GitHub Hardening Playbook](docs/github-hardening-playbook.md)' || rc=1
+assert_ok "README community-standards includes hardening playbook link" "$rc"
+
+rc=0
 grep -q '^## Community Standards' "$REPO_DIR/CONTRIBUTING.md" || rc=1
 assert_ok "CONTRIBUTING has Community Standards section" "$rc"
 
@@ -1228,10 +1232,10 @@ CONTRIBUTING_COMMUNITY_SECTION=$(
 )
 
 CONTRIBUTING_COMMUNITY_LINK_COUNT=$(echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | wc -l | tr -d ' ')
-assert_eq "CONTRIBUTING community-standards section lists 5 links" "5" "$CONTRIBUTING_COMMUNITY_LINK_COUNT"
+assert_eq "CONTRIBUTING community-standards section lists 6 links" "6" "$CONTRIBUTING_COMMUNITY_LINK_COUNT"
 
 CONTRIBUTING_COMMUNITY_UNIQUE_LINK_COUNT=$(echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | sort -u | wc -l | tr -d ' ')
-assert_eq "CONTRIBUTING community-standards section links are unique" "5" "$CONTRIBUTING_COMMUNITY_UNIQUE_LINK_COUNT"
+assert_eq "CONTRIBUTING community-standards section links are unique" "6" "$CONTRIBUTING_COMMUNITY_UNIQUE_LINK_COUNT"
 
 rc=0
 echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Fq '[Code of Conduct](CODE_OF_CONDUCT.md)' || rc=1
@@ -1252,6 +1256,10 @@ assert_ok "CONTRIBUTING community-standards includes Issue Templates link" "$rc"
 rc=0
 echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Fq '[Pull Request Template](.github/pull_request_template.md)' || rc=1
 assert_ok "CONTRIBUTING community-standards includes Pull Request Template link" "$rc"
+
+rc=0
+echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Fq '[GitHub Hardening Playbook](docs/github-hardening-playbook.md)' || rc=1
+assert_ok "CONTRIBUTING community-standards includes hardening playbook link" "$rc"
 
 rc=0
 if ! diff -u \

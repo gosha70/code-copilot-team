@@ -197,7 +197,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    59 hook tests
 │   ├── test-generate.sh                 238 generation + adapter tests
-│   └── test-shared-structure.sh         508 structure + content tests
+│   └── test-shared-structure.sh         510 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift prevention
 ├── README.md
@@ -239,6 +239,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). PRs welcome for new templates, rule impr
 - [Security Policy](SECURITY.md)
 - [Issue Templates](.github/ISSUE_TEMPLATE/)
 - [Pull Request Template](.github/pull_request_template.md)
+- [GitHub Hardening Playbook](docs/github-hardening-playbook.md)
 
 ## Alignment Maintenance
 

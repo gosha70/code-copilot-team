@@ -70,6 +70,7 @@ To prevent instruction drift and outdated quality claims:
 - [Security Policy](SECURITY.md)
 - [Issue Templates](.github/ISSUE_TEMPLATE/)
 - [Pull Request Template](.github/pull_request_template.md)
+- [GitHub Hardening Playbook](docs/github-hardening-playbook.md)
 
 ## Security Reporting
 
