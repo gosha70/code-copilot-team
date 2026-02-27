@@ -678,7 +678,22 @@ grep -Eq "test-shared-structure\\.sh[[:space:]]+${TEST_SHARED_STRUCTURE_EXPECTED
 assert_ok "README lists ${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure + content tests" "$rc"
 
 # ══════════════════════════════════════════════════════════════
-# 19. CI workflow coverage — sync-check enforces full gates
+# 19. CONTRIBUTING governance references
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== CONTRIBUTING governance references ==="
+
+rc=0
+grep -q 'tests/test-counts.env' "$REPO_DIR/CONTRIBUTING.md" || rc=1
+assert_ok "CONTRIBUTING references test-counts source of truth" "$rc"
+
+rc=0
+grep -q '.github/workflows/sync-check.yml' "$REPO_DIR/CONTRIBUTING.md" || rc=1
+assert_ok "CONTRIBUTING references sync-check workflow contract" "$rc"
+
+# ══════════════════════════════════════════════════════════════
+# 20. CI workflow coverage — sync-check enforces full gates
 # ══════════════════════════════════════════════════════════════
 
 echo ""

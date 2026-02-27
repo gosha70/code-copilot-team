@@ -54,7 +54,9 @@ To prevent instruction drift and outdated quality claims:
 
 1. Follow [shared/docs/alignment-maintenance.md](shared/docs/alignment-maintenance.md) for release and monthly health checks.
 2. Keep README test-count lines in sync with actual test output.
-3. If structure tests fail on installed template parity, refresh local install and rerun:
+3. Treat `tests/test-counts.env` as the source of truth for expected top-level suite totals when assertions change.
+4. Keep `.github/workflows/sync-check.yml` aligned with full gate coverage (all suites + setup before structure test).
+5. If structure tests fail on installed template parity, refresh local install and rerun:
    ```bash
    bash adapters/claude-code/setup.sh
    bash tests/test-shared-structure.sh
