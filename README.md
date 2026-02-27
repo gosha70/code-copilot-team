@@ -181,7 +181,7 @@ code-copilot-team/
 ├── shared/                              ← Single source of truth
 │   ├── rules/always/                    3 global rules (always loaded)
 │   ├── rules/on-demand/                 10 rules loaded by phase agents
-│   ├── docs/                            6 tool-agnostic reference docs
+│   ├── docs/                            7 tool-agnostic reference docs
 │   └── templates/                       7 stacks × PROJECT.md + commands/
 ├── adapters/
 │   ├── claude-code/                     agents, hooks, commands, settings, setup.sh
@@ -196,7 +196,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    59 hook tests
 │   ├── test-generate.sh                 238 generation + adapter tests
-│   └── test-shared-structure.sh         353 structure + content tests
+│   └── test-shared-structure.sh         356 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift prevention
 ├── README.md

@@ -171,11 +171,18 @@ DOCS_FILES=(
   ralph-loop-guide.md
   session-management.md
 )
+DOCS_EXPECTED_COUNT=7
 
 for f in "${DOCS_FILES[@]}"; do
   assert_file_exists "$f exists" "$SHARED_DIR/docs/$f"
   assert_nonempty "$f non-empty" "$SHARED_DIR/docs/$f"
 done
+
+DOCS_COUNT=$(find "$SHARED_DIR/docs" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ')
+assert_eq "exactly ${DOCS_EXPECTED_COUNT} shared docs" "$DOCS_EXPECTED_COUNT" "$DOCS_COUNT"
+
+DOCS_LISTED_COUNT="${#DOCS_FILES[@]}"
+assert_eq "DOCS_FILES enumerates all shared docs" "$DOCS_COUNT" "$DOCS_LISTED_COUNT"
 
 # ══════════════════════════════════════════════════════════════
 # 4. shared/templates/ — 7 project templates extracted
@@ -684,6 +691,10 @@ assert_ok "README lists ${TEST_GENERATE_EXPECTED_PASS} generation + adapter test
 rc=0
 grep -Eq "test-shared-structure\\.sh[[:space:]]+${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure \\+ content tests" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists ${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure + content tests" "$rc"
+
+rc=0
+grep -Eq "docs/[[:space:]]+${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists ${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$rc"
 
 # ══════════════════════════════════════════════════════════════
 # 19. test-counts contract
