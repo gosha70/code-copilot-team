@@ -7,12 +7,20 @@ on:
       - 'shared/**'
       - 'scripts/generate.sh'
       - 'adapters/**'
+      - 'tests/**'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - '.github/workflows/sync-check.yml'
   pull_request:
     branches: [master, main]
     paths:
       - 'shared/**'
       - 'scripts/generate.sh'
       - 'adapters/**'
+      - 'tests/**'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - '.github/workflows/sync-check.yml'
 
 jobs:
   sync-check:
@@ -38,3 +46,11 @@ jobs:
 
       - name: Run hook tests
         run: bash tests/test-hooks.sh
+
+      - name: Run shared structure tests
+        env:
+          HOME: ${{ runner.temp }}/cct-home
+        run: |
+          mkdir -p "$HOME"
+          bash adapters/claude-code/setup.sh
+          bash tests/test-shared-structure.sh
