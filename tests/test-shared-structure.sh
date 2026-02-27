@@ -1154,6 +1154,44 @@ rc=0
 echo "$README_COMMUNITY_SECTION" | grep -Fq '[Pull Request Template](.github/pull_request_template.md)' || rc=1
 assert_ok "README community-standards includes Pull Request Template link" "$rc"
 
+rc=0
+grep -q '^## Community Standards' "$REPO_DIR/CONTRIBUTING.md" || rc=1
+assert_ok "CONTRIBUTING has Community Standards section" "$rc"
+
+CONTRIBUTING_COMMUNITY_SECTION=$(
+  awk '
+    /^## Community Standards/ {in_section=1; next}
+    /^## / && in_section {exit}
+    in_section {print}
+  ' "$REPO_DIR/CONTRIBUTING.md"
+)
+
+CONTRIBUTING_COMMUNITY_LINK_COUNT=$(echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | wc -l | tr -d ' ')
+assert_eq "CONTRIBUTING community-standards section lists 5 links" "5" "$CONTRIBUTING_COMMUNITY_LINK_COUNT"
+
+CONTRIBUTING_COMMUNITY_UNIQUE_LINK_COUNT=$(echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | sort -u | wc -l | tr -d ' ')
+assert_eq "CONTRIBUTING community-standards section links are unique" "5" "$CONTRIBUTING_COMMUNITY_UNIQUE_LINK_COUNT"
+
+rc=0
+echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Fq '[Code of Conduct](CODE_OF_CONDUCT.md)' || rc=1
+assert_ok "CONTRIBUTING community-standards includes Code of Conduct link" "$rc"
+
+rc=0
+echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Fq '[Code Owners](.github/CODEOWNERS)' || rc=1
+assert_ok "CONTRIBUTING community-standards includes Code Owners link" "$rc"
+
+rc=0
+echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Fq '[Security Policy](SECURITY.md)' || rc=1
+assert_ok "CONTRIBUTING community-standards includes Security Policy link" "$rc"
+
+rc=0
+echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Fq '[Issue Templates](.github/ISSUE_TEMPLATE/)' || rc=1
+assert_ok "CONTRIBUTING community-standards includes Issue Templates link" "$rc"
+
+rc=0
+echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Fq '[Pull Request Template](.github/pull_request_template.md)' || rc=1
+assert_ok "CONTRIBUTING community-standards includes Pull Request Template link" "$rc"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))

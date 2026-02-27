@@ -62,6 +62,14 @@ To prevent instruction drift and outdated quality claims:
    bash tests/test-shared-structure.sh
    ```
 
+## Community Standards
+
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Code Owners](.github/CODEOWNERS)
+- [Security Policy](SECURITY.md)
+- [Issue Templates](.github/ISSUE_TEMPLATE/)
+- [Pull Request Template](.github/pull_request_template.md)
+
 ## Security Reporting
 
 - Do not open public issues for security vulnerabilities.
