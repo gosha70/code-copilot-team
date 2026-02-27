@@ -1031,6 +1031,14 @@ rc=0
 grep -q '\[Security Policy\](SECURITY.md)' "$REPO_DIR/README.md" || rc=1
 assert_ok "README links Security Policy" "$rc"
 
+rc=0
+grep -q '\[Issue Templates\](.github/ISSUE_TEMPLATE/)' "$REPO_DIR/README.md" || rc=1
+assert_ok "README links Issue Templates" "$rc"
+
+rc=0
+grep -q '\[Pull Request Template\](.github/pull_request_template.md)' "$REPO_DIR/README.md" || rc=1
+assert_ok "README links Pull Request Template" "$rc"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))
