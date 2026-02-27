@@ -1,0 +1,8 @@
+# Default owner for all paths
+* @gosha70
+
+# Governance and community standards files
+/CODE_OF_CONDUCT.md @gosha70
+/SECURITY.md @gosha70
+/CONTRIBUTING.md @gosha70
+/README.md @gosha70
