@@ -521,6 +521,26 @@ rc=0
 grep -Eq '\[ \].*sync-check\.yml.*full gate coverage.*all suites.*setup.*structure test' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
 assert_ok "alignment-maintenance release checklist includes sync-check coverage item" "$rc"
 
+rc=0
+grep -Eq '\[ \].*All three test suites pass.*zero failures' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance release checklist includes all-suites-pass item" "$rc"
+
+rc=0
+grep -Eq '\[ \].*README test counts.*accurate' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance release checklist includes README parity item" "$rc"
+
+rc=0
+grep -Eq '\[ \].*CONTRIBUTING.*current contributor workflow' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance release checklist includes CONTRIBUTING workflow item" "$rc"
+
+rc=0
+grep -Eq '\[ \].*No adapter drift.*scripts/generate\.sh' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance release checklist includes adapter-drift item" "$rc"
+
+rc=0
+grep -Eq '\[ \].*manual verification run.*changed behavior' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance release checklist includes manual-verification item" "$rc"
+
 echo ""
 echo "=== harness engineering: architecture rules in templates ==="
 
