@@ -845,6 +845,14 @@ rc=0
 grep -q 'bash tests/test-shared-structure.sh' "$WORKFLOW_FILE" || rc=1
 assert_ok "sync-check runs test-shared-structure.sh" "$rc"
 
+rc=0
+grep -q 'bash scripts/generate.sh' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check runs scripts/generate.sh" "$rc"
+
+rc=0
+grep -q 'git diff --exit-code adapters/' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check checks adapter drift via git diff" "$rc"
+
 # Ensure setup.sh appears in the shared-structure step before test execution.
 SHARED_STEP=$(
   awk '
@@ -865,6 +873,15 @@ assert_ok "sync-check uses isolated HOME for structure tests" "$rc"
 
 TESTS_PATH_COUNT=$(grep -Fc "'tests/**'" "$WORKFLOW_FILE")
 assert_eq "sync-check triggers on tests/** changes" "2" "$TESTS_PATH_COUNT"
+
+SHARED_PATH_COUNT=$(grep -Fc "'shared/**'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on shared/** changes" "2" "$SHARED_PATH_COUNT"
+
+SCRIPTS_PATH_COUNT=$(grep -Fc "'scripts/generate.sh'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on scripts/generate.sh changes" "2" "$SCRIPTS_PATH_COUNT"
+
+ADAPTERS_PATH_COUNT=$(grep -Fc "'adapters/**'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on adapters/** changes" "2" "$ADAPTERS_PATH_COUNT"
 
 README_PATH_COUNT=$(grep -Fc "'README.md'" "$WORKFLOW_FILE")
 assert_eq "sync-check triggers on README.md changes" "2" "$README_PATH_COUNT"
