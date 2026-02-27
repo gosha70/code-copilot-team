@@ -49,6 +49,12 @@ gh api repos/gosha70/code-copilot-team/branches/master/protection --jq '{
 }'
 ```
 
+Or run the consolidated hardening audit script:
+
+```bash
+bash scripts/check-github-hardening.sh --repo gosha70/code-copilot-team --branch master --required-check sync-check
+```
+
 UI verification:
 
 1. Open repository settings.
@@ -67,4 +73,3 @@ Enable private vulnerability reporting in repository settings:
 
 1. Open `Settings > Security & analysis`.
 2. Turn on **Private vulnerability reporting**.
-
