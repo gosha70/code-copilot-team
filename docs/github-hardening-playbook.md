@@ -27,6 +27,12 @@ Run from repository root:
 bash scripts/apply-branch-protection.sh --repo gosha70/code-copilot-team --branch master --checks "sync-check"
 ```
 
+Or run apply + audit in one command:
+
+```bash
+bash scripts/harden-github.sh --repo gosha70/code-copilot-team --branch master --checks "sync-check"
+```
+
 If you prefer a non-mutating preview first:
 
 ```bash
@@ -52,7 +58,7 @@ gh api repos/gosha70/code-copilot-team/branches/master/protection --jq '{
 Or run the consolidated hardening audit script:
 
 ```bash
-bash scripts/check-github-hardening.sh --repo gosha70/code-copilot-team --branch master --required-check sync-check
+bash scripts/check-github-hardening.sh --repo gosha70/code-copilot-team --branch master --required-checks "sync-check"
 ```
 
 UI verification:

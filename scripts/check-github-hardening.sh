@@ -19,7 +19,7 @@
 #   bash scripts/check-github-hardening.sh
 #   bash scripts/check-github-hardening.sh --repo gosha70/code-copilot-team
 #   bash scripts/check-github-hardening.sh --repo gosha70/code-copilot-team --branch master
-#   bash scripts/check-github-hardening.sh --required-check sync-check
+#   bash scripts/check-github-hardening.sh --required-checks "sync-check"
 
 set -euo pipefail
 
@@ -30,9 +30,17 @@ Usage: check-github-hardening.sh [options]
 Options:
   --repo <owner/name>        Repository slug (default: current gh repo)
   --branch <name>            Branch to inspect (default: repo default branch)
-  --required-check <name>    Required CI check context (default: sync-check)
+  --required-check <name>    Required CI check context (single-value alias)
+  --required-checks "<a,b>"  Required CI check contexts (default: sync-check)
   -h, --help                 Show this help
 EOF
+}
+
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
 }
 
 require_cmd() {
@@ -89,7 +97,7 @@ assert_ge() {
 
 REPO=""
 BRANCH=""
-REQUIRED_CHECK="sync-check"
+REQUIRED_CHECKS_CSV="sync-check"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -102,7 +110,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --required-check)
-      REQUIRED_CHECK="${2:-}"
+      REQUIRED_CHECKS_CSV="${2:-}"
+      shift 2
+      ;;
+    --required-checks)
+      REQUIRED_CHECKS_CSV="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -137,10 +149,24 @@ if [[ -z "$BRANCH" ]]; then
   exit 1
 fi
 
+IFS=',' read -r -a REQUIRED_CHECKS_RAW <<< "$REQUIRED_CHECKS_CSV"
+REQUIRED_CHECKS=()
+for raw in "${REQUIRED_CHECKS_RAW[@]}"; do
+  c="$(trim "$raw")"
+  if [[ -n "$c" ]]; then
+    REQUIRED_CHECKS+=("$c")
+  fi
+done
+
+if [[ "${#REQUIRED_CHECKS[@]}" -eq 0 ]]; then
+  echo "[ERROR] At least one required check must be supplied."
+  exit 1
+fi
+
 echo "=== GitHub hardening check ==="
 echo "Repo:   $REPO"
 echo "Branch: $BRANCH"
-echo "Check:  $REQUIRED_CHECK"
+echo "Checks: $REQUIRED_CHECKS_CSV"
 echo ""
 
 if gh api "/repos/$REPO/branches/$BRANCH/protection" >/dev/null 2>&1; then
@@ -156,7 +182,6 @@ fi
 
 strict_checks="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_status_checks.strict')"
 checks_csv="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_status_checks.contexts | join(",")')"
-has_required_check="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq ".required_status_checks.contexts | index(\"$REQUIRED_CHECK\") != null")"
 require_code_owner_reviews="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_pull_request_reviews.require_code_owner_reviews')"
 required_approvals="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_pull_request_reviews.required_approving_review_count')"
 require_conversation_resolution="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.required_conversation_resolution.enabled')"
@@ -166,7 +191,6 @@ allow_force_pushes="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.a
 allow_deletions="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq '.allow_deletions.enabled')"
 
 assert_true "strict status checks enabled" "$strict_checks"
-assert_true "required check '$REQUIRED_CHECK' configured" "$has_required_check"
 assert_true "code owner reviews required" "$require_code_owner_reviews"
 assert_ge "required approving review count >= 1" "$required_approvals" 1
 assert_true "conversation resolution required" "$require_conversation_resolution"
@@ -174,6 +198,11 @@ assert_true "linear history required" "$require_linear_history"
 assert_true "admins are subject to protections" "$enforce_admins"
 assert_false "force pushes blocked" "$allow_force_pushes"
 assert_false "branch deletions blocked" "$allow_deletions"
+
+for required_check in "${REQUIRED_CHECKS[@]}"; do
+  has_required_check="$(gh api "/repos/$REPO/branches/$BRANCH/protection" --jq ".required_status_checks.contexts | index(\"$required_check\") != null")"
+  assert_true "required check '$required_check' configured" "$has_required_check"
+done
 
 echo "  INFO: required status checks = ${checks_csv:-<none>}"
 
@@ -194,4 +223,3 @@ echo "========================================="
 if [[ "$fail" -gt 0 ]]; then
   exit 1
 fi
-
