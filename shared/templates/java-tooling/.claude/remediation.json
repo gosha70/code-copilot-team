@@ -1,0 +1,40 @@
+{
+  "patterns": [
+    {
+      "match": "MirroredTypeException",
+      "hint": "This is expected when reading Class<?> annotation attributes at compile time. Catch MirroredTypeException and extract the TypeMirror from it: ((MirroredTypeException) e).getTypeMirror(). Never use getClass() on annotation values in a processor."
+    },
+    {
+      "match": "cannot find symbol.*Generated",
+      "hint": "Add javax.annotation.processing dependency or use jakarta.annotation.Generated. Check the demo module has annotationProcessor dependency on the processor module."
+    },
+    {
+      "match": "Annotation processor.*not found",
+      "hint": "Ensure META-INF/services/javax.annotation.processing.Processor is present in processor module resources, or that @AutoService(Processor.class) is on the processor class. Verify annotationProcessor configuration in build.gradle.kts."
+    },
+    {
+      "match": "error: incompatible types.*TypeMirror",
+      "hint": "At compile time, use TypeMirror and TypeElement instead of Class<?>. Convert via processingEnv.getElementUtils().getTypeElement(). Use TypeName.get(typeMirror) for JavaPoet integration."
+    },
+    {
+      "match": "Incremental annotation processing.*not supported",
+      "hint": "Add @SupportedOptions(\"org.gradle.annotation.processing.aggregating\") to the processor class, or register it as AGGREGATING in META-INF/gradle/incremental.annotation.processors."
+    },
+    {
+      "match": "lombok.*not found.*generated",
+      "hint": "Annotation processor ordering issue. In build.gradle.kts, ensure Lombok's annotationProcessor is declared BEFORE the project processor: annotationProcessor(libs.lombok) then annotationProcessor(project(':modules:processor'))."
+    },
+    {
+      "match": "modules.annotations.*import.*org.springframework",
+      "hint": "Module boundary violation: annotations module must have ZERO external dependencies. See PROJECT.md #Module Dependency Rules."
+    },
+    {
+      "match": "modules.processor.*import.*modules.runtime",
+      "hint": "Module boundary violation: processor must not depend on runtime. Dependencies flow: runtime → processor → annotations. See PROJECT.md #Module Dependency Rules."
+    },
+    {
+      "match": "String\\.format.*TypeSpec|StringBuilder.*addStatement",
+      "hint": "Code generation violation: use JavaPoet API (TypeSpec, MethodSpec, CodeBlock) exclusively. No string concatenation for code generation. See PROJECT.md #Code Generation Rules."
+    }
+  ]
+}

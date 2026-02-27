@@ -193,7 +193,7 @@ echo "=== shared/templates/ ==="
 
 assert_dir_exists "shared/templates/ exists" "$SHARED_DIR/templates"
 
-TEMPLATE_TYPES=(ml-rag ml-app ml-langchain ml-n8n java-enterprise web-static web-dynamic)
+TEMPLATE_TYPES=(ml-rag ml-app ml-langchain ml-n8n java-enterprise web-static web-dynamic java-tooling)
 
 for t in "${TEMPLATE_TYPES[@]}"; do
   assert_dir_exists "$t dir exists" "$SHARED_DIR/templates/$t"
@@ -203,7 +203,7 @@ for t in "${TEMPLATE_TYPES[@]}"; do
 done
 
 TEMPLATE_DIR_COUNT=$(find "$SHARED_DIR/templates" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-assert_eq "exactly 7 template dirs" "7" "$TEMPLATE_DIR_COUNT"
+assert_eq "exactly 8 template dirs" "8" "$TEMPLATE_DIR_COUNT"
 
 # Verify each template has at least one command file
 for t in "${TEMPLATE_TYPES[@]}"; do
@@ -244,6 +244,7 @@ assert_header "ml-n8n" "$SHARED_DIR/templates/ml-n8n/PROJECT.md" "# ML/AI — n8
 assert_header "java-enterprise" "$SHARED_DIR/templates/java-enterprise/PROJECT.md" "# Enterprise Java Full-Stack Application"
 assert_header "web-static" "$SHARED_DIR/templates/web-static/PROJECT.md" "# Static Website"
 assert_header "web-dynamic" "$SHARED_DIR/templates/web-dynamic/PROJECT.md" "# Dynamic Web Application"
+assert_header "java-tooling" "$SHARED_DIR/templates/java-tooling/PROJECT.md" "# Java Developer Tooling — Annotation Processors, Gradle Plugins & Code Generators"
 
 # Verify templates contain Agent Team section (structural check)
 for t in "${TEMPLATE_TYPES[@]}"; do
@@ -380,20 +381,20 @@ rc=0; grep -q '# 1. GLOBAL CLAUDE.md' "$SETUP_SCRIPT" || rc=1
 assert_ok "section 1 (GLOBAL CLAUDE.md) present" "$rc"
 
 # Launcher install section exists
-rc=0; grep -q '# 9. INSTALL LAUNCHER SCRIPT' "$SETUP_SCRIPT" || rc=1
-assert_ok "section 9 (LAUNCHER) present" "$rc"
+rc=0; grep -q '# 10. INSTALL LAUNCHER SCRIPT' "$SETUP_SCRIPT" || rc=1
+assert_ok "section 10 (LAUNCHER) present" "$rc"
 
 # Hooks section exists
-rc=0; grep -q '# 10. GLOBAL HOOKS' "$SETUP_SCRIPT" || rc=1
-assert_ok "section 10 (HOOKS) present" "$rc"
+rc=0; grep -q '# 11. GLOBAL HOOKS' "$SETUP_SCRIPT" || rc=1
+assert_ok "section 11 (HOOKS) present" "$rc"
 
 # Agents section exists
-rc=0; grep -q '# 10b. GLOBAL AGENTS' "$SETUP_SCRIPT" || rc=1
-assert_ok "section 10b (AGENTS) present" "$rc"
+rc=0; grep -q '# 11b. GLOBAL AGENTS' "$SETUP_SCRIPT" || rc=1
+assert_ok "section 11b (AGENTS) present" "$rc"
 
 # Settings section exists
-rc=0; grep -q '# 11. GLOBAL SETTINGS' "$SETUP_SCRIPT" || rc=1
-assert_ok "section 11 (SETTINGS) present" "$rc"
+rc=0; grep -q '# 12. GLOBAL SETTINGS' "$SETUP_SCRIPT" || rc=1
+assert_ok "section 12 (SETTINGS) present" "$rc"
 
 # Summary section exists
 rc=0; grep -q 'Setup Complete!' "$SETUP_SCRIPT" || rc=1
@@ -735,8 +736,8 @@ grep -Eq "rules/on-demand/[[:space:]]+10 rules loaded by phase agents" "$REPO_DI
 assert_ok "README lists 10 on-demand rules" "$rc"
 
 rc=0
-grep -Eq "templates/[[:space:]]+7 stacks" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 7 template stacks" "$rc"
+grep -Eq "templates/[[:space:]]+8 stacks" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 8 template stacks" "$rc"
 
 rc=0
 grep -Eq "codex/.*5 skills" "$REPO_DIR/README.md" || rc=1

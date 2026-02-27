@@ -344,7 +344,22 @@ fi
 echo "[done] Created template: web-dynamic"
 
 # ══════════════════════════════════════════════════════════════
-# 9. INSTALL LAUNCHER SCRIPT
+# 9. TEMPLATE: java-tooling
+# ══════════════════════════════════════════════════════════════
+
+mkdir -p "$TEMPLATES_DIR/java-tooling/commands"
+cp "$SHARED_DIR/templates/java-tooling/PROJECT.md" "$TEMPLATES_DIR/java-tooling/CLAUDE.md"
+if [[ -d "$SHARED_DIR/templates/java-tooling/commands" ]]; then
+    cp "$SHARED_DIR/templates/java-tooling/commands/"*.md "$TEMPLATES_DIR/java-tooling/commands/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/java-tooling/.claude" ]]; then
+    mkdir -p "$TEMPLATES_DIR/java-tooling/.claude"
+    cp -r "$SHARED_DIR/templates/java-tooling/.claude/"* "$TEMPLATES_DIR/java-tooling/.claude/" 2>/dev/null || true
+fi
+echo "[done] Created template: java-tooling"
+
+# ══════════════════════════════════════════════════════════════
+# 10. INSTALL LAUNCHER SCRIPT
 # ══════════════════════════════════════════════════════════════
 
 mkdir -p "$HOME/.local/bin"
@@ -369,7 +384,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 10. GLOBAL HOOKS
+# 11. GLOBAL HOOKS
 # ══════════════════════════════════════════════════════════════
 
 HOOKS_SOURCE="$SCRIPT_DIR/.claude/hooks"
@@ -391,7 +406,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 10b. GLOBAL AGENTS
+# 11b. GLOBAL AGENTS
 # ══════════════════════════════════════════════════════════════
 
 AGENTS_SOURCE="$SCRIPT_DIR/.claude/agents"
@@ -407,7 +422,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 10c. GLOBAL RULES (auto-loaded, 3 files) — from shared/rules/always/
+# 11c. GLOBAL RULES (auto-loaded, 3 files) — from shared/rules/always/
 # ══════════════════════════════════════════════════════════════
 
 RULES_SOURCE="$SHARED_DIR/rules/always"
@@ -423,7 +438,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 10d. RULES LIBRARY (on-demand, 10 files) — from shared/rules/on-demand/
+# 11d. RULES LIBRARY (on-demand, 10 files) — from shared/rules/on-demand/
 # ══════════════════════════════════════════════════════════════
 
 LIBRARY_SOURCE="$SHARED_DIR/rules/on-demand"
@@ -439,7 +454,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 11. GLOBAL SETTINGS (hooks wiring)
+# 12. GLOBAL SETTINGS (hooks wiring)
 # ══════════════════════════════════════════════════════════════
 
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"

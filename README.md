@@ -38,7 +38,7 @@ Evaluated against the two leading AI coding agent frameworks (February 2026):
 - **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 10 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
 - **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
 - **Hooks** (`~/.claude/hooks/`) — 6 lifecycle scripts: test verification, type checking, auto-format, file protection, context re-injection, and desktop notifications. Auto-detect your project's stack.
-- **7 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
+- **8 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
 - **Four-phase workflow** — Research → Plan → Build → Review. Plus **Ralph Loop** for single-agent autonomous iteration.
 ![Three - Phase Agent Workflow](docs/images/three-phase-workflow.png)
 - **Optional GCC memory** — persistent cross-session context via the [GCC protocol](https://arxiv.org/abs/2508.00031), powered by Aline MCP (`aline-ai`). Install with `--gcc`.
@@ -104,6 +104,7 @@ claude-code ~/projects/existing-api
 | `java-enterprise` | Spring Boot · Kafka · GraphQL · React | Team Lead, Backend Dev, Frontend Dev, Data & Messaging, QA, DevOps |
 | `web-static` | Astro/Next.js/Hugo · Tailwind | Team Lead, Frontend Dev, Content & SEO, QA |
 | `web-dynamic` | Next.js/Remix · Node/Python · PostgreSQL | Team Lead, Frontend Dev, Backend Dev, QA, DevOps |
+| `java-tooling` | Java 21 · Gradle · JSR 269 · JavaPoet · Spring AI MCP | Team Lead, APT Engineer, MCP Specialist, Plugin Dev, QA |
 
 ## How Configuration Layers Work
 
@@ -182,7 +183,7 @@ code-copilot-team/
 │   ├── rules/always/                    3 global rules (always loaded)
 │   ├── rules/on-demand/                 10 rules loaded by phase agents
 │   ├── docs/                            7 tool-agnostic reference docs
-│   └── templates/                       7 stacks × PROJECT.md + commands/
+│   └── templates/                       8 stacks × PROJECT.md + commands/
 ├── adapters/
 │   ├── claude-code/                     agents, hooks, commands, settings, setup.sh
 │   ├── codex/                           AGENTS.md, config.toml, 5 skills, setup.sh
@@ -196,7 +197,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    59 hook tests
 │   ├── test-generate.sh                 238 generation + adapter tests
-│   └── test-shared-structure.sh         427 structure + content tests
+│   └── test-shared-structure.sh         450 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift prevention
 ├── README.md
