@@ -829,8 +829,29 @@ grep -q 'bash tests/test-shared-structure.sh' "$REPO_DIR/CONTRIBUTING.md" || rc=
 assert_ok "CONTRIBUTING includes test-shared-structure command" "$rc"
 
 rc=0
+grep -q 'bash adapters/claude-code/setup.sh' "$REPO_DIR/CONTRIBUTING.md" || rc=1
+assert_ok "CONTRIBUTING includes setup.sh command" "$rc"
+
+CONTRIB_ALIGNMENT_SECTION=$(
+  awk '
+    /^## Ongoing Alignment Checks/ {in_section=1; next}
+    /^## / && in_section {exit}
+    in_section {print}
+  ' "$REPO_DIR/CONTRIBUTING.md"
+)
+SETUP_CONTRIB_LINE=$(echo "$CONTRIB_ALIGNMENT_SECTION" | nl -ba | awk '/bash adapters\/claude-code\/setup\.sh/{print $1; exit}')
+STRUCT_CONTRIB_LINE=$(echo "$CONTRIB_ALIGNMENT_SECTION" | nl -ba | awk '/bash tests\/test-shared-structure\.sh/{print $1; exit}')
+rc=0
+[[ -n "$SETUP_CONTRIB_LINE" && -n "$STRUCT_CONTRIB_LINE" && "$SETUP_CONTRIB_LINE" -lt "$STRUCT_CONTRIB_LINE" ]] || rc=1
+assert_ok "CONTRIBUTING runs setup.sh before structure test" "$rc"
+
+rc=0
 grep -q 'shared/docs/alignment-maintenance.md' "$REPO_DIR/CONTRIBUTING.md" || rc=1
 assert_ok "CONTRIBUTING references alignment-maintenance checklist" "$rc"
+
+rc=0
+grep -q '\./scripts/generate.sh' "$REPO_DIR/CONTRIBUTING.md" || rc=1
+assert_ok "CONTRIBUTING references scripts/generate.sh regeneration flow" "$rc"
 
 # ══════════════════════════════════════════════════════════════
 # 21. CI workflow coverage — sync-check enforces full gates
