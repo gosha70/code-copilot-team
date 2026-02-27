@@ -1419,6 +1419,157 @@ rc=0
 grep -q 'scripts/harden-github.sh' "$REPO_DIR/docs/github-hardening-playbook.md" || rc=1
 assert_ok "hardening playbook references harden script" "$rc"
 
+# ══════════════════════════════════════════════════════════════
+# 24. GitHub hardening scripts — behavioral dry-run checks
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== github hardening script behavior ==="
+
+FAKE_GH_DIR="$(mktemp -d)"
+FAKE_GH="$FAKE_GH_DIR/gh"
+cat >"$FAKE_GH" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+cmd="${1:-}"
+
+if [[ "$cmd" == "repo" && "${2:-}" == "view" ]]; then
+  if [[ " $* " == *" defaultBranchRef "* ]]; then
+    echo "master"
+    exit 0
+  fi
+  if [[ " $* " == *" nameWithOwner "* ]]; then
+    echo "gosha70/code-copilot-team"
+    exit 0
+  fi
+fi
+
+if [[ "$cmd" == "api" ]]; then
+  shift
+  endpoint=""
+  jq_filter=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --jq)
+        jq_filter="${2:-}"
+        shift 2
+        ;;
+      --method|-H|--input)
+        shift 2
+        ;;
+      -*)
+        shift
+        ;;
+      /repos/*)
+        endpoint="$1"
+        shift
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  if [[ "$endpoint" == */branches/*/protection ]]; then
+    case "$jq_filter" in
+      "")
+        echo '{}'
+        ;;
+      ".required_status_checks.strict")
+        echo "true"
+        ;;
+      ".required_status_checks.contexts | join(\",\")")
+        echo "sync-check,lint"
+        ;;
+      ".required_pull_request_reviews.require_code_owner_reviews")
+        echo "true"
+        ;;
+      ".required_pull_request_reviews.required_approving_review_count")
+        echo "1"
+        ;;
+      ".required_conversation_resolution.enabled")
+        echo "true"
+        ;;
+      ".required_linear_history.enabled")
+        echo "true"
+        ;;
+      ".enforce_admins.enabled")
+        echo "true"
+        ;;
+      ".allow_force_pushes.enabled")
+        echo "false"
+        ;;
+      ".allow_deletions.enabled")
+        echo "false"
+        ;;
+      *)
+        echo "true"
+        ;;
+    esac
+    exit 0
+  fi
+
+  if [[ "$endpoint" == /repos/* ]]; then
+    if [[ "$jq_filter" == ".security_and_analysis.private_vulnerability_reporting.status // \"\"" ]]; then
+      echo "enabled"
+      exit 0
+    fi
+    echo '{}'
+    exit 0
+  fi
+fi
+
+echo "unsupported gh stub invocation: $cmd $*" >&2
+exit 1
+EOF
+chmod +x "$FAKE_GH"
+
+APPLY_DRY_RUN_OUTPUT="$FAKE_GH_DIR/apply-dry-run.out"
+rc=0
+PATH="$FAKE_GH_DIR:$PATH" bash "$REPO_DIR/scripts/apply-branch-protection.sh" \
+  --repo gosha70/code-copilot-team \
+  --branch master \
+  --checks "sync-check,lint" \
+  --dry-run >"$APPLY_DRY_RUN_OUTPUT" 2>&1 || rc=1
+assert_ok "apply-branch-protection dry-run works with fake gh" "$rc"
+
+rc=0
+grep -q '"contexts": \["sync-check", "lint"\]' "$APPLY_DRY_RUN_OUTPUT" || rc=1
+assert_ok "apply-branch-protection dry-run payload includes required checks list" "$rc"
+
+CHECK_OUTPUT="$FAKE_GH_DIR/check.out"
+rc=0
+PATH="$FAKE_GH_DIR:$PATH" bash "$REPO_DIR/scripts/check-github-hardening.sh" \
+  --repo gosha70/code-copilot-team \
+  --branch master \
+  --required-checks "sync-check" >"$CHECK_OUTPUT" 2>&1 || rc=1
+assert_ok "check-github-hardening passes with fake gh" "$rc"
+
+rc=0
+grep -q 'Results: 11 passed, 0 failed' "$CHECK_OUTPUT" || rc=1
+assert_ok "check-github-hardening reports clean result summary" "$rc"
+
+HARDEN_DRY_RUN_OUTPUT="$FAKE_GH_DIR/harden-dry-run.out"
+rc=0
+PATH="$FAKE_GH_DIR:$PATH" bash "$REPO_DIR/scripts/harden-github.sh" \
+  --repo gosha70/code-copilot-team \
+  --branch master \
+  --checks "sync-check,lint" \
+  --dry-run >"$HARDEN_DRY_RUN_OUTPUT" 2>&1 || rc=1
+assert_ok "harden-github dry-run works with fake gh" "$rc"
+
+rc=0
+grep -q '=== Dry run: apply payload ===' "$HARDEN_DRY_RUN_OUTPUT" || rc=1
+assert_ok "harden-github dry-run prints apply payload section" "$rc"
+
+rc=0
+grep -q 'Dry run completed. No remote settings were changed.' "$HARDEN_DRY_RUN_OUTPUT" || rc=1
+assert_ok "harden-github dry-run confirms no remote changes" "$rc"
+
+rm -rf "$FAKE_GH_DIR"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))
