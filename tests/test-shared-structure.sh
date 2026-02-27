@@ -1024,20 +1024,38 @@ grep -q '^## Validation' "$REPO_DIR/.github/pull_request_template.md" || rc=1
 assert_ok "pull_request_template has Validation section" "$rc"
 
 rc=0
-grep -q '\[Code of Conduct\](CODE_OF_CONDUCT.md)' "$REPO_DIR/README.md" || rc=1
-assert_ok "README links Code of Conduct" "$rc"
+grep -q '^## Community Standards' "$REPO_DIR/README.md" || rc=1
+assert_ok "README has Community Standards section" "$rc"
+
+README_COMMUNITY_SECTION=$(
+  awk '
+    /^## Community Standards/ {in_section=1; next}
+    /^## / && in_section {exit}
+    in_section {print}
+  ' "$REPO_DIR/README.md"
+)
+
+README_COMMUNITY_LINK_COUNT=$(echo "$README_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | wc -l | tr -d ' ')
+assert_eq "README community-standards section lists 4 links" "4" "$README_COMMUNITY_LINK_COUNT"
+
+README_COMMUNITY_UNIQUE_LINK_COUNT=$(echo "$README_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | sort -u | wc -l | tr -d ' ')
+assert_eq "README community-standards section links are unique" "4" "$README_COMMUNITY_UNIQUE_LINK_COUNT"
 
 rc=0
-grep -q '\[Security Policy\](SECURITY.md)' "$REPO_DIR/README.md" || rc=1
-assert_ok "README links Security Policy" "$rc"
+echo "$README_COMMUNITY_SECTION" | grep -Fq '[Code of Conduct](CODE_OF_CONDUCT.md)' || rc=1
+assert_ok "README community-standards includes Code of Conduct link" "$rc"
 
 rc=0
-grep -q '\[Issue Templates\](.github/ISSUE_TEMPLATE/)' "$REPO_DIR/README.md" || rc=1
-assert_ok "README links Issue Templates" "$rc"
+echo "$README_COMMUNITY_SECTION" | grep -Fq '[Security Policy](SECURITY.md)' || rc=1
+assert_ok "README community-standards includes Security Policy link" "$rc"
 
 rc=0
-grep -q '\[Pull Request Template\](.github/pull_request_template.md)' "$REPO_DIR/README.md" || rc=1
-assert_ok "README links Pull Request Template" "$rc"
+echo "$README_COMMUNITY_SECTION" | grep -Fq '[Issue Templates](.github/ISSUE_TEMPLATE/)' || rc=1
+assert_ok "README community-standards includes Issue Templates link" "$rc"
+
+rc=0
+echo "$README_COMMUNITY_SECTION" | grep -Fq '[Pull Request Template](.github/pull_request_template.md)' || rc=1
+assert_ok "README community-standards includes Pull Request Template link" "$rc"
 
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
