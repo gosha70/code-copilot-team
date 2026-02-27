@@ -525,6 +525,18 @@ grep -q '.github/workflows/sync-check.yml' "$SHARED_DIR/docs/alignment-maintenan
 assert_ok "alignment-maintenance references sync-check workflow contract" "$rc"
 
 rc=0
+grep -Eq 'community standards links.*(complete|sync|synchron)' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance includes community-standards link parity gate" "$rc"
+
+rc=0
+grep -q 'docs/github-hardening-playbook.md' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance references hardening playbook" "$rc"
+
+rc=0
+grep -Eq 'CI triggers include governance/hardening files' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance includes CI governance/hardening trigger gate" "$rc"
+
+rc=0
 grep -Eq '\[ \].*tests/test-counts\.env.*expected totals.*suite outputs' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
 assert_ok "alignment-maintenance release checklist includes test-counts parity item" "$rc"
 
@@ -547,6 +559,14 @@ assert_ok "alignment-maintenance release checklist includes CONTRIBUTING workflo
 rc=0
 grep -Eq '\[ \].*No adapter drift.*scripts/generate\.sh' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
 assert_ok "alignment-maintenance release checklist includes adapter-drift item" "$rc"
+
+rc=0
+grep -Eq '\[ \].*community standards links.*(complete|synchron)' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance release checklist includes community-standards parity item" "$rc"
+
+rc=0
+grep -Eq '\[ \].*hardening.*(playbook|scripts/harden-github\.sh)' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance release checklist includes hardening-docs/scripts item" "$rc"
 
 rc=0
 grep -Eq '\[ \].*manual verification run.*changed behavior' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1

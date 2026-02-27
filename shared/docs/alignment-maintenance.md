@@ -48,11 +48,13 @@ Source of truth:
 5. **Documentation Drift**
    - README test-count claims match current test outputs.
    - CONTRIBUTING test instructions remain current.
-   - New governance docs are listed under shared documentation.
+   - README and CONTRIBUTING community standards links stay complete and in sync.
+   - Governance hardening docs (for example `docs/github-hardening-playbook.md`) stay discoverable.
 
 6. **CI Gate Integrity**
    - `sync-check.yml` runs `test-generate`, `test-hooks`, and `test-shared-structure`.
    - CI structure checks run against a fresh install path (isolated `HOME`).
+   - CI triggers include governance/hardening files so protection drift is gated.
 
 ## Release Checklist
 
@@ -62,6 +64,8 @@ Source of truth:
 - [ ] CONTRIBUTING reflects current contributor workflow
 - [ ] No adapter drift (`scripts/generate.sh` produces no unexpected diffs)
 - [ ] `sync-check.yml` still enforces full gate coverage (all suites + setup before structure test)
+- [ ] README and CONTRIBUTING community standards links remain complete and synchronized
+- [ ] Governance hardening docs/scripts remain current and referenced (`docs/github-hardening-playbook.md`, `scripts/harden-github.sh`)
 - [ ] At least one manual verification run performed for changed behavior
 
 ## Failure Handling
