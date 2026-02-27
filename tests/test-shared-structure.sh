@@ -669,6 +669,53 @@ rc=0
 grep -Eq "test-shared-structure\\.sh[[:space:]]+${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure \\+ content tests" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists ${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure + content tests" "$rc"
 
+# ══════════════════════════════════════════════════════════════
+# 19. CI workflow coverage — sync-check enforces full gates
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== CI workflow coverage ==="
+
+WORKFLOW_FILE="$REPO_DIR/.github/workflows/sync-check.yml"
+assert_file_exists "sync-check workflow exists" "$WORKFLOW_FILE"
+assert_nonempty "sync-check workflow non-empty" "$WORKFLOW_FILE"
+
+rc=0
+grep -q 'bash tests/test-generate.sh' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check runs test-generate.sh" "$rc"
+
+rc=0
+grep -q 'bash tests/test-hooks.sh' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check runs test-hooks.sh" "$rc"
+
+rc=0
+grep -q 'bash tests/test-shared-structure.sh' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check runs test-shared-structure.sh" "$rc"
+
+rc=0
+grep -q 'bash adapters/claude-code/setup.sh' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check runs setup.sh before structure tests" "$rc"
+
+rc=0
+grep -Eq 'HOME:[[:space:]]+\$\{\{ runner\.temp \}\}/cct-home' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check uses isolated HOME for structure tests" "$rc"
+
+rc=0
+grep -Fq "'tests/**'" "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check triggers on tests/** changes" "$rc"
+
+rc=0
+grep -q "'README.md'" "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check triggers on README.md changes" "$rc"
+
+rc=0
+grep -q "'CONTRIBUTING.md'" "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check triggers on CONTRIBUTING.md changes" "$rc"
+
+rc=0
+grep -q "'.github/workflows/sync-check.yml'" "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check triggers on workflow file changes" "$rc"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))
