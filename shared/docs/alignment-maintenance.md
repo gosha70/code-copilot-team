@@ -20,6 +20,11 @@ bash tests/test-shared-structure.sh
 
 Record the result counts in release notes or PR summary.
 
+Source of truth:
+
+- `tests/test-counts.env` defines expected PASS totals for each top-level suite.
+- `.github/workflows/sync-check.yml` must run all three suites and execute `adapters/claude-code/setup.sh` before structure checks using isolated `HOME`.
+
 ## Alignment Gates
 
 1. **Instruction Layer Integrity**
@@ -44,12 +49,18 @@ Record the result counts in release notes or PR summary.
    - CONTRIBUTING test instructions remain current.
    - New governance docs are listed under shared documentation.
 
+6. **CI Gate Integrity**
+   - `sync-check.yml` runs `test-generate`, `test-hooks`, and `test-shared-structure`.
+   - CI structure checks run against a fresh install path (isolated `HOME`).
+
 ## Release Checklist
 
 - [ ] All three test suites pass with zero failures
 - [ ] README test counts are accurate
+- [ ] `tests/test-counts.env` expected totals match current suite outputs
 - [ ] CONTRIBUTING reflects current contributor workflow
 - [ ] No adapter drift (`scripts/generate.sh` produces no unexpected diffs)
+- [ ] `sync-check.yml` still enforces full gate coverage (all suites + setup before structure test)
 - [ ] At least one manual verification run performed for changed behavior
 
 ## Failure Handling

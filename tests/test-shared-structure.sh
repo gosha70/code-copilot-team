@@ -498,6 +498,14 @@ rc=0
 grep -q 'bash tests/test-shared-structure.sh' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
 assert_ok "alignment-maintenance includes test-shared-structure command" "$rc"
 
+rc=0
+grep -q 'tests/test-counts.env' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance references test-counts source of truth" "$rc"
+
+rc=0
+grep -q '.github/workflows/sync-check.yml' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance references sync-check workflow contract" "$rc"
+
 echo ""
 echo "=== harness engineering: architecture rules in templates ==="
 
