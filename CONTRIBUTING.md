@@ -35,6 +35,7 @@ shared/rules/on-demand/*.md                            (committed, CI-verified)
    ```bash
    bash tests/test-generate.sh        # generation + adapter tests
    bash tests/test-hooks.sh           # hook script tests
+   bash adapters/claude-code/setup.sh # refresh install target for structure checks
    bash tests/test-shared-structure.sh # structure + content tests
    ```
 5. Commit with a clear message (`git commit -m "Add Go microservice template with gRPC agent team"`)

@@ -886,6 +886,24 @@ rc=0
 grep -q 'bash adapters/claude-code/setup.sh' "$REPO_DIR/CONTRIBUTING.md" || rc=1
 assert_ok "CONTRIBUTING includes setup.sh command" "$rc"
 
+CONTRIB_HOWTO_SECTION=$(
+  awk '
+    /^## How to Contribute/ {in_section=1; next}
+    /^## / && in_section {exit}
+    in_section {print}
+  ' "$REPO_DIR/CONTRIBUTING.md"
+)
+
+rc=0
+echo "$CONTRIB_HOWTO_SECTION" | grep -q 'bash adapters/claude-code/setup.sh' || rc=1
+assert_ok "CONTRIBUTING How to Contribute includes setup.sh command" "$rc"
+
+SETUP_HOWTO_LINE=$(echo "$CONTRIB_HOWTO_SECTION" | nl -ba | awk '/bash adapters\/claude-code\/setup\.sh/{print $1; exit}')
+STRUCT_HOWTO_LINE=$(echo "$CONTRIB_HOWTO_SECTION" | nl -ba | awk '/bash tests\/test-shared-structure\.sh/{print $1; exit}')
+rc=0
+[[ -n "$SETUP_HOWTO_LINE" && -n "$STRUCT_HOWTO_LINE" && "$SETUP_HOWTO_LINE" -lt "$STRUCT_HOWTO_LINE" ]] || rc=1
+assert_ok "CONTRIBUTING How to Contribute runs setup.sh before structure test" "$rc"
+
 CONTRIB_ALIGNMENT_SECTION=$(
   awk '
     /^## Ongoing Alignment Checks/ {in_section=1; next}
@@ -995,6 +1013,21 @@ assert_eq "sync-check triggers on adapters/** changes" "2" "$ADAPTERS_PATH_COUNT
 
 DOCS_HARDEN_PATH_COUNT=$(grep -Fc "'docs/github-hardening-playbook.md'" "$WORKFLOW_FILE")
 assert_eq "sync-check triggers on docs/github-hardening-playbook.md changes" "2" "$DOCS_HARDEN_PATH_COUNT"
+
+COC_PATH_COUNT=$(grep -Fc "'CODE_OF_CONDUCT.md'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on CODE_OF_CONDUCT.md changes" "2" "$COC_PATH_COUNT"
+
+SECURITY_PATH_COUNT=$(grep -Fc "'SECURITY.md'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on SECURITY.md changes" "2" "$SECURITY_PATH_COUNT"
+
+CODEOWNERS_PATH_COUNT=$(grep -Fc "'.github/CODEOWNERS'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on .github/CODEOWNERS changes" "2" "$CODEOWNERS_PATH_COUNT"
+
+ISSUE_TEMPLATE_PATH_COUNT=$(grep -Fc "'.github/ISSUE_TEMPLATE/**'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on .github/ISSUE_TEMPLATE/** changes" "2" "$ISSUE_TEMPLATE_PATH_COUNT"
+
+PR_TEMPLATE_PATH_COUNT=$(grep -Fc "'.github/pull_request_template.md'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on .github/pull_request_template.md changes" "2" "$PR_TEMPLATE_PATH_COUNT"
 
 README_PATH_COUNT=$(grep -Fc "'README.md'" "$WORKFLOW_FILE")
 assert_eq "sync-check triggers on README.md changes" "2" "$README_PATH_COUNT"
