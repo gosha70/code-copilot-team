@@ -696,6 +696,15 @@ rc=0
 grep -Eq "docs/[[:space:]]+${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists ${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$rc"
 
+README_SHARED_DOC_UNIQUE_COUNT=$(grep -Eo 'shared/docs/[a-z0-9-]+\.md' "$REPO_DIR/README.md" | sort -u | wc -l | tr -d ' ')
+assert_eq "README has ${DOCS_EXPECTED_COUNT} unique shared docs links" "$DOCS_EXPECTED_COUNT" "$README_SHARED_DOC_UNIQUE_COUNT"
+
+rc=0
+for f in "${DOCS_FILES[@]}"; do
+  grep -q "shared/docs/$f" "$REPO_DIR/README.md" || rc=1
+done
+assert_ok "README references every shared docs file" "$rc"
+
 # ══════════════════════════════════════════════════════════════
 # 19. test-counts contract
 # ══════════════════════════════════════════════════════════════
