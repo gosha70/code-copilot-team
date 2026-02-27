@@ -763,6 +763,14 @@ rc=0
 grep -Eq "codex/.*5 skills" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists 5 codex skills" "$rc"
 
+rc=0
+grep -Eq "\\.github/workflows/sync-check\\.yml[[:space:]]+CI: .*drift" "$REPO_DIR/README.md" || rc=1
+assert_ok "README describes sync-check workflow as drift guard" "$rc"
+
+rc=0
+grep -Eq "\\.github/workflows/sync-check\\.yml[[:space:]]+CI: .*(full gate|gate verification)" "$REPO_DIR/README.md" || rc=1
+assert_ok "README describes sync-check workflow as full gate verification" "$rc"
+
 README_SHARED_DOC_UNIQUE_COUNT=$(grep -Eo 'shared/docs/[A-Za-z0-9._-]+\.md' "$REPO_DIR/README.md" | sort -u | wc -l | tr -d ' ')
 assert_eq "README has ${DOCS_EXPECTED_COUNT} unique shared docs links" "$DOCS_EXPECTED_COUNT" "$README_SHARED_DOC_UNIQUE_COUNT"
 
