@@ -1192,6 +1192,14 @@ rc=0
 echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Fq '[Pull Request Template](.github/pull_request_template.md)' || rc=1
 assert_ok "CONTRIBUTING community-standards includes Pull Request Template link" "$rc"
 
+rc=0
+if ! diff -u \
+  <(echo "$README_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | sort) \
+  <(echo "$CONTRIBUTING_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | sort) >/dev/null; then
+  rc=1
+fi
+assert_ok "README and CONTRIBUTING community-standards link sets match" "$rc"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))
