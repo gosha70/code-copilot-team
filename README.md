@@ -196,7 +196,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    59 hook tests
 │   ├── test-generate.sh                 238 generation + adapter tests
-│   └── test-shared-structure.sh         404 structure + content tests
+│   └── test-shared-structure.sh         406 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift prevention
 ├── README.md
@@ -230,6 +230,13 @@ Rule content is written once in `shared/` and adapted per tool via `scripts/gene
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). PRs welcome for new templates, rule improvements, and ports to other tools.
+
+## Community Standards
+
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security Policy](SECURITY.md)
+- [Issue Templates](.github/ISSUE_TEMPLATE/)
+- [Pull Request Template](.github/pull_request_template.md)
 
 ## Alignment Maintenance
 

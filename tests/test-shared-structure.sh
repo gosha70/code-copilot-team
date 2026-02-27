@@ -1023,6 +1023,14 @@ rc=0
 grep -q '^## Validation' "$REPO_DIR/.github/pull_request_template.md" || rc=1
 assert_ok "pull_request_template has Validation section" "$rc"
 
+rc=0
+grep -q '\[Code of Conduct\](CODE_OF_CONDUCT.md)' "$REPO_DIR/README.md" || rc=1
+assert_ok "README links Code of Conduct" "$rc"
+
+rc=0
+grep -q '\[Security Policy\](SECURITY.md)' "$REPO_DIR/README.md" || rc=1
+assert_ok "README links Security Policy" "$rc"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))
