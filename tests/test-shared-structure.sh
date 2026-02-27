@@ -994,6 +994,14 @@ rc=0
 grep -q '^## Enforcement' "$REPO_DIR/CODE_OF_CONDUCT.md" || rc=1
 assert_ok "CODE_OF_CONDUCT has Enforcement section" "$rc"
 
+rc=0
+grep -q 'contacting the repository owner directly on GitHub' "$REPO_DIR/CODE_OF_CONDUCT.md" || rc=1
+assert_ok "CODE_OF_CONDUCT includes direct owner contact channel" "$rc"
+
+rc=0
+grep -q 'avoid opening public issues' "$REPO_DIR/CODE_OF_CONDUCT.md" || rc=1
+assert_ok "CODE_OF_CONDUCT discourages public conduct reports" "$rc"
+
 assert_file_exists "SECURITY.md exists" "$REPO_DIR/SECURITY.md"
 assert_nonempty "SECURITY.md non-empty" "$REPO_DIR/SECURITY.md"
 
@@ -1020,6 +1028,10 @@ assert_ok "issue template config disables blank issues" "$rc"
 rc=0
 grep -q '/security/policy' "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml" || rc=1
 assert_ok "issue template config references security policy" "$rc"
+
+rc=0
+grep -q '/CODE_OF_CONDUCT.md' "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml" || rc=1
+assert_ok "issue template config references Code of Conduct" "$rc"
 
 rc=0
 grep -q '/security/advisories/new' "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml" || rc=1

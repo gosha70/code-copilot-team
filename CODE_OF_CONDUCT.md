@@ -34,8 +34,8 @@ individual is officially representing the project in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the maintainers by opening an issue with the prefix `[CoC]` or by
-contacting the repository owner directly on GitHub.
+reported to the maintainers by contacting the repository owner directly on GitHub.
+Please avoid opening public issues for sensitive conduct reports.
 
 All reports will be reviewed and investigated promptly and fairly.
 Maintainers are expected to respect the privacy and security of the reporter.
