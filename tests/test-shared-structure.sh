@@ -1200,6 +1200,89 @@ if ! diff -u \
 fi
 assert_ok "README and CONTRIBUTING community-standards link sets match" "$rc"
 
+# ══════════════════════════════════════════════════════════════
+# 23. GitHub hardening automation scripts/docs
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== github hardening automation ==="
+
+assert_file_exists "scripts/apply-branch-protection.sh exists" "$REPO_DIR/scripts/apply-branch-protection.sh"
+assert_nonempty "scripts/apply-branch-protection.sh non-empty" "$REPO_DIR/scripts/apply-branch-protection.sh"
+
+rc=0
+[[ -x "$REPO_DIR/scripts/apply-branch-protection.sh" ]] || rc=1
+assert_ok "scripts/apply-branch-protection.sh is executable" "$rc"
+
+rc=0
+bash -n "$REPO_DIR/scripts/apply-branch-protection.sh" || rc=1
+assert_ok "apply-branch-protection.sh syntax valid" "$rc"
+
+rc=0
+grep -q -- '--checks' "$REPO_DIR/scripts/apply-branch-protection.sh" || rc=1
+assert_ok "apply-branch-protection supports --checks option" "$rc"
+
+rc=0
+grep -q '"require_code_owner_reviews": true' "$REPO_DIR/scripts/apply-branch-protection.sh" || rc=1
+assert_ok "apply-branch-protection requires code owner reviews" "$rc"
+
+rc=0
+grep -q '"required_conversation_resolution": true' "$REPO_DIR/scripts/apply-branch-protection.sh" || rc=1
+assert_ok "apply-branch-protection requires conversation resolution" "$rc"
+
+assert_file_exists "scripts/check-github-hardening.sh exists" "$REPO_DIR/scripts/check-github-hardening.sh"
+assert_nonempty "scripts/check-github-hardening.sh non-empty" "$REPO_DIR/scripts/check-github-hardening.sh"
+
+rc=0
+[[ -x "$REPO_DIR/scripts/check-github-hardening.sh" ]] || rc=1
+assert_ok "scripts/check-github-hardening.sh is executable" "$rc"
+
+rc=0
+bash -n "$REPO_DIR/scripts/check-github-hardening.sh" || rc=1
+assert_ok "check-github-hardening.sh syntax valid" "$rc"
+
+rc=0
+grep -q -- '--required-checks' "$REPO_DIR/scripts/check-github-hardening.sh" || rc=1
+assert_ok "check-github-hardening supports --required-checks option" "$rc"
+
+rc=0
+grep -q 'private vulnerability reporting enabled' "$REPO_DIR/scripts/check-github-hardening.sh" || rc=1
+assert_ok "check-github-hardening validates private vulnerability reporting" "$rc"
+
+assert_file_exists "scripts/harden-github.sh exists" "$REPO_DIR/scripts/harden-github.sh"
+assert_nonempty "scripts/harden-github.sh non-empty" "$REPO_DIR/scripts/harden-github.sh"
+
+rc=0
+[[ -x "$REPO_DIR/scripts/harden-github.sh" ]] || rc=1
+assert_ok "scripts/harden-github.sh is executable" "$rc"
+
+rc=0
+bash -n "$REPO_DIR/scripts/harden-github.sh" || rc=1
+assert_ok "harden-github.sh syntax valid" "$rc"
+
+rc=0
+grep -q 'apply-branch-protection.sh' "$REPO_DIR/scripts/harden-github.sh" || rc=1
+assert_ok "harden-github invokes apply-branch-protection" "$rc"
+
+rc=0
+grep -q 'check-github-hardening.sh' "$REPO_DIR/scripts/harden-github.sh" || rc=1
+assert_ok "harden-github invokes check-github-hardening" "$rc"
+
+assert_file_exists "docs/github-hardening-playbook.md exists" "$REPO_DIR/docs/github-hardening-playbook.md"
+assert_nonempty "docs/github-hardening-playbook.md non-empty" "$REPO_DIR/docs/github-hardening-playbook.md"
+
+rc=0
+grep -q 'scripts/apply-branch-protection.sh' "$REPO_DIR/docs/github-hardening-playbook.md" || rc=1
+assert_ok "hardening playbook references apply script" "$rc"
+
+rc=0
+grep -q 'scripts/check-github-hardening.sh' "$REPO_DIR/docs/github-hardening-playbook.md" || rc=1
+assert_ok "hardening playbook references check script" "$rc"
+
+rc=0
+grep -q 'scripts/harden-github.sh' "$REPO_DIR/docs/github-hardening-playbook.md" || rc=1
+assert_ok "hardening playbook references harden script" "$rc"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))
