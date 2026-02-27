@@ -726,6 +726,22 @@ rc=0
 grep -Eq "docs/[[:space:]]+${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists ${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$rc"
 
+rc=0
+grep -Eq "rules/always/[[:space:]]+3 global rules" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 3 global always rules" "$rc"
+
+rc=0
+grep -Eq "rules/on-demand/[[:space:]]+10 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 10 on-demand rules" "$rc"
+
+rc=0
+grep -Eq "templates/[[:space:]]+7 stacks" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 7 template stacks" "$rc"
+
+rc=0
+grep -Eq "codex/.*5 skills" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 5 codex skills" "$rc"
+
 README_SHARED_DOC_UNIQUE_COUNT=$(grep -Eo 'shared/docs/[A-Za-z0-9._-]+\.md' "$REPO_DIR/README.md" | sort -u | wc -l | tr -d ' ')
 assert_eq "README has ${DOCS_EXPECTED_COUNT} unique shared docs links" "$DOCS_EXPECTED_COUNT" "$README_SHARED_DOC_UNIQUE_COUNT"
 
