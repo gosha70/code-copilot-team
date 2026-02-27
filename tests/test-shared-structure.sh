@@ -935,6 +935,22 @@ grep -q 'bash scripts/generate.sh' "$WORKFLOW_FILE" || rc=1
 assert_ok "sync-check runs scripts/generate.sh" "$rc"
 
 rc=0
+grep -q 'name: Validate hardening scripts' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check has hardening script validation step" "$rc"
+
+rc=0
+grep -q 'bash -n scripts/apply-branch-protection.sh' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check validates apply-branch-protection syntax" "$rc"
+
+rc=0
+grep -q 'bash -n scripts/check-github-hardening.sh' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check validates check-github-hardening syntax" "$rc"
+
+rc=0
+grep -q 'bash -n scripts/harden-github.sh' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check validates harden-github syntax" "$rc"
+
+rc=0
 grep -q 'git diff --exit-code adapters/' "$WORKFLOW_FILE" || rc=1
 assert_ok "sync-check checks adapter drift via git diff" "$rc"
 
@@ -965,8 +981,20 @@ assert_eq "sync-check triggers on shared/** changes" "2" "$SHARED_PATH_COUNT"
 SCRIPTS_PATH_COUNT=$(grep -Fc "'scripts/generate.sh'" "$WORKFLOW_FILE")
 assert_eq "sync-check triggers on scripts/generate.sh changes" "2" "$SCRIPTS_PATH_COUNT"
 
+APPLY_BP_PATH_COUNT=$(grep -Fc "'scripts/apply-branch-protection.sh'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on scripts/apply-branch-protection.sh changes" "2" "$APPLY_BP_PATH_COUNT"
+
+CHECK_GH_HARDEN_PATH_COUNT=$(grep -Fc "'scripts/check-github-hardening.sh'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on scripts/check-github-hardening.sh changes" "2" "$CHECK_GH_HARDEN_PATH_COUNT"
+
+HARDEN_GH_PATH_COUNT=$(grep -Fc "'scripts/harden-github.sh'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on scripts/harden-github.sh changes" "2" "$HARDEN_GH_PATH_COUNT"
+
 ADAPTERS_PATH_COUNT=$(grep -Fc "'adapters/**'" "$WORKFLOW_FILE")
 assert_eq "sync-check triggers on adapters/** changes" "2" "$ADAPTERS_PATH_COUNT"
+
+DOCS_HARDEN_PATH_COUNT=$(grep -Fc "'docs/github-hardening-playbook.md'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on docs/github-hardening-playbook.md changes" "2" "$DOCS_HARDEN_PATH_COUNT"
 
 README_PATH_COUNT=$(grep -Fc "'README.md'" "$WORKFLOW_FILE")
 assert_eq "sync-check triggers on README.md changes" "2" "$README_PATH_COUNT"

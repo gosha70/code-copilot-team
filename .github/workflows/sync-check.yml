@@ -6,7 +6,11 @@ on:
     paths:
       - 'shared/**'
       - 'scripts/generate.sh'
+      - 'scripts/apply-branch-protection.sh'
+      - 'scripts/check-github-hardening.sh'
+      - 'scripts/harden-github.sh'
       - 'adapters/**'
+      - 'docs/github-hardening-playbook.md'
       - 'tests/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
@@ -16,7 +20,11 @@ on:
     paths:
       - 'shared/**'
       - 'scripts/generate.sh'
+      - 'scripts/apply-branch-protection.sh'
+      - 'scripts/check-github-hardening.sh'
+      - 'scripts/harden-github.sh'
       - 'adapters/**'
+      - 'docs/github-hardening-playbook.md'
       - 'tests/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
@@ -40,6 +48,12 @@ jobs:
             exit 1
           fi
           echo "Adapters are in sync with shared/."
+
+      - name: Validate hardening scripts
+        run: |
+          bash -n scripts/apply-branch-protection.sh
+          bash -n scripts/check-github-hardening.sh
+          bash -n scripts/harden-github.sh
 
       - name: Run generation tests
         run: bash tests/test-generate.sh
