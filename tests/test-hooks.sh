@@ -6,6 +6,9 @@
 #   bash tests/test-hooks.sh
 
 HOOKS_DIR="$(cd "$(dirname "$0")/../adapters/claude-code/.claude/hooks" && pwd)"
+COUNTS_FILE="$(cd "$(dirname "$0")" && pwd)/test-counts.env"
+# shellcheck source=/dev/null
+source "$COUNTS_FILE"
 PASS=0
 FAIL=0
 
@@ -225,6 +228,12 @@ assert_exit "nonexistent project dir" 0 "$RC"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RC=$(run_hook reinject-context.sh '{}' CLAUDE_PROJECT_DIR="$REPO_DIR")
 assert_exit "valid git repo" 0 "$RC"
+
+echo ""
+if [[ "$PASS" -ne "$TEST_HOOKS_EXPECTED_PASS" ]]; then
+  echo "  FAIL: assertion-count drift (expected $TEST_HOOKS_EXPECTED_PASS, got $PASS)"
+  FAIL=$((FAIL + 1))
+fi
 
 echo ""
 echo "========================================="

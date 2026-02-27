@@ -11,6 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$SCRIPT_DIR/.."
 ADAPTERS="$REPO_DIR/adapters"
 SHARED="$REPO_DIR/shared/rules"
+COUNTS_FILE="$SCRIPT_DIR/test-counts.env"
+# shellcheck source=/dev/null
+source "$COUNTS_FILE"
 PASS=0
 FAIL=0
 
@@ -490,6 +493,12 @@ assert "Windsurf rules.md is identical" "[[ '$MD5_BEFORE_WINDSURF' == '$MD5_AFTE
 assert "Aider CONVENTIONS.md is identical" "[[ '$MD5_BEFORE_AIDER' == '$MD5_AFTER_AIDER' ]]"
 
 # ── Results ───────────────────────────────────────────────
+
+echo ""
+if [[ "$PASS" -ne "$TEST_GENERATE_EXPECTED_PASS" ]]; then
+  echo "  FAIL: assertion-count drift (expected $TEST_GENERATE_EXPECTED_PASS, got $PASS)"
+  FAIL=$((FAIL + 1))
+fi
 
 echo ""
 echo "========================================="

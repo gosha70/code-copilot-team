@@ -19,6 +19,9 @@ SHARED_DIR="$REPO_DIR/shared"
 CLAUDE_CODE_DIR="$REPO_DIR/claude_code"
 ADAPTER_DIR="$REPO_DIR/adapters/claude-code"
 SETUP_SCRIPT="$ADAPTER_DIR/setup.sh"
+COUNTS_FILE="$REPO_DIR/tests/test-counts.env"
+# shellcheck source=/dev/null
+source "$COUNTS_FILE"
 PASS=0
 FAIL=0
 
@@ -655,16 +658,21 @@ echo ""
 echo "=== README test-count claims ==="
 
 rc=0
-grep -Eq 'test-hooks\.sh[[:space:]]+59 hook tests' "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 59 hook tests" "$rc"
+grep -Eq "test-hooks\\.sh[[:space:]]+${TEST_HOOKS_EXPECTED_PASS} hook tests" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists ${TEST_HOOKS_EXPECTED_PASS} hook tests" "$rc"
 
 rc=0
-grep -Eq 'test-generate\.sh[[:space:]]+238 generation \+ adapter tests' "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 238 generation + adapter tests" "$rc"
+grep -Eq "test-generate\\.sh[[:space:]]+${TEST_GENERATE_EXPECTED_PASS} generation \\+ adapter tests" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists ${TEST_GENERATE_EXPECTED_PASS} generation + adapter tests" "$rc"
 
 rc=0
-grep -Eq 'test-shared-structure\.sh[[:space:]]+324 structure \+ content tests' "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 324 structure + content tests" "$rc"
+grep -Eq "test-shared-structure\\.sh[[:space:]]+${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure \\+ content tests" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists ${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure + content tests" "$rc"
+
+if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
+  echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
+  FAIL=$((FAIL + 1))
+fi
 
 # ══════════════════════════════════════════════════════════════
 # SUMMARY
