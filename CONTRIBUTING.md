@@ -62,6 +62,11 @@ To prevent instruction drift and outdated quality claims:
    bash tests/test-shared-structure.sh
    ```
 
+## Security Reporting
+
+- Do not open public issues for security vulnerabilities.
+- Follow [SECURITY.md](SECURITY.md) and use private GitHub Security Advisories for disclosure.
+
 ## Questions?
 
 Open an issue. Happy to discuss design decisions or help with template development.

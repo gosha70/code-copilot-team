@@ -16,4 +16,5 @@ Briefly describe what this pull request changes and why.
 
 - [ ] Scope is focused and does not mix unrelated changes
 - [ ] Documentation updated where needed
+- [ ] Security-sensitive findings were handled privately per `SECURITY.md`
 - [ ] No secrets or credentials were introduced

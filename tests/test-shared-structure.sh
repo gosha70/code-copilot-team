@@ -862,6 +862,14 @@ grep -q '.github/workflows/sync-check.yml' "$REPO_DIR/CONTRIBUTING.md" || rc=1
 assert_ok "CONTRIBUTING references sync-check workflow contract" "$rc"
 
 rc=0
+grep -q 'Do not open public issues for security vulnerabilities' "$REPO_DIR/CONTRIBUTING.md" || rc=1
+assert_ok "CONTRIBUTING states no public issues for vulnerabilities" "$rc"
+
+rc=0
+grep -q '\[SECURITY.md\](SECURITY.md)' "$REPO_DIR/CONTRIBUTING.md" || rc=1
+assert_ok "CONTRIBUTING links SECURITY.md reporting policy" "$rc"
+
+rc=0
 grep -q 'bash tests/test-generate.sh' "$REPO_DIR/CONTRIBUTING.md" || rc=1
 assert_ok "CONTRIBUTING includes test-generate command" "$rc"
 
@@ -1049,6 +1057,10 @@ assert_nonempty "pull_request_template.md non-empty" "$REPO_DIR/.github/pull_req
 rc=0
 grep -q '^## Validation' "$REPO_DIR/.github/pull_request_template.md" || rc=1
 assert_ok "pull_request_template has Validation section" "$rc"
+
+rc=0
+grep -q 'Security-sensitive findings were handled privately per `SECURITY.md`' "$REPO_DIR/.github/pull_request_template.md" || rc=1
+assert_ok "pull_request_template has SECURITY.md handling checklist item" "$rc"
 
 rc=0
 grep -q '^## Community Standards' "$REPO_DIR/README.md" || rc=1
