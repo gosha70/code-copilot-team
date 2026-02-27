@@ -786,6 +786,22 @@ rc=0
 grep -q '.github/workflows/sync-check.yml' "$REPO_DIR/CONTRIBUTING.md" || rc=1
 assert_ok "CONTRIBUTING references sync-check workflow contract" "$rc"
 
+rc=0
+grep -q 'bash tests/test-generate.sh' "$REPO_DIR/CONTRIBUTING.md" || rc=1
+assert_ok "CONTRIBUTING includes test-generate command" "$rc"
+
+rc=0
+grep -q 'bash tests/test-hooks.sh' "$REPO_DIR/CONTRIBUTING.md" || rc=1
+assert_ok "CONTRIBUTING includes test-hooks command" "$rc"
+
+rc=0
+grep -q 'bash tests/test-shared-structure.sh' "$REPO_DIR/CONTRIBUTING.md" || rc=1
+assert_ok "CONTRIBUTING includes test-shared-structure command" "$rc"
+
+rc=0
+grep -q 'shared/docs/alignment-maintenance.md' "$REPO_DIR/CONTRIBUTING.md" || rc=1
+assert_ok "CONTRIBUTING references alignment-maintenance checklist" "$rc"
+
 # ══════════════════════════════════════════════════════════════
 # 21. CI workflow coverage — sync-check enforces full gates
 # ══════════════════════════════════════════════════════════════
