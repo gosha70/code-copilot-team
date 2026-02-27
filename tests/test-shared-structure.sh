@@ -1147,6 +1147,26 @@ grep -q '^/\.github/pull_request_template\.md @gosha70$' "$REPO_DIR/.github/CODE
 assert_ok "CODEOWNERS includes pull request template ownership" "$rc"
 
 rc=0
+grep -q '^/scripts/apply-branch-protection\.sh @gosha70$' "$REPO_DIR/.github/CODEOWNERS" || rc=1
+assert_ok "CODEOWNERS includes apply-branch-protection ownership" "$rc"
+
+rc=0
+grep -q '^/scripts/check-github-hardening\.sh @gosha70$' "$REPO_DIR/.github/CODEOWNERS" || rc=1
+assert_ok "CODEOWNERS includes check-github-hardening ownership" "$rc"
+
+rc=0
+grep -q '^/scripts/harden-github\.sh @gosha70$' "$REPO_DIR/.github/CODEOWNERS" || rc=1
+assert_ok "CODEOWNERS includes harden-github ownership" "$rc"
+
+rc=0
+grep -q '^/docs/github-hardening-playbook\.md @gosha70$' "$REPO_DIR/.github/CODEOWNERS" || rc=1
+assert_ok "CODEOWNERS includes hardening playbook ownership" "$rc"
+
+rc=0
+grep -q '^/\.github/workflows/sync-check\.yml @gosha70$' "$REPO_DIR/.github/CODEOWNERS" || rc=1
+assert_ok "CODEOWNERS includes sync-check workflow ownership" "$rc"
+
+rc=0
 grep -q '^## Our Standards' "$REPO_DIR/CODE_OF_CONDUCT.md" || rc=1
 assert_ok "CODE_OF_CONDUCT has Our Standards section" "$rc"
 

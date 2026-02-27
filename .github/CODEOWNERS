@@ -8,3 +8,10 @@
 /README.md @gosha70
 /.github/ISSUE_TEMPLATE/ @gosha70
 /.github/pull_request_template.md @gosha70
+
+# Hardening automation and policy workflow
+/scripts/apply-branch-protection.sh @gosha70
+/scripts/check-github-hardening.sh @gosha70
+/scripts/harden-github.sh @gosha70
+/docs/github-hardening-playbook.md @gosha70
+/.github/workflows/sync-check.yml @gosha70
