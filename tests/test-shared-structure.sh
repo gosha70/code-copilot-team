@@ -506,6 +506,14 @@ rc=0
 grep -q '.github/workflows/sync-check.yml' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
 assert_ok "alignment-maintenance references sync-check workflow contract" "$rc"
 
+rc=0
+grep -Eq '\[ \].*tests/test-counts\.env.*expected totals.*suite outputs' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance release checklist includes test-counts parity item" "$rc"
+
+rc=0
+grep -Eq '\[ \].*sync-check\.yml.*full gate coverage.*all suites.*setup.*structure test' "$SHARED_DIR/docs/alignment-maintenance.md" || rc=1
+assert_ok "alignment-maintenance release checklist includes sync-check coverage item" "$rc"
+
 echo ""
 echo "=== harness engineering: architecture rules in templates ==="
 
