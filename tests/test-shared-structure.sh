@@ -678,7 +678,56 @@ grep -Eq "test-shared-structure\\.sh[[:space:]]+${TEST_SHARED_STRUCTURE_EXPECTED
 assert_ok "README lists ${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure + content tests" "$rc"
 
 # ══════════════════════════════════════════════════════════════
-# 19. CONTRIBUTING governance references
+# 19. test-counts contract
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== test-counts contract ==="
+
+assert_file_exists "test-counts.env exists" "$REPO_DIR/tests/test-counts.env"
+assert_nonempty "test-counts.env non-empty" "$REPO_DIR/tests/test-counts.env"
+
+rc=0
+grep -Eq '^TEST_GENERATE_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
+assert_ok "test-counts has TEST_GENERATE_EXPECTED_PASS numeric value" "$rc"
+
+rc=0
+grep -Eq '^TEST_HOOKS_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
+assert_ok "test-counts has TEST_HOOKS_EXPECTED_PASS numeric value" "$rc"
+
+rc=0
+grep -Eq '^TEST_SHARED_STRUCTURE_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
+assert_ok "test-counts has TEST_SHARED_STRUCTURE_EXPECTED_PASS numeric value" "$rc"
+
+COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
+assert_eq "test-counts has exactly 3 expected-pass variables" "3" "$COUNT_VARS"
+
+rc=0
+grep -q 'source "\$COUNTS_FILE"' "$REPO_DIR/tests/test-generate.sh" || rc=1
+assert_ok "test-generate sources count contract" "$rc"
+
+rc=0
+grep -q 'source "\$COUNTS_FILE"' "$REPO_DIR/tests/test-hooks.sh" || rc=1
+assert_ok "test-hooks sources count contract" "$rc"
+
+rc=0
+grep -q 'source "\$COUNTS_FILE"' "$REPO_DIR/tests/test-shared-structure.sh" || rc=1
+assert_ok "test-shared-structure sources count contract" "$rc"
+
+rc=0
+grep -q 'TEST_GENERATE_EXPECTED_PASS' "$REPO_DIR/tests/test-generate.sh" || rc=1
+assert_ok "test-generate uses expected-pass variable" "$rc"
+
+rc=0
+grep -q 'TEST_HOOKS_EXPECTED_PASS' "$REPO_DIR/tests/test-hooks.sh" || rc=1
+assert_ok "test-hooks uses expected-pass variable" "$rc"
+
+rc=0
+grep -q 'TEST_SHARED_STRUCTURE_EXPECTED_PASS' "$REPO_DIR/tests/test-shared-structure.sh" || rc=1
+assert_ok "test-shared-structure uses expected-pass variable" "$rc"
+
+# ══════════════════════════════════════════════════════════════
+# 20. CONTRIBUTING governance references
 # ══════════════════════════════════════════════════════════════
 
 echo ""
@@ -693,7 +742,7 @@ grep -q '.github/workflows/sync-check.yml' "$REPO_DIR/CONTRIBUTING.md" || rc=1
 assert_ok "CONTRIBUTING references sync-check workflow contract" "$rc"
 
 # ══════════════════════════════════════════════════════════════
-# 20. CI workflow coverage — sync-check enforces full gates
+# 21. CI workflow coverage — sync-check enforces full gates
 # ══════════════════════════════════════════════════════════════
 
 echo ""
