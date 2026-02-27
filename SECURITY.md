@@ -6,7 +6,7 @@ Security fixes are provided for the latest state of the default branch.
 
 | Version | Supported |
 | ------- | --------- |
-| `main`  | :white_check_mark: |
+| `master` | :white_check_mark: |
 
 ## Reporting a Vulnerability
 

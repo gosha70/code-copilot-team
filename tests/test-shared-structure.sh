@@ -997,6 +997,10 @@ rc=0
 grep -q '^## Reporting a Vulnerability' "$REPO_DIR/SECURITY.md" || rc=1
 assert_ok "SECURITY has Reporting a Vulnerability section" "$rc"
 
+rc=0
+grep -qE '^\| `master`[[:space:]]*\| :white_check_mark: \|$' "$REPO_DIR/SECURITY.md" || rc=1
+assert_ok "SECURITY supported version row matches default branch (master)" "$rc"
+
 assert_dir_exists ".github/ISSUE_TEMPLATE exists" "$REPO_DIR/.github/ISSUE_TEMPLATE"
 assert_file_exists "bug_report.md template exists" "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md"
 assert_nonempty "bug_report.md template non-empty" "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md"
