@@ -1020,6 +1020,10 @@ rc=0
 grep -q '^name: Bug report' "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md" || rc=1
 assert_ok "bug_report template has name field" "$rc"
 
+rc=0
+grep -q 'SECURITY.md' "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md" || rc=1
+assert_ok "bug_report template references SECURITY.md for vulnerabilities" "$rc"
+
 assert_file_exists "feature_request.md template exists" "$REPO_DIR/.github/ISSUE_TEMPLATE/feature_request.md"
 assert_nonempty "feature_request.md template non-empty" "$REPO_DIR/.github/ISSUE_TEMPLATE/feature_request.md"
 
