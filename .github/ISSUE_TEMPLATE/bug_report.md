@@ -9,7 +9,8 @@ assignees: ""
 ## Summary
 
 Describe the bug clearly and concisely.
-For security vulnerabilities, do not use this template; report privately via `SECURITY.md`.
+For security vulnerabilities, do not use this template; report privately via `SECURITY.md` or:
+https://github.com/gosha70/code-copilot-team/security/advisories/new
 
 ## Steps To Reproduce
 

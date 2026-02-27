@@ -1013,6 +1013,10 @@ rc=0
 grep -q '/security/policy' "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml" || rc=1
 assert_ok "issue template config references security policy" "$rc"
 
+rc=0
+grep -q '/security/advisories/new' "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml" || rc=1
+assert_ok "issue template config references advisories submission URL" "$rc"
+
 assert_file_exists "bug_report.md template exists" "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md"
 assert_nonempty "bug_report.md template non-empty" "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md"
 
@@ -1023,6 +1027,14 @@ assert_ok "bug_report template has name field" "$rc"
 rc=0
 grep -q 'SECURITY.md' "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md" || rc=1
 assert_ok "bug_report template references SECURITY.md for vulnerabilities" "$rc"
+
+rc=0
+grep -q '/security/advisories/new' "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md" || rc=1
+assert_ok "bug_report template references advisories submission URL" "$rc"
+
+rc=0
+grep -q '/security/advisories/new' "$REPO_DIR/SECURITY.md" || rc=1
+assert_ok "SECURITY.md includes direct advisories submission URL" "$rc"
 
 assert_file_exists "feature_request.md template exists" "$REPO_DIR/.github/ISSUE_TEMPLATE/feature_request.md"
 assert_nonempty "feature_request.md template non-empty" "$REPO_DIR/.github/ISSUE_TEMPLATE/feature_request.md"
