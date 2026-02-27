@@ -1002,6 +1002,17 @@ grep -qE '^\| `master`[[:space:]]*\| :white_check_mark: \|$' "$REPO_DIR/SECURITY
 assert_ok "SECURITY supported version row matches default branch (master)" "$rc"
 
 assert_dir_exists ".github/ISSUE_TEMPLATE exists" "$REPO_DIR/.github/ISSUE_TEMPLATE"
+assert_file_exists "issue template config.yml exists" "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml"
+assert_nonempty "issue template config.yml non-empty" "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml"
+
+rc=0
+grep -q '^blank_issues_enabled:[[:space:]]*false' "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml" || rc=1
+assert_ok "issue template config disables blank issues" "$rc"
+
+rc=0
+grep -q '/security/policy' "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml" || rc=1
+assert_ok "issue template config references security policy" "$rc"
+
 assert_file_exists "bug_report.md template exists" "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md"
 assert_nonempty "bug_report.md template non-empty" "$REPO_DIR/.github/ISSUE_TEMPLATE/bug_report.md"
 
