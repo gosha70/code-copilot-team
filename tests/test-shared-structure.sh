@@ -752,6 +752,35 @@ for f in "${DOCS_FILES[@]}"; do
 done
 assert_ok "README shared-docs section references every shared docs file" "$rc"
 
+README_CLAUDE_DOCS=(
+  claude-code-setup-cookbook.md
+  claude-config-guide.md
+  hooks-guide.md
+  subagents-guide.md
+  agent-traces.md
+  debugging-strategies.md
+  permissions-guide.md
+  recommended-mcp-servers.md
+)
+README_CLAUDE_DOCS_EXPECTED_COUNT="${#README_CLAUDE_DOCS[@]}"
+
+README_CLAUDE_DOCS_SECTION=$(
+  awk '
+    /^\*\*Claude Code specific:\*\*/ {in_section=1; next}
+    /^\*\*Shared \(all tools\):\*\*/ && in_section {exit}
+    in_section {print}
+  ' "$REPO_DIR/README.md"
+)
+
+README_CLAUDE_SECTION_LINK_COUNT=$(echo "$README_CLAUDE_DOCS_SECTION" | grep -Eo 'adapters/claude-code/docs/[A-Za-z0-9._-]+\.md' | sort -u | wc -l | tr -d ' ')
+assert_eq "README Claude-docs section lists ${README_CLAUDE_DOCS_EXPECTED_COUNT} unique links" "$README_CLAUDE_DOCS_EXPECTED_COUNT" "$README_CLAUDE_SECTION_LINK_COUNT"
+
+rc=0
+for f in "${README_CLAUDE_DOCS[@]}"; do
+  echo "$README_CLAUDE_DOCS_SECTION" | grep -q "adapters/claude-code/docs/$f" || rc=1
+done
+assert_ok "README Claude-docs section references expected curated docs" "$rc"
+
 # ══════════════════════════════════════════════════════════════
 # 19. test-counts contract
 # ══════════════════════════════════════════════════════════════
