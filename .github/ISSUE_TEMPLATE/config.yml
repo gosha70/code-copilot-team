@@ -3,6 +3,9 @@ contact_links:
   - name: Code of Conduct
     url: https://github.com/gosha70/code-copilot-team/blob/master/CODE_OF_CONDUCT.md
     about: Review expected behavior and conduct reporting guidance.
+  - name: Private conduct report
+    url: https://github.com/gosha70
+    about: Contact the repository owner privately for conduct concerns.
   - name: Report a security vulnerability
     url: https://github.com/gosha70/code-copilot-team/security/advisories/new
     about: Use private GitHub Security Advisories for vulnerability reports.

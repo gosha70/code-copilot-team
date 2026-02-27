@@ -995,12 +995,18 @@ grep -q '^## Enforcement' "$REPO_DIR/CODE_OF_CONDUCT.md" || rc=1
 assert_ok "CODE_OF_CONDUCT has Enforcement section" "$rc"
 
 rc=0
-grep -q 'contacting the repository owner directly on GitHub' "$REPO_DIR/CODE_OF_CONDUCT.md" || rc=1
-assert_ok "CODE_OF_CONDUCT includes direct owner contact channel" "$rc"
+grep -q 'https://github.com/gosha70' "$REPO_DIR/CODE_OF_CONDUCT.md" || rc=1
+assert_ok "CODE_OF_CONDUCT includes owner profile contact link" "$rc"
 
 rc=0
 grep -q 'avoid opening public issues' "$REPO_DIR/CODE_OF_CONDUCT.md" || rc=1
 assert_ok "CODE_OF_CONDUCT discourages public conduct reports" "$rc"
+
+rc=0
+if grep -q '\[CoC\]' "$REPO_DIR/CODE_OF_CONDUCT.md"; then
+  rc=1
+fi
+assert_ok "CODE_OF_CONDUCT omits legacy public [CoC] issue flow" "$rc"
 
 assert_file_exists "SECURITY.md exists" "$REPO_DIR/SECURITY.md"
 assert_nonempty "SECURITY.md non-empty" "$REPO_DIR/SECURITY.md"
@@ -1032,6 +1038,10 @@ assert_ok "issue template config references security policy" "$rc"
 rc=0
 grep -q '/CODE_OF_CONDUCT.md' "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml" || rc=1
 assert_ok "issue template config references Code of Conduct" "$rc"
+
+rc=0
+grep -q '^    url: https://github.com/gosha70$' "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml" || rc=1
+assert_ok "issue template config references private conduct contact URL" "$rc"
 
 rc=0
 grep -q '/security/advisories/new' "$REPO_DIR/.github/ISSUE_TEMPLATE/config.yml" || rc=1
