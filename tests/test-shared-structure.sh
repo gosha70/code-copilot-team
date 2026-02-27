@@ -771,6 +771,45 @@ rc=0
 grep -Eq "\\.github/workflows/sync-check\\.yml[[:space:]]+CI: .*(full gate|gate verification)" "$REPO_DIR/README.md" || rc=1
 assert_ok "README describes sync-check workflow as full gate verification" "$rc"
 
+rc=0
+grep -q '^## Supported Tools' "$REPO_DIR/README.md" || rc=1
+assert_ok "README has Supported Tools section" "$rc"
+
+README_SUPPORTED_TOOLS_SECTION=$(
+  awk '
+    /^## Supported Tools/ {in_section=1; next}
+    /^## / && in_section {exit}
+    in_section {print}
+  ' "$REPO_DIR/README.md"
+)
+
+SUPPORTED_TOOLS_ROW_COUNT=$(echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Ec '^\| \*\*[^|]+\*\* \|')
+assert_eq "README supported-tools table lists 6 tools" "6" "$SUPPORTED_TOOLS_ROW_COUNT"
+
+rc=0
+echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Claude Code** | agents, hooks, commands, settings | `~/.claude/` (global) |' || rc=1
+assert_ok "README supported-tools includes Claude Code row" "$rc"
+
+rc=0
+echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **OpenAI Codex** | `AGENTS.md` + 5 skills | `~/.codex/` (global) |' || rc=1
+assert_ok "README supported-tools includes OpenAI Codex row" "$rc"
+
+rc=0
+echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Cursor** | `.mdc` files with frontmatter | `project/.cursor/rules/` |' || rc=1
+assert_ok "README supported-tools includes Cursor row" "$rc"
+
+rc=0
+echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **GitHub Copilot** | `copilot-instructions.md` + per-rule instructions | `project/.github/` |' || rc=1
+assert_ok "README supported-tools includes GitHub Copilot row" "$rc"
+
+rc=0
+echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Windsurf** | `rules.md` | `project/.windsurf/rules/` |' || rc=1
+assert_ok "README supported-tools includes Windsurf row" "$rc"
+
+rc=0
+echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Aider** | `CONVENTIONS.md` | `project/` |' || rc=1
+assert_ok "README supported-tools includes Aider row" "$rc"
+
 README_SHARED_DOC_UNIQUE_COUNT=$(grep -Eo 'shared/docs/[A-Za-z0-9._-]+\.md' "$REPO_DIR/README.md" | sort -u | wc -l | tr -d ' ')
 assert_eq "README has ${DOCS_EXPECTED_COUNT} unique shared docs links" "$DOCS_EXPECTED_COUNT" "$README_SHARED_DOC_UNIQUE_COUNT"
 
