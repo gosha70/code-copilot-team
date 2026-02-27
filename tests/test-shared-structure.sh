@@ -987,6 +987,29 @@ echo "=== community standards files ==="
 assert_file_exists "CODE_OF_CONDUCT.md exists" "$REPO_DIR/CODE_OF_CONDUCT.md"
 assert_nonempty "CODE_OF_CONDUCT.md non-empty" "$REPO_DIR/CODE_OF_CONDUCT.md"
 
+assert_file_exists ".github/CODEOWNERS exists" "$REPO_DIR/.github/CODEOWNERS"
+assert_nonempty ".github/CODEOWNERS non-empty" "$REPO_DIR/.github/CODEOWNERS"
+
+rc=0
+grep -q '^\* @gosha70$' "$REPO_DIR/.github/CODEOWNERS" || rc=1
+assert_ok "CODEOWNERS has default owner" "$rc"
+
+rc=0
+grep -q '^/CODE_OF_CONDUCT.md @gosha70$' "$REPO_DIR/.github/CODEOWNERS" || rc=1
+assert_ok "CODEOWNERS includes CODE_OF_CONDUCT ownership" "$rc"
+
+rc=0
+grep -q '^/SECURITY.md @gosha70$' "$REPO_DIR/.github/CODEOWNERS" || rc=1
+assert_ok "CODEOWNERS includes SECURITY ownership" "$rc"
+
+rc=0
+grep -q '^/CONTRIBUTING.md @gosha70$' "$REPO_DIR/.github/CODEOWNERS" || rc=1
+assert_ok "CODEOWNERS includes CONTRIBUTING ownership" "$rc"
+
+rc=0
+grep -q '^/README.md @gosha70$' "$REPO_DIR/.github/CODEOWNERS" || rc=1
+assert_ok "CODEOWNERS includes README ownership" "$rc"
+
 rc=0
 grep -q '^## Our Standards' "$REPO_DIR/CODE_OF_CONDUCT.md" || rc=1
 assert_ok "CODE_OF_CONDUCT has Our Standards section" "$rc"
@@ -1098,14 +1121,18 @@ README_COMMUNITY_SECTION=$(
 )
 
 README_COMMUNITY_LINK_COUNT=$(echo "$README_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | wc -l | tr -d ' ')
-assert_eq "README community-standards section lists 4 links" "4" "$README_COMMUNITY_LINK_COUNT"
+assert_eq "README community-standards section lists 5 links" "5" "$README_COMMUNITY_LINK_COUNT"
 
 README_COMMUNITY_UNIQUE_LINK_COUNT=$(echo "$README_COMMUNITY_SECTION" | grep -Eo '\[[^]]+\]\([^)]+\)' | sort -u | wc -l | tr -d ' ')
-assert_eq "README community-standards section links are unique" "4" "$README_COMMUNITY_UNIQUE_LINK_COUNT"
+assert_eq "README community-standards section links are unique" "5" "$README_COMMUNITY_UNIQUE_LINK_COUNT"
 
 rc=0
 echo "$README_COMMUNITY_SECTION" | grep -Fq '[Code of Conduct](CODE_OF_CONDUCT.md)' || rc=1
 assert_ok "README community-standards includes Code of Conduct link" "$rc"
+
+rc=0
+echo "$README_COMMUNITY_SECTION" | grep -Fq '[Code Owners](.github/CODEOWNERS)' || rc=1
+assert_ok "README community-standards includes Code Owners link" "$rc"
 
 rc=0
 echo "$README_COMMUNITY_SECTION" | grep -Fq '[Security Policy](SECURITY.md)' || rc=1
