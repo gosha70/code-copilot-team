@@ -1117,6 +1117,15 @@ assert_eq "sync-check triggers on CONTRIBUTING.md changes" "2" "$CONTRIB_PATH_CO
 WORKFLOW_PATH_COUNT=$(grep -Fc "'.github/workflows/sync-check.yml'" "$WORKFLOW_FILE")
 assert_eq "sync-check triggers on workflow file changes" "2" "$WORKFLOW_PATH_COUNT"
 
+SPECS_PATH_COUNT=$(grep -Fc "'specs/**'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on specs/** changes" "2" "$SPECS_PATH_COUNT"
+
+VALIDATE_SPEC_PATH_COUNT=$(grep -Fc "'scripts/validate-spec.sh'" "$WORKFLOW_FILE")
+assert_eq "sync-check triggers on scripts/validate-spec.sh changes" "2" "$VALIDATE_SPEC_PATH_COUNT"
+
+rc=0; grep -q 'Validate spec conformance' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check has Validate spec conformance step" "$rc"
+
 # ══════════════════════════════════════════════════════════════
 # 22. GitHub community standards files
 # ══════════════════════════════════════════════════════════════
@@ -1601,6 +1610,97 @@ grep -q 'Dry run completed. No remote settings were changed.' "$HARDEN_DRY_RUN_O
 assert_ok "harden-github dry-run confirms no remote changes" "$rc"
 
 rm -rf "$FAKE_GH_DIR"
+
+# ══════════════════════════════════════════════════════════════
+# SDD Sprint 3 — validate-spec.sh, template frontmatter, spec-workflow, review.md
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== validate-spec.sh existence and syntax ==="
+
+assert_file_exists "validate-spec.sh exists" "$REPO_DIR/scripts/validate-spec.sh"
+assert_nonempty "validate-spec.sh non-empty" "$REPO_DIR/scripts/validate-spec.sh"
+
+rc=0; [[ -x "$REPO_DIR/scripts/validate-spec.sh" ]] || rc=1
+assert_ok "validate-spec.sh is executable" "$rc"
+
+rc=0; bash -n "$REPO_DIR/scripts/validate-spec.sh" 2>/dev/null || rc=1
+assert_ok "validate-spec.sh passes bash -n" "$rc"
+
+echo ""
+echo "=== SDD template frontmatter contract ==="
+
+rc=0; grep -q 'spec_mode:' "$SHARED_DIR/templates/sdd/spec-template.md" || rc=1
+assert_ok "spec-template.md contains spec_mode: in frontmatter" "$rc"
+
+rc=0; grep -q 'feature_id:' "$SHARED_DIR/templates/sdd/spec-template.md" || rc=1
+assert_ok "spec-template.md contains feature_id: in frontmatter" "$rc"
+
+rc=0; grep -q 'status:' "$SHARED_DIR/templates/sdd/spec-template.md" || rc=1
+assert_ok "spec-template.md contains status: in frontmatter" "$rc"
+
+rc=0; grep -q 'spec_mode:' "$SHARED_DIR/templates/sdd/plan-template.md" || rc=1
+assert_ok "plan-template.md contains spec_mode: in frontmatter" "$rc"
+
+rc=0; grep -q 'justification:' "$SHARED_DIR/templates/sdd/plan-template.md" || rc=1
+assert_ok "plan-template.md contains justification: in frontmatter" "$rc"
+
+rc=0; grep -q 'status:' "$SHARED_DIR/templates/sdd/plan-template.md" || rc=1
+assert_ok "plan-template.md contains status: in frontmatter" "$rc"
+
+echo ""
+echo "=== spec-workflow.md content ==="
+
+SPEC_WORKFLOW="$SHARED_DIR/rules/on-demand/spec-workflow.md"
+
+rc=0; grep -q 'spec_mode' "$SPEC_WORKFLOW" || rc=1
+assert_ok "spec-workflow.md contains spec_mode classification" "$rc"
+
+rc=0; grep -q '`full`' "$SPEC_WORKFLOW" || rc=1
+assert_ok "spec-workflow.md contains full mode description" "$rc"
+
+rc=0; grep -q '`lightweight`' "$SPEC_WORKFLOW" || rc=1
+assert_ok "spec-workflow.md contains lightweight mode description" "$rc"
+
+rc=0; grep -q '`none`' "$SPEC_WORKFLOW" || rc=1
+assert_ok "spec-workflow.md contains none mode description" "$rc"
+
+rc=0; grep -q '\[NEEDS CLARIFICATION\]' "$SPEC_WORKFLOW" || rc=1
+assert_ok "spec-workflow.md contains [NEEDS CLARIFICATION] resolution rules" "$rc"
+
+rc=0; grep -q 'Plan Approval Gate' "$SPEC_WORKFLOW" || rc=1
+assert_ok "spec-workflow.md contains Plan Approval Gate section" "$rc"
+
+rc=0; grep -q 'Build Agent Behavior' "$SPEC_WORKFLOW" || rc=1
+assert_ok "spec-workflow.md contains Build Agent Behavior section" "$rc"
+
+rc=0; grep -q 'Spec Artifacts Directory Convention' "$SPEC_WORKFLOW" || rc=1
+assert_ok "spec-workflow.md contains Spec Artifacts Directory Convention section" "$rc"
+
+echo ""
+echo "=== lessons-learned-template.md content ==="
+
+LESSONS_TEMPLATE="$SHARED_DIR/templates/sdd/lessons-learned-template.md"
+
+rc=0; grep -q 'specs/lessons-learned.md' "$LESSONS_TEMPLATE" || rc=1
+assert_ok "lessons-learned-template.md contains specs/lessons-learned.md canonical path" "$rc"
+
+rc=0; grep -q 'Context.*Issue.*Resolution\|Context\|Takeaway' "$LESSONS_TEMPLATE" || rc=1
+assert_ok "lessons-learned-template.md contains entry format guidance" "$rc"
+
+rc=0; grep -q 'Plan agent\|Build agent' "$LESSONS_TEMPLATE" || rc=1
+assert_ok "lessons-learned-template.md contains Plan and Build agent usage" "$rc"
+
+echo ""
+echo "=== review.md spec conformance ==="
+
+REVIEW_MD="$ADAPTER_DIR/.claude/agents/review.md"
+
+rc=0; grep -q 'Spec Conformance' "$REVIEW_MD" || rc=1
+assert_ok "review.md contains Spec Conformance in output format" "$rc"
+
+rc=0; grep -q 'spec-workflow.md' "$REVIEW_MD" || rc=1
+assert_ok "review.md contains spec-workflow.md in rules list" "$rc"
 
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
