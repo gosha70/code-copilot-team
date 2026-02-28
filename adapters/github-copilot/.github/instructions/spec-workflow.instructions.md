@@ -24,15 +24,11 @@ When in doubt, escalate to the next higher mode. Under-speccing a risky change c
 
 All sections from `spec-template.md` are required, plus a `tasks.md` task breakdown:
 
-- Overview
+- User Scenarios
 - Requirements
-- Constraints
-- Architecture / Design
-- Data Model (if applicable)
-- API Contract (if applicable)
-- Security Considerations
-- Test Strategy
-- Open Questions
+- Constraints / What NOT to Build
+- Key Entities
+- Success Criteria
 - `tasks.md` — discrete, bounded build tasks derived from the spec
 
 ### lightweight

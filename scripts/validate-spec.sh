@@ -29,7 +29,7 @@ extract_frontmatter_field() {
     | sed "s/^${field}:[[:space:]]*//" \
     | sed 's/^"\(.*\)"$/\1/' \
     | sed "s/^'\(.*\)'$/\1/" \
-    | tr -d '[:space:]'
+    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
 pass() {
