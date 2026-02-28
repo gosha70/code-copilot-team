@@ -32,7 +32,8 @@
 │   ├── schema.prisma
 │   └── migrations/
 ├── public/
-└── tests/
+├── tests/
+└── specs/                    # SDD artifacts and lessons learned
 ```
 
 ## Architecture Rules

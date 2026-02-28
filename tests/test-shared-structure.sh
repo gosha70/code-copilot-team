@@ -214,6 +214,8 @@ assert_file_exists "sdd/plan-template.md exists" "$SHARED_DIR/templates/sdd/plan
 assert_nonempty "sdd/plan-template.md non-empty" "$SHARED_DIR/templates/sdd/plan-template.md"
 assert_file_exists "sdd/tasks-template.md exists" "$SHARED_DIR/templates/sdd/tasks-template.md"
 assert_nonempty "sdd/tasks-template.md non-empty" "$SHARED_DIR/templates/sdd/tasks-template.md"
+assert_file_exists "sdd/lessons-learned-template.md exists" "$SHARED_DIR/templates/sdd/lessons-learned-template.md"
+assert_nonempty "sdd/lessons-learned-template.md non-empty" "$SHARED_DIR/templates/sdd/lessons-learned-template.md"
 
 # Verify each template has at least one command file
 for t in "${TEMPLATE_TYPES[@]}"; do

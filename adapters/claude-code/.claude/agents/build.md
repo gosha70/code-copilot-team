@@ -30,11 +30,12 @@ You are a build agent (team lead). Your job is to execute an approved plan by de
 
    **Ralph Loop mode** (single-agent):
    - `ralph-loop.md` — single-agent loop pattern
-4. **Decompose into tasks.** Each task should be bounded (5-30 min), with explicit file ownership.
-5. **Show delegation plan to user** before executing. List agents, tasks, and order.
-6. **Delegate.** Use the Task tool. One task per sub-agent. Explicit context, file lists, and constraints.
-7. **Integrate.** After each agent returns, review output and verify the build.
-8. **Verify.** Run type checker, linter, and dev server after every significant change.
+4. **Consult lessons learned.** If `specs/lessons-learned.md` exists, read it before starting implementation. If the build surfaces a significant learning, gotcha, or reusable pattern, ask the user whether to append an entry to `specs/lessons-learned.md`.
+5. **Decompose into tasks.** Each task should be bounded (5-30 min), with explicit file ownership.
+6. **Show delegation plan to user** before executing. List agents, tasks, and order.
+7. **Delegate.** Use the Task tool. One task per sub-agent. Explicit context, file lists, and constraints.
+8. **Integrate.** After each agent returns, review output and verify the build.
+9. **Verify.** Run type checker, linter, and dev server after every significant change.
 
 ## Delegation Prompt Template
 

@@ -58,6 +58,16 @@ Or use the official `ralph-wiggum` plugin which implements this via a Stop hook 
 
 Each iteration picks the first story where `passes: false`, implements it, runs tests, and flips to `true` if tests pass.
 
+## PRD Source
+
+When `specs/<id>/spec.md` exists for the feature being built, use it as the PRD input:
+
+1. Read `specs/<id>/spec.md` to extract user stories and requirements.
+2. Convert each user story (US1, US2, ...) into a PRD story entry with `passes: false`.
+3. Map functional requirements (FR-xxx) to acceptance checks within each story.
+
+If no `spec.md` exists (e.g., `spec_mode: none`), use the manually provided PRD format above.
+
 ## Progress File
 
 Append-only. Each entry records what happened in one iteration:

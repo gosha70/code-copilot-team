@@ -21,7 +21,8 @@
 ├── custom-nodes/               # Custom n8n nodes (TypeScript)
 ├── credentials/                # Credential type definitions (not secrets!)
 ├── config/                     # Environment configs
-└── tests/
+├── tests/
+└── specs/                    # SDD artifacts and lessons learned
 ```
 
 ## Architecture Rules

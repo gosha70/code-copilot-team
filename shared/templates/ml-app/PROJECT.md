@@ -51,6 +51,7 @@ tests/
 ├── unit/                # Component-level tests
 ├── integration/         # Multi-component tests
 └── e2e/                 # End-to-end tests
+specs/                    # SDD artifacts and lessons learned
 ```
 
 ## Architecture Rules

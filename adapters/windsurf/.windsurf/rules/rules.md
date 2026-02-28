@@ -64,10 +64,12 @@ When setting up a new project, prefer this layout:
   OPERATIONAL_RULES.md — project-specific coding rules
   CONTEXT.md      — session context summaries
   HISTORY.md      — timestamped session log
+/specs            — SDD artifacts and lessons learned
+  lessons-learned.md — cross-project knowledge base
 .gitignore
 ```
 
-doc_internal/ should be in .gitignore for private projects or kept checked in for team-shared context.
+doc_internal/ should be in .gitignore for private projects or kept checked in for team-shared context. specs/ should always be committed — it contains SDD artifacts that bridge Plan and Build phases across sessions.
 
 ---
 

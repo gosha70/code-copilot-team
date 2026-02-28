@@ -42,8 +42,9 @@
 │   │   └── hooks/
 │   ├── codegen.ts
 │   └── package.json
-└── db/
-    └── migration/                  # Flyway migrations (V001__, V002__, ...)
+├── db/
+│   └── migration/                  # Flyway migrations (V001__, V002__, ...)
+└── specs/                          # SDD artifacts and lessons learned
 ```
 
 ## Hexagonal Architecture Rules

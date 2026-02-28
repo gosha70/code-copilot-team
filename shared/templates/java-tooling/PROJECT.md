@@ -55,10 +55,11 @@
 ├── demo-frontend/                   # Generated Next.js app (from OpenAPI spec)
 │   ├── src/
 │   └── package.json
-└── docs/
-    ├── annotation-guide.md          # Developer guide for annotation usage
-    ├── processor-internals.md       # How the annotation processor works
-    └── migration-guide.md           # Upgrading between versions
+├── docs/
+│   ├── annotation-guide.md          # Developer guide for annotation usage
+│   ├── processor-internals.md       # How the annotation processor works
+│   └── migration-guide.md           # Upgrading between versions
+└── specs/                           # SDD artifacts and lessons learned
 ```
 
 ## Module Architecture Rules

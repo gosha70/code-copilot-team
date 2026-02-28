@@ -73,3 +73,12 @@ Cross-cutting issues that arise during multi-agent builds, regardless of stack.
 | Build fails in CI but passes locally | Different runtime versions | Pin versions in project config, use version manager | Align versions, add version config file |
 | Migrations fail in production | Database state diverged from expected | Never edit migrations manually after applying | Roll back, fix locally, push clean migration |
 | Secrets exposed in logs | Logging config values or sensitive data | Sanitize logs, never log secrets | Remove from logs, rotate exposed secrets |
+
+## SDD Workflow
+
+| Issue | Root Cause | Prevention | Solution |
+|-------|-----------|-----------|----------|
+| Build agent skips spec gate | `plan.md` missing `spec_mode` frontmatter | Always emit `plan.md` from Plan phase, even for `spec_mode: none` | Re-run Plan agent to emit properly formatted `plan.md` |
+| Same mistake repeated across projects | No knowledge capture mechanism | Consult and append to `specs/lessons-learned.md` during builds | Review `specs/lessons-learned.md` at session start |
+| Spec has unresolved ambiguities | `[NEEDS CLARIFICATION]` markers left in `spec.md` | Resolve all markers via clarifying questions before completing Plan | Return to Plan phase, resolve markers, re-approve |
+| Lessons-learned file missing | Never initialized from template | Copy `shared/templates/sdd/lessons-learned-template.md` to `specs/lessons-learned.md` during project init | Create the file manually from the template |

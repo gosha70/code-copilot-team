@@ -27,6 +27,7 @@ src/
 prompts/                  # Versioned YAML prompt templates
 eval/                     # Evaluation datasets + harnesses
 tests/
+specs/                    # SDD artifacts and lessons learned
 poc/                      # Streamlit prototypes
 notebooks/                # Exploration
 ```

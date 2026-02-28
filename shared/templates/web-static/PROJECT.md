@@ -19,6 +19,7 @@
 │   ├── blog/
 │   └── pages/
 ├── public/               # Static assets (images, fonts, favicons)
+├── specs/                    # SDD artifacts and lessons learned
 └── astro.config.mjs
 ```
 

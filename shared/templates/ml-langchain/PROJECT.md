@@ -25,6 +25,7 @@ eval/
 ├── evaluators/           # Custom evaluator functions
 └── config.yaml           # Eval run configurations
 tests/
+specs/                    # SDD artifacts and lessons learned
 poc/
 ```
 
