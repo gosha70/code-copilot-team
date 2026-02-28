@@ -4,7 +4,7 @@
 # Creates:
 #   ~/.claude/CLAUDE.md                    Global configuration
 #   ~/.claude/rules/                       Global rules (auto-loaded, 3 files)
-#   ~/.claude/rules-library/               Rules library (on-demand, 10 files)
+#   ~/.claude/rules-library/               Rules library (on-demand, 11 files)
 #   ~/.claude/agents/                      Global agents (5 utility + 4 phase)
 #   ~/.claude/hooks/                       Global hook scripts (verify, notify)
 #   ~/.claude/settings.json                Global settings with hooks wired
@@ -41,7 +41,7 @@ if [[ "${1:-}" == "--sync" ]]; then
         echo "[done] Synced rules to $RULES_TARGET"
     fi
 
-    # Rules library (10 files) — from shared/rules/on-demand/
+    # Rules library (11 files) — from shared/rules/on-demand/
     LIBRARY_SOURCE="$SHARED_DIR/rules/on-demand"
     LIBRARY_TARGET="$CLAUDE_DIR/rules-library"
     mkdir -p "$LIBRARY_TARGET"
@@ -438,7 +438,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 11d. RULES LIBRARY (on-demand, 10 files) — from shared/rules/on-demand/
+# 11d. RULES LIBRARY (on-demand, 11 files) — from shared/rules/on-demand/
 # ══════════════════════════════════════════════════════════════
 
 LIBRARY_SOURCE="$SHARED_DIR/rules/on-demand"
@@ -597,7 +597,7 @@ echo "  - review               — holistic review, tests, integration (opus)"
 echo ""
 echo "Rules installed:"
 echo "  - ~/.claude/rules/          — 3 global rules (auto-loaded every session)"
-echo "  - ~/.claude/rules-library/  — 10 library rules (loaded on demand by agents)"
+echo "  - ~/.claude/rules-library/  — 11 library rules (loaded on demand by agents)"
 echo ""
 echo "Each project now includes:"
 echo "  - CLAUDE.md with stack, conventions, and Agent Team config"

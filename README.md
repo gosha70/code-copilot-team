@@ -35,7 +35,7 @@ Evaluated against the two leading AI coding agent frameworks (February 2026):
 
 ![Configuration Layers](docs/images/configuration-layers.png)
 
-- **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 10 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
+- **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 11 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
 - **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
 - **Hooks** (`~/.claude/hooks/`) — 6 lifecycle scripts: test verification, type checking, auto-format, file protection, context re-injection, and desktop notifications. Auto-detect your project's stack.
 - **8 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
@@ -181,9 +181,10 @@ All tools share the same rules from `shared/rules/always/`. Each adapter formats
 code-copilot-team/
 ├── shared/                              ← Single source of truth
 │   ├── rules/always/                    3 global rules (always loaded)
-│   ├── rules/on-demand/                 10 rules loaded by phase agents
+│   ├── rules/on-demand/                 11 rules loaded by phase agents
 │   ├── docs/                            7 tool-agnostic reference docs
-│   └── templates/                       8 stacks × PROJECT.md + commands/
+│   ├── templates/                       8 stacks × PROJECT.md + commands/
+│   └── templates/sdd/                   3 SDD spec/plan/tasks templates
 ├── adapters/
 │   ├── claude-code/                     agents, hooks, commands, settings, setup.sh
 │   ├── codex/                           AGENTS.md, config.toml, 5 skills, setup.sh
@@ -196,8 +197,8 @@ code-copilot-team/
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    59 hook tests
-│   ├── test-generate.sh                 238 generation + adapter tests
-│   └── test-shared-structure.sh         537 structure + content tests
+│   ├── test-generate.sh                 242 generation + adapter tests
+│   └── test-shared-structure.sh         550 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md

@@ -18,9 +18,21 @@ Every non-trivial task follows three phases with distinct behaviors:
 - Produce a concrete plan: files to touch, interfaces to change, test strategy.
 - Get user approval before moving to Phase 2.
 
+### Plan Approval Gate
+
+Between Phase 1 (Plan) and Phase 2 (Build), a spec gate applies:
+
+- Plan always emits `specs/<feature-id>/plan.md` with `spec_mode` frontmatter.
+- For `full` or `lightweight`: Plan also emits `spec.md`. User approves both before Build.
+- For `none`: User approves `plan.md` only. Build proceeds without a spec gate.
+- All `[NEEDS CLARIFICATION]` markers in `spec.md` must be resolved before Build starts.
+
+See `spec-workflow.md` for risk classification and required sections.
+
 ### Phase 2 — BUILD (Team Delegation)
 - **Model:** Fast (e.g., Sonnet) · **Effort:** Medium
 - Team Lead decomposes the approved plan into discrete tasks.
+- Read `specs/<id>/plan.md` frontmatter to determine `spec_mode` gating behavior.
 - Delegate each task to the appropriate specialist sub-agent via the Task tool.
 - Each sub-agent works on ONE bounded task with explicit inputs/outputs.
 - **Show the delegation plan to the user before executing.** List which agents, what tasks, in what order.

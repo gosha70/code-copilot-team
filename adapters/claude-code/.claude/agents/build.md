@@ -12,12 +12,17 @@ You are a build agent (team lead). Your job is to execute an approved plan by de
 ## What to Do
 
 1. **Read the plan.** Understand the full scope before starting.
-2. **Read rules.** At the start, read from `~/.claude/rules-library/`:
+2. **Read spec_mode.** Read `specs/<id>/plan.md` YAML frontmatter to determine `spec_mode`. Gate behavior:
+   - **full**: Require `spec.md` present with no unresolved `[NEEDS CLARIFICATION]`. Emit `tasks.md` to `specs/<id>/` before delegation. Show `tasks.md` to user for approval.
+   - **lightweight**: Require `spec.md` present with no unresolved `[NEEDS CLARIFICATION]`. Proceed with plan decomposition.
+   - **none**: Proceed directly — no spec artifacts required beyond `plan.md`.
+3. **Read rules.** At the start, read from `~/.claude/rules-library/`:
 
    **Always read:**
    - `phase-workflow.md` — post-phase verification steps
    - `environment-setup.md` — env var patterns and validation
    - `stack-constraints.md` — version pinning and dependency protocol
+   - `spec-workflow.md` — risk classification, spec_mode gating, SDD artifact requirements
 
    **Team delegation mode** (multi-agent):
    - `agent-team-protocol.md` — delegation rules, session boundaries
@@ -25,11 +30,11 @@ You are a build agent (team lead). Your job is to execute an approved plan by de
 
    **Ralph Loop mode** (single-agent):
    - `ralph-loop.md` — single-agent loop pattern
-3. **Decompose into tasks.** Each task should be bounded (5-30 min), with explicit file ownership.
-4. **Show delegation plan to user** before executing. List agents, tasks, and order.
-5. **Delegate.** Use the Task tool. One task per sub-agent. Explicit context, file lists, and constraints.
-6. **Integrate.** After each agent returns, review output and verify the build.
-7. **Verify.** Run type checker, linter, and dev server after every significant change.
+4. **Decompose into tasks.** Each task should be bounded (5-30 min), with explicit file ownership.
+5. **Show delegation plan to user** before executing. List agents, tasks, and order.
+6. **Delegate.** Use the Task tool. One task per sub-agent. Explicit context, file lists, and constraints.
+7. **Integrate.** After each agent returns, review output and verify the build.
+8. **Verify.** Run type checker, linter, and dev server after every significant change.
 
 ## Delegation Prompt Template
 
@@ -63,6 +68,8 @@ After final verification passes, before requesting review:
 - **Fix integration issues yourself** — don't delegate another sub-agent for it.
 - **Don't busy-wait.** Launch independent agents in parallel, work on other tasks while waiting.
 - **Commit gate.** Ask the user before committing. One commit per phase.
+- **Gate on spec_mode.** Read `plan.md` frontmatter before proceeding. Block if `full`/`lightweight` and `spec.md` is missing or has unresolved `[NEEDS CLARIFICATION]`.
+- **Emit tasks.md** to `specs/<id>/` before delegation when `spec_mode` is `full`. Show to user for approval.
 
 ## GCC Memory (optional)
 

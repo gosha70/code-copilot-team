@@ -6,6 +6,22 @@ applyTo: "**"
 
 Standardized steps to complete after each build phase, regardless of stack.
 
+## Spec Artifact Verification
+
+### Post-Plan Verification
+
+After Plan phase completes, verify:
+- `specs/<feature-id>/plan.md` exists with `spec_mode` in YAML frontmatter
+- If `spec_mode` is `full` or `lightweight`: `spec.md` exists in the same directory
+- No unresolved `[NEEDS CLARIFICATION]` markers remain in `spec.md`
+
+### Pre-Build Check
+
+Before Build phase starts, verify based on `spec_mode`:
+- **full**: `spec.md` present, no unresolved `[NEEDS CLARIFICATION]`, `plan.md` approved
+- **lightweight**: `spec.md` present, no unresolved `[NEEDS CLARIFICATION]`, `plan.md` approved
+- **none**: `plan.md` present and approved — no further spec artifacts required
+
 ## Post-Phase Steps (Every Phase)
 
 1. **Type/lint check.** Run the project's type checker and linter. Zero errors required before proceeding.

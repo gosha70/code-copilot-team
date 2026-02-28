@@ -65,6 +65,8 @@ mkdir -p "$CODEX_DIR"
         skill="plan" ;;
       integration-testing)
         skill="review" ;;
+      spec-workflow)
+        skill="plan, build" ;;
       token-efficiency)
         skill="research" ;;
       gcc-protocol)
@@ -142,6 +144,7 @@ for f in "$SHARED/on-demand"/*.md; do
     integration-testing)   glob="**/tests/**,**/test/**,**/*test*,**/*spec*" ;;
     phase-workflow)        glob="**" ;;
     ralph-loop)            glob="**" ;;
+    spec-workflow)            glob="**" ;;
     gcc-protocol)          glob="**" ;;
     clarification-protocol) glob="**" ;;
     agent-team-protocol)   glob="**" ;;

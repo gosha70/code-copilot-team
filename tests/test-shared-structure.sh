@@ -141,6 +141,7 @@ ON_DEMAND_FILES=(
   phase-workflow.md
   ralph-loop.md
   stack-constraints.md
+  spec-workflow.md
   team-lead-efficiency.md
   token-efficiency.md
 )
@@ -151,7 +152,7 @@ for f in "${ON_DEMAND_FILES[@]}"; do
 done
 
 ONDEMAND_COUNT=$(find "$SHARED_DIR/rules/on-demand" -name '*.md' | wc -l | tr -d ' ')
-assert_eq "exactly 10 on-demand rules" "10" "$ONDEMAND_COUNT"
+assert_eq "exactly 11 on-demand rules" "11" "$ONDEMAND_COUNT"
 
 # ══════════════════════════════════════════════════════════════
 # 3. shared/docs/ — tool-agnostic docs exist
@@ -203,7 +204,16 @@ for t in "${TEMPLATE_TYPES[@]}"; do
 done
 
 TEMPLATE_DIR_COUNT=$(find "$SHARED_DIR/templates" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-assert_eq "exactly 8 template dirs" "8" "$TEMPLATE_DIR_COUNT"
+assert_eq "exactly 9 template dirs" "9" "$TEMPLATE_DIR_COUNT"
+
+# Verify SDD templates exist
+assert_dir_exists "sdd dir exists" "$SHARED_DIR/templates/sdd"
+assert_file_exists "sdd/spec-template.md exists" "$SHARED_DIR/templates/sdd/spec-template.md"
+assert_nonempty "sdd/spec-template.md non-empty" "$SHARED_DIR/templates/sdd/spec-template.md"
+assert_file_exists "sdd/plan-template.md exists" "$SHARED_DIR/templates/sdd/plan-template.md"
+assert_nonempty "sdd/plan-template.md non-empty" "$SHARED_DIR/templates/sdd/plan-template.md"
+assert_file_exists "sdd/tasks-template.md exists" "$SHARED_DIR/templates/sdd/tasks-template.md"
+assert_nonempty "sdd/tasks-template.md non-empty" "$SHARED_DIR/templates/sdd/tasks-template.md"
 
 # Verify each template has at least one command file
 for t in "${TEMPLATE_TYPES[@]}"; do
@@ -752,8 +762,8 @@ grep -Eq "rules/always/[[:space:]]+3 global rules" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists 3 global always rules" "$rc"
 
 rc=0
-grep -Eq "rules/on-demand/[[:space:]]+10 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 10 on-demand rules" "$rc"
+grep -Eq "rules/on-demand/[[:space:]]+11 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 11 on-demand rules" "$rc"
 
 rc=0
 grep -Eq "templates/[[:space:]]+8 stacks" "$REPO_DIR/README.md" || rc=1

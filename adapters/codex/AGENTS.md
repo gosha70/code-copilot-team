@@ -125,6 +125,7 @@ corresponding skill to apply them.
 | `integration-testing` | review |
 | `phase-workflow` | build |
 | `ralph-loop` | build |
+| `spec-workflow` | plan, build |
 | `stack-constraints` | build |
 | `team-lead-efficiency` | build (optional team mode) |
 | `token-efficiency` | research |
