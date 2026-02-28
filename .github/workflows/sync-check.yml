@@ -44,6 +44,9 @@ on:
       - 'CONTRIBUTING.md'
       - '.github/workflows/sync-check.yml'
 
+permissions:
+  contents: read
+
 jobs:
   sync-check:
     runs-on: ubuntu-latest
