@@ -117,6 +117,28 @@ assert_contains "clarification-protocol mapped to plan" "$AGENTS_MD" "clarificat
 assert_contains "integration-testing mapped to review" "$AGENTS_MD" "integration-testing.*review"
 assert_contains "token-efficiency mapped to research" "$AGENTS_MD" "token-efficiency.*research"
 
+# ── Section 4b: spec-workflow content in adapter outputs ──
+
+echo ""
+echo "=== spec-workflow in adapter outputs ==="
+
+assert_contains "Codex AGENTS.md: contains spec-workflow reference" "$AGENTS_MD" "spec-workflow"
+assert_contains "Codex AGENTS.md: spec-workflow mapped to plan, build" "$AGENTS_MD" "spec-workflow.*plan, build"
+
+GH_SPEC_WORKFLOW="$ADAPTERS/github-copilot/.github/instructions/spec-workflow.instructions.md"
+assert_contains "GH Copilot spec-workflow.instructions.md: contains spec_mode" "$GH_SPEC_WORKFLOW" "spec_mode"
+assert_contains "GH Copilot spec-workflow.instructions.md: contains full" "$GH_SPEC_WORKFLOW" "full"
+assert_contains "GH Copilot spec-workflow.instructions.md: contains NEEDS CLARIFICATION" "$GH_SPEC_WORKFLOW" "NEEDS CLARIFICATION"
+
+echo ""
+echo "=== specs/ convention in concatenated adapters ==="
+
+assert_contains "Windsurf rules.md contains specs/" "$ADAPTERS/windsurf/.windsurf/rules/rules.md" "specs/"
+assert_contains "Aider CONVENTIONS.md contains specs/" "$ADAPTERS/aider/CONVENTIONS.md" "specs/"
+assert_contains "GH Copilot copilot-instructions.md contains specs/" "$ADAPTERS/github-copilot/.github/copilot-instructions.md" "specs/"
+assert_contains "Codex AGENTS.md contains specs/" "$AGENTS_MD" "specs/"
+assert_contains "Cursor copilot-conventions.mdc contains specs/" "$ADAPTERS/cursor/.cursor/rules/copilot-conventions.mdc" "specs/"
+
 # ── Section 5: Codex adapter structure ────────────────────
 
 echo ""

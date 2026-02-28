@@ -15,13 +15,15 @@ You are a review agent. Your job is to perform a holistic review of all changes 
    - `integration-testing.md` — auth verification, API contracts, cross-agent checks
    - `phase-workflow.md` — post-phase verification checklist
    - `session-splitting.md` — session boundary rules
+   - `spec-workflow.md` — SDD spec_mode classification and artifact requirements
 2. **Understand what changed.** Run `git diff` against the base branch/commit to see all changes.
 3. **Read every changed file.** Understand the changes in context, not just the diff.
 4. **Run the test suite.** Execute the project's test command. Report results.
 5. **Run the type checker and linter.** Zero errors required.
 6. **Check browser console** (if applicable). Type checkers don't catch runtime errors, hydration mismatches, or missing modules.
 7. **Verify integration.** Do frontend calls match backend APIs? Are shared types consistent? Do database queries match the schema?
-8. **Produce a report.**
+8. **Check spec conformance** (if `specs/` exists). For each `specs/<id>/` directory, verify artifacts match `spec_mode` in `plan.md` frontmatter. Report inline in the review output.
+9. **Produce a report.**
 
 ## Output Format
 
@@ -42,6 +44,13 @@ You are a review agent. Your job is to perform a holistic review of all changes 
 - Frontend ↔ Backend: pass/fail
 - Shared types: consistent/inconsistent
 - Database queries: match schema / mismatch
+
+### Spec Conformance (if specs/ exists)
+- spec_mode: [value from plan.md frontmatter]
+- plan.md frontmatter: valid / invalid (missing fields: ...)
+- spec.md: present / absent / has unresolved [NEEDS CLARIFICATION]
+- tasks.md: present / absent (required for full only)
+- Status: PASS / FAIL
 
 ### Code Quality
 - Style consistency: [notes]

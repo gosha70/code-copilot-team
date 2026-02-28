@@ -9,6 +9,7 @@ on:
       - 'scripts/apply-branch-protection.sh'
       - 'scripts/check-github-hardening.sh'
       - 'scripts/harden-github.sh'
+      - 'scripts/validate-spec.sh'
       - 'adapters/**'
       - 'docs/github-hardening-playbook.md'
       - 'CODE_OF_CONDUCT.md'
@@ -17,6 +18,7 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/pull_request_template.md'
       - 'tests/**'
+      - 'specs/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
       - '.github/workflows/sync-check.yml'
@@ -28,6 +30,7 @@ on:
       - 'scripts/apply-branch-protection.sh'
       - 'scripts/check-github-hardening.sh'
       - 'scripts/harden-github.sh'
+      - 'scripts/validate-spec.sh'
       - 'adapters/**'
       - 'docs/github-hardening-playbook.md'
       - 'CODE_OF_CONDUCT.md'
@@ -36,6 +39,7 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/pull_request_template.md'
       - 'tests/**'
+      - 'specs/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
       - '.github/workflows/sync-check.yml'
@@ -64,6 +68,7 @@ jobs:
           bash -n scripts/apply-branch-protection.sh
           bash -n scripts/check-github-hardening.sh
           bash -n scripts/harden-github.sh
+          bash -n scripts/validate-spec.sh
 
       - name: Run generation tests
         run: bash tests/test-generate.sh
@@ -78,3 +83,11 @@ jobs:
           mkdir -p "$HOME"
           bash adapters/claude-code/setup.sh
           bash tests/test-shared-structure.sh
+
+      - name: Validate spec conformance
+        run: |
+          if [[ -d specs/ ]] && ls specs/*/plan.md >/dev/null 2>&1; then
+            bash scripts/validate-spec.sh --all
+          else
+            echo "No spec artifacts found; skipping validation"
+          fi
