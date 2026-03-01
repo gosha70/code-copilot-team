@@ -1,7 +1,7 @@
 <h1>
   <img
     src="/docs/images/CCT_LOGO.png"
-    width="200"
+    width="250"
     alt="Code Copilot Team Logo"
     style="vertical-align: middle; margin-right: 12px; position: relative; top: -2px;" />
   Code Copilot Team
