@@ -1,6 +1,6 @@
 <h1>
   <img
-    src="https://github.com/user-attachments/assets/2c08f6e9-276b-49e5-a9c1-d4ce9c66cba8"
+    src="/docs/images/CCT_LOGO.png"
     width="200"
     alt="Code Copilot Team Logo"
     style="vertical-align: middle; margin-right: 12px; position: relative; top: -2px;" />
