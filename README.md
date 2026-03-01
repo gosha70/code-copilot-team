@@ -1,4 +1,12 @@
-# Code Copilot Team
+<h1>
+  <img
+    src="https://github.com/user-attachments/assets/2c08f6e9-276b-49e5-a9c1-d4ce9c66cba8"
+    width="200"
+    alt="Code Copilot Team Logo"
+    style="vertical-align: middle; margin-right: 12px; position: relative; top: -2px;" />
+  Code Copilot Team
+</h1>
+
 
 Reusable, opinionated configuration for AI-assisted coding with multi-agent team delegation. Ships with templates for ML/AI, Enterprise Java, and Web projects.
 
