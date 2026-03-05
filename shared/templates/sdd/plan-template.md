@@ -5,6 +5,7 @@ risk_category: [security | integration | schema | feature | bug | docs]
 justification: "[Why this spec_mode? One sentence.]"
 status: draft
 date: [YYYY-MM-DD]
+collaboration_mode: single
 ---
 
 <!-- spec_mode: none → stop here. Only frontmatter + Summary paragraph required. -->
@@ -82,3 +83,20 @@ date: [YYYY-MM-DD]
 |-------|-------|
 | [agent/role] | [file list] |
 | [agent/role] | [file list] |
+
+## Collaboration (Dual Mode)
+
+<!-- Only fill this section if collaboration_mode is set to dual. -->
+<!-- Delete this section if collaboration_mode: single. -->
+
+| Field | Value |
+|-------|-------|
+| Subject provider | [e.g., claude] |
+| Peer provider | [e.g., codex] |
+| Review scope | [code \| design \| both] |
+
+Required artifacts (created by peer-review runner):
+- `specs/[feature-id]/collaboration/plan-consult.md`
+- `specs/[feature-id]/collaboration/build-review.md`
+
+See `provider-collaboration-protocol.md` for the full protocol.

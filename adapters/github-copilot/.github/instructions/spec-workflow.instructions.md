@@ -97,5 +97,7 @@ All SDD artifacts for a feature live under `specs/<feature-id>/`.
 | `plan.md`   | all modes              | Plan with `spec_mode` frontmatter and high-level approach |
 | `spec.md`   | `full` and `lightweight` | Software design document with required sections |
 | `tasks.md`  | `full` only            | Discrete, bounded build tasks for delegation |
+| `collaboration/plan-consult.md` | `dual` collaboration_mode only | Peer review of plan phase (see `provider-collaboration-protocol.md`) |
+| `collaboration/build-review.md` | `dual` collaboration_mode only | Peer review of build phase (see `provider-collaboration-protocol.md`) |
 
 The `specs/` directory should be committed to the repository so the Plan and Build phases can operate across session boundaries.

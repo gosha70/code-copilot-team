@@ -25,6 +25,14 @@ Between Phase 1 (Plan) and Phase 2 (Build), a spec gate applies:
 
 See `spec-workflow.md` for risk classification and required sections.
 
+### Collaboration Gate (Dual Mode)
+
+When `collaboration_mode: dual` in `plan.md` frontmatter:
+- After Plan phase: run `/phase-complete` to trigger peer review of the plan. The `plan-consult.md` artifact must exist with `verdict: PASS` before Build starts.
+- After Build phase: run `/phase-complete` to trigger peer review of the build. The `build-review.md` artifact must exist with `verdict: PASS` before Review starts.
+
+See `provider-collaboration-protocol.md` for the full protocol.
+
 ### Phase 2 — BUILD (Team Delegation)
 - **Model:** Fast (e.g., Sonnet) · **Effort:** Medium
 - Team Lead decomposes the approved plan into discrete tasks.
@@ -41,6 +49,7 @@ See `spec-workflow.md` for risk classification and required sections.
 - Review all changes holistically: correctness, consistency, style, test coverage.
 - Run full test suite, verify no regressions.
 - **Check browser console for runtime errors** — type checkers don't catch everything.
+- If `collaboration_mode: dual`: verify collaboration artifacts exist with `verdict: PASS` and `blocking_findings_open: 0`.
 - Summarize what changed and any remaining concerns.
 
 ## Why Planning Must Not Delegate

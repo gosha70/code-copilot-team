@@ -126,6 +126,7 @@ corresponding skill to apply them.
 | `gcc-protocol` | all (optional) |
 | `integration-testing` | review |
 | `phase-workflow` | build |
+| `provider-collaboration-protocol` | — |
 | `ralph-loop` | build |
 | `spec-workflow` | plan, build |
 | `stack-constraints` | build |

@@ -39,3 +39,5 @@
 - [ ] Linter: 0 errors
 - [ ] All existing tests pass
 - [ ] No [NEEDS CLARIFICATION] markers remain in spec.md
+- [ ] Collaboration artifacts present (if `collaboration_mode: dual`): `plan-consult.md` and `build-review.md`
+- [ ] Collaboration verdict: `PASS`, `blocking_findings_open`: 0
