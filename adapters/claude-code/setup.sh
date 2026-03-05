@@ -96,6 +96,30 @@ if [[ "${1:-}" == "--gcc" ]]; then
     exit 0
 fi
 
+# ══════════════════════════════════════════════════════════════
+# --playwright: install Playwright CLI for browser automation (optional)
+# ══════════════════════════════════════════════════════════════
+
+if [[ "${1:-}" == "--playwright" ]]; then
+    echo "Installing Playwright CLI for browser automation..."
+
+    if command -v npm &>/dev/null; then
+        npm install -g @playwright/cli@latest
+        echo "[done] Playwright CLI installed globally"
+        playwright-cli install --skills 2>/dev/null && echo "[done] Playwright skills installed" \
+            || echo "[info] Skills install skipped (run 'playwright-cli install --skills' manually)"
+    else
+        echo "[WARN] npm not found. Install Playwright CLI manually:"
+        echo "       npm install -g @playwright/cli@latest"
+        echo "       playwright-cli install --skills"
+    fi
+
+    echo ""
+    echo "Playwright CLI setup complete."
+    echo "Usage: playwright-cli open <url>, playwright-cli click, playwright-cli screenshot"
+    exit 0
+fi
+
 echo "============================================"
 echo "  Claude Code Project Template Setup v2"
 echo "  (with Agent Team configurations)"

@@ -60,6 +60,19 @@ npx lighthouse http://localhost:4321 --view   # performance audit
 npx playwright test          # e2e/visual tests (if configured)
 ```
 
+## Browser Automation (Playwright CLI)
+
+Playwright CLI enables Claude to interact with your running site for debugging and visual regression testing.
+
+```bash
+# One-time setup (from code-copilot-team repo)
+bash adapters/claude-code/setup.sh --playwright
+
+# Or manually
+npm install -g @playwright/cli@latest
+playwright-cli install --skills
+```
+
 ## Agent Team
 
 ### Roles

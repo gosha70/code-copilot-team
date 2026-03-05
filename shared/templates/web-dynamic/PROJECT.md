@@ -85,6 +85,19 @@ npx playwright test --project=smoke      # quick smoke tests only
 npm run test                             # unit + component tests
 ```
 
+## Browser Automation (Playwright CLI)
+
+Playwright CLI enables Claude to interact with your running app for debugging, visual testing, and e2e validation.
+
+```bash
+# One-time setup (from code-copilot-team repo)
+bash adapters/claude-code/setup.sh --playwright
+
+# Or manually
+npm install -g @playwright/cli@latest
+playwright-cli install --skills
+```
+
 ## Agent Team
 
 ### Roles

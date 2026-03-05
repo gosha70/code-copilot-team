@@ -47,6 +47,39 @@ claude mcp add --scope project --transport stdio filesystem -- \
 
 **When to use:** When Claude needs access to files outside the project root (e.g., shared config, monorepo siblings).
 
+### Playwright (Browser Automation)
+
+**Purpose:** Browser automation for debugging, visual testing, and e2e validation in web projects.
+
+**Recommended: Playwright CLI** (token-efficient, designed for coding agents with shell access):
+
+```bash
+# Install (or use setup.sh --playwright)
+npm install -g @playwright/cli@latest
+playwright-cli install --skills
+
+# Usage
+playwright-cli open http://localhost:<port>
+playwright-cli click "Login button"
+playwright-cli screenshot
+```
+
+**Alternative: Playwright MCP** (for Docker/CI environments without shell access):
+
+```bash
+claude mcp add --scope project --transport stdio playwright -- \
+  npx -y @playwright/mcp@latest --headless
+```
+
+Or via Docker:
+
+```bash
+claude mcp add --scope project --transport stdio playwright -- \
+  docker run -i --rm --init mcr.microsoft.com/playwright/mcp
+```
+
+**When to use:** Web projects (`web-static`, `web-dynamic`, any project with a browser UI). Use CLI for local development, MCP for containerized environments.
+
 ## When to Use MCP vs Built-in Tools
 
 | Capability | Built-in Tool | MCP Server | Prefer |
@@ -57,13 +90,14 @@ claude mcp add --scope project --transport stdio filesystem -- \
 | Database schema | Bash(psql ...) | PostgreSQL MCP | **MCP** (safer, structured) |
 | Session memory | Auto-memory files | Aline | **MCP** (richer context) |
 | Files outside project | Bash(cat ...) | Filesystem MCP | **MCP** (scoped, auditable) |
+| Browser automation | Bash(npx playwright test) | Playwright CLI / MCP | **CLI** (token-efficient) |
 
 ## Scope Guidance
 
 | Scope | Meaning | Use For |
 |---|---|---|
 | `--scope user` | Available in all projects | Aline, Context7 (general-purpose tools) |
-| `--scope project` | Only available in this project | PostgreSQL MCP, Filesystem MCP (project-specific) |
+| `--scope project` | Only available in this project | PostgreSQL MCP, Filesystem MCP, Playwright MCP (project-specific) |
 
 ## Managing MCP Servers
 

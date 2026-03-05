@@ -67,41 +67,46 @@ done &
 
 ---
 
-## 3. MCP-Based Console Inspection
+## 3. Browser Debugging with Playwright
 
-Use the [Playwright MCP server](https://github.com/anthropics/mcp-playwright) for browser-level debugging.
+Use [Playwright CLI](https://github.com/microsoft/playwright-cli) for browser-level debugging. It's token-efficient and works natively with Claude Code's shell access.
 
 ### Setup
 
-Add to your `.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["@anthropic-ai/mcp-playwright"]
-    }
-  }
-}
+```bash
+# One-time install (or use setup.sh --playwright)
+npm install -g @playwright/cli@latest
+playwright-cli install --skills
 ```
 
 ### Debugging patterns
 
-| Pattern | MCP Tool | What it reveals |
+| Pattern | Command | What it reveals |
 |---|---|---|
-| Console errors | `browser_console` | Runtime JS errors, failed assertions, React warnings |
-| DOM state | `browser_snapshot` | Current page structure, visibility, accessibility tree |
-| Network failures | `browser_network` | Failed API calls, CORS errors, 4xx/5xx responses |
-| Screenshots | `browser_screenshot` | Visual rendering issues, layout bugs, responsive breakpoints |
+| Open page | `playwright-cli open <url>` | Navigate to the page, start a session |
+| Console errors | `playwright-cli console` | Runtime JS errors, React warnings |
+| DOM state | `playwright-cli snapshot` | Current page structure, accessibility tree |
+| Screenshots | `playwright-cli screenshot` | Visual rendering issues, layout bugs |
+| Click/interact | `playwright-cli click "Button text"` | Trigger UI actions, test flows |
 
 ### Workflow
 
 1. Start the dev server (`npm run dev` or equivalent)
-2. Use `browser_navigate` to open the page
-3. Use `browser_console` to check for errors
-4. Use `browser_snapshot` to inspect DOM state
+2. `playwright-cli open http://localhost:<port>`
+3. `playwright-cli snapshot` to inspect DOM state
+4. `playwright-cli screenshot` to capture visual state
 5. Fix issues and repeat
+
+### Alternative: Playwright MCP (Docker/CI)
+
+For containerized environments without shell access, use [Playwright MCP](https://github.com/microsoft/playwright-mcp):
+
+```bash
+claude mcp add --scope project --transport stdio playwright -- \
+  npx -y @playwright/mcp@latest --headless
+```
+
+See [recommended-mcp-servers.md](recommended-mcp-servers.md) for full setup options including Docker.
 
 This is especially useful for debugging UI issues that don't surface in test output.
 

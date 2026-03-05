@@ -35,10 +35,14 @@ show_help() {
 claude-code - Smart Claude Code session launcher
 
 USAGE:
-    claude-code [path]                  Start/resume Claude in tmux (default: .)
-    claude-code init <type> [path]      Initialize project from template
-    claude-code list                    List available templates
-    claude-code help                    Show this help
+    claude-code [path]                              Start/resume Claude in tmux (default: .)
+    claude-code init <type> [path] [--playwright]   Initialize project from template
+    claude-code playwright [path]                   Install Playwright CLI skills into a project
+    claude-code list                                List available templates
+    claude-code help                                Show this help
+
+OPTIONS:
+    --playwright    With 'init': install Playwright CLI skills into the new project
 
 PROJECT TYPES:
     ml-rag              Python RAG + Knowledge Graph
@@ -121,6 +125,19 @@ init_project() {
         cp -r "$TEMPLATES_DIR/$type/commands/"* "$target/.claude/commands/" 2>/dev/null || true
     fi
 
+    # Install Playwright CLI skills for web templates if --playwright flag is set
+    if [[ "$PLAYWRIGHT" == "1" ]]; then
+        if command -v playwright-cli &>/dev/null; then
+            (cd "$target" && playwright-cli install --skills 2>/dev/null) \
+                && echo "[done] Playwright CLI skills installed" \
+                || echo "[WARN] Playwright skills install failed (run 'playwright-cli install --skills' in project)"
+        else
+            echo "[WARN] playwright-cli not found. Install first:"
+            echo "       npm install -g @playwright/cli@latest"
+            echo "       Then run: cd $target && playwright-cli install --skills"
+        fi
+    fi
+
     echo "Initialized '$type' project at $target"
     echo ""
     echo "Created files:"
@@ -188,19 +205,48 @@ start_session() {
 
 # ── Main ─────────────────────────────────────────────────────
 
+PLAYWRIGHT=0
+
 case "${1:-}" in
     init)
-        if [[ -z "${2:-}" ]]; then
+        shift
+        # Parse --playwright flag
+        ARGS=()
+        for arg in "$@"; do
+            if [[ "$arg" == "--playwright" ]]; then
+                PLAYWRIGHT=1
+            else
+                ARGS+=("$arg")
+            fi
+        done
+        if [[ ${#ARGS[@]} -eq 0 ]]; then
             echo "Error: Missing project type."
-            echo "Usage: claude-code init <type> [path]"
+            echo "Usage: claude-code init <type> [path] [--playwright]"
             echo ""
             list_templates
             exit 1
         fi
-        init_project "$2" "${3:-}"
+        init_project "${ARGS[0]}" "${ARGS[1]:-}"
         ;;
     list)
         list_templates
+        ;;
+    playwright)
+        target="${2:-.}"
+        if [[ ! -d "$target" ]]; then
+            echo "Error: Directory '$target' does not exist."
+            exit 1
+        fi
+        target=$(cd "$target" && pwd)
+        if command -v playwright-cli &>/dev/null; then
+            (cd "$target" && playwright-cli install --skills) \
+                && echo "[done] Playwright CLI skills installed in $target" \
+                || echo "[FAIL] Playwright skills install failed"
+        else
+            echo "Error: playwright-cli not found."
+            echo "Install first: npm install -g @playwright/cli@latest"
+            exit 1
+        fi
         ;;
     help|-h|--help)
         show_help
