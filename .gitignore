@@ -43,6 +43,9 @@ dist/
 npm-debug.log*
 yarn-debug.log*
 
+# Playwright CLI skills (per-project install artifact)
+.claude/skills/
+
 # Generated docs (keep source only)
 README.html
 /doc_internal
