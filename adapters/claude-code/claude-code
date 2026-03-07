@@ -42,7 +42,10 @@ USAGE:
     claude-code help                                Show this help
 
 OPTIONS:
-    --playwright    With 'init': install Playwright CLI skills into the new project
+    --playwright         With 'init': install Playwright CLI skills into the new project
+    --peer-review [name] Enable peer review (optional: specify provider)
+    --peer-review-off    Disable peer review for this session
+    --peer-review-scope <scope>  Review scope: code|design|both (default: both)
 
 PROJECT TYPES:
     ml-rag              Python RAG + Knowledge Graph
@@ -50,6 +53,7 @@ PROJECT TYPES:
     ml-langchain        Python LangChain/LangGraph/LangSmith
     ml-n8n              Python + n8n workflow automation
     java-enterprise     Full-stack Java (Spring Boot + React + GraphQL)
+    java-tooling        Java tooling (Annotation Processors, Gradle Plugins)
     web-static          Static site (Astro/Next.js/Hugo)
     web-dynamic         Dynamic web app (Next.js/Remix full-stack)
 
@@ -178,6 +182,9 @@ start_session() {
         [[ "$dirty" -gt 0 ]] && echo "  Status:  $dirty uncommitted change(s)"
     fi
     [[ -f "$project_dir/CLAUDE.md" ]] && echo "  Config:  CLAUDE.md found" || echo "  Config:  No CLAUDE.md (run 'claude-code init <type>')"
+    if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
+        echo "  Peer:    ${PEER_PROVIDER:-profile default} (scope: $PEER_SCOPE)"
+    fi
     echo "──────────────────────────────────────"
     echo ""
 
@@ -188,24 +195,72 @@ start_session() {
 
     # Check if session already exists
     if tmux has-session -t "$session_name" 2>/dev/null; then
-        echo "Session '$session_name' exists. Attaching..."
-        echo "  Log: $log_file"
-        # Start logging on the existing session (append to new log file)
-        tmux pipe-pane -t "$session_name" -o "sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> '$log_file'"
-        tmux attach-session -t "$session_name"
-    else
-        echo "Creating session '$session_name'..."
-        echo "  Log: $log_file"
-        # Create detached, set up logging, then attach
-        tmux new-session -d -s "$session_name" -c "$project_dir" "$CLAUDE_CMD"
-        tmux pipe-pane -t "$session_name" -o "sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> '$log_file'"
-        tmux attach-session -t "$session_name"
+        # If peer-review flags changed, recreate the session so env vars are injected
+        if [[ -n "$PEER_REVIEW_ENABLED" ]]; then
+            echo "Recreating session '$session_name' with peer-review config..."
+            tmux kill-session -t "$session_name" 2>/dev/null
+        else
+            echo "Session '$session_name' exists. Attaching..."
+            echo "  Log: $log_file"
+            # Start logging on the existing session (append to new log file)
+            tmux pipe-pane -t "$session_name" -o "sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> '$log_file'"
+            tmux attach-session -t "$session_name"
+            return
+        fi
     fi
+
+    echo "Creating session '$session_name'..."
+    echo "  Log: $log_file"
+    # Build the claude command — inject peer-review env vars so Claude and hooks inherit them
+    local run_cmd="$CLAUDE_CMD"
+    if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
+        run_cmd="env CCT_PEER_REVIEW_ENABLED=true CCT_PEER_PROVIDER='${PEER_PROVIDER:-}' CCT_PEER_TRIGGER=phase-complete CCT_PEER_REVIEW_SCOPE='$PEER_SCOPE' CCT_SESSION_START='$(date -u +%Y-%m-%dT%H:%M:%SZ)' $CLAUDE_CMD"
+    fi
+    # Create detached, set up logging, then attach
+    tmux new-session -d -s "$session_name" -c "$project_dir" "$run_cmd"
+    tmux pipe-pane -t "$session_name" -o "sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> '$log_file'"
+    tmux attach-session -t "$session_name"
 }
 
 # ── Main ─────────────────────────────────────────────────────
 
+# ── Flag parsing ─────────────────────────────────────────────
 PLAYWRIGHT=0
+PEER_REVIEW_ENABLED=""
+PEER_PROVIDER=""
+PEER_SCOPE="both"
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --peer-review)
+            PEER_REVIEW_ENABLED="true"
+            # Next arg might be provider name (not starting with --)
+            if [[ -n "${2:-}" && "${2:0:2}" != "--" ]]; then
+                PEER_PROVIDER="$2"
+                shift
+            fi
+            shift
+            ;;
+        --peer-review-off)
+            PEER_REVIEW_ENABLED="false"
+            shift
+            ;;
+        --peer-review-scope)
+            PEER_SCOPE="${2:-both}"
+            shift 2
+            ;;
+        --playwright)
+            PLAYWRIGHT=1
+            shift
+            ;;
+        *)
+            POSITIONAL+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 case "${1:-}" in
     init)

@@ -87,6 +87,18 @@ if [[ -d ".gcc" ]]; then
   fi
 fi
 
+# --- Peer review context ---
+if [[ "${CCT_PEER_REVIEW_ENABLED:-false}" == "true" ]]; then
+  PEER_INFO="enabled"
+  if [[ -n "${CCT_PEER_PROVIDER:-}" ]]; then
+    PEER_INFO="$PEER_INFO (provider: ${CCT_PEER_PROVIDER})"
+  else
+    PEER_INFO="$PEER_INFO (provider: profile default)"
+  fi
+  PEER_INFO="$PEER_INFO, scope: ${CCT_PEER_REVIEW_SCOPE:-both}"
+  OUTPUT="${OUTPUT}## Peer Review\n- Status: ${PEER_INFO}\n- Trigger: /phase-complete command\n\n"
+fi
+
 # --- Output if we found anything ---
 if [[ -n "$OUTPUT" ]]; then
   echo "--- Session Context (auto-injected) ---"

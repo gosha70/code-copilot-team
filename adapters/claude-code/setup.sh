@@ -423,6 +423,7 @@ if [[ -d "$HOOKS_SOURCE" ]]; then
     cp "$HOOKS_SOURCE/auto-format.sh" "$HOOKS_TARGET/auto-format.sh"
     cp "$HOOKS_SOURCE/protect-files.sh" "$HOOKS_TARGET/protect-files.sh"
     cp "$HOOKS_SOURCE/reinject-context.sh" "$HOOKS_TARGET/reinject-context.sh"
+    cp "$HOOKS_SOURCE/peer-review-on-stop.sh" "$HOOKS_TARGET/peer-review-on-stop.sh"
     chmod +x "$HOOKS_TARGET"/*.sh
     echo "[done] Installed hooks to $HOOKS_TARGET"
 else
@@ -485,7 +486,10 @@ SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 HOOKS_CONFIG='{
   "env": {
     "HOOK_EDIT_BLOCK": "true",
-    "HOOK_STOP_BLOCK": "false"
+    "HOOK_STOP_BLOCK": "false",
+    "CCT_PEER_REVIEW_ENABLED": "false",
+    "CCT_PEER_PROVIDER": "",
+    "CCT_PEER_TRIGGER": "phase-complete"
   },
   "hooks": {
     "PreToolUse": [
@@ -508,6 +512,11 @@ HOOKS_CONFIG='{
             "type": "command",
             "command": "~/.claude/hooks/verify-on-stop.sh",
             "timeout": 180000
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/peer-review-on-stop.sh",
+            "timeout": 300000
           }
         ]
       }
@@ -577,6 +586,37 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
+# 13. PROVIDER PROFILE
+# ══════════════════════════════════════════════════════════════
+
+PROVIDER_DIR="$HOME/.code-copilot-team"
+PROVIDER_FILE="$PROVIDER_DIR/providers.toml"
+
+if [[ ! -f "$PROVIDER_FILE" ]]; then
+    mkdir -p "$PROVIDER_DIR"
+    cp "$SHARED_DIR/templates/provider-profile-template.toml" "$PROVIDER_FILE"
+    echo "[done] Created provider profile at $PROVIDER_FILE"
+else
+    echo "[skip] Provider profile already exists at $PROVIDER_FILE"
+fi
+
+# ══════════════════════════════════════════════════════════════
+# 14. LAUNCHER
+# ══════════════════════════════════════════════════════════════
+
+LAUNCHER_SOURCE="$SCRIPT_DIR/claude-code"
+LAUNCHER_TARGET="$HOME/.local/bin/claude-code"
+
+if [[ -f "$LAUNCHER_SOURCE" ]]; then
+    mkdir -p "$HOME/.local/bin"
+    cp "$LAUNCHER_SOURCE" "$LAUNCHER_TARGET"
+    chmod +x "$LAUNCHER_TARGET"
+    echo "[done] Installed launcher to $LAUNCHER_TARGET"
+else
+    echo "[skip] Launcher not found at $LAUNCHER_SOURCE"
+fi
+
+# ══════════════════════════════════════════════════════════════
 # SUMMARY
 # ══════════════════════════════════════════════════════════════
 
@@ -604,6 +644,7 @@ echo "  - verify-after-edit.sh — runs type checker after source edits"
 echo "  - auto-format.sh       — runs formatter after source edits"
 echo "  - protect-files.sh     — blocks edits to .env, *.lock, .git/, credentials"
 echo "  - reinject-context.sh  — re-injects project context on session start"
+echo "  - peer-review-on-stop.sh — triggers peer review on phase completion"
 echo "  - notify.sh            — desktop notifications when Claude needs input"
 echo ""
 echo "Custom agents installed:"
@@ -621,7 +662,7 @@ echo "  - review               — holistic review, tests, integration (opus)"
 echo ""
 echo "Rules installed:"
 echo "  - ~/.claude/rules/          — 3 global rules (auto-loaded every session)"
-echo "  - ~/.claude/rules-library/  — 11 library rules (loaded on demand by agents)"
+echo "  - ~/.claude/rules-library/  — 12 library rules (loaded on demand by agents)"
 echo ""
 echo "Each project now includes:"
 echo "  - CLAUDE.md with stack, conventions, and Agent Team config"

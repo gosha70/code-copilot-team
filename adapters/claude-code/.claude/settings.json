@@ -1,7 +1,10 @@
 {
   "env": {
     "HOOK_EDIT_BLOCK": "true",
-    "HOOK_STOP_BLOCK": "false"
+    "HOOK_STOP_BLOCK": "false",
+    "CCT_PEER_REVIEW_ENABLED": "false",
+    "CCT_PEER_PROVIDER": "",
+    "CCT_PEER_TRIGGER": "phase-complete"
   },
   "hooks": {
     "PreToolUse": [
@@ -24,6 +27,11 @@
             "type": "command",
             "command": "~/.claude/hooks/verify-on-stop.sh",
             "timeout": 180000
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/peer-review-on-stop.sh",
+            "timeout": 300000
           }
         ]
       }

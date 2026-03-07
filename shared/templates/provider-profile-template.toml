@@ -1,0 +1,29 @@
+# Provider Profile — ~/.code-copilot-team/providers.toml
+#
+# Defines peer providers for cross-copilot review.
+# See provider-collaboration-protocol.md for the full protocol.
+#
+# Each provider needs:
+#   command      — command template ({review_request} = review file path, {model} = optional model)
+#   timeout_sec  — max execution time in seconds
+#   healthcheck  — command to verify provider availability
+#   version      — provider type label (cli, local, api)
+
+[defaults]
+# Map subject providers to their default peer reviewer.
+# Used when --peer-review is invoked without an explicit provider name.
+peer_for.claude = "codex"
+peer_for.codex = "claude"
+
+[providers.codex]
+command = "codex --quiet --prompt-file {review_request}"
+timeout_sec = 300
+healthcheck = "codex --version"
+version = "cli"
+
+[providers.ollama]
+command = "ollama run {model} < {review_request}"
+timeout_sec = 600
+healthcheck = "ollama --version"
+model = "llama3"
+version = "local"
