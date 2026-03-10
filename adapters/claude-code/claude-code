@@ -235,8 +235,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --peer-review)
             PEER_REVIEW_ENABLED="true"
-            # Next arg might be provider name (not starting with --)
-            if [[ -n "${2:-}" && "${2:0:2}" != "--" ]]; then
+            # Next arg is provider name only if it's not a flag, not a path, and not an existing directory
+            if [[ -n "${2:-}" && "${2:0:2}" != "--" && "${2:0:1}" != "/" && "${2:0:2}" != "./" && "${2:0:1}" != "~" && "$2" != */* && ! -d "$2" ]]; then
                 PEER_PROVIDER="$2"
                 shift
             fi

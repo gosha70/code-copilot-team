@@ -31,7 +31,8 @@ See `spec-workflow.md` for risk classification and required sections.
 
 ### Collaboration Gate (Dual Mode)
 
-When `collaboration_mode: dual` in `plan.md` frontmatter:
+When `collaboration_mode: dual` in `plan.md` frontmatter **OR** the environment variable `CCT_PEER_REVIEW_ENABLED` is `true`:
+- **Plan agent**: set `collaboration_mode: dual` in `plan.md` frontmatter if `CCT_PEER_REVIEW_ENABLED=true` is detected in the environment.
 - After Plan phase: run `/phase-complete` to trigger peer review of the plan. The `plan-consult.md` artifact must exist with `verdict: PASS` before Build starts.
 - After Build phase: run `/phase-complete` to trigger peer review of the build. The `build-review.md` artifact must exist with `verdict: PASS` before Review starts.
 

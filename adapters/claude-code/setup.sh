@@ -431,6 +431,22 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
+# 11a. GLOBAL COMMANDS
+# ══════════════════════════════════════════════════════════════
+
+COMMANDS_SOURCE="$SCRIPT_DIR/.claude/commands"
+COMMANDS_TARGET="$CLAUDE_DIR/commands"
+
+mkdir -p "$COMMANDS_TARGET"
+
+if [[ -d "$COMMANDS_SOURCE" ]]; then
+    cp "$COMMANDS_SOURCE"/*.md "$COMMANDS_TARGET/" 2>/dev/null || true
+    echo "[done] Installed commands to $COMMANDS_TARGET"
+else
+    echo "[skip] Command files not found at $COMMANDS_SOURCE"
+fi
+
+# ══════════════════════════════════════════════════════════════
 # 11b. GLOBAL AGENTS
 # ══════════════════════════════════════════════════════════════
 
@@ -572,7 +588,34 @@ elif command -v jq &>/dev/null; then
     # Check if hooks key already exists
     HAS_HOOKS=$(jq 'has("hooks")' "$SETTINGS_FILE" 2>/dev/null)
     if [[ "$HAS_HOOKS" == "true" ]]; then
-        echo "[skip] $SETTINGS_FILE already has hooks configured (not overwriting)"
+        # Merge missing env defaults and hook entries into existing settings
+        UPDATED="$SETTINGS_FILE"
+        CHANGED=0
+
+        # Add missing CCT_* env vars
+        for VAR_KEY in CCT_PEER_REVIEW_ENABLED CCT_PEER_PROVIDER CCT_PEER_TRIGGER; do
+            HAS_VAR=$(jq --arg k "$VAR_KEY" '.env | has($k)' "$UPDATED" 2>/dev/null || echo "false")
+            if [[ "$HAS_VAR" != "true" ]]; then
+                DEFAULT_VAL=$(echo "$HOOKS_CONFIG" | jq -r --arg k "$VAR_KEY" '.env[$k]')
+                CONTENT=$(jq --arg k "$VAR_KEY" --arg v "$DEFAULT_VAL" '.env[$k] = $v' "$UPDATED")
+                echo "$CONTENT" > "$UPDATED"
+                CHANGED=1
+            fi
+        done
+
+        # Add peer-review-on-stop.sh to Stop hooks if missing
+        HAS_PEER_HOOK=$(jq '[.hooks.Stop[]?.hooks[]? | select(.command == "~/.claude/hooks/peer-review-on-stop.sh")] | length > 0' "$UPDATED" 2>/dev/null || echo "false")
+        if [[ "$HAS_PEER_HOOK" != "true" ]]; then
+            CONTENT=$(jq '.hooks.Stop[0].hooks += [{"type":"command","command":"~/.claude/hooks/peer-review-on-stop.sh","timeout":300000}]' "$UPDATED")
+            echo "$CONTENT" > "$UPDATED"
+            CHANGED=1
+        fi
+
+        if [[ $CHANGED -eq 1 ]]; then
+            echo "[done] Updated $SETTINGS_FILE with missing peer-review config"
+        else
+            echo "[skip] $SETTINGS_FILE already up to date"
+        fi
     else
         # Add hooks key, preserve everything else (permissions, etc.)
         EXISTING=$(cat "$SETTINGS_FILE")
@@ -617,6 +660,31 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
+# 15. PEER REVIEW SCRIPTS
+# ══════════════════════════════════════════════════════════════
+
+REPO_SCRIPTS="$SCRIPT_DIR/../../scripts"
+BIN_TARGET="$HOME/.local/bin"
+
+mkdir -p "$BIN_TARGET"
+
+if [[ -f "$REPO_SCRIPTS/peer-review-runner.sh" ]]; then
+    cp "$REPO_SCRIPTS/peer-review-runner.sh" "$BIN_TARGET/peer-review-runner.sh"
+    chmod +x "$BIN_TARGET/peer-review-runner.sh"
+    echo "[done] Installed peer-review-runner.sh to $BIN_TARGET"
+else
+    echo "[skip] peer-review-runner.sh not found at $REPO_SCRIPTS"
+fi
+
+if [[ -f "$REPO_SCRIPTS/providers-health.sh" ]]; then
+    cp "$REPO_SCRIPTS/providers-health.sh" "$BIN_TARGET/providers-health.sh"
+    chmod +x "$BIN_TARGET/providers-health.sh"
+    echo "[done] Installed providers-health.sh to $BIN_TARGET"
+else
+    echo "[skip] providers-health.sh not found at $REPO_SCRIPTS"
+fi
+
+# ══════════════════════════════════════════════════════════════
 # SUMMARY
 # ══════════════════════════════════════════════════════════════
 
@@ -647,6 +715,9 @@ echo "  - reinject-context.sh  — re-injects project context on session start"
 echo "  - peer-review-on-stop.sh — triggers peer review on phase completion"
 echo "  - notify.sh            — desktop notifications when Claude needs input"
 echo ""
+echo "Global commands installed:"
+echo "  - /phase-complete      — signal phase completion and trigger peer review"
+echo ""
 echo "Custom agents installed:"
 echo "  Utility agents:"
 echo "  - code-simplifier      — post-build code cleanup (read + edit)"
@@ -659,6 +730,10 @@ echo "  - research             — codebase exploration, no code changes (opus)"
 echo "  - plan                 — clarification + implementation plans (opus)"
 echo "  - build                — team lead, delegates + integrates (sonnet)"
 echo "  - review               — holistic review, tests, integration (opus)"
+echo ""
+echo "Peer review scripts installed:"
+echo "  - peer-review-runner.sh  — executes peer provider and writes artifacts"
+echo "  - providers-health.sh    — checks availability of configured providers"
 echo ""
 echo "Rules installed:"
 echo "  - ~/.claude/rules/          — 3 global rules (auto-loaded every session)"

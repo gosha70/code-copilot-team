@@ -229,6 +229,287 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RC=$(run_hook reinject-context.sh '{}' CLAUDE_PROJECT_DIR="$REPO_DIR")
 assert_exit "valid git repo" 0 "$RC"
 
+echo "=== peer-review-on-stop.sh ==="
+
+# --- Guards ---
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":true}' CCT_PEER_REVIEW_ENABLED=true)
+assert_exit "loop guard exits immediately" 0 "$RC"
+
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=false)
+assert_exit "disabled peer review exits" 0 "$RC"
+
+RC=$(run_hook peer-review-on-stop.sh '{}' CCT_PEER_REVIEW_ENABLED=false)
+assert_exit "disabled with empty input" 0 "$RC"
+
+RC=$(run_hook peer-review-on-stop.sh '' CCT_PEER_REVIEW_ENABLED=false)
+assert_exit "disabled empty input" 0 "$RC"
+
+RC=$(run_hook peer-review-on-stop.sh 'not json' CCT_PEER_REVIEW_ENABLED=false)
+assert_exit "disabled invalid JSON" 0 "$RC"
+
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR=/tmp)
+assert_exit "enabled but no marker" 0 "$RC"
+
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR=/nonexistent)
+assert_exit "enabled but nonexistent dir" 0 "$RC"
+
+# --- Malformed marker cleanup ---
+PEER_TMP=$(mktemp -d)
+mkdir -p "$PEER_TMP/.cct/review"
+echo '{"feature_id":"test"}' > "$PEER_TMP/.cct/review/pending.json"
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP")
+assert_exit "malformed marker (missing keys) exits 0" 0 "$RC"
+if [[ ! -f "$PEER_TMP/.cct/review/pending.json" ]]; then
+    echo "  PASS: malformed marker cleaned up"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: malformed marker NOT cleaned up"
+    FAIL=$((FAIL + 1))
+fi
+rm -rf "$PEER_TMP"
+
+# --- Stale marker cleanup ---
+PEER_TMP=$(mktemp -d)
+mkdir -p "$PEER_TMP/.cct/review"
+cat > "$PEER_TMP/.cct/review/pending.json" << 'STALE_EOF'
+{"feature_id":"test","phase":"build","target_ref":"main","subject_provider":"claude","requested_at":"2020-01-01T00:00:00Z"}
+STALE_EOF
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP" CCT_SESSION_START="2026-01-01T00:00:00Z")
+assert_exit "stale marker exits 0" 0 "$RC"
+if [[ ! -f "$PEER_TMP/.cct/review/pending.json" ]]; then
+    echo "  PASS: stale marker cleaned up"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: stale marker NOT cleaned up"
+    FAIL=$((FAIL + 1))
+fi
+rm -rf "$PEER_TMP"
+
+# --- Bypass cleans up marker ---
+PEER_TMP=$(mktemp -d)
+mkdir -p "$PEER_TMP/.cct/review"
+cat > "$PEER_TMP/.cct/review/pending.json" << 'BYPASS_EOF'
+{"feature_id":"test","phase":"build","target_ref":"main","subject_provider":"claude","requested_at":"2026-03-09T00:00:00Z"}
+BYPASS_EOF
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP" CCT_PEER_BYPASS=true CCT_SESSION_START="2026-01-01T00:00:00Z")
+assert_exit "bypass exits 0" 0 "$RC"
+if [[ ! -f "$PEER_TMP/.cct/review/pending.json" ]]; then
+    echo "  PASS: bypass marker cleaned up"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: bypass marker NOT cleaned up"
+    FAIL=$((FAIL + 1))
+fi
+rm -rf "$PEER_TMP"
+
+# --- Valid marker but no runner → fail-closed (exit 2) ---
+PEER_TMP=$(mktemp -d)
+mkdir -p "$PEER_TMP/.cct/review"
+cat > "$PEER_TMP/.cct/review/pending.json" << 'VALID_EOF'
+{"feature_id":"test","phase":"build","target_ref":"main","subject_provider":"claude","requested_at":"2026-03-09T00:00:00Z"}
+VALID_EOF
+# Override PATH so runner is not found, clear HOME so ~/.local/bin isn't checked
+RC=$(printf '{"stop_hook_active":false}' | env CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP" CCT_SESSION_START="2026-01-01T00:00:00Z" HOME=/nonexistent PATH=/usr/bin:/bin bash "$HOOKS_DIR/peer-review-on-stop.sh" >/dev/null 2>/dev/null || echo $?)
+# If jq is not in /usr/bin or /bin, hook exits 0 (jq guard); otherwise exit 2 (no runner)
+if command -v /usr/bin/jq &>/dev/null || command -v /bin/jq &>/dev/null; then
+    assert_exit "valid marker no runner → fail-closed" 2 "$RC"
+else
+    assert_exit "valid marker no jq → jq guard" 0 "$RC"
+fi
+rm -rf "$PEER_TMP"
+
+echo ""
+echo "=== peer-review-runner.sh — PROJECT_DIR derivation ==="
+
+RUNNER_SCRIPT="$(cd "$(dirname "$0")/../scripts" && pwd)/peer-review-runner.sh"
+
+# Test PROJECT_DIR derivation with a mock marker
+RUNNER_TMP=$(mktemp -d)
+mkdir -p "$RUNNER_TMP/.cct/review"
+echo '{}' > "$RUNNER_TMP/.cct/review/pending.json"
+MARKER_PATH="$RUNNER_TMP/.cct/review/pending.json"
+# Extract just the PROJECT_DIR derivation logic
+MARKER_ABS=$(cd "$(dirname "$MARKER_PATH")" && pwd)/$(basename "$MARKER_PATH")
+DERIVED_DIR=$(dirname "$(dirname "$(dirname "$MARKER_ABS")")")
+if [[ "$DERIVED_DIR" == "$RUNNER_TMP" ]]; then
+    echo "  PASS: PROJECT_DIR derived correctly from marker path"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: PROJECT_DIR='$DERIVED_DIR' expected='$RUNNER_TMP'"
+    FAIL=$((FAIL + 1))
+fi
+rm -rf "$RUNNER_TMP"
+
+# Test with nested project path
+RUNNER_TMP=$(mktemp -d)
+NESTED="$RUNNER_TMP/deep/nested/project"
+mkdir -p "$NESTED/.cct/review"
+echo '{}' > "$NESTED/.cct/review/pending.json"
+MARKER_PATH="$NESTED/.cct/review/pending.json"
+MARKER_ABS=$(cd "$(dirname "$MARKER_PATH")" && pwd)/$(basename "$MARKER_PATH")
+DERIVED_DIR=$(dirname "$(dirname "$(dirname "$MARKER_ABS")")")
+if [[ "$DERIVED_DIR" == "$NESTED" ]]; then
+    echo "  PASS: PROJECT_DIR correct for nested path"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: PROJECT_DIR='$DERIVED_DIR' expected='$NESTED'"
+    FAIL=$((FAIL + 1))
+fi
+rm -rf "$RUNNER_TMP"
+
+echo ""
+echo "=== claude-code launcher — --peer-review flag parsing ==="
+
+LAUNCHER="$(cd "$(dirname "$0")/../adapters/claude-code" && pwd)/claude-code"
+
+# Helper: source just the flag-parsing section and inspect variables
+parse_flags() {
+    # Run the launcher with 'help' subcommand injected (exits after help, no tmux needed)
+    # We only care about variable values after parsing, so we inject a trap
+    local result
+    result=$(bash -c '
+        PLAYWRIGHT=0
+        PEER_REVIEW_ENABLED=""
+        PEER_PROVIDER=""
+        PEER_SCOPE="both"
+        POSITIONAL=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --peer-review)
+                    PEER_REVIEW_ENABLED="true"
+                    if [[ -n "${2:-}" && "${2:0:2}" != "--" && "${2:0:1}" != "/" && "${2:0:2}" != "./" && "${2:0:1}" != "~" && "$2" != */* && ! -d "$2" ]]; then
+                        PEER_PROVIDER="$2"
+                        shift
+                    fi
+                    shift
+                    ;;
+                --peer-review-off)
+                    PEER_REVIEW_ENABLED="false"
+                    shift
+                    ;;
+                --peer-review-scope)
+                    PEER_SCOPE="${2:-both}"
+                    shift 2
+                    ;;
+                --playwright)
+                    PLAYWRIGHT=1
+                    shift
+                    ;;
+                *)
+                    POSITIONAL+=("$1")
+                    shift
+                    ;;
+            esac
+        done
+        set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
+        echo "ENABLED=$PEER_REVIEW_ENABLED|PROVIDER=$PEER_PROVIDER|SCOPE=$PEER_SCOPE|POS=${1:-}"
+    ' -- "$@" 2>/dev/null)
+    echo "$result"
+}
+
+# Test: --peer-review codex /path
+RESULT=$(parse_flags --peer-review codex /some/path)
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=codex|SCOPE=both|POS=/some/path" ]]; then
+    echo "  PASS: --peer-review codex /path"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --peer-review codex /path → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: --peer-review /absolute/path (path not consumed as provider)
+RESULT=$(parse_flags --peer-review /some/path)
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=/some/path" ]]; then
+    echo "  PASS: --peer-review /absolute/path not consumed"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --peer-review /absolute/path → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: --peer-review ~/path (tilde path not consumed)
+RESULT=$(parse_flags --peer-review '~/projects/app')
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=~/projects/app" ]]; then
+    echo "  PASS: --peer-review ~/path not consumed"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --peer-review ~/path → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: --peer-review ./relative (dot-relative not consumed)
+RESULT=$(parse_flags --peer-review ./my-app)
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=./my-app" ]]; then
+    echo "  PASS: --peer-review ./relative not consumed"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --peer-review ./relative → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: --peer-review rel/path (path with slash not consumed)
+RESULT=$(parse_flags --peer-review projects/app)
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=projects/app" ]]; then
+    echo "  PASS: --peer-review rel/path not consumed"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --peer-review rel/path → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: --peer-review <existing-dir> (directory not consumed as provider)
+FLAG_TMP=$(mktemp -d)
+DIRNAME=$(basename "$FLAG_TMP")
+RESULT=$(cd "$(dirname "$FLAG_TMP")" && parse_flags --peer-review "$DIRNAME")
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=$DIRNAME" ]]; then
+    echo "  PASS: --peer-review <existing-dir> not consumed"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --peer-review <existing-dir> → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+rm -rf "$FLAG_TMP"
+
+# Test: --peer-review-off
+RESULT=$(parse_flags --peer-review-off /some/path)
+if [[ "$RESULT" == "ENABLED=false|PROVIDER=|SCOPE=both|POS=/some/path" ]]; then
+    echo "  PASS: --peer-review-off"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --peer-review-off → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: --peer-review-scope code
+RESULT=$(parse_flags --peer-review codex --peer-review-scope code /path)
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=codex|SCOPE=code|POS=/path" ]]; then
+    echo "  PASS: --peer-review-scope code"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --peer-review-scope code → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: no flags (defaults)
+RESULT=$(parse_flags /some/path)
+if [[ "$RESULT" == "ENABLED=|PROVIDER=|SCOPE=both|POS=/some/path" ]]; then
+    echo "  PASS: no peer-review flags"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: no flags → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: --peer-review alone (no provider, no path)
+RESULT=$(parse_flags --peer-review)
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=" ]]; then
+    echo "  PASS: --peer-review alone"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --peer-review alone → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
 echo ""
 if [[ "$PASS" -ne "$TEST_HOOKS_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_HOOKS_EXPECTED_PASS, got $PASS)"

@@ -131,7 +131,9 @@ fi
 
 # ── Prepare review request ────────────────────────────────────
 
-PROJECT_DIR=$(dirname "$(cd "$(dirname "$MARKER_PATH")" && pwd)")
+# Marker lives at <project>/.cct/review/pending.json — go up 3 levels
+MARKER_ABS=$(cd "$(dirname "$MARKER_PATH")" && pwd)/$(basename "$MARKER_PATH")
+PROJECT_DIR=$(dirname "$(dirname "$(dirname "$MARKER_ABS")")")
 REVIEW_REQUEST=$(mktemp)
 trap 'rm -f "$REVIEW_REQUEST"; rm -f "$MARKER_PATH"' EXIT
 

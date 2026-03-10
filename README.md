@@ -129,23 +129,60 @@ No additional setup required — SDD is active by default after installation.
 
 Code Copilot Team supports **dual-copilot peer review** — a second AI provider automatically reviews your work at phase completion. This catches blind spots that a single provider misses, using the same structured collaboration protocol regardless of which providers are involved.
 
+### Prerequisites
+
+1. **Install Code Copilot Team** — run `setup.sh --claude-code` (see [Quick Start](#quick-start)). This installs all peer review components:
+   - `peer-review-runner.sh` and `providers-health.sh` to `~/.local/bin/`
+   - `peer-review-on-stop.sh` hook to `~/.claude/hooks/`
+   - `/phase-complete` command to `~/.claude/commands/`
+   - Provider profile seed to `~/.code-copilot-team/providers.toml`
+
+2. **Install the peer provider CLI** — the peer provider must be available on your machine. For example, to use OpenAI Codex as a peer reviewer, install the Codex CLI first.
+
+3. **Verify provider availability:**
+   ```bash
+   providers-health.sh
+   ```
+
+### Setup — New Projects
+
+```bash
+# 1. Init project from template
+claude-code init ml-rag ~/projects/my-app
+
+# 2. Start session with peer review
+claude-code --peer-review codex ~/projects/my-app
+```
+
+### Setup — Existing Projects
+
+No project-level changes required. Peer review is driven entirely by session flags and global hooks:
+
+```bash
+# Just add --peer-review to your usual launch command
+claude-code --peer-review codex ~/projects/existing-app
+
+# Or use the default peer from your provider profile
+cd ~/projects/existing-app && claude-code --peer-review
+```
+
 ### How It Works
 
 1. **Start a session with peer review enabled:**
    ```bash
-   claude-code --peer-review codex ~/projects/my-app
-   claude-code --peer-review              # uses default peer from profile
-   claude-code --peer-review-off          # disable for this session
-   claude-code --peer-review-scope code   # review scope: code|design|both
+   claude-code --peer-review codex ~/projects/my-app   # explicit peer provider
+   claude-code --peer-review ~/projects/my-app          # default peer from profile
+   claude-code --peer-review-off ~/projects/my-app      # disable for this session
+   claude-code --peer-review-scope code ~/projects/my-app  # scope: code|design|both
    ```
 
-2. **Work normally** through the Plan → Build phases.
+2. **Work normally** through the Plan → Build phases. Claude detects `CCT_PEER_REVIEW_ENABLED=true` in the environment and sets `collaboration_mode: dual` in the SDD plan.
 
-3. **Signal phase completion** by running `/phase-complete` inside the Claude session. This creates a review marker (`.cct/review/pending.json`) with the feature context.
+3. **Run `/phase-complete`** when a phase is done — this creates the review marker (`.cct/review/pending.json`). The phase-workflow rules instruct Claude to run this command at phase boundaries when peer review is active, but you can also run it manually at any time.
 
-4. **Peer review triggers automatically** — when Claude stops responding, the `peer-review-on-stop.sh` hook detects the marker, invokes the peer provider via `peer-review-runner.sh`, and writes a collaboration artifact to `specs/<feature-id>/collaboration/`.
+4. **Peer review executes on stop** — when Claude stops responding, the `peer-review-on-stop.sh` hook detects the marker, invokes the peer provider via `peer-review-runner.sh`, and writes a collaboration artifact to `specs/<feature-id>/collaboration/`.
 
-5. **Review the artifact** — the collaboration artifact contains the peer's findings with a verdict (`approve`, `request-changes`, `comment-only`) and structured feedback.
+5. **Review the artifact** — the collaboration artifact contains the peer's findings with a verdict (`PASS`, `FAIL`, `INCONCLUSIVE`) and structured feedback.
 
 ### Provider Profile
 
@@ -168,10 +205,7 @@ healthcheck = "ollama --version"
 model = "llama3"
 ```
 
-Check provider availability:
-```bash
-./scripts/providers-health.sh
-```
+Add your own providers by creating new `[providers.<name>]` sections. The `{review_request}` placeholder is replaced with the path to a temporary file containing the review prompt.
 
 ### Safety Model
 
@@ -361,7 +395,7 @@ code-copilot-team/
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   └── setup.sh                         Unified install entry point
 ├── tests/
-│   ├── test-hooks.sh                    59 hook tests
+│   ├── test-hooks.sh                    85 hook tests
 │   ├── test-generate.sh                 256 generation + adapter tests
 │   └── test-shared-structure.sh         578 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/

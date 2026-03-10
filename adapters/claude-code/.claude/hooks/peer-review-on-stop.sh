@@ -47,7 +47,8 @@ REQUIRED_KEYS=("feature_id" "phase" "target_ref" "subject_provider" "requested_a
 for key in "${REQUIRED_KEYS[@]}"; do
     VALUE=$(jq -r ".$key // empty" "$MARKER_PATH" 2>/dev/null) || true
     if [[ -z "$VALUE" ]]; then
-        echo "Warning: Peer review marker missing required key '$key'. Skipping." >&2
+        echo "Warning: Peer review marker missing required key '$key'. Removing invalid marker." >&2
+        rm -f "$MARKER_PATH"
         exit 0
     fi
 done
@@ -59,7 +60,8 @@ SESSION_START="${CCT_SESSION_START:-}"
 if [[ -n "$SESSION_START" && -n "$REQUESTED_AT" ]]; then
     # Compare timestamps (works with ISO 8601 strings via string comparison)
     if [[ "$REQUESTED_AT" < "$SESSION_START" ]]; then
-        echo "Warning: Peer review marker is stale (requested_at=$REQUESTED_AT, session_start=$SESSION_START). Skipping." >&2
+        echo "Warning: Peer review marker is stale (requested_at=$REQUESTED_AT, session_start=$SESSION_START). Removing stale marker." >&2
+        rm -f "$MARKER_PATH"
         exit 0
     fi
 fi
@@ -73,17 +75,14 @@ if [[ "${CCT_PEER_BYPASS:-false}" == "true" ]]; then
 fi
 
 # --- Locate runner ---
+# Search order: project-local, ~/.local/bin (setup.sh install location), then PATH
 RUNNER=""
 if [[ -x "$PROJECT_DIR/scripts/peer-review-runner.sh" ]]; then
     RUNNER="$PROJECT_DIR/scripts/peer-review-runner.sh"
+elif [[ -x "$HOME/.local/bin/peer-review-runner.sh" ]]; then
+    RUNNER="$HOME/.local/bin/peer-review-runner.sh"
 elif command -v peer-review-runner.sh &>/dev/null; then
     RUNNER="peer-review-runner.sh"
-else
-    # Try the code-copilot-team repo location
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd ../../../.. && pwd)"
-    if [[ -x "$SCRIPT_DIR/scripts/peer-review-runner.sh" ]]; then
-        RUNNER="$SCRIPT_DIR/scripts/peer-review-runner.sh"
-    fi
 fi
 
 if [[ -z "$RUNNER" ]]; then

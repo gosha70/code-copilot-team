@@ -42,7 +42,7 @@ Before Build phase starts, verify based on `spec_mode`:
 
 9. **Wait for approval.** Do not start the next phase until the user confirms this one is complete.
 
-10. **Phase-complete signal (dual mode).** If `collaboration_mode: dual` in `plan.md`, run `/phase-complete` to write the peer-review marker before ending the session. The stop hook will invoke the peer-review runner. See `provider-collaboration-protocol.md`.
+10. **Phase-complete signal (dual mode).** If `collaboration_mode: dual` in `plan.md` **OR** the environment variable `CCT_PEER_REVIEW_ENABLED` is `true`, run `/phase-complete` to write the peer-review marker before ending the phase. The stop hook will invoke the peer-review runner. See `provider-collaboration-protocol.md`. **This step is mandatory when peer review is active — do not skip it.**
 
 ## Phase 1 Checklist (Scaffolding)
 
