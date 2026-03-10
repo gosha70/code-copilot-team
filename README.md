@@ -86,7 +86,10 @@ specs/
     ├── plan.md              ← Always present
     ├── spec.md              ← full / lightweight
     ├── tasks.md             ← full only
-    └── lessons-learned.md   ← End of project
+    ├── lessons-learned.md   ← End of project
+    └── collaboration/       ← Peer review artifacts (dual mode)
+        ├── plan-consult.md  ← Peer review of plan phase
+        └── build-review.md  ← Peer review of build phase
 ```
 
 ### Risk Classification
@@ -122,19 +125,81 @@ SDD rules propagate through the same `shared/ → generate.sh → adapters/` pip
 
 No additional setup required — SDD is active by default after installation.
 
+## Peer Review (Multi-Copilot)
+
+Code Copilot Team supports **dual-copilot peer review** — a second AI provider automatically reviews your work at phase completion. This catches blind spots that a single provider misses, using the same structured collaboration protocol regardless of which providers are involved.
+
+### How It Works
+
+1. **Start a session with peer review enabled:**
+   ```bash
+   claude-code --peer-review codex ~/projects/my-app
+   claude-code --peer-review              # uses default peer from profile
+   claude-code --peer-review-off          # disable for this session
+   claude-code --peer-review-scope code   # review scope: code|design|both
+   ```
+
+2. **Work normally** through the Plan → Build phases.
+
+3. **Signal phase completion** by running `/phase-complete` inside the Claude session. This creates a review marker (`.cct/review/pending.json`) with the feature context.
+
+4. **Peer review triggers automatically** — when Claude stops responding, the `peer-review-on-stop.sh` hook detects the marker, invokes the peer provider via `peer-review-runner.sh`, and writes a collaboration artifact to `specs/<feature-id>/collaboration/`.
+
+5. **Review the artifact** — the collaboration artifact contains the peer's findings with a verdict (`approve`, `request-changes`, `comment-only`) and structured feedback.
+
+### Provider Profile
+
+Peer providers are configured in `~/.code-copilot-team/providers.toml` (seeded by setup):
+
+```toml
+[defaults]
+peer_for.claude = "codex"
+peer_for.codex = "claude"
+
+[providers.codex]
+command = "codex --quiet --prompt-file {review_request}"
+timeout_sec = 300
+healthcheck = "codex --version"
+
+[providers.ollama]
+command = "ollama run {model} < {review_request}"
+timeout_sec = 600
+healthcheck = "ollama --version"
+model = "llama3"
+```
+
+Check provider availability:
+```bash
+./scripts/providers-health.sh
+```
+
+### Safety Model
+
+- **Fail-closed** — if the peer review runner fails, the session blocks (exit 2). This prevents unreviewed work from proceeding silently.
+- **Escape hatch** — set `CCT_PEER_BYPASS=true` to skip a stuck review. CI rejects bypass artifacts.
+- **Staleness check** — markers from previous sessions are ignored (compared via `requested_at` vs `CCT_SESSION_START`).
+- **Identity tracking** — collaboration artifacts include `peer_profile` (provider name) and `runner_fingerprint` (SHA-256 of command template) for auditability.
+
+### Collaboration Modes
+
+| Mode | When | What Happens |
+|---|---|---|
+| **single** (default) | No `--peer-review` flag | Standard single-provider workflow, no peer review |
+| **dual** | `--peer-review [provider]` | Peer reviews at `/phase-complete`, artifacts written to `specs/` |
+
 ## What You Get
 
 ![Configuration Layers](docs/images/configuration-layers.png)
 
-- **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 11 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
+- **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 12 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
 - **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
-- **Hooks** (`~/.claude/hooks/`) — 6 lifecycle scripts: test verification, type checking, auto-format, file protection, context re-injection, and desktop notifications. Auto-detect your project's stack.
+- **Hooks** (`~/.claude/hooks/`) — 7 lifecycle scripts: test verification, type checking, auto-format, file protection, context re-injection, peer review trigger, and desktop notifications. Auto-detect your project's stack.
 - **8 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
 - **Four-phase workflow** — Research → Plan → Build → Review. Plus **Ralph Loop** for single-agent autonomous iteration.
 ![Three - Phase Agent Workflow](docs/images/three-phase-workflow.png)
 - **Optional GCC memory** — persistent cross-session context via the [GCC protocol](https://arxiv.org/abs/2508.00031), powered by Aline MCP (`aline-ai`). Install with `--gcc`.
 ![Git Context Control](docs/images/gcc-operations-map.png)
-- **tmux launcher** (`claude-code`) — per-project sessions with git context display.
+- **tmux launcher** (`claude-code`) — per-project sessions with git context display and `--peer-review` flags.
 
 ## Quick Start
 
@@ -205,13 +270,15 @@ claude-code ~/projects/existing-api
   ├── coding-standards.md          SOLID, quality gates, prohibited patterns
   ├── copilot-conventions.md       Cross-tool portable conventions
   └── safety.md                    Destructive action guards, secrets policy
-~/.claude/rules-library/*.md       ← On-demand rules (loaded by phase agents, 10 files)
+~/.claude/rules-library/*.md       ← On-demand rules (loaded by phase agents, 12 files)
   ├── agent-team-protocol.md       Three-phase workflow, delegation rules
   ├── clarification-protocol.md    Ask before implementing ambiguous requirements
   ├── environment-setup.md         Environment and config verification
   ├── integration-testing.md       Test integration points early
   ├── phase-workflow.md            Phase transition rules and boundaries
+  ├── provider-collaboration-protocol.md  Peer review protocol and collaboration rules
   ├── ralph-loop.md                Single-agent autonomous iteration loop
+  ├── spec-workflow.md             SDD spec gating and artifact management
   ├── stack-constraints.md         Stack version and compatibility guards
   ├── team-lead-efficiency.md      Limit agents, poll frequency, no re-work
   ├── token-efficiency.md          Diff-over-rewrite, context economy
@@ -226,11 +293,12 @@ claude-code ~/projects/existing-api
   ├── phase-recap.md               Summarize completed phase
   ├── security-review.md           Scan for security vulnerabilities
   └── verify-app.md                End-to-end project verification
-~/.claude/hooks/*.sh               ← Deterministic lifecycle hooks (always active, 6 files)
+~/.claude/hooks/*.sh               ← Deterministic lifecycle hooks (always active, 7 files)
   ├── verify-on-stop.sh            Run test suite when Claude finishes responding
   ├── verify-after-edit.sh         Run type checker after source file edits
   ├── auto-format.sh               Auto-format edited files
   ├── protect-files.sh             Prevent edits to protected files
+  ├── peer-review-on-stop.sh       Trigger peer review on phase completion
   ├── reinject-context.sh          Re-inject session context on prompt submit
   └── notify.sh                    Desktop notifications (macOS + Linux)
 ~/.claude/settings.json            ← Hooks wiring and global settings
@@ -272,10 +340,11 @@ All tools share the same rules from `shared/rules/always/`. Each adapter formats
 code-copilot-team/
 ├── shared/                              ← Single source of truth
 │   ├── rules/always/                    3 global rules (always loaded)
-│   ├── rules/on-demand/                 11 rules loaded by phase agents
+│   ├── rules/on-demand/                 12 rules loaded by phase agents
 │   ├── docs/                            7 tool-agnostic reference docs
 │   ├── templates/                       8 stacks × PROJECT.md + commands/
-│   └── templates/sdd/                   4 SDD templates (spec, plan, tasks, lessons-learned)
+│   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
+│   └── templates/provider-profile-template.toml  Peer provider profile seed
 ├── specs/                               ← SDD artifacts per feature (versioned)
 │   └── <feature-id>/                    plan.md, spec.md, tasks.md, lessons-learned.md
 ├── adapters/
@@ -288,6 +357,8 @@ code-copilot-team/
 ├── scripts/
 │   ├── generate.sh                      Builds adapter configs from shared/
 │   ├── validate-spec.sh                 SDD spec validator (CI + local)
+│   ├── peer-review-runner.sh            Peer review execution engine
+│   ├── providers-health.sh              Peer provider availability diagnostics
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    59 hook tests

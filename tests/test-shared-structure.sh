@@ -764,8 +764,8 @@ grep -Eq "rules/always/[[:space:]]+3 global rules" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists 3 global always rules" "$rc"
 
 rc=0
-grep -Eq "rules/on-demand/[[:space:]]+11 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 11 on-demand rules" "$rc"
+grep -Eq "rules/on-demand/[[:space:]]+12 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 12 on-demand rules" "$rc"
 
 rc=0
 grep -Eq "templates/[[:space:]]+8 stacks" "$REPO_DIR/README.md" || rc=1
