@@ -54,7 +54,7 @@ You do **not** need to run `/init` every time. `/init` is a one-time command to 
 
 - **Project session log** (`doc_internal/HISTORY.md`): Add to your project CLAUDE.md if you want it.
 - **Explicit memory requests**: Say `"remember that we use pnpm"` to save to auto-memory.
-- **Spec artifact handoff**: When resuming from a Plan session, ensure `specs/<id>/plan.md` and `specs/<id>/spec.md` are committed so the Build agent can read them. Include `specs/lessons-learned.md` in handoff if it was updated.
+- **Spec artifact handoff**: The Plan agent writes `specs/<id>/plan.md` during planning (and `spec.md` when `spec_mode` is `full` or `lightweight`). Ensure they are committed so the Build agent can read them. Include `specs/lessons-learned.md` in handoff if it was updated.
 
 ## Parallel Development with Git Worktrees
 

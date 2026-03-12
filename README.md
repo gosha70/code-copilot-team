@@ -119,7 +119,7 @@ SDD rules propagate through the same `shared/ → generate.sh → adapters/` pip
 ### Getting Started with SDD
 
 1. Start a Plan session — describe your feature to the Plan agent.
-2. The Plan agent classifies risk, sets `spec_mode`, and emits the appropriate artifacts in `specs/<feature-id>/`.
+2. The Plan agent classifies risk, sets `spec_mode`, and writes the appropriate artifacts to `specs/<feature-id>/`.
 3. Switch to Build — the Build agent reads the frontmatter and gates itself.
 4. CI validates on PR — `validate-spec.sh` catches any missing artifacts or incomplete specs.
 
@@ -397,7 +397,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    85 hook tests
 │   ├── test-generate.sh                 256 generation + adapter tests
-│   └── test-shared-structure.sh         578 structure + content tests
+│   └── test-shared-structure.sh         580 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md

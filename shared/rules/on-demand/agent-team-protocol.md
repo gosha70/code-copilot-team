@@ -18,8 +18,8 @@ Every non-trivial task follows three phases with distinct behaviors:
 
 Between Phase 1 (Plan) and Phase 2 (Build), a spec gate applies:
 
-- Plan always emits `specs/<feature-id>/plan.md` with `spec_mode` frontmatter.
-- For `full` or `lightweight`: Plan also emits `spec.md`. User approves both before Build.
+- Plan always writes `specs/<feature-id>/plan.md` with `spec_mode` frontmatter.
+- For `full` or `lightweight`: Plan also writes `spec.md`. User approves both before Build.
 - For `none`: User approves `plan.md` only. Build proceeds without a spec gate.
 - All `[NEEDS CLARIFICATION]` markers in `spec.md` must be resolved before Build starts.
 

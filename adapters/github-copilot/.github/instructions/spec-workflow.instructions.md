@@ -40,13 +40,13 @@ Only two sections are required in `spec.md`:
 
 ### none
 
-No `spec.md` is required. The Plan agent emits only `plan.md`.
+No `spec.md` is required. The Plan agent writes only `plan.md`.
 
 ## Plan Approval Gate Protocol
 
-### What the Plan Agent Emits
+### What the Plan Agent Writes
 
-The Plan agent always emits `specs/<feature-id>/plan.md` regardless of `spec_mode`. The file must include YAML frontmatter with at minimum:
+The Plan agent always writes `specs/<feature-id>/plan.md` regardless of `spec_mode`. The file must include YAML frontmatter with at minimum:
 
 ```yaml
 ---
@@ -59,13 +59,13 @@ status: draft | approved
 ### Approval Flow by spec_mode
 
 **full or lightweight:**
-1. Plan agent emits `plan.md` and `spec.md` (with required sections populated).
-2. All `[NEEDS CLARIFICATION]` markers in `spec.md` are resolved via user questions before emitting.
+1. Plan agent writes `plan.md` and `spec.md` (with required sections populated).
+2. All `[NEEDS CLARIFICATION]` markers in `spec.md` are resolved via user questions before writing.
 3. User reviews and approves both `plan.md` and `spec.md`.
 4. Build may not start until both are approved.
 
 **none:**
-1. Plan agent emits `plan.md` only.
+1. Plan agent writes `plan.md` only.
 2. User reviews and approves `plan.md` directly.
 3. Build proceeds without a spec gate.
 

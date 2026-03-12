@@ -363,6 +363,15 @@ for f in "${AGENT_FILES[@]}"; do
   assert_file_exists "adapter agent $f exists" "$ADAPTER_DIR/.claude/agents/$f"
 done
 
+# Plan agent must have Write and Edit tools for specs/ artifacts
+rc=0
+grep -q "tools:.*Write" "$ADAPTER_DIR/.claude/agents/plan.md" || rc=1
+assert_ok "Plan agent has Write tool for specs/ artifacts" "$rc"
+
+rc=0
+grep -q "tools:.*Edit" "$ADAPTER_DIR/.claude/agents/plan.md" || rc=1
+assert_ok "Plan agent has Edit tool for specs/ artifacts" "$rc"
+
 # Hooks in adapter
 HOOK_FILES=(verify-on-stop.sh verify-after-edit.sh auto-format.sh protect-files.sh reinject-context.sh notify.sh)
 for f in "${HOOK_FILES[@]}"; do
