@@ -57,7 +57,7 @@ mkdir -p "$CODEX_DIR"
     name="$(basename "$f" .md)"
     # Map rules to skills
     case "$name" in
-      ralph-loop|environment-setup|stack-constraints|phase-workflow)
+      ralph-loop|environment-setup|stack-constraints|phase-workflow|infra-verification)
         skill="build" ;;
       agent-team-protocol|team-lead-efficiency)
         skill="build (optional team mode)" ;;
@@ -139,6 +139,7 @@ for f in "$SHARED/on-demand"/*.md; do
   name="$(basename "$f" .md)"
   # Map rules to reasonable glob patterns
   case "$name" in
+    infra-verification)   glob="**/Dockerfile*,**/docker-compose*,**/compose*,**/*.sh,**/.github/workflows/*" ;;
     environment-setup)     glob="**/.env*,**/docker-compose*" ;;
     stack-constraints)     glob="**/package.json,**/pyproject.toml,**/go.mod,**/Cargo.toml,**/pom.xml" ;;
     integration-testing)   glob="**/tests/**,**/test/**,**/*test*,**/*spec*" ;;

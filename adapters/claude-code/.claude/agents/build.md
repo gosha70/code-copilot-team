@@ -23,6 +23,7 @@ You are a build agent (team lead). Your job is to execute an approved plan by de
    - `environment-setup.md` — env var patterns and validation
    - `stack-constraints.md` — version pinning and dependency protocol
    - `spec-workflow.md` — risk classification, spec_mode gating, SDD artifact requirements
+   - `infra-verification.md` — infrastructure artifact verification ("build it, run it")
 
    **Team delegation mode** (multi-agent):
    - `agent-team-protocol.md` — delegation rules, session boundaries

@@ -88,7 +88,7 @@ Example marker (must not appear in an approved spec):
 
 All SDD artifacts for a feature live under `specs/<feature-id>/`.
 
-| Artifact    | Emitted for            | Description |
+| Artifact    | Written for            | Description |
 |-------------|------------------------|-------------|
 | `plan.md`   | all modes              | Plan with `spec_mode` frontmatter and high-level approach |
 | `spec.md`   | `full` and `lightweight` | Software design document with required sections |

@@ -225,7 +225,7 @@ Add your own providers by creating new `[providers.<name>]` sections. The `{revi
 
 ![Configuration Layers](docs/images/configuration-layers.png)
 
-- **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 12 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
+- **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 13 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
 - **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
 - **Hooks** (`~/.claude/hooks/`) — 7 lifecycle scripts: test verification, type checking, auto-format, file protection, context re-injection, peer review trigger, and desktop notifications. Auto-detect your project's stack.
 - **8 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
@@ -304,7 +304,7 @@ claude-code ~/projects/existing-api
   ├── coding-standards.md          SOLID, quality gates, prohibited patterns
   ├── copilot-conventions.md       Cross-tool portable conventions
   └── safety.md                    Destructive action guards, secrets policy
-~/.claude/rules-library/*.md       ← On-demand rules (loaded by phase agents, 12 files)
+~/.claude/rules-library/*.md       ← On-demand rules (loaded by phase agents, 13 files)
   ├── agent-team-protocol.md       Three-phase workflow, delegation rules
   ├── clarification-protocol.md    Ask before implementing ambiguous requirements
   ├── environment-setup.md         Environment and config verification
@@ -316,7 +316,8 @@ claude-code ~/projects/existing-api
   ├── stack-constraints.md         Stack version and compatibility guards
   ├── team-lead-efficiency.md      Limit agents, poll frequency, no re-work
   ├── token-efficiency.md          Diff-over-rewrite, context economy
-  └── gcc-protocol.md              GCC memory persistence (optional, Aline MCP)
+  ├── gcc-protocol.md              GCC memory persistence (optional, Aline MCP)
+  └── infra-verification.md        Infrastructure artifact verification ("build it, run it")
 ~/.claude/agents/*.md              ← Phase + utility agents (9 files)
   ├── research.md                  Research phase agent
   ├── plan.md                      Plan phase agent
@@ -374,7 +375,7 @@ All tools share the same rules from `shared/rules/always/`. Each adapter formats
 code-copilot-team/
 ├── shared/                              ← Single source of truth
 │   ├── rules/always/                    3 global rules (always loaded)
-│   ├── rules/on-demand/                 12 rules loaded by phase agents
+│   ├── rules/on-demand/                 13 rules loaded by phase agents
 │   ├── docs/                            7 tool-agnostic reference docs
 │   ├── templates/                       8 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
@@ -396,8 +397,8 @@ code-copilot-team/
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    85 hook tests
-│   ├── test-generate.sh                 256 generation + adapter tests
-│   └── test-shared-structure.sh         580 structure + content tests
+│   ├── test-generate.sh                 261 generation + adapter tests
+│   └── test-shared-structure.sh         596 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md

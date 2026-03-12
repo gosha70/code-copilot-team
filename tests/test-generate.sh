@@ -116,6 +116,7 @@ assert_contains "team-lead-efficiency mapped to build optional team mode" "$AGEN
 assert_contains "clarification-protocol mapped to plan" "$AGENTS_MD" "clarification-protocol.*plan"
 assert_contains "integration-testing mapped to review" "$AGENTS_MD" "integration-testing.*review"
 assert_contains "token-efficiency mapped to research" "$AGENTS_MD" "token-efficiency.*research"
+assert_contains "infra-verification mapped to build" "$AGENTS_MD" "infra-verification.*build"
 
 # ── Section 4b: spec-workflow content in adapter outputs ──
 
@@ -327,7 +328,7 @@ assert "instructions dir exists" "[[ -d '$INSTRUCTIONS_DIR' ]]"
 
 # Verify all 10 on-demand rules become instruction files
 ON_DEMAND_COUNT=$(ls "$INSTRUCTIONS_DIR"/*.instructions.md 2>/dev/null | wc -l | tr -d ' ')
-assert "exactly 12 instruction files ($ON_DEMAND_COUNT)" "[[ $ON_DEMAND_COUNT -eq 12 ]]"
+assert "exactly 13 instruction files ($ON_DEMAND_COUNT)" "[[ $ON_DEMAND_COUNT -eq 13 ]]"
 
 # Verify each on-demand rule has a corresponding instruction file
 for f in "$SHARED/on-demand"/*.md; do
@@ -380,7 +381,7 @@ GH_INSTALL_RC=$?
 assert "gh-copilot install exits 0" "[[ $GH_INSTALL_RC -eq 0 ]]"
 assert "installed copilot-instructions.md" "[[ -f '$GH_TMP/.github/copilot-instructions.md' ]]"
 INSTALLED_INSTR=$(ls "$GH_TMP/.github/instructions"/*.instructions.md 2>/dev/null | wc -l | tr -d ' ')
-assert "gh-copilot installed 12 instruction files ($INSTALLED_INSTR)" "[[ $INSTALLED_INSTR -eq 12 ]]"
+assert "gh-copilot installed 13 instruction files ($INSTALLED_INSTR)" "[[ $INSTALLED_INSTR -eq 13 ]]"
 rm -rf "$GH_TMP"
 
 # ── Section 17: Windsurf rules.md ─────────────────────────

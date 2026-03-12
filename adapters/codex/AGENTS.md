@@ -27,6 +27,12 @@ Applied to all code generation and review sessions.
 - No bare except / catch without specific exception types.
 - No SQL string concatenation — use parameterized queries.
 
+## Verification Discipline
+
+- **Never suggest skipping a failing verification step.** When a test, build, lint check, Docker build, or script execution fails, diagnose and fix the issue. Do not suggest workarounds that bypass the deliverable.
+- **Execute your own test plan.** If you write test commands (curl, bash, docker, etc.) as part of a build summary, run every command yourself and report results before declaring done.
+- **Build it, run it.** Any executable artifact you create (Dockerfile, shell script, CI workflow, launcher flag) must be executed at least once before committing. Syntax validity alone is not sufficient.
+
 ---
 
 # Cross-Copilot Conventions
@@ -124,6 +130,7 @@ corresponding skill to apply them.
 | `clarification-protocol` | plan |
 | `environment-setup` | build |
 | `gcc-protocol` | all (optional) |
+| `infra-verification` | build |
 | `integration-testing` | review |
 | `phase-workflow` | build |
 | `provider-collaboration-protocol` | — |

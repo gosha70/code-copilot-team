@@ -137,6 +137,7 @@ ON_DEMAND_FILES=(
   clarification-protocol.md
   environment-setup.md
   gcc-protocol.md
+  infra-verification.md
   integration-testing.md
   phase-workflow.md
   ralph-loop.md
@@ -152,7 +153,7 @@ for f in "${ON_DEMAND_FILES[@]}"; do
 done
 
 ONDEMAND_COUNT=$(find "$SHARED_DIR/rules/on-demand" -name '*.md' | wc -l | tr -d ' ')
-assert_eq "exactly 12 on-demand rules" "12" "$ONDEMAND_COUNT"
+assert_eq "exactly 13 on-demand rules" "13" "$ONDEMAND_COUNT"
 
 # ══════════════════════════════════════════════════════════════
 # 3. shared/docs/ — tool-agnostic docs exist
@@ -773,8 +774,8 @@ grep -Eq "rules/always/[[:space:]]+3 global rules" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists 3 global always rules" "$rc"
 
 rc=0
-grep -Eq "rules/on-demand/[[:space:]]+12 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 12 on-demand rules" "$rc"
+grep -Eq "rules/on-demand/[[:space:]]+13 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 13 on-demand rules" "$rc"
 
 rc=0
 grep -Eq "templates/[[:space:]]+8 stacks" "$REPO_DIR/README.md" || rc=1
@@ -1710,6 +1711,30 @@ assert_ok "review.md contains Spec Conformance in output format" "$rc"
 
 rc=0; grep -q 'spec-workflow.md' "$REVIEW_MD" || rc=1
 assert_ok "review.md contains spec-workflow.md in rules list" "$rc"
+
+# ══════════════════════════════════════════════════════════════
+# Agent contract consistency
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== Agent contract consistency ==="
+
+# No agent has both Write tool AND unscoped "never write files" ban
+for agent in "$ADAPTER_DIR"/.claude/agents/*.md; do
+  rc=0
+  HAS_WRITE=$(grep -c "tools:.*Write" "$agent" 2>/dev/null) || HAS_WRITE=0
+  UNSCOPED=$(grep -c "Never create, edit, or write files" "$agent" 2>/dev/null) || UNSCOPED=0
+  if [[ "$HAS_WRITE" -gt 0 && "$UNSCOPED" -gt 0 ]]; then
+    rc=1
+  fi
+  assert_ok "agent $(basename "$agent") has no unscoped write contradiction" "$rc"
+done
+
+# Shared rules use "writes" not "emits" for Plan agent file creation
+rc=0
+EMIT_COUNT=$(grep -rl "Plan.*emits\|emits.*plan\|agent emits" "$SHARED_DIR/rules/" 2>/dev/null | wc -l | tr -d ' ')
+if [[ "$EMIT_COUNT" -gt 0 ]]; then rc=1; fi
+assert_ok "shared rules use 'writes' not 'emits' for Plan agent file creation (found $EMIT_COUNT files)" "$rc"
 
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
