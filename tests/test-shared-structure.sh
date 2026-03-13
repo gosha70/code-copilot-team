@@ -1736,6 +1736,29 @@ EMIT_COUNT=$(grep -rl "Plan.*emits\|emits.*plan\|agent emits" "$SHARED_DIR/rules
 if [[ "$EMIT_COUNT" -gt 0 ]]; then rc=1; fi
 assert_ok "shared rules use 'writes' not 'emits' for Plan agent file creation (found $EMIT_COUNT files)" "$rc"
 
+echo ""
+echo "=== peer review enforcement: agent manifests and hook ==="
+
+rc=0
+grep -q 'phase-complete' "$ADAPTER_DIR/.claude/agents/build.md" || rc=1
+assert_ok "build.md mentions phase-complete" "$rc"
+
+rc=0
+grep -q 'phase-complete' "$ADAPTER_DIR/.claude/agents/plan.md" || rc=1
+assert_ok "plan.md mentions phase-complete" "$rc"
+
+rc=0
+grep -q 'phase-workflow.md' "$ADAPTER_DIR/.claude/agents/plan.md" || rc=1
+assert_ok "plan.md reads phase-workflow.md" "$rc"
+
+rc=0
+grep -q 'Peer review gate' "$ADAPTER_DIR/.claude/agents/build.md" || rc=1
+assert_ok "build.md has Peer review gate rule" "$rc"
+
+rc=0
+grep -q 'Action required.*phase-complete' "$ADAPTER_DIR/.claude/hooks/reinject-context.sh" || rc=1
+assert_ok "reinject-context.sh has action-required reminder" "$rc"
+
 if [[ "$PASS" -ne "$TEST_SHARED_STRUCTURE_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_SHARED_STRUCTURE_EXPECTED_PASS, got $PASS)"
   FAIL=$((FAIL + 1))

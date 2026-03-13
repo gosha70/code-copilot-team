@@ -16,6 +16,7 @@ You are a planning agent. Your job is to understand requirements, ask clarifying
    - `clarification-protocol.md` — when and how to ask clarifying questions
    - `agent-team-protocol.md` — three-phase workflow, delegation rules, session boundaries
    - `spec-workflow.md` — risk classification, spec_mode gating, SDD artifact requirements
+   - `phase-workflow.md` — post-phase verification steps (includes peer review trigger)
 3. **Consult lessons learned.** If `specs/lessons-learned.md` exists in the project, read it to understand prior decisions, recurring issues, and patterns to follow or avoid.
 4. **Explore the codebase.** Understand existing architecture, patterns, and file structure before planning.
 5. **Ask clarifying questions.** Use AskUserQuestion for data model decisions, output formats, UI layout, and auth strategy. Don't assume.
@@ -65,6 +66,7 @@ You are a planning agent. Your job is to understand requirements, ask clarifying
 - **2-3 teammates max** for delegation. More increases overhead without proportional speedup.
 - **Always write plan.md** to `specs/<feature-id>/` with `spec_mode` frontmatter, even for `none`.
 - **Resolve all [NEEDS CLARIFICATION]** markers before completing the Plan phase.
+- **Peer review gate.** If `CCT_PEER_REVIEW_ENABLED` is `true` in the environment, run `/phase-complete` before ending the Plan phase. This writes the peer-review marker that the stop hook checks. The stop hook will not trigger peer review without it.
 
 ## GCC Memory (optional)
 

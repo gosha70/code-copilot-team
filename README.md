@@ -398,7 +398,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    85 hook tests
 │   ├── test-generate.sh                 261 generation + adapter tests
-│   └── test-shared-structure.sh         596 structure + content tests
+│   └── test-shared-structure.sh         601 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md
