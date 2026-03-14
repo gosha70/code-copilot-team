@@ -601,6 +601,177 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# ══════════════════════════════════════════════════════════════
+# statusline.sh tests
+# ══════════════════════════════════════════════════════════════
+
+echo "=== statusline.sh ==="
+
+STATUSLINE="$(cd "$(dirname "$0")/../adapters/claude-code/.claude" && pwd)/statusline.sh"
+
+# Helper: run statusline with JSON input, return stdout
+run_statusline() {
+  printf '%s' "$1" | bash "$STATUSLINE" 2>/dev/null
+}
+
+assert_contains() {
+  local name="$1" haystack="$2" needle="$3"
+  if echo "$haystack" | grep -qF "$needle"; then
+    echo "  PASS: $name"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $name (expected to contain '$needle', got '$haystack')"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+assert_not_contains() {
+  local name="$1" haystack="$2" needle="$3"
+  if ! echo "$haystack" | grep -qF "$needle"; then
+    echo "  PASS: $name"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $name (expected NOT to contain '$needle')"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# Basic output with all fields
+BASIC_INPUT='{"model":{"display_name":"Opus"},"workspace":{"current_dir":"/tmp/my-repo"},"cwd":"/tmp/my-repo","context_window":{"used_percentage":42},"cost":{"total_cost_usd":1.23,"total_duration_ms":754000,"total_lines_added":100,"total_lines_removed":5}}'
+BASIC_OUT=$(run_statusline "$BASIC_INPUT")
+assert_contains "displays model name" "$BASIC_OUT" "[Opus]"
+assert_contains "displays project dir" "$BASIC_OUT" "my-repo"
+assert_contains "displays context percent" "$BASIC_OUT" "42%"
+assert_contains "displays cost" "$BASIC_OUT" '$1.23'
+assert_contains "displays lines added" "$BASIC_OUT" "+100"
+assert_contains "displays lines removed" "$BASIC_OUT" "/-5"
+assert_contains "displays duration" "$BASIC_OUT" "12m"
+
+# Agent name shown when present
+AGENT_INPUT='{"model":{"display_name":"Opus"},"agent":{"name":"build"},"workspace":{"current_dir":"/tmp/repo"},"cwd":"/tmp/repo","context_window":{"used_percentage":0},"cost":{"total_cost_usd":0,"total_duration_ms":0,"total_lines_added":0,"total_lines_removed":0}}'
+AGENT_OUT=$(run_statusline "$AGENT_INPUT")
+assert_contains "displays agent name" "$AGENT_OUT" "build"
+
+# Agent name absent when not in JSON
+NO_AGENT_INPUT='{"model":{"display_name":"Opus"},"workspace":{"current_dir":"/tmp/repo"},"cwd":"/tmp/repo","context_window":{"used_percentage":0},"cost":{"total_cost_usd":0,"total_duration_ms":0,"total_lines_added":0,"total_lines_removed":0}}'
+NO_AGENT_OUT=$(run_statusline "$NO_AGENT_INPUT")
+assert_not_contains "no agent when absent" "$NO_AGENT_OUT" "build"
+
+# Worktree shown instead of project dir
+WT_INPUT='{"model":{"display_name":"Opus"},"workspace":{"current_dir":"/tmp/repo"},"cwd":"/tmp/repo","context_window":{"used_percentage":0},"cost":{"total_cost_usd":0,"total_duration_ms":0,"total_lines_added":0,"total_lines_removed":0},"worktree":{"name":"my-feature"}}'
+WT_OUT=$(run_statusline "$WT_INPUT")
+assert_contains "displays worktree name" "$WT_OUT" "wt:my-feature"
+
+# Paths with spaces handled correctly
+SPACE_INPUT='{"model":{"display_name":"Opus"},"workspace":{"current_dir":"/tmp/My Cool Project"},"cwd":"/tmp/My Cool Project","context_window":{"used_percentage":0},"cost":{"total_cost_usd":0,"total_duration_ms":0,"total_lines_added":0,"total_lines_removed":0}}'
+SPACE_OUT=$(run_statusline "$SPACE_INPUT")
+assert_contains "handles spaces in path" "$SPACE_OUT" "My Cool Project"
+
+# Per-workspace cache isolation: different workspaces get different cache files
+CACHE_KEY_A=$(printf '%s' "/tmp/repo-a" | cksum | cut -d' ' -f1)
+CACHE_KEY_B=$(printf '%s' "/tmp/repo-b" | cksum | cut -d' ' -f1)
+if [[ "$CACHE_KEY_A" != "$CACHE_KEY_B" ]]; then
+  echo "  PASS: per-workspace cache keys differ"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: per-workspace cache keys are identical"
+  FAIL=$((FAIL + 1))
+fi
+
+# Output is a single line (no multi-line rendering glitches)
+LINE_COUNT=$(echo "$BASIC_OUT" | wc -l | tr -d ' ')
+if [[ "$LINE_COUNT" -eq 1 ]]; then
+  echo "  PASS: output is single line"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: output is $LINE_COUNT lines (expected 1)"
+  FAIL=$((FAIL + 1))
+fi
+
+# Output contains no ANSI escape codes (plain text only)
+if echo "$BASIC_OUT" | grep -qP '\033\[' 2>/dev/null || echo "$BASIC_OUT" | grep -q $'\033' 2>/dev/null; then
+  echo "  FAIL: output contains ANSI escape codes"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: output is plain text (no ANSI)"
+  PASS=$((PASS + 1))
+fi
+
+# Null/missing fields handled gracefully
+NULL_INPUT='{"model":{"display_name":"Opus"},"workspace":{"current_dir":"/tmp/repo"},"cwd":"/tmp/repo","context_window":{"used_percentage":null},"cost":{"total_cost_usd":null,"total_duration_ms":null,"total_lines_added":null,"total_lines_removed":null}}'
+NULL_OUT=$(run_statusline "$NULL_INPUT")
+assert_contains "handles null fields" "$NULL_OUT" "[Opus]"
+assert_contains "null percentage defaults to 0" "$NULL_OUT" "0%"
+
+# Git reads from workspace, not cwd — run from /tmp pointing at this repo
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+EXPECTED_BRANCH=$(git -C "$REPO_DIR" branch --show-current 2>/dev/null)
+if [[ -n "$EXPECTED_BRANCH" ]]; then
+  CROSS_CWD_INPUT="{\"model\":{\"display_name\":\"Opus\"},\"workspace\":{\"current_dir\":\"$REPO_DIR\"},\"cwd\":\"$REPO_DIR\",\"context_window\":{\"used_percentage\":0},\"cost\":{\"total_cost_usd\":0,\"total_duration_ms\":0,\"total_lines_added\":0,\"total_lines_removed\":0}}"
+  # Invalidate cache so git actually runs
+  CROSS_CACHE_KEY=$(printf '%s' "$REPO_DIR" | cksum | cut -d' ' -f1)
+  rm -f "/tmp/claude-statusline-git-${CROSS_CACHE_KEY}"
+  # Run from /tmp — git must still resolve the workspace repo
+  CROSS_OUT=$(cd /tmp && printf '%s' "$CROSS_CWD_INPUT" | bash "$STATUSLINE" 2>/dev/null)
+  assert_contains "git reads workspace not cwd" "$CROSS_OUT" "$EXPECTED_BRANCH"
+else
+  echo "  SKIP: no branch detected (detached HEAD)"
+fi
+
+echo ""
+
+echo "=== setup.sh statusLine wiring ==="
+
+SETUP_SCRIPT="$(cd "$(dirname "$0")/../adapters/claude-code" && pwd)/setup.sh"
+
+# The HOOKS_CONFIG template includes statusLine
+if grep -q '"statusLine"' "$SETUP_SCRIPT"; then
+  echo "  PASS: setup.sh template includes statusLine"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: setup.sh template missing statusLine"
+  FAIL=$((FAIL + 1))
+fi
+
+# --sync path wires statusLine into settings.json
+SYNC_SECTION=$(sed -n '/^if.*--sync/,/exit 0/p' "$SETUP_SCRIPT")
+if echo "$SYNC_SECTION" | grep -q 'statusLine'; then
+  echo "  PASS: --sync path adds statusLine to settings"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: --sync path does not add statusLine to settings"
+  FAIL=$((FAIL + 1))
+fi
+
+# no-hooks branch adds statusLine
+NO_HOOKS_SECTION=$(sed -n '/Add hooks.*preserve/,/echo.*Added/p' "$SETUP_SCRIPT")
+if echo "$NO_HOOKS_SECTION" | grep -q 'statusLine\|sl'; then
+  echo "  PASS: no-hooks migration adds statusLine"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: no-hooks migration does not add statusLine"
+  FAIL=$((FAIL + 1))
+fi
+
+# adapter settings.json includes statusLine
+ADAPTER_SETTINGS="$(cd "$(dirname "$0")/../adapters/claude-code/.claude" && pwd)/settings.json"
+if jq -e '.statusLine.command' "$ADAPTER_SETTINGS" >/dev/null 2>&1; then
+  echo "  PASS: adapter settings.json has statusLine.command"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: adapter settings.json missing statusLine.command"
+  FAIL=$((FAIL + 1))
+fi
+
+# statusline.sh is executable
+if [[ -x "$STATUSLINE" ]]; then
+  echo "  PASS: statusline.sh is executable"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: statusline.sh is not executable"
+  FAIL=$((FAIL + 1))
+fi
+
 echo ""
 if [[ "$PASS" -ne "$TEST_HOOKS_EXPECTED_PASS" ]]; then
   echo "  FAIL: assertion-count drift (expected $TEST_HOOKS_EXPECTED_PASS, got $PASS)"

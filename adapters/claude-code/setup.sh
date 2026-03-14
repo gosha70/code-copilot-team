@@ -59,6 +59,26 @@ if [[ "${1:-}" == "--sync" ]]; then
         echo "[done] Synced agents to $AGENTS_TARGET"
     fi
 
+    # Status line script
+    STATUSLINE_SOURCE="$SCRIPT_DIR/.claude/statusline.sh"
+    STATUSLINE_TARGET="$CLAUDE_DIR/statusline.sh"
+    if [[ -f "$STATUSLINE_SOURCE" ]]; then
+        cp "$STATUSLINE_SOURCE" "$STATUSLINE_TARGET"
+        chmod +x "$STATUSLINE_TARGET"
+        echo "[done] Synced statusline.sh to $STATUSLINE_TARGET"
+    fi
+
+    # Wire statusLine into settings.json if missing
+    SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+    if [[ -f "$SETTINGS_FILE" ]] && command -v jq &>/dev/null; then
+        HAS_STATUSLINE=$(jq 'has("statusLine")' "$SETTINGS_FILE" 2>/dev/null || echo "false")
+        if [[ "$HAS_STATUSLINE" != "true" ]]; then
+            CONTENT=$(jq '.statusLine = {"type":"command","command":"~/.claude/statusline.sh"}' "$SETTINGS_FILE")
+            echo "$CONTENT" > "$SETTINGS_FILE"
+            echo "[done] Added statusLine to $SETTINGS_FILE"
+        fi
+    fi
+
     echo "Sync complete."
     exit 0
 fi
@@ -495,11 +515,30 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
+# 11e. STATUS LINE SCRIPT
+# ══════════════════════════════════════════════════════════════
+
+STATUSLINE_SOURCE="$SCRIPT_DIR/.claude/statusline.sh"
+STATUSLINE_TARGET="$CLAUDE_DIR/statusline.sh"
+
+if [[ -f "$STATUSLINE_SOURCE" ]]; then
+    cp "$STATUSLINE_SOURCE" "$STATUSLINE_TARGET"
+    chmod +x "$STATUSLINE_TARGET"
+    echo "[done] Installed statusline.sh to $STATUSLINE_TARGET"
+else
+    echo "[skip] statusline.sh not found at $STATUSLINE_SOURCE"
+fi
+
+# ══════════════════════════════════════════════════════════════
 # 12. GLOBAL SETTINGS (hooks wiring)
 # ══════════════════════════════════════════════════════════════
 
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 HOOKS_CONFIG='{
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh"
+  },
   "env": {
     "HOOK_EDIT_BLOCK": "true",
     "HOOK_STOP_BLOCK": "false",
@@ -611,17 +650,28 @@ elif command -v jq &>/dev/null; then
             CHANGED=1
         fi
 
+        # Add statusLine if missing
+        HAS_STATUSLINE=$(jq 'has("statusLine")' "$UPDATED" 2>/dev/null || echo "false")
+        if [[ "$HAS_STATUSLINE" != "true" ]]; then
+            CONTENT=$(jq '.statusLine = {"type":"command","command":"~/.claude/statusline.sh"}' "$UPDATED")
+            echo "$CONTENT" > "$UPDATED"
+            CHANGED=1
+        fi
+
         if [[ $CHANGED -eq 1 ]]; then
-            echo "[done] Updated $SETTINGS_FILE with missing peer-review config"
+            echo "[done] Updated $SETTINGS_FILE with missing config"
         else
             echo "[skip] $SETTINGS_FILE already up to date"
         fi
     else
-        # Add hooks key, preserve everything else (permissions, etc.)
+        # Add hooks + statusLine keys, preserve everything else (permissions, etc.)
         EXISTING=$(cat "$SETTINGS_FILE")
-        MERGED=$(echo "$EXISTING" | jq --argjson hooks "$(echo "$HOOKS_CONFIG" | jq '.hooks')" '. + {hooks: $hooks}')
+        MERGED=$(echo "$EXISTING" | jq \
+            --argjson hooks "$(echo "$HOOKS_CONFIG" | jq '.hooks')" \
+            --argjson sl '{"type":"command","command":"~/.claude/statusline.sh"}' \
+            '. + {hooks: $hooks, statusLine: $sl}')
         echo "$MERGED" > "$SETTINGS_FILE"
-        echo "[done] Added hooks to existing $SETTINGS_FILE"
+        echo "[done] Added hooks and statusLine to existing $SETTINGS_FILE"
     fi
 else
     echo "[WARN] $SETTINGS_FILE already exists and jq is not installed for safe merge."
@@ -705,6 +755,9 @@ echo "Quick start:"
 echo "  claude-code list                              # see all templates"
 echo "  claude-code init java-enterprise ~/projects/my-app"
 echo "  claude-code ~/projects/my-app                 # start Claude session"
+echo ""
+echo "Status line installed:"
+echo "  - statusline.sh       — model, agent, git, context%, cost, lines, duration"
 echo ""
 echo "Global hooks installed (active in all projects):"
 echo "  - verify-on-stop.sh    — runs tests when Claude finishes"

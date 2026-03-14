@@ -396,7 +396,7 @@ code-copilot-team/
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   └── setup.sh                         Unified install entry point
 ├── tests/
-│   ├── test-hooks.sh                    90 hook tests
+│   ├── test-hooks.sh                    112 hook tests
 │   ├── test-generate.sh                 261 generation + adapter tests
 │   └── test-shared-structure.sh         601 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
