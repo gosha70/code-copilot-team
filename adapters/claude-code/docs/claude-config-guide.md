@@ -414,6 +414,18 @@ Set `keep-coding-instructions: true` to retain Claude Code's software engineerin
 ```
 claude-code [path]                  Start/resume Claude session (default: current dir)
 claude-code init <type> [path]      Initialize project from template
+claude-code sync [path] [--dry-run] Sync project against its template
 claude-code list                    List available templates
 claude-code help                    Show full usage
 ```
+
+### Template Sync
+
+After updating templates (`claude-setup.sh --sync`), use `claude-code sync` to propagate changes to existing projects:
+
+```bash
+claude-code sync --dry-run              # preview changes in current directory
+claude-code sync ~/projects/my-app      # apply sync to a specific project
+```
+
+Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but never overwrites `CLAUDE.md` — it shows a diff for manual review. Projects track their template in `.claude/template.json`; older projects without this file are matched by their `CLAUDE.md` heading.

@@ -233,7 +233,7 @@ Add your own providers by creating new `[providers.<name>]` sections. The `{revi
 ![Three - Phase Agent Workflow](docs/images/three-phase-workflow.png)
 - **Optional GCC memory** — persistent cross-session context via the [GCC protocol](https://arxiv.org/abs/2508.00031), powered by Aline MCP (`aline-ai`). Install with `--gcc`.
 ![Git Context Control](docs/images/gcc-operations-map.png)
-- **Adaptive launcher** (`claude-code`) — uses `cmux` on macOS by default, `tmux` elsewhere, with git context display and `--peer-review` flags.
+- **Adaptive launcher** (`claude-code`) — uses `cmux` on macOS by default, `tmux` elsewhere, with git context display, `--peer-review` flags, and `sync` for keeping projects aligned with template updates.
 
 ## Quick Start
 
@@ -280,6 +280,23 @@ claude-code ~/projects/my-rag-app
 # Just point the launcher at it — global rules load automatically
 claude-code ~/projects/existing-api
 ```
+
+## Sync a Project to Latest Template
+
+After pulling repo updates, sync your project's commands and `.claude/` files against the latest template:
+
+```bash
+# 1. Update global config + templates from repo
+git pull && ./scripts/setup.sh --sync --claude-code
+
+# 2. Preview what would change (safe — no files modified)
+claude-code sync ~/projects/my-rag-app --dry-run
+
+# 3. Apply the sync
+claude-code sync ~/projects/my-rag-app
+```
+
+Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but never overwrites your `CLAUDE.md` — it shows a diff for manual review instead. Projects initialized with `claude-code init` have a `.claude/template.json` that tracks the template; older projects are matched by their `CLAUDE.md` heading.
 
 ## Available Templates
 
@@ -398,7 +415,8 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    112 hook tests
 │   ├── test-generate.sh                 261 generation + adapter tests
-│   └── test-shared-structure.sh         601 structure + content tests
+│   ├── test-shared-structure.sh         603 structure + content tests
+│   └── test-sync.sh                     39 sync + init metadata tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md

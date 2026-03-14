@@ -79,6 +79,9 @@ jobs:
       - name: Run hook tests
         run: bash tests/test-hooks.sh
 
+      - name: Run sync tests
+        run: bash tests/test-sync.sh
+
       - name: Run shared structure tests
         env:
           HOME: ${{ runner.temp }}/cct-home

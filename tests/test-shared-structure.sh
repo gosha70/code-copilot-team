@@ -766,6 +766,10 @@ grep -Eq "test-shared-structure\\.sh[[:space:]]+${TEST_SHARED_STRUCTURE_EXPECTED
 assert_ok "README lists ${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure + content tests" "$rc"
 
 rc=0
+grep -Eq "test-sync\\.sh[[:space:]]+${TEST_SYNC_EXPECTED_PASS} sync \\+ init metadata tests" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists ${TEST_SYNC_EXPECTED_PASS} sync + init metadata tests" "$rc"
+
+rc=0
 grep -Eq "docs/[[:space:]]+${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists ${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$rc"
 
@@ -909,8 +913,12 @@ rc=0
 grep -Eq '^TEST_SHARED_STRUCTURE_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
 assert_ok "test-counts has TEST_SHARED_STRUCTURE_EXPECTED_PASS numeric value" "$rc"
 
+rc=0
+grep -Eq '^TEST_SYNC_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
+assert_ok "test-counts has TEST_SYNC_EXPECTED_PASS numeric value" "$rc"
+
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
-assert_eq "test-counts has exactly 3 expected-pass variables" "3" "$COUNT_VARS"
+assert_eq "test-counts has exactly 4 expected-pass variables" "4" "$COUNT_VARS"
 
 rc=0
 grep -q 'source "\$COUNTS_FILE"' "$REPO_DIR/tests/test-generate.sh" || rc=1

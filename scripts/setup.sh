@@ -129,10 +129,18 @@ for tool in "${TOOLS[@]}"; do
   echo "=== Installing: $tool ==="
   case "$tool" in
     claude-code)
-      bash "$ADAPTERS/claude-code/setup.sh" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+      if $SYNC; then
+        bash "$ADAPTERS/claude-code/setup.sh" --sync && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+      else
+        bash "$ADAPTERS/claude-code/setup.sh" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+      fi
       ;;
     codex)
-      bash "$ADAPTERS/codex/setup.sh" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+      if $SYNC; then
+        bash "$ADAPTERS/codex/setup.sh" --sync && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+      else
+        bash "$ADAPTERS/codex/setup.sh" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+      fi
       ;;
     cursor)
       bash "$ADAPTERS/cursor/setup.sh" "$PROJECT_DIR" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))

@@ -13,7 +13,8 @@
 #   Installs claude-code launcher to ~/.local/bin/
 #
 # Run once, then use 'claude-code init <type> [path]' to scaffold projects.
-# Run with --sync to re-copy rules, rules-library, and agents from repo.
+# Run with --sync to re-copy rules, rules-library, agents, templates, and launcher from repo.
+# Then use 'claude-code sync [path]' to update individual projects against their template.
 # Run with --gcc to install optional GCC memory support (Aline MCP).
 
 set -e
@@ -77,6 +78,59 @@ if [[ "${1:-}" == "--sync" ]]; then
             echo "$CONTENT" > "$SETTINGS_FILE"
             echo "[done] Added statusLine to $SETTINGS_FILE"
         fi
+    fi
+
+    # Templates — clean redeploy from repo to ~/.claude/templates/
+    # First, collect the set of repo template names so we can prune stale ones.
+    REPO_TEMPLATES=()
+    for tmpl_dir in "$SHARED_DIR"/templates/*/; do
+        [[ -f "$tmpl_dir/PROJECT.md" ]] || continue
+        REPO_TEMPLATES+=("$(basename "$tmpl_dir")")
+    done
+
+    # Prune installed templates that no longer exist in the repo.
+    if [[ -d "$TEMPLATES_DIR" ]]; then
+        for installed_dir in "$TEMPLATES_DIR"/*/; do
+            [[ -d "$installed_dir" ]] || continue
+            installed_name=$(basename "$installed_dir")
+            found=0
+            for repo_name in "${REPO_TEMPLATES[@]}"; do
+                if [[ "$repo_name" == "$installed_name" ]]; then
+                    found=1
+                    break
+                fi
+            done
+            if [[ $found -eq 0 ]]; then
+                rm -rf "$installed_dir"
+                echo "[prune] Removed retired template: $installed_name"
+            fi
+        done
+    fi
+
+    # Remove and recreate each current template so deleted files don't linger.
+    for tmpl_dir in "$SHARED_DIR"/templates/*/; do
+        [[ -f "$tmpl_dir/PROJECT.md" ]] || continue
+        tmpl_name=$(basename "$tmpl_dir")
+        dest="$TEMPLATES_DIR/$tmpl_name"
+        rm -rf "$dest"
+        mkdir -p "$dest/commands"
+        cp "$tmpl_dir/PROJECT.md" "$dest/CLAUDE.md"
+        if [[ -d "$tmpl_dir/commands" ]]; then
+            cp "$tmpl_dir/commands/"*.md "$dest/commands/" 2>/dev/null || true
+        fi
+        if [[ -d "$tmpl_dir/.claude" ]]; then
+            mkdir -p "$dest/.claude"
+            cp -r "$tmpl_dir/.claude/"* "$dest/.claude/" 2>/dev/null || true
+        fi
+    done
+    echo "[done] Synced templates to $TEMPLATES_DIR"
+
+    # Launcher
+    if [[ -f "$LAUNCHER_SOURCE" ]]; then
+        mkdir -p "$HOME/.local/bin"
+        cp "$LAUNCHER_SOURCE" "$LAUNCHER_TARGET"
+        chmod +x "$LAUNCHER_TARGET"
+        echo "[done] Synced launcher to $LAUNCHER_TARGET"
     fi
 
     echo "Sync complete."

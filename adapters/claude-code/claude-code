@@ -10,6 +10,7 @@
 # Usage:
 #   claude-code [path]                  Start/resume Claude session (default: current dir)
 #   claude-code init <type> [path]      Initialize new project from template
+#   claude-code sync [path] [--dry-run] Sync project against its template
 #   claude-code list                    List available project templates
 #   claude-code help                    Show usage
 #
@@ -18,6 +19,8 @@
 #   claude-code ~/projects/my-api       Start session in existing project
 #   claude-code init ml-rag             Init ML RAG project in current directory
 #   claude-code init java-enterprise ~/projects/order-service
+#   claude-code sync                    Sync current project against its template
+#   claude-code sync ~/projects/my-api --dry-run   Preview sync changes
 #
 # Setup:
 #   Run claude-setup.sh first to create ~/.claude/templates/
@@ -273,6 +276,40 @@ exec_claude_in_current_shell() {
 
 # ── Helpers ──────────────────────────────────────────────────
 
+compute_template_hash() {
+    local file="$1"
+    if command_exists md5sum; then
+        md5sum "$file" | cut -d' ' -f1
+    elif command_exists md5; then
+        md5 -q "$file"
+    else
+        echo "unknown"
+    fi
+}
+
+infer_template() {
+    local target="$1"
+    [[ -f "$target/CLAUDE.md" ]] || return 1
+
+    local heading
+    heading=$(head -1 "$target/CLAUDE.md")
+
+    # Exact heading match only — no fuzzy/prefix matching.
+    # Multiple templates can share a heading prefix (e.g. "# ML/AI"),
+    # so a fuzzy match would pick the wrong one and persist it.
+    for dir in "$TEMPLATES_DIR"/*/; do
+        [[ -f "$dir/CLAUDE.md" ]] || continue
+        local tmpl_heading
+        tmpl_heading=$(head -1 "$dir/CLAUDE.md")
+        if [[ "$heading" == "$tmpl_heading" ]]; then
+            basename "$dir"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 show_help() {
     cat << 'HELP'
 claude-code - Smart Claude Code session launcher
@@ -280,11 +317,13 @@ claude-code - Smart Claude Code session launcher
 USAGE:
     claude-code [path]                              Start/resume Claude (cmux on macOS, tmux elsewhere)
     claude-code init <type> [path] [--playwright]   Initialize project from template
+    claude-code sync [path] [--dry-run]             Sync project against its template
     claude-code playwright [path]                   Install Playwright CLI skills into a project
     claude-code list                                List available templates
     claude-code help                                Show this help
 
 OPTIONS:
+    --dry-run            With 'sync': show what would change without modifying files
     --playwright         With 'init': install Playwright CLI skills into the new project
     --peer-review [name] Enable peer review (optional: specify provider)
     --peer-review-off    Disable peer review for this session
@@ -308,6 +347,11 @@ WORKFLOW - New Project:
 WORKFLOW - Existing Project:
     claude-code ~/projects/existing-app
     claude-code --shell tmux ~/projects/existing-app
+
+WORKFLOW - Sync Project to Latest Template:
+    claude-setup.sh --sync                          # update templates from repo first
+    claude-code sync ~/projects/existing-app        # sync project files
+    claude-code sync --dry-run                      # preview changes without applying
 
 SETUP:
     Run claude-setup.sh once to create templates in ~/.claude/templates/
@@ -374,6 +418,18 @@ init_project() {
         cp -r "$TEMPLATES_DIR/$type/commands/"* "$target/.claude/commands/" 2>/dev/null || true
     fi
 
+    # Write template metadata for sync support
+    local hash
+    hash=$(compute_template_hash "$TEMPLATES_DIR/$type/CLAUDE.md")
+    mkdir -p "$target/.claude"
+    cat > "$target/.claude/template.json" << TMPLEOF
+{
+  "name": "$type",
+  "initialized": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "templateHash": "$hash"
+}
+TMPLEOF
+
     # Install Playwright CLI skills for web templates if --playwright flag is set
     if [[ "$PLAYWRIGHT" == "1" ]]; then
         if command -v playwright-cli &>/dev/null; then
@@ -398,6 +454,191 @@ init_project() {
     echo "  1. Edit $target/CLAUDE.md to customize for your project"
     echo "  2. Run: claude-code $target"
     echo ""
+}
+
+sync_project() {
+    local target="${1:-.}"
+    local dry_run="${2:-0}"
+
+    # Resolve to absolute path
+    if [[ ! -d "$target" ]]; then
+        echo "Error: Directory '$target' does not exist."
+        exit 1
+    fi
+    target=$(cd "$target" && pwd)
+
+    # 1. Determine template name
+    local template_name=""
+    if [[ -f "$target/.claude/template.json" ]]; then
+        if command_exists jq; then
+            template_name=$(jq -r '.name // empty' "$target/.claude/template.json" 2>/dev/null)
+        else
+            template_name=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$target/.claude/template.json" 2>/dev/null | head -1 | sed 's/.*"name"[[:space:]]*:[[:space:]]*"//; s/"//')
+        fi
+    fi
+
+    # If no template.json, infer from CLAUDE.md heading (one-time backfill)
+    local inferred=0
+    if [[ -z "$template_name" ]]; then
+        template_name=$(infer_template "$target" 2>/dev/null) || true
+        if [[ -n "$template_name" ]]; then
+            inferred=1
+            echo "[info] No .claude/template.json found — inferred '$template_name' from CLAUDE.md heading."
+            if [[ "$dry_run" == "1" ]]; then
+                echo "       Run without --dry-run to record this in .claude/template.json."
+            else
+                echo "       This will be recorded so future syncs don't need inference."
+            fi
+            echo ""
+        fi
+    fi
+
+    if [[ -z "$template_name" ]]; then
+        echo "Error: Cannot determine template for this project."
+        echo ""
+        echo "No .claude/template.json found and could not match CLAUDE.md heading"
+        echo "against any installed template."
+        echo ""
+        echo "Available templates:"
+        list_templates
+        echo "To set the template manually:"
+        echo "  mkdir -p .claude"
+        echo '  echo '"'"'{"name":"<template-name>"}'"'"' > .claude/template.json'
+        exit 1
+    fi
+
+    # 2. Validate template exists
+    if [[ ! -d "$TEMPLATES_DIR/$template_name" ]]; then
+        echo "Error: Template '$template_name' not found in $TEMPLATES_DIR"
+        echo "Run 'claude-setup.sh --sync' to update templates first."
+        exit 1
+    fi
+
+    local tmpl_dir="$TEMPLATES_DIR/$template_name"
+    local changes=0
+
+    if [[ "$dry_run" == "1" ]]; then
+        echo "Dry run: syncing $(basename "$target") against template '$template_name'"
+    else
+        echo "Syncing $(basename "$target") against template '$template_name'"
+    fi
+    echo ""
+
+    # 3. Sync commands
+    if [[ -d "$tmpl_dir/commands" ]]; then
+        for cmd_file in "$tmpl_dir/commands/"*.md; do
+            [[ -f "$cmd_file" ]] || continue
+            local cmd_name
+            cmd_name=$(basename "$cmd_file")
+            local dest="$target/.claude/commands/$cmd_name"
+
+            if [[ ! -f "$dest" ]]; then
+                if [[ "$dry_run" == "1" ]]; then
+                    echo "  [add] .claude/commands/$cmd_name (new)"
+                else
+                    mkdir -p "$target/.claude/commands"
+                    cp "$cmd_file" "$dest"
+                    echo "  [add] .claude/commands/$cmd_name"
+                fi
+                changes=$((changes + 1))
+            elif ! diff -q "$cmd_file" "$dest" >/dev/null 2>&1; then
+                if [[ "$dry_run" == "1" ]]; then
+                    echo "  [upd] .claude/commands/$cmd_name (changed)"
+                    diff --unified=3 "$dest" "$cmd_file" 2>/dev/null | head -20 || true
+                    echo ""
+                else
+                    cp "$cmd_file" "$dest"
+                    echo "  [upd] .claude/commands/$cmd_name"
+                fi
+                changes=$((changes + 1))
+            fi
+        done
+    fi
+
+    # 4. Sync .claude directory contents (remediation.json, settings, etc.)
+    if [[ -d "$tmpl_dir/.claude" ]]; then
+        while IFS= read -r -d '' tmpl_file; do
+            local rel_path="${tmpl_file#$tmpl_dir/}"
+            local dest="$target/$rel_path"
+
+            # Skip commands/ — handled above
+            [[ "$rel_path" == .claude/commands/* ]] && continue
+
+            if [[ ! -f "$dest" ]]; then
+                if [[ "$dry_run" == "1" ]]; then
+                    echo "  [add] $rel_path (new)"
+                else
+                    mkdir -p "$(dirname "$dest")"
+                    cp "$tmpl_file" "$dest"
+                    echo "  [add] $rel_path"
+                fi
+                changes=$((changes + 1))
+            elif ! diff -q "$tmpl_file" "$dest" >/dev/null 2>&1; then
+                if [[ "$dry_run" == "1" ]]; then
+                    echo "  [upd] $rel_path (changed)"
+                    diff --unified=3 "$dest" "$tmpl_file" 2>/dev/null | head -20 || true
+                    echo ""
+                else
+                    cp "$tmpl_file" "$dest"
+                    echo "  [upd] $rel_path"
+                fi
+                changes=$((changes + 1))
+            fi
+        done < <(find "$tmpl_dir/.claude" -type f -print0 2>/dev/null)
+    fi
+
+    # 5. Show CLAUDE.md diff (never auto-overwrite — user has customizations)
+    if [[ -f "$tmpl_dir/CLAUDE.md" && -f "$target/CLAUDE.md" ]]; then
+        local tmpl_hash proj_hash
+        tmpl_hash=$(compute_template_hash "$tmpl_dir/CLAUDE.md")
+        proj_hash=$(compute_template_hash "$target/CLAUDE.md")
+
+        if [[ "$tmpl_hash" != "$proj_hash" ]]; then
+            echo ""
+            echo "  [info] CLAUDE.md differs from template (expected — you have customizations)"
+            if [[ "$dry_run" == "1" ]]; then
+                echo "  Template CLAUDE.md diff:"
+                diff --unified=3 "$target/CLAUDE.md" "$tmpl_dir/CLAUDE.md" 2>/dev/null | head -40 || true
+            else
+                echo "  Review manually: diff '$target/CLAUDE.md' '$tmpl_dir/CLAUDE.md'"
+            fi
+        fi
+    fi
+
+    # 6. Update template.json (preserve initialized, add lastSynced)
+    if [[ "$dry_run" != "1" ]]; then
+        local hash initialized
+        hash=$(compute_template_hash "$tmpl_dir/CLAUDE.md")
+        initialized=""
+        if [[ -f "$target/.claude/template.json" ]]; then
+            if command_exists jq; then
+                initialized=$(jq -r '.initialized // empty' "$target/.claude/template.json" 2>/dev/null)
+            else
+                initialized=$(grep -o '"initialized"[[:space:]]*:[[:space:]]*"[^"]*"' "$target/.claude/template.json" 2>/dev/null | head -1 | sed 's/.*"initialized"[[:space:]]*:[[:space:]]*"//; s/"//')
+            fi
+        fi
+        if [[ -z "$initialized" ]]; then
+            initialized=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        fi
+        mkdir -p "$target/.claude"
+        cat > "$target/.claude/template.json" << TMPLEOF
+{
+  "name": "$template_name",
+  "initialized": "$initialized",
+  "lastSynced": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "templateHash": "$hash"
+}
+TMPLEOF
+    fi
+
+    echo ""
+    if [[ $changes -eq 0 ]]; then
+        echo "Already up to date."
+    elif [[ "$dry_run" == "1" ]]; then
+        echo "$changes file(s) would be updated. Run without --dry-run to apply."
+    else
+        echo "$changes file(s) synced."
+    fi
 }
 
 start_tmux_session() {
@@ -637,6 +878,19 @@ case "${1:-}" in
         ;;
     list)
         list_templates
+        ;;
+    sync)
+        shift
+        SYNC_DRY_RUN=0
+        SYNC_ARGS=()
+        for arg in "$@"; do
+            if [[ "$arg" == "--dry-run" ]]; then
+                SYNC_DRY_RUN=1
+            else
+                SYNC_ARGS+=("$arg")
+            fi
+        done
+        sync_project "${SYNC_ARGS[0]:-.}" "$SYNC_DRY_RUN"
         ;;
     playwright)
         target="${2:-.}"
