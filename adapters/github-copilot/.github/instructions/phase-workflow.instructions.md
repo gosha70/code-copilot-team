@@ -22,6 +22,26 @@ Before Build phase starts, verify based on `spec_mode`:
 - **lightweight**: `spec.md` present, no unresolved `[NEEDS CLARIFICATION]`, `plan.md` approved
 - **none**: `plan.md` present and approved — no further spec artifacts required
 
+## Phase Completion Integrity
+
+Rules preventing false completion claims. Derived from a real incident where Claude marked a phase complete with major deliverables missing, then suggested experimental work.
+
+### No partial completion
+
+Never mark a phase as complete when deliverables are missing. If a phase has two deliverable clusters (e.g., auth middleware + chat UI) and only one is built, the phase is **partially complete**. Report exactly what is done and what remains.
+
+### No summary laundering
+
+When presenting phase status, compare against the **original plan text** — not your memory of what was built. If the plan says "Auth/RBAC + UI Split into Chat UI and Admin Console" and you only built auth, do not rewrite the summary as "Role-based auth middleware, CORS preflight." Report the gap.
+
+### No stretch before core
+
+Never suggest experimental, nice-to-have, or post-plan work when core deliverables from the current or earlier phases are incomplete. If the plan has sequencing prerequisites (e.g., "only pursue after Phase N gates are met"), enforce them.
+
+### Regression detection on removal
+
+When existing functionality is removed or replaced during a phase (e.g., replacing a Dash app with FastAPI), verify the replacement is functional before closing the phase. A regression from "working app" to "no app" is a hard blocker — not a separate bug to fix later.
+
 ## Post-Phase Steps (Every Phase)
 
 1. **Type/lint check.** Run the project's type checker and linter. Zero errors required before proceeding.
