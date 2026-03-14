@@ -233,7 +233,7 @@ Add your own providers by creating new `[providers.<name>]` sections. The `{revi
 ![Three - Phase Agent Workflow](docs/images/three-phase-workflow.png)
 - **Optional GCC memory** — persistent cross-session context via the [GCC protocol](https://arxiv.org/abs/2508.00031), powered by Aline MCP (`aline-ai`). Install with `--gcc`.
 ![Git Context Control](docs/images/gcc-operations-map.png)
-- **Adaptive launcher** (`claude-code`) — uses `cmux` on macOS by default, `tmux` elsewhere, with git context display, `--peer-review` flags, and `sync` for keeping projects aligned with template updates.
+- **Adaptive launcher** (`claude-code`) — prefers `zellij` when available, then `cmux` (macOS), then `tmux`, with git context display, `--peer-review` flags, and `sync` for keeping projects aligned with template updates.
 
 ## Quick Start
 
@@ -413,7 +413,7 @@ code-copilot-team/
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   └── setup.sh                         Unified install entry point
 ├── tests/
-│   ├── test-hooks.sh                    112 hook tests
+│   ├── test-hooks.sh                    125 hook tests
 │   ├── test-generate.sh                 261 generation + adapter tests
 │   ├── test-shared-structure.sh         603 structure + content tests
 │   └── test-sync.sh                     39 sync + init metadata tests

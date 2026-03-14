@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-code - Smart Claude Code session launcher with cmux/tmux
+# claude-code - Smart Claude Code session launcher with cmux/zellij/tmux
 #
 # Enhances the basic Claude workflow with:
 #   - Project template initialization
@@ -33,6 +33,8 @@ CLAUDE_CMD="claude"
 BACKEND_AUTO="auto"
 BACKEND_TMUX="tmux"
 BACKEND_CMUX="cmux"
+BACKEND_ZELLIJ="zellij"
+LAUNCHER_CONFIG="$HOME/.claude/launcher.json"
 SESSION_BACKEND="$BACKEND_AUTO"
 
 command_exists() {
@@ -51,13 +53,60 @@ is_inside_cmux() {
     [[ -n "${CMUX_WORKSPACE_ID:-}" ]]
 }
 
+is_inside_zellij() {
+    [[ -n "${ZELLIJ_SESSION_NAME:-}" ]]
+}
+
+is_inside_tmux() {
+    [[ -n "${TMUX:-}" ]]
+}
+
+read_saved_backend() {
+    local val=""
+    if [[ -f "$LAUNCHER_CONFIG" ]] && command_exists jq; then
+        val=$(jq -r '.sessionBackend // empty' "$LAUNCHER_CONFIG" 2>/dev/null) || val=""
+    elif [[ -f "$LAUNCHER_CONFIG" ]]; then
+        val=$(grep -o '"sessionBackend"[[:space:]]*:[[:space:]]*"[^"]*"' "$LAUNCHER_CONFIG" 2>/dev/null \
+            | head -1 | sed 's/.*"sessionBackend"[[:space:]]*:[[:space:]]*"//; s/"//') || val=""
+    fi
+    # Only return recognized backends; ignore malformed or unsupported values
+    case "$val" in
+        "$BACKEND_ZELLIJ"|"$BACKEND_CMUX"|"$BACKEND_TMUX") printf '%s\n' "$val" ;;
+    esac
+}
+
 resolve_session_backend() {
     if [[ "$SESSION_BACKEND" != "$BACKEND_AUTO" ]]; then
         printf '%s\n' "$SESSION_BACKEND"
         return
     fi
 
-    if is_macos; then
+    # If already inside a multiplexer, reuse it (avoids nesting)
+    if is_inside_zellij; then
+        printf '%s\n' "$BACKEND_ZELLIJ"
+        return
+    fi
+    if is_inside_cmux; then
+        printf '%s\n' "$BACKEND_CMUX"
+        return
+    fi
+    if is_inside_tmux; then
+        printf '%s\n' "$BACKEND_TMUX"
+        return
+    fi
+
+    # Use saved preference from setup.sh if available
+    local saved
+    saved=$(read_saved_backend)
+    if [[ -n "$saved" ]]; then
+        printf '%s\n' "$saved"
+        return
+    fi
+
+    # Default: zellij if available, cmux on macOS, tmux elsewhere
+    if command_exists zellij; then
+        printf '%s\n' "$BACKEND_ZELLIJ"
+    elif is_macos; then
         printf '%s\n' "$BACKEND_CMUX"
     else
         printf '%s\n' "$BACKEND_TMUX"
@@ -150,6 +199,34 @@ ensure_tmux_available() {
     return 1
 }
 
+ensure_zellij_available() {
+    if command_exists zellij; then
+        return 0
+    fi
+
+    if ! is_interactive_terminal || [[ -n "${CI:-}" ]]; then
+        echo "zellij is not installed and automatic install was skipped because this shell is non-interactive."
+        return 1
+    fi
+
+    if ! command_exists brew; then
+        echo "Error: zellij is not installed."
+        echo "Install it with: brew install zellij (macOS) or cargo install zellij"
+        return 1
+    fi
+
+    local reply=""
+    echo "zellij is not installed."
+    echo -n "Install zellij now with Homebrew? [Y/n] "
+    read -r reply
+    if [[ -n "$reply" && ! "$reply" =~ ^[Yy]$ ]]; then
+        return 1
+    fi
+
+    brew install zellij
+    command_exists zellij
+}
+
 resolve_shell_bin() {
     printf '%s\n' "${SHELL:-/bin/bash}"
 }
@@ -184,22 +261,29 @@ build_launch_command() {
     local project_dir="$1"
     local session_start="$2"
     local log_file="$3"
+    local no_exec="${4:-0}"
     local run_cmd
     local shell_bin
     local launch_cmd=""
+    local exec_prefix="exec "
+
+    if [[ "$no_exec" == "1" ]]; then
+        exec_prefix=""
+    fi
 
     run_cmd=$(build_run_cmd_string "$session_start")
     shell_bin=$(resolve_shell_bin)
 
     if command_exists script; then
-        printf -v launch_cmd 'cd %q && mkdir -p %q && exec script -q %q %q -lc %q' \
+        printf -v launch_cmd 'cd %q && mkdir -p %q && %sscript -q %q %q -lc %q' \
             "$project_dir" \
             "$LOGS_DIR" \
+            "$exec_prefix" \
             "$log_file" \
             "$shell_bin" \
             "$run_cmd"
     else
-        printf -v launch_cmd 'cd %q && exec %s' "$project_dir" "$run_cmd"
+        printf -v launch_cmd 'cd %q && %s%s' "$project_dir" "$exec_prefix" "$run_cmd"
     fi
 
     printf '%s\n' "$launch_cmd"
@@ -315,7 +399,7 @@ show_help() {
 claude-code - Smart Claude Code session launcher
 
 USAGE:
-    claude-code [path]                              Start/resume Claude (cmux on macOS, tmux elsewhere)
+    claude-code [path]                              Start/resume Claude (zellij > cmux > tmux)
     claude-code init <type> [path] [--playwright]   Initialize project from template
     claude-code sync [path] [--dry-run]             Sync project against its template
     claude-code playwright [path]                   Install Playwright CLI skills into a project
@@ -328,7 +412,7 @@ OPTIONS:
     --peer-review [name] Enable peer review (optional: specify provider)
     --peer-review-off    Disable peer review for this session
     --peer-review-scope <scope>  Review scope: code|design|both (default: both)
-    --shell <auto|cmux|tmux>  Session backend (default: auto)
+    --shell <auto|zellij|cmux|tmux>  Session backend (default: auto)
 
 PROJECT TYPES:
     ml-rag              Python RAG + Knowledge Graph
@@ -346,7 +430,7 @@ WORKFLOW - New Project:
 
 WORKFLOW - Existing Project:
     claude-code ~/projects/existing-app
-    claude-code --shell tmux ~/projects/existing-app
+    claude-code --shell zellij ~/projects/existing-app
 
 WORKFLOW - Sync Project to Latest Template:
     claude-setup.sh --sync                          # update templates from repo first
@@ -673,13 +757,22 @@ start_tmux_session() {
     if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
         echo "  Peer:    ${PEER_PROVIDER:-profile default} (scope: $PEER_SCOPE)"
     fi
-    echo "──────────────────────────────────────"
-    echo ""
 
     # Session transcript logging
     mkdir -p "$LOGS_DIR"
     local timestamp=$(date +%Y-%m-%d-%H%M%S)
     local log_file="$LOGS_DIR/${dir_name}-${timestamp}.log"
+
+    echo "  Shell:   tmux"
+    echo "  Log:     $log_file"
+    echo "──────────────────────────────────────"
+    echo ""
+
+    # If already inside tmux, run directly in the current pane
+    if is_inside_tmux; then
+        echo "Launching Claude in the current tmux pane..."
+        exec_claude_in_current_shell "$project_dir" "$log_file"
+    fi
 
     # Check if session already exists
     if tmux has-session -t "$session_name" 2>/dev/null; then
@@ -689,7 +782,6 @@ start_tmux_session() {
             tmux kill-session -t "$session_name" 2>/dev/null
         else
             echo "Session '$session_name' exists. Attaching..."
-            echo "  Log: $log_file"
             # Start logging on the existing session (append to new log file)
             tmux pipe-pane -t "$session_name" -o "sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> '$log_file'"
             tmux attach-session -t "$session_name"
@@ -766,37 +858,165 @@ start_cmux_session() {
     exit 1
 }
 
+start_zellij_session() {
+    local project_dir="${1:-.}"
+    local dir_name session_start run_cmd log_file session_name
+
+    if [[ ! -d "$project_dir" ]]; then
+        echo "Error: Directory '$project_dir' does not exist."
+        echo "To create a new project, use: claude-code init <type> $project_dir"
+        exit 1
+    fi
+    project_dir=$(cd "$project_dir" && pwd)
+    dir_name=$(basename "$project_dir")
+    session_name="claude-${dir_name//[^a-zA-Z0-9_-]/_}"
+    log_file=$(create_log_file "$dir_name")
+
+    echo "──────────────────────────────────────"
+    echo "  Project: $dir_name"
+    if git -C "$project_dir" rev-parse --is-inside-work-tree &>/dev/null; then
+        local branch last_commit dirty
+        branch=$(git -C "$project_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+        last_commit=$(git -C "$project_dir" log -1 --oneline 2>/dev/null)
+        dirty=$(git -C "$project_dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+        echo "  Branch:  $branch"
+        echo "  Latest:  $last_commit"
+        [[ "$dirty" -gt 0 ]] && echo "  Status:  $dirty uncommitted change(s)"
+    fi
+    [[ -f "$project_dir/CLAUDE.md" ]] && echo "  Config:  CLAUDE.md found" || echo "  Config:  No CLAUDE.md (run 'claude-code init <type>')"
+    if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
+        echo "  Peer:    ${PEER_PROVIDER:-profile default} (scope: $PEER_SCOPE)"
+    fi
+    echo "  Shell:   zellij"
+    echo "  Log:     $log_file"
+    echo "──────────────────────────────────────"
+    echo ""
+
+    # If already inside zellij, run directly in the current pane
+    if is_inside_zellij; then
+        echo "Launching Claude in the current zellij pane..."
+        exec_claude_in_current_shell "$project_dir" "$log_file"
+    fi
+
+    # Stable paths keyed by session name — persist across detach/reattach
+    # cycles so the wrapper and marker survive the full session lifetime.
+    local wrapper_script shell_bin marker
+    shell_bin=$(resolve_shell_bin)
+    wrapper_script="/tmp/claude-zellij-${session_name}.sh"
+    marker="/tmp/.claude-zellij-${session_name}.mark"
+
+    # Check if session already exists
+    if zellij list-sessions 2>/dev/null | grep -q "^${session_name}\b"; then
+        if [[ -n "$PEER_REVIEW_ENABLED" ]]; then
+            echo "Recreating session '$session_name' with peer-review config..."
+            zellij delete-session "$session_name" 2>/dev/null || true
+            rm -f "$wrapper_script" "$marker"
+        else
+            echo "Session '$session_name' exists. Attaching..."
+            zellij attach "$session_name"
+            return
+        fi
+    fi
+
+    echo "Creating session '$session_name'..."
+    session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    # Build launch command without exec so the wrapper shell survives
+    # and can fall back to a login shell after Claude exits.
+    local launch_cmd
+    launch_cmd=$(build_launch_command "$project_dir" "$session_start" "$log_file" 1)
+
+    # Write a wrapper that uses a marker file to distinguish the
+    # initial pane (runs claude) from new panes (normal shell).
+    # This avoids --config overrides that would replace the user's
+    # zellij config (keybindings, theme, plugins).
+    # Stable paths ensure new panes work correctly after detach/reattach.
+    rm -f "$marker"
+    cat > "$wrapper_script" << WRAPEOF
+#!/usr/bin/env bash
+if [[ -f "$marker" ]]; then
+    exec "$shell_bin" -l
+fi
+touch "$marker"
+$launch_cmd
+exec "$shell_bin" -l
+WRAPEOF
+    chmod +x "$wrapper_script"
+
+    # SHELL override makes all panes run our wrapper, but the marker
+    # ensures only the first pane launches claude — subsequent panes
+    # exec the real shell immediately. No --config needed.
+    SHELL="$wrapper_script" zellij attach "$session_name" --create
+}
+
 start_session() {
     local project_dir="${1:-.}"
     local selected_backend
 
     selected_backend=$(resolve_session_backend)
 
-    case "$selected_backend" in
-        "$BACKEND_CMUX")
-            if ensure_cmux_available; then
+    # If explicitly requested, fail hard if unavailable
+    if [[ "$SESSION_BACKEND" != "$BACKEND_AUTO" ]]; then
+        case "$selected_backend" in
+            "$BACKEND_ZELLIJ")
+                ensure_zellij_available || { echo "Error: zellij backend was requested explicitly but is unavailable."; exit 1; }
+                start_zellij_session "$project_dir"
+                return
+                ;;
+            "$BACKEND_CMUX")
+                ensure_cmux_available || { echo "Error: cmux backend was requested explicitly but is unavailable."; exit 1; }
                 start_cmux_session "$project_dir"
                 return
-            fi
-
-            if [[ "$SESSION_BACKEND" == "$BACKEND_CMUX" ]]; then
-                echo "Error: cmux backend was requested explicitly but is unavailable."
+                ;;
+            "$BACKEND_TMUX")
+                ensure_tmux_available || exit 1
+                start_tmux_session "$project_dir"
+                return
+                ;;
+            *)
+                echo "Error: Unsupported shell backend '$selected_backend'. Use auto, cmux, zellij, or tmux."
                 exit 1
-            fi
+                ;;
+        esac
+    fi
 
-            echo "[info] cmux is unavailable; falling back to tmux."
-            selected_backend="$BACKEND_TMUX"
-            ;;
-        "$BACKEND_TMUX")
-            ;;
-        *)
-            echo "Error: Unsupported shell backend '$selected_backend'. Use auto, cmux, or tmux."
-            exit 1
-            ;;
-    esac
+    # Auto mode: try resolved backend, then fall through alternatives
+    if [[ "$selected_backend" == "$BACKEND_ZELLIJ" ]] && ensure_zellij_available 2>/dev/null; then
+        start_zellij_session "$project_dir"
+        return
+    fi
 
-    ensure_tmux_available || exit 1
-    start_tmux_session "$project_dir"
+    if [[ "$selected_backend" == "$BACKEND_CMUX" ]] && ensure_cmux_available 2>/dev/null; then
+        start_cmux_session "$project_dir"
+        return
+    fi
+
+    if [[ "$selected_backend" == "$BACKEND_TMUX" ]] && command_exists tmux; then
+        start_tmux_session "$project_dir"
+        return
+    fi
+
+    # Resolved choice unavailable — try remaining backends in preference order
+    if command_exists zellij; then
+        echo "[info] $selected_backend is unavailable; falling back to zellij."
+        start_zellij_session "$project_dir"
+        return
+    fi
+
+    if is_macos && ensure_cmux_available 2>/dev/null; then
+        echo "[info] $selected_backend is unavailable; falling back to cmux."
+        start_cmux_session "$project_dir"
+        return
+    fi
+
+    if ensure_tmux_available; then
+        echo "[info] $selected_backend is unavailable; falling back to tmux."
+        start_tmux_session "$project_dir"
+        return
+    fi
+
+    echo "Error: No session backend available. Install zellij, cmux, or tmux."
+    exit 1
 }
 
 # ── Main ─────────────────────────────────────────────────────
@@ -829,15 +1049,15 @@ while [[ $# -gt 0 ]]; do
             ;;
         --shell)
             if [[ -z "${2:-}" ]]; then
-                echo "Error: --shell requires one of: auto, cmux, tmux"
+                echo "Error: --shell requires one of: auto, cmux, zellij, tmux"
                 exit 1
             fi
             SESSION_BACKEND="${2:-$BACKEND_AUTO}"
             case "$SESSION_BACKEND" in
-                "$BACKEND_AUTO"|"$BACKEND_CMUX"|"$BACKEND_TMUX")
+                "$BACKEND_AUTO"|"$BACKEND_CMUX"|"$BACKEND_ZELLIJ"|"$BACKEND_TMUX")
                     ;;
                 *)
-                    echo "Error: Unsupported shell backend '$SESSION_BACKEND'. Use auto, cmux, or tmux."
+                    echo "Error: Unsupported shell backend '$SESSION_BACKEND'. Use auto, cmux, zellij, or tmux."
                     exit 1
                     ;;
             esac

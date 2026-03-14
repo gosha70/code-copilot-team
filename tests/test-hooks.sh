@@ -375,6 +375,7 @@ parse_flags() {
         BACKEND_AUTO="auto"
         BACKEND_TMUX="tmux"
         BACKEND_CMUX="cmux"
+        BACKEND_ZELLIJ="zellij"
         SESSION_BACKEND="$BACKEND_AUTO"
         POSITIONAL=()
         while [[ $# -gt 0 ]]; do
@@ -398,7 +399,7 @@ parse_flags() {
                 --shell)
                     SESSION_BACKEND="${2:-$BACKEND_AUTO}"
                     case "$SESSION_BACKEND" in
-                        "$BACKEND_AUTO"|"$BACKEND_CMUX"|"$BACKEND_TMUX")
+                        "$BACKEND_AUTO"|"$BACKEND_CMUX"|"$BACKEND_ZELLIJ"|"$BACKEND_TMUX")
                             ;;
                         *)
                             echo "INVALID"
@@ -424,20 +425,49 @@ parse_flags() {
 }
 
 resolve_backend_for_os() {
-    local backend="$1" os_name="$2"
+    local backend="$1" os_name="$2" has_zellij="${3:-0}" inside_zellij="${4:-0}" inside_cmux="${5:-0}" saved_backend="${6:-}" inside_tmux="${7:-0}"
     bash -c '
         BACKEND_AUTO="auto"
         BACKEND_TMUX="tmux"
         BACKEND_CMUX="cmux"
+        BACKEND_ZELLIJ="zellij"
         SESSION_BACKEND="$1"
         OS_NAME="$2"
+        HAS_ZELLIJ="$3"
+        INSIDE_ZELLIJ="$4"
+        INSIDE_CMUX="$5"
+        SAVED_BACKEND="$6"
+        INSIDE_TMUX="$7"
 
         resolve_backend() {
             if [[ "$SESSION_BACKEND" != "$BACKEND_AUTO" ]]; then
                 printf "%s\n" "$SESSION_BACKEND"
                 return
             fi
-            if [[ "$OS_NAME" == "Darwin" ]]; then
+            # Active multiplexer wins
+            if [[ "$INSIDE_ZELLIJ" == "1" ]]; then
+                printf "%s\n" "$BACKEND_ZELLIJ"
+                return
+            fi
+            if [[ "$INSIDE_CMUX" == "1" ]]; then
+                printf "%s\n" "$BACKEND_CMUX"
+                return
+            fi
+            if [[ "$INSIDE_TMUX" == "1" ]]; then
+                printf "%s\n" "$BACKEND_TMUX"
+                return
+            fi
+            # Saved preference (only recognized values)
+            case "$SAVED_BACKEND" in
+                "$BACKEND_ZELLIJ"|"$BACKEND_CMUX"|"$BACKEND_TMUX")
+                    printf "%s\n" "$SAVED_BACKEND"
+                    return
+                    ;;
+            esac
+            # Tool preference
+            if [[ "$HAS_ZELLIJ" == "1" ]]; then
+                printf "%s\n" "$BACKEND_ZELLIJ"
+            elif [[ "$OS_NAME" == "Darwin" ]]; then
                 printf "%s\n" "$BACKEND_CMUX"
             else
                 printf "%s\n" "$BACKEND_TMUX"
@@ -445,7 +475,7 @@ resolve_backend_for_os() {
         }
 
         resolve_backend
-    ' -- "$backend" "$os_name" 2>/dev/null
+    ' -- "$backend" "$os_name" "$has_zellij" "$inside_zellij" "$inside_cmux" "$saved_backend" "$inside_tmux" 2>/dev/null
 }
 
 # Test: --peer-review codex /path
@@ -571,6 +601,16 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# Test: --shell zellij
+RESULT=$(parse_flags --shell zellij /some/path)
+if [[ "$RESULT" == "ENABLED=|PROVIDER=|SCOPE=both|SHELL=zellij|POS=/some/path" ]]; then
+    echo "  PASS: --shell zellij"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --shell zellij → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
 # Test: --shell auto
 RESULT=$(parse_flags --shell auto /some/path)
 if [[ "$RESULT" == "ENABLED=|PROVIDER=|SCOPE=both|SHELL=auto|POS=/some/path" ]]; then
@@ -581,23 +621,143 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Test: macOS defaults to cmux when backend is auto
-RESULT=$(resolve_backend_for_os auto Darwin)
-if [[ "$RESULT" == "cmux" ]]; then
-    echo "  PASS: auto backend defaults to cmux on macOS"
+# Test: --shell invalid rejected
+RESULT=$(parse_flags --shell bogus /some/path)
+if [[ "$RESULT" == "INVALID" ]]; then
+    echo "  PASS: --shell invalid rejected"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: auto backend on macOS → $RESULT"
+    echo "  FAIL: --shell invalid → $RESULT"
     FAIL=$((FAIL + 1))
 fi
 
-# Test: non-macOS defaults to tmux when backend is auto
-RESULT=$(resolve_backend_for_os auto Linux)
-if [[ "$RESULT" == "tmux" ]]; then
-    echo "  PASS: auto backend defaults to tmux off macOS"
+# Test: macOS without zellij defaults to cmux
+RESULT=$(resolve_backend_for_os auto Darwin 0)
+if [[ "$RESULT" == "cmux" ]]; then
+    echo "  PASS: auto defaults to cmux on macOS (no zellij)"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: auto backend off macOS → $RESULT"
+    echo "  FAIL: auto on macOS no zellij → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: macOS with zellij defaults to zellij
+RESULT=$(resolve_backend_for_os auto Darwin 1)
+if [[ "$RESULT" == "zellij" ]]; then
+    echo "  PASS: auto defaults to zellij on macOS (zellij available)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: auto on macOS with zellij → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: non-macOS defaults to tmux when no zellij
+RESULT=$(resolve_backend_for_os auto Linux 0)
+if [[ "$RESULT" == "tmux" ]]; then
+    echo "  PASS: auto defaults to tmux off macOS (no zellij)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: auto off macOS no zellij → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: non-macOS with zellij defaults to zellij
+RESULT=$(resolve_backend_for_os auto Linux 1)
+if [[ "$RESULT" == "zellij" ]]; then
+    echo "  PASS: auto defaults to zellij off macOS (zellij available)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: auto off macOS with zellij → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: inside zellij wins over cmux availability
+RESULT=$(resolve_backend_for_os auto Darwin 1 1 0)
+if [[ "$RESULT" == "zellij" ]]; then
+    echo "  PASS: inside zellij wins on macOS"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: inside zellij on macOS → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: inside cmux wins over zellij availability
+RESULT=$(resolve_backend_for_os auto Darwin 1 0 1)
+if [[ "$RESULT" == "cmux" ]]; then
+    echo "  PASS: inside cmux wins over zellij availability"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: inside cmux with zellij → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: explicit --shell overrides active multiplexer
+RESULT=$(resolve_backend_for_os tmux Darwin 1 1 0)
+if [[ "$RESULT" == "tmux" ]]; then
+    echo "  PASS: explicit --shell tmux overrides active zellij"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: explicit tmux inside zellij → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: saved preference tmux overrides zellij availability
+RESULT=$(resolve_backend_for_os auto Darwin 1 0 0 tmux)
+if [[ "$RESULT" == "tmux" ]]; then
+    echo "  PASS: saved preference tmux overrides zellij availability"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: saved tmux with zellij available → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: active multiplexer still wins over saved preference
+RESULT=$(resolve_backend_for_os auto Darwin 1 1 0 cmux)
+if [[ "$RESULT" == "zellij" ]]; then
+    echo "  PASS: active zellij wins over saved cmux preference"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: active zellij with saved cmux → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: inside tmux detects correctly
+RESULT=$(resolve_backend_for_os auto Darwin 1 0 0 "" 1)
+if [[ "$RESULT" == "tmux" ]]; then
+    echo "  PASS: inside tmux wins on macOS with zellij available"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: inside tmux on macOS → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: inside tmux wins over saved preference
+RESULT=$(resolve_backend_for_os auto Linux 0 0 0 zellij 1)
+if [[ "$RESULT" == "tmux" ]]; then
+    echo "  PASS: inside tmux wins over saved zellij preference"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: inside tmux with saved zellij → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: unrecognized saved backend is ignored
+RESULT=$(resolve_backend_for_os auto Linux 0 0 0 screen)
+if [[ "$RESULT" == "tmux" ]]; then
+    echo "  PASS: unrecognized saved backend 'screen' ignored"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: unrecognized saved 'screen' → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: empty saved backend falls through to default
+RESULT=$(resolve_backend_for_os auto Linux 0 0 0 "")
+if [[ "$RESULT" == "tmux" ]]; then
+    echo "  PASS: empty saved backend falls through to default"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: empty saved backend → $RESULT"
     FAIL=$((FAIL + 1))
 fi
 
