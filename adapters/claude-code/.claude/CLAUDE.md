@@ -20,6 +20,15 @@ These instructions apply to every Claude Code session regardless of project.
 - Do not over-engineer: no premature abstractions, no speculative feature flags.
 - Do not leave TODO comments unless explicitly asked.
 
+## Plan Mode
+
+When using `/plan` mode, Claude Code writes the plan to `~/.claude/plans/` — outside the project. Before exiting plan mode, **also write the plan content** to the project:
+
+- For SDD feature work: `specs/<feature-id>/plan.md` (with `spec_mode` frontmatter per `spec-workflow.md`)
+- For ad-hoc plans: `doc_internal/plans/<descriptive-name>.md`
+
+This ensures new sessions and other copilot tools can find and continue the work.
+
 ## Session Workflow
 
 1. **Understand** — Read relevant files. Check for a project-level CLAUDE.md or doc_internal/CONTEXT.md.

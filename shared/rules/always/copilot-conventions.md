@@ -41,3 +41,11 @@ When setting up a new project, prefer this layout:
 ```
 
 doc_internal/ should be in .gitignore for private projects or kept checked in for team-shared context. specs/ should always be committed — it contains SDD artifacts that bridge Plan and Build phases across sessions.
+
+## Plan Artifact Locality
+
+All design/plan artifacts must reside within the project directory so that any copilot session can discover them. Plans stored outside the project (e.g., `~/.claude/plans/`) are session-local and invisible to new sessions or other tools.
+
+- Plans go in `specs/<feature-id>/plan.md` (with SDD frontmatter) for feature work.
+- Ad-hoc plans without a feature-id go in `doc_internal/plans/`.
+- Never rely on external plan storage as the only copy. If a tool writes a plan outside the project, also write it to the appropriate project-local location.
