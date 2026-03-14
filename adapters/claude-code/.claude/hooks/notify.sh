@@ -3,8 +3,9 @@ set -euo pipefail
 
 # notify.sh — Desktop notification hook (Notification event)
 #
-# Sends a native desktop notification when Claude Code fires a notification
-# event (permission prompt, idle, etc.). Cross-platform: macOS + Linux.
+# Sends a workspace-aware notification when Claude Code fires a notification
+# event (permission prompt, idle, etc.). Uses cmux notifications when Claude
+# is running inside cmux; otherwise falls back to native desktop notifications.
 #
 # Exit: always 0 — notifications are passive, never block.
 
@@ -20,6 +21,12 @@ TITLE=$(echo "$INPUT" | jq -r '.title // "Claude Code"' 2>/dev/null) || exit 0
 MESSAGE=$(echo "$INPUT" | jq -r '.message // ""' 2>/dev/null) || exit 0
 
 if [[ -z "$MESSAGE" ]]; then
+  exit 0
+fi
+
+# --- Prefer cmux notifications when running inside cmux ---
+if [[ -n "${CMUX_WORKSPACE_ID:-}" ]] && command -v cmux &>/dev/null; then
+  cmux notify --title "$TITLE" --body "$MESSAGE" >/dev/null 2>&1 || true
   exit 0
 fi
 

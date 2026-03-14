@@ -34,11 +34,11 @@ Demo/example endpoints MUST return meaningful sample data, not empty stubs (`[]`
 Verify each endpoint with a test request and confirm the response is non-empty and
 structurally correct.
 
-## tmux-Aware Verification
+## Multiplexer-Aware Verification
 
-When the project uses tmux (detected via `claude-code` launcher or `$TMUX` env var):
-- UI-facing features (banners, status messages) must be verified INSIDE a tmux session
-- Environment variables must be passed directly to processes (not via `tmux setenv` for already-running processes)
+When the project uses a terminal multiplexer (detected via `claude-code`, `$TMUX`, or `$CMUX_WORKSPACE_ID`):
+- UI-facing features (banners, status messages) must be verified inside the active multiplexer session
+- Environment variables must be passed directly to processes (not via multiplexer env injection for already-running processes)
 - Test launcher flags by actually running the launcher command
 
 ## Self-Execute Test Plan

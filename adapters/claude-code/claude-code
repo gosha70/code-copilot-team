@@ -1,9 +1,9 @@
 #!/bin/bash
-# claude-code - Smart Claude Code session launcher with tmux
+# claude-code - Smart Claude Code session launcher with cmux/tmux
 #
-# Enhances the basic tmux+claude workflow with:
+# Enhances the basic Claude workflow with:
 #   - Project template initialization
-#   - Per-project tmux sessions (named after directory)
+#   - Per-project multiplexer sessions/workspaces
 #   - Working directory awareness
 #   - Session transcript logging (~/.claude/logs/)
 #
@@ -27,6 +27,249 @@ set -e
 TEMPLATES_DIR="$HOME/.claude/templates"
 LOGS_DIR="$HOME/.claude/logs"
 CLAUDE_CMD="claude"
+BACKEND_AUTO="auto"
+BACKEND_TMUX="tmux"
+BACKEND_CMUX="cmux"
+SESSION_BACKEND="$BACKEND_AUTO"
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+is_interactive_terminal() {
+    [[ -t 0 && -t 1 ]]
+}
+
+is_macos() {
+    [[ "$(uname -s)" == "Darwin" ]]
+}
+
+is_inside_cmux() {
+    [[ -n "${CMUX_WORKSPACE_ID:-}" ]]
+}
+
+resolve_session_backend() {
+    if [[ "$SESSION_BACKEND" != "$BACKEND_AUTO" ]]; then
+        printf '%s\n' "$SESSION_BACKEND"
+        return
+    fi
+
+    if is_macos; then
+        printf '%s\n' "$BACKEND_CMUX"
+    else
+        printf '%s\n' "$BACKEND_TMUX"
+    fi
+}
+
+cmux_app_path() {
+    local app_path
+    for app_path in \
+        "/Applications/cmux.app" \
+        "$HOME/Applications/cmux.app"
+    do
+        if [[ -d "$app_path" ]]; then
+            printf '%s\n' "$app_path"
+            return 0
+        fi
+    done
+    return 1
+}
+
+ensure_cmux_cli() {
+    local app_path cli_path target_link
+
+    if command_exists cmux; then
+        return 0
+    fi
+
+    app_path=$(cmux_app_path) || return 1
+    cli_path="$app_path/Contents/Resources/bin/cmux"
+    [[ -x "$cli_path" ]] || return 1
+
+    mkdir -p "$HOME/.local/bin"
+    target_link="$HOME/.local/bin/cmux"
+    ln -sf "$cli_path" "$target_link"
+    command_exists cmux
+}
+
+prompt_install_cmux() {
+    local reply=""
+
+    if ! is_macos; then
+        echo "Error: cmux is only supported on macOS."
+        return 1
+    fi
+
+    if ! is_interactive_terminal || [[ -n "${CI:-}" ]]; then
+        echo "cmux is not installed and automatic install was skipped because this shell is non-interactive."
+        return 1
+    fi
+
+    if ! command_exists brew; then
+        echo "Error: cmux is not installed and Homebrew is unavailable."
+        echo "Install Homebrew first: https://brew.sh"
+        return 1
+    fi
+
+    echo "cmux is not installed."
+    echo -n "Install cmux now with Homebrew? [Y/n] "
+    read -r reply
+    if [[ -n "$reply" && ! "$reply" =~ ^[Yy]$ ]]; then
+        return 1
+    fi
+
+    brew tap manaflow-ai/cmux
+    brew install --cask cmux
+    ensure_cmux_cli >/dev/null 2>&1 || true
+    command_exists cmux
+}
+
+ensure_cmux_available() {
+    ensure_cmux_cli >/dev/null 2>&1 || true
+    if command_exists cmux; then
+        return 0
+    fi
+
+    prompt_install_cmux || return 1
+    ensure_cmux_cli >/dev/null 2>&1 || true
+    command_exists cmux
+}
+
+ensure_tmux_available() {
+    if command_exists tmux; then
+        return 0
+    fi
+
+    echo "Error: tmux is not installed."
+    if is_macos && command_exists brew; then
+        echo "Install it with: brew install tmux"
+    fi
+    return 1
+}
+
+resolve_shell_bin() {
+    printf '%s\n' "${SHELL:-/bin/bash}"
+}
+
+create_log_file() {
+    local dir_name="$1"
+    local timestamp
+
+    mkdir -p "$LOGS_DIR"
+    timestamp=$(date +%Y-%m-%d-%H%M%S)
+    printf '%s/%s-%s.log\n' "$LOGS_DIR" "$dir_name" "$timestamp"
+}
+
+build_run_cmd_string() {
+    local session_start="$1"
+    local run_cmd=""
+
+    if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
+        printf -v run_cmd 'env CCT_PEER_REVIEW_ENABLED=true CCT_PEER_PROVIDER=%q CCT_PEER_TRIGGER=phase-complete CCT_PEER_REVIEW_SCOPE=%q CCT_SESSION_START=%q %q' \
+            "${PEER_PROVIDER:-}" \
+            "$PEER_SCOPE" \
+            "$session_start" \
+            "$CLAUDE_CMD"
+    else
+        printf -v run_cmd '%q' "$CLAUDE_CMD"
+    fi
+
+    printf '%s\n' "$run_cmd"
+}
+
+build_launch_command() {
+    local project_dir="$1"
+    local session_start="$2"
+    local log_file="$3"
+    local run_cmd
+    local shell_bin
+    local launch_cmd=""
+
+    run_cmd=$(build_run_cmd_string "$session_start")
+    shell_bin=$(resolve_shell_bin)
+
+    if command_exists script; then
+        printf -v launch_cmd 'cd %q && mkdir -p %q && exec script -q %q %q -lc %q' \
+            "$project_dir" \
+            "$LOGS_DIR" \
+            "$log_file" \
+            "$shell_bin" \
+            "$run_cmd"
+    else
+        printf -v launch_cmd 'cd %q && exec %s' "$project_dir" "$run_cmd"
+    fi
+
+    printf '%s\n' "$launch_cmd"
+}
+
+escape_applescript_text() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '%s\n' "$value"
+}
+
+copy_to_clipboard() {
+    local text="$1"
+    if is_macos && command_exists pbcopy; then
+        printf '%s' "$text" | pbcopy
+    fi
+}
+
+launch_cmux_with_cli() {
+    local launch_cmd="$1"
+    cmux new-workspace >/dev/null 2>&1 || return 1
+    cmux send "$launch_cmd"$'\n' >/dev/null 2>&1 || return 1
+}
+
+launch_cmux_with_osascript() {
+    local launch_cmd="$1"
+    local escaped_cmd
+
+    escaped_cmd=$(escape_applescript_text "$launch_cmd")
+    open -a cmux >/dev/null 2>&1 || return 1
+
+    osascript <<EOF >/dev/null 2>&1
+tell application "cmux" to activate
+delay 0.8
+tell application "System Events"
+    keystroke "n" using {command down}
+    delay 0.2
+    keystroke "$escaped_cmd"
+    key code 36
+end tell
+EOF
+}
+
+exec_claude_in_current_shell() {
+    local project_dir="$1"
+    local log_file="$2"
+    local session_start
+    local run_cmd
+    local shell_bin
+
+    session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    cd "$project_dir"
+
+    run_cmd=$(build_run_cmd_string "$session_start")
+    shell_bin=$(resolve_shell_bin)
+
+    if command_exists script; then
+        exec script -q "$log_file" "$shell_bin" -lc "$run_cmd"
+    fi
+
+    if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
+        exec env \
+            CCT_PEER_REVIEW_ENABLED=true \
+            CCT_PEER_PROVIDER="${PEER_PROVIDER:-}" \
+            CCT_PEER_TRIGGER=phase-complete \
+            CCT_PEER_REVIEW_SCOPE="$PEER_SCOPE" \
+            CCT_SESSION_START="$session_start" \
+            "$CLAUDE_CMD"
+    fi
+
+    exec "$CLAUDE_CMD"
+}
 
 # ── Helpers ──────────────────────────────────────────────────
 
@@ -35,7 +278,7 @@ show_help() {
 claude-code - Smart Claude Code session launcher
 
 USAGE:
-    claude-code [path]                              Start/resume Claude in tmux (default: .)
+    claude-code [path]                              Start/resume Claude (cmux on macOS, tmux elsewhere)
     claude-code init <type> [path] [--playwright]   Initialize project from template
     claude-code playwright [path]                   Install Playwright CLI skills into a project
     claude-code list                                List available templates
@@ -46,6 +289,7 @@ OPTIONS:
     --peer-review [name] Enable peer review (optional: specify provider)
     --peer-review-off    Disable peer review for this session
     --peer-review-scope <scope>  Review scope: code|design|both (default: both)
+    --shell <auto|cmux|tmux>  Session backend (default: auto)
 
 PROJECT TYPES:
     ml-rag              Python RAG + Knowledge Graph
@@ -63,6 +307,7 @@ WORKFLOW - New Project:
 
 WORKFLOW - Existing Project:
     claude-code ~/projects/existing-app
+    claude-code --shell tmux ~/projects/existing-app
 
 SETUP:
     Run claude-setup.sh once to create templates in ~/.claude/templates/
@@ -155,8 +400,10 @@ init_project() {
     echo ""
 }
 
-start_session() {
+start_tmux_session() {
     local project_dir="${1:-.}"
+    local session_start
+    local run_cmd
 
     # Resolve to absolute path
     if [[ ! -d "$project_dir" ]]; then
@@ -211,15 +458,104 @@ start_session() {
 
     echo "Creating session '$session_name'..."
     echo "  Log: $log_file"
-    # Build the claude command — inject peer-review env vars so Claude and hooks inherit them
-    local run_cmd="$CLAUDE_CMD"
-    if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
-        run_cmd="env CCT_PEER_REVIEW_ENABLED=true CCT_PEER_PROVIDER='${PEER_PROVIDER:-}' CCT_PEER_TRIGGER=phase-complete CCT_PEER_REVIEW_SCOPE='$PEER_SCOPE' CCT_SESSION_START='$(date -u +%Y-%m-%dT%H:%M:%SZ)' $CLAUDE_CMD"
-    fi
+    session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    run_cmd=$(build_run_cmd_string "$session_start")
     # Create detached, set up logging, then attach
     tmux new-session -d -s "$session_name" -c "$project_dir" "$run_cmd"
     tmux pipe-pane -t "$session_name" -o "sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> '$log_file'"
     tmux attach-session -t "$session_name"
+}
+
+start_cmux_session() {
+    local project_dir="${1:-.}"
+    local dir_name session_start launch_cmd log_file
+
+    if [[ ! -d "$project_dir" ]]; then
+        echo "Error: Directory '$project_dir' does not exist."
+        echo "To create a new project, use: claude-code init <type> $project_dir"
+        exit 1
+    fi
+    project_dir=$(cd "$project_dir" && pwd)
+    dir_name=$(basename "$project_dir")
+    log_file=$(create_log_file "$dir_name")
+
+    echo "──────────────────────────────────────"
+    echo "  Project: $dir_name"
+    if git -C "$project_dir" rev-parse --is-inside-work-tree &>/dev/null; then
+        local branch last_commit dirty
+        branch=$(git -C "$project_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+        last_commit=$(git -C "$project_dir" log -1 --oneline 2>/dev/null)
+        dirty=$(git -C "$project_dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+        echo "  Branch:  $branch"
+        echo "  Latest:  $last_commit"
+        [[ "$dirty" -gt 0 ]] && echo "  Status:  $dirty uncommitted change(s)"
+    fi
+    [[ -f "$project_dir/CLAUDE.md" ]] && echo "  Config:  CLAUDE.md found" || echo "  Config:  No CLAUDE.md (run 'claude-code init <type>')"
+    if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
+        echo "  Peer:    ${PEER_PROVIDER:-profile default} (scope: $PEER_SCOPE)"
+    fi
+    echo "  Shell:   cmux"
+    echo "  Log:     $log_file"
+    echo "──────────────────────────────────────"
+    echo ""
+
+    if is_inside_cmux; then
+        echo "Launching Claude in the current cmux terminal..."
+        exec_claude_in_current_shell "$project_dir" "$log_file"
+    fi
+
+    session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    launch_cmd=$(build_launch_command "$project_dir" "$session_start" "$log_file")
+
+    if command_exists cmux && launch_cmux_with_cli "$launch_cmd"; then
+        echo "Opened a new cmux workspace and launched Claude."
+        return
+    fi
+
+    if launch_cmux_with_osascript "$launch_cmd"; then
+        echo "Opened a new cmux workspace and launched Claude."
+        return
+    fi
+
+    copy_to_clipboard "$launch_cmd"
+    echo "Unable to automate cmux launch."
+    echo "The Claude launch command has been copied to your clipboard."
+    echo "Paste it into a new cmux workspace:"
+    echo "  $launch_cmd"
+    exit 1
+}
+
+start_session() {
+    local project_dir="${1:-.}"
+    local selected_backend
+
+    selected_backend=$(resolve_session_backend)
+
+    case "$selected_backend" in
+        "$BACKEND_CMUX")
+            if ensure_cmux_available; then
+                start_cmux_session "$project_dir"
+                return
+            fi
+
+            if [[ "$SESSION_BACKEND" == "$BACKEND_CMUX" ]]; then
+                echo "Error: cmux backend was requested explicitly but is unavailable."
+                exit 1
+            fi
+
+            echo "[info] cmux is unavailable; falling back to tmux."
+            selected_backend="$BACKEND_TMUX"
+            ;;
+        "$BACKEND_TMUX")
+            ;;
+        *)
+            echo "Error: Unsupported shell backend '$selected_backend'. Use auto, cmux, or tmux."
+            exit 1
+            ;;
+    esac
+
+    ensure_tmux_available || exit 1
+    start_tmux_session "$project_dir"
 }
 
 # ── Main ─────────────────────────────────────────────────────
@@ -248,6 +584,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --peer-review-scope)
             PEER_SCOPE="${2:-both}"
+            shift 2
+            ;;
+        --shell)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --shell requires one of: auto, cmux, tmux"
+                exit 1
+            fi
+            SESSION_BACKEND="${2:-$BACKEND_AUTO}"
+            case "$SESSION_BACKEND" in
+                "$BACKEND_AUTO"|"$BACKEND_CMUX"|"$BACKEND_TMUX")
+                    ;;
+                *)
+                    echo "Error: Unsupported shell backend '$SESSION_BACKEND'. Use auto, cmux, or tmux."
+                    exit 1
+                    ;;
+            esac
             shift 2
             ;;
         --playwright)

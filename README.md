@@ -233,7 +233,7 @@ Add your own providers by creating new `[providers.<name>]` sections. The `{revi
 ![Three - Phase Agent Workflow](docs/images/three-phase-workflow.png)
 - **Optional GCC memory** — persistent cross-session context via the [GCC protocol](https://arxiv.org/abs/2508.00031), powered by Aline MCP (`aline-ai`). Install with `--gcc`.
 ![Git Context Control](docs/images/gcc-operations-map.png)
-- **tmux launcher** (`claude-code`) — per-project sessions with git context display and `--peer-review` flags.
+- **Adaptive launcher** (`claude-code`) — uses `cmux` on macOS by default, `tmux` elsewhere, with git context display and `--peer-review` flags.
 
 ## Quick Start
 
@@ -396,7 +396,7 @@ code-copilot-team/
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   └── setup.sh                         Unified install entry point
 ├── tests/
-│   ├── test-hooks.sh                    85 hook tests
+│   ├── test-hooks.sh                    90 hook tests
 │   ├── test-generate.sh                 261 generation + adapter tests
 │   └── test-shared-structure.sh         601 structure + content tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/

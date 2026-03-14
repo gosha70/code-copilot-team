@@ -372,6 +372,10 @@ parse_flags() {
         PEER_REVIEW_ENABLED=""
         PEER_PROVIDER=""
         PEER_SCOPE="both"
+        BACKEND_AUTO="auto"
+        BACKEND_TMUX="tmux"
+        BACKEND_CMUX="cmux"
+        SESSION_BACKEND="$BACKEND_AUTO"
         POSITIONAL=()
         while [[ $# -gt 0 ]]; do
             case "$1" in
@@ -391,6 +395,18 @@ parse_flags() {
                     PEER_SCOPE="${2:-both}"
                     shift 2
                     ;;
+                --shell)
+                    SESSION_BACKEND="${2:-$BACKEND_AUTO}"
+                    case "$SESSION_BACKEND" in
+                        "$BACKEND_AUTO"|"$BACKEND_CMUX"|"$BACKEND_TMUX")
+                            ;;
+                        *)
+                            echo "INVALID"
+                            exit 0
+                            ;;
+                    esac
+                    shift 2
+                    ;;
                 --playwright)
                     PLAYWRIGHT=1
                     shift
@@ -402,14 +418,39 @@ parse_flags() {
             esac
         done
         set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
-        echo "ENABLED=$PEER_REVIEW_ENABLED|PROVIDER=$PEER_PROVIDER|SCOPE=$PEER_SCOPE|POS=${1:-}"
+        echo "ENABLED=$PEER_REVIEW_ENABLED|PROVIDER=$PEER_PROVIDER|SCOPE=$PEER_SCOPE|SHELL=$SESSION_BACKEND|POS=${1:-}"
     ' -- "$@" 2>/dev/null)
     echo "$result"
 }
 
+resolve_backend_for_os() {
+    local backend="$1" os_name="$2"
+    bash -c '
+        BACKEND_AUTO="auto"
+        BACKEND_TMUX="tmux"
+        BACKEND_CMUX="cmux"
+        SESSION_BACKEND="$1"
+        OS_NAME="$2"
+
+        resolve_backend() {
+            if [[ "$SESSION_BACKEND" != "$BACKEND_AUTO" ]]; then
+                printf "%s\n" "$SESSION_BACKEND"
+                return
+            fi
+            if [[ "$OS_NAME" == "Darwin" ]]; then
+                printf "%s\n" "$BACKEND_CMUX"
+            else
+                printf "%s\n" "$BACKEND_TMUX"
+            fi
+        }
+
+        resolve_backend
+    ' -- "$backend" "$os_name" 2>/dev/null
+}
+
 # Test: --peer-review codex /path
 RESULT=$(parse_flags --peer-review codex /some/path)
-if [[ "$RESULT" == "ENABLED=true|PROVIDER=codex|SCOPE=both|POS=/some/path" ]]; then
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=codex|SCOPE=both|SHELL=auto|POS=/some/path" ]]; then
     echo "  PASS: --peer-review codex /path"
     PASS=$((PASS + 1))
 else
@@ -419,7 +460,7 @@ fi
 
 # Test: --peer-review /absolute/path (path not consumed as provider)
 RESULT=$(parse_flags --peer-review /some/path)
-if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=/some/path" ]]; then
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|SHELL=auto|POS=/some/path" ]]; then
     echo "  PASS: --peer-review /absolute/path not consumed"
     PASS=$((PASS + 1))
 else
@@ -429,7 +470,7 @@ fi
 
 # Test: --peer-review ~/path (tilde path not consumed)
 RESULT=$(parse_flags --peer-review '~/projects/app')
-if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=~/projects/app" ]]; then
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|SHELL=auto|POS=~/projects/app" ]]; then
     echo "  PASS: --peer-review ~/path not consumed"
     PASS=$((PASS + 1))
 else
@@ -439,7 +480,7 @@ fi
 
 # Test: --peer-review ./relative (dot-relative not consumed)
 RESULT=$(parse_flags --peer-review ./my-app)
-if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=./my-app" ]]; then
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|SHELL=auto|POS=./my-app" ]]; then
     echo "  PASS: --peer-review ./relative not consumed"
     PASS=$((PASS + 1))
 else
@@ -449,7 +490,7 @@ fi
 
 # Test: --peer-review rel/path (path with slash not consumed)
 RESULT=$(parse_flags --peer-review projects/app)
-if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=projects/app" ]]; then
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|SHELL=auto|POS=projects/app" ]]; then
     echo "  PASS: --peer-review rel/path not consumed"
     PASS=$((PASS + 1))
 else
@@ -461,7 +502,7 @@ fi
 FLAG_TMP=$(mktemp -d)
 DIRNAME=$(basename "$FLAG_TMP")
 RESULT=$(cd "$(dirname "$FLAG_TMP")" && parse_flags --peer-review "$DIRNAME")
-if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=$DIRNAME" ]]; then
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|SHELL=auto|POS=$DIRNAME" ]]; then
     echo "  PASS: --peer-review <existing-dir> not consumed"
     PASS=$((PASS + 1))
 else
@@ -472,7 +513,7 @@ rm -rf "$FLAG_TMP"
 
 # Test: --peer-review-off
 RESULT=$(parse_flags --peer-review-off /some/path)
-if [[ "$RESULT" == "ENABLED=false|PROVIDER=|SCOPE=both|POS=/some/path" ]]; then
+if [[ "$RESULT" == "ENABLED=false|PROVIDER=|SCOPE=both|SHELL=auto|POS=/some/path" ]]; then
     echo "  PASS: --peer-review-off"
     PASS=$((PASS + 1))
 else
@@ -482,7 +523,7 @@ fi
 
 # Test: --peer-review-scope code
 RESULT=$(parse_flags --peer-review codex --peer-review-scope code /path)
-if [[ "$RESULT" == "ENABLED=true|PROVIDER=codex|SCOPE=code|POS=/path" ]]; then
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=codex|SCOPE=code|SHELL=auto|POS=/path" ]]; then
     echo "  PASS: --peer-review-scope code"
     PASS=$((PASS + 1))
 else
@@ -492,7 +533,7 @@ fi
 
 # Test: no flags (defaults)
 RESULT=$(parse_flags /some/path)
-if [[ "$RESULT" == "ENABLED=|PROVIDER=|SCOPE=both|POS=/some/path" ]]; then
+if [[ "$RESULT" == "ENABLED=|PROVIDER=|SCOPE=both|SHELL=auto|POS=/some/path" ]]; then
     echo "  PASS: no peer-review flags"
     PASS=$((PASS + 1))
 else
@@ -502,11 +543,61 @@ fi
 
 # Test: --peer-review alone (no provider, no path)
 RESULT=$(parse_flags --peer-review)
-if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|POS=" ]]; then
+if [[ "$RESULT" == "ENABLED=true|PROVIDER=|SCOPE=both|SHELL=auto|POS=" ]]; then
     echo "  PASS: --peer-review alone"
     PASS=$((PASS + 1))
 else
     echo "  FAIL: --peer-review alone → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: --shell cmux
+RESULT=$(parse_flags --shell cmux /some/path)
+if [[ "$RESULT" == "ENABLED=|PROVIDER=|SCOPE=both|SHELL=cmux|POS=/some/path" ]]; then
+    echo "  PASS: --shell cmux"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --shell cmux → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: --shell tmux
+RESULT=$(parse_flags --shell tmux /some/path)
+if [[ "$RESULT" == "ENABLED=|PROVIDER=|SCOPE=both|SHELL=tmux|POS=/some/path" ]]; then
+    echo "  PASS: --shell tmux"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --shell tmux → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: --shell auto
+RESULT=$(parse_flags --shell auto /some/path)
+if [[ "$RESULT" == "ENABLED=|PROVIDER=|SCOPE=both|SHELL=auto|POS=/some/path" ]]; then
+    echo "  PASS: --shell auto"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: --shell auto → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: macOS defaults to cmux when backend is auto
+RESULT=$(resolve_backend_for_os auto Darwin)
+if [[ "$RESULT" == "cmux" ]]; then
+    echo "  PASS: auto backend defaults to cmux on macOS"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: auto backend on macOS → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: non-macOS defaults to tmux when backend is auto
+RESULT=$(resolve_backend_for_os auto Linux)
+if [[ "$RESULT" == "tmux" ]]; then
+    echo "  PASS: auto backend defaults to tmux off macOS"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: auto backend off macOS → $RESULT"
     FAIL=$((FAIL + 1))
 fi
 
