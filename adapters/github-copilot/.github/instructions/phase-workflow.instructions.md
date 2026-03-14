@@ -32,7 +32,7 @@ Never mark a phase as complete when deliverables are missing. If a phase has two
 
 ### No summary laundering
 
-When presenting phase status, compare against the **original plan text** — not your memory of what was built. If the plan says "Auth/RBAC + UI Split into Chat UI and Admin Console" and you only built auth, do not rewrite the summary as "Role-based auth middleware, CORS preflight." Report the gap.
+When presenting phase status, compare against the **latest approved plan/spec** (`plan.md`, `spec.md`, and `tasks.md` when present) — not your memory of what was built. If the approved plan says "Auth/RBAC + UI Split into Chat UI and Admin Console" and you only built auth, do not rewrite the summary as "Role-based auth middleware, CORS preflight." Report the gap.
 
 ### No stretch before core
 

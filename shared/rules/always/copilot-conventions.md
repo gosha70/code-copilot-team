@@ -45,7 +45,7 @@ doc_internal/ should be in .gitignore for private projects or kept checked in fo
 ## Priority Discipline
 
 - **Core before stretch.** Never suggest experimental, optional, or nice-to-have features when core deliverables are incomplete. Finish what was planned before proposing additions.
-- **No repeated rejected suggestions.** When the user rejects a suggestion or corrects your prioritization, do not re-propose the same items in the next response. Acknowledge, adjust, and move forward.
+- **No repeated rejected suggestions.** When the user rejects a suggestion or corrects your prioritization, do not re-propose the same items unless the user reopens the topic or new information materially changes the tradeoff. Acknowledge, adjust, and move forward.
 
 ## Plan Artifact Locality
 
