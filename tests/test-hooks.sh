@@ -762,6 +762,149 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
+# protect-git.sh tests
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== protect-git.sh ==="
+
+# --- Should block: bare git commit ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\""}}')
+assert_exit "bare git commit blocked" 2 "$RC"
+
+# --- Should block: bare git push ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git push origin main"}}')
+assert_exit "bare git push blocked" 2 "$RC"
+
+# --- Should block: after && ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git add . && git commit -m \"test\""}}')
+assert_exit "git commit after && blocked" 2 "$RC"
+
+# --- Should block: after ; ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git add .; git commit -m \"test\""}}')
+assert_exit "git commit after ; blocked" 2 "$RC"
+
+# --- Should block: after || ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"false || git push"}}')
+assert_exit "git push after || blocked" 2 "$RC"
+
+# --- Should block: in subshell ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"(git commit -m \"test\")"}}')
+assert_exit "git commit in subshell blocked" 2 "$RC"
+
+# --- Should block: in $() ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"echo $(git push origin main)"}}')
+assert_exit "git push in command substitution blocked" 2 "$RC"
+
+# --- Should block: newline-separated commands ---
+CMD_NL=$(jq -n --arg cmd $'git add .\ngit commit -m test' '{"tool_input":{"command":$cmd}}')
+RC=$(run_hook protect-git.sh "$CMD_NL")
+assert_exit "git commit after newline blocked" 2 "$RC"
+
+# --- Should block: with env var prefix ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"GIT_AUTHOR_NAME=test git commit -m \"test\""}}')
+assert_exit "git commit with env prefix blocked" 2 "$RC"
+
+# --- Should block: env command wrapper ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"env FOO=bar git commit -m \"test\""}}')
+assert_exit "env FOO=bar git commit blocked" 2 "$RC"
+
+# --- Should block: env var with quoted value ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"env FOO=bar git push origin main"}}')
+assert_exit "env git push blocked" 2 "$RC"
+
+# --- Should block: env with flags ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"env -i FOO=bar git commit -m \"test\""}}')
+assert_exit "env -i git commit blocked" 2 "$RC"
+
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"env -u HOME git push origin main"}}')
+assert_exit "env -u git push blocked" 2 "$RC"
+
+# --- Should block: command wrapper ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"command git push origin main"}}')
+assert_exit "command git push blocked" 2 "$RC"
+
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"command git commit -m \"test\""}}')
+assert_exit "command git commit blocked" 2 "$RC"
+
+# --- Should block: exec wrapper ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"exec git push origin main"}}')
+assert_exit "exec git push blocked" 2 "$RC"
+
+# --- Should block: stacked wrappers ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"command env -u HOME git commit -m \"test\""}}')
+assert_exit "command env git commit blocked" 2 "$RC"
+
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"exec env -i FOO=bar git push origin main"}}')
+assert_exit "exec env git push blocked" 2 "$RC"
+
+# --- Should allow: wrapped non-git commands mentioning git push/commit ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"command env -u HOME echo git push origin main"}}')
+assert_exit "command env echo git push allowed" 0 "$RC"
+
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"env -i FOO=bar printf git commit"}}')
+assert_exit "env printf git commit allowed" 0 "$RC"
+
+# --- Should allow: heredoc body containing git commit ---
+CMD_HEREDOC=$(jq -n --arg cmd $'cat <<EOF\ngit commit -m x\nEOF' '{"tool_input":{"command":$cmd}}')
+RC=$(run_hook protect-git.sh "$CMD_HEREDOC")
+assert_exit "heredoc git commit allowed" 0 "$RC"
+
+# --- Should allow: heredoc body containing git push ---
+CMD_HEREDOC2=$(jq -n --arg cmd $'cat <<\'EOF\'\ngit push origin main\nEOF' '{"tool_input":{"command":$cmd}}')
+RC=$(run_hook protect-git.sh "$CMD_HEREDOC2")
+assert_exit "heredoc git push allowed" 0 "$RC"
+
+# --- Should allow: single-quoted literal with $() ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"echo '\''$(git push origin main)'\''"}}')
+assert_exit "single-quoted git push allowed" 0 "$RC"
+
+# --- Should block: command substitution inside double quotes ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"echo \"$(git push origin main)\""}}')
+assert_exit "quoted command substitution git push blocked" 2 "$RC"
+
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"echo \"$(git commit -m test)\""}}')
+assert_exit "quoted command substitution git commit blocked" 2 "$RC"
+
+# --- Should block: backtick substitution inside double quotes ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"echo \"`git push origin main`\""}}')
+assert_exit "quoted backtick git push blocked" 2 "$RC"
+
+# --- Should allow: echo containing git commit (not executed) ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"echo \"git commit -m x\""}}')
+assert_exit "echo git commit allowed" 0 "$RC"
+
+# --- Should allow: echo containing git push ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"echo \"git push origin main\""}}')
+assert_exit "echo git push allowed" 0 "$RC"
+
+# --- Should allow: git status (not commit/push) ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git status"}}')
+assert_exit "git status allowed" 0 "$RC"
+
+# --- Should allow: git log ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git log --oneline -5"}}')
+assert_exit "git log allowed" 0 "$RC"
+
+# --- Should allow: git diff ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git diff HEAD"}}')
+assert_exit "git diff allowed" 0 "$RC"
+
+# --- Should allow: override env var ---
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\""}}' HOOK_GIT_ALLOW=true)
+assert_exit "override allows git commit" 0 "$RC"
+
+# --- Edge cases ---
+RC=$(run_hook protect-git.sh '{}')
+assert_exit "missing command" 0 "$RC"
+
+RC=$(run_hook protect-git.sh '')
+assert_exit "empty input" 0 "$RC"
+
+RC=$(run_hook protect-git.sh 'not json')
+assert_exit "invalid JSON" 0 "$RC"
+
+# ══════════════════════════════════════════════════════════════
 # statusline.sh tests
 # ══════════════════════════════════════════════════════════════
 
