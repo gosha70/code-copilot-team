@@ -797,30 +797,24 @@ LAUNCHER_CONFIG="$CLAUDE_DIR/launcher.json"
 echo ""
 echo "Choose your preferred session backend for claude-code:"
 echo ""
-echo "  1) zellij   — Best TUI compatibility, session resurrection (recommended)"
-echo "  2) tmux     — Mature, widest ecosystem support"
 if [[ "$(uname -s)" == "Darwin" ]]; then
-    echo "  3) cmux     — macOS native multiplexer"
-    echo ""
-    echo -n "Select [1-3] (default: 1): "
-else
+    echo "  1) cmux     — macOS native multiplexer (recommended)"
+    echo "  2) tmux     — Mature, widest ecosystem support"
     echo ""
     echo -n "Select [1-2] (default: 1): "
+    read -r BACKEND_CHOICE
+    case "${BACKEND_CHOICE:-1}" in
+        1) CHOSEN_BACKEND="cmux" ;;
+        2) CHOSEN_BACKEND="tmux" ;;
+        *) CHOSEN_BACKEND="cmux" ;;
+    esac
+else
+    echo "  1) tmux     — Mature, widest ecosystem support (recommended)"
+    echo ""
+    echo -n "Select [1] (default: 1): "
+    read -r BACKEND_CHOICE
+    CHOSEN_BACKEND="tmux"
 fi
-read -r BACKEND_CHOICE
-
-case "${BACKEND_CHOICE:-1}" in
-    1) CHOSEN_BACKEND="zellij" ;;
-    2) CHOSEN_BACKEND="tmux" ;;
-    3)
-        if [[ "$(uname -s)" == "Darwin" ]]; then
-            CHOSEN_BACKEND="cmux"
-        else
-            CHOSEN_BACKEND="zellij"
-        fi
-        ;;
-    *) CHOSEN_BACKEND="zellij" ;;
-esac
 
 # Save preference
 if command -v jq &>/dev/null; then
@@ -839,26 +833,6 @@ echo "[done] Set session backend to '$CHOSEN_BACKEND' in $LAUNCHER_CONFIG"
 install_backend() {
     local backend="$1"
     case "$backend" in
-        zellij)
-            if command -v zellij &>/dev/null; then
-                echo "[ok]   zellij found: $(zellij --version 2>/dev/null || echo 'installed')"
-                return
-            fi
-            echo ""
-            echo "       zellij is not installed."
-            if command -v brew &>/dev/null; then
-                echo -n "       Install zellij now with 'brew install zellij'? [Y/n] "
-                read -r REPLY
-                if [[ -z "$REPLY" || "$REPLY" =~ ^[Yy]$ ]]; then
-                    brew install zellij && echo "[done] zellij installed" \
-                        || echo "[FAIL] zellij installation failed. Install manually: brew install zellij"
-                else
-                    echo "[skip] Install later: brew install zellij"
-                fi
-            else
-                echo "       Install manually: brew install zellij (macOS) or cargo install zellij"
-            fi
-            ;;
         tmux)
             if command -v tmux &>/dev/null; then
                 echo "[ok]   tmux found: $(tmux -V 2>/dev/null || echo 'installed')"

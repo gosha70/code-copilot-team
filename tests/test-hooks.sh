@@ -375,7 +375,6 @@ parse_flags() {
         BACKEND_AUTO="auto"
         BACKEND_TMUX="tmux"
         BACKEND_CMUX="cmux"
-        BACKEND_ZELLIJ="zellij"
         SESSION_BACKEND="$BACKEND_AUTO"
         POSITIONAL=()
         while [[ $# -gt 0 ]]; do
@@ -399,7 +398,7 @@ parse_flags() {
                 --shell)
                     SESSION_BACKEND="${2:-$BACKEND_AUTO}"
                     case "$SESSION_BACKEND" in
-                        "$BACKEND_AUTO"|"$BACKEND_CMUX"|"$BACKEND_ZELLIJ"|"$BACKEND_TMUX")
+                        "$BACKEND_AUTO"|"$BACKEND_CMUX"|"$BACKEND_TMUX")
                             ;;
                         *)
                             echo "INVALID"
@@ -425,30 +424,29 @@ parse_flags() {
 }
 
 resolve_backend_for_os() {
-    local backend="$1" os_name="$2" has_zellij="${3:-0}" inside_zellij="${4:-0}" inside_cmux="${5:-0}" saved_backend="${6:-}" inside_tmux="${7:-0}"
+    local backend="$1" os_name="$2" inside_cmux="${3:-0}" saved_backend="${4:-}" inside_tmux="${5:-0}" inside_zellij="${6:-0}"
     bash -c '
         BACKEND_AUTO="auto"
         BACKEND_TMUX="tmux"
         BACKEND_CMUX="cmux"
-        BACKEND_ZELLIJ="zellij"
         SESSION_BACKEND="$1"
         OS_NAME="$2"
-        HAS_ZELLIJ="$3"
-        INSIDE_ZELLIJ="$4"
-        INSIDE_CMUX="$5"
-        SAVED_BACKEND="$6"
-        INSIDE_TMUX="$7"
+        INSIDE_CMUX="$3"
+        SAVED_BACKEND="$4"
+        INSIDE_TMUX="$5"
+        INSIDE_ZELLIJ="$6"
 
         resolve_backend() {
             if [[ "$SESSION_BACKEND" != "$BACKEND_AUTO" ]]; then
                 printf "%s\n" "$SESSION_BACKEND"
                 return
             fi
-            # Active multiplexer wins
+            # Zellij compatibility: run directly instead of nesting
             if [[ "$INSIDE_ZELLIJ" == "1" ]]; then
-                printf "%s\n" "$BACKEND_ZELLIJ"
+                printf "%s\n" "direct"
                 return
             fi
+            # Active multiplexer wins
             if [[ "$INSIDE_CMUX" == "1" ]]; then
                 printf "%s\n" "$BACKEND_CMUX"
                 return
@@ -459,15 +457,13 @@ resolve_backend_for_os() {
             fi
             # Saved preference (only recognized values)
             case "$SAVED_BACKEND" in
-                "$BACKEND_ZELLIJ"|"$BACKEND_CMUX"|"$BACKEND_TMUX")
+                "$BACKEND_CMUX"|"$BACKEND_TMUX")
                     printf "%s\n" "$SAVED_BACKEND"
                     return
                     ;;
             esac
-            # Tool preference
-            if [[ "$HAS_ZELLIJ" == "1" ]]; then
-                printf "%s\n" "$BACKEND_ZELLIJ"
-            elif [[ "$OS_NAME" == "Darwin" ]]; then
+            # Default: cmux on macOS, tmux elsewhere
+            if [[ "$OS_NAME" == "Darwin" ]]; then
                 printf "%s\n" "$BACKEND_CMUX"
             else
                 printf "%s\n" "$BACKEND_TMUX"
@@ -475,7 +471,7 @@ resolve_backend_for_os() {
         }
 
         resolve_backend
-    ' -- "$backend" "$os_name" "$has_zellij" "$inside_zellij" "$inside_cmux" "$saved_backend" "$inside_tmux" 2>/dev/null
+    ' -- "$backend" "$os_name" "$inside_cmux" "$saved_backend" "$inside_tmux" "$inside_zellij" 2>/dev/null
 }
 
 # Test: --peer-review codex /path
@@ -601,13 +597,13 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Test: --shell zellij
+# Test: --shell zellij now rejected
 RESULT=$(parse_flags --shell zellij /some/path)
-if [[ "$RESULT" == "ENABLED=|PROVIDER=|SCOPE=both|SHELL=zellij|POS=/some/path" ]]; then
-    echo "  PASS: --shell zellij"
+if [[ "$RESULT" == "INVALID" ]]; then
+    echo "  PASS: --shell zellij rejected"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: --shell zellij → $RESULT"
+    echo "  FAIL: --shell zellij should be rejected → $RESULT"
     FAIL=$((FAIL + 1))
 fi
 
@@ -631,100 +627,70 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Test: macOS without zellij defaults to cmux
-RESULT=$(resolve_backend_for_os auto Darwin 0)
+# Test: macOS defaults to cmux
+RESULT=$(resolve_backend_for_os auto Darwin)
 if [[ "$RESULT" == "cmux" ]]; then
-    echo "  PASS: auto defaults to cmux on macOS (no zellij)"
+    echo "  PASS: auto defaults to cmux on macOS"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: auto on macOS no zellij → $RESULT"
+    echo "  FAIL: auto on macOS → $RESULT"
     FAIL=$((FAIL + 1))
 fi
 
-# Test: macOS with zellij defaults to zellij
-RESULT=$(resolve_backend_for_os auto Darwin 1)
-if [[ "$RESULT" == "zellij" ]]; then
-    echo "  PASS: auto defaults to zellij on macOS (zellij available)"
-    PASS=$((PASS + 1))
-else
-    echo "  FAIL: auto on macOS with zellij → $RESULT"
-    FAIL=$((FAIL + 1))
-fi
-
-# Test: non-macOS defaults to tmux when no zellij
-RESULT=$(resolve_backend_for_os auto Linux 0)
+# Test: non-macOS defaults to tmux
+RESULT=$(resolve_backend_for_os auto Linux)
 if [[ "$RESULT" == "tmux" ]]; then
-    echo "  PASS: auto defaults to tmux off macOS (no zellij)"
+    echo "  PASS: auto defaults to tmux off macOS"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: auto off macOS no zellij → $RESULT"
+    echo "  FAIL: auto off macOS → $RESULT"
     FAIL=$((FAIL + 1))
 fi
 
-# Test: non-macOS with zellij defaults to zellij
-RESULT=$(resolve_backend_for_os auto Linux 1)
-if [[ "$RESULT" == "zellij" ]]; then
-    echo "  PASS: auto defaults to zellij off macOS (zellij available)"
-    PASS=$((PASS + 1))
-else
-    echo "  FAIL: auto off macOS with zellij → $RESULT"
-    FAIL=$((FAIL + 1))
-fi
-
-# Test: inside zellij wins over cmux availability
-RESULT=$(resolve_backend_for_os auto Darwin 1 1 0)
-if [[ "$RESULT" == "zellij" ]]; then
-    echo "  PASS: inside zellij wins on macOS"
-    PASS=$((PASS + 1))
-else
-    echo "  FAIL: inside zellij on macOS → $RESULT"
-    FAIL=$((FAIL + 1))
-fi
-
-# Test: inside cmux wins over zellij availability
-RESULT=$(resolve_backend_for_os auto Darwin 1 0 1)
+# Test: inside cmux wins on macOS
+RESULT=$(resolve_backend_for_os auto Darwin 1)
 if [[ "$RESULT" == "cmux" ]]; then
-    echo "  PASS: inside cmux wins over zellij availability"
+    echo "  PASS: inside cmux wins on macOS"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: inside cmux with zellij → $RESULT"
+    echo "  FAIL: inside cmux on macOS → $RESULT"
     FAIL=$((FAIL + 1))
 fi
 
 # Test: explicit --shell overrides active multiplexer
-RESULT=$(resolve_backend_for_os tmux Darwin 1 1 0)
+RESULT=$(resolve_backend_for_os tmux Darwin 1)
 if [[ "$RESULT" == "tmux" ]]; then
-    echo "  PASS: explicit --shell tmux overrides active zellij"
+    echo "  PASS: explicit --shell tmux overrides active cmux"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: explicit tmux inside zellij → $RESULT"
+    echo "  FAIL: explicit tmux inside cmux → $RESULT"
     FAIL=$((FAIL + 1))
 fi
 
-# Test: saved preference tmux overrides zellij availability
-RESULT=$(resolve_backend_for_os auto Darwin 1 0 0 tmux)
+# Test: saved preference tmux overrides macOS default
+RESULT=$(resolve_backend_for_os auto Darwin 0 tmux)
 if [[ "$RESULT" == "tmux" ]]; then
-    echo "  PASS: saved preference tmux overrides zellij availability"
+    echo "  PASS: saved preference tmux overrides macOS default"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: saved tmux with zellij available → $RESULT"
+    echo "  FAIL: saved tmux on macOS → $RESULT"
     FAIL=$((FAIL + 1))
 fi
 
-# Test: active multiplexer still wins over saved preference
-RESULT=$(resolve_backend_for_os auto Darwin 1 1 0 cmux)
-if [[ "$RESULT" == "zellij" ]]; then
-    echo "  PASS: active zellij wins over saved cmux preference"
+# Test: active multiplexer wins over saved preference
+RESULT=$(resolve_backend_for_os auto Darwin 1 tmux)
+if [[ "$RESULT" == "cmux" ]]; then
+    echo "  PASS: active cmux wins over saved tmux preference"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: active zellij with saved cmux → $RESULT"
+    echo "  FAIL: active cmux with saved tmux → $RESULT"
     FAIL=$((FAIL + 1))
 fi
 
 # Test: inside tmux detects correctly
-RESULT=$(resolve_backend_for_os auto Darwin 1 0 0 "" 1)
+RESULT=$(resolve_backend_for_os auto Darwin 0 "" 1)
 if [[ "$RESULT" == "tmux" ]]; then
-    echo "  PASS: inside tmux wins on macOS with zellij available"
+    echo "  PASS: inside tmux wins on macOS"
     PASS=$((PASS + 1))
 else
     echo "  FAIL: inside tmux on macOS → $RESULT"
@@ -732,17 +698,17 @@ else
 fi
 
 # Test: inside tmux wins over saved preference
-RESULT=$(resolve_backend_for_os auto Linux 0 0 0 zellij 1)
+RESULT=$(resolve_backend_for_os auto Linux 0 cmux 1)
 if [[ "$RESULT" == "tmux" ]]; then
-    echo "  PASS: inside tmux wins over saved zellij preference"
+    echo "  PASS: inside tmux wins over saved cmux preference"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: inside tmux with saved zellij → $RESULT"
+    echo "  FAIL: inside tmux with saved cmux → $RESULT"
     FAIL=$((FAIL + 1))
 fi
 
 # Test: unrecognized saved backend is ignored
-RESULT=$(resolve_backend_for_os auto Linux 0 0 0 screen)
+RESULT=$(resolve_backend_for_os auto Linux 0 screen)
 if [[ "$RESULT" == "tmux" ]]; then
     echo "  PASS: unrecognized saved backend 'screen' ignored"
     PASS=$((PASS + 1))
@@ -752,7 +718,7 @@ else
 fi
 
 # Test: empty saved backend falls through to default
-RESULT=$(resolve_backend_for_os auto Linux 0 0 0 "")
+RESULT=$(resolve_backend_for_os auto Linux 0 "")
 if [[ "$RESULT" == "tmux" ]]; then
     echo "  PASS: empty saved backend falls through to default"
     PASS=$((PASS + 1))
@@ -760,6 +726,68 @@ else
     echo "  FAIL: empty saved backend → $RESULT"
     FAIL=$((FAIL + 1))
 fi
+
+# Test: inside Zellij returns "direct" (compatibility path)
+RESULT=$(resolve_backend_for_os auto Darwin 0 "" 0 1)
+if [[ "$RESULT" == "direct" ]]; then
+    echo "  PASS: inside Zellij returns direct on macOS"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: inside Zellij on macOS → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+RESULT=$(resolve_backend_for_os auto Linux 0 "" 0 1)
+if [[ "$RESULT" == "direct" ]]; then
+    echo "  PASS: inside Zellij returns direct on Linux"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: inside Zellij on Linux → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: inside Zellij takes priority over saved preference
+RESULT=$(resolve_backend_for_os auto Darwin 0 cmux 0 1)
+if [[ "$RESULT" == "direct" ]]; then
+    echo "  PASS: inside Zellij wins over saved cmux preference"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: inside Zellij with saved cmux → $RESULT"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: start_session() takes Zellij direct fast path (integration)
+# Extract all function definitions from the launcher, source them, then
+# stub exec_claude_in_current_shell and invoke start_session.
+ZELLIJ_TMP=$(mktemp -d)
+ZELLIJ_OUT=$(bash -c '
+    set -e
+    # Extract function definitions (everything before the main block)
+    FUNCS=$(sed -n "1,/^# ── Main/p" "'"$LAUNCHER"'")
+    eval "$FUNCS"
+
+    # Override globals
+    export ZELLIJ_SESSION_NAME=test-session
+    LAUNCHER_CONFIG=/nonexistent
+    SESSION_BACKEND="$BACKEND_AUTO"
+    PEER_REVIEW_ENABLED=""
+    LOGS_DIR="'"$ZELLIJ_TMP"'"
+
+    # Stub exec so it echoes a marker instead of replacing the process
+    exec_claude_in_current_shell() {
+        echo "STUB_EXEC_CALLED dir=$1"
+    }
+
+    start_session "'"$ZELLIJ_TMP"'"
+' 2>&1) || true
+if echo "$ZELLIJ_OUT" | grep -q "Detected active Zellij session" && echo "$ZELLIJ_OUT" | grep -q "STUB_EXEC_CALLED dir=$ZELLIJ_TMP"; then
+    echo "  PASS: start_session takes Zellij direct fast path"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: start_session Zellij fast path → $ZELLIJ_OUT"
+    FAIL=$((FAIL + 1))
+fi
+rm -rf "$ZELLIJ_TMP"
 
 # ══════════════════════════════════════════════════════════════
 # protect-git.sh tests

@@ -2,14 +2,14 @@
 
 ## Overview
 
-This system gives you templated `CLAUDE.md` configurations for different project types, each with a built-in **Agent Team** — specialized roles that Claude uses to delegate work via sub-agents. The enhanced launcher script manages per-project Claude sessions, preferring `zellij` when available, then `cmux` (macOS), then `tmux`.
+This system gives you templated `CLAUDE.md` configurations for different project types, each with a built-in **Agent Team** — specialized roles that Claude uses to delegate work via sub-agents. The enhanced launcher script manages per-project Claude sessions, using `cmux` on macOS and `tmux` elsewhere.
 
 **Files included:**
 
 | File | Purpose |
 |---|---|
 | `claude-setup.sh` | One-time setup — creates `~/.claude/templates/` with Agent Team configs |
-| `claude-code` | Enhanced launcher — manages sessions via zellij, cmux, or tmux |
+| `claude-code` | Enhanced launcher — manages sessions via cmux or tmux |
 
 ---
 
