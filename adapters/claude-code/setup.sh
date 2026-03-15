@@ -795,25 +795,35 @@ fi
 LAUNCHER_CONFIG="$CLAUDE_DIR/launcher.json"
 
 echo ""
-echo "Choose your preferred session backend for claude-code:"
-echo ""
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    echo "  1) cmux     — macOS native multiplexer (recommended)"
-    echo "  2) tmux     — Mature, widest ecosystem support"
-    echo ""
-    echo -n "Select [1-2] (default: 1): "
-    read -r BACKEND_CHOICE
-    case "${BACKEND_CHOICE:-1}" in
-        1) CHOSEN_BACKEND="cmux" ;;
-        2) CHOSEN_BACKEND="tmux" ;;
-        *) CHOSEN_BACKEND="cmux" ;;
-    esac
+if [[ ! -t 0 || -n "${CI:-}" ]]; then
+    # Non-interactive: use OS-appropriate default
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        CHOSEN_BACKEND="cmux"
+    else
+        CHOSEN_BACKEND="tmux"
+    fi
+    echo "[auto] Session backend set to '$CHOSEN_BACKEND' (non-interactive)"
 else
-    echo "  1) tmux     — Mature, widest ecosystem support (recommended)"
+    echo "Choose your preferred session backend for claude-code:"
     echo ""
-    echo -n "Select [1] (default: 1): "
-    read -r BACKEND_CHOICE
-    CHOSEN_BACKEND="tmux"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "  1) cmux     — macOS native multiplexer (recommended)"
+        echo "  2) tmux     — Mature, widest ecosystem support"
+        echo ""
+        echo -n "Select [1-2] (default: 1): "
+        read -r BACKEND_CHOICE
+        case "${BACKEND_CHOICE:-1}" in
+            1) CHOSEN_BACKEND="cmux" ;;
+            2) CHOSEN_BACKEND="tmux" ;;
+            *) CHOSEN_BACKEND="cmux" ;;
+        esac
+    else
+        echo "  1) tmux     — Mature, widest ecosystem support (recommended)"
+        echo ""
+        echo -n "Select [1] (default: 1): "
+        read -r BACKEND_CHOICE
+        CHOSEN_BACKEND="tmux"
+    fi
 fi
 
 # Save preference
