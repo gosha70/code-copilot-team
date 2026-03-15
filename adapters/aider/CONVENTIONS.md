@@ -54,6 +54,9 @@ These conventions ensure consistent behaviour regardless of which AI tool is dri
 
 ## Git Discipline
 
+- **Never commit without explicit user instruction.** "Commit message", "what is the commit message", or similar questions are requests to propose a message — not instructions to commit. Only commit when the user says "commit", "yes", "go ahead", or equivalent. This applies regardless of auto-accept mode.
+- **Show the diff before committing.** Run `git status` and `git diff` and present the summary to the user before staging and committing. The user must see what is being committed, especially for multi-file changes.
+- **Never push without explicit user instruction.** Pushing is a separate action from committing. Never push automatically after a commit.
 - Commit messages: imperative mood, concise summary, optional body explaining "why".
 - One logical change per commit — do not mix refactors with features.
 - Branch naming: feature/, fix/, chore/, docs/ prefixes.

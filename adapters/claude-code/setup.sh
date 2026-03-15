@@ -496,6 +496,7 @@ if [[ -d "$HOOKS_SOURCE" ]]; then
     cp "$HOOKS_SOURCE/verify-on-stop.sh" "$HOOKS_TARGET/verify-on-stop.sh"
     cp "$HOOKS_SOURCE/auto-format.sh" "$HOOKS_TARGET/auto-format.sh"
     cp "$HOOKS_SOURCE/protect-files.sh" "$HOOKS_TARGET/protect-files.sh"
+    cp "$HOOKS_SOURCE/protect-git.sh" "$HOOKS_TARGET/protect-git.sh"
     cp "$HOOKS_SOURCE/reinject-context.sh" "$HOOKS_TARGET/reinject-context.sh"
     cp "$HOOKS_SOURCE/peer-review-on-stop.sh" "$HOOKS_TARGET/peer-review-on-stop.sh"
     chmod +x "$HOOKS_TARGET"/*.sh
@@ -611,6 +612,16 @@ HOOKS_CONFIG='{
             "timeout": 5000
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/protect-git.sh",
+            "timeout": 5000
+          }
+        ]
       }
     ],
     "Stop": [
@@ -700,6 +711,20 @@ elif command -v jq &>/dev/null; then
         HAS_PEER_HOOK=$(jq '[.hooks.Stop[]?.hooks[]? | select(.command == "~/.claude/hooks/peer-review-on-stop.sh")] | length > 0' "$UPDATED" 2>/dev/null || echo "false")
         if [[ "$HAS_PEER_HOOK" != "true" ]]; then
             CONTENT=$(jq '.hooks.Stop[0].hooks += [{"type":"command","command":"~/.claude/hooks/peer-review-on-stop.sh","timeout":300000}]' "$UPDATED")
+            echo "$CONTENT" > "$UPDATED"
+            CHANGED=1
+        fi
+
+        # Add protect-git.sh to PreToolUse Bash hooks if missing
+        HAS_GIT_HOOK=$(jq '[.hooks.PreToolUse[]? | select(.matcher == "Bash") | .hooks[]? | select(.command == "~/.claude/hooks/protect-git.sh")] | length > 0' "$UPDATED" 2>/dev/null || echo "false")
+        if [[ "$HAS_GIT_HOOK" != "true" ]]; then
+            # Check if a Bash matcher entry already exists
+            HAS_BASH_MATCHER=$(jq '[.hooks.PreToolUse[]? | select(.matcher == "Bash")] | length > 0' "$UPDATED" 2>/dev/null || echo "false")
+            if [[ "$HAS_BASH_MATCHER" == "true" ]]; then
+                CONTENT=$(jq '(.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks) += [{"type":"command","command":"~/.claude/hooks/protect-git.sh","timeout":5000}]' "$UPDATED")
+            else
+                CONTENT=$(jq '.hooks.PreToolUse += [{"matcher":"Bash","hooks":[{"type":"command","command":"~/.claude/hooks/protect-git.sh","timeout":5000}]}]' "$UPDATED")
+            fi
             echo "$CONTENT" > "$UPDATED"
             CHANGED=1
         fi
@@ -956,6 +981,7 @@ echo "  - verify-on-stop.sh    — runs tests when Claude finishes"
 echo "  - verify-after-edit.sh — runs type checker after source edits"
 echo "  - auto-format.sh       — runs formatter after source edits"
 echo "  - protect-files.sh     — blocks edits to .env, *.lock, .git/, credentials"
+echo "  - protect-git.sh       — blocks git commit/push without explicit user instruction"
 echo "  - reinject-context.sh  — re-injects project context on session start"
 echo "  - peer-review-on-stop.sh — triggers peer review on phase completion"
 echo "  - notify.sh            — desktop notifications when Claude needs input"
