@@ -36,6 +36,16 @@ BACKEND_CMUX="cmux"
 LAUNCHER_CONFIG="$HOME/.claude/launcher.json"
 SESSION_BACKEND="$BACKEND_AUTO"
 
+# Force IPv4 DNS resolution order. Claude Code's Bun runtime prefers IPv6
+# but lacks Happy Eyeballs (RFC 8305) fallback, causing ECONNRESET on
+# networks with partial/broken IPv6. BUN_OPTIONS prepends CLI flags to
+# any Bun execution. Preserves existing BUN_OPTIONS if set.
+if [[ -z "${BUN_OPTIONS:-}" ]]; then
+    export BUN_OPTIONS="--dns-result-order=ipv4first"
+elif [[ "$BUN_OPTIONS" != *"--dns-result-order"* ]]; then
+    export BUN_OPTIONS="--dns-result-order=ipv4first $BUN_OPTIONS"
+fi
+
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
@@ -364,7 +374,9 @@ show_help() {
 claude-code - Smart Claude Code session launcher
 
 USAGE:
-    claude-code [path]                              Start/resume Claude (cmux on macOS, tmux elsewhere)
+    claude-code [path]                              Start Claude session (cmux on macOS, tmux elsewhere)
+    claude-code --continue [path]                   Continue last session
+    claude-code --resume [path]                     Resume a named session (interactive picker)
     claude-code init <type> [path] [--playwright]   Initialize project from template
     claude-code sync [path] [--dry-run]             Sync project against its template
     claude-code playwright [path]                   Install Playwright CLI skills into a project
@@ -377,6 +389,8 @@ OPTIONS:
     --peer-review [name] Enable peer review (optional: specify provider)
     --peer-review-off    Disable peer review for this session
     --peer-review-scope <scope>  Review scope: code|design|both (default: both)
+    --continue, -c       Continue the most recent Claude session
+    --resume, -r         Resume a named session (interactive picker)
     --shell <auto|cmux|tmux>  Session backend (default: auto)
 
 PROJECT TYPES:
@@ -898,10 +912,19 @@ PLAYWRIGHT=0
 PEER_REVIEW_ENABLED=""
 PEER_PROVIDER=""
 PEER_SCOPE="both"
+CLAUDE_ARGS=()
 POSITIONAL=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --continue|-c)
+            CLAUDE_ARGS+=("--continue")
+            shift
+            ;;
+        --resume|-r)
+            CLAUDE_ARGS+=("--resume")
+            shift
+            ;;
         --peer-review)
             PEER_REVIEW_ENABLED="true"
             # Next arg is provider name only if it's not a flag, not a path, and not an existing directory
@@ -946,6 +969,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
+
+# Append claude-specific flags to the command
+if [[ ${#CLAUDE_ARGS[@]} -gt 0 ]]; then
+    CLAUDE_CMD="$CLAUDE_CMD ${CLAUDE_ARGS[*]}"
+fi
 
 case "${1:-}" in
     init)
