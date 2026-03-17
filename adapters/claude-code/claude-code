@@ -249,17 +249,7 @@ build_launch_command() {
     run_cmd=$(build_run_cmd_string "$session_start")
     shell_bin=$(resolve_shell_bin)
 
-    if command_exists script; then
-        printf -v launch_cmd 'cd %q && mkdir -p %q && %sscript -q %q %q -lc %q' \
-            "$project_dir" \
-            "$LOGS_DIR" \
-            "$exec_prefix" \
-            "$log_file" \
-            "$shell_bin" \
-            "$run_cmd"
-    else
-        printf -v launch_cmd 'cd %q && %s%s' "$project_dir" "$exec_prefix" "$run_cmd"
-    fi
+    printf -v launch_cmd 'cd %q && %s%s' "$project_dir" "$exec_prefix" "$run_cmd"
 
     printf '%s\n' "$launch_cmd"
 }
@@ -315,10 +305,6 @@ exec_claude_in_current_shell() {
 
     run_cmd=$(build_run_cmd_string "$session_start")
     shell_bin=$(resolve_shell_bin)
-
-    if command_exists script; then
-        exec script -q "$log_file" "$shell_bin" -lc "$run_cmd"
-    fi
 
     if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
         exec env \
