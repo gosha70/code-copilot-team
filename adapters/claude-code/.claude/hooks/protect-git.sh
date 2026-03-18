@@ -200,8 +200,9 @@ Blocked: git commit and git push both require explicit user approval.
 To proceed:
 1. Show the user the diff summary, proposed commit message, and push target
 2. Ask the user for permission to commit and push
-3. If they approve, run: mkdir -p ${APPROVAL_DIR} && touch ${APPROVAL_COMMIT} ${APPROVAL_PUSH}
-4. Then retry the command
+3. Once approved, run this EXACT command in a NEW, SEPARATE Bash call (do not add git to this line):
+   mkdir -p ${APPROVAL_DIR} && touch ${APPROVAL_COMMIT} ${APPROVAL_PUSH}
+4. In another separate Bash call, retry the git commit/push command
 MSG
     elif [[ " ${MISSING[*]} " == *" commit "* ]]; then
       cat <<MSG
@@ -210,8 +211,9 @@ Blocked: git commit requires explicit user approval.
 To proceed:
 1. Show the user the diff summary and your proposed commit message
 2. Ask the user for permission to commit
-3. If they approve, run: mkdir -p ${APPROVAL_DIR} && touch ${APPROVAL_COMMIT}
-4. Then retry the git commit command
+3. Once approved, run this EXACT command in a NEW, SEPARATE Bash call (do not add git to this line):
+   mkdir -p ${APPROVAL_DIR} && touch ${APPROVAL_COMMIT}
+4. In another separate Bash call, retry the git commit command
 MSG
     else
       cat <<MSG
@@ -220,21 +222,32 @@ Blocked: git push requires explicit user approval.
 To proceed:
 1. Tell the user what branch and remote you want to push to
 2. Ask the user for permission to push
-3. If they approve, run: mkdir -p ${APPROVAL_DIR} && touch ${APPROVAL_PUSH}
-4. Then retry the git push command
+3. Once approved, run this EXACT command in a NEW, SEPARATE Bash call (do not add git to this line):
+   mkdir -p ${APPROVAL_DIR} && touch ${APPROVAL_PUSH}
+4. In another separate Bash call, retry the git push command
 MSG
     fi
   } >&2
   exit 2
 fi
 
-# --- All approvals present — consume atomically ---
+# --- Consume approvals atomically — mv result is the gate, not the peek ---
+# peek above confirmed files exist; we now race to be the sole consumer.
+# If consume fails (another process won the race), block rather than allow.
 if [[ $NEEDS_COMMIT -eq 1 ]]; then
-  consume_approval "$APPROVAL_COMMIT" || true
+  if ! consume_approval "$APPROVAL_COMMIT"; then
+    echo "Blocked: commit approval was already used. Ask the user for a new approval and retry." >&2
+    exit 2
+  fi
 fi
 
 if [[ $NEEDS_PUSH -eq 1 ]]; then
-  consume_approval "$APPROVAL_PUSH" || true
+  if ! consume_approval "$APPROVAL_PUSH"; then
+    # Restore commit approval if consumed moments ago (compound git commit && git push race)
+    [[ $NEEDS_COMMIT -eq 1 ]] && touch "$APPROVAL_COMMIT" 2>/dev/null || true
+    echo "Blocked: push approval was already used. Ask the user for a new approval and retry." >&2
+    exit 2
+  fi
 fi
 
 exit 0

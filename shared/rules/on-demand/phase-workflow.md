@@ -47,6 +47,14 @@ When existing functionality is removed or replaced during a phase (e.g., replaci
 2. **Dependency verification.** After any dependency change, run the full install + build cycle. Static analysis doesn't catch missing runtime packages.
    - Examples: `npm install && npm run build`, `pip install -r requirements.txt`, `mvn dependency:resolve`
 
+2.5. **Infrastructure verification.** After any phase that creates or modifies Docker, Compose, or CI
+     workflow files — run the artifact to verify it works. This is NOT optional. If you introduced
+     a Dockerfile, run `docker build`. If you introduced a compose file, run `docker compose up
+     --build` and verify health. If you introduced a CI workflow, validate the YAML syntax. See
+     `infra-verification.md` for the full command reference.
+     - Infrastructure verification failures block the commit, just like test failures.
+     - Environment issues are diagnosed and fixed, not worked around.
+
 3. **Build verification.** Run the dev server or build command. This catches missing dependencies, import resolution issues, and config errors that static analysis misses.
    - Examples: `npm run dev`, `python manage.py runserver`, `mvn spring-boot:run`, `go run .`
 
@@ -84,6 +92,9 @@ When existing functionality is removed or replaced during a phase (e.g., replaci
 - [ ] **Browser console has no errors** (check for missing modules, hydration mismatches)
 - [ ] Manual smoke test completed (if applicable)
 - [ ] Integration between agents verified (e.g., frontend calls backend APIs)
+- [ ] **Infrastructure files verified** — all Docker/Compose/CI files introduced in this phase have been executed successfully
+- [ ] **Docker healthchecks use proper probes** — not business endpoints
+- [ ] **Demo endpoints return meaningful data** — no empty stubs (`[]`, `null`, `{}`)
 - [ ] **Commit is granular** — one phase's worth of changes, not multiple phases bundled
 - [ ] Ready for commit
 

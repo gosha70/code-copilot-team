@@ -77,6 +77,26 @@ assert_exit "loop guard in block mode" 0 "$RC"
 RC=$(run_hook verify-on-stop.sh '{"stop_hook_active":false}' CLAUDE_PROJECT_DIR=/tmp HOOK_STOP_BLOCK=true)
 assert_exit "block mode no test runner" 0 "$RC"
 
+# CI-only change with Docker unavailable: YAML validation does not need Docker, must exit 0
+_CI_REPO=$(mktemp -d)
+(
+  cd "$_CI_REPO"
+  git init -q
+  git -c user.email="t@t.com" -c user.name="T" commit -q --allow-empty -m "init"
+  mkdir -p .github/workflows
+  printf 'name: CI\non: push\n' > .github/workflows/ci.yml
+)
+# Build a PATH that strips any directory containing a docker binary
+_NO_DOCKER_PATH=$(printf '%s' "$PATH" | tr ':' '\n' | while IFS= read -r _d; do
+  [[ -x "$_d/docker" ]] || printf '%s\n' "$_d"
+done | paste -sd ':' -)
+_CI_RC=0
+printf '%s' '{"stop_hook_active":false}' \
+  | env CLAUDE_PROJECT_DIR="$_CI_REPO" HOOK_STOP_BLOCK=true PATH="$_NO_DOCKER_PATH" \
+    bash "$HOOKS_DIR/verify-on-stop.sh" >/dev/null 2>/dev/null || _CI_RC=$?
+assert_exit "CI-only change without Docker exits 0 (Docker not required for YAML check)" 0 "$_CI_RC"
+rm -rf "$_CI_REPO"
+
 echo ""
 echo "=== verify-after-edit.sh ==="
 
@@ -1025,6 +1045,42 @@ mv "$APPROVAL_COMMIT" "${APPROVAL_COMMIT}.del.fake" 2>/dev/null
 RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\""}}')
 assert_exit "approval cannot be consumed twice" 2 "$RC"
 rm -f "${APPROVAL_COMMIT}.del.fake"
+
+# --- Concurrent race: two parallel invocations with one approval — exactly one must win ---
+mkdir -p "$APPROVAL_DIR"
+touch "$APPROVAL_COMMIT"
+_RACE_TMP1=$(mktemp); _RACE_TMP2=$(mktemp)
+( printf '%s' '{"tool_input":{"command":"git commit -m \"test\""}}' \
+    | bash "$HOOKS_DIR/protect-git.sh" >/dev/null 2>/dev/null; echo $? ) > "$_RACE_TMP1" &
+( printf '%s' '{"tool_input":{"command":"git commit -m \"test\""}}' \
+    | bash "$HOOKS_DIR/protect-git.sh" >/dev/null 2>/dev/null; echo $? ) > "$_RACE_TMP2" &
+wait
+_E1=$(cat "$_RACE_TMP1"); _E2=$(cat "$_RACE_TMP2")
+rm -f "$_RACE_TMP1" "$_RACE_TMP2" "$APPROVAL_COMMIT"
+assert_exit "concurrent race: exactly one allow, one block (sum exits = 2)" 2 "$(( _E1 + _E2 ))"
+
+# --- Bundled touch+commit in one command is blocked (touch never runs) ---
+RC=$(run_hook protect-git.sh "{\"tool_input\":{\"command\":\"touch ${APPROVAL_COMMIT} && git commit -m test\"}}")
+assert_exit "bundled touch+commit in one command is blocked" 2 "$RC"
+rm -f "$APPROVAL_COMMIT"
+
+# --- Block message instructs EXACT command in a NEW, SEPARATE Bash call ---
+_BLOCK_MSG=$(printf '%s' '{"tool_input":{"command":"git commit -m \"test\""}}' \
+    | bash "$HOOKS_DIR/protect-git.sh" 2>&1) || true
+if echo "$_BLOCK_MSG" | grep -q "EXACT command"; then
+  echo "  PASS: block message contains 'EXACT command'"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: block message missing 'EXACT command'"
+  FAIL=$((FAIL + 1))
+fi
+if echo "$_BLOCK_MSG" | grep -q "NEW, SEPARATE Bash call"; then
+  echo "  PASS: block message contains 'NEW, SEPARATE Bash call'"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: block message missing 'NEW, SEPARATE Bash call'"
+  FAIL=$((FAIL + 1))
+fi
 
 # Clean up
 rm -rf "$APPROVAL_DIR"

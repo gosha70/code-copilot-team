@@ -85,3 +85,20 @@ echo "Auth smoke test complete."
 ```
 
 Save these in `scripts/` or `tests/` for reuse across sessions.
+
+## Demo / Example Application Verification
+
+When a build phase creates or modifies a demo or example application:
+
+1. **Exercise every exposed endpoint** after the app starts. Use curl or the project's test
+   framework.
+2. **Verify responses are non-empty.** Empty arrays (`[]`), null, or empty objects (`{}`) indicate
+   a stub that was never implemented. Stubs MUST be replaced with meaningful sample data before
+   commit.
+3. **Verify PII exclusion** (if applicable). Ensure sensitive fields declared as hidden are absent
+   from the response.
+4. **Log the verification output** in the build summary so the reviewer can confirm.
+
+Common trap: demo services with stub methods (e.g., `return List.of()`) that compile and pass
+type checks but return nothing at runtime. The type checker cannot catch this — only an actual
+HTTP request reveals it.
