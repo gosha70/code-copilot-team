@@ -69,8 +69,6 @@ mkdir -p "$CODEX_DIR"
         skill="plan, build" ;;
       token-efficiency)
         skill="research" ;;
-      gcc-protocol)
-        skill="all (optional)" ;;
       *)
         skill="—" ;;
     esac
@@ -146,7 +144,6 @@ for f in "$SHARED/on-demand"/*.md; do
     phase-workflow)        glob="**" ;;
     ralph-loop)            glob="**" ;;
     spec-workflow)            glob="**" ;;
-    gcc-protocol)          glob="**" ;;
     clarification-protocol) glob="**" ;;
     agent-team-protocol)   glob="**" ;;
     team-lead-efficiency)  glob="**" ;;

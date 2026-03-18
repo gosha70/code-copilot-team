@@ -145,7 +145,6 @@ corresponding skill to apply them.
 | `agent-team-protocol` | build (optional team mode) |
 | `clarification-protocol` | plan |
 | `environment-setup` | build |
-| `gcc-protocol` | all (optional) |
 | `infra-verification` | build |
 | `integration-testing` | review |
 | `phase-workflow` | build |

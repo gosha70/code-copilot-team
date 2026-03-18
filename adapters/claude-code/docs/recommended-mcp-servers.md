@@ -4,17 +4,6 @@ MCP (Model Context Protocol) servers extend Claude Code with external capabiliti
 
 ## Recommended Servers
 
-### Aline (GCC Memory)
-
-**Purpose:** Git Context Controller — persistent memory across sessions via git-aware context tracking.
-
-```bash
-# Install (already done if you ran setup.sh --gcc)
-claude mcp add --scope user --transport stdio aline -- npx -y aline-ai@latest
-```
-
-**When to use:** Every project. Aline provides session continuity by tracking what Claude has learned about your codebase.
-
 ### Context7
 
 **Purpose:** Live library documentation lookup. Fetches current docs for any library, bypassing Claude's knowledge cutoff.
@@ -88,7 +77,7 @@ claude mcp add --scope project --transport stdio playwright -- \
 | Search the web | WebSearch, WebFetch | — | **Built-in** |
 | Library docs lookup | WebFetch (manual URL) | Context7 | **MCP** (structured, current) |
 | Database schema | Bash(psql ...) | PostgreSQL MCP | **MCP** (safer, structured) |
-| Session memory | Auto-memory files | Aline | **MCP** (richer context) |
+| Session continuity | `CLAUDE.md`, specs, phase recaps | — | **Built-in** |
 | Files outside project | Bash(cat ...) | Filesystem MCP | **MCP** (scoped, auditable) |
 | Browser automation | Bash(npx playwright test) | Playwright CLI / MCP | **CLI** (token-efficient) |
 
@@ -96,7 +85,7 @@ claude mcp add --scope project --transport stdio playwright -- \
 
 | Scope | Meaning | Use For |
 |---|---|---|
-| `--scope user` | Available in all projects | Aline, Context7 (general-purpose tools) |
+| `--scope user` | Available in all projects | Context7 (general-purpose tools) |
 | `--scope project` | Only available in this project | PostgreSQL MCP, Filesystem MCP, Playwright MCP (project-specific) |
 
 ## Managing MCP Servers

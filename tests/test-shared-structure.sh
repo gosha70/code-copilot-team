@@ -124,7 +124,7 @@ ALWAYS_COUNT=$(find "$SHARED_DIR/rules/always" -name '*.md' | wc -l | tr -d ' ')
 assert_eq "exactly 3 always rules" "3" "$ALWAYS_COUNT"
 
 # ══════════════════════════════════════════════════════════════
-# 2. shared/rules/on-demand/ — 10 library rules exist
+# 2. shared/rules/on-demand/ — 12 library rules exist
 # ══════════════════════════════════════════════════════════════
 
 echo ""
@@ -136,7 +136,6 @@ ON_DEMAND_FILES=(
   agent-team-protocol.md
   clarification-protocol.md
   environment-setup.md
-  gcc-protocol.md
   infra-verification.md
   integration-testing.md
   phase-workflow.md
@@ -153,7 +152,7 @@ for f in "${ON_DEMAND_FILES[@]}"; do
 done
 
 ONDEMAND_COUNT=$(find "$SHARED_DIR/rules/on-demand" -name '*.md' | wc -l | tr -d ' ')
-assert_eq "exactly 13 on-demand rules" "13" "$ONDEMAND_COUNT"
+assert_eq "exactly 12 on-demand rules" "12" "$ONDEMAND_COUNT"
 
 # ══════════════════════════════════════════════════════════════
 # 3. shared/docs/ — tool-agnostic docs exist
@@ -426,9 +425,9 @@ assert_ok "SUMMARY section present" "$rc"
 rc=0; grep -q '\-\-sync' "$SETUP_SCRIPT" || rc=1
 assert_ok "--sync handler present" "$rc"
 
-# --gcc handler exists
-rc=0; grep -q '\-\-gcc' "$SETUP_SCRIPT" || rc=1
-assert_ok "--gcc handler present" "$rc"
+# unknown-option guard exists
+rc=0; grep -q 'Unknown option:' "$SETUP_SCRIPT" || rc=1
+assert_ok "unknown-option guard present" "$rc"
 
 # jq dependency check exists
 rc=0; grep -q 'command -v jq' "$SETUP_SCRIPT" || rc=1
@@ -778,8 +777,8 @@ grep -Eq "rules/always/[[:space:]]+3 global rules" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists 3 global always rules" "$rc"
 
 rc=0
-grep -Eq "rules/on-demand/[[:space:]]+13 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 13 on-demand rules" "$rc"
+grep -Eq "rules/on-demand/[[:space:]]+12 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 12 on-demand rules" "$rc"
 
 rc=0
 grep -Eq "templates/[[:space:]]+8 stacks" "$REPO_DIR/README.md" || rc=1

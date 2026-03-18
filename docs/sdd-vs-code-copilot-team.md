@@ -49,7 +49,7 @@ A side-by-side comparison of two complementary approaches to AI-assisted softwar
 
 **Ralph Loop (autonomous iteration)** — Single-agent loop pattern (read PRD → implement → test → commit → repeat) with safety guards: max iterations, stuck detection, progress monitoring. No human review required per task.
 
-**Cross-session memory** — GCC memory integration via Aline MCP for persistent context across sessions.
+**Repository-native continuity** — phase recaps, spec artifacts, and project docs keep context in versioned files instead of an external memory service.
 
 **Self-testing framework** — ~580 automated tests covering hook correctness, generation pipeline integrity, structural validation, and remediation coverage.
 
@@ -106,7 +106,7 @@ Both frameworks address the same root problems — lost context, hallucinations,
 | Ralph Loop for autonomous iteration | Multi-agent delegation adds overhead for simple tasks |
 | Multi-copilot support from single source of truth | Opinionated templates may not fit every stack |
 | ~580 automated tests for the framework itself | |
-| GCC cross-session memory | |
+| Versioned continuity via project artifacts | |
 
 ---
 

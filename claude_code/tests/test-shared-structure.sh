@@ -132,7 +132,6 @@ ON_DEMAND_FILES=(
   agent-team-protocol.md
   clarification-protocol.md
   environment-setup.md
-  gcc-protocol.md
   integration-testing.md
   phase-workflow.md
   ralph-loop.md
@@ -147,7 +146,7 @@ for f in "${ON_DEMAND_FILES[@]}"; do
 done
 
 ONDEMAND_COUNT=$(find "$SHARED_DIR/rules/on-demand" -name '*.md' | wc -l | tr -d ' ')
-assert_eq "exactly 10 on-demand rules" "10" "$ONDEMAND_COUNT"
+assert_eq "exactly 9 on-demand rules" "9" "$ONDEMAND_COUNT"
 
 # ══════════════════════════════════════════════════════════════
 # 3. shared/docs/ — tool-agnostic docs exist
@@ -388,9 +387,9 @@ assert_ok "SUMMARY section present" "$rc"
 rc=0; grep -q '\-\-sync' "$SETUP_SCRIPT" || rc=1
 assert_ok "--sync handler present" "$rc"
 
-# --gcc handler exists
-rc=0; grep -q '\-\-gcc' "$SETUP_SCRIPT" || rc=1
-assert_ok "--gcc handler present" "$rc"
+# unknown-option guard exists
+rc=0; grep -q 'Unknown option:' "$SETUP_SCRIPT" || rc=1
+assert_ok "unknown-option guard present" "$rc"
 
 # jq dependency check exists
 rc=0; grep -q 'command -v jq' "$SETUP_SCRIPT" || rc=1

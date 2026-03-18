@@ -4,7 +4,7 @@
 # Creates:
 #   ~/.claude/CLAUDE.md                    Global configuration
 #   ~/.claude/rules/                       Global rules (auto-loaded, 3 files)
-#   ~/.claude/rules-library/               Rules library (on-demand, 11 files)
+#   ~/.claude/rules-library/               Rules library (on-demand, 12 files)
 #   ~/.claude/agents/                      Global agents (5 utility + 4 phase)
 #   ~/.claude/hooks/                       Global hook scripts (verify, notify)
 #   ~/.claude/settings.json                Global settings with hooks wired
@@ -15,8 +15,6 @@
 # Run once, then use 'claude-code init <type> [path]' to scaffold projects.
 # Run with --sync to re-copy rules, rules-library, agents, templates, and launcher from repo.
 # Then use 'claude-code sync [path]' to update individual projects against their template.
-# Run with --gcc to install optional GCC memory support (Aline MCP).
-
 set -e
 
 CLAUDE_DIR="$HOME/.claude"
@@ -42,7 +40,7 @@ if [[ "${1:-}" == "--sync" ]]; then
         echo "[done] Synced rules to $RULES_TARGET"
     fi
 
-    # Rules library (11 files) — from shared/rules/on-demand/
+    # Rules library (12 files) — from shared/rules/on-demand/
     LIBRARY_SOURCE="$SHARED_DIR/rules/on-demand"
     LIBRARY_TARGET="$CLAUDE_DIR/rules-library"
     mkdir -p "$LIBRARY_TARGET"
@@ -138,39 +136,6 @@ if [[ "${1:-}" == "--sync" ]]; then
 fi
 
 # ══════════════════════════════════════════════════════════════
-# --gcc: install Aline MCP + GCC protocol rule (optional)
-# ══════════════════════════════════════════════════════════════
-
-if [[ "${1:-}" == "--gcc" ]]; then
-    echo "Installing GCC (Git Context Controller) support..."
-
-    # Install Aline MCP server
-    if command -v claude &>/dev/null; then
-        claude mcp add --scope user --transport stdio aline -- npx -y aline-ai@latest
-        echo "[done] Aline MCP server added (scope: user)"
-    else
-        echo "[WARN] 'claude' CLI not found. Install Aline MCP manually:"
-        echo "       claude mcp add --scope user --transport stdio aline -- npx -y aline-ai@latest"
-    fi
-
-    # Copy gcc-protocol rule to rules-library
-    LIBRARY_TARGET="$CLAUDE_DIR/rules-library"
-    GCC_RULE_SOURCE="$SHARED_DIR/rules/on-demand/gcc-protocol.md"
-    mkdir -p "$LIBRARY_TARGET"
-    if [[ -f "$GCC_RULE_SOURCE" ]]; then
-        cp "$GCC_RULE_SOURCE" "$LIBRARY_TARGET/"
-        echo "[done] Copied gcc-protocol.md to $LIBRARY_TARGET"
-    else
-        echo "[WARN] gcc-protocol.md not found at $GCC_RULE_SOURCE"
-    fi
-
-    echo ""
-    echo "GCC setup complete. Phase agents will use GCC memory when Aline MCP is available."
-    echo "To verify: start a Claude session and check that the 'aline' MCP server is listed."
-    exit 0
-fi
-
-# ══════════════════════════════════════════════════════════════
 # --playwright: install Playwright CLI for browser automation (optional)
 # ══════════════════════════════════════════════════════════════
 
@@ -192,6 +157,12 @@ if [[ "${1:-}" == "--playwright" ]]; then
     echo "Playwright CLI setup complete."
     echo "Usage: playwright-cli open <url>, playwright-cli click, playwright-cli screenshot"
     exit 0
+fi
+
+if [[ $# -gt 0 ]]; then
+    echo "[ERROR] Unknown option: $1"
+    echo "        Supported options: --sync, --playwright"
+    exit 1
 fi
 
 echo "============================================"
@@ -554,7 +525,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 11d. RULES LIBRARY (on-demand, 11 files) — from shared/rules/on-demand/
+# 11d. RULES LIBRARY (on-demand, 12 files) — from shared/rules/on-demand/
 # ══════════════════════════════════════════════════════════════
 
 LIBRARY_SOURCE="$SHARED_DIR/rules/on-demand"

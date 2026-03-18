@@ -163,7 +163,7 @@ cat ~/.claude/projects/<project>/traces/<session-id>.jsonl | jq '.'
 1. Check if auto-compression happened (trace will show a compression event)
 2. Use `/compact` proactively with a focus hint before context fills
 3. Put critical context in `CLAUDE.md` or project files rather than relying on chat history
-4. For cross-session context, use GCC memory (see `gcc-protocol.md`)
+4. For cross-session continuity, keep critical context in `CLAUDE.md`, specs, and phase recaps
 
 ### Sub-agent produces wrong output
 
