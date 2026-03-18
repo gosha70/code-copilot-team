@@ -86,15 +86,21 @@ _CI_REPO=$(mktemp -d)
   mkdir -p .github/workflows
   printf 'name: CI\non: push\n' > .github/workflows/ci.yml
 )
-# Build a PATH that strips any directory containing a docker binary
-_NO_DOCKER_PATH=$(printf '%s' "$PATH" | tr ':' '\n' | while IFS= read -r _d; do
-  [[ -x "$_d/docker" ]] || printf '%s\n' "$_d"
-done | paste -sd ':' -)
+# Build a PATH without docker while keeping the rest of the toolchain available.
+_NO_DOCKER_BIN=$(mktemp -d)
+for _cmd in bash git grep sort jq python3 head basename dirname sleep awk sed tr paste; do
+  _cmd_path=$(command -v "$_cmd" 2>/dev/null || true)
+  if [[ -n "$_cmd_path" ]]; then
+    ln -sf "$_cmd_path" "$_NO_DOCKER_BIN/$_cmd"
+  fi
+done
+_NO_DOCKER_PATH="$_NO_DOCKER_BIN:$PATH"
 _CI_RC=0
 printf '%s' '{"stop_hook_active":false}' \
   | env CLAUDE_PROJECT_DIR="$_CI_REPO" HOOK_STOP_BLOCK=true PATH="$_NO_DOCKER_PATH" \
     bash "$HOOKS_DIR/verify-on-stop.sh" >/dev/null 2>/dev/null || _CI_RC=$?
 assert_exit "CI-only change without Docker exits 0 (Docker not required for YAML check)" 0 "$_CI_RC"
+rm -rf "$_NO_DOCKER_BIN"
 rm -rf "$_CI_REPO"
 
 echo ""

@@ -166,7 +166,13 @@ peek_approval() {
   [[ -f "$file" ]] || return 1
   local now file_mtime age
   now=$(date +%s)
-  file_mtime=$(stat -f %m "$file" 2>/dev/null || stat -c %Y "$file" 2>/dev/null || echo 0)
+  if file_mtime=$(stat -c %Y "$file" 2>/dev/null); then
+    :
+  elif file_mtime=$(stat -f %m "$file" 2>/dev/null); then
+    :
+  else
+    file_mtime=0
+  fi
   age=$(( now - file_mtime ))
   [[ $age -lt $MAX_AGE ]]
 }
