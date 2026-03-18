@@ -922,6 +922,113 @@ assert_exit "git diff allowed" 0 "$RC"
 RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\""}}' HOOK_GIT_ALLOW=true)
 assert_exit "override allows git commit" 0 "$RC"
 
+# --- Approval file flow ---
+# Compute the same repo-scoped paths the hook uses
+APPROVAL_DIR="/tmp/.claude-git-approvals"
+_REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
+if command -v md5 &>/dev/null; then
+  _REPO_HASH=$(printf '%s' "$_REPO_ROOT" | md5 -q)
+elif command -v md5sum &>/dev/null; then
+  _REPO_HASH=$(printf '%s' "$_REPO_ROOT" | md5sum | cut -d' ' -f1)
+else
+  _REPO_HASH=$(printf '%s' "$_REPO_ROOT" | tr '/' '_')
+fi
+APPROVAL_COMMIT="$APPROVAL_DIR/commit-$(id -u)-${_REPO_HASH}"
+APPROVAL_PUSH="$APPROVAL_DIR/push-$(id -u)-${_REPO_HASH}"
+
+# Clean up any leftover approval files
+rm -f "$APPROVAL_COMMIT" "$APPROVAL_PUSH"
+
+# Without approval file: blocked
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\""}}')
+assert_exit "commit blocked without approval" 2 "$RC"
+
+# Create approval file, then retry: allowed
+mkdir -p "$APPROVAL_DIR"
+touch "$APPROVAL_COMMIT"
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\""}}')
+assert_exit "commit allowed with approval file" 0 "$RC"
+
+# Approval file consumed — third attempt blocks again
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\""}}')
+assert_exit "commit blocked after approval consumed" 2 "$RC"
+
+# Same for push
+touch "$APPROVAL_PUSH"
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git push origin main"}}')
+assert_exit "push allowed with approval file" 0 "$RC"
+
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git push origin main"}}')
+assert_exit "push blocked after approval consumed" 2 "$RC"
+
+# Expired approval file (mtime in the past) — should block
+touch "$APPROVAL_COMMIT"
+# Set mtime to 200 seconds ago (beyond MAX_AGE=120)
+touch -t "$(date -v-200S +%Y%m%d%H%M.%S 2>/dev/null || date -d '200 seconds ago' +%Y%m%d%H%M.%S 2>/dev/null)" "$APPROVAL_COMMIT" 2>/dev/null || true
+if [[ -f "$APPROVAL_COMMIT" ]]; then
+  RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\""}}')
+  assert_exit "expired approval file still blocks" 2 "$RC"
+fi
+
+# Commit approval does not unlock push
+touch "$APPROVAL_COMMIT"
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git push origin main"}}')
+assert_exit "commit approval does not unlock push" 2 "$RC"
+# Clean up the unconsumed commit approval
+rm -f "$APPROVAL_COMMIT"
+
+# Push approval does not unlock commit
+touch "$APPROVAL_PUSH"
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\""}}')
+assert_exit "push approval does not unlock commit" 2 "$RC"
+rm -f "$APPROVAL_PUSH"
+
+# --- Compound command: git commit && git push ---
+# Needs BOTH approvals — commit alone is not enough
+touch "$APPROVAL_COMMIT"
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git add . && git commit -m \"test\" && git push origin main"}}')
+assert_exit "compound commit+push blocked with only commit approval" 2 "$RC"
+# Commit approval should NOT have been consumed (peek-then-block)
+assert_exit "commit approval preserved after compound block" 0 "$([[ -f "$APPROVAL_COMMIT" ]] && echo 0 || echo 1)"
+rm -f "$APPROVAL_COMMIT"
+
+# Push alone is not enough for compound
+touch "$APPROVAL_PUSH"
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\" && git push origin main"}}')
+assert_exit "compound commit+push blocked with only push approval" 2 "$RC"
+rm -f "$APPROVAL_PUSH"
+
+# Both approvals present — compound allowed
+touch "$APPROVAL_COMMIT"
+touch "$APPROVAL_PUSH"
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\" && git push origin main"}}')
+assert_exit "compound commit+push allowed with both approvals" 0 "$RC"
+
+# Both consumed after compound
+assert_exit "commit approval consumed after compound" 0 "$([[ ! -f "$APPROVAL_COMMIT" ]] && echo 0 || echo 1)"
+assert_exit "push approval consumed after compound" 0 "$([[ ! -f "$APPROVAL_PUSH" ]] && echo 0 || echo 1)"
+
+# --- Repo scoping: approval from different repo does not apply ---
+# Create approval with a different repo hash
+FOREIGN_COMMIT="$APPROVAL_DIR/commit-$(id -u)-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+mkdir -p "$APPROVAL_DIR"
+touch "$FOREIGN_COMMIT"
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\""}}')
+assert_exit "foreign repo approval does not unlock commit" 2 "$RC"
+rm -f "$FOREIGN_COMMIT"
+
+# --- Atomic consumption: consumed file cannot be reused ---
+touch "$APPROVAL_COMMIT"
+# Simulate first consumer (mv away)
+mv "$APPROVAL_COMMIT" "${APPROVAL_COMMIT}.del.fake" 2>/dev/null
+# Second invocation should block (file gone)
+RC=$(run_hook protect-git.sh '{"tool_input":{"command":"git commit -m \"test\""}}')
+assert_exit "approval cannot be consumed twice" 2 "$RC"
+rm -f "${APPROVAL_COMMIT}.del.fake"
+
+# Clean up
+rm -rf "$APPROVAL_DIR"
+
 # --- Edge cases ---
 RC=$(run_hook protect-git.sh '{}')
 assert_exit "missing command" 0 "$RC"

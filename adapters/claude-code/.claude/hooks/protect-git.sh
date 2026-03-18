@@ -3,13 +3,37 @@ set -euo pipefail
 
 # protect-git.sh — PreToolUse hook (Bash matcher)
 #
-# Blocks git commit and git push commands unless the user has explicitly
-# instructed them. Exit 0 = allow, Exit 2 = block.
+# Guards git commit and git push. On first attempt, blocks and instructs
+# Claude to ask the user for permission. After user approval, Claude
+# creates a one-time approval file and retries — the hook sees the file,
+# consumes it, and allows the command through.
 #
-# This hook prevents Claude from committing or pushing without user
-# approval, even when auto-accept mode is enabled.
+# Flow:
+#   1. Claude tries git commit/push → hook blocks (exit 2)
+#   2. Claude asks user for permission (shown as a confirmation prompt)
+#   3. User approves → Claude runs: mkdir -p <dir> && touch <file>
+#   4. Claude retries git commit/push → hook allows (exit 0)
 #
-# Override: set HOOK_GIT_ALLOW=true to disable this guard.
+# Approval files are scoped to the current git repo (or PWD) and user,
+# consumed atomically via mv, and expire after MAX_AGE seconds.
+# Compound commands (git commit && git push) require both approvals.
+#
+# Override: set HOOK_GIT_ALLOW=true to disable this guard entirely.
+
+MAX_AGE=120  # seconds — approval expires after this
+
+# --- Compute repo-scoped approval paths ---
+APPROVAL_DIR="/tmp/.claude-git-approvals"
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
+if command -v md5 &>/dev/null; then
+  REPO_HASH=$(printf '%s' "$REPO_ROOT" | md5 -q)
+elif command -v md5sum &>/dev/null; then
+  REPO_HASH=$(printf '%s' "$REPO_ROOT" | md5sum | cut -d' ' -f1)
+else
+  REPO_HASH=$(printf '%s' "$REPO_ROOT" | tr '/' '_')
+fi
+APPROVAL_COMMIT="$APPROVAL_DIR/commit-$(id -u)-${REPO_HASH}"
+APPROVAL_PUSH="$APPROVAL_DIR/push-$(id -u)-${REPO_HASH}"
 
 # --- Override check ---
 if [[ "${HOOK_GIT_ALLOW:-false}" == "true" ]]; then
@@ -119,17 +143,98 @@ ENV_PREFIX='env\s+(((-i|--ignore-environment|-0|--null)\s+)|((-u|--unset|-C|--ch
 TRANSPARENT_PREFIX="(${ENV_PREFIX}|(command|builtin|exec)\s+|\w+=\S*\s+)"
 GIT_POS="(^|&&\s*|;\s*|\|\|\s*|\(\s*|\`\s*|\$\(\s*)(${TRANSPARENT_PREFIX})*git\s+"
 
-# --- Check for git commit in a command position ---
+# --- Detect which operations are in the command ---
+NEEDS_COMMIT=0
+NEEDS_PUSH=0
+
 if echo "$COMMAND_NORMALIZED" | grep -qE "${GIT_POS}commit\b"; then
-  echo "Blocked: git commit requires explicit user instruction. Show the diff summary first, propose a commit message, and wait for the user to say 'commit', 'yes', or 'go ahead'. Do not commit in response to questions like 'what is the commit message'." >&2
-  exit 2
+  NEEDS_COMMIT=1
 fi
 
-# --- Check for git push in a command position ---
 if echo "$COMMAND_NORMALIZED" | grep -qE "${GIT_POS}push\b"; then
-  echo "Blocked: git push requires explicit user instruction. Never push automatically after a commit. Wait for the user to explicitly request a push." >&2
+  NEEDS_PUSH=1
+fi
+
+# Neither commit nor push — allow
+if [[ $NEEDS_COMMIT -eq 0 && $NEEDS_PUSH -eq 0 ]]; then
+  exit 0
+fi
+
+# --- Helpers: peek (non-destructive) and consume (atomic via mv) ---
+peek_approval() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+  local now file_mtime age
+  now=$(date +%s)
+  file_mtime=$(stat -f %m "$file" 2>/dev/null || stat -c %Y "$file" 2>/dev/null || echo 0)
+  age=$(( now - file_mtime ))
+  [[ $age -lt $MAX_AGE ]]
+}
+
+consume_approval() {
+  local file="$1"
+  local tmp="${file}.del.$$"
+  mv "$file" "$tmp" 2>/dev/null || return 1
+  rm -f "$tmp"
+  return 0
+}
+
+# --- Check all needed approvals before consuming any ---
+MISSING=()
+
+if [[ $NEEDS_COMMIT -eq 1 ]] && ! peek_approval "$APPROVAL_COMMIT"; then
+  MISSING+=("commit")
+fi
+
+if [[ $NEEDS_PUSH -eq 1 ]] && ! peek_approval "$APPROVAL_PUSH"; then
+  MISSING+=("push")
+fi
+
+if [[ ${#MISSING[@]} -gt 0 ]]; then
+  # Build block message listing all missing approvals
+  {
+    if [[ " ${MISSING[*]} " == *" commit "* && " ${MISSING[*]} " == *" push "* ]]; then
+      cat <<MSG
+Blocked: git commit and git push both require explicit user approval.
+
+To proceed:
+1. Show the user the diff summary, proposed commit message, and push target
+2. Ask the user for permission to commit and push
+3. If they approve, run: mkdir -p ${APPROVAL_DIR} && touch ${APPROVAL_COMMIT} ${APPROVAL_PUSH}
+4. Then retry the command
+MSG
+    elif [[ " ${MISSING[*]} " == *" commit "* ]]; then
+      cat <<MSG
+Blocked: git commit requires explicit user approval.
+
+To proceed:
+1. Show the user the diff summary and your proposed commit message
+2. Ask the user for permission to commit
+3. If they approve, run: mkdir -p ${APPROVAL_DIR} && touch ${APPROVAL_COMMIT}
+4. Then retry the git commit command
+MSG
+    else
+      cat <<MSG
+Blocked: git push requires explicit user approval.
+
+To proceed:
+1. Tell the user what branch and remote you want to push to
+2. Ask the user for permission to push
+3. If they approve, run: mkdir -p ${APPROVAL_DIR} && touch ${APPROVAL_PUSH}
+4. Then retry the git push command
+MSG
+    fi
+  } >&2
   exit 2
 fi
 
-# --- Not a git commit/push: allow ---
+# --- All approvals present — consume atomically ---
+if [[ $NEEDS_COMMIT -eq 1 ]]; then
+  consume_approval "$APPROVAL_COMMIT" || true
+fi
+
+if [[ $NEEDS_PUSH -eq 1 ]]; then
+  consume_approval "$APPROVAL_PUSH" || true
+fi
+
 exit 0

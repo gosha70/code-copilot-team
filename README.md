@@ -413,7 +413,7 @@ code-copilot-team/
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   └── setup.sh                         Unified install entry point
 ├── tests/
-│   ├── test-hooks.sh                    161 hook tests
+│   ├── test-hooks.sh                    177 hook tests
 │   ├── test-generate.sh                 261 generation + adapter tests
 │   ├── test-shared-structure.sh         603 structure + content tests
 │   └── test-sync.sh                     39 sync + init metadata tests
