@@ -38,6 +38,18 @@ After setup, your `~/.claude/` directory looks like:
 │   │       ├── eval.md
 │   │       ├── ingest.md
 │   │       └── team-review.md
+│   ├── ml-app/                   # 5 agents: Lead, Backend Dev, Frontend Dev, ML/AI Eng, QA
+│   │   ├── CLAUDE.md
+│   │   └── commands/
+│   │       ├── bench.md
+│   │       ├── providers.md
+│   │       └── team-review.md
+│   ├── ml-utils/                 # 5 agents: Lead, MCP Eng, Retrieval Eng, Storage Eng, QA
+│   │   ├── CLAUDE.md
+│   │   └── commands/
+│   │       ├── eval.md
+│   │       ├── mcp-test.md
+│   │       └── team-review.md
 │   ├── ml-langchain/             # 4 agents: Lead, Agent Dev, Integration Eng, QA
 │   │   ├── CLAUDE.md
 │   │   └── commands/
@@ -60,12 +72,20 @@ After setup, your `~/.claude/` directory looks like:
 │   │   ├── CLAUDE.md
 │   │   └── commands/
 │   │       └── team-review.md
-│   └── web-dynamic/              # 5 agents: Lead, Frontend Dev, Backend Dev, QA, DevOps
+│   ├── web-dynamic/              # 5 agents: Lead, Frontend Dev, Backend Dev, QA, DevOps
+│   │   ├── CLAUDE.md
+│   │   └── commands/
+│   │       ├── db-migrate.md
+│   │       ├── team-review.md
+│   │       └── new-feature.md
+│   └── java-tooling/             # 5 agents: Lead, APT Eng, MCP Specialist, Plugin Dev, QA
 │       ├── CLAUDE.md
 │       └── commands/
-│           ├── db-migrate.md
-│           ├── team-review.md
-│           └── new-feature.md
+│           ├── build.md
+│           ├── generate-and-verify.md
+│           ├── new-annotation.md
+│           ├── new-generator.md
+│           └── team-review.md
 └── settings.json                 # Your global Claude settings (if any)
 ```
 
@@ -170,9 +190,12 @@ The global file provides your universal baseline. The project file provides spec
 | Template | Use When | Key Features |
 |---|---|---|
 | `ml-rag` | Building RAG pipelines with knowledge graphs | Vector + graph hybrid search, eval harnesses, chunking rules |
+| `ml-app` | Full-stack LLM applications | Clean Architecture, protocol-based LLM abstraction, strategy pattern, Next.js frontend |
+| `ml-utils` | Headless Python utility / MCP tool server | MCP-first, ports-and-adapters, hybrid retrieval, pluggable vector stores |
 | `ml-langchain` | LangChain/LangGraph agent workflows | LangGraph state machines, LangSmith tracing, agent patterns |
 | `ml-n8n` | n8n-based workflow automation | Workflow JSON versioning, Python microservice integration |
 | `java-enterprise` | Full-stack Java with messaging + caching | Hexagonal architecture, Kafka/RabbitMQ, GraphQL schema-first |
+| `java-tooling` | Java annotation processors, Gradle plugins, code generators | JSR 269, JavaPoet, Spring AI MCP, multi-module Gradle |
 | `web-static` | Static marketing/blog sites | Content-first, SEO, performance budgets |
 | `web-dynamic` | Full-stack web apps | Next.js App Router, Prisma, auth, mobile-responsive |
 
@@ -261,9 +284,12 @@ Only during the build phase. The Team Lead uses these rules:
 | Template | Team Lead (default) | Specialists |
 |---|---|---|
 | **ml-rag** | Team Lead | RAG Engineer, Knowledge Graph Engineer, Data Analyst, QA Engineer |
+| **ml-app** | Team Lead | Backend Dev, Frontend Dev, ML/AI Engineer, QA Engineer |
+| **ml-utils** | Team Lead | MCP Engineer, Retrieval Engineer, Storage Engineer, QA Engineer |
 | **ml-langchain** | Team Lead | Agent Developer, Integration Engineer, QA & Eval Engineer |
 | **ml-n8n** | Team Lead | Workflow Designer, Python Developer, QA & DevOps Engineer |
 | **java-enterprise** | Team Lead / Architect | Java Backend Dev, Frontend Dev, Data & Messaging Eng, QA, DevOps |
+| **java-tooling** | Team Lead | APT Engineer, MCP Specialist, Plugin Dev, QA Engineer |
 | **web-static** | Team Lead | Frontend Developer, Content & SEO Specialist, QA Engineer |
 | **web-dynamic** | Team Lead / Architect | Frontend Dev, Backend Dev, QA Engineer, DevOps |
 

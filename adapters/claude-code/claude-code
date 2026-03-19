@@ -382,6 +382,7 @@ OPTIONS:
 PROJECT TYPES:
     ml-rag              Python RAG + Knowledge Graph
     ml-app              Python + Next.js full-stack LLM application
+    ml-utils            Python headless utility / MCP tool server
     ml-langchain        Python LangChain/LangGraph/LangSmith
     ml-n8n              Python + n8n workflow automation
     java-enterprise     Full-stack Java (Spring Boot + React + GraphQL)

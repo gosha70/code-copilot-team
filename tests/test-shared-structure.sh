@@ -194,7 +194,7 @@ echo "=== shared/templates/ ==="
 
 assert_dir_exists "shared/templates/ exists" "$SHARED_DIR/templates"
 
-TEMPLATE_TYPES=(ml-rag ml-app ml-langchain ml-n8n java-enterprise web-static web-dynamic java-tooling)
+TEMPLATE_TYPES=(ml-rag ml-app ml-utils ml-langchain ml-n8n java-enterprise web-static web-dynamic java-tooling)
 
 for t in "${TEMPLATE_TYPES[@]}"; do
   assert_dir_exists "$t dir exists" "$SHARED_DIR/templates/$t"
@@ -204,7 +204,7 @@ for t in "${TEMPLATE_TYPES[@]}"; do
 done
 
 TEMPLATE_DIR_COUNT=$(find "$SHARED_DIR/templates" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-assert_eq "exactly 9 template dirs" "9" "$TEMPLATE_DIR_COUNT"
+assert_eq "exactly 10 template dirs" "10" "$TEMPLATE_DIR_COUNT"
 
 # Verify SDD templates exist
 assert_dir_exists "sdd dir exists" "$SHARED_DIR/templates/sdd"
@@ -251,6 +251,7 @@ assert_header() {
 
 assert_header "ml-rag" "$SHARED_DIR/templates/ml-rag/PROJECT.md" "# ML/AI — RAG + Knowledge Graph"
 assert_header "ml-app" "$SHARED_DIR/templates/ml-app/PROJECT.md" "# ML/AI — Full-Stack LLM Application"
+assert_header "ml-utils" "$SHARED_DIR/templates/ml-utils/PROJECT.md" "# ML/AI — Headless Utility / MCP Tool Server"
 assert_header "ml-langchain" "$SHARED_DIR/templates/ml-langchain/PROJECT.md" "# ML/AI — LangChain + LangGraph + LangSmith"
 assert_header "ml-n8n" "$SHARED_DIR/templates/ml-n8n/PROJECT.md" "# ML/AI — n8n Workflow Automation"
 assert_header "java-enterprise" "$SHARED_DIR/templates/java-enterprise/PROJECT.md" "# Enterprise Java Full-Stack Application"
@@ -781,8 +782,8 @@ grep -Eq "rules/on-demand/[[:space:]]+12 rules loaded by phase agents" "$REPO_DI
 assert_ok "README lists 12 on-demand rules" "$rc"
 
 rc=0
-grep -Eq "templates/[[:space:]]+8 stacks" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 8 template stacks" "$rc"
+grep -Eq "templates/[[:space:]]+9 stacks" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 9 template stacks" "$rc"
 
 rc=0
 grep -Eq "codex/.*5 skills" "$REPO_DIR/README.md" || rc=1

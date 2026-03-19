@@ -302,6 +302,7 @@ Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but neve
 | `ml-rag` | Python · FAISS/Chroma · Neo4j/NetworkX | Team Lead, RAG Engineer, KG Engineer, Data Analyst, QA |
 | `ml-langchain` | Python · LangChain/LangGraph/LangSmith | Team Lead, Agent Developer, Integration Engineer, QA & Eval |
 | `ml-app` | Python · FastAPI · LiteLLM · Next.js/React | Team Lead, Backend Dev, Frontend Dev, ML/AI Engineer, QA |
+| `ml-utils` | Python · MCP SDK · Chroma/Qdrant · tree-sitter | Team Lead, MCP Engineer, Retrieval Engineer, Storage Engineer, QA |
 | `ml-n8n` | Python · n8n · REST/webhooks | Team Lead, Workflow Designer, Python Developer, QA & DevOps |
 | `java-enterprise` | Spring Boot · Kafka · GraphQL · React | Team Lead, Backend Dev, Frontend Dev, Data & Messaging, QA, DevOps |
 | `web-static` | Astro/Next.js/Hugo · Tailwind | Team Lead, Frontend Dev, Content & SEO, QA |
@@ -388,7 +389,7 @@ code-copilot-team/
 │   ├── rules/always/                    3 global rules (always loaded)
 │   ├── rules/on-demand/                 12 rules loaded by phase agents
 │   ├── docs/                            7 tool-agnostic reference docs
-│   ├── templates/                       8 stacks × PROJECT.md + commands/
+│   ├── templates/                       9 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
 │   └── templates/provider-profile-template.toml  Peer provider profile seed
 ├── specs/                               ← SDD artifacts per feature (versioned)
@@ -409,7 +410,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    182 hook tests
 │   ├── test-generate.sh                 257 generation + adapter tests
-│   ├── test-shared-structure.sh         597 structure + content tests
+│   ├── test-shared-structure.sh         618 structure + content tests
 │   └── test-sync.sh                     39 sync + init metadata tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

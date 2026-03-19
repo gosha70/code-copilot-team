@@ -1,0 +1,44 @@
+{
+  "patterns": [
+    {
+      "match": "ModuleNotFoundError",
+      "hint": "Missing dependency. Run: poetry install (or pip install -e '.[dev]')"
+    },
+    {
+      "match": "No module named 'chromadb'",
+      "hint": "Run: poetry add chromadb (or pip install chromadb)"
+    },
+    {
+      "match": "No module named 'tree_sitter'",
+      "hint": "Run: poetry add tree-sitter tree-sitter-languages (or pip install tree-sitter tree-sitter-languages)"
+    },
+    {
+      "match": "Connection refused.*:6333",
+      "hint": "Qdrant is not running. Start it: docker compose up -d qdrant"
+    },
+    {
+      "match": "Connection refused.*:8000",
+      "hint": "Admin API server not running. Start it: uvicorn src.<package>.api.app:app --reload"
+    },
+    {
+      "match": "core.*import.*storage|core.*import.*mcp|core.*import.*retrieval",
+      "hint": "Ports-and-adapters violation: core/ must not import from storage/, mcp/, or retrieval/. Use protocols in core/ports.py instead. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "import chromadb|import qdrant_client|import qdrant|from chromadb|from qdrant_client|from qdrant",
+      "hint": "Direct backend import outside storage/. Use the VectorStorePort protocol instead. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "inline.*prompt|f['\"].*system.*message",
+      "hint": "Inline prompt detected. All prompts must be in versioned YAML files in prompts/. See PROJECT.md #Key Conventions."
+    },
+    {
+      "match": "Incompatible type.*Any",
+      "hint": "mypy strict violation: Any type detected. Use explicit types for all public functions. See PROJECT.md #Key Conventions."
+    },
+    {
+      "match": "tools.*exceeded|tool_count|too many tools",
+      "hint": "Tool count exceeding target. Consolidate related operations into parameterized tools. Target: < 10 tools total. See PROJECT.md #MCP Server Rules."
+    }
+  ]
+}

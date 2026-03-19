@@ -338,6 +338,21 @@ fi
 echo "[done] Created template: ml-app"
 
 # ══════════════════════════════════════════════════════════════
+# 3b. TEMPLATE: ml-utils
+# ══════════════════════════════════════════════════════════════
+
+mkdir -p "$TEMPLATES_DIR/ml-utils/commands"
+cp "$SHARED_DIR/templates/ml-utils/PROJECT.md" "$TEMPLATES_DIR/ml-utils/CLAUDE.md"
+if [[ -d "$SHARED_DIR/templates/ml-utils/commands" ]]; then
+    cp "$SHARED_DIR/templates/ml-utils/commands/"*.md "$TEMPLATES_DIR/ml-utils/commands/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/ml-utils/.claude" ]]; then
+    mkdir -p "$TEMPLATES_DIR/ml-utils/.claude"
+    cp -r "$SHARED_DIR/templates/ml-utils/.claude/"* "$TEMPLATES_DIR/ml-utils/.claude/" 2>/dev/null || true
+fi
+echo "[done] Created template: ml-utils"
+
+# ══════════════════════════════════════════════════════════════
 # 4. TEMPLATE: ml-langchain
 # ══════════════════════════════════════════════════════════════
 
