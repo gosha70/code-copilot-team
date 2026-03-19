@@ -22,12 +22,18 @@ These instructions apply to every Claude Code session regardless of project.
 
 ## Plan Mode
 
-When using `/plan` mode, Claude Code writes the plan to `~/.claude/plans/` — outside the project. Before exiting plan mode, **also write the plan content** to the project:
+**CRITICAL: Write plan artifacts to the project directory FIRST — during plan creation, not after.**
+
+The system file at `~/.claude/plans/` is ephemeral and session-local. It is NOT the authoritative plan. The authoritative plan lives in the project:
 
 - For SDD feature work: `specs/<feature-id>/plan.md` (with `spec_mode` frontmatter per `spec-workflow.md`)
 - For ad-hoc plans: `doc_internal/plans/<descriptive-name>.md`
 
-This ensures new sessions and other copilot tools can find and continue the work.
+**Rules:**
+1. As you produce each planning section, write it to the project path immediately. Do not wait until plan mode exits.
+2. You CAN write to project files while in plan mode — the `~/.claude/plans/` restriction is a system default, not a capability limit.
+3. The plan is incomplete until the project-local file exists. If the session ends before the project file is written, the plan is lost.
+4. Never tell the user "I'll write it to the project after exiting plan mode." Write it now.
 
 ## Session Workflow
 

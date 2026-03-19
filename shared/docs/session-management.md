@@ -55,7 +55,7 @@ You do **not** need to run `/init` every time. `/init` is a one-time command to 
 
 - **Project session log** (`doc_internal/HISTORY.md`): Add to your project CLAUDE.md if you want it.
 - **Explicit memory requests**: Say `"remember that we use pnpm"` to save to auto-memory.
-- **Plan mode locality**: Claude Code's `/plan` mode writes plans to `~/.claude/plans/` — outside the project. These are invisible to new sessions and other copilot tools. Always also write the plan to `specs/<feature-id>/plan.md` or `doc_internal/plans/` before exiting plan mode.
+- **Plan mode locality**: Claude Code's `/plan` mode writes a system file to `~/.claude/plans/` — ephemeral and invisible to new sessions or other copilot tools. **Write plan artifacts to the project directory FIRST, during plan creation:** `specs/<feature-id>/plan.md` for SDD feature work, or `doc_internal/plans/` for ad-hoc plans. Do not wait until plan mode exits. The `~/.claude/plans/` file is not the authoritative plan — the project-local file is.
 - **Spec artifact handoff**: The Plan agent writes `specs/<id>/plan.md` during planning (and `spec.md` when `spec_mode` is `full` or `lightweight`). Ensure they are committed so the Build agent can read them. Include `specs/lessons-learned.md` in handoff if it was updated.
 
 ## Parallel Development with Git Worktrees
