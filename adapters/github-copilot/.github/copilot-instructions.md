@@ -93,6 +93,15 @@ All design/plan artifacts must reside within the project directory so that any c
 - Ad-hoc plans without a feature-id go in `doc_internal/plans/`.
 - Never rely on external plan storage as the only copy. If a tool writes a plan outside the project, also write it to the appropriate project-local location.
 
+## Plan Artifact Persistence
+
+**Write planning documents to disk as you produce them — never leave them only in conversation context.**
+
+- When analysis produces architecture decisions, requirements, or implementation plans, write them to `specs/` or `doc_internal/` immediately — do not defer to "later" or assume the conversation will persist.
+- When a planning conversation produces SDD-ready content (user scenarios, requirements, task breakdowns), write `spec.md`, `plan.md`, and `tasks.md` to `specs/<feature-id>/` before moving on to other work.
+- Partial artifacts are better than none. If a session is interrupted or compacted, whatever was written to disk survives.
+- This rule applies even when planning work spans conversations or is exploratory. If the output is actionable, persist it.
+
 ---
 
 # Agent Safety Rules
