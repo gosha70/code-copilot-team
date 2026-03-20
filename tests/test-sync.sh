@@ -161,6 +161,84 @@ assert_file_exists "CLAUDE.md copied by init" "$INIT_DIR/CLAUDE.md"
 assert_file_exists "commands copied by init" "$INIT_DIR/.claude/commands/eval.md"
 assert_file_exists "remediation.json copied by init" "$INIT_DIR/.claude/remediation.json"
 
+# settings.local.json — git approval permissions
+assert_file_exists "settings.local.json created by init" "$INIT_DIR/.claude/settings.local.json"
+assert_ok "settings.local.json has commit approval" \
+  $(grep -q "touch.*commit-" "$INIT_DIR/.claude/settings.local.json" && echo 0 || echo 1)
+assert_ok "settings.local.json has push approval" \
+  $(grep -q "touch.*push-" "$INIT_DIR/.claude/settings.local.json" && echo 0 || echo 1)
+assert_ok "settings.local.json has compound commit+push approval" \
+  $(grep -q "touch.*commit-.*push-" "$INIT_DIR/.claude/settings.local.json" && echo 0 || echo 1)
+
+# Merge: init on a project that already has settings.local.json must preserve existing entries
+echo ""
+echo "=== 1b. init_project() merges into existing settings.local.json ==="
+
+MERGE_DIR="$TEST_TMPDIR/project-merge"
+mkdir -p "$MERGE_DIR/.claude"
+cat > "$MERGE_DIR/.claude/settings.local.json" << 'EXISTINGEOF'
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo hello)"
+    ]
+  }
+}
+EXISTINGEOF
+
+echo "y" | init_project "ml-rag" "$MERGE_DIR" > /dev/null 2>&1
+assert_file_exists "settings.local.json still present after merge" "$MERGE_DIR/.claude/settings.local.json"
+assert_ok "merge preserves pre-existing permission" \
+  $(grep -q "echo hello" "$MERGE_DIR/.claude/settings.local.json" && echo 0 || echo 1)
+assert_ok "merge adds commit approval" \
+  $(grep -q "touch.*commit-" "$MERGE_DIR/.claude/settings.local.json" && echo 0 || echo 1)
+assert_ok "merge adds compound approval" \
+  $(grep -q "touch.*commit-.*push-" "$MERGE_DIR/.claude/settings.local.json" && echo 0 || echo 1)
+
+# Idempotency: re-running init must not duplicate approval entries
+echo "y" | init_project "ml-rag" "$MERGE_DIR" > /dev/null 2>&1
+if command -v jq &>/dev/null; then
+  _COMMIT_COUNT=$(jq '[.permissions.allow[] | select(test("touch.*commit-[0-9]+-[0-9a-f]+ "))] | length' \
+    "$MERGE_DIR/.claude/settings.local.json" 2>/dev/null || echo "0")
+  assert_eq "no duplicate compound entries after re-init" "1" "$_COMMIT_COUNT"
+else
+  echo "  SKIP: jq not available for duplicate-entry check"
+fi
+
+# ══════════════════════════════════════════════════════════════
+echo ""
+echo "=== 1c. init_project() uses git toplevel hash in nested-repo setups ==="
+
+NESTED_PARENT="$TEST_TMPDIR/nested-parent"
+NESTED_SUBDIR="$NESTED_PARENT/subproject"
+mkdir -p "$NESTED_SUBDIR"
+git init "$NESTED_PARENT" --quiet
+
+echo "y" | init_project "ml-rag" "$NESTED_SUBDIR" > /dev/null 2>&1
+
+# Derive hashes the same way the function does: ask git for the toplevel
+# (which resolves symlinks on macOS — /var/folders → /private/var/folders).
+# Using $NESTED_PARENT directly would differ from the canonical path git returns.
+_GIT_ROOT=$(git -C "$NESTED_SUBDIR" rev-parse --show-toplevel 2>/dev/null || echo "$NESTED_PARENT")
+_RESOLVED_SUBDIR=$(cd "$NESTED_SUBDIR" && pwd -P 2>/dev/null || echo "$NESTED_SUBDIR")
+if command -v md5 &>/dev/null; then
+  _PARENT_HASH=$(printf '%s' "$_GIT_ROOT" | md5 -q)
+  _SUBDIR_HASH=$(printf '%s' "$_RESOLVED_SUBDIR" | md5 -q)
+elif command -v md5sum &>/dev/null; then
+  _PARENT_HASH=$(printf '%s' "$_GIT_ROOT" | md5sum | cut -d' ' -f1)
+  _SUBDIR_HASH=$(printf '%s' "$_RESOLVED_SUBDIR" | md5sum | cut -d' ' -f1)
+else
+  _PARENT_HASH=$(printf '%s' "$_GIT_ROOT" | tr '/' '_')
+  _SUBDIR_HASH=$(printf '%s' "$_RESOLVED_SUBDIR" | tr '/' '_')
+fi
+
+assert_ok "nested-repo: settings.local.json created" \
+  $([[ -f "$NESTED_SUBDIR/.claude/settings.local.json" ]] && echo 0 || echo 1)
+assert_ok "nested-repo: approval hash matches git toplevel (parent), not subdir path" \
+  $(grep -q "$_PARENT_HASH" "$NESTED_SUBDIR/.claude/settings.local.json" && echo 0 || echo 1)
+assert_ok "nested-repo: approval does not use subdir hash" \
+  $(grep -q "$_SUBDIR_HASH" "$NESTED_SUBDIR/.claude/settings.local.json" && echo 1 || echo 0)
+
 # ══════════════════════════════════════════════════════════════
 echo ""
 echo "=== 2. sync_project() detects template from template.json ==="

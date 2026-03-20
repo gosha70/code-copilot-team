@@ -480,6 +480,56 @@ init_project() {
 }
 TMPLEOF
 
+    # Pre-approve git approval commands in settings.local.json.
+    # The protect-git.sh hook blocks every git commit/push and instructs Claude to
+    # create a one-time approval file via a combined "mkdir && touch" command.
+    # That combined form must be pre-approved here so it runs without a permission
+    # prompt — otherwise Claude Code prompts the user on every commit attempt.
+    local repo_hash repo_root _uid
+    _uid=$(id -u)
+    # Hash the git toplevel, not the init path — matches protect-git.sh behaviour.
+    # When $target is a subdirectory of an existing repo, rev-parse returns the
+    # repo root so the approval filenames agree with what the hook will generate.
+    repo_root=$(git -C "$target" rev-parse --show-toplevel 2>/dev/null || echo "$target")
+    if command -v md5 &>/dev/null; then
+        repo_hash=$(printf '%s' "$repo_root" | md5 -q)
+    elif command -v md5sum &>/dev/null; then
+        repo_hash=$(printf '%s' "$repo_root" | md5sum | cut -d' ' -f1)
+    else
+        repo_hash=$(printf '%s' "$repo_root" | tr '/' '_')
+    fi
+    local _adir="/tmp/.claude-git-approvals"
+    local _cf="${_adir}/commit-${_uid}-${repo_hash}"
+    local _pf="${_adir}/push-${_uid}-${repo_hash}"
+    # Three approval variants matching protect-git.sh's three block-message branches:
+    #   commit-only, push-only, and compound commit+push (one touch with two file args)
+    local _cp="Bash(mkdir -p ${_adir} && touch ${_cf})"
+    local _pp="Bash(mkdir -p ${_adir} && touch ${_pf})"
+    local _both="Bash(mkdir -p ${_adir} && touch ${_cf} ${_pf})"
+    local _sl="$target/.claude/settings.local.json"
+    if [[ -f "$_sl" ]] && command_exists jq; then
+        local _updated
+        _updated=$(jq --arg cp "$_cp" --arg pp "$_pp" --arg both "$_both" '
+            .permissions.allow //= [] |
+            if (.permissions.allow | index($cp))   == null then .permissions.allow += [$cp]   else . end |
+            if (.permissions.allow | index($pp))   == null then .permissions.allow += [$pp]   else . end |
+            if (.permissions.allow | index($both)) == null then .permissions.allow += [$both] else . end
+        ' "$_sl")
+        echo "$_updated" > "$_sl"
+        echo "[done] Added git approval permissions to .claude/settings.local.json"
+    elif [[ ! -f "$_sl" ]]; then
+        mkdir -p "$target/.claude"
+        printf '{\n  "permissions": {\n    "allow": [\n      "%s",\n      "%s",\n      "%s"\n    ]\n  }\n}\n' \
+            "$_cp" "$_pp" "$_both" > "$_sl"
+        echo "[done] Created .claude/settings.local.json with git approval permissions"
+    else
+        echo "[WARN] jq not installed — could not write git approval permissions to settings.local.json"
+        echo "       Add manually:"
+        echo "         $_cp"
+        echo "         $_pp"
+        echo "         $_both"
+    fi
+
     # Install Playwright CLI skills for web templates if --playwright flag is set
     if [[ "$PLAYWRIGHT" == "1" ]]; then
         if command -v playwright-cli &>/dev/null; then
