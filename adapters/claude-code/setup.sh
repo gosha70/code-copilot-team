@@ -3,7 +3,7 @@
 #
 # Creates:
 #   ~/.claude/CLAUDE.md                    Global configuration
-#   ~/.claude/rules/                       Global rules (auto-loaded, 3 files)
+#   ~/.claude/rules/                       Global rules (auto-loaded, 4 files)
 #   ~/.claude/rules-library/               Rules library (on-demand, 12 files)
 #   ~/.claude/agents/                      Global agents (5 utility + 4 phase)
 #   ~/.claude/hooks/                       Global hook scripts (verify, notify)
@@ -31,7 +31,7 @@ LAUNCHER_TARGET="$HOME/.local/bin/claude-code"
 if [[ "${1:-}" == "--sync" ]]; then
     echo "Syncing rules, rules-library, and agents from repo..."
 
-    # Global rules (3 files) — from shared/rules/always/
+    # Global rules (4 files) — from shared/rules/always/
     RULES_SOURCE="$SHARED_DIR/rules/always"
     RULES_TARGET="$CLAUDE_DIR/rules"
     mkdir -p "$RULES_TARGET"
@@ -524,7 +524,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 11c. GLOBAL RULES (auto-loaded, 3 files) — from shared/rules/always/
+# 11c. GLOBAL RULES (auto-loaded, 4 files) — from shared/rules/always/
 # ══════════════════════════════════════════════════════════════
 
 RULES_SOURCE="$SHARED_DIR/rules/always"
@@ -758,6 +758,29 @@ else
     echo "[skip] Provider profile already exists at $PROVIDER_FILE"
 fi
 
+# Prompt for company name if not already set (interactive sessions only)
+if [[ -t 0 && -z "${CI:-}" && -f "$PROVIDER_FILE" ]]; then
+    _CURRENT_COMPANY=$(grep '^company[[:space:]]*=[[:space:]]*' "$PROVIDER_FILE" \
+        | head -1 \
+        | sed 's/^company[[:space:]]*=[[:space:]]*"//; s/"[[:space:]]*$//' 2>/dev/null || echo "")
+    if [[ -z "$_CURRENT_COMPANY" ]]; then
+        echo ""
+        read -rp "Company name for copyright headers (e.g. ACME Corp; leave blank to skip): " _INPUT_COMPANY
+        if [[ -n "$_INPUT_COMPANY" ]]; then
+            python3 - "$PROVIDER_FILE" "$_INPUT_COMPANY" <<'PYEOF'
+import sys, re
+path, company = sys.argv[1], sys.argv[2]
+# Escape backslashes and double quotes for TOML double-quoted string
+escaped = company.replace('\\', '\\\\').replace('"', '\\"')
+content = open(path).read()
+content = re.sub(r'^company\s*=\s*""', f'company = "{escaped}"', content, flags=re.MULTILINE)
+open(path, 'w').write(content)
+PYEOF
+            echo "[done] Set company name to '$_INPUT_COMPANY' in $PROVIDER_FILE"
+        fi
+    fi
+fi
+
 # ══════════════════════════════════════════════════════════════
 # 14. LAUNCHER
 # ══════════════════════════════════════════════════════════════
@@ -977,7 +1000,7 @@ echo "  - peer-review-runner.sh  — executes peer provider and writes artifacts
 echo "  - providers-health.sh    — checks availability of configured providers"
 echo ""
 echo "Rules installed:"
-echo "  - ~/.claude/rules/          — 3 global rules (auto-loaded every session)"
+echo "  - ~/.claude/rules/          — 4 global rules (auto-loaded every session)"
 echo "  - ~/.claude/rules-library/  — 12 library rules (loaded on demand by agents)"
 echo ""
 echo "Each project now includes:"

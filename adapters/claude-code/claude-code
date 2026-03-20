@@ -363,7 +363,7 @@ USAGE:
     claude-code [path]                              Start Claude session (cmux on macOS, tmux elsewhere)
     claude-code --continue [path]                   Continue last session
     claude-code --resume [path]                     Resume a named session (interactive picker)
-    claude-code init <type> [path] [--playwright]   Initialize project from template
+    claude-code init <type> [path] [--playwright] [--license <type>]   Initialize project from template
     claude-code sync [path] [--dry-run]             Sync project against its template
     claude-code playwright [path]                   Install Playwright CLI skills into a project
     claude-code list                                List available templates
@@ -372,6 +372,7 @@ USAGE:
 OPTIONS:
     --dry-run            With 'sync': show what would change without modifying files
     --playwright         With 'init': install Playwright CLI skills into the new project
+    --license <type>     With 'init': add Copyright & Licensing section to CLAUDE.md (e.g. MIT, Apache-2.0, Proprietary)
     --peer-review [name] Enable peer review (optional: specify provider)
     --peer-review-off    Disable peer review for this session
     --peer-review-scope <scope>  Review scope: code|design|both (default: both)
@@ -528,6 +529,24 @@ TMPLEOF
         echo "         $_cp"
         echo "         $_pp"
         echo "         $_both"
+    fi
+
+    # Append Copyright & Licensing section to CLAUDE.md if --license was given
+    if [[ -n "$LICENSE_TYPE" ]]; then
+        local _year _company=""
+        _year=$(date +%Y)
+        local _providers="$HOME/.code-copilot-team/providers.toml"
+        if [[ -f "$_providers" ]]; then
+            _company=$(grep '^company[[:space:]]*=[[:space:]]*' "$_providers" \
+                | head -1 \
+                | sed 's/^company[[:space:]]*=[[:space:]]*"//; s/"[[:space:]]*$//' 2>/dev/null || echo "")
+        fi
+        {
+            printf '\n## Copyright & Licensing\n\n'
+            printf -- '- **Company**: %s\n' "${_company:-Unknown}"
+            printf -- '- **License**: %s\n' "$LICENSE_TYPE"
+        } >> "$target/CLAUDE.md"
+        echo "[done] Added copyright section (company: '${_company:-Unknown}', license: $LICENSE_TYPE) to CLAUDE.md"
     fi
 
     # Install Playwright CLI skills for web templates if --playwright flag is set
@@ -946,6 +965,7 @@ start_session() {
 
 # ── Flag parsing ─────────────────────────────────────────────
 PLAYWRIGHT=0
+LICENSE_TYPE=""
 PEER_REVIEW_ENABLED=""
 PEER_PROVIDER=""
 PEER_SCOPE="both"
@@ -1015,18 +1035,31 @@ fi
 case "${1:-}" in
     init)
         shift
-        # Parse --playwright flag
+        # Parse --playwright and --license flags
         ARGS=()
-        for arg in "$@"; do
-            if [[ "$arg" == "--playwright" ]]; then
-                PLAYWRIGHT=1
-            else
-                ARGS+=("$arg")
-            fi
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --playwright)
+                    PLAYWRIGHT=1
+                    shift
+                    ;;
+                --license)
+                    if [[ -z "${2:-}" || "${2:0:2}" == "--" ]]; then
+                        echo "Error: --license requires a value (e.g. --license MIT)"
+                        exit 1
+                    fi
+                    LICENSE_TYPE="$2"
+                    shift 2
+                    ;;
+                *)
+                    ARGS+=("$1")
+                    shift
+                    ;;
+            esac
         done
         if [[ ${#ARGS[@]} -eq 0 ]]; then
             echo "Error: Missing project type."
-            echo "Usage: claude-code init <type> [path] [--playwright]"
+            echo "Usage: claude-code init <type> [path] [--playwright] [--license <type>]"
             echo ""
             list_templates
             exit 1

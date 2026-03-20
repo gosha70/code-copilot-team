@@ -225,7 +225,7 @@ Add your own providers by creating new `[providers.<name>]` sections. The `{revi
 
 ![Configuration Layers](docs/images/configuration-layers.png)
 
-- **Layered rules** — 3 global rules (`~/.claude/rules/`) auto-load every session; 12 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
+- **Layered rules** — 4 global rules (`~/.claude/rules/`) auto-load every session; 12 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
 - **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
 - **Hooks** (`~/.claude/hooks/`) — 7 lifecycle scripts: test verification, type checking, auto-format, file protection, context re-injection, peer review trigger, and desktop notifications. Auto-detect your project's stack.
 - **8 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
@@ -313,10 +313,11 @@ Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but neve
 
 ```
 ~/.claude/CLAUDE.md                ← Global agent manifest (base)
-~/.claude/rules/*.md               ← Global rules (always loaded, 3 files)
+~/.claude/rules/*.md               ← Global rules (always loaded, 4 files)
   ├── coding-standards.md          SOLID, quality gates, prohibited patterns
   ├── copilot-conventions.md       Cross-tool portable conventions
-  └── safety.md                    Destructive action guards, secrets policy
+  ├── safety.md                    Destructive action guards, secrets policy
+  └── copyright-headers.md         Copyright header rules for generated source files
 ~/.claude/rules-library/*.md       ← On-demand rules (loaded by phase agents, 12 files)
   ├── agent-team-protocol.md       Three-phase workflow, delegation rules
   ├── clarification-protocol.md    Ask before implementing ambiguous requirements
@@ -386,7 +387,7 @@ All tools share the same rules from `shared/rules/always/`. Each adapter formats
 ```
 code-copilot-team/
 ├── shared/                              ← Single source of truth
-│   ├── rules/always/                    3 global rules (always loaded)
+│   ├── rules/always/                    4 global rules (always loaded)
 │   ├── rules/on-demand/                 12 rules loaded by phase agents
 │   ├── docs/                            7 tool-agnostic reference docs
 │   ├── templates/                       9 stacks × PROJECT.md + commands/
@@ -409,8 +410,8 @@ code-copilot-team/
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    182 hook tests
-│   ├── test-generate.sh                 257 generation + adapter tests
-│   ├── test-shared-structure.sh         618 structure + content tests
+│   ├── test-generate.sh                 265 generation + adapter tests
+│   ├── test-shared-structure.sh         620 structure + content tests
 │   └── test-sync.sh                     39 sync + init metadata tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

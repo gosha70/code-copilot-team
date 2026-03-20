@@ -9,6 +9,11 @@
 #   healthcheck  — command to verify provider availability
 #   version      — provider type label (cli, local, api)
 
+[copyright]
+# Company name used in copyright headers of generated source files.
+# Set by claude-setup.sh during initial configuration, or edit manually.
+company = ""
+
 [defaults]
 # Map subject providers to their default peer reviewer.
 # Used when --peer-review is invoked without an explicit provider name.

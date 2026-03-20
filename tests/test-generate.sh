@@ -87,6 +87,9 @@ assert_contains "contains Agent Safety Rules header" "$AGENTS_MD" "^# Agent Safe
 assert_contains "contains Secrets section" "$AGENTS_MD" "## Secrets & Credentials"
 assert_contains "contains Input Validation section" "$AGENTS_MD" "## Input Validation"
 
+assert_contains "contains Copyright Header Rules header" "$AGENTS_MD" "^# Copyright Header Rules"
+assert_contains "contains Copyright Trigger section" "$AGENTS_MD" "## Trigger"
+
 # Verify key content from each rule file is present
 assert_contains "has lint errors: 0" "$AGENTS_MD" "Lint errors: 0"
 assert_contains "has SQL injection rule" "$AGENTS_MD" "parameterized queries"
@@ -258,16 +261,17 @@ CURSOR_RULES="$ADAPTERS/cursor/.cursor/rules"
 
 assert "cursor rules dir exists" "[[ -d '$CURSOR_RULES' ]]"
 
-# Verify 3 .mdc files (one per always-on rule)
+# Verify 4 .mdc files (one per always-on rule)
 MDC_COUNT=$(ls "$CURSOR_RULES"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
-assert "exactly 3 .mdc files ($MDC_COUNT)" "[[ $MDC_COUNT -eq 3 ]]"
+assert "exactly 4 .mdc files ($MDC_COUNT)" "[[ $MDC_COUNT -eq 4 ]]"
 
 assert "coding-standards.mdc exists" "[[ -f '$CURSOR_RULES/coding-standards.mdc' ]]"
 assert "copilot-conventions.mdc exists" "[[ -f '$CURSOR_RULES/copilot-conventions.mdc' ]]"
 assert "safety.mdc exists" "[[ -f '$CURSOR_RULES/safety.mdc' ]]"
+assert "copyright-headers.mdc exists" "[[ -f '$CURSOR_RULES/copyright-headers.mdc' ]]"
 
 # Verify frontmatter structure
-for mdc in coding-standards copilot-conventions safety; do
+for mdc in coding-standards copilot-conventions safety copyright-headers; do
   MDC_FILE="$CURSOR_RULES/$mdc.mdc"
   assert_contains "$mdc.mdc: has frontmatter start" "$MDC_FILE" "^---"
   assert_contains "$mdc.mdc: has description field" "$MDC_FILE" "^description:"
@@ -278,11 +282,13 @@ done
 assert_contains "coding-standards.mdc: has Quality Gates" "$CURSOR_RULES/coding-standards.mdc" "Quality Gates"
 assert_contains "copilot-conventions.mdc: has Core Contract" "$CURSOR_RULES/copilot-conventions.mdc" "Core Contract"
 assert_contains "safety.mdc: has Secrets & Credentials" "$CURSOR_RULES/safety.mdc" "Secrets & Credentials"
+assert_contains "copyright-headers.mdc: has Trigger section" "$CURSOR_RULES/copyright-headers.mdc" "## Trigger"
 
 # Verify descriptions match first headings
 assert_contains "coding-standards.mdc: description is Coding Standards" "$CURSOR_RULES/coding-standards.mdc" 'description: "Coding Standards"'
 assert_contains "copilot-conventions.mdc: description is Cross-Copilot" "$CURSOR_RULES/copilot-conventions.mdc" 'description: "Cross-Copilot Conventions"'
 assert_contains "safety.mdc: description is Agent Safety" "$CURSOR_RULES/safety.mdc" 'description: "Agent Safety Rules"'
+assert_contains "copyright-headers.mdc: description is Copyright Header Rules" "$CURSOR_RULES/copyright-headers.mdc" 'description: "Copyright Header Rules"'
 
 # ── Section 11: Cursor setup.sh ───────────────────────────
 
@@ -367,7 +373,7 @@ bash "$CURSOR_SETUP" "$CURSOR_TMP" >/dev/null 2>&1
 CURSOR_INSTALL_RC=$?
 assert "cursor install exits 0" "[[ $CURSOR_INSTALL_RC -eq 0 ]]"
 INSTALLED_MDC=$(ls "$CURSOR_TMP/.cursor/rules"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
-assert "cursor installed 3 .mdc files ($INSTALLED_MDC)" "[[ $INSTALLED_MDC -eq 3 ]]"
+assert "cursor installed 4 .mdc files ($INSTALLED_MDC)" "[[ $INSTALLED_MDC -eq 4 ]]"
 rm -rf "$CURSOR_TMP"
 
 # ── Section 16: GitHub Copilot setup.sh install test ──────

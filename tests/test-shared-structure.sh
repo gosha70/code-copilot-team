@@ -107,7 +107,7 @@ assert_nonempty() {
 }
 
 # ══════════════════════════════════════════════════════════════
-# 1. shared/rules/always/ — 3 core rules exist and are non-empty
+# 1. shared/rules/always/ — 4 core rules exist and are non-empty
 # ══════════════════════════════════════════════════════════════
 
 echo "=== shared/rules/always/ ==="
@@ -116,12 +116,14 @@ assert_dir_exists "shared/rules/always/ exists" "$SHARED_DIR/rules/always"
 assert_file_exists "coding-standards.md exists" "$SHARED_DIR/rules/always/coding-standards.md"
 assert_file_exists "copilot-conventions.md exists" "$SHARED_DIR/rules/always/copilot-conventions.md"
 assert_file_exists "safety.md exists" "$SHARED_DIR/rules/always/safety.md"
+assert_file_exists "copyright-headers.md exists" "$SHARED_DIR/rules/always/copyright-headers.md"
 assert_nonempty "coding-standards.md non-empty" "$SHARED_DIR/rules/always/coding-standards.md"
 assert_nonempty "copilot-conventions.md non-empty" "$SHARED_DIR/rules/always/copilot-conventions.md"
 assert_nonempty "safety.md non-empty" "$SHARED_DIR/rules/always/safety.md"
+assert_nonempty "copyright-headers.md non-empty" "$SHARED_DIR/rules/always/copyright-headers.md"
 
 ALWAYS_COUNT=$(find "$SHARED_DIR/rules/always" -name '*.md' | wc -l | tr -d ' ')
-assert_eq "exactly 3 always rules" "3" "$ALWAYS_COUNT"
+assert_eq "exactly 4 always rules" "4" "$ALWAYS_COUNT"
 
 # ══════════════════════════════════════════════════════════════
 # 2. shared/rules/on-demand/ — 12 library rules exist
@@ -774,8 +776,8 @@ grep -Eq "docs/[[:space:]]+${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" 
 assert_ok "README lists ${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$rc"
 
 rc=0
-grep -Eq "rules/always/[[:space:]]+3 global rules" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 3 global always rules" "$rc"
+grep -Eq "rules/always/[[:space:]]+4 global rules" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 4 global always rules" "$rc"
 
 rc=0
 grep -Eq "rules/on-demand/[[:space:]]+12 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
