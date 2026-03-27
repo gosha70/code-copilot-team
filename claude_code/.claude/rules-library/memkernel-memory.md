@@ -1,0 +1,1 @@
+../../../shared/rules/on-demand/memkernel-memory.md

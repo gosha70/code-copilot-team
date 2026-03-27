@@ -11,6 +11,7 @@
 #   ./scripts/setup.sh --aider <dir>       # install Aider conventions into project
 #   ./scripts/setup.sh --all               # install all adapters (project-level need <dir>)
 #   ./scripts/setup.sh --sync              # regenerate + re-install active tools
+#   ./scripts/setup.sh --claude-code --memkernel /path/to/memkernel
 #
 # Claude Code and Codex install to global config dirs (~/.claude/, ~/.codex/).
 # Cursor, GitHub Copilot, Windsurf, and Aider install into a target project directory.
@@ -26,6 +27,7 @@ TOOLS=()
 SYNC=false
 PROJECT_DIR=""
 SHOW_HELP=false
+MEMKERNEL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,6 +39,15 @@ while [[ $# -gt 0 ]]; do
     --aider)            TOOLS+=("aider"); shift ;;
     --all)              TOOLS=("claude-code" "codex" "cursor" "github-copilot" "windsurf" "aider"); shift ;;
     --sync)             SYNC=true; shift ;;
+    --memkernel)
+      MEMKERNEL_ARGS+=("--memkernel")
+      if [[ -n "${2:-}" && "${2:0:2}" != "--" ]]; then
+        MEMKERNEL_ARGS+=("$2")
+        shift 2
+      else
+        shift
+      fi
+      ;;
     --help|-h)          SHOW_HELP=true; shift ;;
     *)
       if [[ -z "$PROJECT_DIR" ]]; then
@@ -66,10 +77,12 @@ if $SHOW_HELP; then
   echo "Flags:"
   echo "  --all             Install all adapters"
   echo "  --sync            Regenerate configs before installing"
+  echo "  --memkernel [dir] Install or enable MemKernel support for Claude Code"
   echo "  --help            Show this help"
   echo ""
   echo "Examples:"
   echo "  $0 --claude-code              # Install Claude Code globally"
+  echo "  $0 --claude-code --memkernel ~/src/memkernel"
   echo "  $0 --cursor ~/my-project      # Install Cursor rules into project"
   echo "  $0 --all ~/my-project         # Install everything"
   echo "  $0 --sync --claude-code       # Regenerate then install Claude Code"
@@ -130,9 +143,9 @@ for tool in "${TOOLS[@]}"; do
   case "$tool" in
     claude-code)
       if $SYNC; then
-        bash "$ADAPTERS/claude-code/setup.sh" --sync && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+        bash "$ADAPTERS/claude-code/setup.sh" --sync "${MEMKERNEL_ARGS[@]+"${MEMKERNEL_ARGS[@]}"}" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
       else
-        bash "$ADAPTERS/claude-code/setup.sh" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+        bash "$ADAPTERS/claude-code/setup.sh" "${MEMKERNEL_ARGS[@]+"${MEMKERNEL_ARGS[@]}"}" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
       fi
       ;;
     codex)

@@ -54,6 +54,6 @@ You are a planning agent. Your job is to understand requirements, ask clarifying
 - **One owner per file** in delegation plans. No overlapping file ownership.
 - **2-3 teammates max** for delegation. More increases overhead without proportional speedup.
 
-## GCC Memory (optional)
+## Memory (optional)
 
-If the Aline MCP server is available, run **CONTEXT** at the start to load prior decisions and research findings. After plan approval, run **COMMIT** with the plan summary. Use **BRANCH** / **MERGE** when exploring alternative approaches.
+If the `memkernel` MCP server is configured, read `~/.claude/rules-library/memkernel-memory.md` and use it to recall prior context at the start of planning and retain the approved plan summary when it is worth preserving.

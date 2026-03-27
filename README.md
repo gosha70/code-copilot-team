@@ -225,9 +225,9 @@ Add your own providers by creating new `[providers.<name>]` sections. The `{revi
 
 ![Configuration Layers](docs/images/configuration-layers.png)
 
-- **Layered rules** — 4 global rules (`~/.claude/rules/`) auto-load every session; 12 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
+- **Layered rules** — 4 global rules (`~/.claude/rules/`) auto-load every session; 13 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
 - **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
-- **Hooks** (`~/.claude/hooks/`) — 7 lifecycle scripts: test verification, type checking, auto-format, file protection, context re-injection, peer review trigger, and desktop notifications. Auto-detect your project's stack.
+- **Hooks** (`~/.claude/hooks/`) — 11 lifecycle scripts: test verification, type checking, auto-format, file protection, git safety guards, context re-injection, peer review trigger, desktop notifications, plus 3 self-guarding MemKernel hooks (session recall, pre-compact checkpoint, post-compact recovery) that activate only when MemKernel is installed.
 - **8 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
 - **Four-phase workflow** — Research → Plan → Build → Review. Plus **Ralph Loop** for single-agent autonomous iteration.
 ![Three - Phase Agent Workflow](docs/images/three-phase-workflow.png)
@@ -318,7 +318,7 @@ Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but neve
   ├── copilot-conventions.md       Cross-tool portable conventions
   ├── safety.md                    Destructive action guards, secrets policy
   └── copyright-headers.md         Copyright header rules for generated source files
-~/.claude/rules-library/*.md       ← On-demand rules (loaded by phase agents, 12 files)
+~/.claude/rules-library/*.md       ← On-demand rules (loaded by phase agents, 13 files)
   ├── agent-team-protocol.md       Three-phase workflow, delegation rules
   ├── clarification-protocol.md    Ask before implementing ambiguous requirements
   ├── environment-setup.md         Environment and config verification
@@ -330,7 +330,8 @@ Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but neve
   ├── stack-constraints.md         Stack version and compatibility guards
   ├── team-lead-efficiency.md      Limit agents, poll frequency, no re-work
   ├── token-efficiency.md          Diff-over-rewrite, context economy
-  └── infra-verification.md        Infrastructure artifact verification ("build it, run it")
+  ├── infra-verification.md        Infrastructure artifact verification ("build it, run it")
+  └── memkernel-memory.md          MemKernel persistent memory protocol (self-guarding)
 ~/.claude/agents/*.md              ← Phase + utility agents (9 files)
   ├── research.md                  Research phase agent
   ├── plan.md                      Plan phase agent
@@ -341,14 +342,18 @@ Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but neve
   ├── phase-recap.md               Summarize completed phase
   ├── security-review.md           Scan for security vulnerabilities
   └── verify-app.md                End-to-end project verification
-~/.claude/hooks/*.sh               ← Deterministic lifecycle hooks (always active, 7 files)
+~/.claude/hooks/*.sh               ← Deterministic lifecycle hooks (always active, 11 files)
   ├── verify-on-stop.sh            Run test suite when Claude finishes responding
   ├── verify-after-edit.sh         Run type checker after source file edits
   ├── auto-format.sh               Auto-format edited files
   ├── protect-files.sh             Prevent edits to protected files
+  ├── protect-git.sh               Guard destructive git commands (push --force, reset --hard)
   ├── peer-review-on-stop.sh       Trigger peer review on phase completion
   ├── reinject-context.sh          Re-inject session context on prompt submit
-  └── notify.sh                    Desktop notifications (macOS + Linux)
+  ├── notify.sh                    Desktop notifications (macOS + Linux)
+  ├── memkernel-recall.sh          Recall MemKernel context on session start (self-guarding)
+  ├── memkernel-pre-compact.sh     Save checkpoint before compaction (self-guarding)
+  └── memkernel-post-compact.sh    Recover context after compaction (self-guarding)
 ~/.claude/settings.json            ← Hooks wiring and global settings
 ./CLAUDE.md                        ← Project-level (overrides global)
 ./.claude/commands/*.md            ← Project slash commands
@@ -388,7 +393,7 @@ All tools share the same rules from `shared/rules/always/`. Each adapter formats
 code-copilot-team/
 ├── shared/                              ← Single source of truth
 │   ├── rules/always/                    4 global rules (always loaded)
-│   ├── rules/on-demand/                 12 rules loaded by phase agents
+│   ├── rules/on-demand/                 13 rules loaded by phase agents
 │   ├── docs/                            7 tool-agnostic reference docs
 │   ├── templates/                       9 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
@@ -409,10 +414,10 @@ code-copilot-team/
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   └── setup.sh                         Unified install entry point
 ├── tests/
-│   ├── test-hooks.sh                    182 hook tests
-│   ├── test-generate.sh                 265 generation + adapter tests
-│   ├── test-shared-structure.sh         620 structure + content tests
-│   └── test-sync.sh                     39 sync + init metadata tests
+│   ├── test-hooks.sh                    188 hook tests
+│   ├── test-generate.sh                 269 generation + adapter tests
+│   ├── test-shared-structure.sh         654 structure + content tests
+│   └── test-sync.sh                     61 sync + init metadata tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md

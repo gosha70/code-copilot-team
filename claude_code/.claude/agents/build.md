@@ -50,6 +50,6 @@ When delegating to a sub-agent, include:
 - **Don't busy-wait.** Launch independent agents in parallel, work on other tasks while waiting.
 - **Commit gate.** Ask the user before committing. One commit per phase.
 
-## GCC Memory (optional)
+## Memory (optional)
 
-If the Aline MCP server is available, run **CONTEXT** at the start to load the approved plan. After build verification passes, run **COMMIT** with a build summary (files changed, tests passing, key decisions).
+If the `memkernel` MCP server is configured, read `~/.claude/rules-library/memkernel-memory.md` and use it to recall the approved plan context at the start of implementation and retain key build decisions or checkpoints when they matter.

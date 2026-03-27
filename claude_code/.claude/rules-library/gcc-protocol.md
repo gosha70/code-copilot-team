@@ -1,1 +1,0 @@
-../../../shared/rules/on-demand/gcc-protocol.md

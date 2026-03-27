@@ -126,7 +126,7 @@ ALWAYS_COUNT=$(find "$SHARED_DIR/rules/always" -name '*.md' | wc -l | tr -d ' ')
 assert_eq "exactly 4 always rules" "4" "$ALWAYS_COUNT"
 
 # ══════════════════════════════════════════════════════════════
-# 2. shared/rules/on-demand/ — 12 library rules exist
+# 2. shared/rules/on-demand/ — 13 library rules exist
 # ══════════════════════════════════════════════════════════════
 
 echo ""
@@ -140,7 +140,9 @@ ON_DEMAND_FILES=(
   environment-setup.md
   infra-verification.md
   integration-testing.md
+  memkernel-memory.md
   phase-workflow.md
+  provider-collaboration-protocol.md
   ralph-loop.md
   stack-constraints.md
   spec-workflow.md
@@ -154,7 +156,7 @@ for f in "${ON_DEMAND_FILES[@]}"; do
 done
 
 ONDEMAND_COUNT=$(find "$SHARED_DIR/rules/on-demand" -name '*.md' | wc -l | tr -d ' ')
-assert_eq "exactly 12 on-demand rules" "12" "$ONDEMAND_COUNT"
+assert_eq "exactly 13 on-demand rules" "13" "$ONDEMAND_COUNT"
 
 # ══════════════════════════════════════════════════════════════
 # 3. shared/docs/ — tool-agnostic docs exist
@@ -376,9 +378,13 @@ grep -q "tools:.*Edit" "$ADAPTER_DIR/.claude/agents/plan.md" || rc=1
 assert_ok "Plan agent has Edit tool for specs/ artifacts" "$rc"
 
 # Hooks in adapter
-HOOK_FILES=(verify-on-stop.sh verify-after-edit.sh auto-format.sh protect-files.sh reinject-context.sh notify.sh)
+HOOK_FILES=(verify-on-stop.sh verify-after-edit.sh auto-format.sh protect-files.sh protect-git.sh peer-review-on-stop.sh reinject-context.sh notify.sh memkernel-recall.sh memkernel-pre-compact.sh memkernel-post-compact.sh)
+HOOK_HELPERS=(memkernel-recall.py memkernel-pre-compact.py memkernel-post-compact.py)
 for f in "${HOOK_FILES[@]}"; do
   assert_file_exists "adapter hook $f exists" "$ADAPTER_DIR/.claude/hooks/$f"
+done
+for f in "${HOOK_HELPERS[@]}"; do
+  assert_file_exists "adapter hook helper $f exists" "$ADAPTER_DIR/.claude/hooks/$f"
 done
 
 # Claude-specific docs in adapter
@@ -506,6 +512,17 @@ for t in "${TEMPLATE_TYPES[@]}"; do
       FAIL=$((FAIL + 1))
     fi
   done
+done
+
+# Hooks match
+for f in "${HOOK_FILES[@]}" "${HOOK_HELPERS[@]}"; do
+  if [[ -f "$INSTALL_DIR/hooks/$f" ]]; then
+    rc=0; diff -q "$INSTALL_DIR/hooks/$f" "$ADAPTER_DIR/.claude/hooks/$f" >/dev/null 2>&1 || rc=1
+    assert_ok "installed hooks/$f matches adapter/" "$rc"
+  else
+    echo "  FAIL: installed hooks/$f not found (run setup.sh first)"
+    FAIL=$((FAIL + 1))
+  fi
 done
 
 # ══════════════════════════════════════════════════════════════
@@ -780,8 +797,8 @@ grep -Eq "rules/always/[[:space:]]+4 global rules" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists 4 global always rules" "$rc"
 
 rc=0
-grep -Eq "rules/on-demand/[[:space:]]+12 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 12 on-demand rules" "$rc"
+grep -Eq "rules/on-demand/[[:space:]]+13 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 13 on-demand rules" "$rc"
 
 rc=0
 grep -Eq "templates/[[:space:]]+9 stacks" "$REPO_DIR/README.md" || rc=1

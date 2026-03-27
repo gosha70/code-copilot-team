@@ -229,6 +229,7 @@ corresponding skill to apply them.
 | `environment-setup` | build |
 | `infra-verification` | build |
 | `integration-testing` | review |
+| `memkernel-memory` | — |
 | `phase-workflow` | build |
 | `provider-collaboration-protocol` | — |
 | `ralph-loop` | build |

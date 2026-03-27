@@ -72,6 +72,6 @@ You are a review agent. Your job is to perform a holistic review of all changes 
 - **Check the browser console** for runtime errors — this catches issues static analysis misses.
 - **Work alone.** Do not delegate to sub-agents.
 
-## GCC Memory (optional)
+## Memory (optional)
 
-If the Aline MCP server is available, run **CONTEXT** at the start to load build results and plan context. After the review verdict, run **COMMIT** with the review summary (pass/fail, key findings, recommendations).
+If the `memkernel` MCP server is configured, read `~/.claude/rules-library/memkernel-memory.md` and use it to recall build context at the start of review and retain the final review summary when it would help future sessions.

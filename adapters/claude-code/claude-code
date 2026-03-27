@@ -355,6 +355,125 @@ infer_template() {
     return 1
 }
 
+resolve_project_root() {
+    local target="$1"
+    git -C "$target" rev-parse --show-toplevel 2>/dev/null \
+        || (cd "$target" && pwd -P 2>/dev/null) \
+        || echo "$target"
+}
+
+hash_string() {
+    local value="$1"
+    if command_exists md5; then
+        printf '%s' "$value" | md5 -q
+    elif command_exists md5sum; then
+        printf '%s' "$value" | md5sum | cut -d' ' -f1
+    else
+        printf '%s' "$value" | cksum | awk '{print $1}'
+    fi
+}
+
+compute_repo_hash() {
+    local target="$1"
+    hash_string "$(resolve_project_root "$target")"
+}
+
+compute_memkernel_project_id() {
+    local target="$1"
+    local project_root project_slug project_hash
+
+    project_root=$(resolve_project_root "$target")
+    project_slug=$(basename "$project_root" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')
+    project_slug=$(printf '%s' "$project_slug" | sed 's/^-*//; s/-*$//')
+    [[ -n "$project_slug" ]] || project_slug="project"
+    project_hash=$(hash_string "$project_root")
+
+    printf '%s-%s\n' "$project_slug" "${project_hash:0:12}"
+}
+
+memkernel_available() {
+    command_exists memkernel
+}
+
+ensure_memkernel_settings_local() {
+    local target="$1"
+    local settings_file="$target/.claude/settings.local.json"
+    local project_id current_json updated_json
+
+    if ! memkernel_available; then
+        printf '%s\n' "unavailable"
+        return 0
+    fi
+
+    project_id=$(compute_memkernel_project_id "$target")
+    mkdir -p "$target/.claude"
+
+    if [[ -f "$settings_file" ]]; then
+        if ! command_exists jq; then
+            printf '%s\n' "warn-no-jq"
+            return 0
+        fi
+
+        current_json=$(jq -S . "$settings_file" 2>/dev/null) || {
+            printf '%s\n' "warn-merge"
+            return 0
+        }
+
+        updated_json=$(jq -S --arg pid "$project_id" '
+            .mcpServers //= {} |
+            .mcpServers.memkernel //= {} |
+            .mcpServers.memkernel.command //= "memkernel" |
+            .mcpServers.memkernel.args //= [] |
+            .mcpServers.memkernel.env //= {} |
+            .mcpServers.memkernel.env.MEMKERNEL_PROJECT_ID //= $pid
+        ' "$settings_file" 2>/dev/null) || {
+            printf '%s\n' "warn-merge"
+            return 0
+        }
+
+        if [[ "$current_json" == "$updated_json" ]]; then
+            printf '%s\n' "present"
+            return 0
+        fi
+
+        printf '%s\n' "$updated_json" > "$settings_file"
+        printf '%s\n' "updated"
+        return 0
+    fi
+
+    if command_exists jq; then
+        jq -n -S --arg pid "$project_id" '
+            {
+              mcpServers: {
+                memkernel: {
+                  command: "memkernel",
+                  args: [],
+                  env: {
+                    MEMKERNEL_PROJECT_ID: $pid
+                  }
+                }
+              }
+            }
+        ' > "$settings_file"
+    else
+        cat > "$settings_file" << EOF
+{
+  "mcpServers": {
+    "memkernel": {
+      "command": "memkernel",
+      "args": [],
+      "env": {
+        "MEMKERNEL_PROJECT_ID": "$project_id"
+      }
+    }
+  }
+}
+EOF
+    fi
+
+    printf '%s\n' "created"
+}
+
 show_help() {
     cat << 'HELP'
 claude-code - Smart Claude Code session launcher
@@ -486,19 +605,9 @@ TMPLEOF
     # create a one-time approval file via a combined "mkdir && touch" command.
     # That combined form must be pre-approved here so it runs without a permission
     # prompt — otherwise Claude Code prompts the user on every commit attempt.
-    local repo_hash repo_root _uid
+    local repo_hash _uid
     _uid=$(id -u)
-    # Hash the git toplevel, not the init path — matches protect-git.sh behaviour.
-    # When $target is a subdirectory of an existing repo, rev-parse returns the
-    # repo root so the approval filenames agree with what the hook will generate.
-    repo_root=$(git -C "$target" rev-parse --show-toplevel 2>/dev/null || echo "$target")
-    if command -v md5 &>/dev/null; then
-        repo_hash=$(printf '%s' "$repo_root" | md5 -q)
-    elif command -v md5sum &>/dev/null; then
-        repo_hash=$(printf '%s' "$repo_root" | md5sum | cut -d' ' -f1)
-    else
-        repo_hash=$(printf '%s' "$repo_root" | tr '/' '_')
-    fi
+    repo_hash=$(compute_repo_hash "$target")
     local _adir="/tmp/.claude-git-approvals"
     local _cf="${_adir}/commit-${_uid}-${repo_hash}"
     local _pf="${_adir}/push-${_uid}-${repo_hash}"
@@ -530,6 +639,23 @@ TMPLEOF
         echo "         $_pp"
         echo "         $_both"
     fi
+
+    local _memkernel_status
+    _memkernel_status=$(ensure_memkernel_settings_local "$target")
+    case "$_memkernel_status" in
+        updated)
+            echo "[done] Added MemKernel MCP config to .claude/settings.local.json"
+            ;;
+        created)
+            echo "[done] Created .claude/settings.local.json with MemKernel MCP config"
+            ;;
+        warn-no-jq)
+            echo "[WARN] jq not installed — could not add MemKernel MCP config to settings.local.json"
+            ;;
+        warn-merge)
+            echo "[WARN] Could not safely merge MemKernel MCP config into settings.local.json"
+            ;;
+    esac
 
     # Append Copyright & Licensing section to CLAUDE.md if --license was given
     if [[ -n "$LICENSE_TYPE" ]]; then
@@ -748,6 +874,27 @@ sync_project() {
   "templateHash": "$hash"
 }
 TMPLEOF
+    fi
+
+    if [[ "$dry_run" != "1" ]]; then
+        local memkernel_status
+        memkernel_status=$(ensure_memkernel_settings_local "$target")
+        case "$memkernel_status" in
+            created)
+                echo "  [add] .claude/settings.local.json (MemKernel MCP)"
+                changes=$((changes + 1))
+                ;;
+            updated)
+                echo "  [upd] .claude/settings.local.json (MemKernel MCP)"
+                changes=$((changes + 1))
+                ;;
+            warn-no-jq)
+                echo "  [warn] jq not installed — could not add MemKernel MCP config"
+                ;;
+            warn-merge)
+                echo "  [warn] Could not safely merge MemKernel MCP config"
+                ;;
+        esac
     fi
 
     echo ""

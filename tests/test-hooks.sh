@@ -255,6 +255,37 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RC=$(run_hook reinject-context.sh '{}' CLAUDE_PROJECT_DIR="$REPO_DIR")
 assert_exit "valid git repo" 0 "$RC"
 
+echo ""
+echo "=== MemKernel hooks ==="
+
+_NO_MEMKERNEL_BIN=$(mktemp -d)
+ln -sf "$(command -v bash)" "$_NO_MEMKERNEL_BIN/bash"
+for hook in memkernel-recall.sh memkernel-pre-compact.sh memkernel-post-compact.sh; do
+  RC=$(run_hook "$hook" '{}' PATH="$_NO_MEMKERNEL_BIN")
+  assert_exit "$hook exits 0 when memkernel is absent" 0 "$RC"
+done
+rm -rf "$_NO_MEMKERNEL_BIN"
+
+_IMPORT_FAIL_BIN=$(mktemp -d)
+ln -sf "$(command -v bash)" "$_IMPORT_FAIL_BIN/bash"
+cat > "$_IMPORT_FAIL_BIN/memkernel" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$_IMPORT_FAIL_BIN/python3" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "-c" && "\${2:-}" == "import memkernel" ]]; then
+  exit 1
+fi
+exec "$(command -v python3)" "\$@"
+EOF
+chmod +x "$_IMPORT_FAIL_BIN/memkernel" "$_IMPORT_FAIL_BIN/python3"
+for hook in memkernel-recall.sh memkernel-pre-compact.sh memkernel-post-compact.sh; do
+  RC=$(run_hook "$hook" '{}' PATH="$_IMPORT_FAIL_BIN")
+  assert_exit "$hook exits 0 when memkernel import fails" 0 "$RC"
+done
+rm -rf "$_IMPORT_FAIL_BIN"
+
 echo "=== peer-review-on-stop.sh ==="
 
 # --- Guards ---
@@ -1234,7 +1265,7 @@ else
 fi
 
 # --sync path wires statusLine into settings.json
-SYNC_SECTION=$(sed -n '/^if.*--sync/,/exit 0/p' "$SETUP_SCRIPT")
+SYNC_SECTION=$(sed -n '/# --sync:/,/exit 0/p' "$SETUP_SCRIPT")
 if echo "$SYNC_SECTION" | grep -q 'statusLine'; then
   echo "  PASS: --sync path adds statusLine to settings"
   PASS=$((PASS + 1))

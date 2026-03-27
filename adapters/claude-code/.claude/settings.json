@@ -21,6 +21,16 @@
             "timeout": 5000
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/protect-git.sh",
+            "timeout": 5000
+          }
+        ]
       }
     ],
     "Stop": [
@@ -77,6 +87,35 @@
             "type": "command",
             "command": "~/.claude/hooks/reinject-context.sh",
             "timeout": 10000
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/memkernel-recall.sh",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/memkernel-pre-compact.sh",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/memkernel-post-compact.sh",
+            "timeout": 30000
           }
         ]
       }

@@ -1,0 +1,1 @@
+../../../shared/rules/on-demand/provider-collaboration-protocol.md

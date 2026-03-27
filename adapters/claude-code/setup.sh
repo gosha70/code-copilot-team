@@ -4,7 +4,7 @@
 # Creates:
 #   ~/.claude/CLAUDE.md                    Global configuration
 #   ~/.claude/rules/                       Global rules (auto-loaded, 4 files)
-#   ~/.claude/rules-library/               Rules library (on-demand, 12 files)
+#   ~/.claude/rules-library/               Rules library (on-demand, 13 files)
 #   ~/.claude/agents/                      Global agents (5 utility + 4 phase)
 #   ~/.claude/hooks/                       Global hook scripts (verify, notify)
 #   ~/.claude/settings.json                Global settings with hooks wired
@@ -13,7 +13,7 @@
 #   Installs claude-code launcher to ~/.local/bin/
 #
 # Run once, then use 'claude-code init <type> [path]' to scaffold projects.
-# Run with --sync to re-copy rules, rules-library, agents, templates, and launcher from repo.
+# Run with --sync to re-copy rules, rules-library, agents, hooks, templates, and launcher from repo.
 # Then use 'claude-code sync [path]' to update individual projects against their template.
 set -e
 
@@ -23,13 +23,122 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/
 SHARED_DIR="$SCRIPT_DIR/../../shared"
 LAUNCHER_SOURCE="$SCRIPT_DIR/claude-code"
 LAUNCHER_TARGET="$HOME/.local/bin/claude-code"
+SYNC_MODE=0
+PLAYWRIGHT_MODE=0
+MEMKERNEL_ENABLED=0
+MEMKERNEL_SOURCE=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --sync)
+            SYNC_MODE=1
+            shift
+            ;;
+        --playwright)
+            PLAYWRIGHT_MODE=1
+            shift
+            ;;
+        --memkernel)
+            MEMKERNEL_ENABLED=1
+            if [[ -n "${2:-}" && "${2:0:2}" != "--" ]]; then
+                MEMKERNEL_SOURCE="$2"
+                shift 2
+            else
+                shift
+            fi
+            ;;
+        *)
+            echo "[ERROR] Unknown option: $1"
+            echo "        Supported options: --sync, --playwright, --memkernel [path]"
+            exit 1
+            ;;
+    esac
+done
+
+if [[ "$PLAYWRIGHT_MODE" == "1" && ( "$SYNC_MODE" == "1" || "$MEMKERNEL_ENABLED" == "1" ) ]]; then
+    echo "[ERROR] --playwright cannot be combined with --sync or --memkernel"
+    exit 1
+fi
+
+maybe_install_memkernel() {
+    if [[ "$MEMKERNEL_ENABLED" != "1" ]]; then
+        return
+    fi
+
+    if [[ -n "$MEMKERNEL_SOURCE" ]]; then
+        if [[ ! -d "$MEMKERNEL_SOURCE" ]]; then
+            echo "[WARN] MemKernel source path not found: $MEMKERNEL_SOURCE"
+            return
+        fi
+        if command -v python3 &>/dev/null; then
+            if python3 -m pip install -e "$MEMKERNEL_SOURCE"; then
+                echo "[done] Installed MemKernel from $MEMKERNEL_SOURCE"
+            else
+                echo "[WARN] MemKernel install failed from $MEMKERNEL_SOURCE"
+            fi
+        else
+            echo "[WARN] python3 not found. Install MemKernel manually from: $MEMKERNEL_SOURCE"
+        fi
+        return
+    fi
+
+    if command -v memkernel &>/dev/null; then
+        echo "[ok]   memkernel found: $(command -v memkernel)"
+    else
+        echo "[WARN] --memkernel requested but memkernel is not on PATH and no source path was provided"
+    fi
+}
+
+ensure_hook_command() {
+    local settings_file="$1"
+    local event_name="$2"
+    local matcher="$3"
+    local command_name="$4"
+    local timeout_ms="$5"
+    local has_hook has_matcher content
+
+    has_hook=$(jq --arg event "$event_name" --arg command "$command_name" \
+        '[.hooks[$event][]?.hooks[]? | select(.command == $command)] | length > 0' \
+        "$settings_file" 2>/dev/null || echo "false")
+    if [[ "$has_hook" == "true" ]]; then
+        return 1
+    fi
+
+    has_matcher=$(jq --arg event "$event_name" --arg matcher "$matcher" \
+        '[.hooks[$event][]? | select(.matcher == $matcher)] | length > 0' \
+        "$settings_file" 2>/dev/null || echo "false")
+
+    if [[ "$has_matcher" == "true" ]]; then
+        content=$(jq --arg event "$event_name" --arg matcher "$matcher" --arg command "$command_name" --argjson timeout "$timeout_ms" '
+            (.hooks[$event][] | select(.matcher == $matcher) | .hooks) += [
+              {"type":"command","command":$command,"timeout":$timeout}
+            ]
+        ' "$settings_file")
+    else
+        content=$(jq --arg event "$event_name" --arg matcher "$matcher" --arg command "$command_name" --argjson timeout "$timeout_ms" '
+            .hooks[$event] //= [] |
+            .hooks[$event] += [
+              {
+                "matcher": $matcher,
+                "hooks": [
+                  {"type":"command","command":$command,"timeout":$timeout}
+                ]
+              }
+            ]
+        ' "$settings_file")
+    fi
+
+    echo "$content" > "$settings_file"
+    return 0
+}
 
 # ══════════════════════════════════════════════════════════════
-# --sync: re-copy rules, rules-library, and agents from repo
+# --sync: re-copy rules, rules-library, agents, hooks, and launcher from repo
 # ══════════════════════════════════════════════════════════════
 
-if [[ "${1:-}" == "--sync" ]]; then
-    echo "Syncing rules, rules-library, and agents from repo..."
+if [[ "$SYNC_MODE" == "1" ]]; then
+    maybe_install_memkernel
+    echo "Syncing rules, rules-library, agents, hooks, and launcher from repo..."
 
     # Global rules (4 files) — from shared/rules/always/
     RULES_SOURCE="$SHARED_DIR/rules/always"
@@ -40,7 +149,7 @@ if [[ "${1:-}" == "--sync" ]]; then
         echo "[done] Synced rules to $RULES_TARGET"
     fi
 
-    # Rules library (12 files) — from shared/rules/on-demand/
+    # Rules library (13 files) — from shared/rules/on-demand/
     LIBRARY_SOURCE="$SHARED_DIR/rules/on-demand"
     LIBRARY_TARGET="$CLAUDE_DIR/rules-library"
     mkdir -p "$LIBRARY_TARGET"
@@ -58,6 +167,34 @@ if [[ "${1:-}" == "--sync" ]]; then
         echo "[done] Synced agents to $AGENTS_TARGET"
     fi
 
+    # Hooks
+    HOOKS_SOURCE="$SCRIPT_DIR/.claude/hooks"
+    HOOKS_TARGET="$CLAUDE_DIR/hooks"
+    mkdir -p "$HOOKS_TARGET"
+    if [[ -d "$HOOKS_SOURCE" ]]; then
+        for hook_file in \
+            notify.sh \
+            verify-after-edit.sh \
+            verify-on-stop.sh \
+            auto-format.sh \
+            protect-files.sh \
+            protect-git.sh \
+            reinject-context.sh \
+            peer-review-on-stop.sh \
+            memkernel-recall.sh \
+            memkernel-recall.py \
+            memkernel-pre-compact.sh \
+            memkernel-pre-compact.py \
+            memkernel-post-compact.sh \
+            memkernel-post-compact.py
+        do
+            [[ -f "$HOOKS_SOURCE/$hook_file" ]] || continue
+            cp "$HOOKS_SOURCE/$hook_file" "$HOOKS_TARGET/$hook_file"
+        done
+        chmod +x "$HOOKS_TARGET"/*.sh 2>/dev/null || true
+        echo "[done] Synced hooks to $HOOKS_TARGET"
+    fi
+
     # Status line script
     STATUSLINE_SOURCE="$SCRIPT_DIR/.claude/statusline.sh"
     STATUSLINE_TARGET="$CLAUDE_DIR/statusline.sh"
@@ -67,15 +204,42 @@ if [[ "${1:-}" == "--sync" ]]; then
         echo "[done] Synced statusline.sh to $STATUSLINE_TARGET"
     fi
 
-    # Wire statusLine into settings.json if missing
+    # Wire hooks + statusLine into settings.json if missing
     SETTINGS_FILE="$CLAUDE_DIR/settings.json"
     if [[ -f "$SETTINGS_FILE" ]] && command -v jq &>/dev/null; then
+        CONTENT=$(jq '.hooks //= {} | .env //= {}' "$SETTINGS_FILE")
+        echo "$CONTENT" > "$SETTINGS_FILE"
+
         HAS_STATUSLINE=$(jq 'has("statusLine")' "$SETTINGS_FILE" 2>/dev/null || echo "false")
         if [[ "$HAS_STATUSLINE" != "true" ]]; then
             CONTENT=$(jq '.statusLine = {"type":"command","command":"~/.claude/statusline.sh"}' "$SETTINGS_FILE")
             echo "$CONTENT" > "$SETTINGS_FILE"
             echo "[done] Added statusLine to $SETTINGS_FILE"
         fi
+
+        for VAR_KEY in CCT_PEER_REVIEW_ENABLED CCT_PEER_PROVIDER CCT_PEER_TRIGGER; do
+            HAS_VAR=$(jq --arg key "$VAR_KEY" '.env | has($key)' "$SETTINGS_FILE" 2>/dev/null || echo "false")
+            if [[ "$HAS_VAR" != "true" ]]; then
+                case "$VAR_KEY" in
+                    CCT_PEER_REVIEW_ENABLED) DEFAULT_VAL="false" ;;
+                    CCT_PEER_PROVIDER) DEFAULT_VAL="" ;;
+                    CCT_PEER_TRIGGER) DEFAULT_VAL="phase-complete" ;;
+                esac
+                CONTENT=$(jq --arg key "$VAR_KEY" --arg value "$DEFAULT_VAL" '.env[$key] = $value' "$SETTINGS_FILE")
+                echo "$CONTENT" > "$SETTINGS_FILE"
+            fi
+        done
+
+        ensure_hook_command "$SETTINGS_FILE" "PreToolUse" "Bash" "~/.claude/hooks/protect-git.sh" 5000 && \
+            echo "[done] Added protect-git hook to $SETTINGS_FILE" || true
+        ensure_hook_command "$SETTINGS_FILE" "Stop" "" "~/.claude/hooks/peer-review-on-stop.sh" 300000 && \
+            echo "[done] Added peer-review hook to $SETTINGS_FILE" || true
+        ensure_hook_command "$SETTINGS_FILE" "SessionStart" "" "~/.claude/hooks/memkernel-recall.sh" 30000 && \
+            echo "[done] Added MemKernel SessionStart hook to $SETTINGS_FILE" || true
+        ensure_hook_command "$SETTINGS_FILE" "PreCompact" "" "~/.claude/hooks/memkernel-pre-compact.sh" 30000 && \
+            echo "[done] Added MemKernel PreCompact hook to $SETTINGS_FILE" || true
+        ensure_hook_command "$SETTINGS_FILE" "PostCompact" "" "~/.claude/hooks/memkernel-post-compact.sh" 30000 && \
+            echo "[done] Added MemKernel PostCompact hook to $SETTINGS_FILE" || true
     fi
 
     # Templates — clean redeploy from repo to ~/.claude/templates/
@@ -139,7 +303,7 @@ fi
 # --playwright: install Playwright CLI for browser automation (optional)
 # ══════════════════════════════════════════════════════════════
 
-if [[ "${1:-}" == "--playwright" ]]; then
+if [[ "$PLAYWRIGHT_MODE" == "1" ]]; then
     echo "Installing Playwright CLI for browser automation..."
 
     if command -v npm &>/dev/null; then
@@ -159,11 +323,7 @@ if [[ "${1:-}" == "--playwright" ]]; then
     exit 0
 fi
 
-if [[ $# -gt 0 ]]; then
-    echo "[ERROR] Unknown option: $1"
-    echo "        Supported options: --sync, --playwright"
-    exit 1
-fi
+maybe_install_memkernel
 
 echo "============================================"
 echo "  Claude Code Project Template Setup v2"
@@ -477,15 +637,26 @@ HOOKS_TARGET="$CLAUDE_DIR/hooks"
 mkdir -p "$HOOKS_TARGET"
 
 if [[ -d "$HOOKS_SOURCE" ]]; then
-    cp "$HOOKS_SOURCE/notify.sh" "$HOOKS_TARGET/notify.sh"
-    cp "$HOOKS_SOURCE/verify-after-edit.sh" "$HOOKS_TARGET/verify-after-edit.sh"
-    cp "$HOOKS_SOURCE/verify-on-stop.sh" "$HOOKS_TARGET/verify-on-stop.sh"
-    cp "$HOOKS_SOURCE/auto-format.sh" "$HOOKS_TARGET/auto-format.sh"
-    cp "$HOOKS_SOURCE/protect-files.sh" "$HOOKS_TARGET/protect-files.sh"
-    cp "$HOOKS_SOURCE/protect-git.sh" "$HOOKS_TARGET/protect-git.sh"
-    cp "$HOOKS_SOURCE/reinject-context.sh" "$HOOKS_TARGET/reinject-context.sh"
-    cp "$HOOKS_SOURCE/peer-review-on-stop.sh" "$HOOKS_TARGET/peer-review-on-stop.sh"
-    chmod +x "$HOOKS_TARGET"/*.sh
+    for hook_file in \
+        notify.sh \
+        verify-after-edit.sh \
+        verify-on-stop.sh \
+        auto-format.sh \
+        protect-files.sh \
+        protect-git.sh \
+        reinject-context.sh \
+        peer-review-on-stop.sh \
+        memkernel-recall.sh \
+        memkernel-recall.py \
+        memkernel-pre-compact.sh \
+        memkernel-pre-compact.py \
+        memkernel-post-compact.sh \
+        memkernel-post-compact.py
+    do
+        [[ -f "$HOOKS_SOURCE/$hook_file" ]] || continue
+        cp "$HOOKS_SOURCE/$hook_file" "$HOOKS_TARGET/$hook_file"
+    done
+    chmod +x "$HOOKS_TARGET"/*.sh 2>/dev/null || true
     echo "[done] Installed hooks to $HOOKS_TARGET"
 else
     echo "[skip] Hook scripts not found at $HOOKS_SOURCE"
@@ -540,7 +711,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 11d. RULES LIBRARY (on-demand, 12 files) — from shared/rules/on-demand/
+# 11d. RULES LIBRARY (on-demand, 13 files) — from shared/rules/on-demand/
 # ══════════════════════════════════════════════════════════════
 
 LIBRARY_SOURCE="$SHARED_DIR/rules/on-demand"
@@ -664,6 +835,35 @@ HOOKS_CONFIG='{
             "type": "command",
             "command": "~/.claude/hooks/reinject-context.sh",
             "timeout": 10000
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/memkernel-recall.sh",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/memkernel-pre-compact.sh",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/memkernel-post-compact.sh",
+            "timeout": 30000
           }
         ]
       }
@@ -722,6 +922,10 @@ elif command -v jq &>/dev/null; then
             echo "$CONTENT" > "$UPDATED"
             CHANGED=1
         fi
+
+        ensure_hook_command "$UPDATED" "SessionStart" "" "~/.claude/hooks/memkernel-recall.sh" 30000 && CHANGED=1 || true
+        ensure_hook_command "$UPDATED" "PreCompact" "" "~/.claude/hooks/memkernel-pre-compact.sh" 30000 && CHANGED=1 || true
+        ensure_hook_command "$UPDATED" "PostCompact" "" "~/.claude/hooks/memkernel-post-compact.sh" 30000 && CHANGED=1 || true
 
         if [[ $CHANGED -eq 1 ]]; then
             echo "[done] Updated $SETTINGS_FILE with missing config"
@@ -976,6 +1180,9 @@ echo "  - auto-format.sh       — runs formatter after source edits"
 echo "  - protect-files.sh     — blocks edits to .env, *.lock, .git/, credentials"
 echo "  - protect-git.sh       — blocks git commit/push without explicit user instruction"
 echo "  - reinject-context.sh  — re-injects project context on session start"
+echo "  - memkernel-recall.sh  — recalls persisted memory on session start"
+echo "  - memkernel-pre-compact.sh  — saves a memory checkpoint before compaction"
+echo "  - memkernel-post-compact.sh — restores memory context after compaction"
 echo "  - peer-review-on-stop.sh — triggers peer review on phase completion"
 echo "  - notify.sh            — desktop notifications when Claude needs input"
 echo ""
@@ -1001,7 +1208,7 @@ echo "  - providers-health.sh    — checks availability of configured providers
 echo ""
 echo "Rules installed:"
 echo "  - ~/.claude/rules/          — 4 global rules (auto-loaded every session)"
-echo "  - ~/.claude/rules-library/  — 12 library rules (loaded on demand by agents)"
+echo "  - ~/.claude/rules-library/  — 13 library rules (loaded on demand by agents)"
 echo ""
 echo "Each project now includes:"
 echo "  - CLAUDE.md with stack, conventions, and Agent Team config"

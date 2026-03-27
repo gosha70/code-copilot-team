@@ -28,6 +28,14 @@ FAIL=0
 TEST_TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TEST_TMPDIR"' EXIT
 
+FAKE_MEMKERNEL_BIN="$TEST_TMPDIR/fake-memkernel-bin"
+mkdir -p "$FAKE_MEMKERNEL_BIN"
+cat > "$FAKE_MEMKERNEL_BIN/memkernel" << 'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$FAKE_MEMKERNEL_BIN/memkernel"
+
 assert_ok() {
   local name="$1" result="$2"
   if [[ "$result" -eq 0 ]]; then
@@ -241,6 +249,30 @@ assert_ok "nested-repo: approval does not use subdir hash" \
 
 # ══════════════════════════════════════════════════════════════
 echo ""
+echo "=== 1d. init_project() adds MemKernel MCP when available ==="
+
+MEM_INIT_DIR="$TEST_TMPDIR/project-init-memkernel"
+mkdir -p "$MEM_INIT_DIR"
+_ORIG_PATH="$PATH"
+PATH="$FAKE_MEMKERNEL_BIN:$PATH"
+echo "y" | init_project "ml-rag" "$MEM_INIT_DIR" > /dev/null 2>&1
+PATH="$_ORIG_PATH"
+
+assert_file_exists "settings.local.json created by init with memkernel available" "$MEM_INIT_DIR/.claude/settings.local.json"
+if command -v jq &>/dev/null; then
+  MEMKERNEL_PRESENT=$(jq -r '.mcpServers | has("memkernel")' "$MEM_INIT_DIR/.claude/settings.local.json")
+  MEMKERNEL_COMMAND=$(jq -r '.mcpServers.memkernel.command // empty' "$MEM_INIT_DIR/.claude/settings.local.json")
+  MEMKERNEL_PROJECT_ID=$(jq -r '.mcpServers.memkernel.env.MEMKERNEL_PROJECT_ID // empty' "$MEM_INIT_DIR/.claude/settings.local.json")
+
+  assert_eq "init adds mcpServers.memkernel" "true" "$MEMKERNEL_PRESENT"
+  assert_eq "init configures memkernel command" "memkernel" "$MEMKERNEL_COMMAND"
+  assert_ok "init sets MEMKERNEL_PROJECT_ID" $([[ -n "$MEMKERNEL_PROJECT_ID" ]] && echo 0 || echo 1)
+else
+  echo "  SKIP: jq not available for MemKernel init assertions"
+fi
+
+# ══════════════════════════════════════════════════════════════
+echo ""
 echo "=== 2. sync_project() detects template from template.json ==="
 
 SYNC_DIR="$TEST_TMPDIR/project-sync"
@@ -259,6 +291,63 @@ OUTPUT=$(sync_project "$SYNC_DIR" "0" 2>&1)
 assert_contains "sync detects template from template.json" "$OUTPUT" "ml-rag"
 assert_file_exists "remediation.json synced" "$SYNC_DIR/.claude/remediation.json"
 assert_file_exists "eval.md command synced" "$SYNC_DIR/.claude/commands/eval.md"
+
+# ══════════════════════════════════════════════════════════════
+echo ""
+echo "=== 2b. sync_project() merges MemKernel MCP into settings.local.json ==="
+
+SYNC_MEM_DIR="$TEST_TMPDIR/project-sync-memkernel"
+mkdir -p "$SYNC_MEM_DIR/.claude/commands"
+cp "$FAKE_TEMPLATES/ml-rag/CLAUDE.md" "$SYNC_MEM_DIR/CLAUDE.md"
+cat > "$SYNC_MEM_DIR/.claude/template.json" << 'TMPL'
+{
+  "name": "ml-rag",
+  "initialized": "2026-01-01T00:00:00Z",
+  "templateHash": "old-hash"
+}
+TMPL
+cat > "$SYNC_MEM_DIR/.claude/settings.local.json" << 'SETTINGS'
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo hello)"
+    ]
+  },
+  "mcpServers": {
+    "other": {
+      "command": "other-server"
+    }
+  }
+}
+SETTINGS
+
+_ORIG_PATH="$PATH"
+PATH="$FAKE_MEMKERNEL_BIN:$PATH"
+OUTPUT=$(sync_project "$SYNC_MEM_DIR" "0" 2>&1)
+PATH="$_ORIG_PATH"
+assert_contains "sync reports MemKernel settings update" "$OUTPUT" ".claude/settings.local.json"
+
+if command -v jq &>/dev/null; then
+  PRESERVED_ALLOW=$(jq -r '.permissions.allow[0] // empty' "$SYNC_MEM_DIR/.claude/settings.local.json")
+  OTHER_SERVER=$(jq -r '.mcpServers.other.command // empty' "$SYNC_MEM_DIR/.claude/settings.local.json")
+  MEMKERNEL_PRESENT=$(jq -r '.mcpServers | has("memkernel")' "$SYNC_MEM_DIR/.claude/settings.local.json")
+  MEMKERNEL_PROJECT_ID=$(jq -r '.mcpServers.memkernel.env.MEMKERNEL_PROJECT_ID // empty' "$SYNC_MEM_DIR/.claude/settings.local.json")
+
+  assert_eq "sync preserves existing permission entry" "Bash(echo hello)" "$PRESERVED_ALLOW"
+  assert_eq "sync preserves existing mcp server entries" "other-server" "$OTHER_SERVER"
+  assert_eq "sync adds memkernel mcp server" "true" "$MEMKERNEL_PRESENT"
+  assert_ok "sync sets MEMKERNEL_PROJECT_ID" $([[ -n "$MEMKERNEL_PROJECT_ID" ]] && echo 0 || echo 1)
+
+  _ORIG_PATH="$PATH"
+  PATH="$FAKE_MEMKERNEL_BIN:$PATH"
+  sync_project "$SYNC_MEM_DIR" "0" > /dev/null 2>&1
+  PATH="$_ORIG_PATH"
+
+  MEMKERNEL_COUNT=$(jq '[.mcpServers | keys[] | select(. == "memkernel")] | length' "$SYNC_MEM_DIR/.claude/settings.local.json")
+  assert_eq "sync remains idempotent for memkernel entry" "1" "$MEMKERNEL_COUNT"
+else
+  echo "  SKIP: jq not available for MemKernel sync assertions"
+fi
 
 # ══════════════════════════════════════════════════════════════
 echo ""

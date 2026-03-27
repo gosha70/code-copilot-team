@@ -97,6 +97,6 @@ After final verification passes, before requesting review:
 - **Gate on spec_mode.** Read `plan.md` frontmatter before proceeding. Block if `full`/`lightweight` and `spec.md` is missing or has unresolved `[NEEDS CLARIFICATION]`.
 - **Emit tasks.md** to `specs/<id>/` before delegation when `spec_mode` is `full`. Show to user for approval.
 
-## GCC Memory (optional)
+## Memory (optional)
 
-If the Aline MCP server is available, run **CONTEXT** at the start to load the approved plan. After build verification passes, run **COMMIT** with a build summary (files changed, tests passing, key decisions).
+If the `memkernel` MCP server is configured, read `~/.claude/rules-library/memkernel-memory.md` and use it to recall the approved plan context at the start of implementation and retain key build decisions or checkpoints when they matter.
