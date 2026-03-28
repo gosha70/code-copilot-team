@@ -47,9 +47,13 @@ while [[ $# -gt 0 ]]; do
                 shift
             fi
             ;;
+        --configure-providers)
+            CONFIGURE_PROVIDERS=1
+            shift
+            ;;
         *)
             echo "[ERROR] Unknown option: $1"
-            echo "        Supported options: --sync, --playwright, --memkernel [path]"
+            echo "        Supported options: --sync, --playwright, --memkernel [path], --configure-providers"
             exit 1
             ;;
     esac
@@ -985,6 +989,110 @@ PYEOF
     fi
 fi
 
+# ── Interactive provider configuration (--configure-providers) ─
+if [[ "${CONFIGURE_PROVIDERS:-}" == "1" && -t 0 && -z "${CI:-}" ]]; then
+    echo ""
+    echo "══════════════════════════════════════════════════════"
+    echo "  Configure Provider"
+    echo "══════════════════════════════════════════════════════"
+    echo ""
+    echo "Provider types:"
+    echo "  1) cli              — local CLI tool (Codex, Aider, etc.)"
+    echo "  2) openai-compatible — OpenAI-compatible HTTP API"
+    echo "  3) ollama           — Ollama instance (local or remote)"
+    echo "  4) custom           — custom command template"
+    echo ""
+    read -rp "Select type [1-4]: " _TYPE_CHOICE
+    case "$_TYPE_CHOICE" in
+        1) _PTYPE="cli" ;;
+        2) _PTYPE="openai-compatible" ;;
+        3) _PTYPE="ollama" ;;
+        4) _PTYPE="custom" ;;
+        *) echo "[error] Invalid choice"; _PTYPE="" ;;
+    esac
+
+    if [[ -n "$_PTYPE" ]]; then
+        read -rp "Provider name (e.g. gdx-spark, openai): " _PNAME
+        if [[ -z "$_PNAME" ]]; then
+            echo "[error] Provider name is required"
+        else
+            _PBLOCK="\n[providers.$_PNAME]\ntype = \"$_PTYPE\""
+
+            case "$_PTYPE" in
+                cli)
+                    read -rp "Command template (use {review_request} and {model}): " _PCMD
+                    read -rp "Healthcheck command: " _PHC
+                    read -rp "Timeout (seconds) [300]: " _PTO
+                    _PBLOCK="$_PBLOCK\ncommand = \"$_PCMD\""
+                    [[ -n "$_PHC" ]] && _PBLOCK="$_PBLOCK\nhealthcheck = \"$_PHC\""
+                    _PBLOCK="$_PBLOCK\ntimeout_sec = ${_PTO:-300}"
+                    ;;
+                openai-compatible)
+                    read -rp "Base URL (e.g. http://192.168.1.50:8000/v1): " _PURL
+                    read -rp "Model name: " _PMODEL
+                    read -rp "API key env var name (leave blank if none): " _PKEY
+                    read -rp "Healthcheck command: " _PHC
+                    read -rp "Timeout (seconds) [300]: " _PTO
+                    _PBLOCK="$_PBLOCK\nbase_url = \"$_PURL\""
+                    [[ -n "$_PKEY" ]] && _PBLOCK="$_PBLOCK\napi_key_env = \"$_PKEY\""
+                    _PBLOCK="$_PBLOCK\nmodel = \"$_PMODEL\""
+                    _PBLOCK="$_PBLOCK\ntimeout_sec = ${_PTO:-300}"
+                    [[ -n "$_PHC" ]] && _PBLOCK="$_PBLOCK\nhealthcheck = \"$_PHC\""
+                    ;;
+                ollama)
+                    read -rp "Model name (e.g. llama3.1:70b): " _PMODEL
+                    read -rp "Host:port [localhost:11434]: " _PHOST
+                    read -rp "Healthcheck command [ollama list]: " _PHC
+                    read -rp "Timeout (seconds) [600]: " _PTO
+                    _PBLOCK="$_PBLOCK\nmodel = \"$_PMODEL\""
+                    _PBLOCK="$_PBLOCK\nhost = \"${_PHOST:-localhost:11434}\""
+                    _PBLOCK="$_PBLOCK\nhealthcheck = \"${_PHC:-ollama list}\""
+                    _PBLOCK="$_PBLOCK\ntimeout_sec = ${_PTO:-600}"
+                    ;;
+                custom)
+                    read -rp "Command template (use {review_request} and {model}): " _PCMD
+                    read -rp "Healthcheck command: " _PHC
+                    read -rp "Timeout (seconds) [300]: " _PTO
+                    _PBLOCK="$_PBLOCK\ncommand = \"$_PCMD\""
+                    [[ -n "$_PHC" ]] && _PBLOCK="$_PBLOCK\nhealthcheck = \"$_PHC\""
+                    _PBLOCK="$_PBLOCK\ntimeout_sec = ${_PTO:-300}"
+                    ;;
+            esac
+
+            # Append to providers.toml
+            printf '\n' >> "$PROVIDER_FILE"
+            printf '%b\n' "$_PBLOCK" >> "$PROVIDER_FILE"
+            echo "[done] Added provider '$_PNAME' (type: $_PTYPE) to $PROVIDER_FILE"
+
+            # Test connection
+            _TEST_HC=$(printf '%b' "$_PBLOCK" | grep '^healthcheck' | sed 's/^healthcheck = "//;s/"$//')
+            if [[ -n "$_TEST_HC" ]]; then
+                echo "Testing connection..."
+                if bash -c "$_TEST_HC" &>/dev/null; then
+                    echo "[done] Healthcheck passed: $_TEST_HC"
+                else
+                    echo "[warn] Healthcheck failed: $_TEST_HC"
+                    echo "       The provider was still added. Fix connectivity and re-test with: providers-health.sh"
+                fi
+            fi
+
+            # Offer to set as default peer
+            read -rp "Set '$_PNAME' as default peer for claude? [y/N]: " _SET_DEFAULT
+            if [[ "$_SET_DEFAULT" =~ ^[Yy] ]]; then
+                if grep -q '^peer_for\.claude' "$PROVIDER_FILE"; then
+                    sed -i.bak "s/^peer_for\.claude = .*/peer_for.claude = \"$_PNAME\"/" "$PROVIDER_FILE"
+                    rm -f "${PROVIDER_FILE}.bak"
+                else
+                    sed -i.bak "/^\[defaults\]/a\\
+peer_for.claude = \"$_PNAME\"" "$PROVIDER_FILE"
+                    rm -f "${PROVIDER_FILE}.bak"
+                fi
+                echo "[done] Set default peer for claude to '$_PNAME'"
+            fi
+        fi
+    fi
+fi
+
 # ══════════════════════════════════════════════════════════════
 # 14. LAUNCHER
 # ══════════════════════════════════════════════════════════════
@@ -1146,6 +1254,21 @@ if [[ -f "$REPO_SCRIPTS/providers-health.sh" ]]; then
     echo "[done] Installed providers-health.sh to $BIN_TARGET"
 else
     echo "[skip] providers-health.sh not found at $REPO_SCRIPTS"
+fi
+
+# Install provider adapter scripts
+ADAPTER_TARGET="$BIN_TARGET/provider-adapters"
+mkdir -p "$ADAPTER_TARGET"
+for adapter in "$REPO_SCRIPTS/provider-adapters"/*.sh; do
+    if [[ -f "$adapter" ]]; then
+        cp "$adapter" "$ADAPTER_TARGET/$(basename "$adapter")"
+        chmod +x "$ADAPTER_TARGET/$(basename "$adapter")"
+    fi
+done
+if [[ -d "$REPO_SCRIPTS/provider-adapters" ]] && ls "$REPO_SCRIPTS/provider-adapters"/*.sh &>/dev/null; then
+    echo "[done] Installed provider adapters to $ADAPTER_TARGET"
+else
+    echo "[skip] No provider adapters found at $REPO_SCRIPTS/provider-adapters"
 fi
 
 # ══════════════════════════════════════════════════════════════

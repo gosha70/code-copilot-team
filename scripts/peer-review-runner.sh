@@ -75,6 +75,16 @@ toml_get() {
     ' "$file"
 }
 
+# Parse a TOML array value like ["a", "b", "c"] into newline-separated items.
+toml_get_array() {
+    local file="$1" section="$2" key="$3"
+    local raw
+    raw=$(toml_get "$file" "$section" "$key")
+    if [[ -z "$raw" ]]; then return; fi
+    # Strip brackets, split on comma, trim quotes and whitespace
+    echo "$raw" | tr -d '[]' | tr ',' '\n' | sed 's/^ *"//;s/" *$//'
+}
+
 # ── Resolve peer provider ────────────────────────────────────
 
 if [[ -z "$PEER_PROVIDER" ]]; then
@@ -95,35 +105,110 @@ fi
 
 # ── Load provider config ─────────────────────────────────────
 
-PROVIDER_SECTION="providers.$PEER_PROVIDER"
-COMMAND_TEMPLATE=$(toml_get "$PROFILE" "$PROVIDER_SECTION" "command")
-TIMEOUT_SEC=$(toml_get "$PROFILE" "$PROVIDER_SECTION" "timeout_sec")
-HEALTHCHECK=$(toml_get "$PROFILE" "$PROVIDER_SECTION" "healthcheck")
-PROVIDER_MODEL=$(toml_get "$PROFILE" "$PROVIDER_SECTION" "model")
+# Loads config for a given provider name into PROVIDER_* variables.
+# Returns 0 on success, 1 if the provider section is missing.
+load_provider_config() {
+    local name="$1"
+    local section="providers.$name"
 
-if [[ -z "$COMMAND_TEMPLATE" ]]; then
-    echo "Error: No command template found for provider '$PEER_PROVIDER' in $PROFILE" >&2
+    PROVIDER_TYPE=$(toml_get "$PROFILE" "$section" "type")
+    COMMAND_TEMPLATE=$(toml_get "$PROFILE" "$section" "command")
+    TIMEOUT_SEC=$(toml_get "$PROFILE" "$section" "timeout_sec")
+    HEALTHCHECK=$(toml_get "$PROFILE" "$section" "healthcheck")
+    PROVIDER_MODEL=$(toml_get "$PROFILE" "$section" "model")
+
+    # Type-specific fields
+    PROVIDER_BASE_URL=$(toml_get "$PROFILE" "$section" "base_url")
+    PROVIDER_API_KEY_ENV=$(toml_get "$PROFILE" "$section" "api_key_env")
+    PROVIDER_MAX_TOKENS=$(toml_get "$PROFILE" "$section" "max_tokens")
+    PROVIDER_TEMPERATURE=$(toml_get "$PROFILE" "$section" "temperature")
+    PROVIDER_HOST=$(toml_get "$PROFILE" "$section" "host")
+
+    # Infer type from legacy fields if not set
+    if [[ -z "$PROVIDER_TYPE" ]]; then
+        PROVIDER_TYPE="cli"
+    fi
+
+    # For cli and custom types, command is required
+    if [[ "$PROVIDER_TYPE" == "cli" || "$PROVIDER_TYPE" == "custom" ]]; then
+        if [[ -z "$COMMAND_TEMPLATE" ]]; then
+            echo "Error: No command template found for $PROVIDER_TYPE provider '$name' in $PROFILE" >&2
+            return 1
+        fi
+    fi
+
+    # For openai-compatible, base_url and model are required
+    if [[ "$PROVIDER_TYPE" == "openai-compatible" ]]; then
+        if [[ -z "$PROVIDER_BASE_URL" ]]; then
+            echo "Error: No base_url found for openai-compatible provider '$name' in $PROFILE" >&2
+            return 1
+        fi
+        if [[ -z "$PROVIDER_MODEL" ]]; then
+            echo "Error: No model found for openai-compatible provider '$name' in $PROFILE" >&2
+            return 1
+        fi
+    fi
+
+    # For ollama, model is required
+    if [[ "$PROVIDER_TYPE" == "ollama" ]]; then
+        if [[ -z "$PROVIDER_MODEL" ]]; then
+            echo "Error: No model found for ollama provider '$name' in $PROFILE" >&2
+            return 1
+        fi
+    fi
+
+    TIMEOUT_SEC="${TIMEOUT_SEC:-300}"
+    return 0
+}
+
+load_provider_config "$PEER_PROVIDER" || {
     rm -f "$MARKER_PATH"
     exit 1
-fi
-
-TIMEOUT_SEC="${TIMEOUT_SEC:-300}"
+}
 
 # ── Compute runner fingerprint ────────────────────────────────
 
+FINGERPRINT_INPUT="$PROVIDER_TYPE:${COMMAND_TEMPLATE:-}:${PROVIDER_BASE_URL:-}:${PROVIDER_MODEL:-}"
 if command -v shasum &>/dev/null; then
-    RUNNER_FINGERPRINT=$(echo "$COMMAND_TEMPLATE" | shasum -a 256 | cut -d' ' -f1)
+    RUNNER_FINGERPRINT=$(echo "$FINGERPRINT_INPUT" | shasum -a 256 | cut -d' ' -f1)
 elif command -v sha256sum &>/dev/null; then
-    RUNNER_FINGERPRINT=$(echo "$COMMAND_TEMPLATE" | sha256sum | cut -d' ' -f1)
+    RUNNER_FINGERPRINT=$(echo "$FINGERPRINT_INPUT" | sha256sum | cut -d' ' -f1)
 else
     RUNNER_FINGERPRINT="unknown"
 fi
 
-# ── Healthcheck ───────────────────────────────────────────────
+# ── Healthcheck with fallback chain ──────────────────────────
 
-if [[ -n "$HEALTHCHECK" ]]; then
-    if ! bash -c "$HEALTHCHECK" &>/dev/null; then
-        echo "Error: Healthcheck failed for provider '$PEER_PROVIDER': $HEALTHCHECK" >&2
+run_healthcheck() {
+    local hc="$1"
+    if [[ -z "$hc" ]]; then return 0; fi
+    bash -c "$hc" &>/dev/null
+}
+
+if ! run_healthcheck "$HEALTHCHECK"; then
+    echo "Healthcheck failed for primary provider '$PEER_PROVIDER', trying fallback chain..." >&2
+
+    FALLBACK_CHAIN=$(toml_get_array "$PROFILE" "defaults" "fallback_chain.$SUBJECT_PROVIDER")
+    FALLBACK_FOUND=false
+
+    if [[ -n "$FALLBACK_CHAIN" ]]; then
+        while IFS= read -r fallback; do
+            [[ -z "$fallback" ]] && continue
+            echo "Trying fallback provider '$fallback'..." >&2
+
+            if load_provider_config "$fallback" && run_healthcheck "$HEALTHCHECK"; then
+                echo "Fallback provider '$fallback' is healthy, using it." >&2
+                PEER_PROVIDER="$fallback"
+                FALLBACK_FOUND=true
+                break
+            else
+                echo "Fallback provider '$fallback' failed healthcheck, skipping." >&2
+            fi
+        done <<< "$FALLBACK_CHAIN"
+    fi
+
+    if [[ "$FALLBACK_FOUND" != "true" ]]; then
+        echo "Error: All providers failed healthcheck (primary '$PEER_PROVIDER' + fallback chain)." >&2
         rm -f "$MARKER_PATH"
         exit 1
     fi
@@ -185,10 +270,48 @@ REVIEW_EOF
 
 # ── Execute provider command ──────────────────────────────────
 
-# Substitute placeholders in command template
-RESOLVED_CMD="$COMMAND_TEMPLATE"
-RESOLVED_CMD="${RESOLVED_CMD//\{review_request\}/$REVIEW_REQUEST}"
-RESOLVED_CMD="${RESOLVED_CMD//\{model\}/${PROVIDER_MODEL:-}}"
+# Resolve the adapter script directory relative to this script
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ADAPTER_DIR="$SCRIPT_DIR/provider-adapters"
+
+# Build the provider command based on type
+build_provider_cmd() {
+    case "$PROVIDER_TYPE" in
+        cli|custom)
+            # Execute command template directly (legacy behavior)
+            local cmd="$COMMAND_TEMPLATE"
+            cmd="${cmd//\{review_request\}/$REVIEW_REQUEST}"
+            cmd="${cmd//\{model\}/${PROVIDER_MODEL:-}}"
+            echo "$cmd"
+            ;;
+        openai-compatible)
+            local cmd="'$ADAPTER_DIR/openai-compatible.sh'"
+            cmd="$cmd --base-url '$PROVIDER_BASE_URL'"
+            cmd="$cmd --model '$PROVIDER_MODEL'"
+            cmd="$cmd --input '$REVIEW_REQUEST'"
+            [[ -n "${PROVIDER_API_KEY_ENV:-}" ]] && cmd="$cmd --api-key-env '$PROVIDER_API_KEY_ENV'"
+            [[ -n "${PROVIDER_MAX_TOKENS:-}" ]] && cmd="$cmd --max-tokens '$PROVIDER_MAX_TOKENS'"
+            [[ -n "${PROVIDER_TEMPERATURE:-}" ]] && cmd="$cmd --temperature '$PROVIDER_TEMPERATURE'"
+            echo "$cmd"
+            ;;
+        ollama)
+            local cmd="'$ADAPTER_DIR/ollama.sh'"
+            cmd="$cmd --model '$PROVIDER_MODEL'"
+            cmd="$cmd --input '$REVIEW_REQUEST'"
+            [[ -n "${PROVIDER_HOST:-}" ]] && cmd="$cmd --host '$PROVIDER_HOST'"
+            echo "$cmd"
+            ;;
+        *)
+            echo "Error: Unknown provider type '$PROVIDER_TYPE'" >&2
+            return 1
+            ;;
+    esac
+}
+
+RESOLVED_CMD=$(build_provider_cmd) || {
+    rm -f "$MARKER_PATH"
+    exit 1
+}
 
 # Detect timeout command
 TIMEOUT_CMD=""
@@ -198,7 +321,7 @@ elif command -v gtimeout &>/dev/null; then
     TIMEOUT_CMD="gtimeout"
 fi
 
-echo "Running peer review via '$PEER_PROVIDER'..." >&2
+echo "Running peer review via '$PEER_PROVIDER' (type: $PROVIDER_TYPE)..." >&2
 
 if [[ -n "$TIMEOUT_CMD" ]]; then
     REVIEW_OUTPUT=$($TIMEOUT_CMD "$TIMEOUT_SEC" bash -c "$RESOLVED_CMD" 2>&1) && REVIEW_EXIT=0 || REVIEW_EXIT=$?

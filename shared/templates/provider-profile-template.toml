@@ -3,11 +3,20 @@
 # Defines peer providers for cross-copilot review.
 # See provider-collaboration-protocol.md for the full protocol.
 #
-# Each provider needs:
-#   command      — command template ({review_request} = review file path, {model} = optional model)
+# Each provider has a `type` field: cli, openai-compatible, ollama, or custom.
+# Type-specific fields are documented below.
+#
+# NOTE: The runner currently dispatches all providers via the `command` template.
+# Type-aware dispatch (adapter scripts for openai-compatible and ollama) is
+# planned but not yet wired. Until then, every active provider must include
+# a `command` field. The `type` field and type-specific fields (base_url,
+# api_key_env, host, etc.) are forward-declared for that future dispatch.
+#
+# Common fields (all types):
+#   type         — provider topology (cli, openai-compatible, ollama, custom)
+#   command      — command template (required until type-aware dispatch lands)
 #   timeout_sec  — max execution time in seconds
 #   healthcheck  — command to verify provider availability
-#   version      — provider type label (cli, local, api)
 
 [copyright]
 # Company name used in copyright headers of generated source files.
@@ -20,15 +29,110 @@ company = ""
 peer_for.claude = "codex"
 peer_for.codex = "claude"
 
+# Fallback chain: if primary peer is unavailable, try these in order.
+# fallback_chain.claude = ["openai", "ollama", "gdx-spark"]
+# fallback_chain.codex = ["ollama"]
+
+# ── Type: cli ────────────────────────────────────────────────
+# For locally installed CLI tools (Codex CLI, Claude Code headless, Aider).
+#
+# Required fields:
+#   command      — command template ({review_request} = review file path, {model} = optional model)
+#   healthcheck  — command to verify the CLI is installed
+#
+# Optional fields:
+#   model        — model name passed via {model} placeholder
+#   timeout_sec  — max execution time (default: 300)
+
 [providers.codex]
+type = "cli"
 command = "codex --quiet --prompt-file {review_request}"
 timeout_sec = 300
 healthcheck = "codex --version"
 version = "cli"
 
+# ── Type: openai-compatible ──────────────────────────────────
+# For any OpenAI-compatible HTTP endpoint: OpenAI, Azure OpenAI, vLLM,
+# llama.cpp server, text-generation-inference, GDX Spark, LM Studio, etc.
+# When type-aware dispatch is wired, the adapter handles API calls
+# internally. Until then, use a `command` template with curl.
+#
+# Forward-declared fields (used by adapter when type-dispatch lands):
+#   base_url     — API base URL (e.g., http://192.168.1.50:8000/v1)
+#   api_key_env  — env var name containing the API key (NOT the key itself)
+#   model        — model name for the chat completion request
+#   max_tokens   — max response tokens (default: 4096)
+#   temperature  — sampling temperature (default: 0.1)
+#
+# Optional fields:
+#   timeout_sec  — max execution time (default: 300)
+#   healthcheck  — command to verify endpoint reachability
+
+# [providers.openai]
+# type = "openai-compatible"
+# base_url = "https://api.openai.com/v1"
+# api_key_env = "OPENAI_API_KEY"
+# model = "gpt-4o"
+# timeout_sec = 300
+# max_tokens = 4096
+# temperature = 0.1
+# healthcheck = "curl -sf https://api.openai.com/v1/models"
+
+# [providers.gdx-spark]
+# type = "openai-compatible"
+# base_url = "http://192.168.1.50:8000/v1"
+# api_key_env = "GDX_SPARK_API_KEY"
+# model = "deepseek-coder-v2"
+# timeout_sec = 600
+# max_tokens = 4096
+# temperature = 0.2
+# healthcheck = "curl -sf http://192.168.1.50:8000/v1/models"
+
+# ── Type: ollama ─────────────────────────────────────────────
+# For Ollama instances (local or remote).
+# When type-aware dispatch is wired, the adapter will use `ollama run` CLI
+# for local hosts and the HTTP API for remote hosts. Until then, the
+# `command` template is used directly.
+#
+# Required fields:
+#   model        — Ollama model name (e.g., llama3.1:70b)
+#
+# Forward-declared fields (used by adapter when type-dispatch lands):
+#   host         — Ollama host:port (default: localhost:11434)
+#
+# Optional fields:
+#   timeout_sec  — max execution time (default: 600)
+#   healthcheck  — command to verify Ollama availability
+
 [providers.ollama]
+type = "ollama"
 command = "ollama run {model} < {review_request}"
-timeout_sec = 600
-healthcheck = "ollama --version"
 model = "llama3"
+timeout_sec = 600
+host = "localhost:11434"
+healthcheck = "ollama list"
 version = "local"
+
+# [providers.ollama-remote]
+# type = "ollama"
+# model = "codellama:34b"
+# timeout_sec = 900
+# host = "192.168.1.50:11434"
+# healthcheck = "curl -sf http://192.168.1.50:11434/api/tags"
+
+# ── Type: custom ─────────────────────────────────────────────
+# Escape hatch for anything else: SSH tunnels, Docker, MCP servers, etc.
+# Behaves like the legacy flat command template — full backward compatibility.
+#
+# Required fields:
+#   command      — command template ({review_request} and {model} placeholders)
+#
+# Optional fields:
+#   timeout_sec  — max execution time (default: 300)
+#   healthcheck  — command to verify provider availability
+
+# [providers.my-custom-reviewer]
+# type = "custom"
+# command = "ssh gpubox 'cd /opt/reviewer && python review.py --input {review_request}'"
+# timeout_sec = 900
+# healthcheck = "ssh gpubox 'nvidia-smi' 2>/dev/null"

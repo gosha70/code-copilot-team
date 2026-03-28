@@ -194,18 +194,20 @@ peer_for.claude = "codex"
 peer_for.codex = "claude"
 
 [providers.codex]
+type = "cli"
 command = "codex --quiet --prompt-file {review_request}"
 timeout_sec = 300
 healthcheck = "codex --version"
 
 [providers.ollama]
+type = "ollama"
 command = "ollama run {model} < {review_request}"
-timeout_sec = 600
-healthcheck = "ollama --version"
 model = "llama3"
+timeout_sec = 600
+healthcheck = "ollama list"
 ```
 
-Add your own providers by creating new `[providers.<name>]` sections. The `{review_request}` placeholder is replaced with the path to a temporary file containing the review prompt.
+Every provider currently requires a `command` template with `{review_request}` and `{model}` placeholders. The `type` field (`cli`, `openai-compatible`, `ollama`, `custom`) declares the provider topology and will enable type-aware dispatch and dedicated adapter scripts in a future update. See `shared/templates/provider-profile-template.toml` for all type-specific fields and commented-out examples.
 
 ### Safety Model
 
