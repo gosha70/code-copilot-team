@@ -48,4 +48,5 @@ Tell the user:
 - Marker created at `.cct/review/pending.json`
 - Peer review will execute when the session stops (or on next `/stop`)
 - The session will block until review completes (fail-closed)
+- Collaboration artifact will be written to `specs/<feature-id>/collaboration/` using the schema from `shared/templates/sdd/collaboration-template.md`
 - To bypass: set `CCT_PEER_BYPASS=true` or use `--peer-review-off`
