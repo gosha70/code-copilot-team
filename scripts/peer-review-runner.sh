@@ -390,7 +390,7 @@ blocking_findings_open: $BLOCKING_COUNT
 target_ref: $TARGET_REF
 ---
 
-# Peer Review: $FEATURE_ID — ${PHASE^} Phase
+# Peer Review: $FEATURE_ID — $(echo "$PHASE" | awk '{print toupper(substr($0,1,1)) substr($0,2)}') Phase
 
 **Reviewer**: $PEER_PROVIDER
 **Scope**: $REVIEW_SCOPE
