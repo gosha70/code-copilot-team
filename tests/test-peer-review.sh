@@ -487,6 +487,7 @@ PROJECT=$(setup_project)
 RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$PROFILE" bash "$RUNNER" "$PROJECT/.cct/review/pending.json" 2>&1) || RC=$?
 ARTIFACT="$PROJECT/specs/test-feature/collaboration/build-review.md"
 if [[ -f "$ARTIFACT" ]]; then
+    # Compute expected fingerprint from the fallback provider's config
     EXPECTED_INPUT="cli:echo 'Fallback PASS'::"
     if command -v shasum &>/dev/null; then
         EXPECTED_FP=$(echo "$EXPECTED_INPUT" | shasum -a 256 | cut -d' ' -f1)
