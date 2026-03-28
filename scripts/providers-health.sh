@@ -73,18 +73,23 @@ FAIL=0
 for provider in $(toml_list_providers "$PROFILE"); do
     SECTION="providers.$provider"
     HEALTHCHECK=$(toml_get "$PROFILE" "$SECTION" "healthcheck")
-    VERSION=$(toml_get "$PROFILE" "$SECTION" "version")
+    PROVIDER_TYPE=$(toml_get "$PROFILE" "$SECTION" "type")
+    # Fall back to legacy version field, then default to cli
+    if [[ -z "$PROVIDER_TYPE" ]]; then
+        PROVIDER_TYPE=$(toml_get "$PROFILE" "$SECTION" "version")
+        PROVIDER_TYPE="${PROVIDER_TYPE:-cli}"
+    fi
 
     if [[ -z "$HEALTHCHECK" ]]; then
-        printf "  %-20s %-12s %s\n" "$provider ($VERSION)" "SKIP" "(no healthcheck defined)"
+        printf "  %-20s %-12s %s\n" "$provider ($PROVIDER_TYPE)" "SKIP" "(no healthcheck defined)"
         continue
     fi
 
     if bash -c "$HEALTHCHECK" &>/dev/null; then
-        printf "  %-20s %-12s %s\n" "$provider ($VERSION)" "OK" "$HEALTHCHECK"
+        printf "  %-20s %-12s %s\n" "$provider ($PROVIDER_TYPE)" "OK" "$HEALTHCHECK"
         ((PASS++))
     else
-        printf "  %-20s %-12s %s\n" "$provider ($VERSION)" "FAIL" "$HEALTHCHECK"
+        printf "  %-20s %-12s %s\n" "$provider ($PROVIDER_TYPE)" "FAIL" "$HEALTHCHECK"
         ((FAIL++))
     fi
 done
@@ -97,6 +102,16 @@ DEFAULT_CLAUDE=$(toml_get "$PROFILE" "defaults" "peer_for.claude")
 DEFAULT_CODEX=$(toml_get "$PROFILE" "defaults" "peer_for.codex")
 [[ -n "$DEFAULT_CLAUDE" ]] && echo "  claude → $DEFAULT_CLAUDE"
 [[ -n "$DEFAULT_CODEX" ]] && echo "  codex  → $DEFAULT_CODEX"
+
+# Show fallback chains if configured
+FALLBACK_CLAUDE=$(toml_get "$PROFILE" "defaults" "fallback_chain.claude")
+FALLBACK_CODEX=$(toml_get "$PROFILE" "defaults" "fallback_chain.codex")
+if [[ -n "$FALLBACK_CLAUDE" || -n "$FALLBACK_CODEX" ]]; then
+    echo ""
+    echo "Fallback chains:"
+    [[ -n "$FALLBACK_CLAUDE" ]] && echo "  claude: $FALLBACK_CLAUDE"
+    [[ -n "$FALLBACK_CODEX" ]] && echo "  codex:  $FALLBACK_CODEX"
+fi
 echo ""
 
 if [[ $FAIL -gt 0 ]]; then
