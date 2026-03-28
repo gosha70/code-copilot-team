@@ -10,6 +10,7 @@ Briefly describe what this pull request changes and why.
 
 - [ ] `bash tests/test-generate.sh`
 - [ ] `bash tests/test-hooks.sh`
+- [ ] `bash tests/test-peer-review.sh`
 - [ ] `bash adapters/claude-code/setup.sh && bash tests/test-shared-structure.sh`
 
 ## Checklist

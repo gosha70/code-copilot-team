@@ -82,6 +82,9 @@ jobs:
       - name: Run sync tests
         run: bash tests/test-sync.sh
 
+      - name: Run peer-review runner tests
+        run: bash tests/test-peer-review.sh
+
       - name: Run shared structure tests
         env:
           HOME: ${{ runner.temp }}/cct-home

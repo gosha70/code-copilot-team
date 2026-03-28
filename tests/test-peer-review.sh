@@ -438,6 +438,74 @@ PROJECT=$(setup_project)
 RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$PROFILE" bash "$RUNNER" "$PROJECT/.cct/review/pending.json" 2>&1) || RC=$?
 assert_exit "no fallback chain, dead primary exits 1" 1 "$RC"
 
+# Fallback chain with subject provider should skip self-review
+PROFILE="$TMP/self-review-fallback.toml"
+write_profile "$PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "dead-peer"
+fallback_chain.claude = ["claude", "real-fallback"]
+[providers.dead-peer]
+type = "cli"
+command = "echo 'should not run'"
+timeout_sec = 10
+healthcheck = "false"
+[providers.claude]
+type = "cli"
+command = "echo 'self-review should not run'"
+timeout_sec = 10
+healthcheck = "true"
+[providers.real-fallback]
+type = "cli"
+command = "echo 'Real fallback PASS'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+PROJECT=$(setup_project)
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$PROFILE" bash "$RUNNER" "$PROJECT/.cct/review/pending.json" 2>&1) || RC=$?
+assert_exit "fallback skips self-review candidate" 0 "$RC"
+assert_contains "self-review skipped message" "$OUTPUT" "same as subject provider"
+assert_contains "real fallback used" "$OUTPUT" "Running peer review via 'real-fallback'"
+
+# Fingerprint reflects actual provider after fallback
+PROFILE="$TMP/fingerprint-fallback.toml"
+write_profile "$PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "dead-primary"
+fallback_chain.claude = ["alive-alt"]
+[providers.dead-primary]
+type = "cli"
+command = "echo 'primary command'"
+timeout_sec = 10
+healthcheck = "false"
+[providers.alive-alt]
+type = "cli"
+command = "echo 'Fallback PASS'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+PROJECT=$(setup_project)
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$PROFILE" bash "$RUNNER" "$PROJECT/.cct/review/pending.json" 2>&1) || RC=$?
+ARTIFACT="$PROJECT/specs/test-feature/collaboration/build-review.md"
+if [[ -f "$ARTIFACT" ]]; then
+    EXPECTED_INPUT="cli:echo 'Fallback PASS'::"
+    if command -v shasum &>/dev/null; then
+        EXPECTED_FP=$(echo "$EXPECTED_INPUT" | shasum -a 256 | cut -d' ' -f1)
+    else
+        EXPECTED_FP=$(echo "$EXPECTED_INPUT" | sha256sum | cut -d' ' -f1)
+    fi
+    ACTUAL_FP=$(grep 'runner_fingerprint:' "$ARTIFACT" | sed 's/.*: //')
+    if [[ "$ACTUAL_FP" == "$EXPECTED_FP" ]]; then
+        echo "  PASS: fingerprint matches fallback provider"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: fingerprint matches fallback provider (expected $EXPECTED_FP, got $ACTUAL_FP)"
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo "  FAIL: artifact not created for fingerprint test"
+    FAIL=$((FAIL + 1))
+fi
+
 echo ""
 
 # ══════════════════════════════════════════════════════════════

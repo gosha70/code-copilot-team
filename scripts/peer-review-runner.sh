@@ -166,17 +166,6 @@ load_provider_config "$PEER_PROVIDER" || {
     exit 1
 }
 
-# ── Compute runner fingerprint ────────────────────────────────
-
-FINGERPRINT_INPUT="$PROVIDER_TYPE:${COMMAND_TEMPLATE:-}:${PROVIDER_BASE_URL:-}:${PROVIDER_MODEL:-}"
-if command -v shasum &>/dev/null; then
-    RUNNER_FINGERPRINT=$(echo "$FINGERPRINT_INPUT" | shasum -a 256 | cut -d' ' -f1)
-elif command -v sha256sum &>/dev/null; then
-    RUNNER_FINGERPRINT=$(echo "$FINGERPRINT_INPUT" | sha256sum | cut -d' ' -f1)
-else
-    RUNNER_FINGERPRINT="unknown"
-fi
-
 # ── Healthcheck with fallback chain ──────────────────────────
 
 run_healthcheck() {
@@ -194,6 +183,11 @@ if ! run_healthcheck "$HEALTHCHECK"; then
     if [[ -n "$FALLBACK_CHAIN" ]]; then
         while IFS= read -r fallback; do
             [[ -z "$fallback" ]] && continue
+            # Skip fallback candidates that would produce self-review
+            if [[ "$fallback" == "$SUBJECT_PROVIDER" ]]; then
+                echo "Skipping fallback '$fallback' (same as subject provider)." >&2
+                continue
+            fi
             echo "Trying fallback provider '$fallback'..." >&2
 
             if load_provider_config "$fallback" && run_healthcheck "$HEALTHCHECK"; then
@@ -212,6 +206,18 @@ if ! run_healthcheck "$HEALTHCHECK"; then
         rm -f "$MARKER_PATH"
         exit 1
     fi
+fi
+
+# ── Compute runner fingerprint ────────────────────────────────
+# Computed after fallback resolution so it reflects the actual provider used.
+
+FINGERPRINT_INPUT="$PROVIDER_TYPE:${COMMAND_TEMPLATE:-}:${PROVIDER_BASE_URL:-}:${PROVIDER_MODEL:-}"
+if command -v shasum &>/dev/null; then
+    RUNNER_FINGERPRINT=$(echo "$FINGERPRINT_INPUT" | shasum -a 256 | cut -d' ' -f1)
+elif command -v sha256sum &>/dev/null; then
+    RUNNER_FINGERPRINT=$(echo "$FINGERPRINT_INPUT" | sha256sum | cut -d' ' -f1)
+else
+    RUNNER_FINGERPRINT="unknown"
 fi
 
 # ── Prepare review request ────────────────────────────────────
