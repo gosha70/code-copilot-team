@@ -978,6 +978,11 @@ start_tmux_session() {
     # Create detached, set up logging, then attach
     tmux new-session -d -s "$session_name" -c "$project_dir" "$run_cmd"
     tmux pipe-pane -t "$session_name" -o "sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> '$log_file'"
+    # Show peer review banner inside tmux (after attach redraws the terminal)
+    if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
+        tmux display-message -t "$session_name" \
+            "Peer review: ${PEER_PROVIDER:-profile default} (scope: $PEER_SCOPE)"
+    fi
     tmux attach-session -t "$session_name"
 }
 
