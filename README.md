@@ -395,7 +395,7 @@ All tools share the same rules from `shared/rules/always/`. Each adapter formats
 code-copilot-team/
 ├── shared/                              ← Single source of truth
 │   ├── rules/always/                    4 global rules (always loaded)
-│   ├── rules/on-demand/                 13 rules loaded by phase agents
+│   ├── rules/on-demand/                 14 rules loaded by phase agents
 │   ├── docs/                            7 tool-agnostic reference docs
 │   ├── templates/                       9 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
@@ -417,7 +417,7 @@ code-copilot-team/
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    188 hook tests
-│   ├── test-generate.sh                 269 generation + adapter tests
+│   ├── test-generate.sh                 273 generation + adapter tests
 │   ├── test-shared-structure.sh         659 structure + content tests
 │   ├── test-sync.sh                     61 sync + init metadata tests
 │   └── test-peer-review.sh             54 peer-review runner tests
