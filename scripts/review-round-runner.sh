@@ -102,10 +102,14 @@ if [[ -n "$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null | grep -Ev '^[?
     exit 1
 fi
 
-# ── Circuit breaker: round limit ─────────────────────────────
+# ── Circuit breakers (build phase only) ──────────────────────
+# Plan-phase review is advisory and single-round — no breakers apply.
 
-if [[ "$NEXT_ROUND" -gt "$MAX_ROUNDS" ]]; then
-    cat > "$REVIEW_DIR/breaker-tripped.json" << BREAKER_EOF
+if [[ "$PHASE" != "plan" ]]; then
+
+    # Round limit
+    if [[ "$NEXT_ROUND" -gt "$MAX_ROUNDS" ]]; then
+        cat > "$REVIEW_DIR/breaker-tripped.json" << BREAKER_EOF
 {
   "breaker": "max_rounds",
   "rounds_completed": $CURRENT_ROUND,
@@ -114,17 +118,16 @@ if [[ "$NEXT_ROUND" -gt "$MAX_ROUNDS" ]]; then
   "action": "Run /review-decide approve|reject|retry"
 }
 BREAKER_EOF
-    echo "Circuit breaker: max rounds ($MAX_ROUNDS) reached after $CURRENT_ROUND rounds." >&2
-    exit 2
-fi
+        echo "Circuit breaker: max rounds ($MAX_ROUNDS) reached after $CURRENT_ROUND rounds." >&2
+        exit 2
+    fi
 
-# ── Circuit breaker: wall-clock timeout ──────────────────────
-
-NOW=$(date +%s)
-if [[ -n "$LOOP_START" ]]; then
-    ELAPSED=$((NOW - LOOP_START))
-    if [[ "$ELAPSED" -ge "$TIMEOUT_SEC" ]]; then
-        cat > "$REVIEW_DIR/breaker-tripped.json" << BREAKER_EOF
+    # Wall-clock timeout
+    NOW=$(date +%s)
+    if [[ -n "$LOOP_START" ]]; then
+        ELAPSED=$((NOW - LOOP_START))
+        if [[ "$ELAPSED" -ge "$TIMEOUT_SEC" ]]; then
+            cat > "$REVIEW_DIR/breaker-tripped.json" << BREAKER_EOF
 {
   "breaker": "timeout",
   "rounds_completed": $CURRENT_ROUND,
@@ -134,48 +137,43 @@ if [[ -n "$LOOP_START" ]]; then
   "action": "Run /review-decide approve|reject|retry"
 }
 BREAKER_EOF
-        echo "Circuit breaker: wall-clock timeout (${TIMEOUT_SEC}s) after ${ELAPSED}s." >&2
-        exit 2
+            echo "Circuit breaker: wall-clock timeout (${TIMEOUT_SEC}s) after ${ELAPSED}s." >&2
+            exit 2
+        fi
     fi
-fi
 
-# ── Circuit breaker: stale findings ──────────────────────────
-
-check_stale_findings() {
-    if [[ "$CURRENT_ROUND" -lt 2 || ! -f "$STATE_FILE" ]]; then return; fi
-
-    local stale_ids
-    stale_ids=$(jq -r --argjson threshold "$STALE_THRESHOLD" '
-        .findings // {} | to_entries[] |
-        select(.value.consecutive_fixed >= $threshold) |
-        .key
-    ' "$STATE_FILE" 2>/dev/null)
-
-    if [[ -n "$stale_ids" ]]; then
-        local stale_details
-        stale_details=$(jq --argjson threshold "$STALE_THRESHOLD" '
-            [.findings // {} | to_entries[] |
-             select(.value.consecutive_fixed >= $threshold) |
-             {id: .key, description: .value.description, rounds_seen: .value.rounds_seen,
-              consecutive_fixed: .value.consecutive_fixed}]
+    # Stale findings
+    if [[ "$CURRENT_ROUND" -ge 2 && -f "$STATE_FILE" ]]; then
+        STALE_IDS=$(jq -r --argjson threshold "$STALE_THRESHOLD" '
+            .findings // {} | to_entries[] |
+            select(.value.consecutive_fixed >= $threshold) |
+            .key
         ' "$STATE_FILE" 2>/dev/null)
 
-        cat > "$REVIEW_DIR/breaker-tripped.json" << BREAKER_EOF
+        if [[ -n "$STALE_IDS" ]]; then
+            STALE_DETAILS=$(jq --argjson threshold "$STALE_THRESHOLD" '
+                [.findings // {} | to_entries[] |
+                 select(.value.consecutive_fixed >= $threshold) |
+                 {id: .key, description: .value.description, rounds_seen: .value.rounds_seen,
+                  consecutive_fixed: .value.consecutive_fixed}]
+            ' "$STATE_FILE" 2>/dev/null)
+
+            cat > "$REVIEW_DIR/breaker-tripped.json" << BREAKER_EOF
 {
   "breaker": "stale_findings",
   "rounds_completed": $CURRENT_ROUND,
   "stale_threshold": $STALE_THRESHOLD,
-  "stale_findings": $stale_details,
+  "stale_findings": $STALE_DETAILS,
   "attempt": $ATTEMPT,
   "action": "Run /review-decide approve|reject|retry"
 }
 BREAKER_EOF
-        echo "Circuit breaker: stale findings detected (threshold: $STALE_THRESHOLD consecutive rounds with 'fixed' disposition)." >&2
-        exit 2
+            echo "Circuit breaker: stale findings detected (threshold: $STALE_THRESHOLD consecutive rounds with 'fixed' disposition)." >&2
+            exit 2
+        fi
     fi
-}
 
-check_stale_findings
+fi  # end build-phase-only breakers
 
 # ── Load provider config ─────────────────────────────────────
 
@@ -243,6 +241,11 @@ if ! run_healthcheck "$HEALTHCHECK"; then
     fi
 
     if [[ "$FALLBACK_FOUND" != "true" ]]; then
+        if [[ "$PHASE" == "plan" ]]; then
+            # Plan phase: advisory — log failure and exit without breaker
+            echo "Error: All providers unavailable (plan review skipped)." >&2
+            exit 1
+        fi
         cat > "$REVIEW_DIR/breaker-tripped.json" << BREAKER_EOF
 {
   "breaker": "provider_unavailable",
@@ -327,7 +330,25 @@ else
 fi)
 
 ${PRIOR_CONTEXT}
-## Files to Review
+## Recent Commits
+
+$(git -C "$PROJECT_DIR" log --oneline -10 2>/dev/null || echo "(no git history)")
+
+## Changes to Review
+
+$(git -C "$PROJECT_DIR" diff HEAD~1 --stat 2>/dev/null || echo "(no diff available)")
+
+### Diff
+
+\`\`\`diff
+$(git -C "$PROJECT_DIR" diff HEAD~1 2>/dev/null | head -500 || echo "(no diff available)")
+\`\`\`
+
+$(if [[ $(git -C "$PROJECT_DIR" diff HEAD~1 2>/dev/null | wc -l) -gt 500 ]]; then
+    echo "*Diff truncated at 500 lines. Full diff available in the working tree.*"
+fi)
+
+## Spec Artifacts
 
 $(if [[ -d "$SANDBOX_DIR/specs/$FEATURE_ID" ]]; then
     find "$SANDBOX_DIR/specs/$FEATURE_ID" -name '*.md' -not -path '*/collaboration/*' | sort | while read -r f; do
@@ -673,5 +694,69 @@ ARTIFACT_EOF
     exit 0
 fi
 
-# FAIL or INVALID
+# ── Plan phase: write artifact on any verdict (advisory) ─────
+
+if [[ "$PHASE" == "plan" ]]; then
+    TODAY=$(date +%Y-%m-%d)
+    jq -n \
+        --arg feature_id "$FEATURE_ID" \
+        --arg date "$TODAY" \
+        --arg phase "$PHASE" \
+        --arg verdict "$VERDICT" \
+        --argjson rounds_completed "$NEXT_ROUND" \
+        --argjson attempt "$ATTEMPT" \
+        --arg subject_provider "$SUBJECT_PROVIDER" \
+        --arg peer_provider "$PEER_PROVIDER" \
+        --arg runner_fingerprint "$RUNNER_FINGERPRINT" \
+        --argjson bypass false \
+        --arg target_ref "$TARGET_REF" \
+        --argjson findings "$ACCUMULATED" \
+        '{feature_id: $feature_id, date: $date, phase: $phase, verdict: $verdict,
+          rounds_completed: $rounds_completed, attempt_count: $attempt,
+          subject_provider: $subject_provider, peer_provider: $peer_provider,
+          runner_fingerprint: $runner_fingerprint, bypass: $bypass,
+          target_ref: $target_ref, findings: $findings}' \
+        > "$REVIEW_DIR/loop-summary.json"
+
+    COLLAB_DIR="$PROJECT_DIR/specs/$FEATURE_ID/collaboration"
+    mkdir -p "$COLLAB_DIR"
+    cat > "$COLLAB_DIR/plan-consult.md" << ARTIFACT_EOF
+---
+feature_id: $FEATURE_ID
+date: $TODAY
+status: final
+phase: $PHASE
+mode: consult
+subject_provider: $SUBJECT_PROVIDER
+peer_provider: $PEER_PROVIDER
+peer_profile: $PEER_PROVIDER
+runner_fingerprint: $RUNNER_FINGERPRINT
+verdict: $VERDICT
+blocking_findings_open: $BLOCKING_COUNT
+target_ref: $TARGET_REF
+rounds_completed: $NEXT_ROUND
+attempt_count: $ATTEMPT
+bypass: false
+---
+
+# Peer Review: $FEATURE_ID — Plan Phase (Advisory)
+
+**Reviewer**: $PEER_PROVIDER
+**Scope**: $REVIEW_SCOPE
+**Verdict**: $VERDICT (advisory — does not gate Build)
+
+## Summary
+
+$(echo "$REVIEW_OUTPUT" | awk '/^### Summary/{found=1; next} /^### /{found=0} found{print}')
+
+## Findings
+
+$(echo "$FINDINGS_JSON" | jq -r '.[] | "- [\(.severity)] \(.id): \(.description) (\(.file))"')
+ARTIFACT_EOF
+
+    echo "Plan review complete ($VERDICT, advisory) — plan-consult.md written." >&2
+    exit 0
+fi
+
+# FAIL or INVALID (build phase)
 exit 1

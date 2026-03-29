@@ -233,6 +233,7 @@ corresponding skill to apply them.
 | `phase-workflow` | build |
 | `provider-collaboration-protocol` | — |
 | `ralph-loop` | build |
+| `review-loop` | — |
 | `spec-workflow` | plan, build |
 | `stack-constraints` | build |
 | `team-lead-efficiency` | build (optional team mode) |

@@ -12,28 +12,23 @@ Determine from the current session:
 - `review_scope` — from `CCT_PEER_REVIEW_SCOPE` env var, or `both`
 - `target_ref` — current git branch or HEAD commit
 
-### 2. Check Peer Review Status
+### 2. Check Review Loop Completion
 
-- If `CCT_PEER_REVIEW_ENABLED` is not `true`, inform the user that peer review is disabled and skip marker creation. Still proceed with post-phase checklist.
+If `CCT_PEER_REVIEW_ENABLED` is `true`:
 
-### 3. Create Marker
+**Build phase** — review is gating:
+- Check if `.cct/review/loop-summary.json` exists with `verdict: "PASS"` or `bypass: true`.
+  - If yes: review completed. Proceed to post-phase checklist.
+  - If no: inform the user that peer review has not completed. Tell them to run `/review-submit` before `/phase-complete`.
 
-Write `.cct/review/pending.json` in the project root:
+**Plan phase** — review is advisory:
+- If `loop-summary.json` exists, note the verdict but proceed regardless (even on FAIL).
+- If `loop-summary.json` does not exist, proceed without review — plan review is optional.
+- A plan-phase FAIL is logged but does **not** block `/phase-complete`.
 
-```json
-{
-  "feature_id": "<feature-id>",
-  "phase": "<plan|build>",
-  "target_ref": "<branch-or-sha>",
-  "subject_provider": "claude",
-  "peer_provider": "<provider-name-or-empty>",
-  "review_scope": "<code|design|both>",
-  "request_id": "<uuid>",
-  "requested_at": "<ISO-8601>"
-}
-```
+If `CCT_PEER_REVIEW_ENABLED` is not `true`, skip review checks entirely. Proceed to post-phase checklist.
 
-### 4. Run Post-Phase Checklist
+### 3. Run Post-Phase Checklist
 
 Reference the post-phase steps from `phase-workflow.md`:
 
@@ -42,11 +37,9 @@ Reference the post-phase steps from `phase-workflow.md`:
 3. Present summary — files changed, decisions made
 4. Commit gate — ask user before committing
 
-### 5. Inform User
+### 4. Inform User
 
 Tell the user:
-- Marker created at `.cct/review/pending.json`
-- Peer review will execute when the session stops (or on next `/stop`)
-- The session will block until review completes (fail-closed)
-- Collaboration artifact will be written to `specs/<feature-id>/collaboration/` using the schema from `shared/templates/sdd/collaboration-template.md`
-- To bypass: set `CCT_PEER_BYPASS=true` or use `--peer-review-off`
+- Phase complete
+- If review passed: collaboration artifact at `specs/<feature-id>/collaboration/`
+- If review was bypassed: bypass is logged and CI will flag it
