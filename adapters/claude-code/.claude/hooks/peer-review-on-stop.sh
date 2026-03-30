@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# peer-review-on-stop.sh — Stop hook for peer review
+# peer-review-on-stop.sh — Stop hook for peer review validation
 #
-# When Claude finishes responding, checks for a pending peer-review marker
-# (.cct/review/pending.json). If found and valid, invokes the peer-review
-# runner. Fail-closed: blocks the stop event on runner failure (exit 2).
+# Validates that the review loop completed before the session ends.
+# Does NOT initiate review — that is driven by the agent via /review-submit.
+#
+# Behavior:
+#   - Build phase: blocks stop if loop-summary.json is missing or verdict
+#     is not PASS/bypass. Exit 2 = blocked.
+#   - Plan phase: exempt — plan review is advisory, never blocks stop.
+#   - Peer review disabled: no-op (exit 0).
 #
 # Guards:
 #   - stop_hook_active (infinite-loop prevention)
 #   - CCT_PEER_REVIEW_ENABLED must be "true"
-#   - Marker must exist at .cct/review/pending.json
-#   - Marker must not be stale (requested_at vs CCT_SESSION_START)
-#   - CCT_PEER_BYPASS=true skips review (logged)
+#   - CCT_PEER_BYPASS=true skips validation (logged)
 
 # --- jq guard ---
 if ! command -v jq &>/dev/null; then
@@ -35,68 +38,50 @@ fi
 
 # --- Resolve project directory ---
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"
-MARKER_PATH="$PROJECT_DIR/.cct/review/pending.json"
-
-# --- Marker exists? ---
-if [[ ! -f "$MARKER_PATH" ]]; then
-    exit 0
-fi
-
-# --- Validate marker has required keys ---
-REQUIRED_KEYS=("feature_id" "phase" "target_ref" "subject_provider" "requested_at")
-for key in "${REQUIRED_KEYS[@]}"; do
-    VALUE=$(jq -r ".$key // empty" "$MARKER_PATH" 2>/dev/null) || true
-    if [[ -z "$VALUE" ]]; then
-        echo "Warning: Peer review marker missing required key '$key'. Removing invalid marker." >&2
-        rm -f "$MARKER_PATH"
-        exit 0
-    fi
-done
-
-# --- Staleness check ---
-REQUESTED_AT=$(jq -r '.requested_at // empty' "$MARKER_PATH" 2>/dev/null) || true
-SESSION_START="${CCT_SESSION_START:-}"
-
-if [[ -n "$SESSION_START" && -n "$REQUESTED_AT" ]]; then
-    # Compare timestamps (works with ISO 8601 strings via string comparison)
-    if [[ "$REQUESTED_AT" < "$SESSION_START" ]]; then
-        echo "Warning: Peer review marker is stale (requested_at=$REQUESTED_AT, session_start=$SESSION_START). Removing stale marker." >&2
-        rm -f "$MARKER_PATH"
-        exit 0
-    fi
-fi
+REVIEW_DIR="$PROJECT_DIR/.cct/review"
+SUMMARY="$REVIEW_DIR/loop-summary.json"
 
 # --- Bypass check ---
 if [[ "${CCT_PEER_BYPASS:-false}" == "true" ]]; then
     echo "Warning: Peer review bypassed (CCT_PEER_BYPASS=true). CI will reject bypass artifacts." >&2
-    # Clean up marker
-    rm -f "$MARKER_PATH"
     exit 0
 fi
 
-# --- Locate runner ---
-# Search order: project-local, ~/.local/bin (setup.sh install location), then PATH
-RUNNER=""
-if [[ -x "$PROJECT_DIR/scripts/peer-review-runner.sh" ]]; then
-    RUNNER="$PROJECT_DIR/scripts/peer-review-runner.sh"
-elif [[ -x "$HOME/.local/bin/peer-review-runner.sh" ]]; then
-    RUNNER="$HOME/.local/bin/peer-review-runner.sh"
-elif command -v peer-review-runner.sh &>/dev/null; then
-    RUNNER="peer-review-runner.sh"
+# --- Determine phase ---
+PHASE=""
+if [[ -f "$REVIEW_DIR/state.json" ]]; then
+    PHASE=$(jq -r '.phase // empty' "$REVIEW_DIR/state.json" 2>/dev/null) || true
 fi
 
-if [[ -z "$RUNNER" ]]; then
-    echo "Error: peer-review-runner.sh not found. Peer review cannot proceed." >&2
-    exit 2
-fi
-
-# --- Execute runner ---
-echo "Invoking peer review runner..." >&2
-
-if bash "$RUNNER" "$MARKER_PATH"; then
-    echo "Peer review completed successfully." >&2
+# --- Plan phase: exempt (advisory review never blocks stop) ---
+if [[ "$PHASE" == "plan" ]]; then
     exit 0
-else
-    echo "Peer review failed. Session blocked (fail-closed). Set CCT_PEER_BYPASS=true to bypass." >&2
+fi
+
+# --- No review state: review was never started ---
+# The stop hook validates review completion, but cannot enforce review initiation.
+# Enforcement of "must run /review-submit" comes from the agent manifests and
+# /phase-complete (which checks loop-summary.json before proceeding).
+if [[ ! -d "$REVIEW_DIR" || ! -f "$REVIEW_DIR/state.json" ]]; then
+    echo "Warning: Peer review is enabled but no review state found. Review was never started." >&2
+    echo "If this is a Build session, run /review-submit before /phase-complete." >&2
+    exit 0
+fi
+
+# --- Build phase: validate loop-summary.json ---
+if [[ ! -f "$SUMMARY" ]]; then
+    echo "Error: Peer review required but loop-summary.json not found." >&2
+    echo "Run /review-submit to complete the review loop before ending the session." >&2
     exit 2
 fi
+
+VERDICT=$(jq -r '.verdict // empty' "$SUMMARY" 2>/dev/null) || true
+BYPASS=$(jq -r '.bypass // false' "$SUMMARY" 2>/dev/null) || true
+
+if [[ "$VERDICT" == "PASS" || "$BYPASS" == "true" ]]; then
+    exit 0
+fi
+
+echo "Error: Peer review verdict is '$VERDICT' (not PASS) and no approved bypass." >&2
+echo "Run /review-submit to continue the review loop, or /review-decide approve to bypass." >&2
+exit 2

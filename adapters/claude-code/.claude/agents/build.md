@@ -93,7 +93,12 @@ After final verification passes, before requesting review:
 - **Fix integration issues yourself** — don't delegate another sub-agent for it.
 - **Don't busy-wait.** Launch independent agents in parallel, work on other tasks while waiting.
 - **Commit gate.** Ask the user before committing. One commit per phase.
-- **Peer review gate.** If `CCT_PEER_REVIEW_ENABLED` is `true` in the environment, run `/phase-complete` before ending the phase. This writes the peer-review marker that the stop hook checks. The stop hook will not trigger peer review without it.
+- **Peer review gate.** If `CCT_PEER_REVIEW_ENABLED` is `true` in the environment:
+  1. After completing work and committing, run `/review-submit` to start the review loop.
+  2. On **FAIL**: read `.cct/review/findings-round-N.json`, address each blocking finding (fix, dispute, defer, or mark not-applicable), write `.cct/review/resolution-round-N.json`, commit fixes, and run `/review-submit` again.
+  3. On **BREAKER**: read `.cct/review/breaker-tripped.json`, present the context to the user, and stop. Wait for the user to run `/review-decide approve|reject|retry`. On retry, run `/review-submit` again.
+  4. On **PASS**: proceed to `/phase-complete`.
+  See `review-loop.md` for the full protocol, finding schema, and disposition values.
 - **Gate on spec_mode.** Read `plan.md` frontmatter before proceeding. Block if `full`/`lightweight` and `spec.md` is missing or has unresolved `[NEEDS CLARIFICATION]`.
 - **Emit tasks.md** to `specs/<id>/` before delegation when `spec_mode` is `full`. Show to user for approval.
 

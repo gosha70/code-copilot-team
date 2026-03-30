@@ -1,4 +1,4 @@
-Signal phase completion and trigger peer review (if enabled).
+Signal phase completion. Validates that the review loop has passed (if peer review is enabled) and runs the post-phase checklist.
 
 ## Steps
 

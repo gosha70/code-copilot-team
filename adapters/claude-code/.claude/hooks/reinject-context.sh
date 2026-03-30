@@ -72,7 +72,7 @@ if [[ "${CCT_PEER_REVIEW_ENABLED:-false}" == "true" ]]; then
     PEER_INFO="$PEER_INFO (provider: profile default)"
   fi
   PEER_INFO="$PEER_INFO, scope: ${CCT_PEER_REVIEW_SCOPE:-both}"
-  OUTPUT="${OUTPUT}## Peer Review\n- Status: ${PEER_INFO}\n- Action required: Run /phase-complete before ending each phase\n\n"
+  OUTPUT="${OUTPUT}## Peer Review\n- Status: ${PEER_INFO}\n- Action required: Run /review-submit to start the review loop, then /phase-complete after review passes\n\n"
 fi
 
 # --- Output if we found anything ---

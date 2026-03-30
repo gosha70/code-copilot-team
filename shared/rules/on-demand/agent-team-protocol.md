@@ -28,11 +28,10 @@ See `spec-workflow.md` for risk classification and required sections.
 ### Collaboration Gate (Dual Mode)
 
 When `collaboration_mode: dual` in `plan.md` frontmatter **OR** the environment variable `CCT_PEER_REVIEW_ENABLED` is `true`:
-- **Plan agent**: set `collaboration_mode: dual` in `plan.md` frontmatter if `CCT_PEER_REVIEW_ENABLED=true` is detected in the environment.
-- After Plan phase: run `/phase-complete` to trigger peer review of the plan. The `plan-consult.md` artifact must exist with `verdict: PASS` before Build starts.
-- After Build phase: run `/phase-complete` to trigger peer review of the build. The `build-review.md` artifact must exist with `verdict: PASS` before Review starts.
+- **Plan agent**: run `/review-submit` once (advisory). A FAIL is logged as `plan-consult.md` but does not block Build entry. Proceed to `/phase-complete` regardless of verdict.
+- **Build agent**: run `/review-submit` to start the agent-driven review loop. On FAIL, address findings and resubmit. On PASS, proceed to `/phase-complete`. The `build-review.md` artifact must exist with `verdict: PASS` or approved bypass before the session can end.
 
-See `provider-collaboration-protocol.md` for the full protocol.
+See `review-loop.md` for the full protocol.
 
 ### Phase 2 — BUILD (Team Delegation)
 - **Model:** Fast (e.g., Sonnet) · **Effort:** Medium

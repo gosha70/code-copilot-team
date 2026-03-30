@@ -17,39 +17,23 @@ Peer review is enabled per-session via launcher flags:
 Environment variables set by launcher:
 - `CCT_PEER_REVIEW_ENABLED` — `true` or `false`.
 - `CCT_PEER_PROVIDER` — explicit provider name or empty (use profile default).
-- `CCT_PEER_TRIGGER` — `phase-complete` (only supported value).
+- `CCT_REVIEW_COMMITS` — commit strategy: `single`, `per-round`, or `squash` (default: `squash`).
+- `CCT_REVIEW_MAX_ROUNDS` — max review rounds before breaker (default: 5).
 
-## Trigger Semantics
+## Review Flow
 
-Peer review is triggered **only** by the `/phase-complete` command, not by every session stop.
+Peer review is **agent-driven** via `/review-submit`, not triggered by stop hooks.
 
-1. Developer runs `/phase-complete` at the end of a phase.
-2. Command writes `.cct/review/pending.json` with required fields.
-3. Stop hook checks for the marker and invokes the peer-review runner.
-4. Runner processes the marker, writes collaboration artifacts, then deletes/archives the marker.
+1. Build agent completes work, commits, and runs `/review-submit`.
+2. `/review-submit` invokes `review-round-runner.sh` which spawns a reviewer LLM in a read-only sandbox.
+3. Runner writes structured findings to `.cct/review/findings-round-N.json` and returns a verdict.
+4. On FAIL: agent addresses findings, commits fixes, and runs `/review-submit` again.
+5. On PASS: runner writes `loop-summary.json` and collaboration artifact. Agent proceeds to `/phase-complete`.
+6. On BREAKER: runner writes `breaker-tripped.json`. Agent stops. Human runs `/review-decide`.
 
-The stop hook is a **consumer** of the marker, not a producer. Without a marker, the hook is a no-op.
+The stop hook (`peer-review-on-stop.sh`) **validates** that `loop-summary.json` exists with PASS or approved bypass — it does not initiate review. Plan-phase sessions are exempt.
 
-## Marker Contract
-
-Path: `.cct/review/pending.json` (project root).
-
-Required fields:
-- `feature_id` — matches `specs/<feature-id>/`
-- `phase` — `plan` or `build`
-- `target_ref` — git ref (branch or commit SHA)
-- `subject_provider` — the provider that did the work (e.g., `claude`)
-- `peer_provider` — the provider that will review (e.g., `codex`, or empty for profile default)
-- `review_scope` — `code`, `design`, or `both`
-- `request_id` — unique identifier (UUID or timestamp-based)
-- `requested_at` — ISO 8601 timestamp
-
-### Marker Lifecycle
-
-1. **Created** by `/phase-complete` command.
-2. **Consumed** by peer-review runner on stop hook.
-3. **Deleted or archived** after processing — success or fail.
-4. **Stale markers** (where `requested_at` is older than session start, or required keys are missing) are warned and skipped.
+See `review-loop.md` for the full loop protocol, finding schema, and circuit breaker details.
 
 ## Artifact Schema
 
@@ -80,13 +64,15 @@ target_ref: [git ref]
 
 ## Fail-Closed Runtime Rule
 
-When `CCT_PEER_REVIEW_ENABLED=true` and a valid marker exists:
-- The session blocks until the peer-review runner succeeds.
-- Runner failure (timeout, auth error, provider crash) blocks the stop event (exit 2).
+Build-phase review is enforced at two levels:
+1. **Agent manifest + /phase-complete**: the Build agent must run `/review-submit` and receive PASS before `/phase-complete` proceeds.
+2. **Stop hook**: validates `loop-summary.json` exists with PASS or approved bypass. Blocks session stop (exit 2) if review started but did not complete.
+
+Plan-phase review is **advisory** — FAIL is logged but does not block Build entry or session stop.
 
 ### Local Escape Hatch
 
-- Set `CCT_PEER_BYPASS=true` or run with `--peer-review-off` to unblock the session.
+- Set `CCT_PEER_BYPASS=true` or run with `--peer-review-off` to skip review validation.
 - Bypass events are logged in artifact metadata (`bypass: true`).
 - CI rejects PRs with bypass artifacts — local bypass does not circumvent merge gates.
 

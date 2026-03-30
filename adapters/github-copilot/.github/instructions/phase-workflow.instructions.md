@@ -74,7 +74,7 @@ When existing functionality is removed or replaced during a phase (e.g., replaci
 
 9. **Wait for approval.** Do not start the next phase until the user confirms this one is complete.
 
-10. **Phase-complete signal (dual mode).** If `collaboration_mode: dual` in `plan.md` **OR** the environment variable `CCT_PEER_REVIEW_ENABLED` is `true`, run `/phase-complete` to write the peer-review marker before ending the phase. The stop hook will invoke the peer-review runner. See `provider-collaboration-protocol.md`. **This step is mandatory when peer review is active — do not skip it.**
+10. **Peer review (if active).** If `CCT_PEER_REVIEW_ENABLED` is `true`, the Build agent must complete the review loop via `/review-submit` before running `/phase-complete`. The stop hook validates that `loop-summary.json` exists with PASS or approved bypass — it does not initiate review. Plan-phase review is advisory and single-round. See `review-loop.md` for the full protocol.
 
 ## Phase 1 Checklist (Scaffolding)
 
