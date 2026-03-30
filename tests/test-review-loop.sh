@@ -65,6 +65,8 @@ setup_project() {
     local dir
     dir=$(mktemp -d)
     git -C "$dir" init -q
+    git -C "$dir" config user.email "test@test.local"
+    git -C "$dir" config user.name "Test"
     mkdir -p "$dir/.cct/review" "$dir/specs/test-feat"
     echo "# Plan" > "$dir/specs/test-feat/plan.md"
     echo ".cct/" > "$dir/.gitignore"
