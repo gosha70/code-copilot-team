@@ -261,9 +261,9 @@ CURSOR_RULES="$ADAPTERS/cursor/.cursor/rules"
 
 assert "cursor rules dir exists" "[[ -d '$CURSOR_RULES' ]]"
 
-# Verify 4 .mdc files (one per always-on rule)
+# Verify 5 .mdc files (4 always-on rules + review-loop on-demand)
 MDC_COUNT=$(ls "$CURSOR_RULES"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
-assert "exactly 4 .mdc files ($MDC_COUNT)" "[[ $MDC_COUNT -eq 4 ]]"
+assert "exactly 5 .mdc files ($MDC_COUNT)" "[[ $MDC_COUNT -eq 5 ]]"
 
 assert "coding-standards.mdc exists" "[[ -f '$CURSOR_RULES/coding-standards.mdc' ]]"
 assert "copilot-conventions.mdc exists" "[[ -f '$CURSOR_RULES/copilot-conventions.mdc' ]]"
@@ -373,7 +373,7 @@ bash "$CURSOR_SETUP" "$CURSOR_TMP" >/dev/null 2>&1
 CURSOR_INSTALL_RC=$?
 assert "cursor install exits 0" "[[ $CURSOR_INSTALL_RC -eq 0 ]]"
 INSTALLED_MDC=$(ls "$CURSOR_TMP/.cursor/rules"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
-assert "cursor installed 4 .mdc files ($INSTALLED_MDC)" "[[ $INSTALLED_MDC -eq 4 ]]"
+assert "cursor installed 5 .mdc files ($INSTALLED_MDC)" "[[ $INSTALLED_MDC -eq 5 ]]"
 rm -rf "$CURSOR_TMP"
 
 # ── Section 16: GitHub Copilot setup.sh install test ──────
