@@ -793,6 +793,10 @@ grep -Eq "test-peer-review\\.sh[[:space:]]+${TEST_PEER_REVIEW_EXPECTED_PASS} pee
 assert_ok "README lists ${TEST_PEER_REVIEW_EXPECTED_PASS} peer-review runner tests" "$rc"
 
 rc=0
+grep -Eq "test-review-loop\\.sh[[:space:]]+${TEST_REVIEW_LOOP_EXPECTED_PASS} review loop integration tests" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists ${TEST_REVIEW_LOOP_EXPECTED_PASS} review loop integration tests" "$rc"
+
+rc=0
 grep -Eq "docs/[[:space:]]+${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists ${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$rc"
 
@@ -944,8 +948,12 @@ rc=0
 grep -Eq '^TEST_PEER_REVIEW_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
 assert_ok "test-counts has TEST_PEER_REVIEW_EXPECTED_PASS numeric value" "$rc"
 
+rc=0
+grep -Eq '^TEST_REVIEW_LOOP_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
+assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
+
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
-assert_eq "test-counts has exactly 5 expected-pass variables" "5" "$COUNT_VARS"
+assert_eq "test-counts has exactly 6 expected-pass variables" "6" "$COUNT_VARS"
 
 rc=0
 grep -q 'source "\$COUNTS_FILE"' "$REPO_DIR/tests/test-generate.sh" || rc=1
@@ -964,6 +972,10 @@ grep -q 'source "\$COUNTS_FILE"' "$REPO_DIR/tests/test-peer-review.sh" || rc=1
 assert_ok "test-peer-review sources count contract" "$rc"
 
 rc=0
+grep -q 'source "\$COUNTS_FILE"' "$REPO_DIR/tests/test-review-loop.sh" || rc=1
+assert_ok "test-review-loop sources count contract" "$rc"
+
+rc=0
 grep -q 'TEST_GENERATE_EXPECTED_PASS' "$REPO_DIR/tests/test-generate.sh" || rc=1
 assert_ok "test-generate uses expected-pass variable" "$rc"
 
@@ -978,6 +990,10 @@ assert_ok "test-shared-structure uses expected-pass variable" "$rc"
 rc=0
 grep -q 'TEST_PEER_REVIEW_EXPECTED_PASS' "$REPO_DIR/tests/test-peer-review.sh" || rc=1
 assert_ok "test-peer-review uses expected-pass variable" "$rc"
+
+rc=0
+grep -q 'TEST_REVIEW_LOOP_EXPECTED_PASS' "$REPO_DIR/tests/test-review-loop.sh" || rc=1
+assert_ok "test-review-loop uses expected-pass variable" "$rc"
 
 # ══════════════════════════════════════════════════════════════
 # 20. CONTRIBUTING governance references
@@ -1083,6 +1099,10 @@ assert_ok "sync-check runs test-shared-structure.sh" "$rc"
 rc=0
 grep -q 'bash tests/test-peer-review.sh' "$WORKFLOW_FILE" || rc=1
 assert_ok "sync-check runs test-peer-review.sh" "$rc"
+
+rc=0
+grep -q 'bash tests/test-review-loop.sh' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check runs test-review-loop.sh" "$rc"
 
 rc=0
 grep -q 'bash scripts/generate.sh' "$WORKFLOW_FILE" || rc=1

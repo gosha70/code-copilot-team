@@ -85,6 +85,9 @@ jobs:
       - name: Run peer-review runner tests
         run: bash tests/test-peer-review.sh
 
+      - name: Run review loop integration tests
+        run: bash tests/test-review-loop.sh
+
       - name: Run shared structure tests
         env:
           HOME: ${{ runner.temp }}/cct-home
