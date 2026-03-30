@@ -220,9 +220,13 @@ build_run_cmd_string() {
     local run_cmd=""
 
     if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
-        printf -v run_cmd 'env CCT_PEER_REVIEW_ENABLED=true CCT_PEER_PROVIDER=%q CCT_PEER_TRIGGER=phase-complete CCT_PEER_REVIEW_SCOPE=%q CCT_SESSION_START=%q %q' \
+        local extra_env=""
+        [[ -n "${REVIEW_MAX_ROUNDS:-}" ]] && printf -v extra_env 'CCT_REVIEW_MAX_ROUNDS=%q ' "$REVIEW_MAX_ROUNDS"
+        printf -v run_cmd 'env CCT_PEER_REVIEW_ENABLED=true CCT_PEER_PROVIDER=%q CCT_PEER_TRIGGER=phase-complete CCT_PEER_REVIEW_SCOPE=%q CCT_REVIEW_COMMITS=%q %sCCT_SESSION_START=%q %q' \
             "${PEER_PROVIDER:-}" \
             "$PEER_SCOPE" \
+            "$REVIEW_COMMITS" \
+            "$extra_env" \
             "$session_start" \
             "$CLAUDE_CMD"
     else
@@ -307,13 +311,16 @@ exec_claude_in_current_shell() {
     shell_bin=$(resolve_shell_bin)
 
     if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
-        exec env \
-            CCT_PEER_REVIEW_ENABLED=true \
-            CCT_PEER_PROVIDER="${PEER_PROVIDER:-}" \
-            CCT_PEER_TRIGGER=phase-complete \
-            CCT_PEER_REVIEW_SCOPE="$PEER_SCOPE" \
-            CCT_SESSION_START="$session_start" \
-            "$CLAUDE_CMD"
+        local env_args=(
+            CCT_PEER_REVIEW_ENABLED=true
+            CCT_PEER_PROVIDER="${PEER_PROVIDER:-}"
+            CCT_PEER_TRIGGER=phase-complete
+            CCT_PEER_REVIEW_SCOPE="$PEER_SCOPE"
+            CCT_REVIEW_COMMITS="$REVIEW_COMMITS"
+            CCT_SESSION_START="$session_start"
+        )
+        [[ -n "${REVIEW_MAX_ROUNDS:-}" ]] && env_args+=(CCT_REVIEW_MAX_ROUNDS="$REVIEW_MAX_ROUNDS")
+        exec env "${env_args[@]}" "$CLAUDE_CMD"
     fi
 
     exec "$CLAUDE_CMD"
@@ -495,6 +502,8 @@ OPTIONS:
     --peer-review [name] Enable peer review (optional: specify provider)
     --peer-review-off    Disable peer review for this session
     --peer-review-scope <scope>  Review scope: code|design|both (default: both)
+    --review-commits <mode>  Commit strategy: single|per-round|squash (default: squash)
+    --review-max-rounds <n>  Max review rounds before breaker (default: 5)
     --continue, -c       Continue the most recent Claude session
     --resume, -r         Resume a named session (interactive picker)
     --shell <auto|cmux|tmux>  Session backend (default: auto)
@@ -1121,6 +1130,8 @@ LICENSE_TYPE=""
 PEER_REVIEW_ENABLED=""
 PEER_PROVIDER=""
 PEER_SCOPE="both"
+REVIEW_COMMITS="squash"
+REVIEW_MAX_ROUNDS=""
 CLAUDE_ARGS=()
 POSITIONAL=()
 
@@ -1149,6 +1160,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --peer-review-scope)
             PEER_SCOPE="${2:-both}"
+            shift 2
+            ;;
+        --review-commits)
+            REVIEW_COMMITS="${2:-squash}"
+            case "$REVIEW_COMMITS" in
+                single|per-round|squash) ;;
+                *) echo "Error: --review-commits must be single, per-round, or squash"; exit 1 ;;
+            esac
+            shift 2
+            ;;
+        --review-max-rounds)
+            REVIEW_MAX_ROUNDS="${2:?--review-max-rounds requires a number}"
+            if ! [[ "$REVIEW_MAX_ROUNDS" =~ ^[0-9]+$ ]]; then
+                echo "Error: --review-max-rounds must be a positive integer, got '$REVIEW_MAX_ROUNDS'"
+                exit 1
+            fi
             shift 2
             ;;
         --shell)

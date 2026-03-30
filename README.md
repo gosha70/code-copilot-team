@@ -178,11 +178,11 @@ cd ~/projects/existing-app && claude-code --peer-review
 
 2. **Work normally** through the Plan → Build phases. Claude detects `CCT_PEER_REVIEW_ENABLED=true` in the environment and sets `collaboration_mode: dual` in the SDD plan.
 
-3. **Run `/phase-complete`** when a phase is done — this creates the review marker (`.cct/review/pending.json`). The phase-workflow rules instruct Claude to run this command at phase boundaries when peer review is active, but you can also run it manually at any time.
+3. **Run `/review-submit`** after completing work — the Build agent runs this to start the review loop. The runner spawns a reviewer LLM in a read-only sandbox, captures structured findings, and returns a verdict. On FAIL, the agent addresses findings and resubmits. On PASS, proceed to `/phase-complete`.
 
-4. **Peer review executes on stop** — when Claude stops responding, the `peer-review-on-stop.sh` hook detects the marker, invokes the peer provider via `peer-review-runner.sh`, and writes a collaboration artifact to `specs/<feature-id>/collaboration/`.
+4. **Run `/phase-complete`** when review passes — validates that `loop-summary.json` exists, runs the post-phase checklist, and presents the commit for approval.
 
-5. **Review the artifact** — the collaboration artifact contains the peer's findings with a verdict (`PASS`, `FAIL`, `INCONCLUSIVE`) and structured feedback.
+5. **Review the artifact** — the collaboration artifact (`build-review.md` or `plan-consult.md`) is written to `specs/<feature-id>/collaboration/` with structured findings and a verdict.
 
 ### Provider Profile
 
@@ -211,10 +211,11 @@ Every provider currently requires a `command` template with `{review_request}` a
 
 ### Safety Model
 
-- **Fail-closed** — if the peer review runner fails, the session blocks (exit 2). This prevents unreviewed work from proceeding silently.
-- **Escape hatch** — set `CCT_PEER_BYPASS=true` to skip a stuck review. CI rejects bypass artifacts.
-- **Staleness check** — markers from previous sessions are ignored (compared via `requested_at` vs `CCT_SESSION_START`).
-- **Identity tracking** — collaboration artifacts include `peer_profile` (provider name) and `runner_fingerprint` (SHA-256 of command template) for auditability.
+- **Fail-closed** — enforced at two levels: (1) `/phase-complete` requires `loop-summary.json` with PASS or bypass before proceeding, (2) the stop hook blocks session end if review was started but not completed (exit 2). If review was never started, the hook warns but does not block.
+- **Circuit breakers** — max rounds (default 5), wall-clock timeout (15 min), stale findings, provider unavailability. All escalate to human via `/review-decide`.
+- **Read-only sandbox** — reviewer runs in a snapshot copy; real working tree is never modified by the reviewer.
+- **Escape hatch** — set `CCT_PEER_BYPASS=true` to skip validation. CI rejects bypass artifacts.
+- **Identity tracking** — collaboration artifacts include `peer_profile` (provider name) and `runner_fingerprint` (SHA-256 of provider config) for auditability.
 
 ### Collaboration Modes
 
@@ -416,7 +417,7 @@ code-copilot-team/
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   └── setup.sh                         Unified install entry point
 ├── tests/
-│   ├── test-hooks.sh                    188 hook tests
+│   ├── test-hooks.sh                    186 hook tests
 │   ├── test-generate.sh                 273 generation + adapter tests
 │   ├── test-shared-structure.sh         659 structure + content tests
 │   ├── test-sync.sh                     61 sync + init metadata tests

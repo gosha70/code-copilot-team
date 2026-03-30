@@ -304,75 +304,61 @@ assert_exit "disabled empty input" 0 "$RC"
 RC=$(run_hook peer-review-on-stop.sh 'not json' CCT_PEER_REVIEW_ENABLED=false)
 assert_exit "disabled invalid JSON" 0 "$RC"
 
-RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR=/tmp)
-assert_exit "enabled but no marker" 0 "$RC"
-
-RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR=/nonexistent)
-assert_exit "enabled but nonexistent dir" 0 "$RC"
-
-# --- Malformed marker cleanup ---
+# --- No review state at all → allowed (review never started) ---
 PEER_TMP=$(mktemp -d)
-mkdir -p "$PEER_TMP/.cct/review"
-echo '{"feature_id":"test"}' > "$PEER_TMP/.cct/review/pending.json"
 RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP")
-assert_exit "malformed marker (missing keys) exits 0" 0 "$RC"
-if [[ ! -f "$PEER_TMP/.cct/review/pending.json" ]]; then
-    echo "  PASS: malformed marker cleaned up"
-    PASS=$((PASS + 1))
-else
-    echo "  FAIL: malformed marker NOT cleaned up"
-    FAIL=$((FAIL + 1))
-fi
+assert_exit "no review state → allowed" 0 "$RC"
 rm -rf "$PEER_TMP"
 
-# --- Stale marker cleanup ---
+# --- Build phase: no loop-summary → blocks (exit 2) ---
 PEER_TMP=$(mktemp -d)
 mkdir -p "$PEER_TMP/.cct/review"
-cat > "$PEER_TMP/.cct/review/pending.json" << 'STALE_EOF'
-{"feature_id":"test","phase":"build","target_ref":"main","subject_provider":"claude","requested_at":"2020-01-01T00:00:00Z"}
-STALE_EOF
-RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP" CCT_SESSION_START="2026-01-01T00:00:00Z")
-assert_exit "stale marker exits 0" 0 "$RC"
-if [[ ! -f "$PEER_TMP/.cct/review/pending.json" ]]; then
-    echo "  PASS: stale marker cleaned up"
-    PASS=$((PASS + 1))
-else
-    echo "  FAIL: stale marker NOT cleaned up"
-    FAIL=$((FAIL + 1))
-fi
+echo '{"phase":"build"}' > "$PEER_TMP/.cct/review/state.json"
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP")
+assert_exit "build phase no summary → blocked" 2 "$RC"
 rm -rf "$PEER_TMP"
 
-# --- Bypass cleans up marker ---
+# --- Build phase: PASS summary → allowed ---
 PEER_TMP=$(mktemp -d)
 mkdir -p "$PEER_TMP/.cct/review"
-cat > "$PEER_TMP/.cct/review/pending.json" << 'BYPASS_EOF'
-{"feature_id":"test","phase":"build","target_ref":"main","subject_provider":"claude","requested_at":"2026-03-09T00:00:00Z"}
-BYPASS_EOF
-RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP" CCT_PEER_BYPASS=true CCT_SESSION_START="2026-01-01T00:00:00Z")
-assert_exit "bypass exits 0" 0 "$RC"
-if [[ ! -f "$PEER_TMP/.cct/review/pending.json" ]]; then
-    echo "  PASS: bypass marker cleaned up"
-    PASS=$((PASS + 1))
-else
-    echo "  FAIL: bypass marker NOT cleaned up"
-    FAIL=$((FAIL + 1))
-fi
+echo '{"phase":"build"}' > "$PEER_TMP/.cct/review/state.json"
+echo '{"verdict":"PASS","bypass":false}' > "$PEER_TMP/.cct/review/loop-summary.json"
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP")
+assert_exit "build phase PASS summary → allowed" 0 "$RC"
 rm -rf "$PEER_TMP"
 
-# --- Valid marker but no runner → fail-closed (exit 2) ---
+# --- Build phase: bypass summary → allowed ---
 PEER_TMP=$(mktemp -d)
 mkdir -p "$PEER_TMP/.cct/review"
-cat > "$PEER_TMP/.cct/review/pending.json" << 'VALID_EOF'
-{"feature_id":"test","phase":"build","target_ref":"main","subject_provider":"claude","requested_at":"2026-03-09T00:00:00Z"}
-VALID_EOF
-# Override PATH so runner is not found, clear HOME so ~/.local/bin isn't checked
-RC=$(printf '{"stop_hook_active":false}' | env CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP" CCT_SESSION_START="2026-01-01T00:00:00Z" HOME=/nonexistent PATH=/usr/bin:/bin bash "$HOOKS_DIR/peer-review-on-stop.sh" >/dev/null 2>/dev/null || echo $?)
-# If jq is not in /usr/bin or /bin, hook exits 0 (jq guard); otherwise exit 2 (no runner)
-if command -v /usr/bin/jq &>/dev/null || command -v /bin/jq &>/dev/null; then
-    assert_exit "valid marker no runner → fail-closed" 2 "$RC"
-else
-    assert_exit "valid marker no jq → jq guard" 0 "$RC"
-fi
+echo '{"phase":"build"}' > "$PEER_TMP/.cct/review/state.json"
+echo '{"verdict":"FAIL","bypass":true}' > "$PEER_TMP/.cct/review/loop-summary.json"
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP")
+assert_exit "build phase bypass summary → allowed" 0 "$RC"
+rm -rf "$PEER_TMP"
+
+# --- Build phase: FAIL summary without bypass → blocked ---
+PEER_TMP=$(mktemp -d)
+mkdir -p "$PEER_TMP/.cct/review"
+echo '{"phase":"build"}' > "$PEER_TMP/.cct/review/state.json"
+echo '{"verdict":"FAIL","bypass":false}' > "$PEER_TMP/.cct/review/loop-summary.json"
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP")
+assert_exit "build phase FAIL no bypass → blocked" 2 "$RC"
+rm -rf "$PEER_TMP"
+
+# --- Plan phase: exempt (no state) ---
+PEER_TMP=$(mktemp -d)
+mkdir -p "$PEER_TMP/.cct/review"
+echo '{"phase":"plan"}' > "$PEER_TMP/.cct/review/state.json"
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP")
+assert_exit "plan phase exempt" 0 "$RC"
+rm -rf "$PEER_TMP"
+
+# --- Bypass env var ---
+PEER_TMP=$(mktemp -d)
+mkdir -p "$PEER_TMP/.cct/review"
+echo '{"phase":"build"}' > "$PEER_TMP/.cct/review/state.json"
+RC=$(run_hook peer-review-on-stop.sh '{"stop_hook_active":false}' CCT_PEER_REVIEW_ENABLED=true CLAUDE_PROJECT_DIR="$PEER_TMP" CCT_PEER_BYPASS=true)
+assert_exit "bypass env var → allowed" 0 "$RC"
 rm -rf "$PEER_TMP"
 
 echo ""

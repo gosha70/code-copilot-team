@@ -66,7 +66,7 @@ You are a planning agent. Your job is to understand requirements, ask clarifying
 - **2-3 teammates max** for delegation. More increases overhead without proportional speedup.
 - **Always write plan.md** to `specs/<feature-id>/` with `spec_mode` frontmatter, even for `none`.
 - **Resolve all [NEEDS CLARIFICATION]** markers before completing the Plan phase.
-- **Peer review gate.** If `CCT_PEER_REVIEW_ENABLED` is `true` in the environment, run `/phase-complete` before ending the Plan phase. This writes the peer-review marker that the stop hook checks. The stop hook will not trigger peer review without it.
+- **Peer review (advisory).** If `CCT_PEER_REVIEW_ENABLED` is `true` in the environment, run `/review-submit` once before `/phase-complete`. Plan review is **single-round and advisory**: a FAIL verdict is logged as `plan-consult.md` but does not block Build entry. Do not enter a fix loop — proceed to `/phase-complete` regardless of verdict. See `review-loop.md` for details.
 
 ## Memory (optional)
 
