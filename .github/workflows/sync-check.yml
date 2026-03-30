@@ -96,6 +96,14 @@ jobs:
           bash adapters/claude-code/setup.sh
           bash tests/test-shared-structure.sh
 
+      - name: Validate collaboration artifacts
+        run: |
+          if [[ -d specs/ ]]; then
+            bash scripts/validate-collaboration.sh
+          else
+            echo "No specs/ directory; skipping collaboration validation"
+          fi
+
       - name: Validate spec conformance
         run: |
           if [[ -d specs/ ]] && ls specs/*/plan.md >/dev/null 2>&1; then

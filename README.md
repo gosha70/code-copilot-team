@@ -397,7 +397,7 @@ code-copilot-team/
 ├── shared/                              ← Single source of truth
 │   ├── rules/always/                    4 global rules (always loaded)
 │   ├── rules/on-demand/                 14 rules loaded by phase agents
-│   ├── docs/                            7 tool-agnostic reference docs
+│   ├── docs/                            8 tool-agnostic reference docs
 │   ├── templates/                       9 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
 │   └── templates/provider-profile-template.toml  Peer provider profile seed
@@ -419,7 +419,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
 │   ├── test-generate.sh                 273 generation + adapter tests
-│   ├── test-shared-structure.sh         664 structure + content tests
+│   ├── test-shared-structure.sh         666 structure + content tests
 │   ├── test-sync.sh                     61 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   └── test-review-loop.sh            31 review loop integration tests
@@ -450,6 +450,7 @@ Rule content is written once in `shared/` and adapted per tool via `scripts/gene
 - **[Delegation Best Practices](shared/docs/delegation-best-practices.md)** — when and how to delegate to agents
 - **[Ralph Loop Guide](shared/docs/ralph-loop-guide.md)** — Ralph Loop usage and configuration
 - **[Session Management](shared/docs/session-management.md)** — session commands cheat sheet
+- **[Code Reviewer Assistant Guide](shared/docs/code-reviewer-assistant-guide.md)** — peer review setup, commands, and safety model
 - **[Error Reporting Template](shared/docs/error-reporting-template.md)** — standardized format for bug reports
 - **[Phase Recap Template](shared/docs/phase-recap-template.md)** — end-of-phase handoff checklist
 

@@ -169,6 +169,7 @@ assert_dir_exists "shared/docs/ exists" "$SHARED_DIR/docs"
 
 DOCS_FILES=(
   alignment-maintenance.md
+  code-reviewer-assistant-guide.md
   common-pitfalls.md
   delegation-best-practices.md
   error-reporting-template.md
@@ -176,7 +177,7 @@ DOCS_FILES=(
   ralph-loop-guide.md
   session-management.md
 )
-DOCS_EXPECTED_COUNT=7
+DOCS_EXPECTED_COUNT=8
 
 for f in "${DOCS_FILES[@]}"; do
   assert_file_exists "$f exists" "$SHARED_DIR/docs/$f"
