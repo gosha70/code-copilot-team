@@ -105,6 +105,39 @@ for f in "$SHARED/always"/*.md; do
   } > "$CURSOR_RULES/$name.mdc"
 done
 
+# Add review-loop advisory as an on-demand cursor rule
+if [[ -f "$SHARED/on-demand/review-loop.md" ]]; then
+  {
+    echo "---"
+    echo "description: \"Peer review protocol — advisory overview for non-Claude tools\""
+    echo "alwaysApply: false"
+    echo "---"
+    echo ""
+    cat << 'REVIEW_ADVISORY'
+# Peer Review Protocol (Advisory)
+
+When peer review is enabled (`CCT_PEER_REVIEW_ENABLED=true`), an external reviewer LLM evaluates work produced by the primary copilot. The review system is managed by `review-round-runner.sh` and produces structured findings.
+
+## Key Concepts
+
+- **Agent-driven loop**: the primary session submits work for review, receives findings, addresses them, and resubmits until the reviewer passes or a circuit breaker fires.
+- **Read-only sandbox**: the reviewer runs in a snapshot copy and cannot modify the real working tree.
+- **Structured findings**: each finding has a stable ID, severity (blocking/warning/note), category, and suggested fix.
+- **Circuit breakers**: max rounds (default 5), wall-clock timeout (15 min), stale findings, provider unavailability — all escalate to human decision.
+- **Plan review is advisory**: a FAIL verdict on plan artifacts is logged but does not block the build phase.
+- **Build review is gating**: PASS or an approved bypass is required before the phase can complete.
+
+## Collaboration Artifacts
+
+Review results are written to `specs/<feature-id>/collaboration/`:
+- `build-review.md` — build phase review (PASS or bypass required)
+- `plan-consult.md` — plan phase advisory review
+
+See `shared/rules/on-demand/review-loop.md` for the full protocol. The review commands (`/review-submit`, `/review-decide`) are currently implemented in the Claude Code adapter only.
+REVIEW_ADVISORY
+  } > "$CURSOR_RULES/review-loop.mdc"
+fi
+
 CURSOR_COUNT=$(ls "$CURSOR_RULES"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
 echo "[cursor] Generated $CURSOR_COUNT .mdc files"
 
@@ -181,6 +214,33 @@ mkdir -p "$WINDSURF_RULES"
     echo "---"
     echo ""
   done
+
+  # Append tool-agnostic peer-review advisory
+  if [[ -f "$SHARED/on-demand/review-loop.md" ]]; then
+    cat << 'REVIEW_ADVISORY'
+# Peer Review Protocol (Advisory)
+
+When peer review is enabled (`CCT_PEER_REVIEW_ENABLED=true`), an external reviewer LLM evaluates work produced by the primary copilot. The review system is managed by `review-round-runner.sh` and produces structured findings.
+
+## Key Concepts
+
+- **Agent-driven loop**: the primary session submits work for review, receives findings, addresses them, and resubmits until the reviewer passes or a circuit breaker fires.
+- **Read-only sandbox**: the reviewer runs in a snapshot copy and cannot modify the real working tree.
+- **Structured findings**: each finding has a stable ID, severity (blocking/warning/note), category, and suggested fix.
+- **Circuit breakers**: max rounds (default 5), wall-clock timeout (15 min), stale findings, provider unavailability — all escalate to human decision.
+- **Plan review is advisory**: a FAIL verdict on plan artifacts is logged but does not block the build phase.
+- **Build review is gating**: PASS or an approved bypass is required before the phase can complete.
+
+## Collaboration Artifacts
+
+Review results are written to `specs/<feature-id>/collaboration/`:
+- `build-review.md` — build phase review (PASS or bypass required)
+- `plan-consult.md` — plan phase advisory review
+
+See `shared/rules/on-demand/review-loop.md` for the full protocol. The review commands (`/review-submit`, `/review-decide`) are currently implemented in the Claude Code adapter only.
+REVIEW_ADVISORY
+    echo ""
+  fi
 } > "$WINDSURF_RULES/rules.md"
 
 echo "[windsurf] Generated rules.md"
@@ -204,6 +264,33 @@ mkdir -p "$AIDER_DIR"
     echo "---"
     echo ""
   done
+
+  # Append tool-agnostic peer-review advisory
+  if [[ -f "$SHARED/on-demand/review-loop.md" ]]; then
+    cat << 'REVIEW_ADVISORY'
+# Peer Review Protocol (Advisory)
+
+When peer review is enabled (`CCT_PEER_REVIEW_ENABLED=true`), an external reviewer LLM evaluates work produced by the primary copilot. The review system is managed by `review-round-runner.sh` and produces structured findings.
+
+## Key Concepts
+
+- **Agent-driven loop**: the primary session submits work for review, receives findings, addresses them, and resubmits until the reviewer passes or a circuit breaker fires.
+- **Read-only sandbox**: the reviewer runs in a snapshot copy and cannot modify the real working tree.
+- **Structured findings**: each finding has a stable ID, severity (blocking/warning/note), category, and suggested fix.
+- **Circuit breakers**: max rounds (default 5), wall-clock timeout (15 min), stale findings, provider unavailability — all escalate to human decision.
+- **Plan review is advisory**: a FAIL verdict on plan artifacts is logged but does not block the build phase.
+- **Build review is gating**: PASS or an approved bypass is required before the phase can complete.
+
+## Collaboration Artifacts
+
+Review results are written to `specs/<feature-id>/collaboration/`:
+- `build-review.md` — build phase review (PASS or bypass required)
+- `plan-consult.md` — plan phase advisory review
+
+See `shared/rules/on-demand/review-loop.md` for the full protocol. The review commands (`/review-submit`, `/review-decide`) are currently implemented in the Claude Code adapter only.
+REVIEW_ADVISORY
+    echo ""
+  fi
 } > "$AIDER_DIR/CONVENTIONS.md"
 
 echo "[aider] Generated CONVENTIONS.md"
