@@ -20,7 +20,7 @@ Applied to all code generation and review sessions.
 ## Prohibited Patterns
 
 - No hard-coded structured data (JSON/XML literals) inside source — use config files or env vars.
-- No magic numbers or strings — use named constants.
+- No magic numbers or strings — use named constants. When a string key crosses a module boundary (config key, variable name, prompt template name), define it as a constant in the lowest common ancestor package and import it everywhere. A hardcoded string in two modules is a silent breakage waiting to happen.
 - No secrets in source — use env vars or a secrets manager.
 - No print() debugging in committed code — use structured logging.
 - No wildcard imports.
@@ -32,6 +32,13 @@ Applied to all code generation and review sessions.
 - **Never suggest skipping a failing verification step.** When a test, build, lint check, Docker build, or script execution fails, diagnose and fix the issue. Do not suggest workarounds that bypass the deliverable.
 - **Execute your own test plan.** If you write test commands (curl, bash, docker, etc.) as part of a build summary, run every command yourself and report results before declaring done.
 - **Build it, run it.** Any executable artifact you create (Dockerfile, shell script, CI workflow, launcher flag) must be executed at least once before committing. Syntax validity alone is not sufficient.
+- **Re-review after fix.** After applying a fix for a bug flagged in code review or a reviewer note, run the review process again (e.g., `/team-review` or the equivalent specialist agent) before declaring done. Do not just apply the fix and move on — the re-review may catch secondary issues exposed by the fix itself.
+
+## Never Fix Bugs by Regressing Features
+
+- **Never disable, suppress, or remove an existing feature to fix a bug in that feature.** If a feature shows wrong data, fix the data source — do not hide the feature. If a dropdown shows wrong items, fix the query — do not add `autoComplete="off"` or remove the dropdown.
+- **Understand the feature before changing it.** When encountering a bug in existing functionality, first investigate how the feature works: what data it uses, where it gets its state, how it was built. Fix the root cause, not the symptom.
+- **If unsure how a feature works, ask.** The user may have spent significant effort building it. Suppressing it is a regression bug, not a fix.
 
 ---
 
@@ -47,6 +54,7 @@ These conventions ensure consistent behaviour regardless of which AI tool is dri
 3. Show your work — explain changes, provide diffs.
 4. Test everything — run linters and tests after code changes.
 5. Ask when uncertain — do not guess at ambiguous requirements.
+6. Verify before diagnosing — when asked to fix a reported bug, re-run the failing test or reproduce the symptom first. The issue may already be fixed. Do not spend time diagnosing a problem that no longer exists.
 
 ## Single Source of Truth
 
@@ -189,6 +197,17 @@ Non-negotiable safety constraints for all sessions.
 - Any deployment or publish action.
 - Any command that modifies production data.
 - Any command with side effects outside the working directory.
+
+## Blocked Operations — Stop, Don't Improvise
+
+When the normal path for an operation is blocked (lock files, permission errors, sandbox restrictions), the correct response is to **stop and explain the blockage to the user** — not to improvise a workaround using low-level flags or environment variables.
+
+Specific prohibitions:
+- Never set `GIT_INDEX_FILE`, `GIT_DIR`, or other git environment variables to route around lock files or index problems.
+- Never use `--no-verify`, `--no-gpg-sign`, or similar flags to bypass pre-commit hooks or signing unless the user explicitly requests it.
+- Never bypass sandbox restrictions, file permission checks, or process locks by manipulating environment variables or creating alternate state files.
+
+**Why:** A real incident demonstrated this failure mode — using `GIT_INDEX_FILE` to bypass `.git/index.lock` created a commit with an empty tree that appeared to delete every file in the repository. The copilot pattern-matched "bypass the lock" without reasoning about the consequence (an empty alternate index). The correct move was to explain that the lock file was blocking the commit and ask the user to remove it.
 
 ## Secrets & Credentials
 
