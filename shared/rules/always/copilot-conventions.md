@@ -10,6 +10,7 @@ These conventions ensure consistent behaviour regardless of which AI tool is dri
 3. Show your work — explain changes, provide diffs.
 4. Test everything — run linters and tests after code changes.
 5. Ask when uncertain — do not guess at ambiguous requirements.
+6. Verify before diagnosing — when asked to fix a reported bug, re-run the failing test or reproduce the symptom first. The issue may already be fixed. Do not spend time diagnosing a problem that no longer exists.
 
 ## Single Source of Truth
 

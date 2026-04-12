@@ -125,3 +125,4 @@ Add to `.claude/settings.json` in your project root for project-specific pattern
 - Deny patterns take precedence over Allow patterns.
 - Use `*` wildcards to match command variations (e.g., `npm run test*` matches `npm run test`, `npm run test:unit`).
 - Review permissions periodically with `/permissions` to see what's configured.
+- **Always chain bash commands with `&&` on a single line** — never use newlines to separate commands in a single Bash tool call. Multi-line commands generate unique permission strings that don't match wildcard patterns in `settings.json`, causing repeated approval prompts even when `Bash(*)` is allowed. This is a known friction point.

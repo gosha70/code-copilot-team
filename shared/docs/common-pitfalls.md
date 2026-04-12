@@ -47,6 +47,13 @@ Cross-cutting issues that arise during multi-agent builds, regardless of stack.
 | Auth route crashes | Missing auth dependencies | Install auth-related packages during setup | Check error logs, install missing packages |
 | SMTP/email fails | Using account password instead of app-specific password | Document credential setup requirements | Generate app-specific password per provider docs |
 
+## Bug Fixes That Are Actually Regressions
+
+| Issue | Root Cause | Prevention | Solution |
+|-------|-----------|-----------|----------|
+| Feature disabled as a "fix" | Copilot suppressed a feature (e.g., `autoComplete="off"` on a model dropdown) instead of fixing the data it displayed | Investigate the feature's implementation before changing it; fix the data source, not the UI element | Revert the suppression; trace the data flow to find the real bug (wrong API call, stale cache, missing filter) |
+| Bug fix causes silent regression | Changed behavior the user intentionally built without understanding its purpose | Read the feature code end-to-end before proposing a fix; ask if unsure | Revert the change; investigate root cause; re-apply a targeted fix |
+
 ## Testing & Validation
 
 | Issue | Root Cause | Prevention | Solution |
@@ -73,6 +80,14 @@ Cross-cutting issues that arise during multi-agent builds, regardless of stack.
 | Build fails in CI but passes locally | Different runtime versions | Pin versions in project config, use version manager | Align versions, add version config file |
 | Migrations fail in production | Database state diverged from expected | Never edit migrations manually after applying | Roll back, fix locally, push clean migration |
 | Secrets exposed in logs | Logging config values or sensitive data | Sanitize logs, never log secrets | Remove from logs, rotate exposed secrets |
+| Copilot improvises git workaround, corrupts index | Lock file blocked commit; copilot used `GIT_INDEX_FILE` to bypass, creating an empty-tree commit | Stop and explain when normal path is blocked — never improvise with low-level git env vars or flags | `git reset --hard origin/<branch>` after clearing lock files; review safety rules |
+
+## Config & DTO Wiring
+
+| Issue | Root Cause | Prevention | Solution |
+|-------|-----------|-----------|----------|
+| New config field ignored in some paths | Field added to DTO but not threaded to HTTP, WebSocket, create, and update routes | When adding a field to a config DTO, grep for every site that constructs or maps that DTO and update all of them | Audit all construction sites; add tests that assert new fields round-trip through every path |
+| Fallback path exposes raw internal data | Error/stall handler uses last model output as user-facing answer without sanitization | Add a guard (e.g., `_looks_like_internal()`) at every fallback that produces user-visible output | Check each fallback path; filter out raw JSON, stack traces, or protocol messages before returning |
 
 ## SDD Workflow
 
