@@ -19,7 +19,7 @@ Applied to all code generation and review sessions.
 
 ## Prohibited Patterns
 
-- No hard-coded structured data (JSON/XML literals) inside source — use config files or env vars.
+- No hard-coded structured data (JSON/XML literals) inside source — use config files or env vars. This includes default values on Python dataclasses/Pydantic models and equivalents in other languages — define only the schema in code; put actual defaults in `config/defaults.yaml` (or equivalent). A config loader reads the file and populates the schema; env vars or override files layer on top.
 - No magic numbers or strings — use named constants. When a string key crosses a module boundary (config key, variable name, prompt template name), define it as a constant in the lowest common ancestor package and import it everywhere. A hardcoded string in two modules is a silent breakage waiting to happen.
 - No secrets in source — use env vars or a secrets manager.
 - No print() debugging in committed code — use structured logging.
