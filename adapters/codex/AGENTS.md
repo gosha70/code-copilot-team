@@ -258,6 +258,7 @@ corresponding skill to apply them.
 | `infra-verification` | build |
 | `integration-testing` | review |
 | `memkernel-memory` | — |
+| `opus-4-7-features` | — |
 | `phase-workflow` | build |
 | `provider-collaboration-protocol` | — |
 | `ralph-loop` | build |

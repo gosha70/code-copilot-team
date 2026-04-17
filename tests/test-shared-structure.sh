@@ -141,11 +141,13 @@ ON_DEMAND_FILES=(
   infra-verification.md
   integration-testing.md
   memkernel-memory.md
+  opus-4-7-features.md
   phase-workflow.md
   provider-collaboration-protocol.md
   ralph-loop.md
-  stack-constraints.md
+  review-loop.md
   spec-workflow.md
+  stack-constraints.md
   team-lead-efficiency.md
   token-efficiency.md
 )
@@ -156,7 +158,7 @@ for f in "${ON_DEMAND_FILES[@]}"; do
 done
 
 ONDEMAND_COUNT=$(find "$SHARED_DIR/rules/on-demand" -name '*.md' | wc -l | tr -d ' ')
-assert_eq "exactly 14 on-demand rules" "14" "$ONDEMAND_COUNT"
+assert_eq "exactly 15 on-demand rules" "15" "$ONDEMAND_COUNT"
 
 # ══════════════════════════════════════════════════════════════
 # 3. shared/docs/ — tool-agnostic docs exist
@@ -806,8 +808,8 @@ grep -Eq "rules/always/[[:space:]]+4 global rules" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists 4 global always rules" "$rc"
 
 rc=0
-grep -Eq "rules/on-demand/[[:space:]]+14 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 14 on-demand rules" "$rc"
+grep -Eq "rules/on-demand/[[:space:]]+15 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 15 on-demand rules" "$rc"
 
 rc=0
 grep -Eq "templates/[[:space:]]+9 stacks" "$REPO_DIR/README.md" || rc=1

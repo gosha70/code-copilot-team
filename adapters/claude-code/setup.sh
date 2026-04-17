@@ -4,7 +4,7 @@
 # Creates:
 #   ~/.claude/CLAUDE.md                    Global configuration
 #   ~/.claude/rules/                       Global rules (auto-loaded, 4 files)
-#   ~/.claude/rules-library/               Rules library (on-demand, 13 files)
+#   ~/.claude/rules-library/               Rules library (on-demand, 15 files)
 #   ~/.claude/agents/                      Global agents (5 utility + 4 phase)
 #   ~/.claude/hooks/                       Global hook scripts (verify, notify)
 #   ~/.claude/settings.json                Global settings with hooks wired
@@ -153,7 +153,7 @@ if [[ "$SYNC_MODE" == "1" ]]; then
         echo "[done] Synced rules to $RULES_TARGET"
     fi
 
-    # Rules library (13 files) — from shared/rules/on-demand/
+    # Rules library (15 files) — from shared/rules/on-demand/
     LIBRARY_SOURCE="$SHARED_DIR/rules/on-demand"
     LIBRARY_TARGET="$CLAUDE_DIR/rules-library"
     mkdir -p "$LIBRARY_TARGET"
@@ -715,7 +715,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 11d. RULES LIBRARY (on-demand, 13 files) — from shared/rules/on-demand/
+# 11d. RULES LIBRARY (on-demand, 15 files) — from shared/rules/on-demand/
 # ══════════════════════════════════════════════════════════════
 
 LIBRARY_SOURCE="$SHARED_DIR/rules/on-demand"

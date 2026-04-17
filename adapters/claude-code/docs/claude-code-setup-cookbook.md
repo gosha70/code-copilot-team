@@ -96,9 +96,20 @@ shared\_architecture
 
 * *Low* — exploratory research (cheap, less reasoning)  
 * *Medium* — design reasoning \+ nuanced tasks  
-* *High* — full architectural work, agentic execution
+* *High* — full architectural work, agentic execution  
+* *Extra-high (`xhigh`)* — complex multi-file reasoning, deep architectural analysis (Opus 4.7+ only; other models fall back to `high`). Set with `/effort xhigh` or `"effortLevel": "xhigh"` in settings.
 
 This lets you trade token cost vs reasoning depth. ([Wikipedia](https://en.wikipedia.org/wiki/Claude_%28language_model%29?utm_source=chatgpt.com))
+
+**Prompt Caching — Extended TTL**
+
+By default, Claude Code uses a 5-minute prompt cache TTL. For long multi-phase sessions (30+ minutes with the same context), enable the 1-hour TTL:
+
+```bash
+export ENABLE_PROMPT_CACHING_1H=1
+```
+
+Or persist in `settings.json` via `"env": {"ENABLE_PROMPT_CACHING_1H": "1"}`. The 5-minute default is fine for short tasks.
 
 ---
 

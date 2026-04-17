@@ -126,3 +126,33 @@ Add to `.claude/settings.json` in your project root for project-specific pattern
 - Use `*` wildcards to match command variations (e.g., `npm run test*` matches `npm run test`, `npm run test:unit`).
 - Review permissions periodically with `/permissions` to see what's configured.
 - **Always chain bash commands with `&&` on a single line** — never use newlines to separate commands in a single Bash tool call. Multi-line commands generate unique permission strings that don't match wildcard patterns in `settings.json`, causing repeated approval prompts even when `Bash(*)` is allowed. This is a known friction point.
+
+## Reducing Friction (v2.1.111+)
+
+### Auto mode
+
+Auto mode uses a permission classifier instead of pattern matching — safe read-only actions run without interruption, risky ones get blocked. Activate with `Shift+Tab` to cycle to `auto` in the permission mode selector, or start with `--permission-mode auto`.
+
+Customize with the `autoMode` setting in `settings.json`:
+
+```json
+{
+  "autoMode": {
+    "environment": ["Trusted personal repo, no production access"],
+    "allow": ["Run tests", "Read any file"],
+    "soft_deny": ["Delete files", "Modify CI configuration"]
+  }
+}
+```
+
+Use auto mode in trusted repos where you are the sole developer. Avoid it on unfamiliar codebases or shared machines where you want to see each action before it runs.
+
+### `/less-permission-prompts`
+
+Run `/less-permission-prompts` after a few sessions — it scans your recent transcripts for common read-only Bash and MCP tool calls and proposes a prioritized allowlist for `.claude/settings.json`. Easier than building patterns manually.
+
+### Bash commands that no longer prompt
+
+As of v2.1.111, these no longer trigger permission prompts:
+- Read-only bash commands with glob patterns (e.g., `ls *.ts`)
+- Commands starting with `cd <project-dir> &&`
