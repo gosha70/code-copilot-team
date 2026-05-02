@@ -10,6 +10,7 @@ on:
       - 'scripts/check-github-hardening.sh'
       - 'scripts/harden-github.sh'
       - 'scripts/validate-spec.sh'
+      - 'scripts/validate-pitch.sh'
       - 'adapters/**'
       - 'docs/github-hardening-playbook.md'
       - 'CODE_OF_CONDUCT.md'
@@ -31,6 +32,7 @@ on:
       - 'scripts/check-github-hardening.sh'
       - 'scripts/harden-github.sh'
       - 'scripts/validate-spec.sh'
+      - 'scripts/validate-pitch.sh'
       - 'adapters/**'
       - 'docs/github-hardening-playbook.md'
       - 'CODE_OF_CONDUCT.md'
@@ -72,6 +74,7 @@ jobs:
           bash -n scripts/check-github-hardening.sh
           bash -n scripts/harden-github.sh
           bash -n scripts/validate-spec.sh
+          bash -n scripts/validate-pitch.sh
 
       - name: Run generation tests
         run: bash tests/test-generate.sh
@@ -110,4 +113,12 @@ jobs:
             bash scripts/validate-spec.sh --all
           else
             echo "No spec artifacts found; skipping validation"
+          fi
+
+      - name: Validate Shape-Up pitch conformance
+        run: |
+          if [[ -d specs/pitches/ ]] && ls specs/pitches/*/pitch.md >/dev/null 2>&1; then
+            bash scripts/validate-pitch.sh --all
+          else
+            echo "No Shape-Up pitches found; skipping pitch validation"
           fi

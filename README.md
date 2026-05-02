@@ -125,6 +125,16 @@ SDD rules propagate through the same `shared/ → generate.sh → adapters/` pip
 
 No additional setup required — SDD is active by default after installation.
 
+## Shape-Up (Product Bets)
+
+SDD answers *"how do we know we built the right thing?"* — Shape-Up answers *"what do we build next, and how big should it be?"* The two are complementary: a pitch describes the *bet*, SDD's plan/spec/tasks describe the *implementation* underneath one or more scopes of that pitch.
+
+Code Copilot Team ships a local-first Shape-Up implementation: pitches and hill charts as plain files under `specs/pitches/<id>/`, four agents (`pitch-shaper`, `scope-executor`, `cycle-retro`, `cooldown-report`), five slash commands (`/shape`, `/bet`, `/cycle-start`, `/hill`, `/cooldown`), and `validate-pitch.sh` enforcing frontmatter (appetite ∈ `{2w, 4w, 6w}`, bet_status lifecycle, cycle/circuit-breaker conditional rules) on every PR.
+
+Use Shape-Up for product-shaped work — greenfield, ambiguous problem space, multiple possible solutions, time-boxed bets. Use SDD alone for feature-shaped work where the requirement is clear.
+
+📖 **Full guide:** [docs/shape-up-workflow.md](docs/shape-up-workflow.md) — methodology, frontmatter schema, lifecycle diagram, agent reference, install surface, and a worked example.
+
 ## Peer Review (Multi-Copilot)
 
 Code Copilot Team supports **dual-copilot peer review** — a second AI provider automatically reviews your work at phase completion. This catches blind spots that a single provider misses, using the same structured collaboration protocol regardless of which providers are involved.

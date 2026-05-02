@@ -204,20 +204,34 @@ echo "=== Validating SDD spec conformance ==="
 echo ""
 
 if [[ "$MODE" == "single" ]]; then
-  if [[ ! -d "$SPECS_DIR/$FEATURE_ID" ]]; then
-    echo "  [FAIL] specs/$FEATURE_ID/ directory not found"
+  # --feature-id resolves to either a top-level spec dir or a nested pitch dir.
+  if [[ -d "$SPECS_DIR/$FEATURE_ID" ]]; then
+    validate_spec_dir "$SPECS_DIR/$FEATURE_ID"
+  elif [[ -d "$SPECS_DIR/pitches/$FEATURE_ID" ]]; then
+    validate_spec_dir "$SPECS_DIR/pitches/$FEATURE_ID"
+  else
+    echo "  [FAIL] specs/$FEATURE_ID/ or specs/pitches/$FEATURE_ID/ directory not found"
     exit 1
   fi
-  validate_spec_dir "$SPECS_DIR/$FEATURE_ID"
 else
   found=0
+  # Top-level spec dirs (existing behavior).
   for dir in "$SPECS_DIR"/*/; do
     [[ -d "$dir" ]] || continue
-    # Skip directories without plan.md (e.g. .DS_Store artifacts)
+    # Skip directories without plan.md (e.g. .DS_Store, the pitches/ container).
     [[ -f "$dir/plan.md" ]] || continue
     found=1
     validate_spec_dir "$dir"
   done
+  # Nested pitch dirs (additive — Shape-Up support, see specs/pitches/0001-shape-up-support/).
+  if [[ -d "$SPECS_DIR/pitches" ]]; then
+    for dir in "$SPECS_DIR/pitches"/*/; do
+      [[ -d "$dir" ]] || continue
+      [[ -f "$dir/plan.md" ]] || continue
+      found=1
+      validate_spec_dir "$dir"
+    done
+  fi
   if [[ "$found" -eq 0 ]]; then
     echo "No spec directories found in specs/"
     exit 0
