@@ -70,6 +70,34 @@ Don't ask about:
 
 The goal is to ask about decisions that affect **user-facing behavior** or **data model shape**, not about code internals.
 
+## "Let Claude Interview You" Pattern
+
+For larger features where you have a rough idea but haven't worked through the details, **invert the default clarification flow**: instead of you asking Claude questions, have Claude interview you.
+
+### When to use
+
+- New feature with non-trivial scope (multi-entity data model, several screens, cross-cutting concerns).
+- You have an end goal in mind but haven't decided the technical or UX details.
+- You'd rather think through tradeoffs in conversation than draft a spec from scratch.
+
+### How to invoke
+
+Start a fresh session with a minimal prompt and ask Claude to interview you:
+
+> "I want to build [brief description].
+>
+> Interview me in detail using the `AskUserQuestion` tool. Ask about technical implementation, UI/UX, edge cases, and tradeoffs. Don't ask obvious questions — dig into the hard parts I might not have considered. Keep going until you have enough to write a complete spec."
+
+### After the interview
+
+Once the interview is done and a spec has been produced:
+
+1. **Write the spec to disk** — `specs/<feature-id>/spec.md` and `specs/<feature-id>/plan.md` per SDD conventions.
+2. **Start a fresh session for execution.** The interview transcript is no longer load-bearing — clean context focused on implementation produces better build sessions.
+3. **Reference the spec by path** in the new session, don't paste it back in.
+
+This pattern works well with Opus 4.7's adaptive thinking: deep questioning during planning, then a clean Build session with cached context for execution.
+
 ## Data Model Review Gate
 
 Review gate checklist before implementing data models. This gate occurs after planning/scaffolding, before delegating build tasks to agents.

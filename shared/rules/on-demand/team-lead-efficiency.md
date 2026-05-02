@@ -69,6 +69,25 @@ After all teammates return:
 4. **Fix integration issues** — the lead resolves conflicts, not another sub-agent.
 5. **Report results to user** — summarize what each agent delivered, any issues found, and what was fixed.
 
+## Opus 4.7 Behavioral Changes
+
+When the Team Lead is running on Opus 4.7, the defaults shift in ways that affect delegation:
+
+- **Spawns fewer subagents by default.** Opus 4.7 prefers to do work inline rather than fan out — it will often handle tasks directly that Opus 4.6 would have delegated.
+- **Calls tools less often.** More reasoning per turn, fewer redundant reads or repeated greps.
+- **Calibrates response length to task complexity.** Won't over-explain a simple fix, and won't pad short answers.
+
+These defaults are usually what you want. When they aren't, **be explicit in the prompt:**
+
+| If you need…              | Say so explicitly                                                                  |
+|---------------------------|------------------------------------------------------------------------------------|
+| More subagents            | "Use subagents to investigate X and Y in parallel."                                |
+| More tool use             | "Read files A, B, C and compare their interfaces before proposing the change."     |
+| Verbose output            | "Provide a detailed analysis with code examples and line-number citations."        |
+| A specific decomposition  | "Split this into three tasks: schema, API, UI. Delegate each to its own subagent." |
+
+Do not assume Opus 4.7 will infer the same delegation defaults Opus 4.6 used. If you've been running with `xhigh` effort and noticing thinner output than you expected, the cause is usually the model right-sizing — not the effort level.
+
 ## Anti-Patterns From Real Projects
 
 | Anti-Pattern | What Happened | Prevention |

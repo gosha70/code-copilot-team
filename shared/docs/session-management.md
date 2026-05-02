@@ -27,6 +27,34 @@ You do **not** need to run `/init` every time. `/init` is a one-time command to 
 | View loaded memory | `/memory` | Review/edit what Claude has loaded |
 | Rewind a mistake | `Esc + Esc` or `/rewind` | Undo file changes or roll back |
 
+### Checkpointing & Rewind
+
+Claude Code automatically checkpoints conversation state and file edits made through Claude's file-editing tools (Edit, Write, etc.). You can rewind to any of those points without leaving the session.
+
+| Action | How |
+|---|---|
+| Open the rewind menu | Double-tap `Escape`, or run `/rewind` |
+| Restore conversation only | Pick a message in the rewind menu, choose "conversation" |
+| Restore code only | Pick a message, choose "code" |
+| Restore both | Pick a message, choose "both" |
+| Summarize forward from here | Pick a message, choose "summarize" — keeps the prefix, replaces the rest with a summary |
+
+**Persistence:** Checkpoints survive across sessions. Close the terminal, come back tomorrow, run `/rewind` — the menu still has the snapshots.
+
+**Scope — what rewind tracks:**
+
+- File edits made through Claude's file-editing tools (Edit, Write, NotebookEdit).
+- Conversation state.
+
+**Scope — what rewind does NOT track (do not rely on it for these):**
+
+- **Files modified by bash commands run through Claude.** This includes anything written via `cat >`, `sed -i`, `mv`, `rm`, code formatters invoked from Bash, build steps, generated files, etc. If Claude ran it from a shell, rewind will not undo it.
+- Files modified by editors, formatters, or build tools running outside Claude.
+- Git operations (commits, branch switches, stashes).
+- External process side effects (database writes, deployed artifacts, network calls).
+
+Because bash-side file changes are out of scope, treat rewind as a fast undo for **Claude's own edit-tool changes** — **not** a general-purpose safety net for everything that happened in the session. Commit at meaningful boundaries; rely on git, not rewind, for anything you can't afford to lose.
+
 ## Switching Tasks in Same Terminal
 
 ```
