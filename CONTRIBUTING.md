@@ -64,6 +64,23 @@ To prevent instruction drift and outdated quality claims:
    bash tests/test-shared-structure.sh
    ```
 
+## Default Branch Convention
+
+Scripts and hooks shipped by this scaffold auto-detect the consumer repository's default branch at runtime rather than assuming a fixed name. The detection order is:
+
+1. **Runtime detection** via `git symbolic-ref refs/remotes/origin/HEAD` (reports what the remote declares as its HEAD).
+2. **Env var override** — set `DEFAULT_BRANCH` before invoking any scaffold script to force a specific branch name.
+3. **Fallback** — if detection fails (e.g., no remote configured), scripts fall back to `master`.
+
+The scaffold's own repository stays on `master`, but generated artifacts and hooks that ship to consumer repos must not assume a branch name. When writing new scripts or hooks that need to reference the default branch, use this pattern:
+
+```bash
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')}"
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-master}"
+```
+
+The `.github/workflows/sync-check.yml` already handles both conventions via `branches: [master, main]` and must not be changed.
+
 ## Community Standards
 
 - [Code of Conduct](CODE_OF_CONDUCT.md)

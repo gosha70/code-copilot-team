@@ -44,7 +44,16 @@ is_always() {
 
 # ── Claude Code ──────────────────────────────────────────────
 # Claude Code reads shared/skills/ directly via setup.sh symlinks.
-echo "[claude-code] No generation needed (reads shared/skills/ directly)"
+# Sync verify-app agent from claude_code/ source to adapters/claude-code/.
+echo "[claude-code] Syncing verify-app agent from claude_code/.claude/agents/ to adapters/claude-code/.claude/agents/..."
+CC_AGENTS_SOURCE="$REPO_DIR/claude_code/.claude/agents"
+CC_AGENTS_TARGET="$ADAPTERS/claude-code/.claude/agents"
+if [[ -f "$CC_AGENTS_SOURCE/verify-app.md" && -d "$CC_AGENTS_TARGET" ]]; then
+  cp "$CC_AGENTS_SOURCE/verify-app.md" "$CC_AGENTS_TARGET/verify-app.md"
+  echo "[claude-code] Synced verify-app.md"
+else
+  echo "[claude-code] WARNING: verify-app.md source or target directory not found — skipping sync"
+fi
 
 # ── Codex ────────────────────────────────────────────────────
 # Generate AGENTS.md by concatenating always skills + on-demand TOC
