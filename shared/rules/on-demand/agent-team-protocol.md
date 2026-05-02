@@ -7,7 +7,7 @@ Rules governing multi-agent delegation, phased workflows, and model selection.
 Every non-trivial task follows three phases with distinct behaviors:
 
 ### Phase 1 — PLAN (Single Agent)
-- **Model:** Highest-capability (e.g., Opus) · **Effort:** High
+- **Model:** Highest-capability (e.g., Opus) · **Effort:** `xhigh` (Opus 4.7) / `high` (other models)
 - Work alone. Do NOT delegate to sub-agents.
 - Read the full codebase context, understand architecture, identify risks.
 - **Ask clarifying questions** about data model shape, auth strategy, UI layout, and output formats BEFORE producing the plan. (See `clarification-protocol.md` for the full protocol and data model review gate.)
@@ -34,7 +34,7 @@ When `collaboration_mode: dual` in `plan.md` frontmatter **OR** the environment 
 See `review-loop.md` for the full protocol.
 
 ### Phase 2 — BUILD (Team Delegation)
-- **Model:** Fast (e.g., Sonnet) · **Effort:** Medium
+- **Model:** Fast (e.g., Sonnet) · **Effort:** `high`
 - Team Lead decomposes the approved plan into discrete tasks.
 - Read `specs/<id>/plan.md` frontmatter to determine `spec_mode` gating behavior.
 - Delegate each task to the appropriate specialist sub-agent via the Task tool.
@@ -44,7 +44,7 @@ See `review-loop.md` for the full protocol.
 - **After each agent returns**: run type checker + dev server before delegating dependent work. (See `phase-workflow.md` § Pre-Build Verification.)
 
 ### Phase 3 — REVIEW (Single Agent)
-- **Model:** Highest-capability (e.g., Opus) · **Effort:** High
+- **Model:** Highest-capability (e.g., Opus) · **Effort:** `xhigh` (Opus 4.7) / `high` (other models)
 - Work alone. Do NOT delegate.
 - Review all changes holistically: correctness, consistency, style, test coverage.
 - Run full test suite, verify no regressions.
@@ -156,10 +156,14 @@ See `ralph-loop.md` for the full pattern, PRD format, and safety guards.
 
 ## Model & Effort Quick Reference
 
-| Phase    | Model Tier       | Effort | Delegation |
-|----------|------------------|--------|------------|
-| Plan     | Highest (Opus)   | High   | None       |
-| Build    | Fast (Sonnet)    | Medium | Yes        |
-| Build (loop) | Fast (Sonnet) | Medium | None — single agent loops |
-| Review   | Highest (Opus)   | High   | None       |
-| Quick fix| Fastest (Haiku)  | Low    | None       |
+Effort levels assume Opus 4.7 for the Plan/Review tier. `xhigh` is Opus 4.7 only — on Opus 4.6 and Sonnet 4.6 it falls back to `high`. `high`, `medium`, and `low` are supported across all current models.
+
+| Phase        | Model Tier       | Effort  | Delegation                      |
+|--------------|------------------|---------|---------------------------------|
+| Plan         | Highest (Opus)   | `xhigh` | None                            |
+| Build        | Fast (Sonnet)    | `high`  | Yes                             |
+| Build (loop) | Fast (Sonnet)    | `high`  | None — single agent loops       |
+| Review       | Highest (Opus)   | `xhigh` | None                            |
+| Quick fix    | Fastest (Haiku)  | `low`   | None                            |
+
+**Opus 4.7 calibration note:** Opus 4.7 spawns fewer subagents by default and calibrates response length to task complexity — it prefers concise, inline work over verbose, sprawling delegation. If your task genuinely benefits from parallel subagents or a verbose written analysis, spell that out explicitly in the delegation prompt (e.g., "use subagents to investigate X and Y in parallel" or "produce a detailed written analysis with code examples"). Do not assume it will infer the same defaults Opus 4.6 used.

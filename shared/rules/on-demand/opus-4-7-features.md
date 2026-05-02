@@ -2,6 +2,24 @@
 
 Optional guidance for sessions using Claude Opus 4.7 (v2.1.111+). Load this rule when you want to leverage Opus 4.7-specific capabilities.
 
+## Adaptive Thinking (Breaking Change)
+
+Opus 4.7 changes the API contract for extended thinking. The legacy form is **rejected**:
+
+- `thinking: {type: "enabled", budget_tokens: N}` → returns **400 Bad Request** on Opus 4.7.
+- Only `thinking: {type: "adaptive"}` is accepted.
+
+With adaptive thinking, the model dynamically decides **when** and **how much** to think based on query complexity. There is no fixed token budget — Claude self-regulates depth.
+
+**How to control depth:**
+
+- Use the `effort` parameter (`xhigh` / `high` / `medium` / `low`) instead of `budget_tokens`.
+- Thinking is also promptable in-message:
+  - "Think carefully and step-by-step" → encourages deeper reasoning.
+  - "Prioritize responding quickly" → encourages a shorter thinking pass.
+
+**Older models:** `enabled`/`budget_tokens` is **deprecated** on Opus 4.6 and Sonnet 4.6 (still functional today, but on the way out). Migrate to `adaptive` proactively so your code keeps working when the deprecation lands.
+
 ## Effort Level: `xhigh`
 
 Opus 4.7 introduces a new effort level `xhigh` between `high` and `max`. Other models fall back to `high` when `xhigh` is requested.
@@ -13,9 +31,13 @@ Opus 4.7 introduces a new effort level `xhigh` between `high` and `max`. Other m
 | `high` | Architecture, planning, detailed review | Research, Plan, Review |
 | `xhigh` | Complex multi-file reasoning, deep architectural analysis, hard debugging | Plan (large features), Review (cross-cutting PRs) |
 
-Set per-session with `/effort xhigh` (opens interactive slider if called without arguments). Persist across sessions with the `effortLevel` setting in `settings.json`.
+**Availability:** `xhigh` became selectable in Claude Code **v2.1.111+** when running Opus 4.7.
 
-Use `xhigh` when the task requires reasoning across many files or making subtle architectural judgments. Do not default to `xhigh` for routine work — it trades speed for depth.
+**Default change:** From Claude Code **v2.1.117+**, `xhigh` is the **default** effort level for Opus 4.7. On v2.1.111–v2.1.116 the default is still `high` and you must opt in with `/effort xhigh`. Other models continue to default to `high` regardless of Claude Code version.
+
+Set per-session with `/effort <level>` (opens an interactive slider if called without arguments). Persist across sessions with the `effortLevel` setting in `settings.json`.
+
+Use `xhigh` when the task requires reasoning across many files or making subtle architectural judgments. Drop to `high` or `medium` for routine work — `xhigh` trades speed for depth.
 
 ## Auto Mode
 
@@ -89,6 +111,14 @@ Or set in `settings.json`:
 ```
 
 The 5-minute TTL is fine for short tasks. Use 1-hour when a session will span 30+ minutes with the same context.
+
+### Caching Awareness
+
+Per Anthropic's April 30 2026 guidance, prompt caching is the single most important optimization for Claude Code workflows — but adaptive thinking interacts with it in ways worth knowing:
+
+- **Switching between `adaptive` and `enabled`/`disabled` thinking modes breaks cache breakpoints for messages.** System prompts and tool definitions remain cached, but per-message cache hits are lost.
+- **Pick one thinking mode per session and stay with it.** Toggling mid-session quietly halves cache effectiveness.
+- For long sessions on Opus 4.7, the recommended profile is: `adaptive` thinking + `ENABLE_PROMPT_CACHING_1H=1` + a single sustained `effort` level.
 
 ## Session Continuity
 
