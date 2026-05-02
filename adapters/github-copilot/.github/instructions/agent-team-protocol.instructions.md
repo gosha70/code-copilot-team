@@ -5,6 +5,8 @@ applyTo: "**"
 
 # Agent Team Protocol
 
+> **Note on naming.** This document uses "team" to mean a group of subagents working within a *single session*, coordinated by a Team Lead via the copilot's delegation tool. Some tools also offer experimental multi-session coordination features (see § "Multi-Session Coordination" at the bottom of this document). The two are different things.
+
 Rules governing multi-agent delegation, phased workflows, and model selection.
 
 ## Three-Phase Workflow
@@ -42,7 +44,7 @@ See `review-loop.md` for the full protocol.
 - **Model:** Fast (e.g., Sonnet) · **Effort:** `high`
 - Team Lead decomposes the approved plan into discrete tasks.
 - Read `specs/<id>/plan.md` frontmatter to determine `spec_mode` gating behavior.
-- Delegate each task to the appropriate specialist sub-agent via the Task tool.
+- Delegate each task to the appropriate specialist sub-agent via the Agent tool.
 - Each sub-agent works on ONE bounded task with explicit inputs/outputs.
 - **Show the delegation plan to the user before executing.** List which agents, what tasks, in what order.
 - Team Lead integrates results and resolves conflicts.
@@ -172,3 +174,7 @@ Effort levels assume Opus 4.7 for the Plan/Review tier. `xhigh` is Opus 4.7 only
 | Quick fix    | Fastest (Haiku)  | `low`   | None                            |
 
 **Opus 4.7 calibration note:** Opus 4.7 spawns fewer subagents by default and calibrates response length to task complexity — it prefers concise, inline work over verbose, sprawling delegation. If your task genuinely benefits from parallel subagents or a verbose written analysis, spell that out explicitly in the delegation prompt (e.g., "use subagents to investigate X and Y in parallel" or "produce a detailed written analysis with code examples"). Do not assume it will infer the same defaults Opus 4.6 used.
+
+## Multi-Session Coordination (Tool-Specific)
+
+Some copilots offer experimental multi-session coordination beyond the single-session pattern above (e.g., Claude Code's Agent Teams, Cursor's Cloud Agents, Codex's Subagents SDK). These are tool-specific mechanisms that are not wire-compatible with each other. The single-session principles in this document — non-overlapping file ownership, bounded tasks, lead integration — apply regardless of mechanism. See your tool's documentation for multi-session details.

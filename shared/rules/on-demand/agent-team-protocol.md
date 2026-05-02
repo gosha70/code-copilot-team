@@ -37,7 +37,7 @@ See `review-loop.md` for the full protocol.
 - **Model:** Fast (e.g., Sonnet) · **Effort:** `high`
 - Team Lead decomposes the approved plan into discrete tasks.
 - Read `specs/<id>/plan.md` frontmatter to determine `spec_mode` gating behavior.
-- Delegate each task to the appropriate specialist sub-agent via the Task tool.
+- Delegate each task to the appropriate specialist sub-agent via the Agent tool.
 - Each sub-agent works on ONE bounded task with explicit inputs/outputs.
 - **Show the delegation plan to the user before executing.** List which agents, what tasks, in what order.
 - Team Lead integrates results and resolves conflicts.

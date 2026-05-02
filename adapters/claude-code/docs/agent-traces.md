@@ -14,7 +14,7 @@ Traces are stored at:
 /tmp/claude-{session-id}/{project-path}/tasks/{agentId}.output
 ```
 
-Each agent spawned by the Task tool gets its own output file named by agent ID (e.g., `a0b6bdb.output`).
+Each agent spawned by the Agent tool gets its own output file named by agent ID (e.g., `a0b6bdb.output`).
 
 ## Accessing Traces
 

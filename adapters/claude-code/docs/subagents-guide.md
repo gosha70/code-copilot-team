@@ -48,7 +48,7 @@ Each agent runs in a forked context — it sees the current project directory an
 
 ### Automatic Delegation
 
-When working as Team Lead, delegate to agents via the Task tool:
+When working as Team Lead, delegate to agents via the Agent tool:
 
 ```
 Task: "Run the verify-app agent to check the project"
@@ -96,7 +96,7 @@ You are a [role]. Your job is to [specific task].
 
 ### Step 3: Test It
 
-Invoke the agent via Task tool and verify it:
+Invoke the agent via Agent tool and verify it:
 - Follows its system prompt constraints
 - Uses only its allowed tools
 - Produces the expected output format

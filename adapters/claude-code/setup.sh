@@ -467,7 +467,7 @@ When this project defines an Agent Team section, follow these rules:
 - PLANNING PHASE: Team Lead works alone. Do NOT delegate planning to sub-agents.
   Planning requires seeing the full architecture; sub-agents only see fragments.
 - BUILDING PHASE: Team Lead decomposes the plan into tasks and delegates to
-  specialist sub-agents via the Task tool.
+  specialist sub-agents via the Agent tool.
 - REVIEW PHASE: Team Lead reviews all output holistically. Do NOT delegate review.
 - When spawning a sub-agent, include: (1) its role prompt from the team section,
   (2) relevant project context, (3) the specific task.
@@ -1356,7 +1356,7 @@ echo ""
 echo "Each project now includes:"
 echo "  - CLAUDE.md with stack, conventions, and Agent Team config"
 echo "  - /project:team-review command for full team review"
-echo "  - Role-specific delegation prompts for the Task tool"
+echo "  - Role-specific delegation prompts for the Agent tool"
 echo ""
 echo "Remember to customize each project's CLAUDE.md after init!"
 echo "Look for ← UPDATE comments for project-specific values."

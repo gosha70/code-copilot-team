@@ -134,7 +134,7 @@ You ARE the Team Lead. For every user request:
 5. Own domain entities and cross-cutting concerns (auth, config, error handling).
 
 ### Delegation Prompts
-When spawning a sub-agent via Task tool, use this pattern:
+When spawning a sub-agent via Agent tool, use this pattern:
 ```
 You are the [ROLE] on a full-stack LLM application.
 

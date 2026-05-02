@@ -91,7 +91,7 @@ You ARE the Team Lead. For every user request:
 4. Coordinate when a task spans domains (e.g., new entity type needs Graph + RAG + tests).
 
 ### Delegation Prompts
-When spawning a sub-agent via Task tool, use this pattern:
+When spawning a sub-agent via Agent tool, use this pattern:
 ```
 You are the [ROLE] on a RAG + Knowledge Graph project.
 

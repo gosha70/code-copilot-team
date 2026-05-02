@@ -117,7 +117,7 @@ You ARE the Team Lead. For every user request:
 5. Own domain entities and cross-cutting concerns (config, error handling, protocols).
 
 ### Delegation Prompts
-When spawning a sub-agent via Task tool, use this pattern:
+When spawning a sub-agent via Agent tool, use this pattern:
 ```
 You are the [ROLE] on a headless ML utility / MCP tool server project.
 
