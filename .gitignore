@@ -46,6 +46,9 @@ yarn-debug.log*
 # Playwright CLI skills (per-project install artifact)
 .claude/skills/
 
+# Build-agent worktree isolation dirs (created by Agent tool with isolation: worktree)
+.claude/worktrees/
+
 # Generated docs (keep source only)
 README.html
 /doc_internal

@@ -300,6 +300,20 @@ if [[ "$SYNC_MODE" == "1" ]]; then
     done
     echo "[done] Synced templates to $TEMPLATES_DIR"
 
+    # SDD / Shape-Up template library (flat dir; templates loop above filters by PROJECT.md)
+    if [[ -d "$SHARED_DIR/templates/sdd" ]]; then
+        SDD_TARGET="$TEMPLATES_DIR/sdd"
+        rm -rf "$SDD_TARGET"
+        mkdir -p "$SDD_TARGET"
+        cp "$SHARED_DIR/templates/sdd/"*.md "$SDD_TARGET/" 2>/dev/null || true
+        cp "$SHARED_DIR/templates/sdd/"*.json "$SDD_TARGET/" 2>/dev/null || true
+        if [[ -f "$SHARED_DIR/templates/sdd/validate-pitch.sh" ]]; then
+            cp "$SHARED_DIR/templates/sdd/validate-pitch.sh" "$SDD_TARGET/validate-pitch.sh"
+            chmod +x "$SDD_TARGET/validate-pitch.sh"
+        fi
+        echo "[done] Synced SDD templates to $SDD_TARGET"
+    fi
+
     # Launcher
     if [[ -f "$LAUNCHER_SOURCE" ]]; then
         mkdir -p "$HOME/.local/bin"
@@ -614,6 +628,26 @@ if [[ -d "$SHARED_DIR/templates/java-tooling/.claude" ]]; then
     cp -r "$SHARED_DIR/templates/java-tooling/.claude/"* "$TEMPLATES_DIR/java-tooling/.claude/" 2>/dev/null || true
 fi
 echo "[done] Created template: java-tooling"
+
+# ══════════════════════════════════════════════════════════════
+# 9b. INSTALL SDD / SHAPE-UP TEMPLATE LIBRARY
+# ══════════════════════════════════════════════════════════════
+# Flat template dir without PROJECT.md — used by Shape-Up agents
+# (pitch-shaper, scope-executor, cycle-retro, cooldown-report) and
+# slash commands (/shape, /bet, /cycle-start, /hill, /cooldown).
+# Ships pitch-template.md, hill-chart.json, cycle-retro-template.md,
+# cooldown-report-template.md, and the validate-pitch.sh validator.
+
+if [[ -d "$SHARED_DIR/templates/sdd" ]]; then
+    mkdir -p "$TEMPLATES_DIR/sdd"
+    cp "$SHARED_DIR/templates/sdd/"*.md "$TEMPLATES_DIR/sdd/" 2>/dev/null || true
+    cp "$SHARED_DIR/templates/sdd/"*.json "$TEMPLATES_DIR/sdd/" 2>/dev/null || true
+    if [[ -f "$SHARED_DIR/templates/sdd/validate-pitch.sh" ]]; then
+        cp "$SHARED_DIR/templates/sdd/validate-pitch.sh" "$TEMPLATES_DIR/sdd/validate-pitch.sh"
+        chmod +x "$TEMPLATES_DIR/sdd/validate-pitch.sh"
+    fi
+    echo "[done] Created template library: sdd"
+fi
 
 # ══════════════════════════════════════════════════════════════
 # 10. INSTALL LAUNCHER SCRIPT
