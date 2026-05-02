@@ -262,6 +262,22 @@ The legacy `./claude_code/claude-setup.sh` path still works — it delegates to 
 
 After `git pull`, run `--sync` to regenerate configs and re-install.
 
+### Alternative: Install as a Claude Code Plugin
+
+For Claude Code users who prefer the plugin system over `setup.sh`:
+
+```bash
+# Add the CCT marketplace (one-time)
+/plugin marketplace add gosha70/code-copilot-team
+
+# Install the hooks plugin
+/plugin install code-copilot-team@code-copilot-team
+```
+
+This installs the same hooks (file protection, auto-format, type verification, context re-injection, git safety, notifications) as `setup.sh`, but managed through Claude Code's plugin system. Update installed plugins with `/plugin marketplace update`. The plugin does not include peer-review or memkernel hooks — those are CCT-pipeline-specific and remain in the `setup.sh` path.
+
+Both install paths coexist. Use `setup.sh` for the full install (skills, agents, templates, hooks, peer review) or the plugin for hooks only.
+
 ### Recommended: Install LSP Plugins (Claude Code)
 
 For continuous type-error feedback during edits, install the appropriate code-intelligence plugin. Each requires its language-server binary on `$PATH`:

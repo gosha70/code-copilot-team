@@ -1,8 +1,12 @@
 {
+  "name": "code-copilot-team",
+  "owner": {
+    "name": "gosha70"
+  },
   "plugins": [
     {
       "name": "code-copilot-team",
-      "path": "adapters/claude-code/plugin",
+      "source": "./adapters/claude-code/plugin",
       "description": "Code Copilot Team hooks: file protection, auto-format, type verification, context re-injection, git safety, and desktop notifications."
     }
   ]
