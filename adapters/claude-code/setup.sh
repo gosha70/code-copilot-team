@@ -150,6 +150,8 @@ if [[ "$SYNC_MODE" == "1" ]]; then
     mkdir -p "$RULES_TARGET"
     for name in coding-standards copilot-conventions copyright-headers safety; do
         if [[ -f "$SKILLS_SOURCE/$name/SKILL.md" ]]; then
+            # Remove stale symlinks from pre-SKILL.md layout
+            [[ -L "$RULES_TARGET/$name.md" ]] && rm -f "$RULES_TARGET/$name.md"
             # Strip frontmatter, install body as plain .md for auto-loading
             awk 'BEGIN{n=0} /^---$/{n++; if(n==2){found=1; next}} found{print}' "$SKILLS_SOURCE/$name/SKILL.md" > "$RULES_TARGET/$name.md"
         fi
@@ -717,6 +719,8 @@ mkdir -p "$RULES_TARGET"
 if [[ -d "$SKILLS_SOURCE" ]]; then
     for name in coding-standards copilot-conventions copyright-headers safety; do
         if [[ -f "$SKILLS_SOURCE/$name/SKILL.md" ]]; then
+            # Remove stale symlinks from pre-SKILL.md layout
+            [[ -L "$RULES_TARGET/$name.md" ]] && rm -f "$RULES_TARGET/$name.md"
             # Strip frontmatter, install body as plain .md for auto-loading
             awk 'BEGIN{n=0} /^---$/{n++; if(n==2){found=1; next}} found{print}' "$SKILLS_SOURCE/$name/SKILL.md" > "$RULES_TARGET/$name.md"
         fi

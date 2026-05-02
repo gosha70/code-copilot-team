@@ -1,1 +1,0 @@
-../../../shared/rules/on-demand/agent-team-protocol.md

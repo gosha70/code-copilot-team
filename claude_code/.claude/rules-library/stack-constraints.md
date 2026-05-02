@@ -1,1 +1,0 @@
-../../../shared/rules/on-demand/stack-constraints.md

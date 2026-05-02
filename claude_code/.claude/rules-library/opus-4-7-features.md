@@ -1,1 +1,0 @@
-../../../shared/rules/on-demand/opus-4-7-features.md
