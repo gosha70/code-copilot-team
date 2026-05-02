@@ -1,0 +1,5 @@
+{
+  "name": "code-copilot-team",
+  "version": "1.0.0",
+  "description": "Code Copilot Team hooks: file protection, auto-format, type verification, context re-injection, git safety, and desktop notifications."
+}

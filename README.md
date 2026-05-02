@@ -262,6 +262,19 @@ The legacy `./claude_code/claude-setup.sh` path still works — it delegates to 
 
 After `git pull`, run `--sync` to regenerate configs and re-install.
 
+### Recommended: Install LSP Plugins (Claude Code)
+
+For continuous type-error feedback during edits, install the appropriate code-intelligence plugin. Each requires its language-server binary on `$PATH`:
+
+```bash
+# Install the language server first, then the plugin:
+pip install pyright && /plugin install pyright-lsp@claude-plugins-official           # Python
+npm i -g typescript-language-server typescript && /plugin install typescript-lsp@claude-plugins-official  # TypeScript
+go install golang.org/x/tools/gopls@latest && /plugin install gopls-lsp@claude-plugins-official  # Go
+```
+
+These provide native LSP diagnostics and are preferred over the bundled `verify-after-edit.sh` hook. The hook remains as a fallback for languages without an LSP plugin. See the [official plugin catalog](https://claude.com/plugins) for all available languages.
+
 ## Start a New Project
 
 ```bash
