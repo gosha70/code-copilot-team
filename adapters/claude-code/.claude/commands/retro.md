@@ -30,7 +30,7 @@ For each struggle, propose a specific fix:
 
 | Struggle | Proposed Fix | Target File |
 |----------|-------------|-------------|
-| {from table above} | {concrete change} | {path in shared/rules/, shared/templates/, or adapters/} |
+| {from table above} | {concrete change} | {path in shared/skills/, shared/templates/, or adapters/} |
 
 Be specific: "Add rule X to file Y" not "improve documentation."
 

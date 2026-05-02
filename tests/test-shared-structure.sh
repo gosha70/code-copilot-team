@@ -276,14 +276,6 @@ done
 # ══════════════════════════════════════════════════════════════
 
 echo ""
-echo "=== symlinks: rules → shared/ ==="
-
-for f in coding-standards.md copilot-conventions.md safety.md; do
-  assert_symlink "rules/$f is symlink" "$CLAUDE_CODE_DIR/.claude/rules/$f"
-  assert_symlink_resolves "rules/$f resolves" "$CLAUDE_CODE_DIR/.claude/rules/$f"
-done
-
-echo ""
 echo "=== skills source structure ==="
 
 # Verify each skill directory has a SKILL.md (already checked above, lightweight re-check)
@@ -1709,7 +1701,7 @@ assert_ok "plan-template.md contains status: in frontmatter" "$rc"
 echo ""
 echo "=== spec-workflow.md content ==="
 
-SPEC_WORKFLOW="$SHARED_DIR/rules/on-demand/spec-workflow.md"
+SPEC_WORKFLOW="$SHARED_DIR/skills/spec-workflow/SKILL.md"
 
 rc=0; grep -q 'spec_mode' "$SPEC_WORKFLOW" || rc=1
 assert_ok "spec-workflow.md contains spec_mode classification" "$rc"

@@ -8,7 +8,7 @@ date: [YYYY-MM-DD]
 
 # Spec: [Feature Name]
 
-<!-- Project constitution: shared/rules/always/ — copilot-conventions.md, coding-standards.md, safety.md -->
+<!-- Project constitution: shared/skills/ — copilot-conventions, coding-standards, safety -->
 
 ## User Scenarios
 

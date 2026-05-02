@@ -121,7 +121,7 @@ What was underspecified that caused rework or confusion?
 |----------|-----------|------------|-------------|
 | {description} | {estimate} | {missing context / wrong assumption / tooling gap} | {rule or doc change to prevent recurrence} |
 
-For each item, identify: should a rule in `shared/rules/` be updated? A template section added? A hook modified?
+For each item, identify: should a skill in `shared/skills/` be updated? A template section added? A hook modified?
 
 ---
 

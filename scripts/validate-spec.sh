@@ -3,7 +3,7 @@
 # validate-spec.sh — Validate SDD artifacts in specs/*/ directories
 #
 # Checks that each spec directory conforms to the spec_mode declared
-# in its plan.md YAML frontmatter, per shared/rules/on-demand/spec-workflow.md.
+# in its plan.md YAML frontmatter, per shared/skills/spec-workflow/SKILL.md.
 #
 # Usage:
 #   validate-spec.sh [--feature-id ID | --all]

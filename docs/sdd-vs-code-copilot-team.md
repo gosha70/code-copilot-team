@@ -14,7 +14,7 @@ A side-by-side comparison of two complementary approaches to AI-assisted softwar
 
 | SDD Phase | SDD Artifact | Code Copilot Team Equivalent |
 |---|---|---|
-| **Constitution** — project principles | `/speckit.constitution` → `constitution.md` | `shared/rules/always/*.md` + template golden principles |
+| **Constitution** — project principles | `/speckit.constitution` → `constitution.md` | `shared/skills/*/SKILL.md` (always-on skills) + template golden principles |
 | **Specify** — requirements & intent | `/speckit.specify` → `spec.md` | No direct equivalent — CCT assumes requirements exist |
 | **Plan** — architecture & design | `/speckit.plan` → `plan.md` | Research + Plan agents (Opus model, high effort) |
 | **Tasks** — implementation breakdown | `/speckit.tasks` → `tasks.md` | Build agent decomposes plan into bounded tasks (5–30 min) |

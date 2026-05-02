@@ -30,7 +30,7 @@ collaboration_mode: single
 
 ## Constitution Check
 
-<!-- Confirm the plan satisfies shared/rules/always/ before Build starts. -->
+<!-- Confirm the plan satisfies shared/skills/ (coding-standards, safety, etc.) before Build starts. -->
 
 | Rule file | Concern | Status |
 |-----------|---------|--------|
