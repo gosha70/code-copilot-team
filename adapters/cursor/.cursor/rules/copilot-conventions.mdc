@@ -1,7 +1,8 @@
 ---
-description: "Cross-Copilot Conventions"
+description: "Cross-copilot portable conventions: read before write, minimal changes, git discipline, project structure, and priority rules."
 alwaysApply: true
 ---
+
 
 # Cross-Copilot Conventions
 

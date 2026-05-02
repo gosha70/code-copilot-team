@@ -60,4 +60,4 @@ You are a phase recap agent. Your job is to generate a comprehensive recap docum
 
 ## Memory (optional)
 
-If the `memkernel` MCP server is configured, read `~/.claude/rules-library/memkernel-memory.md` and retain the finished recap summary when it would help the next session recover context quickly.
+If the `memkernel` MCP server is configured, read `~/.claude/skills/memkernel-memory/SKILL.md` and retain the finished recap summary when it would help the next session recover context quickly.

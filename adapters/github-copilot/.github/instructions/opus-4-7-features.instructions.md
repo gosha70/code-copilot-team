@@ -2,6 +2,7 @@
 applyTo: "**"
 ---
 
+
 # Opus 4.7 Features & Optimization
 
 Optional guidance for sessions using Claude Opus 4.7 (v2.1.111+). Load this rule when you want to leverage Opus 4.7-specific capabilities.

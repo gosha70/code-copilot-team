@@ -7,13 +7,13 @@ Thanks for your interest in improving this project. Contributions are welcome in
 Rule content lives in `shared/` as the single source of truth. Tool-specific configurations are generated into `adapters/` by `scripts/generate.sh`. Generated outputs are committed to the repo — CI verifies they never drift.
 
 ```
-shared/rules/always/*.md   →  scripts/generate.sh  →  adapters/<tool>/
-shared/rules/on-demand/*.md                            (committed, CI-verified)
+shared/skills/*/SKILL.md  →  scripts/generate.sh  →  adapters/<tool>/
+                                                      (committed, CI-verified)
 ```
 
 ## What We're Looking For
 
-**Rule improvements** — Found a coding standard, safety guard, or efficiency tip that should be universal? Edit files in `shared/rules/always/` or `shared/rules/on-demand/`, then run `./scripts/generate.sh` to update all adapters.
+**Skill improvements** — Found a coding standard, safety guard, or efficiency tip that should be universal? Edit `SKILL.md` files in `shared/skills/<name>/`, then run `./scripts/generate.sh` to update all adapters.
 
 **New project templates** — Have a stack that isn't covered (e.g., Rust/WASM, Go microservices, Flutter)? Add a template directory under `shared/templates/` and update `adapters/claude-code/setup.sh`.
 
@@ -28,7 +28,7 @@ shared/rules/on-demand/*.md                            (committed, CI-verified)
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/go-microservice-template`)
 3. Make your changes:
-   - **Shared rules:** edit `shared/rules/`, then run `./scripts/generate.sh` and commit the updated `adapters/` outputs
+   - **Shared skills:** edit `shared/skills/<name>/SKILL.md`, then run `./scripts/generate.sh` and commit the updated `adapters/` outputs
    - **Claude-specific:** edit `adapters/claude-code/` directly
    - **Templates:** add to `shared/templates/`
 4. Run the test suites:
@@ -46,7 +46,7 @@ shared/rules/on-demand/*.md                            (committed, CI-verified)
 
 - Keep rules concise. AI copilots have limited context; every word costs tokens.
 - Test templates by actually running `claude-code init <type>` and verifying the generated files.
-- Maintain tool-agnostic language in the `shared/rules/` files.
+- Maintain tool-agnostic language in `shared/skills/` SKILL.md files.
 - Always run `./scripts/generate.sh` after changing `shared/` content. CI will fail if generated outputs are stale.
 - One PR per concern. Don't mix a new template with a rule change.
 

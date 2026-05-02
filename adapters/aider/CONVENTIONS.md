@@ -1,7 +1,8 @@
 # Aider Conventions
 
-Auto-generated from shared/rules/always/. Do not edit directly.
+Auto-generated from shared/skills/. Do not edit directly.
 Regenerate with: ./scripts/generate.sh
+
 
 # Coding Standards
 
@@ -48,6 +49,7 @@ Before declaring a change ready for review, do the homework yourself — do not 
 - **If unsure how a feature works, ask.** The user may have spent significant effort building it. Suppressing it is a regression bug, not a fix.
 
 ---
+
 
 # Cross-Copilot Conventions
 
@@ -120,6 +122,7 @@ All design/plan artifacts must reside within the project directory so that any c
 - This rule applies even when planning work spans conversations or is exploratory. If the output is actionable, persist it.
 
 ---
+
 
 # Copyright Header Rules
 
@@ -194,6 +197,7 @@ Exceptions:
 
 ---
 
+
 # Agent Safety Rules
 
 Non-negotiable safety constraints for all sessions.
@@ -262,5 +266,5 @@ Review results are written to `specs/<feature-id>/collaboration/`:
 - `build-review.md` — build phase review (PASS or bypass required)
 - `plan-consult.md` — plan phase advisory review
 
-See `shared/rules/on-demand/review-loop.md` for the full protocol. The review commands (`/review-submit`, `/review-decide`) are currently implemented in the Claude Code adapter only.
+See `shared/skills/review-loop/SKILL.md` for the full protocol. The review commands (`/review-submit`, `/review-decide`) are currently implemented in the Claude Code adapter only.
 

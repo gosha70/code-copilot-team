@@ -2,6 +2,7 @@
 applyTo: "**"
 ---
 
+
 # MemKernel Memory
 
 Use this rule only when the `memkernel` MCP server is configured for the project.

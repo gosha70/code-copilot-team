@@ -2,6 +2,7 @@
 applyTo: "**/.env*,**/docker-compose*"
 ---
 
+
 # Environment Setup Protocol
 
 Rules for managing environment variables, secrets, and local configuration across any stack.

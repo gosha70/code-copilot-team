@@ -2,6 +2,7 @@
 applyTo: "**"
 ---
 
+
 # Review Loop Protocol
 
 Agent-driven peer review loop for Build and Plan phases. The Build agent drives the loop; the reviewer is a separate, read-only LLM.

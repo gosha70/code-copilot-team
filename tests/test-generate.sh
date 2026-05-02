@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$SCRIPT_DIR/.."
 ADAPTERS="$REPO_DIR/adapters"
 SHARED="$REPO_DIR/shared/rules"
+SKILLS="$REPO_DIR/shared/skills"
 COUNTS_FILE="$SCRIPT_DIR/test-counts.env"
 # shellcheck source=/dev/null
 source "$COUNTS_FILE"
@@ -103,23 +104,20 @@ assert_contains "has password storage" "$AGENTS_MD" "## Password Storage"
 echo ""
 echo "=== AGENTS.md content — on-demand rules reference ==="
 
-assert_contains "has on-demand reference section" "$AGENTS_MD" "## On-Demand Rules Reference"
-assert_contains "has auto-generated notice" "$AGENTS_MD" "Auto-generated from shared/rules/always"
+assert_contains "has on-demand reference section" "$AGENTS_MD" "## On-Demand Skills Reference"
+assert_contains "has auto-generated notice" "$AGENTS_MD" "Auto-generated from shared/skills/"
 
-# Verify all on-demand rules are referenced
-for f in "$SHARED/on-demand"/*.md; do
-  name="$(basename "$f" .md)"
-  assert_contains "references on-demand rule: $name" "$AGENTS_MD" "$name"
+# Verify all on-demand skills are referenced in the table
+for skill_dir in "$SKILLS"/*/; do
+  [[ -d "$skill_dir" ]] || continue
+  name=$(basename "$skill_dir")
+  # Skip always skills — they're in the body, not the table
+  case "$name" in coding-standards|copilot-conventions|copyright-headers|safety) continue ;; esac
+  assert_contains "references on-demand skill: $name" "$AGENTS_MD" "$name"
 done
 
-# Verify skill mappings
-assert_contains "ralph-loop mapped to build" "$AGENTS_MD" "ralph-loop.*build"
-assert_contains "agent-team-protocol mapped to build optional team mode" "$AGENTS_MD" "agent-team-protocol.*build (optional team mode)"
-assert_contains "team-lead-efficiency mapped to build optional team mode" "$AGENTS_MD" "team-lead-efficiency.*build (optional team mode)"
-assert_contains "clarification-protocol mapped to plan" "$AGENTS_MD" "clarification-protocol.*plan"
-assert_contains "integration-testing mapped to review" "$AGENTS_MD" "integration-testing.*review"
-assert_contains "token-efficiency mapped to research" "$AGENTS_MD" "token-efficiency.*research"
-assert_contains "infra-verification mapped to build" "$AGENTS_MD" "infra-verification.*build"
+# Verify the table has Description column (from SKILL.md frontmatter)
+assert_contains "skills table has Description column" "$AGENTS_MD" "| Skill | Description |"
 
 # ── Section 4b: spec-workflow content in adapter outputs ──
 
@@ -127,7 +125,6 @@ echo ""
 echo "=== spec-workflow in adapter outputs ==="
 
 assert_contains "Codex AGENTS.md: contains spec-workflow reference" "$AGENTS_MD" "spec-workflow"
-assert_contains "Codex AGENTS.md: spec-workflow mapped to plan, build" "$AGENTS_MD" "spec-workflow.*plan, build"
 
 GH_SPEC_WORKFLOW="$ADAPTERS/github-copilot/.github/instructions/spec-workflow.instructions.md"
 assert_contains "GH Copilot spec-workflow.instructions.md: contains spec_mode" "$GH_SPEC_WORKFLOW" "spec_mode"
@@ -261,34 +258,35 @@ CURSOR_RULES="$ADAPTERS/cursor/.cursor/rules"
 
 assert "cursor rules dir exists" "[[ -d '$CURSOR_RULES' ]]"
 
-# Verify 5 .mdc files (4 always-on rules + review-loop on-demand)
+# Verify 19 .mdc files (all skills)
 MDC_COUNT=$(ls "$CURSOR_RULES"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
-assert "exactly 5 .mdc files ($MDC_COUNT)" "[[ $MDC_COUNT -eq 5 ]]"
+assert "exactly 19 .mdc files ($MDC_COUNT)" "[[ $MDC_COUNT -eq 19 ]]"
 
-assert "coding-standards.mdc exists" "[[ -f '$CURSOR_RULES/coding-standards.mdc' ]]"
-assert "copilot-conventions.mdc exists" "[[ -f '$CURSOR_RULES/copilot-conventions.mdc' ]]"
-assert "safety.mdc exists" "[[ -f '$CURSOR_RULES/safety.mdc' ]]"
-assert "copyright-headers.mdc exists" "[[ -f '$CURSOR_RULES/copyright-headers.mdc' ]]"
-
-# Verify frontmatter structure
+# Verify always skills have alwaysApply: true
 for mdc in coding-standards copilot-conventions safety copyright-headers; do
   MDC_FILE="$CURSOR_RULES/$mdc.mdc"
+  assert "$mdc.mdc exists" "[[ -f '$MDC_FILE' ]]"
   assert_contains "$mdc.mdc: has frontmatter start" "$MDC_FILE" "^---"
   assert_contains "$mdc.mdc: has description field" "$MDC_FILE" "^description:"
   assert_contains "$mdc.mdc: has alwaysApply: true" "$MDC_FILE" "^alwaysApply: true"
 done
 
-# Verify content from source rules is present
+# Verify on-demand skills have alwaysApply: false
+for mdc in review-loop agent-team-protocol spec-workflow; do
+  MDC_FILE="$CURSOR_RULES/$mdc.mdc"
+  assert "$mdc.mdc exists" "[[ -f '$MDC_FILE' ]]"
+  assert_contains "$mdc.mdc: has alwaysApply: false" "$MDC_FILE" "^alwaysApply: false"
+done
+
+# Verify content from source skills is present
 assert_contains "coding-standards.mdc: has Quality Gates" "$CURSOR_RULES/coding-standards.mdc" "Quality Gates"
 assert_contains "copilot-conventions.mdc: has Core Contract" "$CURSOR_RULES/copilot-conventions.mdc" "Core Contract"
 assert_contains "safety.mdc: has Secrets & Credentials" "$CURSOR_RULES/safety.mdc" "Secrets & Credentials"
 assert_contains "copyright-headers.mdc: has Trigger section" "$CURSOR_RULES/copyright-headers.mdc" "## Trigger"
 
-# Verify descriptions match first headings
-assert_contains "coding-standards.mdc: description is Coding Standards" "$CURSOR_RULES/coding-standards.mdc" 'description: "Coding Standards"'
-assert_contains "copilot-conventions.mdc: description is Cross-Copilot" "$CURSOR_RULES/copilot-conventions.mdc" 'description: "Cross-Copilot Conventions"'
-assert_contains "safety.mdc: description is Agent Safety" "$CURSOR_RULES/safety.mdc" 'description: "Agent Safety Rules"'
-assert_contains "copyright-headers.mdc: description is Copyright Header Rules" "$CURSOR_RULES/copyright-headers.mdc" 'description: "Copyright Header Rules"'
+# Verify descriptions come from SKILL.md frontmatter (not heading extraction)
+assert_contains "coding-standards.mdc: description from frontmatter" "$CURSOR_RULES/coding-standards.mdc" 'description: "Quality gates'
+assert_contains "safety.mdc: description from frontmatter" "$CURSOR_RULES/safety.mdc" 'description: "Non-negotiable safety'
 
 # ── Section 11: Cursor setup.sh ───────────────────────────
 
@@ -311,7 +309,7 @@ GH_DIR="$ADAPTERS/github-copilot/.github"
 COPILOT_MD="$GH_DIR/copilot-instructions.md"
 
 assert "copilot-instructions.md exists" "[[ -f '$COPILOT_MD' ]]"
-assert_contains "has auto-generated notice" "$COPILOT_MD" "Auto-generated from shared/rules/always"
+assert_contains "has auto-generated notice" "$COPILOT_MD" "Auto-generated from shared/skills/"
 assert_contains "has Copilot Instructions header" "$COPILOT_MD" "^# Copilot Instructions"
 
 # Verify all always-on rules are included
@@ -336,9 +334,12 @@ assert "instructions dir exists" "[[ -d '$INSTRUCTIONS_DIR' ]]"
 ON_DEMAND_COUNT=$(ls "$INSTRUCTIONS_DIR"/*.instructions.md 2>/dev/null | wc -l | tr -d ' ')
 assert "exactly 15 instruction files ($ON_DEMAND_COUNT)" "[[ $ON_DEMAND_COUNT -eq 15 ]]"
 
-# Verify each on-demand rule has a corresponding instruction file
-for f in "$SHARED/on-demand"/*.md; do
-  name="$(basename "$f" .md)"
+# Verify each on-demand skill has a corresponding instruction file
+for skill_dir in "$SKILLS"/*/; do
+  [[ -d "$skill_dir" ]] || continue
+  name=$(basename "$skill_dir")
+  # Skip always skills — they go into copilot-instructions.md, not individual files
+  case "$name" in coding-standards|copilot-conventions|copyright-headers|safety) continue ;; esac
   INSTR="$INSTRUCTIONS_DIR/$name.instructions.md"
   assert "$name.instructions.md exists" "[[ -f '$INSTR' ]]"
   assert_contains "$name: has applyTo frontmatter" "$INSTR" "^applyTo:"
@@ -373,7 +374,7 @@ bash "$CURSOR_SETUP" "$CURSOR_TMP" >/dev/null 2>&1
 CURSOR_INSTALL_RC=$?
 assert "cursor install exits 0" "[[ $CURSOR_INSTALL_RC -eq 0 ]]"
 INSTALLED_MDC=$(ls "$CURSOR_TMP/.cursor/rules"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
-assert "cursor installed 5 .mdc files ($INSTALLED_MDC)" "[[ $INSTALLED_MDC -eq 5 ]]"
+assert "cursor installed 19 .mdc files ($INSTALLED_MDC)" "[[ $INSTALLED_MDC -eq 19 ]]"
 rm -rf "$CURSOR_TMP"
 
 # ── Section 16: GitHub Copilot setup.sh install test ──────
@@ -401,7 +402,7 @@ WINDSURF_MD="$WINDSURF_RULES/rules.md"
 assert "windsurf rules dir exists" "[[ -d '$WINDSURF_RULES' ]]"
 assert "rules.md exists" "[[ -f '$WINDSURF_MD' ]]"
 assert_contains "has Windsurf Rules header" "$WINDSURF_MD" "^# Windsurf Rules"
-assert_contains "has auto-generated notice" "$WINDSURF_MD" "Auto-generated from shared/rules/always"
+assert_contains "has auto-generated notice" "$WINDSURF_MD" "Auto-generated from shared/skills/"
 
 # Verify all always-on rules are included
 assert_contains "has Coding Standards" "$WINDSURF_MD" "^# Coding Standards"
@@ -435,7 +436,7 @@ AIDER_MD="$ADAPTERS/aider/CONVENTIONS.md"
 
 assert "CONVENTIONS.md exists" "[[ -f '$AIDER_MD' ]]"
 assert_contains "has Aider Conventions header" "$AIDER_MD" "^# Aider Conventions"
-assert_contains "has auto-generated notice" "$AIDER_MD" "Auto-generated from shared/rules/always"
+assert_contains "has auto-generated notice" "$AIDER_MD" "Auto-generated from shared/skills/"
 
 # Verify all always-on rules are included
 assert_contains "has Coding Standards" "$AIDER_MD" "^# Coding Standards"

@@ -1,0 +1,74 @@
+---
+name: copilot-conventions
+description: "Cross-copilot portable conventions: read before write, minimal changes, git discipline, project structure, and priority rules."
+---
+
+# Cross-Copilot Conventions
+
+Shared rules that apply whether using Claude Code, GitHub Copilot, Cursor, or local LLMs.
+These conventions ensure consistent behaviour regardless of which AI tool is driving.
+
+## Core Contract
+
+1. Read before write — understand existing code and patterns first.
+2. Minimal changes — only modify what was requested.
+3. Show your work — explain changes, provide diffs.
+4. Test everything — run linters and tests after code changes.
+5. Ask when uncertain — do not guess at ambiguous requirements.
+6. Verify before diagnosing — when asked to fix a reported bug, re-run the failing test or reproduce the symptom first. The issue may already be fixed. Do not spend time diagnosing a problem that no longer exists.
+
+## Single Source of Truth
+
+- The repository is the only authoritative source for conventions and decisions.
+- Do not rely on external docs (Confluence, Notion, Google Docs), chat history, or assumed knowledge.
+- If information is needed but not in the repo, ask the user — then capture the answer in `doc_internal/` before proceeding.
+
+## Git Discipline
+
+- **Never commit without explicit user instruction.** "Commit message", "what is the commit message", or similar questions are requests to propose a message — not instructions to commit. Only commit when the user says "commit", "yes", "go ahead", or equivalent. This applies regardless of auto-accept mode.
+- **Show the diff before committing.** Run `git status` and `git diff` and present the summary to the user before staging and committing. The user must see what is being committed, especially for multi-file changes.
+- **Never push without explicit user instruction.** Pushing is a separate action from committing. Never push automatically after a commit.
+- Commit messages: imperative mood, concise summary, optional body explaining "why".
+- One logical change per commit — do not mix refactors with features.
+- Branch naming: feature/, fix/, chore/, docs/ prefixes.
+
+## Project Structure Convention
+
+When setting up a new project, prefer this layout:
+
+```
+/src              — application source
+/tests            — automated tests
+/doc_internal     — internal reference docs (not shipped)
+  ARCHITECTURE.md — system design & ADRs
+  OPERATIONAL_RULES.md — project-specific coding rules
+  CONTEXT.md      — session context summaries
+  HISTORY.md      — timestamped session log
+/specs            — SDD artifacts and lessons learned
+  lessons-learned.md — cross-project knowledge base
+.gitignore
+```
+
+doc_internal/ should be in .gitignore for private projects or kept checked in for team-shared context. specs/ should always be committed — it contains SDD artifacts that bridge Plan and Build phases across sessions.
+
+## Priority Discipline
+
+- **Core before stretch.** Never suggest experimental, optional, or nice-to-have features when core deliverables are incomplete. Finish what was planned before proposing additions.
+- **No repeated rejected suggestions.** When the user rejects a suggestion or corrects your prioritization, do not re-propose the same items unless the user reopens the topic or new information materially changes the tradeoff. Acknowledge, adjust, and move forward.
+
+## Plan Artifact Locality
+
+All design/plan artifacts must reside within the project directory so that any copilot session can discover them. Plans stored outside the project (e.g., `~/.claude/plans/`) are session-local and invisible to new sessions or other tools.
+
+- Plans go in `specs/<feature-id>/plan.md` (with SDD frontmatter) for feature work.
+- Ad-hoc plans without a feature-id go in `doc_internal/plans/`.
+- Never rely on external plan storage as the only copy. If a tool writes a plan outside the project, also write it to the appropriate project-local location.
+
+## Plan Artifact Persistence
+
+**Write planning documents to disk as you produce them — never leave them only in conversation context.**
+
+- When analysis produces architecture decisions, requirements, or implementation plans, write them to `specs/` or `doc_internal/` immediately — do not defer to "later" or assume the conversation will persist.
+- When a planning conversation produces SDD-ready content (user scenarios, requirements, task breakdowns), write `spec.md`, `plan.md`, and `tasks.md` to `specs/<feature-id>/` before moving on to other work.
+- Partial artifacts are better than none. If a session is interrupted or compacted, whatever was written to disk survives.
+- This rule applies even when planning work spans conversations or is exploratory. If the output is actionable, persist it.

@@ -2,6 +2,7 @@
 applyTo: "**"
 ---
 
+
 # Phase Workflow — Post-Phase Verification
 
 Standardized steps to complete after each build phase, regardless of stack.

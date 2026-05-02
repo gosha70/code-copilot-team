@@ -2,6 +2,7 @@
 applyTo: "**"
 ---
 
+
 # Clarification Protocol
 
 Rules for when to ask clarifying questions instead of making assumptions.

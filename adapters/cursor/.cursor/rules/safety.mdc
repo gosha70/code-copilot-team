@@ -1,7 +1,8 @@
 ---
-description: "Agent Safety Rules"
+description: "Non-negotiable safety constraints: destructive action guards, blocked operations, secrets policy, password storage, input validation, and dependency review."
 alwaysApply: true
 ---
+
 
 # Agent Safety Rules
 

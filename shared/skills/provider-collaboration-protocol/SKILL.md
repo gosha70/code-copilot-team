@@ -1,0 +1,100 @@
+---
+name: provider-collaboration-protocol
+description: "Cross-provider peer review protocol: session flags, review flow, collaboration artifacts, fail-closed enforcement, and CI validation."
+---
+
+# Provider Collaboration Protocol
+
+Rules governing cross-provider peer review in dual-copilot sessions.
+
+## Session Flags
+
+Peer review is enabled per-session via launcher flags:
+
+- `--peer-review [provider-name]` — enable peer review; optional provider override.
+- `--peer-review-off` — disable peer review.
+- `--peer-review-scope code|design|both` — review scope (default: `both`).
+
+Environment variables set by launcher:
+- `CCT_PEER_REVIEW_ENABLED` — `true` or `false`.
+- `CCT_PEER_PROVIDER` — explicit provider name or empty (use profile default).
+- `CCT_REVIEW_COMMITS` — commit strategy: `single`, `per-round`, or `squash` (default: `squash`).
+- `CCT_REVIEW_MAX_ROUNDS` — max review rounds before breaker (default: 5).
+
+## Review Flow
+
+Peer review is **agent-driven** via `/review-submit`, not triggered by stop hooks.
+
+1. Build agent completes work, commits, and runs `/review-submit`.
+2. `/review-submit` invokes `review-round-runner.sh` which spawns a reviewer LLM in a read-only sandbox.
+3. Runner writes structured findings to `.cct/review/findings-round-N.json` and returns a verdict.
+4. On FAIL: agent addresses findings, commits fixes, and runs `/review-submit` again.
+5. On PASS: runner writes `loop-summary.json` and collaboration artifact. Agent proceeds to `/phase-complete`.
+6. On BREAKER: runner writes `breaker-tripped.json`. Agent stops. Human runs `/review-decide`.
+
+The stop hook (`peer-review-on-stop.sh`) **validates** that `loop-summary.json` exists with PASS or approved bypass — it does not initiate review. Plan-phase sessions are exempt.
+
+See `review-loop.md` for the full loop protocol, finding schema, and circuit breaker details.
+
+## Artifact Schema
+
+Collaboration artifacts live under `specs/<feature-id>/collaboration/`.
+
+Artifact types:
+- `plan-consult.md` — peer review of the plan phase.
+- `build-review.md` — peer review of the build phase.
+
+### Frontmatter (aligned with SDD conventions)
+
+```yaml
+---
+feature_id: [feature-id]
+date: [YYYY-MM-DD]
+status: [draft | final]
+phase: [plan | build]
+mode: [consult | review]
+subject_provider: [provider that did the work]
+peer_provider: [provider that reviewed]
+peer_profile: [profile name from providers.toml]
+runner_fingerprint: [command template hash + provider version]
+verdict: [PASS | FAIL | INCONCLUSIVE]
+blocking_findings_open: [integer]
+target_ref: [git ref]
+---
+```
+
+## Fail-Closed Runtime Rule
+
+Build-phase review is enforced at two levels:
+1. **Agent manifest + /phase-complete**: the Build agent must run `/review-submit` and receive PASS before `/phase-complete` proceeds.
+2. **Stop hook**: validates `loop-summary.json` exists with PASS or approved bypass. Blocks session stop (exit 2) if review started but did not complete.
+
+Plan-phase review is **advisory** — FAIL is logged but does not block Build entry or session stop.
+
+### Local Escape Hatch
+
+- Set `CCT_PEER_BYPASS=true` or run with `--peer-review-off` to skip review validation.
+- Bypass events are logged in artifact metadata (`bypass: true`).
+- CI rejects PRs with bypass artifacts — local bypass does not circumvent merge gates.
+
+## CI Verdict Policy
+
+CI validator (`scripts/validate-collaboration.sh`) fails the PR when:
+
+1. Required collaboration artifacts are missing (when `collaboration_mode: dual` in plan.md).
+2. `verdict != PASS`.
+3. `blocking_findings_open > 0`.
+4. `subject_provider == peer_provider` (profile-name level).
+5. Bypass artifacts are present.
+
+## Identity Policy
+
+- Provider identity is enforced at the **profile name** level from `providers.toml`.
+- `runner_fingerprint` records the command template hash and provider version for audit.
+- Wrapper-level spoofing detection is out of scope for v1.
+
+## Provider Profile
+
+Global registry: `~/.code-copilot-team/providers.toml`.
+
+See `shared/templates/provider-profile-template.toml` for schema and seed file.

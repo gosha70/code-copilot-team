@@ -1,9 +1,10 @@
 # Codex Agent Instructions
 
-Auto-generated from shared/rules/always/. Do not edit directly.
+Auto-generated from shared/skills/. Do not edit directly.
 Regenerate with: ./scripts/generate.sh
 
 ---
+
 
 # Coding Standards
 
@@ -50,6 +51,7 @@ Before declaring a change ready for review, do the homework yourself — do not 
 - **If unsure how a feature works, ask.** The user may have spent significant effort building it. Suppressing it is a regression bug, not a fix.
 
 ---
+
 
 # Cross-Copilot Conventions
 
@@ -122,6 +124,7 @@ All design/plan artifacts must reside within the project directory so that any c
 - This rule applies even when planning work spans conversations or is exploratory. If the output is actionable, persist it.
 
 ---
+
 
 # Copyright Header Rules
 
@@ -196,6 +199,7 @@ Exceptions:
 
 ---
 
+
 # Agent Safety Rules
 
 Non-negotiable safety constraints for all sessions.
@@ -245,26 +249,26 @@ Specific prohibitions:
 
 ---
 
-## On-Demand Rules Reference
+## On-Demand Skills Reference
 
-The following rules are loaded by skills when relevant. Invoke the
+The following skills are loaded when relevant. Invoke the
 corresponding skill to apply them.
 
-| Rule | Used By |
-|------|---------|
-| `agent-team-protocol` | build (optional team mode) |
-| `clarification-protocol` | plan |
-| `environment-setup` | build |
-| `infra-verification` | build |
-| `integration-testing` | review |
-| `memkernel-memory` | — |
-| `opus-4-7-features` | — |
-| `phase-workflow` | build |
-| `provider-collaboration-protocol` | — |
-| `ralph-loop` | build |
-| `review-loop` | — |
-| `spec-workflow` | plan, build |
-| `stack-constraints` | build |
-| `team-lead-efficiency` | build (optional team mode) |
-| `token-efficiency` | research |
+| Skill | Description |
+|-------|-------------|
+| `agent-team-protocol` | Multi-agent delegation rules, three-phase workflow (Plan/Build/Review), model selection, collaboration gates, and Ralph Loop integration. |
+| `clarification-protocol` | When and how to ask clarifying questions before implementing. Data model review gate and ambiguity resolution rules. |
+| `environment-setup` | Environment variable patterns, config file validation, and setup verification for new project scaffolding. |
+| `infra-verification` | Infrastructure artifact verification: Docker builds, CI workflows, and launcher flags must be executed, not just syntax-checked. |
+| `integration-testing` | Test integration points early. Verify cross-service contracts, API boundaries, and data flow before declaring done. |
+| `memkernel-memory` | MemKernel persistent memory protocol. Self-guarding: activates only when the memkernel MCP server is configured. |
+| `opus-4-7-features` | Optional guidance for sessions using Claude Opus 4.7: adaptive thinking, xhigh effort, prompt caching, /btw side questions. |
+| `phase-workflow` | Phase transition rules, post-phase verification steps, peer review validation, and commit-gate approval flow. |
+| `provider-collaboration-protocol` | Cross-provider peer review protocol: session flags, review flow, collaboration artifacts, fail-closed enforcement, and CI validation. |
+| `ralph-loop` | Single-agent autonomous iteration loop: PRD-driven, self-verifying, with configurable iteration limits and completion criteria. |
+| `review-loop` | Agent-driven peer review loop: structured findings, dispositions, circuit breakers, commit strategies, sandbox isolation, and plan-phase advisory mode. |
+| `spec-workflow` | SDD specification protocol: risk-based spec_mode classification, required sections per mode, plan approval gate, and artifact directory conventions. |
+| `stack-constraints` | Stack version pinning and dependency compatibility guards. Prevents silent version drift across project boundaries. |
+| `team-lead-efficiency` | Build team lead efficiency rules: limit sub-agents, polling discipline, no redundant re-work, parallel task launching. |
+| `token-efficiency` | Token economy rules: diff-over-rewrite, context compression, avoid verbose re-explanations, minimize round-trips. |
 

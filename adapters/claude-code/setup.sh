@@ -4,7 +4,7 @@
 # Creates:
 #   ~/.claude/CLAUDE.md                    Global configuration
 #   ~/.claude/rules/                       Global rules (auto-loaded, 4 files)
-#   ~/.claude/rules-library/               Rules library (on-demand, 15 files)
+#   ~/.claude/skills/*/SKILL.md            On-demand skills (SKILL.md format, 15 skills)
 #   ~/.claude/agents/                      Global agents (5 utility + 4 phase)
 #   ~/.claude/hooks/                       Global hook scripts (verify, notify)
 #   ~/.claude/settings.json                Global settings with hooks wired
@@ -13,7 +13,7 @@
 #   Installs claude-code launcher to ~/.local/bin/
 #
 # Run once, then use 'claude-code init <type> [path]' to scaffold projects.
-# Run with --sync to re-copy rules, rules-library, agents, hooks, templates, and launcher from repo.
+# Run with --sync to re-copy rules, skills, agents, hooks, templates, and launcher from repo.
 # Then use 'claude-code sync [path]' to update individual projects against their template.
 set -e
 
@@ -137,30 +137,37 @@ ensure_hook_command() {
 }
 
 # ══════════════════════════════════════════════════════════════
-# --sync: re-copy rules, rules-library, agents, hooks, and launcher from repo
+# --sync: re-copy rules, skills, agents, hooks, and launcher from repo
 # ══════════════════════════════════════════════════════════════
 
 if [[ "$SYNC_MODE" == "1" ]]; then
     maybe_install_memkernel
-    echo "Syncing rules, rules-library, agents, hooks, and launcher from repo..."
+    echo "Syncing rules, skills, agents, hooks, and launcher from repo..."
 
-    # Global rules (4 files) — from shared/rules/always/
-    RULES_SOURCE="$SHARED_DIR/rules/always"
+    # Global rules (always skills) — from shared/skills/
+    SKILLS_SOURCE="$SHARED_DIR/skills"
     RULES_TARGET="$CLAUDE_DIR/rules"
     mkdir -p "$RULES_TARGET"
-    if [[ -d "$RULES_SOURCE" ]]; then
-        cp "$RULES_SOURCE"/*.md "$RULES_TARGET/" 2>/dev/null || true
-        echo "[done] Synced rules to $RULES_TARGET"
-    fi
+    for name in coding-standards copilot-conventions copyright-headers safety; do
+        if [[ -f "$SKILLS_SOURCE/$name/SKILL.md" ]]; then
+            # Strip frontmatter, install body as plain .md for auto-loading
+            awk 'BEGIN{n=0} /^---$/{n++; if(n==2){found=1; next}} found{print}' "$SKILLS_SOURCE/$name/SKILL.md" > "$RULES_TARGET/$name.md"
+        fi
+    done
+    echo "[done] Synced rules to $RULES_TARGET"
 
-    # Rules library (15 files) — from shared/rules/on-demand/
-    LIBRARY_SOURCE="$SHARED_DIR/rules/on-demand"
-    LIBRARY_TARGET="$CLAUDE_DIR/rules-library"
-    mkdir -p "$LIBRARY_TARGET"
-    if [[ -d "$LIBRARY_SOURCE" ]]; then
-        cp "$LIBRARY_SOURCE"/*.md "$LIBRARY_TARGET/" 2>/dev/null || true
-        echo "[done] Synced rules-library to $LIBRARY_TARGET"
-    fi
+    # On-demand skills — from shared/skills/ to ~/.claude/skills/
+    SKILLS_TARGET="$CLAUDE_DIR/skills"
+    mkdir -p "$SKILLS_TARGET"
+    for skill_dir in "$SKILLS_SOURCE"/*/; do
+        [[ -d "$skill_dir" ]] || continue
+        sname=$(basename "$skill_dir")
+        # Skip always skills (they go to rules/)
+        case "$sname" in coding-standards|copilot-conventions|copyright-headers|safety) continue ;; esac
+        mkdir -p "$SKILLS_TARGET/$sname"
+        cp "$skill_dir/SKILL.md" "$SKILLS_TARGET/$sname/SKILL.md"
+    done
+    echo "[done] Synced skills to $SKILLS_TARGET"
 
     # Agents (9 files)
     AGENTS_SOURCE="$SCRIPT_DIR/.claude/agents"
@@ -699,35 +706,46 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 11c. GLOBAL RULES (auto-loaded, 4 files) — from shared/rules/always/
+# 11c. GLOBAL RULES (always skills, 4 files) — from shared/skills/
 # ══════════════════════════════════════════════════════════════
 
-RULES_SOURCE="$SHARED_DIR/rules/always"
+SKILLS_SOURCE="$SHARED_DIR/skills"
 RULES_TARGET="$CLAUDE_DIR/rules"
 
 mkdir -p "$RULES_TARGET"
 
-if [[ -d "$RULES_SOURCE" ]]; then
-    cp "$RULES_SOURCE"/*.md "$RULES_TARGET/" 2>/dev/null || true
+if [[ -d "$SKILLS_SOURCE" ]]; then
+    for name in coding-standards copilot-conventions copyright-headers safety; do
+        if [[ -f "$SKILLS_SOURCE/$name/SKILL.md" ]]; then
+            # Strip frontmatter, install body as plain .md for auto-loading
+            awk 'BEGIN{n=0} /^---$/{n++; if(n==2){found=1; next}} found{print}' "$SKILLS_SOURCE/$name/SKILL.md" > "$RULES_TARGET/$name.md"
+        fi
+    done
     echo "[done] Installed global rules to $RULES_TARGET"
 else
-    echo "[skip] Rules not found at $RULES_SOURCE"
+    echo "[skip] Skills not found at $SKILLS_SOURCE"
 fi
 
 # ══════════════════════════════════════════════════════════════
-# 11d. RULES LIBRARY (on-demand, 15 files) — from shared/rules/on-demand/
+# 11d. ON-DEMAND SKILLS (15 skills) — from shared/skills/ to ~/.claude/skills/
 # ══════════════════════════════════════════════════════════════
 
-LIBRARY_SOURCE="$SHARED_DIR/rules/on-demand"
-LIBRARY_TARGET="$CLAUDE_DIR/rules-library"
+SKILLS_TARGET="$CLAUDE_DIR/skills"
 
-mkdir -p "$LIBRARY_TARGET"
+mkdir -p "$SKILLS_TARGET"
 
-if [[ -d "$LIBRARY_SOURCE" ]]; then
-    cp "$LIBRARY_SOURCE"/*.md "$LIBRARY_TARGET/" 2>/dev/null || true
-    echo "[done] Installed rules-library to $LIBRARY_TARGET"
+if [[ -d "$SKILLS_SOURCE" ]]; then
+    for skill_dir in "$SKILLS_SOURCE"/*/; do
+        [[ -d "$skill_dir" ]] || continue
+        sname=$(basename "$skill_dir")
+        # Skip always skills (they go to rules/)
+        case "$sname" in coding-standards|copilot-conventions|copyright-headers|safety) continue ;; esac
+        mkdir -p "$SKILLS_TARGET/$sname"
+        cp "$skill_dir/SKILL.md" "$SKILLS_TARGET/$sname/SKILL.md"
+    done
+    echo "[done] Installed skills to $SKILLS_TARGET"
 else
-    echo "[skip] Rules library not found at $LIBRARY_SOURCE"
+    echo "[skip] Skills not found at $SKILLS_SOURCE"
 fi
 
 # ══════════════════════════════════════════════════════════════
@@ -1333,7 +1351,7 @@ echo "  - providers-health.sh    — checks availability of configured providers
 echo ""
 echo "Rules installed:"
 echo "  - ~/.claude/rules/          — 4 global rules (auto-loaded every session)"
-echo "  - ~/.claude/rules-library/  — 13 library rules (loaded on demand by agents)"
+echo "  - ~/.claude/skills/          — 15 on-demand skills (SKILL.md format, loaded by agents)"
 echo ""
 echo "Each project now includes:"
 echo "  - CLAUDE.md with stack, conventions, and Agent Team config"

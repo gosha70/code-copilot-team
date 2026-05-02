@@ -1,7 +1,8 @@
 ---
-description: "Coding Standards"
+description: "Quality gates, prohibited patterns, verification discipline, and self-audit rules for all code generation and review sessions."
 alwaysApply: true
 ---
+
 
 # Coding Standards
 

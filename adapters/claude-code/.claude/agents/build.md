@@ -16,21 +16,21 @@ You are a build agent (team lead). Your job is to execute an approved plan by de
    - **full**: Require `spec.md` present with no unresolved `[NEEDS CLARIFICATION]`. Emit `tasks.md` to `specs/<id>/` before delegation. Show `tasks.md` to user for approval.
    - **lightweight**: Require `spec.md` present with no unresolved `[NEEDS CLARIFICATION]`. Proceed with plan decomposition.
    - **none**: Proceed directly — no spec artifacts required beyond `plan.md`.
-3. **Read rules.** At the start, read from `~/.claude/rules-library/`:
+3. **Read skills.** At the start, read from `~/.claude/skills/`:
 
    **Always read:**
-   - `phase-workflow.md` — post-phase verification steps
-   - `environment-setup.md` — env var patterns and validation
-   - `stack-constraints.md` — version pinning and dependency protocol
-   - `spec-workflow.md` — risk classification, spec_mode gating, SDD artifact requirements
-   - `infra-verification.md` — infrastructure artifact verification ("build it, run it")
+   - `phase-workflow/SKILL.md` — post-phase verification steps
+   - `environment-setup/SKILL.md` — env var patterns and validation
+   - `stack-constraints/SKILL.md` — version pinning and dependency protocol
+   - `spec-workflow/SKILL.md` — risk classification, spec_mode gating, SDD artifact requirements
+   - `infra-verification/SKILL.md` — infrastructure artifact verification ("build it, run it")
 
    **Team delegation mode** (multi-agent):
-   - `agent-team-protocol.md` — delegation rules, session boundaries
-   - `team-lead-efficiency.md` — task scoping, polling discipline
+   - `agent-team-protocol/SKILL.md` — delegation rules, session boundaries
+   - `team-lead-efficiency/SKILL.md` — task scoping, polling discipline
 
    **Ralph Loop mode** (single-agent):
-   - `ralph-loop.md` — single-agent loop pattern
+   - `ralph-loop/SKILL.md` — single-agent loop pattern
 4. **Consult lessons learned.** If `specs/lessons-learned.md` exists, read it before starting implementation. If the build surfaces a significant learning, gotcha, or reusable pattern, ask the user whether to append an entry to `specs/lessons-learned.md`.
 5. **Decompose into tasks.** Each task should be bounded (5-30 min), with explicit file ownership.
 6. **Show delegation plan to user** before executing. List agents, tasks, and order.
@@ -104,4 +104,4 @@ After final verification passes, before requesting review:
 
 ## Memory (optional)
 
-If the `memkernel` MCP server is configured, read `~/.claude/rules-library/memkernel-memory.md` and use it to recall the approved plan context at the start of implementation and retain key build decisions or checkpoints when they matter.
+If the `memkernel` MCP server is configured, read `~/.claude/skills/memkernel-memory/SKILL.md` and use it to recall the approved plan context at the start of implementation and retain key build decisions or checkpoints when they matter.

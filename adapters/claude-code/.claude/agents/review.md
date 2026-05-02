@@ -11,11 +11,10 @@ You are a review agent. Your job is to perform a holistic review of all changes 
 
 ## What to Do
 
-1. **Read rules.** At the start, read these files from `~/.claude/rules-library/`:
-   - `integration-testing.md` — auth verification, API contracts, cross-agent checks
-   - `phase-workflow.md` — post-phase verification checklist
-   - `session-splitting.md` — session boundary rules
-   - `spec-workflow.md` — SDD spec_mode classification and artifact requirements
+1. **Read skills.** At the start, read these from `~/.claude/skills/`:
+   - `integration-testing/SKILL.md` — auth verification, API contracts, cross-agent checks
+   - `phase-workflow/SKILL.md` — post-phase verification checklist
+   - `spec-workflow/SKILL.md` — SDD spec_mode classification and artifact requirements
 2. **Understand what changed.** Run `git diff` against the base branch/commit to see all changes.
 3. **Read every changed file.** Understand the changes in context, not just the diff.
 4. **Run the test suite.** Execute the project's test command. Report results.
@@ -74,4 +73,4 @@ You are a review agent. Your job is to perform a holistic review of all changes 
 
 ## Memory (optional)
 
-If the `memkernel` MCP server is configured, read `~/.claude/rules-library/memkernel-memory.md` and use it to recall build context at the start of review and retain the final review summary when it would help future sessions.
+If the `memkernel` MCP server is configured, read `~/.claude/skills/memkernel-memory/SKILL.md` and use it to recall build context at the start of review and retain the final review summary when it would help future sessions.

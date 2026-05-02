@@ -2,6 +2,7 @@
 applyTo: "**/Dockerfile*,**/docker-compose*,**/compose*,**/*.sh,**/.github/workflows/*"
 ---
 
+
 # Infrastructure Verification — "Build It, Run It"
 
 ## Principle

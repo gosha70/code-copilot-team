@@ -2,6 +2,7 @@
 applyTo: "**"
 ---
 
+
 # Ralph Loop (Single-Agent Autonomous Loop)
 
 A single agent runs in a loop until the task is complete. Each iteration reads a plan, picks the next incomplete item, implements it, runs tests, and commits if passing.

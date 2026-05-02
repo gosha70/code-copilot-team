@@ -2,6 +2,7 @@
 applyTo: "**"
 ---
 
+
 # Token Efficiency
 
 Practices to minimise token waste across all sessions.

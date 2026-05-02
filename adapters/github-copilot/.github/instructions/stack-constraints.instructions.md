@@ -2,6 +2,7 @@
 applyTo: "**/package.json,**/pyproject.toml,**/go.mod,**/Cargo.toml,**/pom.xml"
 ---
 
+
 # Stack Constraints
 
 Rules for managing dependency versions and technology choices across all project types.

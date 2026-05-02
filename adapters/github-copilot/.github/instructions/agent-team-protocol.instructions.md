@@ -2,6 +2,7 @@
 applyTo: "**"
 ---
 
+
 # Agent Team Protocol
 
 Rules governing multi-agent delegation, phased workflows, and model selection.

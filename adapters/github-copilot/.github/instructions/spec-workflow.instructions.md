@@ -2,6 +2,7 @@
 applyTo: "**"
 ---
 
+
 # Spec Workflow — SDD Specification Protocol
 
 Rules governing when a Software Design Document (SDD) spec is required, what sections it must contain, and how it gates the transition from Plan to Build.

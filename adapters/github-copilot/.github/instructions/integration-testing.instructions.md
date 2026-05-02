@@ -2,6 +2,7 @@
 applyTo: "**/tests/**,**/test/**,**/*test*,**/*spec*"
 ---
 
+
 # Integration Testing Protocol
 
 Rules for verifying that cross-cutting features work before building on top of them.

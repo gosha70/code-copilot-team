@@ -1,7 +1,8 @@
 # Copilot Instructions
 
-Auto-generated from shared/rules/always/. Do not edit directly.
+Auto-generated from shared/skills/. Do not edit directly.
 Regenerate with: ./scripts/generate.sh
+
 
 # Coding Standards
 
@@ -48,6 +49,7 @@ Before declaring a change ready for review, do the homework yourself — do not 
 - **If unsure how a feature works, ask.** The user may have spent significant effort building it. Suppressing it is a regression bug, not a fix.
 
 ---
+
 
 # Cross-Copilot Conventions
 
@@ -121,6 +123,7 @@ All design/plan artifacts must reside within the project directory so that any c
 
 ---
 
+
 # Copyright Header Rules
 
 When a project's CLAUDE.md contains a `## Copyright & Licensing` section,
@@ -193,6 +196,7 @@ Exceptions:
 - If the file begins with `<?xml` or `<!DOCTYPE`, place the header after that line.
 
 ---
+
 
 # Agent Safety Rules
 

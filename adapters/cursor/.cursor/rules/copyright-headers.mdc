@@ -1,7 +1,8 @@
 ---
-description: "Copyright Header Rules"
+description: "Copyright header rules for generated source files. Applies the company name from providers.toml to new files."
 alwaysApply: true
 ---
+
 
 # Copyright Header Rules
 

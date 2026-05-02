@@ -107,58 +107,56 @@ assert_nonempty() {
 }
 
 # ══════════════════════════════════════════════════════════════
-# 1. shared/rules/always/ — 4 core rules exist and are non-empty
+# 1. shared/skills/ — 19 skills exist in SKILL.md format
 # ══════════════════════════════════════════════════════════════
 
-echo "=== shared/rules/always/ ==="
+echo "=== shared/skills/ ==="
 
-assert_dir_exists "shared/rules/always/ exists" "$SHARED_DIR/rules/always"
-assert_file_exists "coding-standards.md exists" "$SHARED_DIR/rules/always/coding-standards.md"
-assert_file_exists "copilot-conventions.md exists" "$SHARED_DIR/rules/always/copilot-conventions.md"
-assert_file_exists "safety.md exists" "$SHARED_DIR/rules/always/safety.md"
-assert_file_exists "copyright-headers.md exists" "$SHARED_DIR/rules/always/copyright-headers.md"
-assert_nonempty "coding-standards.md non-empty" "$SHARED_DIR/rules/always/coding-standards.md"
-assert_nonempty "copilot-conventions.md non-empty" "$SHARED_DIR/rules/always/copilot-conventions.md"
-assert_nonempty "safety.md non-empty" "$SHARED_DIR/rules/always/safety.md"
-assert_nonempty "copyright-headers.md non-empty" "$SHARED_DIR/rules/always/copyright-headers.md"
+SKILLS_DIR_PATH="$SHARED_DIR/skills"
+assert_dir_exists "shared/skills/ exists" "$SKILLS_DIR_PATH"
 
-ALWAYS_COUNT=$(find "$SHARED_DIR/rules/always" -name '*.md' | wc -l | tr -d ' ')
-assert_eq "exactly 4 always rules" "4" "$ALWAYS_COUNT"
-
-# ══════════════════════════════════════════════════════════════
-# 2. shared/rules/on-demand/ — 13 library rules exist
-# ══════════════════════════════════════════════════════════════
-
-echo ""
-echo "=== shared/rules/on-demand/ ==="
-
-assert_dir_exists "shared/rules/on-demand/ exists" "$SHARED_DIR/rules/on-demand"
-
-ON_DEMAND_FILES=(
-  agent-team-protocol.md
-  clarification-protocol.md
-  environment-setup.md
-  infra-verification.md
-  integration-testing.md
-  memkernel-memory.md
-  opus-4-7-features.md
-  phase-workflow.md
-  provider-collaboration-protocol.md
-  ralph-loop.md
-  review-loop.md
-  spec-workflow.md
-  stack-constraints.md
-  team-lead-efficiency.md
-  token-efficiency.md
+SKILL_NAMES=(
+  agent-team-protocol
+  clarification-protocol
+  coding-standards
+  copilot-conventions
+  copyright-headers
+  environment-setup
+  infra-verification
+  integration-testing
+  memkernel-memory
+  opus-4-7-features
+  phase-workflow
+  provider-collaboration-protocol
+  ralph-loop
+  review-loop
+  safety
+  spec-workflow
+  stack-constraints
+  team-lead-efficiency
+  token-efficiency
 )
 
-for f in "${ON_DEMAND_FILES[@]}"; do
-  assert_file_exists "$f exists" "$SHARED_DIR/rules/on-demand/$f"
-  assert_nonempty "$f non-empty" "$SHARED_DIR/rules/on-demand/$f"
+for s in "${SKILL_NAMES[@]}"; do
+  assert_dir_exists "$s/ exists" "$SKILLS_DIR_PATH/$s"
+  assert_file_exists "$s/SKILL.md exists" "$SKILLS_DIR_PATH/$s/SKILL.md"
+  assert_nonempty "$s/SKILL.md non-empty" "$SKILLS_DIR_PATH/$s/SKILL.md"
 done
 
-ONDEMAND_COUNT=$(find "$SHARED_DIR/rules/on-demand" -name '*.md' | wc -l | tr -d ' ')
-assert_eq "exactly 15 on-demand rules" "15" "$ONDEMAND_COUNT"
+SKILL_COUNT=$(find "$SKILLS_DIR_PATH" -name 'SKILL.md' | wc -l | tr -d ' ')
+assert_eq "exactly 19 skills" "19" "$SKILL_COUNT"
+
+# Verify SKILL.md frontmatter has required fields
+for s in "${SKILL_NAMES[@]}"; do
+  SKILL_FILE="$SKILLS_DIR_PATH/$s/SKILL.md"
+  rc=0; grep -q '^name:' "$SKILL_FILE" || rc=1
+  assert_ok "$s has name field" "$rc"
+  rc=0; grep -q '^description:' "$SKILL_FILE" || rc=1
+  assert_ok "$s has description field" "$rc"
+  # Verify name matches directory
+  SKILL_NAME_VALUE=$(sed -n '/^---$/,/^---$/p' "$SKILL_FILE" | grep '^name:' | sed 's/^name: *//')
+  assert_eq "$s name matches directory" "$s" "$SKILL_NAME_VALUE"
+done
 
 # ══════════════════════════════════════════════════════════════
 # 3. shared/docs/ — tool-agnostic docs exist
@@ -286,30 +284,11 @@ for f in coding-standards.md copilot-conventions.md safety.md; do
 done
 
 echo ""
-echo "=== symlinks: rules-library → shared/ ==="
+echo "=== skills source structure ==="
 
-for f in "${ON_DEMAND_FILES[@]}"; do
-  assert_symlink "rules-library/$f is symlink" "$CLAUDE_CODE_DIR/.claude/rules-library/$f"
-  assert_symlink_resolves "rules-library/$f resolves" "$CLAUDE_CODE_DIR/.claude/rules-library/$f"
-done
-
-# ══════════════════════════════════════════════════════════════
-# 7. Symlink content matches shared/ content (no divergence)
-# ══════════════════════════════════════════════════════════════
-
-echo ""
-echo "=== symlink content matches shared/ ==="
-
-for f in coding-standards.md copilot-conventions.md safety.md; do
-  rc=0
-  diff -q "$CLAUDE_CODE_DIR/.claude/rules/$f" "$SHARED_DIR/rules/always/$f" >/dev/null 2>&1 || rc=1
-  assert_ok "rules/$f content matches" "$rc"
-done
-
-for f in "${ON_DEMAND_FILES[@]}"; do
-  rc=0
-  diff -q "$CLAUDE_CODE_DIR/.claude/rules-library/$f" "$SHARED_DIR/rules/on-demand/$f" >/dev/null 2>&1 || rc=1
-  assert_ok "rules-library/$f content matches" "$rc"
+# Verify each skill directory has a SKILL.md (already checked above, lightweight re-check)
+for s in "${SKILL_NAMES[@]}"; do
+  assert_file_exists "skills/$s/SKILL.md present" "$SKILLS_DIR_PATH/$s/SKILL.md"
 done
 
 # ══════════════════════════════════════════════════════════════
@@ -338,19 +317,11 @@ HEREDOC_COUNT="${HEREDOC_COUNT:-0}"
 assert_eq "no inline template heredocs remain" "0" "$HEREDOC_COUNT"
 
 # Rules section references shared/
-rc=0; grep -q 'SHARED_DIR/rules/always' "$SETUP_SCRIPT" || rc=1
-assert_ok "rules install uses shared/rules/always" "$rc"
+rc=0; grep -q 'SHARED_DIR/skills' "$SETUP_SCRIPT" || rc=1
+assert_ok "setup.sh references shared/skills" "$rc"
 
-rc=0; grep -q 'SHARED_DIR/rules/on-demand' "$SETUP_SCRIPT" || rc=1
-assert_ok "rules-library install uses shared/rules/on-demand" "$rc"
-
-# --sync references shared/
-SYNC_SECTION=$(sed -n '/--sync/,/exit 0/p' "$SETUP_SCRIPT")
-rc=0; echo "$SYNC_SECTION" | grep -q 'SHARED_DIR/rules/always' || rc=1
-assert_ok "--sync uses shared/rules/always" "$rc"
-
-rc=0; echo "$SYNC_SECTION" | grep -q 'SHARED_DIR/rules/on-demand' || rc=1
-assert_ok "--sync uses shared/rules/on-demand" "$rc"
+rc=0; grep -q 'SKILLS_SOURCE' "$SETUP_SCRIPT" || rc=1
+assert_ok "setup.sh uses SKILLS_SOURCE variable" "$rc"
 
 # ══════════════════════════════════════════════════════════════
 # 9. Regression — Claude-specific files in adapter
@@ -470,24 +441,31 @@ echo "=== install output: ~/.claude/ matches shared/ ==="
 
 INSTALL_DIR="$HOME/.claude"
 
-# Rules match
-for f in coding-standards.md copilot-conventions.md safety.md; do
+# Always rules match (installed as plain .md from SKILL.md body)
+for f in coding-standards.md copilot-conventions.md safety.md copyright-headers.md; do
   if [[ -f "$INSTALL_DIR/rules/$f" ]]; then
-    rc=0; diff -q "$INSTALL_DIR/rules/$f" "$SHARED_DIR/rules/always/$f" >/dev/null 2>&1 || rc=1
-    assert_ok "installed rules/$f matches shared/" "$rc"
+    echo "  PASS: installed rules/$f found"
+    PASS=$((PASS + 1))
   else
     echo "  FAIL: installed rules/$f not found (run setup.sh first)"
     FAIL=$((FAIL + 1))
   fi
 done
 
-# Rules library match
-for f in "${ON_DEMAND_FILES[@]}"; do
-  if [[ -f "$INSTALL_DIR/rules-library/$f" ]]; then
-    rc=0; diff -q "$INSTALL_DIR/rules-library/$f" "$SHARED_DIR/rules/on-demand/$f" >/dev/null 2>&1 || rc=1
-    assert_ok "installed rules-library/$f matches shared/" "$rc"
+# On-demand skills match (installed as SKILL.md directories)
+ON_DEMAND_SKILLS=(
+  agent-team-protocol clarification-protocol environment-setup
+  infra-verification integration-testing memkernel-memory
+  opus-4-7-features phase-workflow provider-collaboration-protocol
+  ralph-loop review-loop spec-workflow stack-constraints
+  team-lead-efficiency token-efficiency
+)
+for s in "${ON_DEMAND_SKILLS[@]}"; do
+  if [[ -f "$INSTALL_DIR/skills/$s/SKILL.md" ]]; then
+    rc=0; diff -q "$INSTALL_DIR/skills/$s/SKILL.md" "$SKILLS_DIR_PATH/$s/SKILL.md" >/dev/null 2>&1 || rc=1
+    assert_ok "installed skills/$s/SKILL.md matches shared/" "$rc"
   else
-    echo "  FAIL: installed rules-library/$f not found (run setup.sh first)"
+    echo "  FAIL: installed skills/$s/SKILL.md not found (run setup.sh first)"
     FAIL=$((FAIL + 1))
   fi
 done
@@ -804,12 +782,12 @@ grep -Eq "docs/[[:space:]]+${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" 
 assert_ok "README lists ${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$rc"
 
 rc=0
-grep -Eq "rules/always/[[:space:]]+4 global rules" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 4 global always rules" "$rc"
+grep -Eq "rules/\*\.md[[:space:]]+.*Global rules" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists global rules" "$rc"
 
 rc=0
-grep -Eq "rules/on-demand/[[:space:]]+15 rules loaded by phase agents" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 15 on-demand rules" "$rc"
+grep -Eq "skills/[[:space:]]+19 skills" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 19 skills" "$rc"
 
 rc=0
 grep -Eq "templates/[[:space:]]+9 stacks" "$REPO_DIR/README.md" || rc=1
@@ -1779,8 +1757,8 @@ REVIEW_MD="$ADAPTER_DIR/.claude/agents/review.md"
 rc=0; grep -q 'Spec Conformance' "$REVIEW_MD" || rc=1
 assert_ok "review.md contains Spec Conformance in output format" "$rc"
 
-rc=0; grep -q 'spec-workflow.md' "$REVIEW_MD" || rc=1
-assert_ok "review.md contains spec-workflow.md in rules list" "$rc"
+rc=0; grep -q 'spec-workflow' "$REVIEW_MD" || rc=1
+assert_ok "review.md references spec-workflow skill" "$rc"
 
 # ══════════════════════════════════════════════════════════════
 # Agent contract consistency
@@ -1818,8 +1796,8 @@ grep -q 'phase-complete' "$ADAPTER_DIR/.claude/agents/plan.md" || rc=1
 assert_ok "plan.md mentions phase-complete" "$rc"
 
 rc=0
-grep -q 'phase-workflow.md' "$ADAPTER_DIR/.claude/agents/plan.md" || rc=1
-assert_ok "plan.md reads phase-workflow.md" "$rc"
+grep -q 'phase-workflow' "$ADAPTER_DIR/.claude/agents/plan.md" || rc=1
+assert_ok "plan.md reads phase-workflow skill" "$rc"
 
 rc=0
 grep -q 'Peer review gate' "$ADAPTER_DIR/.claude/agents/build.md" || rc=1

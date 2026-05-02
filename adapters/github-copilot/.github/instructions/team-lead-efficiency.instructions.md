@@ -2,6 +2,7 @@
 applyTo: "**"
 ---
 
+
 # Team Lead Efficiency
 
 Rules for the lead agent when coordinating sub-agents to minimize waste and maximize throughput.

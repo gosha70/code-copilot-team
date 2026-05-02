@@ -228,7 +228,7 @@ Every provider currently requires a `command` template with `{review_request}` a
 
 ![Configuration Layers](docs/images/configuration-layers.png)
 
-- **Layered rules** — 4 global rules (`~/.claude/rules/`) auto-load every session; 15 on-demand rules (`~/.claude/rules-library/`) loaded by phase agents when needed.
+- **Layered rules** — 4 global rules (`~/.claude/rules/`) auto-load every session; 15 on-demand skills (`~/.claude/skills/*/SKILL.md`) loaded by phase agents when needed.
 - **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
 - **Hooks** (`~/.claude/hooks/`) — 11 lifecycle scripts: test verification, type checking, auto-format, file protection, git safety guards, context re-injection, peer review trigger, desktop notifications, plus 3 self-guarding MemKernel hooks (session recall, pre-compact checkpoint, post-compact recovery) that activate only when MemKernel is installed.
 - **8 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
@@ -321,22 +321,22 @@ Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but neve
   ├── copilot-conventions.md       Cross-tool portable conventions
   ├── safety.md                    Destructive action guards, secrets policy
   └── copyright-headers.md         Copyright header rules for generated source files
-~/.claude/rules-library/*.md       ← On-demand rules (loaded by phase agents, 15 files)
-  ├── agent-team-protocol.md       Three-phase workflow, delegation rules
-  ├── clarification-protocol.md    Ask before implementing ambiguous requirements
-  ├── environment-setup.md         Environment and config verification
-  ├── infra-verification.md        Infrastructure artifact verification ("build it, run it")
-  ├── integration-testing.md       Test integration points early
-  ├── memkernel-memory.md          MemKernel persistent memory protocol (self-guarding)
-  ├── opus-4-7-features.md         Opus 4.7 optimization (xhigh effort, auto mode, caching)
-  ├── phase-workflow.md            Phase transition rules and boundaries
-  ├── provider-collaboration-protocol.md  Peer review protocol and collaboration rules
-  ├── ralph-loop.md                Single-agent autonomous iteration loop
-  ├── review-loop.md               Peer review loop with findings and resolutions
-  ├── spec-workflow.md             SDD spec gating and artifact management
-  ├── stack-constraints.md         Stack version and compatibility guards
-  ├── team-lead-efficiency.md      Limit agents, poll frequency, no re-work
-  └── token-efficiency.md          Diff-over-rewrite, context economy
+~/.claude/skills/*/SKILL.md        ← On-demand skills (SKILL.md format, 15 skills)
+  ├── agent-team-protocol/         Three-phase workflow, delegation rules
+  ├── clarification-protocol/      Ask before implementing ambiguous requirements
+  ├── environment-setup/           Environment and config verification
+  ├── infra-verification/          Infrastructure artifact verification ("build it, run it")
+  ├── integration-testing/         Test integration points early
+  ├── memkernel-memory/            MemKernel persistent memory protocol (self-guarding)
+  ├── opus-4-7-features/           Opus 4.7 optimization (xhigh effort, auto mode, caching)
+  ├── phase-workflow/              Phase transition rules and boundaries
+  ├── provider-collaboration-protocol/  Peer review protocol and collaboration rules
+  ├── ralph-loop/                  Single-agent autonomous iteration loop
+  ├── review-loop/                 Peer review loop with findings and resolutions
+  ├── spec-workflow/               SDD spec gating and artifact management
+  ├── stack-constraints/           Stack version and compatibility guards
+  ├── team-lead-efficiency/        Limit agents, poll frequency, no re-work
+  └── token-efficiency/            Diff-over-rewrite, context economy
 ~/.claude/agents/*.md              ← Phase + utility agents (9 files)
   ├── research.md                  Research phase agent
   ├── plan.md                      Plan phase agent
@@ -381,7 +381,7 @@ Each phase has a dedicated agent (`~/.claude/agents/`) that loads the relevant r
 
 ## Supported Tools
 
-All tools share the same rules from `shared/rules/always/`. Each adapter formats them for the target tool.
+All tools share the same rules from `shared/skills/`. Each adapter formats them for the target tool.
 
 | Tool | Adapter Output | Install Location |
 |---|---|---|
@@ -397,8 +397,7 @@ All tools share the same rules from `shared/rules/always/`. Each adapter formats
 ```
 code-copilot-team/
 ├── shared/                              ← Single source of truth
-│   ├── rules/always/                    4 global rules (always loaded)
-│   ├── rules/on-demand/                 15 rules loaded by phase agents
+│   ├── skills/                          19 skills (SKILL.md format, open Agent Skills spec)
 │   ├── docs/                            8 tool-agnostic reference docs
 │   ├── templates/                       9 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
@@ -420,8 +419,8 @@ code-copilot-team/
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
-│   ├── test-generate.sh                 277 generation + adapter tests
-│   ├── test-shared-structure.sh         678 structure + content tests
+│   ├── test-generate.sh                 274 generation + adapter tests
+│   ├── test-shared-structure.sh         722 structure + content tests
 │   ├── test-sync.sh                     61 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   └── test-review-loop.sh            31 review loop integration tests
