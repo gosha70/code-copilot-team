@@ -297,6 +297,9 @@ if [[ "$SYNC_MODE" == "1" ]]; then
             mkdir -p "$dest/.claude"
             cp -r "$tmpl_dir/.claude/"* "$dest/.claude/" 2>/dev/null || true
         fi
+        if [[ -d "$tmpl_dir/.github" ]]; then
+            cp -r "$tmpl_dir/.github" "$dest/" 2>/dev/null || true
+        fi
     done
     echo "[done] Synced templates to $TEMPLATES_DIR"
 
@@ -507,6 +510,9 @@ if [[ -d "$SHARED_DIR/templates/ml-rag/.claude" ]]; then
     mkdir -p "$TEMPLATES_DIR/ml-rag/.claude"
     cp -r "$SHARED_DIR/templates/ml-rag/.claude/"* "$TEMPLATES_DIR/ml-rag/.claude/" 2>/dev/null || true
 fi
+if [[ -d "$SHARED_DIR/templates/ml-rag/.github" ]]; then
+    cp -r "$SHARED_DIR/templates/ml-rag/.github" "$TEMPLATES_DIR/ml-rag/" 2>/dev/null || true
+fi
 echo "[done] Created template: ml-rag"
 
 # ══════════════════════════════════════════════════════════════
@@ -521,6 +527,9 @@ fi
 if [[ -d "$SHARED_DIR/templates/ml-app/.claude" ]]; then
     mkdir -p "$TEMPLATES_DIR/ml-app/.claude"
     cp -r "$SHARED_DIR/templates/ml-app/.claude/"* "$TEMPLATES_DIR/ml-app/.claude/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/ml-app/.github" ]]; then
+    cp -r "$SHARED_DIR/templates/ml-app/.github" "$TEMPLATES_DIR/ml-app/" 2>/dev/null || true
 fi
 echo "[done] Created template: ml-app"
 
@@ -537,6 +546,9 @@ if [[ -d "$SHARED_DIR/templates/ml-utils/.claude" ]]; then
     mkdir -p "$TEMPLATES_DIR/ml-utils/.claude"
     cp -r "$SHARED_DIR/templates/ml-utils/.claude/"* "$TEMPLATES_DIR/ml-utils/.claude/" 2>/dev/null || true
 fi
+if [[ -d "$SHARED_DIR/templates/ml-utils/.github" ]]; then
+    cp -r "$SHARED_DIR/templates/ml-utils/.github" "$TEMPLATES_DIR/ml-utils/" 2>/dev/null || true
+fi
 echo "[done] Created template: ml-utils"
 
 # ══════════════════════════════════════════════════════════════
@@ -551,6 +563,9 @@ fi
 if [[ -d "$SHARED_DIR/templates/ml-langchain/.claude" ]]; then
     mkdir -p "$TEMPLATES_DIR/ml-langchain/.claude"
     cp -r "$SHARED_DIR/templates/ml-langchain/.claude/"* "$TEMPLATES_DIR/ml-langchain/.claude/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/ml-langchain/.github" ]]; then
+    cp -r "$SHARED_DIR/templates/ml-langchain/.github" "$TEMPLATES_DIR/ml-langchain/" 2>/dev/null || true
 fi
 echo "[done] Created template: ml-langchain"
 
@@ -567,6 +582,9 @@ if [[ -d "$SHARED_DIR/templates/ml-n8n/.claude" ]]; then
     mkdir -p "$TEMPLATES_DIR/ml-n8n/.claude"
     cp -r "$SHARED_DIR/templates/ml-n8n/.claude/"* "$TEMPLATES_DIR/ml-n8n/.claude/" 2>/dev/null || true
 fi
+if [[ -d "$SHARED_DIR/templates/ml-n8n/.github" ]]; then
+    cp -r "$SHARED_DIR/templates/ml-n8n/.github" "$TEMPLATES_DIR/ml-n8n/" 2>/dev/null || true
+fi
 echo "[done] Created template: ml-n8n"
 
 # ══════════════════════════════════════════════════════════════
@@ -581,6 +599,9 @@ fi
 if [[ -d "$SHARED_DIR/templates/java-enterprise/.claude" ]]; then
     mkdir -p "$TEMPLATES_DIR/java-enterprise/.claude"
     cp -r "$SHARED_DIR/templates/java-enterprise/.claude/"* "$TEMPLATES_DIR/java-enterprise/.claude/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/java-enterprise/.github" ]]; then
+    cp -r "$SHARED_DIR/templates/java-enterprise/.github" "$TEMPLATES_DIR/java-enterprise/" 2>/dev/null || true
 fi
 echo "[done] Created template: java-enterprise"
 
@@ -597,6 +618,9 @@ if [[ -d "$SHARED_DIR/templates/web-static/.claude" ]]; then
     mkdir -p "$TEMPLATES_DIR/web-static/.claude"
     cp -r "$SHARED_DIR/templates/web-static/.claude/"* "$TEMPLATES_DIR/web-static/.claude/" 2>/dev/null || true
 fi
+if [[ -d "$SHARED_DIR/templates/web-static/.github" ]]; then
+    cp -r "$SHARED_DIR/templates/web-static/.github" "$TEMPLATES_DIR/web-static/" 2>/dev/null || true
+fi
 echo "[done] Created template: web-static"
 
 # ══════════════════════════════════════════════════════════════
@@ -612,6 +636,9 @@ if [[ -d "$SHARED_DIR/templates/web-dynamic/.claude" ]]; then
     mkdir -p "$TEMPLATES_DIR/web-dynamic/.claude"
     cp -r "$SHARED_DIR/templates/web-dynamic/.claude/"* "$TEMPLATES_DIR/web-dynamic/.claude/" 2>/dev/null || true
 fi
+if [[ -d "$SHARED_DIR/templates/web-dynamic/.github" ]]; then
+    cp -r "$SHARED_DIR/templates/web-dynamic/.github" "$TEMPLATES_DIR/web-dynamic/" 2>/dev/null || true
+fi
 echo "[done] Created template: web-dynamic"
 
 # ══════════════════════════════════════════════════════════════
@@ -626,6 +653,9 @@ fi
 if [[ -d "$SHARED_DIR/templates/java-tooling/.claude" ]]; then
     mkdir -p "$TEMPLATES_DIR/java-tooling/.claude"
     cp -r "$SHARED_DIR/templates/java-tooling/.claude/"* "$TEMPLATES_DIR/java-tooling/.claude/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/java-tooling/.github" ]]; then
+    cp -r "$SHARED_DIR/templates/java-tooling/.github" "$TEMPLATES_DIR/java-tooling/" 2>/dev/null || true
 fi
 echo "[done] Created template: java-tooling"
 

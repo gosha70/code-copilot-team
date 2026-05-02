@@ -597,6 +597,11 @@ init_project() {
         cp -r "$TEMPLATES_DIR/$type/commands/"* "$target/.claude/commands/" 2>/dev/null || true
     fi
 
+    # Copy .github directory (CI workflows) if it exists
+    if [[ -d "$TEMPLATES_DIR/$type/.github" ]]; then
+        cp -r "$TEMPLATES_DIR/$type/.github" "$target/" 2>/dev/null || true
+    fi
+
     # Write template metadata for sync support
     local hash
     hash=$(compute_template_hash "$TEMPLATES_DIR/$type/CLAUDE.md")
@@ -839,6 +844,35 @@ sync_project() {
                 changes=$((changes + 1))
             fi
         done < <(find "$tmpl_dir/.claude" -type f -print0 2>/dev/null)
+    fi
+
+    # 4b. Sync .github directory contents (CI workflows)
+    if [[ -d "$tmpl_dir/.github" ]]; then
+        while IFS= read -r -d '' tmpl_file; do
+            local rel_path="${tmpl_file#$tmpl_dir/}"
+            local dest="$target/$rel_path"
+
+            if [[ ! -f "$dest" ]]; then
+                if [[ "$dry_run" == "1" ]]; then
+                    echo "  [add] $rel_path (new)"
+                else
+                    mkdir -p "$(dirname "$dest")"
+                    cp "$tmpl_file" "$dest"
+                    echo "  [add] $rel_path"
+                fi
+                changes=$((changes + 1))
+            elif ! diff -q "$tmpl_file" "$dest" >/dev/null 2>&1; then
+                if [[ "$dry_run" == "1" ]]; then
+                    echo "  [upd] $rel_path (changed)"
+                    diff --unified=3 "$dest" "$tmpl_file" 2>/dev/null | head -20 || true
+                    echo ""
+                else
+                    cp "$tmpl_file" "$dest"
+                    echo "  [upd] $rel_path"
+                fi
+                changes=$((changes + 1))
+            fi
+        done < <(find "$tmpl_dir/.github" -type f -print0 2>/dev/null)
     fi
 
     # 5. Show CLAUDE.md diff (never auto-overwrite — user has customizations)

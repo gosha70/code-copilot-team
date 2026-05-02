@@ -341,6 +341,22 @@ Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but neve
 | `web-dynamic` | Next.js/Remix · Node/Python · PostgreSQL | Team Lead, Frontend Dev, Backend Dev, QA, DevOps |
 | `java-tooling` | Java 21 · Gradle · JSR 269 · JavaPoet · Spring AI MCP | Team Lead, APT Engineer, MCP Specialist, Plugin Dev, QA |
 
+### Bundled CI Workflows
+
+Each template ships a `.github/workflows/` file so consumer projects have working CI on day one.
+
+| Stack | Workflow file | What it runs |
+|---|---|---|
+| `ml-app`, `ml-rag`, `ml-langchain`, `ml-n8n`, `ml-utils` | `python.yml` | ruff · mypy · pytest --cov · matrix: 3.10, 3.11, 3.12 |
+| `java-enterprise`, `java-tooling` | `gradle.yml` | `./gradlew build check test` · matrix: JDK 17, 21 · optional `publish-staging` on tags |
+| `web-static`, `web-dynamic` | `node.yml` | lint · typecheck · test · matrix: Node 20, 22 · auto-detects npm/yarn/pnpm |
+
+**Matrix override via `workflow_dispatch`.** Every workflow accepts a manual trigger with an optional version input (e.g. `python-version: "3.12"` or `node-version: "20"`). Leave it blank to run the full matrix.
+
+**Dual-branch trigger.** All workflows fire on push to `master` or `main` — whichever convention a project uses.
+
+**Bootstrap path.** `claude-code init <type>` copies `.github/workflows/` into the new project automatically. `claude-code sync` keeps the workflow file up to date alongside `remediation.json` and commands.
+
 ## How Configuration Layers Work
 
 ```
