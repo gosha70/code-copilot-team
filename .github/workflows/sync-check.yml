@@ -109,7 +109,7 @@ jobs:
 
       - name: Validate spec conformance
         run: |
-          if [[ -d specs/ ]] && ls specs/*/plan.md >/dev/null 2>&1; then
+          if [[ -d specs/ ]] && { ls specs/*/plan.md >/dev/null 2>&1 || ls specs/pitches/*/plan.md >/dev/null 2>&1; }; then
             bash scripts/validate-spec.sh --all
           else
             echo "No spec artifacts found; skipping validation"

@@ -16,15 +16,43 @@ permissions:
   contents: read
 
 jobs:
+  detect:
+    # Lightweight gate: skip the build job entirely until the consumer
+    # project ships the Gradle wrapper. hashFiles() is not allowed in
+    # jobs.<id>.if, so detection happens in a step here and downstream
+    # jobs gate on needs.detect.outputs.ready. Note: the workflow uses
+    # ./gradlew, so the wrapper itself is the load-bearing marker —
+    # build.gradle alone is insufficient (no `gradle` is installed on
+    # the runner by default).
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: check
+        run: |
+          if [[ -f gradlew ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            if [[ -f build.gradle || -f build.gradle.kts || -f settings.gradle || -f settings.gradle.kts ]]; then
+              echo "::notice::Gradle build scripts found but no wrapper (gradlew). Run 'gradle wrapper' to enable CI."
+            else
+              echo "::notice::No Gradle wrapper found — skipping Gradle CI."
+            fi
+          fi
+
   build:
+    needs: detect
+    if: needs.detect.outputs.ready == 'true'
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        java-version:
-          - "17"
-          - "21"
+        # workflow_dispatch with a non-empty java-version input runs that
+        # version only; otherwise (push, PR, or blank dispatch) runs the full matrix.
+        java-version: ${{ github.event.inputs.java-version && fromJSON(format('["{0}"]', github.event.inputs.java-version)) || fromJSON('["17","21"]') }}
 
     steps:
       - uses: actions/checkout@v5
@@ -46,8 +74,8 @@ jobs:
         run: ./gradlew test
 
   publish-staging:
-    if: startsWith(github.ref, 'refs/tags/')
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
 
     permissions:

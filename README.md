@@ -353,7 +353,7 @@ Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but neve
 
 ### Bundled CI Workflows
 
-Each template ships a `.github/workflows/` file so consumer projects have working CI on day one.
+Each template ships a `.github/workflows/` file so CI is wired up the moment the consumer adds their toolchain manifest.
 
 | Stack | Workflow file | What it runs |
 |---|---|---|
@@ -361,7 +361,9 @@ Each template ships a `.github/workflows/` file so consumer projects have workin
 | `java-enterprise`, `java-tooling` | `gradle.yml` | `./gradlew build check test` · matrix: JDK 17, 21 · optional `publish-staging` on tags |
 | `web-static`, `web-dynamic` | `node.yml` | lint · typecheck · test · matrix: Node 20, 22 · auto-detects npm/yarn/pnpm |
 
-**Matrix override via `workflow_dispatch`.** Every workflow accepts a manual trigger with an optional version input (e.g. `python-version: "3.12"` or `node-version: "20"`). Leave it blank to run the full matrix.
+**Auto-skip on empty project.** Each workflow's job is gated on a toolchain marker (`pyproject.toml` / `setup.py` / `setup.cfg` for Python, `package.json` for Node, `gradlew` for Gradle — the wrapper, since build steps invoke `./gradlew`). A freshly bootstrapped project with no marker yet gets a green skip rather than a red failure. The job activates as soon as the consumer adds the marker file. Gradle projects that have build scripts but no wrapper get a notice nudging them to run `gradle wrapper`.
+
+**Matrix override via `workflow_dispatch`.** Every workflow accepts a manual trigger with an optional version input (e.g. `python-version: "3.12"` or `node-version: "20"`). Leave it blank to run the full matrix; set it to a specific version to run that one only.
 
 **Dual-branch trigger.** All workflows fire on push to `master` or `main` — whichever convention a project uses.
 

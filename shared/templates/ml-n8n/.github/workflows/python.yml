@@ -16,16 +16,36 @@ permissions:
   contents: read
 
 jobs:
+  detect:
+    # Lightweight gate: skip the test job entirely until the consumer
+    # project ships a Python build manifest. hashFiles() is not allowed
+    # in jobs.<id>.if, so detection happens in a step here and downstream
+    # jobs gate on needs.detect.outputs.ready.
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: check
+        run: |
+          if [[ -f pyproject.toml || -f setup.py || -f setup.cfg ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Python manifest (pyproject.toml/setup.py/setup.cfg) found — skipping Python CI."
+          fi
+
   test:
+    needs: detect
+    if: needs.detect.outputs.ready == 'true'
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        python-version:
-          - "3.10"
-          - "3.11"
-          - "3.12"
+        # workflow_dispatch with a non-empty python-version input runs that
+        # version only; otherwise (push, PR, or blank dispatch) runs the full matrix.
+        python-version: ${{ github.event.inputs.python-version && fromJSON(format('["{0}"]', github.event.inputs.python-version)) || fromJSON('["3.10","3.11","3.12"]') }}
 
     steps:
       - uses: actions/checkout@v5

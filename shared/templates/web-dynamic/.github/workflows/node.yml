@@ -16,15 +16,36 @@ permissions:
   contents: read
 
 jobs:
+  detect:
+    # Lightweight gate: skip the test job entirely until the consumer
+    # project ships package.json. hashFiles() is not allowed in
+    # jobs.<id>.if, so detection happens in a step here and downstream
+    # jobs gate on needs.detect.outputs.ready.
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: check
+        run: |
+          if [[ -f package.json ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No package.json found — skipping Node CI."
+          fi
+
   test:
+    needs: detect
+    if: needs.detect.outputs.ready == 'true'
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        node-version:
-          - "20"
-          - "22"
+        # workflow_dispatch with a non-empty node-version input runs that
+        # version only; otherwise (push, PR, or blank dispatch) runs the full matrix.
+        node-version: ${{ github.event.inputs.node-version && fromJSON(format('["{0}"]', github.event.inputs.node-version)) || fromJSON('["20","22"]') }}
 
     steps:
       - uses: actions/checkout@v5
