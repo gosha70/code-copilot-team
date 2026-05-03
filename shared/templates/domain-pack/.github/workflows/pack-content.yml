@@ -1,0 +1,115 @@
+name: Pack Content
+
+# Validates the manifest and content files on every PR. Catches malformed
+# content at PR time rather than at consumer install time.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: check
+        run: |
+          if [[ -f content/manifest.yaml ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No content/manifest.yaml — skipping pack content validation."
+          fi
+
+  validate:
+    needs: detect
+    if: needs.detect.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install validators
+        run: |
+          pip install --upgrade pyyaml 'jsonschema[format]'
+          sudo apt-get update -y
+          sudo apt-get install -y libxml2-utils
+
+      - name: Validate manifest against JSON Schema
+        run: |
+          if [[ ! -f content/manifest.schema.json ]]; then
+            echo "::error::content/manifest.schema.json missing — schema validation cannot run."
+            exit 1
+          fi
+          python - <<'PY'
+          import json
+          import sys
+
+          import jsonschema
+          import yaml
+
+          with open("content/manifest.yaml", encoding="utf-8") as f:
+              manifest = yaml.safe_load(f)
+          with open("content/manifest.schema.json", encoding="utf-8") as f:
+              schema = json.load(f)
+
+          try:
+              jsonschema.validate(manifest, schema)
+          except jsonschema.ValidationError as err:
+              print(f"manifest.yaml fails schema validation: {err.message}", file=sys.stderr)
+              print(f"  at: {'/'.join(str(p) for p in err.absolute_path)}", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"OK: {manifest['name']} {manifest['version']} ({manifest['content_format']})")
+          PY
+
+      - name: Validate content file presence
+        run: |
+          content_file=$(python -c "import yaml; print(yaml.safe_load(open('content/manifest.yaml'))['content_file'])")
+          if [[ ! -f "content/$content_file" ]]; then
+            echo "::error::content/$content_file declared in manifest but not present"
+            exit 1
+          fi
+
+      - name: Validate TBX content
+        run: |
+          fmt=$(python -c "import yaml; print(yaml.safe_load(open('content/manifest.yaml'))['content_format'])")
+          content_file=$(python -c "import yaml; print(yaml.safe_load(open('content/manifest.yaml'))['content_file'])")
+          if [[ "$fmt" != tbx-* ]]; then
+            echo "::notice::content_format=$fmt — TBX validator skipped."
+            exit 0
+          fi
+          # Always require well-formed XML.
+          xmllint --noout "content/$content_file"
+          echo "TBX content is well-formed XML."
+          # If a TBX schema (DTD or XSD) is shipped alongside content/, run a
+          # full schema-validating pass. The official TBX-Basic DTD is small
+          # enough to vendor; drop it at content/tbx-basic.dtd or
+          # content/tbx.xsd to enable structural validation.
+          if [[ -f content/tbx.xsd ]]; then
+            xmllint --noout --schema content/tbx.xsd "content/$content_file"
+            echo "TBX content validates against bundled XSD."
+          elif [[ -f content/tbx-basic.dtd ]]; then
+            xmllint --noout --dtdvalid content/tbx-basic.dtd "content/$content_file"
+            echo "TBX content validates against bundled DTD."
+          else
+            echo "::notice::No content/tbx.xsd or content/tbx-basic.dtd shipped — running well-formedness only. Drop one in to enable structural validation."
+          fi
+
+      - name: Verify wrapper sync would succeed
+        run: |
+          bash scripts/sync-content.sh
+          test -f jvm-wrapper/src/main/resources/domain-pack/manifest.yaml
+          test -f python-wrapper/src/domain_pack/data/manifest.yaml

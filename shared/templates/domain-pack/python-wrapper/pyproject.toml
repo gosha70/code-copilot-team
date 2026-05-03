@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "pyyaml>=6"]
+build-backend = "setuptools.build_meta"
+
+# NOTE: `version` is sourced from ../content/manifest.yaml at build time by
+# setup.py so the manifest stays the single source of truth. `name` is set
+# statically here because PEP 621 dynamic-name support is uneven across build
+# backends; rename it to your pack name (e.g. nemo-pack-legal-en) when you
+# bootstrap a new pack from this template.
+[project]
+name = "example-pack-legal-en"
+dynamic = ["version", "description"]
+requires-python = ">=3.10"
+readme = "README.md"
+authors = [{ name = "Replace Me", email = "you@example.org" }]
+license = { text = "Apache-2.0" }
+dependencies = [
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "ruff>=0.4",
+  "mypy>=1.8",
+  "types-PyYAML>=6.0",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["data/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+strict = true
+files = ["src"]

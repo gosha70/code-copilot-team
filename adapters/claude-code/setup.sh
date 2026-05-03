@@ -300,6 +300,17 @@ if [[ "$SYNC_MODE" == "1" ]]; then
         if [[ -d "$tmpl_dir/.github" ]]; then
             cp -r "$tmpl_dir/.github" "$dest/" 2>/dev/null || true
         fi
+        # Copy any other top-level template subdirs (e.g. domain-pack ships
+        # content/, jvm-wrapper/, python-wrapper/, scripts/). Skip the ones
+        # already handled above.
+        for extra in "$tmpl_dir"/*/; do
+            [[ -d "$extra" ]] || continue
+            extra_name=$(basename "$extra")
+            case "$extra_name" in
+                commands|.claude|.github) continue ;;
+            esac
+            cp -r "$extra" "$dest/" 2>/dev/null || true
+        done
     done
     echo "[done] Synced templates to $TEMPLATES_DIR"
 
@@ -658,6 +669,31 @@ if [[ -d "$SHARED_DIR/templates/java-tooling/.github" ]]; then
     cp -r "$SHARED_DIR/templates/java-tooling/.github" "$TEMPLATES_DIR/java-tooling/" 2>/dev/null || true
 fi
 echo "[done] Created template: java-tooling"
+
+# ══════════════════════════════════════════════════════════════
+# 9a. TEMPLATE: domain-pack
+# ══════════════════════════════════════════════════════════════
+
+mkdir -p "$TEMPLATES_DIR/domain-pack/commands"
+cp "$SHARED_DIR/templates/domain-pack/PROJECT.md" "$TEMPLATES_DIR/domain-pack/CLAUDE.md"
+if [[ -d "$SHARED_DIR/templates/domain-pack/commands" ]]; then
+    cp "$SHARED_DIR/templates/domain-pack/commands/"*.md "$TEMPLATES_DIR/domain-pack/commands/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/domain-pack/.claude" ]]; then
+    mkdir -p "$TEMPLATES_DIR/domain-pack/.claude"
+    cp -r "$SHARED_DIR/templates/domain-pack/.claude/"* "$TEMPLATES_DIR/domain-pack/.claude/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/domain-pack/.github" ]]; then
+    cp -r "$SHARED_DIR/templates/domain-pack/.github" "$TEMPLATES_DIR/domain-pack/" 2>/dev/null || true
+fi
+# domain-pack ships content/, jvm-wrapper/, python-wrapper/, scripts/ — copy
+# them all so `claude-code init domain-pack` produces a buildable project.
+for sub in content jvm-wrapper python-wrapper scripts; do
+    if [[ -d "$SHARED_DIR/templates/domain-pack/$sub" ]]; then
+        cp -r "$SHARED_DIR/templates/domain-pack/$sub" "$TEMPLATES_DIR/domain-pack/" 2>/dev/null || true
+    fi
+done
+echo "[done] Created template: domain-pack"
 
 # ══════════════════════════════════════════════════════════════
 # 9b. INSTALL SDD / SHAPE-UP TEMPLATE LIBRARY

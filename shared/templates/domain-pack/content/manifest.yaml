@@ -1,0 +1,15 @@
+name: example-pack-legal-en
+version: 0.1.0
+schema_version: 1
+description: "Sample legal-domain English terminology pack — replace with your own content."
+content_format: tbx-3.0
+content_file: data.tbx
+licenses:
+  data: CC-BY-SA-4.0
+  code: Apache-2.0
+sources:
+  - name: Example source
+    url: https://example.org/replace-me
+    license: CC-BY-4.0
+maintainers:
+  - "Replace with your name <you@example.org>"

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sample TBX 3.0 content — replace with your own.
+  Each <termEntry> represents one concept; <langSet> groups its terms by language.
+-->
+<tbx style="dca" type="TBX-Basic" xml:lang="en"
+     xmlns="urn:iso:std:iso:30042:ed-2">
+  <tbxHeader>
+    <fileDesc>
+      <titleStmt>
+        <title>Example Pack: Legal-EN (sample)</title>
+      </titleStmt>
+      <sourceDesc>
+        <p>Sample seed content. Replace before publishing.</p>
+      </sourceDesc>
+    </fileDesc>
+  </tbxHeader>
+  <text>
+    <body>
+      <termEntry id="t-0001">
+        <langSet xml:lang="en">
+          <tig>
+            <term>plaintiff</term>
+            <termNote type="partOfSpeech">noun</termNote>
+            <descrip type="definition">A person who brings a case against another in a court of law.</descrip>
+          </tig>
+        </langSet>
+      </termEntry>
+      <termEntry id="t-0002">
+        <langSet xml:lang="en">
+          <tig>
+            <term>defendant</term>
+            <termNote type="partOfSpeech">noun</termNote>
+            <descrip type="definition">A person sued or accused in a court of law.</descrip>
+          </tig>
+        </langSet>
+      </termEntry>
+      <termEntry id="t-0003">
+        <langSet xml:lang="en">
+          <tig>
+            <term>tort</term>
+            <termNote type="partOfSpeech">noun</termNote>
+            <descrip type="definition">A wrongful act that causes harm or loss for which civil legal liability may be imposed.</descrip>
+          </tig>
+        </langSet>
+      </termEntry>
+    </body>
+  </text>
+</tbx>

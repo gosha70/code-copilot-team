@@ -1,0 +1,114 @@
+name: Pack Publish
+
+# Coordinated dual-publish to Maven Central + PyPI. Fires on tag push only.
+# Aborts if the manifest version disagrees with the tag.
+#
+# `workflow_dispatch` is supported for retries, but every publish job (JVM
+# and PyPI) requires the workflow to be run from a `refs/tags/v*` ref. That
+# guard is non-negotiable: without it a manual run could publish only one
+# half of the pair and produce an asymmetric release.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # Required for PyPI trusted publishing.
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: read
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "::error::pack-publish must be invoked from a refs/tags/v* ref (got '$GITHUB_REF'). Tag the release and retry."
+            exit 1
+          fi
+          version=$(awk -F': *' '/^version:/ { gsub(/"/, "", $2); print $2; exit }' content/manifest.yaml)
+          tag="${GITHUB_REF_NAME#v}"
+          if [[ "$version" != "$tag" ]]; then
+            echo "::error::manifest version ($version) does not match tag ($tag)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  publish-jvm:
+    needs: preflight
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: zulu
+          cache: gradle
+
+      - name: Sync content
+        run: bash scripts/sync-content.sh
+
+      - name: Build JVM wrapper
+        working-directory: jvm-wrapper
+        run: ./gradlew clean build
+
+      - name: Preflight — required Maven Central credentials
+        id: mc_creds
+        run: |
+          if [[ -n "${{ secrets.SIGNING_KEY }}" \
+              && -n "${{ secrets.SIGNING_PASSWORD }}" \
+              && -n "${{ secrets.OSSRH_USERNAME }}" \
+              && -n "${{ secrets.OSSRH_TOKEN }}" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Maven Central credentials incomplete (need SIGNING_KEY, SIGNING_PASSWORD, OSSRH_USERNAME, OSSRH_TOKEN) — skipping JVM publish."
+          fi
+
+      - name: Publish to Maven Central (OSSRH staging)
+        if: steps.mc_creds.outputs.ready == 'true'
+        working-directory: jvm-wrapper
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          OSSRH_TOKEN: ${{ secrets.OSSRH_TOKEN }}
+          OSSRH_RELEASES_URL: ${{ vars.OSSRH_RELEASES_URL }}
+          OSSRH_SNAPSHOTS_URL: ${{ vars.OSSRH_SNAPSHOTS_URL }}
+        run: ./gradlew publishLibraryPublicationToOssrhRepository
+
+  publish-pypi:
+    needs: preflight
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Sync content
+        run: bash scripts/sync-content.sh
+
+      - name: Build sdist + wheel
+        working-directory: python-wrapper
+        run: |
+          pip install --upgrade build
+          python -m build
+
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python-wrapper/dist/

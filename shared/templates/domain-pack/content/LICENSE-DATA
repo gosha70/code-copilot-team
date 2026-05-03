@@ -1,0 +1,10 @@
+Sample Data License Notice
+==========================
+
+The pack data in this directory is distributed under CC-BY-SA-4.0 by default.
+Replace this file with the actual license text for your data, and update
+`manifest.yaml` accordingly.
+
+The wrapper code under jvm-wrapper/ and python-wrapper/ is licensed
+separately — see those modules' LICENSE files. Code license and data
+license are intentionally distinct.

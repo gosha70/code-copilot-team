@@ -199,7 +199,7 @@ echo "=== shared/templates/ ==="
 
 assert_dir_exists "shared/templates/ exists" "$SHARED_DIR/templates"
 
-TEMPLATE_TYPES=(ml-rag ml-app ml-utils ml-langchain ml-n8n java-enterprise web-static web-dynamic java-tooling)
+TEMPLATE_TYPES=(ml-rag ml-app ml-utils ml-langchain ml-n8n java-enterprise web-static web-dynamic java-tooling domain-pack)
 
 for t in "${TEMPLATE_TYPES[@]}"; do
   assert_dir_exists "$t dir exists" "$SHARED_DIR/templates/$t"
@@ -209,7 +209,7 @@ for t in "${TEMPLATE_TYPES[@]}"; do
 done
 
 TEMPLATE_DIR_COUNT=$(find "$SHARED_DIR/templates" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-assert_eq "exactly 10 template dirs" "10" "$TEMPLATE_DIR_COUNT"
+assert_eq "exactly 11 template dirs" "11" "$TEMPLATE_DIR_COUNT"
 
 # Verify SDD templates exist
 assert_dir_exists "sdd dir exists" "$SHARED_DIR/templates/sdd"
@@ -263,6 +263,7 @@ assert_header "java-enterprise" "$SHARED_DIR/templates/java-enterprise/PROJECT.m
 assert_header "web-static" "$SHARED_DIR/templates/web-static/PROJECT.md" "# Static Website"
 assert_header "web-dynamic" "$SHARED_DIR/templates/web-dynamic/PROJECT.md" "# Dynamic Web Application"
 assert_header "java-tooling" "$SHARED_DIR/templates/java-tooling/PROJECT.md" "# Java Developer Tooling — Annotation Processors, Gradle Plugins & Code Generators"
+assert_header "domain-pack" "$SHARED_DIR/templates/domain-pack/PROJECT.md" "# Domain Pack — Versioned Content Distribution (JVM + Python)"
 
 # Verify templates contain Agent Team section (structural check)
 for t in "${TEMPLATE_TYPES[@]}"; do
@@ -782,8 +783,8 @@ grep -Eq "skills/[[:space:]]+19 skills" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists 19 skills" "$rc"
 
 rc=0
-grep -Eq "templates/[[:space:]]+9 stacks" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 9 template stacks" "$rc"
+grep -Eq "templates/[[:space:]]+10 stacks" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 10 template stacks" "$rc"
 
 rc=0
 grep -Eq "codex/.*5 skills" "$REPO_DIR/README.md" || rc=1

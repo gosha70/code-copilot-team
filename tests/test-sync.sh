@@ -590,6 +590,80 @@ eval 'command_exists() { command -v "$1" >/dev/null 2>&1; }'
 
 # ══════════════════════════════════════════════════════════════
 echo ""
+echo "=== 15. sync_project() handles extra top-level template subdirs ==="
+
+# Add a fake domain-pack-shaped template to the fixture: in addition to
+# CLAUDE.md / commands / .claude, it ships content/ and python-wrapper/.
+# Sync must add new files and MUST NOT overwrite consumer-customized ones.
+mkdir -p "$FAKE_TEMPLATES/dp-fake/commands"
+mkdir -p "$FAKE_TEMPLATES/dp-fake/content"
+mkdir -p "$FAKE_TEMPLATES/dp-fake/python-wrapper/src/dp_fake"
+cat > "$FAKE_TEMPLATES/dp-fake/CLAUDE.md" << 'EOF'
+# Fake Domain Pack
+EOF
+cat > "$FAKE_TEMPLATES/dp-fake/commands/team-review.md" << 'EOF'
+Team review for fake domain pack
+EOF
+cat > "$FAKE_TEMPLATES/dp-fake/content/manifest.yaml" << 'EOF'
+name: fake-pack
+version: 0.1.0
+EOF
+cat > "$FAKE_TEMPLATES/dp-fake/content/data.tbx" << 'EOF'
+<tbx>shipped sample</tbx>
+EOF
+cat > "$FAKE_TEMPLATES/dp-fake/python-wrapper/setup.py" << 'EOF'
+# template scaffold
+print("template")
+EOF
+cat > "$FAKE_TEMPLATES/dp-fake/python-wrapper/src/dp_fake/__init__.py" << 'EOF'
+# template loader
+EOF
+
+DP_DIR="$TEST_TMPDIR/project-dp"
+mkdir -p "$DP_DIR/.claude/commands"
+mkdir -p "$DP_DIR/content"
+mkdir -p "$DP_DIR/python-wrapper/src/dp_fake"
+cp "$FAKE_TEMPLATES/dp-fake/CLAUDE.md" "$DP_DIR/CLAUDE.md"
+cp "$FAKE_TEMPLATES/dp-fake/commands/team-review.md" "$DP_DIR/.claude/commands/team-review.md"
+# Consumer-customized content (their own pack data) — sync MUST preserve.
+cat > "$DP_DIR/content/manifest.yaml" << 'EOF'
+name: my-real-pack
+version: 2.0.0
+EOF
+cat > "$DP_DIR/content/data.tbx" << 'EOF'
+<tbx>my real content</tbx>
+EOF
+# Consumer customized python wrapper — sync MUST preserve.
+cat > "$DP_DIR/python-wrapper/src/dp_fake/__init__.py" << 'EOF'
+# my customized loader
+EOF
+cat > "$DP_DIR/.claude/template.json" << 'TMPL'
+{
+  "name": "dp-fake",
+  "initialized": "2026-01-01T00:00:00Z",
+  "templateHash": "current"
+}
+TMPL
+
+OUTPUT=$(sync_project "$DP_DIR" "0" 2>&1)
+
+# python-wrapper/setup.py is missing in the project — sync should ADD it.
+assert_ok "extra-dir new file added (setup.py)" \
+  $([[ -f "$DP_DIR/python-wrapper/setup.py" ]] && echo 0 || echo 1)
+
+# Consumer-customized content/manifest.yaml must NOT be overwritten.
+PROJECT_MANIFEST=$(cat "$DP_DIR/content/manifest.yaml")
+assert_contains "consumer manifest preserved" "$PROJECT_MANIFEST" "my-real-pack"
+
+# Consumer-customized python loader must NOT be overwritten.
+PROJECT_LOADER=$(cat "$DP_DIR/python-wrapper/src/dp_fake/__init__.py")
+assert_contains "consumer loader preserved" "$PROJECT_LOADER" "my customized loader"
+
+# Sync output should flag the diff for consumer-owned files (not silent overwrite).
+assert_contains "sync reports diff for content/manifest.yaml" "$OUTPUT" "content/manifest.yaml"
+
+# ══════════════════════════════════════════════════════════════
+echo ""
 echo "──────────────────────────────"
 echo "Results: $PASS passed, $FAIL failed"
 echo "──────────────────────────────"

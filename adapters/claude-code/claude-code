@@ -516,6 +516,7 @@ PROJECT TYPES:
     ml-n8n              Python + n8n workflow automation
     java-enterprise     Full-stack Java (Spring Boot + React + GraphQL)
     java-tooling        Java tooling (Annotation Processors, Gradle Plugins)
+    domain-pack         Versioned content distribution (Maven Central + PyPI)
     web-static          Static site (Astro/Next.js/Hugo)
     web-dynamic         Dynamic web app (Next.js/Remix full-stack)
 
@@ -601,6 +602,21 @@ init_project() {
     if [[ -d "$TEMPLATES_DIR/$type/.github" ]]; then
         cp -r "$TEMPLATES_DIR/$type/.github" "$target/" 2>/dev/null || true
     fi
+
+    # Copy any other top-level template subdirs (e.g. domain-pack ships
+    # content/, jvm-wrapper/, python-wrapper/, scripts/). Skip ones already
+    # handled above and never overwrite the project's existing dirs.
+    for extra in "$TEMPLATES_DIR/$type"/*/; do
+        [[ -d "$extra" ]] || continue
+        local extra_name
+        extra_name=$(basename "$extra")
+        case "$extra_name" in
+            commands|.claude|.github) continue ;;
+        esac
+        if [[ ! -e "$target/$extra_name" ]]; then
+            cp -r "$extra" "$target/" 2>/dev/null || true
+        fi
+    done
 
     # Write template metadata for sync support
     local hash
@@ -874,6 +890,45 @@ sync_project() {
             fi
         done < <(find "$tmpl_dir/.github" -type f -print0 2>/dev/null)
     fi
+
+    # 4c. Sync any other top-level template subdirs (e.g. domain-pack ships
+    # content/, jvm-wrapper/, python-wrapper/, scripts/). Treat these like
+    # CLAUDE.md: add new files, but NEVER auto-overwrite existing ones —
+    # consumers customize these (their actual content, their loader code,
+    # their publish credentials). Changed files are reported as a hint, not
+    # silently clobbered.
+    for extra in "$tmpl_dir"/*/; do
+        [[ -d "$extra" ]] || continue
+        local extra_name
+        extra_name=$(basename "$extra")
+        case "$extra_name" in
+            commands|.claude|.github) continue ;;
+        esac
+        while IFS= read -r -d '' tmpl_file; do
+            local rel_path="${tmpl_file#$tmpl_dir/}"
+            local dest="$target/$rel_path"
+
+            if [[ ! -f "$dest" ]]; then
+                if [[ "$dry_run" == "1" ]]; then
+                    echo "  [add] $rel_path (new)"
+                else
+                    mkdir -p "$(dirname "$dest")"
+                    cp "$tmpl_file" "$dest"
+                    echo "  [add] $rel_path"
+                fi
+                changes=$((changes + 1))
+            elif ! diff -q "$tmpl_file" "$dest" >/dev/null 2>&1; then
+                if [[ "$dry_run" == "1" ]]; then
+                    echo "  [diff] $rel_path (consumer-owned — not overwritten)"
+                    diff --unified=3 "$dest" "$tmpl_file" 2>/dev/null | head -20 || true
+                    echo ""
+                else
+                    echo "  [diff] $rel_path differs from template — not overwritten (consumer-owned). Compare against $tmpl_dir/$rel_path to review."
+                fi
+                changes=$((changes + 1))
+            fi
+        done < <(find "$extra" -type f -print0 2>/dev/null)
+    done
 
     # 5. Show CLAUDE.md diff (never auto-overwrite — user has customizations)
     if [[ -f "$tmpl_dir/CLAUDE.md" && -f "$target/CLAUDE.md" ]]; then

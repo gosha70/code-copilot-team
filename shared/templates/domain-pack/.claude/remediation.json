@@ -1,0 +1,40 @@
+{
+  "patterns": [
+    {
+      "match": "manifest.*not found|Resource not found.*manifest.yaml",
+      "hint": "The wrappers read content from synced resource dirs, not directly from content/. Run scripts/sync-content.sh before build/test/publish so jvm-wrapper/src/main/resources/domain-pack/ and python-wrapper/src/domain_pack/data/ are populated."
+    },
+    {
+      "match": "manifest version.*does not match tag|manifest version.*!=.*tag",
+      "hint": "Architecture violation: content/manifest.yaml is the single source of truth for the version. Bump it BEFORE tagging, never the other way around. The publish workflow's preflight job aborts on mismatch — fix the manifest, retag with the matching version."
+    },
+    {
+      "match": "version.*hardcoded|version *= *['\"]\\d",
+      "hint": "Provider/manifest violation: do not hardcode version in build.gradle.kts or pyproject.toml. Both wrappers must read version from ../content/manifest.yaml so a single bump flows everywhere."
+    },
+    {
+      "match": "duplicate.*entry|id.*already exists|reused id",
+      "hint": "Content rule: every <termEntry id=\"...\"> must be unique. Consumers may pin to an entry's id, so reusing one is a silent breakage. Pick a fresh t-NNNN."
+    },
+    {
+      "match": "loader API.*divergence|method.*not found.*loader|PackLoader.*missing",
+      "hint": "Architecture violation: JVM and Python loader public APIs must mirror each other. If you added a method on one side, add it on the other before merging. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "TBX.*invalid|xmllint.*error.*tbx|not well-formed.*XML",
+      "hint": "Schema violation: content/data.tbx must validate against TBX 3.0. Run `xmllint --noout content/data.tbx` locally before committing — the CI workflow pack-content.yml gates merge on this check."
+    },
+    {
+      "match": "license.*mismatch|LICENSE-DATA.*not present|licenses\\..*missing",
+      "hint": "License separation violation: the data license (LICENSE-DATA + manifest.licenses.data) is independent of the wrapper code license (manifest.licenses.code). Both must be declared explicitly in manifest.yaml. Wrapper code must not inherit data license, and vice versa."
+    },
+    {
+      "match": "edited.*src/main/resources/domain-pack|edited.*src/domain_pack/data",
+      "hint": "Single-source-of-truth violation: never edit synced copies under wrapper resource dirs. Edit content/ and re-run scripts/sync-content.sh. The synced copies are regenerated and your edit will be lost."
+    },
+    {
+      "match": "publishToMavenLocal.*missing.*signing|signing.*not configured",
+      "hint": "Maven Central requires GPG-signed artifacts. Set SIGNING_KEY and SIGNING_PASSWORD environment variables (or GitHub Secrets) before publishing. The signing block in build.gradle.kts is gated on these env vars and is a no-op without them — useful for local builds but blocks Central publish."
+    }
+  ]
+}

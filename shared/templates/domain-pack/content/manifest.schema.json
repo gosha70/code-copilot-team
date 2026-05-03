@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/domain-pack/manifest.schema.json",
+  "title": "Domain Pack Manifest",
+  "description": "Schema for content/manifest.yaml. Validated on every PR by .github/workflows/pack-content.yml. Loaders treat the manifest as the single source of truth for pack name, version, content format, and licenses.",
+  "type": "object",
+  "required": [
+    "name",
+    "version",
+    "schema_version",
+    "content_format",
+    "content_file",
+    "licenses"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "description": "Pack identifier — used as the artifact name on Maven Central and PyPI. Must be a valid name on both registries (lowercase, dashes/dots/underscores only)."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[A-Za-z0-9.-]+)?(?:\\+[A-Za-z0-9.-]+)?$",
+      "description": "SemVer 2.0 string. Major bump on entry removal/rename or breaking loader-API change; minor on additive content; patch otherwise."
+    },
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Manifest schema version. Bump when a breaking change is made to this schema."
+    },
+    "description": {
+      "type": "string"
+    },
+    "content_format": {
+      "type": "string",
+      "enum": ["tbx-3.0", "json-ld", "turtle", "csv", "yaml"],
+      "description": "Format of content_file. Loaders pick a parser based on this value."
+    },
+    "content_file": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "Filename of the content file inside content/, relative to manifest.yaml."
+    },
+    "licenses": {
+      "type": "object",
+      "required": ["data", "code"],
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SPDX identifier for the data license (e.g. CC-BY-SA-4.0)."
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SPDX identifier for the wrapper-code license (e.g. Apache-2.0)."
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "url"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "url": { "type": "string", "format": "uri" },
+          "license": { "type": "string" }
+        }
+      }
+    },
+    "maintainers": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}
