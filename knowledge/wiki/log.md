@@ -16,6 +16,9 @@ Append-only. One bullet per entry, newest at the top. Format:
 
 ## Entries
 
+- 2026-05-03 — created `multi-round-spec-review` (concept): iterating a spec across review rounds catches distinct bug classes; dogfood promotion C1 from rlmkit prefill-decode-telemetry rollout.
+- 2026-05-03 — created `spec-code-coherence-drift` (incident): three drift instances (v1.4 wrong fallback, v1.5 layer confusion, v1.6 wrong field names); dogfood promotion C2.
+- 2026-05-03 — created `grep-based-acceptance-criteria` (playbook): replace enumerated call-site lists with self-checking grep predicates; dogfood promotion C3.
 - 2026-05-03 — created `index` (index): wiki entry point established.
 - 2026-05-03 — created `log` (log): append-only edit changelog established.
 - 2026-05-03 — created `overview` (concept-adjacent meta): orientation page for new readers.

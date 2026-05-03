@@ -34,6 +34,9 @@ about to add or change a page, read
 - [Spec-Driven Development](concepts/spec-driven-development.md) —
   why this project ships features through `specs/<feature-id>/`
   rather than ad-hoc.
+- [Multi-Round Spec Review](concepts/multi-round-spec-review.md) —
+  iterating a spec across multiple review rounds catches
+  structurally distinct classes of bugs before code lands.
 
 ## Workflows
 
@@ -46,6 +49,9 @@ about to add or change a page, read
 - [Git Safety Bypasses](incidents/git-safety-bypasses.md) — the
   `GIT_INDEX_FILE` empty-tree near-miss and what changed because
   of it.
+- [Spec/Code Coherence Drift](incidents/spec-code-coherence-drift.md) —
+  three concrete drift instances caught across three rounds of
+  iterative spec review.
 
 ## Decisions
 
@@ -58,6 +64,9 @@ about to add or change a page, read
 - [Recover After a Bad AI Git Operation](playbooks/recover-after-bad-ai-git-op.md) —
   how to triage when an agent has done something destructive to
   the repo.
+- [Grep-Based Acceptance Criteria](playbooks/grep-based-acceptance-criteria.md) —
+  recipe for converting fragile enumerated ACs into self-checking
+  grep predicates that survive line-number drift.
 
 ## Glossary
 
