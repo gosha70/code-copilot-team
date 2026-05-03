@@ -301,16 +301,29 @@ if [[ "$SYNC_MODE" == "1" ]]; then
             cp -r "$tmpl_dir/.github" "$dest/" 2>/dev/null || true
         fi
         # Copy any other top-level template subdirs (e.g. domain-pack ships
-        # content/, jvm-wrapper/, python-wrapper/, scripts/). Skip the ones
-        # already handled above.
+        # content/, jvm-wrapper/, python-wrapper/, scripts/; gradle-plugin
+        # ships plugin/, sample-consumer/, gradle/). Skip the ones already
+        # handled above.
+        #
+        # NOTE: trailing slash on the source path unwraps the directory
+        # contents into $dest. Strip it with `${extra%/}` so `cp -r` copies
+        # the directory itself into $dest, preserving the layout.
         for extra in "$tmpl_dir"/*/; do
             [[ -d "$extra" ]] || continue
             extra_name=$(basename "$extra")
             case "$extra_name" in
                 commands|.claude|.github) continue ;;
             esac
-            cp -r "$extra" "$dest/" 2>/dev/null || true
+            cp -r "${extra%/}" "$dest/" 2>/dev/null || true
         done
+        # Copy top-level regular files other than PROJECT.md (already mapped
+        # to CLAUDE.md above). gradle-plugin ships build.gradle.kts /
+        # settings.gradle.kts / .gitignore at the template root.
+        while IFS= read -r -d '' extra_file; do
+            extra_name=$(basename "$extra_file")
+            [[ "$extra_name" == "PROJECT.md" ]] && continue
+            cp "$extra_file" "$dest/$extra_name" 2>/dev/null || true
+        done < <(find "$tmpl_dir" -maxdepth 1 -type f -print0 2>/dev/null)
     done
     echo "[done] Synced templates to $TEMPLATES_DIR"
 
@@ -669,6 +682,37 @@ if [[ -d "$SHARED_DIR/templates/java-tooling/.github" ]]; then
     cp -r "$SHARED_DIR/templates/java-tooling/.github" "$TEMPLATES_DIR/java-tooling/" 2>/dev/null || true
 fi
 echo "[done] Created template: java-tooling"
+
+# ══════════════════════════════════════════════════════════════
+# 9a0. TEMPLATE: gradle-plugin
+# ══════════════════════════════════════════════════════════════
+
+mkdir -p "$TEMPLATES_DIR/gradle-plugin/commands"
+cp "$SHARED_DIR/templates/gradle-plugin/PROJECT.md" "$TEMPLATES_DIR/gradle-plugin/CLAUDE.md"
+if [[ -d "$SHARED_DIR/templates/gradle-plugin/commands" ]]; then
+    cp "$SHARED_DIR/templates/gradle-plugin/commands/"*.md "$TEMPLATES_DIR/gradle-plugin/commands/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/gradle-plugin/.claude" ]]; then
+    mkdir -p "$TEMPLATES_DIR/gradle-plugin/.claude"
+    cp -r "$SHARED_DIR/templates/gradle-plugin/.claude/"* "$TEMPLATES_DIR/gradle-plugin/.claude/" 2>/dev/null || true
+fi
+if [[ -d "$SHARED_DIR/templates/gradle-plugin/.github" ]]; then
+    cp -r "$SHARED_DIR/templates/gradle-plugin/.github" "$TEMPLATES_DIR/gradle-plugin/" 2>/dev/null || true
+fi
+# gradle-plugin ships build/settings files at root + plugin/,
+# sample-consumer/, gradle/ subdirs. Copy them all so the bootstrapped
+# project is buildable end-to-end (modulo `gradle wrapper`).
+for sub in plugin sample-consumer gradle; do
+    if [[ -d "$SHARED_DIR/templates/gradle-plugin/$sub" ]]; then
+        cp -r "$SHARED_DIR/templates/gradle-plugin/$sub" "$TEMPLATES_DIR/gradle-plugin/" 2>/dev/null || true
+    fi
+done
+for f in build.gradle.kts settings.gradle.kts .gitignore; do
+    if [[ -f "$SHARED_DIR/templates/gradle-plugin/$f" ]]; then
+        cp "$SHARED_DIR/templates/gradle-plugin/$f" "$TEMPLATES_DIR/gradle-plugin/" 2>/dev/null || true
+    fi
+done
+echo "[done] Created template: gradle-plugin"
 
 # ══════════════════════════════════════════════════════════════
 # 9a. TEMPLATE: domain-pack

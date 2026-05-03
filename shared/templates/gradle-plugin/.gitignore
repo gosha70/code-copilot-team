@@ -1,0 +1,25 @@
+# Gradle build artifacts
+.gradle/
+**/build/
+!**/src/**/build/
+buildSrc/.gradle/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.fleet/
+
+# OS
+.DS_Store
+
+# Wrapper-managed downloads
+gradle/wrapper/dists/
+
+# Sample consumer's local Gradle state
+sample-consumer/.gradle/
+sample-consumer/build/
+
+# Local credentials — NEVER commit
+gradle.properties
+!gradle/gradle.properties

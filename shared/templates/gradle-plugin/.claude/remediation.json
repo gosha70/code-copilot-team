@@ -1,0 +1,44 @@
+{
+  "patterns": [
+    {
+      "match": "Cannot mutate the (build|task|project) state in execution phase|cannot run Project\\.afterEvaluate\\(Action\\) when the project is already evaluated",
+      "hint": "Configuration-cache violation: you're reading or modifying configuration-time state at execution time. Replace `extension.value` reads in task actions with `Property<T>` wired via `task.value.set(extension.value)` at registration time. See PROJECT.md #Architecture Rules — Lazy by default."
+    },
+    {
+      "match": "tasks\\.create|configurations\\.create",
+      "hint": "Use `tasks.register` / `configurations.register` instead of `create`. The `register` API is the configuration-avoidance API and keeps the plugin lazy. `create` realises the task eagerly and breaks lazy configuration. See PROJECT.md #Architecture Rules."
+    },
+    {
+      "match": "afterEvaluate \\{|project\\.afterEvaluate",
+      "hint": "Avoid `afterEvaluate {}`. If you need a value that the consumer hasn't set yet, wire it through a `Provider<T>` chain so it is read lazily at execution time. The only legitimate use of `afterEvaluate` is to react to another plugin's eager state — in that case, prefer `plugins.withId(\"...\")` instead."
+    },
+    {
+      "match": "captured.*Project|Task type .* contains .*Project",
+      "hint": "Tasks must NOT capture a `Project` reference into a task action — this breaks the configuration cache. Capture `Provider<T>` / `Property<T>` values instead, and resolve them inside the `@TaskAction` method with `.get()`."
+    },
+    {
+      "match": "no-args constructor|Cannot find a constructor",
+      "hint": "Gradle constructs task and extension instances reflectively. Make the class `abstract` and declare every property as `abstract val foo: Property<T>` — Gradle will synthesize the implementation and inject the `ObjectFactory`. Don't write your own constructor."
+    },
+    {
+      "match": "@get:Input.*not annotated|@get:OutputFile.*not annotated|missing.*@Input|missing.*@OutputFile",
+      "hint": "Every task input/output must be annotated (`@get:Input`, `@get:InputFile`, `@get:OutputFile`, `@get:OutputDirectory`, `@get:Internal`). Without annotations the task is uncacheable and incremental builds break. See PROJECT.md #Plugin Authoring Rules."
+    },
+    {
+      "match": "GRADLE_PUBLISH_KEY|GRADLE_PUBLISH_SECRET.*not set|pluginPublish.*credentials",
+      "hint": "`com.gradle.plugin-publish` reads credentials from env vars (`GRADLE_PUBLISH_KEY`, `GRADLE_PUBLISH_SECRET`) or `~/.gradle/gradle.properties`. Set them as GitHub Secrets in CI; never commit them. The publish workflow gates on their presence and skips with a notice if missing."
+    },
+    {
+      "match": "pluginVersion.*does not match tag|version catalog .* mismatch",
+      "hint": "Architecture violation: `gradle/libs.versions.toml` `pluginVersion` is the source of truth for the plugin version. Bump it BEFORE tagging — never the other way around. The publish workflow's preflight step aborts on mismatch."
+    },
+    {
+      "match": "java.lang.NoSuchMethodError.*org\\.gradle|TestKit.*incompatible",
+      "hint": "Gradle API incompatibility. The functional-test matrix tests against multiple Gradle versions exactly to catch this. Expand the matrix to include the failing version, fix the API call (use `Provider`-based equivalents), and assert the fix in a functional test."
+    },
+    {
+      "match": "tasks\\.create.*sample-consumer|sample-consumer.*subproject",
+      "hint": "Architecture violation: `sample-consumer/` is NOT a Gradle subproject — it's an independent composite build via `pluginManagement.includeBuild(\"..\")`. Do not `include(\":sample-consumer\")` in the root `settings.gradle.kts`."
+    }
+  ]
+}

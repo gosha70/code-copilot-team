@@ -241,7 +241,7 @@ Every provider currently requires a `command` template with `{review_request}` a
 - **Layered rules** — 4 global rules (`~/.claude/rules/`) auto-load every session; 15 on-demand skills (`~/.claude/skills/*/SKILL.md`) loaded by phase agents when needed.
 - **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
 - **Hooks** (`~/.claude/hooks/`) — 11 lifecycle scripts: test verification, type checking, auto-format, file protection, git safety guards, context re-injection, peer review trigger, desktop notifications, plus 3 self-guarding MemKernel hooks (session recall, pre-compact checkpoint, post-compact recovery) that activate only when MemKernel is installed.
-- **10 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
+- **11 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
 - **Four-phase workflow** — Research → Plan → Build → Review. Plus **Ralph Loop** for single-agent autonomous iteration.
 ![Three - Phase Agent Workflow](docs/images/three-phase-workflow.png)
 - **Adaptive launcher** (`claude-code`) — uses `cmux` on macOS, `tmux` elsewhere, with git context display, `--peer-review` flags, and `sync` for keeping projects aligned with template updates.
@@ -350,6 +350,7 @@ Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but neve
 | `web-static` | Astro/Next.js/Hugo · Tailwind | Team Lead, Frontend Dev, Content & SEO, QA |
 | `web-dynamic` | Next.js/Remix · Node/Python · PostgreSQL | Team Lead, Frontend Dev, Backend Dev, QA, DevOps |
 | `java-tooling` | Java 21 · Gradle · JSR 269 · JavaPoet · Spring AI MCP | Team Lead, APT Engineer, MCP Specialist, Plugin Dev, QA |
+| `gradle-plugin` | Kotlin · Gradle 8 · `Plugin<Project>` · TestKit matrix · Plugin Portal | Team Lead, Plugin Eng, Functional Test Eng, Build & Release |
 | `domain-pack` | Versioned content (TBX/JSON-LD/CSV) · Maven Central + PyPI dual publish | Team Lead, Content Curator, JVM Wrapper Eng, Python Wrapper Eng, Release & CI |
 
 ### Bundled CI Workflows
@@ -362,6 +363,7 @@ Each template ships a `.github/workflows/` file so CI is wired up the moment the
 | `java-enterprise`, `java-tooling` | `gradle.yml` | `./gradlew build check test` · matrix: JDK 17, 21 · optional `publish-staging` on tags |
 | `web-static`, `web-dynamic` | `node.yml` | lint · typecheck · test · matrix: Node 20, 22 · auto-detects npm/yarn/pnpm |
 | `domain-pack` | `pack-content.yml` + `pack-publish.yml` | manifest + content schema validation on PR · coordinated Maven Central + PyPI publish on tag |
+| `gradle-plugin` | `gradle-plugin.yml` | unit tests · TestKit functional matrix (Gradle 8.5/8.10/current) · sample-consumer smoke · Plugin Portal publish on tag |
 
 **Auto-skip on empty project.** Each workflow's job is gated on a toolchain marker (`pyproject.toml` / `setup.py` / `setup.cfg` for Python, `package.json` for Node, `gradlew` for Gradle — the wrapper, since build steps invoke `./gradlew`). A freshly bootstrapped project with no marker yet gets a green skip rather than a red failure. The job activates as soon as the consumer adds the marker file. Gradle projects that have build scripts but no wrapper get a notice nudging them to run `gradle wrapper`.
 
@@ -458,7 +460,7 @@ code-copilot-team/
 ├── shared/                              ← Single source of truth
 │   ├── skills/                          19 skills (SKILL.md format, open Agent Skills spec)
 │   ├── docs/                            8 tool-agnostic reference docs
-│   ├── templates/                       10 stacks × PROJECT.md + commands/
+│   ├── templates/                       11 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
 │   └── templates/provider-profile-template.toml  Peer provider profile seed
 ├── specs/                               ← SDD artifacts per feature (versioned)
@@ -479,7 +481,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
 │   ├── test-generate.sh                 274 generation + adapter tests
-│   ├── test-shared-structure.sh         742 structure + content tests
+│   ├── test-shared-structure.sh         786 structure + content tests
 │   ├── test-sync.sh                     65 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   └── test-review-loop.sh            31 review loop integration tests

@@ -1,0 +1,16 @@
+# Version catalog — SINGLE SOURCE OF TRUTH for plugin dependencies.
+# Tag-driven release reads `pluginVersion` and aborts if it disagrees with the git tag.
+
+[versions]
+pluginVersion = "0.1.0"
+kotlin = "1.9.25"
+junit = "5.10.2"
+pluginPublish = "1.2.1"
+
+[libraries]
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version = "1.10.2" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+plugin-publish = { id = "com.gradle.plugin-publish", version.ref = "pluginPublish" }

@@ -199,7 +199,7 @@ echo "=== shared/templates/ ==="
 
 assert_dir_exists "shared/templates/ exists" "$SHARED_DIR/templates"
 
-TEMPLATE_TYPES=(ml-rag ml-app ml-utils ml-langchain ml-n8n java-enterprise web-static web-dynamic java-tooling domain-pack)
+TEMPLATE_TYPES=(ml-rag ml-app ml-utils ml-langchain ml-n8n java-enterprise web-static web-dynamic java-tooling domain-pack gradle-plugin)
 
 for t in "${TEMPLATE_TYPES[@]}"; do
   assert_dir_exists "$t dir exists" "$SHARED_DIR/templates/$t"
@@ -209,7 +209,7 @@ for t in "${TEMPLATE_TYPES[@]}"; do
 done
 
 TEMPLATE_DIR_COUNT=$(find "$SHARED_DIR/templates" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-assert_eq "exactly 11 template dirs" "11" "$TEMPLATE_DIR_COUNT"
+assert_eq "exactly 12 template dirs" "12" "$TEMPLATE_DIR_COUNT"
 
 # Verify SDD templates exist
 assert_dir_exists "sdd dir exists" "$SHARED_DIR/templates/sdd"
@@ -264,6 +264,7 @@ assert_header "web-static" "$SHARED_DIR/templates/web-static/PROJECT.md" "# Stat
 assert_header "web-dynamic" "$SHARED_DIR/templates/web-dynamic/PROJECT.md" "# Dynamic Web Application"
 assert_header "java-tooling" "$SHARED_DIR/templates/java-tooling/PROJECT.md" "# Java Developer Tooling — Annotation Processors, Gradle Plugins & Code Generators"
 assert_header "domain-pack" "$SHARED_DIR/templates/domain-pack/PROJECT.md" "# Domain Pack — Versioned Content Distribution (JVM + Python)"
+assert_header "gradle-plugin" "$SHARED_DIR/templates/gradle-plugin/PROJECT.md" "# Gradle Plugin — Idiomatic \`Plugin<Project>\` with TestKit"
 
 # Verify templates contain Agent Team section (structural check)
 for t in "${TEMPLATE_TYPES[@]}"; do
@@ -714,6 +715,54 @@ for t in "${TEMPLATE_TYPES[@]}"; do
 done
 
 # ══════════════════════════════════════════════════════════════
+# 15b. Templates that ship extra top-level subdirs (domain-pack,
+# gradle-plugin) install with their layout intact — no unwrapping.
+# Regression guard for a real bug where `cp -r src/ dest/` (trailing
+# slash) flattened nested dirs into the template root.
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== install output: extra subdirs preserved (no unwrapping) ==="
+
+# domain-pack: content/, jvm-wrapper/, python-wrapper/, scripts/
+for nested in \
+    "domain-pack/content/manifest.yaml" \
+    "domain-pack/content/data.tbx" \
+    "domain-pack/jvm-wrapper/build.gradle.kts" \
+    "domain-pack/jvm-wrapper/src/main/java/com/example/domainpack/PackLoader.java" \
+    "domain-pack/python-wrapper/pyproject.toml" \
+    "domain-pack/python-wrapper/src/domain_pack/loader.py" \
+    "domain-pack/scripts/sync-content.sh"; do
+  assert_file_exists "installed $nested preserves nesting" "$INSTALL_DIR/templates/$nested"
+done
+
+# gradle-plugin: plugin/, sample-consumer/, gradle/
+for nested in \
+    "gradle-plugin/plugin/build.gradle.kts" \
+    "gradle-plugin/plugin/src/main/kotlin/com/example/gradleplugin/ExamplePlugin.kt" \
+    "gradle-plugin/plugin/src/test/kotlin/com/example/gradleplugin/ExamplePluginTest.kt" \
+    "gradle-plugin/plugin/src/functionalTest/kotlin/com/example/gradleplugin/ExamplePluginFunctionalTest.kt" \
+    "gradle-plugin/sample-consumer/build.gradle.kts" \
+    "gradle-plugin/sample-consumer/settings.gradle.kts" \
+    "gradle-plugin/gradle/libs.versions.toml" \
+    "gradle-plugin/settings.gradle.kts" \
+    "gradle-plugin/build.gradle.kts"; do
+  assert_file_exists "installed $nested preserves nesting" "$INSTALL_DIR/templates/$nested"
+done
+
+# Negative guards: the unwrapping bug would put these at the template root.
+for unwrapped in \
+    "domain-pack/manifest.yaml" \
+    "domain-pack/data.tbx" \
+    "domain-pack/loader.py" \
+    "domain-pack/PackLoader.java" \
+    "gradle-plugin/ExamplePlugin.kt" \
+    "gradle-plugin/libs.versions.toml"; do
+  rc=0; [[ ! -e "$INSTALL_DIR/templates/$unwrapped" ]] || rc=1
+  assert_ok "installed $unwrapped is NOT at template root (no unwrapping)" "$rc"
+done
+
+# ══════════════════════════════════════════════════════════════
 # 16. Claude-specific docs — new docs exist
 # ══════════════════════════════════════════════════════════════
 
@@ -783,8 +832,8 @@ grep -Eq "skills/[[:space:]]+19 skills" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists 19 skills" "$rc"
 
 rc=0
-grep -Eq "templates/[[:space:]]+10 stacks" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 10 template stacks" "$rc"
+grep -Eq "templates/[[:space:]]+11 stacks" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 11 template stacks" "$rc"
 
 rc=0
 grep -Eq "codex/.*5 skills" "$REPO_DIR/README.md" || rc=1

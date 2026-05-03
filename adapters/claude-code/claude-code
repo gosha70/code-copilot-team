@@ -516,6 +516,7 @@ PROJECT TYPES:
     ml-n8n              Python + n8n workflow automation
     java-enterprise     Full-stack Java (Spring Boot + React + GraphQL)
     java-tooling        Java tooling (Annotation Processors, Gradle Plugins)
+    gradle-plugin       Gradle plugin (Plugin<Project> + TestKit + Plugin Portal)
     domain-pack         Versioned content distribution (Maven Central + PyPI)
     web-static          Static site (Astro/Next.js/Hugo)
     web-dynamic         Dynamic web app (Next.js/Remix full-stack)
@@ -604,8 +605,13 @@ init_project() {
     fi
 
     # Copy any other top-level template subdirs (e.g. domain-pack ships
-    # content/, jvm-wrapper/, python-wrapper/, scripts/). Skip ones already
-    # handled above and never overwrite the project's existing dirs.
+    # content/, jvm-wrapper/, python-wrapper/, scripts/; gradle-plugin
+    # ships plugin/, sample-consumer/, gradle/). Skip ones already handled
+    # above and never overwrite the project's existing dirs.
+    #
+    # NOTE: trailing slash on the source path unwraps the directory contents
+    # into $target. Strip it with `${extra%/}` so `cp -r` copies the
+    # directory itself into $target, preserving the layout.
     for extra in "$TEMPLATES_DIR/$type"/*/; do
         [[ -d "$extra" ]] || continue
         local extra_name
@@ -614,9 +620,23 @@ init_project() {
             commands|.claude|.github) continue ;;
         esac
         if [[ ! -e "$target/$extra_name" ]]; then
-            cp -r "$extra" "$target/" 2>/dev/null || true
+            cp -r "${extra%/}" "$target/" 2>/dev/null || true
         fi
     done
+
+    # Copy any top-level regular files other than CLAUDE.md (e.g.
+    # gradle-plugin ships settings.gradle.kts, build.gradle.kts, .gitignore at
+    # the template root). Never overwrite an existing project file.
+    while IFS= read -r -d '' extra_file; do
+        local extra_name
+        extra_name=$(basename "$extra_file")
+        case "$extra_name" in
+            CLAUDE.md|PROJECT.md) continue ;;
+        esac
+        if [[ ! -e "$target/$extra_name" ]]; then
+            cp "$extra_file" "$target/$extra_name" 2>/dev/null || true
+        fi
+    done < <(find "$TEMPLATES_DIR/$type" -maxdepth 1 -type f -print0 2>/dev/null)
 
     # Write template metadata for sync support
     local hash
@@ -892,7 +912,8 @@ sync_project() {
     fi
 
     # 4c. Sync any other top-level template subdirs (e.g. domain-pack ships
-    # content/, jvm-wrapper/, python-wrapper/, scripts/). Treat these like
+    # content/, jvm-wrapper/, python-wrapper/, scripts/; gradle-plugin ships
+    # plugin/, sample-consumer/, gradle/). Treat these like
     # CLAUDE.md: add new files, but NEVER auto-overwrite existing ones —
     # consumers customize these (their actual content, their loader code,
     # their publish credentials). Changed files are reported as a hint, not
@@ -929,6 +950,36 @@ sync_project() {
             fi
         done < <(find "$extra" -type f -print0 2>/dev/null)
     done
+
+    # 4d. Sync top-level regular files (e.g. gradle-plugin ships
+    # settings.gradle.kts, build.gradle.kts, .gitignore at the template
+    # root). Same consumer-owned semantics: add new, never clobber.
+    while IFS= read -r -d '' tmpl_file; do
+        local extra_name
+        extra_name=$(basename "$tmpl_file")
+        case "$extra_name" in
+            CLAUDE.md|PROJECT.md) continue ;;
+        esac
+        local dest="$target/$extra_name"
+        if [[ ! -f "$dest" ]]; then
+            if [[ "$dry_run" == "1" ]]; then
+                echo "  [add] $extra_name (new)"
+            else
+                cp "$tmpl_file" "$dest"
+                echo "  [add] $extra_name"
+            fi
+            changes=$((changes + 1))
+        elif ! diff -q "$tmpl_file" "$dest" >/dev/null 2>&1; then
+            if [[ "$dry_run" == "1" ]]; then
+                echo "  [diff] $extra_name (consumer-owned — not overwritten)"
+                diff --unified=3 "$dest" "$tmpl_file" 2>/dev/null | head -20 || true
+                echo ""
+            else
+                echo "  [diff] $extra_name differs from template — not overwritten (consumer-owned). Compare against $tmpl_dir/$extra_name to review."
+            fi
+            changes=$((changes + 1))
+        fi
+    done < <(find "$tmpl_dir" -maxdepth 1 -type f -print0 2>/dev/null)
 
     # 5. Show CLAUDE.md diff (never auto-overwrite — user has customizations)
     if [[ -f "$tmpl_dir/CLAUDE.md" && -f "$target/CLAUDE.md" ]]; then
