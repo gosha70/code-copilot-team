@@ -3,7 +3,7 @@
 #
 # Usage:
 #   bash scripts/harden-github.sh
-#   bash scripts/harden-github.sh --repo gosha70/code-copilot-team --branch master
+#   bash scripts/harden-github.sh --repo gosha70/code-copilot-team
 #   bash scripts/harden-github.sh --checks "sync-check" --dry-run
 #   bash scripts/harden-github.sh --no-apply --checks "sync-check"
 

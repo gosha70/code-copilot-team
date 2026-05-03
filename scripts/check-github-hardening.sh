@@ -18,7 +18,7 @@
 # Usage:
 #   bash scripts/check-github-hardening.sh
 #   bash scripts/check-github-hardening.sh --repo gosha70/code-copilot-team
-#   bash scripts/check-github-hardening.sh --repo gosha70/code-copilot-team --branch master
+#   bash scripts/check-github-hardening.sh --repo gosha70/code-copilot-team --branch <name>  # override default-branch detection
 #   bash scripts/check-github-hardening.sh --required-checks "sync-check"
 
 set -euo pipefail

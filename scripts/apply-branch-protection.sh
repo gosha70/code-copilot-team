@@ -8,7 +8,7 @@
 # Usage:
 #   bash scripts/apply-branch-protection.sh
 #   bash scripts/apply-branch-protection.sh --repo gosha70/code-copilot-team
-#   bash scripts/apply-branch-protection.sh --repo gosha70/code-copilot-team --branch master
+#   bash scripts/apply-branch-protection.sh --repo gosha70/code-copilot-team --branch <name>  # override default-branch detection
 #   bash scripts/apply-branch-protection.sh --checks "sync-check" --dry-run
 
 set -euo pipefail
