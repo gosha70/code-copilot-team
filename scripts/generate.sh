@@ -15,7 +15,7 @@ SKILLS_DIR="$REPO_DIR/shared/skills"
 ADAPTERS="$REPO_DIR/adapters"
 
 # Skills that are always loaded (unconditional, every session)
-ALWAYS_SKILLS="coding-standards copilot-conventions copyright-headers safety"
+ALWAYS_SKILLS="coding-standards copilot-conventions copyright-headers safety wiki-first-query"
 
 echo "=== Generating adapter configs from shared/skills/ ==="
 

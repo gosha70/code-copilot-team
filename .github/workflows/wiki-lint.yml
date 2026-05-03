@@ -1,0 +1,31 @@
+name: Wiki Lint
+
+# Non-blocking structural lint of knowledge/wiki/ per issue #12.
+# Surfaces violations without gating merges (continue-on-error: true).
+# Promote to blocking once the wiki layer has settled.
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'knowledge/wiki/**'
+      - 'knowledge/wiki/scripts/lint-wiki.sh'
+      - '.github/workflows/wiki-lint.yml'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'knowledge/wiki/**'
+      - 'knowledge/wiki/scripts/lint-wiki.sh'
+      - '.github/workflows/wiki-lint.yml'
+
+jobs:
+  lint:
+    name: Lint knowledge/wiki/
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run wiki linter
+        run: bash knowledge/wiki/scripts/lint-wiki.sh

@@ -112,7 +112,7 @@ for skill_dir in "$SKILLS"/*/; do
   [[ -d "$skill_dir" ]] || continue
   name=$(basename "$skill_dir")
   # Skip always skills — they're in the body, not the table
-  case "$name" in coding-standards|copilot-conventions|copyright-headers|safety) continue ;; esac
+  case "$name" in coding-standards|copilot-conventions|copyright-headers|safety|wiki-first-query) continue ;; esac
   assert_contains "references on-demand skill: $name" "$AGENTS_MD" "$name"
 done
 
@@ -258,12 +258,12 @@ CURSOR_RULES="$ADAPTERS/cursor/.cursor/rules"
 
 assert "cursor rules dir exists" "[[ -d '$CURSOR_RULES' ]]"
 
-# Verify 19 .mdc files (all skills)
+# Verify 20 .mdc files (all skills)
 MDC_COUNT=$(ls "$CURSOR_RULES"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
-assert "exactly 19 .mdc files ($MDC_COUNT)" "[[ $MDC_COUNT -eq 19 ]]"
+assert "exactly 20 .mdc files ($MDC_COUNT)" "[[ $MDC_COUNT -eq 20 ]]"
 
 # Verify always skills have alwaysApply: true
-for mdc in coding-standards copilot-conventions safety copyright-headers; do
+for mdc in coding-standards copilot-conventions safety copyright-headers wiki-first-query; do
   MDC_FILE="$CURSOR_RULES/$mdc.mdc"
   assert "$mdc.mdc exists" "[[ -f '$MDC_FILE' ]]"
   assert_contains "$mdc.mdc: has frontmatter start" "$MDC_FILE" "^---"
@@ -339,7 +339,7 @@ for skill_dir in "$SKILLS"/*/; do
   [[ -d "$skill_dir" ]] || continue
   name=$(basename "$skill_dir")
   # Skip always skills — they go into copilot-instructions.md, not individual files
-  case "$name" in coding-standards|copilot-conventions|copyright-headers|safety) continue ;; esac
+  case "$name" in coding-standards|copilot-conventions|copyright-headers|safety|wiki-first-query) continue ;; esac
   INSTR="$INSTRUCTIONS_DIR/$name.instructions.md"
   assert "$name.instructions.md exists" "[[ -f '$INSTR' ]]"
   assert_contains "$name: has applyTo frontmatter" "$INSTR" "^applyTo:"
@@ -374,7 +374,7 @@ bash "$CURSOR_SETUP" "$CURSOR_TMP" >/dev/null 2>&1
 CURSOR_INSTALL_RC=$?
 assert "cursor install exits 0" "[[ $CURSOR_INSTALL_RC -eq 0 ]]"
 INSTALLED_MDC=$(ls "$CURSOR_TMP/.cursor/rules"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
-assert "cursor installed 19 .mdc files ($INSTALLED_MDC)" "[[ $INSTALLED_MDC -eq 19 ]]"
+assert "cursor installed 20 .mdc files ($INSTALLED_MDC)" "[[ $INSTALLED_MDC -eq 20 ]]"
 rm -rf "$CURSOR_TMP"
 
 # ── Section 16: GitHub Copilot setup.sh install test ──────

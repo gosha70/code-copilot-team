@@ -458,13 +458,17 @@ All tools share the same rules from `shared/skills/`. Each adapter formats them 
 ```
 code-copilot-team/
 ├── shared/                              ← Single source of truth
-│   ├── skills/                          19 skills (SKILL.md format, open Agent Skills spec)
+│   ├── skills/                          20 skills (SKILL.md format, open Agent Skills spec)
 │   ├── docs/                            8 tool-agnostic reference docs
 │   ├── templates/                       11 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
 │   └── templates/provider-profile-template.toml  Peer provider profile seed
 ├── specs/                               ← SDD artifacts per feature (versioned)
 │   └── <feature-id>/                    plan.md, spec.md, tasks.md, lessons-learned.md
+├── knowledge/                           ← Project knowledge layer (curated wiki + raw notes)
+│   ├── README.md                        Wiki usage guide (read this first)
+│   ├── raw/                             Unedited candidate material
+│   └── wiki/                            Curated, cited, agent-maintainable pages
 ├── adapters/
 │   ├── claude-code/                     agents, hooks, commands, settings, setup.sh
 │   ├── codex/                           AGENTS.md, config.toml, 5 skills, setup.sh
@@ -480,8 +484,8 @@ code-copilot-team/
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
-│   ├── test-generate.sh                 274 generation + adapter tests
-│   ├── test-shared-structure.sh         786 structure + content tests
+│   ├── test-generate.sh                 278 generation + adapter tests
+│   ├── test-shared-structure.sh         793 structure + content tests
 │   ├── test-sync.sh                     65 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   └── test-review-loop.sh            31 review loop integration tests

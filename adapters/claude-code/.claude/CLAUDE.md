@@ -42,3 +42,7 @@ The system file at `~/.claude/plans/` is ephemeral and session-local. It is NOT 
 3. **Execute** — Small increments. Run linters and tests after each change.
 4. **Validate** — Zero lint errors, tests pass, before declaring done.
 5. **Compact** — Use /compact when context grows large.
+
+## Wiki-First Query Convention
+
+If the project ships a `knowledge/wiki/` directory, **consult `knowledge/wiki/index.md` and the linked pages first** when starting work on any project topic, before re-reading raw sources (specs, issues, code). The wiki is the canonical project memory layer. If the wiki is silent or stale on the topic, do the raw research, then propose a promotion via `knowledge/wiki/workflows/promote-lesson-to-wiki.md` (or run the `/promote-lesson` slash command). See `shared/skills/wiki-first-query/SKILL.md` for the full convention.
