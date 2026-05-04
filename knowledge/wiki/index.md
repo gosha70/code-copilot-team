@@ -37,12 +37,22 @@ about to add or change a page, read
 - [Multi-Round Spec Review](concepts/multi-round-spec-review.md) —
   iterating a spec across multiple review rounds catches
   structurally distinct classes of bugs before code lands.
+- [Phase-Scoped Build Prompts](concepts/phase-scoped-build-prompts.md) —
+  for any multi-PR feature, scope each agent build invocation to
+  one phase; pair with read-first + plan-first discipline and a
+  per-phase gotchas list.
+- [Cross-Session State Must Be File-Backed](concepts/cross-session-state-must-be-file-backed.md) —
+  conversation context, agent memory, and slash-command state do
+  not survive session boundaries; durable state lives in files.
 
 ## Workflows
 
 - [Promote a Lesson to the Wiki](workflows/promote-lesson-to-wiki.md) —
   the manual procedure for turning a session-level lesson into a
   durable wiki page.
+- [30-Day Doc Coverage Audit](workflows/doc-coverage-audit.md) —
+  recurring procedure for reconciling shipped features against
+  user-facing docs across a fixed time window.
 
 ## Incidents
 
@@ -52,12 +62,23 @@ about to add or change a page, read
 - [Spec/Code Coherence Drift](incidents/spec-code-coherence-drift.md) —
   three concrete drift instances caught across three rounds of
   iterative spec review.
+- [Executable Artifacts Shipped Without Being Executed](incidents/executable-artifacts-shipped-unexecuted.md) —
+  three concrete cases (ai-atlas Docker, Sprint 2 launcher flags,
+  `providers-health.sh`) where the language test runner was
+  treated as the sole quality gate.
+- [Plan Agent Contract Contradiction](incidents/plan-agent-contract-contradiction.md) —
+  the agent told to "emit" SDD artifacts while forbidden from
+  writing files; ai-atlas Mar 9 session wrote zero `specs/`
+  artifacts as a result.
 
 ## Decisions
 
 - [Use an LLM Wiki as the Project Knowledge Layer](decisions/use-llm-wiki-as-knowledge-layer.md) —
   why we are introducing `knowledge/wiki/` instead of relying on
   scattered docs, specs, and session memory.
+- [Treat Infra Verification as a Gate, Not a Guideline](decisions/infra-verification-as-gate.md) —
+  why infra-verification is a hard precondition for phase
+  completion in this project, not advisory text.
 
 ## Playbooks
 
@@ -67,6 +88,8 @@ about to add or change a page, read
 - [Grep-Based Acceptance Criteria](playbooks/grep-based-acceptance-criteria.md) —
   recipe for converting fragile enumerated ACs into self-checking
   grep predicates that survive line-number drift.
+- [Respond to a Production-Readiness Review Without Scope Creep](playbooks/respond-to-production-readiness-review.md) —
+  bucket each item by release target; refuse the lump-sum framing.
 
 ## Glossary
 
