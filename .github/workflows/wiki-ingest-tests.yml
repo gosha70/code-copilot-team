@@ -1,0 +1,55 @@
+name: Wiki Ingest Tests
+
+# Runs the wiki ingest pipeline test suite (Python unittest + bash
+# end-to-end smoke + negative-path drills) on PRs that touch the
+# pipeline. Per specs/wiki-ingest-pipeline/plan.md Phase 4 option
+# (a): a feature-scoped workflow with an explicit paths filter is
+# preferred over wiring the suite into an always-on entrypoint —
+# keeps the change small and avoids cross-cutting count drift in
+# tests/test-counts.env.
+#
+# The paths filter must include EVERY input the test depends on,
+# otherwise a change to the test harness or schema will not trigger
+# CI:
+#   - scripts/wiki-ingest                   (bash entrypoint)
+#   - scripts/wiki_ingest/**                (python package + tests)
+#   - tests/test-wiki-ingest.sh             (the runner itself)
+#   - .github/workflows/wiki-ingest-tests.yml (this file)
+#   - knowledge/wiki/schema/**              (prompt.py loads schema at runtime)
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'scripts/wiki-ingest'
+      - 'scripts/wiki_ingest/**'
+      - 'tests/test-wiki-ingest.sh'
+      - '.github/workflows/wiki-ingest-tests.yml'
+      - 'knowledge/wiki/schema/**'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'scripts/wiki-ingest'
+      - 'scripts/wiki_ingest/**'
+      - 'tests/test-wiki-ingest.sh'
+      - '.github/workflows/wiki-ingest-tests.yml'
+      - 'knowledge/wiki/schema/**'
+
+jobs:
+  test:
+    name: Run wiki-ingest pipeline tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Stdlib-only pipeline (see spec.md requirement #1) — no
+          # pip install step required. Python 3.10+ for PEP 604
+          # union syntax (X | None).
+          python-version: '3.11'
+
+      - name: Run tests/test-wiki-ingest.sh
+        run: bash tests/test-wiki-ingest.sh

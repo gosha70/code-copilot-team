@@ -233,6 +233,91 @@ document directly.
 - Generated content (AGENTS.md, Cursor rules, …) → edit
   `shared/skills/` and regenerate, not wiki.
 
+### 5e. Running ingest (semi-automated alternative to 5b)
+
+`scripts/wiki-ingest` is a semi-automated companion to the manual
+promotion loop in 5b. It runs the four-question gate and drafts a
+typed wiki page from a single source, then writes a **proposal** to
+`doc_internal/proposals/`. **Human approval remains gating** — the
+pipeline never writes to `knowledge/wiki/`.
+
+```
+./scripts/wiki-ingest <path-to-source.md>
+```
+
+Default invocation auto-detects an installed copilot CLI in the
+order `claude → codex → cursor` and uses it as the synthesis
+backend. Override with `--backend <name>` or the
+`WIKI_INGEST_BACKEND` environment variable. Use
+`--backend test` for a deterministic stub (no real LLM call) —
+this is what CI uses.
+
+**What the pipeline does:**
+
+1. Reads the source file.
+2. Loads the wiki schema (`ingest-rules.md`, `page-types.md`,
+   `citation-rules.md`) at runtime so the prompt always reflects
+   current rules.
+3. Calls the chosen backend with a structured prompt asking for
+   the four-question gate decision plus, on accept, a typed draft.
+4. Validates the response in two layers: shape (against an inline
+   JSON schema) and semantic cross-consistency (the structured
+   `page_type` / `slug` / `title` / `sources` fields must match
+   the YAML frontmatter embedded in the draft markdown).
+5. Writes a proposal file `<YYYY-MM-DD>-<slug>.md` whose
+   frontmatter carries `gate_disposition`, `gate_reason`,
+   `target_page_type`, `target_slug`, `backend`, and
+   `ingestor_version`; on accept the body is the full draft, on
+   dry-run only the gate decision is recorded.
+
+**What the pipeline does not do:**
+
+- Write to `knowledge/wiki/` (proposals stay in `doc_internal/`).
+- Open PRs, commit, or push (everything is a local file write).
+- Reconcile shape/semantic inconsistencies silently (a mismatch
+  raises `ContractViolationError`, exit 4, so a curator sees it).
+- Replace 5b — the curator still walks the proposal across the
+  finish line: review, edit, lint, commit.
+
+**Flags:**
+
+| Flag | Purpose |
+|---|---|
+| `--backend <name>` | Backend selection (claude / codex / cursor / test). Wins over `WIKI_INGEST_BACKEND`, which wins over auto-detect. |
+| `--dry-run` | Run the gate but omit the draft body from the proposal file (frontmatter still records `gate_disposition` + `gate_reason`). |
+| `--output-dir <path>` | Override the default `doc_internal/proposals/` output location. |
+
+**Exit codes** (stable across v1):
+
+| Code | Meaning |
+|---|---|
+| `0` | Successful run; proposal file written (accept or reject). |
+| `2` | Backend not found. |
+| `3` | Backend invocation failed (non-zero exit, timeout, OS error). |
+| `4` | Contract violation (response failed shape or semantic validation). |
+| `5` | Source file missing or unreadable. |
+| `6` | Output directory write failure. |
+
+**The four-question gate** (same as 5a — the pipeline applies it
+mechanically). A candidate is only promoted on `accept`; a
+`reject` disposition produces a proposal file too, with the
+gate's reasoning, so the curator sees *why* a candidate was
+declined.
+
+**CI mode:** `tests/test-wiki-ingest.sh` invokes the entrypoint
+with `--backend test` (deterministic stub, no network, no copilot
+CLI required). The same flag is what
+`.github/workflows/wiki-ingest-tests.yml` uses on every PR
+touching `scripts/wiki_ingest/**`.
+
+**Stdlib only.** No `pip install` step; Python 3.10+. The
+`scripts/wiki-ingest` Bash entrypoint sets `PYTHONPATH` and
+exec's `python3 -m wiki_ingest`.
+
+For the full curator-facing workflow (when to use ingest vs.
+manual, and how to take a proposal across the line), see
+`knowledge/wiki/workflows/run-wiki-ingest.md`.
+
 ---
 
 ## 6. How AI agents use the wiki (the wiki-first convention)
@@ -396,10 +481,11 @@ wiki content.
 This first cut is **groundwork only**. Three deliberate
 non-goals, each tracked as its own follow-up:
 
-1. **Automated ingest pipeline.** A `WikiIngestor` interface
-   plus a baseline implementation that watches for changes
-   (post-merge hook, spec completion, incident-resolved
-   trigger) and produces wiki updates without manual prompting.
+1. **Automated ingest pipeline.** v1 lands the on-demand,
+   single-source ingest CLI (`scripts/wiki-ingest`, see §5e) —
+   human approval still gating. Deferred follow-ups: hooks
+   (post-commit / post-merge / file-watcher triggers) and
+   multi-source synthesis. Both are v2.
 2. **RLMKit synthesis backend.** Use RLMKit's recursive engine
    as the synthesis backend for large-corpus ingest, cross-page
    synthesis, and stale-page repair. Depends on
