@@ -17,6 +17,16 @@ from ..errors import ContractViolationError
 _FENCE_JSON_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
 _FENCE_ANY_RE = re.compile(r"```\s*\n(.*?)```", re.DOTALL)
 
+# Matches any fully-closed fenced region with any (possibly empty)
+# language tag. Used by the balanced-brace fallback to mask out
+# reference material the prompt put inside ```text``` (or any other
+# non-json fence) so its braces are not mistaken for the response.
+# Note this is broader than _FENCE_ANY_RE — that regex requires
+# whitespace+newline immediately after the opening backticks (so
+# ```text\n is not matched), whereas this one allows any non-newline
+# language tag (text, python, bash, schema, …).
+_FENCE_REGION_RE = re.compile(r"```[^\n]*\n.*?```", re.DOTALL)
+
 
 def _try_parse_dict(text: str) -> dict | None:
     """Attempt to parse text as JSON. Return the dict on success, None otherwise.
@@ -49,12 +59,39 @@ def _extract_via_fence(stdout: str) -> dict | None:
     return None
 
 
+def _strip_fenced_regions(stdout: str) -> str:
+    """Replace fully-closed fenced regions with whitespace of the same length.
+
+    Used by the balanced-brace fallback to mask out reference material
+    the prompt put inside ```text``` (or any non-json fence) so its
+    braces are not mistaken for the response. Whitespace replacement
+    (rather than removal) preserves character positions in case any
+    future caller wants original-stdout offsets.
+
+    Unclosed fences are left as-is (fail-safe: do not silently swallow
+    text after a malformed prompt).
+    """
+    def _to_whitespace(match: re.Match) -> str:
+        return " " * len(match.group(0))
+    return _FENCE_REGION_RE.sub(_to_whitespace, stdout)
+
+
 def _extract_via_balanced_braces(stdout: str) -> dict | None:
     """Strategy 2: scan for the first balanced top-level {…} block.
 
     Tracks nesting depth and respects JSON string literals (with \" escape
     handling) so braces inside strings are not counted.
+
+    **Skips fenced regions.** Reference material in ```text``` (or any
+    non-json fence) is masked out before scanning, so a JSON-shaped
+    schema in the prompt cannot shadow an unfenced response. The
+    fence-first strategy in `_extract_via_fence` already handles
+    ``json``-fenced responses; this fallback is only reached when no
+    fence yielded a parseable dict, and at that point any remaining
+    fenced content is by definition reference material (or a malformed
+    response that already failed parse).
     """
+    stdout = _strip_fenced_regions(stdout)
     n = len(stdout)
     i = 0
     while i < n:
