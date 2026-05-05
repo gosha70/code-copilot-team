@@ -16,11 +16,10 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 from typing import Any
 
-from ..errors import BackendInvocationError
+from ..errors import BackendInvocationError, BackendNotFoundError
 from .json_extract import extract_json_object
 
 # Maximum stderr bytes to include in error messages.
@@ -34,9 +33,20 @@ def _render_plain_text_prompt(backend_prompt: dict[str, Any]) -> str:
     - Frames the task with system-instructions.
     - Includes schema excerpts in labelled sections.
     - Includes the source content.
-    - Specifies the JSON response schema.
-    - Explicitly asks the CLI to wrap its JSON response in a ```json fence.
-    - Includes the full BackendPrompt JSON as a reference block.
+    - Specifies the JSON response schema (in a ``text`` fence — never
+      ``json`` — so an echo of the prompt does not collide with the
+      extractor's preferred ``json`` fence).
+    - Explicitly asks the CLI to wrap its JSON response in a ``json``
+      fence and to use no other ``json`` fence in its output.
+
+    **The ```json fence is reserved exclusively for the model's actual
+    response.** Reference material (response schema, prompt-shape docs,
+    etc.) MUST be emitted in a non-json fence — using ``json`` for
+    reference text would let an echoing CLI's prompt-echo capture the
+    schema before its real response, and the extractor (which prefers
+    the first ```json block) would return the schema instead of the
+    answer. See test_extracts_response_when_prompt_is_echoed_verbatim
+    in test_json_extract.py for the regression that pins this rule.
     """
     system_instructions = backend_prompt.get("system_instructions", "")
     schema_excerpts = backend_prompt.get("schema_excerpts", {})
@@ -71,20 +81,22 @@ def _render_plain_text_prompt(backend_prompt: dict[str, Any]) -> str:
     lines.append("=== RESPONSE INSTRUCTIONS ===")
     lines.append(
         "Respond with exactly one JSON object matching the schema below. "
-        "Wrap the JSON in a ```json code fence so it can be extracted reliably. "
-        "Do not include any other text outside the fence."
+        "Wrap your JSON response in a ```json code fence so it can be "
+        "extracted reliably. Do not use any other ```json fence in your "
+        "output — that fence is reserved exclusively for your response. "
+        "The reference schema below is shown in a ```text fence (which "
+        "is not captured by the extractor)."
     )
     lines.append("")
-    lines.append("Response schema:")
-    lines.append("```json")
+    lines.append("Response schema (reference only — do NOT echo this "
+                 "block back; emit your real response in a ```json fence):")
+    lines.append("```text")
     lines.append(response_schema)
     lines.append("```")
-    lines.append("")
 
-    lines.append("=== FULL PROMPT REFERENCE (BackendPrompt JSON) ===")
-    lines.append("```json")
-    lines.append(json.dumps(backend_prompt, indent=2))
-    lines.append("```")
+    # No "FULL PROMPT REFERENCE" block: it would either need a ```json
+    # fence (collision risk) or a ```text fence (redundant with the
+    # labelled sections above). Drop entirely.
 
     return "\n".join(lines)
 
@@ -134,7 +146,14 @@ class CopilotCliBackend:
                 f"stderr (first {_MAX_STDERR_BYTES} bytes): {stderr_snippet!r}"
             ) from exc
         except FileNotFoundError as exc:
-            raise BackendInvocationError(
+            # Missing CLI is a "not found" condition (exit 2), not an
+            # "invocation" condition (exit 3). resolve_backend() preflights
+            # with shutil.which so this branch is normally unreachable, but
+            # keep the same error semantics as the resolver for any code
+            # path that constructs CopilotCliBackend directly (e.g.,
+            # contributor SDK adapters built against the same Backend
+            # Protocol).
+            raise BackendNotFoundError(
                 f"Backend CLI '{self._cli_name}' not found on PATH. "
                 "Use --backend test for fixture runs, or install the CLI."
             ) from exc
