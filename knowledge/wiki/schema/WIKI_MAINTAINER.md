@@ -71,6 +71,46 @@ For every promotion or update:
   in a separate change. Do not commit lint violations.
 - **Mix promotion and curation in one turn.** Promote *or* refactor;
   not both.
+- **Assert a distribution claim without verifying it.** See the
+  next section.
+
+## Distribution-claim discipline
+
+Several wiki page types (decisions, incidents, concepts about
+shared infrastructure) describe how a generated artifact is
+distributed across the project — for example, "this skill
+reaches every adapter via `scripts/generate.sh`" or "this rule
+is always-on for Claude Code." Such claims are easy to overstate
+and hard to retract once cited from other pages.
+
+**Before writing any claim about how a generated artifact is
+distributed, you must:**
+
+1. Read the generator source code (`scripts/generate.sh` or the
+   equivalent) and identify the exact mechanism that propagates
+   the artifact (e.g., `ALWAYS_SKILLS`, on-demand TOC, hardcoded
+   advisory).
+2. Verify the claim against **at least one generated-artifact
+   target** — grep for the artifact in the generated adapter
+   output (e.g., `adapters/codex/AGENTS.md`,
+   `adapters/cursor/.cursor/rules/*.mdc`). "It runs through the
+   generator" is not the same as "every adapter receives it."
+3. **Cite both:** the generator source (with commit SHA) **and**
+   at least one generated-artifact target (with commit SHA), in
+   the page's `sources:` frontmatter. If different adapters
+   receive the artifact through different mechanisms (always-on
+   vs. on-demand vs. not-at-all), enumerate each adapter
+   explicitly in prose — do not collapse them into "all adapters."
+4. If a verification step shows the claim is narrower than you
+   first thought, **rewrite the prose, not the verification.**
+   The empirical signal is correct; the prose is the thing to
+   change.
+
+This rule was added in v0.2 after a peer-review pair fired twice
+on the same page (`decisions/infra-verification-as-gate.md`),
+each time on a different distribution overstatement. The pattern
+generalises: when in doubt about distribution, grep the generator
+and at least one target before writing the prose.
 
 ## Escalation
 

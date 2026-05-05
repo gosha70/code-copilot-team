@@ -27,13 +27,15 @@ sources:
 
 ```yaml
 sources:
-  - issue: 12        # in this repo
-  - pr: 22
-  - issue: gosha70/rlmkit#37   # cross-repo
+  - issue: 12                  # issue in this repo
+  - pr: 22                     # PR in this repo
+  - issue: gosha70/rlmkit#37   # cross-repo issue
+  - pr: gosha70/rlmkit#30      # cross-repo PR
 ```
 
 Use the bare number for issues/PRs in `code-copilot-team`. Use
-`<owner>/<repo>#<n>` for cross-repo references.
+`<owner>/<repo>#<n>` for cross-repo references — same form for
+both `issue:` and `pr:`.
 
 ### 3. External URL
 
@@ -46,6 +48,46 @@ sources:
 - `url` is the canonical permalink.
 - `retrieved` is the date you read it (URLs rot; the date tells the
   next reader how stale the citation may be).
+
+## When the upstream source is private (gitignored or in a sister repo's `doc_internal/`)
+
+The richest sources for methodological lessons are sometimes
+working docs in a gitignored `doc_internal/` directory of this
+repo or of a sister repo (e.g., `rlmkit`). The three forms above
+do not handle these — `path: + sha:` will not resolve for another
+contributor, and there is no public URL.
+
+**The blessed workaround** (validated by the v0.1 dogfood):
+**cite the public artifact the private working doc informed —
+the PR, issue, or merged spec — and reference the private doc
+inline in prose by path with a one-line description.** A future
+reader can audit every claim by following the public artifact;
+the inline pointer tells them the private doc exists and where.
+
+```yaml
+sources:
+  - pr: gosha70/rlmkit#30
+  - pr: gosha70/rlmkit#31
+  - pr: gosha70/rlmkit#32
+  - pr: gosha70/rlmkit#33
+```
+
+Then in prose:
+
+> The driving spec was `rlmkit doc_internal/specs/prefill-decode-telemetry.md`,
+> which evolved across seven review rounds; the four PRs cited
+> above are the public artifacts that landed each round.
+
+**Constraints:**
+
+- The private doc must have informed at least one citable public
+  artifact. A private doc that has produced nothing public yet is
+  not a citable source — wait for the public artifact to land.
+- Do not invent a `private_path:` source kind in the frontmatter.
+  The frontmatter must remain machine-checkable; the private-doc
+  pointer lives in prose only.
+- The inline pointer must be specific (path inside the sister
+  repo, one-line description), not vague ("internal notes").
 
 ## Forbidden citations
 

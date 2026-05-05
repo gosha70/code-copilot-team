@@ -56,7 +56,8 @@ Required H2 sections:
 ### `incident` — `incidents/<slug>.md`
 A real failure (or near-miss) and what was learned from it. NOT a
 generic "things to avoid" page — every incident page describes a
-specific event.
+specific event, or a tightly-scoped cluster of events with one
+root cause.
 
 Required H2 sections:
 
@@ -64,6 +65,18 @@ Required H2 sections:
 - `## Why it happened` (root cause, not symptom)
 - `## What we changed`
 - `## How to recognize a recurrence`
+
+Optional H2 section:
+
+- `## Instances` — used when the page bundles **multiple
+  receipts of one root cause** (e.g., three drift instances
+  caught across three review rounds). Place between `## Why it
+  happened` and `## What we changed`. Each instance is a `###`
+  subsection with a short headline and a 2–4 line account
+  (what was observed, what the receipt looked like, how it was
+  resolved). Use this **instead of** rewriting the four required
+  H2s in the plural — the singular framing of the required H2s
+  is intentional and stays.
 
 ### `decision` — `decisions/<slug>.md`
 An architecture or process decision. Light-weight ADR.
@@ -74,6 +87,15 @@ Required H2 sections:
 - `## Context`
 - `## Alternatives considered`
 - `## Consequences`
+
+**Note on ADR conventions:** Classical ADR templates (Nygard,
+MADR) include `## Status` and `## Date` H2s in the body. This
+schema deliberately surfaces both in the YAML frontmatter
+instead — `status` and `last_reviewed` — because they are
+machine-checkable there and the linter enforces them. **Do not
+add `## Status` or `## Date` H2s to a wiki decision page.** If
+you are migrating an external ADR, drop those sections and let
+the frontmatter carry the metadata.
 
 ### `playbook` — `playbooks/<slug>.md`
 An operational recipe for a recurring situation. Like a workflow,
@@ -108,7 +130,13 @@ Required H2 sections:
 
 - `## Question`
 - `## Why it matters`
-- `## What would resolve it`
+- `## What an answer might look like` — what shape a resolution
+  would take, what evidence would close the question, or what
+  precondition must change before it can be answered.
+  "**No clear resolution path yet**" is an explicitly valid body
+  for this section — say so plainly when that is the truth, and
+  describe what you have ruled out. Do not invent a fake
+  resolution path just to fill the slot.
 
 ### `index` — `index.md` only
 The wiki entry point. No required structure beyond grouping links by

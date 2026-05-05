@@ -3,11 +3,19 @@ page_type: decision
 slug: infra-verification-as-gate
 title: Treat Infra Verification as a Gate, Not a Guideline
 status: stable
-last_reviewed: 2026-05-03
+last_reviewed: 2026-05-04
 sources:
   - path: specs/infra-verification-gate/spec.md
     sha: 2753e34
   - path: shared/skills/infra-verification/SKILL.md
+    sha: d2b083d
+  - path: scripts/generate.sh
+    sha: 0434fbf
+  - path: adapters/codex/AGENTS.md
+    sha: 0434fbf
+  - path: adapters/cursor/.cursor/rules/infra-verification.mdc
+    sha: d2b083d
+  - path: adapters/github-copilot/.github/instructions/infra-verification.instructions.md
     sha: d2b083d
 ---
 

@@ -3,7 +3,7 @@ page_type: workflow
 slug: promote-lesson-to-wiki
 title: Promote a Lesson to the Wiki
 status: stable
-last_reviewed: 2026-05-03
+last_reviewed: 2026-05-04
 sources:
   - issue: 12
   - path: claude_code/.claude/rules/copilot-conventions.md
@@ -28,6 +28,57 @@ In Claude Code, the `/promote-lesson <description>` slash command
 runs this workflow on your behalf. The procedure below is the
 canonical, adapter-agnostic version; the slash command is a
 convenience wrapper around it.
+
+## Two modes: single-page and atomic cluster
+
+Promotion runs in one of two modes. Pick **before** you start
+writing.
+
+- **Single-page mode** — one lesson, one page, no inbound or
+  outbound wiki links beyond the index entry. Use this when the
+  page genuinely stands alone. Walk steps 1–10 below in order.
+- **Atomic cluster mode** — two or more pages promoted in one
+  turn that reference each other. Use this when the lessons share
+  a root cause, a sequence, or a pattern that only makes sense as
+  a set. Linking pages one-at-a-time forces a topological order
+  and breaks the linter mid-batch on every forward reference.
+  Atomic cluster mode avoids that entirely.
+
+If you find yourself two pages into single-page mode and a third
+page wants to link to one not yet written — stop, restart in
+atomic cluster mode. Do not paper over with placeholder TBD links;
+the linter catches them and the review trail is worse than the
+restart.
+
+### Atomic cluster recipe
+
+Use this in place of steps 4–9 when promoting a cluster:
+
+1. **Slug table first.** Decide all page types, slugs, and
+   directories upfront. Write them in a markdown table in the
+   conversation or in `doc_internal/` so they are visible. Do not
+   start writing pages before the table is settled.
+2. **Write each page with `## Related` placeholders.** Use literal
+   `## Related — Links added in cross-link pass.` so the section
+   exists but the linker pass has nothing to break. Do **not**
+   write speculative markdown-link stubs that point at not-yet-
+   written files — those will trip the linter the moment they
+   target a missing path.
+3. **Single cross-link pass.** With every page in the cluster
+   written, fill in every `## Related` section against the slug
+   table. This is also when you wire each page to siblings the
+   index already names.
+4. **Update `index.md` and `log.md` once.** One bullet per page
+   in `index.md`; one entry per page in `log.md`, all dated the
+   same day.
+5. **Lint once.** `bash knowledge/wiki/scripts/lint-wiki.sh`. With
+   the cross-link pass complete and the index updated, the linter
+   should pass on the first run. If it doesn't, fix the violation
+   without splitting the cluster.
+
+The dogfood that produced v0.2 measured cluster mode at
+~24 min/page versus ~28 min/page for one-at-a-time, with zero
+forward-link breakage.
 
 ## Steps
 
