@@ -140,10 +140,16 @@ class TestCopilotCliBackend(unittest.TestCase):
         finally:
             os.unlink(script_path)
 
-    def test_cli_not_found_raises_backend_invocation_error(self) -> None:
-        """Non-existent CLI executable raises BackendInvocationError."""
+    def test_cli_not_found_raises_backend_not_found_error(self) -> None:
+        """Non-existent CLI executable raises BackendNotFoundError (exit 2).
+
+        Missing CLI is "not found", not "invocation failed". This matches
+        resolve_backend()'s preflight semantics so direct
+        CopilotCliBackend construction (e.g., contributor SDK adapters)
+        produces the same error type as the resolver path.
+        """
         backend = CopilotCliBackend("__no_such_cli__", timeout_seconds=5)
-        with self.assertRaises(BackendInvocationError) as ctx:
+        with self.assertRaises(BackendNotFoundError) as ctx:
             backend.call(_SAMPLE_PROMPT)
         msg = str(ctx.exception)
         self.assertIn("__no_such_cli__", msg)

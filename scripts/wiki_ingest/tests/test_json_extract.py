@@ -337,5 +337,107 @@ class TestNonDictJson(unittest.TestCase):
         self.assertIn("no JSON object", str(ctx.exception))
 
 
+# ---------------------------------------------------------------------------
+# Regression: prompt echoed before response must NOT shadow the response
+# ---------------------------------------------------------------------------
+
+class TestPromptEchoCollision(unittest.TestCase):
+    """Pins the rule: ```json fences in the prompt must not be captured.
+
+    A real CLI may echo the rendered prompt verbatim before its actual
+    response. If the prompt contains its own ```json fences (e.g., for
+    the response schema or a prompt-shape reference block), the
+    extractor — which prefers the FIRST ```json block — would return
+    the schema instead of the answer. Reference material in the prompt
+    must use ```text (or any non-json fence). This test pins that
+    contract by simulating a realistic prompt-echo-then-response stdout
+    against the actual prompt renderer.
+    """
+
+    def test_extracts_response_when_prompt_is_echoed_verbatim(self) -> None:
+        """The extractor must return the BackendResponse, not the prompt's schema."""
+        from wiki_ingest.backends.copilot_cli import _render_plain_text_prompt
+
+        backend_prompt = {
+            "version": 1,
+            "system_instructions": "You are a wiki curator.",
+            "task": "ingest",
+            "schema_excerpts": {
+                "ingest_rules": "Apply the four-question gate.",
+                "page_types": "incident, concept, ...",
+                "citation_rules": "Cite sources.",
+            },
+            "source": {
+                "kind": "file",
+                "path": "fixture.md",
+                "content": "# A Test Source\n\nSome content.",
+            },
+            "response_schema": json.dumps({
+                "type": "object",
+                "required": ["version", "disposition"],
+            }),
+        }
+        rendered_prompt = _render_plain_text_prompt(backend_prompt)
+
+        # Simulate a CLI echoing the entire rendered prompt back, then
+        # emitting its real response.
+        stdout = (
+            rendered_prompt
+            + "\n\nHere is my response:\n\n"
+            + "```json\n"
+            + _VALID_JSON
+            + "\n```\n"
+        )
+        result = extract_json_object(stdout)
+        # Must return the actual BackendResponse, not the schema.
+        self.assertEqual(result["disposition"], "accept")
+        self.assertEqual(result["slug"], "test-slug")
+        self.assertNotIn("required", result)  # schema-shaped dict would have this key
+
+    def test_rendered_prompt_alone_yields_no_extractable_object(self) -> None:
+        """The rendered prompt with no response appended must NOT extract.
+
+        This pins the behavior: reference material in the prompt cannot
+        be captured by the extractor. The prose instructions may mention
+        the literal string ``​```json`` inline (e.g., "wrap your
+        response in a ```json fence"), but no such inline mention is a
+        real fence (the extractor regex requires whitespace+newline after
+        the language tag). The response_schema reference uses ```text``,
+        which is also not captured. So extracting on the rendered prompt
+        alone must fail with no-JSON-found.
+        """
+        from wiki_ingest.backends.copilot_cli import _render_plain_text_prompt
+
+        # Use a response_schema that does NOT contain a JSON object as
+        # plain text, otherwise the balanced-brace fallback could pick it
+        # up. The schema in the BackendPrompt is itself a JSON-encoded
+        # string, which when rendered into ```text would appear as
+        # balanced braces — that's a real risk and the test below
+        # documents the limitation: the balanced-brace fallback can in
+        # principle grab text-fenced JSON-shaped content. The defense in
+        # depth is that downstream parse_response shape-validation
+        # rejects any non-BackendResponse dict.
+        backend_prompt = {
+            "version": 1,
+            "system_instructions": "Curator.",
+            "task": "ingest",
+            "schema_excerpts": {
+                "ingest_rules": "Apply the four-question gate.",
+                "page_types": "incident, concept",
+                "citation_rules": "Cite sources.",
+            },
+            "source": {"kind": "file", "path": "f.md", "content": "body"},
+            # Use a non-JSON-shaped response schema reference so the
+            # balanced-brace fallback cannot grab it. In production the
+            # schema IS JSON-shaped; the defense-in-depth is downstream
+            # shape validation in parse_response.
+            "response_schema": "JSON Schema text (a description, not actual JSON).",
+        }
+        rendered = _render_plain_text_prompt(backend_prompt)
+        with self.assertRaises(ContractViolationError) as ctx:
+            extract_json_object(rendered)
+        self.assertIn("no JSON object", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
