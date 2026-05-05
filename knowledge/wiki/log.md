@@ -3,7 +3,7 @@ page_type: log
 slug: log
 title: Wiki Edit Log
 status: stable
-last_reviewed: 2026-05-03
+last_reviewed: 2026-05-04
 ---
 
 # Wiki Edit Log
@@ -16,6 +16,7 @@ Append-only. One bullet per entry, newest at the top. Format:
 
 ## Entries
 
+- 2026-05-04 — patched schema v0.2: F1 (private-source workaround in `citation-rules`), F4 (atomic cluster-promotion mode in `promote-lesson-to-wiki`), F5 (optional `## Instances` H2 for `incident`), F6 (cross-repo `pr:` example), F7 (softened `open-question` resolution H2), F8 (note on ADR-vs-frontmatter convention for `decision`), F9 (curator distribution-claim discipline in `WIKI_MAINTAINER`); driven by v0.1 dogfood findings.
 - 2026-05-03 — created `doc-coverage-audit` (workflow): periodic 30-day reconciliation of shipped features against user-facing docs; dogfood promotion C4.
 - 2026-05-03 — created `respond-to-production-readiness-review` (playbook): bucket items by release target, refuse lump-sum framing; dogfood promotion C5.
 - 2026-05-03 — created `phase-scoped-build-prompts` (concept): scope each agent build invocation to one phase with read-first + plan-first discipline; dogfood promotion C6.
