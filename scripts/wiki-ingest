@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# wiki-ingest — Bash entrypoint for the wiki ingest pipeline.
+#
+# Sets PYTHONPATH so that scripts/wiki_ingest/ is importable as the
+# top-level package wiki_ingest, then exec's python3 -m wiki_ingest.
+#
+# Why module-form (-m) and not script-form: the package uses relative
+# imports (from .errors import …). Invoking the directory directly
+# would fail with "attempted relative import with no known parent
+# package" the moment any module hits a relative import. The -m form
+# (with PYTHONPATH pointing at the parent of wiki_ingest/) is what
+# makes those relative imports resolve.
+#
+# See specs/wiki-ingest-pipeline/spec.md "Entrypoint mechanics".
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+exec env PYTHONPATH="${REPO_DIR}/scripts${PYTHONPATH:+:${PYTHONPATH}}" \
+  python3 -m wiki_ingest "$@"
