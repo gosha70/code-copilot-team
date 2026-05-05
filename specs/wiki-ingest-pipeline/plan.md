@@ -3,9 +3,9 @@ spec_mode: lightweight
 feature_id: wiki-ingest-pipeline
 risk_category: tooling
 justification: "New Python-package script + CLI wrapper, gitignored output dir, one new wiki workflow page, README update. No runtime behavior change for existing users; no edits to shared/skills, generator outputs, or committed wiki pages."
-status: draft
+status: approved
 date: 2026-05-04
-issue: TBD
+issue: 28
 ---
 
 # Implementation Plan: Wiki Ingest Pipeline (v1)
