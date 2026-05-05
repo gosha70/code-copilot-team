@@ -1,8 +1,8 @@
 ---
 feature_id: wiki-ingest-pipeline
 spec_mode: lightweight
-status: draft
-issue: TBD
+status: approved
+issue: 28
 ---
 
 # Wiki Ingest Pipeline — Spec
