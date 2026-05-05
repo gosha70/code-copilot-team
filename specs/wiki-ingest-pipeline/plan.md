@@ -114,29 +114,72 @@ Stop point: review interface shapes before phase 2.
 ### Phase 2 — Default backend (copilot-CLI subprocess) + auto-detect
 
 **Goal:** Real backend works against any of `claude`, `codex`,
-`cursor`. No CLI wrapper yet.
+`cursor`. JSON-extraction is isolated in its own module so it can
+be iterated independently. No CLI wrapper yet.
 
 Files:
 
+- `scripts/wiki_ingest/backends/json_extract.py` — **isolated
+  JSON-extraction module.** Two strategies, in order: (1) fenced
+  code block (` ```json … ``` `, fallback ` ``` … ``` ` if no
+  language tag); (2) balanced-brace scan (track nesting, skip
+  braces inside JSON string literals). Both strategies validate
+  the extracted text is parseable JSON before returning. Exposes
+  one public function `extract_json_object(stdout: str) -> dict`
+  raising `ContractViolationError` with the offending stdout
+  attached on failure. **This module is the only place that knows
+  about extraction strategy** — `copilot_cli.py` calls it but
+  doesn't reimplement.
 - `scripts/wiki_ingest/backends/copilot_cli.py` — subprocess
-  invocation, JSON extraction from free-form CLI output, error
-  mapping
-- `scripts/wiki_ingest/backends/__init__.py` — fill in auto-detect
-  order
-- `scripts/wiki_ingest/tests/test_copilot_cli.py` — uses a tiny
-  shell stub backend (a 5-line shell script that emits a fixed
-  JSON object) under `tests/fixtures/stub-backend.sh` to exercise
-  the subprocess path without requiring a real copilot CLI in CI
+  invocation, prompt rendering as plain-text instructions
+  wrapping the JSON `BackendPrompt`, calls `json_extract` for the
+  extraction step, error mapping (`BackendInvocationError` for
+  non-zero exit; `ContractViolationError` propagates from the
+  extractor). The class `CopilotCliBackend(cli_name)` is
+  parameterised by which CLI to invoke.
+- `scripts/wiki_ingest/backends/__init__.py` — fill in the
+  auto-detect implementation: probe `PATH` for `claude` →
+  `codex` → `cursor` (use `shutil.which`), return a
+  `CopilotCliBackend` for the first match. Add backend selection
+  precedence: `--backend` flag > `WIKI_INGEST_BACKEND` env var >
+  auto-detect. The env-var resolver is a small helper
+  (`resolve_backend(cli_flag: str | None) -> Backend`) used by
+  Phase 3's CLI wrapper.
+- `scripts/wiki_ingest/tests/fixtures/stub-backend.sh` — 5-line
+  shell script that emits a fixed valid JSON `BackendResponse`
+  on stdout and exits 0. Used by Phase-2 tests to exercise the
+  subprocess path without a real copilot CLI in CI.
+- `scripts/wiki_ingest/tests/test_json_extract.py` — focused
+  tests for the extractor covering at minimum: bare JSON, fenced
+  ` ```json ` block, fenced ` ``` ` block (no language), JSON
+  after prose preamble, JSON before prose afterword, multiple
+  JSON-looking blocks (only one is the real response), nested
+  objects in prose followed by the actual response. One negative
+  test for unparseable extracted text and one for "no JSON
+  found at all".
+- `scripts/wiki_ingest/tests/test_copilot_cli.py` — subprocess
+  tests against the stub backend: success path, backend exits
+  non-zero (raises `BackendInvocationError`, exit 3), backend
+  emits malformed JSON (raises `ContractViolationError` via the
+  extractor, exit 4), backend not on `PATH` (raises
+  `BackendNotFoundError`, exit 2). Plus tests for the
+  resolution precedence in `backends/__init__.py`: `--backend`
+  flag wins over env, env wins over auto-detect, auto-detect
+  raises `BackendNotFoundError` when nothing is on `PATH`.
 
 Verification:
 
-- `python3 -m unittest scripts.wiki_ingest.tests.test_copilot_cli`
-  passes against the stub.
+- `PYTHONPATH=scripts python3 -m unittest discover
+  scripts/wiki_ingest/tests` passes (full suite, including
+  Phase-1 tests + the new Phase-2 tests).
 
-Stop point: review backend abstraction; confirm the JSON-extraction
-strategy handles real `claude` / `codex` output before phase 3.
-**This is where I expect the most iteration** — the JSON-extraction
-heuristic is the v1 risk.
+Stop point: review backend abstraction; confirm the
+JSON-extraction strategy handles real `claude` / `codex` output
+before phase 3. **This is where the most iteration is expected**
+— the JSON-extraction heuristic is the v1 risk. When extraction
+fails on a real CLI's output, **stop and report the concrete
+failing stdout**; do not iterate the heuristic in-loop without a
+test case that pins the failure shape.
 
 ### Phase 3 — CLI wrapper + bash entrypoint + end-to-end flow
 
