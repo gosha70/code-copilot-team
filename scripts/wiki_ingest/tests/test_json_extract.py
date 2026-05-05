@@ -394,29 +394,64 @@ class TestPromptEchoCollision(unittest.TestCase):
         self.assertEqual(result["slug"], "test-slug")
         self.assertNotIn("required", result)  # schema-shaped dict would have this key
 
-    def test_rendered_prompt_alone_yields_no_extractable_object(self) -> None:
-        """The rendered prompt with no response appended must NOT extract.
+    def test_extracts_unfenced_response_when_prompt_has_fenced_schema(self) -> None:
+        """The schema's braces inside a ```text fence must not shadow an unfenced response.
 
-        This pins the behavior: reference material in the prompt cannot
-        be captured by the extractor. The prose instructions may mention
-        the literal string ``​```json`` inline (e.g., "wrap your
-        response in a ```json fence"), but no such inline mention is a
-        real fence (the extractor regex requires whitespace+newline after
-        the language tag). The response_schema reference uses ```text``,
-        which is also not captured. So extracting on the rendered prompt
-        alone must fail with no-JSON-found.
+        Without fence-stripping in the balanced-brace fallback, a CLI
+        that echoes the prompt verbatim and then emits a bare (unfenced)
+        JSON response would have the schema's `{"type": "object", ...}`
+        captured first by the brace scanner. This test pins that the
+        extractor masks out fenced regions before scanning.
         """
         from wiki_ingest.backends.copilot_cli import _render_plain_text_prompt
 
-        # Use a response_schema that does NOT contain a JSON object as
-        # plain text, otherwise the balanced-brace fallback could pick it
-        # up. The schema in the BackendPrompt is itself a JSON-encoded
-        # string, which when rendered into ```text would appear as
-        # balanced braces — that's a real risk and the test below
-        # documents the limitation: the balanced-brace fallback can in
-        # principle grab text-fenced JSON-shaped content. The defense in
-        # depth is that downstream parse_response shape-validation
-        # rejects any non-BackendResponse dict.
+        backend_prompt = {
+            "version": 1,
+            "system_instructions": "You are a wiki curator.",
+            "task": "ingest",
+            "schema_excerpts": {
+                "ingest_rules": "Apply the four-question gate.",
+                "page_types": "incident, concept, ...",
+                "citation_rules": "Cite sources.",
+            },
+            "source": {
+                "kind": "file",
+                "path": "fixture.md",
+                "content": "# Test\n\nBody.",
+            },
+            # JSON-shaped schema — this is what would shadow the
+            # response without fence-stripping.
+            "response_schema": json.dumps({
+                "type": "object",
+                "required": ["version", "disposition"],
+            }),
+        }
+        rendered_prompt = _render_plain_text_prompt(backend_prompt)
+
+        # Simulate a CLI echoing the prompt + emitting an UNFENCED
+        # response. The fence-first strategy finds nothing (no
+        # ```json fence in either piece). The balanced-brace fallback
+        # must skip the schema (inside ```text fence) and return the
+        # actual unfenced response.
+        stdout = rendered_prompt + "\n\n" + _VALID_JSON + "\n"
+        result = extract_json_object(stdout)
+        # Must return the BackendResponse, not the schema dict.
+        self.assertEqual(result["disposition"], "accept")
+        self.assertEqual(result["slug"], "test-slug")
+        # Schema-shaped dict would have a "type" key; response would not.
+        self.assertNotIn("type", result)
+
+    def test_rendered_prompt_alone_yields_no_extractable_object(self) -> None:
+        """The rendered prompt with no response appended must NOT extract.
+
+        Pins the behavior: reference material in the prompt — including
+        the JSON-shaped response_schema in its ```text fence — must not
+        be captured by either extraction strategy. This uses a
+        realistic JSON-shaped response_schema (matching production) to
+        exercise the balanced-brace fence-stripping path.
+        """
+        from wiki_ingest.backends.copilot_cli import _render_plain_text_prompt
+
         backend_prompt = {
             "version": 1,
             "system_instructions": "Curator.",
@@ -427,11 +462,12 @@ class TestPromptEchoCollision(unittest.TestCase):
                 "citation_rules": "Cite sources.",
             },
             "source": {"kind": "file", "path": "f.md", "content": "body"},
-            # Use a non-JSON-shaped response schema reference so the
-            # balanced-brace fallback cannot grab it. In production the
-            # schema IS JSON-shaped; the defense-in-depth is downstream
-            # shape validation in parse_response.
-            "response_schema": "JSON Schema text (a description, not actual JSON).",
+            # Realistic JSON-shaped schema — the balanced-brace
+            # fallback must skip it (it's inside ```text).
+            "response_schema": json.dumps({
+                "type": "object",
+                "required": ["version", "disposition"],
+            }),
         }
         rendered = _render_plain_text_prompt(backend_prompt)
         with self.assertRaises(ContractViolationError) as ctx:
