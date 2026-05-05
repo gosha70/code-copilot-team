@@ -112,33 +112,28 @@ class TestCopilotCliBackend(unittest.TestCase):
 
     def test_malformed_json_raises_contract_violation(self) -> None:
         """Backend that emits malformed JSON raises ContractViolationError."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".sh", delete=False, dir=_FIXTURES_DIR
-        ) as f:
-            script_path = f.name
+        # Use TemporaryDirectory so the temp script never lands in the
+        # tracked fixtures directory. Earlier versions used
+        # NamedTemporaryFile(dir=_FIXTURES_DIR), which leaked tmp*.sh
+        # files into the repo whenever os.unlink failed (e.g., on a
+        # macOS-mounted FS where the unlink permission was denied).
+        with tempfile.TemporaryDirectory() as tmp:
+            script_path = str(Path(tmp) / "stub-malformed.sh")
             _write_script(script_path, "#!/usr/bin/env bash\necho 'not json at all'\n")
-        try:
             backend = CopilotCliBackend(script_path, timeout_seconds=10)
             with self.assertRaises(ContractViolationError) as ctx:
                 backend.call(_SAMPLE_PROMPT)
             self.assertIn("no JSON object", str(ctx.exception))
-        finally:
-            os.unlink(script_path)
 
     def test_timeout_raises_backend_invocation_error(self) -> None:
         """Backend that sleeps longer than timeout raises BackendInvocationError."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".sh", delete=False, dir=_FIXTURES_DIR
-        ) as f:
-            script_path = f.name
+        with tempfile.TemporaryDirectory() as tmp:
+            script_path = str(Path(tmp) / "stub-sleep.sh")
             _write_script(script_path, "#!/usr/bin/env bash\nsleep 10\n")
-        try:
             backend = CopilotCliBackend(script_path, timeout_seconds=1)
             with self.assertRaises(BackendInvocationError) as ctx:
                 backend.call(_SAMPLE_PROMPT)
             self.assertIn("timed out", str(ctx.exception))
-        finally:
-            os.unlink(script_path)
 
     def test_cli_not_found_raises_backend_not_found_error(self) -> None:
         """Non-existent CLI executable raises BackendNotFoundError (exit 2).
