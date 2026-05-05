@@ -195,7 +195,8 @@ not optional.
 ### Default backend: copilot-CLI subprocess
 
 Auto-detect order: `claude` → `codex` → `cursor`. The first one
-found on `PATH` is selected unless `--backend <name>` overrides.
+found on `PATH` is selected unless overridden by `--backend <name>`
+or `WIKI_INGEST_BACKEND` (see "Backend selection precedence" above).
 
 The default backend wraps the chosen CLI with a documented prompt
 template. The prompt:
@@ -206,15 +207,59 @@ template. The prompt:
   reject disposition with reason."
 - Specifies the JSON response schema inline, with explicit
   instructions to emit exactly one JSON object on stdout and
-  nothing else.
+  nothing else (preferably wrapped in a `\`\`\`json … \`\`\`` fence
+  to make extraction unambiguous).
 - Includes the source file content verbatim.
 - Includes the v0.2 schema files inline (read from disk at runtime,
   not embedded in source).
 
 The default backend is the **adapter layer** between the
 pipeline's JSON contract and a CLI that returns free-form text.
-It is responsible for extracting the JSON object from CLI output
-(matching the first balanced top-level `{…}` block).
+It is responsible for extracting the JSON object from CLI output.
+
+### JSON-extraction module
+
+JSON extraction from free-form CLI output is the highest-iteration
+risk in v1: real `claude` / `codex` / `cursor` output shapes vary,
+and the heuristic will likely need 2–3 refinements as we encounter
+real cases. To keep that iteration cheap, **extraction lives in its
+own module** (`scripts/wiki_ingest/backends/json_extract.py`) with
+its own focused test file (`tests/test_json_extract.py`). The
+subprocess plumbing in `copilot_cli.py` calls into the extractor
+but knows nothing about its strategy.
+
+**Extraction strategy (in order):**
+
+1. **Fenced code block.** Look for the first ` ```json … ``` ` block
+   (or fallback ` ``` … ``` ` if the language tag is missing); parse
+   its contents as JSON.
+2. **Balanced-brace fallback.** If no fence is found, scan stdout
+   for the first balanced top-level `{…}` block (tracking nesting,
+   ignoring braces inside string literals).
+
+The fenced-block-first order handles the most common LLM output
+shape (JSON wrapped in a markdown fence) without false-matching on
+prose-embedded JSON-like fragments. Both strategies must validate
+that the extracted text is actually parseable JSON before returning
+it; an extractor that returns "looks-like-JSON" text and lets
+`parse_response` fail downstream is harder to debug than one that
+fails fast at extraction time with the offending stdout attached.
+
+Test coverage for the extractor must include at minimum:
+
+- Bare JSON object as entire stdout
+- JSON inside ` ```json … ``` `
+- JSON inside ` ``` … ``` ` (no language tag)
+- JSON after a prose preamble ("Here's my analysis: { … }")
+- JSON before a prose afterword ("{ … } I hope this is helpful.")
+- Multiple JSON-looking blocks where only the actual response is
+  the real one (e.g., the prompt echoed back, then the answer)
+- Nested objects in prose explanation followed by the actual
+  response object later
+
+When extraction fails on a real CLI's output, **stop and report the
+concrete failing stdout**. Do not iterate the heuristic
+in-loop without a test case that pins the failure shape.
 
 ### Test backend
 
@@ -237,6 +282,31 @@ A deterministic in-process backend used by the test suite:
 ./scripts/wiki-ingest --output-dir <dir>     # override doc_internal/proposals/
 ./scripts/wiki-ingest --help
 ```
+
+### Backend selection precedence
+
+Backend is resolved in this order, first match wins:
+
+1. `--backend <name>` CLI flag.
+2. `WIKI_INGEST_BACKEND` environment variable.
+3. Auto-detect: `claude` → `codex` → `cursor` (first one on `PATH`).
+
+The env-var override is for the developer with multiple copilots
+installed who wants to dogfood against a non-default CLI without
+editing code:
+
+```bash
+./scripts/wiki-ingest <source>                              # auto-detect
+WIKI_INGEST_BACKEND=codex ./scripts/wiki-ingest <source>    # env override
+WIKI_INGEST_BACKEND=test ./scripts/wiki-ingest <source>     # tests
+./scripts/wiki-ingest --backend codex <source>              # CLI flag wins
+```
+
+If the CLI flag and env var disagree, the flag wins (it is the more
+specific signal). If neither is set and no copilot CLI is on `PATH`,
+the pipeline exits with `BackendNotFoundError` (exit 2).
+
+### Entrypoint mechanics
 
 The script is `scripts/wiki-ingest` (no extension; matches existing
 script convention). Internally it sets
@@ -319,30 +389,45 @@ Exit codes are documented in `--help` and stable across v1.
    frontmatter embedded in `draft_markdown`)**.
 4. **One default backend** (copilot-CLI subprocess) with documented
    auto-detect order: `claude` → `codex` → `cursor`.
-5. **Test backend** that the test suite uses end-to-end, with a
+   Backend selection precedence: `--backend` flag, then
+   `WIKI_INGEST_BACKEND` env var, then auto-detect.
+5. **Isolated JSON-extraction module.** The default backend's
+   JSON-extraction logic lives in
+   `scripts/wiki_ingest/backends/json_extract.py` with its own
+   focused test file `tests/test_json_extract.py` covering at
+   minimum the seven cases listed in "JSON-extraction module"
+   above. The subprocess plumbing in `copilot_cli.py` calls into
+   the extractor but knows nothing about its strategy. This
+   isolation is mandatory so the extractor can be iterated
+   independently of subprocess plumbing as real CLI output shapes
+   are encountered.
+6. **Test backend** that the test suite uses end-to-end, with a
    committed fixture source file and a deterministic expected
    proposal.
-6. **`./scripts/wiki-ingest` CLI wrapper** with the flags listed
+7. **`./scripts/wiki-ingest` CLI wrapper** with the flags listed
    under "CLI surface", `--help` documenting all of them and the
-   exit codes.
-7. **Output to `doc_internal/proposals/<date>-<slug>.md`**, with
+   exit codes. Resolves backend per the documented precedence
+   (CLI flag → `WIKI_INGEST_BACKEND` env → auto-detect).
+8. **Output to `doc_internal/proposals/<date>-<slug>.md`**, with
    the documented proposal file frontmatter; ensure
    `doc_internal/proposals/` is gitignored.
-8. **Documentation:**
+9. **Documentation:**
    - Update `knowledge/README.md` with a "Running ingest" section.
    - Add `knowledge/wiki/workflows/run-wiki-ingest.md` (page type
      `workflow`) covering when to use it, how it differs from
      manual promotion, and verification steps. Promote via the
      atomic-cluster recipe (one workflow page → one index entry →
      one log entry → one lint pass).
-9. **Tests:**
-   - Unit tests for prompt composition and response parsing.
-   - End-to-end test using `--backend test` against the fixture
-     source; assert exit code 0, assert proposal file exists with
-     expected frontmatter and body shape.
-   - Negative tests: backend not found, contract violation, source
-     missing.
-   - Wired into CI via the existing test runner in `tests/`.
+10. **Tests:**
+    - Unit tests for prompt composition and response parsing.
+    - Unit tests for `json_extract.py` covering all seven cases
+      listed in "JSON-extraction module".
+    - End-to-end test using `--backend test` against the fixture
+      source; assert exit code 0, assert proposal file exists with
+      expected frontmatter and body shape.
+    - Negative tests: backend not found, contract violation, source
+      missing.
+    - Wired into CI via the existing test runner in `tests/`.
 
 ## Constraints
 
