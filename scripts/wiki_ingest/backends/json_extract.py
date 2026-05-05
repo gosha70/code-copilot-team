@@ -47,11 +47,14 @@ def _try_parse_dict(text: str) -> dict | None:
 
 
 def _extract_via_fence(stdout: str) -> dict | None:
-    """Strategy 1: find a ```json … ``` or ``` … ``` block and parse it."""
-    # Prefer the language-tagged form first.
+    """Strategy 1: return the first parseable fenced JSON object.
+
+    Prefer language-tagged ```json fences over plain ``` fences. Within each
+    fence kind, continue past malformed or non-dict candidates until a
+    parseable dict is found.
+    """
     for pattern in (_FENCE_JSON_RE, _FENCE_ANY_RE):
-        match = pattern.search(stdout)
-        if match:
+        for match in pattern.finditer(stdout):
             candidate = match.group(1)
             result = _try_parse_dict(candidate)
             if result is not None:

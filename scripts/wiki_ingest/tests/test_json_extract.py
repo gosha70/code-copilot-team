@@ -169,6 +169,36 @@ class TestMultipleJsonBlocks(unittest.TestCase):
         result = extract_json_object(stdout)
         self.assertEqual(result["tag"], "first")
 
+    def test_continues_past_malformed_fenced_candidate(self) -> None:
+        """A malformed first fence must not hide a later valid response."""
+        stdout = (
+            "Here's my analysis:\n"
+            "```json\n"
+            "{this is not valid json\n"
+            "```\n"
+            "Sorry, retrying:\n"
+            f"```json\n{_VALID_JSON}\n```\n"
+        )
+        result = extract_json_object(stdout)
+        self.assertEqual(result["disposition"], "accept")
+        self.assertEqual(result["slug"], "test-slug")
+
+    def test_picks_first_parseable_among_multiple_fenced_candidates(self) -> None:
+        """Among fenced candidates, first parseable dict wins."""
+        stdout = (
+            "```json\n"
+            "{bad json\n"
+            "```\n"
+            "```json\n"
+            "{\"a\": 1}\n"
+            "```\n"
+            "```json\n"
+            "{\"a\": 2}\n"
+            "```\n"
+        )
+        result = extract_json_object(stdout)
+        self.assertEqual(result, {"a": 1})
+
     def test_multiple_prose_objects_returns_first(self) -> None:
         """Multiple bare JSON blocks in prose — balanced-brace scan picks the first."""
         first = {"version": 1, "tag": "first"}
