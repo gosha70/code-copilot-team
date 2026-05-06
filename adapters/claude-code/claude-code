@@ -1352,18 +1352,32 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         *)
-            # Unknown --flag → forward verbatim to claude. Boolean flags
-            # work as-is (e.g. --dangerously-skip-permissions). For
-            # value-bearing flags use the --flag=value form to avoid
-            # ambiguity with the wrapper's own commands (init, list,
-            # sync, playwright) and project-dir positional.
-            if [[ "$1" == --* ]]; then
-                CLAUDE_ARGS+=("$1")
-                shift
-            else
-                POSITIONAL+=("$1")
-                shift
-            fi
+            # Subcommand boundary: once we hit a known wrapper subcommand,
+            # stop global parsing so the subcommand owns its remaining
+            # flags. Without this, `claude-code sync --dry-run` would
+            # forward --dry-run to claude before the sync parser ran,
+            # and `claude-code init <type> --license MIT` would lose
+            # --license the same way.
+            #
+            # Otherwise: unknown --flag → forward verbatim to claude.
+            # Boolean flags work as-is (e.g. --dangerously-skip-permissions).
+            # For value-bearing flags use the --flag=value form to avoid
+            # ambiguity with the project-dir positional on the
+            # start-session path.
+            case "$1" in
+                init|list|sync|playwright|help|-h|--help)
+                    POSITIONAL+=("$@")
+                    break
+                    ;;
+                --*)
+                    CLAUDE_ARGS+=("$1")
+                    shift
+                    ;;
+                *)
+                    POSITIONAL+=("$1")
+                    shift
+                    ;;
+            esac
             ;;
     esac
 done

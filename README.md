@@ -486,7 +486,7 @@ code-copilot-team/
 │   ├── test-hooks.sh                    186 hook tests
 │   ├── test-generate.sh                 278 generation + adapter tests
 │   ├── test-shared-structure.sh         793 structure + content tests
-│   ├── test-sync.sh                     65 sync + init metadata tests
+│   ├── test-sync.sh                     69 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   └── test-review-loop.sh            31 review loop integration tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/

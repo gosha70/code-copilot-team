@@ -664,6 +664,62 @@ assert_contains "sync reports diff for content/manifest.yaml" "$OUTPUT" "content
 
 # ══════════════════════════════════════════════════════════════
 echo ""
+echo "=== 16. claude-code sync --dry-run forwards --dry-run through launcher ==="
+
+# Regression for the launcher's top-level argument parser. The earlier
+# catch-all forwarded every unknown --flag to CLAUDE_ARGS *before*
+# subcommand dispatch, which stole --dry-run from `sync` and --license
+# from `init`. Tests 1-15 above call sync_project() directly after
+# sourcing the function definitions — they bypass the dispatch loop
+# entirely. This test runs the launcher as a subprocess so the real
+# parsing path is exercised end to end.
+
+LAUNCHER_DR_DIR="$TEST_TMPDIR/launcher-dryrun"
+mkdir -p "$LAUNCHER_DR_DIR/.claude"
+cp "$FAKE_TEMPLATES/ml-rag/CLAUDE.md" "$LAUNCHER_DR_DIR/CLAUDE.md"
+cat > "$LAUNCHER_DR_DIR/.claude/template.json" << 'TMPL'
+{
+  "name": "ml-rag",
+  "initialized": "2026-01-01T00:00:00Z",
+  "templateHash": "old-hash"
+}
+TMPL
+
+# Fake HOME so the launcher's hardcoded TEMPLATES_DIR resolves to our
+# fixture rather than the real ~/.claude.
+LAUNCHER_HOME="$TEST_TMPDIR/launcher-home"
+mkdir -p "$LAUNCHER_HOME/.claude/templates"
+cp -r "$FAKE_TEMPLATES/ml-rag" "$LAUNCHER_HOME/.claude/templates/ml-rag"
+
+OUTPUT=$(HOME="$LAUNCHER_HOME" bash "$LAUNCHER" sync --dry-run "$LAUNCHER_DR_DIR" 2>&1 || true)
+assert_contains "claude-code sync --dry-run reaches sync parser" "$OUTPUT" "would be updated"
+assert_file_not_exists "claude-code sync --dry-run does not create remediation.json" \
+  "$LAUNCHER_DR_DIR/.claude/remediation.json"
+
+# Hash check without depending on jq — grep the literal value out.
+POST_HASH=$(grep -o '"templateHash"[[:space:]]*:[[:space:]]*"[^"]*"' \
+  "$LAUNCHER_DR_DIR/.claude/template.json" | sed 's/.*"\([^"]*\)"$/\1/')
+assert_eq "claude-code sync --dry-run leaves template.json hash unchanged" "old-hash" "$POST_HASH"
+
+# ══════════════════════════════════════════════════════════════
+echo ""
+echo "=== 17. claude-code init --license reaches init parser ==="
+
+# Companion regression to test 16: the same catch-all bug consumed
+# --license before init's parser ran. Drive the launcher with a bare
+# `--license` (no value) and assert init's own validator fires
+# ("--license requires a value"). With the bug, the global parser
+# would have eaten --license and init would error out elsewhere
+# (template-not-found or missing project type) instead.
+LAUNCHER_INIT_HOME="$TEST_TMPDIR/launcher-init-home"
+mkdir -p "$LAUNCHER_INIT_HOME/.claude/templates"
+
+INIT_OUTPUT=$(HOME="$LAUNCHER_INIT_HOME" bash "$LAUNCHER" init python --license 2>&1 || true)
+assert_contains "claude-code init --license validation reaches init parser" \
+  "$INIT_OUTPUT" "--license requires a value"
+
+# ══════════════════════════════════════════════════════════════
+echo ""
 echo "──────────────────────────────"
 echo "Results: $PASS passed, $FAIL failed"
 echo "──────────────────────────────"
