@@ -5,6 +5,9 @@ risk_category: integration
 justification: "Cross-session, cross-provider orchestration layer introducing bidirectional LLM communication, circuit breakers, and commit-strategy modes. Touches hooks, runner, rules, agent manifests, launcher, and generation pipeline. Replaces/completes the partially-implemented peer-review system."
 status: approved
 date: 2026-03-28
+origin:
+  type: internal
+  reason: "Framework-level peer-review infrastructure. Origin is the project's own evolution from single-provider to cross-provider review, plus the Sprint 2 incident review. No external user idea predates the spec."
 ---
 
 # Implementation Plan: Code Reviewer Assistant

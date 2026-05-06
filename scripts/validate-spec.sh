@@ -23,8 +23,10 @@ TOTAL_FAIL=0
 # Expects --- delimited frontmatter at the top of the file.
 extract_frontmatter_field() {
   local file="$1" field="$2"
+  # `|| true` after grep so a missing field returns empty without
+  # tripping `set -e + pipefail` in callers.
   sed -n '/^---$/,/^---$/p' "$file" \
-    | grep "^${field}:" \
+    | { grep "^${field}:" || true; } \
     | head -1 \
     | sed "s/^${field}:[[:space:]]*//" \
     | sed 's/^"\(.*\)"$/\1/' \
@@ -64,6 +66,18 @@ validate_spec_dir() {
   feature_id="$(extract_frontmatter_field "$plan" "feature_id")"
   justification="$(extract_frontmatter_field "$plan" "justification")"
   status="$(extract_frontmatter_field "$plan" "status")"
+
+  # origin: must be present (top-level frontmatter key). The
+  # check-origin-alignment.sh script does the deeper structural check;
+  # here we only verify the convention is followed at all.
+  # See shared/skills/origin-confirmation/SKILL.md.
+  # `|| true` suppresses pipefail when grep finds no match.
+  local has_origin
+  has_origin="$(sed -n '/^---$/,/^---$/p' "$plan" | grep -cE '^origin:' || true)"
+  if [[ "${has_origin:-0}" -eq 0 ]]; then
+    fail "$id: origin: missing from plan.md frontmatter (see shared/skills/origin-confirmation/SKILL.md)"
+    return
+  fi
 
   # spec_mode must be present and valid
   if [[ -z "$spec_mode" ]]; then

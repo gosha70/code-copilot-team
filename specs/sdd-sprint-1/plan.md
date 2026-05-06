@@ -5,6 +5,9 @@ risk_category: integration
 justification: "Framework-level change affecting shared rules, templates, agent manifests, and generation pipeline across 6 adapters."
 status: approved
 date: 2026-02-28
+origin:
+  type: internal
+  reason: "Framework-level specification layer (the SDD plan-mode/build-mode/spec.md/plan.md/tasks.md convention itself). Origin is doc_internal/SDD-Implementation-Plan-v2.1-Final.docx + v2.2 errata, both authored by the project. No external user idea predates the spec."
 ---
 
 # Implementation Plan: SDD Sprint 1 — Specification Layer

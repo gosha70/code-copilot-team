@@ -42,6 +42,7 @@ See `review-loop.md` for the full protocol.
 
 ### Phase 2 — BUILD (Team Delegation)
 - **Model:** Fast (e.g., Sonnet) · **Effort:** `high`
+- **First action — origin alignment gate.** Before decomposing the plan or delegating any sub-agent work, run `scripts/check-origin-alignment.sh <feature-id>`. Exit 0 or 1 proceeds. Exit ≥ 2 halts before delegation and surfaces the three-resolution escalation (rescope / restart / document divergence) — no sub-agent work starts until the user picks A/B/C. See `origin-confirmation.md`.
 - Team Lead decomposes the approved plan into discrete tasks.
 - Read `specs/<id>/plan.md` frontmatter to determine `spec_mode` gating behavior.
 - Delegate each task to the appropriate specialist sub-agent via the Agent tool.

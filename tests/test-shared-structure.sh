@@ -126,6 +126,7 @@ SKILL_NAMES=(
   integration-testing
   memkernel-memory
   opus-4-7-features
+  origin-confirmation
   phase-workflow
   provider-collaboration-protocol
   ralph-loop
@@ -145,7 +146,7 @@ for s in "${SKILL_NAMES[@]}"; do
 done
 
 SKILL_COUNT=$(find "$SKILLS_DIR_PATH" -name 'SKILL.md' | wc -l | tr -d ' ')
-assert_eq "exactly 20 skills" "20" "$SKILL_COUNT"
+assert_eq "exactly 21 skills" "21" "$SKILL_COUNT"
 
 # Verify SKILL.md frontmatter has required fields
 for s in "${SKILL_NAMES[@]}"; do
@@ -829,8 +830,8 @@ grep -Eq "rules/\*\.md[[:space:]]+.*Global rules" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists global rules" "$rc"
 
 rc=0
-grep -Eq "skills/[[:space:]]+20 skills" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 20 skills" "$rc"
+grep -Eq "skills/[[:space:]]+21 skills" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 21 skills" "$rc"
 
 rc=0
 grep -Eq "templates/[[:space:]]+11 stacks" "$REPO_DIR/README.md" || rc=1

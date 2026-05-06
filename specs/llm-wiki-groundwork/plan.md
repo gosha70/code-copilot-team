@@ -6,6 +6,20 @@ justification: "Additive groundwork — new top-level knowledge/ directory, one 
 status: approved
 date: 2026-05-03
 issue: 12
+origin:
+  issue: gosha70/code-copilot-team#12
+  urls:
+    - https://gist.github.com/karpathy/3ef5df0e1ee5d36d59b29eb91f8d35c1
+  origin_claim: |
+    Issue #12 ("LLM Wiki — Groundwork") establishes the structural foundation
+    for the Karpathy-pattern LLM Wiki: a persistent, compounding artifact
+    sitting between raw sources and final agent instructions. The groundwork
+    delivers ONLY the directory structure, schema files, seed pages, manual
+    /promote-lesson workflow, wiki-first-query convention, and a structural
+    linter — explicitly deferring automated ingest, RLMKit synthesis, and
+    adapter generation to follow-up issues. This spec is the structural-only
+    half; the maintainer half (ingest-updates-existing-wiki + query +
+    knowledge-health lint) is a separate follow-up.
 ---
 
 # Implementation Plan: LLM Wiki — Groundwork (issue #12)

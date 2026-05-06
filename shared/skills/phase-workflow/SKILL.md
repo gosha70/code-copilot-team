@@ -75,7 +75,9 @@ When existing functionality is removed or replaced during a phase (e.g., replaci
 
 9. **Wait for approval.** Do not start the next phase until the user confirms this one is complete.
 
-10. **Peer review (if active).** If `CCT_PEER_REVIEW_ENABLED` is `true`, the Build agent must complete the review loop via `/review-submit` before running `/phase-complete`. The stop hook validates that `loop-summary.json` exists with PASS or approved bypass — it does not initiate review. Plan-phase review is advisory and single-round. See `review-loop.md` for the full protocol.
+10. **Origin alignment gate.** Before peer review, run `scripts/check-origin-alignment.sh <feature-id>`. Exit 0 or 1 proceeds. Exit ≥ 2 aborts the phase with the three-resolution escalation prompt (rescope / restart / document divergence). This gate is independent of peer review: peer review scores implementation quality; this gate scores origin alignment. See `origin-confirmation.md` for the full contract.
+
+11. **Peer review (if active).** If `CCT_PEER_REVIEW_ENABLED` is `true`, the Build agent must complete the review loop via `/review-submit` before running `/phase-complete`. The stop hook validates that `loop-summary.json` exists with PASS or approved bypass — it does not initiate review. Plan-phase review is advisory and single-round. See `review-loop.md` for the full protocol.
 
 ## Phase 1 Checklist (Scaffolding)
 

@@ -46,3 +46,7 @@ The system file at `~/.claude/plans/` is ephemeral and session-local. It is NOT 
 ## Wiki-First Query Convention
 
 If the project ships a `knowledge/wiki/` directory, **consult `knowledge/wiki/index.md` and the linked pages first** when starting work on any project topic, before re-reading raw sources (specs, issues, code). The wiki is the canonical project memory layer. If the wiki is silent or stale on the topic, do the raw research, then propose a promotion via `knowledge/wiki/workflows/promote-lesson-to-wiki.md` (or run the `/promote-lesson` slash command). See `shared/skills/wiki-first-query/SKILL.md` for the full convention.
+
+## Origin-Confirmation Circuit Breaker
+
+Before planning, evaluating, or building any feature, run `bash scripts/check-origin-alignment.sh <feature-id>` and read its output. If the exit code is ≥ 2, the working spec/plan has drifted from the user's origin — surface the three-resolution escalation (rescope / restart / document divergence) and stop. Treat the latest `spec.md` / `plan.md` as derived, not authoritative; the origin lives in the issue body, external references, and user messages cited in the spec's `origin:` frontmatter. Full protocol: `shared/skills/origin-confirmation/SKILL.md`.

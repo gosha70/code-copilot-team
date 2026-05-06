@@ -31,6 +31,7 @@ Applied to all code generation and review sessions.
 - **Execute your own test plan.** If you write test commands (curl, bash, docker, etc.) as part of a build summary, run every command yourself and report results before declaring done.
 - **Build it, run it.** Any executable artifact you create (Dockerfile, shell script, CI workflow, launcher flag) must be executed at least once before committing. Syntax validity alone is not sufficient.
 - **Re-review after fix.** After applying a fix for a bug flagged in code review or a reviewer note, run the review process again (e.g., `/team-review` or the equivalent specialist agent) before declaring done. Do not just apply the fix and move on — the re-review may catch secondary issues exposed by the fix itself.
+- **Confirm against origin before declaring done.** Run `scripts/check-origin-alignment.sh <feature-id>` before presenting any feature for review. Exit ≥ 2 means the working artifact has drifted from the user's origin and you must surface the three-resolution escalation (rescope / restart / document divergence) — do not proceed. See `shared/skills/origin-confirmation/SKILL.md` for the full protocol.
 
 ## Self-Audit Before Presenting
 

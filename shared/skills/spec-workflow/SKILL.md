@@ -54,8 +54,23 @@ The Plan agent always writes `specs/<feature-id>/plan.md` regardless of `spec_mo
 feature_id: <feature-id>
 spec_mode: full | lightweight | none
 status: draft | approved
+origin:
+  # at least one of: issue, urls, transcripts — OR the explicit
+  # internal/unrecoverable exemption. See origin-confirmation skill.
+  issue: <repo>#<number>
+  urls:
+    - <external-reference-url>
+  transcripts:
+    - specs/<feature-id>/origin/<date>-<slug>.md
+  origin_claim: |
+    One paragraph in the user's words quoting their original ask.
 ---
 ```
+
+The `origin:` block is required by `scripts/validate-spec.sh` and the
+origin-confirmation gate. See `shared/skills/origin-confirmation/SKILL.md`
+for the full convention, the three escape hatches (`type: internal`,
+`type: unrecoverable`), and the alignment-check protocol.
 
 ### Approval Flow by spec_mode
 

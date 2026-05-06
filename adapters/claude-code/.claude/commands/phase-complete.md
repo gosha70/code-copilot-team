@@ -12,6 +12,38 @@ Determine from the current session:
 - `review_scope` — from `CCT_PEER_REVIEW_SCOPE` env var, or `both`
 - `target_ref` — current git branch or HEAD commit
 
+### 1.5. Origin Alignment Gate
+
+Run `scripts/check-origin-alignment.sh <feature_id>`.
+
+- Exit 0 — `aligned, high`. Proceed to step 2.
+- Exit 1 — `aligned, medium/low`, OR `partial`/`derailed` with a
+  fresh committed `specs/<feature_id>/origin-divergence.md`
+  (option C from the skill body — the user has acknowledged the
+  divergence in writing). Proceed with a recorded warning.
+- Exit 2 — `partial`. **Abort.** Surface the three-resolution
+  escalation:
+  A) rescope the spec to match the origin,
+  B) restart from origin,
+  C) document the divergence as deliberate
+  (`specs/<feature_id>/origin-divergence.md`; once committed and
+  newer than the alignment record, the script exits 1 instead).
+  Wait for the user to pick A/B/C. Do not proceed to step 2 until
+  the script returns exit 0 or 1.
+- Exit 3 — `derailed`. Same as exit 2 but stronger language: the
+  working artifact delivers something fundamentally different from the
+  origin.
+- Exit 4 — missing or stale alignment record. Run the
+  `origin_alignment_check` procedure from
+  `shared/skills/origin-confirmation/SKILL.md` to produce a fresh
+  record, then re-run the script.
+- Exit 5 — origin frontmatter missing or malformed. Author must add an
+  `origin:` block to `specs/<feature_id>/plan.md`; cannot complete
+  the phase without it.
+
+This gate is independent of peer review (step 2). Peer review scores
+implementation quality; this gate scores origin alignment.
+
 ### 2. Check Review Loop Completion
 
 If `CCT_PEER_REVIEW_ENABLED` is `true`:

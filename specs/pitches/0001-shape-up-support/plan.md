@@ -6,6 +6,16 @@ justification: "Framework-level change: new agents, slash commands, templates, C
 status: draft
 date: 2026-05-02
 collaboration_mode: single
+origin:
+  urls:
+    - https://basecamp.com/shapeup
+  origin_claim: |
+    Add Shape-Up methodology support to the framework: new agents (pitch-shaper,
+    cycle-retro, cooldown-report), slash commands (/shape, /bet, /cycle-start,
+    /hill, /cooldown, /retro), templates (pitch.md, hill.json), CI validators,
+    and the specs/pitches/ directory convention. Origin is the Basecamp Shape-Up
+    book/methodology; the pitch in specs/pitches/0001-shape-up-support/pitch.md
+    is the project's distillation of that methodology into framework support.
 ---
 
 # Implementation Plan: Shape-Up methodology support
