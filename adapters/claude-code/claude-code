@@ -29,7 +29,7 @@ set -e
 
 TEMPLATES_DIR="$HOME/.claude/templates"
 LOGS_DIR="$HOME/.claude/logs"
-CLAUDE_CMD="claude"
+CLAUDE_CMD=("claude")
 BACKEND_AUTO="auto"
 BACKEND_TMUX="tmux"
 BACKEND_CMUX="cmux"
@@ -218,19 +218,28 @@ create_log_file() {
 build_run_cmd_string() {
     local session_start="$1"
     local run_cmd=""
+    local quoted_cmd=""
+
+    # %q-quote each element of CLAUDE_CMD separately so multi-token forms
+    # like ("claude" "--dangerously-skip-permissions") survive shell
+    # re-parsing inside tmux/cmux. A naive %q on the whole string would
+    # escape internal spaces, making the resulting command look for a
+    # single executable literally named "claude --flag…".
+    printf -v quoted_cmd '%q ' "${CLAUDE_CMD[@]}"
+    quoted_cmd="${quoted_cmd% }"
 
     if [[ "$PEER_REVIEW_ENABLED" == "true" ]]; then
         local extra_env=""
         [[ -n "${REVIEW_MAX_ROUNDS:-}" ]] && printf -v extra_env 'CCT_REVIEW_MAX_ROUNDS=%q ' "$REVIEW_MAX_ROUNDS"
-        printf -v run_cmd 'env CCT_PEER_REVIEW_ENABLED=true CCT_PEER_PROVIDER=%q CCT_PEER_TRIGGER=phase-complete CCT_PEER_REVIEW_SCOPE=%q CCT_REVIEW_COMMITS=%q %sCCT_SESSION_START=%q %q' \
+        printf -v run_cmd 'env CCT_PEER_REVIEW_ENABLED=true CCT_PEER_PROVIDER=%q CCT_PEER_TRIGGER=phase-complete CCT_PEER_REVIEW_SCOPE=%q CCT_REVIEW_COMMITS=%q %sCCT_SESSION_START=%q %s' \
             "${PEER_PROVIDER:-}" \
             "$PEER_SCOPE" \
             "$REVIEW_COMMITS" \
             "$extra_env" \
             "$session_start" \
-            "$CLAUDE_CMD"
+            "$quoted_cmd"
     else
-        printf -v run_cmd '%q' "$CLAUDE_CMD"
+        run_cmd="$quoted_cmd"
     fi
 
     printf '%s\n' "$run_cmd"
@@ -320,10 +329,10 @@ exec_claude_in_current_shell() {
             CCT_SESSION_START="$session_start"
         )
         [[ -n "${REVIEW_MAX_ROUNDS:-}" ]] && env_args+=(CCT_REVIEW_MAX_ROUNDS="$REVIEW_MAX_ROUNDS")
-        exec env "${env_args[@]}" "$CLAUDE_CMD"
+        exec env "${env_args[@]}" "${CLAUDE_CMD[@]}"
     fi
 
-    exec "$CLAUDE_CMD"
+    exec "${CLAUDE_CMD[@]}"
 }
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -507,6 +516,10 @@ OPTIONS:
     --continue, -c       Continue the most recent Claude session
     --resume, -r         Resume a named session (interactive picker)
     --shell <auto|cmux|tmux>  Session backend (default: auto)
+
+Any other --flag is forwarded verbatim to the underlying `claude` CLI
+(e.g. --dangerously-skip-permissions). Use --flag=value for value-bearing
+flags to avoid ambiguity with positional args.
 
 PROJECT TYPES:
     ml-rag              Python RAG + Knowledge Graph
@@ -1339,16 +1352,43 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         *)
-            POSITIONAL+=("$1")
-            shift
+            # Subcommand boundary: once we hit a known wrapper subcommand,
+            # stop global parsing so the subcommand owns its remaining
+            # flags. Without this, `claude-code sync --dry-run` would
+            # forward --dry-run to claude before the sync parser ran,
+            # and `claude-code init <type> --license MIT` would lose
+            # --license the same way.
+            #
+            # Otherwise: unknown --flag → forward verbatim to claude.
+            # Boolean flags work as-is (e.g. --dangerously-skip-permissions).
+            # For value-bearing flags use the --flag=value form to avoid
+            # ambiguity with the project-dir positional on the
+            # start-session path.
+            case "$1" in
+                init|list|sync|playwright|help|-h|--help)
+                    POSITIONAL+=("$@")
+                    break
+                    ;;
+                --*)
+                    CLAUDE_ARGS+=("$1")
+                    shift
+                    ;;
+                *)
+                    POSITIONAL+=("$1")
+                    shift
+                    ;;
+            esac
             ;;
     esac
 done
 set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
-# Append claude-specific flags to the command
+# Append claude-specific flags to the command. CLAUDE_CMD is an array
+# so multi-token forms (e.g. "claude" "--dangerously-skip-permissions")
+# can be exec'd correctly without bash collapsing them into a single
+# token whose path doesn't resolve.
 if [[ ${#CLAUDE_ARGS[@]} -gt 0 ]]; then
-    CLAUDE_CMD="$CLAUDE_CMD ${CLAUDE_ARGS[*]}"
+    CLAUDE_CMD+=("${CLAUDE_ARGS[@]}")
 fi
 
 case "${1:-}" in
