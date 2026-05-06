@@ -75,6 +75,7 @@ jobs:
           bash -n scripts/harden-github.sh
           bash -n scripts/validate-spec.sh
           bash -n scripts/validate-pitch.sh
+          bash -n scripts/check-origin-alignment.sh
 
       - name: Run generation tests
         run: bash tests/test-generate.sh
@@ -90,6 +91,9 @@ jobs:
 
       - name: Run review loop integration tests
         run: bash tests/test-review-loop.sh
+
+      - name: Run origin-alignment tests
+        run: bash tests/test-origin-alignment.sh
 
       - name: Run shared structure tests
         env:

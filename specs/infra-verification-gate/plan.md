@@ -5,6 +5,9 @@ risk_category: integration
 justification: "Framework-level change affecting the Build agent manifest, verify-on-stop hook, rules library, and phase-workflow verification steps. Touches the core quality gate pipeline."
 status: draft
 date: 2026-03-07
+origin:
+  type: internal
+  reason: "Framework-level quality gate. Origin is a real-world failure transcript from an ai-atlas Build session (March 2026) where unverified Docker/Compose/CI artifacts shipped broken. No external user idea predates the spec."
 ---
 
 # Implementation Plan: Infrastructure Verification Gate

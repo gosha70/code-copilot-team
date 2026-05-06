@@ -50,6 +50,10 @@ about to add or change a page, read
 - [Promote a Lesson to the Wiki](workflows/promote-lesson-to-wiki.md) —
   the manual procedure for turning a session-level lesson into a
   durable wiki page.
+- [Run the Origin-Alignment Gate](workflows/origin-alignment.md) —
+  three-gate breaker that confirms the working spec/plan is a
+  faithful realisation of the user's origin; escalates interactively
+  on deviation.
 - [30-Day Doc Coverage Audit](workflows/doc-coverage-audit.md) —
   recurring procedure for reconciling shipped features against
   user-facing docs across a fixed time window.

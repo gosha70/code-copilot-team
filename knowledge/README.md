@@ -341,6 +341,38 @@ Should run unmodified on macOS default bash and any Linux CI.
 
 ---
 
+## 8.5. Origin alignment (the circuit breaker)
+
+Independent of wiki linting, every feature in `specs/<feature-id>/`
+is gated by the **origin-alignment circuit breaker**. The breaker
+verifies that the working spec/plan is a faithful realisation of
+the user's *origin* — the original idea expressed in the issue
+body, external references, or user messages — before plan approval,
+build entry, or phase completion.
+
+```bash
+bash scripts/check-origin-alignment.sh <feature-id>
+```
+
+Six exit codes; ≥ 2 escalates to the user via the slash command
+`/origin-check <feature-id>` with three resolutions: rescope the
+spec, restart from origin, or document the divergence as deliberate.
+No fourth option, no silent bypass.
+
+The breaker exists because of the PR #27 derailment, which the
+external review at `specs/origin-confirmation-circuit-breaker/origin/external-review.md`
+diagnosed precisely: the spec drifted from the user's origin
+(issue #12 + the Karpathy LLM Wiki gist) and nobody on the
+assistant team caught it. The breaker makes that failure mode
+architecturally impossible to repeat.
+
+Full protocol:
+[`shared/skills/origin-confirmation/SKILL.md`](../shared/skills/origin-confirmation/SKILL.md).
+Workflow walkthrough:
+[`wiki/workflows/origin-alignment.md`](wiki/workflows/origin-alignment.md).
+
+---
+
 ## 9. Schema files (deeper reference)
 
 When you want the rules behind the rules:

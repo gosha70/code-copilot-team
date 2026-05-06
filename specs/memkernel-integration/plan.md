@@ -5,6 +5,15 @@ risk_category: integration
 status: draft
 justification: "Integration with external MCP server — moderate risk due to GCC precedent, but isolated design mitigates"
 collaboration_mode: single
+origin:
+  urls:
+    - file:///Users/gosha/dev/repo/memkernel
+  origin_claim: |
+    Integrate MemKernel (a code-aware memory MCP server at v0.1.0,
+    /Users/gosha/dev/repo/memkernel) as an optional persistent-memory layer
+    for Claude Code sessions in this repo. The user owns both projects;
+    this integration is the bridge from MemKernel's MCP surface into
+    code-copilot-team's session loop.
 ---
 
 # MemKernel Integration Plan
