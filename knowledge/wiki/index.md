@@ -57,6 +57,10 @@ about to add or change a page, read
 - [30-Day Doc Coverage Audit](workflows/doc-coverage-audit.md) —
   recurring procedure for reconciling shipped features against
   user-facing docs across a fixed time window.
+- [Run the Wiki Ingest Pipeline](workflows/run-wiki-ingest.md) —
+  semi-automated single-source promotion: the
+  `scripts/wiki-ingest` CLI applies the four-question gate and
+  drafts a typed page; human approval still gating.
 
 ## Incidents
 

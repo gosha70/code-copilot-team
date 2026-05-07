@@ -16,6 +16,7 @@ Append-only. One bullet per entry, newest at the top. Format:
 
 ## Entries
 
+- 2026-05-05 — created `run-wiki-ingest` (workflow): semi-automated single-source promotion via `scripts/wiki-ingest`; the four-question gate plus a typed draft, written to `doc_internal/proposals/`, human approval still gating; lands wiki-ingest-pipeline v1 (#28).
 - 2026-05-04 — patched schema v0.2: F1 (private-source workaround in `citation-rules`), F4 (atomic cluster-promotion mode in `promote-lesson-to-wiki`), F5 (optional `## Instances` H2 for `incident`), F6 (cross-repo `pr:` example), F7 (softened `open-question` resolution H2), F8 (note on ADR-vs-frontmatter convention for `decision`), F9 (curator distribution-claim discipline in `WIKI_MAINTAINER`); driven by v0.1 dogfood findings.
 - 2026-05-03 — created `doc-coverage-audit` (workflow): periodic 30-day reconciliation of shipped features against user-facing docs; dogfood promotion C4.
 - 2026-05-03 — created `respond-to-production-readiness-review` (playbook): bucket items by release target, refuse lump-sum framing; dogfood promotion C5.

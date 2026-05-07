@@ -1,0 +1,74 @@
+name: Wiki Ingest Tests
+
+# Runs the wiki ingest pipeline test suite (Python unittest + bash
+# end-to-end smoke + negative-path drills) on PRs that touch the
+# pipeline. Per specs/wiki-ingest-pipeline/plan.md Phase 4 option
+# (a): a feature-scoped workflow with an explicit paths filter is
+# preferred over wiring the suite into an always-on entrypoint —
+# keeps the change small and avoids cross-cutting count drift in
+# tests/test-counts.env.
+#
+# The paths filter must include EVERY input the test depends on,
+# otherwise a change to the test harness or schema will not trigger
+# CI:
+#   - scripts/wiki-ingest                   (bash entrypoint)
+#   - scripts/wiki_ingest/**                (python package + tests)
+#   - tests/test-wiki-ingest.sh             (the runner itself)
+#   - .github/workflows/wiki-ingest-tests.yml (this file)
+#   - knowledge/wiki/schema/**              (prompt.py loads schema at runtime)
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'scripts/wiki'
+      - 'scripts/wiki-ingest'
+      - 'scripts/wiki_ingest/**'
+      - 'tests/test-wiki-ingest.sh'
+      - '.github/workflows/wiki-ingest-tests.yml'
+      - 'knowledge/wiki/schema/**'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'scripts/wiki'
+      - 'scripts/wiki-ingest'
+      - 'scripts/wiki_ingest/**'
+      - 'tests/test-wiki-ingest.sh'
+      - '.github/workflows/wiki-ingest-tests.yml'
+      - 'knowledge/wiki/schema/**'
+
+# Least privilege: this workflow reads code and runs tests; it never
+# writes to issues, PRs, packages, or any other GH surface.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Run wiki-ingest pipeline tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Stdlib-only pipeline (see spec.md requirement #10) — no pip
+        # install step required. Python 3.10+ for PEP 604 union syntax
+        # (X | None). Matrix proves both ends of the supported range.
+        python-version: ['3.10', '3.11', '3.12']
+    steps:
+      - name: Checkout repository
+        # Pin to a SHA so an upstream tag re-point cannot inject code
+        # into our CI. v4.3.1 as of 2026-05-06.
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Python
+        # Pin to a SHA — same rationale. v5.6.0 as of 2026-05-06.
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run tests/test-wiki-ingest.sh
+        # The bash runner internally runs `python3 -m unittest
+        # discover` against scripts/wiki_ingest/tests/ before the
+        # bash smoke + negative-path drills, so this single step
+        # exercises both the Python unit tests AND the e2e tests
+        # against the matrix-selected Python version.
+        run: bash tests/test-wiki-ingest.sh

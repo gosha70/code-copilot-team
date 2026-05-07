@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# wiki — primary entrypoint for the Karpathy-pattern LLM Wiki maintainer.
+#
+# Verbs (Phase 0+):
+#   wiki ingest <source>            — Phase 0: requires --legacy-single-source
+#                                     (Phase 1 multi-page ingest TBD).
+#   wiki promote <proposal-dir>     — Phase 2 (TBD).
+#   wiki query "<question>"         — Phase 3 (TBD).
+#   wiki lint [--health]            — Phase 0: structural lint via
+#                                     knowledge/wiki/scripts/lint-wiki.sh.
+#                                     --health is Phase 4 (TBD).
+#
+# Sets PYTHONPATH so scripts/wiki_ingest/ resolves as a top-level package,
+# then exec's python3 -m wiki_ingest with the verb and remaining args.
+#
+# See specs/wiki-ingest-pipeline/spec.md for the full feature spec and
+# specs/wiki-ingest-pipeline/plan.md for the phased delivery plan.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+exec env PYTHONPATH="${REPO_DIR}/scripts${PYTHONPATH:+:${PYTHONPATH}}" \
+  python3 -m wiki_ingest "$@"

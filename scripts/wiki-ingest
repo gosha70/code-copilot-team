@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# wiki-ingest — backwards-compat alias for the v1 single-source proposal generator.
+#
+# Phase-0 onwards, the canonical entrypoint is `./scripts/wiki <verb>`.
+# This wrapper preserves the v1 caller surface — every existing
+# invocation (`./scripts/wiki-ingest <source>`, `--backend`, `--dry-run`,
+# `--output-dir`) continues to work unchanged. The shell prepends
+# `ingest --legacy-single-source` so the Python verb dispatcher routes
+# to the v1 single-source path.
+#
+# See specs/wiki-ingest-pipeline/plan.md § "Phase 0" for the relabel
+# rationale and the rescope record at
+# specs/wiki-ingest-pipeline/origin-alignment-2026-05-06-2200.md.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+exec env PYTHONPATH="${REPO_DIR}/scripts${PYTHONPATH:+:${PYTHONPATH}}" \
+  python3 -m wiki_ingest ingest --legacy-single-source "$@"

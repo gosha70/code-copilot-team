@@ -234,6 +234,42 @@ Every provider currently requires a `command` template with `{review_request}` a
 | **single** (default) | No `--peer-review` flag | Standard single-provider workflow, no peer review |
 | **dual** | `--peer-review [provider]` | Peer reviews at `/phase-complete`, artifacts written to `specs/` |
 
+## LLM Wiki Maintainer
+
+`code-copilot-team` ships a Karpathy-pattern LLM Wiki maintainer that
+turns `knowledge/raw/` into a curated, cited, agent-readable markdown
+layer under `knowledge/wiki/`. Four operations, one CLI:
+
+```bash
+./scripts/wiki ingest <source>          # multi-page write plan against existing wiki state
+./scripts/wiki promote <proposal-dir>   # atomic apply (only writer to knowledge/wiki/)
+./scripts/wiki query "<question>"       # index-first synthesis with citations
+./scripts/wiki query --file-back "..."  # round-trip the answer back into a patch-set
+./scripts/wiki lint                     # structural lint (frontmatter, links, slugs)
+./scripts/wiki lint --health [--strict] # knowledge-health (contradictions, stale claims, weak orphans, missing cross-links)
+```
+
+**Human approval is always gating.** `wiki ingest` writes typed
+proposals to `doc_internal/proposals/`; `wiki promote` is the only
+operation that ever writes to `knowledge/wiki/`, and it runs as a
+plan-then-apply commit with snapshot rollback on any failure.
+
+The CLI auto-detects an installed copilot backend in the order
+`claude → codex → cursor`. Override with `--backend <name>` or
+`WIKI_INGEST_BACKEND=<name>`. Use `--backend test` for the
+deterministic stub backend (no LLM call; this is what CI uses).
+
+For the v1 single-source flow, the legacy invocation
+`./scripts/wiki-ingest <source>` is preserved as a backwards-compat
+alias.
+
+### Operator docs
+
+- Full operator workflow: [`knowledge/README.md`](knowledge/README.md) §5e.
+- Workflow page: [`knowledge/wiki/workflows/run-wiki-ingest.md`](knowledge/wiki/workflows/run-wiki-ingest.md).
+- Design rationale: [`specs/wiki-ingest-pipeline/spec.md`](specs/wiki-ingest-pipeline/spec.md).
+- Schema: [`knowledge/wiki/schema/`](knowledge/wiki/schema/) — page types, ingest rules, citation rules, lint rules, curator persona.
+
 ## What You Get
 
 ![Configuration Layers](docs/images/configuration-layers.png)
