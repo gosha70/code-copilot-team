@@ -234,7 +234,10 @@ def validate_page_edit_semantics(
             f"a rumor.')"
         )
 
-    # update target must exist on disk
+    # update target must exist on disk; create target must NOT exist
+    # (otherwise create would clobber an existing page — the curator
+    # would have to catch this at promote time, but it's cheap to catch
+    # at validate time and lets the backend pick the right action).
     if edit.action == "update":
         target = repo_root / "knowledge" / "wiki" / edit.path
         if not target.exists():
@@ -242,6 +245,14 @@ def validate_page_edit_semantics(
                 f"{edit.path}: update target does not exist at "
                 f"{target.relative_to(repo_root)}; use action 'create' "
                 f"for new pages"
+            )
+    elif edit.action == "create":
+        target = repo_root / "knowledge" / "wiki" / edit.path
+        if target.exists():
+            errors.append(
+                f"{edit.path}: create target already exists at "
+                f"{target.relative_to(repo_root)}; use action 'update' "
+                f"to modify an existing page"
             )
 
     return errors

@@ -618,6 +618,222 @@ class TestE2EPerEditSemanticValidation(unittest.TestCase):
         self.assertIn("per-edit semantic validation", msg)
 
 
+class TestE2EFenceNeutralization(unittest.TestCase):
+    """Regression for the prompt-echo fence-capture issue: a real CLI
+    that echoes the prompt to stdout before its response would otherwise
+    let extract_json_object return a ```json block from source/wiki
+    reference content instead of the model's actual response.
+    Reference fences are neutralized to ```ref-json / ```ref-block in
+    the rendered prompt so the extractor only sees the model's fence."""
+
+    def test_source_json_fence_is_neutralized(self) -> None:
+        from wiki_ingest.backends.copilot_cli import _render_plain_text_prompt
+
+        prompt = {
+            "version": 1,
+            "system_instructions": "be a curator",
+            "task": "ingest",
+            "schema_excerpts": {
+                "ingest_rules": "RULES",
+                "page_types": "TYPES",
+                "citation_rules": "CITES",
+            },
+            "source": {
+                "kind": "file",
+                "path": "src.md",
+                "content": (
+                    "# Source\n"
+                    "\n"
+                    "An example response shape:\n"
+                    "\n"
+                    "```json\n"
+                    '{"disposition": "accept", "slug": "decoy"}\n'
+                    "```\n"
+                    "\n"
+                    "End.\n"
+                ),
+            },
+            "response_schema": "{}",
+        }
+        rendered = _render_plain_text_prompt(prompt)
+
+        # The opening ```json from the source content MUST NOT appear
+        # verbatim — that's exactly what the extractor first-fence-wins.
+        self.assertNotIn("\n```json\n", rendered)
+        # Disarmed variant IS present (proves the source content was rendered).
+        self.assertIn("```ref-json", rendered)
+        # Inner content is preserved (verbatim for the model to read).
+        self.assertIn('"disposition": "accept"', rendered)
+        self.assertIn('"slug": "decoy"', rendered)
+
+    def test_candidate_page_json_fence_is_neutralized(self) -> None:
+        from wiki_ingest.backends.copilot_cli import _render_plain_text_prompt
+
+        prompt = {
+            "version": 1,
+            "system_instructions": "be a curator",
+            "task": "ingest-multi",
+            "schema_excerpts": {
+                "ingest_rules": "RULES",
+                "page_types": "TYPES",
+                "citation_rules": "CITES",
+            },
+            "source": {
+                "kind": "file",
+                "path": "src.md",
+                "content": "# Source",
+            },
+            "wiki_state": {
+                "index_md": "# Wiki Index\n",
+                "log_md": "- 2026-01-01 — promote x.\n",
+                "candidate_pages": {
+                    "workflows/run-wiki-ingest.md": (
+                        "# Run Wiki Ingest\n\n"
+                        "Example backend response:\n\n"
+                        "```json\n"
+                        '{"version": 1, "edits": [], "rationale": "decoy"}\n'
+                        "```\n"
+                    ),
+                },
+            },
+            "response_schema": "{}",
+        }
+        rendered = _render_plain_text_prompt(prompt)
+        self.assertNotIn("\n```json\n", rendered)
+        self.assertIn("```ref-json", rendered)
+        self.assertIn('"rationale": "decoy"', rendered)
+
+    def test_neutralize_only_rewrites_opening_fences(self) -> None:
+        """Closing fences must stay ``` so rendered code blocks remain
+        well-formed for the model to parse. Only OPENING fences are
+        rewritten."""
+        from wiki_ingest.backends.copilot_cli import _neutralize_extractor_fences
+
+        text = "before\n```json\n{}\n```\nafter\n"
+        out = _neutralize_extractor_fences(text)
+        self.assertEqual(
+            out,
+            "before\n```ref-json\n{}\n```\nafter\n",
+        )
+
+    def test_neutralize_handles_bare_fence(self) -> None:
+        from wiki_ingest.backends.copilot_cli import _neutralize_extractor_fences
+
+        text = "before\n```\n{}\n```\nafter\n"
+        out = _neutralize_extractor_fences(text)
+        self.assertEqual(
+            out,
+            "before\n```ref-block\n{}\n```\nafter\n",
+        )
+
+    def test_extractor_skips_neutralized_fence_in_prompt_echo(self) -> None:
+        """End-to-end: simulate a CLI that echoes the prompt before its
+        response. The extractor must return the model's response, not
+        the source's example fence."""
+        from wiki_ingest.backends.copilot_cli import (
+            _render_plain_text_prompt,
+        )
+        from wiki_ingest.backends.json_extract import extract_json_object
+
+        prompt = {
+            "version": 1,
+            "system_instructions": "be a curator",
+            "task": "ingest",
+            "schema_excerpts": {
+                "ingest_rules": "",
+                "page_types": "",
+                "citation_rules": "",
+            },
+            "source": {
+                "kind": "file",
+                "path": "src.md",
+                "content": (
+                    "# Source\n\n"
+                    "Reference example:\n\n"
+                    "```json\n"
+                    '{"disposition": "DECOY", "slug": "wrong"}\n'
+                    "```\n"
+                ),
+            },
+            "response_schema": "{}",
+        }
+        echoed = _render_plain_text_prompt(prompt)
+        # Simulate CLI echoing the prompt + appending its real response.
+        real_response = (
+            '\n```json\n{"version": 1, "disposition": "accept", '
+            '"reason": "REAL", "page_type": "incident", "slug": "real", '
+            '"title": "Real", "draft_markdown": null, "sources": [{}]}\n'
+            '```\n'
+        )
+        stdout = echoed + real_response
+
+        extracted = extract_json_object(stdout)
+        # The extractor must return the REAL response, not the decoy.
+        self.assertEqual(extracted.get("reason"), "REAL")
+        self.assertEqual(extracted.get("slug"), "real")
+        self.assertNotEqual(extracted.get("disposition"), "DECOY")
+
+
+class TestE2ECreateTargetExistsRejection(unittest.TestCase):
+    """Regression: validate_page_edit_semantics rejects create against
+    an existing wiki path (the curator would clobber otherwise)."""
+
+    def test_rejects_create_to_existing_wiki_page(self) -> None:
+        from wiki_ingest.proposal import (
+            PageEdit,
+            validate_page_edit_semantics,
+        )
+        repo_root = _SCRIPTS_DIR.parent
+        # concepts/spec-driven-development.md is a real, committed wiki
+        # page. A create against it must fail.
+        bad = PageEdit(
+            path="concepts/spec-driven-development.md",
+            action="create",
+            new_content=(
+                "---\n"
+                "page_type: concept\n"
+                "slug: spec-driven-development\n"
+                "title: Spec-Driven Development (clobber)\n"
+                "sources:\n"
+                "  - path: src.md\n"
+                "    sha: abc\n"
+                "---\n"
+                "# Clobber\n"
+            ),
+            rationale="r",
+        )
+        errors = validate_page_edit_semantics(bad, repo_root)
+        self.assertTrue(
+            any("create target already exists" in e for e in errors),
+            f"errors: {errors}",
+        )
+
+    def test_create_to_new_path_passes(self) -> None:
+        """The happy path — create a brand-new file — still passes."""
+        from wiki_ingest.proposal import (
+            PageEdit,
+            validate_page_edit_semantics,
+        )
+        repo_root = _SCRIPTS_DIR.parent
+        good = PageEdit(
+            path="concepts/this-page-does-not-yet-exist.md",
+            action="create",
+            new_content=(
+                "---\n"
+                "page_type: concept\n"
+                "slug: this-page-does-not-yet-exist\n"
+                "title: New\n"
+                "sources:\n"
+                "  - path: src.md\n"
+                "    sha: abc\n"
+                "---\n"
+                "# New\n"
+            ),
+            rationale="r",
+        )
+        self.assertEqual(validate_page_edit_semantics(good, repo_root), [])
+
+
 class TestE2EWikiState(unittest.TestCase):
     """Phase 1: WikiState loads the existing wiki for the multi-page prompt."""
 

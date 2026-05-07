@@ -28,6 +28,63 @@ from typing import Any
 from ..errors import BackendInvocationError, BackendNotFoundError
 from .json_extract import extract_json_object
 
+# Reference content rendered into the prompt — source body, candidate
+# wiki pages — can legitimately contain ```json ... ``` examples (specs
+# do, the run-wiki-ingest workflow page does). When a CLI echoes the
+# prompt to stdout before its response, the extractor's "first-fence-
+# wins" strategy (json_extract.py: _FENCE_JSON_RE / _FENCE_ANY_RE) would
+# return the echoed reference fence instead of the model's response.
+# Rewriting the language tag of OPENING fences to "ref-json" / "ref-block"
+# disarms the extractor (its regexes require exactly "json" or whitespace-
+# only language) while keeping the fence visually intact for the model.
+#
+# Critical: distinguish opening from closing fences. A naive regex would
+# also rewrite closing ``` (which look identical to opening bare fences),
+# corrupting block structure. The stateful line-walk below tracks which
+# side of a fence pair each ``` line is on.
+
+
+def _neutralize_extractor_fences(text: str) -> str:
+    """Disarm opening ``\\`\\`\\`json`` / bare ``\\`\\`\\``` fences in reference text
+    so prompt-echo cannot capture reference content as the model's
+    response.
+
+    Algorithm: walk lines, track ``in_fence`` state. Only the OPENING
+    line of each fence pair is rewritten (closing ``\\`\\`\\``` lines stay
+    intact so block structure is preserved).
+    """
+    if not text:
+        return text
+    out: list[str] = []
+    in_fence = False
+    # Preserve the original trailing-newline shape: ``"a\n".split("\n")``
+    # is ``["a", ""]``, ``"\n".join(...)`` of that is ``"a\n"`` only if
+    # we don't strip — split→join is a true round-trip.
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not in_fence:
+            if stripped == "```json":
+                out.append(line.replace("```json", "```ref-json", 1))
+                in_fence = True
+            elif stripped == "```":
+                out.append(line.replace("```", "```ref-block", 1))
+                in_fence = True
+            elif stripped.startswith("```"):
+                # Opening fence with a non-json, non-empty language tag
+                # (text, python, bash, …). Already not extractor-matched
+                # — leave as-is.
+                out.append(line)
+                in_fence = True
+            else:
+                out.append(line)
+        else:
+            if stripped == "```":
+                out.append(line)  # closing fence — leave as-is
+                in_fence = False
+            else:
+                out.append(line)
+    return "\n".join(out)
+
 # Maximum stderr bytes to fingerprint when redacting.
 _MAX_STDERR_BYTES = 2048
 
@@ -121,7 +178,9 @@ def _render_plain_text_prompt(backend_prompt: dict[str, Any]) -> str:
     lines.append(f"Path: {source.get('path', '')}")
     lines.append(f"Kind: {source.get('kind', 'file')}")
     lines.append("")
-    lines.append(source.get("content", ""))
+    # Neutralize opening fences so a prompt-echoing CLI cannot trick the
+    # JSON extractor into returning a reference fence as the response.
+    lines.append(_neutralize_extractor_fences(source.get("content", "")))
     lines.append("")
 
     # Phase-1 multi-page ingest: render the existing wiki state so the
@@ -150,12 +209,12 @@ def _render_plain_text_prompt(backend_prompt: dict[str, Any]) -> str:
         index_md = wiki_state.get("index_md", "")
         if index_md:
             lines.append("--- knowledge/wiki/index.md ---")
-            lines.append(index_md)
+            lines.append(_neutralize_extractor_fences(index_md))
             lines.append("")
         log_md = wiki_state.get("log_md", "")
         if log_md:
             lines.append("--- knowledge/wiki/log.md ---")
-            lines.append(log_md)
+            lines.append(_neutralize_extractor_fences(log_md))
             lines.append("")
         candidate_pages = wiki_state.get("candidate_pages", {}) or {}
         if candidate_pages:
@@ -165,7 +224,7 @@ def _render_plain_text_prompt(backend_prompt: dict[str, Any]) -> str:
             )
             for rel_path, page_content in candidate_pages.items():
                 lines.append(f"--- knowledge/wiki/{rel_path} ---")
-                lines.append(page_content)
+                lines.append(_neutralize_extractor_fences(page_content))
                 lines.append("")
         lines.append("")
 
