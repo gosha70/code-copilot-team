@@ -151,6 +151,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
              "knowledge/wiki/ and do not move the proposals dir to "
              ".applied/. Exits 0 on a clean stage.",
     )
+    p_promote.add_argument(
+        "--allow-out-of-repo",
+        action="store_true",
+        help="Allow proposal directories outside the repository tree. "
+             "Default: refuse (exit 7). The proposal dir's content is "
+             "applied to knowledge/wiki/, so accepting paths from "
+             "outside the repo is an avoidable security surface.",
+    )
 
     # ── query ──────────────────────────────────────────────────
     p_query = sub.add_parser(
@@ -483,6 +491,22 @@ def _do_promote(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return SourceMissingError.exit_code
+
+    # Repo-root path confinement (parallel to ingest's check). The
+    # proposal dir's content gets written to knowledge/wiki/ on
+    # successful promote, so a proposal dir from outside the repo
+    # tree is an avoidable security surface — refuse by default;
+    # --allow-out-of-repo overrides for the rare deliberate case
+    # (e.g. a curator hand-assembling a patch-set in /tmp).
+    if not args.allow_out_of_repo and not _path_within_repo(proposals_dir, repo_root):
+        print(
+            f"error: proposal dir is outside the repository tree: {proposals_dir}\n"
+            f"  Repo root: {repo_root}\n"
+            f"  Pass --allow-out-of-repo to override (only when the "
+            f"proposal dir comes from a trusted source you've audited).",
+            file=sys.stderr,
+        )
+        return EXIT_PATH_OUT_OF_REPO
 
     try:
         result = run_promote(

@@ -1584,6 +1584,35 @@ class TestE2EPromoteAtomicity(unittest.TestCase):
             self.assertFalse(archived.exists())
 
 
+class TestE2EPromotePathConfinement(unittest.TestCase):
+    """Regression: promote refuses proposal dirs outside the repo tree
+    by default, parallel to ingest's source-path confinement. The
+    proposal dir's content is applied to knowledge/wiki/ on success;
+    accepting paths from outside the repo without an explicit override
+    is an avoidable security surface."""
+
+    def test_promote_refuses_out_of_repo_proposal_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as out_of_repo:
+            # Put a valid proposal dir OUTSIDE the real repo.
+            out_dir = Path(out_of_repo) / "external-prop"
+            out_dir.mkdir()
+            (out_dir / "plan.json").write_text("{}", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable, "-m", "wiki_ingest",
+                    "promote", str(out_dir),
+                ],
+                capture_output=True,
+                text=True,
+                env=_module_env(),
+                timeout=30,
+            )
+            # Exit 7 (EXIT_PATH_OUT_OF_REPO).
+            self.assertEqual(result.returncode, 7, f"stderr={result.stderr!r}")
+            self.assertIn("outside the repository tree", result.stderr)
+            self.assertIn("--allow-out-of-repo", result.stderr)
+
+
 class TestE2EQueryCitationValidation(unittest.TestCase):
     """Regression for [P2]: query rejects citations to pages not loaded
     by the index-first selection. Pre-fix bug: the parser only checked
