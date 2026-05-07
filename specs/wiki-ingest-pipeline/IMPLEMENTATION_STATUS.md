@@ -58,13 +58,16 @@ verb.
 
 ## Phase 2 — Promote (the only writer to `knowledge/wiki/`)
 
-| Capability | Status | Target |
+| Capability | Status | Where |
 |---|---|---|
-| `./scripts/wiki promote <dir>` | ⏳ planned | Phase 2 PR |
-| `promoter.py` atomic apply | ⏳ planned | new module |
-| Structural-lint gate before apply | ⏳ planned | `lint-wiki.sh` integration |
-| `.applied/` audit trail | ⏳ planned | `doc_internal/proposals/.applied/` |
-| Single-writer invariant test | ⏳ planned | grep-based |
+| `./scripts/wiki promote <dir>` | ✓ delivered | verb dispatcher routes to `promoter.run_promote` |
+| `promoter.py` atomic apply | ✓ delivered | staged-temp-dir → validate → commit → archive |
+| Per-edit semantic re-validation against staged tree | ✓ delivered | `_validate_staged_tree` re-runs `validate_page_edit_semantics` so update-after-create within one patch-set works |
+| Structural-lint gate before apply | ✓ delivered | `lint-wiki.sh` runs against staged tree with repo escape paths symlinked in |
+| `--dry-run` flag | ✓ delivered | builds + validates the stage; never commits |
+| `.applied/` audit trail | ✓ delivered | `doc_internal/proposals/.applied/<dir-name>/` |
+| Idempotency on `.applied/` re-runs | ✓ delivered | second promote on archived dir is a no-op |
+| Single-writer invariant test | ✓ delivered | grep-based test — only `promoter.py` writes to `knowledge/wiki/` |
 
 ## Phase 3 — Query
 

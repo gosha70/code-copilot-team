@@ -42,10 +42,13 @@ from .errors import (
     BackendNotFoundError,
     ContractViolationError,
     OutputWriteError,
+    PromoteApplyError,
+    PromoteValidationError,
     SourceMissingError,
 )
 from .ingestor import DefaultIngestor
 from .ingestor_multi import DefaultMultiIngestor, write_patch_set_dir
+from .promoter import promote as run_promote
 from .proposal import IngestProposal, IngestRequest, render_proposal_file
 
 _DEFAULT_OUTPUT_DIR = Path("doc_internal/proposals")
@@ -131,9 +134,21 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p_promote = sub.add_parser(
         "promote",
         help="Apply a proposal patch-set to knowledge/wiki/ atomically. "
-             "Phase 2 — not yet implemented.",
+             "The ONLY code path that writes to knowledge/wiki/.",
     )
-    p_promote.add_argument("proposal_dir", type=Path, nargs="?")
+    p_promote.add_argument(
+        "proposal_dir",
+        type=Path,
+        help="Path to a doc_internal/proposals/<date>-<slug>/ directory "
+             "produced by `./scripts/wiki ingest`.",
+    )
+    p_promote.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build and validate the staged tree but do not commit to "
+             "knowledge/wiki/ and do not move the proposals dir to "
+             ".applied/. Exits 0 on a clean stage.",
+    )
 
     # ── query ──────────────────────────────────────────────────
     p_query = sub.add_parser(
@@ -401,15 +416,52 @@ def _do_ingest_multi(args: argparse.Namespace) -> int:
 
 
 def _do_promote(args: argparse.Namespace) -> int:
-    """Phase 2 — not yet implemented."""
+    """Phase 2: atomic patch-set application — the only writer to knowledge/wiki/."""
+    repo_root = _resolve_repo_root()
+    proposals_dir: Path = args.proposal_dir
+    if not proposals_dir.exists():
+        print(
+            f"error: proposals dir not found: {proposals_dir}",
+            file=sys.stderr,
+        )
+        return SourceMissingError.exit_code
+
+    try:
+        result = run_promote(
+            proposals_dir=proposals_dir,
+            repo_root=repo_root,
+            dry_run=args.dry_run,
+        )
+    except PromoteValidationError as exc:
+        print(f"error: promote validation failed:\n{exc}", file=sys.stderr)
+        return PromoteValidationError.exit_code
+    except PromoteApplyError as exc:
+        print(f"error: promote apply failed:\n{exc}", file=sys.stderr)
+        return PromoteApplyError.exit_code
+
+    if result.dry_run:
+        print(
+            f"dry-run: staged tree validated; would apply "
+            f"{len(result.applied_paths)} edit(s); wiki tree unchanged."
+        )
+        for p in result.applied_paths:
+            print(f"  + {p}")
+        return 0
+
+    if not result.applied_paths:
+        print(
+            f"no-op: {proposals_dir.name} already applied "
+            f"(no changes to write)."
+        )
+        return 0
+
     print(
-        "error: `./scripts/wiki promote` is Phase 2 of the wiki-ingest-pipeline "
-        "rescope and is not yet implemented. See "
-        "specs/wiki-ingest-pipeline/plan.md § 'Phase 2 — Promote' for the "
-        "delivery schedule.",
-        file=sys.stderr,
+        f"applied {len(result.applied_paths)} edit(s) from "
+        f"{proposals_dir.name}; archived to {result.archived_dir}."
     )
-    return EXIT_NOT_IMPLEMENTED
+    for p in result.applied_paths:
+        print(f"  + knowledge/wiki/{p}")
+    return 0
 
 
 def _do_query(args: argparse.Namespace) -> int:

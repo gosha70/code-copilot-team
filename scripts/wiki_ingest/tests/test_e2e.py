@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -856,6 +857,270 @@ class TestE2EWikiState(unittest.TestCase):
         self.assertTrue(state.log_md, "log.md should be loaded")
         # Candidate set should be a dict (may be empty for unrelated source).
         self.assertIsInstance(state.candidate_pages, dict)
+
+
+class TestE2EPromote(unittest.TestCase):
+    """Phase 2: ``./scripts/wiki promote <dir>`` applies a patch-set atomically.
+
+    Tests use a tmp repo layout (``<tmp>/knowledge/wiki/...``) so the
+    real repo's wiki is never touched, even if the promoter has a bug.
+    """
+
+    def _build_tmp_repo(self, tmp: Path) -> Path:
+        """Create a minimal repo layout with a 1-page wiki under <tmp>."""
+        wiki = tmp / "knowledge" / "wiki"
+        wiki.mkdir(parents=True)
+        # Minimal wiki: index.md + log.md (no other pages, but the
+        # linter expects them).
+        (wiki / "index.md").write_text(
+            "---\n"
+            "page_type: index\n"
+            "slug: index\n"
+            "title: Test Wiki\n"
+            "status: stable\n"
+            "last_reviewed: 2026-05-06\n"
+            "---\n"
+            "\n# Test Wiki\n\n## Incidents\n\n",
+            encoding="utf-8",
+        )
+        (wiki / "log.md").write_text(
+            "---\n"
+            "page_type: log\n"
+            "slug: log\n"
+            "title: Wiki Log\n"
+            "status: stable\n"
+            "last_reviewed: 2026-05-06\n"
+            "---\n"
+            "\n# Log\n\n",
+            encoding="utf-8",
+        )
+        # Mirror the schema/scripts dirs from the real repo so the
+        # linter has its rules + script in the staged-tree validation.
+        real_root = _SCRIPTS_DIR.parent
+        for sub in ("schema", "scripts"):
+            shutil.copytree(
+                real_root / "knowledge" / "wiki" / sub,
+                wiki / sub,
+            )
+        return wiki
+
+    def _build_proposals_dir(
+        self,
+        tmp: Path,
+        slug: str = "promote-fixture",
+        page_type: str = "incident",
+    ) -> Path:
+        """Create a doc_internal/proposals/<date>-<slug>/ dir with a
+        deterministic 3-edit patch-set (create + append-log + append-index)."""
+        prop = tmp / "doc_internal" / "proposals" / f"2026-05-06-{slug}"
+        (prop / "preview" / "incidents").mkdir(parents=True)
+        (prop / "preview").mkdir(exist_ok=True)
+        # create
+        (prop / "preview" / "incidents" / f"{slug}.md").write_text(
+            "---\n"
+            f"page_type: {page_type}\n"
+            f"slug: {slug}\n"
+            "title: Promote Fixture\n"
+            "status: draft\n"
+            "last_reviewed: 2026-05-06\n"
+            "sources:\n"
+            "  - path: src.md\n"
+            "    sha: abc1234\n"
+            "---\n"
+            "\n# Promote Fixture\n\nBody.\n",
+            encoding="utf-8",
+        )
+        # append-log
+        (prop / "preview" / "log.md").write_text(
+            f"- 2026-05-06 — promote {slug} (incident): test fixture.",
+            encoding="utf-8",
+        )
+        # append-index
+        (prop / "preview" / "index.md").write_text(
+            f"- [Promote Fixture](incidents/{slug}.md) — test fixture.",
+            encoding="utf-8",
+        )
+        plan = {
+            "version": 1,
+            "source_path": "src.md",
+            "backend": "test",
+            "rationale": "test fixture",
+            "edits": [
+                {
+                    "path": f"incidents/{slug}.md",
+                    "action": "create",
+                    "rationale": "create incident",
+                    "preview": f"preview/incidents/{slug}.md",
+                },
+                {
+                    "path": "log.md",
+                    "action": "append-log",
+                    "rationale": "append log",
+                    "preview": "preview/log.md",
+                },
+                {
+                    "path": "index.md",
+                    "action": "append-index",
+                    "rationale": "link from index",
+                    "preview": "preview/index.md",
+                },
+            ],
+        }
+        import json as _json
+        (prop / "plan.json").write_text(
+            _json.dumps(plan, indent=2), encoding="utf-8"
+        )
+        return prop
+
+    def test_promote_happy_path_applies_all_edits(self) -> None:
+        from wiki_ingest.promoter import promote
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            wiki = self._build_tmp_repo(tmp_root)
+            prop = self._build_proposals_dir(tmp_root)
+
+            result = promote(prop, tmp_root)
+
+            # Patch applied: incident page exists, log/index have new entries.
+            incident = wiki / "incidents" / "promote-fixture.md"
+            self.assertTrue(incident.exists())
+            self.assertIn("# Promote Fixture", incident.read_text())
+
+            log = wiki / "log.md"
+            self.assertIn("promote promote-fixture", log.read_text())
+
+            index = wiki / "index.md"
+            self.assertIn("Promote Fixture", index.read_text())
+
+            # Audit trail: proposals dir moved to .applied/.
+            self.assertFalse(prop.exists())
+            archived = (
+                tmp_root / "doc_internal" / "proposals" / ".applied" / prop.name
+            )
+            self.assertTrue(archived.exists())
+            self.assertEqual(result.archived_dir, archived)
+            self.assertFalse(result.dry_run)
+
+    def test_promote_dry_run_does_not_modify_wiki(self) -> None:
+        from wiki_ingest.promoter import promote
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            wiki = self._build_tmp_repo(tmp_root)
+            prop = self._build_proposals_dir(tmp_root)
+
+            log_before = (wiki / "log.md").read_text()
+            index_before = (wiki / "index.md").read_text()
+
+            result = promote(prop, tmp_root, dry_run=True)
+
+            self.assertTrue(result.dry_run)
+            # Wiki unchanged.
+            self.assertEqual((wiki / "log.md").read_text(), log_before)
+            self.assertEqual((wiki / "index.md").read_text(), index_before)
+            self.assertFalse((wiki / "incidents" / "promote-fixture.md").exists())
+            # Proposals dir not moved.
+            self.assertTrue(prop.exists())
+            self.assertIsNone(result.archived_dir)
+
+    def test_promote_validation_failure_leaves_wiki_untouched(self) -> None:
+        """A patch-set that would fail the structural linter must NOT
+        touch the live wiki tree."""
+        from wiki_ingest.errors import PromoteValidationError
+        from wiki_ingest.promoter import promote
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            wiki = self._build_tmp_repo(tmp_root)
+            # Build a proposals dir with malformed frontmatter (slug
+            # mismatch) so per-edit validation rejects.
+            prop = self._build_proposals_dir(tmp_root, slug="bad-fixture")
+            bad_preview = prop / "preview" / "incidents" / "bad-fixture.md"
+            content = bad_preview.read_text()
+            # Corrupt the slug so it doesn't match the filename stem.
+            corrupted = content.replace("slug: bad-fixture", "slug: wrong-slug")
+            bad_preview.write_text(corrupted)
+
+            with self.assertRaises(PromoteValidationError):
+                promote(prop, tmp_root)
+
+            # Wiki tree still pristine.
+            self.assertFalse((wiki / "incidents" / "bad-fixture.md").exists())
+            # Proposals dir still in place (not moved to .applied/).
+            self.assertTrue(prop.exists())
+
+    def test_promote_idempotent_on_already_applied(self) -> None:
+        """A second promote on an already-archived dir is a no-op."""
+        from wiki_ingest.promoter import promote
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_tmp_repo(tmp_root)
+            prop = self._build_proposals_dir(tmp_root)
+
+            promote(prop, tmp_root)  # first apply
+
+            archived = (
+                tmp_root / "doc_internal" / "proposals" / ".applied" / prop.name
+            )
+            # Second promote on the .applied/ path is a no-op.
+            result = promote(archived, tmp_root)
+            self.assertEqual(result.applied_paths, [])
+
+    def test_promote_missing_proposals_dir_raises(self) -> None:
+        from wiki_ingest.errors import PromoteValidationError
+        from wiki_ingest.promoter import promote
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_tmp_repo(tmp_root)
+            with self.assertRaises(PromoteValidationError):
+                promote(tmp_root / "doc_internal" / "proposals" / "nope", tmp_root)
+
+
+class TestE2ESingleWriterInvariant(unittest.TestCase):
+    """Phase 2 invariant: ONLY ``promoter.py`` writes to knowledge/wiki/.
+
+    Grep-based check across the wiki_ingest package for write-side
+    filesystem operations targeting knowledge/wiki/. Any module other
+    than promoter.py performing such writes is a bug — even if it's
+    "safe" — because the single-writer property is what makes
+    promote's atomicity guarantee meaningful.
+    """
+
+    _PACKAGE_ROOT = _SCRIPTS_DIR / "wiki_ingest"
+    _ALLOWED_WRITERS = {"promoter.py"}
+
+    def test_only_promoter_writes_to_knowledge_wiki(self) -> None:
+        import re
+
+        # Patterns that signal "writing to knowledge/wiki": any
+        # filesystem-write call (.write_text, .write_bytes, shutil.copy*,
+        # shutil.move, os.rename, os.replace, mkdir+write) where the
+        # path expression mentions "knowledge" / "wiki".
+        write_re = re.compile(
+            r"(\.write_text|\.write_bytes|shutil\.(copy|move|rmtree)|"
+            r"os\.(rename|replace))\s*\(",
+        )
+
+        offenders: list[tuple[str, int, str]] = []
+        for py in self._PACKAGE_ROOT.rglob("*.py"):
+            rel = py.relative_to(self._PACKAGE_ROOT)
+            # Tests are allowed to touch fixture wiki dirs.
+            if rel.parts and rel.parts[0] == "tests":
+                continue
+            if py.name in self._ALLOWED_WRITERS:
+                continue
+            for lineno, line in enumerate(
+                py.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if write_re.search(line) and (
+                    "knowledge/wiki" in line or "knowledge / \"wiki\"" in line
+                    or 'knowledge"' in line
+                ):
+                    offenders.append((str(rel), lineno, line.strip()))
+
+        self.assertEqual(
+            offenders, [],
+            f"Found {len(offenders)} non-promoter writes to knowledge/wiki/:\n"
+            + "\n".join(f"  {p}:{n}: {l}" for p, n, l in offenders)
+        )
 
 
 if __name__ == "__main__":
