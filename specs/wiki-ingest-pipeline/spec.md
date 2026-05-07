@@ -1,501 +1,478 @@
 ---
 feature_id: wiki-ingest-pipeline
-spec_mode: lightweight
-status: approved
+spec_mode: full
+status: draft
 issue: 28
+origin:
+  issue: gosha70/code-copilot-team#12
+  urls:
+    - https://gist.github.com/karpathy/3ef5df0e1ee5d36d59b29eb91f8d35c1
+  origin_claim: |
+    The Karpathy-pattern LLM Wiki: a persistent, compounding artifact
+    between raw sources and final agent instructions, maintained by an
+    LLM via THREE operations — ingest (reads existing wiki state and
+    UPDATES index.md + log.md + multiple matching pages; one source
+    can touch 10–15 pages), query (index-first navigation; optional
+    file-back), and knowledge-health lint (contradictions, stale
+    claims, orphans, missing cross-links — semantic, not just
+    structural). Issue #12 (LLM Wiki Groundwork) shipped only the
+    structural foundation and explicitly deferred automated ingest,
+    RLMKit synthesis, and adapter generation to follow-up issues; #28
+    (this spec) was the first follow-up and was expected to deliver
+    the maintainer half.
 ---
 
-# Wiki Ingest Pipeline — Spec
+# Wiki Ingest Pipeline — Karpathy-pattern LLM Wiki Maintainer
+
+> **Rescope notice (2026-05-06).** This spec replaces the v1 "single-
+> source proposal generator" spec that previously occupied this file.
+> The earlier spec was found derailed against the user's origin (issue
+> #12 + Karpathy's LLM Wiki gist) by the origin-confirmation circuit
+> breaker (`specs/wiki-ingest-pipeline/origin-alignment-2026-05-06-1919.md`,
+> verdict: derailed). The user picked resolution **A) Rescope spec to
+> match origin**. The Stage-1 substrate built under the v1 spec —
+> `scripts/wiki_ingest/` Python package — is preserved and reused as
+> the foundation for this rescoped feature; the legacy single-source
+> CLI is preserved as a backwards-compat alias.
 
 ## Problem
 
-The LLM Wiki groundwork (#12) plus v0.2 schema patches (#26) have
-proved the wiki schema works at small scale. The v0.1 dogfood
-measured the remaining bottleneck: every promotion costs ~24–28
-minutes of focused human work, and the most repetitive shape inside
-that cost is **applying the four-question gate** (reusable, citable,
-non-duplicative, new-contributor-relevant) and **drafting the typed
-skeleton** that fills the page-type template.
+The user's `code-copilot-team` repo accumulates durable project knowledge
+(lessons, decisions, incidents, workflows) in scattered locations: SDD
+specs, GitHub issues/PRs, ephemeral session memory, and an in-repo wiki
+that today is curated only by hand. Issue #12 ("LLM Wiki Groundwork")
+shipped the structural foundation for a Karpathy-pattern LLM Wiki —
+directory layout, schema files, seed pages, manual `/promote-lesson`
+workflow, structural linter. It explicitly deferred the maintainer half
+(automated ingest, query, knowledge-health lint) to follow-up issues.
+This spec (#28) is that follow-up and delivers the **maintainer**.
 
-That repetitive shape is exactly what an LLM agent can do — under
-human review, without merging into the canonical wiki on its own.
-This spec defines the v1 pipeline that runs the gate and the draft
-as a structured prompt, and writes a typed proposal to
-`doc_internal/proposals/<date>-<slug>.md` for human curator review.
+The Karpathy-pattern wiki is a persistent, compounding artifact sitting
+between raw sources and final agent instructions, maintained by an LLM
+via three operations:
 
-**Human approval remains gating throughout.** The pipeline never
-writes to `knowledge/wiki/`. A curator runs the existing
-`/promote-lesson` workflow (or the manual procedure in
-`knowledge/wiki/workflows/promote-lesson-to-wiki.md`) to take an
-approved proposal across the line.
+1. **Ingest** — reads existing wiki state into the prompt; produces a
+   multi-page write plan that updates `index.md`, `log.md`, and every
+   relevant existing or new page. One source can touch many pages
+   (Karpathy's gist describes 10–15 typical).
+2. **Query** — reads the wiki to answer a question, navigating index-
+   first; optionally files the answer back into the wiki.
+3. **Knowledge-health lint** — semantic checks beyond the existing
+   structural linter: contradictions across pages, stale claims whose
+   sources have moved, orphans only weakly cited from a hub, missing
+   cross-links between pages that name the same entity.
 
-## Non-goals
+Plus a fourth verb that gates writes:
 
-- Automatic merging into `knowledge/wiki/`. v1 produces proposals
-  only.
-- Post-commit / post-merge / file-watcher triggers. v1 is manual
-  CLI only.
-- Multi-source synthesis (combining N sources into one proposal).
-  v1 is one-source-in, one-proposal-out.
-- Concrete LLM SDK backends (anthropic, openai, ollama, etc.).
-  v1 ships one default backend that subprocess-invokes existing
-  copilot CLIs (`claude`, `codex`, `cursor`); SDK backends are a
-  v1.x extension contributors can write against the documented
-  protocol.
-- Rich review UI. Markdown-on-disk plus git is the review surface.
+4. **Promote** — the only operation that writes to `knowledge/wiki/`.
+   Applies a patch-set produced by `ingest` (or `query --file-back`),
+   atomic, runs the structural linter as a gate, stages the result for
+   git review.
 
-## User scenarios
+## User Scenarios
 
-1. **Curator with a candidate file.** A curator finishes reading a
-   merged spec or incident write-up and wants to propose it as a
-   wiki page. They run `./scripts/wiki-ingest path/to/source.md`,
-   wait <60 seconds, and find a proposal at
-   `doc_internal/proposals/<date>-<slug>.md`. They open it,
-   sanity-check the gate decision, accept the draft, and run
-   `/promote-lesson` to land it.
+1. **Curator ingests a real source.** A curator finishes reading a
+   merged spec or incident write-up. They run
+   `./scripts/wiki ingest path/to/source.md`. Within ~60 seconds they
+   get a patch-set under
+   `doc_internal/proposals/<date>-<source-slug>/`: a `plan.json` listing
+   every (page-path, action) pair, plus a `preview/` directory
+   containing one rendered markdown per affected page. The
+   patch-set typically touches `index.md`, `log.md`, one or more
+   existing concept/decision/incident pages (updates), and zero or
+   more new pages (creates). The curator reviews the preview, runs
+   `./scripts/wiki promote doc_internal/proposals/<dir>` to apply,
+   and `git diff` reflects the multi-page update.
 
-2. **Curator with a borderline candidate.** Same flow, but the
-   pipeline's gate disposition is `reject` with a recorded reason.
-   The proposal file contains the reason and no draft. The curator
-   either accepts the rejection (file lives in
-   `doc_internal/proposals/` as a record) or overrides it manually.
+2. **Curator queries the wiki.** A curator wants to know "what does
+   our wiki say about origin alignment?" They run
+   `./scripts/wiki query "what does our wiki say about origin alignment?"`.
+   The pipeline reads `knowledge/wiki/index.md` first, follows links
+   to relevant pages, synthesises an answer, and prints the answer plus
+   `(page, fragment)` citations to every page consulted. If the answer
+   isn't fully in the wiki, the curator re-runs with `--file-back`,
+   which generates a small patch-set that adds or updates a page with
+   the answer; promote applies it.
 
-3. **Curator running CI / sanity check.** The test backend is
-   selected via `--backend test`. The pipeline runs end-to-end
-   against a fixture file with no real LLM call and produces a
-   deterministic proposal that the test suite asserts against.
+3. **CI runs knowledge-health lint.** A CI job runs
+   `./scripts/wiki lint --health`. The structural linter
+   (`knowledge/wiki/scripts/lint-wiki.sh`) runs first as before. Then
+   the health pass runs: it flags contradictions across pages
+   (LLM-checked over candidate page pairs sharing slugs, sources, or
+   cross-links), stale claims whose cited sources moved or contradict
+   the cited file's current state, orphans that are reachable from
+   `index.md` but only weakly cited from a single hub, and entities
+   mentioned in N pages that aren't cross-linked. Default mode is
+   advisory (exit 0 with warnings); `--strict` for CI gating once the
+   false-positive rate is calibrated.
 
-4. **Curator without `claude` installed.** The auto-detect order
-   tries `claude`, then `codex`, then `cursor`. If none are on
-   `PATH`, the pipeline fails with a clear message naming all
-   three and pointing at `--backend test` for fixture-only runs.
+4. **Curator on a fresh repo.** A curator running ingest on a repo
+   with an empty `knowledge/wiki/` (only seed pages from issue #12)
+   gets a patch-set that creates 1–3 pages plus `index.md`/`log.md`
+   updates — the pipeline degrades gracefully when there is no
+   existing wiki state to integrate with.
+
+5. **Curator using legacy single-source flow.** A curator who liked
+   the v1 single-source proposal generator continues to run
+   `./scripts/wiki-ingest source.md` (the existing Phase-3 wrapper)
+   or `./scripts/wiki ingest --legacy-single-source source.md`. The
+   pipeline produces a single proposal at
+   `doc_internal/proposals/<date>-<slug>.md` exactly as the v1 spec
+   defined. No regressions.
+
+6. **Curator running CI / sanity check.** `--backend test` selects the
+   in-process deterministic backend used by the test suite. All four
+   verbs (ingest, promote, query, lint) round-trip against fixture
+   sources without network calls.
 
 ## Interface
 
-### `WikiIngestor` protocol (Python)
+### CLI surface
+
+```
+# Karpathy-pattern operations (new)
+./scripts/wiki ingest <source>                  # multi-page write plan generator
+./scripts/wiki promote <proposal-dir>           # apply patch-set to knowledge/wiki/
+./scripts/wiki query "<question>"               # index-first synthesis with citations
+./scripts/wiki query "<question>" --file-back   # synthesise + generate patch-set
+./scripts/wiki lint                              # structural linter (existing)
+./scripts/wiki lint --health                    # structural + knowledge-health
+./scripts/wiki lint --health --strict           # exit non-zero on health flags
+
+# Backwards-compat aliases (Stage 1, kept)
+./scripts/wiki ingest --legacy-single-source <source>   # produces the v1 single proposal
+./scripts/wiki-ingest <source>                          # alias for the above
+```
+
+### Operation contracts
+
+#### `ingest` (multi-page)
+
+- **Input:** path to a source file (repo-relative or absolute).
+- **Reads:** the source content; the existing wiki state — at minimum
+  `index.md` and `log.md`, plus a bounded candidate set of relevant
+  existing pages selected by slug/title/page-type heuristics against
+  the source; the schema files (`ingest-rules.md`, `page-types.md`,
+  `citation-rules.md`).
+- **Backend prompt:** the wiki-aware prompt is composed by the new
+  module `compose_multi_prompt` in `prompt.py`. It includes the
+  schema, the source, AND the loaded wiki state, framed as "the
+  curator's working memory."
+- **Output:** a directory under
+  `doc_internal/proposals/<date>-<source-slug>/` containing:
+  - `plan.json` — the patch-set: a list of `PageEdit` records, each
+    with `path`, `action ∈ {create, update, append-log, append-index}`,
+    and `new_content`. Plus `index_update`, `log_append`.
+  - `preview/<rel-path-to-wiki-page>.md` — one rendered markdown per
+    affected page; the curator can `diff` against the live wiki.
+- **Validation:** every per-page entry passes the existing two-layer
+  validation (shape + semantic cross-consistency between structured
+  fields and YAML frontmatter in the rendered body). The patch-set
+  itself passes a new `WikiPatchSet`-level validation: no two
+  `create` entries write the same path; no `update` targets a non-
+  existent path; the `index_update` and `log_append` are well-formed.
+- **Exit codes:** as today (0 success, 2 backend-not-found, 3 backend
+  invocation failure, 4 contract violation, 5 source missing, 6 output
+  dir write failure).
+
+#### `promote`
+
+- **Input:** path to a `doc_internal/proposals/<dir>/`.
+- **Action:** the ONLY writer to `knowledge/wiki/`. Applies the
+  patch-set atomically: stages `create` and `update` actions to a
+  temp dir, runs `knowledge/wiki/scripts/lint-wiki.sh` against the
+  staged tree, and only on lint exit 0 moves the changes into
+  `knowledge/wiki/` and stages them via `git add`. On lint failure,
+  rolls back and prints the lint output.
+- **Output:** the wiki tree is updated; `git status` reflects the
+  multi-page change. The proposals dir is moved to
+  `doc_internal/proposals/.applied/<date>-<source-slug>/` (kept for
+  audit, gitignored).
+- **Idempotency:** running `promote` on the same dir twice is a
+  no-op (after the first run, it's in `.applied/`).
+
+#### `query`
+
+- **Input:** a free-text question and optional `--file-back` flag.
+- **Reads:** `knowledge/wiki/index.md` first; navigates to linked
+  pages by lexical matching against the question; reads only the
+  selected pages into the prompt (NOT the full wiki — Karpathy's
+  efficiency principle).
+- **Output:** the answer printed to stdout, plus a list of
+  `(page-path, fragment)` citations on stderr.
+- **`--file-back`:** in addition to printing, generates a patch-set
+  under `doc_internal/proposals/query-<date>-<slug>/` containing a
+  page (new or update) that captures the answer. Curator reviews
+  and runs `promote` to land it.
+- **Logging:** which pages were loaded into context is logged to
+  `doc_internal/wiki-query-log.jsonl` (one JSONL line per query) so
+  curators can audit the index-first navigation.
+
+#### `lint`
+
+- **Input:** none for `lint` (defaults to structural). Flags:
+  `--health` to add the knowledge-health pass; `--strict` to make
+  health-pass findings non-zero exit; `--paths <p>...` to scope to
+  specific page paths.
+- **Structural pass:** runs `knowledge/wiki/scripts/lint-wiki.sh`
+  unchanged. Exit 0 if clean.
+- **Knowledge-health pass (with `--health`):**
+  - **Contradictions** — pairs of pages making conflicting claims
+    about the same entity/decision. Detected by sending candidate
+    pairs (sharing slugs in title, shared sources, or cross-link
+    edges) to the backend with a "do these contradict?" prompt.
+    JSON-over-stdio response.
+  - **Stale claims** — pages whose cited `sources:` `path:` no
+    longer exists, or whose `sha:` is more than N commits behind
+    HEAD with the file having changed in a meaningful way (LLM
+    judgment), or whose cited URL returns 404.
+  - **Weak orphans** — pages reachable from `index.md` but only via
+    a single hub page; degrade-resilience signal.
+  - **Missing cross-links** — entities (proper nouns, function/file
+    names) that appear in N pages but aren't cross-linked.
+- **Exit codes:** 0 if all passes clean; 1 if structural fails (same
+  as today); 2 if health fails AND `--strict`; 0 with stderr
+  warnings if health fails WITHOUT `--strict`.
+
+### Python interface
 
 ```python
+# Existing (kept as-is, Stage 1)
 @dataclass(frozen=True)
-class IngestRequest:
-    source_path: Path                      # repo-relative or absolute
-    source_kind: Literal["file", "issue", "url"]  # v1: only "file"
-    backend_name: str                      # "claude" | "codex" | "cursor" | "test" | <plugin>
-
+class IngestRequest: ...           # source_path, source_kind, backend_name
 @dataclass(frozen=True)
-class IngestProposal:
-    disposition: Literal["accept", "reject"]
-    reason: str                            # required for reject; optional rationale for accept
-    page_type: str | None                  # one of page-types.md types; None on reject
-    slug: str | None                       # kebab-case; None on reject
-    title: str | None                      # None on reject
-    draft_markdown: str | None             # full page body inc. frontmatter; None on reject
-    sources: list[dict]                    # frontmatter sources entries; may be empty on reject
+class IngestProposal: ...          # disposition, reason, page_type, slug, title, draft_markdown, sources
 
 class WikiIngestor(Protocol):
     def ingest(self, request: IngestRequest) -> IngestProposal: ...
+
+# New (Stage 2+)
+@dataclass(frozen=True)
+class PageEdit:
+    path: str                      # e.g., "concepts/origin-alignment.md"
+    action: Literal["create", "update", "append-log", "append-index"]
+    new_content: str               # full page markdown (for create/update) or one-line entry (for log/index)
+
+@dataclass(frozen=True)
+class WikiPatchSet:
+    edits: list[PageEdit]
+    source_path: Path
+    backend: str
+    rationale: str                 # one-paragraph why-this-touches-these-pages
+
+class MultiIngestor(Protocol):
+    def ingest_multi(self, request: IngestRequest, wiki_state: WikiState) -> WikiPatchSet: ...
+
+@dataclass(frozen=True)
+class WikiState:
+    index_md: str
+    log_md: str
+    candidate_pages: dict[str, str]  # path → content, for the relevant subset
+
+@dataclass(frozen=True)
+class QueryAnswer:
+    answer: str
+    citations: list[tuple[str, str]]  # (page-path, fragment)
+    pages_loaded: list[str]           # for index-first navigation auditing
+
+class Querier(Protocol):
+    def query(self, question: str) -> QueryAnswer: ...
+    def query_with_file_back(self, question: str) -> tuple[QueryAnswer, WikiPatchSet]: ...
+
+@dataclass(frozen=True)
+class HealthFinding:
+    kind: Literal["contradiction", "stale-claim", "weak-orphan", "missing-cross-link"]
+    severity: Literal["warning", "error"]
+    pages: list[str]                  # page paths involved
+    description: str                  # human-readable
+
+class HealthLinter(Protocol):
+    def lint_health(self, paths: list[str] | None) -> list[HealthFinding]: ...
 ```
 
-The default implementation composes a structured prompt from the
-schema files (`ingest-rules.md`, `page-types.md`,
-`citation-rules.md`), invokes the backend via JSON-over-stdio,
-parses the response, and returns the typed `IngestProposal`.
+## Reuse map (Stage 1 → Stage 2+)
 
-### Backend contract (JSON-over-stdio)
+The `scripts/wiki_ingest/` package built under the v1 spec stays. The
+new operations grow as siblings, not replacements:
 
-A backend is any executable on `PATH` (or any Python callable
-registered as a plugin) that:
+| Existing module | Fate |
+|---|---|
+| `__main__.py` | grow a verb dispatcher (`ingest|promote|query|lint`); existing single-arg behavior moves behind `--legacy-single-source`. |
+| `ingestor.py` | split into `ingestor_single.py` (current `DefaultIngestor` — the legacy path) and `ingestor_multi.py` (new — wiki-aware multi-page generator). |
+| `prompt.py::compose_prompt` | kept for the legacy path. New: `compose_multi_prompt` (loads wiki state), `compose_query_prompt`, `compose_health_prompt`. |
+| `prompt.py::_parse_frontmatter`, `_parse_simple_yaml`, `_unquote`, `_sources_equal` | extract to new `yaml_lite.py`; all four operations import it. |
+| `prompt.py::_validate_shape`, `_validate_semantics` | reused per-page inside the patch-set generator (every page edit goes through the same validation). |
+| `backends/json_extract.py` | keep as-is. |
+| `backends/copilot_cli.py` | keep, with these required fixes from the external review: cursor backend uses `cursor-agent -p` (not `cursor -p`); codex backend uses `codex exec` (not `codex -p`); claude stays on `claude -p`. Stderr redaction by default; `--debug-unsafe-output` for full text. Real `--dry-run` (passes `task: gate-only` to the backend). |
+| `backends/test.py` | extend to dispatch on `prompt["task"]`; return deterministic responses for `ingest`, `ingest-multi`, `query`, `lint-health`. |
+| `proposal.py::IngestProposal` | keep for legacy path. New `WikiPatchSet`, `PageEdit`, `WikiState`, `QueryAnswer`, `HealthFinding`. |
+| `errors.py` | add `WikiStateError`, `KnowledgeHealthError`. Reuse the existing exit-code taxonomy. |
+| `tests/` | keep all existing tests. Add per-operation suites alongside (`test-wiki-ingest-multi.sh`, `test-wiki-promote.sh`, `test-wiki-query.sh`, `test-wiki-health-lint.sh`). |
 
-1. Accepts a single JSON object on stdin matching the
-   `BackendPrompt` schema below.
-2. Writes a single JSON object on stdout matching the
-   `BackendResponse` schema below.
-3. Exits 0 on success, non-zero on backend failure (the pipeline
-   surfaces backend stderr in the error message).
+New modules required:
 
-```json
-// BackendPrompt — what the pipeline sends to the backend
-{
-  "version": 1,
-  "system_instructions": "<schema-derived prelude>",
-  "task": "ingest",
-  "schema_excerpts": {
-    "ingest_rules": "<contents of schema/ingest-rules.md>",
-    "page_types":   "<contents of schema/page-types.md>",
-    "citation_rules": "<contents of schema/citation-rules.md>"
-  },
-  "source": {
-    "kind": "file",
-    "path": "<repo-relative path>",
-    "content": "<source file body, UTF-8>"
-  },
-  "response_schema": "<inline JSON Schema for BackendResponse>"
-}
-```
-
-```json
-// BackendResponse — what the backend must return on stdout
-{
-  "version": 1,
-  "disposition": "accept",
-  "reason": "<short prose>",
-  "page_type": "incident",
-  "slug": "spec-code-coherence-drift",
-  "title": "Spec/Code Coherence Drift",
-  "draft_markdown": "---\npage_type: incident\n…",
-  "sources": [
-    {"path": "specs/foo/spec.md", "sha": "abc1234"},
-    {"pr": "gosha70/rlmkit#30"}
-  ]
-}
-```
-
-The pipeline validates the response in **two layers**:
-
-1. **Shape (JSON-schema).** `BackendResponse` matches the inline
-   schema: required keys present, values of expected types,
-   `disposition` ∈ `{accept, reject}`, etc. A shape failure raises
-   `ContractViolation` (exit 4).
-
-2. **Semantic cross-consistency.** When `disposition == "accept"`,
-   the pipeline must also parse the YAML frontmatter embedded in
-   `draft_markdown` and assert that:
-
-   - `draft_markdown` starts with a `---`-fenced YAML frontmatter
-     block (per `knowledge/wiki/schema/page-types.md` universal
-     frontmatter format).
-   - The frontmatter's `page_type` equals the structured-field
-     `page_type`.
-   - The frontmatter's `slug` equals the structured-field `slug`.
-   - The frontmatter's `title` equals the structured-field
-     `title`.
-   - The frontmatter's `sources:` entries equal the structured-
-     field `sources` (set equality; order is not significant).
-   - The structured-field `slug` is kebab-case.
-   - The structured-field `slug`-and-`page_type` pair satisfies
-     the directory-placement rule the wiki linter would later
-     enforce (`page_type: incident` ⇒ destined for `incidents/`,
-     etc.; the special case for `glossary/index.md` applies if
-     `slug == "glossary"`).
-   - The structured-field `sources` list is non-empty (the wiki
-     linter will reject any non-index/log page without sources;
-     a draft proposal that violates this is dead on arrival).
-
-   Any semantic-validation failure raises `ContractViolation`
-   (exit 4) with a message naming the specific mismatch (e.g.,
-   `draft_markdown.frontmatter.page_type ('concept') ≠ structured
-   page_type ('incident')`). The pipeline does **not** attempt to
-   silently reconcile mismatches — the curator must see that the
-   backend is producing inconsistent output.
-
-The semantic validation is what protects the curator from
-proposals that pass JSON-shape checks but would fail the wiki
-linter, the schema templates, or basic frontmatter sanity. It is
-not optional.
-
-### Default backend: copilot-CLI subprocess
-
-Auto-detect order: `claude` → `codex` → `cursor`. The first one
-found on `PATH` is selected unless overridden by `--backend <name>`
-or `WIKI_INGEST_BACKEND` (see "Backend selection precedence" above).
-
-The default backend wraps the chosen CLI with a documented prompt
-template. The prompt:
-
-- Frames the task as "act as the wiki curator persona; read the
-  schema excerpts in this prompt; apply the four-question gate to
-  the source; if it passes, draft a typed page; if not, return a
-  reject disposition with reason."
-- Specifies the JSON response schema inline, with explicit
-  instructions to emit exactly one JSON object on stdout and
-  nothing else (preferably wrapped in a `\`\`\`json … \`\`\`` fence
-  to make extraction unambiguous).
-- Includes the source file content verbatim.
-- Includes the v0.2 schema files inline (read from disk at runtime,
-  not embedded in source).
-
-The default backend is the **adapter layer** between the
-pipeline's JSON contract and a CLI that returns free-form text.
-It is responsible for extracting the JSON object from CLI output.
-
-### JSON-extraction module
-
-JSON extraction from free-form CLI output is the highest-iteration
-risk in v1: real `claude` / `codex` / `cursor` output shapes vary,
-and the heuristic will likely need 2–3 refinements as we encounter
-real cases. To keep that iteration cheap, **extraction lives in its
-own module** (`scripts/wiki_ingest/backends/json_extract.py`) with
-its own focused test file (`tests/test_json_extract.py`). The
-subprocess plumbing in `copilot_cli.py` calls into the extractor
-but knows nothing about its strategy.
-
-**Extraction strategy (in order):**
-
-1. **Fenced code block.** Look for the first ` ```json … ``` ` block
-   (or fallback ` ``` … ``` ` if the language tag is missing); parse
-   its contents as JSON.
-2. **Balanced-brace fallback.** If no fence is found, scan stdout
-   for the first balanced top-level `{…}` block (tracking nesting,
-   ignoring braces inside string literals).
-
-The fenced-block-first order handles the most common LLM output
-shape (JSON wrapped in a markdown fence) without false-matching on
-prose-embedded JSON-like fragments. Both strategies must validate
-that the extracted text is actually parseable JSON before returning
-it; an extractor that returns "looks-like-JSON" text and lets
-`parse_response` fail downstream is harder to debug than one that
-fails fast at extraction time with the offending stdout attached.
-
-Test coverage for the extractor must include at minimum:
-
-- Bare JSON object as entire stdout
-- JSON inside ` ```json … ``` `
-- JSON inside ` ``` … ``` ` (no language tag)
-- JSON after a prose preamble ("Here's my analysis: { … }")
-- JSON before a prose afterword ("{ … } I hope this is helpful.")
-- Multiple JSON-looking blocks where only the actual response is
-  the real one (e.g., the prompt echoed back, then the answer)
-- Nested objects in prose explanation followed by the actual
-  response object later
-
-When extraction fails on a real CLI's output, **stop and report the
-concrete failing stdout**. Do not iterate the heuristic
-in-loop without a test case that pins the failure shape.
-
-### Test backend
-
-A deterministic in-process backend used by the test suite:
-
-- Accepts the same `BackendPrompt` shape.
-- Returns a fixed `BackendResponse` derived from the source
-  content's first H1 (page-type and slug derived deterministically).
-- No subprocess, no LLM call.
-- Selected via `--backend test`. Must not be selected by
-  auto-detect.
-
-## CLI surface
-
-```
-./scripts/wiki-ingest <source-path>          # default backend, accept-or-reject, full draft
-./scripts/wiki-ingest --dry-run <source>     # gate only; do not request a draft
-./scripts/wiki-ingest --backend test <src>   # use test backend (CI / fixture)
-./scripts/wiki-ingest --backend claude <src> # explicit backend selection
-./scripts/wiki-ingest --output-dir <dir>     # override doc_internal/proposals/
-./scripts/wiki-ingest --help
-```
-
-### Backend selection precedence
-
-Backend is resolved in this order, first match wins:
-
-1. `--backend <name>` CLI flag.
-2. `WIKI_INGEST_BACKEND` environment variable.
-3. Auto-detect: `claude` → `codex` → `cursor` (first one on `PATH`).
-
-The env-var override is for the developer with multiple copilots
-installed who wants to dogfood against a non-default CLI without
-editing code:
-
-```bash
-./scripts/wiki-ingest <source>                              # auto-detect
-WIKI_INGEST_BACKEND=codex ./scripts/wiki-ingest <source>    # env override
-WIKI_INGEST_BACKEND=test ./scripts/wiki-ingest <source>     # tests
-./scripts/wiki-ingest --backend codex <source>              # CLI flag wins
-```
-
-If the CLI flag and env var disagree, the flag wins (it is the more
-specific signal). If neither is set and no copilot CLI is on `PATH`,
-the pipeline exits with `BackendNotFoundError` (exit 2).
-
-### Entrypoint mechanics
-
-The script is `scripts/wiki-ingest` (no extension; matches existing
-script convention). Internally it sets
-`PYTHONPATH=<repo>/scripts` and `exec`s `python3 -m wiki_ingest
-"$@"` — the module-form invocation is required so relative imports
-inside the package resolve. (Running the directory or
-`__main__.py` as a script would fail with `attempted relative
-import with no known parent package` the moment any module does
-`from .errors import …`.) Python 3.10+ required; documented in
-`knowledge/README.md`.
-
-## Output
-
-One proposal file per invocation, written to
-`doc_internal/proposals/<YYYY-MM-DD>-<slug>.md`. The proposal
-file contains:
-
-```markdown
----
-proposal_kind: <accept | reject>
-proposal_date: 2026-05-04
-source_path: rlmkit/doc_internal/specs/foo.md
-backend: claude
-ingestor_version: 1
-gate_disposition: <accept | reject>
-gate_reason: <short prose>
-target_slug: <slug or empty>
-target_page_type: <type or empty>
----
-
-<for accept: the full proposed wiki page body, ready to drop into knowledge/wiki/<dir>/<slug>.md>
-
-<for reject: a short prose explanation of which gate question failed and why>
-```
-
-For accept proposals, the body is verbatim what would be saved to
-the wiki — the curator can `cp` it into place once approved (or run
-`/promote-lesson` against the proposal path).
-
-`doc_internal/proposals/` is gitignored in v1.
-
-## Error semantics
-
-The pipeline distinguishes:
-
-1. **Backend not found.** All auto-detect candidates absent; or the
-   explicitly-named backend not on `PATH` and not registered as a
-   plugin. Exit 2; message names the backends tried and points at
-   `--backend test`.
-2. **Backend invocation failure.** Backend exits non-zero. Exit 3;
-   message includes the backend's stderr (truncated to 2 KiB).
-3. **Contract violation.** Backend stdout cannot be parsed as JSON,
-   or fails the `BackendResponse` schema validation. Exit 4;
-   message names the failing schema field and prints the offending
-   stdout (truncated).
-4. **Source missing or unreadable.** Exit 5.
-5. **Output directory write failure.** Exit 6.
-6. **Successful run, gate accept.** Exit 0; print absolute path of
-   the proposal file.
-7. **Successful run, gate reject.** Exit 0; print absolute path of
-   the proposal file (a reject is a successful pipeline outcome —
-   the gate did its job).
-
-Exit codes are documented in `--help` and stable across v1.
+- `scripts/wiki_ingest/wiki_state.py` — loads `index.md`, `log.md`,
+  and a candidate set of relevant pages into `WikiState`.
+- `scripts/wiki_ingest/promoter.py` — the only writer to
+  `knowledge/wiki/`; atomic patch-set application + structural-lint
+  gate.
+- `scripts/wiki_ingest/querier.py` — index-first navigation + answer
+  synthesis + optional file-back.
+- `scripts/wiki_ingest/health_lint.py` — knowledge-health lint
+  (contradictions, stale claims, weak orphans, missing cross-links).
+- `scripts/wiki` — new shell wrapper alongside the existing
+  `scripts/wiki-ingest` (kept as backwards-compat alias).
 
 ## Requirements
 
-1. **Python 3.10+ only.** Stdlib only — no `pip install` step. Type
-   hints, `dataclasses`, `argparse`, `subprocess`, `json`,
-   `pathlib`, `tempfile` are sufficient. The decision to introduce
-   Python (the rest of the repo's scripts are Bash) is deliberate
-   and justified by the JSON + subprocess + structured-prompt
-   shape; documented in `knowledge/README.md`.
-2. **`WikiIngestor` protocol** as defined above, with concrete
-   types (`IngestRequest`, `IngestProposal`).
-3. **JSON-over-stdio backend contract** with version field,
-   inline response schema, explicit error semantics, **and the
-   two-layer validation specified above (shape + semantic
-   cross-consistency between structured fields and the YAML
-   frontmatter embedded in `draft_markdown`)**.
-4. **One default backend** (copilot-CLI subprocess) with documented
-   auto-detect order: `claude` → `codex` → `cursor`.
-   Backend selection precedence: `--backend` flag, then
-   `WIKI_INGEST_BACKEND` env var, then auto-detect.
-5. **Isolated JSON-extraction module.** The default backend's
-   JSON-extraction logic lives in
-   `scripts/wiki_ingest/backends/json_extract.py` with its own
-   focused test file `tests/test_json_extract.py` covering at
-   minimum the seven cases listed in "JSON-extraction module"
-   above. The subprocess plumbing in `copilot_cli.py` calls into
-   the extractor but knows nothing about its strategy. This
-   isolation is mandatory so the extractor can be iterated
-   independently of subprocess plumbing as real CLI output shapes
-   are encountered.
-6. **Test backend** that the test suite uses end-to-end, with a
-   committed fixture source file and a deterministic expected
-   proposal.
-7. **`./scripts/wiki-ingest` CLI wrapper** with the flags listed
-   under "CLI surface", `--help` documenting all of them and the
-   exit codes. Resolves backend per the documented precedence
-   (CLI flag → `WIKI_INGEST_BACKEND` env → auto-detect).
-8. **Output to `doc_internal/proposals/<date>-<slug>.md`**, with
-   the documented proposal file frontmatter; ensure
-   `doc_internal/proposals/` is gitignored.
-9. **Documentation:**
-   - Update `knowledge/README.md` with a "Running ingest" section.
-   - Add `knowledge/wiki/workflows/run-wiki-ingest.md` (page type
-     `workflow`) covering when to use it, how it differs from
-     manual promotion, and verification steps. Promote via the
-     atomic-cluster recipe (one workflow page → one index entry →
-     one log entry → one lint pass).
-10. **Tests:**
-    - Unit tests for prompt composition and response parsing.
-    - Unit tests for `json_extract.py` covering all seven cases
-      listed in "JSON-extraction module".
-    - End-to-end test using `--backend test` against the fixture
-      source; assert exit code 0, assert proposal file exists with
-      expected frontmatter and body shape.
-    - Negative tests: backend not found, contract violation, source
-      missing.
-    - Wired into CI via the existing test runner in `tests/`.
+1. **Four verbs.** `./scripts/wiki ingest|promote|query|lint`, all
+   wired through the same Python package
+   (`scripts/wiki_ingest/__main__.py`).
 
-## Constraints
+2. **Multi-page ingest.** `wiki ingest <source>` produces a
+   `WikiPatchSet` with at least one `index_update` and `log_append`
+   entry; one source can touch ≥ 1 existing or new page. The
+   prompt MUST include the loaded `WikiState`.
 
-1. **No automatic merging into `knowledge/wiki/`.** The pipeline
-   only writes under `doc_internal/proposals/`. Human approval
-   remains gating.
-2. **No new third-party dependencies.** Stdlib Python only.
-   Backends remain pluggable so a contributor *can* add an SDK
-   adapter without changing the pipeline.
-3. **No new top-level directory.** The pipeline lives at
-   `scripts/wiki-ingest` (entrypoint) and `scripts/wiki_ingest/`
-   (Python package). No `src/` or `pkg/` for one feature.
-4. **No bypass of `knowledge/wiki/scripts/lint-wiki.sh`.** This
-   issue does not edit any committed wiki page; the linter must
-   continue to exit 0 against the wiki at every step. The new
-   `workflows/run-wiki-ingest.md` page is the only addition and
-   must lint clean before commit.
-5. **Backend prompts read schema files at runtime.** The prompt
-   loader reads `knowledge/wiki/schema/{ingest-rules,page-types,citation-rules}.md`
-   from disk on every invocation. Do not embed schema text in
-   Python source — that would drift the moment a v0.3 schema
-   patch lands.
-6. **`doc_internal/proposals/` is gitignored.** The
-   `.gitignore` already covers `doc_internal/`; verify and
-   document. Proposals are unfinished work and must not pollute
-   the tracked tree.
-7. **No telemetry, no network calls from the pipeline itself.**
-   The default backend invokes a copilot CLI which may make
-   network calls; that is the user's choice. The pipeline layer
-   does not.
-8. **Manual CLI only in v1.** No hooks, no watchers, no
-   schedulers. Future hook integration is a v2 issue.
-9. **Validate-spec compliance.**
-   `scripts/validate-spec.sh --feature-id wiki-ingest-pipeline`
-   must pass.
+3. **Promote = only writer.** `wiki promote` is the ONLY code path
+   in the repo that writes to `knowledge/wiki/`. Atomic application;
+   structural-lint gate; rollback on lint failure.
 
-## Acceptance criteria
+4. **Query reads index first.** `wiki query` reads
+   `knowledge/wiki/index.md` and follows links to relevant pages;
+   it must NOT load the full wiki into context. The pages-loaded
+   list is recorded in `doc_internal/wiki-query-log.jsonl` for audit.
 
-- [ ] `./scripts/wiki-ingest scripts/wiki_ingest/tests/fixtures/sample-incident.md --backend test`
-      writes a syntactically valid proposal to
-      `doc_internal/proposals/<today>-<slug>.md` and exits 0.
-- [ ] The proposal frontmatter contains `proposal_kind`,
-      `gate_disposition`, `target_slug`, `target_page_type`, and
-      the proposal body for an `accept` proposal contains a
-      complete wiki-page-shaped frontmatter block compatible with
-      `knowledge/wiki/schema/page-types.md`.
-- [ ] Negative tests pass for: backend-not-found (exit 2),
-      contract-violation (exit 4), source-missing (exit 5).
-- [ ] `bash scripts/validate-spec.sh --feature-id wiki-ingest-pipeline` passes.
-- [ ] `bash knowledge/wiki/scripts/lint-wiki.sh` continues to
-      exit 0 (the new `workflows/run-wiki-ingest.md` page passes).
-- [ ] `knowledge/README.md` documents the pipeline in a "Running
-      ingest" section.
-- [ ] Existing test suites (`tests/test-shared-structure.sh`,
-      `tests/test-generate.sh`, etc.) continue to pass with no
-      count adjustments — this issue does not change `shared/skills/`
-      or generator output.
+5. **Knowledge-health lint.** `wiki lint --health` adds four checks
+   on top of the structural linter: contradictions, stale claims,
+   weak orphans, missing cross-links. Default advisory; `--strict`
+   for CI gating.
+
+6. **Backwards compatibility.** `./scripts/wiki-ingest <source>`
+   continues to produce the v1 single-source proposal at
+   `doc_internal/proposals/<date>-<slug>.md`. All existing v1 tests
+   pass. The legacy path is also available as
+   `./scripts/wiki ingest --legacy-single-source <source>`.
+
+7. **Reuse, not rewrite.** All Stage 1 modules are kept; new
+   operations grow as siblings. No fork.
+
+8. **Adapter fixes from the external review.** Cursor backend uses
+   `cursor-agent -p`; codex backend uses `codex exec`; stderr
+   redacted by default; real `--dry-run` skips the body generation
+   by passing `task: gate-only` through the prompt.
+
+9. **Test backend dispatches on task.** The deterministic test
+   backend handles `ingest`, `ingest-multi`, `query`, `lint-health`
+   with fixed responses; all four operations have a CI-safe path
+   from day one.
+
+10. **Stdlib-only Python.** No third-party deps. `dataclasses`,
+    `argparse`, `subprocess`, `json`, `pathlib`, `tempfile`, `re`.
+
+11. **Bash 3.2 + awk for any new scripts.** Matches the repo
+    convention (`lint-wiki.sh`, `check-origin-alignment.sh`).
+
+12. **Origin alignment passes.** `bash scripts/check-origin-alignment.sh
+    wiki-ingest-pipeline` exits 0 (`aligned, high`) before this spec
+    is approved (status: draft → approved).
+
+## Constraints / What NOT to Build
+
+1. **No automatic merging into `knowledge/wiki/`.** `promote` is
+   curator-triggered; never run on commit, never run by a hook.
+
+2. **No file-watcher / scheduler / cron.** All four operations are
+   manual CLI only.
+
+3. **No third-party LLM SDK dependencies.** Subprocess invocation of
+   existing copilot CLIs (claude, codex, cursor) remains the default.
+   SDK adapters are a v1.x extension, written by contributors against
+   the documented JSON-over-stdio contract.
+
+4. **No vector store, no embeddings.** Karpathy's gist explicitly
+   notes the pattern works at moderate scale without a vector DB.
+   Index-first navigation is the retrieval primitive. Adding a vector
+   DB is a separate, deferred optimization.
+
+5. **No new top-level directory.** All code lives under the existing
+   `scripts/wiki_ingest/` package.
+
+6. **No bypass of the structural linter.**
+   `knowledge/wiki/scripts/lint-wiki.sh` continues to gate every
+   `promote` invocation. If it's wrong, fix it in a separate change.
+
+7. **No silent overrides for backend mismatches.** If a backend's CLI
+   contract is wrong (e.g., the cursor adapter calling `cursor -p`
+   instead of `cursor-agent -p`), fix the adapter — never mask the
+   error and continue.
+
+8. **No coupling to a single copilot.** All four operations work
+   identically across the test backend, claude, codex, and cursor.
+   `WIKI_INGEST_BACKEND` env var and `--backend` flag continue to
+   override auto-detect.
+
+9. **Origin frontmatter immutability.** The `origin:` block in
+   `plan.md` is immutable except via an explicit `origin-amendment:`
+   commit. Other commits that touch the block fail validation.
+
+## Key Entities
+
+- **WikiState** — the working memory loaded into the multi-page ingest
+  prompt: `index.md`, `log.md`, plus a bounded candidate set of
+  existing pages selected by relevance to the source. Without
+  `WikiState`, ingest cannot integrate; with it, ingest compounds.
+- **WikiPatchSet** — the multi-page output of `ingest`: a list of
+  `PageEdit` records plus `index_update`/`log_append`. Atomic unit of
+  promotion.
+- **PageEdit** — one (path, action, content) record. Action is one of
+  `create`, `update`, `append-log`, `append-index`.
+- **QueryAnswer** — the structured output of `query`: answer text plus
+  citations plus the audit list of pages loaded.
+- **HealthFinding** — one finding from the knowledge-health lint pass:
+  kind, severity, pages involved, description.
+- **IngestProposal** — kept, unchanged, for the legacy single-source
+  path. Continues to satisfy the v1 contract documented in this
+  spec's earlier revisions (preserved in git history).
+
+## Success Criteria
+
+The spec is approved (status `draft` → `approved`) when:
+
+- `bash scripts/check-origin-alignment.sh wiki-ingest-pipeline` exits
+  0 with verdict `aligned, high`. The post-rescope alignment record is
+  the gate: until it lands, this spec stays `draft`.
+- `bash scripts/validate-spec.sh --feature-id wiki-ingest-pipeline`
+  exits 0.
+- `plan.md` carries the phased delivery plan (Phase 0 relabel +
+  hardening; Phase 1 multi-page ingest; Phase 2 promote; Phase 3 query;
+  Phase 4 health-lint).
+- `tasks.md` carries bounded, independently-verifiable tasks per phase.
+
+The feature is delivered (PR-by-PR) when, after each phase merges:
+
+- All existing tests continue to pass (1437+ assertions across the
+  current suite).
+- The new operation's test suite exits 0 against the deterministic
+  test backend.
+- `bash knowledge/wiki/scripts/lint-wiki.sh` continues to exit 0.
+- The legacy `./scripts/wiki-ingest <source>` path continues to work
+  identically — zero regressions for v1 callers.
 
 ## Sources
 
-- `path: knowledge/wiki/schema/ingest-rules.md` (v0.2)
-- `path: knowledge/wiki/schema/page-types.md` (v0.2)
-- `path: knowledge/wiki/schema/citation-rules.md` (v0.2)
-- `path: knowledge/wiki/workflows/promote-lesson-to-wiki.md` (v0.2)
-- `path: scripts/validate-spec.sh`
-- `pr: 26` — v0.2 schema patches PR
-- `issue: 12` — wiki groundwork prerequisite
-- Local-only `doc_internal/dogfood-learnings.md` — friction findings
-  F1/F4/F5 are addressed by the v0.2 schema patches the pipeline
-  consumes; the "automated ingest pipeline" recommendation in that
-  doc is the direct origin of this spec.
+- `pr: 27` — the v1 substrate this rescope builds on.
+- `issue: gosha70/code-copilot-team#12` — origin: LLM Wiki Groundwork.
+- `issue: 28` — this spec.
+- `url: https://gist.github.com/karpathy/3ef5df0e1ee5d36d59b29eb91f8d35c1`
+  retrieved: 2026-05-06 — origin: the Karpathy LLM Wiki gist.
+- `path: specs/wiki-ingest-pipeline/origin-alignment-2026-05-06-1919.md`
+  — derailment record that motivated this rescope.
+- `path: specs/origin-confirmation-circuit-breaker/origin/external-review.md`
+  — independent diagnosis of the v1 derailment.
+- `path: knowledge/wiki/schema/WIKI_MAINTAINER.md` — curator persona.
+- `path: knowledge/wiki/schema/ingest-rules.md`,
+  `path: knowledge/wiki/schema/page-types.md`,
+  `path: knowledge/wiki/schema/citation-rules.md`,
+  `path: knowledge/wiki/schema/lint-rules.md` — schema files that
+  every operation reads.
