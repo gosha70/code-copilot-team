@@ -110,6 +110,143 @@ class WikiPatchSet:
     rationale: str
 
 
+# Promotable wiki page types — the only types valid as the target of a
+# create or update edit. Root-only meta types (index, log, overview)
+# cannot be (re)created via ingest; they are touched via append-index /
+# append-log only. Mirrors prompt.py::_PROMOTABLE_PAGE_TYPES.
+_PROMOTABLE_PAGE_TYPES: frozenset[str] = frozenset({
+    "concept", "workflow", "incident", "decision",
+    "playbook", "glossary", "open-question",
+})
+
+
+def validate_page_edit_semantics(
+    edit: "PageEdit",
+    repo_root: Path,
+) -> list[str]:
+    """Per-edit semantic validation.
+
+    Mirrors the v1 two-layer validation pattern (shape + semantic
+    cross-consistency) at the per-edit grain so multi-page ingest
+    can't slip frontmatter mismatches through under the cover of the
+    set-level check.
+
+    For ``create`` and ``update`` actions, parses the new_content's
+    YAML frontmatter and asserts:
+      - frontmatter is well-formed;
+      - page_type, slug, title are present;
+      - frontmatter slug equals the filename stem;
+      - page_type is a promotable type (not index/log/overview);
+      - sources is a non-empty list (per citation-rules.md);
+      - the path lives under the directory matching page_type
+        (concepts/ for concept, etc.).
+
+    For ``update`` specifically, additionally asserts the target file
+    actually exists under ``knowledge/wiki/<path>`` (otherwise the
+    edit is an unintended create masquerading as an update).
+
+    For ``append-log`` and ``append-index``, frontmatter parsing is
+    skipped (the new_content is a single bullet line, not a full
+    page). The append targets are already enforced by
+    validate_patch_set.
+
+    Returns a list of error strings; empty list means valid.
+    """
+    # Avoid circular import
+    from . import yaml_lite
+    from .errors import ContractViolationError
+
+    errors: list[str] = []
+
+    if edit.action in ("append-log", "append-index"):
+        if not edit.new_content.strip():
+            errors.append(f"{edit.path}: append content is empty")
+        return errors
+
+    # create / update: parse frontmatter from new_content
+    try:
+        fm = yaml_lite.parse_frontmatter(edit.new_content)
+    except ContractViolationError as exc:
+        errors.append(f"{edit.path}: frontmatter parse failed: {exc}")
+        return errors
+
+    fm_page_type = fm.get("page_type")
+    fm_slug = fm.get("slug")
+    fm_title = fm.get("title")
+
+    if not fm_page_type:
+        errors.append(f"{edit.path}: frontmatter missing 'page_type'")
+    if not fm_slug:
+        errors.append(f"{edit.path}: frontmatter missing 'slug'")
+    if not fm_title:
+        errors.append(f"{edit.path}: frontmatter missing 'title'")
+
+    # slug == filename stem
+    expected_stem = Path(edit.path).stem
+    if fm_slug and fm_slug != expected_stem:
+        # Special case: <dir>/index.md → slug equals parent dir name
+        # (per the wiki linter). Glossary index in particular.
+        parent = Path(edit.path).parent.name
+        if expected_stem == "index" and parent and fm_slug == parent:
+            pass
+        else:
+            errors.append(
+                f"{edit.path}: frontmatter slug {fm_slug!r} should be "
+                f"{expected_stem!r} (filename stem rule)"
+            )
+
+    # page_type must be promotable (not index/log/overview)
+    if fm_page_type and fm_page_type not in _PROMOTABLE_PAGE_TYPES:
+        valid = ", ".join(sorted(_PROMOTABLE_PAGE_TYPES))
+        errors.append(
+            f"{edit.path}: frontmatter page_type {fm_page_type!r} is not "
+            f"promotable for create/update; must be one of: {valid}. "
+            f"Root-only types (index, log, overview) are touched via "
+            f"append-index / append-log."
+        )
+
+    # page_type matches directory placement
+    page_type_to_dir = {
+        "concept": "concepts",
+        "workflow": "workflows",
+        "incident": "incidents",
+        "decision": "decisions",
+        "playbook": "playbooks",
+        "glossary": "glossary",
+        "open-question": "open-questions",
+    }
+    if fm_page_type and fm_page_type in page_type_to_dir:
+        expected_dir = page_type_to_dir[fm_page_type]
+        actual_dir = Path(edit.path).parent.as_posix() or "."
+        if actual_dir != expected_dir:
+            errors.append(
+                f"{edit.path}: page_type {fm_page_type!r} should live "
+                f"under {expected_dir}/ but path is in {actual_dir}/"
+            )
+
+    # sources must be non-empty (per citation-rules.md — every page
+    # except index.md and log.md must declare its sources)
+    sources = fm.get("sources") or []
+    if not isinstance(sources, list) or not sources:
+        errors.append(
+            f"{edit.path}: frontmatter 'sources:' must be a non-empty "
+            f"list (citation-rules.md: 'A wiki page without sources is "
+            f"a rumor.')"
+        )
+
+    # update target must exist on disk
+    if edit.action == "update":
+        target = repo_root / "knowledge" / "wiki" / edit.path
+        if not target.exists():
+            errors.append(
+                f"{edit.path}: update target does not exist at "
+                f"{target.relative_to(repo_root)}; use action 'create' "
+                f"for new pages"
+            )
+
+    return errors
+
+
 def validate_patch_set(patch: WikiPatchSet) -> list[str]:
     """Return a list of validation errors (empty list = valid).
 

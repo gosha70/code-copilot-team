@@ -34,6 +34,7 @@ from .proposal import (
     IngestRequest,
     PageEdit,
     WikiPatchSet,
+    validate_page_edit_semantics,
     validate_patch_set,
 )
 from .wiki_state import load_wiki_state
@@ -137,7 +138,25 @@ class DefaultMultiIngestor:
             rationale=str(validated.get("rationale", "")),
         )
 
-        # 7. Set-level validation.
+        # 7a. Per-edit semantic validation. Mirrors v1 two-layer
+        #     validation at the per-edit grain so frontmatter mismatches,
+        #     missing sources, root-only page types as create targets,
+        #     and updates to non-existent pages all fail fast — before
+        #     the curator sees a patch-set that would later fail the
+        #     wiki linter at promote time.
+        if patch.edits:
+            per_edit_errors: list[str] = []
+            for edit in patch.edits:
+                per_edit_errors.extend(
+                    validate_page_edit_semantics(edit, self._repo_root)
+                )
+            if per_edit_errors:
+                raise ContractViolationError(
+                    "WikiPatchSet failed per-edit semantic validation:\n  - "
+                    + "\n  - ".join(per_edit_errors)
+                )
+
+        # 7b. Set-level validation.
         # Empty edits is OK (gate reject); only fail if non-empty edits
         # have invariant violations.
         if patch.edits:

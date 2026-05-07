@@ -95,6 +95,7 @@ def _render_plain_text_prompt(backend_prompt: dict[str, Any]) -> str:
     system_instructions = backend_prompt.get("system_instructions", "")
     schema_excerpts = backend_prompt.get("schema_excerpts", {})
     source = backend_prompt.get("source", {})
+    wiki_state = backend_prompt.get("wiki_state", {})
     response_schema = backend_prompt.get("response_schema", "")
     task = backend_prompt.get("task", "ingest")
 
@@ -122,6 +123,51 @@ def _render_plain_text_prompt(backend_prompt: dict[str, Any]) -> str:
     lines.append("")
     lines.append(source.get("content", ""))
     lines.append("")
+
+    # Phase-1 multi-page ingest: render the existing wiki state so the
+    # backend can integrate with it. compose_multi_prompt populates this
+    # block; compose_prompt (Stage-1 single-source) does not, so the
+    # block is omitted unless wiki_state has any non-empty content. A
+    # bug fix landed here after a reviewer caught that the multi-page
+    # prompt dict carried wiki_state but the renderer dropped it on the
+    # floor — Phase 1 was wiki-aware in test backends only until this
+    # block was added.
+    if wiki_state and (
+        wiki_state.get("index_md")
+        or wiki_state.get("log_md")
+        or wiki_state.get("candidate_pages")
+    ):
+        lines.append("=== EXISTING WIKI STATE ===")
+        lines.append(
+            "The following is the current wiki state, loaded as your "
+            "working memory. Integrate the new source with what is "
+            "already here: prefer updating an existing page over "
+            "creating a duplicate; append a one-line dated entry to "
+            "log.md; add a link from the appropriate section of "
+            "index.md whenever you create a new page."
+        )
+        lines.append("")
+        index_md = wiki_state.get("index_md", "")
+        if index_md:
+            lines.append("--- knowledge/wiki/index.md ---")
+            lines.append(index_md)
+            lines.append("")
+        log_md = wiki_state.get("log_md", "")
+        if log_md:
+            lines.append("--- knowledge/wiki/log.md ---")
+            lines.append(log_md)
+            lines.append("")
+        candidate_pages = wiki_state.get("candidate_pages", {}) or {}
+        if candidate_pages:
+            lines.append(
+                "--- candidate pages (relevance-ranked subset of the wiki, "
+                "selected by lexical overlap with the source) ---"
+            )
+            for rel_path, page_content in candidate_pages.items():
+                lines.append(f"--- knowledge/wiki/{rel_path} ---")
+                lines.append(page_content)
+                lines.append("")
+        lines.append("")
 
     lines.append("=== RESPONSE INSTRUCTIONS ===")
     lines.append(

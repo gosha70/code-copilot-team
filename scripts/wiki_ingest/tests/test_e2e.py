@@ -339,6 +339,285 @@ class TestE2EMultiPageIngest(unittest.TestCase):
             self.assertEqual(output_path.suffix, ".md")
 
 
+class TestE2ERendererIncludesWikiState(unittest.TestCase):
+    """Regression for [P1]: ``_render_plain_text_prompt`` MUST emit
+    wiki-state content. Pre-fix bug: the renderer dropped wiki_state on
+    the floor; only the in-process test backend (which reads the dict
+    directly) saw it. Real Claude/Codex/Cursor backends got nothing."""
+
+    def test_render_includes_index_log_and_candidate_pages(self) -> None:
+        from wiki_ingest.backends.copilot_cli import _render_plain_text_prompt
+
+        prompt = {
+            "version": 1,
+            "system_instructions": "be a curator",
+            "task": "ingest-multi",
+            "schema_excerpts": {
+                "ingest_rules": "RULES",
+                "page_types": "TYPES",
+                "citation_rules": "CITES",
+            },
+            "source": {
+                "kind": "file",
+                "path": "src.md",
+                "content": "# Source",
+            },
+            "wiki_state": {
+                "index_md": "# Wiki Index\n- [Foo](concepts/foo.md)\n",
+                "log_md": "- 2026-01-01 — promote foo (concept).\n",
+                "candidate_pages": {
+                    "concepts/foo.md": "---\npage_type: concept\nslug: foo\n---\n# Foo\n",
+                    "incidents/bar.md": "---\npage_type: incident\nslug: bar\n---\n# Bar\n",
+                },
+            },
+            "response_schema": "{}",
+        }
+        rendered = _render_plain_text_prompt(prompt)
+
+        self.assertIn("=== EXISTING WIKI STATE ===", rendered)
+        self.assertIn("knowledge/wiki/index.md", rendered)
+        self.assertIn("# Wiki Index", rendered)
+        self.assertIn("knowledge/wiki/log.md", rendered)
+        self.assertIn("2026-01-01 — promote foo", rendered)
+        self.assertIn("knowledge/wiki/concepts/foo.md", rendered)
+        self.assertIn("# Foo", rendered)
+        self.assertIn("knowledge/wiki/incidents/bar.md", rendered)
+        self.assertIn("# Bar", rendered)
+
+    def test_render_omits_wiki_state_block_when_empty(self) -> None:
+        """Stage-1 (single-source) prompts have no wiki_state; the block
+        must be omitted entirely so v1 prompts stay byte-identical."""
+        from wiki_ingest.backends.copilot_cli import _render_plain_text_prompt
+
+        prompt = {
+            "version": 1,
+            "system_instructions": "be a curator",
+            "task": "ingest",
+            "schema_excerpts": {
+                "ingest_rules": "RULES",
+                "page_types": "TYPES",
+                "citation_rules": "CITES",
+            },
+            "source": {"kind": "file", "path": "src.md", "content": "# X"},
+            "response_schema": "{}",
+        }
+        rendered = _render_plain_text_prompt(prompt)
+        self.assertNotIn("=== EXISTING WIKI STATE ===", rendered)
+
+
+class TestE2EPerEditSemanticValidation(unittest.TestCase):
+    """Regression for [P2]: every PageEdit's create/update content goes
+    through the same semantic validation as v1 IngestProposal frontmatter.
+    Pre-fix bug: multi-page ingest only ran shape + set-level checks,
+    so frontmatter mismatches, missing sources, root-only page types
+    used as create targets, and updates to non-existent pages all
+    slipped through to the proposal directory."""
+
+    def test_validates_frontmatter_slug_matches_filename(self) -> None:
+        from wiki_ingest.proposal import (
+            PageEdit,
+            validate_page_edit_semantics,
+        )
+        repo_root = _SCRIPTS_DIR.parent
+        bad = PageEdit(
+            path="concepts/foo.md",
+            action="create",
+            new_content=(
+                "---\n"
+                "page_type: concept\n"
+                "slug: not-foo\n"          # mismatch
+                "title: Foo\n"
+                "sources:\n"
+                "  - path: src.md\n"
+                "    sha: abc\n"
+                "---\n"
+                "# Foo\n"
+            ),
+            rationale="r",
+        )
+        errors = validate_page_edit_semantics(bad, repo_root)
+        self.assertTrue(any("slug" in e for e in errors))
+
+    def test_validates_sources_non_empty(self) -> None:
+        from wiki_ingest.proposal import (
+            PageEdit,
+            validate_page_edit_semantics,
+        )
+        repo_root = _SCRIPTS_DIR.parent
+        bad = PageEdit(
+            path="concepts/foo.md",
+            action="create",
+            new_content=(
+                "---\n"
+                "page_type: concept\n"
+                "slug: foo\n"
+                "title: Foo\n"
+                "---\n"
+                "# Foo\n"
+            ),
+            rationale="r",
+        )
+        errors = validate_page_edit_semantics(bad, repo_root)
+        self.assertTrue(any("sources" in e for e in errors))
+
+    def test_rejects_root_only_page_type_as_create_target(self) -> None:
+        from wiki_ingest.proposal import (
+            PageEdit,
+            validate_page_edit_semantics,
+        )
+        repo_root = _SCRIPTS_DIR.parent
+        bad = PageEdit(
+            path="overview.md",
+            action="create",
+            new_content=(
+                "---\n"
+                "page_type: overview\n"
+                "slug: overview\n"
+                "title: Overview\n"
+                "sources:\n"
+                "  - path: src.md\n"
+                "    sha: abc\n"
+                "---\n"
+                "# Overview\n"
+            ),
+            rationale="r",
+        )
+        errors = validate_page_edit_semantics(bad, repo_root)
+        self.assertTrue(any("promotable" in e or "page_type" in e for e in errors))
+
+    def test_rejects_update_to_nonexistent_path(self) -> None:
+        from wiki_ingest.proposal import (
+            PageEdit,
+            validate_page_edit_semantics,
+        )
+        repo_root = _SCRIPTS_DIR.parent
+        bad = PageEdit(
+            path="concepts/does-not-exist.md",
+            action="update",
+            new_content=(
+                "---\n"
+                "page_type: concept\n"
+                "slug: does-not-exist\n"
+                "title: x\n"
+                "sources:\n"
+                "  - path: src.md\n"
+                "    sha: abc\n"
+                "---\n"
+                "# x\n"
+            ),
+            rationale="r",
+        )
+        errors = validate_page_edit_semantics(bad, repo_root)
+        self.assertTrue(any("does not exist" in e for e in errors))
+
+    def test_rejects_directory_mismatch(self) -> None:
+        from wiki_ingest.proposal import (
+            PageEdit,
+            validate_page_edit_semantics,
+        )
+        repo_root = _SCRIPTS_DIR.parent
+        bad = PageEdit(
+            path="incidents/foo.md",       # path under incidents/
+            action="create",
+            new_content=(
+                "---\n"
+                "page_type: concept\n"     # but page_type is concept
+                "slug: foo\n"
+                "title: Foo\n"
+                "sources:\n"
+                "  - path: src.md\n"
+                "    sha: abc\n"
+                "---\n"
+                "# Foo\n"
+            ),
+            rationale="r",
+        )
+        errors = validate_page_edit_semantics(bad, repo_root)
+        self.assertTrue(any("concepts" in e or "incidents" in e for e in errors))
+
+    def test_well_formed_create_passes(self) -> None:
+        from wiki_ingest.proposal import (
+            PageEdit,
+            validate_page_edit_semantics,
+        )
+        repo_root = _SCRIPTS_DIR.parent
+        good = PageEdit(
+            path="incidents/foo.md",
+            action="create",
+            new_content=(
+                "---\n"
+                "page_type: incident\n"
+                "slug: foo\n"
+                "title: Foo\n"
+                "sources:\n"
+                "  - path: src.md\n"
+                "    sha: abc\n"
+                "---\n"
+                "# Foo\n"
+            ),
+            rationale="r",
+        )
+        self.assertEqual(validate_page_edit_semantics(good, repo_root), [])
+
+    def test_append_log_skips_frontmatter_validation(self) -> None:
+        """append-log content is a one-line bullet, not a full page —
+        frontmatter validation must not fire on it."""
+        from wiki_ingest.proposal import (
+            PageEdit,
+            validate_page_edit_semantics,
+        )
+        repo_root = _SCRIPTS_DIR.parent
+        good = PageEdit(
+            path="log.md",
+            action="append-log",
+            new_content="- 2026-05-06 — promote foo (concept): rationale.",
+            rationale="r",
+        )
+        self.assertEqual(validate_page_edit_semantics(good, repo_root), [])
+
+    def test_ingestor_multi_raises_on_bad_frontmatter(self) -> None:
+        """End-to-end: a backend that returns a patch with bad frontmatter
+        causes DefaultMultiIngestor.ingest_multi to raise ContractViolationError."""
+        from wiki_ingest.errors import ContractViolationError
+        from wiki_ingest.ingestor_multi import DefaultMultiIngestor
+        from wiki_ingest.proposal import IngestRequest
+
+        class _BadBackend:
+            def call(self, prompt: dict) -> dict:
+                return {
+                    "version": 1,
+                    "rationale": "test",
+                    "edits": [
+                        {
+                            "path": "concepts/x.md",
+                            "action": "create",
+                            "new_content": (
+                                "---\n"
+                                "page_type: concept\n"
+                                "slug: y\n"        # mismatch with x
+                                "title: x\n"
+                                "sources: []\n"   # empty
+                                "---\n"
+                                "# x\n"
+                            ),
+                            "rationale": "r",
+                        }
+                    ],
+                }
+
+        repo_root = _SCRIPTS_DIR.parent
+        ingestor = DefaultMultiIngestor(backend=_BadBackend(), repo_root=repo_root)
+        req = IngestRequest(
+            source_path=_SAMPLE_INCIDENT,
+            source_kind="file",
+            backend_name="bad-test-backend",
+        )
+        with self.assertRaises(ContractViolationError) as ctx:
+            ingestor.ingest_multi(req)
+        msg = str(ctx.exception)
+        self.assertIn("per-edit semantic validation", msg)
+
+
 class TestE2EWikiState(unittest.TestCase):
     """Phase 1: WikiState loads the existing wiki for the multi-page prompt."""
 
