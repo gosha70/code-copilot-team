@@ -45,16 +45,18 @@ verb.
 
 ## Phase 1 — Multi-page ingest
 
-| Capability | Status | Target |
+| Capability | Status | Where |
 |---|---|---|
-| `./scripts/wiki ingest <source>` (no `--legacy-single-source`) | ⏳ planned | Phase 1 PR |
-| `WikiState` (loads index.md, log.md, candidate pages) | ⏳ planned | `wiki_state.py` |
-| `WikiPatchSet` / `PageEdit` data types | ⏳ planned | `proposal.py` extension |
-| `compose_multi_prompt` (wiki-aware) | ⏳ planned | `prompt.py` extension |
-| `ingestor_multi.py` orchestration | ⏳ planned | new module |
-| Patch-set output: `plan.json` + `preview/<rel>.md` | ⏳ planned | `doc_internal/proposals/<date>-<source-slug>/` |
-| Test backend dispatches on `task: ingest-multi` | ⏳ planned | `backends/test.py` extension |
-| `tests/test-wiki-ingest-multi.sh` | ⏳ planned | new |
+| `./scripts/wiki ingest <source>` (no `--legacy-single-source`) | ✓ delivered | verb dispatcher routes to `DefaultMultiIngestor` (`__main__.py::_do_ingest_multi`) |
+| `WikiState` (loads index.md, log.md, candidate pages) | ✓ delivered | `scripts/wiki_ingest/wiki_state.py` (`load_wiki_state` with token-overlap relevance ranking) |
+| `WikiPatchSet` / `PageEdit` data types | ✓ delivered | `scripts/wiki_ingest/proposal.py` |
+| `compose_multi_prompt` (wiki-aware) | ✓ delivered | `scripts/wiki_ingest/prompt.py::compose_multi_prompt`; renderer in `backends/copilot_cli.py` emits an `=== EXISTING WIKI STATE ===` block (post-review fix `ddada06`) so real subprocess backends actually receive index/log/candidate content |
+| Reference fences neutralised in rendered prompt | ✓ delivered | `_neutralize_extractor_fences` rewrites opening ` ```json ` → ` ```ref-json ` in source + wiki-state content so prompt-echo cannot capture reference fences as the model's response (post-review fix `282654a`) |
+| `ingestor_multi.py` orchestration | ✓ delivered | `scripts/wiki_ingest/ingestor_multi.py` (`DefaultMultiIngestor.ingest_multi`) with per-edit semantic + set-level validation, including `validate_page_edit_semantics` against on-disk wiki state |
+| Patch-set output: `plan.json` + `preview/<rel>.md` | ✓ delivered | `write_patch_set_dir` writes `doc_internal/proposals/<date>-<source-slug>/plan.json` plus `preview/<edit.path>` mirroring the wiki tree shape |
+| Per-edit semantic validation | ✓ delivered | `validate_page_edit_semantics` checks frontmatter slug==stem, sources non-empty, page_type promotable, directory match, update target exists, create target does NOT exist (post-review fixes `ddada06` and `282654a`) |
+| Test backend dispatches on `task: ingest-multi` | ✓ delivered | `backends/test.py::_call_multi` returns deterministic 3-edit response (create + append-log + append-index) |
+| Phase-1 e2e tests | ✓ delivered | `scripts/wiki_ingest/tests/test_e2e.py::TestE2EMultiPageIngest` plus regression suites for fence neutralization, per-edit validation, and create-clobber rejection |
 
 ## Phase 2 — Promote (the only writer to `knowledge/wiki/`)
 
