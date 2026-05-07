@@ -249,10 +249,17 @@ layer under `knowledge/wiki/`. Four operations, one CLI:
 ./scripts/wiki lint --health [--strict] # knowledge-health (contradictions, stale claims, weak orphans, missing cross-links)
 ```
 
-**Human approval is always gating.** `wiki ingest` writes typed
-proposals to `doc_internal/proposals/`; `wiki promote` is the only
-operation that ever writes to `knowledge/wiki/`, and it runs as a
-plan-then-apply commit with snapshot rollback on any failure.
+**Human approval is always gating, and the source-control boundary
+is explicit: the wiki is source-controlled, the proposal workspace
+is not.** `wiki ingest` writes draft proposals to a local-only
+`doc_internal/proposals/` directory (gitignored — proposals are
+working drafts, not canonical state). `wiki promote` is the only
+operation that writes to the tracked `knowledge/wiki/` tree, and it
+runs as a plan-then-apply commit with snapshot rollback on any
+failure. Promotion history is traceable via git on `knowledge/wiki/`
+plus the append-only `knowledge/wiki/log.md` ledger; rejected or
+abandoned ingest attempts are not preserved (see audit-trail
+follow-up).
 
 The CLI auto-detects an installed copilot backend in the order
 `claude → codex → cursor`. Override with `--backend <name>` or
