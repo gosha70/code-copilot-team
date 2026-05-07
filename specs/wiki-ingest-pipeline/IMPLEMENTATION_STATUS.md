@@ -99,6 +99,13 @@ verb.
 - 5 weak-orphan warnings (pages reachable from `index.md` only, no peer cross-links). These are real knowledge-health debt that the new linter surfaces; the curator can either add cross-links or accept the single-hub state.
 - 0 stale-claim, contradiction (no backend), or missing-cross-link findings — the wiki is otherwise healthy.
 
+## Dogfood evidence
+
+| Round | Result | Notes |
+|---|---|---|
+| Round 1 (rlmkit#38 vs #39) | superseded | Ran against the pre-rescope single-source generator. Not valid evidence for the current PR shape. Branches preserved as historical artifacts; do not cite. |
+| Round 2 (rlmkit#38 vs #41) | A = 40 / B' = 41 (B' − A = +1) | Ran against cct HEAD `d03ac57` (Phase 4 + hardening). Architectural confound held constant. +1/45 is noise-level on the rubric; the qualitative row-8 evidence (concrete design changes from wiki use) is the meaningful signal. Full record: [`dogfood/round-2-result.md`](dogfood/round-2-result.md). |
+
 ## Origin alignment trail
 
 | Record | Verdict | Trigger |
