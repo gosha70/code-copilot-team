@@ -297,6 +297,28 @@ class DefaultQuerier:
         else:
             answer = parse_query_response(response)
 
+        # Validate citations against pages_loaded. The prompt contract
+        # says answers must use ONLY the provided pages; a backend that
+        # cites pages_loaded ∪ {index.md} is honest, anything else is
+        # fabrication and must be rejected fail-fast (otherwise the
+        # caller surfaces hallucinated citations as if they were real).
+        allowed = set(pages_loaded) | {"index.md"}
+        for c in answer.citations:
+            if c.page not in allowed:
+                raise ContractViolationError(
+                    f"query response cites {c.page!r}, which was not in "
+                    f"the index-first selection. Allowed citations are "
+                    f"index.md and the pages loaded into the prompt: "
+                    f"{sorted(pages_loaded)}. The backend may have "
+                    f"hallucinated this page."
+                )
+            if not c.fragment.strip():
+                raise ContractViolationError(
+                    f"query response cites {c.page!r} with an empty "
+                    f"fragment; every citation must include a supporting "
+                    f"text excerpt from the cited page."
+                )
+
         # Re-pack with the pages_loaded list filled in by selection.
         answer = QueryAnswer(
             answer=answer.answer,

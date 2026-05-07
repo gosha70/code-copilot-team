@@ -321,26 +321,92 @@ def _validate_staged_tree(
 
 
 def _commit_stage_to_wiki(stage_dir: Path, repo_root: Path) -> list[str]:
-    """Copy staged tree files back into knowledge/wiki/. Returns the
-    list of wiki-relative paths that were written."""
+    """Copy staged tree files back into knowledge/wiki/ atomically.
+
+    Atomicity is the load-bearing guarantee here: every patch-set is
+    a single curator decision, and the wiki must not end up in a
+    partial state if any per-file write fails midway. The strategy:
+      1. Plan the writes (collect every (target, new_content) pair
+         and snapshot the existing content so we can restore).
+      2. Apply each write, tracking which targets we created vs
+         updated.
+      3. On any OSError during the apply loop, restore originals
+         (rewriting updated files, removing newly-created files),
+         then raise PromoteApplyError. The wiki ends up in its
+         pre-commit state.
+      4. Only on full success does the function return without
+         raising.
+
+    Returns the list of wiki-relative paths actually written
+    (excluding no-op files whose content was already identical).
+    """
     wiki_dst = repo_root / "knowledge" / "wiki"
-    written: list[str] = []
+
+    # Plan phase — read existing state for every file we'd write.
+    @dataclass
+    class _PlannedWrite:
+        target: Path
+        new_content: str
+        original: str | None  # None ⇒ file did not exist pre-commit (created)
+        rel: str
+
+    planned: list[_PlannedWrite] = []
     for staged in stage_dir.rglob("*.md"):
         rel = staged.relative_to(stage_dir)
         rel_str = rel.as_posix()
-        # Skip schema/ and scripts/ — they're not patch-set targets.
         if rel.parts and rel.parts[0] in ("schema", "scripts"):
             continue
         target = wiki_dst / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
         new_content = staged.read_text(encoding="utf-8")
+        original: str | None = None
         if target.exists():
-            existing = target.read_text(encoding="utf-8")
-            if existing == new_content:
-                continue
-        target.write_text(new_content, encoding="utf-8")
-        written.append(rel_str)
-    return written
+            try:
+                original = target.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise PromoteApplyError(
+                    f"could not read existing wiki file for backup: "
+                    f"{target.relative_to(repo_root)}: {exc}"
+                ) from exc
+            if original == new_content:
+                continue  # no-op
+        planned.append(_PlannedWrite(target, new_content, original, rel_str))
+
+    # Apply phase — write each file, tracking what we did so we can
+    # roll back on any failure.
+    applied: list[_PlannedWrite] = []
+    try:
+        for plan in planned:
+            plan.target.parent.mkdir(parents=True, exist_ok=True)
+            plan.target.write_text(plan.new_content, encoding="utf-8")
+            applied.append(plan)
+    except OSError as exc:
+        # Roll back every applied write before re-raising. Rollback
+        # itself can fail (rare); we surface both errors.
+        rollback_errors: list[str] = []
+        for done in applied:
+            try:
+                if done.original is None:
+                    # We created this file; remove it to restore the
+                    # pre-commit state.
+                    if done.target.exists():
+                        done.target.unlink()
+                else:
+                    # We updated this file; rewrite the original
+                    # contents.
+                    done.target.write_text(done.original, encoding="utf-8")
+            except OSError as rb_exc:
+                rollback_errors.append(
+                    f"rollback failed for {done.rel}: {rb_exc}"
+                )
+        msg = (
+            f"live wiki write failed for {planned[len(applied)].rel}: {exc}; "
+            f"rolled back {len(applied)} prior write(s)."
+        )
+        if rollback_errors:
+            msg += " Rollback also raised: " + "; ".join(rollback_errors)
+        raise PromoteApplyError(msg) from exc
+
+    return [p.rel for p in applied]
 
 
 def _archive_proposals_dir(proposals_dir: Path, repo_root: Path) -> Path:
@@ -439,7 +505,13 @@ def promote(
 
         applied = _commit_stage_to_wiki(stage_dir, repo_root)
 
-    archived = _archive_proposals_dir(proposals_dir, repo_root)
+    # Archive is post-commit and best-effort. The wiki is already
+    # updated; failing to move the proposals dir is a curator-fixable
+    # housekeeping issue, not a promote failure. Log and continue.
+    try:
+        archived: Path | None = _archive_proposals_dir(proposals_dir, repo_root)
+    except OSError:
+        archived = None
     return PromoteResult(
         applied_paths=applied,
         proposals_dir=proposals_dir,

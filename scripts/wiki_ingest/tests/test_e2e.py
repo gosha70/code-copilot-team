@@ -1465,5 +1465,224 @@ class TestE2EHealthLint(unittest.TestCase):
             )
 
 
+class TestE2EPromoteAtomicity(unittest.TestCase):
+    """Regression for [P1]: live wiki write failure must NOT leave the
+    wiki in a partial state. Pre-fix bug: promoter wrote files
+    one-by-one and a mid-loop OSError left some files updated and
+    others not, while the proposals dir stayed un-archived.
+    Post-fix: every successful prior write is rolled back to its
+    pre-commit state (recreated files removed; updated files
+    restored) before PromoteApplyError is raised."""
+
+    def _build_tmp_repo(self, tmp: Path) -> Path:
+        wiki = tmp / "knowledge" / "wiki"
+        wiki.mkdir(parents=True)
+        (wiki / "index.md").write_text(
+            "---\npage_type: index\nslug: index\ntitle: I\nstatus: stable\nlast_reviewed: 2026-05-06\n---\n"
+            "\n# Index\n\n## Incidents\n\n",
+            encoding="utf-8",
+        )
+        (wiki / "log.md").write_text(
+            "---\npage_type: log\nslug: log\ntitle: L\nstatus: stable\nlast_reviewed: 2026-05-06\n---\n\n# Log\n",
+            encoding="utf-8",
+        )
+        real_root = _SCRIPTS_DIR.parent
+        for sub in ("schema", "scripts"):
+            shutil.copytree(
+                real_root / "knowledge" / "wiki" / sub,
+                wiki / sub,
+            )
+        return wiki
+
+    def _build_proposals_dir(self, tmp: Path, slug: str = "atomicity-fixture") -> Path:
+        prop = tmp / "doc_internal" / "proposals" / f"2026-05-06-{slug}"
+        (prop / "preview" / "incidents").mkdir(parents=True)
+        (prop / "preview").mkdir(exist_ok=True)
+        (prop / "preview" / "incidents" / f"{slug}.md").write_text(
+            "---\n"
+            f"page_type: incident\nslug: {slug}\ntitle: A\nstatus: draft\n"
+            "last_reviewed: 2026-05-06\nsources:\n  - path: src.md\n    sha: abc\n---\n\n# A\n",
+            encoding="utf-8",
+        )
+        (prop / "preview" / "log.md").write_text(
+            f"- 2026-05-06 — promote {slug} (incident).",
+            encoding="utf-8",
+        )
+        (prop / "preview" / "index.md").write_text(
+            f"- [A](incidents/{slug}.md) — fixture.",
+            encoding="utf-8",
+        )
+        import json as _json
+        (prop / "plan.json").write_text(_json.dumps({
+            "version": 1,
+            "source_path": "src.md",
+            "backend": "test",
+            "rationale": "fixture",
+            "edits": [
+                {"path": f"incidents/{slug}.md", "action": "create",
+                 "rationale": "r", "preview": f"preview/incidents/{slug}.md"},
+                {"path": "log.md", "action": "append-log",
+                 "rationale": "r", "preview": "preview/log.md"},
+                {"path": "index.md", "action": "append-index",
+                 "rationale": "r", "preview": "preview/index.md"},
+            ],
+        }, indent=2), encoding="utf-8")
+        return prop
+
+    def test_partial_write_failure_rolls_back_wiki(self) -> None:
+        """Simulate: the second target.write_text() raises OSError
+        mid-commit. Expect: the first write is rolled back to its
+        pre-commit content, the third+ targets are never written, the
+        proposals dir is NOT archived, and PromoteApplyError is
+        raised."""
+        from unittest.mock import patch as _patch
+        from wiki_ingest.errors import PromoteApplyError
+        from wiki_ingest.promoter import promote
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            wiki = self._build_tmp_repo(tmp_root)
+            prop = self._build_proposals_dir(tmp_root)
+
+            log_pre = (wiki / "log.md").read_text()
+            index_pre = (wiki / "index.md").read_text()
+
+            # Patch Path.write_text to raise OSError on the SECOND
+            # call. Counts only writes inside _commit_stage_to_wiki
+            # (the staging phase already wrote to a tempdir before
+            # the patch took effect via this counter).
+            real_write = Path.write_text
+            calls = {"n": 0}
+
+            def flaky_write(self, *args, **kwargs):
+                # Only intercept writes into knowledge/wiki/.
+                if "knowledge/wiki" in str(self):
+                    calls["n"] += 1
+                    if calls["n"] == 2:
+                        raise OSError("simulated mid-commit failure")
+                return real_write(self, *args, **kwargs)
+
+            with _patch.object(Path, "write_text", flaky_write):
+                with self.assertRaises(PromoteApplyError) as ctx:
+                    promote(prop, tmp_root)
+
+            self.assertIn("simulated mid-commit failure", str(ctx.exception))
+            self.assertIn("rolled back", str(ctx.exception))
+
+            # Pre-commit state restored: log.md and index.md unchanged,
+            # incidents/atomicity-fixture.md does not exist.
+            self.assertEqual((wiki / "log.md").read_text(), log_pre)
+            self.assertEqual((wiki / "index.md").read_text(), index_pre)
+            self.assertFalse(
+                (wiki / "incidents" / "atomicity-fixture.md").exists(),
+                "newly-created file should have been removed during rollback",
+            )
+            # Proposals dir NOT archived (promote did not succeed).
+            self.assertTrue(prop.exists())
+            archived = (
+                tmp_root / "doc_internal" / "proposals" / ".applied" / prop.name
+            )
+            self.assertFalse(archived.exists())
+
+
+class TestE2EQueryCitationValidation(unittest.TestCase):
+    """Regression for [P2]: query rejects citations to pages not loaded
+    by the index-first selection. Pre-fix bug: the parser only checked
+    citation shape (page+fragment present); a backend could cite any
+    page name and the orchestrator surfaced it unchanged. Post-fix:
+    every citation.page must be in pages_loaded ∪ {index.md} and
+    fragment must be non-empty."""
+
+    def _build_wiki(self, tmp: Path) -> Path:
+        wiki = tmp / "knowledge" / "wiki"
+        wiki.mkdir(parents=True)
+        (wiki / "concepts").mkdir()
+        (wiki / "index.md").write_text(
+            "---\npage_type: index\nslug: index\ntitle: I\nstatus: stable\nlast_reviewed: 2026-05-06\n---\n\n"
+            "# Index\n\n## Concepts\n- [Foo](concepts/foo.md) — about foo.\n",
+            encoding="utf-8",
+        )
+        (wiki / "log.md").write_text(
+            "---\npage_type: log\nslug: log\ntitle: L\nstatus: stable\nlast_reviewed: 2026-05-06\n---\n\n# Log\n",
+            encoding="utf-8",
+        )
+        (wiki / "concepts" / "foo.md").write_text(
+            "# Foo\n\nFoo body.\n", encoding="utf-8",
+        )
+        real_root = _SCRIPTS_DIR.parent
+        shutil.copytree(real_root / "knowledge" / "wiki" / "schema", wiki / "schema")
+        return wiki
+
+    def test_query_rejects_citation_to_unloaded_page(self) -> None:
+        from wiki_ingest.errors import ContractViolationError
+        from wiki_ingest.querier import DefaultQuerier
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_wiki(tmp_root)
+
+            class _LiarBackend:
+                def call(self, prompt):
+                    return {
+                        "version": 1,
+                        "answer": "fabricated",
+                        "citations": [
+                            {"page": "concepts/never-loaded.md",
+                             "fragment": "made up"},
+                        ],
+                    }
+
+            q = DefaultQuerier(backend=_LiarBackend(), repo_root=tmp_root)
+            with self.assertRaises(ContractViolationError) as ctx:
+                q.query("foo")
+            msg = str(ctx.exception)
+            self.assertIn("concepts/never-loaded.md", msg)
+            self.assertIn("hallucinated", msg)
+
+    def test_query_rejects_empty_fragment(self) -> None:
+        from wiki_ingest.errors import ContractViolationError
+        from wiki_ingest.querier import DefaultQuerier
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_wiki(tmp_root)
+
+            class _EmptyFragBackend:
+                def call(self, prompt):
+                    return {
+                        "version": 1,
+                        "answer": "ok",
+                        "citations": [
+                            {"page": "concepts/foo.md", "fragment": ""},
+                        ],
+                    }
+
+            q = DefaultQuerier(backend=_EmptyFragBackend(), repo_root=tmp_root)
+            with self.assertRaises(ContractViolationError) as ctx:
+                q.query("foo")
+            self.assertIn("empty", str(ctx.exception).lower())
+
+    def test_query_accepts_index_md_citation(self) -> None:
+        """index.md citation is allowed (legitimate when wiki lacks info)."""
+        from wiki_ingest.querier import DefaultQuerier
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_wiki(tmp_root)
+
+            class _IndexOnlyBackend:
+                def call(self, prompt):
+                    return {
+                        "version": 1,
+                        "answer": "",
+                        "citations": [
+                            {"page": "index.md",
+                             "fragment": "(no answer found)"},
+                        ],
+                    }
+
+            q = DefaultQuerier(backend=_IndexOnlyBackend(), repo_root=tmp_root)
+            # No raise.
+            ans = q.query("foo")
+            self.assertEqual(ans.answer, "")
+            self.assertEqual(len(ans.citations), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
