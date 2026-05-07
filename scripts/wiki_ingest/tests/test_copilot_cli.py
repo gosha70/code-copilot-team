@@ -100,14 +100,33 @@ class TestCopilotCliBackend(unittest.TestCase):
         self.assertEqual(result["version"], 1)
         self.assertEqual(result["page_type"], "incident")
 
-    def test_nonzero_exit_raises_backend_invocation_error(self) -> None:
-        """Backend that exits non-zero raises BackendInvocationError with stderr in message."""
+    def test_nonzero_exit_raises_backend_invocation_error_redacted(self) -> None:
+        """Default: stderr is redacted (sha256 fingerprint), not leaked verbatim.
+
+        Verifies the privacy fix from the external review (PR #27 § stderr
+        leakage). The raw stderr text "simulated backend failure" must NOT
+        appear in the error message; the fingerprint format must.
+        """
         backend = CopilotCliBackend(_STUB_BACKEND_FAIL, timeout_seconds=10)
         with self.assertRaises(BackendInvocationError) as ctx:
             backend.call(_SAMPLE_PROMPT)
         msg = str(ctx.exception)
         self.assertIn("exited with code", msg)
-        # The stub writes "simulated backend failure" to stderr
+        # Raw stderr MUST NOT leak.
+        self.assertNotIn("simulated backend failure", msg)
+        # Fingerprint MUST be present.
+        self.assertIn("redacted:", msg)
+        self.assertIn("sha256=", msg)
+
+    def test_nonzero_exit_raises_backend_invocation_error_unredacted(self) -> None:
+        """Opt-in via redact_output=False: raw stderr still available for local debugging."""
+        backend = CopilotCliBackend(
+            _STUB_BACKEND_FAIL, timeout_seconds=10, redact_output=False
+        )
+        with self.assertRaises(BackendInvocationError) as ctx:
+            backend.call(_SAMPLE_PROMPT)
+        msg = str(ctx.exception)
+        self.assertIn("exited with code", msg)
         self.assertIn("simulated backend failure", msg)
 
     def test_malformed_json_raises_contract_violation(self) -> None:

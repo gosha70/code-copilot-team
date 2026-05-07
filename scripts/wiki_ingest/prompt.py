@@ -84,8 +84,19 @@ def compose_prompt(
     source_content: str,
     schema_files: dict[str, str],
     source_kind: str = "file",
+    task: str = "ingest",
 ) -> dict[str, Any]:
-    """Compose a BackendPrompt dict from source content and loaded schema files."""
+    """Compose a BackendPrompt dict from source content and loaded schema files.
+
+    ``task`` is one of:
+      - ``"ingest"``    — run the four-question gate AND draft the page body
+                          (default).
+      - ``"gate-only"`` — run the gate; on accept, set draft_markdown=null.
+                          Used by ``--dry-run`` to skip body generation cost.
+    The render layer in ``backends/copilot_cli.py`` adds a ``GATE-ONLY MODE``
+    instruction when ``task == "gate-only"``; backends that ignore the hint
+    still get the body stripped at the render side as a safety net.
+    """
     system_instructions = (
         "You are acting as a wiki curator. "
         "Read the schema excerpts provided, apply the four-question gate to the source, "
@@ -95,7 +106,7 @@ def compose_prompt(
     return {
         "version": 1,
         "system_instructions": system_instructions,
-        "task": "ingest",
+        "task": task,
         "schema_excerpts": {
             "ingest_rules": schema_files.get("ingest-rules", ""),
             "page_types": schema_files.get("page-types", ""),

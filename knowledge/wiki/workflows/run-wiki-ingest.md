@@ -14,24 +14,31 @@ sources:
 
 # Run the Wiki Ingest Pipeline
 
+> **Stage notice (Phase 0).** What this page describes — single-source
+> proposal generation — is **Stage 1** of the rescoped wiki ingest
+> pipeline (`spec.md`, post-2026-05-06 rescope). The Karpathy-pattern
+> maintainer (multi-page ingest, promote, query, knowledge-health
+> lint) ships in Phases 1–4. See
+> [`../../../specs/wiki-ingest-pipeline/spec.md`](../../../specs/wiki-ingest-pipeline/spec.md)
+> and `IMPLEMENTATION_STATUS.md` for the delivery schedule.
+
 ## When to use this
 
-Use the ingest pipeline when you have **one** source artifact (a
-merged spec, an incident write-up, a postmortem, a session note in
-`knowledge/raw/`, or any other promotion candidate) and you want
-the four-question gate plus a typed draft applied to it without
-hand-walking every step in
+Use the Stage 1 single-source proposal flow when you have **one**
+source artifact (a merged spec, an incident write-up, a postmortem,
+a session note in `knowledge/raw/`, or any other promotion candidate)
+and you want the four-question gate plus a typed draft applied to it
+without hand-walking every step in
 [`promote-lesson-to-wiki.md`](promote-lesson-to-wiki.md).
 
-The pipeline is the **semi-automated companion** to the manual
-promotion loop. It does not replace it — the curator still drives
-the proposal across the finish line. Use the manual workflow
-instead when:
+Stage 1 is the **semi-automated companion** to the manual promotion
+loop. It does not replace it — the curator still drives the proposal
+across the finish line. Use the manual workflow instead when:
 
-- You are promoting a **cluster** of related pages in one turn
-  (the pipeline is single-source in v1).
-- You already know the page is a refinement of an **existing
-  slug**; the pipeline is optimised for new pages.
+- You are promoting a **cluster** of related pages in one turn (Stage 1
+  is single-source; multi-page ingest is Phase 1, not yet shipped).
+- You already know the page is a refinement of an **existing slug**;
+  Stage 1 is optimised for new pages.
 - You want to **think through** the gate yourself rather than have
   a backend apply it. The pipeline is a labour-saver, not a
   judgement substitute.
@@ -47,9 +54,14 @@ If neither shoe fits, run the pipeline. The output goes to
    follow-up. If the lesson genuinely spans two sources, write a
    short consolidated note in `knowledge/raw/` first and ingest
    that.
-2. **Run the pipeline.** From the repo root:
+2. **Run the pipeline.** From the repo root, either of these works
+   (they are equivalent — pick whichever matches muscle memory):
 
    ```bash
+   # Phase 0+ canonical:
+   ./scripts/wiki ingest --legacy-single-source <path-to-source>
+
+   # Backwards-compat alias (preserved for v1 callers):
    ./scripts/wiki-ingest <path-to-source>
    ```
 
@@ -59,6 +71,18 @@ If neither shoe fits, run the pipeline. The output goes to
    deterministic stub if you want to dry-run the wiring without an
    LLM call. The full flag set is documented in
    [`../../README.md`](../../README.md) §5e.
+
+   **Phase 0 hardening** (vs. v1 default behavior):
+   - Source paths must live inside the repo (`--allow-out-of-repo`
+     to override).
+   - Backend stderr in error messages is redacted by default
+     (`--debug-unsafe-output` to see raw text).
+   - `--dry-run` now passes `task: gate-only` to the backend, so
+     the body draft is never generated; previously the body was
+     generated and stripped at render time.
+   - Cursor backend uses `cursor-agent -p`; Codex backend uses
+     `codex exec` (was `cursor -p` / `codex -p` in v1, both wrong
+     per the external review).
 3. **Read the proposal.** Open the file printed on stdout. It
    lives in `doc_internal/proposals/<YYYY-MM-DD>-<slug>.md`.
    Frontmatter records `gate_disposition` (`accept` or `reject`),

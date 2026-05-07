@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -46,13 +47,18 @@ class DefaultIngestor:
                 f"Cannot read source file {source_path}: {exc}"
             ) from exc
 
-        # 2. Load schema files and compose prompt
+        # 2. Load schema files and compose prompt.
+        # WIKI_INGEST_TASK env var carries the dry-run intent from
+        # __main__.py; default "ingest" when unset. See compose_prompt
+        # for the task semantics.
         schema_files = load_schema_files(self._repo_root)
+        task = os.environ.get("WIKI_INGEST_TASK", "ingest")
         prompt_dict = compose_prompt(
             source_path=source_path,
             source_content=source_content,
             schema_files=schema_files,
             source_kind=request.source_kind,
+            task=task,
         )
 
         # 3. Invoke backend

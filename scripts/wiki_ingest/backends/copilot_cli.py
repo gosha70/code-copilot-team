@@ -4,26 +4,68 @@
 # BackendPrompt as a plain-text prompt, and uses json_extract to pull the JSON
 # response from free-form CLI output.
 #
-# CLI flag conventions (best-effort v1; may need refinement after real dogfooding):
-#   claude:  claude -p "<prompt>"  — '-p' is the "print/non-interactive" flag
-#   codex:   codex -p "<prompt>"   — same shape assumed; verify with real CLI
-#   cursor:  cursor -p "<prompt>"  — same shape assumed; verify with real CLI
+# Adapter mappings (verified against vendor docs as of 2026-05; fix any that
+# drift in a separate change with a pinning test):
+#   claude  → ``claude -p "<prompt>"``     (Anthropic Claude Code CLI)
+#   codex   → ``codex exec "<prompt>"``    (OpenAI Codex CLI; non-interactive)
+#   cursor  → ``cursor-agent -p "<prompt>"`` (Cursor agent CLI)
 #
-# NOTE: The flag shape for codex and cursor is v1 best-effort. Real-world CLI
-# conventions may differ. This is the expected iteration risk per plan.md Phase 2
-# stop point. When dogfooding surfaces a different flag shape, add a test case
-# that pins the new shape before updating this module.
+# The user-facing backend name (cursor) is decoupled from the on-disk binary
+# (cursor-agent) so callers can keep saying ``--backend cursor`` even after
+# the cursor team renamed the headless binary.
+#
+# Privacy: by default, error messages do NOT include raw stderr from the
+# backend (it can echo source content or model output). They include a
+# redacted summary (byte count + sha256 hex prefix). Pass redact_output=False
+# to recover the unredacted form (only for local debugging).
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from typing import Any
 
 from ..errors import BackendInvocationError, BackendNotFoundError
 from .json_extract import extract_json_object
 
-# Maximum stderr bytes to include in error messages.
+# Maximum stderr bytes to fingerprint when redacting.
 _MAX_STDERR_BYTES = 2048
+
+# User-facing backend name → on-disk binary name. Names not in this map fall
+# back to using the user-facing name as the binary (used by stub-backend.sh
+# in tests, and by contributor CLIs that don't need remapping).
+CLI_BINARY_MAP: dict[str, str] = {
+    "claude": "claude",
+    "codex": "codex",
+    "cursor": "cursor-agent",
+}
+
+# User-facing backend name → invocation args inserted between the binary and
+# the prompt text. Defaults to ``["-p"]`` for any unmapped name.
+_CLI_INVOCATION_MAP: dict[str, list[str]] = {
+    "claude": ["-p"],
+    "codex": ["exec"],
+    "cursor": ["-p"],
+}
+
+
+def cli_binary_for(name: str) -> str:
+    """Return the on-disk binary name for a user-facing backend name."""
+    return CLI_BINARY_MAP.get(name, name)
+
+
+def _redact_stderr(stderr: str) -> str:
+    """Return a privacy-safe fingerprint of stderr instead of the raw bytes.
+
+    The fingerprint includes the byte count and a sha256 hex prefix so two
+    identical errors yield identical fingerprints (useful for log dedup),
+    without leaking source content the backend may have echoed back.
+    """
+    if not stderr:
+        return "<no stderr>"
+    encoded = stderr.encode("utf-8", errors="replace")
+    digest = hashlib.sha256(encoded).hexdigest()[:16]
+    return f"<redacted: {len(encoded)} bytes, sha256={digest}; rerun with --debug-unsafe-output to see raw text>"
 
 
 def _render_plain_text_prompt(backend_prompt: dict[str, Any]) -> str:
@@ -38,6 +80,8 @@ def _render_plain_text_prompt(backend_prompt: dict[str, Any]) -> str:
       extractor's preferred ``json`` fence).
     - Explicitly asks the CLI to wrap its JSON response in a ``json``
       fence and to use no other ``json`` fence in its output.
+    - When ``backend_prompt["task"] == "gate-only"``, instructs the
+      backend to skip drafting the body (resolution-A real --dry-run).
 
     **The ```json fence is reserved exclusively for the model's actual
     response.** Reference material (response schema, prompt-shape docs,
@@ -52,6 +96,7 @@ def _render_plain_text_prompt(backend_prompt: dict[str, Any]) -> str:
     schema_excerpts = backend_prompt.get("schema_excerpts", {})
     source = backend_prompt.get("source", {})
     response_schema = backend_prompt.get("response_schema", "")
+    task = backend_prompt.get("task", "ingest")
 
     lines: list[str] = []
 
@@ -87,6 +132,15 @@ def _render_plain_text_prompt(backend_prompt: dict[str, Any]) -> str:
         "The reference schema below is shown in a ```text fence (which "
         "is not captured by the extractor)."
     )
+    if task == "gate-only":
+        lines.append("")
+        lines.append(
+            "GATE-ONLY MODE: do not draft the page body. Apply the "
+            "four-question gate and return disposition + reason ONLY. "
+            "Set draft_markdown to null on accept; the curator will "
+            "rerun without --dry-run to obtain the body if the gate "
+            "passes. This saves model tokens and latency."
+        )
     lines.append("")
     lines.append("Response schema (reference only — do NOT echo this "
                  "block back; emit your real response in a ```json fence):")
@@ -107,14 +161,45 @@ class CopilotCliBackend:
     Parameters
     ----------
     cli_name : str
-        The CLI executable name (e.g. "claude", "codex", "cursor").
+        The user-facing backend name (``claude``, ``codex``, ``cursor``)
+        OR an explicit binary path (e.g., a stub script in tests). When
+        the name matches an entry in :data:`CLI_BINARY_MAP`, the on-disk
+        binary and invocation args are looked up there; otherwise the
+        name is used verbatim with ``-p`` as the only invocation arg.
     timeout_seconds : int
         Subprocess timeout in seconds. Default 120. Test suite can lower this.
+    redact_output : bool
+        When True (default), error messages substitute a hashed
+        fingerprint for raw stderr — the backend may echo source content
+        and the raw text is unsafe to log. When False, raw stderr is
+        included (for local debugging via ``--debug-unsafe-output``).
     """
 
-    def __init__(self, cli_name: str, timeout_seconds: int = 120) -> None:
+    def __init__(
+        self,
+        cli_name: str,
+        timeout_seconds: int = 120,
+        redact_output: bool = True,
+    ) -> None:
         self._cli_name = cli_name
         self._timeout_seconds = timeout_seconds
+        self._redact_output = redact_output
+
+    def _build_command(self, prompt_text: str) -> list[str]:
+        """Construct argv for the subprocess: [binary, *invocation, prompt]."""
+        binary = cli_binary_for(self._cli_name)
+        invocation = _CLI_INVOCATION_MAP.get(self._cli_name, ["-p"])
+        return [binary, *invocation, prompt_text]
+
+    def _format_stderr(self, stderr: str | bytes | None) -> str:
+        """Return either a redacted fingerprint or a truncated raw snippet."""
+        if stderr is None:
+            return "<no stderr>"
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        if self._redact_output:
+            return _redact_stderr(stderr[:_MAX_STDERR_BYTES * 4])
+        return repr(stderr[:_MAX_STDERR_BYTES])
 
     def call(self, prompt: dict[str, Any]) -> dict[str, Any]:
         """Invoke the CLI with the rendered prompt and return the parsed response dict.
@@ -127,7 +212,7 @@ class CopilotCliBackend:
             If extract_json_object cannot find a parseable JSON object in stdout.
         """
         prompt_text = _render_plain_text_prompt(prompt)
-        cmd = [self._cli_name, "-p", prompt_text]
+        cmd = self._build_command(prompt_text)
 
         try:
             result = subprocess.run(
@@ -137,13 +222,9 @@ class CopilotCliBackend:
                 timeout=self._timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
-            stderr_snippet = ""
-            if exc.stderr:
-                raw = exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode("utf-8", errors="replace")
-                stderr_snippet = raw[:_MAX_STDERR_BYTES]
             raise BackendInvocationError(
                 f"Backend '{self._cli_name}' timed out after {self._timeout_seconds}s. "
-                f"stderr (first {_MAX_STDERR_BYTES} bytes): {stderr_snippet!r}"
+                f"stderr: {self._format_stderr(exc.stderr)}"
             ) from exc
         except FileNotFoundError as exc:
             # Missing CLI is a "not found" condition (exit 2), not an
@@ -154,15 +235,14 @@ class CopilotCliBackend:
             # contributor SDK adapters built against the same Backend
             # Protocol).
             raise BackendNotFoundError(
-                f"Backend CLI '{self._cli_name}' not found on PATH. "
+                f"Backend CLI '{cli_binary_for(self._cli_name)}' not found on PATH. "
                 "Use --backend test for fixture runs, or install the CLI."
             ) from exc
 
         if result.returncode != 0:
-            stderr_snippet = result.stderr[:_MAX_STDERR_BYTES]
             raise BackendInvocationError(
                 f"Backend '{self._cli_name}' exited with code {result.returncode}. "
-                f"stderr (first {_MAX_STDERR_BYTES} bytes): {stderr_snippet!r}"
+                f"stderr: {self._format_stderr(result.stderr)}"
             )
 
         # extract_json_object raises ContractViolationError if no JSON found.

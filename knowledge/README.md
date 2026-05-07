@@ -235,13 +235,25 @@ document directly.
 
 ### 5e. Running ingest (semi-automated alternative to 5b)
 
-`scripts/wiki-ingest` is a semi-automated companion to the manual
-promotion loop in 5b. It runs the four-question gate and drafts a
-typed wiki page from a single source, then writes a **proposal** to
-`doc_internal/proposals/`. **Human approval remains gating** — the
-pipeline never writes to `knowledge/wiki/`.
+> **Stage notice (Phase 0).** `scripts/wiki-ingest` is **Stage 1** of
+> the rescoped wiki ingest pipeline (see
+> `specs/wiki-ingest-pipeline/spec.md`, post-2026-05-06 rescope). The
+> Karpathy-pattern maintainer (multi-page ingest, promote, query,
+> knowledge-health lint) ships in Phases 1–4. Stage 1 is preserved
+> end-to-end as a backwards-compat alias.
+
+`./scripts/wiki ingest --legacy-single-source` (Stage 1) is the
+semi-automated companion to the manual promotion loop in 5b. It runs
+the four-question gate and drafts a typed wiki page from a single
+source, then writes a **proposal** to `doc_internal/proposals/`.
+**Human approval remains gating** — the pipeline never writes to
+`knowledge/wiki/`.
 
 ```
+# Phase 0+ canonical:
+./scripts/wiki ingest --legacy-single-source <path-to-source.md>
+
+# Backwards-compat alias (v1 callers):
 ./scripts/wiki-ingest <path-to-source.md>
 ```
 
@@ -251,6 +263,28 @@ backend. Override with `--backend <name>` or the
 `WIKI_INGEST_BACKEND` environment variable. Use
 `--backend test` for a deterministic stub (no real LLM call) —
 this is what CI uses.
+
+**Phase 0 hardening** added in the post-rescope branch:
+
+- Source paths must live inside the repo (`--allow-out-of-repo` to
+  override). Returns exit 7 on refusal.
+- Backend stderr is redacted by default in error messages
+  (`--debug-unsafe-output` to see raw text — privacy fix from the
+  external review).
+- `--dry-run` now passes `task: gate-only` to the backend, skipping
+  body generation. Saves model tokens vs. v1 (which generated the
+  body and then stripped it at render time).
+- Cursor backend uses `cursor-agent -p`; Codex backend uses
+  `codex exec` (was `cursor -p` / `codex -p` in v1).
+
+Phases 1–4 will add the full Karpathy-pattern maintainer:
+`./scripts/wiki ingest <source>` (multi-page write plan against
+existing wiki state), `./scripts/wiki promote <dir>` (the only
+writer to `knowledge/wiki/`), `./scripts/wiki query "..."`
+(index-first navigation), `./scripts/wiki lint --health`
+(contradictions, stale claims, weak orphans, missing cross-links).
+See `specs/wiki-ingest-pipeline/IMPLEMENTATION_STATUS.md` for the
+delivery schedule.
 
 **What the pipeline does:**
 

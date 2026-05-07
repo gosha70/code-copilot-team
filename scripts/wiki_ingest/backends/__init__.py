@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from ..ingestor import Backend
 
 from ..errors import BackendNotFoundError
-from .copilot_cli import CopilotCliBackend
+from .copilot_cli import CopilotCliBackend, cli_binary_for
 from .test import TestBackend
 
 _REGISTRY: dict[str, type] = {
@@ -55,7 +55,7 @@ def auto_detect() -> "Backend":
     Raises BackendNotFoundError if none of the candidates are on PATH.
     """
     for cli_name in _AUTO_DETECT_ORDER:
-        if shutil.which(cli_name):
+        if shutil.which(cli_binary_for(cli_name)):
             return CopilotCliBackend(cli_name)
     raise BackendNotFoundError(
         "No copilot CLI on PATH. Tried: " + ", ".join(_AUTO_DETECT_ORDER) +
@@ -107,11 +107,14 @@ def _resolve_by_name(name: str) -> "Backend":
         return get_backend(name)
 
     # Copilot-CLI backends — verify the CLI is on PATH (fail-fast semantics).
+    # Look up the on-disk binary name (cursor → cursor-agent, etc.) so the
+    # PATH probe finds the right executable.
     if name in _AUTO_DETECT_ORDER:
-        if shutil.which(name):
+        binary = cli_binary_for(name)
+        if shutil.which(binary):
             return CopilotCliBackend(name)
         raise BackendNotFoundError(
-            f"Backend CLI '{name}' not found on PATH. "
+            f"Backend CLI '{binary}' not found on PATH. "
             "Install it or use --backend test for fixture runs."
         )
 
