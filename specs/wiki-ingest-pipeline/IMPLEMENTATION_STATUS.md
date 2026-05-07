@@ -84,14 +84,20 @@ verb.
 
 ## Phase 4 — Knowledge-health lint
 
-| Capability | Status | Target |
+| Capability | Status | Where |
 |---|---|---|
-| `./scripts/wiki lint --health` | ⏳ planned | Phase 4 PR |
-| Contradictions check | ⏳ planned | `health_lint.py` |
-| Stale-claims check | ⏳ planned | same |
-| Weak-orphan check | ⏳ planned | same |
-| Missing-cross-link check | ⏳ planned | same |
-| `--strict` mode | ⏳ planned | flips advisory → error |
+| `./scripts/wiki lint --health` | ✓ delivered | verb dispatcher routes to `lint_health` |
+| Contradictions check | ✓ delivered | LLM-driven over candidate page pairs (shared sources / linked pairs); skipped when no `--backend` given |
+| Stale-claims check | ✓ delivered | scans frontmatter `sources[].path` references; flags missing files |
+| Weak-orphan check | ✓ delivered | counts inbound edges; flags pages with exactly 1 (excludes index/log/overview) |
+| Missing-cross-link check | ✓ delivered | entity-mention vs cross-link gap; threshold mentions ≥ 3 ∧ links < 2 (hubs excluded) |
+| `--strict` mode | ✓ delivered | findings flip exit to non-zero when set |
+| `--paths` scoping | ✓ delivered | scopes findings to specified wiki-relative paths |
+| Test backend dispatches `task: lint-health` | ✓ delivered | contradiction prompts use the same JSON-over-stdio shape; deterministic in tests via inline backends |
+
+**First real-world findings** on the actual project wiki (advisory):
+- 5 weak-orphan warnings (pages reachable from `index.md` only, no peer cross-links). These are real knowledge-health debt that the new linter surfaces; the curator can either add cross-links or accept the single-hub state.
+- 0 stale-claim, contradiction (no backend), or missing-cross-link findings — the wiki is otherwise healthy.
 
 ## Origin alignment trail
 

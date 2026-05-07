@@ -48,6 +48,7 @@ from .errors import (
 )
 from .ingestor import DefaultIngestor
 from .ingestor_multi import DefaultMultiIngestor, write_patch_set_dir
+from .health_lint import lint_health
 from .promoter import promote as run_promote
 from .proposal import IngestProposal, IngestRequest, render_proposal_file
 from .querier import DefaultQuerier
@@ -197,12 +198,35 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p_lint = sub.add_parser(
         "lint",
         help="Run wiki linters. Default: structural (delegates to "
-             "knowledge/wiki/scripts/lint-wiki.sh). --health adds the "
-             "knowledge-health pass — Phase 4, not yet implemented.",
+             "knowledge/wiki/scripts/lint-wiki.sh). --health adds "
+             "the knowledge-health pass (contradictions, stale claims, "
+             "weak orphans, missing cross-links).",
     )
-    p_lint.add_argument("--health", action="store_true")
-    p_lint.add_argument("--strict", action="store_true")
-    p_lint.add_argument("--paths", nargs="*", default=None)
+    p_lint.add_argument(
+        "--health",
+        action="store_true",
+        help="Run knowledge-health checks on top of the structural "
+             "linter. Default mode is advisory (exit 0 with stderr "
+             "warnings); --strict flips to non-zero exit on findings.",
+    )
+    p_lint.add_argument(
+        "--strict",
+        action="store_true",
+        help="With --health: any finding causes non-zero exit.",
+    )
+    p_lint.add_argument(
+        "--paths",
+        nargs="*",
+        default=None,
+        help="With --health: scope to specific wiki-relative paths.",
+    )
+    p_lint.add_argument(
+        "--backend",
+        default=None,
+        help="With --health: backend for the LLM-dependent "
+             "contradiction check. When omitted, contradictions are "
+             "skipped (the other three checks run without a backend).",
+    )
 
     return parser
 
@@ -571,20 +595,12 @@ def _do_query(args: argparse.Namespace) -> int:
 
 
 def _do_lint(args: argparse.Namespace) -> int:
-    """Phase 0: structural lint via knowledge/wiki/scripts/lint-wiki.sh.
-    --health is Phase 4 — not yet implemented."""
-    if args.health:
-        print(
-            "error: `./scripts/wiki lint --health` is Phase 4 of the "
-            "wiki-ingest-pipeline rescope and is not yet implemented. The "
-            "structural linter (no --health) is available now and is what "
-            "`./scripts/wiki lint` runs by default. See "
-            "specs/wiki-ingest-pipeline/plan.md § 'Phase 4 — "
-            "Knowledge-health lint' for the delivery schedule.",
-            file=sys.stderr,
-        )
-        return EXIT_NOT_IMPLEMENTED
+    """Wiki linters.
 
+    Default: structural lint via knowledge/wiki/scripts/lint-wiki.sh.
+    --health: structural + knowledge-health (contradictions,
+    stale-claims, weak-orphans, missing-cross-links).
+    """
     repo_root = _resolve_repo_root()
     linter = repo_root / "knowledge" / "wiki" / "scripts" / "lint-wiki.sh"
     if not linter.exists():
@@ -593,7 +609,52 @@ def _do_lint(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return BackendNotFoundError.exit_code
-    return subprocess.call(["bash", str(linter)])
+
+    structural_rc = subprocess.call(["bash", str(linter)])
+    if not args.health:
+        return structural_rc
+
+    # Knowledge-health pass.
+    backend = None
+    if args.backend:
+        try:
+            backend = resolve_backend(args.backend)
+        except BackendNotFoundError as exc:
+            print(
+                f"error: --health backend resolution failed: {exc}",
+                file=sys.stderr,
+            )
+            return BackendNotFoundError.exit_code
+
+    result = lint_health(
+        repo_root=repo_root,
+        paths=args.paths,
+        backend=backend,
+    )
+    if not result.findings:
+        print(
+            f"\nknowledge-health: clean ({result.pages_checked} pages "
+            f"checked, 0 findings)."
+        )
+        return structural_rc
+
+    # Print findings on stderr so the structural linter's stdout
+    # remains the canonical output.
+    print(
+        f"\nknowledge-health: {len(result.findings)} finding(s) "
+        f"across {result.pages_checked} pages",
+        file=sys.stderr,
+    )
+    for f in result.findings:
+        loc = ", ".join(f.pages)
+        print(
+            f"  [{f.kind} / {f.severity}] {loc}: {f.description}",
+            file=sys.stderr,
+        )
+
+    if args.strict:
+        return 1 if structural_rc == 0 else structural_rc
+    return structural_rc
 
 
 _VERBS = ("ingest", "promote", "query", "lint")

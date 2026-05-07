@@ -1277,5 +1277,193 @@ class TestE2EQuery(unittest.TestCase):
             self.assertEqual(len(patch.edits), 3)
 
 
+class TestE2EHealthLint(unittest.TestCase):
+    """Phase 4: knowledge-health lint — contradictions, stale claims,
+    weak orphans, missing cross-links."""
+
+    def _build_wiki(self, tmp: Path) -> Path:
+        # Provide README.md so frontmatter sources resolve.
+        (tmp / "README.md").write_text("# Root\n", encoding="utf-8")
+        wiki = tmp / "knowledge" / "wiki"
+        wiki.mkdir(parents=True)
+        for sub in ("concepts", "incidents", "decisions"):
+            (wiki / sub).mkdir()
+        (wiki / "index.md").write_text(
+            "---\npage_type: index\nslug: index\ntitle: I\nstatus: stable\nlast_reviewed: 2026-05-06\n---\n\n"
+            "# Index\n\n"
+            "## Concepts\n- [Foo](concepts/foo.md)\n- [Bar](concepts/bar.md)\n\n"
+            "## Decisions\n- [Use Foo](decisions/use-foo.md)\n",
+            encoding="utf-8",
+        )
+        (wiki / "log.md").write_text(
+            "---\npage_type: log\nslug: log\ntitle: L\nstatus: stable\nlast_reviewed: 2026-05-06\n---\n\n# Log\n",
+            encoding="utf-8",
+        )
+        # foo: no source path drift, mentioned by other pages.
+        (wiki / "concepts" / "foo.md").write_text(
+            "---\npage_type: concept\nslug: foo\ntitle: Foo\nstatus: stable\n"
+            "last_reviewed: 2026-05-06\nsources:\n  - path: README.md\n    sha: abc\n---\n\n"
+            "# Foo\n\nA durable concept.\n",
+            encoding="utf-8",
+        )
+        # bar: cites a missing source path → stale-claim finding.
+        (wiki / "concepts" / "bar.md").write_text(
+            "---\npage_type: concept\nslug: bar\ntitle: Bar\nstatus: stable\n"
+            "last_reviewed: 2026-05-06\nsources:\n  - path: docs/this-file-does-not-exist.md\n    sha: def\n---\n\n"
+            "# Bar\n\nMentions foo but does not link foo.\n",
+            encoding="utf-8",
+        )
+        # use-foo: links foo (one inbound edge to foo from this page).
+        (wiki / "decisions" / "use-foo.md").write_text(
+            "---\npage_type: decision\nslug: use-foo\ntitle: Use Foo\nstatus: stable\n"
+            "last_reviewed: 2026-05-06\nsources:\n  - path: README.md\n    sha: abc\n---\n\n"
+            "# Use Foo\n\nWe will use [foo](../concepts/foo.md). Mentions foo.\n",
+            encoding="utf-8",
+        )
+        # Mirror schema/scripts so tests don't need them but the lint
+        # script ignores those subdirs anyway.
+        real_root = _SCRIPTS_DIR.parent
+        for sub in ("schema",):
+            shutil.copytree(
+                real_root / "knowledge" / "wiki" / sub,
+                wiki / sub,
+            )
+        return wiki
+
+    def test_stale_claim_check_flags_missing_source_path(self) -> None:
+        from wiki_ingest.health_lint import lint_health
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_wiki(tmp_root)
+            result = lint_health(repo_root=tmp_root, backend=None)
+            stale = [f for f in result.findings if f.kind == "stale-claim"]
+            self.assertEqual(len(stale), 1)
+            self.assertIn("concepts/bar.md", stale[0].pages)
+            self.assertIn("does-not-exist.md", stale[0].description)
+
+    def test_weak_orphan_check_flags_single_inbound(self) -> None:
+        """concepts/foo.md is linked only from decisions/use-foo.md
+        (and from index.md, but the orphan check counts non-index
+        non-log inbound edges as both contribute)."""
+        from wiki_ingest.health_lint import lint_health
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_wiki(tmp_root)
+            result = lint_health(repo_root=tmp_root, backend=None)
+            orphans = [f for f in result.findings if f.kind == "weak-orphan"]
+            self.assertGreater(len(orphans), 0)
+
+    def test_missing_cross_link_check(self) -> None:
+        """Build a wiki where 'foo' is mentioned in many pages but
+        only linked once → flagged."""
+        from wiki_ingest.health_lint import lint_health
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            wiki = self._build_wiki(tmp_root)
+            # Add 3 more pages that mention foo without linking it.
+            for i in range(3):
+                slug = f"mentions-foo-{i}"
+                (wiki / "concepts" / f"{slug}.md").write_text(
+                    f"---\npage_type: concept\nslug: {slug}\ntitle: M{i}\nstatus: stable\n"
+                    "last_reviewed: 2026-05-06\nsources:\n  - path: README.md\n    sha: abc\n---\n\n"
+                    f"# Mentions Foo {i}\n\nThis page mentions foo without linking it.\n",
+                    encoding="utf-8",
+                )
+            result = lint_health(repo_root=tmp_root, backend=None)
+            cross = [f for f in result.findings if f.kind == "missing-cross-link"]
+            self.assertGreater(len(cross), 0)
+            slugs = sum(("foo" in f.description) for f in cross)
+            self.assertGreater(slugs, 0)
+
+    def test_clean_wiki_produces_zero_findings(self) -> None:
+        """A wiki where every cited path exists, every page has ≥2
+        inbound edges, and every entity is cross-linked produces 0
+        findings."""
+        from wiki_ingest.health_lint import lint_health
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            wiki = tmp_root / "knowledge" / "wiki"
+            wiki.mkdir(parents=True)
+            (tmp_root / "README.md").write_text("# Root readme\n", encoding="utf-8")
+            (wiki / "index.md").write_text(
+                "---\npage_type: index\nslug: index\ntitle: I\nstatus: stable\nlast_reviewed: 2026-05-06\n---\n\n"
+                "# Index\n\n## Concepts\n\n- [Alpha](concepts/alpha.md)\n- [Beta](concepts/beta.md)\n",
+                encoding="utf-8",
+            )
+            (wiki / "log.md").write_text(
+                "---\npage_type: log\nslug: log\ntitle: L\nstatus: stable\nlast_reviewed: 2026-05-06\n---\n\n# Log\n",
+                encoding="utf-8",
+            )
+            (wiki / "concepts").mkdir()
+            (wiki / "concepts" / "alpha.md").write_text(
+                "---\npage_type: concept\nslug: alpha\ntitle: Alpha\nstatus: stable\n"
+                "last_reviewed: 2026-05-06\nsources:\n  - path: README.md\n    sha: abc\n---\n\n"
+                "# Alpha\n\nLinks to [beta](beta.md).\n",
+                encoding="utf-8",
+            )
+            (wiki / "concepts" / "beta.md").write_text(
+                "---\npage_type: concept\nslug: beta\ntitle: Beta\nstatus: stable\n"
+                "last_reviewed: 2026-05-06\nsources:\n  - path: README.md\n    sha: abc\n---\n\n"
+                "# Beta\n\nLinks to [alpha](alpha.md).\n",
+                encoding="utf-8",
+            )
+            real_root = _SCRIPTS_DIR.parent
+            shutil.copytree(real_root / "knowledge" / "wiki" / "schema", wiki / "schema")
+
+            result = lint_health(repo_root=tmp_root, backend=None)
+            # alpha and beta cross-link each other AND both are linked
+            # from index → no weak orphans (each has 2 inbound edges).
+            # Sources resolve. No frequent-mention entities.
+            self.assertEqual(
+                result.findings, [],
+                f"clean wiki yielded findings: {result.findings}",
+            )
+
+    def test_paths_filter_scopes_findings(self) -> None:
+        from wiki_ingest.health_lint import lint_health
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_wiki(tmp_root)
+            # Scoped to bar.md only.
+            scoped = lint_health(
+                repo_root=tmp_root,
+                paths=["concepts/bar.md"],
+                backend=None,
+            )
+            for f in scoped.findings:
+                self.assertIn("concepts/bar.md", f.pages)
+
+    def test_contradiction_check_uses_backend_when_provided(self) -> None:
+        from wiki_ingest.health_lint import lint_health
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_wiki(tmp_root)
+
+            class _FixedBackend:
+                """Returns contradicts=True for every page pair, with a
+                fixed description. Lets us assert the contradictions
+                code path runs and shapes findings correctly."""
+
+                def call(self, prompt):
+                    return {
+                        "version": 1,
+                        "contradicts": True,
+                        "description": "fixture backend says yes",
+                    }
+
+            result = lint_health(
+                repo_root=tmp_root,
+                backend=_FixedBackend(),
+            )
+            contradictions = [
+                f for f in result.findings if f.kind == "contradiction"
+            ]
+            self.assertGreater(len(contradictions), 0)
+            self.assertIn(
+                "fixture backend says yes",
+                contradictions[0].description,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

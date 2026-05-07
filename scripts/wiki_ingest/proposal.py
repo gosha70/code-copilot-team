@@ -111,6 +111,39 @@ class QueryAnswer:
     pages_loaded: list[str]
 
 
+HealthFindingKind = Literal[
+    "contradiction", "stale-claim", "weak-orphan", "missing-cross-link",
+]
+HealthFindingSeverity = Literal["warning", "error"]
+
+
+@dataclass(frozen=True)
+class HealthFinding:
+    """One finding from the Phase-4 knowledge-health lint pass.
+
+    Attributes
+    ----------
+    kind : HealthFindingKind
+        Which check produced the finding.
+    severity : HealthFindingSeverity
+        ``warning`` is the default for advisory mode (exit 0 with
+        stderr noise). ``error`` flips to non-zero exit when ``--strict``
+        is set; without --strict, it's still surfaced but does not
+        block.
+    pages : list[str]
+        Wiki-relative paths involved in the finding. For
+        contradictions, typically two pages. For stale-claim,
+        weak-orphan, missing-cross-link, usually one or more.
+    description : str
+        Human-readable description of the finding, with enough detail
+        for the curator to either act on it or ignore it.
+    """
+    kind: HealthFindingKind
+    severity: HealthFindingSeverity
+    pages: list[str]
+    description: str
+
+
 @dataclass(frozen=True)
 class WikiPatchSet:
     """A multi-page write plan emitted by Phase-1 ``wiki ingest``.
