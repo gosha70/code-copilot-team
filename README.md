@@ -258,8 +258,8 @@ operation that writes to the tracked `knowledge/wiki/` tree, and it
 runs as a plan-then-apply commit with snapshot rollback on any
 failure. Promotion history is traceable via git on `knowledge/wiki/`
 plus the append-only `knowledge/wiki/log.md` ledger; rejected or
-abandoned ingest attempts are not preserved (see audit-trail
-follow-up).
+abandoned ingest attempts are intentionally ephemeral — the
+proposal workspace is a working surface, not an audit log.
 
 The CLI auto-detects an installed copilot backend in the order
 `claude → codex → cursor`. Override with `--backend <name>` or
