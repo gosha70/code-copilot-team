@@ -242,5 +242,126 @@ class TestE2EBashEntrypoint(unittest.TestCase):
             self.assertTrue(output_path.exists())
 
 
+class TestE2EMultiPageIngest(unittest.TestCase):
+    """Phase 1: ``./scripts/wiki ingest <source>`` (without --legacy-single-source)
+    runs the multi-page DefaultMultiIngestor and produces a patch-set dir."""
+
+    def test_multi_page_ingest_writes_plan_and_preview(self) -> None:
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run_module(
+                "ingest",
+                str(_SAMPLE_INCIDENT),
+                "--backend", "test",
+                "--output-dir", tmp,
+            )
+            self.assertEqual(
+                result.returncode, 0,
+                f"stdout={result.stdout!r} stderr={result.stderr!r}"
+            )
+            patch_dir = Path(result.stdout.strip())
+            self.assertTrue(patch_dir.exists(), f"patch-set dir missing at {patch_dir}")
+
+            plan = json.loads((patch_dir / "plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(plan["version"], 1)
+            self.assertEqual(plan["backend"], "test")
+            # Test backend produces 3 edits: incident page + log + index.
+            self.assertEqual(len(plan["edits"]), 3)
+            actions = [e["action"] for e in plan["edits"]]
+            self.assertIn("create", actions)
+            self.assertIn("append-log", actions)
+            self.assertIn("append-index", actions)
+
+            # Each edit has a corresponding preview file.
+            for edit in plan["edits"]:
+                preview = patch_dir / "preview" / edit["path"]
+                self.assertTrue(preview.exists(), f"preview missing for {edit['path']}")
+
+    def test_multi_page_ingest_validates_per_edit_paths(self) -> None:
+        """Patch-set with a duplicate-create or '..' in path raises contract violation."""
+        from wiki_ingest.proposal import (
+            PageEdit,
+            WikiPatchSet,
+            validate_patch_set,
+        )
+
+        # Duplicate create — same path twice
+        dup = WikiPatchSet(
+            edits=[
+                PageEdit(path="incidents/x.md", action="create",
+                         new_content="x", rationale="r"),
+                PageEdit(path="incidents/x.md", action="create",
+                         new_content="x", rationale="r"),
+            ],
+            source_path="src.md", backend="test", rationale="r",
+        )
+        errors = validate_patch_set(dup)
+        self.assertTrue(any("duplicate create" in e for e in errors))
+
+        # Path traversal
+        bad = WikiPatchSet(
+            edits=[
+                PageEdit(path="../escape.md", action="create",
+                         new_content="x", rationale="r"),
+            ],
+            source_path="src.md", backend="test", rationale="r",
+        )
+        errors = validate_patch_set(bad)
+        self.assertTrue(any("relative" in e for e in errors))
+
+        # append-log targeting wrong file
+        bad2 = WikiPatchSet(
+            edits=[
+                PageEdit(path="something.md", action="append-log",
+                         new_content="x", rationale="r"),
+            ],
+            source_path="src.md", backend="test", rationale="r",
+        )
+        errors = validate_patch_set(bad2)
+        self.assertTrue(any("append-log" in e for e in errors))
+
+    def test_legacy_single_source_still_works(self) -> None:
+        """Backwards-compat: --legacy-single-source produces v1 IngestProposal output."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run_module(
+                "ingest",
+                "--legacy-single-source",
+                str(_SAMPLE_INCIDENT),
+                "--backend", "test",
+                "--output-dir", tmp,
+            )
+            self.assertEqual(result.returncode, 0)
+            output_path = Path(result.stdout.strip())
+            self.assertTrue(output_path.exists())
+            self.assertTrue(output_path.is_file())
+            # v1 produces a single .md file; multi-page produces a directory.
+            self.assertEqual(output_path.suffix, ".md")
+
+
+class TestE2EWikiState(unittest.TestCase):
+    """Phase 1: WikiState loads the existing wiki for the multi-page prompt."""
+
+    def test_loads_index_and_log(self) -> None:
+        import sys as _sys
+        _sys.path.insert(0, str(_SCRIPTS_DIR))
+        try:
+            from wiki_ingest.wiki_state import load_wiki_state
+        finally:
+            _sys.path.pop(0)
+        # Repo root is the ancestor of scripts/.
+        repo_root = _SCRIPTS_DIR.parent
+        state = load_wiki_state(
+            repo_root=repo_root,
+            source_path=_SAMPLE_INCIDENT,
+            source_content=_SAMPLE_INCIDENT.read_text(encoding="utf-8"),
+        )
+        # index.md and log.md should be loaded (they exist in the repo).
+        self.assertTrue(state.index_md, "index.md should be loaded")
+        self.assertTrue(state.log_md, "log.md should be loaded")
+        # Candidate set should be a dict (may be empty for unrelated source).
+        self.assertIsInstance(state.candidate_pages, dict)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -45,6 +45,7 @@ from .errors import (
     SourceMissingError,
 )
 from .ingestor import DefaultIngestor
+from .ingestor_multi import DefaultMultiIngestor, write_patch_set_dir
 from .proposal import IngestProposal, IngestRequest, render_proposal_file
 
 _DEFAULT_OUTPUT_DIR = Path("doc_internal/proposals")
@@ -219,17 +220,14 @@ def _path_within_repo(source: Path, repo_root: Path) -> bool:
 
 
 def _do_ingest(args: argparse.Namespace) -> int:
-    """Phase 0: only --legacy-single-source is wired. Multi-page ingest is Phase 1."""
+    """Route to legacy single-source ingest or Phase-1 multi-page ingest.
+
+    --legacy-single-source preserves the v1 IngestProposal flow.
+    Without the flag, Phase-1 DefaultMultiIngestor produces a
+    WikiPatchSet under doc_internal/proposals/<date>-<slug>/.
+    """
     if not args.legacy_single_source:
-        print(
-            "error: multi-page ingest is Phase 1 of the wiki-ingest-pipeline "
-            "rescope and is not yet implemented. Use "
-            "`./scripts/wiki ingest --legacy-single-source <source>` for the "
-            "v1 single-source proposal generator. See "
-            "specs/wiki-ingest-pipeline/spec.md for the full plan.",
-            file=sys.stderr,
-        )
-        return EXIT_NOT_IMPLEMENTED
+        return _do_ingest_multi(args)
 
     repo_root = _resolve_repo_root()
 
@@ -316,6 +314,89 @@ def _do_ingest(args: argparse.Namespace) -> int:
         return OutputWriteError.exit_code
 
     print(str(proposal_path))
+    return 0
+
+
+def _do_ingest_multi(args: argparse.Namespace) -> int:
+    """Phase-1 multi-page ingest: source → WikiPatchSet → proposals/<date>-<slug>/."""
+    repo_root = _resolve_repo_root()
+
+    source_path: Path = args.source
+    if not source_path.exists():
+        print(f"error: source file not found: {source_path}", file=sys.stderr)
+        return SourceMissingError.exit_code
+
+    if not args.allow_out_of_repo and not _path_within_repo(source_path, repo_root):
+        print(
+            f"error: source path is outside the repository tree: {source_path}\n"
+            f"  Repo root: {repo_root}\n"
+            f"  Pass --allow-out-of-repo to override.",
+            file=sys.stderr,
+        )
+        return EXIT_PATH_OUT_OF_REPO
+
+    try:
+        backend = resolve_backend(args.backend)
+    except BackendNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return BackendNotFoundError.exit_code
+
+    if args.debug_unsafe_output and hasattr(backend, "_redact_output"):
+        backend._redact_output = False
+
+    backend_name = _backend_display_name(backend, args.backend)
+    multi = DefaultMultiIngestor(backend=backend, repo_root=repo_root)
+
+    request = IngestRequest(
+        source_path=source_path,
+        source_kind="file",
+        backend_name=backend_name,
+    )
+
+    env_backup = os.environ.get("WIKI_INGEST_TASK")
+    if args.dry_run:
+        os.environ["WIKI_INGEST_TASK"] = "gate-only"
+    try:
+        patch = multi.ingest_multi(request)
+    except SourceMissingError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return SourceMissingError.exit_code
+    except BackendNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return BackendNotFoundError.exit_code
+    except BackendInvocationError as exc:
+        print(f"error: backend invocation failed: {exc}", file=sys.stderr)
+        return BackendInvocationError.exit_code
+    except ContractViolationError as exc:
+        print(f"error: contract violation: {exc}", file=sys.stderr)
+        return ContractViolationError.exit_code
+    finally:
+        if env_backup is None:
+            os.environ.pop("WIKI_INGEST_TASK", None)
+        else:
+            os.environ["WIKI_INGEST_TASK"] = env_backup
+
+    # Output dir: doc_internal/proposals/<date>-<source-stem>/
+    today = datetime.date.today().isoformat()
+    source_stem = source_path.stem or "source"
+    proposal_root: Path = args.output_dir or (repo_root / _DEFAULT_OUTPUT_DIR)
+    output_dir = proposal_root / f"{today}-{source_stem}"
+
+    try:
+        written = write_patch_set_dir(patch, output_dir)
+    except OSError as exc:
+        print(
+            f"error: could not write patch-set dir at {output_dir}: {exc}",
+            file=sys.stderr,
+        )
+        return OutputWriteError.exit_code
+
+    if not patch.edits:
+        # Gate rejected the source; surface the rationale.
+        print(f"{written}  (gate rejected, 0 edits)")
+        print(f"  rationale: {patch.rationale}", file=sys.stderr)
+        return 0
+    print(str(written))
     return 0
 
 

@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from . import yaml_lite
 from .errors import ContractViolationError
 
 # ---------------------------------------------------------------------------
@@ -79,6 +80,126 @@ _RESPONSE_SCHEMA = {
 }
 
 
+_PATCH_SET_RESPONSE_SCHEMA = {
+    "type": "object",
+    "required": ["version", "rationale", "edits"],
+    "properties": {
+        "version": {"type": "integer", "const": 1},
+        "rationale": {"type": "string"},
+        "edits": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["path", "action", "new_content", "rationale"],
+                "properties": {
+                    "path": {"type": "string"},
+                    "action": {"enum": ["create", "update", "append-log", "append-index"]},
+                    "new_content": {"type": "string"},
+                    "rationale": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
+def compose_multi_prompt(
+    source_path: Path,
+    source_content: str,
+    schema_files: dict[str, str],
+    wiki_state: "Any",  # noqa: F821 — Phase-1 WikiState forward-ref via TYPE_CHECKING in caller
+    source_kind: str = "file",
+) -> dict[str, Any]:
+    """Compose a wiki-aware BackendPrompt for multi-page ingest (Phase 1).
+
+    Differs from compose_prompt (Stage 1) in that it loads the existing
+    wiki state — index.md, log.md, and a candidate page set — into the
+    prompt as the curator's working memory, and asks the backend to
+    emit a WikiPatchSet (multi-page write plan) instead of a single
+    IngestProposal.
+
+    The instructions explicitly tell the backend to:
+      - integrate with existing pages where applicable (update, not
+        always create);
+      - update index.md with a one-line entry under the right section
+        whenever a page is created;
+      - append a one-line dated entry to log.md;
+      - one source can touch many pages — emit several edits if the
+        source warrants it.
+    """
+    system_instructions = (
+        "You are acting as the wiki curator. The wiki is a persistent, "
+        "compounding artifact maintained over time. You have been given "
+        "the existing wiki state below as your working memory. Your "
+        "task is to produce a multi-page WIKI PATCH-SET that integrates "
+        "the new source into the existing wiki: update existing pages "
+        "where the source extends or refines them, create new pages "
+        "only when no existing page covers the topic, append a one-line "
+        "dated entry to log.md, and update index.md with a link to any "
+        "new page. One source can touch several pages — emit edits for "
+        "each. Apply the four-question gate to the source first; if the "
+        "gate rejects, return an empty edits array with the reject "
+        "reason in 'rationale'."
+    )
+    return {
+        "version": 1,
+        "system_instructions": system_instructions,
+        "task": "ingest-multi",
+        "schema_excerpts": {
+            "ingest_rules": schema_files.get("ingest-rules", ""),
+            "page_types": schema_files.get("page-types", ""),
+            "citation_rules": schema_files.get("citation-rules", ""),
+        },
+        "source": {
+            "kind": source_kind,
+            "path": str(source_path),
+            "content": source_content,
+        },
+        "wiki_state": {
+            "index_md": getattr(wiki_state, "index_md", ""),
+            "log_md": getattr(wiki_state, "log_md", ""),
+            "candidate_pages": dict(getattr(wiki_state, "candidate_pages", {})),
+        },
+        "response_schema": json.dumps(_PATCH_SET_RESPONSE_SCHEMA),
+    }
+
+
+def parse_patch_set_response(raw_stdout: str) -> dict[str, Any]:
+    """Parse a backend's WikiPatchSet response (no semantic validation here).
+
+    Per-edit semantic validation lives in ingestor_multi.DefaultMultiIngestor;
+    set-level validation lives in proposal.validate_patch_set. This helper
+    only confirms the response is a JSON object with the required shape
+    so the orchestrator can build a WikiPatchSet from it.
+    """
+    try:
+        data = json.loads(raw_stdout)
+    except json.JSONDecodeError as exc:
+        truncated = raw_stdout[:500]
+        raise ContractViolationError(
+            f"WikiPatchSet response is not valid JSON: {exc}\n"
+            f"  stdout (first 500 chars): {truncated!r}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise ContractViolationError(
+            f"WikiPatchSet response must be a JSON object, got {type(data).__name__}"
+        )
+    for required in ("version", "rationale", "edits"):
+        if required not in data:
+            raise ContractViolationError(
+                f"WikiPatchSet response missing required key: {required!r}"
+            )
+    if data["version"] != 1:
+        raise ContractViolationError(
+            f"WikiPatchSet response version must be 1, got {data['version']!r}"
+        )
+    if not isinstance(data["edits"], list):
+        raise ContractViolationError(
+            f"WikiPatchSet.edits must be an array, got {type(data['edits']).__name__}"
+        )
+    return data
+
+
 def compose_prompt(
     source_path: Path,
     source_content: str,
@@ -122,147 +243,37 @@ def compose_prompt(
 
 
 # ---------------------------------------------------------------------------
-# YAML frontmatter parser (no pyyaml; ports the awk trick from lint-wiki.sh)
+# YAML frontmatter parser (delegates to yaml_lite — extracted in Phase 1
+# so all four operations can share without import cycles).
+#
+# These wrappers keep the historical _parse_frontmatter / _parse_simple_yaml /
+# _unquote / _sources_equal names for any internal callers that used them.
+# New code should import from yaml_lite directly.
 # ---------------------------------------------------------------------------
 
 def _parse_frontmatter(markdown: str) -> dict[str, Any]:
-    """Extract and parse the YAML frontmatter from a markdown string.
-
-    Raises ContractViolationError if the frontmatter block is missing or malformed.
-    Returns a dict of scalar and simple-list values found in the frontmatter.
-    """
-    lines = markdown.splitlines()
-    if not lines or lines[0].strip() != "---":
-        raise ContractViolationError(
-            "draft_markdown.frontmatter: missing opening '---' on line 1"
-        )
-    # Find closing ---
-    close_idx: int | None = None
-    for i, line in enumerate(lines[1:], start=1):
-        if line.strip() == "---":
-            close_idx = i
-            break
-    if close_idx is None:
-        raise ContractViolationError(
-            "draft_markdown.frontmatter: missing closing '---' for frontmatter block"
-        )
-
-    fm_lines = lines[1:close_idx]
-    return _parse_simple_yaml(fm_lines)
+    """Delegates to yaml_lite.parse_frontmatter (Phase 1 extraction)."""
+    return yaml_lite.parse_frontmatter(markdown)
 
 
 def _parse_simple_yaml(lines: list[str]) -> dict[str, Any]:
-    """Parse a minimal subset of YAML sufficient for wiki frontmatter.
-
-    Handles:
-    - scalar keys: ``key: value``
-    - list keys: ``key:\\n  - item``
-    - list items may themselves be dicts (multi-line): ``  - key: value\\n    key2: value2``
-    """
-    result: dict[str, Any] = {}
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        # Skip blank lines and comments
-        if not line.strip() or line.strip().startswith("#"):
-            i += 1
-            continue
-        # Top-level key
-        m = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)", line)
-        if m:
-            key = m.group(1)
-            rest = m.group(2).strip()
-            if rest == "" or rest == "null":
-                # Could be a list or a null scalar
-                # Peek ahead for list items starting with "  - "
-                items = []
-                j = i + 1
-                while j < len(lines):
-                    next_line = lines[j]
-                    # A new list item: starts with optional spaces then "- "
-                    item_m = re.match(r"^(\s+)-\s+(.*)", next_line)
-                    if item_m:
-                        item_indent = len(item_m.group(1))
-                        first_pair = item_m.group(2).strip()
-                        # Collect this item's key-value pairs (multi-line dict item)
-                        item_dict: dict[str, str] = {}
-                        kv_m = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)", first_pair)
-                        if kv_m:
-                            item_dict[kv_m.group(1)] = _unquote(kv_m.group(2).strip())
-                        else:
-                            # Plain scalar item
-                            items.append(_unquote(first_pair))
-                            j += 1
-                            continue
-                        j += 1
-                        # Collect continuation lines (indented more than the dash)
-                        while j < len(lines):
-                            cont = lines[j]
-                            if not cont.strip():
-                                j += 1
-                                continue
-                            cont_indent = len(cont) - len(cont.lstrip())
-                            if cont_indent <= item_indent:
-                                break
-                            # Must not start a new list item
-                            if re.match(r"^\s+-\s+", cont):
-                                break
-                            cont_kv = re.match(r"^\s+([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)", cont)
-                            if cont_kv:
-                                item_dict[cont_kv.group(1)] = _unquote(cont_kv.group(2).strip())
-                            j += 1
-                        items.append(item_dict)
-                    elif next_line and not next_line.startswith(" ") and not next_line.startswith("\t"):
-                        # Back at top level
-                        break
-                    else:
-                        j += 1
-                if items:
-                    result[key] = items
-                    i = j
-                else:
-                    result[key] = None
-                    i = j
-            else:
-                result[key] = _unquote(rest)
-                i += 1
-        else:
-            i += 1
-    return result
+    """Delegates to yaml_lite.parse_simple_yaml (Phase 1 extraction)."""
+    return yaml_lite.parse_simple_yaml(lines)
 
 
 def _unquote(s: str) -> str:
-    """Strip surrounding quotes from a YAML scalar value.
+    """Delegates to yaml_lite.unquote (Phase 1 extraction)."""
+    return yaml_lite.unquote(s)
 
-    For single-quoted strings, also unescape doubled single quotes (`''` →
-    `'`) per the YAML 1.2 single-quoted-flow-scalar rule.
-    For double-quoted strings, surrounding quotes are stripped but no
-    backslash-escape processing is attempted (this parser is intentionally
-    minimal — wiki frontmatter rarely uses double-quoted scalars).
-    """
-    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
-        return s[1:-1]
-    if len(s) >= 2 and s[0] == "'" and s[-1] == "'":
-        return s[1:-1].replace("''", "'")
-    return s
-
-
-# ---------------------------------------------------------------------------
-# Sources normalisation for set-equality comparison
-# ---------------------------------------------------------------------------
 
 def _normalise_source(source: Any) -> frozenset[tuple[str, str]]:
-    """Convert a source entry (dict) to a frozenset of (key, value) pairs for comparison."""
-    if isinstance(source, dict):
-        return frozenset((k, str(v)) for k, v in source.items())
-    return frozenset({("raw", str(source))})
+    """Delegates to yaml_lite.normalise_source (Phase 1 extraction)."""
+    return yaml_lite.normalise_source(source)
 
 
 def _sources_equal(a: list[Any], b: list[Any]) -> bool:
-    """Return True if two sources lists are set-equal (order-independent)."""
-    set_a = {_normalise_source(s) for s in a}
-    set_b = {_normalise_source(s) for s in b}
-    return set_a == set_b
+    """Delegates to yaml_lite.sources_equal (Phase 1 extraction)."""
+    return yaml_lite.sources_equal(a, b)
 
 
 # ---------------------------------------------------------------------------
