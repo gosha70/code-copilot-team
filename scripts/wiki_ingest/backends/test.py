@@ -45,7 +45,43 @@ class TestBackend:
         task = prompt.get("task", "ingest")
         if task == "ingest-multi":
             return self._call_multi(prompt)
+        if task == "query":
+            return self._call_query(prompt)
         return self._call_single(prompt)
+
+    def _call_query(self, prompt: dict[str, Any]) -> dict[str, Any]:
+        """Deterministic query response for Phase-3 tests.
+
+        Returns an answer derived from the question + cites every
+        candidate page that was loaded into the prompt. Idempotent
+        and stable — useful for index-first navigation tests.
+        """
+        question = prompt.get("source", {}).get("content", "")
+        wiki_state = prompt.get("wiki_state", {})
+        candidates = wiki_state.get("candidate_pages", {}) or {}
+
+        # Synthesise a stable answer from the question + page paths.
+        if candidates:
+            citations = [
+                {
+                    "page": rel,
+                    "fragment": (content[:120].splitlines()[0] if content else ""),
+                }
+                for rel, content in candidates.items()
+            ]
+            answer = (
+                f"Test backend deterministic answer to: {question.strip()!r}. "
+                f"Consulted {len(candidates)} page(s)."
+            )
+        else:
+            citations = [{"page": "index.md", "fragment": "(index only — no candidates loaded)"}]
+            answer = ""  # empty signals "not enough info"
+
+        return {
+            "version": 1,
+            "answer": answer,
+            "citations": citations,
+        }
 
     def _call_single(self, prompt: dict[str, Any]) -> dict[str, Any]:
         source = prompt.get("source", {})

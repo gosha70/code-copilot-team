@@ -71,12 +71,16 @@ verb.
 
 ## Phase 3 — Query
 
-| Capability | Status | Target |
+| Capability | Status | Where |
 |---|---|---|
-| `./scripts/wiki query "<question>"` | ⏳ planned | Phase 3 PR |
-| Index-first navigation | ⏳ planned | `querier.py` |
-| Pages-loaded log | ⏳ planned | `doc_internal/wiki-query-log.jsonl` |
-| `--file-back` round-trip | ⏳ planned | query → patch-set → promote |
+| `./scripts/wiki query "<question>"` | ✓ delivered | verb dispatcher routes to `DefaultQuerier` |
+| Index-first navigation | ✓ delivered | `_select_query_candidates` reads `index.md`, follows `[…](path.md)` links, scores by token overlap, top-N selection (default 5) |
+| Pages outside `index.md` are unreachable | ✓ delivered | regression test `test_query_skips_pages_not_in_index` |
+| `compose_query_prompt` with wiki state | ✓ delivered | uses the same renderer as multi-ingest; reference fences neutralised |
+| Pages-loaded log | ✓ delivered | `doc_internal/wiki-query-log.jsonl` (one JSONL line per query) |
+| `--file-back` round-trip | ✓ delivered | synthesises a source from question+answer, runs `DefaultMultiIngestor` over it, returns `(QueryAnswer, WikiPatchSet)` |
+| Empty-answer handling | ✓ delivered | answer == `""` when wiki lacks info; --file-back returns empty patch-set |
+| Test backend dispatches `task: query` | ✓ delivered | `backends/test.py::_call_query` |
 
 ## Phase 4 — Knowledge-health lint
 

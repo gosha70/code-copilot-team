@@ -50,6 +50,7 @@ from .ingestor import DefaultIngestor
 from .ingestor_multi import DefaultMultiIngestor, write_patch_set_dir
 from .promoter import promote as run_promote
 from .proposal import IngestProposal, IngestRequest, render_proposal_file
+from .querier import DefaultQuerier
 
 _DEFAULT_OUTPUT_DIR = Path("doc_internal/proposals")
 
@@ -153,11 +154,44 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     # ── query ──────────────────────────────────────────────────
     p_query = sub.add_parser(
         "query",
-        help="Answer a question by reading the wiki, index-first. "
-             "Phase 3 — not yet implemented.",
+        help="Answer a question by reading the wiki, index-first.",
     )
-    p_query.add_argument("question", nargs="?")
-    p_query.add_argument("--file-back", action="store_true")
+    p_query.add_argument(
+        "question",
+        help="The question to answer against the wiki.",
+    )
+    p_query.add_argument(
+        "--file-back",
+        action="store_true",
+        help="In addition to printing the answer, run a multi-page "
+             "ingest over a synthetic source built from the question + "
+             "answer, producing a patch-set under doc_internal/proposals/. "
+             "The curator reviews and runs `wiki promote` to land it.",
+    )
+    p_query.add_argument(
+        "--backend",
+        default=None,
+        help="Backend name (claude / codex / cursor / test). Defaults "
+             "to WIKI_INGEST_BACKEND env var, then auto-detect.",
+    )
+    p_query.add_argument(
+        "--max-pages",
+        type=int,
+        default=None,
+        help="Max number of wiki pages to load into the query prompt. "
+             "Default 5 (DEFAULT_MAX_QUERY_PAGES).",
+    )
+    p_query.add_argument(
+        "--debug-unsafe-output",
+        action="store_true",
+        help="Disable stderr redaction in error messages (see ingest).",
+    )
+    p_query.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="When --file-back: override the proposals directory.",
+    )
 
     # ── lint ───────────────────────────────────────────────────
     p_lint = sub.add_parser(
@@ -465,15 +499,75 @@ def _do_promote(args: argparse.Namespace) -> int:
 
 
 def _do_query(args: argparse.Namespace) -> int:
-    """Phase 3 — not yet implemented."""
+    """Phase 3: index-first query against the wiki."""
+    repo_root = _resolve_repo_root()
+    try:
+        backend = resolve_backend(args.backend)
+    except BackendNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return BackendNotFoundError.exit_code
+
+    if args.debug_unsafe_output and hasattr(backend, "_redact_output"):
+        backend._redact_output = False
+
+    querier_kwargs: dict[str, object] = {
+        "backend": backend,
+        "repo_root": repo_root,
+    }
+    if args.max_pages is not None:
+        querier_kwargs["max_pages"] = args.max_pages
+    querier = DefaultQuerier(**querier_kwargs)  # type: ignore[arg-type]
+
+    try:
+        if args.file_back:
+            answer, patch = querier.query_with_file_back(args.question)
+        else:
+            answer = querier.query(args.question)
+            patch = None
+    except SourceMissingError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return SourceMissingError.exit_code
+    except BackendInvocationError as exc:
+        print(f"error: backend invocation failed: {exc}", file=sys.stderr)
+        return BackendInvocationError.exit_code
+    except ContractViolationError as exc:
+        print(f"error: contract violation: {exc}", file=sys.stderr)
+        return ContractViolationError.exit_code
+
+    if answer.answer:
+        print(answer.answer)
+    else:
+        print("(no answer — wiki does not contain enough information)")
+
+    print("\n--- citations ---", file=sys.stderr)
+    for c in answer.citations:
+        print(f"  - {c.page}: {c.fragment}", file=sys.stderr)
     print(
-        "error: `./scripts/wiki query` is Phase 3 of the wiki-ingest-pipeline "
-        "rescope and is not yet implemented. See "
-        "specs/wiki-ingest-pipeline/plan.md § 'Phase 3 — Query' for the "
-        "delivery schedule.",
-        file=sys.stderr,
+        f"--- pages loaded: {len(answer.pages_loaded)} ---", file=sys.stderr,
     )
-    return EXIT_NOT_IMPLEMENTED
+    for p in answer.pages_loaded:
+        print(f"  + {p}", file=sys.stderr)
+
+    if args.file_back and patch is not None:
+        if not patch.edits:
+            print(
+                "(--file-back: empty patch-set; nothing to file back)",
+                file=sys.stderr,
+            )
+            return 0
+        # Write the patch-set out so the curator can promote it.
+        from .ingestor_multi import write_patch_set_dir
+        today = datetime.date.today().isoformat()
+        slug = "query-fileback"
+        proposal_root: Path = args.output_dir or (repo_root / _DEFAULT_OUTPUT_DIR)
+        out = proposal_root / f"{today}-{slug}"
+        try:
+            written = write_patch_set_dir(patch, out)
+        except OSError as exc:
+            print(f"error: could not write file-back dir: {exc}", file=sys.stderr)
+            return OutputWriteError.exit_code
+        print(f"--- file-back patch-set: {written}", file=sys.stderr)
+    return 0
 
 
 def _do_lint(args: argparse.Namespace) -> int:

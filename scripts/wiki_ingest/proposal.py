@@ -81,6 +81,37 @@ class PageEdit:
 
 
 @dataclass(frozen=True)
+class Citation:
+    """One (page-path, fragment) citation produced by ``wiki query``."""
+    page: str
+    fragment: str
+
+
+@dataclass(frozen=True)
+class QueryAnswer:
+    """The structured result of ``wiki query`` (Phase 3).
+
+    Attributes
+    ----------
+    answer : str
+        The synthesised answer text. May be empty if the wiki does
+        not contain enough information; in that case ``citations``
+        will typically contain only the index entry the reader
+        followed.
+    citations : list[Citation]
+        (page-path, fragment) for every wiki page consulted in the
+        answer. Pages not in this list were not opened.
+    pages_loaded : list[str]
+        Wiki-relative paths of pages loaded into the prompt. Useful
+        for auditing index-first navigation. Logged to
+        ``doc_internal/wiki-query-log.jsonl``.
+    """
+    answer: str
+    citations: list[Citation]
+    pages_loaded: list[str]
+
+
+@dataclass(frozen=True)
 class WikiPatchSet:
     """A multi-page write plan emitted by Phase-1 ``wiki ingest``.
 

@@ -1123,5 +1123,159 @@ class TestE2ESingleWriterInvariant(unittest.TestCase):
         )
 
 
+class TestE2EQuery(unittest.TestCase):
+    """Phase 3: ``./scripts/wiki query "<question>"`` reads index.md
+    first, follows links to relevant pages, returns an answer with
+    citations. Pages NOT linked from the index are unreachable."""
+
+    def _build_tmp_repo_with_pages(self, tmp: Path) -> Path:
+        """Create a minimal wiki with index.md + 3 linked pages."""
+        wiki = tmp / "knowledge" / "wiki"
+        wiki.mkdir(parents=True)
+        (wiki / "concepts").mkdir()
+        (wiki / "incidents").mkdir()
+        (wiki / "index.md").write_text(
+            "---\npage_type: index\nslug: index\ntitle: T\nstatus: stable\nlast_reviewed: 2026-05-06\n---\n\n"
+            "# Index\n\n"
+            "## Concepts\n\n"
+            "- [Origin Alignment](concepts/origin-alignment.md) — the breaker.\n"
+            "- [Spec Drift](concepts/spec-drift.md) — when specs diverge.\n\n"
+            "## Incidents\n\n"
+            "- [PR 27 Derailment](incidents/pr-27-derailment.md) — a real example.\n",
+            encoding="utf-8",
+        )
+        (wiki / "concepts" / "origin-alignment.md").write_text(
+            "# Origin Alignment\n\nBody about origin alignment and breakers.\n",
+            encoding="utf-8",
+        )
+        (wiki / "concepts" / "spec-drift.md").write_text(
+            "# Spec Drift\n\nBody about specs and drift.\n",
+            encoding="utf-8",
+        )
+        (wiki / "incidents" / "pr-27-derailment.md").write_text(
+            "# PR 27 Derailment\n\nBody about PR 27 and derailment from origin.\n",
+            encoding="utf-8",
+        )
+        (wiki / "log.md").write_text(
+            "---\npage_type: log\nslug: log\ntitle: L\nstatus: stable\nlast_reviewed: 2026-05-06\n---\n\n# Log\n",
+            encoding="utf-8",
+        )
+        # Mirror schema/ from the real repo so load_schema_files works.
+        real_root = _SCRIPTS_DIR.parent
+        shutil.copytree(
+            real_root / "knowledge" / "wiki" / "schema",
+            wiki / "schema",
+        )
+        return wiki
+
+    def test_query_reads_index_first_and_selects_relevant_pages(self) -> None:
+        from wiki_ingest.querier import _select_query_candidates
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_tmp_repo_with_pages(tmp_root)
+            index_md, pages_loaded, pages_content = _select_query_candidates(
+                repo_root=tmp_root,
+                question="what does the wiki say about origin alignment and the breaker?",
+                max_pages=5,
+            )
+            self.assertIn("# Index", index_md)
+            self.assertIn("concepts/origin-alignment.md", pages_loaded)
+            # Stable: the page with the most token overlap should be first.
+            self.assertEqual(pages_loaded[0], "concepts/origin-alignment.md")
+            # All loaded pages were linked from index.md.
+            for rel in pages_loaded:
+                self.assertIn(rel, index_md)
+
+    def test_query_with_test_backend_returns_answer_and_citations(self) -> None:
+        from wiki_ingest.backends.test import TestBackend
+        from wiki_ingest.querier import DefaultQuerier
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_tmp_repo_with_pages(tmp_root)
+            q = DefaultQuerier(backend=TestBackend(), repo_root=tmp_root)
+            answer = q.query("origin alignment")
+            self.assertTrue(answer.answer)
+            self.assertGreater(len(answer.citations), 0)
+            self.assertGreater(len(answer.pages_loaded), 0)
+
+    def test_query_logs_pages_loaded_to_jsonl(self) -> None:
+        import json as _json
+        from wiki_ingest.backends.test import TestBackend
+        from wiki_ingest.querier import DefaultQuerier
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_tmp_repo_with_pages(tmp_root)
+            q = DefaultQuerier(backend=TestBackend(), repo_root=tmp_root)
+            q.query("origin alignment breaker")
+            log_path = tmp_root / "doc_internal" / "wiki-query-log.jsonl"
+            self.assertTrue(log_path.exists())
+            entry = _json.loads(log_path.read_text().strip().splitlines()[0])
+            self.assertEqual(entry["question"], "origin alignment breaker")
+            self.assertIn("pages_loaded", entry)
+            self.assertIsInstance(entry["pages_loaded"], list)
+
+    def test_query_skips_pages_not_in_index(self) -> None:
+        """A page on disk that is NOT linked from index.md must not be
+        loaded, even if its content looks relevant. Index-first."""
+        from wiki_ingest.querier import _select_query_candidates
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            wiki = self._build_tmp_repo_with_pages(tmp_root)
+            # Add an orphan page on disk — NOT linked from index.md.
+            orphan = wiki / "concepts" / "orphan-relevant.md"
+            orphan.write_text(
+                "# Orphan\n\nVery relevant: origin alignment breaker drift.\n",
+                encoding="utf-8",
+            )
+            _index, pages_loaded, _content = _select_query_candidates(
+                repo_root=tmp_root,
+                question="origin alignment breaker drift",
+                max_pages=10,
+            )
+            self.assertNotIn(
+                "concepts/orphan-relevant.md", pages_loaded,
+                "orphan page (not in index) must not be loaded",
+            )
+
+    def test_query_empty_answer_when_wiki_lacks_info(self) -> None:
+        """When the test backend's deterministic response returns an
+        empty answer, the orchestrator surfaces it as ``answer == ''``."""
+        from wiki_ingest.querier import DefaultQuerier
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_tmp_repo_with_pages(tmp_root)
+
+            class _NoMatchBackend:
+                def call(self, prompt):
+                    return {
+                        "version": 1,
+                        "answer": "",
+                        "citations": [
+                            {"page": "index.md", "fragment": "(index only)"}
+                        ],
+                    }
+
+            q = DefaultQuerier(backend=_NoMatchBackend(), repo_root=tmp_root)
+            ans = q.query("a question with no good answer")
+            self.assertEqual(ans.answer, "")
+            self.assertEqual(len(ans.citations), 1)
+
+    def test_query_file_back_round_trip(self) -> None:
+        """--file-back: query → answer → patch-set with at least one edit."""
+        from wiki_ingest.backends.test import TestBackend
+        from wiki_ingest.querier import DefaultQuerier
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            self._build_tmp_repo_with_pages(tmp_root)
+            q = DefaultQuerier(backend=TestBackend(), repo_root=tmp_root)
+            answer, patch = q.query_with_file_back(
+                "origin alignment breaker"
+            )
+            self.assertTrue(answer.answer)
+            # Test backend's ingest-multi response is deterministic and
+            # produces 3 edits (create + log + index).
+            self.assertEqual(len(patch.edits), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
