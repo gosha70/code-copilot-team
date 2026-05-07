@@ -1,6 +1,13 @@
 ---
 feature_id: issue-25-recommend-next-bet
-spec_mode: lightweight
+spec_mode: none
+justification: |
+  Prompt-text edits to existing agents/skills/templates + new bash contract test.
+  No novel data model, no auth surface, no runtime/migration changes, no new
+  external dependencies. The risk surface is prompt drift across the canonical
+  + adapter copies; tests/test-cooldown-recommendation.sh pins it (46 assertions).
+  Acceptance mapping below ties each issue acceptance item to the file that
+  satisfies it — that mapping is the spec for this kind of work.
 status: approved
 date: 2026-05-06
 issue: 25
