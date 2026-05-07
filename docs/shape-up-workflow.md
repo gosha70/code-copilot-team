@@ -37,7 +37,11 @@ The two coexist by nesting: `specs/pitches/<id>/` holds `pitch.md` (Shape-Up)
 - **Cycle** — uninterrupted build period at the appetite. Identified by a
   cycle number (e.g. `01`).
 - **Cooldown** — 1–2 weeks between cycles for fixes, polish, and shaping the
-  next round of pitches.
+  next round of pitches. During shaping AND cooldown, run
+  `./scripts/wiki query "<your design question>"` to consult prior decisions
+  and incidents in the project wiki before re-deriving them — wiki-first,
+  raw-source fallback. See the [LLM Wiki Maintainer](../README.md#llm-wiki-maintainer)
+  section of the top-level README for the full CLI surface.
 - **Scope** — self-contained slice of a pitch. 3–7 per pitch. Tracked on
   the hill chart.
 - **Hill chart** — per-scope status (`uphill | downhill | done`) for an
