@@ -52,6 +52,6 @@ The agent will:
 ### 7. Report
 
 Print:
-- Pitch outcome (`shipped` or `shelved`)
-- Path to the cooldown report
-- Next step: "Review the report. When ready, `/shape` new pitches and convene the next betting table."
+- Pitch outcome (`shipped` or `shelved`).
+- Path to the cooldown report.
+- **The recommendation message that the `cooldown-report` agent emitted** in step 6, verbatim — surface it here so the user sees it directly in `/cooldown`'s output without having to open the report file. The agent emits exactly one of three forms (single-winner / no-shaped / multiple-ambiguous, see its **Output** section); echo whichever it chose. Do **not** fall back to a generic "review the report" or "what's next?" line — that defeats the recommendation discipline (issue #25).

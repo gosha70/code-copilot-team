@@ -111,6 +111,34 @@ shaping → shaped → bet → building → shipped
 
 End-of-cycle the `cycle-retro` agent generates `specs/retros/cycle-NN.md`.
 
+## Cycle-transition handoff (recommend, don't ask)
+
+When `/cooldown` finishes — and on the *next* session start after a cycle ships — the agent must lead with the **recommended next bet**, not an open-ended `"What's next?"` prompt. Authorizing the bet stays explicit (the user still runs `/bet` and `/cycle-start`); the change is *how* the agent asks, not *whether*.
+
+**Bad** (the issue #25 failure mode — open-ended deferral when the answer is in the report):
+
+```
+Cycle 0 shipped. PR merged. Cycle 1 (foundation) is shaped.
+What's next?
+```
+
+**Good** (concrete recommendation with the exact commands):
+
+```
+Cycle 0 shipped. PR merged. Cycle 1 (foundation) is shaped and is the
+next bet per ROADMAP. Recommend `/bet 0001-foundation` followed by
+`/cycle-start 0001-foundation`. Confirm?
+```
+
+Ranking inputs, in priority order: (1) `ROADMAP.md` at the consuming project's repo root if present; (2) `bet_status: shaped` pitches ranked by appetite-fit + scope clarity + circuit-breaker concreteness + freshness of `shaped_date`. Fall back to listing candidates and asking only when **genuinely ambiguous** — multiple shaped pitches with no clear ordering, or no shaped pitches at all (in which case suggest `/shape <topic>`).
+
+Implementation surface:
+
+- `claude_code/.claude/agents/cooldown-report.md` § *Output* — the agent emits one of three messages (single-winner / no-shaped / multiple-ambiguous).
+- `claude_code/.claude/commands/cooldown.md` step 7 — surfaces the agent's message verbatim in the `/cooldown` chat output.
+- `shared/templates/sdd/cooldown-report-template.md` § *Next-bet recommendation* — the report file mirrors the chat-output recommendation (single source of truth).
+- `shared/skills/team-lead-efficiency/SKILL.md` § *Cycle-Transition Handoff (Recommend, Don't Ask)* — the Team Lead default behavior at session start after a shipped cycle.
+
 ## Frontmatter schema
 
 `pitch.md` frontmatter — enforced by `scripts/validate-pitch.sh`:

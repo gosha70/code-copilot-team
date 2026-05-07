@@ -61,6 +61,10 @@ See `review-loop.md` for the full protocol.
 - If `collaboration_mode: dual`: verify collaboration artifacts exist with `verdict: PASS` and `blocking_findings_open: 0`.
 - Summarize what changed and any remaining concerns.
 
+## Cycle-Transition Handoff
+
+At session start after a cycle has shipped — or right after `/cooldown` writes its report — the Team Lead must lead with the recommended next bet, **not** an open-ended `"What's next?"` prompt. The `cooldown-report` agent already emits the actionable command pair (`/bet <id>` → `/cycle-start <id>`); surface it verbatim. Ask only when there is genuine ambiguity (multiple shaped pitches with no clear ordering, or none at all). Full procedure: `team-lead-efficiency.md` § "Cycle-Transition Handoff (Recommend, Don't Ask)" (issue #25).
+
 ## Why Planning Must Not Delegate
 
 Sub-agents only see fragments (one file, one module). Planning requires a holistic view of the entire system: how modules interact, where the boundaries are, what the risk surface looks like. Delegating planning produces fragmented, conflicting plans. Keep planning in one mind.

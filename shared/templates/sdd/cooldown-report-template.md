@@ -48,6 +48,23 @@ duration: [1w | 2w]
 1. **[pitch_id]** ([appetite]) — [why this is a strong bet]
 2. **[pitch_id]** ([appetite]) — [why this is a strong bet]
 
+### Next-bet recommendation
+
+<!-- The single most-likely-next bet, surfaced as the actionable command pair
+     the user should run if they accept. Mirrors the agent's chat-output
+     recommendation so the report file is the single source of truth.
+     Per issue #25: recommend, don't ask. Authorizing the bet stays explicit
+     (the user still runs both commands), but the agent names the bet
+     concretely instead of asking "what's next?". -->
+
+**Next-bet recommendation:** `/bet [pitch_id]` → `/cycle-start [pitch_id]` (cycle [NN+1])
+
+<!-- Empty-set fallback (use only when no shaped pitches exist):
+     **Next-bet recommendation:** `/shape <topic>` — no shaped pitches available; draft the next bet before convening the betting table. -->
+
+<!-- Ambiguity fallback (use only when multiple shaped pitches tie with no
+     clear ordering — list them above and ask the user to pick). -->
+
 ## Carryover
 
 <!-- Anything still open at end of cooldown. -->
