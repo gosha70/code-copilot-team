@@ -10,7 +10,7 @@ Phased delivery on `feat/benchmark-harness`. Each task is bounded and independen
 
 ### T0.2 — Adapter + Backend protocols
 - **Output:** `contracts.py` defines `TaskSpec`, `VerifyResult`, `BackendResult`, `RunContext` dataclasses and `BenchmarkAdapter`, `Backend` protocols exactly as in `spec.md` § "Adapter contract" / "Backend contract".
-- **Done when:** `pytest scripts/benchmark_runner/tests/test_contracts.py` passes (instantiating the protocols + dataclasses, type-checking attribute presence).
+- **Done when:** `PYTHONPATH=scripts python3 -m unittest discover -s scripts/benchmark_runner/tests -v` passes (instantiating the protocols + dataclasses, type-checking attribute presence). Repo convention is stdlib `unittest`, matching `scripts/wiki_ingest/tests/`.
 
 ### T0.3 — CLI skeleton
 - **Output:** `cli.py` argparse with subcommands `list`, `run`, `report`, `dogfood`. `list` returns `[]` JSON when no adapters registered. `run` errors clearly on unknown adapter/backend.

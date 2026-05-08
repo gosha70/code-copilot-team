@@ -134,7 +134,7 @@ Each phase is a separate commit (or commit chain) reviewed and approved before t
 ## Test strategy
 
 - Unit tests live alongside the package (`scripts/benchmark_runner/tests/`).
-- Adapter contract conformance test: any registered adapter must satisfy a `pytest` parametrized test that lists tasks, prepares one task in a tmpdir, calls verify on the prepared+golden state, and asserts pass.
+- Adapter contract conformance test: any registered adapter must satisfy a stdlib `unittest` parametrized test that lists tasks, prepares one task in a tmpdir, calls verify on the prepared+golden state, and asserts pass. (Repo convention is stdlib `unittest`, mirroring `scripts/wiki_ingest/tests/`. The `pytest` mention earlier in this plan is the Polyglot adapter's *per-language verify command* — Polyglot Python tasks ship pytest test files — not the harness's own test framework.)
 - Backend contract conformance test: same shape, against a recorded fixture.
 - CI smoke test (live): stub × stub on GH free runner.
 - The repo's existing `tests/` shell tests are not modified.

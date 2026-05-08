@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "aider-polyglot",
+  "task_id": "exercism/python/leap",
+  "backend_id": "claude-code-sonnet",
+  "run_id": "run-001",
+  "attempt": 2,
+  "started_at": "2026-05-07T20:00:00Z",
+  "finished_at": "2026-05-07T20:05:12Z",
+  "isolation": {
+    "tier": "worktree+venv",
+    "python": "3.12",
+    "install_command": "pip install -e .[dev]"
+  },
+  "backend_invocation": {
+    "model": "sonnet",
+    "temperature": 0.0,
+    "seed": null
+  },
+  "prompt": {
+    "path": "prompt.md",
+    "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  },
+  "effective_prompt": null,
+  "model_output_path": "model-output.txt"
+}

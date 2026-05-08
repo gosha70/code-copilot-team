@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# benchmark — primary entrypoint for the CCT benchmark harness.
+#
+# Subcommands (Phase 0+):
+#   benchmark list                              — list registered adapters and backends.
+#   benchmark run --benchmark <id>              — run a benchmark against a backend.
+#                 --backend <id> --runs <n>       (Phase 1+: real runs).
+#   benchmark report --run-dir <path>           — aggregate a run-dir into a report
+#                                                 (Phase 1: skeleton; Phase 4: full).
+#   benchmark dogfood --backend <id>            — Phase 4: Aider Polyglot vs leaderboard.
+#
+# Sets PYTHONPATH so scripts/benchmark_runner/ resolves as a top-level
+# package, then exec's python3 -m benchmark_runner with the args.
+#
+# See specs/benchmark-harness/spec.md for the feature spec and
+# specs/benchmark-harness/plan.md for the phased delivery plan.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+exec env PYTHONPATH="${REPO_DIR}/scripts${PYTHONPATH:+:${PYTHONPATH}}" \
+  python3 -m benchmark_runner "$@"

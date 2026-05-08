@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gosha70/code-copilot-team/benchmarks/schema/score.schema.json",
+  "title": "Benchmark task score record",
+  "description": "Per-task deterministic score emitted by the harness. One file per (task, attempt). null distinguishes 'adapter does not produce this signal' from false ('signal produced and failed'). See specs/benchmark-harness/spec.md for the contract.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "benchmark_id",
+    "task_id",
+    "backend_id",
+    "run_id",
+    "attempt",
+    "scores",
+    "derived",
+    "result"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "benchmark_id": { "type": "string", "minLength": 1 },
+    "task_id": { "type": "string", "minLength": 1 },
+    "backend_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "scores": {
+      "type": "object",
+      "required": [
+        "tests_passed",
+        "lint_passed",
+        "typecheck_passed",
+        "required_files_present",
+        "timeout",
+        "human_interventions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tests_passed": { "type": "boolean" },
+        "lint_passed": { "type": ["boolean", "null"] },
+        "typecheck_passed": { "type": ["boolean", "null"] },
+        "required_files_present": { "type": "boolean" },
+        "timeout": { "type": "boolean" },
+        "human_interventions": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "derived": {
+      "type": "object",
+      "required": [
+        "elapsed_seconds",
+        "files_changed",
+        "lines_added",
+        "lines_removed",
+        "failed_commands"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "elapsed_seconds": { "type": "number", "minimum": 0 },
+        "files_changed": { "type": "integer", "minimum": 0 },
+        "lines_added": { "type": "integer", "minimum": 0 },
+        "lines_removed": { "type": "integer", "minimum": 0 },
+        "failed_commands": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "result": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "timeout"]
+    }
+  }
+}
