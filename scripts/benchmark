@@ -19,5 +19,10 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-exec env PYTHONPATH="${REPO_DIR}/scripts${PYTHONPATH:+:${PYTHONPATH}}" \
+# Two paths on PYTHONPATH:
+#   ${REPO_DIR}/scripts — so ``benchmark_runner`` resolves as a top-level package.
+#   ${REPO_DIR}         — so ``benchmarks.adapters.<id>`` is importable for
+#                         registration. Adapter datasets live alongside the
+#                         Python code under ``benchmarks/adapters/<id>/``.
+exec env PYTHONPATH="${REPO_DIR}/scripts:${REPO_DIR}${PYTHONPATH:+:${PYTHONPATH}}" \
   python3 -m benchmark_runner "$@"

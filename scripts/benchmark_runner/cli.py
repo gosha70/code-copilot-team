@@ -36,6 +36,7 @@ from .registry import (
 # Stable exit codes; documented in the bash wrapper and in spec.md.
 EXIT_OK = 0
 EXIT_USAGE = 2
+EXIT_RUNTIME = 3
 EXIT_NOT_IMPLEMENTED = 8
 
 
@@ -51,7 +52,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Exit codes: 0 success; 2 usage error or unknown "
-            "adapter/backend; 8 subcommand not yet implemented."
+            "adapter/backend; 3 runtime failure during run/report; "
+            "8 subcommand not yet implemented."
         ),
     )
     sub = parser.add_subparsers(dest="subcommand", required=True, metavar="<subcommand>")
@@ -124,13 +126,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _cmd_list(args: argparse.Namespace) -> int:
     if args.benchmark is not None:
-        # Phase 1+: list adapter tasks. Phase 0 stubs out.
-        print(
-            f"benchmark: listing tasks for an adapter is Phase 1+ (got --benchmark "
-            f"{args.benchmark!r}); see specs/benchmark-harness/plan.md.",
-            file=sys.stderr,
-        )
-        return EXIT_NOT_IMPLEMENTED
+        from .registry import get_adapter
+
+        try:
+            adapter = get_adapter(args.benchmark)
+        except UnknownAdapterError as exc:
+            print(f"benchmark: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        tasks = [
+            {"task_id": t.task_id, "language": t.language}
+            for t in adapter.list_tasks()
+        ]
+        print(json.dumps({"benchmark_id": args.benchmark, "tasks": tasks}, indent=2))
+        return EXIT_OK
 
     payload = {
         "adapters": list_adapter_ids(),
@@ -141,25 +149,37 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    # Phase 0 reports unknown adapter/backend cleanly even though the
-    # registries are empty — the user gets a discoverable error path
-    # before Phase 1 lands the real orchestration.
-    try:
-        from .registry import get_adapter, get_backend  # local: keeps import-time clean
+    from .registry import get_adapter, get_backend
 
+    try:
         get_adapter(args.benchmark)
         get_backend(args.backend)
     except (UnknownAdapterError, UnknownBackendError) as exc:
         print(f"benchmark: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
-    print(
-        f"benchmark: run orchestration lands in Phase 1 "
-        f"(--benchmark {args.benchmark!r} --backend {args.backend!r} "
-        f"--runs {args.runs}); see specs/benchmark-harness/plan.md.",
-        file=sys.stderr,
-    )
-    return EXIT_NOT_IMPLEMENTED
+    from .run import run_benchmark
+
+    try:
+        run_dir = run_benchmark(
+            args.benchmark,
+            args.backend,
+            runs=args.runs,
+            runs_root=args.runs_root,
+            task_filter=args.task,
+        )
+    except KeyError as exc:  # unknown task ids
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except NotImplementedError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_NOT_IMPLEMENTED
+    except Exception as exc:  # noqa: BLE001 — runtime failure path
+        print(f"benchmark: run failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    print(json.dumps({"run_dir": str(run_dir)}, indent=2))
+    return EXIT_OK
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
@@ -167,12 +187,19 @@ def _cmd_report(args: argparse.Namespace) -> int:
         print(f"benchmark: run-dir not found: {args.run_dir}", file=sys.stderr)
         return EXIT_USAGE
 
-    print(
-        f"benchmark: report aggregation lands in Phase 1 "
-        f"(--run-dir {args.run_dir}); see specs/benchmark-harness/plan.md.",
-        file=sys.stderr,
-    )
-    return EXIT_NOT_IMPLEMENTED
+    from .report import render_report
+
+    try:
+        report_path = render_report(args.run_dir)
+    except FileNotFoundError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except Exception as exc:  # noqa: BLE001
+        print(f"benchmark: report failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    print(json.dumps({"report_md": str(report_path)}, indent=2))
+    return EXIT_OK
 
 
 def _cmd_dogfood(args: argparse.Namespace) -> int:
@@ -194,6 +221,13 @@ _HANDLERS = {
 
 
 def main(argv: Sequence[str]) -> int:
+    # Register the shipped adapters and backends. Idempotent; the test
+    # suite uses ``benchmark_runner._register.unregister_all_for_tests``
+    # plus its own selective registration to avoid coupling tests to
+    # the shipped set.
+    from ._register import register_all
+    register_all()
+
     parser = _build_parser()
     args = parser.parse_args(list(argv))
     handler = _HANDLERS[args.subcommand]

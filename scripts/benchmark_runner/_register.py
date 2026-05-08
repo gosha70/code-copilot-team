@@ -1,0 +1,43 @@
+# benchmark_runner._register — explicit adapter+backend registration.
+#
+# Phase 1: ships ``stub`` adapter + ``stub`` backend.
+# Phase 2 adds ``aider-polyglot``. Phase 3 adds ``claude-code`` and
+# ``vllm``. Each registration is one line — no auto-discovery, so the
+# active set is grep-able from a single file.
+
+from __future__ import annotations
+
+from .registry import register_backend
+
+
+_REGISTERED = False
+
+
+def register_all() -> None:
+    """Idempotent. The CLI calls this once before parsing args."""
+    global _REGISTERED
+    if _REGISTERED:
+        return
+
+    # Adapters: each adapter package exposes a ``register()`` function.
+    # Calling it (rather than relying on module import side-effects)
+    # ensures re-registration after a registry reset in tests works
+    # correctly — Python imports each module only once per process,
+    # so import-time side-effects fire exactly once.
+    from benchmarks.adapters.stub.adapter import register as register_stub_adapter
+    register_stub_adapter()
+
+    # Backends: backend modules expose a ``factory`` function; we
+    # register it here. Same one-call rule.
+    from .backends import stub as stub_backend
+    register_backend(stub_backend.BACKEND_FAMILY, stub_backend.factory)
+
+    _REGISTERED = True
+
+
+def unregister_all_for_tests() -> None:
+    """Reset for test isolation. The test harness calls this."""
+    global _REGISTERED
+    from .registry import _reset_for_tests
+    _reset_for_tests()
+    _REGISTERED = False

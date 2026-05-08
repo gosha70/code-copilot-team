@@ -52,3 +52,7 @@ yarn-debug.log*
 # Generated docs (keep source only)
 README.html
 /doc_internal
+
+# Benchmark harness run artifacts (per-attempt worktrees + scores).
+# The harness writes here at runtime; commit none of it.
+/runs

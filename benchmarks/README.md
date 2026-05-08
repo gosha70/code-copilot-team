@@ -8,15 +8,15 @@ See [`specs/benchmark-harness/spec.md`](../specs/benchmark-harness/spec.md) for 
 
 ## Status
 
-**Phase 0** is the current phase: scaffolding, contracts, CLI skeleton, JSON schemas. No real adapters or backends are registered yet. `./scripts/benchmark list` returns empty arrays.
+**Phase 1** is the current phase: stub adapter + stub backend + CI smoke test, plus Phase-1 run orchestration and a report skeleton. `./scripts/benchmark list` shows `stub`; `./scripts/benchmark run --benchmark stub --backend stub` produces a complete run record without invoking any LLM.
 
 | Phase | Ships                                                                          |
 |-------|--------------------------------------------------------------------------------|
-| 0     | Contracts, CLI skeleton, schemas, tests — *current*                            |
-| 1     | Stub adapter, stub backend, CI smoke test                                      |
+| 0     | Contracts, CLI skeleton, schemas, tests — done                                 |
+| 1     | Stub adapter, stub backend, CI smoke test, run orchestration, report skeleton — *current* |
 | 2     | Aider Polyglot adapter (multi-language)                                        |
 | 3     | Claude Code (`claude -p`) and vLLM (OpenAI-compatible HTTP) backends           |
-| 4     | Report aggregator, winner-declaration rule, dogfood gate vs Aider leaderboard  |
+| 4     | Calibrated winner-declaration rule, dogfood gate vs Aider leaderboard          |
 
 ## CLI
 
@@ -61,9 +61,10 @@ The adapter owns "what is a task in this benchmark and how do I check it." The h
 
 1. Create `benchmarks/adapters/<your-id>/adapter.py` implementing `BenchmarkAdapter`.
 2. Pin any external dataset by SHA in `benchmarks/adapters/<your-id>/REVISION`.
-3. Register the adapter via `register_adapter(<id>, factory)` in your module's import side-effects, or via an explicit registration hook (Phase 1 will document the chosen pattern).
-4. Add at least one task that the stub backend can satisfy via `golden_patch`.
-5. Add adapter-conformance tests under `scripts/benchmark_runner/tests/`.
+3. Expose a module-level `register()` function that calls `register_adapter(<id>, AdapterClass)`. Do **not** call `register_adapter` at module import time — Python imports each module only once per process, so an import-time side-effect would break test isolation when the registry is reset between cases. See `benchmarks/adapters/stub/adapter.py` for the worked example.
+4. Add the new `register()` call to `scripts/benchmark_runner/_register.py:register_all` — the single place where the production set of adapters is wired up.
+5. Add at least one task that the stub backend can satisfy via `golden_patch`.
+6. Add adapter-conformance tests under `scripts/benchmark_runner/tests/`.
 
 ## Backend contract
 
@@ -83,8 +84,8 @@ The MVP ships three backends (Phases 1 + 3):
 
 ### How to add a new backend
 
-1. Create `scripts/benchmark_runner/backends/<family>.py` implementing `Backend`.
-2. `register_backend(<family>, factory)` — the factory takes the model spec (the part after the colon in `<family>:<model>`).
+1. Create `scripts/benchmark_runner/backends/<family>.py` implementing `Backend`. Export a `factory(model: str) -> Backend` callable.
+2. Add the `register_backend(<family>, factory)` call to `scripts/benchmark_runner/_register.py:register_all`. The `<family>` is what the user types before the colon in `--backend <family>:<model>` (or alone when there is no model variant — see `stub`).
 3. Document any required env vars (e.g. `CCT_VLLM_ENDPOINT`) in this README.
 4. Add a backend-conformance test that drives `run()` against a recorded transcript or HTTP fixture (no live network calls in the unit tests).
 
