@@ -75,25 +75,25 @@ Phased delivery on `feat/benchmark-harness`. Each task is bounded and independen
 
 **Phase 2 commit:** `feat(benchmark): Aider Polyglot adapter (pinned, multi-language)`
 
-## Phase 3 — Claude Code backend with provider-routing recording
+## Phase 3 — Real backends
 
 ### T3.1 — Claude Code backend
-- **Output:** `backends/claude_code.py`. Spawns `claude -p <prompt>` in the worktree (no `--bare` by default — measures real product behavior with full autodiscovery + OAuth/keychain auth), captures stdout transcript, parses final-event usage. Model passed via `--model <id>` (separate flag from `--backend`). Transcript parser is its own function with a snapshot test.
-- **Done when:** unit test against committed transcript fixtures asserts parsed `tokens_input`, `tokens_output`, `tool_calls` match expected values; the fake-`claude`-shim test asserts the backend invokes the CLI with the right argv, sends the prompt on stdin, sets cwd to the worktree, and writes the transcript + model-output files.
+- **Output:** `backends/claude_code.py`. Spawns `claude -p <prompt> --cwd <worktree>` (exact flags per Claude Code headless docs at implementation time), captures stdout transcript, parses final-event usage. Transcript parser is its own function with a snapshot test.
+- **Done when:** unit test against recorded transcript fixture asserts parsed `tokens_input`, `tokens_output`, `tool_calls` match expected values; smoke test passes a hand-crafted recorded transcript.
 
-### T3.2 — Provider-routing record (replaces the discarded vLLM backend)
-- **Output:** Claude Code backend reads `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN_present` (boolean only — never the value), and the `claude_code_invocation` mode (`"launcher" | "bare"`) at run time and writes them into `BackendResult.backend_metadata`. The harness does NOT have a `--vllm-endpoint`-style flag — provider routing is set by the user in their shell, recorded by the harness.
-- **Done when:** with `ANTHROPIC_BASE_URL` set in the env, a run's `run-record.json["backend"]["metadata"]["provider_endpoint"]` reflects the value; with it unset, the field is `null`. With `CCT_CLAUDE_BARE=1`, `claude_code_invocation` is `"bare"` and `--bare` appears in the actual argv; otherwise `"launcher"` and no `--bare` flag.
+### T3.2 — vLLM backend
+- **Output:** `backends/vllm.py`. OpenAI-compatible HTTP client. Reads endpoint URL from `--vllm-endpoint` flag or `CCT_VLLM_ENDPOINT` env. Captures token usage; missing fields stay `null`.
+- **Done when:** unit test against recorded HTTP-response fixture asserts a successful round-trip + parse.
 
 ### T3.3 — Backend registry + selection
-- **Output:** `registry.py` exposes `get_backend(family: str, model: str) -> Backend`. The CLI parses `--backend <family> --model <id>` (separate flags). Errors clearly on unknown backend family with the registered-families list in the error.
-- **Done when:** `./scripts/benchmark run --backend nope --model sonnet` exits with a registered-families list in the error message.
+- **Output:** `registry.py` exposes `get_backend(spec: str) -> Backend` parsing `claude-code:<model>`, `vllm:<model>`, `stub`. Errors clearly on unknown backend.
+- **Done when:** `./scripts/benchmark run --backend foo:bar` exits with a registered-backends list in the error message.
 
-### T3.4 — Local end-to-end smoke against one Polyglot Python task
-- **Output:** documented invocation that runs `claude-code --model sonnet` against one Polyglot Python task, lands a real run record, and produces a real score. README documents a parallel example showing the same command with `ANTHROPIC_BASE_URL` set to a local vLLM/Ollama gateway. Not in CI.
-- **Done when:** maintainer can paste the command from the README and observe `result: pass` in `score.json`. With the gateway env var set, `backend_metadata.provider_endpoint` reflects the local URL.
+### T3.4 — Local end-to-end smoke against one Polyglot task
+- **Output:** documented invocation that runs `claude-code:sonnet` against one Polyglot Python task, lands a real run record, and produces a real score. Not in CI.
+- **Done when:** maintainer can paste the command from the README and observe `result: pass` in `score.json`.
 
-**Phase 3 commit:** `feat(benchmark): Claude Code backend with provider-routing recording`
+**Phase 3 commit:** `feat(benchmark): Claude Code + vLLM backends`
 
 ## Phase 4 — Report + winner rule + dogfood gate
 
@@ -102,32 +102,21 @@ Phased delivery on `feat/benchmark-harness`. Each task is bounded and independen
 - **Done when:** `test_report.py` covers ≥8 cases including: clear A win, clear B win, tied means, high-variance no-winner, low-variance just-below-1pt threshold, low-variance just-above-1pt, continuous metric (elapsed_seconds) at exactly 10%, single-run no-stdev fallback.
 
 ### T4.2 — Markdown + JSON report
-- **Output:** report aggregates run-dir into per-task table, per-language summary, per-(backend, model) totals, A/B winner verdict (when 2+ (backend, model) tuples are present in the run-dir), and an explicit "directional, no winner declared" line where the rule abstains. Reports surface `backend_metadata.provider_endpoint` so mixed-provider runs are visible. JSON mirrors the markdown structure.
+- **Output:** report aggregates run-dir into per-task table, per-language summary, per-backend totals, A/B winner verdict (when 2 backends are present in the run-dir), and an explicit "directional, no winner declared" line where the rule abstains. JSON mirrors the markdown structure.
 - **Done when:** sample run-dir produces a report that matches a snapshot fixture (allowing whitelisted variance: timestamps).
 
 ### T4.3 — `./scripts/benchmark dogfood`
-- **Output:** subcommand that runs the Polyglot adapter against the dogfood subset for a chosen backend (`claude-code --model sonnet` for the MVP). Emits a Markdown summary of the run-dir. **No** Aider-leaderboard comparison (apples-to-oranges; see spec.md § Dogfood gate).
-- **Done when:** dogfood subcommand runs end-to-end against `claude-code --model sonnet` locally and produces a run-dir + summary.
+- **Output:** subcommand that runs the Polyglot adapter against the dogfood subset for a chosen backend, emits a comparison table against a checked-in `aider-leaderboard-snapshot.json` (manually populated from Aider's published leaderboard at a specific date).
+- **Done when:** dogfood subcommand runs end-to-end against `claude-code:sonnet` locally and produces the comparison report.
 
 ### T4.4 — Dogfood execution + cause classification
-- **Output:** committed run-dir under `specs/benchmark-harness/dogfood/<UTC-ts>/`. Merge-commit body cause-classifies any task failures (harness bug / backend agent-loop / provider-side / model-side).
+- **Output:** committed run-dir under `specs/benchmark-harness/dogfood/<UTC-ts>/` containing the dogfood report. Merge-commit body classifies any divergence as harness bug / backend difference / prompt difference / agent-loop difference.
 - **Done when:** the run is documented and the merge commit links to it.
 
 **Phase 4 commit chain:**
 1. `feat(benchmark): winner-declaration rule + report generator`
-2. `chore(benchmark): dogfood — Aider Polyglot run-to-completion, claude-code --model sonnet`
+2. `chore(benchmark): dogfood — Aider Polyglot vs leaderboard, claude-code:sonnet`
 
 ## Out of scope (issue #33 / #34)
 
-- Additional benchmark adapters (SWE-bench Verified, BigCodeBench, LiveCodeBench, CCT-custom dogfood) — issue #33.
-- **Additional copilot backends** (Aider, Codex, GitHub Copilot CLI) — issue #33 as Phase 4 candidates.
-- LLM-judge, charts, HTML/CSV exports — issue #34.
-
-See `doc_internal/benchmark-issue-2-v3.md` and `-3-v3.md` for the v3 issue body drafts.
-
-## Out of scope entirely (not deferred — never)
-
-- vLLM/Ollama/LM Studio as **backends** — they are *providers*, configured per-backend via that backend's gateway env vars (e.g. `ANTHROPIC_BASE_URL` for Claude Code). The harness records the provider env vars; it does not set them.
-- Cursor / Windsurf as backends — GUI-only, no headless agent loop.
-- Per-run `--vllm-endpoint` / `--provider` CLI flags — provider routing is a shell-environment concern; the harness reads the env, doesn't set it.
-- Dollar-cost reporting — permanently deferred until cross-provider billing-correlation is solved.
+Tasks for additional adapters, LLM-judge, charts, HTML/CSV exports, optional CCT custom-fixture adapter — see `doc_internal/benchmark-issue-2-v2.md` and `-3-v2.md`.

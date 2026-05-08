@@ -2,7 +2,7 @@
 spec_mode: full
 feature_id: benchmark-harness
 risk_category: integration
-justification: "New subsystem touching scripts/, benchmarks/, .github/workflows/, and tests/. External integrations: Aider Polyglot dataset (git submodule or pinned download), Claude Code headless CLI (which itself can route to vLLM/Ollama/LM Studio via the Anthropic-Messages gateway). Multi-phase delivery with CI smoke gate and a run-to-completion dogfood gate. v3 (2026-05-08): backends are copilot agents, providers are LLM endpoints; the harness records provider env vars but does not set them."
+justification: "New subsystem touching scripts/, benchmarks/, .github/workflows/, and tests/. External integrations: Aider Polyglot dataset (git submodule or pinned download), Claude Code headless CLI, vLLM OpenAI-compatible HTTP. Multi-phase delivery with CI smoke gate and dogfood comparison against an external public leaderboard."
 status: draft
 date: 2026-05-07
 issue: 32
@@ -11,8 +11,7 @@ origin:
   urls:
     - https://github.com/Aider-AI/polyglot-benchmark
     - https://github.com/Aider-AI/aider/blob/main/benchmark/README.md
-    - https://code.claude.com/docs/en/llm-gateway
-    - https://docs.vllm.ai/en/stable/serving/integrations/claude_code/
+    - https://docs.vllm.ai/en/latest/serving/openai_compatible_server/
     - https://code.claude.com/docs/en/headless
   origin_claim: |
     See spec.md `origin:` block. Issue #32's original framing
@@ -36,13 +35,11 @@ Phase 0 lays the directory layout, the adapter and backend contracts as Python p
 
 Phase 1 ships the stub adapter + stub backend + CI smoke test. From this point forward every PR runs the smoke test.
 
-Phase 2 ships the Aider Polyglot adapter. Still uses stub backend for the smoke test; integration is verified locally with `claude-code --model sonnet` on one task.
+Phase 2 ships the Aider Polyglot adapter. Still uses stub backend for the smoke test; integration is verified locally with `claude-code:sonnet` on one task.
 
-Phase 3 ships the Claude Code backend (`claude -p` headless via the launcher; `CCT_CLAUDE_BARE=1` opts into `--bare`). The harness records `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN_present`, and `claude_code_invocation` in `backend_metadata` so reports distinguish Anthropic-API runs from gateway-routed runs (vLLM/Ollama/LM Studio served via Claude Code's [LLM gateway support](https://code.claude.com/docs/en/llm-gateway)).
+Phase 3 ships the Claude Code backend (`claude -p` headless) and the vLLM backend (OpenAI-compatible HTTP). Each is independently verifiable against the stub adapter and the Aider Polyglot adapter.
 
-Additional copilot backends (Aider, Codex, GitHub Copilot CLI) are scoped into issue #33 as Phase 4 candidates — each requires independent verification of its headless-invocation surface. The earlier "Phase 3 vLLM backend" plan is dropped (v3 correction): vLLM is a *provider*, configured via Claude Code's gateway env vars, not a peer backend.
-
-Phase 4 ships the report generator and the winner-declaration rule (unit-tested), then runs the dogfood gate: ≥10 Aider Polyglot tasks × `claude-code --model sonnet`, run-to-completion + cause-classification (no Aider-leaderboard comparison — apples-to-oranges).
+Phase 4 ships the report generator and the winner-declaration rule (unit-tested), then runs the dogfood gate: ≥10 Aider Polyglot tasks × `claude-code:sonnet`, leaderboard comparison + cause classification.
 
 Each phase is a separate commit (or commit chain) reviewed and approved before the next phase starts. No phase's work begins until the previous phase's commits are reviewed.
 
@@ -53,7 +50,7 @@ Each phase is a separate commit (or commit chain) reviewed and approved before t
 | 0     | `./scripts/benchmark list` runs and prints `[]`                            | Code review                                   |
 | 1     | `./scripts/benchmark run --benchmark stub --backend stub` produces score    | CI smoke test green                           |
 | 2     | Aider Polyglot adapter loads, `list` shows tasks, stub-backend run scores  | Per-language smoke task passes via stub       |
-| 3     | Claude Code backend produces real BackendResults; provider env vars logged | One real `claude-code --model sonnet` task scores `pass` locally |
+| 3     | Claude Code + vLLM backends produce real BackendResults                    | One real `claude-code:sonnet` task scores `pass` locally |
 | 4     | Report generator emits Markdown + JSON; winner rule unit-tested; dogfood   | Dogfood comparison + cause classification documented |
 
 ## Phase 0 — Scaffolding + contracts
@@ -110,17 +107,17 @@ Each phase is a separate commit (or commit chain) reviewed and approved before t
 - The two-attempt protocol is implemented in the runner, not the adapter: runner calls `prompt_for(task, attempt=1, prior=None)`, runs backend, calls `verify`, and if failed and `max_attempts() == 2`, calls `prompt_for(task, attempt=2, prior=verify_result)` and runs backend again.
 - Smoke target: one Python Polyglot task verified end-to-end against the stub backend (golden patch ships from upstream's reference solutions).
 
-## Phase 3 — Claude Code backend with provider-routing recording
+## Phase 3 — Real backends
 
 - `scripts/benchmark_runner/backends/claude_code.py`:
-  - Spawns `claude -p` (no `--bare` by default — measures real product behavior with full autodiscovery + OAuth/keychain auth) with the prompt + working directory; captures transcript JSON; parses final-event usage.
-  - Transcript parser is a separate function with a snapshot test against committed transcript fixtures.
-  - Model passed via `--model <id>` (separated from `--backend` per the v3 CLI surface): `--backend claude-code --model sonnet`.
-  - **Provider routing recorded, not set.** The backend reads `ANTHROPIC_BASE_URL`, presence of `ANTHROPIC_AUTH_TOKEN` (boolean only — never the value), and the chosen invocation mode (`launcher` | `bare`) at run time and writes them into `backend_metadata`. The user is responsible for setting these env vars in their shell (e.g. to point at a local vLLM or Ollama gateway). The harness does NOT have a `--vllm-endpoint`-style flag; provider routing is a shell-environment concern, not a CCT CLI concern.
-  - Opt-in to `--bare` via `CCT_CLAUDE_BARE=1` env var (deterministic CI use; skips OAuth/keychain, requires `ANTHROPIC_API_KEY`).
-- Tests use recorded transcript fixtures + a fake `claude` CLI shim — no live `claude -p` calls or network in unit tests. A separate, documented manual smoke (T3.4) exercises the real CLI locally.
-
-(Phase 3 originally also included a vLLM backend with raw OpenAI Chat Completions + a fenced-block file-edit format. Both are dropped in v3 — vLLM is a *provider*, configured via Claude Code's gateway env vars; the file-edit format problem doesn't exist when Claude Code does the file editing internally via its Edit tool.)
+  - Spawns `claude -p` with the prompt + working directory; captures transcript JSON; parses final-event usage.
+  - Transcript parser is a separate function with a snapshot test against a known transcript fixture.
+  - Configurable model via `--backend claude-code:<model>`; defaults to `sonnet`.
+- `scripts/benchmark_runner/backends/vllm.py`:
+  - OpenAI-compatible HTTP client (uses stdlib `http.client` or `requests` if already in deps; will pick after auditing repo deps).
+  - Endpoint URL + model from env or `--backend vllm:<model>` plus `--vllm-endpoint <url>`.
+  - Token usage parsed from response `usage` block; missing fields → `null`.
+- Both backends register via `registry.py`; tests use a recorded HTTP fixture (vLLM) and a recorded transcript (claude-code) — no live network calls in unit tests.
 
 ## Phase 4 — Reports + winner rule + dogfood
 
@@ -129,12 +126,10 @@ Each phase is a separate commit (or commit chain) reviewed and approved before t
   - `report.json` — same data, machine-readable.
 - Winner-declaration rule is its own pure function with unit tests against synthetic A/B distributions (8 tests minimum: clear winner each direction, tied means, high-variance no-winner, low-variance just-below-threshold, one-sided null variance, etc.).
 - Dogfood gate execution:
-  1. Subset of 10–15 Aider Polyglot tasks (≥1 per language) defined in `benchmarks/adapters/aider_polyglot/dogfood-subset.txt`.
-  2. Run `./scripts/benchmark dogfood --backend claude-code --model sonnet --runs 1`.
-  3. Commit the produced run-dir under `specs/benchmark-harness/dogfood/<UTC-ts>/`. The merge commit links to it and cause-classifies any task failures.
-
-  (Earlier draft compared per-language pass rate against Aider's published Polyglot leaderboard. Dropped in v3 — Aider's leaderboard is Aider-the-agent, not Claude Code; not apples-to-apples.)
-  4. Document cause classification for any task failures (harness bug / backend agent-loop / provider-side / model-side) in the merge commit body.
+  1. Subset of 10–15 Aider Polyglot tasks (≥1 per language) defined in `benchmarks/adapters/aider-polyglot/dogfood-subset.txt`.
+  2. Run `./scripts/benchmark dogfood --backend claude-code:sonnet --runs 1`.
+  3. Compare per-language pass rate against Aider's published leaderboard for `claude-3-5-sonnet` (or current `claude-code:sonnet` equivalent).
+  4. Document cause classification (harness bug / backend difference / prompt difference / agent-loop difference) in the merge commit body.
 
 ## Test strategy
 
@@ -152,7 +147,7 @@ Per spec § "Out of scope" — SWE-bench / LiveCodeBench / BigCodeBench / custom
 
 - **Aider Polyglot dataset is large.** Cloning the full upstream repo is fine locally but bad for CI. The CI smoke test uses the stub adapter only; the Polyglot adapter never runs in CI in this MVP.
 - **Headless `claude -p` requires API auth.** The dogfood gate is run locally by the maintainer, not in CI. Document this clearly in `benchmarks/README.md`.
-- **Gateway provider may not be reachable at dev time.** Tests against the Claude Code backend use a fake `claude` CLI shim and recorded transcripts; live `claude -p` (whether against Anthropic API or a local gateway) is exercised only in the documented manual smoke and the dogfood gate. CI never makes live network calls.
+- **vLLM endpoint may not be reachable at dev time.** vLLM backend tests use recorded HTTP fixtures; the live integration test is documented but not gated on by CI.
 
 ## Phase-end gates (commit policy)
 
