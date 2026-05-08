@@ -1,0 +1,8 @@
+{
+  "files": {
+    "solution": ["leap.js"],
+    "test": ["leap.spec.js"],
+    "example": [".meta/example.js"]
+  },
+  "blurb": "Determine whether a given year is a leap year."
+}

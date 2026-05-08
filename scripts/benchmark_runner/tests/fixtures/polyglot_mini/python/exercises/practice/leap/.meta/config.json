@@ -1,0 +1,8 @@
+{
+  "files": {
+    "solution": ["leap.py"],
+    "test": ["leap_test.py"],
+    "example": [".meta/example.py"]
+  },
+  "blurb": "Determine whether a given year is a leap year."
+}

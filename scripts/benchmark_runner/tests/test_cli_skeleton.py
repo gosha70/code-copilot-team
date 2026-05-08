@@ -84,7 +84,11 @@ class TestListCommand(CLITestBase):
         rc, stdout, _ = self._invoke("list")
         self.assertEqual(rc, EXIT_OK)
         payload = json.loads(stdout)
-        self.assertEqual(sorted(payload["adapters"]), ["demo", "stub"])
+        # 'demo' was pre-registered by the test; the rest come from
+        # _register.register_all (the production set).
+        self.assertIn("demo", payload["adapters"])
+        self.assertIn("stub", payload["adapters"])
+        self.assertIn("aider-polyglot", payload["adapters"])
         self.assertIn("stub", payload["backends"])
 
     def test_list_with_known_benchmark_returns_tasks(self) -> None:
@@ -135,6 +139,26 @@ class TestRunCommand(CLITestBase):
             )
             self.assertEqual(rc, EXIT_USAGE)
             self.assertIn("missing-task", stderr)
+
+    def test_run_empty_adapter_returns_usage_with_fetch_hint(self) -> None:
+        # Regression: aider-polyglot with an empty cache returns USAGE
+        # and prints a hint pointing at the fetch script. Was silently
+        # exit 0 with an empty run-dir before the EmptyAdapterError fix.
+        with tempfile.TemporaryDirectory() as td:
+            rc, _, stderr = self._invoke(
+                "run",
+                "--benchmark",
+                "aider-polyglot",
+                "--backend",
+                "stub",
+                "--runs",
+                "1",
+                "--runs-root",
+                td,
+            )
+        self.assertEqual(rc, EXIT_USAGE)
+        self.assertIn("fetch", stderr.lower())
+        self.assertIn("aider_polyglot", stderr)
 
     def test_run_stub_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as td:

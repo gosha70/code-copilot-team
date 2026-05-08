@@ -47,6 +47,17 @@ COST_REPORTING_REASON = "billing-correlation pending"
 _SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
 
+class EmptyAdapterError(RuntimeError):
+    """Raised when an adapter exposes zero tasks at run time.
+
+    Most commonly, this means the adapter's network-backed dataset
+    cache is missing — e.g. the user invoked the Aider Polyglot
+    adapter without first running its fetch script. Surfacing this as
+    a USAGE-style error (caught and reported by the CLI) prevents a
+    no-op run from being indistinguishable from a successful one.
+    """
+
+
 # ── Public entrypoint ──────────────────────────────────────────────────
 
 
@@ -65,14 +76,24 @@ def run_benchmark(
     adapter = get_adapter(benchmark_id)
     backend = get_backend(backend_spec)
 
+    all_tasks = adapter.list_tasks()
+    if not all_tasks:
+        raise EmptyAdapterError(
+            f"benchmark {benchmark_id!r} exposed no tasks. "
+            f"If this adapter requires a cached dataset, run its fetch "
+            f"script first (e.g. for Aider Polyglot: "
+            f"python3 -m benchmarks.adapters.aider_polyglot.fetch)."
+        )
+    tasks = _filter_tasks(all_tasks, task_filter)
+
     run_dir = _make_run_dir(runs_root, benchmark_id, backend.backend_id)
-    tasks = _filter_tasks(adapter.list_tasks(), task_filter)
 
     for task in tasks:
         for run_index in range(1, runs + 1):
             run_id = f"run-{run_index:03d}"
+            prior: Optional[VerifyResult] = None
             for attempt in range(1, adapter.max_attempts() + 1):
-                _execute_attempt(
+                attempt_verify = _execute_attempt(
                     adapter=adapter,
                     backend=backend,
                     backend_spec=backend_spec,
@@ -80,12 +101,16 @@ def run_benchmark(
                     attempt=attempt,
                     run_id=run_id,
                     run_dir=run_dir,
+                    prior=prior,
                 )
-                if attempt >= adapter.max_attempts():
+                # Stop early on success — there is no value in burning
+                # a second attempt for a task that already passed.
+                if attempt_verify.tests_passed:
                     break
-                # Phase-2 hook: stop early if the prior attempt passed.
-                # (Not exercised by the stub; kept here so Phase 2's
-                # Aider Polyglot adapter has a single integration point.)
+                # Carry the failed verify result into the next attempt's
+                # prompt so two-shot adapters (Aider-style) can show the
+                # model what went wrong.
+                prior = attempt_verify
 
     return run_dir
 
@@ -102,7 +127,8 @@ def _execute_attempt(
     attempt: int,
     run_id: str,
     run_dir: Path,
-) -> None:
+    prior: Optional[VerifyResult],
+) -> VerifyResult:
     attempt_dir = run_dir / _slug(task.task_id) / f"attempt-{attempt:02d}-{run_id}"
     attempt_dir.mkdir(parents=True, exist_ok=False)
 
@@ -116,8 +142,8 @@ def _execute_attempt(
     prepared = attempt_dir / "prepared"
     shutil.copytree(worktree, prepared)
 
-    # Phase-2 hook: prior verify result. Phase 1 always passes None.
-    prior: Optional[VerifyResult] = None
+    # ``prior`` carries the previous attempt's verify result for two-shot
+    # adapters (Aider-style retry); first attempt always sees None.
     prompt = adapter.prompt_for(task, attempt, prior)
 
     prompt_path = attempt_dir / "prompt.md"
@@ -232,6 +258,8 @@ def _execute_attempt(
         (attempt_dir / "verify-output.txt").write_text(
             verify_result.tests_output, encoding="utf-8"
         )
+
+    return verify_result
 
 
 # ── Helpers ────────────────────────────────────────────────────────────

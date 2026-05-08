@@ -158,7 +158,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"benchmark: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
-    from .run import run_benchmark
+    from .run import EmptyAdapterError, run_benchmark
 
     try:
         run_dir = run_benchmark(
@@ -168,6 +168,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
             runs_root=args.runs_root,
             task_filter=args.task,
         )
+    except EmptyAdapterError as exc:
+        # Distinct from "unknown task id" (KeyError) — no tasks at all.
+        # Surfaced as USAGE so a missing fetch doesn't masquerade as a
+        # successful benchmark run.
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     except KeyError as exc:  # unknown task ids
         print(f"benchmark: {exc}", file=sys.stderr)
         return EXIT_USAGE

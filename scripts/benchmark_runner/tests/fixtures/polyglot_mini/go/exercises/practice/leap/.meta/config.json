@@ -1,0 +1,8 @@
+{
+  "files": {
+    "solution": ["leap.go"],
+    "test": ["leap_test.go"],
+    "example": [".meta/example.go"]
+  },
+  "blurb": "Determine whether a given year is a leap year."
+}

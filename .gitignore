@@ -56,3 +56,7 @@ README.html
 # Benchmark harness run artifacts (per-attempt worktrees + scores).
 # The harness writes here at runtime; commit none of it.
 /runs
+
+# Benchmark adapter caches (cloned upstream datasets, pinned by SHA).
+# Populated by per-adapter fetch scripts; never committed.
+/benchmarks/.cache/

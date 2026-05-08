@@ -26,6 +26,8 @@ def register_all() -> None:
     # so import-time side-effects fire exactly once.
     from benchmarks.adapters.stub.adapter import register as register_stub_adapter
     register_stub_adapter()
+    from benchmarks.adapters.aider_polyglot.adapter import register as register_polyglot
+    register_polyglot()
 
     # Backends: backend modules expose a ``factory`` function; we
     # register it here. Same one-call rule.
