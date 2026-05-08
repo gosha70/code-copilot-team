@@ -64,7 +64,8 @@ class EmptyAdapterError(RuntimeError):
 
 def run_benchmark(
     benchmark_id: str,
-    backend_spec: str,
+    backend_family: str,
+    backend_model: str = "",
     *,
     runs: int,
     runs_root: Path,
@@ -75,7 +76,7 @@ def run_benchmark(
         raise ValueError(f"--runs must be >= 1; got {runs}")
 
     adapter = get_adapter(benchmark_id)
-    backend = get_backend(backend_spec)
+    backend = get_backend(backend_family, backend_model)
 
     all_tasks = adapter.list_tasks()
     if not all_tasks:
@@ -97,7 +98,7 @@ def run_benchmark(
                 attempt_verify = _execute_attempt(
                     adapter=adapter,
                     backend=backend,
-                    backend_spec=backend_spec,
+                    backend_model=backend_model,
                     task=task,
                     attempt=attempt,
                     run_id=run_id,
@@ -123,7 +124,7 @@ def _execute_attempt(
     *,
     adapter: BenchmarkAdapter,
     backend,  # type: ignore[no-untyped-def]  (Backend protocol)
-    backend_spec: str,
+    backend_model: str,
     task: TaskSpec,
     attempt: int,
     run_id: str,
@@ -164,7 +165,7 @@ def _execute_attempt(
         run_id=run_id,
         attempt=attempt,
         worktree=worktree,
-        model=_model_from_spec(backend_spec),
+        model=backend_model,
         temperature=0.0,
         seed=None,
         timeout_seconds=None,
@@ -344,10 +345,6 @@ def _filter_tasks(
     if missing:
         raise KeyError(f"unknown task ids: {sorted(missing)}")
     return out
-
-
-def _model_from_spec(backend_spec: str) -> str:
-    return backend_spec.partition(":")[2]
 
 
 def _sha256_file(path: Path) -> str:

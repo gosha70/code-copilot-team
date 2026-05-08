@@ -39,7 +39,8 @@ def register_all() -> None:
     # register it here. Same one-call rule.
     from .backends import stub as stub_backend
     register_backend(stub_backend.BACKEND_FAMILY, stub_backend.factory)
-
+    from .backends import claude_code as claude_code_backend
+    register_backend(claude_code_backend.BACKEND_FAMILY, claude_code_backend.factory)
     _REGISTERED = True
 
 

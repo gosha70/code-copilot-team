@@ -78,7 +78,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_run.add_argument(
         "--backend",
         required=True,
-        help="Backend spec (e.g. 'claude-code:sonnet', 'vllm:llama-3.1-70b', 'stub').",
+        help="Backend family (e.g. 'claude-code', 'stub'). Backends are "
+             "agentic copilot CLIs; provider routing is configured separately "
+             "via the backend's own gateway env vars (e.g. ANTHROPIC_BASE_URL "
+             "for claude-code). The harness records but does not set them.",
+    )
+    p_run.add_argument(
+        "--model",
+        default="",
+        help="Model identifier passed to the backend (e.g. 'sonnet', 'opus', "
+             "'claude-sonnet-4-6'). The stub backend takes no model.",
     )
     p_run.add_argument(
         "--runs",
@@ -114,7 +123,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_dogfood.add_argument(
         "--backend",
         required=True,
-        help="Backend spec to dogfood (typically 'claude-code:sonnet').",
+        help="Backend family to dogfood (typically 'claude-code').",
+    )
+    p_dogfood.add_argument(
+        "--model",
+        default="",
+        help="Model identifier (typically 'sonnet').",
     )
     p_dogfood.add_argument("--runs", type=int, default=1)
 
@@ -153,7 +167,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     try:
         get_adapter(args.benchmark)
-        get_backend(args.backend)
+        get_backend(args.backend, args.model)
     except (UnknownAdapterError, UnknownBackendError) as exc:
         print(f"benchmark: {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -164,6 +178,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         run_dir = run_benchmark(
             args.benchmark,
             args.backend,
+            args.model,
             runs=args.runs,
             runs_root=args.runs_root,
             task_filter=args.task,
@@ -211,7 +226,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
 def _cmd_dogfood(args: argparse.Namespace) -> int:
     print(
         f"benchmark: dogfood subcommand lands in Phase 4 "
-        f"(--backend {args.backend!r} --runs {args.runs}); "
+        f"(--backend {args.backend!r} --model {args.model!r} --runs {args.runs}); "
         f"see specs/benchmark-harness/plan.md.",
         file=sys.stderr,
     )

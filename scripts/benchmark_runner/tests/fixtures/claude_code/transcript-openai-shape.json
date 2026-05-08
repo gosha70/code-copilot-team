@@ -1,0 +1,8 @@
+{
+  "result": "Older transcript shape used OpenAI-style usage keys.",
+  "session_id": "01HV1Z00000000000000000002",
+  "usage": {
+    "prompt_tokens": 9000,
+    "completion_tokens": 200
+  }
+}

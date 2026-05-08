@@ -62,15 +62,20 @@ def list_backend_ids() -> list[str]:
     return sorted(_BACKENDS)
 
 
-def get_backend(spec: str) -> Backend:
-    """Resolve a backend spec like ``claude-code:sonnet`` or ``stub``."""
-    family, _, model = spec.partition(":")
+def get_backend(family: str, model: str = "") -> Backend:
+    """Resolve a backend by family name + optional model id.
+
+    The CLI surface separates these into ``--backend <family> --model <id>``
+    (per the v3 architectural correction — see
+    specs/benchmark-harness/audit-2026-05-08.md). Some backends (``stub``)
+    take no model; pass ``""`` (the default).
+    """
     try:
         factory = _BACKENDS[family]
     except KeyError:
         known = ", ".join(list_backend_ids()) or "(none)"
         raise UnknownBackendError(
-            f"unknown backend: {spec!r}; registered families: {known}"
+            f"unknown backend family: {family!r}; registered families: {known}"
         ) from None
     return factory(model)
 
