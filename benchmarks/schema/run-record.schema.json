@@ -15,7 +15,8 @@
     "finished_at",
     "isolation",
     "backend_invocation",
-    "prompt"
+    "prompt",
+    "backend"
   ],
   "additionalProperties": false,
   "properties": {
@@ -83,6 +84,16 @@
       "description": "Path (relative to attempt dir) to the model's raw text output. Distinct from a backend-specific structured transcript. May be null for backends that only mutate the worktree.",
       "type": ["string", "null"],
       "minLength": 1
+    },
+    "backend": {
+      "description": "Per-attempt diagnostic block from the backend invocation. ``error`` is the captured exception message when backend.run raised; null when the backend ran cleanly. ``metadata`` is the backend's own free-form record (model, family, hint strings, transcript anchors, etc.). Persisting this here means a Phase-2 stub backend's NotImplementedError + endpoint hint survives in the audit record instead of being lost.",
+      "type": "object",
+      "required": ["error", "metadata"],
+      "additionalProperties": false,
+      "properties": {
+        "error": { "type": ["string", "null"] },
+        "metadata": { "type": "object" }
+      }
     }
   }
 }

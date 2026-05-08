@@ -1,9 +1,15 @@
 # benchmark_runner._register — explicit adapter+backend registration.
 #
 # Phase 1: ships ``stub`` adapter + ``stub`` backend.
-# Phase 2 adds ``aider-polyglot``. Phase 3 adds ``claude-code`` and
-# ``vllm``. Each registration is one line — no auto-discovery, so the
-# active set is grep-able from a single file.
+# Phase 2 adds ``aider-polyglot`` adapter + the ``worktree+venv``
+# isolation tier. Phase 3 adds the ``claude-code`` agent backend.
+# Each registration is one line — no auto-discovery, so the active
+# set is grep-able from a single file.
+#
+# vLLM/Ollama/LM Studio are NOT backends — they're providers, routed
+# to via Claude Code's gateway env vars (ANTHROPIC_BASE_URL etc.).
+# The harness *records* which provider a run used; it does not set
+# the routing.
 
 from __future__ import annotations
 

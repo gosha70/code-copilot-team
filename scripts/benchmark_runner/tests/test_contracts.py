@@ -115,12 +115,17 @@ class TestProtocols(unittest.TestCase):
     """
 
     def test_adapter_protocol_shape(self) -> None:
+        from benchmark_runner.contracts import IsolationConfig
+
         class _Stub:
             benchmark_id = "stub"
             isolation_default = ISOLATION_WORKTREE
 
             def list_tasks(self) -> list[TaskSpec]:
                 return []
+
+            def isolation_for(self, task: TaskSpec) -> IsolationConfig:
+                return IsolationConfig(tier=ISOLATION_WORKTREE)
 
             def prepare_task(self, task: TaskSpec, worktree: Path) -> None:
                 return None

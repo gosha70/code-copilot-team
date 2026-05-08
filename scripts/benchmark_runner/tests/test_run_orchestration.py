@@ -115,6 +115,7 @@ class TestRunOrchestration(unittest.TestCase):
         from benchmark_runner._register import unregister_all_for_tests
         from benchmark_runner.contracts import (
             ISOLATION_WORKTREE,
+            IsolationConfig,
             VerifyResult,
         )
         from benchmark_runner.registry import (
@@ -129,6 +130,8 @@ class TestRunOrchestration(unittest.TestCase):
             benchmark_id = "empty"
             isolation_default = ISOLATION_WORKTREE
             def list_tasks(self): return []
+            def isolation_for(self, task):
+                return IsolationConfig(tier=ISOLATION_WORKTREE)
             def prepare_task(self, task, worktree): return None
             def prompt_for(self, task, attempt, prior): return ""
             def verify(self, task, worktree):
@@ -154,6 +157,7 @@ class TestRunOrchestration(unittest.TestCase):
         from benchmark_runner.contracts import (
             ISOLATION_WORKTREE,
             BackendResult,
+            IsolationConfig,
             RunContext,
             TaskSpec,
             VerifyResult,
@@ -172,6 +176,8 @@ class TestRunOrchestration(unittest.TestCase):
             isolation_default = ISOLATION_WORKTREE
             def list_tasks(self):
                 return [TaskSpec(task_id="t1", language="text")]
+            def isolation_for(self, task):
+                return IsolationConfig(tier=ISOLATION_WORKTREE)
             def prepare_task(self, task, worktree): return None
             def prompt_for(self, task, attempt, prior):
                 attempts_seen.append(attempt)
@@ -204,6 +210,7 @@ class TestRunOrchestration(unittest.TestCase):
         from benchmark_runner.contracts import (
             ISOLATION_WORKTREE,
             BackendResult,
+            IsolationConfig,
             RunContext,
             TaskSpec,
             VerifyResult,
@@ -223,6 +230,8 @@ class TestRunOrchestration(unittest.TestCase):
             isolation_default = ISOLATION_WORKTREE
             def list_tasks(self):
                 return [TaskSpec(task_id="t1", language="text")]
+            def isolation_for(self, task):
+                return IsolationConfig(tier=ISOLATION_WORKTREE)
             def prepare_task(self, task, worktree): return None
             def prompt_for(self, task, attempt, prior):
                 prompt = f"attempt-{attempt}"
@@ -261,6 +270,141 @@ class TestRunOrchestration(unittest.TestCase):
             # Two attempt directories on disk, one for each attempt.
             attempt_dirs = sorted(p for p in run_dir.rglob("attempt-*") if p.is_dir())
             self.assertEqual(len(attempt_dirs), 2)
+
+    def test_backend_error_persisted_in_run_record(self) -> None:
+        # Regression: backend exceptions used to be captured into
+        # BackendResult.backend_metadata but were never serialized to
+        # any artifact — score.json showed "result: error" with zero
+        # context. The vLLM Phase-2 stub's "set CCT_VLLM_ENDPOINT"
+        # hint was lost the moment it raised. Now the error message
+        # and the backend's own metadata both survive in
+        # run-record.json's ``backend`` block.
+        from benchmark_runner._register import unregister_all_for_tests
+        from benchmark_runner.contracts import (
+            ISOLATION_WORKTREE,
+            BackendResult,
+            IsolationConfig,
+            RunContext,
+            TaskSpec,
+            VerifyResult,
+        )
+        from benchmark_runner.registry import (
+            register_adapter,
+            register_backend,
+        )
+
+        unregister_all_for_tests()
+
+        class _MinimalAdapter:
+            benchmark_id = "x"
+            isolation_default = ISOLATION_WORKTREE
+            def list_tasks(self):
+                return [TaskSpec(task_id="t1", language="text")]
+            def isolation_for(self, task):
+                return IsolationConfig(tier=ISOLATION_WORKTREE)
+            def prepare_task(self, task, worktree): return None
+            def prompt_for(self, task, attempt, prior): return ""
+            def verify(self, task, worktree):
+                return VerifyResult(tests_passed=False, tests_output="")
+            def golden_patch(self, task): return Path("/tmp")
+            def max_attempts(self): return 1
+
+        class _RaisingBackend:
+            backend_id = "raising"
+            def run(self, prompt, ctx):
+                raise NotImplementedError(
+                    "set CCT_FOO_ENDPOINT first; Phase 3 lands the real client"
+                )
+
+        register_adapter("x", _MinimalAdapter)
+        register_backend("raising", lambda model: _RaisingBackend())
+
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = run_benchmark("x", "raising", runs=1, runs_root=Path(td))
+            rr = json.loads(
+                next(run_dir.rglob("run-record.json")).read_text(encoding="utf-8")
+            )
+            score = json.loads(
+                next(run_dir.rglob("score.json")).read_text(encoding="utf-8")
+            )
+
+        # score.json still records the error verdict.
+        self.assertEqual(score["result"], "error")
+        # run-record.json now preserves the message + the env-var hint.
+        self.assertIsNotNone(rr["backend"]["error"])
+        self.assertIn("CCT_FOO_ENDPOINT", rr["backend"]["error"])
+        self.assertIn("Phase 3", rr["backend"]["error"])
+
+    def test_backend_clean_run_records_null_error(self) -> None:
+        # Symmetric: the backend block must be present even when the
+        # backend ran cleanly, with error=None and metadata reflecting
+        # whatever the backend put there (stub backend records family/
+        # model/note).
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = run_benchmark("stub", "stub", runs=1, runs_root=Path(td))
+            rr = json.loads(
+                next(run_dir.rglob("run-record.json")).read_text(encoding="utf-8")
+            )
+        self.assertIn("backend", rr)
+        self.assertIsNone(rr["backend"]["error"])
+        self.assertEqual(rr["backend"]["metadata"]["family"], "stub")
+
+    def test_isolation_block_records_venv_config(self) -> None:
+        # When an adapter declares isolation_for(task) -> worktree+venv
+        # with python + install_command, those fields must appear in the
+        # run-record's isolation block (per spec.md isolation tier schema).
+        from benchmark_runner._register import unregister_all_for_tests
+        from benchmark_runner.contracts import (
+            ISOLATION_WORKTREE_VENV,
+            BackendResult,
+            IsolationConfig,
+            RunContext,
+            TaskSpec,
+            VerifyResult,
+        )
+        from benchmark_runner.registry import (
+            register_adapter,
+            register_backend,
+        )
+
+        unregister_all_for_tests()
+
+        class _VenvAdapter:
+            benchmark_id = "venv-fixture"
+            isolation_default = ISOLATION_WORKTREE_VENV
+            def list_tasks(self):
+                return [TaskSpec(task_id="t1", language="python")]
+            def isolation_for(self, task):
+                return IsolationConfig(
+                    tier=ISOLATION_WORKTREE_VENV,
+                    python="python3",
+                    install_command="true",
+                )
+            def prepare_task(self, task, worktree): return None
+            def prompt_for(self, task, attempt, prior): return ""
+            def verify(self, task, worktree):
+                return VerifyResult(tests_passed=True, tests_output="")
+            def golden_patch(self, task): return Path("/tmp")
+            def max_attempts(self): return 1
+
+        class _NoOp:
+            backend_id = "noop"
+            def run(self, prompt: str, ctx: RunContext) -> BackendResult:
+                return BackendResult(transcript_path=None, elapsed_seconds=0.0)
+
+        register_adapter("venv-fixture", _VenvAdapter)
+        register_backend("noop", lambda model: _NoOp())
+
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = run_benchmark(
+                "venv-fixture", "noop", runs=1, runs_root=Path(td)
+            )
+            rr_path = next(run_dir.rglob("run-record.json"))
+            rr = json.loads(rr_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(rr["isolation"]["tier"], ISOLATION_WORKTREE_VENV)
+        self.assertEqual(rr["isolation"]["python"], "python3")
+        self.assertEqual(rr["isolation"]["install_command"], "true")
 
     def test_back_to_back_runs_get_sibling_run_dirs(self) -> None:
         # Regression: two run_benchmark calls within the same UTC-second

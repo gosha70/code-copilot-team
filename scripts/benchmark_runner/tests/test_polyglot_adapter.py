@@ -282,6 +282,37 @@ class TestVerify(unittest.TestCase):
             self.assertIn("starter stub", result.tests_output.lower())
 
 
+class TestIsolationFor(unittest.TestCase):
+    """Per-task isolation directive: Python -> worktree+venv, others -> worktree."""
+
+    def _task(self, language: str) -> TaskSpec:
+        for t in _adapter().list_tasks():
+            if t.language == language:
+                return t
+        raise KeyError(language)
+
+    def test_python_uses_worktree_plus_venv(self) -> None:
+        from benchmark_runner.contracts import (
+            ISOLATION_WORKTREE_VENV,
+        )
+        task = self._task("python")
+        config = _adapter().isolation_for(task)
+        self.assertEqual(config.tier, ISOLATION_WORKTREE_VENV)
+        self.assertIsNotNone(config.python)
+        self.assertIsNotNone(config.install_command)
+        self.assertIn("pytest", config.install_command or "")
+
+    def test_non_python_uses_plain_worktree(self) -> None:
+        from benchmark_runner.contracts import ISOLATION_WORKTREE
+        for lang in ("go", "javascript", "rust", "java", "cpp"):
+            task = self._task(lang)
+            config = _adapter().isolation_for(task)
+            self.assertEqual(
+                config.tier, ISOLATION_WORKTREE, f"{lang} should use plain worktree"
+            )
+            self.assertIsNone(config.install_command)
+
+
 class TestRegister(unittest.TestCase):
     """register() function side-effects.
 

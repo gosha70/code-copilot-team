@@ -15,6 +15,7 @@ from typing import Optional
 from benchmark_runner.contracts import (
     ISOLATION_WORKTREE,
     BenchmarkAdapter,
+    IsolationConfig,
     TaskSpec,
     VerifyResult,
 )
@@ -44,6 +45,10 @@ class StubAdapter:
 
     def list_tasks(self) -> list[TaskSpec]:
         return [_HELLO_WORLD]
+
+    def isolation_for(self, task: TaskSpec) -> IsolationConfig:
+        # Stub adapter is single-tier; no per-task variance.
+        return IsolationConfig(tier=ISOLATION_WORKTREE)
 
     def prepare_task(self, task: TaskSpec, worktree: Path) -> None:
         # Stub task starts from an empty worktree; nothing to copy.

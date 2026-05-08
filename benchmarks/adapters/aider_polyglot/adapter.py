@@ -24,7 +24,9 @@ from typing import Optional
 
 from benchmark_runner.contracts import (
     ISOLATION_WORKTREE,
+    ISOLATION_WORKTREE_VENV,
     BenchmarkAdapter,
+    IsolationConfig,
     IsolationTier,
     TaskSpec,
     VerifyResult,
@@ -87,6 +89,23 @@ class AiderPolyglotAdapter:
         )
 
     # ── Required protocol methods ──────────────────────────────────────
+
+    def isolation_for(self, task: TaskSpec) -> IsolationConfig:
+        """Per-language isolation directive.
+
+        Python tasks run inside a worktree-local venv with pytest
+        installed (the worktree+venv tier). Other languages assume
+        the host has the relevant toolchain (go, cargo, gradle, npm,
+        cmake) — installation of those is out of scope for the
+        harness; document the requirement in benchmarks/README.md.
+        """
+        if task.language == "python":
+            return IsolationConfig(
+                tier=ISOLATION_WORKTREE_VENV,
+                python="python3",
+                install_command="pip install -q pytest",
+            )
+        return IsolationConfig(tier=ISOLATION_WORKTREE)
 
     def list_tasks(self) -> list[TaskSpec]:
         if not self._dataset_root.is_dir():
@@ -272,6 +291,25 @@ class AiderPolyglotAdapter:
         # Sibling cache so wiping benchmarks/.cache/polyglot/<sha>/ also
         # wipes its derived golden material.
         return self._dataset_root.parent.parent / "polyglot-golden" / self._dataset_root.name
+
+
+_DOGFOOD_FILE = Path(__file__).resolve().parent / "dogfood-subset.txt"
+
+
+def load_dogfood_subset() -> list[str]:
+    """Read the dogfood subset (one task_id per line, # comments).
+
+    The list is committed alongside REVISION so the dogfood gate is
+    deterministic across machines. Phase 4 wires this into
+    ``./scripts/benchmark dogfood``; Phase 2d ships only the file.
+    """
+    out: list[str] = []
+    for raw in _DOGFOOD_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        out.append(line)
+    return out
 
 
 def register() -> None:

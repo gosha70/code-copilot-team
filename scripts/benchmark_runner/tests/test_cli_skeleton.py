@@ -52,6 +52,7 @@ class TestListCommand(CLITestBase):
         # stub on top.
         from benchmark_runner.contracts import (
             ISOLATION_WORKTREE,
+            IsolationConfig,
             TaskSpec,
             VerifyResult,
         )
@@ -63,6 +64,9 @@ class TestListCommand(CLITestBase):
 
             def list_tasks(self) -> list[TaskSpec]:
                 return []
+
+            def isolation_for(self, task):  # type: ignore[no-untyped-def]
+                return IsolationConfig(tier=ISOLATION_WORKTREE)
 
             def prepare_task(self, task, worktree):  # type: ignore[no-untyped-def]
                 return None

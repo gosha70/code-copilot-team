@@ -57,6 +57,29 @@ class TaskSpec:
 
 
 @dataclass(frozen=True)
+class IsolationConfig:
+    """Isolation directive resolved per task by ``BenchmarkAdapter.isolation_for``.
+
+    Adapters that don't vary isolation per task can return
+    ``IsolationConfig(tier=adapter.isolation_default)`` from
+    ``isolation_for`` (this is what the protocol's default-shaped
+    behavior produces). Multi-language adapters (Aider Polyglot) override
+    to return ``worktree+venv`` for Python tasks and ``worktree`` for
+    languages whose toolchains are managed at host level.
+
+    Fields beyond ``tier`` are tier-specific; the runner reads only
+    those that match the chosen tier and records all of them in
+    ``run-record.json``'s ``isolation`` block for audit.
+    """
+
+    tier: "IsolationTier"  # forward-ref to keep the alias close to its consumers
+    python: Optional[str] = None
+    install_command: Optional[str] = None
+    dockerfile: Optional[Path] = None
+    build_args: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class VerifyResult:
     """Outcome of running an adapter's verify pass on a worktree.
 
@@ -150,6 +173,15 @@ class BenchmarkAdapter(Protocol):
     isolation_default: IsolationTier
 
     def list_tasks(self) -> list[TaskSpec]: ...
+
+    def isolation_for(self, task: TaskSpec) -> IsolationConfig:
+        """Return the isolation directive for ``task``.
+
+        Adapters that don't vary per task return
+        ``IsolationConfig(tier=self.isolation_default)``. Multi-language
+        adapters (Polyglot, future SWE-bench) override to vary tier
+        and venv/docker config per language or per task.
+        """
 
     def prepare_task(self, task: TaskSpec, worktree: Path) -> None:
         """Place starter files for ``task`` into ``worktree``."""

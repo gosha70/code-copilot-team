@@ -180,6 +180,20 @@ class TestSchemaInvariants(unittest.TestCase):
         self.assertIn("null", mo["type"])
         self.assertIn("string", mo["type"])
 
+    def test_run_record_backend_block_required(self) -> None:
+        # Locked-in invariant after the Phase 2c review: backends
+        # exceptions used to disappear because run.py didn't serialize
+        # backend_metadata anywhere, and a permissive schema let that
+        # gap go unnoticed. Since the runner now always writes the
+        # backend block, the schema requires it.
+        schema = _load_json(SCHEMA_DIR / "run-record.schema.json")
+        self.assertIn("backend", schema["required"])
+        backend = schema["properties"]["backend"]
+        self.assertEqual(sorted(backend["required"]), ["error", "metadata"])
+        self.assertIn("null", backend["properties"]["error"]["type"])
+        self.assertIn("string", backend["properties"]["error"]["type"])
+        self.assertEqual(backend["properties"]["metadata"]["type"], "object")
+
 
 # Sanity check on the validator itself — it should detect obvious mismatches.
 class TestValidatorSelfCheck(unittest.TestCase):

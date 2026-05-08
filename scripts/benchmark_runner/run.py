@@ -33,11 +33,12 @@ from .contracts import (
     RESULT_PASS,
     BackendResult,
     BenchmarkAdapter,
+    IsolationConfig,
     RunContext,
     TaskSpec,
     VerifyResult,
 )
-from .isolation import provision_worktree
+from .isolation import install_dependencies, provision_worktree
 from .registry import get_adapter, get_backend
 
 
@@ -135,12 +136,18 @@ def _execute_attempt(
     started_at = _utc_now()
     started = time.monotonic()
 
-    worktree = provision_worktree(adapter.isolation_default, attempt_dir)
+    isolation_config = adapter.isolation_for(task)
+    worktree = provision_worktree(isolation_config, attempt_dir)
     adapter.prepare_task(task, worktree)
+    # install_command runs AFTER prepare_task so project-aware installs
+    # (e.g. ``pip install -e .[dev]``) can see pyproject.toml/setup.py.
+    install_dependencies(isolation_config, worktree)
 
     # Snapshot prepared state so we can compute the post-attempt diff.
+    # ``.venv`` is excluded — installed packages aren't the model's
+    # contribution and would explode the diff to thousands of lines.
     prepared = attempt_dir / "prepared"
-    shutil.copytree(worktree, prepared)
+    shutil.copytree(worktree, prepared, ignore=shutil.ignore_patterns(".venv"))
 
     # ``prior`` carries the previous attempt's verify result for two-shot
     # adapters (Aider-style retry); first attempt always sees None.
@@ -167,11 +174,14 @@ def _execute_attempt(
     try:
         backend_result: BackendResult = backend.run(prompt, ctx)
     except Exception as exc:  # noqa: BLE001 — capture, don't crash the run
+        # The error string lives in run_record["backend"]["error"]; we
+        # don't also stuff it into backend_metadata (which is the
+        # backend's own free-form context — empty here because the
+        # backend never produced a real result).
         backend_error = f"{type(exc).__name__}: {exc}"
         backend_result = BackendResult(
             transcript_path=None,
             elapsed_seconds=time.monotonic() - started,
-            backend_metadata={"error": backend_error},
         )
 
     # Verify regardless — even on backend error, the worktree may be
@@ -196,7 +206,7 @@ def _execute_attempt(
         "attempt": attempt,
         "started_at": started_at,
         "finished_at": finished_at,
-        "isolation": {"tier": adapter.isolation_default},
+        "isolation": _isolation_record(isolation_config),
         "backend_invocation": {
             "model": ctx.model,
             "temperature": ctx.temperature,
@@ -210,6 +220,10 @@ def _execute_attempt(
         "model_output_path": _relpath_or_none(
             backend_result.model_output_path, attempt_dir
         ),
+        "backend": {
+            "error": backend_error,
+            "metadata": dict(backend_result.backend_metadata),
+        },
     }
 
     score = {
@@ -267,6 +281,25 @@ def _execute_attempt(
 
 def _slug(value: str) -> str:
     return _SLUG_RE.sub("-", value).strip("-") or "task"
+
+
+def _isolation_record(config: IsolationConfig) -> dict:
+    """Serialize an IsolationConfig into the run-record's isolation block.
+
+    Only emits the optional fields that are actually set, so
+    ``worktree`` runs don't end up with null python/install_command
+    keys cluttering the record.
+    """
+    out: dict = {"tier": config.tier}
+    if config.python is not None:
+        out["python"] = config.python
+    if config.install_command is not None:
+        out["install_command"] = config.install_command
+    if config.dockerfile is not None:
+        out["dockerfile"] = str(config.dockerfile)
+    if config.build_args:
+        out["build_args"] = dict(config.build_args)
+    return out
 
 
 def _utc_now() -> str:
@@ -381,7 +414,9 @@ def _write_diff(prepared: Path, worktree: Path, attempt_dir: Path) -> Path:
     """
     diff_path = attempt_dir / "diff.patch"
     proc = subprocess.run(
-        ["diff", "-urN", str(prepared), str(worktree)],
+        # Exclude .venv (mirrors the prepared/ snapshot's ignore pattern):
+        # installed-package files swamp the model's actual edits.
+        ["diff", "-urN", "-x", ".venv", str(prepared), str(worktree)],
         capture_output=True,
         text=True,
         check=False,
@@ -407,8 +442,18 @@ def _diff_stats(prepared: Path, worktree: Path) -> tuple[int, int, int]:
     lines_added = 0
     lines_removed = 0
 
-    pre_files = {p.relative_to(prepared): p for p in prepared.rglob("*") if p.is_file()}
-    post_files = {p.relative_to(worktree): p for p in worktree.rglob("*") if p.is_file()}
+    # Mirror the diff command's exclusion: ``.venv`` is a runner artifact,
+    # not the model's contribution — counting its files would dominate.
+    pre_files = {
+        p.relative_to(prepared): p
+        for p in prepared.rglob("*")
+        if p.is_file() and ".venv" not in p.parts
+    }
+    post_files = {
+        p.relative_to(worktree): p
+        for p in worktree.rglob("*")
+        if p.is_file() and ".venv" not in p.parts
+    }
 
     for rel in set(pre_files) | set(post_files):
         pre = pre_files.get(rel)

@@ -8,15 +8,15 @@ See [`specs/benchmark-harness/spec.md`](../specs/benchmark-harness/spec.md) for 
 
 ## Status
 
-**Phase 1** is the current phase: stub adapter + stub backend + CI smoke test, plus Phase-1 run orchestration and a report skeleton. `./scripts/benchmark list` shows `stub`; `./scripts/benchmark run --benchmark stub --backend stub` produces a complete run record without invoking any LLM.
+**Phase 2** is the current phase: Aider Polyglot adapter (pinned upstream + per-language tasks), `worktree+venv` isolation tier active. `./scripts/benchmark list` shows `aider-polyglot` and `stub` as adapters, `stub` as the only backend.
 
 | Phase | Ships                                                                          |
 |-------|--------------------------------------------------------------------------------|
 | 0     | Contracts, CLI skeleton, schemas, tests — done                                 |
-| 1     | Stub adapter, stub backend, CI smoke test, run orchestration, report skeleton — *current* |
-| 2     | Aider Polyglot adapter (multi-language)                                        |
-| 3     | Claude Code (`claude -p`) and vLLM (OpenAI-compatible HTTP) backends           |
-| 4     | Calibrated winner-declaration rule, dogfood gate vs Aider leaderboard          |
+| 1     | Stub adapter, stub backend, CI smoke test, run orchestration, report skeleton — done |
+| 2     | Aider Polyglot adapter, `worktree+venv` tier — *current*                       |
+| 3     | Claude Code (`claude -p`) backend with provider-routing recording              |
+| 4     | Calibrated winner-declaration rule, dogfood gate                               |
 
 ## CLI
 
@@ -25,8 +25,6 @@ See [`specs/benchmark-harness/spec.md`](../specs/benchmark-harness/spec.md) for 
 ./scripts/benchmark list --benchmark aider-polyglot           # Phase 1+
 ./scripts/benchmark run --benchmark aider-polyglot \
     --backend claude-code:sonnet --runs 3                     # Phase 1+
-./scripts/benchmark run --benchmark aider-polyglot \
-    --backend vllm:<model> --runs 3                           # Phase 3+
 ./scripts/benchmark report --run-dir runs/<UTC-ts>/           # Phase 1+
 ./scripts/benchmark dogfood --backend claude-code:sonnet      # Phase 4
 ```
@@ -74,13 +72,14 @@ class Backend(Protocol):
     def run(self, prompt: str, ctx: RunContext) -> BackendResult: ...
 ```
 
-The MVP ships three backends (Phases 1 + 3):
+The MVP ships these backends:
 
-| Backend          | Phase | Description                                                                  |
-|------------------|-------|------------------------------------------------------------------------------|
-| `stub`           | 1     | Copies `golden_patch` into the worktree; CI smoke test only.                 |
-| `claude-code:<m>`| 3     | Spawns `claude -p` headless; parses transcript usage.                        |
-| `vllm:<model>`   | 3     | OpenAI-compatible HTTP against a configured vLLM endpoint.                   |
+| Backend          | Phase | Description                                                                                         |
+|------------------|-------|-----------------------------------------------------------------------------------------------------|
+| `stub`           | 1     | Copies `golden_patch` into the worktree; CI smoke test only.                                        |
+| `claude-code`    | 3     | Spawns `claude -p` headless; parses transcript usage. Provider routing via `ANTHROPIC_BASE_URL` (vLLM, Ollama, LM Studio). |
+
+**Not a backend:** vLLM, Ollama, LM Studio, OpenRouter — these are *providers* (LLM HTTP endpoints) that backends route to via the backend's own gateway env vars. CCT records which provider a run used; it does not set the routing.
 
 ### How to add a new backend
 
@@ -93,18 +92,36 @@ The MVP ships three backends (Phases 1 + 3):
 
 ```yaml
 isolation:
-  tier: worktree                 # cheap; copies adapter-prepared files into a git worktree
+  tier: worktree                 # cheap; clean per-attempt directory
   # or:
   tier: worktree+venv
-  python: "3.12"
-  install_command: "pip install -e .[dev]"
+  python: "python3"              # interpreter to use for `python -m venv`
+  install_command: "pip install -q pytest"
   # or:
   tier: docker
   dockerfile: <path>
   build_args: {}
 ```
 
-All three tiers are in the schema from Phase 0. Implementation lands per phase: `worktree` and `worktree+venv` in Phases 1–2; `docker` lands when issue #33's SWE-bench Verified adapter ships.
+The runner provisions one worktree per attempt under
+`runs/<ts>-<benchmark>-<backend>-NNN/<task>/<attempt>/worktree/`. For
+the `worktree+venv` tier (Phase 2), it also creates a `.venv/` inside
+the worktree, runs the configured `install_command` with the venv's
+`bin/` at the front of `PATH`, and the verify path looks for
+`worktree/.venv/bin/python` and `worktree/.venv/bin/pytest` before
+falling back to the host toolchain. The `docker` tier is reserved
+for issue #33's SWE-bench Verified adapter; calling it raises
+`NotImplementedError`.
+
+Per-task isolation is declared by the adapter's
+`isolation_for(task) -> IsolationConfig`. Adapters that don't vary
+per task return `IsolationConfig(tier=self.isolation_default)`. The
+Aider Polyglot adapter overrides this to use `worktree+venv` for
+Python tasks (so `pytest` lives inside the worktree, not on the
+host) and `worktree` for the other five languages (which assume the
+host has `go`, `cargo`, `gradle`, `npm`, and `cmake`/`make`/a C++
+compiler installed; this is documented as a host-toolchain
+requirement).
 
 ## Run-record layout
 
@@ -150,7 +167,18 @@ Backends that don't support seeding record `seed: null`. The report flags such c
 ## Running the tests
 
 ```bash
-PYTHONPATH=scripts python3 -m unittest discover -s scripts/benchmark_runner/tests -v
+PYTHONPATH=scripts:. python3 -m unittest discover -s scripts/benchmark_runner/tests -v
 ```
 
-CI runs the same discovery on every PR matching the smoke workflow's path filter (Phase 1+).
+CI runs the same discovery on every PR matching the smoke workflow's
+path filter (Phase 1+). A handful of tests are skipped by default:
+
+- Tests that require `pytest` to be installed on the host (Phase 2c
+  removes the need for a host-installed `pytest` for the Polyglot
+  Python verify path; integration coverage there relies on the venv
+  tier described above).
+- Real-pip integration coverage of the venv tier
+  (`test_isolation.py:test_real_pip_install_pytest`). To run it,
+  set `CCT_BENCHMARK_INTEGRATION=1`. Otherwise the suite is
+  hermetic — no network calls, no per-language toolchains required
+  beyond stdlib `python3` for the venv-creation tests.
