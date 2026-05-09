@@ -136,6 +136,25 @@ class TestRunCommand(CLITestBase):
         self.assertIn("--backend 'claude-code'", stderr)
         self.assertIn("--model 'sonnet'", stderr)
 
+    def test_run_combined_form_hint_handles_hyphenated_model_name(self) -> None:
+        # Pre-push review follow-up: real model names contain hyphens
+        # (e.g. ``gpt-4o-mini``, ``claude-sonnet-4-6``,
+        # ``meta-llama/Meta-Llama-3.1-70B-Instruct``). The hint must
+        # render single-quoted strings cleanly without double-quoting
+        # or shell-escape artifacts.
+        rc, _, stderr = self._invoke(
+            "run",
+            "--benchmark", "stub",
+            "--backend", "vllm:gpt-4o-mini",
+            "--runs", "1",
+        )
+        self.assertEqual(rc, EXIT_USAGE)
+        # Single quotes only, no double-quoting:
+        self.assertIn("--backend 'vllm'", stderr)
+        self.assertIn("--model 'gpt-4o-mini'", stderr)
+        self.assertNotIn("\"vllm\"", stderr)
+        self.assertNotIn("\"gpt-4o-mini\"", stderr)
+
     def test_run_unknown_backend_returns_usage(self) -> None:
         # Use a no-colon backend name so this test exercises the
         # registry's "unknown backend family" path rather than the

@@ -70,6 +70,13 @@ class TestRenderReport(unittest.TestCase):
 
         self.assertIn("schema_version", payload)
         self.assertEqual(payload["schema_version"], REPORT_SCHEMA_VERSION)
+        # Type discipline: schema_version is a STRING, not int. A bump
+        # from "1" to "2" stays string; consumers branching on this
+        # value should `==`-compare strings, not int-cast. This pin
+        # catches an accidental ``schema_version: 1`` (int) that would
+        # later trip strict-type comparisons.
+        self.assertIsInstance(payload["schema_version"], str)
+        self.assertIsInstance(REPORT_SCHEMA_VERSION, str)
         # v3 architecture-correction shape — top-level groups + verdicts.
         self.assertEqual(REPORT_SCHEMA_VERSION, "1")
 
