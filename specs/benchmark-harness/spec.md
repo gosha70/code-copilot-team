@@ -290,15 +290,17 @@ Two complementary gates with distinct purposes — both must pass before merge.
 
 **Removed from this gate (v3 correction):** the prior version compared CCT's `claude-code` per-language pass rate against Aider's published Polyglot leaderboard. That comparison is apples-to-oranges — Aider's leaderboard reports *Aider-the-agent driving model X*, not *Claude Code driving model X*. Different agents, different scores. Apples-to-apples comparison requires adding an Aider backend (issue #33's scope).
 
-### Gate 2 — Verdict correctness (rlmkit#38/#41 retrospective)
+### Gate 2 — Verdict correctness (memkernel#3 spec-first dogfood)
 
 This is the **load-bearing** merge gate — the one that justifies the harness's existence. Liveness is necessary but not sufficient: a harness that runs to completion but produces wrong verdicts is worse than no harness, because it gives false confidence.
 
-> Build a small `cct-dogfood-rlmkit-llm-wiki-backbone` fixture (committed under `benchmarks/adapters/cct_dogfood_rlmkit/`) that approximates the rlmkit#37 task referenced in the original issue framing. Run the harness against this fixture using `claude-code --model sonnet`. Compare the harness's deterministic verdict (`tests_passed`, `result`) to the human-rubric verdict in the gist `https://gist.github.com/gosha70/6fbf6dcf8e84a8110c431331c628d344` (rlmkit#38 / rlmkit#41 retrospective).
+> Build a `cct-dogfood-memkernel` fixture (committed under `benchmarks/adapters/cct_dogfood_memkernel/`) that snapshots the memkernel repo at a pinned SHA and exposes one task — `memory-brain-spec` — whose prompt is the verbatim body of memkernel#3 ("Define MemKernel Memory Brain Architecture"). The deliverable is a single file the agent must author: `specs/memory-brain/spec.md`. The deterministic verifier checks: (1) spec.md exists; (2) the seven section headers from memkernel#3's acceptance criteria are present; (3) `pyproject.toml` is unchanged (memkernel#3 is spec-only — no new deps); (4) `src/memkernel/mcp/` is unchanged (no MCP code lands). Run the harness against this fixture using `claude-code --model sonnet --runs 3`. For each (run, attempt) pair, the maintainer manually reads the produced `specs/memory-brain/spec.md` and records a human verdict (the spec is / is not a faithful answer to memkernel#3). Compare against the harness's `tests_passed` per attempt.
 >
-> **Pass criteria:** verdict-class match (pass/fail) on ≥80% of the gist's labeled cases. Below that, document the divergence cause (harness can't model the task / human-rubric criteria not deterministically checkable / model regression / harness bug) in the merge commit. Material divergence is calibration data, not necessarily a blocker — but the merge commit must explain it. If the harness can't model the rlmkit task at all, the issue does not merge.
+> **Pass criteria:** verdict-class match (pass/fail) between harness and human on ≥80% of (run, attempt) pairs. With `--runs 3` and a single task, this is 3 comparisons. Below 80%, document the divergence cause (verify.sh too lenient / verify.sh too strict / human rubric not deterministically checkable / model regression / harness bug) in the merge commit. Material divergence is calibration data, not necessarily a blocker — but the merge commit must explain it. If the harness can't run memkernel#3 to completion at all, the issue does not merge.
 
-The fixture itself is **throwaway** — issue #33 will replace `cct-dogfood-rlmkit` with the proper SWE-bench/BigCode/etc. adapter suite. This gate exists to verify, at MVP, that CCT's deterministic-scoring + run-record machinery produces verdicts a human reviewer would agree with on a real CCT-shaped task.
+memkernel#3 is **forward-looking and unrun** at the time the fixture lands — that is the defining property. Retrospective dogfood (replaying a closed experiment whose verdict is already recorded) is too easy: the harness only has to match a known answer. A fresh task forces the harness to demonstrate that its deterministic-scoring + run-record machinery produces verdicts a maintainer would agree with on a real, never-seen-before copilot task.
+
+> **Privileged fixture status.** This is the *only* custom-CCT fixture the MVP ships. The Constraints section ("No custom application fixtures as the foundation") allows it precisely because it is calibration infrastructure for Gate 2, not a fixture pretending to be a benchmark. It does not appear in any leaderboard, does not contend with Aider Polyglot for "first public adapter" status, and never runs in CI (it requires a memkernel clone + claude-code auth). It runs only at maintainer-driven dogfood time. Whether the fixture is refreshed (newer pinned SHA), archived, or removed after #32 merges is a future-maintainer decision — out of scope for this issue.
 
 The two gates measure orthogonal things:
 - Gate 1 confirms the harness *runs* end-to-end. Catches integration bugs.
@@ -356,11 +358,13 @@ Both must pass.
    (9a) **Liveness:** ≥10 Aider Polyglot tasks (≥1 per supported language)
    run end-to-end against `claude-code --model sonnet`. Run-dir committed,
    provider env vars in run-record, failures cause-classified.
-   (9b) **Verdict correctness (rlmkit#38/#41 retrospective):** harness
-   verdict matches human-rubric verdict from the gist on ≥80% of labeled
-   cases. This is the load-bearing gate — a running harness that
-   produces wrong verdicts is worse than no harness. Below 80%, document
-   the divergence cause in the merge commit.
+   (9b) **Verdict correctness (memkernel#3 spec-first dogfood):** harness's
+   `tests_passed` matches the maintainer's human verdict on the produced
+   `specs/memory-brain/spec.md` for ≥80% of (run, attempt) pairs from a
+   `claude-code --model sonnet --runs 3` invocation. This is the
+   load-bearing gate — a running harness that produces wrong verdicts is
+   worse than no harness. Below 80%, document the divergence cause in
+   the merge commit.
 
 10. **Report output.** Markdown + JSON only. HTML, charts, and CSV are
     deferred to issue #34.
@@ -375,10 +379,16 @@ Both must pass.
 What this issue MUST NOT build, even if convenient:
 
 - **No custom application fixtures as the foundation.** A custom CCT
-  fixture (e.g. `cct-dogfood-rlmkit-llm-wiki-backbone`) is permitted
-  in issue #33 as one adapter among several — never as the centerpiece
-  or the calibration target. The MVP's first public adapter is Aider
-  Polyglot precisely so we ride a published leaderboard for sanity.
+  fixture is permitted in issue #33 as one adapter among several —
+  never as the centerpiece or as a stand-in for a public benchmark.
+  The MVP's first public adapter is Aider Polyglot precisely so we
+  ride a published leaderboard for sanity. *Carve-out:*
+  `cct-dogfood-memkernel` (Gate 2 calibration target) ships in this
+  issue because verdict-correctness calibration on a fresh,
+  forward-looking copilot task is the harness's load-bearing
+  justification. It is never invoked outside maintainer-driven
+  dogfood, never runs in CI, and never appears in cross-backend
+  leaderboard reports.
 - **No LLM-judge scoring.** Deferred to issue #34, gated on a 50–100
   sample human-labeled calibration set with per-dimension Spearman ≥
   0.6 before any judge score influences winner declaration.
@@ -422,7 +432,7 @@ What this issue MUST NOT build, even if convenient:
 - [ ] Report distinguishes missing stats (`null`) from zero values.
 - [ ] No dollar-cost estimate appears in any output.
 - [ ] Dogfood Gate 1 (liveness): ≥10 Aider Polyglot tasks across ≥1 language each, against `claude-code --model sonnet`, with run-dir committed under `specs/benchmark-harness/dogfood/<UTC-ts>-liveness/`, provider env vars recorded in run-record, any task failures cause-classified in the merge commit.
-- [ ] Dogfood Gate 2 (verdict correctness): rlmkit#38/#41 retrospective — `cct-dogfood-rlmkit` fixture committed under `benchmarks/adapters/cct_dogfood_rlmkit/`, harness verdict compared to gist's human-rubric verdict on ≥80% of labeled cases, run-dir committed under `specs/benchmark-harness/dogfood/<UTC-ts>-rlmkit-retrospective/`, divergence cause documented in merge commit.
+- [ ] Dogfood Gate 2 (verdict correctness): memkernel#3 spec-first dogfood — `cct-dogfood-memkernel` fixture committed under `benchmarks/adapters/cct_dogfood_memkernel/` (snapshots memkernel at a pinned SHA; one task `memory-brain-spec` whose prompt is the verbatim memkernel#3 body); harness verdict (`tests_passed`) compared to maintainer's human verdict on the produced `specs/memory-brain/spec.md` for ≥80% of (run, attempt) pairs from `claude-code --model sonnet --runs 3`; run-dir committed under `specs/benchmark-harness/dogfood/<UTC-ts>-memkernel-spec/`; divergence cause documented in merge commit.
 - [ ] Documentation explains how to add a new benchmark adapter and a new backend.
 
 ## Reuse map
@@ -468,3 +478,16 @@ Audit + rollback documents:
 - [`rollback-2026-05-08.md`](rollback-2026-05-08.md) — concrete per-file revert + new commit description.
 - [`_backup-2026-05-08-pre-correction/`](_backup-2026-05-08-pre-correction/) — frozen v2 specs for diff convenience.
 - [`doc_internal/copilot-llm-support-matrix.md`](../../doc_internal/copilot-llm-support-matrix.md) — verified-facts fact base for the per-copilot LLM-customization story across all six adapters.
+
+### v4 correction (2026-05-09): Gate 2 retargeted
+
+The v3 spec restored the **rlmkit#38/#41 retrospective** as the load-bearing Gate 2 calibration target. That choice was wrong on a third axis — it was retrospective. The gist verdicts are final and the rlmkit experiment is closed; calibrating against a known-answer keyhole produces optimistic verdict-correctness numbers (the harness can be wrong about *anything* and still match the answer if it happens to copy the cases' pattern). v4 retargets Gate 2 onto **memkernel#3**, a fresh forward-looking spec-first issue from a sister project that is unrun at the time the fixture lands. The harness's first comparison against memkernel#3 generates true calibration data — neither side knows the answer in advance.
+
+What changed in v4:
+- New fixture: `benchmarks/adapters/cct_dogfood_memkernel/` snapshots memkernel at a pinned SHA and exposes one task (`memory-brain-spec`) whose prompt is the verbatim memkernel#3 issue body.
+- Verifier: hard checks (spec.md exists + 7 section headers + pyproject unchanged + MCP unchanged) plus best-effort checks (ruff/mypy/pytest, skipped if toolchain absent).
+- Calibration unit: per (run, attempt) pair, harness `tests_passed` vs. maintainer's read of the produced `specs/memory-brain/spec.md`. With `--runs 3` and a single task, that's 3 comparisons; ≥80% match (i.e. 3/3 in practice) clears the gate.
+- Removed: `cct-dogfood-rlmkit` fixture, retrospective gist comparison, `rlmkit-retrospective` run-dir naming.
+- Constraints carve-out: the v3 prohibition on custom CCT fixtures gets a single, narrow exception named for `cct-dogfood-memkernel` — calibration infrastructure, never a benchmark, never in CI. Whether the fixture is refreshed (newer pinned SHA), archived, or removed after #32 merges is a future-maintainer decision; v4 takes no position on cadence or longevity.
+
+The "no custom CCT fixture as the foundation" rule (v2 origin redirect) is preserved: Aider Polyglot is still the only public adapter shipped, still the calibration backbone for cross-backend comparison, and still the centerpiece of the MVP. `cct-dogfood-memkernel` is calibration infra, not benchmark content.

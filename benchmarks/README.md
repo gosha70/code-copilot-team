@@ -162,7 +162,7 @@ Backends that don't support seeding record `seed: null`. The report flags such c
 - **No dollar-cost reporting.** The `cost_reporting.enabled` field in `stats.json` is permanently `false`. Cross-provider billing correlation is not solved; estimates would mislead. See `specs/benchmark-harness/spec.md` § Constraints.
 - **No LLM-judge scoring in the MVP.** Issue #34 adds calibrated judge scoring on top of deterministic scoring, gated on a 50–100-sample human-labeled calibration set.
 - **No HTML / charts / CSV reports in the MVP.** Markdown + JSON only. Issue #34 adds rich reports.
-- **No custom application fixtures as the foundation.** The MVP's first public adapter is Aider Polyglot precisely so we ride a published leaderboard for sanity. Custom CCT fixtures (e.g. `cct-dogfood-rlmkit-llm-wiki-backbone`) are one adapter among several in issue #33, never the centerpiece.
+- **No custom application fixtures as the foundation.** The MVP's first public adapter is Aider Polyglot precisely so we ride a published leaderboard for sanity. Custom CCT fixtures are one adapter among several in issue #33, never the centerpiece. *Carve-out:* `cct-dogfood-memkernel` ships in this issue as Gate-2 verdict-correctness calibration infra against memkernel#3 (a fresh forward-looking spec-first task) — never invoked outside maintainer-driven dogfood, never in CI, never in cross-backend leaderboard reports. See `specs/benchmark-harness/spec.md` § Constraints.
 
 ## Running the tests
 

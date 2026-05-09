@@ -34,6 +34,8 @@ def register_all() -> None:
     register_stub_adapter()
     from benchmarks.adapters.aider_polyglot.adapter import register as register_polyglot
     register_polyglot()
+    from benchmarks.adapters.cct_dogfood_memkernel.adapter import register as register_cct_dogfood_memkernel
+    register_cct_dogfood_memkernel()
 
     # Backends: backend modules expose a ``factory`` function; we
     # register it here. Same one-call rule.

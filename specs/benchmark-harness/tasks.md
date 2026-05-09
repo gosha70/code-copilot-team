@@ -113,26 +113,26 @@ Phased delivery on `feat/benchmark-harness`. Each task is bounded and independen
 - **Output:** committed run-dir under `specs/benchmark-harness/dogfood/<UTC-ts>-liveness/`. Merge-commit body cause-classifies any task failures (harness bug / backend agent-loop / provider-side / model-side).
 - **Done when:** the run is documented and the merge commit links to it.
 
-### T4.5 — Dogfood Gate 2 (rlmkit#38/#41 retrospective — load-bearing)
+### T4.5 — Dogfood Gate 2 (memkernel#3 spec-first dogfood — load-bearing)
 - **Output:**
-  - `benchmarks/adapters/cct_dogfood_rlmkit/` — small throwaway fixture approximating rlmkit#37 (deterministic tests + lint + required-files checks). Adapter implements `BenchmarkAdapter` with `max_attempts=1`. Replaced by issue #33's proper SWE-bench/BigCode adapter suite.
-  - `specs/benchmark-harness/dogfood/<UTC-ts>-rlmkit-retrospective/` — committed run-dir from `./scripts/benchmark run --benchmark cct-dogfood-rlmkit --backend claude-code --model sonnet --runs 1`.
-  - Comparison report: harness verdict vs human-rubric verdict in the gist (`https://gist.github.com/gosha70/6fbf6dcf8e84a8110c431331c628d344`), per labeled case.
-  - Cause classification of any divergences in the merge commit body: harness can't model task / human-rubric criteria not deterministically checkable / model regression / harness bug.
+  - `benchmarks/adapters/cct_dogfood_memkernel/` — fixture that snapshots memkernel at a pinned SHA (REVISION file) and exposes one task `memory-brain-spec`. Adapter implements `BenchmarkAdapter` with `max_attempts=1`. Calibration infra under the spec.md § Constraints carve-out; whether the fixture is refreshed, archived, or removed after #32 merges is a future-maintainer decision out of scope for this issue.
+  - `specs/benchmark-harness/dogfood/<UTC-ts>-memkernel-spec/` — committed run-dir from `./scripts/benchmark run --benchmark cct-dogfood-memkernel --backend claude-code --model sonnet --runs 3`.
+  - Comparison record: maintainer's per (run, attempt) human verdict on the produced `specs/memory-brain/spec.md` vs. harness `tests_passed`. Recorded inline in the merge commit body (3 rows for `--runs 3`).
+  - Cause classification of any divergences in the merge commit body: verify.sh too lenient / verify.sh too strict / human rubric not deterministically checkable / model regression / harness bug.
 
 - **Required input artifacts (maintainer-supplied; not derivable from this spec):**
-  1. **`benchmarks/adapters/cct_dogfood_rlmkit/tasks/<task-id>/prompt.md`** — the rlmkit#37 issue body, copied verbatim from the GitHub issue. This is the prompt the harness hands to Claude Code at run time.
-  2. **`benchmarks/adapters/cct_dogfood_rlmkit/tasks/<task-id>/acceptance.md`** + **`verify.sh`** — the deterministic checks that map onto `VerifyResult` (e.g., "spec.md / plan.md / tasks.md exist," "scripts/<feature>/ implementation passes existing test suite," "linter clean," etc.). Each check becomes a line in `verify.sh` and contributes to `tests_passed` / `lint_passed` / `required_files_present`.
-  3. **`benchmarks/adapters/cct_dogfood_rlmkit/comparison-source.json`** — JSON derived from the gist (`https://gist.github.com/gosha70/6fbf6dcf8e84a8110c431331c628d344`) listing each labeled case with the human-rubric verdict per dimension. The dogfood Gate 2 subcommand reads this file and emits per-case divergence between harness verdict and human verdict.
+  1. **`benchmarks/adapters/cct_dogfood_memkernel/tasks/memory-brain-spec/prompt.md`** — the verbatim memkernel#3 issue body. The adapter's `prompt_for` wraps it with a small framing header (working-directory note + deliverable path + scope guard) so the agent has the operational context without modifying the issue text.
+  2. **`benchmarks/adapters/cct_dogfood_memkernel/tasks/memory-brain-spec/acceptance.md`** + **`verify.sh`** — the deterministic checks that map onto `VerifyResult`. Hard checks (must pass): `specs/memory-brain/spec.md` exists; the seven section headers from memkernel#3 §7 are present; `pyproject.toml` byte-for-byte unchanged from baseline; `src/memkernel/mcp/` byte-for-byte unchanged from baseline. Best-effort checks (skipped if toolchain absent, otherwise must pass): `ruff check`, `mypy src/`, `pytest`. Best-effort because memkernel's runtime stack (chromadb, sentence-transformers, tree-sitter) is heavy and slow to install in a fresh per-attempt venv; static spec-correctness is the load-bearing assertion.
+  3. **`benchmarks/adapters/cct_dogfood_memkernel/REVISION`** — the pinned memkernel SHA that the adapter snapshots via `git archive`. Updating this file rebases the dogfood gate against a newer memkernel commit.
 
-  These three artifacts are maintainer knowledge: the rlmkit#37 task body, the acceptance criteria the harness should check, and the human-rubric labels. They are NOT derivable from anything in this spec or the harness code. Until they're committed, T4.5 cannot run — and a session attempting T4.5 without them is a session about to invent fixture content that doesn't match the user's actual judgment, defeating the purpose of the gate.
+  These three artifacts plus the host's memkernel clone (default `~/dev/repo/memkernel`, override via `CCT_MEMKERNEL_PATH`) are maintainer knowledge: which memkernel revision is the calibration target, the verbatim issue body, and the deterministic acceptance checks. They are NOT derivable from anything in this spec or the harness code, and the v3 rlmkit-retrospective plan is not directly portable (the rlmkit gist's per-case verdicts have no analogue in a single forward-looking task — see plan.md Phase 4 step 4 on the per-(run, attempt) calibration unit).
 
-- **Done when:** verdict-class match on ≥80% of the gist's labeled cases AND the run is committed AND any divergence is cause-classified. This is the load-bearing merge gate — a running harness that produces wrong verdicts fails this gate even if Gate 1 (T4.4) passes.
+- **Done when:** verdict-class match on ≥80% of (run, attempt) pairs (3 pairs at `--runs 3`, so 3/3 in practice) AND the run-dir is committed AND any divergence is cause-classified. This is the load-bearing merge gate — a running harness that produces wrong verdicts fails this gate even if Gate 1 (T4.4) passes.
 
 **Phase 4 commit chain:**
 1. `feat(benchmark): winner-declaration rule + report generator`
 2. `chore(benchmark): dogfood Gate 1 — Aider Polyglot run-to-completion, claude-code --model sonnet`
-3. `chore(benchmark): dogfood Gate 2 — rlmkit#38/#41 retrospective verdict-correctness`
+3. `chore(benchmark): dogfood Gate 2 — memkernel#3 spec-first verdict-correctness`
 
 ## Out of scope (issue #33 / #34)
 
