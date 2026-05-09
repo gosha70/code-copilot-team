@@ -171,14 +171,51 @@ PYTHONPATH=scripts:. python3 -m unittest discover -s scripts/benchmark_runner/te
 ```
 
 CI runs the same discovery on every PR matching the smoke workflow's
-path filter (Phase 1+). A handful of tests are skipped by default:
+path filter (Phase 1+). The hermetic suite stays green on a fresh
+checkout with stdlib `python3` only — no network, no per-language
+toolchains, no pytest, no Anthropic auth.
 
-- Tests that require `pytest` to be installed on the host (Phase 2c
-  removes the need for a host-installed `pytest` for the Polyglot
-  Python verify path; integration coverage there relies on the venv
-  tier described above).
-- Real-pip integration coverage of the venv tier
-  (`test_isolation.py:test_real_pip_install_pytest`). To run it,
-  set `CCT_BENCHMARK_INTEGRATION=1`. Otherwise the suite is
-  hermetic — no network calls, no per-language toolchains required
-  beyond stdlib `python3` for the venv-creation tests.
+### Skipped tests and when to re-run them
+
+Skipped tests cover environment-dependent paths that the hermetic CI
+can't validate. They drift toward never-running unless explicitly
+exercised on a documented schedule. Each skipped test below has
+explicit re-run criteria — run the listed command at the listed
+trigger.
+
+| Test | Skip reason | Re-run trigger | Re-run command |
+|---|---|---|---|
+| `test_polyglot_adapter.py:test_python_verify_passes_with_example_solution` | Requires `pytest` on host | Pre-merge of any PR touching `benchmarks/adapters/aider_polyglot/` or `scripts/benchmark_runner/backends/claude_code.py` | `pip install pytest && PYTHONPATH=scripts:. python3 -m unittest test_polyglot_adapter -v` |
+| `test_polyglot_adapter.py:test_python_verify_fails_with_starter` | Requires `pytest` on host | Same as above | Same as above |
+| `test_isolation.py:test_real_pip_install_pytest` | Network + pip required | Pre-merge of PR touching `scripts/benchmark_runner/isolation.py` | `CCT_BENCHMARK_INTEGRATION=1 PYTHONPATH=scripts:. python3 -m unittest test_isolation -v` |
+| `test_polyglot_dogfood_subset.py:TestDogfoodSubsetResolvesAgainstRealCache` | Requires real upstream cache | Pre-merge of PR touching `benchmarks/adapters/aider_polyglot/` (any file) | `python3 -m benchmarks.adapters.aider_polyglot.fetch && PYTHONPATH=scripts:. python3 -m unittest test_polyglot_dogfood_subset -v` |
+
+Maintainer responsibility: when one of the trigger paths changes, the
+PR description must include a paste of the re-run output (pass/fail
+summary). If the PR adds a new skipped test, this table is updated in
+the same PR — a skipped test without an entry here is a review
+finding.
+
+### Local manual smoke
+
+For exercising the real `claude` CLI against the Polyglot fixture
+(local-only, not in CI — see spec.md § "Dogfood gate"):
+
+```bash
+# Pull the upstream Polyglot dataset (one-time):
+python3 -m benchmarks.adapters.aider_polyglot.fetch
+
+# Run one Python task with Claude Code (default = Anthropic API):
+./scripts/benchmark run --benchmark aider-polyglot \
+    --backend claude-code --model sonnet --runs 1 --task python/leap
+
+# Same task, routed through a local vLLM gateway:
+export ANTHROPIC_BASE_URL=http://localhost:8000
+export ANTHROPIC_AUTH_TOKEN=dummy
+export ANTHROPIC_DEFAULT_SONNET_MODEL=<served-model-name>
+./scripts/benchmark run --benchmark aider-polyglot \
+    --backend claude-code --model <served-model-name> --runs 1 --task python/leap
+```
+
+Either run produces a complete record; the second path's
+`backend_metadata.provider_endpoint` reflects the local URL.

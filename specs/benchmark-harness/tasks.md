@@ -109,13 +109,22 @@ Phased delivery on `feat/benchmark-harness`. Each task is bounded and independen
 - **Output:** subcommand that runs the Polyglot adapter against the dogfood subset for a chosen backend (`claude-code --model sonnet` for the MVP). Emits a Markdown summary of the run-dir. **No** Aider-leaderboard comparison (apples-to-oranges; see spec.md § Dogfood gate).
 - **Done when:** dogfood subcommand runs end-to-end against `claude-code --model sonnet` locally and produces a run-dir + summary.
 
-### T4.4 — Dogfood execution + cause classification
-- **Output:** committed run-dir under `specs/benchmark-harness/dogfood/<UTC-ts>/`. Merge-commit body cause-classifies any task failures (harness bug / backend agent-loop / provider-side / model-side).
+### T4.4 — Dogfood Gate 1 execution (liveness)
+- **Output:** committed run-dir under `specs/benchmark-harness/dogfood/<UTC-ts>-liveness/`. Merge-commit body cause-classifies any task failures (harness bug / backend agent-loop / provider-side / model-side).
 - **Done when:** the run is documented and the merge commit links to it.
+
+### T4.5 — Dogfood Gate 2 (rlmkit#38/#41 retrospective — load-bearing)
+- **Output:**
+  - `benchmarks/adapters/cct_dogfood_rlmkit/` — small throwaway fixture approximating rlmkit#37 (deterministic tests + lint + required-files checks). Adapter implements `BenchmarkAdapter` with `max_attempts=1`. Replaced by issue #33's proper SWE-bench/BigCode adapter suite.
+  - `specs/benchmark-harness/dogfood/<UTC-ts>-rlmkit-retrospective/` — committed run-dir from `./scripts/benchmark run --benchmark cct-dogfood-rlmkit --backend claude-code --model sonnet --runs 1`.
+  - Comparison report: harness verdict vs human-rubric verdict in the gist (`https://gist.github.com/gosha70/6fbf6dcf8e84a8110c431331c628d344`), per labeled case.
+  - Cause classification of any divergences in the merge commit body: harness can't model task / human-rubric criteria not deterministically checkable / model regression / harness bug.
+- **Done when:** verdict-class match on ≥80% of the gist's labeled cases AND the run is committed AND any divergence is cause-classified. This is the load-bearing merge gate — a running harness that produces wrong verdicts fails this gate even if Gate 1 (T4.4) passes.
 
 **Phase 4 commit chain:**
 1. `feat(benchmark): winner-declaration rule + report generator`
-2. `chore(benchmark): dogfood — Aider Polyglot run-to-completion, claude-code --model sonnet`
+2. `chore(benchmark): dogfood Gate 1 — Aider Polyglot run-to-completion, claude-code --model sonnet`
+3. `chore(benchmark): dogfood Gate 2 — rlmkit#38/#41 retrospective verdict-correctness`
 
 ## Out of scope (issue #33 / #34)
 

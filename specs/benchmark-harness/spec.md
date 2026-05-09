@@ -280,15 +280,31 @@ on:
 
 The stub backend copies `golden_patch` into the worktree and exits 0 — verifies plumbing (init → run → score → report) without invoking any LLM. Total wall time target: <90s on GitHub free runners. The Aider Polyglot adapter is **not** exercised in CI (cloning the upstream dataset + running language toolchains exceeds the budget); local-only.
 
-## Dogfood gate (softened from origin)
+## Dogfood gate
 
-The original issue required reproducing rlmkit#37 within strict bounds, against a single hand-graded gist. The rescoped gate:
+Two complementary gates with distinct purposes — both must pass before merge.
+
+### Gate 1 — Liveness (T3.4): "harness runs end-to-end against a public benchmark"
 
 > Run the Aider Polyglot adapter against `claude-code --model sonnet` on a small task subset (≥10 tasks, ≥1 per language). The merge commit must (1) link to the run-dir produced (under `specs/benchmark-harness/dogfood/<UTC-ts>/`); (2) state which provider the run used (Anthropic API by default, or `ANTHROPIC_BASE_URL=...` if a gateway was configured); (3) note any task-specific failures with cause classification (harness bug / backend agent-loop issue / provider-side issue / model-side issue). If the harness cannot run the adapter end-to-end at all, the issue does not merge.
 
 **Removed from this gate (v3 correction):** the prior version compared CCT's `claude-code` per-language pass rate against Aider's published Polyglot leaderboard. That comparison is apples-to-oranges — Aider's leaderboard reports *Aider-the-agent driving model X*, not *Claude Code driving model X*. Different agents, different scores. Apples-to-apples comparison requires adding an Aider backend (issue #33's scope).
 
-The optional `rlmkit-llm-wiki-backbone` adapter from the original gate is deferred to issue #33 as one possible custom-CCT-fixture adapter, on equal footing with SWE-bench and BigCodeBench adapters.
+### Gate 2 — Verdict correctness (rlmkit#38/#41 retrospective)
+
+This is the **load-bearing** merge gate — the one that justifies the harness's existence. Liveness is necessary but not sufficient: a harness that runs to completion but produces wrong verdicts is worse than no harness, because it gives false confidence.
+
+> Build a small `cct-dogfood-rlmkit-llm-wiki-backbone` fixture (committed under `benchmarks/adapters/cct_dogfood_rlmkit/`) that approximates the rlmkit#37 task referenced in the original issue framing. Run the harness against this fixture using `claude-code --model sonnet`. Compare the harness's deterministic verdict (`tests_passed`, `result`) to the human-rubric verdict in the gist `https://gist.github.com/gosha70/6fbf6dcf8e84a8110c431331c628d344` (rlmkit#38 / rlmkit#41 retrospective).
+>
+> **Pass criteria:** verdict-class match (pass/fail) on ≥80% of the gist's labeled cases. Below that, document the divergence cause (harness can't model the task / human-rubric criteria not deterministically checkable / model regression / harness bug) in the merge commit. Material divergence is calibration data, not necessarily a blocker — but the merge commit must explain it. If the harness can't model the rlmkit task at all, the issue does not merge.
+
+The fixture itself is **throwaway** — issue #33 will replace `cct-dogfood-rlmkit` with the proper SWE-bench/BigCode/etc. adapter suite. This gate exists to verify, at MVP, that CCT's deterministic-scoring + run-record machinery produces verdicts a human reviewer would agree with on a real CCT-shaped task.
+
+The two gates measure orthogonal things:
+- Gate 1 confirms the harness *runs* end-to-end. Catches integration bugs.
+- Gate 2 confirms the harness's *verdict* tracks human judgment. Catches scoring/rubric correctness bugs.
+
+Both must pass.
 
 ## Requirements
 
@@ -336,15 +352,15 @@ The optional `rlmkit-llm-wiki-backbone` adapter from the original gate is deferr
    "CI smoke test" section. Wall-time budget <90s on GitHub free
    runners. The Aider Polyglot adapter MUST NOT run in CI.
 
-9. **Dogfood gate.** Before merge, the harness MUST run ≥10 Aider
-   Polyglot tasks (≥1 per supported language) against
-   `claude-code --model sonnet`. The merge commit MUST link to a
-   committed run-dir under `specs/benchmark-harness/dogfood/<UTC-ts>/`,
-   record provider env vars in the run-record, and cause-classify any
-   task failures (harness bug / backend agent-loop / provider-side /
-   model-side). Apples-to-oranges leaderboard comparison against Aider's
-   own Polyglot leaderboard is NOT required (different agents, different
-   scores — see Dogfood gate section).
+9. **Dogfood gates (TWO must pass).**
+   (9a) **Liveness:** ≥10 Aider Polyglot tasks (≥1 per supported language)
+   run end-to-end against `claude-code --model sonnet`. Run-dir committed,
+   provider env vars in run-record, failures cause-classified.
+   (9b) **Verdict correctness (rlmkit#38/#41 retrospective):** harness
+   verdict matches human-rubric verdict from the gist on ≥80% of labeled
+   cases. This is the load-bearing gate — a running harness that
+   produces wrong verdicts is worse than no harness. Below 80%, document
+   the divergence cause in the merge commit.
 
 10. **Report output.** Markdown + JSON only. HTML, charts, and CSV are
     deferred to issue #34.
@@ -405,7 +421,8 @@ What this issue MUST NOT build, even if convenient:
 - [ ] Report shows `mean ± stdev` per metric across runs and obeys the winner-declaration rule (unit-tested over ≥8 cases).
 - [ ] Report distinguishes missing stats (`null`) from zero values.
 - [ ] No dollar-cost estimate appears in any output.
-- [ ] Dogfood gate executed: ≥10 Aider Polyglot tasks across ≥1 language each, against `claude-code --model sonnet`, with run-dir committed under `specs/benchmark-harness/dogfood/<UTC-ts>/`, provider env vars recorded in run-record, and any task failures cause-classified in the merge commit. **No** leaderboard comparison required (apples-to-oranges; see Dogfood gate section).
+- [ ] Dogfood Gate 1 (liveness): ≥10 Aider Polyglot tasks across ≥1 language each, against `claude-code --model sonnet`, with run-dir committed under `specs/benchmark-harness/dogfood/<UTC-ts>-liveness/`, provider env vars recorded in run-record, any task failures cause-classified in the merge commit.
+- [ ] Dogfood Gate 2 (verdict correctness): rlmkit#38/#41 retrospective — `cct-dogfood-rlmkit` fixture committed under `benchmarks/adapters/cct_dogfood_rlmkit/`, harness verdict compared to gist's human-rubric verdict on ≥80% of labeled cases, run-dir committed under `specs/benchmark-harness/dogfood/<UTC-ts>-rlmkit-retrospective/`, divergence cause documented in merge commit.
 - [ ] Documentation explains how to add a new benchmark adapter and a new backend.
 
 ## Reuse map

@@ -35,9 +35,10 @@ from benchmark_runner.contracts import Backend, RunContext
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "claude_code"
 _FAKE_CLAUDE = """#!{shebang}
-# Fake `claude` for tests: echoes a chosen fixture from CCT_FAKE_CLAUDE_TRANSCRIPT
-# and exits 0. Captures argv + stdin + cwd into CCT_FAKE_CLAUDE_LOG so the
-# tests can assert on the invocation surface.
+# Fake `claude` for tests: echoes a chosen fixture from CCT_FAKE_CLAUDE_TRANSCRIPT,
+# optionally writes to stderr from CCT_FAKE_CLAUDE_STDERR, and exits with
+# CCT_FAKE_CLAUDE_EXIT_CODE (default 0). Captures argv + stdin + cwd into
+# CCT_FAKE_CLAUDE_LOG for assertions.
 import json, os, sys
 log_path = os.environ.get("CCT_FAKE_CLAUDE_LOG", "")
 fixture_path = os.environ["CCT_FAKE_CLAUDE_TRANSCRIPT"]
@@ -52,6 +53,10 @@ if log_path:
         }}, f)
 with open(fixture_path, "r", encoding="utf-8") as src:
     sys.stdout.write(src.read())
+stderr_msg = os.environ.get("CCT_FAKE_CLAUDE_STDERR", "")
+if stderr_msg:
+    sys.stderr.write(stderr_msg)
+sys.exit(int(os.environ.get("CCT_FAKE_CLAUDE_EXIT_CODE", "0")))
 """
 
 
@@ -320,6 +325,124 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
         meta = out["result"].backend_metadata
         self.assertIsNone(meta["provider_endpoint"])
         self.assertFalse(meta["anthropic_auth_token_present"])
+
+    # ── F9: full 4-state provider routing matrix ──────────────────────
+
+    def test_provider_routing_state_url_only(self) -> None:
+        # URL set, token unset — gateway with no auth (some local vLLM
+        # deployments allow this).
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(GATEWAY_AUTH_TOKEN_ENV_VAR, None)
+            out = self._run_backend(
+                "transcript-success.json",
+                env_overrides={GATEWAY_BASE_URL_ENV_VAR: "http://gw:1"},
+            )
+        meta = out["result"].backend_metadata
+        self.assertEqual(meta["provider_endpoint"], "http://gw:1")
+        self.assertFalse(meta["anthropic_auth_token_present"])
+
+    def test_provider_routing_state_token_only(self) -> None:
+        # Token set, URL unset — default Anthropic API with explicit
+        # auth (rather than OAuth/keychain). Distinguishable from the
+        # both-unset state.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(GATEWAY_BASE_URL_ENV_VAR, None)
+            out = self._run_backend(
+                "transcript-success.json",
+                env_overrides={GATEWAY_AUTH_TOKEN_ENV_VAR: "redacted-value"},
+            )
+        meta = out["result"].backend_metadata
+        self.assertIsNone(meta["provider_endpoint"])
+        self.assertTrue(meta["anthropic_auth_token_present"])
+        # Auth value never leaks (already covered, but locked again here).
+        self.assertNotIn("redacted-value", str(meta))
+
+    def test_provider_routing_state_both_set(self) -> None:
+        # Already covered by test_provider_endpoint_recorded_when_set;
+        # repeating with explicit naming so the 4-state matrix is
+        # complete and grep-able as one block.
+        out = self._run_backend(
+            "transcript-success.json",
+            env_overrides={
+                GATEWAY_BASE_URL_ENV_VAR: "http://gw:2",
+                GATEWAY_AUTH_TOKEN_ENV_VAR: "redacted-2",
+            },
+        )
+        meta = out["result"].backend_metadata
+        self.assertEqual(meta["provider_endpoint"], "http://gw:2")
+        self.assertTrue(meta["anthropic_auth_token_present"])
+
+    # ── F8: model-typo / unknown-model error path ─────────────────────
+
+    def test_unknown_model_lands_as_backend_error(self) -> None:
+        # Model-name validation is done by the upstream copilot, not
+        # CCT — there's no whitelist. A typo lands as a non-zero exit
+        # from the CLI; the harness records exit_code != 0 and the
+        # stderr tail. This documents the contract: CCT does NOT
+        # validate model names.
+        out = self._run_backend(
+            "transcript-success.json",
+            model="totally-not-a-real-model-id",
+            env_overrides={
+                "CCT_FAKE_CLAUDE_EXIT_CODE": "1",
+                "CCT_FAKE_CLAUDE_STDERR": "error: unknown model 'totally-not-a-real-model-id'",
+            },
+        )
+        result = out["result"]
+        meta = result.backend_metadata
+        # Run completed but the CLI signaled failure.
+        self.assertEqual(meta["exit_code"], 1)
+        self.assertEqual(result.failed_commands, 1)
+        # stderr is captured (truncated to 1024 chars by _tail).
+        self.assertIn("unknown model", meta["stderr_tail"])
+        # Model arg was passed through to argv unchanged — CCT doesn't
+        # rewrite it.
+        argv = out["log"]["argv"]
+        self.assertIn("totally-not-a-real-model-id", argv)
+
+
+class TestBackendTimeout(unittest.TestCase):
+    """F10: timeout handling — high-probability real-world failure mode."""
+
+    def test_timeout_returns_populated_result_not_crash(self) -> None:
+        # Mock subprocess.run to raise TimeoutExpired. The backend
+        # must return a populated BackendResult with failed_commands=1
+        # and a "timed out" note in metadata, NOT crash the run.
+        import subprocess as _subprocess
+
+        backend = ClaudeCodeBackend(
+            model="sonnet", cli_executable="claude"
+        )
+
+        # shutil.which gets called first; mock it to "find" the CLI.
+        with mock.patch(
+            "benchmark_runner.backends.claude_code.shutil.which",
+            return_value="/usr/local/bin/claude",
+        ), mock.patch(
+            "benchmark_runner.backends.claude_code.subprocess.run",
+            side_effect=_subprocess.TimeoutExpired(
+                cmd=["claude"], timeout=1, output=b"", stderr=b"hung in tool loop",
+            ),
+        ):
+            ctx = RunContext(
+                benchmark_id="x",
+                task_id="t1",
+                backend_id=BACKEND_FAMILY,
+                run_id="run-001",
+                attempt=1,
+                worktree=Path("/tmp"),
+                model="sonnet",
+                timeout_seconds=1,
+            )
+            result = backend.run("hi", ctx)
+
+        self.assertEqual(result.failed_commands, 1)
+        meta = result.backend_metadata
+        self.assertEqual(meta["family"], BACKEND_FAMILY)
+        self.assertIn("timed out", meta["note"].lower())
+        self.assertIn("1s", meta["note"])  # the timeout value is mentioned
+        # No transcript on timeout.
+        self.assertIsNone(result.transcript_path)
 
 
 if __name__ == "__main__":

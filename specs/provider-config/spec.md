@@ -1,7 +1,7 @@
 ---
 feature_id: provider-config
-spec_mode: placeholder
-status: draft-pending-design-decision
+spec_mode: full
+status: draft
 issue: TBD
 origin:
   user_message: "if this repo produces the setting for AI Copilot, then we MUST [know] if that copilot supports LLM customization and how"
@@ -9,6 +9,7 @@ origin:
   related_specs:
     - specs/benchmark-harness/audit-2026-05-08.md
     - shared/templates/provider-profile-template.toml
+    - doc_internal/copilot-llm-support-matrix.md
   origin_claim: |
     Today's CCT adapters (`adapters/<copilot>/setup.sh`) emit only
     conventions/rules — they do NOT emit LLM-provider configuration.
@@ -21,121 +22,231 @@ origin:
     config model.
 ---
 
-# Provider-config — standalone CCT capability (PLACEHOLDER)
+# Provider-config — standalone CCT capability
 
-> **Status: design pending.** This spec is a stub. Two prerequisites
-> before it can be filled out:
->
-> 1. Audit on `specs/benchmark-harness/audit-2026-05-08.md` is
->    approved by the user (locks the backend-vs-provider abstraction).
-> 2. User's choice between **Option 1 (minimal extension)** and
->    **Option 2 (per-use-case extensions)** of the existing
->    `shared/templates/provider-profile-template.toml` schema (see
->    Open question below).
->
-> Until both prerequisites land, this file remains a placeholder so
-> that other docs can cross-reference the planned spec without
-> committing to its contents.
+> **Scope discipline (Option 1, minimal extension).** This spec
+> deliberately does NOT introduce per-use-case sub-blocks under each
+> provider (the "Option 2" framing in the audit). The schema at
+> `shared/templates/provider-profile-template.toml` already exposes
+> the primitives every consumer needs: `type`, `base_url`, `model`,
+> `api_key_env`, `host`. Each consumer (peer review, benchmark,
+> adapter setup) constructs its own per-copilot invocation from those
+> primitives. The minimal extension covered by this spec is **a
+> recording schema** (what each consumer captures about which provider
+> a run used) and **adapter-setup emission** (each adapter's setup.sh
+> learns to emit the right per-copilot config from a chosen provider
+> profile). The TOML schema does not gain new fields.
 
-## Problem
+## User Scenarios
 
-The repo's six AI-copilot adapters (`adapters/{aider,claude-code,codex,cursor,github-copilot,windsurf}/setup.sh`) install conventions and rules — but **not LLM/provider configuration**. A user who wants to point Aider at a local Ollama instance, or route Claude Code through a vLLM gateway, or configure Codex for OpenRouter, has to assemble the env vars and config files by hand based on each copilot's separate documentation.
+1. **Maintainer points Aider at a local Ollama instance.** They edit `~/.code-copilot-team/providers.toml` to add a `[providers.local-ollama]` block (`type = "ollama"`, `host = "localhost:11434"`, `model = "qwen3.5"`). Then `./adapters/aider/setup.sh ~/myproject --provider local-ollama` emits an env-var block (`OLLAMA_API_BASE=http://localhost:11434`) and a suggested `--model ollama_chat/qwen3.5` flag. The user sources the block in their shell rc; future `aider` invocations route to Ollama.
 
-CCT already has a partial solution for the **peer review** flow: `~/.code-copilot-team/providers.toml` (template at `shared/templates/provider-profile-template.toml`) defines providers with type-aware fields (`cli` / `openai-compatible` / `ollama` / `custom`). But that schema's `command` field is shaped for review invocation (`{review_request}`, `{model}` placeholders), and the broader workflow ("emit config files for each adapter") is not implemented anywhere.
+2. **Team lead runs the benchmark harness and reads the provider out of the report.** They run `./scripts/benchmark run --benchmark aider-polyglot --backend claude-code --model sonnet --runs 1`. The run-record's `backend_metadata.provider_endpoint` field is `null` (default Anthropic API) or a URL (gateway-routed). The report renders distinct rows for each `(backend, provider)` tuple, so a teammate's runs against a vLLM gateway are visible-as-different from another teammate's runs against the Anthropic API.
 
-This spec proposes a **standalone provider-config capability** that:
+3. **Curator adds a new provider that all CCT consumers pick up.** They add `[providers.gdx-spark]` to `~/.code-copilot-team/providers.toml` once. `./adapters/claude-code/setup.sh ~/myproject --provider gdx-spark` emits the right Anthropic-Messages env vars; `./adapters/codex/setup.sh --provider gdx-spark` appends the right `[model_providers.gdx-spark]` block to `~/.codex/config.toml`; `./scripts/peer-review.sh --provider gdx-spark` (existing flow) uses the same profile. One profile, three consumers — no duplicate config, no drift.
 
-1. Extends the existing `~/.code-copilot-team/providers.toml` schema (does NOT duplicate it).
-2. Adds a way for `adapters/<copilot>/setup.sh` to emit the right per-copilot configuration files / env-var setups based on a user-chosen provider profile.
-3. Is consumed by the benchmark harness for the `backend_metadata.provider_endpoint` recording (the harness reads the env at run time; the env was set by either the user's shell rc or by a CCT-emitted profile).
+4. **CI smoke verifies emitted config is well-formed.** A test in `tests/test-provider-emit.sh` runs `provider-emit.sh <copilot> <sample-profile>` for each (copilot, sample) pair and snapshot-asserts the output. A schema change that breaks emission gets caught before the user-visible `setup.sh` does.
 
-## Strategic framing
+5. **Forensic on a stale benchmark run.** A maintainer reading a year-old run-dir sees `backend_metadata.provider_endpoint = "http://192.168.1.50:8000"` and can reconstruct what was actually being measured — even if the host is gone, the run's identity is in the record.
 
-CCT's value is **governance + measurement around copilot workflows**. Provider configuration is part of the workflow:
+## Requirements
 
-- For a developer, it's "I want Aider on my private Llama, Claude Code on my company's Bedrock, Codex on OpenRouter — make my env reflect that."
-- For a team, it's "all reviewers route to the same provider for consistency; here's the team profile."
-- For a benchmark, it's "this run used vLLM on `gpu-host-1`; that run used Anthropic API; the report should segment by provider."
+1. **Single source of truth.** `~/.code-copilot-team/providers.toml` (template at `shared/templates/provider-profile-template.toml`) is consumed by peer review, benchmark, and adapter setup uniformly. No per-feature TOML files; no parallel schema.
 
-The capability is therefore embedded (default workflow), not benchmark-only.
+2. **Schema is unchanged for field semantics.** No new per-provider sub-blocks (`[providers.<id>.benchmark]` / `[providers.<id>.adapter_setup]`). Existing `type` / `base_url` / `model` / `api_key_env` / `host` / `command` fields cover all consumers' needs. Pure additions: optional top-level `[meta]` block (forward-compat versioning) + a README documenting the existing fields with worked examples.
 
-## Out of scope
+3. **CCT records, doesn't set.** The benchmark harness reads provider env vars at run time and writes them into `backend_metadata`; it does not mutate the user's shell environment. Adapter setup emits config to stdout (or, for Codex, appends to a copilot-specific config file the copilot itself reads); the harness does not run a router/proxy.
 
-- Authoring new copilots. CCT works with the six existing adapters; adding a new copilot family is a separate concern.
-- Selling a hosted / SaaS provider profile registry. Provider profiles are local files in `~/.code-copilot-team/`.
-- Replacing each copilot's native config. CCT *emits* the config the copilot expects, in the format the copilot's docs specify; it does not introduce a CCT-specific runtime layer between copilot and provider.
+4. **Auth values are never recorded.** Only presence-as-boolean. Locked at the recording-schema level (`run-record.schema.json` field `provider_auth_token_present`).
 
-## Verified-fact basis
+5. **Per-copilot translator.** `shared/scripts/provider-emit.sh <copilot> <provider-id>` is the single point that translates the abstract profile into copilot-specific config. Each `adapters/<copilot>/setup.sh` delegates to it via `--provider <id>` flag. Adapters do NOT learn the schema directly.
 
-The full per-copilot LLM-customization fact base lives at `doc_internal/copilot-llm-support-matrix.md` (research run 2026-05-08). Highlights:
+6. **Backwards compatibility.** Existing `providers.toml` files (without `[meta]`) parse and dispatch correctly. Existing `setup.sh` invocations (without `--provider`) continue to install conventions/rules unchanged.
 
-- **Headless-driveable copilots**: Claude Code, Aider, Codex, GitHub Copilot CLI. Each has its own provider-config surface (env vars, TOML, etc.).
-- **GUI-only copilots** (out of scope as benchmark backends but in scope for provider-config emission): Cursor, Windsurf. CCT can still emit the right Cursor settings JSON or Windsurf profile entry.
-- **Three integration formats matter**: Anthropic Messages, OpenAI Chat Completions, OpenAI Responses.
+7. **GUI copilot best-effort emission.** Cursor and Windsurf are out of scope as benchmark backends, but `provider-emit.sh cursor <id>` and `provider-emit.sh windsurf <id>` produce paste-into-UI settings JSON snippets — best-effort, with the limitation documented.
 
-## Open question: extension scope of the existing schema
+## Constraints
 
-`shared/templates/provider-profile-template.toml` already has the right type taxonomy (`cli` / `openai-compatible` / `ollama` / `custom`) and forward-declared fields (`base_url`, `api_key_env`, `host`, `model`). Two ways to extend it for the standalone-feature use cases:
+What this spec MUST NOT do:
 
-### Option 1 — minimal (no new fields)
+- **No per-use-case TOML sub-blocks.** That's Option 2 territory and a separate spec if/when it becomes necessary.
+- **No CCT-side provider router or proxy.** CCT remains out of the connection path. The user's chosen copilot talks directly to the user's chosen provider; CCT only records and emits.
+- **No hosted / shared provider profile registry.** Profiles are local to `~/.code-copilot-team/`. Sharing across team members is via standard Git / file-share / config-management tooling, not a CCT-hosted service.
+- **No auth-value recording, ever.** Tokens, keys, secrets — presence-only. This is a hard schema invariant.
+- **No cross-provider dollar-cost reporting.** Permanently deferred (consistent with `specs/benchmark-harness/spec.md` § Constraints).
+- **No re-implementation of peer review's command-template dispatch.** The existing schema's `command` field stays peer-review-specific. Benchmark and adapter setup construct their own invocations from `type` + `base_url` + `model` + `api_key_env`.
 
-The harness and adapter `setup.sh` scripts read provider type + base_url + model + api_key_env from the existing schema and construct copilot-specific commands themselves.
+## Posture: CCT records, doesn't set
 
-- Pro: zero schema churn; existing peer-review users see no diff.
-- Pro: each consumer (peer review, benchmark, adapter setup) implements its own command-building logic — clean separation of concerns.
-- Con: duplicated logic across consumers (peer review, benchmark, adapter setup all have to know "given an `openai-compatible` provider, here's how Aider talks to it" / "here's how Claude Code talks to it").
+The harness *reads* provider env vars at run time and writes them into
+run records. Per-copilot adapter setup *emits* config from a chosen
+profile when the user invokes `setup.sh --provider <id>`. CCT does not
+mutate the user's shell environment at run time, and does not run a
+provider router or proxy of its own.
 
-### Option 2 — per-use-case extensions
+This keeps CCT out of the connection path — provider routing is a
+shell-environment concern (or a config-file concern for copilots like
+Codex that read from disk). The user always owns the routing decision.
 
-Add optional sub-blocks per provider that describe how each consumer should invoke it. Example:
+## Provider env-var matrix per copilot
 
-```toml
-[providers.gdx-spark]
-type = "openai-compatible"
-base_url = "http://192.168.1.50:8000/v1"
-api_key_env = "GDX_SPARK_API_KEY"
-model = "deepseek-coder-v2"
+For each headless-driveable copilot, the relevant env vars / config
+files are documented in `doc_internal/copilot-llm-support-matrix.md`
+with primary-source citations. Summary:
 
-[providers.gdx-spark.peer_review]
-command = "curl -sf {base_url}/chat/completions ..."
+| Copilot | Primary config surface | Env vars (or config file) the harness records |
+|---|---|---|
+| **Claude Code** | env vars (Anthropic Messages gateway) | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN_present` (bool), `ANTHROPIC_DEFAULT_*_MODEL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` |
+| **Aider** | env vars + YAML config | `OPENAI_API_BASE`, `OLLAMA_API_BASE`, presence of `OPENAI_API_KEY` / `OLLAMA_API_KEY`, the active `--model` arg |
+| **Codex** | `~/.codex/config.toml` | path to config.toml + the active provider id from `[model_providers.<id>]` block + `wire_api` |
+| **GitHub Copilot CLI** | env vars | `COPILOT_PROVIDER_BASE_URL`, `COPILOT_MODEL`, `COPILOT_PROVIDER_TYPE`, `COPILOT_OFFLINE` (bool) |
 
-[providers.gdx-spark.benchmark]
-temperature = 0.0
-extra_headers = { "X-Trace" = "cct-bench" }
+Cursor and Windsurf are GUI-only and out of scope as benchmark
+backends; for adapter-setup emission, see "Future work" below.
 
-[providers.gdx-spark.adapter_setup]
-# Per-copilot invocation hints (which env vars to set, which config file to emit)
-claude_code = { gateway = "anthropic-messages", env = { ANTHROPIC_BASE_URL = "{base_url}" } }
-aider = { env = { OPENAI_API_BASE = "{base_url}", OPENAI_API_KEY_env = "{api_key_env}" } }
-codex = { config_toml = "[model_providers.gdx-spark]\nbase_url = \"{base_url}\"\nenv_key = \"{api_key_env}\"\nwire_api = \"chat\"" }
-github_copilot = { env = { COPILOT_PROVIDER_BASE_URL = "{base_url}", COPILOT_MODEL = "{model}" } }
+## Recording schema in run records
+
+When a benchmark backend produces a `BackendResult`, the runner writes
+the relevant env-var snapshot into `backend_metadata` under three
+canonical fields:
+
+```json
+{
+  "family": "<copilot-id>",
+  "model": "<model-id-or-empty>",
+  "provider_endpoint": "<full-URL-or-null>",
+  "provider_auth_token_present": true,
+  "provider_config_source": "env|toml|none"
+}
 ```
 
-- Pro: declarative — once a provider is defined with all sub-blocks, every consumer (peer review, benchmark, adapter setup) can use it without ad-hoc per-copilot logic.
-- Pro: a single provider profile drives the whole CCT workflow; users edit one file.
-- Con: schema gets significantly richer; changes to any copilot's invocation surface require schema updates.
-- Con: forward-compatibility risk — when a new copilot version changes its env-var names, every existing profile may need touching.
+Per-copilot extensions (recorded under the same keys, since they map
+to the same semantic):
 
-### Recommendation (pending user call)
+- **Claude Code**: `provider_endpoint = ANTHROPIC_BASE_URL` (or null);
+  `provider_auth_token_present = bool(ANTHROPIC_AUTH_TOKEN)`. Plus
+  `claude_code_invocation: "launcher" | "bare"` for the invocation
+  mode (per spec.md § "Backends vs providers"). Already implemented in
+  `scripts/benchmark_runner/backends/claude_code.py`.
+- **Aider** (when shipped): `provider_endpoint = OPENAI_API_BASE` (or
+  `OLLAMA_API_BASE`); `provider_auth_token_present` follows whichever
+  is in use.
+- **Codex** (when shipped): `provider_endpoint = base_url` from the
+  active `[model_providers.<id>]` block; `provider_config_source =
+  "toml"` (path to `~/.codex/config.toml` recorded under
+  `backend_metadata.codex_config_path`).
+- **GitHub Copilot CLI** (when shipped): `provider_endpoint =
+  COPILOT_PROVIDER_BASE_URL`; `provider_auth_token_present =
+  bool(COPILOT_PROVIDER_API_KEY)`.
 
-Option 1 for the immediate work. Option 2 may be the right end-state but it's a much bigger schema commitment, and Option 1 is forward-compatible with Option 2 (just don't ship the `[providers.<id>.X]` blocks initially; add later when their shape stabilizes). If we ship Option 1 now, the benchmark harness's read-only consumption of the schema is trivial and we don't lock in a particular invocation contract for adapter setup.
+**Auth values are never recorded.** Only their presence, as a boolean.
+This is locked at the schema level (see
+`benchmarks/schema/run-record.schema.json` once the field is added).
 
-User call expected before this spec is filled out.
+## Adapter setup emission (`setup.sh --provider <id>`)
 
-## Provisional acceptance criteria (when this spec is finalized)
+Each `adapters/<copilot>/setup.sh` gains an optional `--provider <id>`
+flag. When set:
 
-These are sketches; final criteria depend on the option chosen.
+1. Read `~/.code-copilot-team/providers.toml` (or the explicit path
+   passed via `--providers-file`).
+2. Look up the provider section by id.
+3. Translate the provider's `type` + `base_url` + `model` +
+   `api_key_env` into the right per-copilot config:
+   - **Claude Code**: print to stdout an env-var block the user
+     sources (`export ANTHROPIC_BASE_URL=... ; export
+     ANTHROPIC_AUTH_TOKEN=...`).
+   - **Aider**: print the env-var block + suggested
+     `--model <prefix>/<id>` flag.
+   - **Codex**: emit a `[model_providers.<id>]` block to append to
+     `~/.codex/config.toml` (idempotent — skip if already present).
+   - **GitHub Copilot CLI**: print the env-var block.
+   - **Cursor / Windsurf**: print a settings JSON snippet the user
+     pastes into the IDE's Settings → Models pane (best-effort; GUI
+     copilots can't be fully automated).
 
-- [ ] `~/.code-copilot-team/providers.toml` is a single source of truth across peer review + benchmark + adapter setup.
-- [ ] Each `adapters/<copilot>/setup.sh` accepts an optional `--provider <id>` flag that, when set, emits the right per-copilot configuration files alongside the existing conventions/rules.
-- [ ] Documentation: `shared/docs/provider-config.md` (or equivalent) covers: (a) the TOML schema, (b) per-copilot setup invocation, (c) how the benchmark records what providers were used at run time.
-- [ ] Backwards compatibility: existing peer-review users see no breakage; their `providers.toml` continues to work for the review flow.
-- [ ] CI: a smoke test that emits each per-copilot config from a single profile and validates the emitted file matches the copilot's documented schema.
+The translation logic lives in `shared/scripts/provider-emit.sh` (new)
+keyed by copilot family; each adapter's `setup.sh` calls it. No
+per-copilot adapter learns the schema directly — they all delegate to
+`provider-emit.sh`.
+
+## Schema extension (minimal)
+
+The existing `shared/templates/provider-profile-template.toml` schema
+is unchanged for **all field semantics**. Two pure additions:
+
+1. A top-level optional `[meta]` block with `schema_version` (string)
+   and `documentation_url` (string, default to this spec's path). For
+   forward-compat versioning. Existing profiles without `[meta]` are
+   treated as `schema_version = "1.0"`.
+2. A README at `shared/templates/PROVIDER_PROFILE_README.md`
+   documenting the existing fields, with worked examples per copilot
+   (the env-var matrix above, made concrete). Not a schema change —
+   documentation only.
+
+No new per-provider fields. No `[providers.<id>.benchmark]` /
+`[providers.<id>.adapter_setup]` sub-blocks. If a future use case
+needs them, that's a separate spec (Option 2).
+
+## Acceptance criteria
+
+- [ ] `~/.code-copilot-team/providers.toml` is the single source of
+      truth across peer review, benchmark, and adapter setup. Existing
+      peer-review users see no breakage.
+- [ ] `shared/scripts/provider-emit.sh <copilot> <provider-id>` emits
+      the right per-copilot config for {claude-code, aider, codex,
+      github-copilot, cursor, windsurf}. For each: tested against a
+      committed sample profile + golden expected-output snapshot.
+- [ ] Each `adapters/<copilot>/setup.sh` accepts `--provider <id>` and
+      `--providers-file <path>` (default
+      `~/.code-copilot-team/providers.toml`).
+- [ ] Benchmark harness records `provider_endpoint`,
+      `provider_auth_token_present`, `provider_config_source` in
+      `backend_metadata` for every backend that has a configurable
+      provider. Auth values are NEVER recorded.
+- [ ] `shared/templates/PROVIDER_PROFILE_README.md` covers all 6
+      copilot families with concrete env-var or config-file examples.
+- [ ] Schema validation: existing `providers.toml` files (without
+      `[meta]`) continue to parse and dispatch correctly.
+- [ ] `bash scripts/validate-spec.sh --feature-id provider-config` passes
+      (full-mode spec sections present).
+
+## Out of scope (this spec)
+
+- Per-use-case TOML sub-blocks (`[providers.<id>.benchmark]`,
+  `[providers.<id>.adapter_setup]`). If they become necessary, they
+  land in a separate Option-2 spec.
+- A CCT-side provider router or proxy. CCT remains out of the
+  connection path; it records and emits, never proxies.
+- Hosted / shared provider profile registry. Profiles are local to
+  `~/.code-copilot-team/`.
+- Provider-specific health checks beyond the existing `healthcheck`
+  field in the schema.
+- Cross-provider dollar-cost reporting (deferred indefinitely per
+  benchmark-harness spec).
+
+## Future work (separate specs)
+
+- **GUI copilot deep integration**: emit a Settings JSON file Cursor
+  / Windsurf can import directly, vs the current paste-into-UI
+  posture. Requires understanding their settings format and
+  forward-compat strategy.
+- **Provider profile validation**: `shared/scripts/validate-providers.sh`
+  that checks each profile's reachability + auth + capabilities (tool
+  calling, streaming, ≥128k context for GH Copilot) before any
+  consumer uses it.
+- **Migration tool** for users currently using ad-hoc env vars: read
+  the user's shell rc, suggest a `providers.toml` skeleton.
 
 ## Source pointers
 
-- `shared/templates/provider-profile-template.toml` — existing schema; extend, don't duplicate.
-- `shared/skills/provider-collaboration-protocol/SKILL.md` — peer-review flow that consumes the schema today.
-- `doc_internal/Multi_Copilot_Providers_PLAN.md` — earlier planning doc on multi-copilot providers (review for relevance).
-- `doc_internal/copilot-llm-support-matrix.md` — verified-facts per-copilot LLM-customization matrix.
-- `specs/benchmark-harness/spec.md` § "Backends vs providers" — the benchmark consumer's view.
+- `shared/templates/provider-profile-template.toml` — existing schema
+  (unchanged by this spec).
+- `shared/skills/provider-collaboration-protocol/SKILL.md` —
+  peer-review consumer.
+- `doc_internal/Multi_Copilot_Providers_PLAN.md` — earlier planning
+  doc; review for relevance and merge useful pieces.
+- `doc_internal/copilot-llm-support-matrix.md` — verified-facts
+  per-copilot LLM-customization matrix.
+- `specs/benchmark-harness/spec.md` § "Backends vs providers" — the
+  benchmark consumer's view.
