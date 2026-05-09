@@ -152,6 +152,98 @@ class TestEmptyInputs(unittest.TestCase):
         self.assertEqual(v, "directional")
 
 
+class TestSmallSampleEdgeCases(unittest.TestCase):
+    """Pre-push review F-finding #3: explicit cases for small N."""
+
+    def test_n_equals_2_per_side_high_variance_punts(self) -> None:
+        # N=2 is the smallest sample where stdev is defined. With
+        # values that disagree (1, 5) on each side, stdev is large
+        # relative to the mean delta — significance gate punts to
+        # directional. This documents the rule's conservatism on
+        # tiny samples.
+        v = declare_winner(PASS_COUNT, [1, 5], [0, 4])
+        # Means: A=3, B=2. Delta=1. Both stdevs ≈ 2.83. 2*max_stdev ≈
+        # 5.66 — which exceeds |delta|=1 → directional.
+        self.assertEqual(v, "directional")
+
+    def test_n_equals_2_per_side_clear_signal_wins(self) -> None:
+        # N=2 with consistent samples (no variance on either side)
+        # passes the significance gate (2*0=0 < |delta|) and the
+        # threshold gate (1pt for deterministic). A wins.
+        v = declare_winner(PASS_COUNT, [10, 10], [5, 5])
+        self.assertEqual(v, "A")
+
+    def test_both_empty_after_null_filter_returns_directional(self) -> None:
+        # Distinct from test_both_empty_returns_directional (which
+        # passes []s); this case starts with non-empty inputs that
+        # become empty after None filtering.
+        v = declare_winner(PASS_COUNT, [None, None], [None, None, None])
+        self.assertEqual(v, "directional")
+
+    def test_one_side_empty_after_null_filter(self) -> None:
+        # A has all Nones, B has data. After filtering, A has 0
+        # samples; the min_samples_for_winner check fires before
+        # any statistics are attempted.
+        v = declare_winner(PASS_COUNT, [None, None, None], [5, 5, 5])
+        self.assertEqual(v, "directional")
+
+
+class TestPassRateBinarySamples(unittest.TestCase):
+    """F-finding #4: pass_rate samples are 0.0/1.0 per attempt; the
+    rule's behavior on binary samples should be tested explicitly."""
+
+    PASS_RATE = MetricSpec(
+        name="pass_rate",
+        kind="continuous",
+        higher_is_better=True,
+        continuous_threshold_relative=0.10,
+    )
+
+    def test_all_a_pass_all_b_fail_a_wins(self) -> None:
+        # Cleanest signal: A passes 100%, B passes 0%. Stdevs are
+        # both 0. Threshold gate: base = min(1.0, 0.0) = 0 falls back
+        # to max(1.0, 0.0) = 1.0; threshold = 0.10. |delta|=1.0 > 0.10
+        # → A wins.
+        v = declare_winner(self.PASS_RATE, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0])
+        self.assertEqual(v, "A")
+
+    def test_close_to_50pct_each_side_no_winner(self) -> None:
+        # Small N, small delta, high stdev (binary samples around 0.5
+        # have stdev ≈ 0.58). Significance gate punts.
+        v = declare_winner(
+            self.PASS_RATE,
+            [1.0, 0.0, 1.0, 0.0, 1.0],  # 60% pass
+            [1.0, 0.0, 0.0, 1.0, 0.0],  # 40% pass
+        )
+        self.assertEqual(v, "directional")
+
+    def test_high_pass_rate_with_small_delta_directional(self) -> None:
+        # A=10/10 pass, B=9/10 pass. Delta=0.10. Stdev_A=0,
+        # stdev_B=sqrt(0.1*0.9*10/9) ≈ 0.316. 2*max_stdev ≈ 0.632
+        # → significance gate punts (delta 0.10 < 0.632).
+        v = declare_winner(
+            self.PASS_RATE,
+            [1.0] * 10,
+            [1.0] * 9 + [0.0],
+        )
+        self.assertEqual(v, "directional")
+
+    def test_high_pass_rate_with_large_n_consistent_signal(self) -> None:
+        # A=20/20 pass, B=15/20 pass. Delta=0.25. Stdev_A=0,
+        # stdev_B = sqrt(0.25*0.75*20/19) ≈ 0.444. 2*max_stdev ≈ 0.888
+        # — still > |delta|=0.25. Significance gate punts. Documents
+        # the rule's conservatism on binary samples even with N=20.
+        # Reviewer intuition might say "A wins" here, but the rule
+        # disagrees — this is the deliberate conservatism the user's
+        # F4 finding flagged.
+        v = declare_winner(
+            self.PASS_RATE,
+            [1.0] * 20,
+            [1.0] * 15 + [0.0] * 5,
+        )
+        self.assertEqual(v, "directional")
+
+
 class TestDirectionInversion(unittest.TestCase):
     def test_lower_is_better_a_higher_means_b_wins(self) -> None:
         # ELAPSED_SECONDS — lower is better. A=200, B=100. Both

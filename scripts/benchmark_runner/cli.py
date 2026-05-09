@@ -171,6 +171,21 @@ def _cmd_list(args: argparse.Namespace) -> int:
 def _cmd_run(args: argparse.Namespace) -> int:
     from .registry import get_adapter, get_backend
 
+    # Hint when the user passes the deprecated combined form
+    # ``--backend foo:bar`` (matches the report's display label
+    # convention but is NOT the CLI input format). Surface a
+    # specific suggestion before the generic "unknown backend
+    # family" message.
+    if ":" in args.backend:
+        family, _, model_in_backend = args.backend.partition(":")
+        print(
+            f"benchmark: --backend {args.backend!r} uses the deprecated "
+            f"combined form. Use separate flags: "
+            f"--backend {family!r} --model {model_in_backend!r}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
     try:
         get_adapter(args.benchmark)
         get_backend(args.backend, args.model)
@@ -239,6 +254,16 @@ def _cmd_dogfood(args: argparse.Namespace) -> int:
     See spec.md § Dogfood gate for the two-gate structure.
     """
     from .registry import get_adapter, get_backend
+
+    if ":" in args.backend:
+        family, _, model_in_backend = args.backend.partition(":")
+        print(
+            f"benchmark: --backend {args.backend!r} uses the deprecated "
+            f"combined form. Use separate flags: "
+            f"--backend {family!r} --model {model_in_backend!r}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
 
     try:
         get_adapter("aider-polyglot")

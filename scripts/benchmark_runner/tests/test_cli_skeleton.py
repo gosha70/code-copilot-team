@@ -119,9 +119,29 @@ class TestRunCommand(CLITestBase):
         self.assertEqual(rc, EXIT_USAGE)
         self.assertIn("unknown adapter", stderr)
 
-    def test_run_unknown_backend_returns_usage(self) -> None:
+    def test_run_combined_backend_form_hints_separate_flags(self) -> None:
+        # Pre-push review F-finding #6: report uses "<backend>:<model>"
+        # as a display label, but the CLI takes separate flags. A user
+        # copying the report label into the CLI hits an "unknown
+        # backend family" error unless the parser surfaces a specific
+        # hint pointing at the separate-flags form.
         rc, _, stderr = self._invoke(
-            "run", "--benchmark", "stub", "--backend", "ghost:v1", "--runs", "1"
+            "run",
+            "--benchmark", "stub",
+            "--backend", "claude-code:sonnet",
+            "--runs", "1",
+        )
+        self.assertEqual(rc, EXIT_USAGE)
+        self.assertIn("deprecated combined form", stderr)
+        self.assertIn("--backend 'claude-code'", stderr)
+        self.assertIn("--model 'sonnet'", stderr)
+
+    def test_run_unknown_backend_returns_usage(self) -> None:
+        # Use a no-colon backend name so this test exercises the
+        # registry's "unknown backend family" path rather than the
+        # colon-form-rejection hint added in F6.
+        rc, _, stderr = self._invoke(
+            "run", "--benchmark", "stub", "--backend", "ghost", "--runs", "1"
         )
         self.assertEqual(rc, EXIT_USAGE)
         self.assertIn("unknown backend", stderr)

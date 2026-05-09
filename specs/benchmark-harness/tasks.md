@@ -119,6 +119,14 @@ Phased delivery on `feat/benchmark-harness`. Each task is bounded and independen
   - `specs/benchmark-harness/dogfood/<UTC-ts>-rlmkit-retrospective/` — committed run-dir from `./scripts/benchmark run --benchmark cct-dogfood-rlmkit --backend claude-code --model sonnet --runs 1`.
   - Comparison report: harness verdict vs human-rubric verdict in the gist (`https://gist.github.com/gosha70/6fbf6dcf8e84a8110c431331c628d344`), per labeled case.
   - Cause classification of any divergences in the merge commit body: harness can't model task / human-rubric criteria not deterministically checkable / model regression / harness bug.
+
+- **Required input artifacts (maintainer-supplied; not derivable from this spec):**
+  1. **`benchmarks/adapters/cct_dogfood_rlmkit/tasks/<task-id>/prompt.md`** — the rlmkit#37 issue body, copied verbatim from the GitHub issue. This is the prompt the harness hands to Claude Code at run time.
+  2. **`benchmarks/adapters/cct_dogfood_rlmkit/tasks/<task-id>/acceptance.md`** + **`verify.sh`** — the deterministic checks that map onto `VerifyResult` (e.g., "spec.md / plan.md / tasks.md exist," "scripts/<feature>/ implementation passes existing test suite," "linter clean," etc.). Each check becomes a line in `verify.sh` and contributes to `tests_passed` / `lint_passed` / `required_files_present`.
+  3. **`benchmarks/adapters/cct_dogfood_rlmkit/comparison-source.json`** — JSON derived from the gist (`https://gist.github.com/gosha70/6fbf6dcf8e84a8110c431331c628d344`) listing each labeled case with the human-rubric verdict per dimension. The dogfood Gate 2 subcommand reads this file and emits per-case divergence between harness verdict and human verdict.
+
+  These three artifacts are maintainer knowledge: the rlmkit#37 task body, the acceptance criteria the harness should check, and the human-rubric labels. They are NOT derivable from anything in this spec or the harness code. Until they're committed, T4.5 cannot run — and a session attempting T4.5 without them is a session about to invent fixture content that doesn't match the user's actual judgment, defeating the purpose of the gate.
+
 - **Done when:** verdict-class match on ≥80% of the gist's labeled cases AND the run is committed AND any divergence is cause-classified. This is the load-bearing merge gate — a running harness that produces wrong verdicts fails this gate even if Gate 1 (T4.4) passes.
 
 **Phase 4 commit chain:**

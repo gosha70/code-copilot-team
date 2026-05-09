@@ -27,9 +27,17 @@ from .report_winner import MetricSpec, declare_winner
 
 PASS_RATE_METRIC = MetricSpec(
     name="pass_rate",
-    kind="deterministic",
+    # ``continuous`` because pass rate is a fraction in [0, 1], not a
+    # count. ``deterministic_threshold=1.0`` would mean "must differ
+    # by 100 percentage points," which only an all-pass-vs-all-fail
+    # comparison ever clears — too strict to be useful. The continuous
+    # threshold (10% of the smaller mean) instead requires e.g. ~8 pp
+    # at mean(0.85, 0.75)=0.80, ~5 pp at mean(0.55, 0.45)=0.50 — both
+    # roughly aligned with reviewer intuition for "noticeable
+    # difference vs noise."
+    kind="continuous",
     higher_is_better=True,
-    deterministic_threshold=1.0,  # 1 percentage point
+    continuous_threshold_relative=0.10,
 )
 
 ELAPSED_SECONDS_METRIC = MetricSpec(
@@ -37,6 +45,27 @@ ELAPSED_SECONDS_METRIC = MetricSpec(
     kind="continuous",
     higher_is_better=False,  # faster is better
     continuous_threshold_relative=0.10,
+)
+
+FAILED_COMMANDS_METRIC = MetricSpec(
+    name="failed_commands",
+    # Backend-stability signal: how many commands the backend retried
+    # or had to abort. Per-attempt integer count; a difference of 1
+    # is meaningful ("backend X retried once, backend Y didn't"), so
+    # deterministic with a 1-point threshold is the right shape.
+    kind="deterministic",
+    higher_is_better=False,  # fewer failed commands is better
+    deterministic_threshold=1.0,
+)
+
+HUMAN_INTERVENTIONS_METRIC = MetricSpec(
+    name="human_interventions",
+    # Always 0 in the MVP (no human-in-the-loop), but reserved so
+    # future backends that allow human edits surface here when the
+    # field departs from 0. Same shape as failed_commands.
+    kind="deterministic",
+    higher_is_better=False,
+    deterministic_threshold=1.0,
 )
 
 
@@ -112,6 +141,17 @@ def _provider_endpoint_for(attempt: dict) -> str | None:
     )
 
 
+REPORT_SCHEMA_VERSION = "1"
+"""Bumped on any breaking change to the report JSON shape.
+
+Consumers of report.json (the dogfood subcommand internally; future
+external tools) should branch on this value rather than the absence
+or presence of fields. Phase 4a introduces the v1 shape (top-level
+``groups`` and ``verdicts``); a v2 bump would happen if those keys
+moved or got renamed.
+"""
+
+
 def _summarize(attempts: list[dict]) -> dict[str, Any]:
     by_group: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for a in attempts:
@@ -124,6 +164,7 @@ def _summarize(attempts: list[dict]) -> dict[str, Any]:
     verdicts = _verdicts_across_groups(by_group) if len(by_group) >= 2 else None
 
     return {
+        "schema_version": REPORT_SCHEMA_VERSION,
         "run_count": len(attempts),
         "groups": groups,
         "verdicts": verdicts,
@@ -189,9 +230,16 @@ def _verdicts_across_groups(
 ) -> dict[str, Any]:
     """Pairwise verdicts for the registered metrics.
 
-    For every pair of (backend, model) groups, emit verdicts on
-    pass_rate and elapsed_seconds. The label pair is sorted so the
-    output is deterministic.
+    For every pair of (backend, model) groups, emit verdicts on:
+      - pass_rate (continuous, higher is better)
+      - elapsed_seconds (continuous, lower is better)
+      - failed_commands (deterministic, lower is better — backend
+        stability signal: distinguishes "passed but needed retries"
+        from "passed cleanly")
+      - human_interventions (deterministic, lower is better — always
+        0 in the MVP but reserved for future human-in-the-loop runs)
+
+    Label pair is sorted so the output is deterministic.
     """
     keys = sorted(by_group.keys())
     pairs: list[dict[str, Any]] = []
@@ -214,6 +262,16 @@ def _verdicts_across_groups(
                         ELAPSED_SECONDS_METRIC,
                         [r["score"]["derived"]["elapsed_seconds"] for r in a_rows],
                         [r["score"]["derived"]["elapsed_seconds"] for r in b_rows],
+                    ),
+                    "failed_commands_verdict": declare_winner(
+                        FAILED_COMMANDS_METRIC,
+                        [r["score"]["derived"].get("failed_commands", 0) for r in a_rows],
+                        [r["score"]["derived"].get("failed_commands", 0) for r in b_rows],
+                    ),
+                    "human_interventions_verdict": declare_winner(
+                        HUMAN_INTERVENTIONS_METRIC,
+                        [r["score"]["scores"].get("human_interventions", 0) for r in a_rows],
+                        [r["score"]["scores"].get("human_interventions", 0) for r in b_rows],
                     ),
                 }
             )
@@ -284,12 +342,14 @@ def _render_markdown(summary: Mapping[str, Any]) -> str:
         lines.append("")
         lines.append("Calibrated rule: `Δ > 2σ AND |Δ| ≥ threshold` (deterministic threshold = 1 point; continuous threshold = 10% relative). See `scripts/benchmark_runner/report_winner.py`.")
         lines.append("")
-        lines.append("| A | B | pass_rate | elapsed_seconds |")
-        lines.append("| --- | --- | --- | --- |")
+        lines.append("| A | B | pass_rate | elapsed_seconds | failed_commands | human_interventions |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
         for pair in summary["verdicts"]["pairwise"]:
             pr = _fmt_verdict_label(pair["pass_rate_verdict"], pair["a"], pair["b"])
             es = _fmt_verdict_label(pair["elapsed_seconds_verdict"], pair["a"], pair["b"])
-            lines.append(f"| `{pair['a']}` | `{pair['b']}` | {pr} | {es} |")
+            fc = _fmt_verdict_label(pair["failed_commands_verdict"], pair["a"], pair["b"])
+            hi = _fmt_verdict_label(pair["human_interventions_verdict"], pair["a"], pair["b"])
+            lines.append(f"| `{pair['a']}` | `{pair['b']}` | {pr} | {es} | {fc} | {hi} |")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

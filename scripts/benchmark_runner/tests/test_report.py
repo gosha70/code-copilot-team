@@ -55,6 +55,24 @@ class TestRenderReport(unittest.TestCase):
             self.assertIn("hello-world", md)
             self.assertIn("100.0%", md)
 
+    def test_json_carries_schema_version(self) -> None:
+        # Pre-push review finding #2: every breaking change to the
+        # report JSON shape MUST bump REPORT_SCHEMA_VERSION. The
+        # field's presence is required so future consumers can
+        # branch on the version rather than guessing from the
+        # presence/absence of fields.
+        from benchmark_runner.report import REPORT_SCHEMA_VERSION
+
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = _seed_run_dir(Path(td))
+            render_report(run_dir)
+            payload = json.loads((run_dir / "report.json").read_text())
+
+        self.assertIn("schema_version", payload)
+        self.assertEqual(payload["schema_version"], REPORT_SCHEMA_VERSION)
+        # v3 architecture-correction shape — top-level groups + verdicts.
+        self.assertEqual(REPORT_SCHEMA_VERSION, "1")
+
     def test_json_schema_shape(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             run_dir = _seed_run_dir(Path(td))
@@ -116,8 +134,13 @@ class TestRenderReport(unittest.TestCase):
         # Two groups -> 1 pairwise comparison.
         self.assertEqual(len(payload["verdicts"]["pairwise"]), 1)
         pair = payload["verdicts"]["pairwise"][0]
+        # All four verdict metrics present (F-finding #5: failed_commands
+        # and human_interventions are backend-stability signals worth
+        # surfacing, not just pass_rate / elapsed_seconds).
         self.assertIn("pass_rate_verdict", pair)
         self.assertIn("elapsed_seconds_verdict", pair)
+        self.assertIn("failed_commands_verdict", pair)
+        self.assertIn("human_interventions_verdict", pair)
         # Both groups exist in the groups map.
         self.assertIn("stub", payload["groups"])
         self.assertIn("synthetic:v1", payload["groups"])
