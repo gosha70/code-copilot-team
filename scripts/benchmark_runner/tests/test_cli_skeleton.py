@@ -226,19 +226,38 @@ class TestReportCommand(CLITestBase):
             report_md = Path(json.loads(stdout)["report_md"])
             self.assertTrue(report_md.exists())
             content = report_md.read_text(encoding="utf-8")
-            self.assertIn("Backend `stub`", content)
+            # New v3 group heading: `<backend>:<model>` or just
+            # `<backend>` when model is empty (stub case).
+            self.assertIn("`stub`", content)
+            self.assertIn("backend=stub", content)
             self.assertIn("100.0%", content)
 
 
 class TestDogfoodCommand(CLITestBase):
-    def test_dogfood_phase0_not_implemented(self) -> None:
-        # Dogfood is Phase 4. Stays NOT_IMPLEMENTED for the whole MVP
-        # build phases until issue #32's report+dogfood phase.
-        rc, _, stderr = self._invoke(
-            "dogfood", "--backend", "claude-code:sonnet"
-        )
-        self.assertEqual(rc, EXIT_NOT_IMPLEMENTED)
-        self.assertIn("Phase 4", stderr)
+    def test_dogfood_unknown_backend_returns_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            rc, _, stderr = self._invoke(
+                "dogfood",
+                "--backend", "nope",
+                "--model", "sonnet",
+                "--runs-root", td,
+            )
+        self.assertEqual(rc, EXIT_USAGE)
+        self.assertIn("unknown backend", stderr)
+
+    def test_dogfood_with_missing_polyglot_cache_returns_usage(self) -> None:
+        # Most common real-world failure mode: user runs dogfood
+        # before fetching the polyglot dataset. The harness's
+        # EmptyAdapterError surfaces as USAGE with a fetch hint.
+        # CI never has the cache; this test exercises that path.
+        with tempfile.TemporaryDirectory() as td:
+            rc, _, stderr = self._invoke(
+                "dogfood",
+                "--backend", "stub",
+                "--runs-root", td,
+            )
+        self.assertEqual(rc, EXIT_USAGE)
+        self.assertIn("fetch", stderr.lower())
 
 
 if __name__ == "__main__":

@@ -1,14 +1,15 @@
-# benchmark_runner.report — Phase 1 report skeleton.
+# benchmark_runner.report — report aggregator with calibrated verdicts.
 #
 # Aggregates a run directory into report.md + report.json. Per-task
-# pass/fail and per-backend totals; mean/stdev across runs where the
-# data permits.
+# pass/fail and per-(backend, model) totals; mean/stdev across runs.
+# When 2+ (backend, model) groups are present, the calibrated
+# winner-declaration rule (report_winner.py) emits per-metric verdicts.
 #
-# The winner-declaration rule from spec.md § "Winner-declaration rule"
-# is *not* yet active — Phase 1 emits "directional, no winner declared"
-# whenever two backends are present, regardless of the deltas. Phase 4
-# replaces this with the unit-tested pure function that enforces the
-# (Δ > 2σ AND ≥ threshold) gate.
+# Per the v3 architectural correction, the comparison axis is
+# (backend, model) — same backend with different models is a meaningful
+# comparison; same model on different backends is a meaningful
+# comparison. Provider endpoint is surfaced per group so reports
+# distinguish gateway-routed runs from default-Anthropic runs.
 
 from __future__ import annotations
 
@@ -19,10 +20,23 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping
 
+from .report_winner import MetricSpec, declare_winner
 
-WINNER_DEFERRED_NOTE = (
-    "directional, no winner declared (Phase 1 reporter; the calibrated "
-    "winner-declaration rule lands in Phase 4)"
+
+# ── Metric specs used for verdict declaration ─────────────────────────
+
+PASS_RATE_METRIC = MetricSpec(
+    name="pass_rate",
+    kind="deterministic",
+    higher_is_better=True,
+    deterministic_threshold=1.0,  # 1 percentage point
+)
+
+ELAPSED_SECONDS_METRIC = MetricSpec(
+    name="elapsed_seconds",
+    kind="continuous",
+    higher_is_better=False,  # faster is better
+    continuous_threshold_relative=0.10,
 )
 
 
@@ -35,13 +49,13 @@ def render_report(run_dir: Path) -> Path:
     if not run_dir.exists():
         raise FileNotFoundError(f"run-dir not found: {run_dir}")
 
-    scores = _load_scores(run_dir)
-    if not scores:
+    attempts = _load_attempts(run_dir)
+    if not attempts:
         raise FileNotFoundError(
             f"no score.json files found under {run_dir}; nothing to report"
         )
 
-    summary = _summarize(scores)
+    summary = _summarize(attempts)
 
     report_md_path = run_dir / "report.md"
     report_json_path = run_dir / "report.json"
@@ -56,45 +70,96 @@ def render_report(run_dir: Path) -> Path:
 # ── Loading + aggregation ──────────────────────────────────────────────
 
 
-def _load_scores(run_dir: Path) -> list[dict]:
+def _load_attempts(run_dir: Path) -> list[dict]:
+    """Load score.json + sibling run-record.json into one row per attempt.
+
+    The score.json carries the metrics; run-record.json carries
+    backend_invocation.model (the comparison axis) and backend.metadata
+    (provider routing). Older run-dirs may have score.json but no
+    run-record.json; we tolerate the absence by leaving model="" and
+    provider_endpoint=None.
+    """
     out: list[dict] = []
-    for path in sorted(run_dir.rglob("score.json")):
-        with path.open(encoding="utf-8") as f:
-            out.append(json.load(f))
+    for score_path in sorted(run_dir.rglob("score.json")):
+        with score_path.open(encoding="utf-8") as f:
+            score = json.load(f)
+        # run-record.json is in the same attempt directory.
+        rr_path = score_path.parent / "run-record.json"
+        run_record: dict[str, Any] = {}
+        if rr_path.is_file():
+            with rr_path.open(encoding="utf-8") as f:
+                run_record = json.load(f)
+        out.append({"score": score, "run_record": run_record})
     return out
 
 
-def _summarize(scores: list[dict]) -> dict[str, Any]:
-    by_backend: dict[str, list[dict]] = defaultdict(list)
-    for s in scores:
-        by_backend[s["backend_id"]].append(s)
+def _group_key(attempt: dict) -> tuple[str, str]:
+    backend_id = attempt["score"]["backend_id"]
+    model = (
+        attempt["run_record"].get("backend_invocation", {}).get("model", "")
+        or attempt["score"].get("model", "")
+        or ""
+    )
+    return backend_id, model
 
-    backends = {}
-    for backend_id, rows in by_backend.items():
-        backends[backend_id] = _backend_summary(rows)
 
-    winner_verdict: str | None = None
-    if len(by_backend) >= 2:
-        winner_verdict = WINNER_DEFERRED_NOTE
+def _provider_endpoint_for(attempt: dict) -> str | None:
+    return (
+        attempt["run_record"]
+        .get("backend", {})
+        .get("metadata", {})
+        .get("provider_endpoint")
+    )
+
+
+def _summarize(attempts: list[dict]) -> dict[str, Any]:
+    by_group: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for a in attempts:
+        by_group[_group_key(a)].append(a)
+
+    groups: dict[str, dict[str, Any]] = {}
+    for (backend_id, model), rows in by_group.items():
+        groups[_label(backend_id, model)] = _group_summary(backend_id, model, rows)
+
+    verdicts = _verdicts_across_groups(by_group) if len(by_group) >= 2 else None
 
     return {
-        "run_count": len(scores),
-        "backends": backends,
-        "winner_verdict": winner_verdict,
+        "run_count": len(attempts),
+        "groups": groups,
+        "verdicts": verdicts,
     }
 
 
-def _backend_summary(rows: list[dict]) -> dict[str, Any]:
+def _label(backend_id: str, model: str) -> str:
+    return f"{backend_id}:{model}" if model else backend_id
+
+
+def _group_summary(
+    backend_id: str, model: str, rows: list[dict]
+) -> dict[str, Any]:
     total = len(rows)
-    passed = sum(1 for r in rows if r["result"] == "pass")
-    elapsed_values = [r["derived"]["elapsed_seconds"] for r in rows]
+    passed = sum(1 for r in rows if r["score"]["result"] == "pass")
+    elapsed_values = [r["score"]["derived"]["elapsed_seconds"] for r in rows]
+
+    # Provider endpoints seen in this group — usually one, but multiple
+    # if a maintainer ran the same (backend, model) against different
+    # gateways within the same run-dir.
+    endpoints: set[str | None] = {_provider_endpoint_for(r) for r in rows}
+    # ``None`` means "default Anthropic API" for claude-code; we keep
+    # the None bucket distinct from a string-URL bucket.
+    endpoints_sorted = sorted(
+        endpoints, key=lambda e: ("" if e is None else e)
+    )
 
     return {
+        "backend_id": backend_id,
+        "model": model,
         "total_attempts": total,
         "passed": passed,
         "pass_rate": _safe_div(passed, total),
         "elapsed_seconds_mean": _mean(elapsed_values),
         "elapsed_seconds_stdev": _stdev(elapsed_values),
+        "provider_endpoints": list(endpoints_sorted),
         "per_task": _per_task(rows),
     }
 
@@ -102,13 +167,13 @@ def _backend_summary(rows: list[dict]) -> dict[str, Any]:
 def _per_task(rows: list[dict]) -> dict[str, Any]:
     by_task: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
-        by_task[r["task_id"]].append(r)
+        by_task[r["score"]["task_id"]].append(r)
 
     out: dict[str, Any] = {}
     for task_id, attempts in by_task.items():
         total = len(attempts)
-        passed = sum(1 for a in attempts if a["result"] == "pass")
-        elapsed_values = [a["derived"]["elapsed_seconds"] for a in attempts]
+        passed = sum(1 for a in attempts if a["score"]["result"] == "pass")
+        elapsed_values = [a["score"]["derived"]["elapsed_seconds"] for a in attempts]
         out[task_id] = {
             "attempts": total,
             "passed": passed,
@@ -117,6 +182,50 @@ def _per_task(rows: list[dict]) -> dict[str, Any]:
             "elapsed_seconds_stdev": _stdev(elapsed_values),
         }
     return out
+
+
+def _verdicts_across_groups(
+    by_group: Mapping[tuple[str, str], list[dict]],
+) -> dict[str, Any]:
+    """Pairwise verdicts for the registered metrics.
+
+    For every pair of (backend, model) groups, emit verdicts on
+    pass_rate and elapsed_seconds. The label pair is sorted so the
+    output is deterministic.
+    """
+    keys = sorted(by_group.keys())
+    pairs: list[dict[str, Any]] = []
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            a_key = keys[i]
+            b_key = keys[j]
+            a_rows = by_group[a_key]
+            b_rows = by_group[b_key]
+            pairs.append(
+                {
+                    "a": _label(*a_key),
+                    "b": _label(*b_key),
+                    "pass_rate_verdict": declare_winner(
+                        PASS_RATE_METRIC,
+                        [_pass_rate_for_attempt(r) for r in a_rows],
+                        [_pass_rate_for_attempt(r) for r in b_rows],
+                    ),
+                    "elapsed_seconds_verdict": declare_winner(
+                        ELAPSED_SECONDS_METRIC,
+                        [r["score"]["derived"]["elapsed_seconds"] for r in a_rows],
+                        [r["score"]["derived"]["elapsed_seconds"] for r in b_rows],
+                    ),
+                }
+            )
+    return {"pairwise": pairs}
+
+
+def _pass_rate_for_attempt(row: dict) -> float:
+    # Per-attempt "pass rate" is just 0/1; declare_winner aggregates
+    # across attempts via mean. Keeps the threshold-rule semantics
+    # consistent (1pt = 1 percentage point on the count, mean across
+    # attempts is the empirical pass rate).
+    return 1.0 if row["score"]["result"] == "pass" else 0.0
 
 
 def _safe_div(num: int, denom: int) -> float | None:
@@ -143,24 +252,25 @@ def _render_markdown(summary: Mapping[str, Any]) -> str:
     lines.append(f"Total attempts recorded: **{summary['run_count']}**")
     lines.append("")
 
-    for backend_id, b in summary["backends"].items():
-        lines.append(f"## Backend `{backend_id}`")
+    for label, g in summary["groups"].items():
+        lines.append(f"## `{label}` (backend={g['backend_id']}, model={g['model'] or '<none>'})")
         lines.append("")
         lines.append(
-            f"- Total attempts: {b['total_attempts']}  "
-            f"\n- Passed: {b['passed']}  "
-            f"\n- Pass rate: {_fmt_pct(b['pass_rate'])}  "
-            f"\n- Elapsed (s): mean {_fmt_num(b['elapsed_seconds_mean'])}, "
-            f"stdev {_fmt_num(b['elapsed_seconds_stdev'])}"
+            f"- Total attempts: {g['total_attempts']}  "
+            f"\n- Passed: {g['passed']}  "
+            f"\n- Pass rate: {_fmt_pct(g['pass_rate'])}  "
+            f"\n- Elapsed (s): mean {_fmt_num(g['elapsed_seconds_mean'])}, "
+            f"stdev {_fmt_num(g['elapsed_seconds_stdev'])}"
         )
+        lines.append(f"\n- Provider endpoint(s): {_fmt_endpoints(g['provider_endpoints'])}")
         lines.append("")
 
-        if b["per_task"]:
+        if g["per_task"]:
             lines.append("### Per-task")
             lines.append("")
             lines.append("| task | attempts | passed | pass-rate | elapsed (mean ± stdev) |")
             lines.append("| --- | --- | --- | --- | --- |")
-            for task_id, t in sorted(b["per_task"].items()):
+            for task_id, t in sorted(g["per_task"].items()):
                 lines.append(
                     f"| `{task_id}` | {t['attempts']} | {t['passed']} | "
                     f"{_fmt_pct(t['pass_rate'])} | "
@@ -169,13 +279,41 @@ def _render_markdown(summary: Mapping[str, Any]) -> str:
                 )
             lines.append("")
 
-    if summary["winner_verdict"]:
-        lines.append("## Winner verdict")
+    if summary["verdicts"]:
+        lines.append("## Winner verdicts")
         lines.append("")
-        lines.append(f"_{summary['winner_verdict']}_")
+        lines.append("Calibrated rule: `Δ > 2σ AND |Δ| ≥ threshold` (deterministic threshold = 1 point; continuous threshold = 10% relative). See `scripts/benchmark_runner/report_winner.py`.")
+        lines.append("")
+        lines.append("| A | B | pass_rate | elapsed_seconds |")
+        lines.append("| --- | --- | --- | --- |")
+        for pair in summary["verdicts"]["pairwise"]:
+            pr = _fmt_verdict_label(pair["pass_rate_verdict"], pair["a"], pair["b"])
+            es = _fmt_verdict_label(pair["elapsed_seconds_verdict"], pair["a"], pair["b"])
+            lines.append(f"| `{pair['a']}` | `{pair['b']}` | {pr} | {es} |")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _fmt_endpoints(endpoints: list[str | None]) -> str:
+    # ``None`` means the backend did not record a provider_endpoint.
+    # For claude-code, that means default Anthropic API; for stub or
+    # other backends it just means the metadata field wasn't populated.
+    # Use generic language; let context speak.
+    if not endpoints:
+        return "_(unknown)_"
+    return ", ".join(
+        "_(none recorded)_" if e is None else f"`{e}`"
+        for e in endpoints
+    )
+
+
+def _fmt_verdict_label(verdict: str, a: str, b: str) -> str:
+    if verdict == "A":
+        return f"**{a}** wins"
+    if verdict == "B":
+        return f"**{b}** wins"
+    return "directional, no winner declared"
 
 
 def _fmt_pct(value: float | None) -> str:

@@ -118,7 +118,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── dogfood ───────────────────────────────────────────────────────
     p_dogfood = sub.add_parser(
         "dogfood",
-        help="Run Aider Polyglot dogfood subset and compare to leaderboard (Phase 4).",
+        help="Run Aider Polyglot dogfood subset for the chosen backend (Gate 1 liveness).",
     )
     p_dogfood.add_argument(
         "--backend",
@@ -131,6 +131,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Model identifier (typically 'sonnet').",
     )
     p_dogfood.add_argument("--runs", type=int, default=1)
+    p_dogfood.add_argument(
+        "--runs-root",
+        type=Path,
+        default=Path("runs"),
+        help="Directory under which run records are written (default ./runs).",
+    )
 
     return parser
 
@@ -224,13 +230,92 @@ def _cmd_report(args: argparse.Namespace) -> int:
 
 
 def _cmd_dogfood(args: argparse.Namespace) -> int:
-    print(
-        f"benchmark: dogfood subcommand lands in Phase 4 "
-        f"(--backend {args.backend!r} --model {args.model!r} --runs {args.runs}); "
-        f"see specs/benchmark-harness/plan.md.",
-        file=sys.stderr,
-    )
-    return EXIT_NOT_IMPLEMENTED
+    """T4.3 — Gate 1 liveness: run the Polyglot adapter against the
+    committed dogfood subset for the chosen backend, then aggregate.
+
+    Gate 2 (verdict correctness via the rlmkit#38/#41 retrospective)
+    is exercised separately against the ``cct-dogfood-rlmkit`` adapter
+    via ``./scripts/benchmark run --benchmark cct-dogfood-rlmkit ...``.
+    See spec.md § Dogfood gate for the two-gate structure.
+    """
+    from .registry import get_adapter, get_backend
+
+    try:
+        get_adapter("aider-polyglot")
+        get_backend(args.backend, args.model)
+    except (UnknownAdapterError, UnknownBackendError) as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    # Load the committed dogfood subset (12 task IDs, ≥1 per language).
+    from benchmarks.adapters.aider_polyglot.adapter import load_dogfood_subset
+    subset = load_dogfood_subset()
+    if not subset:
+        print(
+            "benchmark: dogfood subset is empty — check "
+            "benchmarks/adapters/aider_polyglot/dogfood-subset.txt",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+
+    from .run import EmptyAdapterError, run_benchmark
+
+    try:
+        run_dir = run_benchmark(
+            "aider-polyglot",
+            args.backend,
+            args.model,
+            runs=args.runs,
+            runs_root=args.runs_root,
+            task_filter=subset,
+        )
+    except EmptyAdapterError as exc:
+        # Polyglot cache absent. Tell the user how to fix it.
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except KeyError as exc:
+        # Some dogfood-subset task id doesn't resolve in the cache —
+        # likely the subset references tasks not in the upstream pin.
+        print(
+            f"benchmark: {exc}\n"
+            f"  hint: dogfood-subset.txt may reference task IDs missing "
+            f"from the pinned upstream cache. Run "
+            f"`python3 -m benchmarks.adapters.aider_polyglot.fetch` to "
+            f"refresh, or update dogfood-subset.txt.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"benchmark: dogfood run failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+
+    # Aggregate the just-completed run. With one (backend, model) group
+    # in the run-dir, the verdicts section will be empty — Gate 1 is
+    # liveness, not comparison.
+    from .report import render_report
+    try:
+        report_path = render_report(run_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"benchmark: dogfood report failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+
+    print(json.dumps({
+        "run_dir": str(run_dir),
+        "report_md": str(report_path),
+        "tasks_run": len(subset),
+        "note": (
+            "Gate 1 (liveness) only. Gate 2 (rlmkit#38/#41 retrospective "
+            "verdict-correctness) is run via cct-dogfood-rlmkit; see "
+            "specs/benchmark-harness/spec.md § Dogfood gate."
+        ),
+    }, indent=2))
+    return EXIT_OK
 
 
 _HANDLERS = {

@@ -1,4 +1,10 @@
-# tests/test_report.py — Phase 1 report aggregator.
+# tests/test_report.py — Phase 4 report aggregator with calibrated verdicts.
+#
+# Updated for the v3 architecture: groups are keyed by (backend, model)
+# tuples (rendered as "backend:model" or just "backend" when model
+# is empty). Provider-routing endpoint is surfaced per group. The
+# Phase-1 "WINNER_DEFERRED_NOTE" stub is replaced by the calibrated
+# rule from report_winner.py.
 
 from __future__ import annotations
 
@@ -8,10 +14,7 @@ import unittest
 from pathlib import Path
 
 from benchmark_runner._register import register_all, unregister_all_for_tests
-from benchmark_runner.report import (
-    WINNER_DEFERRED_NOTE,
-    render_report,
-)
+from benchmark_runner.report import render_report
 from benchmark_runner.run import run_benchmark
 
 
@@ -45,7 +48,10 @@ class TestRenderReport(unittest.TestCase):
             self.assertTrue(json_path.exists())
 
             md = md_path.read_text(encoding="utf-8")
-            self.assertIn("Backend `stub`", md)
+            # New v3 group heading format: `<backend>:<model>` or just
+            # `<backend>` when model is empty (stub case).
+            self.assertIn("`stub`", md)
+            self.assertIn("backend=stub", md)
             self.assertIn("hello-world", md)
             self.assertIn("100.0%", md)
 
@@ -56,42 +62,112 @@ class TestRenderReport(unittest.TestCase):
             payload = json.loads((run_dir / "report.json").read_text())
 
         self.assertEqual(payload["run_count"], 1)
-        self.assertIn("stub", payload["backends"])
-        backend = payload["backends"]["stub"]
-        self.assertEqual(backend["total_attempts"], 1)
-        self.assertEqual(backend["passed"], 1)
-        self.assertEqual(backend["pass_rate"], 1.0)
-        self.assertIn("hello-world", backend["per_task"])
-        self.assertEqual(backend["per_task"]["hello-world"]["pass_rate"], 1.0)
+        # New schema: top-level "groups" keyed by "<backend>:<model>" or
+        # just "<backend>" when model is empty.
+        self.assertIn("groups", payload)
+        self.assertIn("stub", payload["groups"])
+        group = payload["groups"]["stub"]
+        self.assertEqual(group["backend_id"], "stub")
+        self.assertEqual(group["model"], "")
+        self.assertEqual(group["total_attempts"], 1)
+        self.assertEqual(group["passed"], 1)
+        self.assertEqual(group["pass_rate"], 1.0)
+        self.assertIn("hello-world", group["per_task"])
+        self.assertEqual(group["per_task"]["hello-world"]["pass_rate"], 1.0)
+        # Provider endpoint surfaced per group; stub has no metadata.provider_endpoint
+        # so the value is None.
+        self.assertIn("provider_endpoints", group)
+        self.assertEqual(group["provider_endpoints"], [None])
 
-    def test_winner_verdict_absent_for_single_backend(self) -> None:
+    def test_verdicts_absent_for_single_group(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             run_dir = _seed_run_dir(Path(td))
             render_report(run_dir)
             payload = json.loads((run_dir / "report.json").read_text())
-        # Only one backend in the run-dir → no comparison, no verdict.
-        self.assertIsNone(payload["winner_verdict"])
+        # Only one (backend, model) group → no comparison, no verdicts.
+        self.assertIsNone(payload["verdicts"])
 
-    def test_winner_verdict_deferred_when_two_backends(self) -> None:
-        # Inject a synthetic second-backend score.json into a real run-dir.
+    def test_verdicts_present_when_two_groups(self) -> None:
+        # Inject a synthetic second-group score.json + run-record.json
+        # to exercise the verdict-emission path.
         with tempfile.TemporaryDirectory() as td:
             run_dir = _seed_run_dir(Path(td))
-            # Find the existing attempt dir + score.json.
             existing_score = next(run_dir.rglob("score.json"))
+            existing_rr = existing_score.parent / "run-record.json"
             second_attempt = existing_score.parent.with_name("attempt-fake")
             second_attempt.mkdir()
-            synthetic = json.loads(existing_score.read_text())
-            synthetic["backend_id"] = "synthetic"
-            synthetic["run_id"] = "run-001"
-            synthetic["attempt"] = 1
-            (second_attempt / "score.json").write_text(json.dumps(synthetic))
+            synth_score = json.loads(existing_score.read_text())
+            synth_score["backend_id"] = "synthetic"
+            synth_score["run_id"] = "run-001"
+            synth_score["attempt"] = 1
+            (second_attempt / "score.json").write_text(json.dumps(synth_score))
+            # run-record.json carries backend_invocation.model and
+            # backend.metadata; preserve the shape from the existing one.
+            synth_rr = json.loads(existing_rr.read_text()) if existing_rr.exists() else {}
+            synth_rr.setdefault("backend_invocation", {})["model"] = "v1"
+            synth_rr.setdefault("backend", {}).setdefault("metadata", {})["provider_endpoint"] = None
+            (second_attempt / "run-record.json").write_text(json.dumps(synth_rr))
 
             render_report(run_dir)
             payload = json.loads((run_dir / "report.json").read_text())
 
-        self.assertEqual(payload["winner_verdict"], WINNER_DEFERRED_NOTE)
-        self.assertIn("stub", payload["backends"])
-        self.assertIn("synthetic", payload["backends"])
+        self.assertIsNotNone(payload["verdicts"])
+        self.assertIn("pairwise", payload["verdicts"])
+        # Two groups -> 1 pairwise comparison.
+        self.assertEqual(len(payload["verdicts"]["pairwise"]), 1)
+        pair = payload["verdicts"]["pairwise"][0]
+        self.assertIn("pass_rate_verdict", pair)
+        self.assertIn("elapsed_seconds_verdict", pair)
+        # Both groups exist in the groups map.
+        self.assertIn("stub", payload["groups"])
+        self.assertIn("synthetic:v1", payload["groups"])
+
+    def test_groups_keyed_by_backend_and_model(self) -> None:
+        # Exercise the (backend, model) tuple keying directly: same
+        # backend with two models should produce two groups, not one.
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = _seed_run_dir(Path(td))
+            existing_score = next(run_dir.rglob("score.json"))
+            existing_rr = existing_score.parent / "run-record.json"
+            # First, give the existing run a model; then add a second
+            # attempt with a different model under the same backend.
+            rr0 = json.loads(existing_rr.read_text()) if existing_rr.exists() else {}
+            rr0.setdefault("backend_invocation", {})["model"] = "alpha"
+            existing_rr.write_text(json.dumps(rr0))
+
+            second = existing_score.parent.with_name("attempt-beta")
+            second.mkdir()
+            s1 = json.loads(existing_score.read_text())
+            s1["run_id"] = "run-002"
+            (second / "score.json").write_text(json.dumps(s1))
+            rr1 = json.loads(existing_rr.read_text())
+            rr1["backend_invocation"]["model"] = "beta"
+            (second / "run-record.json").write_text(json.dumps(rr1))
+
+            render_report(run_dir)
+            payload = json.loads((run_dir / "report.json").read_text())
+
+        # Two distinct groups despite the same backend.
+        self.assertIn("stub:alpha", payload["groups"])
+        self.assertIn("stub:beta", payload["groups"])
+
+    def test_provider_endpoint_surfaces_into_group(self) -> None:
+        # If run-record.backend.metadata.provider_endpoint is set,
+        # the group's provider_endpoints list contains it.
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = _seed_run_dir(Path(td))
+            existing_rr = next(run_dir.rglob("run-record.json"))
+            rr = json.loads(existing_rr.read_text())
+            rr.setdefault("backend", {}).setdefault("metadata", {})[
+                "provider_endpoint"
+            ] = "http://localhost:8000"
+            existing_rr.write_text(json.dumps(rr))
+
+            render_report(run_dir)
+            payload = json.loads((run_dir / "report.json").read_text())
+
+        group = payload["groups"]["stub"]
+        self.assertIn("http://localhost:8000", group["provider_endpoints"])
 
 
 if __name__ == "__main__":
