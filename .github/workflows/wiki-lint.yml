@@ -18,6 +18,9 @@ on:
       - 'knowledge/wiki/scripts/lint-wiki.sh'
       - '.github/workflows/wiki-lint.yml'
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint knowledge/wiki/
