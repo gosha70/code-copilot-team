@@ -84,7 +84,8 @@ def render_report(run_dir: Path) -> Path:
             f"no score.json files found under {run_dir}; nothing to report"
         )
 
-    summary = _summarize(attempts)
+    candidate_map = _load_candidate_map(run_dir)
+    summary = _summarize(attempts, candidate_map)
 
     report_md_path = run_dir / "report.md"
     report_json_path = run_dir / "report.json"
@@ -107,6 +108,12 @@ def _load_attempts(run_dir: Path) -> list[dict]:
     (provider routing). Older run-dirs may have score.json but no
     run-record.json; we tolerate the absence by leaving model="" and
     provider_endpoint=None.
+
+    ``score_path`` is included on every row so downstream grouping can
+    derive candidate identity for compare-style run-dirs (where two
+    candidates may share (backend_id, model) but live in different
+    nested directories — e.g. the same Claude Code model routed through
+    two providers).
     """
     out: list[dict] = []
     for score_path in sorted(run_dir.rglob("score.json")):
@@ -118,18 +125,83 @@ def _load_attempts(run_dir: Path) -> list[dict]:
         if rr_path.is_file():
             with rr_path.open(encoding="utf-8") as f:
                 run_record = json.load(f)
-        out.append({"score": score, "run_record": run_record})
+        out.append({
+            "score": score,
+            "run_record": run_record,
+            "score_path": score_path,
+        })
     return out
 
 
-def _group_key(attempt: dict) -> tuple[str, str]:
+def _load_candidate_map(run_dir: Path) -> dict[Path, str]:
+    """For a compare run-dir, return absolute candidate-dir → name.
+
+    ``./scripts/benchmark compare`` writes ``candidate-runs.json``
+    alongside ``compare-manifest.json``; this helper reads it and
+    resolves the per-candidate relative paths to absolute paths so the
+    grouper can match attempts to their owning candidate by path.
+
+    Returns ``{}`` for non-compare run-dirs (no
+    ``candidate-runs.json``) — the grouper then falls back to the
+    plain ``(backend_id, model)`` shape with empty candidate name,
+    matching the pre-compare behaviour.
+    """
+    candidate_runs_path = run_dir / "candidate-runs.json"
+    if not candidate_runs_path.is_file():
+        return {}
+    try:
+        with candidate_runs_path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        # If the file is malformed, fall back to plain grouping rather
+        # than crashing — a compare run-dir whose manifest got truncated
+        # mid-write should still render *some* report.
+        return {}
+    out: dict[Path, str] = {}
+    for c in payload.get("candidates", []):
+        name = c.get("name")
+        rel = c.get("run_dir")
+        if isinstance(name, str) and isinstance(rel, str):
+            out[(run_dir / rel).resolve()] = name
+    return out
+
+
+def _candidate_name_for(attempt: dict, candidate_map: Mapping[Path, str]) -> str:
+    """Walk up the attempt's score_path until a candidate dir matches.
+
+    Returns ``""`` when no candidate dir contains the attempt — which
+    is always the case for non-compare run-dirs (the map is empty)
+    and is also the right fallback if a compare run-dir somehow
+    contains attempts outside any registered candidate directory.
+    """
+    if not candidate_map:
+        return ""
+    path = attempt["score_path"].resolve().parent
+    while True:
+        if path in candidate_map:
+            return candidate_map[path]
+        if path.parent == path:  # filesystem root
+            return ""
+        path = path.parent
+
+
+def _group_key(attempt: dict) -> tuple[str, str, str]:
+    """3-tuple group key: ``(backend_id, model, candidate_name)``.
+
+    ``candidate_name`` is empty for non-compare run-dirs (preserved
+    behaviour from the v1 report schema). For compare run-dirs it
+    discriminates candidates that share ``(backend_id, model)`` but
+    differ in env routing — without it, the report collapsed them
+    into one group and produced misleading pairwise verdicts.
+    """
     backend_id = attempt["score"]["backend_id"]
     model = (
         attempt["run_record"].get("backend_invocation", {}).get("model", "")
         or attempt["score"].get("model", "")
         or ""
     )
-    return backend_id, model
+    candidate_name = attempt.get("_candidate_name", "")
+    return backend_id, model, candidate_name
 
 
 def _provider_endpoint_for(attempt: dict) -> str | None:
@@ -141,25 +213,39 @@ def _provider_endpoint_for(attempt: dict) -> str | None:
     )
 
 
-REPORT_SCHEMA_VERSION = "1"
+REPORT_SCHEMA_VERSION = "2"
 """Bumped on any breaking change to the report JSON shape.
 
 Consumers of report.json (the dogfood subcommand internally; future
 external tools) should branch on this value rather than the absence
-or presence of fields. Phase 4a introduces the v1 shape (top-level
-``groups`` and ``verdicts``); a v2 bump would happen if those keys
-moved or got renamed.
+or presence of fields.
+
+- v1 (Phase 4a): top-level ``groups`` keyed by ``backend:model``,
+  group summaries carrying ``backend_id`` + ``model``.
+- v2 (compare driver shipped 2026-05-13): group key is the tuple
+  ``(backend_id, model, candidate_name)``. For compare-style run-dirs
+  the group label is the candidate name; for plain ``run`` run-dirs
+  ``candidate_name`` is the empty string and the label is unchanged
+  from v1 (``backend:model``). Each group summary additionally carries
+  a ``candidate_name`` field.
 """
 
 
-def _summarize(attempts: list[dict]) -> dict[str, Any]:
-    by_group: dict[tuple[str, str], list[dict]] = defaultdict(list)
+def _summarize(attempts: list[dict], candidate_map: Mapping[Path, str]) -> dict[str, Any]:
+    # Stamp each attempt with its owning candidate name (empty string
+    # for non-compare layouts) before grouping. Mutating the row in
+    # place keeps the rest of the pipeline shape-stable.
+    for a in attempts:
+        a["_candidate_name"] = _candidate_name_for(a, candidate_map)
+
+    by_group: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
     for a in attempts:
         by_group[_group_key(a)].append(a)
 
     groups: dict[str, dict[str, Any]] = {}
-    for (backend_id, model), rows in by_group.items():
-        groups[_label(backend_id, model)] = _group_summary(backend_id, model, rows)
+    for (backend_id, model, candidate_name), rows in by_group.items():
+        label = _label(backend_id, model, candidate_name)
+        groups[label] = _group_summary(backend_id, model, candidate_name, rows)
 
     verdicts = _verdicts_across_groups(by_group) if len(by_group) >= 2 else None
 
@@ -171,12 +257,18 @@ def _summarize(attempts: list[dict]) -> dict[str, Any]:
     }
 
 
-def _label(backend_id: str, model: str) -> str:
+def _label(backend_id: str, model: str, candidate_name: str = "") -> str:
+    # When the run-dir is a compare layout, candidates are guaranteed
+    # to have unique names by ``compare._validate``; use the name as
+    # the label so two same-(backend, model) candidates that differ
+    # only in env routing get distinct rows + distinct verdict pairs.
+    if candidate_name:
+        return candidate_name
     return f"{backend_id}:{model}" if model else backend_id
 
 
 def _group_summary(
-    backend_id: str, model: str, rows: list[dict]
+    backend_id: str, model: str, candidate_name: str, rows: list[dict]
 ) -> dict[str, Any]:
     total = len(rows)
     passed = sum(1 for r in rows if r["score"]["result"] == "pass")
@@ -195,6 +287,7 @@ def _group_summary(
     return {
         "backend_id": backend_id,
         "model": model,
+        "candidate_name": candidate_name,
         "total_attempts": total,
         "passed": passed,
         "pass_rate": _safe_div(passed, total),
@@ -226,7 +319,7 @@ def _per_task(rows: list[dict]) -> dict[str, Any]:
 
 
 def _verdicts_across_groups(
-    by_group: Mapping[tuple[str, str], list[dict]],
+    by_group: Mapping[tuple[str, str, str], list[dict]],
 ) -> dict[str, Any]:
     """Pairwise verdicts for the registered metrics.
 

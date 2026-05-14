@@ -6,32 +6,183 @@ The harness does **not** author benchmarks — it runs established public benchm
 
 See [`specs/benchmark-harness/spec.md`](../specs/benchmark-harness/spec.md) for the full design and [`specs/benchmark-harness/plan.md`](../specs/benchmark-harness/plan.md) for the phased delivery plan.
 
+## Quick start: compare multiple LLMs
+
+You have a benchmark (say, Aider Polyglot) and you want to know which LLM does best on it. The `compare` subcommand takes a JSON config listing N candidate LLMs and runs them sequentially under one shared run-dir, then aggregates a Markdown report with mean ± stdev per metric and the calibrated winner verdict.
+
+### 1. Make sure your backend is authenticated
+
+The harness *records* which provider an LLM run uses; it never *sets* the provider. Configuration happens through the backend's own gateway env vars. For Claude Code (the only copilot backend in the MVP — see issue #33 for Aider/Codex/GH-Copilot CLI):
+
+- **Anthropic API (default)**: `claude login` once, or set `ANTHROPIC_API_KEY` in your shell.
+- **Local LLM via vLLM**: spin up vLLM with its Anthropic-compatible endpoint (`vllm serve <model> --enable-anthropic-api`) and use the `env` block in the compare config to point Claude Code at it.
+- **Local LLM via Ollama**: same pattern; Ollama exposes an Anthropic-compatible endpoint on `http://localhost:11434`.
+- **LM Studio, OpenRouter, etc.**: same pattern; whatever URL the gateway serves goes into `ANTHROPIC_BASE_URL`.
+
+See [Claude Code's LLM gateway docs](https://code.claude.com/docs/en/llm-gateway) for the full env-var set.
+
+### 2. Pick a benchmark and fetch its dataset
+
+```bash
+./scripts/benchmark list
+# {
+#   "adapters": ["aider-polyglot", "cct-dogfood-memkernel", "stub"],
+#   "backends": ["claude-code", "stub"]
+# }
+
+# Aider Polyglot needs a one-time clone of the upstream dataset (pinned by SHA):
+python3 -m benchmarks.adapters.aider_polyglot.fetch
+
+./scripts/benchmark list --benchmark aider-polyglot
+# Lists every (language, exercise) the adapter exposes.
+```
+
+### 3. Write a compare config
+
+Copy [`benchmarks/compare-config.example.json`](compare-config.example.json) as a starting point. Minimal shape:
+
+```json
+{
+  "benchmark": "aider-polyglot",
+  "runs": 3,
+  "task": ["python/leap", "go/leap", "rust/leap"],
+  "candidates": [
+    { "name": "sonnet",   "backend": "claude-code", "model": "sonnet" },
+    { "name": "opus",     "backend": "claude-code", "model": "opus"   },
+    {
+      "name": "llama3-vllm",
+      "backend": "claude-code",
+      "model": "meta-llama/Llama-3-70B-Instruct",
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://localhost:8000",
+        "ANTHROPIC_AUTH_TOKEN": "dummy"
+      }
+    }
+  ]
+}
+```
+
+Field reference (full schema: [`benchmarks/schema/compare-config.schema.json`](schema/compare-config.schema.json)):
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `benchmark` | string | yes | Adapter id from `./scripts/benchmark list`. |
+| `runs` | integer ≥1 | no (default 1) | Repetitions per task per candidate. **Use ≥3** for cross-LLM comparisons; the calibrated winner-rule needs stdev to declare a winner over noise. |
+| `task` | string[] | no | Task filter (omit to run every task). Same shape as `./scripts/benchmark run --task`. |
+| `candidates[]` | array (≥2) | yes | LLMs to compare. Order is preserved in the report. |
+| `candidates[].name` | string | no | Human-readable label; defaults to `<backend>:<model>`. Must be unique. |
+| `candidates[].backend` | string | yes | Backend family — `claude-code` or `stub`. **Do not** use the combined `claude-code:sonnet` form (rejected). |
+| `candidates[].model` | string | no | Model id passed to the backend. |
+| `candidates[].env` | string→string map | no | Provider routing env vars, applied only for this candidate's runs and restored after. Values are passed verbatim into `os.environ`; **only key names are persisted** to the compare manifest (no secret leakage). |
+
+Three things the config deliberately does **not** support:
+- **Per-candidate `task` overrides** — comparison must be apples-to-apples.
+- **Per-candidate `runs` overrides** — same reason.
+- **Parallel execution** — candidates run sequentially. Parallel runs would contend on the polyglot cache, the per-attempt worktree provisioning, and most providers' rate limits.
+
+### 4. Run the comparison
+
+```bash
+./scripts/benchmark compare --config my-compare.json
+# {
+#   "run_dir": "runs/20260513T140000Z-compare-aider-polyglot",
+#   "report_md": "runs/20260513T140000Z-compare-aider-polyglot/report.md"
+# }
+```
+
+The harness validates the adapter and every candidate backend *before* doing any work, so a typo in `candidates[5]` does not waste candidates 0–4's wall time. Each candidate's per-attempt artifacts (`run-record.json`, `score.json`, `stats.json`, `diff.patch`, transcripts) land in its own nested run-dir under the parent.
+
+### 5. Read the report
+
+```bash
+cat runs/20260513T140000Z-compare-aider-polyglot/report.md
+```
+
+The report shows:
+- One group per candidate (labelled by the candidate's `name`), with total attempts, pass rate, and `mean ± stdev` for elapsed seconds. When two candidates share `(backend, model)` but differ in `env` routing — e.g. the same Claude Code model through Anthropic API vs. an OpenRouter gateway — the unique candidate names keep them as distinct groups rather than collapsing them.
+- A per-task table (which tasks each candidate passed).
+- Pairwise winner verdicts using the calibrated rule: `(Δ > 2σ) AND (|Δ| ≥ threshold)` per metric. Below those thresholds the report emits `directional, no winner declared` rather than calling a winner on noise.
+- `backend_metadata.provider_endpoint` per candidate, so a comparison that mixes Anthropic API + a local gateway is visibly marked as such.
+
+### 6. (Optional) skip the auto-report
+
+```bash
+./scripts/benchmark compare --config my-compare.json --no-report
+# Later:
+./scripts/benchmark report --run-dir runs/20260513T140000Z-compare-aider-polyglot/
+```
+
+Useful when you want to inspect run-dirs first before producing the comparison.
+
+### Common patterns
+
+**Three Anthropic models on Python tasks only:**
+```json
+{ "benchmark": "aider-polyglot", "runs": 3,
+  "task": ["python/leap", "python/anagram", "python/clock"],
+  "candidates": [
+    { "name": "haiku",  "backend": "claude-code", "model": "haiku"  },
+    { "name": "sonnet", "backend": "claude-code", "model": "sonnet" },
+    { "name": "opus",   "backend": "claude-code", "model": "opus"   }
+  ] }
+```
+
+**Anthropic API vs. one local LLM:**
+```json
+{ "benchmark": "aider-polyglot", "runs": 3,
+  "task": ["python/leap"],
+  "candidates": [
+    { "name": "sonnet-cloud", "backend": "claude-code", "model": "sonnet" },
+    { "name": "local-qwen", "backend": "claude-code",
+      "model": "qwen2.5-coder:32b",
+      "env": { "ANTHROPIC_BASE_URL": "http://localhost:11434",
+               "ANTHROPIC_AUTH_TOKEN": "dummy" } }
+  ] }
+```
+
+**Same model, two different providers** (give each candidate a unique `name` since `(backend, model)` overlaps):
+```json
+{ "benchmark": "stub", "runs": 1,
+  "candidates": [
+    { "name": "anthropic-direct",
+      "backend": "claude-code", "model": "claude-sonnet-4-6" },
+    { "name": "openrouter-proxy",
+      "backend": "claude-code", "model": "claude-sonnet-4-6",
+      "env": { "ANTHROPIC_BASE_URL": "https://openrouter.ai/api/v1" } }
+  ] }
+```
+
 ## Status
 
-**Phase 2** is the current phase: Aider Polyglot adapter (pinned upstream + per-language tasks), `worktree+venv` isolation tier active. `./scripts/benchmark list` shows `aider-polyglot` and `stub` as adapters, `stub` as the only backend.
+| Phase | Ships | State |
+|-------|-------|-------|
+| 0 | Contracts, CLI skeleton, schemas, tests | done |
+| 1 | Stub adapter + stub backend + run orchestration + CI smoke test + report skeleton | done |
+| 2 | Aider Polyglot adapter, `worktree+venv` tier | done |
+| 3 | Claude Code (`claude -p`) backend with provider-routing recording | done |
+| 4a | Calibrated winner-declaration rule, report verdicts, dogfood subcommand | done |
+| 4b | Gate 1 (Polyglot liveness) + Gate 2 (memkernel#3 spec-first verdict-correctness) dogfood execution | pending — maintainer-driven on user's machine |
 
-| Phase | Ships                                                                          |
-|-------|--------------------------------------------------------------------------------|
-| 0     | Contracts, CLI skeleton, schemas, tests — done                                 |
-| 1     | Stub adapter, stub backend, CI smoke test, run orchestration, report skeleton — done |
-| 2     | Aider Polyglot adapter, `worktree+venv` tier — *current*                       |
-| 3     | Claude Code (`claude -p`) backend with provider-routing recording              |
-| 4     | Calibrated winner-declaration rule, dogfood gate                               |
+Comparison driver (`./scripts/benchmark compare`) shipped 2026-05-13.
 
 ## CLI
 
 ```bash
-./scripts/benchmark list
-./scripts/benchmark list --benchmark aider-polyglot           # Phase 1+
+./scripts/benchmark list                                       # adapters + backends
+./scripts/benchmark list --benchmark aider-polyglot            # tasks for an adapter
 ./scripts/benchmark run --benchmark aider-polyglot \
-    --backend claude-code:sonnet --runs 3                     # Phase 1+
-./scripts/benchmark report --run-dir runs/<UTC-ts>/           # Phase 1+
-./scripts/benchmark dogfood --backend claude-code:sonnet      # Phase 4
+    --backend claude-code --model sonnet --runs 3              # single (backend, model) run
+./scripts/benchmark compare --config my-compare.json           # multi-LLM comparison
+./scripts/benchmark report --run-dir runs/<UTC-ts>/            # aggregate any run-dir
+./scripts/benchmark dogfood --backend claude-code --model sonnet  # Gate 1 dogfood
 ```
+
+Backend and model are **separate flags**. The combined `--backend claude-code:sonnet` form is rejected (see spec.md § v3 correction for why the abstractions were split).
 
 Exit codes (stable across the MVP):
 - `0` — success.
-- `2` — usage error (argparse) or unknown adapter / backend.
+- `2` — usage error (argparse), unknown adapter / backend, or invalid compare-config.
+- `3` — runtime failure during run / report / compare.
 - `8` — subcommand or feature not yet implemented (Phase N stub).
 
 ## Adapter contract

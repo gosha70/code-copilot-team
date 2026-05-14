@@ -115,6 +115,36 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_report.add_argument("--run-dir", required=True, type=Path)
 
+    # ── compare ───────────────────────────────────────────────────────
+    p_compare = sub.add_parser(
+        "compare",
+        help=(
+            "Run a benchmark against multiple LLMs sequentially and "
+            "aggregate the report (one shared run-dir per invocation). "
+            "See benchmarks/compare-config.example.json for the config "
+            "shape and benchmarks/README.md § 'Quick start: compare "
+            "multiple LLMs' for an end-to-end walkthrough."
+        ),
+    )
+    p_compare.add_argument(
+        "--config",
+        required=True,
+        type=Path,
+        help="Path to a compare-config JSON file. Must list ≥2 candidates.",
+    )
+    p_compare.add_argument(
+        "--runs-root",
+        type=Path,
+        default=Path("runs"),
+        help="Directory under which the compare run-dir is created (default ./runs).",
+    )
+    p_compare.add_argument(
+        "--no-report",
+        action="store_true",
+        help="Skip auto-emitting the aggregate report; you can run "
+             "`./scripts/benchmark report --run-dir <path>` later.",
+    )
+
     # ── dogfood ───────────────────────────────────────────────────────
     p_dogfood = sub.add_parser(
         "dogfood",
@@ -244,6 +274,66 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_compare(args: argparse.Namespace) -> int:
+    """Multi-LLM comparison driver.
+
+    Reads a JSON compare-config, validates the adapter + each candidate's
+    backend up front, then orchestrates sequential per-candidate runs
+    under one shared parent run-dir and (by default) renders the
+    aggregate report. Failure of any single candidate aborts the
+    comparison and leaves prior candidates' run-dirs on disk for
+    postmortem.
+    """
+    if not args.config.exists():
+        print(f"benchmark: compare-config not found: {args.config}", file=sys.stderr)
+        return EXIT_USAGE
+
+    from .compare import CompareConfigError, load_config, run_comparison
+    from .registry import get_adapter, get_backend
+    from .run import EmptyAdapterError
+
+    try:
+        config = load_config(args.config)
+    except CompareConfigError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    # Validate every candidate up front so a typo in candidate[5] does
+    # not waste the wall time of candidates[0..4].
+    try:
+        get_adapter(config.benchmark)
+        for c in config.candidates:
+            get_backend(c.backend, c.model)
+    except (UnknownAdapterError, UnknownBackendError) as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        run_dir = run_comparison(
+            config,
+            runs_root=args.runs_root,
+            emit_report=not args.no_report,
+        )
+    except EmptyAdapterError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except KeyError as exc:  # unknown task ids in config.task
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except NotImplementedError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_NOT_IMPLEMENTED
+    except Exception as exc:  # noqa: BLE001 — runtime failure path
+        print(f"benchmark: compare failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    payload: dict[str, str] = {"run_dir": str(run_dir)}
+    if not args.no_report:
+        payload["report_md"] = str(run_dir / "report.md")
+    print(json.dumps(payload, indent=2))
+    return EXIT_OK
+
+
 def _cmd_dogfood(args: argparse.Namespace) -> int:
     """T4.3 — Gate 1 liveness: run the Polyglot adapter against the
     committed dogfood subset for the chosen backend, then aggregate.
@@ -347,6 +437,7 @@ _HANDLERS = {
     "list": _cmd_list,
     "run": _cmd_run,
     "report": _cmd_report,
+    "compare": _cmd_compare,
     "dogfood": _cmd_dogfood,
 }
 

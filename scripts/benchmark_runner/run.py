@@ -309,27 +309,39 @@ def _utc_now() -> str:
 
 
 def _make_run_dir(runs_root: Path, benchmark_id: str, backend_id: str) -> Path:
-    """Mint a fresh run directory.
-
-    Two invocations within the same UTC-second collide on the timestamp
-    alone (the schema's date-time format is second-precision). We
-    disambiguate with a 3-digit counter suffix (-001, -002, ...) and
-    create the directory atomically; the counter increments until
-    ``mkdir`` succeeds. 999 collisions in one second would be a
-    pathological loop, so we cap and surface a clear error.
-    """
+    """Mint a fresh single-run directory under ``runs_root``."""
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     base_name = f"{ts}-{_slug(benchmark_id)}-{_slug(backend_id)}"
-    runs_root.mkdir(parents=True, exist_ok=True)
+    return allocate_unique_dir(runs_root, base_name)
+
+
+def allocate_unique_dir(parent: Path, base_name: str) -> Path:
+    """Atomically allocate a fresh directory under ``parent``.
+
+    Two invocations within the same UTC-second collide on a
+    timestamp-based ``base_name`` alone (the schema's date-time format
+    is second-precision). We disambiguate with a 3-digit counter
+    suffix (-001, -002, ...) and create the directory atomically; the
+    counter increments until ``mkdir`` succeeds. 999 collisions in
+    one second would be a pathological loop, so we cap and surface a
+    clear error.
+
+    Used by ``_make_run_dir`` for per-(benchmark, backend) run-dirs
+    and by ``compare.run_comparison`` for the compare parent run-dir.
+    Centralising the loop keeps the collision-safety invariant in one
+    place — the original bug fix has been re-introduced once already
+    when ``compare`` shipped without this helper.
+    """
+    parent.mkdir(parents=True, exist_ok=True)
     for counter in range(1, 1000):
-        candidate = runs_root / f"{base_name}-{counter:03d}"
+        candidate = parent / f"{base_name}-{counter:03d}"
         try:
             candidate.mkdir(exist_ok=False)
         except FileExistsError:
             continue
         return candidate
     raise RuntimeError(
-        f"could not allocate a unique run directory under {runs_root!r} "
+        f"could not allocate a unique directory under {parent!r} "
         f"for {base_name!r} after 999 attempts"
     )
 

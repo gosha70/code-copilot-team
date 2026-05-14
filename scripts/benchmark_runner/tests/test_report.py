@@ -77,8 +77,11 @@ class TestRenderReport(unittest.TestCase):
         # later trip strict-type comparisons.
         self.assertIsInstance(payload["schema_version"], str)
         self.assertIsInstance(REPORT_SCHEMA_VERSION, str)
-        # v3 architecture-correction shape — top-level groups + verdicts.
-        self.assertEqual(REPORT_SCHEMA_VERSION, "1")
+        # v1 → v2 bump (compare driver, 2026-05-13): group key tuple
+        # gained a third element (candidate_name); group summary gained
+        # a candidate_name field. Backwards-compatible for plain
+        # `run` run-dirs (candidate_name="" preserves v1 labels).
+        self.assertEqual(REPORT_SCHEMA_VERSION, "2")
 
     def test_json_schema_shape(self) -> None:
         with tempfile.TemporaryDirectory() as td:
