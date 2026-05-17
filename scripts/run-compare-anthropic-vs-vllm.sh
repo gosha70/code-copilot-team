@@ -45,9 +45,13 @@
 #      script only WARNS (does not abort) — raw-completion-only
 #      benchmarks don't need tool parsing.
 #
-#   2. CONTEXT LENGTH. A default `--max-model-len 8192` truncates
-#      Polyglot tasks with long prompts + multi-file context. Preflight
-#      warns if /v1/models reports a context length below 16384.
+#   2. CONTEXT LENGTH. claude-code requests max_output_tokens=32000 per
+#      call; vLLM 400s the request outright when that exceeds
+#      --max-model-len (e.g. the default 8192), so a too-small window is
+#      a HARD failure — every call 400s, the vLLM candidate is a
+#      deterministic 0%, not mere prompt truncation. Preflight ABORTS
+#      when /v1/models reports max_model_len below the 32000 output
+#      request, and warns below the recommended 65536.
 #
 # Usage:
 #   ./scripts/run-compare-anthropic-vs-vllm.sh [ANTHROPIC_MODEL] [VLLM_MODEL]
@@ -99,7 +103,7 @@ set -euo pipefail
 # --- Help ---
 case "${1:-}" in
     -h|--help)
-        sed -n '2,95p' "$0" | sed -E 's/^# ?//'
+        sed -n '2,99p' "$0" | sed -E 's/^# ?//'
         exit 0
         ;;
 esac
@@ -112,6 +116,13 @@ VLLM_BASE="${VLLM_BASE:-http://192.168.1.23:8000}"
 VLLM_TIMEOUT="${VLLM_TIMEOUT:-1800}"
 LITELLM_PROXY_PORT="${LITELLM_PROXY_PORT:-8787}"
 LITELLM_PROXY_BASE="http://127.0.0.1:${LITELLM_PROXY_PORT}"
+# Observed from run transcripts: claude-code requests this many output
+# tokens per call (max_output_tokens=32000). vLLM returns HTTP 400 when
+# this exceeds --max-model-len, so it is the HARD floor below which the
+# vLLM candidate is deterministically 0%. The recommended window adds
+# room for the multi-file Polyglot prompt on top of that output budget.
+CLAUDE_CODE_MAX_OUTPUT_TOKENS=32000
+VLLM_CTX_RECOMMENDED=65536
 # Per-run unique paths: two concurrent runs with different models/ports
 # must not clobber each other's config/log, and both are removed by the
 # trap on exit.
@@ -313,19 +324,36 @@ else
     fi
     ok "Remote vLLM reachable and serves $VLLM_MODEL"
 
-    # 1b. Context-length sanity (Caveat 2). vLLM /v1/models reports
-    #     max_model_len when available; warn (don't fail) if < 16384.
+    # 1b. Context-length GATE (Caveat 2). claude-code requests
+    #     max_output_tokens=$CLAUDE_CODE_MAX_OUTPUT_TOKENS per call; vLLM
+    #     rejects the request with HTTP 400 when that exceeds
+    #     --max-model-len, before generating a token. A window below that
+    #     request is therefore a deterministic 0% for the vLLM candidate
+    #     — hard-fail here rather than burn a multi-minute run to find a
+    #     400 in every transcript.
     CTX_LEN=$(grep -oE '"max_model_len":[[:space:]]*[0-9]+' "$VLLM_MODELS_JSON" \
         | head -1 | grep -oE '[0-9]+$' || true)
     if [[ -z "$CTX_LEN" ]]; then
-        warn "Could not read max_model_len from /v1/models — cannot verify context budget."
-        warn "  If vLLM was started with the default --max-model-len 8192, long Polyglot"
-        warn "  prompts WILL be truncated. Recommended: restart vLLM with --max-model-len 16384+."
-    elif (( CTX_LEN < 16384 )); then
-        warn "vLLM context length is $CTX_LEN (< 16384). Long Polyglot prompts + multi-file"
-        warn "  context will be truncated. Recommended: restart vLLM with --max-model-len 16384+."
+        warn "Could not read max_model_len from /v1/models — cannot verify the context"
+        warn "  budget. If vLLM is on the default --max-model-len 8192, EVERY claude-code"
+        warn "  call will 400 (max_output_tokens=$CLAUDE_CODE_MAX_OUTPUT_TOKENS > 8192)."
+        warn "  Strongly recommend restarting vLLM with --max-model-len $VLLM_CTX_RECOMMENDED+."
+    elif (( CTX_LEN < CLAUDE_CODE_MAX_OUTPUT_TOKENS )); then
+        err "vLLM max_model_len=$CTX_LEN < claude-code's per-call output request"
+        err "  ($CLAUDE_CODE_MAX_OUTPUT_TOKENS). vLLM will reject EVERY request with HTTP"
+        err "  400 (\"max_output_tokens=$CLAUDE_CODE_MAX_OUTPUT_TOKENS cannot be greater"
+        err "  than max_model_len=$CTX_LEN\") before generating a token — the vLLM"
+        err "  candidate would be a deterministic 0%. Restart vLLM with"
+        err "  --max-model-len $VLLM_CTX_RECOMMENDED plus the tool/reasoning parser"
+        err "  flags, then re-run. Aborting before the run is spent."
+        exit 1
+    elif (( CTX_LEN < VLLM_CTX_RECOMMENDED )); then
+        warn "vLLM max_model_len=$CTX_LEN accepts requests but leaves little room for a"
+        warn "  multi-file Polyglot prompt on top of the $CLAUDE_CODE_MAX_OUTPUT_TOKENS-token"
+        warn "  output budget — long tasks may still truncate. Recommended:"
+        warn "  --max-model-len $VLLM_CTX_RECOMMENDED+."
     else
-        ok "vLLM context length is $CTX_LEN (>= 16384)"
+        ok "vLLM max_model_len=$CTX_LEN (>= recommended $VLLM_CTX_RECOMMENDED)"
     fi
 
     # 1c. Tool-call parser advisory (Caveat 1). We cannot reliably probe
