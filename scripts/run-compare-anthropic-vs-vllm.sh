@@ -51,7 +51,8 @@
 #      a HARD failure — every call 400s, the vLLM candidate is a
 #      deterministic 0%, not mere prompt truncation. Preflight ABORTS
 #      when /v1/models reports max_model_len below the 32000 output
-#      request, and warns below the recommended 65536.
+#      request, and warns below the recommended 131072 (≈2x the
+#      ~70K floor of 32K output + ~38K claude-code envelope).
 #
 # Usage:
 #   ./scripts/run-compare-anthropic-vs-vllm.sh [ANTHROPIC_MODEL] [VLLM_MODEL]
@@ -103,7 +104,7 @@ set -euo pipefail
 # --- Help ---
 case "${1:-}" in
     -h|--help)
-        sed -n '2,99p' "$0" | sed -E 's/^# ?//'
+        sed -n '2,100p' "$0" | sed -E 's/^# ?//'
         exit 0
         ;;
 esac
@@ -116,13 +117,22 @@ VLLM_BASE="${VLLM_BASE:-http://192.168.1.23:8000}"
 VLLM_TIMEOUT="${VLLM_TIMEOUT:-1800}"
 LITELLM_PROXY_PORT="${LITELLM_PROXY_PORT:-8787}"
 LITELLM_PROXY_BASE="http://127.0.0.1:${LITELLM_PROXY_PORT}"
-# Observed from run transcripts: claude-code requests this many output
-# tokens per call (max_output_tokens=32000). vLLM returns HTTP 400 when
-# this exceeds --max-model-len, so it is the HARD floor below which the
-# vLLM candidate is deterministically 0%. The recommended window adds
-# room for the multi-file Polyglot prompt on top of that output budget.
+# Durable rule (don't hardcode a magic ctx number — derive it):
+#   required_ctx > measured_claude_code_envelope + max_output + margin
+#
+# claude-code requests max_output_tokens=32000 per call (observed in run
+# transcripts). vLLM returns HTTP 400 when that alone exceeds
+# --max-model-len, so 32000 is the HARD floor below which the vLLM
+# candidate is deterministically 0%. On top of that, claude-code sends a
+# ~38K-token request envelope every turn (system prompt + tool schemas +
+# skills + CLAUDE.md + plugin metadata) — independent of task size and
+# likely to GROW as Anthropic adds tools. Arithmetic floor is therefore
+# ~70K (32K output + ~38K envelope); the recommended window is ~2x that
+# so envelope drift across claude-code versions + longer Polyglot tasks
+# don't silently re-introduce the truncation/400. Verified: 32768 fails
+# mid-conversation, 131072 runs clean 3/3.
 CLAUDE_CODE_MAX_OUTPUT_TOKENS=32000
-VLLM_CTX_RECOMMENDED=65536
+VLLM_CTX_RECOMMENDED=131072
 # Per-run unique paths: two concurrent runs with different models/ports
 # must not clobber each other's config/log, and both are removed by the
 # trap on exit.
