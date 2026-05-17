@@ -49,6 +49,18 @@ yarn-debug.log*
 # Build-agent worktree isolation dirs (created by Agent tool with isolation: worktree)
 .claude/worktrees/
 
+# Scheduled-task lock files (session/process-local state — not portable across machines)
+.claude/scheduled_tasks.lock
+.claude/scheduled_tasks/
+
 # Generated docs (keep source only)
 README.html
 /doc_internal
+
+# Benchmark harness run artifacts (per-attempt worktrees + scores).
+# The harness writes here at runtime; commit none of it.
+/runs
+
+# Benchmark adapter caches (cloned upstream datasets, pinned by SHA).
+# Populated by per-adapter fetch scripts; never committed.
+/benchmarks/.cache/

@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gosha70/code-copilot-team/benchmarks/schema/run-record.schema.json",
+  "title": "Benchmark run record (per attempt)",
+  "description": "Top-level metadata for one (task, attempt) under a run directory. Pairs with score.json and stats.json. The run directory layout: runs/<UTC-ts>-<benchmark>-<backend>/<task-id-slug>/<attempt>/ contains run-record.json + score.json + stats.json + transcript + diff.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "benchmark_id",
+    "task_id",
+    "backend_id",
+    "run_id",
+    "attempt",
+    "started_at",
+    "finished_at",
+    "isolation",
+    "backend_invocation",
+    "prompt",
+    "backend"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "benchmark_id": { "type": "string", "minLength": 1 },
+    "task_id": { "type": "string", "minLength": 1 },
+    "backend_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "isolation": {
+      "type": "object",
+      "required": ["tier"],
+      "properties": {
+        "tier": {
+          "type": "string",
+          "enum": ["worktree", "worktree+venv", "docker"]
+        },
+        "python": { "type": "string" },
+        "install_command": { "type": "string" },
+        "verify_imports": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+          },
+          "description": "Modules the harness post-install-verified as importable (e.g. ['pytest']). When non-empty, the run was guarded against silent pip-no-op installs."
+        },
+        "dockerfile": { "type": "string" },
+        "build_args": { "type": "object" }
+      }
+    },
+    "backend_invocation": {
+      "type": "object",
+      "required": ["model", "temperature", "seed"],
+      "additionalProperties": true,
+      "properties": {
+        "model": { "type": "string" },
+        "temperature": { "type": "number", "minimum": 0 },
+        "seed": { "type": ["integer", "null"] }
+      }
+    },
+    "prompt": {
+      "description": "Canonical prompt the harness handed to the backend (output of adapter.prompt_for). Always written to disk by the runner; sha256 lets reports detect prompt drift across runs.",
+      "type": "object",
+      "required": ["path", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Path to the prompt artifact, relative to the attempt directory (typically 'prompt.md').",
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "description": "SHA-256 of the prompt bytes, lowercase hex.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "effective_prompt": {
+      "description": "The prompt the backend actually sent to the model after any wrapping (Claude Code's system prompt, adapter-added framing, etc.). Optional — backends that do not wrap omit this. When present, the path is relative to the attempt directory.",
+      "type": ["object", "null"],
+      "required": ["path", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "model_output_path": {
+      "description": "Path (relative to attempt dir) to the model's raw text output. Distinct from a backend-specific structured transcript. May be null for backends that only mutate the worktree.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "backend": {
+      "description": "Per-attempt diagnostic block from the backend invocation. ``error`` is the captured exception message when backend.run raised; null when the backend ran cleanly. ``metadata`` is the backend's own free-form record (model, family, hint strings, transcript anchors, etc.). Persisting this here means a Phase-2 stub backend's NotImplementedError + endpoint hint survives in the audit record instead of being lost.",
+      "type": "object",
+      "required": ["error", "metadata"],
+      "additionalProperties": false,
+      "properties": {
+        "error": { "type": ["string", "null"] },
+        "metadata": { "type": "object" }
+      }
+    }
+  }
+}

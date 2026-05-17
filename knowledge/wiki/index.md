@@ -98,6 +98,10 @@ about to add or change a page, read
   grep predicates that survive line-number drift.
 - [Respond to a Production-Readiness Review Without Scope Creep](playbooks/respond-to-production-readiness-review.md) —
   bucket each item by release target; refuse the lump-sum framing.
+- [Drive Claude Code With a Local vLLM Model](playbooks/drive-claude-code-with-local-vllm.md) —
+  the sequential, disguised blocker chain (Responses-API misroute,
+  context-envelope sizing, tool parsing) and how to clear it in
+  hours not days.
 
 ## Glossary
 

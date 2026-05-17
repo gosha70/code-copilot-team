@@ -1,0 +1,35 @@
+# benchmarks/adapters/aider_polyglot/dogfood-subset.txt
+#
+# Task IDs used by ``./scripts/benchmark dogfood`` (Phase 4) for the
+# pre-merge sanity comparison against Aider's published leaderboard.
+# Chosen for breadth (>= 1 per language) and speed (skip multi-file
+# Java / heavy CMake C++ tasks). Pinned alongside REVISION; update both
+# when bumping the upstream snapshot.
+#
+# Format: one task_id per line ("<lang>/<exercise>"); blank lines and
+# `#`-prefixed lines are ignored. Validated by
+# scripts/benchmark_runner/tests/test_polyglot_dogfood_subset.py.
+
+# Python (4 tasks — broadest coverage in the Aider leaderboard)
+python/leap
+python/affine-cipher
+python/bowling
+python/grade-school
+
+# Go (2 tasks)
+go/leap
+go/grade-school
+
+# JavaScript (2 tasks)
+javascript/leap
+javascript/grade-school
+
+# Rust (2 tasks)
+rust/leap
+rust/grade-school
+
+# Java (1 task — gradle adds wall-time cost)
+java/leap
+
+# C++ (1 task — cmake build adds wall-time cost)
+cpp/leap

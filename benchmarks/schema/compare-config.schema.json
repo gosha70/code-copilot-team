@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gosha70/code-copilot-team/benchmarks/schema/compare-config.schema.json",
+  "title": "CCT benchmark compare-config",
+  "description": "Configuration consumed by `./scripts/benchmark compare --config <path>`. Lists multiple (backend, model, env) candidates to evaluate against the same benchmark task set; the harness runs them sequentially under one parent run-dir and aggregates the report.",
+  "type": "object",
+  "required": ["benchmark", "candidates"],
+  "additionalProperties": false,
+  "properties": {
+    "benchmark": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Benchmark adapter id, as listed by `./scripts/benchmark list` (e.g. 'aider-polyglot', 'stub', 'cct-dogfood-memkernel')."
+    },
+    "runs": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Number of repetitions per task per candidate. Higher values reduce stdev and enable the calibrated winner-declaration rule; 3 is the recommended floor for cross-LLM comparisons."
+    },
+    "task": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Optional task-id filter; same shape as `./scripts/benchmark run --task <id>` (repeatable). Omit to run every task the adapter exposes."
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "$ref": "#/$defs/candidate" },
+      "description": "Two or more LLM candidates to compare. Single-candidate comparisons are rejected — use `./scripts/benchmark run` for that. Each candidate runs sequentially in declaration order."
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "required": ["backend"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable label for this candidate; appears in compare-manifest.json. Defaults to '<backend>:<model>'. Must be unique across all candidates; set explicitly when (backend, model) overlaps but env routing differs."
+        },
+        "backend": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^:]+$",
+          "description": "Backend family (copilot CLI), e.g. 'claude-code', 'stub'. The deprecated combined form 'claude-code:sonnet' is rejected — split into separate backend + model fields."
+        },
+        "model": {
+          "type": "string",
+          "default": "",
+          "description": "Model identifier passed to the backend, e.g. 'sonnet', 'opus', 'claude-sonnet-4-6', or — when routing through a gateway — the model name the gateway serves (e.g. 'meta-llama/Llama-3-70B-Instruct'). The stub backend ignores this field."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Provider-routing env vars applied only for this candidate's runs and restored afterward. Typical keys: ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_DEFAULT_SONNET_MODEL (for Claude Code's gateway support — see https://code.claude.com/docs/en/llm-gateway). VALUES MAY CONTAIN SECRETS and are read into os.environ for the candidate's runs; only the KEY NAMES are persisted to compare-manifest.json."
+        }
+      }
+    }
+  }
+}

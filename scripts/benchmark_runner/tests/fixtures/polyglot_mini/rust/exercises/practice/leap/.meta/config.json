@@ -1,0 +1,8 @@
+{
+  "files": {
+    "solution": ["src/lib.rs"],
+    "test": ["tests/leap.rs"],
+    "example": [".meta/example.rs"]
+  },
+  "blurb": "Determine whether a given year is a leap year."
+}

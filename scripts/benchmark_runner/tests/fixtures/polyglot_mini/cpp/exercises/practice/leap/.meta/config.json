@@ -1,0 +1,8 @@
+{
+  "files": {
+    "solution": ["leap.cpp", "leap.h"],
+    "test": ["leap_test.cpp"],
+    "example": [".meta/example.cpp", ".meta/example.h"]
+  },
+  "blurb": "Determine whether a given year is a leap year."
+}

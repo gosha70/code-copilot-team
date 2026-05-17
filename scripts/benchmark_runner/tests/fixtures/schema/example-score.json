@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "aider-polyglot",
+  "task_id": "exercism/python/leap",
+  "backend_id": "claude-code-sonnet",
+  "run_id": "run-001",
+  "attempt": 2,
+  "scores": {
+    "tests_passed": true,
+    "lint_passed": null,
+    "typecheck_passed": null,
+    "required_files_present": true,
+    "timeout": false,
+    "human_interventions": 0
+  },
+  "derived": {
+    "elapsed_seconds": 312.4,
+    "files_changed": 1,
+    "lines_added": 18,
+    "lines_removed": 0,
+    "failed_commands": 0
+  },
+  "result": "pass"
+}

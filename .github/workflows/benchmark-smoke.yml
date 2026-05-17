@@ -1,0 +1,49 @@
+name: benchmark-smoke
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/benchmark'
+      - 'scripts/benchmark_runner/**'
+      - 'benchmarks/**'
+      - 'specs/benchmark-harness/**'
+      - '.github/workflows/benchmark-smoke.yml'
+  workflow_dispatch: {}
+
+# Smoke test: run the harness's own unittest suite, then exercise the
+# stub adapter against the stub backend. Verifies the plumbing
+# (init -> run -> score -> report) without invoking any LLM. Wall-time
+# target: <90s on GitHub free runners.
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run unittest suite
+        run: |
+          PYTHONPATH=scripts:. python3 -m unittest discover \
+            -s scripts/benchmark_runner/tests -v
+
+      - name: Stub run (init -> run -> score)
+        run: |
+          ./scripts/benchmark list
+          ./scripts/benchmark run --benchmark stub --backend stub --runs 1 \
+            --runs-root "$RUNNER_TEMP/runs"
+          ls -R "$RUNNER_TEMP/runs"
+
+      - name: Aggregate report
+        run: |
+          run_dir="$(ls -1d "$RUNNER_TEMP/runs"/* | head -1)"
+          ./scripts/benchmark report --run-dir "$run_dir"
+          test -f "$run_dir/report.md"
+          test -f "$run_dir/report.json"
+          cat "$run_dir/report.md"

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gosha70/code-copilot-team/benchmarks/schema/stats.schema.json",
+  "title": "Benchmark run statistics record",
+  "description": "Per-attempt run statistics. Token fields are nullable so backends that do not report usage can record null instead of fabricating zero. cost_reporting.enabled is permanently false in the MVP (see specs/benchmark-harness/spec.md § Constraints).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "elapsed_seconds",
+    "tokens_input",
+    "tokens_output",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "tool_calls",
+    "temperature",
+    "seed",
+    "cost_reporting"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "elapsed_seconds": { "type": "number", "minimum": 0 },
+    "tokens_input": { "type": ["integer", "null"], "minimum": 0 },
+    "tokens_output": { "type": ["integer", "null"], "minimum": 0 },
+    "cache_read_tokens": { "type": ["integer", "null"], "minimum": 0 },
+    "cache_write_tokens": { "type": ["integer", "null"], "minimum": 0 },
+    "tool_calls": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "temperature": { "type": "number", "minimum": 0 },
+    "seed": { "type": ["integer", "null"] },
+    "cost_reporting": {
+      "type": "object",
+      "required": ["enabled", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "const": false },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
