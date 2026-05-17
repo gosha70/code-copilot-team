@@ -256,15 +256,21 @@ start_litellm_proxy() {
     fi
     ok "litellm present in venv: $(litellm --version 2>/dev/null | head -1 || echo 'version unknown')"
 
-    # 2. Write the translation config. One alias 'vllm-proxy' that maps
-    #    Anthropic-shaped traffic to the remote vLLM's OpenAI API. The
-    #    openai/ prefix tells LiteLLM to speak the OpenAI protocol to
-    #    api_base; api_key is required by the SDK but vLLM ignores it.
+    # 2. Write the translation config. One alias that maps Anthropic-
+    #    shaped traffic to the remote vLLM's OpenAI API. The hosted_vllm/
+    #    prefix routes through LiteLLM's purpose-built vLLM adapter, which
+    #    pins to /v1/chat/completions. The generic openai/ provider on
+    #    LiteLLM >= 1.50 auto-detects vLLM's advertised /v1/responses
+    #    endpoint and routes multi-turn conversations through it; vLLM's
+    #    Responses API rejects LiteLLM's input-array shape with a
+    #    212-validation-error 400 (agent solves task at turn ~9, dies at
+    #    turn ~10 on the next continuation). hosted_vllm/ avoids that
+    #    route discovery. api_key is required by the SDK; vLLM ignores it.
     cat > "$LITELLM_CONFIG" <<EOF
 model_list:
   - model_name: "$VLLM_MODEL"
     litellm_params:
-      model: "openai/$VLLM_MODEL"
+      model: "hosted_vllm/$VLLM_MODEL"
       api_base: "${VLLM_BASE%/}/v1"
       api_key: "dummy"
 litellm_settings:
