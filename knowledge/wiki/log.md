@@ -37,3 +37,4 @@ Append-only. One bullet per entry, newest at the top. Format:
 - 2026-05-03 — created `use-llm-wiki-as-knowledge-layer` (decision): record the rationale for introducing the wiki layer per issue #12.
 - 2026-05-03 — created `recover-after-bad-ai-git-op` (playbook): operational recipe for triaging destructive AI git operations.
 - 2026-05-03 — created `glossary/index` (glossary): seed glossary with the project's most-used terms.
+- 2026-05-17 — created `drive-claude-code-with-local-vllm` (playbook): two-day local-LLM-vs-Anthropic investigation distilled; sequential disguised blocker chain (FlashInfer OOM, reasoning-parser, ctx-envelope sizing, tool parsing, LiteLLM Responses-API misroute) with detection + fix; surfaces `benchmarks/backends/vllm.md` and the first clean Sonnet-vs-Qwen data point.
