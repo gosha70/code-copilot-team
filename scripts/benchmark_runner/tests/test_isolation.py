@@ -149,6 +149,293 @@ class TestVenvTier(unittest.TestCase):
                 "install_command should have seen marker.txt placed by prepare_task",
             )
 
+    def test_install_command_runs_as_non_login_shell(self) -> None:
+        # Regression: `bash -lc` on macOS triggers /etc/profile →
+        # /usr/libexec/path_helper, which rebuilds PATH from
+        # /etc/paths{,.d/*} and clobbers the venv-prepended PATH that
+        # _run_install_command just constructed. Symptom in the field:
+        # `pip` resolves to /usr/local/bin/pip (often a broken
+        # Python-2.7-shebanged shim on developer Macs) instead of the
+        # venv's own pip, and install_command exits 126.
+        #
+        # The fix is to invoke `bash -c` (non-login). This test asserts
+        # the shell is non-login regardless of what any login profile
+        # might do on this host — it's the lever, not a downstream
+        # observable.
+        from benchmark_runner.isolation import install_dependencies
+
+        with tempfile.TemporaryDirectory() as td:
+            wt = provision_worktree(
+                IsolationConfig(tier=ISOLATION_WORKTREE_VENV, python="python3"),
+                Path(td),
+            )
+            trace = wt / "shell-mode.txt"
+            # `$-` contains the flags the shell was invoked with;
+            # `l` is present for login shells. Always exits 0, so
+            # install_dependencies doesn't raise on shopt's quirky
+            # rc=1-when-unset behaviour.
+            install_dependencies(
+                IsolationConfig(
+                    tier=ISOLATION_WORKTREE_VENV,
+                    python="python3",
+                    install_command=(
+                        f'case "$-" in *l*) echo login > {trace};; '
+                        f'*) echo non-login > {trace};; esac'
+                    ),
+                ),
+                wt,
+            )
+            content = trace.read_text(encoding="utf-8").strip()
+            self.assertEqual(
+                content, "non-login",
+                "install_command must run as non-login shell to keep "
+                "explicit PATH precedence (see _run_install_command's "
+                "IMPORTANT note in isolation.py).",
+            )
+
+    def test_install_command_resolves_venv_binaries_first(self) -> None:
+        # Regression: the venv's bin/ must be the FIRST entry in PATH
+        # as seen by install_command, so `pip`, `pytest`, etc. resolve
+        # to the venv's copies instead of any host-side equivalents.
+        # If a future change re-introduces a login-shell PATH rebuild
+        # or otherwise reorders PATH, this test catches it.
+        from benchmark_runner.isolation import install_dependencies
+
+        with tempfile.TemporaryDirectory() as td:
+            wt = provision_worktree(
+                IsolationConfig(tier=ISOLATION_WORKTREE_VENV, python="python3"),
+                Path(td),
+            )
+            path_trace = wt / "path-trace.txt"
+            install_dependencies(
+                IsolationConfig(
+                    tier=ISOLATION_WORKTREE_VENV,
+                    python="python3",
+                    install_command=f'printf "%s" "$PATH" > {path_trace}',
+                ),
+                wt,
+            )
+            path_seen = path_trace.read_text(encoding="utf-8")
+            first_entry = path_seen.split(":", 1)[0]
+            self.assertEqual(
+                Path(first_entry).resolve(),
+                (wt / ".venv" / "bin").resolve(),
+                f"venv bin/ must be first on PATH inside install_command. "
+                f"Got first={first_entry!r}; full PATH={path_seen!r}",
+            )
+
+    def test_verify_imports_raises_when_module_absent(self) -> None:
+        # Regression: pip can exit 0 without actually installing the
+        # requested packages (transient network failure + `-q` masks
+        # the warning, pip's internal retry-then-give-up silently
+        # returns success). Discovered on 2026-05-15 — 5 of 6 Polyglot
+        # attempts produced venvs with only `pip` in site-packages.
+        # The fix is verify_imports: declare modules that MUST be
+        # importable post-install; harness fails loud when they're not.
+        from benchmark_runner.isolation import install_dependencies
+
+        with tempfile.TemporaryDirectory() as td:
+            wt = provision_worktree(
+                IsolationConfig(tier=ISOLATION_WORKTREE_VENV, python="python3"),
+                Path(td),
+            )
+            # install_command exits 0 (literally /bin/true) but installs
+            # nothing. verify_imports must catch the mismatch.
+            with self.assertRaises(Exception) as ctx:
+                install_dependencies(
+                    IsolationConfig(
+                        tier=ISOLATION_WORKTREE_VENV,
+                        python="python3",
+                        install_command="true",  # no-op shell builtin
+                        verify_imports=("pytest",),
+                    ),
+                    wt,
+                )
+            msg = str(ctx.exception)
+            self.assertIn("pytest", msg)
+            self.assertIn("not importable", msg)
+
+    def test_verify_imports_passes_when_module_present(self) -> None:
+        # Positive case: a module that ships with the stdlib is always
+        # importable, so verify_imports=("json",) plus a no-op
+        # install_command should succeed.
+        from benchmark_runner.isolation import install_dependencies
+
+        with tempfile.TemporaryDirectory() as td:
+            wt = provision_worktree(
+                IsolationConfig(tier=ISOLATION_WORKTREE_VENV, python="python3"),
+                Path(td),
+            )
+            install_dependencies(
+                IsolationConfig(
+                    tier=ISOLATION_WORKTREE_VENV,
+                    python="python3",
+                    install_command="true",
+                    verify_imports=("json",),  # stdlib, always present
+                ),
+                wt,
+            )
+            # No exception = pass.
+
+    def test_verify_imports_rejects_invalid_module_name(self) -> None:
+        # Defence-in-depth regression: verify_imports entries are
+        # user-supplied (via the adapter), so even though they're
+        # passed to subprocess as argv (not interpolated into source),
+        # we validate them as dotted-identifier strings before
+        # invoking python. An adapter that returned a derived value
+        # (config-driven, dataset-driven, malicious) MUST NOT be
+        # able to smuggle code through this surface.
+        from benchmark_runner.isolation import (
+            IsolationProvisionError,
+            install_dependencies,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            wt = provision_worktree(
+                IsolationConfig(tier=ISOLATION_WORKTREE_VENV, python="python3"),
+                Path(td),
+            )
+            # Classic injection shape: would have been concatenated
+            # into `import <X>` source before the data-not-code fix.
+            with self.assertRaises(IsolationProvisionError) as ctx:
+                install_dependencies(
+                    IsolationConfig(
+                        tier=ISOLATION_WORKTREE_VENV,
+                        python="python3",
+                        install_command="true",
+                        verify_imports=("os'); __import__('os').system('echo PWNED",),
+                    ),
+                    wt,
+                )
+            self.assertIn("not a valid Python module name", str(ctx.exception))
+            self.assertIn("Refusing to invoke subprocess", str(ctx.exception))
+
+        # Other invalid shapes that must also be rejected.
+        for bad_name in ("", "1abc", "abc-def", "abc def", "abc;def", "..pytest"):
+            with tempfile.TemporaryDirectory() as td2:
+                wt2 = provision_worktree(
+                    IsolationConfig(tier=ISOLATION_WORKTREE_VENV, python="python3"),
+                    Path(td2),
+                )
+                with self.assertRaises(IsolationProvisionError) as ctx:
+                    install_dependencies(
+                        IsolationConfig(
+                            tier=ISOLATION_WORKTREE_VENV,
+                            python="python3",
+                            install_command="true",
+                            verify_imports=(bad_name,),
+                        ),
+                        wt2,
+                    )
+                self.assertIn(
+                    "not a valid Python module name", str(ctx.exception),
+                    f"expected rejection for {bad_name!r}",
+                )
+
+    def test_verify_imports_accepts_dotted_submodule(self) -> None:
+        # Positive case for the valid-name allowlist: dotted submodule
+        # paths (e.g. ``numpy.linalg``) must be accepted, since real
+        # adapters may want to verify a submodule rather than just the
+        # top-level package.
+        from benchmark_runner.isolation import install_dependencies
+
+        with tempfile.TemporaryDirectory() as td:
+            wt = provision_worktree(
+                IsolationConfig(tier=ISOLATION_WORKTREE_VENV, python="python3"),
+                Path(td),
+            )
+            install_dependencies(
+                IsolationConfig(
+                    tier=ISOLATION_WORKTREE_VENV,
+                    python="python3",
+                    install_command="true",
+                    verify_imports=("json.decoder",),  # stdlib dotted name
+                ),
+                wt,
+            )
+
+    def test_verify_imports_empty_is_no_op(self) -> None:
+        # Default verify_imports=() must not run the import check —
+        # adapters that don't declare it should see exactly the
+        # pre-fix behaviour.
+        from benchmark_runner.isolation import install_dependencies
+
+        with tempfile.TemporaryDirectory() as td:
+            wt = provision_worktree(
+                IsolationConfig(tier=ISOLATION_WORKTREE_VENV, python="python3"),
+                Path(td),
+            )
+            install_dependencies(
+                IsolationConfig(
+                    tier=ISOLATION_WORKTREE_VENV,
+                    python="python3",
+                    install_command="true",
+                    # No verify_imports → no import check.
+                ),
+                wt,
+            )
+
+    def test_install_command_uses_venv_pip_under_relative_worktree(self) -> None:
+        # Reviewer-flagged regression (Bug #5, 2026-05-16): the
+        # orchestration layer passes worktree as a relative path
+        # (runs_root defaults to Path("runs")), and subprocess.run
+        # with cwd=worktree re-relativizes the PATH entries we
+        # prepended — so bash's `pip` lookup fails on the venv entry
+        # and falls through to the system pip (which on this user's
+        # Mac found pytest "already satisfied" in
+        # ~/Library/Python/3.11/site-packages, exited 0, leaving the
+        # venv with only pip+pip.dist-info). Symptom: `verify_imports`
+        # raises "exited 0 but X is not importable" after a smoke run
+        # that should have installed pytest.
+        #
+        # Fix: absolutize the venv bin path before injecting into
+        # PATH. This test exercises that fix by cd'ing into a tempdir
+        # and passing a relative attempt_dir to provision_worktree
+        # (mirroring how run.py constructs paths).
+        from benchmark_runner.isolation import install_dependencies
+
+        with tempfile.TemporaryDirectory() as td:
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(td)
+                # Build a relative attempt_dir, same shape as run.py
+                # produces with the default runs_root=Path("runs").
+                rel_attempt = Path("runs-rel/attempt-01")
+                rel_attempt.mkdir(parents=True)
+                wt = provision_worktree(
+                    IsolationConfig(tier=ISOLATION_WORKTREE_VENV, python="python3"),
+                    rel_attempt,
+                )
+                self.assertFalse(
+                    Path(wt).is_absolute(),
+                    "test precondition: worktree must be relative to exercise the bug",
+                )
+                # `install_command` records which `pip` actually got
+                # picked up by bash's PATH lookup inside the harness's
+                # subprocess. We capture it before pip would have a
+                # chance to silently no-op.
+                install_dependencies(
+                    IsolationConfig(
+                        tier=ISOLATION_WORKTREE_VENV,
+                        python="python3",
+                        install_command="command -v pip > pip-resolution.txt",
+                    ),
+                    wt,
+                )
+                resolved_pip = (wt / "pip-resolution.txt").read_text(encoding="utf-8").strip()
+                expected_venv_bin = (wt / ".venv" / "bin").absolute()
+                self.assertEqual(
+                    str(Path(resolved_pip).parent.resolve()),
+                    str(expected_venv_bin.resolve()),
+                    f"install_command's `pip` must resolve to the venv's "
+                    f"bin ({expected_venv_bin}); got {resolved_pip!r}. "
+                    f"If this fails, subprocess re-relativization is back "
+                    f"and pip installs would silently no-op into the "
+                    f"system Python.",
+                )
+            finally:
+                os.chdir(original_cwd)
+
     def test_install_dependencies_noop_for_plain_worktree(self) -> None:
         from benchmark_runner.isolation import install_dependencies
 

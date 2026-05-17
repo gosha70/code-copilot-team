@@ -10,7 +10,8 @@
   "isolation": {
     "tier": "worktree+venv",
     "python": "3.12",
-    "install_command": "pip install -e .[dev]"
+    "install_command": "pip install -e .[dev]",
+    "verify_imports": ["pytest"]
   },
   "backend_invocation": {
     "model": "sonnet",

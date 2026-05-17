@@ -23,10 +23,15 @@ from benchmark_runner._register import unregister_all_for_tests
 from benchmark_runner.backends.claude_code import (
     BACKEND_FAMILY,
     BARE_OPT_IN_ENV_VAR,
+    EFFORT_OPT_IN_ENV_VAR,
     GATEWAY_AUTH_TOKEN_ENV_VAR,
     GATEWAY_BASE_URL_ENV_VAR,
+    TIMEOUT_OPT_IN_ENV_VAR,
+    VALID_EFFORT_LEVELS,
     ClaudeCliNotFoundError,
     ClaudeCodeBackend,
+    InvalidClaudeEffortError,
+    InvalidClaudeTimeoutError,
     factory,
     parse_transcript_json,
 )
@@ -247,6 +252,144 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
         self.assertEqual(
             out["result"].backend_metadata["claude_code_invocation"], "bare"
         )
+
+    def test_cct_claude_effort_unset_omits_flag(self) -> None:
+        # When CCT_CLAUDE_EFFORT is unset, --effort must NOT appear in
+        # argv (Claude Code picks its own default) and backend_metadata
+        # records effort=None so audit trails know the flag was off.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(EFFORT_OPT_IN_ENV_VAR, None)
+            out = self._run_backend("transcript-success.json", model="sonnet")
+        argv = out["log"]["argv"]
+        self.assertNotIn("--effort", argv)
+        self.assertIsNone(out["result"].backend_metadata["effort"])
+
+    def test_cct_claude_effort_valid_value_adds_flag_and_records(self) -> None:
+        # CCT_CLAUDE_EFFORT=max should add `--effort max` to argv and
+        # surface "max" in backend_metadata.effort for audit.
+        out = self._run_backend(
+            "transcript-success.json",
+            model="sonnet",
+            env_overrides={EFFORT_OPT_IN_ENV_VAR: "max"},
+        )
+        argv = out["log"]["argv"]
+        self.assertIn("--effort", argv)
+        self.assertEqual(argv[argv.index("--effort") + 1], "max")
+        self.assertEqual(out["result"].backend_metadata["effort"], "max")
+
+    def test_cct_claude_effort_allowlist_pins_the_five_documented_values(self) -> None:
+        # Static check: VALID_EFFORT_LEVELS must contain exactly the
+        # five values Claude Code's `--effort` doc lists. This catches
+        # a typo or accidental edit to the allowlist without doing N
+        # round-trip backend invocations (which would each need a
+        # fresh worktree dir — see _run_backend's setUp pattern).
+        self.assertEqual(
+            VALID_EFFORT_LEVELS,
+            frozenset({"low", "medium", "high", "xhigh", "max"}),
+        )
+
+    def test_cct_claude_effort_invalid_value_raises(self) -> None:
+        # Typo'd or otherwise unsupported level must fail loudly —
+        # silently dropping the setting would produce a run that looks
+        # like it ran with the requested level but actually didn't.
+        from benchmark_runner.contracts import RunContext
+
+        backend = ClaudeCodeBackend(model="sonnet", cli_executable="claude")
+        with tempfile.TemporaryDirectory() as td:
+            wt = Path(td) / "attempt-01" / "worktree"
+            wt.mkdir(parents=True)
+            ctx = RunContext(
+                benchmark_id="x",
+                task_id="t",
+                backend_id=BACKEND_FAMILY,
+                run_id="r",
+                attempt=1,
+                worktree=wt,
+                model="sonnet",
+            )
+            with mock.patch.dict(os.environ, {EFFORT_OPT_IN_ENV_VAR: "ludicrous"}):
+                with self.assertRaises(InvalidClaudeEffortError) as exc:
+                    backend.run("prompt", ctx)
+            self.assertIn("ludicrous", str(exc.exception))
+            self.assertIn("Allowed values", str(exc.exception))
+
+    def test_cct_claude_timeout_unset_uses_default_600s(self) -> None:
+        # When CCT_CLAUDE_TIMEOUT_SECONDS is unset, the subprocess
+        # timeout is _DEFAULT_TIMEOUT_SECONDS (600s). Verified via the
+        # recorded backend_metadata.timeout_seconds.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(TIMEOUT_OPT_IN_ENV_VAR, None)
+            out = self._run_backend("transcript-success.json", model="sonnet")
+        self.assertEqual(out["result"].backend_metadata["timeout_seconds"], 600)
+
+    def test_cct_claude_timeout_override_is_recorded(self) -> None:
+        # CCT_CLAUDE_TIMEOUT_SECONDS=1800 (30 min) — typical for slow
+        # local models — must be applied and recorded.
+        out = self._run_backend(
+            "transcript-success.json",
+            model="sonnet",
+            env_overrides={TIMEOUT_OPT_IN_ENV_VAR: "1800"},
+        )
+        self.assertEqual(out["result"].backend_metadata["timeout_seconds"], 1800)
+
+    def test_cct_claude_timeout_non_integer_raises(self) -> None:
+        # "thirty-minutes" or any non-int value must fail loud.
+        from benchmark_runner.contracts import RunContext
+
+        backend = ClaudeCodeBackend(model="sonnet", cli_executable="claude")
+        with tempfile.TemporaryDirectory() as td:
+            wt = Path(td) / "attempt-01" / "worktree"
+            wt.mkdir(parents=True)
+            ctx = RunContext(
+                benchmark_id="x", task_id="t", backend_id=BACKEND_FAMILY,
+                run_id="r", attempt=1, worktree=wt, model="sonnet",
+            )
+            with mock.patch.dict(os.environ, {TIMEOUT_OPT_IN_ENV_VAR: "thirty"}):
+                with self.assertRaises(InvalidClaudeTimeoutError) as exc:
+                    backend.run("prompt", ctx)
+            self.assertIn("integer", str(exc.exception))
+
+    def test_cct_claude_timeout_zero_or_negative_raises(self) -> None:
+        # 0 and negative values are nonsensical timeouts; fail loud.
+        from benchmark_runner.contracts import RunContext
+
+        for bad_val in ("0", "-1", "-3600"):
+            with self.subTest(value=bad_val):
+                backend = ClaudeCodeBackend(model="sonnet", cli_executable="claude")
+                with tempfile.TemporaryDirectory() as td:
+                    wt = Path(td) / "attempt-01" / "worktree"
+                    wt.mkdir(parents=True)
+                    ctx = RunContext(
+                        benchmark_id="x", task_id="t", backend_id=BACKEND_FAMILY,
+                        run_id="r", attempt=1, worktree=wt, model="sonnet",
+                    )
+                    with mock.patch.dict(os.environ, {TIMEOUT_OPT_IN_ENV_VAR: bad_val}):
+                        with self.assertRaises(InvalidClaudeTimeoutError) as exc:
+                            backend.run("prompt", ctx)
+                    self.assertIn("positive", str(exc.exception))
+
+    def test_cct_claude_timeout_empty_string_is_treated_as_unset(self) -> None:
+        # Whitespace-only value falls back to default — defensive
+        # against shell-quote accidents.
+        out = self._run_backend(
+            "transcript-success.json",
+            model="sonnet",
+            env_overrides={TIMEOUT_OPT_IN_ENV_VAR: "   "},
+        )
+        self.assertEqual(out["result"].backend_metadata["timeout_seconds"], 600)
+
+    def test_cct_claude_effort_empty_string_is_treated_as_unset(self) -> None:
+        # Empty/whitespace-only value (e.g. user set the var but never
+        # gave it a value) should be treated as unset — not as an
+        # invalid level. Defensive against shell-quote accidents.
+        out = self._run_backend(
+            "transcript-success.json",
+            model="sonnet",
+            env_overrides={EFFORT_OPT_IN_ENV_VAR: "   "},
+        )
+        argv = out["log"]["argv"]
+        self.assertNotIn("--effort", argv)
+        self.assertIsNone(out["result"].backend_metadata["effort"])
 
     def test_prompt_sent_on_stdin(self) -> None:
         out = self._run_backend("transcript-success.json")

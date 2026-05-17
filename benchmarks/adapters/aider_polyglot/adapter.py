@@ -100,10 +100,17 @@ class AiderPolyglotAdapter:
         harness; document the requirement in benchmarks/README.md.
         """
         if task.language == "python":
+            # `pip install` without `-q` so transient-network warnings
+            # surface in install_dependencies' captured stderr instead
+            # of being silenced. The `verify_imports` post-install
+            # check catches the "exit 0 but nothing installed" failure
+            # mode regardless — see isolation.install_dependencies for
+            # the discovery write-up.
             return IsolationConfig(
                 tier=ISOLATION_WORKTREE_VENV,
                 python="python3",
-                install_command="pip install -q pytest",
+                install_command="pip install pytest",
+                verify_imports=("pytest",),
             )
         return IsolationConfig(tier=ISOLATION_WORKTREE)
 
@@ -383,10 +390,29 @@ def _maybe_use_venv_python(
     Phase 2c provisions venvs via the worktree+venv isolation tier;
     this hook lets the verify runner pick them up without coupling
     the adapter to the runner's tier-implementation details.
+
+    IMPORTANT: the returned path MUST be absolute BUT MUST NOT follow
+    symlinks. ``verify`` invokes subprocess with ``cwd=worktree``,
+    and the kernel resolves the exec target relative to that cwd. A
+    relative path would be re-relativized — e.g.
+    ``runs/.../worktree/.venv/bin/python`` becomes
+    ``runs/.../worktree/runs/.../worktree/.venv/bin/python`` and
+    the exec fails with ENOENT.
+
+    Use ``Path.absolute()`` (makes absolute, does NOT follow symlinks),
+    NOT ``Path.resolve()``. On macOS, ``.venv/bin/python`` is a
+    symlink chain to ``/opt/homebrew/.../python3.13``; following it
+    with ``.resolve()`` exec's the system Python directly, which
+    bypasses the venv's sys.path machinery — site-packages becomes
+    the system one and pytest (installed via install_command into the
+    venv) is not findable. Symptom in the field:
+    ``ModuleNotFoundError: No module named pytest`` even though
+    ``pip install pytest`` succeeded in the venv. Regression covered
+    by ``test_polyglot_adapter.TestVenvPython``.
     """
     if language != "python":
         return cmd
-    venv_python = worktree / ".venv" / "bin" / "python"
+    venv_python = (worktree / ".venv" / "bin" / "python").absolute()
     if not venv_python.exists() or not cmd or cmd[0] != "python":
         return cmd
     return [str(venv_python), *cmd[1:]]

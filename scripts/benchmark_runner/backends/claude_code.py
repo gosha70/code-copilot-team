@@ -48,8 +48,19 @@ BACKEND_FAMILY = "claude-code"
 
 # Env vars (canonical names — referenced by README + tests).
 BARE_OPT_IN_ENV_VAR = "CCT_CLAUDE_BARE"
+EFFORT_OPT_IN_ENV_VAR = "CCT_CLAUDE_EFFORT"
+TIMEOUT_OPT_IN_ENV_VAR = "CCT_CLAUDE_TIMEOUT_SECONDS"
 GATEWAY_BASE_URL_ENV_VAR = "ANTHROPIC_BASE_URL"
 GATEWAY_AUTH_TOKEN_ENV_VAR = "ANTHROPIC_AUTH_TOKEN"
+
+# Values Claude Code's ``--effort`` CLI flag accepts. Surfaced as a
+# probe/tuning knob — NOT defaulted to anything by the harness. Higher
+# levels give the model more thinking + response budget; useful for
+# verbose-thinking local models like qwen3.6:27b that exhaust default
+# budgets mid-thinking. Whether ``--effort`` actually propagates to
+# non-Anthropic backends (Ollama, vLLM, …) routed via a gateway is
+# untested and provider-specific.
+VALID_EFFORT_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 # Conservative default; per-task adapters override via RunContext.timeout_seconds.
 _DEFAULT_TIMEOUT_SECONDS = 600
@@ -58,6 +69,27 @@ _DEFAULT_TIMEOUT_SECONDS = 600
 # the model what to edit; we let Claude Code use Read+Edit+Bash without
 # prompting.
 _DEFAULT_ALLOWED_TOOLS = "Read,Edit,Bash"
+
+
+class InvalidClaudeTimeoutError(ValueError):
+    """Raised when ``CCT_CLAUDE_TIMEOUT_SECONDS`` is set to a non-positive-integer value.
+
+    Reason this knob exists: the harness's default subprocess timeout
+    of 600s is tight for slow local models — qwen3.6:27b on multi-turn
+    agent loops can run >10 min for one attempt. The flag lets users
+    bump the budget per-candidate via the compare-config ``env`` block.
+    Failing loud on bad values keeps run records reproducible.
+    """
+
+
+class InvalidClaudeEffortError(ValueError):
+    """Raised when ``CCT_CLAUDE_EFFORT`` is set to a value Claude Code does not accept.
+
+    Failing loud beats silently dropping a typo'd setting — the
+    benchmark is meant to be reproducible, and a silently-ignored
+    effort value would produce a run that looks like it ran with
+    the requested level but actually didn't.
+    """
 
 
 class ClaudeCliNotFoundError(RuntimeError):
@@ -98,8 +130,16 @@ class ClaudeCodeBackend:
             )
 
         bare_mode = _bare_mode_enabled()
-        argv = self._build_argv(bare_mode=bare_mode)
-        timeout = ctx.timeout_seconds or _DEFAULT_TIMEOUT_SECONDS
+        effort = _effort_setting()  # may raise InvalidClaudeEffortError
+        argv = self._build_argv(bare_mode=bare_mode, effort=effort)
+        # Precedence: explicit ctx.timeout_seconds → CCT_CLAUDE_TIMEOUT_SECONDS
+        # env override → built-in default. The env override is the
+        # per-candidate knob for slow local models (set via the
+        # compare-config ``env`` block). Discovered necessary on
+        # 2026-05-16 when qwen3.6:27b consistently hit the 600s
+        # default ceiling on multi-turn agent loops even though the
+        # model + claude-code were both working correctly.
+        timeout = ctx.timeout_seconds or _timeout_override() or _DEFAULT_TIMEOUT_SECONDS
 
         # Capture provider-routing env vars BEFORE the call (the user
         # may set them per-shell; we record what was true at run time).
@@ -126,6 +166,8 @@ class ClaudeCodeBackend:
                 backend_metadata=_build_metadata(
                     model=self._model,
                     bare_mode=bare_mode,
+                    effort=effort,
+                    timeout_seconds=timeout,
                     provider_endpoint=provider_endpoint,
                     auth_token_present=auth_token_present,
                     session_id=None,
@@ -167,6 +209,8 @@ class ClaudeCodeBackend:
             backend_metadata=_build_metadata(
                 model=self._model,
                 bare_mode=bare_mode,
+                effort=effort,
+                timeout_seconds=timeout,
                 provider_endpoint=provider_endpoint,
                 auth_token_present=auth_token_present,
                 session_id=parsed.session_id,
@@ -177,7 +221,9 @@ class ClaudeCodeBackend:
 
     # ── Internals ──────────────────────────────────────────────────────
 
-    def _build_argv(self, *, bare_mode: bool) -> list[str]:
+    def _build_argv(
+        self, *, bare_mode: bool, effort: Optional[str] = None
+    ) -> list[str]:
         argv = [
             self._cli,
             "-p",
@@ -193,6 +239,12 @@ class ClaudeCodeBackend:
             argv.insert(1, "--bare")
         if self._model:
             argv.extend(["--model", self._model])
+        if effort:
+            # Validated to be in VALID_EFFORT_LEVELS before reaching here
+            # (see ``_effort_setting``). Untested whether ``--effort``
+            # propagates beyond the Anthropic API into Ollama/vLLM
+            # gateways — record-and-ship; correctness is empirical.
+            argv.extend(["--effort", effort])
         return argv
 
     def _build_env(self) -> dict[str, str]:
@@ -215,6 +267,60 @@ def _bare_mode_enabled() -> bool:
     return val.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _timeout_override() -> Optional[int]:
+    """Resolve a per-attempt timeout (seconds) from the environment.
+
+    Returns the positive integer when set, ``None`` when unset (so the
+    caller falls through to ``_DEFAULT_TIMEOUT_SECONDS``). Raises
+    ``InvalidClaudeTimeoutError`` on non-numeric or non-positive
+    values — silently dropping a bad value would let a typo'd
+    setting masquerade as the default budget.
+
+    This is the per-candidate knob for slow local models (set via the
+    compare-config ``env`` block). The 600s default is fine for
+    cloud-hosted models like sonnet on Anthropic API; local 27B+
+    models on multi-turn agent loops may need 1800-3600s.
+    """
+    val = os.environ.get(TIMEOUT_OPT_IN_ENV_VAR, "").strip()
+    if not val:
+        return None
+    try:
+        seconds = int(val)
+    except ValueError as exc:
+        raise InvalidClaudeTimeoutError(
+            f"{TIMEOUT_OPT_IN_ENV_VAR}={val!r} is not an integer. "
+            f"Expected a positive integer number of seconds (e.g. 1800 for 30 min)."
+        ) from exc
+    if seconds <= 0:
+        raise InvalidClaudeTimeoutError(
+            f"{TIMEOUT_OPT_IN_ENV_VAR}={val!r} must be positive; got {seconds}."
+        )
+    return seconds
+
+
+def _effort_setting() -> Optional[str]:
+    """Resolve the value to pass to ``claude -p --effort`` from the env.
+
+    Returns the string when set + valid, ``None`` when unset (in which
+    case ``--effort`` is omitted entirely and Claude Code picks its
+    own default). Raises ``InvalidClaudeEffortError`` when set to a
+    value Claude Code does not accept — fail loud, not silent-drop.
+
+    This is a probe/tuning knob (see ``VALID_EFFORT_LEVELS``). NOT
+    defaulted to anything by the harness — users opt in per-candidate
+    via the compare-config ``env`` block (``CCT_CLAUDE_EFFORT=max``).
+    """
+    val = os.environ.get(EFFORT_OPT_IN_ENV_VAR, "").strip()
+    if not val:
+        return None
+    if val not in VALID_EFFORT_LEVELS:
+        raise InvalidClaudeEffortError(
+            f"{EFFORT_OPT_IN_ENV_VAR}={val!r} is not a valid Claude Code "
+            f"effort level. Allowed values: {sorted(VALID_EFFORT_LEVELS)}"
+        )
+    return val
+
+
 def _build_metadata(
     *,
     model: str,
@@ -224,17 +330,25 @@ def _build_metadata(
     session_id: Optional[str],
     exit_code: Optional[int],
     stderr_tail: str,
+    effort: Optional[str] = None,
+    timeout_seconds: Optional[int] = None,
     note: Optional[str] = None,
 ) -> dict[str, Any]:
     """Assemble the ``backend_metadata`` dict with provider-routing record.
 
     Key invariant: ``ANTHROPIC_AUTH_TOKEN`` value is NEVER recorded —
     only its presence as a boolean. Same for any future API-key fields.
+
+    ``effort`` is included as ``None`` when unset, so a successful
+    run-record always carries the audit answer to "was --effort
+    passed and at what level?"
     """
     meta: dict[str, Any] = {
         "family": BACKEND_FAMILY,
         "model": model,
         "claude_code_invocation": "bare" if bare_mode else "launcher",
+        "effort": effort,  # None == --effort flag omitted
+        "timeout_seconds": timeout_seconds,  # effective subprocess timeout
         "provider_endpoint": provider_endpoint,  # full URL, or None
         "anthropic_auth_token_present": auth_token_present,  # bool only
         "session_id": session_id,

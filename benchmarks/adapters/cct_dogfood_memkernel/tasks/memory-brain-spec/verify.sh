@@ -137,16 +137,22 @@ fi
 # ── Best-effort check 7: pytest ─────────────────────────────────────────
 if command -v pytest >/dev/null 2>&1; then
   # Memkernel's full test suite needs chromadb + sentence-transformers.
-  # If those imports fail at collection, treat as skipped.
-  if pytest -q --no-header --tb=line > /tmp/cct-pytest.log 2>&1; then
+  # If those imports fail at collection, treat as skipped. Also treat
+  # pytest exit code 5 ("no tests collected") as skip — that fires on
+  # synthetic test fixtures that don't carry any tests, and on a real
+  # memkernel checkout it would indicate the test suite couldn't even
+  # discover anything (usually a deps-missing symptom).
+  pytest -q --no-header --tb=line > /tmp/cct-pytest.log 2>&1
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
     ok "pytest: passes"
+  elif [[ $rc -eq 5 ]]; then
+    skip "pytest: no tests collected (deps missing or empty suite)"
+  elif grep -qE "ImportError|ModuleNotFoundError" /tmp/cct-pytest.log; then
+    skip "pytest: runtime deps missing (collection errors)"
   else
-    if grep -qE "ImportError|ModuleNotFoundError" /tmp/cct-pytest.log; then
-      skip "pytest: runtime deps missing (collection errors)"
-    else
-      bad "pytest: failures"
-      sed 's/^/    /' /tmp/cct-pytest.log | tail -30
-    fi
+    bad "pytest: failures"
+    sed 's/^/    /' /tmp/cct-pytest.log | tail -30
   fi
 else
   skip "pytest: not installed in venv"

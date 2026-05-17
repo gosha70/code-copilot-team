@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -311,6 +312,119 @@ class TestIsolationFor(unittest.TestCase):
                 config.tier, ISOLATION_WORKTREE, f"{lang} should use plain worktree"
             )
             self.assertIsNone(config.install_command)
+
+
+class TestVenvPython(unittest.TestCase):
+    """``_maybe_use_venv_python``: regression coverage for the
+    relative-path-vs-subprocess-cwd interaction.
+
+    Background: ``verify`` calls subprocess with ``cwd=worktree``, so
+    the path passed as ``cmd[0]`` is resolved by the kernel relative
+    to ``worktree`` — not to the harness's process cwd. A relative
+    path like ``runs/.../worktree/.venv/bin/python`` becomes
+    ``runs/.../worktree/runs/.../worktree/.venv/bin/python`` at exec
+    time and fails ENOENT. ``Path.exists()`` doesn't catch this
+    because Python resolves it against the process cwd. The fix is
+    that ``_maybe_use_venv_python`` must return an absolute path.
+    """
+
+    def test_returned_path_is_absolute(self) -> None:
+        from benchmarks.adapters.aider_polyglot.adapter import (
+            _maybe_use_venv_python,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            # Build a fake worktree-relative-to-cwd: chdir to td's
+            # parent and use a relative Path. The .venv/bin/python
+            # must exist so the helper enters the substitution branch.
+            old_cwd = os.getcwd()
+            try:
+                parent = Path(td)
+                os.chdir(parent)
+                rel_worktree = Path("wt")
+                (rel_worktree / ".venv" / "bin").mkdir(parents=True)
+                fake_python = rel_worktree / ".venv" / "bin" / "python"
+                fake_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                fake_python.chmod(0o755)
+                cmd = _maybe_use_venv_python(
+                    "python", rel_worktree, ["python", "-m", "pytest", "-q"]
+                )
+                self.assertTrue(
+                    Path(cmd[0]).is_absolute(),
+                    f"_maybe_use_venv_python must return an absolute "
+                    f"path for cmd[0]; got: {cmd[0]!r}",
+                )
+                # The absolute path must actually point at the venv
+                # python (not at the cwd-relativized double-prefix).
+                self.assertEqual(
+                    Path(cmd[0]).resolve(),
+                    fake_python.resolve(),
+                )
+            finally:
+                os.chdir(old_cwd)
+
+    def test_returned_path_preserves_symlinks(self) -> None:
+        # Regression: `python3 -m venv` creates ``.venv/bin/python`` as
+        # a symlink chain pointing at the system interpreter. We MUST
+        # NOT follow the symlinks (no Path.resolve()), because the
+        # venv's sys.path machinery is triggered by the path the
+        # interpreter is invoked AS, not by where its binary actually
+        # lives. Following the symlink chain ends up running the
+        # system python, which has no access to the venv's
+        # site-packages → "ModuleNotFoundError: No module named pytest".
+        from benchmarks.adapters.aider_polyglot.adapter import (
+            _maybe_use_venv_python,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            venv_bin = worktree / ".venv" / "bin"
+            venv_bin.mkdir(parents=True)
+            # Real target (analog of /opt/homebrew/.../python3.13):
+            real_python = worktree / "real-python"
+            real_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            real_python.chmod(0o755)
+            # Symlink chain mirroring how `python3 -m venv` lays it out
+            # on macOS: .venv/bin/python -> python3 -> python3.13
+            # -> /opt/.../python3.13
+            (venv_bin / "python3.13").symlink_to(real_python.resolve())
+            (venv_bin / "python3").symlink_to("python3.13")
+            (venv_bin / "python").symlink_to("python3")
+
+            cmd = _maybe_use_venv_python(
+                "python", worktree, ["python", "-m", "pytest", "-q"]
+            )
+            self.assertEqual(
+                str(Path(cmd[0])),
+                str((worktree / ".venv" / "bin" / "python").absolute()),
+                "Returned path must point at the venv's symlink, not "
+                "the symlink target. Following the chain escapes the "
+                "venv and breaks site-packages.",
+            )
+            # Sanity: the returned path is absolute and lives under
+            # the venv (never under the symlink target).
+            self.assertTrue(Path(cmd[0]).is_absolute())
+            self.assertIn(".venv", str(cmd[0]))
+
+    def test_falls_back_to_plain_python_when_venv_missing(self) -> None:
+        from benchmarks.adapters.aider_polyglot.adapter import (
+            _maybe_use_venv_python,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)  # no .venv/ inside
+            cmd = _maybe_use_venv_python(
+                "python", worktree, ["python", "-m", "pytest", "-q"]
+            )
+            self.assertEqual(cmd, ["python", "-m", "pytest", "-q"])
+
+    def test_passes_through_non_python_languages(self) -> None:
+        from benchmarks.adapters.aider_polyglot.adapter import (
+            _maybe_use_venv_python,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            worktree = Path(td)
+            (worktree / ".venv" / "bin").mkdir(parents=True)
+            (worktree / ".venv" / "bin" / "python").write_text("", encoding="utf-8")
+            cmd = _maybe_use_venv_python("go", worktree, ["go", "test", "./..."])
+            self.assertEqual(cmd, ["go", "test", "./..."])
 
 
 class TestRegister(unittest.TestCase):

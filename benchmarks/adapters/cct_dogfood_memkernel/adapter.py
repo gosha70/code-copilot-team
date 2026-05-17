@@ -121,7 +121,10 @@ class CctDogfoodMemkernelAdapter:
         return IsolationConfig(
             tier=ISOLATION_WORKTREE_VENV,
             python="python3",
-            install_command="pip install --quiet ruff mypy pytest pytest-asyncio",
+            # Drop `--quiet` so transient-network warnings surface;
+            # verify_imports below catches "exit 0 but nothing installed".
+            install_command="pip install ruff mypy pytest pytest-asyncio",
+            verify_imports=("pytest", "ruff", "mypy"),
         )
 
     def prepare_task(self, task: TaskSpec, worktree: Path) -> None:

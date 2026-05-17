@@ -290,12 +290,20 @@ def _isolation_record(config: IsolationConfig) -> dict:
     Only emits the optional fields that are actually set, so
     ``worktree`` runs don't end up with null python/install_command
     keys cluttering the record.
+
+    ``verify_imports`` is included whenever it's non-empty — that
+    way a successful run-record carries proof of which modules were
+    contractually required to be importable, so any post-hoc audit
+    can tell whether the install_command was supposed to install
+    pytest (or ruff, etc.) independently of whether it succeeded.
     """
     out: dict = {"tier": config.tier}
     if config.python is not None:
         out["python"] = config.python
     if config.install_command is not None:
         out["install_command"] = config.install_command
+    if config.verify_imports:
+        out["verify_imports"] = list(config.verify_imports)
     if config.dockerfile is not None:
         out["dockerfile"] = str(config.dockerfile)
     if config.build_args:

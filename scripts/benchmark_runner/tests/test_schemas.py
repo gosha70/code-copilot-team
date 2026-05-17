@@ -149,6 +149,26 @@ class TestSchemaInvariants(unittest.TestCase):
             "all three isolation tiers must be in the schema from day one",
         )
 
+    def test_run_record_isolation_verify_imports_is_dotted_identifier_array(self) -> None:
+        # Locked-in invariant after the install-silently-failed
+        # discovery on 2026-05-15: ``verify_imports`` must be a
+        # string-array of dotted Python identifiers. The pattern
+        # mirrors the validator in isolation._verify_installed_imports,
+        # so schema rejection and runtime rejection stay in sync.
+        schema = _load_json(SCHEMA_DIR / "run-record.schema.json")
+        vi = schema["properties"]["isolation"]["properties"]["verify_imports"]
+        self.assertEqual(vi["type"], "array")
+        self.assertEqual(vi["items"]["type"], "string")
+        # Pattern must reject the canonical injection shape AND
+        # require a dotted identifier start.
+        import re
+        pat = re.compile(vi["items"]["pattern"])
+        self.assertIsNotNone(pat.match("pytest"))
+        self.assertIsNotNone(pat.match("numpy.linalg"))
+        self.assertIsNone(pat.match(""))
+        self.assertIsNone(pat.match("1abc"))
+        self.assertIsNone(pat.match("abc; __import__('os')"))
+
     def test_run_record_prompt_required(self) -> None:
         # spec.md § Success Criteria: 'Each run records: prompt, ...'
         # This is a Phase-0-locked invariant — the prompt block must be

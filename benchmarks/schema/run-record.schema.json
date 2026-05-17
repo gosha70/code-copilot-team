@@ -38,6 +38,14 @@
         },
         "python": { "type": "string" },
         "install_command": { "type": "string" },
+        "verify_imports": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+          },
+          "description": "Modules the harness post-install-verified as importable (e.g. ['pytest']). When non-empty, the run was guarded against silent pip-no-op installs."
+        },
         "dockerfile": { "type": "string" },
         "build_args": { "type": "object" }
       }

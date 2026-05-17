@@ -1,21 +1,39 @@
 #!/usr/bin/env bash
-# scripts/run-compare-sonnet-vs-qwen.sh
+# scripts/run-compare-anthropic-vs-ollama.sh
 #
-# Automated multi-LLM benchmark: Claude Code → sonnet (Anthropic API)
-# vs. Claude Code → qwen3.6:27b (local Ollama), on Aider Polyglot.
+# Automated 2-LLM benchmark: Claude Code → <anthropic-model> (Anthropic API)
+# vs. Claude Code → <ollama-model> (local Ollama), on Aider Polyglot.
+#
+# Usage:
+#   ./scripts/run-compare-anthropic-vs-ollama.sh [ANTHROPIC_MODEL] [OLLAMA_MODEL]
+#
+# Examples:
+#   ./scripts/run-compare-anthropic-vs-ollama.sh
+#       # defaults: sonnet vs qwen3.6:27b
+#   ./scripts/run-compare-anthropic-vs-ollama.sh opus qwen3.6:27b
+#   ./scripts/run-compare-anthropic-vs-ollama.sh sonnet llama3.1:70b
+#   ./scripts/run-compare-anthropic-vs-ollama.sh haiku qwen3-coder:30b
 #
 # Stages (gated; press Enter to continue, Ctrl-C to abort):
-#   1. Preflight checks — Ollama running + version + model + endpoint
-#      shape + claude CLI + Polyglot dataset cached + harness sanity.
-#   2. Harness smoke — one Polyglot Python task against qwen3.6:27b
-#      only (~5-10 min, no Anthropic spend). Confirms the env-routing
+#   1. Preflight checks — Ollama running + version + Ollama model
+#      pulled + endpoint shape + claude CLI + Polyglot dataset cached
+#      + harness sanity.
+#   2. Harness smoke — one Polyglot task against the Ollama model
+#      only (~5-10 min, no Anthropic spend). Confirms env-routing
 #      reaches Ollama end-to-end through the harness.
-#   3. Full compare — sonnet vs qwen on configured tasks at --runs N
-#      (~15-30 min default; sonnet runs DO bill the Anthropic account).
+#   3. Full compare — Anthropic vs Ollama on configured tasks at
+#      --runs N (~15-30 min default; the Anthropic-side runs DO bill
+#      the Anthropic account).
 #
-# Knobs (env vars, all optional):
-#   QWEN_MODEL       default: qwen3.6:27b
-#   COMPARE_TASKS    default: python/leap   (comma-separated for multi-task)
+# Positional args:
+#   $1  Anthropic model id      default: sonnet
+#   $2  Ollama model tag         default: qwen3.6:27b
+#
+# Env-var knobs (all optional, orthogonal to positional args):
+#   COMPARE_TASKS    default: python/bowling  (comma-separated for multi-task).
+#                    Must be task ids the Polyglot adapter actually exposes —
+#                    inspect with: ./scripts/benchmark list --benchmark aider-polyglot
+#   SMOKE_TASK       default: first task in COMPARE_TASKS.
 #   COMPARE_RUNS     default: 3
 #   SKIP_SMOKE=1     jump straight from preflight to compare.
 #   SKIP_PREFLIGHT=1 dangerous — only set after a prior run already passed.
@@ -26,16 +44,28 @@
 #   1  preflight failed (state of the local environment).
 #   2  smoke failed (harness or Ollama routing).
 #   3  compare failed (one or more candidate runs errored).
-#
-# To compare other models, copy this file and edit the two `cat
-# <<EOF` blocks (smoke env vars + compare-config JSON). The
-# preflight/smoke skeleton is reusable as-is.
 
 set -euo pipefail
 
-# --- Defaults ---
-QWEN_MODEL="${QWEN_MODEL:-qwen3.6:27b}"
-COMPARE_TASKS="${COMPARE_TASKS:-python/leap}"
+# --- Help ---
+case "${1:-}" in
+    -h|--help)
+        sed -n '2,46p' "$0" | sed -E 's/^# ?//'
+        exit 0
+        ;;
+esac
+
+# --- Positional args + env-var defaults ---
+ANTHROPIC_MODEL="${1:-sonnet}"
+OLLAMA_MODEL="${2:-qwen3.6:27b}"
+
+# python/bowling is in the pinned Polyglot snapshot (verified
+# 2026-05-15). The dogfood-subset.txt's `python/leap` entry is
+# stale — that exercise is NOT in the pinned tree; tracked as a
+# separate followup. Verify any task id with:
+#   ./scripts/benchmark list --benchmark aider-polyglot
+COMPARE_TASKS="${COMPARE_TASKS:-python/bowling}"
+SMOKE_TASK="${SMOKE_TASK:-${COMPARE_TASKS%%,*}}"
 COMPARE_RUNS="${COMPARE_RUNS:-3}"
 SKIP_SMOKE="${SKIP_SMOKE:-0}"
 SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-0}"
@@ -43,6 +73,16 @@ AUTO_CONFIRM="${AUTO_CONFIRM:-0}"
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
+
+note_intro() {
+    printf '\n=== Anthropic vs Ollama compare ===\n'
+    printf '  Anthropic model: %s\n' "$ANTHROPIC_MODEL"
+    printf '  Ollama model:    %s\n' "$OLLAMA_MODEL"
+    printf '  Tasks:           %s\n' "$COMPARE_TASKS"
+    printf '  Runs/candidate:  %s\n' "$COMPARE_RUNS"
+    printf '  Smoke task:      %s\n' "$SMOKE_TASK"
+    printf '\n'
+}
 
 # --- Output helpers ---
 ts()   { date +%H:%M:%S; }
@@ -56,6 +96,9 @@ gate() {
     printf '    Press Enter to continue, Ctrl-C to abort: '
     read -r _ || true
 }
+
+# --- Print parsed config ---
+note_intro
 
 # --- Stage 1: Preflight ---
 if [[ "$SKIP_PREFLIGHT" == "1" ]]; then
@@ -84,19 +127,25 @@ else
     ok "Ollama version supports Anthropic /v1/messages"
 
     # 1c. Model pulled?
-    if ! ollama list | awk 'NR>1 {print $1}' | grep -qxF "$QWEN_MODEL"; then
-        err "Ollama model '$QWEN_MODEL' not pulled. Run: ollama pull $QWEN_MODEL"
+    if ! ollama list | awk 'NR>1 {print $1}' | grep -qxF "$OLLAMA_MODEL"; then
+        err "Ollama model '$OLLAMA_MODEL' not pulled. Run: ollama pull $OLLAMA_MODEL"
         exit 1
     fi
-    ok "Model $QWEN_MODEL is pulled"
+    ok "Model $OLLAMA_MODEL is pulled"
 
     # 1d. Endpoint serves the model with Anthropic shape?
+    # --max-time 300: a cold-load of a 17–24 GB model from disk to GPU
+    # can take 30–90s on Apple Silicon; longer on slower storage. 60s
+    # was too aggressive — bumped 2026-05-15 after a real run hit it.
+    # If the model has been recently unloaded (`ollama ps` UNTIL ticked
+    # down to "Stopping..."), the first /v1/messages call has to pay
+    # the load latency.
     TMP_RESP=$(mktemp)
-    HTTP=$(curl -sS -o "$TMP_RESP" -w '%{http_code}' --max-time 60 -X POST \
+    HTTP=$(curl -sS -o "$TMP_RESP" -w '%{http_code}' --max-time 300 -X POST \
         http://localhost:11434/v1/messages \
         -H "Content-Type: application/json" \
         -H "anthropic-version: 2023-06-01" \
-        -d "{\"model\":\"$QWEN_MODEL\",\"max_tokens\":50,
+        -d "{\"model\":\"$OLLAMA_MODEL\",\"max_tokens\":50,
              \"messages\":[{\"role\":\"user\",\"content\":\"Reply: OK\"}]}" || echo "000")
     if [[ "$HTTP" != "200" ]]; then
         err "Ollama /v1/messages returned HTTP $HTTP. Response:"
@@ -111,7 +160,7 @@ else
         exit 1
     fi
     rm -f "$TMP_RESP"
-    ok "Ollama serves Anthropic-shaped responses for $QWEN_MODEL"
+    ok "Ollama serves Anthropic-shaped responses for $OLLAMA_MODEL"
 
     # 1e. claude CLI present?
     if ! command -v claude > /dev/null; then
@@ -147,17 +196,25 @@ fi
 if [[ "$SKIP_SMOKE" == "1" ]]; then
     note "Skipping smoke (SKIP_SMOKE=1)"
 else
-    gate "Stage 2/3 — smoke: 1 Polyglot Python task against $QWEN_MODEL only (~5-10 min, no Anthropic spend)"
-    note "Running smoke…"
+    gate "Stage 2/3 — smoke: Polyglot task '$SMOKE_TASK' against $OLLAMA_MODEL only (~5-10 min, no Anthropic spend)"
+    note "Running smoke against task: $SMOKE_TASK"
 
     SMOKE_OUTPUT=$(mktemp)
+    # Pass the same per-candidate timeout used in stage 3's compare
+    # config (default 1800s; OLLAMA_TIMEOUT override propagates here too).
+    # Without this, the smoke uses the harness default 600s — which is
+    # too tight for slow local models like qwen3.6:27b and produces
+    # spurious "smoke failed" signals before the real compare can start.
+    # Bug discovered 2026-05-16 after the OLLAMA_TIMEOUT knob was added
+    # to the compare-config JSON but not surfaced to the smoke stage.
     if ANTHROPIC_BASE_URL=http://localhost:11434 \
        ANTHROPIC_AUTH_TOKEN=ollama \
-       ANTHROPIC_DEFAULT_SONNET_MODEL="$QWEN_MODEL" \
-       ANTHROPIC_DEFAULT_HAIKU_MODEL="$QWEN_MODEL" \
+       ANTHROPIC_DEFAULT_SONNET_MODEL="$OLLAMA_MODEL" \
+       ANTHROPIC_DEFAULT_HAIKU_MODEL="$OLLAMA_MODEL" \
+       CCT_CLAUDE_TIMEOUT_SECONDS="${OLLAMA_TIMEOUT:-1800}" \
        ./scripts/benchmark run --benchmark aider-polyglot \
-           --backend claude-code --model "$QWEN_MODEL" \
-           --task python/leap --runs 1 \
+           --backend claude-code --model "$OLLAMA_MODEL" \
+           --task "$SMOKE_TASK" --runs 1 \
            | tee "$SMOKE_OUTPUT"; then
         SMOKE_RUN_DIR=$(grep -oE '"run_dir":[[:space:]]*"[^"]+"' "$SMOKE_OUTPUT" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
         ok "Smoke completed. Run-dir: $SMOKE_RUN_DIR"
@@ -183,11 +240,11 @@ else
 fi
 
 # --- Stage 3: Full compare ---
-gate "Stage 3/3 — full compare: sonnet vs $QWEN_MODEL on '$COMPARE_TASKS' at --runs $COMPARE_RUNS (~15-30 min; sonnet WILL bill Anthropic)"
+gate "Stage 3/3 — full compare: $ANTHROPIC_MODEL (Anthropic) vs $OLLAMA_MODEL (Ollama) on '$COMPARE_TASKS' at --runs $COMPARE_RUNS (~15-30 min; the Anthropic side WILL bill your account)"
 
 # Render the compare config (comma-separated tasks → JSON array).
 TASKS_JSON=$(printf '"%s"' "$COMPARE_TASKS" | sed 's/,/","/g')
-COMPARE_CONFIG=$(mktemp -t compare-sonnet-vs-qwen.XXXXXX.json)
+COMPARE_CONFIG=$(mktemp -t compare-anthropic-vs-ollama.XXXXXX.json)
 cat > "$COMPARE_CONFIG" <<EOF
 {
   "benchmark": "aider-polyglot",
@@ -195,19 +252,20 @@ cat > "$COMPARE_CONFIG" <<EOF
   "task": [$TASKS_JSON],
   "candidates": [
     {
-      "name": "sonnet-anthropic",
+      "name": "anthropic-$ANTHROPIC_MODEL",
       "backend": "claude-code",
-      "model": "sonnet"
+      "model": "$ANTHROPIC_MODEL"
     },
     {
-      "name": "qwen3.6-ollama",
+      "name": "ollama-$OLLAMA_MODEL",
       "backend": "claude-code",
-      "model": "$QWEN_MODEL",
+      "model": "$OLLAMA_MODEL",
       "env": {
         "ANTHROPIC_BASE_URL": "http://localhost:11434",
         "ANTHROPIC_AUTH_TOKEN": "ollama",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "$QWEN_MODEL",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "$QWEN_MODEL"
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "$OLLAMA_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "$OLLAMA_MODEL",
+        "CCT_CLAUDE_TIMEOUT_SECONDS": "${OLLAMA_TIMEOUT:-1800}"
       }
     }
   ]

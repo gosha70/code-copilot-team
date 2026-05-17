@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -93,12 +94,26 @@ def provision_worktree(
 
 
 def install_dependencies(config: IsolationConfig, worktree: Path) -> None:
-    """Run ``config.install_command`` inside the worktree's venv.
+    """Run ``config.install_command`` inside the worktree's venv, then
+    verify the declared ``verify_imports`` are actually importable.
 
     Called by run.py AFTER ``adapter.prepare_task`` so that
     project-aware install commands (e.g. ``pip install -e .[dev]``)
     can see the task's pyproject.toml/setup.py. No-op when the tier
     is plain ``worktree`` or there is no install_command.
+
+    Post-install import check: ``pip install`` can exit 0 without
+    actually installing the requested packages — most commonly under
+    transient network failures where pip retries internally, prints
+    a warning to stderr (which ``-q`` suppresses), and ultimately
+    returns success without having downloaded anything. The harness
+    has no way to detect this from the exit code alone. The
+    ``verify_imports`` field on ``IsolationConfig`` lets the adapter
+    declare which modules MUST be importable post-install; we run
+    ``<venv>/bin/python -c "import <m>"`` for each and raise
+    ``IsolationProvisionError`` if any fails. This converts a silent
+    "install no-op'd but exited 0" into a loud, debuggable failure.
+    Discovered on 2026-05-15 when 5 of 6 Polyglot attempts hit this.
     """
     if config.tier != ISOLATION_WORKTREE_VENV or not config.install_command:
         return
@@ -108,6 +123,71 @@ def install_dependencies(config: IsolationConfig, worktree: Path) -> None:
             f"install_dependencies called before venv creation; expected {venv_dir} to exist"
         )
     _run_install_command(worktree, venv_dir, config.install_command)
+    _verify_installed_imports(venv_dir, config.verify_imports, config.install_command)
+
+
+# Strict dotted-identifier match: same shape as Python's own module
+# resolver accepts. Validating before invoking python prevents any
+# value supplied to verify_imports from becoming Python source —
+# even if the adapter is malicious, dataset-derived, or simply
+# malformed. Defence-in-depth alongside the data-not-code import
+# invocation below.
+_MODULE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+
+
+def _verify_installed_imports(
+    venv_dir: Path, verify_imports: tuple[str, ...], install_command: str
+) -> None:
+    """Confirm every name in ``verify_imports`` is importable in the venv.
+
+    Failure raises ``IsolationProvisionError`` with the offending
+    module name, the install_command that was supposed to install it,
+    and a hint that pip likely exited 0 without doing the work.
+
+    Security: ``verify_imports`` entries are passed to the subprocess
+    Python as ``sys.argv[1]`` — *data, not code* — and resolved via
+    ``importlib.import_module``. Each entry is also validated as a
+    dotted Python identifier before invocation, so even adapters
+    that surface dataset-derived strings can't smuggle code into the
+    subprocess via this surface.
+    """
+    if not verify_imports:
+        return
+    # Absolute path: ``subprocess.run`` resolves the binary relative
+    # to its own cwd if given a bare or relative ``argv[0]``; we
+    # don't pass ``cwd=`` here so it inherits the harness's cwd,
+    # but absolutizing keeps the contract stable regardless of how
+    # this helper gets called.
+    python = (venv_dir / "bin" / "python").absolute()
+    if not python.exists():
+        raise IsolationProvisionError(
+            f"verify_imports check requires {python} to exist; venv creation may have been incomplete"
+        )
+    for module in verify_imports:
+        if not isinstance(module, str) or not _MODULE_NAME_RE.match(module):
+            raise IsolationProvisionError(
+                f"verify_imports entry {module!r} is not a valid Python module name "
+                f"(dotted identifier required, e.g. 'pytest', 'numpy.linalg'). "
+                f"Refusing to invoke subprocess with unvalidated input."
+            )
+        proc = subprocess.run(
+            [
+                str(python),
+                "-c",
+                "import importlib, sys; importlib.import_module(sys.argv[1])",
+                module,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise IsolationProvisionError(
+                f"install_command exited 0 but {module!r} is not importable. "
+                f"Most likely pip silently no-op'd (transient network failure + "
+                f"-q flag hides the warning). Install command was: {install_command!r}. "
+                f"importlib.import_module({module!r}) stderr: {proc.stderr.strip()!r}"
+            )
 
 
 # ── Internals ──────────────────────────────────────────────────────────
@@ -148,14 +228,33 @@ def _run_install_command(
     # Run with the venv's bin directory at the front of PATH so
     # ``pip``, ``pytest``, etc., resolve to the venv's copies. We
     # don't activate the venv (no shell needed); just prepend.
-    env_path = f"{venv_dir / 'bin'}:" + os.environ.get("PATH", "")
+    #
+    # IMPORTANT: ``bash -c``, NOT ``bash -lc``. A login shell on macOS
+    # triggers ``/etc/profile`` → ``/usr/libexec/path_helper`` which
+    # rebuilds PATH from ``/etc/paths{,.d/*}`` and clobbers the
+    # venv-prepended PATH we just constructed.
+    #
+    # CRITICAL: the venv bin entry MUST be absolute. ``subprocess.run``
+    # is called with ``cwd=str(worktree)``, and the kernel's PATH
+    # lookup re-relativizes any relative entry against the subprocess
+    # cwd. So a relative ``runs/.../worktree/.venv/bin`` ends up
+    # searched as ``<worktree>/runs/.../worktree/.venv/bin/pip`` —
+    # doesn't exist — falls through to the next PATH entry, which on
+    # a Mac is typically the system Python's pip (or worse, a broken
+    # `/usr/local/bin/pip` shim). Symptom in the field: pip exits 0
+    # with "Requirement already satisfied" pulling from
+    # ``~/Library/Python/3.<x>/lib/python/site-packages``, but the
+    # venv keeps only ``pip + pip.dist-info``. Regression: see
+    # ``test_isolation.py::test_install_command_uses_venv_pip_under_relative_worktree``.
+    venv_bin_abs = (venv_dir / "bin").absolute()
+    env_path = f"{venv_bin_abs}:" + os.environ.get("PATH", "")
     proc = subprocess.run(
-        ["bash", "-lc", install_command],
-        cwd=str(worktree),
+        ["bash", "-c", install_command],
+        cwd=str(worktree.absolute()),
         capture_output=True,
         text=True,
         check=False,
-        env={**os.environ, "PATH": env_path, "VIRTUAL_ENV": str(venv_dir)},
+        env={**os.environ, "PATH": env_path, "VIRTUAL_ENV": str(venv_dir.absolute())},
     )
     if proc.returncode != 0:
         raise IsolationProvisionError(

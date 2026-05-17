@@ -75,6 +75,15 @@ class IsolationConfig:
     tier: "IsolationTier"  # forward-ref to keep the alias close to its consumers
     python: Optional[str] = None
     install_command: Optional[str] = None
+    # Packages that MUST be importable after ``install_command`` runs.
+    # The harness invokes ``<venv>/bin/python -c "import <name>"`` for
+    # each entry; failure raises ``IsolationProvisionError``. This
+    # closes the "pip silently no-op'd but exited 0" failure mode
+    # discovered on 2026-05-15: a network hiccup can make pip return
+    # success without actually installing anything, and `pip install
+    # -q` suppresses the warning. The import check is the ground
+    # truth — if the module is importable, the install actually worked.
+    verify_imports: tuple[str, ...] = ()
     dockerfile: Optional[Path] = None
     build_args: Mapping[str, str] = field(default_factory=dict)
 
