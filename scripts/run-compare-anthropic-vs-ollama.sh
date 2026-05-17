@@ -14,10 +14,20 @@
 #   ./scripts/run-compare-anthropic-vs-ollama.sh sonnet llama3.1:70b
 #   ./scripts/run-compare-anthropic-vs-ollama.sh haiku qwen3-coder:30b
 #
+# ENVIRONMENT (no setup step, no flags): every run creates a throwaway
+# Python venv and DELETES it on exit — even on failure or Ctrl-C —
+# isolating python3 from your system/Homebrew Python. The Ollama path
+# needs no third-party libs (the harness is pure stdlib), so nothing is
+# pip-installed; the venv is purely isolation. The venv plus every
+# scratch temp file (preflight dumps, smoke/compare stdout captures)
+# are removed on exit. Two things are deliberately KEPT: the benchmark
+# results under runs/, and the compare-config tmp file — its path is
+# printed at the end so the compare is re-runnable.
+#
 # Stages (gated; press Enter to continue, Ctrl-C to abort):
-#   1. Preflight checks — Ollama running + version + Ollama model
-#      pulled + endpoint shape + claude CLI + Polyglot dataset cached
-#      + harness sanity.
+#   1. Preflight checks — ephemeral venv provisioned + Ollama running
+#      + version + Ollama model pulled + endpoint shape + claude CLI
+#      + Polyglot dataset cached + harness sanity.
 #   2. Harness smoke — one Polyglot task against the Ollama model
 #      only (~5-10 min, no Anthropic spend). Confirms env-routing
 #      reaches Ollama end-to-end through the harness.
@@ -50,7 +60,7 @@ set -euo pipefail
 # --- Help ---
 case "${1:-}" in
     -h|--help)
-        sed -n '2,46p' "$0" | sed -E 's/^# ?//'
+        sed -n '2,56p' "$0" | sed -E 's/^# ?//'
         exit 0
         ;;
 esac
@@ -97,8 +107,74 @@ gate() {
     read -r _ || true
 }
 
+# --- Ephemeral virtualenv (auto-provisioned, auto-removed) ---
+# A throwaway venv that isolates python3 from the user's Python
+# (Homebrew is PEP-668 externally-managed). rm -rf'd on exit by the
+# trap below. No flag, no manual setup. The Ollama path has no
+# third-party deps, so no pip install runs.
+VENV_DIR=""
+cleanup_venv() {
+    [[ -n "$VENV_DIR" && -d "$VENV_DIR" ]] && rm -rf "$VENV_DIR" || true
+}
+
+# Per-run unique preflight scratch files (mktemp ⇒ no clobber across
+# concurrent runs); removed by the trap.
+OLLAMA_VERSION_JSON="$(mktemp -t cct-ollama-version.XXXXXX.json)"
+BENCH_LIST_JSON="$(mktemp -t cct-bench-list.XXXXXX.json)"
+# Per-stage scratch captures, assigned later. Declared empty here so
+# cleanup() can reference them under `set -u` even on an early exit,
+# and so a signal abort mid-stage does not leak them. COMPARE_CONFIG is
+# intentionally NOT tracked — it is kept and printed for re-runs.
+TMP_RESP=""
+SMOKE_OUTPUT=""
+COMPARE_OUTPUT=""
+
+# Idempotent (every step guarded) — safe to run from both the signal
+# trap and the EXIT trap.
+cleanup() {
+    rm -f "$OLLAMA_VERSION_JSON" "$BENCH_LIST_JSON" \
+          "$TMP_RESP" "$SMOKE_OUTPUT" "$COMPARE_OUTPUT" 2>/dev/null || true
+    cleanup_venv
+}
+# A bare `trap … EXIT` does NOT run on SIGINT/SIGTERM/SIGHUP in bash —
+# only on normal exit or `exit N`. Trap the signals explicitly so an
+# aborted run (Ctrl-C at a gate, kill) still tears the env down. cleanup
+# is idempotent, so the signal+EXIT double-fire is harmless. SIGKILL
+# alone cannot be trapped — the only uncleaned path.
+on_signal() { cleanup; exit 130; }
+trap cleanup EXIT
+trap on_signal INT TERM HUP
+
+setup_venv() {
+    # Args: pip requirement specs (none for the Ollama path).
+    local pip_pkgs=("$@")
+    VENV_DIR="$(mktemp -d -t cct-venv-XXXXXX)"
+    note "Creating ephemeral venv at $VENV_DIR (auto-removed on exit)"
+    if ! python3 -m venv "$VENV_DIR"; then
+        err "python3 -m venv failed — cannot provision the test env"
+        exit 1
+    fi
+    export PATH="$VENV_DIR/bin:$PATH"
+    export VIRTUAL_ENV="$VENV_DIR"
+    # No PyPI contact unless there is actually something to install —
+    # the Ollama path is pure stdlib and must not gain a network
+    # failure mode ahead of its own preflight.
+    if (( ${#pip_pkgs[@]} > 0 )); then
+        "$VENV_DIR/bin/python" -m pip install --quiet --upgrade pip > /dev/null
+        note "Installing into venv: ${pip_pkgs[*]} (fresh each run)"
+        if ! "$VENV_DIR/bin/python" -m pip install --quiet "${pip_pkgs[@]}"; then
+            err "pip install failed in venv: ${pip_pkgs[*]}"
+            exit 1
+        fi
+    fi
+    ok "Ephemeral venv ready"
+}
+
 # --- Print parsed config ---
 note_intro
+
+# --- Provision the ephemeral test env (needed by all stages) ---
+setup_venv
 
 # --- Stage 1: Preflight ---
 if [[ "$SKIP_PREFLIGHT" == "1" ]]; then
@@ -107,11 +183,11 @@ else
     note "Stage 1/3 — preflight checks"
 
     # 1a. Ollama reachable?
-    if ! curl -sS --max-time 3 http://localhost:11434/api/version > /tmp/cct-ollama-version.json; then
+    if ! curl -sS --max-time 3 http://localhost:11434/api/version > "$OLLAMA_VERSION_JSON"; then
         err "Ollama not reachable at http://localhost:11434. Start it: ollama serve"
         exit 1
     fi
-    OLLAMA_VERSION=$(grep -oE '"version":"[^"]+"' /tmp/cct-ollama-version.json | cut -d'"' -f4)
+    OLLAMA_VERSION=$(grep -oE '"version":"[^"]+"' "$OLLAMA_VERSION_JSON" | cut -d'"' -f4)
     ok "Ollama running, version $OLLAMA_VERSION"
 
     # 1b. Ollama version >= 0.14.0?
@@ -177,15 +253,15 @@ else
     ok "Polyglot dataset cached"
 
     # 1g. Harness wiring sane?
-    if ! ./scripts/benchmark list > /tmp/cct-bench-list.json; then
+    if ! ./scripts/benchmark list > "$BENCH_LIST_JSON"; then
         err "./scripts/benchmark list failed; harness setup is broken"
         exit 1
     fi
-    if ! grep -q '"aider-polyglot"' /tmp/cct-bench-list.json; then
+    if ! grep -q '"aider-polyglot"' "$BENCH_LIST_JSON"; then
         err "aider-polyglot adapter missing from registry"
         exit 1
     fi
-    if ! grep -q '"claude-code"' /tmp/cct-bench-list.json; then
+    if ! grep -q '"claude-code"' "$BENCH_LIST_JSON"; then
         err "claude-code backend missing from registry"
         exit 1
     fi
