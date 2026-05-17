@@ -30,27 +30,39 @@ pure gateway env-vars (`ANTHROPIC_BASE_URL` etc.). The
 
 Exact vLLM launch on the DGX Spark that produced a clean run:
 
+Copy-paste safe — no inline comments on the continued lines (a `#`
+after a `\` cancels the line continuation and truncates the command):
+
 ```bash
 pkill -f "vllm.entrypoints.openai.api_server" || true
 pkill -f "EngineCore" || true
 sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null
 source ~/dgx-spark-vllm/vllm_env/bin/activate
-export VLLM_USE_FLASHINFER_MOE_FP4=0      # blocker 1 mitigation
-export MAX_JOBS=2                         # blocker 1 mitigation
+export VLLM_USE_FLASHINFER_MOE_FP4=0
+export MAX_JOBS=2
 
 python -m vllm.entrypoints.openai.api_server \
   --model ~/dgx-spark-vllm/models/Qwen3-Coder-Next-NVFP4 \
   --served-model-name RedHatAI/Qwen3-Coder-Next-NVFP4 \
   --enforce-eager \
-  --max-model-len 131072 \                # blocker 3 mitigation
+  --max-model-len 131072 \
   --max-num-seqs 1 \
   --max-num-batched-tokens 8192 \
   --gpu-memory-utilization 0.72 \
-  --enable-auto-tool-choice \             # blocker 4 (tool calls) mitigation
-  --tool-call-parser qwen3_coder \        # blocker 4 mitigation
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder \
   --trust-remote-code \
   --host 0.0.0.0 --port 8000
 ```
+
+Which flag clears which blocker:
+
+- `VLLM_USE_FLASHINFER_MOE_FP4=0` + `MAX_JOBS=2` → blocker 1 (FP4 MoE
+  JIT compile OOM).
+- `--max-model-len 131072` → blocker 3 (envelope + output context).
+- `--enable-auto-tool-choice` + `--tool-call-parser qwen3_coder` →
+  blocker 4 (tool-call parsing). **Do not** add `--reasoning-parser
+  qwen3_coder` — wrong for the Coder variant (blocker 2).
 
 Client side (handled automatically by the script — no manual step):
 LiteLLM config uses the **`hosted_vllm/`** provider prefix, not
