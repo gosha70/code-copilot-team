@@ -295,7 +295,11 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
         # like it ran with the requested level but actually didn't.
         from benchmark_runner.contracts import RunContext
 
-        backend = ClaudeCodeBackend(model="sonnet", cli_executable="claude")
+        # Point at the resolvable fake CLI (not the literal "claude"): the
+        # CLI-presence guard runs before effort validation, so a bare
+        # "claude" makes this pass only where Claude Code is installed —
+        # green locally, ERROR in CI.
+        backend = ClaudeCodeBackend(model="sonnet", cli_executable=str(self._fake))
         with tempfile.TemporaryDirectory() as td:
             wt = Path(td) / "attempt-01" / "worktree"
             wt.mkdir(parents=True)
@@ -337,7 +341,9 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
         # "thirty-minutes" or any non-int value must fail loud.
         from benchmark_runner.contracts import RunContext
 
-        backend = ClaudeCodeBackend(model="sonnet", cli_executable="claude")
+        # Resolvable fake CLI so the CLI-presence guard passes and
+        # timeout validation is reached regardless of host PATH.
+        backend = ClaudeCodeBackend(model="sonnet", cli_executable=str(self._fake))
         with tempfile.TemporaryDirectory() as td:
             wt = Path(td) / "attempt-01" / "worktree"
             wt.mkdir(parents=True)
@@ -356,7 +362,9 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
 
         for bad_val in ("0", "-1", "-3600"):
             with self.subTest(value=bad_val):
-                backend = ClaudeCodeBackend(model="sonnet", cli_executable="claude")
+                # Resolvable fake CLI so the CLI-presence guard passes
+                # and timeout validation is reached regardless of PATH.
+                backend = ClaudeCodeBackend(model="sonnet", cli_executable=str(self._fake))
                 with tempfile.TemporaryDirectory() as td:
                     wt = Path(td) / "attempt-01" / "worktree"
                     wt.mkdir(parents=True)
