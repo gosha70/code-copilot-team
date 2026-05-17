@@ -34,16 +34,18 @@
 #
 # CAVEATS — read before trusting a green run:
 #
-#   1. TOOL CALLS. The user's vLLM is (by default) started WITHOUT
-#      `--enable-auto-tool-choice --tool-call-parser qwen3_coder
-#      --reasoning-parser qwen3_coder`. Without these, OpenAI-shaped
-#      tool calls are NOT parsed into structured tool_calls[]: claude-
-#      code sends tools=[…], vLLM ignores them, the model answers in
-#      plain prose, and claude-code's tool-use loop cannot action the
-#      reply — a SILENT capability loss on Polyglot tasks. RECOMMENDED:
-#      restart vLLM with those three flags before any compare run. This
-#      script only WARNS (does not abort) — raw-completion-only
-#      benchmarks don't need tool parsing.
+#   1. TOOL CALLS. The vLLM must be started WITH
+#      `--enable-auto-tool-choice --tool-call-parser qwen3_coder`.
+#      Without them, OpenAI-shaped tool calls are NOT parsed into
+#      structured tool_calls[]: claude-code sends tools=[…], vLLM
+#      ignores them, the model answers in plain prose, and claude-code's
+#      tool-use loop cannot action the reply — a SILENT capability loss
+#      on Polyglot tasks. RECOMMENDED: restart vLLM with those two flags
+#      before any compare run. Do NOT add `--reasoning-parser
+#      qwen3_coder` for the Qwen3-Coder *Coder* variant — it is wrong
+#      there and recreates a separate failure. This script only WARNS
+#      (does not abort) — raw-completion-only benchmarks don't need
+#      tool parsing.
 #
 #   2. CONTEXT LENGTH. claude-code requests max_output_tokens=32000 per
 #      call; vLLM 400s the request outright when that exceeds
@@ -104,7 +106,7 @@ set -euo pipefail
 # --- Help ---
 case "${1:-}" in
     -h|--help)
-        sed -n '2,100p' "$0" | sed -E 's/^# ?//'
+        sed -n '2,102p' "$0" | sed -E 's/^# ?//'
         exit 0
         ;;
 esac
@@ -347,8 +349,19 @@ else
     #     request is therefore a deterministic 0% for the vLLM candidate
     #     — hard-fail here rather than burn a multi-minute run to find a
     #     400 in every transcript.
-    CTX_LEN=$(grep -oE '"max_model_len":[[:space:]]*[0-9]+' "$VLLM_MODELS_JSON" \
-        | head -1 | grep -oE '[0-9]+$' || true)
+    # Select the entry whose id == $VLLM_MODEL (a multi-model vLLM
+    # server lists several; the first max_model_len may be a different
+    # model's). stdlib JSON only — python3 is on PATH from the venv.
+    CTX_LEN=$(python3 -c '
+import json, sys
+try:
+    data = json.load(open(sys.argv[1])).get("data", [])
+    hit = [m for m in data if m.get("id") == sys.argv[2]]
+    v = hit[0].get("max_model_len") if hit else None
+    print(v if v is not None else "")
+except Exception:
+    print("")
+' "$VLLM_MODELS_JSON" "$VLLM_MODEL" 2>/dev/null || true)
     if [[ -z "$CTX_LEN" ]]; then
         warn "Could not read max_model_len from /v1/models — cannot verify the context"
         warn "  budget. If vLLM is on the default --max-model-len 8192, EVERY claude-code"
@@ -360,8 +373,9 @@ else
         err "  400 (\"max_output_tokens=$CLAUDE_CODE_MAX_OUTPUT_TOKENS cannot be greater"
         err "  than max_model_len=$CTX_LEN\") before generating a token — the vLLM"
         err "  candidate would be a deterministic 0%. Restart vLLM with"
-        err "  --max-model-len $VLLM_CTX_RECOMMENDED plus the tool/reasoning parser"
-        err "  flags, then re-run. Aborting before the run is spent."
+        err "  --max-model-len $VLLM_CTX_RECOMMENDED --enable-auto-tool-choice"
+        err "  --tool-call-parser qwen3_coder, then re-run. Aborting before"
+        err "  the run is spent."
         exit 1
     elif (( CTX_LEN < VLLM_CTX_RECOMMENDED )); then
         warn "vLLM max_model_len=$CTX_LEN accepts requests but leaves little room for a"
@@ -376,10 +390,11 @@ else
     #     whether vLLM was started with --enable-auto-tool-choice from
     #     /v1/models, so this is an unconditional advisory, not a gate.
     warn "Tool-call parsing is NOT verifiable from /v1/models. If this vLLM was started"
-    warn "  WITHOUT --enable-auto-tool-choice --tool-call-parser qwen3_coder"
-    warn "  --reasoning-parser qwen3_coder, claude-code's tool-use loop will silently"
-    warn "  fail on Polyglot tasks. Restart vLLM with those three flags unless this is a"
-    warn "  raw-completion-only benchmark. (Proceeding — advisory only.)"
+    warn "  WITHOUT --enable-auto-tool-choice --tool-call-parser qwen3_coder,"
+    warn "  claude-code's tool-use loop will silently fail on Polyglot tasks. Restart"
+    warn "  vLLM with those two flags unless this is a raw-completion-only benchmark."
+    warn "  Do NOT add --reasoning-parser qwen3_coder for the Coder variant — wrong"
+    warn "  there. (Proceeding — advisory only.)"
 
     # 1d. Start the LiteLLM Anthropic→OpenAI proxy.
     start_litellm_proxy
