@@ -6,9 +6,9 @@ status: stable
 last_reviewed: 2026-05-17
 sources:
   - path: scripts/run-compare-anthropic-vs-vllm.sh
-    sha: 9cbffbb
+    sha: fe9c690
   - path: benchmarks/backends/vllm.md
-    sha: 9cbffbb
+    sha: a9a3b1e
   - issue: 35
 ---
 
