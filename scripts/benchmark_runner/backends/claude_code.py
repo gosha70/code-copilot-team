@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -147,18 +148,57 @@ class ClaudeCodeBackend:
         auth_token_present = bool(os.environ.get(GATEWAY_AUTH_TOKEN_ENV_VAR))
 
         started = time.monotonic()
+        # Bug #6 (discovered 2026-05-17): ``subprocess.run(..., timeout=)``
+        # is NOT safe with ``claude -p`` because Claude Code is a Node
+        # binary that spawns grandchildren (MCP servers, hook
+        # subprocesses via ``--settings``). On timeout, Python sends
+        # SIGKILL to the immediate child (PID claude), then blocks
+        # forever in ``communicate()`` draining stdout/stderr — the
+        # pipe FDs are still held open by the orphan grandchildren.
+        # Symptom in the field: an overnight benchmark with
+        # ``CCT_CLAUDE_TIMEOUT_SECONDS=3600`` ran for 9+ hours with
+        # no score.json written; the timeout fired internally but
+        # ``communicate()`` never returned.
+        #
+        # Fix: ``start_new_session=True`` puts claude + all
+        # grandchildren in a new process group; on timeout we
+        # ``os.killpg(pgid, SIGKILL)`` to take the whole tree down
+        # atomically, then ``communicate()`` drains cleanly.
+        proc = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=str(ctx.worktree),
+            text=True,
+            env=self._build_env(),
+            start_new_session=True,  # NEW: enables os.killpg below
+        )
         try:
-            proc = subprocess.run(
-                argv,
-                input=prompt,
-                cwd=str(ctx.worktree),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout,
-                env=self._build_env(),
-            )
-        except subprocess.TimeoutExpired as exc:
+            stdout_data, stderr_data = proc.communicate(input=prompt, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Kill the whole process group so grandchildren can't
+            # keep our stdout/stderr pipes open. With the group
+            # SIGKILL'd, the followup communicate() drains pipes
+            # promptly (typically < 1s).
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass  # already dead — race with normal exit
+            stderr_tail = ""
+            try:
+                _stdout_late, stderr_late = proc.communicate(timeout=10)
+                stderr_tail = _tail(stderr_late or "", 1024)
+            except subprocess.TimeoutExpired:
+                # Defensive — group SIGKILL should have closed FDs.
+                # If we hit this, something is exotically broken; fall
+                # through with whatever we have and let the caller see
+                # the timeout signal via exit_code=None.
+                proc.kill()
+                try:
+                    proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
             elapsed = time.monotonic() - started
             return BackendResult(
                 transcript_path=None,
@@ -172,12 +212,8 @@ class ClaudeCodeBackend:
                     auth_token_present=auth_token_present,
                     session_id=None,
                     exit_code=None,
-                    stderr_tail=(
-                        exc.stderr.decode("utf-8", errors="replace")
-                        if isinstance(exc.stderr, bytes)
-                        else (exc.stderr or "")
-                    ),
-                    note=f"claude -p timed out after {timeout}s",
+                    stderr_tail=stderr_tail,
+                    note=f"claude -p timed out after {timeout}s (process group killed)",
                 ),
                 failed_commands=1,
             )
@@ -188,9 +224,9 @@ class ClaudeCodeBackend:
         # response is still recoverable from the run-dir.
         attempt_dir = ctx.worktree.parent
         transcript_path = attempt_dir / "transcript.json"
-        transcript_path.write_text(proc.stdout, encoding="utf-8")
+        transcript_path.write_text(stdout_data or "", encoding="utf-8")
 
-        parsed = parse_transcript_json(proc.stdout)
+        parsed = parse_transcript_json(stdout_data or "")
         model_output_path: Optional[Path] = None
         if parsed.result_text:
             model_output_path = attempt_dir / "model-output.txt"
@@ -215,7 +251,7 @@ class ClaudeCodeBackend:
                 auth_token_present=auth_token_present,
                 session_id=parsed.session_id,
                 exit_code=proc.returncode,
-                stderr_tail=_tail(proc.stderr, 1024),
+                stderr_tail=_tail(stderr_data or "", 1024),
             ),
         )
 

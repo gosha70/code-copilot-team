@@ -49,6 +49,10 @@ yarn-debug.log*
 # Build-agent worktree isolation dirs (created by Agent tool with isolation: worktree)
 .claude/worktrees/
 
+# Scheduled-task lock files (session/process-local state — not portable across machines)
+.claude/scheduled_tasks.lock
+.claude/scheduled_tasks/
+
 # Generated docs (keep source only)
 README.html
 /doc_internal

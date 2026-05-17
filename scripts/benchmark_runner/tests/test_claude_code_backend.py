@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import stat
 import sys
 import tempfile
@@ -545,27 +546,50 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
 
 
 class TestBackendTimeout(unittest.TestCase):
-    """F10: timeout handling — high-probability real-world failure mode."""
+    """F10: timeout handling — high-probability real-world failure mode.
+
+    Bug #6 (2026-05-17): the original ``subprocess.run(timeout=)``
+    pattern is fundamentally broken with claude-code because Claude
+    Code's Node binary spawns grandchildren (MCP servers, hook
+    subprocesses) that inherit stdout/stderr pipes. On timeout,
+    SIGKILL goes to the immediate child but pipes stay open via
+    grandchildren, and ``subprocess.run`` blocks forever draining
+    them. An overnight benchmark with a 60-min budget ran 9+ hours
+    before being manually killed. The fix is
+    ``start_new_session=True`` + ``os.killpg(pgid, SIGKILL)`` on
+    timeout, then ``communicate()`` drains cleanly. The tests here
+    cover both shapes: the legacy "process exited but communicate
+    drained cleanly" path AND the real failure mode where the
+    grandchild holds the pipe.
+    """
 
     def test_timeout_returns_populated_result_not_crash(self) -> None:
-        # Mock subprocess.run to raise TimeoutExpired. The backend
-        # must return a populated BackendResult with failed_commands=1
-        # and a "timed out" note in metadata, NOT crash the run.
+        # Synthetic timeout via Popen+communicate mock — locks in the
+        # shape of the returned BackendResult on a normal-ish timeout
+        # path. (The pathological grandchild case has its own test
+        # below.)
         import subprocess as _subprocess
 
-        backend = ClaudeCodeBackend(
-            model="sonnet", cli_executable="claude"
-        )
+        backend = ClaudeCodeBackend(model="sonnet", cli_executable="claude")
+        fake_popen = mock.MagicMock()
+        fake_popen.pid = 99999
+        fake_popen.communicate.side_effect = [
+            _subprocess.TimeoutExpired(cmd=["claude"], timeout=1),
+            ("", ""),  # post-kill drain
+        ]
+        fake_popen.returncode = None
 
-        # shutil.which gets called first; mock it to "find" the CLI.
         with mock.patch(
             "benchmark_runner.backends.claude_code.shutil.which",
             return_value="/usr/local/bin/claude",
         ), mock.patch(
-            "benchmark_runner.backends.claude_code.subprocess.run",
-            side_effect=_subprocess.TimeoutExpired(
-                cmd=["claude"], timeout=1, output=b"", stderr=b"hung in tool loop",
-            ),
+            "benchmark_runner.backends.claude_code.subprocess.Popen",
+            return_value=fake_popen,
+        ), mock.patch(
+            "benchmark_runner.backends.claude_code.os.killpg",
+        ) as killpg_mock, mock.patch(
+            "benchmark_runner.backends.claude_code.os.getpgid",
+            return_value=99999,
         ):
             ctx = RunContext(
                 benchmark_id="x",
@@ -579,13 +603,84 @@ class TestBackendTimeout(unittest.TestCase):
             )
             result = backend.run("hi", ctx)
 
+        # killpg was called → process group abort fired.
+        killpg_mock.assert_called_once_with(99999, signal.SIGKILL)
         self.assertEqual(result.failed_commands, 1)
         meta = result.backend_metadata
         self.assertEqual(meta["family"], BACKEND_FAMILY)
         self.assertIn("timed out", meta["note"].lower())
+        self.assertIn("process group killed", meta["note"])
         self.assertIn("1s", meta["note"])  # the timeout value is mentioned
-        # No transcript on timeout.
         self.assertIsNone(result.transcript_path)
+
+    def test_bug6_killpg_releases_pipes_held_by_grandchildren(self) -> None:
+        # Real regression for Bug #6: a fake CLI that spawns a
+        # background grandchild holding stdout open, then sleeps
+        # forever. With the broken pre-fix code, the backend would
+        # block indefinitely in communicate() after SIGKILLing the
+        # immediate child. With the fix, ``os.killpg`` takes down the
+        # grandchild too and the call returns within bounded time.
+        #
+        # Acceptance: backend.run returns within timeout + 10s of
+        # generous cleanup, with the timeout-shape BackendResult.
+        import time as _time
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            fake_cli = tmp_path / "fake-claude-hang-with-grandchild.sh"
+            fake_cli.write_text(
+                "#!/bin/bash\n"
+                "# Spawn a background subprocess that holds stdout open\n"
+                "# and sleeps. Without process-group SIGKILL on timeout,\n"
+                "# this grandchild keeps the harness's stdout pipe open\n"
+                "# and communicate() hangs forever after SIGKILL of\n"
+                "# the immediate child.\n"
+                "(sleep 99999) &\n"
+                "# Now the parent itself blocks indefinitely waiting\n"
+                "# for stdin that never closes.\n"
+                "sleep 99999\n",
+                encoding="utf-8",
+            )
+            fake_cli.chmod(0o755)
+
+            worktree = tmp_path / "wt"
+            worktree.mkdir()
+            ctx = RunContext(
+                benchmark_id="x",
+                task_id="t1",
+                backend_id=BACKEND_FAMILY,
+                run_id="run-001",
+                attempt=1,
+                worktree=worktree,
+                model="sonnet",
+                timeout_seconds=3,  # short; we don't want the test to be slow
+            )
+            backend = ClaudeCodeBackend(
+                model="sonnet", cli_executable=str(fake_cli)
+            )
+
+            t0 = _time.monotonic()
+            result = backend.run("hi", ctx)
+            elapsed = _time.monotonic() - t0
+
+            # The fix must return within (timeout + cleanup_margin).
+            # Generous margin: 10s. Without the fix, this would hang
+            # indefinitely until the test suite's hard kill.
+            self.assertLess(
+                elapsed, 15,
+                f"backend.run did not return promptly on timeout "
+                f"({elapsed:.1f}s); Bug #6 has regressed.",
+            )
+            # And the result is the timeout-shape BackendResult.
+            self.assertEqual(result.failed_commands, 1)
+            self.assertIsNone(result.transcript_path)
+            self.assertIn(
+                "timed out", result.backend_metadata["note"].lower()
+            )
+            self.assertIn(
+                "process group killed", result.backend_metadata["note"]
+            )
+            self.assertIsNone(result.backend_metadata["exit_code"])
 
 
 if __name__ == "__main__":
