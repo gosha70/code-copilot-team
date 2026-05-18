@@ -48,6 +48,7 @@ from .errors import (
 )
 from .ingestor import DefaultIngestor
 from .ingestor_multi import DefaultMultiIngestor, write_patch_set_dir
+from .audit_lint import validate_audit_tree
 from .health_lint import lint_health
 from .promoter import promote as run_promote
 from .proposal import IngestProposal, IngestRequest, render_proposal_file
@@ -220,7 +221,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p_lint.add_argument(
         "--strict",
         action="store_true",
-        help="With --health: any finding causes non-zero exit.",
+        help="Make advisory findings fatal (non-zero exit): "
+             "audit-format violations (always run) and, with "
+             "--health, any knowledge-health finding.",
     )
     p_lint.add_argument(
         "--paths",
@@ -635,8 +638,25 @@ def _do_lint(args: argparse.Namespace) -> int:
         return BackendNotFoundError.exit_code
 
     structural_rc = subprocess.call(["bash", str(linter)])
+
+    # Audit-format pass: always on (advisory; gates only under --strict).
+    # Validates knowledge/wiki/.audit/ against schema/audit-rules.md.
+    audit_errors = validate_audit_tree(repo_root)
+    audit_rc = 0
+    if audit_errors:
+        print(
+            f"\naudit-format: {len(audit_errors)} violation(s)",
+            file=sys.stderr,
+        )
+        for e in audit_errors:
+            print(f"  [audit] {e}", file=sys.stderr)
+        if args.strict:
+            audit_rc = 1
+    else:
+        print("\naudit-format: clean.")
+
     if not args.health:
-        return structural_rc
+        return structural_rc or audit_rc
 
     # Knowledge-health pass.
     backend = None
@@ -660,7 +680,7 @@ def _do_lint(args: argparse.Namespace) -> int:
             f"\nknowledge-health: clean ({result.pages_checked} pages "
             f"checked, 0 findings)."
         )
-        return structural_rc
+        return structural_rc or audit_rc
 
     # Print findings on stderr so the structural linter's stdout
     # remains the canonical output.
@@ -677,8 +697,8 @@ def _do_lint(args: argparse.Namespace) -> int:
         )
 
     if args.strict:
-        return 1 if structural_rc == 0 else structural_rc
-    return structural_rc
+        return (1 if structural_rc == 0 else structural_rc) or audit_rc
+    return structural_rc or audit_rc
 
 
 _VERBS = ("ingest", "promote", "query", "lint")

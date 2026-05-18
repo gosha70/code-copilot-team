@@ -53,10 +53,10 @@ class HealthLintResult:
 
 
 def _list_wiki_pages(wiki_dir: Path) -> list[Path]:
-    """All wiki .md files except those under schema/, scripts/."""
+    """All wiki .md files except those under schema/, scripts/, .audit/."""
     if not wiki_dir.is_dir():
         return []
-    excluded = {"schema", "scripts"}
+    excluded = {"schema", "scripts", ".audit"}
     pages: list[Path] = []
     for p in sorted(wiki_dir.rglob("*.md")):
         rel_parts = p.relative_to(wiki_dir).parts
