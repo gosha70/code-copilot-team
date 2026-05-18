@@ -23,6 +23,11 @@
       "items": { "type": "string", "minLength": 1 },
       "description": "Optional task-id filter; same shape as `./scripts/benchmark run --task <id>` (repeatable). Omit to run every task the adapter exposes."
     },
+    "attempt_timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional per-attempt wall-clock timeout (seconds). NOT YET WIRED AT RUNTIME: as of D3 this key is schema-accepted but the compare config parser (`compare._validate`/`CompareConfig`) does not read or retain it, so a config that sets it currently runs with the harness's existing default timeout behaviour. D5 adds the parser field and threads it to the backend via RunContext.timeout_seconds, at which point a timed-out attempt is recorded result='timeout', counted as a pass_rate failure, and flagged separately in verdicts, and the wrapper's cloud/local heuristic default (scripts/bench: 300s cloud, 600s when ANTHROPIC_BASE_URL is non-default) applies when this key is omitted. See specs/benchmark-bench-driver/spec.md § D5."
+    },
     "candidates": {
       "type": "array",
       "minItems": 2,

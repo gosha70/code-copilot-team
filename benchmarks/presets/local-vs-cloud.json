@@ -1,0 +1,35 @@
+{
+  "benchmark": "aider-polyglot",
+  "runs": 3,
+  "attempt_timeout_seconds": 600,
+  "task": ["python/bowling", "go/bowling"],
+  "candidates": [
+    {
+      "name": "claude-code-sonnet-cloud",
+      "backend": "claude-code",
+      "model": "sonnet"
+    },
+    {
+      "name": "ollama-qwen2.5-coder-7b",
+      "backend": "claude-code",
+      "model": "qwen2.5-coder:7b",
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://localhost:11434",
+        "ANTHROPIC_AUTH_TOKEN": "ollama",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen2.5-coder:7b",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen2.5-coder:7b"
+      }
+    },
+    {
+      "name": "ollama-qwen2.5-coder-32b",
+      "backend": "claude-code",
+      "model": "qwen2.5-coder:32b",
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://localhost:11434",
+        "ANTHROPIC_AUTH_TOKEN": "ollama",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen2.5-coder:32b",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen2.5-coder:32b"
+      }
+    }
+  ]
+}

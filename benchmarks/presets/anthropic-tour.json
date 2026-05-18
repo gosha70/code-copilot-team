@@ -1,0 +1,22 @@
+{
+  "benchmark": "aider-polyglot",
+  "runs": 3,
+  "task": ["python/bowling"],
+  "candidates": [
+    {
+      "name": "claude-code-sonnet",
+      "backend": "claude-code",
+      "model": "sonnet"
+    },
+    {
+      "name": "claude-code-opus",
+      "backend": "claude-code",
+      "model": "opus"
+    },
+    {
+      "name": "claude-code-haiku",
+      "backend": "claude-code",
+      "model": "haiku"
+    }
+  ]
+}
