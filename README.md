@@ -242,7 +242,7 @@ layer under `knowledge/wiki/`. Four operations, one CLI:
 
 ```bash
 ./scripts/wiki ingest <source>          # multi-page write plan against existing wiki state
-./scripts/wiki promote <proposal-dir>   # atomic apply (only writer to knowledge/wiki/)
+./scripts/wiki promote <proposal-dir>   # atomic apply (only writer to the canonical wiki content tree, excluding .audit/)
 ./scripts/wiki query "<question>"       # index-first synthesis with citations
 ./scripts/wiki query --file-back "..."  # round-trip the answer back into a patch-set
 ./scripts/wiki lint                     # structural lint (frontmatter, links, slugs)
@@ -254,12 +254,18 @@ is explicit: the wiki is source-controlled, the proposal workspace
 is not.** `wiki ingest` writes draft proposals to a local-only
 `doc_internal/proposals/` directory (gitignored — proposals are
 working drafts, not canonical state). `wiki promote` is the only
-operation that writes to the tracked `knowledge/wiki/` tree, and it
-runs as a plan-then-apply commit with snapshot rollback on any
-failure. Promotion history is traceable via git on `knowledge/wiki/`
-plus the append-only `knowledge/wiki/log.md` ledger; rejected or
-abandoned ingest attempts are intentionally ephemeral (tracked: #31) —
-the proposal workspace is a working surface, not an audit log.
+operation that writes to the canonical `knowledge/wiki/` content tree;
+`wiki ingest` has one additional tracked write: appending to the
+append-only `knowledge/wiki/.audit/ingest-log.md` audit ledger. The
+audit trail under `knowledge/wiki/.audit/` records every `wiki ingest`
+decision (timestamp, source SHA, backend, disposition, reason) in
+`ingest-log.md`, and every accepted proposal's original LLM draft in
+`knowledge/wiki/.audit/proposals/<date>-<slug>/` (applied atomically
+by `wiki promote`). A pending follow-up —
+[gosha70/code-copilot-team#37](https://github.com/gosha70/code-copilot-team/issues/37)
+— will add `wiki audit-flush` for reject-only workflows. Promotion
+history is traceable via git on `knowledge/wiki/` plus
+`knowledge/wiki/log.md`.
 
 The CLI auto-detects an installed copilot backend in the order
 `claude → codex → cursor`. Override with `--backend <name>` or

@@ -129,12 +129,79 @@ If neither shoe fits, run the pipeline. The output goes to
   under `knowledge/wiki/`. The proposal file alone records the
   gate's decision.
 
+## Audit Trail
+
+Every `wiki ingest` call appends exactly one NDJSON line to
+`knowledge/wiki/.audit/ingest-log.md` regardless of gate outcome. The
+line records the timestamp, source path, source SHA-256, backend,
+disposition (`accept` or `reject`), a truncated reason (≤ 240
+codepoints), and — for accepted ingest runs — a canonical hash of the
+proposal payload (`proposal_hash`). Every `wiki promote` of an accepted
+proposal writes an immutable snapshot of the original LLM draft to
+`knowledge/wiki/.audit/proposals/<date>-<slug>/` (`plan.json` +
+`proposal.md`) as part of the same atomic staged tree.
+
+### `.audit/` layout
+
+```
+knowledge/wiki/.audit/
+  ingest-log.md               — append-only NDJSON ledger
+  proposals/
+    <date>-<slug>/
+      plan.json               — verbatim proposal patch-set JSON
+      proposal.md             — human-readable render of the LLM draft
+      curator-delta.md        — unified diff (present only when curator
+                                edited preview/ between ingest and promote)
+```
+
+The `.audit/` subtree is excluded from structural lint (no frontmatter,
+no page-type, not linked from `index.md`). It is validated by the
+separate `wiki lint` audit pass (`scripts/wiki_ingest/audit_lint.py`)
+against `knowledge/wiki/schema/audit-rules.md`.
+
+### `--check` vs `--dry-run`
+
+| Flag | Side effects | Audit line? | Snapshot? |
+|---|---|---|---|
+| _(none)_ | Proposal dir written | Yes | Yes |
+| `--dry-run` | Proposal dir written (body stripped) | Yes (`proposal_hash: null`) | No |
+| `--check` | None (zero side effects) | No | No |
+
+Use `--check` when you want to know whether a source _would_ pass the
+gate without polluting the audit trail. `--dry-run` audits the gate
+decision but strips the LLM body from the written proposal file.
+
+`--check` and `--dry-run` are mutually exclusive.
+
+### Curator-delta behavior
+
+When a curator hand-edits `doc_internal/proposals/<dir>/preview/`
+between `wiki ingest` and `wiki promote`, `wiki promote` detects the
+difference against the immutable `.ingest-snapshot/` copy (written at
+ingest time) and produces a `curator-delta.md` file in the archive
+directory. When no edits were made, `curator-delta.md` is absent
+(zero footprint).
+
+For proposals generated before Phase 2 (no `.ingest-snapshot/`
+present), `curator-delta.md` is silently omitted — not an error.
+
+### Audit-format lint note
+
+`wiki lint` always runs the audit-format pass (advisory by default;
+non-zero under `--strict`). It validates format only (marker line,
+JSON parse, required keys/types/enums, `ts` ISO-8601, `reason` ≤ 240
+codepoints). It does **not** perform referential checks (`source_sha`
+resolves, `proposal_hash` matches an archive) — those are a named
+follow-up.
+
 ## Related
 
 - [`promote-lesson-to-wiki`](promote-lesson-to-wiki.md) — the
   manual loop the pipeline accelerates and hands off to.
 - [`../schema/ingest-rules.md`](../schema/ingest-rules.md) — the
   four-question gate the pipeline applies mechanically.
+- [`../schema/audit-rules.md`](../schema/audit-rules.md) — the
+  machine-checkable spec for the `.audit/` trail format.
 - [`../schema/page-types.md`](../schema/page-types.md) — the
   template every drafted page must conform to.
 - [`../schema/citation-rules.md`](../schema/citation-rules.md) —

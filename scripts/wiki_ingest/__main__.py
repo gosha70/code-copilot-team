@@ -36,6 +36,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
+from .audit import append_ingest_log, build_log_record
 from .backends import resolve_backend
 from .errors import (
     BackendInvocationError,
@@ -132,12 +133,21 @@ def _build_arg_parser() -> argparse.ArgumentParser:
              "refuse (exit 7). Use only when ingesting external artifacts "
              "deliberately.",
     )
+    p_ingest.add_argument(
+        "--check",
+        action="store_true",
+        help="Gate-only pre-flight: run the ingest gate and exit with "
+             "code 0 (accept) or non-zero (reject) with ZERO filesystem "
+             "side effects — no proposal directory, no audit line, no "
+             "snapshot. Mutually exclusive with --dry-run.",
+    )
 
     # ── promote ────────────────────────────────────────────────
     p_promote = sub.add_parser(
         "promote",
         help="Apply a proposal patch-set to knowledge/wiki/ atomically. "
-             "The ONLY code path that writes to knowledge/wiki/.",
+             "The ONLY code path that writes to the canonical wiki content "
+             "tree, excluding .audit/.",
     )
     p_promote.add_argument(
         "proposal_dir",
@@ -300,6 +310,31 @@ def _path_within_repo(source: Path, repo_root: Path) -> bool:
         return False
 
 
+def _write_ingest_snapshot(proposal_dir: Path) -> None:
+    """Write an immutable .ingest-snapshot/ copy inside the gitignored proposal dir.
+
+    Copies plan.json + preview/ into proposal_dir/.ingest-snapshot/ so that
+    wiki promote can later diff the LLM draft vs the curator-edited version.
+    Called from the CLI layer immediately after write_patch_set_dir materializes
+    the proposal dir (Design Decision 2, 8). Never called on --dry-run (no body)
+    or --check (no materialization).
+    """
+    import shutil as _shutil
+    snapshot_dir = proposal_dir / ".ingest-snapshot"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    plan = proposal_dir / "plan.json"
+    if plan.is_file():
+        _shutil.copy2(str(plan), str(snapshot_dir / "plan.json"))
+
+    preview = proposal_dir / "preview"
+    if preview.is_dir():
+        preview_snapshot = snapshot_dir / "preview"
+        if preview_snapshot.exists():
+            _shutil.rmtree(str(preview_snapshot))
+        _shutil.copytree(str(preview), str(preview_snapshot))
+
+
 # ── Verb implementations ──────────────────────────────────────
 
 
@@ -310,6 +345,11 @@ def _do_ingest(args: argparse.Namespace) -> int:
     Without the flag, Phase-1 DefaultMultiIngestor produces a
     WikiPatchSet under doc_internal/proposals/<date>-<slug>/.
     """
+    # --check and --dry-run are mutually exclusive.
+    if getattr(args, "check", False) and getattr(args, "dry_run", False):
+        print("error: --check and --dry-run are mutually exclusive", file=sys.stderr)
+        return 1
+
     if not args.legacy_single_source:
         return _do_ingest_multi(args)
 
@@ -382,6 +422,12 @@ def _do_ingest(args: argparse.Namespace) -> int:
         else:
             os.environ["WIKI_INGEST_TASK"] = env_backup
 
+    # --check: gate ran, no side effects.  Exit code reflects disposition.
+    if getattr(args, "check", False):
+        if proposal.disposition == "accept":
+            return 0
+        return 1
+
     # Render-side body strip is the safety net: stubs that ignore the
     # gate-only task still produce body text; we drop it here so the
     # proposal file matches the dry-run contract.
@@ -393,6 +439,29 @@ def _do_ingest(args: argparse.Namespace) -> int:
         proposal_path = _write_proposal_file(
             proposal, request, backend_name, output_dir
         )
+    except OutputWriteError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return OutputWriteError.exit_code
+
+    # Phase-3: write .ingest-snapshot/ immediately after materialisation
+    # (not on --dry-run because the body was stripped).
+    if not args.dry_run:
+        _write_ingest_snapshot(proposal_path.parent)
+
+    # Phase-2: audit-log append (fail-closed). Runs after proposal-dir
+    # materialisation and after dry-run stripping so proposal_hash is
+    # computed over the on-disk payload.
+    try:
+        record = build_log_record(
+            source_file=source_path,
+            repo_root=repo_root,
+            backend_name=backend_name,
+            proposal_dir_path=proposal_path.parent,
+            allow_out_of_repo=getattr(args, "allow_out_of_repo", False),
+            legacy_proposal=proposal,
+            dry_run=args.dry_run,
+        )
+        append_ingest_log(repo_root, record)
     except OutputWriteError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return OutputWriteError.exit_code
@@ -437,9 +506,17 @@ def _do_ingest_multi(args: argparse.Namespace) -> int:
         backend_name=backend_name,
     )
 
-    env_backup = os.environ.get("WIKI_INGEST_TASK")
-    if args.dry_run:
-        os.environ["WIKI_INGEST_TASK"] = "gate-only"
+    check_mode = getattr(args, "check", False)
+
+    # For multi-page, compose_multi_prompt sets task=ingest-multi in the prompt
+    # dict; ingestor_multi.py then overrides with WIKI_INGEST_TASK env if set.
+    # We deliberately do NOT set gate-only here: clobbering task=ingest-multi
+    # would break the backend dispatch (the test backend and real backends both
+    # expect the multi-page task contract when entering this path).
+    # --dry-run for multi-page writes the full proposal dir; proposal_hash is
+    # forced null in the audit record to signal the dry-run intent.
+    # --check is gate-only at the CLI level: it reads patch.edits and returns
+    # before writing anything.
     try:
         patch = multi.ingest_multi(request)
     except SourceMissingError as exc:
@@ -454,11 +531,12 @@ def _do_ingest_multi(args: argparse.Namespace) -> int:
     except ContractViolationError as exc:
         print(f"error: contract violation: {exc}", file=sys.stderr)
         return ContractViolationError.exit_code
-    finally:
-        if env_backup is None:
-            os.environ.pop("WIKI_INGEST_TASK", None)
-        else:
-            os.environ["WIKI_INGEST_TASK"] = env_backup
+
+    # --check: gate ran, zero side effects.  Exit code reflects disposition.
+    if check_mode:
+        if patch.edits:
+            return 0
+        return 1
 
     # Output dir: doc_internal/proposals/<date>-<source-stem>/
     today = datetime.date.today().isoformat()
@@ -473,6 +551,29 @@ def _do_ingest_multi(args: argparse.Namespace) -> int:
             f"error: could not write patch-set dir at {output_dir}: {exc}",
             file=sys.stderr,
         )
+        return OutputWriteError.exit_code
+
+    # Phase-3: write .ingest-snapshot/ immediately after materialisation
+    # (not on --dry-run because the body was stripped).
+    if not args.dry_run and patch.edits:
+        _write_ingest_snapshot(written)
+
+    # Phase-2: audit-log append (fail-closed). Runs after proposal-dir
+    # materialisation and after dry-run stripping so proposal_hash is
+    # computed over the on-disk payload.
+    try:
+        record = build_log_record(
+            source_file=source_path,
+            repo_root=repo_root,
+            backend_name=backend_name,
+            proposal_dir_path=written,
+            allow_out_of_repo=getattr(args, "allow_out_of_repo", False),
+            patch=patch,
+            dry_run=args.dry_run,
+        )
+        append_ingest_log(repo_root, record)
+    except OutputWriteError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return OutputWriteError.exit_code
 
     if not patch.edits:
