@@ -43,3 +43,9 @@ class PromoteApplyError(IngestError):
     (rare; usually means the wiki dir is read-only or a TOCTOU race).
     Exit 10."""
     exit_code: int = 10
+
+
+class AuditFlushError(IngestError):
+    """wiki audit-flush: not a git work tree; append-only invariant violated;
+    working log malformed; or git commit failed. Exit 11."""
+    exit_code: int = 11

@@ -37,8 +37,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from .audit import append_ingest_log, build_log_record
+from .audit_flush import detect_pending, flush as audit_flush_run
 from .backends import resolve_backend
 from .errors import (
+    AuditFlushError,
     BackendInvocationError,
     BackendNotFoundError,
     ContractViolationError,
@@ -67,8 +69,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wiki",
         description=(
-            "Karpathy-pattern LLM Wiki maintainer. Four verbs: "
-            "ingest|promote|query|lint. See specs/wiki-ingest-pipeline/ "
+            "Karpathy-pattern LLM Wiki maintainer. Five verbs: "
+            "ingest|promote|query|lint|audit-flush. See specs/wiki-ingest-pipeline/ "
             "for the full spec; ``./scripts/wiki <verb> --help`` for "
             "per-verb help."
         ),
@@ -76,7 +78,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Exit codes (stable across v1): "
             "0 success; 2 backend not found; 3 backend invocation failed; "
             "4 contract violation; 5 source missing; 6 output write failure; "
-            "7 source out of repo; 8 verb not yet implemented (Phase N stub)."
+            "7 source out of repo; 8 verb not yet implemented (Phase N stub); "
+            "11 audit-flush error (not a git work tree; append-only invariant "
+            "violated; working log malformed; git commit failed)."
         ),
     )
     sub = parser.add_subparsers(dest="verb", required=True, metavar="<verb>")
@@ -247,6 +251,20 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="With --health: backend for the LLM-dependent "
              "contradiction check. When omitted, contradictions are "
              "skipped (the other three checks run without a backend).",
+    )
+
+    # ── audit-flush ────────────────────────────────────────────
+    p_audit_flush = sub.add_parser(
+        "audit-flush",
+        help="Commit any pending (uncommitted) lines in "
+             "knowledge/wiki/.audit/ingest-log.md. The ONLY pipeline "
+             "command that runs git commit; never auto-invoked.",
+    )
+    p_audit_flush.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report the pending line count and blob SHA without committing. "
+             "Exits 0 after the divergence + malformed gates.",
     )
 
     return parser
@@ -802,7 +820,17 @@ def _do_lint(args: argparse.Namespace) -> int:
     return structural_rc or audit_rc
 
 
-_VERBS = ("ingest", "promote", "query", "lint")
+def _do_audit_flush(args: argparse.Namespace) -> int:
+    """Commit pending ingest-log lines (or dry-run report them)."""
+    repo_root = _resolve_repo_root()
+    try:
+        return audit_flush_run(repo_root, dry_run=args.dry_run)
+    except AuditFlushError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return AuditFlushError.exit_code
+
+
+_VERBS = ("ingest", "promote", "query", "lint", "audit-flush")
 
 
 def _inject_legacy_v1_prefix(argv: list[str]) -> list[str]:
@@ -853,6 +881,7 @@ def main(argv: list[str] | None = None) -> int:
         "promote": _do_promote,
         "query": _do_query,
         "lint": _do_lint,
+        "audit-flush": _do_audit_flush,
     }
     handler = dispatch.get(args.verb)
     if handler is None:
