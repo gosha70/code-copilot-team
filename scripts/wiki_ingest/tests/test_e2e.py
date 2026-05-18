@@ -29,6 +29,21 @@ _SCRIPTS_DIR = _REPO_ROOT / "scripts"
 _FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 _SAMPLE_INCIDENT = _FIXTURES_DIR / "sample-incident.md"
 _BASH_ENTRYPOINT = _SCRIPTS_DIR / "wiki-ingest"
+_AUDIT_DIR = _REPO_ROOT / "knowledge" / "wiki" / ".audit"
+
+
+def tearDownModule() -> None:
+    """Remove the .audit/ directory created by test invocations of the CLI.
+
+    Phase-2 audit trail: wiki ingest now appends an audit line on every
+    call, including the subprocess calls made by this e2e suite. The audit
+    path is derived from the real repo root (knowledge/wiki/.audit/), so
+    it ends up in the working tree. Clean it up after the suite to keep
+    the tree tidy. This is analogous to how the suite already uses temp
+    dirs for --output-dir to avoid polluting doc_internal/proposals/.
+    """
+    if _AUDIT_DIR.exists():
+        shutil.rmtree(_AUDIT_DIR)
 
 
 def _module_env() -> dict[str, str]:

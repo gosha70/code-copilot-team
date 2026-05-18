@@ -145,6 +145,29 @@ class HealthFinding:
 
 
 @dataclass(frozen=True)
+class IngestLogRecord:
+    """One NDJSON line appended to knowledge/wiki/.audit/ingest-log.md.
+
+    Patch-set-oriented: a single ``wiki ingest`` run may touch many pages
+    of several types, and a reject is an empty ``edits`` list rather than
+    a separate disposition field. Fields are final names per spec.md
+    § Python interface (v: 1).
+    """
+    v: int                      # schema version (1)
+    ts: str                     # ISO-8601 UTC, second precision, "Z"
+    source_path: str            # as-used path (repo-rel or verbatim)
+    source_repo_relative: bool  # False for --allow-out-of-repo sources
+    source_sha: str             # sha256 hex of source file bytes
+    backend: str
+    disposition: str            # "accept" | "reject"
+    reason: str                 # rationale, newline-collapsed, ≤ 240 cp
+    proposal_dir: str | None    # basename of doc_internal/proposals/<name>/
+    target_paths: list[str]     # sorted unique wiki-rel paths; [] on reject
+    page_types: list[str]       # sorted unique page types; [] on reject
+    proposal_hash: str | None   # sha256 of canonicalized payload, or None
+
+
+@dataclass(frozen=True)
 class WikiPatchSet:
     """A multi-page write plan emitted by Phase-1 ``wiki ingest``.
 

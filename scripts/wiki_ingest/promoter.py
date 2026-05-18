@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 import shutil
 import subprocess
@@ -320,6 +321,119 @@ def _validate_staged_tree(
             )
 
 
+def _stage_audit_archive(
+    stage_dir: Path,
+    proposals_dir: Path,
+    patch: WikiPatchSet,
+) -> None:
+    """Stage the accepted-proposal archive into stage_dir/.audit/proposals/<name>/.
+
+    Written AFTER the _apply_edit loop and BEFORE _validate_staged_tree so
+    the validator sees the final tree and the existing atomic apply commits
+    it.
+
+    Contents:
+      plan.json  — verbatim copy of proposals_dir/plan.json
+      proposal.md — human-readable render of the patch-set
+      curator-delta.md — present only when the curator hand-edited
+                          preview/ between ingest and promote (diff of
+                          .ingest-snapshot/ vs current preview/)
+
+    Collision handling: if stage_dir/.audit/proposals/<name>/ already
+    exists in the live wiki (mirrored into stage_dir by _stage_wiki), a
+    deterministic numeric suffix is appended: <name>-2, <name>-3, ...
+
+    A proposal dir lacking .ingest-snapshot/ means no snapshot was taken
+    (pre-Phase-2 proposal or --dry-run); curator-delta.md is omitted
+    silently (not an error).
+    """
+    archive_root = stage_dir / ".audit" / "proposals"
+    archive_root.mkdir(parents=True, exist_ok=True)
+
+    base_name = proposals_dir.name
+    archive_name = base_name
+    suffix = 2
+    while (archive_root / archive_name).exists():
+        archive_name = f"{base_name}-{suffix}"
+        suffix += 1
+
+    archive_dir = archive_root / archive_name
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    # plan.json — verbatim copy.
+    src_plan = proposals_dir / "plan.json"
+    if src_plan.is_file():
+        shutil.copy2(str(src_plan), str(archive_dir / "plan.json"))
+
+    # proposal.md — human-readable render.
+    lines = [f"# Proposal: {base_name}\n"]
+    lines.append(f"\n**Rationale:** {patch.rationale}\n")
+    for edit in patch.edits:
+        lines.append(f"\n## {edit.path}\n")
+        lines.append(f"**Action:** {edit.action}  \n")
+        lines.append(f"**Rationale:** {edit.rationale}\n")
+        lines.append("\n")
+        lines.append("```markdown\n")
+        lines.append(edit.new_content)
+        if not edit.new_content.endswith("\n"):
+            lines.append("\n")
+        lines.append("```\n")
+    (archive_dir / "proposal.md").write_text("".join(lines), encoding="utf-8")
+
+    # curator-delta.md — diff snapshot preview vs live preview (if snapshot present).
+    # The snapshot contains plan.json + preview/ as siblings; compare only the
+    # preview/ subdirectories so the diff is over the proposal page content only.
+    snapshot_dir = proposals_dir / ".ingest-snapshot"
+    snapshot_preview = snapshot_dir / "preview"
+    preview_dir = proposals_dir / "preview"
+    if snapshot_preview.is_dir() and preview_dir.is_dir():
+        delta_lines: list[str] = []
+        # Collect all preview files from both snapshot preview and live preview.
+        snap_files: set[str] = set()
+        live_files: set[str] = set()
+        for p in snapshot_preview.rglob("*"):
+            if p.is_file():
+                try:
+                    rel = p.relative_to(snapshot_preview)
+                    snap_files.add(rel.as_posix())
+                except ValueError:
+                    pass
+        for p in preview_dir.rglob("*"):
+            if p.is_file():
+                try:
+                    rel = p.relative_to(preview_dir)
+                    live_files.add(rel.as_posix())
+                except ValueError:
+                    pass
+
+        all_files = sorted(snap_files | live_files)
+        for rel_path in all_files:
+            snap_file = snapshot_preview / rel_path
+            live_file = preview_dir / rel_path
+
+            snap_text = snap_file.read_text(encoding="utf-8") if snap_file.is_file() else ""
+            live_text = live_file.read_text(encoding="utf-8") if live_file.is_file() else ""
+
+            if snap_text == live_text:
+                continue
+
+            snap_label = f"a/{rel_path}"
+            live_label = f"b/{rel_path}"
+            diff = difflib.unified_diff(
+                snap_text.splitlines(keepends=True),
+                live_text.splitlines(keepends=True),
+                fromfile=snap_label,
+                tofile=live_label,
+                n=3,
+            )
+            delta_lines.extend(diff)
+
+        if delta_lines:
+            (archive_dir / "curator-delta.md").write_text(
+                "".join(delta_lines), encoding="utf-8"
+            )
+
+
 def _commit_stage_to_wiki(stage_dir: Path, repo_root: Path) -> list[str]:
     """Copy staged tree files back into knowledge/wiki/ atomically.
 
@@ -348,28 +462,76 @@ def _commit_stage_to_wiki(stage_dir: Path, repo_root: Path) -> list[str]:
         target: Path
         new_content: str
         original: str | None  # None ⇒ file did not exist pre-commit (created)
+        original_bytes: bytes | None  # for binary files (plan.json)
+        new_bytes: bytes | None
         rel: str
+        is_text: bool
 
     planned: list[_PlannedWrite] = []
-    for staged in stage_dir.rglob("*.md"):
-        rel = staged.relative_to(stage_dir)
-        rel_str = rel.as_posix()
-        if rel.parts and rel.parts[0] in ("schema", "scripts"):
-            continue
-        target = wiki_dst / rel
-        new_content = staged.read_text(encoding="utf-8")
-        original: str | None = None
-        if target.exists():
-            try:
-                original = target.read_text(encoding="utf-8")
-            except OSError as exc:
-                raise PromoteApplyError(
-                    f"could not read existing wiki file for backup: "
-                    f"{target.relative_to(repo_root)}: {exc}"
-                ) from exc
-            if original == new_content:
-                continue  # no-op
-        planned.append(_PlannedWrite(target, new_content, original, rel_str))
+
+    def _collect_md(stage_root: Path) -> None:
+        """Collect all *.md files from stage_root except schema/ and scripts/."""
+        for staged in stage_root.rglob("*.md"):
+            rel = staged.relative_to(stage_dir)
+            rel_str = rel.as_posix()
+            if rel.parts and rel.parts[0] in ("schema", "scripts"):
+                continue
+            target = wiki_dst / rel
+            new_content = staged.read_text(encoding="utf-8")
+            original: str | None = None
+            if target.exists():
+                try:
+                    original = target.read_text(encoding="utf-8")
+                except OSError as exc:
+                    raise PromoteApplyError(
+                        f"could not read existing wiki file for backup: "
+                        f"{target.relative_to(repo_root)}: {exc}"
+                    ) from exc
+                if original == new_content:
+                    continue  # no-op for this file
+            planned.append(_PlannedWrite(
+                target=target,
+                new_content=new_content,
+                original=original,
+                original_bytes=None,
+                new_bytes=None,
+                rel=rel_str,
+                is_text=True,
+            ))
+
+    def _collect_plan_json(stage_root: Path) -> None:
+        """Collect all .audit/**/plan.json files."""
+        audit_dir = stage_root / ".audit"
+        if not audit_dir.is_dir():
+            return
+        for staged in audit_dir.rglob("plan.json"):
+            rel = staged.relative_to(stage_dir)
+            rel_str = rel.as_posix()
+            target = wiki_dst / rel
+            new_bytes = staged.read_bytes()
+            original_bytes: bytes | None = None
+            if target.exists():
+                try:
+                    original_bytes = target.read_bytes()
+                except OSError as exc:
+                    raise PromoteApplyError(
+                        f"could not read existing wiki file for backup: "
+                        f"{target.relative_to(repo_root)}: {exc}"
+                    ) from exc
+                if original_bytes == new_bytes:
+                    continue  # no-op
+            planned.append(_PlannedWrite(
+                target=target,
+                new_content="",
+                original=None,
+                original_bytes=original_bytes,
+                new_bytes=new_bytes,
+                rel=rel_str,
+                is_text=False,
+            ))
+
+    _collect_md(stage_dir)
+    _collect_plan_json(stage_dir)
 
     # Apply phase — write each file, tracking what we did so we can
     # roll back on any failure.
@@ -377,7 +539,11 @@ def _commit_stage_to_wiki(stage_dir: Path, repo_root: Path) -> list[str]:
     try:
         for plan in planned:
             plan.target.parent.mkdir(parents=True, exist_ok=True)
-            plan.target.write_text(plan.new_content, encoding="utf-8")
+            if plan.is_text:
+                plan.target.write_text(plan.new_content, encoding="utf-8")
+            else:
+                assert plan.new_bytes is not None
+                plan.target.write_bytes(plan.new_bytes)
             applied.append(plan)
     except OSError as exc:
         # Roll back every applied write before re-raising. Rollback
@@ -385,15 +551,20 @@ def _commit_stage_to_wiki(stage_dir: Path, repo_root: Path) -> list[str]:
         rollback_errors: list[str] = []
         for done in applied:
             try:
-                if done.original is None:
+                if done.original is None and done.original_bytes is None:
                     # We created this file; remove it to restore the
                     # pre-commit state.
                     if done.target.exists():
                         done.target.unlink()
-                else:
-                    # We updated this file; rewrite the original
+                elif done.is_text:
+                    # We updated this text file; rewrite the original
                     # contents.
+                    assert done.original is not None
                     done.target.write_text(done.original, encoding="utf-8")
+                else:
+                    # We updated this binary file; rewrite the original.
+                    assert done.original_bytes is not None
+                    done.target.write_bytes(done.original_bytes)
             except OSError as rb_exc:
                 rollback_errors.append(
                     f"rollback failed for {done.rel}: {rb_exc}"
@@ -489,6 +660,11 @@ def promote(
 
         for edit in patch.edits:
             _apply_edit(stage_dir, edit)
+
+        # Phase-3: stage the accepted-proposal archive AFTER the edit
+        # loop and BEFORE validation so the validator sees the full tree
+        # (including .audit/) and the existing atomic apply commits it.
+        _stage_audit_archive(stage_dir, proposals_dir, patch)
 
         # Validation gate. Raises PromoteValidationError on any
         # failure; the wiki tree is unchanged because we haven't
