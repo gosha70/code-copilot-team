@@ -36,6 +36,8 @@ def register_all() -> None:
     register_polyglot()
     from benchmarks.adapters.cct_dogfood_memkernel.adapter import register as register_cct_dogfood_memkernel
     register_cct_dogfood_memkernel()
+    from benchmarks.adapters.swe_bench_verified.adapter import register as register_swe_bench_verified
+    register_swe_bench_verified()
 
     # Backends: backend modules expose a ``factory`` function; we
     # register it here. Same one-call rule.
@@ -43,6 +45,8 @@ def register_all() -> None:
     register_backend(stub_backend.BACKEND_FAMILY, stub_backend.factory)
     from .backends import claude_code as claude_code_backend
     register_backend(claude_code_backend.BACKEND_FAMILY, claude_code_backend.factory)
+    from .backends import codex as codex_backend
+    register_backend(codex_backend.BACKEND_FAMILY, codex_backend.factory)
     _REGISTERED = True
 
 

@@ -49,10 +49,18 @@ class TestProvisionWorktree(unittest.TestCase):
             with self.assertRaises(ValueError):
                 provision_worktree(IsolationConfig(tier="nope"), Path(td))  # type: ignore[arg-type]
 
-    def test_docker_not_implemented(self) -> None:
+    def test_docker_tier_requires_image(self) -> None:
+        # #33 implements the docker tier (the #32 NotImplementedError is
+        # gone). A docker-tier config with no image must fail fast and
+        # clearly, NOT attempt a real `docker run`. (Was
+        # test_docker_not_implemented; updated by #33 as the spec
+        # mandates replacing the NotImplementedError.)
+        from benchmark_runner.isolation import IsolationProvisionError
+
         with tempfile.TemporaryDirectory() as td:
-            with self.assertRaises(NotImplementedError):
+            with self.assertRaises(IsolationProvisionError) as ctx:
                 provision_worktree(IsolationConfig(tier=ISOLATION_DOCKER), Path(td))
+            self.assertIn("image", str(ctx.exception).lower())
 
     def test_legacy_string_tier_accepted(self) -> None:
         # Backwards-compat: callers that pass a bare tier string get
