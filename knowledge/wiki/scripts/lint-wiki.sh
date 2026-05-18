@@ -29,11 +29,14 @@ err() {
 }
 
 # ── Discover wiki pages ──────────────────────────────────────
-# All *.md under wiki/, EXCEPT schema/ (structural docs, exempt)
-# and scripts/ (no .md anyway). Newline-separated list.
+# All *.md under wiki/, EXCEPT schema/ (structural docs, exempt),
+# scripts/ (no .md anyway), and .audit/ (tooling audit trail, not wiki
+# content — governed by schema/audit-rules.md, not the page rules).
+# Newline-separated list.
 PAGES_LIST=$(find "$WIKI_DIR" -type f -name '*.md' \
   -not -path "$WIKI_DIR/schema/*" \
   -not -path "$WIKI_DIR/scripts/*" \
+  -not -path "$WIKI_DIR/.audit/*" \
   | sort)
 
 # ── Helpers ──────────────────────────────────────────────────
