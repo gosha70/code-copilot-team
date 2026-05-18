@@ -138,8 +138,13 @@ Provider tokens are a **closed set**: `sonnet`, `opus`, `haiku`,
 `claude-code:`, `ollama:`, `vllm:`, `lmstudio:`, `openrouter:`.
 Anything else fails fast with a `did you mean…` hint. Parser rules:
 
-1. Token ∈ `{sonnet, opus, haiku}` → `claude-code:<token>`, ambient
-   Anthropic auth.
+1. Token ∈ `{sonnet, opus, haiku}` → `(backend=claude-code,
+   model=<token>)` with ambient Anthropic auth. The model id is the
+   **bare** alias (`sonnet`/`opus`/`haiku`) — matching the harness and
+   the D3 presets. It is **not** `model="claude-code:<token>"`: the
+   combined `claude-code:sonnet` form is explicitly rejected by
+   `cli.py`/`compare.py` and would reach `claude --model` as an
+   invalid id.
 2. Token starts `claude-code:` → suffix is the model verbatim.
 3. Token starts a known endpoint-bearing prefix (`ollama:`, `vllm:`,
    `lmstudio:`, `openrouter:`) → **strip only that one prefix**;
