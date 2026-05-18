@@ -86,6 +86,16 @@ class IsolationConfig:
     verify_imports: tuple[str, ...] = ()
     dockerfile: Optional[Path] = None
     build_args: Mapping[str, str] = field(default_factory=dict)
+    # docker tier only: prebuilt image reference to pull before starting the
+    # attempt container (e.g. "swebench/sweb.eval.x86_64.<instance_id>").
+    # Ignored by the worktree and worktree+venv tiers.
+    image: Optional[str] = None
+    # docker tier: in-container path the host worktree is bind-mounted
+    # at. Defaults to "/workspace"; adapters whose image keeps the repo
+    # elsewhere (SWE-bench: "/testbed", deps editable-installed there)
+    # set this so backend edits land where the tests + install resolve.
+    # Ignored by the worktree and worktree+venv tiers.
+    container_mount: Optional[str] = None
 
 
 @dataclass(frozen=True)

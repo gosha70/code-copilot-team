@@ -6,15 +6,20 @@
 # Phase 2c adds ``worktree+venv``: same plain dir, plus a
 # ``.venv/`` provisioned with the adapter's ``python`` interpreter and
 # the adapter's ``install_command`` run inside it.
-# Issue #33 will add ``docker``.
+# Issue #33 adds ``docker``: a long-lived container per attempt with the
+# host worktree bind-mounted; container spans provision→verify→teardown.
+# The container is tracked in a module-level registry keyed by worktree
+# path; release_worktree() tears it down.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 from .contracts import (
     ISOLATION_DOCKER,
@@ -24,8 +29,28 @@ from .contracts import (
     IsolationTier,
 )
 
+_log = logging.getLogger(__name__)
 
 _KNOWN_TIERS = (ISOLATION_WORKTREE, ISOLATION_WORKTREE_VENV, ISOLATION_DOCKER)
+
+# Module-level registry: worktree path (str) -> container_id (str).
+# Populated by provision_worktree (docker tier), consumed + cleared by
+# run_in_worktree and release_worktree. Keyed by the absolute string
+# path so Path equality is not sensitive to symlink resolution.
+_DOCKER_REGISTRY: dict[str, str] = {}
+# Per-worktree in-container mount point (worktree path → mount). The
+# docker-branch default cwd of run_in_worktree must match wherever the
+# worktree was actually bind-mounted (SWE-bench uses /testbed, not the
+# /workspace default) — conflating these was a real bug caught by
+# docker verification.
+_DOCKER_MOUNTS: dict[str, str] = {}
+
+# Default in-container mount point for the bind-mounted host worktree.
+# Single source of truth: used by _provision_docker (-v/-w) AND
+# run_in_worktree's docker-branch default cwd. Must not be a bare
+# literal in two places (host path != container path — conflating
+# them was the real bug caught by docker verification).
+_CONTAINER_MOUNT = "/workspace"
 
 
 def is_known_tier(tier: str) -> bool:
@@ -85,9 +110,7 @@ def provision_worktree(
         return wt
 
     if config.tier == ISOLATION_DOCKER:
-        raise NotImplementedError(
-            "isolation tier 'docker' lands with issue #33's SWE-bench adapter"
-        )
+        return _provision_docker(config, attempt_dir)
 
     # Unreachable; placates mypy.
     raise AssertionError(f"unhandled tier: {config.tier!r}")
@@ -190,7 +213,211 @@ def _verify_installed_imports(
             )
 
 
+# ── New public helpers (Issue #33) ────────────────────────────────────
+
+
+def run_in_worktree(
+    worktree: Path,
+    argv: list[str],
+    *,
+    timeout: Optional[int] = None,
+    cwd: Optional[str] = None,
+) -> subprocess.CompletedProcess:
+    """Run ``argv`` inside the container if ``worktree`` was docker-provisioned,
+    else run it as a local subprocess.
+
+    ``cwd`` is the working directory INSIDE the container (or on the host for
+    non-docker worktrees); defaults to the worktree's absolute path.
+
+    Returns a ``subprocess.CompletedProcess`` with ``returncode``,
+    ``stdout``, and ``stderr``.
+    """
+    key = str(worktree.resolve())
+    container_id = _DOCKER_REGISTRY.get(key)
+
+    # cwd semantics differ by routing: inside the container the worktree
+    # is bind-mounted at the fixed mount point (NOT the host tmp path —
+    # `docker exec -w <host-path>` fails "chdir ... no such file or
+    # directory"). The local branch uses the host worktree path. An
+    # explicit `cwd` (e.g. SWE-bench's image repo dir) always wins.
+    if container_id is not None:
+        effective_cwd = cwd or _DOCKER_MOUNTS.get(key, _CONTAINER_MOUNT)
+    else:
+        effective_cwd = cwd or str(worktree.absolute())
+
+    if container_id is not None:
+        # Route through docker exec. NOTE: `docker exec` OPTIONS (incl.
+        # `-w <dir>`) must precede the container id; anything after the
+        # container id is the command to run in the container. Putting
+        # `-w` after <cid> makes docker try to exec `-w` itself
+        # (OCI "exec: -w: executable file not found"). Order is
+        # load-bearing — caught by the real-docker verification, missed
+        # by the docker-faked unit tests.
+        docker_cmd = ["docker", "exec"]
+        if effective_cwd:
+            docker_cmd += ["-w", effective_cwd]
+        docker_cmd += [container_id]
+        docker_cmd += argv
+        _log.debug("run_in_worktree (docker): %s", docker_cmd)
+        return subprocess.run(
+            docker_cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    else:
+        # Non-docker worktree: local subprocess.
+        _log.debug("run_in_worktree (local): %s", argv)
+        return subprocess.run(
+            argv,
+            cwd=effective_cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+
+
+def release_worktree(config: "IsolationConfig | IsolationTier", worktree: Path) -> None:
+    """Tear down the isolation for ``worktree``.
+
+    For the docker tier: ``docker rm -f <cid>`` and deregisters the
+    worktree. For worktree/venv tiers: no-op (the runner keeps worktrees
+    on disk for postmortem). Idempotent: double-call is safe.
+    """
+    if isinstance(config, str):
+        tier = config
+    else:
+        tier = config.tier
+
+    if tier != ISOLATION_DOCKER:
+        return
+
+    key = str(worktree.resolve())
+    container_id = _DOCKER_REGISTRY.pop(key, None)
+    _DOCKER_MOUNTS.pop(key, None)
+    if container_id is None:
+        # Already released or never registered (idempotent).
+        return
+
+    _log.debug("release_worktree: docker rm -f %s", container_id)
+    proc = subprocess.run(
+        ["docker", "rm", "-f", container_id],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        # Log but do not raise — teardown failures are not fatal; the
+        # container is typically already gone (e.g. killed externally).
+        _log.warning(
+            "release_worktree: docker rm -f %s exited %d: %s",
+            container_id,
+            proc.returncode,
+            (proc.stderr or proc.stdout).strip(),
+        )
+
+
 # ── Internals ──────────────────────────────────────────────────────────
+
+
+def _provision_docker(config: IsolationConfig, attempt_dir: Path) -> Path:
+    """Provision a docker-tier worktree.
+
+    1. Probes ``docker version`` — a missing daemon is an ENVIRONMENT
+       prerequisite failure (clear message, not a bug, not a skip).
+    2. Creates the host worktree directory (mirrors ``_provision_plain``).
+    3. Starts a long-lived container with the worktree bind-mounted at
+       ``/workspace``:
+           docker run -d -v <abs_worktree>:/workspace -w /workspace <image> sleep infinity
+    4. Registers ``{worktree_path → container_id}`` in ``_DOCKER_REGISTRY``.
+    5. Returns the host worktree ``Path`` (unchanged signature).
+
+    No DinD, no image build, no provision-time copy. The worktree is
+    empty at this point; ``prepare_task`` + the backend populate it
+    before ``verify`` executes in-container via ``run_in_worktree``.
+    """
+    _require_docker()
+
+    image = config.image
+    if not image:
+        raise IsolationProvisionError(
+            "docker isolation tier requires IsolationConfig.image to be set "
+            "(the prebuilt image reference, e.g. 'swebench/sweb.eval.x86_64.<id>')"
+        )
+
+    wt = _provision_plain(attempt_dir)
+    abs_wt = str(wt.absolute())
+    mount = config.container_mount or _CONTAINER_MOUNT
+
+    _log.debug(
+        "_provision_docker: starting container image=%s wt=%s mount=%s",
+        image, abs_wt, mount,
+    )
+    proc = subprocess.run(
+        [
+            "docker", "run",
+            "--detach",
+            "--volume", f"{abs_wt}:{mount}",
+            "--workdir", mount,
+            image,
+            "sleep", "infinity",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise IsolationProvisionError(
+            f"docker run failed for image {image!r} (exit {proc.returncode}): "
+            f"{(proc.stderr or proc.stdout).strip()}"
+        )
+
+    container_id = proc.stdout.strip()
+    if not container_id:
+        raise IsolationProvisionError(
+            f"docker run succeeded but returned no container id (stdout empty); "
+            f"image: {image!r}"
+        )
+
+    key = str(wt.resolve())
+    _DOCKER_REGISTRY[key] = container_id
+    _DOCKER_MOUNTS[key] = mount
+    _log.info(
+        "_provision_docker: container %s started for worktree %s (mount=%s)",
+        container_id[:12], wt, mount,
+    )
+    return wt
+
+
+def _require_docker() -> None:
+    """Probe ``docker version``; raise ``IsolationProvisionError`` with an
+    ENVIRONMENT-prerequisite message if Docker is absent.
+
+    This is an environment check, not a harness bug. The error message
+    explicitly says "install Docker" so the user knows the remedy.
+    """
+    if shutil.which("docker") is None:
+        raise IsolationProvisionError(
+            "ENVIRONMENT PREREQUISITE: the docker isolation tier requires "
+            "'docker' on PATH. Install Docker Desktop or Docker Engine and "
+            "start the daemon before running SWE-bench or other docker-tier "
+            "benchmarks. (docker isolation is local-only; CI uses the stub tier.)"
+        )
+    proc = subprocess.run(
+        ["docker", "version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise IsolationProvisionError(
+            "ENVIRONMENT PREREQUISITE: 'docker version' failed "
+            f"(exit {proc.returncode}). The Docker daemon may not be running. "
+            f"Start the Docker daemon and retry. "
+            f"stderr: {(proc.stderr or proc.stdout).strip()!r}"
+        )
 
 
 def _provision_plain(attempt_dir: Path) -> Path:

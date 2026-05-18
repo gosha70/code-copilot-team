@@ -229,6 +229,7 @@ The MVP ships these backends:
 |------------------|-------|-----------------------------------------------------------------------------------------------------|
 | `stub`           | 1     | Copies `golden_patch` into the worktree; CI smoke test only.                                        |
 | `claude-code`    | 3     | Spawns `claude -p` headless; parses transcript usage. Provider routing via `ANTHROPIC_BASE_URL` (vLLM, Ollama, LM Studio). |
+| `codex`          | #33   | Spawns `codex exec --json --sandbox workspace-write --skip-git-repo-check [--model <m>] -` (prompt on stdin), parses the JSONL transcript. **Provider routing:** the OpenAI Codex CLI selects a provider via `~/.codex/config.toml` `[model_providers.<id>]` blocks (OpenAI cloud, or a local `base_url` for Ollama/vLLM). CCT *records* the resolved config.toml path + selected provider id in `backend_metadata` (never secrets); it does not set them. Pinned & verified: `codex-cli 0.130.0` — see `specs/benchmark-harness/verification/codex.md`. |
 
 **Not a backend:** vLLM, Ollama, LM Studio, OpenRouter — these are *providers* (LLM HTTP endpoints) that backends route to via the backend's own gateway env vars. CCT records which provider a run used; it does not set the routing.
 
@@ -250,7 +251,10 @@ isolation:
   install_command: "pip install -q pytest"
   # or:
   tier: docker
-  dockerfile: <path>
+  image: <prebuilt image ref>     # e.g. swebench/sweb.eval.<arch>.<id>:latest
+  container_mount: /testbed       # bind-mount the worktree over the
+                                  # image's repo dir (default /workspace)
+  dockerfile: <path>              # (build-from-Dockerfile variant)
   build_args: {}
 ```
 
@@ -260,9 +264,25 @@ the `worktree+venv` tier (Phase 2), it also creates a `.venv/` inside
 the worktree, runs the configured `install_command` with the venv's
 `bin/` at the front of `PATH`, and the verify path looks for
 `worktree/.venv/bin/python` and `worktree/.venv/bin/pytest` before
-falling back to the host toolchain. The `docker` tier is reserved
-for issue #33's SWE-bench Verified adapter; calling it raises
-`NotImplementedError`.
+falling back to the host toolchain.
+
+The `docker` tier (issue #33) provisions a long-lived container with
+the host worktree **bind-mounted at `IsolationConfig.container_mount`**
+(default `/workspace`; the SWE-bench Verified adapter sets `/testbed`,
+where its prebuilt image keeps the repo + editable-installed deps).
+`prepare_task` + the backend edit the host worktree; those edits are
+live in the container; `verify` runs the test sets in-container via
+`isolation.run_in_worktree`; teardown (`release_worktree`) is called
+by the runner in a `finally`. **docker is local-only — never in CI**
+(images are multi-GB); a missing/misconfigured Docker daemon is
+reported as an environment prerequisite, never a silent skip. The
+SWE-bench Verified adapter (`swe-bench-verified`, `REVISION`-pinned via
+the stdlib HF rows-API `fetch.py`; image ref derived at runtime as
+`swebench/sweb.eval.<host-arch>.<instance_id with __→_1776_>:latest`;
+single-shot) is the first real docker-tier consumer; `verify` applies
+the instance `test_patch` then runs `FAIL_TO_PASS`/`PASS_TO_PASS` in
+the image's `testbed` conda env. Update procedure: edit `REVISION`,
+run `python3 -m benchmarks.adapters.swe_bench_verified.fetch`.
 
 Per-task isolation is declared by the adapter's
 `isolation_for(task) -> IsolationConfig`. Adapters that don't vary

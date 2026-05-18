@@ -38,7 +38,7 @@ from .contracts import (
     TaskSpec,
     VerifyResult,
 )
-from .isolation import install_dependencies, provision_worktree
+from .isolation import install_dependencies, provision_worktree, release_worktree
 from .registry import get_adapter, get_backend
 
 
@@ -188,11 +188,17 @@ def _execute_attempt(
     # Verify regardless — even on backend error, the worktree may be
     # in a partially-populated state and the verify step's output is
     # diagnostic.
-    verify_result = adapter.verify(task, worktree)
+    try:
+        verify_result = adapter.verify(task, worktree)
 
-    # Compute diff (prepared -> worktree).
-    diff_path = _write_diff(prepared, worktree, attempt_dir)
-    files_changed, lines_added, lines_removed = _diff_stats(prepared, worktree)
+        # Compute diff (prepared -> worktree).
+        diff_path = _write_diff(prepared, worktree, attempt_dir)
+        files_changed, lines_added, lines_removed = _diff_stats(prepared, worktree)
+    finally:
+        # Tear down the docker container (no-op for worktree/venv tiers).
+        # Called unconditionally so orphan containers are not left running
+        # on crashes or exceptions.
+        release_worktree(isolation_config, worktree)
 
     finished_at = _utc_now()
     elapsed = time.monotonic() - started
@@ -308,6 +314,10 @@ def _isolation_record(config: IsolationConfig) -> dict:
         out["dockerfile"] = str(config.dockerfile)
     if config.build_args:
         out["build_args"] = dict(config.build_args)
+    if config.image is not None:
+        out["image"] = config.image
+    if config.container_mount is not None:
+        out["container_mount"] = config.container_mount
     return out
 
 

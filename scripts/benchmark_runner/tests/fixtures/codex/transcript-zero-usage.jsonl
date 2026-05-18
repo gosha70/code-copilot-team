@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"019e3913-0000-0000-0000-000000000002"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Done with zero tokens."}}
+{"type":"turn.completed","usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}
