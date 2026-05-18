@@ -238,7 +238,7 @@ Every provider currently requires a `command` template with `{review_request}` a
 
 `code-copilot-team` ships a Karpathy-pattern LLM Wiki maintainer that
 turns `knowledge/raw/` into a curated, cited, agent-readable markdown
-layer under `knowledge/wiki/`. Four operations, one CLI:
+layer under `knowledge/wiki/`. Five operations, one CLI:
 
 ```bash
 ./scripts/wiki ingest <source>          # multi-page write plan against existing wiki state
@@ -247,6 +247,8 @@ layer under `knowledge/wiki/`. Four operations, one CLI:
 ./scripts/wiki query --file-back "..."  # round-trip the answer back into a patch-set
 ./scripts/wiki lint                     # structural lint (frontmatter, links, slugs)
 ./scripts/wiki lint --health [--strict] # knowledge-health (contradictions, stale claims, weak orphans, missing cross-links)
+./scripts/wiki audit-flush              # commit pending ingest-log lines (reject-only durability)
+./scripts/wiki audit-flush --dry-run    # report count + blob SHA without committing
 ```
 
 **Human approval is always gating, and the source-control boundary
@@ -261,9 +263,11 @@ audit trail under `knowledge/wiki/.audit/` records every `wiki ingest`
 decision (timestamp, source SHA, backend, disposition, reason) in
 `ingest-log.md`, and every accepted proposal's original LLM draft in
 `knowledge/wiki/.audit/proposals/<date>-<slug>/` (applied atomically
-by `wiki promote`). A pending follow-up —
-[gosha70/code-copilot-team#37](https://github.com/gosha70/code-copilot-team/issues/37)
-— will add `wiki audit-flush` for reject-only workflows. Promotion
+by `wiki promote`). `wiki audit-flush` (shipped in
+[gosha70/code-copilot-team#37](https://github.com/gosha70/code-copilot-team/issues/37))
+closes the reject-only durability gap: run it after a reject-only session
+to commit any pending audit lines in a focused `audit: flush N pending
+ingest-log line(s)` commit. Promotion
 history is traceable via git on `knowledge/wiki/` plus
 `knowledge/wiki/log.md`.
 

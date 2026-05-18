@@ -174,6 +174,142 @@ set -e
 
 assert "unknown backend exits 2" "[[ '$UNKNOWN_BACKEND_EXIT' -eq 2 ]]"
 
+# ── Section 5: audit-flush e2e round-trip ─────────────────
+#
+# Run in a scratch git init repo that contains a copy of the
+# wiki_ingest package. This means _resolve_repo_root() resolves to
+# the scratch root (Path(__file__).parent.parent.parent), so a real
+# `git commit` does not touch the working repo.
+
+echo ""
+echo "=== audit-flush e2e round-trip ==="
+
+WIKI_BIN="$REPO_DIR/scripts/wiki"
+assert "wiki entrypoint exists" "[[ -f '$WIKI_BIN' ]]"
+assert "wiki entrypoint is executable" "[[ -x '$WIKI_BIN' ]]"
+
+AF_SCRATCH="$(mktemp -d)"
+# Sections 2+3 (wiki-ingest smoke tests) write to the working repo's
+# knowledge/wiki/.audit/. Clean that up on exit along with all other temp
+# files. The REPO_DIR .audit/ is an untracked side-effect of running ingest
+# against the real repo root; we own the cleanup here.
+# shellcheck disable=SC2064
+trap "rm -rf '$SMOKE_TMPDIR' '$SMOKE_STDOUT' '$SMOKE_STDERR' '$UNITTEST_LOG' '$DRY_TMPDIR' '$DRY_STDOUT' '$AF_SCRATCH' '$REPO_DIR/knowledge/wiki/.audit'" EXIT
+
+AF_REPO="$AF_SCRATCH/repo"
+mkdir -p "$AF_REPO"
+git -C "$AF_REPO" init --quiet
+git -C "$AF_REPO" config user.email "test@example.com"
+git -C "$AF_REPO" config user.name "Test"
+
+# Seed a README so HEAD exists before audit-flush runs.
+printf '# scratch\n' > "$AF_REPO/README.md"
+git -C "$AF_REPO" add README.md
+git -C "$AF_REPO" commit --quiet -m "init"
+
+# Copy the wiki_ingest package into the scratch repo's scripts/ dir so
+# that _resolve_repo_root() (Path(__file__).parent.parent.parent)
+# resolves to AF_REPO rather than the working repo.
+# Also copy the schema files that the multi-page ingestor requires.
+mkdir -p "$AF_REPO/scripts"
+cp -r "$REPO_DIR/scripts/wiki_ingest" "$AF_REPO/scripts/wiki_ingest"
+mkdir -p "$AF_REPO/knowledge/wiki/schema"
+cp "$REPO_DIR/knowledge/wiki/schema/ingest-rules.md" "$AF_REPO/knowledge/wiki/schema/"
+cp "$REPO_DIR/knowledge/wiki/schema/page-types.md" "$AF_REPO/knowledge/wiki/schema/"
+cp "$REPO_DIR/knowledge/wiki/schema/citation-rules.md" "$AF_REPO/knowledge/wiki/schema/"
+
+# Helper alias: run wiki_ingest with the scratch package on PYTHONPATH.
+AF_WIKI="PYTHONPATH=$AF_REPO/scripts python3 -m wiki_ingest"
+
+# Step 1: run `wiki ingest --backend test` inside the scratch repo.
+# --allow-out-of-repo is required because the fixture lives in the
+# working repo, not in the scratch repo.
+AF_INGEST_OUT="$(mktemp)"
+AF_INGEST_PROPOSALS="$AF_SCRATCH/proposals"
+mkdir -p "$AF_INGEST_PROPOSALS"
+set +e
+eval "$AF_WIKI ingest \
+    --backend test \
+    --allow-out-of-repo \
+    --output-dir '$AF_INGEST_PROPOSALS' \
+    '$REPO_DIR/scripts/wiki_ingest/tests/fixtures/sample-incident.md'" \
+    >"$AF_INGEST_OUT" 2>/dev/null
+AF_INGEST_EXIT=$?
+set -e
+assert "audit-flush e2e: wiki ingest exits 0" "[[ '$AF_INGEST_EXIT' -eq 0 ]]"
+
+AF_LOG="$AF_REPO/knowledge/wiki/.audit/ingest-log.md"
+assert "audit-flush e2e: ingest-log.md exists after ingest" "[[ -f '$AF_LOG' ]]"
+
+# Count data lines (lines after the 2-line preamble) using the scratch package.
+AF_LOG_DATA_LINES="$(PYTHONPATH="$AF_REPO/scripts" python3 - "$AF_LOG" <<'PYEOF'
+import sys, pathlib
+from wiki_ingest.audit_lint import INGEST_LOG_MARKER
+p = pathlib.Path(sys.argv[1])
+lines = p.read_text(encoding="utf-8").split("\n")
+data = [l for l in lines[2:] if l.strip()]
+print(len(data))
+PYEOF
+)"
+assert "audit-flush e2e: at least 1 pending data line after ingest" \
+  "[[ '$AF_LOG_DATA_LINES' -ge 1 ]]"
+
+# Step 2: dry-run — should print "N pending ingest-log line(s); blob <sha>"
+AF_DRY_OUT="$(mktemp)"
+set +e
+eval "$AF_WIKI audit-flush --dry-run" >"$AF_DRY_OUT" 2>/dev/null
+AF_DRY_EXIT=$?
+set -e
+assert "audit-flush --dry-run exits 0" "[[ '$AF_DRY_EXIT' -eq 0 ]]"
+assert "audit-flush --dry-run prints 'pending ingest-log line(s)'" \
+  "grep -q 'pending ingest-log line' '$AF_DRY_OUT'"
+assert "audit-flush --dry-run output contains 'blob'" \
+  "grep -q 'blob' '$AF_DRY_OUT'"
+
+# Step 3: ingest-log.md must NOT be committed yet (dry-run does not commit).
+AF_LOG_STATUS="$(git -C "$AF_REPO" status --porcelain -- 'knowledge/wiki/.audit/ingest-log.md')"
+assert "audit-flush e2e: ingest-log.md is still uncommitted after --dry-run" \
+  "[[ -n '$AF_LOG_STATUS' ]]"
+
+# Step 4: real flush.
+AF_FLUSH_OUT="$(mktemp)"
+set +e
+eval "$AF_WIKI audit-flush" >"$AF_FLUSH_OUT" 2>/dev/null
+AF_FLUSH_EXIT=$?
+set -e
+assert "audit-flush exits 0" "[[ '$AF_FLUSH_EXIT' -eq 0 ]]"
+
+# Step 5: verify commit message and single-file diff.
+AF_COMMIT_MSG="$(git -C "$AF_REPO" log -1 --format='%s')"
+assert "audit-flush commit message starts with 'audit: flush'" \
+  "[[ '$AF_COMMIT_MSG' == 'audit: flush '* ]]"
+assert "audit-flush commit message contains 'pending ingest-log line'" \
+  "[[ '$AF_COMMIT_MSG' == *'pending ingest-log line'* ]]"
+
+AF_STAT="$(git -C "$AF_REPO" show --stat --format='' HEAD)"
+# Count files listed in the stat (lines containing "|")
+AF_FILE_COUNT="$(printf '%s\n' "$AF_STAT" | grep -c '|' || true)"
+assert "audit-flush commit changes exactly one file" \
+  "[[ '$AF_FILE_COUNT' -eq 1 ]]"
+assert "audit-flush commit changes ingest-log.md" \
+  "[[ '$AF_STAT' == *'ingest-log.md'* ]]"
+
+# Step 6: second run must be a no-op.
+AF_NOOP_OUT="$(mktemp)"
+set +e
+eval "$AF_WIKI audit-flush" >"$AF_NOOP_OUT" 2>/dev/null
+AF_NOOP_EXIT=$?
+set -e
+assert "audit-flush second run exits 0" "[[ '$AF_NOOP_EXIT' -eq 0 ]]"
+assert "audit-flush second run prints 'nothing to flush'" \
+  "grep -q 'nothing to flush' '$AF_NOOP_OUT'"
+
+# The scratch repo is under AF_SCRATCH — removed by the trap above.
+# Verify no stray .audit/ was left in the working repo itself.
+assert "audit-flush e2e: no stray .audit/ in the working repo" \
+  "[[ ! -e '$REPO_DIR/knowledge/wiki/.audit/ingest-log.md' ]] || \
+   git -C '$REPO_DIR' diff --quiet -- 'knowledge/wiki/.audit/ingest-log.md'"
+
 # ── Results ───────────────────────────────────────────────
 
 echo ""
