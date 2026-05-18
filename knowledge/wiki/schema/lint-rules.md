@@ -9,8 +9,8 @@ reading prose. Everything else is a curator concern.
 
 ### 1. Frontmatter presence and well-formedness
 
-Every `*.md` file under `knowledge/wiki/` (excluding `scripts/`,
-`schema/`, and `.audit/`) must:
+Every `*.md` file under `knowledge/wiki/` (excluding `scripts/` and
+`schema/`) must:
 
 - begin with a `---` line on line 1
 - contain a closing `---` line within the first 50 lines
@@ -21,16 +21,6 @@ Every `*.md` file under `knowledge/wiki/` (excluding `scripts/`,
 
 `schema/*.md` files are exempt from frontmatter checks (they are
 structural documentation, not wiki content).
-
-`.audit/**` is **entirely exempt** from every rule in this document
-(frontmatter, `page_type`, `slug`, directory placement, link
-integrity, orphan BFS). It is a tooling audit trail, not wiki
-content — it has no frontmatter and is never linked from `index.md`.
-Its format is governed by a separate machine-checkable spec,
-[`audit-rules.md`](audit-rules.md), validated by the `wiki lint`
-audit pass rather than by `lint-wiki.sh`. See that file for the
-`ingest-log.md` NDJSON schema and the `.audit/proposals/<dir>/`
-structure.
 
 ### 2. `page_type` must be one of the canonical values
 

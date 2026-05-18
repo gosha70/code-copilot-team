@@ -79,10 +79,10 @@ def _read_text_or_empty(path: Path) -> str:
 
 
 def _list_wiki_pages(wiki_dir: Path) -> list[Path]:
-    """Return all candidate wiki .md files (excludes schema/, scripts/, .audit/, index, log, overview)."""
+    """Return all candidate wiki .md files (excludes schema/, scripts/, index, log, overview)."""
     if not wiki_dir.is_dir():
         return []
-    excluded_dirs = {"schema", "scripts", ".audit"}
+    excluded_dirs = {"schema", "scripts"}
     excluded_stems = {"index", "log", "overview"}
     pages: list[Path] = []
     for p in sorted(wiki_dir.rglob("*.md")):
