@@ -22,11 +22,13 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Optional
 
+from .progress import ProgressLogger
 from .contracts import (
     RESULT_ERROR,
     RESULT_FAIL,
@@ -90,11 +92,30 @@ def run_benchmark(
 
     run_dir = _make_run_dir(runs_root, benchmark_id, backend.backend_id)
 
+    # Live-progress setup (D2).
+    # Total = tasks × runs × max_attempts gives an upper bound; in
+    # practice the loop breaks early on pass so the counter may not
+    # reach total. We expose the upper bound rather than lying with a
+    # smaller number — the user sees [3/6] not [3/3] when one task
+    # passed early and the rest are running.
+    progress = ProgressLogger()
+    max_attempts = adapter.max_attempts()
+    attempt_total = len(tasks) * runs * max_attempts
+    # Monotonically increasing attempt counter (1-based).
+    attempt_idx = 0
+
+    # candidate_name for progress display: "backend_family:backend_model"
+    # or just "backend_family" when model is empty (stub, etc.).
+    candidate_name = (
+        f"{backend_family}:{backend_model}" if backend_model else backend_family
+    )
+
     for task in tasks:
         for run_index in range(1, runs + 1):
             run_id = f"run-{run_index:03d}"
             prior: Optional[VerifyResult] = None
-            for attempt in range(1, adapter.max_attempts() + 1):
+            for attempt in range(1, max_attempts + 1):
+                attempt_idx += 1
                 attempt_verify = _execute_attempt(
                     adapter=adapter,
                     backend=backend,
@@ -104,6 +125,10 @@ def run_benchmark(
                     run_id=run_id,
                     run_dir=run_dir,
                     prior=prior,
+                    progress=progress,
+                    attempt_idx=attempt_idx,
+                    attempt_total=attempt_total,
+                    candidate_name=candidate_name,
                 )
                 # Stop early on success — there is no value in burning
                 # a second attempt for a task that already passed.
@@ -130,6 +155,10 @@ def _execute_attempt(
     run_id: str,
     run_dir: Path,
     prior: Optional[VerifyResult],
+    progress: Optional[ProgressLogger] = None,
+    attempt_idx: int = 0,
+    attempt_total: int = 0,
+    candidate_name: str = "",
 ) -> VerifyResult:
     attempt_dir = run_dir / _slug(task.task_id) / f"attempt-{attempt:02d}-{run_id}"
     attempt_dir.mkdir(parents=True, exist_ok=False)
@@ -171,6 +200,53 @@ def _execute_attempt(
         timeout_seconds=None,
     )
 
+    # ── Live progress (D2) ───────────────────────────────────────────
+    # Emit start line, spawn a daemon heartbeat thread, then run the
+    # backend. The thread emits a line every progress._interval seconds
+    # while the attempt_in_progress event is set. The finally block
+    # clears the event and joins the thread unconditionally — whether
+    # backend.run returns normally, returns a timeout result, or raises.
+    # This is safe because the heartbeat thread never writes to the
+    # run record; it only emits to stderr.
+    if progress is not None:
+        progress.emit_start(
+            idx=attempt_idx,
+            total=attempt_total,
+            candidate=candidate_name,
+            task=task.task_id,
+            attempt=attempt,
+        )
+
+    attempt_in_progress = threading.Event()
+    heartbeat_started_at = time.monotonic()
+
+    # attempt_in_progress is a stop-signal Event:
+    # - cleared (not set) while the attempt is running → heartbeat loops
+    # - set when the attempt finishes → heartbeat thread exits
+    # This is the inverse of a "flag" event so that Event.wait(timeout=)
+    # returns False on timeout (heartbeat should fire) and True when
+    # stop is requested (heartbeat should exit).
+    attempt_in_progress.clear()
+
+    if progress is not None:
+        _heartbeat_thread = threading.Thread(
+            target=progress.run_heartbeat,
+            kwargs=dict(
+                stop_event=attempt_in_progress,
+                started_at=heartbeat_started_at,
+                idx=attempt_idx,
+                total=attempt_total,
+                candidate=candidate_name,
+                task=task.task_id,
+                attempt=attempt,
+            ),
+            daemon=True,
+            name=f"heartbeat-{attempt_idx}",
+        )
+        _heartbeat_thread.start()
+    else:
+        _heartbeat_thread = None
+
     backend_error: Optional[str] = None
     try:
         backend_result: BackendResult = backend.run(prompt, ctx)
@@ -184,6 +260,13 @@ def _execute_attempt(
             transcript_path=None,
             elapsed_seconds=time.monotonic() - started,
         )
+    finally:
+        # Signal the heartbeat thread to stop by setting the event.
+        # join() waits for it to exit. timeout=5 is a safety net;
+        # the daemon flag ensures it cannot outlive the process.
+        attempt_in_progress.set()
+        if _heartbeat_thread is not None:
+            _heartbeat_thread.join(timeout=5)
 
     # Verify regardless — even on backend error, the worktree may be
     # in a partially-populated state and the verify step's output is
@@ -257,6 +340,22 @@ def _execute_attempt(
         },
         "result": _classify_result(verify_result, backend_error),
     }
+
+    # Emit the attempt-end progress line now that we know the result
+    # and elapsed time. tool_calls is the sum of all tool invocations
+    # recorded by the backend.
+    if progress is not None:
+        _total_tool_calls = sum(backend_result.tool_calls.values())
+        progress.emit_end(
+            idx=attempt_idx,
+            total=attempt_total,
+            candidate=candidate_name,
+            task=task.task_id,
+            attempt=attempt,
+            result=score["result"],
+            elapsed_seconds=elapsed,
+            tool_calls=_total_tool_calls,
+        )
 
     stats = {
         "schema_version": SCHEMA_VERSION,

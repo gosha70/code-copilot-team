@@ -558,6 +558,7 @@ def _run_stub_smoke(runs_root: Optional[Path] = None) -> bool:
                 capture_output=True,
                 text=True,
                 timeout=60,
+                env=_subprocess_env(),
             )
             return proc.returncode == 0
         except subprocess.TimeoutExpired:
@@ -920,7 +921,7 @@ def _invoke_benchmark_compare_from_preset(preset: dict, passthrough_flags: list[
         os.close(fd)
         Path(tmp_path).write_text(json.dumps(preset, indent=2), encoding="utf-8")
         cmd = [str(benchmark_script), "compare", "--config", tmp_path] + passthrough_flags
-        proc = subprocess.run(cmd)
+        proc = subprocess.run(cmd, env=_subprocess_env())
         return proc.returncode
     finally:
         try:
@@ -976,7 +977,7 @@ def _dispatch(
         os.close(fd)
         Path(tmp_path).write_text(json.dumps(cfg, indent=2), encoding="utf-8")
         cmd = [str(benchmark_script), "compare", "--config", tmp_path] + passthrough_flags
-        proc = subprocess.run(cmd)
+        proc = subprocess.run(cmd, env=_subprocess_env())
         return proc.returncode
     finally:
         try:
@@ -1008,8 +1009,24 @@ def _invoke_benchmark_run(
         for t in task_filter:
             cmd += ["--task", t]
     cmd += passthrough_flags
-    proc = subprocess.run(cmd)
+    proc = subprocess.run(cmd, env=_subprocess_env())
     return proc.returncode
+
+
+# ── Subprocess environment helper (D2 flush discipline) ──────────────────
+
+
+def _subprocess_env() -> dict[str, str]:
+    """Return os.environ with PYTHONUNBUFFERED=1 guaranteed.
+
+    Belt-and-suspenders flush discipline: scripts/bench already exports
+    PYTHONUNBUFFERED=1 at the shim level, but we also inject it here
+    so any subprocess spawned by bench.py (e.g. when bench is imported
+    and called programmatically rather than via the shim) inherits it.
+    """
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+    return env
 
 
 # ── Env patching helper (mirrors compare._patched_env) ─────────────────
