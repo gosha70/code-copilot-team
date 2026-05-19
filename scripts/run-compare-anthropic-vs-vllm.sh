@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # scripts/run-compare-anthropic-vs-vllm.sh
 #
+# NOTE: This script is one way to run an Anthropic-vs-vLLM comparison.
+# `./scripts/bench` is the daily tool — either is supported. The
+# LiteLLM proxy lifecycle below is now powered by the shared
+# benchmark_runner/proxy.py helper (extracted 2026-05-18).
+#
 # Automated 2-LLM benchmark: Claude Code → <anthropic-model> (Anthropic API)
 # vs. Claude Code → <vllm-model> (remote vLLM on an NVIDIA DGX Spark),
 # on Aider Polyglot.
@@ -9,7 +14,7 @@
 #
 #   claude-code  ──Anthropic shape──▶  LiteLLM proxy        ──OpenAI shape──▶  vLLM
 #   (claude -p)   /v1/messages         127.0.0.1:8787                          192.168.1.23:8000
-#                                      (this script starts & kills it)         /v1/chat/completions
+#                                      (proxy.py manages lifecycle)            /v1/chat/completions
 #
 #   Why the proxy: vLLM exposes an OpenAI-compatible API only
 #   (/v1/chat/completions, /v1/models). It does NOT serve an
@@ -106,7 +111,7 @@ set -euo pipefail
 # --- Help ---
 case "${1:-}" in
     -h|--help)
-        sed -n '2,102p' "$0" | sed -E 's/^# ?//'
+        sed -n '2,107p' "$0" | sed -E 's/^# ?//'
         exit 0
         ;;
 esac
@@ -135,11 +140,11 @@ LITELLM_PROXY_BASE="http://127.0.0.1:${LITELLM_PROXY_PORT}"
 # mid-conversation, 131072 runs clean 3/3.
 CLAUDE_CODE_MAX_OUTPUT_TOKENS=32000
 VLLM_CTX_RECOMMENDED=131072
-# Per-run unique paths: two concurrent runs with different models/ports
-# must not clobber each other's config/log, and both are removed by the
-# trap on exit.
-LITELLM_CONFIG="$(mktemp -t cct-litellm-vllm.XXXXXX.yaml)"
-LITELLM_LOG="$(mktemp -t cct-litellm-vllm.XXXXXX.log)"
+# These are assigned by start_litellm_proxy() (via proxy.py) at runtime.
+# Declared empty here so cleanup() can reference them under `set -u`
+# even on an early exit before the proxy is started.
+LITELLM_CONFIG=""
+LITELLM_LOG=""
 # Same rule for the preflight scratch files (vLLM /v1/models dump,
 # harness registry dump) — mktemp'd, trap-removed.
 VLLM_MODELS_JSON="$(mktemp -t cct-vllm-models.XXXXXX.json)"
@@ -259,60 +264,41 @@ trap cleanup EXIT
 trap on_signal INT TERM HUP
 
 start_litellm_proxy() {
-    # 1. litellm present? It is pip-installed into the ephemeral venv by
-    #    setup_venv before any stage; this guards against a silent
-    #    install failure (pip succeeded but no console-script on PATH).
+    # Delegate to the shared proxy.py helper (benchmark_runner/proxy.py).
+    # This is the single source of truth for the LiteLLM lifecycle, the
+    # hosted_vllm/ prefix, and the SIGTERM→SIGKILL teardown shape.
+    # (Previously this function carried its own copy; extracted 2026-05-18.)
     if ! command -v litellm > /dev/null; then
         err "litellm missing after venv provisioning — inspect the pip output above"
         exit 1
     fi
     ok "litellm present in venv: $(litellm --version 2>/dev/null | head -1 || echo 'version unknown')"
 
-    # 2. Write the translation config. One alias that maps Anthropic-
-    #    shaped traffic to the remote vLLM's OpenAI API. The hosted_vllm/
-    #    prefix routes through LiteLLM's purpose-built vLLM adapter, which
-    #    pins to /v1/chat/completions. The generic openai/ provider on
-    #    LiteLLM >= 1.50 auto-detects vLLM's advertised /v1/responses
-    #    endpoint and routes multi-turn conversations through it; vLLM's
-    #    Responses API rejects LiteLLM's input-array shape with a
-    #    212-validation-error 400 (agent solves task at turn ~9, dies at
-    #    turn ~10 on the next continuation). hosted_vllm/ avoids that
-    #    route discovery. api_key is required by the SDK; vLLM ignores it.
-    cat > "$LITELLM_CONFIG" <<EOF
-model_list:
-  - model_name: "$VLLM_MODEL"
-    litellm_params:
-      model: "hosted_vllm/$VLLM_MODEL"
-      api_base: "${VLLM_BASE%/}/v1"
-      api_key: "dummy"
-litellm_settings:
-  drop_params: true
-EOF
-    ok "LiteLLM config written: $LITELLM_CONFIG"
+    note "Starting LiteLLM proxy on ${LITELLM_PROXY_BASE} → ${VLLM_BASE%/}/v1 (via proxy.py)…"
+    local proxy_output
+    proxy_output=$(
+        PYTHONPATH="${REPO_DIR}/scripts:${REPO_DIR}" \
+        python3 -m benchmark_runner.proxy start \
+            --vllm-base "$VLLM_BASE" \
+            --model "$VLLM_MODEL" \
+            --port "$LITELLM_PROXY_PORT" 2>&1
+    ) || {
+        err "proxy.py failed to start the LiteLLM proxy. Output:"
+        printf '%s\n' "$proxy_output" >&2
+        exit 1
+    }
 
-    # 3. Start the proxy in the background; capture PID for the trap.
-    note "Starting LiteLLM proxy on ${LITELLM_PROXY_BASE} → ${VLLM_BASE%/}/v1 …"
-    litellm --config "$LITELLM_CONFIG" --port "$LITELLM_PROXY_PORT" --host 127.0.0.1 \
-        > "$LITELLM_LOG" 2>&1 &
-    LITELLM_PID=$!
+    # Parse pid=, config=, log= from proxy output.
+    LITELLM_PID=$(printf '%s\n' "$proxy_output" | grep '^pid=' | cut -d= -f2-)
+    LITELLM_CONFIG=$(printf '%s\n' "$proxy_output" | grep '^config=' | cut -d= -f2-)
+    LITELLM_LOG=$(printf '%s\n' "$proxy_output" | grep '^log=' | cut -d= -f2-)
 
-    # 4. Wait up to 30s for /v1/models to answer.
-    local i
-    for i in $(seq 1 30); do
-        if ! kill -0 "$LITELLM_PID" 2>/dev/null; then
-            err "LiteLLM proxy process died during startup. Log:"
-            tail -40 "$LITELLM_LOG" >&2 || true
-            exit 1
-        fi
-        if curl -sS --max-time 2 "${LITELLM_PROXY_BASE}/v1/models" > /dev/null 2>&1; then
-            ok "LiteLLM proxy up (PID $LITELLM_PID), /v1/models responding"
-            return 0
-        fi
-        sleep 1
-    done
-    err "LiteLLM proxy did not answer /v1/models within 30s. Log:"
-    tail -40 "$LITELLM_LOG" >&2 || true
-    exit 1
+    if [[ -z "$LITELLM_PID" ]]; then
+        err "proxy.py did not print a PID. Output:"
+        printf '%s\n' "$proxy_output" >&2
+        exit 1
+    fi
+    ok "LiteLLM proxy up (PID $LITELLM_PID), /v1/models responding"
 }
 
 # --- Print parsed config ---

@@ -216,6 +216,7 @@ class ClaudeCodeBackend:
                     note=f"claude -p timed out after {timeout}s (process group killed)",
                 ),
                 failed_commands=1,
+                timed_out=True,  # D5: structured signal consumed by run._execute_attempt
             )
 
         elapsed = time.monotonic() - started

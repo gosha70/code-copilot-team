@@ -444,5 +444,73 @@ class RunComparisonE2ETest(unittest.TestCase):
         self.assertNotIn("CCT_COMPARE_PROBE", os.environ)
 
 
+# ── D1 regression: legacy --config flow unaffected ─────────────────────
+
+
+class LegacyConfigRegressionTest(unittest.TestCase):
+    """Regression: the legacy ./scripts/benchmark compare --config <file> path
+    must be byte-for-byte unaffected by the D1 wrapper changes."""
+
+    def setUp(self) -> None:
+        _fresh_registry()
+        self.addCleanup(_register.unregister_all_for_tests)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.runs_root = Path(self._tmp.name) / "runs"
+
+    def test_load_config_on_two_candidate_config(self) -> None:
+        raw = {
+            "benchmark": "stub",
+            "runs": 2,
+            "candidates": [
+                {"backend": "stub", "model": ""},
+                {"backend": "stub2", "model": ""},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "cfg.json"
+            p.write_text(json.dumps(raw), encoding="utf-8")
+            cfg = load_config(p)
+        self.assertEqual(cfg.benchmark, "stub")
+        self.assertEqual(cfg.runs, 2)
+        self.assertEqual(len(cfg.candidates), 2)
+
+    def test_single_candidate_still_rejected(self) -> None:
+        """compare's minItems:2 guard must remain intact after D1."""
+        raw = {
+            "benchmark": "stub",
+            "candidates": [{"backend": "stub"}],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "bad.json"
+            p.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(CompareConfigError, "at least 2"):
+                load_config(p)
+
+    def test_end_to_end_run_comparison_still_works(self) -> None:
+        """run_comparison on a 2-candidate config produces the expected layout."""
+        cfg = CompareConfig(
+            benchmark="stub",
+            runs=1,
+            task_filter=None,
+            candidates=[
+                Candidate(name="alpha", backend="stub", model="", env={}),
+                Candidate(name="beta", backend="stub2", model="", env={}),
+            ],
+        )
+        run_dir = run_comparison(
+            cfg,
+            runs_root=self.runs_root,
+            timestamp="20260518T000000Z",
+            emit_report=False,
+        )
+        self.assertTrue(run_dir.is_dir())
+        self.assertTrue((run_dir / "compare-manifest.json").is_file())
+        self.assertTrue((run_dir / "candidate-runs.json").is_file())
+        # Both candidate run-dirs exist.
+        nested = [p for p in run_dir.iterdir() if p.is_dir()]
+        self.assertEqual(len(nested), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

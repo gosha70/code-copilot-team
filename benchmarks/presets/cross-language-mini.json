@@ -1,0 +1,12 @@
+{
+  "benchmark": "aider-polyglot",
+  "runs": 3,
+  "task": ["python/bowling", "go/bowling", "rust/bowling"],
+  "candidates": [
+    {
+      "name": "claude-code-sonnet",
+      "backend": "claude-code",
+      "model": "sonnet"
+    }
+  ]
+}

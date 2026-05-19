@@ -62,6 +62,7 @@ class CompareConfig:
     runs: int
     candidates: list[Candidate]
     task_filter: Optional[list[str]] = None
+    attempt_timeout_seconds: Optional[int] = None
 
 
 class CompareConfigError(ValueError):
@@ -161,11 +162,26 @@ def _validate(raw: Any, *, source: str = "<config>") -> CompareConfig:
             Candidate(name=name, backend=backend, model=model, env=dict(env_raw))
         )
 
+    # Optional top-level per-attempt timeout (D3 schema field; D5 wires it).
+    # Positive integer only — silently ignoring a bad value would let a typo'd
+    # setting masquerade as "no timeout", which is exactly the hang-risk D5
+    # is meant to prevent.
+    raw_timeout = raw.get("attempt_timeout_seconds")
+    attempt_timeout_seconds: Optional[int] = None
+    if raw_timeout is not None:
+        if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, int) or raw_timeout < 1:
+            raise CompareConfigError(
+                f"{source}: 'attempt_timeout_seconds' must be a positive integer (≥ 1); "
+                f"got {raw_timeout!r}"
+            )
+        attempt_timeout_seconds = raw_timeout
+
     return CompareConfig(
         benchmark=benchmark,
         runs=runs,
         candidates=candidates,
         task_filter=task,
+        attempt_timeout_seconds=attempt_timeout_seconds,
     )
 
 
@@ -203,6 +219,7 @@ def run_comparison(
     runs_root: Path = Path("runs"),
     timestamp: Optional[str] = None,
     emit_report: bool = True,
+    attempt_timeout_seconds: Optional[int] = None,
 ) -> Path:
     """Run every candidate sequentially under one shared parent run-dir.
 
@@ -248,6 +265,10 @@ def run_comparison(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
 
+    # Resolve the effective per-attempt timeout: explicit caller arg
+    # overrides the config field (bench.py passes --attempt-timeout here).
+    effective_timeout = attempt_timeout_seconds or config.attempt_timeout_seconds
+
     candidate_runs: list[dict[str, str]] = []
     for c in config.candidates:
         with _patched_env(c.env):
@@ -258,6 +279,7 @@ def run_comparison(
                 runs=config.runs,
                 runs_root=parent,
                 task_filter=config.task_filter,
+                attempt_timeout_seconds=effective_timeout,
             )
         candidate_runs.append(
             {"name": c.name, "run_dir": run_dir.relative_to(parent).as_posix()}

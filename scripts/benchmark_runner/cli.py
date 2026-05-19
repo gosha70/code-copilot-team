@@ -107,6 +107,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path("runs"),
         help="Directory under which run records are written (default ./runs).",
     )
+    p_run.add_argument(
+        "--attempt-timeout",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="Per-attempt timeout in seconds (D5). Passed to RunContext.timeout_seconds.",
+    )
 
     # ── report ────────────────────────────────────────────────────────
     p_report = sub.add_parser(
@@ -233,6 +240,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             runs=args.runs,
             runs_root=args.runs_root,
             task_filter=args.task,
+            attempt_timeout_seconds=args.attempt_timeout,
         )
     except EmptyAdapterError as exc:
         # Distinct from "unknown task id" (KeyError) — no tasks at all.

@@ -6,7 +6,73 @@ The harness does **not** author benchmarks — it runs established public benchm
 
 See [`specs/benchmark-harness/spec.md`](../specs/benchmark-harness/spec.md) for the full design and [`specs/benchmark-harness/plan.md`](../specs/benchmark-harness/plan.md) for the phased delivery plan.
 
-## Quick start: compare multiple LLMs
+## 60-second quickstart
+
+`./scripts/bench` is the daily driver. It translates a terse CLI into
+the JSON config the harness consumes — no hand-authored config, no
+four-env-var incantation, live progress to your terminal, and a
+per-attempt timeout so a hung model never blocks the run.
+
+**First-time check (no LLM call, no spend):**
+
+```bash
+./scripts/bench
+```
+
+Runs an internal stub-vs-stub smoke (proves the wrapper + harness +
+report pipeline work), prints which LLM endpoints your environment has,
+and exits — without making any LLM call or touching your Anthropic
+account.
+
+**Compare two models on a coding task:**
+
+```bash
+./scripts/bench sonnet ollama:qwen2.5-coder:7b
+```
+
+`sonnet`/`opus`/`haiku` use your ambient Anthropic auth;
+`ollama:`/`lmstudio:`/`openrouter:`/`vllm:` auto-fill the gateway env
+vars for you (colons in model tags like `qwen2.5-coder:7b` are parsed
+correctly). The wrapper **prompts for confirmation before any
+Anthropic-API-bearing run** (all-local comparisons never prompt); add
+`--yes` for CI / non-interactive use.
+
+**Different models, tasks, or run counts:**
+
+```bash
+./scripts/bench --task python/bowling,go/bowling --runs 5 sonnet opus
+```
+
+**A curated comparison without thinking about candidate specs:**
+
+```bash
+./scripts/bench --preset local-vs-cloud
+```
+
+**Discovery:**
+
+```bash
+./scripts/bench --help
+./scripts/bench --list-presets      # anthropic-tour, local-vs-cloud, cross-language-mini
+./scripts/bench --list-providers    # what your machine can actually run (Ollama ≥0.14.0, etc.)
+```
+
+Live progress streams to **stderr** while a run is in flight (stdout
+stays clean JSON), so a long run is never silently stuck. A single
+candidate routes to `./scripts/benchmark run`; two or more route to
+`compare`. Everything below is the underlying machinery `./scripts/bench`
+drives — reach for it only when you need the raw knobs.
+
+## Advanced configuration
+
+> The `./scripts/bench` quickstart above is the recommended entry
+> point. This section documents the raw `./scripts/benchmark compare`
+> JSON-config flow it builds on, the four-`ANTHROPIC_*` gateway
+> incantation, the `claude-code:` long form, and the
+> `attempt_timeout_seconds` knob — kept here for users who need them
+> directly.
+
+### Compare multiple LLMs (raw JSON config)
 
 You have a benchmark (say, Aider Polyglot) and you want to know which LLM does best on it. The `compare` subcommand takes a JSON config listing N candidate LLMs and runs them sequentially under one shared run-dir, then aggregates a Markdown report with mean ± stdev per metric and the calibrated winner verdict.
 
@@ -45,7 +111,7 @@ Copy [`benchmarks/compare-config.example.json`](compare-config.example.json) as 
 {
   "benchmark": "aider-polyglot",
   "runs": 3,
-  "task": ["python/leap", "go/leap", "rust/leap"],
+  "task": ["python/bowling", "go/bowling", "rust/bowling"],
   "candidates": [
     { "name": "sonnet",   "backend": "claude-code", "model": "sonnet" },
     { "name": "opus",     "backend": "claude-code", "model": "opus"   },
@@ -69,6 +135,7 @@ Field reference (full schema: [`benchmarks/schema/compare-config.schema.json`](s
 | `benchmark` | string | yes | Adapter id from `./scripts/benchmark list`. |
 | `runs` | integer ≥1 | no (default 1) | Repetitions per task per candidate. **Use ≥3** for cross-LLM comparisons; the calibrated winner-rule needs stdev to declare a winner over noise. |
 | `task` | string[] | no | Task filter (omit to run every task). Same shape as `./scripts/benchmark run --task`. |
+| `attempt_timeout_seconds` | integer ≥1 | no | Per-attempt wall-clock cap. A timed-out attempt is recorded `result="timeout"` / `scores.timeout=true`, counts as a pass-rate failure, and is flagged separately in the report's `timed_out` tally (it does **not** alter the winner calculus). Precedence depends on the entry path. Via `./scripts/bench`: `--attempt-timeout` CLI flag > this field > the wrapper's heuristic (300s cloud, 600s when `ANTHROPIC_BASE_URL` is set). Via a hand-written config run with `./scripts/benchmark compare --config …` (which bypasses the wrapper): this field, else the backend's own default / `CCT_CLAUDE_TIMEOUT_SECONDS` env override (no 300/600 heuristic — that lives in `bench.py`). |
 | `candidates[]` | array (≥2) | yes | LLMs to compare. Order is preserved in the report. |
 | `candidates[].name` | string | no | Human-readable label; defaults to `<backend>:<model>`. Must be unique. |
 | `candidates[].backend` | string | yes | Backend family — `claude-code` or `stub`. **Do not** use the combined `claude-code:sonnet` form (rejected). |
@@ -119,7 +186,7 @@ Useful when you want to inspect run-dirs first before producing the comparison.
 **Three Anthropic models on Python tasks only:**
 ```json
 { "benchmark": "aider-polyglot", "runs": 3,
-  "task": ["python/leap", "python/anagram", "python/clock"],
+  "task": ["python/bowling", "python/book-store", "python/forth"],
   "candidates": [
     { "name": "haiku",  "backend": "claude-code", "model": "haiku"  },
     { "name": "sonnet", "backend": "claude-code", "model": "sonnet" },
@@ -130,7 +197,7 @@ Useful when you want to inspect run-dirs first before producing the comparison.
 **Anthropic API vs. one local LLM:**
 ```json
 { "benchmark": "aider-polyglot", "runs": 3,
-  "task": ["python/leap"],
+  "task": ["python/bowling"],
   "candidates": [
     { "name": "sonnet-cloud", "backend": "claude-code", "model": "sonnet" },
     { "name": "local-qwen", "backend": "claude-code",
@@ -168,6 +235,14 @@ Comparison driver (`./scripts/benchmark compare`) shipped 2026-05-13.
 ## CLI
 
 ```bash
+# Daily driver (terse wrapper — see the 60-second quickstart):
+./scripts/bench                                                # safe stub smoke + env detection
+./scripts/bench sonnet ollama:qwen2.5-coder:7b                 # compare two models
+./scripts/bench --preset local-vs-cloud --runs 5               # curated preset, run-count override
+./scripts/bench --yes --attempt-timeout 600 sonnet opus        # CI: no prompt, 600s/attempt cap
+./scripts/bench --help | --list-presets | --list-providers
+
+# Underlying harness (what the wrapper builds on):
 ./scripts/benchmark list                                       # adapters + backends
 ./scripts/benchmark list --benchmark aider-polyglot            # tasks for an adapter
 ./scripts/benchmark run --benchmark aider-polyglot \
@@ -378,15 +453,20 @@ python3 -m benchmarks.adapters.aider_polyglot.fetch
 
 # Run one Python task with Claude Code (default = Anthropic API):
 ./scripts/benchmark run --benchmark aider-polyglot \
-    --backend claude-code --model sonnet --runs 1 --task python/leap
+    --backend claude-code --model sonnet --runs 1 --task python/bowling
 
 # Same task, routed through a local vLLM gateway:
 export ANTHROPIC_BASE_URL=http://localhost:8000
 export ANTHROPIC_AUTH_TOKEN=dummy
 export ANTHROPIC_DEFAULT_SONNET_MODEL=<served-model-name>
 ./scripts/benchmark run --benchmark aider-polyglot \
-    --backend claude-code --model <served-model-name> --runs 1 --task python/leap
+    --backend claude-code --model <served-model-name> --runs 1 --task python/bowling
 ```
 
 Either run produces a complete record; the second path's
 `backend_metadata.provider_endpoint` reflects the local URL.
+
+> Tip: `./scripts/bench sonnet vllm:<served-model>@<endpoint>` does the
+> three env exports above for you and probes the endpoint first
+> (Anthropic-shape proxy → used directly; raw OpenAI-only vLLM → an
+> ephemeral LiteLLM proxy is started in front and torn down on exit).

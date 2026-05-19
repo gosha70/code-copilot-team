@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# bench — user-facing wrapper for the CCT benchmark harness.
+#
+# Parses terse provider:model[@endpoint] tokens, auto-fills env-vars,
+# probes vLLM endpoints, and delegates to `./scripts/benchmark compare`
+# or `./scripts/benchmark run` depending on the number of resolved
+# candidates.
+#
+# Usage:
+#   ./scripts/bench                                   # safe default: stub×stub smoke + env detection
+#   ./scripts/bench sonnet opus
+#   ./scripts/bench sonnet ollama:qwen2.5-coder:7b
+#   ./scripts/bench sonnet vllm:Qwen3-Coder@http://127.0.0.1:8787
+#   ./scripts/bench --task python/bowling,go/leap --runs 5 sonnet ollama:qwen2.5-coder:7b
+#   ./scripts/bench --preset local-vs-cloud
+#   ./scripts/bench --yes sonnet ollama:qwen2.5-coder:7b
+#   ./scripts/bench --help | --list-presets | --list-providers
+#
+# See specs/benchmark-bench-driver/spec.md for the full feature spec.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+exec env PYTHONPATH="${REPO_DIR}/scripts:${REPO_DIR}${PYTHONPATH:+:${PYTHONPATH}}" \
+     PYTHONUNBUFFERED=1 \
+  python3 -m benchmark_runner.bench "$@"

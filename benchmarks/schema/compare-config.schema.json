@@ -23,6 +23,11 @@
       "items": { "type": "string", "minLength": 1 },
       "description": "Optional task-id filter; same shape as `./scripts/benchmark run --task <id>` (repeatable). Omit to run every task the adapter exposes."
     },
+    "attempt_timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional per-attempt wall-clock timeout (seconds). Parsed and retained by `compare._validate`/`CompareConfig`, then threaded to the backend via `RunContext.timeout_seconds`. A timed-out attempt is recorded with `result='timeout'` and `scores.timeout=true`, counted as a pass_rate failure, and flagged separately in the report tally (timed_out count). Precedence: `--attempt-timeout` CLI flag > this config field > the wrapper's heuristic default (300s for cloud backends, 600s when ANTHROPIC_BASE_URL is non-default). Omit this field to rely on the heuristic."
+    },
     "candidates": {
       "type": "array",
       "minItems": 2,

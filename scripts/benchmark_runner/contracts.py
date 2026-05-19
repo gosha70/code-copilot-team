@@ -162,6 +162,12 @@ class BackendResult:
     log, e.g. Claude Code's JSON transcript). Backends that have no
     separate text output (only the worktree mutations) leave it
     ``None``.
+
+    ``timed_out`` is True when the backend killed the attempt due to a
+    harness-imposed timeout (D5). Only the backend's own TimeoutExpired
+    branch sets this; all other code paths leave it False. Using a
+    structured boolean rather than substring-matching the human-readable
+    ``note`` field keeps the classification stable across note rewording.
     """
 
     transcript_path: Optional[Path]
@@ -175,6 +181,7 @@ class BackendResult:
     tool_calls: Mapping[str, int] = field(default_factory=dict)
     failed_commands: int = 0
     backend_metadata: Mapping[str, Any] = field(default_factory=dict)
+    timed_out: bool = False
 
 
 # ── Protocols ──────────────────────────────────────────────────────────
