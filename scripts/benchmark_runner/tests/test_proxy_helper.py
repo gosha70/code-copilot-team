@@ -143,5 +143,54 @@ class TestHttpOk(unittest.TestCase):
             self.assertFalse(_http_ok("http://no-such-host:9999"))
 
 
+class TestEntrypointOrdering(unittest.TestCase):
+    """Regression: the T1.4 extraction placed the ``if __name__ ==
+    '__main__': main_cli()`` block mid-file, *before* the module-level
+    helpers (_graceful_kill / _http_ok / _read_tail). Running
+    ``python3 -m benchmark_runner.proxy`` executes top-to-bottom, so
+    main_cli() ran before those defs -> ``NameError: name '_http_ok'
+    is not defined``, caught only by the DGX pre-merge check
+    (2026-05-19). Invariant: every module-level def/class must precede
+    the ``__main__`` entrypoint block.
+    """
+
+    def test_entrypoint_block_is_after_all_module_level_defs(self) -> None:
+        import ast
+        from pathlib import Path
+
+        import benchmark_runner.proxy as proxy_mod
+
+        src = Path(proxy_mod.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(src)
+
+        last_def_lineno = max(
+            node.lineno
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        )
+        main_guard_lineno = None
+        for node in tree.body:
+            if (
+                isinstance(node, ast.If)
+                and isinstance(node.test, ast.Compare)
+                and isinstance(node.test.left, ast.Name)
+                and node.test.left.id == "__name__"
+            ):
+                main_guard_lineno = node.lineno
+                break
+
+        self.assertIsNotNone(
+            main_guard_lineno, "no `if __name__ == '__main__'` guard found in proxy.py"
+        )
+        self.assertGreater(
+            main_guard_lineno,
+            last_def_lineno,
+            'the `if __name__ == "__main__"` block must come AFTER every '
+            "module-level def/class — otherwise `python3 -m "
+            "benchmark_runner.proxy` calls main_cli() before later "
+            "helpers are defined (NameError). Move it to EOF.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

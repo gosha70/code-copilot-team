@@ -224,10 +224,6 @@ def main_cli() -> None:  # noqa: D401 — CLI entry
         _cli_start(args.vllm_base, args.model, args.port)
 
 
-if __name__ == "__main__":
-    main_cli()
-
-
 # ── Module-level helpers ───────────────────────────────────────────────
 
 
@@ -274,3 +270,12 @@ def _read_tail(path: Optional[Path], lines: int) -> str:
         return "\n".join(text.splitlines()[-lines:])
     except OSError:
         return "(unreadable)"
+
+
+# Entrypoint MUST be last: ``python3 -m benchmark_runner.proxy`` executes
+# the module top-to-bottom, so main_cli() can only run after every
+# helper (_graceful_kill / _http_ok / _read_tail) is defined. Keeping
+# this block mid-file caused a NameError on _http_ok during the DGX
+# pre-merge check (T1.4 extraction regression, caught 2026-05-19).
+if __name__ == "__main__":
+    main_cli()
