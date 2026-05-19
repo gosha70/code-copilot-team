@@ -75,11 +75,13 @@ regressions.
   booleans; no `sk-`/`Bearer ` in `str(metadata)`;
   nonzero exit→`failed_commands=1`; no live CLI / no network. Suite
   green per-module.
-- **Self-enforcing B0 gate test:** `test_verified_version_not_placeholder`
-  asserts `"PHASE_B3_CAPTURE_REQUIRED" not in _VERIFIED_VERSION` with a
-  message pointing at the spec § verification capture. It FAILS until
-  B3 wires the real version → the gate enforces itself; the
-  placeholder cannot reach merge by human oversight.
+- **NOTE (gate-ordering fix, review 2026-05-19):** the self-enforcing
+  `test_verified_version_not_placeholder` is deliberately NOT created
+  in B2 — B1 intentionally ships the loud placeholder, so such a test
+  cannot be green in the B2 "green per-module" window. It is created
+  in **B3** alongside the real-version wiring (passes the moment it
+  exists). The gate still self-enforces across B3→B4→B5→PR — the only
+  windows where a placeholder leak could actually reach merge.
 
 **B2 commit:** `test(benchmark): recorded-transcript aider backend tests (#41)`
 
@@ -110,7 +112,16 @@ regressions.
   6. `timed_out=True` on `TimeoutExpired`; parser
      `no-summary`→`None`, `zero-tokens`→`0`.
   7. fake-CLI suite passes per-module; no live CLI/network.
-- **Done when:** every checklist item maps to a code/test location.
+- **Wire the real version:** replace `_VERIFIED_VERSION`'s loud
+  placeholder with the verbatim TB0.1 capture; add
+  `test_verified_version_not_placeholder` (asserts
+  `"PHASE_B3_CAPTURE_REQUIRED" not in _VERIFIED_VERSION`, message
+  pointing at the verification record) — created HERE so it is green
+  the moment it exists; thereafter it self-enforces the gate through
+  B4/B5/PR.
+- **Done when:** every checklist item maps to a code/test location;
+  `test_verified_version_not_placeholder` green; the recorded
+  transcript + observed `EXIT_CODE` are in `aider.md`.
 
 **B3 commit:** `docs(benchmark): aider verification record (#41)`
 
