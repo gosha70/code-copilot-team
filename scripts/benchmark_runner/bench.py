@@ -414,6 +414,7 @@ def build_compare_config(
     benchmark: str,
     runs: int,
     task_filter: Optional[list[str]] = None,
+    attempt_timeout_seconds: Optional[int] = None,
 ) -> dict[str, Any]:
     """Build a compare-config dict suitable for serialisation to a tempfile."""
     cfg: dict[str, Any] = {
@@ -431,6 +432,8 @@ def build_compare_config(
     }
     if task_filter:
         cfg["task"] = task_filter
+    if attempt_timeout_seconds is not None:
+        cfg["attempt_timeout_seconds"] = attempt_timeout_seconds
     return cfg
 
 
@@ -633,13 +636,14 @@ Provider tokens:
   openrouter:<model>               OpenRouter (requires OPENROUTER_API_KEY)
 
 Options:
-  --task <id>[,<id>...]   Limit to specific task ids
-  --runs <n>              Repetitions per task (default 3)
-  --preset <name>         Load a preset compare-config from benchmarks/presets/
-  --yes / --no-confirm    Bypass the Anthropic-spend confirmation gate
-  --list-presets          List available presets and exit
-  --list-providers        Detect available providers and exit
-  --help                  Show this help and exit
+  --task <id>[,<id>...]         Limit to specific task ids
+  --runs <n>                    Repetitions per task (default 3)
+  --preset <name>               Load a preset compare-config from benchmarks/presets/
+  --attempt-timeout <seconds>   Per-attempt timeout in seconds (overrides heuristic + preset)
+  --yes / --no-confirm          Bypass the Anthropic-spend confirmation gate
+  --list-presets                List available presets and exit
+  --list-providers              Detect available providers and exit
+  --help                        Show this help and exit
 
 Unknown flags are passed through verbatim to ./scripts/benchmark compare.
 
@@ -656,6 +660,7 @@ def _parse_argv(argv: Sequence[str]) -> tuple[dict, list[str], list[str]]:
         "task": None,
         "runs": None,
         "preset": None,
+        "attempt_timeout": None,
         "yes": False,
         "no_confirm": False,
         "list_presets": False,
@@ -699,6 +704,26 @@ def _parse_argv(argv: Sequence[str]) -> tuple[dict, list[str], list[str]]:
                 opts["runs"] = int(a[7:])
             except ValueError:
                 raise ValueError(f"--runs requires an integer, got {a[7:]!r}") from None
+        elif a == "--attempt-timeout":
+            i += 1
+            if i >= len(args):
+                raise ValueError("--attempt-timeout requires an argument")
+            try:
+                val = int(args[i])
+            except ValueError:
+                raise ValueError(f"--attempt-timeout requires an integer, got {args[i]!r}") from None
+            if val < 1:
+                raise ValueError(f"--attempt-timeout must be a positive integer, got {val!r}")
+            opts["attempt_timeout"] = val
+        elif a.startswith("--attempt-timeout="):
+            raw_val = a[len("--attempt-timeout="):]
+            try:
+                val = int(raw_val)
+            except ValueError:
+                raise ValueError(f"--attempt-timeout requires an integer, got {raw_val!r}") from None
+            if val < 1:
+                raise ValueError(f"--attempt-timeout must be a positive integer, got {val!r}")
+            opts["attempt_timeout"] = val
         elif a == "--preset":
             i += 1
             if i >= len(args):
@@ -870,6 +895,26 @@ def _run_preset(opts: dict, passthrough_flags: list[str]) -> int:
         print(f"bench: preset {preset_name!r} has no candidates.", file=sys.stderr)
         return 1
 
+    # D5: resolve the per-attempt timeout for the preset path.
+    # Precedence: --attempt-timeout > preset attempt_timeout_seconds > heuristic.
+    preset_timeout = preset.get("attempt_timeout_seconds")
+    # Build stub candidates to drive the heuristic (any env with ANTHROPIC_BASE_URL → local).
+    stub_for_heuristic = [
+        ResolvedCandidate(
+            name=c.get("name", "?"),
+            backend=c.get("backend", "claude-code"),
+            model=c.get("model", ""),
+            env=c.get("env", {}),
+            is_anthropic="ANTHROPIC_BASE_URL" not in c.get("env", {}),
+        )
+        for c in candidates_raw
+    ]
+    timeout_seconds = _resolve_timeout(
+        explicit=opts.get("attempt_timeout"),
+        preset_timeout=preset_timeout,
+        candidates=stub_for_heuristic,
+    )
+
     # Confirmation gate — apply BEFORE dispatching, same as the inline path.
     # Build lightweight ResolvedCandidate stubs so _confirmation_gate can inspect them.
     bypass_gate = opts["yes"] or opts["no_confirm"] or not sys.stdin.isatty()
@@ -900,14 +945,17 @@ def _run_preset(opts: dict, passthrough_flags: list[str]) -> int:
                 runs=runs,
                 task_filter=task_filter,
                 passthrough_flags=passthrough_flags,
+                attempt_timeout_seconds=timeout_seconds,
             )
 
     # Multi-candidate → write tempfile config and call compare.
-    # Apply --runs / --task overrides.
+    # Apply --runs / --task / --attempt-timeout overrides.
     if opts["runs"] is not None:
         preset["runs"] = opts["runs"]
     if opts["task"] is not None:
         preset["task"] = opts["task"]
+    if timeout_seconds is not None:
+        preset["attempt_timeout_seconds"] = timeout_seconds
 
     return _invoke_benchmark_compare_from_preset(preset, passthrough_flags)
 
@@ -940,6 +988,12 @@ def _dispatch(
     task_filter = opts["task"]
     bypass_gate = opts["yes"] or opts["no_confirm"] or not sys.stdin.isatty()
 
+    # D5: resolve the per-attempt timeout.
+    timeout_seconds = _resolve_timeout(
+        explicit=opts.get("attempt_timeout"),
+        candidates=candidates,
+    )
+
     # Confirmation gate (only for Anthropic-bearing candidates unless bypassed).
     has_anthropic = any(c.is_anthropic for c in candidates)
     if has_anthropic and not bypass_gate:
@@ -963,6 +1017,7 @@ def _dispatch(
                 runs=runs,
                 task_filter=task_filter,
                 passthrough_flags=passthrough_flags,
+                attempt_timeout_seconds=timeout_seconds,
             )
 
     # Multi-candidate → write tempfile config and call compare.
@@ -971,6 +1026,7 @@ def _dispatch(
         benchmark="aider-polyglot",
         runs=runs,
         task_filter=task_filter,
+        attempt_timeout_seconds=timeout_seconds,
     )
     fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="bench-compare-")
     try:
@@ -994,6 +1050,7 @@ def _invoke_benchmark_run(
     runs: int,
     task_filter: Optional[list[str]],
     passthrough_flags: list[str],
+    attempt_timeout_seconds: Optional[int] = None,
 ) -> int:
     repo_dir = Path(__file__).resolve().parent.parent.parent
     benchmark_script = repo_dir / "scripts" / "benchmark"
@@ -1008,9 +1065,48 @@ def _invoke_benchmark_run(
     if task_filter:
         for t in task_filter:
             cmd += ["--task", t]
+    if attempt_timeout_seconds is not None:
+        cmd += ["--attempt-timeout", str(attempt_timeout_seconds)]
     cmd += passthrough_flags
     proc = subprocess.run(cmd, env=_subprocess_env())
     return proc.returncode
+
+
+# ── Timeout resolution (D5) ───────────────────────────────────────────────
+
+# Heuristic per-attempt timeouts (seconds).
+# 300s for cloud Anthropic API (fast, reliable); 600s for local LLMs
+# (slower inference, more variable). Precedence: --attempt-timeout >
+# config/preset attempt_timeout_seconds > heuristic.
+_CLOUD_TIMEOUT_SECONDS = 300
+_LOCAL_TIMEOUT_SECONDS = 600
+
+
+def _resolve_timeout(
+    *,
+    explicit: Optional[int] = None,
+    preset_timeout: Optional[int] = None,
+    candidates: Optional[list[ResolvedCandidate]] = None,
+) -> Optional[int]:
+    """Resolve the effective per-attempt timeout.
+
+    Precedence (highest to lowest):
+      1. --attempt-timeout CLI flag (explicit)
+      2. Preset / config attempt_timeout_seconds
+      3. Per-candidate heuristic: 300s for cloud Anthropic; 600s when
+         ANTHROPIC_BASE_URL is set in any candidate's env (local LLM heuristic)
+    """
+    if explicit is not None:
+        return explicit
+    if preset_timeout is not None:
+        return preset_timeout
+    if not candidates:
+        return None
+    # Heuristic: if ANY candidate has a non-default ANTHROPIC_BASE_URL → local
+    any_local = any(
+        "ANTHROPIC_BASE_URL" in c.env for c in candidates
+    )
+    return _LOCAL_TIMEOUT_SECONDS if any_local else _CLOUD_TIMEOUT_SECONDS
 
 
 # ── Subprocess environment helper (D2 flush discipline) ──────────────────

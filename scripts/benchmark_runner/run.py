@@ -33,6 +33,7 @@ from .contracts import (
     RESULT_ERROR,
     RESULT_FAIL,
     RESULT_PASS,
+    RESULT_TIMEOUT,
     BackendResult,
     BenchmarkAdapter,
     IsolationConfig,
@@ -72,10 +73,20 @@ def run_benchmark(
     runs: int,
     runs_root: Path,
     task_filter: Optional[list[str]] = None,
+    attempt_timeout_seconds: Optional[int] = None,
 ) -> Path:
     """Execute the benchmark; return the produced run directory."""
     if runs < 1:
         raise ValueError(f"--runs must be >= 1; got {runs}")
+    if attempt_timeout_seconds is not None and (
+        isinstance(attempt_timeout_seconds, bool)
+        or not isinstance(attempt_timeout_seconds, int)
+        or attempt_timeout_seconds <= 0
+    ):
+        raise ValueError(
+            f"--attempt-timeout must be a positive integer of seconds; "
+            f"got {attempt_timeout_seconds!r}"
+        )
 
     adapter = get_adapter(benchmark_id)
     backend = get_backend(backend_family, backend_model)
@@ -129,6 +140,7 @@ def run_benchmark(
                     attempt_idx=attempt_idx,
                     attempt_total=attempt_total,
                     candidate_name=candidate_name,
+                    attempt_timeout_seconds=attempt_timeout_seconds,
                 )
                 # Stop early on success — there is no value in burning
                 # a second attempt for a task that already passed.
@@ -159,6 +171,7 @@ def _execute_attempt(
     attempt_idx: int = 0,
     attempt_total: int = 0,
     candidate_name: str = "",
+    attempt_timeout_seconds: Optional[int] = None,
 ) -> VerifyResult:
     attempt_dir = run_dir / _slug(task.task_id) / f"attempt-{attempt:02d}-{run_id}"
     attempt_dir.mkdir(parents=True, exist_ok=False)
@@ -197,7 +210,7 @@ def _execute_attempt(
         model=backend_model,
         temperature=0.0,
         seed=None,
-        timeout_seconds=None,
+        timeout_seconds=attempt_timeout_seconds,
     )
 
     # ── Live progress (D2) ───────────────────────────────────────────
@@ -316,6 +329,16 @@ def _execute_attempt(
         },
     }
 
+    # D5: detect harness-imposed timeout via the structured flag on BackendResult.
+    # The backend's TimeoutExpired branch sets timed_out=True; all other paths
+    # leave it False. Timeout takes classification precedence over fail because
+    # the verify step ran on a worktree that the model never finished editing.
+    is_timeout = backend_result.timed_out
+    if is_timeout:
+        timeout_note = _timeout_output(attempt_timeout_seconds or 0, elapsed)
+    else:
+        timeout_note = None
+
     score = {
         "schema_version": SCHEMA_VERSION,
         "benchmark_id": adapter.benchmark_id,
@@ -328,7 +351,7 @@ def _execute_attempt(
             "lint_passed": verify_result.lint_passed,
             "typecheck_passed": verify_result.typecheck_passed,
             "required_files_present": verify_result.required_files_present,
-            "timeout": False,
+            "timeout": is_timeout,
             "human_interventions": 0,
         },
         "derived": {
@@ -338,7 +361,7 @@ def _execute_attempt(
             "lines_removed": lines_removed,
             "failed_commands": backend_result.failed_commands + verify_result.failed_commands,
         },
-        "result": _classify_result(verify_result, backend_error),
+        "result": _classify_result(verify_result, backend_error, is_timeout),
     }
 
     # Emit the attempt-end progress line now that we know the result
@@ -374,10 +397,14 @@ def _execute_attempt(
     _write_json(attempt_dir / "score.json", score)
     _write_json(attempt_dir / "stats.json", stats)
 
-    if verify_result.tests_output:
-        (attempt_dir / "verify-output.txt").write_text(
-            verify_result.tests_output, encoding="utf-8"
-        )
+    # D5: for timed-out attempts, prepend the harness-imposed timeout note to
+    # verify-output.txt so postmortem inspection shows why the verify result
+    # (if any) was produced on an incomplete worktree.
+    verify_output = verify_result.tests_output
+    if timeout_note:
+        verify_output = timeout_note + ("\n" + verify_output if verify_output else "")
+    if verify_output:
+        (attempt_dir / "verify-output.txt").write_text(verify_output, encoding="utf-8")
 
     return verify_result
 
@@ -482,7 +509,21 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _classify_result(verify: VerifyResult, backend_error: Optional[str]) -> str:
+def _timeout_output(timeout_seconds: int, elapsed: float) -> str:
+    """Return the harness-imposed timeout note written to verify-output.txt."""
+    n = round(elapsed, 1)
+    return f"<harness-imposed timeout after {n}s>"
+
+
+def _classify_result(
+    verify: VerifyResult,
+    backend_error: Optional[str],
+    is_timeout: bool = False,
+) -> str:
+    # D5: timeout takes precedence over fail/error — the model never finished,
+    # so recording "fail" or "error" would misrepresent what happened.
+    if is_timeout:
+        return RESULT_TIMEOUT
     if backend_error is not None:
         return RESULT_ERROR
     return RESULT_PASS if verify.tests_passed else RESULT_FAIL

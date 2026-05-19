@@ -272,6 +272,11 @@ def _group_summary(
 ) -> dict[str, Any]:
     total = len(rows)
     passed = sum(1 for r in rows if r["score"]["result"] == "pass")
+    # D5: count timeout attempts separately so reviewers can distinguish
+    # "LLM failed" from "LLM hung". The timeout count is additive — it does
+    # NOT change pass_rate (timeouts already lower it via result != "pass").
+    # Constraint #8: verdict calculus is untouched; we only ADD a tally.
+    timed_out = sum(1 for r in rows if r["score"]["result"] == "timeout")
     elapsed_values = [r["score"]["derived"]["elapsed_seconds"] for r in rows]
 
     # Provider endpoints seen in this group — usually one, but multiple
@@ -290,6 +295,7 @@ def _group_summary(
         "candidate_name": candidate_name,
         "total_attempts": total,
         "passed": passed,
+        "timed_out": timed_out,
         "pass_rate": _safe_div(passed, total),
         "elapsed_seconds_mean": _mean(elapsed_values),
         "elapsed_seconds_stdev": _stdev(elapsed_values),
@@ -406,9 +412,11 @@ def _render_markdown(summary: Mapping[str, Any]) -> str:
     for label, g in summary["groups"].items():
         lines.append(f"## `{label}` (backend={g['backend_id']}, model={g['model'] or '<none>'})")
         lines.append("")
+        timeout_note = f" ({g['timed_out']} timed out)" if g.get("timed_out", 0) > 0 else ""
         lines.append(
             f"- Total attempts: {g['total_attempts']}  "
             f"\n- Passed: {g['passed']}  "
+            f"\n- Timed out: {g.get('timed_out', 0)}{timeout_note}  "
             f"\n- Pass rate: {_fmt_pct(g['pass_rate'])}  "
             f"\n- Elapsed (s): mean {_fmt_num(g['elapsed_seconds_mean'])}, "
             f"stdev {_fmt_num(g['elapsed_seconds_stdev'])}"
