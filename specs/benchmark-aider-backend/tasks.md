@@ -30,21 +30,29 @@ regressions.
 ### TB0.1 — Confirm Aider CLI facts + capture version/transcript
 - **Output:** confirmed `--message-file` flag/semantics; `--no-stream`
   display-only finding; leaderboard-methodology re-scan notes;
-  captured `aider --version` + a real headless transcript with the
-  exact pinned argv (maintainer machine).
-- **Done when:** all 4 preflight spot-checks (plan § Preflight)
-  recorded; `_VERIFIED_VERSION` value chosen verbatim.
+  captured `aider --version` + `pip show aider-chat` + a real headless
+  transcript with the exact B0-corrected pinned argv (`--yes-always`,
+  no `--temperature`), capturing **`EXIT_CODE`** (Aider's exit codes
+  are undocumented — the canonical run pins it empirically) — maintainer
+  machine, AFTER B1–B2 settle so the fixture pins a stable contract.
+- **Done when:** the doc-confirmable spot-checks (1–3) recorded
+  [DONE 2026-05-19, see origin-alignment-0641]; spot-check 4 (live
+  capture) supplied by the maintainer before B3.
 
 ## Phase B1 — Backend
 
 ### TB1.1 — `backends/aider.py`
 - **Output:** `AiderBackend` mirroring `codex.py`: `BACKEND_FAMILY`,
   `_VERIFIED_VERSION`, timeout constants + `CCT_AIDER_TIMEOUT_SECONDS`
-  override, `_build_argv` (pinned contract; `--model` iff non-empty;
-  `--edit-format` iff `CCT_AIDER_EDIT_FORMAT`; NO
-  `--map-tokens/--temperature`), Popen+pgkill timeout →
+  override, `_build_argv` (pinned contract: `--yes-always` (NOT
+  `--yes` — B0); `--model` iff non-empty; `--edit-format` iff
+  `CCT_AIDER_EDIT_FORMAT`; NO `--map-tokens`; `--temperature` is not
+  an Aider flag), Popen+pgkill timeout →
   `timed_out=True`, `_resolve_provider_env` (presence booleans),
   `_build_metadata`, best-effort `_parse_transcript`, `factory`.
+  **Loud placeholder (B0 gate, option-b):**
+  `_VERIFIED_VERSION = "PHASE_B3_CAPTURE_REQUIRED__DO_NOT_MERGE"`
+  until TB0.1's real capture is wired in B3.
   Prompt → `attempt_dir/aider-message.txt`; history flags →
   `attempt_dir`.
 ### TB1.2 — Registration
@@ -67,6 +75,11 @@ regressions.
   booleans; no `sk-`/`Bearer ` in `str(metadata)`;
   nonzero exit→`failed_commands=1`; no live CLI / no network. Suite
   green per-module.
+- **Self-enforcing B0 gate test:** `test_verified_version_not_placeholder`
+  asserts `"PHASE_B3_CAPTURE_REQUIRED" not in _VERIFIED_VERSION` with a
+  message pointing at the spec § verification capture. It FAILS until
+  B3 wires the real version → the gate enforces itself; the
+  placeholder cannot reach merge by human oversight.
 
 **B2 commit:** `test(benchmark): recorded-transcript aider backend tests (#41)`
 
@@ -75,23 +88,25 @@ regressions.
 ### TB3.1 — `specs/benchmark-harness/verification/aider.md`
 - **Output:** mirrors `codex.md`; real pinned version + real recorded
   transcript (from TB0.1); ## Verified argv (### Flag contract; ###
-  Flags NOT present incl. the deliberately-unpinned
-  map-tokens/edit-format/temperature); ## Transcript format; ##
+  Flags NOT present: `--yes` (doesn't exist — flag is `--yes-always`,
+  B0); map-tokens/edit-format deliberately unpinned; `--temperature`
+  not an Aider flag); ## Transcript format; ##
   Provider routing (booleans, never set); ## Edit-format &
   comparability; the `--no-stream` display-only confirmation; and the
   **enumerated 7-point Reviewer checklist** verbatim:
   1. pinned version matches `_VERIFIED_VERSION`; transcript regenerated
      if CLI bumped.
-  2. `_build_argv` emits the contract; `--model` iff `ctx.model`;
-     no `--map-tokens/--edit-format/--temperature` unless
-     `CCT_AIDER_EDIT_FORMAT` (then `edit_format_forced=true`).
+  2. `_build_argv` emits the contract; `--yes-always` (NOT `--yes`);
+     `--model` iff `ctx.model`; no `--map-tokens/--edit-format` unless
+     `CCT_AIDER_EDIT_FORMAT` (then `edit_format_forced=true`);
+     `--temperature` never (not an Aider flag).
   3. prompt via `--message-file` under `attempt_dir`, not argv/stdin.
   4. `--no-auto-commits --no-dirty-commits --no-gitignore` always
      present; history files under `attempt_dir`; post-`run()` worktree
      has no `.aider*`/commits.
   5. metadata = provider presence booleans + resolved
-     edit_format/map_tokens/temperature; no key values, no
-     `sk-`/`Bearer ` in `str(metadata)`.
+     edit_format/map_tokens (no `temperature` — not an Aider flag);
+     no key values, no `sk-`/`Bearer ` in `str(metadata)`.
   6. `timed_out=True` on `TimeoutExpired`; parser
      `no-summary`→`None`, `zero-tokens`→`0`.
   7. fake-CLI suite passes per-module; no live CLI/network.
@@ -119,8 +134,15 @@ regressions.
   run (fake-CLI suite, `benchmark list`); fresh
   `origin-alignment-<date>-<time>.md` (mtime-newest, `Verdict:` +
   `Confidence:` lines).
+- **PR-description pre-merge gate line (mandatory):** "Pre-merge gate:
+  `specs/benchmark-harness/verification/aider.md` contains the real
+  captured `aider --version` + headless transcript (NOT the B0
+  placeholder); `test_verified_version_not_placeholder` passes." Two
+  independent signals (failing test + PR line) catch a leaked
+  placeholder.
 - **Done when:** `check-origin-alignment.sh benchmark-aider-backend`
-  exits ≤1; diff shown + explicitly approved per commit; single PR
+  exits ≤1; `test_verified_version_not_placeholder` green (real
+  version wired); diff shown + explicitly approved per commit; single PR
   `feat(benchmark): aider backend + verification + Aider-Polyglot
   apples-to-apples (Closes #41)` from `feat/benchmark-aider-backend`
   (never pushed to master). bench.py / dogfood-subset / aider_polyglot

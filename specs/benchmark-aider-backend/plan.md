@@ -121,9 +121,10 @@ No live CLI / no network anywhere.
 
 Mirror `codex.md` section-for-section: preamble (pinned `aider
 --version`, captured live), ## Version, ## Verified argv (### Flag
-contract table; ### Flags NOT present — `--yes-always` doesn't exist,
-no chat-mode flag intentional, `--map-tokens/--edit-format/
---temperature` deliberately unpinned), ## Transcript format (no JSON;
+contract table; ### Flags NOT present — `--yes` doesn't exist (the
+flag is `--yes-always`, B0); no chat-mode flag intentional;
+`--map-tokens/--edit-format` deliberately unpinned; `--temperature`
+not an Aider flag at all), ## Transcript format (no JSON;
 summary shape; key→field best-effort table; tokens may be None / cache
 None / tool_calls {}), ## Real recorded transcript (live dump +
 observed exit code), ## Provider routing (env presence booleans, never

@@ -72,7 +72,7 @@ that only becomes meaningful once the Aider backend exists.
    groups them like any other comparison.
 3. **Audit a run's methodology.** A reviewer opens a run's
    `run-record.json` / backend_metadata and sees `aider_version`, the
-   *resolved* `edit_format`, effective `map_tokens`, `temperature`,
+   *resolved* `edit_format`, effective `map_tokens`,
    `chat_mode`, and provider-env *presence booleans* — never any key
    value — enough to judge leaderboard comparability.
 4. **A hung Aider attempt.** Aider exceeds the per-attempt timeout; the
@@ -115,7 +115,7 @@ model-string convention*. Aider joins codex in the second category.
 ```
 aider
   --model <model>              # only when ctx.model non-empty (codex pattern)
-  --yes                        # auto-confirm (the real flag; NOT --yes-always)
+  --yes-always                 # auto-confirm (the ONLY flag; `--yes` does NOT exist — B0)
   --no-auto-commits
   --no-dirty-commits
   --no-gitignore
@@ -132,15 +132,19 @@ aider
 pattern). The prompt is written to `aider-message.txt` and passed via
 `--message-file` (Aider has no codex `-` stdin; message files handle
 the large multiline two-shot prompts). Message + history files live in
-`attempt_dir` (= `ctx.worktree.parent`), never in `worktree`.
+`attempt_dir` (= `ctx.worktree.parent`), never in `worktree`. NOT
+pinned (Decision 3 — methodology fidelity): `--map-tokens`,
+`--edit-format` (unless `CCT_AIDER_EDIT_FORMAT`), chat-mode (→ Aider
+default `code`). **Aider exposes no `--temperature` CLI flag (B0
+confirmed)** — temperature is Aider-internal (litellm default); the
+harness neither sets nor can observe it via the CLI.
 
 ### backend_metadata schema (presence/paths only — never secret values)
 
 `family="aider"`, `model`, `aider_version` (pinned constant),
 `chat_mode="code"`, `edit_format_resolved` (parsed or `None`),
 `edit_format_forced` (bool), `map_tokens_effective` (parsed or `None`),
-`temperature` (Aider default, recorded), `auto_commits=False`,
-`dirty_commits=False`, `provider_env_present` =
+`auto_commits=False`, `dirty_commits=False`, `provider_env_present` =
 `{ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY,
 OPENAI_API_BASE}` booleans only, `exit_code`, `stderr_tail` (≤1024
 chars), optional `note` (timeout only).
@@ -284,8 +288,8 @@ statement; and the `dogfood-subset.txt` `*/leap` staleness caveat.
 - [ ] `_parse_transcript`: `no-summary`→all token fields `None`;
       `zero-tokens`→`0`; `success`→parsed tokens + `edit_format_resolved`.
 - [ ] `backend_metadata` carries provider presence booleans + resolved
-      edit_format/map_tokens/temperature; `str(metadata)` contains no
-      `sk-`/`Bearer ` substring.
+      edit_format/map_tokens (no `temperature` — not an Aider flag);
+      `str(metadata)` contains no `sk-`/`Bearer ` substring.
 - [ ] Timeout path sets `timed_out=True`; `result:"timeout"` inherited
       from `run.py` with no aider-specific code.
 - [ ] `verification/aider.md` carries the real pinned version, a real
@@ -315,10 +319,11 @@ here and in `verification/aider.md`:
 6. **Exit codes pinned empirically** — Aider's are undocumented; the
    recorded transcript pins observed success behavior.
 
-NOT a deviation (the opposite): leaving `--map-tokens`,
-`--edit-format`, `--temperature` at Aider's defaults is the
-methodology-fidelity choice that keeps the apples-to-apples claim
-honest (Design Decision 3).
+NOT a deviation (the opposite): leaving `--map-tokens` and
+`--edit-format` at Aider's defaults is the methodology-fidelity choice
+that keeps the apples-to-apples claim honest (Design Decision 3).
+Temperature is not an Aider CLI flag at all (B0) — Aider-internal,
+neither set nor recorded by the harness; noted in the invariants doc.
 
 Documented comparability caveat (no code change — adapter is OUT of
 scope): Aider's own polyglot harness truncates attempt-2 test output
@@ -336,8 +341,11 @@ modified here.
   template.
 - `path: scripts/benchmark_runner/run.py` — `_execute_attempt`,
   `_write_diff` (`.venv`-only exclusion).
-- `url: https://aider.chat/docs/scripting.html` — `--message-file`,
-  `--yes`, `--no-auto-commits`, `--no-stream`.
+- `url: https://aider.chat/docs/config/options.html` — authoritative
+  flag reference: `--message-file`, `--yes-always`, `--no-auto-commits`,
+  `--no-dirty-commits`, `--no-gitignore`, `--no-check-update`,
+  `--no-stream` (display-only), `--edit-format` (per-model default);
+  confirmed no `--yes` and no `--temperature` (B0).
 - `url: https://aider.chat/docs/leaderboards/` +
   `https://aider.chat/2024/12/21/polyglot.html` — 225-task pool,
   2-attempt pass@2, per-model edit format, 50-line attempt-2 truncation.
