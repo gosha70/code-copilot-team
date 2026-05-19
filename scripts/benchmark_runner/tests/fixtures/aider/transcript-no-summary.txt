@@ -1,0 +1,10 @@
+Aider v0.50.1
+Model: claude-3-5-sonnet-20241022
+
+Can't initialize git repo: not a git repository.
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/aider/main.py", line 423, in main
+    coder = Coder.create(...)
+  File "/usr/local/lib/python3.11/site-packages/aider/coders/base_coder.py", line 188, in create
+    raise ValueError("No suitable model found")
+ValueError: No suitable model found
