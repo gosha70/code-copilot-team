@@ -47,6 +47,8 @@ def register_all() -> None:
     register_backend(claude_code_backend.BACKEND_FAMILY, claude_code_backend.factory)
     from .backends import codex as codex_backend
     register_backend(codex_backend.BACKEND_FAMILY, codex_backend.factory)
+    from .backends import aider as aider_backend
+    register_backend(aider_backend.BACKEND_FAMILY, aider_backend.factory)
     _REGISTERED = True
 
 
