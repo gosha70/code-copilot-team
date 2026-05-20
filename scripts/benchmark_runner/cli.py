@@ -153,6 +153,49 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Re-rate every attempt even if judge.json already exists.",
     )
 
+    # ── calibration-corpus ─────────────────────────────────────────
+    p_corpus = sub.add_parser(
+        "calibration-corpus",
+        help=(
+            "Select a corpus of attempt-records from runs/ for human "
+            "labeling. Writes <name>.corpus.jsonl + <name>.meta.json "
+            "under --output-dir (default benchmarks/calibration/). "
+            "Never mutates runs/."
+        ),
+    )
+    p_corpus.add_argument(
+        "--runs-root",
+        type=Path,
+        default=Path("runs"),
+        help="Directory to walk for attempt-NN-run-MM/ candidates (default ./runs).",
+    )
+    p_corpus.add_argument(
+        "--target-n",
+        required=True,
+        type=int,
+        help="Target number of attempts to select (>=1). Issue #34 v3 requires >=50.",
+    )
+    p_corpus.add_argument(
+        "--axes",
+        required=True,
+        help=(
+            "Comma-separated axes of variation: any of "
+            "'model', 'adapter', 'backend', 'repeated-runs'. "
+            "Issue #34 v3 requires >=2 distinct axes."
+        ),
+    )
+    p_corpus.add_argument(
+        "--name",
+        required=True,
+        help="Corpus name; outputs land at <output-dir>/<name>.{corpus.jsonl,meta.json}.",
+    )
+    p_corpus.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("benchmarks/calibration"),
+        help="Where to write the corpus files (default benchmarks/calibration/).",
+    )
+
     # ── compare ───────────────────────────────────────────────────────
     p_compare = sub.add_parser(
         "compare",
@@ -564,6 +607,79 @@ def _cmd_judge(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_calibration_corpus(args: argparse.Namespace) -> int:
+    if not args.runs_root.exists():
+        print(
+            f"benchmark: runs-root not found: {args.runs_root}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.target_n < 1:
+        print(
+            f"benchmark: --target-n must be >= 1; got {args.target_n}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    from .calibration.corpus_select import (
+        EmptyCandidatePoolError,
+        InsufficientAxisRepresentationError,
+        InvalidAxisError,
+        parse_axes_arg,
+        select_and_write,
+    )
+
+    try:
+        axes = parse_axes_arg(args.axes)
+    except InvalidAxisError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    selection_command = (
+        f"./scripts/benchmark calibration-corpus "
+        f"--target-n {args.target_n} --axes {args.axes} "
+        f"--name {args.name} --runs-root {args.runs_root} "
+        f"--output-dir {args.output_dir}"
+    )
+    try:
+        corpus_path, meta_path, result = select_and_write(
+            runs_root=args.runs_root,
+            axes=axes,
+            target_n=args.target_n,
+            name=args.name,
+            output_dir=args.output_dir,
+            selection_command=selection_command,
+        )
+    except EmptyCandidatePoolError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    except InsufficientAxisRepresentationError as exc:
+        print(
+            f"benchmark: cannot satisfy requested axes: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"benchmark: corpus selection failed: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+
+    print(json.dumps({
+        "corpus_path": str(corpus_path),
+        "meta_path": str(meta_path),
+        "target_n": args.target_n,
+        "actual_n": len(result.selected),
+        "candidate_pool_size": result.candidate_pool_size,
+        "axes": axes,
+        "skipped_count": len(result.skipped),
+        "axis_summary": result.axis_summary,
+    }, indent=2))
+    return EXIT_OK
+
+
 _HANDLERS = {
     "list": _cmd_list,
     "run": _cmd_run,
@@ -571,6 +687,7 @@ _HANDLERS = {
     "compare": _cmd_compare,
     "dogfood": _cmd_dogfood,
     "judge": _cmd_judge,
+    "calibration-corpus": _cmd_calibration_corpus,
 }
 
 
