@@ -1,0 +1,9 @@
+{
+  "type": "result",
+  "session_id": "01HV1JUDGE0000000000000000",
+  "result": "{\n  \"ratings\": {\n    \"idiomaticity\": {\n      \"rating\": 4,\n      \"explanation\": \"Naming and control flow match Python conventions. The list comprehension on line 12 is idiomatic; the manual loop on line 18 would also work but a comprehension would be more native.\"\n    },\n    \"error_handling\": {\n      \"rating\": 3,\n      \"explanation\": \"Catches ValueError on parse but uses a bare except in one spot. Common failure modes are handled; one over-broad catch.\"\n    },\n    \"test_thoughtfulness\": {\n      \"rating\": 2,\n      \"explanation\": \"One happy-path test only; no edge cases.\"\n    },\n    \"security_hygiene\": {\n      \"rating\": 4,\n      \"explanation\": \"Uses parameterized queries; no shell concatenation; input validated at boundaries.\"\n    }\n  }\n}",
+  "usage": {
+    "input_tokens": 3200,
+    "output_tokens": 480
+  }
+}

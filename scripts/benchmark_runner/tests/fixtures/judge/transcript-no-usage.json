@@ -1,0 +1,5 @@
+{
+  "type": "result",
+  "session_id": "01HV1JUDGE5555555555555555",
+  "result": "{\n  \"ratings\": {\n    \"idiomaticity\": {\"rating\": 3, \"explanation\": \"Adequate.\"},\n    \"error_handling\": {\"rating\": 3, \"explanation\": \"Functional.\"},\n    \"test_thoughtfulness\": {\"rating\": 2, \"explanation\": \"Token tests.\"},\n    \"security_hygiene\": {\"rating\": 3, \"explanation\": \"Adequate.\"}\n  }\n}"
+}

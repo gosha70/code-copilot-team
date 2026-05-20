@@ -1,0 +1,9 @@
+{
+  "type": "result",
+  "session_id": "01HV1JUDGE3333333333333333",
+  "result": "{\n  \"ratings\": {\n    \"idiomaticity\": {\n      \"rating\": 4,\n      \"explanation\": \"Idiomatic.\"\n    },\n    \"error_handling\": {\n      \"rating\": 3,\n      \"explanation\": \"Functional.\"\n    }\n  }\n}",
+  "usage": {
+    "input_tokens": 2700,
+    "output_tokens": 220
+  }
+}

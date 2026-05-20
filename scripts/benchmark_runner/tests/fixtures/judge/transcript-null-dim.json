@@ -1,0 +1,9 @@
+{
+  "type": "result",
+  "session_id": "01HV1JUDGE1111111111111111",
+  "result": "{\n  \"ratings\": {\n    \"idiomaticity\": {\n      \"rating\": 3,\n      \"explanation\": \"Adequate for the language; nothing remarkable.\"\n    },\n    \"error_handling\": {\n      \"rating\": 3,\n      \"explanation\": \"Specific exception types; one over-broad catch.\"\n    },\n    \"test_thoughtfulness\": {\n      \"rating\": null,\n      \"explanation\": \"Task instructions explicitly forbid editing the test file (Aider Polyglot framing); model had no opportunity to demonstrate test thoughtfulness.\"\n    },\n    \"security_hygiene\": {\n      \"rating\": null,\n      \"explanation\": \"Pure-string algorithm; no IO, no parsing, no shell, no SQL — nothing for a defensive posture to defend against.\"\n    }\n  }\n}",
+  "usage": {
+    "input_tokens": 2950,
+    "output_tokens": 410
+  }
+}
