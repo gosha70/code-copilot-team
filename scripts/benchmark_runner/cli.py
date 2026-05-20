@@ -122,6 +122,37 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_report.add_argument("--run-dir", required=True, type=Path)
 
+    # ── judge ─────────────────────────────────────────────────────────
+    p_judge = sub.add_parser(
+        "judge",
+        help=(
+            "Rate every attempt under a run-dir with a calibrated LLM "
+            "judge. Writes judge.json adjacent to score.json; never "
+            "modifies score.json. See specs/benchmark-llm-judge/spec.md."
+        ),
+    )
+    p_judge.add_argument("--run-dir", required=True, type=Path)
+    p_judge.add_argument(
+        "--judge",
+        required=True,
+        help=(
+            "Judge spec '<family>:<model>'. Currently supported family: "
+            "'claude-code' (e.g. claude-code:sonnet). The alias "
+            "'claude-code-judge' is also accepted for parity with the "
+            "internal judge_id recorded in judge.json."
+        ),
+    )
+    p_judge.add_argument(
+        "--rubric",
+        default="default-v1",
+        help="Rubric name; loaded from benchmarks/calibration/rubric-<name>.md.",
+    )
+    p_judge.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-rate every attempt even if judge.json already exists.",
+    )
+
     # ── compare ───────────────────────────────────────────────────────
     p_compare = sub.add_parser(
         "compare",
@@ -441,12 +472,105 @@ def _cmd_dogfood(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+_JUDGE_FACTORIES: dict[str, "callable"] = {}
+
+# User-facing family tokens accepted by the ``--judge`` CLI arg.
+# The SDD canonicalizes ``claude-code`` (spec.md scenarios + Interface
+# section); the internal ``judge_id`` recorded in judge.json is
+# ``claude-code-judge`` (claude_code_judge.JUDGE_FAMILY). Both spellings
+# are accepted as aliases so docs, judge.json values, and the
+# corresponding CLI command all work without a translation step.
+_JUDGE_FAMILY_ALIASES: dict[str, str] = {
+    "claude-code": "claude-code",
+    "claude-code-judge": "claude-code",
+}
+
+
+def _judge_factory(family: str):
+    """Resolve a judge family (or alias) to its factory function.
+
+    A TB1.5 follow-up will replace this with the canonical
+    judge/registry.py + _register.py pattern (parallel to backends').
+    For now: a lazy import keeps the CLI import cheap and avoids
+    pulling the judge subpackage into ``benchmark list`` / `run` paths.
+    """
+    canonical = _JUDGE_FAMILY_ALIASES.get(family)
+    if canonical is None:
+        return None
+    if canonical not in _JUDGE_FACTORIES:
+        if canonical == "claude-code":
+            from .judge.claude_code_judge import factory as _factory
+            _JUDGE_FACTORIES[canonical] = _factory
+    return _JUDGE_FACTORIES.get(canonical)
+
+
+def _cmd_judge(args: argparse.Namespace) -> int:
+    if not args.run_dir.exists():
+        print(f"benchmark: run-dir not found: {args.run_dir}", file=sys.stderr)
+        return EXIT_USAGE
+    if ":" not in args.judge:
+        print(
+            f"benchmark: --judge must be '<family>:<model>'; got {args.judge!r}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    family, model = args.judge.split(":", 1)
+    factory_fn = _judge_factory(family)
+    if factory_fn is None:
+        supported = ", ".join(sorted(_JUDGE_FAMILY_ALIASES))
+        print(
+            f"benchmark: unknown judge family {family!r}; "
+            f"supported: {supported}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    from .judge.rubric import RubricNotFoundError, RubricParseError, load_rubric
+    from .judge.runner import ScoreJsonMutatedError, run_judge
+
+    try:
+        rubric = load_rubric(args.rubric)
+    except RubricNotFoundError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except RubricParseError as exc:
+        print(f"benchmark: rubric parse error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    judge = factory_fn(model)
+    try:
+        stats = run_judge(args.run_dir, judge, rubric, overwrite=args.overwrite)
+    except ScoreJsonMutatedError as exc:
+        # Additivity invariant violation — hard fail.
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"benchmark: judge failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+
+    print(json.dumps({
+        "run_dir": str(args.run_dir),
+        "judge": args.judge,
+        "rubric": args.rubric,
+        "attempts_processed": stats.attempts_processed,
+        "attempts_skipped": stats.attempts_skipped,
+        "attempts_failed": stats.attempts_failed,
+        "skip_reasons": stats.skip_reasons,
+        "failure_reasons": stats.failure_reasons,
+    }, indent=2))
+    return EXIT_OK
+
+
 _HANDLERS = {
     "list": _cmd_list,
     "run": _cmd_run,
     "report": _cmd_report,
     "compare": _cmd_compare,
     "dogfood": _cmd_dogfood,
+    "judge": _cmd_judge,
 }
 
 
