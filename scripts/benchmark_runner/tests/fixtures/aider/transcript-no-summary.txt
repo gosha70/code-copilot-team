@@ -1,10 +1,13 @@
-Aider v0.50.1
-Model: claude-3-5-sonnet-20241022
+──────────────────────────────────────────────────────────────────────────────────────
+Aider v0.86.2
+Model: anthropic/claude-sonnet-4-5 with diff edit format, infinite output
+Git repo: none
+Repo-map: disabled
+Added m.py to the chat.
 
-Can't initialize git repo: not a git repository.
 Traceback (most recent call last):
-  File "/usr/local/lib/python3.11/site-packages/aider/main.py", line 423, in main
-    coder = Coder.create(...)
-  File "/usr/local/lib/python3.11/site-packages/aider/coders/base_coder.py", line 188, in create
-    raise ValueError("No suitable model found")
-ValueError: No suitable model found
+  File "/Users/gosha/.local/bin/aider", line 8, in <module>
+    sys.exit(main())
+  File "/usr/local/lib/python3.11/site-packages/aider/main.py", line 1182, in main
+    coder.run(with_message=initial_message)
+RuntimeError: model returned an empty response

@@ -15,6 +15,7 @@ origin:
     - https://aider.chat/docs/leaderboards/
     - https://aider.chat/2024/12/21/polyglot.html
     - https://aider.chat/docs/more/edit-formats.html
+    - https://github.com/gosha70/code-copilot-team/issues/46
   origin_claim: |
     See spec.md `origin:` block. Issue #41 adds the `aider` copilot
     backend mirroring codex (#33): backend + verification record

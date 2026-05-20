@@ -1,16 +1,18 @@
 # benchmark_runner.backends.aider — Aider CLI backend.
 #
-# Spawns ``aider --yes-always --no-auto-commits --no-dirty-commits
-# --no-gitignore --no-check-update --no-stream [--model <model>]
-# --chat-history-file <attempt_dir>/aider.chat.history.md
+# Spawns ``aider [--model <m>] --yes-always --no-auto-commits
+# --no-dirty-commits --no-gitignore --no-git --no-check-update
+# --no-stream --chat-history-file <attempt_dir>/aider.chat.history.md
 # --llm-history-file  <attempt_dir>/aider.llm.history.txt
-# [--edit-format <fmt>]
-# --message-file <attempt_dir>/aider-message.txt``
+# [--edit-format <fmt>] --message-file <attempt_dir>/aider-message.txt``
 # in the attempt worktree and captures the text transcript.
 #
-# Verified argv contract (see specs/benchmark-harness/verification/aider.md
-# once B3 is complete). The pinned version constant is a loud placeholder
-# until Phase B3 wires in the real captured version.
+# Verified argv contract: see specs/benchmark-harness/verification/aider.md
+# (aider 0.86.2 recorded transcript, captured 2026-05-19). Apples-to-apples
+# caveat: ``--no-git`` is pinned to keep the worktree clean for run.py's
+# _write_diff (which excludes only .venv) — Aider's published Polyglot
+# leaderboard runs each exercise inside a git repo, so the repo-map may
+# degrade on multi-file tasks. Tracked in #46 (git-with-cleanup pattern).
 #
 # Provider routing:
 # Aider reads provider credentials from the environment (ANTHROPIC_API_KEY,
@@ -55,10 +57,12 @@ from ..contracts import BackendResult, RunContext
 
 BACKEND_FAMILY = "aider"
 
-# Loud placeholder — replaced in Phase B3 when the maintainer captures
-# the real ``aider --version`` output. A B2 test asserts this string is
-# NOT present, enforcing the gate before merge.
-_VERIFIED_VERSION = "PHASE_B3_CAPTURE_REQUIRED__DO_NOT_MERGE"
+# Pinned ``aider --version`` output, captured on the maintainer machine
+# 2026-05-19 (see specs/benchmark-harness/verification/aider.md). The
+# self-enforcing ``test_verified_version_not_placeholder`` asserts this
+# string is not the B0 gate placeholder — a regression guard if anyone
+# bumps the pin without re-capturing.
+_VERIFIED_VERSION = "aider 0.86.2"
 
 # Conservative default; per-task adapters can override via RunContext.timeout_seconds.
 _DEFAULT_TIMEOUT_SECONDS = 600
@@ -213,12 +217,13 @@ class AiderBackend:
     def _build_argv(self, *, attempt_dir: Path, edit_format: Optional[str]) -> list[str]:
         """Build the verified argv for the Aider CLI.
 
-        Exact form (B0-corrected contract):
+        Exact form (B0-corrected + B3-recapture contract):
           aider [--model <model>]
                 --yes-always
                 --no-auto-commits
                 --no-dirty-commits
                 --no-gitignore
+                --no-git                    # B3: prevents .git/ in worktree
                 --no-check-update
                 --no-stream
                 --chat-history-file <attempt_dir>/aider.chat.history.md
@@ -230,6 +235,8 @@ class AiderBackend:
         ``--yes`` does NOT exist; the flag is ``--yes-always`` (B0).
         ``--temperature`` is not an Aider CLI flag.
         ``--map-tokens`` is not pinned (methodology fidelity, Design Decision 3).
+        ``--no-git`` yields ``Git repo: none``, ``Repo-map: disabled`` in
+        the transcript (apples-to-apples caveat tracked in #46).
         """
         argv = ["aider"]
         if self._model:
@@ -239,6 +246,9 @@ class AiderBackend:
             "--no-auto-commits",
             "--no-dirty-commits",
             "--no-gitignore",
+            "--no-git",  # B3: real aider creates .git/ in a non-git dir despite
+                         # --no-gitignore; --no-git yields "Git repo: none",
+                         # "Repo-map: disabled" (a-to-a caveat tracked in #46).
             "--no-check-update",
             "--no-stream",
             "--chat-history-file", str(attempt_dir / "aider.chat.history.md"),
@@ -332,25 +342,35 @@ def _tail(text: str, max_chars: int) -> str:
 
 # ── Transcript parser ──────────────────────────────────────────────────
 
-# Aider's summary line formats (approximate — tested against real output):
-#   Tokens: 1234 sent, 567 received.
-#   Tokens: 1234 sent, 567 received. Cost: $0.00123 message, $0.00456 session.
-#   Tokens: 1,234 sent, 567 received.   (comma-separated thousands)
-# Edit format echo:
-#   Edit format: diff
-# Repo-map / map-tokens echo (when repo map is active):
-#   Repo-map: 1024 tokens
+# Aider summary line shapes — regenerated from the B3 recorded transcript
+# (aider 0.86.2, 2026-05-19). The earlier hand-authored regexes did not
+# match real output; see [[feedback_recorded_capture_is_fixture_ground_truth]].
+#
+# Tokens (the `k`/`M` suffixed form is the common real format, but plain
+# integers and comma thousands also appear in other versions/contexts):
+#   Tokens: 2.7k sent, 73 received.
+#   Tokens: 2.7k sent, 73 received. Cost: $0.0091 message, $0.0091 session.
+#   Tokens: 1,234 sent, 567 received.   (comma thousands)
+#   Tokens: 1234 sent, 567 received.    (plain int)
+# Edit format echo (substring of the Model: line, NOT a standalone line):
+#   Model: anthropic/claude-sonnet-4-5 with diff edit format, infinite output
+# Repo-map (only when active; under --no-git aider prints
+# ``Repo-map: disabled`` and there is no token count to parse → None):
+#   Repo-map: using 4096 tokens, auto refresh
+#   Repo-map: disabled
+
+_TOKEN_NUM = r"[\d][\d.,]*[kKmM]?"
 
 _TOKENS_RE = re.compile(
-    r"Tokens:\s*([\d,]+)\s+sent,\s*([\d,]+)\s+received",
+    rf"Tokens:\s*({_TOKEN_NUM})\s+sent,\s*({_TOKEN_NUM})\s+received",
     re.IGNORECASE,
 )
 _EDIT_FORMAT_RE = re.compile(
-    r"^Edit\s+format:\s*(.+)$",
-    re.IGNORECASE | re.MULTILINE,
+    r"with\s+(\S+)\s+edit\s+format",
+    re.IGNORECASE,
 )
 _MAP_TOKENS_RE = re.compile(
-    r"Repo-map:\s*([\d,]+)\s+tokens",
+    r"Repo-map:\s*using\s+([\d,]+)\s+tokens",
     re.IGNORECASE,
 )
 
@@ -370,9 +390,19 @@ class _Parsed:
         self.map_tokens_effective: Optional[int] = None
 
 
-def _parse_int_with_commas(s: str) -> int:
-    """Parse an integer that may contain comma thousands-separators."""
-    return int(s.replace(",", ""))
+def _parse_token_count(s: str) -> int:
+    """Parse Aider's token-count tokens — supports plain ints (``73``),
+    comma thousands (``1,234``), and ``k``/``M`` suffixes (``2.7k`` → 2700,
+    ``1.2M`` → 1_200_000). Per the B3 recorded transcript the ``k`` suffix
+    is the common real form. The result is rounded to the nearest int.
+    """
+    s = s.strip().replace(",", "")
+    mult = 1
+    if s and s[-1] in ("k", "K"):
+        mult, s = 1_000, s[:-1]
+    elif s and s[-1] in ("m", "M"):
+        mult, s = 1_000_000, s[:-1]
+    return round(float(s) * mult)
 
 
 def _parse_transcript(stdout: str) -> _Parsed:
@@ -399,8 +429,8 @@ def _parse_transcript(stdout: str) -> _Parsed:
     for m in _TOKENS_RE.finditer(stdout):
         tokens_match = m
     if tokens_match is not None:
-        out.tokens_input = _parse_int_with_commas(tokens_match.group(1))
-        out.tokens_output = _parse_int_with_commas(tokens_match.group(2))
+        out.tokens_input = _parse_token_count(tokens_match.group(1))
+        out.tokens_output = _parse_token_count(tokens_match.group(2))
     # If no match: tokens_input and tokens_output remain None.
 
     # Parse edit format echo (first match).
@@ -413,7 +443,7 @@ def _parse_transcript(stdout: str) -> _Parsed:
     for m in _MAP_TOKENS_RE.finditer(stdout):
         map_match = m
     if map_match is not None:
-        out.map_tokens_effective = _parse_int_with_commas(map_match.group(1))
+        out.map_tokens_effective = _parse_token_count(map_match.group(1))
 
     return out
 

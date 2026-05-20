@@ -45,7 +45,10 @@ regressions.
 - **Output:** `AiderBackend` mirroring `codex.py`: `BACKEND_FAMILY`,
   `_VERIFIED_VERSION`, timeout constants + `CCT_AIDER_TIMEOUT_SECONDS`
   override, `_build_argv` (pinned contract: `--yes-always` (NOT
-  `--yes` — B0); `--model` iff non-empty; `--edit-format` iff
+  `--yes` — B0); **`--no-git`** (B3 capture: real aider creates `.git/`
+  in a non-git dir despite `--no-gitignore`; `--no-git` yields `Git
+  repo: none`, `Repo-map: disabled`; apples-to-apples caveat tracked
+  in #46); `--model` iff non-empty; `--edit-format` iff
   `CCT_AIDER_EDIT_FORMAT`; NO `--map-tokens`; `--temperature` is not
   an Aider flag), Popen+pgkill timeout →
   `timed_out=True`, `_resolve_provider_env` (presence booleans),
@@ -103,9 +106,11 @@ regressions.
      `CCT_AIDER_EDIT_FORMAT` (then `edit_format_forced=true`);
      `--temperature` never (not an Aider flag).
   3. prompt via `--message-file` under `attempt_dir`, not argv/stdin.
-  4. `--no-auto-commits --no-dirty-commits --no-gitignore` always
-     present; history files under `attempt_dir`; post-`run()` worktree
-     has no `.aider*`/commits.
+  4. `--no-auto-commits --no-dirty-commits --no-gitignore --no-git`
+     always present (B3: `--no-git` is the actual fix for the `.git/`
+     repo Aider creates in a non-git dir despite `--no-gitignore`);
+     history files under `attempt_dir`; post-`run()` worktree has no
+     `.aider*`, no `.git/`, and no `.gitignore`.
   5. metadata = provider presence booleans + resolved
      edit_format/map_tokens (no `temperature` — not an Aider flag);
      no key values, no `sk-`/`Bearer ` in `str(metadata)`.

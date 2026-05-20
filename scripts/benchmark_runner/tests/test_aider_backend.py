@@ -85,6 +85,28 @@ if log_path:
 with open(fixture_path, "r", encoding="utf-8") as src:
     sys.stdout.write(src.read())
 
+# Simulate real aider's worktree-pollution behavior: in a non-git dir,
+# real aider creates a .git/ repo AND writes ``.aider*`` to .gitignore
+# (B3 capture proved --no-gitignore alone does NOT suppress this; only
+# --no-git does). The shim mimics that: if --no-git is NOT present in
+# argv, attempt to create .git/ + .gitignore in cwd. The pinned argv
+# passes --no-git, so a correctly-built backend keeps the worktree
+# clean; a regression that drops --no-git would have the shim pollute
+# the worktree and the cleanliness test would fail.
+if "--no-git" not in argv:
+    try:
+        Path(".git").mkdir(exist_ok=True)
+        (Path(".git") / "HEAD").write_text("ref: refs/heads/main\\n")
+    except OSError:
+        pass
+    try:
+        gi = Path(".gitignore")
+        existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
+        if ".aider" not in existing:
+            gi.write_text(existing + ".aider*\\n", encoding="utf-8")
+    except OSError:
+        pass
+
 stderr_msg = os.environ.get("CCT_FAKE_AIDER_STDERR", "")
 if stderr_msg:
     sys.stderr.write(stderr_msg)
@@ -105,12 +127,30 @@ def _install_fake_aider(tmpdir: Path) -> Path:
 
 class TestParseTranscript(unittest.TestCase):
     def test_success_transcript_yields_tokens_and_edit_format(self) -> None:
+        # Fixture is the B3-recorded aider 0.86.2 transcript (under --no-git).
+        # Tokens: `2.7k sent, 73 received.` → 2700 / 73. Edit format parsed
+        # from the substring `with diff edit format` of the `Model:` line.
+        # Repo-map line is `disabled` (the --no-git posture) → None.
         stdout = (_FIXTURES / "transcript-success.txt").read_text(encoding="utf-8")
         parsed = _parse_transcript(stdout)
-        self.assertEqual(parsed.tokens_input, 12345)
-        self.assertEqual(parsed.tokens_output, 678)
+        self.assertEqual(parsed.tokens_input, 2700)
+        self.assertEqual(parsed.tokens_output, 73)
         self.assertEqual(parsed.edit_format_resolved, "diff")
-        self.assertEqual(parsed.map_tokens_effective, 1024)
+        self.assertIsNone(parsed.map_tokens_effective)
+
+    def test_map_tokens_using_n_form_parses(self) -> None:
+        # When repo-map IS active (e.g. running WITHOUT --no-git, as Aider's
+        # leaderboard does), the line is `Repo-map: using <N> tokens, …`.
+        # Regression guard: the regex still handles this form even though our
+        # pinned argv (and the success fixture) yields `Repo-map: disabled`.
+        parsed = _parse_transcript(
+            "Model: x with diff edit format\n"
+            "Repo-map: using 4,096 tokens, auto refresh\n"
+            "Tokens: 1.2M sent, 2,345 received.\n"
+        )
+        self.assertEqual(parsed.map_tokens_effective, 4096)
+        self.assertEqual(parsed.tokens_input, 1_200_000)
+        self.assertEqual(parsed.tokens_output, 2345)
 
     def test_no_summary_yields_none_not_zero(self) -> None:
         stdout = (_FIXTURES / "transcript-no-summary.txt").read_text(encoding="utf-8")
@@ -285,6 +325,13 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
         out = self._run_backend("transcript-success.txt")
         self.assertNotIn("--map-tokens", out["log"]["argv"])
 
+    def test_no_git_present(self) -> None:
+        # B3 contract: --no-git prevents aider from creating .git/ in a
+        # non-git worktree (the fake-shim simulates that pollution; this
+        # flag stops it; the worktree-cleanliness test verifies the effect).
+        out = self._run_backend("transcript-success.txt")
+        self.assertIn("--no-git", out["log"]["argv"])
+
     def test_model_flag_present_when_model_nonempty(self) -> None:
         out = self._run_backend("transcript-success.txt", model="claude-3-5-sonnet-20241022")
         argv = out["log"]["argv"]
@@ -411,8 +458,9 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
     def test_run_records_token_counts(self) -> None:
         out = self._run_backend("transcript-success.txt")
         result = out["result"]
-        self.assertEqual(result.tokens_input, 12345)
-        self.assertEqual(result.tokens_output, 678)
+        # Recorded transcript: `Tokens: 2.7k sent, 73 received.` → 2700 / 73.
+        self.assertEqual(result.tokens_input, 2700)
+        self.assertEqual(result.tokens_output, 73)
 
     def test_missing_tokens_yields_none(self) -> None:
         out = self._run_backend("transcript-no-summary.txt")
@@ -472,12 +520,69 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
         )
 
     def test_worktree_has_no_git_commits_after_run(self) -> None:
-        # The worktree is not a git repo (no .git); no commit should have been
-        # made there. The fake shim writes nothing into worktree.
+        # The worktree is not a git repo, and the pinned argv passes --no-git
+        # so the shim (which simulates real aider's pollution) does NOT create
+        # .git/. The fake shim creates files in cwd; the backend's cwd is the
+        # worktree, so a regression would land .git there.
         worktree = self._run_backend("transcript-success.txt")["worktree"]
         self.assertFalse(
             (worktree / ".git").exists(),
             "A .git directory was created in the worktree",
+        )
+        self.assertFalse(
+            (worktree / ".gitignore").exists(),
+            "A .gitignore was written into the worktree",
+        )
+
+    def test_negative_control_shim_pollutes_without_no_git(self) -> None:
+        # Negative control: prove the shim's pollution simulation is real
+        # (and that the cleanliness guard above is therefore meaningful).
+        # When --no-git is removed from argv, the shim DOES create .git/ +
+        # .gitignore in cwd. This is the regression the pinned argv prevents.
+        import subprocess
+        from pathlib import Path
+
+        tmpdir = Path(self._tmp_path) / "polluted-cwd"
+        tmpdir.mkdir()
+        # Run the shim directly with argv that LACKS --no-git.
+        env = dict(os.environ, CCT_FAKE_AIDER_TRANSCRIPT=str(
+            _FIXTURES / "transcript-success.txt"))
+        proc = subprocess.run(
+            [sys.executable, str(self._fake), "--yes-always"],
+            cwd=str(tmpdir), env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertTrue(
+            (tmpdir / ".git").is_dir(),
+            "shim should pollute with .git/ when --no-git is absent (control)",
+        )
+        self.assertTrue(
+            (tmpdir / ".gitignore").is_file(),
+            "shim should pollute with .gitignore when --no-git is absent",
+        )
+
+
+class TestVerifiedVersionGate(unittest.TestCase):
+    """Self-enforcing B3 gate: `_VERIFIED_VERSION` must not be the loud
+    placeholder string after B3 wires the real maintainer capture. If
+    anyone bumps the pin without re-capturing, this test fails and the
+    PR description's pre-merge gate (verification-record-matches) line
+    is the second independent signal. Tracks the spec's invariant 1.
+    """
+
+    def test_verified_version_not_placeholder(self) -> None:
+        from benchmark_runner.backends.aider import _VERIFIED_VERSION
+        self.assertNotIn(
+            "PHASE_B3_CAPTURE_REQUIRED",
+            _VERIFIED_VERSION,
+            "Pinned aider version is still the B0 placeholder. Run the "
+            "live capture per specs/benchmark-harness/verification/aider.md "
+            "before merging.",
+        )
+        self.assertTrue(
+            _VERIFIED_VERSION.startswith("aider "),
+            f"_VERIFIED_VERSION must match `aider --version` output shape; "
+            f"got {_VERIFIED_VERSION!r}",
         )
 
 

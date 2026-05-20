@@ -12,6 +12,7 @@ origin:
     - https://aider.chat/docs/leaderboards/
     - https://aider.chat/2024/12/21/polyglot.html
     - https://aider.chat/docs/more/edit-formats.html
+    - https://github.com/gosha70/code-copilot-team/issues/46
   origin_claim: |
     Issue #41: "Follow-up to #33 (deferred, not partially built per the
     one-PR-per-issue rule). Add the `aider` copilot backend to the
@@ -119,6 +120,10 @@ aider
   --no-auto-commits
   --no-dirty-commits
   --no-gitignore
+  --no-git                     # do not create/use a git repo (B3 capture confirmed
+                               #   real aider creates .git/ in a non-git dir,
+                               #   polluting _write_diff). See #46 for the
+                               #   git-with-cleanup follow-up evaluation.
   --no-check-update            # no startup network version check
   --no-stream                  # reliable end-of-run summary (display-only;
                                #   confirmed in the verification record)
@@ -313,9 +318,17 @@ here and in `verification/aider.md`:
 4. **Provider routing = env-presence booleans**, not codex's
    `config.toml` path/provider id (Aider routes via env vars).
 5. **Extra pinned `--no-auto-commits --no-dirty-commits
-   --no-gitignore`** — no codex analogue; forced by `run.py`'s
-   `_write_diff` excluding only `.venv` (commits/`.aider*` in the
-   worktree would pollute every scored diff).
+   --no-gitignore --no-git`** — no codex analogue; forced by `run.py`'s
+   `_write_diff` excluding only `.venv` (commits/`.aider*`/`.git/` in
+   the worktree would pollute every scored diff). The B3 recorded
+   capture proved real aider creates `.git/` in a non-git dir despite
+   `--no-gitignore`; `--no-git` (confirmed in aider 0.86.2 options
+   reference) suppresses it and yields `Git repo: none`,
+   `Repo-map: disabled` in the transcript. Apples-to-apples caveat:
+   Aider's published Polyglot leaderboard runs each exercise inside a
+   git repo, so `--no-git` may degrade the repo-map on multi-file
+   tasks — tracked for empirical evaluation in
+   gosha70/code-copilot-team#46 (git-with-cleanup pattern).
 6. **Exit codes pinned empirically** — Aider's are undocumented; the
    recorded transcript pins observed success behavior.
 

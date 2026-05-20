@@ -305,7 +305,7 @@ The MVP ships these backends:
 | `stub`           | 1     | Copies `golden_patch` into the worktree; CI smoke test only.                                        |
 | `claude-code`    | 3     | Spawns `claude -p` headless; parses transcript usage. Provider routing via `ANTHROPIC_BASE_URL` (vLLM, Ollama, LM Studio). |
 | `codex`          | #33   | Spawns `codex exec --json --sandbox workspace-write --skip-git-repo-check [--model <m>] -` (prompt on stdin), parses the JSONL transcript. **Provider routing:** the OpenAI Codex CLI selects a provider via `~/.codex/config.toml` `[model_providers.<id>]` blocks (OpenAI cloud, or a local `base_url` for Ollama/vLLM). CCT *records* the resolved config.toml path + selected provider id in `backend_metadata` (never secrets); it does not set them. Pinned & verified: `codex-cli 0.130.0` — see `specs/benchmark-harness/verification/codex.md`. |
-| `aider`          | #41   | Spawns `aider --yes-always --no-auto-commits --no-dirty-commits --no-gitignore --no-check-update --no-stream --message-file <attempt_dir>/aider-message.txt [--model <m>] [--edit-format <fmt>]`; captures plain-text transcript. **Provider routing:** Aider reads credentials from env (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_BASE`); CCT records only presence booleans in `backend_metadata.provider_env_present`, never values, and never sets them. Model string is Aider-native `<provider>/<model>` (e.g. `anthropic/claude-sonnet-4-5`). Pinned & verified: see `specs/benchmark-harness/verification/aider.md` (added in B3). See [`### Aider backend`](#aider-backend) below for addressing, env knobs, and the apples-to-apples procedure. |
+| `aider`          | #41   | Spawns `aider --yes-always --no-auto-commits --no-dirty-commits --no-gitignore --no-git --no-check-update --no-stream --message-file <attempt_dir>/aider-message.txt [--model <m>] [--edit-format <fmt>]`; captures plain-text transcript. **Provider routing:** Aider reads credentials from env (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_BASE`); CCT records only presence booleans in `backend_metadata.provider_env_present`, never values, and never sets them. Model string is Aider-native `<provider>/<model>` (e.g. `anthropic/claude-sonnet-4-5`). Pinned & verified: `aider 0.86.2` — see `specs/benchmark-harness/verification/aider.md`. See [`### Aider backend`](#aider-backend) below for addressing, env knobs, and the apples-to-apples procedure. |
 
 **Not a backend:** vLLM, Ollama, LM Studio, OpenRouter — these are *providers* (LLM HTTP endpoints) that backends route to via the backend's own gateway env vars. CCT records which provider a run used; it does not set the routing.
 
@@ -358,8 +358,9 @@ records only presence booleans in `backend_metadata.provider_env_present`
 | `CCT_AIDER_EDIT_FORMAT` | Force a specific edit format (e.g. `diff`, `udiff`, `whole`). When unset, Aider uses its per-model default — the methodology-fidelity choice that keeps numbers comparable to Aider's published leaderboard. Setting this records `edit_format_forced=true` in `backend_metadata`. |
 
 Pinned invocation contract and recorded headless transcript:
-`specs/benchmark-harness/verification/aider.md` (added in B3, the same
-structure as `specs/benchmark-harness/verification/codex.md`).
+`specs/benchmark-harness/verification/aider.md` (`aider 0.86.2`,
+captured 2026-05-19; same structure as
+`specs/benchmark-harness/verification/codex.md`).
 
 #### Aider-vs-Aider Polyglot apples-to-apples (maintainer procedure)
 
@@ -398,9 +399,11 @@ directly comparable to https://aider.chat/docs/leaderboards/:
    recorded in `backend_metadata.edit_format_resolved` for audit.
 
 6. **Resolved edit format recorded per run.** `backend_metadata.edit_format_resolved`
-   captures the format Aider echoed in its output (parsed from
-   `Edit format: <fmt>`), or `None` if not echoed. This satisfies the
-   audit requirement without forcing a value.
+   captures the format Aider echoed in its output, parsed from the
+   `Model: … with <fmt> edit format` line (a substring of the `Model:`
+   line — B3 confirmed Aider 0.86.2 does NOT emit a standalone
+   `Edit format: <fmt>` line), or `None` if not echoed. This satisfies
+   the audit requirement without forcing a value.
 
 7. **Model and params recorded.** `backend_metadata` carries `model`,
    `aider_version`, `chat_mode`, `edit_format_resolved`,
@@ -440,6 +443,18 @@ polyglot harness truncates attempt-2 test output to the first 50 lines
 before passing it to the model. The CCT `aider_polyglot` adapter appends
 the full `prior.tests_output`. This is a recorded, known nuance — the
 adapter is out of scope for this PR.
+
+**`--no-git` apples-to-apples caveat (tracked):** the pinned argv
+includes `--no-git` to keep the harness worktree clean for
+`_write_diff` (real Aider creates `.git/` in a non-git dir, polluting
+the scored diff). Aider's published leaderboard runs each exercise
+inside a git repo, so the repo-map (`Repo-map: disabled` in our
+recorded transcript) may degrade on multi-file tasks. Tracked for
+empirical evaluation in
+[`gosha70/code-copilot-team#46`](https://github.com/gosha70/code-copilot-team/issues/46)
+(git-with-cleanup pattern: switch to running Aider with git enabled +
+a backend finalizer that removes `.git/` if the multi-file delta
+exceeds 5% across 5+ reference tasks).
 
 ## Isolation tiers
 

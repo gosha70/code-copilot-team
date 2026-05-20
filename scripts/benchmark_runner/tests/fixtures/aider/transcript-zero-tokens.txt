@@ -1,8 +1,10 @@
-Aider v0.50.1
-Model: claude-3-5-sonnet-20241022 with diff edit format
-Git repo: .git with 1 file
-Edit format: diff
+──────────────────────────────────────────────────────────────────────────────────────
+Aider v0.86.2
+Model: anthropic/claude-sonnet-4-5 with diff edit format, infinite output
+Git repo: none
+Repo-map: disabled
+Added m.py to the chat.
 
 No changes needed.
 
-Tokens: 0 sent, 0 received.
+Tokens: 0 sent, 0 received. Cost: $0.0000 message, $0.0000 session.
