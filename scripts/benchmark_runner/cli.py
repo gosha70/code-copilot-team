@@ -271,9 +271,12 @@ def _cmd_list(args: argparse.Namespace) -> int:
         print(json.dumps({"benchmark_id": args.benchmark, "tasks": tasks}, indent=2))
         return EXIT_OK
 
+    from .judge.registry import list_judge_ids
+
     payload = {
         "adapters": list_adapter_ids(),
         "backends": list_backend_ids(),
+        "judges": list_judge_ids(),
     }
     print(json.dumps(payload, indent=2))
     return EXIT_OK
@@ -515,38 +518,6 @@ def _cmd_dogfood(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-_JUDGE_FACTORIES: dict[str, "callable"] = {}
-
-# User-facing family tokens accepted by the ``--judge`` CLI arg.
-# The SDD canonicalizes ``claude-code`` (spec.md scenarios + Interface
-# section); the internal ``judge_id`` recorded in judge.json is
-# ``claude-code-judge`` (claude_code_judge.JUDGE_FAMILY). Both spellings
-# are accepted as aliases so docs, judge.json values, and the
-# corresponding CLI command all work without a translation step.
-_JUDGE_FAMILY_ALIASES: dict[str, str] = {
-    "claude-code": "claude-code",
-    "claude-code-judge": "claude-code",
-}
-
-
-def _judge_factory(family: str):
-    """Resolve a judge family (or alias) to its factory function.
-
-    A TB1.5 follow-up will replace this with the canonical
-    judge/registry.py + _register.py pattern (parallel to backends').
-    For now: a lazy import keeps the CLI import cheap and avoids
-    pulling the judge subpackage into ``benchmark list`` / `run` paths.
-    """
-    canonical = _JUDGE_FAMILY_ALIASES.get(family)
-    if canonical is None:
-        return None
-    if canonical not in _JUDGE_FACTORIES:
-        if canonical == "claude-code":
-            from .judge.claude_code_judge import factory as _factory
-            _JUDGE_FACTORIES[canonical] = _factory
-    return _JUDGE_FACTORIES.get(canonical)
-
-
 def _cmd_judge(args: argparse.Namespace) -> int:
     if not args.run_dir.exists():
         print(f"benchmark: run-dir not found: {args.run_dir}", file=sys.stderr)
@@ -558,16 +529,8 @@ def _cmd_judge(args: argparse.Namespace) -> int:
         )
         return EXIT_USAGE
     family, model = args.judge.split(":", 1)
-    factory_fn = _judge_factory(family)
-    if factory_fn is None:
-        supported = ", ".join(sorted(_JUDGE_FAMILY_ALIASES))
-        print(
-            f"benchmark: unknown judge family {family!r}; "
-            f"supported: {supported}",
-            file=sys.stderr,
-        )
-        return EXIT_USAGE
 
+    from .judge.registry import UnknownJudgeError, get_judge
     from .judge.rubric import RubricNotFoundError, RubricParseError, load_rubric
     from .judge.runner import ScoreJsonMutatedError, run_judge
 
@@ -580,7 +543,11 @@ def _cmd_judge(args: argparse.Namespace) -> int:
         print(f"benchmark: rubric parse error: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
-    judge = factory_fn(model)
+    try:
+        judge = get_judge(family, model)
+    except UnknownJudgeError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     try:
         stats = run_judge(args.run_dir, judge, rubric, overwrite=args.overwrite)
     except ScoreJsonMutatedError as exc:

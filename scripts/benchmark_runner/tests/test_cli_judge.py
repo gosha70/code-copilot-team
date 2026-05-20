@@ -76,6 +76,15 @@ class TestCliJudge(unittest.TestCase):
         self._tmp = tempfile.mkdtemp(prefix="cct-cli-judge-test-")
         self.tmpdir = Path(self._tmp)
         self.run_dir = _make_run_dir(self.tmpdir)
+        # Call register_all() in setUp so mock.patch.dict can override
+        # already-registered entries inside individual tests. Without
+        # this, register_all() running inside the with-block would see
+        # a registry pre-populated by mock.patch.dict and raise
+        # "different factory" on the canonical token — TB1.5 registry
+        # contract is strict about same-key/different-factory
+        # collisions (test_different_factories_under_same_token_raises).
+        from benchmark_runner._register import register_all
+        register_all()
 
     def tearDown(self) -> None:
         shutil.rmtree(self._tmp, ignore_errors=True)
@@ -135,9 +144,12 @@ class TestCliJudge(unittest.TestCase):
         # (spec.md scenarios + Interface section). Monkeypatch the
         # factory to return a stub so the test doesn't need the real
         # `claude` CLI in CI.
-        with mock.patch(
-            "benchmark_runner.cli._JUDGE_FACTORIES",
-            new={"claude-code": lambda model: _CannedJudge()},
+        with mock.patch.dict(
+            "benchmark_runner.judge.registry._JUDGES",
+            {
+                "claude-code": lambda model: _CannedJudge(),
+                "claude-code-judge": lambda model: _CannedJudge(),
+            },
         ):
             code, out, err = self._invoke(
                 "judge",
@@ -160,9 +172,12 @@ class TestCliJudge(unittest.TestCase):
         # judge.json's ``judge_id`` field). Accepting it as a CLI
         # alias for ``claude-code`` lets a user copy that value
         # verbatim into a re-run command without translation.
-        with mock.patch(
-            "benchmark_runner.cli._JUDGE_FACTORIES",
-            new={"claude-code": lambda model: _CannedJudge()},
+        with mock.patch.dict(
+            "benchmark_runner.judge.registry._JUDGES",
+            {
+                "claude-code": lambda model: _CannedJudge(),
+                "claude-code-judge": lambda model: _CannedJudge(),
+            },
         ):
             code, out, err = self._invoke(
                 "judge",
@@ -191,9 +206,9 @@ class TestCliJudge(unittest.TestCase):
                 )
                 return _CannedJudge().rate(attempt)
 
-        with mock.patch(
-            "benchmark_runner.cli._JUDGE_FACTORIES",
-            new={"claude-code": lambda model: _MutatingJudge()},
+        with mock.patch.dict(
+            "benchmark_runner.judge.registry._JUDGES",
+            {"claude-code": lambda model: _MutatingJudge()},
         ):
             code, _, err = self._invoke(
                 "judge",

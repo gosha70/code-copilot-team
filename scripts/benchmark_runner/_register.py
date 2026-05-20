@@ -13,7 +13,17 @@
 
 from __future__ import annotations
 
+from .judge.registry import register_judge
 from .registry import register_backend
+
+
+# Judge family tokens accepted on the CLI. The canonical one is
+# ``claude-code`` (per spec.md scenarios). ``claude-code-judge``
+# is the internal ``judge_id`` recorded in judge.json; accepting
+# it as an alias lets a user copy that value verbatim into a
+# re-run command. Same factory, two tokens — register_judge
+# tolerates the shared factory by design (see judge/registry.py).
+_JUDGE_FAMILY_TOKENS = ("claude-code", "claude-code-judge")
 
 
 _REGISTERED = False
@@ -49,12 +59,23 @@ def register_all() -> None:
     register_backend(codex_backend.BACKEND_FAMILY, codex_backend.factory)
     from .backends import aider as aider_backend
     register_backend(aider_backend.BACKEND_FAMILY, aider_backend.factory)
+
+    # Judges (TB1.5). Each judge module exposes a ``factory``
+    # function; register it under every accepted family token. The
+    # shared factory makes ``claude-code`` and ``claude-code-judge``
+    # behave identically on the CLI.
+    from .judge import claude_code_judge
+    for token in _JUDGE_FAMILY_TOKENS:
+        register_judge(token, claude_code_judge.factory)
+
     _REGISTERED = True
 
 
 def unregister_all_for_tests() -> None:
     """Reset for test isolation. The test harness calls this."""
     global _REGISTERED
+    from .judge.registry import _reset_for_tests as _reset_judges
     from .registry import _reset_for_tests
     _reset_for_tests()
+    _reset_judges()
     _REGISTERED = False
