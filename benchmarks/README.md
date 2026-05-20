@@ -305,6 +305,7 @@ The MVP ships these backends:
 | `stub`           | 1     | Copies `golden_patch` into the worktree; CI smoke test only.                                        |
 | `claude-code`    | 3     | Spawns `claude -p` headless; parses transcript usage. Provider routing via `ANTHROPIC_BASE_URL` (vLLM, Ollama, LM Studio). |
 | `codex`          | #33   | Spawns `codex exec --json --sandbox workspace-write --skip-git-repo-check [--model <m>] -` (prompt on stdin), parses the JSONL transcript. **Provider routing:** the OpenAI Codex CLI selects a provider via `~/.codex/config.toml` `[model_providers.<id>]` blocks (OpenAI cloud, or a local `base_url` for Ollama/vLLM). CCT *records* the resolved config.toml path + selected provider id in `backend_metadata` (never secrets); it does not set them. Pinned & verified: `codex-cli 0.130.0` — see `specs/benchmark-harness/verification/codex.md`. |
+| `aider`          | #41   | Spawns `aider --yes-always --no-auto-commits --no-dirty-commits --no-gitignore --no-git --no-check-update --no-stream --message-file <attempt_dir>/aider-message.txt [--model <m>] [--edit-format <fmt>]`; captures plain-text transcript. **Provider routing:** Aider reads credentials from env (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_BASE`); CCT records only presence booleans in `backend_metadata.provider_env_present`, never values, and never sets them. Model string is Aider-native `<provider>/<model>` (e.g. `anthropic/claude-sonnet-4-5`). Pinned & verified: `aider 0.86.2` — see `specs/benchmark-harness/verification/aider.md`. See [`### Aider backend`](#aider-backend) below for addressing, env knobs, and the apples-to-apples procedure. |
 
 **Not a backend:** vLLM, Ollama, LM Studio, OpenRouter — these are *providers* (LLM HTTP endpoints) that backends route to via the backend's own gateway env vars. CCT records which provider a run used; it does not set the routing.
 
@@ -314,6 +315,146 @@ The MVP ships these backends:
 2. Add the `register_backend(<family>, factory)` call to `scripts/benchmark_runner/_register.py:register_all`. The `<family>` is what the user types before the colon in `--backend <family>:<model>` (or alone when there is no model variant — see `stub`).
 3. Document any required env vars (e.g. `CCT_VLLM_ENDPOINT`) in this README.
 4. Add a backend-conformance test that drives `run()` against a recorded transcript or HTTP fixture (no live network calls in the unit tests).
+
+### Aider backend
+
+Aider is a backend, not a bench provider. `./scripts/bench` whitelists
+*providers* (sonnet, ollama:…, vllm:…) that all resolve to
+`backend=claude-code`; it has no backend concept and is **not
+modified**. Like `codex`, `aider` is addressed only via the lower-level
+harness (`scripts/benchmark run|compare` = many backends, each with its
+own model-string convention; `./scripts/bench` = one backend / many
+providers).
+
+**Run a single task:**
+
+```bash
+./scripts/benchmark run --benchmark aider-polyglot \
+    --backend aider --model anthropic/claude-sonnet-4-5 \
+    --task python/bowling --runs 3
+```
+
+**Compare-config candidate shape:**
+
+```json
+{ "name": "aider-sonnet", "backend": "aider",
+  "model": "anthropic/claude-sonnet-4-5" }
+```
+
+**Model string format:** Aider-native `<provider>/<model>`, passed
+verbatim to `--model`. Examples: `anthropic/claude-sonnet-4-5`,
+`openai/gpt-4o`, `openrouter/qwen/qwen-2.5-coder-32b`.
+
+**Provider credentials:** Aider reads them from env (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_BASE`). The harness
+records only presence booleans in `backend_metadata.provider_env_present`
+— never the values — and never sets them.
+
+**Env knobs:**
+
+| Variable | Effect |
+|---|---|
+| `CCT_AIDER_TIMEOUT_SECONDS` | Per-attempt wall-clock cap (overrides the default 600 s). |
+| `CCT_AIDER_EDIT_FORMAT` | Force a specific edit format (e.g. `diff`, `udiff`, `whole`). When unset, Aider uses its per-model default — the methodology-fidelity choice that keeps numbers comparable to Aider's published leaderboard. Setting this records `edit_format_forced=true` in `backend_metadata`. |
+
+Pinned invocation contract and recorded headless transcript:
+`specs/benchmark-harness/verification/aider.md` (`aider 0.86.2`,
+captured 2026-05-19; same structure as
+`specs/benchmark-harness/verification/codex.md`).
+
+#### Aider-vs-Aider Polyglot apples-to-apples (maintainer procedure)
+
+**This procedure is NOT executed in CI or in this PR.** Running the full
+225-exercise Polyglot pool requires real API spend and multiple hours of
+wall time — it is maintainer-scale, like the existing dogfood Gate.
+The PR ships the documented invariants and exact command; it does not
+run the leaderboard.
+
+The 9 comparability invariants that make CCT-Aider numbers
+directly comparable to https://aider.chat/docs/leaderboards/:
+
+1. **Same 225-task Polyglot pool.** The `aider-polyglot` adapter
+   exposes the same 225 (language, exercise) pairs as Aider's published
+   benchmark. Satisfied by the existing adapter's `list_tasks()`.
+
+2. **2 attempts per exercise.** The adapter's `max_attempts()` returns
+   `2`. The harness calls `run()` up to twice per task.
+
+3. **Attempt 2 receives attempt 1 test output.** The adapter's
+   `prompt_for(attempt=2, prior=...)` appends `prior.tests_output`
+   to the second-attempt prompt — same information Aider's own harness
+   passes on retry. Satisfied by the existing adapter unchanged.
+
+4. **pass@2 primary, pass@1 secondary.** A task counts as passed if
+   either attempt exits 0 (pass@2); pass@1 is the subset where
+   attempt 1 already exits 0. These are **derived** by the aggregator
+   from the per-attempt `score.json` files (which record each
+   attempt's result) — there are no explicit `pass@1`/`pass@2` fields
+   in the schema; do not look for them there.
+
+5. **Per-model default edit format.** `CCT_AIDER_EDIT_FORMAT` is left
+   unset for leaderboard runs. The harness omits `--edit-format` from
+   the argv, so Aider selects its per-model default — exactly the
+   behavior Aider's own leaderboard uses. The resolved format is
+   recorded in `backend_metadata.edit_format_resolved` for audit.
+
+6. **Resolved edit format recorded per run.** `backend_metadata.edit_format_resolved`
+   captures the format Aider echoed in its output, parsed from the
+   `Model: … with <fmt> edit format` line (a substring of the `Model:`
+   line — B3 confirmed Aider 0.86.2 does NOT emit a standalone
+   `Edit format: <fmt>` line), or `None` if not echoed. This satisfies
+   the audit requirement without forcing a value.
+
+7. **Model and params recorded.** `backend_metadata` carries `model`,
+   `aider_version`, `chat_mode`, `edit_format_resolved`,
+   `edit_format_forced`, and `map_tokens_effective`. No `temperature`
+   field — Aider has no CLI temperature flag (Aider-internal via
+   litellm; neither set nor observable by the harness).
+
+8. **T=0 is not truly deterministic.** Aider exposes no `--temperature`
+   CLI flag; temperature is litellm-internal. The harness neither sets
+   it nor can observe it. Run variance from LLM nondeterminism and
+   per-run repo-map variation is accepted — same class as all other
+   backends. The report's calibrated winner-rule accounts for this.
+
+9. **Scoring = unit-test exit 0.** A task is scored passed when the
+   adapter's `verify()` exits 0 (language-specific test runner:
+   pytest for Python, `go test` for Go, etc.). No LLM judge.
+   Identical to Aider's own leaderboard scoring criterion.
+
+**Exact leaderboard-faithful command** (run over the full pool, not
+just a subset; `--runs 1` because pass@2 is the adapter's 2-attempt
+loop, not `--runs 2`):
+
+```bash
+./scripts/benchmark run --benchmark aider-polyglot \
+    --backend aider --model <provider/model> --runs 1
+```
+
+**Dogfood-subset caveat:** `benchmarks/adapters/aider_polyglot/dogfood-subset.txt`
+references `*/leap` task ids that are absent from the pinned snapshot
+(known pre-existing stale data, NOT fixed in this PR — scope
+discipline). Maintainers running a smoke subset should use
+`--task python/bowling` (verified present) or tasks confirmed against
+the local cache, not the dogfood-subset file.
+
+**Known comparability nuance (recorded, not modified):** Aider's own
+polyglot harness truncates attempt-2 test output to the first 50 lines
+before passing it to the model. The CCT `aider_polyglot` adapter appends
+the full `prior.tests_output`. This is a recorded, known nuance — the
+adapter is out of scope for this PR.
+
+**`--no-git` apples-to-apples caveat (tracked):** the pinned argv
+includes `--no-git` to keep the harness worktree clean for
+`_write_diff` (real Aider creates `.git/` in a non-git dir, polluting
+the scored diff). Aider's published leaderboard runs each exercise
+inside a git repo, so the repo-map (`Repo-map: disabled` in our
+recorded transcript) may degrade on multi-file tasks. Tracked for
+empirical evaluation in
+[`gosha70/code-copilot-team#46`](https://github.com/gosha70/code-copilot-team/issues/46)
+(git-with-cleanup pattern: switch to running Aider with git enabled +
+a backend finalizer that removes `.git/` if the multi-file delta
+exceeds 5% across 5+ reference tasks).
 
 ## Isolation tiers
 
