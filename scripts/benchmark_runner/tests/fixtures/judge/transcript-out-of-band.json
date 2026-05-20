@@ -1,0 +1,9 @@
+{
+  "type": "result",
+  "session_id": "01HV1JUDGE2222222222222222",
+  "result": "{\n  \"ratings\": {\n    \"idiomaticity\": {\n      \"rating\": 6,\n      \"explanation\": \"Model emitted a rating outside the 1-5 band.\"\n    },\n    \"error_handling\": {\n      \"rating\": 0,\n      \"explanation\": \"Zero is also outside the band.\"\n    },\n    \"test_thoughtfulness\": {\n      \"rating\": 3,\n      \"explanation\": \"Adequate.\"\n    },\n    \"security_hygiene\": {\n      \"rating\": 4,\n      \"explanation\": \"Defensive.\"\n    }\n  }\n}",
+  "usage": {
+    "input_tokens": 2800,
+    "output_tokens": 380
+  }
+}

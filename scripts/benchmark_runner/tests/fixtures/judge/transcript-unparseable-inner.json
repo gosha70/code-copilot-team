@@ -1,0 +1,9 @@
+{
+  "type": "result",
+  "session_id": "01HV1JUDGE4444444444444444",
+  "result": "The four dimensions of this attempt are roughly: idiomaticity good, error handling weak, tests minimal, security adequate. (LLM forgot to format as JSON.)",
+  "usage": {
+    "input_tokens": 2650,
+    "output_tokens": 95
+  }
+}

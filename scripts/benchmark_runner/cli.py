@@ -122,6 +122,80 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_report.add_argument("--run-dir", required=True, type=Path)
 
+    # ── judge ─────────────────────────────────────────────────────────
+    p_judge = sub.add_parser(
+        "judge",
+        help=(
+            "Rate every attempt under a run-dir with a calibrated LLM "
+            "judge. Writes judge.json adjacent to score.json; never "
+            "modifies score.json. See specs/benchmark-llm-judge/spec.md."
+        ),
+    )
+    p_judge.add_argument("--run-dir", required=True, type=Path)
+    p_judge.add_argument(
+        "--judge",
+        required=True,
+        help=(
+            "Judge spec '<family>:<model>'. Currently supported family: "
+            "'claude-code' (e.g. claude-code:sonnet). The alias "
+            "'claude-code-judge' is also accepted for parity with the "
+            "internal judge_id recorded in judge.json."
+        ),
+    )
+    p_judge.add_argument(
+        "--rubric",
+        default="default-v1",
+        help="Rubric name; loaded from benchmarks/calibration/rubric-<name>.md.",
+    )
+    p_judge.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-rate every attempt even if judge.json already exists.",
+    )
+
+    # ── calibration-corpus ─────────────────────────────────────────
+    p_corpus = sub.add_parser(
+        "calibration-corpus",
+        help=(
+            "Select a corpus of attempt-records from runs/ for human "
+            "labeling. Writes <name>.corpus.jsonl + <name>.meta.json "
+            "under --output-dir (default benchmarks/calibration/). "
+            "Never mutates runs/."
+        ),
+    )
+    p_corpus.add_argument(
+        "--runs-root",
+        type=Path,
+        default=Path("runs"),
+        help="Directory to walk for attempt-NN-run-MM/ candidates (default ./runs).",
+    )
+    p_corpus.add_argument(
+        "--target-n",
+        required=True,
+        type=int,
+        help="Target number of attempts to select (>=1). Issue #34 v3 requires >=50.",
+    )
+    p_corpus.add_argument(
+        "--axes",
+        required=True,
+        help=(
+            "Comma-separated axes of variation: any of "
+            "'model', 'adapter', 'backend', 'repeated-runs'. "
+            "Issue #34 v3 requires >=2 distinct axes."
+        ),
+    )
+    p_corpus.add_argument(
+        "--name",
+        required=True,
+        help="Corpus name; outputs land at <output-dir>/<name>.{corpus.jsonl,meta.json}.",
+    )
+    p_corpus.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("benchmarks/calibration"),
+        help="Where to write the corpus files (default benchmarks/calibration/).",
+    )
+
     # ── compare ───────────────────────────────────────────────────────
     p_compare = sub.add_parser(
         "compare",
@@ -197,9 +271,12 @@ def _cmd_list(args: argparse.Namespace) -> int:
         print(json.dumps({"benchmark_id": args.benchmark, "tasks": tasks}, indent=2))
         return EXIT_OK
 
+    from .judge.registry import list_judge_ids
+
     payload = {
         "adapters": list_adapter_ids(),
         "backends": list_backend_ids(),
+        "judges": list_judge_ids(),
     }
     print(json.dumps(payload, indent=2))
     return EXIT_OK
@@ -441,12 +518,143 @@ def _cmd_dogfood(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_judge(args: argparse.Namespace) -> int:
+    if not args.run_dir.exists():
+        print(f"benchmark: run-dir not found: {args.run_dir}", file=sys.stderr)
+        return EXIT_USAGE
+    if ":" not in args.judge:
+        print(
+            f"benchmark: --judge must be '<family>:<model>'; got {args.judge!r}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    family, model = args.judge.split(":", 1)
+
+    from .judge.registry import UnknownJudgeError, get_judge
+    from .judge.rubric import RubricNotFoundError, RubricParseError, load_rubric
+    from .judge.runner import ScoreJsonMutatedError, run_judge
+
+    try:
+        rubric = load_rubric(args.rubric)
+    except RubricNotFoundError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except RubricParseError as exc:
+        print(f"benchmark: rubric parse error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        judge = get_judge(family, model)
+    except UnknownJudgeError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        stats = run_judge(args.run_dir, judge, rubric, overwrite=args.overwrite)
+    except ScoreJsonMutatedError as exc:
+        # Additivity invariant violation — hard fail.
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"benchmark: judge failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+
+    print(json.dumps({
+        "run_dir": str(args.run_dir),
+        "judge": args.judge,
+        "rubric": args.rubric,
+        "attempts_processed": stats.attempts_processed,
+        "attempts_skipped": stats.attempts_skipped,
+        "attempts_failed": stats.attempts_failed,
+        "skip_reasons": stats.skip_reasons,
+        "failure_reasons": stats.failure_reasons,
+    }, indent=2))
+    return EXIT_OK
+
+
+def _cmd_calibration_corpus(args: argparse.Namespace) -> int:
+    if not args.runs_root.exists():
+        print(
+            f"benchmark: runs-root not found: {args.runs_root}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.target_n < 1:
+        print(
+            f"benchmark: --target-n must be >= 1; got {args.target_n}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    from .calibration.corpus_select import (
+        EmptyCandidatePoolError,
+        InsufficientAxisRepresentationError,
+        InvalidAxisError,
+        parse_axes_arg,
+        select_and_write,
+    )
+
+    try:
+        axes = parse_axes_arg(args.axes)
+    except InvalidAxisError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    selection_command = (
+        f"./scripts/benchmark calibration-corpus "
+        f"--target-n {args.target_n} --axes {args.axes} "
+        f"--name {args.name} --runs-root {args.runs_root} "
+        f"--output-dir {args.output_dir}"
+    )
+    try:
+        corpus_path, meta_path, result = select_and_write(
+            runs_root=args.runs_root,
+            axes=axes,
+            target_n=args.target_n,
+            name=args.name,
+            output_dir=args.output_dir,
+            selection_command=selection_command,
+        )
+    except EmptyCandidatePoolError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    except InsufficientAxisRepresentationError as exc:
+        print(
+            f"benchmark: cannot satisfy requested axes: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"benchmark: corpus selection failed: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+
+    print(json.dumps({
+        "corpus_path": str(corpus_path),
+        "meta_path": str(meta_path),
+        "target_n": args.target_n,
+        "actual_n": len(result.selected),
+        "candidate_pool_size": result.candidate_pool_size,
+        "axes": axes,
+        "skipped_count": len(result.skipped),
+        "axis_summary": result.axis_summary,
+    }, indent=2))
+    return EXIT_OK
+
+
 _HANDLERS = {
     "list": _cmd_list,
     "run": _cmd_run,
     "report": _cmd_report,
     "compare": _cmd_compare,
     "dogfood": _cmd_dogfood,
+    "judge": _cmd_judge,
+    "calibration-corpus": _cmd_calibration_corpus,
 }
 
 

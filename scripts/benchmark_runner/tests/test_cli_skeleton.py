@@ -45,6 +45,13 @@ class TestListCommand(CLITestBase):
         payload = json.loads(stdout)
         self.assertIn("stub", payload["adapters"])
         self.assertIn("stub", payload["backends"])
+        # TB1.5 — `judges` key now ships in the list output and
+        # both shipped claude-code tokens (canonical + alias)
+        # appear. Pin the contract so a future regression that
+        # drops one is caught here.
+        self.assertIn("judges", payload)
+        self.assertIn("claude-code", payload["judges"])
+        self.assertIn("claude-code-judge", payload["judges"])
 
     def test_list_after_extra_adapter_registration(self) -> None:
         # Pre-register an additional adapter under a name that does NOT
