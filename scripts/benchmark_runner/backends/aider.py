@@ -75,6 +75,16 @@ _TIMEOUT_ENV_VAR = "CCT_AIDER_TIMEOUT_SECONDS"
 
 # Env var to force edit-format (omitted entirely when unset — methodology fidelity).
 _EDIT_FORMAT_ENV_VAR = "CCT_AIDER_EDIT_FORMAT"
+# #46 — git-with-cleanup opt-in. When set truthy, the backend stops
+# pinning ``--no-git`` (so aider creates ``.git/`` + can use its
+# repo-map), then in the run finalizer removes ``.git/`` + reverts
+# aider-introduced ``.gitignore`` so ``run.py`` ``_write_diff`` (which
+# excludes only ``.venv``) sees a clean worktree. The empirical
+# decision — whether the resulting repo-map improves apples-to-apples
+# fidelity on multi-file Polyglot tasks by >5% — is deferred to a
+# maintainer empirical run per #46 (needs the first apples-to-apples
+# leaderboard PR's baseline; not yet available).
+_GIT_WITH_CLEANUP_ENV_VAR = "CCT_AIDER_GIT_WITH_CLEANUP"
 
 # Provider env vars recorded as presence booleans (never values).
 _PROVIDER_ENV_KEYS = (
@@ -123,7 +133,18 @@ class AiderBackend:
         edit_format_raw = os.environ.get(_EDIT_FORMAT_ENV_VAR, "").strip()
         edit_format: Optional[str] = edit_format_raw if edit_format_raw else None
 
-        argv = self._build_argv(attempt_dir=attempt_dir, edit_format=edit_format)
+        # #46 — git-with-cleanup opt-in. When enabled, drop the
+        # --no-git pin (so aider gets a real .git repo + repo-map)
+        # and remember the pre-aider state of .gitignore so we can
+        # revert aider's modifications to it post-run.
+        git_with_cleanup = _git_with_cleanup_enabled()
+        pre_gitignore_state = _snapshot_gitignore(ctx.worktree) if git_with_cleanup else None
+
+        argv = self._build_argv(
+            attempt_dir=attempt_dir,
+            edit_format=edit_format,
+            git_with_cleanup=git_with_cleanup,
+        )
         timeout = ctx.timeout_seconds or _timeout_override() or _DEFAULT_TIMEOUT_SECONDS
 
         started = time.monotonic()
@@ -160,6 +181,10 @@ class AiderBackend:
                 except subprocess.TimeoutExpired:
                     pass
             elapsed = time.monotonic() - started
+            # #46: even on timeout, the cleanup must run so the
+            # worktree is in the same shape ``_write_diff`` expects.
+            if git_with_cleanup:
+                _git_cleanup(ctx.worktree, pre_gitignore_state)
             return BackendResult(
                 transcript_path=None,
                 elapsed_seconds=elapsed,
@@ -171,6 +196,7 @@ class AiderBackend:
                     exit_code=None,
                     stderr_tail=stderr_tail,
                     note=f"aider timed out after {timeout}s (process group killed)",
+                    git_with_cleanup=git_with_cleanup,
                 ),
                 failed_commands=1,
                 timed_out=True,  # D5: structured signal consumed by run._execute_attempt
@@ -192,6 +218,13 @@ class AiderBackend:
         if chat_history_file.is_file() and chat_history_file.stat().st_size > 0:
             model_output_path = chat_history_file
 
+        # #46: post-aider cleanup of .git/ + .gitignore so the worktree
+        # is what ``_write_diff`` (which excludes only .venv) expects.
+        # Must run before BackendResult returns so the diff-stat path
+        # in run.py sees the cleaned tree.
+        if git_with_cleanup:
+            _git_cleanup(ctx.worktree, pre_gitignore_state)
+
         return BackendResult(
             transcript_path=transcript_path,
             model_output_path=model_output_path,
@@ -209,12 +242,19 @@ class AiderBackend:
                 map_tokens_effective=parsed.map_tokens_effective,
                 exit_code=proc.returncode,
                 stderr_tail=_tail(stderr_data or "", _STDERR_TAIL_CHARS),
+                git_with_cleanup=git_with_cleanup,
             ),
         )
 
     # ── Internals ──────────────────────────────────────────────────────
 
-    def _build_argv(self, *, attempt_dir: Path, edit_format: Optional[str]) -> list[str]:
+    def _build_argv(
+        self,
+        *,
+        attempt_dir: Path,
+        edit_format: Optional[str],
+        git_with_cleanup: bool = False,
+    ) -> list[str]:
         """Build the verified argv for the Aider CLI.
 
         Exact form (B0-corrected + B3-recapture contract):
@@ -246,9 +286,15 @@ class AiderBackend:
             "--no-auto-commits",
             "--no-dirty-commits",
             "--no-gitignore",
-            "--no-git",  # B3: real aider creates .git/ in a non-git dir despite
-                         # --no-gitignore; --no-git yields "Git repo: none",
-                         # "Repo-map: disabled" (a-to-a caveat tracked in #46).
+        ])
+        if not git_with_cleanup:
+            # Default pinned argv: --no-git keeps the worktree clean
+            # for _write_diff. When CCT_AIDER_GIT_WITH_CLEANUP=1, we
+            # OMIT --no-git here and rely on _git_cleanup() to scrub
+            # .git/ + .gitignore post-run. The empirical decision on
+            # which pattern wins is deferred (#46).
+            argv.append("--no-git")
+        argv.extend([
             "--no-check-update",
             "--no-stream",
             "--chat-history-file", str(attempt_dir / "aider.chat.history.md"),
@@ -307,6 +353,7 @@ def _build_metadata(
     exit_code: Optional[int],
     stderr_tail: str,
     note: Optional[str] = None,
+    git_with_cleanup: bool = False,
 ) -> dict[str, Any]:
     """Assemble backend_metadata for an aider run.
 
@@ -314,6 +361,10 @@ def _build_metadata(
     - No API keys or credential values are ever recorded.
     - ``provider_env_present`` carries only boolean presence flags.
     - No ``temperature`` key (Aider has no CLI temperature flag — B0).
+    - ``git_with_cleanup`` records the #46 opt-in path so reports can
+      distinguish leaderboard-comparable runs (--no-git) from
+      git-with-cleanup runs (real .git + repo-map, scrubbed before
+      _write_diff).
     """
     meta: dict[str, Any] = {
         "family": BACKEND_FAMILY,
@@ -325,6 +376,7 @@ def _build_metadata(
         "map_tokens_effective": map_tokens_effective,
         "auto_commits": False,
         "dirty_commits": False,
+        "git_with_cleanup": git_with_cleanup,
         "provider_env_present": _resolve_provider_env(),
         "exit_code": exit_code,
         "stderr_tail": stderr_tail,
@@ -332,6 +384,73 @@ def _build_metadata(
     if note is not None:
         meta["note"] = note
     return meta
+
+
+# ── #46: git-with-cleanup pattern ─────────────────────────────────────
+
+
+def _git_with_cleanup_enabled() -> bool:
+    """``CCT_AIDER_GIT_WITH_CLEANUP=1`` (or other truthy value) opts
+    into the experimental pattern of letting aider use a real .git
+    repo + repo-map, then scrubbing .git/ + .gitignore in the
+    finalizer so ``run.py`` ``_write_diff`` sees a clean worktree.
+
+    The empirical decision on whether this pattern beats ``--no-git``
+    by >5% on multi-file Polyglot tasks is deferred to a maintainer
+    empirical run per #46 (needs the first apples-to-apples
+    leaderboard PR baseline; not yet available).
+    """
+    val = os.environ.get(_GIT_WITH_CLEANUP_ENV_VAR, "")
+    return val.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _snapshot_gitignore(worktree: Path) -> Optional[bytes]:
+    """Capture the pre-aider state of ``<worktree>/.gitignore`` so
+    we can revert aider's modifications post-run. Returns the raw
+    bytes if the file existed, ``None`` if it did not."""
+    gi = worktree / ".gitignore"
+    if not gi.is_file():
+        return None
+    try:
+        return gi.read_bytes()
+    except OSError:
+        return None
+
+
+def _git_cleanup(worktree: Path, pre_gitignore: Optional[bytes]) -> None:
+    """Post-aider cleanup: remove ``.git/`` and revert any
+    aider-introduced ``.gitignore`` mutations.
+
+    ``ignore_errors=True`` on rmtree because:
+    - a partial aider run may have created an incomplete .git/
+      tree we still want to scrub;
+    - permissions weirdness on the maintainer's worktree shouldn't
+      crash the backend (the diff-stat step downstream is what
+      surfaces a too-dirty worktree anyway).
+    """
+    git_dir = worktree / ".git"
+    if git_dir.exists():
+        shutil.rmtree(git_dir, ignore_errors=True)
+    gi = worktree / ".gitignore"
+    if pre_gitignore is None:
+        # Pre-aider state: no .gitignore. If aider added one, remove it.
+        if gi.exists():
+            try:
+                gi.unlink()
+            except OSError:
+                pass
+    else:
+        # Pre-aider state: had a .gitignore. Restore byte-identically
+        # if aider modified or removed it.
+        try:
+            current = gi.read_bytes() if gi.is_file() else None
+        except OSError:
+            current = None
+        if current != pre_gitignore:
+            try:
+                gi.write_bytes(pre_gitignore)
+            except OSError:
+                pass
 
 
 def _tail(text: str, max_chars: int) -> str:

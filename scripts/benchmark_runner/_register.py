@@ -48,6 +48,14 @@ def register_all() -> None:
     register_cct_dogfood_memkernel()
     from benchmarks.adapters.swe_bench_verified.adapter import register as register_swe_bench_verified
     register_swe_bench_verified()
+    from benchmarks.adapters.bigcodebench.adapter import register as register_bigcodebench
+    register_bigcodebench()
+    # NOTE: benchmarks.adapters.livecodebench is intentionally NOT
+    # registered here. See benchmarks/adapters/livecodebench/README.md
+    # for the empirical blocker (HF datasets-server doesn't serve the
+    # loader-script dataset; raw test.jsonl is ~497MB). Re-enable when
+    # the maintainer-side parquet-conversion procedure in that README
+    # has been completed and the real adapter written.
 
     # Backends: backend modules expose a ``factory`` function; we
     # register it here. Same one-call rule.

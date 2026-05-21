@@ -562,6 +562,113 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
         )
 
 
+class TestGitWithCleanup(unittest.TestCase):
+    """#46 — opt-in git-with-cleanup pattern.
+
+    When ``CCT_AIDER_GIT_WITH_CLEANUP=1``, the backend:
+      - omits ``--no-git`` from argv (so aider gets a real .git repo
+        + can use repo-map for multi-file tasks);
+      - in the finalizer, removes ``.git/`` and reverts aider's
+        ``.gitignore`` modifications so ``run.py`` ``_write_diff``
+        (which excludes only ``.venv``) sees a clean worktree.
+
+    The empirical decision on whether this pattern beats ``--no-git``
+    by >5% on multi-file Polyglot tasks is deferred (issue #46;
+    needs the first apples-to-apples leaderboard PR baseline).
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+        self._tmp = tempfile.mkdtemp(prefix="cct-aider-cleanup-")
+        self._tmp_path = Path(self._tmp)
+        self._fake = _install_fake_aider(self._tmp_path)
+        self._old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{self._fake.parent}:{self._old_path}"
+        self._old_cleanup = os.environ.get("CCT_AIDER_GIT_WITH_CLEANUP")
+
+    def tearDown(self) -> None:
+        os.environ["PATH"] = self._old_path
+        if self._old_cleanup is None:
+            os.environ.pop("CCT_AIDER_GIT_WITH_CLEANUP", None)
+        else:
+            os.environ["CCT_AIDER_GIT_WITH_CLEANUP"] = self._old_cleanup
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _run(self, *, cleanup: bool, pre_gitignore_content: Optional[str] = None) -> tuple[Path, dict]:
+        """Spin up a fresh worktree, optionally pre-seed a .gitignore,
+        run the backend, return (worktree_path, backend_metadata)."""
+        os.environ["CCT_AIDER_GIT_WITH_CLEANUP"] = "1" if cleanup else ""
+
+        attempt_dir = self._tmp_path / f"attempt-{cleanup}"
+        attempt_dir.mkdir()
+        worktree = attempt_dir / "worktree"
+        worktree.mkdir()
+        # Optional pre-existing .gitignore (simulates the case where
+        # a task setup placed one before aider ran).
+        if pre_gitignore_content is not None:
+            (worktree / ".gitignore").write_text(pre_gitignore_content, encoding="utf-8")
+
+        os.environ["CCT_FAKE_AIDER_TRANSCRIPT"] = str(_FIXTURES / "transcript-success.txt")
+
+        ctx = RunContext(
+            benchmark_id="test", task_id="t/a",
+            backend_id=BACKEND_FAMILY, run_id="run-001", attempt=1,
+            worktree=worktree, model="anthropic/claude-sonnet-4-5",
+        )
+        result = AiderBackend(model="anthropic/claude-sonnet-4-5").run("prompt", ctx)
+        return worktree, dict(result.backend_metadata)
+
+    def test_default_pinned_argv_keeps_no_git(self) -> None:
+        # Without the env var, the original --no-git pin is preserved.
+        worktree, meta = self._run(cleanup=False)
+        # The shim simulates real aider creating .git/ when --no-git
+        # is ABSENT. In the default mode --no-git IS passed, so no
+        # .git/ is created.
+        self.assertFalse((worktree / ".git").exists())
+        self.assertFalse(meta["git_with_cleanup"])
+
+    def test_git_with_cleanup_drops_no_git_then_scrubs(self) -> None:
+        # With the env var, --no-git is NOT passed (the shim creates
+        # .git/ + .gitignore as if real aider had), and the finalizer
+        # then scrubs them. End state: clean worktree, no .git/, no
+        # leftover .gitignore from aider.
+        worktree, meta = self._run(cleanup=True)
+        self.assertFalse(
+            (worktree / ".git").exists(),
+            "git_with_cleanup finalizer must remove .git/",
+        )
+        self.assertFalse(
+            (worktree / ".gitignore").exists(),
+            "git_with_cleanup finalizer must remove aider-introduced .gitignore "
+            "when the worktree had none pre-run",
+        )
+        self.assertTrue(meta["git_with_cleanup"])
+
+    def test_git_with_cleanup_restores_preexisting_gitignore(self) -> None:
+        # A worktree with a pre-existing .gitignore must have its
+        # original content restored byte-identically after aider
+        # appends to it (the fake shim simulates that append).
+        pre_content = "*.pyc\n.venv/\n"
+        worktree, meta = self._run(
+            cleanup=True, pre_gitignore_content=pre_content,
+        )
+        self.assertTrue((worktree / ".gitignore").is_file())
+        self.assertEqual(
+            (worktree / ".gitignore").read_text(encoding="utf-8"),
+            pre_content,
+            "pre-existing .gitignore must be restored byte-identically",
+        )
+        self.assertFalse((worktree / ".git").exists())
+
+    def test_metadata_records_git_with_cleanup_flag(self) -> None:
+        _, meta_default = self._run(cleanup=False)
+        _, meta_cleanup = self._run(cleanup=True)
+        self.assertIn("git_with_cleanup", meta_default)
+        self.assertIn("git_with_cleanup", meta_cleanup)
+        self.assertFalse(meta_default["git_with_cleanup"])
+        self.assertTrue(meta_cleanup["git_with_cleanup"])
+
+
 class TestVerifiedVersionGate(unittest.TestCase):
     """Self-enforcing B3 gate: `_VERIFIED_VERSION` must not be the loud
     placeholder string after B3 wires the real maintainer capture. If
