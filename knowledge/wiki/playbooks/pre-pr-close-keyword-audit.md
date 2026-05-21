@@ -3,15 +3,17 @@ page_type: playbook
 slug: pre-pr-close-keyword-audit
 title: Pre-PR Close-Keyword Audit
 status: stable
-last_reviewed: 2026-05-20
+last_reviewed: 2026-05-21
 sources:
   - pr: 53
+  - pr: 54
+  - pr: 55
   - path: scripts/pre-pr-check.sh
 ---
 
 # Playbook — Pre-PR close-keyword audit
 
-> Close-keywords (`Closes`/`Fixes`/`Resolves` `#N`) in plain text in any commit message OR the PR body fire on merge — GitHub reads syntax, not intent. Backtick them when referencing an issue the PR isn't closing.
+> Close-keywords (`Closes`/`Fixes`/`Resolves` `#N`) in any commit message OR PR body fire on merge — GitHub reads syntax, not intent, and **does not strip markdown code spans in commit messages**. Rephrase to drop the keyword when referencing an issue the PR isn't closing. Backticks do NOT shield you.
 
 ## The one-line audit
 
@@ -19,15 +21,22 @@ sources:
 git log master..HEAD --format='%B' | grep -nE '(Closes|Fixes|Resolves)[[:space:]]+#[0-9]+'
 ```
 
-Every match must be the PR's intended close ID(s). Exception: an epic-closing sub-issue PR (e.g. sub-issue E on the LLM-judge work, where both `Closes #52` and `Closes #34` are intended) — multiple IDs allowed when explicitly intended. Backticked variants do **not** trigger GitHub's parser; use them freely for documentation references.
+Every match — whether inside backticks, fenced code blocks, or plain prose — must be the PR's intended close ID(s). Exception: an epic-closing sub-issue PR (e.g. sub-issue E on the LLM-judge work, where both `Closes #52` and `Closes #34` are intended) — multiple IDs allowed when explicitly intended.
+
+The defense for a documentation reference is to REPHRASE rather than backtick. Examples:
+- "the PR that closes #34 will land later" — no close-keyword.
+- "the close-keyword for #34" — no `Closes` prefix.
+- "this is the failure pattern that closed #34 by accident" — no `Closes` prefix.
+
+NOT "the `Closes #34` keyword" or `` ``Closes #34`` `` — both forms fire GitHub's parser on commit message merge.
 
 ## The enforced version
 
 Use `scripts/pre-pr-check.sh` before opening any PR. It bundles the three recurring PR-mechanics failures into one gate:
 
-1. **Commit-message close-keyword audit** — every match (after stripping markdown code spans) must have an ID in `--closes`. The scanner iterates over EVERY close-keyword match on a line (not just the first) and extracts the ID from each match — so a line like `Closes #48 and later Closes #34` is correctly flagged when `--closes 48`, and a line like `See #34 for context. Closes #48` correctly passes (the bare `#34` is not a close-keyword match).
-2. **PR body file readable in the same shell that runs `gh`** — guards the PR #41 failure where `--body-file` pointed at a path `gh` couldn't read; the script verifies existence + readability + non-emptiness (non-whitespace content) immediately before printing the suggested `gh pr create` command. Body lines scanned by the same per-match scanner as commit messages.
-3. **Title set inline in `gh pr create` AND carries the repo's `(Closes #N)` convention** — the script requires `--title` (so the PR never opens with the auto-generated branch-name title, the PR #41 failure mode) AND requires the title to contain a close-keyword marker whose ID is in `--closes`. Both are hard failures, not warnings. The script then prints the exact `gh pr create --title "..." --body-file ...` command for the caller to run next; never a follow-up edit.
+1. **Commit-message close-keyword audit (strict mode)** — every `(Closes|Fixes|Resolves) #N` token in the raw commit message text must have its ID in `--closes`. NO code-span stripping; backticked and fenced occurrences are scanned identically to plain text, because GitHub's parser does the same. The scanner iterates over EVERY close-keyword match on a line (not just the first) and extracts the ID from each match.
+2. **PR body file readable in the same shell that runs `gh`** — guards the PR #41 failure where `--body-file` pointed at a path `gh` couldn't read; the script verifies existence + readability + non-emptiness (non-whitespace content) immediately before printing the suggested `gh pr create` command. Body lines scanned by the same strict per-match scanner as commit messages.
+3. **Title set inline in `gh pr create` AND carries the repo's `(Closes #N)` convention** — the script requires `--title` (so the PR never opens with the auto-generated branch-name title, the PR #41 / PR #55 failure mode) AND requires the title to contain a close-keyword marker whose ID is in `--closes`. Both are hard failures, not warnings. The script then prints the exact `gh pr create --title "..." --body-file ...` command for the caller to run next; never a follow-up edit.
 
 ```bash
 # Sub-issue B (closes #49 only)
@@ -48,20 +57,40 @@ Exit codes:
 - `1` — at least one check failed; diagnostics on stderr, no `gh pr create` printed.
 - `2` — usage error (missing required flag, bad `--closes` value).
 
-The audit is intentionally strict: it must succeed before you invoke `gh`, not after. The aim is to surface the problem when the fix is still cheap (rephrase a line, add an ID to `--closes`, backtick a documentation reference) rather than after merge, when recovery requires reopening an auto-closed issue.
+The audit is intentionally strict: it must succeed before you invoke `gh`, not after. The aim is to surface the problem when the fix is still cheap (rephrase a line, add an ID to `--closes`) rather than after merge, when recovery requires reopening an auto-closed issue.
 
-## What goes wrong without it
+## Incident history (two failures, one correction)
 
-PR #53 (2026-05-20) merged sub-issue A (#48) cleanly and accidentally closed epic #34. The TB1.1 commit message body contained:
+### PR #53 (2026-05-20) — plain-text `Closes #34` in a commit body
 
+PR #53 (sub-issue A) merged cleanly and accidentally closed epic #34. The TB1.1 commit message body contained the literal phrase `Closes #34` in plain prose, describing what a FUTURE PR would do. GitHub's close-keyword scanner reads every commit message in a merged PR, doesn't care about intent, and fired on merge. PR-body sanitization had been done; commit messages were never re-audited. Recovery: `gh issue reopen 34` with an explanatory comment.
+
+This was the incident the v1 of `scripts/pre-pr-check.sh` was built to prevent.
+
+### PR #54 (2026-05-21) — `Closes #34` ONLY in backticks and fenced code blocks
+
+PR #54 (the audit script + playbook v1 itself) merged. Its commit body had `Closes #34` references in three places: an inline-backtick span, a triple-backtick fenced code block, and a double-backtick code span. **Zero plain-text occurrences.** The v1 audit (which stripped markdown code spans before grepping, mirroring an assumption about how GitHub's parser works) returned clean. **GitHub's parser closed #34 anyway.**
+
+The empirical conclusion: **GitHub's close-keyword parser in commit messages does NOT respect markdown code constructs.** Backticked, fenced, or plain — all fire. The v1 script's `strip_code_spans` step was modelling a guarantee that does not hold.
+
+Recovery: `gh issue reopen 34` for the second time, plus this script v2 (strict mode, no code-span stripping) and the corrected playbook + memory.
+
+### Lesson — empirical test, not docs reading
+
+Both incidents share a root cause that's worth naming: **assuming GitHub's behavior from documentation or rendering rules**, rather than testing it against a throwaway PR. The "backticked variants don't trigger the parser" claim came from observing PR #53's merge (multiple backticked `Closes #48` references in commits; #48 closed — but #48 was already targeted by the PR body's plain-text `Closes #48`, so the backticked instances couldn't be distinguished as live or inert). That ambiguous evidence was treated as proof of safety. PR #54 broke that assumption.
+
+The empirical test that resolves it definitively:
+
+```bash
+# Create a throwaway tracking issue (call it #N).
+# On a feature branch, create a commit with body containing ONLY:
+#     test commit
+#     `Closes #N`
+# (in single backticks, no other occurrences)
+# Open a PR from that branch + merge. Observe whether #N closes.
 ```
-sub-issue E's closing PR carries a separate Closes #34 keyword so the
-epic auto-closes.
-```
 
-Plain-text `Closes #34` describing what a **future** PR would do. The PR body had been edited to remove the same phrasing (via a peer-review fix earlier in the session) — but commit messages were never re-audited. On merge, GitHub's close-keyword scanner reads every commit in the PR, doesn't care about intent, and fired on `Closes #34`. Epic closed in error; the recovery was a manual `gh issue reopen 34` with an explanatory comment.
-
-The same merge taught us a useful adjacent fact: **backticked variants `` `Closes #X` `` in commit messages do NOT trigger the scanner.** Three commits in PR #53 had `` `Closes #48` `` in backticked references; none of them double-fired against the PR body's plain-text `Closes #48`. The audit script applies the same stripping (`awk` drops fenced code blocks and inline backtick spans before grepping) so safe documentation references don't generate false positives.
+Do this once per assumption-about-GitHub-parser-behavior before relying on it. Costs one issue + one merge; saves a recovery cycle.
 
 ## When `gh pr edit` rejects your changes
 
@@ -77,7 +106,8 @@ gh api -X PATCH /repos/<owner>/<repo>/pulls/<n> \
 
 ## Related
 
-- Memory: `feedback_close_keyword_audit_pre_pr` — the rule + command at a glance.
+- Memory: `feedback_close_keyword_audit_pre_pr` — the rule + command at a glance (updated 2026-05-21).
 - Memory: `feedback_commit_messages_with_backticks_use_F_file` — adjacent failure mode (`git commit -m "...with backticks..."` under zsh runs the backtick contents as command substitution).
 - Memory: `feedback_github_close_keyword_per_issue` — `Closes #N, #M` only closes `#N`; repeat the keyword per issue.
 - Script: `scripts/pre-pr-check.sh`.
+- Incident commits: `dafbc5b` (PR #53; plain-text), `e9c5f7f9` (PR #54; backticked-only).
