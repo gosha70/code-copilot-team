@@ -101,25 +101,46 @@ id_expected() {
   return 1
 }
 
-# Pattern: (Closes|Fixes|Resolves)[whitespace]#<digits>
-# Case-insensitive on keyword to catch a `closes #34` typo too.
-PATTERN='([Cc]loses|[Ff]ixes|[Rr]esolves)[[:space:]]+#[0-9]+'
+# Pattern: <keyword>[whitespace]+#<digits>
+#
+# Keyword set per GitHub docs (and verified empirically by the v3
+# incident — see playbook): the parser accepts NINE forms across
+# three roots, each with present-tense singular/plural AND past
+# tense:
+#     close   closes   closed
+#     fix     fixes    fixed
+#     resolve resolves resolved
+#
+# Matching is fully case-insensitive — GitHub fires on `CLOSES`,
+# `Closed`, `RESOLVE`, etc. The v2 of this script enumerated only
+# (Closes|Fixes|Resolves) (the plural-present-tense forms) and so
+# missed `closed #34` in its OWN commit body, which closed epic
+# #34 a third time. The v3 fix is this widened keyword set + the
+# grep `-i` flag everywhere it scans.
+PATTERN='(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[0-9]+'
 
-# Scanning model (corrected 2026-05-21 after PR #54 incident).
+# Scanning model (v3, corrected 2026-05-21 after three incidents
+# on this repo: PR #53, PR #54, PR #57).
+#
 # GitHub's close-keyword parser in COMMIT MESSAGES fires on every
-# `(Closes|Fixes|Resolves) #N` token in the raw text — including
-# tokens that appear inside inline-backtick code spans (`...`) and
-# inside triple-backtick fenced code blocks. The "backtick to be
-# safe" guidance that the v1 of this script encoded was empirically
-# wrong: PR #54's merge closed epic #34 via a commit whose ONLY
-# `Closes #34` references were backticked or fenced.
+# token matching the PATTERN above in the raw text — including
+# tokens that appear inside inline-backtick code spans (`...`),
+# inside triple-backtick fenced code blocks, and across all nine
+# keyword forms (close/closes/closed, fix/fixes/fixed,
+# resolve/resolves/resolved) fully case-insensitive. The "backtick
+# to be safe" guidance and the "Closes/Fixes/Resolves are the only
+# forms" assumption that earlier versions of this script encoded
+# were both empirically wrong.
 #
 # Consequence: the audit must NOT pre-strip markdown code spans
-# before grepping. Every match in the raw text is a live close-
-# keyword and must have its ID in --closes. The defense for a
-# documentation reference is to REPHRASE rather than backtick —
-# e.g. write "the PR that closes #34" (no close-keyword prefix) or
-# "the close-keyword for #34" instead of "Closes #34".
+# before grepping AND must use the full nine-keyword set with
+# grep -i. Every match in the raw text is a live close-keyword
+# and must have its ID in --closes. The defense for a
+# documentation reference is to REPHRASE so that no keyword form
+# appears immediately followed by #N — examples in the playbook.
+# Use noun forms ("the auto-close on #34"), put the #N before the
+# verb ("#34 was reopened later"), or drop the verb altogether
+# ("the PR for #34 will land in sub-issue E").
 #
 # The empirical test is the only authoritative source for parser
 # behavior; the playbook documents how to run one before assuming.
@@ -144,10 +165,13 @@ scan_line() {
   local context="$2"
   local fail_suffix="$3"
   local match found_id
-  # ``grep -oE PATTERN`` emits each match on its own line. Iterating
-  # via a process substitution gives us one match per loop iteration;
-  # extracting the number from THAT match (not from the whole line)
-  # is the fix for the original single-extraction bug.
+  # ``grep -oiE PATTERN`` emits each match on its own line. The ``-i``
+  # flag is the v3 fix: GitHub's parser is fully case-insensitive
+  # (CLOSES, Closed, ReSoLvEs all fire), but bash regex match
+  # ``[[ =~ ]]`` is not. Iterating via process substitution gives us
+  # one match per loop iteration; extracting the number from THAT
+  # match (not from the whole line) is the fix for the original
+  # single-extraction bug.
   while IFS= read -r match; do
     [[ -z "$match" ]] && continue
     found_id="$(echo "$match" | grep -oE '[0-9]+' | head -1)"
@@ -160,7 +184,7 @@ scan_line() {
       OVERALL_OK=0
       ANY_FAIL_REASON+="$fail_suffix; "
     fi
-  done < <(echo "$line" | grep -oE "$PATTERN" || true)
+  done < <(echo "$line" | grep -oiE "$PATTERN" || true)
 }
 
 OVERALL_OK=1
@@ -181,7 +205,10 @@ while IFS= read -r line; do
     current_sha=""
     continue
   fi
-  if [[ "$line" =~ $PATTERN ]]; then
+  # ``grep -qiE`` is the v3 case-insensitive pre-filter (bash
+  # ``[[ =~ ]]`` matches are case-sensitive by default; GitHub's
+  # parser is not). Use grep -i everywhere PATTERN appears.
+  if echo "$line" | grep -qiE "$PATTERN"; then
     scan_line "$line" "commit $current_sha" "commit messages reference unintended issue IDs (rephrase the prose to drop the close-keyword, or add the ID to --closes if intended — backticking does NOT save you for commit messages, see the playbook)"
   fi
 done <<< "$COMMIT_BODIES"
@@ -214,7 +241,7 @@ else
   # why). Every close-keyword match on a line is checked against
   # --closes via scan_line.
   while IFS= read -r line; do
-    if [[ "$line" =~ $PATTERN ]]; then
+    if echo "$line" | grep -qiE "$PATTERN"; then
       scan_line "$line" "body" "body references unintended issue IDs"
     fi
   done < "$BODY_FILE"
@@ -230,7 +257,7 @@ if [[ -z "$TITLE" ]]; then
   ANY_FAIL_REASON+="title empty; "
 else
   echo "  [PASS] title non-empty: $TITLE"
-  if echo "$TITLE" | grep -qE "$PATTERN"; then
+  if echo "$TITLE" | grep -qiE "$PATTERN"; then
     # Scan EVERY close-keyword match in the title (scan_line handles
     # the "multiple matches per line" case + extracts the ID from
     # each match, not from the whole line).
@@ -254,8 +281,15 @@ if [[ "$OVERALL_OK" -eq 1 ]]; then
   echo
   echo "Proposed gh pr create command (run this NEXT, in the same shell):"
   echo
+  # Normalize a remote-tracking ref (e.g. ``origin/master``) to the
+  # branch name (``master``) for the printed gh pr create command —
+  # gh expects the base BRANCH on the remote, not the local
+  # remote-tracking ref. The audit-time --base value remains useful
+  # in its original form (it points git log at the right merge
+  # base); only the printed gh command needs normalization.
+  PR_BASE="${BASE##*/}"
   printf '  gh pr create \\\n'
-  printf '      --base %s \\\n' "$BASE"
+  printf '      --base %s \\\n' "$PR_BASE"
   printf '      --title %q \\\n' "$TITLE"
   printf '      --body-file %q\n' "$BODY_FILE"
   echo
