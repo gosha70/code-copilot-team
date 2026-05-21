@@ -151,14 +151,26 @@ class TestAdapter(unittest.TestCase):
         a = BigCodeBenchAdapter(cache_file=self.cache)
         self.assertEqual(a.max_attempts(), 1)
 
-    def test_golden_patch_writes_canonical(self) -> None:
+    def test_golden_patch_returns_directory_with_task_func(self) -> None:
+        # Reviewer-flagged P1 fix: golden_patch() must return a
+        # DIRECTORY (not a single file) so the stub backend's
+        # ``golden.rglob('*')`` iteration produces the canonical
+        # task_func.py to copy into the worktree.
         a = BigCodeBenchAdapter(cache_file=self.cache)
         task = a.list_tasks()[0]
         gp = a.golden_patch(task)
-        self.assertTrue(gp.is_file())
-        text = gp.read_text(encoding="utf-8")
+        self.assertTrue(gp.is_dir(), "golden_patch must return a directory")
+        # The directory contains task_func.py with code_prompt +
+        # canonical_solution.
+        task_func = gp / "task_func.py"
+        self.assertTrue(task_func.is_file())
+        text = task_func.read_text(encoding="utf-8")
         self.assertIn("def task_func", text)
         self.assertIn("return sum(numbers)", text)
+        # rglob('*') yields at least one file (the stub backend's
+        # iteration model). Pre-fix: rglob yielded nothing.
+        files = [p for p in gp.rglob("*") if p.is_file()]
+        self.assertGreaterEqual(len(files), 1)
 
     def test_register_adds_to_registry(self) -> None:
         from benchmark_runner.registry import (
@@ -190,30 +202,88 @@ class TestPiplineAgainstHarness(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self._tmp, ignore_errors=True)
 
-    def test_protocol_walkthrough(self) -> None:
-        a = BigCodeBenchAdapter(cache_file=self.cache)
-        tasks = a.list_tasks()
-        self.assertEqual(len(tasks), 1)
-        task = tasks[0]
-
-        worktree = Path(self._tmp) / "wt"
-        worktree.mkdir()
-        a.prepare_task(task, worktree)
-
-        # Apply the golden patch (i.e., simulate the stub backend
-        # replacing the starter with the canonical solution).
-        gp = a.golden_patch(task)
-        (worktree / "task_func.py").write_text(
-            gp.read_text(encoding="utf-8"), encoding="utf-8",
+    def test_stub_backend_copies_golden_into_worktree(self) -> None:
+        # Reviewer-flagged P1 fix: previously golden_patch returned a
+        # single file → stub's ``golden.rglob('*')`` was empty →
+        # the worktree's starter task_func.py survived → verify ran
+        # against the starter → tests always failed.
+        # Post-fix: golden_patch returns a directory, the stub
+        # copies task_func.py over the starter, and the verify path
+        # can then succeed.
+        from benchmark_runner.backends.stub import StubBackend
+        from benchmark_runner.contracts import RunContext
+        from benchmark_runner.registry import (
+            _reset_for_tests,
+            register_adapter,
         )
 
-        # verify() invokes ``python -m unittest`` in the worktree.
-        # We don't actually run it here (would require venv +
-        # subprocess; out of scope for this unit test). The
-        # protocol-walkthrough check is that all the inputs verify()
-        # needs are present in the worktree.
-        self.assertTrue((worktree / "task_func.py").is_file())
-        self.assertTrue((worktree / "test_task_func.py").is_file())
+        a = BigCodeBenchAdapter(cache_file=self.cache)
+        task = a.list_tasks()[0]
+
+        worktree = Path(self._tmp) / "wt-stub"
+        worktree.mkdir()
+        a.prepare_task(task, worktree)
+        # Pre-condition: starter task_func.py has no ``return``
+        # statement (BigCodeBench's code_prompt is just the signature).
+        starter = (worktree / "task_func.py").read_text(encoding="utf-8")
+        self.assertNotIn("return", starter)
+
+        # Stub backend resolves the adapter from the global registry
+        # via ``get_adapter(ctx.benchmark_id)``. Register a factory
+        # that returns THIS adapter instance (so the synthetic JSONL
+        # cache is the one the stub sees).
+        _reset_for_tests()
+        try:
+            register_adapter(BENCHMARK_ID, lambda: a)
+            ctx = RunContext(
+                benchmark_id=BENCHMARK_ID, task_id=task.task_id,
+                backend_id="stub", run_id="run-001", attempt=1,
+                worktree=worktree, model="",
+            )
+            result = StubBackend("").run(prompt="", ctx=ctx)
+            self.assertEqual(result.failed_commands, 0)
+        finally:
+            _reset_for_tests()
+
+        # Post-condition: task_func.py now contains the canonical
+        # solution (``return sum(numbers)``).
+        copied = (worktree / "task_func.py").read_text(encoding="utf-8")
+        self.assertIn("return sum(numbers)", copied)
+
+    def test_verify_runs_against_golden_and_passes(self) -> None:
+        # Reviewer-flagged P1 fix: verify() previously called
+        # ``run_in_worktree(cmd, worktree)`` (arguments reversed),
+        # which crashed inside the function on
+        # ``worktree.resolve()`` against the argv list. Post-fix
+        # the call is ``run_in_worktree(worktree, cmd)`` and verify
+        # actually runs.
+        a = BigCodeBenchAdapter(cache_file=self.cache)
+        task = a.list_tasks()[0]
+
+        worktree = Path(self._tmp) / "wt-verify"
+        worktree.mkdir()
+        a.prepare_task(task, worktree)
+        # Apply the golden solution by hand (skipping the venv setup
+        # that would normally accompany worktree+venv isolation —
+        # this test exercises verify()'s argv contract + subprocess
+        # call, not the install/venv path).
+        gp = a.golden_patch(task)
+        for src in gp.rglob("*"):
+            if src.is_file():
+                rel = src.relative_to(gp)
+                (worktree / rel).write_text(
+                    src.read_text(encoding="utf-8"), encoding="utf-8",
+                )
+
+        result = a.verify(task, worktree)
+        # The synthetic task's test asserts sum([1, 2, 3]) == 6 —
+        # the canonical task_func returns ``sum(numbers)`` so the
+        # test passes.
+        self.assertTrue(
+            result.tests_passed,
+            msg=f"verify failed; tests_output tail:\n{result.tests_output}",
+        )
+        self.assertTrue(result.required_files_present)
 
 
 if __name__ == "__main__":

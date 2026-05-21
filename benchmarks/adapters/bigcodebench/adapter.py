@@ -140,11 +140,16 @@ class BigCodeBenchAdapter:
         return task.metadata.get("instruct_prompt") or task.metadata.get("complete_prompt", "")
 
     def verify(self, task: TaskSpec, worktree: Path) -> VerifyResult:
-        """Run ``python -m unittest test_task_func``."""
+        """Run ``python -m unittest test_task_func``.
+
+        Argument order for ``run_in_worktree`` is ``(worktree, argv,
+        ...)`` — getting it backwards crashes inside the function on
+        a Path.resolve() call against the argv list (reviewer P1 fix).
+        """
         cmd = [_DEFAULT_PYTHON, "-m", "unittest", "test_task_func", "-v"]
         try:
             proc = run_in_worktree(
-                cmd, worktree, timeout=300,
+                worktree, cmd, timeout=300,
             )
         except Exception as exc:  # noqa: BLE001
             return VerifyResult(
@@ -160,23 +165,32 @@ class BigCodeBenchAdapter:
         )
 
     def golden_patch(self, task: TaskSpec) -> Path:
-        """Return a path to the canonical solution as a complete file.
+        """Return a DIRECTORY containing the canonical solution.
 
-        Combines the ``code_prompt`` (imports + signature) with the
-        ``canonical_solution`` body. The result is a working module
-        the stub backend can copy as its single-shot answer.
+        The stub backend copies every file under ``golden.rglob('*')``
+        into the worktree, preserving relative paths. Returning a
+        single file makes rglob yield nothing — the worktree's
+        starter ``task_func.py`` then survives untouched and the
+        verify step runs against the starter, not the canonical
+        solution (reviewer P1 fix; pre-fix this method returned a
+        single .py file, so the stub backend copied nothing and
+        the supposed "golden" path actually failed every task).
+
+        The returned directory contains ``task_func.py`` with the
+        ``code_prompt`` + ``canonical_solution`` concatenation.
         """
-        # Materialize the canonical task_func.py under the cache
-        # directory, content-addressed by task_id slug.
-        out_dir = fetch.cache_dir() / "golden_patches"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        # Materialize the canonical task_func.py under a per-task
+        # directory in the cache, content-addressed by task_id slug.
+        roots = fetch.cache_dir() / "golden_patches"
         slug = task.task_id.replace("/", "-")
-        out_path = out_dir / f"{slug}.py"
-        if not out_path.is_file():
+        out_dir = roots / slug
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / "task_func.py"
+        if not out_file.is_file():
             code_prompt = task.metadata.get("code_prompt", "")
             canonical = task.metadata.get("canonical_solution", "")
-            out_path.write_text(code_prompt + canonical, encoding="utf-8")
-        return out_path
+            out_file.write_text(code_prompt + canonical, encoding="utf-8")
+        return out_dir
 
     def max_attempts(self) -> int:
         # Single-shot benchmark; no test-feedback retry loop.
