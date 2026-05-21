@@ -1,3 +1,14 @@
+---
+page_type: playbook
+slug: pre-pr-close-keyword-audit
+title: Pre-PR Close-Keyword Audit
+status: stable
+last_reviewed: 2026-05-20
+sources:
+  - pr: 53
+  - path: scripts/pre-pr-check.sh
+---
+
 # Playbook — Pre-PR close-keyword audit
 
 > Close-keywords (`Closes`/`Fixes`/`Resolves` `#N`) in plain text in any commit message OR the PR body fire on merge — GitHub reads syntax, not intent. Backtick them when referencing an issue the PR isn't closing.
