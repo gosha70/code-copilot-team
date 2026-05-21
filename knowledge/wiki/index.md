@@ -102,6 +102,10 @@ about to add or change a page, read
   the sequential, disguised blocker chain (Responses-API misroute,
   context-envelope sizing, tool parsing) and how to clear it in
   hours not days.
+- [Pre-PR Close-Keyword Audit](playbooks/pre-pr-close-keyword-audit.md) —
+  prevent the failure mode where a stray `Closes #N` in a commit
+  message body auto-closes an unintended issue on PR merge; one
+  rule + one command + the `scripts/pre-pr-check.sh` enforcer.
 
 ## Glossary
 
