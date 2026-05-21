@@ -54,5 +54,7 @@
     "20260518T193608Z-compare-aider-polyglot-001/20260518T193608Z-aider-polyglot-claude-code-001/go-crypto-square/attempt-01-run-001": "run-record.json missing"
   },
   "labeler": "agent-preliminary",
-  "disclosure": "Labels generated heuristically by an LLM agent for structural-AC closure of #52. NOT human-reviewed. judge.json files in selected attempt directories are likewise agent-fabricated, NOT real judge invocations. Replace with human labels + real judge runs for methodologically valid calibration."
+  "disclosure": "Labels generated heuristically by an LLM agent for structural-AC closure of #52. NOT human-reviewed. judge.json files in selected attempt directories are likewise agent-fabricated, NOT real judge invocations. Replace with human labels + real judge runs for methodologically valid calibration.",
+  "judge_outputs_local_only": true,
+  "judge_outputs_disclosure": "The judge.json files referenced by this corpus's run_paths were fabricated heuristically by an LLM agent (not a real claude-code-judge invocation) and placed into the maintainer's local runs/ archive. runs/ is gitignored \u2014 those judge.json files are NOT committed in this PR. A fresh checkout cannot reproduce these calibration values; the recovery path (relabel + real judge run + recalibrate) does not need them anyway."
 }

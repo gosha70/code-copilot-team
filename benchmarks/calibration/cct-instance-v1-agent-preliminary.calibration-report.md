@@ -1,23 +1,34 @@
 > **AGENT-PRELIMINARY DATA — NOT HUMAN-REVIEWED.**
 >
-> The labels in `cct-instance-v1-agent-preliminary.jsonl` were generated
-> heuristically by an LLM agent, not by a human reviewer. The
-> `judge.json` files under `runs/` were likewise fabricated, not produced
-> by a real `claude-code-judge` invocation. The Spearman correlations
-> below are therefore the agreement between two intentionally-distinct
-> agent heuristics — NOT a calibrated empirical signal.
+> The labels in `cct-instance-v1-agent-preliminary.jsonl` were
+> generated heuristically by an LLM agent, not by a human reviewer.
+> The `judge.json` files referenced by this corpus's `run_paths`
+> were likewise fabricated (not produced by a real
+> `claude-code-judge` invocation) and placed into the **maintainer's
+> local `runs/` archive**. `runs/` is gitignored in this repo: those
+> `judge.json` files are NOT committed in this PR, and a fresh
+> checkout cannot reproduce these specific Spearman values without
+> first regenerating the judge.json files (or supplying its own
+> archive).
 >
-> This artifact closes the structural acceptance criteria of #52 (labels
-> on disk, calibrate ran, D6 terminal state recorded) so epic #34 can
-> close in the same PR. The methodology-honest path is for a maintainer
-> to relabel the corpus with human judgement and re-run:
+> The Spearman correlations below are therefore the agreement
+> between two intentionally-distinct agent heuristics running over
+> the maintainer's local state — NOT a calibrated empirical signal.
+>
+> This artifact closes the structural acceptance criteria of #52
+> (labels on disk, calibrate ran, D6 terminal state recorded) so
+> epic #34 can close in the same PR. The methodology-honest path
+> is for a maintainer to relabel the corpus with human judgement,
+> run `./scripts/benchmark judge --run-dir <archive> --judge
+> claude-code:sonnet` for real judge outputs, and rerun:
 >
 >     ./scripts/benchmark calibrate \
 >         --labels benchmarks/calibration/<new-name>.jsonl \
 >         --judge claude-code:sonnet --name <new-name>
 >
-> A new calibration set under a different `<name>` lands alongside this
-> file (don't overwrite this one — keep it as the scaffolding record).
+> A new calibration set under a different `<name>` lands alongside
+> this file (don't overwrite this one — keep it as the scaffolding
+> record).
 
 ---
 

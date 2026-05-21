@@ -296,5 +296,131 @@ class TestRichOutputs(unittest.TestCase):
             self.assertNotIn("$", text, msg=f"dollar sign found in {fname}")
 
 
+# ── Reviewer-flagged regressions (post PR #60) ────────────────────────
+
+
+class TestD6TerminalStateSurfaced(unittest.TestCase):
+    """Reviewer-flagged P1: when ALL dimensions are uncalibrated
+    (the spec.md D6 terminal state), the report MUST surface the
+    'Zero calibrated dimensions' paragraph. The pre-fix code only
+    emitted the paragraph inside a ``judge['pairwise']`` branch,
+    which was empty when no dimension calibrated — making the D6
+    message unreachable in practice.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp(prefix="cct-report-d6-")
+        self.run_dir = Path(self._tmp)
+        for model in ("m1", "m2"):
+            _write_attempt(
+                self.run_dir / model / "t" / "attempt-01-run-001",
+                task_id="t/x", model=model,
+                judge_ratings={"idiomaticity": 3},
+            )
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _calibrated_dims_all_uncalibrated(self) -> Path:
+        """Stage a calibrated-dimensions.json where every dimension
+        is uncalibrated (the D6 terminal state)."""
+        path = self.run_dir / "cal.json"
+        path.write_text(json.dumps({
+            "schema_version": "1.0",
+            "threshold": 0.6,
+            "calibrated": [],
+            "uncalibrated": [{"dimension": "idiomaticity", "spearman": 0.3}],
+            "no_signal": [],
+        }), encoding="utf-8")
+        return path
+
+    def test_markdown_emits_d6_paragraph(self) -> None:
+        render_report(
+            self.run_dir,
+            calibrated_dimensions_path=self._calibrated_dims_all_uncalibrated(),
+        )
+        md = (self.run_dir / "report.md").read_text(encoding="utf-8")
+        self.assertIn("Zero calibrated dimensions", md)
+        self.assertIn("D6", md)
+
+    def test_html_emits_d6_paragraph(self) -> None:
+        render_report(
+            self.run_dir,
+            html=True,
+            calibrated_dimensions_path=self._calibrated_dims_all_uncalibrated(),
+        )
+        html = (self.run_dir / "report.html").read_text(encoding="utf-8")
+        self.assertIn("Zero calibrated dimensions", html)
+        self.assertIn("D6", html)
+
+
+class TestOutOfBandJudgeRatingsRejected(unittest.TestCase):
+    """Reviewer-flagged P2: the validator (validate.py) rejects judge
+    ratings outside 1..5, but the report path previously accepted any
+    non-bool int. A stale/hand-edited judge.json with rating 6 fed
+    into group means + verdict declarations. Same 1..5 guard now
+    applies in report.py."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp(prefix="cct-report-oob-")
+        self.run_dir = Path(self._tmp)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_out_of_band_rating_does_not_enter_group_mean(self) -> None:
+        # m1 has rating=6 (out-of-band), m2 has rating=3 (in-band).
+        # Pre-fix: m1's mean was 6.0; post-fix: m1's mean is None
+        # (no valid samples).
+        _write_attempt(
+            self.run_dir / "m1" / "t" / "attempt-01-run-001",
+            task_id="t/x", model="m1",
+            judge_ratings={"idiomaticity": 6},
+        )
+        _write_attempt(
+            self.run_dir / "m2" / "t" / "attempt-01-run-001",
+            task_id="t/x", model="m2",
+            judge_ratings={"idiomaticity": 3},
+        )
+        render_report(self.run_dir)
+        doc = json.loads((self.run_dir / "report.json").read_text(encoding="utf-8"))
+        # m1's mean MUST be None (the out-of-band 6 was filtered out
+        # — no in-band samples remain).
+        m1_group = doc["judge"]["groups"]["claude-code:m1"]
+        self.assertIsNone(m1_group["per_dimension"]["idiomaticity"]["mean"])
+        self.assertEqual(m1_group["per_dimension"]["idiomaticity"]["n"], 0)
+        # m2's mean is 3.0 (the in-band sample is kept).
+        m2_group = doc["judge"]["groups"]["claude-code:m2"]
+        self.assertEqual(m2_group["per_dimension"]["idiomaticity"]["mean"], 3.0)
+
+    def test_out_of_band_rating_does_not_swing_calibrated_verdict(self) -> None:
+        # m1 has rating=6 on every passing attempt; m2 has rating=3.
+        # Pre-fix: m1 wins (6.0 > 3.0). Post-fix: m1's samples are
+        # filtered out → insufficient samples → directional.
+        for i in range(3):
+            _write_attempt(
+                self.run_dir / "m1" / f"t-{i}" / "attempt-01-run-001",
+                task_id=f"t/{i}", model="m1",
+                judge_ratings={"idiomaticity": 6},
+            )
+            _write_attempt(
+                self.run_dir / "m2" / f"t-{i}" / "attempt-01-run-001",
+                task_id=f"t/{i}", model="m2",
+                judge_ratings={"idiomaticity": 3},
+            )
+        cal = self.run_dir / "cal.json"
+        cal.write_text(json.dumps({
+            "schema_version": "1.0", "threshold": 0.6,
+            "calibrated": [{"dimension": "idiomaticity"}],
+            "uncalibrated": [], "no_signal": [],
+        }), encoding="utf-8")
+        render_report(self.run_dir, calibrated_dimensions_path=cal)
+        doc = json.loads((self.run_dir / "report.json").read_text(encoding="utf-8"))
+        verdict = doc["judge"]["pairwise"][0]["calibrated_judge_verdicts"]["idiomaticity"]
+        # Pre-fix: would have been "A" (m1 wins from out-of-band 6s).
+        # Post-fix: "directional" (m1's samples filtered, n=0 < 2).
+        self.assertEqual(verdict, "directional")
+
+
 if __name__ == "__main__":
     unittest.main()

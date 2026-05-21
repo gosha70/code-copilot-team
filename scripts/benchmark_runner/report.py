@@ -653,7 +653,17 @@ def _enrich_summary_with_judge(
                 if not isinstance(entry, dict):
                     continue
                 val = entry.get("rating")
-                if isinstance(val, int) and not isinstance(val, bool):
+                # Defense-in-depth: report must reject the same
+                # out-of-band ratings the validator rejects. A stale or
+                # hand-edited judge.json with rating 6 must NOT enter
+                # group means or feed declare_winner. Mirror the
+                # rubric-enforced 1..5 band from
+                # judge.contracts.DimensionRating.__post_init__.
+                if (
+                    isinstance(val, int)
+                    and not isinstance(val, bool)
+                    and 1 <= val <= 5
+                ):
                     ratings.append(val)
             per_dim[dim] = {
                 "n": len(ratings),
@@ -757,7 +767,15 @@ def _pull_judge_ratings(
         if not isinstance(entry, dict):
             continue
         val = entry.get("rating")
-        if isinstance(val, int) and not isinstance(val, bool):
+        # Same 1..5-band guard as _enrich_summary_with_judge:
+        # out-of-band ratings (0, 6, 99) from a stale/hand-edited
+        # judge.json must not contribute to calibrated-judge
+        # winner-extension samples.
+        if (
+            isinstance(val, int)
+            and not isinstance(val, bool)
+            and 1 <= val <= 5
+        ):
             out.append(float(val))
     return out
 
@@ -875,13 +893,29 @@ def _render_html(summary: Mapping[str, Any]) -> str:
                 f"<td>{_html_verdict_label(pair['human_interventions_verdict'], pair['a'], pair['b'])}</td></tr>"
             )
         out.append("</table>")
-        if summary.get("judge") and summary["judge"].get("pairwise"):
-            out.append("<h3>Calibrated-judge verdicts</h3>")
-            out.append('<object data="chart-verdict-forest.svg" type="image/svg+xml" aria-label="A/B forest plot for all verdicts"></object>')
+        # Calibrated-judge verdicts (or D6 terminal-state paragraph)
+        # surface when judge data is present — independently of
+        # whether ``pairwise`` is populated, since pairwise is only
+        # built when at least one dimension calibrated.
+        if summary.get("judge"):
             cal_dims = summary["judge"]["calibrated_dimensions"]
             if not cal_dims:
-                out.append("<p><em>Zero calibrated dimensions — no calibrated-judge verdicts to declare. Raw ratings above remain advisory-only.</em></p>")
-            else:
+                out.append("<h3>Calibrated-judge verdicts</h3>")
+                out.append(
+                    "<p><em>Zero calibrated dimensions — no "
+                    "calibrated-judge verdicts to declare. Raw "
+                    "ratings above remain advisory-only. This is "
+                    "spec.md D6's zero-dimensions-calibrated "
+                    "terminal state: a valid completed outcome of "
+                    "the empirical research question, not a build "
+                    "failure. Maintainer recovery options: revise "
+                    "the rubric (new <code>rubric-default-vN.md</code>), "
+                    "try a different judge model, or accept the "
+                    "negative result as advisory-only.</em></p>"
+                )
+            elif summary["judge"].get("pairwise"):
+                out.append("<h3>Calibrated-judge verdicts</h3>")
+                out.append('<object data="chart-verdict-forest.svg" type="image/svg+xml" aria-label="A/B forest plot for all verdicts"></object>')
                 out.append("<table>")
                 out.append("<tr><th>A</th><th>B</th>")
                 for dim in cal_dims:
@@ -1173,22 +1207,39 @@ def _render_markdown_judge_section(summary: Mapping[str, Any]) -> list[str]:
                 row.append(f"{_fmt_num(mean)} ± {_fmt_num(stdev)} (n={n})")
         lines.append("| " + " | ".join(row) + " |")
     lines.append("")
-    if judge.get("pairwise"):
+    # Calibrated-judge verdicts (or the D6 terminal-state paragraph
+    # when none of the dimensions cleared the threshold). Surface
+    # the paragraph independently of ``judge['pairwise']`` because
+    # the pairwise list is only built when ``calibrated_dimensions``
+    # is non-empty — without this surfacing-on-empty path the D6
+    # report state was unreachable (the bug fixed here).
+    cal_list = judge["calibrated_dimensions"]
+    if not cal_list:
         lines.append("### Calibrated-judge verdicts")
         lines.append("")
-        cal_list = judge["calibrated_dimensions"]
-        if not cal_list:
-            lines.append("_Zero calibrated dimensions — no calibrated-judge verdicts to declare. Raw ratings above remain advisory-only._")
-            lines.append("")
-        else:
-            header = ["A", "B"] + [f"judge:{d}" for d in cal_list]
-            lines.append("| " + " | ".join(header) + " |")
-            lines.append("|" + "|".join(["---"] * len(header)) + "|")
-            for pair in judge["pairwise"]:
-                row = [f"`{pair['a']}`", f"`{pair['b']}`"]
-                for d in cal_list:
-                    v = pair["calibrated_judge_verdicts"].get(d, "directional")
-                    row.append(_fmt_verdict_label(v, pair["a"], pair["b"]))
-                lines.append("| " + " | ".join(row) + " |")
-            lines.append("")
+        lines.append(
+            "_Zero calibrated dimensions — no calibrated-judge "
+            "verdicts to declare. Raw ratings above remain "
+            "advisory-only. This is spec.md D6's "
+            "zero-dimensions-calibrated terminal state: a valid "
+            "completed outcome of the empirical research question, "
+            "not a build failure. Maintainer recovery options: "
+            "revise the rubric (new `rubric-default-vN.md`), try a "
+            "different judge model, or accept the negative result "
+            "as advisory-only._"
+        )
+        lines.append("")
+    elif judge.get("pairwise"):
+        lines.append("### Calibrated-judge verdicts")
+        lines.append("")
+        header = ["A", "B"] + [f"judge:{d}" for d in cal_list]
+        lines.append("| " + " | ".join(header) + " |")
+        lines.append("|" + "|".join(["---"] * len(header)) + "|")
+        for pair in judge["pairwise"]:
+            row = [f"`{pair['a']}`", f"`{pair['b']}`"]
+            for d in cal_list:
+                v = pair["calibrated_judge_verdicts"].get(d, "directional")
+                row.append(_fmt_verdict_label(v, pair["a"], pair["b"]))
+            lines.append("| " + " | ".join(row) + " |")
+        lines.append("")
     return lines
