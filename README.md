@@ -287,6 +287,57 @@ alias.
 - Design rationale: [`specs/wiki-ingest-pipeline/spec.md`](specs/wiki-ingest-pipeline/spec.md).
 - Schema: [`knowledge/wiki/schema/`](knowledge/wiki/schema/) — page types, ingest rules, citation rules, lint rules, curator persona.
 
+## Benchmark Harness
+
+`code-copilot-team` ships a benchmark-agnostic harness for evaluating AI
+copilots and LLMs on real coding tasks under reproducible isolation —
+so you can answer "which copilot/model is actually better on this kind
+of work?" with a controlled run record instead of a vibe.
+
+It does **not** author benchmarks; it runs established public ones
+(Aider Polyglot, SWE-bench Verified, BigCodeBench) and custom CCT
+fixtures through one adapter contract. There are two entry points — a
+terse daily-driver wrapper and the underlying harness CLI:
+
+```bash
+# Daily driver — safe by default (no-arg run is a free stub smoke + env detection)
+./scripts/bench                                          # prove the plumbing, no LLM call, no spend
+./scripts/bench sonnet ollama:qwen2.5-coder:7b           # compare two models on a coding task
+./scripts/bench --preset local-vs-cloud --runs 5         # curated comparison preset
+./scripts/bench --list-presets                           # discovery: available presets
+./scripts/bench --list-providers                         # discovery: detected backends/providers
+
+# Underlying harness
+./scripts/benchmark list                                 # adapters + backends + judges
+./scripts/benchmark run --benchmark aider-polyglot \
+    --backend claude-code --model sonnet --runs 3        # one (backend, model) run
+./scripts/benchmark compare --config my-compare.json     # multi-LLM comparison
+./scripts/benchmark report --run-dir runs/<ts>/ --html --csv  # rich report (HTML + SVG charts + CSV)
+```
+
+**What it measures.** Deterministic scoring is the primary signal —
+build/test/lint pass, required files present, elapsed time, token usage
+— with a calibrated winner-declaration rule (`Δ > 2σ AND ≥ threshold`)
+that refuses to call a winner on noise. A **calibrated LLM judge**
+(issue #34) adds a secondary quality signal (idiomaticity, error
+handling, test thoughtfulness, security hygiene), but only after it's
+proven to correlate with human reviewers (Spearman ρ ≥ threshold per
+dimension); it never overrides the deterministic verdict, and a run
+that fails its tests can never win on judge-only criteria. No
+dollar-cost estimates are ever reported.
+
+**Backends** (the agent driving the task): `claude-code`, `codex`,
+`aider`, plus a deterministic `stub` for CI. Local models (vLLM,
+Ollama, LM Studio) are reached as *providers* through the gateway env
+vars — `./scripts/bench sonnet vllm:<model>@<endpoint>` probes the
+endpoint and spawns an ephemeral Anthropic↔OpenAI proxy when needed.
+
+### Operator docs
+
+- Full harness guide, CLI reference, adapter/backend/judge contracts: [`benchmarks/README.md`](benchmarks/README.md).
+- 60-second quickstart: [`benchmarks/README.md` § 60-second quickstart](benchmarks/README.md#60-second-quickstart).
+- Design rationale: [`specs/benchmark-harness/spec.md`](specs/benchmark-harness/spec.md) and the per-feature spec bundles under [`specs/`](specs/).
+
 ## What You Get
 
 ![Configuration Layers](docs/images/configuration-layers.png)
@@ -522,6 +573,11 @@ code-copilot-team/
 │   ├── README.md                        Wiki usage guide (read this first)
 │   ├── raw/                             Unedited candidate material
 │   └── wiki/                            Curated, cited, agent-maintainable pages
+├── benchmarks/                          ← Benchmark harness (start at benchmarks/README.md)
+│   ├── README.md                        Harness guide + CLI reference
+│   ├── adapters/                        aider-polyglot, swe-bench-verified, bigcodebench, stub, …
+│   ├── presets/                         Curated compare-configs for ./scripts/bench
+│   └── calibration/                     Judge rubrics + calibration corpora/labels
 ├── adapters/
 │   ├── claude-code/                     agents, hooks, commands, settings, setup.sh
 │   ├── codex/                           AGENTS.md, config.toml, 5 skills, setup.sh
@@ -531,7 +587,11 @@ code-copilot-team/
 │   └── aider/                           CONVENTIONS.md, setup.sh
 ├── scripts/
 │   ├── generate.sh                      Builds adapter configs from shared/
+│   ├── bench                            Terse benchmark comparison driver (wraps benchmark)
+│   ├── benchmark                        Benchmark harness CLI (run, compare, judge, calibrate, report)
+│   ├── wiki                             LLM Wiki maintainer CLI (ingest, promote, query, lint, audit-flush)
 │   ├── validate-spec.sh                 SDD spec validator (CI + local)
+│   ├── pre-pr-check.sh                  Pre-PR close-keyword audit gate
 │   ├── peer-review-runner.sh            Peer review execution engine
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   └── setup.sh                         Unified install entry point

@@ -2,7 +2,7 @@
 
 Benchmark-agnostic runner for evaluating AI copilots and LLMs on coding tasks under reproducible isolation, with deterministic scoring and SDD-aware run records.
 
-The harness does **not** author benchmarks — it runs established public benchmarks (Aider Polyglot, SWE-bench Verified, BigCodeBench, LiveCodeBench, …) and one-off custom CCT fixtures through a single adapter contract. CCT's value is the harness, not the fixtures.
+The harness does **not** author benchmarks — it runs established public benchmarks (Aider Polyglot, SWE-bench Verified, and BigCodeBench ship today; LiveCodeBench is scaffolded but not yet registered) and one-off custom CCT fixtures through a single adapter contract. CCT's value is the harness, not the fixtures.
 
 See [`specs/benchmark-harness/spec.md`](../specs/benchmark-harness/spec.md) for the full design and [`specs/benchmark-harness/plan.md`](../specs/benchmark-harness/plan.md) for the phased delivery plan.
 
@@ -229,8 +229,12 @@ Useful when you want to inspect run-dirs first before producing the comparison.
 | 3 | Claude Code (`claude -p`) backend with provider-routing recording | done |
 | 4a | Calibrated winner-declaration rule, report verdicts, dogfood subcommand | done |
 | 4b | Gate 1 (Polyglot liveness) + Gate 2 (memkernel#3 spec-first verdict-correctness) dogfood execution | pending — maintainer-driven on user's machine |
+| #33 | SWE-bench Verified + BigCodeBench adapters, `docker` isolation tier, codex backend | done |
+| #36 | `./scripts/bench` driver — terse `provider:model[@endpoint]` specs, presets, live stderr progress, per-attempt timeout + skip, safe stub-smoke default | done |
+| #41 | Aider backend + recorded-transcript verification + apples-to-apples leaderboard procedure | done |
+| #34 (A–C) | Calibrated LLM-judge scoring (`judge`), calibration corpus + validation (`calibration-corpus`, `calibrate`; Spearman ρ gate), rich reports (`report --html --csv` + static-SVG charts) | done; epic #34 has remaining sub-issues |
 
-Comparison driver (`./scripts/benchmark compare`) shipped 2026-05-13.
+Comparison driver (`./scripts/benchmark compare`) shipped 2026-05-13; the `./scripts/bench` terse wrapper shipped 2026-05-18.
 
 ## CLI
 
@@ -240,7 +244,9 @@ Comparison driver (`./scripts/benchmark compare`) shipped 2026-05-13.
 ./scripts/bench sonnet ollama:qwen2.5-coder:7b                 # compare two models
 ./scripts/bench --preset local-vs-cloud --runs 5               # curated preset, run-count override
 ./scripts/bench --yes --attempt-timeout 600 sonnet opus        # CI: no prompt, 600s/attempt cap
-./scripts/bench --help | --list-presets | --list-providers
+./scripts/bench --help                                         # usage
+./scripts/bench --list-presets                                 # available presets
+./scripts/bench --list-providers                               # detected backends/providers
 
 # Underlying harness (what the wrapper builds on):
 ./scripts/benchmark list                                       # adapters + backends
@@ -248,8 +254,17 @@ Comparison driver (`./scripts/benchmark compare`) shipped 2026-05-13.
 ./scripts/benchmark run --benchmark aider-polyglot \
     --backend claude-code --model sonnet --runs 3              # single (backend, model) run
 ./scripts/benchmark compare --config my-compare.json           # multi-LLM comparison
-./scripts/benchmark report --run-dir runs/<UTC-ts>/            # aggregate any run-dir
+./scripts/benchmark report --run-dir runs/<UTC-ts>/            # aggregate (Markdown + JSON)
+./scripts/benchmark report --run-dir runs/<UTC-ts>/ --html --csv  # + report.html, SVG charts, CSV exports
 ./scripts/benchmark dogfood --backend claude-code --model sonnet  # Gate 1 dogfood
+
+# Calibrated LLM-judge subsystem (issue #34 — secondary signal, never overrides deterministic):
+./scripts/benchmark judge --run-dir runs/<UTC-ts>/ \
+    --judge claude-code:sonnet [--rubric default-v1]           # rate attempts → judge.json per run
+./scripts/benchmark calibration-corpus --target-n 50 \
+    --axes model,adapter --name set1                           # select runs for human labeling
+./scripts/benchmark calibrate --labels set1.labels.jsonl \
+    --judge claude-code:sonnet --name set1 [--threshold 0.6]   # Spearman ρ vs human labels
 ```
 
 Backend and model are **separate flags**. The combined `--backend claude-code:sonnet` form is rejected (see spec.md § v3 correction for why the abstractions were split).
@@ -544,11 +559,55 @@ backend_invocation:
 
 Backends that don't support seeding record `seed: null`. The report flags such comparisons "higher-variance," and the winner-declaration rule (Phase 4) protects against false positives.
 
+## Judge & calibration
+
+Deterministic scoring answers "did it build, test, and lint clean?" It cannot rate quality differences *inside* a passing run — idiomaticity, error handling, test thoughtfulness, security hygiene. Issue #34 adds an **LLM judge** for those dimensions, but only as a *secondary* signal: it never overrides the deterministic verdict, and a dimension's scores are excluded from winner-declaration until the judge is proven to agree with human reviewers on that dimension.
+
+The judge lives in `scripts/benchmark_runner/judge/`. It mirrors the backend contract: a `Judge` protocol, a structured invocation record, and a structured-output schema. The invocation record captures the determinism controls the judge backend actually exposes — it does **not** assume temperature 0 / fixed seed are available. The initial `claude-code:<model>` judge records `temperature_control: "unsupported"` and `seed_control: "unsupported"` (with `temperature`/`seed` both `null`), because the local `claude` CLI exposes neither knob; future judge backends that can pin those knobs record `"supported"` instead. Re-run stability is therefore an **empirical** property — surfaced and quantified by the calibration step below — not a guarantee inherited from a pinned temperature or seed. The judge is driven by a fixed rubric prompt (`benchmarks/calibration/rubric-<name>.md`, default `default-v1`) and can be routed at a local gateway via the same provider env vars as any backend — use the `hosted_vllm/` LiteLLM provider for vLLM endpoints.
+
+The workflow is gated on calibration so the judge is never "just another opinion":
+
+```bash
+# 1. Rate every attempt under a run-dir. Writes judge.json adjacent to
+#    each score.json; never touches score.json.
+./scripts/benchmark judge --run-dir runs/<ts>/ --judge claude-code:sonnet
+
+# 2. Select a calibration corpus (>=50 task-runs spanning >=2 axes of
+#    variation: model / adapter / backend / repeated-runs) for humans to label.
+./scripts/benchmark calibration-corpus --target-n 50 --axes model,adapter --name set1
+#    -> benchmarks/calibration/set1.corpus.jsonl + set1.meta.json
+
+# 3. A human reviewer labels each row 1-5 per rubric dimension, producing
+#    set1.labels.jsonl (one {run_path, dimension, rating, notes} per line).
+
+# 4. Validate the judge against the human labels: per-dimension Spearman ρ
+#    + exact-match rate. Dimensions with ρ >= threshold (default 0.6) are
+#    "calibrated"; the rest are reported but excluded from winner math.
+./scripts/benchmark calibrate --labels set1.labels.jsonl \
+    --judge claude-code:sonnet --name set1 --threshold 0.6
+#    -> set1.calibration-report.md + set1.calibrated-dimensions.json
+```
+
+Calibration is empirical, not assumed: if a dimension's judge-vs-human correlation falls below the threshold, that dimension ships as `uncalibrated` and never declares a winner. Activate calibrated-judge verdicts in a report by passing the calibration output:
+
+```bash
+./scripts/benchmark report --run-dir runs/<ts>/ --html --csv \
+    --calibrated-dimensions set1.calibrated-dimensions.json
+```
+
+## Rich reports
+
+`report` emits Markdown + JSON by default. Two additive flags produce richer output (no JavaScript, no new dependencies):
+
+- `--html` → `report.html` plus static-SVG charts: `chart-pass-rate.svg` (always), and `chart-judge-histogram.svg` + `chart-verdict-forest.svg` (only when judge data is present). Deterministic and judge scores render in clearly separated sections.
+- `--csv` → `report-by-model.csv` and `report-per-task.csv` for spreadsheet analysis.
+
+The existing Markdown + JSON reports are never removed — HTML/CSV are strictly additive.
+
 ## What this harness deliberately does not do
 
 - **No dollar-cost reporting.** The `cost_reporting.enabled` field in `stats.json` is permanently `false`. Cross-provider billing correlation is not solved; estimates would mislead. See `specs/benchmark-harness/spec.md` § Constraints.
-- **No LLM-judge scoring in the MVP.** Issue #34 adds calibrated judge scoring on top of deterministic scoring, gated on a 50–100-sample human-labeled calibration set.
-- **No HTML / charts / CSV reports in the MVP.** Markdown + JSON only. Issue #34 adds rich reports.
+- **Judge scoring never overrides deterministic scoring.** Calibrated LLM-judge scoring has shipped (issue #34 — see [§ Judge & calibration](#judge--calibration)), but it is strictly *secondary*. A run that fails its deterministic tests can never win on judge-only criteria, and any rubric dimension that fails calibration (Spearman ρ below the threshold) is flagged "uncalibrated" and excluded from winner-declaration math. The deterministic verdict is always primary.
 - **No custom application fixtures as the foundation.** The MVP's first public adapter is Aider Polyglot precisely so we ride a published leaderboard for sanity. Custom CCT fixtures are one adapter among several in issue #33, never the centerpiece. *Carve-out:* `cct-dogfood-memkernel` ships in this issue as Gate-2 verdict-correctness calibration infra against memkernel#3 (a fresh forward-looking spec-first task) — never invoked outside maintainer-driven dogfood, never in CI, never in cross-backend leaderboard reports. See `specs/benchmark-harness/spec.md` § Constraints.
 
 ## Running the tests
