@@ -196,6 +196,62 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Where to write the corpus files (default benchmarks/calibration/).",
     )
 
+    # ── calibrate ─────────────────────────────────────────────────
+    p_calibrate = sub.add_parser(
+        "calibrate",
+        help=(
+            "Validate a labeled calibration corpus against a judge's "
+            "judge.json outputs. Computes per-dimension Spearman ρ + "
+            "exact-match rate; writes <name>.calibration-report.md + "
+            "<name>.calibrated-dimensions.json under --output-dir. "
+            "Never mutates runs/."
+        ),
+    )
+    p_calibrate.add_argument(
+        "--labels",
+        required=True,
+        type=Path,
+        help="Path to the labels JSONL (one {run_path,dimension,rating,notes} record per line).",
+    )
+    p_calibrate.add_argument(
+        "--judge",
+        required=True,
+        help=(
+            "Judge identity to validate against, '<family>:<model>' "
+            "(e.g. 'claude-code:sonnet'). The script reads each "
+            "judge.json and asserts its judge_id/judge_backend_id + "
+            "judge_model match; mismatches are recorded as skips."
+        ),
+    )
+    p_calibrate.add_argument(
+        "--name",
+        required=True,
+        help="Calibration name; outputs land at <output-dir>/<name>.{calibration-report.md,calibrated-dimensions.json}.",
+    )
+    p_calibrate.add_argument(
+        "--runs-root",
+        type=Path,
+        default=Path("runs"),
+        help="Root that label run_paths are relative to (default ./runs).",
+    )
+    p_calibrate.add_argument(
+        "--threshold",
+        type=float,
+        default=0.6,
+        help="Spearman threshold for 'calibrated' (default 0.6 per issue #34 v3).",
+    )
+    p_calibrate.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("benchmarks/calibration"),
+        help="Where to write the report + JSON (default benchmarks/calibration/).",
+    )
+    p_calibrate.add_argument(
+        "--judge-output-name",
+        default="judge.json",
+        help="Filename of the judge output per attempt directory (default judge.json).",
+    )
+
     # ── compare ───────────────────────────────────────────────────────
     p_compare = sub.add_parser(
         "compare",
@@ -647,6 +703,92 @@ def _cmd_calibration_corpus(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_calibrate(args: argparse.Namespace) -> int:
+    if not args.labels.exists():
+        print(
+            f"benchmark: labels file not found: {args.labels}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if not args.runs_root.exists():
+        print(
+            f"benchmark: runs-root not found: {args.runs_root}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if ":" not in args.judge:
+        print(
+            f"benchmark: --judge must be '<family>:<model>'; got {args.judge!r}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    from .calibration.validate import (
+        LabelsParseError,
+        NoLabelsError,
+        STATUS_CALIBRATED,
+        STATUS_NO_SIGNAL,
+        STATUS_UNCALIBRATED,
+        validate_and_write,
+        validate_threshold,
+    )
+
+    # Validate --threshold up front so the CLI surfaces a clear usage
+    # error instead of failing inside validate_corpus (which would map
+    # to the catch-all EXIT_RUNTIME branch + a less-readable message).
+    # The library-level guard in validate_threshold remains as defense
+    # in depth for direct callers.
+    try:
+        validate_threshold(args.threshold)
+    except ValueError as exc:
+        print(f"benchmark: --threshold: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        report_path, json_path, result = validate_and_write(
+            labels_path=args.labels,
+            runs_root=args.runs_root,
+            judge_family_model=args.judge,
+            name=args.name,
+            output_dir=args.output_dir,
+            threshold=args.threshold,
+            judge_output_name=args.judge_output_name,
+        )
+    except FileNotFoundError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except LabelsParseError as exc:
+        print(f"benchmark: labels parse error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except NoLabelsError as exc:
+        print(f"benchmark: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"benchmark: calibration failed: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+
+    n_cal = sum(1 for r in result.results if r.status == STATUS_CALIBRATED)
+    n_unc = sum(1 for r in result.results if r.status == STATUS_UNCALIBRATED)
+    n_nos = sum(1 for r in result.results if r.status == STATUS_NO_SIGNAL)
+    print(json.dumps({
+        "report_path": str(report_path),
+        "json_path": str(json_path),
+        "name": args.name,
+        "judge": args.judge,
+        "threshold": args.threshold,
+        "n_dimensions": len(result.results),
+        "calibrated": n_cal,
+        "uncalibrated": n_unc,
+        "no_signal": n_nos,
+        "labels_total": result.data_quality.labels_total,
+    }, indent=2))
+    return EXIT_OK
+
+
 _HANDLERS = {
     "list": _cmd_list,
     "run": _cmd_run,
@@ -655,6 +797,7 @@ _HANDLERS = {
     "dogfood": _cmd_dogfood,
     "judge": _cmd_judge,
     "calibration-corpus": _cmd_calibration_corpus,
+    "calibrate": _cmd_calibrate,
 }
 
 
