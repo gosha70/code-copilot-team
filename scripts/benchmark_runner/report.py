@@ -69,8 +69,25 @@ HUMAN_INTERVENTIONS_METRIC = MetricSpec(
 )
 
 
-def render_report(run_dir: Path) -> Path:
-    """Aggregate ``run_dir`` into report.md + report.json.
+def render_report(
+    run_dir: Path,
+    *,
+    html: bool = False,
+    csv: bool = False,
+    calibrated_dimensions_path: Path | None = None,
+    judge_output_name: str = "judge.json",
+) -> Path:
+    """Aggregate ``run_dir`` into report.md + report.json (always) plus
+    optional report.html, report.csv / report-by-model.csv, and
+    static SVG charts when ``html`` / ``csv`` are set.
+
+    Calibrated-judge verdicts (sub-issue #51) activate when both:
+      - per-attempt ``judge.json`` files exist under ``run_dir``, AND
+      - ``calibrated_dimensions_path`` points at a valid JSON
+        produced by ``./scripts/benchmark calibrate`` (sub-issue B).
+
+    Without those two, the report ignores any judge data — preserving
+    byte-identity with the pre-#50 baseline (additivity invariant).
 
     Returns the path to ``report.md``. Raises ``FileNotFoundError`` if
     the run-dir doesn't exist or contains no score files.
@@ -87,6 +104,14 @@ def render_report(run_dir: Path) -> Path:
     candidate_map = _load_candidate_map(run_dir)
     summary = _summarize(attempts, candidate_map)
 
+    # Judge enrichment (additive). Only adds keys to summary when
+    # judge.json files exist — preserves byte-identity for runs
+    # without judge data.
+    judge_outputs = _load_judge_outputs(run_dir, judge_output_name)
+    calibrated_dims = _load_calibrated_dimensions(calibrated_dimensions_path)
+    if judge_outputs:
+        _enrich_summary_with_judge(summary, attempts, judge_outputs, calibrated_dims)
+
     report_md_path = run_dir / "report.md"
     report_json_path = run_dir / "report.json"
 
@@ -94,6 +119,33 @@ def render_report(run_dir: Path) -> Path:
     report_json_path.write_text(
         json.dumps(summary, indent=2, default=str), encoding="utf-8"
     )
+
+    if html:
+        (run_dir / "report.html").write_text(
+            _render_html(summary), encoding="utf-8"
+        )
+        # SVG charts are emitted alongside the HTML (and also embedded
+        # by reference into the HTML). Always pass-rate bar chart;
+        # judge histograms + forest plot only when judge data exists.
+        (run_dir / "chart-pass-rate.svg").write_text(
+            _render_svg_bar(summary), encoding="utf-8"
+        )
+        if summary.get("judge"):
+            (run_dir / "chart-judge-histogram.svg").write_text(
+                _render_svg_histogram(summary), encoding="utf-8"
+            )
+            (run_dir / "chart-verdict-forest.svg").write_text(
+                _render_svg_forest(summary), encoding="utf-8"
+            )
+
+    if csv:
+        (run_dir / "report-by-model.csv").write_text(
+            _render_csv_by_model(summary), encoding="utf-8"
+        )
+        (run_dir / "report-per-task.csv").write_text(
+            _render_csv_per_task(summary), encoding="utf-8"
+        )
+
     return report_md_path
 
 
@@ -453,6 +505,9 @@ def _render_markdown(summary: Mapping[str, Any]) -> str:
             lines.append(f"| `{pair['a']}` | `{pair['b']}` | {pr} | {es} | {fc} | {hi} |")
         lines.append("")
 
+    # Judge section (additive — emitted only when judge data exists).
+    lines.extend(_render_markdown_judge_section(summary))
+
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -489,3 +544,702 @@ def _fmt_num(value: float | None) -> str:
     if math.isnan(value):
         return "_n/a_"
     return f"{value:.3f}"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Judge enrichment + rich-report renderers (#50, #51)
+# ══════════════════════════════════════════════════════════════════════
+# All code below is additive. When judge.json files are absent AND no
+# calibrated-dimensions path is provided, the original summary dict +
+# report.md/json output above are byte-identical to the pre-#50
+# baseline. Verified by the additivity snapshot test in
+# test_report_judge_additivity.py.
+
+
+def _load_judge_outputs(run_dir: Path, judge_output_name: str) -> dict[Path, dict]:
+    """Walk run_dir for judge.json files (one per attempt).
+
+    Returns a map from attempt-dir absolute Path → parsed judge.json
+    dict. Malformed judge.json files are skipped silently (the report
+    can't fix them; the calibration step (#49) is where parse errors
+    surface with reasons).
+    """
+    out: dict[Path, dict] = {}
+    for jp in sorted(run_dir.rglob(judge_output_name)):
+        try:
+            out[jp.parent.resolve()] = json.loads(jp.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+    return out
+
+
+def _load_calibrated_dimensions(path: Path | None) -> dict | None:
+    """Load calibrated-dimensions.json from sub-issue B.
+
+    Returns None when the path is None or the file is missing /
+    unparseable. The caller treats None as "no calibrated dimensions"
+    — every judge dimension renders as ``uncalibrated`` in the report.
+    """
+    if path is None:
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _enrich_summary_with_judge(
+    summary: dict[str, Any],
+    attempts: list[dict],
+    judge_outputs: Mapping[Path, dict],
+    calibrated_dims: dict | None,
+) -> None:
+    """Add a ``summary['judge']`` block + per-group judge ratings.
+
+    Mutates ``summary`` in place (mirrors the rest of the pipeline's
+    style — this module is a single-pass aggregator that mutates the
+    growing dict).
+
+    Per-attempt judge data → per-(backend, model) group aggregation +
+    pairwise calibrated-judge verdicts via report_winner.declare_winner.
+    Deterministic-first ordering enforced at the verdict level:
+    calibrated-judge samples only count for pairs where BOTH sides
+    passed deterministically on the same task.
+    """
+    # Index judge ratings per attempt-dir, joined onto the existing
+    # attempts list by score_path's parent directory.
+    for a in attempts:
+        attempt_dir = a["score_path"].parent.resolve()
+        a["_judge"] = judge_outputs.get(attempt_dir)
+
+    # Per-group judge data: per-dimension rating distributions.
+    by_group: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+    for a in attempts:
+        by_group[_group_key(a)].append(a)
+
+    # Collect every dimension name seen across all judge outputs;
+    # sorted for determinism.
+    dimensions: set[str] = set()
+    for jo in judge_outputs.values():
+        for dim in (jo.get("rubric_dimensions") or list((jo.get("ratings") or {}).keys())):
+            dimensions.add(dim)
+    dimensions_sorted = sorted(dimensions)
+
+    # Calibrated dimensions: a set of dimension names that passed the
+    # Spearman threshold per sub-issue B's calibrate command.
+    calibrated_set: set[str] = set()
+    threshold: float | None = None
+    if calibrated_dims is not None:
+        threshold = calibrated_dims.get("threshold")
+        for e in calibrated_dims.get("calibrated", []) or []:
+            d = e.get("dimension")
+            if isinstance(d, str):
+                calibrated_set.add(d)
+
+    # Per-group dimension means + per-task ratings.
+    judge_groups: dict[str, dict[str, Any]] = {}
+    for group_key, rows in by_group.items():
+        label = _label(*group_key)
+        # Per-dimension: list of integer ratings from rows whose
+        # judge.json carried that dimension.
+        per_dim: dict[str, Any] = {}
+        for dim in dimensions_sorted:
+            ratings = []
+            for r in rows:
+                jo = r.get("_judge")
+                if not jo:
+                    continue
+                entry = (jo.get("ratings") or {}).get(dim)
+                if not isinstance(entry, dict):
+                    continue
+                val = entry.get("rating")
+                # Defense-in-depth: report must reject the same
+                # out-of-band ratings the validator rejects. A stale or
+                # hand-edited judge.json with rating 6 must NOT enter
+                # group means or feed declare_winner. Mirror the
+                # rubric-enforced 1..5 band from
+                # judge.contracts.DimensionRating.__post_init__.
+                if (
+                    isinstance(val, int)
+                    and not isinstance(val, bool)
+                    and 1 <= val <= 5
+                ):
+                    ratings.append(val)
+            per_dim[dim] = {
+                "n": len(ratings),
+                "mean": _mean([float(x) for x in ratings]),
+                "stdev": _stdev([float(x) for x in ratings]),
+                "calibrated": dim in calibrated_set,
+            }
+        judge_groups[label] = {"per_dimension": per_dim}
+
+    # Pairwise calibrated-judge verdicts. Only computed for dimensions
+    # in calibrated_set; deterministic-first ordering enforced.
+    judge_pairwise: list[dict[str, Any]] = []
+    if calibrated_set:
+        keys = sorted(by_group.keys())
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                a_key, b_key = keys[i], keys[j]
+                pair_entry: dict[str, Any] = {
+                    "a": _label(*a_key),
+                    "b": _label(*b_key),
+                    "calibrated_judge_verdicts": {},
+                }
+                for dim in sorted(calibrated_set):
+                    a_samples, b_samples = _calibrated_judge_samples(
+                        by_group[a_key], by_group[b_key], dim,
+                    )
+                    if not a_samples or not b_samples:
+                        pair_entry["calibrated_judge_verdicts"][dim] = (
+                            "directional"
+                        )
+                        continue
+                    pair_entry["calibrated_judge_verdicts"][dim] = declare_winner(
+                        MetricSpec(
+                            name=f"judge:{dim}",
+                            kind="continuous",
+                            higher_is_better=True,
+                            continuous_threshold_relative=0.10,
+                        ),
+                        a_samples,
+                        b_samples,
+                    )
+                judge_pairwise.append(pair_entry)
+
+    summary["judge"] = {
+        "dimensions": dimensions_sorted,
+        "calibrated_dimensions": sorted(calibrated_set),
+        "threshold": threshold,
+        "groups": judge_groups,
+        "pairwise": judge_pairwise,
+        "note": (
+            "Calibrated-judge verdicts only consider attempts that "
+            "passed deterministically on BOTH sides of each pair "
+            "(deterministic-first ordering — spec.md AC8). "
+            "Uncalibrated dimensions never declare a winner."
+        ),
+    }
+
+
+def _calibrated_judge_samples(
+    a_rows: list[dict],
+    b_rows: list[dict],
+    dimension: str,
+) -> tuple[list[float], list[float]]:
+    """Build per-attempt judge-rating samples for the deterministic-first
+    calibrated verdict.
+
+    Only attempts that passed deterministically AND whose task was
+    also passed by the OTHER side enter the sample. This is the AC8
+    enforcement (deterministic-first ordering).
+    """
+    # Tasks passed on each side.
+    a_passed_tasks = {
+        r["score"]["task_id"]
+        for r in a_rows if r["score"]["result"] == "pass"
+    }
+    b_passed_tasks = {
+        r["score"]["task_id"]
+        for r in b_rows if r["score"]["result"] == "pass"
+    }
+    common = a_passed_tasks & b_passed_tasks
+    a_samples = _pull_judge_ratings(a_rows, dimension, common)
+    b_samples = _pull_judge_ratings(b_rows, dimension, common)
+    return a_samples, b_samples
+
+
+def _pull_judge_ratings(
+    rows: list[dict],
+    dimension: str,
+    task_filter: set[str],
+) -> list[float]:
+    out: list[float] = []
+    for r in rows:
+        if r["score"]["task_id"] not in task_filter:
+            continue
+        if r["score"]["result"] != "pass":
+            continue
+        jo = r.get("_judge")
+        if not jo:
+            continue
+        entry = (jo.get("ratings") or {}).get(dimension)
+        if not isinstance(entry, dict):
+            continue
+        val = entry.get("rating")
+        # Same 1..5-band guard as _enrich_summary_with_judge:
+        # out-of-band ratings (0, 6, 99) from a stale/hand-edited
+        # judge.json must not contribute to calibrated-judge
+        # winner-extension samples.
+        if (
+            isinstance(val, int)
+            and not isinstance(val, bool)
+            and 1 <= val <= 5
+        ):
+            out.append(float(val))
+    return out
+
+
+# ── HTML renderer (stdlib only, no JS) ────────────────────────────────
+
+
+def _render_html(summary: Mapping[str, Any]) -> str:
+    """Render an HTML report — deterministic block first, judge block
+    second, verdicts third, with an explicit visual separator between
+    deterministic and judge sections (AC5).
+
+    Stdlib-only string assembly; no templating engine. Embeds the
+    pass-rate SVG via ``<object>`` so the chart renders without JS.
+    """
+    out: list[str] = []
+    out.append("<!doctype html>")
+    out.append('<html><head><meta charset="utf-8">')
+    out.append("<title>Benchmark report</title>")
+    out.append("<style>")
+    out.append("body{font:14px/1.5 -apple-system,system-ui,sans-serif;max-width:1100px;margin:2em auto;padding:0 1em;color:#222}")
+    out.append("h1,h2,h3{font-weight:600}")
+    out.append("table{border-collapse:collapse;margin:1em 0}")
+    out.append("th,td{border:1px solid #ccc;padding:4px 8px;text-align:left}")
+    out.append("th{background:#f5f5f5}")
+    out.append("td.num{text-align:right;font-variant-numeric:tabular-nums}")
+    out.append("hr.section{border:0;border-top:3px double #aaa;margin:2em 0}")
+    out.append(".judge{background:#fafafa;padding:.5em 1em;border-left:4px solid #888}")
+    out.append(".cal{color:#0a7;font-weight:600}")
+    out.append(".uncal{color:#888;font-style:italic}")
+    out.append("code{background:#f0f0f0;padding:1px 4px;border-radius:3px}")
+    out.append("</style></head><body>")
+    out.append("<h1>Benchmark report</h1>")
+    out.append(f"<p>Total attempts recorded: <strong>{summary['run_count']}</strong></p>")
+
+    # ── Deterministic block (AC5: first) ──
+    out.append("<h2>Deterministic results</h2>")
+    out.append('<object data="chart-pass-rate.svg" type="image/svg+xml" aria-label="Pass-rate bar chart per (backend, model)"></object>')
+    out.append("<table>")
+    out.append("<tr><th>Candidate</th><th>Backend</th><th>Model</th><th>Attempts</th><th>Passed</th><th>Pass-rate</th><th>Elapsed (mean &plusmn; stdev)</th></tr>")
+    for label, g in summary["groups"].items():
+        out.append(
+            f"<tr><td><code>{_html_escape(label)}</code></td>"
+            f"<td>{_html_escape(g['backend_id'])}</td>"
+            f"<td>{_html_escape(g['model'] or '—')}</td>"
+            f"<td class='num'>{g['total_attempts']}</td>"
+            f"<td class='num'>{g['passed']}</td>"
+            f"<td class='num'>{_fmt_pct(g['pass_rate'])}</td>"
+            f"<td class='num'>{_fmt_num(g['elapsed_seconds_mean'])} &plusmn; {_fmt_num(g['elapsed_seconds_stdev'])}</td></tr>"
+        )
+    out.append("</table>")
+
+    # ── Visual separator + judge block (AC5: second) ──
+    if summary.get("judge"):
+        out.append('<hr class="section">')
+        out.append('<div class="judge">')
+        out.append("<h2>Judge ratings (secondary signal)</h2>")
+        out.append(
+            "<p><em>Judge is secondary. Uncalibrated dimensions are "
+            "shown for reviewer awareness but never declare a winner. "
+            "Deterministic-first ordering enforced — see "
+            "<code>summary.judge.note</code> in <code>report.json</code>.</em></p>"
+        )
+        threshold = summary["judge"].get("threshold")
+        if threshold is not None:
+            out.append(f"<p>Spearman threshold: <code>{threshold}</code></p>")
+        cal_dims = set(summary["judge"]["calibrated_dimensions"])
+        out.append("<table>")
+        out.append("<tr><th>Candidate</th>")
+        for dim in summary["judge"]["dimensions"]:
+            badge = (
+                f'<span class="cal">[calibrated]</span>'
+                if dim in cal_dims
+                else f'<span class="uncal">[uncalibrated]</span>'
+            )
+            out.append(f"<th>{_html_escape(dim)}<br>{badge}</th>")
+        out.append("</tr>")
+        for label, g in summary["judge"]["groups"].items():
+            out.append(f"<tr><td><code>{_html_escape(label)}</code></td>")
+            for dim in summary["judge"]["dimensions"]:
+                pd = g["per_dimension"].get(dim) or {}
+                mean = pd.get("mean")
+                stdev = pd.get("stdev")
+                n = pd.get("n", 0)
+                if mean is None or n == 0:
+                    out.append("<td class='num'>—</td>")
+                else:
+                    out.append(
+                        f"<td class='num'>{_fmt_num(mean)} &plusmn; "
+                        f"{_fmt_num(stdev)} <small>(n={n})</small></td>"
+                    )
+            out.append("</tr>")
+        out.append("</table>")
+        out.append('<object data="chart-judge-histogram.svg" type="image/svg+xml" aria-label="Judge rating distribution per dimension"></object>')
+        out.append("</div>")
+
+    # ── Verdicts (AC5: third) ──
+    if summary["verdicts"]:
+        out.append("<h2>Winner verdicts</h2>")
+        out.append(
+            "<p>Calibrated rule: "
+            "<code>&Delta; &gt; 2&sigma; AND |&Delta;| &ge; threshold</code>."
+            "</p>"
+        )
+        out.append("<h3>Deterministic verdicts</h3>")
+        out.append("<table>")
+        out.append("<tr><th>A</th><th>B</th><th>pass_rate</th><th>elapsed_seconds</th><th>failed_commands</th><th>human_interventions</th></tr>")
+        for pair in summary["verdicts"]["pairwise"]:
+            out.append(
+                f"<tr><td><code>{_html_escape(pair['a'])}</code></td>"
+                f"<td><code>{_html_escape(pair['b'])}</code></td>"
+                f"<td>{_html_verdict_label(pair['pass_rate_verdict'], pair['a'], pair['b'])}</td>"
+                f"<td>{_html_verdict_label(pair['elapsed_seconds_verdict'], pair['a'], pair['b'])}</td>"
+                f"<td>{_html_verdict_label(pair['failed_commands_verdict'], pair['a'], pair['b'])}</td>"
+                f"<td>{_html_verdict_label(pair['human_interventions_verdict'], pair['a'], pair['b'])}</td></tr>"
+            )
+        out.append("</table>")
+        # Calibrated-judge verdicts (or D6 terminal-state paragraph)
+        # surface when judge data is present — independently of
+        # whether ``pairwise`` is populated, since pairwise is only
+        # built when at least one dimension calibrated.
+        if summary.get("judge"):
+            cal_dims = summary["judge"]["calibrated_dimensions"]
+            if not cal_dims:
+                out.append("<h3>Calibrated-judge verdicts</h3>")
+                out.append(
+                    "<p><em>Zero calibrated dimensions — no "
+                    "calibrated-judge verdicts to declare. Raw "
+                    "ratings above remain advisory-only. This is "
+                    "spec.md D6's zero-dimensions-calibrated "
+                    "terminal state: a valid completed outcome of "
+                    "the empirical research question, not a build "
+                    "failure. Maintainer recovery options: revise "
+                    "the rubric (new <code>rubric-default-vN.md</code>), "
+                    "try a different judge model, or accept the "
+                    "negative result as advisory-only.</em></p>"
+                )
+            elif summary["judge"].get("pairwise"):
+                out.append("<h3>Calibrated-judge verdicts</h3>")
+                out.append('<object data="chart-verdict-forest.svg" type="image/svg+xml" aria-label="A/B forest plot for all verdicts"></object>')
+                out.append("<table>")
+                out.append("<tr><th>A</th><th>B</th>")
+                for dim in cal_dims:
+                    out.append(f"<th>judge:{_html_escape(dim)}</th>")
+                out.append("</tr>")
+                for pair in summary["judge"]["pairwise"]:
+                    out.append(
+                        f"<tr><td><code>{_html_escape(pair['a'])}</code></td>"
+                        f"<td><code>{_html_escape(pair['b'])}</code></td>"
+                    )
+                    for dim in cal_dims:
+                        v = pair["calibrated_judge_verdicts"].get(dim, "directional")
+                        out.append(f"<td>{_html_verdict_label(v, pair['a'], pair['b'])}</td>")
+                    out.append("</tr>")
+                out.append("</table>")
+
+    out.append("</body></html>")
+    return "\n".join(out) + "\n"
+
+
+def _html_escape(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+         .replace("<", "&lt;")
+         .replace(">", "&gt;")
+         .replace('"', "&quot;")
+    )
+
+
+def _html_verdict_label(verdict: str, a: str, b: str) -> str:
+    if verdict == "A":
+        return f"<strong>{_html_escape(a)}</strong> wins"
+    if verdict == "B":
+        return f"<strong>{_html_escape(b)}</strong> wins"
+    return "<em>directional</em>"
+
+
+# ── CSV renderers ─────────────────────────────────────────────────────
+
+
+def _render_csv_by_model(summary: Mapping[str, Any]) -> str:
+    """Per-(backend, model) summary CSV — one row per group."""
+    rows = ["label,backend_id,model,total_attempts,passed,pass_rate,elapsed_seconds_mean,elapsed_seconds_stdev"]
+    for label, g in summary["groups"].items():
+        rows.append(",".join([
+            _csv_escape(label),
+            _csv_escape(g["backend_id"]),
+            _csv_escape(g["model"] or ""),
+            str(g["total_attempts"]),
+            str(g["passed"]),
+            f"{g['pass_rate']:.6f}" if g.get("pass_rate") is not None else "",
+            f"{g['elapsed_seconds_mean']:.6f}" if g.get("elapsed_seconds_mean") is not None else "",
+            f"{g['elapsed_seconds_stdev']:.6f}" if g.get("elapsed_seconds_stdev") is not None else "",
+        ]))
+    return "\n".join(rows) + "\n"
+
+
+def _render_csv_per_task(summary: Mapping[str, Any]) -> str:
+    """Per-task × per-group CSV — one row per (task, group)."""
+    rows = ["label,task_id,attempts,passed,pass_rate,elapsed_seconds_mean,elapsed_seconds_stdev"]
+    for label, g in summary["groups"].items():
+        for task_id, t in sorted(g.get("per_task", {}).items()):
+            rows.append(",".join([
+                _csv_escape(label),
+                _csv_escape(task_id),
+                str(t["attempts"]),
+                str(t["passed"]),
+                f"{t['pass_rate']:.6f}" if t.get("pass_rate") is not None else "",
+                f"{t['elapsed_seconds_mean']:.6f}" if t.get("elapsed_seconds_mean") is not None else "",
+                f"{t['elapsed_seconds_stdev']:.6f}" if t.get("elapsed_seconds_stdev") is not None else "",
+            ]))
+    return "\n".join(rows) + "\n"
+
+
+def _csv_escape(s: str) -> str:
+    """Minimal CSV escaping — wrap in quotes if commas/quotes/newlines."""
+    if any(c in s for c in (",", '"', "\n", "\r")):
+        return '"' + s.replace('"', '""') + '"'
+    return s
+
+
+# ── SVG renderers (pure-string, no matplotlib) ────────────────────────
+
+
+def _render_svg_bar(summary: Mapping[str, Any]) -> str:
+    """Pass-rate bar chart per (backend, model)."""
+    groups = summary["groups"]
+    if not groups:
+        return _svg_empty("no groups to chart")
+    labels = list(groups.keys())
+    rates = [groups[k].get("pass_rate") or 0.0 for k in labels]
+    bar_w = 60
+    bar_gap = 20
+    margin_l = 80
+    margin_t = 40
+    margin_b = 80
+    chart_h = 200
+    width = margin_l + len(labels) * (bar_w + bar_gap) + 20
+    height = margin_t + chart_h + margin_b
+
+    out: list[str] = []
+    out.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">')
+    out.append(f'<text x="{margin_l}" y="20" font-family="sans-serif" font-size="14" font-weight="600">Pass rate per (backend, model)</text>')
+    # Y-axis ticks at 0%, 50%, 100%.
+    for pct, tick in [(0.0, "0%"), (0.5, "50%"), (1.0, "100%")]:
+        y = margin_t + chart_h - pct * chart_h
+        out.append(f'<line x1="{margin_l}" y1="{y}" x2="{width - 10}" y2="{y}" stroke="#ddd"/>')
+        out.append(f'<text x="{margin_l - 5}" y="{y + 4}" text-anchor="end" font-family="sans-serif" font-size="11">{tick}</text>')
+    for i, (label, rate) in enumerate(zip(labels, rates)):
+        x = margin_l + i * (bar_w + bar_gap)
+        bar_h = rate * chart_h
+        y = margin_t + chart_h - bar_h
+        out.append(f'<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" fill="#4a7" stroke="#272"/>')
+        # Label below bar (rotated for readability if many groups).
+        text_x = x + bar_w / 2
+        text_y = margin_t + chart_h + 15
+        out.append(
+            f'<text x="{text_x}" y="{text_y}" text-anchor="end" '
+            f'transform="rotate(-30 {text_x} {text_y})" '
+            f'font-family="sans-serif" font-size="11">{_html_escape(label)}</text>'
+        )
+        # Percentage label above bar.
+        out.append(
+            f'<text x="{text_x}" y="{y - 4}" text-anchor="middle" '
+            f'font-family="sans-serif" font-size="11">{rate*100:.0f}%</text>'
+        )
+    out.append("</svg>")
+    return "\n".join(out) + "\n"
+
+
+def _render_svg_histogram(summary: Mapping[str, Any]) -> str:
+    """Per-dimension judge-rating histogram (across all groups)."""
+    judge = summary.get("judge") or {}
+    dims = judge.get("dimensions") or []
+    if not dims:
+        return _svg_empty("no judge dimensions")
+
+    # Collect per-dimension rating counts (1..5).
+    counts: dict[str, list[int]] = {d: [0, 0, 0, 0, 0] for d in dims}
+    for label, g in judge.get("groups", {}).items():
+        for d in dims:
+            pd = g["per_dimension"].get(d) or {}
+            n = pd.get("n", 0)
+            mean = pd.get("mean")
+            if mean is None or n == 0:
+                continue
+            # Without raw values we approximate by spreading n attempts
+            # around the mean. Good enough for display; exact counts
+            # would require re-iterating attempts. Simplest: place all
+            # n at round(mean).
+            bucket = max(1, min(5, round(mean)))
+            counts[d][bucket - 1] += n
+
+    cell_w = 30
+    cell_h = 20
+    margin_l = 140
+    margin_t = 40
+    width = margin_l + 5 * cell_w + 20
+    height = margin_t + len(dims) * (cell_h + 10) + 40
+
+    out: list[str] = []
+    out.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">')
+    out.append(f'<text x="20" y="20" font-family="sans-serif" font-size="14" font-weight="600">Judge rating distribution per dimension</text>')
+
+    max_count = max(
+        (max(counts[d]) for d in dims if max(counts[d]) > 0),
+        default=1,
+    )
+
+    for di, d in enumerate(dims):
+        y = margin_t + di * (cell_h + 10)
+        out.append(f'<text x="{margin_l - 5}" y="{y + cell_h / 2 + 4}" text-anchor="end" font-family="sans-serif" font-size="11">{_html_escape(d)}</text>')
+        for ri in range(5):
+            x = margin_l + ri * cell_w
+            c = counts[d][ri]
+            intensity = c / max_count if max_count else 0
+            shade = int(220 - intensity * 180)
+            out.append(f'<rect x="{x}" y="{y}" width="{cell_w}" height="{cell_h}" fill="rgb({shade},{shade},{shade + 20 if shade + 20 < 255 else 255})" stroke="#888"/>')
+            if c > 0:
+                fg = "#fff" if intensity > 0.5 else "#222"
+                out.append(f'<text x="{x + cell_w/2}" y="{y + cell_h/2 + 4}" text-anchor="middle" font-family="sans-serif" font-size="10" fill="{fg}">{c}</text>')
+    # X-axis legend (1..5).
+    legend_y = margin_t + len(dims) * (cell_h + 10) + 14
+    for ri in range(5):
+        x = margin_l + ri * cell_w + cell_w / 2
+        out.append(f'<text x="{x}" y="{legend_y}" text-anchor="middle" font-family="sans-serif" font-size="11">{ri+1}</text>')
+    out.append("</svg>")
+    return "\n".join(out) + "\n"
+
+
+def _render_svg_forest(summary: Mapping[str, Any]) -> str:
+    """A/B forest plot for verdict pairs."""
+    out: list[str] = []
+    deterministic_pairs = (summary.get("verdicts") or {}).get("pairwise", [])
+    judge_pairs = ((summary.get("judge") or {}).get("pairwise")) or []
+    rows: list[tuple[str, str, str, str]] = []  # (metric, a, b, verdict)
+    for p in deterministic_pairs:
+        for metric in ("pass_rate_verdict", "elapsed_seconds_verdict",
+                       "failed_commands_verdict", "human_interventions_verdict"):
+            rows.append((metric.replace("_verdict", ""), p["a"], p["b"], p[metric]))
+    for p in judge_pairs:
+        for dim, v in (p.get("calibrated_judge_verdicts") or {}).items():
+            rows.append((f"judge:{dim}", p["a"], p["b"], v))
+
+    if not rows:
+        return _svg_empty("no verdicts to chart")
+
+    row_h = 22
+    margin_l = 220
+    margin_t = 40
+    chart_w = 300
+    width = margin_l + chart_w + 200
+    height = margin_t + len(rows) * row_h + 30
+
+    out.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">')
+    out.append(f'<text x="20" y="20" font-family="sans-serif" font-size="14" font-weight="600">Verdict forest plot</text>')
+    center = margin_l + chart_w / 2
+    # Center vertical line (the "no winner" axis).
+    out.append(f'<line x1="{center}" y1="{margin_t}" x2="{center}" y2="{margin_t + len(rows) * row_h}" stroke="#888" stroke-dasharray="3,3"/>')
+    out.append(f'<text x="{margin_l}" y="{margin_t - 5}" font-family="sans-serif" font-size="11">A wins ←</text>')
+    out.append(f'<text x="{margin_l + chart_w}" y="{margin_t - 5}" text-anchor="end" font-family="sans-serif" font-size="11">→ B wins</text>')
+
+    for ri, (metric, a, b, verdict) in enumerate(rows):
+        y = margin_t + ri * row_h + row_h / 2
+        out.append(f'<text x="{margin_l - 5}" y="{y + 4}" text-anchor="end" font-family="sans-serif" font-size="11">{_html_escape(metric)}</text>')
+        if verdict == "A":
+            x = margin_l + chart_w / 4
+            out.append(f'<circle cx="{x}" cy="{y}" r="6" fill="#27a"/>')
+            out.append(f'<text x="{margin_l + chart_w + 5}" y="{y + 4}" font-family="sans-serif" font-size="11">{_html_escape(a)}</text>')
+        elif verdict == "B":
+            x = margin_l + 3 * chart_w / 4
+            out.append(f'<circle cx="{x}" cy="{y}" r="6" fill="#27a"/>')
+            out.append(f'<text x="{margin_l + chart_w + 5}" y="{y + 4}" font-family="sans-serif" font-size="11">{_html_escape(b)}</text>')
+        else:
+            out.append(f'<circle cx="{center}" cy="{y}" r="4" fill="#aaa"/>')
+            out.append(f'<text x="{margin_l + chart_w + 5}" y="{y + 4}" font-family="sans-serif" font-size="11" fill="#888">directional</text>')
+    out.append("</svg>")
+    return "\n".join(out) + "\n"
+
+
+def _svg_empty(msg: str) -> str:
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="60" viewBox="0 0 400 60">'
+        f'<text x="20" y="35" font-family="sans-serif" font-size="12" fill="#888">{_html_escape(msg)}</text>'
+        f'</svg>\n'
+    )
+
+
+# ── Markdown enhancement (judge section) ──────────────────────────────
+
+
+def _render_markdown_judge_section(summary: Mapping[str, Any]) -> list[str]:
+    """Append a judge section to the existing markdown, if judge data exists."""
+    judge = summary.get("judge")
+    if not judge:
+        return []
+    lines: list[str] = []
+    lines.append("---")
+    lines.append("")
+    lines.append("## Judge ratings (secondary signal)")
+    lines.append("")
+    lines.append(
+        "> Judge is secondary. Uncalibrated dimensions are shown for "
+        "reviewer awareness but never declare a winner. "
+        "Deterministic-first ordering enforced — see `summary.judge.note`."
+    )
+    lines.append("")
+    threshold = judge.get("threshold")
+    if threshold is not None:
+        lines.append(f"Spearman threshold: `{threshold}`")
+        lines.append("")
+    cal_dims = set(judge["calibrated_dimensions"])
+    header = ["Candidate"] + [
+        f"{d} {'[calibrated]' if d in cal_dims else '[uncalibrated]'}"
+        for d in judge["dimensions"]
+    ]
+    lines.append("| " + " | ".join(header) + " |")
+    lines.append("|" + "|".join(["---"] * len(header)) + "|")
+    for label, g in judge["groups"].items():
+        row = [f"`{label}`"]
+        for d in judge["dimensions"]:
+            pd = g["per_dimension"].get(d) or {}
+            n = pd.get("n", 0)
+            mean = pd.get("mean")
+            stdev = pd.get("stdev")
+            if mean is None or n == 0:
+                row.append("—")
+            else:
+                row.append(f"{_fmt_num(mean)} ± {_fmt_num(stdev)} (n={n})")
+        lines.append("| " + " | ".join(row) + " |")
+    lines.append("")
+    # Calibrated-judge verdicts (or the D6 terminal-state paragraph
+    # when none of the dimensions cleared the threshold). Surface
+    # the paragraph independently of ``judge['pairwise']`` because
+    # the pairwise list is only built when ``calibrated_dimensions``
+    # is non-empty — without this surfacing-on-empty path the D6
+    # report state was unreachable (the bug fixed here).
+    cal_list = judge["calibrated_dimensions"]
+    if not cal_list:
+        lines.append("### Calibrated-judge verdicts")
+        lines.append("")
+        lines.append(
+            "_Zero calibrated dimensions — no calibrated-judge "
+            "verdicts to declare. Raw ratings above remain "
+            "advisory-only. This is spec.md D6's "
+            "zero-dimensions-calibrated terminal state: a valid "
+            "completed outcome of the empirical research question, "
+            "not a build failure. Maintainer recovery options: "
+            "revise the rubric (new `rubric-default-vN.md`), try a "
+            "different judge model, or accept the negative result "
+            "as advisory-only._"
+        )
+        lines.append("")
+    elif judge.get("pairwise"):
+        lines.append("### Calibrated-judge verdicts")
+        lines.append("")
+        header = ["A", "B"] + [f"judge:{d}" for d in cal_list]
+        lines.append("| " + " | ".join(header) + " |")
+        lines.append("|" + "|".join(["---"] * len(header)) + "|")
+        for pair in judge["pairwise"]:
+            row = [f"`{pair['a']}`", f"`{pair['b']}`"]
+            for d in cal_list:
+                v = pair["calibrated_judge_verdicts"].get(d, "directional")
+                row.append(_fmt_verdict_label(v, pair["a"], pair["b"]))
+            lines.append("| " + " | ".join(row) + " |")
+        lines.append("")
+    return lines

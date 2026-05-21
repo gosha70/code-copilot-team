@@ -121,6 +121,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Aggregate a run directory into a Markdown + JSON report (Phase 1+).",
     )
     p_report.add_argument("--run-dir", required=True, type=Path)
+    p_report.add_argument(
+        "--html",
+        action="store_true",
+        help="Also emit report.html + static-SVG charts (additive, no JS, no new deps).",
+    )
+    p_report.add_argument(
+        "--csv",
+        action="store_true",
+        help="Also emit report-by-model.csv + report-per-task.csv (additive).",
+    )
+    p_report.add_argument(
+        "--calibrated-dimensions",
+        type=Path,
+        default=None,
+        help="Path to <name>.calibrated-dimensions.json from `./scripts/benchmark calibrate` — activates calibrated-judge verdicts in the report.",
+    )
+    p_report.add_argument(
+        "--judge-output-name",
+        default="judge.json",
+        help="Filename of the judge output per attempt directory (default judge.json).",
+    )
 
     # ── judge ─────────────────────────────────────────────────────────
     p_judge = sub.add_parser(
@@ -396,6 +417,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
+    # New flags (sub-issues #50/#51) are kwargs to render_report;
+    # backwards-compat: legacy callers without these flags get the
+    # original report.md + report.json output unchanged.
     if not args.run_dir.exists():
         print(f"benchmark: run-dir not found: {args.run_dir}", file=sys.stderr)
         return EXIT_USAGE
@@ -403,7 +427,13 @@ def _cmd_report(args: argparse.Namespace) -> int:
     from .report import render_report
 
     try:
-        report_path = render_report(args.run_dir)
+        report_path = render_report(
+            args.run_dir,
+            html=getattr(args, "html", False),
+            csv=getattr(args, "csv", False),
+            calibrated_dimensions_path=getattr(args, "calibrated_dimensions", None),
+            judge_output_name=getattr(args, "judge_output_name", "judge.json"),
+        )
     except FileNotFoundError as exc:
         print(f"benchmark: {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -411,7 +441,13 @@ def _cmd_report(args: argparse.Namespace) -> int:
         print(f"benchmark: report failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return EXIT_RUNTIME
 
-    print(json.dumps({"report_md": str(report_path)}, indent=2))
+    payload: dict = {"report_md": str(report_path)}
+    if getattr(args, "html", False):
+        payload["report_html"] = str(args.run_dir / "report.html")
+    if getattr(args, "csv", False):
+        payload["report_csv_by_model"] = str(args.run_dir / "report-by-model.csv")
+        payload["report_csv_per_task"] = str(args.run_dir / "report-per-task.csv")
+    print(json.dumps(payload, indent=2))
     return EXIT_OK
 
 

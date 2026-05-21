@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "name": "cct-instance-v1-agent-preliminary",
+  "selected_at": "2026-05-21T02:33:54Z",
+  "selection_command": "./scripts/benchmark calibration-corpus --target-n 50 --axes model,repeated-runs --name cct-instance-v1-agent-preliminary --runs-root runs --output-dir benchmarks/calibration",
+  "runs_root": "/Users/gosha/dev/repo/code-copilot-team/runs",
+  "axes": [
+    "model",
+    "repeated-runs"
+  ],
+  "target_n": 50,
+  "actual_n": 50,
+  "candidate_pool_size": 1171,
+  "axis_summary": {
+    "model": {
+      "": 3,
+      "RedHatAI/Qwen3-Coder-Next-NVFP4": 10,
+      "phi-3": 10,
+      "qwen2.5-coder:7b": 9,
+      "qwen3.6:27b": 9,
+      "sonnet": 9
+    },
+    "repeated-runs": {
+      "tuples_with_>=2_runs": 10,
+      "details": {
+        "cpp/all-your-base / claude-code / phi-3": 2,
+        "cpp/allergies / claude-code / phi-3": 2,
+        "cpp/bank-account / claude-code / phi-3": 2,
+        "cpp/binary-search-tree / claude-code / phi-3": 2,
+        "cpp/circular-buffer / claude-code / phi-3": 2,
+        "psf__requests-1142 / stub / ": 3,
+        "python/bowling / claude-code / RedHatAI/Qwen3-Coder-Next-NVFP4": 10,
+        "python/bowling / claude-code / qwen2.5-coder:7b": 9,
+        "python/bowling / claude-code / qwen3.6:27b": 9,
+        "python/bowling / claude-code / sonnet": 9
+      }
+    }
+  },
+  "skipped": {
+    "20260515T152950Z-compare-aider-polyglot-001/20260515T152951Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001": "run-record.json missing",
+    "20260515T153146Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001": "run-record.json missing",
+    "20260515T162338Z-aider-polyglot-claude-code-001/python-bowling/attempt-02-run-001": "run-record.json missing",
+    "20260515T175849Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001": "run-record.json missing",
+    "20260515T180943Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001": "run-record.json missing",
+    "20260515T183347Z-compare-aider-polyglot-001/20260515T183347Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-003": "run-record.json missing",
+    "20260516T140507Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001": "run-record.json missing",
+    "20260516T160208Z-aider-polyglot-claude-code-001/python-bowling/attempt-02-run-001": "run-record.json missing",
+    "20260516T161715Z-aider-polyglot-claude-code-001/python-bowling/attempt-02-run-001": "run-record.json missing",
+    "20260516T163043Z-aider-polyglot-claude-code-001/python-bowling/attempt-02-run-001": "run-record.json missing",
+    "20260517T033501Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001": "run-record.json missing",
+    "20260517T142720Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001": "run-record.json missing",
+    "20260518T124558Z-swe-bench-verified-stub-001/psf__requests-1142/attempt-01-run-001": "run-record.json missing",
+    "20260518T193450Z-compare-aider-polyglot-001/20260518T193450Z-aider-polyglot-claude-code-001/cpp-perfect-numbers/attempt-01-run-001": "run-record.json missing",
+    "20260518T193608Z-compare-aider-polyglot-001/20260518T193608Z-aider-polyglot-claude-code-001/go-crypto-square/attempt-01-run-001": "run-record.json missing"
+  },
+  "labeler": "agent-preliminary",
+  "disclosure": "Labels generated heuristically by an LLM agent for structural-AC closure of #52. NOT human-reviewed. judge.json files in selected attempt directories are likewise agent-fabricated, NOT real judge invocations. Replace with human labels + real judge runs for methodologically valid calibration.",
+  "judge_outputs_local_only": true,
+  "judge_outputs_disclosure": "The judge.json files referenced by this corpus's run_paths were fabricated heuristically by an LLM agent (not a real claude-code-judge invocation) and placed into the maintainer's local runs/ archive. runs/ is gitignored \u2014 those judge.json files are NOT committed in this PR. A fresh checkout cannot reproduce these calibration values; the recovery path (relabel + real judge run + recalibrate) does not need them anyway."
+}
