@@ -105,20 +105,24 @@ id_expected() {
 # Case-insensitive on keyword to catch a `closes #34` typo too.
 PATTERN='([Cc]loses|[Ff]ixes|[Rr]esolves)[[:space:]]+#[0-9]+'
 
-# strip_code_spans — drop markdown code spans before scanning so the
-# audit matches GitHub's actual close-keyword parser behavior:
-# inline-backtick spans (`...`) and triple-backtick fenced blocks are
-# rendered as code by GitHub and are NOT parsed for close keywords.
-# Documenting an issue via `` `Closes #X` `` is the safe pattern the
-# memory recommends; the audit must respect that, not punish it.
-strip_code_spans() {
-  awk '
-    BEGIN { in_fence = 0 }
-    /^```/ { in_fence = !in_fence; print ""; next }
-    in_fence { print ""; next }
-    { gsub(/`[^`]*`/, ""); print }
-  '
-}
+# Scanning model (corrected 2026-05-21 after PR #54 incident).
+# GitHub's close-keyword parser in COMMIT MESSAGES fires on every
+# `(Closes|Fixes|Resolves) #N` token in the raw text — including
+# tokens that appear inside inline-backtick code spans (`...`) and
+# inside triple-backtick fenced code blocks. The "backtick to be
+# safe" guidance that the v1 of this script encoded was empirically
+# wrong: PR #54's merge closed epic #34 via a commit whose ONLY
+# `Closes #34` references were backticked or fenced.
+#
+# Consequence: the audit must NOT pre-strip markdown code spans
+# before grepping. Every match in the raw text is a live close-
+# keyword and must have its ID in --closes. The defense for a
+# documentation reference is to REPHRASE rather than backtick —
+# e.g. write "the PR that closes #34" (no close-keyword prefix) or
+# "the close-keyword for #34" instead of "Closes #34".
+#
+# The empirical test is the only authoritative source for parser
+# behavior; the playbook documents how to run one before assuming.
 
 # scan_line — iterate over EVERY close-keyword match on a line (not
 # just the first one) and check each match's own ID against --closes.
@@ -165,7 +169,7 @@ ANY_FAIL_REASON=""
 # ── Check 1: commit-message close-keyword audit ───────────────────────
 
 echo "=== pre-pr-check: commit-message close-keyword audit ==="
-COMMIT_BODIES="$(git log "${BASE}..HEAD" --format='COMMIT %h%n%B%n---END---' | strip_code_spans)"
+COMMIT_BODIES="$(git log "${BASE}..HEAD" --format='COMMIT %h%n%B%n---END---')"
 PRE_SCAN_OK="$OVERALL_OK"
 current_sha=""
 while IFS= read -r line; do
@@ -178,7 +182,7 @@ while IFS= read -r line; do
     continue
   fi
   if [[ "$line" =~ $PATTERN ]]; then
-    scan_line "$line" "commit $current_sha" "commit messages reference unintended issue IDs (backtick them, or add the ID to --closes if intended)"
+    scan_line "$line" "commit $current_sha" "commit messages reference unintended issue IDs (rephrase the prose to drop the close-keyword, or add the ID to --closes if intended — backticking does NOT save you for commit messages, see the playbook)"
   fi
 done <<< "$COMMIT_BODIES"
 if [[ "$OVERALL_OK" -eq "$PRE_SCAN_OK" ]]; then
@@ -205,15 +209,15 @@ elif [[ -z "$(tr -d '[:space:]' < "$BODY_FILE")" ]]; then
   ANY_FAIL_REASON+="body file empty; "
 else
   echo "  [PASS] body file exists, readable, non-empty: $BODY_FILE ($(wc -c < "$BODY_FILE" | tr -d ' ') bytes)"
-  # Scan body for close keywords (after stripping markdown code spans
-  # — see strip_code_spans rationale above). Every close-keyword
-  # match on a line (not just the first one) is checked against
+  # Scan body for close keywords — strict mode (NO code-span
+  # stripping; see the "Scanning model" comment block above for
+  # why). Every close-keyword match on a line is checked against
   # --closes via scan_line.
   while IFS= read -r line; do
     if [[ "$line" =~ $PATTERN ]]; then
       scan_line "$line" "body" "body references unintended issue IDs"
     fi
-  done < <(strip_code_spans < "$BODY_FILE")
+  done < "$BODY_FILE"
 fi
 echo
 
@@ -264,5 +268,5 @@ fi
 
 echo "=== pre-pr-check: FAILED ===" >&2
 echo "Reason(s): $ANY_FAIL_REASON" >&2
-echo "Fix the offending references (backtick them, rephrase them, or add the ID to --closes), then re-run." >&2
+echo "Fix the offending references (rephrase the prose to drop the close-keyword, or add the ID to --closes if intended). Backticking does NOT shield commit messages from GitHub's parser — see knowledge/wiki/playbooks/pre-pr-close-keyword-audit.md for the empirical finding." >&2
 exit 1
