@@ -15,6 +15,12 @@ on:
 # (init -> run -> score -> report) without invoking any LLM. Wall-time
 # target: <90s on GitHub free runners.
 
+# Least-privilege GITHUB_TOKEN: this workflow only reads the repo
+# (checkout + run tests + read generated files). No write scopes
+# needed. Mirrors wiki-lint.yml / sync-check.yml.
+permissions:
+  contents: read
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
