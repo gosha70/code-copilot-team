@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Tool-name normalization map (DATA, not code). Maps each copilot's raw",
+    "tool name to a canonical cross-copilot id. Keys matched case-insensitively;",
+    "an unmapped name falls through to its lowercased form. Extend here."
+  ],
+  "map": {
+    "bash": "bash",
+    "execute_bash": "bash",
+    "shell": "bash",
+    "run_command": "bash",
+    "read": "file_read",
+    "fsread": "file_read",
+    "read_file": "file_read",
+    "view": "file_read",
+    "write": "file_write",
+    "fswrite": "file_write",
+    "write_file": "file_write",
+    "create_file": "file_write",
+    "edit": "file_edit",
+    "str_replace": "file_edit",
+    "apply_patch": "file_edit",
+    "multiedit": "file_edit",
+    "glob": "file_search",
+    "grep": "file_search",
+    "search": "file_search",
+    "codebase_search": "file_search",
+    "webfetch": "web_fetch",
+    "websearch": "web_search",
+    "fetch": "web_fetch",
+    "task": "subagent",
+    "agent": "subagent",
+    "notebookedit": "notebook_edit",
+    "todowrite": "todo_write",
+    "exitplanmode": "plan_exit"
+  }
+}

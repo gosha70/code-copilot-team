@@ -1,0 +1,127 @@
+name: session-analytics-smoke
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/session-analytics'
+      - 'scripts/session_analytics/**'
+      - 'studio/**'
+      - 'specs/session-analytics/**'
+      - '.github/workflows/session-analytics-smoke.yml'
+  workflow_dispatch: {}
+
+# Smoke test: run the unittest suite (SQLite, zero deps), then exercise the
+# real PostgreSQL dialect by ingesting the committed fixture into a postgres
+# service container and asserting the row counts. No LLM is invoked.
+# Wall-time target: <90s on GitHub free runners.
+
+# Least-privilege GITHUB_TOKEN: read-only (checkout + tests + read output).
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cct
+          POSTGRES_PASSWORD: cct
+          POSTGRES_DB: session_analytics
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cct -d session_analytics"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SA_DSN: "postgresql://cct:cct@localhost:5432/session_analytics"
+      FIXTURE_ROOT: "scripts/session_analytics/tests/fixtures/claude_code"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Install optional deps FIRST so the kuzu/fastapi-gated tests actually
+      # run here (they skip when the package is absent).
+      - name: Install psycopg + kuzu + fastapi (Postgres/graph/API paths)
+        run: python3 -m pip install "psycopg[binary]>=3.1" "kuzu>=0.6" "fastapi>=0.110" "httpx>=0.27"
+
+      - name: Run unittest suite (graph + API tests included)
+        run: |
+          PYTHONPATH=scripts:. python3 -m unittest discover \
+            -s scripts/session_analytics/tests -v
+
+      - name: List adapters
+        run: ./scripts/session-analytics list
+
+      - name: Ingest fixture into PostgreSQL (full)
+        run: |
+          ./scripts/session-analytics ingest \
+            --copilot claude-code --root "$FIXTURE_ROOT" \
+            --dsn "$SA_DSN" --full
+
+      - name: Re-ingest must be idempotent
+        run: |
+          ./scripts/session-analytics ingest \
+            --copilot claude-code --root "$FIXTURE_ROOT" \
+            --dsn "$SA_DSN" --full
+
+      - name: Assert store counts
+        run: |
+          ./scripts/session-analytics doctor --dsn "$SA_DSN" > doctor.json
+          cat doctor.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("doctor.json"))["store"]
+          assert d["dsn_dialect"] == "postgres", d
+          assert d["sessions"] == 1, d            # exactly one, not duplicated
+          assert d["turns"] == 6, d
+          assert d["tool_calls"] == 2, d
+          assert d["errors"] == 1, d
+          print("OK", d)
+          PY
+
+      - name: Build + assert the Kùzu graph
+        run: |
+          ./scripts/session-analytics graph --rebuild \
+            --dsn "$SA_DSN" --db-path "$RUNNER_TEMP/kuzu" > graph.json
+          cat graph.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("graph.json"))["node_counts"]
+          assert d["Session"] == 1, d
+          assert d["Turn"] == 6, d
+          assert d["ToolInvocation"] == 2, d
+          assert d["FileNode"] == 1, d
+          assert d["ErrorNode"] == 1, d
+          print("OK", d)
+          PY
+
+  studio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build the Studio (type-check + production build)
+        working-directory: studio
+        run: |
+          npm install
+          npm run build
