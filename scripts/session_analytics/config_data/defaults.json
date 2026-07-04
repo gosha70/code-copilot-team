@@ -1,0 +1,33 @@
+{
+  "_comment": [
+    "session_analytics default configuration — the single source of schema",
+    "default values. User configuration lives in the repo-root .env (shared by",
+    "the CLI and the Studio config page). Override precedence: defaults.json <",
+    ".env < real env vars < CLI flags. See config.py.",
+    "'judge.default'/'by_copilot': the DEFAULT judge is local-only Ollama",
+    "(model:'' = the backend's default model, llama3), so no session content",
+    "leaves the machine unless the user explicitly opts in. Pick a cloud judge",
+    "per the .env (CCT_SA_JUDGE_BACKEND/MODEL/BASE_URL) or",
+    "`--judge <family>:<model>` — e.g. claude-code:sonnet for Anthropic via the",
+    "local claude CLI, or openai:<model> for LM Studio / vLLM / any",
+    "OpenAI-compatible endpoint."
+  ],
+  "sources": {
+    "claude-code": "~/.claude/projects",
+    "aider": "~"
+  },
+  "dsn": "",
+  "kuzu_path": "",
+  "redaction_mode": "code",
+  "judge": {
+    "default": { "backend": "ollama", "model": "" },
+    "by_copilot": {
+      "claude-code": { "backend": "ollama", "model": "" },
+      "aider": { "backend": "ollama", "model": "" }
+    },
+    "workers": 2,
+    "ollama_url": "http://localhost:11434",
+    "base_url": "",
+    "api_key": ""
+  }
+}

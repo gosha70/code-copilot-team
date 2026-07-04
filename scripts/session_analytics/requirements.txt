@@ -1,0 +1,16 @@
+# session_analytics Python dependencies.
+#
+# The repo has no root pyproject; deps are declared per-application. Install
+# with:  pip install -r scripts/session_analytics/requirements.txt
+#
+# SQLite (stdlib) backs the unit tests, so the test suite needs ZERO deps —
+# config is JSON (stdlib) to keep `python3 -m unittest discover` setup-free.
+# Postgres (psycopg) + Kùzu + FastAPI are needed for real ingestion / graph /
+# serving.
+
+psycopg[binary]>=3.1
+kuzu>=0.6
+fastapi>=0.110
+uvicorn[standard]>=0.29
+httpx>=0.27
+mcp>=1.0

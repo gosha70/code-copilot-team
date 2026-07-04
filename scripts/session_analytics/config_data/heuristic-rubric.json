@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "Heuristic-labeling rubric (DATA, not code). The judge produces one row",
+    "per turn with these labels. bool_labels are true/false/null (null =",
+    "judge couldn't decide / inapplicable). 'sentiment' is one of the enum",
+    "values; 'interaction_quality' is an integer in [quality_min, quality_max].",
+    "The prompt_template placeholders {role} {prev_text} {text} are filled per",
+    "turn. Keep the JSON-shape instruction in sync with bool_labels."
+  ],
+  "name": "heuristic-v1",
+  "bool_labels": [
+    "user_corrects_agent",
+    "user_asks_question",
+    "user_gives_command",
+    "agent_asks_clarification",
+    "user_changes_approach",
+    "agent_changes_approach",
+    "has_misunderstanding",
+    "response_helpful",
+    "rework_detected",
+    "phase_violation"
+  ],
+  "sentiment_values": ["POSITIVE", "NEUTRAL", "NEGATIVE", "FRUSTRATED"],
+  "quality_min": 1,
+  "quality_max": 5,
+  "prompt_template": "You are labeling one turn of a developer<->AI-coding-agent session for process-mining analytics. Output ONLY a JSON object, no prose.\n\nThe turn role is: {role}\nPrevious turn (context):\n<<<\n{prev_text}\n>>>\nThis turn:\n<<<\n{text}\n>>>\n\nReturn a JSON object with EXACTLY these keys:\n- user_corrects_agent (bool): the user explicitly corrects the agent's behavior/output.\n- user_asks_question (bool): the user asks for clarification or explanation.\n- user_gives_command (bool): the user gives a direct implementation instruction.\n- agent_asks_clarification (bool): the agent asks before proceeding.\n- user_changes_approach (bool): the user pivots strategy mid-session.\n- agent_changes_approach (bool): the agent self-corrects or tries a different approach.\n- has_misunderstanding (bool): the agent misinterprets user intent.\n- response_helpful (bool): the turn advances the task.\n- rework_detected (bool): previously completed work is being redone.\n- phase_violation (bool): the agent acts outside its declared phase (research/plan/build/review).\n- sentiment (string): one of POSITIVE, NEUTRAL, NEGATIVE, FRUSTRATED.\n- interaction_quality (integer 1-5): overall turn quality.\n\nA label that does not apply to this role should be false. Respond with only the JSON object."
+}

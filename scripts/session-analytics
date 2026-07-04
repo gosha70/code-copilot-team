@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# session-analytics — entrypoint for the copilot session analytics pipeline.
+#
+# Subcommands:
+#   session-analytics list                       — list registered copilot adapters.
+#   session-analytics ingest [--copilot ...]      — ingest sessions into PostgreSQL.
+#   session-analytics doctor                      — report store counts + sources.
+#   session-analytics graph   [--rebuild]         — build the Kùzu knowledge graph (M2).
+#   session-analytics analyze --judge ...         — LLM-as-Judge heuristic pass (M3).
+#   session-analytics kpis                         — compute session KPI rollups (M3).
+#   session-analytics mcp                          — run the MCP stdio server (M4).
+#   session-analytics serve                        — launch FastAPI + Next.js Studio (M6).
+#
+# Sets PYTHONPATH so ``session_analytics`` resolves as a top-level package,
+# then exec's python3 -m session_analytics with the args.
+#
+# See specs/session-analytics/spec.md and plan.md.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Prefer a project virtualenv if one exists, so optional deps (kuzu, psycopg,
+# fastapi, …) resolve without polluting the system interpreter. Falls back to
+# system python3 for the zero-install path (ingest/doctor on SQLite).
+PY="python3"
+for cand in \
+  "${REPO_DIR}/scripts/session_analytics/.venv/bin/python" \
+  "${REPO_DIR}/.venv/bin/python"; do
+  if [ -x "$cand" ]; then PY="$cand"; break; fi
+done
+
+exec env PYTHONPATH="${REPO_DIR}/scripts:${REPO_DIR}${PYTHONPATH:+:${PYTHONPATH}}" \
+     PYTHONUNBUFFERED=1 \
+  "$PY" -m session_analytics "$@"

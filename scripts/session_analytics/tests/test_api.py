@@ -1,0 +1,105 @@
+# API tests via FastAPI TestClient. Run only when fastapi is importable (CI
+# installs it for the API job); skips are logged, never silently passed.
+
+from __future__ import annotations
+
+import importlib.util
+import unittest
+
+from session_analytics import constants as C
+from session_analytics.ingest.pipeline import ingest
+
+from session_analytics.tests.support import CLAUDE_CODE_ROOT, RegistryResetTestCase
+
+_FASTAPI = (
+    importlib.util.find_spec("fastapi") is not None
+    and importlib.util.find_spec("httpx") is not None
+)
+
+
+@unittest.skipUnless(_FASTAPI, "fastapi/httpx not installed; API tests skipped (covered in CI)")
+class TestApi(RegistryResetTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        # Register the full set (adapters + judges) so /api/config reflects the
+        # real judge backends; create_app also calls register_all idempotently.
+        from session_analytics._register import register_all
+        register_all()
+        self.dsn = self.sqlite_dsn()
+        ingest(dsn=self.dsn, copilots=[C.COPILOT_CLAUDE_CODE], root=CLAUDE_CODE_ROOT, full=True)
+        from fastapi.testclient import TestClient
+
+        from session_analytics.api.server import create_app
+
+        self.client = TestClient(create_app(self.dsn))
+
+    def test_health(self) -> None:
+        r = self.client.get("/api/health")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["status"], "ok")
+
+    def test_dashboard_kpis(self) -> None:
+        r = self.client.get("/api/dashboard/kpis")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["totals"]["sessions"], 1)
+
+    def test_sessions_list_and_detail(self) -> None:
+        r = self.client.get("/api/sessions")
+        self.assertEqual(r.status_code, 200)
+        sessions = r.json()["sessions"]
+        self.assertEqual(len(sessions), 1)
+        sid = sessions[0]["id"]
+
+        r = self.client.get(f"/api/sessions/{sid}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.json()["turns"]), 6)
+
+        self.assertEqual(self.client.get("/api/sessions/99999").status_code, 404)
+
+    def test_settings_does_not_leak_dsn(self) -> None:
+        r = self.client.get("/api/settings")
+        self.assertEqual(r.status_code, 200)
+        body = r.text
+        self.assertNotIn(self.dsn, body)  # raw DSN must never be returned
+        self.assertEqual(r.json()["dsn_dialect"], "sqlite")
+
+    def test_test_connection(self) -> None:
+        r = self.client.post("/api/settings/test-connection", json={"dsn": self.dsn})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["ok"])
+        self.assertEqual(r.json()["sessions"], 1)
+
+    def test_get_config(self) -> None:
+        r = self.client.get("/api/config")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("configured", body)
+        keys = {f["key"] for f in body["fields"]}
+        self.assertIn("CCT_SA_DSN", keys)
+        self.assertIn("CCT_SA_JUDGE_API_KEY", keys)
+        # The API-key field is secret → its value is never sent to the browser.
+        apikey = next(f for f in body["fields"] if f["key"] == "CCT_SA_JUDGE_API_KEY")
+        self.assertTrue(apikey["secret"])
+        self.assertEqual(apikey["value"], "")
+        # Privacy AC: the packaged default judge is local-only Ollama.
+        self.assertTrue(body["judge_default"].startswith("ollama"))
+        self.assertIn("openai", body["judge_backends"])
+
+    def test_put_config_drops_blank_secret(self) -> None:
+        from unittest import mock
+
+        captured = {}
+        with mock.patch("session_analytics.config.write_env_file",
+                        side_effect=lambda v, *a, **k: captured.update(v)):
+            r = self.client.put("/api/config", json={"values": {
+                "CCT_SA_DSN": "sqlite:////tmp/y.db",
+                "CCT_SA_JUDGE_API_KEY": "",      # blank secret = unchanged → dropped
+            }})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["ok"])
+        self.assertIn("CCT_SA_DSN", captured)
+        self.assertNotIn("CCT_SA_JUDGE_API_KEY", captured)  # not overwritten with blank
+
+
+if __name__ == "__main__":
+    unittest.main()
