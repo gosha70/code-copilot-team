@@ -146,7 +146,7 @@ for s in "${SKILL_NAMES[@]}"; do
 done
 
 SKILL_COUNT=$(find "$SKILLS_DIR_PATH" -name 'SKILL.md' | wc -l | tr -d ' ')
-assert_eq "exactly 21 skills" "21" "$SKILL_COUNT"
+assert_eq "exactly 23 skills" "23" "$SKILL_COUNT"
 
 # Verify SKILL.md frontmatter has required fields
 for s in "${SKILL_NAMES[@]}"; do
@@ -211,7 +211,7 @@ for t in "${TEMPLATE_TYPES[@]}"; do
 done
 
 TEMPLATE_DIR_COUNT=$(find "$SHARED_DIR/templates" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-assert_eq "exactly 12 template dirs" "12" "$TEMPLATE_DIR_COUNT"
+assert_eq "exactly 13 template dirs" "13" "$TEMPLATE_DIR_COUNT"
 
 # Verify SDD templates exist
 assert_dir_exists "sdd dir exists" "$SHARED_DIR/templates/sdd"
@@ -267,6 +267,18 @@ assert_header "web-dynamic" "$SHARED_DIR/templates/web-dynamic/PROJECT.md" "# Dy
 assert_header "java-tooling" "$SHARED_DIR/templates/java-tooling/PROJECT.md" "# Java Developer Tooling — Annotation Processors, Gradle Plugins & Code Generators"
 assert_header "domain-pack" "$SHARED_DIR/templates/domain-pack/PROJECT.md" "# Domain Pack — Versioned Content Distribution (JVM + Python)"
 assert_header "gradle-plugin" "$SHARED_DIR/templates/gradle-plugin/PROJECT.md" "# Gradle Plugin — Idiomatic \`Plugin<Project>\` with TestKit"
+
+# UI-Enhancement harness add-on bundle (not a project type — no Agent Team section)
+UI_HARNESS="$SHARED_DIR/templates/ui-harness"
+assert_dir_exists "ui-harness dir exists" "$UI_HARNESS"
+assert_header "ui-harness" "$UI_HARNESS/PROJECT.md" "# UI-Enhancement Harness (Add-On)"
+assert_file_exists "ui-harness DESIGN.md starter" "$UI_HARNESS/DESIGN.md"
+assert_file_exists "ui-harness tokens.json starter" "$UI_HARNESS/design/tokens.json"
+assert_file_exists "ui-harness harness/package.json" "$UI_HARNESS/harness/package.json"
+assert_file_exists "ui-harness runner.ts" "$UI_HARNESS/harness/src/runner.ts"
+assert_file_exists "ui-harness audit.ts" "$UI_HARNESS/harness/src/audit.ts"
+assert_file_exists "ui-harness rubric.ts" "$UI_HARNESS/harness/src/rubric.ts"
+assert_file_exists "ui-harness team-review command" "$UI_HARNESS/commands/team-review.md"
 
 # Verify templates contain Agent Team section (structural check)
 for t in "${TEMPLATE_TYPES[@]}"; do
@@ -830,8 +842,8 @@ grep -Eq "rules/\*\.md[[:space:]]+.*Global rules" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists global rules" "$rc"
 
 rc=0
-grep -Eq "skills/[[:space:]]+21 skills" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 21 skills" "$rc"
+grep -Eq "skills/[[:space:]]+23 skills" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 23 skills" "$rc"
 
 rc=0
 grep -Eq "templates/[[:space:]]+11 stacks" "$REPO_DIR/README.md" || rc=1

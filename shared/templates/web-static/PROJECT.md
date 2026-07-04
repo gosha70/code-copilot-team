@@ -73,6 +73,26 @@ npm install -g @playwright/cli@latest
 playwright-cli install --skills
 ```
 
+## Design System & Visual Review
+
+This site uses the **UI-Enhancement harness** to keep the design unique, on-brand,
+and release-grade — not "AI-generated"-looking.
+
+- **Steering bundle**: `DESIGN.md` + `design/tokens.json` at the repo root define the
+  committed art direction and design tokens. Read them before building any UI.
+- **Scaffold once** (if absent), then add `"copilot:review": "cd harness && npm run harness:verify"` to `package.json`:
+  ```bash
+  cp -r ~/.claude/templates/ui-harness/harness \
+        ~/.claude/templates/ui-harness/design \
+        ~/.claude/templates/ui-harness/DESIGN.md .
+  ```
+- **Derive** `DESIGN.md` from the site's domain/brand with the `design-system` skill;
+  override the four defaults (neutral, accent, font, radius) — shipping framework
+  defaults is the AI-slop tell.
+- **Verify** with the `visual-review` skill: `DEV_URL=<your dev url> npm run copilot:review`
+  runs the axe-core WCAG 2.2 AA gate + anti-slop rubric + screenshot critique at
+  375/768/1440. On Claude Code the `visual-reviewer` agent is the critic.
+
 ## Agent Team
 
 ### Roles
@@ -90,7 +110,7 @@ Delegate only when a task is heavily specialized (e.g., complex animation, SEO a
 
 ### Frontend Developer
 Expertise: Astro/Next.js components, Tailwind CSS, responsive design, progressive enhancement, build optimization.
-Constraints: no client-side JS unless essential. Mobile-first breakpoints. Semantic HTML. Components must be accessible (ARIA).
+Constraints: no client-side JS unless essential. Mobile-first breakpoints. Semantic HTML. Components must be accessible (ARIA). Read `DESIGN.md` + the `design-system` skill before building UI; use `design/tokens.json` semantic tokens (never framework defaults).
 
 ### Content & SEO Specialist
 Expertise: content structure, frontmatter schemas, meta tags, Open Graph, structured data (JSON-LD), Lighthouse optimization, accessibility auditing.
@@ -98,4 +118,4 @@ Constraints: every page has title + description + og:image. Alt text on all imag
 
 ### QA Engineer
 Expertise: cross-browser testing, responsive testing, Lighthouse CI, accessibility auditing (axe-core), link validation.
-Constraints: test at all 5 breakpoints. Run Lighthouse after every significant change. Validate HTML semantics. Check all links.
+Constraints: test at all 5 breakpoints. Run Lighthouse after every significant change. Validate HTML semantics. Check all links. Run `npm run copilot:review` (visual-review loop) and resolve findings in `tmp/ui-review/critique-feedback.json`.

@@ -1,0 +1,88 @@
+---
+applyTo: "**/*.tsx,**/*.jsx,**/*.vue,**/*.svelte,**/*.astro,**/*.css,**/DESIGN.md"
+---
+
+
+# Visual Review Loop Protocol
+
+Invoke after UI is built against the `design-system` bundle. Generation alone can't
+be trusted — this loop verifies the *rendered* result against the committed
+`DESIGN.md` and fails the build until the bar is met.
+
+## The loop
+
+```
+build → boot dev server → rubric pre-filter (cheap, deterministic)
+      → axe-core a11y gate (fail-fast)
+      → Playwright screenshot @ 375 / 768 / 1440
+      → CRITIC scores screenshots vs DESIGN.md rubric
+      → triage [Blocker/High/Medium/Nitpick] → write critique-feedback.json
+      → coding agent applies fixes → re-run → check exit criteria
+```
+
+**Deterministic harness + pluggable critic.** The `harness/` runner does the
+identical-for-every-copilot parts (boot, screenshot, axe, rubric pre-filter, emit
+artifacts). The **critic** (aesthetic judgment) is either:
+- **Agent critic** (Claude Code): the `visual-reviewer` agent reads the PNGs
+  directly (a picture is worth 1000 tokens) and scores them.
+- **Runner critic** (any other copilot): the runner calls a vision-LLM (provider,
+  model, key from env) and writes `critique-feedback.json`.
+
+Same rubric, same gates, same exit criteria — only the critic swaps.
+
+## Running it
+
+From the project root: `npm run copilot:review` (wraps `harness/`). It:
+1. runs the a11y + rubric gates; on failure writes `tmp/ui-review/critique-feedback.json`
+   and exits non-zero;
+2. captures screenshots at the three breakpoints;
+3. runs the critic;
+4. exits `0` only when all exit criteria pass (vision critic), or after emitting
+   artifacts for the agent critic to judge.
+
+The coding agent reads `tmp/ui-review/critique-feedback.json` (`{passed,
+critiqueSummary, actionableFixes[]}`), applies the fixes, and re-runs. **Never**
+hand-wave a failing gate — fix the UI.
+
+## The critic rubric (score each; source of truth is DESIGN.md)
+
+Phased, adapted from published design-review agents (OneRedOak, Anthropic
+frontend-design, shiplightai):
+1. **Typography** — modular scale, real hierarchy, committed pairing (no default fonts).
+2. **Spacing & layout** — 4/8pt rhythm, internal ≤ external spacing, deliberate
+   layout grammar (no lone centered column, no cardocalypse).
+3. **Color & theme** — semantic-token discipline, dominant + sharp accent (not evenly
+   distributed), light/dark parity, no banned gradients.
+4. **Hierarchy** — one primary CTA per screen; attention guided by size/weight/space.
+5. **States** — empty/loading/error/success/focus present for every data component.
+6. **Anti-slop flags** — any Step-3 tell from `design-system` present ⇒ automatic fail.
+7. **Domain fit** — does it match the archetype/density locked in DESIGN.md.
+
+## The a11y gate (deterministic, fail-fast)
+
+`@axe-core/playwright` with WCAG 2.2 AA tags (`wcag2a wcag2aa wcag22aa`), **zero
+critical violations** to pass. Cheaper than the vision critic, so it runs first.
+Note: axe covers ~29.5% of WCAG success criteria — passing ≠ accessible; keyboard +
+screen-reader passes remain irreducible. Also verify WCAG 2.2 additions: target size
+≥24×24px, visible ≥2px focus (≥3:1), non-drag alternatives, focus not obscured.
+
+## Exit criteria (combine — don't rely on one)
+
+Stop when **all** hold, else iterate:
+- axe returns **0 critical** violations, and
+- rubric critical items pass, and
+- contrast ≥4.5:1 body / ≥3:1 large+UI at **all** breakpoints, and
+- **zero** anti-slop flags, and
+- within the **iteration cap (3)** — then hand residual [Medium]/[Nitpick] findings
+  to the human rather than thrashing.
+
+Loops thrash without a committed rubric and a stable render environment; both are
+fixed here (rubric = DESIGN.md; env = the pinned `harness/`).
+
+## Graceful degradation
+
+Mirror the `verify-app` rule: **never auto-install Playwright.** If it's absent, run
+an **HTTP-200 smoke only** (the DOM rubric and screenshot critique both need a browser
+page, so they are SKIPPED too) and report the visual pass as **SKIP** — do not block
+on a tool the environment doesn't have. A dead dev server still **FAILS**, so SKIP
+never becomes a false pass.

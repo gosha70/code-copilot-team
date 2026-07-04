@@ -258,9 +258,9 @@ CURSOR_RULES="$ADAPTERS/cursor/.cursor/rules"
 
 assert "cursor rules dir exists" "[[ -d '$CURSOR_RULES' ]]"
 
-# Verify 21 .mdc files (all skills)
+# Verify 23 .mdc files (all skills)
 MDC_COUNT=$(ls "$CURSOR_RULES"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
-assert "exactly 21 .mdc files ($MDC_COUNT)" "[[ $MDC_COUNT -eq 21 ]]"
+assert "exactly 23 .mdc files ($MDC_COUNT)" "[[ $MDC_COUNT -eq 23 ]]"
 
 # Verify always skills have alwaysApply: true
 for mdc in coding-standards copilot-conventions safety copyright-headers origin-confirmation wiki-first-query; do
@@ -332,7 +332,7 @@ assert "instructions dir exists" "[[ -d '$INSTRUCTIONS_DIR' ]]"
 
 # Verify all on-demand rules become instruction files
 ON_DEMAND_COUNT=$(ls "$INSTRUCTIONS_DIR"/*.instructions.md 2>/dev/null | wc -l | tr -d ' ')
-assert "exactly 15 instruction files ($ON_DEMAND_COUNT)" "[[ $ON_DEMAND_COUNT -eq 15 ]]"
+assert "exactly 17 instruction files ($ON_DEMAND_COUNT)" "[[ $ON_DEMAND_COUNT -eq 17 ]]"
 
 # Verify each on-demand skill has a corresponding instruction file
 for skill_dir in "$SKILLS"/*/; do
@@ -374,7 +374,7 @@ bash "$CURSOR_SETUP" "$CURSOR_TMP" >/dev/null 2>&1
 CURSOR_INSTALL_RC=$?
 assert "cursor install exits 0" "[[ $CURSOR_INSTALL_RC -eq 0 ]]"
 INSTALLED_MDC=$(ls "$CURSOR_TMP/.cursor/rules"/*.mdc 2>/dev/null | wc -l | tr -d ' ')
-assert "cursor installed 21 .mdc files ($INSTALLED_MDC)" "[[ $INSTALLED_MDC -eq 21 ]]"
+assert "cursor installed 23 .mdc files ($INSTALLED_MDC)" "[[ $INSTALLED_MDC -eq 23 ]]"
 rm -rf "$CURSOR_TMP"
 
 # ── Section 16: GitHub Copilot setup.sh install test ──────
@@ -388,7 +388,7 @@ GH_INSTALL_RC=$?
 assert "gh-copilot install exits 0" "[[ $GH_INSTALL_RC -eq 0 ]]"
 assert "installed copilot-instructions.md" "[[ -f '$GH_TMP/.github/copilot-instructions.md' ]]"
 INSTALLED_INSTR=$(ls "$GH_TMP/.github/instructions"/*.instructions.md 2>/dev/null | wc -l | tr -d ' ')
-assert "gh-copilot installed 15 instruction files ($INSTALLED_INSTR)" "[[ $INSTALLED_INSTR -eq 15 ]]"
+assert "gh-copilot installed 17 instruction files ($INSTALLED_INSTR)" "[[ $INSTALLED_INSTR -eq 17 ]]"
 rm -rf "$GH_TMP"
 
 # ── Section 17: Windsurf rules.md ─────────────────────────

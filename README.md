@@ -562,7 +562,7 @@ All tools share the same rules from `shared/skills/`. Each adapter formats them 
 ```
 code-copilot-team/
 ├── shared/                              ← Single source of truth
-│   ├── skills/                          21 skills (SKILL.md format, open Agent Skills spec)
+│   ├── skills/                          23 skills (SKILL.md format, open Agent Skills spec)
 │   ├── docs/                            8 tool-agnostic reference docs
 │   ├── templates/                       11 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
@@ -597,8 +597,8 @@ code-copilot-team/
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
-│   ├── test-generate.sh                 282 generation + adapter tests
-│   ├── test-shared-structure.sh         800 structure + content tests
+│   ├── test-generate.sh                 290 generation + adapter tests
+│   ├── test-shared-structure.sh         810 structure + content tests
 │   ├── test-sync.sh                     69 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   └── test-review-loop.sh            31 review loop integration tests
