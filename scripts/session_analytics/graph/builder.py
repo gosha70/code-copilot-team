@@ -144,7 +144,7 @@ def _build_session(rel: Database, gdb: GraphDatabase, srow, stats: GraphStats) -
         tools = rel.query(
             """
             SELECT tc.id, tc.tool_name, tc.tool_name_raw, tc.sequence_num,
-                   COALESCE(tr.is_error, 0)
+                   COALESCE(tr.is_error, FALSE)
             FROM copilot_tool_call tc
             LEFT JOIN copilot_tool_result tr ON tr.tool_call_id = tc.id
             WHERE tc.turn_id = ? ORDER BY tc.sequence_num

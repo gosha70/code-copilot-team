@@ -74,7 +74,7 @@ benchmarks don't capture. #63 fills that gap.
 - Cursor / Codex adapters (the issue marks them "future").
 - Cloud sync / multi-machine aggregation.
 
-## Users & Scenarios
+## User Scenarios
 
 - **Developer (local):** runs `./scripts/session-analytics ingest` then `serve`, opens
   the Studio, inspects last week's sessions, drills into a session timeline with
@@ -141,7 +141,7 @@ localhost endpoints keep it fully local).
 config page; first run is guided (`session-analytics setup` prompts interactively;
 the Studio lands on Settings until configured).
 
-## Acceptance Criteria (from issue #63)
+## Requirements (acceptance criteria from issue #63)
 
 - [ ] `session-analytics ingest` parses Claude Code JSONL into PostgreSQL.
 - [ ] `session-analytics analyze` runs LLM-as-Judge on un-labeled turns.
@@ -153,6 +153,25 @@ the Studio lands on Settings until configured).
 - [ ] At least 2 copilot adapters working (Claude Code + one other).
 - [ ] Idempotent ingestion (re-running doesn't duplicate data).
 - [ ] Privacy: no session content leaves the local machine unless explicitly configured.
+
+## Constraints
+
+- **Privacy-first defaults:** ingestion, storage, API (binds `127.0.0.1`), and the
+  default Ollama judge are all local; sending anything off-machine (the
+  `claude-code`/hosted `openai` judges) requires explicit configuration.
+- **Zero-infra baseline:** the unit suite and default store run on stdlib SQLite
+  (Python 3.11+, no third-party deps); PostgreSQL (docker-compose, :5433) and
+  `kuzu`/`fastapi`/`mcp` are optional extras. SQL must stay valid on BOTH the
+  SQLite and Postgres dialects (e.g. boolean literals).
+- **Externally-managed host Python (PEP 668):** optional deps install into a
+  throwaway venv; nothing is installed system-wide.
+- **Idempotency:** re-running `ingest`/`graph` must not duplicate rows/nodes
+  (natural keys + upserts / MERGE-by-id).
+- **Config discipline (repo rule):** defaults live in `config_data/defaults.json`,
+  never hardcoded in source; user config is the single repo-root `.env`
+  (chmod 600, gitignored) shared by CLI and Studio.
+- **Additive judge writes:** `analyze` labels un-labeled turns only (no mutation
+  of ingested rows); `--overwrite` is the explicit exception.
 
 ## Risks
 

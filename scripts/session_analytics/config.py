@@ -144,6 +144,7 @@ def write_env_file(values: Mapping[str, str], path: Path = ENV_FILE) -> None:
     for key, val in existing.items():  # any extra/unknown keys preserved
         lines.append(f"{key}={val}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.chmod(0o600)  # may hold secrets (API keys, DSN passwords) — owner-only
 
 
 def is_initialized() -> bool:
