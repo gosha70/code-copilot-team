@@ -1,0 +1,20 @@
+{
+  "name": "ui-enhancement-harness",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tool-agnostic visual-review harness: boot app, screenshot per breakpoint, axe-core a11y gate, anti-slop rubric, pluggable vision critic.",
+  "scripts": {
+    "harness:init": "playwright install chromium",
+    "harness:verify": "tsx src/runner.ts"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "^4.10.0",
+    "playwright": "^1.50.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0"
+  }
+}

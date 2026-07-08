@@ -556,6 +556,7 @@ corresponding skill to apply them.
 |-------|-------------|
 | `agent-team-protocol` | Multi-agent delegation rules, three-phase workflow (Plan/Build/Review), model selection, collaboration gates, and Ralph Loop integration. |
 | `clarification-protocol` | When and how to ask clarifying questions before implementing. Data model review gate and ambiguity resolution rules. |
+| `design-system` | Derive a unique, domain-fit design direction and enforce design-token + anti-slop discipline. Read/author DESIGN.md before building any UI; override framework defaults so output is bespoke by construction, not generic. |
 | `environment-setup` | Environment variable patterns, config file validation, and setup verification for new project scaffolding. |
 | `infra-verification` | Infrastructure artifact verification: Docker builds, CI workflows, and launcher flags must be executed, not just syntax-checked. |
 | `integration-testing` | Test integration points early. Verify cross-service contracts, API boundaries, and data flow before declaring done. |
@@ -569,4 +570,5 @@ corresponding skill to apply them.
 | `stack-constraints` | Stack version pinning and dependency compatibility guards. Prevents silent version drift across project boundaries. |
 | `team-lead-efficiency` | Build team lead efficiency rules: limit sub-agents, polling discipline, no redundant re-work, parallel task launching. |
 | `token-efficiency` | Token economy rules: diff-over-rewrite, context compression, avoid verbose re-explanations, minimize round-trips. |
+| `visual-review` | Closed visual-review loop for generated UI: render the running app, screenshot per breakpoint, run an axe-core a11y gate, critique against the DESIGN.md rubric, triage findings, and iterate to a quality bar with a hard cap. Drives the shippable harness/ runner. |
 

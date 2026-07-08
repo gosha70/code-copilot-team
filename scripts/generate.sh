@@ -44,16 +44,18 @@ is_always() {
 
 # ── Claude Code ──────────────────────────────────────────────
 # Claude Code reads shared/skills/ directly via setup.sh symlinks.
-# Sync verify-app agent from claude_code/ source to adapters/claude-code/.
-echo "[claude-code] Syncing verify-app agent from claude_code/.claude/agents/ to adapters/claude-code/.claude/agents/..."
+# Sync authored-in-claude_code agents to adapters/claude-code/.
 CC_AGENTS_SOURCE="$REPO_DIR/claude_code/.claude/agents"
 CC_AGENTS_TARGET="$ADAPTERS/claude-code/.claude/agents"
-if [[ -f "$CC_AGENTS_SOURCE/verify-app.md" && -d "$CC_AGENTS_TARGET" ]]; then
-  cp "$CC_AGENTS_SOURCE/verify-app.md" "$CC_AGENTS_TARGET/verify-app.md"
-  echo "[claude-code] Synced verify-app.md"
-else
-  echo "[claude-code] WARNING: verify-app.md source or target directory not found — skipping sync"
-fi
+CC_SYNC_AGENTS="verify-app.md visual-reviewer.md"
+for agent_file in $CC_SYNC_AGENTS; do
+  if [[ -f "$CC_AGENTS_SOURCE/$agent_file" && -d "$CC_AGENTS_TARGET" ]]; then
+    cp "$CC_AGENTS_SOURCE/$agent_file" "$CC_AGENTS_TARGET/$agent_file"
+    echo "[claude-code] Synced $agent_file"
+  else
+    echo "[claude-code] WARNING: $agent_file source or target directory not found — skipping sync"
+  fi
+done
 
 # ── Codex ────────────────────────────────────────────────────
 # Generate AGENTS.md by concatenating always skills + on-demand TOC
@@ -185,6 +187,7 @@ for skill_dir in "$SKILLS_DIR"/*/; do
     environment-setup)     glob="**/.env*,**/docker-compose*" ;;
     stack-constraints)     glob="**/package.json,**/pyproject.toml,**/go.mod,**/Cargo.toml,**/pom.xml" ;;
     integration-testing)   glob="**/tests/**,**/test/**,**/*test*,**/*spec*" ;;
+    design-system|visual-review) glob="**/*.tsx,**/*.jsx,**/*.vue,**/*.svelte,**/*.astro,**/*.css,**/DESIGN.md" ;;
     *)                     glob="**" ;;
   esac
   {

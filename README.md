@@ -338,12 +338,22 @@ endpoint and spawns an ephemeral Anthropic↔OpenAI proxy when needed.
 - 60-second quickstart: [`benchmarks/README.md` § 60-second quickstart](benchmarks/README.md#60-second-quickstart).
 - Design rationale: [`specs/benchmark-harness/spec.md`](specs/benchmark-harness/spec.md) and the per-feature spec bundles under [`specs/`](specs/).
 
+## UI Design Harness
+
+Stops copilot-generated UI from converging on the generic "AI-slop" look (default fonts, purple gradients, centered cards, `<div onClick>` a11y) and gates it with a closed visual-review loop. Two on-demand skills + a shippable, tool-agnostic runner.
+
+- **Steering bundle** — every UI project commits `DESIGN.md` + `design/tokens.json` (DTCG). The `design-system` skill derives a domain-fit direction (brand archetype + user + density) and overrides the framework defaults (neutral, accent, font, radius) so output is bespoke by construction, not generic.
+- **Visual-review loop** — `npm run copilot:review` boots the app, runs an axe-core WCAG 2.2 AA gate + an anti-slop rubric, screenshots at 375/768/1440, and a critic scores against `DESIGN.md`: the `visual-reviewer` agent on Claude Code (reads the PNGs), or a vision LLM over `fetch` for other tools. Iterates to a quality bar (cap 3); degrades to an HTTP smoke when Playwright is absent (a dead dev server still fails).
+- **Enable it** — the `web-dynamic` / `web-static` templates reference it. Scaffold into any project from `~/.claude/templates/ui-harness/` (`harness/`, `DESIGN.md`, `design/`), then add `"copilot:review": "cd harness && npm run harness:verify"` to `package.json`.
+
+Skills: `design-system`, `visual-review` · Agent: `visual-reviewer` · Template: `ui-harness`.
+
 ## What You Get
 
 ![Configuration Layers](docs/images/configuration-layers.png)
 
-- **Layered rules** — 4 global rules (`~/.claude/rules/`) auto-load every session; 15 on-demand skills (`~/.claude/skills/*/SKILL.md`) loaded by phase agents when needed.
-- **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 5 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app).
+- **Layered rules** — 4 global rules (`~/.claude/rules/`) auto-load every session; 17 on-demand skills (`~/.claude/skills/*/SKILL.md`) loaded by phase agents when needed.
+- **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 6 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app, visual-reviewer).
 - **Hooks** (`~/.claude/hooks/`) — 11 lifecycle scripts: test verification, type checking, auto-format, file protection, git safety guards, context re-injection, peer review trigger, desktop notifications, plus 3 self-guarding MemKernel hooks (session recall, pre-compact checkpoint, post-compact recovery) that activate only when MemKernel is installed.
 - **11 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
 - **Four-phase workflow** — Research → Plan → Build → Review. Plus **Ralph Loop** for single-agent autonomous iteration.
@@ -457,6 +467,8 @@ Sync updates commands and `.claude/` contents (e.g. `remediation.json`) but neve
 | `gradle-plugin` | Kotlin · Gradle 8 · `Plugin<Project>` · TestKit matrix · Plugin Portal | Team Lead, Plugin Eng, Functional Test Eng, Build & Release |
 | `domain-pack` | Versioned content (TBX/JSON-LD/CSV) · Maven Central + PyPI dual publish | Team Lead, Content Curator, JVM Wrapper Eng, Python Wrapper Eng, Release & CI |
 
+> **`ui-harness`** — an add-on bundle (not a stack) that layers the [UI Design Harness](#ui-design-harness) onto any web project: `DESIGN.md` + DTCG tokens + the `harness/` visual-review runner.
+
 ### Bundled CI Workflows
 
 Each template ships a `.github/workflows/` file so CI is wired up the moment the consumer adds their toolchain manifest.
@@ -562,7 +574,7 @@ All tools share the same rules from `shared/skills/`. Each adapter formats them 
 ```
 code-copilot-team/
 ├── shared/                              ← Single source of truth
-│   ├── skills/                          21 skills (SKILL.md format, open Agent Skills spec)
+│   ├── skills/                          23 skills (SKILL.md format, open Agent Skills spec)
 │   ├── docs/                            8 tool-agnostic reference docs
 │   ├── templates/                       11 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
@@ -597,8 +609,8 @@ code-copilot-team/
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
-│   ├── test-generate.sh                 282 generation + adapter tests
-│   ├── test-shared-structure.sh         800 structure + content tests
+│   ├── test-generate.sh                 290 generation + adapter tests
+│   ├── test-shared-structure.sh         810 structure + content tests
 │   ├── test-sync.sh                     69 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   └── test-review-loop.sh            31 review loop integration tests

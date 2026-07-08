@@ -98,6 +98,26 @@ npm install -g @playwright/cli@latest
 playwright-cli install --skills
 ```
 
+## Design System & Visual Review
+
+This project uses the **UI-Enhancement harness** to keep generated UI unique,
+on-brand, and release-grade — not "AI-generated"-looking.
+
+- **Steering bundle**: `DESIGN.md` + `design/tokens.json` at the repo root define the
+  committed art direction and design tokens. Read them before building any UI.
+- **Scaffold once** (if absent), then add `"copilot:review": "cd harness && npm run harness:verify"` to `package.json`:
+  ```bash
+  cp -r ~/.claude/templates/ui-harness/harness \
+        ~/.claude/templates/ui-harness/design \
+        ~/.claude/templates/ui-harness/DESIGN.md .
+  ```
+- **Derive** `DESIGN.md` from the app's domain with the `design-system` skill; override
+  the four defaults (neutral, accent, font, radius) — shipping framework defaults is the
+  AI-slop tell.
+- **Verify** with the `visual-review` skill: `npm run copilot:review` runs the axe-core
+  WCAG 2.2 AA gate + anti-slop rubric + screenshot critique at 375/768/1440. On Claude
+  Code the `visual-reviewer` agent is the critic. Iterate ≤3 to the design bar.
+
 ## Agent Team
 
 ### Roles
@@ -136,7 +156,7 @@ Constraints:
 
 ### Frontend Developer
 Expertise: React 18+ (Server/Client Components), Next.js App Router, Tailwind CSS, shadcn/ui, responsive design, form handling, loading/error states.
-Constraints: Server Components by default. 'use client' only for interactivity (hooks, event handlers). No data fetching in Client Components. Use Suspense for loading states. All inputs validated with zod. Responsive at all breakpoints.
+Constraints: Server Components by default. 'use client' only for interactivity (hooks, event handlers). No data fetching in Client Components. Use Suspense for loading states. All inputs validated with zod. Responsive at all breakpoints. Read `DESIGN.md` + the `design-system` skill before building UI; use `design/tokens.json` semantic tokens (never framework defaults); ship empty/loading/error/success/focus states.
 
 ### Backend Developer
 Expertise: Next.js API routes, tRPC, Prisma ORM, NextAuth, zod validation, server-only utilities, middleware.
@@ -144,7 +164,7 @@ Constraints: all inputs validated with zod before processing. Auth checked befor
 
 ### QA Engineer
 Expertise: Vitest, React Testing Library, Playwright, accessibility testing, API testing, load testing.
-Constraints: unit tests for all server services (Vitest). Component tests with RTL. E2e tests in Playwright for critical flows (auth, CRUD, checkout). Check responsive at all breakpoints. Accessibility audit with axe-core.
+Constraints: unit tests for all server services (Vitest). Component tests with RTL. E2e tests in Playwright for critical flows (auth, CRUD, checkout). Check responsive at all breakpoints. Accessibility audit with axe-core. Run `npm run copilot:review` (visual-review loop) and resolve findings in `tmp/ui-review/critique-feedback.json`.
 
 ### DevOps / Release Engineer
 Expertise: Vercel deployment, environment management, CI/CD, Prisma migration deployment, monitoring, performance optimization.
