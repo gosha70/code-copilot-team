@@ -95,8 +95,10 @@ for feature in "${FEATURES[@]}"; do
             ERRORS=$((ERRORS + 1))
         fi
 
-        # Check blocking findings
-        if [[ -n "$BLOCKING" && "$BLOCKING" != "0" && "$VERDICT" != "PASS" && "$BYPASS" != "true" ]]; then
+        # Check blocking findings — open blocking findings fail regardless of
+        # verdict (a hand-edited PASS must not slip through); approved bypass
+        # is the only exception.
+        if [[ -n "$BLOCKING" && "$BLOCKING" != "0" && "$BYPASS" != "true" ]]; then
             echo "  build-review.md: $BLOCKING blocking findings open — FAIL"
             ERRORS=$((ERRORS + 1))
         fi

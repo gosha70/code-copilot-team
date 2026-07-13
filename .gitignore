@@ -64,3 +64,7 @@ README.html
 # Benchmark adapter caches (cloned upstream datasets, pinned by SHA).
 # Populated by per-adapter fetch scripts; never committed.
 /benchmarks/.cache/
+
+# Cross-session collaboration/automation working state (review loop,
+# auto-build ledger). Machine-local; never committed.
+/.cct/

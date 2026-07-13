@@ -43,6 +43,8 @@ PROFILE="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
 MAX_ROUNDS="${CCT_REVIEW_MAX_ROUNDS:-5}"
 TIMEOUT_SEC="${CCT_REVIEW_TIMEOUT_SEC:-900}"
 STALE_THRESHOLD="${CCT_REVIEW_STALE_THRESHOLD:-2}"
+BASE_REF="${CCT_REVIEW_BASE_REF:-HEAD~1}"
+DIFF_MAX_LINES="${CCT_REVIEW_DIFF_MAX_LINES:-500}"
 
 if [[ ! -f "$PROFILE" ]]; then
     echo "Error: Provider profile not found: $PROFILE" >&2
@@ -336,16 +338,16 @@ $(git -C "$PROJECT_DIR" log --oneline -10 2>/dev/null || echo "(no git history)"
 
 ## Changes to Review
 
-$(git -C "$PROJECT_DIR" diff HEAD~1 --stat 2>/dev/null || echo "(no diff available)")
+$(git -C "$PROJECT_DIR" diff "$BASE_REF" --stat 2>/dev/null || echo "(no diff available)")
 
 ### Diff
 
 \`\`\`diff
-$(git -C "$PROJECT_DIR" diff HEAD~1 2>/dev/null | head -500 || echo "(no diff available)")
+$(git -C "$PROJECT_DIR" diff "$BASE_REF" 2>/dev/null | head -"$DIFF_MAX_LINES" || echo "(no diff available)")
 \`\`\`
 
-$(if [[ $(git -C "$PROJECT_DIR" diff HEAD~1 2>/dev/null | wc -l) -gt 500 ]]; then
-    echo "*Diff truncated at 500 lines. Full diff available in the working tree.*"
+$(if [[ $(git -C "$PROJECT_DIR" diff "$BASE_REF" 2>/dev/null | wc -l) -gt "$DIFF_MAX_LINES" ]]; then
+    echo "*Diff truncated at $DIFF_MAX_LINES lines. Full diff available in the working tree.*"
 fi)
 
 ## Spec Artifacts
