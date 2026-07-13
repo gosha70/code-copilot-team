@@ -613,7 +613,7 @@ code-copilot-team/
 │   ├── test-shared-structure.sh         810 structure + content tests
 │   ├── test-sync.sh                     69 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
-│   └── test-review-loop.sh            31 review loop integration tests
+│   └── test-review-loop.sh            40 review loop integration tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md

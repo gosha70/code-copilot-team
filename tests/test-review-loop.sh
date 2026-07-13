@@ -415,6 +415,93 @@ rm -rf "$P"
 echo ""
 
 # ══════════════════════════════════════════════════════════════
+echo "=== Base ref + diff cap knobs ==="
+# ══════════════════════════════════════════════════════════════
+
+# Capture profile: copies the review request to a fixed path so assertions
+# can inspect the diff the reviewer actually received.
+CAPTURE_FILE=$(mktemp)
+CAPTURE_PROFILE=$(mktemp)
+cat > "$CAPTURE_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "cp {review_request} $CAPTURE_FILE && printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+echo "alpha" > "$P/file-a.txt"
+git -C "$P" add -A && git -C "$P" commit -q -m "commit one"
+echo "beta" > "$P/file-b.txt"
+git -C "$P" add -A && git -C "$P" commit -q -m "commit two"
+
+# Default base ref (HEAD~1): only the latest commit is in the diff
+write_state "$P" 0
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$CAPTURE_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "default base ref round PASS" 0 "$RC"
+assert_contains "default base ref diff has file-b" "$(cat "$CAPTURE_FILE")" "file-b.txt"
+assert_eq "default base ref diff excludes file-a" "0" "$(grep -c "file-a.txt" "$CAPTURE_FILE" || true)"
+
+# CCT_REVIEW_BASE_REF=HEAD~2: both commits are in the diff
+# (drop the collaboration artifact the PASS round just wrote — it is
+# untracked outside .cct/ and would trip the clean-worktree check)
+rm -rf "$P/specs/test-feat/collaboration"
+write_state "$P" 0
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$CAPTURE_PROFILE" CCT_REVIEW_BASE_REF="HEAD~2" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "custom base ref round PASS" 0 "$RC"
+assert_contains "custom base ref diff includes file-a" "$(cat "$CAPTURE_FILE")" "file-a.txt"
+
+# CCT_REVIEW_DIFF_MAX_LINES: truncation notice honors the knob
+rm -rf "$P/specs/test-feat/collaboration"
+write_state "$P" 0
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$CAPTURE_PROFILE" CCT_REVIEW_BASE_REF="HEAD~2" CCT_REVIEW_DIFF_MAX_LINES=5 bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_contains "diff cap truncation notice" "$(cat "$CAPTURE_FILE")" "truncated at 5 lines"
+rm -rf "$P" "$CAPTURE_FILE" "$CAPTURE_PROFILE"
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+echo "=== Collaboration validation: blocking findings ==="
+# ══════════════════════════════════════════════════════════════
+
+VALIDATOR="$SCRIPT_DIR/../scripts/validate-collaboration.sh"
+P=$(mktemp -d)
+mkdir -p "$P/specs/test-feat/collaboration"
+
+# Forged artifact: hand-edited PASS with open blocking findings must fail
+cat > "$P/specs/test-feat/collaboration/build-review.md" << 'MD'
+---
+mode: review
+verdict: PASS
+blocking_findings_open: 3
+subject_provider: claude
+peer_provider: mock
+---
+MD
+RC=0; OUTPUT=$(bash "$VALIDATOR" --project-dir "$P" 2>&1) || RC=$?
+assert_exit "forged PASS with open blocking findings fails" 1 "$RC"
+assert_contains "forged PASS failure message" "$OUTPUT" "blocking findings open"
+
+# Genuine PASS with zero open blocking findings still passes
+cat > "$P/specs/test-feat/collaboration/build-review.md" << 'MD'
+---
+mode: review
+verdict: PASS
+blocking_findings_open: 0
+subject_provider: claude
+peer_provider: mock
+---
+MD
+RC=0; OUTPUT=$(bash "$VALIDATOR" --project-dir "$P" 2>&1) || RC=$?
+assert_exit "clean PASS still passes" 0 "$RC"
+rm -rf "$P"
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════
 # Summary
 # ══════════════════════════════════════════════════════════════
 
