@@ -202,6 +202,44 @@ CFG
     echo "$dir"
 }
 
+# Reduce a project to a single US1 phase with no milestone (completes to done)
+single_phase() {
+    local dir="$1"
+    sed -i '' 's/"milestone_every": 2/"milestone_every": 0/' "$dir/specs/demo-feat/automation.json" 2>/dev/null || \
+        sed -i 's/"milestone_every": 2/"milestone_every": 0/' "$dir/specs/demo-feat/automation.json"
+    awk '/^## US2/{exit} {print}' "$dir/specs/demo-feat/tasks.md" > "$dir/specs/demo-feat/tasks-one.md"
+    mv "$dir/specs/demo-feat/tasks-one.md" "$dir/specs/demo-feat/tasks.md"
+    git -C "$dir" add -A
+    git -C "$dir" commit -q -m "single phase fixture"
+}
+
+# Simulate /review-decide per its documented contract: write decision.json,
+# remove breaker-tripped.json, write/adjust the decision artifacts.
+fake_review_decide() {
+    local dir="$1" decision="$2"
+    local rd="$dir/.cct/review"
+    local btype
+    btype=$(jq -r '.breaker_type // "unknown"' "$rd/breaker-tripped.json" 2>/dev/null)
+    jq -n --arg d "$decision" --arg b "$btype" \
+        '{decision: $d, breaker_type: $b, decided_at: "test"}' > "$rd/decision.json"
+    rm -f "$rd/breaker-tripped.json"
+    case "$decision" in
+        approve)
+            jq -n --arg b "$btype" \
+                '{verdict: "FAIL", bypass: true, breaker_type: $b}' > "$rd/loop-summary.json"
+            ;;
+        reject)
+            jq -n '{verdict: "REJECTED", bypass: false}' > "$rd/loop-summary.json"
+            ;;
+        retry)
+            local tmp
+            tmp=$(mktemp)
+            jq --argjson now "$(date +%s)" '.attempt += 1 | .loop_start = $now' \
+                "$rd/state.json" > "$tmp" && mv "$tmp" "$rd/state.json"
+            ;;
+    esac
+}
+
 # run_driver <project> [driver args...] — captures OUTPUT and RC
 run_driver() {
     local project="$1"; shift
@@ -582,6 +620,180 @@ assert_contains "crash-resume reviewed the phase diff (demo.sh present)" "$(cat 
 FEAT_COMMITS=$(git -C "$P" log --format=%s | grep -c '^feat(demo-feat)')
 assert_eq "no duplicate phase commit on crash-resume" "1" "$FEAT_COMMITS"
 rm -f "$CRASH_CAPTURE" "$CRASH_PROFILE"
+rm -rf "$P"
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+echo "=== C/US1: notification ==="
+# ══════════════════════════════════════════════════════════════
+
+NOTIFY_LOG=$(mktemp)
+NOTIFY_CMD='printf "%s|%s|%s|%s|%s\n" {feature_id} {reason} {phase} {status} {summary} >> '"$NOTIFY_LOG"
+
+# Park fires a notification with rendered placeholders; esc records notified
+P=$(setup_project)
+REVIEW_PROFILE="$DOWN_PROFILE" CCT_AUTOBUILD_NOTIFY_CMD="$NOTIFY_CMD" run_driver "$P"
+assert_exit "park with notify still exits 4" 4 "$RC"
+assert_contains "notify rendered feature+reason" "$(cat "$NOTIFY_LOG")" "demo-feat|provider_unavailable"
+assert_contains "notify summary preserves spaces (quoting)" "$(cat "$NOTIFY_LOG")" "parked: gating reviewer 'mock'"
+assert_eq "escalation marked notified" "true" "$(jq -r '.notified' "$P"/.cct/auto-build/demo-feat/escalations/esc-1.json)"
+rm -rf "$P"
+
+# Milestone pause and done both notify
+: > "$NOTIFY_LOG"
+P=$(setup_project)
+CCT_AUTOBUILD_NOTIFY_CMD="$NOTIFY_CMD" run_driver "$P"
+assert_exit "milestone run exits 3" 3 "$RC"
+assert_contains "milestone notification sent" "$(cat "$NOTIFY_LOG")" "|milestone|"
+echo "approved-by: gosha 2026-07-13" >> "$P/specs/demo-feat/automation-summary.md"
+CCT_AUTOBUILD_NOTIFY_CMD="$NOTIFY_CMD" run_driver "$P" --resume
+assert_exit "resume completes with notify configured" 0 "$RC"
+assert_contains "done notification sent" "$(cat "$NOTIFY_LOG")" "|done|"
+rm -rf "$P"
+
+# Failing notify command never blocks parking; journaled + esc notified=false
+P=$(setup_project)
+REVIEW_PROFILE="$DOWN_PROFILE" CCT_AUTOBUILD_NOTIFY_CMD="false" run_driver "$P"
+assert_exit "failing notify still parks with exit 4" 4 "$RC"
+assert_eq "escalation notified=false on notify failure" "false" "$(jq -r '.notified' "$P"/.cct/auto-build/demo-feat/escalations/esc-1.json)"
+assert_contains "notify_failed journaled" "$(cat "$P"/.cct/auto-build/demo-feat/events.jsonl)" "notify_failed"
+rm -rf "$P"
+rm -f "$NOTIFY_LOG"
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+echo "=== C/US2: parked resume — review breaker decisions ==="
+# ══════════════════════════════════════════════════════════════
+
+# APPROVE: park -> refuse without decision -> /review-decide approve -> done
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "review breaker parks" 4 "$RC"
+run_driver "$P" --resume
+assert_exit "resume without decision refused" 1 "$RC"
+assert_contains "refusal names /review-decide" "$OUTPUT" "review-decide"
+fake_review_decide "$P" approve
+run_driver "$P" --resume
+assert_exit "approve-resume completes" 0 "$RC"
+assert_eq "escalation resolved" "true" "$(jq -r '.resolved' "$P"/.cct/auto-build/demo-feat/escalations/esc-1.json)"
+assert_eq "bypass approval scoped to phase 1" "esc-1" "$(jq -r '.phases["1"].bypass_approved' "$P"/.cct/auto-build/demo-feat/state.json)"
+assert_eq "final status done after approve" "done" "$(jq -r '.status' "$P"/.cct/auto-build/demo-feat/state.json)"
+rm -rf "$P"
+
+# REJECT: park -> /review-decide reject -> aborted
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "review breaker parks (reject case)" 4 "$RC"
+fake_review_decide "$P" reject
+run_driver "$P" --resume
+assert_exit "reject-resume exits 0" 0 "$RC"
+assert_eq "status aborted after reject" "aborted" "$(jq -r '.status' "$P"/.cct/auto-build/demo-feat/state.json)"
+rm -rf "$P"
+
+# RETRY: park -> /review-decide retry -> reviewer now passes -> done
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "review breaker parks (retry case)" 4 "$RC"
+fake_review_decide "$P" retry
+REVIEW_PROFILE="$PASS_PROFILE" run_driver "$P" --resume
+assert_exit "retry-resume completes" 0 "$RC"
+ARCHIVED_SUMMARY="$P/.cct/auto-build/demo-feat/phase-1/review/loop-summary.json"
+assert_eq "retry re-review reached PASS" "PASS" "$(jq -r '.verdict' "$ARCHIVED_SUMMARY" 2>/dev/null)"
+rm -rf "$P"
+
+# DECISION SINGLE-USE: a retry decision must not auto-resolve the NEXT breaker
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "first breaker parks (single-use case)" 4 "$RC"
+fake_review_decide "$P" retry
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P" --resume
+assert_exit "retry-resume re-parks when review still fails" 4 "$RC"
+assert_eq "second escalation recorded" "review_breaker" "$(jq -r '.reason' "$P"/.cct/auto-build/demo-feat/escalations/esc-2.json 2>/dev/null)"
+if [[ -f "$P/.cct/review/decision.json" ]]; then
+    echo "  FAIL: stale decision.json survived the second park"
+    FAIL=$((FAIL + 1))
+else
+    echo "  PASS: decision consumed/cleared — none present at second park"
+    PASS=$((PASS + 1))
+fi
+run_driver "$P" --resume
+assert_exit "second breaker refuses without a fresh decision" 1 "$RC"
+assert_contains "second refusal names /review-decide" "$OUTPUT" "review-decide"
+if [[ -f "$P/.cct/auto-build/demo-feat/escalations/decision-esc-1.json" ]]; then
+    echo "  PASS: consumed decision archived for audit"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: consumed decision not archived"
+    FAIL=$((FAIL + 1))
+fi
+rm -rf "$P"
+
+# BYPASS SCOPE (task 7a): a bypass summary with NO phase-scoped approval parks
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review"
+jq -n '{verdict: "FAIL", bypass: true, breaker_type: "forged"}' > "$P/.cct/review/loop-summary.json"
+run_driver "$P"
+assert_exit "unapproved bypass parks" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json | head -1)
+assert_contains "park detail names missing phase-scoped approval" "$(jq -r '.detail' "$ESC")" "without a phase-scoped human approval"
+rm -rf "$P"
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+echo "=== C/US2: parked resume — origin, tests, caps ==="
+# ══════════════════════════════════════════════════════════════
+
+# ORIGIN: break -> park -> restore -> resume completes
+P=$(setup_project); single_phase "$P"
+sed -i '' 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md" 2>/dev/null || \
+    sed -i 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md"
+git -C "$P" add -A && git -C "$P" commit -q -m "break origin"
+run_driver "$P"
+assert_exit "origin park" 4 "$RC"
+assert_eq "origin reason recorded" "origin_gate" "$(jq -r '.reason' "$P"/.cct/auto-build/demo-feat/escalations/esc-1.json)"
+run_driver "$P" --resume
+assert_exit "origin resume refused while broken" 1 "$RC"
+sed -i '' 's/^  issue: missing-repo#0$/  type: internal/' "$P/specs/demo-feat/plan.md" 2>/dev/null || \
+    sed -i 's/^  issue: missing-repo#0$/  type: internal/' "$P/specs/demo-feat/plan.md"
+git -C "$P" add -A && git -C "$P" commit -q -m "restore origin"
+run_driver "$P" --resume
+assert_exit "origin resume completes after restore" 0 "$RC"
+rm -rf "$P"
+
+# TEST FAILURE: failing fixture -> park -> human fix + commit -> resume
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$P/project-test.sh"
+git -C "$P" add -A && git -C "$P" commit -q -m "failing tests"
+run_driver "$P"
+assert_exit "test failure parks" 4 "$RC"
+assert_eq "test_failure reason recorded" "test_failure" "$(jq -r '.reason' "$P"/.cct/auto-build/demo-feat/escalations/esc-1.json)"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$P/project-test.sh"
+git -C "$P" add -A && git -C "$P" commit -q -m "human fix: tests pass"
+run_driver "$P" --resume
+assert_exit "test-fix resume completes" 0 "$RC"
+rm -rf "$P"
+
+# CAPS: cost park -> refuse until raised -> raise -> resume completes
+# (two phases: the cap check runs before each session, so the park fires at
+# phase 2's build session; milestone disabled so resume runs to done)
+P=$(setup_project)
+sed -i '' 's/"milestone_every": 2/"milestone_every": 0/' "$P/specs/demo-feat/automation.json" 2>/dev/null || \
+    sed -i 's/"milestone_every": 2/"milestone_every": 0/' "$P/specs/demo-feat/automation.json"
+git -C "$P" add -A && git -C "$P" commit -q -m "no milestones"
+MOCK_CLAUDE_COST=6 run_driver "$P"
+assert_exit "cost cap parks (resume case)" 4 "$RC"
+assert_eq "cap reason recorded" "cap_exceeded" "$(jq -r '.reason' "$P"/.cct/auto-build/demo-feat/escalations/esc-1.json)"
+run_driver "$P" --resume
+assert_exit "cap resume refused while still exceeded" 1 "$RC"
+assert_contains "cap refusal names the config key" "$OUTPUT" "cost_usd"
+sed -i '' 's/"cost_usd": 5/"cost_usd": 100/' "$P/specs/demo-feat/automation.json" 2>/dev/null || \
+    sed -i 's/"cost_usd": 5/"cost_usd": 100/' "$P/specs/demo-feat/automation.json"
+git -C "$P" add -A && git -C "$P" commit -q -m "raise cost cap"
+run_driver "$P" --resume
+assert_exit "cap resume completes after raise" 0 "$RC"
 rm -rf "$P"
 
 echo ""

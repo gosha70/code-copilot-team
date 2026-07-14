@@ -118,6 +118,37 @@ set_status() {
     echo "[auto-build] status: $status" >&2
 }
 
+# ── Notification (FR-1, FR-2): pluggable, never blocking ─────
+
+# Placeholder values never enter the command string: each {placeholder} is
+# rewritten to a quoted env-var reference, so values containing spaces or
+# quotes cannot split words or inject shell syntax.
+notify() {
+    # notify <reason> <summary>; sets NOTIFY_OK (true|false)
+    local reason="$1" summary="$2"
+    NOTIFY_OK=false
+    local cmd="${CCT_AUTOBUILD_NOTIFY_CMD:-$(cfg '.notify.command' '')}"
+    [[ -z "$cmd" ]] && return 0
+    local rendered="$cmd"
+    rendered="${rendered//\{feature_id\}/\"\$CCT_NOTIFY_FEATURE_ID\"}"
+    rendered="${rendered//\{reason\}/\"\$CCT_NOTIFY_REASON\"}"
+    rendered="${rendered//\{phase\}/\"\$CCT_NOTIFY_PHASE\"}"
+    rendered="${rendered//\{status\}/\"\$CCT_NOTIFY_STATUS\"}"
+    rendered="${rendered//\{summary\}/\"\$CCT_NOTIFY_SUMMARY\"}"
+    if env CCT_NOTIFY_FEATURE_ID="$FEATURE_ID" \
+           CCT_NOTIFY_REASON="$reason" \
+           CCT_NOTIFY_PHASE="${CURRENT_PHASE:-0}" \
+           CCT_NOTIFY_STATUS="$(state_get '.status' 2>/dev/null || echo preflight)" \
+           CCT_NOTIFY_SUMMARY="$summary" \
+           bash -c "$rendered" >/dev/null 2>&1; then
+        NOTIFY_OK=true
+        journal "notified" "$reason"
+    else
+        journal "notify_failed" "$reason"
+    fi
+    return 0
+}
+
 # ── Parking (FR-15): every breaker writes a record, no proceed path ──
 
 park() {
@@ -125,6 +156,18 @@ park() {
     local reason="$1" detail="$2" history="${3:-null}"
     echo "[auto-build] PARK: $reason — $detail" >&2
     if [[ "$DRY_RUN" == "true" ]]; then exit 4; fi
+    # Preflight-time parks (origin gate, provider health) can fire before
+    # init_ledger; a park without a ledger would be unresumable. Bootstrap
+    # the full skeleton so --resume has a state to dispatch on.
+    if [[ ! -f "$STATE" ]]; then
+        write_ledger_skeleton
+    fi
+    # A review decision belongs to exactly one breaker instance. Any
+    # decision.json still present when a NEW review breaker parks is stale
+    # (e.g. left from an earlier retry) and must not auto-resolve this one.
+    if [[ "$reason" == "review_breaker" ]]; then
+        rm -f "$PROJECT_DIR/.cct/review/decision.json"
+    fi
     mkdir -p "$LEDGER_DIR/escalations"
     local n=1
     while [[ -f "$LEDGER_DIR/escalations/esc-$n.json" ]]; do n=$((n + 1)); done
@@ -135,7 +178,7 @@ park() {
         --arg created "$(now_iso)" --argjson history "$history" \
         '{id: $id, reason: $reason, detail: $detail, phase: ($phase | tonumber),
           status_at_escalation: $status, created: $created, history: $history,
-          resolved: false,
+          resolved: false, notified: false,
           human_actions: [
             "Inspect the history refs above, resolve the blocker (e.g. /review-decide, origin A/B/C, manual fix + commit)",
             "Then rerun: scripts/auto-build-loop.sh '"$FEATURE_ID"' --resume"
@@ -144,6 +187,12 @@ park() {
         state_set '.status = "parked" | .escalations += [$e] | .updated = $t' \
             --arg e "esc-$n" --arg t "$(now_iso)"
         journal "parked" "$reason: $detail"
+    fi
+    notify "$reason" "parked: $detail"
+    if [[ "$NOTIFY_OK" == "true" ]]; then
+        local tmp
+        tmp=$(mktemp)
+        jq '.notified = true' "$esc" > "$tmp" && mv "$tmp" "$esc"
     fi
     exit 4
 }
@@ -322,6 +371,11 @@ init_ledger() {
         exit 1
     fi
     if [[ -f "$STATE" ]]; then return 0; fi
+    write_ledger_skeleton
+}
+
+write_ledger_skeleton() {
+    mkdir -p "$LEDGER_DIR"
     local base_ref
     base_ref=$(git -C "$PROJECT_DIR" rev-parse HEAD)
     jq -n \
@@ -497,7 +551,33 @@ verify_pass_gate() {
 run_review_loop() {
     # run_review_loop <phase-num> <phase-base-ref> <phase-dir>
     local n="$1" base_ref="$2" phase_dir="$3"
-    init_review_state "$base_ref"
+
+    # Human-approved bypass (FR-5): accepted once, only for the phase whose
+    # parked escalation was approved via /review-decide. Any other bypass
+    # (different phase, stale approval, hand-written summary) still parks.
+    local summary="$PROJECT_DIR/.cct/review/loop-summary.json"
+    if [[ -f "$summary" ]]; then
+        local byp appr verdict
+        byp=$(jq -r '.bypass // false' "$summary")
+        verdict=$(jq -r '.verdict // empty' "$summary")
+        appr=$(state_get ".phases[\"$n\"].bypass_approved // empty")
+        if [[ "$byp" == "true" ]]; then
+            if [[ -n "$appr" && "$appr" != "null" ]]; then
+                mkdir -p "$phase_dir"
+                mv "$PROJECT_DIR/.cct/review" "$phase_dir/review"
+                journal "review_bypass_accepted" "phase $n via $appr"
+                return 0
+            fi
+            park "review_breaker" "bypass present without a phase-scoped human approval (phase $n)" "null"
+        fi
+    fi
+
+    # Live parked/interrupted review state is reused as-is: a /review-decide
+    # retry relies on the existing attempt counter and monotonic round
+    # numbering (FR-4). Fresh phases start a fresh loop.
+    if [[ ! -f "$PROJECT_DIR/.cct/review/state.json" ]]; then
+        init_review_state "$base_ref"
+    fi
     local fix_count=0
     while true; do
         local rc=0
@@ -516,8 +596,16 @@ run_review_loop() {
             1)
                 fix_count=$((fix_count + 1))
                 if [[ $fix_count -gt $MAX_FIX_SESSIONS ]]; then
+                    # Driver-level breaker: write breaker-tripped.json so the
+                    # /review-decide channel works exactly as for runner
+                    # breakers (it refuses to run without a breaker file).
+                    jq -n --arg r "$round" --arg t "$(now_iso)" \
+                        '{breaker_type: "driver_fix_sessions_exhausted",
+                          rounds_completed: ($r | tonumber), tripped_at: $t}' \
+                        > "$PROJECT_DIR/.cct/review/breaker-tripped.json"
                     park "review_breaker" "max fix sessions ($MAX_FIX_SESSIONS) exhausted in phase $n" \
-                        "$(jq -n --arg f "$phase_dir" '{findings_dir: $f}')"
+                        "$(jq -n --arg f "$phase_dir" --arg fixes "$fix_count" \
+                            '{findings_dir: $f, fix_sessions: ($fixes | tonumber)}')"
                 fi
                 set_status "addressing-findings"
                 local findings="$PROJECT_DIR/.cct/review/findings-round-$round.json"
@@ -548,8 +636,13 @@ run_review_loop() {
                 local btype="unknown"
                 [[ -f "$PROJECT_DIR/.cct/review/breaker-tripped.json" ]] && \
                     btype=$(jq -r '.breaker_type // "unknown"' "$PROJECT_DIR/.cct/review/breaker-tripped.json")
+                # Live .cct/review/ state is intentionally left in place:
+                # /review-decide operates on it after parking (FR-4).
                 park "review_breaker" "circuit breaker '$btype' in phase $n round $round" \
-                    "$(jq -n --arg b "$PROJECT_DIR/.cct/review/breaker-tripped.json" '{breaker_file: $b}')"
+                    "$(jq -n --arg b "$PROJECT_DIR/.cct/review/breaker-tripped.json" \
+                        --argjson findings "$(ls "$PROJECT_DIR"/.cct/review/findings-round-*.json 2>/dev/null | jq -Rs 'split("\n") | map(select(. != ""))')" \
+                        --arg fixes "$fix_count" \
+                        '{breaker_file: $b, findings_files: $findings, fix_sessions: ($fixes | tonumber)}')"
                 ;;
             *)
                 park "review_breaker" "review runner exited $rc (phase $n)" "null"
@@ -579,6 +672,7 @@ milestone_pause() {
     state_set '.milestones.last_paused_after_phase = ($n | tonumber)' --arg n "$n"
     set_status "milestone-paused"
     journal "milestone" "paused after phase $n"
+    notify "milestone" "paused after phase $n ($title) — sign off in specs/$FEATURE_ID/automation-summary.md, then --resume"
     echo "[auto-build] Milestone reached after phase $n. Sign off in $SUMMARY_MD, then --resume." >&2
     exit 3
 }
@@ -670,7 +764,8 @@ run_phase() {
             attempt=$((attempt + 1))
             if [[ $attempt -gt $MAX_FIX_SESSIONS ]]; then
                 park "test_failure" "tests still failing after $MAX_FIX_SESSIONS fix sessions (phase $n, log: $tlog)" \
-                    "$(jq -n --arg log "$tlog" '{last_log: $log}')"
+                    "$(jq -n --arg log "$tlog" --arg fixes "$((attempt - 1))" \
+                        '{last_log: $log, fix_sessions: ($fixes | tonumber)}')"
             fi
             local fixp="$phase_dir/fix-prompt-tests-$attempt.md"
             {
@@ -753,6 +848,127 @@ if [[ "$DRY_RUN" == "true" ]]; then
     exit 0
 fi
 
+# ── Parked-run resume (FR-4..FR-7): artifact-based, no bypass flags ──
+
+resolve_escalation() {
+    # resolve_escalation <esc-file> <note>
+    local esc_file="$1" note="$2" tmp
+    tmp=$(mktemp)
+    jq --arg t "$(now_iso)" '.resolved = true | .resolved_at = $t' "$esc_file" > "$tmp" && mv "$tmp" "$esc_file"
+    set_status "resumed"
+    journal "resumed" "$note"
+    notify "resumed" "$note"
+}
+
+refuse_resume() {
+    echo "Error: cannot resume — $1" >&2
+    exit 1
+}
+
+# Decisions are single-use: consumed (archived to the escalation dir) the
+# moment they resolve a breaker, so a later breaker can never reuse one.
+consume_review_decision() {
+    # consume_review_decision <esc-id>
+    local esc_id="$1" dec="$PROJECT_DIR/.cct/review/decision.json"
+    mv "$dec" "$LEDGER_DIR/escalations/decision-$esc_id.json" 2>/dev/null || rm -f "$dec"
+}
+
+resume_parked() {
+    # Dispatch on the newest UNRESOLVED escalation; resolution is derived
+    # from human-produced artifacts only. Falls through on success.
+    local esc_file="" i=1
+    while [[ -f "$LEDGER_DIR/escalations/esc-$i.json" ]]; do
+        if [[ "$(jq -r '.resolved' "$LEDGER_DIR/escalations/esc-$i.json")" == "false" ]]; then
+            esc_file="$LEDGER_DIR/escalations/esc-$i.json"
+        fi
+        i=$((i + 1))
+    done
+    [[ -z "$esc_file" ]] && refuse_resume "run is parked but no unresolved escalation record found; inspect $LEDGER_DIR/escalations/"
+    local reason phase
+    reason=$(jq -r '.reason' "$esc_file")
+    phase=$(jq -r '.phase' "$esc_file")
+
+    case "$reason" in
+        review_breaker)
+            local dec="$PROJECT_DIR/.cct/review/decision.json"
+            [[ -f "$dec" ]] || refuse_resume "review breaker pending — run /review-decide approve|reject|retry in a copilot session first"
+            local decision
+            decision=$(jq -r '.decision // empty' "$dec")
+            case "$decision" in
+                approve)
+                    [[ "$(jq -r '.bypass // false' "$PROJECT_DIR/.cct/review/loop-summary.json" 2>/dev/null)" == "true" ]] \
+                        || refuse_resume "decision is approve but no bypass loop-summary.json exists; rerun /review-decide approve"
+                    # Single-use, phase-scoped approval (FR-5).
+                    state_set '.phases[$p].bypass_approved = $e' \
+                        --arg p "$phase" --arg e "$(basename "$esc_file" .json)"
+                    consume_review_decision "$(basename "$esc_file" .json)"
+                    resolve_escalation "$esc_file" "review breaker approved for phase $phase (human bypass)"
+                    ;;
+                reject)
+                    consume_review_decision "$(basename "$esc_file" .json)"
+                    resolve_escalation "$esc_file" "review breaker rejected by human — run aborted"
+                    set_status "aborted"
+                    echo "[auto-build] Review REJECTED via /review-decide. Run aborted; branch and ledger left for inspection." >&2
+                    exit 0
+                    ;;
+                retry)
+                    # Runner retry semantics live in .cct/review/state.json
+                    # (attempt incremented, loop_start reset by /review-decide);
+                    # run_review_loop reuses that state without re-init.
+                    consume_review_decision "$(basename "$esc_file" .json)"
+                    resolve_escalation "$esc_file" "review breaker retry approved (phase $phase)"
+                    ;;
+                *) refuse_resume "unrecognized decision '$decision' in .cct/review/decision.json" ;;
+            esac
+            ;;
+        origin_gate)
+            local oe=0
+            bash "$SCRIPT_DIR/check-origin-alignment.sh" "$FEATURE_ID" >/dev/null 2>&1 || oe=$?
+            [[ $oe -le 1 ]] || refuse_resume "origin still misaligned (exit $oe) — produce a fresh aligned origin-alignment record or commit origin-divergence.md (rescope/restart/document-divergence is your call, never the driver's)"
+            resolve_escalation "$esc_file" "origin gate cleared (exit $oe)"
+            ;;
+        provider_unavailable)
+            local health_args=(--provider "$GATING_REVIEWER")
+            [[ -n "${CCT_PROVIDER_PROFILE:-}" ]] && health_args=(--profile "$CCT_PROVIDER_PROFILE" "${health_args[@]}")
+            bash "$SCRIPT_DIR/providers-health.sh" "${health_args[@]}" >/dev/null 2>&1 \
+                || refuse_resume "gating reviewer chain still unhealthy — fix providers.toml or the provider service, then --resume"
+            resolve_escalation "$esc_file" "reviewer chain healthy again"
+            ;;
+        test_failure|build_session_error|git_anomaly)
+            [[ -z "$(git -C "$PROJECT_DIR" status --porcelain | grep -v '^?? \.cct/')" ]] \
+                || refuse_resume "worktree is dirty — commit your manual fix first, then --resume"
+            local probe_log
+            probe_log=$(mktemp)
+            run_tests "$probe_log" || refuse_resume "test.command still failing (log: $probe_log) — fix, commit, then --resume"
+            resolve_escalation "$esc_file" "$reason cleared: tests green after manual fix"
+            ;;
+        cap_exceeded)
+            # Re-read caps (and phase cap) from the live config into the
+            # frozen snapshot; the wall-clock guard restarts on human resume.
+            local tmp
+            tmp=$(mktemp)
+            jq --slurpfile live "$CONFIG_PATH" \
+                '.caps = ($live[0].caps // .caps) |
+                 .phases.max_phases = ($live[0].phases.max_phases // .phases.max_phases)' \
+                "$CONFIG_SNAPSHOT" > "$tmp" && mv "$tmp" "$CONFIG_SNAPSHOT"
+            CAP_WALL_CLOCK=$(cfg '.caps.wall_clock_sec' '14400')
+            CAP_COST=$(cfg '.caps.cost_usd' '25')
+            MAX_PHASES="${MAX_PHASES_ARG:-$(cfg '.phases.max_phases' '8')}"
+            state_set '.caps.max_cost_usd = ($c | tonumber) | .caps.max_wall_clock_sec = ($w | tonumber) | .caps.max_phases = ($m | tonumber) | .totals.started_epoch = ($now | tonumber)' \
+                --arg c "$CAP_COST" --arg w "$CAP_WALL_CLOCK" --arg m "$MAX_PHASES" --arg now "$(now_epoch)"
+            local spent
+            spent=$(state_get '.totals.cost_usd')
+            if awk -v s="$spent" -v c="$CAP_COST" 'BEGIN { exit !(s >= c) }'; then
+                refuse_resume "cost cap still exceeded (spent \$$spent, cap \$$CAP_COST) — raise caps.cost_usd in $CONFIG_PATH, then --resume"
+            fi
+            resolve_escalation "$esc_file" "caps refreshed from config (cost \$$CAP_COST, wall ${CAP_WALL_CLOCK}s, phases $MAX_PHASES)"
+            ;;
+        *)
+            refuse_resume "no automatic resolution for reason '$reason' — inspect $esc_file"
+            ;;
+    esac
+}
+
 if [[ "$RESUME" == "true" ]]; then
     if [[ ! -f "$STATE" ]]; then
         echo "Error: --resume but no ledger at $STATE." >&2
@@ -777,12 +993,7 @@ if [[ "$RESUME" == "true" ]]; then
             journal "resumed" "after milestone sign-off"
             ;;
         parked)
-            UNRESOLVED=$(jq -r '[.escalations[]] | length' "$STATE")
-            echo "Error: run is parked ($UNRESOLVED escalation(s) recorded)." >&2
-            echo "Full breaker resolution/resume detection lands in increment C (#70)." >&2
-            echo "Manual path: resolve the blocker, remove the ledger dir, and start over," >&2
-            echo "or wait for #70's --resume resolution detection." >&2
-            exit 1
+            resume_parked
             ;;
         done)
             echo "Run already complete for '$FEATURE_ID'." >&2
@@ -817,5 +1028,6 @@ set_status "finalizing"
 } >> "$SUMMARY_MD"
 driver_commit "docs($FEATURE_ID): automation summary [auto-build]" || true
 set_status "done"
+notify "done" "run complete: $DONE_COUNT phase(s) on $BRANCH_NAME (advisory — nothing pushed)"
 echo "[auto-build] DONE — $DONE_COUNT phase(s) on $BRANCH_NAME. Nothing pushed (advisory)." >&2
 exit 0
