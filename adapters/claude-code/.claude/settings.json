@@ -10,7 +10,8 @@
     "CCT_PEER_PROVIDER": "",
     "CCT_PEER_TRIGGER": "phase-complete",
     "CCT_AUTOBUILD_PROFILE": "",
-    "CCT_AUTOBUILD_NOTIFY_CMD": ""
+    "CCT_AUTOBUILD_NOTIFY_CMD": "",
+    "CCT_GH_BIN": ""
   },
   "hooks": {
     "PreToolUse": [

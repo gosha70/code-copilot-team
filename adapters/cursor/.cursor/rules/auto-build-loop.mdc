@@ -24,14 +24,36 @@ breakers. Design: `specs/auto-build-loop/design.md`.
 | Peer review (11) | driver-run, gating, driver verifies PASS | same | same + green CI |
 | Push / PR / merge | never / never / never | auto / auto / never | auto / auto / gated auto |
 
-Only `advisory` is implemented today. `pr` (#71) and `merge` (later) are
-config slots; the driver rejects them until their increments land.
+`advisory` and `pr` are implemented. `merge` remains a reserved config slot;
+the driver rejects it until its increment lands.
+
+### `pr` profile specifics
+
+- **`gh` preflight**: `gh auth status` (via `$CCT_GH_BIN`, default `gh`) must
+  succeed — checked only when the profile can push. `advisory` never invokes
+  `gh`.
+- **Branch push**: after each phase gate the driver runs a plain
+  `git push -u <branch.remote> <branch>` (no `--force` code path anywhere),
+  refusing to push `master`/`main` or the base branch — so milestone pauses
+  are inspectable remotely.
+- **PR create/update**: at finalize the driver composes a deterministic PR
+  body, runs `pre-pr-check.sh` (close-keyword + body/title audit), then
+  `gh pr create` exactly once — recording `pr.number`/`pr.url` in the ledger.
+  Re-runs and `--resume` detect the existing PR (ledger, else
+  `gh pr view <branch>`) and `gh pr edit --body-file` instead of duplicating.
+  The driver never merges.
+- **Close target**: the PR title's `(Closes #N)` marker comes from config
+  `pr.closes` (a list), else the spec's `origin:` issue number; missing →
+  parks `pr_config`. Optional `pr.title` overrides the title prefix.
+- **WIP-push-on-escalation**: parking under `pr`/`merge` pushes the feature
+  branch (best-effort — a push failure is journaled and never blocks the
+  park); `advisory` parks locally only.
 
 ## Invocation
 
 ```bash
 scripts/auto-build-loop.sh <feature-id> \
-    [--profile advisory] [--config <path>] \
+    [--profile advisory|pr] [--config <path>] \
     [--resume] [--dry-run] [--max-phases N] [--start-phase N]
 # Exit: 0 done | 3 milestone-paused | 4 escalated/parked | 1 usage/preflight
 ```
@@ -114,6 +136,7 @@ and a `resumed` notification fires. `review_breaker` parking leaves
 
 Default-on caps (max phases 8, review rounds 5, fix sessions 3/phase,
 wall-clock 4h, cost $25); `advisory` cannot push even on escalation; no
-`--force` code path; commits refused on `master`/`main`; sessions run with
+`--force` code path; commits refused on `master`/`main` and pushes refused
+to `master`/`main`/the base branch; sessions run with
 `acceptEdits` so PreToolUse protect hooks stay active; origin escalations are
 clearable only by human-authored artifacts.

@@ -124,7 +124,62 @@ timeout_sec = 10
 healthcheck = "false"
 TOML
 
-trap 'rm -rf "$MOCK_BIN" "$PASS_PROFILE" "$FAIL_ONCE_PROFILE" "$FAIL_ALWAYS_PROFILE" "$DOWN_PROFILE" /tmp/cct-mock-reviewed' EXIT
+# ── Mock gh (argv logger + auth/pr create/view/edit) ──────────
+# Logs every invocation's argv to $GH_LOG. Simulates PR existence via
+# $GH_PR_STATE.{n,url} so `pr view` after `pr create` returns the PR (drives
+# resume idempotency). Set GH_AUTH_FAIL=1 to make `gh auth status` fail.
+
+GH_BIN_DIR=$(mktemp -d)
+cat > "$GH_BIN_DIR/gh" << 'GH'
+#!/usr/bin/env bash
+LOG="${GH_LOG:-/dev/null}"
+STATE="${GH_PR_STATE:-/tmp/mock-gh-pr}"
+printf '%s\n' "$*" >> "$LOG"
+if [[ "${1:-}" == "--version" ]]; then echo "gh version 0.0.0 (mock)"; exit 0; fi
+if [[ "${1:-}" == "auth" ]]; then
+    [[ "${GH_AUTH_FAIL:-}" == "1" ]] && exit 1
+    exit 0
+fi
+case "${1:-} ${2:-}" in
+    "pr create")
+        n=$(( $(cat "$STATE.n" 2>/dev/null || echo 0) + 1 ))
+        echo "$n" > "$STATE.n"
+        url="https://github.com/mock/repo/pull/$n"
+        echo "$url" > "$STATE.url"
+        echo "$url"
+        exit 0 ;;
+    "pr view")
+        if [[ -f "$STATE.url" ]]; then
+            printf '{"number":%s,"url":"%s"}\n' "$(cat "$STATE.n")" "$(cat "$STATE.url")"
+            exit 0
+        fi
+        exit 1 ;;
+    "pr edit") exit 0 ;;
+    *) exit 0 ;;
+esac
+GH
+chmod +x "$GH_BIN_DIR/gh"
+GH_STUB="$GH_BIN_DIR/gh"
+
+# add_remote <project> — bare remote as 'origin'; echoes the bare repo path
+add_remote() {
+    local dir="$1" bare
+    bare="$(mktemp -d)/remote.git"
+    git init -q --bare "$bare"
+    git -C "$dir" remote add origin "$bare"
+    echo "$bare"
+}
+
+# cfg_set <project> <jq-filter> — edit automation.json and commit
+cfg_set() {
+    local dir="$1" filter="$2" f tmp
+    f="$dir/specs/demo-feat/automation.json"
+    tmp=$(mktemp)
+    jq "$filter" "$f" > "$tmp" && mv "$tmp" "$f"
+    git -C "$dir" add -A && git -C "$dir" commit -q -m "cfg"
+}
+
+trap 'rm -rf "$MOCK_BIN" "$GH_BIN_DIR" "$PASS_PROFILE" "$FAIL_ONCE_PROFILE" "$FAIL_ALWAYS_PROFILE" "$DOWN_PROFILE" /tmp/cct-mock-reviewed' EXIT
 
 # ── Project factory ───────────────────────────────────────────
 
@@ -281,11 +336,18 @@ export MOCK_CLAUDE_SCRIPT="$DEFAULT_SCRIPT"
 echo "=== US1: preflight rejections ==="
 # ══════════════════════════════════════════════════════════════
 
-# Non-advisory profile rejected (FR-1)
+# merge profile still rejected; unknown profile rejected (FR-1)
+P0=$(setup_project)
+run_driver "$P0" --profile merge
+assert_exit "profile merge rejected" 1 "$RC"
+assert_contains "merge rejection names reserved slot" "$OUTPUT" "not available yet"
+run_driver "$P0" --profile bogus
+assert_exit "unknown profile rejected" 1 "$RC"
+assert_contains "unknown profile message" "$OUTPUT" "unknown profile"
+rm -rf "$P0"
+
+# Shared advisory project for the advisory-path tests that follow.
 P=$(setup_project)
-run_driver "$P" --profile pr
-assert_exit "profile pr rejected" 1 "$RC"
-assert_contains "profile rejection names later increment" "$OUTPUT" "not available in this increment"
 
 # Unapproved plan rejected (FR-2)
 P2=$(setup_project draft)
@@ -795,6 +857,102 @@ git -C "$P" add -A && git -C "$P" commit -q -m "raise cost cap"
 run_driver "$P" --resume
 assert_exit "cap resume completes after raise" 0 "$RC"
 rm -rf "$P"
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+echo "=== D/US1-US3: pr profile — push, PR, WIP-push ==="
+# ══════════════════════════════════════════════════════════════
+
+export CCT_GH_BIN="$GH_STUB"
+
+# A: happy path — 2 phases, no milestone, branch pushed, PR opened once
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .phases.milestone_every=0 | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+run_driver "$P"
+assert_exit "pr happy path completes (done)" 0 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat/state.json"
+assert_eq "ledger records PR number" "1" "$(jq -r '.pr.number' "$LEDGER")"
+assert_contains "ledger records PR url" "$(jq -r '.pr.url' "$LEDGER")" "/pull/1"
+assert_eq "gh pr create invoked exactly once" "1" "$(grep -c '^pr create' "$GH_LOG")"
+assert_contains "branch pushed (events journal)" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl")" "pushed"
+RC2=0; git -C "$BARE" rev-parse --verify -q feature/demo-feat >/dev/null 2>&1 || RC2=$?
+assert_exit "feature branch present on remote" 0 "$RC2"
+assert_eq "no --force in any gh argv" "0" "$(grep -c -- '--force' "$GH_LOG")"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# B: resume detects the existing PR and edits — no duplicate create
+P=$(setup_project)
+cfg_set "$P" '.profile="pr" | .phases.milestone_every=0 | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+run_driver "$P"
+assert_exit "pr run completes before resume test" 0 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat/state.json"
+# Simulate a crash after gh pr create but before the ledger recorded it.
+CB=$(mktemp); jq '.status="finalizing" | .pr={number:null,url:null}' "$LEDGER" > "$CB" && mv "$CB" "$LEDGER"
+run_driver "$P" --resume
+assert_exit "resume after PR create completes" 0 "$RC"
+assert_eq "pr create still invoked only once across resume" "1" "$(grep -c '^pr create' "$GH_LOG")"
+assert_eq "resume used pr edit" "1" "$(grep -c '^pr edit' "$GH_LOG")"
+assert_eq "ledger PR number restored via remote lookup" "1" "$(jq -r '.pr.number' "$LEDGER")"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# C: advisory never invokes gh, never pushes (even on park)
+P=$(setup_project); single_phase "$P"
+GH_LOG=$(mktemp); export GH_LOG
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "advisory review-breaker parks" 4 "$RC"
+assert_eq "advisory invoked gh zero times" "0" "$(wc -l < "$GH_LOG" | tr -d ' ')"
+assert_eq "advisory park records no wip_pushed" "null" "$(jq -r '.wip_pushed' "$P/.cct/auto-build/demo-feat/escalations/esc-1.json")"
+rm -rf "$P" "$GH_LOG"
+
+# D: push refused when the branch resolves to the base branch
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.profile="pr" | .branch.name="main-dev" | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+run_driver "$P"
+assert_exit "push to base branch refused (exit 1)" 1 "$RC"
+assert_contains "push refusal message" "$OUTPUT" "refusing to push"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# E: gh auth preflight — required under pr, skipped under advisory
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.profile="pr" | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE GH_AUTH_FAIL=1
+run_driver "$P"
+assert_exit "pr preflight fails on bad gh auth" 1 "$RC"
+assert_contains "gh auth failure message" "$OUTPUT" "gh auth status"
+unset GH_AUTH_FAIL
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+P=$(setup_project)
+GH_LOG=$(mktemp); export GH_LOG GH_AUTH_FAIL=1
+run_driver "$P"
+assert_exit "advisory ignores gh auth (reaches milestone)" 3 "$RC"
+unset GH_AUTH_FAIL
+rm -rf "$P" "$GH_LOG"
+
+# F: WIP-push-on-escalation pushes on a pr park
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.profile="pr" | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "pr review-breaker parks" 4 "$RC"
+assert_eq "pr park pushed WIP branch" "true" "$(jq -r '.wip_pushed' "$P/.cct/auto-build/demo-feat/escalations/esc-1.json")"
+RC2=0; git -C "$BARE" rev-parse --verify -q feature/demo-feat >/dev/null 2>&1 || RC2=$?
+assert_exit "WIP branch present on remote after park" 0 "$RC2"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# G: the driver has no --force / force-push code path anywhere
+assert_eq "driver contains no --force code path" "0" "$(grep -c -- '--force' "$DRIVER")"
+
+unset CCT_GH_BIN GH_LOG GH_PR_STATE
 
 echo ""
 
