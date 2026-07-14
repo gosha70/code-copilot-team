@@ -1,16 +1,104 @@
-# Claude Code Permission Patterns Guide
+# Claude Code Permission Profiles Guide
 
-Recommended `/permissions` Allow and Deny patterns for Claude Code projects. These reduce friction on safe commands while blocking destructive operations.
+`claude-code init` and `claude-code permissions` write a project's permission
+posture as one of three **tiers**. Pick a tier by how much you trust the
+codebase — the tier does the work, so you don't hand-maintain allow/deny lists.
 
-## How Permissions Work
+> **Why tiers, not enumerated allowlists.** Enumerating "safe" commands does
+> NOT stop prompts — the next unlisted command (`python -m alembic`,
+> `npx prisma …`) prompts again. Durable zero-prompt work comes from a blanket
+> allow under `dontAsk` plus **`deny` rules + the `protect-*` hooks** as the
+> real safety boundary — not from prompt friction. The per-stack enumerated
+> lists below are kept only as an appendix for custom middle grounds; see the
+> warning there.
 
-Claude Code's permission system controls which tools and commands the agent can execute without asking. Configure via `/permissions` in a Claude session or edit `~/.claude/settings.json` directly.
+## The three tiers
 
-Patterns are matched against tool names and command arguments:
-- `Allow` — automatically approved, no confirmation prompt
-- `Deny` — always blocked, Claude cannot execute
+| Tier | Prompts for repo work | Destructive guardrails | Commit/push + credential edits | Use for |
+|---|---|---|---|---|
+| `default` | Yes (everything) | n/a | `protect-*` hooks gate them | Shared, unfamiliar, or high-risk repos |
+| `balanced` | **No** (`dontAsk`) | `deny` rules (rm -rf, sudo, force-push, hard-reset) | `protect-*` hooks still gate them | **Your own repos (recommended)** |
+| `relaxed` ⚠️ | **No** | `deny` rules kept | **Disarmed** (`HOOK_*_ALLOW`) — fully autonomous | A project you fully trust and run unattended |
 
-## Recommended Allow Patterns
+### `default` — current behavior, unchanged
+
+No project `settings.json` is written; only the git-approval allows in
+`settings.local.json`. Everything prompts. This is the safe default for shared
+or unfamiliar codebases.
+
+### `balanced` — zero prompts for repo work, guarded destructives
+
+Writes `.claude/settings.json` with `permissions.defaultMode: "dontAsk"`
+(auto-denies anything not allowlisted — never a stall, never a prompt), a broad
+tool `allow` list, and a `deny` list that blocks the dangerous operations. The
+`protect-git.sh` / `protect-files.sh` hooks still gate commits, pushes, and
+credential/`.env` edits through chat approval.
+
+```json
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "WebSearch", "WebFetch"],
+    "deny": [
+      "Read(./.env)", "Read(./.env.local)", "Read(./.env.production)",
+      "Bash(rm -rf:*)", "Bash(sudo:*)",
+      "Bash(git push --force:*)", "Bash(git reset --hard:*)"
+    ]
+  }
+}
+```
+
+Stack-specific `deny` extras are appended per template type (e.g. `web-dynamic`
+adds `Bash(npx prisma migrate reset:*)`, `Bash(npx prisma db push:*)`,
+`Bash(git push:*)`).
+
+### `relaxed` (dangerous) — fully autonomous, hooks disarmed
+
+`balanced` plus an `env` block that disarms both protect hooks:
+
+```json
+{
+  "env": { "HOOK_GIT_ALLOW": "true", "HOOK_PROTECT_ALLOW": "true" }
+}
+```
+
+- `HOOK_GIT_ALLOW=true` — commits and pushes run without chat approval.
+- `HOOK_PROTECT_ALLOW=true` — `.env`/credential/key edits are allowed;
+  consequently the `Read(./.env*)` denies are **dropped** in this tier
+  (read-deny + edit-allow is incoherent).
+- The Bash `deny` guardrails (rm -rf / sudo / push --force / reset --hard) are
+  **kept** — `deny` wins over allow and costs zero prompts.
+- **`bypassPermissions` is never used** — it would skip `deny` too.
+- Writing this tier requires explicit confirmation: `--yes-dangerous`, or an
+  interactive `y/N` after a loud warning.
+
+## Applying a tier
+
+```bash
+# At init (default tier if the flag is omitted; interactive prompt in a TTY):
+claude-code init web-dynamic ./my-app --permissions balanced
+claude-code init web-dynamic ./my-app --permissions relaxed --yes-dangerous
+
+# Switch an existing project onto (or off) a managed tier:
+claude-code permissions balanced ./my-app
+claude-code permissions relaxed  ./my-app --yes-dangerous
+claude-code permissions default  ./my-app   # strips the managed keys, keeps your custom ones
+```
+
+The chosen tier is recorded in `.claude/template.json`. `claude-code sync`
+**reports** permission-profile drift but never re-applies it — switching a
+safety boundary is always an explicit act.
+
+Docs recommendation: use `balanced` for personal repos; keep `default` for
+shared, unfamiliar, or high-risk repos.
+
+---
+
+## Appendix: enumerated per-stack patterns (custom middle grounds)
+
+> ⚠️ **These lists re-trigger prompts.** Enumeration only allows exactly what
+> you list — the next unlisted command prompts again. Prefer a tier above.
+> These are here only if you deliberately want a hand-tuned middle ground.
 
 ### Universal (All Stacks)
 
@@ -69,90 +157,22 @@ Bash(go vet*)               # vet
 Bash(golangci-lint*)        # linting
 ```
 
-## Recommended Deny Patterns
+### Recommended Deny Patterns
 
 ```
 Bash(rm -rf*)               # recursive delete
-Bash(git push*)             # push to remote
 Bash(git push --force*)     # force push
 Bash(docker rm*)            # remove containers
 Bash(docker rmi*)           # remove images
 Bash(npm publish*)          # publish packages
-Bash(pip upload*)           # upload packages
 Bash(DROP TABLE*)           # destructive SQL
 Bash(TRUNCATE*)             # destructive SQL
 ```
 
-## Setup Instructions
+### Tips
 
-### Via CLI
-
-```bash
-# Open permissions UI
-claude
-# Then type: /permissions
-```
-
-### Via settings.json
-
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "Read",
-      "Glob",
-      "Grep",
-      "Bash(npm run test*)",
-      "Bash(npx tsc*)"
-    ],
-    "deny": [
-      "Bash(rm -rf*)",
-      "Bash(git push*)"
-    ]
-  }
-}
-```
-
-### Project-Level Permissions
-
-Add to `.claude/settings.json` in your project root for project-specific patterns. Project permissions are merged with global permissions.
-
-## Tips
-
-- Start conservative — you can always add more Allow patterns as you build trust.
-- Deny patterns take precedence over Allow patterns.
-- Use `*` wildcards to match command variations (e.g., `npm run test*` matches `npm run test`, `npm run test:unit`).
-- Review permissions periodically with `/permissions` to see what's configured.
-- **Always chain bash commands with `&&` on a single line** — never use newlines to separate commands in a single Bash tool call. Multi-line commands generate unique permission strings that don't match wildcard patterns in `settings.json`, causing repeated approval prompts even when `Bash(*)` is allowed. This is a known friction point.
-
-## Reducing Friction (v2.1.111+)
-
-### Auto mode
-
-Auto mode uses a permission classifier instead of pattern matching — safe read-only actions run without interruption, risky ones get blocked. Activate with `Shift+Tab` to cycle to `auto` in the permission mode selector, or start with `--permission-mode auto`.
-
-Customize with the `autoMode` setting in `settings.json`:
-
-```json
-{
-  "autoMode": {
-    "environment": ["Trusted personal repo, no production access"],
-    "allow": ["Run tests", "Read any file"],
-    "soft_deny": ["Delete files", "Modify CI configuration"]
-  }
-}
-```
-
-Use auto mode in trusted repos where you are the sole developer. Avoid it on unfamiliar codebases or shared machines where you want to see each action before it runs.
-
-### `/less-permission-prompts`
-
-Run `/less-permission-prompts` after a few sessions — it scans your recent transcripts for common read-only Bash and MCP tool calls and proposes a prioritized allowlist for `.claude/settings.json`. Easier than building patterns manually.
-
-### Bash commands that no longer prompt
-
-As of v2.1.111, these no longer trigger permission prompts:
-- Read-only bash commands with glob patterns (e.g., `ls *.ts`)
-- Commands starting with `cd <project-dir> &&`
+- Deny patterns take precedence over Allow patterns in every mode.
+- Use `*` wildcards to match command variations (e.g., `npm run test*`).
+- **Always chain bash commands with `&&` on a single line** — multi-line
+  commands generate unique permission strings that don't match wildcard
+  patterns, causing repeated prompts even when `Bash` is allowed.

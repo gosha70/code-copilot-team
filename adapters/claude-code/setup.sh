@@ -180,6 +180,20 @@ if [[ "$SYNC_MODE" == "1" ]]; then
         echo "[done] Synced agents to $AGENTS_TARGET"
     fi
 
+    # Permission profiles (default = absence of a file; balanced/relaxed +
+    # per-stack deny-extras). The launcher resolves tiers from here.
+    PERMISSIONS_SOURCE="$SCRIPT_DIR/permissions"
+    PERMISSIONS_TARGET="$CLAUDE_DIR/permissions"
+    if [[ -d "$PERMISSIONS_SOURCE" ]]; then
+        mkdir -p "$PERMISSIONS_TARGET"
+        cp "$PERMISSIONS_SOURCE"/*.json "$PERMISSIONS_TARGET/" 2>/dev/null || true
+        if [[ -d "$PERMISSIONS_SOURCE/deny-extras" ]]; then
+            mkdir -p "$PERMISSIONS_TARGET/deny-extras"
+            cp "$PERMISSIONS_SOURCE/deny-extras"/*.json "$PERMISSIONS_TARGET/deny-extras/" 2>/dev/null || true
+        fi
+        echo "[done] Synced permission profiles to $PERMISSIONS_TARGET"
+    fi
+
     # Hooks
     HOOKS_SOURCE="$SCRIPT_DIR/.claude/hooks"
     HOOKS_TARGET="$CLAUDE_DIR/hooks"
