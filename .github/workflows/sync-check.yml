@@ -76,6 +76,8 @@ jobs:
           bash -n scripts/validate-spec.sh
           bash -n scripts/validate-pitch.sh
           bash -n scripts/check-origin-alignment.sh
+          bash -n scripts/auto-build-loop.sh
+          bash -n scripts/providers-health.sh
 
       - name: Run generation tests
         run: bash tests/test-generate.sh
@@ -91,6 +93,9 @@ jobs:
 
       - name: Run review loop integration tests
         run: bash tests/test-review-loop.sh
+
+      - name: Run auto-build loop tests
+        run: bash tests/test-auto-build-loop.sh
 
       - name: Run origin-alignment tests
         run: bash tests/test-origin-alignment.sh

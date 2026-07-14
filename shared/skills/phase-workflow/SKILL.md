@@ -79,6 +79,29 @@ When existing functionality is removed or replaced during a phase (e.g., replaci
 
 11. **Peer review (if active).** If `CCT_PEER_REVIEW_ENABLED` is `true`, the Build agent must complete the review loop via `/review-submit` before running `/phase-complete`. The stop hook validates that `loop-summary.json` exists with PASS or approved bypass — it does not initiate review. Plan-phase review is advisory and single-round. See `review-loop.md` for the full protocol.
 
+## Autonomy Profiles (auto-build-loop)
+
+When a feature runs under `scripts/auto-build-loop.sh` (see
+`auto-build-loop.md`), the human gates above are not bypassed — they are
+converted into explicit, configured state transitions under an opt-in
+autonomy profile declared in `specs/<feature-id>/automation.json`:
+
+| Gate (step) | advisory | pr | merge |
+|---|---|---|---|
+| Manual testing (6) | deferred to milestone checkpoint | deferred to milestone | deferred to milestone |
+| Commit gate (8) | driver auto-commits, local only, isolated branch | auto-commit | auto-commit |
+| Wait-for-approval (9) | auto-advance; hard pause every N phases | same | same |
+| Origin gate exit >= 2 (10) | **always escalate to human** | **always escalate** | **always escalate** |
+| Peer review (11) | driver-run and gating; driver independently verifies PASS | same | same + green CI |
+| Push / PR / merge | never / never / never | auto / auto / never | auto / auto / gated auto |
+
+The driver runs build sessions with `CCT_PEER_REVIEW_ENABLED=false` because
+it owns the review gate itself (the stop hook validates completion, not
+initiation). Milestone checkpoints batch steps 6 and 9: the human manually
+tests, records retro notes, and signs off with an `approved-by:` line before
+the loop resumes. Origin escalation semantics are unchanged — the driver
+never resolves rescope/restart/divergence on the user's behalf.
+
 ## Phase 1 Checklist (Scaffolding)
 
 - [ ] Package/dependency installation completes without errors
