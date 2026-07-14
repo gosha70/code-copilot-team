@@ -132,11 +132,13 @@ for provider in $(toml_list_providers "$PROFILE"); do
     elif bash -c "$HEALTHCHECK" &>/dev/null; then
         STATUS="OK"
         printf "  %-20s %-12s %s\n" "$provider ($PROVIDER_TYPE)" "OK" "$HEALTHCHECK"
-        ((PASS++))
+        # Assignment form, not ((PASS++)): under set -e, an arithmetic command
+        # evaluating to 0 (first increment) exits the script on bash >= 4.1.
+        PASS=$((PASS + 1))
     else
         STATUS="FAIL"
         printf "  %-20s %-12s %s\n" "$provider ($PROVIDER_TYPE)" "FAIL" "$HEALTHCHECK"
-        ((FAIL++))
+        FAIL=$((FAIL + 1))
     fi
     RESULTS="$RESULTS$provider $STATUS
 "
