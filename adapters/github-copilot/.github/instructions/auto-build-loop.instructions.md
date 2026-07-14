@@ -59,8 +59,21 @@ scripts/auto-build-loop.sh <feature-id> \
 
 Config lives at `specs/<feature-id>/automation.json` (template:
 `shared/templates/sdd/automation-template.json`; scaffold with `/auto-build`).
-Reviewers are a list with `specialization` and `gating` fields; v1 uses the
-first `gating: true` entry, resolved through `~/.code-copilot-team/providers.toml`.
+Reviewers are a list with `specialization`, `scope`, and `gating` fields,
+resolved through `~/.code-copilot-team/providers.toml`. The panel is **one
+gating reviewer + N advisory (non-gating) reviewers**:
+
+- The single `gating: true` reviewer drives the review round loop and decides
+  PASS/FAIL/breaker (exactly one gating reviewer is allowed; more is an error).
+- Each `gating: false` reviewer runs per phase as **advisory** — in an
+  isolated review dir (via `CCT_REVIEW_DIR`/`CCT_REVIEW_COLLAB_DIR`, so the
+  gating state is never touched). Its findings are folded into the fix-session
+  prompt (tagged by specialization) but never block PASS or trigger a round.
+- Preflight health-checks the whole panel: the gating reviewer down parks the
+  run; an advisory reviewer down is a warning and that lens is skipped.
+- Advisory reviewers are consulted only when a gating FAIL triggers a fix; a
+  clean gating PASS ends the phase. All reviewer outputs are archived per
+  phase (`phase-N/review/` gating, `phase-N/review-advisory/<provider>/`).
 
 ## The loop, per phase
 

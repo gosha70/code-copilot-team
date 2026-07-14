@@ -26,6 +26,11 @@ company = ""
 [defaults]
 # Map subject providers to their default peer reviewer.
 # Used when --peer-review is invoked without an explicit provider name.
+# NOTE: the auto-build driver selects reviewers from `review.reviewers[]` in
+# the feature's automation.json (each with a specialization + gating flag —
+# one gating reviewer + N advisory), NOT from peer_for; this section only sets
+# the default peer for ad-hoc `--peer-review` runs. providers.toml supplies
+# every reviewer's command + healthcheck + fallback chain.
 peer_for.claude = "codex"
 peer_for.codex = "claude"
 

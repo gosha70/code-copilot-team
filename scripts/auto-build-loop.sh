@@ -250,6 +250,12 @@ load_config() {
     CAP_WALL_CLOCK=$(cfg '.caps.wall_clock_sec' '14400')
     CAP_COST=$(cfg '.caps.cost_usd' '25')
     GATING_REVIEWER=$(jq -r '[.review.reviewers[]? | select(.gating == true)][0].provider // empty' "$CONFIG_SNAPSHOT")
+    GATING_SCOPE=$(jq -r '[.review.reviewers[]? | select(.gating == true)][0].scope // "both"' "$CONFIG_SNAPSHOT")
+    GATING_SPECIALIZATION=$(jq -r '[.review.reviewers[]? | select(.gating == true)][0].specialization // "general"' "$CONFIG_SNAPSHOT")
+    GATING_COUNT=$(jq -r '[.review.reviewers[]? | select(.gating == true)] | length' "$CONFIG_SNAPSHOT")
+    # Advisory (non-gating) panel reviewers as TSV rows: provider<TAB>scope<TAB>specialization.
+    ADVISORY_REVIEWERS=$(jq -r '.review.reviewers[]? | select(.gating != true)
+        | [.provider, (.scope // "both"), (.specialization // "general")] | @tsv' "$CONFIG_SNAPSHOT")
 
     # FR-1: single hard-coded profile ladder. advisory publishes nothing;
     # pr pushes + opens a PR (never merges); merge is a later increment
@@ -271,6 +277,12 @@ load_config() {
     fi
     if [[ -z "$GATING_REVIEWER" ]]; then
         echo "Error: config review.reviewers must contain at least one entry with gating=true." >&2
+        exit 1
+    fi
+    # v1 (increment E): exactly one gating reviewer + N advisory reviewers.
+    if [[ "${GATING_COUNT:-0}" -gt 1 ]]; then
+        echo "Error: exactly one gating reviewer is supported ($GATING_COUNT found)." >&2
+        echo "Mark the extras gating=false (advisory) — multiple gating reviewers are a later increment." >&2
         exit 1
     fi
 
@@ -340,6 +352,24 @@ preflight() {
     [[ -n "${CCT_PROVIDER_PROFILE:-}" ]] && health_args=(--profile "$CCT_PROVIDER_PROFILE" "${health_args[@]}")
     if ! bash "$SCRIPT_DIR/providers-health.sh" "${health_args[@]}" >/dev/null 2>&1; then
         park "provider_unavailable" "gating reviewer '$GATING_REVIEWER' (or its fallback chain) failed healthcheck" "null"
+    fi
+
+    # Advisory panel reviewers (FR-5): health-check each; drop the unhealthy
+    # ones (warn + journal). An advisory lens being down never blocks the run.
+    if [[ -n "$ADVISORY_REVIEWERS" ]]; then
+        local _kept="" _prov _scope _spec
+        while IFS=$'\t' read -r _prov _scope _spec; do
+            [[ -z "$_prov" ]] && continue
+            local _ah=(--provider "$_prov")
+            [[ -n "${CCT_PROVIDER_PROFILE:-}" ]] && _ah=(--profile "$CCT_PROVIDER_PROFILE" "${_ah[@]}")
+            if bash "$SCRIPT_DIR/providers-health.sh" "${_ah[@]}" >/dev/null 2>&1; then
+                _kept+=$(printf '%s\t%s\t%s' "$_prov" "$_scope" "$_spec")$'\n'
+            else
+                echo "[auto-build] advisory reviewer '$_prov' ($_spec) unhealthy — skipped for this run." >&2
+                journal "advisory_skipped" "$_prov ($_spec) failed healthcheck" 2>/dev/null || true
+            fi
+        done <<< "$ADVISORY_REVIEWERS"
+        ADVISORY_REVIEWERS=$(printf '%s' "$_kept" | sed '/^[[:space:]]*$/d')
     fi
 
     # Clean worktree
@@ -569,16 +599,18 @@ init_review_state() {
     mkdir -p "$PROJECT_DIR/.cct/review"
     jq -n \
         --arg fid "$FEATURE_ID" --arg peer "$GATING_REVIEWER" --arg tref "$BRANCH_NAME" \
+        --arg scope "$GATING_SCOPE" --arg spec "$GATING_SPECIALIZATION" \
         --argjson start "$(now_epoch)" \
         '{current_round: 0, attempt: 1, loop_start: $start, feature_id: $fid,
           phase: "build", subject_provider: "claude", peer_provider: $peer,
-          review_scope: "both", target_ref: $tref, last_verdict: null, findings: {}}' \
+          review_scope: $scope, review_specialization: $spec,
+          target_ref: $tref, last_verdict: null, findings: {}}' \
         > "$PROJECT_DIR/.cct/review/state.json"
 }
 
 compose_fix_prompt() {
-    # compose_fix_prompt <findings-file> <round> <out-file>
-    local findings="$1" round="$2" out="$3"
+    # compose_fix_prompt <findings-file> <round> <out-file> [advisory-findings-file]
+    local findings="$1" round="$2" out="$3" advisory="${4:-}"
     {
         echo "# Auto-build fix session: address review round $round findings"
         echo
@@ -593,7 +625,57 @@ compose_fix_prompt() {
         echo
         echo "## Findings (JSON)"
         cat "$findings"
+        if [[ -n "$advisory" && -f "$advisory" ]] \
+           && [[ "$(jq 'length' "$advisory" 2>/dev/null || echo 0)" -gt 0 ]]; then
+            echo
+            echo "## Advisory findings (non-gating panel reviewers)"
+            echo "Address these where reasonable — they DO NOT block PASS. Each is tagged"
+            echo "with its reviewer and specialization."
+            cat "$advisory"
+        fi
     } > "$out"
+}
+
+# run_advisory_pass <phase-num> <base_ref> <round> <phase_dir> <out-advisory-json>
+# Runs each healthy advisory (non-gating) reviewer against the phase diff in an
+# ISOLATED review dir (CCT_REVIEW_DIR/COLLAB_DIR overrides) so the canonical
+# .cct/review/ gating state is never touched. Writes a combined, tagged
+# findings array to <out-advisory-json> and archives each run under
+# phase-N/review-advisory/<provider>/. Verdicts are ignored (advisory only).
+run_advisory_pass() {
+    local n="$1" base_ref="$2" round="$3" phase_dir="$4" out="$5"
+    echo '[]' > "$out"
+    [[ -z "$ADVISORY_REVIEWERS" ]] && return 0
+    local _prov _scope _spec
+    while IFS=$'\t' read -r _prov _scope _spec; do
+        [[ -z "$_prov" ]] && continue
+        local scratch="$PROJECT_DIR/.cct/review-advisory/$_prov"
+        rm -rf "$scratch"; mkdir -p "$scratch/collab"
+        jq -n --arg fid "$FEATURE_ID" --arg peer "$_prov" --arg scope "$_scope" \
+            --arg spec "$_spec" --arg tref "$BRANCH_NAME" --argjson start "$(now_epoch)" \
+            '{current_round: 0, attempt: 1, loop_start: $start, feature_id: $fid,
+              phase: "build", subject_provider: "claude", peer_provider: $peer,
+              review_scope: $scope, review_specialization: $spec,
+              target_ref: $tref, last_verdict: null, findings: {}}' \
+            > "$scratch/state.json"
+        ( cd "$PROJECT_DIR" && CCT_REVIEW_DIR="$scratch" CCT_REVIEW_COLLAB_DIR="$scratch/collab" \
+            CCT_REVIEW_BASE_REF="$base_ref" CCT_REVIEW_MAX_ROUNDS=1 \
+            bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >/dev/null 2>&1 || true
+        local frf
+        frf=$(ls "$scratch"/findings-round-*.json 2>/dev/null | sort | tail -1)
+        if [[ -n "$frf" && -f "$frf" ]]; then
+            local tagged tmp
+            tagged=$(jq --arg prov "$_prov" --arg spec "$_spec" \
+                '[(.findings // [])[] | . + {advisory: true, reviewer: $prov, specialization: $spec}]' "$frf" 2>/dev/null || echo '[]')
+            tmp=$(mktemp)
+            jq --argjson add "$tagged" '. + $add' "$out" > "$tmp" && mv "$tmp" "$out"
+        fi
+        mkdir -p "$phase_dir/review-advisory"
+        rm -rf "$phase_dir/review-advisory/$_prov"
+        mv "$scratch" "$phase_dir/review-advisory/$_prov" 2>/dev/null || true
+        journal "advisory_reviewed" "$_prov ($_spec) phase $n round $round"
+    done <<< "$ADVISORY_REVIEWERS"
+    return 0
 }
 
 verify_pass_gate() {
@@ -679,7 +761,11 @@ run_review_loop() {
                 local fixp="$phase_dir/fix-prompt-$fix_count.md"
                 local fixr="$phase_dir/fix-result-$fix_count.json"
                 mkdir -p "$phase_dir"
-                compose_fix_prompt "$findings" "$round" "$fixp"
+                # Panel (E): gather advisory findings for this diff and fold
+                # them into the fix prompt. Advisory reviewers never block.
+                local advf="$phase_dir/advisory-findings-$round.json"
+                run_advisory_pass "$n" "$base_ref" "$round" "$phase_dir" "$advf"
+                compose_fix_prompt "$findings" "$round" "$fixp" "$advf"
                 run_claude_session "$fixp" "$fixr"
                 [[ "$SESSION_SUBTYPE" == "success" ]] || park "build_session_error" "fix session subtype=$SESSION_SUBTYPE (phase $n round $round)" "null"
                 local tlog="$phase_dir/test-fix-$fix_count.log"
