@@ -612,7 +612,7 @@ code-copilot-team/
 │   ├── test-hooks.sh                    186 hook tests
 │   ├── test-generate.sh                 294 generation + adapter tests
 │   ├── test-shared-structure.sh         811 structure + content tests
-│   ├── test-sync.sh                     69 sync + init metadata tests
+│   ├── test-sync.sh                     104 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   ├── test-review-loop.sh            40 review loop integration tests
 │   └── test-auto-build-loop.sh        127 auto-build driver tests

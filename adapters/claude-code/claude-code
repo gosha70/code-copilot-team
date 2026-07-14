@@ -28,6 +28,7 @@
 set -e
 
 TEMPLATES_DIR="$HOME/.claude/templates"
+PERMISSIONS_DIR="$HOME/.claude/permissions"
 LOGS_DIR="$HOME/.claude/logs"
 CLAUDE_CMD=("claude")
 BACKEND_AUTO="auto"
@@ -570,6 +571,176 @@ list_templates() {
     echo ""
 }
 
+print_relaxed_warning() {
+    echo ""
+    echo "  ⚠️  RELAXED (dangerous) permission tier"
+    echo "  ─────────────────────────────────────────────────────────────"
+    echo "  This DISARMS the safety hooks for this project:"
+    echo "    • HOOK_GIT_ALLOW=true      — commits and pushes run WITHOUT chat approval"
+    echo "    • HOOK_PROTECT_ALLOW=true  — edits to .env / credentials / keys are ALLOWED"
+    echo "  The Bash deny guardrails (rm -rf, sudo, push --force, reset --hard)"
+    echo "  are kept, and bypassPermissions is NEVER used — but this is still"
+    echo "  fully autonomous. Only choose this for a project you fully trust."
+    echo "  ─────────────────────────────────────────────────────────────"
+}
+
+# confirm_relaxed <yes_dangerous> — 0 if OK to write the relaxed profile, 1 if
+# refused. --yes-dangerous (1) skips the prompt; otherwise an interactive y/N
+# is required and the write is refused when there is no TTY.
+confirm_relaxed() {
+    local yes="${1:-0}"
+    [[ "$yes" == "1" ]] && return 0
+    print_relaxed_warning
+    if [[ -t 0 ]]; then
+        local REPLY
+        read -p "  Proceed writing the relaxed profile? [y/N] " -n 1 -r REPLY || true
+        echo
+        [[ "$REPLY" =~ ^[Yy]$ ]] && return 0
+        echo "Aborted — relaxed profile not written."
+        return 1
+    fi
+    echo "Refusing to write 'relaxed' without --yes-dangerous (no TTY to confirm)."
+    return 1
+}
+
+# preflight_permission_tier <tier> — validate an EXPLICITLY chosen tier (and
+# confirm 'relaxed') BEFORE init creates any files, so init never reports
+# success with the wrong or missing safety boundary. No-op for 'default'.
+# Sets YES_DANGEROUS=1 once a relaxed choice is confirmed. Returns nonzero to
+# abort init before anything is written.
+preflight_permission_tier() {
+    local tier="$1"
+    [[ "$tier" == "default" ]] && return 0
+    case "$tier" in
+        balanced|relaxed) ;;
+        *) echo "Error: unknown permission tier '$tier' (expected default|balanced|relaxed)."; return 1 ;;
+    esac
+    if [[ ! -f "$PERMISSIONS_DIR/$tier.json" ]]; then
+        echo "Error: permission profile '$tier' not found at $PERMISSIONS_DIR/$tier.json."
+        echo "       Run setup.sh --sync to install permission profiles."
+        return 1
+    fi
+    if ! command_exists jq; then
+        echo "Error: jq is required to apply the '$tier' permission profile."
+        return 1
+    fi
+    if [[ "$tier" == "relaxed" ]]; then
+        confirm_relaxed "$YES_DANGEROUS" || return 1
+        YES_DANGEROUS=1
+    fi
+    return 0
+}
+
+# apply_permission_profile <target> <tier> <template_type> [yes_dangerous]
+# Merges a permission profile (+ per-type deny-extras) into
+# $target/.claude/settings.json via jq — never clobbering existing keys,
+# idempotent — and records the tier in template.json. 'default' writes
+# nothing. 'relaxed' requires explicit confirmation (--yes-dangerous or an
+# interactive y/N). Returns non-zero (writing nothing) on refusal or error.
+apply_permission_profile() {
+    local target="$1" tier="$2" type="${3:-}" yes="${4:-0}"
+
+    if [[ "$tier" == "default" ]]; then
+        # Still record the choice so sync/drift knows the tier.
+        _record_permission_tier "$target" "default"
+        return 0
+    fi
+
+    local prof="$PERMISSIONS_DIR/$tier.json"
+    if [[ ! -f "$prof" ]]; then
+        echo "Error: unknown permission tier '$tier' (expected default|balanced|relaxed)."
+        return 1
+    fi
+
+    if [[ "$tier" == "relaxed" ]]; then
+        confirm_relaxed "$yes" || return 1
+    fi
+
+    if ! command_exists jq; then
+        echo "[WARN] jq not installed — cannot write permission profile. Apply manually from $prof."
+        return 1
+    fi
+
+    mkdir -p "$target/.claude"
+    local settings="$target/.claude/settings.json"
+    [[ -f "$settings" ]] || echo '{}' > "$settings"
+
+    local extras_arg='{}'
+    local extras="$PERMISSIONS_DIR/deny-extras/$type.json"
+    if [[ -n "$type" && -f "$extras" ]]; then
+        extras_arg=$(cat "$extras")
+    fi
+
+    local merged
+    merged=$(jq --slurpfile p "$prof" --argjson x "$extras_arg" '
+        .permissions.defaultMode = $p[0].permissions.defaultMode
+        | .permissions.allow = (((.permissions.allow // []) + ($p[0].permissions.allow // [])) | unique)
+        | .permissions.deny  = (((.permissions.deny  // []) + ($p[0].permissions.deny  // []) + ($x.permissions.deny // [])) | unique)
+        | if (($p[0].env // {}) | length) > 0 then .env = ((.env // {}) + $p[0].env) else . end
+    ' "$settings") || { echo "[WARN] failed to merge permission profile into settings.json."; return 1; }
+    printf '%s\n' "$merged" > "$settings"
+
+    _record_permission_tier "$target" "$tier"
+    echo "[done] Applied '$tier' permission profile to .claude/settings.json"
+    return 0
+}
+
+# strip_permission_profile <target> — remove the profile-managed keys
+# (defaultMode, managed allow/deny entries, relaxed env vars) while preserving
+# any user-added settings.json content. Used by 'permissions default'.
+strip_permission_profile() {
+    local target="$1"
+    local settings="$target/.claude/settings.json"
+
+    if [[ ! -f "$settings" ]]; then
+        _record_permission_tier "$target" "default"
+        echo "[done] No managed settings.json — tier set to default."
+        return 0
+    fi
+    if ! command_exists jq; then
+        echo "[WARN] jq not installed — cannot strip permission profile."
+        return 1
+    fi
+
+    # Managed entries = union across shipped profiles + deny-extras. User-added
+    # allow/deny entries not present in any shipped profile survive.
+    local managed_allow managed_deny
+    managed_allow=$(cat "$PERMISSIONS_DIR"/balanced.json "$PERMISSIONS_DIR"/relaxed.json 2>/dev/null \
+        | jq -s '[.[].permissions.allow // [] | .[]] | unique')
+    managed_deny=$(cat "$PERMISSIONS_DIR"/balanced.json "$PERMISSIONS_DIR"/relaxed.json "$PERMISSIONS_DIR"/deny-extras/*.json 2>/dev/null \
+        | jq -s '[.[].permissions.deny // [] | .[]] | unique')
+    [[ -n "$managed_allow" ]] || managed_allow='[]'
+    [[ -n "$managed_deny" ]]  || managed_deny='[]'
+
+    local stripped
+    stripped=$(jq --argjson ma "$managed_allow" --argjson md "$managed_deny" '
+        del(.permissions.defaultMode)
+        | if (.permissions.allow != null) then .permissions.allow = (.permissions.allow - $ma)
+            | (if ((.permissions.allow | length) == 0) then del(.permissions.allow) else . end) else . end
+        | if (.permissions.deny != null) then .permissions.deny = (.permissions.deny - $md)
+            | (if ((.permissions.deny | length) == 0) then del(.permissions.deny) else . end) else . end
+        | if ((.permissions // {}) | length) == 0 then del(.permissions) else . end
+        | if (.env != null) then del(.env.HOOK_GIT_ALLOW) | del(.env.HOOK_PROTECT_ALLOW)
+            | (if ((.env | length) == 0) then del(.env) else . end) else . end
+    ' "$settings") || { echo "[WARN] failed to strip permission profile."; return 1; }
+    printf '%s\n' "$stripped" > "$settings"
+
+    _record_permission_tier "$target" "default"
+    echo "[done] Stripped managed permission profile; tier set to default."
+    return 0
+}
+
+# _record_permission_tier <target> <tier> — record the tier in template.json.
+_record_permission_tier() {
+    local target="$1" tier="$2"
+    local tj="$target/.claude/template.json"
+    [[ -f "$tj" ]] || return 0
+    command_exists jq || return 0
+    local updated
+    updated=$(jq --arg t "$tier" '.permissions = $t' "$tj") || return 0
+    printf '%s\n' "$updated" > "$tj"
+}
+
 init_project() {
     local type="$1"
     local target="${2:-.}"
@@ -751,6 +922,19 @@ TMPLEOF
         fi
     fi
 
+    # Permission profile. An explicitly chosen non-default tier was validated
+    # and (for relaxed) confirmed by preflight_permission_tier BEFORE any files
+    # were written, so a failure here is fatal — init must not claim success
+    # with the wrong or missing safety boundary. Implicit/default never blocks.
+    if [[ "${PERM_TIER:-default}" == "default" ]]; then
+        apply_permission_profile "$target" "default" "$type" "0" || true
+    else
+        apply_permission_profile "$target" "$PERM_TIER" "$type" "${YES_DANGEROUS:-1}" || {
+            echo "Error: failed to apply '$PERM_TIER' permission profile — init aborted."
+            return 1
+        }
+    fi
+
     echo "Initialized '$type' project at $target"
     echo ""
     echo "Created files:"
@@ -831,6 +1015,28 @@ sync_project() {
         echo "Syncing $(basename "$target") against template '$template_name'"
     fi
     echo ""
+
+    # 2b. Permission-profile drift — REPORT ONLY (never auto-apply; a safety
+    # boundary is switched explicitly via `claude-code permissions <tier>`).
+    if command_exists jq && [[ -f "$target/.claude/template.json" ]]; then
+        local rec_tier
+        rec_tier=$(jq -r '.permissions // "default"' "$target/.claude/template.json" 2>/dev/null)
+        if [[ -n "$rec_tier" && "$rec_tier" != "default" && "$rec_tier" != "null" ]]; then
+            local prof="$PERMISSIONS_DIR/$rec_tier.json"
+            local settings="$target/.claude/settings.json"
+            if [[ ! -f "$settings" ]]; then
+                echo "  [drift] recorded permission tier '$rec_tier' but no .claude/settings.json — run 'claude-code permissions $rec_tier'"
+                echo ""
+            elif [[ -f "$prof" ]] && ! jq -e -n --slurpfile p "$prof" --slurpfile s "$settings" '
+                    ($p[0].permissions.defaultMode == $s[0].permissions.defaultMode)
+                    and ((($p[0].permissions.allow // []) - ($s[0].permissions.allow // [])) | length == 0)
+                    and ((($p[0].permissions.deny  // []) - ($s[0].permissions.deny  // [])) | length == 0)
+                ' >/dev/null 2>&1; then
+                echo "  [drift] permission profile '$rec_tier' differs from .claude/settings.json — run 'claude-code permissions $rec_tier' to re-apply (sync never auto-applies)"
+                echo ""
+            fi
+        fi
+    fi
 
     # 3. Sync commands
     if [[ -d "$tmpl_dir/commands" ]]; then
@@ -1280,6 +1486,8 @@ start_session() {
 # ── Flag parsing ─────────────────────────────────────────────
 PLAYWRIGHT=0
 LICENSE_TYPE=""
+PERM_TIER=""
+YES_DANGEROUS=0
 PEER_REVIEW_ENABLED=""
 PEER_PROVIDER=""
 PEER_SCOPE="both"
@@ -1394,8 +1602,10 @@ fi
 case "${1:-}" in
     init)
         shift
-        # Parse --playwright and --license flags
+        # Parse --playwright, --license, --permissions, --yes-dangerous flags
         ARGS=()
+        PERM_TIER=""
+        YES_DANGEROUS=0
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --playwright)
@@ -1410,6 +1620,22 @@ case "${1:-}" in
                     LICENSE_TYPE="$2"
                     shift 2
                     ;;
+                --permissions)
+                    if [[ -z "${2:-}" || "${2:0:2}" == "--" ]]; then
+                        echo "Error: --permissions requires a value (default|balanced|relaxed)"
+                        exit 1
+                    fi
+                    PERM_TIER="$2"
+                    shift 2
+                    ;;
+                --permissions=*)
+                    PERM_TIER="${1#*=}"
+                    shift
+                    ;;
+                --yes-dangerous)
+                    YES_DANGEROUS=1
+                    shift
+                    ;;
                 *)
                     ARGS+=("$1")
                     shift
@@ -1418,12 +1644,67 @@ case "${1:-}" in
         done
         if [[ ${#ARGS[@]} -eq 0 ]]; then
             echo "Error: Missing project type."
-            echo "Usage: claude-code init <type> [path] [--playwright] [--license <type>]"
+            echo "Usage: claude-code init <type> [path] [--permissions <tier>] [--yes-dangerous] [--playwright] [--license <type>]"
             echo ""
             list_templates
             exit 1
         fi
+        # Tier resolution: flag > interactive TTY prompt > default. Scripts/CI
+        # (no TTY) silently get 'default' so init never blocks automation.
+        if [[ -z "$PERM_TIER" ]]; then
+            if [[ -t 0 ]]; then
+                echo "Select a permission tier for this project:"
+                echo "  1) default  — prompt for everything (safe; shared or unfamiliar repos)"
+                echo "  2) balanced — zero prompts for repo work, guarded destructives (recommended for your own repos)"
+                echo "  3) relaxed  — fully autonomous, protect hooks disarmed (DANGEROUS)"
+                read -p "Tier [1-3, default 1]: " -r _perm_choice || true
+                case "$_perm_choice" in
+                    2) PERM_TIER="balanced" ;;
+                    3) PERM_TIER="relaxed" ;;
+                    *) PERM_TIER="default" ;;
+                esac
+            else
+                PERM_TIER="default"
+            fi
+        fi
+        # Validate + confirm the chosen tier BEFORE init writes any files, so a
+        # bad/declined tier never leaves a project with the wrong boundary.
+        preflight_permission_tier "$PERM_TIER" || exit 1
         init_project "${ARGS[0]}" "${ARGS[1]:-}"
+        ;;
+    permissions)
+        shift
+        PERM_TIER=""
+        YES_DANGEROUS=0
+        PERM_ARGS=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --yes-dangerous) YES_DANGEROUS=1; shift ;;
+                -*) echo "Unknown option: $1"; exit 1 ;;
+                *) PERM_ARGS+=("$1"); shift ;;
+            esac
+        done
+        perm_tier="${PERM_ARGS[0]:-}"
+        perm_target="${PERM_ARGS[1]:-.}"
+        if [[ -z "$perm_tier" ]]; then
+            echo "Usage: claude-code permissions <default|balanced|relaxed> [dir] [--yes-dangerous]"
+            exit 1
+        fi
+        if [[ ! -d "$perm_target" ]]; then
+            echo "Error: Directory '$perm_target' does not exist."
+            exit 1
+        fi
+        perm_target=$(cd "$perm_target" && pwd)
+        # Template type (for per-stack deny-extras) from the project's metadata.
+        perm_type=""
+        if [[ -f "$perm_target/.claude/template.json" ]] && command_exists jq; then
+            perm_type=$(jq -r '.name // empty' "$perm_target/.claude/template.json" 2>/dev/null)
+        fi
+        if [[ "$perm_tier" == "default" ]]; then
+            strip_permission_profile "$perm_target"
+        else
+            apply_permission_profile "$perm_target" "$perm_tier" "$perm_type" "$YES_DANGEROUS" || exit 1
+        fi
         ;;
     list)
         list_templates

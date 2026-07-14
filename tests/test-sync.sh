@@ -719,6 +719,163 @@ assert_contains "claude-code init --license validation reaches init parser" \
   "$INIT_OUTPUT" "--license requires a value"
 
 # ══════════════════════════════════════════════════════════════
+echo "=== 18. permission profiles (init tiers + switch + drift) ==="
+
+# Resolve profiles from the repo (the launcher default is ~/.claude/permissions,
+# populated by setup.sh --sync; tests point straight at the source).
+PERMISSIONS_DIR="$REPO_DIR/adapters/claude-code/permissions"
+
+# 18a. default tier writes no settings.json; tier recorded
+PD="$TEST_TMPDIR/perm-default"
+mkdir -p "$PD"
+PERM_TIER="default"; YES_DANGEROUS=0
+echo "y" | init_project "ml-rag" "$PD" > /dev/null 2>&1
+assert_file_not_exists "default tier writes no settings.json" "$PD/.claude/settings.json"
+assert_eq "default tier recorded in template.json" "default" \
+  "$(jq -r '.permissions' "$PD/.claude/template.json" 2>/dev/null)"
+
+# 18b. balanced tier: settings.json with dontAsk + allow/deny; tier recorded
+PB="$TEST_TMPDIR/perm-balanced"
+mkdir -p "$PB"
+PERM_TIER="balanced"; YES_DANGEROUS=0
+echo "y" | init_project "ml-rag" "$PB" > /dev/null 2>&1
+assert_file_exists "balanced writes settings.json" "$PB/.claude/settings.json"
+assert_eq "balanced defaultMode is dontAsk" "dontAsk" \
+  "$(jq -r '.permissions.defaultMode' "$PB/.claude/settings.json" 2>/dev/null)"
+jq -e . "$PB/.claude/settings.json" > /dev/null 2>&1
+assert_ok "balanced settings.json is valid JSON" $?
+assert_contains "balanced denies .env read" \
+  "$(jq -c '.permissions.deny' "$PB/.claude/settings.json" 2>/dev/null)" "Read(./.env)"
+assert_eq "balanced tier recorded in template.json" "balanced" \
+  "$(jq -r '.permissions' "$PB/.claude/template.json" 2>/dev/null)"
+
+# 18c. per-stack deny-extras merged for the template type; idempotent
+PE="$TEST_TMPDIR/perm-extras"
+mkdir -p "$PE/.claude"
+echo '{"name":"web-dynamic"}' > "$PE/.claude/template.json"
+apply_permission_profile "$PE" "balanced" "web-dynamic" "0" > /dev/null 2>&1
+assert_contains "web-dynamic deny-extras applied" \
+  "$(jq -c '.permissions.deny' "$PE/.claude/settings.json" 2>/dev/null)" "npx prisma db push"
+EXTRAS_BEFORE=$(jq '.permissions.deny | length' "$PE/.claude/settings.json" 2>/dev/null)
+apply_permission_profile "$PE" "balanced" "web-dynamic" "0" > /dev/null 2>&1
+EXTRAS_AFTER=$(jq '.permissions.deny | length' "$PE/.claude/settings.json" 2>/dev/null)
+assert_eq "balanced apply is idempotent (deny length stable)" "$EXTRAS_BEFORE" "$EXTRAS_AFTER"
+
+# 18d. merge never clobbers unrelated settings.json keys / user entries
+PC="$TEST_TMPDIR/perm-clobber"
+mkdir -p "$PC/.claude"
+echo '{"name":"ml-rag"}' > "$PC/.claude/template.json"
+echo '{"statusLine":{"type":"command","command":"x"},"permissions":{"allow":["Bash(mycustom:*)"]}}' \
+  > "$PC/.claude/settings.json"
+apply_permission_profile "$PC" "balanced" "ml-rag" "0" > /dev/null 2>&1
+assert_eq "unrelated settings.json key preserved" "command" \
+  "$(jq -r '.statusLine.type' "$PC/.claude/settings.json" 2>/dev/null)"
+assert_contains "user allow entry preserved on merge" \
+  "$(jq -c '.permissions.allow' "$PC/.claude/settings.json" 2>/dev/null)" "Bash(mycustom:*)"
+
+# 18e. relaxed: refused without --yes-dangerous; with it, env + dropped
+#      env-read denies + kept guardrails + never bypassPermissions
+PR="$TEST_TMPDIR/perm-relaxed"
+mkdir -p "$PR/.claude"
+echo '{"name":"ml-rag"}' > "$PR/.claude/template.json"
+apply_permission_profile "$PR" "relaxed" "ml-rag" "0" < /dev/null > /dev/null 2>&1
+assert_eq "relaxed refused without confirmation (non-TTY)" "1" "$?"
+assert_file_not_exists "relaxed refusal writes nothing" "$PR/.claude/settings.json"
+apply_permission_profile "$PR" "relaxed" "ml-rag" "1" > /dev/null 2>&1
+assert_eq "relaxed sets HOOK_GIT_ALLOW" "true" \
+  "$(jq -r '.env.HOOK_GIT_ALLOW' "$PR/.claude/settings.json" 2>/dev/null)"
+assert_eq "relaxed sets HOOK_PROTECT_ALLOW" "true" \
+  "$(jq -r '.env.HOOK_PROTECT_ALLOW' "$PR/.claude/settings.json" 2>/dev/null)"
+assert_eq "relaxed drops env-read denies" "0" \
+  "$(jq '[.permissions.deny[] | select(startswith("Read(./.env"))] | length' "$PR/.claude/settings.json" 2>/dev/null)"
+assert_eq "relaxed keeps rm -rf guardrail" "1" \
+  "$(jq '[.permissions.deny[] | select(. == "Bash(rm -rf:*)")] | length' "$PR/.claude/settings.json" 2>/dev/null)"
+assert_eq "relaxed never uses bypassPermissions" "dontAsk" \
+  "$(jq -r '.permissions.defaultMode' "$PR/.claude/settings.json" 2>/dev/null)"
+
+# 18f. permissions default strips managed keys, preserves user customizations
+PS="$TEST_TMPDIR/perm-strip"
+mkdir -p "$PS/.claude"
+echo '{"name":"ml-rag"}' > "$PS/.claude/template.json"
+apply_permission_profile "$PS" "balanced" "ml-rag" "0" > /dev/null 2>&1
+jq '.permissions.allow += ["Bash(mycustom:*)"]' "$PS/.claude/settings.json" > "$PS/tmp.json" \
+  && mv "$PS/tmp.json" "$PS/.claude/settings.json"
+strip_permission_profile "$PS" > /dev/null 2>&1
+assert_eq "strip removes defaultMode" "null" \
+  "$(jq -r '.permissions.defaultMode // "null"' "$PS/.claude/settings.json" 2>/dev/null)"
+assert_contains "strip preserves user custom allow" \
+  "$(jq -c '.permissions.allow // []' "$PS/.claude/settings.json" 2>/dev/null)" "Bash(mycustom:*)"
+assert_eq "strip records default tier" "default" \
+  "$(jq -r '.permissions' "$PS/.claude/template.json" 2>/dev/null)"
+
+# 18g. dispatch: unknown tier + relaxed-without-flag refused via the launcher
+PERM_HOME="$TEST_TMPDIR/perm-launcher-home"
+mkdir -p "$PERM_HOME/.claude/permissions/deny-extras"
+cp "$REPO_DIR/adapters/claude-code/permissions/"*.json "$PERM_HOME/.claude/permissions/" 2>/dev/null || true
+cp "$REPO_DIR/adapters/claude-code/permissions/deny-extras/"*.json "$PERM_HOME/.claude/permissions/deny-extras/" 2>/dev/null || true
+PDIS="$TEST_TMPDIR/perm-dispatch"
+mkdir -p "$PDIS/.claude"
+echo '{"name":"ml-rag"}' > "$PDIS/.claude/template.json"
+UNKNOWN_OUT=$(HOME="$PERM_HOME" bash "$LAUNCHER" permissions bogus "$PDIS" 2>&1 || true)
+assert_contains "unknown tier rejected by permissions subcommand" "$UNKNOWN_OUT" "unknown permission tier"
+RELAXED_OUT=$(HOME="$PERM_HOME" bash "$LAUNCHER" permissions relaxed "$PDIS" < /dev/null 2>&1 || true)
+assert_contains "launcher relaxed refused without --yes-dangerous" "$RELAXED_OUT" "Refusing to write 'relaxed'"
+
+# 18h. sync reports permission-profile drift (report only, no auto-apply)
+PDR="$TEST_TMPDIR/perm-drift"
+mkdir -p "$PDR/.claude"
+echo '{"name":"ml-rag","permissions":"balanced"}' > "$PDR/.claude/template.json"
+DRIFT_OUT=$(sync_project "$PDR" 1 2>&1 || true)
+assert_contains "sync reports permission-profile drift" "$DRIFT_OUT" "[drift]"
+assert_file_not_exists "sync drift is report-only (wrote no settings.json)" "$PDR/.claude/settings.json"
+
+# 18i-l. Explicitly requested tiers fail LOUDLY at init (no misleading success).
+# Drive the real launcher dispatch with a freshly-synced HOME (templates +
+# permissions + launcher installed).
+INIT_HOME="$TEST_TMPDIR/perm-init-home"
+HOME="$INIT_HOME" bash "$REPO_DIR/adapters/claude-code/setup.sh" --sync > /dev/null 2>&1
+
+# 18i. --permissions bogus: nonzero exit, no project, actionable message
+BOGUS_PROJ="$TEST_TMPDIR/proj-bogus"
+BOGUS_OUT=$(HOME="$INIT_HOME" bash "$LAUNCHER" init web-dynamic "$BOGUS_PROJ" --permissions bogus 2>&1)
+BOGUS_RC=$?
+[[ "$BOGUS_RC" -ne 0 ]]; assert_ok "init --permissions bogus exits nonzero" "$?"
+assert_contains "bogus tier names the error" "$BOGUS_OUT" "unknown permission tier"
+assert_file_not_exists "bogus tier created no project" "$BOGUS_PROJ/CLAUDE.md"
+
+# 18j. --permissions relaxed without TTY/--yes-dangerous: refused, no project,
+#      and init does NOT claim success
+RELAX_PROJ="$TEST_TMPDIR/proj-relaxed-init"
+RELAX_INIT_OUT=$(HOME="$INIT_HOME" bash "$LAUNCHER" init web-dynamic "$RELAX_PROJ" --permissions relaxed < /dev/null 2>&1)
+RELAX_INIT_RC=$?
+[[ "$RELAX_INIT_RC" -ne 0 ]]; assert_ok "init --permissions relaxed (no TTY/flag) exits nonzero" "$?"
+assert_file_not_exists "declined relaxed init created no project" "$RELAX_PROJ/CLAUDE.md"
+if [[ "$RELAX_INIT_OUT" == *"Initialized '"* ]]; then
+  echo "  FAIL: declined relaxed init still claimed success"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: declined relaxed init did not claim success"; PASS=$((PASS + 1))
+fi
+
+# 18k. --permissions balanced with the profile source unavailable: nonzero,
+#      no project (explicit request must not silently degrade)
+NOPERM_HOME="$TEST_TMPDIR/perm-noperm-home"
+HOME="$NOPERM_HOME" bash "$REPO_DIR/adapters/claude-code/setup.sh" --sync > /dev/null 2>&1
+rm -rf "$NOPERM_HOME/.claude/permissions"
+NOPERM_PROJ="$TEST_TMPDIR/proj-noperm"
+NOPERM_OUT=$(HOME="$NOPERM_HOME" bash "$LAUNCHER" init web-dynamic "$NOPERM_PROJ" --permissions balanced 2>&1)
+NOPERM_RC=$?
+[[ "$NOPERM_RC" -ne 0 ]]; assert_ok "init --permissions balanced with missing profile source exits nonzero" "$?"
+assert_file_not_exists "missing-profile balanced init created no project" "$NOPERM_PROJ/CLAUDE.md"
+
+# 18l. Positive control: an explicit valid balanced init still succeeds + applies
+GOOD_PROJ="$TEST_TMPDIR/proj-good"
+HOME="$INIT_HOME" bash "$LAUNCHER" init web-dynamic "$GOOD_PROJ" --permissions balanced > /dev/null 2>&1
+GOOD_RC=$?
+assert_eq "explicit valid balanced init succeeds" "0" "$GOOD_RC"
+assert_eq "explicit balanced init applied dontAsk" "dontAsk" \
+  "$(jq -r '.permissions.defaultMode' "$GOOD_PROJ/.claude/settings.json" 2>/dev/null)"
+
+# ══════════════════════════════════════════════════════════════
 echo ""
 echo "──────────────────────────────"
 echo "Results: $PASS passed, $FAIL failed"

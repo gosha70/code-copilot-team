@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(npx prisma migrate reset:*)",
+      "Bash(npx prisma db push:*)",
+      "Bash(git push:*)"
+    ]
+  }
+}
