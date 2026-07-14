@@ -25,8 +25,14 @@ fi
 
 PROJECT_DIR="$(cd "$1" && pwd)"
 
-if [[ ! -d "$PROJECT_DIR/.cct/review" ]]; then
-    echo "Error: No .cct/review/ directory in $PROJECT_DIR" >&2
+# Review state dir — overridable so a caller (e.g. the auto-build driver
+# running an advisory panel reviewer) can run a review in isolation, without
+# touching the canonical .cct/review/ state the gating loop depends on. The
+# default is unchanged.
+REVIEW_DIR="${CCT_REVIEW_DIR:-$PROJECT_DIR/.cct/review}"
+
+if [[ ! -d "$REVIEW_DIR" ]]; then
+    echo "Error: No review state dir at $REVIEW_DIR" >&2
     exit 1
 fi
 
@@ -37,7 +43,6 @@ fi
 
 # ── Configuration ─────────────────────────────────────────────
 
-REVIEW_DIR="$PROJECT_DIR/.cct/review"
 STATE_FILE="$REVIEW_DIR/state.json"
 PROFILE="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
 MAX_ROUNDS="${CCT_REVIEW_MAX_ROUNDS:-5}"
@@ -89,6 +94,7 @@ if [[ -f "$STATE_FILE" ]]; then
     SUBJECT_PROVIDER=$(jq -r '.subject_provider // empty' "$STATE_FILE")
     PEER_PROVIDER=$(jq -r '.peer_provider // empty' "$STATE_FILE")
     REVIEW_SCOPE=$(jq -r '.review_scope // "both"' "$STATE_FILE")
+    REVIEW_SPECIALIZATION=$(jq -r '.review_specialization // empty' "$STATE_FILE")
     TARGET_REF=$(jq -r '.target_ref // empty' "$STATE_FILE")
 else
     echo "Error: state.json not found. Create it via /review-submit." >&2
@@ -316,13 +322,13 @@ cat > "$REVIEW_REQUEST" << REVIEW_EOF
 
 Feature: $FEATURE_ID
 Phase: $PHASE
-Scope: $REVIEW_SCOPE
+Scope: $REVIEW_SCOPE$(if [[ -n "${REVIEW_SPECIALIZATION:-}" && "$REVIEW_SPECIALIZATION" != "general" ]]; then echo " | Specialization: $REVIEW_SPECIALIZATION"; fi)
 Target ref: $TARGET_REF
 Round: $NEXT_ROUND
 
 ## Review Instructions
 
-You are a code reviewer. Review the changes and produce structured findings.
+You are a code reviewer.$(if [[ -n "${REVIEW_SPECIALIZATION:-}" && "$REVIEW_SPECIALIZATION" != "general" ]]; then echo " You are the $REVIEW_SPECIALIZATION specialist on a review panel — review primarily through the $REVIEW_SPECIALIZATION lens."; fi) Review the changes and produce structured findings.
 $(if [[ "$REVIEW_SCOPE" == "code" ]]; then
     echo "Focus on: code correctness, edge cases, error handling, security vulnerabilities, performance."
 elif [[ "$REVIEW_SCOPE" == "design" ]]; then
@@ -612,13 +618,15 @@ jq -n \
     --arg subject_provider "$SUBJECT_PROVIDER" \
     --arg peer_provider "$PEER_PROVIDER" \
     --arg review_scope "$REVIEW_SCOPE" \
+    --arg review_specialization "$REVIEW_SPECIALIZATION" \
     --arg target_ref "$TARGET_REF" \
     --arg last_verdict "$VERDICT" \
     --argjson findings "$ACCUMULATED" \
     '{current_round: $round, attempt: $attempt, loop_start: $loop_start,
       feature_id: $feature_id, phase: $phase,
       subject_provider: $subject_provider, peer_provider: $peer_provider,
-      review_scope: $review_scope, target_ref: $target_ref,
+      review_scope: $review_scope, review_specialization: $review_specialization,
+      target_ref: $target_ref,
       last_verdict: $last_verdict, findings: $findings}' \
     > "$STATE_FILE"
 
@@ -655,7 +663,7 @@ if [[ "$VERDICT" == "PASS" ]]; then
         MODE="review"
     fi
 
-    COLLAB_DIR="$PROJECT_DIR/specs/$FEATURE_ID/collaboration"
+    COLLAB_DIR="${CCT_REVIEW_COLLAB_DIR:-$PROJECT_DIR/specs/$FEATURE_ID/collaboration}"
     mkdir -p "$COLLAB_DIR"
     cat > "$COLLAB_DIR/$ARTIFACT_NAME" << ARTIFACT_EOF
 ---
@@ -720,7 +728,7 @@ if [[ "$PHASE" == "plan" ]]; then
           target_ref: $target_ref, findings: $findings}' \
         > "$REVIEW_DIR/loop-summary.json"
 
-    COLLAB_DIR="$PROJECT_DIR/specs/$FEATURE_ID/collaboration"
+    COLLAB_DIR="${CCT_REVIEW_COLLAB_DIR:-$PROJECT_DIR/specs/$FEATURE_ID/collaboration}"
     mkdir -p "$COLLAB_DIR"
     cat > "$COLLAB_DIR/plan-consult.md" << ARTIFACT_EOF
 ---

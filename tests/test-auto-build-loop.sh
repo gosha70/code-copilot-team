@@ -179,7 +179,62 @@ cfg_set() {
     git -C "$dir" add -A && git -C "$dir" commit -q -m "cfg"
 }
 
-trap 'rm -rf "$MOCK_BIN" "$GH_BIN_DIR" "$PASS_PROFILE" "$FAIL_ONCE_PROFILE" "$FAIL_ALWAYS_PROFILE" "$DOWN_PROFILE" /tmp/cct-mock-reviewed' EXIT
+# ── Panel profile (increment E): gating 'mock' (FAIL once → PASS) + advisory
+# 'mock-adv' (always emits a security finding) + optional unhealthy advisory ──
+PANEL_PROFILE=$(mktemp)
+cat > "$PANEL_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "if [ -f /tmp/cct-mock-reviewed ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch /tmp/cct-mock-reviewed && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|near top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
+timeout_sec = 10
+healthcheck = "true"
+[providers.mock-adv]
+type = "cli"
+command = "printf '### Summary\nAdvisory security review.\n\n### Findings\nFINDING|advisory|security|demo.sh|near top|Advisory security note|Consider hardening\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+# Same panel but the advisory provider is unhealthy (skip path)
+PANEL_ADV_DOWN_PROFILE=$(mktemp)
+cat > "$PANEL_ADV_DOWN_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'"
+timeout_sec = 10
+healthcheck = "true"
+[providers.mock-adv]
+type = "cli"
+command = "printf 'unreachable'"
+timeout_sec = 10
+healthcheck = "false"
+TOML
+
+# Panel profile that CAPTURES each reviewer's actual review-request text, to
+# prove specialization/scope reach the provider (not just the archived tags).
+GATING_REQ_CAPTURE=$(mktemp)
+ADV_REQ_CAPTURE=$(mktemp)
+PANEL_CAPTURE_PROFILE=$(mktemp)
+cat > "$PANEL_CAPTURE_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "cp {review_request} $GATING_REQ_CAPTURE && if [ -f /tmp/cct-mock-reviewed ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch /tmp/cct-mock-reviewed && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
+timeout_sec = 10
+healthcheck = "true"
+[providers.mock-adv]
+type = "cli"
+command = "cp {review_request} $ADV_REQ_CAPTURE && printf '### Summary\nAdvisory.\n\n### Findings\nFINDING|advisory|security|demo.sh|top|Note|Consider\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+trap 'rm -rf "$MOCK_BIN" "$GH_BIN_DIR" "$PASS_PROFILE" "$FAIL_ONCE_PROFILE" "$FAIL_ALWAYS_PROFILE" "$DOWN_PROFILE" "$PANEL_PROFILE" "$PANEL_ADV_DOWN_PROFILE" "$PANEL_CAPTURE_PROFILE" "$GATING_REQ_CAPTURE" "$ADV_REQ_CAPTURE" /tmp/cct-mock-reviewed' EXIT
 
 # ── Project factory ───────────────────────────────────────────
 
@@ -856,6 +911,76 @@ sed -i '' 's/"cost_usd": 5/"cost_usd": 100/' "$P/specs/demo-feat/automation.json
 git -C "$P" add -A && git -C "$P" commit -q -m "raise cost cap"
 run_driver "$P" --resume
 assert_exit "cap resume completes after raise" 0 "$RC"
+rm -rf "$P"
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+echo "=== E: reviewer panel — gating + advisory reviewers ==="
+# ══════════════════════════════════════════════════════════════
+
+# Happy path: gating FAIL -> advisory pass -> findings folded -> gating PASS
+P=$(setup_project); single_phase "$P"
+jq '.review.reviewers += [{"provider":"mock-adv","specialization":"security","scope":"both","gating":false}]' \
+    "$P/specs/demo-feat/automation.json" > "$P/cfg" && mv "$P/cfg" "$P/specs/demo-feat/automation.json"
+git -C "$P" add -A && git -C "$P" commit -q -m "panel config"
+REVIEW_PROFILE="$PANEL_PROFILE" run_driver "$P"
+assert_exit "panel run completes (gating FAIL->fix->PASS)" 0 "$RC"
+ADV_ARCHIVE="$P/.cct/auto-build/demo-feat/phase-1/review-advisory/mock-adv"
+if [[ -d "$ADV_ARCHIVE" ]]; then
+  echo "  PASS: advisory reviewer archived per phase"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: advisory archive missing"; FAIL=$((FAIL + 1))
+fi
+FIXP=$(ls "$P"/.cct/auto-build/demo-feat/phase-1/fix-prompt-*.md 2>/dev/null | head -1)
+assert_contains "fix prompt has advisory section" "$(cat "$FIXP" 2>/dev/null)" "Advisory findings"
+assert_contains "fix prompt carries advisory specialization" "$(cat "$FIXP" 2>/dev/null)" "security"
+GATING_ARCH="$P/.cct/auto-build/demo-feat/phase-1/review"
+if grep -rq "mock-adv" "$GATING_ARCH" 2>/dev/null; then
+  echo "  FAIL: advisory leaked into gating review state"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: advisory isolated from gating review state"; PASS=$((PASS + 1))
+fi
+assert_contains "advisory review journaled" "$(cat "$P"/.cct/auto-build/demo-feat/events.jsonl)" "advisory_reviewed"
+rm -rf "$P"
+
+# Advisory reviewer unhealthy: skipped at preflight, run continues on gating alone
+P=$(setup_project); single_phase "$P"
+jq '.review.reviewers += [{"provider":"mock-adv","specialization":"security","scope":"both","gating":false}]' \
+    "$P/specs/demo-feat/automation.json" > "$P/cfg" && mv "$P/cfg" "$P/specs/demo-feat/automation.json"
+git -C "$P" add -A && git -C "$P" commit -q -m "panel config (adv down)"
+REVIEW_PROFILE="$PANEL_ADV_DOWN_PROFILE" run_driver "$P"
+assert_exit "panel run completes with unhealthy advisory skipped" 0 "$RC"
+assert_contains "advisory skip journaled" "$(cat "$P"/.cct/auto-build/demo-feat/events.jsonl)" "advisory_skipped"
+if [[ -d "$P/.cct/auto-build/demo-feat/phase-1/review-advisory/mock-adv" ]]; then
+  echo "  FAIL: skipped advisory reviewer still ran"; FAIL=$((FAIL + 1))
+else
+  echo "  PASS: unhealthy advisory reviewer did not run"; PASS=$((PASS + 1))
+fi
+rm -rf "$P"
+
+# Specialization/scope reach the ACTUAL review request (not just archived tags)
+P=$(setup_project); single_phase "$P"
+jq '.review.reviewers += [{"provider":"mock-adv","specialization":"security","scope":"both","gating":false}]' \
+    "$P/specs/demo-feat/automation.json" > "$P/cfg" && mv "$P/cfg" "$P/specs/demo-feat/automation.json"
+git -C "$P" add -A && git -C "$P" commit -q -m "panel capture config"
+: > "$GATING_REQ_CAPTURE"; : > "$ADV_REQ_CAPTURE"
+REVIEW_PROFILE="$PANEL_CAPTURE_PROFILE" run_driver "$P"
+assert_exit "panel capture run completes" 0 "$RC"
+assert_contains "gating review request carries its specialization" \
+  "$(cat "$GATING_REQ_CAPTURE" 2>/dev/null)" "Specialization: correctness"
+assert_contains "advisory review request carries its specialization" \
+  "$(cat "$ADV_REQ_CAPTURE" 2>/dev/null)" "Specialization: security"
+rm -rf "$P"
+
+# v1 constraint: more than one gating reviewer is rejected at load
+P=$(setup_project); single_phase "$P"
+jq '.review.reviewers += [{"provider":"mock2","specialization":"security","scope":"both","gating":true}]' \
+    "$P/specs/demo-feat/automation.json" > "$P/cfg" && mv "$P/cfg" "$P/specs/demo-feat/automation.json"
+git -C "$P" add -A && git -C "$P" commit -q -m "two gating"
+run_driver "$P"
+assert_exit "two gating reviewers rejected" 1 "$RC"
+assert_contains "multi-gating error names the constraint" "$OUTPUT" "exactly one gating reviewer"
 rm -rf "$P"
 
 echo ""
