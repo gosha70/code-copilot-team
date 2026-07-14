@@ -8,7 +8,9 @@
     "HOOK_STOP_BLOCK": "false",
     "CCT_PEER_REVIEW_ENABLED": "false",
     "CCT_PEER_PROVIDER": "",
-    "CCT_PEER_TRIGGER": "phase-complete"
+    "CCT_PEER_TRIGGER": "phase-complete",
+    "CCT_AUTOBUILD_PROFILE": "",
+    "CCT_AUTOBUILD_NOTIFY_CMD": ""
   },
   "hooks": {
     "PreToolUse": [

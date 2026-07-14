@@ -555,6 +555,7 @@ corresponding skill to apply them.
 | Skill | Description |
 |-------|-------------|
 | `agent-team-protocol` | Multi-agent delegation rules, three-phase workflow (Plan/Build/Review), model selection, collaboration gates, and Ralph Loop integration. |
+| `auto-build-loop` | Autonomous build driver after SDD spec approval: phase-scoped headless build sessions, driver-owned commits, cross-provider review gates, milestone pauses, and fail-closed escalation — under explicit opt-in autonomy profiles. |
 | `clarification-protocol` | When and how to ask clarifying questions before implementing. Data model review gate and ambiguity resolution rules. |
 | `design-system` | Derive a unique, domain-fit design direction and enforce design-token + anti-slop discipline. Read/author DESIGN.md before building any UI; override framework defaults so output is bespoke by construction, not generic. |
 | `environment-setup` | Environment variable patterns, config file validation, and setup verification for new project scaffolding. |

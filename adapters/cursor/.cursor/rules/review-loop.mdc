@@ -12,6 +12,8 @@ Agent-driven peer review loop for Build and Plan phases. The Build agent drives 
 
 The review loop is **agent-driven**: the Build agent calls `/review-submit`, which invokes `review-round-runner.sh` as a synchronous subprocess. The runner executes one round and returns. The agent reads the result and decides the next action. There is no long-running orchestrator.
 
+**Driver-as-submitter mode:** under the auto-build loop (`auto-build-loop.md`), `scripts/auto-build-loop.sh` plays the `/review-submit` role — it initializes `.cct/review/state.json`, invokes the runner with `CCT_REVIEW_BASE_REF=<phase-base>` so the whole multi-commit phase diff is reviewed (the default remains `HEAD~1`), commits review fixes itself, and injects `commit_ref` into `fixed` dispositions. The runner's contract (exit codes, file formats, breakers, sandbox) is unchanged.
+
 ```
 Agent completes work → /review-submit → review-round-runner.sh (one round)
                                               ↓

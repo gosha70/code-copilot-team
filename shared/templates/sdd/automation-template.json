@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "profile": "advisory",
+  "branch": {
+    "name": "feature/FEATURE_ID",
+    "base": "master",
+    "remote": "origin"
+  },
+  "phases": {
+    "source": "tasks.md",
+    "milestone_every": 2,
+    "max_phases": 8
+  },
+  "build": {
+    "max_turns": 80,
+    "permission_mode": "acceptEdits",
+    "max_fix_sessions_per_phase": 3
+  },
+  "test": {
+    "command": "REPLACE_WITH_TEST_COMMAND",
+    "timeout_sec": 1200
+  },
+  "review": {
+    "reviewers": [
+      {
+        "provider": "REPLACE_WITH_PROVIDER_NAME",
+        "specialization": "correctness",
+        "scope": "both",
+        "gating": true
+      }
+    ],
+    "max_rounds": 5,
+    "round_timeout_sec": 1800
+  },
+  "caps": {
+    "wall_clock_sec": 14400,
+    "cost_usd": 25
+  },
+  "notify": {
+    "command": ""
+  },
+  "merge": {
+    "enabled": false,
+    "require_green_ci": true,
+    "require_branch_protection": true
+  }
+}

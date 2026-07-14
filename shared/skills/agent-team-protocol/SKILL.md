@@ -166,6 +166,14 @@ The Team Lead can also use hybrid mode: delegate a Ralph Loop sub-agent for one 
 
 See `ralph-loop.md` for the full pattern, PRD format, and safety guards.
 
+**Fully unattended alternative (auto-build loop):** after the Plan Approval
+Gate, `scripts/auto-build-loop.sh` can drive the whole Build phase outside any
+copilot session — fresh headless session per phase, driver-owned commits,
+gating cross-provider review per phase, milestone pauses for batched human
+sign-off, fail-closed parking on breakers. Opt-in via
+`specs/<feature-id>/automation.json` autonomy profiles; see
+`auto-build-loop.md` and `phase-workflow.md` § Autonomy Profiles.
+
 ## Model & Effort Quick Reference
 
 Effort levels assume Opus 4.7 for the Plan/Review tier. `xhigh` is Opus 4.7 only — on Opus 4.6 and Sonnet 4.6 it falls back to `high`. `high`, `medium`, and `low` are supported across all current models.

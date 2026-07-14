@@ -146,7 +146,7 @@ for s in "${SKILL_NAMES[@]}"; do
 done
 
 SKILL_COUNT=$(find "$SKILLS_DIR_PATH" -name 'SKILL.md' | wc -l | tr -d ' ')
-assert_eq "exactly 23 skills" "23" "$SKILL_COUNT"
+assert_eq "exactly 24 skills" "24" "$SKILL_COUNT"
 
 # Verify SKILL.md frontmatter has required fields
 for s in "${SKILL_NAMES[@]}"; do
@@ -834,6 +834,10 @@ grep -Eq "test-review-loop\\.sh[[:space:]]+${TEST_REVIEW_LOOP_EXPECTED_PASS} rev
 assert_ok "README lists ${TEST_REVIEW_LOOP_EXPECTED_PASS} review loop integration tests" "$rc"
 
 rc=0
+grep -Eq "test-auto-build-loop\\.sh[[:space:]]+${TEST_AUTO_BUILD_LOOP_EXPECTED_PASS} auto-build driver tests" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists ${TEST_AUTO_BUILD_LOOP_EXPECTED_PASS} auto-build driver tests" "$rc"
+
+rc=0
 grep -Eq "docs/[[:space:]]+${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists ${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$rc"
 
@@ -842,8 +846,8 @@ grep -Eq "rules/\*\.md[[:space:]]+.*Global rules" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists global rules" "$rc"
 
 rc=0
-grep -Eq "skills/[[:space:]]+23 skills" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists 23 skills" "$rc"
+grep -Eq "skills/[[:space:]]+24 skills" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists 24 skills" "$rc"
 
 rc=0
 grep -Eq "templates/[[:space:]]+11 stacks" "$REPO_DIR/README.md" || rc=1
@@ -990,7 +994,7 @@ grep -Eq '^TEST_REVIEW_LOOP_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.
 assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
 
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
-assert_eq "test-counts has exactly 6 expected-pass variables" "6" "$COUNT_VARS"
+assert_eq "test-counts has exactly 7 expected-pass variables" "7" "$COUNT_VARS"
 
 rc=0
 grep -q 'source "\$COUNTS_FILE"' "$REPO_DIR/tests/test-generate.sh" || rc=1

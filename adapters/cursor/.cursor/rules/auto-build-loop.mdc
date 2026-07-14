@@ -1,0 +1,104 @@
+---
+description: "Autonomous build driver after SDD spec approval: phase-scoped headless build sessions, driver-owned commits, cross-provider review gates, milestone pauses, and fail-closed escalation — under explicit opt-in autonomy profiles."
+alwaysApply: false
+---
+
+
+# Auto-Build Loop (Autonomous Build After Spec Approval)
+
+Once a feature's SDD bundle is approved, `scripts/auto-build-loop.sh` runs the
+build loop unattended. The driver lives OUTSIDE any copilot session (the phase
+workflow mandates a fresh session per phase): it starts headless build
+sessions, runs tests, commits, submits each phase to cross-provider review,
+re-checks origin alignment, and pauses for humans only at milestones or
+breakers. Design: `specs/auto-build-loop/design.md`.
+
+## Autonomy Profiles (explicit opt-in — no silent gate bypass)
+
+| Gate (phase-workflow step) | advisory | pr | merge |
+|---|---|---|---|
+| Manual testing (6) | deferred to milestone checkpoint | deferred to milestone | deferred to milestone |
+| Commit gate (8) | auto-commit, local only, isolated branch | auto-commit | auto-commit |
+| Wait-for-approval (9) | auto-advance; hard pause at milestones | same | same |
+| Origin gate exit >= 2 (10) | **always escalate to human** | **always escalate** | **always escalate** |
+| Peer review (11) | driver-run, gating, driver verifies PASS | same | same + green CI |
+| Push / PR / merge | never / never / never | auto / auto / never | auto / auto / gated auto |
+
+Only `advisory` is implemented today. `pr` (#71) and `merge` (later) are
+config slots; the driver rejects them until their increments land.
+
+## Invocation
+
+```bash
+scripts/auto-build-loop.sh <feature-id> \
+    [--profile advisory] [--config <path>] \
+    [--resume] [--dry-run] [--max-phases N] [--start-phase N]
+# Exit: 0 done | 3 milestone-paused | 4 escalated/parked | 1 usage/preflight
+```
+
+Config lives at `specs/<feature-id>/automation.json` (template:
+`shared/templates/sdd/automation-template.json`; scaffold with `/auto-build`).
+Reviewers are a list with `specialization` and `gating` fields; v1 uses the
+first `gating: true` entry, resolved through `~/.code-copilot-team/providers.toml`.
+
+## The loop, per phase
+
+1. **Preflight** (first run): plan.md `status: approved`, `validate-spec.sh`
+   passes, origin gate exit <= 1, targeted provider health
+   (`providers-health.sh --provider <gating-reviewer>`), clean worktree, then
+   base-ref resolve → feature-branch create/checkout → refuse to proceed on
+   `master`/`main`.
+2. **Build**: fresh `claude -p` session scoped to one `## US<n>:` group from
+   tasks.md (`--permission-mode acceptEdits`, `CCT_PEER_REVIEW_ENABLED=false`
+   — the driver owns the review gate). One `--resume` continuation on
+   `error_max_turns`, then park.
+3. **Test**: driver runs `test.command`; failures get bounded fix sessions
+   (`build.max_fix_sessions_per_phase`), then park.
+4. **Commit**: the DRIVER commits (`feat(<id>): phase N — <title>
+   [auto-build]`); sessions never commit. Empty diff parks (`git_anomaly`).
+5. **Review**: driver initializes `.cct/review/state.json` and invokes
+   `review-round-runner.sh` with `CCT_REVIEW_BASE_REF=<phase-base>` so the
+   whole phase diff is reviewed. FAIL → fix session + driver commit +
+   `commit_ref` injection into `fixed` dispositions → re-review. BREAKER →
+   park. PASS → driver hard gate (verdict PASS, no un-approved bypass,
+   `blocking_findings_open: 0`), archive `.cct/review/` into the ledger.
+6. **Phase gate**: origin re-check (exit >= 2 or stale → park), commit the
+   collaboration artifact + `automation-summary.md` update.
+7. **Milestone** (every `milestone_every` phases or `<!-- milestone -->`
+   marker in tasks.md): write a checkpoint into `automation-summary.md`,
+   exit 3. Resume requires an `approved-by:` line under the checkpoint —
+   the driver commits that sign-off itself on `--resume`.
+
+## Ledger (file-backed, machine-local)
+
+`.cct/auto-build/<feature-id>/` — `state.json` (single source of truth:
+status, per-phase commits/reviews, caps, totals), `events.jsonl` (append-only
+transitions), `config.snapshot.json`, `phase-N/` artifacts (prompts, raw
+result JSON, test logs, archived review), `escalations/esc-<n>.json`.
+Durable human-facing output goes to `specs/<feature-id>/automation-summary.md`
+and `specs/<feature-id>/collaboration/` (committed).
+
+## Escalation & resume playbook
+
+Every breaker parks fail-closed (exit 4) with an escalation record naming the
+reason: `review_breaker | origin_gate | test_failure | cap_exceeded |
+provider_unavailable | build_session_error | git_anomaly`. There is no
+proceed-anyway path. Human actions:
+
+- **review_breaker**: run `/review-decide approve|reject|retry` in a session.
+- **origin_gate**: resolve via the origin-confirmation escalation (rescope /
+  restart / document divergence) — the driver NEVER picks for you.
+- **test_failure / build_session_error / git_anomaly**: fix manually, commit.
+- **milestone-paused** (exit 3, not an escalation): manual-test + retro, add
+  `approved-by: <name> <date>` under the checkpoint, rerun with `--resume`.
+
+Full breaker `--resume` resolution detection and notifications land in
+increment C (#70); until then a parked run is restarted after manual cleanup.
+
+## Safety rails (hard-coded)
+
+Default-on caps (max phases 8, review rounds 5, fix sessions 3/phase,
+wall-clock 4h, cost $25); `advisory` cannot push even on escalation; no
+`--force` code path; commits refused on `master`/`main`; sessions run with
+`acceptEdits` so PreToolUse protect hooks stay active; origin escalations are
+clearable only by human-authored artifacts.

@@ -12,7 +12,9 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SPECS_DIR="$REPO_DIR/specs"
+# CCT_SPECS_DIR overrides the default specs/ root (same pattern as
+# check-origin-alignment.sh; used by the auto-build driver and tests).
+SPECS_DIR="${CCT_SPECS_DIR:-$REPO_DIR/specs}"
 
 TOTAL_PASS=0
 TOTAL_FAIL=0
