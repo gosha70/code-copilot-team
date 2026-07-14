@@ -77,22 +77,37 @@ result JSON, test logs, archived review), `escalations/esc-<n>.json`.
 Durable human-facing output goes to `specs/<feature-id>/automation-summary.md`
 and `specs/<feature-id>/collaboration/` (committed).
 
+## Notification
+
+`notify.command` (config; `CCT_AUTOBUILD_NOTIFY_CMD` overrides) fires on every
+park, milestone pause, and run completion with placeholders `{feature_id}
+{reason} {phase} {status} {summary}`. Values are substituted as quoted
+env-var references — they never enter the command string, so spaces/quotes
+cannot inject shell syntax. Notification failure is journaled
+(`notify_failed`) and never blocks parking; the ledger is the durable record.
+
 ## Escalation & resume playbook
 
 Every breaker parks fail-closed (exit 4) with an escalation record naming the
-reason: `review_breaker | origin_gate | test_failure | cap_exceeded |
-provider_unavailable | build_session_error | git_anomaly`. There is no
-proceed-anyway path. Human actions:
+reason. There is no proceed-anyway path and no bypass flag: `--resume`
+re-derives resolution from human-produced artifacts, per reason:
 
-- **review_breaker**: run `/review-decide approve|reject|retry` in a session.
-- **origin_gate**: resolve via the origin-confirmation escalation (rescope /
-  restart / document divergence) — the driver NEVER picks for you.
-- **test_failure / build_session_error / git_anomaly**: fix manually, commit.
-- **milestone-paused** (exit 3, not an escalation): manual-test + retro, add
-  `approved-by: <name> <date>` under the checkpoint, rerun with `--resume`.
+| Reason | Human action | `--resume` detects |
+|---|---|---|
+| `review_breaker` | `/review-decide approve\|reject\|retry` in a session (works for runner breakers AND driver fix-exhaustion — the driver writes `breaker-tripped.json` for its own breakers) | `decision.json`: approve → single-use, phase-scoped bypass accepted by the PASS gate; reject → run `aborted`; retry → review loop re-entered on the live state (attempt/round numbering preserved) |
+| `origin_gate` | rescope / restart / document divergence — the driver NEVER picks for you | `check-origin-alignment.sh` exit <= 1 (fresh aligned record or committed `origin-divergence.md`) |
+| `test_failure` / `build_session_error` / `git_anomaly` | fix manually, commit | clean worktree AND `test.command` green |
+| `provider_unavailable` | fix providers.toml or the provider service | targeted health (`--provider` chain) passes |
+| `cap_exceeded` | raise `caps.*` / `phases.max_phases` in `automation.json` | refreshed caps no longer exceeded (wall-clock guard restarts on resume) |
 
-Full breaker `--resume` resolution detection and notifications land in
-increment C (#70); until then a parked run is restarted after manual cleanup.
+Unresolved: `--resume` prints exactly what is still needed and exits 1 with
+no side effects. On resolution the escalation is marked `resolved`, journaled,
+and a `resumed` notification fires. `review_breaker` parking leaves
+`.cct/review/` in place — `/review-decide` operates on that live state.
+
+**milestone-paused** (exit 3, not an escalation): manual-test + retro, add
+`approved-by: <name> <date>` under the checkpoint, rerun with `--resume`
+(the driver commits the sign-off itself).
 
 ## Safety rails (hard-coded)
 

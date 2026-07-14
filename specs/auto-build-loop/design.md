@@ -89,8 +89,8 @@ Single `can_push/can_open_pr/can_merge` profile ladder; advisory never pushes ev
 
 - **A — Review-engine generalization + CI tightening** (enabler, tiny): diffs 1-3 above + tests.
 - **B — Driver core, advisory profile** (largest): driver script, ledger/state machine, config + template, `/auto-build` command, `auto-build-loop` + `phase-workflow` skill updates + regen, `tests/test-auto-build-loop.sh`, CI wiring. Split B1 (state machine + build/test/commit + dry-run) / B2 (review integration + gates) if needed.
-- **C — Escalation, notification, resume**: escalation records, pluggable notify, `--resume` resolution detection, WIP-push for pr profile.
-- **D — `pr` profile**: push, pre-pr-check integration, idempotent gh PR create/edit, mock-gh tests.
+- **C — Escalation, notification, resume**: escalation records, pluggable notify, `--resume` resolution detection. (WIP-push-on-escalation relocated to D/#71 at C's plan approval, 2026-07-13 — no pushing profile exists before D.)
+- **D — `pr` profile**: push, pre-pr-check integration, idempotent gh PR create/edit, WIP-push-on-escalation (relocated from C), mock-gh tests.
 - **E — Reviewer panel**: specialization-scoped multi-reviewer rounds (non-gating = advisory findings folded into fix prompt); fix stale providers.toml template comment.
 - **F — `merge` profile** (later): branch-protection + green-CI gated auto-merge.
 
