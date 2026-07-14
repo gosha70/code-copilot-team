@@ -39,6 +39,10 @@
   "notify": {
     "command": ""
   },
+  "pr": {
+    "closes": [],
+    "title": ""
+  },
   "merge": {
     "enabled": false,
     "require_green_ci": true,

@@ -13,7 +13,9 @@ set -uo pipefail
 # Spec:   specs/auto-build-loop-driver/spec.md (FR references below)
 #
 # Usage: auto-build-loop.sh <feature-id> [options]
-#   --profile advisory        Autonomy profile (only 'advisory' in this increment)
+#   --profile advisory|pr     Autonomy profile: advisory publishes nothing;
+#                             pr pushes the branch + opens/updates a PR (never
+#                             merges). 'merge' is a later increment.
 #   --config <path>           Config (default: specs/<feature-id>/automation.json)
 #   --resume                  Continue a paused/parked run from the ledger
 #   --dry-run                 Print planned phases/transitions; no side effects
@@ -22,7 +24,8 @@ set -uo pipefail
 #
 # Exit: 0 = done | 3 = milestone-paused | 4 = escalated/parked | 1 = usage/preflight
 #
-# Env: CCT_CLAUDE_BIN (default claude), CCT_AUTOBUILD_DIR (default .cct/auto-build),
+# Env: CCT_CLAUDE_BIN (default claude), CCT_GH_BIN (default gh, pr profile),
+#      CCT_AUTOBUILD_DIR (default .cct/auto-build),
 #      CCT_AUTOBUILD_PROFILE, CCT_PROVIDER_PROFILE, CCT_REVIEW_* (passed through)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -31,6 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="${CCT_PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 CLAUDE_BIN="${CCT_CLAUDE_BIN:-claude}"
+GH_BIN="${CCT_GH_BIN:-gh}"
 AUTOBUILD_ROOT="${CCT_AUTOBUILD_DIR:-.cct/auto-build}"
 # Gate scripts resolve specs relative to their own repo by default; point
 # them at the project under build.
@@ -194,6 +198,19 @@ park() {
         tmp=$(mktemp)
         jq '.notified = true' "$esc" > "$tmp" && mv "$tmp" "$esc"
     fi
+    # WIP-push-on-escalation (FR-8): pr/merge push the feature branch so the
+    # parked state is inspectable remotely. Failure is journaled and NEVER
+    # blocks the park (fail-closed). advisory parks locally only.
+    if [[ "${CAN_PUSH:-false}" == "true" ]]; then
+        local cur wip=false
+        cur=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+        if [[ "$cur" == "$BRANCH_NAME" ]] && push_branch soft; then
+            wip=true
+        fi
+        local tmp
+        tmp=$(mktemp)
+        jq --argjson w "$wip" '.wip_pushed = $w' "$esc" > "$tmp" && mv "$tmp" "$esc"
+    fi
     exit 4
 }
 
@@ -223,6 +240,7 @@ load_config() {
     PROFILE="${PROFILE_ARG:-${CCT_AUTOBUILD_PROFILE:-$(cfg '.profile' 'advisory')}}"
     BRANCH_NAME=$(cfg '.branch.name' "feature/$FEATURE_ID")
     BRANCH_BASE=$(cfg '.branch.base' 'master')
+    BRANCH_REMOTE=$(cfg '.branch.remote' 'origin')
     MILESTONE_EVERY=$(cfg '.phases.milestone_every' '2')
     MAX_PHASES="${MAX_PHASES_ARG:-$(cfg '.phases.max_phases' '8')}"
     BUILD_MAX_TURNS=$(cfg '.build.max_turns' '80')
@@ -233,12 +251,20 @@ load_config() {
     CAP_COST=$(cfg '.caps.cost_usd' '25')
     GATING_REVIEWER=$(jq -r '[.review.reviewers[]? | select(.gating == true)][0].provider // empty' "$CONFIG_SNAPSHOT")
 
-    # FR-1: only advisory is implemented in this increment.
-    if [[ "$PROFILE" != "advisory" ]]; then
-        echo "Error: profile '$PROFILE' is not available in this increment." >&2
-        echo "Only 'advisory' is implemented; 'pr' is #71 and 'merge' is a later increment." >&2
-        exit 1
-    fi
+    # FR-1: single hard-coded profile ladder. advisory publishes nothing;
+    # pr pushes + opens a PR (never merges); merge is a later increment
+    # (config slots reserved) and is still refused here.
+    case "$PROFILE" in
+        advisory) CAN_PUSH=false; CAN_OPEN_PR=false; CAN_MERGE=false ;;
+        pr)       CAN_PUSH=true;  CAN_OPEN_PR=true;  CAN_MERGE=false ;;
+        merge)
+            echo "Error: profile 'merge' is not available yet (later increment)." >&2
+            echo "Its config slots are reserved; use 'advisory' or 'pr'." >&2
+            exit 1 ;;
+        *)
+            echo "Error: unknown profile '$PROFILE' (expected advisory|pr)." >&2
+            exit 1 ;;
+    esac
     if [[ -z "$TEST_CMD" ]]; then
         echo "Error: config test.command is required (the driver must be able to verify builds)." >&2
         exit 1
@@ -268,6 +294,18 @@ preflight() {
     if ! "$CLAUDE_BIN" --version &>/dev/null; then
         echo "Error: claude binary not usable: $CLAUDE_BIN (override with CCT_CLAUDE_BIN)." >&2
         exit 1
+    fi
+
+    # gh preflight (FR-2a): required only when the profile can push / open PRs.
+    if [[ "$CAN_PUSH" == "true" ]]; then
+        if ! "$GH_BIN" --version >/dev/null 2>&1; then
+            echo "Error: gh binary not usable: $GH_BIN (override with CCT_GH_BIN) — required for profile '$PROFILE'." >&2
+            exit 1
+        fi
+        if ! ( cd "$PROJECT_DIR" && "$GH_BIN" auth status ) >/dev/null 2>&1; then
+            echo "Error: 'gh auth status' failed — authenticate gh before running profile '$PROFILE'." >&2
+            exit 1
+        fi
     fi
 
     # Spec approved
@@ -493,6 +531,35 @@ driver_commit() {
     fi
     git -C "$PROJECT_DIR" commit -q -m "$msg"
     COMMIT_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD)
+}
+
+# ── Branch push (FR-2, pr/merge only) ────────────────────────
+
+# Plain push only — the driver never force-pushes (no force or lease flags
+# anywhere). Hard-refuses to push the base branch or master/main. In normal
+# flow a refusal or push failure is fatal; WIP-push-on-escalation passes
+# mode=soft to get a return code instead of aborting the park.
+push_branch() {
+    # push_branch [soft]; mode=soft returns non-zero instead of exiting/parking
+    local mode="${1:-hard}"
+    local branch="$BRANCH_NAME"
+    if [[ "$branch" == "master" || "$branch" == "main" || "$branch" == "$BRANCH_BASE" ]]; then
+        if [[ "$mode" == "soft" ]]; then
+            echo "[auto-build] refusing WIP-push: '$branch' is master/main or the base branch" >&2
+            return 1
+        fi
+        echo "Error: refusing to push '$branch' (master/main or the base branch)." >&2
+        exit 1
+    fi
+    if git -C "$PROJECT_DIR" push -u "$BRANCH_REMOTE" "$branch" >/dev/null 2>&1; then
+        journal "pushed" "$BRANCH_REMOTE/$branch"
+        return 0
+    fi
+    if [[ "$mode" == "soft" ]]; then
+        journal "wip_push_failed" "$BRANCH_REMOTE/$branch"
+        return 1
+    fi
+    park "git_anomaly" "git push to $BRANCH_REMOTE/$branch failed" "null"
 }
 
 # ── Review integration (FR-9..FR-12) ─────────────────────────
@@ -811,6 +878,13 @@ run_phase() {
         --arg p "$n" --arg sha "$(git -C "$PROJECT_DIR" rev-parse HEAD)"
     journal "phase_done" "phase $n"
 
+    # Publish the branch after each phase (pr/merge) so progress — including
+    # milestone pauses — is inspectable remotely. advisory never pushes.
+    if [[ "$CAN_PUSH" == "true" ]]; then
+        set_status "pushing"
+        push_branch
+    fi
+
     # Milestone boundary?
     local every paused_after
     every=$(state_get '.milestones.every_n_phases')
@@ -963,10 +1037,123 @@ resume_parked() {
             fi
             resolve_escalation "$esc_file" "caps refreshed from config (cost \$$CAP_COST, wall ${CAP_WALL_CLOCK}s, phases $MAX_PHASES)"
             ;;
+        pr_config)
+            # Human added pr.closes (or an origin issue) — refresh the frozen
+            # snapshot's pr block from the live config, then re-derive.
+            local tmp
+            tmp=$(mktemp)
+            jq --slurpfile live "$CONFIG_PATH" '.pr = ($live[0].pr // .pr)' \
+                "$CONFIG_SNAPSHOT" > "$tmp" && mv "$tmp" "$CONFIG_SNAPSHOT"
+            local ids
+            ids=$(derive_close_ids)
+            [[ -n "$ids" ]] || refuse_resume "still no PR close target — set pr.closes in $CONFIG_PATH (and commit it) or add an origin issue to plan.md, then --resume"
+            resolve_escalation "$esc_file" "PR close target available ($ids) — retrying PR step"
+            ;;
+        pr_precheck|pr_error)
+            # The PR mechanics re-run at finalize; resolving lets the run reach
+            # it again and re-gate (a still-broken state re-parks with fresh
+            # diagnostics — fail-closed).
+            resolve_escalation "$esc_file" "$reason cleared — retrying PR step at finalize"
+            ;;
         *)
             refuse_resume "no automatic resolution for reason '$reason' — inspect $esc_file"
             ;;
     esac
+}
+
+# ── PR create / idempotent update (FR-3..FR-7, pr profile) ──
+
+derive_close_ids() {
+    # Echo comma-separated issue numbers for the PR "Closes #N" marker.
+    # Config pr.closes wins; else the spec's origin-frontmatter issue number.
+    local ids
+    ids=$(jq -r '(.pr.closes // []) | map(tostring) | join(",")' "$CONFIG_SNAPSHOT" 2>/dev/null)
+    if [[ -n "$ids" && "$ids" != "null" ]]; then
+        echo "$ids"; return 0
+    fi
+    local raw
+    raw=$(sed -n '/^---$/,/^---$/p' "$SPEC_DIR/plan.md" 2>/dev/null \
+          | grep -E '^[[:space:]]*issue:' | head -1 | sed -E 's/^[[:space:]]*issue:[[:space:]]*//')
+    raw="${raw##*#}"
+    printf '%s' "$raw" | tr -cd '0-9'
+    echo
+}
+
+compose_pr_body() {
+    # compose_pr_body <out-file>
+    local out="$1"
+    {
+        echo "## Autonomous build — $FEATURE_ID"
+        echo
+        echo "Built by \`scripts/auto-build-loop.sh\` under the \`$PROFILE\` profile."
+        echo "Branch \`$BRANCH_NAME\` — $DONE_COUNT phase(s) completed, each reviewed"
+        echo "to PASS by the gating reviewer before the driver committed it."
+        echo
+        echo "- Automation summary: \`specs/$FEATURE_ID/automation-summary.md\`"
+        echo "- Review artifacts: \`specs/$FEATURE_ID/collaboration/\`"
+        echo
+        echo "The driver never merges; a human reviews and merges this PR."
+        echo
+        echo "🤖 Generated by auto-build-loop"
+    } > "$out"
+}
+
+open_or_update_pr() {
+    # Sets PR_NUMBER, PR_URL, PR_ACTION (opened|updated). pr create runs at
+    # most once across a create->kill->resume cycle (idempotency via ledger
+    # then remote lookup).
+    local body="$LEDGER_DIR/pr-body.md"
+    compose_pr_body "$body"
+
+    PR_NUMBER=$(state_get '.pr.number')
+    PR_URL=$(state_get '.pr.url')
+    if [[ -z "$PR_NUMBER" || "$PR_NUMBER" == "null" ]]; then
+        local view
+        view=$( ( cd "$PROJECT_DIR" && "$GH_BIN" pr view "$BRANCH_NAME" --json number,url ) 2>/dev/null || true )
+        if [[ -n "$view" ]]; then
+            PR_NUMBER=$(printf '%s' "$view" | jq -r '.number // empty' 2>/dev/null)
+            PR_URL=$(printf '%s' "$view" | jq -r '.url // empty' 2>/dev/null)
+        fi
+    fi
+
+    if [[ -n "$PR_NUMBER" && "$PR_NUMBER" != "null" ]]; then
+        ( cd "$PROJECT_DIR" && "$GH_BIN" pr edit "$PR_NUMBER" --body-file "$body" ) >/dev/null 2>&1 \
+            || park "pr_error" "gh pr edit #$PR_NUMBER failed" "null"
+        PR_ACTION="updated"
+        state_set '.pr.number = ($n | tonumber) | .pr.url = $u' --arg n "$PR_NUMBER" --arg u "$PR_URL"
+        journal "pr_updated" "#$PR_NUMBER"
+        return 0
+    fi
+
+    # No existing PR — audit close-keywords, then create exactly once.
+    local closes first_close title
+    closes=$(derive_close_ids)
+    if [[ -z "$closes" ]]; then
+        park "pr_config" "no PR close target — set pr.closes in $CONFIG_PATH or an origin issue in plan.md frontmatter" "null"
+    fi
+    first_close="${closes%%,*}"
+    title=$(cfg '.pr.title' "feat($FEATURE_ID): autonomous build")
+    title="$title (Closes #$first_close)"
+
+    if ! ( cd "$PROJECT_DIR" && bash "$SCRIPT_DIR/pre-pr-check.sh" \
+            --closes "$closes" --title "$title" --body-file "$body" --base "$BRANCH_BASE" ) \
+            >"$LEDGER_DIR/pre-pr-check.log" 2>&1; then
+        park "pr_precheck" "pre-pr-check.sh failed (see $LEDGER_DIR/pre-pr-check.log)" \
+            "$(jq -n --arg f "$LEDGER_DIR/pre-pr-check.log" '{precheck_log: $f}')"
+    fi
+
+    local out
+    out=$( ( cd "$PROJECT_DIR" && "$GH_BIN" pr create --base "$BRANCH_BASE" \
+             --title "$title" --body-file "$body" ) 2>&1 ) \
+        || park "pr_error" "gh pr create failed: $out" "null"
+    PR_URL=$(printf '%s' "$out" | grep -oE 'https://[^[:space:]]*/pull/[0-9]+' | head -1)
+    PR_NUMBER="${PR_URL##*/}"
+    if [[ -z "$PR_NUMBER" ]]; then
+        park "pr_error" "could not parse PR number from gh output: $out" "null"
+    fi
+    PR_ACTION="opened"
+    state_set '.pr.number = ($n | tonumber) | .pr.url = $u' --arg n "$PR_NUMBER" --arg u "$PR_URL"
+    journal "pr_opened" "#$PR_NUMBER $PR_URL"
 }
 
 if [[ "$RESUME" == "true" ]]; then
@@ -1023,11 +1210,24 @@ set_status "finalizing"
 {
     echo ""
     echo "## Run complete ($(now_iso))"
-    echo "Profile: advisory — nothing was pushed. Branch: $BRANCH_NAME."
+    if [[ "$CAN_OPEN_PR" == "true" ]]; then
+        echo "Profile: $PROFILE — branch $BRANCH_NAME pushed to $BRANCH_REMOTE; a pull request tracks the work (the driver never merges)."
+    else
+        echo "Profile: advisory — nothing was pushed. Branch: $BRANCH_NAME."
+    fi
     echo "Review artifacts: specs/$FEATURE_ID/collaboration/."
 } >> "$SUMMARY_MD"
 driver_commit "docs($FEATURE_ID): automation summary [auto-build]" || true
+
+FINAL_MSG="run complete: $DONE_COUNT phase(s) on $BRANCH_NAME"
+if [[ "$CAN_OPEN_PR" == "true" ]]; then
+    push_branch
+    open_or_update_pr
+    FINAL_MSG="$FINAL_MSG — PR #$PR_NUMBER $PR_ACTION: $PR_URL"
+else
+    FINAL_MSG="$FINAL_MSG (advisory — nothing pushed)"
+fi
 set_status "done"
-notify "done" "run complete: $DONE_COUNT phase(s) on $BRANCH_NAME (advisory — nothing pushed)"
-echo "[auto-build] DONE — $DONE_COUNT phase(s) on $BRANCH_NAME. Nothing pushed (advisory)." >&2
+notify "done" "$FINAL_MSG"
+echo "[auto-build] DONE — $FINAL_MSG." >&2
 exit 0
