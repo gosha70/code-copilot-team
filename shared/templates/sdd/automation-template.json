@@ -46,6 +46,7 @@
   "merge": {
     "enabled": false,
     "require_green_ci": true,
-    "require_branch_protection": true
+    "require_branch_protection": true,
+    "method": "squash"
   }
 }

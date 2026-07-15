@@ -223,6 +223,18 @@ cfg() {
     if [[ -z "$val" || "$val" == "null" ]]; then echo "$2"; else echo "$val"; fi
 }
 
+# merge.method is used as a `gh pr merge --<method>` flag, so it MUST be one of
+# the three merge methods — never an arbitrary gh flag (e.g. --admin,
+# --delete-branch) that would change the merge's safety semantics.
+validate_merge_method() {
+    case "$MERGE_METHOD" in
+        squash|merge|rebase) ;;
+        *)
+            echo "Error: merge.method must be one of squash|merge|rebase (got '$MERGE_METHOD')." >&2
+            exit 1 ;;
+    esac
+}
+
 load_config() {
     if [[ ! -f "$CONFIG_PATH" ]]; then
         echo "Error: automation config not found: $CONFIG_PATH" >&2
@@ -258,19 +270,23 @@ load_config() {
         | [.provider, (.scope // "both"), (.specialization // "general")] | @tsv' "$CONFIG_SNAPSHOT")
 
     # FR-1: single hard-coded profile ladder. advisory publishes nothing;
-    # pr pushes + opens a PR (never merges); merge is a later increment
-    # (config slots reserved) and is still refused here.
+    # pr pushes + opens a PR (never merges); merge additionally arms a
+    # GitHub-native gated auto-merge (never merges locally).
     case "$PROFILE" in
         advisory) CAN_PUSH=false; CAN_OPEN_PR=false; CAN_MERGE=false ;;
         pr)       CAN_PUSH=true;  CAN_OPEN_PR=true;  CAN_MERGE=false ;;
-        merge)
-            echo "Error: profile 'merge' is not available yet (later increment)." >&2
-            echo "Its config slots are reserved; use 'advisory' or 'pr'." >&2
-            exit 1 ;;
+        merge)    CAN_PUSH=true;  CAN_OPEN_PR=true;  CAN_MERGE=true  ;;
         *)
-            echo "Error: unknown profile '$PROFILE' (expected advisory|pr)." >&2
+            echo "Error: unknown profile '$PROFILE' (expected advisory|pr|merge)." >&2
             exit 1 ;;
     esac
+    # merge-profile config (all fail-closed defaults). enabled is the final
+    # switch; require_branch_protection guards merging into an unprotected base.
+    MERGE_ENABLED=$(cfg '.merge.enabled' 'false')
+    MERGE_REQUIRE_PROTECTION=$(cfg '.merge.require_branch_protection' 'true')
+    MERGE_REQUIRE_GREEN_CI=$(cfg '.merge.require_green_ci' 'true')
+    MERGE_METHOD=$(cfg '.merge.method' 'squash')
+    [[ "$CAN_MERGE" == "true" ]] && validate_merge_method
     if [[ -z "$TEST_CMD" ]]; then
         echo "Error: config test.command is required (the driver must be able to verify builds)." >&2
         exit 1
@@ -1141,6 +1157,20 @@ resume_parked() {
             # diagnostics — fail-closed).
             resolve_escalation "$esc_file" "$reason cleared — retrying PR step at finalize"
             ;;
+        merge_blocked)
+            # Human enabled branch protection (or flipped merge.*) — refresh the
+            # snapshot's merge block from live config, then let finalize re-arm.
+            # A still-unprotected base re-parks (fail-closed).
+            local tmp
+            tmp=$(mktemp)
+            jq --slurpfile live "$CONFIG_PATH" '.merge = ($live[0].merge // .merge)' \
+                "$CONFIG_SNAPSHOT" > "$tmp" && mv "$tmp" "$CONFIG_SNAPSHOT"
+            MERGE_ENABLED=$(cfg '.merge.enabled' 'false')
+            MERGE_REQUIRE_PROTECTION=$(cfg '.merge.require_branch_protection' 'true')
+            MERGE_METHOD=$(cfg '.merge.method' 'squash')
+            validate_merge_method
+            resolve_escalation "$esc_file" "merge gate resolved — retrying auto-merge at finalize"
+            ;;
         *)
             refuse_resume "no automatic resolution for reason '$reason' — inspect $esc_file"
             ;;
@@ -1242,6 +1272,46 @@ open_or_update_pr() {
     journal "pr_opened" "#$PR_NUMBER $PR_URL"
 }
 
+# arm_auto_merge (FR-2..FR-5, merge profile): arm GitHub-native gated
+# auto-merge on the open PR. No-op when merge.enabled != true (behaves as pr).
+# Fail-closed: a required-but-missing branch protection or a gh failure parks
+# (merge_blocked). Idempotent — never re-arms an already-armed PR. The driver
+# never merges locally; GitHub performs the merge when the branch-protection
+# required checks pass. Sets MERGE_ARMED.
+arm_auto_merge() {
+    MERGE_ARMED=false
+    if [[ "$MERGE_ENABLED" != "true" ]]; then
+        state_set '.pr.auto_merge_armed = false'
+        journal "merge_skipped" "merge.enabled=false — PR left open, not merged"
+        return 0
+    fi
+    # Idempotency: ledger, then the remote (auto-merge already requested).
+    if [[ "$(state_get '.pr.auto_merge_armed' 2>/dev/null)" == "true" ]]; then
+        MERGE_ARMED=true; return 0
+    fi
+    local amr
+    amr=$( ( cd "$PROJECT_DIR" && "$GH_BIN" pr view "$PR_NUMBER" --json autoMergeRequest -q '.autoMergeRequest' ) 2>/dev/null || echo "" )
+    if [[ -n "$amr" && "$amr" != "null" ]]; then
+        state_set '.pr.auto_merge_armed = true | .pr.merge_method = $m' --arg m "$MERGE_METHOD"
+        journal "merge_already_armed" "#$PR_NUMBER"
+        MERGE_ARMED=true; return 0
+    fi
+    # Branch-protection gate (fail-closed).
+    if [[ "$MERGE_REQUIRE_PROTECTION" == "true" ]]; then
+        if ! ( cd "$PROJECT_DIR" && "$GH_BIN" api "repos/{owner}/{repo}/branches/$BRANCH_BASE/protection" ) >/dev/null 2>&1; then
+            park "merge_blocked" "base branch '$BRANCH_BASE' is not protected but merge.require_branch_protection=true" "null"
+        fi
+    fi
+    # Arm GitHub-native auto-merge — GitHub merges when required checks pass.
+    if ! ( cd "$PROJECT_DIR" && "$GH_BIN" pr merge "$PR_NUMBER" --auto --"$MERGE_METHOD" ) >/dev/null 2>&1; then
+        park "merge_blocked" "gh pr merge --auto --$MERGE_METHOD failed for #$PR_NUMBER (auto-merge unavailable? check repo/branch-protection settings)" "null"
+    fi
+    state_set '.pr.auto_merge_armed = true | .pr.merge_method = $m' --arg m "$MERGE_METHOD"
+    journal "merge_armed" "#$PR_NUMBER --auto --$MERGE_METHOD"
+    MERGE_ARMED=true
+    return 0
+}
+
 if [[ "$RESUME" == "true" ]]; then
     if [[ ! -f "$STATE" ]]; then
         echo "Error: --resume but no ledger at $STATE." >&2
@@ -1296,7 +1366,9 @@ set_status "finalizing"
 {
     echo ""
     echo "## Run complete ($(now_iso))"
-    if [[ "$CAN_OPEN_PR" == "true" ]]; then
+    if [[ "$CAN_MERGE" == "true" ]]; then
+        echo "Profile: merge — branch $BRANCH_NAME pushed; PR opened; gated auto-merge per merge.enabled + branch protection (GitHub merges when required checks pass; the driver never merges locally)."
+    elif [[ "$CAN_OPEN_PR" == "true" ]]; then
         echo "Profile: $PROFILE — branch $BRANCH_NAME pushed to $BRANCH_REMOTE; a pull request tracks the work (the driver never merges)."
     else
         echo "Profile: advisory — nothing was pushed. Branch: $BRANCH_NAME."
@@ -1310,6 +1382,14 @@ if [[ "$CAN_OPEN_PR" == "true" ]]; then
     push_branch
     open_or_update_pr
     FINAL_MSG="$FINAL_MSG — PR #$PR_NUMBER $PR_ACTION: $PR_URL"
+    if [[ "$CAN_MERGE" == "true" ]]; then
+        arm_auto_merge
+        if [[ "$MERGE_ARMED" == "true" ]]; then
+            FINAL_MSG="$FINAL_MSG (auto-merge armed: --$MERGE_METHOD, merges when required checks pass)"
+        else
+            FINAL_MSG="$FINAL_MSG (merge.enabled=false — PR open, not merged)"
+        fi
+    fi
 else
     FINAL_MSG="$FINAL_MSG (advisory — nothing pushed)"
 fi
