@@ -10,7 +10,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "next": "14.2.5",
+    "next": "15.5.20",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "cytoscape": "3.30.2",
@@ -22,8 +22,11 @@
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",
     "autoprefixer": "10.4.19",
-    "postcss": "8.4.39",
+    "postcss": "8.5.10",
     "tailwindcss": "3.4.6",
     "typescript": "5.5.3"
+  },
+  "overrides": {
+    "postcss": "8.5.10"
   }
 }
