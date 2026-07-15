@@ -61,7 +61,7 @@ Test knobs: `CCT_CLAUDE_BIN`, `CCT_GH_BIN`, `CCT_AUTOBUILD_DIR`, pass-through `C
 - **Preflight**: jq/git/claude present; `gh auth status` iff ≥ pr; `plan.md status: approved` + `validate-spec.sh` pass + no `[NEEDS CLARIFICATION]`; origin check (≥2 escalates); `providers-health.sh`; clean worktree; create/checkout `feature/<id>` branch (never operate on default branch); snapshot config; init ledger.
 - **Phase enumeration**: `## US<n>:` story groups in `specs/<id>/tasks.md` (fallback `### Task N:` in plan.md; overridable `phases` array in config). Milestones every `milestone_every` phases (default 2) or explicit `<!-- milestone -->` marker.
 - **Per phase**: compose phase-scoped prompt (spec→PRD bridge from ralph-loop §PRD Source: US stories + FR acceptance checks + plan constraints + "do NOT commit; driver commits") → `claude -p --output-format json --permission-mode acceptEdits --max-turns N` with `CCT_PEER_REVIEW_ENABLED=false`; parse subtype (`error_max_turns` → one `--resume <session_id>` continuation then escalate); check cost/wall-clock caps before every session → run `test.command` (fix sessions ≤ cap, else escalate) → driver commits `feat(<id>): phase N — <title> [auto-build]` (empty diff → escalate `git_anomaly`) → review rounds: init `.cct/review/state.json` as `/review-submit` does, invoke runner with `CCT_REVIEW_BASE_REF=<phase_base_ref>`; on FAIL run fix session with findings + disposition contract, driver commits and injects `commit_ref` into `fixed` dispositions, re-invoke; on BREAKER escalate; on PASS apply **driver hard gate** (loop-summary PASS, no un-approved bypass, `blocking_findings_open: 0`), archive `.cct/review/` → `phase-N/review/`, reset for next phase → origin re-check (≥2 or stale → escalate) → commit collaboration artifact + summary → push (profile-gated) → milestone check (pause exit 3 + notify) or next phase.
-- **Finalize**: advisory = summary + "nothing pushed"; pr = `pre-pr-check.sh` then run its printed `gh pr create` (idempotent via `gh pr view`/`pr edit`), record pr in ledger, never merge; merge = v-later (config slots reserved: green CI + branch protection + `merge.enabled`).
+- **Finalize**: advisory = summary + "nothing pushed"; pr = `pre-pr-check.sh` then run its printed `gh pr create` (idempotent via `gh pr view`/`pr edit`), record pr in ledger, never merge; merge = pr + gated GitHub-native auto-merge (`gh pr merge <n> --auto --<method>` after a branch-protection probe; config `merge.{enabled,require_branch_protection,require_green_ci,method}`; the driver never merges locally). [Shipped — the "Confirmed decisions" snapshot above predates E/F; see the Phasing status.]
 
 ### Config: `specs/<feature-id>/automation.json` (JSON, not YAML — repo is jq/Bash-3.2)
 
@@ -87,14 +87,16 @@ Single `can_push/can_open_pr/can_merge` profile ladder; advisory never pushes ev
 
 ## Phasing (one GitHub issue per increment; each PR fully addresses its issue)
 
-- **A — Review-engine generalization + CI tightening** (enabler, tiny): diffs 1-3 above + tests.
-- **B — Driver core, advisory profile** (largest): driver script, ledger/state machine, config + template, `/auto-build` command, `auto-build-loop` + `phase-workflow` skill updates + regen, `tests/test-auto-build-loop.sh`, CI wiring. Split B1 (state machine + build/test/commit + dry-run) / B2 (review integration + gates) if needed.
-- **C — Escalation, notification, resume**: escalation records, pluggable notify, `--resume` resolution detection. (WIP-push-on-escalation relocated to D/#71 at C's plan approval, 2026-07-13 — no pushing profile exists before D.)
-- **D — `pr` profile**: push, pre-pr-check integration, idempotent gh PR create/edit, WIP-push-on-escalation (relocated from C), mock-gh tests.
-- **E — Reviewer panel**: specialization-scoped multi-reviewer rounds (non-gating = advisory findings folded into fix prompt); fix stale providers.toml template comment.
-- **F — `merge` profile** (later): branch-protection + green-CI gated auto-merge.
+**Status: SHIPPED — all six increments A–F are merged to `master` (2026-07-14).**
 
-Each increment follows the repo's own SDD flow: issue → `specs/auto-build-loop-<x>/` bundle with `origin:` frontmatter → plan approval → build.
+- ✅ **A — Review-engine generalization + CI tightening** (#68, PR #72) — enabler, tiny: diffs 1-3 above + tests.
+- ✅ **B — Driver core, advisory profile** (#69, PR #73) — largest: driver script, ledger/state machine, config + template, `/auto-build` command, `auto-build-loop` + `phase-workflow` skill updates + regen, `tests/test-auto-build-loop.sh`, CI wiring.
+- ✅ **C — Escalation, notification, resume** (#70, PR #74) — escalation records, pluggable notify, `--resume` resolution detection. (WIP-push-on-escalation relocated to D/#71 at C's plan approval, 2026-07-13 — no pushing profile exists before D.)
+- ✅ **D — `pr` profile** (#71, PR #75) — push, pre-pr-check integration, idempotent gh PR create/edit, WIP-push-on-escalation (relocated from C), mock-gh tests.
+- ✅ **E — Reviewer panel** (#78, PR #79) — specialization-scoped multi-reviewer rounds (non-gating = advisory findings folded into fix prompt); fixed the stale providers.toml template comment.
+- ✅ **F — `merge` profile** (#80, PR #81) — branch-protection + green-CI gated GitHub-native auto-merge (`merge.enabled` default off; `merge.method` ∈ squash|merge|rebase; the driver never merges locally).
+
+Each increment followed the repo's own SDD flow: issue → `specs/auto-build-loop-<x>/` bundle with `origin:` frontmatter → plan approval → build.
 
 ## Testing / verification
 
@@ -104,5 +106,5 @@ Each increment follows the repo's own SDD flow: issue → `specs/auto-build-loop
 ## First execution steps
 
 1. Persist this plan into the project per Plan Artifact Locality: this file, `specs/auto-build-loop/design.md` (tracked; committed with increment A). Seed `specs/auto-build-loop-review-engine/` SDD bundle for increment A.
-2. Create GitHub issues A-D (E/F when reached). (Done: #68, #69, #70, #71.)
-3. Implement increment A on a feature branch (never master), with diff shown before any commit per user rules.
+2. Create GitHub issues per increment. (Done: A #68, B #69, C #70, D #71, E #78, F #80 — all merged.)
+3. Implement increment A on a feature branch (never master), with diff shown before any commit per user rules. (Series complete — see the Phasing status above.)
