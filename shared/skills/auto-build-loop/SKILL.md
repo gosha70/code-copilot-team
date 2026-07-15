@@ -23,8 +23,26 @@ breakers. Design: `specs/auto-build-loop/design.md`.
 | Peer review (11) | driver-run, gating, driver verifies PASS | same | same + green CI |
 | Push / PR / merge | never / never / never | auto / auto / never | auto / auto / gated auto |
 
-`advisory` and `pr` are implemented. `merge` remains a reserved config slot;
-the driver rejects it until its increment lands.
+All three profiles — `advisory`, `pr`, and `merge` — are implemented.
+
+### `merge` profile specifics
+
+`merge` does everything `pr` does, then arms a **gated, GitHub-native**
+auto-merge at finalize (the driver never merges locally):
+
+- `merge.enabled` (default **false**) is the final switch. When false, `merge`
+  behaves exactly like `pr` — the PR is opened, nothing is merged.
+- With `enabled: true` and `merge.require_branch_protection` (default true),
+  the driver verifies the base branch is protected
+  (`gh api repos/{owner}/{repo}/branches/{base}/protection`) and parks
+  (`merge_blocked`) if it is not.
+- It then runs `gh pr merge <n> --auto --<merge.method>` (default `squash`);
+  GitHub performs the merge only once the branch-protection required checks
+  pass — so `merge.require_green_ci` is delegated to GitHub's own rules. The
+  driver never polls CI and never force-merges.
+- The arm is idempotent (ledger `pr.auto_merge_armed`, else `gh pr view
+  --json autoMergeRequest`); resume never re-arms. A `merge_blocked` park
+  resolves once branch protection exists (or `merge.enabled` is flipped).
 
 ### `pr` profile specifics
 

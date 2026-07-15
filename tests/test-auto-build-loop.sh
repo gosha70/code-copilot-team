@@ -140,6 +140,11 @@ if [[ "${1:-}" == "auth" ]]; then
     [[ "${GH_AUTH_FAIL:-}" == "1" ]] && exit 1
     exit 0
 fi
+# api (branch protection probe): 0 = protected, non-zero = unprotected.
+if [[ "${1:-}" == "api" ]]; then
+    [[ "${GH_BRANCH_PROTECTED:-}" == "1" ]] && exit 0
+    exit 1
+fi
 case "${1:-} ${2:-}" in
     "pr create")
         n=$(( $(cat "$STATE.n" 2>/dev/null || echo 0) + 1 ))
@@ -149,12 +154,21 @@ case "${1:-} ${2:-}" in
         echo "$url"
         exit 0 ;;
     "pr view")
+        # autoMergeRequest query: report armed state from $STATE.armed.
+        if [[ "$*" == *autoMergeRequest* ]]; then
+            [[ -f "$STATE.armed" ]] && echo '{"enabledAt":"now"}' || echo "null"
+            exit 0
+        fi
         if [[ -f "$STATE.url" ]]; then
             printf '{"number":%s,"url":"%s"}\n' "$(cat "$STATE.n")" "$(cat "$STATE.url")"
             exit 0
         fi
         exit 1 ;;
     "pr edit") exit 0 ;;
+    "pr merge")
+        [[ "${GH_MERGE_FAIL:-}" == "1" ]] && exit 1
+        echo "armed" > "$STATE.armed"
+        exit 0 ;;
     *) exit 0 ;;
 esac
 GH
@@ -391,11 +405,8 @@ export MOCK_CLAUDE_SCRIPT="$DEFAULT_SCRIPT"
 echo "=== US1: preflight rejections ==="
 # ══════════════════════════════════════════════════════════════
 
-# merge profile still rejected; unknown profile rejected (FR-1)
+# unknown profile rejected (FR-1); advisory|pr|merge are all valid now
 P0=$(setup_project)
-run_driver "$P0" --profile merge
-assert_exit "profile merge rejected" 1 "$RC"
-assert_contains "merge rejection names reserved slot" "$OUTPUT" "not available yet"
 run_driver "$P0" --profile bogus
 assert_exit "unknown profile rejected" 1 "$RC"
 assert_contains "unknown profile message" "$OUTPUT" "unknown profile"
@@ -1076,6 +1087,80 @@ rm -rf "$P" "$BARE" "$GH_LOG"
 
 # G: the driver has no --force / force-push code path anywhere
 assert_eq "driver contains no --force code path" "0" "$(grep -c -- '--force' "$DRIVER")"
+
+# ── F: merge profile — gated GitHub-native auto-merge ──
+MERGE_CFG='.profile="merge" | .phases.milestone_every=0 | .pr={closes:[99],title:""} | .merge={enabled:true,require_branch_protection:true,require_green_ci:true,method:"squash"}'
+
+# F1: enabled + protected → arms auto-merge exactly once
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" "$MERGE_CFG"
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE GH_BRANCH_PROTECTED=1
+run_driver "$P"
+assert_exit "merge run completes (enabled + protected)" 0 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat/state.json"
+assert_eq "ledger records auto_merge_armed" "true" "$(jq -r '.pr.auto_merge_armed' "$LEDGER")"
+assert_eq "ledger records merge_method" "squash" "$(jq -r '.pr.merge_method' "$LEDGER")"
+assert_eq "gh pr merge --auto invoked exactly once" "1" "$(grep -c '^pr merge .* --auto --squash' "$GH_LOG")"
+rm -rf "$P" "$BARE"; unset GH_BRANCH_PROTECTED
+
+# F1-resume: an already-armed PR is never re-armed (idempotent)
+P=$(setup_project); single_phase "$P"; cfg_set "$P" "$MERGE_CFG"; BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE GH_BRANCH_PROTECTED=1
+run_driver "$P"
+assert_exit "merge run completes before resume" 0 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat/state.json"
+CB=$(mktemp); jq '.status="finalizing"' "$LEDGER" > "$CB" && mv "$CB" "$LEDGER"
+run_driver "$P" --resume
+assert_exit "merge resume completes" 0 "$RC"
+assert_eq "auto-merge armed at most once across resume" "1" "$(grep -c '^pr merge .* --auto' "$GH_LOG")"
+rm -rf "$P" "$BARE"; unset GH_BRANCH_PROTECTED
+
+# F2: merge.enabled=false behaves as pr (PR opened, nothing armed)
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.profile="merge" | .phases.milestone_every=0 | .pr={closes:[99],title:""} | .merge={enabled:false,require_branch_protection:true,method:"squash"}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE GH_BRANCH_PROTECTED=1
+run_driver "$P"
+assert_exit "merge enabled:false completes as pr" 0 "$RC"
+assert_eq "enabled:false arms nothing" "false" "$(jq -r '.pr.auto_merge_armed' "$P/.cct/auto-build/demo-feat/state.json")"
+assert_eq "enabled:false invokes no pr merge" "0" "$(grep -c '^pr merge' "$GH_LOG")"
+assert_contains "enabled:false still opened a PR" "$(jq -r '.pr.url' "$P/.cct/auto-build/demo-feat/state.json")" "/pull/"
+rm -rf "$P" "$BARE"; unset GH_BRANCH_PROTECTED
+
+# F3: unprotected base parks (fail-closed), never merges
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" "$MERGE_CFG"
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+# GH_BRANCH_PROTECTED unset → api probe fails → unprotected
+run_driver "$P"
+assert_exit "unprotected base parks (exit 4)" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
+assert_eq "park reason merge_blocked" "merge_blocked" "$(jq -r '.reason' "$ESC" 2>/dev/null)"
+assert_eq "no merge attempted on unprotected base" "0" "$(grep -c '^pr merge' "$GH_LOG")"
+rm -rf "$P" "$BARE"
+
+# F4: pr profile never invokes pr merge (ladder guard)
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.profile="pr" | .phases.milestone_every=0 | .pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE
+run_driver "$P"
+assert_exit "pr profile run completes" 0 "$RC"
+assert_eq "pr profile never invokes pr merge" "0" "$(grep -c '^pr merge' "$GH_LOG")"
+rm -rf "$P" "$BARE" "$GH_LOG"
+
+# F5: an invalid merge.method is rejected at load, before any gh pr merge
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.profile="merge" | .phases.milestone_every=0 | .pr={closes:[99],title:""} | .merge={enabled:true,require_branch_protection:true,method:"admin"}'
+BARE=$(add_remote "$P")
+GH_LOG=$(mktemp); GH_PR_STATE=$(mktemp -u); export GH_LOG GH_PR_STATE GH_BRANCH_PROTECTED=1
+run_driver "$P"
+assert_exit "invalid merge.method rejected at load" 1 "$RC"
+assert_contains "merge.method error names the enum" "$OUTPUT" "squash|merge|rebase"
+assert_eq "invalid merge.method invokes no pr merge" "0" "$(grep -c '^pr merge' "$GH_LOG")"
+rm -rf "$P" "$BARE" "$GH_LOG"; unset GH_BRANCH_PROTECTED
 
 unset CCT_GH_BIN GH_LOG GH_PR_STATE
 
