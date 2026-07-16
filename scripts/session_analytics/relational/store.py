@@ -17,7 +17,9 @@ import logging
 from typing import Optional
 
 from .. import constants as C
+from ..config import PricingConfig
 from ..contracts import RawSession, RawTurn
+from ..cost import UnpricedStats, compute_turn_cost
 from ..ingest import redaction
 from ..normalize import files as files_norm
 from ..normalize import tool_names
@@ -40,11 +42,18 @@ def upsert_session(
     *,
     developer_id: str = C.DEFAULT_DEVELOPER_ID,
     redaction_mode: str = C.REDACT_CODE,
+    pricing: Optional[PricingConfig] = None,
+    unpriced: Optional[UnpricedStats] = None,
 ) -> int:
     """Idempotently persist ``raw`` and its children. Returns the session id.
 
     Commits on success; the caller may also wrap multiple sessions in an
     outer transaction by passing a shared ``db`` and committing once.
+
+    ``pricing`` is the E5 price table (``None`` — the default — leaves every
+    turn's ``cost_usd`` NULL, matching pre-E5 behavior). When given, a turn
+    whose model isn't in the table also stays NULL but is tallied in
+    ``unpriced`` when the caller passes one (for end-of-ingest reporting).
     """
     turn_count = len(raw.turns)
     tool_call_count = sum(len(t.tool_calls) for t in raw.turns)
@@ -69,7 +78,7 @@ def upsert_session(
     _delete_children(db, session_id)
 
     for turn in raw.turns:
-        _insert_turn_tree(db, session_id, turn, redaction_mode)
+        _insert_turn_tree(db, session_id, turn, redaction_mode, pricing, unpriced)
 
     db.commit()
     return session_id
@@ -164,17 +173,31 @@ def _delete_children(db: Database, session_id: int) -> None:
 
 
 def _insert_turn_tree(
-    db: Database, session_id: int, turn: RawTurn, redaction_mode: str
+    db: Database,
+    session_id: int,
+    turn: RawTurn,
+    redaction_mode: str,
+    pricing: Optional[PricingConfig] = None,
+    unpriced: Optional[UnpricedStats] = None,
 ) -> None:
     preview = redaction.redact_text(turn.text, redaction_mode)[: C.CONTENT_PREVIEW_CHARS]
+    cost = compute_turn_cost(
+        pricing,
+        turn.model,
+        tokens_input=turn.tokens_input,
+        tokens_output=turn.tokens_output,
+        cache_read_tokens=turn.cache_read_tokens,
+        cache_write_tokens=turn.cache_write_tokens,
+        unpriced=unpriced,
+    )
     turn_id = db.insert_returning_id(
         """
         INSERT INTO copilot_turn
             (session_id, sequence_num, role, content_preview, content_length,
              has_tool_use, uuid, parent_uuid, is_sidechain, slash_command,
              tokens_input, tokens_output, cache_read_tokens, cache_write_tokens,
-             timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             model, cost_usd, cost_price_version, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
         """,
         (
@@ -192,6 +215,9 @@ def _insert_turn_tree(
             turn.tokens_output,
             turn.cache_read_tokens,
             turn.cache_write_tokens,
+            turn.model,
+            cost.cost_usd,
+            cost.price_version,
             turn.timestamp,
         ),
     )

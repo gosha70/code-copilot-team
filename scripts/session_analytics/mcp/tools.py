@@ -15,11 +15,25 @@ _SESSION_COLS = (
     "turn_count, tool_call_count, error_count, started_at, ended_at, "
     "duration_seconds"
 )
+# E5: session cost = Σ its turns' cost_usd (query-time rollup, not a
+# materialized column — see D-outcome in
+# specs/session-analytics-cost-tracking/plan.md). NULL when no turn in the
+# session has a priced model.
+_COST_ROLLUP_SQL = (
+    "(SELECT SUM(t.cost_usd) FROM copilot_turn t "
+    "WHERE t.session_id = copilot_session.id) AS cost_usd"
+)
+_SESSION_SELECT_COLS = f"{_SESSION_COLS}, {_COST_ROLLUP_SQL}"
 
 
-def _session_dict(row) -> dict[str, Any]:
+def _session_dict(row, *, has_cost: bool = True) -> dict[str, Any]:
     keys = [c.strip() for c in _SESSION_COLS.split(",")]
-    return dict(zip(keys, row))
+    if has_cost:
+        keys = keys + ["cost_usd"]
+    d = dict(zip(keys, row))
+    if d.get("cost_usd") is not None:
+        d["cost_usd"] = float(d["cost_usd"])
+    return d
 
 
 def search_sessions(
@@ -48,7 +62,7 @@ def search_sessions(
         params.append(date_to)
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
     rows = db.query(
-        f"SELECT {_SESSION_COLS} FROM copilot_session{where_sql} "
+        f"SELECT {_SESSION_SELECT_COLS} FROM copilot_session{where_sql} "
         f"ORDER BY started_at DESC LIMIT {int(limit)}",
         tuple(params),
     )
@@ -58,7 +72,7 @@ def search_sessions(
 def get_session_details(db: Database, session_id: int) -> dict[str, Any]:
     """Full turn/tool/error breakdown for one session."""
     srow = db.query_one(
-        f"SELECT {_SESSION_COLS} FROM copilot_session WHERE id = ?", (session_id,)
+        f"SELECT {_SESSION_SELECT_COLS} FROM copilot_session WHERE id = ?", (session_id,)
     )
     if srow is None:
         return {"error": f"session {session_id} not found"}
@@ -174,6 +188,9 @@ def compare_approaches(db: Database, task_description: str, *, limit: int = 10) 
     session_kpi when present. (Embedding similarity is the E2 enhancement.)
     """
     terms = [t for t in (task_description or "").lower().split() if len(t) > 3][:6]
+    # compare_approaches ranks by task-term match and never reads cost, so
+    # select without the per-row correlated cost rollup (avoids 500 needless
+    # subqueries).
     rows = db.query(
         f"""
         SELECT {_SESSION_COLS} FROM copilot_session
@@ -182,7 +199,7 @@ def compare_approaches(db: Database, task_description: str, *, limit: int = 10) 
     )
     scored = []
     for r in rows:
-        s = _session_dict(r)
+        s = _session_dict(r, has_cost=False)
         hay = (s.get("project_path") or "").lower()
         score = sum(1 for t in terms if t in hay)
         if score:

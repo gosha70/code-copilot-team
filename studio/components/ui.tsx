@@ -81,6 +81,14 @@ export function useApi<T>(loader: () => Promise<T>, deps: unknown[] = []): {
   return { data, error, loading };
 }
 
+/** Cost is NULL for unpriced turns/sessions (never silently 0) — render an
+ * em dash rather than "$0.00" so "no price data" is visually distinct from
+ * "priced at zero". */
+export function formatCost(usd: number | null | undefined): string {
+  if (usd === null || usd === undefined) return "—";
+  return `$${usd.toFixed(usd < 1 ? 4 : 2)}`;
+}
+
 export function Loading() {
   return <div className="text-slate-400 text-sm py-8">Loading…</div>;
 }

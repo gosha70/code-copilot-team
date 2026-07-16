@@ -93,6 +93,59 @@ per-env via `CCT_SA_*` env vars, or per-invocation via CLI flags. The
 tool-name and file-language normalization maps are data files in `config_data/`,
 not hardcoded in source.
 
+## Cost tracking (E5, issue #83)
+
+`ingest` computes each turn's `cost_usd` from a price table, so cost is never
+guessed or hardcoded in source.
+
+**The price table** lives in the `pricing.models` block of
+`config_data/defaults.json` (or your `~/.cct/session-analytics.json`
+override), keyed by model id:
+
+```json
+"pricing": {
+  "models": {
+    "claude-opus-4-8": {
+      "currency": "USD",
+      "effective_date": "2026-05-01",
+      "input": 15.0,
+      "output": 75.0,
+      "cache_read": 1.5,
+      "cache_write": 18.75
+    }
+  }
+}
+```
+
+- Rates are **USD per 1,000,000 tokens** (`input`, `output`, `cache_read`,
+  `cache_write` — the four token types Claude Code reports).
+- **`effective_date`** is also the *price version*: it is stamped onto every
+  turn priced with that rate (`copilot_turn.cost_price_version`), so a stored
+  `cost_usd` is always traceable to the rate that produced it.
+- **`currency`** must be the same across every entry in the table — a table
+  mixing currencies (no normalization is performed) is **rejected at load**
+  with a `ValueError`.
+- **Updating rates**: edit the entry (or add a new model) and re-ingest.
+  Changing a rate does **not** re-price already-ingested turns — their
+  `cost_usd`/`cost_price_version` reflect whatever was effective when they
+  were ingested (v1 has no bulk re-price pass; see
+  `specs/session-analytics-cost-tracking/plan.md`, D-repricing).
+- **Unknown models**: a turn whose model has no entry in the table gets
+  `cost_usd = NULL` (never silently `0`) and is tallied + logged once at the
+  end of `ingest` (`unpriced_models` in the ingest summary / CLI output).
+- **No `pricing` block at all**: `cost_usd` stays `NULL` for every turn —
+  identical to pre-E5 behavior (fully additive, no migration required to
+  keep working).
+- **Per-turn model attribution**: `copilot_turn.model` is captured per
+  assistant message (falling back to the session's `copilot_session.model`
+  when a message doesn't report its own), so a mid-session `/model` switch
+  is priced correctly per turn.
+
+**Rollups**: session cost = Σ its turns' `cost_usd` (a query, not a stored
+column); the dashboard reports total cost + cost-per-session, and
+cost-per-outcome (cost grouped by session `phase` and by judge
+`sentiment`/heuristic label) via `/api/dashboard/cost`.
+
 ## Tests
 
 ```bash

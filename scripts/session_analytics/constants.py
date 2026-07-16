@@ -58,6 +58,19 @@ CFG_JUDGE_BASE_URL = "base_url"
 CFG_JUDGE_API_KEY = "api_key"
 CFG_OLLAMA_URL = "ollama_url"
 
+# ── Pricing config keys (E5 cost tracking) ─────────────────────────────
+# Rates are per-1,000,000 tokens. Each model entry declares its own
+# ``currency`` + ``effective_date`` (the "version" stamped onto priced
+# turns via ``copilot_turn.cost_price_version``).
+CFG_PRICING = "pricing"
+CFG_PRICING_MODELS = "models"
+CFG_PRICE_CURRENCY = "currency"
+CFG_PRICE_EFFECTIVE_DATE = "effective_date"
+CFG_PRICE_INPUT = "input"
+CFG_PRICE_OUTPUT = "output"
+CFG_PRICE_CACHE_READ = "cache_read"
+CFG_PRICE_CACHE_WRITE = "cache_write"
+
 # ── Stable CLI exit codes (mirror benchmark_runner) ────────────────────
 EXIT_OK = 0
 EXIT_USAGE = 2

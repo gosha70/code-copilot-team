@@ -92,8 +92,15 @@ class ClaudeCodeAdapter:
         # by tool_use_id, so assistant-turn tool_use blocks can be paired.
         results_by_id = _collect_tool_results(ordered)
 
+        # Session-level model (E5 fallback target): the first non-empty
+        # model reported by an assistant message, same as before per-turn
+        # attribution existed. Computed up front (not mutated during the
+        # main loop) so every turn's fallback is correct regardless of
+        # ordering — including a turn preceding the message that first
+        # reports the model.
+        session_model = _first_model(ordered)
+
         turns: list[RawTurn] = []
-        model: Optional[str] = None
         project_path: Optional[str] = None
         started_at: Optional[str] = None
         ended_at: Optional[str] = None
@@ -114,8 +121,12 @@ class ClaudeCodeAdapter:
             if ts:
                 started_at = started_at or ts
                 ended_at = ts
-            if rtype == C.ROLE_ASSISTANT and not model:
-                model = msg.get("model")
+
+            # Per-turn model attribution (E5): the assistant message's own
+            # model, falling back to the session-level model when this
+            # turn's message has none. Non-assistant turns (user turns
+            # never carry a model in Claude Code transcripts) get None.
+            turn_model = (msg.get("model") or session_model) if rtype == C.ROLE_ASSISTANT else None
 
             text, tool_calls = _blocks_to_turn(msg.get("content"), results_by_id)
             usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
@@ -134,6 +145,7 @@ class ClaudeCodeAdapter:
                     tokens_output=_opt_int(usage.get("output_tokens")),
                     cache_read_tokens=_opt_int(usage.get("cache_read_input_tokens")),
                     cache_write_tokens=_opt_int(usage.get("cache_creation_input_tokens")),
+                    model=turn_model,
                     timestamp=ts,
                     slash_command=_slash_command(text),
                 )
@@ -150,7 +162,7 @@ class ClaudeCodeAdapter:
             turns=tuple(turns),
             source_files=ref.source_files,
             project_path=project_path,
-            model=model,
+            model=session_model,
             started_at=started_at,
             ended_at=ended_at,
             metadata=metadata,
@@ -188,6 +200,22 @@ def _iter_records(path: Path) -> Iterable[dict[str, Any]]:
                     yield obj
     except OSError as exc:
         _log.warning("cannot read %s: %s", path, exc)
+
+
+def _first_model(records: list[dict[str, Any]]) -> Optional[str]:
+    """The first non-empty ``model`` reported by any assistant message,
+    in the already-chronologically-ordered ``records``. This is the
+    session-level model (``copilot_session.model``) and the per-turn
+    fallback target (E5)."""
+    for rec in records:
+        if rec.get("type") != C.ROLE_ASSISTANT:
+            continue
+        msg = rec.get("message")
+        if isinstance(msg, dict):
+            m = msg.get("model")
+            if m:
+                return m
+    return None
 
 
 def _peek_session_id(path: Path) -> Optional[str]:

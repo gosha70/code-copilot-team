@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { Card, ErrorNote, Loading, useApi } from "@/components/ui";
+import { Card, ErrorNote, Loading, formatCost, useApi } from "@/components/ui";
 
 export default function SessionsPage() {
   const [query, setQuery] = useState("");
@@ -44,6 +44,7 @@ export default function SessionsPage() {
                 <th className="text-right">Turns</th>
                 <th className="text-right">Tools</th>
                 <th className="text-right">Errors</th>
+                <th className="text-right">Cost</th>
                 <th>Started</th>
               </tr>
             </thead>
@@ -60,12 +61,13 @@ export default function SessionsPage() {
                   <td className="text-right tabular-nums">{s.turn_count}</td>
                   <td className="text-right tabular-nums">{s.tool_call_count}</td>
                   <td className="text-right tabular-nums">{s.error_count}</td>
+                  <td className="text-right tabular-nums">{formatCost(s.cost_usd)}</td>
                   <td className="text-slate-500">{(s.started_at || "").slice(0, 19)}</td>
                 </tr>
               ))}
               {data.sessions.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="py-6 text-center text-slate-400">
+                  <td colSpan={8} className="py-6 text-center text-slate-400">
                     No sessions. Run <code>./scripts/session-analytics ingest</code>.
                   </td>
                 </tr>

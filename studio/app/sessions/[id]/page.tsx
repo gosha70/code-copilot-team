@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import { api, SessionDetail, TurnRow } from "@/lib/api";
-import { Badge, Card, ErrorNote, Loading, useApi } from "@/components/ui";
+import { Badge, Card, ErrorNote, Loading, formatCost, useApi } from "@/components/ui";
 
 type Tab = "insights" | "tuning" | "coaching";
 
@@ -22,7 +22,7 @@ export default function SessionDetailPage() {
         <h1 className="text-2xl font-bold">{data.copilot} session</h1>
         <p className="text-sm text-slate-500">
           {data.project_path} · {data.model} · {data.turn_count} turns ·{" "}
-          {data.error_count} errors
+          {data.error_count} errors · {formatCost(data.cost_usd)}
         </p>
       </div>
 
