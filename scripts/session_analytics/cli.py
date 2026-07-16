@@ -130,6 +130,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Limit to specific relational session ids (repeatable).",
     )
 
+    p_exp = sub.add_parser(
+        "export", help="Export the relational store to CSV/Parquet (E7)."
+    )
+    p_exp.add_argument("--dsn", default=None, help="Database DSN (else config).")
+    p_exp.add_argument(
+        "--format",
+        choices=C.EXPORT_FORMATS,
+        default=C.EXPORT_FORMAT_CSV,
+        help="Output format (default: csv). Parquet needs 'pyarrow' (pip install pyarrow).",
+    )
+    p_exp.add_argument(
+        "--table",
+        choices=C.EXPORT_TABLES,
+        default=C.EXPORT_TABLE_SESSIONS,
+        help="Table to export, or 'all' for one file per table (default: sessions).",
+    )
+    p_exp.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help=(
+            "Output path. A single CSV table defaults to stdout without --out. "
+            "Parquet always requires --out (binary — never written to stdout). "
+            "--table all requires --out to be a directory (one <table>.<ext> file each)."
+        ),
+    )
+
     return parser
 
 
@@ -273,6 +300,83 @@ def _cmd_graph(args: argparse.Namespace) -> int:
     return C.EXIT_OK
 
 
+def _cmd_export(args: argparse.Namespace) -> int:
+    from . import export as exp
+    from .relational.db import Database, apply_ddl
+
+    # ── validate the output semantics BEFORE touching the DB (FR-1, FR-5) ──
+    if args.format == C.EXPORT_FORMAT_PARQUET and args.out is None:
+        print(
+            "error: --format parquet always requires --out "
+            "(binary output cannot be written to stdout).",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+    if args.table == C.EXPORT_TABLE_ALL and args.out is None:
+        print(
+            "error: --table all requires --out <dir> (writes one file per table).",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+    if args.table == C.EXPORT_TABLE_ALL and args.out.exists() and not args.out.is_dir():
+        print(
+            f"error: --out must be a directory for --table all, got a file: {args.out}",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+    if args.table != C.EXPORT_TABLE_ALL and args.out is not None and args.out.is_dir():
+        print(
+            f"error: --out must be a file path for --table {args.table}, "
+            f"got a directory: {args.out}",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+
+    cfg = load_config(dsn=args.dsn)
+    if not cfg.dsn:
+        print("error: no DSN configured (see --dsn).", file=sys.stderr)
+        return C.EXIT_USAGE
+
+    try:
+        db = Database.connect(cfg.dsn)
+        try:
+            apply_ddl(db)
+            if args.table == C.EXPORT_TABLE_ALL:
+                args.out.mkdir(parents=True, exist_ok=True)
+                for table in C.EXPORT_DATA_TABLES:
+                    dest = args.out / f"{table}.{args.format}"
+                    _export_one(exp, db, table, args.format, dest)
+            elif args.out is not None:
+                args.out.parent.mkdir(parents=True, exist_ok=True)
+                _export_one(exp, db, args.table, args.format, args.out)
+            else:
+                exp.write_csv(db, args.table, sys.stdout)
+        finally:
+            db.close()
+    except ImportError as exc:
+        # Parquet's pyarrow is optional (FR-4): a usage error + install hint,
+        # never a traceback.
+        print(
+            f"error: Parquet export needs the 'pyarrow' package "
+            f"(pip install pyarrow): {exc}",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("export failed")
+        print(f"error: export failed: {exc}", file=sys.stderr)
+        return C.EXIT_RUNTIME
+    return C.EXIT_OK
+
+
+def _export_one(exp, db, table: str, fmt: str, dest: Path) -> None:
+    if fmt == C.EXPORT_FORMAT_PARQUET:
+        exp.write_parquet(db, table, dest)
+    else:
+        with open(dest, "w", newline="", encoding="utf-8") as fp:
+            exp.write_csv(db, table, fp)
+
+
 def _parse_judge_spec(spec: str) -> tuple[str, str]:
     if ":" in spec:
         family, model = spec.split(":", 1)
@@ -402,6 +506,7 @@ _HANDLERS = {
     "kpis": _cmd_kpis,
     "mcp": _cmd_mcp,
     "serve": _cmd_serve,
+    "export": _cmd_export,
 }
 
 

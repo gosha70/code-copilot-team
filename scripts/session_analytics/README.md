@@ -54,6 +54,7 @@ The zero-install path still works without `setup` — just pass `--dsn`:
 | `kpis`    | Compute session-level KPI rollups (M3). |
 | `mcp`     | Run the MCP stdio server (M4). |
 | `serve`   | Launch FastAPI + the Next.js Studio (M6). |
+| `export`  | Export the relational store to CSV/Parquet (E7). |
 
 `ingest` flags: `--copilot` (repeatable; default all), `--root`, `--dsn`,
 `--developer-id`, `--redact {none,code,metadata-only}`, `--incremental`
@@ -193,6 +194,57 @@ override), keyed by model id:
 column); the dashboard reports total cost + cost-per-session, and
 cost-per-outcome (cost grouped by session `phase` and by judge
 `sentiment`/heuristic label) via `/api/dashboard/cost`.
+
+## Export (E7, issue #87)
+
+`export` writes the relational store to CSV (always available, stdlib) or
+Parquet (optional `pyarrow`) for spreadsheets, pandas, or DuckDB:
+
+```bash
+# One-row-per-session summary → stdout (the default table + format).
+./scripts/session-analytics export --format csv --table sessions
+
+# A single table to a file.
+./scripts/session-analytics export --table turns --out turns.csv
+
+# One file per table, written into a directory.
+./scripts/session-analytics export --table all --out ./export/
+
+# Parquet (needs `pip install pyarrow`) always writes to a file.
+./scripts/session-analytics export --format parquet --table sessions --out sessions.parquet
+```
+
+**Tables** (fixed, documented column order — see `export.py`):
+
+| Table      | Contents |
+|------------|----------|
+| `sessions` | One denormalized row per session: identity/timing columns, the E5 cost rollup (`cost_usd`, Σ its turns'), the E8 `redaction_mode`, and the `session_kpi` columns (prefixed `kpi_`, `NULL` when the session has no labeled turns). **Default table.** |
+| `turns`    | One row per turn: sequence, role, token/cost columns, the parent session's `redaction_mode`, and the stored `content_preview`. |
+| `labels`   | One row per `heuristic_label` (the judge's per-turn labels). |
+| `kpis`     | One row per `session_kpi` (the session-level rollup a rubric produced). |
+| `all`      | One file per table above, written as `<table>.<format>` into `--out <dir>`. |
+
+**Formats**: `--format csv` (default, stdlib `csv`, streamed row-by-row — the
+full table is never loaded into memory) or `--format parquet` (`pyarrow`,
+same columns + ordering as CSV; the table is built in memory once before
+writing). A missing `pyarrow` prints an install hint to stderr and exits with
+the usage code (never a traceback):
+
+```
+error: Parquet export needs the 'pyarrow' package (pip install pyarrow): ...
+```
+
+**Output semantics**: a single CSV table defaults to stdout, or `--out
+<file>` to write one; Parquet is binary and always requires `--out`; `--table
+all` always requires `--out <dir>`.
+
+**Redaction-safe by construction (FR-6)**: export reads ONLY the relational
+store — it never re-reads raw transcripts, so it can only ever surface what
+`ingest` already wrote. A project opted out under E8 (`ingest: "off"`) simply
+has no rows in the store and is absent from every export. `redaction_mode` is
+an exported column on both `sessions` and `turns`, so an export
+self-documents its own privacy posture per row (a `redaction: none` session
+exports its raw preview — the operator's own ingest-time choice).
 
 ## Tests
 
