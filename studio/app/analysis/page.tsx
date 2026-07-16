@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { api } from "@/lib/api";
-import { Card } from "@/components/ui";
+import { Card, Stat, formatCost, useApi } from "@/components/ui";
 
 const STEPS = [
   { key: "select", label: "Select Sessions", cmd: "session-analytics ingest --since-days 7" },
@@ -17,6 +17,7 @@ export default function AnalysisPage() {
   const [limit, setLimit] = useState(50);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const { data: kpis } = useApi(() => api.dashboard());
 
   async function runJudge() {
     setRunning(true);
@@ -45,6 +46,13 @@ export default function AnalysisPage() {
         The pipeline runs as five steps. Ingestion/graph/kpis run from the CLI; the
         LLM-Judge step can be triggered here.
       </p>
+
+      {kpis && (
+        <div className="grid grid-cols-2 md:grid-cols-2 gap-4 max-w-md">
+          <Stat label="Total cost (USD)" value={formatCost(kpis.totals.total_cost_usd)} />
+          <Stat label="Cost / session" value={formatCost(kpis.totals.cost_per_session)} />
+        </div>
+      )}
 
       <ol className="space-y-3">
         {STEPS.map((s, i) => (

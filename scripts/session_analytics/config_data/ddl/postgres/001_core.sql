@@ -58,7 +58,9 @@ CREATE TABLE IF NOT EXISTS copilot_turn (
     tokens_output       INTEGER,
     cache_read_tokens   INTEGER,
     cache_write_tokens  INTEGER,
+    model               VARCHAR(100),                          -- E5 (nullable, per-message + session fallback)
     cost_usd            DOUBLE PRECISION,                      -- E5 (nullable)
+    cost_price_version  VARCHAR(50),                            -- E5 (nullable, effective_date that priced this turn)
     timestamp           TEXT
 );
 

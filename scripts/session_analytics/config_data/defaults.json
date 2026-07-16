@@ -10,7 +10,17 @@
     "per the .env (CCT_SA_JUDGE_BACKEND/MODEL/BASE_URL) or",
     "`--judge <family>:<model>` — e.g. claude-code:sonnet for Anthropic via the",
     "local claude CLI, or openai:<model> for LM Studio / vLLM / any",
-    "OpenAI-compatible endpoint."
+    "OpenAI-compatible endpoint.",
+    "'pricing.models': per-model token rates (E5 cost tracking). Rates are",
+    "USD per 1,000,000 tokens. Each entry carries its own 'currency' +",
+    "'effective_date' (the version stamped onto priced turns). Update this",
+    "block (or override it in ~/.cct/session-analytics.json) as list prices",
+    "change; a price change never re-prices already-ingested turns (their",
+    "cost_usd + cost_price_version reflect the rate effective at ingest — see",
+    "specs/session-analytics-cost-tracking/spec.md, D-repricing). A model with",
+    "no entry here ingests with cost_usd = NULL (never silently 0), and is",
+    "counted + logged as 'unpriced' at the end of ingest. Removing this whole",
+    "block restores today's behavior (cost_usd stays NULL for everything)."
   ],
   "sources": {
     "claude-code": "~/.claude/projects",
@@ -29,5 +39,33 @@
     "ollama_url": "http://localhost:11434",
     "base_url": "",
     "api_key": ""
+  },
+  "pricing": {
+    "models": {
+      "claude-opus-4-8": {
+        "currency": "USD",
+        "effective_date": "2026-05-01",
+        "input": 15.0,
+        "output": 75.0,
+        "cache_read": 1.5,
+        "cache_write": 18.75
+      },
+      "claude-sonnet-4-8": {
+        "currency": "USD",
+        "effective_date": "2026-05-01",
+        "input": 3.0,
+        "output": 15.0,
+        "cache_read": 0.3,
+        "cache_write": 3.75
+      },
+      "claude-haiku-4-8": {
+        "currency": "USD",
+        "effective_date": "2026-05-01",
+        "input": 0.8,
+        "output": 4.0,
+        "cache_read": 0.08,
+        "cache_write": 1.0
+      }
+    }
   }
 }

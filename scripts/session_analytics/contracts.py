@@ -76,9 +76,11 @@ class RawTurn:
 
     ``parent_uuid`` threads the turn DAG (Claude Code); ``is_sidechain``
     marks subagent branches. Token fields are ``Optional[int]`` —
-    ``None`` when the source did not report them. ``slash_command`` is the
-    bare command name (``/compact``) when the user turn was a slash
-    command, else ``None``.
+    ``None`` when the source did not report them. ``model`` is the model
+    that produced THIS turn (per-message attribution, E5); adapters fall
+    back to the session-level model when a turn's own message has none.
+    ``slash_command`` is the bare command name (``/compact``) when the user
+    turn was a slash command, else ``None``.
     """
 
     sequence_num: int
@@ -93,6 +95,7 @@ class RawTurn:
     tokens_output: Optional[int] = None
     cache_read_tokens: Optional[int] = None
     cache_write_tokens: Optional[int] = None
+    model: Optional[str] = None
     timestamp: Optional[str] = None
     slash_command: Optional[str] = None
 

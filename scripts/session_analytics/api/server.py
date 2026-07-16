@@ -143,6 +143,14 @@ def create_app(dsn: str, kuzu_path: str = ""):
         finally:
             conn.close()
 
+    @app.get("/api/dashboard/cost")
+    def dashboard_cost() -> dict[str, Any]:
+        conn = db()
+        try:
+            return dashboard.cost_by_outcome(conn)
+        finally:
+            conn.close()
+
     # ── sessions ───────────────────────────────────────────────────────
     @app.get("/api/sessions")
     def sessions(query: str = "", copilot: str = "", limit: int = 50) -> dict[str, Any]:

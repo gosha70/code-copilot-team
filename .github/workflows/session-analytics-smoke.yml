@@ -92,6 +92,28 @@ jobs:
           print("OK", d)
           PY
 
+      - name: Assert cost_usd populated under Postgres (E5)
+        run: |
+          python3 - <<'PY'
+          import os
+          import psycopg
+          conn = psycopg.connect(os.environ["SA_DSN"])
+          cur = conn.cursor()
+          cur.execute(
+              "SELECT model, cost_usd, cost_price_version FROM copilot_turn "
+              "WHERE role = 'assistant' ORDER BY sequence_num"
+          )
+          rows = cur.fetchall()
+          assert len(rows) == 3, rows
+          for model, cost_usd, version in rows:
+              assert model == "claude-opus-4-8", rows       # packaged defaults.json price the fixture's model
+              assert cost_usd is not None and cost_usd > 0, rows
+              assert version == "2026-05-01", rows          # defaults.json effective_date
+          cur.execute("SELECT COUNT(*) FROM copilot_turn WHERE role = 'user' AND cost_usd IS NOT NULL")
+          assert cur.fetchone()[0] == 0, "user turns must never be priced"
+          print("OK cost_usd populated:", rows)
+          PY
+
       - name: Build + assert the Kùzu graph
         run: |
           ./scripts/session-analytics graph --rebuild \

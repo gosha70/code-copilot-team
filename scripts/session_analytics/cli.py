@@ -176,6 +176,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             developer_id=args.developer_id,
             redaction_mode=cfg.redaction_mode,
             full=args.full,
+            pricing=cfg.pricing,
         )
     except UnknownAdapterError as exc:
         print(f"error: {exc}", file=sys.stderr)

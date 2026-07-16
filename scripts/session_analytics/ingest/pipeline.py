@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .. import constants as C
+from ..config import PricingConfig
+from ..cost import UnpricedStats
 from ..registry import get_adapter, list_adapter_ids
 from ..relational import store
 from ..relational.db import Database, apply_ddl
@@ -28,6 +30,7 @@ class IngestStats:
     tool_calls: int = 0
     errors: int = 0
     per_copilot: dict = field(default_factory=dict)
+    unpriced_models: dict = field(default_factory=dict)  # E5: model -> turn count
 
     def as_dict(self) -> dict:
         return {
@@ -37,6 +40,7 @@ class IngestStats:
             "tool_calls": self.tool_calls,
             "errors": self.errors,
             "per_copilot": self.per_copilot,
+            "unpriced_models": self.unpriced_models,
         }
 
 
@@ -48,15 +52,24 @@ def ingest(
     developer_id: str = C.DEFAULT_DEVELOPER_ID,
     redaction_mode: str = C.REDACT_CODE,
     full: bool = False,
+    pricing: Optional[PricingConfig] = None,
 ) -> IngestStats:
     """Run ingestion for the selected copilots into ``dsn``.
 
     ``copilots`` defaults to every registered adapter. ``root`` overrides the
     configured source root for ALL selected copilots (mainly for tests /
     fixtures); pass ``None`` to use each adapter's configured default.
+
+    ``pricing`` (E5) is the price table to cost turns with at ingest; the
+    default ``None`` leaves every ``cost_usd`` NULL (regression-safe — same
+    as before E5). Callers that want cost computed pass ``cfg.pricing`` from
+    ``load_config()``. A turn whose (known) model has no matching price is
+    tallied in ``stats.unpriced_models`` and logged once per run — cost is
+    never silently 0.
     """
     selected = list(copilots) if copilots else list_adapter_ids()
     stats = IngestStats()
+    unpriced = UnpricedStats()
 
     db = Database.connect(dsn)
     try:
@@ -75,6 +88,8 @@ def ingest(
                     raw,
                     developer_id=developer_id,
                     redaction_mode=redaction_mode,
+                    pricing=pricing,
+                    unpriced=unpriced,
                 )
                 incremental.record_ingested(db, ref)
                 db.commit()
@@ -91,6 +106,15 @@ def ingest(
             }
             _log.info(
                 "ingest %s: %d ingested, %d skipped", copilot, c_ingested, c_skipped
+            )
+        stats.unpriced_models = dict(unpriced.counts)
+        if unpriced.counts:
+            _log.warning(
+                "ingest: %d turn(s) across %d unpriced model(s) — cost_usd left "
+                "NULL for: %s",
+                unpriced.total_turns,
+                len(unpriced.counts),
+                sorted(unpriced.counts),
             )
     finally:
         db.close()

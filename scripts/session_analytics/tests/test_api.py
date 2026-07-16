@@ -42,6 +42,17 @@ class TestApi(RegistryResetTestCase):
         r = self.client.get("/api/dashboard/kpis")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["totals"]["sessions"], 1)
+        # E5: total cost + cost-per-session always present, NULL-safe (this
+        # fixture ingests with no pricing kwarg → 0.0, never an error).
+        self.assertEqual(r.json()["totals"]["total_cost_usd"], 0.0)
+        self.assertEqual(r.json()["totals"]["cost_per_session"], 0.0)
+
+    def test_dashboard_cost(self) -> None:
+        r = self.client.get("/api/dashboard/cost")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("by_phase", body)
+        self.assertIn("by_sentiment", body)
 
     def test_sessions_list_and_detail(self) -> None:
         r = self.client.get("/api/sessions")
@@ -49,10 +60,12 @@ class TestApi(RegistryResetTestCase):
         sessions = r.json()["sessions"]
         self.assertEqual(len(sessions), 1)
         sid = sessions[0]["id"]
+        self.assertIn("cost_usd", sessions[0])  # E5: present even when NULL
 
         r = self.client.get(f"/api/sessions/{sid}")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(len(r.json()["turns"]), 6)
+        self.assertIn("cost_usd", r.json())
 
         self.assertEqual(self.client.get("/api/sessions/99999").status_code, 404)
 

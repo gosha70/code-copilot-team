@@ -96,6 +96,7 @@ class AnalyticsConfig:
     kuzu_path: str
     redaction_mode: str
     judge: JudgeConfig
+    pricing: "PricingConfig"
     raw: Mapping[str, Any] = field(default_factory=dict)
 
     def source_root(self, copilot: str) -> Optional[Path]:
@@ -103,6 +104,39 @@ class AnalyticsConfig:
         if not raw:
             return None
         return Path(raw).expanduser()
+
+
+# ── pricing config (E5 cost tracking) ───────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ModelRate:
+    """One model's per-1M-token rates, versioned by ``effective_date``.
+
+    ``effective_date`` doubles as the price version recorded per turn
+    (``copilot_turn.cost_price_version``) — see D-units/versioning in
+    specs/session-analytics-cost-tracking/plan.md.
+    """
+
+    currency: str
+    effective_date: str
+    input: float
+    output: float
+    cache_read: float
+    cache_write: float
+
+
+@dataclass(frozen=True)
+class PricingConfig:
+    """The price table. Empty when no ``pricing`` block is configured —
+    that is the regression-safe "cost stays NULL for everything" state."""
+
+    models: Mapping[str, ModelRate] = field(default_factory=dict)
+
+    def rate_for(self, model: Optional[str]) -> Optional[ModelRate]:
+        if not model:
+            return None
+        return self.models.get(model)
 
 
 # ── .env file I/O (shared by CLI setup + the Studio config page) ────────
@@ -183,6 +217,76 @@ def _spec_tuple(d: Any, fallback: tuple[str, str]) -> tuple[str, str]:
     return fallback
 
 
+def _load_pricing(data: Mapping[str, Any]) -> PricingConfig:
+    """Parse + validate the ``pricing`` block. No block / empty block →
+    an empty ``PricingConfig`` (cost stays NULL everywhere — regression-safe).
+
+    Raises ``ValueError`` if the table mixes currencies (no normalization is
+    performed — a mixed table is rejected outright at load, per FR-1)."""
+    pdata = data.get(C.CFG_PRICING)
+    if not isinstance(pdata, Mapping):
+        return PricingConfig()
+
+    raw_models = pdata.get(C.CFG_PRICING_MODELS)
+    if not isinstance(raw_models, Mapping):
+        return PricingConfig()
+
+    models: dict[str, ModelRate] = {}
+    currencies: set[str] = set()
+    for model_id, entry in raw_models.items():
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"pricing.models[{model_id!r}] must be a mapping of rates")
+        currency = str(entry.get(C.CFG_PRICE_CURRENCY) or "")
+        if not currency:
+            raise ValueError(f"pricing.models[{model_id!r}] is missing 'currency'")
+        currencies.add(currency)
+        # effective_date is the price version stamped into
+        # copilot_turn.cost_price_version; a blank version would break the
+        # audit/reproducibility guarantee (FR-1/FR-3), so require it.
+        effective_date = str(entry.get(C.CFG_PRICE_EFFECTIVE_DATE) or "")
+        if not effective_date:
+            raise ValueError(f"pricing.models[{model_id!r}] is missing 'effective_date'")
+
+        # Rate values must be present + numeric + non-negative. A missing or
+        # misspelled rate key must NOT silently become 0 (that would price
+        # those tokens free and understate cost with no error) — an explicit
+        # 0.0 is allowed, an absent key is not.
+        def _rate(field_key: str) -> float:
+            if field_key not in entry:
+                raise ValueError(
+                    f"pricing.models[{model_id!r}] is missing rate {field_key!r}"
+                )
+            try:
+                val = float(entry[field_key])
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"pricing.models[{model_id!r}] rate {field_key!r} is not a "
+                    f"number: {entry[field_key]!r}"
+                )
+            if val < 0:
+                raise ValueError(
+                    f"pricing.models[{model_id!r}] rate {field_key!r} is negative"
+                )
+            return val
+
+        models[str(model_id)] = ModelRate(
+            currency=currency,
+            effective_date=effective_date,
+            input=_rate(C.CFG_PRICE_INPUT),
+            output=_rate(C.CFG_PRICE_OUTPUT),
+            cache_read=_rate(C.CFG_PRICE_CACHE_READ),
+            cache_write=_rate(C.CFG_PRICE_CACHE_WRITE),
+        )
+
+    if len(currencies) > 1:
+        raise ValueError(
+            f"pricing table mixes currencies {sorted(currencies)!r} without "
+            "normalization; a price table must use a single currency"
+        )
+
+    return PricingConfig(models=models)
+
+
 def load_config(
     *,
     dsn: Optional[str] = None,
@@ -247,12 +351,15 @@ def load_config(
         api_key=str(env(ENV_JUDGE_API_KEY) or ""),
     )
 
+    pricing = _load_pricing(data)
+
     return AnalyticsConfig(
         sources=sources,
         dsn=str(resolved_dsn),
         kuzu_path=str(Path(resolved_kuzu).expanduser()),
         redaction_mode=resolved_redaction,
         judge=judge,
+        pricing=pricing,
         raw=data,
     )
 

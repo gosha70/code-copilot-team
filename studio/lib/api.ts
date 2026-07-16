@@ -53,11 +53,19 @@ export interface DashboardKpis {
     tool_calls: number;
     errors: number;
     avg_duration_seconds: number;
+    total_cost_usd: number;
+    cost_per_session: number;
+    priced_sessions: number;
   };
   by_copilot: { copilot: string; sessions: number; errors: number }[];
   by_day: { day: string; sessions: number }[];
   tool_usage: { tool: string; count: number; errors: number }[];
   sentiment_distribution: { sentiment: string; count: number }[];
+}
+
+export interface CostByOutcome {
+  by_phase: { phase: string; cost_usd: number; sessions: number }[];
+  by_sentiment: { sentiment: string; cost_usd: number; turns: number }[];
 }
 
 export interface SessionRow {
@@ -70,6 +78,7 @@ export interface SessionRow {
   tool_call_count: number;
   error_count: number;
   started_at: string | null;
+  cost_usd: number | null;
 }
 
 export interface TurnRow {
@@ -98,6 +107,7 @@ export interface GraphCounts {
 export const api = {
   dashboard: () => get<DashboardKpis>("/api/dashboard/kpis"),
   labels: () => get<{ labels: { label: string; true: number; total: number }[] }>("/api/dashboard/labels"),
+  costByOutcome: () => get<CostByOutcome>("/api/dashboard/cost"),
   sessions: (query = "", copilot = "") =>
     get<{ sessions: SessionRow[] }>(
       `/api/sessions?query=${encodeURIComponent(query)}&copilot=${encodeURIComponent(copilot)}`,
