@@ -90,6 +90,23 @@ class JudgeConfig:
 
 
 @dataclass(frozen=True)
+class ProjectOverride:
+    """One ``projects.<key>`` entry: a per-project redaction/ingest override."""
+
+    redaction_mode: Optional[str] = None
+    ingest: str = C.INGEST_ON
+
+
+@dataclass(frozen=True)
+class ProjectIdRule:
+    """One ``project_ids[]`` entry: a substring-match rule used when a
+    session's cwd isn't a locally-detectable git repo."""
+
+    match: str
+    id: str
+
+
+@dataclass(frozen=True)
 class AnalyticsConfig:
     sources: Mapping[str, str]
     dsn: str
@@ -97,6 +114,8 @@ class AnalyticsConfig:
     redaction_mode: str
     judge: JudgeConfig
     pricing: "PricingConfig"
+    projects: Mapping[str, ProjectOverride] = field(default_factory=dict)
+    project_id_rules: tuple[ProjectIdRule, ...] = field(default_factory=tuple)
     raw: Mapping[str, Any] = field(default_factory=dict)
 
     def source_root(self, copilot: str) -> Optional[Path]:
@@ -104,6 +123,9 @@ class AnalyticsConfig:
         if not raw:
             return None
         return Path(raw).expanduser()
+
+    def project_override(self, key: Optional[str]) -> Optional[ProjectOverride]:
+        return self.projects.get(key) if key else None
 
 
 # ── pricing config (E5 cost tracking) ───────────────────────────────────
@@ -287,6 +309,53 @@ def _load_pricing(data: Mapping[str, Any]) -> PricingConfig:
     return PricingConfig(models=models)
 
 
+def _load_projects(
+    data: Mapping[str, Any],
+) -> tuple[dict[str, ProjectOverride], tuple[ProjectIdRule, ...]]:
+    """Parse + validate the ``projects`` / ``project_ids`` blocks. Absent or
+    non-mapping/non-list blocks resolve to empty ({}, ()) — the
+    regression-safe "every session ingests with the global redaction_mode"
+    state (FR-6)."""
+    projects: dict[str, ProjectOverride] = {}
+    pdata = data.get(C.CFG_PROJECTS)
+    if isinstance(pdata, Mapping):
+        for key, entry in pdata.items():
+            if not isinstance(entry, Mapping):
+                raise ValueError(f"projects[{key!r}] must be a mapping")
+
+            mode = entry.get(C.CFG_REDACTION)
+            if mode is not None and mode not in C.REDACTION_MODES:
+                raise ValueError(
+                    f"projects[{key!r}]: invalid redaction mode {mode!r}; "
+                    f"expected one of {C.REDACTION_MODES}"
+                )
+
+            ingest_val = entry.get(C.CFG_PROJECT_INGEST, C.INGEST_ON)
+            if ingest_val not in C.INGEST_MODES:
+                raise ValueError(
+                    f"projects[{key!r}]: invalid ingest mode {ingest_val!r}; "
+                    f"expected one of {C.INGEST_MODES}"
+                )
+
+            projects[str(key)] = ProjectOverride(redaction_mode=mode, ingest=ingest_val)
+
+    rules: list[ProjectIdRule] = []
+    idata = data.get(C.CFG_PROJECT_IDS)
+    if isinstance(idata, list):
+        for entry in idata:
+            if not isinstance(entry, Mapping):
+                raise ValueError("project_ids[] entries must be mappings")
+            match = entry.get(C.CFG_PROJECT_ID_MATCH)
+            pid = entry.get(C.CFG_PROJECT_ID_ID)
+            if not isinstance(match, str) or not match:
+                raise ValueError("project_ids[] entry is missing non-empty 'match'")
+            if not isinstance(pid, str) or not pid:
+                raise ValueError("project_ids[] entry is missing non-empty 'id'")
+            rules.append(ProjectIdRule(match=match, id=pid))
+
+    return projects, tuple(rules)
+
+
 def load_config(
     *,
     dsn: Optional[str] = None,
@@ -352,6 +421,7 @@ def load_config(
     )
 
     pricing = _load_pricing(data)
+    projects, project_id_rules = _load_projects(data)
 
     return AnalyticsConfig(
         sources=sources,
@@ -360,6 +430,8 @@ def load_config(
         redaction_mode=resolved_redaction,
         judge=judge,
         pricing=pricing,
+        projects=projects,
+        project_id_rules=project_id_rules,
         raw=data,
     )
 

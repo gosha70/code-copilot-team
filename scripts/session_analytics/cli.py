@@ -160,7 +160,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
 
     if not ensure_initialized(args.dsn):
         return C.EXIT_USAGE
-    cfg = load_config(dsn=args.dsn, redaction_mode=args.redact)
+    cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
         print(
             "error: no DSN configured. Run setup, pass --dsn, or set CCT_SA_DSN. "
@@ -177,6 +177,9 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             redaction_mode=cfg.redaction_mode,
             full=args.full,
             pricing=cfg.pricing,
+            cli_redaction_override=args.redact,
+            projects=cfg.projects,
+            project_id_rules=cfg.project_id_rules,
         )
     except UnknownAdapterError as exc:
         print(f"error: {exc}", file=sys.stderr)

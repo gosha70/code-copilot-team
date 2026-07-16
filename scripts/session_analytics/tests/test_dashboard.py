@@ -41,6 +41,44 @@ class TestDashboard(RegistryResetTestCase):
         self.assertEqual(len(dist["labels"]), 10)
         self.assertTrue(all(item["total"] == 0 for item in dist["labels"]))
 
+    def test_effective_redaction_by_project(self) -> None:
+        # Uniform project: every session shares one redaction_mode.
+        self.db.execute(
+            "INSERT INTO copilot_session (copilot, session_id, project_path, redaction_mode) "
+            "VALUES (?, ?, ?, ?)",
+            (C.COPILOT_CLAUDE_CODE, "s-uniform-1", "/work/client-a", "code"),
+        )
+        self.db.execute(
+            "INSERT INTO copilot_session (copilot, session_id, project_path, redaction_mode) "
+            "VALUES (?, ?, ?, ?)",
+            (C.COPILOT_CLAUDE_CODE, "s-uniform-2", "/work/client-a", "code"),
+        )
+        # Mixed project: redaction_mode changed between ingests.
+        self.db.execute(
+            "INSERT INTO copilot_session (copilot, session_id, project_path, redaction_mode) "
+            "VALUES (?, ?, ?, ?)",
+            (C.COPILOT_CLAUDE_CODE, "s-mixed-1", "/work/client-b", "code"),
+        )
+        self.db.execute(
+            "INSERT INTO copilot_session (copilot, session_id, project_path, redaction_mode) "
+            "VALUES (?, ?, ?, ?)",
+            (C.COPILOT_CLAUDE_CODE, "s-mixed-2", "/work/client-b", "metadata-only"),
+        )
+        self.db.commit()
+
+        result = dashboard.effective_redaction_by_project(self.db)
+        by_path = {p["project_path"]: p for p in result["projects"]}
+
+        uniform = by_path["/work/client-a"]
+        self.assertEqual(uniform["session_count"], 2)
+        self.assertEqual(uniform["redaction_modes"], {"code": 2})
+        self.assertEqual(uniform["effective_redaction_mode"], "code")
+
+        mixed = by_path["/work/client-b"]
+        self.assertEqual(mixed["session_count"], 2)
+        self.assertEqual(mixed["redaction_modes"], {"code": 1, "metadata-only": 1})
+        self.assertEqual(mixed["effective_redaction_mode"], "mixed")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,7 +20,15 @@
     "specs/session-analytics-cost-tracking/spec.md, D-repricing). A model with",
     "no entry here ingests with cost_usd = NULL (never silently 0), and is",
     "counted + logged as 'unpriced' at the end of ingest. Removing this whole",
-    "block restores today's behavior (cost_usd stays NULL for everything)."
+    "block restores today's behavior (cost_usd stays NULL for everything).",
+    "'projects': maps a project key -> {'redaction_mode'?, 'ingest'?: 'on'|",
+    "'off'} to override the global redaction_mode (stricter/looser) or opt a",
+    "project out of ingestion entirely, per-project.",
+    "'project_ids': a list of {'match': <substring>, 'id': <project-key>}",
+    "rules, tried in order, used to resolve a project key when a session's",
+    "cwd isn't a locally-detectable git repo (git toplevel detection is tried",
+    "first). An empty/absent 'projects' block means every session ingests",
+    "with the global redaction_mode — today's behavior, unchanged."
   ],
   "sources": {
     "claude-code": "~/.claude/projects",
@@ -29,6 +37,8 @@
   "dsn": "",
   "kuzu_path": "",
   "redaction_mode": "code",
+  "projects": {},
+  "project_ids": [],
   "judge": {
     "default": { "backend": "ollama", "model": "" },
     "by_copilot": {

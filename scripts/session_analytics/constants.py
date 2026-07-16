@@ -58,6 +58,16 @@ CFG_JUDGE_BASE_URL = "base_url"
 CFG_JUDGE_API_KEY = "api_key"
 CFG_OLLAMA_URL = "ollama_url"
 
+# ── Per-project privacy config keys (session-analytics-privacy-granularity) ──
+CFG_PROJECTS = "projects"
+CFG_PROJECT_INGEST = "ingest"
+CFG_PROJECT_IDS = "project_ids"
+CFG_PROJECT_ID_MATCH = "match"
+CFG_PROJECT_ID_ID = "id"
+INGEST_ON = "on"
+INGEST_OFF = "off"
+INGEST_MODES = (INGEST_ON, INGEST_OFF)
+
 # ── Pricing config keys (E5 cost tracking) ─────────────────────────────
 # Rates are per-1,000,000 tokens. Each model entry declares its own
 # ``currency`` + ``effective_date`` (the "version" stamped onto priced

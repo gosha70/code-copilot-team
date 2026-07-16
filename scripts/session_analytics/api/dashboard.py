@@ -139,6 +139,41 @@ def cost_by_outcome(db: Database) -> dict[str, Any]:
     return {"by_phase": by_phase, "by_sentiment": by_sentiment}
 
 
+def effective_redaction_by_project(db: Database) -> dict[str, Any]:
+    """FR-5: per-project "effective redaction mode" the project's already-
+    ingested sessions were recorded with — read-only, derived purely by
+    grouping ``copilot_session.redaction_mode`` by ``project_path`` (no new
+    DB column, no migration). A project's mode can differ across ingests if
+    the layered config changed between runs, so when a project's sessions
+    don't all share one mode the effective mode is the literal string
+    ``"mixed"`` (surfacing the ambiguity rather than silently picking one)."""
+    rows = db.query(
+        """
+        SELECT project_path, redaction_mode, COUNT(*)
+        FROM copilot_session
+        WHERE project_path IS NOT NULL
+        GROUP BY project_path, redaction_mode
+        """
+    )
+    by_project: dict[str, dict[str, int]] = {}
+    for project_path, redaction_mode, count in rows:
+        modes = by_project.setdefault(project_path, {})
+        modes[redaction_mode] = modes.get(redaction_mode, 0) + int(count)
+
+    projects = []
+    for project_path, modes in by_project.items():
+        session_count = sum(modes.values())
+        effective = next(iter(modes)) if len(modes) == 1 else "mixed"
+        projects.append({
+            "project_path": project_path,
+            "session_count": session_count,
+            "redaction_modes": modes,
+            "effective_redaction_mode": effective,
+        })
+    projects.sort(key=lambda p: p["session_count"], reverse=True)
+    return {"projects": projects}
+
+
 def label_distribution(db: Database, rubric_name: str = "heuristic-v1") -> dict[str, Any]:
     """Per-bool-label true-counts across all labeled turns."""
     from ..judge.rubric import load_rubric

@@ -93,6 +93,54 @@ per-env via `CCT_SA_*` env vars, or per-invocation via CLI flags. The
 tool-name and file-language normalization maps are data files in `config_data/`,
 not hardcoded in source.
 
+### Per-project privacy granularity (E8, issue #84)
+
+The global `redaction_mode` applies to every project by default. To set a
+stricter (or looser) redaction for specific projects, or to fully exclude a
+project from ingestion, add a `projects` block to `config_data/defaults.json`
+(or your `~/.cct/session-analytics.json` override):
+
+```json
+"projects": {
+  "sensitive-client-a": { "redaction_mode": "metadata-only" },
+  "internal-experiments": { "ingest": "off" }
+},
+"project_ids": [
+  { "match": "/Users/dev/work/client-a", "id": "sensitive-client-a" }
+]
+```
+
+- **Project key**: for each session, the key is resolved from its captured
+  `cwd` in this order: (1) the **git repo root** when that `cwd` is a local
+  git worktree at ingest time (`git -C <cwd> rev-parse --show-toplevel`); (2)
+  else the first matching `project_ids` rule (`match` is a substring of the
+  `cwd`, e.g. `/Users/dev/work/client-a` matches any subdirectory of that
+  repo); (3) else there is no per-project override and the global default
+  applies. The key is **never the raw cwd itself** — only a detected repo
+  root or a configured id — so subdirectories/worktrees of one repo share a
+  single setting instead of fragmenting. The `project_ids` map is the primary
+  keying mechanism for transcripts ingested on a machine where the repo isn't
+  checked out (git-toplevel detection needs local filesystem access to that
+  `cwd`); git-toplevel auto-detection is a convenience on the machine where
+  the sessions were recorded.
+- **Redaction precedence** (per session): explicit CLI `--redact` (if passed)
+  > the resolved project's `redaction_mode` > the global default. The
+  resolved mode is what's actually applied before any DB write or judge
+  prompt, and is recorded in `copilot_session.redaction_mode`.
+- **`ingest: "off"`** is a hard privacy boundary: that project's sessions are
+  skipped entirely — no DB rows, no judge calls, not even incremental
+  bookkeeping. An explicit `--redact` on the CLI does **not** force-include
+  an opted-out project. Skipped sessions are counted per project and
+  reported in the `ingest` summary (`sessions_opted_out`,
+  `per_project_opt_out`).
+- **No `projects` block configured** (the default): every session ingests
+  with the global `redaction_mode`, exactly as before this feature existed —
+  fully additive, no migration required.
+- The Studio **Settings** page shows the effective per-project redaction
+  (read-only), derived from already-ingested sessions' `redaction_mode`
+  grouped by project — it does not edit per-project config; that lives in
+  the layered config file above.
+
 ## Cost tracking (E5, issue #83)
 
 `ingest` computes each turn's `cost_usd` from a price table, so cost is never

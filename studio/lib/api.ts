@@ -104,6 +104,13 @@ export interface GraphCounts {
   tool_failures: { tool: string; invocations: number; errors: number }[];
 }
 
+export interface ProjectRedactionRow {
+  project_path: string;
+  session_count: number;
+  redaction_modes: Record<string, number>;
+  effective_redaction_mode: string;
+}
+
 export const api = {
   dashboard: () => get<DashboardKpis>("/api/dashboard/kpis"),
   labels: () => get<{ labels: { label: string; true: number; total: number }[] }>("/api/dashboard/labels"),
@@ -117,6 +124,7 @@ export const api = {
   graphQuery: (cypher: string) =>
     post<{ rows: Record<string, unknown>[] }>("/api/graph/query", { cypher }),
   settings: () => get<Record<string, unknown>>("/api/settings"),
+  projectRedaction: () => get<{ projects: ProjectRedactionRow[] }>("/api/settings/projects"),
   config: () => get<ConfigResponse>("/api/config"),
   saveConfig: (values: Record<string, string>) =>
     put<{ ok: boolean }>("/api/config", { values }),

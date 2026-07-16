@@ -3,21 +3,29 @@
 # discover() (cheap) → incremental gate → load() (full parse) → idempotent
 # upsert → record ingest_state. Copilot-agnostic: it iterates whatever
 # adapters are registered and selected.
+#
+# Per-project privacy (session-analytics-privacy-granularity): ``projects``/
+# ``project_id_rules`` (from config.py) resolve a per-session redaction
+# override or a hard ingest opt-out via a ProjectKeyResolver, and
+# ``cli_redaction_override`` carries the CLI's raw --redact value so it can
+# win over both without being conflated with the global default. All three
+# are optional/defaulted — every pre-existing caller keeps working unchanged.
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 from .. import constants as C
-from ..config import PricingConfig
+from ..config import PricingConfig, ProjectIdRule, ProjectOverride
 from ..cost import UnpricedStats
 from ..registry import get_adapter, list_adapter_ids
 from ..relational import store
 from ..relational.db import Database, apply_ddl
 from . import incremental
+from .project_key import ProjectKeyResolver
 
 _log = logging.getLogger(__name__)
 
@@ -31,6 +39,8 @@ class IngestStats:
     errors: int = 0
     per_copilot: dict = field(default_factory=dict)
     unpriced_models: dict = field(default_factory=dict)  # E5: model -> turn count
+    sessions_opted_out: int = 0
+    per_project_opt_out: dict = field(default_factory=dict)  # project key -> count
 
     def as_dict(self) -> dict:
         return {
@@ -41,6 +51,8 @@ class IngestStats:
             "errors": self.errors,
             "per_copilot": self.per_copilot,
             "unpriced_models": self.unpriced_models,
+            "sessions_opted_out": self.sessions_opted_out,
+            "per_project_opt_out": self.per_project_opt_out,
         }
 
 
@@ -53,6 +65,9 @@ def ingest(
     redaction_mode: str = C.REDACT_CODE,
     full: bool = False,
     pricing: Optional[PricingConfig] = None,
+    cli_redaction_override: Optional[str] = None,
+    projects: Optional[Mapping[str, ProjectOverride]] = None,
+    project_id_rules: Optional[Sequence[ProjectIdRule]] = None,
 ) -> IngestStats:
     """Run ingestion for the selected copilots into ``dsn``.
 
@@ -66,10 +81,21 @@ def ingest(
     ``load_config()``. A turn whose (known) model has no matching price is
     tallied in ``stats.unpriced_models`` and logged once per run — cost is
     never silently 0.
+
+    ``cli_redaction_override``, ``projects``, ``project_id_rules`` (session-
+    analytics-privacy-granularity): per-session redaction/opt-out. All
+    default to ``None`` so pre-existing callers are unaffected. Precedence
+    for the effective redaction mode is CLI-explicit > per-project >
+    ``redaction_mode`` (the global default); a project with ``ingest="off"``
+    is a HARD boundary — nothing is written for it, not even incremental
+    bookkeeping — and that boundary is checked BEFORE redaction precedence,
+    so it cannot be overridden by ``cli_redaction_override``.
     """
     selected = list(copilots) if copilots else list_adapter_ids()
     stats = IngestStats()
     unpriced = UnpricedStats()
+    projects = projects or {}
+    resolver = ProjectKeyResolver(project_id_rules or ())
 
     db = Database.connect(dsn)
     try:
@@ -83,11 +109,36 @@ def ingest(
                     stats.sessions_skipped += 1
                     continue
                 raw = adapter.load(ref)
+
+                project_key = resolver.resolve(raw.project_path)
+                override = projects.get(project_key) if project_key else None
+
+                # Hard privacy boundary (FR-4): opt-out is checked BEFORE
+                # redaction precedence and is never overridable, including by
+                # an explicit cli_redaction_override — write NOTHING for this
+                # session, not even the incremental bookkeeping row.
+                if override is not None and override.ingest == C.INGEST_OFF:
+                    stats.sessions_opted_out += 1
+                    stats.per_project_opt_out[project_key] = (
+                        stats.per_project_opt_out.get(project_key, 0) + 1
+                    )
+                    continue
+
+                session_redaction = (
+                    cli_redaction_override
+                    if cli_redaction_override is not None
+                    else (
+                        override.redaction_mode
+                        if (override is not None and override.redaction_mode is not None)
+                        else redaction_mode
+                    )
+                )
+
                 store.upsert_session(
                     db,
                     raw,
                     developer_id=developer_id,
-                    redaction_mode=redaction_mode,
+                    redaction_mode=session_redaction,
                     pricing=pricing,
                     unpriced=unpriced,
                 )
@@ -115,6 +166,13 @@ def ingest(
                 unpriced.total_turns,
                 len(unpriced.counts),
                 sorted(unpriced.counts),
+            )
+        if stats.sessions_opted_out:
+            _log.warning(
+                "ingest: %d session(s) opted out across %d project(s): %s",
+                stats.sessions_opted_out,
+                len(stats.per_project_opt_out),
+                stats.per_project_opt_out,
             )
     finally:
         db.close()
