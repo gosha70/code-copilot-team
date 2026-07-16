@@ -55,6 +55,7 @@ The zero-install path still works without `setup` — just pass `--dsn`:
 | `mcp`     | Run the MCP stdio server (M4). |
 | `serve`   | Launch FastAPI + the Next.js Studio (M6). |
 | `export`  | Export the relational store to CSV/Parquet (E7). |
+| `watch`   | Loop incremental `ingest()` every `--interval` seconds until Ctrl+C (E6). |
 
 `ingest` flags: `--copilot` (repeatable; default all), `--root`, `--dsn`,
 `--developer-id`, `--redact {none,code,metadata-only}`, `--incremental`
@@ -245,6 +246,45 @@ has no rows in the store and is absent from every export. `redaction_mode` is
 an exported column on both `sessions` and `turns`, so an export
 self-documents its own privacy posture per row (a `redaction: none` session
 exports its raw preview — the operator's own ingest-time choice).
+
+## Watch (E6, issue #89)
+
+`watch` keeps the store fresh without a cron job or manual re-runs: it loops
+incremental `ingest()` — the same config-resolved redaction/projects/pricing
+as `ingest` — on an interval, until you stop it:
+
+```bash
+./scripts/session-analytics watch --interval 15
+./scripts/session-analytics watch --interval 15 --dsn "sqlite:////tmp/sa.db" --copilots claude-code
+```
+
+- `--interval` (default `15` seconds, minimum `1`) — time between cycles.
+- `--dsn` — same DSN resolution as every other command (else config /
+  `CCT_SA_DSN`).
+- `--copilots` — repeatable copilot id to watch (default: all registered).
+
+Each cycle is **incremental** (never `--full` — new/changed sessions only,
+via the same mtime-gated `should_ingest` check `ingest` already uses) and
+logs its `IngestStats` summary (ingested / skipped / opted-out counts) so an
+operator can see per-cycle progress.
+
+**Fail-fast setup, resilient runtime**: the **first** cycle surfaces
+setup/config errors (unreachable DB, bad schema) as a non-zero exit — no point
+looping on a broken config. Once the watch is running, a transient error in a
+later cycle (e.g. a momentarily unreachable source) is logged and does **not**
+stop it — it retries on the next cycle.
+
+**Interruptible**: Ctrl+C (SIGINT) or SIGTERM stop the loop cleanly between
+cycles — no traceback, exit code `0`.
+
+**Studio auto-refresh**: while `watch` is running, the Studio dashboard and
+sessions list auto-refresh (poll every ~15s) so new data shows up without a
+manual reload; a small "auto-refreshing (every Ns)" indicator marks this.
+
+**Deferred (out of scope for this slice)**: this is a polling loop, not a
+push mechanism — there is no native filesystem watcher (fswatch/inotify) and
+no WebSocket/SSE push to the Studio. A later E6 issue may add push-based
+updates; for now, `--interval` controls the responsiveness/cost trade-off.
 
 ## Tests
 

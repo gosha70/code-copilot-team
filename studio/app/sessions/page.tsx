@@ -5,14 +5,25 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { Card, ErrorNote, Loading, formatCost, useApi } from "@/components/ui";
 
+const REFRESH_MS = 15000;
+
 export default function SessionsPage() {
   const [query, setQuery] = useState("");
   const [copilot, setCopilot] = useState("");
-  const { data, error, loading } = useApi(() => api.sessions(query, copilot), [query, copilot]);
+  const { data, error, loading } = useApi(
+    () => api.sessions(query, copilot),
+    [query, copilot],
+    REFRESH_MS
+  );
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Sessions</h1>
+      <div className="flex items-baseline gap-2">
+        <h1 className="text-2xl font-bold">Sessions</h1>
+        <span className="text-slate-400 text-xs">
+          Auto-refreshing every {REFRESH_MS / 1000}s
+        </span>
+      </div>
       <div className="flex gap-3">
         <input
           className="border border-slate-300 rounded px-3 py-1.5 text-sm flex-1"

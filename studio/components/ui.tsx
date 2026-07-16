@@ -57,8 +57,22 @@ export function Bar({ value, max, label }: { value: number; max: number; label: 
   );
 }
 
-/** Tiny data hook: returns {data, error, loading} for an async loader. */
-export function useApi<T>(loader: () => Promise<T>, deps: unknown[] = []): {
+/**
+ * Tiny data hook: returns {data, error, loading} for an async loader.
+ *
+ * `refreshMs` is an OPTIONAL auto-refresh interval (ms). When omitted (or
+ * not positive), behavior is exactly the one-shot fetch-on-mount/deps-change
+ * from before this option existed. When set, the same loader is re-invoked
+ * on a `setInterval` after the initial fetch; the interval is cleared on
+ * unmount and reset whenever `deps` or `refreshMs` changes. Background
+ * refreshes update `data`/`error` silently — `loading` is only toggled by
+ * the initial (or deps-triggered) fetch, never by the periodic poll.
+ */
+export function useApi<T>(
+  loader: () => Promise<T>,
+  deps: unknown[] = [],
+  refreshMs?: number
+): {
   data: T | null;
   error: string | null;
   loading: boolean;
@@ -68,16 +82,24 @@ export function useApi<T>(loader: () => Promise<T>, deps: unknown[] = []): {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     let live = true;
+    const fetchOnce = () => {
+      loader()
+        .then((d) => live && (setData(d), setError(null)))
+        .catch((e) => live && setError(String(e)))
+        .finally(() => live && setLoading(false));
+    };
     setLoading(true);
-    loader()
-      .then((d) => live && (setData(d), setError(null)))
-      .catch((e) => live && setError(String(e)))
-      .finally(() => live && setLoading(false));
+    fetchOnce();
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+    if (refreshMs && refreshMs > 0) {
+      intervalId = setInterval(fetchOnce, refreshMs);
+    }
     return () => {
       live = false;
+      if (intervalId) clearInterval(intervalId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, [...deps, refreshMs]);
   return { data, error, loading };
 }
 

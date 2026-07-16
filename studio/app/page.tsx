@@ -3,8 +3,10 @@
 import { api } from "@/lib/api";
 import { Bar, Card, ErrorNote, Loading, Stat, useApi } from "@/components/ui";
 
+const REFRESH_MS = 15000;
+
 export default function DashboardPage() {
-  const { data, error, loading } = useApi(() => api.dashboard());
+  const { data, error, loading } = useApi(() => api.dashboard(), [], REFRESH_MS);
   if (loading) return <Loading />;
   if (error || !data) return <ErrorNote error={error || "no data"} />;
 
@@ -13,7 +15,12 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Dashboard</h1>
+      <div className="flex items-baseline gap-2">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <span className="text-slate-400 text-xs">
+          Auto-refreshing every {REFRESH_MS / 1000}s
+        </span>
+      </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <Stat label="Sessions" value={data.totals.sessions} />
