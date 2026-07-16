@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import signal
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -155,6 +156,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "Parquet always requires --out (binary — never written to stdout). "
             "--table all requires --out to be a directory (one <table>.<ext> file each)."
         ),
+    )
+
+    p_watch = sub.add_parser(
+        "watch", help="Loop incremental ingest() every --interval seconds (E6)."
+    )
+    p_watch.add_argument(
+        "--interval", type=int, default=15, help="Seconds between cycles (default: 15)."
+    )
+    p_watch.add_argument(
+        "--dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+    )
+    p_watch.add_argument(
+        "--copilots",
+        action="append",
+        default=None,
+        help="Copilot id to watch (repeatable). Default: all registered.",
     )
 
     return parser
@@ -377,6 +394,89 @@ def _export_one(exp, db, table: str, fmt: str, dest: Path) -> None:
             exp.write_csv(db, table, fp)
 
 
+def _cmd_watch(args: argparse.Namespace) -> int:
+    import threading
+
+    from .ingest.pipeline import ingest
+    from .setup_cmd import ensure_initialized
+    from .watch import run_watch
+
+    # Interval bounds: reject < 1s up front. 0 would busy-loop ingest with no
+    # delay; a negative value would raise from the sleep mid-run.
+    if args.interval < 1:
+        print(
+            f"error: --interval must be >= 1 second (got {args.interval}).",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+
+    if not ensure_initialized(args.dsn):
+        return C.EXIT_USAGE
+    cfg = load_config(dsn=args.dsn)
+    if not cfg.dsn:
+        print(
+            "error: no DSN configured. Run setup, pass --dsn, or set CCT_SA_DSN. "
+            "For a sqlite test run: --dsn sqlite:////tmp/sa.db",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+
+    # Per-cycle IngestStats are logged at INFO; the root logger is WARNING
+    # unless -v, so raise this logger to INFO so `watch` shows progress by
+    # default (otherwise a healthy watch prints nothing and looks frozen).
+    _log.setLevel(logging.INFO)
+
+    def ingest_fn() -> None:
+        stats = ingest(
+            dsn=cfg.dsn,
+            copilots=args.copilots,
+            redaction_mode=cfg.redaction_mode,
+            pricing=cfg.pricing,
+            cli_redaction_override=None,
+            projects=cfg.projects,
+            project_id_rules=cfg.project_id_rules,
+            full=False,
+        )
+        _log.info(
+            "watch cycle: %d ingested, %d skipped, %d opted out",
+            stats.sessions_ingested,
+            stats.sessions_skipped,
+            stats.sessions_opted_out,
+        )
+
+    # A threading.Event is the stop signal: the handler sets it, `event.wait`
+    # is the inter-cycle sleep (returns IMMEDIATELY when set, so Ctrl+C is
+    # prompt — unlike time.sleep, which PEP 475 resumes for its full duration
+    # after a non-raising handler), and `is_set` is the loop's stop check.
+    stop = threading.Event()
+
+    def _handle_signal(signum, frame) -> None:
+        stop.set()
+
+    prev_sigint = signal.getsignal(signal.SIGINT)
+    prev_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+    try:
+        # fail_fast_first: an unreachable DB / bad config surfaces on the first
+        # cycle as a non-zero exit instead of looping forever.
+        run_watch(
+            ingest_fn,
+            args.interval,
+            iterations=None,
+            sleep_fn=stop.wait,
+            should_stop=stop.is_set,
+            fail_fast_first=True,
+        )
+    except Exception:
+        _log.exception("watch: initial ingest failed — check DSN / config")
+        return C.EXIT_RUNTIME
+    finally:
+        signal.signal(signal.SIGINT, prev_sigint)
+        signal.signal(signal.SIGTERM, prev_sigterm)
+    return C.EXIT_OK
+
+
 def _parse_judge_spec(spec: str) -> tuple[str, str]:
     if ":" in spec:
         family, model = spec.split(":", 1)
@@ -507,6 +607,7 @@ _HANDLERS = {
     "mcp": _cmd_mcp,
     "serve": _cmd_serve,
     "export": _cmd_export,
+    "watch": _cmd_watch,
 }
 
 
