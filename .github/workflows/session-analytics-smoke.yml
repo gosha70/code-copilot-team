@@ -52,10 +52,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Install optional deps FIRST so the kuzu/fastapi-gated tests actually
-      # run here (they skip when the package is absent).
-      - name: Install psycopg + kuzu + fastapi (Postgres/graph/API paths)
-        run: python3 -m pip install "psycopg[binary]>=3.1" "kuzu>=0.6" "fastapi>=0.110" "httpx>=0.27"
+      # Install optional deps FIRST so the kuzu/fastapi/pyarrow-gated tests
+      # actually run here (they skip when the package is absent).
+      - name: Install psycopg + kuzu + fastapi + pyarrow (Postgres/graph/API/export paths)
+        run: python3 -m pip install "psycopg[binary]>=3.1" "kuzu>=0.6" "fastapi>=0.110" "httpx>=0.27" "pyarrow>=14"
 
       - name: Run unittest suite (graph + API tests included)
         run: |
@@ -112,6 +112,20 @@ jobs:
           cur.execute("SELECT COUNT(*) FROM copilot_turn WHERE role = 'user' AND cost_usd IS NOT NULL")
           assert cur.fetchone()[0] == 0, "user turns must never be priced"
           print("OK cost_usd populated:", rows)
+          PY
+
+      - name: "Export CSV + Parquet round-trip against PostgreSQL (E7, #87)"
+        run: |
+          ./scripts/session-analytics export --format csv --table sessions --dsn "$SA_DSN" > sessions.csv
+          head -1 sessions.csv | grep -q '^id,copilot,session_id' || { echo "unexpected CSV header"; cat sessions.csv; exit 1; }
+          ./scripts/session-analytics export --format parquet --table all --out "$RUNNER_TEMP/export" --dsn "$SA_DSN"
+          ls "$RUNNER_TEMP/export"
+          python3 - <<PY
+          import pyarrow.parquet as pq
+          for table, expected_rows in (("sessions", 1), ("turns", 6), ("labels", 0), ("kpis", 0)):
+              t = pq.read_table("$RUNNER_TEMP/export/" + table + ".parquet")
+              assert t.num_rows == expected_rows, (table, t.num_rows)
+          print("OK parquet round-trip")
           PY
 
       - name: "Per-project redaction override survives PostgreSQL (E8, #84)"

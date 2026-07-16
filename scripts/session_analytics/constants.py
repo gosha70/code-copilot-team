@@ -90,3 +90,19 @@ EXIT_NOT_IMPLEMENTED = 8
 # ── Content-preview length (chars) for content_preview columns ─────────
 CONTENT_PREVIEW_CHARS = 500
 INPUT_PREVIEW_CHARS = 500
+
+# ── Export command (E7 CSV/Parquet export, issue #87) ──────────────────
+EXPORT_FORMAT_CSV = "csv"
+EXPORT_FORMAT_PARQUET = "parquet"
+EXPORT_FORMATS = (EXPORT_FORMAT_CSV, EXPORT_FORMAT_PARQUET)
+
+EXPORT_TABLE_SESSIONS = "sessions"
+EXPORT_TABLE_TURNS = "turns"
+EXPORT_TABLE_LABELS = "labels"
+EXPORT_TABLE_KPIS = "kpis"
+EXPORT_TABLE_ALL = "all"
+# The actual queryable tables (i.e. everything except the "all" pseudo-table).
+EXPORT_DATA_TABLES = (
+    EXPORT_TABLE_SESSIONS, EXPORT_TABLE_TURNS, EXPORT_TABLE_LABELS, EXPORT_TABLE_KPIS,
+)
+EXPORT_TABLES = EXPORT_DATA_TABLES + (EXPORT_TABLE_ALL,)
