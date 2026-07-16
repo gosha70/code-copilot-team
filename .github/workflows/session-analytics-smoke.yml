@@ -114,6 +114,34 @@ jobs:
           print("OK cost_usd populated:", rows)
           PY
 
+      - name: "Per-project redaction override survives PostgreSQL (E8, #84)"
+        run: |
+          mkdir -p ~/.cct
+          cat > ~/.cct/session-analytics.json <<'JSON'
+          {
+            "projects": {
+              "demo-project": { "redaction_mode": "metadata-only" }
+            },
+            "project_ids": [
+              { "match": "/repo/demo", "id": "demo-project" }
+            ]
+          }
+          JSON
+          ./scripts/session-analytics ingest \
+            --copilot claude-code --root "$FIXTURE_ROOT" \
+            --dsn "$SA_DSN" --full
+          python3 - <<'PY'
+          import os
+          import psycopg
+          conn = psycopg.connect(os.environ["SA_DSN"])
+          cur = conn.cursor()
+          cur.execute("SELECT redaction_mode FROM copilot_session")
+          rows = cur.fetchall()
+          assert rows == [("metadata-only",)], rows  # per-project override, not the global 'code' default
+          print("OK per-project override under Postgres:", rows)
+          PY
+          rm -f ~/.cct/session-analytics.json
+
       - name: Build + assert the Kùzu graph
         run: |
           ./scripts/session-analytics graph --rebuild \

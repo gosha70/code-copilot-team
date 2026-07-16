@@ -3,6 +3,15 @@
 # Writes the repo-root .env that both the CLI and the Studio config page share.
 # Interactive by default (prompts with sensible defaults the user can accept);
 # also runnable non-interactively with explicit values for CI / automation.
+#
+# This wizard only covers the GLOBAL redaction mode (the ``.env`` value below).
+# Per-project overrides (a stricter/looser redaction mode, or opting a project
+# out of ingestion entirely) are not part of this wizard — they live in the
+# layered JSON config (``config_data/defaults.json`` or your
+# ``~/.cct/session-analytics.json`` override) under a ``projects`` block, keyed
+# by git-repo-root or a configured ``project_ids`` id (never the raw cwd). See
+# "Per-project privacy granularity" in README.md for the schema + precedence
+# (explicit CLI ``--redact`` > per-project > this global default).
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, ConfigResponse } from "@/lib/api";
+import { api, ConfigResponse, ProjectRedactionRow } from "@/lib/api";
 import { Card, ErrorNote, Loading } from "@/components/ui";
 
 // Friendly labels + hints per .env key. Anything not listed renders as text.
@@ -23,6 +23,8 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [probe, setProbe] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectRedactionRow[] | null>(null);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -38,6 +40,13 @@ export default function SettingsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    api
+      .projectRedaction()
+      .then((r) => setProjects(r.projects))
+      .catch((e) => setProjectsError(String(e)));
   }, []);
 
   function set(key: string, val: string) {
@@ -149,6 +158,56 @@ export default function SettingsPage() {
           <code className="bg-slate-100 px-1 rounded">{cfg.judge_default}</code>. A blank backend
           uses each copilot’s own LLM; set a backend above to force one for all sessions.
         </p>
+      </Card>
+
+      <Card title="Effective per-project redaction">
+        <p className="text-xs text-slate-400 mb-3">
+          Read-only — the redaction mode each project’s already-ingested sessions were recorded
+          with. To change redaction for future ingests, edit the per-project config file.
+        </p>
+        {projectsError ? (
+          <ErrorNote error={projectsError} />
+        ) : projects === null ? (
+          <Loading />
+        ) : projects.length === 0 ? (
+          <p className="text-sm text-slate-500">No per-project data yet — ingest some sessions.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-500 border-b border-slate-200">
+                <th className="py-1 font-medium">Project</th>
+                <th className="py-1 font-medium text-right">Sessions</th>
+                <th className="py-1 font-medium">Effective redaction</th>
+              </tr>
+            </thead>
+            <tbody>
+              {projects.map((p) => (
+                <tr key={p.project_path} className="border-b border-slate-100 last:border-0">
+                  <td className="py-1 font-mono text-xs truncate max-w-xs" title={p.project_path}>
+                    {p.project_path}
+                  </td>
+                  <td className="py-1 text-right tabular-nums">{p.session_count}</td>
+                  <td className="py-1">
+                    {p.effective_redaction_mode === "mixed" ? (
+                      <span>
+                        mixed{" "}
+                        <span className="text-xs text-slate-400">
+                          (
+                          {Object.entries(p.redaction_modes)
+                            .map(([mode, count]) => `${mode}: ${count}`)
+                            .join(", ")}
+                          )
+                        </span>
+                      </span>
+                    ) : (
+                      p.effective_redaction_mode
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </Card>
     </div>
   );

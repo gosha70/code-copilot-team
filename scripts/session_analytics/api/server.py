@@ -126,6 +126,14 @@ def create_app(dsn: str, kuzu_path: str = ""):
 
         return probe(req.dsn or dsn)
 
+    @app.get("/api/settings/projects")
+    def settings_projects() -> dict[str, Any]:
+        conn = db()
+        try:
+            return dashboard.effective_redaction_by_project(conn)
+        finally:
+            conn.close()
+
     # ── dashboard ──────────────────────────────────────────────────────
     @app.get("/api/dashboard/kpis")
     def dashboard_kpis() -> dict[str, Any]:
