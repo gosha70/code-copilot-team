@@ -155,13 +155,18 @@ def _record_version(db: Database) -> None:
     if row is None:
         db.execute(
             "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-            (_SCHEMA_VERSION, _now_iso()),
+            (_SCHEMA_VERSION, now_iso()),
         )
 
 
-def _now_iso() -> str:
-    # Local import keeps the module import-time side-effect-free; datetime is
-    # only needed when actually recording a schema-version row.
+def now_iso() -> str:
+    """UTC ISO-8601 timestamp — the package's shared now-stamp helper.
+
+    Public (E9 outcomes, #92): reused by callers that stamp rows (e.g.
+    ``benchmark_result.ingested_at``) so the timestamp format can't drift
+    between tables. The local import keeps the module import-time
+    side-effect-free.
+    """
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()

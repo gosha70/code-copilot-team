@@ -12,3 +12,5 @@ CREATE INDEX IF NOT EXISTS idx_fileaccess_path ON copilot_file_access(file_path)
 CREATE INDEX IF NOT EXISTS idx_error_session ON copilot_error(session_id);
 CREATE INDEX IF NOT EXISTS idx_label_turn ON heuristic_label(turn_id);
 CREATE INDEX IF NOT EXISTS idx_kpi_session ON session_kpi(session_id);
+CREATE INDEX IF NOT EXISTS idx_benchres_session ON benchmark_result(session_ref);
+CREATE INDEX IF NOT EXISTS idx_benchres_result ON benchmark_result(result);

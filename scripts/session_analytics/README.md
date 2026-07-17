@@ -331,10 +331,44 @@ NULL for organic sessions) and in a backend dashboard summary
 `distinct_benchmark_attempts` — named for what the column stores, per-attempt
 directories, not runs).
 
-**Deferred (out of scope for this slice)**: ingesting benchmark **outcomes**
-(score.json pass/fail) into the store; a Studio comparison UI; and a fuzzy
-`project_path` + time-window fallback for null-`session_id` runs — a later E9
-issue.
+### Outcomes (E9 outcome slice, issue #92)
+
+`correlate` also ingests each attempt's `score.json` into a **`benchmark_result`**
+table — one row per attempt directory (`UNIQUE(run_dir)`, idempotent re-runs)
+carrying the **stable identity** (`benchmark_id`, `task_id`, `backend_id`,
+`run_id`, `attempt` — chosen precisely because attempt *paths* get archived or
+pruned, while the identity survives), the outcome (`result` ∈
+pass/fail/error/timeout, `tests_passed`/`lint_passed`/`typecheck_passed`,
+`elapsed_seconds`, diff stats), and a nullable `session_ref` to the linked
+analytics session. Outcomes are stored for **every** backend (the table is
+analytical record); only session *linking* stays claude-code-scoped. It's a
+new table on purpose: `apply_ddl` re-runs `CREATE TABLE IF NOT EXISTS` on
+every command, so existing databases pick it up with **no migration**.
+
+**Missing vs malformed** (strictness rule): a missing `score.json`, or missing
+keys inside one, are tolerated — absent fields become NULL and the row is
+still stored. But a present field with a **malformed type** that would corrupt
+aggregates (a `result` outside the enum, a string where a number belongs,
+`0/1` where a real boolean belongs) rejects the whole score: it is counted in
+`scores_missing`, logged, and never coerced. The summary gains three counters —
+`scores_ingested`, `scores_missing`, and `skipped_run_records` (attempt dirs
+whose `run-record.json` itself was unreadable/malformed — dropped, but
+visibly) — alongside the link counters.
+
+**Transactions**: `correlate` commits **once per scan** (not per record). If a
+scan fails mid-run, the partial counters gathered so far are printed to
+stderr (same JSON shape) before the non-zero exit — explicitly labeled
+**processed-only**: the transaction rolled back, so none of that run's rows or
+links were persisted; re-run after fixing the error.
+
+**Comparison**: `GET /api/dashboard/benchmark` additionally returns
+`by_result` — per result: `attempts`, `linked_sessions`, `total_cost_usd`
+(summed from **linked** sessions' turn costs only; unlinked attempts count in
+`attempts` but contribute no cost), and `avg_duration_seconds`. The raw table
+exports via `--table benchmark_results` (and `--table all`).
+
+**Deferred (out of scope)**: a Studio comparison UI; a fuzzy `project_path` +
+time-window fallback for null-`session_id` runs — a later E9 issue.
 
 ## Tests
 

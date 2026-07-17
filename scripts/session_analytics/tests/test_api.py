@@ -64,9 +64,14 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(body["sessions_linked"], 0)
         self.assertEqual(body["sessions_unlinked"], 1)
         self.assertEqual(body["distinct_benchmark_attempts"], 0)
+        self.assertEqual(body["by_result"], [])  # E9 outcomes (#92): merged payload
 
+        from session_analytics import correlate as cor
         from session_analytics.relational.db import Database
-        from session_analytics.relational.store import link_benchmark_run
+        from session_analytics.relational.store import (
+            link_benchmark_run,
+            upsert_benchmark_result,
+        )
 
         db = Database.connect(self.dsn)
         try:
@@ -77,6 +82,13 @@ class TestApi(RegistryResetTestCase):
             self.assertTrue(
                 link_benchmark_run(db, C.COPILOT_CLAUDE_CODE, sid, "/runs/x/attempt-01")
             )
+            upsert_benchmark_result(
+                db, "/runs/x/attempt-01", cor.Score(result="pass", tests_passed=True),
+                copilot=C.COPILOT_CLAUDE_CODE, session_id=sid, ingested_at="x",
+            )
+            # Store helpers no longer commit (caller-owned transaction, #92) —
+            # commit here so the API's own connection sees the rows.
+            db.commit()
         finally:
             db.close()
 
@@ -86,6 +98,9 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(body["sessions_linked"], 1)
         self.assertEqual(body["sessions_unlinked"], 0)
         self.assertEqual(body["distinct_benchmark_attempts"], 1)
+        self.assertEqual(len(body["by_result"]), 1)
+        self.assertEqual(body["by_result"][0]["result"], "pass")
+        self.assertEqual(body["by_result"][0]["linked_sessions"], 1)
 
     def test_sessions_list_and_detail(self) -> None:
         r = self.client.get("/api/sessions")

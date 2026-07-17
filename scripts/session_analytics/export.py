@@ -69,11 +69,23 @@ KPIS_COLUMNS: tuple[str, ...] = (
     "phase_compliance_score", "avg_interaction_quality", "computed_at",
 )
 
+# One row per benchmark attempt outcome (E9 outcomes, #92) — the stable
+# identity + result the ``correlate`` command ingested from score.json.
+# ``session_ref`` is the linked copilot_session.id (NULL for unmatched /
+# out-of-scope-backend attempts).
+BENCHMARK_RESULTS_COLUMNS: tuple[str, ...] = (
+    "id", "run_dir", "benchmark_id", "task_id", "backend_id", "run_id",
+    "attempt", "result", "tests_passed", "lint_passed", "typecheck_passed",
+    "elapsed_seconds", "files_changed", "lines_added", "lines_removed",
+    "session_ref", "ingested_at",
+)
+
 _COLUMNS: dict[str, tuple[str, ...]] = {
     C.EXPORT_TABLE_SESSIONS: SESSIONS_COLUMNS,
     C.EXPORT_TABLE_TURNS: TURNS_COLUMNS,
     C.EXPORT_TABLE_LABELS: LABELS_COLUMNS,
     C.EXPORT_TABLE_KPIS: KPIS_COLUMNS,
+    C.EXPORT_TABLE_BENCHMARK_RESULTS: BENCHMARK_RESULTS_COLUMNS,
 }
 
 # Boolean columns are stored with dialect-dependent affinity (SQLite returns
@@ -81,6 +93,7 @@ _COLUMNS: dict[str, tuple[str, ...]] = {
 # identical regardless of the backing store.
 _TURNS_BOOL_IDX = (4,)  # has_tool_use
 _LABELS_BOOL_IDX = (3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+_BENCHMARK_RESULTS_BOOL_IDX = (8, 9, 10)  # tests/lint/typecheck _passed
 
 # ── SQL (dialect-agnostic: plain SELECT/JOIN, ``?`` placeholders unused —
 #    no filters in v1) ───────────────────────────────────────────────────
@@ -141,6 +154,15 @@ _KPIS_SQL = """
     ORDER BY session_id, rubric_name
 """
 
+_BENCHMARK_RESULTS_SQL = f"""
+    SELECT id, run_dir, benchmark_id, task_id, backend_id, run_id, attempt,
+           result, tests_passed, lint_passed, typecheck_passed,
+           elapsed_seconds, files_changed, lines_added, lines_removed,
+           session_ref, ingested_at
+    FROM {C.TBL_BENCHMARK_RESULT}
+    ORDER BY id
+"""
+
 
 def _bool01(v: Any) -> Any:
     """Normalize a stored boolean-affinity value to 0/1 (``None`` stays ``None``)."""
@@ -185,11 +207,17 @@ def iter_kpis(db: Database) -> Iterator[tuple]:
     return _stream(db, _KPIS_SQL)
 
 
+def iter_benchmark_results(db: Database) -> Iterator[tuple]:
+    """Stream ``benchmark_results`` rows in ``BENCHMARK_RESULTS_COLUMNS`` order, by ``id``."""
+    return _stream(db, _BENCHMARK_RESULTS_SQL, _BENCHMARK_RESULTS_BOOL_IDX)
+
+
 _ROW_ITERATORS = {
     C.EXPORT_TABLE_SESSIONS: iter_sessions,
     C.EXPORT_TABLE_TURNS: iter_turns,
     C.EXPORT_TABLE_LABELS: iter_labels,
     C.EXPORT_TABLE_KPIS: iter_kpis,
+    C.EXPORT_TABLE_BENCHMARK_RESULTS: iter_benchmark_results,
 }
 
 
