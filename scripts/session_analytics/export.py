@@ -28,7 +28,9 @@ from .relational.db import Database
 # columns (LEFT JOIN — NULL when the session has no labeled turns). A
 # session with labels under more than one rubric contributes exactly one
 # session_kpi row here (the lexicographically-first rubric_name), matching
-# the dedup convention used for per-turn sentiment in api/dashboard.py.
+# the dedup convention used for per-turn sentiment in api/dashboard.py. The
+# trailing benchmark_run_dir column (E9, #91) is the linked benchmark
+# attempt's artifact directory — NULL for an organic (non-benchmark) session.
 SESSIONS_COLUMNS: tuple[str, ...] = (
     "id", "copilot", "session_id", "project_path", "model", "phase",
     "developer_id", "redaction_mode", "turn_count", "tool_call_count",
@@ -36,6 +38,7 @@ SESSIONS_COLUMNS: tuple[str, ...] = (
     "kpi_rubric_name", "kpi_labeled_turn_count", "kpi_correction_rate",
     "kpi_rework_rate", "kpi_first_attempt_success_rate", "kpi_autonomy_score",
     "kpi_phase_compliance_score", "kpi_avg_interaction_quality", "kpi_computed_at",
+    C.COL_BENCHMARK_RUN_DIR,
 )
 
 # One row per turn. ``redaction_mode`` is the parent session's mode (the turn
@@ -86,7 +89,7 @@ _LABELS_BOOL_IDX = (3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
 # ``_COST_ROLLUP_SQL``: session cost = Σ its turns' cost_usd, computed at
 # query time (not a materialized column) — NULL when no turn in the session
 # has a priced model.
-_SESSIONS_SQL = """
+_SESSIONS_SQL = f"""
     SELECT
         s.id, s.copilot, s.session_id, s.project_path, s.model, s.phase,
         s.developer_id, s.redaction_mode, s.turn_count, s.tool_call_count,
@@ -94,7 +97,7 @@ _SESSIONS_SQL = """
         (SELECT SUM(t.cost_usd) FROM copilot_turn t WHERE t.session_id = s.id),
         k.rubric_name, k.labeled_turn_count, k.correction_rate, k.rework_rate,
         k.first_attempt_success_rate, k.autonomy_score, k.phase_compliance_score,
-        k.avg_interaction_quality, k.computed_at
+        k.avg_interaction_quality, k.computed_at, s.{C.COL_BENCHMARK_RUN_DIR}
     FROM copilot_session s
     LEFT JOIN (
         SELECT sk.session_id, sk.rubric_name, sk.labeled_turn_count,

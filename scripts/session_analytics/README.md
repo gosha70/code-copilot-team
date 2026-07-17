@@ -56,6 +56,7 @@ The zero-install path still works without `setup` — just pass `--dsn`:
 | `serve`   | Launch FastAPI + the Next.js Studio (M6). |
 | `export`  | Export the relational store to CSV/Parquet (E7). |
 | `watch`   | Loop incremental `ingest()` every `--interval` seconds until Ctrl+C (E6). |
+| `correlate` | Link benchmark `run-record.json` session_ids to analytics sessions (E9). |
 
 `ingest` flags: `--copilot` (repeatable; default all), `--root`, `--dsn`,
 `--developer-id`, `--redact {none,code,metadata-only}`, `--incremental`
@@ -285,6 +286,55 @@ manual reload; a small "auto-refreshing (every Ns)" indicator marks this.
 push mechanism — there is no native filesystem watcher (fswatch/inotify) and
 no WebSocket/SSE push to the Studio. A later E6 issue may add push-based
 updates; for now, `--interval` controls the responsiveness/cost trade-off.
+
+## Correlate (E9, issue #91)
+
+`correlate` links benchmark run artifacts to the analytics sessions they
+produced, so a session can be traced back to its benchmark attempt directory:
+
+```bash
+./scripts/session-analytics correlate --runs-root benchmarks/runs
+./scripts/session-analytics correlate --runs-root benchmarks/runs --dsn "sqlite:////tmp/sa.db"
+```
+
+It recursively scans `--runs-root` for `run-record.json` files and, for each
+record that carries a Claude Code `session_id`
+(`backend.metadata.session_id`), stamps `copilot_session.benchmark_run_dir`
+with that record's **attempt directory** on the matching
+`(copilot='claude-code', session_id)` row (a parameterized, idempotent
+UPDATE). No schema change — the column already ships in the DDL.
+
+**Exact `session_id` join only, scoped to the claude-code backend.** Matching
+is a strict equi-join on the session UUID that both the benchmark harness and
+the analytics ingest capture from the same source. A record whose
+`backend_id` names another backend (aider/codex/stub) is counted
+`out_of_scope` — never miscounted as an unmatched claude-code session. Runs
+whose `session_id` is null (bare mode, timeouts) or whose id matches no
+ingested session are **not** linked — they are reported, not fuzzy-matched.
+Stamped paths are `resolve()`d, so relative and absolute `--runs-root`
+spellings stamp the identical value (idempotent re-runs).
+
+**Coverage is explicit.** The command prints a summary that breaks out every
+counter — `scanned`, `out_of_scope`, `with_session_id`, `linked`, `unmatched`
+(session id present but no session row), `null_session_id`, and
+`duplicate_session_id` (2nd+ record carrying the same id; still linked,
+last-writer-wins) — so gaps are visible, never hidden:
+
+```json
+{ "scanned": 42, "out_of_scope": 6, "with_session_id": 24, "null_session_id": 12,
+  "linked": 22, "unmatched": 2, "duplicate_session_id": 0 }
+```
+
+The linkage also surfaces in the sessions export (a `benchmark_run_dir` column,
+NULL for organic sessions) and in a backend dashboard summary
+(`GET /api/dashboard/benchmark`: linked vs unlinked sessions +
+`distinct_benchmark_attempts` — named for what the column stores, per-attempt
+directories, not runs).
+
+**Deferred (out of scope for this slice)**: ingesting benchmark **outcomes**
+(score.json pass/fail) into the store; a Studio comparison UI; and a fuzzy
+`project_path` + time-window fallback for null-`session_id` runs — a later E9
+issue.
 
 ## Tests
 

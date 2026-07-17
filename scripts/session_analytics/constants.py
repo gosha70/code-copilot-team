@@ -106,3 +106,20 @@ EXPORT_DATA_TABLES = (
     EXPORT_TABLE_SESSIONS, EXPORT_TABLE_TURNS, EXPORT_TABLE_LABELS, EXPORT_TABLE_KPIS,
 )
 EXPORT_TABLES = EXPORT_DATA_TABLES + (EXPORT_TABLE_ALL,)
+
+# ── Benchmark ↔ session correlation (E9, issue #91) ────────────────────
+# The ``copilot_session`` column stamped by ``correlate.py`` with a linked
+# benchmark run's attempt directory (NULL for organic sessions). Crosses the
+# store/export/dashboard/correlate module boundary, so it lives here once.
+COL_BENCHMARK_RUN_DIR = "benchmark_run_dir"
+
+# The benchmark harness's per-attempt artifact filename (``run.py``) and the
+# JSON key-path, inside that file, to the Claude Code session id
+# (``run_record["backend"]["metadata"]["session_id"]`` — may be null/absent
+# for bare mode, timeouts, or non-claude backends).
+RUN_RECORD_FILENAME = "run-record.json"
+RUN_RECORD_SESSION_ID_PATH = ("backend", "metadata", "session_id")
+# Required top-level backend id in every run-record (schema: backend_id). The
+# claude-code backend writes the same string as COPILOT_CLAUDE_CODE, so the
+# CLI scopes the link to records whose backend_id matches that constant.
+RUN_RECORD_BACKEND_ID_KEY = "backend_id"

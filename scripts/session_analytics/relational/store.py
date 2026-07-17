@@ -306,6 +306,25 @@ def _insert_turn_tree(
 # ── helpers ────────────────────────────────────────────────────────────
 
 
+def link_benchmark_run(db: Database, copilot: str, session_id: str, run_dir: str) -> bool:
+    """E9 (#91): stamp ``benchmark_run_dir`` on the matching session row.
+
+    A parameterized, idempotent UPDATE on the natural key ``(copilot,
+    session_id)`` — no value is ever string-interpolated into the SQL.
+    Re-running with the same ``run_dir`` sets the identical value (idempotent
+    by construction). Returns whether a row was affected: ``False`` means no
+    session with that ``(copilot, session_id)`` exists yet (counted as
+    ``unmatched`` by the caller — see ``correlate.correlate_links``).
+    """
+    cur = db.execute(
+        f"UPDATE copilot_session SET {C.COL_BENCHMARK_RUN_DIR} = ? "
+        "WHERE copilot = ? AND session_id = ?",
+        (run_dir, copilot, session_id),
+    )
+    db.commit()
+    return cur.rowcount > 0
+
+
 def _duration_seconds(started_at: Optional[str], ended_at: Optional[str]) -> Optional[int]:
     if not started_at or not ended_at:
         return None

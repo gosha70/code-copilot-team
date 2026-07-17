@@ -54,6 +54,39 @@ class TestApi(RegistryResetTestCase):
         self.assertIn("by_phase", body)
         self.assertIn("by_sentiment", body)
 
+    def test_dashboard_benchmark(self) -> None:
+        # E9 (#91): the correlation summary endpoint. Fresh ingest → nothing
+        # linked yet; after link_benchmark_run the counters move.
+        r = self.client.get("/api/dashboard/benchmark")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["sessions_total"], 1)
+        self.assertEqual(body["sessions_linked"], 0)
+        self.assertEqual(body["sessions_unlinked"], 1)
+        self.assertEqual(body["distinct_benchmark_attempts"], 0)
+
+        from session_analytics.relational.db import Database
+        from session_analytics.relational.store import link_benchmark_run
+
+        db = Database.connect(self.dsn)
+        try:
+            sid = db.query_one(
+                "SELECT session_id FROM copilot_session WHERE copilot = ?",
+                (C.COPILOT_CLAUDE_CODE,),
+            )[0]
+            self.assertTrue(
+                link_benchmark_run(db, C.COPILOT_CLAUDE_CODE, sid, "/runs/x/attempt-01")
+            )
+        finally:
+            db.close()
+
+        r = self.client.get("/api/dashboard/benchmark")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["sessions_linked"], 1)
+        self.assertEqual(body["sessions_unlinked"], 0)
+        self.assertEqual(body["distinct_benchmark_attempts"], 1)
+
     def test_sessions_list_and_detail(self) -> None:
         r = self.client.get("/api/sessions")
         self.assertEqual(r.status_code, 200)

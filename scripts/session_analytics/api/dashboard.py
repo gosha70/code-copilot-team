@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .. import constants as C
 from ..relational.db import Database
 
 
@@ -172,6 +173,34 @@ def effective_redaction_by_project(db: Database) -> dict[str, Any]:
         })
     projects.sort(key=lambda p: p["session_count"], reverse=True)
     return {"projects": projects}
+
+
+def benchmark_correlation(db: Database) -> dict[str, Any]:
+    """E9 (#91): benchmark-linked vs organic session coverage.
+
+    ``sessions_linked`` = sessions whose ``benchmark_run_dir`` was stamped by
+    ``correlate`` (``COUNT(col)`` counts non-NULL only); ``sessions_unlinked``
+    is the organic remainder; ``distinct_benchmark_attempts`` is how many
+    distinct attempt directories are linked — named for what the column
+    actually stores (the per-ATTEMPT dir, D-run-dir-granularity), NOT runs: a
+    run with N attempts contributes up to N. Backend-only summary — no Studio
+    UI in this slice."""
+    row = db.query_one(
+        f"""
+        SELECT COUNT(*),
+               COUNT({C.COL_BENCHMARK_RUN_DIR}),
+               COUNT(DISTINCT {C.COL_BENCHMARK_RUN_DIR})
+        FROM copilot_session
+        """
+    ) or (0, 0, 0)
+    total = int(row[0] or 0)
+    linked = int(row[1] or 0)
+    return {
+        "sessions_total": total,
+        "sessions_linked": linked,
+        "sessions_unlinked": total - linked,
+        "distinct_benchmark_attempts": int(row[2] or 0),
+    }
 
 
 def label_distribution(db: Database, rubric_name: str = "heuristic-v1") -> dict[str, Any]:

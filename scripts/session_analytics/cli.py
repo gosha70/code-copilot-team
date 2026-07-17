@@ -158,6 +158,20 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    p_cor = sub.add_parser(
+        "correlate",
+        help="Link benchmark run-record.json session_ids to analytics sessions (E9).",
+    )
+    p_cor.add_argument(
+        "--runs-root",
+        type=Path,
+        required=True,
+        help="Benchmark runs root to recursively scan for run-record.json files.",
+    )
+    p_cor.add_argument(
+        "--dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+    )
+
     p_watch = sub.add_parser(
         "watch", help="Loop incremental ingest() every --interval seconds (E6)."
     )
@@ -394,6 +408,64 @@ def _export_one(exp, db, table: str, fmt: str, dest: Path) -> None:
             exp.write_csv(db, table, fp)
 
 
+def _cmd_correlate(args: argparse.Namespace) -> int:
+    from . import correlate as cor
+    from .relational.db import Database, apply_ddl
+    from .relational.store import link_benchmark_run
+    from .setup_cmd import ensure_initialized
+
+    # Validate the runs-root BEFORE any DB work (FR-1): it must be an existing
+    # DIRECTORY — a plain file would rglob to nothing and masquerade as an
+    # all-zero success.
+    if not args.runs_root.is_dir():
+        print(
+            f"error: --runs-root is not a directory: {args.runs_root}",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+
+    if not ensure_initialized(args.dsn):
+        return C.EXIT_USAGE
+    cfg = load_config(dsn=args.dsn)
+    if not cfg.dsn:
+        print(
+            "error: no DSN configured. Run setup, pass --dsn, or set CCT_SA_DSN. "
+            "For a sqlite test run: --dsn sqlite:////tmp/sa.db",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+
+    try:
+        db = Database.connect(cfg.dsn)
+        try:
+            apply_ddl(db)
+
+            def link_fn(session_id: str, run_dir: str) -> bool:
+                return link_benchmark_run(db, C.COPILOT_CLAUDE_CODE, session_id, run_dir)
+
+            # This slice scopes linking to the claude-code backend: records
+            # from other backends are counted out_of_scope, never miscounted
+            # as unmatched claude-code sessions. The benchmark backend id is
+            # the same string as the copilot id.
+            stats = cor.correlate_links(
+                cor.iter_run_records(args.runs_root),
+                link_fn,
+                backend_id=C.COPILOT_CLAUDE_CODE,
+            )
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("correlate failed")
+        print(f"error: correlate failed: {exc}", file=sys.stderr)
+        return C.EXIT_RUNTIME
+
+    # GUARDRAIL: coverage gaps must be explicit, distinct, clearly-labeled
+    # lines — never collapsed into just a "linked N" summary. as_dict()
+    # serializes EVERY counter, so a future field can't silently vanish here.
+    print(json.dumps(stats.as_dict(), indent=2))
+    return C.EXIT_OK
+
+
 def _cmd_watch(args: argparse.Namespace) -> int:
     import threading
 
@@ -607,6 +679,7 @@ _HANDLERS = {
     "mcp": _cmd_mcp,
     "serve": _cmd_serve,
     "export": _cmd_export,
+    "correlate": _cmd_correlate,
     "watch": _cmd_watch,
 }
 
