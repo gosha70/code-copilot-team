@@ -203,6 +203,63 @@ def benchmark_correlation(db: Database) -> dict[str, Any]:
     }
 
 
+def benchmark_outcomes(db: Database) -> dict[str, Any]:
+    """E9 outcomes (#92): compare sessions BY benchmark result.
+
+    Grouped over ``benchmark_result`` by ``result`` (pass/fail/error/timeout;
+    ``(none)`` for rows whose score carried no result). Per group: ``attempts``
+    = all outcome rows; ``linked_sessions`` = DISTINCT sessions with a
+    resolved ``session_ref``; ``total_cost_usd`` = Σ of those DISTINCT linked
+    sessions' turn costs (D-aggregate-cost-source — NULL-safe like the E5
+    KPIs: unpriced turns excluded, unlinked attempts contribute NO cost);
+    ``avg_duration_seconds`` over distinct linked sessions only. Session-level
+    figures aggregate through ``SELECT DISTINCT (result, session_ref)`` so a
+    session referenced by MULTIPLE attempt rows (the tolerated
+    duplicate-session_id case) contributes its cost/duration exactly ONCE per
+    result bucket — never once per row (that fan-out would double-count)."""
+    attempts_by = {
+        r[0]: int(r[1])
+        for r in db.query(
+            f"SELECT result, COUNT(*) FROM {C.TBL_BENCHMARK_RESULT} GROUP BY result"
+        )
+    }
+    # Distinct (result, session) pairs drive every session-level figure; the
+    # per-session cost is pre-aggregated once (one grouped scan of
+    # copilot_turn), not re-computed per benchmark_result row.
+    session_by = {
+        r[0]: (int(r[1]), float(r[2] or 0), float(r[3] or 0))
+        for r in db.query(
+            f"""
+            SELECT dr.result, COUNT(*), SUM(sc.cost), AVG(s.duration_seconds)
+            FROM (
+                SELECT DISTINCT result, session_ref
+                FROM {C.TBL_BENCHMARK_RESULT}
+                WHERE session_ref IS NOT NULL
+            ) dr
+            JOIN copilot_session s ON s.id = dr.session_ref
+            LEFT JOIN (
+                SELECT session_id, SUM(cost_usd) AS cost
+                FROM copilot_turn GROUP BY session_id
+            ) sc ON sc.session_id = dr.session_ref
+            GROUP BY dr.result
+            """
+        )
+    }
+    by_result = [
+        {
+            "result": result if result is not None else "(none)",
+            "attempts": attempts,
+            "linked_sessions": session_by.get(result, (0, 0.0, 0.0))[0],
+            "total_cost_usd": session_by.get(result, (0, 0.0, 0.0))[1],
+            "avg_duration_seconds": session_by.get(result, (0, 0.0, 0.0))[2],
+        }
+        for result, attempts in sorted(
+            attempts_by.items(), key=lambda kv: kv[1], reverse=True
+        )
+    ]
+    return {"by_result": by_result}
+
+
 def label_distribution(db: Database, rubric_name: str = "heuristic-v1") -> dict[str, Any]:
     """Per-bool-label true-counts across all labeled turns."""
     from ..judge.rubric import load_rubric

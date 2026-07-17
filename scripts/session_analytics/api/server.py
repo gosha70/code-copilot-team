@@ -14,7 +14,7 @@ import logging
 from typing import Any, Optional
 
 from ..config import load_config
-from ..relational.db import Database
+from ..relational.db import Database, apply_ddl
 from . import dashboard
 from ..mcp import resources as mcp_resources
 from ..mcp import tools as mcp_tools
@@ -43,6 +43,21 @@ def create_app(dsn: str, kuzu_path: str = ""):
 
     def db() -> Database:
         return Database.connect(dsn)
+
+    # Schema readiness (E9 outcomes, #92): every CLI command runs apply_ddl,
+    # but the serve path opens bare per-request connections — an upgraded
+    # (pre-#92) DB would 500 on endpoints touching the new benchmark_result
+    # table. Apply the idempotent DDL once at app creation; a briefly
+    # unreachable DB is logged, not fatal (matching the old startup behavior —
+    # requests surface connection errors as before).
+    try:
+        _conn = db()
+        try:
+            apply_ddl(_conn)
+        finally:
+            _conn.close()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("startup apply_ddl skipped (db unreachable?): %s", exc)
 
     # ── models ─────────────────────────────────────────────────────────
     class CypherQuery(BaseModel):
@@ -163,7 +178,12 @@ def create_app(dsn: str, kuzu_path: str = ""):
     def dashboard_benchmark() -> dict[str, Any]:
         conn = db()
         try:
-            return dashboard.benchmark_correlation(conn)
+            # E9: correlation coverage (#91) + by-result outcomes (#92) in
+            # one payload; both stay independently unit-testable pure fns.
+            return {
+                **dashboard.benchmark_correlation(conn),
+                **dashboard.benchmark_outcomes(conn),
+            }
         finally:
             conn.close()
 

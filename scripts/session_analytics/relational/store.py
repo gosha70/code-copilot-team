@@ -315,14 +315,88 @@ def link_benchmark_run(db: Database, copilot: str, session_id: str, run_dir: str
     by construction). Returns whether a row was affected: ``False`` means no
     session with that ``(copilot, session_id)`` exists yet (counted as
     ``unmatched`` by the caller — see ``correlate.correlate_links``).
+
+    Transaction ownership (E9 outcomes, #92 / FR-4): this does NOT commit —
+    the caller owns the transaction and commits once per scan (``_cmd_
+    correlate``), not once per record.
     """
     cur = db.execute(
         f"UPDATE copilot_session SET {C.COL_BENCHMARK_RUN_DIR} = ? "
         "WHERE copilot = ? AND session_id = ?",
         (run_dir, copilot, session_id),
     )
-    db.commit()
     return cur.rowcount > 0
+
+
+def upsert_benchmark_result(
+    db: Database,
+    run_dir: str,
+    score,  # correlate.Score (duck-typed to avoid a store→correlate import)
+    *,
+    copilot: Optional[str] = None,
+    session_id: Optional[str] = None,
+    ingested_at: Optional[str] = None,
+) -> None:
+    """E9 outcomes (#92): upsert one attempt's outcome row.
+
+    Keyed by ``UNIQUE(run_dir)`` (D-upsert-key — the same resolve()d attempt
+    dir the link stamps); re-running a scan updates the row in place, never
+    duplicates it. ``session_ref`` is resolved here via the SAME
+    ``(copilot, session_id)`` equi-join the link uses — NULL when either part
+    is absent (organic / out-of-scope-backend / unmatched attempts). Fully
+    parameterized; does NOT commit (caller-owned transaction, FR-4).
+    """
+    session_ref = None
+    if copilot and session_id:
+        row = db.query_one(
+            "SELECT id FROM copilot_session WHERE copilot = ? AND session_id = ?",
+            (copilot, session_id),
+        )
+        session_ref = row[0] if row else None
+    db.execute(
+        f"""
+        INSERT INTO {C.TBL_BENCHMARK_RESULT}
+            (run_dir, benchmark_id, task_id, backend_id, run_id, attempt,
+             result, tests_passed, lint_passed, typecheck_passed,
+             elapsed_seconds, files_changed, lines_added, lines_removed,
+             session_ref, ingested_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (run_dir) DO UPDATE SET
+            benchmark_id=excluded.benchmark_id,
+            task_id=excluded.task_id,
+            backend_id=excluded.backend_id,
+            run_id=excluded.run_id,
+            attempt=excluded.attempt,
+            result=excluded.result,
+            tests_passed=excluded.tests_passed,
+            lint_passed=excluded.lint_passed,
+            typecheck_passed=excluded.typecheck_passed,
+            elapsed_seconds=excluded.elapsed_seconds,
+            files_changed=excluded.files_changed,
+            lines_added=excluded.lines_added,
+            lines_removed=excluded.lines_removed,
+            session_ref=excluded.session_ref,
+            ingested_at=excluded.ingested_at
+        """,
+        (
+            run_dir,
+            score.benchmark_id,
+            score.task_id,
+            score.backend_id,
+            score.run_id,
+            score.attempt,
+            score.result,
+            score.tests_passed,
+            score.lint_passed,
+            score.typecheck_passed,
+            score.elapsed_seconds,
+            score.files_changed,
+            score.lines_added,
+            score.lines_removed,
+            session_ref,
+            ingested_at,
+        ),
+    )
 
 
 def _duration_seconds(started_at: Optional[str], ended_at: Optional[str]) -> Optional[int]:

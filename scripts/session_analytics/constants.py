@@ -100,10 +100,12 @@ EXPORT_TABLE_SESSIONS = "sessions"
 EXPORT_TABLE_TURNS = "turns"
 EXPORT_TABLE_LABELS = "labels"
 EXPORT_TABLE_KPIS = "kpis"
+EXPORT_TABLE_BENCHMARK_RESULTS = "benchmark_results"  # E9 outcomes (#92)
 EXPORT_TABLE_ALL = "all"
 # The actual queryable tables (i.e. everything except the "all" pseudo-table).
 EXPORT_DATA_TABLES = (
     EXPORT_TABLE_SESSIONS, EXPORT_TABLE_TURNS, EXPORT_TABLE_LABELS, EXPORT_TABLE_KPIS,
+    EXPORT_TABLE_BENCHMARK_RESULTS,
 )
 EXPORT_TABLES = EXPORT_DATA_TABLES + (EXPORT_TABLE_ALL,)
 
@@ -123,3 +125,29 @@ RUN_RECORD_SESSION_ID_PATH = ("backend", "metadata", "session_id")
 # claude-code backend writes the same string as COPILOT_CLAUDE_CODE, so the
 # CLI scopes the link to records whose backend_id matches that constant.
 RUN_RECORD_BACKEND_ID_KEY = "backend_id"
+
+# ── Benchmark outcomes (E9 outcome slice, issue #92) ───────────────────
+# score.json sits next to run-record.json in each attempt dir (writer:
+# scripts/benchmark_runner/run.py; schema: benchmarks/schema/score.schema.json).
+SCORE_FILENAME = "score.json"
+# The classifier's closed result vocabulary — a value outside this set is a
+# MALFORMED score (strict-reject, D-parse-strictness), not a new category.
+SCORE_RESULTS = ("pass", "fail", "error", "timeout")
+TBL_BENCHMARK_RESULT = "benchmark_result"
+# score.json field keys. These cross the benchmark_runner → session_analytics
+# boundary (run.py writes them; correlate.py reads them), so per the repo's
+# constants rule they live here once — same treatment as RUN_RECORD_* above.
+SCORE_KEY_BENCHMARK_ID = "benchmark_id"
+SCORE_KEY_TASK_ID = "task_id"
+SCORE_KEY_RUN_ID = "run_id"
+SCORE_KEY_ATTEMPT = "attempt"
+SCORE_KEY_RESULT = "result"
+SCORE_KEY_SCORES = "scores"
+SCORE_KEY_DERIVED = "derived"
+SCORE_KEY_TESTS_PASSED = "tests_passed"
+SCORE_KEY_LINT_PASSED = "lint_passed"
+SCORE_KEY_TYPECHECK_PASSED = "typecheck_passed"
+SCORE_KEY_ELAPSED_SECONDS = "elapsed_seconds"
+SCORE_KEY_FILES_CHANGED = "files_changed"
+SCORE_KEY_LINES_ADDED = "lines_added"
+SCORE_KEY_LINES_REMOVED = "lines_removed"

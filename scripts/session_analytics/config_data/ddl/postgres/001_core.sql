@@ -104,6 +104,33 @@ CREATE TABLE IF NOT EXISTS copilot_error (
     is_recovered  BOOLEAN NOT NULL DEFAULT FALSE
 );
 
+-- E9 outcomes (#92): one row per benchmark attempt directory, written by
+-- ``correlate`` from the attempt's score.json. Carries the STABLE identity
+-- (benchmark_id/task_id/backend_id/run_id/attempt — survives runs-tree
+-- pruning) alongside the outcome; ``session_ref`` is the linked analytics
+-- session (NULL for unmatched / out-of-scope-backend attempts). New table
+-- (not new columns) on purpose: apply_ddl's CREATE IF NOT EXISTS re-run
+-- lands it on existing databases with no migration.
+CREATE TABLE IF NOT EXISTS benchmark_result (
+    id                {PK},
+    run_dir           VARCHAR(1000) NOT NULL UNIQUE,
+    benchmark_id      VARCHAR(100),
+    task_id           VARCHAR(200),
+    backend_id        VARCHAR(50),
+    run_id            VARCHAR(50),
+    attempt           INTEGER,
+    result            VARCHAR(20),
+    tests_passed      BOOLEAN,
+    lint_passed       BOOLEAN,
+    typecheck_passed  BOOLEAN,
+    elapsed_seconds   DOUBLE PRECISION,
+    files_changed     INTEGER,
+    lines_added       INTEGER,
+    lines_removed     INTEGER,
+    session_ref       BIGINT REFERENCES copilot_session(id),
+    ingested_at       TEXT
+);
+
 -- Incremental-ingest bookkeeping.
 CREATE TABLE IF NOT EXISTS ingest_state (
     id               {PK},
