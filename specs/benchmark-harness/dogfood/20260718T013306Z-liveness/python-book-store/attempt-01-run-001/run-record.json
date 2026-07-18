@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "aider-polyglot",
+  "task_id": "python/book-store",
+  "backend_id": "claude-code",
+  "run_id": "run-001",
+  "attempt": 1,
+  "started_at": "2026-07-18T01:36:59Z",
+  "finished_at": "2026-07-18T01:38:00Z",
+  "isolation": {
+    "tier": "worktree+venv",
+    "python": "python3",
+    "install_command": "pip install pytest",
+    "verify_imports": [
+      "pytest"
+    ]
+  },
+  "backend_invocation": {
+    "model": "sonnet",
+    "temperature": 0.0,
+    "seed": null
+  },
+  "prompt": {
+    "path": "prompt.md",
+    "sha256": "d3dc05f5b4afe3d230ff55d3b9648e7868d17353df94d899a1091b3dc6f488a7"
+  },
+  "effective_prompt": null,
+  "model_output_path": null,
+  "backend": {
+    "error": null,
+    "metadata": {
+      "family": "claude-code",
+      "model": "sonnet",
+      "claude_code_invocation": "launcher",
+      "effort": null,
+      "timeout_seconds": 600,
+      "provider_endpoint": null,
+      "anthropic_auth_token_present": false,
+      "session_id": null,
+      "exit_code": 0,
+      "stderr_tail": ""
+    }
+  }
+}

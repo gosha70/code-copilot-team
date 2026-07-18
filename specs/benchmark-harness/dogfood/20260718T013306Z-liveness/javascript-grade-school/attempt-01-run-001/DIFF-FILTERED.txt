@@ -1,0 +1,3 @@
+diff.patch filtered to SOURCE-ONLY sections. Removed: all node_modules/ sections, 'Only in ... node_modules' lines, and the generated package-lock.json section (npm install materialized these in the worktree; the raw diff -urN patch was ~79 MB).
+
+NOTE: score.json's derived diff counts (files_changed / lines_added / lines_removed) were computed by the harness over the RAW worktree diff and therefore include this install noise (e.g. files_changed=21406, lines_added>1M). Those counts were NOT used for the Gate 1 judgment — the verdict rests on the verify step's test execution (tests_passed).

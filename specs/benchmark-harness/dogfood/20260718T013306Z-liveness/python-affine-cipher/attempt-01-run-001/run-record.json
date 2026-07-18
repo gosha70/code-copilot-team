@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "aider-polyglot",
+  "task_id": "python/affine-cipher",
+  "backend_id": "claude-code",
+  "run_id": "run-001",
+  "attempt": 1,
+  "started_at": "2026-07-18T01:36:35Z",
+  "finished_at": "2026-07-18T01:36:59Z",
+  "isolation": {
+    "tier": "worktree+venv",
+    "python": "python3",
+    "install_command": "pip install pytest",
+    "verify_imports": [
+      "pytest"
+    ]
+  },
+  "backend_invocation": {
+    "model": "sonnet",
+    "temperature": 0.0,
+    "seed": null
+  },
+  "prompt": {
+    "path": "prompt.md",
+    "sha256": "137121ca2e701488a637adf24cb025588f75bacfcba0cbc97dd73524cc1eda1f"
+  },
+  "effective_prompt": null,
+  "model_output_path": null,
+  "backend": {
+    "error": null,
+    "metadata": {
+      "family": "claude-code",
+      "model": "sonnet",
+      "claude_code_invocation": "launcher",
+      "effort": null,
+      "timeout_seconds": 600,
+      "provider_endpoint": null,
+      "anthropic_auth_token_present": false,
+      "session_id": null,
+      "exit_code": 0,
+      "stderr_tail": ""
+    }
+  }
+}

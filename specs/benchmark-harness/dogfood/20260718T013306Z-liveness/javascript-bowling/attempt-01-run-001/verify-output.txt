@@ -1,0 +1,40 @@
+PASS ./bowling.spec.js
+  Bowling
+    Check game can be scored correctly.
+      ✓ should be able to score a game with all zeros (4 ms)
+      ○ skipped should be able to score a game with no strikes or spares
+      ○ skipped a spare followed by zeros is worth ten points
+      ○ skipped points scored in the roll after a spare are counted twice
+      ○ skipped consecutive spares each get a one roll bonus
+      ○ skipped a spare in the last frame gets a one roll bonus that is counted once
+      ○ skipped a strike earns ten points in a frame with a single roll
+      ○ skipped points scored in the two rolls after a strike are counted twice as a bonus
+      ○ skipped consecutive strikes each get the two roll bonus
+      ○ skipped a strike in the last frame gets a two roll bonuses that is counted once
+      ○ skipped rolling a spare with the two roll bonus does not get a bonus roll
+      ○ skipped strikes with the two roll bonus do not get bonus rolls
+      ○ skipped a strike with the one roll bonus after a spare in the last frame does not get a bonus
+      ○ skipped all strikes is a perfect game
+    Check game rules.
+      ○ skipped rolls cannot score negative points
+      ○ skipped a roll cannot score more than 10 points
+      ○ skipped two rolls in a frame cannot score more than 10 points
+      ○ skipped bonus roll after a strike in the last frame cannot score more than 10 points
+      ○ skipped two bonus rolls after a strike in the last frame cannot score more than 10 points
+      ○ skipped two bonus rolls after a strike in the last frame can score more than 10 points if one is a strike
+      ○ skipped the second bonus rolls after a strike in the last frame cannot be a strike if the first one is not a strike
+      ○ skipped second bonus roll after a strike in the last frame cannot score more than 10 points
+      ○ skipped an unstarted game cannot be scored
+      ○ skipped an incomplete game cannot be scored
+      ○ skipped cannot roll if game already has ten frames
+      ○ skipped bonus rolls for a strike in the last frame must be rolled before score can be calculated
+      ○ skipped both bonus rolls for a strike in the last frame must be rolled before score can be calculated
+      ○ skipped bonus roll for a spare in the last frame must be rolled before score can be calculated
+      ○ skipped cannot roll after bonus roll for spare
+      ○ skipped cannot roll after bonus rolls for strike
+
+Test Suites: 1 passed, 1 total
+Tests:       29 skipped, 1 passed, 30 total
+Snapshots:   0 total
+Time:        1.219 s
+Ran all test suites matching /.\/babel.config.js|.\/bowling.js|.\/bowling.spec.js|.\/LICENSE|.\/node_modules|.\/package-lock.json|.\/package.json/i.

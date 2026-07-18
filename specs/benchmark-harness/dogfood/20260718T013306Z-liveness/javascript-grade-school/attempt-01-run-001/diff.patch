@@ -1,0 +1,42 @@
+diff -urN -x .venv /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/javascript-grade-school/attempt-01-run-001/prepared/grade-school.js /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/javascript-grade-school/attempt-01-run-001/worktree/grade-school.js
+--- /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/javascript-grade-school/attempt-01-run-001/prepared/grade-school.js	2026-05-15 11:22:48
++++ /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/javascript-grade-school/attempt-01-run-001/worktree/grade-school.js	2026-07-17 21:36:07
+@@ -4,15 +4,33 @@
+ //
+ 
+ export class GradeSchool {
++  constructor() {
++    this.students = new Map();
++  }
++
+   roster() {
+-    throw new Error('Remove this statement and implement this function');
++    const result = {};
++    for (const grade of [...this.students.keys()].sort((a, b) => a - b)) {
++      result[grade] = this.grade(grade);
++    }
++    return result;
+   }
+ 
+-  add() {
+-    throw new Error('Remove this statement and implement this function');
++  add(name, grade) {
++    for (const names of this.students.values()) {
++      if (names.includes(name)) {
++        return;
++      }
++    }
++
++    if (!this.students.has(grade)) {
++      this.students.set(grade, []);
++    }
++    this.students.get(grade).push(name);
+   }
+ 
+-  grade() {
+-    throw new Error('Remove this statement and implement this function');
++  grade(grade) {
++    const names = this.students.get(grade) || [];
++    return [...names].sort();
+   }
+ }

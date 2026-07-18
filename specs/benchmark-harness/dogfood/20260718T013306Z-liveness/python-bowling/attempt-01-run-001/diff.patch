@@ -1,0 +1,144 @@
+diff -urN -x .venv /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/.pytest_cache/.gitignore /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/.pytest_cache/.gitignore
+--- /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/.pytest_cache/.gitignore	1969-12-31 19:00:00
++++ /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/.pytest_cache/.gitignore	2026-07-17 21:40:08
+@@ -0,0 +1,2 @@
++# Created by pytest automatically.
++*
+diff -urN -x .venv /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/.pytest_cache/CACHEDIR.TAG /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/.pytest_cache/CACHEDIR.TAG
+--- /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/.pytest_cache/CACHEDIR.TAG	1969-12-31 19:00:00
++++ /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/.pytest_cache/CACHEDIR.TAG	2026-07-17 21:40:08
+@@ -0,0 +1,4 @@
++Signature: 8a477f597d28d172789f06886806bc55
++# This file is a cache directory tag created by pytest.
++# For information about cache directory tags, see:
++#	https://bford.info/cachedir/spec.html
+diff -urN -x .venv /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/.pytest_cache/README.md /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/.pytest_cache/README.md
+--- /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/.pytest_cache/README.md	1969-12-31 19:00:00
++++ /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/.pytest_cache/README.md	2026-07-17 21:40:08
+@@ -0,0 +1,8 @@
++# pytest cache directory #
++
++This directory contains data from the pytest's cache plugin,
++which provides the `--lf` and `--ff` options, as well as the `cache` fixture.
++
++**Do not** commit this to version control.
++
++See [the docs](https://docs.pytest.org/en/stable/how-to/cache.html) for more information.
+diff -urN -x .venv /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/.pytest_cache/v/cache/nodeids /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/.pytest_cache/v/cache/nodeids
+--- /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/.pytest_cache/v/cache/nodeids	1969-12-31 19:00:00
++++ /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/.pytest_cache/v/cache/nodeids	2026-07-17 21:40:12
+@@ -0,0 +1,33 @@
++[
++  "bowling_test.py::BowlingTest::test_a_roll_cannot_score_more_than_10_points",
++  "bowling_test.py::BowlingTest::test_a_spare_followed_by_zeros_is_worth_ten_points",
++  "bowling_test.py::BowlingTest::test_a_spare_in_the_last_frame_gets_a_one_roll_bonus_that_is_counted_once",
++  "bowling_test.py::BowlingTest::test_a_strike_earns_ten_points_in_a_frame_with_a_single_roll",
++  "bowling_test.py::BowlingTest::test_a_strike_in_the_last_frame_gets_a_two_roll_bonus_that_is_counted_once",
++  "bowling_test.py::BowlingTest::test_a_strike_with_the_one_roll_bonus_after_a_spare_in_the_last_frame_does_not_get_a_bonus",
++  "bowling_test.py::BowlingTest::test_all_strikes_is_a_perfect_game",
++  "bowling_test.py::BowlingTest::test_an_incomplete_game_cannot_be_scored",
++  "bowling_test.py::BowlingTest::test_an_unstarted_game_cannot_be_scored",
++  "bowling_test.py::BowlingTest::test_bonus_roll_after_a_strike_in_the_last_frame_cannot_score_more_than_10_points",
++  "bowling_test.py::BowlingTest::test_bonus_roll_for_a_spare_in_the_last_frame_must_be_rolled_before_score_can_be_calculated",
++  "bowling_test.py::BowlingTest::test_bonus_rolls_for_a_strike_in_the_last_frame_must_be_rolled_before_score_can_be_calculated",
++  "bowling_test.py::BowlingTest::test_both_bonus_rolls_for_a_strike_in_the_last_frame_must_be_rolled_before_score_can_be_calculated",
++  "bowling_test.py::BowlingTest::test_cannot_roll_after_bonus_roll_for_spare",
++  "bowling_test.py::BowlingTest::test_cannot_roll_after_bonus_rolls_for_strike",
++  "bowling_test.py::BowlingTest::test_cannot_roll_if_game_already_has_ten_frames",
++  "bowling_test.py::BowlingTest::test_consecutive_spares_each_get_a_one_roll_bonus",
++  "bowling_test.py::BowlingTest::test_consecutive_strikes_each_get_the_two_roll_bonus",
++  "bowling_test.py::BowlingTest::test_last_two_strikes_followed_by_only_last_bonus_with_non_strike_points",
++  "bowling_test.py::BowlingTest::test_points_scored_in_the_roll_after_a_spare_are_counted_twice",
++  "bowling_test.py::BowlingTest::test_points_scored_in_the_two_rolls_after_a_strike_are_counted_twice_as_a_bonus",
++  "bowling_test.py::BowlingTest::test_rolling_a_spare_with_the_two_roll_bonus_does_not_get_a_bonus_roll",
++  "bowling_test.py::BowlingTest::test_rolls_cannot_score_negative_points",
++  "bowling_test.py::BowlingTest::test_second_bonus_roll_after_a_strike_in_the_last_frame_cannot_score_more_than_10_points",
++  "bowling_test.py::BowlingTest::test_should_be_able_to_score_a_game_with_all_zeros",
++  "bowling_test.py::BowlingTest::test_should_be_able_to_score_a_game_with_no_strikes_or_spares",
++  "bowling_test.py::BowlingTest::test_strikes_with_the_two_roll_bonus_do_not_get_bonus_rolls",
++  "bowling_test.py::BowlingTest::test_the_second_bonus_rolls_after_a_strike_in_the_last_frame_cannot_be_a_strike_if_the_first_one_is_not_a_strike",
++  "bowling_test.py::BowlingTest::test_two_bonus_rolls_after_a_strike_in_the_last_frame_can_score_more_than_10_points_if_one_is_a_strike",
++  "bowling_test.py::BowlingTest::test_two_bonus_rolls_after_a_strike_in_the_last_frame_cannot_score_more_than_10_points",
++  "bowling_test.py::BowlingTest::test_two_rolls_in_a_frame_cannot_score_more_than_10_points"
++]
+\ No newline at end of file
+Binary files /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/__pycache__/bowling.cpython-313.pyc and /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/__pycache__/bowling.cpython-313.pyc differ
+Binary files /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/__pycache__/bowling_test.cpython-313-pytest-9.0.3.pyc and /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/__pycache__/bowling_test.cpython-313-pytest-9.0.3.pyc differ
+Binary files /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/__pycache__/bowling_test.cpython-313-pytest-9.1.1.pyc and /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/__pycache__/bowling_test.cpython-313-pytest-9.1.1.pyc differ
+diff -urN -x .venv /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/bowling.py /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/bowling.py
+--- /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/prepared/bowling.py	2026-05-15 11:22:48
++++ /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/python-bowling/attempt-01-run-001/worktree/bowling.py	2026-07-17 21:40:04
+@@ -1,9 +1,70 @@
+ class BowlingGame:
+     def __init__(self):
+-        pass
++        self._frames = []
++        self._current_frame_rolls = []
++        self._game_over = False
+ 
+     def roll(self, pins):
+-        pass
++        if self._game_over:
++            raise IndexError("cannot roll after game is over")
++        if not 0 <= pins <= 10:
++            raise ValueError("invalid number of pins")
+ 
++        if len(self._frames) < 9:
++            self._roll_regular_frame(pins)
++        else:
++            self._roll_tenth_frame(pins)
++
++    def _roll_regular_frame(self, pins):
++        self._current_frame_rolls.append(pins)
++        if len(self._current_frame_rolls) == 1:
++            if pins == 10:
++                self._frames.append(self._current_frame_rolls)
++                self._current_frame_rolls = []
++        else:
++            if sum(self._current_frame_rolls) > 10:
++                self._current_frame_rolls.pop()
++                raise ValueError("two rolls in a frame cannot score more than 10 points")
++            self._frames.append(self._current_frame_rolls)
++            self._current_frame_rolls = []
++
++    def _roll_tenth_frame(self, pins):
++        self._current_frame_rolls.append(pins)
++        rolls = self._current_frame_rolls
++
++        if len(rolls) == 2:
++            if rolls[0] != 10 and sum(rolls) > 10:
++                rolls.pop()
++                raise ValueError("two rolls in a frame cannot score more than 10 points")
++            if rolls[0] != 10 and sum(rolls) < 10:
++                self._finish_tenth_frame()
++        elif len(rolls) == 3:
++            if rolls[0] == 10 and rolls[1] != 10 and rolls[1] + rolls[2] > 10:
++                rolls.pop()
++                raise ValueError("invalid fill balls")
++            self._finish_tenth_frame()
++
++    def _finish_tenth_frame(self):
++        self._frames.append(self._current_frame_rolls)
++        self._current_frame_rolls = []
++        self._game_over = True
++
+     def score(self):
+-        pass
++        if not self._game_over:
++            raise IndexError("score cannot be taken until the end of the game")
++
++        flat = [pins for frame in self._frames for pins in frame]
++        total = 0
++        pos = 0
++        for frame in self._frames[:9]:
++            if frame[0] == 10:
++                total += 10 + flat[pos + 1] + flat[pos + 2]
++                pos += 1
++            elif sum(frame) == 10:
++                total += 10 + flat[pos + 2]
++                pos += 2
++            else:
++                total += sum(frame)
++                pos += 2
++        total += sum(self._frames[9])
++        return total

@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "cct-dogfood-memkernel",
+  "task_id": "memory-brain-spec",
+  "backend_id": "claude-code",
+  "run_id": "run-002",
+  "attempt": 1,
+  "started_at": "2026-07-18T02:09:53Z",
+  "finished_at": "2026-07-18T02:11:42Z",
+  "isolation": {
+    "tier": "worktree+venv",
+    "python": "python3",
+    "install_command": "pip install ruff mypy pytest pytest-asyncio",
+    "verify_imports": [
+      "pytest",
+      "ruff",
+      "mypy"
+    ]
+  },
+  "backend_invocation": {
+    "model": "sonnet",
+    "temperature": 0.0,
+    "seed": null
+  },
+  "prompt": {
+    "path": "prompt.md",
+    "sha256": "d0f2cb5b37236559a9b7f6311b5a7d2f3bf8926ab682ef93bbdc1b1fb1e69002"
+  },
+  "effective_prompt": null,
+  "model_output_path": null,
+  "backend": {
+    "error": null,
+    "metadata": {
+      "family": "claude-code",
+      "model": "sonnet",
+      "claude_code_invocation": "launcher",
+      "effort": null,
+      "timeout_seconds": 900,
+      "provider_endpoint": null,
+      "anthropic_auth_token_present": false,
+      "session_id": null,
+      "exit_code": 0,
+      "stderr_tail": ""
+    }
+  }
+}

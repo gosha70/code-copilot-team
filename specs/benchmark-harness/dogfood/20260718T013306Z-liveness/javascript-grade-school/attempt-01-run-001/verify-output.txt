@@ -1,0 +1,18 @@
+PASS ./grade-school.spec.js
+  School
+    ✓ a new school has an empty roster (4 ms)
+    ○ skipped adding a student adds them to the roster for the given grade
+    ○ skipped adding more students to the same grade adds them to the roster
+    ○ skipped adding students to different grades adds them to the roster
+    ○ skipped grade returns the students in that grade in alphabetical order
+    ○ skipped grade returns an empty array if there are no students in that grade
+    ○ skipped the students names in each grade in the roster are sorted
+    ○ skipped roster cannot be modified outside of module
+    ○ skipped roster cannot be modified outside of module using grade()
+    ○ skipped a student can't be in two different grades
+
+Test Suites: 1 passed, 1 total
+Tests:       9 skipped, 1 passed, 10 total
+Snapshots:   0 total
+Time:        0.949 s, estimated 1 s
+Ran all test suites matching /.\/babel.config.js|.\/grade-school.js|.\/grade-school.spec.js|.\/LICENSE|.\/node_modules|.\/package-lock.json|.\/package.json/i.

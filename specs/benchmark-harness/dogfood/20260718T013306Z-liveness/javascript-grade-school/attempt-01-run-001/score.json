@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "aider-polyglot",
+  "task_id": "javascript/grade-school",
+  "backend_id": "claude-code",
+  "run_id": "run-001",
+  "attempt": 1,
+  "scores": {
+    "tests_passed": true,
+    "lint_passed": null,
+    "typecheck_passed": null,
+    "required_files_present": true,
+    "timeout": false,
+    "human_interventions": 0
+  },
+  "derived": {
+    "elapsed_seconds": 62.1414,
+    "files_changed": 21406,
+    "lines_added": 1061145,
+    "lines_removed": 0,
+    "failed_commands": 0
+  },
+  "result": "pass"
+}
