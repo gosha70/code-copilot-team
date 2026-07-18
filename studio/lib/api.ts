@@ -111,10 +111,30 @@ export interface ProjectRedactionRow {
   effective_redaction_mode: string;
 }
 
+// E9 (#96): GET /api/dashboard/benchmark — correlation coverage (#91) +
+// by-result outcome comparison (#92). Mirrors the server payload exactly;
+// the Studio never re-derives these figures client-side.
+export interface BenchmarkResultRow {
+  result: string;
+  attempts: number;
+  linked_sessions: number;
+  total_cost_usd: number;
+  avg_duration_seconds: number;
+}
+
+export interface BenchmarkSummary {
+  sessions_total: number;
+  sessions_linked: number;
+  sessions_unlinked: number;
+  distinct_benchmark_attempts: number;
+  by_result: BenchmarkResultRow[];
+}
+
 export const api = {
   dashboard: () => get<DashboardKpis>("/api/dashboard/kpis"),
   labels: () => get<{ labels: { label: string; true: number; total: number }[] }>("/api/dashboard/labels"),
   costByOutcome: () => get<CostByOutcome>("/api/dashboard/cost"),
+  benchmark: () => get<BenchmarkSummary>("/api/dashboard/benchmark"),
   sessions: (query = "", copilot = "") =>
     get<{ sessions: SessionRow[] }>(
       `/api/sessions?query=${encodeURIComponent(query)}&copilot=${encodeURIComponent(copilot)}`,

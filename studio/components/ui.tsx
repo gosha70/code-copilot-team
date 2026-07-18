@@ -37,6 +37,12 @@ const BADGE_COLORS: Record<string, string> = {
   question: "bg-purple-100 text-purple-800",
   correction: "bg-amber-100 text-amber-900",
   rework: "bg-rose-100 text-rose-800",
+  // E9 (#96): benchmark result classes (server's closed vocabulary;
+  // "(none)" falls through to the default slate).
+  pass: "bg-green-100 text-green-800",
+  fail: "bg-rose-100 text-rose-800",
+  error: "bg-amber-100 text-amber-900",
+  timeout: "bg-purple-100 text-purple-800",
 };
 
 export function Badge({ kind, children }: { kind: string; children: React.ReactNode }) {
@@ -109,6 +115,18 @@ export function useApi<T>(
 export function formatCost(usd: number | null | undefined): string {
   if (usd === null || usd === undefined) return "—";
   return `$${usd.toFixed(usd < 1 ? 4 : 2)}`;
+}
+
+/** Humanized duration (E9, #96): "—" for unavailable (null/zero — some
+ * endpoints coerce SQL NULL to 0), "<1s" for sub-second, "Xs" / "Xm Ys"
+ * otherwise. Lives beside formatCost so duration rendering can't fork
+ * per-page. */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (!seconds || seconds <= 0) return "—";
+  const s = Math.round(seconds);
+  if (s === 0) return "<1s";
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
 export function Loading() {

@@ -13,6 +13,7 @@ const TABS = [
   { href: "/sessions", label: "Sessions" },
   { href: "/graph", label: "Knowledge Graph" },
   { href: "/analysis", label: "Analysis" },
+  { href: "/benchmark", label: "Benchmark" },
   { href: "/agents", label: "Agents" },
   { href: "/settings", label: "Settings" },
 ];
