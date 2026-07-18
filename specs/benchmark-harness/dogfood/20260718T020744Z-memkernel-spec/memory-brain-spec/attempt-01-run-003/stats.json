@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "elapsed_seconds": 114.6306,
+  "tokens_input": null,
+  "tokens_output": null,
+  "cache_read_tokens": null,
+  "cache_write_tokens": null,
+  "tool_calls": {},
+  "temperature": 0.0,
+  "seed": null,
+  "cost_reporting": {
+    "enabled": false,
+    "reason": "billing-correlation pending"
+  }
+}

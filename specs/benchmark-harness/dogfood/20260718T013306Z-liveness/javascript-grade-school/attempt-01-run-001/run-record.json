@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "aider-polyglot",
+  "task_id": "javascript/grade-school",
+  "backend_id": "claude-code",
+  "run_id": "run-001",
+  "attempt": 1,
+  "started_at": "2026-07-18T01:35:33Z",
+  "finished_at": "2026-07-18T01:36:35Z",
+  "isolation": {
+    "tier": "worktree"
+  },
+  "backend_invocation": {
+    "model": "sonnet",
+    "temperature": 0.0,
+    "seed": null
+  },
+  "prompt": {
+    "path": "prompt.md",
+    "sha256": "66ac024c8e2e787200c2b35f89d4dcda1bf71d9ee325f9b56c9df35a13856642"
+  },
+  "effective_prompt": null,
+  "model_output_path": null,
+  "backend": {
+    "error": null,
+    "metadata": {
+      "family": "claude-code",
+      "model": "sonnet",
+      "claude_code_invocation": "launcher",
+      "effort": null,
+      "timeout_seconds": 600,
+      "provider_endpoint": null,
+      "anthropic_auth_token_present": false,
+      "session_id": null,
+      "exit_code": 0,
+      "stderr_tail": ""
+    }
+  }
+}

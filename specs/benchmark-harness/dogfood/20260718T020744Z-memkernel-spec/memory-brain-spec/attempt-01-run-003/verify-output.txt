@@ -1,0 +1,15 @@
+✓ spec_exists: specs/memory-brain/spec.md present
+✓ section: Problem Statement
+✓ section: Proposed Architecture
+✓ section: Memory Tier Model
+✓ section: Lifecycle State Machine
+✓ section: Routing Layer
+✓ section: Synthesis Port
+✓ section: Acceptance Criteria
+✓ pyproject_unchanged: no new dependencies
+✓ mcp_unchanged: no new MCP code
+- ruff: not installed in venv
+- mypy: not installed in venv
+- pytest: runtime deps missing (collection errors)
+
+[verify] PASS=10 FAIL=0 SKIP=3

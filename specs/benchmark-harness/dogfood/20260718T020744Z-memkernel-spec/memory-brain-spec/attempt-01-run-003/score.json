@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "cct-dogfood-memkernel",
+  "task_id": "memory-brain-spec",
+  "backend_id": "claude-code",
+  "run_id": "run-003",
+  "attempt": 1,
+  "scores": {
+    "tests_passed": true,
+    "lint_passed": null,
+    "typecheck_passed": null,
+    "required_files_present": true,
+    "timeout": false,
+    "human_interventions": 0
+  },
+  "derived": {
+    "elapsed_seconds": 114.6306,
+    "files_changed": 41,
+    "lines_added": 274,
+    "lines_removed": 0,
+    "failed_commands": 0
+  },
+  "result": "pass"
+}

@@ -1,0 +1,99 @@
+diff -urN -x .venv /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/javascript-bowling/attempt-01-run-001/prepared/bowling.js /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/javascript-bowling/attempt-01-run-001/worktree/bowling.js
+--- /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/javascript-bowling/attempt-01-run-001/prepared/bowling.js	2026-05-15 11:22:48
++++ /private/tmp/claude-501/-Users-gosha-dev-repo-code-copilot-team/dfbd9d13-d768-4659-87ed-835bc1451d4a/scratchpad/gate1-liveness/20260718T013306Z-aider-polyglot-claude-code-001/javascript-bowling/attempt-01-run-001/worktree/bowling.js	2026-07-17 21:35:04
+@@ -1,14 +1,90 @@
+ //
+-// This is only a SKELETON file for the 'Bowling' exercise. It's been provided as a
+-// convenience to get you started writing code faster.
++// This is a solution to the 'Bowling' exercise.
+ //
+ 
+ export class Bowling {
+-  roll() {
+-    throw new Error('Remove this statement and implement this function');
++  constructor() {
++    this.rolls = [];
++    this.frame = 1;
++    this.frameRolls = [];
++    this.gameOver = false;
+   }
+ 
++  roll(pins) {
++    if (pins < 0) {
++      throw new Error("Negative roll is invalid");
++    }
++    if (pins > 10) {
++      throw new Error("Pin count exceeds pins on the lane");
++    }
++    if (this.gameOver) {
++      throw new Error("Cannot roll after game is over");
++    }
++
++    if (this.frame < 10) {
++      const frameTotal = this.frameRolls.reduce((sum, roll) => sum + roll, 0);
++      if (frameTotal + pins > 10) {
++        throw new Error("Pin count exceeds pins on the lane");
++      }
++
++      this.frameRolls.push(pins);
++      this.rolls.push(pins);
++
++      if (pins === 10 || this.frameRolls.length === 2) {
++        this.frame += 1;
++        this.frameRolls = [];
++      }
++      return;
++    }
++
++    const [first, second] = this.frameRolls;
++    if (this.frameRolls.length === 1 && first !== 10 && first + pins > 10) {
++      throw new Error("Pin count exceeds pins on the lane");
++    }
++    if (
++      this.frameRolls.length === 2 &&
++      first === 10 &&
++      second !== 10 &&
++      second + pins > 10
++    ) {
++      throw new Error("Pin count exceeds pins on the lane");
++    }
++
++    this.frameRolls.push(pins);
++    this.rolls.push(pins);
++
++    if (
++      this.frameRolls.length === 2 &&
++      first !== 10 &&
++      this.frameRolls[0] + this.frameRolls[1] !== 10
++    ) {
++      this.gameOver = true;
++    } else if (this.frameRolls.length === 3) {
++      this.gameOver = true;
++    }
++  }
++
+   score() {
+-    throw new Error('Remove this statement and implement this function');
++    if (!this.gameOver) {
++      throw new Error("Score cannot be taken until the end of the game");
++    }
++
++    let total = 0;
++    let rollIndex = 0;
++
++    for (let frame = 0; frame < 10; frame += 1) {
++      if (this.rolls[rollIndex] === 10) {
++        total += 10 + this.rolls[rollIndex + 1] + this.rolls[rollIndex + 2];
++        rollIndex += 1;
++      } else if (this.rolls[rollIndex] + this.rolls[rollIndex + 1] === 10) {
++        total += 10 + this.rolls[rollIndex + 2];
++        rollIndex += 2;
++      } else {
++        total += this.rolls[rollIndex] + this.rolls[rollIndex + 1];
++        rollIndex += 2;
++      }
++    }
++
++    return total;
+   }
+ }

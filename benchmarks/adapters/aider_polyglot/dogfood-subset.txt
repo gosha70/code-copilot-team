@@ -10,26 +10,33 @@
 # `#`-prefixed lines are ignored. Validated by
 # scripts/benchmark_runner/tests/test_polyglot_dogfood_subset.py.
 
+# NOTE (2026-07-17 repair): the original subset listed `leap` variants that
+# do NOT exist in the pinned snapshot — Aider's polyglot set is the HARD
+# exercise selection, and trivial exercises were never part of it. Every task
+# below is verified present under
+# benchmarks/.cache/polyglot/<REVISION>/<lang>/exercises/practice/ and by
+# TestDogfoodSubsetResolvesAgainstRealCache.
+
 # Python (4 tasks — broadest coverage in the Aider leaderboard)
-python/leap
 python/affine-cipher
 python/bowling
 python/grade-school
+python/book-store
 
 # Go (2 tasks)
-go/leap
-go/grade-school
+go/bowling
+go/book-store
 
 # JavaScript (2 tasks)
-javascript/leap
+javascript/bowling
 javascript/grade-school
 
 # Rust (2 tasks)
-rust/leap
+rust/bowling
 rust/grade-school
 
 # Java (1 task — gradle adds wall-time cost)
-java/leap
+java/bowling
 
 # C++ (1 task — cmake build adds wall-time cost)
-cpp/leap
+cpp/grade-school
