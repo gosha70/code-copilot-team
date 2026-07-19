@@ -145,6 +145,13 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
   (read-only), derived from already-ingested sessions' `redaction_mode`
   grouped by project — it does not edit per-project config; that lives in
   the layered config file above.
+- **Test Connection** reports a *category*, never the driver's own message
+  (#100): authentication failed / host unreachable / database missing /
+  driver not installed / malformed DSN / permission denied / unknown, each
+  with a fixed explanation and a stable `error_code`. Driver messages carry
+  hostnames, IPs, ports and usernames, and this endpoint accepts a
+  caller-supplied DSN, so the detail goes to the **server log** — check
+  there when the category is not enough.
 
 ## Cost tracking (E5, issue #83)
 

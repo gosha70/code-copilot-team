@@ -172,3 +172,66 @@ SEARCH_SNIPPET_CHARS = 120
 # mtime comparison tolerance shared by BOTH incremental walks (ingest_state
 # and trace_archive_state) — the two gates must agree or they drift apart.
 MTIME_EPSILON = 1e-6
+
+# ── Connection-probe diagnostics (#100) ────────────────────────────────
+# /api/settings/test-connection must never echo driver exception text: a
+# real Postgres failure carries hostname, IP, port, database and username,
+# and the endpoint accepts a CALLER-SUPPLIED DSN. Every failure therefore
+# maps to one of this closed set, and the response carries ONLY these
+# curated messages. Full detail goes to the server log instead.
+PROBE_ERR_DRIVER_MISSING = "driver_missing"
+PROBE_ERR_BAD_DSN = "bad_dsn"
+PROBE_ERR_AUTH_FAILED = "auth_failed"
+PROBE_ERR_UNREACHABLE = "unreachable"
+PROBE_ERR_DATABASE_MISSING = "database_missing"
+PROBE_ERR_PERMISSION_DENIED = "permission_denied"
+PROBE_ERR_UNKNOWN = "unknown"
+
+PROBE_ERROR_MESSAGES = {
+    PROBE_ERR_DRIVER_MISSING:
+        "PostgreSQL driver not installed — run: pip install psycopg",
+    PROBE_ERR_BAD_DSN:
+        "DSN is empty or not a supported format "
+        "(sqlite:///… or postgresql://…).",
+    PROBE_ERR_AUTH_FAILED:
+        "Authentication failed — check the username and password in the DSN.",
+    PROBE_ERR_UNREACHABLE:
+        "Could not reach the database host — check the host and port in the "
+        "DSN, and that the server is running.",
+    PROBE_ERR_DATABASE_MISSING:
+        "The database does not exist (or the SQLite path is not writable).",
+    PROBE_ERR_PERMISSION_DENIED:
+        "Connected, but the account lacks permission to create or read the "
+        "schema.",
+    PROBE_ERR_UNKNOWN:
+        "Connection failed. See the server log for details.",
+}
+
+# Signals matched (lowercased, on WORD BOUNDARIES — see db_test._word_re)
+# against the driver's message for CLASSIFICATION ONLY; the matched text is
+# never returned. A signature is either a phrase, or a TUPLE of phrases that
+# must ALL be present. The tuple form matters because Postgres interpolates
+# identifiers: `role "alice" does not exist` and `database "prod" does not
+# exist` differ only by the noun, so a bare "does not exist" would
+# misclassify auth failures. Boundary matching matters for the same reason
+# in the other direction: bare `role` occurs inside `role_store`.
+# First match wins, so order is significant.
+PROBE_ERROR_SIGNATURES = (
+    (PROBE_ERR_AUTH_FAILED, (
+        "password authentication failed", "authentication failed",
+        "no password supplied", ("role", "does not exist"),
+    )),
+    (PROBE_ERR_UNREACHABLE, (
+        "could not connect", "connection refused", "could not translate host",
+        "name or service not known", "timeout expired", "connection timed out",
+        "network is unreachable", "server closed the connection",
+    )),
+    (PROBE_ERR_DATABASE_MISSING, (
+        ("database", "does not exist"), "unable to open database file",
+        "no such file or directory",
+    )),
+    (PROBE_ERR_PERMISSION_DENIED, (
+        "permission denied", "must be owner", "readonly database",
+        "attempt to write a readonly database", "access denied",
+    )),
+)
