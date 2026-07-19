@@ -13,6 +13,8 @@
 import logging
 from typing import Any, Optional
 
+from .. import archive as arch
+from .. import constants as C
 from ..config import load_config
 from ..relational.db import Database, apply_ddl
 from . import dashboard
@@ -171,6 +173,18 @@ def create_app(dsn: str, kuzu_path: str = ""):
         conn = db()
         try:
             return dashboard.cost_by_outcome(conn)
+        finally:
+            conn.close()
+
+    @app.get("/api/search")
+    def search(q: str = "", limit: int = C.SEARCH_DEFAULT_LIMIT) -> dict[str, Any]:
+        # E10 Slice A (#98): substring search over archived (redacted) trace
+        # text — documented as NOT ranked; deterministic ordering.
+        if not q.strip():
+            raise HTTPException(status_code=400, detail="empty search query")
+        conn = db()
+        try:
+            return {"query": q, "results": arch.search_traces(conn, q, limit=limit)}
         finally:
             conn.close()
 

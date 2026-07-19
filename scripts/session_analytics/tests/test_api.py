@@ -117,6 +117,35 @@ class TestApi(RegistryResetTestCase):
 
         self.assertEqual(self.client.get("/api/sessions/99999").status_code, 404)
 
+    def test_search_endpoint(self) -> None:
+        # E10 Slice A (#98): substring search over archived trace text.
+        from session_analytics import archive as arch
+        from session_analytics.config import ProjectIdRule, ProjectOverride
+
+        r = self.client.get("/api/search", params={"q": "anything"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["results"], [])  # nothing archived yet
+
+        arch.archive(
+            dsn=self.dsn,
+            copilots=[C.COPILOT_CLAUDE_CODE],
+            root=CLAUDE_CODE_ROOT,
+            projects={"demo-project": ProjectOverride(trace_archive=True)},
+            project_id_rules=(ProjectIdRule(match="/repo/demo", id="demo-project"),),
+            full=True,
+        )
+        r = self.client.get("/api/search", params={"q": "e", "limit": 3})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertLessEqual(len(body["results"]), 3)
+        if body["results"]:
+            self.assertIn("snippet", body["results"][0])
+            self.assertIn("session_ref", body["results"][0])
+
+        # Empty query → 400, not an empty result set.
+        r = self.client.get("/api/search", params={"q": "  "})
+        self.assertEqual(r.status_code, 400)
+
     def test_settings_does_not_leak_dsn(self) -> None:
         r = self.client.get("/api/settings")
         self.assertEqual(r.status_code, 200)

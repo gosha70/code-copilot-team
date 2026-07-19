@@ -101,11 +101,12 @@ EXPORT_TABLE_TURNS = "turns"
 EXPORT_TABLE_LABELS = "labels"
 EXPORT_TABLE_KPIS = "kpis"
 EXPORT_TABLE_BENCHMARK_RESULTS = "benchmark_results"  # E9 outcomes (#92)
+EXPORT_TABLE_TRACE_DOCUMENTS = "trace_documents"      # E10 Slice A (#98)
 EXPORT_TABLE_ALL = "all"
 # The actual queryable tables (i.e. everything except the "all" pseudo-table).
 EXPORT_DATA_TABLES = (
     EXPORT_TABLE_SESSIONS, EXPORT_TABLE_TURNS, EXPORT_TABLE_LABELS, EXPORT_TABLE_KPIS,
-    EXPORT_TABLE_BENCHMARK_RESULTS,
+    EXPORT_TABLE_BENCHMARK_RESULTS, EXPORT_TABLE_TRACE_DOCUMENTS,
 )
 EXPORT_TABLES = EXPORT_DATA_TABLES + (EXPORT_TABLE_ALL,)
 
@@ -151,3 +152,23 @@ SCORE_KEY_ELAPSED_SECONDS = "elapsed_seconds"
 SCORE_KEY_FILES_CHANGED = "files_changed"
 SCORE_KEY_LINES_ADDED = "lines_added"
 SCORE_KEY_LINES_REMOVED = "lines_removed"
+
+# ── Trace archive (E10 Slice A, issue #98) ─────────────────────────────
+# Durable, redaction-safe full-text trace retention. Explicit per-project
+# opt-in only: `projects.<key>.trace_archive: true` (OFF by default).
+TBL_TRACE_DOCUMENT = "trace_document"
+TBL_TRACE_ARCHIVE_STATE = "trace_archive_state"
+CFG_PROJECT_TRACE_ARCHIVE = "trace_archive"
+SOURCE_KIND_COPILOT_TRANSCRIPT = "copilot_transcript"
+# FR-4 redaction floor: index = strictness rank (higher wins). The archive
+# stores under the STRICTER of the config-resolved mode and the mode the
+# session's ingest recorded — never looser.
+REDACTION_STRICTNESS = (REDACT_NONE, REDACT_CODE, REDACT_METADATA_ONLY)
+# Substring search (documented as NON-ranked): result limits + snippet window.
+SEARCH_DEFAULT_LIMIT = 50
+SEARCH_MAX_LIMIT = 500
+SEARCH_SNIPPET_CHARS = 120
+
+# mtime comparison tolerance shared by BOTH incremental walks (ingest_state
+# and trace_archive_state) — the two gates must agree or they drift apart.
+MTIME_EPSILON = 1e-6

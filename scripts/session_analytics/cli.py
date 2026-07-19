@@ -172,6 +172,39 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
     )
 
+    p_arch = sub.add_parser(
+        "archive",
+        help="Archive full REDACTED trace text for opted-in projects (E10).",
+    )
+    p_arch.add_argument(
+        "--copilot", action="append", default=None,
+        help="Copilot id to archive (repeatable). Default: all registered.",
+    )
+    p_arch.add_argument(
+        "--root", type=Path, default=None,
+        help="Override the source root (all copilots).",
+    )
+    p_arch.add_argument(
+        "--dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+    )
+    p_arch.add_argument(
+        "--full", action="store_true",
+        help="Re-archive every source (idempotent; default is incremental).",
+    )
+
+    p_srch = sub.add_parser(
+        "search",
+        help="Substring search over archived trace text (E10; NOT ranked).",
+    )
+    p_srch.add_argument("query", help="Substring to search for (case-insensitive).")
+    p_srch.add_argument(
+        "--limit", type=int, default=C.SEARCH_DEFAULT_LIMIT,
+        help=f"Max results (default {C.SEARCH_DEFAULT_LIMIT}, cap {C.SEARCH_MAX_LIMIT}).",
+    )
+    p_srch.add_argument(
+        "--dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+    )
+
     p_watch = sub.add_parser(
         "watch", help="Loop incremental ingest() every --interval seconds (E6)."
     )
@@ -589,6 +622,84 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     return C.EXIT_OK
 
 
+def _cmd_archive(args: argparse.Namespace) -> int:
+    from . import archive as arch
+    from .setup_cmd import ensure_initialized
+
+    if not ensure_initialized(args.dsn):
+        return C.EXIT_USAGE
+    cfg = load_config(dsn=args.dsn)
+    if not cfg.dsn:
+        print(
+            "error: no DSN configured. Run setup, pass --dsn, or set CCT_SA_DSN.",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+
+    # Pre-created so a mid-run failure still has partial counters to report
+    # (the settled #92 convention) — archive() mutates it in place.
+    stats = arch.ArchiveStats()
+    try:
+        arch.archive(
+            dsn=cfg.dsn,
+            copilots=args.copilot,
+            root=args.root,
+            redaction_mode=cfg.redaction_mode,
+            full=args.full,
+            projects=cfg.projects,
+            project_id_rules=cfg.project_id_rules,
+            stats=stats,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(json.dumps(stats.as_dict(), indent=2), file=sys.stderr)
+        print(
+            "note: counters above are PROCESSED-only — the run failed before "
+            "its single commit, the transaction was rolled back, and NO rows "
+            "were persisted. Re-run after fixing the error below.",
+            file=sys.stderr,
+        )
+        print(f"error: archive failed: {exc}", file=sys.stderr)
+        _log.exception("archive failed")
+        return C.EXIT_RUNTIME
+
+    print(json.dumps(stats.as_dict(), indent=2))
+    return C.EXIT_OK
+
+
+def _cmd_search(args: argparse.Namespace) -> int:
+    from . import archive as arch
+    from .relational.db import Database, apply_ddl
+    from .setup_cmd import ensure_initialized
+
+    if not args.query.strip():
+        print("error: empty search query.", file=sys.stderr)
+        return C.EXIT_USAGE
+    if not ensure_initialized(args.dsn):
+        return C.EXIT_USAGE
+    cfg = load_config(dsn=args.dsn)
+    if not cfg.dsn:
+        print(
+            "error: no DSN configured. Run setup, pass --dsn, or set CCT_SA_DSN.",
+            file=sys.stderr,
+        )
+        return C.EXIT_USAGE
+
+    try:
+        db = Database.connect(cfg.dsn)
+        try:
+            apply_ddl(db)
+            results = arch.search_traces(db, args.query, limit=args.limit)
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: search failed: {exc}", file=sys.stderr)
+        _log.exception("search failed")
+        return C.EXIT_RUNTIME
+
+    print(json.dumps({"query": args.query, "results": results}, indent=2))
+    return C.EXIT_OK
+
+
 def _parse_judge_spec(spec: str) -> tuple[str, str]:
     if ":" in spec:
         family, model = spec.split(":", 1)
@@ -720,6 +831,8 @@ _HANDLERS = {
     "serve": _cmd_serve,
     "export": _cmd_export,
     "correlate": _cmd_correlate,
+    "archive": _cmd_archive,
+    "search": _cmd_search,
     "watch": _cmd_watch,
 }
 

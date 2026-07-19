@@ -131,6 +131,45 @@ CREATE TABLE IF NOT EXISTS benchmark_result (
     ingested_at       TEXT
 );
 
+-- E10 Slice A (#98): durable, redaction-safe trace archive. One row per
+-- archived TURN (D-granularity); ``content`` is REDACTED full text — the
+-- archive never stores raw content (redact_text runs before every write,
+-- under the STRICTER of the config-resolved mode and the session's recorded
+-- ingest mode). Populated only for projects with the explicit
+-- ``trace_archive: true`` opt-in. New table on purpose: apply_ddl's
+-- CREATE IF NOT EXISTS re-run lands it with no migration.
+-- Anchoring note: turns are keyed by (session_ref, sequence_num), NOT by
+-- copilot_turn.id — re-ingest DELETEs and reinserts turn rows with fresh
+-- ids (store._delete_children), so an id-based FK would make re-ingest of
+-- any archived session fail, and id anchoring would silently mis-attach
+-- across re-ingests. sequence_num is the identity ingest itself keys turns
+-- by; join copilot_turn via (session_id, sequence_num) when needed.
+CREATE TABLE IF NOT EXISTS trace_document (
+    id             {PK},
+    session_ref    BIGINT NOT NULL REFERENCES copilot_session(id),
+    sequence_num   INTEGER NOT NULL,
+    source_kind    VARCHAR(30) NOT NULL,
+    content        TEXT,
+    content_hash   VARCHAR(64),
+    source_path    VARCHAR(1000),
+    redaction_mode VARCHAR(20) NOT NULL,
+    archived_at    TEXT,
+    UNIQUE (session_ref, sequence_num, source_kind)
+);
+
+-- E10 Slice A: archive-walk bookkeeping, ingest_state-shaped but separate
+-- (D-bookkeeping) — a source can be ingested but not archived and vice
+-- versa; the two walks gate independently.
+CREATE TABLE IF NOT EXISTS trace_archive_state (
+    id               {PK},
+    copilot          VARCHAR(30) NOT NULL,
+    source_file      VARCHAR(1000) NOT NULL,
+    last_mtime       DOUBLE PRECISION NOT NULL DEFAULT 0,
+    last_session_id  VARCHAR(200),
+    archived_at      TEXT,
+    UNIQUE (copilot, source_file)
+);
+
 -- Incremental-ingest bookkeeping.
 CREATE TABLE IF NOT EXISTS ingest_state (
     id               {PK},
