@@ -153,6 +153,21 @@ class TestApi(RegistryResetTestCase):
         self.assertNotIn(self.dsn, body)  # raw DSN must never be returned
         self.assertEqual(r.json()["dsn_dialect"], "sqlite")
 
+    def test_test_connection_failure_leaks_nothing(self) -> None:
+        # #100: the failure payload must be curated constants only — asserted
+        # over the RAW response body, so a leak through any field is caught.
+        marker = "s3cret-host.example.internal"
+        r = self.client.post(
+            "/api/settings/test-connection",
+            json={"dsn": f"mysql://user:pw@{marker}:3306/db"},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn(marker, r.text)
+        body = r.json()
+        self.assertFalse(body["ok"])
+        self.assertIn(body["error_code"], C.PROBE_ERROR_MESSAGES)
+        self.assertEqual(body["error"], C.PROBE_ERROR_MESSAGES[body["error_code"]])
+
     def test_test_connection(self) -> None:
         r = self.client.post("/api/settings/test-connection", json={"dsn": self.dsn})
         self.assertEqual(r.status_code, 200)

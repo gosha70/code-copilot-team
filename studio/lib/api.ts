@@ -148,11 +148,19 @@ export const api = {
   config: () => get<ConfigResponse>("/api/config"),
   saveConfig: (values: Record<string, string>) =>
     put<{ ok: boolean }>("/api/config", { values }),
+  // #100: on failure the server returns a curated `error` message plus a
+  // stable `error_code` from a closed set (driver_missing / bad_dsn /
+  // auth_failed / unreachable / database_missing / permission_denied /
+  // unknown) — never driver exception text. Branch on error_code, render
+  // error.
   testConnection: (dsn?: string) =>
-    post<{ ok: boolean; error?: string; sessions?: number; dialect?: string }>(
-      "/api/settings/test-connection",
-      { dsn },
-    ),
+    post<{
+      ok: boolean;
+      error?: string;
+      error_code?: string;
+      sessions?: number;
+      dialect?: string;
+    }>("/api/settings/test-connection", { dsn }),
   analyze: (body: { judge?: string; limit?: number; session_id?: number }) =>
     post<{ judge?: string; by_copilot?: Record<string, unknown> }>("/api/analyze", body),
 };
