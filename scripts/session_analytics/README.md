@@ -145,6 +145,21 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
   (read-only), derived from already-ingested sessions' `redaction_mode`
   grouped by project — it does not edit per-project config; that lives in
   the layered config file above.
+- **Request admission (#103).** The API validates the `Host` header against
+  an allowlist (`127.0.0.1`, `localhost`) on every route, rejecting anything
+  else with `400`. This is what stops **DNS rebinding** — a hostile page that
+  re-resolves its own name to `127.0.0.1` reaches the API *same-origin*, so
+  CORS never applies, and loopback binding does not help because the browser
+  is a co-resident client. A browser always sets `Host` from the URL, so page
+  script cannot forge it. State-changing requests (everything except
+  `GET`/`HEAD`) additionally require that any `Origin` header present is one
+  of the Studio's; an **absent** `Origin` is allowed, because non-browser
+  callers (curl, scripts, tests) never send one — which also means this
+  second layer does not constrain a local non-browser process, and is not
+  meant to. To reach the API from another host, extend `API_ALLOWED_HOSTS`
+  in `constants.py` deliberately. Note: IPv6 literal hosts cannot be
+  allowlisted (the middleware splits on `:`); irrelevant while the server
+  binds IPv4 loopback.
 - **Test Connection** reports a *category*, never the driver's own message
   (#100): authentication failed / host unreachable / database missing /
   driver not installed / malformed DSN / permission denied / unknown, each
