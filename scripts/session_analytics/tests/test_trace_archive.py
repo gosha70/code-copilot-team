@@ -232,10 +232,17 @@ class TestArchiveIntegration(RegistryResetTestCase):
                 self.assertTrue(content.startswith("[redacted"))
 
     def test_adversarial_redaction_code_mode_strips_fences(self) -> None:
-        # FR-8 hardening: fenced code (the fixture's tool-heavy turns) must
-        # come out as markers under `code` mode — never verbatim.
+        # FR-8 hardening: whatever sits inside a fenced block must come out
+        # as a marker under `code` mode — never verbatim — so a leaked
+        # credential in a transcript cannot reach the archive.
+        #
+        # The payload is a synthetic canary, deliberately NOT credential-
+        # shaped: `code`-mode redaction is content-agnostic (it strips fenced
+        # blocks by regex, never inspecting what is inside), so an
+        # API-key-shaped literal would prove nothing extra while tripping
+        # every secret scanner that ever runs on this repo.
         self._ingest(redaction_mode=C.REDACT_CODE)
-        secret = "sk-ant-SECRET123"
+        fenced_payload = "CANARY-FENCED-PAYLOAD-MUST-NOT-BE-ARCHIVED"
         fixture_src = Path(tempfile.mkdtemp(prefix="cct-adv-"))
         self.addCleanup(shutil.rmtree, fixture_src, ignore_errors=True)
         proj = fixture_src / "proj"
@@ -249,7 +256,7 @@ class TestArchiveIntegration(RegistryResetTestCase):
                         "timestamp": "2026-07-18T00:00:01Z",
                         "message": {"role": "user", "content": [
                             {"type": "text",
-                             "text": f"key is ```\n{secret}\n``` ok?"}]}}),
+                             "text": f"key is ```\n{fenced_payload}\n``` ok?"}]}}),
         ]
         (proj / "sess-adv-1.jsonl").write_text("\n".join(lines))
         ingest(dsn=self.dsn, copilots=[C.COPILOT_CLAUDE_CODE], root=fixture_src,
@@ -266,8 +273,9 @@ class TestArchiveIntegration(RegistryResetTestCase):
         finally:
             db.close()
         joined = "\n".join(contents)
-        self.assertNotIn(secret, joined)          # the secret never lands
-        self.assertIn("[code redacted", joined)   # the marker does
+        # Fenced content never lands in the archive; the marker does.
+        self.assertNotIn(fenced_payload, joined)
+        self.assertIn("[code redacted", joined)
 
     def test_archived_text_survives_source_deletion_and_is_searchable(self) -> None:
         # Copy the fixture to a temp root so we can delete the "source".
