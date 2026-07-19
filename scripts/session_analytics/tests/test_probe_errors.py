@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
+import tempfile
 import unittest
 
 from session_analytics import constants as C
@@ -179,9 +181,14 @@ class TestProbePayload(unittest.TestCase):
         self.assertIn(result["error_code"], C.PROBE_ERROR_MESSAGES)
 
     def test_success_payload_shape_unchanged(self) -> None:
-        import tempfile
+        # mkdtemp (0700, created atomically) rather than mktemp, which only
+        # RESERVES a name — another process can win the path between the
+        # call and the open (TOCTOU). It also leaves the db file behind;
+        # this cleans up after itself.
+        tmpdir = tempfile.mkdtemp(prefix="cct-probe-")
+        self.addCleanup(shutil.rmtree, tmpdir, ignore_errors=True)
 
-        result = probe(f"sqlite:///{tempfile.mktemp(suffix='.db')}")
+        result = probe(f"sqlite:///{tmpdir}/store.db")
         self.assertTrue(result["ok"])
         self.assertEqual(result["dialect"], "sqlite")
         self.assertEqual(result["sessions"], 0)
