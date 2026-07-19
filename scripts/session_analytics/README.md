@@ -57,6 +57,8 @@ The zero-install path still works without `setup` — just pass `--dsn`:
 | `export`  | Export the relational store to CSV/Parquet (E7). |
 | `watch`   | Loop incremental `ingest()` every `--interval` seconds until Ctrl+C (E6). |
 | `correlate` | Link benchmark `run-record.json` session_ids to analytics sessions (E9). |
+| `archive` | Archive full REDACTED trace text for opted-in projects (E10). |
+| `search`  | Substring search over archived trace text (E10; not ranked). |
 
 `ingest` flags: `--copilot` (repeatable; default all), `--root`, `--dsn`,
 `--developer-id`, `--redact {none,code,metadata-only}`, `--incremental`
@@ -224,7 +226,9 @@ Parquet (optional `pyarrow`) for spreadsheets, pandas, or DuckDB:
 | `turns`    | One row per turn: sequence, role, token/cost columns, the parent session's `redaction_mode`, and the stored `content_preview`. |
 | `labels`   | One row per `heuristic_label` (the judge's per-turn labels). |
 | `kpis`     | One row per `session_kpi` (the session-level rollup a rubric produced). |
-| `all`      | One file per table above, written as `<table>.<format>` into `--out <dir>`. |
+| `benchmark_results` | One row per benchmark attempt outcome (E9): stable identity + result + `session_ref`. |
+| `trace_documents` | One row per archived trace turn (E10). **⚠ Contains FULL redacted turn text**, not 500-char previews — a materially wider disclosure than the preview tables. Only opted-in projects have rows, and every row passed redaction, but review before sharing an export that includes it. |
+| `all`      | One file per table above, written as `<table>.<format>` into `--out <dir>`. **Note:** since E10 this includes `trace_documents` — if your workflow shares `--table all` output, be aware it now carries full redacted trace text for opted-in projects. |
 
 **Formats**: `--format csv` (default, stdlib `csv`, streamed row-by-row — the
 full table is never loaded into memory) or `--format parquet` (`pyarrow`,
@@ -369,6 +373,68 @@ exports via `--table benchmark_results` (and `--table all`).
 
 **Deferred (out of scope)**: a Studio comparison UI; a fuzzy `project_path` +
 time-window fallback for null-`session_id` runs — a later E9 issue.
+
+## Trace archive + search (E10 Slice A, issue #98)
+
+The store keeps only 500-char redacted previews, while full traces live in
+volatile sources (Claude Code's own transcript cleanup deletes them after
+~30 days). `archive` makes traces durable — **redaction-safe by
+construction** and **off by default**.
+
+**Scope honesty (v1): the archive stores redacted TURN TEXT only.** Tool
+inputs and tool results — the highest-risk redaction surface — are
+deliberately NOT archived in this slice; searching for content that only
+appears in a tool call (e.g. a file path passed to an editor tool) will not
+find it. Tool-I/O trace archival is a named follow-up once the turn-text
+contract has proven itself.
+
+```jsonc
+// config: projects block (same place as the E8 redaction/opt-out overrides)
+"projects": {
+  "my-project": { "trace_archive": true }   // EXPLICIT opt-in, per project
+}
+```
+
+```bash
+./scripts/session-analytics archive              # incremental; opted-in projects only
+./scripts/session-analytics search "pricing config" --limit 20
+```
+
+- **Explicit opt-in only.** No project is archived until its
+  `trace_archive: true` is set; there is no global enable flag. Opt-out
+  (`ingest: "off"`) beats opt-in, always. Opted-out and not-opted-in
+  projects produce **zero** `trace_document` rows.
+- **Redaction floor.** Every stored turn passes the same `redact_text` path
+  ingest trusts, under the **stricter** of the config-resolved mode and the
+  mode the session's ingest recorded — the archive can never store looser
+  than the store already holds. Each row stamps the mode actually applied.
+- **One row per turn**, anchored by `(session_ref, sequence_num)` — not by
+  turn ids, which re-ingest regenerates — upserted idempotently;
+  incremental via its own `trace_archive_state` bookkeeping (`--full`
+  bypasses). Sessions not yet ingested are counted and skipped; a session
+  whose source has turns the store hasn't ingested yet is **deferred**
+  (its ingested turns archive, the tail retries next run — never silently
+  dropped). Archive complements ingest, it never replaces it. Expect
+  roughly the size of your transcripts' prose (fenced code is replaced by
+  markers under `code` mode).
+- **Revocation purges.** Every run starts with a policy-reconciliation
+  pass: sessions whose CURRENT policy no longer authorizes archiving
+  (project opted out, or `trace_archive` removed/false) have their rows
+  **deleted**, counted as `sessions_purged` — the zero-rows guarantee
+  holds continuously, not just at write time.
+- **Search is substring search, not ranked search**: case-insensitive,
+  `%`/`_` match literally, deterministic (session, turn) ordering, default
+  limit 50 (cap 500), ±120-char snippets. Also served at
+  `GET /api/search?q=...&limit=...`. Real FTS is a named follow-up (Slice
+  B), gated on demonstrated pain.
+- **Transactions**: one commit per successful run; a failed run persists
+  nothing and prints its counters to stderr explicitly labeled
+  PROCESSED-only.
+- Export: `--table trace_documents` (and `--table all`).
+
+**Deferred (out of scope for this slice)**: benchmark attempt traces (A2 —
+needs its own opt-in contract), real FTS (B), label correlation + Studio UI
+(C), embeddings (E2's lane), retention/TTL policies.
 
 ## Tests
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from .. import constants as C
 from ..contracts import SessionRef
 from ..relational.db import Database
 
@@ -17,7 +18,7 @@ def should_ingest(db: Database, ref: SessionRef, *, full: bool) -> bool:
     if recorded is None:
         return True
     # Re-ingest if any contributing file is newer than the last record.
-    return ref.latest_mtime > recorded + 1e-6
+    return ref.latest_mtime > recorded + C.MTIME_EPSILON
 
 
 def record_ingested(db: Database, ref: SessionRef) -> None:

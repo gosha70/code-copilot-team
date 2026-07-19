@@ -399,6 +399,54 @@ def upsert_benchmark_result(
     )
 
 
+def upsert_trace_document(
+    db: Database,
+    *,
+    session_ref: int,
+    sequence_num: int,
+    source_kind: str,
+    content: Optional[str],
+    content_hash: Optional[str],
+    source_path: Optional[str],
+    redaction_mode: str,
+    archived_at: Optional[str],
+) -> None:
+    """E10 Slice A (#98): upsert one archived (REDACTED) trace row.
+
+    ``content`` MUST already have passed ``redact_text`` — this helper never
+    redacts and callers never bypass it (`archive.py` is the only writer).
+    Anchored by (session_ref, sequence_num) — NOT a copilot_turn.id FK,
+    which re-ingest would invalidate (see the DDL note). Keyed by
+    UNIQUE(session_ref, sequence_num, source_kind); re-archiving updates in
+    place. Fully parameterized; does NOT commit (caller-owned transaction,
+    the settled #92 convention).
+    """
+    db.execute(
+        f"""
+        INSERT INTO {C.TBL_TRACE_DOCUMENT}
+            (session_ref, sequence_num, source_kind, content, content_hash,
+             source_path, redaction_mode, archived_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (session_ref, sequence_num, source_kind) DO UPDATE SET
+            content=excluded.content,
+            content_hash=excluded.content_hash,
+            source_path=excluded.source_path,
+            redaction_mode=excluded.redaction_mode,
+            archived_at=excluded.archived_at
+        """,
+        (
+            session_ref,
+            sequence_num,
+            source_kind,
+            content,
+            content_hash,
+            source_path,
+            redaction_mode,
+            archived_at,
+        ),
+    )
+
+
 def _duration_seconds(started_at: Optional[str], ended_at: Optional[str]) -> Optional[int]:
     if not started_at or not ended_at:
         return None

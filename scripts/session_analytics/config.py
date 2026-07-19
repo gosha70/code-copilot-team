@@ -91,10 +91,16 @@ class JudgeConfig:
 
 @dataclass(frozen=True)
 class ProjectOverride:
-    """One ``projects.<key>`` entry: a per-project redaction/ingest override."""
+    """One ``projects.<key>`` entry: a per-project redaction/ingest override.
+
+    ``trace_archive`` (E10 Slice A, #98) is the EXPLICIT opt-in for full-text
+    trace archiving — False by default everywhere; there is deliberately no
+    global enable flag.
+    """
 
     redaction_mode: Optional[str] = None
     ingest: str = C.INGEST_ON
+    trace_archive: bool = False
 
 
 @dataclass(frozen=True)
@@ -337,7 +343,19 @@ def _load_projects(
                     f"expected one of {C.INGEST_MODES}"
                 )
 
-            projects[str(key)] = ProjectOverride(redaction_mode=mode, ingest=ingest_val)
+            # E10 Slice A (#98): explicit opt-in only — a real boolean, never
+            # a truthy coercion ("true"/1 would silently widen the privacy
+            # surface; reject them loudly instead).
+            trace_archive = entry.get(C.CFG_PROJECT_TRACE_ARCHIVE, False)
+            if not isinstance(trace_archive, bool):
+                raise ValueError(
+                    f"projects[{key!r}]: {C.CFG_PROJECT_TRACE_ARCHIVE} must be "
+                    f"a boolean, got {trace_archive!r}"
+                )
+
+            projects[str(key)] = ProjectOverride(
+                redaction_mode=mode, ingest=ingest_val, trace_archive=trace_archive
+            )
 
     rules: list[ProjectIdRule] = []
     idata = data.get(C.CFG_PROJECT_IDS)

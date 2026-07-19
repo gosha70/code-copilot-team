@@ -80,12 +80,25 @@ BENCHMARK_RESULTS_COLUMNS: tuple[str, ...] = (
     "session_ref", "ingested_at",
 )
 
+# One row per archived (REDACTED) trace turn (E10 Slice A, #98). Redaction-
+# safe by construction: trace_document only ever holds text that passed
+# redact_text under the FR-4 floor; the per-row redaction_mode documents it.
+# NOTE: unlike every other export table this carries FULL redacted turn
+# text, not 500-char previews — `--table all` includes it (see README's
+# export section for the disclosure note). Turns are anchored by
+# (session_ref, sequence_num), not turn ids (stable across re-ingests).
+TRACE_DOCUMENTS_COLUMNS: tuple[str, ...] = (
+    "id", "session_ref", "sequence_num", "source_kind", "content",
+    "content_hash", "source_path", "redaction_mode", "archived_at",
+)
+
 _COLUMNS: dict[str, tuple[str, ...]] = {
     C.EXPORT_TABLE_SESSIONS: SESSIONS_COLUMNS,
     C.EXPORT_TABLE_TURNS: TURNS_COLUMNS,
     C.EXPORT_TABLE_LABELS: LABELS_COLUMNS,
     C.EXPORT_TABLE_KPIS: KPIS_COLUMNS,
     C.EXPORT_TABLE_BENCHMARK_RESULTS: BENCHMARK_RESULTS_COLUMNS,
+    C.EXPORT_TABLE_TRACE_DOCUMENTS: TRACE_DOCUMENTS_COLUMNS,
 }
 
 # Boolean columns are stored with dialect-dependent affinity (SQLite returns
@@ -163,6 +176,13 @@ _BENCHMARK_RESULTS_SQL = f"""
     ORDER BY id
 """
 
+_TRACE_DOCUMENTS_SQL = f"""
+    SELECT id, session_ref, sequence_num, source_kind, content, content_hash,
+           source_path, redaction_mode, archived_at
+    FROM {C.TBL_TRACE_DOCUMENT}
+    ORDER BY id
+"""
+
 
 def _bool01(v: Any) -> Any:
     """Normalize a stored boolean-affinity value to 0/1 (``None`` stays ``None``)."""
@@ -212,12 +232,18 @@ def iter_benchmark_results(db: Database) -> Iterator[tuple]:
     return _stream(db, _BENCHMARK_RESULTS_SQL, _BENCHMARK_RESULTS_BOOL_IDX)
 
 
+def iter_trace_documents(db: Database) -> Iterator[tuple]:
+    """Stream ``trace_documents`` rows in ``TRACE_DOCUMENTS_COLUMNS`` order, by ``id``."""
+    return _stream(db, _TRACE_DOCUMENTS_SQL)
+
+
 _ROW_ITERATORS = {
     C.EXPORT_TABLE_SESSIONS: iter_sessions,
     C.EXPORT_TABLE_TURNS: iter_turns,
     C.EXPORT_TABLE_LABELS: iter_labels,
     C.EXPORT_TABLE_KPIS: iter_kpis,
     C.EXPORT_TABLE_BENCHMARK_RESULTS: iter_benchmark_results,
+    C.EXPORT_TABLE_TRACE_DOCUMENTS: iter_trace_documents,
 }
 
 
