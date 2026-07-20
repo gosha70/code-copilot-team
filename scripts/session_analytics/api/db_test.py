@@ -14,12 +14,21 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from functools import lru_cache
-from typing import Any, Union
+from typing import Any, Optional, Sequence, Union
+from urllib.parse import urlsplit
 
 from .. import constants as C
-from ..relational.db import Database, apply_ddl
+from ..relational.db import (
+    SQLITE_MEMORY,
+    SQLITE_MODE_RW,
+    Database,
+    apply_ddl,
+    is_sqlite_dsn,
+    sqlite_target,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -79,6 +88,86 @@ def classify_probe_error(exc: Exception, *, phase: str) -> str:
     return C.PROBE_ERR_UNKNOWN
 
 
+def _host_of(dsn: str) -> Optional[str]:
+    """The hostname of a URL-shaped DSN, or ``None`` when it has none.
+
+    ``None`` means "this DSN carries no host", never "we failed to read
+    one" — ``urlsplit`` raises on a malformed netloc (e.g. an unterminated
+    IPv6 literal) and that exception is left to propagate, because
+    conflating the two made an unparseable netloc look local and admitted.
+    """
+    return urlsplit(dsn).hostname
+
+
+def validate_probe_dsn(
+    dsn: str, configured_dsns: Sequence[str] = ()
+) -> Optional[str]:
+    """Constrain what the probe will ATTEMPT (#101).
+
+    Returns a ``constants.PROBE_ERR_*`` code to reject with, or ``None`` to
+    proceed. This is the ONE place a DSN is admitted, so the empty case is
+    classified here too rather than in a second check. Rejection happens
+    BEFORE any connection, so this endpoint cannot be used to reach
+    arbitrary hosts, nor — with ``SQLITE_MODE_RW`` at the open — to create
+    files.
+
+    ``configured_dsns`` are the operator's OWN DSNs (the saved config and
+    whatever the server was started with — they differ after a config save,
+    and both must stay testable). Their hosts are allowed alongside
+    loopback, so "test the database I actually use" keeps working in either
+    order. Pure apart from one existence check.
+    """
+    if not dsn:
+        return C.PROBE_ERR_BAD_DSN
+
+    # ONE parse for the whole policy — urlsplit raises on a malformed
+    # netloc, so this single handler is what makes the function fail
+    # CLOSED. Scheme is case-normalized: schemes are case-insensitive, so
+    # `SQLITE://` must reach the SQLite rules rather than falling through
+    # to the host branch.
+    try:
+        parts = urlsplit(dsn)
+    except ValueError:
+        return C.PROBE_ERR_HOST_NOT_ALLOWED
+    scheme = parts.scheme.lower()
+    if scheme not in C.PROBE_ALLOWED_SCHEMES:
+        return C.PROBE_ERR_SCHEME_NOT_ALLOWED
+
+    if scheme == C.SCHEME_SQLITE:
+        # Scheme says sqlite, so the `sqlite://` form is required — a
+        # single-slash `sqlite:/path` is not one we can resolve, and must
+        # not fall through to the host branch and be admitted.
+        if not is_sqlite_dsn(dsn):
+            return C.PROBE_ERR_SCHEME_NOT_ALLOWED
+        target = sqlite_target(dsn)
+        if target == SQLITE_MEMORY:
+            return None  # touches no filesystem path at all
+        # Existing FILE only. The open itself enforces this (SQLITE_MODE_RW);
+        # checking here just makes the failure specific and actionable.
+        if not os.path.isfile(target):
+            return C.PROBE_ERR_SQLITE_FILE_MISSING
+        return None
+
+    allowed = set(C.PROBE_LOOPBACK_HOSTS)
+    for configured in configured_dsns:
+        if not configured:
+            continue
+        try:
+            configured_host = _host_of(configured)
+        except ValueError:
+            continue  # unparseable: contributes nothing, refuses nothing
+        if configured_host:
+            allowed.add(configured_host)
+    # `parts` came from the guarded urlsplit above, so reading the host off
+    # it cannot raise here.
+    host = parts.hostname
+    # A hostless DSN (e.g. a local unix-socket postgres URL) is local by
+    # nature — there is no remote target to constrain.
+    if host is None or host in allowed:
+        return None
+    return C.PROBE_ERR_HOST_NOT_ALLOWED
+
+
 def _error_payload(code: str) -> dict[str, Any]:
     """The ONE place a failure response is shaped, and the ONE place a code
     is turned into text — so every failure path stays identical."""
@@ -91,11 +180,21 @@ def _failure(exc: Exception, *, phase: str) -> dict[str, Any]:
     return _error_payload(classify_probe_error(exc, phase=phase))
 
 
-def probe(dsn: str) -> dict[str, Any]:
-    if not dsn:
-        return _error_payload(C.PROBE_ERR_BAD_DSN)
+def probe(dsn: str, configured_dsns: Sequence[str] = ()) -> dict[str, Any]:
+    """Test a DSN. ``configured_dsns`` are the operator's own DSNs, kept
+    SEPARATE from the caller-supplied one so policy can tell them apart
+    (#101) — a caller-supplied host is only allowed if it is loopback or
+    matches one of the configured ones."""
+    # Constrain what we will attempt BEFORE attempting anything (the empty
+    # DSN is classified in there too, so there is ONE admission decision).
+    rejection = validate_probe_dsn(dsn, configured_dsns)
+    if rejection is not None:
+        return _error_payload(rejection)
     try:
-        db = Database.connect(dsn)
+        # SQLITE_MODE_RW: the open REFUSES to create, so the existing-file
+        # rule is enforced where the file is actually opened — no TOCTOU
+        # window between the check above and here.
+        db = Database.connect(dsn, sqlite_mode=SQLITE_MODE_RW)
     except Exception as exc:  # noqa: BLE001 — report any connect failure
         return _failure(exc, phase=PHASE_CONNECT)
     try:

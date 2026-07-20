@@ -167,6 +167,26 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
   hostnames, IPs, ports and usernames, and this endpoint accepts a
   caller-supplied DSN, so the detail goes to the **server log** — check
   there when the category is not enough.
+- **Test Connection only attempts DSNs it is allowed to attempt (#101).**
+  The DSN is screened *before* any connection, so the endpoint is neither a
+  port scanner nor a file creator:
+  - **Scheme** must be `sqlite`, `postgresql` or `postgres` — anything else
+    is `scheme_not_allowed`. Compared case-insensitively, so `SQLITE://`
+    gets the SQLite rules rather than slipping past them.
+  - **Host** must be loopback (`localhost`, `127.0.0.1`, `::1`) or the host
+    of a DSN you have configured — both the **saved** config and the one
+    the server was started with count, so testing works in either order
+    (edit-then-test, and save-then-test without a restart). Anything else
+    is `host_not_allowed`. A hostless DSN (unix-socket Postgres) is local
+    by nature and passes.
+  - **SQLite** must name a file that already **exists**, or be in-memory
+    (`sqlite://`). Probing a fresh path used to *create* a schema file
+    wherever the caller pointed; now it returns `sqlite_file_missing` —
+    save the config and run `ingest` to bring the database into being.
+    The probe opens SQLite with `sqlite_mode="rw"`, which **refuses** to
+    create, so the rule is enforced at the open and not merely pre-checked.
+    Ingest, setup and the tests use the default mode and still auto-create.
+  - A DSN whose host cannot be **parsed** is refused, not assumed local.
 
 ## Cost tracking (E5, issue #83)
 

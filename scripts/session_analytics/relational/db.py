@@ -15,11 +15,67 @@ import logging
 from importlib import resources
 from pathlib import Path
 from typing import Any, Optional, Sequence
+from urllib.parse import quote
 
 _log = logging.getLogger(__name__)
 
 DIALECT_POSTGRES = "postgres"
 DIALECT_SQLITE = "sqlite"
+
+SQLITE_PREFIX = "sqlite://"
+SQLITE_MEMORY = ":memory:"
+
+# Opt-in open mode for callers that must NOT bring a database into being.
+# SQLite's URI form refuses to create the file in ``rw`` (only ``rwc``
+# creates), so this enforces "must already exist" at the open itself rather
+# than pre-checking and racing (#101).
+SQLITE_MODE_RW = "rw"
+
+
+def is_sqlite_dsn(dsn: str) -> bool:
+    """Whether ``dsn`` is a SQLite URL.
+
+    Case-INSENSITIVE: URL schemes are case-insensitive per RFC 3986, and
+    routing must not diverge from the probe's admission policy just because
+    someone wrote ``SQLITE://`` — that divergence would let a DSN skip the
+    SQLite rules and be handled as PostgreSQL (#101).
+    """
+    return dsn[:len(SQLITE_PREFIX)].lower() == SQLITE_PREFIX
+
+
+def _sqlite_uri(target: str) -> str:
+    """``target`` as a SQLite ``file:`` URI.
+
+    Two hazards, both load-bearing:
+    - ``quote`` escapes ``?``/``#``/``%`` (which would otherwise be read as
+      query/fragment delimiters) while leaving ``/`` alone.
+    - An ABSOLUTE path is emitted with an explicit empty authority
+      (``file://`` + ``/path``). Without it a path that begins with ``//``
+      turns its first segment into a URI authority, and SQLite rejects it
+      with "invalid uri authority" — a DSN that opens fine in the default
+      mode. Relative paths take no authority marker at all.
+    """
+    prefix = "file://" if target.startswith("/") else "file:"
+    return f"{prefix}{quote(target)}"
+
+
+def sqlite_target(dsn: str) -> str:
+    """Resolve a ``sqlite://`` DSN to the path sqlite3 will actually open.
+
+    The rule is non-obvious, so it lives here ONCE and every caller reuses
+    it (#101): the text after ``sqlite://`` has a single leading ``/``
+    stripped, which makes ``sqlite:////abs/path`` the absolute form and
+    ``sqlite:///rel/path`` relative. An empty path (``sqlite://`` or
+    ``sqlite:///``) means in-memory.
+
+    Callers that need to know whether a DSN touches the filesystem should
+    compare the result against ``SQLITE_MEMORY`` rather than re-parsing.
+    """
+    path = dsn[len(SQLITE_PREFIX):]
+    if path in ("", "/"):
+        return SQLITE_MEMORY
+    target = path[1:] if path.startswith("/") else path
+    return target or SQLITE_MEMORY
 
 _DDL_PACKAGE = "session_analytics.config_data"
 _DDL_FILES = (
@@ -50,22 +106,30 @@ class Database:
     # ── construction ───────────────────────────────────────────────────
 
     @classmethod
-    def connect(cls, dsn: str) -> "Database":
+    def connect(cls, dsn: str, sqlite_mode: str = "") -> "Database":
+        """Open ``dsn``.
+
+        ``sqlite_mode`` is an OPT-IN SQLite open mode (``SQLITE_MODE_RW``)
+        for callers that must not create the database — the probe (#101).
+        The default is unchanged: ingest, tests and setup still auto-create
+        a SQLite file, which is how a fresh install gets its store.
+        """
         if not dsn:
             raise ValueError(
                 "no DSN configured; set --dsn, CCT_SA_DSN, or 'dsn' in config. "
                 "For local dev, docker-compose up brings up Postgres; for tests "
                 "use a sqlite:/// DSN."
             )
-        if dsn.startswith("sqlite://"):
+        if is_sqlite_dsn(dsn):
             import sqlite3
 
-            path = dsn[len("sqlite://"):]
-            # sqlite:///abs/path → '/abs/path'; sqlite:// → '' (in-memory)
-            target = path[1:] if path.startswith("/") and path != "/" else path
-            if path == "" or path == "/":
-                target = ":memory:"
-            conn = sqlite3.connect(target or ":memory:")
+            target = sqlite_target(dsn)
+            if sqlite_mode and target != SQLITE_MEMORY:
+                conn = sqlite3.connect(
+                    f"{_sqlite_uri(target)}?mode={sqlite_mode}", uri=True
+                )
+            else:
+                conn = sqlite3.connect(target)
             conn.execute("PRAGMA foreign_keys = ON")
             return cls(conn, DIALECT_SQLITE)
 

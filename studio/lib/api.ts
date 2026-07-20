@@ -152,7 +152,8 @@ export const api = {
   // stable `error_code` from a closed set (driver_missing / bad_dsn /
   // auth_failed / unreachable / database_missing / permission_denied /
   // unknown) — never driver exception text. Branch on error_code, render
-  // error.
+  // error. #101 added three codes rejected BEFORE any connection is
+  // attempted: scheme_not_allowed / host_not_allowed / sqlite_file_missing.
   testConnection: (dsn?: string) =>
     post<{
       ok: boolean;
