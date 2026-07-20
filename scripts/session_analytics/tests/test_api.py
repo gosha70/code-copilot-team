@@ -31,7 +31,10 @@ class TestApi(RegistryResetTestCase):
 
         from session_analytics.api.server import create_app
 
-        self.client = TestClient(create_app(self.dsn))
+        # #103: point at an allowlisted host. TestClient defaults to
+        # `Host: testserver`, which the Host guard (correctly) rejects —
+        # `testserver` is deliberately NOT in the shipped allowlist.
+        self.client = TestClient(create_app(self.dsn), base_url="http://127.0.0.1:8765")
 
     def test_health(self) -> None:
         r = self.client.get("/api/health")

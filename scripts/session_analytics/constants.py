@@ -173,6 +173,33 @@ SEARCH_SNIPPET_CHARS = 120
 # and trace_archive_state) — the two gates must agree or they drift apart.
 MTIME_EPSILON = 1e-6
 
+# ── API request admission (#103) ───────────────────────────────────────
+# The API has no authentication and binds loopback, but loopback does not
+# stop a BROWSER: a page using DNS rebinding (attacker.com re-resolved to
+# 127.0.0.1) reaches the API same-origin, so CORS never applies. Host
+# validation is the control that closes that path — a browser always sets
+# Host from the URL, so page script cannot forge it.
+#
+# NOTE (IPv6): Starlette's TrustedHostMiddleware compares
+# `host.split(":")[0]`, which yields "[" for an IPv6 literal like
+# "[::1]:8765" — IPv6 hosts CANNOT be allowlisted here. Moot while
+# api/serve.py binds IPv4 127.0.0.1; revisit if that ever becomes "::".
+API_ALLOWED_HOSTS = ("127.0.0.1", "localhost")
+
+# The Studio's browser origins are built from these hosts plus the ACTUAL
+# --ui-port (see api/server.studio_origins), so running the Studio on a
+# non-default port is not silently broken. Used for BOTH the CORS allowlist
+# and the Origin guard, so the two can never drift apart.
+STUDIO_ORIGIN_HOSTS = ("localhost", "127.0.0.1")
+DEFAULT_UI_PORT = 3000  # keep in sync with cli.py's --ui-port default
+
+# Methods exempt from the Origin check. GET/HEAD are safe; everything else
+# (POST/PUT/PATCH/DELETE/OPTIONS) is checked, so new state-changing routes
+# are covered without maintaining a route list.
+ORIGIN_SAFE_METHODS = frozenset({"GET", "HEAD"})
+MSG_ORIGIN_NOT_ALLOWED = "Origin not allowed"
+
+
 # ── Connection-probe diagnostics (#100) ────────────────────────────────
 # /api/settings/test-connection must never echo driver exception text: a
 # real Postgres failure carries hostname, IP, port, database and username,

@@ -24,10 +24,24 @@ from ..mcp import tools as mcp_tools
 _log = logging.getLogger(__name__)
 
 
-def create_app(dsn: str, kuzu_path: str = ""):
-    from fastapi import FastAPI, HTTPException
+def studio_origins(ui_port: int = C.DEFAULT_UI_PORT) -> tuple[str, ...]:
+    """Browser origins the Studio can actually be served from (#103).
+
+    Derived from the REAL ``--ui-port`` rather than hardcoded, so running the
+    Studio on a non-default port is not silently broken by CORS and the
+    Origin guard.
+    """
+    return tuple(f"http://{host}:{ui_port}" for host in C.STUDIO_ORIGIN_HOSTS)
+
+
+def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
+    from typing import Awaitable, Callable
+
+    from fastapi import FastAPI, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+    from starlette.responses import JSONResponse, Response
 
     # Ensure adapters + judges are registered regardless of how the app was
     # constructed (idempotent — no-op if the CLI already registered).
@@ -35,13 +49,56 @@ def create_app(dsn: str, kuzu_path: str = ""):
     register_all()
 
     app = FastAPI(title="session-analytics Studio API", version="1.0")
-    # The Studio dev server runs on localhost:3000; allow it (local only).
+    allowed_origins = studio_origins(ui_port)
+    # The Studio runs on localhost:<ui_port>; allow it (local only). The same
+    # tuple feeds the Origin guard below, so the two cannot drift.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_origins=allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ── request admission (#103) ───────────────────────────────────────
+    # Starlette applies the LAST-added middleware outermost, so the Origin
+    # guard is registered first and TrustedHost second: Host is validated
+    # before anything else runs.
+    @app.middleware("http")
+    async def _origin_guard(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Reject cross-origin state-changing requests from unknown origins.
+
+        Allowed: the Studio's origins, and the API's OWN origin — the latter
+        so FastAPI's built-in /docs (Swagger "Try it out") keeps working;
+        browsers send Origin on same-origin non-GET requests too. Trusting
+        own-origin is safe because the Host it is compared against has
+        already passed TrustedHostMiddleware, and page script cannot forge
+        either header.
+
+        Absent Origin is ALLOWED by design: TestClient, curl and scripted
+        callers never send one, and requiring it would break every
+        non-browser client. The honest limit — this does not stop a local
+        non-browser process, which already has code execution and is
+        outside the threat model. The rebinding threat is browser-borne and
+        is caught by the Host check.
+        """
+        if request.method not in C.ORIGIN_SAFE_METHODS:
+            origin = request.headers.get("origin")
+            if origin is not None and origin not in allowed_origins:
+                own_origin = f"{request.url.scheme}://{request.headers.get('host', '')}"
+                if origin != own_origin:
+                    # Constant message, API-standard JSON shape (matches
+                    # HTTPException); never echo the offending value.
+                    return JSONResponse(
+                        {"detail": C.MSG_ORIGIN_NOT_ALLOWED}, status_code=403
+                    )
+        return await call_next(request)
+
+    # Load-bearing control against DNS rebinding. Registered last → runs
+    # first. Rejects with 400 before any handler (see constants for the
+    # IPv6 caveat).
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=C.API_ALLOWED_HOSTS)
 
     def db() -> Database:
         return Database.connect(dsn)

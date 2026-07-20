@@ -40,7 +40,10 @@ def serve(
 
     from .server import create_app
 
-    app = create_app(cfg.dsn, cfg.kuzu_path)
+    # ui_port is passed so the CORS/Origin allowlists match where the Studio
+    # ACTUALLY runs (#103) — a non-default --ui-port used to be silently
+    # broken by hardcoded :3000 origins.
+    app = create_app(cfg.dsn, cfg.kuzu_path, ui_port=ui_port)
 
     ui_proc: Optional[subprocess.Popen] = None
     if not no_ui:
