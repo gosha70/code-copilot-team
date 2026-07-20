@@ -16,7 +16,13 @@ from typing import Any, Optional
 from .. import archive as arch
 from .. import constants as C
 from ..config import load_config
-from ..relational.db import Database, apply_ddl
+from ..relational.db import (
+    DIALECT_POSTGRES,
+    DIALECT_SQLITE,
+    Database,
+    apply_ddl,
+    is_sqlite_dsn,
+)
 from . import dashboard
 from ..mcp import resources as mcp_resources
 from ..mcp import tools as mcp_tools
@@ -185,7 +191,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     def settings() -> dict[str, Any]:
         cfg = load_config()
         # Never leak the raw DSN; report dialect + redaction + sources only.
-        dialect = "sqlite" if dsn.startswith("sqlite://") else "postgres"
+        dialect = DIALECT_SQLITE if is_sqlite_dsn(dsn) else DIALECT_POSTGRES
         return {
             "dsn_dialect": dialect,
             "kuzu_path": kuzu_path or cfg.kuzu_path,
@@ -198,7 +204,13 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     def test_connection(req: TestConnRequest) -> dict[str, Any]:
         from .db_test import probe
 
-        return probe(req.dsn or dsn)
+        # Caller-supplied DSN and the configured ones stay SEPARATE so the
+        # host allowlist can distinguish them (#101). BOTH the saved config
+        # and the startup DSN count as configured: they diverge the moment
+        # the operator saves a new one, and testing the just-saved database
+        # must not require a restart (nor must a --dsn override stop being
+        # testable).
+        return probe(req.dsn or dsn, configured_dsns=(load_config().dsn, dsn))
 
     @app.get("/api/settings/projects")
     def settings_projects() -> dict[str, Any]:

@@ -213,6 +213,14 @@ PROBE_ERR_UNREACHABLE = "unreachable"
 PROBE_ERR_DATABASE_MISSING = "database_missing"
 PROBE_ERR_PERMISSION_DENIED = "permission_denied"
 PROBE_ERR_UNKNOWN = "unknown"
+# Pre-connection rejections (#101). The endpoint takes a caller-supplied
+# DSN, so what it will ATTEMPT is constrained before any connection: only
+# known schemes, only loopback or the configured host, and — because
+# probing a fresh sqlite path used to CREATE a database file at an
+# arbitrary location — only sqlite files that already exist.
+PROBE_ERR_SCHEME_NOT_ALLOWED = "scheme_not_allowed"
+PROBE_ERR_HOST_NOT_ALLOWED = "host_not_allowed"
+PROBE_ERR_SQLITE_FILE_MISSING = "sqlite_file_missing"
 
 PROBE_ERROR_MESSAGES = {
     PROBE_ERR_DRIVER_MISSING:
@@ -232,7 +240,22 @@ PROBE_ERROR_MESSAGES = {
         "schema.",
     PROBE_ERR_UNKNOWN:
         "Connection failed. See the server log for details.",
+    PROBE_ERR_SCHEME_NOT_ALLOWED:
+        "Unsupported DSN scheme — use sqlite:… or postgresql://…",
+    PROBE_ERR_HOST_NOT_ALLOWED:
+        "Host not allowed — this endpoint only tests localhost or the "
+        "database host already configured.",
+    PROBE_ERR_SQLITE_FILE_MISSING:
+        "That SQLite database file does not exist yet — save the "
+        "configuration and run ingest to create it.",
 }
+
+# Schemes the probe will attempt at all (#101). Compared case-normalized.
+SCHEME_SQLITE = "sqlite"
+PROBE_ALLOWED_SCHEMES = (SCHEME_SQLITE, "postgresql", "postgres")
+# Hosts always allowed, alongside the CONFIGURED DSN's host. Extra
+# config-declared hosts are deliberately deferred until someone needs them.
+PROBE_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 # Signals matched (lowercased, on WORD BOUNDARIES — see db_test._word_re)
 # against the driver's message for CLASSIFICATION ONLY; the matched text is
