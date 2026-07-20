@@ -13,12 +13,13 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import re
 from functools import lru_cache
 from typing import Any, Optional, Sequence, Union
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from .. import constants as C
 from ..relational.db import (
@@ -99,6 +100,45 @@ def _host_of(dsn: str) -> Optional[str]:
     return urlsplit(dsn).hostname
 
 
+def _is_loopback_host(host: str) -> bool:
+    """True when ``host`` is a loopback ADDRESS in any notation.
+
+    The literal allowlist only holds the canonical spellings, so an IP such
+    as ``127.0.0.2`` (all of 127/8 is loopback) or an expanded ``::1`` was
+    refused even though it is local. ``ipaddress`` recognizes every form; a
+    non-IP hostname (``localhost``) is not our concern here — the name
+    allowlist handles it — so a parse failure just means "not a loopback IP".
+    """
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _libpq_conninfo(dsn: str) -> Optional[dict]:
+    """Parse ``dsn`` with libpq's OWN parser, or ``None`` when unavailable.
+
+    The host allowlist is only meaningful if it constrains the host libpq
+    will ACTUALLY dial, and libpq reads the URI query as connection keywords
+    (``?host=`` overrides the authority, ``?hostaddr=`` sets the IP directly,
+    ``?service=`` pulls the target from a file). Validating urlsplit's view
+    while libpq connects by its own is a parser-differential (#101 follow-up),
+    so where psycopg is importable we read the effective params from it.
+
+    Returns the conninfo dict, ``{}`` if libpq rejected the DSN (no target to
+    check — the later connect surfaces the error), or ``None`` if psycopg is
+    absent (sqlite-only environments) so the caller uses the raw-query floor.
+    """
+    try:
+        from psycopg.conninfo import conninfo_to_dict
+    except Exception:  # noqa: BLE001 — psycopg optional; any import failure = absent
+        return None
+    try:
+        return conninfo_to_dict(dsn)
+    except Exception:  # noqa: BLE001 — malformed per libpq; no resolvable target
+        return {}
+
+
 def validate_probe_dsn(
     dsn: str, configured_dsns: Sequence[str] = ()
 ) -> Optional[str]:
@@ -148,6 +188,22 @@ def validate_probe_dsn(
             return C.PROBE_ERR_SQLITE_FILE_MISSING
         return None
 
+    # We validate parts.hostname, but psycopg/libpq re-parses the RAW dsn —
+    # a different URI parser. Close that gap before trusting the host:
+    #   - a URL fragment has no meaning to libpq, so a `#` means the
+    #     authority we checked is not the whole authority libpq will read
+    #     (`…@localhost#@evil.example` parses to host=localhost here while
+    #     the real target hides in the fragment);
+    #   - an authority whose port will not cast (`localhost:5432:9999`)
+    #     likewise is not the clean host:port we validated.
+    # Either way we cannot vouch for the host, so refuse.
+    if parts.fragment:
+        return C.PROBE_ERR_HOST_NOT_ALLOWED
+    try:
+        _ = parts.port
+    except ValueError:
+        return C.PROBE_ERR_HOST_NOT_ALLOWED
+
     allowed = set(C.PROBE_LOOPBACK_HOSTS)
     for configured in configured_dsns:
         if not configured:
@@ -158,12 +214,37 @@ def validate_probe_dsn(
             continue  # unparseable: contributes nothing, refuses nothing
         if configured_host:
             allowed.add(configured_host)
+
+    def _host_ok(h: Optional[str]) -> bool:
+        # A hostless target is local by nature (unix socket); otherwise it
+        # must be an allowlisted name or a loopback address in any notation.
+        return h is None or h in allowed or _is_loopback_host(h)
+
+    # Validate the host libpq will ACTUALLY contact, read from the SAME
+    # parser that connects. This closes the query-keyword redirect class
+    # (?host=, ?hostaddr=, ?service=) at its root rather than by spelling.
+    info = _libpq_conninfo(dsn)
+    if info is None:
+        # No libpq parser here — inspect the raw query and refuse any keyword
+        # that would redirect the target out from under the allowlist.
+        query_keys = {k.lower() for k, _ in parse_qsl(parts.query, keep_blank_values=True)}
+        if query_keys & set(C.PROBE_DSN_REDIRECT_PARAMS):
+            return C.PROBE_ERR_HOST_NOT_ALLOWED
+    else:
+        # ?service= pulls the host from a file we cannot inspect — refuse.
+        if info.get("service"):
+            return C.PROBE_ERR_HOST_NOT_ALLOWED
+        # Both the name (host) and the direct IP (hostaddr) are dialled, so
+        # every one that is set must be permitted.
+        for key in ("host", "hostaddr"):
+            target = info.get(key)
+            if target and not _host_ok(target):
+                return C.PROBE_ERR_HOST_NOT_ALLOWED
+
     # `parts` came from the guarded urlsplit above, so reading the host off
-    # it cannot raise here.
-    host = parts.hostname
-    # A hostless DSN (e.g. a local unix-socket postgres URL) is local by
-    # nature — there is no remote target to constrain.
-    if host is None or host in allowed:
+    # it cannot raise here. This is the authority-host check: the primary
+    # gate without libpq, a redundant floor with it.
+    if _host_ok(parts.hostname):
         return None
     return C.PROBE_ERR_HOST_NOT_ALLOWED
 
