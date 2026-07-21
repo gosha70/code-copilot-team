@@ -23,6 +23,12 @@ from session_analytics.api.db_test import (
     validate_probe_dsn,
 )
 
+try:
+    import psycopg  # noqa: F401 — presence flips the probe to libpq's own parser
+    _HAS_PSYCOPG = True
+except Exception:  # noqa: BLE001
+    _HAS_PSYCOPG = False
+
 # A realistic psycopg-style failure: multi-line, and carrying every piece of
 # infrastructure detail we must never hand back — host, IP, port, database
 # and username.
@@ -224,6 +230,114 @@ class TestDsnConstraints(unittest.TestCase):
                 "postgresql://user@evil.example/db", ["postgresql://u@[::1bad/x"]
             ),
             C.PROBE_ERR_HOST_NOT_ALLOWED,
+        )
+
+    def test_parser_differential_authority_is_refused(self) -> None:
+        # The host is validated with urlsplit but the connection is made by
+        # psycopg/libpq — a different URI parser. Forms where urlsplit reads
+        # host=localhost while the real target hides elsewhere must be
+        # refused, not admitted on urlsplit's say-so.
+        for dsn in (
+            # `#` starts a URL fragment for urlsplit (host=localhost), but
+            # libpq has no fragment concept — the real authority is hidden.
+            "postgresql://user@localhost#@evil.example/db",
+            "postgresql://user@127.0.0.1#@evil.example/db",
+            # A second colon in the authority: urlsplit still yields
+            # host=localhost, but this is not the clean host:port we checked.
+            "postgresql://user@localhost:5432:9999/db",
+        ):
+            self.assertEqual(
+                validate_probe_dsn(dsn), C.PROBE_ERR_HOST_NOT_ALLOWED, msg=dsn
+            )
+            self.assertEqual(
+                probe(dsn)["error_code"], C.PROBE_ERR_HOST_NOT_ALLOWED, msg=dsn
+            )
+        # A fragment must not be inferred from a legitimate query string —
+        # `?sslmode=require` is a real DSN and stays admitted.
+        self.assertIsNone(
+            validate_probe_dsn("postgresql://user@localhost/db?sslmode=require")
+        )
+
+    def test_query_param_host_redirect_is_refused(self) -> None:
+        # libpq reads the URI query as connection keywords, so `?host=`,
+        # `?hostaddr=` and `?service=` REDIRECT the real connection target
+        # while urlsplit still sees host=localhost. The allowlist means
+        # nothing unless these are refused — in BOTH the libpq-parser path
+        # and the raw-query fallback, so this holds with or without psycopg.
+        for dsn in (
+            "postgresql://user@localhost/db?host=evil.example",
+            "postgresql://user@localhost/db?hostaddr=10.0.0.5",
+            "postgresql://user@localhost/db?service=prod",
+            "postgresql://user@localhost/db?sslmode=require&host=evil.example",
+        ):
+            self.assertEqual(
+                validate_probe_dsn(dsn), C.PROBE_ERR_HOST_NOT_ALLOWED, msg=dsn
+            )
+            self.assertEqual(
+                probe(dsn)["error_code"], C.PROBE_ERR_HOST_NOT_ALLOWED, msg=dsn
+            )
+        # A benign connection option is not a redirect and stays admitted.
+        self.assertIsNone(
+            validate_probe_dsn("postgresql://user@localhost/db?connect_timeout=2")
+        )
+
+    @unittest.skipUnless(_HAS_PSYCOPG, "needs libpq's own parser (psycopg)")
+    def test_libpq_effective_host_is_validated(self) -> None:
+        # With psycopg present the host is read from libpq's parser, so the
+        # check is exact rather than conservative: a loopback target smuggled
+        # through the query is CORRECTLY allowed…
+        self.assertIsNone(validate_probe_dsn("postgresql:///db?host=localhost"))
+        self.assertIsNone(
+            validate_probe_dsn("postgresql://u@localhost/db?hostaddr=127.0.0.1")
+        )
+        # …while a hostaddr pointing off-box is refused even though the URI
+        # authority (and urlsplit) still say localhost — hostaddr is the IP
+        # libpq actually dials.
+        self.assertEqual(
+            validate_probe_dsn(
+                "postgresql://u@localhost/db?host=localhost&hostaddr=10.0.0.5"
+            ),
+            C.PROBE_ERR_HOST_NOT_ALLOWED,
+        )
+
+    def test_loopback_addresses_in_any_notation_are_local(self) -> None:
+        # The literal allowlist held only canonical spellings; every 127/8
+        # address and expanded ::1 is loopback too, and refusing them told
+        # an operator their own machine was "not allowed".
+        for host in (
+            "127.0.0.1", "127.0.0.2", "127.255.255.254",
+            "[::1]", "[0:0:0:0:0:0:0:1]",
+        ):
+            self.assertIsNone(
+                validate_probe_dsn(f"postgresql://user@{host}/db"), msg=host
+            )
+        # Non-loopback addresses are still refused.
+        for host in ("10.0.0.5", "0.0.0.0", "[2001:db8::1]"):
+            self.assertEqual(
+                validate_probe_dsn(f"postgresql://user@{host}/db"),
+                C.PROBE_ERR_HOST_NOT_ALLOWED,
+                msg=host,
+            )
+
+    def test_unsaved_arbitrary_host_is_refused_by_design(self) -> None:
+        # NOT a bug — the core security property. Testing a brand-new host
+        # the operator typed but has NOT configured must be refused, because
+        # admitting the caller-supplied host would restore the very
+        # reachability oracle #101 closed. Save-then-test is the supported
+        # path (the saved host then appears in configured_dsns).
+        self.assertEqual(
+            validate_probe_dsn(
+                "postgresql://user@brand-new-host.internal/db",
+                configured_dsns=("postgresql://user@already-saved.internal/db",),
+            ),
+            C.PROBE_ERR_HOST_NOT_ALLOWED,
+        )
+        # …and once it IS the configured host, it is testable.
+        self.assertIsNone(
+            validate_probe_dsn(
+                "postgresql://user@brand-new-host.internal/db",
+                configured_dsns=("postgresql://user@brand-new-host.internal/db",),
+            )
         )
 
     def test_host_allowlist(self) -> None:

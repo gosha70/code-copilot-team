@@ -253,9 +253,21 @@ PROBE_ERROR_MESSAGES = {
 # Schemes the probe will attempt at all (#101). Compared case-normalized.
 SCHEME_SQLITE = "sqlite"
 PROBE_ALLOWED_SCHEMES = (SCHEME_SQLITE, "postgresql", "postgres")
-# Hosts always allowed, alongside the CONFIGURED DSN's host. Extra
-# config-declared hosts are deliberately deferred until someone needs them.
-PROBE_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+# Loopback host NAMES always allowed, alongside the CONFIGURED DSN's host.
+# Only the name lives here: loopback IP ADDRESSES in every notation
+# (127.0.0.1, 127.0.0.2, expanded ::1) are matched semantically by
+# db_test._is_loopback_host, so listing the canonical IPs here too would be
+# redundant. Extra config-declared hosts are deliberately deferred.
+PROBE_LOOPBACK_HOSTS = ("localhost",)
+
+# libpq reads a connection URI's query string as connection keywords, and
+# some of them CHANGE WHICH SERVER is contacted — so a caller could smuggle
+# a target past the host allowlist via `?host=…`, `?hostaddr=…`, or a
+# `?service=…` that pulls the host from a file (#101 follow-up). When psycopg
+# is installed the effective host is read from libpq's OWN parser and this
+# list is unused; it is the fallback for environments without psycopg, where
+# only the raw query can be inspected. Compared lowercased.
+PROBE_DSN_REDIRECT_PARAMS = ("host", "hostaddr", "service")
 
 # Signals matched (lowercased, on WORD BOUNDARIES — see db_test._word_re)
 # against the driver's message for CLASSIFICATION ONLY; the matched text is

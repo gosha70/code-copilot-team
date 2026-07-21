@@ -187,6 +187,17 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
     create, so the rule is enforced at the open and not merely pre-checked.
     Ingest, setup and the tests use the default mode and still auto-create.
   - A DSN whose host cannot be **parsed** is refused, not assumed local.
+    Loopback is recognized in any notation (`127.0.0.2`, expanded `::1`),
+    not just the canonical spellings.
+  - The host is checked against the target the **database driver** will
+    actually dial, not just the URL authority. libpq reads a connection
+    URI's query string as connection keywords, so `?host=`, `?hostaddr=`
+    and `?service=` can redirect the connection out from under a
+    localhost-looking authority. Where psycopg is installed the effective
+    host is read from libpq's own parser (so the allowlist checks exactly
+    what libpq connects to); where it is not, those redirecting keywords are
+    refused outright, and a URL `#fragment` or a malformed `host:port` is
+    rejected too. Defense-in-depth on top of #103's browser block.
 
 ## Cost tracking (E5, issue #83)
 
