@@ -1,5 +1,5 @@
 /**
- * Code Copilot Team — Pi enforcement runtime (Phase 0 skeleton).
+ * Code Copilot Team — Pi enforcement runtime (Phase 1: registry + config).
  *
  * Loaded EXPLICITLY by the pi-code launcher via `pi --extension …`.
  * This file must never be referenced from the package manifest's
@@ -16,19 +16,23 @@
  * Trust contract (spec FR-004a / P9 / P10):
  *   - This runtime OBSERVES Pi's project_trust lifecycle; it defers
  *     decision ownership (returns no decision) so user trust extensions
- *     keep working. Project CCT configuration loads (in Phase 1+) only
- *     after ctx.isProjectTrusted() reports positive trust; unknown or
- *     deferred trust is treated as untrusted (fail closed).
+ *     keep working. Project CCT configuration loads only after
+ *     ctx.isProjectTrusted() reports positive trust; unknown or deferred
+ *     trust is treated as untrusted (fail closed).
  */
 
-type TrustState = "trusted" | "untrusted" | "unknown";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import {
+  explainKey,
+  loadLayeredConfig,
+  redactedConfig,
+} from "./config/loader.ts";
+import type { LoadResult } from "./config/loader.ts";
+import { BUILTIN_PROFILES } from "./config/profiles.ts";
 
-interface CctRuntimeState {
-  profile: string;
-  trust: TrustState;
-  trustOwner: string | null;
-  capabilities: CapabilityRecord[];
-}
+type TrustState = "trusted" | "untrusted" | "unknown";
 
 interface CapabilityRecord {
   id: string;
@@ -47,16 +51,25 @@ interface CapabilityRecord {
   reason?: string;
 }
 
-/** Phase 0 capability seed. Statuses flip only via acceptance gates (FR-028). */
+interface CctRuntimeState {
+  profile: string;
+  trust: TrustState;
+  trustOwner: string | null;
+  config: LoadResult | null;
+  capabilities: CapabilityRecord[];
+  warnings: string[];
+}
+
+/** Capability seed. Statuses flip only via acceptance gates (FR-028). */
 function seedCapabilities(): CapabilityRecord[] {
   return [
     { id: "skills.shared", implementation_kind: "native", runtime_status: "enabled" },
     { id: "prompts.commands", implementation_kind: "native", runtime_status: "enabled" },
+    { id: "config.layered", implementation_kind: "cct-first-party", runtime_status: "enabled" },
     {
-      id: "config.layered",
+      id: "config.trust-gating",
       implementation_kind: "cct-first-party",
-      runtime_status: "disabled",
-      reason: "Phase 1 (registry, TOML config, trust gating) not yet implemented.",
+      runtime_status: "enabled",
     },
     {
       id: "workflow.sdd",
@@ -92,16 +105,77 @@ function seedCapabilities(): CapabilityRecord[] {
   ];
 }
 
-// The factory signature matches Pi's ExtensionAPI contract. Typed loosely
-// here so Phase 0 carries no build-time dependency; Phase 1 adopts the
-// published types from @earendil-works/pi-coding-agent (dev-only).
+/** Read Pi's own defaultProjectTrust setting for the V2 doctor warning. */
+function readDefaultProjectTrust(): string | null {
+  try {
+    const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+    if (!fs.existsSync(settingsPath)) return null;
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    return typeof settings.defaultProjectTrust === "string"
+      ? settings.defaultProjectTrust
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadConfigForState(state: CctRuntimeState, cwd: string): void {
+  state.config = loadLayeredConfig({
+    globalDir: process.env.CCT_HOME ?? path.join(os.homedir(), ".code-copilot-team"),
+    projectDir: cwd,
+    trusted: state.trust === "trusted",
+    profile: state.profile,
+    noProjectConfig: process.env.CCT_NO_PROJECT_CONFIG === "1",
+  });
+  state.warnings = [...state.config.warnings];
+
+  const dpt = readDefaultProjectTrust();
+  if (dpt === "always") {
+    state.warnings.push(
+      "Pi defaultProjectTrust is 'always': non-interactive sessions trust projects without a saved decision. " +
+        "Project CCT configuration may load headlessly (audit origin: defaultProjectTrust).",
+    );
+  }
+}
+
+function doctorReport(state: CctRuntimeState): string {
+  const lines: string[] = [];
+  lines.push(`pi-code runtime: active (profile=${state.profile})`);
+  lines.push(
+    `project trust: ${state.trust}` +
+      (state.trust !== "trusted" ? " (project CCT config will NOT load)" : "") +
+      (state.trustOwner ? ` — decision owned by: ${state.trustOwner}` : ""),
+  );
+  if (state.config) {
+    lines.push(`profile chain: ${state.config.profileChain.join(" -> ") || "<none>"}`);
+    lines.push("configuration files:");
+    for (const f of state.config.loadedFiles) lines.push(`  loaded:  ${f}`);
+    for (const ig of state.config.ignoredFiles) lines.push(`  ignored: ${ig.file} — ${ig.reason}`);
+    if (state.config.loadedFiles.length === 0 && state.config.ignoredFiles.length === 0)
+      lines.push("  (defaults + profile only)");
+    for (const d of state.config.floorDecisions) {
+      if (d.action !== "unchanged")
+        lines.push(`security floor: ${d.path} [${d.action}] via ${d.layer}`);
+    }
+    for (const e of state.config.errors) lines.push(`error: ${e}`);
+  }
+  for (const w of state.warnings) lines.push(`warning: ${w}`);
+  lines.push("capabilities:");
+  for (const c of state.capabilities) {
+    lines.push(
+      `  ${c.id}: ${c.implementation_kind}/${c.runtime_status}` + (c.reason ? ` — ${c.reason}` : ""),
+    );
+  }
+  return lines.join("\n");
+}
+
+// Factory signature matches Pi's ExtensionAPI contract; typed loosely so
+// the runtime carries no build-time dependency (jiti + Node built-ins only).
 export default async function (pi: any): Promise<void> {
   const marker = process.env.CCT_RUNTIME === "1";
   const testBootstrap = process.env.CCT_TEST_BOOTSTRAP === "1";
 
   if (!marker && !testBootstrap) {
-    // Loaded outside pi-code (e.g. someone pointed --extension at us
-    // manually). Refuse enforcement initialization; register nothing.
     // eslint-disable-next-line no-console
     console.error(
       "[cct] CCT_RUNTIME marker absent — enforcement runtime will not initialize. " +
@@ -114,7 +188,9 @@ export default async function (pi: any): Promise<void> {
     profile: process.env.CCT_PROFILE ?? "disciplined",
     trust: "unknown",
     trustOwner: null,
+    config: null,
     capabilities: seedCapabilities(),
+    warnings: [],
   };
 
   // ── Trust observation (defer ownership: return no decision) ────────
@@ -130,39 +206,49 @@ export default async function (pi: any): Promise<void> {
     } catch {
       state.trust = "unknown"; // fail closed: unknown ⇒ untrusted behavior
     }
+    loadConfigForState(state, ctx?.cwd ?? process.cwd());
+    if (!(state.profile in BUILTIN_PROFILES)) {
+      state.warnings.push(`unknown profile '${state.profile}' — using defaults chain only`);
+    }
     ctx?.ui?.setStatus?.(
       "cct",
-      `CCT ${state.profile} · trust:${state.trust} · phase0`,
+      `CCT ${state.profile} · trust:${state.trust} · sdd:${
+        state.config?.resolved.get("workflow.sdd.enabled")?.value === true ? "on" : "off"
+      }`,
     );
   });
 
-  // ── Diagnostics: /cct:doctor (Phase 0 subset) ──────────────────────
+  const emit = (ctx: any, text: string): void => {
+    if (ctx?.hasUI && ctx?.ui?.notify) ctx.ui.notify(text);
+    // eslint-disable-next-line no-console
+    else console.log(text);
+  };
+
   pi.registerCommand?.("cct:doctor", {
-    description: "Code Copilot Team diagnostics (Phase 0 subset)",
+    description: "Code Copilot Team diagnostics (config, trust, capabilities)",
+    handler: async (ctx: any) => emit(ctx, doctorReport(state)),
+  });
+
+  pi.registerCommand?.("cct:config", {
+    description: "Show resolved CCT configuration (redacted)",
     handler: async (ctx: any) => {
-      const lines = [
-        `pi-code runtime: active (profile=${state.profile})`,
-        `project trust: ${state.trust}${state.trust !== "trusted" ? " (project CCT config will NOT load)" : ""}`,
-        "capabilities:",
-        ...state.capabilities.map(
-          (c) =>
-            `  ${c.id}: ${c.implementation_kind}/${c.runtime_status}` +
-            (c.reason ? ` — ${c.reason}` : ""),
-        ),
-      ];
-      const text = lines.join("\n");
-      if (ctx?.hasUI && ctx?.ui?.notify) ctx.ui.notify(text);
-      // eslint-disable-next-line no-console
-      else console.log(text);
+      if (!state.config) return emit(ctx, "configuration not loaded yet");
+      emit(ctx, JSON.stringify(redactedConfig(state.config), null, 2));
     },
   });
 
-  // ── Discoverability: /cct:features (machine-readable) ──────────────
+  pi.registerCommand?.("cct:explain", {
+    description: "Explain a resolved CCT configuration key: /cct:explain <dotted.key>",
+    handler: async (ctx: any, args?: string) => {
+      if (!state.config) return emit(ctx, "configuration not loaded yet");
+      const key = (typeof args === "string" ? args : "").trim();
+      if (!key) return emit(ctx, "usage: /cct:explain <dotted.key>");
+      emit(ctx, explainKey(state.config, key));
+    },
+  });
+
   pi.registerCommand?.("cct:features", {
     description: "List CCT capability records (JSON)",
-    handler: async (_ctx: any) => {
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify(state.capabilities, null, 2));
-    },
+    handler: async (ctx: any) => emit(ctx, JSON.stringify(state.capabilities, null, 2)),
   });
 }

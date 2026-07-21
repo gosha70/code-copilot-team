@@ -107,7 +107,9 @@ version_ge() {
 PROFILE="${CCT_PROFILE:-disciplined}"
 PROJECT_PATH=""
 NO_CCT=false
+NO_PROJECT_CONFIG=false
 DIAGNOSTIC=false
+CLI_SETS=""
 PI_ARGS=()
 
 case "${1:-}" in
@@ -161,6 +163,12 @@ while [[ $# -gt 0 ]]; do
     --profile)     PROFILE="${2:?--profile requires a name}"; shift 2 ;;
     --project)     PROJECT_PATH="${2:?--project requires a path}"; shift 2 ;;
     --no-cct)      NO_CCT=true; shift ;;
+    --no-project-config|--global) NO_PROJECT_CONFIG=true; shift ;;
+    --set)
+      SET_ENTRY="${2:?--set requires key=value}"
+      if [[ -n "$CLI_SETS" ]]; then CLI_SETS="$CLI_SETS"$'\n'"$SET_ENTRY"; else CLI_SETS="$SET_ENTRY"; fi
+      shift 2
+      ;;
     --diagnostic)  DIAGNOSTIC=true; shift ;;
     --)            shift; PI_ARGS+=("$@"); break ;;
     -*)            PI_ARGS+=("$1"); shift ;;   # unknown option → forward to pi
@@ -215,4 +223,6 @@ fi
 export CCT_RUNTIME=1
 export CCT_PI_CODE_ACTIVE=1
 export CCT_PROFILE="$PROFILE"
+[[ -n "$CLI_SETS" ]] && export CCT_CLI_SETS="$CLI_SETS"
+$NO_PROJECT_CONFIG && export CCT_NO_PROJECT_CONFIG=1
 exec "$PI_BIN" --extension "$RUNTIME_ENTRY" "${PI_ARGS[@]}"
