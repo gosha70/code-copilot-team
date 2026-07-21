@@ -31,6 +31,23 @@ import {
 } from "./config/loader.ts";
 import type { LoadResult } from "./config/loader.ts";
 import { BUILTIN_PROFILES } from "./config/profiles.ts";
+import {
+  checkCommand,
+  checkPath,
+  checkTool,
+  rulesFromConfig,
+} from "./policy/permissions.ts";
+import type { PermissionRuleSet, PermissionVerdict } from "./policy/permissions.ts";
+import { matchCandidates } from "./policy/protected.ts";
+import { audit } from "./policy/audit.ts";
+import {
+  buildWriteGate,
+  isValidPhase,
+  loadState,
+  transition,
+} from "./workflow/phases.ts";
+import type { WorkflowState } from "./workflow/phases.ts";
+import { isSpecPath, validateSpecDir } from "./workflow/sdd.ts";
 
 type TrustState = "trusted" | "untrusted" | "unknown";
 
@@ -58,6 +75,10 @@ interface CctRuntimeState {
   config: LoadResult | null;
   capabilities: CapabilityRecord[];
   warnings: string[];
+  cwd: string;
+  workflow: WorkflowState;
+  rules: PermissionRuleSet | null;
+  interactive: boolean;
 }
 
 /** Capability seed. Statuses flip only via acceptance gates (FR-028). */
@@ -74,14 +95,22 @@ function seedCapabilities(): CapabilityRecord[] {
     {
       id: "workflow.sdd",
       implementation_kind: "cct-first-party",
-      runtime_status: "disabled",
-      reason: "Phase 4 not yet implemented.",
+      runtime_status: "enabled",
+    },
+    {
+      id: "workflow.phases",
+      implementation_kind: "cct-first-party",
+      runtime_status: "enabled",
     },
     {
       id: "permissions.engine",
       implementation_kind: "cct-first-party",
-      runtime_status: "disabled",
-      reason: "Phase 5 not yet implemented.",
+      runtime_status: "enabled",
+    },
+    {
+      id: "permissions.protected-paths",
+      implementation_kind: "cct-first-party",
+      runtime_status: "enabled",
     },
     {
       id: "providers.pi",
@@ -191,6 +220,16 @@ export default async function (pi: any): Promise<void> {
     config: null,
     capabilities: seedCapabilities(),
     warnings: [],
+    cwd: process.cwd(),
+    workflow: { phase: "research", featureId: null, enteredAt: null, history: [] },
+    rules: null,
+    interactive: false,
+  };
+
+  const cfg = (dotted: string): unknown => state.config?.resolved.get(dotted)?.value;
+
+  const refreshRules = (): void => {
+    state.rules = state.config ? rulesFromConfig(cfg, state.interactive) : null;
   };
 
   // ── Trust observation (defer ownership: return no decision) ────────
@@ -206,16 +245,116 @@ export default async function (pi: any): Promise<void> {
     } catch {
       state.trust = "unknown"; // fail closed: unknown ⇒ untrusted behavior
     }
-    loadConfigForState(state, ctx?.cwd ?? process.cwd());
+    state.cwd = ctx?.cwd ?? process.cwd();
+    state.interactive = ctx?.hasUI === true && ctx?.mode === "tui";
+    loadConfigForState(state, state.cwd);
+    state.workflow = loadState(state.cwd);
+    refreshRules();
     if (!(state.profile in BUILTIN_PROFILES)) {
       state.warnings.push(`unknown profile '${state.profile}' — using defaults chain only`);
     }
+    updateStatus(ctx);
+  });
+
+  const updateStatus = (ctx: any): void => {
     ctx?.ui?.setStatus?.(
       "cct",
-      `CCT ${state.profile} · trust:${state.trust} · sdd:${
-        state.config?.resolved.get("workflow.sdd.enabled")?.value === true ? "on" : "off"
-      }`,
+      `CCT ${state.profile} · ${state.workflow.phase}` +
+        (state.workflow.featureId ? `:${state.workflow.featureId}` : "") +
+        ` · trust:${state.trust} · sdd:${cfg("workflow.sdd.enabled") === true ? "on" : "off"}`,
     );
+  };
+
+  // ── Enforcement: tool_call interception (FR-007/FR-009, Phase 4–5 core) ──
+  const WRITE_TOOLS = new Set(["edit", "write"]);
+  const EXEC_TOOLS = new Set(["bash"]);
+
+  const block = (origin: string, actor: string, v: PermissionVerdict, subject: string) => {
+    audit({
+      mode: state.interactive ? "tui" : "headless",
+      actor,
+      decision: v.decision === "ask" ? `ask->${v.effective}` : v.effective,
+      rule: v.rule,
+      subject,
+      origin,
+    });
+    return { block: true, reason: `[cct] ${v.reason}` };
+  };
+
+  pi.on?.("tool_call", async (event: any, ctx: any) => {
+    if (!state.rules) return undefined; // config not loaded → Phase 0 behavior
+    const toolName: string = String(event?.toolName ?? event?.name ?? "");
+    const args: any = event?.input ?? event?.args ?? {};
+
+    // 1) Tool allow/deny (profile allowlists, e.g. peer-reviewer read-only).
+    const toolVerdict = checkTool(state.rules, toolName);
+    if (toolVerdict.effective !== "allow") {
+      return block("permissions", `tool_call:${toolName}`, toolVerdict, toolName);
+    }
+
+    // 2) Path rules for write tools (protected paths, canonicalized).
+    if (WRITE_TOOLS.has(toolName)) {
+      const rawPath: string = String(args?.path ?? args?.file_path ?? args?.filePath ?? "");
+      if (rawPath) {
+        const { candidates } = matchCandidates(state.cwd, rawPath);
+        for (const candidate of candidates) {
+          const v = checkPath(state.rules, candidate);
+          if (v.effective === "deny" || v.effective === "fail") {
+            return block("protected-path", `tool_call:${toolName}`, v, rawPath);
+          }
+          if (v.decision === "ask" && state.interactive && ctx?.ui?.confirm) {
+            const ok = await ctx.ui.confirm(`[cct] Allow ${toolName} on '${rawPath}'?`, {
+              detail: v.reason,
+            });
+            if (!ok) return block("protected-path", `tool_call:${toolName}`, v, rawPath);
+          }
+        }
+
+        // 3) SDD Build gate: writes outside specs/ blocked until artifacts hold.
+        const gate = buildWriteGate(state.cwd, state.workflow, cfg("workflow.sdd.enabled") === true);
+        if (gate && !isSpecPath(rawPath)) {
+          const v: PermissionVerdict = {
+            decision: "deny",
+            effective: "deny",
+            rule: "sdd.build-gate",
+            reason:
+              `Build is gated for feature '${gate.featureId ?? "<none>"}' — ` +
+              gate.reasons.join("; ") +
+              ". Complete the spec artifacts (or /cct:phase plan) to proceed.",
+          };
+          return block("sdd-gate", `tool_call:${toolName}`, v, rawPath);
+        }
+      }
+    }
+
+    // 4) Command rules for execution tools (chained-command aware).
+    if (EXEC_TOOLS.has(toolName)) {
+      const command: string = String(args?.command ?? args?.cmd ?? "");
+      if (command) {
+        const v = checkCommand(state.rules, command);
+        if (v.effective === "deny" || v.effective === "fail") {
+          return block("permissions", `tool_call:${toolName}`, v, command);
+        }
+        if (v.decision === "ask" && state.interactive && ctx?.ui?.confirm) {
+          const ok = await ctx.ui.confirm(`[cct] Allow command?`, { detail: command });
+          if (!ok) return block("permissions", `tool_call:${toolName}`, v, command);
+        }
+        const gate = buildWriteGate(state.cwd, state.workflow, cfg("workflow.sdd.enabled") === true);
+        if (gate) {
+          const v2: PermissionVerdict = {
+            decision: "deny",
+            effective: "deny",
+            rule: "sdd.build-gate",
+            reason:
+              `Build is gated for feature '${gate.featureId ?? "<none>"}' — ` +
+              gate.reasons.join("; "),
+          };
+          return block("sdd-gate", `tool_call:${toolName}`, v2, command);
+        }
+      }
+    }
+
+    return undefined; // allow
   });
 
   const emit = (ctx: any, text: string): void => {
@@ -250,5 +389,69 @@ export default async function (pi: any): Promise<void> {
   pi.registerCommand?.("cct:features", {
     description: "List CCT capability records (JSON)",
     handler: async (ctx: any) => emit(ctx, JSON.stringify(state.capabilities, null, 2)),
+  });
+
+  pi.registerCommand?.("cct:phase", {
+    description: "Show or change workflow phase: /cct:phase [research|plan|build|review] [feature-id]",
+    handler: async (ctx: any, args?: string) => {
+      const parts = (typeof args === "string" ? args : "").trim().split(/\s+/).filter(Boolean);
+      if (parts.length === 0) {
+        return emit(
+          ctx,
+          `phase: ${state.workflow.phase}` +
+            (state.workflow.featureId ? ` (feature: ${state.workflow.featureId})` : ""),
+        );
+      }
+      const target = parts[0].toLowerCase();
+      if (!isValidPhase(target)) {
+        return emit(ctx, `unknown phase '${parts[0]}' (research|plan|build|review)`);
+      }
+      const featureId = parts[1] ?? null;
+      const result = transition(
+        state.cwd,
+        state.workflow,
+        target,
+        featureId,
+        new Date().toISOString(),
+      );
+      if (!result.ok) {
+        audit({
+          mode: state.interactive ? "tui" : "headless",
+          actor: "cct:phase",
+          decision: "deny",
+          rule: "sdd.entry-gate",
+          subject: `${target}:${featureId ?? state.workflow.featureId ?? "<none>"}`,
+          origin: "sdd-gate",
+        });
+        return emit(ctx, `phase transition to '${target}' BLOCKED:\n  - ${result.reasons.join("\n  - ")}`);
+      }
+      state.workflow = result.state;
+      updateStatus(ctx);
+      emit(
+        ctx,
+        `phase: ${state.workflow.phase}` +
+          (state.workflow.featureId ? ` (feature: ${state.workflow.featureId})` : "") +
+          (result.gate ? ` — SDD gate: PASS (${result.gate.specMode})` : ""),
+      );
+    },
+  });
+
+  pi.registerCommand?.("cct:status", {
+    description: "CCT workflow + gate status for the active feature",
+    handler: async (ctx: any) => {
+      const lines = [
+        `phase: ${state.workflow.phase}`,
+        `feature: ${state.workflow.featureId ?? "<none>"}`,
+        `profile: ${state.profile}`,
+        `trust: ${state.trust}`,
+        `sdd: ${cfg("workflow.sdd.enabled") === true ? "enabled" : "disabled"}`,
+      ];
+      if (state.workflow.featureId) {
+        const gate = validateSpecDir(path.join(state.cwd, "specs", state.workflow.featureId));
+        lines.push(`sdd gate: ${gate.pass ? "PASS" : "FAIL"} (spec_mode=${gate.specMode ?? "?"})`);
+        for (const r of gate.reasons) lines.push(`  - ${r}`);
+      }
+      emit(ctx, lines.join("\n"));
+    },
   });
 }
