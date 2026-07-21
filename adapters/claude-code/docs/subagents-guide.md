@@ -59,6 +59,10 @@ Task: "Run the verify-app agent to check the project"
 
 Reference agents by name when spawning sub-agents. The agent's system prompt and tool restrictions are applied automatically.
 
+### Listing Installed Agents
+
+Claude Code removed the interactive `/agents` wizard in v2.1.198 — there is no built-in way to browse loaded agents anymore. Use the `/list-agents` command installed by `setup.sh` instead: it scans `~/.claude/agents/` and the project's `.claude/agents/` and prints the roster (name, model, tools, description). `/list-agents <name>` shows one agent in detail.
+
 ## Creating Custom Agents
 
 ### Step 1: Choose the Right Scope

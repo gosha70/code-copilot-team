@@ -625,6 +625,12 @@ assert_file_exists "retro.md command exists" "$ADAPTER_DIR/.claude/commands/retr
 assert_nonempty "retro.md command non-empty" "$ADAPTER_DIR/.claude/commands/retro.md"
 
 echo ""
+echo "=== harness engineering: list-agents command ==="
+
+assert_file_exists "list-agents.md command exists" "$ADAPTER_DIR/.claude/commands/list-agents.md"
+assert_nonempty "list-agents.md command non-empty" "$ADAPTER_DIR/.claude/commands/list-agents.md"
+
+echo ""
 echo "=== harness engineering: remediation hints in verify-after-edit ==="
 
 rc=0

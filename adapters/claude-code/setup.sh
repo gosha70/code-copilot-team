@@ -137,12 +137,12 @@ ensure_hook_command() {
 }
 
 # ══════════════════════════════════════════════════════════════
-# --sync: re-copy rules, skills, agents, hooks, and launcher from repo
+# --sync: re-copy rules, skills, agents, commands, hooks, and launcher from repo
 # ══════════════════════════════════════════════════════════════
 
 if [[ "$SYNC_MODE" == "1" ]]; then
     maybe_install_memkernel
-    echo "Syncing rules, skills, agents, hooks, and launcher from repo..."
+    echo "Syncing rules, skills, agents, commands, hooks, and launcher from repo..."
 
     # Global rules (always skills) — from shared/skills/
     SKILLS_SOURCE="$SHARED_DIR/skills"
@@ -178,6 +178,15 @@ if [[ "$SYNC_MODE" == "1" ]]; then
     if [[ -d "$AGENTS_SOURCE" ]]; then
         cp "$AGENTS_SOURCE"/*.md "$AGENTS_TARGET/" 2>/dev/null || true
         echo "[done] Synced agents to $AGENTS_TARGET"
+    fi
+
+    # Global commands
+    COMMANDS_SOURCE="$SCRIPT_DIR/.claude/commands"
+    COMMANDS_TARGET="$CLAUDE_DIR/commands"
+    mkdir -p "$COMMANDS_TARGET"
+    if [[ -d "$COMMANDS_SOURCE" ]]; then
+        cp "$COMMANDS_SOURCE"/*.md "$COMMANDS_TARGET/" 2>/dev/null || true
+        echo "[done] Synced commands to $COMMANDS_TARGET"
     fi
 
     # Permission profiles (default = absence of a file; balanced/relaxed +
@@ -1493,6 +1502,7 @@ echo "Global commands installed:"
 echo "  - /review-submit       — start or continue the peer review loop"
 echo "  - /review-decide       — resolve a circuit breaker (approve/reject/retry)"
 echo "  - /phase-complete      — signal phase completion (validates review passed)"
+echo "  - /list-agents         — list installed subagents (replaces removed /agents)"
 echo ""
 echo "Custom agents installed:"
 echo "  Utility agents:"
