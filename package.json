@@ -1,0 +1,22 @@
+{
+  "name": "code-copilot-team-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Code Copilot Team advisory content package for the Pi coding agent: skills and prompt templates. Enforcement requires pi-code (./scripts/setup.sh --pi). See adapters/pi/README.md.",
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gosha70/code-copilot-team.git"
+  },
+  "pi": {
+    "skills": [
+      "./adapters/pi/resources/skills"
+    ],
+    "prompts": [
+      "./adapters/pi/resources/prompts"
+    ]
+  }
+}
