@@ -527,6 +527,7 @@ HOME="$FAKE_HOME" bash "$REPO_DIR/adapters/claude-code/setup.sh" --sync > /dev/n
 assert_ok "retired template pruned" $([[ ! -d "$FAKE_INSTALLED/retired-template" ]] && echo 0 || echo 1)
 assert_ok "current template preserved" $([[ -d "$FAKE_INSTALLED/ml-rag" ]] && echo 0 || echo 1)
 assert_file_exists "current template CLAUDE.md refreshed" "$FAKE_INSTALLED/ml-rag/CLAUDE.md"
+assert_file_exists "--sync installs global commands" "$FAKE_CLAUDE/commands/list-agents.md"
 
 # ══════════════════════════════════════════════════════════════
 echo ""
