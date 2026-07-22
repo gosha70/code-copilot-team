@@ -1232,7 +1232,9 @@ assert_eq "sync-check triggers on README.md changes" "2" "$README_PATH_COUNT"
 CONTRIB_PATH_COUNT=$(grep -Fc "'CONTRIBUTING.md'" "$WORKFLOW_FILE")
 assert_eq "sync-check triggers on CONTRIBUTING.md changes" "2" "$CONTRIB_PATH_COUNT"
 
-WORKFLOW_PATH_COUNT=$(grep -Fc "'.github/workflows/sync-check.yml'" "$WORKFLOW_FILE")
+# Broadened from the single sync-check.yml path to all workflows, so a
+# malformed workflow is caught by a workflow other than itself.
+WORKFLOW_PATH_COUNT=$(grep -Fc "'.github/workflows/**'" "$WORKFLOW_FILE")
 assert_eq "sync-check triggers on workflow file changes" "2" "$WORKFLOW_PATH_COUNT"
 
 SPECS_PATH_COUNT=$(grep -Fc "'specs/**'" "$WORKFLOW_FILE")

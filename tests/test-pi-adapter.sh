@@ -145,6 +145,17 @@ assert "launcher fallback matches compat.env ($COMPAT_MIN)" "[[ '$COMPAT_MIN' ==
 assert "CI consumes compat.env" \
   "grep -q 'compat.env' '$REPO_DIR/.github/workflows/pi-tests.yml'"
 
+# ── Workflow validity (CI cannot self-check a broken workflow) ──
+echo "--- workflow validation ---"
+assert "workflows validate" "bash '$REPO_DIR/scripts/validate-workflows.sh' >/dev/null 2>&1"
+WF_BAD="$REPO_DIR/tests/fixtures/workflow-invalid"
+WF_OUT=$(bash "$REPO_DIR/scripts/validate-workflows.sh" "$WF_BAD" 2>&1 || true)
+WF_RC=0
+bash "$REPO_DIR/scripts/validate-workflows.sh" "$WF_BAD" >/dev/null 2>&1 || WF_RC=$?
+assert "validator rejects a duplicate-key workflow (exit 1)" "[[ '$WF_RC' == '1' ]]"
+assert "validator names the duplicated trigger" \
+  "echo \"\$WF_OUT\" | grep -q 'duplicate keys: on.pull_request'"
+
 # ── Capability registry (T1.1) ──────────────────────────────
 echo "--- capability registry ---"
 CAP_DIR="$REPO_DIR/shared/capabilities"

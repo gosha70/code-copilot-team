@@ -1,7 +1,29 @@
+# FIXTURE — deliberately invalid. Do not copy.
+#
+# This is the real pi-tests.yml as committed at c2b92d0, which carried two
+# `on.pull_request` blocks. YAML resolves duplicate keys last-wins, so every
+# YAML library parses this happily; GitHub Actions' schema validator rejects
+# the whole file and the run fails with zero jobs and no logs.
+#
+# scripts/validate-workflows.sh must report `duplicate keys: on.pull_request`
+# for this file. tests/test-pi-adapter.sh asserts that it does.
 name: Pi Adapter Tests
 
 on:
   push:
+    branches: [master, main]
+    paths:
+      - 'adapters/pi/**'
+      - 'tests/test-pi-launcher.sh'
+      - 'tests/test-pi-adapter.sh'
+      - 'tests/test-pi-runtime.sh'
+      - 'tests/pi-runtime/**'
+      - 'scripts/generate.sh'
+      - 'scripts/validate-capabilities.sh'
+      - 'shared/capabilities/**'
+      - 'shared/schemas/**'
+      - '.github/workflows/pi-tests.yml'
+  pull_request:
     branches: [master, main]
     paths:
       - 'adapters/pi/**'
