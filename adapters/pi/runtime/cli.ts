@@ -196,6 +196,71 @@ function features(json: boolean): CliResult {
   return { out: lines.join("\n"), code: 0 };
 }
 
+/**
+ * A self-contained, redacted snapshot of the resolved configuration (NFR-003,
+ * T1.8). Unlike `config`, which is a human-readable dump, `export` emits a
+ * portable artifact — TOML by default (round-trips back through the loader),
+ * or a JSON document with provenance — carrying its own header so a reader
+ * knows it is redacted and untrusted. Intended for issues, config review, and
+ * pinning. Redaction is inherited from redactedConfig(), so a sensitive value
+ * can never reach this surface; the leak sweep covers it alongside the rest.
+ */
+function exportConfig(opts: CliOptions, json: boolean): CliResult {
+  const cfg = load(opts);
+  const redacted = redactedConfig(cfg);
+  if (json) {
+    return {
+      out: jsonOut({
+        exportedBy: "pi-code export",
+        configVersion: cfg.configVersion,
+        profileChain: cfg.profileChain,
+        loadedFiles: cfg.loadedFiles,
+        redacted: true,
+        trustNote: TRUST_NOTE,
+        config: redacted,
+      }),
+      code: 0,
+    };
+  }
+  const toml: string[] = [
+    "# CCT resolved configuration export (redacted).",
+    `# schema version: ${cfg.configVersion}`,
+    `# profile chain: ${cfg.profileChain.join(" -> ") || "<none>"}`,
+    `# ${TRUST_NOTE}`,
+    `config_version = ${cfg.configVersion}`,
+    "",
+  ];
+  const scalars: string[] = [];
+  const tables: string[] = [];
+  const tomlValue = (v: unknown): string => JSON.stringify(v);
+  const walk = (obj: { [k: string]: unknown }, prefix: string): void => {
+    const leaves = Object.keys(obj)
+      .filter(
+        (k) =>
+          !(obj[k] && typeof obj[k] === "object" && !Array.isArray(obj[k])),
+      )
+      .sort();
+    const subs = Object.keys(obj)
+      .filter(
+        (k) => obj[k] && typeof obj[k] === "object" && !Array.isArray(obj[k]),
+      )
+      .sort();
+    if (prefix && leaves.length) {
+      tables.push(`\n[${prefix}]`);
+      for (const k of leaves) tables.push(`${k} = ${tomlValue(obj[k])}`);
+    } else if (!prefix) {
+      for (const k of leaves) scalars.push(`${k} = ${tomlValue(obj[k])}`);
+    }
+    for (const k of subs)
+      walk(obj[k] as { [k: string]: unknown }, prefix ? `${prefix}.${k}` : k);
+  };
+  walk(redacted, "");
+  return {
+    out: [...toml, ...scalars, ...tables].join("\n").trimEnd() + "\n",
+    code: 0,
+  };
+}
+
 export function runCli(opts: CliOptions): CliResult {
   const args = [...opts.argv];
   const json = args.includes("--json");
@@ -211,9 +276,11 @@ export function runCli(opts: CliOptions): CliResult {
         : config(opts, json);
     case "features":
       return features(json);
+    case "export":
+      return exportConfig(opts, json);
     default:
       return {
-        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features)`,
+        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export)`,
         code: 64,
       };
   }

@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-22
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **16 of 64 complete.**
+written. Current state: **17 of 64 complete.** Phase 1 complete (8/8).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -33,8 +33,7 @@ pass. Work proceeds in phase order.
 - [x] **T1.5 (P0)** Trust gating module: `project_trust` observer (defer ownership — V1), `isProjectTrusted()` gate before every project-config load, fail-closed unknown, restart-required messaging after `/trust`, `defaultProjectTrust: "always"` doctor warning + audit origin (FR-004a, V2).
 - [x] **T1.6 (P0)** `pi-code doctor` / `config` / `config explain <key>` / `features` (+ `--json` for all).
 - [x] **T1.7 (P1)** Config migration mechanism + obsolete-key detection; `validate-cct-config` CI job.
-- [ ] **T1.8 (P2)** Redacted resolved-configuration `export`.
-  - _Partial — missing: an `export` surface (`redactedConfig()` exists and is surfaced via `/cct:config`)._
+- [x] **T1.8 (P2)** Redacted resolved-configuration `export`.
 
 ### Phase 2 — Skills, prompts, always-context
 - [x] **T2.1 (P0)** `generate.sh` `[pi]` section: verbatim skills copy → `adapters/pi/resources/skills/`; deterministic ordering; drift check in `sync-check.yml`.
