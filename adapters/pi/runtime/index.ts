@@ -40,6 +40,7 @@ import {
 import type { PermissionRuleSet, PermissionVerdict } from "./policy/permissions.ts";
 import { matchCandidates } from "./policy/protected.ts";
 import { audit } from "./policy/audit.ts";
+import { defaultProjectTrustFinding, trustDrift } from "./config/trust.ts";
 import {
   buildWriteGate,
   isValidPhase,
@@ -79,6 +80,10 @@ interface CctRuntimeState {
   workflow: WorkflowState;
   rules: PermissionRuleSet | null;
   interactive: boolean;
+  /** Trust value the current config was resolved with (FR-004a). */
+  trustLoadedWith: TrustState | null;
+  /** Set when trust changed after config load; requires a restart. */
+  restartRequired: boolean;
 }
 
 /** Capability seed. Statuses flip only via acceptance gates (FR-028). */
@@ -157,14 +162,39 @@ function loadConfigForState(state: CctRuntimeState, cwd: string): void {
     noProjectConfig: process.env.CCT_NO_PROJECT_CONFIG === "1",
   });
   state.warnings = [...state.config.warnings];
+  state.trustLoadedWith = state.trust;
 
-  const dpt = readDefaultProjectTrust();
-  if (dpt === "always") {
-    state.warnings.push(
-      "Pi defaultProjectTrust is 'always': non-interactive sessions trust projects without a saved decision. " +
-        "Project CCT configuration may load headlessly (audit origin: defaultProjectTrust).",
-    );
+  const finding = defaultProjectTrustFinding(readDefaultProjectTrust());
+  if (finding) {
+    state.warnings.push(finding.warning);
+    // Warning alone is not enough: a headless session that was trusted
+    // without a saved decision must leave a durable record (V2).
+    audit({ mode: state.interactive ? "tui" : "headless", actor: "session_start", ...finding.audit });
   }
+}
+
+/**
+ * Compare live trust against what the config was loaded with. Config is never
+ * re-resolved mid-session: permissions and gates already made decisions using
+ * the old value, so the honest response is to report and require a restart.
+ */
+function noteTrustDrift(state: CctRuntimeState, current: TrustState): void {
+  // Falsy check, not `=== null`: every TrustState is a non-empty string, so
+  // this also covers an uninitialized field rather than reporting drift from it.
+  if (state.restartRequired || !state.trustLoadedWith) return;
+  const drift = trustDrift(state.trustLoadedWith, current);
+  if (!drift) return;
+  state.restartRequired = true;
+  state.trust = current;
+  state.warnings.push(drift.message);
+  audit({
+    mode: state.interactive ? "tui" : "headless",
+    actor: "project_trust",
+    decision: "restart-required",
+    rule: "trust.changed-mid-session",
+    subject: `${drift.from}->${drift.to}`,
+    origin: "trust",
+  });
 }
 
 function doctorReport(state: CctRuntimeState): string {
@@ -224,6 +254,8 @@ export default async function (pi: any): Promise<void> {
     workflow: { phase: "research", featureId: null, enteredAt: null, history: [] },
     rules: null,
     interactive: false,
+    trustLoadedWith: null,
+    restartRequired: false,
   };
 
   const cfg = (dotted: string): unknown => state.config?.resolved.get(dotted)?.value;
@@ -233,9 +265,16 @@ export default async function (pi: any): Promise<void> {
   };
 
   // ── Trust observation (defer ownership: return no decision) ────────
-  pi.on?.("project_trust", async (_event: unknown, _ctx: any) => {
+  pi.on?.("project_trust", async (_event: unknown, ctx: any) => {
     // Deliberately return undefined: the first extension that answers
     // owns the decision (Pi semantics); CCT observes only (P10/V1).
+    try {
+      const current: TrustState = ctx?.isProjectTrusted?.() ? "trusted" : "untrusted";
+      noteTrustDrift(state, current);
+      updateStatus(ctx);
+    } catch {
+      /* observation only — never block the trust decision */
+    }
     return undefined;
   });
 

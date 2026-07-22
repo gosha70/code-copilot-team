@@ -176,11 +176,28 @@ export function migrateTable(table: TomlTable): MigrationResult {
   let version = declared;
   for (const m of MIGRATIONS) {
     if (m.from < version) continue;
-    if (m.from !== version) break; // gap in the chain; stop rather than guess
+    if (m.from !== version) {
+      // Mis-authored chain: refuse rather than silently leave the table at an
+      // intermediate version that later code would treat as current.
+      return {
+        table,
+        declared,
+        notes,
+        error: `migration chain gap: nothing migrates v${version} (next entry starts at v${m.from})`,
+      };
+    }
     for (const change of m.apply(working)) {
       notes.push({ from: m.from, to: m.to, change });
     }
     version = m.to;
+  }
+  if (version !== CONFIG_SCHEMA_VERSION) {
+    return {
+      table,
+      declared,
+      notes,
+      error: `migration chain incomplete: reached v${version}, expected v${CONFIG_SCHEMA_VERSION}`,
+    };
   }
   working[CONFIG_VERSION_KEY] = CONFIG_SCHEMA_VERSION;
 

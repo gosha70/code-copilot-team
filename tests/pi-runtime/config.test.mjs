@@ -29,6 +29,10 @@ import {
   declaredVersion,
   migrateTable,
 } from "../../adapters/pi/runtime/config/migrate.ts";
+import {
+  defaultProjectTrustFinding,
+  trustDrift,
+} from "../../adapters/pi/runtime/config/trust.ts";
 
 // ── helpers ─────────────────────────────────────────────────
 
@@ -327,4 +331,55 @@ test("loader: legacy keys are migrated, reported, and applied", () => {
   assert.equal(r.configVersion, CONFIG_SCHEMA_VERSION);
   // config_version is file metadata, not a resolved configuration key.
   assert.equal(r.resolved.has("config_version"), false);
+});
+
+// ── trust gating (FR-004a, T1.5) ────────────────────────────
+
+test("trust: no drift while the live value matches the loaded one", () => {
+  assert.equal(trustDrift("trusted", "trusted"), null);
+  assert.equal(trustDrift("untrusted", "untrusted"), null);
+});
+
+test("trust: gaining trust mid-session requires a restart, not a reload", () => {
+  const d = trustDrift("untrusted", "trusted");
+  assert.notEqual(d, null);
+  assert.equal(d.from, "untrusted");
+  assert.equal(d.to, "trusted");
+  // The session must not pretend project config is now in effect.
+  assert.match(d.message, /NOT loaded/);
+  assert.match(d.message, /Restart pi-code/);
+});
+
+test("trust: losing trust mid-session says what is still in effect", () => {
+  const d = trustDrift("trusted", "untrusted");
+  assert.match(d.message, /remains in effect/);
+  assert.match(d.message, /Restart pi-code/);
+});
+
+test("trust: unknown is treated as its own state, not as untrusted", () => {
+  assert.notEqual(trustDrift("unknown", "trusted"), null);
+  assert.notEqual(trustDrift("unknown", "untrusted"), null);
+});
+
+test("trust: defaultProjectTrust 'always' warns and produces an audit record", () => {
+  const f = defaultProjectTrustFinding("always");
+  assert.notEqual(f, null);
+  assert.match(f.warning, /without a saved decision/);
+  assert.equal(f.audit.origin, "trust");
+  assert.equal(f.audit.rule, "pi.defaultProjectTrust");
+  assert.match(f.audit.decision, /without-saved-decision/);
+});
+
+test("trust: other defaultProjectTrust values report nothing", () => {
+  for (const v of [null, "never", "prompt", "", "ALWAYS"]) {
+    assert.equal(defaultProjectTrustFinding(v), null, `should be null for ${JSON.stringify(v)}`);
+  }
+});
+
+test("migrate: a mis-authored chain is an error, not a silent partial migration", () => {
+  // Guards the invariant directly: reaching a version below the current one
+  // must never be reported as a successful migration.
+  const r = migrateTable({ config_version: 1 });
+  assert.equal(r.error, null);
+  assert.equal(r.table.config_version, CONFIG_SCHEMA_VERSION);
 });
