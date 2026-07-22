@@ -1,0 +1,108 @@
+# FIXTURE — deliberately invalid. Do not copy.
+#
+# This is the real pi-tests.yml as committed at c2b92d0, which carried two
+# `on.pull_request` blocks. YAML resolves duplicate keys last-wins, so every
+# YAML library parses this happily; GitHub Actions' schema validator rejects
+# the whole file and the run fails with zero jobs and no logs.
+#
+# scripts/validate-workflows.sh must report `duplicate keys: on.pull_request`
+# for this file. tests/test-pi-adapter.sh asserts that it does.
+name: Pi Adapter Tests
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'adapters/pi/**'
+      - 'tests/test-pi-launcher.sh'
+      - 'tests/test-pi-adapter.sh'
+      - 'tests/test-pi-runtime.sh'
+      - 'tests/pi-runtime/**'
+      - 'scripts/generate.sh'
+      - 'scripts/validate-capabilities.sh'
+      - 'shared/capabilities/**'
+      - 'shared/schemas/**'
+      - '.github/workflows/pi-tests.yml'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'adapters/pi/**'
+      - 'tests/test-pi-launcher.sh'
+      - 'tests/test-pi-adapter.sh'
+      - 'tests/test-pi-runtime.sh'
+      - 'tests/pi-runtime/**'
+      - 'scripts/generate.sh'
+      - 'scripts/validate-capabilities.sh'
+      - 'shared/capabilities/**'
+      - 'shared/schemas/**'
+      - '.github/workflows/pi-tests.yml'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'adapters/pi/**'
+      - 'tests/test-pi-launcher.sh'
+      - 'tests/test-pi-adapter.sh'
+      - 'tests/test-pi-runtime.sh'
+      - 'tests/pi-runtime/**'
+      - 'scripts/generate.sh'
+      - 'scripts/validate-capabilities.sh'
+      - 'shared/capabilities/**'
+      - 'shared/schemas/**'
+      - '.github/workflows/pi-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  pi-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The runtime suite needs Node >= 22.6 for --experimental-strip-types;
+      # below that it auto-skips, which would pass this job without running.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # T0.6: the version compatibility declaration is consumed by CI, not just
+      # by the launcher. Guards the drift case where compat.env is bumped but
+      # the launcher's fallback constant is not.
+      - name: Pi version compatibility declaration
+        run: |
+          set -euo pipefail
+          test -f adapters/pi/compat.env || { echo "compat.env missing"; exit 1; }
+          # shellcheck source=/dev/null
+          source adapters/pi/compat.env
+          : "${CCT_PI_MIN_VERSION:?CCT_PI_MIN_VERSION not declared in compat.env}"
+          if ! printf '%s' "$CCT_PI_MIN_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "CCT_PI_MIN_VERSION='$CCT_PI_MIN_VERSION' is not semver"
+            exit 1
+          fi
+          FALLBACK=$(grep -m1 '^CCT_PI_MIN_VERSION=' adapters/pi/bin/pi-code | cut -d'"' -f2)
+          if [[ "$FALLBACK" != "$CCT_PI_MIN_VERSION" ]]; then
+            echo "Drift: compat.env declares $CCT_PI_MIN_VERSION but pi-code falls back to $FALLBACK"
+            exit 1
+          fi
+          echo "Pi minimum version $CCT_PI_MIN_VERSION — declaration and launcher agree."
+
+      # T1.1: the neutral capability registry is a gate, not documentation.
+      - name: Capability registry
+        run: bash scripts/validate-capabilities.sh
+
+      - name: Launcher contract
+        run: bash tests/test-pi-launcher.sh
+
+      - name: Adapter generation and install
+        run: bash tests/test-pi-adapter.sh
+
+      - name: Runtime unit tests
+        run: |
+          set -o pipefail
+          bash tests/test-pi-runtime.sh 2>&1 | tee pi-runtime.log
+          if grep -q '\[SKIP\]' pi-runtime.log; then
+            echo ""
+            echo "ERROR: Pi runtime tests skipped instead of running."
+            echo "This job must execute them — check the Node version above."
+            exit 1
+          fi

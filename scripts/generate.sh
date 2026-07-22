@@ -307,4 +307,86 @@ REVIEW_ADVISORY
 
 echo "[aider] Generated CONVENTIONS.md"
 
+# ── Pi ───────────────────────────────────────────────────────
+# Generate CONTENT resources only (spec: pi-harness-adoption FR-003/P3):
+#   resources/skills/   — verbatim Agent Skills copies (Pi implements the
+#                         Agent Skills spec; zero conversion)
+#   resources/prompts/  — prompt templates converted from the Claude Code
+#                         adapter's static commands
+#   resources/context/  — always-context bundle (ALWAYS_SKILLS bodies)
+# NEVER writes into adapters/pi/runtime/, bin/, schemas/, or tests/ —
+# those are authored, not generated.
+echo "[pi] Generating resources..."
+PI_RES="$ADAPTERS/pi/resources"
+mkdir -p "$PI_RES/skills" "$PI_RES/prompts" "$PI_RES/context"
+rm -rf "$PI_RES/skills" "$PI_RES/prompts"/*.md "$PI_RES/context"/*.md
+mkdir -p "$PI_RES/skills"
+
+# Skills: verbatim copy, sorted for determinism
+for skill_dir in "$SKILLS_DIR"/*/; do
+  [[ -d "$skill_dir" ]] || continue
+  name=$(basename "$skill_dir")
+  [[ -f "$skill_dir/SKILL.md" ]] || continue
+  mkdir -p "$PI_RES/skills/$name"
+  cp "$skill_dir/SKILL.md" "$PI_RES/skills/$name/SKILL.md"
+done
+PI_SKILL_COUNT=$(ls -d "$PI_RES/skills"/*/ 2>/dev/null | wc -l | tr -d ' ')
+echo "[pi] Copied $PI_SKILL_COUNT skills (verbatim, Agent Skills spec)"
+
+# Prompt templates: convert static Claude Code commands. Stateful commands
+# (mutate workflow state / start agents / enforce gates) are excluded here
+# and will be registered as extension commands by the runtime (Phase 2,
+# spec §11.5). Keep this list in sync with tasks.md T2.2.
+PI_STATEFUL_COMMANDS="auto-build phase-complete ralph-start review-decide review-submit cycle-start"
+CC_COMMANDS_DIR="$ADAPTERS/claude-code/.claude/commands"
+PI_PROMPT_COUNT=0
+for cmd_file in "$CC_COMMANDS_DIR"/*.md; do
+  [[ -f "$cmd_file" ]] || continue
+  cmd_name=$(basename "$cmd_file" .md)
+  skip=false
+  for s in $PI_STATEFUL_COMMANDS; do
+    [[ "$s" == "$cmd_name" ]] && skip=true && break
+  done
+  $skip && continue
+  # Pi prompt-template frontmatter: description from the first non-empty line.
+  # -E (ERE): `\+` is a GNU extension BSD/macOS sed does not support, which
+  # silently left the leading `#` in generated descriptions on macOS.
+  desc=$(grep -m1 -v '^[[:space:]]*$' "$cmd_file" | sed -E 's/^#+ *//; s/"/\\"/g')
+  {
+    echo "---"
+    echo "description: \"$desc\""
+    echo "---"
+    echo ""
+    cat "$cmd_file"
+  } > "$PI_RES/prompts/$cmd_name.md"
+  PI_PROMPT_COUNT=$((PI_PROMPT_COUNT + 1))
+done
+echo "[pi] Generated $PI_PROMPT_COUNT prompt templates (stateful commands deferred to runtime)"
+
+# Always-context bundle: ALWAYS_SKILLS bodies, loaded by the runtime /
+# launcher before task execution. NOTE: the 32 KiB cap above is a
+# Codex-adapter constraint; Pi limits are measured separately (spec C-4) —
+# we report size and warn (not fail) past an advisory threshold.
+PI_ALWAYS_MD="$PI_RES/context/always-context.md"
+{
+  echo "# Code Copilot Team — Always-On Policy (generated)"
+  echo ""
+  echo "Generated from shared/skills/ (ALWAYS_SKILLS). Do not edit directly."
+  echo "Regenerate with: ./scripts/generate.sh"
+  echo ""
+  for name in $ALWAYS_SKILLS; do
+    skill_file="$SKILLS_DIR/$name/SKILL.md"
+    [[ -f "$skill_file" ]] || continue
+    echo "---"
+    echo ""
+    skill_body "$skill_file"
+    echo ""
+  done
+} > "$PI_ALWAYS_MD"
+PI_ALWAYS_SIZE=$(wc -c < "$PI_ALWAYS_MD" | tr -d ' ')
+if [[ "$PI_ALWAYS_SIZE" -gt 65536 ]]; then
+  echo "[pi] WARNING: always-context.md is $PI_ALWAYS_SIZE bytes (advisory threshold: 65536)"
+fi
+echo "[pi] Generated always-context.md ($PI_ALWAYS_SIZE bytes)"
+
 echo "=== Done ==="

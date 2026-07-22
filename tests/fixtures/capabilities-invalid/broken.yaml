@@ -1,0 +1,22 @@
+# Deliberately invalid adapter classification. Every defect here must be
+# reported by scripts/validate-capabilities.sh; tests/test-pi-adapter.sh
+# asserts the failures, so editing the validator cannot silently stop
+# catching them.
+#
+# Defects, in order:
+#   1. fixture.invented   — id not present in catalog.yaml
+#   2. fixture.alpha      — runtime_status 'degraded' with no reason
+#   3. fixture.beta       — omitted entirely (catalog id not classified)
+#   4. fixture.alpha      — implementation_kind is not a valid enum value
+schema_version: 1
+kind: adapter
+adapter: broken
+
+capabilities:
+  - id: fixture.invented
+    implementation_kind: native
+    runtime_status: enabled
+
+  - id: fixture.alpha
+    implementation_kind: not-a-real-kind
+    runtime_status: degraded

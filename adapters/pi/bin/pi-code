@@ -1,0 +1,267 @@
+#!/usr/bin/env bash
+# pi-code — Code Copilot Team launcher for the Pi coding agent (CCT-MANAGED)
+#
+# Wraps the upstream `pi` executable and starts it with the CCT enforcement
+# runtime explicitly loaded. Bare `pi` remains an unenforced Pi environment.
+#
+#   pi install git:...  gives reusable CCT content (advisory mode);
+#   pi-code             gives the enforced CCT harness.
+#
+# Usage:
+#   pi-code [CCT_OPTIONS] [PROJECT_PATH] [-- PI_ARGUMENTS]
+#   pi-code <COMMAND> [ARGS]
+#
+# Commands:
+#   version               Print pi-code, CCT, and pi versions
+#   doctor [--json]       Installation and configuration diagnostics
+#   config [--json]       Print the resolved configuration (redacted)
+#   config explain <key>  Show a key's value and the layers that set it
+#   features [--json]     Report capability state (kind x runtime status)
+#   help                  Show usage
+#
+# Diagnostics resolve project config as untrusted: they run outside a Pi
+# session, where isProjectTrusted() is unavailable (fail-closed, C-3).
+#
+# Options (Phase 0 subset):
+#   --profile <name>      Select a CCT profile (recorded; enforced by runtime)
+#   --project <path>      Select the working project directory
+#   --no-cct              Start upstream pi without the CCT runtime (reported)
+#   --diagnostic          Print detailed startup resolution to stderr
+#   --                    Pass all remaining arguments directly to pi
+#
+# Design contract (specs/pi-harness-adoption/spec.md FR-000/FR-002):
+#   - Never reads project CCT configuration (trust is resolved in-process
+#     by the runtime via Pi's project_trust lifecycle).
+#   - Sets CCT_RUNTIME=1 only when the enforcement runtime is loaded.
+#   - Forwards unknown arguments to pi unmodified; preserves exit codes
+#     and signals (exec).
+
+set -euo pipefail
+
+PI_CODE_VERSION="0.1.0-dev"
+SELF_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+# Managed install layout (populated by adapters/pi/setup.sh). When running
+# from the repo checkout, fall back to the adapter directory itself.
+CCT_HOME="${CCT_HOME:-$HOME/.code-copilot-team}"
+MANAGED_DIR="$CCT_HOME/pi"
+REPO_ADAPTER_DIR="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
+
+RUNTIME_ENTRY=""
+for candidate in "$MANAGED_DIR/runtime/index.ts" "$REPO_ADAPTER_DIR/runtime/index.ts"; do
+  if [[ -n "$candidate" && -f "$candidate" ]]; then
+    RUNTIME_ENTRY="$candidate"
+    break
+  fi
+done
+
+COMPAT_FILE=""
+for candidate in "$MANAGED_DIR/compat.env" "$REPO_ADAPTER_DIR/compat.env"; do
+  if [[ -n "$candidate" && -f "$candidate" ]]; then
+    COMPAT_FILE="$candidate"
+    break
+  fi
+done
+
+CCT_PI_MIN_VERSION="0.79.0"
+if [[ -n "$COMPAT_FILE" ]]; then
+  # shellcheck source=/dev/null
+  source "$COMPAT_FILE"
+fi
+
+err()  { echo "[pi-code] ERROR: $*" >&2; }
+warn() { echo "[pi-code] WARN:  $*" >&2; }
+diag() { [[ "${DIAGNOSTIC:-false}" == "true" ]] && echo "[pi-code] $*" >&2 || true; }
+
+# ── Recursion guard ─────────────────────────────────────────
+# A pi-code-launched session (or a reviewer child) must not re-enter the
+# launcher and stack runtimes. CCT_PI_CODE_ACTIVE marks an active launch.
+case "${1:-}" in
+  version|help|--help|-h|doctor|config|features) CCT_DIAGNOSTIC_CMD=true ;;
+  *) CCT_DIAGNOSTIC_CMD=false ;;
+esac
+if [[ "${CCT_PI_CODE_ACTIVE:-}" == "1" && "$CCT_DIAGNOSTIC_CMD" == "false" ]]; then
+  err "recursive pi-code invocation detected (CCT_PI_CODE_ACTIVE=1)."
+  err "Inside a pi-code session, use 'pi' directly or 'pi-code --no-cct'."
+  exit 64
+fi
+
+# ── Upstream pi resolution ──────────────────────────────────
+resolve_pi() {
+  # Find the first `pi` on PATH that is not this launcher (or a copy of it).
+  local IFS=':' dir cand
+  for dir in $PATH; do
+    cand="$dir/pi"
+    [[ -x "$cand" ]] || continue
+    [[ "$cand" -ef "$SELF_PATH" ]] && continue
+    # Refuse a pi that is actually a CCT-managed shim.
+    if head -3 "$cand" 2>/dev/null | grep -q "CCT-MANAGED"; then
+      continue
+    fi
+    echo "$cand"
+    return 0
+  done
+  return 1
+}
+
+pi_version_of() {
+  "$1" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
+}
+
+# version_ge A B → 0 if A >= B (numeric, three components)
+version_ge() {
+  [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" == "$2" ]]
+}
+
+# ── Parse CCT options ───────────────────────────────────────
+PROFILE="${CCT_PROFILE:-disciplined}"
+PROJECT_PATH=""
+NO_CCT=false
+NO_PROJECT_CONFIG=false
+DIAGNOSTIC=false
+CLI_SETS=""
+PI_ARGS=()
+
+case "${1:-}" in
+  version)
+    echo "pi-code $PI_CODE_VERSION (Code Copilot Team)"
+    if PI_BIN="$(resolve_pi)"; then
+      echo "pi $(pi_version_of "$PI_BIN") ($PI_BIN)"
+    else
+      echo "pi (not found on PATH)"
+    fi
+    echo "runtime ${RUNTIME_ENTRY:-<not installed>}"
+    echo "minimum supported pi: $CCT_PI_MIN_VERSION"
+    exit 0
+    ;;
+  help|--help|-h)
+    sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  config|features)
+    # Diagnostics run outside a Pi session; the runtime CLI resolves and
+    # reports configuration and capability state (fail-closed on trust).
+    if [[ -z "$RUNTIME_ENTRY" ]]; then
+      err "enforcement runtime not found — run ./scripts/setup.sh --pi"
+      exit 78
+    fi
+    if ! command -v node >/dev/null 2>&1; then
+      err "node is required for '$1' (>= 22.6 for TypeScript stripping)"
+      exit 127
+    fi
+    CLI_ENTRY="$(dirname "$RUNTIME_ENTRY")/cli.ts"
+    if [[ ! -f "$CLI_ENTRY" ]]; then
+      err "diagnostic CLI not found at $CLI_ENTRY — reinstall with ./adapters/pi/setup.sh --repair"
+      exit 78
+    fi
+    CCT_RUNTIME_ENTRY="$RUNTIME_ENTRY" exec node --no-warnings --experimental-strip-types "$CLI_ENTRY" "$@"
+    ;;
+  doctor)
+    # --json defers to the runtime CLI, which can report resolved
+    # configuration; the shell path stays for a runtime-less install.
+    if [[ "${2:-}" == "--json" && -n "$RUNTIME_ENTRY" ]] && command -v node >/dev/null 2>&1; then
+      CLI_ENTRY="$(dirname "$RUNTIME_ENTRY")/cli.ts"
+      if [[ -f "$CLI_ENTRY" ]]; then
+        CCT_RUNTIME_ENTRY="$RUNTIME_ENTRY" exec node --no-warnings --experimental-strip-types "$CLI_ENTRY" "$@"
+      fi
+    fi
+    STATUS=0
+    echo "=== pi-code doctor (Phase 0) ==="
+    if PI_BIN="$(resolve_pi)"; then
+      PV="$(pi_version_of "$PI_BIN")"
+      echo "[ok]   upstream pi: $PI_BIN (version ${PV:-unknown})"
+      if [[ -n "$PV" ]] && ! version_ge "$PV" "$CCT_PI_MIN_VERSION"; then
+        echo "[fail] pi $PV < minimum supported $CCT_PI_MIN_VERSION"
+        STATUS=1
+      fi
+    else
+      echo "[fail] upstream pi not found on PATH (install: npm i -g @earendil-works/pi-coding-agent)"
+      STATUS=1
+    fi
+    if [[ -n "$RUNTIME_ENTRY" ]]; then
+      echo "[ok]   enforcement runtime: $RUNTIME_ENTRY"
+    else
+      echo "[fail] enforcement runtime not found (run ./scripts/setup.sh --pi)"
+      STATUS=1
+    fi
+    if [[ -d "$MANAGED_DIR/resources/skills" ]]; then
+      echo "[ok]   advisory resources: $MANAGED_DIR/resources"
+    else
+      echo "[warn] managed advisory resources not installed (advisory mode may still be provided via 'pi install')"
+    fi
+    echo "note: run 'pi-code doctor --json', 'pi-code config', or 'pi-code features'"
+    echo "      for configuration, provenance, and capability state."
+    exit "$STATUS"
+    ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile)     PROFILE="${2:?--profile requires a name}"; shift 2 ;;
+    --project)     PROJECT_PATH="${2:?--project requires a path}"; shift 2 ;;
+    --no-cct)      NO_CCT=true; shift ;;
+    --no-project-config|--global) NO_PROJECT_CONFIG=true; shift ;;
+    --set)
+      SET_ENTRY="${2:?--set requires key=value}"
+      if [[ -n "$CLI_SETS" ]]; then CLI_SETS="$CLI_SETS"$'\n'"$SET_ENTRY"; else CLI_SETS="$SET_ENTRY"; fi
+      shift 2
+      ;;
+    --diagnostic)  DIAGNOSTIC=true; shift ;;
+    --)            shift; PI_ARGS+=("$@"); break ;;
+    -*)            PI_ARGS+=("$1"); shift ;;   # unknown option → forward to pi
+    *)
+      if [[ -z "$PROJECT_PATH" && -d "$1" ]]; then
+        PROJECT_PATH="$1"
+      else
+        PI_ARGS+=("$1")
+      fi
+      shift
+      ;;
+  esac
+done
+
+# ── Launch ──────────────────────────────────────────────────
+if ! PI_BIN="$(resolve_pi)"; then
+  err "upstream pi not found on PATH."
+  err "Install it first: npm install -g @earendil-works/pi-coding-agent"
+  exit 127
+fi
+
+PV="$(pi_version_of "$PI_BIN")"
+if [[ -n "$PV" ]] && ! version_ge "$PV" "$CCT_PI_MIN_VERSION"; then
+  err "pi $PV is older than the minimum supported $CCT_PI_MIN_VERSION."
+  err "Upgrade pi, or run bare 'pi' for an unenforced session."
+  exit 65
+fi
+
+if [[ -n "$PROJECT_PATH" ]]; then
+  cd "$PROJECT_PATH" || { err "cannot cd to project: $PROJECT_PATH"; exit 66; }
+fi
+
+diag "pi:       $PI_BIN (version ${PV:-unknown})"
+diag "profile:  $PROFILE"
+diag "project:  ${PROJECT_PATH:-$PWD}"
+diag "runtime:  ${RUNTIME_ENTRY:-<none>}"
+diag "args:     ${PI_ARGS[*]:-<none>}"
+
+if $NO_CCT; then
+  # Equivalent to bare pi: no runtime, no marker. Reported visibly so an
+  # unenforced session is never mistaken for an enforced one (FR-002).
+  warn "--no-cct: starting UNENFORCED pi (no CCT runtime, gates, or policies)."
+  # ${a[@]+"${a[@]}"} — bash 3.2 (macOS /bin/bash) treats "${a[@]}" on an
+  # empty array as unbound under `set -u`.
+  exec "$PI_BIN" ${PI_ARGS[@]+"${PI_ARGS[@]}"}
+fi
+
+if [[ -z "$RUNTIME_ENTRY" ]]; then
+  err "CCT enforcement runtime not found."
+  err "Run ./scripts/setup.sh --pi (or use pi-code --no-cct for plain pi)."
+  exit 78
+fi
+
+export CCT_RUNTIME=1
+export CCT_PI_CODE_ACTIVE=1
+export CCT_PROFILE="$PROFILE"
+[[ -n "$CLI_SETS" ]] && export CCT_CLI_SETS="$CLI_SETS"
+$NO_PROJECT_CONFIG && export CCT_NO_PROJECT_CONFIG=1
+exec "$PI_BIN" --extension "$RUNTIME_ENTRY" ${PI_ARGS[@]+"${PI_ARGS[@]}"}

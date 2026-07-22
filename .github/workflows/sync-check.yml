@@ -22,7 +22,7 @@ on:
       - 'specs/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
-      - '.github/workflows/sync-check.yml'
+      - '.github/workflows/**'
   pull_request:
     branches: [master, main]
     paths:
@@ -44,7 +44,7 @@ on:
       - 'specs/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
-      - '.github/workflows/sync-check.yml'
+      - '.github/workflows/**'
 
 permissions:
   contents: read
@@ -67,6 +67,9 @@ jobs:
             exit 1
           fi
           echo "Adapters are in sync with shared/."
+
+      - name: Validate workflows
+        run: bash scripts/validate-workflows.sh
 
       - name: Validate hardening scripts
         run: |

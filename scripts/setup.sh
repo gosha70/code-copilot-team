@@ -33,11 +33,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --claude-code)      TOOLS+=("claude-code"); shift ;;
     --codex)            TOOLS+=("codex"); shift ;;
+    --pi)               TOOLS+=("pi"); shift ;;
     --cursor)           TOOLS+=("cursor"); shift ;;
     --github-copilot)   TOOLS+=("github-copilot"); shift ;;
     --windsurf)         TOOLS+=("windsurf"); shift ;;
     --aider)            TOOLS+=("aider"); shift ;;
-    --all)              TOOLS=("claude-code" "codex" "cursor" "github-copilot" "windsurf" "aider"); shift ;;
+    --all)              TOOLS=("claude-code" "codex" "pi" "cursor" "github-copilot" "windsurf" "aider"); shift ;;
     --sync)             SYNC=true; shift ;;
     --memkernel)
       MEMKERNEL_ARGS+=("--memkernel")
@@ -67,6 +68,7 @@ if $SHOW_HELP; then
   echo "Tools (global install — no project dir needed):"
   echo "  --claude-code     Install Claude Code config to ~/.claude/"
   echo "  --codex           Install Codex config to ~/.codex/"
+  echo "  --pi              Install Pi adapter (pi-code + runtime) to ~/.code-copilot-team/pi/"
   echo ""
   echo "Tools (project install — requires project dir):"
   echo "  --cursor          Install Cursor .mdc rules"
@@ -99,6 +101,10 @@ if [[ ${#TOOLS[@]} -eq 0 ]]; then
   if command -v codex >/dev/null 2>&1 || [[ -d "$HOME/.codex" ]]; then
     TOOLS+=("codex")
     echo "  Detected: Codex"
+  fi
+  if command -v pi >/dev/null 2>&1 || [[ -d "$HOME/.pi" ]]; then
+    TOOLS+=("pi")
+    echo "  Detected: Pi"
   fi
   if [[ ${#TOOLS[@]} -eq 0 ]]; then
     echo "  No tools detected. Use --help for options."
@@ -153,6 +159,13 @@ for tool in "${TOOLS[@]}"; do
         bash "$ADAPTERS/codex/setup.sh" --sync && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
       else
         bash "$ADAPTERS/codex/setup.sh" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+      fi
+      ;;
+    pi)
+      if $SYNC; then
+        bash "$ADAPTERS/pi/setup.sh" --sync && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+      else
+        bash "$ADAPTERS/pi/setup.sh" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
       fi
       ;;
     cursor)

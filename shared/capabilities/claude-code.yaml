@@ -1,0 +1,74 @@
+# Claude Code adapter capability classification (FR-029).
+#
+# Present so parity reporting compares two classified adapters rather than
+# comparing Pi against an assumed baseline. Ids must exist in catalog.yaml.
+#
+# Validated against shared/schemas/capability.schema.json.
+schema_version: 1
+kind: adapter
+adapter: claude-code
+
+capabilities:
+  - id: skills.shared
+    implementation_kind: native
+    runtime_status: enabled
+    status_probe: "Skills installed under ~/.claude/skills by setup.sh."
+
+  - id: prompts.commands
+    implementation_kind: native
+    runtime_status: enabled
+    status_probe: "Commands installed under ~/.claude/commands by setup.sh."
+
+  - id: config.layered
+    implementation_kind: native
+    runtime_status: degraded
+    reason: >-
+      settings.json resolves through a documented precedence, but resolved
+      values carry no provenance and there is no explain surface.
+    status_probe: "settings.json present; no provenance API exists to probe."
+
+  - id: config.trust-gating
+    implementation_kind: native
+    runtime_status: enabled
+    status_probe: "Workspace trust prompt is enforced by the host application."
+
+  - id: workflow.sdd
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    status_probe: "Plan/build agent manifests gate on plan.md frontmatter."
+
+  - id: workflow.phases
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    status_probe: "Phase agents plus the /phase-complete command are installed."
+
+  - id: permissions.engine
+    implementation_kind: native
+    runtime_status: enabled
+    status_probe: "settings.json permissions block resolved by the host application."
+
+  - id: permissions.protected-paths
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    status_probe: "protect-files.sh and protect-git.sh registered as PreToolUse hooks."
+
+  - id: providers.pi
+    implementation_kind: optional-bridge
+    runtime_status: disabled
+    reason: >-
+      Claude Code can invoke Pi as a peer-review provider, but the reviewer
+      execution contract has not passed its acceptance gates.
+    status_probe: "providers-health.sh check for a working pi-code."
+
+  - id: integrations.mcp
+    implementation_kind: native
+    runtime_status: enabled
+    status_probe: "MCP servers configured in settings.json are attached by the host."
+
+  - id: integrations.hosted-platform
+    implementation_kind: native
+    runtime_status: enabled
+    reason: >-
+      Claude Code is the first-party client for these services, so they are
+      native here and external-platform elsewhere.
+    status_probe: "Provided by the host application."
