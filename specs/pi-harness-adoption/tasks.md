@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-22
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **12 of 64 complete.**
+written. Current state: **13 of 64 complete.**
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -27,8 +27,7 @@ pass. Work proceeds in phase order.
 
 ### Phase 1 — Capability registry, configuration, diagnostics
 - [x] **T1.1 (P0)** Neutral capability schema (`shared/schemas/`) + catalog (`shared/capabilities/catalog.yaml`, `pi.yaml`, `claude-code.yaml`) with two-dimensional classification (FR-029).
-- [ ] **T1.2 (P0)** TOML config schema + loader: layered merge, provenance, redaction, migration, versioning (FR-004). Files: `adapters/pi/runtime/config/*`.
-  - _Partial — missing: config migration and config versioning._
+- [x] **T1.2 (P0)** TOML config schema + loader: layered merge, provenance, redaction, migration, versioning (FR-004). Files: `adapters/pi/runtime/config/*`.
 - [x] **T1.3 (P0)** Profiles (`minimal`, `disciplined`, `review-heavy`, `autonomous`, `local-first`, `air-gapped`, `ci`, `peer-reviewer`) with inheritance + cycle rejection.
 - [x] **T1.4 (P0)** Security floor engine: monotonic protected-settings chain (FR-009a); recorded overrides.
 - [ ] **T1.5 (P0)** Trust gating module: `project_trust` observer (defer ownership — V1), `isProjectTrusted()` gate before every project-config load, fail-closed unknown, restart-required messaging after `/trust`, `defaultProjectTrust: "always"` doctor warning + audit origin (FR-004a, V2).

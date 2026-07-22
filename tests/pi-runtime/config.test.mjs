@@ -24,6 +24,11 @@ import {
   loadLayeredConfig,
   redactedConfig,
 } from "../../adapters/pi/runtime/config/loader.ts";
+import {
+  CONFIG_SCHEMA_VERSION,
+  declaredVersion,
+  migrateTable,
+} from "../../adapters/pi/runtime/config/migrate.ts";
 
 // ── helpers ─────────────────────────────────────────────────
 
@@ -243,4 +248,83 @@ test("errors: malformed TOML reported with file + line, load continues", () => {
   assert.match(r.errors[0], /config.toml/);
   assert.match(r.errors[0], /line 2/);
   assert.equal(r.resolved.get("limits.timeout_sec").value, 900); // defaults intact
+});
+
+// ── versioning + migration (FR-004, T1.2) ───────────────────
+
+test("migrate: absent config_version is treated as v1", () => {
+  assert.equal(declaredVersion({}), 1);
+  assert.equal(declaredVersion({ config_version: 2 }), 2);
+  assert.equal(declaredVersion({ config_version: 0 }), null);
+  assert.equal(declaredVersion({ config_version: "2" }), null);
+});
+
+test("migrate: v1 headless.deny_asks becomes the three-valued resolution", () => {
+  const denied = migrateTable({ headless: { deny_asks: true } });
+  assert.equal(denied.error, null);
+  assert.equal(denied.table.headless.ask_resolution, "deny");
+  assert.equal(denied.table.headless.deny_asks, undefined);
+  assert.match(denied.notes[0].change, /ask_resolution/);
+
+  const allowed = migrateTable({ headless: { deny_asks: false } });
+  assert.equal(allowed.table.headless.ask_resolution, "allow");
+});
+
+test("migrate: an explicit new-form key wins over the legacy one", () => {
+  const r = migrateTable({
+    headless: { deny_asks: true, ask_resolution: "fail" },
+  });
+  assert.equal(r.table.headless.ask_resolution, "fail");
+  assert.equal(r.table.headless.deny_asks, undefined);
+  assert.match(r.notes[0].change, /already set/);
+});
+
+test("migrate: v1 security ask lists move under permissions", () => {
+  const r = migrateTable({
+    security: { ask_paths: ["infra/**"], ask_commands: ["git push"] },
+  });
+  assert.deepEqual(r.table.permissions.paths.ask, ["infra/**"]);
+  assert.deepEqual(r.table.permissions.commands.ask, ["git push"]);
+  assert.equal(r.table.security.ask_paths, undefined);
+});
+
+test("migrate: input table is not mutated and version is stamped", () => {
+  const input = { headless: { deny_asks: true } };
+  const r = migrateTable(input);
+  assert.equal(input.headless.deny_asks, true, "input must be untouched");
+  assert.equal(r.table.config_version, CONFIG_SCHEMA_VERSION);
+});
+
+test("migrate: a future config_version is an error, not a warning", () => {
+  const r = migrateTable({ config_version: CONFIG_SCHEMA_VERSION + 1 });
+  assert.notEqual(r.error, null);
+  assert.match(r.error, /newer than this runtime supports/);
+  const bad = migrateTable({ config_version: -3 });
+  assert.match(bad.error, /positive integer/);
+});
+
+test("loader: a future-versioned file is rejected and never merged", () => {
+  const dir = tempTree({
+    "config.toml": `config_version = ${CONFIG_SCHEMA_VERSION + 10}\n[limits]\ntimeout_sec = 1\n`,
+  });
+  const r = load({ globalDir: dir });
+  assert.ok(r.errors.some((e) => /newer than this runtime supports/.test(e)));
+  assert.ok(r.ignoredFiles.some((f) => /config\.toml$/.test(f.file)));
+  assert.ok(!r.loadedFiles.some((f) => /config\.toml$/.test(f)));
+  // The built-in default must survive; the bad file contributes nothing.
+  assert.equal(r.config.limits.timeout_sec, 900);
+});
+
+test("loader: legacy keys are migrated, reported, and applied", () => {
+  const dir = tempTree({
+    "config.toml": "[headless]\ndeny_asks = false\n",
+  });
+  const r = load({ globalDir: dir });
+  assert.equal(r.errors.length, 0);
+  assert.equal(r.config.headless.ask_resolution, "allow");
+  assert.equal(r.migrations.length, 1);
+  assert.ok(r.warnings.some((w) => /migrated v1->v2/.test(w)));
+  assert.equal(r.configVersion, CONFIG_SCHEMA_VERSION);
+  // config_version is file metadata, not a resolved configuration key.
+  assert.equal(r.resolved.has("config_version"), false);
 });

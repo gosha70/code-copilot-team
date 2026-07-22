@@ -21,6 +21,8 @@ import type { TomlTable, TomlValue } from "./toml.ts";
 import { BUILTIN_PROFILES, resolveProfileChain } from "./profiles.ts";
 import type { Profile } from "./profiles.ts";
 import { applyFloorValue, isFloorPath } from "./floor.ts";
+import { CONFIG_SCHEMA_VERSION, CONFIG_VERSION_KEY, migrateTable } from "./migrate.ts";
+import type { MigrationNote } from "./migrate.ts";
 import type { FloorDecision } from "./floor.ts";
 
 export interface ProvenanceEntry {
@@ -48,6 +50,10 @@ export interface LoadResult {
   floorDecisions: FloorDecision[];
   warnings: string[];
   errors: string[];
+  /** Schema version this runtime resolved the configuration at. */
+  configVersion: number;
+  /** Migrations applied while reading files, per file. */
+  migrations: { file: string; notes: MigrationNote[] }[];
 }
 
 export interface LoadOptions {
@@ -139,6 +145,8 @@ export function loadLayeredConfig(opts: LoadOptions): LoadResult {
     floorDecisions: [],
     warnings: [],
     errors: [],
+    configVersion: CONFIG_SCHEMA_VERSION,
+    migrations: [],
   };
 
   const layers: Layer[] = [
@@ -167,7 +175,24 @@ export function loadLayeredConfig(opts: LoadOptions): LoadResult {
       }
     }
     try {
-      const table = parseToml(fs.readFileSync(file, "utf8"));
+      const parsed = parseToml(fs.readFileSync(file, "utf8"));
+      // Version and migrate before merging: an unreadable version must keep
+      // the file out of the merge entirely rather than half-apply it (C-3).
+      const migrated = migrateTable(parsed);
+      if (migrated.error !== null) {
+        result.errors.push(`${file}: ${migrated.error}`);
+        result.ignoredFiles.push({ file, reason: migrated.error });
+        return;
+      }
+      if (migrated.notes.length > 0) {
+        result.migrations.push({ file, notes: migrated.notes });
+        for (const n of migrated.notes) {
+          result.warnings.push(`${file}: migrated v${n.from}->v${n.to}: ${n.change}`);
+        }
+      }
+      const table = migrated.table;
+      // File metadata, not configuration — keep it out of the resolved keys.
+      delete table[CONFIG_VERSION_KEY];
       layers.push({ name, source: file, table });
       result.loadedFiles.push(file);
     } catch (e) {
