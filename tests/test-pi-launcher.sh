@@ -169,6 +169,35 @@ RC=0
 PATH="$DIAG_PATH" "$LAUNCHER" config explain no.such.key > /dev/null 2>&1 || RC=$?
 assert "explain exits 1 for an unknown key" "[[ '$RC' == '1' ]]"
 
+# Sensitive values must be redacted on EVERY surface. --json once leaked the
+# raw value while the text path redacted it — this output is pasted into issues.
+mkdir -p "$TMP/cct-home"
+printf 'config_version = 2\n[providers]\napi_key = "sk-cct-test-secret"\n' > "$TMP/cct-home/config.toml"
+for extra in "" "--json"; do
+  OUT=$(CCT_HOME="$TMP/cct-home" PATH="$DIAG_PATH" "$LAUNCHER" config explain providers.api_key $extra 2>&1 || true)
+  assert "explain${extra:+ $extra} redacts a sensitive value" \
+    "! echo \"\$OUT\" | grep -q 'sk-cct-test-secret' && echo \"\$OUT\" | grep -q 'redacted'"
+done
+
+# Sweep every surface, not only the two that leaked. A surface added later
+# is covered by this loop the moment it is listed.
+SURFACES=(
+  "config"
+  "config --json"
+  "doctor"
+  "doctor --json"
+  "features"
+  "features --json"
+  "config explain providers.api_key"
+  "config explain providers.api_key --json"
+)
+for surface in "${SURFACES[@]}"; do
+  # shellcheck disable=SC2086
+  OUT=$(CCT_HOME="$TMP/cct-home" PATH="$DIAG_PATH" "$LAUNCHER" $surface 2>&1 || true)
+  assert "no secret leaks via: pi-code $surface" \
+    "! echo \"\$OUT\" | grep -q 'sk-cct-test-secret'"
+done
+
 for cmd in features doctor config; do
   OUT=$(PATH="$DIAG_PATH" "$LAUNCHER" "$cmd" --json 2>&1 || true)
   assert "$cmd --json emits valid JSON" \
