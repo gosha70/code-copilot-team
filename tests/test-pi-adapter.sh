@@ -145,6 +145,25 @@ assert "launcher fallback matches compat.env ($COMPAT_MIN)" "[[ '$COMPAT_MIN' ==
 assert "CI consumes compat.env" \
   "grep -q 'compat.env' '$REPO_DIR/.github/workflows/pi-tests.yml'"
 
+# ── Config validation (T1.7) ────────────────────────────────
+echo "--- config validation ---"
+CFG="$REPO_DIR/tests/fixtures/cct-config"
+if command -v node >/dev/null 2>&1 && [[ "$(node --version | sed 's/^v//' | cut -d. -f1)" -ge 22 ]]; then
+  RC=0; bash "$REPO_DIR/scripts/validate-cct-config.sh" "$CFG/valid.toml" >/dev/null 2>&1 || RC=$?
+  assert "validator accepts a valid config (exit 0)" "[[ '$RC' == '0' ]]"
+
+  OUT=$(bash "$REPO_DIR/scripts/validate-cct-config.sh" "$CFG/obsolete-key.toml" 2>&1 || true)
+  RC=0; bash "$REPO_DIR/scripts/validate-cct-config.sh" "$CFG/obsolete-key.toml" >/dev/null 2>&1 || RC=$?
+  assert "validator rejects an obsolete key (exit 1)" "[[ '$RC' == '1' ]]"
+  assert "validator names the obsolete key" "echo \"\$OUT\" | grep -q 'security.allow_all'"
+
+  RC=0; bash "$REPO_DIR/scripts/validate-cct-config.sh" "$CFG/future-version.toml" >/dev/null 2>&1 || RC=$?
+  assert "validator rejects a future schema version (exit 1)" "[[ '$RC' == '1' ]]"
+else
+  echo "  SKIP: config validation (node >= 22.6 unavailable)"
+  if [[ -n "${CI:-}" ]]; then echo "  FAIL: node >= 22.6 required in CI"; FAIL=$((FAIL + 1)); fi
+fi
+
 # ── Workflow validity (CI cannot self-check a broken workflow) ──
 echo "--- workflow validation ---"
 assert "workflows validate" "bash '$REPO_DIR/scripts/validate-workflows.sh' >/dev/null 2>&1"

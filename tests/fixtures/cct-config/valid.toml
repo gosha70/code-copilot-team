@@ -1,0 +1,13 @@
+# FIXTURE — valid. A legacy key (migrated automatically) and a user-defined
+# provider (open section) must NOT make validation fail. Exit 0.
+config_version = 1
+
+[headless]
+deny_asks = true
+
+[security]
+fail_closed = true
+
+[providers.openai]
+api_key = "placeholder-not-a-real-secret"
+model = "gpt-4"

@@ -11,6 +11,7 @@ on:
       - 'tests/pi-runtime/**'
       - 'scripts/generate.sh'
       - 'scripts/validate-capabilities.sh'
+      - 'scripts/validate-cct-config.sh'
       - 'shared/capabilities/**'
       - 'shared/schemas/**'
       - '.github/workflows/pi-tests.yml'
@@ -24,6 +25,7 @@ on:
       - 'tests/pi-runtime/**'
       - 'scripts/generate.sh'
       - 'scripts/validate-capabilities.sh'
+      - 'scripts/validate-cct-config.sh'
       - 'shared/capabilities/**'
       - 'shared/schemas/**'
       - '.github/workflows/pi-tests.yml'
@@ -67,6 +69,10 @@ jobs:
       # T1.1: the neutral capability registry is a gate, not documentation.
       - name: Capability registry
         run: bash scripts/validate-capabilities.sh
+
+      # T1.7: obsolete/unknown config keys and unsupported schema versions.
+      - name: CCT config validation
+        run: bash scripts/validate-cct-config.sh tests/fixtures/cct-config/valid.toml
 
       - name: Launcher contract
         run: bash tests/test-pi-launcher.sh

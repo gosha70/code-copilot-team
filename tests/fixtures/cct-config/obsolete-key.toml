@@ -1,0 +1,7 @@
+# FIXTURE — invalid. `security.allow_all` was removed and is read by nothing;
+# a config that sets it believes a protection is off when it is not.
+# scripts/validate-cct-config.sh must report an error and exit 1.
+config_version = 2
+
+[security]
+allow_all = true
