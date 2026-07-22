@@ -1,0 +1,15 @@
+# Fixture catalog for negative testing of scripts/validate-capabilities.sh.
+# Deliberately minimal — the adapter fixture beside it is the broken one.
+schema_version: 1
+kind: catalog
+
+capabilities:
+  - id: fixture.alpha
+    description: A capability that exists in this fixture catalog.
+    default: disabled
+    security_level: advisory
+
+  - id: fixture.beta
+    description: A second capability, so omission can be detected.
+    default: disabled
+    security_level: none

@@ -22,6 +22,12 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CAP_DIR="${1:-$REPO_DIR/shared/capabilities}"
 
 if ! command -v ruby >/dev/null 2>&1; then
+  # A silent skip would let CI report success without validating anything.
+  # Ruby ships on the CI images, so absence there is a failure, not a skip.
+  if [[ -n "${CI:-}" ]]; then
+    echo "[ERROR] ruby not found, but CI is set — the capability registry must be validated."
+    exit 1
+  fi
   echo "[SKIP] ruby not found — capability registry validation skipped."
   exit 0
 fi

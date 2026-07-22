@@ -156,6 +156,23 @@ for f in catalog pi claude-code; do
 done
 assert "capability registry validates" "bash '$REPO_DIR/scripts/validate-capabilities.sh' >/dev/null 2>&1"
 
+# Negative fixtures: prove the validator still catches what it claims to.
+# Without these, editing the validator could silently stop enforcing anything
+# while the passing-direction assertion above stayed green.
+BAD_FIXTURE="$REPO_DIR/tests/fixtures/capabilities-invalid"
+BAD_OUT=$(bash "$REPO_DIR/scripts/validate-capabilities.sh" "$BAD_FIXTURE" 2>&1 || true)
+BAD_RC=0
+bash "$REPO_DIR/scripts/validate-capabilities.sh" "$BAD_FIXTURE" >/dev/null 2>&1 || BAD_RC=$?
+assert "validator rejects the invalid fixture (exit 1)" "[[ '$BAD_RC' == '1' ]]"
+assert "validator catches an invented capability id" \
+  "echo \"\$BAD_OUT\" | grep -q 'ids not in catalog: fixture.invented'"
+assert "validator catches an unclassified catalog id" \
+  "echo \"\$BAD_OUT\" | grep -q 'catalog ids not classified: fixture.beta'"
+assert "validator catches a bad implementation_kind" \
+  "echo \"\$BAD_OUT\" | grep -q 'bad implementation_kind'"
+assert "validator catches a non-enabled status with no reason" \
+  "echo \"\$BAD_OUT\" | grep -q 'requires a reason'"
+
 # The runtime carries its own seed; it must agree with pi.yaml or `features`
 # and the generated parity report would disagree about the same capability.
 if command -v ruby >/dev/null 2>&1; then
@@ -181,6 +198,25 @@ if command -v ruby >/dev/null 2>&1; then
     print problems.join("; ")
   ' "$CAP_DIR/pi.yaml" "$PI_DIR/runtime/index.ts")
   assert "runtime capability seed matches pi.yaml${DRIFT:+ — $DRIFT}" "[[ -z '$DRIFT' ]]"
+
+  # The guard must be able to fail: run it against a deliberately drifted copy.
+  DRIFTED="$TMP/pi-drifted.yaml"
+  sed 's/^    runtime_status: enabled$/    runtime_status: degraded/' "$CAP_DIR/pi.yaml" > "$DRIFTED"
+  PLANTED=$(ruby -ryaml -e '
+    doc = YAML.load_file(ARGV[0]); src = File.read(ARGV[1]); n = 0
+    doc["capabilities"].each do |c|
+      idx = src.index("id: \"#{c["id"]}\""); next unless idx
+      n += 1 unless src[idx, 320].to_s.include?("runtime_status: \"#{c["runtime_status"]}\"")
+    end
+    print n
+  ' "$DRIFTED" "$PI_DIR/runtime/index.ts")
+  assert "drift guard fires on planted drift ($PLANTED detected)" "[[ '$PLANTED' -gt 0 ]]"
+else
+  echo "  SKIP: capability drift guard — ruby not found"
+  if [[ -n "${CI:-}" ]]; then
+    echo "  FAIL: ruby is required in CI; the drift guard must run"
+    FAIL=$((FAIL + 1))
+  fi
 fi
 
 # ── Summary ─────────────────────────────────────────────────
