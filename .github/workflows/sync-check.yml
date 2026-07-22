@@ -60,7 +60,12 @@ jobs:
 
       - name: Check for drift
         run: |
-          if ! git diff --exit-code adapters/; then
+          # Stage first: `git diff` reports modified tracked files but is blind
+          # to newly generated untracked ones, so a brand-new generated file
+          # (e.g. a prompt for a newly added command) passed this check while
+          # being absent from the repo.
+          git add -A adapters/
+          if ! git diff --cached --exit-code adapters/; then
             echo ""
             echo "ERROR: Generated adapter configs are out of sync with shared/."
             echo "Run './scripts/generate.sh' and commit the updated outputs."
