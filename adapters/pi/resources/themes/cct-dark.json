@@ -1,0 +1,16 @@
+{
+  "name": "cct-dark",
+  "displayName": "Code Copilot Team — Dark",
+  "description": "Dark theme matching CCT's enforcement-status vocabulary: allow (green), ask (amber), deny (red).",
+  "type": "dark",
+  "colors": {
+    "foreground": "#d4d4d4",
+    "background": "#1e1e1e",
+    "muted": "#7a7a7a",
+    "accent": "#4fa3d1",
+    "success": "#4ec9b0",
+    "warning": "#d7ba7d",
+    "error": "#f14c4c",
+    "info": "#569cd6"
+  }
+}

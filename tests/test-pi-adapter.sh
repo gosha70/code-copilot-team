@@ -94,10 +94,48 @@ assert "installer places compat.env" "grep -q 'CCT_PI_MIN_VERSION' '$TMP/cct2/pi
 CCT_HOME="$TMP/cct2" CCT_BIN_DIR="$TMP/bin2" bash "$PI_DIR/setup.sh" > /dev/null 2>&1
 assert "installer is idempotent" "[[ -x '$TMP/bin2/pi-code' ]]"
 
+# Repair (T0.4) — restores a missing component, refuses a foreign launcher
+rm -f "$TMP/cct2/pi/compat.env"
+REPAIR_OUT=$(CCT_HOME="$TMP/cct2" CCT_BIN_DIR="$TMP/bin2" bash "$PI_DIR/setup.sh" --repair 2>&1)
+assert "repair reports the missing component" "echo \"\$REPAIR_OUT\" | grep -q '\[missing\] compat.env'"
+assert "repair restores the missing component" "[[ -f '$TMP/cct2/pi/compat.env' ]]"
+REPAIR_OK=$(CCT_HOME="$TMP/cct2" CCT_BIN_DIR="$TMP/bin2" bash "$PI_DIR/setup.sh" --repair 2>&1)
+assert "repair reports a healthy install as ok" "echo \"\$REPAIR_OK\" | grep -q '\[ok\]      compat.env'"
+
+mkdir -p "$TMP/bin3"
+printf '#!/bin/bash\necho other\n' > "$TMP/bin3/pi-code"; chmod +x "$TMP/bin3/pi-code"
+RC=0
+CCT_HOME="$TMP/cct3" CCT_BIN_DIR="$TMP/bin3" bash "$PI_DIR/setup.sh" --repair > /dev/null 2>&1 || RC=$?
+assert "repair refuses a foreign launcher (exit 1)" "[[ '$RC' == '1' ]]"
+assert "repair leaves the foreign launcher intact" "grep -q 'echo other' '$TMP/bin3/pi-code'"
+
 # Uninstall
 CCT_HOME="$TMP/cct2" CCT_BIN_DIR="$TMP/bin2" bash "$PI_DIR/setup.sh" --uninstall > /dev/null 2>&1
 assert "uninstall removes launcher" "[[ ! -f '$TMP/bin2/pi-code' ]]"
 assert "uninstall removes managed dir" "[[ ! -d '$TMP/cct2/pi' ]]"
+
+# ── Advisory manifests (T0.1 / T0.3) ────────────────────────
+echo "--- advisory manifests ---"
+assert "adapter manifest exists" "[[ -f '$PI_DIR/package.json' ]]"
+for key in skills prompts themes; do
+  assert "adapter manifest declares pi.$key" \
+    "grep -q '\"$key\"' '$PI_DIR/package.json'"
+  assert "root manifest declares pi.$key" \
+    "sed -n '/\"pi\": {/,/^  }/p' '$REPO_DIR/package.json' | grep -q '\"$key\"'"
+done
+assert "adapter manifest declares no pi.extensions" "! grep -q 'extensions' '$PI_DIR/package.json'"
+assert "root manifest declares no pi.extensions" "! grep -q 'extensions' '$REPO_DIR/package.json'"
+assert "themes resource directory is populated" "ls '$RES/themes'/*.json >/dev/null 2>&1"
+
+# ── Version compatibility declaration (T0.6) ────────────────
+echo "--- version compatibility ---"
+assert "compat.env declares a semver minimum" \
+  "grep -qE '^CCT_PI_MIN_VERSION=\"[0-9]+\.[0-9]+\.[0-9]+\"' '$PI_DIR/compat.env'"
+COMPAT_MIN=$(grep -m1 '^CCT_PI_MIN_VERSION=' "$PI_DIR/compat.env" | cut -d'"' -f2)
+LAUNCHER_MIN=$(grep -m1 '^CCT_PI_MIN_VERSION=' "$PI_DIR/bin/pi-code" | cut -d'"' -f2)
+assert "launcher fallback matches compat.env ($COMPAT_MIN)" "[[ '$COMPAT_MIN' == '$LAUNCHER_MIN' ]]"
+assert "CI consumes compat.env" \
+  "grep -q 'compat.env' '$REPO_DIR/.github/workflows/pi-tests.yml'"
 
 # ── Summary ─────────────────────────────────────────────────
 echo ""

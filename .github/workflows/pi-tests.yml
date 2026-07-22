@@ -37,6 +37,27 @@ jobs:
         with:
           node-version: '22'
 
+      # T0.6: the version compatibility declaration is consumed by CI, not just
+      # by the launcher. Guards the drift case where compat.env is bumped but
+      # the launcher's fallback constant is not.
+      - name: Pi version compatibility declaration
+        run: |
+          set -euo pipefail
+          test -f adapters/pi/compat.env || { echo "compat.env missing"; exit 1; }
+          # shellcheck source=/dev/null
+          source adapters/pi/compat.env
+          : "${CCT_PI_MIN_VERSION:?CCT_PI_MIN_VERSION not declared in compat.env}"
+          if ! printf '%s' "$CCT_PI_MIN_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "CCT_PI_MIN_VERSION='$CCT_PI_MIN_VERSION' is not semver"
+            exit 1
+          fi
+          FALLBACK=$(grep -m1 '^CCT_PI_MIN_VERSION=' adapters/pi/bin/pi-code | cut -d'"' -f2)
+          if [[ "$FALLBACK" != "$CCT_PI_MIN_VERSION" ]]; then
+            echo "Drift: compat.env declares $CCT_PI_MIN_VERSION but pi-code falls back to $FALLBACK"
+            exit 1
+          fi
+          echo "Pi minimum version $CCT_PI_MIN_VERSION — declaration and launcher agree."
+
       - name: Launcher contract
         run: bash tests/test-pi-launcher.sh
 

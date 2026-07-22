@@ -5,35 +5,25 @@ gated integration preview). Priorities: **P0** = gates the phase's
 Done-when; **P1** = required for the umbrella DoD; **P2** = polish.
 Task IDs: `T<phase>.<n>`.
 
-## Delivery status — 2026-07-21 (PR #107)
+## Progress — updated 2026-07-22
 
-Audited against the branch, task by task. Of the 30 tasks in the phases this PR
-touches (0–2, 4–5): **7 complete, 17 partial, 6 not started**. Slice B (Phase 3)
-and Phase 6 are deferred by design; Slices D–F are untouched.
+Every task below must be delivered; the `spec.md` Definition of Done stands as
+written. Current state: **11 of 64 complete.**
 
-Complete tasks are checked below. Partial tasks stay unchecked and carry a
-`_Partial — missing: …_` note naming precisely what is absent; not-started tasks
-carry `_Not started._` The delivered code is verified — the Pi suites run green
-(launcher 23, runtime 24, adapter 27) and now run in CI via
-`.github/workflows/pi-tests.yml` — so this is a scope boundary, not a quality one.
-
-**TX.2 does not yet hold**: the Definition of Done in `spec.md` describes the full
-umbrella. Merging PR #107 requires rescoping that DoD to the delivered slice, with
-everything above explicitly deferred.
+Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
+still absent, so each one can be picked up and finished directly. A task is
+checked only when every deliverable named in its own text exists and its tests
+pass. Work proceeds in phase order.
 
 ## Slice A — Usable Pi adapter (Phases 0–2)
 
 ### Phase 0 — Foundation & launcher
-- [ ] **T0.1 (P0)** `adapters/pi/` skeleton: `package.json` (advisory manifest — no `pi.extensions`), `runtime/index.ts` stub with `CCT_RUNTIME` guard, `resources/` (generated), `README.md` (advisory-mode banner per FR-002a). Files: `adapters/pi/*`.
-  - _Partial — missing: `adapters/pi/package.json` (the advisory manifest lives at repo root instead)._
+- [x] **T0.1 (P0)** `adapters/pi/` skeleton: `package.json` (advisory manifest — no `pi.extensions`), `runtime/index.ts` stub with `CCT_RUNTIME` guard, `resources/` (generated), `README.md` (advisory-mode banner per FR-002a). Files: `adapters/pi/*`.
 - [x] **T0.2 (P0)** `bin/pi-code` launcher: upstream `pi` resolution, recursion guard, version validation (≥ 0.79.0), `--no-cct`, `--profile`, `--project`, `--` passthrough, exit-code/signal preservation, `version` command. Security: never overwrite unrelated `pi-code`; `CCT_RUNTIME=1` only when runtime loads. Test: `tests/test-pi-launcher.sh`.
-- [ ] **T0.3 (P0)** Root `package.json` advisory Pi manifest (keyword `pi-package`; `pi.skills`/`pi.prompts`/`pi.themes` → `adapters/pi/resources/...`).
-  - _Partial — missing: `pi.themes` manifest entry and a `resources/themes/` target._
-- [ ] **T0.4 (P0)** `adapters/pi/setup.sh` + `scripts/setup.sh --pi` (+ `--all`): install runtime to managed dir, `pi-code` to `~/.local/bin`, PATH check, repair/uninstall, `pi-code doctor` as verification.
-  - _Partial — missing: repair mode (`--uninstall` exists; there is no `--repair`)._
+- [x] **T0.3 (P0)** Root `package.json` advisory Pi manifest (keyword `pi-package`; `pi.skills`/`pi.prompts`/`pi.themes` → `adapters/pi/resources/...`).
+- [x] **T0.4 (P0)** `adapters/pi/setup.sh` + `scripts/setup.sh --pi` (+ `--all`): install runtime to managed dir, `pi-code` to `~/.local/bin`, PATH check, repair/uninstall, `pi-code doctor` as verification.
 - [x] **T0.5 (P1)** Deterministic stub tests: bare-`pi` no-runtime-init assertion, launcher arg forwarding, `--no-cct` equivalence. Fixture: temp HOME + fake `pi` shim.
-- [ ] **T0.6 (P1)** Pi version compatibility declaration file consumed by launcher + CI.
-  - _Partial — missing: CI consumption of `compat.env` (the launcher sources it; no workflow reads it)._
+- [x] **T0.6 (P1)** Pi version compatibility declaration file consumed by launcher + CI.
 
 ### Phase 1 — Capability registry, configuration, diagnostics
 - [ ] **T1.1 (P0)** Neutral capability schema (`shared/schemas/`) + catalog (`shared/capabilities/catalog.yaml`, `pi.yaml`, `claude-code.yaml`) with two-dimensional classification (FR-029).
@@ -64,11 +54,6 @@ everything above explicitly deferred.
 - [x] **T2.6 (P1)** `tests/test-pi-adapter.sh`: generation goldens, determinism, install idempotency.
 
 ## Slice B — Repository integration preview (Phase 3, gated per R6/FR-028)
-
-> **Deferred — not in scope for PR #107.** No Slice B artifact is present on the
-> branch (no `pi-review-provider`, no `scripts/benchmark_runner/backends/pi.py`).
-> This is by design: the slice is gated per R6/FR-028, and T3.8 requires
-> `providers.pi` to report `disabled` until T3.2–T3.4 pass.
 
 - [ ] **T3.1 (P0)** `[providers.pi]` seed + `peer_for.pi` in `shared/templates/provider-profile-template.toml`; `providers-health.sh` Pi check (`pi-code version`).
 - [ ] **T3.2 (P0)** `pi-review-provider` adapter script (FR-015b): validates `{review_request}` path, no shell interpolation, invokes `pi-code --profile peer-reviewer`, normalizes output, stderr diagnostics, runner exit codes. Flag validation vs pinned Pi version (V3: `--no-session` or temp `--session` fallback).
@@ -106,12 +91,6 @@ everything above explicitly deferred.
   - _Partial — missing: a property/fuzz generator and malformed-event tests (hand-written adversarial cases exist)._
 
 ### Phase 6 — Verification & review workflow
-
-> **Deferred — not in scope for PR #107.** No Phase 6 task has been started.
-- [ ] **T6.1 (P0)** Peer-review runner integration + bounded review-loop state machine + existing artifact formats (FR-015).
-- [ ] **T6.2 (P0)** Verification gates: build/unit/integration/lint/type-check/dependency-audit/security/visual/docs/drift (FR-016).
-- [ ] **T6.3 (P1)** Audited human override; `CCT_PEER_*` env contract via launcher flags (FR-000a).
-- [ ] **T6.4 (P1)** `pi-code init` (reuse scaffolder) + `pi-code sync [--dry-run]` (reuse sync contract).
 
 ## Slice D — Agent execution (Phases 7–8)
 

@@ -2,7 +2,7 @@
   "name": "code-copilot-team-pi",
   "version": "0.1.0",
   "private": true,
-  "description": "Code Copilot Team advisory content package for the Pi coding agent: skills and prompt templates. Enforcement requires pi-code (./scripts/setup.sh --pi). See adapters/pi/README.md.",
+  "description": "Code Copilot Team advisory content package for the Pi coding agent: skills, prompt templates, and themes. Enforcement requires pi-code (./scripts/setup.sh --pi). See adapters/pi/README.md.",
   "keywords": [
     "pi-package"
   ],
@@ -17,6 +17,9 @@
     ],
     "prompts": [
       "./adapters/pi/resources/prompts"
+    ],
+    "themes": [
+      "./adapters/pi/resources/themes"
     ]
   }
 }

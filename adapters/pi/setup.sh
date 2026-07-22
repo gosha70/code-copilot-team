@@ -10,6 +10,7 @@
 # Usage:
 #   ./adapters/pi/setup.sh              # install
 #   ./adapters/pi/setup.sh --sync       # regenerate resources, then install
+#   ./adapters/pi/setup.sh --repair     # diagnose a managed install, restore what is missing
 #   ./adapters/pi/setup.sh --uninstall  # remove managed install
 #
 # Advisory-only alternative (no enforcement, no pi-code):
@@ -26,10 +27,12 @@ LAUNCHER_TARGET="$BIN_DIR/pi-code"
 
 SYNC=false
 UNINSTALL=false
+REPAIR=false
 for arg in "$@"; do
   case "$arg" in
     --sync)      SYNC=true ;;
     --uninstall) UNINSTALL=true ;;
+    --repair)    REPAIR=true ;;
     *) echo "[WARN] Unknown flag: $arg" ;;
   esac
 done
@@ -54,6 +57,38 @@ if $UNINSTALL; then
   echo "  Removed $MANAGED_DIR"
   echo "=== Pi adapter uninstalled ==="
   exit 0
+fi
+
+if $REPAIR; then
+  # Diagnose the managed install before restoring it, so the operator sees
+  # what was actually broken rather than a silent reinstall.
+  echo "=== Diagnosing Pi adapter install ==="
+  MISSING=0
+  check() {
+    if [[ -e "$2" ]]; then
+      echo "  [ok]      $1"
+    else
+      echo "  [missing] $1 ($2)"
+      MISSING=$((MISSING + 1))
+    fi
+  }
+  check "runtime"     "$MANAGED_DIR/runtime/index.ts"
+  check "resources"   "$MANAGED_DIR/resources"
+  check "compat.env"  "$MANAGED_DIR/compat.env"
+  check "launcher"    "$LAUNCHER_TARGET"
+
+  if [[ -f "$LAUNCHER_TARGET" ]] && ! launcher_is_ours "$LAUNCHER_TARGET"; then
+    echo "[ERROR] $LAUNCHER_TARGET exists and is not CCT-managed."
+    echo "        Repair will not overwrite it. Move it aside or set CCT_BIN_DIR."
+    exit 1
+  fi
+
+  if [[ "$MISSING" -eq 0 ]]; then
+    echo "  Install is complete; restoring from the repo anyway to correct any drift."
+  else
+    echo "  $MISSING component(s) missing — restoring from the repo."
+  fi
+  echo ""
 fi
 
 if $SYNC; then
