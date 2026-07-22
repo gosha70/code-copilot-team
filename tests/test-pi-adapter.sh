@@ -124,6 +124,14 @@ for key in skills prompts themes; do
     "sed -n '/\"pi\": {/,/^  }/p' '$REPO_DIR/package.json' | grep -q '\"$key\"'"
 done
 assert "adapter manifest declares no pi.extensions" "! grep -q 'extensions' '$PI_DIR/package.json'"
+# Both manifests list the same pi content resources; they are two declarations
+# of one fact and must not drift (same class as the compat.env check).
+for key in skills prompts themes; do
+  ROOT_PATH=$(sed -n "/\"$key\": \[/,/\]/p" "$REPO_DIR/package.json" | grep -oE '\./[a-z/.-]+' | head -1)
+  ADPT_PATH=$(sed -n "/\"$key\": \[/,/\]/p" "$PI_DIR/package.json" | grep -oE '\./[a-z/.-]+' | head -1)
+  assert "manifests agree on pi.$key target" \
+    "[[ 'adapters/pi/${ADPT_PATH#./}' == '${ROOT_PATH#./}' ]]"
+done
 assert "root manifest declares no pi.extensions" "! grep -q 'extensions' '$REPO_DIR/package.json'"
 assert "themes resource directory is populated" "ls '$RES/themes'/*.json >/dev/null 2>&1"
 
@@ -136,6 +144,44 @@ LAUNCHER_MIN=$(grep -m1 '^CCT_PI_MIN_VERSION=' "$PI_DIR/bin/pi-code" | cut -d'"'
 assert "launcher fallback matches compat.env ($COMPAT_MIN)" "[[ '$COMPAT_MIN' == '$LAUNCHER_MIN' ]]"
 assert "CI consumes compat.env" \
   "grep -q 'compat.env' '$REPO_DIR/.github/workflows/pi-tests.yml'"
+
+# ── Capability registry (T1.1) ──────────────────────────────
+echo "--- capability registry ---"
+CAP_DIR="$REPO_DIR/shared/capabilities"
+assert "capability schema exists" "[[ -f '$REPO_DIR/shared/schemas/capability.schema.json' ]]"
+assert "capability schema is valid JSON" \
+  "ruby -rjson -e 'JSON.parse(File.read(ARGV[0]))' '$REPO_DIR/shared/schemas/capability.schema.json' 2>/dev/null"
+for f in catalog pi claude-code; do
+  assert "capability file $f.yaml exists" "[[ -f '$CAP_DIR/$f.yaml' ]]"
+done
+assert "capability registry validates" "bash '$REPO_DIR/scripts/validate-capabilities.sh' >/dev/null 2>&1"
+
+# The runtime carries its own seed; it must agree with pi.yaml or `features`
+# and the generated parity report would disagree about the same capability.
+if command -v ruby >/dev/null 2>&1; then
+  DRIFT=$(ruby -ryaml -e '
+    doc = YAML.load_file(ARGV[0])
+    src = File.read(ARGV[1])
+    problems = []
+    yaml_ids = doc["capabilities"].map { |c| c["id"] }
+    ts_ids = src.scan(/id: "([a-z0-9.\-]+)"/).flatten.uniq
+    (yaml_ids - ts_ids).each { |i| problems << "missing from runtime: #{i}" }
+    (ts_ids - yaml_ids).each { |i| problems << "missing from pi.yaml: #{i}" }
+    doc["capabilities"].each do |c|
+      idx = src.index("id: \"#{c["id"]}\"")
+      next unless idx
+      window = src[idx, 320].to_s
+      unless window.include?("runtime_status: \"#{c["runtime_status"]}\"")
+        problems << "status drift: #{c["id"]} (pi.yaml says #{c["runtime_status"]})"
+      end
+      unless window.include?("implementation_kind: \"#{c["implementation_kind"]}\"")
+        problems << "kind drift: #{c["id"]} (pi.yaml says #{c["implementation_kind"]})"
+      end
+    end
+    print problems.join("; ")
+  ' "$CAP_DIR/pi.yaml" "$PI_DIR/runtime/index.ts")
+  assert "runtime capability seed matches pi.yaml${DRIFT:+ — $DRIFT}" "[[ -z '$DRIFT' ]]"
+fi
 
 # ── Summary ─────────────────────────────────────────────────
 echo ""

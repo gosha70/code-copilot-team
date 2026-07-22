@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gosha70/code-copilot-team/shared/schemas/capability.schema.json",
+  "title": "CCT capability registry",
+  "description": "Tool-neutral capability model (FR-029). catalog.yaml defines capabilities once; each <adapter>.yaml classifies them in two dimensions: implementation kind x runtime status. No adapter may invent a capability id that the catalog does not define.",
+  "type": "object",
+  "required": ["schema_version", "kind", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Incremented when the record shape changes incompatibly."
+    },
+    "kind": {
+      "enum": ["catalog", "adapter"],
+      "description": "'catalog' defines capabilities; 'adapter' classifies them for one tool."
+    },
+    "adapter": {
+      "type": "string",
+      "description": "Adapter id (required when kind = adapter), e.g. 'pi', 'claude-code'."
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/capability" }
+    }
+  },
+  "$defs": {
+    "implementation_kind": {
+      "enum": [
+        "native",
+        "cct-first-party",
+        "optional-bridge",
+        "external-platform"
+      ],
+      "description": "How the capability is provided: by the host tool itself, authored by CCT, an optional bridge, or an external platform CCT does not implement."
+    },
+    "runtime_status": {
+      "enum": [
+        "enabled",
+        "disabled",
+        "unavailable",
+        "degraded",
+        "misconfigured",
+        "unsupported"
+      ],
+      "description": "Observed state. 'unavailable' and 'unsupported' are properties of the platform; 'disabled' and 'misconfigured' are properties of this installation."
+    },
+    "security_level": {
+      "enum": ["none", "advisory", "enforcing", "critical"],
+      "description": "'enforcing' and 'critical' capabilities must fail closed (C-3)."
+    },
+    "capability": {
+      "type": "object",
+      "required": ["id", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(\\.[a-z0-9-]+)+$",
+          "description": "Stable dotted identifier, e.g. 'permissions.engine'."
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "default": {
+          "$ref": "#/$defs/runtime_status",
+          "description": "Status assumed before any probe runs."
+        },
+        "implementation_kind": { "$ref": "#/$defs/implementation_kind" },
+        "runtime_status": { "$ref": "#/$defs/runtime_status" },
+        "requires": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Capability ids that must be enabled for this one to function."
+        },
+        "conflicts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Capability ids that cannot be enabled alongside this one."
+        },
+        "security_level": { "$ref": "#/$defs/security_level" },
+        "claude_equivalent": {
+          "type": ["string", "null"],
+          "description": "Corresponding Claude Code surface, or null when there is none. Never claim parity that does not exist."
+        },
+        "status_probe": {
+          "type": "string",
+          "description": "How runtime_status is determined for this adapter."
+        },
+        "docs": {
+          "type": "string",
+          "description": "Repo-relative path or URL documenting the capability."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Required whenever runtime_status is not 'enabled' — the honest explanation surfaced by features/doctor."
+        }
+      }
+    }
+  }
+}

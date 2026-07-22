@@ -1,0 +1,72 @@
+# Pi adapter capability classification (FR-029).
+#
+# Ids must exist in catalog.yaml. Statuses flip only when the acceptance gates
+# named in the spec pass (FR-028) — PATH presence never implies `enabled`.
+#
+# Validated against shared/schemas/capability.schema.json.
+schema_version: 1
+kind: adapter
+adapter: pi
+
+capabilities:
+  - id: skills.shared
+    implementation_kind: native
+    runtime_status: enabled
+    status_probe: "Agent Skills directory present in the installed package resources."
+
+  - id: prompts.commands
+    implementation_kind: native
+    runtime_status: enabled
+    status_probe: "Prompt templates present in the installed package resources."
+
+  - id: config.layered
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    status_probe: "Runtime resolved a layered configuration with provenance."
+
+  - id: config.trust-gating
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    status_probe: "project_trust observer registered and isProjectTrusted() gate active."
+
+  - id: workflow.sdd
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    status_probe: "SDD build gate registered on tool_call."
+
+  - id: workflow.phases
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    status_probe: "Phase state loaded or initialized for the project."
+
+  - id: permissions.engine
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    status_probe: "Permission rule set built from resolved configuration."
+
+  - id: permissions.protected-paths
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    status_probe: "Protected-path matcher active on write and edit tool calls."
+
+  - id: providers.pi
+    implementation_kind: cct-first-party
+    runtime_status: disabled
+    reason: >-
+      Provider plumbing is installed, but the dedicated read-only reviewer
+      execution contract has not passed its acceptance gates.
+    status_probe: "Acceptance gates for the peer-reviewer contract (T3.2-T3.4)."
+
+  - id: integrations.mcp
+    implementation_kind: optional-bridge
+    runtime_status: disabled
+    reason: "Optional; Phase 10."
+    status_probe: "MCP provider interface present and an audited backend configured."
+
+  - id: integrations.hosted-platform
+    implementation_kind: external-platform
+    runtime_status: unavailable
+    reason: >-
+      Anthropic-hosted services are external platforms; never claimed as Pi
+      parity.
+    status_probe: "Not probed — external platform by definition."

@@ -1,0 +1,112 @@
+# Neutral capability catalog (FR-029).
+#
+# Defines each capability once, tool-agnostically. Adapter files
+# (pi.yaml, claude-code.yaml) classify these ids in two dimensions —
+# implementation kind x runtime status — and may not invent new ids.
+#
+# Validated against shared/schemas/capability.schema.json.
+schema_version: 1
+kind: catalog
+
+capabilities:
+  - id: skills.shared
+    description: >-
+      Shared CCT skills are discoverable by the agent as first-class
+      instruction resources.
+    default: disabled
+    security_level: advisory
+    claude_equivalent: "~/.claude/skills + rules"
+    docs: shared/skills/
+
+  - id: prompts.commands
+    description: >-
+      CCT slash commands are available as prompt templates or commands.
+    default: disabled
+    security_level: advisory
+    claude_equivalent: "~/.claude/commands"
+    docs: adapters/claude-code/.claude/commands/
+
+  - id: config.layered
+    description: >-
+      Configuration resolves through an explicit layer precedence, and every
+      resolved value can be explained with its provenance.
+    default: disabled
+    security_level: advisory
+    claude_equivalent: "settings.json precedence (no provenance reporting)"
+    docs: specs/pi-harness-adoption/spec.md
+
+  - id: config.trust-gating
+    description: >-
+      Project-supplied configuration is loaded only after positive trust
+      resolution; unknown trust fails closed.
+    default: disabled
+    requires: [config.layered]
+    security_level: critical
+    claude_equivalent: "workspace trust prompt"
+    docs: specs/pi-harness-adoption/spec.md
+
+  - id: workflow.sdd
+    description: >-
+      Risk-scaled SDD artifacts gate protected work; unresolved clarification
+      markers block it.
+    default: disabled
+    security_level: enforcing
+    claude_equivalent: "plan/build agent frontmatter gating"
+    docs: shared/skills/spec-workflow/SKILL.md
+
+  - id: workflow.phases
+    description: >-
+      A persistent Research -> Plan -> Build -> Review phase machine governs
+      what the agent may do in each phase.
+    default: disabled
+    requires: [workflow.sdd]
+    security_level: enforcing
+    claude_equivalent: "phase agents + /phase-complete"
+    docs: shared/skills/phase-workflow/SKILL.md
+
+  - id: permissions.engine
+    description: >-
+      Tool, command, and path requests resolve to allow / ask / deny, with a
+      deterministic resolution for headless sessions.
+    default: disabled
+    security_level: critical
+    claude_equivalent: "settings.json permissions"
+    docs: adapters/claude-code/permissions/
+
+  - id: permissions.protected-paths
+    description: >-
+      Sensitive paths are protected against write and traversal, with symlink
+      and canonicalization defenses.
+    default: disabled
+    requires: [permissions.engine]
+    security_level: critical
+    claude_equivalent: "protect-files.sh / protect-git.sh hooks"
+    docs: adapters/claude-code/.claude/hooks/protect-files.sh
+
+  - id: providers.pi
+    description: >-
+      Pi can act as a peer-review provider for cross-provider review, under a
+      read-only reviewer contract.
+    default: disabled
+    requires: [permissions.engine]
+    security_level: enforcing
+    claude_equivalent: "peer-review-runner provider entry"
+    docs: shared/skills/provider-collaboration-protocol/SKILL.md
+
+  - id: integrations.mcp
+    description: >-
+      Model Context Protocol servers can be attached, with their provenance and
+      permissions reported.
+    default: disabled
+    security_level: enforcing
+    claude_equivalent: "MCP server support"
+    docs: adapters/claude-code/docs/recommended-mcp-servers.md
+
+  - id: integrations.hosted-platform
+    description: >-
+      Anthropic-hosted platform services. CCT does not implement these; they
+      are reported as external-platform so parity is never overclaimed.
+    default: unavailable
+    security_level: none
+    claude_equivalent: "Claude Code hosted features"
+    docs: specs/pi-harness-adoption/spec.md

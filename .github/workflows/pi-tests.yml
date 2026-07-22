@@ -10,6 +10,9 @@ on:
       - 'tests/test-pi-runtime.sh'
       - 'tests/pi-runtime/**'
       - 'scripts/generate.sh'
+      - 'scripts/validate-capabilities.sh'
+      - 'shared/capabilities/**'
+      - 'shared/schemas/**'
       - '.github/workflows/pi-tests.yml'
   pull_request:
     branches: [master, main]
@@ -20,6 +23,22 @@ on:
       - 'tests/test-pi-runtime.sh'
       - 'tests/pi-runtime/**'
       - 'scripts/generate.sh'
+      - 'scripts/validate-capabilities.sh'
+      - 'shared/capabilities/**'
+      - 'shared/schemas/**'
+      - '.github/workflows/pi-tests.yml'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'adapters/pi/**'
+      - 'tests/test-pi-launcher.sh'
+      - 'tests/test-pi-adapter.sh'
+      - 'tests/test-pi-runtime.sh'
+      - 'tests/pi-runtime/**'
+      - 'scripts/generate.sh'
+      - 'scripts/validate-capabilities.sh'
+      - 'shared/capabilities/**'
+      - 'shared/schemas/**'
       - '.github/workflows/pi-tests.yml'
 
 permissions:
@@ -57,6 +76,10 @@ jobs:
             exit 1
           fi
           echo "Pi minimum version $CCT_PI_MIN_VERSION — declaration and launcher agree."
+
+      # T1.1: the neutral capability registry is a gate, not documentation.
+      - name: Capability registry
+        run: bash scripts/validate-capabilities.sh
 
       - name: Launcher contract
         run: bash tests/test-pi-launcher.sh
