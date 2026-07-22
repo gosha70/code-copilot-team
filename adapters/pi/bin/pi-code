@@ -11,10 +11,16 @@
 #   pi-code [CCT_OPTIONS] [PROJECT_PATH] [-- PI_ARGUMENTS]
 #   pi-code <COMMAND> [ARGS]
 #
-# Commands (Phase 0 subset):
+# Commands:
 #   version               Print pi-code, CCT, and pi versions
-#   doctor                Basic installation diagnostics
+#   doctor [--json]       Installation and configuration diagnostics
+#   config [--json]       Print the resolved configuration (redacted)
+#   config explain <key>  Show a key's value and the layers that set it
+#   features [--json]     Report capability state (kind x runtime status)
 #   help                  Show usage
+#
+# Diagnostics resolve project config as untrusted: they run outside a Pi
+# session, where isProjectTrusted() is unavailable (fail-closed, C-3).
 #
 # Options (Phase 0 subset):
 #   --profile <name>      Select a CCT profile (recorded; enforced by runtime)
@@ -70,7 +76,11 @@ diag() { [[ "${DIAGNOSTIC:-false}" == "true" ]] && echo "[pi-code] $*" >&2 || tr
 # ── Recursion guard ─────────────────────────────────────────
 # A pi-code-launched session (or a reviewer child) must not re-enter the
 # launcher and stack runtimes. CCT_PI_CODE_ACTIVE marks an active launch.
-if [[ "${CCT_PI_CODE_ACTIVE:-}" == "1" && "${1:-}" != "version" && "${1:-}" != "help" && "${1:-}" != "doctor" ]]; then
+case "${1:-}" in
+  version|help|--help|-h|doctor|config|features) CCT_DIAGNOSTIC_CMD=true ;;
+  *) CCT_DIAGNOSTIC_CMD=false ;;
+esac
+if [[ "${CCT_PI_CODE_ACTIVE:-}" == "1" && "$CCT_DIAGNOSTIC_CMD" == "false" ]]; then
   err "recursive pi-code invocation detected (CCT_PI_CODE_ACTIVE=1)."
   err "Inside a pi-code session, use 'pi' directly or 'pi-code --no-cct'."
   exit 64
@@ -125,10 +135,36 @@ case "${1:-}" in
     exit 0
     ;;
   help|--help|-h)
-    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
+  config|features)
+    # Diagnostics run outside a Pi session; the runtime CLI resolves and
+    # reports configuration and capability state (fail-closed on trust).
+    if [[ -z "$RUNTIME_ENTRY" ]]; then
+      err "enforcement runtime not found — run ./scripts/setup.sh --pi"
+      exit 78
+    fi
+    if ! command -v node >/dev/null 2>&1; then
+      err "node is required for '$1' (>= 22.6 for TypeScript stripping)"
+      exit 127
+    fi
+    CLI_ENTRY="$(dirname "$RUNTIME_ENTRY")/cli.ts"
+    if [[ ! -f "$CLI_ENTRY" ]]; then
+      err "diagnostic CLI not found at $CLI_ENTRY — reinstall with ./adapters/pi/setup.sh --repair"
+      exit 78
+    fi
+    CCT_RUNTIME_ENTRY="$RUNTIME_ENTRY" exec node --no-warnings --experimental-strip-types "$CLI_ENTRY" "$@"
+    ;;
   doctor)
+    # --json defers to the runtime CLI, which can report resolved
+    # configuration; the shell path stays for a runtime-less install.
+    if [[ "${2:-}" == "--json" && -n "$RUNTIME_ENTRY" ]] && command -v node >/dev/null 2>&1; then
+      CLI_ENTRY="$(dirname "$RUNTIME_ENTRY")/cli.ts"
+      if [[ -f "$CLI_ENTRY" ]]; then
+        CCT_RUNTIME_ENTRY="$RUNTIME_ENTRY" exec node --no-warnings --experimental-strip-types "$CLI_ENTRY" "$@"
+      fi
+    fi
     STATUS=0
     echo "=== pi-code doctor (Phase 0) ==="
     if PI_BIN="$(resolve_pi)"; then
@@ -153,7 +189,8 @@ case "${1:-}" in
     else
       echo "[warn] managed advisory resources not installed (advisory mode may still be provided via 'pi install')"
     fi
-    echo "note: trust, sandbox, provider, and capability checks land in Phase 1+."
+    echo "note: run 'pi-code doctor --json', 'pi-code config', or 'pi-code features'"
+    echo "      for configuration, provenance, and capability state."
     exit "$STATUS"
     ;;
 esac

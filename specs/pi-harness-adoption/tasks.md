@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-22
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **14 of 64 complete.**
+written. Current state: **15 of 64 complete.**
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -31,8 +31,7 @@ pass. Work proceeds in phase order.
 - [x] **T1.3 (P0)** Profiles (`minimal`, `disciplined`, `review-heavy`, `autonomous`, `local-first`, `air-gapped`, `ci`, `peer-reviewer`) with inheritance + cycle rejection.
 - [x] **T1.4 (P0)** Security floor engine: monotonic protected-settings chain (FR-009a); recorded overrides.
 - [x] **T1.5 (P0)** Trust gating module: `project_trust` observer (defer ownership — V1), `isProjectTrusted()` gate before every project-config load, fail-closed unknown, restart-required messaging after `/trust`, `defaultProjectTrust: "always"` doctor warning + audit origin (FR-004a, V2).
-- [ ] **T1.6 (P0)** `pi-code doctor` / `config` / `config explain <key>` / `features` (+ `--json` for all).
-  - _Partial — missing: `pi-code config`, `config explain <key>`, `features` launcher subcommands, and `--json` on all four._
+- [x] **T1.6 (P0)** `pi-code doctor` / `config` / `config explain <key>` / `features` (+ `--json` for all).
 - [ ] **T1.7 (P1)** Config migration mechanism + obsolete-key detection; `validate-cct-config` CI job.
   - _Not started._
 - [ ] **T1.8 (P2)** Redacted resolved-configuration `export`.

@@ -207,7 +207,7 @@ if command -v ruby >/dev/null 2>&1; then
       end
     end
     print problems.join("; ")
-  ' "$CAP_DIR/pi.yaml" "$PI_DIR/runtime/index.ts")
+  ' "$CAP_DIR/pi.yaml" "$PI_DIR/runtime/capabilities.ts")
   assert "runtime capability seed matches pi.yaml${DRIFT:+ — $DRIFT}" "[[ -z '$DRIFT' ]]"
 
   # The guard must be able to fail: run it against a deliberately drifted copy.
@@ -220,7 +220,7 @@ if command -v ruby >/dev/null 2>&1; then
       n += 1 unless src[idx, 320].to_s.include?("runtime_status: \"#{c["runtime_status"]}\"")
     end
     print n
-  ' "$DRIFTED" "$PI_DIR/runtime/index.ts")
+  ' "$DRIFTED" "$PI_DIR/runtime/capabilities.ts")
   assert "drift guard fires on planted drift ($PLANTED detected)" "[[ '$PLANTED' -gt 0 ]]"
 else
   echo "  SKIP: capability drift guard — ruby not found"

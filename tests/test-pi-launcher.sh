@@ -141,6 +141,47 @@ else
 fi
 assert "pi exit code preserved through exec" "[[ '$RC' == '7' ]]"
 
+# ── Diagnostic subcommands (T1.6) ───────────────────────────
+echo "--- diagnostics ---"
+# The diagnostic subcommands shell out to node; BASE_PATH deliberately does
+# not contain it, so add its real location for these cases only.
+NODE_DIR="$(dirname "$(command -v node 2>/dev/null || echo /usr/bin/node)")"
+DIAG_PATH="$TMP/bin-new:$NODE_DIR:$BASE_PATH"
+
+for cmd in features config; do
+  OUT=$(PATH="$DIAG_PATH" "$LAUNCHER" "$cmd" 2>&1 || true)
+  assert "$cmd produces output" "[[ -n \"\$OUT\" ]]"
+done
+
+OUT=$(PATH="$DIAG_PATH" "$LAUNCHER" features 2>&1 || true)
+assert "features reports capability status" "echo \"\$OUT\" | grep -q 'enabled'"
+assert "features reports implementation kind" "echo \"\$OUT\" | grep -q 'cct-first-party'"
+
+OUT=$(PATH="$DIAG_PATH" "$LAUNCHER" config 2>&1 || true)
+assert "config reports resolved keys" "echo \"\$OUT\" | grep -q 'security.fail_closed'"
+# Diagnostics must never imply project config was trusted (C-3).
+assert "config states the untrusted resolution" "echo \"\$OUT\" | grep -q 'UNTRUSTED'"
+
+OUT=$(PATH="$DIAG_PATH" "$LAUNCHER" config explain security.fail_closed 2>&1 || true)
+assert "explain shows the setting layer" "echo \"\$OUT\" | grep -q 'set by:'"
+
+RC=0
+PATH="$DIAG_PATH" "$LAUNCHER" config explain no.such.key > /dev/null 2>&1 || RC=$?
+assert "explain exits 1 for an unknown key" "[[ '$RC' == '1' ]]"
+
+for cmd in features doctor config; do
+  OUT=$(PATH="$DIAG_PATH" "$LAUNCHER" "$cmd" --json 2>&1 || true)
+  assert "$cmd --json emits valid JSON" \
+    "echo \"\$OUT\" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null"
+done
+
+# Diagnostics stay usable inside a session; only launches recurse.
+OUT=$(CCT_PI_CODE_ACTIVE=1 PATH="$DIAG_PATH" "$LAUNCHER" features 2>&1 || true)
+assert "recursion guard permits diagnostics" "echo \"\$OUT\" | grep -q 'capabilities'"
+
+assert "help documents the diagnostic commands" \
+  "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'config explain'"
+
 # ── Summary ─────────────────────────────────────────────────
 echo ""
 echo "========================================="

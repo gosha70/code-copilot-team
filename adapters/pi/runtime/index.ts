@@ -41,6 +41,8 @@ import type { PermissionRuleSet, PermissionVerdict } from "./policy/permissions.
 import { matchCandidates } from "./policy/protected.ts";
 import { audit } from "./policy/audit.ts";
 import { defaultProjectTrustFinding, trustDrift } from "./config/trust.ts";
+import { seedCapabilities } from "./capabilities.ts";
+import type { CapabilityRecord } from "./capabilities.ts";
 import {
   buildWriteGate,
   isValidPhase,
@@ -52,22 +54,6 @@ import { isSpecPath, validateSpecDir } from "./workflow/sdd.ts";
 
 type TrustState = "trusted" | "untrusted" | "unknown";
 
-interface CapabilityRecord {
-  id: string;
-  implementation_kind:
-    | "native"
-    | "cct-first-party"
-    | "optional-bridge"
-    | "external-platform";
-  runtime_status:
-    | "enabled"
-    | "disabled"
-    | "unavailable"
-    | "degraded"
-    | "misconfigured"
-    | "unsupported";
-  reason?: string;
-}
 
 interface CctRuntimeState {
   profile: string;
@@ -86,58 +72,6 @@ interface CctRuntimeState {
   restartRequired: boolean;
 }
 
-/** Capability seed. Statuses flip only via acceptance gates (FR-028). */
-function seedCapabilities(): CapabilityRecord[] {
-  return [
-    { id: "skills.shared", implementation_kind: "native", runtime_status: "enabled" },
-    { id: "prompts.commands", implementation_kind: "native", runtime_status: "enabled" },
-    { id: "config.layered", implementation_kind: "cct-first-party", runtime_status: "enabled" },
-    {
-      id: "config.trust-gating",
-      implementation_kind: "cct-first-party",
-      runtime_status: "enabled",
-    },
-    {
-      id: "workflow.sdd",
-      implementation_kind: "cct-first-party",
-      runtime_status: "enabled",
-    },
-    {
-      id: "workflow.phases",
-      implementation_kind: "cct-first-party",
-      runtime_status: "enabled",
-    },
-    {
-      id: "permissions.engine",
-      implementation_kind: "cct-first-party",
-      runtime_status: "enabled",
-    },
-    {
-      id: "permissions.protected-paths",
-      implementation_kind: "cct-first-party",
-      runtime_status: "enabled",
-    },
-    {
-      id: "providers.pi",
-      implementation_kind: "cct-first-party",
-      runtime_status: "disabled",
-      reason:
-        "Provider plumbing is installed, but the dedicated read-only reviewer execution contract has not passed its acceptance gates.",
-    },
-    {
-      id: "integrations.mcp",
-      implementation_kind: "optional-bridge",
-      runtime_status: "disabled",
-      reason: "Optional; Phase 10.",
-    },
-    {
-      id: "integrations.hosted-platform",
-      implementation_kind: "external-platform",
-      runtime_status: "unavailable",
-      reason: "Anthropic-hosted services are external platforms; never claimed as Pi parity.",
-    },
-  ];
-}
 
 /** Read Pi's own defaultProjectTrust setting for the V2 doctor warning. */
 function readDefaultProjectTrust(): string | null {
