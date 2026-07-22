@@ -362,6 +362,17 @@ forking Pi.
 
 ## Acceptance Criteria (Definition of Done)
 
+> **Scope note — 2026-07-21 (PR #107).** The criteria below define the
+> **umbrella** feature and remain the target for the feature branch as a whole.
+> They are explicitly **not** the merge gate for PR #107, which delivers a
+> rescoped slice: the `pi-code` launcher, layered configuration with the security
+> floor and trust gating, generated advisory resources, and the SDD/permission
+> enforcement core. Slice B (Phase 3), Phase 6, and Slices D–F are deferred;
+> `specs/pi-harness-adoption/tasks.md` records the per-task delivered/partial/
+> not-started state. TX.2's "no merge to `master` until the DoD holds" applies to
+> the umbrella, and is satisfied for PR #107 by this documented rescope rather
+> than by the full criteria below.
+
 The umbrella feature is complete when all of the following hold (each is a
 tested gate, not aspiration):
 
