@@ -1,0 +1,55 @@
+name: Pi Adapter Tests
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'adapters/pi/**'
+      - 'tests/test-pi-launcher.sh'
+      - 'tests/test-pi-adapter.sh'
+      - 'tests/test-pi-runtime.sh'
+      - 'tests/pi-runtime/**'
+      - 'scripts/generate.sh'
+      - '.github/workflows/pi-tests.yml'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'adapters/pi/**'
+      - 'tests/test-pi-launcher.sh'
+      - 'tests/test-pi-adapter.sh'
+      - 'tests/test-pi-runtime.sh'
+      - 'tests/pi-runtime/**'
+      - 'scripts/generate.sh'
+      - '.github/workflows/pi-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  pi-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The runtime suite needs Node >= 22.6 for --experimental-strip-types;
+      # below that it auto-skips, which would pass this job without running.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Launcher contract
+        run: bash tests/test-pi-launcher.sh
+
+      - name: Adapter generation and install
+        run: bash tests/test-pi-adapter.sh
+
+      - name: Runtime unit tests
+        run: |
+          set -o pipefail
+          bash tests/test-pi-runtime.sh 2>&1 | tee pi-runtime.log
+          if grep -q '\[SKIP\]' pi-runtime.log; then
+            echo ""
+            echo "ERROR: Pi runtime tests skipped instead of running."
+            echo "This job must execute them — check the Node version above."
+            exit 1
+          fi
