@@ -349,7 +349,9 @@ for cmd_file in "$CC_COMMANDS_DIR"/*.md; do
   done
   $skip && continue
   # Pi prompt-template frontmatter: description from the first non-empty line.
-  desc=$(grep -m1 -v '^[[:space:]]*$' "$cmd_file" | sed 's/^#\+ *//; s/"/\\"/g')
+  # -E (ERE): `\+` is a GNU extension BSD/macOS sed does not support, which
+  # silently left the leading `#` in generated descriptions on macOS.
+  desc=$(grep -m1 -v '^[[:space:]]*$' "$cmd_file" | sed -E 's/^#+ *//; s/"/\\"/g')
   {
     echo "---"
     echo "description: \"$desc\""

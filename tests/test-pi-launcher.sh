@@ -121,6 +121,17 @@ assert "recursion block uses exit 64" "[[ '${RC:-0}' == '64' ]]"
 OUT=$(CCT_PI_CODE_ACTIVE=1 PATH="$TMP/bin-new:$BASE_PATH" "$LAUNCHER" version)
 assert "diagnostic commands allowed under recursion guard" "echo \"\$OUT\" | grep -q 'pi-code'"
 
+# ── no passthrough args ─────────────────────────────────────
+# bash 3.2 (macOS /bin/bash) errors on "${a[@]}" for an empty array under
+# `set -u`, which broke the default launch path with no extra arguments.
+echo "--- no passthrough args ---"
+rm -f "$TMP/capture.txt"
+PATH="$TMP/bin-new:$BASE_PATH" "$LAUNCHER" > /dev/null 2>&1 || true
+assert "enforced launch execs pi with no args" "grep -q 'CCT_RUNTIME:1' '$TMP/capture.txt'"
+rm -f "$TMP/capture.txt"
+PATH="$TMP/bin-new:$BASE_PATH" "$LAUNCHER" --no-cct > /dev/null 2>&1 || true
+assert "--no-cct execs pi with no args" "grep -q 'CCT_RUNTIME:unset' '$TMP/capture.txt'"
+
 # ── exit-code preservation ──────────────────────────────────
 echo "--- exit codes ---"
 if PI_SHIM_EXIT=7 PATH="$TMP/bin-new:$BASE_PATH" "$LAUNCHER" --no-cct > /dev/null 2>&1; then

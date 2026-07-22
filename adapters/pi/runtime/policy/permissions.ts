@@ -79,9 +79,17 @@ export function splitCommands(raw: string): string[] {
   let quote: string | null = null;
   for (let i = 0; i < raw.length; i++) {
     const ch = raw[i];
+    // POSIX processes backslash escapes inside "..." but never inside '...'.
+    // Consume the escaped pair atomically so `'a\'` closes its quote and
+    // `"a\\"` does not leave one open — either would hide a separator.
+    if (quote === '"' && ch === "\\" && i + 1 < raw.length) {
+      current += ch + raw[i + 1];
+      i += 1;
+      continue;
+    }
     if (quote) {
       current += ch;
-      if (ch === quote && raw[i - 1] !== "\\") quote = null;
+      if (ch === quote) quote = null;
       continue;
     }
     if (ch === '"' || ch === "'") {

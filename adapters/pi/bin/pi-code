@@ -211,7 +211,9 @@ if $NO_CCT; then
   # Equivalent to bare pi: no runtime, no marker. Reported visibly so an
   # unenforced session is never mistaken for an enforced one (FR-002).
   warn "--no-cct: starting UNENFORCED pi (no CCT runtime, gates, or policies)."
-  exec "$PI_BIN" "${PI_ARGS[@]}"
+  # ${a[@]+"${a[@]}"} — bash 3.2 (macOS /bin/bash) treats "${a[@]}" on an
+  # empty array as unbound under `set -u`.
+  exec "$PI_BIN" ${PI_ARGS[@]+"${PI_ARGS[@]}"}
 fi
 
 if [[ -z "$RUNTIME_ENTRY" ]]; then
@@ -225,4 +227,4 @@ export CCT_PI_CODE_ACTIVE=1
 export CCT_PROFILE="$PROFILE"
 [[ -n "$CLI_SETS" ]] && export CCT_CLI_SETS="$CLI_SETS"
 $NO_PROJECT_CONFIG && export CCT_NO_PROJECT_CONFIG=1
-exec "$PI_BIN" --extension "$RUNTIME_ENTRY" "${PI_ARGS[@]}"
+exec "$PI_BIN" --extension "$RUNTIME_ENTRY" ${PI_ARGS[@]+"${PI_ARGS[@]}"}

@@ -87,6 +87,22 @@ test("commands: chained, piped, and substituted commands are scanned", () => {
   assert.deepEqual(splitCommands('echo "a && b"'), ['echo "a && b"']);
 });
 
+test("commands: backslash-in-quotes cannot hide a separator", () => {
+  // POSIX processes backslash escapes in "..." but not in '...'. Each of
+  // these really does run the trailing command in a shell, so each must
+  // deny — a scanner that keeps the quote open would see one benign command.
+  const cases = [
+    "echo 'a\\'; git push --force",
+    'echo "a\\\\"; git push --force',
+    'echo "a\\"b" ; git push --force',
+  ];
+  for (const c of cases) {
+    assert.equal(checkCommand(RULES, c).effective, "deny", `should deny: ${c}`);
+  }
+  // An escaped quote still keeps a double-quoted string open.
+  assert.deepEqual(splitCommands('echo "a\\" && b"'), ['echo "a\\" && b"']);
+});
+
 test("permissions: headless ask resolves deterministically (FR-022)", () => {
   assert.equal(checkCommand(RULES, "git push origin main").effective, "deny");
   const failRules = { ...RULES, askResolution: "fail" };
