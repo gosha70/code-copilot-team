@@ -44,6 +44,31 @@ assert "static command converted (bet)" "[[ -f '$RES/prompts/bet.md' ]]"
 assert "prompt has description frontmatter" "head -2 '$RES/prompts/bet.md' | grep -q '^description:'"
 assert "stateful command excluded (review-submit)" "[[ ! -f '$RES/prompts/review-submit.md' ]]"
 assert "stateful command excluded (auto-build)" "[[ ! -f '$RES/prompts/auto-build.md' ]]"
+
+# ── Command → prompt conversion (T2.2) ──────────────────────
+echo "--- prompt conversion ---"
+CONVERT="$REPO_DIR/scripts/pi-convert-command.sh"
+
+# argument-hint is derived from the source `Usage:` line.
+assert "generated prompt carries argument-hint (shape)" \
+  "grep -q '^argument-hint: \"<topic>\"' '$RES/prompts/shape.md'"
+# a command with no arguments omits argument-hint rather than emitting an empty one.
+assert "no-argument command omits argument-hint (cooldown)" \
+  "! grep -q '^argument-hint:' '$RES/prompts/cooldown.md'"
+
+# Claude-only frontmatter keys are dropped, with a warning; description and
+# argument-hint from source frontmatter are kept.
+FIX="$REPO_DIR/tests/fixtures/pi-commands/with-claude-metadata.md"
+CONV_OUT=$(bash "$CONVERT" "$FIX" 2>/dev/null)
+CONV_ERR=$(bash "$CONVERT" "$FIX" 2>&1 >/dev/null)
+assert "conversion keeps source description" "echo \"\$CONV_OUT\" | grep -q '^description: \"A fixture command'"
+assert "conversion keeps source argument-hint" "echo \"\$CONV_OUT\" | grep -q '^argument-hint: \"<file> \[--force\]\"'"
+assert "conversion drops allowed-tools" "! echo \"\$CONV_OUT\" | grep -q 'allowed-tools'"
+assert "conversion drops model" "! echo \"\$CONV_OUT\" | grep -qE '^model:'"
+assert "conversion warns about dropped Claude-only keys" "echo \"\$CONV_ERR\" | grep -q 'dropped Claude-only metadata'"
+assert "conversion preserves \$ARGUMENTS" "echo \"\$CONV_OUT\" | grep -q 'ARGUMENTS'"
+assert "conversion preserves positional \$1" "echo \"\$CONV_OUT\" | grep -q '\$1'"
+
 assert "always-context bundle exists" "[[ -f '$RES/context/always-context.md' ]]"
 assert "always-context includes safety policy" "grep -q 'Destructive' '$RES/context/always-context.md' || grep -qi 'safety' '$RES/context/always-context.md'"
 

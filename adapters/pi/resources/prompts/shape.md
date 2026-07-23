@@ -1,5 +1,6 @@
 ---
 description: "Shape a rough idea into a Shape-Up pitch via the `pitch-shaper` agent."
+argument-hint: "<topic>"
 ---
 
 Shape a rough idea into a Shape-Up pitch via the `pitch-shaper` agent.
