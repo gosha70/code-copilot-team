@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-22
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **19 of 64 complete.** Phase 1 complete (8/8).
+written. Current state: **20 of 64 complete.** Phase 1 complete (8/8).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -44,8 +44,7 @@ just their happy path. Work proceeds in phase order.
 - [x] **T2.1 (P0)** `generate.sh` `[pi]` section: verbatim skills copy → `adapters/pi/resources/skills/`; deterministic ordering; drift check in `sync-check.yml`.
 - [x] **T2.2 (P0)** Command→prompt-template conversion: static/stateful classification, frontmatter normalization (`description`, `argument-hint`), `$ARGUMENTS`/`$1..$n` preservation, collision validation, Claude-only metadata handling.
 - [x] **T2.3 (P0)** Always-context bundle from `ALWAYS_SKILLS` (coding-standards, copilot-conventions, copyright-headers, origin-confirmation, safety, wiki-first-query) loaded before task execution; Pi-specific size limits measured + documented (C-4 — the 32 KiB cap is Codex-only).
-- [ ] **T2.4 (P1)** Stateful commands registered through the runtime (`/cct:*` family).
-  - _Partial — missing: runtime registration of the six stateful commands the generator defers (`auto-build`, `phase-complete`, `ralph-start`, `review-decide`, `review-submit`, `cycle-start`)._
+- [x] **T2.4 (P1)** Stateful commands registered through the runtime (`/cct:*` family).
 - [ ] **T2.5 (P1)** Resource provenance reporting (which package/path supplied each skill/prompt).
   - _Not started._
 - [x] **T2.6 (P1)** `tests/test-pi-adapter.sh`: generation goldens, determinism, install idempotency.

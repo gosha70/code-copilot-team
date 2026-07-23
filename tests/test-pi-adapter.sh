@@ -45,6 +45,21 @@ assert "prompt has description frontmatter" "head -2 '$RES/prompts/bet.md' | gre
 assert "stateful command excluded (review-submit)" "[[ ! -f '$RES/prompts/review-submit.md' ]]"
 assert "stateful command excluded (auto-build)" "[[ ! -f '$RES/prompts/auto-build.md' ]]"
 
+# T2.4: every command the generator DEFERS (excludes from prompt conversion)
+# must be REGISTERED in the runtime as /cct:<name>, or a user typing it gets
+# "unknown command". Cross-check the two lists so they cannot drift.
+STATEFUL=$(grep '^PI_STATEFUL_COMMANDS=' "$REPO_DIR/scripts/generate.sh" | cut -d'"' -f2)
+for cmd in $STATEFUL; do
+  assert "stateful '$cmd' registered as /cct:$cmd in runtime" \
+    "grep -q '\"cct:$cmd\"' '$PI_DIR/runtime/index.ts'"
+done
+# Deferred commands report honestly (not a silent no-op or fake success).
+assert "deferred stateful command reports deferral" \
+  "grep -q 'recognized but not yet active in pi-code' '$PI_DIR/runtime/index.ts'"
+# phase-complete has real backing (validates the SDD gate).
+assert "phase-complete validates the SDD gate" \
+  "grep -A15 '\"cct:phase-complete\"' '$PI_DIR/runtime/index.ts' | grep -q 'validateSpecDir'"
+
 # ── Command → prompt conversion (T2.2) ──────────────────────
 echo "--- prompt conversion ---"
 CONVERT="$REPO_DIR/scripts/pi-convert-command.sh"

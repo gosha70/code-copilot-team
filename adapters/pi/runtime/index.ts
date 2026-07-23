@@ -483,4 +483,75 @@ export default async function (pi: any): Promise<void> {
       emit(ctx, lines.join("\n"));
     },
   });
+
+  // ── Stateful commands (T2.4) ──────────────────────────────────────
+  // The generator excludes these from prompt-template conversion because
+  // they mutate workflow state, start agents, or drive review loops. They
+  // are registered here as /cct:* commands so a session recognizes them
+  // rather than dropping them. Commands whose backing machinery lands in a
+  // later phase report that honestly instead of no-oping or faking success.
+  const DEFERRED_STATEFUL: { name: string; description: string; lands: string }[] = [
+    {
+      name: "cct:cycle-start",
+      description: "Start a Shape-Up cycle for a bet pitch",
+      lands: "the Shape-Up capability is not part of the enforced Pi runtime yet",
+    },
+    {
+      name: "cct:review-submit",
+      description: "Submit work for cross-provider peer review",
+      lands: "the peer-review runner lands in Phase 6 (verification & review)",
+    },
+    {
+      name: "cct:review-decide",
+      description: "Resolve a review-loop circuit breaker (approve/reject/retry)",
+      lands: "the peer-review runner lands in Phase 6 (verification & review)",
+    },
+    {
+      name: "cct:ralph-start",
+      description: "Start a Ralph autonomous-iteration loop",
+      lands: "autonomous loops land with the agent runner in Phase 7+",
+    },
+    {
+      name: "cct:auto-build",
+      description: "Start the autonomous build driver for an approved SDD feature",
+      lands: "the auto-build driver lands with the agent runner in Phase 7+",
+    },
+  ];
+  for (const c of DEFERRED_STATEFUL) {
+    pi.registerCommand?.(c.name, {
+      description: c.description,
+      handler: async (ctx: any) =>
+        emit(
+          ctx,
+          `${c.name} is recognized but not yet active in pi-code: ${c.lands}. ` +
+            `Run 'pi-code features' to see capability status.`,
+        ),
+    });
+  }
+
+  // phase-complete has real backing now: the phase machine and the SDD gate
+  // both exist, so it validates the active feature's gate and reports whether
+  // the phase can complete rather than deferring.
+  pi.registerCommand?.("cct:phase-complete", {
+    description: "Validate the SDD gate and report whether the phase can complete",
+    handler: async (ctx: any) => {
+      if (!state.workflow.featureId) {
+        emit(ctx, "no active feature — set one with /cct:phase <phase> <feature-id>");
+        return;
+      }
+      const gate = validateSpecDir(path.join(state.cwd, "specs", state.workflow.featureId));
+      const lines = [
+        `feature: ${state.workflow.featureId}`,
+        `phase: ${state.workflow.phase}`,
+        `sdd gate: ${gate.pass ? "PASS" : "FAIL"} (spec_mode=${gate.specMode ?? "?"})`,
+      ];
+      for (const r of gate.reasons) lines.push(`  - ${r}`);
+      lines.push(
+        gate.pass
+          ? "phase may complete; advance with /cct:phase <next> " + state.workflow.featureId
+          : "phase is BLOCKED until the gate passes",
+      );
+      emit(ctx, lines.join("\n"));
+    },
+  });
 }
