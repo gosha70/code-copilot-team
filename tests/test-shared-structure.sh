@@ -1171,9 +1171,12 @@ rc=0
 grep -q 'bash -n scripts/harden-github.sh' "$WORKFLOW_FILE" || rc=1
 assert_ok "sync-check validates harden-github syntax" "$rc"
 
+# Staged diff, not plain `git diff`: the latter is blind to untracked
+# generator output, which let a missing generated prompt go undetected.
 rc=0
-grep -q 'git diff --exit-code adapters/' "$WORKFLOW_FILE" || rc=1
-assert_ok "sync-check checks adapter drift via git diff" "$rc"
+grep -q 'git add -A adapters/' "$WORKFLOW_FILE" || rc=1
+grep -q 'git diff --cached --exit-code adapters/' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check checks adapter drift via staged diff" "$rc"
 
 # Ensure setup.sh appears in the shared-structure step before test execution.
 SHARED_STEP=$(
