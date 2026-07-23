@@ -1,0 +1,38 @@
+{
+  "skills": {
+    "agent-team-protocol": "shared/skills/agent-team-protocol/SKILL.md",
+    "auto-build-loop": "shared/skills/auto-build-loop/SKILL.md",
+    "clarification-protocol": "shared/skills/clarification-protocol/SKILL.md",
+    "coding-standards": "shared/skills/coding-standards/SKILL.md",
+    "copilot-conventions": "shared/skills/copilot-conventions/SKILL.md",
+    "copyright-headers": "shared/skills/copyright-headers/SKILL.md",
+    "design-system": "shared/skills/design-system/SKILL.md",
+    "environment-setup": "shared/skills/environment-setup/SKILL.md",
+    "infra-verification": "shared/skills/infra-verification/SKILL.md",
+    "integration-testing": "shared/skills/integration-testing/SKILL.md",
+    "memkernel-memory": "shared/skills/memkernel-memory/SKILL.md",
+    "opus-4-7-features": "shared/skills/opus-4-7-features/SKILL.md",
+    "origin-confirmation": "shared/skills/origin-confirmation/SKILL.md",
+    "phase-workflow": "shared/skills/phase-workflow/SKILL.md",
+    "provider-collaboration-protocol": "shared/skills/provider-collaboration-protocol/SKILL.md",
+    "ralph-loop": "shared/skills/ralph-loop/SKILL.md",
+    "review-loop": "shared/skills/review-loop/SKILL.md",
+    "safety": "shared/skills/safety/SKILL.md",
+    "spec-workflow": "shared/skills/spec-workflow/SKILL.md",
+    "stack-constraints": "shared/skills/stack-constraints/SKILL.md",
+    "team-lead-efficiency": "shared/skills/team-lead-efficiency/SKILL.md",
+    "token-efficiency": "shared/skills/token-efficiency/SKILL.md",
+    "visual-review": "shared/skills/visual-review/SKILL.md",
+    "wiki-first-query": "shared/skills/wiki-first-query/SKILL.md"
+  },
+  "prompts": {
+    "bet": "adapters/claude-code/.claude/commands/bet.md",
+    "cooldown": "adapters/claude-code/.claude/commands/cooldown.md",
+    "hill": "adapters/claude-code/.claude/commands/hill.md",
+    "list-agents": "adapters/claude-code/.claude/commands/list-agents.md",
+    "origin-check": "adapters/claude-code/.claude/commands/origin-check.md",
+    "promote-lesson": "adapters/claude-code/.claude/commands/promote-lesson.md",
+    "retro": "adapters/claude-code/.claude/commands/retro.md",
+    "shape": "adapters/claude-code/.claude/commands/shape.md"
+  }
+}

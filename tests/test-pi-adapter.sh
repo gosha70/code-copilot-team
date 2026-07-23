@@ -86,6 +86,19 @@ assert "conversion preserves positional \$1" "echo \"\$CONV_OUT\" | grep -q '\$1
 
 assert "always-context bundle exists" "[[ -f '$RES/context/always-context.md' ]]"
 
+# T2.5: the generator emits a provenance manifest mapping each generated
+# resource to its source, and the runtime CLI reports it.
+assert "provenance manifest exists" "[[ -f '$RES/provenance.json' ]]"
+assert "provenance manifest is valid JSON" \
+  "python3 -c 'import json; json.load(open(\"$RES/provenance.json\"))'"
+assert "provenance maps a skill to its shared source" \
+  "python3 -c 'import json,sys; d=json.load(open(\"$RES/provenance.json\")); sys.exit(0 if d[\"skills\"][\"safety\"]==\"shared/skills/safety/SKILL.md\" else 1)'"
+assert "provenance maps a prompt to its command source" \
+  "python3 -c 'import json,sys; d=json.load(open(\"$RES/provenance.json\")); sys.exit(0 if \"claude-code\" in d[\"prompts\"][\"shape\"] else 1)'"
+# The count must match what was actually generated (no stale/missing entries).
+assert "provenance skill count matches generated skills" \
+  "[[ \"\$(python3 -c 'import json; print(len(json.load(open(\"$RES/provenance.json\"))[\"skills\"]))')\" == \"\$(ls -d '$RES/skills'/*/ | wc -l | tr -d ' ')\" ]]"
+
 # T2.3: the bundle is not just generated — the runtime loads it at session
 # start and doctor reports it, and the Pi-specific size limit is documented.
 assert "runtime imports the context loader" \
