@@ -17,6 +17,7 @@
 #   config [--json]       Print the resolved configuration (redacted)
 #   config explain <key>  Show a key's value and the layers that set it
 #   features [--json]     Report capability state (kind x runtime status)
+#   export [--json]       Redacted, portable snapshot of the resolved config
 #   help                  Show usage
 #
 # Diagnostics resolve project config as untrusted: they run outside a Pi
@@ -77,7 +78,7 @@ diag() { [[ "${DIAGNOSTIC:-false}" == "true" ]] && echo "[pi-code] $*" >&2 || tr
 # A pi-code-launched session (or a reviewer child) must not re-enter the
 # launcher and stack runtimes. CCT_PI_CODE_ACTIVE marks an active launch.
 case "${1:-}" in
-  version|help|--help|-h|doctor|config|features) CCT_DIAGNOSTIC_CMD=true ;;
+  version|help|--help|-h|doctor|config|features|export) CCT_DIAGNOSTIC_CMD=true ;;
   *) CCT_DIAGNOSTIC_CMD=false ;;
 esac
 if [[ "${CCT_PI_CODE_ACTIVE:-}" == "1" && "$CCT_DIAGNOSTIC_CMD" == "false" ]]; then
@@ -138,7 +139,7 @@ case "${1:-}" in
     sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
-  config|features)
+  config|features|export)
     # Diagnostics run outside a Pi session; the runtime CLI resolves and
     # reports configuration and capability state (fail-closed on trust).
     if [[ -z "$RUNTIME_ENTRY" ]]; then

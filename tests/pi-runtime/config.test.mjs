@@ -33,6 +33,8 @@ import {
   defaultProjectTrustFinding,
   trustDrift,
 } from "../../adapters/pi/runtime/config/trust.ts";
+import { hasErrors, lintConfig } from "../../adapters/pi/runtime/config/lint.ts";
+import { BUILTIN_DEFAULTS } from "../../adapters/pi/runtime/config/loader.ts";
 
 // ── helpers ─────────────────────────────────────────────────
 
@@ -382,4 +384,43 @@ test("migrate: a mis-authored chain is an error, not a silent partial migration"
   const r = migrateTable({ config_version: 1 });
   assert.equal(r.error, null);
   assert.equal(r.table.config_version, CONFIG_SCHEMA_VERSION);
+});
+
+// ── config linting: obsolete / legacy / unknown keys (FR-004, T1.7) ──
+
+test("lint: an obsolete key is an error, not a silent no-op", () => {
+  const findings = lintConfig({ security: { allow_all: true } });
+  const f = findings.find((x) => x.key === "security.allow_all");
+  assert.equal(f.kind, "obsolete");
+  assert.equal(hasErrors(findings), true);
+});
+
+test("lint: a legacy key is informational — migration will carry it", () => {
+  const findings = lintConfig({ headless: { deny_asks: true } });
+  const f = findings.find((x) => x.key === "headless.deny_asks");
+  assert.equal(f.kind, "legacy");
+  assert.equal(hasErrors(findings), false);
+});
+
+test("lint: a typo in a closed section is an unknown-key warning", () => {
+  // The dangerous case: security.fail_close looks like a real setting.
+  const findings = lintConfig({ security: { fail_close: true } });
+  const f = findings.find((x) => x.key === "security.fail_close");
+  assert.equal(f.kind, "unknown");
+  assert.equal(hasErrors(findings), false); // warning, not error
+});
+
+test("lint: known keys and open sections produce no findings", () => {
+  const clean = {
+    config_version: 2,
+    security: { fail_closed: true, protected_paths: [".env"] },
+    profiles: { mine: { extends: "disciplined" } }, // open section
+    providers: { openai: { api_key: "x", model: "gpt" } }, // open section
+  };
+  assert.deepEqual(lintConfig(clean), []);
+});
+
+test("lint: every shipped default is recognized (no linter/default drift)", () => {
+  const unknown = lintConfig(BUILTIN_DEFAULTS).filter((f) => f.kind === "unknown");
+  assert.deepEqual(unknown, [], `defaults not recognized: ${unknown.map((f) => f.key).join(", ")}`);
 });

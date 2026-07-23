@@ -1,0 +1,3 @@
+# FIXTURE — invalid. Declares a schema version newer than the runtime
+# supports; must be rejected rather than merged (C-3). Exit 1.
+config_version = 99

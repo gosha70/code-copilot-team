@@ -190,6 +190,8 @@ SURFACES=(
   "features --json"
   "config explain providers.api_key"
   "config explain providers.api_key --json"
+  "export"
+  "export --json"
 )
 for surface in "${SURFACES[@]}"; do
   # shellcheck disable=SC2086
@@ -210,6 +212,27 @@ assert "recursion guard permits diagnostics" "echo \"\$OUT\" | grep -q 'capabili
 
 assert "help documents the diagnostic commands" \
   "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'config explain'"
+
+# ── Redacted export (T1.8) ──────────────────────────────────
+echo "--- export ---"
+EXP_HOME="$TMP/exp-home"
+mkdir -p "$EXP_HOME"
+printf 'config_version = 2\n[security]\nfail_closed = true\n[providers]\napi_key = "sk-export-secret"\n' > "$EXP_HOME/config.toml"
+
+EXP=$(CCT_HOME="$EXP_HOME" PATH="$DIAG_PATH" "$LAUNCHER" export 2>&1 || true)
+assert "export marks output as redacted" "echo \"\$EXP\" | grep -q 'redacted'"
+assert "export never emits the raw secret" "! echo \"\$EXP\" | grep -q 'sk-export-secret'"
+assert "export includes a resolved key" "echo \"\$EXP\" | grep -q 'security.fail_closed'"
+
+# The exported TOML must re-parse — it claims to be a portable artifact.
+echo "$EXP" > "$TMP/exported.toml"
+assert "exported TOML re-parses through the loader" \
+  "CCT_CFG='$TMP/exported.toml' node --experimental-strip-types --input-type=module -e 'import fs from \"node:fs\"; import { parseToml } from \"$REPO_DIR/adapters/pi/runtime/config/toml.ts\"; const t = parseToml(fs.readFileSync(process.env.CCT_CFG, \"utf8\")); process.exit(t.security && t.security.fail_closed === true ? 0 : 1);' 2>/dev/null"
+
+EXPJ=$(CCT_HOME="$EXP_HOME" PATH="$DIAG_PATH" "$LAUNCHER" export --json 2>&1 || true)
+assert "export --json never emits the raw secret" "! echo \"\$EXPJ\" | grep -q 'sk-export-secret'"
+assert "export --json is valid JSON with redacted flag" \
+  "echo \"\$EXPJ\" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get(\"redacted\") is True else 1)'"
 
 # ── Summary ─────────────────────────────────────────────────
 echo ""
