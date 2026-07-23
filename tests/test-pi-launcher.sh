@@ -192,6 +192,8 @@ SURFACES=(
   "config explain providers.api_key --json"
   "export"
   "export --json"
+  "resources"
+  "resources --json"
 )
 for surface in "${SURFACES[@]}"; do
   # shellcheck disable=SC2086
@@ -233,6 +235,14 @@ EXPJ=$(CCT_HOME="$EXP_HOME" PATH="$DIAG_PATH" "$LAUNCHER" export --json 2>&1 || 
 assert "export --json never emits the raw secret" "! echo \"\$EXPJ\" | grep -q 'sk-export-secret'"
 assert "export --json is valid JSON with redacted flag" \
   "echo \"\$EXPJ\" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get(\"redacted\") is True else 1)'"
+
+# T2.5: resources reports provenance for skills and prompts.
+RES_OUT=$(CCT_HOME="$EXP_HOME" PATH="$DIAG_PATH" "$LAUNCHER" resources 2>&1 || true)
+assert "resources reports a skill source" "echo \"\$RES_OUT\" | grep -q 'shared/skills'"
+assert "resources reports a prompt source" "echo \"\$RES_OUT\" | grep -q 'claude-code'"
+RES_J=$(CCT_HOME="$EXP_HOME" PATH="$DIAG_PATH" "$LAUNCHER" resources --json 2>&1 || true)
+assert "resources --json reports found:true" \
+  "echo \"\$RES_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get(\"found\") else 1)'"
 
 # ── Summary ─────────────────────────────────────────────────
 echo ""

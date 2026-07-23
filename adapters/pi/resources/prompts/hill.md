@@ -1,5 +1,6 @@
 ---
 description: "Update a scope's status on the hill chart of the active pitch."
+argument-hint: "<scope> <up|down|done> [--force]"
 ---
 
 Update a scope's status on the hill chart of the active pitch.

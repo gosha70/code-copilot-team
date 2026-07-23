@@ -44,7 +44,73 @@ assert "static command converted (bet)" "[[ -f '$RES/prompts/bet.md' ]]"
 assert "prompt has description frontmatter" "head -2 '$RES/prompts/bet.md' | grep -q '^description:'"
 assert "stateful command excluded (review-submit)" "[[ ! -f '$RES/prompts/review-submit.md' ]]"
 assert "stateful command excluded (auto-build)" "[[ ! -f '$RES/prompts/auto-build.md' ]]"
+
+# T2.4: every command the generator DEFERS (excludes from prompt conversion)
+# must be REGISTERED in the runtime as /cct:<name>, or a user typing it gets
+# "unknown command". Cross-check the two lists so they cannot drift.
+STATEFUL=$(grep '^PI_STATEFUL_COMMANDS=' "$REPO_DIR/scripts/generate.sh" | cut -d'"' -f2)
+for cmd in $STATEFUL; do
+  assert "stateful '$cmd' registered as /cct:$cmd in runtime" \
+    "grep -q '\"cct:$cmd\"' '$PI_DIR/runtime/index.ts'"
+done
+# Deferred commands report honestly (not a silent no-op or fake success).
+assert "deferred stateful command reports deferral" \
+  "grep -q 'recognized but not yet active in pi-code' '$PI_DIR/runtime/index.ts'"
+# phase-complete has real backing (validates the SDD gate).
+assert "phase-complete validates the SDD gate" \
+  "grep -A15 '\"cct:phase-complete\"' '$PI_DIR/runtime/index.ts' | grep -q 'validateSpecDir'"
+
+# ── Command → prompt conversion (T2.2) ──────────────────────
+echo "--- prompt conversion ---"
+CONVERT="$REPO_DIR/scripts/pi-convert-command.sh"
+
+# argument-hint is derived from the source `Usage:` line.
+assert "generated prompt carries argument-hint (shape)" \
+  "grep -q '^argument-hint: \"<topic>\"' '$RES/prompts/shape.md'"
+# a command with no arguments omits argument-hint rather than emitting an empty one.
+assert "no-argument command omits argument-hint (cooldown)" \
+  "! grep -q '^argument-hint:' '$RES/prompts/cooldown.md'"
+
+# Claude-only frontmatter keys are dropped, with a warning; description and
+# argument-hint from source frontmatter are kept.
+FIX="$REPO_DIR/tests/fixtures/pi-commands/with-claude-metadata.md"
+CONV_OUT=$(bash "$CONVERT" "$FIX" 2>/dev/null)
+CONV_ERR=$(bash "$CONVERT" "$FIX" 2>&1 >/dev/null)
+assert "conversion keeps source description" "echo \"\$CONV_OUT\" | grep -q '^description: \"A fixture command'"
+assert "conversion keeps source argument-hint" "echo \"\$CONV_OUT\" | grep -q '^argument-hint: \"<file> \[--force\]\"'"
+assert "conversion drops allowed-tools" "! echo \"\$CONV_OUT\" | grep -q 'allowed-tools'"
+assert "conversion drops model" "! echo \"\$CONV_OUT\" | grep -qE '^model:'"
+assert "conversion warns about dropped Claude-only keys" "echo \"\$CONV_ERR\" | grep -q 'dropped Claude-only metadata'"
+assert "conversion preserves \$ARGUMENTS" "echo \"\$CONV_OUT\" | grep -q 'ARGUMENTS'"
+assert "conversion preserves positional \$1" "echo \"\$CONV_OUT\" | grep -q '\$1'"
+
 assert "always-context bundle exists" "[[ -f '$RES/context/always-context.md' ]]"
+
+# T2.5: the generator emits a provenance manifest mapping each generated
+# resource to its source, and the runtime CLI reports it.
+assert "provenance manifest exists" "[[ -f '$RES/provenance.json' ]]"
+assert "provenance manifest is valid JSON" \
+  "python3 -c 'import json; json.load(open(\"$RES/provenance.json\"))'"
+assert "provenance maps a skill to its shared source" \
+  "python3 -c 'import json,sys; d=json.load(open(\"$RES/provenance.json\")); sys.exit(0 if d[\"skills\"][\"safety\"]==\"shared/skills/safety/SKILL.md\" else 1)'"
+assert "provenance maps a prompt to its command source" \
+  "python3 -c 'import json,sys; d=json.load(open(\"$RES/provenance.json\")); sys.exit(0 if \"claude-code\" in d[\"prompts\"][\"shape\"] else 1)'"
+# The count must match what was actually generated (no stale/missing entries).
+assert "provenance skill count matches generated skills" \
+  "[[ \"\$(python3 -c 'import json; print(len(json.load(open(\"$RES/provenance.json\"))[\"skills\"]))')\" == \"\$(ls -d '$RES/skills'/*/ | wc -l | tr -d ' ')\" ]]"
+
+# T2.3: the bundle is not just generated — the runtime loads it at session
+# start and doctor reports it, and the Pi-specific size limit is documented.
+assert "runtime imports the context loader" \
+  "grep -q 'context.ts' '$PI_DIR/runtime/index.ts'"
+assert "runtime injects always-context at session start" \
+  "grep -q 'injectAlwaysContext' '$PI_DIR/runtime/index.ts'"
+assert "doctor reports the always-context bundle" \
+  "grep -q 'always-on context' '$PI_DIR/runtime/index.ts'"
+assert "context module documents the advisory size limit" \
+  "grep -q 'ALWAYS_CONTEXT_SOFT_LIMIT_BYTES' '$PI_DIR/runtime/context.ts'"
+assert "README documents the Pi size limit (not Codex 32 KiB)" \
+  "grep -q 'advisory soft limit' '$PI_DIR/README.md'"
 assert "always-context includes safety policy" "grep -q 'Destructive' '$RES/context/always-context.md' || grep -qi 'safety' '$RES/context/always-context.md'"
 
 # ── Determinism (FR-003) ────────────────────────────────────

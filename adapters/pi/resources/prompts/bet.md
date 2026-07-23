@@ -1,5 +1,6 @@
 ---
 description: "Lock a shaped Shape-Up pitch as a bet for the next cycle."
+argument-hint: "<pitch-id>"
 ---
 
 Lock a shaped Shape-Up pitch as a bet for the next cycle.

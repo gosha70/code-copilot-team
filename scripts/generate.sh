@@ -322,6 +322,13 @@ mkdir -p "$PI_RES/skills" "$PI_RES/prompts" "$PI_RES/context"
 rm -rf "$PI_RES/skills" "$PI_RES/prompts"/*.md "$PI_RES/context"/*.md
 mkdir -p "$PI_RES/skills"
 
+# Resource provenance (T2.5): record which source supplied each generated
+# skill/prompt. Accumulated as JSON-object lines, emitted to provenance.json
+# so the runtime can report where every resource came from.
+PI_PROV_SKILLS=""
+PI_PROV_PROMPTS=""
+repo_rel() { printf '%s' "${1#"$REPO_DIR"/}"; }
+
 # Skills: verbatim copy, sorted for determinism
 for skill_dir in "$SKILLS_DIR"/*/; do
   [[ -d "$skill_dir" ]] || continue
@@ -329,6 +336,8 @@ for skill_dir in "$SKILLS_DIR"/*/; do
   [[ -f "$skill_dir/SKILL.md" ]] || continue
   mkdir -p "$PI_RES/skills/$name"
   cp "$skill_dir/SKILL.md" "$PI_RES/skills/$name/SKILL.md"
+  PI_PROV_SKILLS="$PI_PROV_SKILLS    \"$name\": \"$(repo_rel "${skill_dir%/}/SKILL.md")\",
+"
 done
 PI_SKILL_COUNT=$(ls -d "$PI_RES/skills"/*/ 2>/dev/null | wc -l | tr -d ' ')
 echo "[pi] Copied $PI_SKILL_COUNT skills (verbatim, Agent Skills spec)"
@@ -339,7 +348,14 @@ echo "[pi] Copied $PI_SKILL_COUNT skills (verbatim, Agent Skills spec)"
 # spec §11.5). Keep this list in sync with tasks.md T2.2.
 PI_STATEFUL_COMMANDS="auto-build phase-complete ralph-start review-decide review-submit cycle-start"
 CC_COMMANDS_DIR="$ADAPTERS/claude-code/.claude/commands"
+PI_CONVERT="$SCRIPT_DIR/pi-convert-command.sh"
 PI_PROMPT_COUNT=0
+# Collision guard: two sources must not produce the same prompt name. Cannot
+# happen from one directory today, but the conversion is meant to accept more
+# sources later, and a silently overwritten prompt is a nasty surprise. A
+# space-delimited string (not an associative array) keeps this bash-3.2 safe —
+# macOS /bin/bash has no `declare -A`.
+PI_SEEN_PROMPT=" "
 for cmd_file in "$CC_COMMANDS_DIR"/*.md; do
   [[ -f "$cmd_file" ]] || continue
   cmd_name=$(basename "$cmd_file" .md)
@@ -348,20 +364,33 @@ for cmd_file in "$CC_COMMANDS_DIR"/*.md; do
     [[ "$s" == "$cmd_name" ]] && skip=true && break
   done
   $skip && continue
-  # Pi prompt-template frontmatter: description from the first non-empty line.
-  # -E (ERE): `\+` is a GNU extension BSD/macOS sed does not support, which
-  # silently left the leading `#` in generated descriptions on macOS.
-  desc=$(grep -m1 -v '^[[:space:]]*$' "$cmd_file" | sed -E 's/^#+ *//; s/"/\\"/g')
-  {
-    echo "---"
-    echo "description: \"$desc\""
-    echo "---"
-    echo ""
-    cat "$cmd_file"
-  } > "$PI_RES/prompts/$cmd_name.md"
+  if [[ "$PI_SEEN_PROMPT" == *" $cmd_name "* ]]; then
+    echo "[pi] ERROR: prompt name collision '$cmd_name' (source: $cmd_file)" >&2
+    exit 1
+  fi
+  PI_SEEN_PROMPT="$PI_SEEN_PROMPT$cmd_name "
+  # Convert via the shared converter (frontmatter normalization, argument-hint
+  # derivation, Claude-only metadata stripping, $ARGUMENTS/$1 preservation).
+  bash "$PI_CONVERT" "$cmd_file" > "$PI_RES/prompts/$cmd_name.md"
+  PI_PROV_PROMPTS="$PI_PROV_PROMPTS    \"$cmd_name\": \"$(repo_rel "$cmd_file")\",
+"
   PI_PROMPT_COUNT=$((PI_PROMPT_COUNT + 1))
 done
 echo "[pi] Generated $PI_PROMPT_COUNT prompt templates (stateful commands deferred to runtime)"
+
+# Emit the provenance manifest. Trailing commas are stripped so it is valid
+# JSON; keys are already sorted because both loops iterate sorted globs.
+{
+  echo "{"
+  echo "  \"skills\": {"
+  printf '%s' "$PI_PROV_SKILLS" | sed '$ s/,$//'
+  echo "  },"
+  echo "  \"prompts\": {"
+  printf '%s' "$PI_PROV_PROMPTS" | sed '$ s/,$//'
+  echo "  }"
+  echo "}"
+} > "$PI_RES/provenance.json"
+echo "[pi] Wrote resource provenance manifest"
 
 # Always-context bundle: ALWAYS_SKILLS bodies, loaded by the runtime /
 # launcher before task execution. NOTE: the 32 KiB cap above is a

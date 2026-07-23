@@ -204,6 +204,53 @@ function features(json: boolean): CliResult {
 }
 
 /**
+ * Resource provenance (T2.5): report which source supplied each generated
+ * skill and prompt, read from the `provenance.json` the generator emits
+ * alongside the resources. Answers "where did this skill come from?" without
+ * guessing — the manifest is authoritative.
+ */
+function resources(opts: CliOptions, json: boolean): CliResult {
+  let manifest: {
+    skills?: Record<string, string>;
+    prompts?: Record<string, string>;
+  } | null = null;
+  let source: string | null = null;
+  for (const dir of [
+    process.env.CCT_HOME ? path.join(process.env.CCT_HOME, "pi") : null,
+    opts.runtimeEntry ? path.dirname(path.dirname(opts.runtimeEntry)) : null,
+  ]) {
+    if (!dir) continue;
+    const file = path.join(dir, "resources", "provenance.json");
+    if (!fs.existsSync(file)) continue;
+    try {
+      manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+      source = file;
+      break;
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  if (!manifest) {
+    const msg =
+      "no resource provenance manifest found (run scripts/generate.sh)";
+    return {
+      out: json ? jsonOut({ found: false, message: msg }) : msg,
+      code: 1,
+    };
+  }
+  if (json)
+    return { out: jsonOut({ found: true, source, ...manifest }), code: 0 };
+  const lines = [`# resource provenance (from ${source})`];
+  for (const kind of ["skills", "prompts"] as const) {
+    const entries = manifest[kind] ?? {};
+    lines.push(`\n[${kind}]`);
+    for (const name of Object.keys(entries).sort())
+      lines.push(`${name} <- ${entries[name]}`);
+  }
+  return { out: lines.join("\n"), code: 0 };
+}
+
+/**
  * A self-contained, redacted snapshot of the resolved configuration (NFR-003,
  * T1.8). Unlike `config`, which is a human-readable dump, `export` emits a
  * portable artifact — TOML by default (round-trips back through the loader),
@@ -285,9 +332,11 @@ export function runCli(opts: CliOptions): CliResult {
       return features(json);
     case "export":
       return exportConfig(opts, json);
+    case "resources":
+      return resources(opts, json);
     default:
       return {
-        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export)`,
+        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export | resources)`,
         code: 64,
       };
   }

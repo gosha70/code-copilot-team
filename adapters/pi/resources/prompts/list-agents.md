@@ -1,5 +1,6 @@
 ---
 description: "List the custom subagents installed on this machine and in this project — the replacement for the built-in `/agents` command removed from recent Claude Code versions."
+argument-hint: "[name]"
 ---
 
 List the custom subagents installed on this machine and in this project — the replacement for the built-in `/agents` command removed from recent Claude Code versions.
