@@ -86,6 +86,10 @@ just their happy path. Work proceeds in phase order.
   - _Partial — missing: a property/fuzz generator and malformed-event tests (hand-written adversarial cases exist)._
 
 ### Phase 6 — Verification & review workflow
+- [ ] **T6.1 (P0)** Peer-review runner integration + bounded review-loop state machine + existing artifact formats (FR-015).
+- [ ] **T6.2 (P0)** Verification gates: build/unit/integration/lint/type-check/dependency-audit/security/visual/docs/drift (FR-016).
+- [ ] **T6.3 (P1)** Audited human override; `CCT_PEER_*` env contract via launcher flags (FR-000a).
+- [ ] **T6.4 (P1)** `pi-code init` (reuse scaffolder) + `pi-code sync [--dry-run]` (reuse sync contract).
 
 ## Slice D — Agent execution (Phases 7–8)
 
