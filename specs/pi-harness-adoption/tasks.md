@@ -13,7 +13,8 @@ written. Current state: **17 of 64 complete.** Phase 1 complete (8/8).
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
 checked only when every deliverable named in its own text exists and its tests
-pass. Work proceeds in phase order.
+pass — including the security constraints those deliverables are subject to, not
+just their happy path. Work proceeds in phase order.
 
 ## Slice A — Usable Pi adapter (Phases 0–2)
 
@@ -32,6 +33,10 @@ pass. Work proceeds in phase order.
 - [x] **T1.4 (P0)** Security floor engine: monotonic protected-settings chain (FR-009a); recorded overrides.
 - [x] **T1.5 (P0)** Trust gating module: `project_trust` observer (defer ownership — V1), `isProjectTrusted()` gate before every project-config load, fail-closed unknown, restart-required messaging after `/trust`, `defaultProjectTrust: "always"` doctor warning + audit origin (FR-004a, V2).
 - [x] **T1.6 (P0)** `pi-code doctor` / `config` / `config explain <key>` / `features` (+ `--json` for all).
+  - _Post-merge fix: `config explain --json` emitted sensitive values verbatim while the
+    text path redacted them — a C-3 violation. Redaction now covers the value and every
+    history entry on all surfaces, with a planted-secret sweep proven to fail against the
+    defective code. Checked only after that fix._
 - [x] **T1.7 (P1)** Config migration mechanism + obsolete-key detection; `validate-cct-config` CI job.
 - [x] **T1.8 (P2)** Redacted resolved-configuration `export`.
 

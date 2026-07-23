@@ -168,12 +168,19 @@ function explain(
     };
   }
   if (json) {
+    // Sensitive keys redact here too: the text path goes through explainKey's
+    // redaction, and --json must never be the surface that leaks the value.
+    const value = resolved.sensitive ? "<redacted>" : resolved.value;
+    const history = resolved.history.map((h) =>
+      resolved.sensitive ? { ...h, value: "<redacted>" } : h,
+    );
     return {
       out: jsonOut({
         key,
         found: true,
-        value: resolved.value,
-        history: resolved.history,
+        value,
+        sensitive: resolved.sensitive,
+        history,
         trustNote: TRUST_NOTE,
       }),
       code: 0,
