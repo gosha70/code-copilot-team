@@ -70,6 +70,19 @@ assert "conversion preserves \$ARGUMENTS" "echo \"\$CONV_OUT\" | grep -q 'ARGUME
 assert "conversion preserves positional \$1" "echo \"\$CONV_OUT\" | grep -q '\$1'"
 
 assert "always-context bundle exists" "[[ -f '$RES/context/always-context.md' ]]"
+
+# T2.3: the bundle is not just generated — the runtime loads it at session
+# start and doctor reports it, and the Pi-specific size limit is documented.
+assert "runtime imports the context loader" \
+  "grep -q 'context.ts' '$PI_DIR/runtime/index.ts'"
+assert "runtime injects always-context at session start" \
+  "grep -q 'injectAlwaysContext' '$PI_DIR/runtime/index.ts'"
+assert "doctor reports the always-context bundle" \
+  "grep -q 'always-on context' '$PI_DIR/runtime/index.ts'"
+assert "context module documents the advisory size limit" \
+  "grep -q 'ALWAYS_CONTEXT_SOFT_LIMIT_BYTES' '$PI_DIR/runtime/context.ts'"
+assert "README documents the Pi size limit (not Codex 32 KiB)" \
+  "grep -q 'advisory soft limit' '$PI_DIR/README.md'"
 assert "always-context includes safety policy" "grep -q 'Destructive' '$RES/context/always-context.md' || grep -qi 'safety' '$RES/context/always-context.md'"
 
 # ── Determinism (FR-003) ────────────────────────────────────

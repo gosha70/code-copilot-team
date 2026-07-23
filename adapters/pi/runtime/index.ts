@@ -42,6 +42,8 @@ import { matchCandidates } from "./policy/protected.ts";
 import { audit } from "./policy/audit.ts";
 import { defaultProjectTrustFinding, trustDrift } from "./config/trust.ts";
 import { seedCapabilities } from "./capabilities.ts";
+import { loadAlwaysContext } from "./context.ts";
+import type { AlwaysContext } from "./context.ts";
 import type { CapabilityRecord } from "./capabilities.ts";
 import {
   buildWriteGate,
@@ -70,6 +72,10 @@ interface CctRuntimeState {
   trustLoadedWith: TrustState | null;
   /** Set when trust changed after config load; requires a restart. */
   restartRequired: boolean;
+  /** Always-on context bundle, loaded at session start (T2.3). */
+  context: AlwaysContext | null;
+  /** Whether the bundle was actually handed to Pi (API available). */
+  contextInjected: boolean;
 }
 
 
@@ -139,6 +145,14 @@ function doctorReport(state: CctRuntimeState): string {
       (state.trust !== "trusted" ? " (project CCT config will NOT load)" : "") +
       (state.trustOwner ? ` — decision owned by: ${state.trustOwner}` : ""),
   );
+  if (state.context && state.context.text) {
+    lines.push(
+      `always-on context: ${(state.context.bytes / 1024).toFixed(1)} KiB from ` +
+        `${state.context.source} (${state.contextInjected ? "injected" : "NOT injected"})`,
+    );
+  } else {
+    lines.push("always-on context: <no bundle installed>");
+  }
   if (state.config) {
     lines.push(`profile chain: ${state.config.profileChain.join(" -> ") || "<none>"}`);
     lines.push("configuration files:");
@@ -190,6 +204,8 @@ export default async function (pi: any): Promise<void> {
     interactive: false,
     trustLoadedWith: null,
     restartRequired: false,
+    context: null,
+    contextInjected: false,
   };
 
   const cfg = (dotted: string): unknown => state.config?.resolved.get(dotted)?.value;
@@ -212,6 +228,45 @@ export default async function (pi: any): Promise<void> {
     return undefined;
   });
 
+  // Resource dirs to search for the always-context bundle: the managed
+  // install and a repo checkout, mirroring how the launcher finds the runtime.
+  const resourceDirs = (): string[] => {
+    const home = process.env.CCT_HOME ?? path.join(os.homedir(), ".code-copilot-team");
+    const dirs = [path.join(home, "pi")];
+    try {
+      const here = path.dirname(new URL(import.meta.url).pathname);
+      dirs.push(path.dirname(here)); // <adapter>/runtime -> <adapter>
+    } catch {
+      /* import.meta unavailable — managed dir is enough */
+    }
+    return dirs;
+  };
+
+  /**
+   * Load the always-on policy bundle and hand it to Pi. Injection uses Pi's
+   * context API when present; `contextInjected` records whether it actually
+   * ran, so doctor reports the truth instead of assuming the model saw it.
+   */
+  function injectAlwaysContext(s: CctRuntimeState, ctx: any): void {
+    s.context = loadAlwaysContext(resourceDirs());
+    if (s.context.warning) s.warnings.push(s.context.warning);
+    if (!s.context.text) return;
+    const api = ctx?.addContext ?? ctx?.appendSystemContext ?? pi?.registerContext;
+    if (typeof api === "function") {
+      try {
+        api.call(ctx ?? pi, s.context.text);
+        s.contextInjected = true;
+      } catch {
+        s.contextInjected = false;
+      }
+    } else {
+      s.warnings.push(
+        "always-on context bundle loaded but Pi exposed no context-injection " +
+          "API in this version — policy is not in the session prompt",
+      );
+    }
+  }
+
   pi.on?.("session_start", async (_event: unknown, ctx: any) => {
     try {
       state.trust = ctx?.isProjectTrusted?.() ? "trusted" : "untrusted";
@@ -223,6 +278,7 @@ export default async function (pi: any): Promise<void> {
     loadConfigForState(state, state.cwd);
     state.workflow = loadState(state.cwd);
     refreshRules();
+    injectAlwaysContext(state, ctx);
     if (!(state.profile in BUILTIN_PROFILES)) {
       state.warnings.push(`unknown profile '${state.profile}' — using defaults chain only`);
     }

@@ -34,6 +34,10 @@ import {
   trustDrift,
 } from "../../adapters/pi/runtime/config/trust.ts";
 import { hasErrors, lintConfig } from "../../adapters/pi/runtime/config/lint.ts";
+import {
+  ALWAYS_CONTEXT_SOFT_LIMIT_BYTES,
+  loadAlwaysContext,
+} from "../../adapters/pi/runtime/context.ts";
 import { BUILTIN_DEFAULTS } from "../../adapters/pi/runtime/config/loader.ts";
 
 // ── helpers ─────────────────────────────────────────────────
@@ -423,4 +427,40 @@ test("lint: known keys and open sections produce no findings", () => {
 test("lint: every shipped default is recognized (no linter/default drift)", () => {
   const unknown = lintConfig(BUILTIN_DEFAULTS).filter((f) => f.kind === "unknown");
   assert.deepEqual(unknown, [], `defaults not recognized: ${unknown.map((f) => f.key).join(", ")}`);
+});
+
+// ── always-on context bundle (FR-003 / C-4, T2.3) ───────────
+
+test("context: loads a bundle and measures its size", () => {
+  const dir = tempTree({
+    "resources/context/always-context.md": "# policy\n".repeat(10),
+  });
+  const r = loadAlwaysContext([dir]);
+  assert.equal(typeof r.text, "string");
+  assert.ok(r.bytes > 0);
+  assert.equal(r.overSoftLimit, false);
+  assert.equal(r.warning, null);
+  assert.match(r.source, /always-context\.md$/);
+});
+
+test("context: a missing bundle is EMPTY, not an error", () => {
+  const r = loadAlwaysContext(["/nonexistent-cct-dir"]);
+  assert.equal(r.text, null);
+  assert.equal(r.bytes, 0);
+  assert.equal(r.overSoftLimit, false);
+});
+
+test("context: an over-soft-limit bundle warns (advisory, not fatal)", () => {
+  const big = "x".repeat(ALWAYS_CONTEXT_SOFT_LIMIT_BYTES + 1);
+  const dir = tempTree({ "resources/context/always-context.md": big });
+  const r = loadAlwaysContext([dir]);
+  assert.equal(r.overSoftLimit, true);
+  assert.match(r.warning, /advisory limit/);
+  assert.ok(r.text.length > 0, "over-limit bundle is still returned, not truncated");
+});
+
+test("context: falls back to a later dir when the first has no bundle", () => {
+  const withBundle = tempTree({ "resources/context/always-context.md": "policy" });
+  const r = loadAlwaysContext(["/nonexistent-first", withBundle]);
+  assert.equal(r.text, "policy");
 });
