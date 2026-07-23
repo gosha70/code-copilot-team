@@ -33,6 +33,12 @@ import {
   saveState,
   transition,
 } from "../../adapters/pi/runtime/workflow/phases.ts";
+import {
+  classifyRisk,
+  loadClassification,
+  overrideClassification,
+  resolveClassification,
+} from "../../adapters/pi/runtime/workflow/classify.ts";
 
 const NOW = "2026-07-21T20:00:00.000Z";
 
@@ -257,4 +263,63 @@ test("phases: buildWriteGate blocks only in gated build phase", () => {
   // saveState/loadState round-trip helper coverage
   saveState(dir, inBuild);
   assert.equal(loadState(dir).phase, "build");
+});
+
+// ── SDD risk classifier (FR-006, T4.1) ──────────────────────
+
+test("classify: category and file-count map to spec_mode", () => {
+  assert.equal(classifyRisk({ category: "security" }).mode, "full");
+  assert.equal(classifyRisk({ category: "schema" }).mode, "full");
+  assert.equal(classifyRisk({ category: "integration" }).mode, "full");
+  assert.equal(classifyRisk({ category: "feature", filesTouched: 5 }).mode, "full");
+  assert.equal(classifyRisk({ category: "feature", filesTouched: 2 }).mode, "lightweight");
+  assert.equal(classifyRisk({ category: "feature", filesTouched: 1 }).mode, "lightweight");
+  assert.equal(classifyRisk({ category: "bug" }).mode, "none");
+  assert.equal(classifyRisk({ category: "docs" }).mode, "none");
+});
+
+test("classify: a security-relevant change escalates to full", () => {
+  // The escalation rule: risk beats size and category.
+  const bug = classifyRisk({ category: "bug", securityRelevant: true });
+  assert.equal(bug.mode, "full");
+  assert.match(bug.justification, /security-relevant/);
+  assert.equal(classifyRisk({ category: "docs", securityRelevant: true }).mode, "full");
+});
+
+test("classify: every classification carries a justification", () => {
+  for (const category of ["security", "schema", "integration", "feature", "bug", "docs"]) {
+    const c = classifyRisk({ category });
+    assert.ok(c.justification && c.justification.length > 0, `no justification for ${category}`);
+    assert.equal(c.source, "auto");
+  }
+});
+
+test("classify: auto-classification persists and reloads", () => {
+  const dir = tempTree({});
+  const a = resolveClassification(dir, "f1", { category: "feature", filesTouched: 1 });
+  assert.equal(a.mode, "lightweight");
+  assert.equal(loadClassification(dir, "f1").mode, "lightweight");
+  assert.equal(loadClassification(dir, "f1").source, "auto");
+});
+
+test("classify: a user override wins over re-classification (FR-006)", () => {
+  const dir = tempTree({});
+  resolveClassification(dir, "f2", { category: "feature", filesTouched: 1 });
+  const o = overrideClassification(dir, "f2", "full", "auth touched after review");
+  assert.equal(o.mode, "full");
+  assert.equal(o.source, "user");
+  // Re-running the classifier with different input must NOT discard the human decision.
+  const again = resolveClassification(dir, "f2", { category: "docs" });
+  assert.equal(again.mode, "full");
+  assert.equal(again.source, "user");
+});
+
+test("classify: a corrupt classification store recovers to null", () => {
+  const dir = tempTree({ ".cct/pi-classification.json": "{ not json" });
+  assert.equal(loadClassification(dir, "whatever"), null);
+});
+
+test("classify: unknown feature is null, not an error", () => {
+  const dir = tempTree({});
+  assert.equal(loadClassification(dir, "never-classified"), null);
 });
