@@ -48,6 +48,7 @@ if [[ "\${1:-}" == "--version" ]]; then echo "$version"; exit 0; fi
   echo "CCT_RUNTIME:\${CCT_RUNTIME:-unset}"
   echo "CCT_PI_CODE_ACTIVE:\${CCT_PI_CODE_ACTIVE:-unset}"
   echo "CCT_PROFILE:\${CCT_PROFILE:-unset}"
+  echo "CCT_PI_MODE:\${CCT_PI_MODE:-unset}"
 } > "$TMP/capture.txt"
 exit \${PI_SHIM_EXIT:-0}
 SHIM
@@ -120,6 +121,27 @@ fi
 assert "recursion block uses exit 64" "[[ '${RC:-0}' == '64' ]]"
 OUT=$(CCT_PI_CODE_ACTIVE=1 PATH="$TMP/bin-new:$BASE_PATH" "$LAUNCHER" version)
 assert "diagnostic commands allowed under recursion guard" "echo \"\$OUT\" | grep -q 'pi-code'"
+
+# ── Pi invocation mode → CCT_PI_MODE (T5.4) ─────────────────
+# The launcher derives the mode from forwarded flags and exports CCT_PI_MODE,
+# which the runtime uses as the authoritative audit label. One case per form.
+echo "--- pi mode detection ---"
+mode_case() { # $1=passthrough-args  $2=expected-mode
+  rm -f "$TMP/capture.txt"
+  # shellcheck disable=SC2086
+  PATH="$TMP/bin-new:$BASE_PATH" "$LAUNCHER" -- $1 > /dev/null 2>&1 || true
+  assert "CCT_PI_MODE=$2 for [pi $1]" "grep -q 'CCT_PI_MODE:$2' '$TMP/capture.txt'"
+}
+mode_case ""                 tui
+mode_case "-p"               print
+mode_case "--print"          print
+mode_case "--mode json"      json
+mode_case "--mode=json"      json
+mode_case "--mode rpc"       rpc
+mode_case "--mode=rpc"       rpc
+mode_case "--mode print"     print
+mode_case "chat --mode json" json
+mode_case "--thinking high"  tui
 
 # ── no passthrough args ─────────────────────────────────────
 # bash 3.2 (macOS /bin/bash) errors on "${a[@]}" for an empty array under

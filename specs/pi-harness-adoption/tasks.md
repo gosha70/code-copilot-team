@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-22
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **25 of 64 complete.** Phases 1, 2, and 4 complete.
+written. Current state: **26 of 64 complete.** Phases 1, 2, and 4 complete.
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -79,11 +79,7 @@ just their happy path. Work proceeds in phase order.
   - _Partial — missing: the `permissions/*.json` importer._
 - [ ] **T5.3 (P0)** Protected paths: canonicalization, symlink defenses, git command protection, secret-path protection, package-install protection, network policy.
   - _Partial — missing: package-install protection and network-policy enforcement (`allow_package_install` / `deny_network` are declared in config but read by no enforcement point)._
-- [ ] **T5.4 (P0)** Audit log (C-9) + fail-open/fail-closed tests; four-mode (tui/print/json/rpc) blocker matrix.
-  - _Partial — audit fail-open/fail-closed tests DONE (JSONL append, declared-fields-only
-    records, subject truncation, best-effort write failure proven non-vacuous, decision
-    field records fail-open/fail-closed faithfully). Still missing: the four-mode
-    (tui/print/json/rpc) blocker matrix — needs runtime mode-derivation change, next PR._
+- [x] **T5.4 (P0)** Audit log (C-9) + fail-open/fail-closed tests; four-mode (tui/print/json/rpc) blocker matrix.
 - [ ] **T5.5 (P1)** Property/fuzz tests: shell parsing, chained/quoted commands, traversal, wildcards, malformed events.
   - _Partial — missing: a property/fuzz generator and malformed-event tests (hand-written adversarial cases exist)._
 

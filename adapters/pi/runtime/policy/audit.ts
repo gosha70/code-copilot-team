@@ -21,6 +21,21 @@ export interface AuditRecord {
   origin: string; // permissions | protected-path | sdd-gate | security-floor | trust
 }
 
+/** Modes the launcher may report via CCT_PI_MODE. */
+export const PI_MODES = ["tui", "print", "json", "rpc"] as const;
+
+/**
+ * Resolve the audit mode label (T5.4). CCT_PI_MODE — set by the launcher from
+ * the Pi invocation flags — is authoritative. When absent/invalid (e.g. the
+ * runtime is run without the launcher), fall back to the prior two-value label.
+ * Reporting only: never affects an allow/deny decision.
+ */
+export function resolveAuditMode(interactive: boolean): string {
+  const m = process.env.CCT_PI_MODE;
+  if (m && (PI_MODES as readonly string[]).includes(m)) return m;
+  return interactive ? "tui" : "headless";
+}
+
 export function auditLogPath(): string {
   const home = process.env.CCT_HOME ?? path.join(os.homedir(), ".code-copilot-team");
   return path.join(home, "pi", "audit.log");
