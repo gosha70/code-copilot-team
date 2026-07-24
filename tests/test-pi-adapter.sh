@@ -91,6 +91,43 @@ parity_case full-missing-tasks fail
 parity_case full-marker fail
 parity_case none-with-spec fail
 
+# ── Cross-adapter SDD agreement (T4.5) ──────────────────────
+# The Claude Code adapter gates SDD via build.md's rules, enforced in CI by
+# scripts/validate-spec.sh; the Pi adapter gates via the runtime validateSpecDir.
+# These must reach the same verdict on the same spec dirs, and both must match
+# the gate build.md documents. Distinct from T4.2 (script<->runtime): this
+# grounds agreement in the Claude Code adapter's stated contract.
+echo "--- cross-adapter SDD agreement ---"
+CROSS_FX="$REPO_DIR/tests/fixtures/sdd-cross-adapter"
+BUILD_MD="$REPO_DIR/adapters/claude-code/.claude/agents/build.md"
+
+# 1. The Claude Code adapter documents the same gate Pi enforces.
+assert "build.md gates full on spec.md + no [NEEDS CLARIFICATION]" \
+  "grep -A2 '\*\*full\*\*' '$BUILD_MD' | grep -q 'spec.md' && grep -A2 '\*\*full\*\*' '$BUILD_MD' | grep -q 'NEEDS CLARIFICATION'"
+assert "build.md emits tasks.md for full" \
+  "grep -A2 '\*\*full\*\*' '$BUILD_MD' | grep -q 'tasks.md'"
+assert "build.md gates lightweight on spec.md" \
+  "grep -A1 '\*\*lightweight\*\*' '$BUILD_MD' | grep -q 'spec.md'"
+assert "build.md requires no spec artifacts for none" \
+  "grep -A1 '\*\*none\*\*' '$BUILD_MD' | grep -qi 'no spec artifacts\|plan.md'"
+
+# 2. Both adapters reach the same verdict on the same fixtures.
+cross_case() { # $1=fixture $2=expected(proceed|block)
+  local name="$1" want="$2" cc pi
+  if CCT_SPECS_DIR="$CROSS_FX" bash "$REPO_DIR/scripts/validate-spec.sh" --feature-id "$name" >/dev/null 2>&1; then cc=proceed; else cc=block; fi
+  pi=$(node --experimental-strip-types --input-type=module -e "
+    import { validateSpecDir } from '$PI_DIR/runtime/workflow/sdd.ts';
+    console.log(validateSpecDir('$CROSS_FX/$name').pass ? 'proceed' : 'block');" 2>/dev/null)
+  assert "cross-adapter[$name]: Claude Code and Pi agree ($cc)" "[[ '$cc' == '$pi' ]]"
+  assert "cross-adapter[$name]: verdict is the expected $want" "[[ '$cc' == '$want' && '$pi' == '$want' ]]"
+}
+cross_case full-complete proceed
+cross_case full-missing-spec block
+cross_case full-marker block
+cross_case lightweight-complete proceed
+cross_case lightweight-marker block
+cross_case none-proceed proceed
+
 # ── Per-phase policy resolve + report (T4.3) ────────────────
 # Resolved and reported only; the model/thinking respawn (Phase 7) and live
 # permission switching (Phase 5) are explicitly out of scope here.
