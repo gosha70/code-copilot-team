@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-22
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **21 of 64 complete.** Phases 1 and 2 complete.
+written. Current state: **22 of 64 complete.** Phases 1 and 2 complete.
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -63,8 +63,7 @@ just their happy path. Work proceeds in phase order.
 ## Slice C — Enforced disciplined workflow (Phases 4–6)
 
 ### Phase 4 — SDD & phase workflow
-- [ ] **T4.1 (P0)** Risk classifier (full/lightweight/none), persisted + user-correctable (FR-006).
-  - _Not started._
+- [x] **T4.1 (P0)** Risk classifier (full/lightweight/none), persisted + user-correctable (FR-006).
 - [ ] **T4.2 (P0)** Frontmatter parser + artifact completeness validator + `[NEEDS CLARIFICATION]` gate; `validate-spec.sh` parity fixtures.
   - _Partial — missing: `validate-spec.sh` parity fixtures (parity is asserted in comments only)._
 - [ ] **T4.3 (P0)** Phase state machine (Research → Plan → Build → Review) with per-phase model/thinking/tools/skills/permissions/context/gates; persistent state.

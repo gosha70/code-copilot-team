@@ -53,6 +53,14 @@ import {
 } from "./workflow/phases.ts";
 import type { WorkflowState } from "./workflow/phases.ts";
 import { isSpecPath, validateSpecDir } from "./workflow/sdd.ts";
+import {
+  RISK_CATEGORIES,
+  loadClassification,
+  overrideClassification,
+  resolveClassification,
+} from "./workflow/classify.ts";
+import type { RiskCategory } from "./workflow/classify.ts";
+import type { SpecMode } from "./workflow/sdd.ts";
 
 type TrustState = "trusted" | "untrusted" | "unknown";
 
@@ -481,6 +489,62 @@ export default async function (pi: any): Promise<void> {
         for (const r of gate.reasons) lines.push(`  - ${r}`);
       }
       emit(ctx, lines.join("\n"));
+    },
+  });
+
+  // SDD risk classifier (T4.1). Show / set / override the spec_mode for the
+  // active feature. Persisted and user-correctable: `--set` records a manual
+  // override that survives re-classification.
+  pi.registerCommand?.("cct:classify", {
+    description:
+      "Classify SDD risk for the active feature: /cct:classify [<category> [files]] | --set <mode> <reason>",
+    handler: async (ctx: any, args?: string) => {
+      const feature = state.workflow.featureId;
+      if (!feature) {
+        return emit(ctx, "no active feature — set one with /cct:phase <phase> <feature-id>");
+      }
+      const parts = (typeof args === "string" ? args : "").trim().split(/\s+/).filter(Boolean);
+
+      if (parts[0] === "--set") {
+        const mode = parts[1] as SpecMode;
+        if (mode !== "full" && mode !== "lightweight" && mode !== "none") {
+          return emit(ctx, "usage: /cct:classify --set <full|lightweight|none> <reason>");
+        }
+        const reason = parts.slice(2).join(" ") || "(no reason given)";
+        const c = overrideClassification(state.cwd, feature, mode, reason);
+        audit({
+          mode: state.interactive ? "tui" : "headless",
+          actor: "cct:classify",
+          decision: "override",
+          rule: "sdd.classification",
+          subject: `${feature}:${c.mode}`,
+          origin: "sdd-gate",
+        });
+        return emit(ctx, `classification for ${feature}: ${c.mode} (user override) — ${c.justification}`);
+      }
+
+      if (parts.length === 0) {
+        const c = loadClassification(state.cwd, feature);
+        return emit(
+          ctx,
+          c
+            ? `classification for ${feature}: ${c.mode} (${c.source}) — ${c.justification}`
+            : `no classification for ${feature} yet — /cct:classify <${RISK_CATEGORIES.join("|")}> [files]`,
+        );
+      }
+
+      const category = parts[0] as RiskCategory;
+      if (!RISK_CATEGORIES.includes(category)) {
+        return emit(ctx, `unknown category '${parts[0]}' (${RISK_CATEGORIES.join("|")})`);
+      }
+      const filesTouched = parts[1] ? Number(parts[1]) : undefined;
+      const c = resolveClassification(state.cwd, feature, { category, filesTouched });
+      emit(
+        ctx,
+        c
+          ? `classification for ${feature}: ${c.mode} (${c.source}) — ${c.justification}`
+          : `could not classify ${feature}`,
+      );
     },
   });
 

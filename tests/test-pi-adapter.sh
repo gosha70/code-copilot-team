@@ -56,6 +56,12 @@ done
 # Deferred commands report honestly (not a silent no-op or fake success).
 assert "deferred stateful command reports deferral" \
   "grep -q 'recognized but not yet active in pi-code' '$PI_DIR/runtime/index.ts'"
+# T4.1: the risk classifier is registered and user-correctable in a session.
+assert "cct:classify command registered" \
+  "grep -q '"cct:classify"' '$PI_DIR/runtime/index.ts'"
+assert "cct:classify supports a user override (--set)" \
+  "grep -A30 '"cct:classify"' '$PI_DIR/runtime/index.ts' | grep -q 'overrideClassification'"
+
 # phase-complete has real backing (validates the SDD gate).
 assert "phase-complete validates the SDD gate" \
   "grep -A15 '\"cct:phase-complete\"' '$PI_DIR/runtime/index.ts' | grep -q 'validateSpecDir'"
