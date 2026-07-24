@@ -91,6 +91,21 @@ parity_case full-missing-tasks fail
 parity_case full-marker fail
 parity_case none-with-spec fail
 
+# ── Per-phase policy resolve + report (T4.3) ────────────────
+# Resolved and reported only; the model/thinking respawn (Phase 7) and live
+# permission switching (Phase 5) are explicitly out of scope here.
+echo "--- per-phase policy ---"
+assert "per-phase config defaults exist" \
+  "grep -q 'phases:' '$PI_DIR/runtime/config/loader.ts'"
+assert "resolver resolvePhasePolicy exists" \
+  "grep -q 'export function resolvePhasePolicy' '$PI_DIR/runtime/workflow/phases.ts'"
+assert "status line surfaces per-phase model/thinking (FR-020)" \
+  "grep -q 'phasePolicyLabel' '$PI_DIR/runtime/index.ts'"
+assert "doctor reports the resolved phase policy" \
+  "grep -q 'phase policy' '$PI_DIR/runtime/index.ts'"
+assert "policy is reported as not-enforced (honest boundary)" \
+  "grep -q 'not enforced' '$PI_DIR/runtime/index.ts'"
+
 # ── Command → prompt conversion (T2.2) ──────────────────────
 echo "--- prompt conversion ---"
 CONVERT="$REPO_DIR/scripts/pi-convert-command.sh"

@@ -49,6 +49,7 @@ import {
   buildWriteGate,
   isValidPhase,
   loadState,
+  resolvePhasePolicy,
   transition,
 } from "./workflow/phases.ts";
 import type { WorkflowState } from "./workflow/phases.ts";
@@ -162,6 +163,16 @@ function doctorReport(state: CctRuntimeState): string {
     lines.push("always-on context: <no bundle installed>");
   }
   if (state.config) {
+    const resolved = state.config;
+    const policy = resolvePhasePolicy(
+      (k) => resolved.resolved.get(k)?.value,
+      state.workflow.phase,
+    );
+    lines.push(
+      `phase policy [${policy.phase}]: model=${policy.model} thinking=${policy.thinking} ` +
+        `permissions=${policy.permissions} (resolved, reported only — not enforced)`,
+    );
+    lines.push(`  tools: ${policy.tools.join(", ") || "<inherit>"}`);
     lines.push(`profile chain: ${state.config.profileChain.join(" -> ") || "<none>"}`);
     lines.push("configuration files:");
     for (const f of state.config.loadedFiles) lines.push(`  loaded:  ${f}`);
@@ -293,11 +304,19 @@ export default async function (pi: any): Promise<void> {
     updateStatus(ctx);
   });
 
+  // FR-020: the active phase's model/thinking, resolved from config. Shown
+  // in the status line; applying the switch to the session is Phase 7.
+  const phasePolicyLabel = (): string => {
+    const pol = resolvePhasePolicy(cfg, state.workflow.phase);
+    return `model:${pol.model} think:${pol.thinking}`;
+  };
+
   const updateStatus = (ctx: any): void => {
     ctx?.ui?.setStatus?.(
       "cct",
       `CCT ${state.profile} · ${state.workflow.phase}` +
         (state.workflow.featureId ? `:${state.workflow.featureId}` : "") +
+        ` · ${phasePolicyLabel()}` +
         ` · trust:${state.trust} · sdd:${cfg("workflow.sdd.enabled") === true ? "on" : "off"}`,
     );
   };
@@ -464,11 +483,14 @@ export default async function (pi: any): Promise<void> {
       }
       state.workflow = result.state;
       updateStatus(ctx);
+      const pol = resolvePhasePolicy(cfg, state.workflow.phase);
       emit(
         ctx,
         `phase: ${state.workflow.phase}` +
           (state.workflow.featureId ? ` (feature: ${state.workflow.featureId})` : "") +
-          (result.gate ? ` — SDD gate: PASS (${result.gate.specMode})` : ""),
+          (result.gate ? ` — SDD gate: PASS (${result.gate.specMode})` : "") +
+          `\n  policy (resolved, not enforced): model=${pol.model} thinking=${pol.thinking} ` +
+          `permissions=${pol.permissions}\n  tools: ${pol.tools.join(", ") || "<inherit>"}`,
       );
     },
   });

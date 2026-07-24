@@ -48,8 +48,10 @@ export function loadState(projectRoot: string): WorkflowState {
     if (PHASE_ORDER.includes(parsed.phase)) {
       return {
         phase: parsed.phase,
-        featureId: typeof parsed.featureId === "string" ? parsed.featureId : null,
-        enteredAt: typeof parsed.enteredAt === "string" ? parsed.enteredAt : null,
+        featureId:
+          typeof parsed.featureId === "string" ? parsed.featureId : null,
+        enteredAt:
+          typeof parsed.enteredAt === "string" ? parsed.enteredAt : null,
         history: Array.isArray(parsed.history) ? parsed.history : [],
       };
     }
@@ -67,6 +69,52 @@ export function saveState(projectRoot: string, state: WorkflowState): void {
 
 export function isValidPhase(value: string): value is Phase {
   return (PHASE_ORDER as string[]).includes(value);
+}
+
+/**
+ * Per-phase policy (FR-008, T4.3). This is RESOLVED from config and REPORTED
+ * by status / /cct:phase / doctor. It is NOT applied to the live session:
+ * per-phase model/thinking routing re-spawns the session (Phase 7, cct-agents)
+ * and live per-phase permission switching lands with Phase 5. `permissions` is
+ * a named posture for reporting, not a rule set fed to the permission engine.
+ */
+export interface PhasePolicy {
+  phase: Phase;
+  model: string;
+  thinking: string;
+  tools: string[];
+  skills: string[];
+  context: string[];
+  permissions: string;
+}
+
+function asStringArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.map(String) : [];
+}
+
+function asString(v: unknown, fallback: string): string {
+  return typeof v === "string" && v.length > 0 ? v : fallback;
+}
+
+/**
+ * Resolve the policy for one phase from the layered configuration. `get`
+ * reads a dotted config key (the same accessor the permission engine uses),
+ * so profile/file/env/CLI overrides of `phases.<phase>.*` all apply.
+ */
+export function resolvePhasePolicy(
+  get: (path: string) => unknown,
+  phase: Phase,
+): PhasePolicy {
+  const key = (leaf: string): string => `phases.${phase}.${leaf}`;
+  return {
+    phase,
+    model: asString(get(key("model")), "inherit"),
+    thinking: asString(get(key("thinking")), "inherit"),
+    tools: asStringArray(get(key("tools"))),
+    skills: asStringArray(get(key("skills"))),
+    context: asStringArray(get(key("context"))),
+    permissions: asString(get(key("permissions")), "inherit"),
+  };
 }
 
 /**
@@ -94,7 +142,9 @@ export function transition(
   if (target === "review") {
     const beenInBuild =
       state.phase === "build" ||
-      state.history.some((h) => h.phase === "build" && h.featureId === effectiveFeature);
+      state.history.some(
+        (h) => h.phase === "build" && h.featureId === effectiveFeature,
+      );
     if (!beenInBuild) {
       reasons.push(
         `review requires a prior build phase for feature '${effectiveFeature ?? "<none>"}'`,
@@ -109,7 +159,11 @@ export function transition(
     enteredAt: now,
     history: [
       ...state.history,
-      { phase: state.phase, featureId: state.featureId, at: state.enteredAt ?? now },
+      {
+        phase: state.phase,
+        featureId: state.featureId,
+        at: state.enteredAt ?? now,
+      },
     ].slice(-50),
   };
   saveState(projectRoot, next);

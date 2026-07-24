@@ -82,6 +82,13 @@ const KNOWN_KEYS = new Set([
   "permissions.paths.ask",
   "permissions.paths.deny",
   "permissions.commands.ask",
+  // Per-phase policy leaves (T4.3), generated below so a typo in a phase name
+  // or leaf is still caught rather than waved through under a `phases.` prefix.
+  ...["research", "plan", "build", "review"].flatMap((phase) =>
+    ["model", "thinking", "tools", "skills", "context", "permissions"].map(
+      (leaf) => `phases.${phase}.${leaf}`,
+    ),
+  ),
 ]);
 
 /**
