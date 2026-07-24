@@ -21,6 +21,7 @@ import {
   splitCommands,
 } from "../../adapters/pi/runtime/policy/permissions.ts";
 import { matchCandidates, resolveTarget } from "../../adapters/pi/runtime/policy/protected.ts";
+import { audit, auditLogPath } from "../../adapters/pi/runtime/policy/audit.ts";
 import {
   gateBuild,
   parseFrontmatter,
@@ -374,3 +375,89 @@ test("phase policy: an absent phase config resolves to inherit, not a throw", ()
   assert.deepEqual(p.tools, []);
   assert.equal(p.permissions, "inherit");
 });
+
+// ── audit log (C-9, T5.4 — hardening tests) ─────────────────
+
+// Run `fn` with CCT_HOME pointed at `home`, restoring the prior value after.
+function withCctHome(home, fn) {
+  const prev = process.env.CCT_HOME;
+  process.env.CCT_HOME = home;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.CCT_HOME;
+    else process.env.CCT_HOME = prev;
+  }
+}
+
+const AUDIT_FIELDS = ["ts", "mode", "actor", "decision", "rule", "subject", "origin"];
+
+test("audit: appends one valid JSONL record per call", () => {
+  const home = tempTree({});
+  withCctHome(home, () => {
+    audit({ mode: "headless", actor: "tool_call:bash", decision: "deny", rule: "commands.deny:rm -rf /", subject: "rm -rf /", origin: "permissions" });
+    audit({ mode: "tui", actor: "tool_call:write", decision: "deny", rule: "paths.deny:.env", subject: ".env", origin: "protected-path" });
+  });
+  const lines = fs.readFileSync(auditLogPathFor(home), "utf8").trim().split("\n");
+  assert.equal(lines.length, 2, "each call appends exactly one line");
+  for (const line of lines) {
+    const rec = JSON.parse(line); // must be valid JSON
+    assert.deepEqual(Object.keys(rec).sort(), [...AUDIT_FIELDS].sort());
+    assert.ok(typeof rec.ts === "string" && rec.ts.length > 0);
+  }
+});
+
+test("audit: a record carries only the declared fields (no leak surface)", () => {
+  const home = tempTree({});
+  withCctHome(home, () => {
+    audit({ mode: "json", actor: "tool_call:bash", decision: "ask->deny", rule: "commands.ask:git push", subject: "git push origin main", origin: "permissions" });
+  });
+  const rec = JSON.parse(fs.readFileSync(auditLogPathFor(home), "utf8").trim());
+  // Only the seven declared keys — nothing that could smuggle file contents/credentials.
+  assert.deepEqual(Object.keys(rec).sort(), [...AUDIT_FIELDS].sort());
+});
+
+test("audit: an over-long subject is truncated (bounded record size)", () => {
+  const home = tempTree({});
+  const huge = "x".repeat(5000);
+  withCctHome(home, () => {
+    audit({ mode: "headless", actor: "tool_call:bash", decision: "deny", rule: "r", subject: huge, origin: "permissions" });
+  });
+  const rec = JSON.parse(fs.readFileSync(auditLogPathFor(home), "utf8").trim());
+  assert.ok(rec.subject.length <= 400, `subject should be truncated, was ${rec.subject.length}`);
+});
+
+test("audit: the decision field records fail-closed and fail-open outcomes faithfully", () => {
+  const home = tempTree({});
+  withCctHome(home, () => {
+    audit({ mode: "headless", actor: "a", decision: "deny", rule: "r", subject: "s", origin: "permissions" });          // fail-closed
+    audit({ mode: "headless", actor: "a", decision: "ask->fail", rule: "r", subject: "s", origin: "permissions" });     // fail-closed (fail)
+    audit({ mode: "tui", actor: "a", decision: "relaxed-by-override", rule: "r", subject: "s", origin: "security-floor" }); // fail-open
+  });
+  const decisions = fs.readFileSync(auditLogPathFor(home), "utf8").trim().split("\n").map((l) => JSON.parse(l).decision);
+  assert.deepEqual(decisions, ["deny", "ask->fail", "relaxed-by-override"]);
+});
+
+test("audit: a write failure is best-effort and never throws (enforcement must not crash)", () => {
+  // Point CCT_HOME at a FILE, so mkdir of <home>/pi fails (ENOTDIR).
+  const dir = tempTree({ blocker: "i am a file, not a directory" });
+  const asFile = path.join(dir, "blocker");
+  assert.doesNotThrow(() =>
+    withCctHome(asFile, () => {
+      audit({ mode: "headless", actor: "a", decision: "deny", rule: "r", subject: "s", origin: "permissions" });
+    }),
+  );
+  // And nothing was written under the blocking file.
+  assert.ok(!fs.existsSync(path.join(asFile, "pi", "audit.log")));
+});
+
+test("audit: auditLogPath honors CCT_HOME", () => {
+  const home = tempTree({});
+  const p = withCctHome(home, () => auditLogPath());
+  assert.equal(p, path.join(home, "pi", "audit.log"));
+});
+
+// auditLogPath() reads process.env at call time; helper mirrors its layout.
+function auditLogPathFor(home) {
+  return path.join(home, "pi", "audit.log");
+}
