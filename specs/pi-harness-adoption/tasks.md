@@ -73,8 +73,14 @@ just their happy path. Work proceeds in phase order.
 - [x] **T4.5 (P1)** Cross-adapter SDD fixtures (Claude Code vs Pi agreement).
 
 ### Phase 5 — Hooks, permissions, protected operations
-- [ ] **T5.1 (P0)** Neutral lifecycle-event schema + Pi event translator + shell-hook adapter (reuse existing hooks where semantics match; degraded/unsupported reporting otherwise) (FR-010).
-  - _Not started._
+- [x] **T5.1 (P0)** Neutral lifecycle-event schema + Pi event translator + shell-hook adapter (reuse existing hooks where semantics match; degraded/unsupported reporting otherwise) (FR-010).
+  - _Boundary (source-read verified, design-t51-events.md): supported =
+    SessionStart (<- session_start), PreToolUse (<- tool_call); degraded =
+    Notification (outbound-only); unsupported = PostToolUse / Stop / PreCompact /
+    PostCompact (no observable Pi event) — reported + audited, never
+    approximated. project_trust stays Pi-internal. Existing `.sh` hooks reused
+    as subprocesses (no logic ported); support gate + timeout/retry/fail-mode +
+    audit._
 - [ ] **T5.2 (P0)** allow/ask/deny engine (FR-009) + deterministic headless ask; reuse `permissions/*.json` profile content via importer.
   - _Partial — missing: the `permissions/*.json` importer._
 - [ ] **T5.3 (P0)** Protected paths: canonicalization, symlink defenses, git command protection, secret-path protection, package-install protection, network policy.

@@ -40,6 +40,8 @@ import {
 import type { PermissionRuleSet, PermissionVerdict } from "./policy/permissions.ts";
 import { matchCandidates } from "./policy/protected.ts";
 import { audit, resolveAuditMode } from "./policy/audit.ts";
+import { hookMappingReport, translateToolCall } from "./hooks/events.ts";
+import { dispatchHooks, resolveHookScripts, resolveHookScriptsDir } from "./hooks/adapter.ts";
 import { defaultProjectTrustFinding, trustDrift } from "./config/trust.ts";
 import { seedCapabilities } from "./capabilities.ts";
 import { loadAlwaysContext } from "./context.ts";
@@ -84,6 +86,8 @@ interface CctRuntimeState {
   context: AlwaysContext | null;
   /** Whether the bundle was actually handed to Pi (API available). */
   contextInjected: boolean;
+  /** Directory of reusable shell hooks, or null when none (T5.1/FR-010). */
+  hookScriptsDir: string | null;
 }
 
 
@@ -191,6 +195,9 @@ function doctorReport(state: CctRuntimeState): string {
       `  ${c.id}: ${c.implementation_kind}/${c.runtime_status}` + (c.reason ? ` — ${c.reason}` : ""),
     );
   }
+  lines.push("lifecycle-hook mapping (FR-010):");
+  for (const l of hookMappingReport()) lines.push(l);
+  lines.push(`  shell-hook scripts dir: ${state.hookScriptsDir ?? "<none configured>"}`);
   return lines.join("\n");
 }
 
@@ -224,6 +231,7 @@ export default async function (pi: any): Promise<void> {
     restartRequired: false,
     context: null,
     contextInjected: false,
+    hookScriptsDir: null,
   };
 
   const cfg = (dotted: string): unknown => state.config?.resolved.get(dotted)?.value;
@@ -260,6 +268,17 @@ export default async function (pi: any): Promise<void> {
     return dirs;
   };
 
+  // The Pi adapter dir (<adapter>/runtime -> <adapter>), used to locate the
+  // sibling Claude Code plugin scripts the shell-hook adapter reuses (T5.1).
+  const piAdapterDir = (): string | null => {
+    try {
+      const here = path.dirname(new URL(import.meta.url).pathname);
+      return path.dirname(here);
+    } catch {
+      return null;
+    }
+  };
+
   /**
    * Load the always-on policy bundle and hand it to Pi. Injection uses Pi's
    * context API when present; `contextInjected` records whether it actually
@@ -293,6 +312,7 @@ export default async function (pi: any): Promise<void> {
     }
     state.cwd = ctx?.cwd ?? process.cwd();
     state.interactive = ctx?.hasUI === true && ctx?.mode === "tui";
+    state.hookScriptsDir = resolveHookScriptsDir(piAdapterDir());
     loadConfigForState(state, state.cwd);
     state.workflow = loadState(state.cwd);
     refreshRules();
@@ -409,6 +429,25 @@ export default async function (pi: any): Promise<void> {
       }
     }
 
+    // 5) FR-010: reuse existing Claude Code PreToolUse veto hooks where the
+    // semantics match, as a defense-in-depth layer behind the in-runtime
+    // checks. Support-gated, audited, fail-closed (a veto hook that errors
+    // blocks rather than silently allows). No-op when no script resolves.
+    const preEvent = translateToolCall(toolName, args, state.cwd, {
+      interactive: state.interactive,
+      mode: resolveAuditMode(state.interactive),
+    });
+    const preScripts = resolveHookScripts(preEvent, state.hookScriptsDir);
+    if (preScripts.length > 0) {
+      const res = dispatchHooks(
+        preEvent,
+        preScripts,
+        { failMode: "closed" },
+        (rec) => audit({ mode: resolveAuditMode(state.interactive), ...rec }),
+      );
+      if (res.block) return { block: true, reason: `[cct] ${res.reason}` };
+    }
+
     return undefined; // allow
   });
 
@@ -444,6 +483,18 @@ export default async function (pi: any): Promise<void> {
   pi.registerCommand?.("cct:features", {
     description: "List CCT capability records (JSON)",
     handler: async (ctx: any) => emit(ctx, JSON.stringify(state.capabilities, null, 2)),
+  });
+
+  pi.registerCommand?.("cct:hooks", {
+    description: "Show the Pi->CCT lifecycle-hook mapping and support levels (FR-010)",
+    handler: async (ctx: any) => {
+      const lines = [
+        "lifecycle-hook mapping (FR-010):",
+        ...hookMappingReport(),
+        `shell-hook scripts dir: ${state.hookScriptsDir ?? "<none configured>"}`,
+      ];
+      emit(ctx, lines.join("\n"));
+    },
   });
 
   pi.registerCommand?.("cct:phase", {
