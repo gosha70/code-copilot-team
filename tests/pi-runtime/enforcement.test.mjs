@@ -21,7 +21,7 @@ import {
   splitCommands,
 } from "../../adapters/pi/runtime/policy/permissions.ts";
 import { matchCandidates, resolveTarget } from "../../adapters/pi/runtime/policy/protected.ts";
-import { audit, auditLogPath } from "../../adapters/pi/runtime/policy/audit.ts";
+import { audit, auditLogPath, resolveAuditMode } from "../../adapters/pi/runtime/policy/audit.ts";
 import {
   gateBuild,
   parseFrontmatter,
@@ -461,3 +461,79 @@ test("audit: auditLogPath honors CCT_HOME", () => {
 function auditLogPathFor(home) {
   return path.join(home, "pi", "audit.log");
 }
+
+// ── audit mode label (T5.4 part 2) ──────────────────────────
+
+function withPiMode(value, fn) {
+  const prev = process.env.CCT_PI_MODE;
+  if (value === undefined) delete process.env.CCT_PI_MODE;
+  else process.env.CCT_PI_MODE = value;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.CCT_PI_MODE;
+    else process.env.CCT_PI_MODE = prev;
+  }
+}
+
+test("audit mode: CCT_PI_MODE is authoritative for the four modes", () => {
+  for (const m of ["tui", "print", "json", "rpc"]) {
+    withPiMode(m, () => {
+      // The label follows CCT_PI_MODE regardless of the interactive flag.
+      assert.equal(resolveAuditMode(false), m);
+      assert.equal(resolveAuditMode(true), m);
+    });
+  }
+});
+
+test("audit mode: absent/invalid CCT_PI_MODE falls back to the two-value label", () => {
+  for (const bad of [undefined, "", "bogus", "TUI", "headless"]) {
+    withPiMode(bad, () => {
+      assert.equal(resolveAuditMode(true), "tui");
+      assert.equal(resolveAuditMode(false), "headless");
+    });
+  }
+});
+
+test("audit mode: the resolved label is what lands in the audit record", () => {
+  const home = tempTree({});
+  withPiMode("json", () =>
+    withCctHome(home, () => {
+      audit({ mode: resolveAuditMode(false), actor: "tool_call:bash", decision: "deny", rule: "r", subject: "s", origin: "permissions" });
+    }),
+  );
+  const rec = JSON.parse(fs.readFileSync(auditLogPathFor(home), "utf8").trim());
+  assert.equal(rec.mode, "json");
+});
+
+// ── decision invariance across modes (T5.4 part 2) ──────────
+// The permission ENGINE takes no mode — only an `interactive` flag driving
+// ask behavior. So a deny is invariant across all four labels, and an ask
+// resolves deterministically in the three headless modes; only interactive
+// TUI keeps `ask` open for a ui.confirm prompt. The mode LABEL never changes a
+// verdict.
+
+test("decision invariance: deny is identical across all four mode labels", () => {
+  // The label does not enter the verdict; the same rule denies regardless.
+  for (const m of ["tui", "print", "json", "rpc"]) {
+    withPiMode(m, () => {
+      assert.equal(checkCommand(RULES, "git push --force").effective, "deny");
+      assert.equal(checkPath(RULES, ".env").effective, "deny");
+    });
+  }
+});
+
+test("decision invariance: headless ask resolves deterministically; only TUI stays ask", () => {
+  const askCmd = "git push origin main"; // matches commandsAsk
+  // Headless (print/json/rpc): interactive=false → ask resolves per policy (deny here).
+  const headless = { ...RULES, interactive: false };
+  const v = checkCommand(headless, askCmd);
+  assert.equal(v.decision, "ask");
+  assert.equal(v.effective, "deny"); // deterministic resolution, no prompt
+  // Interactive TUI: interactive=true → decision stays ask (a prompt would run).
+  const interactive = { ...RULES, interactive: true };
+  const vi = checkCommand(interactive, askCmd);
+  assert.equal(vi.decision, "ask");
+  assert.equal(vi.effective, "allow"); // escalated to the user via ui.confirm
+  // The resolution difference is driven by `interactive`, never by the mode label.
+});

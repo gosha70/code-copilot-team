@@ -39,7 +39,7 @@ import {
 } from "./policy/permissions.ts";
 import type { PermissionRuleSet, PermissionVerdict } from "./policy/permissions.ts";
 import { matchCandidates } from "./policy/protected.ts";
-import { audit } from "./policy/audit.ts";
+import { audit, resolveAuditMode } from "./policy/audit.ts";
 import { defaultProjectTrustFinding, trustDrift } from "./config/trust.ts";
 import { seedCapabilities } from "./capabilities.ts";
 import { loadAlwaysContext } from "./context.ts";
@@ -64,7 +64,6 @@ import type { RiskCategory } from "./workflow/classify.ts";
 import type { SpecMode } from "./workflow/sdd.ts";
 
 type TrustState = "trusted" | "untrusted" | "unknown";
-
 
 interface CctRuntimeState {
   profile: string;
@@ -118,7 +117,7 @@ function loadConfigForState(state: CctRuntimeState, cwd: string): void {
     state.warnings.push(finding.warning);
     // Warning alone is not enough: a headless session that was trusted
     // without a saved decision must leave a durable record (V2).
-    audit({ mode: state.interactive ? "tui" : "headless", actor: "session_start", ...finding.audit });
+    audit({ mode: resolveAuditMode(state.interactive), actor: "session_start", ...finding.audit });
   }
 }
 
@@ -137,7 +136,7 @@ function noteTrustDrift(state: CctRuntimeState, current: TrustState): void {
   state.trust = current;
   state.warnings.push(drift.message);
   audit({
-    mode: state.interactive ? "tui" : "headless",
+    mode: resolveAuditMode(state.interactive),
     actor: "project_trust",
     decision: "restart-required",
     rule: "trust.changed-mid-session",
@@ -327,7 +326,7 @@ export default async function (pi: any): Promise<void> {
 
   const block = (origin: string, actor: string, v: PermissionVerdict, subject: string) => {
     audit({
-      mode: state.interactive ? "tui" : "headless",
+      mode: resolveAuditMode(state.interactive),
       actor,
       decision: v.decision === "ask" ? `ask->${v.effective}` : v.effective,
       rule: v.rule,
@@ -472,7 +471,7 @@ export default async function (pi: any): Promise<void> {
       );
       if (!result.ok) {
         audit({
-          mode: state.interactive ? "tui" : "headless",
+          mode: resolveAuditMode(state.interactive),
           actor: "cct:phase",
           decision: "deny",
           rule: "sdd.entry-gate",
@@ -535,7 +534,7 @@ export default async function (pi: any): Promise<void> {
         const reason = parts.slice(2).join(" ") || "(no reason given)";
         const c = overrideClassification(state.cwd, feature, mode, reason);
         audit({
-          mode: state.interactive ? "tui" : "headless",
+          mode: resolveAuditMode(state.interactive),
           actor: "cct:classify",
           decision: "override",
           rule: "sdd.classification",

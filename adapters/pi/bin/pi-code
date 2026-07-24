@@ -261,9 +261,25 @@ if [[ -z "$RUNTIME_ENTRY" ]]; then
   exit 78
 fi
 
+# Derive the Pi invocation mode from the forwarded args (T5.4). The runtime
+# reads CCT_PI_MODE as the authoritative label for audit/reporting — Pi's
+# extension ctx.mode is not relied on for this. Decision behavior is unchanged:
+# only a real interactive UI (ctx.ui.confirm) can prompt; print/json/rpc are
+# headless and resolve deterministically. Default `tui` = no headless flag.
+# A space-padded join + case match keeps this simple and bash-3.2 safe (a
+# per-element loop tripped a set -e / $? fragility in command substitution).
+CCT_PI_MODE=tui
+_pi_argstr=" ${PI_ARGS[*]:-} "
+case "$_pi_argstr" in
+  *" --mode json "*|*" --mode=json "*)                 CCT_PI_MODE=json ;;
+  *" --mode rpc "*|*" --mode=rpc "*)                   CCT_PI_MODE=rpc ;;
+  *" -p "*|*" --print "*|*" --mode print "*|*" --mode=print "*) CCT_PI_MODE=print ;;
+esac
+
 export CCT_RUNTIME=1
 export CCT_PI_CODE_ACTIVE=1
 export CCT_PROFILE="$PROFILE"
+export CCT_PI_MODE
 [[ -n "$CLI_SETS" ]] && export CCT_CLI_SETS="$CLI_SETS"
 $NO_PROJECT_CONFIG && export CCT_NO_PROJECT_CONFIG=1
 exec "$PI_BIN" --extension "$RUNTIME_ENTRY" ${PI_ARGS[@]+"${PI_ARGS[@]}"}
