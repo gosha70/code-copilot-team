@@ -15,10 +15,10 @@ export interface AuditRecord {
   ts: string;
   mode: string; // tui | print | json | rpc | unknown
   actor: string; // e.g. "tool_call:bash"
-  decision: string; // deny | ask->deny | ask->fail | relaxed-by-override | ...
+  decision: string; // deny | ask->deny | block | skipped-unsupported | ...
   rule: string | null;
   subject: string; // path or normalized command (truncated)
-  origin: string; // permissions | protected-path | sdd-gate | security-floor | trust
+  origin: string; // permissions | protected-path | sdd-gate | security-floor | trust | shell-hook
 }
 
 /** Modes the launcher may report via CCT_PI_MODE. */
