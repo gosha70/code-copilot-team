@@ -30,9 +30,11 @@ import {
 import {
   buildWriteGate,
   loadState,
+  resolvePhasePolicy,
   saveState,
   transition,
 } from "../../adapters/pi/runtime/workflow/phases.ts";
+import { loadLayeredConfig } from "../../adapters/pi/runtime/config/loader.ts";
 import {
   classifyRisk,
   loadClassification,
@@ -322,4 +324,53 @@ test("classify: a corrupt classification store recovers to null", () => {
 test("classify: unknown feature is null, not an error", () => {
   const dir = tempTree({});
   assert.equal(loadClassification(dir, "never-classified"), null);
+});
+
+// ── per-phase policy: resolve + report (FR-008, T4.3) ───────
+
+function getterFor(env = {}) {
+  const r = loadLayeredConfig({
+    globalDir: "/nonexistent-g",
+    projectDir: "/nonexistent-p",
+    trusted: false,
+    profile: "disciplined",
+    env,
+  });
+  return (k) => r.resolved.get(k)?.value;
+}
+
+test("phase policy: defaults differ per phase and carry the reported fields", () => {
+  const get = getterFor();
+  const research = resolvePhasePolicy(get, "research");
+  const build = resolvePhasePolicy(get, "build");
+  // research is read-oriented; build can write/edit/bash.
+  assert.deepEqual(research.tools, ["read", "grep", "find", "ls"]);
+  assert.ok(build.tools.includes("bash") && build.tools.includes("edit"));
+  assert.equal(research.permissions, "read-only");
+  assert.equal(build.permissions, "build");
+  // model defaults to inherit — actual routing (respawn) is Phase 7.
+  assert.equal(build.model, "inherit");
+  // every reported field is present and typed.
+  for (const p of [research, build]) {
+    assert.equal(typeof p.thinking, "string");
+    assert.ok(Array.isArray(p.skills));
+    assert.ok(Array.isArray(p.context));
+  }
+});
+
+test("phase policy: config overrides flow through the resolver", () => {
+  const get = getterFor({ CCT_CONFIG__PHASES__BUILD__THINKING: "xhigh" });
+  assert.equal(resolvePhasePolicy(get, "build").thinking, "xhigh");
+  // a phase not overridden keeps its default.
+  assert.equal(resolvePhasePolicy(get, "research").thinking, "high");
+});
+
+test("phase policy: an absent phase config resolves to inherit, not a throw", () => {
+  // getter that knows nothing → all inherit / empty, no error.
+  const get = () => undefined;
+  const p = resolvePhasePolicy(get, "review");
+  assert.equal(p.model, "inherit");
+  assert.equal(p.thinking, "inherit");
+  assert.deepEqual(p.tools, []);
+  assert.equal(p.permissions, "inherit");
 });
