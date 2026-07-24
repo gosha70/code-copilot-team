@@ -66,6 +66,31 @@ assert "cct:classify supports a user override (--set)" \
 assert "phase-complete validates the SDD gate" \
   "grep -A15 '\"cct:phase-complete\"' '$PI_DIR/runtime/index.ts' | grep -q 'validateSpecDir'"
 
+# ── SDD validator parity (T4.2) ─────────────────────────────
+# The Pi runtime's validateSpecDir and scripts/validate-spec.sh must reach the
+# same PASS/FAIL verdict on the same spec dirs. The fixtures are built to
+# satisfy both validators' supersets (origin:/status/sections for the shell
+# script; marker-free plan.md for the runtime), so genuine agreement — not a
+# construction artifact — is what is asserted.
+echo "--- validate-spec parity ---"
+PARITY_FX="$REPO_DIR/tests/fixtures/sdd-parity"
+parity_case() { # $1=fixture $2=expected(pass|fail)
+  local name="$1" want="$2" bash_v pi_v
+  if CCT_SPECS_DIR="$PARITY_FX" bash "$REPO_DIR/scripts/validate-spec.sh" --feature-id "$name" >/dev/null 2>&1; then
+    bash_v=pass; else bash_v=fail; fi
+  pi_v=$(node --experimental-strip-types --input-type=module -e "
+    import { validateSpecDir } from '$PI_DIR/runtime/workflow/sdd.ts';
+    console.log(validateSpecDir('$PARITY_FX/$name').pass ? 'pass' : 'fail');" 2>/dev/null)
+  assert "parity[$name]: shell and runtime agree ($bash_v)" "[[ '$bash_v' == '$pi_v' ]]"
+  assert "parity[$name]: verdict is the expected $want" "[[ '$bash_v' == '$want' && '$pi_v' == '$want' ]]"
+}
+parity_case full-valid pass
+parity_case lightweight-valid pass
+parity_case none-valid pass
+parity_case full-missing-tasks fail
+parity_case full-marker fail
+parity_case none-with-spec fail
+
 # ── Command → prompt conversion (T2.2) ──────────────────────
 echo "--- prompt conversion ---"
 CONVERT="$REPO_DIR/scripts/pi-convert-command.sh"
