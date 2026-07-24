@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-22
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **24 of 64 complete.** Phases 1 and 2 complete.
+written. Current state: **25 of 64 complete.** Phases 1, 2, and 4 complete.
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -70,8 +70,7 @@ just their happy path. Work proceeds in phase order.
     /cct:phase / doctor. Applying model/thinking (session respawn) is Phase 7; live
     per-phase permission switching is Phase 5 — both reported as not-enforced._
 - [x] **T4.4 (P1)** `/cct:phase`, `/cct:status`; status UI fields (FR-020).
-- [ ] **T4.5 (P1)** Cross-adapter SDD fixtures (Claude Code vs Pi agreement).
-  - _Not started._
+- [x] **T4.5 (P1)** Cross-adapter SDD fixtures (Claude Code vs Pi agreement).
 
 ### Phase 5 — Hooks, permissions, protected operations
 - [ ] **T5.1 (P0)** Neutral lifecycle-event schema + Pi event translator + shell-hook adapter (reuse existing hooks where semantics match; degraded/unsupported reporting otherwise) (FR-010).
