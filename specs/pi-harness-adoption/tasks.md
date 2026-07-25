@@ -91,8 +91,15 @@ just their happy path. Work proceeds in phase order.
     REMAINING before T5.2 is checked: wire the imported lists into the layered
     config so profiles are reused live (deferred to a later task, per plan —
     importer contract pinned first)._
-- [ ] **T5.3 (P0)** Protected paths: canonicalization, symlink defenses, git command protection, secret-path protection, package-install protection, network policy.
-  - _Partial — missing: package-install protection and network-policy enforcement (`allow_package_install` / `deny_network` are declared in config but read by no enforcement point)._
+- [x] **T5.3 (P0)** Protected paths: canonicalization, symlink defenses, git command protection, secret-path protection, package-install protection, network policy.
+  - _Package-install (`allow_package_install`) + network (`deny_network`)
+    enforcement now live at the bash exec path (`checkExecPolicy`): manager+verb
+    package classification (never the manager alone), network-binary/git-subcommand
+    denylist, `sudo`/`env`-prefix stripping, `security.fail_closed` governs the
+    ambiguous tail; audited as `package-policy`/`network-policy`. `deny_network`
+    is a command-name denylist, NOT a sandbox (P5) — doctor reports that
+    boundary. Default config (allow_package_install=true, deny_network=false)
+    blocks nothing new. Canonicalization/symlink/git/secret-path pre-existed._
 - [x] **T5.4 (P0)** Audit log (C-9) + fail-open/fail-closed tests; four-mode (tui/print/json/rpc) blocker matrix.
 - [ ] **T5.5 (P1)** Property/fuzz tests: shell parsing, chained/quoted commands, traversal, wildcards, malformed events.
   - _Partial — missing: a property/fuzz generator and malformed-event tests (hand-written adversarial cases exist)._

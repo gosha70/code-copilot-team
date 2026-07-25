@@ -14,6 +14,11 @@
  *   permissions.commands.ask            — command prefixes
  */
 
+import {
+  classifyNetwork,
+  classifyPackageInstall,
+} from "./protected-ops.ts";
+
 export type Decision = "allow" | "ask" | "deny";
 
 export interface PermissionRuleSet {
@@ -25,6 +30,9 @@ export interface PermissionRuleSet {
   commandsAsk: string[];
   askResolution: "allow" | "deny" | "fail"; // headless resolution
   interactive: boolean;
+  denyNetwork: boolean; // security.deny_network (command-name denylist)
+  allowPackageInstall: boolean; // security.allow_package_install
+  failClosed: boolean; // security.fail_closed (ambiguous-command disposition)
 }
 
 export interface PermissionVerdict {
@@ -221,5 +229,59 @@ export function rulesFromConfig(
     askResolution:
       askRes === "allow" || askRes === "fail" ? (askRes as "allow" | "fail") : "deny",
     interactive,
+    denyNetwork: get("security.deny_network") === true,
+    allowPackageInstall: get("security.allow_package_install") !== false,
+    failClosed: get("security.fail_closed") !== false,
   };
+}
+
+
+/**
+ * Package-install / network exec policy (T5.3, FR-009). Blocks package-install
+ * commands when `allow_package_install` is false and network commands when
+ * `deny_network` is true, scanning each chained piece. `deny_network` is a
+ * command-name denylist, not a sandbox (spec P5). An ambiguous package
+ * operation (install-ish verb after an unknown binary) denies only when
+ * `fail_closed` is true; definite matches always deny; nothing is ask-gated.
+ */
+export function checkExecPolicy(
+  rules: PermissionRuleSet,
+  rawCommand: string,
+): PermissionVerdict {
+  if (rules.allowPackageInstall && !rules.denyNetwork) {
+    return { decision: "allow", effective: "allow", rule: null, reason: "allowed" };
+  }
+  for (const piece of splitCommands(rawCommand)) {
+    if (!rules.allowPackageInstall) {
+      const pk = classifyPackageInstall(piece);
+      if (pk.match) {
+        return {
+          decision: "deny",
+          effective: "deny",
+          rule: "security.allow_package_install",
+          reason: `package install '${piece}' is blocked (allow_package_install=false)`,
+        };
+      }
+      if (pk.ambiguous && rules.failClosed) {
+        return {
+          decision: "deny",
+          effective: "deny",
+          rule: "security.allow_package_install",
+          reason: `possible package install '${piece}' blocked (fail-closed; ambiguous operation)`,
+        };
+      }
+    }
+    if (rules.denyNetwork) {
+      const nw = classifyNetwork(piece);
+      if (nw.match) {
+        return {
+          decision: "deny",
+          effective: "deny",
+          rule: "security.deny_network",
+          reason: `network command '${piece}' is blocked (deny_network=true; command-name policy, not a sandbox)`,
+        };
+      }
+    }
+  }
+  return { decision: "allow", effective: "allow", rule: null, reason: "allowed" };
 }

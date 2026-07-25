@@ -33,6 +33,7 @@ import type { LoadResult } from "./config/loader.ts";
 import { BUILTIN_PROFILES } from "./config/profiles.ts";
 import {
   checkCommand,
+  checkExecPolicy,
   checkPath,
   checkTool,
   rulesFromConfig,
@@ -176,6 +177,16 @@ function doctorReport(state: CctRuntimeState): string {
         `permissions=${policy.permissions} (resolved, reported only — not enforced)`,
     );
     lines.push(`  tools: ${policy.tools.join(", ") || "<inherit>"}`);
+    const denyNet = resolved.resolved.get("security.deny_network")?.value === true;
+    const allowPkg =
+      resolved.resolved.get("security.allow_package_install")?.value !== false;
+    const failClosed =
+      resolved.resolved.get("security.fail_closed")?.value !== false;
+    lines.push(
+      `exec policy: package_install=${allowPkg ? "allowed" : "DENIED"} ` +
+        `network=${denyNet ? "DENIED (command-name denylist, not a sandbox)" : "allowed"} ` +
+        `fail_closed=${failClosed}`,
+    );
     lines.push(`profile chain: ${state.config.profileChain.join(" -> ") || "<none>"}`);
     lines.push("configuration files:");
     for (const f of state.config.loadedFiles) lines.push(`  loaded:  ${f}`);
@@ -413,6 +424,13 @@ export default async function (pi: any): Promise<void> {
         if (v.decision === "ask" && state.interactive && ctx?.ui?.confirm) {
           const ok = await ctx.ui.confirm(`[cct] Allow command?`, { detail: command });
           if (!ok) return block("permissions", `tool_call:${toolName}`, v, command);
+        }
+        // Package-install / network policy (T5.3, FR-009).
+        const execV = checkExecPolicy(state.rules, command);
+        if (execV.effective === "deny") {
+          const origin =
+            execV.rule === "security.deny_network" ? "network-policy" : "package-policy";
+          return block(origin, `tool_call:${toolName}`, execV, command);
         }
         const gate = buildWriteGate(state.cwd, state.workflow, cfg("workflow.sdd.enabled") === true);
         if (gate) {
