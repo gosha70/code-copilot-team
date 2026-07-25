@@ -18,10 +18,13 @@ import {
   loadLoopSummary,
   loadReviewState,
   midReviewWarning,
+  prepareReviewLoop,
   resolveReviewRunner,
+  resolveTargetRef,
   reviewGate,
   reviewPasses,
   runReviewRound,
+  submitReviewRound,
   writeDecision,
 } from "../../adapters/pi/runtime/workflow/review.ts";
 import { BUILTIN_PROFILES } from "../../adapters/pi/runtime/config/profiles.ts";
@@ -184,6 +187,78 @@ test("resolveReviewRunner honors CCT_REVIEW_RUNNER when it exists", () => {
     if (prev === undefined) delete process.env.CCT_REVIEW_RUNNER;
     else process.env.CCT_REVIEW_RUNNER = prev;
   }
+});
+
+// ── init-vs-continue: the breaker-preservation regression ──────────────────
+
+test("prepareReviewLoop continues an unresolved same-target loop; resets otherwise", () => {
+  const root = tmpProject();
+  initReviewState(root, SUBMIT);
+  // Simulate the runner having advanced the loop (its breaker inputs).
+  const st = loadReviewState(root);
+  st.current_round = 3;
+  st.loop_start = 111;
+  st.last_verdict = "FAIL";
+  fs.writeFileSync(reviewFile(root, "state.json"), JSON.stringify(st));
+
+  // Same feature/phase, unresolved → CONTINUE: breaker state preserved.
+  assert.equal(prepareReviewLoop(root, SUBMIT), "continue");
+  assert.equal(loadReviewState(root).current_round, 3, "must not reset breaker state");
+  assert.equal(loadReviewState(root).loop_start, 111);
+
+  // Prior loop resolved → fresh init: breakers reset, stale PASS cleared.
+  writeSummary(root, { verdict: "PASS", bypass: false });
+  assert.equal(prepareReviewLoop(root, SUBMIT), "init");
+  assert.equal(loadReviewState(root).current_round, 0);
+  assert.equal(loadLoopSummary(root), null, "stale PASS summary cleared on a new loop");
+
+  // Changed feature → fresh init.
+  fs.writeFileSync(
+    reviewFile(root, "state.json"),
+    JSON.stringify({ ...loadReviewState(root), current_round: 2 }),
+  );
+  assert.equal(prepareReviewLoop(root, { ...SUBMIT, featureId: "other" }), "init");
+  assert.equal(loadReviewState(root).current_round, 0);
+});
+
+test("consecutive submits ADVANCE the loop, never reset it (breaker regression)", () => {
+  const bin = tmpProject();
+  // Stub runner that advances current_round (as the real runner does) and FAILs.
+  const incr = stub(
+    bin,
+    "incr.sh",
+    'node -e \'const fs=require("fs");const f=process.argv[1]+"/.cct/review/state.json";' +
+      'const s=JSON.parse(fs.readFileSync(f));s.current_round=(s.current_round||0)+1;' +
+      "fs.writeFileSync(f,JSON.stringify(s));' \"$1\"; exit 1",
+  );
+  const root = tmpProject();
+  const limits = { maxRounds: 5, timeoutSec: 900 };
+
+  const s1 = submitReviewRound(root, SUBMIT, incr, limits);
+  assert.equal(s1.mode, "init");
+  assert.equal(loadReviewState(root).current_round, 1);
+
+  const s2 = submitReviewRound(root, SUBMIT, incr, limits);
+  assert.equal(s2.mode, "continue", "re-submit must continue, not re-init");
+  assert.equal(
+    loadReviewState(root).current_round,
+    2,
+    "current_round must increase monotonically so breakers can trip",
+  );
+});
+
+test("resolveTargetRef: explicit arg wins; non-git dir falls back to HEAD~1", () => {
+  assert.equal(resolveTargetRef("/nonexistent-xyz", "abc123"), "abc123");
+  assert.equal(resolveTargetRef(tmpProject()), "HEAD~1"); // tmp dir is not a repo
+});
+
+test("runReviewRound kills a hung runner via the belt-and-braces timeout", () => {
+  const bin = tmpProject();
+  const slow = stub(bin, "slow.sh", "sleep 5; exit 0");
+  // timeoutSec + 30s grace; -29 => a 1s wall so the 5s sleep is killed.
+  const out = runReviewRound(tmpProject(), slow, { maxRounds: 5, timeoutSec: -29 });
+  assert.equal(out.status, "error");
+  assert.match(out.reason, /failed to run/);
 });
 
 // ── generalized profile-key lint guard (condition E) ───────────────────────
