@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-25
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **29 of 64 complete.** Phases 0–2 and 4 complete; Phase 5 complete except the deferred T5.2 live-wiring.
+written. Current state: **30 of 64 complete.** Phases 0–2 and 4 complete; Phase 5 complete except the deferred T5.2 live-wiring; Phase 6 started (T6.1 done).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -116,7 +116,8 @@ order deviates.
     now strips via `stripPrivilegePrefix` before matching)._
 
 ### Phase 6 — Verification & review workflow
-- [ ] **T6.1 (P0)** Peer-review runner integration + bounded review-loop state machine + existing artifact formats (FR-015).
+- [x] **T6.1 (P0)** Peer-review runner integration + bounded review-loop state machine + existing artifact formats (FR-015).
+  - _Delivered via #126 + #127 (design d021ccf; thin driver over `review-round-runner.sh`; mandatory-review gate at `/cct:phase-complete` + `review→next` as the Stop-hook replacement). Post-merge fix (PR #127): `/cct:review-submit` initially reset loop state each round, neutralizing all three breakers — now init-or-continue with a monotonic-round regression test. Checked only after that fix._
 - [ ] **T6.2 (P0)** Verification gates: build/unit/integration/lint/type-check/dependency-audit/security/visual/docs/drift (FR-016).
 - [ ] **T6.3 (P1)** Audited human override; `CCT_PEER_*` env contract via launcher flags (FR-000a).
 - [ ] **T6.4 (P1)** `pi-code init` (reuse scaffolder) + `pi-code sync [--dry-run]` (reuse sync contract).
