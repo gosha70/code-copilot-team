@@ -60,6 +60,11 @@ capabilities:
       execution contract has not passed its acceptance gates.
     status_probe: "providers-health.sh check for a working pi-code."
 
+  - id: review.enforcement
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    status_probe: "peer-review-on-stop.sh blocks session end until loop-summary.json is PASS/bypass."
+
   - id: integrations.mcp
     implementation_kind: native
     runtime_status: enabled

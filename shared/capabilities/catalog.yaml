@@ -93,6 +93,16 @@ capabilities:
     claude_equivalent: "peer-review-runner provider entry"
     docs: shared/skills/provider-collaboration-protocol/SKILL.md
 
+  - id: review.enforcement
+    description: >-
+      Mandatory peer review is enforced before a build/review phase can
+      complete, via the provider-neutral review-loop runner.
+    default: disabled
+    requires: [workflow.phases]
+    security_level: enforcing
+    claude_equivalent: "peer-review-on-stop.sh Stop-hook gate"
+    docs: shared/skills/review-loop/SKILL.md
+
   - id: integrations.mcp
     description: >-
       Model Context Protocol servers can be attached, with their provenance and
