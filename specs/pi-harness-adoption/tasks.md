@@ -5,16 +5,33 @@ gated integration preview). Priorities: **P0** = gates the phase's
 Done-when; **P1** = required for the umbrella DoD; **P2** = polish.
 Task IDs: `T<phase>.<n>`.
 
-## Progress — updated 2026-07-22
+## Progress — updated 2026-07-25
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **26 of 64 complete.** Phases 1, 2, and 4 complete.
+written. Current state: **29 of 64 complete.** Phases 0–2 and 4 complete; Phase 5 complete except the deferred T5.2 live-wiring.
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
 checked only when every deliverable named in its own text exists and its tests
 pass — including the security constraints those deliverables are subject to, not
 just their happy path. Work proceeds in phase order.
+
+## Execution order (by slice, not phase number)
+
+Work proceeds by **slice**, which deliberately deviates from phase
+numbering. Agreed sequence:
+
+1. **Slice A** — Phases 0–2 — ✅ complete
+2. **Slice C** — Phases 4–6 — in progress (Phase 4 ✅; Phase 5 ✅ except the
+   deferred T5.2 live-wiring; Phase 6 pending)
+3. **Slice B** — Phase 3 — **gated (R6/FR-028); runs last.** The integration
+   preview validates against the completed enforcement path; `providers.pi`
+   stays `disabled` until T3.2–T3.4 acceptance passes.
+4. **Slice D** — Phases 7–8, then **Slice E** — Phases 9–10.
+
+The sections below are ordered to match this sequence (Slice B appears after
+Slice C). Phase *numbers* still map to `plan.md` §17 — only the presentation
+order deviates.
 
 ## Slice A — Usable Pi adapter (Phases 0–2)
 
@@ -47,18 +64,6 @@ just their happy path. Work proceeds in phase order.
 - [x] **T2.4 (P1)** Stateful commands registered through the runtime (`/cct:*` family).
 - [x] **T2.5 (P1)** Resource provenance reporting (which package/path supplied each skill/prompt).
 - [x] **T2.6 (P1)** `tests/test-pi-adapter.sh`: generation goldens, determinism, install idempotency.
-
-## Slice B — Repository integration preview (Phase 3, gated per R6/FR-028)
-
-- [ ] **T3.1 (P0)** `[providers.pi]` seed + `peer_for.pi` in `shared/templates/provider-profile-template.toml`; `providers-health.sh` Pi check (`pi-code version`).
-- [ ] **T3.2 (P0)** `pi-review-provider` adapter script (FR-015b): validates `{review_request}` path, no shell interpolation, invokes `pi-code --profile peer-reviewer`, normalizes output, stderr diagnostics, runner exit codes. Flag validation vs pinned Pi version (V3: `--no-session` or temp `--session` fallback).
-- [ ] **T3.3 (P0)** `peer-reviewer` profile enforcement (FR-015a): read-only tools (`read,grep,find,ls`), ephemeral session, no SDD/teams/subagents/write/packages, timeout + token budget; `peer-reviewer-exec` variant gated on runner sandbox confirmation.
-- [ ] **T3.4 (P0)** No-recursion verification tests (reviewer cannot start reviews, launcher recursion markers).
-- [ ] **T3.5 (P1)** Benchmark backend `scripts/benchmark_runner/backends/pi.py` over `--mode json`; run-record schema fields per provider-config spec; stub-benchmark CI smoke.
-- [ ] **T3.6 (P1)** `provider-emit.sh` `pi` target (settings fragments / custom provider entries).
-- [ ] **T3.7 (P1)** Wiki backend: explicit `--backend pi` first; auto-detect insertion (`claude → codex → pi → cursor`) only when capability `enabled` (FR-025/FR-028).
-- [ ] **T3.8 (P1)** Capability flip logic: `providers.pi` reports `disabled` with reason until T3.2–T3.4 acceptance passes; PATH presence never implies `enabled`.
-- [ ] **T3.9 (P2)** Bench preset featuring a Pi-driven comparison.
 
 ## Slice C — Enforced disciplined workflow (Phases 4–6)
 
@@ -115,6 +120,22 @@ just their happy path. Work proceeds in phase order.
 - [ ] **T6.2 (P0)** Verification gates: build/unit/integration/lint/type-check/dependency-audit/security/visual/docs/drift (FR-016).
 - [ ] **T6.3 (P1)** Audited human override; `CCT_PEER_*` env contract via launcher flags (FR-000a).
 - [ ] **T6.4 (P1)** `pi-code init` (reuse scaffolder) + `pi-code sync [--dry-run]` (reuse sync contract).
+
+## Slice B — Repository integration preview (Phase 3, gated per R6/FR-028)
+
+_Sequenced after Slice C per the execution-order note at the top: the gated
+integration preview validates against the completed enforcement path;
+`providers.pi` stays `disabled` until T3.2–T3.4 acceptance passes._
+
+- [ ] **T3.1 (P0)** `[providers.pi]` seed + `peer_for.pi` in `shared/templates/provider-profile-template.toml`; `providers-health.sh` Pi check (`pi-code version`).
+- [ ] **T3.2 (P0)** `pi-review-provider` adapter script (FR-015b): validates `{review_request}` path, no shell interpolation, invokes `pi-code --profile peer-reviewer`, normalizes output, stderr diagnostics, runner exit codes. Flag validation vs pinned Pi version (V3: `--no-session` or temp `--session` fallback).
+- [ ] **T3.3 (P0)** `peer-reviewer` profile enforcement (FR-015a): read-only tools (`read,grep,find,ls`), ephemeral session, no SDD/teams/subagents/write/packages, timeout + token budget; `peer-reviewer-exec` variant gated on runner sandbox confirmation.
+- [ ] **T3.4 (P0)** No-recursion verification tests (reviewer cannot start reviews, launcher recursion markers).
+- [ ] **T3.5 (P1)** Benchmark backend `scripts/benchmark_runner/backends/pi.py` over `--mode json`; run-record schema fields per provider-config spec; stub-benchmark CI smoke.
+- [ ] **T3.6 (P1)** `provider-emit.sh` `pi` target (settings fragments / custom provider entries).
+- [ ] **T3.7 (P1)** Wiki backend: explicit `--backend pi` first; auto-detect insertion (`claude → codex → pi → cursor`) only when capability `enabled` (FR-025/FR-028).
+- [ ] **T3.8 (P1)** Capability flip logic: `providers.pi` reports `disabled` with reason until T3.2–T3.4 acceptance passes; PATH presence never implies `enabled`.
+- [ ] **T3.9 (P2)** Bench preset featuring a Pi-driven comparison.
 
 ## Slice D — Agent execution (Phases 7–8)
 
