@@ -101,8 +101,14 @@ just their happy path. Work proceeds in phase order.
     boundary. Default config (allow_package_install=true, deny_network=false)
     blocks nothing new. Canonicalization/symlink/git/secret-path pre-existed._
 - [x] **T5.4 (P0)** Audit log (C-9) + fail-open/fail-closed tests; four-mode (tui/print/json/rpc) blocker matrix.
-- [ ] **T5.5 (P1)** Property/fuzz tests: shell parsing, chained/quoted commands, traversal, wildcards, malformed events.
-  - _Partial — missing: a property/fuzz generator and malformed-event tests (hand-written adversarial cases exist)._
+- [x] **T5.5 (P1)** Property/fuzz tests: shell parsing, chained/quoted commands, traversal, wildcards, malformed events.
+  - _Seeded (reproducible) property/fuzz harness (`fuzz.test.mjs`): never-throw
+    invariants over command parsers / path matchers / event translators;
+    no-smuggling of denied / network / install commands via chaining + prefixes;
+    protected basenames caught through `../` traversal + wildcards; malformed
+    lifecycle events. Exposed and fixed one security bug — `sudo` / `env` /
+    assignment prefixes bypassed the `denied_commands` denylist (`checkCommand`
+    now strips via `stripPrivilegePrefix` before matching)._
 
 ### Phase 6 — Verification & review workflow
 - [ ] **T6.1 (P0)** Peer-review runner integration + bounded review-loop state machine + existing artifact formats (FR-015).

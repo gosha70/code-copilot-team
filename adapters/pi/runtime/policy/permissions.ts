@@ -17,6 +17,7 @@
 import {
   classifyNetwork,
   classifyPackageInstall,
+  stripPrivilegePrefix,
 } from "./protected-ops.ts";
 
 export type Decision = "allow" | "ask" | "deny";
@@ -191,9 +192,14 @@ export function checkPath(rules: PermissionRuleSet, filePath: string): Permissio
 
 export function checkCommand(rules: PermissionRuleSet, rawCommand: string): PermissionVerdict {
   const pieces = splitCommands(rawCommand);
+  // Strip a leading `sudo` / `env KEY=val` prefix so a denied command cannot be
+  // hidden behind one (e.g. `FOO=bar git reset --hard`). Match the raw AND the
+  // stripped form, so this only ever adds denials (T5.5 fuzz finding).
+  const bare = (piece: string): string =>
+    stripPrivilegePrefix(piece.split(/\s+/).filter(Boolean)).join(" ");
   for (const piece of pieces) {
     for (const prefix of rules.commandsDeny) {
-      if (commandMatches(prefix, piece)) {
+      if (commandMatches(prefix, piece) || commandMatches(prefix, bare(piece))) {
         return {
           decision: "deny",
           effective: "deny",
@@ -205,7 +211,7 @@ export function checkCommand(rules: PermissionRuleSet, rawCommand: string): Perm
   }
   for (const piece of pieces) {
     for (const prefix of rules.commandsAsk) {
-      if (commandMatches(prefix, piece))
+      if (commandMatches(prefix, piece) || commandMatches(prefix, bare(piece)))
         return resolveAsk(rules, `commands.ask:${prefix}`, `command '${piece}'`);
     }
   }
