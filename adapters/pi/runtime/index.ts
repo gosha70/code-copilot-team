@@ -57,11 +57,11 @@ import {
 } from "./workflow/phases.ts";
 import type { WorkflowState } from "./workflow/phases.ts";
 import {
-  initReviewState,
   midReviewWarning,
   resolveReviewRunner,
+  resolveTargetRef,
   reviewGate,
-  runReviewRound,
+  submitReviewRound,
   writeDecision,
 } from "./workflow/review.ts";
 import { isSpecPath, validateSpecDir } from "./workflow/sdd.ts";
@@ -759,22 +759,29 @@ export default async function (pi: any): Promise<void> {
       if (!state.workflow.featureId) {
         return emit(ctx, "no active feature — set one with /cct:phase <phase> <feature-id>");
       }
-      const peerProvider = (typeof args === "string" ? args : "").trim().split(/\s+/).filter(Boolean)[0] ?? "";
+      const parts = (typeof args === "string" ? args : "").trim().split(/\s+/).filter(Boolean);
+      const peerProvider = parts[0] ?? "";
       const runnerPhase = state.workflow.phase === "plan" ? "plan" : "build";
-      initReviewState(state.cwd, {
-        featureId: state.workflow.featureId,
-        phase: runnerPhase,
-        subjectProvider: "pi",
-        peerProvider,
-        reviewScope: "both",
-        targetRef: "HEAD~1",
-        loopStart: Math.floor(Date.now() / 1000),
-      });
       const limits = {
         maxRounds: Number(cfg("limits.max_review_rounds") ?? 5),
         timeoutSec: Number(cfg("limits.timeout_sec") ?? 900),
       };
-      const outcome = runReviewRound(state.cwd, resolveReviewRunner(piAdapterDir()), limits);
+      // Init-or-continue (NOT unconditional init): re-submitting must preserve
+      // the runner's breaker state (current_round/loop_start/findings).
+      const outcome = submitReviewRound(
+        state.cwd,
+        {
+          featureId: state.workflow.featureId,
+          phase: runnerPhase,
+          subjectProvider: "pi",
+          peerProvider,
+          reviewScope: "both",
+          targetRef: resolveTargetRef(state.cwd, parts[1]),
+          loopStart: Math.floor(Date.now() / 1000),
+        },
+        resolveReviewRunner(piAdapterDir()),
+        limits,
+      );
       audit({
         mode: resolveAuditMode(state.interactive),
         actor: "cct:review-submit",

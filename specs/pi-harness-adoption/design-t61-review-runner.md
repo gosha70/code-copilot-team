@@ -163,3 +163,22 @@ constant, manifests, capability seed) already hit three times this session.
 Not just add the one key: add a **test that walks every key set by every
 `BUILTIN_PROFILES` entry and asserts each is lint-known**, guarding against the
 next profile key that ships unknown (same move as the workflow validator).
+
+## Re-review fix (breaker preservation)
+
+Re-review found a blocking defect: `/cct:review-submit` called `initReviewState`
+unconditionally, resetting `current_round` / `loop_start` / `findings` — the exact
+inputs the runner uses for its max-rounds / timeout / stale breakers. Since the
+failure path tells the user to "re-run /cct:review-submit", the documented UI made
+the bounded loop UNBOUNDED (no breaker could trip), defeating decision D.
+
+Fix: `submitReviewRound` → `prepareReviewLoop` does **init-or-continue** (parity
+with Claude's "/review-submit initializes OR continues"): CONTINUE an unresolved
+loop on the same feature/phase (preserving breaker state); start a fresh loop
+(clearing stale summary/breaker/decision) only when there is no loop, the prior is
+resolved (PASS/bypass), or the feature/phase changed. Handler logic extracted into
+`review.ts` so the decision is suite-testable (the handler was the untested seam).
+Regression test asserts two consecutive submits advance `current_round`
+monotonically. Also: `targetRef` now derives from the merge-base with the default
+branch (multi-commit features reviewed whole), and `runReviewRound` gained a
+belt-and-braces spawn timeout so a hung reviewer cannot block the session.

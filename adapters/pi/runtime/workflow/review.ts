@@ -18,6 +18,10 @@ import * as path from "node:path";
 
 export const REVIEW_DIR_REL = path.join(".cct", "review");
 
+// Grace added to the runner's own timeout budget for the belt-and-braces
+// spawn timeout, so a hung reviewer process cannot block the Pi session.
+const RUNNER_GRACE_SEC = 30;
+
 export interface ReviewLimits {
   maxRounds: number; // limits.max_review_rounds
   timeoutSec: number; // limits.timeout_sec
@@ -145,7 +149,11 @@ export function runReviewRound(
     CCT_REVIEW_TIMEOUT_SEC: String(limits.timeoutSec),
   };
   if (providerProfile) env.CCT_PROVIDER_PROFILE = providerProfile;
-  const r = spawnSync(runnerPath, [projectRoot], { env, encoding: "utf8" });
+  const r = spawnSync(runnerPath, [projectRoot], {
+    env,
+    encoding: "utf8",
+    timeout: (limits.timeoutSec + RUNNER_GRACE_SEC) * 1000,
+  });
   if (r.error) {
     return {
       ran: false,
@@ -167,6 +175,92 @@ export function runReviewRound(
     verdict,
     reason: (r.stderr ?? "").trim() || `round exit ${code}`,
   };
+}
+
+/** Remove resolved-loop artifacts so a fresh loop's gate reflects only itself. */
+function clearReviewArtifacts(projectRoot: string): void {
+  const dir = reviewDir(projectRoot);
+  for (const f of [
+    "loop-summary.json",
+    "breaker-tripped.json",
+    "decision.json",
+  ]) {
+    try {
+      fs.rmSync(path.join(dir, f));
+    } catch {
+      /* absent — nothing to clear */
+    }
+  }
+}
+
+/**
+ * Decide init-vs-continue for a submit. Re-initializing resets the runner's
+ * breaker inputs (current_round, loop_start, findings), so we CONTINUE an
+ * unresolved loop on the same feature/phase — the runner's max-rounds/timeout/
+ * stale breakers must keep accumulating across re-submits (decision D; the
+ * Claude /review-submit skill likewise "initializes OR continues"). We start a
+ * fresh loop only when there is no loop, the prior loop is resolved
+ * (PASS/bypass), or the feature/phase changed — clearing stale artifacts so the
+ * gate does not read a prior loop's PASS.
+ */
+export function prepareReviewLoop(
+  projectRoot: string,
+  p: ReviewSubmitParams,
+): "init" | "continue" {
+  const st = loadReviewState(projectRoot);
+  const sameTarget =
+    !!st && st.feature_id === p.featureId && st.phase === p.phase;
+  if (sameTarget && !reviewPasses(projectRoot)) return "continue";
+  clearReviewArtifacts(projectRoot);
+  initReviewState(projectRoot, p);
+  return "init";
+}
+
+export interface SubmitOutcome extends ReviewRoundOutcome {
+  mode: "init" | "continue";
+}
+
+/**
+ * Full submit: prepare the loop (init or continue) then run one round. Extracted
+ * here rather than inlined in the index.ts handler so the init-vs-continue
+ * decision is reachable by the suite — the handler layer was the untested seam.
+ */
+export function submitReviewRound(
+  projectRoot: string,
+  p: ReviewSubmitParams,
+  runnerPath: string | null,
+  limits: ReviewLimits,
+  providerProfile?: string,
+): SubmitOutcome {
+  const mode = prepareReviewLoop(projectRoot, p);
+  const outcome = runReviewRound(
+    projectRoot,
+    runnerPath,
+    limits,
+    providerProfile,
+  );
+  return { ...outcome, mode };
+}
+
+/**
+ * Resolve the review target ref. An explicit arg wins; else the merge-base with
+ * the default branch (so a MULTI-commit feature is reviewed whole, not just its
+ * last commit); else HEAD~1.
+ */
+export function resolveTargetRef(projectRoot: string, arg?: string): string {
+  if (arg) return arg;
+  try {
+    const r = spawnSync(
+      "git",
+      ["-C", projectRoot, "merge-base", "master", "HEAD"],
+      { encoding: "utf8" },
+    );
+    const base = (r.stdout ?? "").trim();
+    if (r.status === 0 && base) return base;
+  } catch {
+    /* git unavailable — fall back */
+  }
+  return "HEAD~1";
 }
 
 /** Does the current loop-summary satisfy a mandatory-review gate? */
