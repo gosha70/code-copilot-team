@@ -56,6 +56,14 @@ import {
   transition,
 } from "./workflow/phases.ts";
 import type { WorkflowState } from "./workflow/phases.ts";
+import {
+  initReviewState,
+  midReviewWarning,
+  resolveReviewRunner,
+  reviewGate,
+  runReviewRound,
+  writeDecision,
+} from "./workflow/review.ts";
 import { isSpecPath, validateSpecDir } from "./workflow/sdd.ts";
 import {
   RISK_CATEGORIES,
@@ -326,6 +334,18 @@ export default async function (pi: any): Promise<void> {
     state.hookScriptsDir = resolveHookScriptsDir(piAdapterDir());
     loadConfigForState(state, state.cwd);
     state.workflow = loadState(state.cwd);
+    const midReview = midReviewWarning(state.cwd);
+    if (midReview) {
+      state.warnings.push(midReview);
+      audit({
+        mode: resolveAuditMode(state.interactive),
+        actor: "session_start",
+        decision: "warn",
+        rule: "review.unresolved",
+        subject: midReview.slice(0, 200),
+        origin: "review-gate",
+      });
+    }
     refreshRules();
     injectAlwaysContext(state, ctx);
     if (!(state.profile in BUILTIN_PROFILES)) {
@@ -531,6 +551,22 @@ export default async function (pi: any): Promise<void> {
         return emit(ctx, `unknown phase '${parts[0]}' (research|plan|build|review)`);
       }
       const featureId = parts[1] ?? null;
+      // Mandatory-review gate on LEAVING review (decision A): cannot advance
+      // out of an unresolved mandatory review without a PASS/bypass summary.
+      if (state.workflow.phase === "review" && target !== "review" && cfg("review.mandatory") === true) {
+        const rg = reviewGate(state.cwd, true, "review");
+        if (!rg.pass) {
+          audit({
+            mode: resolveAuditMode(state.interactive),
+            actor: "cct:phase",
+            decision: "deny",
+            rule: "review.mandatory",
+            subject: `review->${target}:${state.workflow.featureId ?? "<none>"}`,
+            origin: "review-gate",
+          });
+          return emit(ctx, `phase transition 'review -> ${target}' BLOCKED:\n  - ${rg.reason}`);
+        }
+      }
       const result = transition(
         state.cwd,
         state.workflow,
@@ -651,16 +687,6 @@ export default async function (pi: any): Promise<void> {
       lands: "the Shape-Up capability is not part of the enforced Pi runtime yet",
     },
     {
-      name: "cct:review-submit",
-      description: "Submit work for cross-provider peer review",
-      lands: "the peer-review runner lands in Phase 6 (verification & review)",
-    },
-    {
-      name: "cct:review-decide",
-      description: "Resolve a review-loop circuit breaker (approve/reject/retry)",
-      lands: "the peer-review runner lands in Phase 6 (verification & review)",
-    },
-    {
       name: "cct:ralph-start",
       description: "Start a Ralph autonomous-iteration loop",
       lands: "autonomous loops land with the agent runner in Phase 7+",
@@ -694,6 +720,8 @@ export default async function (pi: any): Promise<void> {
         return;
       }
       const gate = validateSpecDir(path.join(state.cwd, "specs", state.workflow.featureId));
+      const mandatory = cfg("review.mandatory") === true;
+      const rgate = reviewGate(state.cwd, mandatory, state.workflow.phase);
       const lines = [
         `feature: ${state.workflow.featureId}`,
         `phase: ${state.workflow.phase}`,
@@ -701,11 +729,100 @@ export default async function (pi: any): Promise<void> {
       ];
       for (const r of gate.reasons) lines.push(`  - ${r}`);
       lines.push(
-        gate.pass
+        `review gate: ${rgate.pass ? "PASS" : "BLOCKED"}` +
+          (mandatory ? "" : " (review not mandatory)"),
+      );
+      if (!rgate.pass) {
+        lines.push(`  - ${rgate.reason}`);
+        audit({
+          mode: resolveAuditMode(state.interactive),
+          actor: "cct:phase-complete",
+          decision: "deny",
+          rule: "review.mandatory",
+          subject: `${state.workflow.featureId}:${state.workflow.phase}`,
+          origin: "review-gate",
+        });
+      }
+      const canComplete = gate.pass && rgate.pass;
+      lines.push(
+        canComplete
           ? "phase may complete; advance with /cct:phase <next> " + state.workflow.featureId
-          : "phase is BLOCKED until the gate passes",
+          : "phase is BLOCKED",
       );
       emit(ctx, lines.join("\n"));
+    },
+  });
+
+  pi.registerCommand?.("cct:review-submit", {
+    description: "Submit work for cross-provider peer review (one round)",
+    handler: async (ctx: any, args?: string) => {
+      if (!state.workflow.featureId) {
+        return emit(ctx, "no active feature — set one with /cct:phase <phase> <feature-id>");
+      }
+      const peerProvider = (typeof args === "string" ? args : "").trim().split(/\s+/).filter(Boolean)[0] ?? "";
+      const runnerPhase = state.workflow.phase === "plan" ? "plan" : "build";
+      initReviewState(state.cwd, {
+        featureId: state.workflow.featureId,
+        phase: runnerPhase,
+        subjectProvider: "pi",
+        peerProvider,
+        reviewScope: "both",
+        targetRef: "HEAD~1",
+        loopStart: Math.floor(Date.now() / 1000),
+      });
+      const limits = {
+        maxRounds: Number(cfg("limits.max_review_rounds") ?? 5),
+        timeoutSec: Number(cfg("limits.timeout_sec") ?? 900),
+      };
+      const outcome = runReviewRound(state.cwd, resolveReviewRunner(piAdapterDir()), limits);
+      audit({
+        mode: resolveAuditMode(state.interactive),
+        actor: "cct:review-submit",
+        decision: outcome.status,
+        rule: "review.round",
+        subject: `${state.workflow.featureId}:${runnerPhase}`,
+        origin: "review-gate",
+      });
+      const tail =
+        outcome.status === "pass" ? "\n  phase may complete"
+        : outcome.status === "breaker" ? "\n  breaker tripped — /cct:review-decide approve|reject|retry"
+        : outcome.status === "no-runner" || outcome.status === "error" ? ""
+        : "\n  address findings and re-run /cct:review-submit";
+      emit(
+        ctx,
+        `review round: ${outcome.status}` +
+          (outcome.verdict ? ` (verdict ${outcome.verdict})` : "") +
+          `\n  ${outcome.reason}` +
+          tail,
+      );
+    },
+  });
+
+  pi.registerCommand?.("cct:review-decide", {
+    description: "Resolve a review-loop breaker: /cct:review-decide <approve|reject|retry> [detail]",
+    handler: async (ctx: any, args?: string) => {
+      if (!state.workflow.featureId) return emit(ctx, "no active feature");
+      const parts = (typeof args === "string" ? args : "").trim().split(/\s+/).filter(Boolean);
+      const decision = parts[0];
+      if (decision !== "approve" && decision !== "reject" && decision !== "retry") {
+        return emit(ctx, "usage: /cct:review-decide <approve|reject|retry> [detail]");
+      }
+      const detail = parts.slice(1).join(" ") || "(no detail)";
+      writeDecision(state.cwd, decision, detail, new Date().toISOString());
+      audit({
+        mode: resolveAuditMode(state.interactive),
+        actor: "cct:review-decide",
+        decision,
+        rule: "review.decision",
+        subject: `${state.workflow.featureId}:${detail}`.slice(0, 200),
+        origin: "review-gate",
+      });
+      emit(
+        ctx,
+        decision === "approve" ? "review bypassed by audited human override; phase may complete"
+        : decision === "reject" ? "review rejected; work does not proceed"
+        : "breaker reset; continue with /cct:review-submit",
+      );
     },
   });
 }

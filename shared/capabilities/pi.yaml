@@ -57,6 +57,16 @@ capabilities:
       execution contract has not passed its acceptance gates.
     status_probe: "Acceptance gates for the peer-reviewer contract (T3.2-T3.4)."
 
+  - id: review.enforcement
+    implementation_kind: cct-first-party
+    runtime_status: degraded
+    reason: >-
+      Mandatory review is gated at /cct:phase-complete and the review->next
+      transition — the only Pi-observable seam, since Pi emits no Stop/turn-end
+      event. Weaker than Claude's Stop-hook gate, which fires even when the
+      workflow commands are never run.
+    status_probe: "reviewGate() at /cct:phase-complete and the review->next transition."
+
   - id: integrations.mcp
     implementation_kind: optional-bridge
     runtime_status: disabled

@@ -64,6 +64,13 @@ export function seedCapabilities(): CapabilityRecord[] {
         "Provider plumbing is installed, but the dedicated read-only reviewer execution contract has not passed its acceptance gates.",
     },
     {
+      id: "review.enforcement",
+      implementation_kind: "cct-first-party",
+      runtime_status: "degraded",
+      reason:
+        "Mandatory review is gated at /cct:phase-complete and the review->next transition (Pi emits no Stop/turn-end event); weaker than Claude's Stop-hook gate.",
+    },
+    {
       id: "integrations.mcp",
       implementation_kind: "optional-bridge",
       runtime_status: "disabled",
