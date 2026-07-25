@@ -82,7 +82,15 @@ just their happy path. Work proceeds in phase order.
     as subprocesses (no logic ported); support gate + timeout/retry/fail-mode +
     audit._
 - [ ] **T5.2 (P0)** allow/ask/deny engine (FR-009) + deterministic headless ask; reuse `permissions/*.json` profile content via importer.
-  - _Partial — missing: the `permissions/*.json` importer._
+  - _Engine + deterministic headless ask: done (pre-existing). Importer:
+    delivered — `importClaudePermissions()` pure converter maps Claude
+    allow/deny/ask (bare tools, `Bash(<prefix>:*)` -> commandsDeny/Ask,
+    path-scoped -> protected_paths) to Pi rule lists, with structured warnings
+    for no-Pi-target entries and read-vs-write `notEnforced` reporting;
+    balanced/relaxed/web-dynamic fixtures + adversarial path/Bash tests.
+    REMAINING before T5.2 is checked: wire the imported lists into the layered
+    config so profiles are reused live (deferred to a later task, per plan —
+    importer contract pinned first)._
 - [ ] **T5.3 (P0)** Protected paths: canonicalization, symlink defenses, git command protection, secret-path protection, package-install protection, network policy.
   - _Partial — missing: package-install protection and network-policy enforcement (`allow_package_install` / `deny_network` are declared in config but read by no enforcement point)._
 - [x] **T5.4 (P0)** Audit log (C-9) + fail-open/fail-closed tests; four-mode (tui/print/json/rpc) blocker matrix.
