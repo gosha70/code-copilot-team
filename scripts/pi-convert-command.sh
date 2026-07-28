@@ -71,7 +71,12 @@ fi
 
 # Fallbacks when frontmatter did not supply them.
 if [[ -z "$DESC" ]]; then
-  DESC=$(sed -n "${BODY_START},\$p" "$SRC" | grep -m1 -v '^[[:space:]]*$' | sed -E 's/^#+ *//')
+  # Single awk pass, NOT `sed … | grep -m1 | sed`: grep -m1 exits on the first
+  # match while the upstream sed is still writing, raising "sed: couldn't flush
+  # stdout: Broken pipe" under GNU sed — an intermittent SIGPIPE that flakes
+  # sync-check in CI. One process has no early-closed pipe. Do not "simplify"
+  # this back into a pipe.
+  DESC=$(awk -v s="$BODY_START" 'NR>=s && $0 !~ /^[[:space:]]*$/ { sub(/^#+ */, ""); print; exit }' "$SRC")
 fi
 [[ -z "$ARG_HINT" ]] && ARG_HINT=$(derive_arg_hint)
 
