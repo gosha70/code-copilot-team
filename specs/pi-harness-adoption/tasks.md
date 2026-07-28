@@ -118,9 +118,17 @@ order deviates.
 ### Phase 6 — Verification & review workflow
 - [x] **T6.1 (P0)** Peer-review runner integration + bounded review-loop state machine + existing artifact formats (FR-015).
   - _Delivered via #126 + #127 (design d021ccf; thin driver over `review-round-runner.sh`; mandatory-review gate at `/cct:phase-complete` + `review→next` as the Stop-hook replacement). Post-merge fix (PR #127): `/cct:review-submit` initially reset loop state each round, neutralizing all three breakers — now init-or-continue with a monotonic-round regression test. Checked only after that fix._
-- [ ] **T6.2 (P0)** Verification gates: build/unit/integration/lint/type-check/dependency-audit/security/visual/docs/drift (FR-016).
+- [x] **T6.2 (P0)** Verification gates: build/unit/integration/lint/type-check/dependency-audit/security/visual/docs/drift (FR-016).
+  - _Thin driver over `scripts/verify-runner.sh` (mirror T6.1): `verifyGate`
+    joins the phase-complete conjunction (`sdd && review && verify`) + the
+    review→next block; new `/cct:verify`; `verification.required` list config +
+    array-union floor; `verification.enforcement` capability (degraded — no Stop
+    event, and lint/type-check/dependency-audit report `unsupported`, never
+    faked). Fail-closed: absent runner + non-empty required = FAIL, and
+    required+unsupported = a hard config error (leak-shaped tests cover both)._
 - [ ] **T6.3 (P1)** Audited human override; `CCT_PEER_*` env contract via launcher flags (FR-000a).
 - [ ] **T6.4 (P1)** `pi-code init` (reuse scaffolder) + `pi-code sync [--dry-run]` (reuse sync contract).
+- [ ] **T6.5 (P1)** CCT-scoped type-check gate: `tsc --noEmit` over `adapters/pi/runtime`, promoting the T6.2 `type-check` gate from `unsupported` to `supported`. Follow-up from T6.2's honesty model; prioritized because `--experimental-strip-types` strips without checking (the T1.5 undefined defect shipped for exactly this reason).
 
 ## Slice B — Repository integration preview (Phase 3, gated per R6/FR-028)
 

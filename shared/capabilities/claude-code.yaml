@@ -65,6 +65,11 @@ capabilities:
     runtime_status: enabled
     status_probe: "peer-review-on-stop.sh blocks session end until loop-summary.json is PASS/bypass."
 
+  - id: verification.enforcement
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    status_probe: "verify-on-stop.sh runs the gate suite at session end (blocking when HOOK_STOP_BLOCK=true)."
+
   - id: integrations.mcp
     implementation_kind: native
     runtime_status: enabled
