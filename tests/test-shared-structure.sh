@@ -1196,61 +1196,11 @@ rc=0
 grep -Eq 'HOME:[[:space:]]+\$\{\{ runner\.temp \}\}/cct-home' "$WORKFLOW_FILE" || rc=1
 assert_ok "sync-check uses isolated HOME for structure tests" "$rc"
 
-TESTS_PATH_COUNT=$(grep -Fc "'tests/**'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on tests/** changes" "2" "$TESTS_PATH_COUNT"
-
-SHARED_PATH_COUNT=$(grep -Fc "'shared/**'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on shared/** changes" "2" "$SHARED_PATH_COUNT"
-
-SCRIPTS_PATH_COUNT=$(grep -Fc "'scripts/generate.sh'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on scripts/generate.sh changes" "2" "$SCRIPTS_PATH_COUNT"
-
-APPLY_BP_PATH_COUNT=$(grep -Fc "'scripts/apply-branch-protection.sh'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on scripts/apply-branch-protection.sh changes" "2" "$APPLY_BP_PATH_COUNT"
-
-CHECK_GH_HARDEN_PATH_COUNT=$(grep -Fc "'scripts/check-github-hardening.sh'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on scripts/check-github-hardening.sh changes" "2" "$CHECK_GH_HARDEN_PATH_COUNT"
-
-HARDEN_GH_PATH_COUNT=$(grep -Fc "'scripts/harden-github.sh'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on scripts/harden-github.sh changes" "2" "$HARDEN_GH_PATH_COUNT"
-
-ADAPTERS_PATH_COUNT=$(grep -Fc "'adapters/**'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on adapters/** changes" "2" "$ADAPTERS_PATH_COUNT"
-
-DOCS_HARDEN_PATH_COUNT=$(grep -Fc "'docs/github-hardening-playbook.md'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on docs/github-hardening-playbook.md changes" "2" "$DOCS_HARDEN_PATH_COUNT"
-
-COC_PATH_COUNT=$(grep -Fc "'CODE_OF_CONDUCT.md'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on CODE_OF_CONDUCT.md changes" "2" "$COC_PATH_COUNT"
-
-SECURITY_PATH_COUNT=$(grep -Fc "'SECURITY.md'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on SECURITY.md changes" "2" "$SECURITY_PATH_COUNT"
-
-CODEOWNERS_PATH_COUNT=$(grep -Fc "'.github/CODEOWNERS'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on .github/CODEOWNERS changes" "2" "$CODEOWNERS_PATH_COUNT"
-
-ISSUE_TEMPLATE_PATH_COUNT=$(grep -Fc "'.github/ISSUE_TEMPLATE/**'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on .github/ISSUE_TEMPLATE/** changes" "2" "$ISSUE_TEMPLATE_PATH_COUNT"
-
-PR_TEMPLATE_PATH_COUNT=$(grep -Fc "'.github/pull_request_template.md'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on .github/pull_request_template.md changes" "2" "$PR_TEMPLATE_PATH_COUNT"
-
-README_PATH_COUNT=$(grep -Fc "'README.md'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on README.md changes" "2" "$README_PATH_COUNT"
-
-CONTRIB_PATH_COUNT=$(grep -Fc "'CONTRIBUTING.md'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on CONTRIBUTING.md changes" "2" "$CONTRIB_PATH_COUNT"
-
-# Broadened from the single sync-check.yml path to all workflows, so a
-# malformed workflow is caught by a workflow other than itself.
-WORKFLOW_PATH_COUNT=$(grep -Fc "'.github/workflows/**'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on workflow file changes" "2" "$WORKFLOW_PATH_COUNT"
-
-SPECS_PATH_COUNT=$(grep -Fc "'specs/**'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on specs/** changes" "2" "$SPECS_PATH_COUNT"
-
-VALIDATE_SPEC_PATH_COUNT=$(grep -Fc "'scripts/validate-spec.sh'" "$WORKFLOW_FILE")
-assert_eq "sync-check triggers on scripts/validate-spec.sh changes" "2" "$VALIDATE_SPEC_PATH_COUNT"
+# Path filters were removed (PR #131) so sync-check runs on EVERY PR and can be a
+# required status check without deadlocking PRs that touch unlisted paths. One
+# assertion now guards that intent: no `paths:` filter under the triggers.
+PATHS_FILTER_COUNT=$(grep -Ec '^[[:space:]]+paths:' "$WORKFLOW_FILE")
+assert_eq "sync-check has no paths: filter (runs on every PR)" "0" "$PATHS_FILTER_COUNT"
 
 rc=0; grep -q 'Validate spec conformance' "$WORKFLOW_FILE" || rc=1
 assert_ok "sync-check has Validate spec conformance step" "$rc"
