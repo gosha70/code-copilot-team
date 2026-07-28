@@ -71,6 +71,13 @@ export function seedCapabilities(): CapabilityRecord[] {
         "Mandatory review is gated at /cct:phase-complete and the review->next transition (Pi emits no Stop/turn-end event); weaker than Claude's Stop-hook gate.",
     },
     {
+      id: "verification.enforcement",
+      implementation_kind: "cct-first-party",
+      runtime_status: "degraded",
+      reason:
+        "Verification gates block at /cct:phase-complete + review->next (Pi has no Stop event); gates without a substrate (lint/type-check/dependency-audit) report unsupported, never a fake pass.",
+    },
+    {
       id: "integrations.mcp",
       implementation_kind: "optional-bridge",
       runtime_status: "disabled",

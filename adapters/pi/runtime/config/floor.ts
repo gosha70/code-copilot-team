@@ -21,6 +21,8 @@ export const SECURITY_FLOOR: { [path: string]: FloorCombinator } = {
   "security.sandbox_required": "bool-or",
   "security.fail_closed": "bool-or",
   "review.mandatory": "bool-or",
+  "verification.on_stop": "bool-or",
+  "verification.required": "array-union",
   "security.allow_package_install": "bool-and",
   "security.allow_secret_paths": "bool-and",
 };

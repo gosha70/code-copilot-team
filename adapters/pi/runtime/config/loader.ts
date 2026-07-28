@@ -81,6 +81,7 @@ export const BUILTIN_DEFAULTS: TomlTable = {
     denied_commands: ["git push --force", "git reset --hard", "rm -rf /"],
   },
   review: { mandatory: false, after_phase: true, allow_recursive: false },
+  verification: { on_stop: false, required: [] },
   headless: { ask_resolution: "deny" },
   limits: { timeout_sec: 900, max_review_rounds: 5 },
   session: { ephemeral: false },

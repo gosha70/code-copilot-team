@@ -64,6 +64,12 @@ import {
   submitReviewRound,
   writeDecision,
 } from "./workflow/review.ts";
+import {
+  resolveVerifyRunner,
+  runVerify,
+  verifyGate,
+  verifyWarning,
+} from "./workflow/verify.ts";
 import { isSpecPath, validateSpecDir } from "./workflow/sdd.ts";
 import {
   RISK_CATEGORIES,
@@ -255,6 +261,11 @@ export default async function (pi: any): Promise<void> {
 
   const cfg = (dotted: string): unknown => state.config?.resolved.get(dotted)?.value;
 
+  const requiredGates = (): string[] => {
+    const v = cfg("verification.required");
+    return Array.isArray(v) ? v.map(String) : [];
+  };
+
   const refreshRules = (): void => {
     state.rules = state.config ? rulesFromConfig(cfg, state.interactive) : null;
   };
@@ -344,6 +355,18 @@ export default async function (pi: any): Promise<void> {
         rule: "review.unresolved",
         subject: midReview.slice(0, 200),
         origin: "review-gate",
+      });
+    }
+    const verifyWarn = verifyWarning(state.cwd, requiredGates());
+    if (verifyWarn) {
+      state.warnings.push(verifyWarn);
+      audit({
+        mode: resolveAuditMode(state.interactive),
+        actor: "session_start",
+        decision: "warn",
+        rule: "verification.unresolved",
+        subject: verifyWarn.slice(0, 200),
+        origin: "verify-gate",
       });
     }
     refreshRules();
@@ -567,6 +590,20 @@ export default async function (pi: any): Promise<void> {
           return emit(ctx, `phase transition 'review -> ${target}' BLOCKED:\n  - ${rg.reason}`);
         }
       }
+      if (state.workflow.phase === "review" && target !== "review" && requiredGates().length > 0) {
+        const vg = verifyGate(state.cwd, requiredGates(), "review");
+        if (!vg.pass) {
+          audit({
+            mode: resolveAuditMode(state.interactive),
+            actor: "cct:phase",
+            decision: "deny",
+            rule: "verification.required",
+            subject: `review->${target}:${state.workflow.featureId ?? "<none>"}`,
+            origin: "verify-gate",
+          });
+          return emit(ctx, `phase transition 'review -> ${target}' BLOCKED:\n  - ${vg.reason}`);
+        }
+      }
       const result = transition(
         state.cwd,
         state.workflow,
@@ -722,6 +759,7 @@ export default async function (pi: any): Promise<void> {
       const gate = validateSpecDir(path.join(state.cwd, "specs", state.workflow.featureId));
       const mandatory = cfg("review.mandatory") === true;
       const rgate = reviewGate(state.cwd, mandatory, state.workflow.phase);
+      const vgate = verifyGate(state.cwd, requiredGates(), state.workflow.phase);
       const lines = [
         `feature: ${state.workflow.featureId}`,
         `phase: ${state.workflow.phase}`,
@@ -743,12 +781,60 @@ export default async function (pi: any): Promise<void> {
           origin: "review-gate",
         });
       }
-      const canComplete = gate.pass && rgate.pass;
+      lines.push(
+        `verify gate: ${vgate.pass ? "PASS" : "BLOCKED"}` +
+          (requiredGates().length ? "" : " (no gates required)"),
+      );
+      if (!vgate.pass) {
+        for (const l of vgate.reason.split("\n")) lines.push(`  ${l}`);
+        audit({
+          mode: resolveAuditMode(state.interactive),
+          actor: "cct:phase-complete",
+          decision: "deny",
+          rule: "verification.required",
+          subject: `${state.workflow.featureId}:${state.workflow.phase}`,
+          origin: "verify-gate",
+        });
+      }
+      const canComplete = gate.pass && rgate.pass && vgate.pass;
       lines.push(
         canComplete
           ? "phase may complete; advance with /cct:phase <next> " + state.workflow.featureId
           : "phase is BLOCKED",
       );
+      emit(ctx, lines.join("\n"));
+    },
+  });
+
+  pi.registerCommand?.("cct:verify", {
+    description:
+      "Run the verification gates (verification.required) and report per-gate status",
+    handler: async (ctx: any) => {
+      const gates = requiredGates();
+      if (gates.length === 0) {
+        return emit(ctx, "no verification gates required (set verification.required)");
+      }
+      const out = runVerify(
+        state.cwd,
+        resolveVerifyRunner(piAdapterDir()),
+        gates,
+        Number(cfg("limits.timeout_sec") ?? 900),
+      );
+      const vg = verifyGate(state.cwd, gates, state.workflow.phase);
+      audit({
+        mode: resolveAuditMode(state.interactive),
+        actor: "cct:verify",
+        decision: vg.pass ? "pass" : "deny",
+        rule: "verification.required",
+        subject: `${state.workflow.featureId ?? "<none>"}:${gates.join(",")}`,
+        origin: "verify-gate",
+      });
+      const lines = [
+        `verify: ${out.ran ? `ran (exit ${out.exitCode})` : "did not run"}`,
+        `  ${out.reason}`,
+        `verify gate: ${vg.pass ? "PASS" : "BLOCKED"}`,
+      ];
+      if (!vg.pass) for (const l of vg.reason.split("\n")) lines.push(`  ${l}`);
       emit(ctx, lines.join("\n"));
     },
   });

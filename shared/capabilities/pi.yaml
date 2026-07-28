@@ -67,6 +67,16 @@ capabilities:
       workflow commands are never run.
     status_probe: "reviewGate() at /cct:phase-complete and the review->next transition."
 
+  - id: verification.enforcement
+    implementation_kind: cct-first-party
+    runtime_status: degraded
+    reason: >-
+      Verification gates block at /cct:phase-complete and the review->next
+      transition (Pi emits no Stop/turn-end event); and only gates with a
+      runnable substrate run — generic lint, type-check and dependency audit
+      report `unsupported`, never a fake pass.
+    status_probe: "verifyGate() over the configured verification.required list."
+
   - id: integrations.mcp
     implementation_kind: optional-bridge
     runtime_status: disabled

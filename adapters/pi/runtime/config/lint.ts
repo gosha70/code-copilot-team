@@ -75,6 +75,7 @@ const KNOWN_KEYS = new Set([
   "security.denied_commands",
   "session.ephemeral",
   "verification.on_stop",
+  "verification.required",
   "workflow.sdd.enabled",
   "workflow.sdd.mode",
   "tools.allow",

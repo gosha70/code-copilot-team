@@ -103,6 +103,16 @@ capabilities:
     claude_equivalent: "peer-review-on-stop.sh Stop-hook gate"
     docs: shared/skills/review-loop/SKILL.md
 
+  - id: verification.enforcement
+    description: >-
+      Verification gates (tests, drift, docs, ...) block phase completion when
+      required; gate types with no runnable substrate are reported, not faked.
+    default: disabled
+    requires: [workflow.phases]
+    security_level: enforcing
+    claude_equivalent: "verify-on-stop.sh Stop-hook verification gate"
+    docs: specs/pi-harness-adoption/design-t62-verify.md
+
   - id: integrations.mcp
     description: >-
       Model Context Protocol servers can be attached, with their provenance and
