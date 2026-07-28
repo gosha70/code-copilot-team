@@ -3,48 +3,8 @@ name: Adapter Sync Check
 on:
   push:
     branches: [master, main]
-    paths:
-      - 'shared/**'
-      - 'scripts/generate.sh'
-      - 'scripts/apply-branch-protection.sh'
-      - 'scripts/check-github-hardening.sh'
-      - 'scripts/harden-github.sh'
-      - 'scripts/validate-spec.sh'
-      - 'scripts/validate-pitch.sh'
-      - 'adapters/**'
-      - 'docs/github-hardening-playbook.md'
-      - 'CODE_OF_CONDUCT.md'
-      - 'SECURITY.md'
-      - '.github/CODEOWNERS'
-      - '.github/ISSUE_TEMPLATE/**'
-      - '.github/pull_request_template.md'
-      - 'tests/**'
-      - 'specs/**'
-      - 'README.md'
-      - 'CONTRIBUTING.md'
-      - '.github/workflows/**'
   pull_request:
     branches: [master, main]
-    paths:
-      - 'shared/**'
-      - 'scripts/generate.sh'
-      - 'scripts/apply-branch-protection.sh'
-      - 'scripts/check-github-hardening.sh'
-      - 'scripts/harden-github.sh'
-      - 'scripts/validate-spec.sh'
-      - 'scripts/validate-pitch.sh'
-      - 'adapters/**'
-      - 'docs/github-hardening-playbook.md'
-      - 'CODE_OF_CONDUCT.md'
-      - 'SECURITY.md'
-      - '.github/CODEOWNERS'
-      - '.github/ISSUE_TEMPLATE/**'
-      - '.github/pull_request_template.md'
-      - 'tests/**'
-      - 'specs/**'
-      - 'README.md'
-      - 'CONTRIBUTING.md'
-      - '.github/workflows/**'
 
 permissions:
   contents: read

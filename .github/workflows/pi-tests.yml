@@ -3,32 +3,8 @@ name: Pi Adapter Tests
 on:
   push:
     branches: [master, main]
-    paths:
-      - 'adapters/pi/**'
-      - 'tests/test-pi-launcher.sh'
-      - 'tests/test-pi-adapter.sh'
-      - 'tests/test-pi-runtime.sh'
-      - 'tests/pi-runtime/**'
-      - 'scripts/generate.sh'
-      - 'scripts/validate-capabilities.sh'
-      - 'scripts/validate-cct-config.sh'
-      - 'shared/capabilities/**'
-      - 'shared/schemas/**'
-      - '.github/workflows/pi-tests.yml'
   pull_request:
     branches: [master, main]
-    paths:
-      - 'adapters/pi/**'
-      - 'tests/test-pi-launcher.sh'
-      - 'tests/test-pi-adapter.sh'
-      - 'tests/test-pi-runtime.sh'
-      - 'tests/pi-runtime/**'
-      - 'scripts/generate.sh'
-      - 'scripts/validate-capabilities.sh'
-      - 'scripts/validate-cct-config.sh'
-      - 'shared/capabilities/**'
-      - 'shared/schemas/**'
-      - '.github/workflows/pi-tests.yml'
 
 permissions:
   contents: read
