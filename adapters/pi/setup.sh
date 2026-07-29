@@ -129,6 +129,14 @@ fi
 install -m 0755 "$SCRIPT_DIR/bin/pi-code" "$LAUNCHER_TARGET"
 echo "  Installed launcher: $LAUNCHER_TARGET"
 
+# Pi review-provider adapter (T3.2) — on PATH so the [providers.pi] command
+# `pi-review-provider --input {review_request}` resolves for the review runner.
+PI_REVIEW_SRC="$SCRIPT_DIR/../../scripts/provider-adapters/pi-review-provider.sh"
+if [[ -f "$PI_REVIEW_SRC" ]]; then
+  install -m 0755 "$PI_REVIEW_SRC" "$BIN_DIR/pi-review-provider"
+  echo "  Installed review provider: $BIN_DIR/pi-review-provider"
+fi
+
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) echo "[WARN] $BIN_DIR is not on PATH — add it to your shell profile." ;;

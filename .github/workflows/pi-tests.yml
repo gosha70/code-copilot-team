@@ -77,3 +77,8 @@ jobs:
       # path is always exercised (never silently falls back to unsupported).
       - name: Runtime type-check gate
         run: CCT_REQUIRE_TSC=1 bash tests/test-typecheck-gate.sh
+
+      # T3.8: providers.pi may be `enabled` only when its acceptance suite
+      # (T3.1-T3.4) passes — the guard binds the capability to the suite.
+      - name: Pi provider enablement circuit
+        run: bash tests/test-pi-provider-gate.sh

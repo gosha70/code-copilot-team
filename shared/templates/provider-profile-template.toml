@@ -33,6 +33,7 @@ company = ""
 # every reviewer's command + healthcheck + fallback chain.
 peer_for.claude = "codex"
 peer_for.codex = "claude"
+peer_for.pi = "codex"
 
 # Fallback chain: if primary peer is unavailable, try these in order.
 # fallback_chain.claude = ["openai", "ollama", "gdx-spark"]
@@ -54,6 +55,20 @@ type = "cli"
 command = "codex --quiet --prompt-file {review_request}"
 timeout_sec = 300
 healthcheck = "codex --version"
+version = "cli"
+
+# Pi as a read-only peer reviewer (FR-015a/b, T3.1–T3.4). The adapter runs
+# `pi-code --profile peer-reviewer` (non-recursive, read-only) and normalizes the
+# review into the runner's Summary/Findings/Verdict contract. healthcheck is
+# `pi-code doctor` — it proves the launcher, the enforcement runtime, AND the pi
+# binary are actually available (exits non-zero otherwise), not mere file
+# presence. `providers.pi` stays capability-`disabled` until its acceptance suite
+# (T3.1–T3.4) passes — see scripts/pi-provider-acceptance.sh.
+[providers.pi]
+type = "custom"
+command = "pi-review-provider --input {review_request}"
+timeout_sec = 300
+healthcheck = "pi-code doctor"
 version = "cli"
 
 # ── Type: openai-compatible ──────────────────────────────────

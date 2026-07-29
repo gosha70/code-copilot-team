@@ -867,6 +867,24 @@ export default async function (pi: any): Promise<void> {
       if (!state.workflow.featureId) {
         return emit(ctx, "no active feature — set one with /cct:phase <phase> <feature-id>");
       }
+      // T3.4 (FR-015a): the peer-reviewer is a non-recursive read-only reviewer —
+      // a reviewer session must NOT start reviews. The active profile is the
+      // discriminator (review.allow_recursive is false by default for everyone,
+      // so it cannot be the signal). Blocked and audited, never a silent skip.
+      if (state.config?.profileChain.includes("peer-reviewer")) {
+        audit({
+          mode: resolveAuditMode(state.interactive),
+          actor: "cct:review-submit",
+          decision: "block",
+          rule: "review.allow_recursive",
+          subject: state.workflow.featureId,
+          origin: "review-gate",
+        });
+        return emit(
+          ctx,
+          "review blocked: the peer-reviewer is non-recursive (FR-015a) — a reviewer session cannot start reviews (rule: review.allow_recursive)",
+        );
+      }
       const parts = (typeof args === "string" ? args : "").trim().split(/\s+/).filter(Boolean);
       const peerProvider = sessionPeerProvider(parts[0] ?? "");
       const runnerPhase = state.workflow.phase === "plan" ? "plan" : "build";
