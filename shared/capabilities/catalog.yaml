@@ -140,3 +140,12 @@ capabilities:
     default: disabled
     requires: [workflow.phases]
     security_level: advisory
+
+  - id: security.sandbox
+    description: >-
+      Sandbox detection (host-unrestricted / permission-gated-only /
+      containerized / micro-vm / remote-sandboxed) and the autonomous/ci
+      rejection of unrestricted host execution absent an explicit override.
+      Permissions are NOT sandboxing (reported separately, spec P5).
+    default: disabled
+    security_level: enforcing

@@ -96,5 +96,12 @@ export function seedCapabilities(): CapabilityRecord[] {
       reason:
         "Session state persists to .cct/pi-session.json and recovers into context at session_start; checkpoints are taken at explicit CCT actions (phase transitions, /cct:checkpoint) because Pi emits no observable compaction event — not a pre-compaction hook, hence degraded.",
     },
+    {
+      id: "security.sandbox",
+      implementation_kind: "cct-first-party",
+      runtime_status: "degraded",
+      reason:
+        "Enforces the autonomous/ci no-unrestricted-host rule — rejects tool execution (fail-closed) when a sandbox is required but the environment is host-unrestricted and no override is set. Detection is best-effort (Docker via cgroup/.dockerenv; micro-vm/remote via operator CCT_SANDBOX declaration); the runtime cannot itself create a sandbox.",
+    },
   ];
 }

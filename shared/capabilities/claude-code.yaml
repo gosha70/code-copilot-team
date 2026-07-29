@@ -90,3 +90,12 @@ capabilities:
       Claude Code's PreCompact/PostCompact hooks checkpoint before compaction
       and recover after — a true pre-compaction hook (Pi has no such event).
     status_probe: "PreCompact/PostCompact hooks checkpoint + recover session state."
+
+  - id: security.sandbox
+    implementation_kind: cct-first-party
+    runtime_status: disabled
+    reason: >-
+      Pi-runtime sandbox provider (FR-019). The Claude Code adapter relies on
+      host + permission-mode controls and does not implement the CCT sandbox
+      detection/gate; reported disabled rather than overclaimed.
+    status_probe: "Not implemented in the Claude Code adapter."
