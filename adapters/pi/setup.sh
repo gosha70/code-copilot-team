@@ -4,6 +4,7 @@
 # Installs:
 #   ~/.code-copilot-team/pi/runtime/      Enforcement runtime (authored)
 #   ~/.code-copilot-team/pi/resources/    Generated advisory resources
+#   ~/.code-copilot-team/pi/permissions/  Reused Claude permission profiles (T5.2)
 #   ~/.code-copilot-team/pi/compat.env    Pi version compatibility
 #   ~/.local/bin/pi-code                  Launcher
 #
@@ -74,6 +75,7 @@ if $REPAIR; then
   }
   check "runtime"     "$MANAGED_DIR/runtime/index.ts"
   check "resources"   "$MANAGED_DIR/resources"
+  check "permissions" "$MANAGED_DIR/permissions"
   check "compat.env"  "$MANAGED_DIR/compat.env"
   check "launcher"    "$LAUNCHER_TARGET"
 
@@ -109,7 +111,14 @@ rm -rf "$MANAGED_DIR/runtime" "$MANAGED_DIR/resources"
 cp -R "$SCRIPT_DIR/runtime" "$MANAGED_DIR/runtime"
 [[ -d "$SCRIPT_DIR/resources" ]] && cp -R "$SCRIPT_DIR/resources" "$MANAGED_DIR/resources"
 cp "$SCRIPT_DIR/compat.env" "$MANAGED_DIR/compat.env"
-echo "  Installed runtime, resources, compat.env"
+
+# Reused Claude permission profiles (authored) — the Pi runtime imports these
+# live (T5.2, FR-009). Bundled so live-wiring works in the managed install, not
+# only a repo checkout, where adapters/claude-code/ is absent.
+PERMISSIONS_SRC="$SCRIPT_DIR/../claude-code/permissions"
+rm -rf "$MANAGED_DIR/permissions"
+[[ -d "$PERMISSIONS_SRC" ]] && cp -R "$PERMISSIONS_SRC" "$MANAGED_DIR/permissions"
+echo "  Installed runtime, resources, compat.env, permissions"
 
 # Launcher — refuse to clobber an unrelated pi-code
 if [[ -f "$LAUNCHER_TARGET" ]] && ! launcher_is_ours "$LAUNCHER_TARGET"; then

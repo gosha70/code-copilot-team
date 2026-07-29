@@ -12,6 +12,8 @@ export interface Profile {
   name: string;
   description: string;
   inherits?: string;
+  /** Claude permission profiles reused live (T5.2, FR-009); most-derived wins. */
+  importPermissions?: string[];
   config: TomlTable;
 }
 
@@ -28,6 +30,7 @@ export const BUILTIN_PROFILES: { [name: string]: Profile } = {
   disciplined: {
     name: "disciplined",
     description: "Default SDD, safety hooks, review, and verification",
+    importPermissions: ["balanced"],
     config: {
       workflow: { sdd: { enabled: true, mode: "enforced" } },
       security: { fail_closed: true },
@@ -47,6 +50,7 @@ export const BUILTIN_PROFILES: { [name: string]: Profile } = {
     name: "autonomous",
     description: "Autonomous build loop with required isolation",
     inherits: "disciplined",
+    importPermissions: ["relaxed"],
     config: {
       security: { sandbox_required: true },
       autonomy: {
@@ -69,6 +73,7 @@ export const BUILTIN_PROFILES: { [name: string]: Profile } = {
     name: "air-gapped",
     description: "No network integrations; local models and tools only",
     inherits: "local-first",
+    importPermissions: ["balanced"],
     config: {
       security: { deny_network: true },
       providers: { require_local: true },
@@ -88,6 +93,7 @@ export const BUILTIN_PROFILES: { [name: string]: Profile } = {
     name: "peer-reviewer",
     description:
       "Non-recursive read-only reviewer (FR-015a): no SDD, no teams, no subagents, no writes, ephemeral session",
+    importPermissions: ["balanced"],
     config: {
       workflow: { sdd: { enabled: false } },
       review: { mandatory: false, allow_recursive: false },

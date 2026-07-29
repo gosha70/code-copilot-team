@@ -192,7 +192,17 @@ protected_paths = [".env", ".git/config", "**/*.pem", "**/id_rsa*", "secrets/"] 
 denied_commands = ["git push --force"]  # subset (drops entries) -> blocked
 `,
   });
-  const r = load({ projectDir: path.join(dir, "proj"), trusted: true });
+  // Use an import-free profile so the floor baseline is the built-in defaults,
+  // isolating floor mechanics from T5.2 permission-profile imports (the default
+  // `disciplined` now imports balanced, which enriches the denied_commands /
+  // protected_paths base and would change what counts as a superset here).
+  const noImport = { neutral: { name: "neutral", description: "floor-test", config: {} } };
+  const r = load({
+    projectDir: path.join(dir, "proj"),
+    trusted: true,
+    profile: "neutral",
+    profiles: noImport,
+  });
   assert.equal(r.resolved.get("security.fail_closed").value, true, "weakening blocked");
   assert.equal(r.resolved.get("security.sandbox_required").value, true, "strengthening kept");
   assert.ok(r.resolved.get("security.protected_paths").value.includes("secrets/"));

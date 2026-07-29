@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-25
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **34 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete except the deferred T5.2 live-wiring; Phase 6 complete (T6.1–T6.5 done).
+written. Current state: **35 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete (T6.1–T6.5 done). Remaining: Slice B (Phase 3, gated).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -22,8 +22,7 @@ Work proceeds by **slice**, which deliberately deviates from phase
 numbering. Agreed sequence:
 
 1. **Slice A** — Phases 0–2 — ✅ complete
-2. **Slice C** — Phases 4–6 — in progress (Phase 4 ✅; Phase 5 ✅ except the
-   deferred T5.2 live-wiring; Phase 6 ✅)
+2. **Slice C** — Phases 4–6 — ✅ complete (Phase 4 ✅; Phase 5 ✅; Phase 6 ✅)
 3. **Slice B** — Phase 3 — **gated (R6/FR-028); runs last.** The integration
    preview validates against the completed enforcement path; `providers.pi`
    stays `disabled` until T3.2–T3.4 acceptance passes.
@@ -86,16 +85,23 @@ order deviates.
     approximated. project_trust stays Pi-internal. Existing `.sh` hooks reused
     as subprocesses (no logic ported); support gate + timeout/retry/fail-mode +
     audit._
-- [ ] **T5.2 (P0)** allow/ask/deny engine (FR-009) + deterministic headless ask; reuse `permissions/*.json` profile content via importer.
+- [x] **T5.2 (P0)** allow/ask/deny engine (FR-009) + deterministic headless ask; reuse `permissions/*.json` profile content via importer.
   - _Engine + deterministic headless ask: done (pre-existing). Importer:
     delivered — `importClaudePermissions()` pure converter maps Claude
     allow/deny/ask (bare tools, `Bash(<prefix>:*)` -> commandsDeny/Ask,
     path-scoped -> protected_paths) to Pi rule lists, with structured warnings
     for no-Pi-target entries and read-vs-write `notEnforced` reporting;
     balanced/relaxed/web-dynamic fixtures + adversarial path/Bash tests.
-    REMAINING before T5.2 is checked: wire the imported lists into the layered
-    config so profiles are reused live (deferred to a later task, per plan —
-    importer contract pinned first)._
+    LIVE-WIRING (this slice): `Profile.importPermissions?: string[]`
+    (`disciplined`/`peer-reviewer`/`air-gapped`→balanced, `autonomous`→relaxed;
+    most-derived wins); a new `policy/permission-profiles.ts` resolver reads the
+    reused JSON (managed install first — bundled by `setup.sh` — repo fallback),
+    runs the converter, and the loader injects a computed `imported` layer above
+    defaults / below the profile. Imported denies compose through the monotonic
+    floor as `base ∪ imported` (audited `strengthened`); non-floor allow/ask are
+    the base a profile may override; `warnings`/`notEnforced` surface in
+    `LoadResult.warnings`. Engine unchanged. 10 live-wiring tests + full sweep
+    green. See design-t52-live-wiring.md._
 - [x] **T5.3 (P0)** Protected paths: canonicalization, symlink defenses, git command protection, secret-path protection, package-install protection, network policy.
   - _Package-install (`allow_package_install`) + network (`deny_network`)
     enforcement now live at the bash exec path (`checkExecPolicy`): manager+verb
