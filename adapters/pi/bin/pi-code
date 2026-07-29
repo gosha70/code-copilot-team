@@ -19,6 +19,9 @@
 #   features [--json]     Report capability state (kind x runtime status)
 #   export [--json]       Redacted, portable snapshot of the resolved config
 #   resources [--json]    Report which source supplied each skill/prompt
+#   init [dir] [--profile <name>] [--dry-run]
+#                         Scaffold a Pi-native project config + ownership manifest
+#   sync [--dry-run]      Regenerate managed resources (never touches your config)
 #   help                  Show usage
 #
 # Diagnostics resolve project config as untrusted: they run outside a Pi
@@ -79,7 +82,7 @@ diag() { [[ "${DIAGNOSTIC:-false}" == "true" ]] && echo "[pi-code] $*" >&2 || tr
 # A pi-code-launched session (or a reviewer child) must not re-enter the
 # launcher and stack runtimes. CCT_PI_CODE_ACTIVE marks an active launch.
 case "${1:-}" in
-  version|help|--help|-h|doctor|config|features|export|resources) CCT_DIAGNOSTIC_CMD=true ;;
+  version|help|--help|-h|doctor|config|features|export|resources|init|sync) CCT_DIAGNOSTIC_CMD=true ;;
   *) CCT_DIAGNOSTIC_CMD=false ;;
 esac
 if [[ "${CCT_PI_CODE_ACTIVE:-}" == "1" && "$CCT_DIAGNOSTIC_CMD" == "false" ]]; then
@@ -113,6 +116,127 @@ pi_version_of() {
 # version_ge A B → 0 if A >= B (numeric, three components)
 version_ge() {
   [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" == "$2" ]]
+}
+
+# ── init / sync (T6.4, FR-000a) ─────────────────────────────
+# init scaffolds ONLY the Pi-native project footprint; sync reuses Pi's
+# LITERAL managed-resource contract. Neither touches user config once written.
+# Design: specs/pi-harness-adoption/design-t64-init-sync.md.
+
+# Portable content hash (sha256 preferred; first field only).
+hash_file() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v md5 >/dev/null 2>&1; then md5 -q "$1"
+  else md5sum "$1" | awk '{print $1}'; fi
+}
+
+# Starter config.toml (commented defaults — a starting point, enforces nothing
+# unexpected). $1 = profile name or "" (uncomments the profile line when set).
+starter_config() {
+  local prof="$1"
+  echo "# Code Copilot Team — Pi project configuration (created by 'pi-code init')."
+  echo "# Edit freely: 'pi-code sync' NEVER overwrites this file. It is layered under"
+  echo "# the global config; inspect a key with 'pi-code config explain <dotted.key>'."
+  echo ""
+  if [[ -n "$prof" ]]; then echo "profile = \"$prof\""; else echo "# profile = \"disciplined\""; fi
+  echo ""
+  echo "[workflow.sdd]"
+  echo "# enabled = true"
+  echo ""
+  echo "[review]"
+  echo "# mandatory = false"
+  echo ""
+  echo "[verification]"
+  echo "# required = []"
+}
+
+cct_init() {
+  local proj="" prof="" dry=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)   dry=true; shift ;;
+      --profile)   prof="${2:?--profile requires a name}"; shift 2 ;;
+      --profile=*) prof="${1#*=}"; shift ;;
+      -*)          err "unknown init option: $1"; return 2 ;;
+      *)           if [[ -z "$proj" ]]; then proj="$1"; shift
+                   else err "init: unexpected argument '$1'"; return 2; fi ;;
+    esac
+  done
+  [[ -n "$proj" ]] || proj="."
+  [[ -d "$proj" ]] || { err "init: project directory not found: $proj"; return 2; }
+  local cfgdir cfg mani
+  cfgdir="$proj/.code-copilot-team"; cfg="$cfgdir/config.toml"; mani="$cfgdir/.cct-init.json"
+  if [[ -f "$cfg" ]]; then
+    echo "[pi-code] already initialized — $cfg preserved (init never clobbers your config)."
+    return 0
+  fi
+  if [[ "$dry" == "true" ]]; then
+    echo "[pi-code] init --dry-run (report only — no writes):"
+    echo "  would create $cfg"
+    echo "  would create $mani"
+    return 0
+  fi
+  mkdir -p "$cfgdir"
+  starter_config "$prof" > "$cfg"
+  local h ts
+  h="$(hash_file "$cfg")"
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  cat > "$mani" <<JSON
+{
+  "name": "${prof:-default}",
+  "initialized": "$ts",
+  "cctVersion": "$PI_CODE_VERSION",
+  "generated": [
+    { "path": ".code-copilot-team/config.toml", "kind": "user-config", "hash": "$h" }
+  ]
+}
+JSON
+  echo "[pi-code] initialized $cfgdir"
+  echo "  created $cfg (yours to edit; sync never overwrites it)"
+  echo "  created $mani (ownership manifest)"
+}
+
+cct_sync() {
+  local dry=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry=true; shift ;;
+      -*)        err "unknown sync option: $1"; return 2 ;;
+      *)         err "sync takes no positional arguments (got '$1')"; return 2 ;;
+    esac
+  done
+  # Locate the CCT repo — sync reuses the repo's generate.sh + setup.sh --sync
+  # (Pi has no scaffolded project content to diff; managed resources live here).
+  local repo=""
+  if [[ -n "${CCT_REPO_DIR:-}" && -f "$CCT_REPO_DIR/scripts/generate.sh" ]]; then
+    repo="$CCT_REPO_DIR"
+  elif [[ -f "$REPO_ADAPTER_DIR/setup.sh" && -f "$REPO_ADAPTER_DIR/../../scripts/generate.sh" ]]; then
+    repo="$(cd "$REPO_ADAPTER_DIR/../.." && pwd)"
+  fi
+  if [[ -z "$repo" ]]; then
+    err "sync needs the CCT repo checkout (run pi-code from the repo, or set CCT_REPO_DIR)."
+    return 78
+  fi
+  if [[ "$dry" == "true" ]]; then
+    echo "[pi-code] sync --dry-run (report only — no writes, no staging, no git add):"
+    echo "  would run: bash $repo/adapters/pi/setup.sh --sync"
+    echo "             (regenerates adapters/pi/resources via generate.sh, then reinstalls)"
+    # Read-only drift status when the repo is a git checkout — never stages.
+    if command -v git >/dev/null 2>&1 && git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+      local drift
+      drift="$(git -C "$repo" status --porcelain adapters/pi/resources 2>/dev/null || true)"
+      if [[ -n "$drift" ]]; then
+        echo "  current generated-resource drift:"
+        echo "$drift" | sed 's/^/    /'
+      else
+        echo "  generated resources currently in sync"
+      fi
+    fi
+    return 0
+  fi
+  echo "[pi-code] sync: regenerating managed resources + reinstalling (setup.sh --sync)"
+  bash "$repo/adapters/pi/setup.sh" --sync
 }
 
 # ── Parse CCT options ───────────────────────────────────────
@@ -160,6 +284,12 @@ case "${1:-}" in
       exit 78
     fi
     CCT_RUNTIME_ENTRY="$RUNTIME_ENTRY" exec node --no-warnings --experimental-strip-types "$CLI_ENTRY" "$@"
+    ;;
+  init)
+    cct_init "${@:2}" && exit 0 || exit $?
+    ;;
+  sync)
+    cct_sync "${@:2}" && exit 0 || exit $?
     ;;
   doctor)
     # --json defers to the runtime CLI, which can report resolved

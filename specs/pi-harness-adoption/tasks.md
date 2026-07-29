@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-25
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **30 of 64 complete.** Phases 0–2 and 4 complete; Phase 5 complete except the deferred T5.2 live-wiring; Phase 6 started (T6.1 done).
+written. Current state: **33 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete except the deferred T5.2 live-wiring; Phase 6 T6.1–T6.4 done (T6.5 type-check gate remaining).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -23,7 +23,7 @@ numbering. Agreed sequence:
 
 1. **Slice A** — Phases 0–2 — ✅ complete
 2. **Slice C** — Phases 4–6 — in progress (Phase 4 ✅; Phase 5 ✅ except the
-   deferred T5.2 live-wiring; Phase 6 pending)
+   deferred T5.2 live-wiring; Phase 6 T6.1–T6.4 ✅, T6.5 type-check gate remaining)
 3. **Slice B** — Phase 3 — **gated (R6/FR-028); runs last.** The integration
    preview validates against the completed enforcement path; `providers.pi`
    stays `disabled` until T3.2–T3.4 acceptance passes.
@@ -135,7 +135,7 @@ order deviates.
     (ARG > env > profile). `--peer-review-off` / `CCT_PEER_BYPASS` = an AUDITED
     peer-review-only override at the phase-complete + review→next gates — never a
     silent `review.mandatory` downgrade, no verify/permission reach._
-- [ ] **T6.4 (P1)** `pi-code init` (reuse scaffolder) + `pi-code sync [--dry-run]` (reuse sync contract).
+- [x] **T6.4 (P1)** `pi-code init` (Pi-native `.code-copilot-team/config.toml` + `.cct-init.json` ownership manifest) + `pi-code sync [--dry-run]` (literal `generate.sh`/`setup.sh --sync` contract; manifest-driven ownership; `--dry-run` no-write/no-stage) (FR-000a).
 - [ ] **T6.5 (P1)** CCT-scoped type-check gate: `tsc --noEmit` over `adapters/pi/runtime`, promoting the T6.2 `type-check` gate from `unsupported` to `supported`. Follow-up from T6.2's honesty model; prioritized because `--experimental-strip-types` strips without checking (the T1.5 undefined defect shipped for exactly this reason).
 
 ## Slice B — Repository integration preview (Phase 3, gated per R6/FR-028)

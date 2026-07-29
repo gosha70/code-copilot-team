@@ -311,6 +311,63 @@ RES_J=$(CCT_HOME="$EXP_HOME" PATH="$DIAG_PATH" "$LAUNCHER" resources --json 2>&1
 assert "resources --json reports found:true" \
   "echo \"\$RES_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get(\"found\") else 1)'"
 
+# ── T6.4: init / sync (FR-000a) ─────────────────────────────
+echo "--- init / sync ---"
+
+INIT_DIR="$TMP/proj-init"; mkdir -p "$INIT_DIR"
+
+# --dry-run is report-only: no writes.
+DRY_OUT=$(PATH="$BASE_PATH" "$LAUNCHER" init "$INIT_DIR" --dry-run 2>&1 || true)
+assert "init --dry-run reports report-only" "echo \"\$DRY_OUT\" | grep -q 'no writes'"
+assert "init --dry-run writes nothing" "[[ -z \"\$(ls -A '$INIT_DIR')\" ]]"
+
+# Real init scaffolds ONLY the Pi-native footprint (config.toml + manifest).
+PATH="$BASE_PATH" "$LAUNCHER" init "$INIT_DIR" --profile ci >/dev/null 2>&1
+assert "init creates .code-copilot-team/config.toml" "[[ -f '$INIT_DIR/.code-copilot-team/config.toml' ]]"
+assert "init creates the .cct-init.json manifest" "[[ -f '$INIT_DIR/.code-copilot-team/.cct-init.json' ]]"
+assert "init emits no .claude/ (Pi-native only)" "[[ ! -e '$INIT_DIR/.claude' && ! -e '$INIT_DIR/CLAUDE.md' ]]"
+assert "init --profile seeds the profile" "grep -q 'profile = \"ci\"' '$INIT_DIR/.code-copilot-team/config.toml'"
+assert "manifest marks config.toml as user-config" "grep -q '\"kind\": \"user-config\"' '$INIT_DIR/.code-copilot-team/.cct-init.json'"
+
+# Ownership proof: the manifest hash matches the generated config's content.
+MANI_HASH=$(grep '"hash"' "$INIT_DIR/.code-copilot-team/.cct-init.json" | grep -oE '[0-9a-f]{32,}')
+CFG_HASH=$(shasum -a 256 "$INIT_DIR/.code-copilot-team/config.toml" | awk '{print $1}')
+assert "manifest hash matches config.toml content" "[[ -n '$MANI_HASH' && '$MANI_HASH' == '$CFG_HASH' ]]"
+
+# No-clobber: re-init preserves a user-edited config and reports it, exit 0.
+echo "# user edit" >> "$INIT_DIR/.code-copilot-team/config.toml"
+BEFORE=$(shasum -a 256 "$INIT_DIR/.code-copilot-team/config.toml" | awk '{print $1}')
+RC=0; RE_OUT=$(PATH="$BASE_PATH" "$LAUNCHER" init "$INIT_DIR" 2>&1) || RC=$?
+AFTER=$(shasum -a 256 "$INIT_DIR/.code-copilot-team/config.toml" | awk '{print $1}')
+assert "re-init preserves edited config (no clobber)" "[[ '$BEFORE' == '$AFTER' ]]"
+assert "re-init reports already-initialized" "echo \"\$RE_OUT\" | grep -qi 'already initialized'"
+assert "re-init exits 0" "[[ '$RC' == '0' ]]"
+
+RC=0; PATH="$BASE_PATH" "$LAUNCHER" init "$INIT_DIR" --bogus >/dev/null 2>&1 || RC=$?
+assert "init rejects an unknown option (exit 2)" "[[ '$RC' == '2' ]]"
+
+# sync --dry-run against a fake repo: report-only, no staging, names the contract.
+FAKE="$TMP/fakerepo"; mkdir -p "$FAKE/scripts" "$FAKE/adapters/pi"
+: > "$FAKE/scripts/generate.sh"; : > "$FAKE/adapters/pi/setup.sh"
+SYNC_OUT=$(CCT_REPO_DIR="$FAKE" PATH="$BASE_PATH" "$LAUNCHER" sync --dry-run 2>&1 || true)
+assert "sync --dry-run is report-only (no staging)" "echo \"\$SYNC_OUT\" | grep -q 'no staging'"
+assert "sync --dry-run names setup.sh --sync" "echo \"\$SYNC_OUT\" | grep -q 'setup.sh --sync'"
+
+RC=0; PATH="$BASE_PATH" "$LAUNCHER" sync --bogus >/dev/null 2>&1 || RC=$?
+assert "sync rejects an unknown option (exit 2)" "[[ '$RC' == '2' ]]"
+RC=0; PATH="$BASE_PATH" "$LAUNCHER" sync extra >/dev/null 2>&1 || RC=$?
+assert "sync rejects a positional arg (exit 2)" "[[ '$RC' == '2' ]]"
+
+# sync from an isolated location with no repo -> honest exit 78 (not a silent no-op).
+ISO="$TMP/iso"; mkdir -p "$ISO"; cp "$LAUNCHER" "$ISO/pi-code"; chmod +x "$ISO/pi-code"
+RC=0; CCT_REPO_DIR=/nonexistent PATH="$BASE_PATH" "$ISO/pi-code" sync --dry-run >/dev/null 2>&1 || RC=$?
+assert "sync without a repo fails with exit 78" "[[ '$RC' == '78' ]]"
+
+# init/sync are exempt from the recursion guard (they never re-enter pi).
+mkdir -p "$TMP/proj2"
+RC=0; CCT_PI_CODE_ACTIVE=1 PATH="$BASE_PATH" "$LAUNCHER" init "$TMP/proj2" --dry-run >/dev/null 2>&1 || RC=$?
+assert "init allowed under the recursion guard" "[[ '$RC' == '0' ]]"
+
 # ── Summary ─────────────────────────────────────────────────
 echo ""
 echo "========================================="
