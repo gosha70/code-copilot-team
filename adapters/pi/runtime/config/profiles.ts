@@ -120,7 +120,7 @@ export function resolveProfileChain(
         `circular profile inheritance detected: ${[...seen, cursor].join(" -> ")}`,
       );
     }
-    const profile = registry[cursor];
+    const profile: Profile | undefined = registry[cursor];
     if (!profile) {
       throw new ProfileError(
         `unknown profile '${cursor}' (available: ${Object.keys(registry).sort().join(", ")})`,

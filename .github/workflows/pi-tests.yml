@@ -21,6 +21,11 @@ jobs:
         with:
           node-version: '22'
 
+      # T6.5: the type-check gate needs a real tsc — install the pinned devDeps
+      # (typescript, @types/node) from the committed lockfile.
+      - name: Install dev dependencies
+        run: npm ci
+
       # T0.6: the version compatibility declaration is consumed by CI, not just
       # by the launcher. Guards the drift case where compat.env is bumped but
       # the launcher's fallback constant is not.
@@ -66,3 +71,9 @@ jobs:
             echo "This job must execute them — check the Node version above."
             exit 1
           fi
+
+      # T6.5: the CCT-scoped type-check gate — tsc --noEmit over the Pi runtime.
+      # CCT_REQUIRE_TSC=1 fails the job if typescript is absent, so the supported
+      # path is always exercised (never silently falls back to unsupported).
+      - name: Runtime type-check gate
+        run: CCT_REQUIRE_TSC=1 bash tests/test-typecheck-gate.sh
