@@ -57,6 +57,11 @@ import {
 } from "./workflow/phases.ts";
 import type { WorkflowState } from "./workflow/phases.ts";
 import {
+  loadCheckpoint,
+  recoveryDigest,
+  writeCheckpoint,
+} from "./workflow/checkpoint.ts";
+import {
   midReviewWarning,
   peerReviewDisabled,
   resolveReviewRunner,
@@ -348,6 +353,32 @@ export default async function (pi: any): Promise<void> {
     state.hookScriptsDir = resolveHookScriptsDir(piAdapterDir());
     loadConfigForState(state, state.cwd);
     state.workflow = loadState(state.cwd);
+    // T9.1 (FR-017): post-compaction / restart recovery. Pi emits no compaction
+    // event, so recovery runs here — re-inject a digest + the compaction prompt
+    // so the model re-learns where CCT left off. Audited, best-effort.
+    const recovered = loadCheckpoint(state.cwd);
+    if (recovered) {
+      state.warnings.push(
+        `session recovery: resumed from checkpoint #${recovered.checkpointCount} ` +
+          `(${recovered.phase ?? "no phase"}/${recovered.featureId ?? "no feature"})`,
+      );
+      const rApi = ctx?.addContext ?? ctx?.appendSystemContext ?? pi?.registerContext;
+      if (typeof rApi === "function") {
+        try {
+          rApi.call(ctx ?? pi, recoveryDigest(recovered));
+        } catch {
+          /* best-effort: recovery context is advisory */
+        }
+      }
+      audit({
+        mode: resolveAuditMode(state.interactive),
+        actor: "session_start",
+        decision: "recovered",
+        rule: "session.checkpoint",
+        subject: `#${recovered.checkpointCount}:${recovered.featureId ?? "<none>"}`,
+        origin: "session",
+      });
+    }
     const midReview = midReviewWarning(state.cwd);
     if (midReview) {
       state.warnings.push(midReview);
@@ -635,6 +666,17 @@ export default async function (pi: any): Promise<void> {
         return emit(ctx, `phase transition to '${target}' BLOCKED:\n  - ${result.reasons.join("\n  - ")}`);
       }
       state.workflow = result.state;
+      // T9.1: checkpoint on every phase transition (an explicit CCT action —
+      // the durable substitute for a missing pre-compaction hook).
+      writeCheckpoint(
+        state.cwd,
+        {
+          phase: state.workflow.phase,
+          featureId: state.workflow.featureId,
+          note: `entered ${state.workflow.phase}`,
+        },
+        new Date().toISOString(),
+      );
       updateStatus(ctx);
       const pol = resolvePhasePolicy(cfg, state.workflow.phase);
       emit(
@@ -644,6 +686,27 @@ export default async function (pi: any): Promise<void> {
           (result.gate ? ` — SDD gate: PASS (${result.gate.specMode})` : "") +
           `\n  policy (resolved, not enforced): model=${pol.model} thinking=${pol.thinking} ` +
           `permissions=${pol.permissions}\n  tools: ${pol.tools.join(", ") || "<inherit>"}`,
+      );
+    },
+  });
+
+  pi.registerCommand?.("cct:checkpoint", {
+    description: "Save a durable session checkpoint (recovered at next session start)",
+    handler: async (ctx: any) => {
+      const cp = writeCheckpoint(
+        state.cwd,
+        {
+          phase: state.workflow.phase,
+          featureId: state.workflow.featureId,
+          note: `manual checkpoint in ${state.workflow.phase}`,
+        },
+        new Date().toISOString(),
+      );
+      emit(
+        ctx,
+        `checkpoint #${cp.checkpointCount} saved ` +
+          `(${cp.phase ?? "no phase"}/${cp.featureId ?? "no feature"}) — ` +
+          "recovered automatically at the next session start",
       );
     },
   });

@@ -89,5 +89,12 @@ export function seedCapabilities(): CapabilityRecord[] {
       runtime_status: "unavailable",
       reason: "Anthropic-hosted services are external platforms; never claimed as Pi parity.",
     },
+    {
+      id: "memory.session-state",
+      implementation_kind: "cct-first-party",
+      runtime_status: "degraded",
+      reason:
+        "Session state persists to .cct/pi-session.json and recovers into context at session_start; checkpoints are taken at explicit CCT actions (phase transitions, /cct:checkpoint) because Pi emits no observable compaction event — not a pre-compaction hook, hence degraded.",
+    },
   ];
 }

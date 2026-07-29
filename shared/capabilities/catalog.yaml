@@ -130,3 +130,13 @@ capabilities:
     security_level: none
     claude_equivalent: "Claude Code hosted features"
     docs: specs/pi-harness-adoption/spec.md
+
+  - id: memory.session-state
+    description: >-
+      Session state (workflow phase, active feature) persists across restarts
+      and is recovered into context at session start. Pre-compaction checkpoint
+      when the harness exposes a compaction event; otherwise checkpoints are
+      taken at explicit CCT actions.
+    default: disabled
+    requires: [workflow.phases]
+    security_level: advisory
