@@ -94,3 +94,13 @@ capabilities:
       Anthropic-hosted services are external platforms; never claimed as Pi
       parity.
     status_probe: "Not probed — external platform by definition."
+
+  - id: memory.session-state
+    implementation_kind: cct-first-party
+    runtime_status: degraded
+    reason: >-
+      Session state persists to .cct/pi-session.json and recovers into context
+      at session start; checkpoints are taken at explicit CCT actions (phase
+      transitions, /cct:checkpoint) because Pi emits no observable compaction
+      event — not a pre-compaction hook, hence degraded.
+    status_probe: "loadCheckpoint()/recoveryDigest() at session_start; writeCheckpoint() on /cct:checkpoint + phase transition."

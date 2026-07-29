@@ -82,3 +82,11 @@ capabilities:
       Claude Code is the first-party client for these services, so they are
       native here and external-platform elsewhere.
     status_probe: "Provided by the host application."
+
+  - id: memory.session-state
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    reason: >-
+      Claude Code's PreCompact/PostCompact hooks checkpoint before compaction
+      and recover after — a true pre-compaction hook (Pi has no such event).
+    status_probe: "PreCompact/PostCompact hooks checkpoint + recover session state."
