@@ -20,7 +20,7 @@ function tmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "cct-rec-"));
 }
 
-async function drive(cwd) {
+async function drive(cwd, trusted = true) {
   const commands = {};
   const handlers = {};
   const injected = [];
@@ -32,7 +32,7 @@ async function drive(cwd) {
   };
   const sessionCtx = {
     cwd,
-    isProjectTrusted: () => false,
+    isProjectTrusted: () => trusted,
     hasUI: false,
     mode: "print",
     addContext: (t) => injected.push(t),
@@ -59,19 +59,26 @@ async function drive(cwd) {
   return { commands, injected, notified, cmdCtx };
 }
 
-test("recovery: a pre-existing checkpoint is re-injected + reported at session_start", async () => {
+test("recovery: a TRUSTED project re-injects the checkpoint digest at session_start", async () => {
   const cwd = tmp();
   writeCheckpoint(cwd, { phase: "build", featureId: "feat-9" }, "2026-07-29T00:00:00Z");
-  const { injected } = await drive(cwd);
-  // The recovery digest — with the feature, phase, and the compaction-
-  // preservation prompt — must be re-injected into the resumed session's
-  // context (the mechanism that lets the model re-learn CCT state).
+  const { injected } = await drive(cwd, true);
   const digest = injected.find((t) => t.includes("CCT session recovery"));
-  assert.ok(digest, "recovery digest must be injected into context");
+  assert.ok(digest, "recovery digest must be injected into context for a trusted project");
   assert.match(digest, /feat-9/);
   assert.match(digest, /build/);
   assert.match(digest, /checkpoint #1/);
   assert.match(digest, /CCT compaction guidance/);
+});
+
+test("SECURITY: an UNTRUSTED project withholds recovery context injection", async () => {
+  const cwd = tmp();
+  writeCheckpoint(cwd, { phase: "build", featureId: "feat-9" }, "2026-07-29T00:00:00Z");
+  const { injected } = await drive(cwd, false);
+  assert.ok(
+    !injected.some((t) => t.includes("CCT session recovery")),
+    "untrusted project must NOT inject the checkpoint digest into context",
+  );
 });
 
 test("no checkpoint -> clean start (no recovery injection)", async () => {

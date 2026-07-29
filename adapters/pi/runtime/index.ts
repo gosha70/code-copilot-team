@@ -59,7 +59,7 @@ import type { WorkflowState } from "./workflow/phases.ts";
 import {
   loadCheckpoint,
   recoveryDigest,
-  writeCheckpoint,
+  tryWriteCheckpoint,
 } from "./workflow/checkpoint.ts";
 import {
   midReviewWarning,
@@ -362,13 +362,25 @@ export default async function (pi: any): Promise<void> {
         `session recovery: resumed from checkpoint #${recovered.checkpointCount} ` +
           `(${recovered.phase ?? "no phase"}/${recovered.featureId ?? "no feature"})`,
       );
-      const rApi = ctx?.addContext ?? ctx?.appendSystemContext ?? pi?.registerContext;
-      if (typeof rApi === "function") {
-        try {
-          rApi.call(ctx ?? pi, recoveryDigest(recovered));
-        } catch {
-          /* best-effort: recovery context is advisory */
+      // Trust-gate the CONTEXT injection: .cct/pi-session.json is untrusted
+      // project-local input (may be tampered), so its recovery digest is
+      // injected into model context ONLY for a positively-trusted project
+      // (FR-004a) — same discipline as project config. Fields are also
+      // sanitized on load (defense-in-depth).
+      if (state.trust === "trusted") {
+        const rApi =
+          ctx?.addContext ?? ctx?.appendSystemContext ?? pi?.registerContext;
+        if (typeof rApi === "function") {
+          try {
+            rApi.call(ctx ?? pi, recoveryDigest(recovered));
+          } catch {
+            /* best-effort: recovery context is advisory */
+          }
         }
+      } else {
+        state.warnings.push(
+          "session recovery: context injection withheld — project not positively trusted",
+        );
       }
       audit({
         mode: resolveAuditMode(state.interactive),
@@ -668,15 +680,21 @@ export default async function (pi: any): Promise<void> {
       state.workflow = result.state;
       // T9.1: checkpoint on every phase transition (an explicit CCT action —
       // the durable substitute for a missing pre-compaction hook).
-      writeCheckpoint(
-        state.cwd,
-        {
-          phase: state.workflow.phase,
-          featureId: state.workflow.featureId,
-          note: `entered ${state.workflow.phase}`,
-        },
-        new Date().toISOString(),
-      );
+      if (
+        !tryWriteCheckpoint(
+          state.cwd,
+          {
+            phase: state.workflow.phase,
+            featureId: state.workflow.featureId,
+            note: `entered ${state.workflow.phase}`,
+          },
+          new Date().toISOString(),
+        )
+      ) {
+        state.warnings.push(
+          "checkpoint write failed (durability is best-effort; the phase transition itself is unaffected)",
+        );
+      }
       updateStatus(ctx);
       const pol = resolvePhasePolicy(cfg, state.workflow.phase);
       emit(
@@ -693,7 +711,7 @@ export default async function (pi: any): Promise<void> {
   pi.registerCommand?.("cct:checkpoint", {
     description: "Save a durable session checkpoint (recovered at next session start)",
     handler: async (ctx: any) => {
-      const cp = writeCheckpoint(
+      const cp = tryWriteCheckpoint(
         state.cwd,
         {
           phase: state.workflow.phase,
@@ -702,6 +720,12 @@ export default async function (pi: any): Promise<void> {
         },
         new Date().toISOString(),
       );
+      if (!cp) {
+        return emit(
+          ctx,
+          "checkpoint write failed — check .cct/ path and permissions (no workflow state was lost)",
+        );
+      }
       emit(
         ctx,
         `checkpoint #${cp.checkpointCount} saved ` +
