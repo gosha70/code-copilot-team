@@ -1,10 +1,10 @@
 {
-  "//": "CCT-scoped type-check config for the Pi enforcement runtime (T6.5, FR-016). `tsc --noEmit -p` here is the type-check verification gate. Settings mirror the `node --experimental-strip-types` runtime: ESM with extension-ful `.ts` imports, checked but never emitted. `strict` is the enforced baseline (catches the T1.5-class null/undefined defects strip-types silently ships). `noUncheckedIndexedAccess` is a deferred tightening: it currently flags ~28 safe-in-practice index-access sites whose mass rewrite is out of T6.5's scope; enable it once those are hardened.",
+  "//": "CCT-scoped type-check config for the Pi enforcement runtime (T6.5, FR-016). `tsc --noEmit -p` here is the type-check verification gate. `module`/`moduleResolution: nodenext` (with the sibling package.json `type: module`) makes tsc model `node --experimental-strip-types` resolution exactly — relative imports must carry an extension — so the gate cannot pass code the runtime would fail to load with ERR_MODULE_NOT_FOUND (bundler resolution silently allowed extensionless imports; that parity hole is closed). `allowImportingTsExtensions` keeps the runtime's `.ts` imports legal; checked but never emitted. `strict` is the enforced baseline (catches the T1.5-class null/undefined defects strip-types silently ships). `noUncheckedIndexedAccess` is a deferred tightening: it currently flags ~28 safe-in-practice index-access sites whose mass rewrite is out of T6.5's scope; enable it once those are hardened.",
   "compilerOptions": {
     "target": "es2023",
     "lib": ["es2023"],
-    "module": "esnext",
-    "moduleResolution": "bundler",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
