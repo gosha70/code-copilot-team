@@ -106,7 +106,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument(
         "--backend",
         default=None,
-        help="Backend name. One of: claude, codex, cursor, test. "
+        help="Backend name. One of: claude, codex, pi, cursor, test. "
              "Defaults to WIKI_INGEST_BACKEND env var, then auto-detect.",
     )
     p_ingest.add_argument(
@@ -195,7 +195,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p_query.add_argument(
         "--backend",
         default=None,
-        help="Backend name (claude / codex / cursor / test). Defaults "
+        help="Backend name (claude / codex / pi / cursor / test). Defaults "
              "to WIKI_INGEST_BACKEND env var, then auto-detect.",
     )
     p_query.add_argument(

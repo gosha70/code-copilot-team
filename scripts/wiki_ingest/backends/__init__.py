@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -28,8 +29,46 @@ _REGISTRY: dict[str, type] = {
     "test": TestBackend,
 }
 
-# Auto-detect order: first found on PATH wins.
-_AUTO_DETECT_ORDER: tuple[str, ...] = ("claude", "codex", "cursor")
+# Every valid copilot-CLI backend name. Explicit `--backend <name>` (or the
+# WIKI_INGEST_BACKEND env override) accepts any of these first-class — pi
+# included. Auto-detect is a separate, capability-gated concern (see below).
+_COPILOT_NAMES: tuple[str, ...] = ("claude", "codex", "cursor", "pi")
+
+
+def _pi_capability_enabled() -> bool:
+    """True iff the providers.pi capability reports `enabled` (FR-025/FR-028).
+
+    Read from shared/capabilities/pi.yaml — the same declaration the runtime
+    binds to its acceptance suite. PATH presence of pi-code is NOT sufficient;
+    auto-detect only considers pi when the capability is genuinely enabled.
+    """
+    yaml_path = Path(__file__).resolve().parents[3] / "shared" / "capabilities" / "pi.yaml"
+    try:
+        text = yaml_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    in_block = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- id: providers.pi"):
+            in_block = True
+            continue
+        if in_block:
+            if stripped.startswith("- id:"):
+                break
+            if stripped.startswith("runtime_status:"):
+                return stripped.split(":", 1)[1].strip() == "enabled"
+    return False
+
+
+def _auto_detect_order() -> tuple[str, ...]:
+    """Auto-detect probe order. pi is inserted (claude → codex → pi → cursor)
+    ONLY when its capability is enabled; explicit --backend pi is unaffected."""
+    order = ["claude", "codex"]
+    if _pi_capability_enabled():
+        order.append("pi")
+    order.append("cursor")
+    return tuple(order)
 
 
 def get_backend(name: str) -> "Backend":
@@ -54,11 +93,12 @@ def auto_detect() -> "Backend":
 
     Raises BackendNotFoundError if none of the candidates are on PATH.
     """
-    for cli_name in _AUTO_DETECT_ORDER:
+    order = _auto_detect_order()
+    for cli_name in order:
         if shutil.which(cli_binary_for(cli_name)):
             return CopilotCliBackend(cli_name)
     raise BackendNotFoundError(
-        "No copilot CLI on PATH. Tried: " + ", ".join(_AUTO_DETECT_ORDER) +
+        "No copilot CLI on PATH. Tried: " + ", ".join(order) +
         ". Install one or use --backend test for fixture runs."
     )
 
@@ -109,7 +149,7 @@ def _resolve_by_name(name: str) -> "Backend":
     # Copilot-CLI backends — verify the CLI is on PATH (fail-fast semantics).
     # Look up the on-disk binary name (cursor → cursor-agent, etc.) so the
     # PATH probe finds the right executable.
-    if name in _AUTO_DETECT_ORDER:
+    if name in _COPILOT_NAMES:
         binary = cli_binary_for(name)
         if shutil.which(binary):
             return CopilotCliBackend(name)
@@ -119,7 +159,7 @@ def _resolve_by_name(name: str) -> "Backend":
         )
 
     # Unknown name.
-    valid_options = list(_REGISTRY.keys()) + list(_AUTO_DETECT_ORDER)
+    valid_options = list(_REGISTRY.keys()) + list(_COPILOT_NAMES)
     raise BackendNotFoundError(
         f"Unknown backend name: {name!r}. "
         "Valid options: " + ", ".join(valid_options) + "."

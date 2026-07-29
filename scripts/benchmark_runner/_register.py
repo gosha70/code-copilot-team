@@ -67,6 +67,8 @@ def register_all() -> None:
     register_backend(codex_backend.BACKEND_FAMILY, codex_backend.factory)
     from .backends import aider as aider_backend
     register_backend(aider_backend.BACKEND_FAMILY, aider_backend.factory)
+    from .backends import pi as pi_backend
+    register_backend(pi_backend.BACKEND_FAMILY, pi_backend.factory)
 
     # Judges (TB1.5). Each judge module exposes a ``factory``
     # function; register it under every accepted family token. The
