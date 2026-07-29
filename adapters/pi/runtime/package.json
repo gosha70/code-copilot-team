@@ -1,0 +1,4 @@
+{
+  "//": "Declares the Pi enforcement runtime as ESM so its module resolution matches `node --experimental-strip-types` at runtime (detect-module already treats it as ESM; this makes it explicit) AND so `tsc` under moduleResolution:nodenext models the same rules — relative imports must carry an extension, closing the bundler-vs-node parity hole (T6.5 follow-up).",
+  "type": "module"
+}
