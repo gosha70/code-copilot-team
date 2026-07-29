@@ -122,6 +122,9 @@ NO_CCT=false
 NO_PROJECT_CONFIG=false
 DIAGNOSTIC=false
 CLI_SETS=""
+PEER_ENABLED=""      # "" = unset (neither --peer-review nor --peer-review-off)
+PEER_PROVIDER=""
+PEER_SCOPE="both"
 PI_ARGS=()
 
 case "${1:-}" in
@@ -210,6 +213,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --diagnostic)  DIAGNOSTIC=true; shift ;;
     --)            shift; PI_ARGS+=("$@"); break ;;
+    --peer-review)
+      PEER_ENABLED=true
+      # Optional provider (mirror Claude): consume $2 only if it is not a
+      # flag, a path, or a directory — else `--peer-review /proj` would eat it.
+      if [[ -n "${2:-}" && "${2#-}" == "$2" && "$2" != */* && ! -d "$2" ]]; then
+        PEER_PROVIDER="$2"; shift
+      fi
+      shift ;;
+    --peer-review=*)      PEER_ENABLED=true; PEER_PROVIDER="${1#*=}"; shift ;;
+    --peer-review-off)    PEER_ENABLED=false; shift ;;
+    --peer-review-scope)  PEER_SCOPE="${2:?--peer-review-scope requires code|design|both}"; shift 2 ;;
+    --peer-review-scope=*) PEER_SCOPE="${1#*=}"; shift ;;
     -*)            PI_ARGS+=("$1"); shift ;;   # unknown option → forward to pi
     *)
       if [[ -z "$PROJECT_PATH" && -d "$1" ]]; then
@@ -221,6 +236,18 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Validate the peer-review scope (fail-fast; Claude leaves it unvalidated).
+case "$PEER_SCOPE" in
+  code|design|both) ;;
+  *) err "--peer-review-scope must be code|design|both (got '$PEER_SCOPE')"; exit 2 ;;
+esac
+
+# The launcher OWNS the peer-review env: clear any AMBIENT CCT_PEER_* so only
+# these flags (or their absence) reach Pi. Ambient shell values must never be a
+# backdoor that bypasses the mandatory-review gate (guardrail A). The enforced
+# export block below re-sets them from the parsed flags.
+unset CCT_PEER_REVIEW_ENABLED CCT_PEER_PROVIDER CCT_PEER_REVIEW_SCOPE
 
 # ── Launch ──────────────────────────────────────────────────
 if ! PI_BIN="$(resolve_pi)"; then
@@ -282,4 +309,11 @@ export CCT_PROFILE="$PROFILE"
 export CCT_PI_MODE
 [[ -n "$CLI_SETS" ]] && export CCT_CLI_SETS="$CLI_SETS"
 $NO_PROJECT_CONFIG && export CCT_NO_PROJECT_CONFIG=1
+# Peer-review session contract (FR-000a). Session intent only — read by
+# /cct:review-submit; never mutates persisted config. Enforced path only.
+[[ -n "$PEER_ENABLED" ]] && export CCT_PEER_REVIEW_ENABLED="$PEER_ENABLED"
+if [[ "$PEER_ENABLED" == "true" ]]; then
+  [[ -n "$PEER_PROVIDER" ]] && export CCT_PEER_PROVIDER="$PEER_PROVIDER"
+  export CCT_PEER_REVIEW_SCOPE="$PEER_SCOPE"
+fi
 exec "$PI_BIN" --extension "$RUNTIME_ENTRY" ${PI_ARGS[@]+"${PI_ARGS[@]}"}

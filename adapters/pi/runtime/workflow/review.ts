@@ -263,6 +263,35 @@ export function resolveTargetRef(projectRoot: string, arg?: string): string {
   return "HEAD~1";
 }
 
+/**
+ * Peer-review session contract (T6.3, FR-000a). These read the launcher-set
+ * `CCT_PEER_*` env as SESSION INTENT only — they never mutate persisted config,
+ * and the precedence is always explicit-arg > env > profile default.
+ */
+export function sessionPeerProvider(arg: string): string {
+  return arg || process.env.CCT_PEER_PROVIDER || "";
+}
+
+export function sessionReviewScope(): string {
+  const s = process.env.CCT_PEER_REVIEW_SCOPE;
+  return s === "code" || s === "design" || s === "both" ? s : "both";
+}
+
+/**
+ * Audited peer-review override (decision B): `--peer-review-off`
+ * (`CCT_PEER_REVIEW_ENABLED=false`) or `CCT_PEER_BYPASS=true`. This NEVER
+ * downgrades `review.mandatory` (config-authoritative policy is untouched) — it
+ * only signals that the mandatory-review gate should be waived for THIS session,
+ * and every use is audited by the caller. Peer-review only; no reach into
+ * verify/permissions/SDD gates.
+ */
+export function peerReviewDisabled(): boolean {
+  return (
+    process.env.CCT_PEER_REVIEW_ENABLED === "false" ||
+    process.env.CCT_PEER_BYPASS === "true"
+  );
+}
+
 /** Does the current loop-summary satisfy a mandatory-review gate? */
 export function reviewPasses(projectRoot: string): boolean {
   const s = loadLoopSummary(projectRoot);

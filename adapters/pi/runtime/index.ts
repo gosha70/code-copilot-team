@@ -58,9 +58,12 @@ import {
 import type { WorkflowState } from "./workflow/phases.ts";
 import {
   midReviewWarning,
+  peerReviewDisabled,
   resolveReviewRunner,
   resolveTargetRef,
   reviewGate,
+  sessionPeerProvider,
+  sessionReviewScope,
   submitReviewRound,
   writeDecision,
 } from "./workflow/review.ts";
@@ -578,7 +581,16 @@ export default async function (pi: any): Promise<void> {
       // out of an unresolved mandatory review without a PASS/bypass summary.
       if (state.workflow.phase === "review" && target !== "review" && cfg("review.mandatory") === true) {
         const rg = reviewGate(state.cwd, true, "review");
-        if (!rg.pass) {
+        if (!rg.pass && peerReviewDisabled()) {
+          audit({
+            mode: resolveAuditMode(state.interactive),
+            actor: "cct:phase",
+            decision: "override",
+            rule: "peer-review-off",
+            subject: `review->${target}:${state.workflow.featureId ?? "<none>"}`,
+            origin: "review-gate",
+          });
+        } else if (!rg.pass) {
           audit({
             mode: resolveAuditMode(state.interactive),
             actor: "cct:phase",
@@ -759,6 +771,7 @@ export default async function (pi: any): Promise<void> {
       const gate = validateSpecDir(path.join(state.cwd, "specs", state.workflow.featureId));
       const mandatory = cfg("review.mandatory") === true;
       const rgate = reviewGate(state.cwd, mandatory, state.workflow.phase);
+      const reviewOverride = mandatory && !rgate.pass && peerReviewDisabled();
       const vgate = verifyGate(state.cwd, requiredGates(), state.workflow.phase);
       const lines = [
         `feature: ${state.workflow.featureId}`,
@@ -767,10 +780,19 @@ export default async function (pi: any): Promise<void> {
       ];
       for (const r of gate.reasons) lines.push(`  - ${r}`);
       lines.push(
-        `review gate: ${rgate.pass ? "PASS" : "BLOCKED"}` +
+        `review gate: ${rgate.pass ? "PASS" : reviewOverride ? "OVERRIDDEN (--peer-review-off)" : "BLOCKED"}` +
           (mandatory ? "" : " (review not mandatory)"),
       );
-      if (!rgate.pass) {
+      if (reviewOverride) {
+        audit({
+          mode: resolveAuditMode(state.interactive),
+          actor: "cct:phase-complete",
+          decision: "override",
+          rule: "peer-review-off",
+          subject: `${state.workflow.featureId}:${state.workflow.phase}`,
+          origin: "review-gate",
+        });
+      } else if (!rgate.pass) {
         lines.push(`  - ${rgate.reason}`);
         audit({
           mode: resolveAuditMode(state.interactive),
@@ -796,7 +818,7 @@ export default async function (pi: any): Promise<void> {
           origin: "verify-gate",
         });
       }
-      const canComplete = gate.pass && rgate.pass && vgate.pass;
+      const canComplete = gate.pass && (rgate.pass || reviewOverride) && vgate.pass;
       lines.push(
         canComplete
           ? "phase may complete; advance with /cct:phase <next> " + state.workflow.featureId
@@ -846,7 +868,7 @@ export default async function (pi: any): Promise<void> {
         return emit(ctx, "no active feature — set one with /cct:phase <phase> <feature-id>");
       }
       const parts = (typeof args === "string" ? args : "").trim().split(/\s+/).filter(Boolean);
-      const peerProvider = parts[0] ?? "";
+      const peerProvider = sessionPeerProvider(parts[0] ?? "");
       const runnerPhase = state.workflow.phase === "plan" ? "plan" : "build";
       const limits = {
         maxRounds: Number(cfg("limits.max_review_rounds") ?? 5),
@@ -861,7 +883,7 @@ export default async function (pi: any): Promise<void> {
           phase: runnerPhase,
           subjectProvider: "pi",
           peerProvider,
-          reviewScope: "both",
+          reviewScope: sessionReviewScope(),
           targetRef: resolveTargetRef(state.cwd, parts[1]),
           loopStart: Math.floor(Date.now() / 1000),
         },
