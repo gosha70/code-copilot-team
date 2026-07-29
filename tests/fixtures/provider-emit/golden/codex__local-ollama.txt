@@ -1,0 +1,4 @@
+# provider 'local-ollama' -> codex (append to ~/.codex/config.toml; idempotent)
+[model_providers.local-ollama]
+name = "local-ollama"
+base_url = "http://localhost:11434"

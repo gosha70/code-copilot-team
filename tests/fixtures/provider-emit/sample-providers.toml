@@ -1,0 +1,11 @@
+# Sample provider profile for provider-emit golden tests.
+[providers.gdx]
+type = "openai-compatible"
+base_url = "http://192.168.1.50:8000/v1"
+api_key_env = "GDX_KEY"
+model = "deepseek-coder-v2"
+
+[providers.local-ollama]
+type = "ollama"
+host = "localhost:11434"
+model = "llama3.1:70b"

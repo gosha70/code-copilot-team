@@ -1,0 +1,9 @@
+{
+  "//": "provider 'local-ollama' -> windsurf: paste into Settings -> Models (best-effort)",
+  "modelProvider": {
+    "id": "local-ollama",
+    "baseUrl": "http://localhost:11434",
+    "model": "llama3.1:70b",
+    "apiKeyEnv": ""
+  }
+}

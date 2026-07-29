@@ -28,6 +28,10 @@ PLAYWRIGHT_MODE=0
 MEMKERNEL_ENABLED=0
 MEMKERNEL_SOURCE=""
 
+# Provider config: delegate --provider to the shared translator (T2.2).
+source "$SHARED_DIR/scripts/provider-setup.sh"
+if cct_handle_provider_flag "claude-code" "$@"; then exit 0; fi
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --sync)

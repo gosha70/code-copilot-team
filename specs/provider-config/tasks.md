@@ -24,7 +24,7 @@ Phased delivery per `plan.md`. Each task is bounded and independently verifiable
 
 ## Phase 2 — `provider-emit.sh` translator + per-adapter `--provider` flag
 
-### T2.1 — `provider-emit.sh` translator
+### T2.1 — `provider-emit.sh` translator ✅
 - **Output:** `shared/scripts/provider-emit.sh <copilot> <provider-id> [--profile-file <path>]` reads the profile file (default `~/.code-copilot-team/providers.toml`), looks up the provider, emits per-copilot config:
   - claude-code: env-var block to stdout (`export ANTHROPIC_BASE_URL=...`)
   - aider: env-var block + suggested `--model <prefix>/<id>` flag to stdout
@@ -33,11 +33,11 @@ Phased delivery per `plan.md`. Each task is bounded and independently verifiable
   - cursor / windsurf: settings-JSON snippet to stdout for paste-into-UI
 - **Done when:** `tests/test-provider-emit.sh` runs the translator for each (copilot, sample-profile) pair and snapshot-asserts the output matches a committed golden file.
 
-### T2.2 — Per-adapter `--provider` flag
+### T2.2 — Per-adapter `--provider` flag ✅
 - **Output:** each `adapters/<copilot>/setup.sh` accepts optional `--provider <id>` and `--providers-file <path>`. When set: invokes `shared/scripts/provider-emit.sh <copilot> <provider-id>` and writes to the right destination (stdout-for-shell-rc, or copilot's config file).
 - **Done when:** end-to-end smoke for each copilot — given a sample provider profile, `setup.sh --provider <id>` produces config that the copilot would actually read.
 
-### T2.3 — Backwards compatibility test
+### T2.3 — Backwards compatibility test ✅
 - **Output:** existing `setup.sh` invocations (no `--provider`) continue to install conventions/rules unchanged. Test asserts the no-provider output is byte-identical (or content-equivalent) to pre-Phase-2 output.
 - **Done when:** test in `tests/test-adapter-setup-backcompat.sh` (new) passes.
 

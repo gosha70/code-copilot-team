@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-25
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **42 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; Slice B: gate cluster (T3.1–T3.4, T3.8) + benchmark backend (T3.5) + wiki backend (T3.7) done. Remaining in Slice B: T3.6 (BLOCKED — provider-emit.sh not built) + T3.9 (bench preset).
+written. Current state: **43 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; Slice B: gate cluster (T3.1–T3.4, T3.8) + T3.5 + T3.6 (unblocked — built provider-config Phase 2) + T3.7 done. Remaining in Slice B: T3.9 (bench preset).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -157,8 +157,8 @@ integration preview validates against the completed enforcement path;
   - _ENFORCED now, tested through the real policy path (`checkTool`/`checkCommand`/the `/cct:review-submit` handler): read-only tool allowlist (write/edit/bash denied), `allow_package_install:false`, and no-recursion (a reviewer session is blocked from starting reviews — T3.4). `timeout_sec` flows to the review-runner spawn. HONESTLY NOT YET ENFORCED: `session.ephemeral`, `agents.teams_enabled`/`subagents_enabled`, `max_tokens` — those operations don't exist until Slice D (Phases 7–8); the checks land with them. `peer-reviewer-exec` (sandboxed exec variant) is deferred to the runner-sandbox work. The declared flags remain honest config, not faked enforcement._
 - [x] **T3.4 (P0)** No-recursion verification tests (reviewer cannot start reviews, launcher recursion markers).
 - [x] **T3.5 (P1)** Benchmark backend `scripts/benchmark_runner/backends/pi.py` over `--mode json`; run-record schema fields per provider-config spec; stub-benchmark CI smoke.
-- [ ] **T3.6 (P1)** `provider-emit.sh` `pi` target (settings fragments / custom provider entries).
-  - _BLOCKED: `provider-emit.sh` does not exist in the repo — it is a provider-config Phase 2 deliverable (`shared/scripts/provider-emit.sh`, spec'd "new") that has not been built. A `pi` target cannot be added to a nonexistent translator; building the whole framework is out of T3.6's scope. Unblocks once provider-emit.sh lands._
+- [x] **T3.6 (P1)** `provider-emit.sh` `pi` target (settings fragments / custom provider entries).
+  - _UNBLOCKED + done: built provider-config Phase 2 (T2.1/T2.2) in full — `shared/scripts/provider-emit.sh` translates a provider profile per copilot (claude-code/aider/codex/github-copilot/cursor/windsurf/**pi**), golden-tested (`tests/test-provider-emit.sh`, 20); the `pi` target emits a `.code-copilot-team/config.toml` provider fragment. All 7 `adapters/<copilot>/setup.sh` gained `--provider`/`--providers-file` via a shared handler (`provider-setup.sh`); codex idempotently appends to `~/.codex/config.toml`. Backcompat proven (no `--provider` = inert). `tests/test-provider-setup.sh` (10)._
 - [x] **T3.7 (P1)** Wiki backend: explicit `--backend pi` first; auto-detect insertion (`claude → codex → pi → cursor`) only when capability `enabled` (FR-025/FR-028).
 - [x] **T3.8 (P1)** Capability flip logic: `providers.pi` reports `disabled` with reason until T3.2–T3.4 acceptance passes; PATH presence never implies `enabled`.
 - [ ] **T3.9 (P2)** Bench preset featuring a Pi-driven comparison.
