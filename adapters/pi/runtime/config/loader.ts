@@ -20,6 +20,7 @@ import { parseToml, TomlError } from "./toml.ts";
 import type { TomlTable, TomlValue } from "./toml.ts";
 import { BUILTIN_PROFILES, resolveProfileChain } from "./profiles.ts";
 import type { Profile } from "./profiles.ts";
+import { buildImportedLayer } from "../policy/permission-profiles.ts";
 import { applyFloorValue, isFloorPath } from "./floor.ts";
 import { CONFIG_SCHEMA_VERSION, CONFIG_VERSION_KEY, migrateTable } from "./migrate.ts";
 import type { MigrationNote } from "./migrate.ts";
@@ -169,6 +170,41 @@ export function loadLayeredConfig(opts: LoadOptions): LoadResult {
   try {
     const chain = resolveProfileChain(opts.profile, opts.profiles ?? BUILTIN_PROFILES);
     result.profileChain = chain.map((p) => p.name);
+    // T5.2 (FR-009): reuse the Claude permission profile(s) named by the chain
+    // (most-derived profile wins). The computed layer sits ABOVE defaults and
+    // BELOW the profile chain, so imported denies union into the floor as the
+    // base protective posture while the profile/user layers refine non-floor
+    // lists or strengthen the floor further. Warnings/notEnforced are surfaced.
+    let importNames: string[] = [];
+    for (const p of chain) {
+      if (p.importPermissions && p.importPermissions.length > 0) {
+        importNames = p.importPermissions;
+      }
+    }
+    if (importNames.length > 0) {
+      const sec = BUILTIN_DEFAULTS.security;
+      const baseSec =
+        typeof sec === "object" && sec !== null && !Array.isArray(sec)
+          ? sec
+          : {};
+      const base = {
+        protectedPaths: Array.isArray(baseSec.protected_paths)
+          ? (baseSec.protected_paths as string[])
+          : [],
+        deniedCommands: Array.isArray(baseSec.denied_commands)
+          ? (baseSec.denied_commands as string[])
+          : [],
+      };
+      const imported = buildImportedLayer(importNames, opts.globalDir, base);
+      if (Object.keys(imported.table).length > 0) {
+        layers.push({
+          name: "imported",
+          source: `<imported:${importNames.join(",")}>`,
+          table: imported.table,
+        });
+      }
+      for (const w of imported.warnings) result.warnings.push(w);
+    }
     for (const p of chain) {
       layers.push({ name: "profile", source: `<profile:${p.name}>`, table: p.config });
     }
