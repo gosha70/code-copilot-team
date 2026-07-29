@@ -95,6 +95,8 @@ CLI_BINARY_MAP: dict[str, str] = {
     "claude": "claude",
     "codex": "codex",
     "cursor": "cursor-agent",
+    # pi's user-facing name maps to the pi-code launcher (T3.7).
+    "pi": "pi-code",
 }
 
 # User-facing backend name → invocation args inserted between the binary and
@@ -103,6 +105,9 @@ _CLI_INVOCATION_MAP: dict[str, list[str]] = {
     "claude": ["-p"],
     "codex": ["exec"],
     "cursor": ["-p"],
+    # pi-code -p "<prompt>" forwards print-mode to pi (a normal render
+    # invocation — not a review; the peer-reviewer profile is T3.2's concern).
+    "pi": ["-p"],
 }
 
 
