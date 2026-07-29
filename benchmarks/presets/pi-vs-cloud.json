@@ -1,0 +1,18 @@
+{
+  "benchmark": "aider-polyglot",
+  "runs": 3,
+  "attempt_timeout_seconds": 600,
+  "task": ["python/bowling", "go/bowling"],
+  "candidates": [
+    {
+      "name": "pi-local",
+      "backend": "pi",
+      "model": "qwen2.5-coder:7b"
+    },
+    {
+      "name": "claude-code-sonnet-cloud",
+      "backend": "claude-code",
+      "model": "sonnet"
+    }
+  ]
+}
