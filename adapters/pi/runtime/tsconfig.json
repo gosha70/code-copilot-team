@@ -1,0 +1,17 @@
+{
+  "//": "CCT-scoped type-check config for the Pi enforcement runtime (T6.5, FR-016). `tsc --noEmit -p` here is the type-check verification gate. Settings mirror the `node --experimental-strip-types` runtime: ESM with extension-ful `.ts` imports, checked but never emitted. `strict` is the enforced baseline (catches the T1.5-class null/undefined defects strip-types silently ships). `noUncheckedIndexedAccess` is a deferred tightening: it currently flags ~28 safe-in-practice index-access sites whose mass rewrite is out of T6.5's scope; enable it once those are hardened.",
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}

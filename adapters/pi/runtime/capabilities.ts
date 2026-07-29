@@ -75,7 +75,7 @@ export function seedCapabilities(): CapabilityRecord[] {
       implementation_kind: "cct-first-party",
       runtime_status: "degraded",
       reason:
-        "Verification gates block at /cct:phase-complete + review->next (Pi has no Stop event); gates without a substrate (lint/type-check/dependency-audit) report unsupported, never a fake pass.",
+        "Verification gates block at /cct:phase-complete + review->next (Pi has no Stop event); type-check runs tsc --noEmit over the runtime when typescript is installed (else unsupported); lint/dependency-audit still report unsupported, never a fake pass.",
     },
     {
       id: "integrations.mcp",

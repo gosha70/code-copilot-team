@@ -21,5 +21,12 @@
     "themes": [
       "./adapters/pi/resources/themes"
     ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p adapters/pi/runtime/tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "5.7.3"
   }
 }

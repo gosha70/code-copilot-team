@@ -44,6 +44,18 @@ record() { # <gate> <status> <pass:true|false> <detail>
 
 run_quiet() { ( cd "$PROJECT_DIR" && "$@" ) >/dev/null 2>&1; }
 
+# Resolve a runnable tsc (project node_modules first, then the runner's repo).
+# Prints the path on success; non-zero when typescript is not installed.
+resolve_tsc() {
+  if [[ -x "$PROJECT_DIR/node_modules/.bin/tsc" ]]; then
+    echo "$PROJECT_DIR/node_modules/.bin/tsc"; return 0
+  fi
+  if [[ -x "$SCRIPT_DIR/../node_modules/.bin/tsc" ]]; then
+    echo "$SCRIPT_DIR/../node_modules/.bin/tsc"; return 0
+  fi
+  return 1
+}
+
 # --- per-gate handlers ------------------------------------------------------
 gate_drift() {
   if [[ ! -x "$SCRIPT_DIR/generate.sh" ]]; then
@@ -84,6 +96,25 @@ gate_build() {
   fi
 }
 
+# type-check (T6.5): tsc --noEmit over the CCT Pi runtime. Supported only when
+# both the runtime tsconfig and a runnable tsc are present — else unsupported,
+# never a fake pass (strip-types runs the runtime without ever checking it).
+gate_type_check() {
+  local tsconfig="$PROJECT_DIR/adapters/pi/runtime/tsconfig.json"
+  if [[ ! -f "$tsconfig" ]]; then
+    record type-check unsupported false "no adapters/pi/runtime/tsconfig.json in this project"; return
+  fi
+  local tsc
+  if ! tsc="$(resolve_tsc)"; then
+    record type-check unsupported false "typescript not installed (npm install typescript); tsc --noEmit not runnable"; return
+  fi
+  if ( cd "$PROJECT_DIR" && "$tsc" --noEmit -p "$tsconfig" ) >/dev/null 2>&1; then
+    record type-check supported true "tsc --noEmit clean over adapters/pi/runtime"
+  else
+    record type-check supported false "tsc --noEmit reported type errors in adapters/pi/runtime"
+  fi
+}
+
 # No substrate in this repo — reported honestly, never faked.
 gate_unsupported() { record "$1" unsupported false "$2"; }
 
@@ -95,7 +126,7 @@ for gate in ${GATES//,/ }; do
     integration)    gate_tests integration ;;
     build)          gate_build ;;
     lint)           gate_unsupported lint "no generic code linter wired in this project" ;;
-    type-check)     gate_unsupported type-check "no tsc --noEmit/mypy runner (strip-types does not check)" ;;
+    type-check)     gate_type_check ;;
     dependency-audit) gate_unsupported dependency-audit "no npm audit/pip-audit/dependency-review configured" ;;
     security)       record security degraded false "repo-config hardening only; no code SAST" ;;
     visual)         gate_unsupported visual "ui-harness requires a web project with a running dev server" ;;

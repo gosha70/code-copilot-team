@@ -72,9 +72,10 @@ capabilities:
     runtime_status: degraded
     reason: >-
       Verification gates block at /cct:phase-complete and the review->next
-      transition (Pi emits no Stop/turn-end event); and only gates with a
-      runnable substrate run — generic lint, type-check and dependency audit
-      report `unsupported`, never a fake pass.
+      transition (Pi emits no Stop/turn-end event); type-check runs
+      `tsc --noEmit` over the runtime when typescript is installed (else
+      `unsupported`); generic lint and dependency audit still report
+      `unsupported`, never a fake pass.
     status_probe: "verifyGate() over the configured verification.required list."
 
   - id: integrations.mcp
