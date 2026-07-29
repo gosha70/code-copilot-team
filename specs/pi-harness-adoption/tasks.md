@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-25
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **35 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete (T6.1–T6.5 done). Remaining: Slice B (Phase 3, gated).
+written. Current state: **40 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; Slice B gate cluster complete (T3.1–T3.4, T3.8 — providers.pi flipped to `enabled`, bound to its acceptance suite). Remaining in Slice B: T3.5–T3.7, T3.9 (benchmark/emit/wiki/preset).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -151,14 +151,15 @@ _Sequenced after Slice C per the execution-order note at the top: the gated
 integration preview validates against the completed enforcement path;
 `providers.pi` stays `disabled` until T3.2–T3.4 acceptance passes._
 
-- [ ] **T3.1 (P0)** `[providers.pi]` seed + `peer_for.pi` in `shared/templates/provider-profile-template.toml`; `providers-health.sh` Pi check (`pi-code version`).
-- [ ] **T3.2 (P0)** `pi-review-provider` adapter script (FR-015b): validates `{review_request}` path, no shell interpolation, invokes `pi-code --profile peer-reviewer`, normalizes output, stderr diagnostics, runner exit codes. Flag validation vs pinned Pi version (V3: `--no-session` or temp `--session` fallback).
-- [ ] **T3.3 (P0)** `peer-reviewer` profile enforcement (FR-015a): read-only tools (`read,grep,find,ls`), ephemeral session, no SDD/teams/subagents/write/packages, timeout + token budget; `peer-reviewer-exec` variant gated on runner sandbox confirmation.
-- [ ] **T3.4 (P0)** No-recursion verification tests (reviewer cannot start reviews, launcher recursion markers).
+- [x] **T3.1 (P0)** `[providers.pi]` seed + `peer_for.pi` in `shared/templates/provider-profile-template.toml`; `providers-health.sh` Pi check (`pi-code version`).
+- [x] **T3.2 (P0)** `pi-review-provider` adapter script (FR-015b): validates `{review_request}` path, no shell interpolation, invokes `pi-code --profile peer-reviewer`, normalizes output, stderr diagnostics, runner exit codes. Flag validation vs pinned Pi version (V3: `--no-session` or temp `--session` fallback).
+- [x] **T3.3 (P0)** `peer-reviewer` profile enforcement (FR-015a): read-only tools (`read,grep,find,ls`), ephemeral session, no SDD/teams/subagents/write/packages, timeout + token budget; `peer-reviewer-exec` variant gated on runner sandbox confirmation.
+  - _ENFORCED now, tested through the real policy path (`checkTool`/`checkCommand`/the `/cct:review-submit` handler): read-only tool allowlist (write/edit/bash denied), `allow_package_install:false`, and no-recursion (a reviewer session is blocked from starting reviews — T3.4). `timeout_sec` flows to the review-runner spawn. HONESTLY NOT YET ENFORCED: `session.ephemeral`, `agents.teams_enabled`/`subagents_enabled`, `max_tokens` — those operations don't exist until Slice D (Phases 7–8); the checks land with them. `peer-reviewer-exec` (sandboxed exec variant) is deferred to the runner-sandbox work. The declared flags remain honest config, not faked enforcement._
+- [x] **T3.4 (P0)** No-recursion verification tests (reviewer cannot start reviews, launcher recursion markers).
 - [ ] **T3.5 (P1)** Benchmark backend `scripts/benchmark_runner/backends/pi.py` over `--mode json`; run-record schema fields per provider-config spec; stub-benchmark CI smoke.
 - [ ] **T3.6 (P1)** `provider-emit.sh` `pi` target (settings fragments / custom provider entries).
 - [ ] **T3.7 (P1)** Wiki backend: explicit `--backend pi` first; auto-detect insertion (`claude → codex → pi → cursor`) only when capability `enabled` (FR-025/FR-028).
-- [ ] **T3.8 (P1)** Capability flip logic: `providers.pi` reports `disabled` with reason until T3.2–T3.4 acceptance passes; PATH presence never implies `enabled`.
+- [x] **T3.8 (P1)** Capability flip logic: `providers.pi` reports `disabled` with reason until T3.2–T3.4 acceptance passes; PATH presence never implies `enabled`.
 - [ ] **T3.9 (P2)** Bench preset featuring a Pi-driven comparison.
 
 ## Slice D — Agent execution (Phases 7–8)

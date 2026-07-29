@@ -59,9 +59,9 @@ export function seedCapabilities(): CapabilityRecord[] {
     {
       id: "providers.pi",
       implementation_kind: "cct-first-party",
-      runtime_status: "disabled",
+      runtime_status: "enabled",
       reason:
-        "Provider plumbing is installed, but the dedicated read-only reviewer execution contract has not passed its acceptance gates.",
+        "The read-only reviewer execution contract (T3.1-T3.4) passes its acceptance suite (scripts/pi-provider-acceptance.sh) — the single source of truth. Enablement is bound to that suite by tests/test-pi-provider-gate.sh; PATH presence never implies enabled. Runtime availability of the pi binary is gated separately by the pi-code doctor health probe.",
     },
     {
       id: "review.enforcement",
