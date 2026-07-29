@@ -18,12 +18,15 @@ import {
   loadLoopSummary,
   loadReviewState,
   midReviewWarning,
+  peerReviewDisabled,
   prepareReviewLoop,
   resolveReviewRunner,
   resolveTargetRef,
   reviewGate,
   reviewPasses,
   runReviewRound,
+  sessionPeerProvider,
+  sessionReviewScope,
   submitReviewRound,
   writeDecision,
 } from "../../adapters/pi/runtime/workflow/review.ts";
@@ -272,4 +275,55 @@ test("every key set by every BUILTIN_PROFILES entry is lint-known", () => {
     }
   }
   assert.deepEqual(offenders, [], `profiles ship keys the lint flags unknown: ${offenders.join(", ")}`);
+});
+
+// ── T6.3: peer-review session contract (CCT_PEER_*) ─────────────────────────
+
+function withEnv(vars, fn) {
+  const prev = {};
+  for (const k of Object.keys(vars)) prev[k] = process.env[k];
+  try {
+    for (const [k, v] of Object.entries(vars)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fn();
+  } finally {
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+test("sessionPeerProvider: ARG > CCT_PEER_PROVIDER > profile-default(empty)", () => {
+  withEnv({ CCT_PEER_PROVIDER: "codex" }, () => {
+    assert.equal(sessionPeerProvider("gemini"), "gemini"); // explicit arg wins
+    assert.equal(sessionPeerProvider(""), "codex"); // env fallback
+  });
+  withEnv({ CCT_PEER_PROVIDER: undefined }, () => {
+    assert.equal(sessionPeerProvider(""), ""); // profile default (runner resolves)
+  });
+});
+
+test("sessionReviewScope: env value; default both; invalid -> both", () => {
+  withEnv({ CCT_PEER_REVIEW_SCOPE: undefined }, () => assert.equal(sessionReviewScope(), "both"));
+  withEnv({ CCT_PEER_REVIEW_SCOPE: "code" }, () => assert.equal(sessionReviewScope(), "code"));
+  withEnv({ CCT_PEER_REVIEW_SCOPE: "design" }, () => assert.equal(sessionReviewScope(), "design"));
+  withEnv({ CCT_PEER_REVIEW_SCOPE: "both" }, () => assert.equal(sessionReviewScope(), "both"));
+  withEnv({ CCT_PEER_REVIEW_SCOPE: "bogus" }, () => assert.equal(sessionReviewScope(), "both"));
+});
+
+test("peerReviewDisabled: only CCT_PEER_REVIEW_ENABLED=false or CCT_PEER_BYPASS=true", () => {
+  withEnv({ CCT_PEER_REVIEW_ENABLED: undefined, CCT_PEER_BYPASS: undefined }, () =>
+    assert.equal(peerReviewDisabled(), false),
+  );
+  withEnv({ CCT_PEER_REVIEW_ENABLED: "false" }, () => assert.equal(peerReviewDisabled(), true));
+  withEnv({ CCT_PEER_REVIEW_ENABLED: "true" }, () => assert.equal(peerReviewDisabled(), false));
+  withEnv({ CCT_PEER_REVIEW_ENABLED: undefined, CCT_PEER_BYPASS: "true" }, () =>
+    assert.equal(peerReviewDisabled(), true),
+  );
+  // Guardrail A: these are session intent — they never mutate config. A bare
+  // "enabled" set to anything but the literal "false" does NOT disable review.
+  withEnv({ CCT_PEER_REVIEW_ENABLED: "0" }, () => assert.equal(peerReviewDisabled(), false));
 });

@@ -49,6 +49,9 @@ if [[ "\${1:-}" == "--version" ]]; then echo "$version"; exit 0; fi
   echo "CCT_PI_CODE_ACTIVE:\${CCT_PI_CODE_ACTIVE:-unset}"
   echo "CCT_PROFILE:\${CCT_PROFILE:-unset}"
   echo "CCT_PI_MODE:\${CCT_PI_MODE:-unset}"
+  echo "CCT_PEER_REVIEW_ENABLED:\${CCT_PEER_REVIEW_ENABLED:-unset}"
+  echo "CCT_PEER_PROVIDER:\${CCT_PEER_PROVIDER:-unset}"
+  echo "CCT_PEER_REVIEW_SCOPE:\${CCT_PEER_REVIEW_SCOPE:-unset}"
 } > "$TMP/capture.txt"
 exit \${PI_SHIM_EXIT:-0}
 SHIM
@@ -142,6 +145,48 @@ mode_case "--mode=rpc"       rpc
 mode_case "--mode print"     print
 mode_case "chat --mode json" json
 mode_case "--thinking high"  tui
+
+# ── Peer-review launcher flags → CCT_PEER_* (T6.3, FR-000a) ──
+echo "--- peer-review flags ---"
+peer_run() { rm -f "$TMP/capture.txt"; PATH="$TMP/bin-new:$BASE_PATH" "$LAUNCHER" "$@" > /dev/null 2>&1 || true; }
+
+peer_run --peer-review
+assert "peer: --peer-review sets ENABLED=true" "grep -q 'CCT_PEER_REVIEW_ENABLED:true' '$TMP/capture.txt'"
+assert "peer: no provider -> unset" "grep -q 'CCT_PEER_PROVIDER:unset' '$TMP/capture.txt'"
+assert "peer: default scope both" "grep -q 'CCT_PEER_REVIEW_SCOPE:both' '$TMP/capture.txt'"
+
+peer_run --peer-review codex
+assert "peer: spaced provider consumed" "grep -q 'CCT_PEER_PROVIDER:codex' '$TMP/capture.txt'"
+
+peer_run --peer-review=gemini
+assert "peer: equals provider consumed" "grep -q 'CCT_PEER_PROVIDER:gemini' '$TMP/capture.txt'"
+
+peer_run --peer-review --profile ci
+assert "peer: following flag NOT eaten as provider" "grep -q 'CCT_PEER_PROVIDER:unset' '$TMP/capture.txt'"
+assert "peer: --profile still applies after --peer-review" "grep -q 'CCT_PROFILE:ci' '$TMP/capture.txt'"
+
+peer_run --peer-review-off
+assert "peer: --peer-review-off sets ENABLED=false" "grep -q 'CCT_PEER_REVIEW_ENABLED:false' '$TMP/capture.txt'"
+assert "peer: off exports no scope" "grep -q 'CCT_PEER_REVIEW_SCOPE:unset' '$TMP/capture.txt'"
+
+peer_run --peer-review --peer-review-scope code
+assert "peer: scope spaced=code" "grep -q 'CCT_PEER_REVIEW_SCOPE:code' '$TMP/capture.txt'"
+peer_run --peer-review --peer-review-scope=design
+assert "peer: scope equals=design" "grep -q 'CCT_PEER_REVIEW_SCOPE:design' '$TMP/capture.txt'"
+
+rm -f "$TMP/capture.txt"
+SCOPE_ERR=$(PATH="$TMP/bin-new:$BASE_PATH" "$LAUNCHER" --peer-review --peer-review-scope bogus 2>&1 >/dev/null || true)
+assert "peer: invalid scope rejected with error" "echo \"$SCOPE_ERR\" | grep -qF 'code|design|both'"
+assert "peer: invalid scope did not launch pi" "! test -f '$TMP/capture.txt'"
+
+peer_run --profile ci
+assert "peer: no flags -> ENABLED unset" "grep -q 'CCT_PEER_REVIEW_ENABLED:unset' '$TMP/capture.txt'"
+
+peer_run --no-cct --peer-review codex
+assert "peer: --no-cct carries no peer env" "grep -q 'CCT_PEER_REVIEW_ENABLED:unset' '$TMP/capture.txt'"
+
+peer_run --thinking high
+assert "peer: unknown flag still forwarded" "grep -q -- '--thinking high' '$TMP/capture.txt'"
 
 # ── no passthrough args ─────────────────────────────────────
 # bash 3.2 (macOS /bin/bash) errors on "${a[@]}" for an empty array under

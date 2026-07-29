@@ -148,3 +148,13 @@ Minor items (my call, low-risk):
   error on invalid; pi-code is `set -euo`).
 - Divergence: the required trio is fully mirrored, so no new capability; at most a
   one-line parity note in `review.enforcement.reason`.
+
+## Implementation refinement — launcher owns the peer env (guardrail A hardening)
+
+Surfaced during implementation + testing: an AMBIENT shell `CCT_PEER_REVIEW_ENABLED=false`
+(e.g. inherited from the Claude launcher that started the shell) would otherwise
+leak through `exec` into the Pi session and silently trigger the audited bypass
+WITHOUT `--peer-review-off` — exactly guardrail A's backdoor. Fix: `pi-code`
+**unsets ambient `CCT_PEER_*` and re-sets only from its own flags** before exec,
+on both paths. The launcher is therefore the SOLE sanctioned source of the peer
+contract; the runtime (loaded only via `pi-code`) never sees ambient shell values.

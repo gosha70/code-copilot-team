@@ -126,7 +126,15 @@ order deviates.
     event, and lint/type-check/dependency-audit report `unsupported`, never
     faked). Fail-closed: absent runner + non-empty required = FAIL, and
     required+unsupported = a hard config error (leak-shaped tests cover both)._
-- [ ] **T6.3 (P1)** Audited human override; `CCT_PEER_*` env contract via launcher flags (FR-000a).
+- [x] **T6.3 (P1)** Audited human override; `CCT_PEER_*` env contract via launcher flags (FR-000a).
+  - _pi-code mirrors `--peer-review [provider]` / `--peer-review-off` /
+    `--peer-review-scope` (spaced + equals; optional-provider heuristic; scope
+    validated) and exports the FR-000a trio on the enforced path only. The
+    launcher OWNS the peer env (clears ambient `CCT_PEER_*` — no shell backdoor,
+    guardrail A). `/cct:review-submit` reads provider/scope as session intent
+    (ARG > env > profile). `--peer-review-off` / `CCT_PEER_BYPASS` = an AUDITED
+    peer-review-only override at the phase-complete + review→next gates — never a
+    silent `review.mandatory` downgrade, no verify/permission reach._
 - [ ] **T6.4 (P1)** `pi-code init` (reuse scaffolder) + `pi-code sync [--dry-run]` (reuse sync contract).
 - [ ] **T6.5 (P1)** CCT-scoped type-check gate: `tsc --noEmit` over `adapters/pi/runtime`, promoting the T6.2 `type-check` gate from `unsupported` to `supported`. Follow-up from T6.2's honesty model; prioritized because `--experimental-strip-types` strips without checking (the T1.5 undefined defect shipped for exactly this reason).
 
