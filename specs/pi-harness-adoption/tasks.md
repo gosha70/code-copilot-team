@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-25
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **43 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; Slice B: gate cluster (T3.1–T3.4, T3.8) + T3.5 + T3.6 (unblocked — built provider-config Phase 2) + T3.7 done. Remaining in Slice B: T3.9 (bench preset).
+written. Current state: **44 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**. Remaining: Slice D (Phases 7–8), Slice E (Phases 9–10), Slice F (Phase 11).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -23,7 +23,7 @@ numbering. Agreed sequence:
 
 1. **Slice A** — Phases 0–2 — ✅ complete
 2. **Slice C** — Phases 4–6 — ✅ complete (Phase 4 ✅; Phase 5 ✅; Phase 6 ✅)
-3. **Slice B** — Phase 3 — **gated (R6/FR-028); runs last.** The integration
+3. **Slice B** — Phase 3 — ✅ complete (gated acceptance passed; providers.pi enabled).  ~~**gated (R6/FR-028); runs last.**~~ The integration
    preview validates against the completed enforcement path; `providers.pi`
    stays `disabled` until T3.2–T3.4 acceptance passes.
 4. **Slice D** — Phases 7–8, then **Slice E** — Phases 9–10.
@@ -161,7 +161,7 @@ integration preview validates against the completed enforcement path;
   - _UNBLOCKED + done: built provider-config Phase 2 (T2.1/T2.2) in full — `shared/scripts/provider-emit.sh` translates a provider profile per copilot (claude-code/aider/codex/github-copilot/cursor/windsurf/**pi**), golden-tested (`tests/test-provider-emit.sh`, 20); the `pi` target emits a `.code-copilot-team/config.toml` provider fragment. All 7 `adapters/<copilot>/setup.sh` gained `--provider`/`--providers-file` via a shared handler (`provider-setup.sh`); codex idempotently appends to `~/.codex/config.toml`. Backcompat proven (no `--provider` = inert). `tests/test-provider-setup.sh` (10)._
 - [x] **T3.7 (P1)** Wiki backend: explicit `--backend pi` first; auto-detect insertion (`claude → codex → pi → cursor`) only when capability `enabled` (FR-025/FR-028).
 - [x] **T3.8 (P1)** Capability flip logic: `providers.pi` reports `disabled` with reason until T3.2–T3.4 acceptance passes; PATH presence never implies `enabled`.
-- [ ] **T3.9 (P2)** Bench preset featuring a Pi-driven comparison.
+- [x] **T3.9 (P2)** Bench preset featuring a Pi-driven comparison.
 
 ## Slice D — Agent execution (Phases 7–8)
 
