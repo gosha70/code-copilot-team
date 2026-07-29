@@ -1,0 +1,5 @@
+# provider 'gdx' -> codex (append to ~/.codex/config.toml; idempotent)
+[model_providers.gdx]
+name = "gdx"
+base_url = "http://192.168.1.50:8000/v1"
+env_key = "GDX_KEY"

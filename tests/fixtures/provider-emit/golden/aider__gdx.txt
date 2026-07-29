@@ -1,0 +1,4 @@
+# provider 'gdx' -> aider (source this)
+export OPENAI_API_BASE="http://192.168.1.50:8000/v1"
+export OPENAI_API_KEY="${GDX_KEY:?set GDX_KEY}"
+# suggested: aider --model openai/deepseek-coder-v2

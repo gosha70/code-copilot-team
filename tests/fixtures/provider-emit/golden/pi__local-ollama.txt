@@ -1,0 +1,5 @@
+# provider 'local-ollama' -> pi: add to .code-copilot-team/config.toml
+[providers.local-ollama]
+type = "ollama"
+model = "llama3.1:70b"
+base_url = "http://localhost:11434"

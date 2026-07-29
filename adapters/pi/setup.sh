@@ -21,6 +21,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
 REPO_DIR="$SCRIPT_DIR/../.."
+
+# Provider config: delegate --provider to the shared translator (T2.2).
+source "$REPO_DIR/shared/scripts/provider-setup.sh"
+if cct_handle_provider_flag "pi" "$@"; then exit 0; fi
 CCT_HOME="${CCT_HOME:-$HOME/.code-copilot-team}"
 MANAGED_DIR="$CCT_HOME/pi"
 BIN_DIR="${CCT_BIN_DIR:-$HOME/.local/bin}"

@@ -1,0 +1,3 @@
+# provider 'local-ollama' -> aider (source this)
+export OLLAMA_API_BASE="http://localhost:11434"
+# suggested: aider --model ollama_chat/llama3.1:70b

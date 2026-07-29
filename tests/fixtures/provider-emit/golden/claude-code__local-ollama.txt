@@ -1,0 +1,2 @@
+# provider 'local-ollama' -> claude-code (Anthropic Messages env; source this)
+export ANTHROPIC_BASE_URL="http://localhost:11434"

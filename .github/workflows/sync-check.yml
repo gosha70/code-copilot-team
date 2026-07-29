@@ -62,6 +62,12 @@ jobs:
       - name: Run review loop integration tests
         run: bash tests/test-review-loop.sh
 
+      - name: Run provider-emit translator tests
+        run: bash tests/test-provider-emit.sh
+
+      - name: Run provider adapter --provider wiring tests
+        run: bash tests/test-provider-setup.sh
+
       - name: Run auto-build loop tests
         run: bash tests/test-auto-build-loop.sh
 

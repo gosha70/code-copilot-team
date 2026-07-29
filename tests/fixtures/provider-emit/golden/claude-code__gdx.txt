@@ -1,0 +1,3 @@
+# provider 'gdx' -> claude-code (Anthropic Messages env; source this)
+export ANTHROPIC_BASE_URL="http://192.168.1.50:8000/v1"
+export ANTHROPIC_AUTH_TOKEN="${GDX_KEY:?set GDX_KEY}"
