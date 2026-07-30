@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-25
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **45 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; Slice E started (T9.1 durable sessions done, degraded). Remaining: Slice D (Phases 7–8), Slice E (T9.2, T10.x), Slice F (Phase 11).
+written. Current state: **46 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; Slice E in progress (T9.1 durable sessions + T10.1 sandbox done, both degraded). Remaining: Slice D (Phases 7–8), Slice E (T9.2, T10.2–T10.4), Slice F (Phase 11).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -177,7 +177,8 @@ integration preview validates against the completed enforcement path;
 - [x] **T9.1 (P0)** Session-state persistence + pre/post-compaction checkpoint/recovery + CCT compaction prompt (FR-017).
   - _DEGRADED by construction — Pi emits no observable compaction event (`hooks/events.ts`: PreCompact/PostCompact `unsupported`), so this cannot be a true pre-compaction hook. Delivered: `workflow/checkpoint.ts` — a durable `.cct/pi-session.json` checkpoint (phase/feature/count, corrupt-safe) written at explicit CCT actions (`/cct:checkpoint` + every phase transition); recovery at `session_start` re-injects a digest + the `COMPACTION_PROMPT` into context and audits it, so a resumed/post-compaction session re-learns CCT state. Capability `memory.session-state` = `degraded` (Pi) / `enabled` (Claude, which has real PreCompact/PostCompact). Tests: `checkpoint.test.mjs` (6) + `session-recovery.test.mjs` (3, driven through the real activation). NOT this task: memory promotion / MemKernel / wiki-retrieval = T9.2._
 - [ ] **T9.2 (P1)** Memory promotion/deletion commands, MemKernel adapter (self-guarding), wiki-first retrieval, provenance, sensitive-memory controls.
-- [ ] **T10.1 (P0)** Sandbox provider interface + Docker backend + detection/reporting (FR-019); autonomous/ci unrestricted-host rejection.
+- [x] **T10.1 (P0)** Sandbox provider interface + Docker backend + detection/reporting (FR-019); autonomous/ci unrestricted-host rejection.
+  - _`policy/sandbox.ts`: a `SandboxProvider` interface + Docker backend (cgroup / `/.dockerenv` / container env) + an env-declaration backend (micro-vm / remote-sandboxed / explicit host); `detectSandbox()` classifies into the FR-019 states, `sandboxGate()` enforces the rule. ENFORCED at the real `tool_call` gate: an `autonomous`/`ci` posture (`security.sandbox_required` / `autonomy.reject_unrestricted_host`) on a `host-unrestricted` environment REJECTS all tool execution fail-closed, unless `CCT_SANDBOX_OVERRIDE=1` (audited). Reported in doctor/status + capability `security.sandbox` (degraded — the runtime detects/reports/rejects but cannot itself CREATE a sandbox; micro-vm/remote need operator `CCT_SANDBOX` declaration; permissions ≠ sandboxing, spec P5). 12 tests (gate logic + detection + tool_call enforcement through the real activation)._
 - [ ] **T10.2 (P1)** MCP provider interface + first audited backend (FR-018); provenance/permissions/connectivity reporting.
 - [ ] **T10.3 (P1)** Auto-build-loop Pi backend; scheduler invocation contract; budget/timeout enforcement (C-5).
 - [ ] **T10.4 (P2)** Evaluate Gondolin/OpenShell/remote sandbox backends.

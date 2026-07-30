@@ -29,4 +29,9 @@ if [[ "$NODE_MAJOR" -lt 22 || ( "$NODE_MAJOR" -eq 22 && "$NODE_MINOR" -lt 6 ) ]]
 fi
 
 echo "=== Pi runtime unit tests (node $NODE_VERSION) ==="
-NODE_NO_WARNINGS=1 node --experimental-strip-types --test "$REPO_DIR/tests/pi-runtime/"*.test.mjs
+# --test-concurrency=1 runs the files serially. Some tests spawn subprocesses
+# (shell hooks via spawnSync, activation-driven behavioral tests); running files
+# in parallel on a constrained CI container creates fork pressure that can tip a
+# hook's spawnSync into EAGAIN -> fail-open (a flaky, environment-only failure).
+# Serial files remove that cross-file contention; the suite is ~seconds either way.
+NODE_NO_WARNINGS=1 node --experimental-strip-types --test --test-concurrency=1 "$REPO_DIR/tests/pi-runtime/"*.test.mjs

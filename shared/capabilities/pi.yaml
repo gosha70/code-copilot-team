@@ -104,3 +104,14 @@ capabilities:
       transitions, /cct:checkpoint) because Pi emits no observable compaction
       event — not a pre-compaction hook, hence degraded.
     status_probe: "loadCheckpoint()/recoveryDigest() at session_start; writeCheckpoint() on /cct:checkpoint + phase transition."
+
+  - id: security.sandbox
+    implementation_kind: cct-first-party
+    runtime_status: degraded
+    reason: >-
+      Enforces the autonomous/ci no-unrestricted-host rule — rejects tool
+      execution (fail-closed) when a sandbox is required but the environment is
+      host-unrestricted and no override is set. Detection is best-effort: Docker
+      via cgroup/.dockerenv; micro-vm / remote-sandboxed via an operator
+      CCT_SANDBOX declaration. The runtime cannot itself create a sandbox.
+    status_probe: "detectSandbox()/sandboxGate() at session_start; tool_call denial when blocked."

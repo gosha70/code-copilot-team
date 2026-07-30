@@ -61,6 +61,11 @@ import {
   recoveryDigest,
   tryWriteCheckpoint,
 } from "./workflow/checkpoint.ts";
+import { detectSandbox, sandboxGate } from "./policy/sandbox.ts";
+import type {
+  SandboxDetection,
+  SandboxGateResult,
+} from "./policy/sandbox.ts";
 import {
   midReviewWarning,
   peerReviewDisabled,
@@ -109,6 +114,7 @@ interface CctRuntimeState {
   context: AlwaysContext | null;
   /** Whether the bundle was actually handed to Pi (API available). */
   contextInjected: boolean;
+  sandbox: { gate: SandboxGateResult; detection: SandboxDetection } | null;
   /** Directory of reusable shell hooks, or null when none (T5.1/FR-010). */
   hookScriptsDir: string | null;
 }
@@ -209,6 +215,19 @@ function doctorReport(state: CctRuntimeState): string {
         `network=${denyNet ? "DENIED (command-name denylist, not a sandbox)" : "allowed"} ` +
         `fail_closed=${failClosed}`,
     );
+    if (state.sandbox) {
+      const g = state.sandbox.gate;
+      const verdict = !g.required
+        ? "not required"
+        : g.allowed
+          ? g.overridden
+            ? "REQUIRED — host-unrestricted, OVERRIDDEN"
+            : "required — satisfied"
+          : "REQUIRED — host-unrestricted: BLOCKED";
+      lines.push(
+        `sandbox: ${g.state} (${state.sandbox.detection.provider}) — ${verdict}`,
+      );
+    }
     lines.push(`profile chain: ${state.config.profileChain.join(" -> ") || "<none>"}`);
     lines.push("configuration files:");
     for (const f of state.config.loadedFiles) lines.push(`  loaded:  ${f}`);
@@ -264,6 +283,7 @@ export default async function (pi: any): Promise<void> {
     restartRequired: false,
     context: null,
     contextInjected: false,
+    sandbox: null,
     hookScriptsDir: null,
   };
 
@@ -416,6 +436,53 @@ export default async function (pi: any): Promise<void> {
       });
     }
     refreshRules();
+    // T10.1 (FR-019): detect the sandbox and evaluate the autonomous/ci
+    // no-unrestricted-host gate. Reported + audited here; enforced at tool_call.
+    {
+      const detection = detectSandbox(process.env);
+      const gate = sandboxGate(detection, {
+        sandboxRequired: cfg("security.sandbox_required") === true,
+        rejectUnrestrictedHost: cfg("autonomy.reject_unrestricted_host") === true,
+        override: process.env.CCT_SANDBOX_OVERRIDE === "1",
+      });
+      state.sandbox = { gate, detection };
+      if (!gate.allowed) {
+        state.warnings.push(`SANDBOX BLOCK: ${gate.reason}`);
+        audit({
+          mode: resolveAuditMode(state.interactive),
+          actor: "session_start",
+          decision: "deny",
+          rule: "security.sandbox_required",
+          subject: gate.state,
+          origin: "sandbox",
+        });
+      } else if (gate.overridden) {
+        state.warnings.push(`sandbox override accepted: ${gate.reason}`);
+        audit({
+          mode: resolveAuditMode(state.interactive),
+          actor: "session_start",
+          decision: "override",
+          rule: "security.sandbox_required",
+          subject: gate.state,
+          origin: "sandbox",
+        });
+      } else if (gate.required && detection.provider === "env") {
+        // A required sandbox satisfied purely by an env DECLARATION (not
+        // host-detected) is allowed, but must not be invisible — a bare host
+        // could declare itself sandboxed via CCT_SANDBOX. Recorded.
+        state.warnings.push(
+          `sandbox declared via env: ${detection.state} (CCT_SANDBOX) — accepted, recorded`,
+        );
+        audit({
+          mode: resolveAuditMode(state.interactive),
+          actor: "session_start",
+          decision: "declared",
+          rule: "security.sandbox_required",
+          subject: `CCT_SANDBOX=${detection.state}`,
+          origin: "sandbox",
+        });
+      }
+    }
     injectAlwaysContext(state, ctx);
     if (!(state.profile in BUILTIN_PROFILES)) {
       state.warnings.push(`unknown profile '${state.profile}' — using defaults chain only`);
@@ -458,6 +525,22 @@ export default async function (pi: any): Promise<void> {
 
   pi.on?.("tool_call", async (event: any, ctx: any) => {
     if (!state.rules) return undefined; // config not loaded → Phase 0 behavior
+
+    // T10.1 (FR-019): reject unrestricted-host EXECUTION. When the posture
+    // requires a sandbox and none is present (no override), no tool runs.
+    if (state.sandbox && !state.sandbox.gate.allowed) {
+      return block(
+        "sandbox",
+        `tool_call:${String(event?.toolName ?? event?.name ?? "")}`,
+        {
+          decision: "deny",
+          effective: "deny",
+          rule: "security.sandbox_required",
+          reason: state.sandbox.gate.reason,
+        },
+        state.sandbox.gate.state,
+      );
+    }
     const toolName: string = String(event?.toolName ?? event?.name ?? "");
     const args: any = event?.input ?? event?.args ?? {};
 
