@@ -115,3 +115,14 @@ capabilities:
       via cgroup/.dockerenv; micro-vm / remote-sandboxed via an operator
       CCT_SANDBOX declaration. The runtime cannot itself create a sandbox.
     status_probe: "detectSandbox()/sandboxGate() at session_start; tool_call denial when blocked."
+
+  - id: memory.promotion
+    implementation_kind: cct-first-party
+    runtime_status: degraded
+    reason: >-
+      Built-in store (.cct/memory.json) is authoritative: /cct:remember,
+      /cct:memory, /cct:memory-forget, wiki-first /cct:recall, provenance, and a
+      fail-closed sensitive-memory control (a secret-bearing fact is refused).
+      MemKernel is an MCP server, so code-aware delegation waits on the Pi MCP
+      provider (integrations.mcp, T10.2); until then it reports pending-MCP.
+    status_probe: "promoteMemory()/recall() over .cct/memory.json + knowledge/wiki; memkernelStatus() reports MCP availability."

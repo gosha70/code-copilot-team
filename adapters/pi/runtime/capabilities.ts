@@ -103,5 +103,12 @@ export function seedCapabilities(): CapabilityRecord[] {
       reason:
         "Enforces the autonomous/ci no-unrestricted-host rule — rejects tool execution (fail-closed) when a sandbox is required but the environment is host-unrestricted and no override is set. Detection is best-effort (Docker via cgroup/.dockerenv; micro-vm/remote via operator CCT_SANDBOX declaration); the runtime cannot itself create a sandbox.",
     },
+    {
+      id: "memory.promotion",
+      implementation_kind: "cct-first-party",
+      runtime_status: "degraded",
+      reason:
+        "Built-in store (.cct/memory.json) is authoritative: promote/delete/list, wiki-first recall, provenance, and a fail-closed sensitive-memory control (a secret-bearing fact is refused). MemKernel is an MCP server, so code-aware delegation waits on the Pi MCP provider (integrations.mcp, T10.2); until then it reports pending-MCP.",
+    },
   ];
 }

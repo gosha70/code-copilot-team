@@ -99,3 +99,11 @@ capabilities:
       host + permission-mode controls and does not implement the CCT sandbox
       detection/gate; reported disabled rather than overclaimed.
     status_probe: "Not implemented in the Claude Code adapter."
+
+  - id: memory.promotion
+    implementation_kind: cct-first-party
+    runtime_status: enabled
+    reason: >-
+      Claude Code promotes memories to its persistent memory layer and can reach
+      MemKernel over MCP for code-aware retrieval.
+    status_probe: "Native memory + MemKernel MCP server."

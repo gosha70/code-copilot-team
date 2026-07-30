@@ -149,3 +149,12 @@ capabilities:
       Permissions are NOT sandboxing (reported separately, spec P5).
     default: disabled
     security_level: enforcing
+
+  - id: memory.promotion
+    description: >-
+      Explicit promotion/deletion of durable memories with provenance, wiki-first
+      retrieval, and sensitive-memory controls (a fact carrying a secret is
+      refused). Optional MemKernel (MCP) backend for code-aware retrieval.
+    default: disabled
+    requires: [memory.session-state]
+    security_level: advisory
