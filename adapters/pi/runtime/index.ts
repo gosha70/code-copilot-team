@@ -69,6 +69,11 @@ import {
   memkernelStatus,
 } from "./workflow/memory.ts";
 import type { MemoryType } from "./workflow/memory.ts";
+import {
+  resolveMcpBackends,
+  probeBackend,
+  mcpReport,
+} from "./policy/mcp.ts";
 import { detectSandbox, sandboxGate } from "./policy/sandbox.ts";
 import type {
   SandboxDetection,
@@ -897,6 +902,41 @@ export default async function (pi: any): Promise<void> {
         hits.map((h) => `[${h.source}] ${h.text}`).join("\n") +
           `\n  (${memkernelStatus().reason})`,
       );
+    },
+  });
+
+  pi.registerCommand?.("cct:mcp", {
+    description: "Report configured MCP backends (FR-018; audited, never silent)",
+    handler: async (ctx: any) => {
+      const backends = resolveMcpBackends(cfg);
+      if (backends.length === 0) {
+        return emit(
+          ctx,
+          "MCP provider: no backends enabled — set integrations.mcp.enabled=true to declare the MemKernel backend",
+        );
+      }
+      const lines: string[] = [];
+      for (const b of backends) {
+        const rep = mcpReport(b, probeBackend(b), state.trust);
+        audit({
+          mode: resolveAuditMode(state.interactive),
+          actor: "cct:mcp",
+          decision: rep.connectivity.startsWith("reachable")
+            ? "reported"
+            : "reported-unreachable",
+          rule: "integrations.mcp",
+          subject: `${b.name}:${b.mode}`,
+          origin: "mcp",
+        });
+        lines.push(
+          `${rep.name} [${rep.mode}] provenance=${rep.provenance} trust=${rep.trust}\n` +
+            `  tools: ${rep.tools.join(", ")}\n` +
+            `  connectivity: ${rep.connectivity}\n` +
+            `  permissions: ${rep.permissions}\n` +
+            `  security: ${rep.security}`,
+        );
+      }
+      emit(ctx, lines.join("\n"));
     },
   });
 
