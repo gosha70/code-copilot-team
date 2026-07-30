@@ -61,6 +61,14 @@ import {
   recoveryDigest,
   tryWriteCheckpoint,
 } from "./workflow/checkpoint.ts";
+import {
+  promoteMemory,
+  deleteMemory,
+  listMemories,
+  recall,
+  memkernelStatus,
+} from "./workflow/memory.ts";
+import type { MemoryType } from "./workflow/memory.ts";
 import { detectSandbox, sandboxGate } from "./policy/sandbox.ts";
 import type {
   SandboxDetection,
@@ -814,6 +822,80 @@ export default async function (pi: any): Promise<void> {
         `checkpoint #${cp.checkpointCount} saved ` +
           `(${cp.phase ?? "no phase"}/${cp.featureId ?? "no feature"}) — ` +
           "recovered automatically at the next session start",
+      );
+    },
+  });
+
+  pi.registerCommand?.("cct:remember", {
+    description:
+      "Promote a durable memory: /cct:remember <user|feedback|project|reference> <fact>",
+    handler: async (ctx: any, args?: string) => {
+      const raw = (typeof args === "string" ? args : "").trim();
+      const m = /^(user|feedback|project|reference)\s+([\s\S]+)$/.exec(raw);
+      if (!m) {
+        return emit(
+          ctx,
+          "usage: /cct:remember <user|feedback|project|reference> <fact>",
+        );
+      }
+      const res = promoteMemory(state.cwd, {
+        type: m[1] as MemoryType,
+        fact: m[2],
+        provenance: {
+          phase: state.workflow.phase,
+          featureId: state.workflow.featureId,
+          at: new Date().toISOString(),
+        },
+      });
+      if (!res.ok) {
+        audit({
+          mode: resolveAuditMode(state.interactive),
+          actor: "cct:remember",
+          decision: res.refused ? "refused" : "deny",
+          rule: "memory.sensitive",
+          subject: res.reason.slice(0, 120),
+          origin: "memory",
+        });
+        return emit(ctx, `not remembered: ${res.reason}`);
+      }
+      emit(ctx, res.reason);
+    },
+  });
+
+  pi.registerCommand?.("cct:memory", {
+    description: "List promoted memories",
+    handler: async (ctx: any) => {
+      const all = listMemories(state.cwd);
+      if (all.length === 0) {
+        return emit(ctx, "no memories yet — /cct:remember <type> <fact>");
+      }
+      emit(ctx, all.map((r) => `${r.id} [${r.type}] ${r.fact}`).join("\n"));
+    },
+  });
+
+  pi.registerCommand?.("cct:memory-forget", {
+    description: "Delete a memory by id: /cct:memory-forget <id>",
+    handler: async (ctx: any, args?: string) => {
+      const id = (typeof args === "string" ? args : "").trim();
+      if (!id) return emit(ctx, "usage: /cct:memory-forget <id>");
+      emit(
+        ctx,
+        deleteMemory(state.cwd, id) ? `forgot ${id}` : `no memory with id '${id}'`,
+      );
+    },
+  });
+
+  pi.registerCommand?.("cct:recall", {
+    description: "Wiki-first recall across the wiki + promoted memories: /cct:recall <query>",
+    handler: async (ctx: any, args?: string) => {
+      const q = (typeof args === "string" ? args : "").trim();
+      if (!q) return emit(ctx, "usage: /cct:recall <query>");
+      const hits = recall(state.cwd, q);
+      if (hits.length === 0) return emit(ctx, `no matches for '${q}'`);
+      emit(
+        ctx,
+        hits.map((h) => `[${h.source}] ${h.text}`).join("\n") +
+          `\n  (${memkernelStatus().reason})`,
       );
     },
   });
