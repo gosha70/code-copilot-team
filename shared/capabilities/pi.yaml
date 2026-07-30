@@ -83,9 +83,14 @@ capabilities:
 
   - id: integrations.mcp
     implementation_kind: optional-bridge
-    runtime_status: disabled
-    reason: "Optional; Phase 10."
-    status_probe: "MCP provider interface present and an audited backend configured."
+    runtime_status: degraded
+    reason: >-
+      MCP provider interface present (FR-018 modes) with MemKernel as the first
+      audited backend — declared, connectivity-probed (PATH, never spawned),
+      trust-gated, reported via /cct:mcp; no backend is silent (P6). Degraded
+      because live tool invocation flows through Pi's own MCP transport, which
+      the extension does not own. Opt in with integrations.mcp.enabled.
+    status_probe: "resolveMcpBackends()/probeBackend()/mcpReport(); /cct:mcp reports each declared backend."
 
   - id: integrations.hosted-platform
     implementation_kind: external-platform

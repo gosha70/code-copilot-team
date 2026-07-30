@@ -86,6 +86,7 @@ export const BUILTIN_DEFAULTS: TomlTable = {
   headless: { ask_resolution: "deny" },
   limits: { timeout_sec: 900, max_review_rounds: 5 },
   session: { ephemeral: false },
+  integrations: { mcp: { enabled: false } },
   // Per-phase policy (FR-008, T4.3). RESOLVED AND REPORTED, not enforced:
   // `model` "inherit" means no override — actual per-phase model/thinking
   // routing re-spawns the session and lands with cct-agents (Phase 7); live

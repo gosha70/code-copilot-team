@@ -67,6 +67,7 @@ const KNOWN_KEYS = new Set([
   "review.after_phase",
   "review.allow_recursive",
   "security.fail_closed",
+  "integrations.mcp.enabled",
   "security.deny_network",
   "security.sandbox_required",
   "security.allow_package_install",

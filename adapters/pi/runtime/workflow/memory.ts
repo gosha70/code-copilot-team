@@ -15,6 +15,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { MEMKERNEL_BACKEND, probeBackend } from "../policy/mcp.ts";
 
 export const MEMORY_REL = path.join(".cct", "memory.json");
 
@@ -188,12 +189,15 @@ export interface MemKernelStatus {
 export function memkernelStatus(
   env: Record<string, string | undefined> = process.env,
 ): MemKernelStatus {
-  const declaredEndpoint = env.MEMKERNEL_ENDPOINT || env.MEMKERNEL_PROJECT_ID;
+  // T10.2: consult the MCP provider's connectivity probe. Live delegation still
+  // flows through Pi's MCP transport, so `available` stays false — but the
+  // reason now reflects whether the MemKernel backend is actually reachable.
+  const probe = probeBackend(MEMKERNEL_BACKEND, env);
   return {
     available: false,
     transport: "mcp",
-    reason: declaredEndpoint
-      ? "MemKernel declared, but delegation requires the Pi MCP provider (integrations.mcp, T10.2) — using the built-in store"
-      : "MemKernel is an MCP server; the Pi MCP provider (T10.2) is not yet available — using the built-in store",
+    reason: probe.reachable
+      ? "MemKernel MCP backend present on PATH; enable integrations.mcp + Pi's MCP transport to delegate (built-in store remains authoritative until then)"
+      : "MemKernel not reachable; the Pi MCP provider (integrations.mcp, T10.2) is present but the backend is not installed — using the built-in store",
   };
 }

@@ -80,8 +80,9 @@ export function seedCapabilities(): CapabilityRecord[] {
     {
       id: "integrations.mcp",
       implementation_kind: "optional-bridge",
-      runtime_status: "disabled",
-      reason: "Optional; Phase 10.",
+      runtime_status: "degraded",
+      reason:
+        "MCP provider interface present (FR-018 modes: disabled/external-package/first-party-bridge/remote-gateway) with MemKernel as the first audited backend — declared, connectivity-probed (PATH, never spawned), trust-gated, and reported via /cct:mcp; no backend is silent (P6). DEGRADED because live JSON-RPC tool invocation flows through Pi's own MCP transport, which the extension does not own; opt in with integrations.mcp.enabled.",
     },
     {
       id: "integrations.hosted-platform",
