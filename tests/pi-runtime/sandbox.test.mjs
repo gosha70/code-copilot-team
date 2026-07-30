@@ -26,7 +26,7 @@ function tmp() {
 // Drive activation + session_start + one bash tool_call, returning the
 // tool_call verdict (undefined when not blocked). CCT_SANDBOX makes detection
 // deterministic regardless of whether the test host is a container.
-async function driveTool(profile, extraEnv) {
+async function driveTool(profile, extraEnv, home = tmp()) {
   const handlers = {};
   const pi = { registerCommand: () => {}, on: (e, h) => (handlers[e] = h), call: () => {} };
   const sessionCtx = {
@@ -40,7 +40,7 @@ async function driveTool(profile, extraEnv) {
   const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   process.env.CCT_TEST_BOOTSTRAP = "1";
   process.env.CCT_PROFILE = profile;
-  process.env.CCT_HOME = tmp();
+  process.env.CCT_HOME = home;
   delete process.env.CCT_SANDBOX;
   delete process.env.CCT_SANDBOX_OVERRIDE;
   for (const [k, v] of Object.entries(extraEnv)) process.env[k] = v;
@@ -152,4 +152,13 @@ test("ENFORCE: a container satisfies the requirement (no sandbox block)", async 
 test("ENFORCE: a non-sandbox-required profile is not blocked on a host", async () => {
   const res = await driveTool("disciplined", { CCT_SANDBOX: "host" });
   assert.ok(!res || res.block !== true, "no sandbox requirement -> no sandbox block");
+});
+
+test("AUDIT: an env-declared sandbox on a required posture is recorded (not invisible)", async () => {
+  const home = tmp();
+  await driveTool("autonomous", { CCT_SANDBOX: "containerized" }, home);
+  const log = fs.readFileSync(path.join(home, "pi", "audit.log"), "utf8");
+  assert.match(log, /"decision":"declared"/);
+  assert.match(log, /CCT_SANDBOX=containerized/);
+  assert.match(log, /"origin":"sandbox"/);
 });

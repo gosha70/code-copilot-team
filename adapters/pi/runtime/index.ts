@@ -466,6 +466,21 @@ export default async function (pi: any): Promise<void> {
           subject: gate.state,
           origin: "sandbox",
         });
+      } else if (gate.required && detection.provider === "env") {
+        // A required sandbox satisfied purely by an env DECLARATION (not
+        // host-detected) is allowed, but must not be invisible — a bare host
+        // could declare itself sandboxed via CCT_SANDBOX. Recorded.
+        state.warnings.push(
+          `sandbox declared via env: ${detection.state} (CCT_SANDBOX) — accepted, recorded`,
+        );
+        audit({
+          mode: resolveAuditMode(state.interactive),
+          actor: "session_start",
+          decision: "declared",
+          rule: "security.sandbox_required",
+          subject: `CCT_SANDBOX=${detection.state}`,
+          origin: "sandbox",
+        });
       }
     }
     injectAlwaysContext(state, ctx);
