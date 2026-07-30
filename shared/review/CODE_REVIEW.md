@@ -28,28 +28,13 @@ previous review declared it complete.
 
 ## Project Configuration
 
-Replace these placeholders for the repository:
-
-- Project: `<PROJECT_NAME>`
-- Purpose: `<ONE_SENTENCE_PROJECT_PURPOSE>`
-- Default branch: `<main | master | other>`
-- Primary stack: `<LANGUAGES_AND_FRAMEWORKS>`
-- Architecture documentation:
-  - `<ARCHITECTURE_FILE>`
-  - `<CONTRIBUTING_FILE>`
-- Specification directory: `<specs/ | docs/specs/ | none>`
-- Test command: `<TEST_COMMAND>`
-- Lint command: `<LINT_COMMAND>`
-- Type-check command: `<TYPECHECK_COMMAND>`
-- Build command: `<BUILD_COMMAND>`
-- Integration or smoke-test command: `<INTEGRATION_COMMAND>`
-- Critical paths:
-  - `<AUTH_PATH>`
-  - `<DATA_OR_SCHEMA_PATH>`
-  - `<PUBLIC_API_PATH>`
-- Generated or vendored paths that should not be reviewed:
-  - `<GENERATED_PATH>`
-  - `<VENDORED_PATH>`
+Project-specific values (project name, stack, verification commands, critical
+paths, generated paths) live in `docs/CODE_REVIEW_PROJECT.md`, which is owned
+by the project: `setup-reviewer.sh` creates it once from a template and never
+overwrites or removes a customized copy, so refreshes of THIS managed document
+cannot destroy the configuration. Read that file together with this one before
+any review; treat unfilled `<PLACEHOLDER>` values there as an open question in
+the review report, not as license to guess.
 
 ## Review-Only Boundary
 

@@ -234,6 +234,37 @@ Every provider currently requires a `command` template with `{review_request}` a
 | **single** (default) | No `--peer-review` flag | Standard single-provider workflow, no peer review |
 | **dual** | `--peer-review [provider]` | Peer reviews at `/phase-complete`, artifacts written to `specs/` |
 
+### Independent Reviewer Setup (Codex)
+
+Complementary to the runner loop above: configure a copilot as the project's
+**independent senior reviewer** through its own instruction-file mechanism —
+persistent review rules that apply to every `/review`, `codex review`, or
+GitHub `@codex review` session, with no runner involved.
+
+```bash
+# Install for a project (Codex first; the dispatch table takes future tools)
+./scripts/setup-reviewer.sh --codex /path/to/project
+
+# Then fill in the project-owned configuration and start a fresh session
+$EDITOR /path/to/project/docs/CODE_REVIEW_PROJECT.md
+```
+
+What it installs, and who owns what:
+
+| File | Ownership | On re-run |
+|---|---|---|
+| `docs/CODE_REVIEW.md` | Managed (marker header) | Refreshed from `shared/review/` |
+| `docs/CODE_REVIEW_PROJECT.md` | **Project-owned** | Never overwritten; uninstall keeps it once customized |
+| `AGENTS.md` loader block | Managed (marker-guarded) | Refreshed in place; content outside markers untouched |
+
+The review rules enforce a read-only boundary, complete-diff scope, SDD/origin
+gating, evidence-backed findings (P0–P3), and `PASS`/`FAIL`/`INCONCLUSIVE`
+verdicts — never `PASS` because another agent said tests passed. CCT-generated
+`AGENTS.md` files get the loader at the generator layer (`generate.sh`), so
+regeneration preserves it; a stale generated file without the loader makes the
+installer fail loudly (exit 65) rather than report an inert setup as success.
+Spec: `specs/copilot-reviewer-setup/`.
+
 ## LLM Wiki Maintainer
 
 `code-copilot-team` ships a Karpathy-pattern LLM Wiki maintainer that
@@ -576,6 +607,7 @@ code-copilot-team/
 ├── shared/                              ← Single source of truth
 │   ├── skills/                          24 skills (SKILL.md format, open Agent Skills spec)
 │   ├── docs/                            8 tool-agnostic reference docs
+│   ├── review/                          Independent-reviewer sources (CODE_REVIEW.md, loader, project-config template)
 │   ├── templates/                       11 stacks × PROJECT.md + commands/
 │   ├── templates/sdd/                   5 SDD templates (spec, plan, tasks, lessons-learned, collaboration)
 │   └── templates/provider-profile-template.toml  Peer provider profile seed
@@ -607,6 +639,7 @@ code-copilot-team/
 │   ├── peer-review-runner.sh            Peer review execution engine
 │   ├── auto-build-loop.sh               Autonomous build driver (advisory + pr profiles)
 │   ├── providers-health.sh              Peer provider availability diagnostics
+│   ├── setup-reviewer.sh                Copilot independent-reviewer installer (Codex first)
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
@@ -615,6 +648,7 @@ code-copilot-team/
 │   ├── test-sync.sh                     105 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   ├── test-review-loop.sh            40 review loop integration tests
+│   ├── test-setup-reviewer.sh           Copilot reviewer installer tests
 │   └── test-auto-build-loop.sh        158 auto-build driver tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

@@ -11,7 +11,8 @@ Before reviewing:
 
 1. If `docs/CODE_REVIEW.md` exists in the repository, read it completely — it
    defines the full independent-review workflow (installed by
-   `scripts/setup-reviewer.sh` from `gosha70/code-copilot-team`).
+   `scripts/setup-reviewer.sh` from `gosha70/code-copilot-team`). Read
+   `docs/CODE_REVIEW_PROJECT.md` (project-owned configuration) with it.
 2. Read the applicable issue, origin artifact, and SDD files under `specs/`.
 3. Determine the complete review diff and merge base.
 4. Treat Claude Code completion claims and prior agent reviews as unverified.

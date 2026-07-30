@@ -47,8 +47,12 @@ bash "$SETUP" --codex "$P1" > /dev/null
 assert "creates docs/CODE_REVIEW.md" "[[ -f '$P1/docs/CODE_REVIEW.md' ]]"
 assert "installed doc carries the managed marker" \
   "head -1 '$P1/docs/CODE_REVIEW.md' | grep -q 'CCT-REVIEWER-MANAGED'"
-assert "installed doc keeps the placeholders" \
-  "grep -q '<PROJECT_NAME>' '$P1/docs/CODE_REVIEW.md'"
+assert "creates project-owned CODE_REVIEW_PROJECT.md" \
+  "[[ -f '$P1/docs/CODE_REVIEW_PROJECT.md' ]]"
+assert "project config keeps the placeholders" \
+  "grep -q '<PROJECT_NAME>' '$P1/docs/CODE_REVIEW_PROJECT.md'"
+assert "managed doc points to the project config" \
+  "grep -q 'CODE_REVIEW_PROJECT.md' '$P1/docs/CODE_REVIEW.md'"
 assert "creates AGENTS.md when absent" "[[ -f '$P1/AGENTS.md' ]]"
 assert "loader block present with markers" \
   "grep -q 'BEGIN CCT-REVIEWER (codex)' '$P1/AGENTS.md' && grep -q 'END CCT-REVIEWER (codex)' '$P1/AGENTS.md'"
@@ -84,6 +88,29 @@ assert "managed block refreshed from source" \
 assert "still exactly one block after refresh" \
   "[[ \$(grep -c 'BEGIN CCT-REVIEWER (codex)' '$P2/AGENTS.md') == 1 ]]"
 
+# ── Project configuration survives refresh + uninstall ──────
+# Regression (PR #148 review, P1): a re-run must never restore placeholders
+# over filled-in values, and uninstall must never delete customized config.
+echo "--- project config ownership ---"
+sed -i.bak 's/<PROJECT_NAME>/AcmeProject/' "$P2/docs/CODE_REVIEW_PROJECT.md" && rm -f "$P2/docs/CODE_REVIEW_PROJECT.md.bak"
+bash "$SETUP" --codex "$P2" > /dev/null
+assert "re-run preserves customized project config" \
+  "grep -q 'AcmeProject' '$P2/docs/CODE_REVIEW_PROJECT.md'"
+assert "re-run does not restore the replaced placeholder" \
+  "! grep -q '<PROJECT_NAME>' '$P2/docs/CODE_REVIEW_PROJECT.md'"
+bash "$SETUP" --codex --uninstall "$P2" > /dev/null
+assert "uninstall keeps customized project config" \
+  "[[ -f '$P2/docs/CODE_REVIEW_PROJECT.md' ]] && grep -q 'AcmeProject' '$P2/docs/CODE_REVIEW_PROJECT.md'"
+bash "$SETUP" --codex "$P2" > /dev/null
+assert "reinstall keeps the customized config (no template reset)" \
+  "grep -q 'AcmeProject' '$P2/docs/CODE_REVIEW_PROJECT.md'"
+P5="$TMP/pristine-uninstall"
+mkdir -p "$P5"
+bash "$SETUP" --codex "$P5" > /dev/null
+bash "$SETUP" --codex --uninstall "$P5" > /dev/null
+assert "uninstall removes a pristine (untouched) project config" \
+  "[[ ! -f '$P5/docs/CODE_REVIEW_PROJECT.md' ]]"
+
 # ── Foreign CODE_REVIEW.md refused ──────────────────────────
 echo "--- foreign files ---"
 P3="$TMP/foreign"
@@ -95,17 +122,35 @@ assert "foreign docs/CODE_REVIEW.md refused (exit 1)" "[[ '$RC' == '1' ]]"
 assert "foreign doc left untouched" \
   "[[ \"\$(cat '$P3/docs/CODE_REVIEW.md')\" == 'my own review doc' ]]"
 
-# ── Generated AGENTS.md skipped ─────────────────────────────
+# ── Generated AGENTS.md: active vs stale ────────────────────
+# Regression (PR #148 review, P2): a generated file WITHOUT the loader must
+# fail loudly (setup would be inert), never report success.
 echo "--- generated instruction file ---"
-P4="$TMP/generated"
+P4="$TMP/generated-stale"
 mkdir -p "$P4"
 printf '# Codex Agent Instructions\n\nAuto-generated from shared/skills/. Do not edit directly.\nRegenerate with: ./scripts/generate.sh\n' > "$P4/AGENTS.md"
-OUT=$(bash "$SETUP" --codex "$P4")
+RC=0
+OUT=$(bash "$SETUP" --codex "$P4" 2>&1) || RC=$?
+assert "stale generated AGENTS.md fails (exit 65)" "[[ '$RC' == '65' ]]"
 assert "generated AGENTS.md is not hand-edited" \
   "! grep -q 'BEGIN CCT-REVIEWER' '$P4/AGENTS.md'"
-assert "skip is reported with generator pointer" \
-  "echo \"\$OUT\" | grep -q 'generator layer'"
-assert "doc still installed alongside the skip" "[[ -f '$P4/docs/CODE_REVIEW.md' ]]"
+assert "failure names the regeneration command" \
+  "echo \"\$OUT\" | grep -q 'generate.sh'"
+assert "failure states the setup is not active" \
+  "echo \"\$OUT\" | grep -qi 'NOT active'"
+
+P4B="$TMP/generated-current"
+mkdir -p "$P4B"
+{
+  printf '# Codex Agent Instructions\n\nAuto-generated from shared/skills/. Do not edit directly.\nRegenerate with: ./scripts/generate.sh\n\n'
+  sed -n '/BEGIN CCT-REVIEWER (codex)/,/END CCT-REVIEWER (codex)/p' "$REPO_DIR/adapters/codex/AGENTS.md"
+} > "$P4B/AGENTS.md"
+RC=0
+OUT=$(bash "$SETUP" --codex "$P4B" 2>&1) || RC=$?
+assert "generated AGENTS.md with loader succeeds" "[[ '$RC' == '0' ]]"
+assert "active loader acknowledged, file untouched" \
+  "echo \"\$OUT\" | grep -q 'already carries the loader' && [[ \$(grep -c 'BEGIN CCT-REVIEWER (codex)' '$P4B/AGENTS.md') == 1 ]]"
+assert "doc installed alongside the generated file" "[[ -f '$P4B/docs/CODE_REVIEW.md' ]]"
 
 # ── Uninstall ───────────────────────────────────────────────
 echo "--- uninstall ---"
