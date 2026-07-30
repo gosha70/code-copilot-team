@@ -101,6 +101,18 @@ mkdir -p "$CODEX_DIR"
     echo "| \`$name\` | $desc |"
   done
   echo ""
+
+  # Independent-reviewer loader (shared/review/). Emitted at the generator
+  # layer so regeneration preserves it; setup-reviewer.sh installs the same
+  # block into non-generated AGENTS.md files. Markers must match that script.
+  if [[ -f "$REPO_DIR/shared/review/reviewer-loader.md" ]]; then
+    echo "<!-- BEGIN CCT-REVIEWER (codex) — managed by setup-reviewer.sh; edits inside this block are overwritten -->"
+    echo ""
+    cat "$REPO_DIR/shared/review/reviewer-loader.md"
+    echo ""
+    echo "<!-- END CCT-REVIEWER (codex) -->"
+    echo ""
+  fi
 } > "$AGENTS_MD"
 
 # Verify size limit (32 KiB = 32768 bytes)
