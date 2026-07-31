@@ -1,0 +1,119 @@
+{
+  "manifests": [
+    {
+      "name": "build",
+      "description": "Decomposes approved plans into tasks, delegates to sub-agents, integrates results, verifies builds. The only phase that writes code.",
+      "model": "sonnet",
+      "thinking": "inherit",
+      "tools": [
+        "read",
+        "grep",
+        "glob",
+        "edit",
+        "write",
+        "bash"
+      ],
+      "skills": [],
+      "context": [],
+      "permissions": "inherit",
+      "source": "claude-import",
+      "declaredNotSourced": [
+        "thinking",
+        "permissions",
+        "skills",
+        "context"
+      ]
+    },
+    {
+      "name": "plan",
+      "description": "Asks clarifying questions, produces implementation plans: files, interfaces, test strategy, and delegation. No application code changes.",
+      "model": "opus",
+      "thinking": "inherit",
+      "tools": [
+        "read",
+        "grep",
+        "glob",
+        "write",
+        "edit",
+        "askuserquestion"
+      ],
+      "skills": [],
+      "context": [],
+      "permissions": "inherit",
+      "source": "claude-import",
+      "declaredNotSourced": [
+        "thinking",
+        "permissions",
+        "skills",
+        "context"
+      ]
+    },
+    {
+      "name": "security-review",
+      "description": "Scans code for common security vulnerabilities. Read-only.",
+      "model": "sonnet",
+      "thinking": "inherit",
+      "tools": [
+        "read",
+        "grep",
+        "glob"
+      ],
+      "skills": [],
+      "context": [],
+      "permissions": "inherit",
+      "source": "claude-import",
+      "declaredNotSourced": [
+        "thinking",
+        "permissions",
+        "skills",
+        "context"
+      ]
+    }
+  ],
+  "warnings": [
+    {
+      "agent": "Not Kebab Case",
+      "field": "manifest",
+      "reason": "name 'Not Kebab Case' is not kebab-case ([a-z0-9] with hyphens)"
+    },
+    {
+      "agent": "build",
+      "field": "tools",
+      "reason": "declares the Claude 'Agent' delegation tool; no Pi tool equivalent — recorded, not imported as a Pi tool"
+    },
+    {
+      "agent": "security-review",
+      "field": "manifest",
+      "reason": "duplicate agent name 'security-review'"
+    }
+  ],
+  "notSourced": [
+    {
+      "agent": "build",
+      "fields": [
+        "thinking",
+        "permissions",
+        "skills",
+        "context"
+      ]
+    },
+    {
+      "agent": "plan",
+      "fields": [
+        "thinking",
+        "permissions",
+        "skills",
+        "context"
+      ]
+    },
+    {
+      "agent": "security-review",
+      "fields": [
+        "thinking",
+        "permissions",
+        "skills",
+        "context"
+      ]
+    }
+  ]
+}

@@ -5,10 +5,10 @@ gated integration preview). Priorities: **P0** = gates the phase's
 Done-when; **P1** = required for the umbrella DoD; **P2** = polish.
 Task IDs: `T<phase>.<n>`.
 
-## Progress — updated 2026-07-25
+## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **50 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4). Remaining: **Slice D** (Phases 7–8, agent execution) + **Slice F** (Phase 11, release).
+written. Current state: **51 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D started** (Phase 7 T7.1 — agent-manifest schema + Claude importer). Remaining: **Slice D** (T7.2–T7.4, T8.1–T8.2) + **Slice F** (Phase 11, release).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -165,7 +165,19 @@ integration preview validates against the completed enforcement path;
 
 ## Slice D — Agent execution (Phases 7–8)
 
-- [ ] **T7.1 (P0)** Neutral agent-manifest schema + Claude-agent importer.
+- [x] **T7.1 (P0)** Neutral agent-manifest schema + Claude-agent importer.
+    Schema (`agents/manifest.ts`) reuses the phase-policy leaf set
+    (model/thinking/tools/skills/context/permissions) + validation (kebab/unique
+    name, thinking vocab, required fields). Pure importer
+    (`agents/import-claude-agents.ts`) maps `.claude/agents` frontmatter →
+    manifests: model tier carried verbatim, the Claude `Agent` tool flagged (no
+    Pi equivalent), and the four Claude-inexpressible fields marked not-sourced
+    on neutral `inherit`/`[]` sentinels — never fabricated. Fixtures + golden
+    drift guard; capability `agents.subagents` reports **degraded** (resolved &
+    reported, not enforced — child-session spawn is T7.2, gated on verifying
+    Pi's SDK surface). Design: `design-t71-agent-manifest.md`. Tests:
+    `agent-manifest.test.mjs`, `import-claude-agents.test.mjs` (17). No runtime
+    disk reads, no spawn. _Enforcement of any manifest field lands with T7.2._
 - [ ] **T7.2 (P0)** SDK child-session runner: per-agent model/thinking/tools/permissions/skills, result contracts, timeout/cancellation, recursion + concurrency caps, foreground/background.
 - [ ] **T7.3 (P0)** Worktree manager: worker/branch/worktree/tasks/ownership/verification/merge/cleanup tracking (FR-013).
 - [ ] **T7.4 (P1)** Worker analytics correlation; partial-failure handling.

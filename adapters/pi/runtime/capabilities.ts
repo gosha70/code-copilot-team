@@ -111,5 +111,12 @@ export function seedCapabilities(): CapabilityRecord[] {
       reason:
         "Built-in store (.cct/memory.json) is authoritative: promote/delete/list, wiki-first recall, provenance, and a fail-closed sensitive-memory control (a secret-bearing fact is refused). MemKernel is an MCP server, so code-aware delegation waits on the Pi MCP provider (integrations.mcp, T10.2); until then it reports pending-MCP.",
     },
+    {
+      id: "agents.subagents",
+      implementation_kind: "cct-first-party",
+      runtime_status: "degraded",
+      reason:
+        "Neutral agent-manifest schema + a pure Claude-agent (.claude/agents) importer are present (FR-011): manifests are validated and reported with the phase-policy leaf set (model/thinking/tools/skills/context/permissions), the Claude model tier is carried verbatim, the Claude 'Agent' delegation tool is flagged (no Pi equivalent), and fields Claude cannot express are marked not-sourced, never fabricated. DEGRADED because every field is resolved-and-reported only — enforcement (spawning an SDK child session under the manifest) lands with the Phase 7 child-session runner (T7.2) and is gated on verifying Pi's child-session surface. Opt in with agents.subagents_enabled.",
+    },
   ];
 }

@@ -107,3 +107,11 @@ capabilities:
       Claude Code promotes memories to its persistent memory layer and can reach
       MemKernel over MCP for code-aware retrieval.
     status_probe: "Native memory + MemKernel MCP server."
+
+  - id: agents.subagents
+    implementation_kind: native
+    runtime_status: enabled
+    reason: >-
+      Claude Code runs subagents as native SDK child sessions defined by
+      `.claude/agents/*.md` manifests, dispatched through the Agent tool.
+    status_probe: "Native Agent tool + .claude/agents/*.md manifests."

@@ -131,3 +131,19 @@ capabilities:
       MemKernel is an MCP server, so code-aware delegation waits on the Pi MCP
       provider (integrations.mcp, T10.2); until then it reports pending-MCP.
     status_probe: "promoteMemory()/recall() over .cct/memory.json + knowledge/wiki; memkernelStatus() reports MCP availability."
+
+  - id: agents.subagents
+    implementation_kind: cct-first-party
+    runtime_status: degraded
+    reason: >-
+      Neutral agent-manifest schema + a pure Claude-agent importer (T7.1,
+      FR-011): manifests are validated and reported with the phase-policy leaf
+      set (model/thinking/tools/skills/context/permissions), the Claude model
+      tier is carried verbatim, the Claude `Agent` delegation tool is flagged
+      (no Pi equivalent), and fields Claude cannot express are marked
+      not-sourced, never fabricated. Degraded because every field is
+      resolved-and-reported only — enforcement (spawning an SDK child session
+      under the manifest) lands with the Phase 7 child-session runner (T7.2)
+      and is gated on verifying Pi's child-session surface. Opt in with the
+      agents.subagents_enabled config gate.
+    status_probe: "importClaudeAgents()/validateManifest() over .claude/agents frontmatter; no spawn, no runtime disk read."
