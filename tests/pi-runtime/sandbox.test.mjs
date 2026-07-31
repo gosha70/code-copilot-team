@@ -76,6 +76,31 @@ test("detectSandbox: explicit declaration wins over host sniffing", () => {
   assert.equal(detectSandbox({ CCT_SANDBOX: "remote" }).state, "remote-sandboxed");
 });
 
+test("EVAL (T10.4): every FR-019 state is declarable via CCT_SANDBOX and gate-correct", () => {
+  // Covers the evaluated backends (remote sandboxes, micro-VMs, Gondolin,
+  // OpenShell) — all supported today via explicit declaration, per
+  // specs/pi-harness-adoption/sandbox-backends-eval.md.
+  const cases = [
+    ["host", "host-unrestricted"],
+    ["none", "host-unrestricted"],
+    ["containerized", "containerized"],
+    ["micro-vm", "micro-vm"],
+    ["remote", "remote-sandboxed"],
+    ["remote-sandboxed", "remote-sandboxed"],
+  ];
+  for (const [decl, state] of cases) {
+    const d = detectSandbox({ CCT_SANDBOX: decl });
+    assert.equal(d.state, state, `CCT_SANDBOX=${decl} -> ${state}`);
+    // A required sandbox is satisfied by any non-host state, rejected on host.
+    const g = sandboxGate(d, {
+      sandboxRequired: true,
+      rejectUnrestrictedHost: false,
+      override: false,
+    });
+    assert.equal(g.allowed, state !== "host-unrestricted", `gate for ${decl}`);
+  }
+});
+
 // ── the gate (pure) ─────────────────────────────────────────────────────────
 
 const HOST = { state: "host-unrestricted", provider: "none", evidence: [] };
