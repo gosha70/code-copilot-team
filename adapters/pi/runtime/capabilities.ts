@@ -118,5 +118,12 @@ export function seedCapabilities(): CapabilityRecord[] {
       reason:
         "Subagents run as isolated out-of-process `pi --mode json` child sessions over T7.1 manifests (T7.2, FR-011). ENFORCED via verified pi CLI flags: per-agent model (--model), thinking (--thinking), tools (--tools) and separate context (--no-session); plus CCT-imposed wall-clock timeout, AbortSignal cancellation, and concurrency/recursion caps (autonomy.max_concurrency/max_recursion). DEGRADED because pi exposes no native subagent primitive, no result contract, and no permission-mode/skills/max-turns surface — the delegation, caps and typed result are CCT-first-party scaffolding, and permissions/skills/context beyond isolation are reported not-enforced, never faked. Opt in with agents.subagents_enabled.",
     },
+    {
+      id: "agents.worktrees",
+      implementation_kind: "cct-first-party",
+      runtime_status: "degraded",
+      reason:
+        "Parallel workers run in isolated git worktrees on their own branch (never master/main), tracked in a versioned .cct/worktrees.json ledger (T7.3, FR-013). ENFORCED against the real git CLI: worktree create/isolation, ownership conflict detection (overlap refused on assignment), dirty-worktree-safe cleanup, stale recovery, and the origin:cct deletion boundary — a worktree CCT did not create is never removed, only reported; force/reset/branch-force-delete are never issued. DEGRADED because verification and merge are only STATE-TRACKED here (running verification is T7.4, executing merges is T8), and write-time ownership enforcement (a worker only writes inside its owned area) is the permission layer's job, reported not enforced.",
+    },
   ];
 }

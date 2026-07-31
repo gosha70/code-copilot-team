@@ -169,3 +169,13 @@ capabilities:
     default: disabled
     security_level: advisory
     claude_equivalent: ".claude/agents/*.md + the Agent tool"
+
+  - id: agents.worktrees
+    description: >-
+      Parallel workers isolated in git worktrees, with worker / branch /
+      worktree / task / owned-area / verification / merge / cleanup state
+      tracked. Verification and merge EXECUTION are separate concerns; this
+      capability is the isolation + tracked state + safe lifecycle.
+    default: disabled
+    security_level: advisory
+    claude_equivalent: "Agent isolation: \"worktree\""

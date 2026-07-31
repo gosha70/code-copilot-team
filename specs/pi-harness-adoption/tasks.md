@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **52 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D in progress** (Phase 7 T7.1 manifest+importer, T7.2 child-session runner). Remaining: **Slice D** (T7.3, T7.4, T8.1–T8.2) + **Slice F** (Phase 11, release).
+written. Current state: **53 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D in progress** (Phase 7 T7.1 manifest+importer, T7.2 child-session runner, T7.3 worktree manager). Remaining: **Slice D** (T7.4, T8.1–T8.2) + **Slice F** (Phase 11, release).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -195,7 +195,22 @@ integration preview validates against the completed enforcement path;
     (mock-pi integration: flags-passed, timeout, cancel, no-runner, error,
     recursion cap) + `agent-caps.test.mjs` (18). _Live `/cct:` invocation wiring
     + full analytics correlation are follow-ups (T7.4)._
-- [ ] **T7.3 (P0)** Worktree manager: worker/branch/worktree/tasks/ownership/verification/merge/cleanup tracking (FR-013).
+- [x] **T7.3 (P0)** Worktree manager: worker/branch/worktree/tasks/ownership/verification/merge/cleanup tracking (FR-013).
+    `agents/worktree.ts`: versioned, sanitized `.cct/worktrees.json` ledger of
+    `WorkerRecord` (id/branch/path/feature/tasks/ownedAreas/verification/merge/
+    cleanup/`origin:"cct"`). Pure planners — `validateCreateRequest`,
+    `detectOwnershipConflicts` (overlap **refused** on assignment),
+    `cleanupEligibility` (origin/primary/clean/merge gate), `reconcile`
+    (stale/foreign) — plus thin git-exec (`createWorktree`/`removeWorktree`/
+    `listWorktrees`/`pruneWorktrees`, realpath-normalized) and orchestration
+    (`createWorker`/`cleanupWorker`). Safety: never master/main, never
+    force/reset/`branch -D`, only `origin:"cct"` worktrees removable (foreign
+    reported, never touched), dirty-refusal, stale recovery. Capability
+    `agents.worktrees` **degraded**: isolation+lifecycle+conflict-detection
+    enforced; verification/merge EXECUTION (T7.4/T8) + write-time ownership
+    (permission layer) out. Design: `design-t73-worktree-manager.md`. Tests:
+    `worktree-planners.test.mjs` + `worktree-git.test.mjs` (real temp-repo, 20).
+    _Verify-run is T7.4; merge is T8; write-time ownership is the permission layer._
 - [ ] **T7.4 (P1)** Worker analytics correlation; partial-failure handling.
 - [ ] **T8.1 (P0)** Team controller: identities, shared task ledger, assignment/claiming, messaging, plan approval, controlled shutdown (FR-012).
 - [ ] **T8.2 (P1)** Team status UI, result synthesis, failure recovery; distinct-from-subagents tests.
