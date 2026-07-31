@@ -20,7 +20,8 @@ export type SandboxState =
   | "permission-gated-only"
   | "containerized"
   | "micro-vm"
-  | "remote-sandboxed";
+  | "remote-sandboxed"
+  | "external-policy-controlled";
 
 export interface SandboxDetection {
   state: SandboxState;
@@ -86,6 +87,12 @@ export const envProvider: SandboxProvider = {
       remote: "remote-sandboxed",
       "remote-sandboxed": "remote-sandboxed",
       containerized: "containerized",
+      "external-policy-controlled": "external-policy-controlled",
+      "external-policy": "external-policy-controlled",
+      // permission-gated-only is declarable/reportable but is NOT a sandbox
+      // (permissions != sandboxing, P5) — the gate below does not accept it.
+      "permission-gated-only": "permission-gated-only",
+      "permission-gated": "permission-gated-only",
       // Explicit bare-host declaration (an operator on an unrestricted host, or
       // a deterministic test) — forces host-unrestricted over FS sniffing.
       host: "host-unrestricted",
@@ -127,9 +134,10 @@ export interface SandboxGateResult {
 /**
  * The autonomous/ci rejection rule. When the config requires a sandbox
  * (`security.sandbox_required` or `autonomy.reject_unrestricted_host`) AND the
- * detected state is `host-unrestricted`, execution is REJECTED — fail-closed —
+ * detected state provides no OS sandbox (`host-unrestricted` or `permission-gated-only`), execution is REJECTED — fail-closed —
  * unless an explicit override is set (which is allowed but recorded). Any
- * non-host-unrestricted state satisfies the requirement.
+ * containerized / micro-vm / remote-sandboxed / external-policy-controlled
+ * satisfies the requirement; permission-gated-only does NOT (permissions != sandbox).
  */
 export function sandboxGate(
   detection: SandboxDetection,
@@ -140,9 +148,15 @@ export function sandboxGate(
   },
 ): SandboxGateResult {
   const required = opts.sandboxRequired || opts.rejectUnrestrictedHost;
-  const hostUnrestricted = detection.state === "host-unrestricted";
+  // "No OS sandbox" — the process is unrestricted at the OS level, so a required
+  // sandbox is NOT satisfied. permission-gated-only counts here: permissions are
+  // not sandboxing (P5). Only containerized / micro-vm / remote-sandboxed /
+  // external-policy-controlled genuinely restrict what the process CAN do.
+  const noOsSandbox =
+    detection.state === "host-unrestricted" ||
+    detection.state === "permission-gated-only";
 
-  if (required && hostUnrestricted) {
+  if (required && noOsSandbox) {
     if (opts.override) {
       return {
         allowed: true,
@@ -150,7 +164,7 @@ export function sandboxGate(
         required,
         overridden: true,
         reason:
-          "sandbox required but host is unrestricted — permitted via explicit override (CCT_SANDBOX_OVERRIDE=1), recorded",
+          `sandbox required but no OS sandbox is present (${detection.state}) — permitted via explicit override (CCT_SANDBOX_OVERRIDE=1), recorded`,
       };
     }
     return {
@@ -159,7 +173,7 @@ export function sandboxGate(
       required,
       overridden: false,
       reason:
-        "sandbox required (autonomous/ci posture) but the environment is host-unrestricted — refusing; run in a container/micro-VM or set CCT_SANDBOX_OVERRIDE=1 (audited)",
+        `sandbox required (autonomous/ci posture) but the environment provides no OS sandbox (${detection.state}) — refusing; run in a container/micro-VM/remote sandbox or set CCT_SANDBOX_OVERRIDE=1 (audited)`,
     };
   }
 

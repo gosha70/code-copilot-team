@@ -76,6 +76,52 @@ test("detectSandbox: explicit declaration wins over host sniffing", () => {
   assert.equal(detectSandbox({ CCT_SANDBOX: "remote" }).state, "remote-sandboxed");
 });
 
+test("EVAL (T10.4): all 6 FR-019 states are declarable via CCT_SANDBOX and gate-correct", () => {
+  // Every FR-019 state (spec.md FR-019) is reachable via declaration. The gate
+  // accepts genuine OS sandboxes; host-unrestricted AND permission-gated-only
+  // are rejected — permissions are not sandboxing (P5). See
+  // specs/pi-harness-adoption/sandbox-backends-eval.md.
+  const SANDBOXED = new Set([
+    "containerized",
+    "micro-vm",
+    "remote-sandboxed",
+    "external-policy-controlled",
+  ]);
+  const cases = [
+    ["host", "host-unrestricted"],
+    ["none", "host-unrestricted"],
+    ["permission-gated-only", "permission-gated-only"],
+    ["containerized", "containerized"],
+    ["micro-vm", "micro-vm"],
+    ["remote", "remote-sandboxed"],
+    ["remote-sandboxed", "remote-sandboxed"],
+    ["external-policy-controlled", "external-policy-controlled"],
+  ];
+  const seen = new Set();
+  for (const [decl, state] of cases) {
+    const d = detectSandbox({ CCT_SANDBOX: decl });
+    assert.equal(d.state, state, `CCT_SANDBOX=${decl} -> ${state}`);
+    seen.add(state);
+    const g = sandboxGate(d, {
+      sandboxRequired: true,
+      rejectUnrestrictedHost: false,
+      override: false,
+    });
+    assert.equal(g.allowed, SANDBOXED.has(state), `gate for ${state}`);
+  }
+  // All six FR-019 states are exercised.
+  for (const st of [
+    "host-unrestricted",
+    "permission-gated-only",
+    "containerized",
+    "micro-vm",
+    "remote-sandboxed",
+    "external-policy-controlled",
+  ]) {
+    assert.ok(seen.has(st), `FR-019 state ${st} covered`);
+  }
+});
+
 // ── the gate (pure) ─────────────────────────────────────────────────────────
 
 const HOST = { state: "host-unrestricted", provider: "none", evidence: [] };
