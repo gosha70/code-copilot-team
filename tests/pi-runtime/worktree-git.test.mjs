@@ -151,3 +151,33 @@ test("reconcile reports a foreign worktree it did not create (never touches it)"
   assert.ok(reported.includes(fs.realpathSync(foreign)), "foreign worktree reported");
   assert.ok(fs.existsSync(foreign), "foreign worktree left intact");
 });
+
+test("a foreign worktree RECORDED in the ledger is never removed, even forced", { skip: !HAS_GIT }, () => {
+  const repo = initRepo();
+  const foreign = wtPath(repo, "intruder");
+  spawnSync("git", ["-C", repo, "worktree", "add", "-q", foreign, "-b", "feature/intruder"], { encoding: "utf8" });
+  // A tampered/injected ledger entry pointing at a real foreign worktree.
+  const ledger = {
+    version: 1,
+    workers: [{
+      workerId: "intruder", branch: "feature/intruder", worktreePath: fs.realpathSync(foreign),
+      featureId: null, tasks: [], ownedAreas: [], verificationStatus: "pending",
+      mergeStatus: "merged", cleanupStatus: "active", createdAt: NOW, origin: "foreign",
+    }],
+  };
+  const res = cleanupWorker(repo, ledger, "intruder", { force: true });
+  assert.equal(res.ok, false);
+  assert.ok(/foreign/.test(res.reason));
+  assert.ok(fs.existsSync(foreign), "foreign worktree left intact even with force");
+});
+
+test("createWorker refuses a worktree path outside the managed root", { skip: !HAS_GIT }, () => {
+  const repo = initRepo();
+  const outside = path.join(path.parse(repo).root, "cct-outside-" + path.basename(repo));
+  const res = createWorker(repo, emptyLedger(), {
+    workerId: "wout", branch: "feature/wout", worktreePath: outside,
+  }, NOW);
+  assert.equal(res.ok, false);
+  assert.ok((res.errors || []).some((e) => /managed root/.test(e)));
+  assert.ok(!fs.existsSync(outside), "nothing created outside the managed root");
+});
