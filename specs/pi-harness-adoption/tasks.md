@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **51 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D started** (Phase 7 T7.1 — agent-manifest schema + Claude importer). Remaining: **Slice D** (T7.2–T7.4, T8.1–T8.2) + **Slice F** (Phase 11, release).
+written. Current state: **52 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D in progress** (Phase 7 T7.1 manifest+importer, T7.2 child-session runner). Remaining: **Slice D** (T7.3, T7.4, T8.1–T8.2) + **Slice F** (Phase 11, release).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -178,7 +178,23 @@ integration preview validates against the completed enforcement path;
     Pi's SDK surface). Design: `design-t71-agent-manifest.md`. Tests:
     `agent-manifest.test.mjs`, `import-claude-agents.test.mjs` (17). No runtime
     disk reads, no spawn. _Enforcement of any manifest field lands with T7.2._
-- [ ] **T7.2 (P0)** SDK child-session runner: per-agent model/thinking/tools/permissions/skills, result contracts, timeout/cancellation, recursion + concurrency caps, foreground/background.
+- [x] **T7.2 (P0)** SDK child-session runner: per-agent model/thinking/tools/permissions/skills, result contracts, timeout/cancellation, recursion + concurrency caps, foreground/background.
+    Out-of-process `pi --mode json` subprocess runner (verified pi CLI surface;
+    the SDK exposes no subagent primitive/result contract/caps — confirmed
+    against earendil-works/pi). `agents/child-session.ts`: pure `buildChildArgv`
+    (manifest → `--model`/`--thinking`/`--tools`/`--no-session`, thinking
+    vocab-mapped, `permissions`/`skills`/`context` reported `notEnforced` not
+    dropped) + async `runChildSession` (spawn, wall-clock timeout→kill,
+    AbortSignal cancellation, typed `ChildResult` from the `--mode json`
+    envelope, no-runner/error/cap-exceeded statuses). `agents/caps.ts`:
+    `resolveCaps` (autonomy.max_concurrency/max_recursion), `Semaphore`,
+    `recursionExceeded`. Capability `agents.subagents` reason rewritten:
+    model/thinking/tools/isolation/timeout/cancel/caps **enforced**;
+    permissions/skills/context-beyond-isolation/max-turns **degraded**. Design:
+    `design-t72-child-session-runner.md`. Tests: `child-session.test.mjs`
+    (mock-pi integration: flags-passed, timeout, cancel, no-runner, error,
+    recursion cap) + `agent-caps.test.mjs` (18). _Live `/cct:` invocation wiring
+    + full analytics correlation are follow-ups (T7.4)._
 - [ ] **T7.3 (P0)** Worktree manager: worker/branch/worktree/tasks/ownership/verification/merge/cleanup tracking (FR-013).
 - [ ] **T7.4 (P1)** Worker analytics correlation; partial-failure handling.
 - [ ] **T8.1 (P0)** Team controller: identities, shared task ledger, assignment/claiming, messaging, plan approval, controlled shutdown (FR-012).
