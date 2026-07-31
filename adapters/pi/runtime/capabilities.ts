@@ -116,7 +116,7 @@ export function seedCapabilities(): CapabilityRecord[] {
       implementation_kind: "cct-first-party",
       runtime_status: "degraded",
       reason:
-        "Neutral agent-manifest schema + a pure Claude-agent (.claude/agents) importer are present (FR-011): manifests are validated and reported with the phase-policy leaf set (model/thinking/tools/skills/context/permissions), the Claude model tier is carried verbatim, the Claude 'Agent' delegation tool is flagged (no Pi equivalent), and fields Claude cannot express are marked not-sourced, never fabricated. DEGRADED because every field is resolved-and-reported only — enforcement (spawning an SDK child session under the manifest) lands with the Phase 7 child-session runner (T7.2) and is gated on verifying Pi's child-session surface. Opt in with agents.subagents_enabled.",
+        "Subagents run as isolated out-of-process `pi --mode json` child sessions over T7.1 manifests (T7.2, FR-011). ENFORCED via verified pi CLI flags: per-agent model (--model), thinking (--thinking), tools (--tools) and separate context (--no-session); plus CCT-imposed wall-clock timeout, AbortSignal cancellation, and concurrency/recursion caps (autonomy.max_concurrency/max_recursion). DEGRADED because pi exposes no native subagent primitive, no result contract, and no permission-mode/skills/max-turns surface — the delegation, caps and typed result are CCT-first-party scaffolding, and permissions/skills/context beyond isolation are reported not-enforced, never faked. Opt in with agents.subagents_enabled.",
     },
   ];
 }
