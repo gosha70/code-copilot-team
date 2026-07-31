@@ -247,15 +247,23 @@ export function runChildSession(
         costUsd: env.costUsd,
         status: "ok",
       };
+      // Cancellation/timeout are the most specific causes and win. Otherwise a
+      // nonzero exit is an error REGARDLESS of whether an envelope was printed —
+      // a failed child must never be reported ok. sessionId/subtype/costUsd stay
+      // populated as diagnostics.
       if (cancelled) {
         result.status = "cancelled";
         result.reason = "child cancelled via AbortSignal";
       } else if (timedOut) {
         result.status = "timeout";
         result.reason = `child exceeded ${o.timeoutSec}s wall-clock; killed`;
-      } else if (code !== 0 && env.subtype === null && env.sessionId === null) {
+      } else if (code !== 0) {
         result.status = "error";
-        result.reason = `pi exited ${code} with no result envelope${
+        const envNote =
+          env.subtype === null && env.sessionId === null
+            ? "no result envelope"
+            : `envelope subtype=${env.subtype ?? "n/a"}`;
+        result.reason = `pi exited ${code} (${envNote})${
           stderr ? `: ${stderr.trim().slice(0, 200)}` : ""
         }`;
       }

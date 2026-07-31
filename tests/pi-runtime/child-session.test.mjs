@@ -204,3 +204,19 @@ test("runChildSession: nonzero exit with no envelope -> status error", async () 
     restore();
   }
 });
+
+test("runChildSession: nonzero exit WITH an envelope is still error (not ok)", async () => {
+  // A failed child that nonetheless printed a result envelope must not be
+  // reported ok; the envelope fields survive as diagnostics.
+  const { restore } = withMock({ MOCK_PI_EXIT: "3" });
+  try {
+    const r = await runChildSession(opts(manifest()), { runnerPath: MOCK_PI });
+    assert.equal(r.status, "error", r.reason);
+    assert.equal(r.exitCode, 3);
+    assert.equal(r.subtype, "success"); // preserved as diagnostic
+    assert.equal(r.sessionId, "sess-mock");
+    assert.equal(r.costUsd, 0.01);
+  } finally {
+    restore();
+  }
+});
