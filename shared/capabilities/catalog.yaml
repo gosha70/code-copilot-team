@@ -158,3 +158,14 @@ capabilities:
     default: disabled
     requires: [memory.session-state]
     security_level: advisory
+
+  - id: agents.subagents
+    description: >-
+      Named subagents with separate context and per-agent
+      model/thinking/tools/permissions/skills, expressed as neutral manifests;
+      Claude `.claude/agents` files import into that schema. Live child-session
+      execution (spawn, result contracts, caps, cancellation) is a separate
+      concern gated on the runner surface.
+    default: disabled
+    security_level: advisory
+    claude_equivalent: ".claude/agents/*.md + the Agent tool"
