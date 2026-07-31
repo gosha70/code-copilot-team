@@ -401,6 +401,25 @@ fi
 SCRIPTLET
 export MOCK_CLAUDE_SCRIPT="$DEFAULT_SCRIPT"
 
+# Mock pi-code (T10.3 Pi backend): `version` prints; otherwise runs the same
+# phase scriptlet as the mock claude and emits the driver's result-JSON contract.
+cat > "$MOCK_BIN/pi-code" << 'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "version" ]]; then echo "pi-code mock 0.0.1"; exit 0; fi
+COUNTER_FILE="${MOCK_PI_COUNTER:-/tmp/mock-pi-count}"
+COUNT=$(( $(cat "$COUNTER_FILE" 2>/dev/null || echo 0) + 1 ))
+echo "$COUNT" > "$COUNTER_FILE"
+export MOCK_SESSION_N="$COUNT"
+if [[ "${MOCK_PI_SLEEP:-0}" -gt 0 ]]; then sleep "$MOCK_PI_SLEEP"; fi
+if [[ -n "${MOCK_PI_SCRIPT:-}" && -f "$MOCK_PI_SCRIPT" ]]; then
+    # shellcheck source=/dev/null
+    source "$MOCK_PI_SCRIPT"
+fi
+printf '{"subtype":"%s","session_id":"pi-session-%s","total_cost_usd":%s,"num_turns":2,"result":"done"}\n' \
+    "${MOCK_PI_SUBTYPE:-success}" "$COUNT" "${MOCK_PI_COST:-0.02}"
+MOCK
+chmod +x "$MOCK_BIN/pi-code"
+
 # ══════════════════════════════════════════════════════════════
 echo "=== US1: preflight rejections ==="
 # ══════════════════════════════════════════════════════════════
@@ -1169,6 +1188,60 @@ echo ""
 # ══════════════════════════════════════════════════════════════
 # Summary
 # ══════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════
+echo "=== US-pi: Pi agent backend (T10.3, C-5) ==="
+# ════════════════════════════════════════════════════════
+
+# Preflight: backend=pi with an unusable pi-code is rejected (not the claude path).
+PPRE=$(setup_project)
+RC=0
+OUTPUT=$(cd "$PPRE" && CCT_PROJECT_DIR="$PPRE" CCT_AUTOBUILD_BACKEND=pi \
+    CCT_PI_BIN=/nonexistent-pi-xyz CCT_PROVIDER_PROFILE="$PASS_PROFILE" \
+    bash "$DRIVER" demo-feat 2>&1) || RC=$?
+assert_exit "pi backend: unusable pi-code rejected" 1 "$RC"
+assert_contains "pi backend: pi-code error message" "$OUTPUT" "pi-code not usable"
+
+# Single-phase happy run on the pi backend: completes, pi-code (not claude) ran,
+# and the review state records subject_provider=pi.
+PPI=$(setup_project); single_phase "$PPI"
+PICOUNT=$(mktemp); echo 0 > "$PICOUNT"
+CLCOUNT=$(mktemp); echo 0 > "$CLCOUNT"
+RC=0
+OUTPUT=$(cd "$PPI" && CCT_PROJECT_DIR="$PPI" CCT_AUTOBUILD_BACKEND=pi \
+    CCT_PI_BIN="$MOCK_BIN/pi-code" MOCK_PI_COUNTER="$PICOUNT" MOCK_PI_SCRIPT="$DEFAULT_SCRIPT" \
+    CCT_CLAUDE_BIN="$MOCK_BIN/claude" MOCK_CLAUDE_COUNTER="$CLCOUNT" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$DRIVER" demo-feat 2>&1) || RC=$?
+assert_exit "pi backend: single-phase completes (exit 0)" 0 "$RC"
+assert_eq "pi backend: status done" "done" "$(jq -r '.status' "$PPI/.cct/auto-build/demo-feat/state.json")"
+assert_eq "pi backend: pi-code was invoked" "1" "$([[ $(cat "$PICOUNT") -gt 0 ]] && echo 1 || echo 0)"
+assert_eq "pi backend: claude was NOT invoked" "0" "$(cat "$CLCOUNT")"
+if grep -rqE '"subject_provider":[[:space:]]*"pi"' "$PPI/.cct" 2>/dev/null; then
+    echo "  PASS: pi backend: review subject_provider=pi"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: pi backend: review subject_provider not pi"; FAIL=$((FAIL + 1))
+fi
+
+# C-5 budget/timeout: a pi session exceeding the wall-clock budget is parked.
+PTO=$(setup_project); single_phase "$PTO"
+# session_timeout_sec = 1 in the project config; the mock pi sleeps 3s.
+sed -i '' 's/"max_turns": 10/"max_turns": 10, "session_timeout_sec": 1/' "$PTO/specs/demo-feat/automation.json" 2>/dev/null ||     sed -i 's/"max_turns": 10/"max_turns": 10, "session_timeout_sec": 1/' "$PTO/specs/demo-feat/automation.json"
+git -C "$PTO" add -A; git -C "$PTO" commit -q -m "timeout fixture"
+RC=0
+OUTPUT=$(cd "$PTO" && CCT_PROJECT_DIR="$PTO" CCT_AUTOBUILD_BACKEND=pi \
+    CCT_PI_BIN="$MOCK_BIN/pi-code" MOCK_PI_COUNTER="$(mktemp)" MOCK_PI_SLEEP=3 \
+    MOCK_PI_SCRIPT="$DEFAULT_SCRIPT" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$DRIVER" demo-feat 2>&1) || RC=$?
+if command -v timeout &>/dev/null; then
+    assert_contains "pi backend: session timeout is parked (C-5)" "$OUTPUT" "timeout"
+else
+    # No timeout(1) on this host (e.g. macOS) — the driver cannot enforce the
+    # wall-clock budget, so the session runs to completion. C-5 enforcement is
+    # verified on CI (Linux has timeout). Same convention as the driver's TEST_TIMEOUT.
+    assert_exit "pi backend: without timeout(1) the session completes (C-5 CI-verified)" 0 "$RC"
+fi
+
+echo ""
 
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"
