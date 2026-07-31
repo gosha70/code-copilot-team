@@ -34,6 +34,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="${CCT_PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 CLAUDE_BIN="${CCT_CLAUDE_BIN:-claude}"
+# Agent backend (T10.3): claude (default) or pi. subject_provider tracks it.
+BACKEND="${CCT_AUTOBUILD_BACKEND:-claude}"
+PI_BIN="${CCT_PI_BIN:-pi-code}"
+SUBJECT_PROVIDER="claude"
+[[ "$BACKEND" == "pi" ]] && SUBJECT_PROVIDER="pi"
 GH_BIN="${CCT_GH_BIN:-gh}"
 AUTOBUILD_ROOT="${CCT_AUTOBUILD_DIR:-.cct/auto-build}"
 # Gate scripts resolve specs relative to their own repo by default; point
@@ -256,6 +261,8 @@ load_config() {
     MILESTONE_EVERY=$(cfg '.phases.milestone_every' '2')
     MAX_PHASES="${MAX_PHASES_ARG:-$(cfg '.phases.max_phases' '8')}"
     BUILD_MAX_TURNS=$(cfg '.build.max_turns' '80')
+    SESSION_TIMEOUT=$(cfg '.build.session_timeout_sec' '1800')
+    BUDGET_TOKENS=$(cfg '.build.budget_tokens' '0')
     MAX_FIX_SESSIONS=$(cfg '.build.max_fix_sessions_per_phase' '3')
     TEST_CMD=$(cfg '.test.command' '')
     TEST_TIMEOUT=$(cfg '.test.timeout_sec' '1200')
@@ -319,7 +326,12 @@ preflight() {
     if ! command -v git &>/dev/null; then
         echo "Error: git is required." >&2; exit 1
     fi
-    if ! "$CLAUDE_BIN" --version &>/dev/null; then
+    if [[ "$BACKEND" == "pi" ]]; then
+        if ! "$PI_BIN" version &>/dev/null; then
+            echo "Error: pi-code not usable: $PI_BIN (override with CCT_PI_BIN)." >&2
+            exit 1
+        fi
+    elif ! "$CLAUDE_BIN" --version &>/dev/null; then
         echo "Error: claude binary not usable: $CLAUDE_BIN (override with CCT_CLAUDE_BIN)." >&2
         exit 1
     fi
@@ -518,6 +530,44 @@ run_claude_session() {
     SESSION_ID=$(jq -r '.session_id // empty' "$result_file" 2>/dev/null || true)
 }
 
+run_pi_session() {
+    # run_pi_session <prompt-file> <result-file> [resume-session-id]  (T10.3)
+    # Same contract as the claude backend: writes a JSON result the driver reads
+    # (.total_cost_usd/.subtype/.session_id). C-5: a hard wall-clock timeout +
+    # a token budget passed to the runtime bound the session.
+    local prompt_file="$1" result_file="$2" resume_id="${3:-}"
+    check_caps
+    local pi_args=(--mode json -p "$(cat "$prompt_file")")
+    [[ -n "$resume_id" ]] && pi_args+=(--resume "$resume_id")
+    local runner=(env CCT_PEER_REVIEW_ENABLED=false CCT_AUTO_BUILD=1 \
+        CCT_BUDGET_TOKENS="$BUDGET_TOKENS" "$PI_BIN" "${pi_args[@]}")
+    local rc=0
+    if command -v timeout &>/dev/null && [[ "${SESSION_TIMEOUT:-0}" -gt 0 ]]; then
+        ( cd "$PROJECT_DIR" && timeout "$SESSION_TIMEOUT" "${runner[@]}" \
+            > "$result_file" 2> "$result_file.stderr" ) || rc=$?
+    else
+        ( cd "$PROJECT_DIR" && "${runner[@]}" > "$result_file" 2> "$result_file.stderr" ) || rc=$?
+    fi
+    if [[ $rc -eq 124 ]]; then
+        park "build_session_timeout" "pi session exceeded ${SESSION_TIMEOUT}s (C-5 budget)" \
+            "$(jq -n --arg f "$result_file.stderr" --argjson t "$SESSION_TIMEOUT" '{stderr: $f, timeout_sec: $t}')"
+    fi
+    if [[ $rc -ne 0 && ! -s "$result_file" ]]; then
+        park "build_session_error" "pi-code exited $rc with no result JSON (see $result_file.stderr)" \
+            "$(jq -n --arg f "$result_file.stderr" '{stderr: $f}')"
+    fi
+    local cost
+    cost=$(jq -r '.total_cost_usd // 0' "$result_file" 2>/dev/null || echo 0)
+    state_set '.totals.cost_usd = (.totals.cost_usd + ($c | tonumber))' --arg c "${cost:-0}"
+    SESSION_SUBTYPE=$(jq -r '.subtype // "unknown"' "$result_file" 2>/dev/null || echo "unknown")
+    SESSION_ID=$(jq -r '.session_id // empty' "$result_file" 2>/dev/null || true)
+}
+
+run_session() {
+    # Scheduler invocation contract: dispatch to the configured agent backend.
+    if [[ "$BACKEND" == "pi" ]]; then run_pi_session "$@"; else run_claude_session "$@"; fi
+}
+
 compose_build_prompt() {
     # compose_build_prompt <phase-num> <phase-title> <out-file>
     local n="$1" title="$2" out="$3"
@@ -616,9 +666,9 @@ init_review_state() {
     jq -n \
         --arg fid "$FEATURE_ID" --arg peer "$GATING_REVIEWER" --arg tref "$BRANCH_NAME" \
         --arg scope "$GATING_SCOPE" --arg spec "$GATING_SPECIALIZATION" \
-        --argjson start "$(now_epoch)" \
+        --arg subj "$SUBJECT_PROVIDER" --argjson start "$(now_epoch)" \
         '{current_round: 0, attempt: 1, loop_start: $start, feature_id: $fid,
-          phase: "build", subject_provider: "claude", peer_provider: $peer,
+          phase: "build", subject_provider: $subj, peer_provider: $peer,
           review_scope: $scope, review_specialization: $spec,
           target_ref: $tref, last_verdict: null, findings: {}}' \
         > "$PROJECT_DIR/.cct/review/state.json"
@@ -668,9 +718,9 @@ run_advisory_pass() {
         local scratch="$PROJECT_DIR/.cct/review-advisory/$_prov"
         rm -rf "$scratch"; mkdir -p "$scratch/collab"
         jq -n --arg fid "$FEATURE_ID" --arg peer "$_prov" --arg scope "$_scope" \
-            --arg spec "$_spec" --arg tref "$BRANCH_NAME" --argjson start "$(now_epoch)" \
+            --arg spec "$_spec" --arg tref "$BRANCH_NAME" --arg subj "$SUBJECT_PROVIDER" --argjson start "$(now_epoch)" \
             '{current_round: 0, attempt: 1, loop_start: $start, feature_id: $fid,
-              phase: "build", subject_provider: "claude", peer_provider: $peer,
+              phase: "build", subject_provider: $subj, peer_provider: $peer,
               review_scope: $scope, review_specialization: $spec,
               target_ref: $tref, last_verdict: null, findings: {}}' \
             > "$scratch/state.json"
@@ -782,7 +832,7 @@ run_review_loop() {
                 local advf="$phase_dir/advisory-findings-$round.json"
                 run_advisory_pass "$n" "$base_ref" "$round" "$phase_dir" "$advf"
                 compose_fix_prompt "$findings" "$round" "$fixp" "$advf"
-                run_claude_session "$fixp" "$fixr"
+                run_session "$fixp" "$fixr"
                 [[ "$SESSION_SUBTYPE" == "success" ]] || park "build_session_error" "fix session subtype=$SESSION_SUBTYPE (phase $n round $round)" "null"
                 local tlog="$phase_dir/test-fix-$fix_count.log"
                 run_tests "$tlog" || park "test_failure" "tests failed after review fix (phase $n round $round, log: $tlog)" "null"
@@ -913,10 +963,10 @@ run_phase() {
     if [[ -z "$build_commit" ]]; then
         local prompt="$phase_dir/build-prompt.md" result="$phase_dir/build-result-1.json"
         compose_build_prompt "$n" "$title" "$prompt"
-        run_claude_session "$prompt" "$result"
+        run_session "$prompt" "$result"
         if [[ "$SESSION_SUBTYPE" == "error_max_turns" ]]; then
             journal "max_turns_continuation" "phase $n session $SESSION_ID"
-            run_claude_session "$prompt" "$phase_dir/build-result-2.json" "$SESSION_ID"
+            run_session "$prompt" "$phase_dir/build-result-2.json" "$SESSION_ID"
         fi
         if [[ "$SESSION_SUBTYPE" != "success" ]]; then
             park "build_session_error" "build session subtype=$SESSION_SUBTYPE (phase $n)" \
@@ -952,7 +1002,7 @@ run_phase() {
                 echo '```'
             } > "$fixp"
             state_set '.phases[$p].fix_sessions += 1' --arg p "$n"
-            run_claude_session "$fixp" "$phase_dir/fix-result-tests-$attempt.json"
+            run_session "$fixp" "$phase_dir/fix-result-tests-$attempt.json"
             [[ "$SESSION_SUBTYPE" == "success" ]] || park "build_session_error" "test-fix session subtype=$SESSION_SUBTYPE (phase $n)" "null"
         done
 

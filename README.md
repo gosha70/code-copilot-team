@@ -644,12 +644,12 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
 │   ├── test-generate.sh                 294 generation + adapter tests
-│   ├── test-shared-structure.sh         796 structure + content tests
+│   ├── test-shared-structure.sh         797 structure + content tests
 │   ├── test-sync.sh                     105 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   ├── test-review-loop.sh            40 review loop integration tests
-│   ├── test-setup-reviewer.sh           Copilot reviewer installer tests
-│   └── test-auto-build-loop.sh        158 auto-build driver tests
+│   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
+│   └── test-auto-build-loop.sh        166 auto-build driver tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md
