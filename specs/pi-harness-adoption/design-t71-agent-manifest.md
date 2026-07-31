@@ -93,7 +93,7 @@ export interface AgentManifest {
   thinking: ThinkingLevel;      // "none"|"low"|"medium"|"high" (phase vocab)
   tools: string[];              // Pi tool names, lowercased (importer normalizes)
   skills: string[];             // CCT skill names; [] when unknown
-  context: string[];            // always-context selectors; ["always"] default
+  context: string[];            // always-context selectors; [] not-sourced default
   permissions: string;          // named posture ("read-only" | profile name)
   // provenance — never fabricated:
   source: "claude-import" | "authored" | "generated";
@@ -122,7 +122,7 @@ export interface AgentManifest {
 | `thinking`     | **absent**             | **defaulted** + listed in `declaredNotSourced` | resolved at respawn (T7.2) |
 | `permissions`  | **absent**             | **defaulted** ("inherit"/profile) + `declaredNotSourced` | named posture only; live switching is Phase 5/7 |
 | `skills`       | **absent**             | **defaulted** `[]` + `declaredNotSourced` | attached at spawn (T7.2) |
-| `context`      | **absent**             | **defaulted** `["always"]` + `declaredNotSourced` | attached at spawn (T7.2) |
+| `context`      | **absent**             | **defaulted** `[]` (neutral sentinel) + `declaredNotSourced` | attached at spawn (T7.2) |
 
 **One-line honesty statement for the capability entry and PR body:** T7.1
 delivers a validated neutral manifest and a faithful Claude importer; every

@@ -32,6 +32,12 @@ export const THINKING_LEVELS: readonly ThinkingLevel[] = [
 /** Where a manifest came from — never fabricated, always recorded. */
 export type AgentSource = "claude-import" | "authored" | "generated";
 
+export const AGENT_SOURCES: readonly AgentSource[] = [
+  "claude-import",
+  "authored",
+  "generated",
+];
+
 export interface AgentManifest {
   /** Invocation key: unique, kebab-case. */
   name: string;
@@ -106,12 +112,25 @@ export function validateManifest(
       `thinking '${m.thinking}' is not one of ${THINKING_LEVELS.join("/")}`,
     );
 
-  if (!Array.isArray(m.tools)) errors.push("tools must be an array");
-  if (!Array.isArray(m.skills)) errors.push("skills must be an array");
-  if (!Array.isArray(m.context)) errors.push("context must be an array");
+  for (const field of ["tools", "skills", "context"] as const) {
+    const v = m[field];
+    if (!isStringArray(v)) errors.push(`${field} must be an array of strings`);
+  }
 
   if (!m.permissions || typeof m.permissions !== "string")
     errors.push("permissions posture is required (use 'inherit' for none)");
 
+  if (!AGENT_SOURCES.includes(m.source))
+    errors.push(
+      `source '${m.source}' is not one of ${AGENT_SOURCES.join("/")}`,
+    );
+
+  if (!isStringArray(m.declaredNotSourced))
+    errors.push("declaredNotSourced must be an array of strings");
+
   return { valid: errors.length === 0, errors };
+}
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
 }

@@ -64,6 +64,39 @@ test("tools/skills/context must be arrays", () => {
   assert.equal(validateManifest(base({ context: {} })).valid, false);
 });
 
+test("tools/skills/context must be arrays OF STRINGS, not any[]", () => {
+  assert.equal(validateManifest(base({ tools: [{}] })).valid, false);
+  assert.equal(validateManifest(base({ skills: [1] })).valid, false);
+  assert.equal(validateManifest(base({ context: [null] })).valid, false);
+});
+
+test("source must be a known AgentSource", () => {
+  assert.equal(validateManifest(base({ source: "bogus" })).valid, false);
+  for (const s of ["claude-import", "authored", "generated"])
+    assert.equal(validateManifest(base({ source: s })).valid, true, s);
+});
+
+test("declaredNotSourced must be an array of strings", () => {
+  assert.equal(validateManifest(base({ declaredNotSourced: "nope" })).valid, false);
+  assert.equal(validateManifest(base({ declaredNotSourced: [1] })).valid, false);
+  assert.equal(validateManifest(base({ declaredNotSourced: ["thinking"] })).valid, true);
+});
+
+test("a fully malformed manifest is rejected, not waved through", () => {
+  // The exact shape a reviewer reproduced returning {valid:true}.
+  const r = validateManifest(
+    base({
+      tools: [{}],
+      skills: [1],
+      context: [null],
+      source: "bogus",
+      declaredNotSourced: "nope",
+    }),
+  );
+  assert.equal(r.valid, false);
+  assert.ok(r.errors.length >= 4, r.errors.join("; "));
+});
+
 test("permissions posture is required (inherit for none)", () => {
   assert.equal(validateManifest(base({ permissions: "" })).valid, false);
   assert.equal(validateManifest(base({ permissions: "inherit" })).valid, true);
