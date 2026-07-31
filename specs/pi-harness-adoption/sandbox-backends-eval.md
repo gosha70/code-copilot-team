@@ -48,8 +48,29 @@ A candidate backend is judged on four axes:
    needed to add these later — a new provider is one entry in the `PROVIDERS`
    list.
 
+## FR-019 state completeness (gap found + fixed by this evaluation)
+
+FR-019 defines **six** states. The T10.1 `SandboxState` type shipped only five —
+`external-policy-controlled` was missing. This evaluation adds it, so the type is
+now FR-019-complete, and clarifies the two states that are not "run it in a
+container" backends:
+
+- **`permission-gated-only`** — an environment where the agent is limited only by
+  CCT's permission engine, with NO OS-level sandbox. It is a distinct *reported*
+  classification, but per **spec P5 (permissions ≠ sandboxing)** it does **NOT**
+  satisfy a required sandbox: `sandboxGate()` rejects it exactly like
+  `host-unrestricted`. (Previously the gate would have wrongly accepted any
+  non-`host-unrestricted` state — corrected here.)
+- **`external-policy-controlled`** — execution governed by an external policy
+  engine/gateway (a real restriction) — declarable via `CCT_SANDBOX` and
+  accepted by the gate, alongside `containerized` / `micro-vm` / `remote-sandboxed`.
+
+Gate semantics: **satisfying** = {containerized, micro-vm, remote-sandboxed,
+external-policy-controlled}; **rejected when required** = {host-unrestricted,
+permission-gated-only}.
+
 ## Test coverage
 
-The full declaration matrix (every FR-019 state reachable via `CCT_SANDBOX`, so
-each evaluated backend is declarable and gate-correct) is asserted in
-`tests/pi-runtime/sandbox.test.mjs`.
+`tests/pi-runtime/sandbox.test.mjs` asserts all **six** FR-019 states are
+reachable via `CCT_SANDBOX` and gate-correct (the four real sandboxes satisfy a
+required posture; `host-unrestricted` and `permission-gated-only` are rejected).
