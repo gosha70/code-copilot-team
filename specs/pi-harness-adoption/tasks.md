@@ -310,7 +310,11 @@ integration preview validates against the completed enforcement path;
 
 ## Follow-ups (named, not silent gaps)
 
-- [ ] **FU-1 (P1)** Persist Pi worker analytics to the Studio DB. T11.1 maps
+_Not part of the 65-task tracker denominator — non-checkbox bullets so the
+mechanical count stays aligned with the header. Promote to a numbered task if
+scheduled._
+
+- **FU-1 (P1)** Persist Pi worker analytics to the Studio DB. T11.1 maps
     `cost_usd`/`worker_outcomes`/`correlation_ids`/`final_verdict`/`feature_id`
     into `RawSession.metadata`, but the store has no surface for session metadata
     so they do not reach the DB (per-turn cost is NULL without tokens). Add a
