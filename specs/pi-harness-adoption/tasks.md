@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **53 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D in progress** (Phase 7 T7.1 manifest+importer, T7.2 child-session runner, T7.3 worktree manager). Remaining: **Slice D** (T7.4, T8.1–T8.2) + **Slice F** (Phase 11, release).
+written. Current state: **54 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D: Phase 7 COMPLETE** (T7.1 manifest+importer, T7.2 child-session runner, T7.3 worktree manager, T7.4 worker analytics). Remaining: **Slice D Phase 8** (T8.1–T8.2 teams) + **Slice F** (Phase 11, release).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -211,7 +211,20 @@ integration preview validates against the completed enforcement path;
     (permission layer) out. Design: `design-t73-worktree-manager.md`. Tests:
     `worktree-planners.test.mjs` + `worktree-git.test.mjs` (real temp-repo, 20).
     _Verify-run is T7.4; merge is T8; write-time ownership is the permission layer._
-- [ ] **T7.4 (P1)** Worker analytics correlation; partial-failure handling.
+- [x] **T7.4 (P1)** Worker analytics correlation; partial-failure handling.
+    `agents/worker-analytics.ts` (one cohesive module): `runWorkerVerification`
+    executes the FR-016 verify runner IN a worker worktree and maps to a
+    `VerificationStatus` (ran+pass→passed, ran+!pass→failed, !ran→**pending**,
+    never a silent pass) — the field T7.3 tracked. `buildCorrelation`/
+    `emitCorrelation` write a **redacted** (`containsSecret`→`[REDACTED]`)
+    worker→parent record to `.cct/worker-analytics.jsonl` (re-redacted on emit).
+    `summarizeBatch` is **fail-closed**: a worker passes only on verification
+    `passed` AND childStatus `ok`; any pending/timeout/error/cap-exceeded ⇒ never
+    all-passed. Capability `agents.worktrees` reason updated (verification now
+    executed; merge still T8). **FR-021 boundary preserved**: emits neutral
+    correlation records only — no full analytics translation / DB ingestion /
+    Studio. Design: `design-t74-worker-analytics.md`. Tests:
+    `worker-analytics.test.mjs` (13). _Merge execution is T8; full analytics is FR-021._
 - [ ] **T8.1 (P0)** Team controller: identities, shared task ledger, assignment/claiming, messaging, plan approval, controlled shutdown (FR-012).
 - [ ] **T8.2 (P1)** Team status UI, result synthesis, failure recovery; distinct-from-subagents tests.
 
