@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **56 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1 team controller + T8.2 team status/synthesis/recovery). Remaining: **Slice F** (Phase 11, release — T11.1–T11.6).
+written. Current state: **57 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F started** (T11.1 Pi analytics adapter). Remaining: **Slice F** (Phase 11, release — T11.2–T11.6).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -272,7 +272,22 @@ integration preview validates against the completed enforcement path;
 
 ## Slice F — Stable release (Phase 11)
 
-- [ ] **T11.1 (P0)** Pi→CCT analytics mapping + redaction tests + Studio ingestion (FR-021/026).
+- [x] **T11.1 (P0)** Pi→CCT analytics mapping + redaction tests + Studio ingestion (FR-021/026).
+    Python adapter `session_analytics/adapters/pi.py` (mirrors claude_code.py) +
+    `COPILOT_PI` + registration in `_register.py`. Source: CCT's OWN emitted
+    analytics — `.cct/worker-analytics.jsonl` (T7.4 interim) + `.cct/pi-session.json`
+    (feature/phase); Pi's native transcript is NOT parsed (unverified format).
+    Each worker record → one synthetic `is_sidechain` `RawTurn`
+    (role=assistant; pipeline-compatible). **Honest absence** (null-vs-zero):
+    per-turn tokens / tool-call detail / message text / model → None/(); denials /
+    review-rounds / compactions → out-of-slice, all listed in
+    `metadata.absent_fields` + asserted. Redaction flows the EXISTING shared path
+    (`ingest.redaction.redact_text`) with T7.4 emit-time `containsSecret` as layer
+    2 — no new regex; high-risk surfaces (code/tool I/O) absent by construction.
+    Studio ingestion via registration (no schema change). Design:
+    `design-t111-analytics.md`. Tests: `test_adapter_pi.py` (7); full
+    session_analytics suite 204/0. _Native-transcript tokens + denials/review/
+    compaction sources are named follow-ups._
 - [ ] **T11.2 (P0)** Generated capability parity documentation from the registry; compatibility matrix.
 - [ ] **T11.3 (P1)** Docs: quickstart, configuration reference, security model, migration-from-Claude-Code guide, extension development guide.
 - [ ] **T11.4 (P1)** SBOM, checksums, release workflow, changelog; package publishing (pinned-tag `pi install` documented as advisory).

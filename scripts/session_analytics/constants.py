@@ -13,6 +13,12 @@ from __future__ import annotations
 # owned by the upstream kiro-analyzer this tool mirrors architecturally.
 COPILOT_CLAUDE_CODE = "claude-code"
 COPILOT_AIDER = "aider"
+COPILOT_PI = "pi"
+
+# Pi (T11.1) sources CCT's OWN emitted analytics under a project's .cct/, NOT
+# Pi's native session transcript (format unverified). Defined once here.
+PI_ANALYTICS_REL = ".cct/worker-analytics.jsonl"  # T7.4 interim neutral source
+PI_SESSION_REL = ".cct/pi-session.json"  # T9.1 checkpoint (feature/phase)
 
 # ── Turn roles ─────────────────────────────────────────────────────────
 ROLE_USER = "user"

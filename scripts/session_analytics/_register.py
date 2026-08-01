@@ -25,6 +25,8 @@ def register_all() -> None:
     claude_code_adapter.register()
     from .adapters import aider as aider_adapter
     aider_adapter.register()
+    from .adapters import pi as pi_adapter
+    pi_adapter.register()
 
     # Judges (M3): ollama (local-only default) + claude-code (cloud opt-in).
     from .judge import _register as judge_register
