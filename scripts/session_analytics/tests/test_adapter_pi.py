@@ -17,8 +17,10 @@ from pathlib import Path
 from session_analytics import constants as C
 from session_analytics.adapters.pi import ABSENT_FIELDS, PiAdapter
 from session_analytics.ingest import redaction
+from session_analytics.ingest.pipeline import ingest
 from session_analytics.registry import get_adapter, _reset_for_tests
-from session_analytics._register import register_all
+from session_analytics._register import register_all, unregister_all_for_tests
+from session_analytics.relational.db import Database
 
 
 def _write_project(root: Path, records, checkpoint=None):
@@ -95,6 +97,9 @@ class PiAdapterTest(unittest.TestCase):
                       "permission_denials", "review_rounds", "compactions"):
                 self.assertIn(f, rs.metadata["absent_fields"], f"{f} must be declared absent")
             self.assertEqual(set(rs.metadata["absent_fields"]), set(ABSENT_FIELDS))
+            # The computed-but-not-persisted boundary is explicit too.
+            for f in ("cost_usd", "worker_outcomes", "correlation_ids", "final_verdict", "feature_id"):
+                self.assertIn(f, rs.metadata["not_persisted_by_current_store"], f"{f} boundary must be explicit")
 
     def test_distinct_parent_sessions_split_into_refs(self):
         with tempfile.TemporaryDirectory() as td:
@@ -142,6 +147,59 @@ class PiAdapterTest(unittest.TestCase):
             self.assertEqual(adapter.copilot_id, "pi")
         finally:
             _reset_for_tests()
+
+
+class PiIngestDBTest(unittest.TestCase):
+    """End-to-end ingest that queries the DB (not RawSession.metadata) to pin
+    exactly what SURVIVES persistence — the honest Studio-ingestion boundary."""
+
+    def setUp(self):
+        unregister_all_for_tests()
+        register_all()
+
+    def tearDown(self):
+        unregister_all_for_tests()
+
+    def _dsn(self):
+        tmp = tempfile.mkdtemp(prefix="cct-sa-pi-")
+        return f"sqlite:///{Path(tmp) / 'sa.db'}"
+
+    def test_ingest_persists_session_skeleton_worker_metadata_does_NOT(self):
+        with tempfile.TemporaryDirectory() as td:
+            _write_project(
+                Path(td) / "proj",
+                [_rec("w1", cost=1.25)],
+                checkpoint={"featureId": "F-9", "phase": "build"},
+            )
+            dsn = self._dsn()
+            ingest(dsn=dsn, copilots=["pi"], root=Path(td), full=True)
+
+            db = Database.connect(dsn)
+            try:
+                srow = db.query_one(
+                    "SELECT project_path, phase, started_at, ended_at, turn_count "
+                    "FROM copilot_session WHERE copilot = ?",
+                    ("pi",),
+                )
+                # SURVIVES: the session skeleton (project/phase/timestamps/turns).
+                self.assertIsNotNone(srow, "the pi session row persists")
+                self.assertEqual(srow[1], "build")            # phase
+                self.assertIsNotNone(srow[2])                 # started_at
+                self.assertEqual(srow[4], 1)                  # one worker turn
+
+                trow = db.query_one(
+                    "SELECT is_sidechain, cost_usd FROM copilot_turn ct "
+                    "JOIN copilot_session s ON ct.session_id = s.id WHERE s.copilot = ?",
+                    ("pi",),
+                )
+                self.assertIsNotNone(trow)
+                self.assertTrue(trow[0], "worker turn is a sidechain")
+                # HONEST BOUNDARY: per-turn cost is NULL (Pi has no tokens), and
+                # the worker-analytics costUsd=1.25 is NOT persisted anywhere —
+                # copilot_session/turn have no surface for RawSession.metadata.
+                self.assertIsNone(trow[1], "no per-turn cost without tokens")
+            finally:
+                db.close()
 
 
 if __name__ == "__main__":

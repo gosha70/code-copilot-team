@@ -284,10 +284,18 @@ integration preview validates against the completed enforcement path;
     `metadata.absent_fields` + asserted. Redaction flows the EXISTING shared path
     (`ingest.redaction.redact_text`) with T7.4 emit-time `containsSecret` as layer
     2 — no new regex; high-risk surfaces (code/tool I/O) absent by construction.
-    Studio ingestion via registration (no schema change). Design:
-    `design-t111-analytics.md`. Tests: `test_adapter_pi.py` (7); full
-    session_analytics suite 204/0. _Native-transcript tokens + denials/review/
-    compaction sources are named follow-ups._
+    Studio ingestion via registration (no schema change). **Persistence boundary
+    (review):** the store persists only fixed columns — no surface for
+    `RawSession.metadata`, so `cost_usd`/`worker_outcomes`/`correlation_ids`/
+    `final_verdict`/`feature_id` are computed IN MEMORY but NOT written to the DB
+    (listed in `metadata.not_persisted_by_current_store`); a DB-level ingest test
+    pins what survives (session id/project/phase/timestamps/turn_count/sidechain
+    turns; per-turn cost NULL — no tokens). Persisting worker analytics needs a
+    store-schema surface — **open decision / follow-up**. Design:
+    `design-t111-analytics.md`. Tests: `test_adapter_pi.py` (8, incl. DB-level
+    ingest); full session_analytics suite 205/0. _Native-transcript tokens,
+    denials/review/compaction sources, and worker-analytics persistence are
+    named follow-ups._
 - [ ] **T11.2 (P0)** Generated capability parity documentation from the registry; compatibility matrix.
 - [ ] **T11.3 (P1)** Docs: quickstart, configuration reference, security model, migration-from-Claude-Code guide, extension development guide.
 - [ ] **T11.4 (P1)** SBOM, checksums, release workflow, changelog; package publishing (pinned-tag `pi install` documented as advisory).
@@ -299,3 +307,17 @@ integration preview validates against the completed enforcement path;
 - [ ] **TX.1 (P0)** All security-relevant tasks include acceptance tests and audit-log coverage before merge to the feature branch mainline.
 - [ ] **TX.2 (P0)** Branch policy: all work on `feature/pi-harness-adoption` (or child branches merged into it); no merge to `master` until spec.md Definition of Done holds.
 - [ ] **TX.3 (P1)** Each task records files affected + delivery slice in its PR description (consolidated plan §15 tasks.md contract).
+
+## Follow-ups (named, not silent gaps)
+
+_Not part of the 65-task tracker denominator — non-checkbox bullets so the
+mechanical count stays aligned with the header. Promote to a numbered task if
+scheduled._
+
+- **FU-1 (P1)** Persist Pi worker analytics to the Studio DB. T11.1 maps
+    `cost_usd`/`worker_outcomes`/`correlation_ids`/`final_verdict`/`feature_id`
+    into `RawSession.metadata`, but the store has no surface for session metadata
+    so they do not reach the DB (per-turn cost is NULL without tokens). Add a
+    session-metadata surface (table/columns) written during ingest — a
+    shared-pipeline change that would also recover claude's dropped `git_branch`.
+    Decision recorded (2026-08-01): narrow T11.1, track persistence here.
