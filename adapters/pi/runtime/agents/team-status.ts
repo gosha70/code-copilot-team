@@ -132,13 +132,36 @@ export function synthesizeTeam(ledger: TeamLedger): TeamSynthesis {
 
 // ── 3. failure recovery (local state) ────────────────────────────────────────
 
-function reopen(t: TeamTask): TeamTask {
-  return { ...t, claimStatus: "open", claimedBy: null, claimedAt: null };
+/**
+ * Reopen a claimed task for reclaim. `isInactive` decides which member ids no
+ * longer count — a claim held by an inactive member is reset to open, AND an
+ * `assignedTo` pointing at an inactive member is cleared, so a peer can actually
+ * reclaim it (`claimTask` rejects a task assigned to someone else). Terminal
+ * (done/failed) tasks are never touched.
+ */
+function recoverTask(
+  t: TeamTask,
+  isInactive: (id: string) => boolean,
+): TeamTask {
+  const assignedTo =
+    t.assignedTo && isInactive(t.assignedTo) ? null : t.assignedTo;
+  if (t.claimStatus === "claimed" && (!t.claimedBy || isInactive(t.claimedBy)))
+    return {
+      ...t,
+      claimStatus: "open",
+      claimedBy: null,
+      claimedAt: null,
+      assignedTo,
+    };
+  // An OPEN task assigned to a departed member is also stranded -> unassign.
+  if (t.claimStatus === "open") return { ...t, assignedTo };
+  return t;
 }
 
 /**
  * Mark a member as `left` and REOPEN the tasks it had claimed, so a peer can
- * reclaim them. Recovery never auto-succeeds or auto-fails work.
+ * reclaim them — clearing an `assignedTo` that points at the departing member so
+ * the task is truly reclaimable. Never auto-succeeds or auto-fails work.
  */
 export function markMemberLeft(
   ledger: TeamLedger,
@@ -148,6 +171,7 @@ export function markMemberLeft(
   if (!ledger.members.some((m) => m.memberId === memberId))
     return { ok: false, ledger, error: `no member '${memberId}'` };
   void nowIso; // reserved for a future left-at timestamp; kept in the signature
+  const isInactive = (id: string): boolean => id === memberId;
   return {
     ok: true,
     ledger: {
@@ -155,32 +179,27 @@ export function markMemberLeft(
       members: ledger.members.map((m) =>
         m.memberId === memberId ? { ...m, status: "left" } : m,
       ),
-      tasks: ledger.tasks.map((t) =>
-        t.claimStatus === "claimed" && t.claimedBy === memberId ? reopen(t) : t,
-      ),
+      tasks: ledger.tasks.map((t) => recoverTask(t, isInactive)),
     },
   };
 }
 
 /**
  * Sweep: reopen any task still `claimed` by a member who is now left/inactive or
- * gone. The explicit recovery pass (loadTeamLedger does the tamper-safe version
- * passively). Always succeeds; ledger unchanged if nothing was orphaned.
+ * gone (and clear an `assignedTo` pointing at such a member). The explicit
+ * recovery pass (loadTeamLedger does the tamper-safe version passively). Always
+ * succeeds; ledger unchanged if nothing was orphaned.
  */
 export function reopenOrphanedClaims(ledger: TeamLedger): TeamOpResult {
   const active = new Set(
     ledger.members.filter((m) => m.status === "active").map((m) => m.memberId),
   );
+  const isInactive = (id: string): boolean => !active.has(id);
   return {
     ok: true,
     ledger: {
       ...ledger,
-      tasks: ledger.tasks.map((t) =>
-        t.claimStatus === "claimed" &&
-        (!t.claimedBy || !active.has(t.claimedBy))
-          ? reopen(t)
-          : t,
-      ),
+      tasks: ledger.tasks.map((t) => recoverTask(t, isInactive)),
     },
   };
 }

@@ -147,6 +147,36 @@ test("reopenOrphanedClaims sweeps claims held by left/inactive members", () => {
   assert.equal(r.ledger.tasks[0].claimedBy, null);
 });
 
+test("markMemberLeft clears assignedTo of the departed member so a peer CAN reclaim", () => {
+  let l = team([{ taskId: "task-a", title: "A" }]);
+  l = assignTask(l, "task-a", "alice").ledger;
+  l = claimTask(l, "task-a", "alice", NOW).ledger; // assigned to + claimed by alice
+  const r = markMemberLeft(l, "alice", NOW);
+  assert.equal(r.ledger.tasks[0].claimStatus, "open");
+  assert.equal(r.ledger.tasks[0].assignedTo, null, "assignment to the departed member is cleared");
+  // a peer can now actually reclaim it (would fail if still assigned to alice)
+  assert.equal(claimTask(r.ledger, "task-a", "bob", NOW).ok, true);
+});
+
+test("reopenOrphanedClaims clears assignedTo of an inactive member so a peer CAN reclaim", () => {
+  let l = team([{ taskId: "task-a", title: "A" }]);
+  l = assignTask(l, "task-a", "alice").ledger;
+  l = claimTask(l, "task-a", "alice", NOW).ledger;
+  l = { ...l, members: l.members.map((m) => (m.memberId === "alice" ? { ...m, status: "left" } : m)) };
+  const r = reopenOrphanedClaims(l);
+  assert.equal(r.ledger.tasks[0].claimStatus, "open");
+  assert.equal(r.ledger.tasks[0].assignedTo, null);
+  assert.equal(claimTask(r.ledger, "task-a", "bob", NOW).ok, true);
+});
+
+test("recovery leaves a task assigned to a STILL-ACTIVE member intact", () => {
+  let l = team([{ taskId: "task-a", title: "A" }]);
+  l = assignTask(l, "task-a", "alice").ledger; // assigned to alice (active), unclaimed
+  // bob leaves — must not disturb alice's assignment
+  const r = markMemberLeft(l, "bob", NOW);
+  assert.equal(r.ledger.tasks[0].assignedTo, "alice", "an active member's assignment is preserved");
+});
+
 // ── distinct-from-subagents (an explicit T8.2 deliverable) ───────────────────
 
 test("DISTINCT: team ledger file differs from the worktree ledger file", async () => {
