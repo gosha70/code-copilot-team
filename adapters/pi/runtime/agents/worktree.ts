@@ -385,15 +385,22 @@ export function saveLedger(projectRoot: string, ledger: WorktreeLedger): void {
  * reconcile depends on this.
  */
 export function resolveWorktreePath(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
+  // Resolve the DEEPEST existing ancestor (following symlinks at any depth),
+  // then re-append the not-yet-created tail. A symlinked component anywhere in
+  // the path is therefore resolved, so containment checks cannot be bypassed by
+  // a symlink under the managed root.
+  let dir = path.resolve(p);
+  const tail: string[] = [];
+  while (dir !== path.dirname(dir)) {
     try {
-      return path.join(fs.realpathSync(path.dirname(p)), path.basename(p));
+      const real = fs.realpathSync(dir);
+      return tail.length ? path.join(real, ...tail) : real;
     } catch {
-      return p;
+      tail.unshift(path.basename(dir));
+      dir = path.dirname(dir);
     }
   }
+  return path.resolve(p);
 }
 
 function git(
@@ -526,6 +533,20 @@ export function createWorker(
   const managedRoot = path.dirname(repoRoot);
   const v = validateCreateRequest(req, ledger, { managedRoot });
   if (!v.valid) return { ok: false, ledger, errors: v.errors };
+
+  // Authoritative containment: resolve symlinks on BOTH sides before comparing,
+  // so a symlinked directory under the managed root cannot smuggle the worktree
+  // outside it (the lexical check above only catches raw `../`).
+  const realRoot = resolveWorktreePath(managedRoot);
+  const realChild = resolveWorktreePath(req.worktreePath);
+  if (!isPathContained(realChild, realRoot))
+    return {
+      ok: false,
+      ledger,
+      errors: [
+        `worktreePath '${req.worktreePath}' resolves outside the managed root '${realRoot}' (symlink escape)`,
+      ],
+    };
 
   const created = createWorktree(
     repoRoot,
