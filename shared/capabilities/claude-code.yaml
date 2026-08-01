@@ -125,3 +125,13 @@ capabilities:
       cleanup ledger (FR-013) is not implemented in the Claude adapter; reported
       disabled rather than overclaimed.
     status_probe: "Native Agent worktree isolation; no CCT worktree ledger."
+
+  - id: agents.teams
+    implementation_kind: cct-first-party
+    runtime_status: disabled
+    reason: >-
+      Claude Code ships native Agent Team configurations, but the CCT
+      team-coordination ledger (FR-012 shared ledger / claiming / plan approval /
+      controlled shutdown) is not implemented in the Claude adapter; reported
+      disabled rather than overclaimed.
+    status_probe: "Native Agent Team configs; no CCT team ledger."

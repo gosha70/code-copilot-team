@@ -179,3 +179,14 @@ capabilities:
     default: disabled
     security_level: advisory
     claude_equivalent: "Agent isolation: \"worktree\""
+
+  - id: agents.teams
+    description: >-
+      Opt-in agent teams: lead/teammate identities, a shared task ledger with
+      assignment/claiming, peer messaging, plan approval, bounded concurrency,
+      controlled shutdown, result synthesis and partial-failure handling.
+      DISTINCT from subagent delegation (peers coordinating over shared state,
+      not a parent spawning children).
+    default: disabled
+    security_level: advisory
+    claude_equivalent: "Agent Team configurations"

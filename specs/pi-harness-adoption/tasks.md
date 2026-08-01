@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **54 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D: Phase 7 COMPLETE** (T7.1 manifest+importer, T7.2 child-session runner, T7.3 worktree manager, T7.4 worker analytics). Remaining: **Slice D Phase 8** (T8.1–T8.2 teams) + **Slice F** (Phase 11, release).
+written. Current state: **55 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D: Phase 7 COMPLETE** (T7.1–T7.4); **Phase 8 in progress** (T8.1 team controller). Remaining: **Slice D** (T8.2 team UI/synthesis) + **Slice F** (Phase 11, release).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -225,7 +225,20 @@ integration preview validates against the completed enforcement path;
     correlation records only — no full analytics translation / DB ingestion /
     Studio. Design: `design-t74-worker-analytics.md`. Tests:
     `worker-analytics.test.mjs` (13). _Merge execution is T8; full analytics is FR-021._
-- [ ] **T8.1 (P0)** Team controller: identities, shared task ledger, assignment/claiming, messaging, plan approval, controlled shutdown (FR-012).
+- [x] **T8.1 (P0)** Team controller: identities, shared task ledger, assignment/claiming, messaging, plan approval, controlled shutdown (FR-012).
+    `agents/team.ts` — CCT-first-party coordination STATE, distinct from
+    subagents (peers, not parent→child). Two files kept SEPARATE from
+    worktrees.json: `.cct/team.json` (ledger) + `.cct/team-messages.jsonl`
+    (redacted append); a task links to a worker only by optional `workerId`.
+    Fail-closed ops: createTeam (one lead) / addTeammate / postTask /
+    assignTask / **claimTask** (active + approval-satisfied + open +
+    self-or-unassigned + under cap + single-claimant, else refused) /
+    complete/fail / approvePlan (lead only) / activateTeam / requestShutdown /
+    closeTeam (only when no task claimed) / postMessage (redacted). Plan approval
+    gates BOTH activation and claiming; bounded by autonomy.max_concurrency;
+    tamper-safe load. Capability `agents.teams` **degraded** (Pi) / **disabled**
+    (Claude). Design: `design-t81-team-controller.md`. Tests: `team.test.mjs`
+    (17). _Live peer execution via T7.2/T7.4; UI/synthesis/recovery are T8.2._
 - [ ] **T8.2 (P1)** Team status UI, result synthesis, failure recovery; distinct-from-subagents tests.
 
 ## Slice E — Durable autonomous harness (Phases 9–10)
