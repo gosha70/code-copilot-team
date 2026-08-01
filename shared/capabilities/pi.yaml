@@ -159,9 +159,13 @@ capabilities:
       ownership conflict detection (overlap refused on assignment),
       dirty-worktree-safe cleanup, stale recovery, and the origin:cct deletion
       boundary — a worktree CCT did not create is never removed, only reported;
-      force/reset/branch-force-delete are never issued. Degraded because
-      verification and merge are only STATE-TRACKED here (running verification
-      is T7.4, executing merges is T8), and write-time ownership enforcement
-      (a worker only writes inside its owned area) is the permission layer's
-      job, reported not enforced.
-    status_probe: "createWorker()/cleanupWorker()/reconcile() over git worktree; ledger at .cct/worktrees.json; cleanupEligibility() gates removal on origin/primary/clean/merge."
+      force/reset/branch-force-delete are never issued. Worker VERIFICATION is
+      now executed in the worktree and its status set (T7.4, reusing the FR-016
+      runner), with redacted worker->parent correlation records emitted to
+      .cct/worker-analytics.jsonl and fail-closed partial-failure aggregation.
+      Degraded because MERGE execution is still only state-tracked (T8),
+      write-time ownership enforcement (a worker only writes inside its owned
+      area) is the permission layer's job, and the full FR-021 analytics-format
+      translation / DB ingestion / Studio surfacing is a separate task — T7.4
+      emits neutral correlation records only, never claiming full analytics.
+    status_probe: "createWorker()/cleanupWorker()/reconcile() over git worktree; runWorkerVerification()/emitCorrelation()/summarizeBatch() (T7.4) set verification + emit .cct/worker-analytics.jsonl; ledger at .cct/worktrees.json."
