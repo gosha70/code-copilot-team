@@ -115,3 +115,13 @@ capabilities:
       Claude Code runs subagents as native SDK child sessions defined by
       `.claude/agents/*.md` manifests, dispatched through the Agent tool.
     status_probe: "Native Agent tool + .claude/agents/*.md manifests."
+
+  - id: agents.worktrees
+    implementation_kind: cct-first-party
+    runtime_status: disabled
+    reason: >-
+      Claude Code isolates parallel subagents in native git worktrees (Agent
+      isolation: "worktree"), but the CCT worker/ownership/verification/merge/
+      cleanup ledger (FR-013) is not implemented in the Claude adapter; reported
+      disabled rather than overclaimed.
+    status_probe: "Native Agent worktree isolation; no CCT worktree ledger."

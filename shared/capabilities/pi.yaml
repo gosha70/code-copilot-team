@@ -148,3 +148,20 @@ capabilities:
       beyond isolation are reported not-enforced, never faked. Opt in with the
       agents.subagents_enabled config gate.
     status_probe: "buildChildArgv()/runChildSession() spawn pi --mode json with a typed ChildResult; caps.ts bounds concurrency/recursion. T7.1 importClaudeAgents()/validateManifest() over .claude/agents frontmatter."
+
+  - id: agents.worktrees
+    implementation_kind: cct-first-party
+    runtime_status: degraded
+    reason: >-
+      Parallel workers run in isolated git worktrees on their own branch (never
+      master/main), tracked in a versioned .cct/worktrees.json ledger (T7.3,
+      FR-013). ENFORCED against the real git CLI: worktree create/isolation,
+      ownership conflict detection (overlap refused on assignment),
+      dirty-worktree-safe cleanup, stale recovery, and the origin:cct deletion
+      boundary — a worktree CCT did not create is never removed, only reported;
+      force/reset/branch-force-delete are never issued. Degraded because
+      verification and merge are only STATE-TRACKED here (running verification
+      is T7.4, executing merges is T8), and write-time ownership enforcement
+      (a worker only writes inside its owned area) is the permission layer's
+      job, reported not enforced.
+    status_probe: "createWorker()/cleanupWorker()/reconcile() over git worktree; ledger at .cct/worktrees.json; cleanupEligibility() gates removal on origin/primary/clean/merge."
