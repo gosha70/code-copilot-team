@@ -30,6 +30,14 @@ export type VerificationStatus = "pending" | "passed" | "failed";
 export type MergeStatus = "unmerged" | "merged" | "abandoned";
 export type CleanupStatus = "active" | "cleaned" | "stale";
 
+/**
+ * Provenance. Only "cct" records are ever removable. A loaded record whose raw
+ * origin is not exactly "cct" (tampered, externally injected, or a
+ * hand-recorded foreign worktree) is preserved as "foreign" — NEVER rewritten
+ * to "cct" — so cleanup refuses it even when forced.
+ */
+export type WorkerOrigin = "cct" | "foreign";
+
 export interface WorkerRecord {
   workerId: string;
   branch: string;
@@ -41,8 +49,31 @@ export interface WorkerRecord {
   mergeStatus: MergeStatus;
   cleanupStatus: CleanupStatus;
   createdAt: string;
-  /** Provenance — only "cct" records are cleanable. Hard deletion boundary. */
-  origin: "cct";
+  /** Provenance — only "cct" is cleanable. Hard deletion boundary. */
+  origin: WorkerOrigin;
+}
+
+/**
+ * A branch is protected if it is (or, as a full ref, resolves to) master/main.
+ * Full `refs/...` names are rejected outright — workers use short branch names;
+ * this closes the `refs/heads/master` bypass where git treats the full ref as
+ * the protected branch.
+ */
+export function isProtectedBranch(branch: string): boolean {
+  const b = branch.trim().toLowerCase();
+  if (b.startsWith("refs/")) return true;
+  return PROTECTED_BRANCHES.has(b);
+}
+
+/**
+ * True iff `child` is strictly inside `parent` (both absolute). Used to confine
+ * managed worktrees to the repo's parent — create/remove side effects stay
+ * within the managed root, per the design's safety model.
+ */
+export function isPathContained(child: string, parent: string): boolean {
+  if (!path.isAbsolute(child) || !path.isAbsolute(parent)) return false;
+  const rel = path.relative(parent, child);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
 export interface WorktreeLedger {
@@ -109,10 +140,16 @@ export interface Validation {
   errors: string[];
 }
 
-/** Validate a create request against the current ledger (uniqueness + overlap). */
+/**
+ * Validate a create request against the current ledger (uniqueness + overlap).
+ * When `opts.managedRoot` is given, the worktree path must live strictly inside
+ * it (the repo's parent) — create/remove side effects stay within the managed
+ * root. `createWorker` always passes it.
+ */
 export function validateCreateRequest(
   req: CreateRequest,
   ledger: WorktreeLedger,
+  opts: { managedRoot?: string } = {},
 ): Validation {
   const errors: string[] = [];
   const active = ledger.workers.filter((w) => w.cleanupStatus === "active");
@@ -131,21 +168,26 @@ export function validateCreateRequest(
   const branch = (req.branch || "").trim();
   if (!branch || !BRANCH_RE.test(branch) || branch.length > MAX_BRANCH)
     errors.push(`branch '${req.branch}' is not a valid branch name`);
-  else if (PROTECTED_BRANCHES.has(branch.toLowerCase()))
+  else if (isProtectedBranch(branch))
     errors.push(`refusing to create a worker on protected branch '${branch}'`);
   else if (active.some((w) => w.branch === branch))
     errors.push(`branch '${branch}' is already in use by an active worker`);
 
   if (!req.worktreePath || !path.isAbsolute(req.worktreePath))
     errors.push("worktreePath must be an absolute path");
+  else if (
+    opts.managedRoot &&
+    !isPathContained(req.worktreePath, opts.managedRoot)
+  )
+    errors.push(
+      `worktreePath '${req.worktreePath}' must be inside the managed root '${opts.managedRoot}'`,
+    );
   else if (active.some((w) => w.worktreePath === req.worktreePath))
     errors.push(`worktreePath '${req.worktreePath}' is already in use`);
 
-  if (
-    req.base &&
-    PROTECTED_BRANCHES.has(req.base.toLowerCase()) === false &&
-    !BRANCH_RE.test(req.base)
-  )
+  // base is the START point (branching OFF master is legitimate) — only its ref
+  // format is validated, not whether it is protected.
+  if (req.base && !BRANCH_RE.test(req.base))
     errors.push(`base '${req.base}' is not a valid ref`);
 
   const areas = (req.ownedAreas ?? []).map(normalizeArea).filter(Boolean);
@@ -299,7 +341,10 @@ function sanitizeRecord(raw: unknown): WorkerRecord | null {
     mergeStatus: pick(r.mergeStatus, MERGE, "unmerged"),
     cleanupStatus: pick(r.cleanupStatus, CLEANUP, "active"),
     createdAt: sanitizeText(r.createdAt, 40),
-    origin: "cct",
+    // Provenance is PRESERVED, never rewritten: anything not exactly "cct"
+    // (tampered / injected / hand-recorded foreign) loads as "foreign" so
+    // cleanup refuses it. This is the no-delete-user-worktrees invariant.
+    origin: r.origin === "cct" ? "cct" : "foreign",
   };
 }
 
@@ -340,15 +385,22 @@ export function saveLedger(projectRoot: string, ledger: WorktreeLedger): void {
  * reconcile depends on this.
  */
 export function resolveWorktreePath(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
+  // Resolve the DEEPEST existing ancestor (following symlinks at any depth),
+  // then re-append the not-yet-created tail. A symlinked component anywhere in
+  // the path is therefore resolved, so containment checks cannot be bypassed by
+  // a symlink under the managed root.
+  let dir = path.resolve(p);
+  const tail: string[] = [];
+  while (dir !== path.dirname(dir)) {
     try {
-      return path.join(fs.realpathSync(path.dirname(p)), path.basename(p));
+      const real = fs.realpathSync(dir);
+      return tail.length ? path.join(real, ...tail) : real;
     } catch {
-      return p;
+      tail.unshift(path.basename(dir));
+      dir = path.dirname(dir);
     }
   }
+  return path.resolve(p);
 }
 
 function git(
@@ -424,7 +476,7 @@ export function createWorktree(
   branch: string,
   base?: string,
 ): GitOpResult {
-  if (PROTECTED_BRANCHES.has(branch.toLowerCase()))
+  if (isProtectedBranch(branch))
     return {
       ok: false,
       reason: `refusing to create on protected branch '${branch}'`,
@@ -477,8 +529,24 @@ export function createWorker(
   req: CreateRequest,
   nowIso: string,
 ): WorkerOpResult {
-  const v = validateCreateRequest(req, ledger);
+  // Confine managed worktrees to the repo's parent (the managed root).
+  const managedRoot = path.dirname(repoRoot);
+  const v = validateCreateRequest(req, ledger, { managedRoot });
   if (!v.valid) return { ok: false, ledger, errors: v.errors };
+
+  // Authoritative containment: resolve symlinks on BOTH sides before comparing,
+  // so a symlinked directory under the managed root cannot smuggle the worktree
+  // outside it (the lexical check above only catches raw `../`).
+  const realRoot = resolveWorktreePath(managedRoot);
+  const realChild = resolveWorktreePath(req.worktreePath);
+  if (!isPathContained(realChild, realRoot))
+    return {
+      ok: false,
+      ledger,
+      errors: [
+        `worktreePath '${req.worktreePath}' resolves outside the managed root '${realRoot}' (symlink escape)`,
+      ],
+    };
 
   const created = createWorktree(
     repoRoot,

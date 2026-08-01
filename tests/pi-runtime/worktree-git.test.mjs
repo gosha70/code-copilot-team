@@ -23,8 +23,8 @@ import {
 const HAS_GIT = spawnSync("git", ["--version"], { encoding: "utf8" }).status === 0;
 const NOW = "2026-07-31T00:00:00Z";
 
-function initRepo() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cct-wt-repo-"));
+function initRepoAt(dir) {
+  fs.mkdirSync(dir, { recursive: true });
   const g = (args) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
   g(["init", "-q", "-b", "master"]);
   g(["config", "user.email", "t@example.com"]);
@@ -33,6 +33,10 @@ function initRepo() {
   g(["add", "-A"]);
   g(["commit", "-q", "-m", "seed"]);
   return dir;
+}
+
+function initRepo() {
+  return initRepoAt(fs.mkdtempSync(path.join(os.tmpdir(), "cct-wt-repo-")));
 }
 
 const wtPath = (repo, name) => path.join(path.dirname(repo), path.basename(repo) + "-" + name);
@@ -150,4 +154,52 @@ test("reconcile reports a foreign worktree it did not create (never touches it)"
   // git reports realpath'd paths (macOS /var -> /private/var).
   assert.ok(reported.includes(fs.realpathSync(foreign)), "foreign worktree reported");
   assert.ok(fs.existsSync(foreign), "foreign worktree left intact");
+});
+
+test("a foreign worktree RECORDED in the ledger is never removed, even forced", { skip: !HAS_GIT }, () => {
+  const repo = initRepo();
+  const foreign = wtPath(repo, "intruder");
+  spawnSync("git", ["-C", repo, "worktree", "add", "-q", foreign, "-b", "feature/intruder"], { encoding: "utf8" });
+  // A tampered/injected ledger entry pointing at a real foreign worktree.
+  const ledger = {
+    version: 1,
+    workers: [{
+      workerId: "intruder", branch: "feature/intruder", worktreePath: fs.realpathSync(foreign),
+      featureId: null, tasks: [], ownedAreas: [], verificationStatus: "pending",
+      mergeStatus: "merged", cleanupStatus: "active", createdAt: NOW, origin: "foreign",
+    }],
+  };
+  const res = cleanupWorker(repo, ledger, "intruder", { force: true });
+  assert.equal(res.ok, false);
+  assert.ok(/foreign/.test(res.reason));
+  assert.ok(fs.existsSync(foreign), "foreign worktree left intact even with force");
+});
+
+test("createWorker refuses a worktree path outside the managed root", { skip: !HAS_GIT }, () => {
+  const repo = initRepo();
+  const outside = path.join(path.parse(repo).root, "cct-outside-" + path.basename(repo));
+  const res = createWorker(repo, emptyLedger(), {
+    workerId: "wout", branch: "feature/wout", worktreePath: outside,
+  }, NOW);
+  assert.equal(res.ok, false);
+  assert.ok((res.errors || []).some((e) => /managed root/.test(e)));
+  assert.ok(!fs.existsSync(outside), "nothing created outside the managed root");
+});
+
+test("createWorker refuses a symlink escape out of the managed root", { skip: !HAS_GIT }, () => {
+  // Managed root = the repo's parent. Put a symlink INSIDE it pointing OUTSIDE,
+  // then request a worktree under the symlink. Lexically it looks contained;
+  // by realpath it escapes and must be refused.
+  const managedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cct-mroot-"));
+  const repo = initRepoAt(path.join(managedRoot, "repo"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "cct-escape-")); // sibling of managedRoot
+  fs.symlinkSync(outside, path.join(managedRoot, "link-out"));
+  const escapePath = path.join(managedRoot, "link-out", "worker"); // -> <outside>/worker
+
+  const res = createWorker(repo, emptyLedger(), {
+    workerId: "wesc", branch: "feature/wesc", worktreePath: escapePath,
+  }, NOW);
+  assert.equal(res.ok, false);
+  assert.ok((res.errors || []).some((e) => /managed root|symlink escape/.test(e)), (res.errors || []).join("; "));
+  assert.ok(!fs.existsSync(path.join(outside, "worker")), "no worktree created outside via the symlink");
 });

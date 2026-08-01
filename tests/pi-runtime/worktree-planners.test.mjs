@@ -13,6 +13,8 @@ import {
   cleanupEligibility,
   detectOwnershipConflicts,
   emptyLedger,
+  isPathContained,
+  isProtectedBranch,
   loadLedger,
   normalizeArea,
   reconcile,
@@ -197,9 +199,68 @@ test("loadLedger sanitizes: drops bad records, forces origin cct, clamps enums",
   const led = loadLedger(dir);
   assert.equal(led.version, 1);
   assert.equal(led.workers.length, 1);
-  assert.equal(led.workers[0].origin, "cct"); // forced
+  // Provenance PRESERVED, not rewritten: an origin:"user" record loads as
+  // "foreign" and is never removable — the no-delete-user-worktrees invariant.
+  assert.equal(led.workers[0].origin, "foreign");
+  assert.equal(
+    cleanupEligibility(led.workers[0], { isClean: true, isPrimary: false, force: true }).eligible,
+    false,
+    "a foreign (non-cct) record must never be removable, even forced",
+  );
   assert.equal(led.workers[0].mergeStatus, "unmerged"); // clamped
   assert.equal(led.workers[0].verificationStatus, "passed"); // valid kept
+});
+
+test("a missing/unknown origin loads as foreign (never cct)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cct-wt-orig-"));
+  fs.mkdirSync(path.join(dir, ".cct"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, ".cct", "worktrees.json"),
+    JSON.stringify({ version: 1, workers: [{ workerId: "x", branch: "feature/x", worktreePath: "/abs/x" }] }),
+  );
+  assert.equal(loadLedger(dir).workers[0].origin, "foreign");
+});
+
+// ── branch-name + path safety (review fixes) ─────────────────────────────────
+
+test("isProtectedBranch rejects master/main and any full refs/ name", () => {
+  for (const b of ["master", "main", "MASTER", "refs/heads/master", "refs/heads/main", "refs/tags/x"])
+    assert.equal(isProtectedBranch(b), true, b);
+  for (const b of ["feature/x", "fix/master-thing", "heads/x"])
+    assert.equal(isProtectedBranch(b), false, b);
+});
+
+test("validateCreateRequest rejects a full-ref master bypass", () => {
+  const r = validateCreateRequest(
+    { workerId: "wref", branch: "refs/heads/master", worktreePath: "/mroot/wref" },
+    emptyLedger(),
+  );
+  assert.equal(r.valid, false);
+  assert.ok(r.errors.some((e) => /protected branch/.test(e)));
+});
+
+test("isPathContained: strictly-inside only", () => {
+  assert.equal(isPathContained("/root/a/b", "/root"), true);
+  assert.equal(isPathContained("/root", "/root"), false); // equal is not inside
+  assert.equal(isPathContained("/other/x", "/root"), false);
+  assert.equal(isPathContained("/root/../evil", "/root"), false);
+  assert.equal(isPathContained("relative", "/root"), false);
+});
+
+test("validateCreateRequest enforces managedRoot containment when given", () => {
+  const inside = validateCreateRequest(
+    { workerId: "wi", branch: "feature/wi", worktreePath: "/mroot/repo-wi" },
+    emptyLedger(),
+    { managedRoot: "/mroot" },
+  );
+  assert.equal(inside.valid, true, inside.errors.join("; "));
+  const outside = validateCreateRequest(
+    { workerId: "wo", branch: "feature/wo", worktreePath: "/tmp/arbitrary-cct-wt" },
+    emptyLedger(),
+    { managedRoot: "/mroot" },
+  );
+  assert.equal(outside.valid, false);
+  assert.ok(outside.errors.some((e) => /managed root/.test(e)));
 });
 
 test("saveLedger/loadLedger round-trips and pins the version", () => {
