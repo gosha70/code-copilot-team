@@ -301,6 +301,27 @@ test("loadTeamLedger resets a task claimed by a non-member to open", () => {
   assert.equal(l.tasks[0].claimedBy, null);
 });
 
+test("loadTeamLedger resets a claim that contradicts assignment (assignedTo != claimedBy)", () => {
+  const root = tmp();
+  writeLedger(root, {
+    teamId: "t1",
+    status: "active",
+    members: [
+      { memberId: "lead", role: "lead", status: "active" },
+      { memberId: "alice", role: "teammate", status: "active" },
+      { memberId: "bob", role: "teammate", status: "active" },
+    ],
+    // both active, but the claim contradicts the assignment
+    tasks: [{ taskId: "task-a", assignedTo: "alice", claimStatus: "claimed", claimedBy: "bob" }],
+    planApproval: { required: true, approved: true, approvedBy: "lead" },
+  });
+  const l = loadTeamLedger(root);
+  assert.equal(l.tasks[0].claimStatus, "open", "cross-assignment claim reset to open");
+  assert.equal(l.tasks[0].claimedBy, null);
+  // and therefore the wrong member cannot complete it
+  assert.equal(completeTask(l, "task-a", "bob").ok, false);
+});
+
 test("postMessage redacts secret-like from/to, not just body", () => {
   const root = tmp();
   postMessage(root, "sk-ABCDEFGHIJKLMNOP1234", "ghp_ABCDEFGHIJKLMNOPQRST12345", "hi", NOW);

@@ -580,18 +580,25 @@ function reconcileLedger(l: TeamLedger): TeamLedger | null {
     .map((t) => {
       const assignedTo =
         t.assignedTo && activeIds.has(t.assignedTo) ? t.assignedTo : null;
-      // A claim by a non-active/unknown member is invalid -> reset to open.
-      if (
-        t.claimStatus === "claimed" &&
-        (!t.claimedBy || !activeIds.has(t.claimedBy))
-      )
-        return {
-          ...t,
-          assignedTo,
-          claimStatus: "open" as ClaimStatus,
-          claimedBy: null,
-          claimedAt: null,
-        };
+      // A claim is valid ONLY when the claimant is active AND consistent with
+      // assignment (unassigned or assigned to the claimant) — the same contract
+      // claimTask enforces. Anything else (ghost claimant, or a claim that
+      // contradicts assignedTo) is reset to open, so a tampered ledger cannot
+      // let the wrong member complete a task.
+      if (t.claimStatus === "claimed") {
+        const validClaim =
+          !!t.claimedBy &&
+          activeIds.has(t.claimedBy) &&
+          (assignedTo === null || assignedTo === t.claimedBy);
+        if (!validClaim)
+          return {
+            ...t,
+            assignedTo,
+            claimStatus: "open" as ClaimStatus,
+            claimedBy: null,
+            claimedAt: null,
+          };
+      }
       return { ...t, assignedTo };
     });
 
