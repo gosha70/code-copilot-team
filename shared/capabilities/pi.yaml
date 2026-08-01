@@ -186,7 +186,10 @@ capabilities:
       (recorded who/why; close only when no task is still claimed). Degraded
       because Pi has no team primitive: live peer EXECUTION runs through the
       T7.2/T7.4 runners separately (the controller never spawns), messaging is a
-      polled append-log not a live transport, and result synthesis / failure
-      recovery / status UI are T8.2. Opt in with the agents.teams_enabled config
-      gate.
-    status_probe: "createTeam()/addTeammate()/postTask()/assignTask()/claimTask()/approvePlan()/activateTeam()/requestShutdown()/closeTeam() over .cct/team.json; postMessage() appends redacted .cct/team-messages.jsonl."
+      polled append-log not a live transport. A team status SNAPSHOT,
+      fail-closed result synthesis, and failure recovery (reopening a left
+      member's claims) are present (T8.2); still degraded because the status view
+      is an on-demand snapshot, not a live-updating UI (no Pi UI event stream),
+      and live peer execution / real message transport are not Pi primitives.
+      Opt in with the agents.teams_enabled config gate.
+    status_probe: "createTeam()/claimTask()/approvePlan()/requestShutdown() over .cct/team.json; teamStatus()/synthesizeTeam()/markMemberLeft()/reopenOrphanedClaims() (T8.2) read-model + recovery; postMessage() appends redacted .cct/team-messages.jsonl."
