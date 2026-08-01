@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **57 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F started** (T11.1 Pi analytics adapter). Remaining: **Slice F** (Phase 11, release — T11.2–T11.6).
+written. Current state: **58 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F in progress** (T11.1 analytics adapter, T11.2 capability parity docs). Remaining: **Slice F** (Phase 11, release — T11.3–T11.6).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -296,7 +296,19 @@ integration preview validates against the completed enforcement path;
     ingest); full session_analytics suite 205/0. _Native-transcript tokens,
     denials/review/compaction sources, and worker-analytics persistence are
     named follow-ups._
-- [ ] **T11.2 (P0)** Generated capability parity documentation from the registry; compatibility matrix.
+- [x] **T11.2 (P0)** Generated capability parity documentation from the registry; compatibility matrix.
+    `scripts/generate-capability-docs.sh` (bash + `ruby -ryaml`, same substrate as
+    validate-capabilities.sh) renders `shared/capabilities/COMPATIBILITY.md`
+    purely from the registry (catalog + pi/claude-code yaml): a compact matrix
+    (per-capability `status (kind)` × adapter, + default/security) plus
+    per-capability detail carrying the **verbatim** adapter `reason` /
+    `status_probe` / `claude_equivalent` — degraded/disabled/unsupported nuance
+    preserved, never summarized. `--check` drift guard (optional temp-path arg)
+    wired into `test-pi-adapter.sh` (positive + planted-drift negative) so the doc
+    cannot stale; no hand-authored claims (any edit fails the guard — fix the
+    registry reason instead). Deterministic; committed baseline. Design:
+    `design-t112-capability-docs.md`. Adapter suite 132/0; validate-capabilities
+    169/0. _README tier table is T11.6 (hand-curated narrative)._
 - [ ] **T11.3 (P1)** Docs: quickstart, configuration reference, security model, migration-from-Claude-Code guide, extension development guide.
 - [ ] **T11.4 (P1)** SBOM, checksums, release workflow, changelog; package publishing (pinned-tag `pi install` documented as advisory).
 - [ ] **T11.5 (P1)** Security test battery complete (§18.5 of consolidated plan); cross-adapter contract suite green.

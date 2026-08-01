@@ -335,6 +335,28 @@ for f in catalog pi claude-code; do
 done
 assert "capability registry validates" "bash '$REPO_DIR/scripts/validate-capabilities.sh' >/dev/null 2>&1"
 
+# T11.2: the generated compatibility doc must not stale — it is a deterministic
+# render of the registry. The guard fails the build if COMPATIBILITY.md differs
+# from a fresh generation (registry changed without regenerating, or hand-edit).
+if command -v ruby >/dev/null 2>&1; then
+  assert "generated capability doc is up to date with the registry" \
+    "bash '$REPO_DIR/scripts/generate-capability-docs.sh' --check >/dev/null 2>&1"
+  # Negative: prove the guard fires on planted drift (a temp copy, never the
+  # tracked file), mirroring the registry drift guard above.
+  DOC_DRIFT="$TMP/COMPATIBILITY-drifted.md"
+  cp "$CAP_DIR/COMPATIBILITY.md" "$DOC_DRIFT"
+  printf '\nHAND EDITED\n' >> "$DOC_DRIFT"
+  DOC_RC=0
+  bash "$REPO_DIR/scripts/generate-capability-docs.sh" --check "$DOC_DRIFT" >/dev/null 2>&1 || DOC_RC=$?
+  assert "capability doc drift guard fires on planted drift" "[[ '$DOC_RC' == '1' ]]"
+else
+  echo "  SKIP: capability doc drift guard — ruby not found"
+  if [[ -n "${CI:-}" ]]; then
+    echo "  FAIL: ruby is required in CI; the capability doc drift guard must run"
+    FAIL=$((FAIL + 1))
+  fi
+fi
+
 # Negative fixtures: prove the validator still catches what it claims to.
 # Without these, editing the validator could silently stop enforcing anything
 # while the passing-direction assertion above stayed green.
