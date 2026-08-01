@@ -106,9 +106,25 @@ un-redacted field.
 
 Adding `COPILOT_PI` + the registered adapter is sufficient for the EXISTING
 archive/ingest/Studio path to accept Pi sessions — **no Studio schema change**.
-A test normalizes a Pi `RawSession` through the existing ingest and asserts it
-lands (compatibility preserved, null fields tolerated by the null-vs-zero
-contract).
+
+### Persistence boundary (review finding — the store does not persist `metadata`)
+A DB-level ingest test revealed that `copilot_session`/`copilot_turn` persist
+**only fixed columns** — there is **no surface for `RawSession.metadata`**, and
+per-turn cost is computed from tokens×pricing (which are `None` for Pi). So:
+
+- **Persists to the Studio DB:** `copilot="pi"`, session id (parent),
+  `project_path`, `phase`, `started_at`/`ended_at`, `turn_count`, and the
+  per-worker **sidechain** turns.
+- **Computed but NOT persisted** (in `RawSession.metadata` only — no column):
+  `cost_usd`, `worker_outcomes`, `correlation_ids`, `final_verdict`,
+  `feature_id`; per-turn `cost_usd` is `NULL` (no tokens). Listed in
+  `metadata.not_persisted_by_current_store` so the boundary is not silent.
+
+Persisting the worker-analytics fields requires a **store-schema surface** (a
+session-metadata table/columns — which would also recover claude's currently
+dropped `git_branch`). That is a **shared-pipeline change beyond T11.1's
+"mapping + redaction + ingestion" scope** — a named follow-up / open decision,
+not a silent gap. The ingest test asserts the DB, not `RawSession.metadata`.
 
 ## Enforceable vs declared (T11.1)
 
