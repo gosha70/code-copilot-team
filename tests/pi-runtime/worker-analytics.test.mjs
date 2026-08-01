@@ -64,6 +64,29 @@ test("runWorkerVerification: no runner -> pending (did NOT execute, never silent
   assert.equal(r.ran, false);
 });
 
+test("runWorkerVerification: empty required gates -> passed, before any runner (no spurious pending)", () => {
+  const r = runWorkerVerification(tmp(), [], 900, { runner: null });
+  assert.equal(r.status, "passed");
+  assert.equal(r.ran, false);
+  assert.match(r.reason, /no verification gates required/);
+});
+
+test("runWorkerVerification: a stale passing result cannot mask a later failing run", () => {
+  const worktree = tmp();
+  const passStub = writeStub(
+    tmp(),
+    `mkdir -p "$1/.cct/verify"; echo '{"drift":{"status":"supported","pass":true}}' > "$1/.cct/verify/result.json"; exit 0`,
+  );
+  assert.equal(runWorkerVerification(worktree, ["drift"], 900, { runner: passStub }).status, "passed");
+
+  // A second runner fails WITHOUT writing a fresh result. The prior pass must
+  // be cleared, so this run is NOT reported passed.
+  const failNoWriteStub = writeStub(tmp(), `exit 1`);
+  const r = runWorkerVerification(worktree, ["drift"], 900, { runner: failNoWriteStub });
+  assert.notEqual(r.status, "passed", "a stale pass must not survive a failing run");
+  assert.equal(r.status, "failed");
+});
+
 // ── 2. correlation + redaction ───────────────────────────────────────────────
 
 function corrInput(overrides = {}) {

@@ -23,6 +23,7 @@ import {
   runVerify,
   verifyGate,
   resolveVerifyRunner,
+  verifyDir,
 } from "../workflow/verify.ts";
 import { containsSecret } from "../workflow/memory.ts";
 import type { VerificationStatus } from "./worktree.ts";
@@ -50,14 +51,37 @@ export function runWorkerVerification(
   timeoutSec: number,
   opts: { runner?: string | null; piAdapterDir?: string | null } = {},
 ): WorkerVerificationResult {
+  // No required gates -> vacuously passed. Decided BEFORE resolving/running a
+  // runner, so a default config (verification.required = []) with no runner is
+  // "passed" (nothing to verify), not a spurious "pending".
+  if (gates.length === 0) {
+    return {
+      status: "passed",
+      ran: false,
+      reason: "no verification gates required",
+    };
+  }
+
   const runner =
     opts.runner !== undefined
       ? opts.runner
       : resolveVerifyRunner(opts.piAdapterDir ?? null);
+
+  // Clear any PRIOR result before running: a runner that fails without writing
+  // a fresh result must not let verifyGate reuse a stale pass (fail-closed).
+  try {
+    fs.rmSync(path.join(verifyDir(worktreePath), "result.json"), {
+      force: true,
+    });
+  } catch {
+    // best-effort; verifyGate still fails closed on a missing result
+  }
+
   const outcome = runVerify(worktreePath, runner, gates, timeoutSec);
   if (!outcome.ran) {
     return { status: "pending", ran: false, reason: outcome.reason };
   }
+  // verifyGate now reads only THIS run's result (or none -> fail closed).
   const gate = verifyGate(worktreePath, gates, "build");
   return {
     status: gate.pass ? "passed" : "failed",
