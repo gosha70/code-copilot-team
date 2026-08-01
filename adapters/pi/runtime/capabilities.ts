@@ -125,5 +125,12 @@ export function seedCapabilities(): CapabilityRecord[] {
       reason:
         "Parallel workers run in isolated git worktrees on their own branch (never master/main), tracked in a versioned .cct/worktrees.json ledger (T7.3, FR-013). ENFORCED against the real git CLI: worktree create/isolation, ownership conflict detection (overlap refused on assignment), dirty-worktree-safe cleanup, stale recovery, and the origin:cct deletion boundary — a worktree CCT did not create is never removed, only reported; force/reset/branch-force-delete are never issued. Worker VERIFICATION is now executed in the worktree and its status set (T7.4, reusing the FR-016 runner), with redacted worker->parent correlation records emitted to .cct/worker-analytics.jsonl and fail-closed partial-failure aggregation. DEGRADED because MERGE execution is still only state-tracked (T8), write-time ownership enforcement (a worker only writes inside its owned area) is the permission layer's job, and the full FR-021 analytics-format translation / DB ingestion / Studio surfacing is a separate task — T7.4 emits neutral correlation records only, never claiming full analytics.",
     },
+    {
+      id: "agents.teams",
+      implementation_kind: "cct-first-party",
+      runtime_status: "degraded",
+      reason:
+        "Opt-in agent teams (T8.1, FR-012) — CCT-first-party coordination STATE, distinct from subagent delegation (peers, not parent->child). A shared ledger (.cct/team.json) + redacted peer-message append-log (.cct/team-messages.jsonl), kept separate from the worktree ledger (a task links to a worker only by workerId). ENFORCED fail-closed on local state: unique lead/teammate identities (exactly one lead), a single-claimant task ledger (double-claim / cross-assignment / over-cap / pre-approval claims all refused), a plan-approval gate on BOTH activation and claiming, bounded concurrency (autonomy.max_concurrency), and controlled shutdown (recorded who/why; close only when no task is still claimed). DEGRADED because Pi has no team primitive: live peer EXECUTION runs through the T7.2/T7.4 runners separately (the controller never spawns), messaging is a polled append-log not a live transport, and result synthesis / failure recovery / status UI are T8.2. Opt in with agents.teams_enabled.",
+    },
   ];
 }
