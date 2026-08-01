@@ -486,11 +486,15 @@ export function postMessage(
   nowIso: string,
 ): boolean {
   try {
+    // Redact EVERY persisted string field — from/to are caller-provided and
+    // could carry a secret value, not just the body.
+    const redact = (v: string, max: number): string =>
+      containsSecret(v) ? "[REDACTED]" : sanitizeText(v, max);
     const msg: TeamMessage = {
       at: nowIso,
-      from: sanitizeText(from, MAX_ID),
-      to: to === "all" ? "all" : sanitizeText(to, MAX_ID),
-      body: containsSecret(body) ? "[REDACTED]" : sanitizeText(body, MAX_BODY),
+      from: redact(from, MAX_ID),
+      to: to === "all" ? "all" : redact(to, MAX_ID),
+      body: redact(body, MAX_BODY),
     };
     const file = path.join(projectRoot, TEAM_MESSAGES_REL);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -536,6 +540,64 @@ function sanitizeTask(raw: unknown): TeamTask | null {
   };
 }
 
+/**
+ * Re-enforce the ledger invariants AFTER field sanitization, fail-closed. Field
+ * sanitization alone does not stop a tampered ledger from loading as active +
+ * approved with a bogus lead, which would let `claimTask` bypass approval. So:
+ *   - unique members (dedupe by id) + unique tasks; exactly ONE lead or the
+ *     whole ledger is rejected (returns null — a team must have one lead);
+ *   - `approved` is trusted ONLY when `approvedBy` is that canonical lead, else
+ *     approval is dropped (claims stay blocked);
+ *   - a task's `assignedTo`/`claimedBy` must reference an ACTIVE member, else it
+ *     is cleared (a claim by a ghost member is reset to open).
+ */
+function reconcileLedger(l: TeamLedger): TeamLedger | null {
+  const seenM = new Set<string>();
+  const members = l.members.filter((m) =>
+    seenM.has(m.memberId) ? false : (seenM.add(m.memberId), true),
+  );
+  const leads = members.filter((m) => m.role === "lead");
+  if (leads.length !== 1) return null; // no single lead -> not a valid team
+  const lead = leads[0].memberId;
+  const activeIds = new Set(
+    members.filter((m) => m.status === "active").map((m) => m.memberId),
+  );
+
+  const approvalOk =
+    l.planApproval.approved && l.planApproval.approvedBy === lead;
+  const planApproval: PlanApproval = approvalOk
+    ? l.planApproval
+    : {
+        ...l.planApproval,
+        approved: false,
+        approvedBy: null,
+        approvedAt: null,
+      };
+
+  const seenT = new Set<string>();
+  const tasks = l.tasks
+    .filter((t) => (seenT.has(t.taskId) ? false : (seenT.add(t.taskId), true)))
+    .map((t) => {
+      const assignedTo =
+        t.assignedTo && activeIds.has(t.assignedTo) ? t.assignedTo : null;
+      // A claim by a non-active/unknown member is invalid -> reset to open.
+      if (
+        t.claimStatus === "claimed" &&
+        (!t.claimedBy || !activeIds.has(t.claimedBy))
+      )
+        return {
+          ...t,
+          assignedTo,
+          claimStatus: "open" as ClaimStatus,
+          claimedBy: null,
+          claimedAt: null,
+        };
+      return { ...t, assignedTo };
+    });
+
+  return { ...l, members, tasks, planApproval };
+}
+
 export function loadTeamLedger(projectRoot: string): TeamLedger | null {
   const file = path.join(projectRoot, TEAM_LEDGER_REL);
   try {
@@ -549,7 +611,7 @@ export function loadTeamLedger(projectRoot: string): TeamLedger | null {
       .filter((t: TeamTask | null): t is TeamTask => !!t);
     const pa = (p.planApproval ?? {}) as Record<string, unknown>;
     const sd = (p.shutdown ?? {}) as Record<string, unknown>;
-    return {
+    const sanitized: TeamLedger = {
       version: TEAM_LEDGER_VERSION,
       teamId: p.teamId,
       createdAt: sanitizeText(p.createdAt, 40),
@@ -569,6 +631,8 @@ export function loadTeamLedger(projectRoot: string): TeamLedger | null {
         at: sanitizeText(sd.at, 40) || null,
       },
     };
+    // Field sanitization is not enough — enforce the structural invariants.
+    return reconcileLedger(sanitized);
   } catch {
     return null;
   }

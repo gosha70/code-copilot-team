@@ -234,3 +234,79 @@ test("loadTeamLedger drops malformed members/tasks and clamps enums", () => {
 test("loadTeamLedger on missing/corrupt returns null", () => {
   assert.equal(loadTeamLedger(tmp()), null);
 });
+
+// ── tamper invariants (review fixes) ─────────────────────────────────────────
+
+function writeLedger(root, obj) {
+  fs.mkdirSync(path.join(root, ".cct"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".cct", "team.json"), JSON.stringify(obj));
+}
+
+test("loadTeamLedger rejects a ledger with two leads (no single lead)", () => {
+  const root = tmp();
+  writeLedger(root, {
+    teamId: "t1",
+    status: "active",
+    members: [
+      { memberId: "lead", role: "lead", status: "active" },
+      { memberId: "eve", role: "lead", status: "active" },
+    ],
+    tasks: [{ taskId: "task-a", claimStatus: "open" }],
+    planApproval: { required: true, approved: true, approvedBy: "eve" },
+  });
+  assert.equal(loadTeamLedger(root), null, "two leads -> invalid team -> rejected");
+});
+
+test("loadTeamLedger rejects a ledger with zero leads", () => {
+  const root = tmp();
+  writeLedger(root, {
+    teamId: "t1",
+    status: "active",
+    members: [{ memberId: "alice", role: "teammate", status: "active" }],
+    tasks: [{ taskId: "task-a", claimStatus: "open" }],
+    planApproval: { required: true, approved: true },
+  });
+  assert.equal(loadTeamLedger(root), null, "zero leads -> rejected");
+});
+
+test("loadTeamLedger drops approval not granted by the canonical lead", () => {
+  const root = tmp();
+  writeLedger(root, {
+    teamId: "t1",
+    status: "active",
+    members: [
+      { memberId: "lead", role: "lead", status: "active" },
+      { memberId: "alice", role: "teammate", status: "active" },
+    ],
+    tasks: [{ taskId: "task-a", claimStatus: "open" }],
+    planApproval: { required: true, approved: true, approvedBy: "alice" }, // not the lead
+  });
+  const l = loadTeamLedger(root);
+  assert.equal(l.planApproval.approved, false, "approval by a non-lead is invalid");
+  // and therefore a claim is blocked
+  assert.equal(claimTask(l, "task-a", "alice", NOW).ok, false);
+});
+
+test("loadTeamLedger resets a task claimed by a non-member to open", () => {
+  const root = tmp();
+  writeLedger(root, {
+    teamId: "t1",
+    status: "active",
+    members: [{ memberId: "lead", role: "lead", status: "active" }],
+    tasks: [{ taskId: "task-a", claimStatus: "claimed", claimedBy: "ghost" }],
+    planApproval: { required: true, approved: true, approvedBy: "lead" },
+  });
+  const l = loadTeamLedger(root);
+  assert.equal(l.tasks[0].claimStatus, "open");
+  assert.equal(l.tasks[0].claimedBy, null);
+});
+
+test("postMessage redacts secret-like from/to, not just body", () => {
+  const root = tmp();
+  postMessage(root, "sk-ABCDEFGHIJKLMNOP1234", "ghp_ABCDEFGHIJKLMNOPQRST12345", "hi", NOW);
+  const line = JSON.parse(
+    fs.readFileSync(path.join(root, TEAM_MESSAGES_REL), "utf8").trim(),
+  );
+  assert.equal(line.from, "[REDACTED]");
+  assert.equal(line.to, "[REDACTED]");
+});
