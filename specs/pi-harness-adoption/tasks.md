@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **58 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F in progress** (T11.1 analytics adapter, T11.2 capability parity docs). Remaining: **Slice F** (Phase 11, release — T11.3–T11.6).
+written. Current state: **59 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F in progress** (T11.1 analytics, T11.2 capability docs, T11.5 security battery). Remaining: **Slice F** (T11.3, T11.4, T11.6).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -311,7 +311,21 @@ integration preview validates against the completed enforcement path;
     169/0. _README tier table is T11.6 (hand-curated narrative)._
 - [ ] **T11.3 (P1)** Docs: quickstart, configuration reference, security model, migration-from-Claude-Code guide, extension development guide.
 - [ ] **T11.4 (P1)** SBOM, checksums, release workflow, changelog; package publishing (pinned-tag `pi install` documented as advisory).
-- [ ] **T11.5 (P1)** Security test battery complete (§18.5 of consolidated plan); cross-adapter contract suite green.
+- [x] **T11.5 (P1)** Security test battery complete (§18.5 of consolidated plan); cross-adapter contract suite green.
+    CONSOLIDATION, not new behavior. `tests/pi-runtime/security-battery.test.mjs`
+    (9): one canonical fail-closed invariant per category — trust gating,
+    protected paths, command denial, sandbox fail-closed, secret redaction,
+    lifecycle-hook honesty, tamper-safe ledgers, fail-closed team/worktree — each
+    imported from the SAME real function the deep suites use (tripwire, not a
+    parallel impl), + a #9 asserting the degraded surfaces (fork-bomb/live-UI/
+    Stop-compaction) are reported honestly in the registry (never `enabled`).
+    `tests/pi-runtime/cross-adapter-contract.test.mjs` (4): SHARED SEMANTICS ONLY
+    — phase order, permission deny-precedence, Pi≡Claude≡catalog capability set,
+    and an assertion that native divergence (Pi degraded vs Claude native) is
+    intentional, not forced parity. `specs/pi-harness-adoption/security-battery.md`
+    maps every DoD-11/12 item + the 8 categories to concrete tests, with the
+    "degraded, not parity" call-outs. Runtime 331/0; adapter 132/0. Design:
+    `design-t115-security-battery.md`.
 - [ ] **T11.6 (P1)** `lessons-learned.md`; alignment-maintenance checklist pass; README Supported Tools + tier table (Pi = Enforced).
 
 ## Cross-cutting
