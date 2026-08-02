@@ -10,7 +10,7 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ## [Unreleased]
 
-## [1.0.0]
+## [1.1.0]
 
 Pi adopted as a first-class **enforced** coding-agent harness alongside Claude
 Code, with honest capability reporting throughout.

@@ -43,7 +43,7 @@
 
 set -euo pipefail
 
-PI_CODE_VERSION="0.1.0-dev"
+PI_CODE_VERSION="1.1.0"
 SELF_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
 # Managed install layout (populated by adapters/pi/setup.sh). When running

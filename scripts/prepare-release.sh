@@ -37,6 +37,17 @@ if [[ "$VERSION" != "$PKG_VERSION" ]]; then
   echo "[FAIL] requested version $VERSION != package.json $PKG_VERSION." >&2
   exit 1
 fi
+# A released tag must never move: reject a version whose vX.Y.Z tag already
+# exists at a DIFFERENT commit. (When tags aren't fetched — e.g. a shallow test
+# checkout — this is skipped; the release workflow fetches tags with depth 0.)
+if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
+  existing="$(git rev-parse "v$VERSION")"
+  head="$(git rev-parse HEAD)"
+  if [[ "$existing" != "$head" ]]; then
+    echo "[FAIL] tag v$VERSION already exists at ${existing:0:9} (HEAD=${head:0:9}) — bump the version; a released tag must not move." >&2
+    exit 1
+  fi
+fi
 echo "[OK] release version: $VERSION"
 
 # ── 3. checksums over the tracked Pi package files (deterministic, sorted) ────

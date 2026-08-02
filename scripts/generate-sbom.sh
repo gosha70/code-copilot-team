@@ -108,8 +108,12 @@ case "$MODE" in
     target="${2:-$OUT}"
     tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
     render >"$tmp"
-    if ! diff -u "$target" "$tmp" >/dev/null 2>&1; then
-      echo "[FAIL] $target is stale — regenerate with scripts/generate-sbom.sh" >&2
+    # SEMANTIC compare: JSON.pretty_generate formatting varies across ruby
+    # versions (CI ruby 3.x vs a dev's 4.x), so compare the PARSED content, not
+    # the text — content drift still fails, formatting variance does not. A
+    # parse error on the target (hand-corruption) also fails, closed.
+    if ! ruby -rjson -e 'exit(JSON.parse(File.read(ARGV[0])) == JSON.parse(File.read(ARGV[1])) ? 0 : 1)' "$target" "$tmp" 2>/dev/null; then
+      echo "[FAIL] $target is stale (content differs) — regenerate with scripts/generate-sbom.sh" >&2
       diff -u "$target" "$tmp" >&2 || true
       exit 1
     fi

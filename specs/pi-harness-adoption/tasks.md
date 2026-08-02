@@ -321,13 +321,16 @@ integration preview validates against the completed enforcement path;
     each must pass. Structure check wired into `test-pi-adapter.sh` (5 docs exist
     + README links them); all relative links verified. Adapter suite 142/0.
 - [x] **T11.4 (P1)** SBOM, checksums, release workflow, changelog; package publishing (pinned-tag `pi install` documented as advisory).
-    `package.json` bumped to **1.0.0** (aligned to the existing `v1.0.0` tag).
-    `CHANGELOG.md` (Keep a Changelog) seeded with `1.0.0`. `scripts/generate-sbom.sh`
+    `package.json` (+ lock, + `pi-code` `PI_CODE_VERSION`) bumped to **1.1.0** —
+    `v1.0.0` is already a released tag at a different commit, so the harness is the
+    next minor. `CHANGELOG.md` (Keep a Changelog) seeded with `1.1.0`. `scripts/generate-sbom.sh`
     renders a **deterministic CycloneDX 1.5** `adapters/pi/sbom.cdx.json` (committed;
     runtime deps: none, build-only devDeps marked excluded) with a `--check` drift
-    guard. `scripts/prepare-release.sh [version]` is an **offline dry-run** (verify
-    SBOM current → tag↔package.json agreement → `dist/SHA256SUMS` → `dist/RELEASE_NOTES.md`
-    from CHANGELOG; no publish). `.github/workflows/release.yml` (tag-triggered,
+    guard (**semantic** — parses+deep-compares so CI ruby 3.x vs a dev's 4.x
+    JSON-formatting variance never causes false drift). `scripts/prepare-release.sh
+    [version]` is an **offline dry-run** (verify SBOM current → tag↔package.json
+    agreement → **reject a version whose `vX.Y.Z` tag already exists at a different
+    commit** → `dist/SHA256SUMS` → `dist/RELEASE_NOTES.md` from CHANGELOG; no publish). `.github/workflows/release.yml` (tag-triggered,
     `contents: write`) runs the gates + the **same** prepare script + `gh release
     create` — **no external registry**. SBOM drift guard + prepare-release smoke
     wired into `test-pi-adapter.sh` (145/0). `SHA256SUMS`/`RELEASE_NOTES.md` stay
