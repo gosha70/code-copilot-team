@@ -19,7 +19,7 @@ import { stripPrivilegePrefix, classifyPackageInstall } from "../../adapters/pi/
 import { sandboxGate } from "../../adapters/pi/runtime/policy/sandbox.ts";
 import { containsSecret } from "../../adapters/pi/runtime/workflow/memory.ts";
 import { supportOf } from "../../adapters/pi/runtime/hooks/events.ts";
-import { loadTeamLedger, claimTask, createTeam } from "../../adapters/pi/runtime/agents/team.ts";
+import { loadTeamLedger, claimTask, createTeam, postTask } from "../../adapters/pi/runtime/agents/team.ts";
 import { cleanupEligibility } from "../../adapters/pi/runtime/agents/worktree.ts";
 import { seedCapabilities } from "../../adapters/pi/runtime/capabilities.ts";
 
@@ -112,10 +112,14 @@ test("BATTERY 7 — tamper-safe ledger: a two-lead / bogus-approval team.json is
 
 // 8 ── fail-closed team/worktree behavior ────────────────────────────────────
 test("BATTERY 8 — fail-closed team/worktree: unsafe claim + foreign cleanup are refused", () => {
-  // team: a claim before the team is active is refused
+  // team: a claim of a REAL task before the team is active is refused — assert
+  // the specific reason so this cannot pass via "no such task" if ordering ever
+  // changes.
   let l = createTeam("t1", "lead", "2026-08-01T00:00:00Z").ledger;
-  const claim = claimTask(l, "task-x", "lead", "2026-08-01T00:00:00Z");
+  l = postTask(l, { taskId: "task-a", title: "A" }).ledger; // a real, open task
+  const claim = claimTask(l, "task-a", "lead", "2026-08-01T00:00:00Z");
   assert.equal(claim.ok, false, "claim on a non-active team is refused");
+  assert.match(claim.error, /not active/, "refused specifically because the team is not active");
   // worktree: a foreign (non-cct) worktree is never removable, even forced
   const foreign = {
     workerId: "x", branch: "feature/x", worktreePath: "/abs/x", featureId: null, tasks: [],
