@@ -594,11 +594,33 @@ All tools share the same rules from `shared/skills/`. Each adapter formats them 
 | Tool | Adapter Output | Install Location |
 |---|---|---|
 | **Claude Code** | agents, hooks, commands, settings | `~/.claude/` (global) |
+| **Pi** | enforcement runtime extension + skills/prompts | `pi install` (advisory) / `pi-code` (enforced) |
 | **OpenAI Codex** | `AGENTS.md` + 5 skills | `~/.codex/` (global) |
 | **Cursor** | `.mdc` files with frontmatter | `project/.cursor/rules/` |
 | **GitHub Copilot** | `copilot-instructions.md` + per-rule instructions | `project/.github/` |
 | **Windsurf** | `rules.md` | `project/.windsurf/rules/` |
 | **Aider** | `CONVENTIONS.md` | `project/` |
+
+## Enforcement Tiers
+
+Adapters fall into two tiers by how the CCT contract is applied. **Enforced**
+adapters run a real gate (a native harness or the Pi runtime extension) that can
+*block*; **Advisory** adapters receive the same rules as content the tool reads
+but cannot mechanically enforce.
+
+| Tier | Adapters | What it means |
+|---|---|---|
+| **Enforced** | Claude Code (native), **Pi** (runtime extension) | gates can block: SDD/phase workflow, permissions, protected paths, verification/review, sandbox fail-closed |
+| **Advisory** | Codex, Cursor, GitHub Copilot, Windsurf, Aider | the same rules as tool-read content; no runtime enforcement |
+
+Pi is **Enforced** but honest about its boundaries: some capabilities are
+`degraded` where Pi lacks a native primitive (no Stop/compaction event, no
+sandbox creation, no live team transport). The **per-capability authority** —
+every capability's `enabled`/`degraded`/`disabled`/`unsupported` status ×
+implementation kind, with verbatim reasons, for both Pi and Claude Code — is the
+**generated** [`shared/capabilities/COMPATIBILITY.md`](shared/capabilities/COMPATIBILITY.md)
+(rendered from the registry; do not hand-edit). This table stays high-level on
+purpose.
 
 ## Repo Structure
 
