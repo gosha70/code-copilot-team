@@ -610,7 +610,7 @@ but cannot mechanically enforce.
 
 | Tier | Adapters | What it means |
 |---|---|---|
-| **Enforced** | Claude Code (native), **Pi** (runtime extension) | gates can block: SDD/phase workflow, permissions, protected paths, verification/review, sandbox fail-closed |
+| **Enforced** | Claude Code (native), **Pi** (runtime extension) | a runtime gate can block (e.g. SDD/phase workflow, permissions, protected paths). Per-capability enforcement varies by adapter — some are `degraded`/`disabled` (e.g. sandbox, verification, review). See the matrix. |
 | **Advisory** | Codex, Cursor, GitHub Copilot, Windsurf, Aider | the same rules as tool-read content; no runtime enforcement |
 
 Pi is **Enforced** but honest about its boundaries: some capabilities are
@@ -666,7 +666,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
 │   ├── test-generate.sh                 294 generation + adapter tests
-│   ├── test-shared-structure.sh         797 structure + content tests
+│   ├── test-shared-structure.sh         798 structure + content tests
 │   ├── test-sync.sh                     105 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   ├── test-review-loop.sh            40 review loop integration tests

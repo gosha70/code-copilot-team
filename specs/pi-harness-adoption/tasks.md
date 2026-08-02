@@ -336,7 +336,7 @@ integration preview validates against the completed enforcement path;
     table stays high-level on purpose). `alignment-maintenance.md` release
     checklist gains capability-registry-valid + `generate-capability-docs.sh
     --check` + tier-table-stays-high-level items. test-shared-structure
-    supported-tools count 6→7; suite 797/0; validate-capabilities 169/0; doc
+    supported-tools count 6→7 + explicit Pi-row assertion; suite 798/0; validate-capabilities 169/0; doc
     drift guard green. Design: implemented directly (placements were
     convention-clear). _README tier table sources from the generated matrix._
 

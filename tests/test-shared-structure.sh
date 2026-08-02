@@ -895,6 +895,10 @@ echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Claude Code** | agents, h
 assert_ok "README supported-tools includes Claude Code row" "$rc"
 
 rc=0
+echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Pi** | enforcement runtime extension + skills/prompts | `pi install` (advisory) / `pi-code` (enforced) |' || rc=1
+assert_ok "README supported-tools includes Pi row" "$rc"
+
+rc=0
 echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **OpenAI Codex** | `AGENTS.md` + 5 skills | `~/.codex/` (global) |' || rc=1
 assert_ok "README supported-tools includes OpenAI Codex row" "$rc"
 
