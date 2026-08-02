@@ -66,3 +66,13 @@ contract: advisory/enforced split, in-process trust gating (Pi ≥ 0.79.0),
 non-recursive `peer-reviewer` profile, launcher symmetry with
 `claude-code`, gated provider/wiki/benchmark rollout, two-dimensional
 capability reporting.
+
+## Documentation
+
+Detailed guides live in [`docs/`](docs/):
+
+- [Quickstart](docs/quickstart.md) — install, verify, first enforced session.
+- [Configuration reference](docs/configuration-reference.md) — keys, layering, profiles.
+- [Security model](docs/security-model.md) — what's enforced, what's honestly degraded.
+- [Migration from Claude Code](docs/migration-from-claude-code.md) — what maps, what's degraded, what's Pi-native.
+- [Extension development](docs/extension-development.md) — add commands, capabilities, tests, generated resources.

@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **60 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F in progress** (T11.1 analytics, T11.2 capability docs, T11.5 security battery, T11.6 lessons/README tiers). Remaining: **Slice F** (T11.3 docs, T11.4 SBOM/release).
+written. Current state: **61 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F in progress** (T11.1 analytics, T11.2 capability docs, T11.3 docs, T11.5 security battery, T11.6 lessons/README tiers). Remaining: **Slice F** (T11.4 SBOM/release).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -309,7 +309,17 @@ integration preview validates against the completed enforcement path;
     registry reason instead). Deterministic; committed baseline. Design:
     `design-t112-capability-docs.md`. Adapter suite 132/0; validate-capabilities
     169/0. _README tier table is T11.6 (hand-curated narrative)._
-- [ ] **T11.3 (P1)** Docs: quickstart, configuration reference, security model, migration-from-Claude-Code guide, extension development guide.
+- [x] **T11.3 (P1)** Docs: quickstart, configuration reference, security model, migration-from-Claude-Code guide, extension development guide.
+    Docs-only, in `adapters/pi/docs/` (mirrors `adapters/claude-code/docs/`),
+    linked from the Pi README. Source-of-truth-disciplined: quickstart points at
+    the real `pi-code` commands; configuration-reference derives the key set from
+    the linter (`config/lint.ts`) + directs to `pi-code config`/`explain` for
+    live values (no hand-invented keys/defaults); security-model sources the
+    security battery + capability matrix + lessons-learned; migration guide maps
+    Claude→Pi with the degraded rows from `COMPATIBILITY.md`; extension-dev maps
+    where to add commands/capabilities/tests/generated-resources with the gates
+    each must pass. Structure check wired into `test-pi-adapter.sh` (5 docs exist
+    + README links them); all relative links verified. Adapter suite 142/0.
 - [ ] **T11.4 (P1)** SBOM, checksums, release workflow, changelog; package publishing (pinned-tag `pi install` documented as advisory).
 - [x] **T11.5 (P1)** Security test battery complete (§18.5 of consolidated plan); cross-adapter contract suite green.
     CONSOLIDATION, not new behavior. `tests/pi-runtime/security-battery.test.mjs`
