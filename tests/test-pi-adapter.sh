@@ -349,10 +349,24 @@ if command -v ruby >/dev/null 2>&1; then
   DOC_RC=0
   bash "$REPO_DIR/scripts/generate-capability-docs.sh" --check "$DOC_DRIFT" >/dev/null 2>&1 || DOC_RC=$?
   assert "capability doc drift guard fires on planted drift" "[[ '$DOC_RC' == '1' ]]"
+
+  # T11.4: the committed SBOM must not stale (deterministic render of the pkg).
+  assert "SBOM (adapters/pi/sbom.cdx.json) is up to date" \
+    "bash '$REPO_DIR/scripts/generate-sbom.sh' --check >/dev/null 2>&1"
+  SBOM_DRIFT="$TMP/sbom-drifted.json"
+  cp "$REPO_DIR/adapters/pi/sbom.cdx.json" "$SBOM_DRIFT"
+  printf '\n{"x":1}\n' >> "$SBOM_DRIFT"
+  SBOM_RC=0
+  bash "$REPO_DIR/scripts/generate-sbom.sh" --check "$SBOM_DRIFT" >/dev/null 2>&1 || SBOM_RC=$?
+  assert "SBOM drift guard fires on planted drift" "[[ '$SBOM_RC' == '1' ]]"
+
+  # T11.4: prepare-release assembles artifacts offline (version must match pkg).
+  assert "prepare-release.sh runs offline and produces artifacts" \
+    "bash '$REPO_DIR/scripts/prepare-release.sh' >/dev/null 2>&1 && [[ -s '$REPO_DIR/dist/SHA256SUMS' && -s '$REPO_DIR/dist/RELEASE_NOTES.md' ]]"
 else
-  echo "  SKIP: capability doc drift guard — ruby not found"
+  echo "  SKIP: capability doc + SBOM drift guards — ruby not found"
   if [[ -n "${CI:-}" ]]; then
-    echo "  FAIL: ruby is required in CI; the capability doc drift guard must run"
+    echo "  FAIL: ruby is required in CI; the drift guards must run"
     FAIL=$((FAIL + 1))
   fi
 fi

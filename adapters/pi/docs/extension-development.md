@@ -88,3 +88,35 @@ Conventions worth knowing:
   invariants on load (tamper-safe), not just sanitize fields.
 - Follow the `null = unavailable` discipline: never fabricate a value the source
   doesn't provide.
+
+## Releases & provenance (FR-027)
+
+Releases are cut from git tags — the publish boundary is the **tag + a GitHub
+Release**, with no external registry (the install path stays
+`pi install git:…@<tag>` / `scripts/setup.sh --pi`).
+
+To cut a release:
+
+1. Bump `package.json` `version` (the Pi package version — kept in sync with the
+   tag) and regenerate the SBOM: `bash scripts/generate-sbom.sh`.
+2. Add a `## [X.Y.Z]` section to `CHANGELOG.md`.
+3. Dry-run locally: `bash scripts/prepare-release.sh` (offline — verifies the SBOM
+   is current, checks tag↔package.json agreement, writes `dist/SHA256SUMS` +
+   `dist/RELEASE_NOTES.md`; publishes nothing).
+4. Push tag `vX.Y.Z` → `.github/workflows/release.yml` runs the gates, calls the
+   same `prepare-release.sh`, and creates the GitHub Release with the SBOM +
+   checksums + notes.
+
+**Provenance (FR-027)** is exposed by these artifacts + existing reports:
+
+| Field | Where |
+|---|---|
+| source | the git tag / commit (GitHub Release) |
+| version | the tag + `package.json` (kept in sync) |
+| checksum | `dist/SHA256SUMS` (release artifact) |
+| dependency status | `adapters/pi/sbom.cdx.json` (runtime deps: none) |
+| enabled modules + security classification | `pi-code features` / `../../../shared/capabilities/COMPATIBILITY.md` |
+| scope + trust state | `pi-code doctor` |
+
+A dedicated `pi-code provenance` command that aggregates these is a named
+follow-up (the runtime has no version/checksum data source today).

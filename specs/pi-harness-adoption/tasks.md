@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **61 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F in progress** (T11.1 analytics, T11.2 capability docs, T11.3 docs, T11.5 security battery, T11.6 lessons/README tiers). Remaining: **Slice F** (T11.4 SBOM/release).
+written. Current state: **62 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F COMPLETE** (T11.1–T11.6). Remaining: **cross-cutting** (TX.1–TX.3 — meta/process).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -320,7 +320,20 @@ integration preview validates against the completed enforcement path;
     where to add commands/capabilities/tests/generated-resources with the gates
     each must pass. Structure check wired into `test-pi-adapter.sh` (5 docs exist
     + README links them); all relative links verified. Adapter suite 142/0.
-- [ ] **T11.4 (P1)** SBOM, checksums, release workflow, changelog; package publishing (pinned-tag `pi install` documented as advisory).
+- [x] **T11.4 (P1)** SBOM, checksums, release workflow, changelog; package publishing (pinned-tag `pi install` documented as advisory).
+    `package.json` bumped to **1.0.0** (aligned to the existing `v1.0.0` tag).
+    `CHANGELOG.md` (Keep a Changelog) seeded with `1.0.0`. `scripts/generate-sbom.sh`
+    renders a **deterministic CycloneDX 1.5** `adapters/pi/sbom.cdx.json` (committed;
+    runtime deps: none, build-only devDeps marked excluded) with a `--check` drift
+    guard. `scripts/prepare-release.sh [version]` is an **offline dry-run** (verify
+    SBOM current → tag↔package.json agreement → `dist/SHA256SUMS` → `dist/RELEASE_NOTES.md`
+    from CHANGELOG; no publish). `.github/workflows/release.yml` (tag-triggered,
+    `contents: write`) runs the gates + the **same** prepare script + `gh release
+    create` — **no external registry**. SBOM drift guard + prepare-release smoke
+    wired into `test-pi-adapter.sh` (145/0). `SHA256SUMS`/`RELEASE_NOTES.md` stay
+    generated + uncommitted (`dist/`). FR-027 provenance exposed via the artifacts +
+    `features`/`doctor`/`COMPATIBILITY.md` (mapping in the extension-dev doc); a
+    `pi-code provenance` command is FU-2. Design: `design-t114-release.md`.
 - [x] **T11.5 (P1)** Security test battery complete (§18.5 of consolidated plan); cross-adapter contract suite green.
     CONSOLIDATION, not new behavior. `tests/pi-runtime/security-battery.test.mjs`
     (9): one canonical fail-closed invariant per category — trust gating,
@@ -369,3 +382,10 @@ scheduled._
     session-metadata surface (table/columns) written during ingest — a
     shared-pipeline change that would also recover claude's dropped `git_branch`.
     Decision recorded (2026-08-01): narrow T11.1, track persistence here.
+
+- **FU-2 (P2)** `pi-code provenance [--json]` — a single report aggregating
+    source / version / checksum / scope / trust / enabled modules / dependency
+    status / security classification (FR-027). T11.4 exposes these via the SBOM +
+    SHA256SUMS + `features`/`doctor`/`COMPATIBILITY.md`; a dedicated command needs
+    a runtime version + checksum data source (absent today). Decided (2026-08-02):
+    Option A now, this command as a follow-up.

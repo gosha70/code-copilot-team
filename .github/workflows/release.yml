@@ -1,0 +1,60 @@
+name: Release
+
+# Tag-triggered. Runs the required gates, verifies the committed SBOM + assembles
+# checksums and release notes via the SAME scripts/prepare-release.sh used
+# locally, then creates a GitHub Release with the artifacts. Publish boundary:
+# the git tag + this Release. There is NO external registry push — the install
+# path is `pi install git:…@<tag>` (advisory) / `scripts/setup.sh --pi` (enforced).
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write        # create the Release
+  # nothing else
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # tags, for version resolution
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dev dependencies
+        run: npm ci
+
+      # ── required gates (must be green to release) ──
+      - name: Capability registry + generated docs
+        run: |
+          set -euo pipefail
+          bash scripts/validate-capabilities.sh
+          bash scripts/generate-capability-docs.sh --check
+      - name: SBOM up to date
+        run: bash scripts/generate-sbom.sh --check
+      - name: Pi runtime suite
+        run: bash tests/test-pi-runtime.sh
+      - name: Pi adapter suite
+        run: bash tests/test-pi-adapter.sh
+
+      # ── assemble artifacts (offline; same script as local) ──
+      - name: Prepare release artifacts
+        run: bash scripts/prepare-release.sh "${GITHUB_REF_NAME#v}"
+
+      # ── publish: the tag + a GitHub Release (no registry) ──
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            dist/SHA256SUMS \
+            adapters/pi/sbom.cdx.json \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file dist/RELEASE_NOTES.md

@@ -1,6 +1,6 @@
 {
   "name": "code-copilot-team-pi",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Code Copilot Team advisory content package for Pi — skills, prompt templates, and themes. Advisory only: installing this package registers no enforcement runtime, lifecycle handlers, or gates.",
   "license": "MIT",
   "keywords": [

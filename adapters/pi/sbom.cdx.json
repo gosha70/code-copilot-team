@@ -1,0 +1,88 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:github/gosha70/code-copilot-team@1.0.0",
+      "name": "code-copilot-team-pi",
+      "version": "1.0.0",
+      "purl": "pkg:github/gosha70/code-copilot-team@1.0.0",
+      "description": "Code Copilot Team — Pi adapter (advisory content + the enforced pi-code runtime).",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    "properties": [
+      {
+        "name": "cct:runtime-dependencies",
+        "value": "none"
+      },
+      {
+        "name": "cct:install",
+        "value": "pi install git:github.com/gosha70/code-copilot-team@<tag> (advisory) / scripts/setup.sh --pi (enforced)"
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "application",
+      "bom-ref": "pi-runtime",
+      "name": "pi",
+      "version": "0.79.0",
+      "scope": "required",
+      "description": "Upstream Pi coding-agent runtime (external requirement).",
+      "properties": [
+        {
+          "name": "cct:requirement",
+          "value": ">= 0.79.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "dev:@types/node",
+      "name": "@types/node",
+      "version": "^22",
+      "scope": "excluded",
+      "purl": "pkg:npm/@types/node@22",
+      "properties": [
+        {
+          "name": "cct:build-only",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "dev:typescript",
+      "name": "typescript",
+      "version": "5.7.3",
+      "scope": "excluded",
+      "purl": "pkg:npm/typescript@5.7.3",
+      "properties": [
+        {
+          "name": "cct:build-only",
+          "value": "true"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:github/gosha70/code-copilot-team@1.0.0",
+      "dependsOn": [
+        "pi-runtime"
+      ]
+    },
+    {
+      "ref": "pi-runtime",
+      "dependsOn": []
+    }
+  ]
+}
