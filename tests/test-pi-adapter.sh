@@ -420,6 +420,15 @@ else
   fi
 fi
 
+# ── Pi docs (T11.3): the five guides exist + are linked from the README ──
+echo "--- pi docs ---"
+PI_DOCS_DIR="$REPO_DIR/adapters/pi/docs"
+for d in quickstart configuration-reference security-model migration-from-claude-code extension-development; do
+  assert "pi docs: $d.md exists" "[[ -f '$PI_DOCS_DIR/$d.md' ]]"
+  assert "pi README links $d.md" \
+    "grep -q 'docs/$d.md' '$REPO_DIR/adapters/pi/README.md'"
+done
+
 # ── Summary ─────────────────────────────────────────────────
 echo ""
 echo "========================================="
