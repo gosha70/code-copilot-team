@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **59 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F in progress** (T11.1 analytics, T11.2 capability docs, T11.5 security battery). Remaining: **Slice F** (T11.3, T11.4, T11.6).
+written. Current state: **60 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F in progress** (T11.1 analytics, T11.2 capability docs, T11.5 security battery, T11.6 lessons/README tiers). Remaining: **Slice F** (T11.3 docs, T11.4 SBOM/release).
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -326,7 +326,19 @@ integration preview validates against the completed enforcement path;
     maps every DoD-11/12 item + the 8 categories to concrete tests, with the
     "degraded, not parity" call-outs. Runtime 331/0; adapter 132/0. Design:
     `design-t115-security-battery.md`.
-- [ ] **T11.6 (P1)** `lessons-learned.md`; alignment-maintenance checklist pass; README Supported Tools + tier table (Pi = Enforced).
+- [x] **T11.6 (P1)** `lessons-learned.md`; alignment-maintenance checklist pass; README Supported Tools + tier table (Pi = Enforced).
+    Docs-only. `specs/pi-harness-adoption/lessons-learned.md`: operational lessons
+    (honesty boundaries, degraded-not-faked, autosync/merge-race discipline,
+    tamper-safe ledgers, security tripwires, registry-driven docs, + cross-cutting
+    mechanics). README: **Pi** added to the Supported Tools table (7 tools) + a
+    new high-level **Enforcement Tiers** section (Pi = Enforced) that defers to
+    the T11.2 generated `COMPATIBILITY.md` as the per-capability authority (the
+    table stays high-level on purpose). `alignment-maintenance.md` release
+    checklist gains capability-registry-valid + `generate-capability-docs.sh
+    --check` + tier-table-stays-high-level items. test-shared-structure
+    supported-tools count 6→7 + explicit Pi-row assertion; suite 798/0; validate-capabilities 169/0; doc
+    drift guard green. Design: implemented directly (placements were
+    convention-clear). _README tier table sources from the generated matrix._
 
 ## Cross-cutting
 

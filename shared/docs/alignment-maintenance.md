@@ -63,6 +63,8 @@ Source of truth:
 - [ ] `tests/test-counts.env` expected totals match current suite outputs
 - [ ] CONTRIBUTING reflects current contributor workflow
 - [ ] No adapter drift (`scripts/generate.sh` produces no unexpected diffs)
+- [ ] Capability registry valid + docs current (`scripts/validate-capabilities.sh`; `scripts/generate-capability-docs.sh --check` — the generated `shared/capabilities/COMPATIBILITY.md` matches the registry)
+- [ ] README enforcement-tier table stays high-level; `COMPATIBILITY.md` remains the per-capability authority
 - [ ] `sync-check.yml` still enforces full gate coverage (all suites + setup before structure test)
 - [ ] README and CONTRIBUTING community standards links remain complete and synchronized
 - [ ] Governance hardening docs/scripts remain current and referenced (`docs/github-hardening-playbook.md`, `scripts/harden-github.sh`)

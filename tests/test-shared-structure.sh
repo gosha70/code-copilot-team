@@ -888,11 +888,15 @@ README_SUPPORTED_TOOLS_SECTION=$(
 )
 
 SUPPORTED_TOOLS_ROW_COUNT=$(echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Ec '^\| \*\*[^|]+\*\* \|')
-assert_eq "README supported-tools table lists 6 tools" "6" "$SUPPORTED_TOOLS_ROW_COUNT"
+assert_eq "README supported-tools table lists 7 tools" "7" "$SUPPORTED_TOOLS_ROW_COUNT"
 
 rc=0
 echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Claude Code** | agents, hooks, commands, settings | `~/.claude/` (global) |' || rc=1
 assert_ok "README supported-tools includes Claude Code row" "$rc"
+
+rc=0
+echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Pi** | enforcement runtime extension + skills/prompts | `pi install` (advisory) / `pi-code` (enforced) |' || rc=1
+assert_ok "README supported-tools includes Pi row" "$rc"
 
 rc=0
 echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **OpenAI Codex** | `AGENTS.md` + 5 skills | `~/.codex/` (global) |' || rc=1
