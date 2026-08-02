@@ -82,8 +82,9 @@ _DDL_FILES = (
     "ddl/postgres/001_core.sql",
     "ddl/postgres/002_analytics.sql",
     "ddl/postgres/003_indexes.sql",
+    "ddl/postgres/004_metadata.sql",
 )
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",

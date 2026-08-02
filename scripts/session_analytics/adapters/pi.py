@@ -49,17 +49,6 @@ ABSENT_FIELDS = (
     "compactions",
 )
 
-# Fields the adapter DOES compute from the CCT source but the current store has
-# no column/table for — so they live only in RawSession.metadata (in memory) and
-# do NOT reach the Studio DB. Persisting them is a store-schema follow-up.
-NOT_PERSISTED_FIELDS = [
-    "cost_usd",
-    "correlation_ids",
-    "worker_outcomes",
-    "final_verdict",
-    "feature_id",
-]
-
 
 class PiAdapter:
     copilot_id = COPILOT_ID
@@ -144,14 +133,10 @@ class PiAdapter:
             "worker_outcomes": [_outcome(r) for r in records],
             "final_verdict": _verdict(records),
             # Explicit honest-absence marker so downstream can see what Pi's
-            # source does not provide (never fabricated).
+            # source does not provide (never fabricated). These describe the
+            # SOURCE (Pi's native transcript is unparsed), not storage — they are
+            # unrelated to FU-1's metadata persistence.
             "absent_fields": list(ABSENT_FIELDS),
-            # HONEST PERSISTENCE BOUNDARY: the current store persists only fixed
-            # RawSession/RawTurn columns — it has NO surface for RawSession.metadata.
-            # So these keys are computed + available IN MEMORY but are NOT written
-            # to the Studio DB. Persisting them needs a store-schema surface (a
-            # named follow-up); listed here so the boundary is not silent.
-            "not_persisted_by_current_store": NOT_PERSISTED_FIELDS,
         }
         feature_id = checkpoint.get("featureId") if checkpoint else None
         if isinstance(feature_id, str) and feature_id:

@@ -134,7 +134,7 @@ def ingest(
                     )
                 )
 
-                store.upsert_session(
+                session_pk = store.upsert_session(
                     db,
                     raw,
                     developer_id=developer_id,
@@ -142,6 +142,9 @@ def ingest(
                     pricing=pricing,
                     unpriced=unpriced,
                 )
+                # FU-1: persist RawSession.metadata (adapter-neutral) — the
+                # subsequent db.commit() persists it with the session.
+                store.upsert_session_metadata(db, session_pk, raw.metadata)
                 incremental.record_ingested(db, ref)
                 db.commit()
                 c_ingested += 1

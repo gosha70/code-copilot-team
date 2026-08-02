@@ -97,9 +97,8 @@ class PiAdapterTest(unittest.TestCase):
                       "permission_denials", "review_rounds", "compactions"):
                 self.assertIn(f, rs.metadata["absent_fields"], f"{f} must be declared absent")
             self.assertEqual(set(rs.metadata["absent_fields"]), set(ABSENT_FIELDS))
-            # The computed-but-not-persisted boundary is explicit too.
-            for f in ("cost_usd", "worker_outcomes", "correlation_ids", "final_verdict", "feature_id"):
-                self.assertIn(f, rs.metadata["not_persisted_by_current_store"], f"{f} boundary must be explicit")
+            # FU-1: metadata IS persisted now — no not_persisted marker.
+            self.assertNotIn("not_persisted_by_current_store", rs.metadata)
 
     def test_distinct_parent_sessions_split_into_refs(self):
         with tempfile.TemporaryDirectory() as td:
@@ -151,7 +150,8 @@ class PiAdapterTest(unittest.TestCase):
 
 class PiIngestDBTest(unittest.TestCase):
     """End-to-end ingest that queries the DB (not RawSession.metadata) to pin
-    exactly what SURVIVES persistence — the honest Studio-ingestion boundary."""
+    exactly what SURVIVES persistence. FU-1: worker analytics now persist to
+    copilot_session_metadata; the session skeleton is unchanged."""
 
     def setUp(self):
         unregister_all_for_tests()
@@ -164,7 +164,18 @@ class PiIngestDBTest(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="cct-sa-pi-")
         return f"sqlite:///{Path(tmp) / 'sa.db'}"
 
-    def test_ingest_persists_session_skeleton_worker_metadata_does_NOT(self):
+    def _meta(self, db, copilot):
+        rows = db.query(
+            "SELECT key, value, value_json FROM copilot_session_metadata m "
+            "JOIN copilot_session s ON m.session_id = s.id WHERE s.copilot = ?",
+            (copilot,),
+        )
+        out = {}
+        for key, value, is_json in rows:
+            out[key] = json.loads(value) if is_json else value
+        return out
+
+    def test_ingest_persists_session_skeleton_and_worker_metadata(self):
         with tempfile.TemporaryDirectory() as td:
             _write_project(
                 Path(td) / "proj",
@@ -181,7 +192,7 @@ class PiIngestDBTest(unittest.TestCase):
                     "FROM copilot_session WHERE copilot = ?",
                     ("pi",),
                 )
-                # SURVIVES: the session skeleton (project/phase/timestamps/turns).
+                # session skeleton unchanged
                 self.assertIsNotNone(srow, "the pi session row persists")
                 self.assertEqual(srow[1], "build")            # phase
                 self.assertIsNotNone(srow[2])                 # started_at
@@ -192,12 +203,35 @@ class PiIngestDBTest(unittest.TestCase):
                     "JOIN copilot_session s ON ct.session_id = s.id WHERE s.copilot = ?",
                     ("pi",),
                 )
-                self.assertIsNotNone(trow)
                 self.assertTrue(trow[0], "worker turn is a sidechain")
-                # HONEST BOUNDARY: per-turn cost is NULL (Pi has no tokens), and
-                # the worker-analytics costUsd=1.25 is NOT persisted anywhere —
-                # copilot_session/turn have no surface for RawSession.metadata.
                 self.assertIsNone(trow[1], "no per-turn cost without tokens")
+
+                # FU-1: worker analytics now persist to copilot_session_metadata.
+                meta = self._meta(db, "pi")
+                self.assertEqual(meta["cost_usd"], 1.25)          # complex value, json round-trips
+                self.assertEqual(meta["feature_id"], "F-9")       # string, verbatim
+                self.assertEqual(meta["final_verdict"], "all-passed")
+                self.assertEqual(len(meta["worker_outcomes"]), 1)
+                self.assertIn("correlation_ids", meta)
+            finally:
+                db.close()
+
+    def test_metadata_reingest_is_a_full_replacement_no_stale_keys(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "proj"
+            _write_project(proj, [_rec("w1", cost=1.0)], checkpoint={"featureId": "F-1", "phase": "build"})
+            dsn = self._dsn()
+            ingest(dsn=dsn, copilots=["pi"], root=Path(td), full=True)
+
+            # Re-ingest with the feature removed — the stale feature_id must go.
+            _write_project(proj, [_rec("w1", cost=1.0)], checkpoint={"phase": "build"})
+            ingest(dsn=dsn, copilots=["pi"], root=Path(td), full=True)
+
+            db = Database.connect(dsn)
+            try:
+                meta = self._meta(db, "pi")
+                self.assertNotIn("feature_id", meta, "an omitted key must not leave a stale row")
+                self.assertIn("cost_usd", meta)
             finally:
                 db.close()
 
