@@ -13,8 +13,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from .. import constants as C
 from ..config import PricingConfig
@@ -82,6 +83,51 @@ def upsert_session(
 
     db.commit()
     return session_id
+
+
+# ── session metadata (FU-1) ─────────────────────────────────────────────
+
+# Per-value length cap (bounded, like every other stored string).
+_MAX_METADATA_VALUE = 4096
+_MAX_METADATA_KEY = 100
+
+
+def upsert_session_metadata(
+    db: Database, session_id: int, metadata: Optional[Mapping[str, Any]]
+) -> None:
+    """Adapter-neutral persistence of ``RawSession.metadata`` (FU-1).
+
+    FULL REPLACEMENT per session (delete-then-insert), so a key omitted by a
+    later re-ingest leaves no stale row. A plain string is stored verbatim
+    (``value_json = FALSE``, clean to query); anything else is ``json.dumps``'d
+    (``value_json = TRUE``, consumers ``json.loads``). Values are bounded to
+    ``_MAX_METADATA_VALUE``.
+
+    Redaction boundary: adapters neutralize/redact metadata BEFORE it reaches the
+    store; this bounds + persists it — it is NOT a second redaction engine. Does
+    not commit (caller-owned transaction).
+    """
+    db.execute(
+        "DELETE FROM copilot_session_metadata WHERE session_id = ?", (session_id,)
+    )
+    if not metadata:
+        return
+    for key, val in metadata.items():
+        if isinstance(val, str):
+            # A truncated string is still a valid string (value_json=false).
+            value, is_json = val[:_MAX_METADATA_VALUE], False
+        else:
+            value, is_json = json.dumps(val, sort_keys=True), True
+            if len(value) > _MAX_METADATA_VALUE:
+                # Never store a blindly-sliced JSON blob (it would be unparsable
+                # while value_json=true). Replace with a VALID truncated envelope
+                # so consumers can always json.loads it.
+                value = json.dumps({"_truncated": True, "bytes": len(value)})
+        db.execute(
+            "INSERT INTO copilot_session_metadata "
+            "(session_id, key, value, value_json) VALUES (?, ?, ?, ?)",
+            (session_id, str(key)[:_MAX_METADATA_KEY], value, is_json),
+        )
 
 
 # ── session row ────────────────────────────────────────────────────────

@@ -378,13 +378,22 @@ _Not part of the 65-task tracker denominator — non-checkbox bullets so the
 mechanical count stays aligned with the header. Promote to a numbered task if
 scheduled._
 
-- **FU-1 (P1)** Persist Pi worker analytics to the Studio DB. T11.1 maps
-    `cost_usd`/`worker_outcomes`/`correlation_ids`/`final_verdict`/`feature_id`
-    into `RawSession.metadata`, but the store has no surface for session metadata
-    so they do not reach the DB (per-turn cost is NULL without tokens). Add a
-    session-metadata surface (table/columns) written during ingest — a
-    shared-pipeline change that would also recover claude's dropped `git_branch`.
-    Decision recorded (2026-08-01): narrow T11.1, track persistence here.
+- **FU-1 (P1) — ✅ DONE (2026-08-02).** Persist session metadata to the Studio
+    DB (adapter-neutral). New `copilot_session_metadata` key–value child table
+    (`004_metadata.sql`; `_SCHEMA_VERSION 1→2`, idempotent DDL — existing DBs gain
+    it on next `apply_ddl`, no data migration). `store.upsert_session_metadata`
+    (wired into ingest after `upsert_session`) is a **full replacement per
+    session** (delete-then-insert → an omitted key leaves no stale row); strings
+    stored verbatim (`value_json=false`), complex values `json.dumps`
+    (`value_json=true`), 4 KiB cap. **Redaction boundary:** adapters neutralize
+    before the store, which bounds+persists (not a second redaction engine). Pi's
+    now-false `not_persisted_by_current_store` marker removed; the T11.1 DB test
+    **flipped** to prove cost/outcomes/feature persist. Recovers Claude's
+    `git_branch` + Aider's `provisional_format` too. Existing adapter rows
+    unchanged. Tests: `test_session_metadata.py` (4) + `test_adapter_pi.py`
+    (flipped DB test + replacement); full session_analytics suite 210/0. Design:
+    `design-fu1-session-metadata.md`. _Studio dashboard surfacing is a separate
+    consumer task._
 
 - **FU-2 (P2)** `pi-code provenance [--json]` — a single report aggregating
     source / version / checksum / scope / trust / enabled modules / dependency
