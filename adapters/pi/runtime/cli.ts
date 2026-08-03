@@ -350,8 +350,9 @@ function resolveVersion(opts: CliOptions): string {
 /**
  * `pi-code provenance` (FU-2, FR-027) — a read-only report composing existing
  * surfaces (version + install identity + capability/trust posture). Fields the
- * runtime cannot obtain (checksum, the full SBOM) are reported absent with a
- * pointer to the release artifact, never fabricated.
+ * runtime cannot obtain (checksum, the full SBOM, and the security-level
+ * classification — which lives in the catalog/COMPATIBILITY.md, not bundled at
+ * runtime) are reported absent with a pointer to the authority, never fabricated.
  */
 function provenance(opts: CliOptions, json: boolean): CliResult {
   const version = resolveVersion(opts);
@@ -374,6 +375,7 @@ function provenance(opts: CliOptions, json: boolean): CliResult {
           by_status: byStatus,
           authority: CAP_AUTHORITY,
         },
+        security: { available: false, authority: CAP_AUTHORITY },
         checksum: null,
         sbom: { available: false, release_artifact: SBOM_ARTIFACT },
       }),
@@ -393,6 +395,7 @@ function provenance(opts: CliOptions, json: boolean): CliResult {
       `scope:        ${profile} · trust: ${trust}`,
       `dependencies: runtime: none (build-only devDeps in the SBOM)`,
       `capabilities: ${caps.length} total · ${statusSummary}  (authority: ${CAP_AUTHORITY})`,
+      `security:     classification in ${CAP_AUTHORITY} (not bundled at runtime)`,
       `checksum:     (not available at runtime — see the release SHA256SUMS)`,
       `sbom:         ${SBOM_ARTIFACT} (release artifact)`,
     ].join("\n"),

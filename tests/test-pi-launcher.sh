@@ -327,12 +327,16 @@ assert "provenance summarizes capabilities with the authority" \
   "echo \"\$PROV\" | grep -q 'capabilities:' && echo \"\$PROV\" | grep -q 'COMPATIBILITY.md'"
 assert "provenance reports checksum as not-available (honest)" \
   "echo \"\$PROV\" | grep -qi 'checksum' && echo \"\$PROV\" | grep -q 'not available at runtime'"
+assert "provenance reports security classification with the authority (honest)" \
+  "echo \"\$PROV\" | grep -qi 'security:' && echo \"\$PROV\" | grep -q 'COMPATIBILITY.md'"
 
 PROV_J=$(PATH="$DIAG_PATH" "$LAUNCHER" provenance --json 2>&1 || true)
 assert "provenance --json marks checksum null (absent, not fabricated)" \
   "echo \"\$PROV_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"checksum\"] is None else 1)'"
 assert "provenance --json marks the SBOM unavailable with a release pointer" \
   "echo \"\$PROV_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); s=d[\"sbom\"]; sys.exit(0 if s[\"available\"] is False and s[\"release_artifact\"]==\"adapters/pi/sbom.cdx.json\" else 1)'"
+assert "provenance --json marks security classification unavailable with an authority pointer" \
+  "echo \"\$PROV_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); s=d[\"security\"]; sys.exit(0 if s[\"available\"] is False and s[\"authority\"]==\"shared/capabilities/COMPATIBILITY.md\" else 1)'"
 assert "provenance --json states runtime deps: none" \
   "echo \"\$PROV_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"dependencies\"][\"runtime\"]==\"none\" else 1)'"
 
