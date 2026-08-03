@@ -261,6 +261,8 @@ SURFACES=(
   "export --json"
   "resources"
   "resources --json"
+  "provenance"
+  "provenance --json"
 )
 for surface in "${SURFACES[@]}"; do
   # shellcheck disable=SC2086
@@ -269,7 +271,7 @@ for surface in "${SURFACES[@]}"; do
     "! echo \"\$OUT\" | grep -q 'sk-cct-test-secret'"
 done
 
-for cmd in features doctor config; do
+for cmd in features doctor config provenance; do
   OUT=$(PATH="$DIAG_PATH" "$LAUNCHER" "$cmd" --json 2>&1 || true)
   assert "$cmd --json emits valid JSON" \
     "echo \"\$OUT\" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null"
@@ -281,6 +283,8 @@ assert "recursion guard permits diagnostics" "echo \"\$OUT\" | grep -q 'capabili
 
 assert "help documents the diagnostic commands" \
   "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'config explain'"
+assert "help documents the provenance command" \
+  "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'provenance'"
 
 # ── Redacted export (T1.8) ──────────────────────────────────
 echo "--- export ---"
@@ -310,6 +314,34 @@ assert "resources reports a prompt source" "echo \"\$RES_OUT\" | grep -q 'claude
 RES_J=$(CCT_HOME="$EXP_HOME" PATH="$DIAG_PATH" "$LAUNCHER" resources --json 2>&1 || true)
 assert "resources --json reports found:true" \
   "echo \"\$RES_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get(\"found\") else 1)'"
+
+# ── FU-2: provenance (FR-027) ───────────────────────────────
+# A read-only report composing version + install identity + capability/trust.
+# Fields the runtime cannot obtain (checksum, the full SBOM) MUST be reported
+# absent-but-machine-readable (null / {available:false}), never fabricated.
+echo "--- provenance ---"
+PROV=$(PATH="$DIAG_PATH" "$LAUNCHER" provenance 2>&1 || true)
+assert "provenance names the package + source" \
+  "echo \"\$PROV\" | grep -q 'code-copilot-team-pi' && echo \"\$PROV\" | grep -q 'git:github.com/gosha70'"
+assert "provenance summarizes capabilities with the authority" \
+  "echo \"\$PROV\" | grep -q 'capabilities:' && echo \"\$PROV\" | grep -q 'COMPATIBILITY.md'"
+assert "provenance reports checksum as not-available (honest)" \
+  "echo \"\$PROV\" | grep -qi 'checksum' && echo \"\$PROV\" | grep -q 'not available at runtime'"
+
+PROV_J=$(PATH="$DIAG_PATH" "$LAUNCHER" provenance --json 2>&1 || true)
+assert "provenance --json marks checksum null (absent, not fabricated)" \
+  "echo \"\$PROV_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"checksum\"] is None else 1)'"
+assert "provenance --json marks the SBOM unavailable with a release pointer" \
+  "echo \"\$PROV_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); s=d[\"sbom\"]; sys.exit(0 if s[\"available\"] is False and s[\"release_artifact\"]==\"adapters/pi/sbom.cdx.json\" else 1)'"
+assert "provenance --json states runtime deps: none" \
+  "echo \"\$PROV_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"dependencies\"][\"runtime\"]==\"none\" else 1)'"
+
+# The two public version surfaces must never drift: provenance reports the SAME
+# version as `pi-code version` (both trace to the launcher's PI_CODE_VERSION).
+V_VER=$(PATH="$DIAG_PATH" "$LAUNCHER" version 2>&1 | grep -oE 'pi-code [0-9]+\.[0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+P_VER=$(echo "$PROV_J" | python3 -c 'import json,sys; print(json.load(sys.stdin)["package"]["version"])')
+assert "provenance version matches the version command (no drift)" \
+  "[[ -n '$V_VER' && '$V_VER' == '$P_VER' ]]"
 
 # ── T6.4: init / sync (FR-000a) ─────────────────────────────
 echo "--- init / sync ---"
