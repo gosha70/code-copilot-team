@@ -315,6 +315,94 @@ function exportConfig(opts: CliOptions, json: boolean): CliResult {
   };
 }
 
+// Package identity (constants — a single home for the strings that cross the
+// runtime/launcher/registry boundary).
+const PKG_NAME = "code-copilot-team-pi";
+const PKG_SOURCE = "git:github.com/gosha70/code-copilot-team";
+const SBOM_ARTIFACT = "adapters/pi/sbom.cdx.json";
+const CAP_AUTHORITY = "shared/capabilities/COMPATIBILITY.md";
+
+/**
+ * The package version. `CCT_VERSION` (set by the pi-code launcher from
+ * PI_CODE_VERSION) is AUTHORITATIVE — in a managed install package.json is not
+ * present. The package.json read is a dev/repo-checkout fallback ONLY (guarded
+ * so a managed install never depends on it); else "unknown".
+ */
+function resolveVersion(opts: CliOptions): string {
+  const env = process.env.CCT_VERSION;
+  if (env && env.trim()) return env.trim();
+  const adapterDir = opts.runtimeEntry
+    ? path.dirname(path.dirname(opts.runtimeEntry))
+    : null;
+  if (adapterDir) {
+    try {
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(adapterDir, "package.json"), "utf8"),
+      );
+      if (typeof pkg.version === "string" && pkg.version) return pkg.version;
+    } catch {
+      // not a repo checkout (managed install) — env is authoritative there
+    }
+  }
+  return "unknown";
+}
+
+/**
+ * `pi-code provenance` (FU-2, FR-027) — a read-only report composing existing
+ * surfaces (version + install identity + capability/trust posture). Fields the
+ * runtime cannot obtain (checksum, the full SBOM, and the security-level
+ * classification — which lives in the catalog/COMPATIBILITY.md, not bundled at
+ * runtime) are reported absent with a pointer to the authority, never fabricated.
+ */
+function provenance(opts: CliOptions, json: boolean): CliResult {
+  const version = resolveVersion(opts);
+  const caps = seedCapabilities();
+  const byStatus: Record<string, number> = {};
+  for (const c of caps)
+    byStatus[c.runtime_status] = (byStatus[c.runtime_status] ?? 0) + 1;
+  const trust = opts.trusted === true ? "trusted" : "untrusted";
+  const profile = process.env.CCT_PROFILE ?? "disciplined";
+
+  if (json) {
+    return {
+      out: jsonOut({
+        package: { name: PKG_NAME, version },
+        source: PKG_SOURCE,
+        scope: { profile, trust },
+        dependencies: { runtime: "none" },
+        capabilities: {
+          total: caps.length,
+          by_status: byStatus,
+          authority: CAP_AUTHORITY,
+        },
+        security: { available: false, authority: CAP_AUTHORITY },
+        checksum: null,
+        sbom: { available: false, release_artifact: SBOM_ARTIFACT },
+      }),
+      code: 0,
+    };
+  }
+
+  const statusSummary = Object.keys(byStatus)
+    .sort()
+    .map((s) => `${byStatus[s]} ${s}`)
+    .join(" · ");
+  return {
+    out: [
+      "=== provenance ===",
+      `package:      ${PKG_NAME} ${version}`,
+      `source:       ${PKG_SOURCE}`,
+      `scope:        ${profile} · trust: ${trust}`,
+      `dependencies: runtime: none (build-only devDeps in the SBOM)`,
+      `capabilities: ${caps.length} total · ${statusSummary}  (authority: ${CAP_AUTHORITY})`,
+      `security:     classification in ${CAP_AUTHORITY} (not bundled at runtime)`,
+      `checksum:     (not available at runtime — see the release SHA256SUMS)`,
+      `sbom:         ${SBOM_ARTIFACT} (release artifact)`,
+    ].join("\n"),
+    code: 0,
+  };
+}
+
 export function runCli(opts: CliOptions): CliResult {
   const args = [...opts.argv];
   const json = args.includes("--json");
@@ -334,9 +422,11 @@ export function runCli(opts: CliOptions): CliResult {
       return exportConfig(opts, json);
     case "resources":
       return resources(opts, json);
+    case "provenance":
+      return provenance(opts, json);
     default:
       return {
-        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export | resources)`,
+        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export | resources | provenance)`,
         code: 64,
       };
   }
