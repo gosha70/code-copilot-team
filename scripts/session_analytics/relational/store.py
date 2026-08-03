@@ -114,13 +114,19 @@ def upsert_session_metadata(
         return
     for key, val in metadata.items():
         if isinstance(val, str):
-            value, is_json = val, False
+            # A truncated string is still a valid string (value_json=false).
+            value, is_json = val[:_MAX_METADATA_VALUE], False
         else:
             value, is_json = json.dumps(val, sort_keys=True), True
+            if len(value) > _MAX_METADATA_VALUE:
+                # Never store a blindly-sliced JSON blob (it would be unparsable
+                # while value_json=true). Replace with a VALID truncated envelope
+                # so consumers can always json.loads it.
+                value = json.dumps({"_truncated": True, "bytes": len(value)})
         db.execute(
             "INSERT INTO copilot_session_metadata "
             "(session_id, key, value, value_json) VALUES (?, ?, ?, ?)",
-            (session_id, str(key)[:_MAX_METADATA_KEY], value[:_MAX_METADATA_VALUE], is_json),
+            (session_id, str(key)[:_MAX_METADATA_KEY], value, is_json),
         )
 
 

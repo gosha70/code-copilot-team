@@ -93,6 +93,27 @@ class SessionMetadataTest(unittest.TestCase):
         got = _read(self.db, pk)
         self.assertLessEqual(len(got["big"]), store._MAX_METADATA_VALUE)
 
+    def test_large_structured_value_stays_valid_json_when_truncated(self):
+        # A big structured value must NOT be stored as a blindly-sliced (invalid)
+        # JSON blob while value_json=true. _read() does json.loads for such rows,
+        # so it would raise if the fix regressed.
+        pk = _session(self.db)
+        big = [{"worker": "w" * 200, "ok": True} for _ in range(200)]  # >> 4 KiB
+        store.upsert_session_metadata(self.db, pk, {"worker_outcomes": big})
+        self.db.commit()
+        got = _read(self.db, pk)  # json.loads must succeed
+        self.assertEqual(
+            got["worker_outcomes"],
+            {"_truncated": True, "bytes": len(json.dumps(big, sort_keys=True))},
+        )
+
+    def test_structured_value_under_cap_round_trips_fully(self):
+        pk = _session(self.db)
+        small = [{"worker": "w1", "ok": True}]
+        store.upsert_session_metadata(self.db, pk, {"worker_outcomes": small})
+        self.db.commit()
+        self.assertEqual(_read(self.db, pk)["worker_outcomes"], small)
+
 
 if __name__ == "__main__":
     unittest.main()
