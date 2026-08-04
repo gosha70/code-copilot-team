@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **62 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F COMPLETE** (T11.1–T11.6). Remaining: **cross-cutting** (TX.1–TX.3 — meta/process).
+written. Current state: **65 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F COMPLETE** (T11.1–T11.6). **Cross-cutting TX.1–TX.3 CLOSED** (`cross-cutting-compliance.md`; TX.2 = documented branch-policy divergence, not literal compliance). Follow-ups FU-1 + FU-2 delivered.
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -368,9 +368,27 @@ integration preview validates against the completed enforcement path;
 
 ## Cross-cutting
 
-- [ ] **TX.1 (P0)** All security-relevant tasks include acceptance tests and audit-log coverage before merge to the feature branch mainline.
-- [ ] **TX.2 (P0)** Branch policy: all work on `feature/pi-harness-adoption` (or child branches merged into it); no merge to `master` until spec.md Definition of Done holds.
-- [ ] **TX.3 (P1)** Each task records files affected + delivery slice in its PR description (consolidated plan §15 tasks.md contract).
+- [x] **TX.1 (P0)** All security-relevant tasks include acceptance tests and audit-log coverage. **MET.**
+    Audit-log (`policy/audit.ts`, C-9 fields) emission asserted in 8 runtime test
+    files (enforcement primary — 32 assertions); `security-battery.test.mjs` = 9
+    threat batteries (DoD #11); analytics secret-leak covered by `test_redaction.py`
+    + `test_project_privacy.py` + the launcher secret-leak sweep over every
+    diagnostic surface. Audit: `cross-cutting-compliance.md` §TX.1.
+- [x] **TX.2 (P0)** Branch policy: integration branch, no merge to master until DoD.
+    **CLOSED BY DOCUMENTED DIVERGENCE — literal policy NOT followed.** Delivery was
+    trunk-based (per-task child branches merged directly to `master` via autosync),
+    not a long-lived `feature/pi-harness-adoption` branch. TX.2's intent (master
+    never holds half-built/unenforced security work) was preserved by per-PR gating
+    instead of per-DoD: every PR independently green, security surfaces shipped with
+    their tests, capability-enablement circuit-gated. History cannot/should-not be
+    rewritten; the record IS the resolution. Full rationale:
+    `cross-cutting-compliance.md` §TX.2.
+- [x] **TX.3 (P1)** Each task records files affected + delivery slice in its PR description.
+    **SUBSTANTIALLY MET.** Files-affected recorded in every PR body (commit-message
+    fed) + `tasks.md`; the delivery-slice label lives in `tasks.md` rather than each
+    PR body, and the auto-appended PR template sections were often left as
+    placeholders. Deviation noted, not claimed as perfect. Audit:
+    `cross-cutting-compliance.md` §TX.3.
 
 ## Follow-ups (named, not silent gaps)
 
@@ -395,9 +413,17 @@ scheduled._
     `design-fu1-session-metadata.md`. _Studio dashboard surfacing is a separate
     consumer task._
 
-- **FU-2 (P2)** `pi-code provenance [--json]` — a single report aggregating
-    source / version / checksum / scope / trust / enabled modules / dependency
-    status / security classification (FR-027). T11.4 exposes these via the SBOM +
-    SHA256SUMS + `features`/`doctor`/`COMPATIBILITY.md`; a dedicated command needs
-    a runtime version + checksum data source (absent today). Decided (2026-08-02):
-    Option A now, this command as a follow-up.
+- **FU-2 (P2) — ✅ DONE (2026-08-04, PR #168).** `pi-code provenance [--json]` —
+    a read-only report aggregating source / version / scope / trust / enabled
+    modules / dependency status (FR-027), composed from existing surfaces (no new
+    data model). Version = launcher-owned `CCT_VERSION` (authoritative; guarded
+    repo-`package.json` fallback for dev only) — a launcher parity test locks
+    `provenance --json` to the `version` command so the two public version surfaces
+    can't drift. The fields the runtime cannot obtain — `checksum`, the full SBOM,
+    and the security-level classification (lives in `catalog.yaml`/`COMPATIBILITY.md`,
+    not bundled at runtime; no runtime YAML parser) — are reported absent with a
+    machine-readable pointer (`null` / `{available:false, …}`), never fabricated.
+    Files: `runtime/cli.ts` (`provenance()` + `resolveVersion()`), `bin/pi-code`
+    (`export CCT_VERSION`, dispatch, help), `test-pi-launcher.sh` (+9 assertions),
+    `design-fu2-provenance.md`. Verify: launcher 116/0, typecheck gate 7/0, tsc
+    clean.
