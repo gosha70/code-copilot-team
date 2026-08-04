@@ -90,6 +90,11 @@ per-PR gating discipline.** Recorded as a divergence rather than a false `[x]`.
 No action possible or desirable on merged history — this record *is* the
 resolution (document-divergence, per the origin-confirmation escalation).
 
+**Preventive fix (2026-08-04):** `plan.md`'s branch-policy wording (the header
+field + the "no merge to `master` until DoD" rule) has been revised to describe
+the actual trunk-based, per-PR-gated workflow, so a future feature does not
+re-inherit the unworkable single-integration-branch rule.
+
 ## TX.3 (P1) — files-affected + delivery slice in each PR — SUBSTANTIALLY MET
 
 **Files-affected: recorded.** Each PR body (fed from the commit message by

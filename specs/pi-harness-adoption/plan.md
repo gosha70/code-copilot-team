@@ -29,7 +29,12 @@ origin:
 
 # Implementation Plan: Pi Harness Adoption
 
-**Branch**: `feature/pi-harness-adoption`
+**Branch policy**: trunk-based — short-lived per-task child branches, each
+merged to `master` via its own gated PR (see "Pull-Request Decomposition"
+below). _Revised
+from the original single `feature/pi-harness-adoption` integration branch, which
+was unworkable under the repo's autosync workflow; rationale in
+`cross-cutting-compliance.md` §TX.2._
 **Input**: specs/pi-harness-adoption/spec.md
 
 ## Summary
@@ -236,9 +241,17 @@ the consolidated plan §21. The first three PRs stay narrow:
    paths, sandbox-status reporting. *(Phases 4–5 core)*
 
 Agents, teams, MCP, memory, analytics, and autonomy follow only after the
-configuration and enforcement foundations are stable. **No merge to
-`master` until the umbrella Definition of Done holds; all work lands on
-`feature/pi-harness-adoption` (or child branches merged into it).**
+configuration and enforcement foundations are stable. **Branch policy (revised):
+trunk-based delivery — each task lands on its own short-lived child branch merged
+directly to `master` via its own PR, gated per-PR (independently green; security
+surfaces ship with their tests in the same PR; a capability reports `enabled`
+only once its acceptance suite passes). This supersedes the original
+single-integration-branch / "no merge to `master` until the Definition of Done
+holds" rule, which was unworkable under the repo's autosync workflow (any local
+commit is pushed and raised as a PR within seconds). The intent — `master` never
+holds half-built or unenforced work — is preserved by the per-PR gates rather
+than deferred to a DoD barrier. Full rationale: `cross-cutting-compliance.md`
+§TX.2.**
 
 ## Risks
 
