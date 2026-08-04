@@ -44,8 +44,8 @@ with two activation surfaces: a native Pi advisory content package (skills,
 prompts, themes) and a `pi-code`-launched enforcement runtime (SDD gates,
 permissions, hooks, phases, agents, integrations, capability registry,
 layered TOML configuration). Twelve phases, six delivery slices, narrow
-early PRs. Nothing merges to `master` until the umbrella Definition of Done
-in spec.md holds.
+early PRs — each task merged to `master` via its own gated PR (branch policy
+above).
 
 ## Technical Context
 
