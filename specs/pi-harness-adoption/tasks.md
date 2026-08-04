@@ -285,17 +285,20 @@ integration preview validates against the completed enforcement path;
     (`ingest.redaction.redact_text`) with T7.4 emit-time `containsSecret` as layer
     2 — no new regex; high-risk surfaces (code/tool I/O) absent by construction.
     Studio ingestion via registration (no schema change). **Persistence boundary
-    (review):** the store persists only fixed columns — no surface for
+    (review, T11.1-time — later closed by FU-1):** the store persisted only fixed
+    columns — no surface for
     `RawSession.metadata`, so `cost_usd`/`worker_outcomes`/`correlation_ids`/
-    `final_verdict`/`feature_id` are computed IN MEMORY but NOT written to the DB
-    (listed in `metadata.not_persisted_by_current_store`); a DB-level ingest test
+    `final_verdict`/`feature_id` were computed IN MEMORY but NOT written to the DB
+    (listed in the then-present `metadata.not_persisted_by_current_store`); a DB-level ingest test
     pins what survives (session id/project/phase/timestamps/turn_count/sidechain
     turns; per-turn cost NULL — no tokens). Persisting worker analytics needs a
-    store-schema surface — **open decision / follow-up**. Design:
+    store-schema surface — **later closed by FU-1** (`copilot_session_metadata`;
+    `not_persisted_by_current_store` removed and the DB test flipped to prove
+    cost/outcomes/feature persist). Design:
     `design-t111-analytics.md`. Tests: `test_adapter_pi.py` (8, incl. DB-level
-    ingest); full session_analytics suite 205/0. _Native-transcript tokens,
-    denials/review/compaction sources, and worker-analytics persistence are
-    named follow-ups._
+    ingest); full session_analytics suite 205/0. _Native-transcript tokens and
+    denials/review/compaction sources remain named follow-ups; worker-analytics
+    persistence was later closed by FU-1._
 - [x] **T11.2 (P0)** Generated capability parity documentation from the registry; compatibility matrix.
     `scripts/generate-capability-docs.sh` (bash + `ruby -ryaml`, same substrate as
     validate-capabilities.sh) renders `shared/capabilities/COMPATIBILITY.md`
@@ -336,7 +339,7 @@ integration preview validates against the completed enforcement path;
     wired into `test-pi-adapter.sh` (145/0). `SHA256SUMS`/`RELEASE_NOTES.md` stay
     generated + uncommitted (`dist/`). FR-027 provenance exposed via the artifacts +
     `features`/`doctor`/`COMPATIBILITY.md` (mapping in the extension-dev doc); a
-    `pi-code provenance` command is FU-2. Design: `design-t114-release.md`.
+    `pi-code provenance` command is FU-2 (**later delivered — PR #168**). Design: `design-t114-release.md`.
 - [x] **T11.5 (P1)** Security test battery complete (§18.5 of consolidated plan); cross-adapter contract suite green.
     CONSOLIDATION, not new behavior. `tests/pi-runtime/security-battery.test.mjs`
     (9): one canonical fail-closed invariant per category — trust gating,
