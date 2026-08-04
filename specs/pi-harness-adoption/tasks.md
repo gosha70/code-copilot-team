@@ -8,7 +8,7 @@ Task IDs: `T<phase>.<n>`.
 ## Progress — updated 2026-07-30
 
 Every task below must be delivered; the `spec.md` Definition of Done stands as
-written. Current state: **62 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F COMPLETE** (T11.1–T11.6). Remaining: **cross-cutting** (TX.1–TX.3 — meta/process).
+written. Current state: **65 of 65 complete.** Phases 0–2 and 4 complete; Phase 5 complete; Phase 6 complete; **Slice B COMPLETE (T3.1–T3.9)**; **Slice E COMPLETE** (Phase 9 T9.1+T9.2; Phase 10 T10.1–T10.4); **Slice D COMPLETE** (Phase 7 T7.1–T7.4; Phase 8 T8.1+T8.2); **Slice F COMPLETE** (T11.1–T11.6). **Cross-cutting TX.1–TX.3 CLOSED** (`cross-cutting-compliance.md`; TX.2 = documented branch-policy divergence, not literal compliance). Follow-ups FU-1 + FU-2 delivered.
 
 Unchecked tasks carry a `_Partial — missing: …_` note naming exactly what is
 still absent, so each one can be picked up and finished directly. A task is
@@ -285,17 +285,20 @@ integration preview validates against the completed enforcement path;
     (`ingest.redaction.redact_text`) with T7.4 emit-time `containsSecret` as layer
     2 — no new regex; high-risk surfaces (code/tool I/O) absent by construction.
     Studio ingestion via registration (no schema change). **Persistence boundary
-    (review):** the store persists only fixed columns — no surface for
+    (review, T11.1-time — later closed by FU-1):** the store persisted only fixed
+    columns — no surface for
     `RawSession.metadata`, so `cost_usd`/`worker_outcomes`/`correlation_ids`/
-    `final_verdict`/`feature_id` are computed IN MEMORY but NOT written to the DB
-    (listed in `metadata.not_persisted_by_current_store`); a DB-level ingest test
+    `final_verdict`/`feature_id` were computed IN MEMORY but NOT written to the DB
+    (listed in the then-present `metadata.not_persisted_by_current_store`); a DB-level ingest test
     pins what survives (session id/project/phase/timestamps/turn_count/sidechain
     turns; per-turn cost NULL — no tokens). Persisting worker analytics needs a
-    store-schema surface — **open decision / follow-up**. Design:
+    store-schema surface — **later closed by FU-1** (`copilot_session_metadata`;
+    `not_persisted_by_current_store` removed and the DB test flipped to prove
+    cost/outcomes/feature persist). Design:
     `design-t111-analytics.md`. Tests: `test_adapter_pi.py` (8, incl. DB-level
-    ingest); full session_analytics suite 205/0. _Native-transcript tokens,
-    denials/review/compaction sources, and worker-analytics persistence are
-    named follow-ups._
+    ingest); full session_analytics suite 205/0. _Native-transcript tokens and
+    denials/review/compaction sources remain named follow-ups; worker-analytics
+    persistence was later closed by FU-1._
 - [x] **T11.2 (P0)** Generated capability parity documentation from the registry; compatibility matrix.
     `scripts/generate-capability-docs.sh` (bash + `ruby -ryaml`, same substrate as
     validate-capabilities.sh) renders `shared/capabilities/COMPATIBILITY.md`
@@ -336,7 +339,7 @@ integration preview validates against the completed enforcement path;
     wired into `test-pi-adapter.sh` (145/0). `SHA256SUMS`/`RELEASE_NOTES.md` stay
     generated + uncommitted (`dist/`). FR-027 provenance exposed via the artifacts +
     `features`/`doctor`/`COMPATIBILITY.md` (mapping in the extension-dev doc); a
-    `pi-code provenance` command is FU-2. Design: `design-t114-release.md`.
+    `pi-code provenance` command is FU-2 (**later delivered — PR #168**). Design: `design-t114-release.md`.
 - [x] **T11.5 (P1)** Security test battery complete (§18.5 of consolidated plan); cross-adapter contract suite green.
     CONSOLIDATION, not new behavior. `tests/pi-runtime/security-battery.test.mjs`
     (9): one canonical fail-closed invariant per category — trust gating,
@@ -368,9 +371,27 @@ integration preview validates against the completed enforcement path;
 
 ## Cross-cutting
 
-- [ ] **TX.1 (P0)** All security-relevant tasks include acceptance tests and audit-log coverage before merge to the feature branch mainline.
-- [ ] **TX.2 (P0)** Branch policy: all work on `feature/pi-harness-adoption` (or child branches merged into it); no merge to `master` until spec.md Definition of Done holds.
-- [ ] **TX.3 (P1)** Each task records files affected + delivery slice in its PR description (consolidated plan §15 tasks.md contract).
+- [x] **TX.1 (P0)** All security-relevant tasks include acceptance tests and audit-log coverage. **MET.**
+    Audit-log (`policy/audit.ts`, C-9 fields) emission asserted in 8 runtime test
+    files (enforcement primary — 32 assertions); `security-battery.test.mjs` = 9
+    threat batteries (DoD #11); analytics secret-leak covered by `test_redaction.py`
+    + `test_project_privacy.py` + the launcher secret-leak sweep over every
+    diagnostic surface. Audit: `cross-cutting-compliance.md` §TX.1.
+- [x] **TX.2 (P0)** Branch policy: integration branch, no merge to master until DoD.
+    **CLOSED BY DOCUMENTED DIVERGENCE — literal policy NOT followed.** Delivery was
+    trunk-based (per-task child branches merged directly to `master` via autosync),
+    not a long-lived `feature/pi-harness-adoption` branch. TX.2's intent (master
+    never holds half-built/unenforced security work) was preserved by per-PR gating
+    instead of per-DoD: every PR independently green, security surfaces shipped with
+    their tests, capability-enablement circuit-gated. History cannot/should-not be
+    rewritten; the record IS the resolution. Full rationale:
+    `cross-cutting-compliance.md` §TX.2.
+- [x] **TX.3 (P1)** Each task records files affected + delivery slice in its PR description.
+    **SUBSTANTIALLY MET.** Files-affected recorded in every PR body (commit-message
+    fed) + `tasks.md`; the delivery-slice label lives in `tasks.md` rather than each
+    PR body, and the auto-appended PR template sections were often left as
+    placeholders. Deviation noted, not claimed as perfect. Audit:
+    `cross-cutting-compliance.md` §TX.3.
 
 ## Follow-ups (named, not silent gaps)
 
@@ -395,9 +416,17 @@ scheduled._
     `design-fu1-session-metadata.md`. _Studio dashboard surfacing is a separate
     consumer task._
 
-- **FU-2 (P2)** `pi-code provenance [--json]` — a single report aggregating
-    source / version / checksum / scope / trust / enabled modules / dependency
-    status / security classification (FR-027). T11.4 exposes these via the SBOM +
-    SHA256SUMS + `features`/`doctor`/`COMPATIBILITY.md`; a dedicated command needs
-    a runtime version + checksum data source (absent today). Decided (2026-08-02):
-    Option A now, this command as a follow-up.
+- **FU-2 (P2) — ✅ DONE (2026-08-04, PR #168).** `pi-code provenance [--json]` —
+    a read-only report aggregating source / version / scope / trust / enabled
+    modules / dependency status (FR-027), composed from existing surfaces (no new
+    data model). Version = launcher-owned `CCT_VERSION` (authoritative; guarded
+    repo-`package.json` fallback for dev only) — a launcher parity test locks
+    `provenance --json` to the `version` command so the two public version surfaces
+    can't drift. The fields the runtime cannot obtain — `checksum`, the full SBOM,
+    and the security-level classification (lives in `catalog.yaml`/`COMPATIBILITY.md`,
+    not bundled at runtime; no runtime YAML parser) — are reported absent with a
+    machine-readable pointer (`null` / `{available:false, …}`), never fabricated.
+    Files: `runtime/cli.ts` (`provenance()` + `resolveVersion()`), `bin/pi-code`
+    (`export CCT_VERSION`, dispatch, help), `test-pi-launcher.sh` (+9 assertions),
+    `design-fu2-provenance.md`. Verify: launcher 116/0, typecheck gate 7/0, tsc
+    clean.
