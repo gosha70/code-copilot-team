@@ -128,6 +128,27 @@ test("profiles: peer-reviewer is read-only and non-recursive by construction", (
   assert.equal(p.config.headless.ask_resolution, "deny");
 });
 
+test("profiles: unattended = autonomous posture + headless ask allow (US1)", () => {
+  // Inherits autonomous (which inherits disciplined); base-most first.
+  const chain = resolveProfileChain("unattended").map((p) => p.name);
+  assert.deepEqual(chain, ["disciplined", "autonomous", "unattended"]);
+  // FR-1: relaxed is the explicit base allow/deny posture.
+  assert.deepEqual(BUILTIN_PROFILES["unattended"].importPermissions, ["relaxed"]);
+
+  const r = load({ profile: "unattended" });
+  assert.equal(r.errors.length, 0);
+  // The one delta over autonomous: headless asks resolve to allow.
+  assert.equal(r.resolved.get("headless.ask_resolution").value, "allow");
+  // Inherited hardening is intact (FR-1/FR-2: posture relaxes asks, not gates).
+  assert.equal(r.resolved.get("security.sandbox_required").value, true);
+  assert.equal(r.resolved.get("security.fail_closed").value, true);
+  assert.equal(r.resolved.get("autonomy.reject_unrestricted_host").value, true);
+
+  // Conservative profiles are unchanged: ci stays fail-fast; default denies asks.
+  assert.equal(load({ profile: "ci" }).resolved.get("headless.ask_resolution").value, "fail");
+  assert.equal(load().resolved.get("headless.ask_resolution").value, "deny");
+});
+
 // ── layered precedence + provenance ─────────────────────────
 
 test("precedence: defaults < profile < global < project < project-local < env < cli", () => {

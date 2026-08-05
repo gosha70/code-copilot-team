@@ -537,3 +537,39 @@ test("decision invariance: headless ask resolves deterministically; only TUI sta
   assert.equal(vi.effective, "allow"); // escalated to the user via ui.confirm
   // The resolution difference is driven by `interactive`, never by the mode label.
 });
+
+// ── Unattended posture: ask_resolution=allow relaxes ONLY asks (US1, FR-2) ──
+test("permissions: unattended ask_resolution=allow relaxes only asks, never denies", () => {
+  const base = {
+    toolsAllow: [],
+    toolsDeny: [],
+    pathsDeny: [".env", "**/*.pem"],
+    pathsAsk: ["secrets/**"],
+    commandsDeny: ["git push --force", "rm -rf /"],
+    commandsAsk: ["git commit"],
+    interactive: false,
+    denyNetwork: false,
+    allowPackageInstall: true,
+    failClosed: true,
+  };
+  const unattended = { ...base, askResolution: "allow" };
+  const conservative = { ...base, askResolution: "deny" };
+
+  // Ask-gated work proceeds under unattended, but would block conservatively.
+  assert.equal(checkCommand(unattended, "git commit -m x").effective, "allow");
+  assert.equal(checkCommand(conservative, "git commit -m x").effective, "deny");
+  assert.equal(checkPath(unattended, "secrets/key.txt").effective, "allow");
+  assert.equal(checkPath(conservative, "secrets/key.txt").effective, "deny");
+
+  // Deny decisions are untouched by ask_resolution — decision AND effective stay deny.
+  for (const cmd of ["git push --force", "rm -rf /"]) {
+    const v = checkCommand(unattended, cmd);
+    assert.equal(v.decision, "deny", `decision for ${cmd}`);
+    assert.equal(v.effective, "deny", `effective for ${cmd}`);
+  }
+  for (const fp of [".env", "id_rsa.pem"]) {
+    const v = checkPath(unattended, fp);
+    assert.equal(v.decision, "deny", `decision for ${fp}`);
+    assert.equal(v.effective, "deny", `effective for ${fp}`);
+  }
+});
