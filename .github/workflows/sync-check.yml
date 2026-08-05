@@ -45,6 +45,7 @@ jobs:
           bash -n scripts/validate-pitch.sh
           bash -n scripts/check-origin-alignment.sh
           bash -n scripts/auto-build-loop.sh
+          bash -n scripts/generate-claude-settings.sh
           bash -n scripts/providers-health.sh
 
       - name: Run generation tests
@@ -67,6 +68,12 @@ jobs:
 
       - name: Run provider adapter --provider wiring tests
         run: bash tests/test-provider-setup.sh
+
+      - name: Run Claude settings generator tests (US2 unattended posture)
+        run: bash tests/test-claude-settings-gen.sh
+
+      - name: Cross-harness permission drift guard (FR-8)
+        run: bash scripts/generate-claude-settings.sh relaxed --settings adapters/claude-code/.claude/settings.json --check
 
       - name: Run auto-build loop tests
         run: bash tests/test-auto-build-loop.sh
