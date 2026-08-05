@@ -48,82 +48,91 @@ Claude Code and Pi harnesses.
 - FR-5: Claude Code settings MUST be generated from the same shared permission
   profile source that Pi imports. Generated settings MUST be idempotent, must
   preserve unrelated user settings, and must never emit `bypassPermissions`.
-- FR-6: Claude Code generated settings MUST distinguish managed keys from
+- FR-6: Claude Code generated settings MUST include the Claude-side analog of
+  Pi's `headless.ask_resolution = "allow"`: an explicit non-interactive
+  default such as `permissions.defaultMode = "acceptEdits"` or the
+  adapter-supported equivalent. This default MUST resolve residual routine asks
+  without `bypassPermissions`, and MUST NOT weaken explicit deny rules,
+  protected-path hooks, security floors, review gates, or verification gates.
+- FR-7: Claude Code generated settings MUST distinguish managed keys from
   user-owned keys so switching away from the unattended posture removes or
   updates only managed permission-profile content.
-- FR-7: A drift guard MUST prove the shared permission profile, the Pi imported
+- FR-8: A drift guard MUST prove the shared permission profile, the Pi imported
   layer, and the Claude generated settings remain aligned for the managed
-  allow/ask/deny posture.
+  allow/ask/deny posture and for ask-resolution semantics. The guard MUST fail
+  if Pi resolves residual asks to allow but Claude would still prompt under its
+  generated settings.
 
 ### Long-Run Continuity (US3)
 
-- FR-8: The continuity contract MUST use existing durable state as the source of
+- FR-9: The continuity contract MUST use existing durable state as the source of
   truth: SDD `tasks.md`, `.cct/pi-session.json`, and the auto-build ledger under
   `.cct/auto-build/<feature-id>/`.
-- FR-9: Pi continuity MUST remain honestly classified as degraded when the
+- FR-10: Pi continuity MUST remain honestly classified as degraded when the
   limitation is native context or compaction visibility. Pi currently observes
   `session_start` and can re-inject a checkpoint digest, but does not expose
   `PreCompact` or `PostCompact`.
-- FR-10: Claude Code continuity MAY use native hook surfaces where available,
+- FR-11: Claude Code continuity MAY use native hook surfaces where available,
   but the cross-harness contract MUST still be durable-state-first so the
   supervisor can resume either adapter from the same project artifacts.
-- FR-11: Any model-visible recovery digest MUST be sanitized and trust-gated
+- FR-12: Any model-visible recovery digest MUST be sanitized and trust-gated
   using the existing checkpoint discipline. A tampered checkpoint or task file
   MUST NOT become unsanitized instruction text.
-- FR-12: Diagnostics MUST make the continuity source explicit: native hook,
+- FR-13: Diagnostics MUST make the continuity source explicit: native hook,
   checkpoint recovery, auto-build ledger, and tasks file status. Missing or
   corrupt state MUST be reported as absent/corrupt, never fabricated.
 
 ### Cooldown Resume Supervisor (US4)
 
-- FR-13: The feature MUST add a harness-neutral resume supervisor around the
+- FR-14: The feature MUST add a harness-neutral resume supervisor around the
   existing launchers and automation driver, rather than embedding token-limit
   logic in one adapter. It MUST support at least:
   - `scripts/auto-build-loop.sh <feature-id> --resume`;
   - Pi through `pi-code`;
   - Claude Code through the existing `claude-code` wrapper or Claude CLI path.
-- FR-14: The supervisor MUST maintain its own durable run ledger under `.cct/`
+- FR-15: The supervisor MUST maintain its own durable run ledger under `.cct/`
   with feature id, harness, worktree, attempt count, cooldowns, last exit code,
   last classified reason, and timestamps. Missing/corrupt ledgers MUST fail
   closed with a clear recovery message.
-- FR-15: Usage-limit detection MUST be explicit and test-backed. The first
-  implementation MAY use configured output matchers and known subprocess exit
-  classifications, but MUST store the matched evidence. It MUST NOT rely on
+- FR-16: Usage-limit detection MUST be explicit and test-backed. The first
+  implementation MAY use configured output matchers, known subprocess exit
+  classifications, and `scripts/auto-build-loop.sh`'s existing usage/preflight
+  exit signal (`1`), but MUST store the matched evidence. It MUST NOT rely on
   unverified vendor session stores or infer success from silence.
-- FR-16: If the harness exits cleanly while `tasks.md` still has unchecked tasks
+- FR-17: If the harness exits cleanly while `tasks.md` still has unchecked tasks
   in the active feature, the supervisor MUST treat that as incomplete work and
   either relaunch or park according to the configured policy.
-- FR-17: A cooldown resume MUST:
+- FR-18: A cooldown resume MUST:
   - wait at least the configured cooldown;
   - relaunch in the same project/worktree;
   - pass the selected unattended posture;
   - preserve the automation/checkpoint ledgers;
   - cap retries and total wall-clock time.
-- FR-18: Terminal conditions MUST be deterministic:
+- FR-19: Terminal conditions MUST be deterministic:
   - success when the configured task-completion detector reports all target
     tasks complete and verification gates pass;
   - parked when a non-usage breaker occurs;
   - failed when max attempts, max cooldowns, or wall-clock caps are exceeded;
   - failed when state is corrupt and cannot be reconciled.
-- FR-19: The supervisor MUST not perform destructive git operations. Commits,
+- FR-20: The supervisor MUST not perform destructive git operations. Commits,
   pushes, merges, cleanup, and branch deletion remain owned by the existing
   auto-build driver or explicit user action.
-- FR-20: Notifications, if configured, MUST reuse the existing non-blocking
+- FR-21: Notifications, if configured, MUST reuse the existing non-blocking
   notification contract: notify failures are journaled and never convert a
   failed/parked state into success.
 
 ### Reporting and Documentation
 
-- FR-21: `doctor`, `features`, or equivalent diagnostics MUST report the new
+- FR-22: `doctor`, `features`, or equivalent diagnostics MUST report the new
   unattended posture and cooldown-resume support, including which pieces are
   enabled, degraded, or unavailable by adapter.
-- FR-22: Documentation MUST include:
+- FR-23: Documentation MUST include:
   - when to use unattended mode;
   - why `ask_resolution = "allow"` is not a permission bypass;
   - how to run/resume a supervised build;
   - how to inspect ledgers after a cooldown resume;
   - what Pi cannot remember natively.
-- FR-23: The spec MUST include tests for prompt resolution, generated Claude
+- FR-24: The spec MUST include tests for prompt resolution, generated Claude
   settings, checkpoint/trust honesty, cooldown classification, task-completion
   detection, retry caps, and no-destructive-git behavior.
 

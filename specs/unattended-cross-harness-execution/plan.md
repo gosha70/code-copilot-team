@@ -68,9 +68,13 @@ launcher subcommand that produces Claude Code `settings.json` managed
 permission keys from that source. The generator must:
 
 - emit no `bypassPermissions`;
+- set the Claude-side non-interactive default that is semantically equivalent
+  to Pi's `headless.ask_resolution = "allow"` for residual routine asks, for
+  example `permissions.defaultMode = "acceptEdits"` when that remains the
+  adapter-supported setting;
 - preserve unrelated user settings;
 - mark or track the managed section so it can be updated idempotently;
-- support drift checks;
+- support drift checks over both allow/deny lists and ask-resolution semantics;
 - share tests with Pi profile import expectations where possible.
 
 This converts "Claude has hand-maintained settings" into "Claude consumes the
@@ -115,9 +119,10 @@ commands.
 ### D5: Classification Honesty
 
 Usage/token-limit detection starts as explicit pattern/exit classification over
-captured subprocess output, because there is no verified generic quota API. The
-ledger must include the matched evidence and classifier version. Unknown
-nonzero exits park or fail; they do not become cooldown resumes by default.
+captured subprocess output, plus the existing `auto-build-loop.sh` usage/preflight
+exit signal (`1`), because there is no verified generic quota API. The ledger
+must include the matched evidence and classifier version. Unknown nonzero exits
+park or fail; they do not become cooldown resumes by default.
 
 ### D6: Safety Defaults
 
