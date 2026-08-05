@@ -63,6 +63,14 @@ MANIFEST="$(dirname "$SETTINGS")/$MANIFEST_NAME"
 # ── --remove: drop managed permissions + manifest, keep everything else ──
 if [[ "$MODE" == "remove" ]]; then
   [[ -f "$SETTINGS" ]] || { echo "[$PROG] no settings at $SETTINGS — nothing to remove."; exit 0; }
+  # FR-7 ownership boundary: remove `permissions` ONLY when the manifest proves
+  # CCT wrote it. Absent/foreign manifest ⇒ the block is user-owned; leave it
+  # untouched (deleting it could drop hand-authored deny guardrails).
+  if [[ ! -f "$MANIFEST" ]] || ! jq -e --arg k "$MANAGED_KEY" \
+        '(.managedKeys // []) | index($k)' "$MANIFEST" >/dev/null 2>&1; then
+    echo "[$PROG] no CCT-managed permissions manifest at $MANIFEST — leaving $SETTINGS untouched (user-owned permissions are never removed)."
+    exit 0
+  fi
   updated="$(jq --arg k "$MANAGED_KEY" 'del(.[$k])' "$SETTINGS")"
   printf '%s\n' "$updated" > "$SETTINGS"
   rm -f "$MANIFEST"
