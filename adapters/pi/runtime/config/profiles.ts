@@ -61,6 +61,21 @@ export const BUILTIN_PROFILES: { [name: string]: Profile } = {
       },
     },
   },
+  unattended: {
+    name: "unattended",
+    description:
+      "Unattended long-run build: the autonomous posture with headless asks resolved to allow. Deny rules, protected paths, security floors, and sandbox requirements are unchanged (unattended-cross-harness-execution FR-1/FR-2).",
+    inherits: "autonomous",
+    // Explicit per FR-1: relaxed is the base allow/deny posture (also inherited
+    // from `autonomous`; stated here so the posture is self-documenting).
+    importPermissions: ["relaxed"],
+    config: {
+      // The only delta over `autonomous`: resolve an ask to allow when headless,
+      // so routine build work proceeds unattended. ask_resolution acts ONLY on
+      // ask decisions — deny/floor/sandbox stay intact (see policy/permissions.ts).
+      headless: { ask_resolution: "allow" },
+    },
+  },
   "local-first": {
     name: "local-first",
     description: "Prefer Ollama, vLLM, LM Studio, or local providers",

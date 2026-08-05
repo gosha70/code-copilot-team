@@ -70,6 +70,7 @@ A profile is a partial config applied between defaults and global. Built-ins:
 | `disciplined` (default) | SDD + safety hooks + review + verification |
 | `review-heavy` | mandatory peer review + stronger gates |
 | `autonomous` | autonomous build loop + required isolation (sandbox) |
+| `unattended` | `autonomous` + headless asks resolved to allow (deny/floor/sandbox unchanged) — for long unattended builds |
 | `local-first` | prefer local providers (Ollama/vLLM/LM Studio) |
 | `air-gapped` | no network integrations; local models/tools only |
 | `ci` | non-interactive CI posture |
