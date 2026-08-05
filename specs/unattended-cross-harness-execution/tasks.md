@@ -36,7 +36,8 @@
 |---|-----|------|---------|-------|------|
 | 7 | | Add a continuity report over `tasks.md`, `.cct/pi-session.json`, and `.cct/auto-build/<feature-id>/state.json`; report missing/corrupt/untrusted honestly (FR-9, FR-13) | `adapters/pi/runtime/`, `scripts/` as appropriate | build | [ ] |
 | 8 | | Add tests for trusted checkpoint recovery, untrusted withheld recovery, corrupt checkpoint handling, and no native Pi compaction overclaim (FR-10, FR-11, FR-12) | `tests/pi-runtime/`, `tests/` | build | [ ] |
-| 9 | [P] | Document the durable-state-first contract and mapatlas-style `tasks.md` workflow (FR-22, FR-23) | `adapters/pi/docs/`, shared docs as appropriate | docs | [ ] |
+| 9 | | Surface unattended posture and cooldown-resume support in `doctor`, `features`, or the equivalent diagnostics, including enabled/degraded/unavailable status by adapter (FR-22) | `adapters/pi/runtime/`, `adapters/claude-code/`, tests as appropriate | build | [ ] |
+| 10 | [P] | Document the durable-state-first contract and mapatlas-style `tasks.md` workflow (FR-23) | `adapters/pi/docs/`, shared docs as appropriate | docs | [ ] |
 
 **Checkpoint US3** - verify before continuing:
 - [ ] Continuity diagnostics distinguish present, missing, corrupt, and untrusted state
@@ -48,12 +49,12 @@
 
 | # | [P] | Task | File(s) | Owner | Done |
 |---|-----|------|---------|-------|------|
-| 10 | | Add the supervisor ledger schema under `.cct/` with feature id, harness, worktree, attempts, cooldowns, exit classification, evidence, and timestamps (FR-15, FR-16) | `scripts/`, tests fixtures | build | [ ] |
-| 11 | | Implement harness-neutral launch/resume around `scripts/auto-build-loop.sh --resume`, `pi-code`, and the Claude Code wrapper; preserve project/worktree and posture (FR-14, FR-18) | `scripts/` | build | [ ] |
-| 12 | | Implement explicit usage-limit classification with stored evidence and unknown-error parking/failure (FR-16, FR-19) | `scripts/` | build | [ ] |
-| 13 | | Implement incomplete-task detection after clean exit and retry/cooldown caps with injectable sleep/test clock (FR-17, FR-18, FR-19) | `scripts/`, tests fixtures | build | [ ] |
-| 14 | | Prove no destructive git operations are issued by the supervisor; git ownership remains with the auto-build driver or user action (FR-20) | `tests/` | build | [ ] |
-| 15 | | Wire non-blocking notifications for cooldown/park/done using the existing notification contract (FR-21) | `scripts/`, tests | build | [ ] |
+| 11 | | Add the supervisor ledger schema under `.cct/` with feature id, harness, worktree, attempts, cooldowns, exit classification, evidence, and timestamps (FR-15, FR-16) | `scripts/`, tests fixtures | build | [ ] |
+| 12 | | Implement harness-neutral launch/resume around `scripts/auto-build-loop.sh --resume`, `pi-code`, and the Claude Code wrapper; preserve project/worktree and posture (FR-14, FR-18) | `scripts/` | build | [ ] |
+| 13 | | Implement explicit usage-limit classification with stored evidence and unknown-error parking/failure (FR-16, FR-19) | `scripts/` | build | [ ] |
+| 14 | | Implement incomplete-task detection after clean exit and retry/cooldown caps with injectable sleep/test clock (FR-17, FR-18, FR-19) | `scripts/`, tests fixtures | build | [ ] |
+| 15 | | Prove no destructive git operations are issued by the supervisor; git ownership remains with the auto-build driver or user action (FR-20) | `tests/` | build | [ ] |
+| 16 | | Wire non-blocking notifications for cooldown/park/done using the existing notification contract (FR-21) | `scripts/`, tests | build | [ ] |
 
 **Checkpoint US4** - verify before continuing:
 - [ ] Mock harness usage-limit run cools down and relaunches
