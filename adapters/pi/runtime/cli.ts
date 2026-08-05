@@ -72,9 +72,11 @@ function doctor(opts: CliOptions, json: boolean): CliResult {
         ? "active"
         : "available",
     ask_resolution: askRes,
-    // Honest: the cooldown-resume supervisor (US4) is not built yet — reported
-    // unavailable, never fabricated. Flips to available when US4 lands.
-    cooldown_resume: "unavailable",
+    // The cooldown-resume supervisor (US4) is a repo tool
+    // (scripts/cooldown-supervisor.sh); report "available" only when it is
+    // actually present relative to the runtime, else "unavailable" (e.g. a
+    // managed install that does not bundle it) — never fabricated.
+    cooldown_resume: supervisorPresent(opts) ? "available" : "unavailable",
   };
   const runtimeOk = Boolean(
     opts.runtimeEntry && fs.existsSync(opts.runtimeEntry),
@@ -366,6 +368,24 @@ function resolveVersion(opts: CliOptions): string {
     }
   }
   return "unknown";
+}
+
+/**
+ * Is the cooldown-resume supervisor (US4) present? It is a top-level repo tool
+ * (scripts/cooldown-supervisor.sh), not bundled into a managed Pi install, so
+ * detect it relative to the runtime and report honestly.
+ */
+function supervisorPresent(opts: CliOptions): boolean {
+  if (!opts.runtimeEntry) return false;
+  // <repo>/adapters/pi/runtime/index.ts -> up 3 -> <repo>
+  const repoRoot = path.dirname(
+    path.dirname(path.dirname(path.dirname(opts.runtimeEntry))),
+  );
+  try {
+    return fs.existsSync(path.join(repoRoot, "scripts", "cooldown-supervisor.sh"));
+  } catch {
+    return false;
+  }
 }
 
 /**

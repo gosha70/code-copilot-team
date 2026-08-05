@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# test-cooldown-supervisor.sh — US4 of unattended-cross-harness-execution.
+#
+# Drives scripts/cooldown-supervisor.sh with MOCK harnesses and an injected
+# clock (CCT_SUPERVISOR_SLEEP=true), proving FR-14..FR-21:
+#   - usage-limit → cooldown → relaunch → success, with stored evidence;
+#   - clean exit with unchecked tasks is NOT success (park or relaunch);
+#   - non-usage breakers park; caps (attempts/cooldowns/wall) fail deterministically;
+#   - a corrupt ledger fails closed;
+#   - the supervisor issues NO destructive git operations;
+#   - notifications are non-blocking and never flip a terminal state.
+#
+# No network, no real harness, no waiting. Run from the repo root:
+#   bash tests/test-cooldown-supervisor.sh
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SUP="$REPO_DIR/scripts/cooldown-supervisor.sh"
+
+PASS=0
+FAIL=0
+assert_exit() { # assert_exit <name> <expected> <actual>
+  if [[ "$2" == "$3" ]]; then echo "  PASS: $1 (exit $3)"; PASS=$((PASS + 1))
+  else echo "  FAIL: $1 (expected $2, got $3)"; FAIL=$((FAIL + 1)); fi
+}
+assert() { # assert <name> <condition>
+  if eval "$2"; then echo "  PASS: $1"; PASS=$((PASS + 1))
+  else echo "  FAIL: $1"; FAIL=$((FAIL + 1)); fi
+}
+
+command -v jq >/dev/null 2>&1 || { echo "[SKIP] jq not found."; exit 0; }
+
+# A fresh worktree with a tasks.md. $1 = "done" (all checked) or "open" (one [ ]).
+mkproj() { # mkproj <done|open>
+  local w; w="$(mktemp -d)"
+  mkdir -p "$w/specs/demo"
+  if [[ "$1" == "done" ]]; then
+    printf '| # | Task | Done |\n|---|---|---|\n| 1 | a | [x] |\n' > "$w/specs/demo/tasks.md"
+  else
+    printf '| # | Task | Done |\n|---|---|---|\n| 1 | a | [x] |\n| 2 | b | [ ] |\n' > "$w/specs/demo/tasks.md"
+  fi
+  echo "$w"
+}
+
+# A mock harness that emits a scripted line + exit code per attempt. It records
+# its call count in $CCT_PROJECT_DIR/.n so a sequence can be scripted.
+run_sup() { # run_sup <worktree> <mock-cmd> [extra args...]; echoes exit code
+  local w="$1" mock="$2"; shift 2
+  set +e
+  CCT_SUPERVISOR_HARNESS_CMD="$mock" CCT_SUPERVISOR_SLEEP=true \
+    bash "$SUP" demo --worktree "$w" --cooldown-sec 1 "$@" >"$w/.out" 2>&1
+  local rc=$?
+  set -e
+  echo "$rc"
+}
+
+echo "=== cooldown-supervisor (US4) ==="
+
+# ── FR-16/18: usage-limit → cooldown → success, evidence stored ──
+echo "--- usage-limit → cooldown → success ---"
+W="$(mkproj done)"
+MOCK='n=$(cat "$CCT_PROJECT_DIR/.n" 2>/dev/null||echo 0);n=$((n+1));echo $n>"$CCT_PROJECT_DIR/.n";
+if [ "$n" -eq 1 ]; then echo "HTTP 429: usage limit reached"; exit 1; fi; echo ok; exit 0'
+RC="$(run_sup "$W" "$MOCK")"
+assert_exit "usage then clean → done (exit 0)" 0 "$RC"
+assert "ledger status is done" "[[ \"\$(jq -r .status "$W/.cct/supervisor/demo/run.json")\" == done ]]"
+assert "one cooldown recorded" "[[ \"\$(jq -r .cooldowns "$W/.cct/supervisor/demo/run.json")\" == 1 ]]"
+assert "usage evidence stored (not inferred from silence)" \
+  "jq -r .last_usage_evidence "$W/.cct/supervisor/demo/run.json" | grep -qi '429'"
+assert "events journal recorded a usage_limit event" \
+  "grep -q usage_limit "$W/.cct/supervisor/demo/events.jsonl""
+rm -r "$W"
+
+# ── FR-17: clean exit but tasks remain → NOT success ──
+echo "--- clean exit + unchecked tasks ---"
+W="$(mkproj open)"   # one task still [ ]
+RC="$(run_sup "$W" 'echo done; exit 0')"    # default --on-incomplete=park
+assert_exit "clean exit + unchecked tasks → parked (exit 4), not 0" 4 "$RC"
+assert "status parked, not done" "[[ \"\$(jq -r .status "$W/.cct/supervisor/demo/run.json")\" == parked ]]"
+rm -r "$W"
+
+W="$(mkproj open)"
+# relaunch policy: first exit clean-but-open, then the task file is completed by
+# the mock's side effect so the next pass sees 0 remaining → success.
+# On the 2nd pass, complete the work by overwriting tasks.md with an all-done
+# file (so tasks_remaining sees 0), simulating the harness finishing the task.
+MOCK='n=$(cat "$CCT_PROJECT_DIR/.n" 2>/dev/null||echo 0);n=$((n+1));echo $n>"$CCT_PROJECT_DIR/.n";
+if [ "$n" -ge 2 ]; then printf "| 1 | a | [x] |\n| 2 | b | [x] |\n" > "$CCT_PROJECT_DIR/specs/demo/tasks.md"; fi; echo pass; exit 0'
+RC="$(run_sup "$W" "$MOCK" --on-incomplete relaunch --max-attempts 5)"
+assert_exit "on-incomplete=relaunch eventually completes (exit 0)" 0 "$RC"
+rm -r "$W"
+
+# ── FR-19: non-usage breaker → parked ──
+echo "--- non-usage breaker ---"
+W="$(mkproj done)"
+RC="$(run_sup "$W" 'echo "compile error, unrelated"; exit 2')"
+assert_exit "breaker (nonzero, no usage evidence) → parked (exit 4)" 4 "$RC"
+assert "does not cool down on an unclassified error" \
+  "[[ \"\$(jq -r .cooldowns "$W/.cct/supervisor/demo/run.json")\" == 0 ]]"
+rm -r "$W"
+
+# ── FR-18/19: caps fail deterministically ──
+echo "--- caps ---"
+W="$(mkproj done)"
+RC="$(run_sup "$W" 'echo "rate limit exceeded"; exit 1' --max-cooldowns 2)"
+assert_exit "always-usage hits max-cooldowns → failed (exit 5)" 5 "$RC"
+assert "failed status recorded" "[[ \"\$(jq -r .status "$W/.cct/supervisor/demo/run.json")\" == failed ]]"
+rm -r "$W"
+
+W="$(mkproj open)"
+RC="$(run_sup "$W" 'echo pass; exit 0' --on-incomplete relaunch --max-attempts 3)"
+assert_exit "relaunch loop hits max-attempts → failed (exit 5)" 5 "$RC"
+rm -r "$W"
+
+# ── FR-15: corrupt ledger fails closed ──
+echo "--- corrupt ledger ---"
+W="$(mkproj done)"
+mkdir -p "$W/.cct/supervisor/demo"; printf 'not json{' > "$W/.cct/supervisor/demo/run.json"
+RC="$(run_sup "$W" 'echo ok; exit 0')"
+assert_exit "corrupt ledger → fail closed (exit 5)" 5 "$RC"
+assert "corrupt-ledger message names recovery" "grep -qi 'corrupt' "$W/.out""
+rm -r "$W"
+
+# Parseable JSON but a structurally invalid numeric field is ALSO corrupt: it
+# would otherwise reach shell arithmetic and crash (exit 1, status left running)
+# instead of the documented fail-closed exit 5.
+for BADFIELD in '"attempts":"notnum"' '"cooldowns":"x"' '"started_epoch":"abc"'; do
+  W="$(mkproj done)"
+  mkdir -p "$W/.cct/supervisor/demo"
+  printf '{"schema_version":1,"feature_id":"demo","status":"running","attempts":0,"cooldowns":0,"started_epoch":1000000,%s}\n' \
+    "$BADFIELD" > "$W/.cct/supervisor/demo/run.json"
+  RC="$(run_sup "$W" 'echo ok; exit 0')"
+  assert_exit "invalid ledger field ($BADFIELD) → fail closed (exit 5)" 5 "$RC"
+  assert "invalid-field run does not leave status running" \
+    "[[ \"\$(jq -r .status "$W/.cct/supervisor/demo/run.json")\" != running ]] || grep -qi corrupt "$W/.out""
+  rm -r "$W"
+done
+
+# A valid resumed ledger (numeric fields) still resumes and completes.
+W="$(mkproj done)"
+mkdir -p "$W/.cct/supervisor/demo"
+printf '{"schema_version":1,"feature_id":"demo","status":"running","attempts":2,"cooldowns":1,"started_epoch":1000000}\n' \
+  > "$W/.cct/supervisor/demo/run.json"
+set +e
+CCT_SUPERVISOR_NOW=1000050 CCT_SUPERVISOR_HARNESS_CMD='echo ok; exit 0' CCT_SUPERVISOR_SLEEP=true \
+  bash "$SUP" demo --worktree "$W" --cooldown-sec 1 >"$W/.out" 2>&1
+RC=$?; set -e
+assert_exit "valid resumed ledger still completes (exit 0)" 0 "$RC"
+assert "resumed attempts counter advanced from 2" \
+  "[[ \"\$(jq -r .attempts "$W/.cct/supervisor/demo/run.json")\" == 3 ]]"
+rm -r "$W"
+
+# ── FR-20: NO destructive git operations ──
+echo "--- no destructive git ---"
+W="$(mkproj done)"
+SHIM="$(mktemp -d)"
+cat > "$SHIM/git" <<'GIT'
+#!/usr/bin/env bash
+echo "git $*" >> "$GIT_RECORDER"
+exit 0
+GIT
+chmod +x "$SHIM/git"
+export GIT_RECORDER="$W/.git-calls"
+set +e
+CCT_SUPERVISOR_HARNESS_CMD='echo ok; exit 0' CCT_SUPERVISOR_SLEEP=true \
+  PATH="$SHIM:$PATH" bash "$SUP" demo --worktree "$W" >/dev/null 2>&1
+set -e
+assert "supervisor issued no git commands at runtime" "[[ ! -s '$W/.git-calls' ]]"
+assert "supervisor source contains no git mutation commands" \
+  "! grep -qE '(^|[^A-Za-z])git[[:space:]]+(commit|push|merge|branch|worktree|checkout|reset|rebase|tag|clean)' '$SUP'"
+unset GIT_RECORDER
+rm -r "$W" "$SHIM"
+
+# ── FR-21: notifications are non-blocking, never flip terminal state ──
+echo "--- notifications ---"
+W="$(mkproj done)"
+NOTES="$W/notes.log"
+MOCK='n=$(cat "$CCT_PROJECT_DIR/.n" 2>/dev/null||echo 0);n=$((n+1));echo $n>"$CCT_PROJECT_DIR/.n";
+if [ "$n" -eq 1 ]; then echo "usage limit"; exit 1; fi; echo ok; exit 0'
+set +e
+CCT_SUPERVISOR_HARNESS_CMD="$MOCK" CCT_SUPERVISOR_SLEEP=true \
+  CCT_SUPERVISOR_NOTIFY_CMD='echo "$CCT_NOTIFY_REASON" >> '"$NOTES" \
+  bash "$SUP" demo --worktree "$W" --cooldown-sec 1 >/dev/null 2>&1
+RC=$?; set -e
+assert_exit "notified run still succeeds (exit 0)" 0 "$RC"
+assert "cooldown notification fired" "grep -q cooldown '$NOTES'"
+assert "done notification fired" "grep -q done '$NOTES'"
+rm -r "$W"
+
+# A FAILING notify command must not change the terminal status.
+W="$(mkproj done)"
+set +e
+CCT_SUPERVISOR_HARNESS_CMD='echo ok; exit 0' CCT_SUPERVISOR_SLEEP=true \
+  CCT_SUPERVISOR_NOTIFY_CMD='exit 7' \
+  bash "$SUP" demo --worktree "$W" >/dev/null 2>&1
+RC=$?; set -e
+assert_exit "failing notify does not break success (exit 0)" 0 "$RC"
+assert "notify_failed journaled but status still done" \
+  "grep -q notify_failed "$W/.cct/supervisor/demo/events.jsonl" && [[ \"\$(jq -r .status "$W/.cct/supervisor/demo/run.json")\" == done ]]"
+rm -r "$W"
+
+# ── input validation: unsafe feature id rejected ──
+echo "--- validation ---"
+set +e
+CCT_SUPERVISOR_SLEEP=true bash "$SUP" '../escape' --worktree "$(mktemp -d)" >/dev/null 2>&1
+RC=$?; set -e
+assert_exit "unsafe feature id rejected (exit 64)" 64 "$RC"
+
+echo ""
+echo "========================================="
+echo "  cooldown-supervisor tests: $PASS passed, $FAIL failed"
+echo "========================================="
+[[ $FAIL -eq 0 ]]

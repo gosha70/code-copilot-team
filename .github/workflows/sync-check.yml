@@ -46,6 +46,7 @@ jobs:
           bash -n scripts/check-origin-alignment.sh
           bash -n scripts/auto-build-loop.sh
           bash -n scripts/generate-claude-settings.sh
+          bash -n scripts/cooldown-supervisor.sh
           bash -n scripts/providers-health.sh
 
       - name: Run generation tests
@@ -77,6 +78,9 @@ jobs:
 
       - name: Run auto-build loop tests
         run: bash tests/test-auto-build-loop.sh
+
+      - name: Run cooldown supervisor tests (US4 unattended resume)
+        run: bash tests/test-cooldown-supervisor.sh
 
       - name: Run origin-alignment tests
         run: bash tests/test-origin-alignment.sh
