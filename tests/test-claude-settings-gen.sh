@@ -91,6 +91,24 @@ assert "--remove deletes the managed permissions key" "[[ \"\$(jq -r '.permissio
 assert "--remove preserves unrelated user env"        "[[ \"\$(jq -r '.env.USER_KEY' "$TMP/settings.json")\" == 'keep-me' ]]"
 assert "--remove deletes the manifest"                "[[ ! -f '$TMP/.cct-permissions.json' ]]"
 
+# FR-7 ownership boundary: --remove must NOT delete user-owned permissions when
+# no manifest (or a manifest that doesn't declare `permissions`) proves CCT wrote
+# them — otherwise a switch-away drops hand-authored deny guardrails.
+echo "--- --remove respects ownership (no/foreign manifest) ---"
+printf '%s\n' '{ "permissions": { "deny": ["Bash(rm -rf:*)","Read(./.env)"] }, "env": {"U":"1"} }' > "$TMP/user.json"
+[[ -f "$TMP/.cct-permissions.json" ]] && rm -f "$TMP/.cct-permissions.json"
+bash "$GEN" --remove --settings "$TMP/user.json" >/dev/null
+assert "no manifest: user permissions.deny preserved" \
+  "jq -e '.permissions.deny | index(\"Bash(rm -rf:*)\")' '$TMP/user.json' >/dev/null"
+assert "no manifest: user env preserved"               "[[ \"\$(jq -r '.env.U' '$TMP/user.json')\" == '1' ]]"
+
+# A foreign manifest (managedKeys without `permissions`) must not authorize removal.
+printf '%s\n' '{ "generator":"other","managedKeys":["hooks"] }' > "$TMP/.cct-permissions.json"
+bash "$GEN" --remove --settings "$TMP/user.json" >/dev/null
+assert "foreign manifest: user permissions.deny still preserved" \
+  "jq -e '.permissions.deny | index(\"Read(./.env)\")' '$TMP/user.json' >/dev/null"
+rm -f "$TMP/.cct-permissions.json"
+
 # ── FR-8: cross-harness drift guard ─────────────────────────
 # The SAME shared file both harnesses consume. Pi's unattended/autonomous
 # profiles import it via importPermissions; the Claude generator sources it.
