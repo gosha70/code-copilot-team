@@ -119,17 +119,28 @@ ledger_set() { # ledger_set <jq-filter> [--arg ...]
 }
 ledger_get() { jq -r "$1" "$RUN" 2>/dev/null; }
 
+# A resumed ledger is untrusted local state EVEN after it parses as JSON: a
+# structurally invalid field (e.g. a non-numeric attempt count) would otherwise
+# reach shell arithmetic and crash. Reject it the same way as malformed JSON.
+fail_corrupt() { # fail_corrupt <why>
+  err "supervisor ledger is corrupt: $RUN ($1)"
+  err "inspect and remove it to restart, then rerun. Refusing to proceed (fail-closed)."
+  exit 5
+}
+is_nonneg_int() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
 START_EPOCH="$(now_epoch)"
 if [[ -f "$RUN" ]]; then
   # Corrupt (present but unparseable) → fail closed with recovery guidance.
-  if ! jq -e . "$RUN" >/dev/null 2>&1; then
-    err "supervisor ledger is corrupt: $RUN"
-    err "inspect and remove it to restart, then rerun. Refusing to proceed (fail-closed)."
-    exit 5
-  fi
+  jq -e . "$RUN" >/dev/null 2>&1 || fail_corrupt "not valid JSON"
   ATTEMPTS="$(ledger_get '.attempts // 0')"
   COOLDOWNS="$(ledger_get '.cooldowns // 0')"
-  START_EPOCH="$(ledger_get '.started_epoch // empty')"; [[ -n "$START_EPOCH" ]] || START_EPOCH="$(now_epoch)"
+  START_EPOCH="$(ledger_get '.started_epoch // empty')"
+  [[ -n "$START_EPOCH" ]] || START_EPOCH="$(now_epoch)"
+  # Validate every persisted field used in arithmetic before it is used.
+  is_nonneg_int "$ATTEMPTS"    || fail_corrupt "invalid .attempts: '$ATTEMPTS'"
+  is_nonneg_int "$COOLDOWNS"   || fail_corrupt "invalid .cooldowns: '$COOLDOWNS'"
+  is_nonneg_int "$START_EPOCH" || fail_corrupt "invalid .started_epoch: '$START_EPOCH'"
   info "resuming supervisor ledger (attempts=$ATTEMPTS cooldowns=$COOLDOWNS)"
 else
   mkdir -p "$LEDGER_DIR"

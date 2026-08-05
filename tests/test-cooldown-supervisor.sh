@@ -123,6 +123,35 @@ assert_exit "corrupt ledger → fail closed (exit 5)" 5 "$RC"
 assert "corrupt-ledger message names recovery" "grep -qi 'corrupt' "$W/.out""
 rm -r "$W"
 
+# Parseable JSON but a structurally invalid numeric field is ALSO corrupt: it
+# would otherwise reach shell arithmetic and crash (exit 1, status left running)
+# instead of the documented fail-closed exit 5.
+for BADFIELD in '"attempts":"notnum"' '"cooldowns":"x"' '"started_epoch":"abc"'; do
+  W="$(mkproj done)"
+  mkdir -p "$W/.cct/supervisor/demo"
+  printf '{"schema_version":1,"feature_id":"demo","status":"running","attempts":0,"cooldowns":0,"started_epoch":1000000,%s}\n' \
+    "$BADFIELD" > "$W/.cct/supervisor/demo/run.json"
+  RC="$(run_sup "$W" 'echo ok; exit 0')"
+  assert_exit "invalid ledger field ($BADFIELD) → fail closed (exit 5)" 5 "$RC"
+  assert "invalid-field run does not leave status running" \
+    "[[ \"\$(jq -r .status "$W/.cct/supervisor/demo/run.json")\" != running ]] || grep -qi corrupt "$W/.out""
+  rm -r "$W"
+done
+
+# A valid resumed ledger (numeric fields) still resumes and completes.
+W="$(mkproj done)"
+mkdir -p "$W/.cct/supervisor/demo"
+printf '{"schema_version":1,"feature_id":"demo","status":"running","attempts":2,"cooldowns":1,"started_epoch":1000000}\n' \
+  > "$W/.cct/supervisor/demo/run.json"
+set +e
+CCT_SUPERVISOR_NOW=1000050 CCT_SUPERVISOR_HARNESS_CMD='echo ok; exit 0' CCT_SUPERVISOR_SLEEP=true \
+  bash "$SUP" demo --worktree "$W" --cooldown-sec 1 >"$W/.out" 2>&1
+RC=$?; set -e
+assert_exit "valid resumed ledger still completes (exit 0)" 0 "$RC"
+assert "resumed attempts counter advanced from 2" \
+  "[[ \"\$(jq -r .attempts "$W/.cct/supervisor/demo/run.json")\" == 3 ]]"
+rm -r "$W"
+
 # ── FR-20: NO destructive git operations ──
 echo "--- no destructive git ---"
 W="$(mkproj done)"
