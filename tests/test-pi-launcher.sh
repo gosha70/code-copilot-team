@@ -366,7 +366,7 @@ assert "continuity --json reports each source with an explicit status (FR-13)" \
 # doctor surfaces the unattended posture + cooldown-resume status (FR-22).
 DOC_J=$(PATH="$DIAG_PATH" "$LAUNCHER" doctor --json 2>&1 || true)
 assert "doctor --json reports the unattended posture" \
-  "echo \"\$DOC_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); u=d[\"unattended\"]; sys.exit(0 if u[\"posture\"] in (\"active\",\"available\") and u[\"cooldown_resume\"]==\"unavailable\" else 1)'"
+  "echo \"\$DOC_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); u=d[\"unattended\"]; sys.exit(0 if u[\"posture\"] in (\"active\",\"available\") and u[\"cooldown_resume\"] in (\"available\",\"unavailable\") else 1)'"
 
 assert "help documents the continuity command" \
   "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'continuity'"

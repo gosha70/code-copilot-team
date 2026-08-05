@@ -92,18 +92,42 @@ directives into a recovery digest.
 
 ## Resuming after a usage-limit pause
 
-Today: a paused/parked auto-build run resumes with
+A paused/parked auto-build run always resumes manually with
+`scripts/auto-build-loop.sh <feature-id> --resume`, which re-reads the ledger
+above and continues.
+
+For a fully hands-off long run, the **cooldown-resume supervisor** wraps that
+driver and keeps it alive across usage-limit pauses:
 
 ```bash
-scripts/auto-build-loop.sh <feature-id> --resume
+scripts/cooldown-supervisor.sh <feature-id> \
+  --worktree <path> --backend <claude|pi> --profile unattended
 ```
 
-which re-reads the ledger above and continues. An automatic **cooldown-resume
-supervisor** — detect a usage-limit block, wait the cooldown, relaunch the same
-harness against the same worktree — is **planned (not yet built)**;
-`pi-code doctor --json` reports `unattended.cooldown_resume: "unavailable"`
-until it lands, so you can tell from diagnostics whether it exists. Until then,
-resume is a manual `--resume` after the limit clears.
+It launches the harness, and on each exit **classifies from stored evidence**
+(never from silence):
+
+- **usage limit** (output matches a usage-limit pattern) → records the evidence,
+  waits the cooldown, relaunches the *same* worktree with the *same* posture;
+- **clean exit, tasks remaining** → relaunch or park (per `--on-incomplete`);
+- **clean exit, all tasks done** → success;
+- **any other breaker** → park;
+- **caps exceeded** (attempts / cooldowns / wall-clock) or a **corrupt ledger**
+  → fail closed.
+
+It keeps its own ledger under `.cct/supervisor/<feature>/` (attempts, cooldowns,
+last exit, last usage evidence, timestamps) and **issues no git operations** —
+commits, pushes, merges, and branch/worktree changes stay with the driver or
+you. `pi-code doctor --json` reports `unattended.cooldown_resume: "available"`
+when the supervisor is present (`"unavailable"` on an install that does not
+bundle it), so diagnostics tell you honestly whether it exists.
+
+Inspect a supervised run's ledger any time:
+
+```bash
+jq . .cct/supervisor/<feature-id>/run.json      # status, attempts, cooldowns, evidence
+cat .cct/supervisor/<feature-id>/events.jsonl    # the append-only journal
+```
 
 ## Diagnostics summary
 
