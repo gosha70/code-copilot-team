@@ -76,3 +76,4 @@ Detailed guides live in [`docs/`](docs/):
 - [Security model](docs/security-model.md) — what's enforced, what's honestly degraded.
 - [Migration from Claude Code](docs/migration-from-claude-code.md) — what maps, what's degraded, what's Pi-native.
 - [Extension development](docs/extension-development.md) — add commands, capabilities, tests, generated resources.
+- [Unattended runs & continuity](docs/unattended-runs.md) — the `unattended` posture, `pi-code continuity`, and how work survives compaction/restart (honestly degraded).

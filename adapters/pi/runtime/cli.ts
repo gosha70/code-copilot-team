@@ -24,6 +24,7 @@ import {
 } from "./config/loader.ts";
 import { CONFIG_SCHEMA_VERSION } from "./config/migrate.ts";
 import { seedCapabilities } from "./capabilities.ts";
+import { continuityReport } from "./workflow/continuity.ts";
 
 export interface CliResult {
   out: string;
@@ -60,6 +61,21 @@ function jsonOut(value: unknown): string {
 function doctor(opts: CliOptions, json: boolean): CliResult {
   const cfg = load(opts);
   const caps = seedCapabilities();
+  const askRes = String(
+    cfg.resolved.get("headless.ask_resolution")?.value ?? "deny",
+  );
+  const unattended = {
+    // The `unattended` profile (US1) is selectable; "active" when it is in the
+    // resolved chain or headless asks already resolve to allow.
+    posture:
+      cfg.profileChain.includes("unattended") || askRes === "allow"
+        ? "active"
+        : "available",
+    ask_resolution: askRes,
+    // Honest: the cooldown-resume supervisor (US4) is not built yet — reported
+    // unavailable, never fabricated. Flips to available when US4 lands.
+    cooldown_resume: "unavailable",
+  };
   const runtimeOk = Boolean(
     opts.runtimeEntry && fs.existsSync(opts.runtimeEntry),
   );
@@ -94,6 +110,7 @@ function doctor(opts: CliOptions, json: boolean): CliResult {
         warnings: cfg.warnings,
         errors: cfg.errors,
         trustNote: TRUST_NOTE,
+        unattended,
       }),
       code,
     };
@@ -110,6 +127,10 @@ function doctor(opts: CliOptions, json: boolean): CliResult {
   }
   for (const w of cfg.warnings) lines.push(`warning: ${w}`);
   for (const e of cfg.errors) lines.push(`error: ${e}`);
+  lines.push(
+    `unattended: posture ${unattended.posture} (ask_resolution=${unattended.ask_resolution}); ` +
+      `cooldown-resume: ${unattended.cooldown_resume}`,
+  );
   lines.push(`note: ${TRUST_NOTE}`);
   return { out: lines.join("\n"), code };
 }
@@ -403,6 +424,29 @@ function provenance(opts: CliOptions, json: boolean): CliResult {
   };
 }
 
+/**
+ * `pi-code continuity` (US3, FR-9/FR-10/FR-13) — report the durable state a
+ * resumed or supervised session re-reads: SDD tasks, the Pi checkpoint, and the
+ * auto-build ledger. Each source is present/missing/corrupt from disk (never
+ * fabricated); Pi native compaction stays degraded (no PreCompact hook).
+ */
+function continuity(opts: CliOptions, json: boolean): CliResult {
+  const report = continuityReport(opts.cwd);
+  if (json) {
+    return { out: jsonOut(report), code: 0 };
+  }
+  const lines = [
+    "=== pi-code continuity ===",
+    `feature: ${report.featureId ?? "<none>"}`,
+  ];
+  for (const src of report.sources)
+    lines.push(`[${src.status}] ${src.name}: ${src.detail} (${src.path})`);
+  lines.push(
+    `compaction: ${report.compaction.native ? "native" : "degraded"} — ${report.compaction.mechanism}`,
+  );
+  return { out: lines.join("\n"), code: 0 };
+}
+
 export function runCli(opts: CliOptions): CliResult {
   const args = [...opts.argv];
   const json = args.includes("--json");
@@ -424,9 +468,11 @@ export function runCli(opts: CliOptions): CliResult {
       return resources(opts, json);
     case "provenance":
       return provenance(opts, json);
+    case "continuity":
+      return continuity(opts, json);
     default:
       return {
-        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export | resources | provenance)`,
+        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export | resources | provenance | continuity)`,
         code: 64,
       };
   }
