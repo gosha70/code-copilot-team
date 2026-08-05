@@ -1,0 +1,8 @@
+{
+  "generator": "generate-claude-settings.sh",
+  "managedKeys": [
+    "permissions"
+  ],
+  "profile": "relaxed",
+  "source": "adapters/claude-code/permissions/relaxed.json"
+}
