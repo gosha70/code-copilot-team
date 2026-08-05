@@ -20,6 +20,7 @@
 #   export [--json]       Redacted, portable snapshot of the resolved config
 #   resources [--json]    Report which source supplied each skill/prompt
 #   provenance [--json]   FR-027 report: version, source, capability + trust posture
+#   continuity [--json]   Durable resume state: SDD tasks, checkpoint, auto-build ledger
 #   init [dir] [--profile <name>] [--dry-run]
 #                         Scaffold a Pi-native project config + ownership manifest
 #   sync [--dry-run]      Regenerate managed resources (never touches your config)
@@ -86,7 +87,7 @@ diag() { [[ "${DIAGNOSTIC:-false}" == "true" ]] && echo "[pi-code] $*" >&2 || tr
 # A pi-code-launched session (or a reviewer child) must not re-enter the
 # launcher and stack runtimes. CCT_PI_CODE_ACTIVE marks an active launch.
 case "${1:-}" in
-  version|help|--help|-h|doctor|config|features|export|resources|provenance|init|sync) CCT_DIAGNOSTIC_CMD=true ;;
+  version|help|--help|-h|doctor|config|features|export|resources|provenance|continuity|init|sync) CCT_DIAGNOSTIC_CMD=true ;;
   *) CCT_DIAGNOSTIC_CMD=false ;;
 esac
 if [[ "${CCT_PI_CODE_ACTIVE:-}" == "1" && "$CCT_DIAGNOSTIC_CMD" == "false" ]]; then
@@ -271,7 +272,7 @@ case "${1:-}" in
     sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
-  config|features|export|resources|provenance)
+  config|features|export|resources|provenance|continuity)
     # Diagnostics run outside a Pi session; the runtime CLI resolves and
     # reports configuration and capability state (fail-closed on trust).
     if [[ -z "$RUNTIME_ENTRY" ]]; then

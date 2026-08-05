@@ -263,6 +263,8 @@ SURFACES=(
   "resources --json"
   "provenance"
   "provenance --json"
+  "continuity"
+  "continuity --json"
 )
 for surface in "${SURFACES[@]}"; do
   # shellcheck disable=SC2086
@@ -271,7 +273,7 @@ for surface in "${SURFACES[@]}"; do
     "! echo \"\$OUT\" | grep -q 'sk-cct-test-secret'"
 done
 
-for cmd in features doctor config provenance; do
+for cmd in features doctor config provenance continuity; do
   OUT=$(PATH="$DIAG_PATH" "$LAUNCHER" "$cmd" --json 2>&1 || true)
   assert "$cmd --json emits valid JSON" \
     "echo \"\$OUT\" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null"
@@ -346,6 +348,28 @@ V_VER=$(PATH="$DIAG_PATH" "$LAUNCHER" version 2>&1 | grep -oE 'pi-code [0-9]+\.[
 P_VER=$(echo "$PROV_J" | python3 -c 'import json,sys; print(json.load(sys.stdin)["package"]["version"])')
 assert "provenance version matches the version command (no drift)" \
   "[[ -n '$V_VER' && '$V_VER' == '$P_VER' ]]"
+
+# ── US3: continuity + unattended posture (FR-9/10/13/22) ────
+echo "--- continuity + unattended ---"
+CONT=$(PATH="$DIAG_PATH" "$LAUNCHER" continuity 2>&1 || true)
+assert "continuity lists the three durable sources" \
+  "echo \"\$CONT\" | grep -q 'tasks:' && echo \"\$CONT\" | grep -q 'checkpoint:' && echo \"\$CONT\" | grep -q 'auto-build-ledger:'"
+assert "continuity reports Pi compaction as degraded (no native overclaim)" \
+  "echo \"\$CONT\" | grep -q 'compaction: degraded' && echo \"\$CONT\" | grep -qi 'no PreCompact'"
+
+CONT_J=$(PATH="$DIAG_PATH" "$LAUNCHER" continuity --json 2>&1 || true)
+assert "continuity --json marks compaction native=false (FR-10)" \
+  "echo \"\$CONT_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d[\"compaction\"][\"native\"] is False else 1)'"
+assert "continuity --json reports each source with an explicit status (FR-13)" \
+  "echo \"\$CONT_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); ok={\"present\",\"missing\",\"corrupt\"}; sys.exit(0 if all(s[\"status\"] in ok for s in d[\"sources\"]) else 1)'"
+
+# doctor surfaces the unattended posture + cooldown-resume status (FR-22).
+DOC_J=$(PATH="$DIAG_PATH" "$LAUNCHER" doctor --json 2>&1 || true)
+assert "doctor --json reports the unattended posture" \
+  "echo \"\$DOC_J\" | python3 -c 'import json,sys; d=json.load(sys.stdin); u=d[\"unattended\"]; sys.exit(0 if u[\"posture\"] in (\"active\",\"available\") and u[\"cooldown_resume\"]==\"unavailable\" else 1)'"
+
+assert "help documents the continuity command" \
+  "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'continuity'"
 
 # ── T6.4: init / sync (FR-000a) ─────────────────────────────
 echo "--- init / sync ---"
