@@ -48,7 +48,51 @@ const COMPACTION_MECHANISM =
   "explicit CCT actions (phase transitions, /cct:checkpoint) and recovered at " +
   "session_start — durable, not a native compaction hook";
 
-/** Count SDD task checkboxes without trusting free-form text into the report. */
+/**
+ * A feature id is a slug and is used to build filesystem paths under `specs/`
+ * and `.cct/auto-build/`. The checkpoint is UNTRUSTED disk state, so an id that
+ * is not a single safe path segment (contains a slash/backslash, or is `.`/`..`)
+ * is rejected for path use — a tampered checkpoint must not probe outside the
+ * project (path traversal). Rejected ⇒ treated as "no active feature id".
+ */
+const SAFE_FEATURE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+function safeFeatureId(id: string | null | undefined): string | null {
+  if (!id || id === "." || id === "..") return null;
+  if (id.includes("/") || id.includes("\\")) return null;
+  return SAFE_FEATURE_ID.test(id) ? id : null;
+}
+
+/**
+ * Defense in depth: resolve `segments` under `root` and return the absolute
+ * path ONLY if it stays within `root`; otherwise null (never read it). Catches
+ * any residual traversal even if a segment slipped past validation.
+ */
+function resolveWithin(root: string, ...segments: string[]): string | null {
+  const rootAbs = path.resolve(root);
+  const abs = path.resolve(root, ...segments);
+  if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) return null;
+  return abs;
+}
+
+/**
+ * Count SDD task checkboxes in BOTH layouts this repo uses: bullet lists
+ * (`- [ ]` / `* [x]`) and markdown table cells (`| [ ] |`). One checkbox per
+ * line; header/separator rows have none. Avoids matching stray `[ ]` in prose.
+ */
+function countTaskCheckboxes(text: string): { total: number; done: number } {
+  let total = 0;
+  let done = 0;
+  for (const line of text.split("\n")) {
+    const m =
+      line.match(/^\s*[-*]\s+\[([ xX])\]/) ??
+      line.match(/\|\s*\[([ xX])\]\s*\|/);
+    if (!m) continue;
+    total += 1;
+    if (m[1] === "x" || m[1] === "X") done += 1;
+  }
+  return { total, done };
+}
+
 function readTasks(
   projectRoot: string,
   featureId: string | null,
@@ -60,13 +104,11 @@ function readTasks(
   ].filter(Boolean);
 
   for (const rel of candidates) {
-    const abs = path.join(projectRoot, rel);
-    if (!fs.existsSync(abs)) continue;
+    const abs = resolveWithin(projectRoot, rel);
+    if (!abs || !fs.existsSync(abs)) continue;
     try {
       const text = fs.readFileSync(abs, "utf8");
-      const boxes = text.match(/^\s*[-*]\s+\[[ xX]\]/gm) ?? [];
-      const done = (text.match(/^\s*[-*]\s+\[[xX]\]/gm) ?? []).length;
-      const total = boxes.length;
+      const { total, done } = countTaskCheckboxes(text);
       const remaining = total - done;
       return {
         name: "tasks",
@@ -150,8 +192,8 @@ function readLedger(
     };
   }
   const rel = path.join(".cct", "auto-build", featureId, "state.json");
-  const abs = path.join(projectRoot, rel);
-  if (!fs.existsSync(abs)) {
+  const abs = resolveWithin(projectRoot, rel);
+  if (!abs || !fs.existsSync(abs)) {
     return {
       name: "auto-build-ledger",
       path: rel,
@@ -203,7 +245,9 @@ export function continuityReport(
   featureId?: string | null,
 ): ContinuityReport {
   const cp = readCheckpoint(projectRoot);
-  const activeFeature = featureId ?? cp.featureId;
+  // The feature id builds file paths; a tampered checkpoint must not escape the
+  // project root, so reject anything that is not a safe path segment (P1).
+  const activeFeature = safeFeatureId(featureId ?? cp.featureId);
   return {
     featureId: activeFeature,
     sources: [
