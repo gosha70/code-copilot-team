@@ -56,3 +56,8 @@ added) · every action audited · "never auto-remove live work" intact · isolat
 failure **blocks** edit/write/bash (not warn-only) · the **full** reconcile
 transaction is lock-serialized with pid/token lock ownership · reconcile
 fail-closed (strict parse) + primary-excluded · no new Pi event source invented.
+
+## Status
+
+All findings from the PR #183 review rounds are resolved and the required CI
+checks (`pi-tests`, `sync-check`, `CodeQL`) pass on the branch.
