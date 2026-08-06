@@ -294,6 +294,12 @@ cct_worktree_run() {
   [[ -n "$wtasks" ]]   && export CCT_WORKER_TASKS="$wtasks"
   [[ -n "$wfeature" ]] && export CCT_FEATURE_ID="$wfeature"
   # Launch pi INSIDE the worktree via the normal launch path (--project cds there).
+  # A controller session sets CCT_PI_CODE_ACTIVE=1; this child worker is an
+  # INTENTIONAL handoff (a fresh, independently-enforced worker launch), not the
+  # accidental runtime-stacking the recursion guard defends against. Clear the
+  # marker for THIS one exec so the guard permits it — the child launcher re-sets
+  # it right before exec'ing pi. Targeted, not a broad weakening of the guard.
+  unset CCT_PI_CODE_ACTIVE
   exec "$SELF_PATH" --project "$wt" ${pia[@]+"${pia[@]}"}
 }
 

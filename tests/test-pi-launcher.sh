@@ -408,6 +408,22 @@ if command -v git >/dev/null 2>&1; then
     "grep -q 'CCT_WORKER_ID:fix-9' \"\$TMP/capture.txt\""
   assert "worktree run wrote the record to the PRIMARY ledger" \
     "grep -q '\"workerId\": \"fix-9\"' \"\$WR_REPO/.cct/worktrees.json\""
+
+  # A controller (an active pi session) sets CCT_PI_CODE_ACTIVE=1. `worktree run`
+  # must still hand off and launch the worker — the recursion guard permits this
+  # intentional child, not the accidental runtime-stacking it defends against.
+  WR_REPO2="$TMP/wr-repo2"; mkdir -p "$WR_REPO2"
+  git -C "$WR_REPO2" init -q -b master
+  git -C "$WR_REPO2" config user.email t@e.com
+  git -C "$WR_REPO2" config user.name T
+  echo seed > "$WR_REPO2/README.md"; git -C "$WR_REPO2" add -A; git -C "$WR_REPO2" commit -q -m seed
+  rm -f "$TMP/capture.txt"
+  ( cd "$WR_REPO2" && CCT_PI_CODE_ACTIVE=1 CCT_HOME="$TMP/wr-home2" PATH="$DIAG_PATH" "$LAUNCHER" worktree run ctl-1 --branch feature/ctl-1 ) >/dev/null 2>&1 || true
+  WR_WT2="$(cd "$(dirname "$WR_REPO2")/.cct-worktrees/wr-repo2/ctl-1" 2>/dev/null && pwd -P || echo MISSING)"
+  assert "worktree run launches the worker even under an active controller (CCT_PI_CODE_ACTIVE=1)" \
+    "test -f \"\$TMP/capture.txt\" && grep -q \"PWD:\$WR_WT2\" \"\$TMP/capture.txt\""
+  assert "worktree run under a controller still exports CCT_WORKER_ID" \
+    "grep -q 'CCT_WORKER_ID:ctl-1' \"\$TMP/capture.txt\""
 else
   echo "  SKIP: worktree run (git unavailable)"
 fi

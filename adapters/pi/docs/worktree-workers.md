@@ -67,6 +67,12 @@ WT="$(pi-code worktree create fix-42 --branch fix/issue-42 --areas src/api)" || 
 > subshell above — but `worktree run` is preferred because it provisions and
 > hands off `cwd` atomically, and sets the `CCT_WORKER_*` env for you.
 
+`worktree run` works when invoked **from an active controller session**
+(`CCT_PI_CODE_ACTIVE=1`): the worker handoff is an intentional, independently
+enforced child launch, so it clears the active-launch marker for that one
+re-exec (the child re-sets it before starting pi). The recursion guard still
+blocks accidental runtime-stacking everywhere else.
+
 ## The `CCT_WORKER_*` env contract
 
 Set by the spawning driver. **Every value is untrusted** and re-validated by the
