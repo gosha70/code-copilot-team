@@ -1,28 +1,30 @@
 # Tasks: Wire the T8.1/T8.2 local team ledger into Pi — Slice A of #174
 
 Wiring only — `agents/team.ts` (T8.1) + `agents/team-status.ts` (T8.2) are built +
-tested and MUST NOT be re-implemented. This is **Slice A** of epic #174 (target a
-narrower sub-issue; do NOT close #174). Keep the gates green (`test-pi-runtime.sh`,
+tested and MUST NOT be re-implemented. This targets **issue #185** (Slice A of the
+#174 epic); do **not** close #174. Keep the gates green (`test-pi-runtime.sh`,
 `test-typecheck-gate.sh`, `test-pi-launcher.sh`), resolve every PR #184 review
-finding, and preserve the `degraded` boundary. `AC` = acceptance.
+finding (both rounds), and preserve the `degraded` boundary. Identity is
+**declared attribution, not authentication** (documented). `AC` = acceptance.
 
 ## US1 — Canonical, identity-safe, gated command surface
 
 | # | [P] | Task | File(s) | AC |
 |---|-----|------|---------|----|
 | 1 | | Extract `withLedgerLock` → `agents/ledger-lock.ts`, `withLedgerLock(repoRoot, fn, { lockName })` with `type LedgerLockName = "worktrees" \| "team"`; update `worktree-lifecycle.ts` to import it (no behavior change). (review lock decision) | `agents/ledger-lock.ts`, `agents/worktree-lifecycle.ts` | worktree concurrency + stale-owner tests green unchanged; team uses `.cct/team.lock` |
-| 2 | | `teamRoot = primaryRepoRoot(cwd) ?? cwd` used for EVERY team op (load/save/message/lock/status/synthesis/advisory/CLI). (review #2, FR-2) | `agents/team-commands.ts` | a linked-worktree op targets the PRIMARY ledger |
-| 3 | | `CCT_TEAM_ID`/`CCT_TEAM_MEMBER_ID` contract + `attachTeamIdentity(cwd, env)`: validate the member against the ledger at `session_start`; actor for actor-scoped subs comes from `state.teamMember`, never args; mismatch/absent ⇒ fail closed + audit. (review #3, FR-3) | `agents/team-commands.ts`, `index.ts` | impersonation refused; actor from `CCT_TEAM_MEMBER_ID` |
-| 4 | | Lead-only authz for `assign`/`activate`/`close`/`recover`/`approve` (wiring enforces; library does not); `create`/`join`/`task` open admin. (review #3, FR-4) | `agents/team-commands.ts` | non-lead admin command refused |
-| 5 | | Safe paths under the lock: `create` refuses over existing-valid AND corrupt `team.json` (never overwrite); other mutations load→null⇒refuse→op→save-on-ok; reads/advisory missing⇒"no team", corrupt⇒fail-closed (never `null`→`teamStatus`). (review #4, FR-5) | `agents/team-commands.ts` | duplicate/corrupt create leaves file byte-for-byte unchanged |
-| 6 | | `/cct:team` handlers with correct signatures: `complete/fail(ledger, taskId, actor)`; `message <to\|all> <body…>` → `postMessage(teamRoot, actor, to, body, now)` (locked append, `false`⇒failure, no `team.json` rewrite); claim uses `autonomy.max_concurrency`. Gate mutations on `agents.teams_enabled`. (review #5, FR-1/FR-6) | `agents/team-commands.ts` | signatures correct; disabled ⇒ refuse + no write |
+| 2 | | `resolveTeamRoot(cwd) → {ok,root}\|{ok:false,reason}` (via `primaryRepoRoot`, **NO `?? cwd`**) fronts EVERY team op; unresolved ⇒ mutation refuses + audit `team.root-unresolved` + writes nothing; reads report "no canonical repository root". (round-2 #2, FR-2) | `agents/team-commands.ts` | linked-worktree op targets the PRIMARY ledger; git-fail creates nothing |
+| 3 | | `CCT_TEAM_ID`/`CCT_TEAM_MEMBER_ID` **declared** contract + `attachTeamIdentity(env)` storing ONLY `{teamId?, memberId}` (no cached role/status); actor for actor-scoped subs comes from it, never args. Honest: attribution, NOT authentication. (round-2 #1/#3, FR-3) | `agents/team-commands.ts`, `index.ts` | actor from `CCT_TEAM_MEMBER_ID`; declared id absent from ledger refused |
+| 4 | | Authz re-validated **inside the lock per mutation**: load → `actor=members.find(memberId)` → require `active`; lead-only (`assign`/`activate`/`close`/`recover`/`approve`) require `actor.role==="lead"` as of the loaded ledger (never cached). **Sole-active-lead `leave` on a non-closed team refused** (no lead-transfer). `create`/`join`/`task` open admin. (round-2 #3, FR-4) | `agents/team-commands.ts` | stale-lead + non-lead admin refused; sole lead can't strand team |
+| 5 | | Safe create + bootstrap: `create <teamId> [--no-plan-approval]` (approval default-on = library) — refuse over existing-valid AND corrupt `team.json` (never overwrite); lead = **declared** member; no restart after create. Other mutations load→null⇒refuse→authz→op→save-on-ok; reads/advisory missing⇒"no team", corrupt⇒fail-closed (never `null`→`teamStatus`). (review #4 + round-2 #5, FR-5) | `agents/team-commands.ts` | duplicate/corrupt create leaves file byte-for-byte unchanged; declared lead usable immediately |
+| 6 | | `/cct:team` handlers, correct signatures: `complete/fail(ledger, taskId, actor)`; `message <to\|all> <body…>` → **load ledger under lock, validate team-open + sender-active + recipient**, then `postMessage(root, actor, to, body, now)` (`false`⇒failure, no `team.json` rewrite); claim uses `autonomy.max_concurrency`. Gate mutations on `agents.teams_enabled`. (review #5, FR-1/FR-6) | `agents/team-commands.ts` | signatures correct; message validates before append; disabled ⇒ refuse + no write |
 | 7 | | `registerCommand("cct:team", …)` in `index.ts`, routing subcommands via `emit`. (FR-1) | `index.ts` | `/cct:team …` dispatches; usage on unknown sub |
-| 8 | | Tests: gated; full lifecycle; **each refusal** (double/cross/over-cap/pre-approval claim, close-while-claimed); identity (actor from env, mismatch + non-lead refused); create-over-existing/corrupt byte-for-byte. (AC-1,3,4) | `tests/pi-runtime/team-commands.test.mjs` | all branches asserted |
-| 9 | | Tests: **canonical ledger across two REAL linked worktrees** (claim in A → visible in B; concurrent claim of one task → exactly one wins in the primary ledger, real processes). (AC-2) | `tests/pi-runtime/team-commands.test.mjs` (+ fixture) | split-ledger impossible; one-claimant proven |
+| 8 | | Tests: gated; full lifecycle; **each refusal** (double/cross/over-cap/pre-approval claim, close-while-claimed); **live authz** — after lead `leave`s, a lead-only cmd by that session is refused (not cached); declared-id-absent + non-lead refused; **sole-active-lead `leave` refused**; a session declaring another *existing* member's id is NOT prevented (documented limitation asserted); create-over-existing/corrupt byte-for-byte; `--no-plan-approval` vs default. (AC-3,4,5) | `tests/pi-runtime/team-commands.test.mjs` | all branches + live-authz asserted |
+| 9 | | Tests: **canonical ledger across two REAL linked worktrees** (claim in A → visible in B; concurrent claim → exactly one wins in the primary ledger); **fail-closed root** — force `gitCommonDir` to fail from a worktree ⇒ mutation refuses + `team.root-unresolved`, **nothing created** in that worktree. (AC-1,2) | `tests/pi-runtime/team-commands.test.mjs` (+ fixture) | split-ledger impossible; one-claimant proven; git-fail creates nothing |
 
 **Checkpoint US1** — team lifecycle drivable via `/cct:team`, on ONE canonical
-primary ledger, with a trusted actor, lead-only admin, safe create, gated + lock-
-serialized, every refusal enforced.
+primary ledger (fail-closed), actor from declared identity with per-mutation
+authz, lead-only admin, safe create, gated + lock-serialized, every refusal
+enforced.
 
 ---
 
@@ -56,9 +58,12 @@ degraded), surfaced at session start, and discoverable.
 
 `build` + `typecheck` (strict) + Pi runtime suite + launcher suite green ·
 team libraries & safety model unchanged (wiring only; lock extraction additive +
-behavior-preserving) · ONE canonical ledger via `primaryRepoRoot` (no split) ·
-actor from trusted `CCT_TEAM_*` identity (no impersonation) · lead-only admin ·
-create never overwrites existing/corrupt · single-claimant / approval / bounded /
-close-while-claimed fail-closed + lock-serialized · every action audited · CLI
-gate never misreports project-only opt-in · team ledger separate from the worktree
-ledger · `agents.teams` capability unchanged · no new Pi event · #174 NOT closed.
+behavior-preserving) · ONE canonical ledger via `resolveTeamRoot` **fail-closed**
+(no `?? cwd`) · actor from **declared** `CCT_TEAM_*` (attribution, honestly NOT
+authentication) · authz re-validated **inside the lock per mutation** (active +
+lead-only; never cached) · sole active lead can't strand the team · create never
+overwrites existing/corrupt (bootstrap lead = declared member) · single-claimant /
+approval / bounded / close-while-claimed fail-closed + lock-serialized · every
+action audited · CLI gate never misreports project-only opt-in · team ledger
+separate from the worktree ledger · `agents.teams` capability unchanged · no new
+Pi event · targets **#185**, does NOT close epic **#174**.

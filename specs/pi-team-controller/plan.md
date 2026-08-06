@@ -16,8 +16,8 @@ justification: |
 status: draft
 date: 2026-08-06
 origin:
-  issue: https://github.com/gosha70/code-copilot-team/issues/174
-  epic: true
+  issue: https://github.com/gosha70/code-copilot-team/issues/185
+  epic: https://github.com/gosha70/code-copilot-team/issues/174
   slice: "A — local team coordination wiring (foundation)"
   review: https://github.com/gosha70/code-copilot-team/pull/184
   design:
@@ -25,12 +25,14 @@ origin:
     - specs/pi-harness-adoption/design-t82-team-status.md
   origin_claim: |
     #174 is an epic (a centralized, cross-developer management plane with cost
-    rollups + budget alerting). The PR #184 review established that wiring the
-    LOCAL t81/t82 libraries is a prerequisite SLICE, not the whole feature, so
-    this bundle is scoped to Slice A and does NOT close #174. Slice A is pointed
-    at a narrower sub-issue; #174 stays open as the epic. The centralized plane
-    (topology + identity/auth undecided) is shaped in plane-shaping.md before its
-    own SDD. Every PR #184 review finding is resolved in this revision.
+    rollups + budget alerting). The PR #184 reviews established that wiring the
+    LOCAL t81/t82 libraries is a prerequisite SLICE, so this bundle targets the
+    narrower sub-issue #185 and does NOT close the epic #174. The centralized
+    plane (topology + identity/auth undecided) is shaped in plane-shaping.md
+    before its own SDD. All PR #184 review findings (both rounds) are resolved
+    here — incl. a fail-closed canonical root, per-mutation authz re-validation,
+    an honest attribution-not-authentication identity model, the create
+    bootstrap, and --no-plan-approval.
 ---
 
 # Plan: Wire the T8.1/T8.2 local team ledger into Pi (Slice A of #174)
@@ -62,57 +64,72 @@ path-shaped names; error messages name the right ledger). `worktree-lifecycle.ts
 imports it (default `"worktrees"`); its concurrency + stale-owner tests run
 unchanged against the extracted helper.
 
-### D1 — Canonical team-state root (review #2)
-A single `teamRoot = primaryRepoRoot(cwd) ?? cwd` fronts EVERY team op — load,
-save, `postMessage`, `team.lock`, status, synthesis, session advisory, CLI reads.
-From a linked worker worktree, `primaryRepoRoot` resolves the shared git common
-dir's parent (the primary checkout that owns `.cct/team.json`), so all peers
-share one ledger + one lock. Tested with two real linked worktrees.
+### D1 — Canonical team-state root, FAIL-CLOSED (review round-2 #2)
+`resolveTeamRoot(cwd, deps) → { ok: true; root } | { ok: false; reason }` fronts
+EVERY team op. `root = primaryRepoRoot(cwd)` (shared git common dir, #172). When
+`primaryRepoRoot` returns `null` (git failure / not a repo), resolve is
+`{ ok: false }` — **no `?? cwd` fallback** (that reintroduces the per-worktree
+split FR-2 prevents). Mutations on `{ ok: false }` refuse + audit
+`team.root-unresolved` + write nothing; reads report "no canonical repository
+root"; the advisory stays silent. Tested by forcing `gitCommonDir` to fail from a
+linked worktree and asserting nothing is created there.
 
-### D2 — Trusted session identity (review #3)
-A session identity contract: `CCT_TEAM_ID` + `CCT_TEAM_MEMBER_ID` (untrusted env,
-validated). `attachTeamIdentity(cwd, env)` at `session_start`: if set, load the
-ledger at `teamRoot`, assert the member exists and (if `CCT_TEAM_ID` given)
-matches the team; store `state.teamMember` on match, else fail closed (warn +
-audit `team.identity-invalid`). Actor-scoped subcommands (`claim`, `complete`,
-`fail`, `approve`, `message` from, `leave`, `shutdown`) derive the actor from
-`state.teamMember` — **never** from a command argument; absent/mismatch ⇒ refuse.
+### D2 — Declared identity (attribution, NOT authentication) (review round-2 #1)
+Contract `CCT_TEAM_ID` + `CCT_TEAM_MEMBER_ID` is a **declared** identity. Slice A
+is honest that this is **attribution, not authentication**: a co-located session
+can declare any *existing* member id, so impersonation of another member/the lead
+is **not** prevented (documented limitation; authenticated authz — a
+controller-issued capability or the validated T7.3 worker binding — is an
+epic/topology decision). `attachTeamIdentity(env)` stores **only the immutable
+declared ids** `state.teamIdentity = { teamId?, memberId } | null` — **no cached
+role/status**. Actor-scoped subcommands take the actor from `state.teamIdentity`,
+never from a command argument.
 
-### D3 — Authorization for admin subcommands (review #3)
-The wiring adds the lead-only check the library lacks: `assign`, `activate`,
-`close`, `recover`, and `approve` require `state.teamMember.role === "lead"`.
-`create` / `join` / `task` are open local administration (documented). Each
-subcommand's authz level is stated in the docs; attribution-only vs authenticated
-is called out honestly.
+### D3 — Authorization re-validated per mutation, inside the lock (review round-2 #3)
+Every mutation, after `load` under the lock, resolves
+`actor = ledger.members.find(m => m.memberId === identity.memberId)` and requires
+`actor?.status === "active"` (else refuse). Lead-only subs (`assign`, `activate`,
+`close`, `recover`, `approve`) additionally require `actor.role === "lead"` **as
+of the loaded ledger** — never a `session_start` cache, so a lead that has since
+`left` loses authority immediately. **Sole-lead guard:** `leave` by the only
+active lead of a non-closed team is refused (no lead-transfer op exists;
+documented). `create`/`join`/`task` are open local administration (documented as
+attribution-only).
 
-### D4 — Safe create / corrupt / missing paths (review #4)
-Distinct paths, all under the lock:
-- **create:** `fs.existsSync(team.json)` → if present: `loadTeamLedger` valid ⇒
-  refuse "already exists"; `null` ⇒ refuse "ledger invalid", **no write**. Absent
-  ⇒ `createTeam` → save.
-- **other mutations:** `loadTeamLedger`; `null` ⇒ refuse (no save); op; save on
-  `ok`.
-- **reads / advisory:** missing (`!existsSync`) ⇒ "no team"; `existsSync` but
-  `null` ⇒ fail-closed warning; valid ⇒ render. Never pass `null` to `teamStatus`.
+### D4 — Safe create + bootstrap; `--no-plan-approval` (review #4 + round-2 #5)
+`create <teamId> [--no-plan-approval]` — approval **required by default** (matches
+`createTeam`'s `planRequired = true`); the flag opts out. Under the lock:
+`fs.existsSync(team.json)` → present + `loadTeamLedger` valid ⇒ refuse "already
+exists"; present + `null` ⇒ refuse "ledger invalid", **no write**; absent ⇒
+`createTeam(teamId, identity.memberId, now, { planRequired: !noPlanApproval })`
+(the lead is the **declared** member) → save. **Bootstrap:** the declared member
+is now a valid active lead in the saved ledger; since session state holds only
+the declared id, later commands re-validate against that ledger — **no restart**.
+Non-create mutations: `loadTeamLedger`; `null` ⇒ refuse (no save); authz (D3); op;
+save on `ok`. Reads/advisory: missing (`!existsSync`) ⇒ "no team"; `existsSync`
+but `null` ⇒ fail-closed warning; never pass `null` to `teamStatus`.
 
 ### D5 — Command surface with correct signatures (review #5)
 `/cct:team <sub>`, under the lock, audited. Actor from session identity where
 noted:
 
+All actor-scoped rows take the actor from `state.teamIdentity.memberId` (never an
+argument) and re-validate `actor.status === "active"` under the lock (D3):
+
 | sub | op | actor / authz |
 |---|---|---|
-| `create <teamId> [--require-approval]` | createTeam | lead = the session member; open admin |
-| `join <memberId>` | addTeammate | open admin (join records identity) |
+| `create <teamId> [--no-plan-approval]` | createTeam (D4) | lead = the **declared** member; open admin; approval default-on |
+| `join <memberId>` | addTeammate | open admin (records the declared member) |
 | `task <taskId> <title…> [--assign <m>] [--worker <w>]` | postTask | open admin |
-| `assign <taskId> <memberId>` | assignTask | **lead-only** (wiring) |
+| `assign <taskId> <memberId>` | assignTask | **lead-only** (active lead, per D3) |
 | `approve` | approvePlan(ledger, actor) | **lead-only** |
 | `activate` | activateTeam | **lead-only** |
-| `claim <taskId>` | claimTask(ledger, taskId, **actor**, now, {maxConcurrency}) | actor from identity |
-| `complete <taskId>` / `fail <taskId>` | completeTask/failTask(ledger, taskId, **actor**) | actor from identity |
-| `message <to\|all> <body…>` | postMessage(teamRoot, **actor**, to, body, now) | actor from identity; boolean-checked |
-| `leave` | markMemberLeft(ledger, **actor**) | actor from identity |
+| `claim <taskId>` | claimTask(ledger, taskId, **actor**, now, {maxConcurrency}) | active actor |
+| `complete <taskId>` / `fail <taskId>` | completeTask/failTask(ledger, taskId, **actor**) | active actor |
+| `message <to\|all> <body…>` | postMessage(root, **actor**, to, body, now) | active actor; **load ledger under lock** first → validate team-open + sender-active + recipient (`all` or a member); boolean-checked; no `team.json` rewrite |
+| `leave` | markMemberLeft(ledger, **actor**) | active actor; **sole-active-lead refused** on a non-closed team |
 | `recover` | reopenOrphanedClaims | **lead-only** |
-| `shutdown [--reason …]` | requestShutdown(ledger, **actor**, reason, now) | actor from identity |
+| `shutdown [--reason …]` | requestShutdown(ledger, **actor**, reason, now) | active actor |
 | `close` | closeTeam | **lead-only**; refused while a task is `claimed` |
 | `status [--json]` | teamStatus + renderTeamStatus | read-only (FR-8) |
 | `synthesize [--json]` | synthesizeTeam | read-only |
@@ -121,7 +138,8 @@ noted:
 load/save `team.json`); a `false` return surfaces as failure.
 
 ### D6 — CLI gate semantics (review #6)
-`pi-code team status|synthesize [--json]` — read-only, at `teamRoot`. It renders
+`pi-code team status|synthesize [--json]` — read-only, at the resolved root
+(unresolved ⇒ "no canonical repository root"). It renders
 whenever a **valid ledger exists**, independent of the (out-of-session,
 project-untrusted) `agents.teams_enabled`. `--json` includes
 `enabled: true|false|unknown` (unknown when only project config could set it and
@@ -138,11 +156,11 @@ activate|message|shutdown|close|recover|leave|status|identity-invalid>`, subject
 
 1. `agents/ledger-lock.ts` — extracted, `LedgerLockName`-parameterized lock;
    `worktree-lifecycle.ts` updated to import it (behavior unchanged).
-2. `agents/team-commands.ts` — `teamRoot` resolution, identity/authz, safe
-   create/corrupt paths, gate + lock + audit wrappers, the `/cct:team` + CLI
-   handlers, session-identity attach.
-3. `index.ts` — `registerCommand("cct:team", …)`; `attachTeamIdentity` +
-   session-start advisory in the existing `session_start` handler.
+2. `agents/team-commands.ts` — `resolveTeamRoot` (fail-closed), declared-identity
+   attach (ids only), per-mutation authz re-validation, safe create/bootstrap,
+   gate + lock + audit wrappers, the `/cct:team` + CLI handlers.
+3. `index.ts` — `registerCommand("cct:team", …)`; `attachTeamIdentity` (stores
+   only `{teamId?, memberId}`) + session-start advisory in `session_start`.
 4. `cli.ts` — `pi-code team status|synthesize [--json]` (FR-8 semantics).
 5. `bin/pi-code` — route `team` to the runtime CLI, recursion-guard entry, help,
    the `CCT_TEAM_*` contract in a driver note.
@@ -169,11 +187,19 @@ activate|message|shutdown|close|recover|leave|status|identity-invalid>`, subject
 - **Canonical ledger (review #2):** two real linked worktrees — claim/read/
   concurrent-claim resolve to the primary ledger (the prior single-dir test could
   not detect a split).
-- **Identity (review #3):** actor derived from `CCT_TEAM_MEMBER_ID`; a mismatched
-  identity and a non-lead admin command are refused.
-- **Safe create (review #4):** duplicate `create` and `create` over a corrupt
-  `team.json` both refuse and leave the file byte-for-byte unchanged; a non-create
-  command with no/invalid ledger refuses; advisory never passes `null` in.
+- **Fail-closed root (round-2 #2):** force `gitCommonDir` to fail from a linked
+  worktree ⇒ mutation refuses + audits `team.root-unresolved`, nothing created in
+  the worktree; read reports "no canonical repository root".
+- **Live authz (round-2 #3):** actor from `CCT_TEAM_MEMBER_ID`; after the lead
+  `leave`s, a lead-only command by that session is refused (re-validated, not
+  cached); a declared id absent from the ledger and a non-lead admin command are
+  refused; the sole active lead cannot `leave` a non-closed team. A session
+  declaring another *existing* member's id is NOT prevented (asserted as the
+  documented attribution-only limitation).
+- **Safe create + bootstrap (review #4 + round-2 #5):** duplicate `create` and
+  `create` over a corrupt `team.json` refuse + leave the file byte-for-byte
+  unchanged; after a successful create the declared lead runs a lead-only command
+  with no restart; `--no-plan-approval` ⇒ `planRequired:false`, default `true`.
 - **Signatures/message (review #5):** `complete/fail` use the actor; `message`
   appends via the locked path, surfaces `false` as failure, does not rewrite
   `team.json`.
@@ -190,16 +216,23 @@ assertion in `tests/test-pi-launcher.sh`.
 
 ## Resolved decisions
 
-1. **Scope** → Slice A (local wiring); #174 stays the epic; a narrower sub-issue
-   targets this bundle; centralized plane shaped in `plane-shaping.md`.
-2. **Canonical root** → `primaryRepoRoot(cwd)` for all team state.
-3. **Identity** → trusted `CCT_TEAM_*` session contract; actor never from args.
-4. **Authz** → lead-only for assign/activate/close/recover/approve; create/join/
-   task open admin (documented).
-5. **Create safety** → refuse over existing/corrupt, never overwrite.
+1. **Scope** → Slice A (local wiring), targets sub-issue **#185**; epic **#174**
+   stays open; centralized plane shaped in `plane-shaping.md`.
+2. **Canonical root** → `resolveTeamRoot` via `primaryRepoRoot(cwd)`,
+   **fail-closed** (no `?? cwd`); unresolved ⇒ refuse + `team.root-unresolved`.
+3. **Identity** → **declared** `CCT_TEAM_*` (attribution, **NOT** authentication —
+   documented limitation); actor never from args; session state = ids only.
+4. **Authz** → re-validated **inside the lock per mutation** (active + lead-only);
+   never cached; sole-active-lead cannot leave an open team; create/join/task open
+   admin.
+5. **Create safety + bootstrap** → refuse over existing/corrupt (never overwrite);
+   lead = declared member; no restart. `create [--no-plan-approval]` (default on).
 6. **Lock** → extract + `LedgerLockName = "worktrees" | "team"` union.
 7. **CLI gate** → mutations gated; read-only renders a valid ledger with
    `enabled: true|false|unknown`.
+8. **Authenticated identity** → out of Slice A; an epic decision (folds into the
+   topology/identity shaping — a controller-issued capability or the validated
+   T7.3 worker binding).
 
 ## Deferred to the epic (plane-shaping.md, decisions still open)
 

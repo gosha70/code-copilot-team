@@ -66,10 +66,13 @@ a central interface; runaway recursive loops and budget breaches are flagged;
 
 ## Proposed slices (each → its own sub-issue + PR)
 
-- **Slice A — Local team coordination wiring (foundation).** DONE as an SDD here.
-- **Slice B — Developer identity + live status registry.** Populate `developer`;
-  derive `developer_id`; add in-flight/last-heartbeat columns (or a registry
-  table) fed from checkpoint-writes; a poller/emit path for live progress.
+- **Slice A — Local team coordination wiring (foundation).** SDD ready here (#185).
+- **Slice B1 — Local developer identity + local heartbeat emission.** Derive +
+  populate `developer_id`/`developer`; a **local** heartbeat/progress emitter off
+  checkpoint-writes. **Buildable before the topology decision** (no exposure).
+- **Slice B2 — Central live registry.** In-flight/last-heartbeat rows exposed
+  across developers. **Depends on the topology + identity/auth decisions** (its
+  storage + exposure can't be settled before them) — do NOT SDD before those.
 - **Slice C — Cross-developer aggregation + token/cost rollups.** The topology
   (below) lands here: a shared view over multiple developers' data +
   developer/team/repo/time-window cost rollups reusing the E5 engine.
@@ -87,7 +90,10 @@ a central interface; runaway recursive loops and budget breaches are flagged;
    precedent; breaks the local-first Non-Goal to varying degrees.
 2. **Identity / auth (folds into #1):** trusted-LAN no-auth (git-email
    `developer_id`) · vs · authenticated (tokens/SSO). Determines whether
-   cross-developer data can be exposed safely.
+   cross-developer data can be exposed safely. **Note:** Slice A's team-member
+   identity is *declared attribution only* (not authenticated); a candidate
+   unforgeable binding for the plane is the **validated T7.3 worker identity**
+   (#172 proves a worker runs in its worktree) — evaluate here.
 3. **Progress liveness:** poll `.cct/pi-session.json` + `worker-analytics.jsonl`
    on an interval (like `watch.py`) · vs · build a new emit/push path (Pi has no
    turn-end event, so a true stream is net-new).
@@ -110,7 +116,8 @@ a central interface; runaway recursive loops and budget breaches are flagged;
 
 ## Next step
 
-Build **Slice A** (its SDD is ready). Do a focused **shaping/design pass on the
-topology + identity** (decisions 1–2) before writing the Slice C SDD; B can start
-in parallel with A once the identity derivation (decision 2, lightweight half) is
-picked. Keep #174 open as the epic tracking all slices.
+Build **Slice A** (#185; SDD ready). **Slice B1** (local identity + local
+heartbeat) can start in parallel — it needs no topology/auth decision. Do a
+focused **shaping/design pass on the topology + identity/auth** (decisions 1–2)
+**before** writing the **B2 / C** SDDs (their storage + exposure depend on it).
+Keep **#174** open as the epic tracking all slices.
