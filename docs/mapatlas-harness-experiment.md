@@ -242,3 +242,51 @@ more correctly.** Neither dominates.
 _Review changes committed as follow-ups (not part of the scored build): Claude
 `9722fe0`, pi `3211c58` in the MAP-ATLAS repo._
 
+---
+
+## 9. Performance & cost
+
+Measured from git commit timestamps (the overnight autonomous run), the overnight
+monitor, and each harness's own session logs.
+
+### Speed per phase (autonomous run, Phases 2–7)
+
+Both harnesses launched ~21:07 and ran continuously; values are inter-commit
+durations. (Phases 0–1 ran interactively with review/setup gaps and are not
+speed-comparable.)
+
+| Phase | pi.dev | Claude Code |
+|---|---|---|
+| 2 · storage-idb | ~6 min | ~7 min |
+| 3 · web recorder | 2m 26s | 4m 24s |
+| 4 · leaflet renderer | 6m 54s | 6m 21s |
+| 5 · react (hooks + 4 components) | 13m 21s | 9m 52s |
+| 6 · offline regions | 5m 33s | 6m 49s |
+| 7 · demo | 5m 53s | 11m 00s |
+| **Total (2→7)** | **~40 min** | **~44 min** |
+
+pi finished ~4 minutes sooner (leaner output). Phase 5 (React) was the slowest
+for both — the most components.
+
+### Tokens handled (from each harness's session logs)
+
+| Metric | pi.dev | Claude Code |
+|---|---|---|
+| Assistant turns | 191 | 565 (≈3×) |
+| **Output tokens** | 183K (63K reasoning) | **826K** (≈4.5×) |
+| Input (fresh) | 380 | 59K |
+| Cache write | 324K | 2.1M |
+| Cache read | 13.8M | 74.9M |
+| **Total tokens** | 14.3M | 77.9M (≈5.4×) |
+| Cost | **$13.50** (metered) | plan-included |
+
+**The headline:** Claude did ~3× the turns and ~4.5× the output for the same
+product — a direct, quantified measure of the "thorough vs lean" character
+difference seen throughout. More tests, ADRs, files, and iteration = more tokens.
+
+**Caveats.** Total-token counts are dominated by *cache reads* (which scale with
+turns × context and are weighted differently from fresh tokens), so **output
+tokens + turns are the fairer "work done" metric**. Cost is not directly
+comparable — pi is metered ($13.50 for the whole build, under the $50 budget);
+Claude ran plan-included.
+
