@@ -3,183 +3,208 @@ spec_mode: full
 feature_id: pi-team-controller
 risk_category: security
 justification: |
-  Wires the T8.1 team controller + T8.2 team status/synthesis/recovery libraries
-  into the live Pi session. Safety-sensitive coordination STATE: it must enforce
-  single-claimant tasks (no double-claim / cross-assignment / over-cap /
-  pre-approval claims), the plan-approval gate, bounded concurrency, and a
-  controlled shutdown that refuses to close over still-claimed work — all
-  fail-closed and tamper-safe. Untrusted CLI/command input mutates a shared
-  ledger, and peer messages must stay redacted. The libraries + their safety
-  model already exist and are tested (#T8.1/#T8.2); this is wiring only, in the
-  same discipline as the merged #172 worktree-lifecycle wiring.
+  Slice A of #174: wires the T8.1 team controller + T8.2 status/synthesis/recovery
+  libraries into the live Pi session. Safety-sensitive coordination STATE — it
+  must resolve one canonical ledger across linked worktrees (no split state),
+  derive the actor from a TRUSTED session identity (not impersonatable command
+  args), enforce lead-only administration, never overwrite an existing/corrupt
+  team on create, and keep the single-claimant / approval / bounded-concurrency /
+  close-while-claimed guarantees fail-closed and lock-serialized. Peer messages
+  stay redacted. The libraries + their safety model already exist and are tested;
+  this is wiring only, revised per the PR #184 review. The centralized plane
+  (#174's later slices) is shaped separately in plane-shaping.md.
 status: draft
 date: 2026-08-06
 origin:
   issue: https://github.com/gosha70/code-copilot-team/issues/174
+  epic: true
+  slice: "A — local team coordination wiring (foundation)"
+  review: https://github.com/gosha70/code-copilot-team/pull/184
   design:
     - specs/pi-harness-adoption/design-t81-team-controller.md
     - specs/pi-harness-adoption/design-t82-team-status.md
   origin_claim: |
-    The T8.1 team.ts and T8.2 team-status.ts libraries are built and tested; the
-    agents.teams capability + agents.teams_enabled config key exist. Both design
-    docs explicitly defer "live /cct:team command wiring" as out of scope — that
-    deferred wiring is exactly what issue #174 ("deployment of design-t81/t82")
-    asks for. This plan wires the command surface + CLI + session advisory +
-    audit, composing the libraries without re-implementing them. Live peer
-    execution, real message transport, FR-020 status-line, and FR-021 analytics
-    stay out of scope (not Pi primitives / separate issues).
+    #174 is an epic (a centralized, cross-developer management plane with cost
+    rollups + budget alerting). The PR #184 review established that wiring the
+    LOCAL t81/t82 libraries is a prerequisite SLICE, not the whole feature, so
+    this bundle is scoped to Slice A and does NOT close #174. Slice A is pointed
+    at a narrower sub-issue; #174 stays open as the epic. The centralized plane
+    (topology + identity/auth undecided) is shaped in plane-shaping.md before its
+    own SDD. Every PR #184 review finding is resolved in this revision.
 ---
 
-# Plan: Wire the T8.1/T8.2 team controller into Pi
+# Plan: Wire the T8.1/T8.2 local team ledger into Pi (Slice A of #174)
 
-## Existing facts (verified)
+## Existing facts (verified against the code)
 
-- `agents/team.ts`: pure ops `(ledger, …) → TeamOpResult { ok, ledger, error? }`
-  — `createTeam(teamId, leadId, nowIso, {planRequired})`, `addTeammate`,
-  `postTask(ledger, PostTaskInput)`, `assignTask`, `claimTask(ledger, taskId,
-  memberId, nowIso, {maxConcurrency})`, `completeTask`, `failTask`,
-  `approvePlan`, `activateTeam`, `requestShutdown(ledger, byId, reason, nowIso)`,
-  `closeTeam`, `postMessage` (redacted), `loadTeamLedger(projectRoot)` /
-  `saveTeamLedger(projectRoot, ledger)`. Ledger files: `.cct/team.json` +
-  `.cct/team-messages.jsonl`. `loadTeamLedger` tamper-hardens on load.
-- `agents/team-status.ts`: `teamStatus(ledger) → TeamStatusView` (pure),
-  `renderTeamStatus(view, json)`, `synthesizeTeam(ledger) → TeamSynthesis`
-  (verdict `complete|partial|failed|empty`), `markMemberLeft`,
-  `reopenOrphanedClaims`.
-- Config: `agents.teams_enabled` (lint.ts, off by default). `autonomy.max_concurrency`
-  exists (the claim cap).
-- Capability `agents.teams` exists, `degraded` (Pi) / `disabled` (Claude), with a
-  reason already covering T8.1 **and** T8.2 — **no capability change needed**.
-- `index.ts` has the `session_start` handler, the `registerCommand(…)` pattern
-  (`cct:doctor|config|worktree|…`), the `emit(ctx, text)` helper, and the
-  `tool_call` gate. `cli.ts` has the `pi-code <cmd> [--json]` diagnostic router.
-  `withLedgerLock` (pid/token-owned, from the #172 work) lives in
-  `agents/worktree-lifecycle.ts`.
+- `team.ts` ops are pure `(ledger, …) → TeamOpResult { ok, ledger, error? }`
+  EXCEPT `postMessage(projectRoot, from, to, body, nowIso): boolean` (locked
+  append, redacts fields). `completeTask`/`failTask` take `memberId`;
+  `approvePlan(ledger, byLeadId)`; `assignTask` is NOT lead-restricted.
+  `loadTeamLedger` returns `null` for missing AND corrupt. `createTeam` builds a
+  fresh ledger with no storage awareness.
+- `team-status.ts`: `teamStatus`(pure) + `renderTeamStatus`, `synthesizeTeam`
+  (`complete|partial|failed|empty`), `markMemberLeft`, `reopenOrphanedClaims`.
+- Config: `agents.teams_enabled` (off by default), `autonomy.max_concurrency`
+  (claim cap). Capability `agents.teams` (`degraded`) — already covers T8.1+T8.2.
+- `#172` shipped `primaryRepoRoot(cwd)` + the pid/token `withLedgerLock` in
+  `agents/worktree-lifecycle.ts`; `index.ts` has `session_start` + the
+  `registerCommand`/`emit` pattern + the `tool_call` gate; `cli.ts` has the
+  `pi-code <cmd> [--json]` diagnostic router with a trust note.
 
-## Design (wiring only)
+## Design (wiring only; every #184 review finding resolved)
 
-### D1 — Thin command module `agents/team-commands.ts`
-Holds the `/cct:team` subcommand handlers and the CLI `team status` handler. It
-**composes** `team.ts` + `team-status.ts`, gates on `agents.teams_enabled`,
-serializes mutations under the lock, and audits each action. `index.ts` and
-`cli.ts` only call into it. Mirrors `agents/worktree-lifecycle.ts`.
+### D0 — Extract + constrain the lock (review "lock decision")
+Move the pid/token `withLedgerLock` into `agents/ledger-lock.ts`, parameterized:
+`withLedgerLock(repoRoot, fn, { lockName }: { lockName: LedgerLockName })` with
+`export type LedgerLockName = "worktrees" | "team"` (constrained union → no
+path-shaped names; error messages name the right ledger). `worktree-lifecycle.ts`
+imports it (default `"worktrees"`); its concurrency + stale-owner tests run
+unchanged against the extracted helper.
 
-### D2 — Feature gate (FR-1)
-A single `teamsEnabled(cfg)` check fronts every subcommand. Disabled ⇒ return a
-one-line opt-in message, **no** load/save. Read subcommands are also gated (a
-disabled feature shows nothing) — consistent with the capability being off.
+### D1 — Canonical team-state root (review #2)
+A single `teamRoot = primaryRepoRoot(cwd) ?? cwd` fronts EVERY team op — load,
+save, `postMessage`, `team.lock`, status, synthesis, session advisory, CLI reads.
+From a linked worker worktree, `primaryRepoRoot` resolves the shared git common
+dir's parent (the primary checkout that owns `.cct/team.json`), so all peers
+share one ledger + one lock. Tested with two real linked worktrees.
 
-### D3 — Serialized mutations, shared lock (FR-3, reuse #172)
-`saveTeamLedger` has no CAS, so every mutating subcommand runs its full
-`load → op → save` inside a repo-scoped lock. **Generalize** the existing
-`withLedgerLock(repoRoot, fn)` to `withLedgerLock(repoRoot, fn, { lockName })`
-(default `worktrees` — a pure additive refactor keeping the pid/token ownership),
-and use `lockName: "team"` here → `.cct/team.lock`, separate from
-`worktrees.lock`. Extract the lock into `agents/ledger-lock.ts` so both modules
-import it (no behavior change to the worktree path).
+### D2 — Trusted session identity (review #3)
+A session identity contract: `CCT_TEAM_ID` + `CCT_TEAM_MEMBER_ID` (untrusted env,
+validated). `attachTeamIdentity(cwd, env)` at `session_start`: if set, load the
+ledger at `teamRoot`, assert the member exists and (if `CCT_TEAM_ID` given)
+matches the team; store `state.teamMember` on match, else fail closed (warn +
+audit `team.identity-invalid`). Actor-scoped subcommands (`claim`, `complete`,
+`fail`, `approve`, `message` from, `leave`, `shutdown`) derive the actor from
+`state.teamMember` — **never** from a command argument; absent/mismatch ⇒ refuse.
 
-### D4 — Command surface (FR-1/FR-2)
-`/cct:team <sub>` → the op, under the lock, audited:
+### D3 — Authorization for admin subcommands (review #3)
+The wiring adds the lead-only check the library lacks: `assign`, `activate`,
+`close`, `recover`, and `approve` require `state.teamMember.role === "lead"`.
+`create` / `join` / `task` are open local administration (documented). Each
+subcommand's authz level is stated in the docs; attribution-only vs authenticated
+is called out honestly.
 
-| sub | op | notes |
+### D4 — Safe create / corrupt / missing paths (review #4)
+Distinct paths, all under the lock:
+- **create:** `fs.existsSync(team.json)` → if present: `loadTeamLedger` valid ⇒
+  refuse "already exists"; `null` ⇒ refuse "ledger invalid", **no write**. Absent
+  ⇒ `createTeam` → save.
+- **other mutations:** `loadTeamLedger`; `null` ⇒ refuse (no save); op; save on
+  `ok`.
+- **reads / advisory:** missing (`!existsSync`) ⇒ "no team"; `existsSync` but
+  `null` ⇒ fail-closed warning; valid ⇒ render. Never pass `null` to `teamStatus`.
+
+### D5 — Command surface with correct signatures (review #5)
+`/cct:team <sub>`, under the lock, audited. Actor from session identity where
+noted:
+
+| sub | op | actor / authz |
 |---|---|---|
-| `create <teamId> <leadId> [--require-approval]` | `createTeam` | planRequired from flag |
-| `join <memberId>` | `addTeammate` | teammate role |
-| `task <taskId> <title…> [--assign <m>] [--worker <w>]` | `postTask` | open-pool or assigned |
-| `assign <taskId> <memberId>` | `assignTask` | lead intent |
-| `approve <memberId>` | `approvePlan` | plan-approval gate |
-| `activate` | `activateTeam` | blocked until approved when required |
-| `claim <taskId> <memberId>` | `claimTask({maxConcurrency})` | cap from `autonomy.max_concurrency` |
-| `complete <taskId>` / `fail <taskId>` | `completeTask` / `failTask` | terminal |
-| `message <from> <text…>` | `postMessage` | redacted append |
-| `leave <memberId>` | `markMemberLeft` | reopens that member's claims |
-| `recover` | `reopenOrphanedClaims` | sweep orphaned claims |
-| `shutdown <byId> [--reason …]` | `requestShutdown` | recorded who/why |
-| `close` | `closeTeam` | refused while a task is `claimed` |
-| `status [--json]` | `teamStatus` + `renderTeamStatus` | read-only (T8.2) |
-| `synthesize [--json]` | `synthesizeTeam` | fail-closed verdict (T8.2) |
+| `create <teamId> [--require-approval]` | createTeam | lead = the session member; open admin |
+| `join <memberId>` | addTeammate | open admin (join records identity) |
+| `task <taskId> <title…> [--assign <m>] [--worker <w>]` | postTask | open admin |
+| `assign <taskId> <memberId>` | assignTask | **lead-only** (wiring) |
+| `approve` | approvePlan(ledger, actor) | **lead-only** |
+| `activate` | activateTeam | **lead-only** |
+| `claim <taskId>` | claimTask(ledger, taskId, **actor**, now, {maxConcurrency}) | actor from identity |
+| `complete <taskId>` / `fail <taskId>` | completeTask/failTask(ledger, taskId, **actor**) | actor from identity |
+| `message <to\|all> <body…>` | postMessage(teamRoot, **actor**, to, body, now) | actor from identity; boolean-checked |
+| `leave` | markMemberLeft(ledger, **actor**) | actor from identity |
+| `recover` | reopenOrphanedClaims | **lead-only** |
+| `shutdown [--reason …]` | requestShutdown(ledger, **actor**, reason, now) | actor from identity |
+| `close` | closeTeam | **lead-only**; refused while a task is `claimed` |
+| `status [--json]` | teamStatus + renderTeamStatus | read-only (FR-8) |
+| `synthesize [--json]` | synthesizeTeam | read-only |
 
-Unknown/absent sub ⇒ usage text.
+`message` uses the dedicated locked append (D4 "other" doesn't apply — it does not
+load/save `team.json`); a `false` return surfaces as failure.
 
-### D5 — CLI surface (FR-4)
-`pi-code team status [--json]` and `pi-code team synthesize [--json]` — read-only,
-resolve the project root, load the ledger, render. Routes through the launcher's
-diagnostic dispatch to `cli.ts` (mirrors `pi-code worktree`), added to the
-recursion-guard allow-list + help.
+### D6 — CLI gate semantics (review #6)
+`pi-code team status|synthesize [--json]` — read-only, at `teamRoot`. It renders
+whenever a **valid ledger exists**, independent of the (out-of-session,
+project-untrusted) `agents.teams_enabled`. `--json` includes
+`enabled: true|false|unknown` (unknown when only project config could set it and
+trust is unavailable) + the existing CLI trust note. In-session mutations stay
+gated on the resolved (trust-aware) flag.
 
-### D6 — Session-start advisory (FR-6)
-In the existing `session_start` handler, when teams are enabled and
-`.cct/team.json` exists, push a one-line `teamStatus` summary to `state.warnings`
-+ audit `team.status`. Read-only; no recovery, no mutation.
-
-### D7 — Audit + honesty (FR-5/FR-7)
+### D7 — Audit + honesty (FR-7/FR-10)
 Each action audits `team.<create|join|task|assign|claim|complete|fail|approve|
-activate|message|shutdown|close|recover|leave|status>` with subject
-`<teamId>:<subject>`, origin `team`. Docs + `pi-code doctor` state the `degraded`
-boundary (no live execution/transport; snapshot status).
+activate|message|shutdown|close|recover|leave|status|identity-invalid>`, subject
+`<teamId>:<actor|task>`, origin `team`. Docs + `pi-code doctor` state the
+`degraded` boundary and that this is the LOCAL slice of the #174 epic.
 
 ## Deliverables
 
-1. `agents/ledger-lock.ts` — the pid/token lock extracted from
-   worktree-lifecycle.ts, parameterized by `lockName` (worktree module updated to
-   import it; behavior unchanged).
-2. `agents/team-commands.ts` — gate + lock + audit wrappers over team.ts /
-   team-status.ts; the `/cct:team` and CLI handlers.
-3. `index.ts` — `registerCommand("cct:team", …)`; session-start advisory.
-4. `cli.ts` — `pi-code team status|synthesize [--json]`.
-5. `bin/pi-code` — route `team` to the runtime CLI, recursion-guard entry, help.
-6. Docs — `adapters/pi/docs/team-coordination.md` (the `/cct:team` + CLI surface,
-   the `agents.teams_enabled` gate, the two-file ledger, the degraded boundary);
-   README link.
+1. `agents/ledger-lock.ts` — extracted, `LedgerLockName`-parameterized lock;
+   `worktree-lifecycle.ts` updated to import it (behavior unchanged).
+2. `agents/team-commands.ts` — `teamRoot` resolution, identity/authz, safe
+   create/corrupt paths, gate + lock + audit wrappers, the `/cct:team` + CLI
+   handlers, session-identity attach.
+3. `index.ts` — `registerCommand("cct:team", …)`; `attachTeamIdentity` +
+   session-start advisory in the existing `session_start` handler.
+4. `cli.ts` — `pi-code team status|synthesize [--json]` (FR-8 semantics).
+5. `bin/pi-code` — route `team` to the runtime CLI, recursion-guard entry, help,
+   the `CCT_TEAM_*` contract in a driver note.
+6. Docs — `adapters/pi/docs/team-coordination.md` (`/cct:team` + CLI, the
+   `CCT_TEAM_*` identity contract + per-subcommand authz table, the
+   `agents.teams_enabled` gate, the two-file ledger at the primary root, the
+   `degraded` boundary, and a pointer to `plane-shaping.md` for the epic); README.
 7. Tests (below).
 
 ## Sequencing
 
-1. Extract/generalize `withLedgerLock` → `ledger-lock.ts` (+ update worktree
-   import; re-run the worktree suite unchanged).
-2. `team-commands.ts` gate + lock + audit wrappers (+ unit tests over a temp
-   project: full lifecycle + each refusal branch).
-3. `registerCommand("cct:team", …)` + session-start advisory in `index.ts`
-   (python-edit to avoid the prettier hook churn).
-4. `pi-code team status|synthesize` in `cli.ts` + launcher route/help + launcher
-   test.
+1. Extract/constrain the lock → `ledger-lock.ts` (+ worktree import; re-run the
+   worktree suite unchanged).
+2. `team-commands.ts`: `teamRoot`, identity/authz, safe create/corrupt, gate +
+   lock + audit wrappers (+ unit tests: lifecycle, each refusal, identity,
+   create-over-existing/corrupt byte-for-byte).
+3. `index.ts` wiring: `registerCommand` + `attachTeamIdentity` + advisory
+   (python-edit to dodge the prettier hook).
+4. `cli.ts` `pi-code team …` (FR-8) + launcher route/help/test.
 5. Docs + honesty note.
 
-## Test strategy
+## Test strategy (mapped to the review)
 
-- **Gated surface (AC-1):** disabled ⇒ refusal + zero side effects; enabled ⇒
-  end-to-end lifecycle green (temp project).
-- **Contract (AC-2):** double-claim, cross-assignment claim, over-cap claim,
-  pre-approval claim, and close-while-claimed each refused (library error
-  surfaced through the wiring).
-- **Concurrency (AC-3):** two real processes claim one task simultaneously
-  (barrier-released, reusing the #172 fixture pattern) → exactly one wins.
-- **Status/synthesis/recovery (AC-4):** counts + `complete|partial|failed|empty`
-  verdict; `leave`/`recover` reopen orphaned claims, never auto-complete.
-- **Audit + CLI (AC-5):** one `team.*` record per action (CCT_HOME temp);
-  `pi-code team status --json` snapshot read-only.
-- **No-invented-event (AC-6):** wiring subscribes only to `session_start` +
-  registers the command (asserted); worktree lock behavior unchanged after the
-  extraction.
+- **Canonical ledger (review #2):** two real linked worktrees — claim/read/
+  concurrent-claim resolve to the primary ledger (the prior single-dir test could
+  not detect a split).
+- **Identity (review #3):** actor derived from `CCT_TEAM_MEMBER_ID`; a mismatched
+  identity and a non-lead admin command are refused.
+- **Safe create (review #4):** duplicate `create` and `create` over a corrupt
+  `team.json` both refuse and leave the file byte-for-byte unchanged; a non-create
+  command with no/invalid ledger refuses; advisory never passes `null` in.
+- **Signatures/message (review #5):** `complete/fail` use the actor; `message`
+  appends via the locked path, surfaces `false` as failure, does not rewrite
+  `team.json`.
+- **CLI gate (review #6):** `agents.teams_enabled=true` only in trusted project
+  config ⇒ `pi-code team status` still renders; JSON reports `enabled`/trust.
+- **Contract + concurrency:** double/cross/over-cap/pre-approval claims and
+  close-while-claimed refused; two real processes claim one task → exactly one
+  wins (reuse the #172 spawn-fixture pattern).
+- **No-invented-event + no worktree regression:** wiring only `session_start` +
+  command; the extracted lock keeps the worktree concurrency/stale tests green.
 
 Home: `tests/pi-runtime/team-commands.test.mjs` (+ a spawn fixture), launcher
 assertion in `tests/test-pi-launcher.sh`.
 
-## Resolved decisions (settled by the built libraries)
+## Resolved decisions
 
-1. **Capability** → `agents.teams`, `degraded` (Pi) / `disabled` (Claude); reason
-   already covers T8.1+T8.2 — no change.
-2. **State model** → `.cct/team.json` + `.cct/team-messages.jsonl`, separate from
-   `worktrees.json`, linked by optional `Task.workerId`.
-3. **Claiming/approval/shutdown semantics** → as implemented in team.ts
-   (single-claimant, approval-gated, bounded, close-refused-while-claimed).
-4. **Synthesis verdict / recovery** → `complete|partial|failed|empty` fail-closed;
-   recovery **reopens** (never auto-`done`/`failed`), per team-status.ts.
+1. **Scope** → Slice A (local wiring); #174 stays the epic; a narrower sub-issue
+   targets this bundle; centralized plane shaped in `plane-shaping.md`.
+2. **Canonical root** → `primaryRepoRoot(cwd)` for all team state.
+3. **Identity** → trusted `CCT_TEAM_*` session contract; actor never from args.
+4. **Authz** → lead-only for assign/activate/close/recover/approve; create/join/
+   task open admin (documented).
+5. **Create safety** → refuse over existing/corrupt, never overwrite.
+6. **Lock** → extract + `LedgerLockName = "worktrees" | "team"` union.
+7. **CLI gate** → mutations gated; read-only renders a valid ledger with
+   `enabled: true|false|unknown`.
 
-## Open question for the reviewer
+## Deferred to the epic (plane-shaping.md, decisions still open)
 
-- **Lock generalization vs a second helper:** D3 extracts `withLedgerLock` into a
-  shared `ledger-lock.ts` (parameterized `lockName`). Alternative: leave the
-  worktree lock untouched and add a tiny sibling `team.lock` helper. Lean:
-  **extract + parameterize** (DRY, keeps the proven pid/token ownership in one
-  place). Confirm before implementation.
+Central topology (shared-Postgres vs export-and-merge vs federated), cross-
+developer identity/auth, developer_id population, developer/team/repo cost
+rollups, budget + runaway-loop alerting, and the team dashboard. **User chose to
+shape these separately before their SDD**; identity/auth folds into the topology
+shaping.
