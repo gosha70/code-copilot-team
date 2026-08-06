@@ -13,7 +13,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +43,7 @@ import {
   setMergeStatus,
 } from "../../adapters/pi/runtime/agents/worktree.ts";
 import { auditLogPath } from "../../adapters/pi/runtime/policy/audit.ts";
+import { runCli } from "../../adapters/pi/runtime/cli.ts";
 
 const HAS_GIT =
   spawnSync("git", ["--version"], { encoding: "utf8" }).status === 0;
@@ -175,25 +177,83 @@ test("provision: refuses master, out-of-root, and overlapping areas (no side eff
   assert.deepEqual(loadLedger(repo).workers.map((w) => w.workerId), ["w1"]);
 });
 
-// ── US1: concurrency (review #2) ─────────────────────────────────────────────
+// ── US1: concurrency — REAL parallel processes with a barrier (review #2) ────
 
-test("concurrency: the ledger lock serializes two provisions — both survive", { skip: !HAS_GIT }, () => {
+const HAS_STRIP_TYPES = (() => {
+  // The child fixture imports a .ts module; needs node >= 22.6 strip-types.
+  const [maj, min] = process.versions.node.split(".").map(Number);
+  return maj > 22 || (maj === 22 && min >= 6);
+})();
+const FIXTURE = fileURLToPath(
+  new URL("./fixtures/provision-worker.mjs", import.meta.url),
+);
+
+/**
+ * Spawn N real child processes that each block on a barrier file, then release
+ * them together so they contend on the ledger lock SIMULTANEOUSLY. Resolves to
+ * each child's parsed JSON result. This genuinely fails if locking is removed
+ * (interleaved load→save drops a record); a sequential call could not.
+ */
+function runConcurrentProvisions(repo, specs) {
+  return new Promise((resolve) => {
+    const barrier = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cct-barrier-")), "go");
+    const outs = specs.map(() => "");
+    let exited = 0;
+    const kids = specs.map((s, i) => {
+      const k = spawn(
+        process.execPath,
+        ["--experimental-strip-types", "--no-warnings", FIXTURE, repo, s.id, s.branch, (s.areas ?? []).join(","), barrier],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      k.stdout.on("data", (d) => (outs[i] += d));
+      k.on("exit", () => {
+        if (++exited === specs.length) resolve(outs.map((o) => JSON.parse(o.trim())));
+      });
+      return k;
+    });
+    void kids;
+    setTimeout(() => fs.writeFileSync(barrier, "go"), 250); // release together
+  });
+}
+
+test("concurrency: two SIMULTANEOUS provisions (real processes) — both survive", { skip: !HAS_GIT || !HAS_STRIP_TYPES }, async () => {
   const repo = initRepo();
-  // The lock is synchronous, so interleave by hand: each mutation is a full
-  // load->create->save critical section; neither can clobber the other's record.
-  const a = provisionWorktree(repo, { workerId: "a", branch: "feature/a" }, { mode: "print", now: NOW });
-  const b = provisionWorktree(repo, { workerId: "b", branch: "feature/b" }, { mode: "print", now: NOW });
-  assert.equal(a.ok, true);
-  assert.equal(b.ok, true);
+  const results = await runConcurrentProvisions(repo, [
+    { id: "a", branch: "feature/a", areas: ["src/a"] },
+    { id: "b", branch: "feature/b", areas: ["src/b"] },
+  ]);
+  assert.equal(results.filter((r) => r.ok).length, 2, `both simultaneous provisions should survive: ${JSON.stringify(results)}`);
   const ids = loadLedger(repo).workers.map((w) => w.workerId).sort();
-  assert.deepEqual(ids, ["a", "b"], "both concurrent records present");
+  assert.deepEqual(ids, ["a", "b"], "both concurrent records present in the ledger");
 });
 
-test("concurrency: two conflicting owned-area requests — exactly one wins", { skip: !HAS_GIT }, () => {
+test("concurrency: two SIMULTANEOUS overlapping-area provisions — exactly one wins", { skip: !HAS_GIT || !HAS_STRIP_TYPES }, async () => {
   const repo = initRepo();
-  const a = provisionWorktree(repo, { workerId: "a", branch: "feature/a", areas: ["src/x"] }, { mode: "print", now: NOW });
-  const b = provisionWorktree(repo, { workerId: "b", branch: "feature/b", areas: ["src/x"] }, { mode: "print", now: NOW });
-  assert.equal([a.ok, b.ok].filter(Boolean).length, 1, "exactly one owned-area winner");
+  const results = await runConcurrentProvisions(repo, [
+    { id: "a", branch: "feature/a", areas: ["src/x"] },
+    { id: "b", branch: "feature/b", areas: ["src/x"] }, // same area → conflict
+  ]);
+  assert.equal(results.filter((r) => r.ok).length, 1, `exactly one overlapping-area winner: ${JSON.stringify(results)}`);
+  assert.equal(loadLedger(repo).workers.length, 1, "ledger holds exactly one record");
+});
+
+test("concurrency: SIMULTANEOUS provision vs reconcile does not lose the new record", { skip: !HAS_GIT || !HAS_STRIP_TYPES }, async () => {
+  const repo = initRepo();
+  // Seed one worker so reconcile has real work, then race a fresh provision
+  // against reconcileOnStart. The provision must not be clobbered by a reconcile
+  // that loaded the ledger before the provision committed (full-transaction lock).
+  provisionWorktree(repo, { workerId: "seed", branch: "feature/seed" }, { mode: "print", now: NOW });
+  const barrier = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cct-barrier-")), "go");
+  const child = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", FIXTURE, repo, "racer", "feature/racer", "", barrier], { stdio: ["ignore", "pipe", "ignore"] });
+  let out = "";
+  child.stdout.on("data", (d) => (out += d));
+  const childDone = new Promise((res) => child.on("exit", () => res()));
+  fs.writeFileSync(barrier, "go"); // release the provision
+  withAuditHome(() => reconcileOnStart(repo, { mode: "print" })); // race it here
+  await childDone;
+  assert.equal(JSON.parse(out.trim()).ok, true, "the racing provision succeeded");
+  const ids = loadLedger(repo).workers.map((w) => w.workerId).sort();
+  assert.ok(ids.includes("racer"), `provision survived the concurrent reconcile: ${ids.join(",")}`);
 });
 
 test("withLedgerLock: a held lock blocks a second acquirer until released; timeout fails closed", { skip: !HAS_GIT }, () => {
@@ -362,34 +422,80 @@ test("primaryRepoRoot resolves the primary from inside a linked worktree", { ski
   assert.equal(primaryRepoRoot(repo), repo, "primary resolves to itself");
 });
 
+test("CLI `worktree create` invoked from a linked worktree writes to the PRIMARY ledger (review #4)", { skip: !HAS_GIT }, () => {
+  const repo = initRepo();
+  const first = provisionWorktree(repo, { workerId: "w1", branch: "feature/w1" }, { mode: "print", now: NOW });
+  const linked = first.path; // an existing linked worker worktree
+
+  withAuditHome(() => {
+    // Run the REAL CLI as if `pi-code worktree create` were invoked from inside
+    // the linked worktree. It must target the primary repo's ledger, not create
+    // a split ledger under the worker.
+    const res = runCli({
+      argv: ["worktree", "create", "w2", "--branch", "feature/w2"],
+      cwd: linked,
+      globalDir: fs.mkdtempSync(path.join(os.tmpdir(), "cct-gdir-")),
+      runtimeEntry: null,
+    });
+    assert.equal(res.code, 0, res.out);
+  });
+
+  // The new record is in the PRIMARY ledger...
+  const primaryIds = loadLedger(repo).workers.map((w) => w.workerId).sort();
+  assert.deepEqual(primaryIds, ["w1", "w2"], "both records in the primary ledger");
+  // ...and NO split ledger was created inside the linked worktree.
+  assert.ok(!fs.existsSync(path.join(linked, ".cct", "worktrees.json")), "no split ledger under the linked worktree");
+});
+
 // ── strict porcelain parsing (review #4) ─────────────────────────────────────
 
-test("parseWorktreePorcelainStrict accepts a well-formed listing", () => {
+const SHA = "0123456789abcdef0123456789abcdef01234567"; // 40-hex, valid HEAD
+const SHA2 = "89abcdef0123456789abcdef0123456789abcdef";
+
+test("parseWorktreePorcelainStrict accepts well-formed records (branch, detached, bare)", () => {
   const stdout = [
-    "worktree /repo",
-    "HEAD abc123",
-    "branch refs/heads/master",
-    "",
-    "worktree /repo-w1",
-    "HEAD def456",
-    "branch refs/heads/feature/w1",
-    "",
+    `worktree /repo`,
+    `HEAD ${SHA}`,
+    `branch refs/heads/master`,
+    ``,
+    `worktree /repo-w1`,
+    `HEAD ${SHA2}`,
+    `detached`,
+    ``,
+    `worktree /repo.git`,
+    `bare`,
+    ``,
   ].join("\n");
   const r = parseWorktreePorcelainStrict(stdout);
   assert.equal(r.ok, true, r.reason);
-  assert.equal(r.worktrees.length, 2);
+  assert.equal(r.worktrees.length, 3);
   assert.equal(r.worktrees[0].isPrimary, true);
-  assert.equal(r.worktrees[1].isPrimary, false);
-  assert.equal(r.worktrees[1].branch, "feature/w1");
+  assert.equal(r.worktrees[0].branch, "master");
+  assert.equal(r.worktrees[1].branch, null); // detached
+  assert.equal(r.worktrees.filter((w) => w.isPrimary).length, 1);
+});
+
+test("parseWorktreePorcelainStrict parses the NUL (-z) form", () => {
+  const z = `worktree /repo\0HEAD ${SHA}\0branch refs/heads/master\0\0`;
+  const r = parseWorktreePorcelainStrict(z, { z: true });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.worktrees[0].branch, "master");
 });
 
 for (const [name, stdout] of [
-  // The exact review #4 case: a valid first block, then a truncated block.
-  ["truncated second block (worktree line, no path)", "worktree /repo\nHEAD abc\nbranch refs/heads/master\n\nworktree\n"],
-  ["relative worktree path", "worktree relative/path\n"],
-  ["content before the first worktree block", "HEAD abc\nworktree /repo\n"],
-  ["unknown structural key", "worktree /repo\nbogus_key value\n"],
-  ["empty output (no entries)", ""],
+  // The exact review #4 cases: valid `worktree` path but an INCOMPLETE record.
+  ["valid path but no HEAD (bare worktree line only)", `worktree /repo\n\n`],
+  ["HEAD but neither branch nor detached", `worktree /repo\nHEAD ${SHA}\n\n`],
+  ["both branch AND detached", `worktree /repo\nHEAD ${SHA}\nbranch refs/heads/m\ndetached\n\n`],
+  ["bare combined with HEAD", `worktree /repo\nbare\nHEAD ${SHA}\n\n`],
+  ["invalid HEAD object id", `worktree /repo\nHEAD not-a-sha\nbranch refs/heads/m\n\n`],
+  ["duplicate branch attribute", `worktree /repo\nHEAD ${SHA}\nbranch refs/heads/a\nbranch refs/heads/b\n\n`],
+  ["unterminated final record (no trailing blank)", `worktree /repo\nHEAD ${SHA}\nbranch refs/heads/m`],
+  ["truncated second block (worktree line, no path)", `worktree /repo\nHEAD ${SHA}\nbranch refs/heads/m\n\nworktree\n\n`],
+  ["relative worktree path", `worktree relative/path\n\n`],
+  ["content before the first worktree block", `HEAD ${SHA}\nworktree /repo\n\n`],
+  ["unknown structural key", `worktree /repo\nHEAD ${SHA}\nbranch refs/heads/m\nbogus_key value\n\n`],
+  ["empty output (no entries)", ``],
 ]) {
   test(`parseWorktreePorcelainStrict REJECTS: ${name}`, () => {
     const r = parseWorktreePorcelainStrict(stdout);
@@ -399,7 +505,7 @@ for (const [name, stdout] of [
   });
 }
 
-test("listWorktreesStrict returns ok for a real repo with a worker worktree", { skip: !HAS_GIT }, () => {
+test("listWorktreesStrict returns ok for a real repo with a worker worktree (-z form)", { skip: !HAS_GIT }, () => {
   const repo = initRepo();
   provisionWorktree(repo, { workerId: "w1", branch: "feature/w1" }, { mode: "print", now: NOW });
   const r = listWorktreesStrict(repo);

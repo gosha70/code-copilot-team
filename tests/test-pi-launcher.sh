@@ -45,6 +45,8 @@ make_shim() {
 if [[ "\${1:-}" == "--version" ]]; then echo "$version"; exit 0; fi
 {
   echo "ARGS:\$*"
+  echo "PWD:\$PWD"
+  echo "CCT_WORKER_ID:\${CCT_WORKER_ID:-unset}"
   echo "CCT_RUNTIME:\${CCT_RUNTIME:-unset}"
   echo "CCT_PI_CODE_ACTIVE:\${CCT_PI_CODE_ACTIVE:-unset}"
   echo "CCT_PROFILE:\${CCT_PROFILE:-unset}"
@@ -387,6 +389,28 @@ assert "worktree with no subcommand exits 64" "[ \"\$WT_RC\" -eq 64 ]"
 WT_G_OUT=$(CCT_PI_CODE_ACTIVE=1 CCT_HOME="$WT_HOME" PATH="$DIAG_PATH" "$LAUNCHER" worktree 2>&1) || true
 assert "worktree allowed under the recursion guard" \
   "echo \"\$WT_G_OUT\" | grep -q 'worktree create'"
+
+# `worktree run` provisions AND launches pi INSIDE the worktree (process
+# boundary). A fake `pi` shim (bin-new, on DIAG_PATH) records its own PWD and
+# CCT_WORKER_ID to capture.txt.
+if command -v git >/dev/null 2>&1; then
+  WR_REPO="$TMP/wr-repo"; mkdir -p "$WR_REPO"
+  git -C "$WR_REPO" init -q -b master
+  git -C "$WR_REPO" config user.email t@e.com
+  git -C "$WR_REPO" config user.name T
+  echo seed > "$WR_REPO/README.md"; git -C "$WR_REPO" add -A; git -C "$WR_REPO" commit -q -m seed
+  rm -f "$TMP/capture.txt"
+  ( cd "$WR_REPO" && CCT_HOME="$TMP/wr-home" PATH="$DIAG_PATH" "$LAUNCHER" worktree run fix-9 --branch fix/nine ) >/dev/null 2>&1 || true
+  WR_WT="$(cd "$(dirname "$WR_REPO")/.cct-worktrees/wr-repo/fix-9" 2>/dev/null && pwd -P || echo MISSING)"
+  assert "worktree run launches pi INSIDE the worktree" \
+    "test -f \"\$TMP/capture.txt\" && grep -q \"PWD:\$WR_WT\" \"\$TMP/capture.txt\""
+  assert "worktree run exports CCT_WORKER_ID to the child" \
+    "grep -q 'CCT_WORKER_ID:fix-9' \"\$TMP/capture.txt\""
+  assert "worktree run wrote the record to the PRIMARY ledger" \
+    "grep -q '\"workerId\": \"fix-9\"' \"\$WR_REPO/.cct/worktrees.json\""
+else
+  echo "  SKIP: worktree run (git unavailable)"
+fi
 
 # ── T6.4: init / sync (FR-000a) ─────────────────────────────
 echo "--- init / sync ---"

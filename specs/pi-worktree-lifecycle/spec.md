@@ -44,10 +44,17 @@ force/reset/`branch -D`, symlink-escape containment), with temp-repo tests.
   worktree the session does not execute inside is not isolation. Pi captures
   `ctx.cwd` at `session_start` and exposes no verified API to change the running
   session's directory afterward. Therefore **creation happens before the worker
-  Pi is spawned**: a driver/controller (or `pi-code worktree create`) provisions
-  the worktree + ledger record and launches the worker process with
-  `cwd = worktreePath`. The `session_start` extension **does not** create-and-hope
-  the session relocates.
+  Pi is spawned**: a driver provisions the worktree + ledger record and launches
+  the worker process with `cwd = worktreePath`. Two launcher surfaces support
+  this: `pi-code worktree create` (provision only; prints the path so a driver
+  can `cd`/`--project` into it) and **`pi-code worktree run <id> --branch <b>
+  [prov flags] -- <pi args>`** (the atomic happy path: provisions, exports the
+  `CCT_WORKER_*` env, and re-execs the launcher with `--project <worktree>` so
+  pi starts with `cwd = worktree`). The `session_start` extension **does not**
+  create-and-hope the session relocates. The CLI provisioner resolves the
+  **primary** repo root (the checkout owning `.cct/worktrees.json`) via the
+  shared git common dir — never a linked worktree's own toplevel — so invoking it
+  from inside a worker does not split the ledger.
 - **FR-2 — Validate/attach on session_start, and BLOCK on failure.** On
   `session_start`, IF `CCT_WORKER_ID` is set, the extension looks up the ledger
   record and **validates** that both `process.cwd()` and `git rev-parse
@@ -149,6 +156,17 @@ force/reset/`branch -D`, symlink-escape containment), with temp-repo tests.
    the malformed cases directly.
 6. **No new event source:** wiring uses only `session_start` / `registerCommand`
    / the existing `tool_call` gate.
-7. **Concurrency-safe transaction + lock ownership:** the full reconcile
-   transaction runs inside the lock; a lock whose owner process is alive is never
-   stolen (even when old), while a crashed owner's lock is reclaimed.
+7. **Concurrency-safe transaction + lock ownership:** two provisions started
+   **simultaneously as real OS processes** (barrier-released) both survive;
+   overlapping-area processes → exactly one wins; a provision racing
+   `reconcileOnStart` is not lost. A lock whose owner process is alive is never
+   stolen (even when old); a crashed owner's lock is reclaimed.
+8. **Launcher/process boundary:** `pi-code worktree run` launches pi with
+   `cwd == worktree` and the `CCT_WORKER_*` env exported (proven with a pi shim),
+   and writes the record to the **primary** ledger. `pi-code worktree create`
+   invoked from **inside a linked worktree** also writes to the primary ledger,
+   never a split one.
+9. **Strict record validation:** the porcelain parser rejects incomplete records
+   (valid path but missing HEAD; HEAD without branch/detached; bare with
+   HEAD/branch/detached; invalid HEAD oid; duplicate attrs; unterminated final
+   record), tested directly.

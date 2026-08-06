@@ -11,7 +11,8 @@ re-implemented here.
 The authoritative surfaces never drift:
 
 ```sh
-pi-code worktree create <workerId> --branch <b> [...]   # provision (pre-spawn)
+pi-code worktree run <workerId> --branch <b> [prov flags] [-- <pi args>]  # provision + launch (one shot)
+pi-code worktree create <workerId> --branch <b> [...]   # provision only (prints the path)
 /cct:worktree list | cleanup <workerId> [--force] | reconcile   # in a session
 ```
 
@@ -43,11 +44,28 @@ The lifecycle therefore splits the responsibility:
    interactive session is never a worker).
 
 ```sh
-# Driver sketch — provision, then launch the worker in the worktree.
-WT="$(pi-code worktree create fix-42 --branch fix/issue-42 --areas src/api)"
-CCT_WORKER_ID=fix-42 CCT_WORKER_BRANCH=fix/issue-42 \
-  pi-code --profile unattended --project "$WT"   # worker runs inside $WT
+# Recommended — one shot: provision AND launch pi inside the worktree.
+# Everything before `--` is a `worktree create` flag; everything after `--`
+# is passed to the launched pi-code session. It exports the CCT_WORKER_*
+# contract and starts pi with cwd = the new worktree.
+pi-code worktree run fix-42 --branch fix/issue-42 --areas src/api -- --profile unattended
 ```
+
+Equivalent manual two-step (provision, then hand off the working directory):
+
+```sh
+WT="$(pi-code worktree create fix-42 --branch fix/issue-42 --areas src/api)" || exit 1
+(
+  cd "$WT" || exit 1
+  CCT_WORKER_ID=fix-42 CCT_WORKER_BRANCH=fix/issue-42 \
+    pi-code --profile unattended        # pi discovers the project from $PWD
+)
+```
+
+> The launcher's `--project <dir>` flag also `cd`s into `<dir>` before starting
+> pi, so `pi-code --profile unattended --project "$WT"` is equivalent to the
+> subshell above — but `worktree run` is preferred because it provisions and
+> hands off `cwd` atomically, and sets the `CCT_WORKER_*` env for you.
 
 ## The `CCT_WORKER_*` env contract
 

@@ -150,62 +150,143 @@ export interface ListWorktreesResult {
   reason?: string;
 }
 
+/** Object-id shape git emits for `HEAD` (sha1 = 40 hex, sha256 = 64 hex). */
+const HEAD_OID_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+interface RecordState {
+  path: string;
+  head: string | null;
+  branch: string | null;
+  sawHead: boolean;
+  sawBranch: boolean;
+  sawDetached: boolean;
+  sawBare: boolean;
+}
+
+export interface ParseOptions {
+  /** true when the input is `--porcelain -z` (NUL-delimited, newline-safe). */
+  z?: boolean;
+}
+
 /**
- * STRICT parse of `git worktree list --porcelain`. Unlike the manager's
+ * STRICT parse of `git worktree list --porcelain[ -z]`. Unlike the manager's
  * tolerant `listWorktrees()` (which ignores malformed lines and always calls the
- * first block primary), this REJECTS structurally-invalid output so reconcile
- * can fail closed on truncated/garbled porcelain (review #4): a block must open
- * with `worktree <abs-path>`, nothing may precede the first block, an unknown
- * key is rejected, and exactly one primary must result. `{ ok:false, reason }`
- * on any violation. Fail-closed by construction — a rejected listing simply
- * skips reconcile, never touching the ledger.
+ * first block primary), this validates each record against git's documented
+ * shapes so reconcile can fail closed on truncated/garbled porcelain (review
+ * #4). `{ ok:false, reason }` — hence a rejected listing simply skips reconcile,
+ * never touching the ledger — on any of:
+ *   - content before the first `worktree` line, or a path-less/relative one;
+ *   - a NON-bare record missing `HEAD`, or with neither/both of branch+detached;
+ *   - a `bare` record carrying `HEAD`/`branch`/`detached`;
+ *   - an invalid `HEAD` object id;
+ *   - a duplicate structural attribute (HEAD/branch/detached/bare);
+ *   - an unterminated/incomplete final record (git terminates every record,
+ *     including the last, with a blank line / NUL-NUL);
+ *   - an unknown structural key, or not exactly one primary.
  */
 export function parseWorktreePorcelainStrict(
-  stdout: string,
+  raw: string,
+  opts: ParseOptions = {},
 ): ListWorktreesResult {
   const worktrees: LiveWorktree[] = [];
-  let cur: { path: string; branch: string | null } | null = null;
+  let cur: RecordState | null = null;
   const bad = (reason: string): ListWorktreesResult => ({
     ok: false,
     worktrees: [],
     reason,
   });
-  const flush = (): void => {
-    if (cur) {
-      worktrees.push({
-        path: cur.path,
-        branch: cur.branch,
-        isPrimary: worktrees.length === 0,
-      });
-      cur = null;
+
+  // Validate + commit the open record; returns an error result or null.
+  const finalize = (): ListWorktreesResult | null => {
+    if (!cur) return null;
+    const c = cur;
+    cur = null;
+    if (c.sawBare) {
+      if (c.sawHead || c.sawBranch || c.sawDetached) {
+        return bad(
+          `bare worktree '${c.path}' must not carry HEAD/branch/detached`,
+        );
+      }
+    } else {
+      if (!c.sawHead) {
+        return bad(`worktree '${c.path}' missing HEAD (incomplete record)`);
+      }
+      if (c.head && !HEAD_OID_RE.test(c.head)) {
+        return bad(`worktree '${c.path}' has an invalid HEAD '${c.head}'`);
+      }
+      // git reports HEAD plus EXACTLY ONE of branch / detached for a normal
+      // record; neither (truncated) or both (garbled) is malformed.
+      if (c.sawBranch === c.sawDetached) {
+        return bad(
+          `worktree '${c.path}' must have exactly one of branch/detached`,
+        );
+      }
     }
+    worktrees.push({
+      path: c.path,
+      branch: c.branch,
+      isPrimary: worktrees.length === 0,
+    });
+    return null;
   };
 
-  for (const line of stdout.split("\n")) {
-    if (line === "") {
-      flush(); // a blank line terminates a block
+  for (const token of raw.split(opts.z ? "\0" : "\n")) {
+    if (token === "") {
+      const err = finalize(); // blank line / NUL-NUL terminates a record
+      if (err) return err;
       continue;
     }
-    const sp = line.indexOf(" ");
-    const key = sp === -1 ? line : line.slice(0, sp);
-    const val = sp === -1 ? "" : line.slice(sp + 1);
+    const sp = token.indexOf(" ");
+    const key = sp === -1 ? token : token.slice(0, sp);
+    const val = sp === -1 ? "" : token.slice(sp + 1);
 
     if (key === "worktree") {
-      flush();
-      if (!val || !path.isAbsolute(val)) {
-        return bad(`worktree line without an absolute path: '${line}'`);
+      if (cur) {
+        return bad(
+          `worktree '${cur.path}' not terminated before the next block`,
+        );
       }
-      cur = { path: val, branch: null };
+      if (!val || !path.isAbsolute(val)) {
+        return bad(`worktree line without an absolute path: '${token}'`);
+      }
+      cur = {
+        path: val,
+        head: null,
+        branch: null,
+        sawHead: false,
+        sawBranch: false,
+        sawDetached: false,
+        sawBare: false,
+      };
     } else if (!cur) {
-      return bad(`unexpected line before any worktree block: '${line}'`);
+      return bad(`unexpected line before any worktree block: '${token}'`);
+    } else if (key === "HEAD") {
+      if (cur.sawHead) return bad(`duplicate HEAD in worktree '${cur.path}'`);
+      cur.sawHead = true;
+      cur.head = val;
     } else if (key === "branch") {
+      if (cur.sawBranch) {
+        return bad(`duplicate branch in worktree '${cur.path}'`);
+      }
+      cur.sawBranch = true;
       cur.branch = val.replace(/^refs\/heads\//, "");
+    } else if (key === "detached") {
+      if (cur.sawDetached) {
+        return bad(`duplicate detached in worktree '${cur.path}'`);
+      }
+      cur.sawDetached = true;
+    } else if (key === "bare") {
+      if (cur.sawBare) return bad(`duplicate bare in worktree '${cur.path}'`);
+      cur.sawBare = true;
     } else if (!PORCELAIN_ATTR_KEYS.has(key)) {
       return bad(`unrecognized porcelain key: '${key}'`);
     }
+    // locked / prunable are advisory (not structural) — accepted as-is.
   }
-  flush();
 
+  // git terminates every record with a blank line; a leftover open record here
+  // is a truncated/incomplete final block.
+  if (cur) return bad(`unterminated final worktree record '${cur.path}'`);
   if (worktrees.length === 0) return bad("no worktree entries parsed");
   if (worktrees.filter((w) => w.isPrimary).length !== 1) {
     return bad("expected exactly one primary worktree");
@@ -213,11 +294,15 @@ export function parseWorktreePorcelainStrict(
   return { ok: true, worktrees };
 }
 
-/** Run `git worktree list --porcelain` and strictly parse it (review #4). */
+/**
+ * Run `git worktree list --porcelain -z` and strictly parse it (review #4). The
+ * `-z` (NUL-delimited) form is used so a worktree path containing a newline
+ * cannot be mis-parsed.
+ */
 export function listWorktreesStrict(repoRoot: string): ListWorktreesResult {
   const r = spawnSync(
     "git",
-    ["-C", repoRoot, "worktree", "list", "--porcelain"],
+    ["-C", repoRoot, "worktree", "list", "--porcelain", "-z"],
     { encoding: "utf8" },
   );
   if ((r.status ?? 1) !== 0) {
@@ -227,7 +312,7 @@ export function listWorktreesStrict(repoRoot: string): ListWorktreesResult {
       reason: `git worktree list exited ${r.status ?? "?"}`,
     };
   }
-  return parseWorktreePorcelainStrict(r.stdout ?? "");
+  return parseWorktreePorcelainStrict(r.stdout ?? "", { z: true });
 }
 
 // ── lock (review #2/#3: full-transaction, PID/token ownership) ───────────────

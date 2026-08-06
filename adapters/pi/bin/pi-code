@@ -23,6 +23,8 @@
 #   continuity [--json]   Durable resume state: SDD tasks, checkpoint, auto-build ledger
 #   worktree create <workerId> --branch <b> [--base <ref>] [--path <dir>] [--tasks a,b] [--areas x,y]
 #                         Provision a worker git worktree + ledger record (pre-spawn); prints the path
+#   worktree run <workerId> --branch <b> [prov flags] [-- <pi args>]
+#                         Provision AND launch pi inside the new worktree (one shot)
 #   init [dir] [--profile <name>] [--dry-run]
 #                         Scaffold a Pi-native project config + ownership manifest
 #   sync [--dry-run]      Regenerate managed resources (never touches your config)
@@ -246,6 +248,55 @@ cct_sync() {
   bash "$repo/adapters/pi/setup.sh" --sync
 }
 
+# `worktree run` — provision a worker worktree AND launch pi INSIDE it in one
+# step (the atomic provision+spawn happy path). Splits args at `--`: before it
+# are the `worktree create` provisioning flags; after it are pi arguments.
+# Re-execs the launcher with --project <worktree> so the child pi starts with
+# cwd = the worktree, and exports the CCT_WORKER_* contract so session_start
+# validates isolation.
+cct_worktree_run() {
+  local prov=() pia=() seen_dd=false a
+  for a in "$@"; do
+    if ! $seen_dd && [[ "$a" == "--" ]]; then seen_dd=true; continue; fi
+    if $seen_dd; then pia+=("$a"); else prov+=("$a"); fi
+  done
+  if [[ ${#prov[@]} -eq 0 ]]; then
+    err "usage: pi-code worktree run <workerId> --branch <b> [prov flags] [-- <pi args>]"
+    return 64
+  fi
+  # Pull workerId (first non-flag) + branch/base/... for the worker env.
+  local wid="" wbranch="" wbase="" wpath="" wareas="" wtasks="" wfeature="" i=0
+  while [[ $i -lt ${#prov[@]} ]]; do
+    case "${prov[$i]}" in
+      --branch)  wbranch="${prov[$((i+1))]:-}";  i=$((i+2)) ;;
+      --base)    wbase="${prov[$((i+1))]:-}";    i=$((i+2)) ;;
+      --path)    wpath="${prov[$((i+1))]:-}";    i=$((i+2)) ;;
+      --areas)   wareas="${prov[$((i+1))]:-}";   i=$((i+2)) ;;
+      --tasks)   wtasks="${prov[$((i+1))]:-}";   i=$((i+2)) ;;
+      --feature) wfeature="${prov[$((i+1))]:-}"; i=$((i+2)) ;;
+      --*)       i=$((i+1)) ;;
+      *)         [[ -z "$wid" ]] && wid="${prov[$i]}"; i=$((i+1)) ;;
+    esac
+  done
+  if [[ -z "$wid" || -z "$wbranch" ]]; then
+    err "worktree run requires <workerId> and --branch"
+    return 64
+  fi
+  # Provision (prints ONLY the worktree path on success; error text on failure).
+  local wt
+  wt="$("$SELF_PATH" worktree create "${prov[@]}")" || { err "worktree run: provisioning failed: $wt"; return 1; }
+  if [[ -z "$wt" ]]; then err "worktree run: provisioning produced no path"; return 1; fi
+  # Export the untrusted CCT_WORKER_* signal contract for isolation validation.
+  export CCT_WORKER_ID="$wid" CCT_WORKER_BRANCH="$wbranch"
+  [[ -n "$wbase" ]]    && export CCT_WORKER_BASE="$wbase"
+  [[ -n "$wpath" ]]    && export CCT_WORKER_PATH="$wpath"
+  [[ -n "$wareas" ]]   && export CCT_WORKER_AREAS="$wareas"
+  [[ -n "$wtasks" ]]   && export CCT_WORKER_TASKS="$wtasks"
+  [[ -n "$wfeature" ]] && export CCT_FEATURE_ID="$wfeature"
+  # Launch pi INSIDE the worktree via the normal launch path (--project cds there).
+  exec "$SELF_PATH" --project "$wt" ${pia[@]+"${pia[@]}"}
+}
+
 # ── Parse CCT options ───────────────────────────────────────
 PROFILE="${CCT_PROFILE:-disciplined}"
 PROJECT_PATH=""
@@ -257,6 +308,12 @@ PEER_ENABLED=""      # "" = unset (neither --peer-review nor --peer-review-off)
 PEER_PROVIDER=""
 PEER_SCOPE="both"
 PI_ARGS=()
+
+# `worktree run` provisions AND launches inside the worktree (one shot).
+if [[ "${1:-}" == "worktree" && "${2:-}" == "run" ]]; then
+  cct_worktree_run "${@:3}"
+  exit $?
+fi
 
 case "${1:-}" in
   version)
@@ -271,7 +328,7 @@ case "${1:-}" in
     exit 0
     ;;
   help|--help|-h)
-    sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
   config|features|export|resources|provenance|continuity|worktree)

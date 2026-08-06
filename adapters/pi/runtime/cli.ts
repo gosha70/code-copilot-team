@@ -26,7 +26,7 @@ import { CONFIG_SCHEMA_VERSION } from "./config/migrate.ts";
 import { seedCapabilities } from "./capabilities.ts";
 import { continuityReport } from "./workflow/continuity.ts";
 import {
-  gitToplevel,
+  primaryRepoRoot,
   provisionWorktree,
 } from "./agents/worktree-lifecycle.ts";
 
@@ -386,7 +386,9 @@ function supervisorPresent(opts: CliOptions): boolean {
     path.dirname(path.dirname(path.dirname(opts.runtimeEntry))),
   );
   try {
-    return fs.existsSync(path.join(repoRoot, "scripts", "cooldown-supervisor.sh"));
+    return fs.existsSync(
+      path.join(repoRoot, "scripts", "cooldown-supervisor.sh"),
+    );
   } catch {
     return false;
   }
@@ -523,7 +525,11 @@ function worktree(opts: CliOptions, json: boolean): CliResult {
   if (!workerId || !branch) {
     return { out: WORKTREE_USAGE, code: 64 };
   }
-  const repoRoot = gitToplevel(opts.cwd);
+  // Use the PRIMARY repo root (the checkout that owns .cct/worktrees.json), not
+  // gitToplevel — invoked from inside a linked worker worktree, gitToplevel would
+  // return that worker and split the ledger (bypassing the primary's overlap
+  // checks). primaryRepoRoot resolves the shared .git common dir's parent.
+  const repoRoot = primaryRepoRoot(opts.cwd);
   if (!repoRoot) {
     return {
       out: json

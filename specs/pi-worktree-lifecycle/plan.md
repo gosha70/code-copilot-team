@@ -51,12 +51,16 @@ origin:
 worktree at `session_start` would leave the agent editing the *primary* checkout.
 Split the responsibilities:
 
-- **Provision (pre-spawn):** a launcher subcommand
-  `pi-code worktree create <workerId> --branch <b> [--base <base>] [--path <p>]
-  [--tasks …] [--areas …]` calls `createWorker` (under the D3 lock) and prints the
-  resolved `worktreePath`. The driver/controller then launches the worker with
-  `cwd = worktreePath` and the `CCT_WORKER_*` env. (Equivalently, a controller
-  calls `createWorker` directly and spawns with that cwd.)
+- **Provision (pre-spawn):** two launcher surfaces. `pi-code worktree create
+  <workerId> --branch <b> [--base][--path][--tasks][--areas]` calls `createWorker`
+  (under the D3 lock) and prints the resolved `worktreePath`; the driver launches
+  the worker with `cwd = worktreePath` (via `cd`, or `--project <wt>` which the
+  launcher `cd`s into). The atomic happy path is **`pi-code worktree run
+  <workerId> --branch <b> [prov flags] -- <pi args>`**: it provisions, exports the
+  `CCT_WORKER_*` env, and re-execs `pi-code --project <worktree> <pi args>` so pi
+  starts inside the worktree in one step. The CLI provisioner uses
+  `primaryRepoRoot(cwd)` (shared git common dir), NOT `gitToplevel`, so running
+  it from inside a linked worktree still targets the primary ledger.
 - **Validate/attach (session_start):** when `CCT_WORKER_ID` is set, the extension
   loads the ledger record and asserts `process.cwd()` **and** `git rev-parse
   --show-toplevel` both equal the record's `worktreePath`. Match ⇒ attach +
@@ -96,8 +100,12 @@ The tolerant `listWorktrees()` cannot detect malformed porcelain (it ignores bad
 lines and always marks the first block primary), so a truncated listing with one
 valid first block would pass a naive `filter(isPrimary).length === 1` gate. D4
 therefore adds an **additive strict parser**, `listWorktreesStrict(repoRoot) → {
-ok, worktrees, reason }`, which rejects: content before the first block, a
-`worktree` line without an absolute path, unknown structural keys, and any result
+ok, worktrees, reason }` (using `--porcelain -z`, newline-safe), which validates
+each record against git's documented shapes and rejects: content before the first
+block; a `worktree` line without an absolute path; a NON-bare record missing HEAD
+or with neither/both of branch+detached; a `bare` record carrying
+HEAD/branch/detached; an invalid HEAD oid; a duplicate structural attribute; an
+unterminated/incomplete final record; an unknown structural key; and any result
 without exactly one primary.
 
 `reconcileOnStart` runs the whole transaction inside the D3 lock:
