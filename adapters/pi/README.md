@@ -77,3 +77,4 @@ Detailed guides live in [`docs/`](docs/):
 - [Migration from Claude Code](docs/migration-from-claude-code.md) — what maps, what's degraded, what's Pi-native.
 - [Extension development](docs/extension-development.md) — add commands, capabilities, tests, generated resources.
 - [Unattended runs & continuity](docs/unattended-runs.md) — the `unattended` posture, `pi-code continuity`, and how work survives compaction/restart (honestly degraded).
+- [Parallel worker worktrees](docs/worktree-workers.md) — running a worker session inside its own git worktree: the `CCT_WORKER_*` contract, the pre-spawn `cwd` handoff, fail-closed reconcile, and explicit-only cleanup.

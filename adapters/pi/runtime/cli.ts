@@ -25,6 +25,10 @@ import {
 import { CONFIG_SCHEMA_VERSION } from "./config/migrate.ts";
 import { seedCapabilities } from "./capabilities.ts";
 import { continuityReport } from "./workflow/continuity.ts";
+import {
+  primaryRepoRoot,
+  provisionWorktree,
+} from "./agents/worktree-lifecycle.ts";
 
 export interface CliResult {
   out: string;
@@ -382,7 +386,9 @@ function supervisorPresent(opts: CliOptions): boolean {
     path.dirname(path.dirname(path.dirname(opts.runtimeEntry))),
   );
   try {
-    return fs.existsSync(path.join(repoRoot, "scripts", "cooldown-supervisor.sh"));
+    return fs.existsSync(
+      path.join(repoRoot, "scripts", "cooldown-supervisor.sh"),
+    );
   } catch {
     return false;
   }
@@ -467,6 +473,109 @@ function continuity(opts: CliOptions, json: boolean): CliResult {
   return { out: lines.join("\n"), code: 0 };
 }
 
+/**
+ * Parse `worktree` argv (flag VALUES are not `--`-prefixed, so runCli's naive
+ * positional split is unsafe here — parse explicitly). `--force` is a boolean.
+ */
+function parseWorktreeArgs(argv: string[]): {
+  pos: string[];
+  flags: Record<string, string>;
+  force: boolean;
+} {
+  const pos: string[] = [];
+  const flags: Record<string, string> = {};
+  let force = false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--json") continue;
+    if (a === "--force") {
+      force = true;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      const next = argv[i + 1];
+      flags[a.slice(2)] = next && !next.startsWith("--") ? argv[++i] : "";
+    } else {
+      pos.push(a);
+    }
+  }
+  return { pos, flags, force };
+}
+
+const WORKTREE_USAGE =
+  "usage: pi-code worktree create <workerId> --branch <branch> " +
+  "[--base <ref>] [--path <dir>] [--tasks a,b] [--areas x,y] [--feature <id>]\n" +
+  "note: list / cleanup / reconcile are in-session commands (/cct:worktree ...)";
+
+/**
+ * `pi-code worktree create` (FR-1/FR-3/FR-5, T7.3 wiring) — provision a worker
+ * worktree + ledger record BEFORE the worker Pi is spawned, then print the
+ * resolved worktree path so the driver can launch the worker with that `cwd`.
+ * Runs the manager's validated create under the repo-scoped ledger lock; a
+ * protected branch / out-of-root / overlapping request is refused with no side
+ * effect. Diagnostics only: this never starts a session.
+ */
+function worktree(opts: CliOptions, json: boolean): CliResult {
+  const { pos, flags } = parseWorktreeArgs(opts.argv);
+  if ((pos[1] ?? "") !== "create") {
+    return { out: WORKTREE_USAGE, code: 64 };
+  }
+  const workerId = pos[2] ?? "";
+  const branch = flags.branch ?? "";
+  if (!workerId || !branch) {
+    return { out: WORKTREE_USAGE, code: 64 };
+  }
+  // Use the PRIMARY repo root (the checkout that owns .cct/worktrees.json), not
+  // gitToplevel — invoked from inside a linked worker worktree, gitToplevel would
+  // return that worker and split the ledger (bypassing the primary's overlap
+  // checks). primaryRepoRoot resolves the shared .git common dir's parent.
+  const repoRoot = primaryRepoRoot(opts.cwd);
+  if (!repoRoot) {
+    return {
+      out: json
+        ? jsonOut({ ok: false, reason: "not a git repository" })
+        : `error: not a git repository: ${opts.cwd}`,
+      code: 69,
+    };
+  }
+  const list = (s?: string): string[] =>
+    s
+      ? s
+          .split(/[,\s]+/)
+          .map((x) => x.trim())
+          .filter(Boolean)
+      : [];
+  const res = provisionWorktree(
+    repoRoot,
+    {
+      workerId,
+      branch,
+      base: flags.base || undefined,
+      worktreePath: flags.path || undefined,
+      tasks: list(flags.tasks),
+      areas: list(flags.areas),
+      featureId: flags.feature || null,
+    },
+    { mode: "print", now: new Date().toISOString() },
+  );
+  if (!res.ok) {
+    const msg = (res.errors ?? []).join("; ") || res.reason || "create failed";
+    return {
+      out: json
+        ? jsonOut({ ok: false, errors: res.errors, reason: res.reason })
+        : `error: ${msg}`,
+      code: 1,
+    };
+  }
+  // Success: print ONLY the path (text mode) so a driver can capture it.
+  return {
+    out: json
+      ? jsonOut({ ok: true, workerId, branch, path: res.path })
+      : (res.path ?? ""),
+    code: 0,
+  };
+}
+
 export function runCli(opts: CliOptions): CliResult {
   const args = [...opts.argv];
   const json = args.includes("--json");
@@ -490,9 +599,11 @@ export function runCli(opts: CliOptions): CliResult {
       return provenance(opts, json);
     case "continuity":
       return continuity(opts, json);
+    case "worktree":
+      return worktree(opts, json);
     default:
       return {
-        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export | resources | provenance | continuity)`,
+        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export | resources | provenance | continuity | worktree)`,
         code: 64,
       };
   }

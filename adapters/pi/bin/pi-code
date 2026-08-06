@@ -21,6 +21,10 @@
 #   resources [--json]    Report which source supplied each skill/prompt
 #   provenance [--json]   FR-027 report: version, source, capability + trust posture
 #   continuity [--json]   Durable resume state: SDD tasks, checkpoint, auto-build ledger
+#   worktree create <workerId> --branch <b> [--base <ref>] [--path <dir>] [--tasks a,b] [--areas x,y]
+#                         Provision a worker git worktree + ledger record (pre-spawn); prints the path
+#   worktree run <workerId> --branch <b> [prov flags] [-- <pi args>]
+#                         Provision AND launch pi inside the new worktree (one shot)
 #   init [dir] [--profile <name>] [--dry-run]
 #                         Scaffold a Pi-native project config + ownership manifest
 #   sync [--dry-run]      Regenerate managed resources (never touches your config)
@@ -87,7 +91,7 @@ diag() { [[ "${DIAGNOSTIC:-false}" == "true" ]] && echo "[pi-code] $*" >&2 || tr
 # A pi-code-launched session (or a reviewer child) must not re-enter the
 # launcher and stack runtimes. CCT_PI_CODE_ACTIVE marks an active launch.
 case "${1:-}" in
-  version|help|--help|-h|doctor|config|features|export|resources|provenance|continuity|init|sync) CCT_DIAGNOSTIC_CMD=true ;;
+  version|help|--help|-h|doctor|config|features|export|resources|provenance|continuity|worktree|init|sync) CCT_DIAGNOSTIC_CMD=true ;;
   *) CCT_DIAGNOSTIC_CMD=false ;;
 esac
 if [[ "${CCT_PI_CODE_ACTIVE:-}" == "1" && "$CCT_DIAGNOSTIC_CMD" == "false" ]]; then
@@ -244,6 +248,82 @@ cct_sync() {
   bash "$repo/adapters/pi/setup.sh" --sync
 }
 
+# `worktree run` — provision a worker worktree AND launch pi INSIDE it in one
+# step (the atomic provision+spawn happy path). Splits args at `--`: before it
+# are the `worktree create` provisioning flags; after it are pi arguments.
+# Re-execs the launcher with --project <worktree> so the child pi starts with
+# cwd = the worktree, and exports the CCT_WORKER_* contract so session_start
+# validates isolation.
+cct_worktree_run() {
+  local prov=() pia=() seen_dd=false a
+  for a in "$@"; do
+    if ! $seen_dd && [[ "$a" == "--" ]]; then seen_dd=true; continue; fi
+    if $seen_dd; then pia+=("$a"); else prov+=("$a"); fi
+  done
+  if [[ ${#prov[@]} -eq 0 ]]; then
+    err "usage: pi-code worktree run <workerId> --branch <b> [prov flags] [-- <pi args>]"
+    return 64
+  fi
+  # Pull workerId (first non-flag) + branch/base/... for the worker env.
+  local wid="" wbranch="" wbase="" wpath="" wareas="" wtasks="" wfeature="" i=0
+  while [[ $i -lt ${#prov[@]} ]]; do
+    case "${prov[$i]}" in
+      --branch)  wbranch="${prov[$((i+1))]:-}";  i=$((i+2)) ;;
+      --base)    wbase="${prov[$((i+1))]:-}";    i=$((i+2)) ;;
+      --path)    wpath="${prov[$((i+1))]:-}";    i=$((i+2)) ;;
+      --areas)   wareas="${prov[$((i+1))]:-}";   i=$((i+2)) ;;
+      --tasks)   wtasks="${prov[$((i+1))]:-}";   i=$((i+2)) ;;
+      --feature) wfeature="${prov[$((i+1))]:-}"; i=$((i+2)) ;;
+      --*)       i=$((i+1)) ;;
+      *)         [[ -z "$wid" ]] && wid="${prov[$i]}"; i=$((i+1)) ;;
+    esac
+  done
+  if [[ -z "$wid" || -z "$wbranch" ]]; then
+    err "worktree run requires <workerId> and --branch"
+    return 64
+  fi
+  # SECURITY (defense 1, pre-provision): the forwarded pi args re-enter the
+  # launcher's own option parser in the child. Reject the ones that would break
+  # the isolation contract BEFORE provisioning (so an invalid launch leaves no
+  # orphaned worktree): --project would move the worker OUT of its worktree and
+  # --no-cct would disable enforcement. Only the launcher-consumed portion (up to
+  # the first `--`, after which args go to pi) is scanned. The locked-path check
+  # in the child (defense 2) is the authoritative backstop.
+  local pa
+  for pa in ${pia[@]+"${pia[@]}"}; do
+    [[ "$pa" == "--" ]] && break
+    case "$pa" in
+      --project|--project=*|--no-cct)
+        err "worktree run: forwarded option '$pa' is not allowed — it would break worktree isolation."
+        err "Provide pi arguments after '--'; the worktree cwd and enforcement are fixed."
+        return 64 ;;
+    esac
+  done
+  # Provision (prints ONLY the worktree path on success; error text on failure).
+  local wt
+  wt="$("$SELF_PATH" worktree create "${prov[@]}")" || { err "worktree run: provisioning failed: $wt"; return 1; }
+  if [[ -z "$wt" ]]; then err "worktree run: provisioning produced no path"; return 1; fi
+  # Export the untrusted CCT_WORKER_* signal contract for isolation validation.
+  export CCT_WORKER_ID="$wid" CCT_WORKER_BRANCH="$wbranch"
+  [[ -n "$wbase" ]]    && export CCT_WORKER_BASE="$wbase"
+  [[ -n "$wpath" ]]    && export CCT_WORKER_PATH="$wpath"
+  [[ -n "$wareas" ]]   && export CCT_WORKER_AREAS="$wareas"
+  [[ -n "$wtasks" ]]   && export CCT_WORKER_TASKS="$wtasks"
+  [[ -n "$wfeature" ]] && export CCT_FEATURE_ID="$wfeature"
+  # Launch pi INSIDE the worktree via the normal launch path (--project cds there).
+  # A controller session sets CCT_PI_CODE_ACTIVE=1; this child worker is an
+  # INTENTIONAL handoff (a fresh, independently-enforced worker launch), not the
+  # accidental runtime-stacking the recursion guard defends against. Clear the
+  # marker for THIS one exec so the guard permits it — the child launcher re-sets
+  # it right before exec'ing pi. Targeted, not a broad weakening of the guard.
+  # CCT_LOCKED_PROJECT_PATH pins the worktree cwd + enforcement for the child
+  # (defense 2): even though forwarded args re-enter the public parser, the child
+  # refuses to launch anywhere other than "$wt" or with --no-cct.
+  unset CCT_PI_CODE_ACTIVE
+  export CCT_LOCKED_PROJECT_PATH="$wt"
+  exec "$SELF_PATH" --project "$wt" ${pia[@]+"${pia[@]}"}
+}
+
 # ── Parse CCT options ───────────────────────────────────────
 PROFILE="${CCT_PROFILE:-disciplined}"
 PROJECT_PATH=""
@@ -255,6 +335,12 @@ PEER_ENABLED=""      # "" = unset (neither --peer-review nor --peer-review-off)
 PEER_PROVIDER=""
 PEER_SCOPE="both"
 PI_ARGS=()
+
+# `worktree run` provisions AND launches inside the worktree (one shot).
+if [[ "${1:-}" == "worktree" && "${2:-}" == "run" ]]; then
+  cct_worktree_run "${@:3}"
+  exit $?
+fi
 
 case "${1:-}" in
   version)
@@ -269,10 +355,10 @@ case "${1:-}" in
     exit 0
     ;;
   help|--help|-h)
-    sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
-  config|features|export|resources|provenance|continuity)
+  config|features|export|resources|provenance|continuity|worktree)
     # Diagnostics run outside a Pi session; the runtime CLI resolves and
     # reports configuration and capability state (fail-closed on trust).
     if [[ -z "$RUNTIME_ENTRY" ]]; then
@@ -383,6 +469,30 @@ esac
 # backdoor that bypasses the mandatory-review gate (guardrail A). The enforced
 # export block below re-sets them from the parsed flags.
 unset CCT_PEER_REVIEW_ENABLED CCT_PEER_PROVIDER CCT_PEER_REVIEW_SCOPE
+
+# SECURITY (defense 2 — worktree run handoff): when a locked-project handoff is
+# in effect, the worker MUST launch inside exactly that worktree, enforced.
+# Forwarded args re-enter this parser, so re-validate the FINAL state here: an
+# overridden --project or a --no-cct is refused. This backstops the pre-provision
+# scan in cct_worktree_run and makes the public parser safe for the handoff.
+# Setting CCT_LOCKED_PROJECT_PATH externally can only RESTRICT a launch (fail
+# closed), never bypass anything.
+if [[ -n "${CCT_LOCKED_PROJECT_PATH:-}" ]]; then
+  if $NO_CCT; then
+    err "worktree run: --no-cct is not allowed for an enforced worker launch."
+    exit 64
+  fi
+  _cct_locked="$(cd "$CCT_LOCKED_PROJECT_PATH" 2>/dev/null && pwd -P || echo "$CCT_LOCKED_PROJECT_PATH")"
+  _cct_proj="$(cd "${PROJECT_PATH:-.}" 2>/dev/null && pwd -P || echo "${PROJECT_PATH:-}")"
+  if [[ "$_cct_proj" != "$_cct_locked" ]]; then
+    err "worktree run: refusing to launch outside the allocated worktree"
+    err "  requested: ${PROJECT_PATH:-<none>}"
+    err "  allocated: $CCT_LOCKED_PROJECT_PATH"
+    exit 64
+  fi
+  PROJECT_PATH="$_cct_locked"
+  unset CCT_LOCKED_PROJECT_PATH   # do not leak the internal lock into pi's env
+fi
 
 # ── Launch ──────────────────────────────────────────────────
 if ! PI_BIN="$(resolve_pi)"; then

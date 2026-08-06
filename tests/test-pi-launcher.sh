@@ -45,6 +45,8 @@ make_shim() {
 if [[ "\${1:-}" == "--version" ]]; then echo "$version"; exit 0; fi
 {
   echo "ARGS:\$*"
+  echo "PWD:\$PWD"
+  echo "CCT_WORKER_ID:\${CCT_WORKER_ID:-unset}"
   echo "CCT_RUNTIME:\${CCT_RUNTIME:-unset}"
   echo "CCT_PI_CODE_ACTIVE:\${CCT_PI_CODE_ACTIVE:-unset}"
   echo "CCT_PROFILE:\${CCT_PROFILE:-unset}"
@@ -370,6 +372,92 @@ assert "doctor --json reports the unattended posture" \
 
 assert "help documents the continuity command" \
   "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'continuity'"
+
+# ── #172: worktree provisioning subcommand ──────────────────
+assert "help documents the worktree command" \
+  "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'worktree create'"
+
+# `worktree` (no subcommand) must ROUTE to the runtime CLI (not the recursion
+# guard / pi launch) and print usage with exit 64. An empty CCT_HOME forces
+# the repo runtime fallback (managed install may be stale).
+WT_HOME="$TMP/wt-home"; mkdir -p "$WT_HOME"
+WT_RC=0
+WT_OUT=$(CCT_HOME="$WT_HOME" PATH="$DIAG_PATH" "$LAUNCHER" worktree 2>&1) || WT_RC=$?
+assert "worktree routes to the runtime CLI (usage shown)" \
+  "echo \"\$WT_OUT\" | grep -q 'worktree create'"
+assert "worktree with no subcommand exits 64" "[ \"\$WT_RC\" -eq 64 ]"
+WT_G_OUT=$(CCT_PI_CODE_ACTIVE=1 CCT_HOME="$WT_HOME" PATH="$DIAG_PATH" "$LAUNCHER" worktree 2>&1) || true
+assert "worktree allowed under the recursion guard" \
+  "echo \"\$WT_G_OUT\" | grep -q 'worktree create'"
+
+# `worktree run` provisions AND launches pi INSIDE the worktree (process
+# boundary). A fake `pi` shim (bin-new, on DIAG_PATH) records its own PWD and
+# CCT_WORKER_ID to capture.txt.
+if command -v git >/dev/null 2>&1; then
+  WR_REPO="$TMP/wr-repo"; mkdir -p "$WR_REPO"
+  git -C "$WR_REPO" init -q -b master
+  git -C "$WR_REPO" config user.email t@e.com
+  git -C "$WR_REPO" config user.name T
+  echo seed > "$WR_REPO/README.md"; git -C "$WR_REPO" add -A; git -C "$WR_REPO" commit -q -m seed
+  rm -f "$TMP/capture.txt"
+  ( cd "$WR_REPO" && CCT_HOME="$TMP/wr-home" PATH="$DIAG_PATH" "$LAUNCHER" worktree run fix-9 --branch fix/nine ) >/dev/null 2>&1 || true
+  WR_WT="$(cd "$(dirname "$WR_REPO")/.cct-worktrees/wr-repo/fix-9" 2>/dev/null && pwd -P || echo MISSING)"
+  assert "worktree run launches pi INSIDE the worktree" \
+    "test -f \"\$TMP/capture.txt\" && grep -q \"PWD:\$WR_WT\" \"\$TMP/capture.txt\""
+  assert "worktree run exports CCT_WORKER_ID to the child" \
+    "grep -q 'CCT_WORKER_ID:fix-9' \"\$TMP/capture.txt\""
+  assert "worktree run wrote the record to the PRIMARY ledger" \
+    "grep -q '\"workerId\": \"fix-9\"' \"\$WR_REPO/.cct/worktrees.json\""
+
+  # A controller (an active pi session) sets CCT_PI_CODE_ACTIVE=1. `worktree run`
+  # must still hand off and launch the worker — the recursion guard permits this
+  # intentional child, not the accidental runtime-stacking it defends against.
+  WR_REPO2="$TMP/wr-repo2"; mkdir -p "$WR_REPO2"
+  git -C "$WR_REPO2" init -q -b master
+  git -C "$WR_REPO2" config user.email t@e.com
+  git -C "$WR_REPO2" config user.name T
+  echo seed > "$WR_REPO2/README.md"; git -C "$WR_REPO2" add -A; git -C "$WR_REPO2" commit -q -m seed
+  rm -f "$TMP/capture.txt"
+  ( cd "$WR_REPO2" && CCT_PI_CODE_ACTIVE=1 CCT_HOME="$TMP/wr-home2" PATH="$DIAG_PATH" "$LAUNCHER" worktree run ctl-1 --branch feature/ctl-1 ) >/dev/null 2>&1 || true
+  WR_WT2="$(cd "$(dirname "$WR_REPO2")/.cct-worktrees/wr-repo2/ctl-1" 2>/dev/null && pwd -P || echo MISSING)"
+  assert "worktree run launches the worker even under an active controller (CCT_PI_CODE_ACTIVE=1)" \
+    "test -f \"\$TMP/capture.txt\" && grep -q \"PWD:\$WR_WT2\" \"\$TMP/capture.txt\""
+  assert "worktree run under a controller still exports CCT_WORKER_ID" \
+    "grep -q 'CCT_WORKER_ID:ctl-1' \"\$TMP/capture.txt\""
+
+  # SECURITY: forwarded args must NOT be able to escape the worktree or disable
+  # enforcement. `-- --project <primary>` / `--no-cct` are rejected before
+  # provisioning (no orphan) and the worker never launches in the primary.
+  PRIMARY_ESC="$TMP/primary-escape"; mkdir -p "$PRIMARY_ESC"
+  rm -f "$TMP/capture.txt"
+  ESC_RC=0
+  ( cd "$WR_REPO2" && CCT_HOME="$TMP/wr-home2" PATH="$DIAG_PATH" "$LAUNCHER" worktree run esc-1 --branch feature/esc-1 -- --project "$PRIMARY_ESC" ) >/dev/null 2>&1 || ESC_RC=$?
+  assert "worktree run rejects a forwarded --project (isolation escape)" "[ \"\$ESC_RC\" -ne 0 ]"
+  assert "rejected --project escape launches NOTHING (no capture)" "[ ! -f \"\$TMP/capture.txt\" ]"
+  assert "rejected --project escape leaves NO orphan ledger record" \
+    "! grep -q 'esc-1' \"\$WR_REPO2/.cct/worktrees.json\" 2>/dev/null"
+  # Pre-provision rejection means NO git side effects at all: no worktree dir…
+  assert "rejected --project escape created NO worktree directory" \
+    "test ! -e \"\$(dirname \"\$WR_REPO2\")/.cct-worktrees/wr-repo2/esc-1\""
+  # …and no branch.
+  assert "rejected --project escape created NO git branch" \
+    "! git -C \"\$WR_REPO2\" show-ref --verify --quiet refs/heads/feature/esc-1"
+
+  ESC2_RC=0
+  ( cd "$WR_REPO2" && CCT_HOME="$TMP/wr-home2" PATH="$DIAG_PATH" "$LAUNCHER" worktree run esc-2 --branch feature/esc-2 -- --project "$PRIMARY_ESC" --no-cct ) >/dev/null 2>&1 || ESC2_RC=$?
+  assert "worktree run rejects forwarded --project + --no-cct" "[ \"\$ESC2_RC\" -ne 0 ]"
+
+  # Defense-2 backstop, exercised directly: a locked-project handoff refuses a
+  # mismatched --project / --no-cct even entering the public parser.
+  D2_RC=0
+  ( cd "$WR_REPO2" && CCT_HOME="$TMP/wr-home2" PATH="$DIAG_PATH" CCT_LOCKED_PROJECT_PATH="$WR_WT2" "$LAUNCHER" --project "$PRIMARY_ESC" ) >/dev/null 2>&1 || D2_RC=$?
+  assert "locked-project backstop refuses a mismatched --project" "[ \"\$D2_RC\" -ne 0 ]"
+  D3_RC=0
+  ( cd "$WR_REPO2" && CCT_HOME="$TMP/wr-home2" PATH="$DIAG_PATH" CCT_LOCKED_PROJECT_PATH="$WR_WT2" "$LAUNCHER" --no-cct --project "$WR_WT2" ) >/dev/null 2>&1 || D3_RC=$?
+  assert "locked-project backstop refuses --no-cct" "[ \"\$D3_RC\" -ne 0 ]"
+else
+  echo "  SKIP: worktree run (git unavailable)"
+fi
 
 # ── T6.4: init / sync (FR-000a) ─────────────────────────────
 echo "--- init / sync ---"
