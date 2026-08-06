@@ -29,6 +29,7 @@ import {
   primaryRepoRoot,
   provisionWorktree,
 } from "./agents/worktree-lifecycle.ts";
+import { readReport } from "./agents/team-commands.ts";
 
 export interface CliResult {
   out: string;
@@ -576,6 +577,41 @@ function worktree(opts: CliOptions, json: boolean): CliResult {
   };
 }
 
+/**
+ * `pi-code team status|synthesize [--json]` (Slice A of #174) — READ-ONLY. It
+ * renders whenever a valid team ledger exists at the canonical root, regardless
+ * of the (out-of-session, project-untrusted) `agents.teams_enabled`. `--json`
+ * adds `enabled: "true" | "unknown"` (never an authoritative `false` — a
+ * project-scoped opt-in is unobservable out of session) + the CLI trust note.
+ */
+function team(
+  opts: CliOptions,
+  positional: string[],
+  json: boolean,
+): CliResult {
+  const sub = (positional[1] ?? "status").toLowerCase();
+  if (sub !== "status" && sub !== "synthesize") {
+    return { out: "usage: pi-code team status|synthesize [--json]", code: 64 };
+  }
+  const base = readReport({ cwd: opts.cwd }, sub === "synthesize", json);
+  if (!json) return base;
+  const cfg = load(opts);
+  const enabled =
+    cfg.resolved.get("agents.teams_enabled")?.value === true
+      ? "true"
+      : "unknown";
+  let report: unknown;
+  try {
+    report = JSON.parse(base.out);
+  } catch {
+    report = { raw: base.out };
+  }
+  return {
+    out: jsonOut({ enabled, trustNote: TRUST_NOTE, report }),
+    code: base.code,
+  };
+}
+
 export function runCli(opts: CliOptions): CliResult {
   const args = [...opts.argv];
   const json = args.includes("--json");
@@ -601,9 +637,11 @@ export function runCli(opts: CliOptions): CliResult {
       return continuity(opts, json);
     case "worktree":
       return worktree(opts, json);
+    case "team":
+      return team(opts, positional, json);
     default:
       return {
-        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export | resources | provenance | continuity | worktree)`,
+        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export | resources | provenance | continuity | worktree | team)`,
         code: 64,
       };
   }

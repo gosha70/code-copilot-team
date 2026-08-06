@@ -25,6 +25,8 @@
 #                         Provision a worker git worktree + ledger record (pre-spawn); prints the path
 #   worktree run <workerId> --branch <b> [prov flags] [-- <pi args>]
 #                         Provision AND launch pi inside the new worktree (one shot)
+#   team status|synthesize [--json]
+#                         Read-only team coordination snapshot (opt-in: agents.teams_enabled)
 #   init [dir] [--profile <name>] [--dry-run]
 #                         Scaffold a Pi-native project config + ownership manifest
 #   sync [--dry-run]      Regenerate managed resources (never touches your config)
@@ -91,7 +93,7 @@ diag() { [[ "${DIAGNOSTIC:-false}" == "true" ]] && echo "[pi-code] $*" >&2 || tr
 # A pi-code-launched session (or a reviewer child) must not re-enter the
 # launcher and stack runtimes. CCT_PI_CODE_ACTIVE marks an active launch.
 case "${1:-}" in
-  version|help|--help|-h|doctor|config|features|export|resources|provenance|continuity|worktree|init|sync) CCT_DIAGNOSTIC_CMD=true ;;
+  version|help|--help|-h|doctor|config|features|export|resources|provenance|continuity|worktree|team|init|sync) CCT_DIAGNOSTIC_CMD=true ;;
   *) CCT_DIAGNOSTIC_CMD=false ;;
 esac
 if [[ "${CCT_PI_CODE_ACTIVE:-}" == "1" && "$CCT_DIAGNOSTIC_CMD" == "false" ]]; then
@@ -355,10 +357,10 @@ case "${1:-}" in
     exit 0
     ;;
   help|--help|-h)
-    sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
-  config|features|export|resources|provenance|continuity|worktree)
+  config|features|export|resources|provenance|continuity|worktree|team)
     # Diagnostics run outside a Pi session; the runtime CLI resolves and
     # reports configuration and capability state (fail-closed on trust).
     if [[ -z "$RUNTIME_ENTRY" ]]; then
