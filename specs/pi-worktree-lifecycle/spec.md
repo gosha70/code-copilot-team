@@ -50,8 +50,13 @@ force/reset/`branch -D`, symlink-escape containment), with temp-repo tests.
   can `cd`/`--project` into it) and **`pi-code worktree run <id> --branch <b>
   [prov flags] -- <pi args>`** (the atomic happy path: provisions, exports the
   `CCT_WORKER_*` env, and re-execs the launcher with `--project <worktree>` so
-  pi starts with `cwd = worktree`). The `session_start` extension **does not**
-  create-and-hope the session relocates. The CLI provisioner resolves the
+  pi starts with `cwd = worktree`). Forwarded pi args (after `--`) re-enter the
+  launcher's own parser, so `worktree run` must keep the worktree cwd and
+  enforcement **immutable**: a forwarded `--project`/`--no-cct` is rejected
+  before provisioning (no orphan), and the child launch is pinned by an internal
+  `CCT_LOCKED_PROJECT_PATH` guard (refuses any cwd ≠ the worktree, or `--no-cct`).
+  The `session_start` extension **does not** create-and-hope the session
+  relocates. The CLI provisioner resolves the
   **primary** repo root (the checkout owning `.cct/worktrees.json`) via the
   shared git common dir — never a linked worktree's own toplevel — so invoking it
   from inside a worker does not split the ledger.
@@ -162,10 +167,12 @@ force/reset/`branch -D`, symlink-escape containment), with temp-repo tests.
    `reconcileOnStart` is not lost. A lock whose owner process is alive is never
    stolen (even when old); a crashed owner's lock is reclaimed.
 8. **Launcher/process boundary:** `pi-code worktree run` launches pi with
-   `cwd == worktree` and the `CCT_WORKER_*` env exported (proven with a pi shim),
-   and writes the record to the **primary** ledger. `pi-code worktree create`
-   invoked from **inside a linked worktree** also writes to the primary ledger,
-   never a split one.
+   `cwd == worktree` and the `CCT_WORKER_*` env exported (proven with a pi shim,
+   incl. under an active controller `CCT_PI_CODE_ACTIVE=1`), and writes the record
+   to the **primary** ledger. `pi-code worktree create` invoked from **inside a
+   linked worktree** also writes to the primary ledger, never a split one. A
+   forwarded `--project`/`--no-cct` cannot escape the worktree or disable
+   enforcement — rejected pre-provision (no orphan) and by the child backstop.
 9. **Strict record validation:** the porcelain parser rejects incomplete records
    (valid path but missing HEAD; HEAD without branch/detached; bare with
    HEAD/branch/detached; invalid HEAD oid; duplicate attrs; unterminated final

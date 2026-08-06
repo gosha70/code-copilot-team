@@ -424,6 +424,31 @@ if command -v git >/dev/null 2>&1; then
     "test -f \"\$TMP/capture.txt\" && grep -q \"PWD:\$WR_WT2\" \"\$TMP/capture.txt\""
   assert "worktree run under a controller still exports CCT_WORKER_ID" \
     "grep -q 'CCT_WORKER_ID:ctl-1' \"\$TMP/capture.txt\""
+
+  # SECURITY: forwarded args must NOT be able to escape the worktree or disable
+  # enforcement. `-- --project <primary>` / `--no-cct` are rejected before
+  # provisioning (no orphan) and the worker never launches in the primary.
+  PRIMARY_ESC="$TMP/primary-escape"; mkdir -p "$PRIMARY_ESC"
+  rm -f "$TMP/capture.txt"
+  ESC_RC=0
+  ( cd "$WR_REPO2" && CCT_HOME="$TMP/wr-home2" PATH="$DIAG_PATH" "$LAUNCHER" worktree run esc-1 --branch feature/esc-1 -- --project "$PRIMARY_ESC" ) >/dev/null 2>&1 || ESC_RC=$?
+  assert "worktree run rejects a forwarded --project (isolation escape)" "[ \"\$ESC_RC\" -ne 0 ]"
+  assert "rejected --project escape launches NOTHING (no capture)" "[ ! -f \"\$TMP/capture.txt\" ]"
+  assert "rejected --project escape leaves NO orphan ledger record" \
+    "! grep -q 'esc-1' \"\$WR_REPO2/.cct/worktrees.json\" 2>/dev/null"
+
+  ESC2_RC=0
+  ( cd "$WR_REPO2" && CCT_HOME="$TMP/wr-home2" PATH="$DIAG_PATH" "$LAUNCHER" worktree run esc-2 --branch feature/esc-2 -- --project "$PRIMARY_ESC" --no-cct ) >/dev/null 2>&1 || ESC2_RC=$?
+  assert "worktree run rejects forwarded --project + --no-cct" "[ \"\$ESC2_RC\" -ne 0 ]"
+
+  # Defense-2 backstop, exercised directly: a locked-project handoff refuses a
+  # mismatched --project / --no-cct even entering the public parser.
+  D2_RC=0
+  ( cd "$WR_REPO2" && CCT_HOME="$TMP/wr-home2" PATH="$DIAG_PATH" CCT_LOCKED_PROJECT_PATH="$WR_WT2" "$LAUNCHER" --project "$PRIMARY_ESC" ) >/dev/null 2>&1 || D2_RC=$?
+  assert "locked-project backstop refuses a mismatched --project" "[ \"\$D2_RC\" -ne 0 ]"
+  D3_RC=0
+  ( cd "$WR_REPO2" && CCT_HOME="$TMP/wr-home2" PATH="$DIAG_PATH" CCT_LOCKED_PROJECT_PATH="$WR_WT2" "$LAUNCHER" --no-cct --project "$WR_WT2" ) >/dev/null 2>&1 || D3_RC=$?
+  assert "locked-project backstop refuses --no-cct" "[ \"\$D3_RC\" -ne 0 ]"
 else
   echo "  SKIP: worktree run (git unavailable)"
 fi

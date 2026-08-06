@@ -282,6 +282,23 @@ cct_worktree_run() {
     err "worktree run requires <workerId> and --branch"
     return 64
   fi
+  # SECURITY (defense 1, pre-provision): the forwarded pi args re-enter the
+  # launcher's own option parser in the child. Reject the ones that would break
+  # the isolation contract BEFORE provisioning (so an invalid launch leaves no
+  # orphaned worktree): --project would move the worker OUT of its worktree and
+  # --no-cct would disable enforcement. Only the launcher-consumed portion (up to
+  # the first `--`, after which args go to pi) is scanned. The locked-path check
+  # in the child (defense 2) is the authoritative backstop.
+  local pa
+  for pa in ${pia[@]+"${pia[@]}"}; do
+    [[ "$pa" == "--" ]] && break
+    case "$pa" in
+      --project|--project=*|--no-cct)
+        err "worktree run: forwarded option '$pa' is not allowed — it would break worktree isolation."
+        err "Provide pi arguments after '--'; the worktree cwd and enforcement are fixed."
+        return 64 ;;
+    esac
+  done
   # Provision (prints ONLY the worktree path on success; error text on failure).
   local wt
   wt="$("$SELF_PATH" worktree create "${prov[@]}")" || { err "worktree run: provisioning failed: $wt"; return 1; }
@@ -299,7 +316,11 @@ cct_worktree_run() {
   # accidental runtime-stacking the recursion guard defends against. Clear the
   # marker for THIS one exec so the guard permits it — the child launcher re-sets
   # it right before exec'ing pi. Targeted, not a broad weakening of the guard.
+  # CCT_LOCKED_PROJECT_PATH pins the worktree cwd + enforcement for the child
+  # (defense 2): even though forwarded args re-enter the public parser, the child
+  # refuses to launch anywhere other than "$wt" or with --no-cct.
   unset CCT_PI_CODE_ACTIVE
+  export CCT_LOCKED_PROJECT_PATH="$wt"
   exec "$SELF_PATH" --project "$wt" ${pia[@]+"${pia[@]}"}
 }
 
@@ -448,6 +469,30 @@ esac
 # backdoor that bypasses the mandatory-review gate (guardrail A). The enforced
 # export block below re-sets them from the parsed flags.
 unset CCT_PEER_REVIEW_ENABLED CCT_PEER_PROVIDER CCT_PEER_REVIEW_SCOPE
+
+# SECURITY (defense 2 — worktree run handoff): when a locked-project handoff is
+# in effect, the worker MUST launch inside exactly that worktree, enforced.
+# Forwarded args re-enter this parser, so re-validate the FINAL state here: an
+# overridden --project or a --no-cct is refused. This backstops the pre-provision
+# scan in cct_worktree_run and makes the public parser safe for the handoff.
+# Setting CCT_LOCKED_PROJECT_PATH externally can only RESTRICT a launch (fail
+# closed), never bypass anything.
+if [[ -n "${CCT_LOCKED_PROJECT_PATH:-}" ]]; then
+  if $NO_CCT; then
+    err "worktree run: --no-cct is not allowed for an enforced worker launch."
+    exit 64
+  fi
+  _cct_locked="$(cd "$CCT_LOCKED_PROJECT_PATH" 2>/dev/null && pwd -P || echo "$CCT_LOCKED_PROJECT_PATH")"
+  _cct_proj="$(cd "${PROJECT_PATH:-.}" 2>/dev/null && pwd -P || echo "${PROJECT_PATH:-}")"
+  if [[ "$_cct_proj" != "$_cct_locked" ]]; then
+    err "worktree run: refusing to launch outside the allocated worktree"
+    err "  requested: ${PROJECT_PATH:-<none>}"
+    err "  allocated: $CCT_LOCKED_PROJECT_PATH"
+    exit 64
+  fi
+  PROJECT_PATH="$_cct_locked"
+  unset CCT_LOCKED_PROJECT_PATH   # do not leak the internal lock into pi's env
+fi
 
 # ── Launch ──────────────────────────────────────────────────
 if ! PI_BIN="$(resolve_pi)"; then

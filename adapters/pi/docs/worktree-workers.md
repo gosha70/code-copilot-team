@@ -73,6 +73,15 @@ enforced child launch, so it clears the active-launch marker for that one
 re-exec (the child re-sets it before starting pi). The recursion guard still
 blocks accidental runtime-stacking everywhere else.
 
+The worktree cwd and enforcement are **immutable** across the handoff. Arguments
+after `--` are forwarded to pi, but they re-enter the launcher's own parser, so
+`worktree run` refuses a forwarded `--project` or `--no-cct` **before
+provisioning** (no orphaned worktree), and the child launch is additionally
+pinned by an internal `CCT_LOCKED_PROJECT_PATH` guard that refuses to start
+anywhere other than the allocated worktree or with enforcement disabled. To run
+an unenforced worker, use `worktree create` + a manual `pi-code --no-cct` launch
+instead.
+
 ## The `CCT_WORKER_*` env contract
 
 Set by the spawning driver. **Every value is untrusted** and re-validated by the
