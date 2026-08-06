@@ -436,6 +436,12 @@ if command -v git >/dev/null 2>&1; then
   assert "rejected --project escape launches NOTHING (no capture)" "[ ! -f \"\$TMP/capture.txt\" ]"
   assert "rejected --project escape leaves NO orphan ledger record" \
     "! grep -q 'esc-1' \"\$WR_REPO2/.cct/worktrees.json\" 2>/dev/null"
+  # Pre-provision rejection means NO git side effects at all: no worktree dir…
+  assert "rejected --project escape created NO worktree directory" \
+    "test ! -e \"\$(dirname \"\$WR_REPO2\")/.cct-worktrees/wr-repo2/esc-1\""
+  # …and no branch.
+  assert "rejected --project escape created NO git branch" \
+    "! git -C \"\$WR_REPO2\" show-ref --verify --quiet refs/heads/feature/esc-1"
 
   ESC2_RC=0
   ( cd "$WR_REPO2" && CCT_HOME="$TMP/wr-home2" PATH="$DIAG_PATH" "$LAUNCHER" worktree run esc-2 --branch feature/esc-2 -- --project "$PRIMARY_ESC" --no-cct ) >/dev/null 2>&1 || ESC2_RC=$?
