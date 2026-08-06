@@ -3,131 +3,155 @@ spec_mode: full
 feature_id: pi-worktree-lifecycle
 risk_category: security
 justification: |
-  Wires the T7.3 worktree manager into the live Pi session lifecycle. It touches
-  session_start (auto-provisioning) and an explicit teardown command that runs
-  git worktree operations. Safety-sensitive: it must never convert the primary
-  worktree, never auto-remove live work, and validate untrusted worker-signal env
-  before any git side effect. The manager + its safety model already exist and are
-  tested; this is wiring only.
+  Wires the T7.3 worktree manager into the live Pi session so worker sessions
+  actually run inside an isolated git worktree. Safety-sensitive: it must never
+  convert the primary worktree, must serialize ledger mutations against parallel
+  workers, must fail closed on git-listing failures (never mark live workers
+  stale), and must validate untrusted CCT_WORKER_* env before any git side effect.
+  The manager + safety model already exist and are tested; this is wiring only,
+  corrected per the PR #183 review so isolation is real (the worker runs inside
+  its worktree), not merely a created directory.
 status: draft
 date: 2026-08-06
 origin:
   issue: https://github.com/gosha70/code-copilot-team/issues/172
+  review: https://github.com/gosha70/code-copilot-team/pull/183
   origin_claim: |
-    The T7.3 worktree manager (worktree.ts, .cct/worktrees.json, safety model,
-    tests) is already merged (#154/#155). The only gap is live wiring into Pi's
-    session lifecycle: create-on-worker-start via session_start, an explicit
-    cleanup command (no session-end event exists), and a reconcile pass. Write-time
-    enforcement and auto-remove-on-crash are explicitly out of scope.
+    The T7.3 worktree manager is merged (#154/#155). The gap is live wiring into
+    Pi's session lifecycle. The #183 review corrected the model: creating a
+    worktree at session_start does NOT isolate the already-running session, so
+    creation must happen before the worker Pi is spawned (cwd=worktreePath) and
+    the extension validates/attaches. It also requires: concurrency-safe ledger
+    mutation, primary-excluded + fail-closed reconciliation, and repo-namespaced
+    paths. Write-time enforcement and auto-remove-on-crash stay out of scope.
 ---
 
 # Plan: Pi worktree lifecycle wiring
 
 ## Existing facts (verified)
 
-- `adapters/pi/runtime/agents/worktree.ts` exports the complete library:
-  `createWorker(repoRoot, ledger, req: CreateRequest, nowIso)`,
+- Library complete: `createWorker(repoRoot, ledger, req, nowIso)`,
   `cleanupWorker(repoRoot, ledger, workerId, {force?})`,
   `reconcile(ledger, liveWorktreePaths)`, `pruneWorktrees(repoRoot)`,
-  `setMergeStatus`, `loadLedger`/`saveLedger`, `validateCreateRequest`
-  (managed-root containment + protected-branch refusal + overlap),
-  `detectOwnershipConflicts`, `cleanupEligibility`, `listWorktrees`,
-  `isWorktreeClean`. `CreateRequest = {workerId, branch, worktreePath, base?,
-  featureId?, tasks?, ownedAreas?}`.
-- `adapters/pi/runtime/index.ts` already registers `pi.on("session_start", …)`
-  (checkpoint recovery wires there) and `pi.registerCommand("cct:doctor", …)` /
-  `cct:config` / `cct:explain`. These are the two wiring points — no new event.
-- `pi.on("tool_call", …)` exists but is the enforcement path; **write-time**
-  containment (pinning tool writes to the worktree) is explicitly out of scope.
-- Pi exposes **no** session-end event (`hooks/events.ts`: Stop/turn-end
-  `unsupported`) — so cleanup cannot be automatic; it is command/driver-driven.
-- Today there is no `CCT_WORKER_*` env contract; only a subagent-depth env var
-  exists (`agents/caps.ts`). This feature defines the worker-signal env contract.
+  `validateCreateRequest` (managed-root containment + protected-branch + overlap),
+  `cleanupEligibility({isClean,isPrimary,force})`, `listWorktrees`,
+  `isWorktreeClean`, `loadLedger`/`saveLedger`. `CreateRequest = {workerId,
+  branch, worktreePath, base?, featureId?, tasks?, ownedAreas?}`.
+- `listWorktrees()` returns `[]` on git failure and its **first entry is always
+  the primary** (`isPrimary`). `reconcile()` marks **every** live path not in the
+  ledger as foreign. Ledger I/O has **no lock/CAS**.
+- `index.ts` registers `pi.on("session_start", …)` (checkpoint recovery wires
+  there; `state.cwd = ctx.cwd ?? process.cwd()`) and `pi.registerCommand(…)`
+  (`cct:doctor`/`config`/`explain`). No session-end event exists.
 
-## Design
+## Design (corrected per the #183 review)
 
-### D1 — A thin lifecycle module, not logic in index.ts
-Add `adapters/pi/runtime/agents/worktree-lifecycle.ts` holding the wiring:
-`onSessionStartWorktree(state, env)` and the `/cct:worktree` command handlers. It
-**composes** the existing library (loadLedger → validateCreateRequest →
-createWorker / reconcile / cleanupWorker → saveLedger) and audits each action.
-`index.ts` only *calls* it from the existing `session_start` handler and
-`registerCommand`, keeping index.ts thin and the logic unit-testable.
+### D1 — Creation is pre-spawn; the extension validates, it does not create (FR-1/FR-2)
+**Blocker fix (review #1).** Pi cannot relocate a running session, so creating a
+worktree at `session_start` would leave the agent editing the *primary* checkout.
+Split the responsibilities:
 
-### D2 — Worker signal (FR-2)
-`session_start` reads env: `CCT_WORKER_ID` gates everything. When present, build a
-`CreateRequest { workerId: CCT_WORKER_ID, branch: CCT_WORKER_BRANCH,
-worktreePath: <managed-root>/<sanitized workerId>, base: CCT_WORKER_BASE?,
-featureId: CCT_FEATURE_ID?, tasks: split(CCT_WORKER_TASKS), ownedAreas:
-split(CCT_WORKER_AREAS) }` and run `validateCreateRequest` (which enforces
-managed-root containment + protected-branch refusal + overlap) before
-`createWorker`. **No `CCT_WORKER_ID` ⇒ the handler returns immediately** — the
-primary session provisions nothing. The env is untrusted, so all string fields
-are sanitized/validated by the existing validators; a validation failure warns +
-audits and does **not** create.
+- **Provision (pre-spawn):** a launcher subcommand
+  `pi-code worktree create <workerId> --branch <b> [--base <base>] [--path <p>]
+  [--tasks …] [--areas …]` calls `createWorker` (under the D3 lock) and prints the
+  resolved `worktreePath`. The driver/controller then launches the worker with
+  `cwd = worktreePath` and the `CCT_WORKER_*` env. (Equivalently, a controller
+  calls `createWorker` directly and spawns with that cwd.)
+- **Validate/attach (session_start):** when `CCT_WORKER_ID` is set, the extension
+  loads the ledger record and asserts `process.cwd()` **and** `git rev-parse
+  --show-toplevel` both equal the record's `worktreePath`. Match ⇒ attach +
+  audit `worktree.attach`. Mismatch/missing ⇒ **fail closed**: push a warning,
+  audit `worktree.not-isolated`, and do not treat the session as isolated.
 
-### D3 — Explicit cleanup command (FR-3)
-`/cct:worktree`:
-- `cleanup <workerId> [--force]` → `cleanupWorker(...)`. Its existing
-  `cleanupEligibility` refuses a worktree that is not (clean **and**
-  merged/abandoned); `--force` is honored but audited as an override.
-- `list` → the ledger records + `listWorktrees` (live/foreign), read-only.
-- `reconcile` → the same pass as D4, on demand.
-No `session.deleted`/Stop hook is used; teardown is explicit by design.
+### D2 — Thin lifecycle module (`agents/worktree-lifecycle.ts`)
+Holds `attachOnSessionStart(state, env)`, `reconcileOnStart(repoRoot)`, the
+`/cct:worktree` subcommand handlers, and the D3 lock helper. It **composes** the
+existing library and audits each action. `index.ts` only calls it.
 
-### D4 — Reconcile-on-start (FR-4)
-In `session_start` (after any worker create), run `pruneWorktrees` then
-`reconcile(ledger, listWorktrees(...).paths)` → mark vanished `active` records
-`stale`, surface foreign worktrees in a warning. **No removal of live work.**
+### D3 — Serialized ledger mutations (FR-5, review #2)
+Add `withLedgerLock(repoRoot, fn)`: acquire `.cct/worktrees.lock` via an atomic
+`fs.mkdirSync(lockDir)` (or `open` with `wx`) with bounded retry + timeout; on
+timeout, fail closed with a clear message. Every mutation —
+`create`, `cleanup`, reconcile-save — runs its full `load → validate → git op →
+save` inside the lock, so parallel worker startups cannot lose each other's
+records or both win an owned-area conflict. Stale-lock reclamation uses the
+lock's own mtime + a bounded age.
 
-### D5 — Audit + honesty (FR-5/FR-6)
-Every create/cleanup/reconcile calls the existing `audit(...)` with a
-`worktree.<action>` rule + subject `<workerId>:<branch>`. `pi-code doctor` /
-docs state cleanup is explicit-only because Pi exposes no session-end event.
+### D4 — Fail-closed reconcile with the primary excluded (FR-7, reviews #3 & #4)
+`reconcileOnStart`:
+1. `live = listWorktrees(repoRoot)`.
+2. **Trust gate:** if `live.filter(isPrimary).length !== 1` ⇒ git listing is
+   untrustworthy (failure/malformed) ⇒ audit `worktree.reconcile-skipped` and
+   **return without pruning/reconciling/saving** (ledger untouched).
+3. `pruneWorktrees` — if it reports failure, likewise skip save.
+4. `workerPaths = live.filter(w => !w.isPrimary && fs.existsSync(w.path))
+     .map(w => w.path)`.
+5. `reconcile(ledger, workerPaths)` → mark vanished `stale`, collect foreign;
+   `saveLedger` **only** when something changed, under the D3 lock; audit.
+
+### D5 — Namespaced path default (FR-4, review "additional")
+`defaultWorktreePath(repoRoot, workerId) =
+<repo-parent>/.cct-worktrees/<basename(repoRoot)>/<sanitize(workerId)>` — avoids
+two sibling repos colliding on the same `workerId`. An explicit `CCT_WORKER_PATH`
+is honored but still goes through `validateCreateRequest` containment.
+
+### D6 — Cleanup command (FR-6)
+`/cct:worktree cleanup <workerId> [--force]` → `cleanupWorker` under the lock;
+`list` → ledger + `listWorktrees` (read-only); `reconcile` → D4. No session-end
+hook is used — teardown is explicit by design.
+
+### D7 — Audit + honesty (FR-8)
+Each action audits `worktree.<create|attach|cleanup|reconcile|not-isolated|
+reconcile-skipped>` with subject `<workerId>:<branch>`. Docs + `pi-code doctor`
+state cleanup is explicit-only (no Pi session-end event).
 
 ## Deliverables
 
-1. `agents/worktree-lifecycle.ts` — `onSessionStartWorktree` + `/cct:worktree`
-   handlers, composing the existing library, with audit.
-2. `index.ts` — 3 call sites: the worker-create + reconcile in the existing
-   `session_start` handler, and `registerCommand("cct:worktree", …)`.
-3. Launcher/docs: the `/cct:worktree` command in the usage help + a short section
-   documenting the `CCT_WORKER_*` env contract and the explicit-cleanup boundary.
-4. Tests (below).
+1. `agents/worktree-lifecycle.ts` — attach/validate, fail-closed reconcile, the
+   `withLedgerLock` helper, namespaced-path derivation, `/cct:worktree` handlers.
+2. `index.ts` — call `attachOnSessionStart` + `reconcileOnStart` in the existing
+   `session_start` handler; `registerCommand("cct:worktree", …)`.
+3. `bin/pi-code` — `worktree create …` provisioning subcommand (routes to the
+   runtime), usage help entry.
+4. Docs — the `CCT_WORKER_*` contract, the pre-spawn `cwd` handoff, and the
+   explicit-cleanup boundary.
+5. Tests (below).
 
 ## Sequencing
 
-1. Lifecycle module + unit tests (pure composition; no index wiring yet).
-2. `session_start` create + reconcile wiring + tests (worker vs primary).
-3. `/cct:worktree` command + tests (cleanup preconditions, list, reconcile).
-4. Docs + honesty note + `pi-code doctor` surfacing.
+1. `withLedgerLock` + namespaced path + `worktree create` subcommand (+ tests).
+2. `attachOnSessionStart` validate/fail-closed + `index.ts` wiring (+ tests).
+3. Fail-closed `reconcileOnStart` (+ tests).
+4. `/cct:worktree cleanup|list|reconcile` command (+ tests).
+5. Docs + launcher help + honesty note.
 
-## Test strategy
+## Test strategy (mapped to the review)
 
-- **Worker create:** with `CCT_WORKER_ID` set (temp repo), `session_start`
-  provisions a worktree + ledger record; **without it, nothing is created** and
-  the primary worktree is untouched.
-- **Validation gate:** a worker signal targeting `master`/`main`, an out-of-root
-  path, or an overlapping owned area is refused (no side effect) and audited.
-- **Cleanup command:** merged/abandoned + clean → removed; dirty or unmerged →
-  refused; `--force` overrides and is audited.
-- **Reconcile:** a vanished worktree path → its record marked `stale`; a foreign
-  worktree → reported, never removed.
-- **No-event honesty:** assert wiring subscribes only to `session_start` (and
-  registers the command) — no Stop/`session.deleted` subscription.
-- **Audit:** each action emits a `worktree.*` audit record.
+- **Isolation (review #1):** create a worker, launch a real command with
+  `cwd=worktreePath`; assert `pwd == worktreePath` and `git rev-parse
+  --show-toplevel == worktreePath`. A `session_start` whose `cwd` ≠ record fails
+  closed (audited `worktree.not-isolated`); primary worktree unchanged.
+- **Concurrency (review #2):** start two `createWorker`s simultaneously → both
+  records survive; two conflicting owned-area requests → exactly one succeeds.
+- **Primary-not-foreign (review #3):** a repo with only its primary → reconcile
+  produces **zero** foreign warnings and no ledger change.
+- **Fail-closed (review #4):** `git worktree list` failure, `prune` failure, and
+  malformed porcelain each leave the ledger **byte-for-byte unchanged** + audit
+  `worktree.reconcile-skipped`.
+- **Cleanup:** merged/abandoned+clean → removed; dirty/unmerged → refused;
+  `--force` → override + audit.
+- **No-invented-event:** wiring subscribes only to `session_start` + registers the
+  command (asserted).
 
-Home: `tests/pi-runtime/worktree-lifecycle.test.mjs` (unit, temp-repo), extending
-the existing worktree test fixtures; launcher help assertion in
-`tests/test-pi-launcher.sh`.
+Home: `tests/pi-runtime/worktree-lifecycle.test.mjs` (unit + temp-repo),
+launcher-help assertion in `tests/test-pi-launcher.sh`.
 
-## Open questions for approval
+## Resolved decisions (were open questions; settled by the #183 review)
 
-1. **Env contract names** — `CCT_WORKER_ID` / `CCT_WORKER_BRANCH` /
-   `CCT_WORKER_BASE` / `CCT_WORKER_TASKS` / `CCT_WORKER_AREAS`. Lean: yes (mirrors
-   the `CCT_PEER_*` / `CCT_PI_MODE` launcher-env style). Confirm names.
-2. **Worktree path derivation** — `<managed-root>/<sanitized workerId>` (managed
-   root = repo parent, matching `createWorker`'s containment). Confirm, or take an
-   explicit `CCT_WORKER_PATH`.
-3. **Reconcile on every start** vs only when a worker signal is present. Lean:
-   always (cheap, keeps the ledger honest) — confirm.
+1. **Lifecycle model** → controller/`pi-code worktree create` provisions
+   pre-spawn; the extension validates/attaches (not create-and-switch).
+2. **Path** → namespaced `<repo-parent>/.cct-worktrees/<repo-name>/<worker-id>`;
+   explicit `CCT_WORKER_PATH` still validated.
+3. **Reconcile** → run on every start, but **fail-closed** (skip on untrustworthy
+   git listing) and **primary-excluded**.
+4. **Concurrency** → repo-scoped lockfile around every ledger mutation.
