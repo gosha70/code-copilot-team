@@ -50,9 +50,12 @@ is an **epic-level decision** that folds into #174's identity/auth topology
 shaping. Slice A must not claim to prevent impersonation.
 
 What Slice A **does** enforce (a real improvement over id-in-args): the actor is
-taken from the **session-declared** identity, and authorization is **re-validated
-against the current ledger inside the lock on every mutation** — never a cached
-role/status.
+taken from the **session-declared** identity (`teamId` **and** `memberId`, both
+mandatory), the declared `teamId` is **validated against `ledger.teamId`** on
+every mutation (team binding — a session cannot act on a team it does not
+declare, nor on a replacement team that reuses a member id), and authorization is
+**re-validated against the current ledger inside the lock on every mutation** —
+never a cached role/status.
 
 ## User Scenarios
 
@@ -82,31 +85,43 @@ role/status.
   the split-ledger FR-2 prevents). Reads report "no canonical repository root".
   Every path — load/save/message/lock/status/synthesis/advisory/CLI — uses the
   resolved `root`.
-- **FR-3 — Declared identity; actor never from args.** The actor for actor-scoped
-  subcommands (`claim`, `complete`, `fail`, `approve`, `message` sender, `leave`,
-  `shutdown`) comes from a **declared** identity contract (`CCT_TEAM_ID` +
-  `CCT_TEAM_MEMBER_ID`), never from a command argument. Session state stores
-  **only the immutable declared ids** — `{ teamId?, memberId }` — not a cached
-  role/status. (Attribution, not authentication — see the identity model above.)
+- **FR-3 — Declared identity (both ids MANDATORY); actor never from args.** The
+  declared identity contract is `{ teamId: string; memberId: string }` — **both
+  `CCT_TEAM_ID` and `CCT_TEAM_MEMBER_ID` are required** for any actor-scoped or
+  membership-requiring subcommand; a missing/empty declared id ⇒ refuse + audit
+  `team.identity-invalid`. The actor comes from this contract, never a command
+  argument. Session state stores **only these two immutable declared ids** — not
+  a cached role/status. (Attribution, not authentication — see the identity model
+  above.)
 - **FR-4 — Authorization re-validated per mutation, inside the lock.** Every
-  mutation, after loading the ledger under the lock, resolves
-  `actor = members.find(memberId)` and requires `actor?.status === "active"`
-  (else refuse). Lead-only subcommands (`assign`, `activate`, `close`, `recover`,
-  `approve`) additionally require `actor.role === "lead"` **as of the loaded
-  ledger** — never a session-start cache. `message` likewise loads the ledger
-  under the lock and validates sender-active / recipient-valid / team-not-closed
-  before appending. **Sole-lead guard:** `leave` by the only active lead of a
-  non-closed team is **refused** (no lead-transfer op exists in Slice A —
-  close/transfer is out of scope); document it.
+  mutation, after loading the ledger under the lock, requires
+  `identity.teamId === ledger.teamId` (**team binding** — else refuse + audit
+  `team.identity-invalid`; prevents a stale session operating on a replacement
+  team), then resolves `actor = members.find(identity.memberId)` and requires
+  `actor?.status === "active"`. Authorization tiers:
+  - **`create`** — bootstrap exception: requires the declared identity and
+    `<teamId arg> === identity.teamId`; does **not** require pre-existing
+    membership (it establishes the lead).
+  - **`join` / `task`** — require the declared identity + the actor to be an
+    **active member** under the lock; do **not** require lead.
+  - **`assign` / `approve` / `activate` / `recover` / `close`** — require the
+    actor to be the **active lead** as of the loaded ledger (never a session-start
+    cache; a lead that has since `left` loses authority).
+  `message` likewise loads the ledger under the lock and validates
+  team-binding / sender-active / recipient-valid / team-not-closed before
+  appending. **Sole-lead guard:** `leave` by the only active lead of a non-closed
+  team is **refused** (no lead-transfer op in Slice A); document it.
 - **FR-5 — Safe create + bootstrap.** `create <teamId> [--no-plan-approval]`
   (approval **required by default**, matching the library; the flag opts out).
-  Under the lock: if `team.json` exists — valid ⇒ refuse "already exists";
-  corrupt ⇒ refuse "ledger invalid", **never overwrite**. Absent ⇒
-  `createTeam(teamId, memberId, now, {planRequired: !noPlanApproval})` where the
-  lead is the **declared `CCT_TEAM_MEMBER_ID`**; save. **Bootstrap:** the declared
-  member becomes a valid active lead in the just-saved ledger; because session
-  state holds only the declared id, subsequent commands re-validate against that
-  ledger with **no restart** required.
+  The `<teamId>` argument **must equal `identity.teamId`** (else refuse) — a
+  session cannot create a team it does not declare itself part of. Under the lock:
+  if `team.json` exists — valid ⇒ refuse "already exists"; corrupt ⇒ refuse
+  "ledger invalid", **never overwrite**. Absent ⇒
+  `createTeam(teamId, identity.memberId, now, {planRequired: !noPlanApproval})`
+  (lead = the declared member); save. **Bootstrap:** the declared member becomes
+  a valid active lead in the just-saved ledger; because session state holds only
+  the declared ids, subsequent commands re-validate against that ledger with
+  **no restart** required.
 - **FR-6 — Serialized mutations + correct message path.** Every mutation runs
   `resolve-root → lock → load → authz → op → save` (create per FR-5). `message`
   uses the dedicated locked append `postMessage(root, actor, to, body, now)`,
@@ -152,24 +167,31 @@ role/status.
 2. **Canonical ledger across worktrees:** two real linked worktrees — claim in A
    is visible from B; concurrent claim of one task ⇒ exactly one wins in the
    **primary** ledger.
-3. **Authorization is live, not cached:** after the lead `leave`s, a subsequent
-   lead-only command by that session is **refused** (re-validated against the
-   ledger); a non-member / non-active actor is refused; a non-lead admin command
-   is refused. The **sole active lead cannot `leave`** a non-closed team.
-4. **Identity is attribution (documented):** actor is taken from
-   `CCT_TEAM_MEMBER_ID`, not the argument; a declared id **absent** from the
-   ledger is refused. (A session declaring another *existing* member's id is NOT
-   prevented — asserted as a documented limitation, not a bug.)
-5. **Safe create + bootstrap:** duplicate `create` and `create` over a corrupt
+3. **Authorization is live, not cached:** an **active teammate** who becomes
+   `left` is **refused** on its next actor-scoped command (re-validated, not
+   cached); the same stale-cache property for a **lead** is proven with an
+   externally-modified/reloaded ledger fixture (the normal lifecycle cannot make
+   the sole lead `left`); a non-member / non-active actor and a non-lead admin
+   command are refused. The **sole active lead cannot `leave`** a non-closed team.
+4. **Team binding + join/task authz:** declared `CCT_TEAM_ID=A` + `create B` ⇒
+   refused, **no ledger**; declared `teamId=A` against an existing ledger `B` ⇒
+   **all** mutations refused (`team.identity-invalid`); `join`/`task` with a
+   **missing, unknown, or inactive** declared identity ⇒ refused; a valid active
+   member (non-lead) **can** `join`/`task`.
+5. **Identity is attribution (documented):** actor from `CCT_TEAM_MEMBER_ID` (not
+   the argument); a declared id absent from the ledger is refused. A session
+   declaring another *existing* member's id in the *same* team is NOT prevented —
+   asserted as a documented limitation, not a bug.
+6. **Safe create + bootstrap:** duplicate `create` and `create` over a corrupt
    `team.json` refuse and leave the file **byte-for-byte unchanged**; after a
    successful `create`, the declared lead can immediately run a lead-only command
    (no restart). `--no-plan-approval` sets `planRequired:false`; default keeps
    `true`.
-6. **Contract + message + CLI:** double/cross/over-cap/pre-approval claims and
+7. **Contract + message + CLI:** double/cross/over-cap/pre-approval claims and
    close-while-claimed refused; `message` appends via the locked path (validates
-   sender-active/recipient/team-open), surfaces `false` as failure, no `team.json`
-   rewrite; `pi-code team status` renders under project-only opt-in with JSON
-   `enabled`/trust.
-7. **No new event source / no regression:** wiring uses only `registerCommand` /
+   team-binding/sender-active/recipient/team-open), surfaces `false` as failure,
+   no `team.json` rewrite; `pi-code team status` renders under project-only opt-in
+   with JSON `enabled`/trust.
+8. **No new event source / no regression:** wiring uses only `registerCommand` /
    `session_start` / the CLI; the extracted lock keeps the worktree concurrency +
    stale-owner tests green.
