@@ -371,6 +371,23 @@ assert "doctor --json reports the unattended posture" \
 assert "help documents the continuity command" \
   "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'continuity'"
 
+# ── #172: worktree provisioning subcommand ──────────────────
+assert "help documents the worktree command" \
+  "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'worktree create'"
+
+# `worktree` (no subcommand) must ROUTE to the runtime CLI (not the recursion
+# guard / pi launch) and print usage with exit 64. An empty CCT_HOME forces
+# the repo runtime fallback (managed install may be stale).
+WT_HOME="$TMP/wt-home"; mkdir -p "$WT_HOME"
+WT_RC=0
+WT_OUT=$(CCT_HOME="$WT_HOME" PATH="$DIAG_PATH" "$LAUNCHER" worktree 2>&1) || WT_RC=$?
+assert "worktree routes to the runtime CLI (usage shown)" \
+  "echo \"\$WT_OUT\" | grep -q 'worktree create'"
+assert "worktree with no subcommand exits 64" "[ \"\$WT_RC\" -eq 64 ]"
+WT_G_OUT=$(CCT_PI_CODE_ACTIVE=1 CCT_HOME="$WT_HOME" PATH="$DIAG_PATH" "$LAUNCHER" worktree 2>&1) || true
+assert "worktree allowed under the recursion guard" \
+  "echo \"\$WT_G_OUT\" | grep -q 'worktree create'"
+
 # ── T6.4: init / sync (FR-000a) ─────────────────────────────
 echo "--- init / sync ---"
 

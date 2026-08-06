@@ -41,6 +41,15 @@ import {
 import type { PermissionRuleSet, PermissionVerdict } from "./policy/permissions.ts";
 import { matchCandidates } from "./policy/protected.ts";
 import { audit, resolveAuditMode } from "./policy/audit.ts";
+import {
+  attachOnSessionStart,
+  isolationStateFromAttach,
+  isolationToolBlock,
+  reconcileOnStart,
+  worktreeCleanup,
+  worktreeListReport,
+} from "./agents/worktree-lifecycle.ts";
+import type { IsolationState } from "./agents/worktree-lifecycle.ts";
 import { hookMappingReport, translateToolCall } from "./hooks/events.ts";
 import { dispatchHooks, resolveHookScripts, resolveHookScriptsDir } from "./hooks/adapter.ts";
 import { defaultProjectTrustFinding, trustDrift } from "./config/trust.ts";
@@ -130,6 +139,8 @@ interface CctRuntimeState {
   sandbox: { gate: SandboxGateResult; detection: SandboxDetection } | null;
   /** Directory of reusable shell hooks, or null when none (T5.1/FR-010). */
   hookScriptsDir: string | null;
+  /** Worktree isolation state (#172): invalid => block edit/write/bash. */
+  worktreeIsolation: IsolationState;
 }
 
 
@@ -297,6 +308,7 @@ export default async function (pi: any): Promise<void> {
     context: null,
     contextInjected: false,
     sandbox: null,
+    worktreeIsolation: "not-a-worker",
     hookScriptsDir: null,
   };
 
@@ -496,6 +508,29 @@ export default async function (pi: any): Promise<void> {
         });
       }
     }
+    // T7.3 wiring (issue #172): validate that a worker session actually
+    // runs inside its worktree, and reconcile the ledger fail-closed. Both
+    // audit internally; a primary/interactive session no-ops on attach.
+    {
+      const wtMode = resolveAuditMode(state.interactive);
+      const attach = attachOnSessionStart(
+        { cwd: state.cwd, mode: wtMode },
+        process.env,
+      );
+      state.worktreeIsolation = isolationStateFromAttach(attach.status);
+      if (attach.warning) state.warnings.push(attach.warning);
+      const rec = reconcileOnStart(state.cwd, { mode: wtMode });
+      if (rec.foreign.length > 0) {
+        state.warnings.push(
+          `worktree reconcile: ${rec.foreign.length} foreign worktree(s) present (reported, not removed)`,
+        );
+      }
+      if (rec.stale.length > 0) {
+        state.warnings.push(
+          `worktree reconcile: marked ${rec.stale.length} vanished worker(s) stale`,
+        );
+      }
+    }
     injectAlwaysContext(state, ctx);
     if (!(state.profile in BUILTIN_PROFILES)) {
       state.warnings.push(`unknown profile '${state.profile}' — using defaults chain only`);
@@ -556,6 +591,26 @@ export default async function (pi: any): Promise<void> {
     }
     const toolName: string = String(event?.toolName ?? event?.name ?? "");
     const args: any = event?.input ?? event?.args ?? {};
+
+    // #172 (FR-2, fail-closed): a worker whose isolation FAILED validation
+    // must not touch the tree. Warn+audit is not enough — block every
+    // edit/write/bash until isolation is corrected.
+    {
+      const iso = isolationToolBlock(state.worktreeIsolation, toolName);
+      if (iso.block) {
+        return block(
+          "worktree",
+          `tool_call:${toolName}`,
+          {
+            decision: "deny",
+            effective: "deny",
+            rule: "worktree.not-isolated",
+            reason: iso.reason ?? "worktree isolation not verified",
+          },
+          toolName,
+        );
+      }
+    }
 
     // 1) Tool allow/deny (profile allowlists, e.g. peer-reviewer read-only).
     const toolVerdict = checkTool(state.rules, toolName);
@@ -686,6 +741,42 @@ export default async function (pi: any): Promise<void> {
   pi.registerCommand?.("cct:features", {
     description: "List CCT capability records (JSON)",
     handler: async (ctx: any) => emit(ctx, JSON.stringify(state.capabilities, null, 2)),
+  });
+
+  pi.registerCommand?.("cct:worktree", {
+    description:
+      "Manage worker worktrees: /cct:worktree list | cleanup <workerId> [--force] | reconcile",
+    handler: async (ctx: any, args?: string) => {
+      const parts = (typeof args === "string" ? args : "")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+      const sub = (parts[0] ?? "list").toLowerCase();
+      const wtMode = resolveAuditMode(state.interactive);
+      if (sub === "list") return emit(ctx, worktreeListReport(state.cwd));
+      if (sub === "reconcile") {
+        const r = reconcileOnStart(state.cwd, { mode: wtMode });
+        return emit(
+          ctx,
+          r.status === "skipped"
+            ? `reconcile skipped (fail-closed): ${r.reason}`
+            : `reconcile: ${r.stale.length} stale, ${r.foreign.length} foreign (reported, not removed)`,
+        );
+      }
+      if (sub === "cleanup") {
+        const workerId = parts[1];
+        if (!workerId) {
+          return emit(ctx, "usage: /cct:worktree cleanup <workerId> [--force]");
+        }
+        const force = parts.includes("--force");
+        const res = worktreeCleanup(state.cwd, workerId, { force, mode: wtMode });
+        return emit(ctx, res.message);
+      }
+      return emit(
+        ctx,
+        `unknown subcommand '${sub}' (list | cleanup <workerId> [--force] | reconcile)`,
+      );
+    },
   });
 
   pi.registerCommand?.("cct:hooks", {

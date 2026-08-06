@@ -60,34 +60,56 @@ Split the responsibilities:
 - **Validate/attach (session_start):** when `CCT_WORKER_ID` is set, the extension
   loads the ledger record and asserts `process.cwd()` **and** `git rev-parse
   --show-toplevel` both equal the record's `worktreePath`. Match ⇒ attach +
-  audit `worktree.attach`. Mismatch/missing ⇒ **fail closed**: push a warning,
-  audit `worktree.not-isolated`, and do not treat the session as isolated.
+  audit `worktree.attach`, isolation state `ok`. Mismatch/missing ⇒ **fail
+  closed OPERATIONALLY**: warn, audit `worktree.not-isolated`, set isolation
+  state `invalid`.
+- **Enforce (tool_call):** the existing `tool_call` gate reads the isolation
+  state via `isolationToolBlock(state, toolName)`; while `invalid` it **blocks
+  every `edit`/`write`/`bash`** (audited) so the worker cannot run from the wrong
+  directory. Warn-only would let the agent keep editing the primary checkout —
+  the exact failure this feature prevents. Read-only tools pass.
 
 ### D2 — Thin lifecycle module (`agents/worktree-lifecycle.ts`)
 Holds `attachOnSessionStart(state, env)`, `reconcileOnStart(repoRoot)`, the
 `/cct:worktree` subcommand handlers, and the D3 lock helper. It **composes** the
 existing library and audits each action. `index.ts` only calls it.
 
-### D3 — Serialized ledger mutations (FR-5, review #2)
+### D3 — Serialized ledger mutations, full transaction + owned lock (FR-5, reviews #2 & #3)
 Add `withLedgerLock(repoRoot, fn)`: acquire `.cct/worktrees.lock` via an atomic
-`fs.mkdirSync(lockDir)` (or `open` with `wx`) with bounded retry + timeout; on
-timeout, fail closed with a clear message. Every mutation —
-`create`, `cleanup`, reconcile-save — runs its full `load → validate → git op →
-save` inside the lock, so parallel worker startups cannot lose each other's
-records or both win an owned-area conflict. Stale-lock reclamation uses the
-lock's own mtime + a bounded age.
+`fs.mkdirSync(lockDir)` with bounded retry + timeout; on timeout, fail closed
+with a clear message. Every mutation — `create`, `cleanup`, **and reconcile in
+full** — runs its **entire** `load → list → prune → validate → git op → save`
+inside the lock (not just the final write), so a reconcile that loaded the ledger
+cannot save a stale copy over a concurrent create, and parallel startups cannot
+both win an owned-area conflict.
 
-### D4 — Fail-closed reconcile with the primary excluded (FR-7, reviews #3 & #4)
-`reconcileOnStart`:
-1. `live = listWorktrees(repoRoot)`.
-2. **Trust gate:** if `live.filter(isPrimary).length !== 1` ⇒ git listing is
-   untrustworthy (failure/malformed) ⇒ audit `worktree.reconcile-skipped` and
-   **return without pruning/reconciling/saving** (ledger untouched).
-3. `pruneWorktrees` — if it reports failure, likewise skip save.
-4. `workerPaths = live.filter(w => !w.isPrimary && fs.existsSync(w.path))
-     .map(w => w.path)`.
-5. `reconcile(ledger, workerPaths)` → mark vanished `stale`, collect foreign;
-   `saveLedger` **only** when something changed, under the D3 lock; audit.
+**Lock ownership (review #3):** the lock dir holds an `owner.json` with the
+holder's `{ pid, token, ts }`. Reclamation does **not** rely on age alone — a
+slow but legitimate checkout could outlive the threshold. A lock is reclaimed
+only when its owner is provably **not alive** (`process.kill(pid, 0)` ⇒ `ESRCH`),
+or — when liveness is unknowable (no owner file / unsupported) — after a bounded
+age. Release removes the lock only when THIS call still owns the recorded token
+(a reclaimer may have taken over), so a live holder's lock is never stolen.
+
+### D4 — Fail-closed reconcile, strict listing + primary excluded (FR-7, reviews #3 & #4)
+The tolerant `listWorktrees()` cannot detect malformed porcelain (it ignores bad
+lines and always marks the first block primary), so a truncated listing with one
+valid first block would pass a naive `filter(isPrimary).length === 1` gate. D4
+therefore adds an **additive strict parser**, `listWorktreesStrict(repoRoot) → {
+ok, worktrees, reason }`, which rejects: content before the first block, a
+`worktree` line without an absolute path, unknown structural keys, and any result
+without exactly one primary.
+
+`reconcileOnStart` runs the whole transaction inside the D3 lock:
+1. `listed = listWorktreesStrict(repoRoot)`; if `!listed.ok` ⇒ audit
+   `worktree.reconcile-skipped`, **return without pruning/reconciling/saving**.
+2. Belt-and-suspenders: if not exactly one `isPrimary` ⇒ skip likewise.
+3. `pruneWorktrees` — if it reports failure, skip save.
+4. `workerPaths = listed.worktrees.filter(w => !w.isPrimary &&
+     fs.existsSync(w.path)).map(w => resolveWorktreePath(w.path))`.
+5. `loadLedger` → `reconcile(ledger, workerPaths)` → mark vanished `stale`,
+   collect foreign; `saveLedger` **only** when something changed; audit. All of
+   1–5 execute while holding the lock (review #3).
 
 ### D5 — Namespaced path default (FR-4, review "additional")
 `defaultWorktreePath(repoRoot, workerId) =
@@ -107,14 +129,18 @@ state cleanup is explicit-only (no Pi session-end event).
 
 ## Deliverables
 
-1. `agents/worktree-lifecycle.ts` — attach/validate, fail-closed reconcile, the
-   `withLedgerLock` helper, namespaced-path derivation, `/cct:worktree` handlers.
+1. `agents/worktree-lifecycle.ts` — attach/validate + `isolationToolBlock` /
+   `isolationStateFromAttach`, the strict `parseWorktreePorcelainStrict` /
+   `listWorktreesStrict`, fail-closed `reconcileOnStart`, the pid/token-owned
+   `withLedgerLock`, namespaced-path derivation, provisioning + `/cct:worktree`
+   handlers.
 2. `index.ts` — call `attachOnSessionStart` + `reconcileOnStart` in the existing
-   `session_start` handler; `registerCommand("cct:worktree", …)`.
-3. `bin/pi-code` — `worktree create …` provisioning subcommand (routes to the
-   runtime), usage help entry.
-4. Docs — the `CCT_WORKER_*` contract, the pre-spawn `cwd` handoff, and the
-   explicit-cleanup boundary.
+   `session_start` handler (store the isolation state); wire `isolationToolBlock`
+   into the existing `tool_call` gate; `registerCommand("cct:worktree", …)`.
+3. `bin/pi-code` + `cli.ts` — `worktree create …` provisioning subcommand (routes
+   to the runtime), usage help entry.
+4. Docs — the `CCT_WORKER_*` contract, the pre-spawn `cwd` handoff, the
+   fail-closed block, and the explicit-cleanup boundary.
 5. Tests (below).
 
 ## Sequencing
@@ -127,21 +153,27 @@ state cleanup is explicit-only (no Pi session-end event).
 
 ## Test strategy (mapped to the review)
 
-- **Isolation (review #1):** create a worker, launch a real command with
-  `cwd=worktreePath`; assert `pwd == worktreePath` and `git rev-parse
-  --show-toplevel == worktreePath`. A `session_start` whose `cwd` ≠ record fails
-  closed (audited `worktree.not-isolated`); primary worktree unchanged.
-- **Concurrency (review #2):** start two `createWorker`s simultaneously → both
-  records survive; two conflicting owned-area requests → exactly one succeeds.
-- **Primary-not-foreign (review #3):** a repo with only its primary → reconcile
-  produces **zero** foreign warnings and no ledger change.
-- **Fail-closed (review #4):** `git worktree list` failure, `prune` failure, and
-  malformed porcelain each leave the ledger **byte-for-byte unchanged** + audit
-  `worktree.reconcile-skipped`.
+- **Isolation + fail-closed block (review #1):** create a worker, launch a real
+  command with `cwd=worktreePath`; assert `pwd`/`show-toplevel == worktreePath`.
+  A `session_start` whose `cwd` ≠ record → audits `worktree.not-isolated`, state
+  `invalid`, and `isolationToolBlock(invalid, edit/write/bash)` returns **block**
+  (read-only tools pass); primary worktree unchanged. Plus the source assertion
+  that `index.ts` wires the block into `tool_call`.
+- **Concurrency + lock ownership (review #2/#3):** two provisions both survive;
+  conflicting owned-area requests → exactly one succeeds; a lock owned by a
+  **live** pid is NOT stolen even when old, while a **dead** pid's lock is
+  reclaimed.
+- **Primary-not-foreign (review #3 orig):** a repo with only its primary →
+  reconcile produces **zero** foreign warnings and no ledger change.
+- **Fail-closed + strict parse (review #4):** `listWorktreesStrict` failure,
+  `prune` failure, and a strict-parser **rejection** each leave the ledger
+  **byte-for-byte unchanged** + audit `worktree.reconcile-skipped`;
+  `parseWorktreePorcelainStrict` is unit-tested directly against malformed inputs
+  (truncated block, relative path, pre-block content, unknown key, empty).
 - **Cleanup:** merged/abandoned+clean → removed; dirty/unmerged → refused;
   `--force` → override + audit.
-- **No-invented-event:** wiring subscribes only to `session_start` + registers the
-  command (asserted).
+- **No-invented-event:** wiring subscribes only to `session_start` +
+  `registerCommand` + the existing `tool_call` gate (asserted).
 
 Home: `tests/pi-runtime/worktree-lifecycle.test.mjs` (unit + temp-repo),
 launcher-help assertion in `tests/test-pi-launcher.sh`.
@@ -150,8 +182,12 @@ launcher-help assertion in `tests/test-pi-launcher.sh`.
 
 1. **Lifecycle model** → controller/`pi-code worktree create` provisions
    pre-spawn; the extension validates/attaches (not create-and-switch).
-2. **Path** → namespaced `<repo-parent>/.cct-worktrees/<repo-name>/<worker-id>`;
+2. **Isolation failure** → not warn-only: set state `invalid` and **block**
+   edit/write/bash at the existing `tool_call` gate (review #1).
+3. **Path** → namespaced `<repo-parent>/.cct-worktrees/<repo-name>/<worker-id>`;
    explicit `CCT_WORKER_PATH` still validated.
-3. **Reconcile** → run on every start, but **fail-closed** (skip on untrustworthy
-   git listing) and **primary-excluded**.
-4. **Concurrency** → repo-scoped lockfile around every ledger mutation.
+4. **Reconcile** → run on every start inside the lock, **fail-closed** on an
+   untrustworthy/malformed listing (strict result-bearing parse) and
+   **primary-excluded**.
+5. **Concurrency** → repo-scoped lock around the **full** mutation transaction,
+   with pid/token ownership so a live holder's lock is never stolen (review #3).
