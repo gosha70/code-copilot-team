@@ -15,7 +15,7 @@ reconcile, no force/reset/`branch -D`, symlink-escape containment), with tests
 against a real temp repo (`worktree-git.test.mjs`, `worktree-planners.test.mjs`).
 The one gap: it is a library with **no live wiring into a running Pi session.**
 
-## User scenarios
+## User Scenarios
 
 - **US1** — As a driver/team-controller orchestrating parallel workers, when a
   *worker* Pi session starts it is automatically given an isolated git worktree +
