@@ -181,3 +181,64 @@ MAP-ATLAS repo under `experiment/results.md` (with `experiment/rubric.md`).
 4. **When you reproduce this, control the variables that actually bit us:** pin
    the *same model* on both, expect non-determinism, and be clear about which
    behaviors are the harness's vs the adaptation layer's.
+
+---
+
+## 8. Postscript — hands-on demo review (UI)
+
+After scoring, both demos were run in a browser and driven with Chrome
+automation. This surfaced concrete, verified UI differences the static scoring
+missed — and the same "each strong where the other is lighter" pattern.
+
+### Runnability — Claude ships an app; pi ships components
+- **Claude's demo runs out of the box** (`npm run dev`, Vite).
+- **pi's demo shipped no bundler** — React components + `index.html`, but nothing
+  to serve them. A minimal Vite dev server had to be added just to view it
+  (committed as a review follow-up so it's reproducible).
+
+### What each UI looks like
+
+Claude's field logger (with review fixes applied — fit-to-track, live track line,
+crosshair cursor, Esri Ocean bathymetry base + OpenSeaMap seamark overlay):
+
+![Claude Code demo](images/mapatlas-claude-demo.jpg)
+
+pi's field logger (bootstrapped) — a more polished, centered layout with custom
+fit/locate map controls and a live OSM + OpenSeaMap seamark base:
+
+![pi.dev demo](images/mapatlas-pi-demo.jpg)
+
+- **pi's UI is the more polished-looking** (centered column, custom map controls,
+  real tiles + seamarks out of the box).
+- **but pi points at public tile hosts** (`tile.openstreetmap.org`,
+  `tiles.openseamap.org`), which the spec forbids (§8: "do not point production at
+  public tile hosts"). Claude used the compliant placeholder (grey until tiles are
+  wired). On this detail, **Claude was spec-faithful; pi deviated to look good.**
+
+### Recorder error handling — pi more correct
+The clearest correctness win for pi: geolocation timeouts.
+- **pi** sets `timeout: 30_000` on `watchPosition` and surfaces the error
+  ("Recorder error: timeout") — honouring the spec's `"timeout"` error kind and
+  giving a field user honest feedback that GPS failed.
+- **Claude** sets **no timeout** → `watchPosition` waits silently forever. It
+  never errors, and its own declared `"timeout"` error kind is **unreachable dead
+  code** — a subtle spec-fidelity gap.
+
+### The attribution flag
+Both demos showed a Ukrainian-flag prefix in the map attribution. That is
+**Leaflet 1.9's built-in default attribution prefix** (defined in `leaflet-src.js`),
+not anything either harness wrote and unrelated to the map data. The fix — and the
+general rule now in ADR-0008 — is engine-owned, neutral, overridable attribution:
+the engine sets the prefix explicitly (`setPrefix(false)`) rather than inheriting a
+library default. (The renderer itself is also being moved to MapLibre GL; see
+`specs/decisions.md` ADR-0008 in the MAP-ATLAS repo.)
+
+### Net
+The UI review reinforces the verdict: **Claude ships something you can run that
+adheres to the spec; pi ships something that looks more finished but skipped the
+tooling to run it and bent a spec rule to do so — while handling recorder errors
+more correctly.** Neither dominates.
+
+_Review changes committed as follow-ups (not part of the scored build): Claude
+`9722fe0`, pi `3211c58` in the MAP-ATLAS repo._
+
