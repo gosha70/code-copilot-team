@@ -59,6 +59,7 @@ if [[ "\${1:-}" == "--version" ]]; then echo "$version"; exit 0; fi
   echo "CCT_ENV_SCRUB_OFF:\${CCT_ENV_SCRUB_OFF:-unset}"
   echo "DASH_TOKEN_COUNT:\$(env | grep -c '^my-app_TOKEN=')"
   echo "CCT_CONFIG_API_KEY:\${CCT_CONFIG__providers__api_key:-unset}"
+  echo "CCT_CLI_SETS:\${CCT_CLI_SETS:-unset}"
 } > "$TMP/capture.txt"
 exit \${PI_SHIM_EXIT:-0}
 SHIM
@@ -487,11 +488,13 @@ if command -v git >/dev/null 2>&1; then
   git -C "$ES_REPO" config user.name T
   echo seed > "$ES_REPO/README.md"; git -C "$ES_REPO" add -A; git -C "$ES_REPO" commit -q -m seed
   rm -f "$TMP/capture.txt"
-  ( cd "$ES_REPO" && GITHUB_TOKEN=leakme CCT_CONFIG__providers__api_key=sk-leak CCT_HOME="$TMP/es-home1" PATH="$DIAG_PATH" "$LAUNCHER" worktree run scrub-1 --branch feature/scrub-1 ) >/dev/null 2>&1 || true
+  ( cd "$ES_REPO" && GITHUB_TOKEN=leakme CCT_CONFIG__providers__api_key=sk-leak CCT_CLI_SETS="providers.api_key=sk-cli" CCT_HOME="$TMP/es-home1" PATH="$DIAG_PATH" "$LAUNCHER" worktree run scrub-1 --branch feature/scrub-1 ) >/dev/null 2>&1 || true
   assert "worktree run scrubs the credential from the worker env" \
     "test -f \"\$TMP/capture.txt\" && grep -q 'GITHUB_TOKEN:unset' \"\$TMP/capture.txt\""
   assert "the CCT_CONFIG__* carrier namespace is scrubbed at the handoff" \
     "grep -q 'CCT_CONFIG_API_KEY:unset' \"\$TMP/capture.txt\""
+  assert "the CCT_CLI_SETS carrier is scrubbed at the handoff" \
+    "grep -q 'CCT_CLI_SETS:unset' \"\$TMP/capture.txt\""
   assert "worktree run reports scrubbed NAMES via CCT_ENV_SCRUBBED" \
     "grep 'CCT_ENV_SCRUBBED:' \"\$TMP/capture.txt\" | grep -q 'GITHUB_TOKEN'"
   assert "scrubbed handoff still exports CCT_WORKER_ID" \

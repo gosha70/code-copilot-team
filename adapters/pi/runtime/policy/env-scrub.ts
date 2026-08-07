@@ -21,15 +21,16 @@
  * Boundary notes, stated deliberately:
  *   - `CCT_*` is kept wholesale (the runtime's own contract vars) and keep
  *     beats pattern — never namespace a real credential under `CCT_` —
- *     EXCEPT the `CCT_CONFIG__*` carrier namespace: that is the loader's
- *     sanctioned env CONFIG layer and may carry arbitrary values including
- *     secrets (e.g. `CCT_CONFIG__providers__api_key`), so the WHOLE
- *     namespace is scrubbed at spawn boundaries regardless of name shape
- *     (a pattern-based rule would miss `...__auth`-style names). It is
- *     exempt from prefix keeps — only an EXACT-name keep from a trusted
- *     scope restores a specific carrier var. Children resolve their own
- *     config from files; the parent's env-layer overrides do not cross the
- *     spawn boundary.
+ *     EXCEPT the loader's env-borne config CARRIERS — the `CCT_CONFIG__*`
+ *     namespace AND `CCT_CLI_SETS` (the exported `--set` layer). Both are
+ *     sanctioned to carry arbitrary key=value config including secrets
+ *     (e.g. `CCT_CONFIG__providers__api_key`, `--set providers.api_key=`),
+ *     so both are scrubbed at spawn boundaries regardless of name shape
+ *     (a pattern-based rule would miss `...__auth`-style names). Carriers
+ *     are exempt from prefix keeps — only an EXACT-name keep from a
+ *     trusted scope restores one. Children resolve their own config from
+ *     files (or explicitly forwarded flags); the parent's env-layer
+ *     overrides do not cross the spawn boundary.
  *   - `KUBECONFIG` (and similar path-POINTER vars) are not scrubbed: they are
  *     file paths, not secrets; restricting file access is the protected-path
  *     / sandbox concern, not this one.
@@ -150,21 +151,32 @@ export function defaultScrubPolicy(): ScrubPolicy {
  * values are dropped (they are not part of a spawnable env either way).
  */
 /**
- * The loader's env CONFIG carrier prefix (`CCT_CONFIG__a__b=value`,
- * loader.ts). Values in this namespace can be secrets under ANY name, so
- * the whole namespace is removed at spawn boundaries: prefix keeps
- * (including the built-in `CCT_*`) never apply to it; only an exact-name
- * keep restores a specific carrier var.
+ * The loader's TWO env-borne config carriers (loader.ts imports these so
+ * the contract has one definition): the `CCT_CONFIG__a__b=value` namespace
+ * and the launcher-exported `CCT_CLI_SETS` (newline-joined `--set` pairs).
+ * Both carry arbitrary key=value config — secrets under ANY name — so both
+ * are removed wholesale at spawn boundaries: prefix keeps (including the
+ * built-in `CCT_*`) never apply; only an exact-name keep restores one.
  */
-const CONFIG_CARRIER_PREFIX = "CCT_CONFIG__";
+export const ENV_CONFIG_CARRIER_PREFIX = "CCT_CONFIG__";
+export const ENV_CLI_SETS_NAME = "CCT_CLI_SETS";
 
 function isConfigCarrier(name: string): boolean {
-  return name.toUpperCase().startsWith(CONFIG_CARRIER_PREFIX);
+  const n = name.toUpperCase();
+  return (
+    n.startsWith(ENV_CONFIG_CARRIER_PREFIX) || n === ENV_CLI_SETS_NAME
+  );
 }
 
-/** Exact (non-glob) keep entries only — the sole escape for carrier vars. */
+/**
+ * Exact (glob-free) keep entries only — the sole escape for carrier vars.
+ * Both glob directions are rejected (a `*_KEY` suffix entry, reachable via
+ * a hand-built policy, must not rescue a carrier — final-review F2).
+ */
 function matchesExactKeep(name: string, keep: readonly string[]): boolean {
-  return keep.some((g) => !g.endsWith("*") && matchesGlob(name, g));
+  return keep.some(
+    (g) => !g.endsWith("*") && !g.startsWith("*") && matchesGlob(name, g),
+  );
 }
 
 export function scrubEnv(

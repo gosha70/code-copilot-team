@@ -157,6 +157,7 @@ test("BATTERY 10 — env scrubbing: the spawn-boundary scrub policy removes cred
       GITHUB_TOKEN: "ghp_x",
       X_SERVICE_TOKEN: "t",
       CCT_CONFIG__providers__api_key: "sk-x", // sanctioned env-config layer
+      CCT_CLI_SETS: "providers.api_key=sk-cli", // the other carrier (--set)
       PATH: "/usr/bin",
       CCT_WORKER_ID: "w1",
       ANTHROPIC_API_KEY: "keep",
@@ -168,6 +169,7 @@ test("BATTERY 10 — env scrubbing: the spawn-boundary scrub policy removes cred
     "GITHUB_TOKEN",
     "X_SERVICE_TOKEN",
     "CCT_CONFIG__providers__api_key",
+    "CCT_CLI_SETS",
   ]) {
     assert.equal(name in env, false, `${name} must be scrubbed`);
     assert.ok(removed.includes(name));

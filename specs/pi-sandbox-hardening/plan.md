@@ -120,6 +120,16 @@ Three facts surfaced during implementation that adjust HOW (never WHAT):
    resolve config from files — the parent's env-layer overrides deliberately
    do not cross the spawn boundary. Regressions at all four levels
    (env-scrub unit, battery 10, child-session real spawn, launcher handoff).
+   **Verification round on this fix found the sibling carrier:**
+   `CCT_CLI_SETS` (the launcher-exported `--set` layer, loader.ts cli layer)
+   leaked identically — closed with the same carrier rule (both carriers now
+   named by shared constants `ENV_CONFIG_CARRIER_PREFIX`/`ENV_CLI_SETS_NAME`
+   exported from env-scrub.ts and consumed by loader.ts), and
+   `matchesExactKeep` now rejects BOTH glob directions so a `*_KEY` suffix
+   entry in a hand-built policy cannot rescue a carrier. Regressions
+   extended at all four levels. The runtime/launcher `CCT_*` read surface
+   was audited: exactly two free-form config carriers exist; the rest are
+   ids, paths, flags, and name-only signals.
 4. **Launcher boundary is global/env/cli-scope only.** The loader's trust
    contract never reads project layers untrusted, so the out-of-session CLI
    cannot see a project-local `env_scrub_extra` either; launcher-side

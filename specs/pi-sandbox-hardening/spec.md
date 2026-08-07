@@ -45,11 +45,12 @@ the `pi-code worktree run` handoff exec's the worker pi with the full host env.
   `*_KEY`, `*_PASSWORD`, `*_PASSPHRASE`, `*_CREDENTIAL`, `*_CREDENTIALS`),
   minus a **keep-list** that always survives: `PATH`, `HOME`, `SHELL`, `TERM`,
   `LANG`/`LC_*`, `TMPDIR`, `USER`, `LOGNAME`, every `CCT_*` contract var —
-  **except the `CCT_CONFIG__*` env-config carrier namespace, which is
-  scrubbed wholesale** (it is sanctioned to carry arbitrary config values
+  **except the loader's two env-borne config carriers — the `CCT_CONFIG__*`
+  namespace and `CCT_CLI_SETS` (the `--set` layer) — which are scrubbed
+  wholesale** (both are sanctioned to carry arbitrary config values
   including secrets, and name shape cannot recognize every secret-bearing
   config key; only an exact-name keep from a trusted scope restores a
-  specific carrier var, never a prefix keep) — and the child's LLM provider
+  specific carrier var, never a prefix or suffix glob) — and the child's LLM provider
   credential(s) (configurable — see FR-3). Matching is on names only;
   **values are never read, logged, or persisted**.
 - **FR-2 — Enforced at CCT-controlled spawn boundaries only.**

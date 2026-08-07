@@ -348,12 +348,14 @@ test("disabledBy is null whenever scrubbing is enabled", () => {
 
 // ── CCT_CONFIG__* carrier namespace (post-review P1) ─────────────────────────
 
-test("the whole CCT_CONFIG__* namespace is scrubbed, contract vars survive", () => {
+test("BOTH env config carriers are scrubbed, contract vars survive", () => {
   const { env, removed } = scrubEnv(
     {
       CCT_CONFIG__providers__api_key: "sk-secret", // credential-shaped
       CCT_CONFIG__providers__auth: "also-secret", // NOT credential-shaped — still removed
       CCT_CONFIG__security__env_scrub: "false", // benign config — still removed (namespace rule)
+      CCT_CLI_SETS: "providers.api_key=sk-via-cli", // the --set carrier — removed
+      cct_cli_sets: "case-trick", // case-insensitive carrier match
       CCT_WORKER_ID: "w1",
       CCT_AGENT_DEPTH: "1",
       CCT_TEAM_MEMBER_ID: "m1",
@@ -361,9 +363,11 @@ test("the whole CCT_CONFIG__* namespace is scrubbed, contract vars survive", () 
     defaultScrubPolicy(),
   );
   assert.deepEqual(removed, [
+    "CCT_CLI_SETS",
     "CCT_CONFIG__providers__api_key",
     "CCT_CONFIG__providers__auth",
     "CCT_CONFIG__security__env_scrub",
+    "cct_cli_sets",
   ]);
   assert.equal(env.CCT_WORKER_ID, "w1");
   assert.equal(env.CCT_AGENT_DEPTH, "1");
@@ -381,8 +385,26 @@ test("only an EXACT keep restores a carrier var; prefix keeps never do", () => {
   assert.equal(exact.env.CCT_CONFIG__autonomy__max_concurrency, "2");
 
   const prefix = scrubEnv(
-    { CCT_CONFIG__providers__api_key: "sk" },
+    { CCT_CONFIG__providers__api_key: "sk", CCT_CLI_SETS: "a=b" },
     { patterns: [], keep: ["CCT_CONFIG__*", "CCT_*"] },
   );
-  assert.deepEqual(prefix.removed, ["CCT_CONFIG__providers__api_key"]);
+  assert.deepEqual(prefix.removed, [
+    "CCT_CLI_SETS",
+    "CCT_CONFIG__providers__api_key",
+  ]);
+
+  // A *_SUFFIX keep entry (unreachable from config, reachable via a
+  // hand-built policy) must not rescue a carrier either (final-review F2).
+  const suffix = scrubEnv(
+    { CCT_CONFIG__providers__api_key: "sk" },
+    { patterns: [], keep: ["*_KEY"] },
+  );
+  assert.deepEqual(suffix.removed, ["CCT_CONFIG__providers__api_key"]);
+
+  // The exact-name escape works for CCT_CLI_SETS too (trusted scope).
+  const cliKept = scrubEnv(
+    { CCT_CLI_SETS: "a=b" },
+    { patterns: [], keep: ["CCT_CLI_SETS"] },
+  );
+  assert.deepEqual(cliKept.removed, []);
 });
