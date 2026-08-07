@@ -68,7 +68,14 @@ commit message + PR body).
   default-ON), `security.env-scrub` ×4 registry files +
   regenerated COMPATIBILITY.md, battery #10 + manifest rows + #173 closure
   mapping, security-model/config-reference/README docs.
-- Gates: pi-runtime 426/0 · typecheck 7/7 · launcher 156/0 · capability
-  registry 177/0 · cct-config 0 err · provider gate 7/0 · adapter suite
-  144/1 (the 1 = pre-existing `prepare-release.sh` host-env failure, fails
-  identically on the clean base — verified via stash).
+- **Review rounds (per-phase, review agent):** phase 1 → 10 findings fixed
+  (`ebb0cf6`), re-verified PASS. Phase 2 → 7 findings incl. one proven leak
+  (non-identifier names bypassing bash `unset`) fixed (`268b7c2`):
+  env -u exec, pre-provision fail-closed ordering, always-audited handoff.
+  Final round → spoofable `#` marker replaced by unforgeable `=disabled=`
+  protocol, signal-var mutual exclusion + scrubbed-first audit precedence,
+  /usr/bin/env preflight, argv-contract test (`9655d5d`).
+- Final gates: pi-runtime 428/0 · typecheck 7/7 · launcher 167/0 ·
+  capability registry 177/0 · cct-config 0 err · provider gate 7/0 ·
+  adapter suite 144/1 (the 1 = pre-existing `prepare-release.sh` host-env
+  failure, fails identically on the clean base — verified via stash).

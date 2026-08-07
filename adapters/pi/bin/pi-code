@@ -308,8 +308,9 @@ cct_worktree_run() {
   # invariant as the pre-provision escape checks above). The list comes from
   # the runtime CLI — the single TS pattern source, resolved at global/env/
   # cli scope (project config is never read untrusted). Text protocol: one
-  # name per line, or a '# disabled by <layer>' marker. stdout is parsed;
-  # stderr is surfaced only on failure (never fed to the parser).
+  # name per line, or an '=disabled=<layer>' marker (unforgeable — an env
+  # var NAME can never contain '='). stdout is parsed; stderr is surfaced
+  # only on failure (never fed to the parser).
   local scrub_out scrub_rc=0 scrub_names="" scrub_off_layer="" sn
   local SCRUB_U=()
   local scrub_errf

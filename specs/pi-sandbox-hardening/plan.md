@@ -95,8 +95,10 @@ Three facts surfaced during implementation that adjust HOW (never WHAT):
    a scrub-list failure refuses the handoff with NO git side effects — and
    that made the fail-closed branch constructible (NODE_OPTIONS recipe) and
    tested; (F3) an unscrubbed handoff is never silent — the CLI prints an
-   explicit `# disabled by <layer>` marker (new `disabledBy` provenance in
-   `resolveScrubPolicy`), the launcher exports `CCT_ENV_SCRUB_OFF=<layer>`
+   explicit disabled marker (final form `=disabled=<layer>` — unforgeable,
+   since an env var name can never contain `=`; the interim `#` form was
+   spoofable and replaced in the final round) via new `disabledBy`
+   provenance in `resolveScrubPolicy`, the launcher exports `CCT_ENV_SCRUB_OFF=<layer>`
    or an always-present `CCT_ENV_SCRUBBED` (empty = "ran, nothing matched"),
    and the worker session_start audits `env.scrub` as `scrubbed` (count may
    be 0) or `disabled` (with the layer); (F4) stderr is never fed to the
