@@ -533,11 +533,17 @@ export default async function (pi: any): Promise<void> {
       // gets here); names are shape-validated, bounded, and truncation is
       // marked rather than silent (F5).
       if (process.env.CCT_WORKER_ID) {
-        if (process.env.CCT_ENV_SCRUB_OFF !== undefined) {
-          const offLayer =
-            String(process.env.CCT_ENV_SCRUB_OFF)
-              .replace(/[^a-zA-Z-]/g, "")
-              .slice(0, 40) || "unknown";
+        // Precedence: a present CCT_ENV_SCRUBBED (evidence a scrub RAN) beats
+        // CCT_ENV_SCRUB_OFF, and an empty/garbage OFF value is ignored — so
+        // neither a stale inherited var nor a forged empty one can record a
+        // scrubbed handoff as disabled (final-round review F2/F3).
+        const offLayer = String(process.env.CCT_ENV_SCRUB_OFF ?? "")
+          .replace(/[^a-zA-Z-]/g, "")
+          .slice(0, 40);
+        if (
+          process.env.CCT_ENV_SCRUBBED === undefined &&
+          offLayer.length > 0
+        ) {
           audit({
             mode: wtMode,
             actor: "session_start",

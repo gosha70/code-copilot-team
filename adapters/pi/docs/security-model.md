@@ -73,10 +73,16 @@ Two boundaries are scrubbed; one is deliberately not:
 
 - **Subagent child sessions** — `runChildSession` scrubs by default
   (fail-safe ON even if a caller passes no config).
-- **`pi-code worktree run` handoff** — the launcher unsets the list computed
-  by `pi-code env scrub-list` (single TS pattern source) and refuses the
-  handoff if that list cannot be computed (never a silent unscrubbed launch).
-  The removed names ride in `CCT_ENV_SCRUBBED` for the worker's audit trail.
+- **`pi-code worktree run` handoff** — the launcher resolves the list via
+  `pi-code env scrub-list` (single TS pattern source) BEFORE provisioning
+  and refuses the handoff if it cannot (never a silent unscrubbed launch, no
+  git side effects on refusal). Removal happens by exec'ing through
+  `/usr/bin/env -u <name> ...`, which also covers names bash `unset` cannot
+  touch (e.g. `my-app_TOKEN`). The removed names ride in `CCT_ENV_SCRUBBED`
+  — or, when a user-controlled scope disabled scrubbing, the disabling layer
+  rides in `CCT_ENV_SCRUB_OFF` — and the worker's session start audits an
+  `env.scrub` record either way (`scrubbed` with count+names, or `disabled`
+  with the layer). An unscrubbed handoff is never silent.
 - **The primary interactive session is NOT scrubbed** — that env is the
   user's own shell, not a CCT spawn; reported `degraded`, not hidden.
 

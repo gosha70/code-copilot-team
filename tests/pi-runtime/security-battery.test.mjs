@@ -146,7 +146,7 @@ test("BATTERY 9 — degraded surfaces are reported honestly in the registry (not
   }
 });
 
-test("BATTERY 10 — env scrubbing: a credential-shaped var does not survive to a child spawn env (#173)", () => {
+test("BATTERY 10 — env scrubbing: the spawn-boundary scrub policy removes credential-shaped names (#173; real-spawn proof in child-session.test.mjs)", () => {
   // ONE canonical fail-closed assertion over the spawn-boundary scrub: the
   // same defaultScrubPolicy/scrubEnv the child-session runner and the
   // worktree-run handoff (via pi-code env scrub-list) consume. Deep coverage:

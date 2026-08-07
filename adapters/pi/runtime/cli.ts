@@ -642,11 +642,12 @@ function envCmd(
     };
   }
   // Text mode is the launcher protocol: names one per line, or an explicit
-  // disabled marker (a line no env name can shadow — names cannot start
-  // with '#') so a disabled handoff is distinguishable from "nothing
-  // matched" and can be audited as such.
+  // disabled marker. The marker embeds '=' because an environment variable
+  // NAME can never contain '=' (execve environ format) — so no env var,
+  // however hostile its name, can forge or shadow this line (a '#'-prefixed
+  // marker would be forgeable: names may contain '#').
   if (!enabled) {
-    return { out: `# disabled by ${disabledBy ?? "config"}`, code: 0 };
+    return { out: `=disabled=${disabledBy ?? "config"}`, code: 0 };
   }
   return { out: names.join("\n"), code: 0 };
 }

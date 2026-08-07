@@ -527,7 +527,7 @@ fi
 # The disabled marker is explicit (never confusable with a name).
 ES_MARK=$(GITHUB_TOKEN=leakme CCT_CONFIG__security__env_scrub=false CCT_HOME="$ES_HOME" PATH="$DIAG_PATH" "$LAUNCHER" env scrub-list 2>&1) || true
 assert "env scrub-list prints an explicit disabled marker with the layer" \
-  "echo \"\$ES_MARK\" | grep -q '^# disabled by env\$'"
+  "echo \"\$ES_MARK\" | grep -q '^=disabled=env\$'"
 
 if command -v git >/dev/null 2>&1; then
   # Phase-2 review F1: a scrub-listed name that is NOT a shell identifier
@@ -555,6 +555,16 @@ if command -v git >/dev/null 2>&1; then
     "! grep -q 'scrub-5' \"\$ES_REPO/.cct/worktrees.json\" 2>/dev/null"
   assert "scrub-list failure created NO git branch" \
     "! git -C \"\$ES_REPO\" show-ref --verify --quiet refs/heads/feature/scrub-5"
+
+  # Final-round review F6: the exec now goes through /usr/bin/env -u; pin the
+  # argv contract — benign forwarded pi args must survive the handoff intact
+  # alongside the scrub.
+  rm -f "$TMP/capture.txt"
+  ( cd "$ES_REPO" && GITHUB_TOKEN=leakme CCT_HOME="$TMP/es-home6" PATH="$DIAG_PATH" "$LAUNCHER" worktree run scrub-6 --branch feature/scrub-6 -- --thinking high -p "do it" ) >/dev/null 2>&1 || true
+  assert "forwarded pi args survive the env -u handoff" \
+    "test -f \"\$TMP/capture.txt\" && grep -q -- '--thinking high -p do it' \"\$TMP/capture.txt\""
+  assert "the arg-forwarding handoff still scrubbed the credential" \
+    "grep -q 'GITHUB_TOKEN:unset' \"\$TMP/capture.txt\""
 fi
 
 # Fail-closed wiring (source assertion, #172 precedent): a scrub-list failure

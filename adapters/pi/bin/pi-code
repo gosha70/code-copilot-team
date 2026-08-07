@@ -313,6 +313,13 @@ cct_worktree_run() {
   local scrub_out scrub_rc=0 scrub_names="" scrub_off_layer="" sn
   local SCRUB_U=()
   local scrub_errf
+  # Preflight the exec vehicle too (review F7): the final launch goes through
+  # /usr/bin/env -u, and this is the last point where refusal is side-effect
+  # free.
+  if [[ ! -x /usr/bin/env ]]; then
+    err "worktree run: /usr/bin/env not executable — refusing an unscrubbed handoff."
+    return 1
+  fi
   scrub_errf="$(mktemp "${TMPDIR:-/tmp}/cct-scrub-err.XXXXXX")" || scrub_errf=""
   scrub_out="$("$SELF_PATH" env scrub-list 2>"${scrub_errf:-/dev/null}")" || scrub_rc=$?
   if [[ $scrub_rc -ne 0 ]]; then
@@ -326,7 +333,9 @@ cct_worktree_run() {
     sn="${sn%$'\r'}"
     [[ -z "$sn" ]] && continue
     case "$sn" in
-      "# disabled by "*) scrub_off_layer="${sn#\# disabled by }"; continue ;;
+      # The disabled marker embeds '=' — unforgeable, since an env var NAME
+      # can never contain '=' (a '#'-style marker would be spoofable).
+      "=disabled="*) scrub_off_layer="${sn#=disabled=}"; continue ;;
       *=*)
         err "worktree run: malformed scrub-list entry — refusing the handoff."
         return 1 ;;
@@ -354,11 +363,16 @@ cct_worktree_run() {
   # CCT_LOCKED_PROJECT_PATH pins the worktree cwd + enforcement for the child
   # (defense 2): even though forwarded args re-enter the public parser, the child
   # refuses to launch anywhere other than "$wt" or with --no-cct.
+  # The two signal vars are mutually exclusive; clear the counterpart so a
+  # stale inherited value (e.g. a controller launched while scrubbing was
+  # off) cannot misrecord this handoff (review F2/F3 of the final round).
   if [[ -n "$scrub_off_layer" ]]; then
+    unset CCT_ENV_SCRUBBED
     export CCT_ENV_SCRUB_OFF="$scrub_off_layer"
   else
     # Always exported when scrubbing ran — an empty value is an auditable
     # "scrub ran, nothing matched" (never silence; phase-2 review F3).
+    unset CCT_ENV_SCRUB_OFF
     export CCT_ENV_SCRUBBED="$scrub_names"
   fi
   unset CCT_PI_CODE_ACTIVE
