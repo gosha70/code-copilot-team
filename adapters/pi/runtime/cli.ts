@@ -633,13 +633,20 @@ function envCmd(
     return { out: ENV_USAGE, code: 64 };
   }
   const cfg = load(opts);
-  const { enabled, policy } = resolveScrubPolicy(cfg.resolved);
+  const { enabled, disabledBy, policy } = resolveScrubPolicy(cfg.resolved);
   const names = enabled ? scrubEnv(process.env, policy).removed : [];
   if (json) {
     return {
-      out: jsonOut({ enabled, names, trustNote: TRUST_NOTE }),
+      out: jsonOut({ enabled, disabledBy, names, trustNote: TRUST_NOTE }),
       code: 0,
     };
+  }
+  // Text mode is the launcher protocol: names one per line, or an explicit
+  // disabled marker (a line no env name can shadow — names cannot start
+  // with '#') so a disabled handoff is distinguishable from "nothing
+  // matched" and can be audited as such.
+  if (!enabled) {
+    return { out: `# disabled by ${disabledBy ?? "config"}`, code: 0 };
   }
   return { out: names.join("\n"), code: 0 };
 }

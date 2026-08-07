@@ -302,3 +302,46 @@ test("resolved policy end-to-end: extra tightens, trusted keep survives", () => 
   assert.equal(env.RELEASE_SIGNING_KEY, "keepme");
   assert.equal(env.PATH, "/bin");
 });
+
+// ── resolveScrubPolicy: disabledBy provenance (phase-2 review F3) ────────────
+
+test("disabledBy names the layer whose explicit false won", () => {
+  const g = resolveScrubPolicy(
+    new Map([
+      ["security.env_scrub", entry("global", false, [{ layer: "defaults", value: true }])],
+    ]),
+  );
+  assert.equal(g.enabled, false);
+  assert.equal(g.disabledBy, "global");
+
+  const c = resolveScrubPolicy(
+    new Map([
+      [
+        "security.env_scrub",
+        entry("cli", false, [
+          { layer: "defaults", value: true },
+          { layer: "project", value: true },
+        ]),
+      ],
+    ]),
+  );
+  assert.equal(c.enabled, false);
+  assert.equal(c.disabledBy, "cli");
+});
+
+test("disabledBy is null whenever scrubbing is enabled", () => {
+  assert.equal(resolveScrubPolicy(undefined).disabledBy, null);
+  const repoLatch = resolveScrubPolicy(
+    new Map([
+      [
+        "security.env_scrub",
+        entry("project", true, [
+          { layer: "defaults", value: true },
+          { layer: "global", value: false },
+        ]),
+      ],
+    ]),
+  );
+  assert.equal(repoLatch.enabled, true);
+  assert.equal(repoLatch.disabledBy, null);
+});

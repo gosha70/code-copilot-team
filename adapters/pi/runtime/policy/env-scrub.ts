@@ -170,6 +170,8 @@ export interface ResolvedEntryLike {
 export interface ResolvedScrubConfig {
   /** Effective on/off after the trust asymmetry is applied. */
   enabled: boolean;
+  /** When disabled: the layer whose explicit false won (audit honesty). */
+  disabledBy: string | null;
   policy: ScrubPolicy;
 }
 
@@ -210,12 +212,17 @@ export function resolveScrubPolicy(
   const keep = resolved?.get("security.env_scrub_keep");
 
   let enabled = true; // built-in default (spec FR-3, resolved decision 1)
+  let disabledBy: string | null = null;
   for (const c of contributions(scrub)) {
     if (typeof c.value !== "boolean") continue;
     if (REPO_LAYERS.has(c.layer)) {
-      if (c.value === true) enabled = true; // tighten-only
+      if (c.value === true) {
+        enabled = true; // tighten-only
+        disabledBy = null;
+      }
     } else {
       enabled = c.value;
+      disabledBy = c.value === false ? c.layer : null;
     }
   }
 
@@ -227,6 +234,7 @@ export function resolveScrubPolicy(
 
   return {
     enabled,
+    disabledBy: enabled ? null : disabledBy,
     policy: {
       patterns: [...DEFAULT_SCRUB_PATTERNS, ...extraPatterns],
       keep: [...DEFAULT_SCRUB_KEEP, ...keepExtra],

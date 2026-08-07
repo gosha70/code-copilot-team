@@ -303,6 +303,37 @@ cct_worktree_run() {
         return 64 ;;
     esac
   done
+  # #173 (FR-4/FR-5): resolve the scrub list BEFORE provisioning, so a
+  # scrub-list failure refuses the handoff with NO git side effects (same
+  # invariant as the pre-provision escape checks above). The list comes from
+  # the runtime CLI — the single TS pattern source, resolved at global/env/
+  # cli scope (project config is never read untrusted). Text protocol: one
+  # name per line, or a '# disabled by <layer>' marker. stdout is parsed;
+  # stderr is surfaced only on failure (never fed to the parser).
+  local scrub_out scrub_rc=0 scrub_names="" scrub_off_layer="" sn
+  local SCRUB_U=()
+  local scrub_errf
+  scrub_errf="$(mktemp "${TMPDIR:-/tmp}/cct-scrub-err.XXXXXX")" || scrub_errf=""
+  scrub_out="$("$SELF_PATH" env scrub-list 2>"${scrub_errf:-/dev/null}")" || scrub_rc=$?
+  if [[ $scrub_rc -ne 0 ]]; then
+    err "worktree run: 'pi-code env scrub-list' failed — refusing an unscrubbed handoff."
+    [[ -n "$scrub_errf" && -s "$scrub_errf" ]] && err "$(cat "$scrub_errf")"
+    [[ -n "$scrub_errf" ]] && rm -f "$scrub_errf"
+    return 1
+  fi
+  [[ -n "$scrub_errf" ]] && rm -f "$scrub_errf"
+  while IFS= read -r sn; do
+    sn="${sn%$'\r'}"
+    [[ -z "$sn" ]] && continue
+    case "$sn" in
+      "# disabled by "*) scrub_off_layer="${sn#\# disabled by }"; continue ;;
+      *=*)
+        err "worktree run: malformed scrub-list entry — refusing the handoff."
+        return 1 ;;
+    esac
+    SCRUB_U+=(-u "$sn")
+    scrub_names="${scrub_names:+$scrub_names,}$sn"
+  done <<< "$scrub_out"
   # Provision (prints ONLY the worktree path on success; error text on failure).
   local wt
   wt="$("$SELF_PATH" worktree create "${prov[@]}")" || { err "worktree run: provisioning failed: $wt"; return 1; }
@@ -323,30 +354,19 @@ cct_worktree_run() {
   # CCT_LOCKED_PROJECT_PATH pins the worktree cwd + enforcement for the child
   # (defense 2): even though forwarded args re-enter the public parser, the child
   # refuses to launch anywhere other than "$wt" or with --no-cct.
-  # #173 (FR-4/FR-5): scrub credential-shaped env before handing off to the
-  # worker pi. The unset list comes from the runtime CLI — the single TS
-  # pattern source, resolved at global/env/cli scope (project config is never
-  # read untrusted). A scrub-list failure FAILS CLOSED: the handoff is
-  # refused rather than silently launching an unscrubbed worker. The removed
-  # NAMES (never values) ride in CCT_ENV_SCRUBBED so the worker's
-  # session_start can audit the scrub (CCT_* survives scrubbing by keep).
-  local scrub_out scrub_names="" sn
-  if ! scrub_out="$("$SELF_PATH" env scrub-list 2>&1)"; then
-    err "worktree run: 'pi-code env scrub-list' failed — refusing an unscrubbed handoff."
-    err "$scrub_out"
-    return 1
+  if [[ -n "$scrub_off_layer" ]]; then
+    export CCT_ENV_SCRUB_OFF="$scrub_off_layer"
+  else
+    # Always exported when scrubbing ran — an empty value is an auditable
+    # "scrub ran, nothing matched" (never silence; phase-2 review F3).
+    export CCT_ENV_SCRUBBED="$scrub_names"
   fi
-  while IFS= read -r sn; do
-    [[ -z "$sn" ]] && continue
-    if [[ "$sn" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-      unset -v "$sn" 2>/dev/null || true
-      scrub_names="${scrub_names:+$scrub_names,}$sn"
-    fi
-  done <<< "$scrub_out"
-  [[ -n "$scrub_names" ]] && export CCT_ENV_SCRUBBED="$scrub_names"
   unset CCT_PI_CODE_ACTIVE
   export CCT_LOCKED_PROJECT_PATH="$wt"
-  exec "$SELF_PATH" --project "$wt" ${pia[@]+"${pia[@]}"}
+  # exec via env -u: EVERY listed name is removed, including names that are
+  # not shell identifiers (bash `unset` cannot touch those — phase-2 review
+  # F1's proven leak). env execs the launcher, preserving exit/signals.
+  exec /usr/bin/env ${SCRUB_U[@]+"${SCRUB_U[@]}"} "$SELF_PATH" --project "$wt" ${pia[@]+"${pia[@]}"}
 }
 
 # ── Parse CCT options ───────────────────────────────────────

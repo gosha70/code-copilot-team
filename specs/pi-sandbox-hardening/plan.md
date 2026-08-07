@@ -87,6 +87,25 @@ Three facts surfaced during implementation that adjust HOW (never WHAT):
    CCT_*/MOCK_PI_* canaries) and cleans up (F4); no scrub is reported when
    no spawn happened (F6). A custom `providers.*.api_key_env` name must be
    kept via `security.env_scrub_keep` — auto-keeping it is future wiring.
+3b. **Phase-2 review addendum (2026-08-06).** The phase-2 review proved one
+   leak and hardened the handoff: (F1) removal now happens via
+   `exec /usr/bin/env -u NAME ...` so names that are not shell identifiers
+   (e.g. `my-app_TOKEN`, which bash `unset` cannot touch) are also removed —
+   proven end-to-end; (F2) the scrub-list call moved BEFORE provisioning, so
+   a scrub-list failure refuses the handoff with NO git side effects — and
+   that made the fail-closed branch constructible (NODE_OPTIONS recipe) and
+   tested; (F3) an unscrubbed handoff is never silent — the CLI prints an
+   explicit `# disabled by <layer>` marker (new `disabledBy` provenance in
+   `resolveScrubPolicy`), the launcher exports `CCT_ENV_SCRUB_OFF=<layer>`
+   or an always-present `CCT_ENV_SCRUBBED` (empty = "ran, nothing matched"),
+   and the worker session_start audits `env.scrub` as `scrubbed` (count may
+   be 0) or `disabled` (with the layer); (F4) stderr is never fed to the
+   name parser; (F5) audit truncation is marked (`,[truncated]`) with a
+   pre-slice count, and control chars are stripped from audited names —
+   forgeability by a real worker session is documented as mitigated by
+   attach validation, not eliminated; (F6) per-name unset failure is
+   impossible by construction under `env -u`; (F7) empty failure output no
+   longer prints a bare error line.
 4. **Launcher boundary is global/env/cli-scope only.** The loader's trust
    contract never reads project layers untrusted, so the out-of-session CLI
    cannot see a project-local `env_scrub_extra` either; launcher-side

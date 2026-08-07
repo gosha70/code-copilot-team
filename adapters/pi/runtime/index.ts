@@ -523,25 +523,47 @@ export default async function (pi: any): Promise<void> {
       );
       state.worktreeIsolation = isolationStateFromAttach(attach.status);
       if (attach.warning) state.warnings.push(attach.warning);
-      // #173 (FR-5): the worktree-run handoff scrubbed the worker's env and
-      // recorded the removed NAMES (never values) in CCT_ENV_SCRUBBED. Audit
-      // them here so the scrub is visible in the worker's own trail. The var
-      // is untrusted input: names are shape-validated and bounded.
-      if (process.env.CCT_WORKER_ID && process.env.CCT_ENV_SCRUBBED) {
-        const scrubbedNames = String(process.env.CCT_ENV_SCRUBBED)
-          .split(",")
-          .map((n) => n.trim())
-          .filter((n) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n))
-          .slice(0, 200);
-        if (scrubbedNames.length > 0) {
+      // #173 (FR-5): every worktree-run handoff leaves an env.scrub record —
+      // "scrubbed" with the removed NAMES (never values; count 0 is still
+      // recorded) via CCT_ENV_SCRUBBED, or "disabled" with the config layer
+      // that turned scrubbing off via CCT_ENV_SCRUB_OFF — so an unscrubbed
+      // worker is never silent (phase-2 review F3). Both vars are untrusted
+      // input from the spawning launcher: a session in a real worker
+      // worktree could fabricate them (attach validation above bounds who
+      // gets here); names are shape-validated, bounded, and truncation is
+      // marked rather than silent (F5).
+      if (process.env.CCT_WORKER_ID) {
+        if (process.env.CCT_ENV_SCRUB_OFF !== undefined) {
+          const offLayer =
+            String(process.env.CCT_ENV_SCRUB_OFF)
+              .replace(/[^a-zA-Z-]/g, "")
+              .slice(0, 40) || "unknown";
+          audit({
+            mode: wtMode,
+            actor: "session_start",
+            decision: "disabled",
+            rule: "env.scrub",
+            subject: `off:${offLayer}`,
+            origin: "worktree",
+          });
+        } else if (process.env.CCT_ENV_SCRUBBED !== undefined) {
+          const allNames = String(process.env.CCT_ENV_SCRUBBED)
+            .split(",")
+            // eslint-disable-next-line no-control-regex
+            .map((n) => n.trim().replace(/[\x00-\x1f\x7f]/g, ""))
+            .filter((n) => n.length > 0 && n.length <= 100)
+            .slice(0, 1000);
+          const total = allNames.length;
+          const shown = allNames.slice(0, 200);
+          let joined = shown.join(",");
+          const truncated = total > shown.length || joined.length > 400;
+          joined = joined.slice(0, 400);
           audit({
             mode: wtMode,
             actor: "session_start",
             decision: "scrubbed",
             rule: "env.scrub",
-            subject:
-              `${scrubbedNames.length}:` +
-              scrubbedNames.join(",").slice(0, 400),
+            subject: `${total}:${joined}${truncated ? ",[truncated]" : ""}`,
             origin: "worktree",
           });
         }

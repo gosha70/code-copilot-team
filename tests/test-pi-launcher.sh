@@ -56,6 +56,8 @@ if [[ "\${1:-}" == "--version" ]]; then echo "$version"; exit 0; fi
   echo "CCT_PEER_REVIEW_SCOPE:\${CCT_PEER_REVIEW_SCOPE:-unset}"
   echo "GITHUB_TOKEN:\${GITHUB_TOKEN:-unset}"
   echo "CCT_ENV_SCRUBBED:\${CCT_ENV_SCRUBBED:-unset}"
+  echo "CCT_ENV_SCRUB_OFF:\${CCT_ENV_SCRUB_OFF:-unset}"
+  echo "DASH_TOKEN_COUNT:\$(env | grep -c '^my-app_TOKEN=')"
 } > "$TMP/capture.txt"
 exit \${PI_SHIM_EXIT:-0}
 SHIM
@@ -499,6 +501,8 @@ if command -v git >/dev/null 2>&1; then
   ( cd "$ES_REPO" && GITHUB_TOKEN=leakme CCT_HOME="$ES_HOME2" PATH="$DIAG_PATH" "$LAUNCHER" worktree run scrub-2 --branch feature/scrub-2 ) >/dev/null 2>&1 || true
   assert "global env_scrub=false restores pass-through at the handoff" \
     "test -f \"\$TMP/capture.txt\" && grep -q 'GITHUB_TOKEN:leakme' \"\$TMP/capture.txt\""
+  assert "pass-through handoff records the disabling layer (CCT_ENV_SCRUB_OFF)" \
+    "grep -q 'CCT_ENV_SCRUB_OFF:global' \"\$TMP/capture.txt\""
   assert "pass-through handoff exports no CCT_ENV_SCRUBBED" \
     "grep -q 'CCT_ENV_SCRUBBED:unset' \"\$TMP/capture.txt\""
 
@@ -518,6 +522,39 @@ if command -v git >/dev/null 2>&1; then
     "test -f \"\$TMP/capture.txt\" && grep -q 'GITHUB_TOKEN:unset' \"\$TMP/capture.txt\""
 else
   echo "  SKIP: worktree-run scrub (git unavailable)"
+fi
+
+# The disabled marker is explicit (never confusable with a name).
+ES_MARK=$(GITHUB_TOKEN=leakme CCT_CONFIG__security__env_scrub=false CCT_HOME="$ES_HOME" PATH="$DIAG_PATH" "$LAUNCHER" env scrub-list 2>&1) || true
+assert "env scrub-list prints an explicit disabled marker with the layer" \
+  "echo \"\$ES_MARK\" | grep -q '^# disabled by env\$'"
+
+if command -v git >/dev/null 2>&1; then
+  # Phase-2 review F1: a scrub-listed name that is NOT a shell identifier
+  # (bash `unset` cannot remove it) must still be removed — env -u path.
+  ES_LIST_DASH=$(env 'my-app_TOKEN=leakme' CCT_HOME="$TMP/es-home4" PATH="$DIAG_PATH" "$LAUNCHER" env scrub-list 2>&1) || true
+  assert "scrub-list reports a non-identifier credential name" \
+    "echo \"\$ES_LIST_DASH\" | grep -q '^my-app_TOKEN\$'"
+  rm -f "$TMP/capture.txt"
+  ( cd "$ES_REPO" && env 'my-app_TOKEN=leakme' CCT_HOME="$TMP/es-home4" PATH="$DIAG_PATH" "$LAUNCHER" worktree run scrub-4 --branch feature/scrub-4 ) >/dev/null 2>&1 || true
+  assert "a non-identifier credential is ALSO removed from the worker env" \
+    "test -f \"\$TMP/capture.txt\" && grep -q 'DASH_TOKEN_COUNT:0' \"\$TMP/capture.txt\""
+
+  # Phase-2 review F2: scrub-list now resolves BEFORE provisioning, so a
+  # scrub-list failure (NODE_OPTIONS breaks every node invocation; the
+  # scrub-list call is the first) refuses the handoff with NO git side
+  # effects — no worktree dir, no ledger record, no branch.
+  ES_FAIL_RC=0
+  ES_FAIL_OUT=$( cd "$ES_REPO" && NODE_OPTIONS="--require /does/not/exist" GITHUB_TOKEN=leakme CCT_HOME="$TMP/es-home5" PATH="$DIAG_PATH" "$LAUNCHER" worktree run scrub-5 --branch feature/scrub-5 2>&1 ) || ES_FAIL_RC=$?
+  assert "scrub-list failure refuses the handoff (fail closed)" "[ \"\$ES_FAIL_RC\" -ne 0 ]"
+  assert "the refusal names the unscrubbed-handoff contract" \
+    "echo \"\$ES_FAIL_OUT\" | grep -q 'refusing an unscrubbed handoff'"
+  assert "scrub-list failure created NO worktree directory" \
+    "test ! -e \"\$(dirname \"\$ES_REPO\")/.cct-worktrees/es-repo/scrub-5\""
+  assert "scrub-list failure created NO ledger record" \
+    "! grep -q 'scrub-5' \"\$ES_REPO/.cct/worktrees.json\" 2>/dev/null"
+  assert "scrub-list failure created NO git branch" \
+    "! git -C \"\$ES_REPO\" show-ref --verify --quiet refs/heads/feature/scrub-5"
 fi
 
 # Fail-closed wiring (source assertion, #172 precedent): a scrub-list failure
