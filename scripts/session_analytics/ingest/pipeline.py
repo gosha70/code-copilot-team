@@ -23,6 +23,7 @@ from ..config import PricingConfig, ProjectIdRule, ProjectOverride
 from ..cost import UnpricedStats
 from ..registry import get_adapter, list_adapter_ids
 from ..relational import store
+from ..heartbeat import ingest_heartbeats
 from ..relational.db import Database, apply_ddl
 from . import incremental
 from .project_key import ProjectKeyResolver
@@ -41,6 +42,7 @@ class IngestStats:
     unpriced_models: dict = field(default_factory=dict)  # E5: model -> turn count
     sessions_opted_out: int = 0
     per_project_opt_out: dict = field(default_factory=dict)  # project key -> count
+    heartbeats_ingested: int = 0  # Slice B1 (#187): local_heartbeat upserts
 
     def as_dict(self) -> dict:
         return {
@@ -53,6 +55,7 @@ class IngestStats:
             "unpriced_models": self.unpriced_models,
             "sessions_opted_out": self.sessions_opted_out,
             "per_project_opt_out": self.per_project_opt_out,
+            "heartbeats_ingested": self.heartbeats_ingested,
         }
 
 
@@ -68,6 +71,7 @@ def ingest(
     cli_redaction_override: Optional[str] = None,
     projects: Optional[Mapping[str, ProjectOverride]] = None,
     project_id_rules: Optional[Sequence[ProjectIdRule]] = None,
+    heartbeat_cwd: Optional[Path] = None,
 ) -> IngestStats:
     """Run ingestion for the selected copilots into ``dsn``.
 
@@ -100,8 +104,43 @@ def ingest(
     db = Database.connect(dsn)
     try:
         apply_ddl(db)
+        # Slice B1 (#187): the developer registry row exists before any
+        # session stamps reference the id (idempotent; both dialects) and is
+        # COMMITTED independently of session work — an all-skipped
+        # incremental run (the steady state of `watch` and of any pre-B1
+        # database) must still persist it, and holding the INSERT open would
+        # pin a SQLite write lock for the whole run (PR #188 review F1/F2).
+        # Registration is deliberately global, not per-project: it runs
+        # before the per-project INGEST_OFF boundary because the row carries
+        # no project data — only the id the user's own sessions are stamped
+        # with (review note 10).
+        store.upsert_developer(db, developer_id)
+        db.commit()
         for copilot in selected:
             adapter = get_adapter(copilot)
+            # Slice B1 (#187): sweep heartbeats for pi projects — BEFORE the
+            # session loop, so an in-flight project with no ingestable
+            # session (the defining B1 case) still lands in local_heartbeat.
+            # The sweep honors the per-project INGEST_OFF hard boundary with
+            # the SAME projects+resolver the session path uses (review F1),
+            # commits its own work, and never raises — a bad file or a DB
+            # error on one root warns and skips. `heartbeat_cwd` is
+            # injectable so tests stay hermetic when the process cwd itself
+            # is a Pi project (review F4); production callers leave it None.
+            if copilot == C.COPILOT_PI:
+                if hasattr(adapter, "resolve_root"):
+                    stats.heartbeats_ingested += ingest_heartbeats(
+                        db,
+                        developer_id,
+                        base=adapter.resolve_root(root),
+                        cwd=heartbeat_cwd if heartbeat_cwd is not None else Path.cwd(),
+                        projects=projects,
+                        resolver=resolver,
+                    )
+                else:
+                    _log.debug(
+                        "pi adapter lacks resolve_root — heartbeat sweep skipped"
+                    )
             c_ingested = c_skipped = 0
             for ref in adapter.discover(root):
                 if not incremental.should_ingest(db, ref, full=full):

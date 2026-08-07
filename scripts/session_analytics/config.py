@@ -23,6 +23,8 @@ from . import constants as C
 
 # Env vars / .env keys (presence-checked, never logged for secrets).
 ENV_DSN = "CCT_SA_DSN"
+# Developer identity (Slice B1, #187). Spec-mandated name (not CCT_SA_).
+ENV_DEVELOPER_ID = "CCT_DEVELOPER_ID"
 ENV_KUZU_PATH = "CCT_SA_KUZU_PATH"
 ENV_REDACTION = "CCT_SA_REDACTION"
 ENV_OLLAMA_URL = "CCT_SA_OLLAMA_URL"
@@ -38,7 +40,7 @@ ENV_SOURCE_PREFIX = "CCT_SA_SOURCE_"  # + COPILOT (e.g. CCT_SA_SOURCE_CLAUDE_COD
 ENV_KEYS = (
     ENV_DSN, ENV_KUZU_PATH, ENV_REDACTION,
     ENV_JUDGE_BACKEND, ENV_JUDGE_MODEL, ENV_JUDGE_BASE_URL, ENV_JUDGE_API_KEY,
-    ENV_JUDGE_WORKERS, ENV_OLLAMA_URL,
+    ENV_JUDGE_WORKERS, ENV_OLLAMA_URL, ENV_DEVELOPER_ID,
 )
 SECRET_ENV_KEYS = frozenset({ENV_JUDGE_API_KEY})
 
@@ -123,6 +125,11 @@ class AnalyticsConfig:
     projects: Mapping[str, ProjectOverride] = field(default_factory=dict)
     project_id_rules: tuple[ProjectIdRule, ...] = field(default_factory=tuple)
     raw: Mapping[str, Any] = field(default_factory=dict)
+    # Slice B1 (#187): identity inputs resolved through THIS loader's
+    # documented layering (real env > repo .env; config files), consumed by
+    # identity.derive_developer_id — never an os.environ bypass.
+    developer_id_env: Optional[str] = None
+    developer_id_cfg: Optional[str] = None
 
     def source_root(self, copilot: str) -> Optional[Path]:
         raw = self.sources.get(copilot)
@@ -374,6 +381,20 @@ def _load_projects(
     return projects, tuple(rules)
 
 
+def _developer_id_cfg(data: Mapping[str, Any]) -> Optional[str]:
+    """The `developer_id` config key; a wrong TYPE is a config error (raises,
+    matching the package's other config blocks) — never coerced into a
+    fabricated id (PR #188 review B-10)."""
+    value = data.get(C.CFG_DEVELOPER_ID)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"config '{C.CFG_DEVELOPER_ID}' must be a string, got {type(value).__name__}"
+        )
+    return value
+
+
 def load_config(
     *,
     dsn: Optional[str] = None,
@@ -451,6 +472,8 @@ def load_config(
         projects=projects,
         project_id_rules=project_id_rules,
         raw=data,
+        developer_id_env=env(ENV_DEVELOPER_ID),
+        developer_id_cfg=_developer_id_cfg(data),
     )
 
 

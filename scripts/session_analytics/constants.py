@@ -48,6 +48,13 @@ REDACTION_MODES = (REDACT_NONE, REDACT_CODE, REDACT_METADATA_ONLY)
 # ── Default multi-tenant developer id (E1) ─────────────────────────────
 DEFAULT_DEVELOPER_ID = "local"
 
+# Config key for an explicit developer id (Slice B1, #187).
+CFG_DEVELOPER_ID = "developer_id"
+
+# The CCT workflow phases — mirrors the Pi runtime's PHASE_ORDER (a
+# cross-adapter shared-semantics contract item).
+CCT_PHASES = ("research", "plan", "build", "review")
+
 # ── Config keys (defaults.yaml) ────────────────────────────────────────
 CFG_SOURCES = "sources"
 CFG_SOURCE_ROOT = "root"

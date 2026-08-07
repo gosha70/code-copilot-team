@@ -114,6 +114,12 @@ a central interface; runaway recursive loops and budget breaches are flagged;
 - **Don't merge the team ledger and the analytics DB** — they're different
   concerns (coordination state vs historical analytics); link, don't fuse.
 
+## Status (2026-08-07)
+
+Slice A: MERGED (#185 / PR #184). Slice B1: built under #187 / PR #188
+(`specs/pi-team-plane-b1/`) — derived developer identity + `local_heartbeat`
+last-seen state, local-first. B2/C/D/E remain blocked on decisions 1–2.
+
 ## Next step
 
 Build **Slice A** (#185; SDD ready). **Slice B1** (local identity + local
