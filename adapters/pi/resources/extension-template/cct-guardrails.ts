@@ -109,7 +109,10 @@ function runValidator(target: string): Promise<Verdict> {
       [...argv.slice(1), "--", target],
       {
         encoding: "utf8",
-        timeout: Number(process.env.GUARDRAILS_TIMEOUT_MS) || VALIDATOR_TIMEOUT_MS,
+        timeout: (() => {
+          const t = Number(process.env.GUARDRAILS_TIMEOUT_MS);
+          return Number.isFinite(t) && t > 0 ? t : VALIDATOR_TIMEOUT_MS;
+        })(),
         maxBuffer: VALIDATOR_MAX_BUFFER,
       },
       (error, stdout, stderr) => {

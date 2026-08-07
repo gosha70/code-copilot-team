@@ -79,7 +79,8 @@ proved the original design wrong in both directions:
   patterns dropped).
 
 ### D1 — Template artifacts (source of truth in resources/; shape superseded by D0 where they differ)
-`adapters/pi/resources/extension-template/` holds three files:
+`adapters/pi/resources/extension-template/` holds four files (tsconfig
+added by the verification round):
 - `cct-guardrails.ts` — the starter extension: registers a `tool_call`
   handler that, for `write`/`edit`, resolves the target path, runs a
   configurable validator command (`CCT_VALIDATOR_CMD` env or an in-file

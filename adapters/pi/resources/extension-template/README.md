@@ -55,7 +55,7 @@ Constants at the top of `cct-guardrails.ts`:
 |---|---|
 | `VALIDATE_EXTENSIONS` | Which file extensions to gate (`[]` = all) |
 | `VALIDATOR_CMD` | Your validator argv; `--` + the target file are appended. Override per-run with `GUARDRAILS_VALIDATOR_CMD` (whitespace-split — no argument may contain spaces; prefer absolute paths for worktree/CI sessions). The active command is printed at session start, so an ambient override is always visible |
-| `FAIL_CLOSED` | `true` (default): a validator that cannot run blocks/errors the operation; `false`: warn-and-allow (warns on the console — never silent). Env overrides: `GUARDRAILS_FAIL_CLOSED=true|false`, `GUARDRAILS_TIMEOUT_MS` |
+| `FAIL_CLOSED` | `true` (default): a validator that cannot run blocks/errors the operation; `false`: warn-and-allow (warns on the console — never silent). Env overrides: `GUARDRAILS_FAIL_CLOSED=true|false`, `GUARDRAILS_TIMEOUT_MS`. Note an AMBIENT `GUARDRAILS_FAIL_CLOSED=false` weakens enforcement to warn-and-allow — the session-start line printing the active posture is your check |
 
 **Validator contract:** exit `0` = pass; exit `1` = violation with a
 readable report on **stderr** (the model reads it verbatim); any other
@@ -102,6 +102,7 @@ installed version's typings when upgrading.
 - `cct-guardrails.ts` — the extension (`session_start`, `tool_call`,
   `tool_result`, `registerCommand`)
 - `validators/check-python-ast.py` — reference validator (stdlib-only)
-- `tsconfig.json` — strict compile settings for the template (run
-  `npx tsc -p .pi/extensions` to type-check your customizations)
+- `tsconfig.json` — strict compile settings for the template. To
+  type-check your customizations: `npm i -D typescript @types/node` (once,
+  in your project), then `npx tsc -p .pi/extensions`
 - `README.md` — this file

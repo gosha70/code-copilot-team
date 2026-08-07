@@ -168,9 +168,16 @@ starter_config() {
 # Resolve the extension-template source dir (managed install first, repo
 # fallback) — #179. Empty when neither exists.
 extension_template_src() {
-  local cand
+  # A candidate must carry the COMPLETE file set — a stale managed install
+  # (e.g. from a mid-development window) falls through to the repo copy
+  # instead of producing a partial scaffold (review P1).
+  local cand f complete
   for cand in "$MANAGED_DIR/resources/extension-template" "$REPO_ADAPTER_DIR/resources/extension-template"; do
-    if [[ -f "$cand/cct-guardrails.ts" ]]; then echo "$cand"; return 0; fi
+    complete=true
+    for f in cct-guardrails.ts README.md tsconfig.json validators/check-python-ast.py; do
+      [[ -f "$cand/$f" ]] || { complete=false; break; }
+    done
+    if [[ "$complete" == "true" ]]; then echo "$cand"; return 0; fi
   done
   echo ""
 }
@@ -180,13 +187,16 @@ extension_template_src() {
 scaffold_ext_file() {
   local src="$1" dest="$2" rel="$3"
   if [[ -f "$dest" ]]; then
-    echo "[pi-code]   $rel exists — preserved (init never clobbers)." >&2
+    echo "[pi-code]   $rel exists — preserved (init never clobbers; a deleted template file IS restored)." >&2
     return 0
   fi
-  mkdir -p "$(dirname "$dest")"
-  cp "$src" "$dest"
+  # Fail LOUDLY: a copy or hash failure must abort the scaffold, never emit
+  # a manifest entry for a file that does not exist (review P1).
+  mkdir -p "$(dirname "$dest")" || { err "init: cannot create $(dirname "$dest")"; return 1; }
+  cp "$src" "$dest" || { err "init: cannot copy $rel from $src"; return 1; }
   local h
-  h="$(hash_file "$dest")"
+  h="$(hash_file "$dest")" || { err "init: cannot hash $rel"; return 1; }
+  [[ -n "$h" ]] || { err "init: empty hash for $rel"; return 1; }
   printf '    { "path": "%s", "kind": "extension-template", "hash": "%s" }' "$rel" "$h"
 }
 

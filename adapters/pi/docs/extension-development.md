@@ -4,6 +4,12 @@ Where to add things in the Pi adapter, and the gates each addition must pass.
 This is a map, not a re-explanation of the internals — read the referenced files
 for the details.
 
+> **User-side project templates:** this doc covers developing the CCT
+> runtime itself. For the end-user guardrails starter (`.pi/extensions/`
+> in YOUR project — pre-write + post-execution validation gates), see
+> `pi-code init --extension-template` and the scaffolded README
+> (source: `adapters/pi/resources/extension-template/`).
+
 ## Layout
 
 ```
