@@ -37,6 +37,27 @@ _ACCESS_BY_TOOL = {
 }
 
 
+def upsert_developer(
+    db: Database,
+    developer_id: str,
+    display_name: Optional[str] = None,
+) -> int:
+    """Idempotently register a developer (E1 registry; Slice B1, #187).
+
+    First code path that WRITES the ``developer`` table. ``display_name``
+    only ever fills in or updates to a non-NULL value — an upsert without
+    one never erases an existing name. Returns the row id.
+    """
+    sql = """
+        INSERT INTO developer (developer_id, display_name)
+        VALUES (?, ?)
+        ON CONFLICT (developer_id) DO UPDATE SET
+            display_name=COALESCE(excluded.display_name, developer.display_name)
+        RETURNING id
+    """
+    return db.insert_returning_id(sql, (developer_id, display_name))
+
+
 def upsert_session(
     db: Database,
     raw: RawSession,

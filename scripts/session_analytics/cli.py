@@ -14,7 +14,11 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+import os
+
 from . import constants as C
+from . import identity as IDENT
+from .identity import derive_developer_id
 from .config import load_config
 from .registry import UnknownAdapterError, list_adapter_ids
 
@@ -63,7 +67,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
     )
     p_ing.add_argument(
-        "--developer-id", default=C.DEFAULT_DEVELOPER_ID, help="E1 multi-tenant tag."
+        "--developer-id",
+        default=None,
+        help=(
+            "E1 multi-tenant tag. Default: derived (CCT_DEVELOPER_ID env > "
+            "config developer_id > git user.email local-part > 'local')."
+        ),
     )
     p_ing.add_argument(
         "--redact",
@@ -245,6 +254,18 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     return C.EXIT_OK
 
 
+def _derived_developer_id(args: argparse.Namespace, cfg) -> str:
+    """Slice B1 (#187): flag > env > config > git-email > "local"."""
+    derived = derive_developer_id(
+        cli_value=getattr(args, "developer_id", None),
+        env=os.environ,
+        config_value=(cfg.raw or {}).get(IDENT.DEVELOPER_ID_CONFIG_KEY),
+    )
+    if derived.source != IDENT.SOURCE_FLAG:
+        _log.info("developer_id '%s' (source: %s)", derived.id, derived.source)
+    return derived.id
+
+
 def _cmd_ingest(args: argparse.Namespace) -> int:
     from .ingest.pipeline import ingest
     from .setup_cmd import ensure_initialized
@@ -264,7 +285,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             dsn=cfg.dsn,
             copilots=args.copilot,
             root=args.root,
-            developer_id=args.developer_id,
+            developer_id=_derived_developer_id(args, cfg),
             redaction_mode=cfg.redaction_mode,
             full=args.full,
             pricing=cfg.pricing,
@@ -571,10 +592,13 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     # default (otherwise a healthy watch prints nothing and looks frozen).
     _log.setLevel(logging.INFO)
 
+    watch_developer_id = _derived_developer_id(args, cfg)
+
     def ingest_fn() -> None:
         stats = ingest(
             dsn=cfg.dsn,
             copilots=args.copilots,
+            developer_id=watch_developer_id,
             redaction_mode=cfg.redaction_mode,
             pricing=cfg.pricing,
             cli_redaction_override=None,

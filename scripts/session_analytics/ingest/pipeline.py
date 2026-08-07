@@ -100,6 +100,9 @@ def ingest(
     db = Database.connect(dsn)
     try:
         apply_ddl(db)
+        # Slice B1 (#187): the developer registry row exists before any
+        # session stamps reference the id (idempotent; both dialects).
+        store.upsert_developer(db, developer_id)
         for copilot in selected:
             adapter = get_adapter(copilot)
             c_ingested = c_skipped = 0
