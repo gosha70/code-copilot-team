@@ -56,8 +56,11 @@ this spec enforces that with a fail-closed preflight.
   session timeout, blocking findings, provider unavailable, `max_phases`,
   origin drift, empty diff, PR precheck failures are ALL
   `terminated_policy`. `parked` (exit 4) is unchanged and remains the
-  attended, resumable state; a policy-terminated run also remains
-  operator-resumable (`--resume` semantics untouched).
+  attended, resumable state. A policy-terminated run is TERMINAL in
+  increment A: `--resume` on a `terminated_policy` ledger is an explicit
+  refusal (a silent fall-through to a re-run would erase the boundary
+  the termination enforced); resume/recovery for terminated runs arrives
+  with #190 increment D. Attended `--resume` semantics are untouched.
 - **FR-2 — `unattended` profile, fail-closed before B.** The profile
   ladder becomes `advisory|pr|merge|unattended`. `merge.enabled` stays an
   independent switch defaulting to false. Because admission control is

@@ -1290,7 +1290,11 @@ assert_eq "termination artifacts add no force-push (prechecks not weakened)" "0"
 
 # End-to-end terminations reach the dispatch machinery through the
 # documented test seam that increment B will REPLACE with real admission.
+# The gh stub keeps these cases deterministic: without it, hosts with an
+# authenticated real gh keep CAN_PUSH=true while CI (no gh auth) takes
+# the capability-downgrade path — two different journal trails.
 export CCT_AUTOBUILD_TEST_SEAM=pre-admission
+export CCT_GH_BIN="$GH_STUB"
 
 # origin_gate at preflight → terminated_policy, exit 6, mandatory artifacts
 P=$(setup_project); unattended_cfg "$P"
@@ -1321,7 +1325,8 @@ assert_eq "termination reason review_breaker" "review_breaker" \
 assert_eq "status terminated_policy (not parked)" "terminated_policy" \
     "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 assert_contains "blocked push journaled as artifact skip" \
-    "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "artifact_skipped"
+    "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" \
+    "termination push failed or refused by prechecks"
 assert_eq "triage report generated on mid-run termination" "1" \
     "$([[ -f "$P/.cct/auto-build/demo-feat/triage-report.md" ]] && echo 1 || echo 0)"
 # terminated_policy is terminal in increment A: --resume is refused.
@@ -1330,18 +1335,31 @@ assert_exit "terminated run refuses --resume (exit 1)" 1 "$RC"
 assert_contains "resume refusal names the terminal contract" "$OUTPUT" "terminal"
 rm -rf "$P"
 
-# cap_exceeded → terminated_policy. Needs a working remote + gh stub: the
-# unattended ladder pushes after phase 1, and the cap trips at phase 2's
-# session preflight — the push must not be the first breaker hit.
+# cap_exceeded → terminated_policy. Needs a working remote: the unattended
+# ladder pushes after phase 1, and the cap trips at phase 2's session
+# preflight — the push must not be the first breaker hit.
 P=$(setup_project); unattended_cfg "$P"
 BARE=$(add_remote "$P")
-export CCT_GH_BIN="$GH_STUB"
 MOCK_CLAUDE_COST=6 run_driver "$P"
 assert_exit "unattended cost cap terminates (exit 6)" 6 "$RC"
 assert_eq "termination reason cap_exceeded" "cap_exceeded" \
     "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
-unset CCT_GH_BIN
 rm -rf "$P" "$BARE"
+
+# Regression (user P1 / CI): an unusable or unauthenticated gh must NEVER
+# block a policy termination — push/PR artifacts are best-effort (FR-5).
+# The capabilities are downgraded (journaled) and exit 6 still happens.
+P=$(setup_project); unattended_cfg "$P"
+sed -i '' 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md" 2>/dev/null || \
+    sed -i 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md"
+git -C "$P" add -A && git -C "$P" commit -q -m "break origin"
+GH_AUTH_FAIL=1 run_driver "$P"
+assert_exit "gh-less unattended termination still exits 6" 6 "$RC"
+assert_eq "gh-less termination reason recorded" "origin_gate" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
+assert_contains "gh downgrade journaled (capabilities, not a hard error)" \
+    "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "capability_downgrade"
+rm -rf "$P"
 
 # git_anomaly (no-op build session) → terminated_policy
 P=$(setup_project); unattended_cfg "$P"
@@ -1404,7 +1422,7 @@ assert_exit "--profile unattended over an attended config is rejected" 1 "$RC"
 assert_contains "override rejection names the declaration rule" "$OUTPUT" "must be declared"
 rm -rf "$P"
 
-unset CCT_AUTOBUILD_TEST_SEAM
+unset CCT_AUTOBUILD_TEST_SEAM CCT_GH_BIN
 
 # FR-9 byte-identical attended behavior: a v2 config with an unattended
 # block present but an ATTENDED profile still parks (exit 4), and writes

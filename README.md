@@ -671,7 +671,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   ├── test-review-loop.sh            40 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
-│   └── test-auto-build-loop.sh        208 auto-build driver tests
+│   └── test-auto-build-loop.sh        211 auto-build driver tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md

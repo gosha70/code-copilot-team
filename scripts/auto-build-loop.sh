@@ -62,7 +62,9 @@ MAX_PHASES_ARG=""
 START_PHASE_ARG=""
 
 usage() {
-    sed -n '5,25p' "$0" | sed 's/^# \{0,1\}//'
+    # Print the header comment block (everything from line 4 to the first
+    # non-comment line) so the range cannot drift as the header grows.
+    awk 'NR < 4 { next } !/^#/ { exit } { print }' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -487,13 +489,30 @@ preflight() {
 
     # gh preflight (FR-2a): required only when the profile can push / open PRs.
     if [[ "$CAN_PUSH" == "true" ]]; then
+        local gh_unusable=""
         if ! "$GH_BIN" --version >/dev/null 2>&1; then
-            echo "Error: gh binary not usable: $GH_BIN (override with CCT_GH_BIN) — required for profile '$PROFILE'." >&2
-            exit 1
+            gh_unusable="gh binary not usable: $GH_BIN (override with CCT_GH_BIN)"
+        elif ! ( cd "$PROJECT_DIR" && "$GH_BIN" auth status ) >/dev/null 2>&1; then
+            gh_unusable="'gh auth status' failed"
         fi
-        if ! ( cd "$PROJECT_DIR" && "$GH_BIN" auth status ) >/dev/null 2>&1; then
-            echo "Error: 'gh auth status' failed — authenticate gh before running profile '$PROFILE'." >&2
-            exit 1
+        if [[ -n "$gh_unusable" ]]; then
+            if [[ "$PROFILE" == "unattended" ]]; then
+                # #191 FR-5: push/PR artifacts are BEST-EFFORT under
+                # unattended — a missing/unauthenticated gh must never block
+                # the terminate-only contract (exit 6 + mandatory
+                # ledger/triage). Downgrade the capabilities and journal;
+                # every later artifact skip is journaled with its cause too.
+                CAN_PUSH=false; CAN_OPEN_PR=false; CAN_MERGE=false
+                mkdir -p "$LEDGER_DIR"
+                journal "capability_downgrade" "$gh_unusable — push/PR artifacts will be skipped (best-effort, FR-5)"
+                echo "[auto-build] WARN: $gh_unusable — unattended run continues without push/PR artifacts." >&2
+            elif [[ "$gh_unusable" == "gh binary"* ]]; then
+                echo "Error: $gh_unusable — required for profile '$PROFILE'." >&2
+                exit 1
+            else
+                echo "Error: 'gh auth status' failed — authenticate gh before running profile '$PROFILE'." >&2
+                exit 1
+            fi
         fi
     fi
 
