@@ -1,42 +1,61 @@
 /**
  * CCT enterprise guardrails — STARTER TEMPLATE (issue #179).
  *
- * A deterministic, programmatic PRE-WRITE gate for your project: every
- * `write`/`edit` the agent attempts is validated by a command YOU control
- * (AST checker, linter, policy script) BEFORE the file is touched. On
- * failure, the validator's stderr is returned as the block reason — the
- * model sees it immediately and self-corrects. This is enforcement, not
- * prompt discipline.
+ * Deterministic, programmatic validation for your project, enforced at two
+ * points (both verified against the installed pi package — see the README
+ * honesty table for sources):
  *
- * VERIFIED SURFACES ONLY. This template uses exactly the Pi APIs the CCT
- * runtime itself is built on: `session_start`, the `tool_call` gate
- * (return `{ block: true, reason }` to stop a tool), and
- * `registerCommand`. Interception happens PRE-write because that is what
- * this Pi build supports (PostToolUse-style hooks are `unsupported` — see
- * the README's honesty table; pre-write blocking is also strictly
- * stronger: bad content never reaches disk).
+ *   1. PRE-WRITE (`tool_call`, `write` tool): the INCOMING content —
+ *      `event.input.content`, not the old file — is validated in a temp
+ *      file BEFORE anything touches disk. Bad content never lands.
+ *   2. POST-EXECUTION (`tool_result`, `write` + `edit` tools): the file as
+ *      it now exists on disk is validated AFTER the tool ran; on failure
+ *      the tool result is patched to an error carrying your validator's
+ *      report, so the model sees it immediately and self-corrects.
+ *      Validating the POST state means an edit that REPAIRS an already-
+ *      broken file passes — there is no "legacy file deadlock".
  *
- * LOADING (see README.md): launch with an explicit extension flag —
- *   pi-code -- --extension .pi/extensions/cct-guardrails.ts
- * Auto-discovery of `.pi/extensions/` is NOT a verified behavior of this
- * Pi build; the explicit flag is exactly how the CCT runtime loads.
+ * `edit` is deliberately not pre-gated: its input is a list of patches,
+ * not final content; the post-execution check covers it one step later.
  *
- * CUSTOMIZE the three constants below. Keep your validator's contract:
- * exit 0 = pass; any other exit = block, with a human-readable report on
- * stderr (that text is what the model reads to fix its output).
+ * KNOWN BOUNDARY: the `bash` tool is NOT gated here — a shell heredoc can
+ * write files without triggering these hooks. Pair this template with your
+ * harness's bash policy (the CCT runtime gates bash separately) and treat
+ * this file as the write/edit guardrail, not a filesystem sandbox.
+ *
+ * Event/result shapes follow pi's shipped typings
+ * (dist/core/extensions/types.d.ts): tool_call events are
+ * `{ type, toolCallId, toolName, input }` with `write` input
+ * `{ path, content }`; blocking returns `{ block: true, reason }`;
+ * tool_result handlers chain like middleware and may return partial
+ * patches `{ content, isError }`.
+ *
+ * LOADING (details + trust caveats in README.md): this file is placed in
+ * `.pi/extensions/`, which pi AUTO-DISCOVERS once the project is trusted —
+ * the upstream-recommended path (enables `/reload`). An explicit
+ * `--extension` flag also works but BYPASSES pi's project-trust gate; see
+ * the README security note before putting it in an alias.
  */
 
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 /** Which file extensions to validate. Empty array = validate every path. */
 const VALIDATE_EXTENSIONS: string[] = [".py"];
 
 /**
- * The validator command. Argv form (no shell). The file under validation
- * is appended as the last argument. Override per-run with the
- * CCT_VALIDATOR_CMD env var (whitespace-split into argv — use the
- * constant instead if your paths contain spaces).
+ * The validator command, argv form (no shell). `--` and the target file
+ * are appended. Override per-run with the GUARDRAILS_VALIDATOR_CMD env var
+ * (whitespace-split into argv — NO argument may contain spaces; use this
+ * constant for anything more complex). Prefer an absolute path when your
+ * sessions may start outside the repo root (e.g. worktree workers).
+ *
+ * Contract: exit 0 = pass; exit 1 = violation (readable report on stderr —
+ * the model reads it verbatim); any other exit, spawn failure, timeout, or
+ * oversized output = "validator error" (handled per FAIL_CLOSED below,
+ * never reported to the model as a code violation).
  */
 const VALIDATOR_CMD: string[] = [
   "python3",
@@ -44,20 +63,20 @@ const VALIDATOR_CMD: string[] = [
 ];
 
 /**
- * Fail-closed: when the validator itself cannot run (missing interpreter,
- * crash, timeout), block the write with the failure text. Set to false to
- * warn-and-allow instead — weaker, but never bricks a session on a
- * misconfigured validator. The CCT posture is fail-closed.
+ * Fail-closed: when the validator itself cannot run, block the pre-write
+ * (and mark the post-result as an error) with the failure text. Set false
+ * for warn-and-allow — which WARNS on the console, never silently.
  */
 const FAIL_CLOSED = true;
 
-/** Wall-clock cap for one validation run. */
+/** Wall-clock cap and output cap for one validation run. */
 const VALIDATOR_TIMEOUT_MS = 15_000;
+const VALIDATOR_MAX_BUFFER = 10 * 1024 * 1024;
 
-const WRITE_TOOLS = new Set(["write", "edit"]);
+const GATED_TOOLS = new Set(["write", "edit"]);
 
 function validatorArgv(): string[] {
-  const env = process.env.CCT_VALIDATOR_CMD;
+  const env = process.env.GUARDRAILS_VALIDATOR_CMD;
   if (env && env.trim()) return env.trim().split(/\s+/);
   return [...VALIDATOR_CMD];
 }
@@ -67,52 +86,130 @@ function shouldValidate(filePath: string): boolean {
   return VALIDATE_EXTENSIONS.includes(path.extname(filePath).toLowerCase());
 }
 
+type Verdict =
+  | { kind: "pass" }
+  | { kind: "violation"; report: string }
+  | { kind: "validator-error"; detail: string };
+
+/** Async (never blocks pi's event loop); `--` guards dash-leading paths. */
+function runValidator(target: string): Promise<Verdict> {
+  const argv = validatorArgv();
+  return new Promise((resolve) => {
+    execFile(
+      argv[0],
+      [...argv.slice(1), "--", target],
+      {
+        encoding: "utf8",
+        timeout: VALIDATOR_TIMEOUT_MS,
+        maxBuffer: VALIDATOR_MAX_BUFFER,
+      },
+      (error, stdout, stderr) => {
+        if (!error) return resolve({ kind: "pass" });
+        const code = (error as NodeJS.ErrnoException & { code?: unknown }).code;
+        if (code === 1) {
+          const report = (stderr || stdout || "").trim() || "(no output)";
+          return resolve({ kind: "violation", report });
+        }
+        // Spawn failure (ENOENT...), timeout, ENOBUFS, or a non-0/1 exit:
+        // the VALIDATOR failed, which is never the model's fault.
+        return resolve({
+          kind: "validator-error",
+          detail: String(code ?? error.message),
+        });
+      },
+    );
+  });
+}
+
+function validatorErrorText(detail: string): string {
+  return (
+    `[guardrails] validator could not run (${detail}) — ` +
+    (FAIL_CLOSED
+      ? "failing closed. Fix the validator setup (see .pi/extensions/README.md) or set FAIL_CLOSED=false."
+      : "warn-and-allow posture: proceeding WITHOUT validation.")
+  );
+}
+
 export default async function (pi: any): Promise<void> {
-  pi.on?.("session_start", async (_event: unknown, _ctx: unknown) => {
-    // A good place for one-time setup. Keep it fast and side-effect free —
-    // this runs on every session start.
+  pi.on?.("session_start", async () => {
+    // Visibility, not enforcement: the active validator is printed once so
+    // an ambient GUARDRAILS_VALIDATOR_CMD can never act invisibly.
+    console.log(
+      `[guardrails] validating ${VALIDATE_EXTENSIONS.join(", ") || "ALL files"} ` +
+        `via [${validatorArgv().join(" ")}] ` +
+        `(${FAIL_CLOSED ? "fail-closed" : "warn-and-allow"})`,
+    );
   });
 
-  pi.on?.("tool_call", async (event: any, _ctx: unknown) => {
-    // The same access patterns the CCT runtime uses (verified shapes).
-    const toolName = String(event?.toolName ?? event?.name ?? "");
-    if (!WRITE_TOOLS.has(toolName)) return undefined; // only gate writes
-    const args: any = event?.input ?? event?.args ?? {};
-    const rawPath = String(
-      args?.path ?? args?.file_path ?? args?.filePath ?? "",
-    );
+  // 1) PRE-WRITE: validate the incoming content before it reaches disk.
+  pi.on?.("tool_call", async (event: any) => {
+    if (event?.toolName !== "write") return undefined;
+    const input: any = event?.input ?? {};
+    const rawPath = String(input?.path ?? "");
+    const content = input?.content;
     if (!rawPath || !shouldValidate(rawPath)) return undefined;
+    if (typeof content !== "string") return undefined;
 
-    const argv = validatorArgv();
-    const proc = spawnSync(argv[0], [...argv.slice(1), rawPath], {
-      encoding: "utf8",
-      timeout: VALIDATOR_TIMEOUT_MS,
-    });
-
-    if (proc.error || proc.status === null) {
-      // The validator itself failed to run (not a validation verdict).
-      const detail = proc.error ? String(proc.error) : "validator timed out";
-      if (FAIL_CLOSED) {
+    // Same extension so extension-sensitive validators behave identically.
+    const tmp = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "guardrails-")),
+      `incoming${path.extname(rawPath)}`,
+    );
+    try {
+      fs.writeFileSync(tmp, content);
+      const verdict = await runValidator(tmp);
+      if (verdict.kind === "violation") {
         return {
           block: true,
           reason:
-            `[guardrails] validator could not run (${detail}) — ` +
-            "failing closed. Fix the validator setup or set FAIL_CLOSED=false.",
+            `[guardrails] pre-write validation failed for '${rawPath}':\n` +
+            `${verdict.report}\n` +
+            "The file was NOT written. Correct the violations and retry.",
         };
       }
-      return undefined; // warn-and-allow posture
+      if (verdict.kind === "validator-error") {
+        const text = validatorErrorText(verdict.detail);
+        if (FAIL_CLOSED) return { block: true, reason: text };
+        console.warn(text);
+      }
+      return undefined;
+    } finally {
+      fs.rmSync(path.dirname(tmp), { recursive: true, force: true });
     }
+  });
 
-    if (proc.status !== 0) {
-      const report = (proc.stderr || proc.stdout || "").trim() || "(no output)";
+  // 2) POST-EXECUTION: validate what is now on disk; patch the result on
+  // failure so the model self-corrects. Repairs of broken files PASS here.
+  pi.on?.("tool_result", async (event: any) => {
+    if (!GATED_TOOLS.has(String(event?.toolName ?? ""))) return undefined;
+    if (event?.isError) return undefined; // the tool already failed
+    const rawPath = String(event?.input?.path ?? "");
+    if (!rawPath || !shouldValidate(rawPath)) return undefined;
+    if (!fs.existsSync(rawPath)) return undefined; // e.g. cwd-relative path
+
+    const verdict = await runValidator(rawPath);
+    if (verdict.kind === "violation") {
       return {
-        block: true,
-        reason:
-          `[guardrails] validation failed for '${rawPath}':\n${report}\n` +
-          "Correct the violations above, then retry the write.",
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text:
+              `[guardrails] post-${event.toolName} validation failed for ` +
+              `'${rawPath}':\n${verdict.report}\n` +
+              "The change IS on disk — fix the violations in a follow-up edit.",
+          },
+        ],
       };
     }
-    return undefined; // clean — the write proceeds
+    if (verdict.kind === "validator-error") {
+      const text = validatorErrorText(verdict.detail);
+      if (FAIL_CLOSED) {
+        return { isError: true, content: [{ type: "text", text }] };
+      }
+      console.warn(text);
+    }
+    return undefined;
   });
 
   pi.registerCommand?.("guardrails:status", {

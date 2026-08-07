@@ -53,7 +53,33 @@ origin:
 
 ## Design
 
-### D1 — Template artifacts (source of truth in resources/)
+### D0 — Phase-1 review redesign (2026-08-07; methodology correction)
+The phase-1 review verified against the INSTALLED pi package (0.83.0) and
+proved the original design wrong in both directions:
+- **Facts corrected**: `tool_result` (post-tool interception, result
+  patching) has shipped since pi 0.18.0; `.pi/extensions/` auto-discovery
+  is supported (trust-gated) and upstream-recommended; explicit
+  `--extension` bypasses the trust gate (security caveat, F3);
+  `setModel` exists on ExtensionAPI; `--mode rpc` is a shipped mode.
+  Root cause: "verifying" against `hooks/events.ts` (a record of what CCT
+  hooks) inverted "unchecked" into "pi doesn't have it". Standing rule
+  now: primary-source citations for every pi claim, version named.
+- **Gate redesigned** (review F4/F5): pre-write validation now judges the
+  INCOMING `write` content via a temp file (a fresh write of broken
+  content is blocked before disk — previously a guaranteed no-op), and a
+  `tool_result` post-execution gate validates the on-disk result of
+  `write`/`edit`, patching the result with the report on failure —
+  which also dissolves the legacy-file deadlock (repairs pass).
+- **Hardening** (F6-F13): bash-bypass boundary stated; env override
+  renamed `GUARDRAILS_VALIDATOR_CMD` (out of the CCT_*-kept namespace)
+  and surfaced at session_start; async execFile (no event-loop stall);
+  `--` argv separator + maxBuffer; violation vs validator-error outcomes
+  distinct (exit 1 vs other); warn-and-allow warns; validator 0755 with
+  the 3-state exit contract; canonical pi event keys only (dead fallback
+  patterns dropped).
+
+### D1 — Template artifacts (source of truth in resources/) — shape
+### superseded by D0 where they differ
 `adapters/pi/resources/extension-template/` holds three files:
 - `cct-guardrails.ts` — the starter extension: registers a `tool_call`
   handler that, for `write`/`edit`, resolves the target path, runs a

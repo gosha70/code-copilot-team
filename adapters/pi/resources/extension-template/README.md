@@ -1,46 +1,66 @@
 # CCT Guardrails — Pi extension starter template (#179)
 
-Deterministic, programmatic guardrails for your project: a **pre-write
-validation gate** that runs YOUR command (AST checker, linter, policy
-script) on every `write`/`edit` before it touches disk, and feeds the
-failure report straight back to the model for immediate self-correction.
-Prompt files declare intent; this extension **enforces** it.
+Deterministic, programmatic validation for your project, enforced at two
+points: incoming `write` content is validated **before it touches disk**,
+and the on-disk result of every `write`/`edit` is validated **after
+execution**, with your validator's report fed straight back to the model
+for immediate self-correction. Prompt files declare intent; this extension
+**enforces** it.
 
 Scaffolded by `pi-code init <dir> --extension-template` into
 `.pi/extensions/`.
 
-## Load it (verified mechanism)
+## Load it
 
-Pi loads extensions via an explicit flag — the same way the CCT
-enforcement runtime itself is loaded:
+`.pi/extensions/*.ts` is **auto-discovered by pi once the project is
+trusted** — this is the upstream-recommended path and enables `/reload`
+during development. Trust the project (pi prompts, or `pi --approve`) and
+the extension is live.
 
-```bash
-pi-code -- --extension .pi/extensions/cct-guardrails.ts
-```
+> **Security note on the explicit flag:** `pi -e .pi/extensions/cct-guardrails.ts`
+> (or forwarding `--extension` through `pi-code -- --extension …`) also
+> works — but explicit CLI extension paths are **not filtered by pi's
+> project-trust gate**. An alias that always passes `-e .pi/extensions/…`
+> will execute whatever a freshly-cloned untrusted repo put at that path.
+> Prefer auto-discovery + trust; reserve `-e` for pinned paths you control
+> (e.g. an absolute path in CI).
 
-> **Honesty note:** auto-discovery of `.pi/extensions/` is **not** a
-> verified behavior of this Pi build. The explicit `--extension` flag is
-> the verified path; keep it in your launch alias/CI job.
+## The two gates
 
-## Customize the gate
+| Gate | Tool(s) | What is validated | On failure |
+|---|---|---|---|
+| pre-write (`tool_call`) | `write` | the **incoming content**, in a temp file — disk is untouched | write blocked; report returned as the block reason |
+| post-execution (`tool_result`) | `write`, `edit` | the file **as it now exists** | tool result patched to an error carrying the report; the model fixes it in a follow-up edit |
 
-Edit the three constants at the top of `cct-guardrails.ts`:
+Because the post-gate checks the *resulting* state, an edit that **repairs
+an already-broken file passes** — enabling this template on a legacy
+codebase does not deadlock existing violations; they surface only when a
+change leaves the file still-broken.
+
+**Known boundary:** the `bash` tool is not gated — a shell heredoc can
+write files without these hooks. Pair the template with your harness's
+bash policy (the CCT runtime gates bash separately); this is the
+write/edit guardrail, not a filesystem sandbox.
+
+## Customize
+
+Constants at the top of `cct-guardrails.ts`:
 
 | Constant | Meaning |
 |---|---|
 | `VALIDATE_EXTENSIONS` | Which file extensions to gate (`[]` = all) |
-| `VALIDATOR_CMD` | Your validator argv; the target file is appended. Override per-run with `CCT_VALIDATOR_CMD` |
-| `FAIL_CLOSED` | `true` (default): a validator that cannot run blocks the write; `false`: warn-and-allow |
+| `VALIDATOR_CMD` | Your validator argv; `--` + the target file are appended. Override per-run with `GUARDRAILS_VALIDATOR_CMD` (whitespace-split — no argument may contain spaces; prefer absolute paths for worktree/CI sessions). The active command is printed at session start, so an ambient override is always visible |
+| `FAIL_CLOSED` | `true` (default): a validator that cannot run blocks/errors the operation; `false`: warn-and-allow (warns on the console — never silent) |
 
-**Validator contract:** exit `0` = pass; any other exit = block, with a
-readable report on **stderr** (that text is what the model reads to fix
-its output). The shipped `validators/check-python-ast.py` demonstrates the
-contract with stdlib `ast.parse`. Swap in anything that honors it:
-
-- `tree-sitter` structural rules (strip illegal syntax, enforce shape)
-- a Java/Kotlin AST analyzer for framework-specific rules (e.g. SAIL-style
-  domain constraints)
-- your linter (`ruff check --quiet`, `eslint --quiet`) or CI policy gate
+**Validator contract:** exit `0` = pass; exit `1` = violation with a
+readable report on **stderr** (the model reads it verbatim); any other
+exit, timeout, or oversized output = *validator error* — handled per
+`FAIL_CLOSED` and never blamed on the model. The shipped
+`validators/check-python-ast.py` demonstrates the contract with stdlib
+`ast.parse`. Swap in anything that honors it: `tree-sitter` structural
+rules, a Java/Kotlin AST analyzer (SAIL-style domain constraints), `ruff
+check --quiet`, `eslint --quiet`, a policy engine. Note the validator
+inherits the session environment — point it at trusted code only.
 
 ## Prompts vs extensions (linkage)
 
@@ -49,31 +69,32 @@ per-agent instructions) and this extension play different roles:
 
 - **Prompts declare** — personas, intent, style, review checklists. The
   model *tries* to follow them.
-- **Extensions enforce** — the `tool_call` gate is deterministic: a write
-  that fails your validator does not happen, regardless of what the model
-  believed. Put every rule you cannot afford to lose on this side.
+- **Extensions enforce** — these gates are deterministic: content that
+  fails your validator is blocked or flagged regardless of what the model
+  believed (within the bash boundary above).
 - They compose: state the rule in your prompt (so the model aims right)
-  AND enforce it here (so a miss cannot land). The block reason closes the
-  loop — the model reads your validator's report and retries.
+  AND enforce it here (so a miss cannot slip through). The report text
+  closes the loop.
 
-## What this Pi build supports (honesty table)
+## Pi surface status (verified against the installed package)
 
-Issue #179 sketches several APIs. Status on this Pi build, verified
-against the CCT runtime's own event registry (`hooks/events.ts`):
+Issue #179 sketches several APIs. Status verified against **pi 0.83.0**
+(`@earendil-works/pi-coding-agent`: `dist/core/extensions/types.d.ts`,
+`docs/extensions.md`, `docs/rpc.md`) — not inferred from CCT internals:
 
-| Sketched API | Status | Working alternative (used here) |
+| Sketched API | Status on pi 0.83.0 | Notes |
 |---|---|---|
-| `post_tool_call` interception | **unsupported** (PostToolUse is not emitted) | the **pre-write `tool_call` gate** — block before disk, feed the reason back |
-| `agent_event` + `ctx.setModel()` mid-turn routing | **unverified** — no such surface confirmed | per-phase model policy exists as reported config (`phases.*.model`); actual routing is a future Pi capability |
-| `pi --mode rpc` | **unverified** | the verified headless surface is `pi --mode json -p` — see `adapters/pi/docs/headless-harness.md` |
-| `.pi/extensions/` auto-discovery | **unverified** | explicit `--extension <path>` (above) |
+| post-tool interception (`post_tool_call`) | **supported** as the `tool_result` event (since pi 0.18.0); handlers chain like middleware and may patch `{content, isError}` | **used by this template** for the post-execution gate |
+| dynamic model routing (`agent_event` + `setModel`) | **partially supported**: there is no `agent_event` event, but `pi.setModel(model)` exists on the extension API (`types.d.ts` `ExtensionAPI.setModel`) and can be called from any handler (e.g. escalate on repeated `tool_result` failures) | not included in this template; the CCT runtime does not wrap it |
+| headless `pi --mode rpc` | **shipped pi mode** (`docs/rpc.md`); the CCT harness has not exercised it — its verified headless recipes use `--mode json` | see `adapters/pi/docs/headless-harness.md` |
+| `.pi/extensions/` auto-discovery | **supported, trust-gated** (project-local entries load after the project is trusted); global dir `~/.pi/agent/extensions/` | the recommended loading path (above); explicit `-e` bypasses the trust gate — see the security note |
 
-These rows may only flip when a Pi build is confirmed to expose the
-surface — never speculatively.
+Rows state what the named pi version ships; re-verify against your
+installed version's typings when upgrading.
 
 ## Files
 
-- `cct-guardrails.ts` — the extension (verified surfaces only:
-  `session_start`, `tool_call`, `registerCommand`)
+- `cct-guardrails.ts` — the extension (`session_start`, `tool_call`,
+  `tool_result`, `registerCommand`)
 - `validators/check-python-ast.py` — reference validator (stdlib-only)
 - `README.md` — this file

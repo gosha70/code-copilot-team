@@ -2,10 +2,11 @@
 # check-python-ast.py — REFERENCE validator for the CCT guardrails template
 # (issue #179). Demonstrates the validator contract:
 #
-#   exit 0               -> the write proceeds
-#   exit non-zero        -> the write is BLOCKED; everything on stderr is
-#                           fed back to the model as the reason, so make it
-#                           a readable, actionable report
+#   exit 0  -> pass
+#   exit 1  -> violation; everything on stderr is fed back to the model as
+#              the reason, so make it a readable, actionable report
+#   other   -> "validator error" (misconfiguration/crash) — the template
+#              handles it per FAIL_CLOSED and never blames the model
 #
 # Stdlib-only on purpose. Swap this for anything that honors the contract:
 # tree-sitter structural rules, a Java AST analyzer, your linter, a policy
@@ -16,10 +17,13 @@ import sys
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: check-python-ast.py <file>", file=sys.stderr)
+    # The template invokes validators as `<argv...> -- <file>`; tolerate the
+    # separator so direct manual runs work identically.
+    args = [a for a in sys.argv[1:] if a != "--"]
+    if len(args) != 1:
+        print("usage: check-python-ast.py [--] <file>", file=sys.stderr)
         return 2
-    file_path = sys.argv[1]
+    file_path = args[0]
     try:
         with open(file_path, "r", encoding="utf-8") as fh:
             source = fh.read()

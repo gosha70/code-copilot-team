@@ -1,9 +1,10 @@
 # Tasks: Pi extension templates & hook recipes (#179)
 
-Verified-surfaces only — no template or recipe may reference
-`post_tool_call`, `agent_event`, `setModel`, `--mode rpc`, or
-`.pi/extensions/` auto-discovery except inside the honesty table. The CCT
-runtime is NOT modified. Targets **#179**. Gates: `test-pi-launcher.sh`,
+Primary-source rule (revised by the phase-1 review): every pi-surface
+claim cites the installed pi package (0.83.0); template code uses only
+pi-shipped surfaces (`session_start`, `tool_call`, `tool_result`,
+`registerCommand`); `agent_event`/`post_tool_call` (names pi does not
+ship) appear nowhere in code. The CCT runtime is NOT modified. Targets **#179**. Gates: `test-pi-launcher.sh`,
 `test-pi-runtime.sh`, `test-typecheck-gate.sh`, `test-pi-adapter.sh`
 (known host-env exclusion), docs lint if any. `SC` = success criterion.
 
