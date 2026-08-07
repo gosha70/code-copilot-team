@@ -5,9 +5,10 @@
 // content is blocked BEFORE disk, a valid->garbage overwrite is blocked, an
 // edit that REPAIRS a broken file passes (no legacy deadlock), post-edit
 // failures patch the tool result, validator-error vs violation are kept
-// distinct, warn-and-allow warns, and the honesty table is checked against
-// the INSTALLED pi package's typings when available (primary source, not
-// CCT internals). Run via tests/test-pi-runtime.sh.
+// distinct, warn-and-allow provably warns, a hung validator times out into
+// the validator-error lane, relative post-gate paths resolve against
+// ctx.cwd, and the honesty table is checked against the INSTALLED pi
+// package (visible skip when pi is absent). Run via tests/test-pi-runtime.sh.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -209,29 +210,147 @@ test("the reference validator honors the contract directly (incl. --)", async ()
   }
 });
 
-test("honesty: template code references only surfaces pi ships; table checked against installed pi", async () => {
+test("honesty: template code never uses names pi does not ship", () => {
   const code = fs.readFileSync(path.join(TEMPLATE_DIR, "cct-guardrails.ts"), "utf8");
-  // The one API #179 sketches that pi does NOT ship as an event: agent_event.
   assert.equal(code.includes("agent_event"), false);
   assert.equal(code.includes("post_tool_call"), false); // pi's name is tool_result
+});
 
-  // Primary-source canary: when the installed pi package is resolvable,
-  // assert the surfaces the README table claims. Skipped (not failed) on
-  // hosts without pi — CI runs without it.
-  let typesPath = null;
+/** Locate the installed pi package: local resolution, then the global npm
+ * root (both the execPath-derived layout and `npm root -g`). */
+function resolvePiPackage() {
   try {
     const require = createRequire(import.meta.url);
-    const pkg = require.resolve("@earendil-works/pi-coding-agent/package.json", {
+    return require.resolve("@earendil-works/pi-coding-agent/package.json", {
       paths: [process.cwd(), os.homedir()],
     });
-    typesPath = path.join(path.dirname(pkg), "dist", "core", "extensions", "types.d.ts");
   } catch {
-    typesPath = null;
+    /* fall through to the global roots */
   }
-  if (typesPath && fs.existsSync(typesPath)) {
-    const types = fs.readFileSync(typesPath, "utf8");
-    assert.ok(types.includes('on(event: "tool_result"')); // table row 1
-    assert.ok(types.includes("setModel(")); // table row 2
-    assert.ok(!types.includes('on(event: "agent_event"')); // absent, as stated
+  const candidates = [
+    path.join(path.dirname(process.execPath), "..", "lib", "node_modules"),
+  ];
+  for (const root of candidates) {
+    const p = path.join(root, "@earendil-works", "pi-coding-agent", "package.json");
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+test("honesty canary: the README table matches the INSTALLED pi package", async (t) => {
+  const pkgPath = resolvePiPackage();
+  if (!pkgPath) {
+    t.skip("pi package not resolvable — honesty-table canary not verified on this host");
+    return;
+  }
+  const pkgDir = path.dirname(pkgPath);
+  const installed = JSON.parse(fs.readFileSync(pkgPath, "utf8")).version;
+  const types = fs.readFileSync(
+    path.join(pkgDir, "dist", "core", "extensions", "types.d.ts"),
+    "utf8",
+  );
+  const readme = fs.readFileSync(path.join(TEMPLATE_DIR, "README.md"), "utf8");
+
+  // The table names the version it was verified against; it must match the
+  // installed package (upgrading pi is SUPPOSED to trip this — that is the
+  // re-verify-on-upgrade contract).
+  assert.ok(
+    readme.includes(`pi ${installed}`),
+    `README table cites a different pi version than the installed ${installed} — re-verify the table`,
+  );
+  // Row 1: tool_result is a shipped event.
+  assert.ok(types.includes('on(event: "tool_result"'));
+  assert.match(readme, /`tool_result` event/);
+  // Row 2: setModel exists; agent_event does not.
+  assert.ok(types.includes("setModel("));
+  assert.equal(types.includes('on(event: "agent_event"'), false);
+  assert.match(readme, /no `agent_event` event/);
+  // Row 4: auto-discovery documented as supported + trust-gated.
+  assert.match(readme, /auto-discovery \| \*\*supported, trust-gated\*\*/);
+});
+
+test("warn-and-allow WARNS (never silent) when the validator cannot run", async () => {
+  const pi = stubPi();
+  await registerGuardrails(pi);
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (msg) => warnings.push(String(msg));
+  const prevFC = process.env.GUARDRAILS_FAIL_CLOSED;
+  process.env.GUARDRAILS_FAIL_CLOSED = "false";
+  try {
+    await withValidatorEnv(async () => {
+      const verdict = await preGate(pi, { path: "/tmp/x.py", content: "x = 1\n" });
+      assert.equal(verdict, undefined); // allowed through...
+    }, "/does/not/exist-validator");
+    assert.equal(warnings.length, 1); // ...but never silently
+    assert.match(warnings[0], /proceeding WITHOUT validation/);
+  } finally {
+    console.warn = origWarn;
+    if (prevFC === undefined) delete process.env.GUARDRAILS_FAIL_CLOSED;
+    else process.env.GUARDRAILS_FAIL_CLOSED = prevFC;
+  }
+});
+
+test("a hung validator times out into a validator-error (fail-closed)", async () => {
+  const pi = stubPi();
+  await registerGuardrails(pi);
+  const prevT = process.env.GUARDRAILS_TIMEOUT_MS;
+  process.env.GUARDRAILS_TIMEOUT_MS = "200";
+  // A sleeper SCRIPT (the whitespace-split env var cannot express a
+  // spaced -c program — the documented limitation).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cct-ext-"));
+  const sleeper = path.join(dir, "sleeper.sh");
+  fs.writeFileSync(sleeper, "#!/bin/sh\nsleep 60\n");
+  fs.chmodSync(sleeper, 0o755);
+  try {
+    await withValidatorEnv(async () => {
+      const verdict = await preGate(pi, { path: "/tmp/x.py", content: "x = 1\n" });
+      assert.equal(verdict.block, true);
+      assert.match(verdict.reason, /validator could not run/);
+    }, sleeper);
+  } finally {
+    if (prevT === undefined) delete process.env.GUARDRAILS_TIMEOUT_MS;
+    else process.env.GUARDRAILS_TIMEOUT_MS = prevT;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("POST gate resolves relative paths against ctx.cwd (no silent fail-open)", async () => {
+  const pi = stubPi();
+  await registerGuardrails(pi);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cct-ext-"));
+  try {
+    fs.writeFileSync(path.join(dir, "rel_bad.py"), "def broken(:\n");
+    await withValidatorEnv(async () => {
+      const verdict = await pi.handlers.tool_result(
+        {
+          type: "tool_result",
+          toolCallId: "t1",
+          toolName: "edit",
+          input: { path: "rel_bad.py" }, // RELATIVE — pi documents this
+          content: [],
+          isError: false,
+        },
+        { cwd: dir },
+      );
+      assert.equal(verdict.isError, true); // resolved + validated, not skipped
+      assert.match(verdict.content[0].text, /syntax error/i);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("non-UTF-8 content is a validator error, not a code violation", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cct-ext-"));
+  try {
+    const f = path.join(dir, "latin1.py");
+    fs.writeFileSync(f, Buffer.from([0x78, 0x20, 0x3d, 0x20, 0xff, 0x0a]));
+    const run = spawnSync("python3", [VALIDATOR, "--", f], { encoding: "utf8" });
+    assert.equal(run.status, 2); // validator-error lane, never "fix your code"
+    assert.match(run.stderr, /not UTF-8/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

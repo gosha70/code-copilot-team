@@ -69,6 +69,15 @@ const VALIDATOR_CMD: string[] = [
  */
 const FAIL_CLOSED = true;
 
+/** Env overrides (tests + per-run tuning): GUARDRAILS_FAIL_CLOSED=false
+ * flips to warn-and-allow; GUARDRAILS_TIMEOUT_MS overrides the cap. */
+function failClosed(): boolean {
+  const env = process.env.GUARDRAILS_FAIL_CLOSED;
+  if (env === "false") return false;
+  if (env === "true") return true;
+  return FAIL_CLOSED;
+}
+
 /** Wall-clock cap and output cap for one validation run. */
 const VALIDATOR_TIMEOUT_MS = 15_000;
 const VALIDATOR_MAX_BUFFER = 10 * 1024 * 1024;
@@ -100,12 +109,12 @@ function runValidator(target: string): Promise<Verdict> {
       [...argv.slice(1), "--", target],
       {
         encoding: "utf8",
-        timeout: VALIDATOR_TIMEOUT_MS,
+        timeout: Number(process.env.GUARDRAILS_TIMEOUT_MS) || VALIDATOR_TIMEOUT_MS,
         maxBuffer: VALIDATOR_MAX_BUFFER,
       },
       (error, stdout, stderr) => {
         if (!error) return resolve({ kind: "pass" });
-        const code = (error as NodeJS.ErrnoException & { code?: unknown }).code;
+        const code: unknown = (error as { code?: unknown }).code;
         if (code === 1) {
           const report = (stderr || stdout || "").trim() || "(no output)";
           return resolve({ kind: "violation", report });
@@ -124,7 +133,7 @@ function runValidator(target: string): Promise<Verdict> {
 function validatorErrorText(detail: string): string {
   return (
     `[guardrails] validator could not run (${detail}) — ` +
-    (FAIL_CLOSED
+    (failClosed()
       ? "failing closed. Fix the validator setup (see .pi/extensions/README.md) or set FAIL_CLOSED=false."
       : "warn-and-allow posture: proceeding WITHOUT validation.")
   );
@@ -137,7 +146,7 @@ export default async function (pi: any): Promise<void> {
     console.log(
       `[guardrails] validating ${VALIDATE_EXTENSIONS.join(", ") || "ALL files"} ` +
         `via [${validatorArgv().join(" ")}] ` +
-        `(${FAIL_CLOSED ? "fail-closed" : "warn-and-allow"})`,
+        `(${failClosed() ? "fail-closed" : "warn-and-allow"})`,
     );
   });
 
@@ -169,7 +178,7 @@ export default async function (pi: any): Promise<void> {
       }
       if (verdict.kind === "validator-error") {
         const text = validatorErrorText(verdict.detail);
-        if (FAIL_CLOSED) return { block: true, reason: text };
+        if (failClosed()) return { block: true, reason: text };
         console.warn(text);
       }
       return undefined;
@@ -180,14 +189,24 @@ export default async function (pi: any): Promise<void> {
 
   // 2) POST-EXECUTION: validate what is now on disk; patch the result on
   // failure so the model self-corrects. Repairs of broken files PASS here.
-  pi.on?.("tool_result", async (event: any) => {
+  pi.on?.("tool_result", async (event: any, ctx: any) => {
     if (!GATED_TOOLS.has(String(event?.toolName ?? ""))) return undefined;
     if (event?.isError) return undefined; // the tool already failed
     const rawPath = String(event?.input?.path ?? "");
     if (!rawPath || !shouldValidate(rawPath)) return undefined;
-    if (!fs.existsSync(rawPath)) return undefined; // e.g. cwd-relative path
+    // pi documents tool paths as relative-or-absolute, resolved against the
+    // SESSION cwd (ctx.cwd) — a fail-closed guardrail must not silently
+    // no-op on relative paths when the process cwd differs.
+    const target = path.resolve(String(ctx?.cwd ?? process.cwd()), rawPath);
+    if (!fs.existsSync(target)) {
+      console.warn(
+        `[guardrails] post-${event.toolName}: '${rawPath}' not found at ` +
+          `'${target}' after a successful tool run — validation skipped.`,
+      );
+      return undefined;
+    }
 
-    const verdict = await runValidator(rawPath);
+    const verdict = await runValidator(target);
     if (verdict.kind === "violation") {
       return {
         isError: true,
@@ -204,7 +223,7 @@ export default async function (pi: any): Promise<void> {
     }
     if (verdict.kind === "validator-error") {
       const text = validatorErrorText(verdict.detail);
-      if (FAIL_CLOSED) {
+      if (failClosed()) {
         return { isError: true, content: [{ type: "text", text }] };
       }
       console.warn(text);
@@ -218,7 +237,7 @@ export default async function (pi: any): Promise<void> {
       const line =
         `guardrails: validating ${VALIDATE_EXTENSIONS.join(", ") || "ALL"} ` +
         `via [${validatorArgv().join(" ")}] ` +
-        `(${FAIL_CLOSED ? "fail-closed" : "warn-and-allow"})`;
+        `(${failClosed() ? "fail-closed" : "warn-and-allow"})`;
       if (ctx?.ui?.notify) ctx.ui.notify(line);
       else console.log(line);
     },

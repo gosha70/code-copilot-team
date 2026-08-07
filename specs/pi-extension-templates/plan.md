@@ -78,8 +78,7 @@ proved the original design wrong in both directions:
   the 3-state exit contract; canonical pi event keys only (dead fallback
   patterns dropped).
 
-### D1 — Template artifacts (source of truth in resources/) — shape
-### superseded by D0 where they differ
+### D1 — Template artifacts (source of truth in resources/; shape superseded by D0 where they differ)
 `adapters/pi/resources/extension-template/` holds three files:
 - `cct-guardrails.ts` — the starter extension: registers a `tool_call`
   handler that, for `write`/`edit`, resolves the target path, runs a

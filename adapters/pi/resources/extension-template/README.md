@@ -32,7 +32,12 @@ the extension is live.
 | pre-write (`tool_call`) | `write` | the **incoming content**, in a temp file — disk is untouched | write blocked; report returned as the block reason |
 | post-execution (`tool_result`) | `write`, `edit` | the file **as it now exists** | tool result patched to an error carrying the report; the model fixes it in a follow-up edit |
 
-Because the post-gate checks the *resulting* state, an edit that **repairs
+Notes: a `write` runs the validator twice (incoming content pre-write,
+result post-write) — halve the cost for heavyweight validators by trimming
+one gate if you need to. On a post-gate failure the tool result's own
+output is REPLACED by the guardrails report (the report is what the model
+must act on); append instead if you want both. Because the post-gate
+checks the *resulting* state, an edit that **repairs
 an already-broken file passes** — enabling this template on a legacy
 codebase does not deadlock existing violations; they surface only when a
 change leaves the file still-broken.
@@ -50,7 +55,7 @@ Constants at the top of `cct-guardrails.ts`:
 |---|---|
 | `VALIDATE_EXTENSIONS` | Which file extensions to gate (`[]` = all) |
 | `VALIDATOR_CMD` | Your validator argv; `--` + the target file are appended. Override per-run with `GUARDRAILS_VALIDATOR_CMD` (whitespace-split — no argument may contain spaces; prefer absolute paths for worktree/CI sessions). The active command is printed at session start, so an ambient override is always visible |
-| `FAIL_CLOSED` | `true` (default): a validator that cannot run blocks/errors the operation; `false`: warn-and-allow (warns on the console — never silent) |
+| `FAIL_CLOSED` | `true` (default): a validator that cannot run blocks/errors the operation; `false`: warn-and-allow (warns on the console — never silent). Env overrides: `GUARDRAILS_FAIL_CLOSED=true|false`, `GUARDRAILS_TIMEOUT_MS` |
 
 **Validator contract:** exit `0` = pass; exit `1` = violation with a
 readable report on **stderr** (the model reads it verbatim); any other
@@ -97,4 +102,6 @@ installed version's typings when upgrading.
 - `cct-guardrails.ts` — the extension (`session_start`, `tool_call`,
   `tool_result`, `registerCommand`)
 - `validators/check-python-ast.py` — reference validator (stdlib-only)
+- `tsconfig.json` — strict compile settings for the template (run
+  `npx tsc -p .pi/extensions` to type-check your customizations)
 - `README.md` — this file
