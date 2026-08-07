@@ -1284,9 +1284,9 @@ for r in origin_gate provider_unavailable review_breaker cap_exceeded \
 done
 assert_eq "all 12 breaker reasons dispatch via dispose()" "1" "$DISPATCH_OK"
 assert_eq "no breaker call site bypasses dispose()" "0" \
-    "$(grep -cE '^[[:space:]]*park "[a-z]' "$DRIVER")"
+    "$(grep -cE '(^|[^a-zA-Z_"])park "[a-z]' "$DRIVER")"
 assert_eq "termination artifacts add no force-push (prechecks not weakened)" "0" \
-    "$(grep -cE 'push[^|]*(--force|[[:space:]]-f[[:space:]])' "$DRIVER")"
+    "$(grep -cE 'push[^|]*--force|push[^|]*[[:space:]]-f([[:space:]]|$)' "$DRIVER")"
 
 # End-to-end terminations reach the dispatch machinery through the
 # documented test seam that increment B will REPLACE with real admission.
@@ -1303,6 +1303,8 @@ TERM="$P/.cct/auto-build/demo-feat/termination.json"
 assert_eq "termination reason origin_gate" "origin_gate" "$(jq -r '.reason' "$TERM" 2>/dev/null)"
 assert_eq "ledger outcome terminated_policy" "terminated_policy" \
     "$(jq -r '.outcome' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "ledger disposition_reason recorded" "origin_gate" \
+    "$(jq -r '.disposition_reason' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 assert_eq "triage report generated (mandatory artifact)" "1" \
     "$([[ -f "$P/.cct/auto-build/demo-feat/triage-report.md" ]] && echo 1 || echo 0)"
 assert_contains "triage report names the reason" \
@@ -1322,6 +1324,10 @@ assert_contains "blocked push journaled as artifact skip" \
     "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "artifact_skipped"
 assert_eq "triage report generated on mid-run termination" "1" \
     "$([[ -f "$P/.cct/auto-build/demo-feat/triage-report.md" ]] && echo 1 || echo 0)"
+# terminated_policy is terminal in increment A: --resume is refused.
+run_driver "$P" --resume
+assert_exit "terminated run refuses --resume (exit 1)" 1 "$RC"
+assert_contains "resume refusal names the terminal contract" "$OUTPUT" "terminal"
 rm -rf "$P"
 
 # cap_exceeded → terminated_policy. Needs a working remote + gh stub: the
@@ -1352,6 +1358,50 @@ REVIEW_PROFILE="$DOWN_PROFILE" run_driver "$P"
 assert_exit "unattended unhealthy reviewer terminates (exit 6)" 6 "$RC"
 assert_eq "termination reason provider_unavailable" "provider_unavailable" \
     "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
+rm -rf "$P"
+
+# Regression (review P1): a preflight termination while HEAD is the
+# repo's DEFAULT branch (master) must still exit 6 — never fall back to
+# park — and must not move HEAD (no artifact commit off the driver branch).
+P=$(setup_project)
+git -C "$P" branch -m master
+unattended_cfg "$P"
+cfg_set "$P" '.branch.base="master"'
+sed -i '' 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md" 2>/dev/null || \
+    sed -i 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md"
+git -C "$P" add -A && git -C "$P" commit -q -m "break origin"
+HEAD_BEFORE=$(git -C "$P" rev-parse HEAD)
+run_driver "$P"
+assert_exit "preflight termination on master still exits 6" 6 "$RC"
+assert_eq "master fixture: status terminated_policy, not parked" "terminated_policy" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "master fixture: HEAD unmoved (no artifact commit)" "$HEAD_BEFORE" \
+    "$(git -C "$P" rev-parse HEAD)"
+assert_contains "master fixture: artifact skip journaled (branch not owned)" \
+    "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "does not own branch"
+rm -rf "$P"
+
+# Regression (review P1): a preflight termination with an operator's
+# dirty worktree must never sweep those files into an artifact commit.
+P=$(setup_project); unattended_cfg "$P"
+sed -i '' 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md" 2>/dev/null || \
+    sed -i 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md"
+git -C "$P" add -A && git -C "$P" commit -q -m "break origin"
+printf 'operator scratch — not the driver'"'"'s to commit\n' > "$P/scratch-work.txt"
+HEAD_BEFORE=$(git -C "$P" rev-parse HEAD)
+run_driver "$P"
+assert_exit "dirty-worktree preflight termination exits 6" 6 "$RC"
+assert_eq "dirty worktree: HEAD unmoved" "$HEAD_BEFORE" "$(git -C "$P" rev-parse HEAD)"
+assert_contains "dirty worktree: operator file left uncommitted" \
+    "$(git -C "$P" status --porcelain)" "scratch-work.txt"
+rm -rf "$P"
+
+# Regression (review P2): the unattended profile cannot be requested via
+# --profile override past the validator — it must be declared in the config.
+P=$(setup_project)
+run_driver "$P" --profile unattended
+assert_exit "--profile unattended over an attended config is rejected" 1 "$RC"
+assert_contains "override rejection names the declaration rule" "$OUTPUT" "must be declared"
 rm -rf "$P"
 
 unset CCT_AUTOBUILD_TEST_SEAM

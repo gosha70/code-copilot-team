@@ -13,16 +13,22 @@ set -uo pipefail
 # Spec:   specs/auto-build-loop-driver/spec.md (FR references below)
 #
 # Usage: auto-build-loop.sh <feature-id> [options]
-#   --profile advisory|pr     Autonomy profile: advisory publishes nothing;
+#   --profile advisory|pr|merge|unattended
+#                             Autonomy profile: advisory publishes nothing;
 #                             pr pushes the branch + opens/updates a PR (never
-#                             merges). 'merge' is a later increment.
+#                             merges); merge additionally arms GitHub-native
+#                             gated auto-merge. 'unattended' (#191) fails
+#                             closed until #190 increment B lands, and must be
+#                             declared in automation.json (schema_version 2).
 #   --config <path>           Config (default: specs/<feature-id>/automation.json)
 #   --resume                  Continue a paused/parked run from the ledger
 #   --dry-run                 Print planned phases/transitions; no side effects
 #   --max-phases N            Override config phase cap
 #   --start-phase N           Start at phase N (default: from ledger or 1)
 #
-# Exit: 0 = done | 3 = milestone-paused | 4 = escalated/parked | 1 = usage/preflight
+# Exit: 0 = done (landed) | 3 = milestone-paused | 4 = escalated/parked
+#       | 6 = terminated_policy (unattended: deliberate stop at a policy
+#         boundary — terminal, never relaunched) | 1 = usage/preflight
 #
 # Env: CCT_CLAUDE_BIN (default claude), CCT_GH_BIN (default gh, pr profile),
 #      CCT_AUTOBUILD_DIR (default .cct/auto-build),
@@ -168,10 +174,17 @@ notify() {
 # anything but terminate in ANY increment.
 dispose() {
     # dispose <reason> <detail> [history-json]
-    if [[ "${PROFILE:-advisory}" == "unattended" && "${TERMINATING:-0}" != "1" ]]; then
+    if [[ "${PROFILE:-advisory}" != "unattended" ]]; then
+        park "$@"
+    elif [[ "${TERMINATING:-0}" != "1" ]]; then
         terminate_policy "$@"
     else
-        park "$@"
+        # A breaker firing INSIDE the termination path (best-effort
+        # artifacts) must never change the terminal disposition — journal
+        # it and return non-zero so the caller aborts its own step. It
+        # must not park (exit 4 would contradict terminated_policy).
+        journal "artifact_error" "$1 during termination: $2"
+        return 1
     fi
 }
 
@@ -192,12 +205,15 @@ triage_report() {
         echo "- verification.yaml state: not present — requirement-to-verifier traceability lands with #190 increment B"
         echo ""
         echo "The system functioned correctly and deliberately stopped at a"
-        echo "defined safety, quality, or budget boundary. Work is preserved;"
-        echo "an operator may resume with:"
-        echo ""
-        echo "    scripts/auto-build-loop.sh $FEATURE_ID --resume"
-        echo ""
-        echo "Escalation records: $LEDGER_DIR/escalations/"
+        echo "defined safety, quality, or budget boundary. Work is preserved."
+        echo "terminated_policy is TERMINAL in #190 increment A: review the"
+        echo "reason and this ledger, resolve the boundary (caps, findings,"
+        echo "origin), then start a fresh attended run. Resume support for"
+        echo "terminated runs arrives with #190 increment D."
+        if [[ -d "$LEDGER_DIR/escalations" ]]; then
+            echo ""
+            echo "Escalation records: $LEDGER_DIR/escalations/"
+        fi
     } > "$report" 2>/dev/null || echo "[auto-build] WARN: triage report write failed" >&2
 }
 
@@ -228,18 +244,30 @@ terminate_policy() {
     journal "terminated_policy" "$reason: $detail"
     triage_report "$reason" "$detail"
     # Best-effort artifacts (FR-5): commit + push via the existing
-    # precheck-respecting paths; a draft PR attempt only when the profile
-    # may open PRs. Every skip is journaled with its cause; nothing here
-    # can re-enter dispose() (TERMINATING guards recursion).
-    driver_commit "chore($FEATURE_ID): terminated_policy artifacts [auto-build]" \
-        || journal "artifact_skipped" "termination commit failed (journaled, not blocking)"
-    if [[ "${CAN_PUSH:-false}" == "true" ]]; then
-        if ! push_branch soft; then
-            journal "artifact_skipped" "termination push failed or refused by prechecks"
+    # precheck-respecting paths. Every skip is journaled with its cause;
+    # nothing here can re-enter dispose() (TERMINATING guards recursion).
+    # Attempted ONLY when the driver owns the checkout — preflight
+    # terminations can fire before the feature-branch checkout, and a
+    # blanket commit there would sweep the operator's branch/worktree.
+    local _cur
+    _cur=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [[ -n "${BRANCH_NAME:-}" && "$_cur" == "$BRANCH_NAME" ]]; then
+        driver_commit "chore($FEATURE_ID): terminated_policy artifacts [auto-build]" \
+            || journal "artifact_skipped" "termination commit failed (journaled, not blocking)"
+        if [[ "${CAN_PUSH:-false}" == "true" ]]; then
+            if ! push_branch soft; then
+                journal "artifact_skipped" "termination push failed or refused by prechecks"
+            fi
+        else
+            journal "artifact_skipped" "push not attempted (profile cannot push)"
         fi
     else
-        journal "artifact_skipped" "push not attempted (profile cannot push)"
+        journal "artifact_skipped" "commit/push not attempted (driver does not own branch '${_cur:-?}')"
     fi
+    # No draft-PR attempt in increment A: a TERMINATING-safe PR path does
+    # not exist yet (open_or_update_pr would re-enter dispose); the skip
+    # is journaled per FR-5 rather than silently omitted.
+    journal "artifact_skipped" "draft PR not attempted (no TERMINATING-safe PR path in #190 increment A)"
     notify "$reason" "terminated_policy: $detail"
     exit 6
 }
@@ -397,9 +425,26 @@ load_config() {
     fi
     # #191 FR-6: the dedicated automation-config validator gates every run
     # (v1 configs remain valid; violations are a config error, exit 1).
+    # Fail-closed: a missing validator is an install error, never a bypass;
+    # `bash` invocation is immune to a lost exec bit (repo convention).
     local _validator="$SCRIPT_DIR/validate-automation-config.sh"
-    if [[ -x "$_validator" ]] && ! "$_validator" "$CONFIG_SNAPSHOT" >&2; then
+    if [[ ! -f "$_validator" ]]; then
+        echo "Error: $_validator is missing — the automation-config gate cannot run." >&2
+        exit 1
+    fi
+    if ! bash "$_validator" "$CONFIG_SNAPSHOT" >/dev/null; then
         echo "Error: automation config failed validation (see violations above)." >&2
+        exit 1
+    fi
+    # The validator checks the config FILE; the unattended contract must
+    # hold for the EFFECTIVE profile too. --profile/CCT_AUTOBUILD_PROFILE
+    # may downgrade to an attended profile, but can never upgrade INTO
+    # unattended past the validator's schema/caps rules: unattended must
+    # be declared in the config document itself.
+    if [[ "$PROFILE" == "unattended" && "$(cfg '.profile' 'advisory')" != "unattended" ]]; then
+        echo "Error: profile 'unattended' must be declared in the automation config" >&2
+        echo "(schema_version 2, explicit caps, unattended block) — it cannot be" >&2
+        echo "requested via --profile or CCT_AUTOBUILD_PROFILE." >&2
         exit 1
     fi
     if [[ -z "$GATING_REVIEWER" ]]; then
@@ -724,7 +769,10 @@ driver_commit() {
     COMMIT_SHA=""
     cur=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD)
     if [[ "$cur" == "master" || "$cur" == "main" ]]; then
+        # Under TERMINATING dispose returns instead of exiting — the
+        # return below keeps the refusal effective in that path too.
         dispose "git_anomaly" "refusing to commit on '$cur'" "null"
+        return 1
     fi
     git -C "$PROJECT_DIR" add -A
     if git -C "$PROJECT_DIR" diff --cached --quiet; then
@@ -761,6 +809,7 @@ push_branch() {
         return 1
     fi
     dispose "git_anomaly" "git push to $BRANCH_REMOTE/$branch failed" "null"
+    return 1
 }
 
 # ── Review integration (FR-9..FR-12) ─────────────────────────
@@ -1492,6 +1541,13 @@ if [[ "$RESUME" == "true" ]]; then
             ;;
         parked)
             resume_parked
+            ;;
+        terminated_policy)
+            echo "Error: this run ended terminated_policy — terminal in #190" >&2
+            echo "increment A (no --resume path; recovery arrives with increment D)." >&2
+            echo "Review $LEDGER_DIR/triage-report.md, resolve the boundary, then" >&2
+            echo "start a fresh attended run." >&2
+            exit 1
             ;;
         done)
             echo "Run already complete for '$FEATURE_ID'." >&2

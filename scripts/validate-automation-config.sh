@@ -50,18 +50,19 @@ q() { jq -r "$1" "$CONFIG" 2>/dev/null || true; }
 # is_type <jq-path> <type> — true iff the path exists and has the jq type.
 is_type() { jq -e "$1 | type == \"$2\"" "$CONFIG" >/dev/null 2>&1; }
 
-sv="$(q '.schema_version // "missing"')"
+# Pre-#191 documents may omit both keys; the driver's long-standing
+# defaults (schema_version 1, profile advisory) apply — a v1 config
+# without the new blocks stays valid byte-identically (FR-6).
+sv="$(q '.schema_version // 1')"
 case "$sv" in
     1|2) ;;
-    missing) violation "schema_version is required (1 or 2)" ;;
-    *)       violation "schema_version '$sv' is not supported (expected 1 or 2)" ;;
+    *)   violation "schema_version '$sv' is not supported (expected 1 or 2)" ;;
 esac
 
-profile="$(q '.profile // "missing"')"
+profile="$(q '.profile // "advisory"')"
 case "$profile" in
     advisory|pr|merge|unattended) ;;
-    missing) violation "profile is required (advisory|pr|merge|unattended)" ;;
-    *)       violation "unknown profile '$profile' (expected advisory|pr|merge|unattended)" ;;
+    *) violation "unknown profile '$profile' (expected advisory|pr|merge|unattended)" ;;
 esac
 
 # v1 documents predate the unattended surface entirely.

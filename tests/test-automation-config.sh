@@ -44,9 +44,22 @@ assert "v2 unattended with explicit caps is valid" bash "$V" "$TMP/v2u.json"
 
 assert "the shipped template is valid" bash "$V" "$REPO_DIR/shared/templates/sdd/automation-template.json"
 
+# Pre-#191 documents omit these keys; driver defaults apply (FR-6).
+w d1.json '{}'
+assert "empty config defaults to v1 advisory (pre-#191 compat)" bash "$V" "$TMP/d1.json"
+
+w d2.json '{"profile":"merge"}'
+assert "missing schema_version defaults to 1" bash "$V" "$TMP/d2.json"
+
+w d3.json '{"schema_version":2}'
+assert "missing profile defaults to advisory" bash "$V" "$TMP/d3.json"
+
 # ── rejects ──
 w r1.json '{"schema_version":1,"profile":"unattended","caps":{"cost_usd":100,"wall_clock_sec":1}}'
 assert_rejects "v1 cannot request the unattended profile" "$TMP/r1.json" "requires schema_version 2"
+
+w r1b.json '{"profile":"unattended","caps":{"cost_usd":100,"wall_clock_sec":1}}'
+assert_rejects "unattended with a DEFAULTED schema_version (=1) is rejected" "$TMP/r1b.json" "requires schema_version 2"
 
 w r2.json '{"schema_version":1,"profile":"merge","unattended":{"on_origin_gate":"terminate"}}'
 assert_rejects "v1 cannot carry an unattended block" "$TMP/r2.json" "requires schema_version 2"

@@ -4,10 +4,12 @@
   "title": "auto-build-loop automation.json (schema_version 2)",
   "description": "Contract for specs/<feature>/automation.json consumed by scripts/auto-build-loop.sh. schema_version 1 documents (without the unattended block) remain valid and resolve to pre-#190 behavior. Enforced by scripts/validate-automation-config.sh (jq-based, so hosts need no JSON-Schema tooling); this file is the authoritative contract the script mirrors. Increment A of #190: the three unattended.on_* keys accept ONLY \"terminate\" — recovery values (adjudicate, swap_builder) do not exist until increment D and must be unrequestable; on_origin_gate is terminate-only in ALL increments (an agent re-checking alignment against a spec it may have misread is circular).",
   "type": "object",
-  "required": ["schema_version", "profile"],
   "properties": {
-    "schema_version": { "enum": [1, 2] },
-    "profile": { "enum": ["advisory", "pr", "merge", "unattended"] },
+    "schema_version": { "enum": [1, 2], "default": 1 },
+    "profile": {
+      "enum": ["advisory", "pr", "merge", "unattended"],
+      "default": "advisory"
+    },
     "branch": { "type": "object" },
     "phases": { "type": "object" },
     "build": { "type": "object" },

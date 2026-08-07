@@ -10,7 +10,7 @@ justification: |
   SDD template; full mode per schema+integration+>2 files. Deliberately
   runs nothing unattended (fail-closed preflight until increment B lands);
   attended profiles must stay byte-identical.
-status: draft
+status: approved
 date: 2026-08-07
 origin:
   issue: https://github.com/gosha70/code-copilot-team/issues/191
