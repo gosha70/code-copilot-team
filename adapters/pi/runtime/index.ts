@@ -523,6 +523,29 @@ export default async function (pi: any): Promise<void> {
       );
       state.worktreeIsolation = isolationStateFromAttach(attach.status);
       if (attach.warning) state.warnings.push(attach.warning);
+      // #173 (FR-5): the worktree-run handoff scrubbed the worker's env and
+      // recorded the removed NAMES (never values) in CCT_ENV_SCRUBBED. Audit
+      // them here so the scrub is visible in the worker's own trail. The var
+      // is untrusted input: names are shape-validated and bounded.
+      if (process.env.CCT_WORKER_ID && process.env.CCT_ENV_SCRUBBED) {
+        const scrubbedNames = String(process.env.CCT_ENV_SCRUBBED)
+          .split(",")
+          .map((n) => n.trim())
+          .filter((n) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n))
+          .slice(0, 200);
+        if (scrubbedNames.length > 0) {
+          audit({
+            mode: wtMode,
+            actor: "session_start",
+            decision: "scrubbed",
+            rule: "env.scrub",
+            subject:
+              `${scrubbedNames.length}:` +
+              scrubbedNames.join(",").slice(0, 400),
+            origin: "worktree",
+          });
+        }
+      }
       const rec = reconcileOnStart(state.cwd, { mode: wtMode });
       if (rec.foreign.length > 0) {
         state.warnings.push(

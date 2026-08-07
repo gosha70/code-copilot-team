@@ -54,6 +54,8 @@ if [[ "\${1:-}" == "--version" ]]; then echo "$version"; exit 0; fi
   echo "CCT_PEER_REVIEW_ENABLED:\${CCT_PEER_REVIEW_ENABLED:-unset}"
   echo "CCT_PEER_PROVIDER:\${CCT_PEER_PROVIDER:-unset}"
   echo "CCT_PEER_REVIEW_SCOPE:\${CCT_PEER_REVIEW_SCOPE:-unset}"
+  echo "GITHUB_TOKEN:\${GITHUB_TOKEN:-unset}"
+  echo "CCT_ENV_SCRUBBED:\${CCT_ENV_SCRUBBED:-unset}"
 } > "$TMP/capture.txt"
 exit \${PI_SHIM_EXIT:-0}
 SHIM
@@ -458,6 +460,70 @@ if command -v git >/dev/null 2>&1; then
 else
   echo "  SKIP: worktree run (git unavailable)"
 fi
+
+# ── #173: env scrubbing at the worktree-run handoff (pi-sandbox-hardening) ───
+assert "help documents env scrub-list" \
+  "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'env scrub-list'"
+
+# `env scrub-list` routes to the runtime CLI and reports a credential-shaped
+# var from its own environment; allowed under the recursion guard.
+ES_HOME="$TMP/es-home"; mkdir -p "$ES_HOME"
+ES_OUT=$(GITHUB_TOKEN=leakme CCT_HOME="$ES_HOME" PATH="$DIAG_PATH" "$LAUNCHER" env scrub-list 2>&1) || true
+assert "env scrub-list reports a credential-shaped name" \
+  "echo \"\$ES_OUT\" | grep -q '^GITHUB_TOKEN\$'"
+ES_G_OUT=$(GITHUB_TOKEN=leakme CCT_PI_CODE_ACTIVE=1 CCT_HOME="$ES_HOME" PATH="$DIAG_PATH" "$LAUNCHER" env scrub-list 2>&1) || true
+assert "env scrub-list allowed under the recursion guard" \
+  "echo \"\$ES_G_OUT\" | grep -q '^GITHUB_TOKEN\$'"
+
+if command -v git >/dev/null 2>&1; then
+  # Default-ON: the worker pi must NOT see the credential; the scrubbed NAMES
+  # ride in CCT_ENV_SCRUBBED; the CCT_WORKER_* contract survives (keep-listed).
+  ES_REPO="$TMP/es-repo"; mkdir -p "$ES_REPO"
+  git -C "$ES_REPO" init -q -b master
+  git -C "$ES_REPO" config user.email t@e.com
+  git -C "$ES_REPO" config user.name T
+  echo seed > "$ES_REPO/README.md"; git -C "$ES_REPO" add -A; git -C "$ES_REPO" commit -q -m seed
+  rm -f "$TMP/capture.txt"
+  ( cd "$ES_REPO" && GITHUB_TOKEN=leakme CCT_HOME="$TMP/es-home1" PATH="$DIAG_PATH" "$LAUNCHER" worktree run scrub-1 --branch feature/scrub-1 ) >/dev/null 2>&1 || true
+  assert "worktree run scrubs the credential from the worker env" \
+    "test -f \"\$TMP/capture.txt\" && grep -q 'GITHUB_TOKEN:unset' \"\$TMP/capture.txt\""
+  assert "worktree run reports scrubbed NAMES via CCT_ENV_SCRUBBED" \
+    "grep 'CCT_ENV_SCRUBBED:' \"\$TMP/capture.txt\" | grep -q 'GITHUB_TOKEN'"
+  assert "scrubbed handoff still exports CCT_WORKER_ID" \
+    "grep -q 'CCT_WORKER_ID:scrub-1' \"\$TMP/capture.txt\""
+
+  # Global (user-owned) opt-out restores pass-through — no CCT_ENV_SCRUBBED.
+  ES_HOME2="$TMP/es-home2"; mkdir -p "$ES_HOME2"
+  printf '[security]\nenv_scrub = false\n' > "$ES_HOME2/config.toml"
+  rm -f "$TMP/capture.txt"
+  ( cd "$ES_REPO" && GITHUB_TOKEN=leakme CCT_HOME="$ES_HOME2" PATH="$DIAG_PATH" "$LAUNCHER" worktree run scrub-2 --branch feature/scrub-2 ) >/dev/null 2>&1 || true
+  assert "global env_scrub=false restores pass-through at the handoff" \
+    "test -f \"\$TMP/capture.txt\" && grep -q 'GITHUB_TOKEN:leakme' \"\$TMP/capture.txt\""
+  assert "pass-through handoff exports no CCT_ENV_SCRUBBED" \
+    "grep -q 'CCT_ENV_SCRUBBED:unset' \"\$TMP/capture.txt\""
+
+  # A repo-local opt-out (config.toml or the conventionally-gitignored
+  # config.local.toml) must NOT loosen the launcher boundary: the untrusted
+  # CLI never reads project layers, so scrubbing still happens.
+  ES_REPO3="$TMP/es-repo3"; mkdir -p "$ES_REPO3/.code-copilot-team"
+  git -C "$ES_REPO3" init -q -b master
+  git -C "$ES_REPO3" config user.email t@e.com
+  git -C "$ES_REPO3" config user.name T
+  printf '[security]\nenv_scrub = false\n' > "$ES_REPO3/.code-copilot-team/config.toml"
+  printf '[security]\nenv_scrub = false\n' > "$ES_REPO3/.code-copilot-team/config.local.toml"
+  echo seed > "$ES_REPO3/README.md"; git -C "$ES_REPO3" add -A; git -C "$ES_REPO3" commit -q -m seed
+  rm -f "$TMP/capture.txt"
+  ( cd "$ES_REPO3" && GITHUB_TOKEN=leakme CCT_HOME="$TMP/es-home3" PATH="$DIAG_PATH" "$LAUNCHER" worktree run scrub-3 --branch feature/scrub-3 ) >/dev/null 2>&1 || true
+  assert "repo-local env_scrub=false is IGNORED at the handoff (still scrubbed)" \
+    "test -f \"\$TMP/capture.txt\" && grep -q 'GITHUB_TOKEN:unset' \"\$TMP/capture.txt\""
+else
+  echo "  SKIP: worktree-run scrub (git unavailable)"
+fi
+
+# Fail-closed wiring (source assertion, #172 precedent): a scrub-list failure
+# refuses the handoff — never a silent unscrubbed launch.
+assert "worktree run fails closed on a scrub-list failure (source wiring)" \
+  "grep -q 'refusing an unscrubbed handoff' '$LAUNCHER'"
 
 # ── #185: read-only `pi-code team` CLI (Slice A of #174) ─────────────────────
 if command -v git >/dev/null 2>&1; then

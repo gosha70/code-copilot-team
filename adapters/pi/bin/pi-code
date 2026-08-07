@@ -27,6 +27,8 @@
 #                         Provision AND launch pi inside the new worktree (one shot)
 #   team status|synthesize [--json]
 #                         Read-only team coordination snapshot (opt-in: agents.teams_enabled)
+#   env scrub-list [--json]
+#                         Env names the worktree-run handoff scrubs (#173; single TS pattern source)
 #   init [dir] [--profile <name>] [--dry-run]
 #                         Scaffold a Pi-native project config + ownership manifest
 #   sync [--dry-run]      Regenerate managed resources (never touches your config)
@@ -93,7 +95,7 @@ diag() { [[ "${DIAGNOSTIC:-false}" == "true" ]] && echo "[pi-code] $*" >&2 || tr
 # A pi-code-launched session (or a reviewer child) must not re-enter the
 # launcher and stack runtimes. CCT_PI_CODE_ACTIVE marks an active launch.
 case "${1:-}" in
-  version|help|--help|-h|doctor|config|features|export|resources|provenance|continuity|worktree|team|init|sync) CCT_DIAGNOSTIC_CMD=true ;;
+  version|help|--help|-h|doctor|config|features|export|resources|provenance|continuity|worktree|team|env|init|sync) CCT_DIAGNOSTIC_CMD=true ;;
   *) CCT_DIAGNOSTIC_CMD=false ;;
 esac
 if [[ "${CCT_PI_CODE_ACTIVE:-}" == "1" && "$CCT_DIAGNOSTIC_CMD" == "false" ]]; then
@@ -321,6 +323,27 @@ cct_worktree_run() {
   # CCT_LOCKED_PROJECT_PATH pins the worktree cwd + enforcement for the child
   # (defense 2): even though forwarded args re-enter the public parser, the child
   # refuses to launch anywhere other than "$wt" or with --no-cct.
+  # #173 (FR-4/FR-5): scrub credential-shaped env before handing off to the
+  # worker pi. The unset list comes from the runtime CLI — the single TS
+  # pattern source, resolved at global/env/cli scope (project config is never
+  # read untrusted). A scrub-list failure FAILS CLOSED: the handoff is
+  # refused rather than silently launching an unscrubbed worker. The removed
+  # NAMES (never values) ride in CCT_ENV_SCRUBBED so the worker's
+  # session_start can audit the scrub (CCT_* survives scrubbing by keep).
+  local scrub_out scrub_names="" sn
+  if ! scrub_out="$("$SELF_PATH" env scrub-list 2>&1)"; then
+    err "worktree run: 'pi-code env scrub-list' failed — refusing an unscrubbed handoff."
+    err "$scrub_out"
+    return 1
+  fi
+  while IFS= read -r sn; do
+    [[ -z "$sn" ]] && continue
+    if [[ "$sn" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      unset -v "$sn" 2>/dev/null || true
+      scrub_names="${scrub_names:+$scrub_names,}$sn"
+    fi
+  done <<< "$scrub_out"
+  [[ -n "$scrub_names" ]] && export CCT_ENV_SCRUBBED="$scrub_names"
   unset CCT_PI_CODE_ACTIVE
   export CCT_LOCKED_PROJECT_PATH="$wt"
   exec "$SELF_PATH" --project "$wt" ${pia[@]+"${pia[@]}"}
@@ -357,10 +380,10 @@ case "${1:-}" in
     exit 0
     ;;
   help|--help|-h)
-    sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
-  config|features|export|resources|provenance|continuity|worktree|team)
+  config|features|export|resources|provenance|continuity|worktree|team|env)
     # Diagnostics run outside a Pi session; the runtime CLI resolves and
     # reports configuration and capability state (fail-closed on trust).
     if [[ -z "$RUNTIME_ENTRY" ]]; then
