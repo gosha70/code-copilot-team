@@ -83,6 +83,7 @@ _DDL_FILES = (
     "ddl/postgres/002_analytics.sql",
     "ddl/postgres/003_indexes.sql",
     "ddl/postgres/004_metadata.sql",
+    "ddl/postgres/005_heartbeat.sql",
 )
 _SCHEMA_VERSION = 2
 

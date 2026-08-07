@@ -199,6 +199,33 @@ project from ingestion, add a `projects` block to `config_data/defaults.json`
     refused outright, and a URL `#fragment` or a malformed `host:port` is
     rejected too. Defense-in-depth on top of #103's browser block.
 
+## Developer identity + local heartbeat (B1, issue #187)
+
+Sessions are stamped with a derived `developer_id` instead of the `"local"`
+stub. Precedence: `--developer-id` flag (taken **verbatim** — pre-B1 stamps
+like `Team_A` stay joinable) > `CCT_DEVELOPER_ID` (real env > repo `.env`)
+> the `developer_id` config key > the local-part of `git config --global
+user.email` (machine identity — deliberately not the launch directory's
+repo-local email) > `"local"`. Derived sources are kebab-normalized; the
+`developer` table is populated on every ingest, committed even when the run
+ingests nothing. Identity is **derived attribution, not authentication**
+(the epic's identity/auth decision is a later slice). Note: an incremental
+run never touches existing rows, but an explicit `--full` re-ingest
+rebuilds each session row and therefore re-stamps it with the
+currently-derived id.
+
+**Privacy note:** the derived id (typically a name-derived email
+local-part) now flows into CSV/Parquet exports, Kuzu graph nodes, MCP
+query results, and the dashboard — artifacts that previously said `local`.
+Use `--developer-id`/`CCT_DEVELOPER_ID` with an opaque value if you share
+those artifacts.
+
+Pi sessions also emit a local heartbeat (`.cct/heartbeat.json`, written at
+checkpoint time) which ingest/`watch` picks up into the `local_heartbeat`
+table — **last-seen** in-flight state (`last_heartbeat_at` proves "a CCT
+action happened at T", never that a session is alive now; alerting is a
+later slice). Everything is local-first: no service, no remote write.
+
 ## Cost tracking (E5, issue #83)
 
 `ingest` computes each turn's `cost_usd` from a price table, so cost is never

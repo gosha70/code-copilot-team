@@ -23,6 +23,7 @@ from ..config import PricingConfig, ProjectIdRule, ProjectOverride
 from ..cost import UnpricedStats
 from ..registry import get_adapter, list_adapter_ids
 from ..relational import store
+from ..heartbeat import ingest_heartbeats
 from ..relational.db import Database, apply_ddl
 from . import incremental
 from .project_key import ProjectKeyResolver
@@ -41,6 +42,7 @@ class IngestStats:
     unpriced_models: dict = field(default_factory=dict)  # E5: model -> turn count
     sessions_opted_out: int = 0
     per_project_opt_out: dict = field(default_factory=dict)  # project key -> count
+    heartbeats_ingested: int = 0  # Slice B1 (#187): local_heartbeat upserts
 
     def as_dict(self) -> dict:
         return {
@@ -53,6 +55,7 @@ class IngestStats:
             "unpriced_models": self.unpriced_models,
             "sessions_opted_out": self.sessions_opted_out,
             "per_project_opt_out": self.per_project_opt_out,
+            "heartbeats_ingested": self.heartbeats_ingested,
         }
 
 
@@ -114,6 +117,18 @@ def ingest(
         db.commit()
         for copilot in selected:
             adapter = get_adapter(copilot)
+            # Slice B1 (#187): sweep heartbeats for pi projects — BEFORE the
+            # session loop, so an in-flight project with no ingestable
+            # session (the defining B1 case) still lands in local_heartbeat.
+            # ingest_heartbeats commits its own work and never raises for a
+            # bad file.
+            if copilot == C.COPILOT_PI and hasattr(adapter, "resolve_root"):
+                stats.heartbeats_ingested += ingest_heartbeats(
+                    db,
+                    developer_id,
+                    base=adapter.resolve_root(root),
+                    cwd=Path.cwd(),
+                )
             c_ingested = c_skipped = 0
             for ref in adapter.discover(root):
                 if not incremental.should_ingest(db, ref, full=full):

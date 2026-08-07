@@ -79,10 +79,16 @@ export function writeHeartbeat(
   const file = path.join(projectRoot, HEARTBEAT_REL);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   // Atomic replace: `watch` polls this file while checkpoints rewrite it —
-  // a torn read must not be constructible from our side (review B-4).
-  const tmp = `${file}.tmp`;
+  // a torn read must not be constructible from our side (review B-4). The
+  // temp name is pid-unique (two sessions in one root must not race on a
+  // shared temp path) and never left behind on a rename failure (R-1).
+  const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(hb, null, 2) + "\n");
-  fs.renameSync(tmp, file);
+  try {
+    fs.renameSync(tmp, file);
+  } finally {
+    if (fs.existsSync(tmp)) fs.rmSync(tmp, { force: true });
+  }
   return hb;
 }
 

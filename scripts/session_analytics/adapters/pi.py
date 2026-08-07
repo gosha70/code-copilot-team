@@ -58,6 +58,12 @@ class PiAdapter:
 
     # ── discovery ──────────────────────────────────────────────────────
 
+    def resolve_root(self, root: Optional[Path]) -> Optional[Path]:
+        """Public alias for the heartbeat sweep (Slice B1): the SAME base
+        resolution discovery uses, so heartbeat project paths match the
+        session `project_path` stamps exactly (review B-6)."""
+        return self._resolve_root(root)
+
     def discover(self, root: Optional[Path]) -> list[SessionRef]:
         base = self._resolve_root(root)
         if base is None or not base.exists():

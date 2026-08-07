@@ -89,7 +89,10 @@ test("heartbeat is sanitized + bounded ON WRITE (review B-1/B-2/B-3)", () => {
     assert.ok(hb.updatedAt.length <= 40);
     const stat = fs.statSync(path.join(root, HEARTBEAT_REL));
     assert.ok(stat.size < 4096, `file size ${stat.size}`); // bounded artifact
-    assert.equal(fs.existsSync(path.join(root, HEARTBEAT_REL) + ".tmp"), false);
+    const residue = fs
+      .readdirSync(path.dirname(path.join(root, HEARTBEAT_REL)))
+      .filter((f) => f.endsWith(".tmp"));
+    assert.deepEqual(residue, []); // pid-unique temp never left behind
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -112,6 +115,11 @@ test("a heartbeat write failure never breaks the checkpoint path", () => {
       tryWriteHeartbeat(root, { phase: null, featureId: null, checkpointCount: 1 }, "t"),
       null, // the failure is reported as null, never thrown
     );
+    // R-1: even the rename-failure path leaves no temp residue behind.
+    const leftover = fs
+      .readdirSync(path.join(root, ".cct"))
+      .filter((f) => f.endsWith(".tmp"));
+    assert.deepEqual(leftover, []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

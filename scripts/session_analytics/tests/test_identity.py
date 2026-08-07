@@ -252,3 +252,88 @@ class TestUpsertSqlIsTheRealStatement(unittest.TestCase):
         self.assertIn("%s", translated)
         self.assertNotIn("?", translated)
         self.assertIn("ON CONFLICT (developer_id)", translated)
+
+
+class TestEnvFileLayer(unittest.TestCase):
+    def test_dot_env_reaches_developer_id_env(self) -> None:
+        # R-2: the .env layer regression guard. Patch parse_env_file, NOT
+        # config.ENV_FILE — parse_env_file binds its default argument at
+        # import time, so an ENV_FILE patch silently proves nothing.
+        from session_analytics import config as config_mod
+
+        with mock.patch.object(
+            config_mod,
+            "parse_env_file",
+            return_value={"CCT_DEVELOPER_ID": "from-dot-env"},
+        ), mock.patch.dict("os.environ", {}, clear=False):
+            import os as _os
+
+            _os.environ.pop("CCT_DEVELOPER_ID", None)
+            cfg = config_mod.load_config(dsn="sqlite:///unused")
+        self.assertEqual(cfg.developer_id_env, "from-dot-env")
+
+    def test_real_env_beats_dot_env(self) -> None:
+        from session_analytics import config as config_mod
+
+        with mock.patch.object(
+            config_mod,
+            "parse_env_file",
+            return_value={"CCT_DEVELOPER_ID": "from-dot-env"},
+        ), mock.patch.dict(
+            "os.environ", {"CCT_DEVELOPER_ID": "from-real-env"}, clear=False
+        ):
+            cfg = config_mod.load_config(dsn="sqlite:///unused")
+        self.assertEqual(cfg.developer_id_env, "from-real-env")
+
+
+class TestWatchDerivesOnce(unittest.TestCase):
+    def test_watch_derives_once_and_reuses_the_id(self) -> None:
+        # R-3 (reviewer-provided recipe): run_watch/ingest are function-local
+        # imports, so patch them on their SOURCE modules; cli calls
+        # IDENT.derive_developer_id, so patch cli.IDENT.
+        import argparse
+
+        from session_analytics import cli as cli_mod
+        from session_analytics import identity as identity_mod
+        from session_analytics import watch as watch_mod
+        from session_analytics.ingest import pipeline as pipeline_mod
+
+        derive_calls = []
+        ids_seen = []
+
+        def counting_derive(**kwargs):
+            derive_calls.append(kwargs)
+            return identity_mod.DerivedIdentity(
+                id="Team_A", source=identity_mod.SOURCE_FLAG
+            )
+
+        def fake_run_watch(ingest_fn, interval, **kwargs):
+            for _ in range(3):
+                ingest_fn()
+
+        def fake_ingest(**kwargs):
+            ids_seen.append(kwargs.get("developer_id"))
+
+            class _Stats:
+                sessions_ingested = 0
+                sessions_skipped = 0
+                sessions_opted_out = 0
+
+            return _Stats()
+
+        args = argparse.Namespace(
+            interval=5, dsn="sqlite:///unused", copilots=None, developer_id="Team_A"
+        )
+        with mock.patch.object(cli_mod, "IDENT") as ident_mod, mock.patch(
+            "session_analytics.setup_cmd.ensure_initialized", return_value=True
+        ), mock.patch.object(watch_mod, "run_watch", fake_run_watch), mock.patch.object(
+            pipeline_mod, "ingest", fake_ingest
+        ), mock.patch.object(
+            cli_mod, "load_config", return_value=TestCliDerivation._cfg()
+        ):
+            ident_mod.derive_developer_id.side_effect = counting_derive
+            ident_mod.SOURCE_FLAG = identity_mod.SOURCE_FLAG
+            rc = cli_mod._cmd_watch(args)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(derive_calls), 1)  # derived ONCE, not per cycle
+        self.assertEqual(ids_seen, ["Team_A", "Team_A", "Team_A"])
