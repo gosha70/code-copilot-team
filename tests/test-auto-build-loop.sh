@@ -1243,6 +1243,144 @@ fi
 
 echo ""
 
+# ══════════════════════════════════════════════════════════════
+echo "=== #191: unattended — fail-closed + terminate-only dispatch ==="
+# ══════════════════════════════════════════════════════════════
+
+# Rewrites a fixture to a valid schema_version-2 unattended config
+# (explicit caps + terminate-only dispositions, per the validator).
+unattended_cfg() {
+    cfg_set "$1" '.schema_version=2 | .profile="unattended"
+        | .caps={cost_usd:5, wall_clock_sec:3600}
+        | .unattended={on_review_breaker:"terminate", on_stale_finding:"terminate", on_origin_gate:"terminate"}'
+}
+
+# FR-2: NOTHING runs unattended before #190 increment B — fail closed at
+# load, before any session, ledger, or termination machinery.
+P=$(setup_project); unattended_cfg "$P"
+run_driver "$P"
+assert_exit "unattended without admission fails closed (exit 1, not 6)" 1 "$RC"
+assert_contains "fail-closed message names admission control" "$OUTPUT" "admission control"
+assert_eq "fail-closed run writes no termination artifact" "0" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/termination.json" ]] && echo 1 || echo 0)"
+rm -rf "$P"
+
+# FR-6: the dedicated validator gates every run (attended included) — a v1
+# config carrying an unattended block is a violation, not a silent pass.
+P=$(setup_project)
+cfg_set "$P" '.unattended={on_origin_gate:"terminate"}'
+run_driver "$P"
+assert_exit "validator violation rejects the run (exit 1)" 1 "$RC"
+assert_contains "validator failure surfaces in output" "$OUTPUT" "failed validation"
+rm -rf "$P"
+
+# FR-3 static dispatch coverage: every one of the 12 breaker reasons routes
+# through dispose(); no call site invokes park() directly; no force-push.
+DISPATCH_OK=1
+for r in origin_gate provider_unavailable review_breaker cap_exceeded \
+         build_session_error build_session_timeout test_failure git_anomaly \
+         pr_error pr_config pr_precheck merge_blocked; do
+    grep -q "dispose \"$r\"" "$DRIVER" || { DISPATCH_OK=0; echo "  (missing dispose for $r)"; }
+done
+assert_eq "all 12 breaker reasons dispatch via dispose()" "1" "$DISPATCH_OK"
+assert_eq "no breaker call site bypasses dispose()" "0" \
+    "$(grep -cE '^[[:space:]]*park "[a-z]' "$DRIVER")"
+assert_eq "termination artifacts add no force-push (prechecks not weakened)" "0" \
+    "$(grep -cE 'push[^|]*(--force|[[:space:]]-f[[:space:]])' "$DRIVER")"
+
+# End-to-end terminations reach the dispatch machinery through the
+# documented test seam that increment B will REPLACE with real admission.
+export CCT_AUTOBUILD_TEST_SEAM=pre-admission
+
+# origin_gate at preflight → terminated_policy, exit 6, mandatory artifacts
+P=$(setup_project); unattended_cfg "$P"
+sed -i '' 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md" 2>/dev/null || \
+    sed -i 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md"
+git -C "$P" add -A && git -C "$P" commit -q -m "break origin"
+run_driver "$P"
+assert_exit "unattended origin gate terminates (exit 6)" 6 "$RC"
+TERM="$P/.cct/auto-build/demo-feat/termination.json"
+assert_eq "termination reason origin_gate" "origin_gate" "$(jq -r '.reason' "$TERM" 2>/dev/null)"
+assert_eq "ledger outcome terminated_policy" "terminated_policy" \
+    "$(jq -r '.outcome' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "triage report generated (mandatory artifact)" "1" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/triage-report.md" ]] && echo 1 || echo 0)"
+assert_contains "triage report names the reason" \
+    "$(cat "$P/.cct/auto-build/demo-feat/triage-report.md" 2>/dev/null)" "origin_gate"
+rm -rf "$P"
+
+# review_breaker mid-run + BLOCKED PUSH (no remote): mandatory artifacts
+# still land locally and the skip is journaled — never forced.
+P=$(setup_project); unattended_cfg "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "unattended review breaker terminates (exit 6)" 6 "$RC"
+assert_eq "termination reason review_breaker" "review_breaker" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
+assert_eq "status terminated_policy (not parked)" "terminated_policy" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_contains "blocked push journaled as artifact skip" \
+    "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "artifact_skipped"
+assert_eq "triage report generated on mid-run termination" "1" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/triage-report.md" ]] && echo 1 || echo 0)"
+rm -rf "$P"
+
+# cap_exceeded → terminated_policy. Needs a working remote + gh stub: the
+# unattended ladder pushes after phase 1, and the cap trips at phase 2's
+# session preflight — the push must not be the first breaker hit.
+P=$(setup_project); unattended_cfg "$P"
+BARE=$(add_remote "$P")
+export CCT_GH_BIN="$GH_STUB"
+MOCK_CLAUDE_COST=6 run_driver "$P"
+assert_exit "unattended cost cap terminates (exit 6)" 6 "$RC"
+assert_eq "termination reason cap_exceeded" "cap_exceeded" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
+unset CCT_GH_BIN
+rm -rf "$P" "$BARE"
+
+# git_anomaly (no-op build session) → terminated_policy
+P=$(setup_project); unattended_cfg "$P"
+NOOP_SCRIPT=$(mktemp); echo ":" > "$NOOP_SCRIPT"
+MOCK_CLAUDE_SCRIPT="$NOOP_SCRIPT" run_driver "$P"
+assert_exit "unattended no-op build terminates (exit 6)" 6 "$RC"
+assert_eq "termination reason git_anomaly" "git_anomaly" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
+rm -f "$NOOP_SCRIPT"; rm -rf "$P"
+
+# provider_unavailable at preflight → terminated_policy
+P=$(setup_project); unattended_cfg "$P"
+REVIEW_PROFILE="$DOWN_PROFILE" run_driver "$P"
+assert_exit "unattended unhealthy reviewer terminates (exit 6)" 6 "$RC"
+assert_eq "termination reason provider_unavailable" "provider_unavailable" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
+rm -rf "$P"
+
+unset CCT_AUTOBUILD_TEST_SEAM
+
+# FR-9 byte-identical attended behavior: a v2 config with an unattended
+# block present but an ATTENDED profile still parks (exit 4), and writes
+# none of the termination artifacts.
+P=$(setup_project)
+cfg_set "$P" '.schema_version=2 | .unattended={on_review_breaker:"terminate"}'
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "attended v2 breaker still parks (exit 4)" 4 "$RC"
+assert_eq "attended status parked, never terminated" "parked" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "attended run writes no termination.json" "0" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/termination.json" ]] && echo 1 || echo 0)"
+assert_eq "attended run writes no triage report" "0" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/triage-report.md" ]] && echo 1 || echo 0)"
+rm -rf "$P"
+
+# FR-1: the completion path records the explicit 'landed' outcome.
+P=$(setup_project); single_phase "$P"
+run_driver "$P"
+assert_exit "attended happy path completes (exit 0)" 0 "$RC"
+assert_eq "ledger outcome landed" "landed" \
+    "$(jq -r '.outcome' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+echo ""
+
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"
 echo "========================================="
