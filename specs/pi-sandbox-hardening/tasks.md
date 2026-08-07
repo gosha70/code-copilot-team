@@ -13,7 +13,7 @@ Targets **#173**. `AC` = acceptance criterion in `spec.md`.
 | 1 | | `policy/env-scrub.ts`: `resolveScrubPolicy(cfgReader)` + pure `scrubEnv(env, policy) → {env, removed}`; prefix/suffix glob patterns only (no config regex); exact keeps beat patterns; `CCT_*`/`LC_*` prefix keeps; never reads values. | `policy/env-scrub.ts` | SC-1/3 |
 | 2 | | Unit tests: pattern semantics, keep-beats-pattern, `env_scrub_extra`/`env_scrub_keep` merging, prefix keeps, empty/undefined values, no mutation of input. | `tests/pi-runtime/env-scrub.test.mjs` | SC-1/3 |
 | 3 | | `runSubagent` spawn-site scrub via an injected `scrub` option; `index.ts` supplies it from config (default ON) + audits `env.scrub` (names+count, never values) per spawn. | `agents/child-session.ts`, `index.ts` | SC-1/4 |
-| 4 | | Real-spawn test with a pi shim that dumps its env: credential names absent, `PATH`/`CCT_*`/keeps present; `security.env_scrub=false` ⇒ pass-through **only from a trusted scope** (global config, or project config in a trusted session — untrusted-project opt-out ignored); audit record asserted. | `tests/pi-runtime/child-session.test.mjs` (+ fixture) | SC-1/3/4 |
+| 4 | | Real-spawn test with a pi shim that dumps its env (NAMES + CCT_*/MOCK_PI_* canary values only; dump dir cleaned): credential names absent, `PATH`/`CCT_*`/keeps present; `security.env_scrub=false` ⇒ pass-through **only from user-controlled scopes** (global/env/cli — both in-repo layers tighten-only); `ChildResult.scrubbedEnv` reporting asserted (names only; the live `env.scrub` audit lands with the US2 handoff wiring per plan D0.2). | `tests/pi-runtime/child-session.test.mjs` (+ fixture) | SC-1/3/4 |
 
 **Checkpoint US1** — child sessions cannot see host credentials; escape hatch +
 audit proven.

@@ -3,7 +3,9 @@
 // tests. Deterministic, no LLM. Behaviour is driven by env vars:
 //
 //   MOCK_PI_ARGV_OUT   write JSON of argv (the flags the runner passed) here
-//   MOCK_PI_ENV_OUT    write JSON of process.env (the child's real env) here
+//   MOCK_PI_ENV_OUT    write a JSON env DUMP here: every env NAME, plus
+//                      values for CCT_*/MOCK_PI_* only (test-owned canaries;
+//                      real credential VALUES are never persisted — #173)
 //   MOCK_PI_SLEEP_MS   sleep this long before emitting (timeout/cancel tests)
 //   MOCK_PI_EXIT       process exit code (default 0)
 //   MOCK_PI_NO_ENVELOPE  emit no result envelope (error-path test)
@@ -18,7 +20,14 @@ if (process.env.MOCK_PI_ARGV_OUT) {
   fs.writeFileSync(process.env.MOCK_PI_ARGV_OUT, JSON.stringify(argv));
 }
 if (process.env.MOCK_PI_ENV_OUT) {
-  fs.writeFileSync(process.env.MOCK_PI_ENV_OUT, JSON.stringify(process.env));
+  const sample = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.startsWith("CCT_") || k.startsWith("MOCK_PI_")) sample[k] = v;
+  }
+  fs.writeFileSync(
+    process.env.MOCK_PI_ENV_OUT,
+    JSON.stringify({ names: Object.keys(process.env).sort(), sample }),
+  );
 }
 
 function emitAndExit() {

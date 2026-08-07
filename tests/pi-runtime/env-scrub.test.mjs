@@ -15,6 +15,7 @@ import {
   defaultScrubPolicy,
   resolveScrubPolicy,
   sanitizeGlobs,
+  sanitizeKeepGlobs,
   scrubEnv,
 } from "../../adapters/pi/runtime/policy/env-scrub.ts";
 
@@ -47,12 +48,15 @@ test("scrubEnv removes credential-shaped names and keeps baselines", () => {
   assert.equal("GITHUB_TOKEN" in env, false);
 });
 
-test("scrubEnv: keep beats pattern (provider keys, CCT_*, LC_*)", () => {
+test("scrubEnv: keep beats pattern (provider keys/tokens, CCT_*, LC_*, AWS selectors)", () => {
   const { env, removed } = scrubEnv(
     {
       ANTHROPIC_API_KEY: "needed", // *_KEY pattern, kept by exact keep
+      ANTHROPIC_AUTH_TOKEN: "needed", // *_TOKEN, kept (gateway/local-LLM setups)
       OPENAI_API_KEY: "needed",
       PI_API_KEY: "needed",
+      AWS_REGION: "us-east-1", // AWS_* pattern, kept (non-secret selector)
+      AWS_PROFILE: "dev",
       CCT_WORKER_ID: "w1", // CCT_* keep
       CCT_TEAM_MEMBER_ID: "m1",
       LC_ALL: "en_US.UTF-8", // LC_* keep
@@ -62,16 +66,37 @@ test("scrubEnv: keep beats pattern (provider keys, CCT_*, LC_*)", () => {
   );
   assert.deepEqual(removed, ["SSH_KEY"]);
   assert.equal(env.ANTHROPIC_API_KEY, "needed");
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN, "needed");
+  assert.equal(env.AWS_REGION, "us-east-1");
   assert.equal(env.CCT_WORKER_ID, "w1");
   assert.equal(env.LC_ALL, "en_US.UTF-8");
 });
 
-test("scrubEnv matches case-insensitively", () => {
+test("scrubEnv removes the review-F5 vectors (PGPASSWORD, SSH_AUTH_SOCK, *_PAT)", () => {
   const { removed } = scrubEnv(
-    { my_api_token: "x", aws_region: "us-east-1", Path: "/bin" },
+    {
+      PGPASSWORD: "p",
+      SSH_AUTH_SOCK: "/tmp/agent.sock",
+      DOCKER_AUTH_CONFIG: "{}",
+      MY_GITHUB_PAT: "t",
+      KUBECONFIG: "/home/u/.kube/config", // path pointer: deliberately NOT scrubbed
+    },
     defaultScrubPolicy(),
   );
-  assert.deepEqual(removed, ["aws_region", "my_api_token"]);
+  assert.deepEqual(removed, [
+    "DOCKER_AUTH_CONFIG",
+    "MY_GITHUB_PAT",
+    "PGPASSWORD",
+    "SSH_AUTH_SOCK",
+  ]);
+});
+
+test("scrubEnv matches case-insensitively", () => {
+  const { removed } = scrubEnv(
+    { my_api_token: "x", aws_secret_thing: "s", Path: "/bin" },
+    defaultScrubPolicy(),
+  );
+  assert.deepEqual(removed, ["aws_secret_thing", "my_api_token"]);
 });
 
 test("scrubEnv drops undefined values and never mutates its input", () => {
@@ -114,6 +139,13 @@ test("sanitizeGlobs accepts only exact / PREFIX_* / *_SUFFIX shapes", () => {
   assert.deepEqual(sanitizeGlobs(undefined), []);
 });
 
+test("sanitizeKeepGlobs is narrower: exact / PREFIX_* only (keeps loosen)", () => {
+  assert.deepEqual(
+    sanitizeKeepGlobs(["FOO", "FOO_*", "*_BAR", "*", 42]),
+    ["FOO", "FOO_*"], // *_SUFFIX rejected for keeps
+  );
+});
+
 // ── resolveScrubPolicy: defaults ─────────────────────────────────────────────
 
 function entry(layer, value, history = []) {
@@ -151,16 +183,35 @@ test("resolveScrubPolicy: global opt-out disables; env layer re-enables", () => 
 
 // ── resolveScrubPolicy: FR-004a trust asymmetry ──────────────────────────────
 
-test("project layer cannot disable scrubbing (tighten-only)", () => {
+test("neither in-repo layer can disable scrubbing (tighten-only)", () => {
+  for (const repoLayer of ["project", "project-local"]) {
+    const r = resolveScrubPolicy(
+      new Map([
+        [
+          "security.env_scrub",
+          entry(repoLayer, false, [{ layer: "defaults", value: true }]),
+        ],
+      ]),
+    );
+    assert.equal(r.enabled, true, `${repoLayer} opt-out must be ignored`);
+  }
+});
+
+test("a LATER trusted opt-out beats an earlier repo enable (ordered walk)", () => {
+  // global: false, then repo latches true, then the user's cli --set false.
   const r = resolveScrubPolicy(
     new Map([
       [
         "security.env_scrub",
-        entry("project", false, [{ layer: "defaults", value: true }]),
+        entry("cli", false, [
+          { layer: "defaults", value: true },
+          { layer: "global", value: false },
+          { layer: "project", value: true },
+        ]),
       ],
     ]),
   );
-  assert.equal(r.enabled, true); // project-layer opt-out ignored
+  assert.equal(r.enabled, false); // the user's later opt-out wins
 });
 
 test("project layer CAN enable scrubbing over a global opt-out", () => {
@@ -194,19 +245,25 @@ test("env_scrub_extra unions across every layer including project", () => {
   assert.ok(r.policy.patterns.includes("*_TOKEN")); // defaults still present
 });
 
-test("env_scrub_keep from the project layer is ignored (keeps loosen)", () => {
-  const r = resolveScrubPolicy(
-    new Map([
-      [
-        "security.env_scrub_keep",
-        entry("project", ["EVIL_TOKEN"], [
-          { layer: "global", value: ["MY_BUILD_KEY"] },
-        ]),
-      ],
-    ]),
-  );
-  assert.ok(r.policy.keep.includes("MY_BUILD_KEY")); // trusted global keep
-  assert.equal(r.policy.keep.includes("EVIL_TOKEN"), false); // project ignored
+test("env_scrub_keep from either in-repo layer is ignored (keeps loosen)", () => {
+  for (const repoLayer of ["project", "project-local"]) {
+    const r = resolveScrubPolicy(
+      new Map([
+        [
+          "security.env_scrub_keep",
+          entry(repoLayer, ["EVIL_TOKEN"], [
+            { layer: "global", value: ["MY_BUILD_KEY"] },
+          ]),
+        ],
+      ]),
+    );
+    assert.ok(r.policy.keep.includes("MY_BUILD_KEY")); // trusted global keep
+    assert.equal(
+      r.policy.keep.includes("EVIL_TOKEN"),
+      false,
+      `${repoLayer} keep must be ignored`,
+    );
+  }
 });
 
 test("config-supplied malformed globs are dropped, defaults intact", () => {

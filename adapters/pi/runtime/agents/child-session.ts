@@ -20,7 +20,7 @@
 import { spawn } from "node:child_process";
 
 import { defaultScrubPolicy, scrubEnv } from "../policy/env-scrub.ts";
-import type { ScrubPolicy } from "../policy/env-scrub.ts";
+import type { ScrubPolicy, ScrubResult } from "../policy/env-scrub.ts";
 
 import type { AgentManifest, ThinkingLevel } from "./manifest.ts";
 import { recursionExceeded } from "./caps.ts";
@@ -163,12 +163,29 @@ export function runChildSession(
   opts: { runnerPath?: string; signal?: AbortSignal } = {},
 ): Promise<ChildResult> {
   const built = buildChildArgv(o);
+
+  if (recursionExceeded(o.depth, o.maxRecursion)) {
+    // No spawn happens on this path, so no scrub is performed or reported
+    // (review F6: never report a scrub for a spawn that never occurred).
+    return Promise.resolve({
+      ran: false,
+      status: "cap-exceeded",
+      exitCode: null,
+      sessionId: null,
+      subtype: null,
+      costUsd: null,
+      notEnforced: built.notEnforced,
+      scrubbedEnv: [],
+      reason: `recursion cap: depth ${o.depth} may not spawn a child past max_recursion=${o.maxRecursion}`,
+    });
+  }
+
   // #173 (FR-2): scrub the inherited host env BEFORE spawn — names only,
   // values never read. built.env (the CCT contract vars) is applied after
   // scrubbing and therefore always survives.
-  const scrubbed =
+  const scrubbed: ScrubResult =
     o.scrub === false
-      ? { env: process.env as Record<string, string>, removed: [] }
+      ? { env: { ...process.env }, removed: [] }
       : scrubEnv(process.env, o.scrub ?? defaultScrubPolicy());
   const base: Omit<ChildResult, "status" | "ran"> = {
     exitCode: null,
@@ -178,15 +195,6 @@ export function runChildSession(
     notEnforced: built.notEnforced,
     scrubbedEnv: scrubbed.removed,
   };
-
-  if (recursionExceeded(o.depth, o.maxRecursion)) {
-    return Promise.resolve({
-      ...base,
-      ran: false,
-      status: "cap-exceeded",
-      reason: `recursion cap: depth ${o.depth} may not spawn a child past max_recursion=${o.maxRecursion}`,
-    });
-  }
 
   const runner = opts.runnerPath || process.env.CCT_PI_BIN || "pi";
 

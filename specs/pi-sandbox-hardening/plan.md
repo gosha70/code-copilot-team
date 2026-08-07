@@ -74,7 +74,20 @@ Three facts surfaced during implementation that adjust HOW (never WHAT):
    policy ⇒ config-resolved. Removed names are reported in
    `ChildResult.scrubbedEnv` (names only) for the future live wiring to
    audit.
-3. **Launcher boundary is global/env/cli-scope only.** The loader's trust
+3a. **Phase-1 review addendum (2026-08-06).** The phase-1 review hardened
+   delta 1: BOTH in-repo layers (`project` AND `project-local`) are
+   tighten-only — `config.local.toml` is gitignored by convention only, so a
+   repo can commit one (verified: it is not ignored in this repo). This
+   deliberately diverges from floor.ts's RELAXATION_LAYERS. Precedence is an
+   ordered walk, so a later user-controlled explicit boolean beats an
+   earlier repo `env_scrub = true` latch (review F2). Keep globs are exact/
+   `PREFIX_*` only (F8); defaults gained `ANTHROPIC_AUTH_TOKEN` + AWS
+   selector keeps (F3) and `PGPASSWORD`/`SSH_AUTH_SOCK`/`DOCKER_AUTH_CONFIG`/
+   `*_PAT` patterns (F5); the test fixture dumps env NAMES (values only for
+   CCT_*/MOCK_PI_* canaries) and cleans up (F4); no scrub is reported when
+   no spawn happened (F6). A custom `providers.*.api_key_env` name must be
+   kept via `security.env_scrub_keep` — auto-keeping it is future wiring.
+4. **Launcher boundary is global/env/cli-scope only.** The loader's trust
    contract never reads project layers untrusted, so the out-of-session CLI
    cannot see a project-local `env_scrub_extra` either; launcher-side
    tightening from checked-in project config does not apply (it still applies
@@ -100,10 +113,10 @@ audits `env.scrub` (count + removed names) per spawn. The pure builder
 `buildChildArgv` stays pure/untouched; the policy applies at the spawn site.
 Plumbing: `runSubagent` gains an optional `scrub` option supplied by the
 caller in `index.ts` (which owns config) — the library keeps no config read.
-In-session policy resolution follows the session's existing trust-gated
-config load: a positively-trusted project may loosen (`env_scrub=false`,
-`env_scrub_keep`); an untrusted project's config may only tighten
-(`env_scrub_extra`) — same FR-004a discipline as every other config surface.
+In-session policy resolution uses the session's trust-gated config load;
+even in a positively-trusted session the in-repo layers may only tighten —
+loosening requires the user's own scopes (global config, env, cli). See the
+phase-1 review addendum in D0.
 
 ### D3 — Worker handoff (`bin/pi-code`), one pattern source, trust-aware
 A read-only CLI surface `pi-code env scrub-list [--json]` prints the names the
@@ -186,11 +199,13 @@ closure comment carries the gap-mapping table from `spec.md`.
 4. **Handoff mechanism** — CLI-computed unset list (`pi-code env scrub-list`),
    single TS pattern source, fail-closed when the call fails while scrub is
    enabled.
-5. **Trust asymmetry for scrub config** (review finding, 2026-08-06) —
-   loosening keys (`env_scrub=false`, `env_scrub_keep`) are honored only from
-   trusted scopes: global/user config always; project-local config only
-   inside a positively-trusted session. Tightening (`env_scrub_extra`) is
-   honored from any scope. The out-of-session CLI (`env scrub-list`) treats
+5. **Trust asymmetry for scrub config** (pre-commit review + phase-1 review,
+   2026-08-06) — loosening keys (`env_scrub=false`, `env_scrub_keep`) are
+   honored only from user-controlled scopes: global config, `CCT_CONFIG__*`
+   env, cli `--set`. BOTH in-repo layers (`config.toml`, `config.local.toml`)
+   are tighten-only, and a later user-controlled explicit boolean beats an
+   earlier repo enable (ordered walk). Tightening (`env_scrub_extra`) is
+   honored from any layer. The out-of-session CLI (`env scrub-list`) treats
    project config as untrusted (existing model) and therefore never honors a
    project-local opt-out — no FR-004a bypass, and launcher pass-through tests
    target global config, not project config.

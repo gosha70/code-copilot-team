@@ -58,14 +58,24 @@ the `pi-code worktree run` handoff exec's the worker pi with the full host env.
   ON**), `security.env_scrub_keep` (extra exact names to keep),
   `security.env_scrub_extra` (extra name patterns to scrub). Keep defaults
   include the LLM provider keys a child pi needs to run (`ANTHROPIC_API_KEY`,
-  `OPENAI_API_KEY`, `PI_API_KEY`) so default-ON scrubbing does not brick child
-  sessions; the keep-list is exact-name, wins over patterns, and is itself
-  documented. **Trust asymmetry (FR-004a):** config that *loosens* the policy
-  (`env_scrub=false`, `env_scrub_keep`) is honored only from **trusted**
-  scopes — global/user config always; project-local config only inside a
-  session whose project is positively trusted. Config that *tightens*
-  (`env_scrub_extra`) is honored from any scope, including an untrusted
-  project. A repo's checked-in config can therefore never weaken scrubbing.
+  `OPENAI_API_KEY`, `PI_API_KEY`, plus `ANTHROPIC_AUTH_TOKEN` for
+  gateway/local-LLM provider setups and the non-secret `AWS_REGION`/
+  `AWS_DEFAULT_REGION`/`AWS_PROFILE` selectors) so default-ON scrubbing does
+  not brick child sessions; the keep-list (exact names or `PREFIX_*` globs —
+  deliberately narrower than patterns, since keeps loosen) wins over
+  patterns and is itself documented. **Trust asymmetry (FR-004a):** config
+  that *loosens* the policy (`env_scrub=false`, `env_scrub_keep`) is honored
+  only from genuinely **user-controlled** scopes — global/user config,
+  `CCT_CONFIG__*` env, `pi-code --set` (cli). **Both** in-repo layers
+  (`config.toml` and `config.local.toml`) may only tighten:
+  `config.local.toml` is gitignored by convention only, so a repo can commit
+  one, and a silently-honored scrub opt-out there is exactly the
+  exfiltration vector this feature closes (a deliberate, recorded divergence
+  from floor.ts's relaxation-layer precedent). Precedence is **ordered**: a
+  later user-controlled layer's explicit boolean beats an earlier repo
+  enable (a repo cannot latch scrubbing against the user's own opt-out).
+  Config that *tightens* (`env_scrub_extra`) is honored from any layer. A
+  repo's config can therefore never weaken scrubbing.
 - **FR-4 — One pattern source for both languages, CLI-side trust honored.**
   The bash launcher must not carry its own copy of the pattern list (drift
   risk). `bin/pi-code` obtains the resolved unset list from the runtime (a
@@ -133,12 +143,13 @@ the `pi-code worktree run` handoff exec's the worker pi with the full host env.
    keep names. Proven with a real spawn (shim) test, not just the pure builder.
 2. `pi-code worktree run` launches the worker with the same scrub applied and
    the `CCT_WORKER_*` contract intact (launcher test with a pi shim).
-3. `security.env_scrub=false` restores pass-through **from a trusted scope
-   only**: global/user config anywhere; project-local config only in a
-   trusted session (in-session boundary). At the launcher boundary a
-   project-local opt-out is provably ignored (test); checked-in
-   `env_scrub_extra` tightens the in-session boundary (the untrusted CLI
-   never reads project layers at all). All three keys lint-registered.
+3. `security.env_scrub=false` restores pass-through from **user-controlled
+   scopes only** (global config, `CCT_CONFIG__*` env, cli `--set`). Both
+   in-repo layers are provably unable to loosen — opt-out and keep additions
+   from `config.toml`/`config.local.toml` are ignored (tests) — and a later
+   user opt-out beats an earlier repo enable. Checked-in `env_scrub_extra`
+   tightens the in-session boundary (the untrusted CLI never reads project
+   layers at all). All three keys lint-registered.
 4. Every scrubbed spawn emits an `env.scrub` audit record with removed names +
    count; no secret **value** ever appears in any log/audit/artifact.
 5. The battery gains the scrub invariant; `pi-tests.yml` gates stay green
