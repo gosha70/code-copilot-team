@@ -126,6 +126,25 @@ test("--no-plan-approval sets planRequired false; default requires approval", { 
   assert.equal(ledgerOf(b).planApproval.required, true);
 });
 
+test("task: --assign/--worker values never leak into the persisted title", { skip: !HAS_GIT }, () => {
+  const repo = initRepo();
+  const lead = ctx(repo, "alpha", "lead1");
+  run(lead, "create alpha");
+  run(lead, "join dev1");
+  // flags after the title
+  assert.match(run(lead, "task t1 build the thing --assign dev1 --worker w9"), /ok/);
+  // flags interleaved before title words
+  assert.match(run(lead, "task t2 --assign dev1 ship it"), /ok/);
+  const led = ledgerOf(repo);
+  const t1 = led.tasks.find((t) => t.taskId === "t1");
+  assert.equal(t1.title, "build the thing", "flag values excluded from the title");
+  assert.equal(t1.assignedTo, "dev1");
+  assert.equal(t1.workerId, "w9");
+  const t2 = led.tasks.find((t) => t.taskId === "t2");
+  assert.equal(t2.title, "ship it");
+  assert.equal(t2.assignedTo, "dev1");
+});
+
 // ── declared identity + team binding ─────────────────────────────────────────
 
 test("identity: missing declared ids ⇒ refused; unknown member ⇒ refused", { skip: !HAS_GIT }, () => {

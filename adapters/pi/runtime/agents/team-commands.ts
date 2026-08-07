@@ -344,7 +344,9 @@ function mutate(
       break;
     }
     case "task": {
-      const pos = rest.filter((a) => !a.startsWith("--"));
+      // --assign/--worker take a VALUE: consume both the flag and its value so
+      // the value never leaks into the positional title words.
+      const pos = positionals(rest, ["--assign", "--worker"]);
       const taskId = pos[0] ?? "";
       const title = pos.slice(1).join(" ");
       if (!taskId || !title)
@@ -508,6 +510,23 @@ function flagPresent(argv: string[], flag: string): boolean {
 function flagValue(argv: string[], flag: string): string | undefined {
   const i = argv.indexOf(flag);
   return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined;
+}
+/**
+ * Positional args after removing flags — a flag listed in `valueFlags` consumes
+ * its following value token too, so option values never leak into positionals.
+ */
+function positionals(argv: string[], valueFlags: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (valueFlags.includes(a)) {
+      i++; // skip the flag's value
+      continue;
+    }
+    if (a.startsWith("--")) continue;
+    out.push(a);
+  }
+  return out;
 }
 function teamRule(sub: string): string {
   return (TEAM_AUDIT as Record<string, string>)[sub] ?? `team.${sub}`;
