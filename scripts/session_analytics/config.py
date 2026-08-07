@@ -381,6 +381,20 @@ def _load_projects(
     return projects, tuple(rules)
 
 
+def _developer_id_cfg(data: Mapping[str, Any]) -> Optional[str]:
+    """The `developer_id` config key; a wrong TYPE is a config error (raises,
+    matching the package's other config blocks) — never coerced into a
+    fabricated id (PR #188 review B-10)."""
+    value = data.get(C.CFG_DEVELOPER_ID)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"config '{C.CFG_DEVELOPER_ID}' must be a string, got {type(value).__name__}"
+        )
+    return value
+
+
 def load_config(
     *,
     dsn: Optional[str] = None,
@@ -459,11 +473,7 @@ def load_config(
         project_id_rules=project_id_rules,
         raw=data,
         developer_id_env=env(ENV_DEVELOPER_ID),
-        developer_id_cfg=(
-            str(data.get(C.CFG_DEVELOPER_ID))
-            if data.get(C.CFG_DEVELOPER_ID) is not None
-            else None
-        ),
+        developer_id_cfg=_developer_id_cfg(data),
     )
 
 

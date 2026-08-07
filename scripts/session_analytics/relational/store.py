@@ -37,6 +37,17 @@ _ACCESS_BY_TOOL = {
 }
 
 
+# Module-level so the dialect test exercises the REAL statement, not a copy
+# (PR #188 review B-9).
+UPSERT_DEVELOPER_SQL = """
+    INSERT INTO developer (developer_id, display_name)
+    VALUES (?, ?)
+    ON CONFLICT (developer_id) DO UPDATE SET
+        display_name=COALESCE(excluded.display_name, developer.display_name)
+    RETURNING id
+"""
+
+
 def upsert_developer(
     db: Database,
     developer_id: str,
@@ -48,14 +59,9 @@ def upsert_developer(
     only ever fills in or updates to a non-NULL value — an upsert without
     one never erases an existing name. Returns the row id.
     """
-    sql = """
-        INSERT INTO developer (developer_id, display_name)
-        VALUES (?, ?)
-        ON CONFLICT (developer_id) DO UPDATE SET
-            display_name=COALESCE(excluded.display_name, developer.display_name)
-        RETURNING id
-    """
-    return db.insert_returning_id(sql, (developer_id, display_name))
+    return db.insert_returning_id(
+        UPSERT_DEVELOPER_SQL, (developer_id, display_name)
+    )
 
 
 def upsert_session(

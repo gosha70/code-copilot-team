@@ -140,15 +140,6 @@ class TestUpsertDeveloper(RegistryResetTestCase):
         finally:
             db.close()
 
-    def test_upsert_sql_translates_for_postgres(self) -> None:
-        # Dialect rep for the new statement (test_db_dialect.py pattern).
-        d = Database(conn=None, dialect="postgres")
-        translated = d._translate(
-            "INSERT INTO developer (developer_id, display_name) VALUES (?, ?)"
-        )
-        self.assertIn("%s", translated)
-        self.assertNotIn("?", translated)
-
 
 class TestPipelinePersistsDeveloper(RegistryResetTestCase):
     def test_zero_ingest_run_still_commits_the_developer_row(self) -> None:
@@ -177,3 +168,87 @@ class TestPipelinePersistsDeveloper(RegistryResetTestCase):
             self.assertIsNotNone(row)  # survived close: committed
         finally:
             db.close()
+
+
+class TestCliDerivation(unittest.TestCase):
+    """_derived_developer_id plumbing (PR #188 review B-9): loader-resolved
+    env/.env + config inputs, the WARNING on a dropped explicit flag, and
+    the watch parser carrying --developer-id."""
+
+    @staticmethod
+    def _cfg(env_value=None, cfg_value=None):
+        # A real load_config() against empty overrides would read the host's
+        # ~/.cct + repo .env; a minimal hand-built config keeps the test
+        # hermetic. Only the identity fields matter here.
+        from session_analytics.config import AnalyticsConfig, JudgeConfig
+        from session_analytics.cost import PricingConfig
+
+        judge = JudgeConfig(
+            override=None,
+            by_copilot={},
+            default=("none", ""),
+            workers=1,
+            ollama_url="",
+            base_url="",
+            api_key="",
+        )
+        return AnalyticsConfig(
+            sources={},
+            dsn="sqlite:///unused",
+            kuzu_path="unused",
+            redaction_mode="code",
+            judge=judge,
+            pricing=PricingConfig(models={}),
+            developer_id_env=env_value,
+            developer_id_cfg=cfg_value,
+        )
+
+    def test_loader_resolved_env_beats_config(self) -> None:
+        import argparse
+
+        from session_analytics.cli import _derived_developer_id
+
+        args = argparse.Namespace(developer_id=None)
+        got = _derived_developer_id(
+            args, self._cfg(env_value="From.Env", cfg_value="from-config")
+        )
+        self.assertEqual(got, "from-env")  # derived sources normalize
+
+    def test_dropped_explicit_flag_warns_and_names_fallback(self) -> None:
+        import argparse
+
+        from session_analytics.cli import _derived_developer_id
+
+        args = argparse.Namespace(developer_id="\x01\x02")
+        with self.assertLogs("session_analytics.cli", level="WARNING") as logs:
+            got = _derived_developer_id(args, self._cfg(cfg_value="cfg-id"))
+        self.assertEqual(got, "cfg-id")
+        self.assertTrue(any("unusable after sanitation" in m for m in logs.output))
+
+    def test_watch_parser_accepts_developer_id(self) -> None:
+        from session_analytics.cli import _build_parser
+
+        args = _build_parser().parse_args(
+            ["watch", "--developer-id", "Team_A", "--interval", "5"]
+        )
+        self.assertEqual(args.developer_id, "Team_A")
+
+    def test_config_type_error_is_raised_not_fabricated(self) -> None:
+        from session_analytics.config import _developer_id_cfg
+
+        with self.assertRaises(ValueError):
+            _developer_id_cfg({"developer_id": {"a": 1}})
+        self.assertIsNone(_developer_id_cfg({}))
+        self.assertEqual(_developer_id_cfg({"developer_id": "x"}), "x")
+
+
+class TestUpsertSqlIsTheRealStatement(unittest.TestCase):
+    def test_translate_targets_the_shipped_sql(self) -> None:
+        # B-9: exercise the REAL statement, not a hand-written copy.
+        from session_analytics.relational.store import UPSERT_DEVELOPER_SQL
+
+        d = Database(conn=None, dialect="postgres")
+        translated = d._translate(UPSERT_DEVELOPER_SQL)
+        self.assertIn("%s", translated)
+        self.assertNotIn("?", translated)
+        self.assertIn("ON CONFLICT (developer_id)", translated)

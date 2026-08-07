@@ -9,26 +9,40 @@
  * does not invent one; emission follows the checkpoint cadence exactly
  * (`memory.session-state` stays degraded for the same reason).
  *
- * The file carries ONLY fields already present in the checkpoint, passed
- * through the same sanitization discipline — no free text beyond the
- * bounded ids, no env values, no secrets surface. A heartbeat write
- * failure must never break the checkpoint path (fail-safe by contract).
+ * Sanitization happens ON WRITE (phase-2 review B-1): the inputs are
+ * user/attacker-reachable (`/cct:phase <phase> <featureId>` args, the
+ * untrusted `.cct/pi-workflow.json` state), so every field goes through
+ * the checkpoint's own `sanitizeText` discipline, the phase is validated
+ * against `PHASE_ORDER`, and numbers are clamped — the artifact is bounded
+ * by construction, not by reader courtesy. The Phase-3 reader still
+ * sanitizes on read (FR-4): both directions, per the spec. The write is
+ * atomic (temp + rename) because `watch` polls this file while checkpoints
+ * rewrite it.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { PHASE_ORDER } from "./phases.ts";
 import type { Phase } from "./phases.ts";
+import { MAX_FEATURE_ID, MAX_TIMESTAMP, sanitizeText } from "./checkpoint.ts";
 
 export const HEARTBEAT_REL = path.join(".cct", "heartbeat.json");
 export const HEARTBEAT_VERSION = 1;
 
+const MAX_SESSION_ID = 128;
+const MAX_CHECKPOINT_COUNT = 1_000_000_000;
+
+export interface HeartbeatFields {
+  /** Nullable by construction (spec FR-3): Pi exposes no native session id
+   * at checkpoint time; carried for the contract, null today. */
+  sessionId?: string | null;
+  phase: Phase | null;
+  featureId: string | null;
+  checkpointCount: number;
+}
+
 export interface Heartbeat {
   version: number;
-  /**
-   * Nullable by construction (spec FR-3): Pi exposes no native session id
-   * at checkpoint time, so this is carried for the contract (and future
-   * runtimes that know one) and is null today — honest, never fabricated.
-   */
   sessionId: string | null;
   phase: Phase | null;
   featureId: string | null;
@@ -36,43 +50,46 @@ export interface Heartbeat {
   updatedAt: string; // ISO timestamp of the underlying CCT action
 }
 
+/** Clamp to a finite non-negative bounded integer (tamper-tolerant). */
+function clampCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.min(Math.max(Math.trunc(value), 0), MAX_CHECKPOINT_COUNT);
+}
+
 /**
- * Write the heartbeat. Throws on I/O failure — call sites that must never
- * fail their primary action use `tryWriteHeartbeat`.
+ * Write the heartbeat (sanitized + bounded on write). Throws on I/O
+ * failure — call sites that must never fail their primary action use
+ * `tryWriteHeartbeat`.
  */
 export function writeHeartbeat(
   projectRoot: string,
-  fields: {
-    sessionId?: string | null;
-    phase: Phase | null;
-    featureId: string | null;
-    checkpointCount: number;
-  },
+  fields: HeartbeatFields,
   nowIso: string,
 ): Heartbeat {
   const hb: Heartbeat = {
     version: HEARTBEAT_VERSION,
-    sessionId: fields.sessionId ?? null,
-    phase: fields.phase,
-    featureId: fields.featureId,
-    checkpointCount: fields.checkpointCount,
-    updatedAt: nowIso,
+    sessionId: sanitizeText(fields.sessionId, MAX_SESSION_ID) || null,
+    phase: (PHASE_ORDER as readonly string[]).includes(fields.phase as string)
+      ? fields.phase
+      : null,
+    featureId: sanitizeText(fields.featureId, MAX_FEATURE_ID) || null,
+    checkpointCount: clampCount(fields.checkpointCount),
+    updatedAt: sanitizeText(nowIso, MAX_TIMESTAMP),
   };
   const file = path.join(projectRoot, HEARTBEAT_REL);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(hb, null, 2) + "\n");
+  // Atomic replace: `watch` polls this file while checkpoints rewrite it —
+  // a torn read must not be constructible from our side (review B-4).
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(hb, null, 2) + "\n");
+  fs.renameSync(tmp, file);
   return hb;
 }
 
 /** Best-effort variant: null on any failure, never throws into the caller. */
 export function tryWriteHeartbeat(
   projectRoot: string,
-  fields: {
-    sessionId?: string | null;
-    phase: Phase | null;
-    featureId: string | null;
-    checkpointCount: number;
-  },
+  fields: HeartbeatFields,
   nowIso: string,
 ): Heartbeat | null {
   try {

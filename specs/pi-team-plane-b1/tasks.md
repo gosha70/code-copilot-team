@@ -10,7 +10,7 @@ criterion in `spec.md`.
 
 | # | [P] | Task | File(s) | SC |
 |---|-----|------|---------|----|
-| 1 | | `identity.py`: `derive_developer_id(cli_value, env, config, repo_root)` with precedence flag > `CCT_DEVELOPER_ID` > config > git-email derivation (form per approved D-1) > `"local"`; bounded kebab normalization; `source` reported; invalid candidates fall through, never invent. | `scripts/session_analytics/identity.py` | SC-1 |
+| 1 | | `identity.py`: `derive_developer_id(cli_value, env_value, config_value)` — inputs loader-resolved (no os.environ); precedence flag (VERBATIM after control-strip/bound) > `CCT_DEVELOPER_ID` (env/.env) > config > `git config --global user.email` local-part > `"local"`; derived sources kebab-normalize; invalid candidates fall through, never invent; a dropped explicit flag WARNs. | `scripts/session_analytics/identity.py` | SC-1 |
 | 2 | | `upsert_developer` in the relational store (both dialects, idempotent); pipeline stamps sessions with the derived id and upserts the developer row before session writes; CLI wires derivation where `DEFAULT_DEVELOPER_ID` flows today. | `relational/store.py`, `ingest/pipeline.py`, `cli.py` | SC-1 |
 | 3 | | Tests: precedence matrix, normalization edges, fallthrough-on-invalid, upsert idempotence ×2 dialects, stub `"local"` fallback preserved. | `scripts/session_analytics/tests/` | SC-1/4 |
 
@@ -37,3 +37,29 @@ best-effort in BOTH directions (emit and ingest) · no exposure surface, no
 new Pi event, no auth claim · honest last-seen phrasing · all suites green
 (per-module exclusions honored) · per-phase review loop · targets **#187**,
 leaves **#174** open.
+
+---
+
+## Review-driven notes (PR #188 plan+phase-1+phase-2 reviews, 2026-08-07)
+
+- D-1/D-2 REVISED (see plan D-0): git identity is `--global` only;
+  in-flight storage is the dedicated `local_heartbeat` table (new DDL,
+  both dialects) — task 6 targets it instead of metadata KV.
+- Explicit `--developer-id` is verbatim (upgrade-compatible) and a dropped
+  explicit value WARNs; `--full` re-stamps by design (spec FR-2 + flag
+  help).
+- `CCT_DEVELOPER_ID` flows through the config loader (`ENV_KEYS`, `.env`);
+  `watch` carries `--developer-id` too; a non-string config `developer_id`
+  raises (never coerced into a fabricated id).
+- Heartbeat is sanitized + bounded ON WRITE (checkpoint's sanitizeText,
+  PHASE_ORDER validation, clamped count, bounded timestamp) and written
+  atomically (temp+rename) because `watch` polls it; the Phase-3 reader
+  STILL sanitizes on read (both directions per spec).
+- **Phase-3 requirement (review B-6):** assert exact string equivalence
+  between the heartbeat's project root (Pi `state.cwd`) and the store's
+  `copilot_session.project_path` values — a shape mismatch (symlink,
+  trailing slash) would make discovery silently find nothing.
+- DEFERRED, tracked: plan D1's "doctor-style reporting" of the identity
+  source (currently an INFO log). Task 8 docs MUST note that derived ids
+  now flow into exports/graph/MCP/dashboard artifacts that previously said
+  `local` (inherent to D-1; shareability note).

@@ -90,7 +90,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--full",
         dest="full",
         action="store_true",
-        help="Re-parse every session (idempotent).",
+        help=(
+            "Re-parse every session (idempotent); re-stamps each session "
+            "with the currently-derived developer id."
+        ),
     )
     p_ing.set_defaults(full=False)
     p_ing.add_argument("--since-days", type=int, default=None, help=argparse.SUPPRESS)

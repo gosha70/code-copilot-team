@@ -50,8 +50,9 @@ auth decision consumed — those gate Slices B2/C/D/E, not this one.
   MACHINE/user identity, deliberately not the launch directory's repo-local
   email (a cwd-dependent id would stamp the same developer differently per
   launch dir, and B1 never migrates stamps retroactively); (5) the
-  `"local"` fallback. The result is validated (bounded, kebab-safe) and
-  deterministic; failures fall through to the next source, never invent.
+  `"local"` fallback. Derived results are validated (bounded, kebab-safe);
+  the explicit flag is bounded-verbatim per clause (1). Deterministic;
+  failures fall through to the next source, never invent.
 - **FR-2 — `developer` table populated, committed unconditionally.**
   Ingest upserts the derived developer row (both dialects) and **commits
   the registration independently of session work** — an incremental run

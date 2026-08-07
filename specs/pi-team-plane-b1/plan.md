@@ -64,15 +64,18 @@ origin:
    `os.environ` bypass in cli.py; `--developer-id` exists on `watch` as
    well as `ingest`.
 
-### D1 — Identity (Python, session_analytics)
-`identity.py`: `derive_developer_id(cli_value, env, config, repo_root) →
-{ id, source }` with FR-1 precedence; validation = bounded kebab-ish
-normalization (lowercase, `[a-z0-9-]`, ≤64, must start alphanumeric);
-every fallthrough recorded in the returned `source` (surfaced by `doctor`
--style reporting where available). Wire: `cli.py` passes the derived value
-where `DEFAULT_DEVELOPER_ID` flows today; `pipeline.py` upserts the
-`developer` row (new `upsert_developer` in `relational/store.py`, both
-dialects) before session upserts; sessions stamped with the derived id.
+### D1 — Identity (Python, session_analytics) — text synced to D-0
+`identity.py`: `derive_developer_id(cli_value, env_value, config_value) →
+{ id, source }` with FR-1 precedence; inputs come loader-resolved (env =
+real env > repo `.env` via `ENV_KEYS`; config via `CFG_DEVELOPER_ID`) —
+no `os.environ` reads. The EXPLICIT flag is verbatim after control-strip +
+column bound; DERIVED sources use bounded kebab normalization (lowercase,
+`[a-z0-9-]`, ≤64, alphanumeric first); the git source is `git config
+--global user.email` local-part. Fallthrough recorded in `source`
+(doctor-style surfacing deferred — tasks.md notes). Wire: `cli.py`
+`_derived_developer_id` for ingest AND watch; `pipeline.py` upserts the
+`developer` row and COMMITS it independently (D-0.4) before session
+stamps.
 
 ### D2 — Heartbeat emission (TS, Pi runtime)
 `workflow/heartbeat.ts`: `writeHeartbeat(projectRoot, fields, nowIso)` —
@@ -84,10 +87,15 @@ gate, `analytics.heartbeat_enabled` default ON is the fallback position).
 
 ### D3 — Heartbeat ingestion (Python)
 Pi adapter/incremental path reads `.cct/heartbeat.json` (missing ⇒ no-op;
-malformed ⇒ skip with a warning, never fail ingest), sanitizes, and
-upserts in-flight state per D-2 keyed by (project, developer) with
-`last_heartbeat_at`. Exposed via the existing local query/report surface
-(read-only), phrased per FR-5 (last-seen, not alive).
+malformed ⇒ skip with a warning, never fail ingest), sanitizes ON READ
+(the writer also sanitizes — both directions), and upserts the
+`local_heartbeat` table (D-0.2) keyed by (project_path, developer_id)
+with `last_heartbeat_at`. **Path-shape requirement (review B-6): the
+heartbeat's project root (Pi `state.cwd`) and the store's
+`copilot_session.project_path` must be asserted string-equivalent** —
+symlink/trailing-slash divergence would make discovery silently empty.
+Exposed via the existing local query/report surface (read-only), phrased
+per FR-5 (last-seen, not alive).
 
 ### D4 — Docs + honesty
 README/analytics docs: what identity is (derived attribution, not auth),

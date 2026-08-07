@@ -31,7 +31,9 @@ from typing import Optional
 
 from . import constants as C
 
-# Column bound (developer.developer_id VARCHAR(100)); explicit flag values
+# Column bound — MUST match developer.developer_id VARCHAR(100) in
+# config_data/ddl/postgres/001_core.sql (drift means the DATABASE truncates
+# instead of this code); explicit flag values
 # are bounded by this, derived values by the tighter kebab bound below.
 _MAX_COLUMN_LEN = 100
 
