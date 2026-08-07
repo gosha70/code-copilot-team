@@ -76,6 +76,11 @@ jobs:
       - name: Cross-harness permission drift guard (FR-8)
         run: bash scripts/generate-claude-settings.sh relaxed --settings adapters/claude-code/.claude/settings.json --check
 
+      - name: Run automation-config validator tests (#191)
+        run: |
+          bash -n scripts/validate-automation-config.sh
+          bash tests/test-automation-config.sh
+
       - name: Run auto-build loop tests
         run: bash tests/test-auto-build-loop.sh
 

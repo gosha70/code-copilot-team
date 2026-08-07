@@ -42,7 +42,13 @@ if ! jq -e 'type == "object"' "$CONFIG" >/dev/null 2>&1; then
     exit 1
 fi
 
-q() { jq -r "$1" "$CONFIG" 2>/dev/null; }
+# q never fails: a jq error (e.g. indexing into a non-object) yields empty
+# instead of killing the script through set -e with jq's exit code — every
+# malformed shape must surface as a VIOLATION (exit 1), never a crash.
+q() { jq -r "$1" "$CONFIG" 2>/dev/null || true; }
+
+# is_type <jq-path> <type> — true iff the path exists and has the jq type.
+is_type() { jq -e "$1 | type == \"$2\"" "$CONFIG" >/dev/null 2>&1; }
 
 sv="$(q '.schema_version // "missing"')"
 case "$sv" in
@@ -68,25 +74,48 @@ if [[ "$sv" == "1" ]]; then
     fi
 fi
 
+# Shape gates (the schema's object constraints, mirrored): a present
+# caps/unattended/budget must BE an object before any nested rule applies —
+# otherwise the nested checks would either miss violations or crash.
+caps_is_object=false
+if [[ "$(q 'has("caps")')" == "true" ]]; then
+    if is_type '.caps' object; then caps_is_object=true
+    else violation "caps must be an object (got $(q '.caps | type'))"; fi
+fi
+unattended_is_object=false
+if [[ "$(q 'has("unattended")')" == "true" ]]; then
+    if is_type '.unattended' object; then unattended_is_object=true
+    else violation "unattended must be an object (got $(q '.unattended | type'))"; fi
+fi
+
 # Explicit caps under unattended — a cap is a cap only if it was chosen.
 if [[ "$profile" == "unattended" ]]; then
-    if [[ "$(q '.caps.cost_usd // "missing"')" == "missing" ]]; then
+    if [[ "$caps_is_object" != "true" ]] \
+       || [[ "$(q '.caps | has("cost_usd")')" != "true" ]]; then
         violation "profile 'unattended' requires an EXPLICIT caps.cost_usd (no silent default — #190 §2)"
     fi
-    if [[ "$(q '.caps.wall_clock_sec // "missing"')" == "missing" ]]; then
+    if [[ "$caps_is_object" != "true" ]] \
+       || [[ "$(q '.caps | has("wall_clock_sec")')" != "true" ]]; then
         violation "profile 'unattended' requires an EXPLICIT caps.wall_clock_sec (no silent default — #190 §2)"
     fi
 fi
-for capkey in cost_usd wall_clock_sec; do
-    capval="$(q ".caps.${capkey} // empty")"
-    if [[ -n "$capval" ]] && ! jq -e ".caps.${capkey} | type == \"number\" and . > 0" "$CONFIG" >/dev/null 2>&1; then
-        violation "caps.${capkey} must be a number > 0 (got '$capval')"
-    fi
-done
+if [[ "$caps_is_object" == "true" ]]; then
+    for capkey in cost_usd wall_clock_sec; do
+        if [[ "$(q ".caps | has(\"$capkey\")")" == "true" ]] \
+           && ! jq -e ".caps.${capkey} | type == \"number\" and . > 0" "$CONFIG" >/dev/null 2>&1; then
+            violation "caps.${capkey} must be a number > 0 (got '$(q ".caps.${capkey}")')"
+        fi
+    done
+fi
 
 # The unattended disposition keys: terminate-only in increment A, and
 # on_origin_gate terminate-only FOREVER (schema-enforced #190 §4).
-if [[ "$(q 'has("unattended")')" == "true" ]]; then
+if [[ "$unattended_is_object" == "true" ]]; then
+    budget_is_object=false
+    if [[ "$(q '.unattended | has("budget")')" == "true" ]]; then
+        if is_type '.unattended.budget' object; then budget_is_object=true
+        else violation "unattended.budget must be an object (got $(q '.unattended.budget | type'))"; fi
+    fi
     for key in on_review_breaker on_stale_finding on_origin_gate; do
         val="$(q ".unattended.${key} // empty")"
         if [[ -n "$val" && "$val" != "terminate" ]]; then
@@ -97,18 +126,25 @@ if [[ "$(q 'has("unattended")')" == "true" ]]; then
             fi
         fi
     done
-    for boolkey in meter_all_invocations estimate_unmetered; do
-        if [[ "$(q ".unattended.budget | has(\"$boolkey\")")" == "true" ]] \
-           && ! jq -e ".unattended.budget.${boolkey} | type == \"boolean\"" "$CONFIG" >/dev/null 2>&1; then
-            violation "unattended.budget.${boolkey} must be a boolean"
+    if [[ "$budget_is_object" == "true" ]]; then
+        for boolkey in meter_all_invocations estimate_unmetered; do
+            if [[ "$(q ".unattended.budget | has(\"$boolkey\")")" == "true" ]] \
+               && ! jq -e ".unattended.budget.${boolkey} | type == \"boolean\"" "$CONFIG" >/dev/null 2>&1; then
+                violation "unattended.budget.${boolkey} must be a boolean"
+            fi
+        done
+        if [[ "$(q '.unattended.budget | has("estimate_usd_per_invocation")')" == "true" ]] \
+           && ! jq -e '.unattended.budget.estimate_usd_per_invocation | type == "number" and . > 0' "$CONFIG" >/dev/null 2>&1; then
+            violation "unattended.budget.estimate_usd_per_invocation must be a number > 0"
         fi
-    done
-    if [[ "$(q '.unattended.budget | has("estimate_usd_per_invocation")')" == "true" ]] \
-       && ! jq -e '.unattended.budget.estimate_usd_per_invocation | type == "number" and . > 0' "$CONFIG" >/dev/null 2>&1; then
-        violation "unattended.budget.estimate_usd_per_invocation must be a number > 0"
+        # budget is a CLOSED object too (mirrors additionalProperties: false).
+        budget_unknown="$(jq -r '.unattended.budget | keys[] | select(. != "meter_all_invocations" and . != "estimate_unmetered" and . != "estimate_usd_per_invocation")' "$CONFIG" 2>/dev/null || true)"
+        for k in $budget_unknown; do
+            violation "unknown key 'unattended.budget.$k' (the schema is closed — see shared/schemas/automation.schema.json)"
+        done
     fi
     # Unknown keys inside the block are contract drift, not extensions.
-    unknown="$(jq -r '.unattended | keys[] | select(. != "on_review_breaker" and . != "on_stale_finding" and . != "on_origin_gate" and . != "budget")' "$CONFIG" 2>/dev/null)"
+    unknown="$(jq -r '.unattended | keys[] | select(. != "on_review_breaker" and . != "on_stale_finding" and . != "on_origin_gate" and . != "budget")' "$CONFIG" 2>/dev/null || true)"
     for k in $unknown; do
         violation "unknown key 'unattended.$k' (the schema is closed — see shared/schemas/automation.schema.json)"
     done

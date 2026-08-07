@@ -84,6 +84,25 @@ assert_rejects "malformed JSON is rejected" "$TMP/r12.json" "not a JSON object"
 w r13.json '{"schema_version":2,"profile":"unattended","caps":{"cost_usd":100,"wall_clock_sec":1},"unattended":{"budget":{"estimate_usd_per_invocation":0}}}'
 assert_rejects "zero estimate is rejected" "$TMP/r13.json" "number > 0"
 
+# ── malformed SHAPES must be violations (exit 1), never crashes (P2 review) ──
+w r14.json '{"schema_version":2,"profile":"unattended","caps":{"cost_usd":100,"wall_clock_sec":1},"unattended":{"budget":"bad"}}'
+assert_rejects "budget as a string is a violation" "$TMP/r14.json" "budget must be an object"
+
+w r15.json '{"schema_version":2,"profile":"unattended","caps":{"cost_usd":100,"wall_clock_sec":1},"unattended":{"budget":{"extra":1}}}'
+assert_rejects "unknown budget key is a violation (closed object)" "$TMP/r15.json" "unknown key 'unattended.budget.extra'"
+
+w r16.json '{"schema_version":2,"profile":"merge","unattended":[]}'
+assert_rejects "unattended as an array is a violation, not a crash" "$TMP/r16.json" "unattended must be an object"
+
+w r17.json '{"schema_version":2,"profile":"merge","unattended":null}'
+assert_rejects "unattended as null is a violation, not a crash" "$TMP/r17.json" "unattended must be an object"
+
+w r18.json '{"schema_version":2,"profile":"unattended","caps":"bad","unattended":{"on_origin_gate":"terminate"}}'
+assert_rejects "caps as a string is a violation, not a crash" "$TMP/r18.json" "caps must be an object"
+
+w r19.json '{"schema_version":2,"profile":"unattended","caps":{"cost_usd":"100","wall_clock_sec":1}}'
+assert_rejects "string-typed cap is a violation" "$TMP/r19.json" "number > 0"
+
 # The schema file itself is valid JSON and pins the A-increment enums.
 assert "schema file is valid JSON" jq -e . "$REPO_DIR/shared/schemas/automation.schema.json"
 assert "schema pins on_* enums to terminate" \
