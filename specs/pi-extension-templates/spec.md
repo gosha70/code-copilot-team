@@ -95,9 +95,11 @@ changelog, or a live probe), with the version named.
   the issue-ask → pi-0.83.0-status → notes table (as above), each row
   citing its source, with the version named and a re-verify-on-upgrade
   note. A test asserts the table's claims against the INSTALLED pi
-  package's typings when resolvable (VISIBLE skip, never fake, when pi is
-  absent — which includes CI: the canary is a developer-local gate by
-  design; CI does not install pi).
+  package's typings. In CI the canary is MANDATORY: the workflow installs
+  the pinned pi version the table was verified against and sets
+  CCT_REQUIRE_PI_CANARY=1, so an unresolvable pi FAILS there (bumping the
+  pin is the deliberate re-verification act); local dev without pi skips
+  VISIBLY, never silently.
 - **FR-7 — Tests + gates.** Launcher tests for the init flag (scaffold,
   no-clobber, dry-run, manifest entry); a template validity check (the
   scaffolded TS parses under the same strip-types execution the runtime

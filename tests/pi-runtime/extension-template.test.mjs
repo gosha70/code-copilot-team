@@ -240,6 +240,13 @@ function resolvePiPackage() {
 test("honesty canary: the README table matches the INSTALLED pi package", async (t) => {
   const pkgPath = resolvePiPackage();
   if (!pkgPath) {
+    // CI pins + installs pi and sets this flag, so the canary can never
+    // silently vanish there; local dev without pi skips VISIBLY.
+    assert.notEqual(
+      process.env.CCT_REQUIRE_PI_CANARY,
+      "1",
+      "CCT_REQUIRE_PI_CANARY=1 but the pi package is not resolvable — install the pinned pi",
+    );
     t.skip("pi package not resolvable — honesty-table canary not verified on this host");
     return;
   }

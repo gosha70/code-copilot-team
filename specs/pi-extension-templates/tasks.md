@@ -53,5 +53,13 @@ merge); base retargets to master when #188 lands.
   DEFAULT branch. This PR is stacked on `plan/pi-team-plane-b1`; after
   PR #188 merges and the base retargets to master, the keyword takes
   effect — otherwise close #179 manually at merge time.
-- The honesty canary is a developer-local gate (CI installs no pi; the
-  skip there is visible by design).
+- The honesty canary is CI-MANDATORY (user review, 2026-08-07): the
+  workflow installs pi pinned @0.83.0 and sets CCT_REQUIRE_PI_CANARY=1 —
+  a silent vanish of the upstream-API check is the exact failure mode the
+  round-1 redesign existed to prevent. Local dev without pi skips visibly.
+- Boundary docs hardened (user review P1): the template/README state
+  prominently that the gates are NOT a filesystem/security boundary
+  (bash/external processes/other extensions bypass; project trust is not
+  a sandbox; CI stays authoritative), with the precise write-preventive /
+  edit-post-execution / CI-authoritative split and the same-file
+  concurrency attribution limitation (P2a) named.

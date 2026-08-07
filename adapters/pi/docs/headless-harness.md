@@ -87,4 +87,6 @@ composes with headless runs: auto-discovery applies when the project is
 trusted in the headless environment; otherwise pass a **pinned, absolute**
 `--extension` path you control (see the template README's security note
 about explicit paths bypassing the trust gate — in CI, the pinned path is
-the appropriate form).
+the appropriate form). The template's gates cover Pi's `write`/`edit`
+tools only — they are not a filesystem boundary, which is exactly why the
+CI validation step above remains the authoritative gate.

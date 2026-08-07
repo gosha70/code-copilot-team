@@ -18,10 +18,15 @@
  * `edit` is deliberately not pre-gated: its input is a list of patches,
  * not final content; the post-execution check covers it one step later.
  *
- * KNOWN BOUNDARY: the `bash` tool is NOT gated here — a shell heredoc can
- * write files without triggering these hooks. Pair this template with your
- * harness's bash policy (the CCT runtime gates bash separately) and treat
- * this file as the write/edit guardrail, not a filesystem sandbox.
+ * KNOWN BOUNDARIES: the `bash` tool is NOT gated here — a shell heredoc,
+ * an external process, or another extension can mutate files without
+ * triggering these hooks, and Pi's project trust is not a sandbox. This
+ * file is a write/edit guardrail that shortens the correction loop, NOT a
+ * filesystem/security boundary — keep an authoritative CI gate. Also:
+ * sibling tool calls execute concurrently and tool_result fires in
+ * completion order, so when two tools mutate the SAME file each post-gate
+ * judges the state at the moment it runs (per-tool attribution is not
+ * guaranteed; the last completed mutation wins the final verdict).
  *
  * Event/result shapes follow pi's shipped typings
  * (dist/core/extensions/types.d.ts): tool_call events are

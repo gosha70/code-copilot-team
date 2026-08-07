@@ -1,11 +1,22 @@
 # CCT Guardrails — Pi extension starter template (#179)
 
-Deterministic, programmatic validation for your project, enforced at two
-points: incoming `write` content is validated **before it touches disk**,
-and the on-disk result of every `write`/`edit` is validated **after
-execution**, with your validator's report fed straight back to the model
-for immediate self-correction. Prompt files declare intent; this extension
-**enforces** it.
+Deterministic, programmatic validation for Pi's `write` and `edit`
+operations. The precise semantics, per operation:
+
+- **`write`: preventive** — the incoming content is validated and a
+  violation is blocked *before it touches disk*.
+- **`edit`: post-execution + repair feedback** — the resulting file state
+  is validated *after* the edit lands; a violation patches the tool result
+  to an error carrying your validator's report, and the model repairs it
+  in a follow-up edit (the bad state DOES reach disk first).
+- **CI: the authoritative final enforcement gate** — always keep one.
+
+> **This is NOT a filesystem or security boundary.** It gates Pi's
+> `write`/`edit` tools only. Shell commands (`bash` heredocs), external
+> processes, and other extensions can mutate files without passing through
+> these hooks, and Pi's project trust is not a sandbox. Treat this
+> extension as preventive/repair guardrails that shorten the correction
+> loop — never as proof that invalid content cannot land.
 
 Scaffolded by `pi-code init <dir> --extension-template` into
 `.pi/extensions/`.
@@ -42,10 +53,18 @@ an already-broken file passes** — enabling this template on a legacy
 codebase does not deadlock existing violations; they surface only when a
 change leaves the file still-broken.
 
-**Known boundary:** the `bash` tool is not gated — a shell heredoc can
-write files without these hooks. Pair the template with your harness's
-bash policy (the CCT runtime gates bash separately); this is the
-write/edit guardrail, not a filesystem sandbox.
+**Known boundaries:**
+- the `bash` tool is not gated — a shell heredoc writes files without
+  these hooks; pair the template with your harness's bash policy (the CCT
+  runtime gates bash separately). External processes and other extensions
+  are likewise outside these hooks. CI validation stays authoritative.
+- **same-file concurrency:** Pi executes sibling tool calls concurrently
+  and `tool_result` handlers fire in completion order — when two tools
+  mutate the SAME file, each post-gate judges the file's state *at the
+  moment it runs*, so per-tool attribution is not guaranteed (the last
+  completed mutation wins the final verdict). If you need serialized
+  mutations, use Pi's mutation-queue facility for custom tools; for
+  attribution-exact enforcement, rely on the CI gate.
 
 ## Customize
 
