@@ -108,6 +108,18 @@ Three facts surfaced during implementation that adjust HOW (never WHAT):
    attach validation, not eliminated; (F6) per-name unset failure is
    impossible by construction under `env -u`; (F7) empty failure output no
    longer prints a bare error line.
+3c. **Post-review P1 fix (2026-08-07, user review of PR #186).** The blanket
+   `CCT_*` keep shielded the loader's `CCT_CONFIG__*` env-config layer, so a
+   credential passed as config (`CCT_CONFIG__providers__api_key=sk-...`)
+   survived into children — reproduced by the reviewer. Fixed with a
+   namespace rule in `scrubEnv`: every `CCT_CONFIG__*` var is removed at
+   spawn boundaries regardless of name shape (a pattern rule would miss
+   `...__auth`-style names); prefix keeps (including built-in `CCT_*` and a
+   user-supplied `CCT_CONFIG__*`) never apply to the namespace; only an
+   exact-name keep from a trusted scope restores a specific var. Children
+   resolve config from files — the parent's env-layer overrides deliberately
+   do not cross the spawn boundary. Regressions at all four levels
+   (env-scrub unit, battery 10, child-session real spawn, launcher handoff).
 4. **Launcher boundary is global/env/cli-scope only.** The loader's trust
    contract never reads project layers untrusted, so the out-of-session CLI
    cannot see a project-local `env_scrub_extra` either; launcher-side

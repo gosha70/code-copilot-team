@@ -86,6 +86,16 @@ Two boundaries are scrubbed; one is deliberately not:
 - **The primary interactive session is NOT scrubbed** — that env is the
   user's own shell, not a CCT spawn; reported `degraded`, not hidden.
 
+The `CCT_*` runtime contract survives scrubbing — with one deliberate
+exception: the **`CCT_CONFIG__*` env-config carrier namespace is scrubbed
+wholesale** at spawn boundaries. That layer is sanctioned to carry arbitrary
+config values, including secrets (`CCT_CONFIG__providers__api_key=...`), and
+a name-shape rule cannot recognize every secret-bearing config key — so none
+of them cross the boundary. Children resolve their own configuration from
+files; a specific carrier var can be restored only by naming it EXACTLY in
+`security.env_scrub_keep` from a trusted scope (prefix keeps never apply to
+the namespace).
+
 Configuration is trust-asymmetric (`security.env_scrub`,
 `security.env_scrub_keep`, `security.env_scrub_extra`): **both** in-repo
 layers (`config.toml`, `config.local.toml`) may only tighten; turning

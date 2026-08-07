@@ -257,6 +257,7 @@ test("runChildSession: default scrub removes credentials from the child env", as
     MOCK_PI_ENV_OUT: dump.file,
     AWS_SECRET_ACCESS_KEY: "s3cr3t",
     GITHUB_TOKEN: "ghp_x",
+    CCT_CONFIG__providers__api_key: "sk-x", // env-config carrier: scrubbed
     CCT_SCRUB_CANARY_TOKEN: "kept-by-cct-prefix",
   });
   try {
@@ -267,6 +268,8 @@ test("runChildSession: default scrub removes credentials from the child env", as
     const child = JSON.parse(fs.readFileSync(dump.file, "utf8"));
     assert.equal(child.names.includes("AWS_SECRET_ACCESS_KEY"), false);
     assert.equal(child.names.includes("GITHUB_TOKEN"), false);
+    assert.equal(child.names.includes("CCT_CONFIG__providers__api_key"), false);
+    assert.ok(r.scrubbedEnv.includes("CCT_CONFIG__providers__api_key"));
     // Baselines + the CCT contract survive; MOCK_PI_ENV_OUT itself survived
     // (or the dump could not have been written).
     assert.ok(child.names.includes("PATH"));

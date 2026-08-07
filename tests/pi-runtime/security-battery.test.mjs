@@ -156,13 +156,19 @@ test("BATTERY 10 — env scrubbing: the spawn-boundary scrub policy removes cred
       AWS_SECRET_ACCESS_KEY: "s3cr3t",
       GITHUB_TOKEN: "ghp_x",
       X_SERVICE_TOKEN: "t",
+      CCT_CONFIG__providers__api_key: "sk-x", // sanctioned env-config layer
       PATH: "/usr/bin",
       CCT_WORKER_ID: "w1",
       ANTHROPIC_API_KEY: "keep",
     },
     defaultScrubPolicy(),
   );
-  for (const name of ["AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "X_SERVICE_TOKEN"]) {
+  for (const name of [
+    "AWS_SECRET_ACCESS_KEY",
+    "GITHUB_TOKEN",
+    "X_SERVICE_TOKEN",
+    "CCT_CONFIG__providers__api_key",
+  ]) {
     assert.equal(name in env, false, `${name} must be scrubbed`);
     assert.ok(removed.includes(name));
   }

@@ -345,3 +345,44 @@ test("disabledBy is null whenever scrubbing is enabled", () => {
   assert.equal(repoLatch.enabled, true);
   assert.equal(repoLatch.disabledBy, null);
 });
+
+// ── CCT_CONFIG__* carrier namespace (post-review P1) ─────────────────────────
+
+test("the whole CCT_CONFIG__* namespace is scrubbed, contract vars survive", () => {
+  const { env, removed } = scrubEnv(
+    {
+      CCT_CONFIG__providers__api_key: "sk-secret", // credential-shaped
+      CCT_CONFIG__providers__auth: "also-secret", // NOT credential-shaped — still removed
+      CCT_CONFIG__security__env_scrub: "false", // benign config — still removed (namespace rule)
+      CCT_WORKER_ID: "w1",
+      CCT_AGENT_DEPTH: "1",
+      CCT_TEAM_MEMBER_ID: "m1",
+    },
+    defaultScrubPolicy(),
+  );
+  assert.deepEqual(removed, [
+    "CCT_CONFIG__providers__api_key",
+    "CCT_CONFIG__providers__auth",
+    "CCT_CONFIG__security__env_scrub",
+  ]);
+  assert.equal(env.CCT_WORKER_ID, "w1");
+  assert.equal(env.CCT_AGENT_DEPTH, "1");
+  assert.equal(env.CCT_TEAM_MEMBER_ID, "m1");
+});
+
+test("only an EXACT keep restores a carrier var; prefix keeps never do", () => {
+  const exact = scrubEnv(
+    { CCT_CONFIG__autonomy__max_concurrency: "2" },
+    {
+      patterns: [...DEFAULT_SCRUB_PATTERNS],
+      keep: [...DEFAULT_SCRUB_KEEP, "CCT_CONFIG__autonomy__max_concurrency"],
+    },
+  );
+  assert.equal(exact.env.CCT_CONFIG__autonomy__max_concurrency, "2");
+
+  const prefix = scrubEnv(
+    { CCT_CONFIG__providers__api_key: "sk" },
+    { patterns: [], keep: ["CCT_CONFIG__*", "CCT_*"] },
+  );
+  assert.deepEqual(prefix.removed, ["CCT_CONFIG__providers__api_key"]);
+});

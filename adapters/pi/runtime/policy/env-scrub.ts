@@ -20,7 +20,16 @@
  *
  * Boundary notes, stated deliberately:
  *   - `CCT_*` is kept wholesale (the runtime's own contract vars) and keep
- *     beats pattern — never namespace a real credential under `CCT_`.
+ *     beats pattern — never namespace a real credential under `CCT_` —
+ *     EXCEPT the `CCT_CONFIG__*` carrier namespace: that is the loader's
+ *     sanctioned env CONFIG layer and may carry arbitrary values including
+ *     secrets (e.g. `CCT_CONFIG__providers__api_key`), so the WHOLE
+ *     namespace is scrubbed at spawn boundaries regardless of name shape
+ *     (a pattern-based rule would miss `...__auth`-style names). It is
+ *     exempt from prefix keeps — only an EXACT-name keep from a trusted
+ *     scope restores a specific carrier var. Children resolve their own
+ *     config from files; the parent's env-layer overrides do not cross the
+ *     spawn boundary.
  *   - `KUBECONFIG` (and similar path-POINTER vars) are not scrubbed: they are
  *     file paths, not secrets; restricting file access is the protected-path
  *     / sandbox concern, not this one.
@@ -73,6 +82,7 @@ export const DEFAULT_SCRUB_PATTERNS: readonly string[] = [
  * `providers.*.api_key_env` name must be added via `security.env_scrub_keep`
  * from a trusted scope.
  */
+// NOTE: the `CCT_*` entry does NOT cover `CCT_CONFIG__*` (see scrubEnv).
 export const DEFAULT_SCRUB_KEEP: readonly string[] = [
   "PATH",
   "HOME",
@@ -139,6 +149,24 @@ export function defaultScrubPolicy(): ScrubPolicy {
  * plus the sorted removed names. The input is never mutated; `undefined`
  * values are dropped (they are not part of a spawnable env either way).
  */
+/**
+ * The loader's env CONFIG carrier prefix (`CCT_CONFIG__a__b=value`,
+ * loader.ts). Values in this namespace can be secrets under ANY name, so
+ * the whole namespace is removed at spawn boundaries: prefix keeps
+ * (including the built-in `CCT_*`) never apply to it; only an exact-name
+ * keep restores a specific carrier var.
+ */
+const CONFIG_CARRIER_PREFIX = "CCT_CONFIG__";
+
+function isConfigCarrier(name: string): boolean {
+  return name.toUpperCase().startsWith(CONFIG_CARRIER_PREFIX);
+}
+
+/** Exact (non-glob) keep entries only — the sole escape for carrier vars. */
+function matchesExactKeep(name: string, keep: readonly string[]): boolean {
+  return keep.some((g) => !g.endsWith("*") && matchesGlob(name, g));
+}
+
 export function scrubEnv(
   env: NodeJS.ProcessEnv,
   policy: ScrubPolicy,
@@ -147,6 +175,16 @@ export function scrubEnv(
   const removed: string[] = [];
   for (const [name, value] of Object.entries(env)) {
     if (typeof value !== "string") continue;
+    if (isConfigCarrier(name)) {
+      // #173 P1 follow-up: the sanctioned env-config layer can carry
+      // secrets under any name — removed wholesale unless EXACTLY kept.
+      if (matchesExactKeep(name, policy.keep)) {
+        out[name] = value;
+      } else {
+        removed.push(name);
+      }
+      continue;
+    }
     if (!matchesAny(name, policy.keep) && matchesAny(name, policy.patterns)) {
       removed.push(name);
       continue;

@@ -44,9 +44,14 @@ the `pi-code worktree run` handoff exec's the worker pi with the full host env.
   `GH_TOKEN`, `NPM_TOKEN`, and generic suffixes `*_TOKEN`, `*_SECRET`,
   `*_KEY`, `*_PASSWORD`, `*_PASSPHRASE`, `*_CREDENTIAL`, `*_CREDENTIALS`),
   minus a **keep-list** that always survives: `PATH`, `HOME`, `SHELL`, `TERM`,
-  `LANG`/`LC_*`, `TMPDIR`, `USER`, `LOGNAME`, every `CCT_*` contract var, and
-  the child's LLM provider credential(s) (configurable — see FR-3). Matching is
-  on names only; **values are never read, logged, or persisted**.
+  `LANG`/`LC_*`, `TMPDIR`, `USER`, `LOGNAME`, every `CCT_*` contract var —
+  **except the `CCT_CONFIG__*` env-config carrier namespace, which is
+  scrubbed wholesale** (it is sanctioned to carry arbitrary config values
+  including secrets, and name shape cannot recognize every secret-bearing
+  config key; only an exact-name keep from a trusted scope restores a
+  specific carrier var, never a prefix keep) — and the child's LLM provider
+  credential(s) (configurable — see FR-3). Matching is on names only;
+  **values are never read, logged, or persisted**.
 - **FR-2 — Enforced at CCT-controlled spawn boundaries only.**
   (a) `runSubagent` (`agents/child-session.ts`) spawns with the scrubbed env;
   (b) the `pi-code worktree run` handoff scrubs before exec'ing the worker.
