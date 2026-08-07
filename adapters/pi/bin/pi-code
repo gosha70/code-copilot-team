@@ -29,8 +29,9 @@
 #                         Read-only team coordination snapshot (opt-in: agents.teams_enabled)
 #   env scrub-list [--json]
 #                         Env names the worktree-run handoff scrubs (#173; single TS pattern source)
-#   init [dir] [--profile <name>] [--dry-run]
-#                         Scaffold a Pi-native project config + ownership manifest
+#   init [dir] [--profile <name>] [--dry-run] [--extension-template]
+#                         Scaffold a Pi-native project config + ownership manifest;
+#                         --extension-template adds .pi/extensions/ guardrails starter (#179)
 #   sync [--dry-run]      Regenerate managed resources (never touches your config)
 #   help                  Show usage
 #
@@ -164,11 +165,37 @@ starter_config() {
   echo "# required = []"
 }
 
+# Resolve the extension-template source dir (managed install first, repo
+# fallback) — #179. Empty when neither exists.
+extension_template_src() {
+  local cand
+  for cand in "$MANAGED_DIR/resources/extension-template" "$REPO_ADAPTER_DIR/resources/extension-template"; do
+    if [[ -f "$cand/cct-guardrails.ts" ]]; then echo "$cand"; return 0; fi
+  done
+  echo ""
+}
+
+# Copy one template file if absent (init NEVER clobbers); echo the manifest
+# entry on create, nothing on preserve.
+scaffold_ext_file() {
+  local src="$1" dest="$2" rel="$3"
+  if [[ -f "$dest" ]]; then
+    echo "[pi-code]   $rel exists — preserved (init never clobbers)." >&2
+    return 0
+  fi
+  mkdir -p "$(dirname "$dest")"
+  cp "$src" "$dest"
+  local h
+  h="$(hash_file "$dest")"
+  printf '    { "path": "%s", "kind": "extension-template", "hash": "%s" }' "$rel" "$h"
+}
+
 cct_init() {
-  local proj="" prof="" dry=false
+  local proj="" prof="" dry=false ext_tpl=false
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dry-run)   dry=true; shift ;;
+      --extension-template) ext_tpl=true; shift ;;
       --profile)   prof="${2:?--profile requires a name}"; shift 2 ;;
       --profile=*) prof="${1#*=}"; shift ;;
       -*)          err "unknown init option: $1"; return 2 ;;
@@ -182,12 +209,25 @@ cct_init() {
   cfgdir="$proj/.code-copilot-team"; cfg="$cfgdir/config.toml"; mani="$cfgdir/.cct-init.json"
   if [[ -f "$cfg" ]]; then
     echo "[pi-code] already initialized — $cfg preserved (init never clobbers your config)."
+    if [[ "$ext_tpl" == "true" ]]; then
+      # capture (and drop) the manifest fragments — a pre-existing manifest
+      # is not rewritten; files are still scaffolded no-clobber.
+      local _ext_ignored
+      _ext_ignored="$(scaffold_extension_into "$proj" "$dry")" || return $?
+      echo "[pi-code] note: pre-existing init — $mani not rewritten for the template files."
+    fi
     return 0
   fi
   if [[ "$dry" == "true" ]]; then
     echo "[pi-code] init --dry-run (report only — no writes):"
     echo "  would create $cfg"
     echo "  would create $mani"
+    if [[ "$ext_tpl" == "true" ]]; then
+      echo "  would create $proj/.pi/extensions/cct-guardrails.ts"
+      echo "  would create $proj/.pi/extensions/README.md"
+      echo "  would create $proj/.pi/extensions/tsconfig.json"
+      echo "  would create $proj/.pi/extensions/validators/check-python-ast.py"
+    fi
     return 0
   fi
   mkdir -p "$cfgdir"
@@ -195,19 +235,58 @@ cct_init() {
   local h ts
   h="$(hash_file "$cfg")"
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local ext_entries=""
+  if [[ "$ext_tpl" == "true" ]]; then
+    ext_entries="$(scaffold_extension_into "$proj" false)" || return $?
+  fi
   cat > "$mani" <<JSON
 {
   "name": "${prof:-default}",
   "initialized": "$ts",
   "cctVersion": "$PI_CODE_VERSION",
   "generated": [
-    { "path": ".code-copilot-team/config.toml", "kind": "user-config", "hash": "$h" }
+    { "path": ".code-copilot-team/config.toml", "kind": "user-config", "hash": "$h" }${ext_entries:+,
+$ext_entries}
   ]
 }
 JSON
   echo "[pi-code] initialized $cfgdir"
   echo "  created $cfg (yours to edit; sync never overwrites it)"
   echo "  created $mani (ownership manifest)"
+}
+
+# Scaffold the #179 guardrails template into <proj>/.pi/extensions/.
+# stdout: comma-joined manifest entry lines for files CREATED (empty when
+# everything already existed); human notes go to stderr. $2=true => dry.
+scaffold_extension_into() {
+  local proj="$1" dry="$2" src entries="" e
+  src="$(extension_template_src)"
+  if [[ -z "$src" ]]; then
+    err "init: extension template not found (reinstall with setup.sh, or run from the CCT repo)."
+    return 78
+  fi
+  if [[ "$dry" == "true" ]]; then
+    echo "[pi-code] would scaffold .pi/extensions/ from $src" >&2
+    return 0
+  fi
+  local pairs=(
+    "cct-guardrails.ts|.pi/extensions/cct-guardrails.ts"
+    "README.md|.pi/extensions/README.md"
+    "tsconfig.json|.pi/extensions/tsconfig.json"
+    "validators/check-python-ast.py|.pi/extensions/validators/check-python-ast.py"
+  )
+  local pair rel srcf
+  for pair in "${pairs[@]}"; do
+    srcf="${pair%%|*}"; rel="${pair##*|}"
+    e="$(scaffold_ext_file "$src/$srcf" "$proj/$rel" "$rel")" || return $?
+    if [[ -n "$e" ]]; then
+      entries="${entries:+$entries,
+}$e"
+    fi
+  done
+  echo "[pi-code] scaffolded .pi/extensions/ (guardrails starter — see its README)" >&2
+  [[ -n "$entries" ]] && printf '%s' "$entries"
+  return 0
 }
 
 cct_sync() {
@@ -415,7 +494,7 @@ case "${1:-}" in
     exit 0
     ;;
   help|--help|-h)
-    sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
   config|features|export|resources|provenance|continuity|worktree|team|env)
