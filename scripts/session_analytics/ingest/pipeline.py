@@ -101,8 +101,17 @@ def ingest(
     try:
         apply_ddl(db)
         # Slice B1 (#187): the developer registry row exists before any
-        # session stamps reference the id (idempotent; both dialects).
+        # session stamps reference the id (idempotent; both dialects) and is
+        # COMMITTED independently of session work — an all-skipped
+        # incremental run (the steady state of `watch` and of any pre-B1
+        # database) must still persist it, and holding the INSERT open would
+        # pin a SQLite write lock for the whole run (PR #188 review F1/F2).
+        # Registration is deliberately global, not per-project: it runs
+        # before the per-project INGEST_OFF boundary because the row carries
+        # no project data — only the id the user's own sessions are stamped
+        # with (review note 10).
         store.upsert_developer(db, developer_id)
+        db.commit()
         for copilot in selected:
             adapter = get_adapter(copilot)
             c_ingested = c_skipped = 0

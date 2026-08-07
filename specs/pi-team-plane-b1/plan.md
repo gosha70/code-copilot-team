@@ -34,17 +34,35 @@ origin:
 
 ## Design
 
-### D-0 — Decisions (settled with the user at plan approval, 2026-08-07)
-1. **D-1: git-email derivation form → sanitized local-part** (`gosha` from
-   `gosha@x.com`): readable in a local-first DB; collision risk is
-   irrelevant locally; B2's identity/auth decision may replace it —
-   recorded as attribution, not auth.
-2. **D-2: in-flight state storage → `copilot_session_metadata` KV rows**:
-   zero DDL change, fits the registry purpose; B2's central-registry
-   decision dictates the real schema — don't pre-commit one locally.
+### D-0 — Decisions (settled at plan approval; D-1/D-2 revised by the
+### PR #188 plan+phase-1 review, 2026-08-07)
+1. **D-1: git-email derivation form → sanitized local-part of `git config
+   --global user.email`.** REVISED per review F3: the original wording ran
+   `git config user.email`, which resolves against the launch directory's
+   repo-local config — the same developer would be stamped `alice` from
+   repo-A and `bob` from repo-B, and B1 never migrates stamps. "Local
+   developer identity" is the MACHINE/user identity: global git config
+   only; unset ⇒ fall through. Still attribution, not auth.
+2. **D-2: in-flight state storage → dedicated `local_heartbeat` table.**
+   REVISED per review F2: `copilot_session_metadata` is FK-anchored to
+   `copilot_session` (`session_id BIGINT NOT NULL REFERENCES ...`), so a
+   heartbeat from a session with no ingested row — the defining B1 case —
+   has nowhere to attach without fabricating history. Shape:
+   `local_heartbeat(project_path, developer_id, session_id NULL, phase,
+   feature_id, checkpoint_count, last_heartbeat_at, PK(project_path,
+   developer_id))` in a new DDL file, both dialects. B2's central-registry
+   schema remains free to replace it.
 3. **D-3: heartbeat artifact → `.cct/heartbeat.json`** alongside the
    checkpoint, same trust posture, picked up by the existing
-   watch/incremental ingest.
+   watch/incremental ingest. Unchanged — with `sessionId` carried nullable
+   (Pi exposes no session id at checkpoint time; honest, not fabricated).
+4. **D-4 (review F1): developer registration commits independently** of
+   session work in the ingest transaction, so an all-skipped incremental
+   run still persists the row.
+5. **D-5 (review F4/F5): identity flows through the config loader** —
+   `CCT_DEVELOPER_ID` joins `ENV_KEYS` (real env > repo `.env`), never an
+   `os.environ` bypass in cli.py; `--developer-id` exists on `watch` as
+   well as `ingest`.
 
 ### D1 — Identity (Python, session_analytics)
 `identity.py`: `derive_developer_id(cli_value, env, config, repo_root) →

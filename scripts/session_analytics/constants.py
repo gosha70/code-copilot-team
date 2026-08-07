@@ -48,6 +48,9 @@ REDACTION_MODES = (REDACT_NONE, REDACT_CODE, REDACT_METADATA_ONLY)
 # ── Default multi-tenant developer id (E1) ─────────────────────────────
 DEFAULT_DEVELOPER_ID = "local"
 
+# Config key for an explicit developer id (Slice B1, #187).
+CFG_DEVELOPER_ID = "developer_id"
+
 # ── Config keys (defaults.yaml) ────────────────────────────────────────
 CFG_SOURCES = "sources"
 CFG_SOURCE_ROOT = "root"

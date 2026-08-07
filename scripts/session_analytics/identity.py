@@ -4,15 +4,22 @@ Derives a stable, local-first ``developer_id`` with explicit precedence —
 never fabricated: every source either yields a valid id or falls through,
 and the terminal fallback is the pre-existing ``"local"`` stub.
 
-    flag > CCT_DEVELOPER_ID env > analytics config > git-email local-part
-         > "local"
+    flag > CCT_DEVELOPER_ID (real env > repo .env, via the config loader)
+         > config ``developer_id`` > git-global-email local-part > "local"
 
-The git derivation uses the sanitized LOCAL-PART of ``git config
-user.email`` (plan D-1, settled 2026-08-07): readable in a local-first
-database, and honestly *attribution*, not authentication — the epic's
-identity/auth decision (Slice B2+) may replace it. The derivation runs
-``git config user.email`` without requiring a repository (git falls back
-to the user's global config), so identity is machine-stable.
+Two deliberate semantics (PR #188 review, 2026-08-07):
+
+- **Explicit flag values are honored verbatim** (after control-character
+  stripping and the column bound) — pre-B1 users passed ``--developer-id
+  Team_A`` and their rows carry ``Team_A``; normalizing an explicit value
+  would split their identity on upgrade. Only *derived* sources (env,
+  config, git) are kebab-normalized. A flag value that survives as empty
+  falls through, and the caller is expected to WARN — an explicit user
+  instruction is never dropped silently.
+- **The git source is the MACHINE/user identity**: ``git config --global
+  user.email``, never the launch directory's repo-local email — a
+  cwd-dependent id would stamp the same developer differently per launch
+  dir, and B1 never migrates stamps retroactively.
 """
 
 from __future__ import annotations
@@ -20,18 +27,15 @@ from __future__ import annotations
 import re
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Mapping, Optional
+from typing import Optional
 
 from . import constants as C
 
-# Env var carrying an explicit developer id (checked after the CLI flag).
-DEVELOPER_ID_ENV = "CCT_DEVELOPER_ID"
+# Column bound (developer.developer_id VARCHAR(100)); explicit flag values
+# are bounded by this, derived values by the tighter kebab bound below.
+_MAX_COLUMN_LEN = 100
 
-# Config key under the analytics config root (``developer_id = "..."``).
-DEVELOPER_ID_CONFIG_KEY = "developer_id"
-
-# Normalized ids: lowercase kebab, alphanumeric first char, bounded.
+# Normalized (derived) ids: lowercase kebab, alphanumeric first, bounded.
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _MAX_ID_LEN = 64
 
@@ -51,8 +55,22 @@ class DerivedIdentity:
     source: str
 
 
+def sanitize_explicit_id(raw: object) -> Optional[str]:
+    """Minimal safety pass for an EXPLICIT ``--developer-id`` value.
+
+    Strips control characters, trims, bounds to the column length —
+    otherwise verbatim (case and punctuation preserved for upgrade
+    compatibility with pre-B1 stamps). ``None`` when nothing remains.
+    """
+    if not isinstance(raw, str):
+        return None
+    cleaned = re.sub(r"[\x00-\x1f\x7f]+", "", raw).strip()
+    candidate = cleaned[:_MAX_COLUMN_LEN].strip()
+    return candidate or None
+
+
 def normalize_developer_id(raw: object) -> Optional[str]:
-    """Normalize a candidate into the bounded kebab form, or ``None``.
+    """Normalize a DERIVED candidate into the bounded kebab form, or ``None``.
 
     Lowercases, maps separator-ish characters (``._ @+``) to ``-``,
     strips everything else, collapses runs of ``-``, trims edge dashes,
@@ -71,15 +89,19 @@ def normalize_developer_id(raw: object) -> Optional[str]:
     return candidate
 
 
-def _from_git_email(repo_root: Optional[Path]) -> Optional[str]:
-    """Local-part of ``git config user.email``, normalized; None on any failure."""
+def _from_git_global_email() -> Optional[str]:
+    """Local-part of ``git config --global user.email``, normalized.
+
+    Global config ONLY — machine/user identity, independent of the launch
+    directory (and of any repo-local ``user.email`` override). ``None`` on
+    any failure: git missing, timeout, unset, or an unusable local part.
+    """
     try:
         proc = subprocess.run(
-            ["git", "config", "user.email"],
+            ["git", "config", "--global", "user.email"],
             capture_output=True,
             text=True,
             timeout=5,
-            cwd=str(repo_root) if repo_root else None,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -94,26 +116,32 @@ def _from_git_email(repo_root: Optional[Path]) -> Optional[str]:
 
 def derive_developer_id(
     cli_value: Optional[str] = None,
-    env: Optional[Mapping[str, str]] = None,
+    env_value: Optional[str] = None,
     config_value: Optional[str] = None,
-    repo_root: Optional[Path] = None,
 ) -> DerivedIdentity:
     """Resolve the developer id by precedence (see module docstring).
 
-    A source whose candidate does not normalize falls through to the next;
-    the terminal fallback is ``constants.DEFAULT_DEVELOPER_ID`` (``"local"``),
-    so the result is always usable and never fabricated.
+    ``env_value``/``config_value`` are the values the analytics config
+    loader resolved (``CCT_DEVELOPER_ID`` through real env > repo ``.env``;
+    the ``developer_id`` config key) — this function never reads the
+    process environment itself, so the loader's documented layering is the
+    single source of truth. A source whose candidate does not survive its
+    sanitation falls through; the terminal fallback is
+    ``constants.DEFAULT_DEVELOPER_ID`` (``"local"``), never fabricated.
     """
+    explicit = sanitize_explicit_id(cli_value)
+    if explicit:
+        return DerivedIdentity(id=explicit, source=SOURCE_FLAG)
+
     for source, raw in (
-        (SOURCE_FLAG, cli_value),
-        (SOURCE_ENV, (env or {}).get(DEVELOPER_ID_ENV)),
+        (SOURCE_ENV, env_value),
         (SOURCE_CONFIG, config_value),
     ):
         candidate = normalize_developer_id(raw)
         if candidate:
             return DerivedIdentity(id=candidate, source=source)
 
-    from_git = _from_git_email(repo_root)
+    from_git = _from_git_global_email()
     if from_git:
         return DerivedIdentity(id=from_git, source=SOURCE_GIT_EMAIL)
 

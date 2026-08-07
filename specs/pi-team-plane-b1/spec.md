@@ -37,31 +37,60 @@ auth decision consumed — those gate Slices B2/C/D/E, not this one.
 
 ## Requirements
 
-- **FR-1 — Identity derivation, never fabricated.** A pure
-  `derive_developer_id()` in session_analytics with explicit precedence:
-  (1) explicit `--developer-id` CLI flag; (2) `CCT_DEVELOPER_ID` env; (3)
-  analytics config; (4) derivation from `git config user.email`; (5) the
-  `"local"` fallback. The git-derivation form is decision D-1 (see plan —
-  settled before build). The result is validated (bounded, kebab-safe) and
+- **FR-1 — Identity derivation, never fabricated, launch-dir independent.**
+  A pure `derive_developer_id()` in session_analytics with explicit
+  precedence: (1) explicit `--developer-id` CLI flag (on `ingest` AND
+  `watch`) — honored **verbatim** after control-char stripping and the
+  column bound (pre-B1 stamps like `Team_A` stay compatible; only derived
+  sources are kebab-normalized), and an explicit value that does not
+  survive sanitation is **warned about**, never dropped silently; (2) `CCT_DEVELOPER_ID` resolved through the analytics config
+  chain (real env > repo-root `.env` — registered in `ENV_KEYS`, never a
+  bypass of the loader); (3) the `developer_id` key in the analytics config
+  files; (4) derivation from **`git config --global user.email`** — the
+  MACHINE/user identity, deliberately not the launch directory's repo-local
+  email (a cwd-dependent id would stamp the same developer differently per
+  launch dir, and B1 never migrates stamps retroactively); (5) the
+  `"local"` fallback. The result is validated (bounded, kebab-safe) and
   deterministic; failures fall through to the next source, never invent.
-- **FR-2 — `developer` table populated.** Ingest upserts the derived
-  developer row (both dialects: SQLite default and Postgres) and stamps
-  `copilot_session.developer_id` with the derived id. Re-ingest is
-  idempotent. Existing rows with the `"local"` stub are left untouched
-  (no retroactive rewrite in B1).
+- **FR-2 — `developer` table populated, committed unconditionally.**
+  Ingest upserts the derived developer row (both dialects) and **commits
+  the registration independently of session work** — an incremental run
+  that skips every session (the standing state of any pre-B1 database)
+  still persists the developer row; a rollback-on-idle would leave the
+  table empty forever. Sessions are stamped with the derived id; re-ingest
+  is idempotent. **Historical-stamp semantics (PR #188 review F5):** B1
+  ships no migration, and *incremental* runs never touch existing rows
+  (they are skipped wholesale) — but an explicit `--full` re-ingest
+  rebuilds each session row from source and therefore re-stamps it with
+  the currently-derived id, by design (the stamp is part of the rebuilt
+  row); documented in the flag help. Anyone needing frozen history simply
+  does not run `--full` after changing identity.
 - **FR-3 — Heartbeat emission at checkpoint writes (Pi side).**
   `writeCheckpoint` additionally maintains a small, bounded, redaction-safe
-  `.cct/heartbeat.json`: `{ sessionId?, phase, featureId, checkpointCount,
-  updatedAt }` — fields that already exist in the checkpoint, sanitized the
-  same way; no free text, no env values, no secrets surface. Best-effort:
+  `.cct/heartbeat.json`: `{ sessionId, phase, featureId, checkpointCount,
+  updatedAt }` — the checkpoint's own sanitized fields plus `sessionId`,
+  which is **nullable by construction**: Pi exposes no native session id at
+  checkpoint time, so the field is carried for the contract (and future
+  runtimes that know one) and is `null` today — recorded honestly, never
+  fabricated. No free text, no env values, no secrets surface. Best-effort:
   a heartbeat write failure never breaks the checkpoint path. Emission
   follows the checkpoint cadence (explicit CCT actions) — Pi has no
   turn-end event, and B1 does not invent one (degraded honesty preserved).
-- **FR-4 — Local heartbeat ingestion.** The pi adapter/incremental ingest
+- **FR-4 — Local heartbeat ingestion into a dedicated table.** Ingest
   reads `.cct/heartbeat.json` (untrusted input: sanitized, bounded,
-  tamper-tolerant) and surfaces it as local in-flight state keyed by
-  project + developer, with `last_heartbeat_at`. Storage shape is decision
-  D-2 (see plan). The `watch` loop picks it up on its existing interval —
+  tamper-tolerant) and upserts a dedicated **`local_heartbeat`** table —
+  `(project_path, developer_id)` primary key; `session_id` nullable;
+  `phase`, `feature_id`, `checkpoint_count`, `last_heartbeat_at` — in both
+  dialects. A dedicated table because the metadata KV registry is
+  FK-anchored to `copilot_session` and therefore **cannot represent the
+  defining B1 case**: a heartbeat from an in-flight session that has no
+  ingested session row yet (nothing is fabricated to satisfy an FK).
+  **Discovery**: heartbeat files are looked for in the distinct
+  `project_path` values already known to the store **plus** the analytics
+  process's own project root (cwd-resolved) when it carries `.cct/` — a
+  brand-new project with zero ingested history and a remote watch process
+  becomes visible on its first normal ingest (documented B1 boundary, not
+  hidden). The `watch` loop picks heartbeats up on its existing interval —
   no new daemon.
 - **FR-5 — Honest liveness semantics.** A heartbeat proves "a CCT action
   happened at T", not "the session is alive now". Reported fields say
@@ -90,7 +119,8 @@ auth decision consumed — those gate Slices B2/C/D/E, not this one.
 
 - `developer` row — `developer_id` (+ whatever the existing DDL defines).
 - Heartbeat artifact — `.cct/heartbeat.json` (bounded, sanitized).
-- In-flight state — storage per decision D-2 (new table vs metadata KV).
+- In-flight state — the `local_heartbeat` table (dedicated; D-2 revised
+  by the PR #188 review).
 - Config/env — `CCT_DEVELOPER_ID`, analytics config key, existing
   `--developer-id` flag.
 

@@ -9,17 +9,15 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
 from typing import Sequence
 
-import os
-
 from . import constants as C
 from . import identity as IDENT
-from .identity import derive_developer_id
-from .config import load_config
+from .config import AnalyticsConfig, load_config
 from .registry import UnknownAdapterError, list_adapter_ids
 
 _log = logging.getLogger(__name__)
@@ -70,8 +68,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--developer-id",
         default=None,
         help=(
-            "E1 multi-tenant tag. Default: derived (CCT_DEVELOPER_ID env > "
-            "config developer_id > git user.email local-part > 'local')."
+            "E1 multi-tenant tag (verbatim; pre-B1 stamps stay compatible). "
+            "Default: derived (CCT_DEVELOPER_ID env/.env > config "
+            "developer_id > git --global user.email local-part > 'local')."
         ),
     )
     p_ing.add_argument(
@@ -218,6 +217,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "watch", help="Loop incremental ingest() every --interval seconds (E6)."
     )
     p_watch.add_argument(
+        "--developer-id",
+        default=None,
+        help=(
+            "E1 multi-tenant tag. Default: derived (CCT_DEVELOPER_ID env/.env > "
+            "config developer_id > git --global user.email local-part > 'local')."
+        ),
+    )
+    p_watch.add_argument(
         "--interval", type=int, default=15, help="Seconds between cycles (default: 15)."
     )
     p_watch.add_argument(
@@ -254,14 +261,29 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     return C.EXIT_OK
 
 
-def _derived_developer_id(args: argparse.Namespace, cfg) -> str:
-    """Slice B1 (#187): flag > env > config > git-email > "local"."""
-    derived = derive_developer_id(
-        cli_value=getattr(args, "developer_id", None),
-        env=os.environ,
-        config_value=(cfg.raw or {}).get(IDENT.DEVELOPER_ID_CONFIG_KEY),
+def _derived_developer_id(args: argparse.Namespace, cfg: AnalyticsConfig) -> str:
+    """Slice B1 (#187): flag > env/.env > config > git-global-email > "local".
+
+    Env and config inputs come from the loader's resolved fields, so the
+    package's documented layering (real env > repo .env > config files)
+    applies — never an os.environ bypass here.
+    """
+    flag_value = getattr(args, "developer_id", None)
+    derived = IDENT.derive_developer_id(
+        cli_value=flag_value,
+        env_value=cfg.developer_id_env,
+        config_value=cfg.developer_id_cfg,
     )
-    if derived.source != IDENT.SOURCE_FLAG:
+    if flag_value is not None and derived.source != IDENT.SOURCE_FLAG:
+        # An explicit user instruction was unusable — never drop it silently.
+        _log.warning(
+            "--developer-id %r is unusable after sanitation; using '%s' "
+            "(source: %s) instead",
+            flag_value,
+            derived.id,
+            derived.source,
+        )
+    elif derived.source != IDENT.SOURCE_FLAG:
         _log.info("developer_id '%s' (source: %s)", derived.id, derived.source)
     return derived.id
 
