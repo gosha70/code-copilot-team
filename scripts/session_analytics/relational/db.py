@@ -85,7 +85,7 @@ _DDL_FILES = (
     "ddl/postgres/004_metadata.sql",
     "ddl/postgres/005_heartbeat.sql",
 )
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3  # 3: + local_heartbeat (Slice B1, #187)
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",

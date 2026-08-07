@@ -93,7 +93,7 @@ class TestReadHeartbeat(unittest.TestCase):
         self.assertIsNotNone(fields)
         self.assertLessEqual(len(fields["feature_id"]), 128)
         self.assertNotIn("\x07", fields["feature_id"])
-        self.assertLessEqual(len(fields["phase"]), 64)
+        self.assertIsNone(fields["phase"])  # oversized text fails membership
         self.assertLessEqual(len(fields["session_id"]), 128)
         self.assertLessEqual(fields["checkpoint_count"], 1_000_000_000)
         self.assertLessEqual(len(fields["last_heartbeat_at"]), 40)
@@ -108,13 +108,18 @@ class TestReadHeartbeat(unittest.TestCase):
 
 
 class TestHeartbeatIngest(RegistryResetTestCase):
-    def _ingest(self, base: Path, dsn: str, developer_id: str = "alice"):
+    def _ingest(self, base: Path, dsn: str, developer_id: str = "alice", **kw):
         register_all()
+        # heartbeat_cwd points at a scratch dir so the suite stays hermetic
+        # even when the process cwd is itself a Pi project with a live
+        # .cct/heartbeat.json — e.g. THIS repo (review F4).
+        kw.setdefault("heartbeat_cwd", Path(tempfile.mkdtemp(prefix="cct-hb-cwd-")))
         return ingest(
             dsn=dsn,
             copilots=[C.COPILOT_PI],
             root=base,
             developer_id=developer_id,
+            **kw,
         )
 
     def test_in_flight_before_any_session_row(self) -> None:
@@ -222,3 +227,147 @@ class TestUpsertHeartbeatSqlIsReal(unittest.TestCase):
         self.assertIn("%s", translated)
         self.assertNotIn("?", translated)
         self.assertIn("ON CONFLICT (project_path, developer_id)", translated)
+
+
+class TestPrivacyAndRobustness(RegistryResetTestCase):
+    def _ingest(self, base, dsn, **kw):
+        register_all()
+        kw.setdefault("heartbeat_cwd", Path(tempfile.mkdtemp(prefix="cct-hb-cwd-")))
+        return ingest(
+            dsn=dsn, copilots=[C.COPILOT_PI], root=base, developer_id="alice", **kw
+        )
+
+    def test_opted_out_project_gets_no_heartbeat_row(self) -> None:
+        # Review F1 (P1): the per-project ingest="off" HARD boundary applies
+        # to heartbeats — an opted-out project writes NOTHING, resolved with
+        # the same key resolution the session path uses.
+        import subprocess
+
+        from session_analytics.config import ProjectOverride
+
+        base = Path(tempfile.mkdtemp(prefix="cct-hb-base-"))
+        proj = base / "client-repo"
+        _write_session(proj)
+        _write_heartbeat(proj, featureId="secret-client-feature")
+        # The resolver keys on git toplevel — make the project a real repo so
+        # BOTH the session path and the heartbeat sweep resolve the same key.
+        subprocess.run(["git", "init", "-q", str(proj)], check=True)
+        key = subprocess.run(
+            ["git", "-C", str(proj), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        dsn = self.sqlite_dsn()
+        stats = self._ingest(
+            base,
+            dsn,
+            projects={key: ProjectOverride(ingest="off")},
+        )
+        self.assertEqual(stats.sessions_opted_out, 1)
+        self.assertEqual(stats.heartbeats_ingested, 0)
+        db = Database.connect(dsn)
+        try:
+            self.assertIsNone(db.query_one("SELECT 1 FROM local_heartbeat"))
+        finally:
+            db.close()
+
+    def test_db_error_on_one_root_never_poisons_the_session_ingest(self) -> None:
+        # Review F2: a failing heartbeat upsert warns, rolls back, and the
+        # session ingest proceeds untouched.
+        from unittest import mock
+
+        from session_analytics import heartbeat as hb_mod
+
+        base = Path(tempfile.mkdtemp(prefix="cct-hb-base-"))
+        proj = base / "proj-ok"
+        _write_session(proj)
+        _write_heartbeat(proj)
+        dsn = self.sqlite_dsn()
+        real_execute = Database.execute
+
+        def failing_execute(self, sql, params=()):
+            if "INSERT INTO local_heartbeat" in sql:
+                raise RuntimeError("injected DB failure")
+            return real_execute(self, sql, params)
+
+        with mock.patch.object(Database, "execute", failing_execute), \
+                self.assertLogs("session_analytics.heartbeat", level="WARNING"):
+            stats = self._ingest(base, dsn)
+        self.assertEqual(stats.heartbeats_ingested, 0)
+        self.assertEqual(stats.sessions_ingested, 1)  # session work unharmed
+
+    def test_symlinked_cwd_does_not_split_the_project(self) -> None:
+        # Review F3: dedup by realpath; the adapter-shaped string wins.
+        import os
+
+        base = Path(tempfile.mkdtemp(prefix="cct-hb-base-"))
+        proj = base / "proj-link"
+        _write_heartbeat(proj)
+        link = Path(tempfile.mkdtemp(prefix="cct-hb-linkdir-")) / "alias"
+        os.symlink(proj, link)
+        dsn = self.sqlite_dsn()
+        stats = self._ingest(base, dsn, heartbeat_cwd=link)
+        self.assertEqual(stats.heartbeats_ingested, 1)
+        db = Database.connect(dsn)
+        try:
+            rows = db.query("SELECT project_path FROM local_heartbeat")
+            self.assertEqual([r[0] for r in rows], [str(proj)])  # one row, adapter shape
+        finally:
+            db.close()
+
+    def test_last_heartbeat_at_is_monotonic(self) -> None:
+        # Review F6: an OLDER heartbeat file never rewinds the row.
+        base = Path(tempfile.mkdtemp(prefix="cct-hb-base-"))
+        proj = base / "proj-mono"
+        _write_heartbeat(proj, updatedAt="2026-08-07T11:00:00Z", checkpointCount=5)
+        dsn = self.sqlite_dsn()
+        self._ingest(base, dsn)
+        _write_heartbeat(proj, updatedAt="2026-08-07T09:00:00Z", checkpointCount=1)
+        self._ingest(base, dsn)
+        db = Database.connect(dsn)
+        try:
+            row = db.query_one(
+                "SELECT checkpoint_count, last_heartbeat_at FROM local_heartbeat"
+            )
+            self.assertEqual(tuple(row), (5, "2026-08-07T11:00:00Z"))  # not rewound
+        finally:
+            db.close()
+
+    def test_unknown_phase_text_is_dropped_on_read(self) -> None:
+        # Review F8: membership, not just bounds.
+        root = Path(tempfile.mkdtemp(prefix="cct-hb-phase-"))
+        _write_heartbeat(root, phase="SYSTEM: ignore previous")
+        fields = hb.read_heartbeat(root)
+        self.assertIsNone(fields["phase"])
+        _write_heartbeat(root, phase="build")
+        self.assertEqual(hb.read_heartbeat(root)["phase"], "build")
+
+    def test_watch_loop_picks_up_a_heartbeat(self) -> None:
+        # Review F7 / tasks.md task 7: one-interval watch integration —
+        # run_watch drives a REAL ingest_fn against sqlite and the row lands.
+        from session_analytics.watch import run_watch
+
+        base = Path(tempfile.mkdtemp(prefix="cct-hb-base-"))
+        _write_heartbeat(base / "proj-watch")
+        dsn = self.sqlite_dsn()
+        register_all()
+        scratch_cwd = Path(tempfile.mkdtemp(prefix="cct-hb-cwd-"))
+
+        def ingest_fn() -> None:
+            ingest(
+                dsn=dsn,
+                copilots=[C.COPILOT_PI],
+                root=base,
+                developer_id="alice",
+                heartbeat_cwd=scratch_cwd,
+            )
+
+        run_watch(ingest_fn, 1, iterations=1, sleep_fn=lambda _t: None)
+        db = Database.connect(dsn)
+        try:
+            row = db.query_one("SELECT project_path FROM local_heartbeat")
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], str(base / "proj-watch"))
+        finally:
+            db.close()

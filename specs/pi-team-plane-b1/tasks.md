@@ -55,6 +55,19 @@ leaves **#174** open.
   PHASE_ORDER validation, clamped count, bounded timestamp) and written
   atomically (temp+rename) because `watch` polls it; the Phase-3 reader
   STILL sanitizes on read (both directions per spec).
+- **Final-round fixes (review #4, 2026-08-07):** the per-project
+  `ingest = "off"` HARD boundary now applies to the heartbeat sweep (same
+  projects+resolver as the session path; P1); a DB error on one root
+  rolls back, warns, and skips (never poisons the session ingest);
+  discovery dedups by realpath while storing the adapter-shaped string
+  (no symlink split); `heartbeat_cwd` is injectable so the suite stays
+  hermetic when the process cwd is itself a Pi project; `last_heartbeat_at`
+  is MONOTONIC via a WHERE guard (older files never rewind a row); phase
+  membership is validated on read against `CCT_PHASES` (width 20, matching
+  `copilot_session.phase`); the watch-loop one-interval pickup test exists;
+  `_SCHEMA_VERSION` bumped to 3. Live-postgres execution of the new DDL +
+  upsert was performed in review (idempotent composite-PK upsert verified);
+  a seeded-heartbeat CI smoke addition remains optional follow-up.
 - **Phase-3 requirement (review B-6):** assert exact string equivalence
   between the heartbeat's project root (Pi `state.cwd`) and the store's
   `copilot_session.project_path` values — a shape mismatch (symlink,

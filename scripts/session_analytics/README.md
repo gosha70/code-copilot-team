@@ -224,7 +224,12 @@ Pi sessions also emit a local heartbeat (`.cct/heartbeat.json`, written at
 checkpoint time) which ingest/`watch` picks up into the `local_heartbeat`
 table — **last-seen** in-flight state (`last_heartbeat_at` proves "a CCT
 action happened at T", never that a session is alive now; alerting is a
-later slice). Everything is local-first: no service, no remote write.
+later slice; a project whose directory disappears keeps its last-seen row).
+Heartbeat discovery covers the scan root, store-known pi projects, and the
+process's own cwd when it carries `.cct/` — so `--root` scopes sessions,
+not heartbeats. The per-project `ingest = "off"` opt-out applies to
+heartbeats in full (nothing is written for an opted-out project).
+Everything is local-first: no service, no remote write.
 
 ## Cost tracking (E5, issue #83)
 

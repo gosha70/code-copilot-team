@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS local_heartbeat (
     project_path      VARCHAR(1024) NOT NULL,
     developer_id      VARCHAR(100)  NOT NULL,
     session_id        VARCHAR(128),
-    phase             VARCHAR(64),
+    phase             VARCHAR(20),
     feature_id        VARCHAR(128),
     checkpoint_count  BIGINT NOT NULL DEFAULT 0,
     last_heartbeat_at VARCHAR(40) NOT NULL,

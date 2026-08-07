@@ -71,6 +71,7 @@ def ingest(
     cli_redaction_override: Optional[str] = None,
     projects: Optional[Mapping[str, ProjectOverride]] = None,
     project_id_rules: Optional[Sequence[ProjectIdRule]] = None,
+    heartbeat_cwd: Optional[Path] = None,
 ) -> IngestStats:
     """Run ingestion for the selected copilots into ``dsn``.
 
@@ -120,15 +121,26 @@ def ingest(
             # Slice B1 (#187): sweep heartbeats for pi projects — BEFORE the
             # session loop, so an in-flight project with no ingestable
             # session (the defining B1 case) still lands in local_heartbeat.
-            # ingest_heartbeats commits its own work and never raises for a
-            # bad file.
-            if copilot == C.COPILOT_PI and hasattr(adapter, "resolve_root"):
-                stats.heartbeats_ingested += ingest_heartbeats(
-                    db,
-                    developer_id,
-                    base=adapter.resolve_root(root),
-                    cwd=Path.cwd(),
-                )
+            # The sweep honors the per-project INGEST_OFF hard boundary with
+            # the SAME projects+resolver the session path uses (review F1),
+            # commits its own work, and never raises — a bad file or a DB
+            # error on one root warns and skips. `heartbeat_cwd` is
+            # injectable so tests stay hermetic when the process cwd itself
+            # is a Pi project (review F4); production callers leave it None.
+            if copilot == C.COPILOT_PI:
+                if hasattr(adapter, "resolve_root"):
+                    stats.heartbeats_ingested += ingest_heartbeats(
+                        db,
+                        developer_id,
+                        base=adapter.resolve_root(root),
+                        cwd=heartbeat_cwd if heartbeat_cwd is not None else Path.cwd(),
+                        projects=projects,
+                        resolver=resolver,
+                    )
+                else:
+                    _log.debug(
+                        "pi adapter lacks resolve_root — heartbeat sweep skipped"
+                    )
             c_ingested = c_skipped = 0
             for ref in adapter.discover(root):
                 if not incremental.should_ingest(db, ref, full=full):
