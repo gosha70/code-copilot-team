@@ -18,6 +18,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { PHASE_ORDER } from "./phases.ts";
 import type { Phase } from "./phases.ts";
+import { tryWriteHeartbeat } from "./heartbeat.ts";
 
 export const SESSION_STATE_REL = path.join(".cct", "pi-session.json");
 export const CHECKPOINT_VERSION = 1;
@@ -116,6 +117,17 @@ export function writeCheckpoint(
   const file = path.join(projectRoot, SESSION_STATE_REL);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(cp, null, 2) + "\n");
+  // Slice B1 (#187): mirror the checkpoint's sanitized fields into the local
+  // heartbeat, best-effort — a heartbeat failure never fails the checkpoint.
+  tryWriteHeartbeat(
+    projectRoot,
+    {
+      phase: cp.phase,
+      featureId: cp.featureId,
+      checkpointCount: cp.checkpointCount,
+    },
+    nowIso,
+  );
   return cp;
 }
 
