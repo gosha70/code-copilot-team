@@ -3,6 +3,7 @@
 // tests. Deterministic, no LLM. Behaviour is driven by env vars:
 //
 //   MOCK_PI_ARGV_OUT   write JSON of argv (the flags the runner passed) here
+//   MOCK_PI_ENV_OUT    write JSON of process.env (the child's real env) here
 //   MOCK_PI_SLEEP_MS   sleep this long before emitting (timeout/cancel tests)
 //   MOCK_PI_EXIT       process exit code (default 0)
 //   MOCK_PI_NO_ENVELOPE  emit no result envelope (error-path test)
@@ -15,6 +16,9 @@ import fs from "node:fs";
 const argv = process.argv.slice(2);
 if (process.env.MOCK_PI_ARGV_OUT) {
   fs.writeFileSync(process.env.MOCK_PI_ARGV_OUT, JSON.stringify(argv));
+}
+if (process.env.MOCK_PI_ENV_OUT) {
+  fs.writeFileSync(process.env.MOCK_PI_ENV_OUT, JSON.stringify(process.env));
 }
 
 function emitAndExit() {

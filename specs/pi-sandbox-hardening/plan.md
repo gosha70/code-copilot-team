@@ -56,6 +56,32 @@ origin:
 
 ## Design
 
+### D0 — Build-discovered deltas (recorded 2026-08-06, build phase 1)
+Three facts surfaced during implementation that adjust HOW (never WHAT):
+1. **Floor engine not used for `env_scrub`.** `config/floor.ts`
+   RELAXATION_LAYERS excludes the `global` layer, so a floored default-ON
+   bool could never be disabled from the user's own global config —
+   contradicting resolved decision 1/5. The FR-004a asymmetry is instead
+   enforced by **provenance** in `resolveScrubPolicy`: the checked-in
+   `project` layer is honored only when it tightens (enable-only for
+   `env_scrub`; union-only for `env_scrub_extra`; ignored for
+   `env_scrub_keep`).
+2. **`runSubagent` has no live caller yet** (T7.2 is a library awaiting its
+   live wiring), so "index.ts supplies the scrub option" has no call site.
+   Scrub is instead part of the runner's contract: `scrub?: ScrubPolicy |
+   false` where omitted ⇒ built-in default policy (fail-safe ON — a future
+   caller that forgets config still scrubs), `false` ⇒ trusted opt-out,
+   policy ⇒ config-resolved. Removed names are reported in
+   `ChildResult.scrubbedEnv` (names only) for the future live wiring to
+   audit.
+3. **Launcher boundary is global/env/cli-scope only.** The loader's trust
+   contract never reads project layers untrusted, so the out-of-session CLI
+   cannot see a project-local `env_scrub_extra` either; launcher-side
+   tightening from checked-in project config does not apply (it still applies
+   in-session). The live `env.scrub` audit for the worker handoff is emitted
+   at the worker's `session_start` from `CCT_ENV_SCRUBBED` (names only,
+   sanitized, set by the launcher after unsetting).
+
 ### D1 — `policy/env-scrub.ts`: pure policy, names only
 `resolveScrubPolicy(cfg)` merges built-in patterns (`AWS_*`, `GITHUB_TOKEN`,
 `GH_TOKEN`, `NPM_TOKEN`, `*_TOKEN`, `*_SECRET`, `*_KEY`, `*_PASSWORD`,

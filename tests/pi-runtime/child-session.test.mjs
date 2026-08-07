@@ -220,3 +220,114 @@ test("runChildSession: nonzero exit WITH an envelope is still error (not ok)", a
     restore();
   }
 });
+
+// ── env scrubbing at the spawn boundary (#173, pi-sandbox-hardening) ─────────
+
+// Set credential-shaped vars on THIS (parent) process, run the child against
+// the mock, and assert on the env the child ACTUALLY received (MOCK_PI_ENV_OUT
+// dump) — a real spawn proof, not just the pure builder.
+function withParentEnv(extra) {
+  const prev = {};
+  for (const [k, v] of Object.entries(extra)) {
+    prev[k] = process.env[k];
+    process.env[k] = v;
+  }
+  return () => {
+    for (const k of Object.keys(extra)) {
+      if (prev[k] === undefined) delete process.env[k];
+      else process.env[k] = prev[k];
+    }
+  };
+}
+
+test("runChildSession: default scrub removes credentials from the child env", async () => {
+  const { restore } = withMock();
+  const envOut = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cct-cs-")), "env.json");
+  const unsetParent = withParentEnv({
+    MOCK_PI_ENV_OUT: envOut,
+    AWS_SECRET_ACCESS_KEY: "s3cr3t",
+    GITHUB_TOKEN: "ghp_x",
+    CCT_SCRUB_CANARY_TOKEN: "kept-by-cct-prefix",
+  });
+  try {
+    const r = await runChildSession(opts(manifest()), { runnerPath: MOCK_PI });
+    assert.equal(r.status, "ok", r.reason);
+    assert.ok(r.scrubbedEnv.includes("AWS_SECRET_ACCESS_KEY"));
+    assert.ok(r.scrubbedEnv.includes("GITHUB_TOKEN"));
+    const childEnv = JSON.parse(fs.readFileSync(envOut, "utf8"));
+    assert.equal("AWS_SECRET_ACCESS_KEY" in childEnv, false);
+    assert.equal("GITHUB_TOKEN" in childEnv, false);
+    // Baselines + the CCT contract survive; MOCK_PI_ENV_OUT itself survived
+    // (or the dump could not have been written).
+    assert.ok(childEnv.PATH);
+    assert.equal(childEnv.CCT_SCRUB_CANARY_TOKEN, "kept-by-cct-prefix");
+    assert.equal(childEnv.CCT_AGENT_DEPTH, "1"); // built.env applied after scrub
+  } finally {
+    unsetParent();
+    restore();
+  }
+});
+
+test("runChildSession: scrub=false passes the host env through (trusted opt-out)", async () => {
+  const { restore } = withMock();
+  const envOut = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cct-cs-")), "env.json");
+  const unsetParent = withParentEnv({
+    MOCK_PI_ENV_OUT: envOut,
+    GITHUB_TOKEN: "ghp_visible",
+  });
+  try {
+    const r = await runChildSession(opts(manifest(), { scrub: false }), {
+      runnerPath: MOCK_PI,
+    });
+    assert.equal(r.status, "ok", r.reason);
+    assert.deepEqual(r.scrubbedEnv, []);
+    const childEnv = JSON.parse(fs.readFileSync(envOut, "utf8"));
+    assert.equal(childEnv.GITHUB_TOKEN, "ghp_visible");
+  } finally {
+    unsetParent();
+    restore();
+  }
+});
+
+test("runChildSession: an explicit policy (config-resolved) is honored", async () => {
+  const { restore } = withMock();
+  const envOut = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cct-cs-")), "env.json");
+  const unsetParent = withParentEnv({
+    MOCK_PI_ENV_OUT: envOut,
+    CORP_INTERNAL_ID: "tightened-away",
+    MY_BUILD_KEY: "kept-by-config",
+  });
+  try {
+    const r = await runChildSession(
+      opts(manifest(), {
+        scrub: {
+          patterns: ["CORP_*", "*_TOKEN"],
+          keep: ["PATH", "HOME", "TMPDIR", "CCT_*", "MOCK_PI_*", "MY_BUILD_KEY"],
+        },
+      }),
+      { runnerPath: MOCK_PI },
+    );
+    assert.equal(r.status, "ok", r.reason);
+    assert.ok(r.scrubbedEnv.includes("CORP_INTERNAL_ID"));
+    const childEnv = JSON.parse(fs.readFileSync(envOut, "utf8"));
+    assert.equal("CORP_INTERNAL_ID" in childEnv, false);
+    assert.equal(childEnv.MY_BUILD_KEY, "kept-by-config");
+  } finally {
+    unsetParent();
+    restore();
+  }
+});
+
+test("runChildSession: scrub reporting carries names only, never values", async () => {
+  const { restore } = withMock();
+  const unsetParent = withParentEnv({ X_CANARY_SECRET: "the-secret-value" });
+  try {
+    const r = await runChildSession(opts(manifest()), { runnerPath: MOCK_PI });
+    assert.equal(r.status, "ok", r.reason);
+    assert.ok(r.scrubbedEnv.includes("X_CANARY_SECRET"));
+    assert.equal(JSON.stringify(r).includes("the-secret-value"), false);
+  } finally {
+    unsetParent();
+    restore();
+  }
+});

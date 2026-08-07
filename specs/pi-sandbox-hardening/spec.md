@@ -73,11 +73,13 @@ the `pi-code worktree run` handoff exec's the worker pi with the full host env.
   those names before the worker exec; the CLI computes it with the same
   `scrubEnv` against the launcher's environment. Because `pi-code`
   diagnostics resolve project config as **untrusted** outside a session, the
-  CLI applies the FR-3 asymmetry: it reads the off-switch and keep additions
-  from **global/user config only**, and honors project-local input solely for
-  `env_scrub_extra` (tightening). A project-local `security.env_scrub=false`
-  is **ignored** at this boundary — launcher-side opt-out is
-  global-config-authoritative. Launcher stays bash-3.2 compatible. If the CLI
+  CLI applies the FR-3 asymmetry structurally: project layers are simply
+  never read untrusted (the loader's existing contract), so the whole scrub
+  policy — off-switch, keeps, extras — resolves from **global/user config +
+  env/cli overrides only** at this boundary. A project-local
+  `security.env_scrub=false` is **ignored** here — launcher-side opt-out is
+  global-config-authoritative — and a checked-in `env_scrub_extra` tightens
+  the in-session boundary only. Launcher stays bash-3.2 compatible. If the CLI
   call fails while scrubbing is enabled, the handoff **fails closed** (never
   continues silently unscrubbed — refused, surfaced, audited).
 - **FR-5 — Audit + honesty.** Each scrubbed spawn audits `env.scrub` with the
@@ -134,8 +136,9 @@ the `pi-code worktree run` handoff exec's the worker pi with the full host env.
 3. `security.env_scrub=false` restores pass-through **from a trusted scope
    only**: global/user config anywhere; project-local config only in a
    trusted session (in-session boundary). At the launcher boundary a
-   project-local opt-out is provably ignored (test), and a project-local
-   `env_scrub_extra` still tightens. All three keys lint-registered.
+   project-local opt-out is provably ignored (test); checked-in
+   `env_scrub_extra` tightens the in-session boundary (the untrusted CLI
+   never reads project layers at all). All three keys lint-registered.
 4. Every scrubbed spawn emits an `env.scrub` audit record with removed names +
    count; no secret **value** ever appears in any log/audit/artifact.
 5. The battery gains the scrub invariant; `pi-tests.yml` gates stay green
