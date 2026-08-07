@@ -672,8 +672,8 @@ assert "pre-existing init scaffolds without leaking manifest fragments" \
 assert "pre-existing init leaves the manifest untouched" \
   "[ \"\$MANI_BEFORE\" = \"\$(cat \"\$EXT_DIR2/.code-copilot-team/.cct-init.json\")\" ]"
 # A partial/stale template source must FAIL the scaffold, not half-succeed (P1).
-PART_HOME="$TMP/ext-partial-home"; mkdir -p "$PART_HOME/resources/extension-template"
-printf '// stale partial\n' > "$PART_HOME/resources/extension-template/cct-guardrails.ts"
+PART_HOME="$TMP/ext-partial-home"; mkdir -p "$PART_HOME/pi/resources/extension-template"
+printf '// stale partial\n' > "$PART_HOME/pi/resources/extension-template/cct-guardrails.ts"
 EXT_DIR3="$TMP/ext-partial"; mkdir -p "$EXT_DIR3"
 PART_RC=0
 CCT_HOME="$PART_HOME" PATH="$BASE_PATH" "$LAUNCHER" init "$EXT_DIR3" --extension-template >/dev/null 2>&1 || PART_RC=$?

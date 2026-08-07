@@ -30,11 +30,13 @@ T10.3 contract, the same fields the subagent runner parses):
 
 ```bash
 out="$(pi-code -- --mode json -p "…" --no-session)" || { echo "run failed: $?"; exit 1; }
-echo "$out" | jq -r 'select(.type == "result") | "\(.subtype) cost=\(.total_cost_usd)"'
+# jq -e: exit nonzero when no envelope matched (missing envelope = error).
+echo "$out" | jq -e -r 'select(.type == "result") | "\(.subtype) cost=\(.total_cost_usd)"'
 ```
 
-A nonzero exit is a failed run regardless of any envelope; treat "no
-envelope in the output" as an error too (both rules mirror the runner).
+A nonzero exit is a failed run regardless of any envelope (the T7.2
+runner's rule); also treat "no envelope in the output" as an error — that
+second rule is STRICTER than the runner, and recommended for CI.
 
 ## Minimal CI job (GitHub Actions shape)
 
@@ -46,13 +48,19 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
+      # setup.sh lives in the CCT repo — check it out alongside your
+      # project (or vendor it) and run its adapter installer; it installs
+      # the pi-code launcher into ~/.local/bin (on PATH in Actions).
       - name: Install pi + the CCT harness
         run: |
           npm install -g @earendil-works/pi-coding-agent
-          ./adapters/pi/setup.sh
+          git clone --depth 1 https://github.com/gosha70/code-copilot-team cct
+          ./cct/adapters/pi/setup.sh
       - name: Enforced headless run
+        shell: bash  # bash -eo pipefail: a nonzero pi exit fails the step even through the pipe
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TASK_PROMPT: ${{ inputs.task }}
         run: |
           pi-code -- --mode json -p "$TASK_PROMPT" --no-session | tee run.jsonl
           jq -e 'select(.type=="result") | .subtype == "success"' run.jsonl > /dev/null
