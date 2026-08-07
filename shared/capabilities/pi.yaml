@@ -121,6 +121,22 @@ capabilities:
       CCT_SANDBOX declaration. The runtime cannot itself create a sandbox.
     status_probe: "detectSandbox()/sandboxGate() at session_start; tool_call denial when blocked."
 
+  - id: security.env-scrub
+    implementation_kind: cct-first-party
+    runtime_status: degraded
+    reason: >-
+      Subagent child sessions spawn with a scrubbed env by default (fail-safe
+      ON; scrub:false is the trusted opt-out), and the worktree-run handoff
+      unsets the CLI-computed scrub list before exec — fail-closed on a
+      scrub-list failure, removed NAMES (never values) audited at the worker's
+      session_start (env.scrub). Config is trust-asymmetric (FR-004a): both
+      in-repo layers may only tighten (security.env_scrub/_keep/_extra);
+      loosening requires user-controlled scopes (global config, CCT_CONFIG__*
+      env, --set). Degraded because the primary interactive session's env is
+      untouched by design and the runtime cannot verify what the OS/sandbox
+      exposes beneath it.
+    status_probe: "scrubEnv() at the runChildSession spawn; pi-code env scrub-list + unset at the worktree-run handoff; env.scrub audit at worker session_start."
+
   - id: memory.promotion
     implementation_kind: cct-first-party
     runtime_status: degraded

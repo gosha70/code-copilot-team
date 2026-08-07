@@ -22,6 +22,10 @@ import { BUILTIN_PROFILES, resolveProfileChain } from "./profiles.ts";
 import type { Profile } from "./profiles.ts";
 import { buildImportedLayer } from "../policy/permission-profiles.ts";
 import { applyFloorValue, isFloorPath } from "./floor.ts";
+import {
+  ENV_CLI_SETS_NAME,
+  ENV_CONFIG_CARRIER_PREFIX,
+} from "../policy/env-scrub.ts";
 import { CONFIG_SCHEMA_VERSION, CONFIG_VERSION_KEY, migrateTable } from "./migrate.ts";
 import type { MigrationNote } from "./migrate.ts";
 import type { FloorDecision } from "./floor.ts";
@@ -80,6 +84,9 @@ export const BUILTIN_DEFAULTS: TomlTable = {
     allow_secret_paths: false,
     protected_paths: [".env", ".git/config", "**/*.pem", "**/id_rsa*"],
     denied_commands: ["git push --force", "git reset --hard", "rm -rf /"],
+    env_scrub: true,
+    env_scrub_keep: [],
+    env_scrub_extra: [],
   },
   review: { mandatory: false, after_phase: true, allow_recursive: false },
   verification: { on_stop: false, required: [] },
@@ -269,15 +276,17 @@ export function loadLayeredConfig(opts: LoadOptions): LoadResult {
   const envTable: TomlTable = {};
   let envAny = false;
   for (const key of Object.keys(env).sort()) {
-    if (!key.startsWith("CCT_CONFIG__")) continue;
-    const dotted = key.slice("CCT_CONFIG__".length).split("__").join(".").toLowerCase();
+    if (!key.startsWith(ENV_CONFIG_CARRIER_PREFIX)) continue;
+    const dotted = key.slice(ENV_CONFIG_CARRIER_PREFIX.length).split("__").join(".").toLowerCase();
     setPath(envTable, dotted, coerceScalar(env[key] as string));
     envAny = true;
   }
   if (envAny) layers.push({ name: "env", source: "<env:CCT_CONFIG__*>", table: envTable });
 
   // CLI layer: pi-code --set a.b=v (newline-joined in CCT_CLI_SETS or opts).
-  const sets = opts.cliSets ?? (env.CCT_CLI_SETS ? env.CCT_CLI_SETS.split("\n") : []);
+  const sets =
+    opts.cliSets ??
+    (env[ENV_CLI_SETS_NAME] ? (env[ENV_CLI_SETS_NAME] as string).split("\n") : []);
   const cliTable: TomlTable = {};
   let cliAny = false;
   for (const entry of sets) {

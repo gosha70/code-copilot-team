@@ -523,6 +523,57 @@ export default async function (pi: any): Promise<void> {
       );
       state.worktreeIsolation = isolationStateFromAttach(attach.status);
       if (attach.warning) state.warnings.push(attach.warning);
+      // #173 (FR-5): every worktree-run handoff leaves an env.scrub record —
+      // "scrubbed" with the removed NAMES (never values; count 0 is still
+      // recorded) via CCT_ENV_SCRUBBED, or "disabled" with the config layer
+      // that turned scrubbing off via CCT_ENV_SCRUB_OFF — so an unscrubbed
+      // worker is never silent (phase-2 review F3). Both vars are untrusted
+      // input from the spawning launcher: a session in a real worker
+      // worktree could fabricate them (attach validation above bounds who
+      // gets here); names are shape-validated, bounded, and truncation is
+      // marked rather than silent (F5).
+      if (process.env.CCT_WORKER_ID) {
+        // Precedence: a present CCT_ENV_SCRUBBED (evidence a scrub RAN) beats
+        // CCT_ENV_SCRUB_OFF, and an empty/garbage OFF value is ignored — so
+        // neither a stale inherited var nor a forged empty one can record a
+        // scrubbed handoff as disabled (final-round review F2/F3).
+        const offLayer = String(process.env.CCT_ENV_SCRUB_OFF ?? "")
+          .replace(/[^a-zA-Z-]/g, "")
+          .slice(0, 40);
+        if (
+          process.env.CCT_ENV_SCRUBBED === undefined &&
+          offLayer.length > 0
+        ) {
+          audit({
+            mode: wtMode,
+            actor: "session_start",
+            decision: "disabled",
+            rule: "env.scrub",
+            subject: `off:${offLayer}`,
+            origin: "worktree",
+          });
+        } else if (process.env.CCT_ENV_SCRUBBED !== undefined) {
+          const allNames = String(process.env.CCT_ENV_SCRUBBED)
+            .split(",")
+            // eslint-disable-next-line no-control-regex
+            .map((n) => n.trim().replace(/[\x00-\x1f\x7f]/g, ""))
+            .filter((n) => n.length > 0 && n.length <= 100)
+            .slice(0, 1000);
+          const total = allNames.length;
+          const shown = allNames.slice(0, 200);
+          let joined = shown.join(",");
+          const truncated = total > shown.length || joined.length > 400;
+          joined = joined.slice(0, 400);
+          audit({
+            mode: wtMode,
+            actor: "session_start",
+            decision: "scrubbed",
+            rule: "env.scrub",
+            subject: `${total}:${joined}${truncated ? ",[truncated]" : ""}`,
+            origin: "worktree",
+          });
+        }
+      }
       const rec = reconcileOnStart(state.cwd, { mode: wtMode });
       if (rec.foreign.length > 0) {
         state.warnings.push(

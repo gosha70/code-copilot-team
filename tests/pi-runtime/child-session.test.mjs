@@ -220,3 +220,147 @@ test("runChildSession: nonzero exit WITH an envelope is still error (not ok)", a
     restore();
   }
 });
+
+// ── env scrubbing at the spawn boundary (#173, pi-sandbox-hardening) ─────────
+
+// Set credential-shaped vars on THIS (parent) process, run the child against
+// the mock, and assert on the env the child ACTUALLY received. The dump is
+// NAMES plus CCT_*/MOCK_PI_* sample values only (test-owned canaries) — real
+// credential values are never persisted (review F4) — and the dump dir is
+// removed in finally.
+function withParentEnv(extra) {
+  const prev = {};
+  for (const [k, v] of Object.entries(extra)) {
+    prev[k] = process.env[k];
+    process.env[k] = v;
+  }
+  return () => {
+    for (const k of Object.keys(extra)) {
+      if (prev[k] === undefined) delete process.env[k];
+      else process.env[k] = prev[k];
+    }
+  };
+}
+
+function envDumpFile() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cct-cs-env-"));
+  return {
+    file: path.join(dir, "env.json"),
+    cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
+test("runChildSession: default scrub removes credentials from the child env", async () => {
+  const { restore } = withMock();
+  const dump = envDumpFile();
+  const unsetParent = withParentEnv({
+    MOCK_PI_ENV_OUT: dump.file,
+    AWS_SECRET_ACCESS_KEY: "s3cr3t",
+    GITHUB_TOKEN: "ghp_x",
+    CCT_CONFIG__providers__api_key: "sk-x", // env-config carrier: scrubbed
+    CCT_CLI_SETS: "providers.api_key=sk-cli", // --set carrier: scrubbed
+    CCT_SCRUB_CANARY_TOKEN: "kept-by-cct-prefix",
+  });
+  try {
+    const r = await runChildSession(opts(manifest()), { runnerPath: MOCK_PI });
+    assert.equal(r.status, "ok", r.reason);
+    assert.ok(r.scrubbedEnv.includes("AWS_SECRET_ACCESS_KEY"));
+    assert.ok(r.scrubbedEnv.includes("GITHUB_TOKEN"));
+    const child = JSON.parse(fs.readFileSync(dump.file, "utf8"));
+    assert.equal(child.names.includes("AWS_SECRET_ACCESS_KEY"), false);
+    assert.equal(child.names.includes("GITHUB_TOKEN"), false);
+    assert.equal(child.names.includes("CCT_CONFIG__providers__api_key"), false);
+    assert.equal(child.names.includes("CCT_CLI_SETS"), false);
+    assert.ok(r.scrubbedEnv.includes("CCT_CONFIG__providers__api_key"));
+    assert.ok(r.scrubbedEnv.includes("CCT_CLI_SETS"));
+    // Baselines + the CCT contract survive; MOCK_PI_ENV_OUT itself survived
+    // (or the dump could not have been written).
+    assert.ok(child.names.includes("PATH"));
+    assert.equal(child.sample.CCT_SCRUB_CANARY_TOKEN, "kept-by-cct-prefix");
+    assert.equal(child.sample.CCT_AGENT_DEPTH, "1"); // built.env applied after scrub
+  } finally {
+    unsetParent();
+    restore();
+    dump.cleanup();
+  }
+});
+
+test("runChildSession: scrub=false passes the host env through (trusted opt-out)", async () => {
+  const { restore } = withMock();
+  const dump = envDumpFile();
+  const unsetParent = withParentEnv({
+    MOCK_PI_ENV_OUT: dump.file,
+    GITHUB_TOKEN: "ghp_visible",
+  });
+  try {
+    const r = await runChildSession(opts(manifest(), { scrub: false }), {
+      runnerPath: MOCK_PI,
+    });
+    assert.equal(r.status, "ok", r.reason);
+    assert.deepEqual(r.scrubbedEnv, []);
+    const child = JSON.parse(fs.readFileSync(dump.file, "utf8"));
+    assert.ok(child.names.includes("GITHUB_TOKEN")); // pass-through by NAME
+  } finally {
+    unsetParent();
+    restore();
+    dump.cleanup();
+  }
+});
+
+test("runChildSession: an explicit policy (config-resolved) is honored", async () => {
+  const { restore } = withMock();
+  const dump = envDumpFile();
+  const unsetParent = withParentEnv({
+    MOCK_PI_ENV_OUT: dump.file,
+    CORP_INTERNAL_ID: "tightened-away",
+    MY_BUILD_KEY: "kept-by-config",
+  });
+  try {
+    const r = await runChildSession(
+      opts(manifest(), {
+        scrub: {
+          patterns: ["CORP_*", "*_TOKEN"],
+          keep: ["PATH", "HOME", "TMPDIR", "CCT_*", "MOCK_PI_*", "MY_BUILD_KEY"],
+        },
+      }),
+      { runnerPath: MOCK_PI },
+    );
+    assert.equal(r.status, "ok", r.reason);
+    assert.ok(r.scrubbedEnv.includes("CORP_INTERNAL_ID"));
+    const child = JSON.parse(fs.readFileSync(dump.file, "utf8"));
+    assert.equal(child.names.includes("CORP_INTERNAL_ID"), false);
+    assert.ok(child.names.includes("MY_BUILD_KEY"));
+  } finally {
+    unsetParent();
+    restore();
+    dump.cleanup();
+  }
+});
+
+test("runChildSession: scrub reporting carries names only, never values", async () => {
+  const { restore } = withMock();
+  const unsetParent = withParentEnv({ X_CANARY_SECRET: "the-secret-value" });
+  try {
+    const r = await runChildSession(opts(manifest()), { runnerPath: MOCK_PI });
+    assert.equal(r.status, "ok", r.reason);
+    assert.ok(r.scrubbedEnv.includes("X_CANARY_SECRET"));
+    assert.equal(JSON.stringify(r).includes("the-secret-value"), false);
+  } finally {
+    unsetParent();
+    restore();
+  }
+});
+
+test("runChildSession: cap-exceeded reports NO scrub (no spawn happened)", async () => {
+  const unsetParent = withParentEnv({ X_CAP_TEST_TOKEN: "t" });
+  try {
+    const r = await runChildSession(
+      opts(manifest(), { depth: 2, maxRecursion: 2 }),
+      { runnerPath: MOCK_PI },
+    );
+    assert.equal(r.status, "cap-exceeded");
+    assert.deepEqual(r.scrubbedEnv, []); // review F6
+  } finally {
+    unsetParent();
+  }
+});

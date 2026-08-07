@@ -19,6 +19,9 @@
 
 import { spawn } from "node:child_process";
 
+import { defaultScrubPolicy, scrubEnv } from "../policy/env-scrub.ts";
+import type { ScrubPolicy, ScrubResult } from "../policy/env-scrub.ts";
+
 import type { AgentManifest, ThinkingLevel } from "./manifest.ts";
 import { recursionExceeded } from "./caps.ts";
 import { AGENT_DEPTH_ENV } from "./caps.ts";
@@ -37,6 +40,13 @@ export interface ChildRunOptions {
   timeoutSec: number;
   depth: number;
   maxRecursion: number;
+  /**
+   * Env scrub for the child (#173, FR-2): omitted -> the built-in default
+   * policy applies (fail-safe ON — a caller that forgets config still scrubs);
+   * `false` -> pass-through (the caller resolved a trusted-scope opt-out);
+   * a ScrubPolicy -> used as given (caller resolved config + trust).
+   */
+  scrub?: ScrubPolicy | false;
 }
 
 export type ChildStatus =
@@ -51,6 +61,8 @@ export interface ChildResult {
   costUsd: number | null;
   /** Manifest fields with no pi surface, reported not enforced (never dropped). */
   notEnforced: string[];
+  /** Env names removed by the scrub policy before spawn (#173); [] when off. */
+  scrubbedEnv: string[];
   reason?: string;
 }
 
@@ -151,22 +163,38 @@ export function runChildSession(
   opts: { runnerPath?: string; signal?: AbortSignal } = {},
 ): Promise<ChildResult> {
   const built = buildChildArgv(o);
+
+  if (recursionExceeded(o.depth, o.maxRecursion)) {
+    // No spawn happens on this path, so no scrub is performed or reported
+    // (review F6: never report a scrub for a spawn that never occurred).
+    return Promise.resolve({
+      ran: false,
+      status: "cap-exceeded",
+      exitCode: null,
+      sessionId: null,
+      subtype: null,
+      costUsd: null,
+      notEnforced: built.notEnforced,
+      scrubbedEnv: [],
+      reason: `recursion cap: depth ${o.depth} may not spawn a child past max_recursion=${o.maxRecursion}`,
+    });
+  }
+
+  // #173 (FR-2): scrub the inherited host env BEFORE spawn — names only,
+  // values never read. built.env (the CCT contract vars) is applied after
+  // scrubbing and therefore always survives.
+  const scrubbed: ScrubResult =
+    o.scrub === false
+      ? { env: { ...process.env }, removed: [] }
+      : scrubEnv(process.env, o.scrub ?? defaultScrubPolicy());
   const base: Omit<ChildResult, "status" | "ran"> = {
     exitCode: null,
     sessionId: null,
     subtype: null,
     costUsd: null,
     notEnforced: built.notEnforced,
+    scrubbedEnv: scrubbed.removed,
   };
-
-  if (recursionExceeded(o.depth, o.maxRecursion)) {
-    return Promise.resolve({
-      ...base,
-      ran: false,
-      status: "cap-exceeded",
-      reason: `recursion cap: depth ${o.depth} may not spawn a child past max_recursion=${o.maxRecursion}`,
-    });
-  }
 
   const runner = opts.runnerPath || process.env.CCT_PI_BIN || "pi";
 
@@ -179,7 +207,7 @@ export function runChildSession(
 
     const child = spawn(runner, built.args, {
       cwd: o.cwd,
-      env: { ...process.env, ...built.env },
+      env: { ...scrubbed.env, ...built.env },
     });
 
     const done = (r: ChildResult): void => {

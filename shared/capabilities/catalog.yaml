@@ -150,6 +150,17 @@ capabilities:
     default: disabled
     security_level: enforcing
 
+  - id: security.env-scrub
+    description: >-
+      Name-based scrubbing of credential-shaped environment variables at
+      harness-controlled spawn boundaries (subagent child sessions, worker
+      handoffs), with a trust-asymmetric configuration surface: in-repo
+      configuration may tighten but never loosen the policy. Values are never
+      read or logged; the primary interactive session's environment is out of
+      scope by design.
+    default: disabled
+    security_level: enforcing
+
   - id: memory.promotion
     description: >-
       Explicit promotion/deletion of durable memories with provenance, wiki-first

@@ -46,7 +46,13 @@ The linter rejects unknown keys, so its allowlist *is* the schema. Groups:
 - **`verification.*`** — `on_stop`, `required` (the gate list).
 - **`security.*`** — `fail_closed`, `deny_network`, `sandbox_required`,
   `allow_package_install`, `allow_secret_paths`, `protected_paths`,
-  `denied_commands`. (Several are **protected** — floor-monotonic.)
+  `denied_commands`. (Several are **protected** — floor-monotonic.) Plus the
+  spawn-boundary env scrub (#173): `env_scrub` (default **on**),
+  `env_scrub_keep` (extra exact/`PREFIX_*` names to keep),
+  `env_scrub_extra` (extra name globs to remove). These are
+  **trust-asymmetric**, not floor-monotonic: both in-repo layers may only
+  tighten; loosening requires global config, `CCT_CONFIG__*` env, or `--set`
+  (see `docs/security-model.md`).
 - **`permissions.paths.*`** (`ask`/`deny`) + **`tools.*`** (`allow`/`deny`) +
   **`permissions.commands.ask`** — the allow/ask/deny engine.
 - **`limits.*`** — `timeout_sec`, `max_review_rounds`, `max_tokens`.

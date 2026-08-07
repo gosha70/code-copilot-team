@@ -19,6 +19,7 @@ deep suites exercise; this manifest points at where the depth lives.
 | tamper-safe ledgers | `security-battery` #7 | `team.test.mjs` (reconcile), `worktree-planners.test.mjs` |
 | fail-closed team/worktree | `security-battery` #8 | `team.test.mjs`, `worktree-git.test.mjs` |
 | (honesty boundary) | `security-battery` #9 | the capability registry + its drift guard |
+| env scrubbing at spawn boundaries (#173) | `security-battery` #10 | `env-scrub.test.mjs` (policy + trust asymmetry), `child-session.test.mjs` (real spawn), `tests/test-pi-launcher.sh` (worktree-run handoff, opt-out scopes) |
 
 ## DoD item 11 — security vectors → tests
 
@@ -32,6 +33,7 @@ deep suites exercise; this manifest points at where the depth lives.
 | **fork bombs** | **degraded, not parity** — see below |
 | worktree cross-contamination | `worktree-git.test.mjs` (ownership conflict refusal, isolation, foreign-worktree protection) |
 | analytics secret leakage | `worker-analytics.test.mjs` (redacted correlation), `team.test.mjs` (redacted messages) |
+| host credentials leaking into sub-sessions | `security-battery` #10; `child-session.test.mjs` (scrubbed spawn); `test-pi-launcher.sh` (scrubbed handoff; repo-local opt-out ignored) |
 
 ## DoD item 12 — cross-adapter contract → tests (shared semantics only)
 
@@ -76,3 +78,19 @@ reported honestly (never `enabled`) in the capability registry.
 T11.5 added **tests + this manifest only** — no new enforcement, no changed
 semantics. Every battery assertion imports an existing function; every "gap"
 closed was a missing test, not a missing behavior.
+
+## #173 closure mapping (pi-sandbox-hardening)
+
+Issue #173's three asks → delivery, honestly bounded:
+
+| #173 ask | Delivered by |
+|---|---|
+| 1. Backend integration (evaluate/choose isolation wrapper) | T10.1 `policy/sandbox.ts` (SandboxProvider, docker + env-declaration backends, fail-closed `sandboxGate`) + T10.4 `sandbox-backends-eval.md` (explicit-declaration recommendation; no blind detectors) |
+| 2. Env-var scrubbing before exposing the shell to the subagent | `policy/env-scrub.ts` + the scrubbed `runChildSession` spawn + the scrubbed `worktree run` handoff (`pi-code env scrub-list`, fail-closed), `security.env-scrub` capability (Pi degraded), battery #10 |
+| 3. Execution battery runs cleanly in CI | this battery + `cross-adapter-contract.test.mjs`, executed by `pi-tests.yml` behind an anti-skip guard |
+
+Containment (#173 AC-1) remains **degraded by construction**: the operator's
+sandbox contains; Pi detects, gates fail-closed, and never fabricates a
+sandbox (`security.sandbox` degraded). The primary interactive session's env
+is not scrubbed (it is the user's own shell) — `security.env-scrub` is
+reported degraded for exactly that boundary.

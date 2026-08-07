@@ -30,6 +30,7 @@ import {
   provisionWorktree,
 } from "./agents/worktree-lifecycle.ts";
 import { readReport } from "./agents/team-commands.ts";
+import { resolveScrubPolicy, scrubEnv } from "./policy/env-scrub.ts";
 
 export interface CliResult {
   out: string;
@@ -612,6 +613,45 @@ function team(
   };
 }
 
+const ENV_USAGE = "usage: pi-code env scrub-list [--json]";
+
+/**
+ * `pi-code env scrub-list` (#173, FR-4) — the env names the launcher must
+ * unset before the worktree-run worker handoff, computed by the SAME
+ * scrubEnv/resolveScrubPolicy the runtime uses (single pattern source).
+ * This CLI resolves project config as UNTRUSTED (C-3), so the policy here is
+ * global/env/cli-scope by construction — a repo-local opt-out or keep never
+ * reaches this boundary. Read-only; prints names one per line (empty when
+ * scrubbing is disabled), or JSON with the enabled flag + trust note.
+ */
+function envCmd(
+  opts: CliOptions,
+  positional: string[],
+  json: boolean,
+): CliResult {
+  if ((positional[1] ?? "") !== "scrub-list") {
+    return { out: ENV_USAGE, code: 64 };
+  }
+  const cfg = load(opts);
+  const { enabled, disabledBy, policy } = resolveScrubPolicy(cfg.resolved);
+  const names = enabled ? scrubEnv(process.env, policy).removed : [];
+  if (json) {
+    return {
+      out: jsonOut({ enabled, disabledBy, names, trustNote: TRUST_NOTE }),
+      code: 0,
+    };
+  }
+  // Text mode is the launcher protocol: names one per line, or an explicit
+  // disabled marker. The marker embeds '=' because an environment variable
+  // NAME can never contain '=' (execve environ format) — so no env var,
+  // however hostile its name, can forge or shadow this line (a '#'-prefixed
+  // marker would be forgeable: names may contain '#').
+  if (!enabled) {
+    return { out: `=disabled=${disabledBy ?? "config"}`, code: 0 };
+  }
+  return { out: names.join("\n"), code: 0 };
+}
+
 export function runCli(opts: CliOptions): CliResult {
   const args = [...opts.argv];
   const json = args.includes("--json");
@@ -639,9 +679,11 @@ export function runCli(opts: CliOptions): CliResult {
       return worktree(opts, json);
     case "team":
       return team(opts, positional, json);
+    case "env":
+      return envCmd(opts, positional, json);
     default:
       return {
-        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export | resources | provenance | continuity | worktree | team)`,
+        out: `unknown command '${command}' (expected: doctor | config | config explain <key> | features | export | resources | provenance | continuity | worktree | team | env scrub-list)`,
         code: 64,
       };
   }

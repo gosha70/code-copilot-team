@@ -105,6 +105,13 @@ export function seedCapabilities(): CapabilityRecord[] {
         "Enforces the autonomous/ci no-unrestricted-host rule — rejects tool execution (fail-closed) when a sandbox is required but the environment is host-unrestricted and no override is set. Detection is best-effort (Docker via cgroup/.dockerenv; micro-vm/remote via operator CCT_SANDBOX declaration); the runtime cannot itself create a sandbox.",
     },
     {
+      id: "security.env-scrub",
+      implementation_kind: "cct-first-party",
+      runtime_status: "degraded",
+      reason:
+        "Name-based credential scrubbing at the CCT-controlled spawn boundaries (#173): subagent child sessions spawn with a scrubbed env by default (fail-safe ON; scrub:false is the trusted opt-out), and the worktree-run handoff unsets the CLI-computed scrub list (single TS source, pi-code env scrub-list) before exec — fail-closed on a scrub-list failure, with the removed NAMES (never values) audited at the worker session_start (env.scrub). Config is trust-asymmetric (FR-004a): both in-repo layers (config.toml, config.local.toml) may only TIGHTEN (security.env_scrub/_keep/_extra); loosening requires user-controlled scopes (global config, CCT_CONFIG__* env, --set). DEGRADED because the primary interactive session's env is untouched by design (it is the user's own shell) and the runtime cannot verify what the OS/sandbox exposes beneath it.",
+    },
+    {
       id: "memory.promotion",
       implementation_kind: "cct-first-party",
       runtime_status: "degraded",
