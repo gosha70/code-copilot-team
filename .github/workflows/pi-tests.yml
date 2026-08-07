@@ -4,7 +4,10 @@ on:
   push:
     branches: [master, main]
   pull_request:
-    branches: [master, main]
+    # plan/** covers STACKED PRs (base = another plan/* branch, per the
+    # stacked-PR flow adopted 2026-08-07) — without it a stacked PR gets
+    # zero CI until its base retargets to master after the parent merges.
+    branches: [master, main, "plan/**"]
 
 permissions:
   contents: read
