@@ -78,3 +78,4 @@ Detailed guides live in [`docs/`](docs/):
 - [Extension development](docs/extension-development.md) — add commands, capabilities, tests, generated resources.
 - [Unattended runs & continuity](docs/unattended-runs.md) — the `unattended` posture, `pi-code continuity`, and how work survives compaction/restart (honestly degraded).
 - [Parallel worker worktrees](docs/worktree-workers.md) — running a worker session inside its own git worktree: the `CCT_WORKER_*` contract, the pre-spawn `cwd` handoff, fail-closed reconcile, and explicit-only cleanup.
+- [Team coordination](docs/team-coordination.md) — opt-in `/cct:team` local coordination: the `CCT_TEAM_*` declared-identity contract (attribution, not authentication), the canonical-root/fail-closed ledger, per-mutation authz tiers, and the `pi-code team` read-only CLI.

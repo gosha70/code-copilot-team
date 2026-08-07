@@ -263,7 +263,7 @@ test("withLedgerLock: a held lock blocks a second acquirer until released; timeo
   fs.mkdirSync(lockDir); // hold the lock out-of-band
   assert.throws(
     () => withLedgerLock(repo, () => "never", { timeoutMs: 120, staleMs: 60_000 }),
-    /could not acquire worktree ledger lock/,
+    /could not acquire worktrees ledger lock/,
   );
   fs.rmdirSync(lockDir);
   // Once free, it acquires and runs.
@@ -573,7 +573,7 @@ test("withLedgerLock does NOT reclaim a lock whose owner process is alive, even 
   // Must time out (not steal a live holder's lock) despite the old mtime.
   assert.throws(
     () => withLedgerLock(repo, () => "never", { staleMs: 1000, timeoutMs: 150 }),
-    /could not acquire worktree ledger lock/,
+    /could not acquire worktrees ledger lock/,
   );
   // And it must NOT have removed the live owner's lock.
   assert.ok(fs.existsSync(lockDir), "live owner's lock left intact");

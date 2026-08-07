@@ -50,6 +50,10 @@ import {
   worktreeListReport,
 } from "./agents/worktree-lifecycle.ts";
 import type { IsolationState } from "./agents/worktree-lifecycle.ts";
+import {
+  runTeamCommand,
+  teamAdvisory,
+} from "./agents/team-commands.ts";
 import { hookMappingReport, translateToolCall } from "./hooks/events.ts";
 import { dispatchHooks, resolveHookScripts, resolveHookScriptsDir } from "./hooks/adapter.ts";
 import { defaultProjectTrustFinding, trustDrift } from "./config/trust.ts";
@@ -531,6 +535,15 @@ export default async function (pi: any): Promise<void> {
         );
       }
     }
+    // Slice A of #174 (#185): a read-only team status advisory when teams are
+    // enabled and a valid ledger exists at the canonical root. Never mutates.
+    {
+      const teamAdv = teamAdvisory(state.cwd, {
+        enabled: cfg("agents.teams_enabled") === true,
+        mode: resolveAuditMode(state.interactive),
+      });
+      if (teamAdv) state.warnings.push(teamAdv);
+    }
     injectAlwaysContext(state, ctx);
     if (!(state.profile in BUILTIN_PROFILES)) {
       state.warnings.push(`unknown profile '${state.profile}' — using defaults chain only`);
@@ -775,6 +788,32 @@ export default async function (pi: any): Promise<void> {
       return emit(
         ctx,
         `unknown subcommand '${sub}' (list | cleanup <workerId> [--force] | reconcile)`,
+      );
+    },
+  });
+
+  pi.registerCommand?.("cct:team", {
+    description:
+      "Team coordination (opt-in, agents.teams_enabled): /cct:team create|join|task|assign|approve|activate|claim|complete|fail|message|leave|recover|shutdown|close|status|synthesize",
+    handler: async (ctx: any, args?: string) => {
+      const argv = (typeof args === "string" ? args : "")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+      const mc = Number(cfg("autonomy.max_concurrency"));
+      return emit(
+        ctx,
+        runTeamCommand(
+          {
+            cwd: state.cwd,
+            env: process.env,
+            mode: resolveAuditMode(state.interactive),
+            teamsEnabled: cfg("agents.teams_enabled") === true,
+            maxConcurrency: Number.isFinite(mc) && mc > 0 ? mc : undefined,
+            now: new Date().toISOString(),
+          },
+          argv,
+        ),
       );
     },
   });

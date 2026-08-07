@@ -459,6 +459,38 @@ else
   echo "  SKIP: worktree run (git unavailable)"
 fi
 
+# ── #185: read-only `pi-code team` CLI (Slice A of #174) ─────────────────────
+if command -v git >/dev/null 2>&1; then
+  TEAM_REPO="$TMP/team-repo"; mkdir -p "$TEAM_REPO/.cct"
+  git -C "$TEAM_REPO" init -q -b master
+  git -C "$TEAM_REPO" config user.email t@e.com
+  git -C "$TEAM_REPO" config user.name T
+  echo seed > "$TEAM_REPO/README.md"; git -C "$TEAM_REPO" add -A; git -C "$TEAM_REPO" commit -q -m seed
+  # A valid team ledger (hand-crafted; loadTeamLedger sanitizes/reconciles).
+  cat > "$TEAM_REPO/.cct/team.json" <<JSON
+{"version":1,"teamId":"alpha","createdAt":"2026-08-06T00:00:00Z","status":"forming","members":[{"memberId":"lead1","role":"lead","status":"active","joinedAt":"2026-08-06T00:00:00Z"}],"tasks":[],"planApproval":{"required":true,"approved":false,"approvedBy":null,"approvedAt":null},"shutdown":{"requested":false,"requestedBy":null,"reason":"","at":null}}
+JSON
+  # Read-only status renders even WITHOUT agents.teams_enabled (project untrusted).
+  TEAM_OUT=$(cd "$TEAM_REPO" && CCT_HOME="$TMP/team-home" PATH="$DIAG_PATH" "$LAUNCHER" team status --json 2>&1) || true
+  assert "pi-code team status --json renders a valid ledger read-only" \
+    "echo \"\$TEAM_OUT\" | grep -q '\"teamId\": \"alpha\"'"
+  assert "pi-code team status --json reports enabled + trust note" \
+    "echo \"\$TEAM_OUT\" | grep -q '\"enabled\"' && echo \"\$TEAM_OUT\" | grep -q 'trustNote'"
+  # Missing ledger in a git repo -> "no team" (distinct from a non-repo).
+  NOTEAM_REPO="$TMP/noteam-repo"; mkdir -p "$NOTEAM_REPO"
+  git -C "$NOTEAM_REPO" init -q -b master
+  git -C "$NOTEAM_REPO" config user.email t@e.com
+  git -C "$NOTEAM_REPO" config user.name T
+  echo seed > "$NOTEAM_REPO/README.md"; git -C "$NOTEAM_REPO" add -A; git -C "$NOTEAM_REPO" commit -q -m seed
+  NOTEAM=$(cd "$NOTEAM_REPO" && CCT_HOME="$TMP/team-home" PATH="$DIAG_PATH" "$LAUNCHER" team status 2>&1) || true
+  assert "pi-code team status reports 'no team' when absent" \
+    "echo \"\$NOTEAM\" | grep -qi 'no team'"
+  assert "help documents the team command" \
+    "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'team status'"
+else
+  echo "  SKIP: pi-code team (git unavailable)"
+fi
+
 # ── T6.4: init / sync (FR-000a) ─────────────────────────────
 echo "--- init / sync ---"
 
