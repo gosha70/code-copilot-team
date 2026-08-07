@@ -76,3 +76,14 @@ leaves **#174** open.
   source (currently an INFO log). Task 8 docs MUST note that derived ids
   now flow into exports/graph/MCP/dashboard artifacts that previously said
   `local` (inherent to D-1; shareability note).
+
+- **Final verdict round (review #5):** APPROVE. Its N-1 (non-ISO timestamp
+  could jam the monotonic guard) is FIXED — `read_heartbeat` now requires
+  the ISO date-time shape (the precondition that makes lexicographic
+  ordering sound) with a jam-repro test; N-2 the `heartbeats_ingested`
+  stat counts APPLIED rows (guard-suppressed upserts excluded, tested);
+  N-3 a test asserts `CCT_PHASES` mirrors the TS `PHASE_ORDER` by reading
+  `phases.ts` (the cross-adapter contract is enforceable, not
+  aspirational). N-4 (merge hygiene): one commit subject contains the
+  text "review #4", which GitHub renders as a PR-#4 backlink — use
+  "review round 4" wording in the SQUASH-MERGE TITLE when merging.

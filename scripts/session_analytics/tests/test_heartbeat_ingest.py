@@ -316,6 +316,53 @@ class TestPrivacyAndRobustness(RegistryResetTestCase):
         finally:
             db.close()
 
+    def test_non_iso_timestamp_cannot_jam_the_row(self) -> None:
+        # Final review N-1: a non-ISO updatedAt is SKIPPED (warned), so it can
+        # never win the lexicographic comparison and freeze the row.
+        base = Path(tempfile.mkdtemp(prefix="cct-hb-base-"))
+        proj = base / "proj-jam"
+        _write_heartbeat(proj, updatedAt="zzzz", checkpointCount=1)
+        dsn = self.sqlite_dsn()
+        stats = self._ingest(base, dsn)
+        self.assertEqual(stats.heartbeats_ingested, 0)  # rejected on read
+        _write_heartbeat(proj, updatedAt="2026-08-07T12:00:00Z", checkpointCount=9)
+        self._ingest(base, dsn)
+        db = Database.connect(dsn)
+        try:
+            row = db.query_one(
+                "SELECT checkpoint_count, last_heartbeat_at FROM local_heartbeat"
+            )
+            self.assertEqual(tuple(row), (9, "2026-08-07T12:00:00Z"))  # not jammed
+        finally:
+            db.close()
+
+    def test_suppressed_upsert_is_not_counted_as_ingested(self) -> None:
+        # Final review N-2: the stat means rows APPLIED, not statements run.
+        base = Path(tempfile.mkdtemp(prefix="cct-hb-base-"))
+        proj = base / "proj-stat"
+        _write_heartbeat(proj, updatedAt="2026-08-07T11:00:00Z", checkpointCount=5)
+        dsn = self.sqlite_dsn()
+        first = self._ingest(base, dsn)
+        self.assertEqual(first.heartbeats_ingested, 1)
+        _write_heartbeat(proj, updatedAt="2026-08-07T09:00:00Z", checkpointCount=1)
+        second = self._ingest(base, dsn)
+        self.assertEqual(second.heartbeats_ingested, 0)  # guard suppressed it
+
+    def test_cct_phases_mirrors_the_ts_phase_order(self) -> None:
+        # Final review N-3: the constant claims to mirror the Pi runtime's
+        # PHASE_ORDER — make the mirror enforceable, not aspirational.
+        import re as _re
+
+        from session_analytics.config import REPO_ROOT
+
+        ts = (
+            REPO_ROOT / "adapters" / "pi" / "runtime" / "workflow" / "phases.ts"
+        ).read_text(encoding="utf-8")
+        m = _re.search(r"PHASE_ORDER[^=]*=\s*\[([^\]]+)\]", ts)
+        self.assertIsNotNone(m, "PHASE_ORDER not found in phases.ts")
+        ts_phases = tuple(_re.findall(r'"([a-z-]+)"', m.group(1)))
+        self.assertEqual(ts_phases, C.CCT_PHASES)
+
     def test_last_heartbeat_at_is_monotonic(self) -> None:
         # Review F6: an OLDER heartbeat file never rewinds the row.
         base = Path(tempfile.mkdtemp(prefix="cct-hb-base-"))

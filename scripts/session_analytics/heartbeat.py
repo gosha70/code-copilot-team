@@ -45,6 +45,9 @@ _MAX_PHASE = 64
 _MAX_TIMESTAMP = 40
 _MAX_COUNT = 1_000_000_000
 
+# ISO-8601 date-time prefix — the sortable shape the monotonic guard relies on.
+_ISO_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T")
+
 # Module-level so the dialect test exercises the REAL statement (the
 # pattern established for UPSERT_DEVELOPER_SQL).
 UPSERT_LOCAL_HEARTBEAT_SQL = """
@@ -104,7 +107,11 @@ def read_heartbeat(project_root: Path) -> Optional[dict[str, Any]]:
         _log.warning("skipping malformed heartbeat %s: not an object", file)
         return None
     last_heartbeat_at = _sanitize_text(parsed.get("updatedAt"), _MAX_TIMESTAMP)
-    if last_heartbeat_at is None:
+    if last_heartbeat_at is None or not _ISO_PREFIX_RE.match(last_heartbeat_at):
+        # The ISO shape check is what makes the monotonic lexicographic
+        # comparison in the upsert SOUND: an accepted non-ISO string (e.g.
+        # "zzzz") would win every future comparison and freeze the row
+        # forever (final review N-1). Tamper-tolerant means skip, not jam.
         _log.warning("skipping heartbeat %s: no usable updatedAt", file)
         return None
     # Phase MEMBERSHIP is validated on read (review F8): the writer checks
@@ -205,7 +212,7 @@ def ingest_heartbeats(
         if fields is None:
             continue
         try:
-            db.execute(
+            cur = db.execute(
                 UPSERT_LOCAL_HEARTBEAT_SQL,
                 (
                     str(root),
@@ -217,7 +224,10 @@ def ingest_heartbeats(
                     fields["last_heartbeat_at"],
                 ),
             )
-            count += 1
+            # Count rows actually APPLIED (final review N-2): an upsert
+            # suppressed by the monotonic WHERE guard is not "ingested".
+            applied = getattr(cur, "rowcount", -1)
+            count += 1 if applied != 0 else 0
         except Exception as exc:  # noqa: BLE001 — isolate per-root DB errors
             try:
                 db.rollback()
