@@ -52,3 +52,23 @@ functional keep defaults, opt-out honored from trusted scopes only ·
 (FR-004a)** · fail-closed handoff (never silently unscrubbed) · every scrub
 audited (names+count) · PR closes **#173 only** (close-keyword audit on every
 commit message + PR body).
+
+---
+
+## Status (build, 2026-08-06/07)
+
+- **US1 (tasks 1–4): DONE** — commit `e3e10e3` + review-fix `ebb0cf6`;
+  phase-1 review PASS on all 10 findings (re-verified).
+- **US2 (tasks 5–7): DONE** — commit `3563a2b`; launcher suite 156/0
+  (10 new #173 assertions). CLI-failure refusal covered by a source
+  assertion (a scenario where provisioning succeeds but scrub-list fails is
+  not constructible from outside the process — provisioning uses the same
+  runtime and fails first).
+- **US3 (tasks 8–11): built** — config keys (lint + BUILTIN_DEFAULTS
+  default-ON), `security.env-scrub` ×4 registry files +
+  regenerated COMPATIBILITY.md, battery #10 + manifest rows + #173 closure
+  mapping, security-model/config-reference/README docs.
+- Gates: pi-runtime 426/0 · typecheck 7/7 · launcher 156/0 · capability
+  registry 177/0 · cct-config 0 err · provider gate 7/0 · adapter suite
+  144/1 (the 1 = pre-existing `prepare-release.sh` host-env failure, fails
+  identically on the clean base — verified via stash).

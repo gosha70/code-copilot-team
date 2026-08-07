@@ -29,6 +29,7 @@ status** (`enabled` / `disabled` / `degraded` / `unavailable` / `misconfigured`
 | `integrations.hosted-platform` | unavailable | none | unavailable (external-platform) | enabled (native) |
 | `memory.session-state` | disabled | advisory | degraded (cct-first-party) | enabled (cct-first-party) |
 | `security.sandbox` | disabled | enforcing | degraded (cct-first-party) | disabled (cct-first-party) |
+| `security.env-scrub` | disabled | enforcing | degraded (cct-first-party) | disabled (cct-first-party) |
 | `memory.promotion` | disabled | advisory | degraded (cct-first-party) | enabled (cct-first-party) |
 | `agents.subagents` | disabled | advisory | degraded (cct-first-party) | enabled (native) |
 | `agents.worktrees` | disabled | advisory | degraded (cct-first-party) | disabled (cct-first-party) |
@@ -199,6 +200,17 @@ Sandbox detection (host-unrestricted / permission-gated-only / containerized / m
 - **Pi:** `degraded` (cct-first-party) — Enforces the autonomous/ci no-unrestricted-host rule — rejects tool execution (fail-closed) when a sandbox is required but the environment is host-unrestricted and no override is set. Detection is best-effort: Docker via cgroup/.dockerenv; micro-vm / remote-sandboxed via an operator CCT_SANDBOX declaration. The runtime cannot itself create a sandbox.
   - _status probe:_ detectSandbox()/sandboxGate() at session_start; tool_call denial when blocked.
 - **Claude Code:** `disabled` (cct-first-party) — Pi-runtime sandbox provider (FR-019). The Claude Code adapter relies on host + permission-mode controls and does not implement the CCT sandbox detection/gate; reported disabled rather than overclaimed.
+  - _status probe:_ Not implemented in the Claude Code adapter.
+
+### `security.env-scrub`
+
+Name-based scrubbing of credential-shaped environment variables at harness-controlled spawn boundaries (subagent child sessions, worker handoffs), with a trust-asymmetric configuration surface: in-repo configuration may tighten but never loosen the policy. Values are never read or logged; the primary interactive session's environment is out of scope by design.
+
+**Default:** disabled · **Security:** enforcing
+
+- **Pi:** `degraded` (cct-first-party) — Subagent child sessions spawn with a scrubbed env by default (fail-safe ON; scrub:false is the trusted opt-out), and the worktree-run handoff unsets the CLI-computed scrub list before exec — fail-closed on a scrub-list failure, removed NAMES (never values) audited at the worker's session_start (env.scrub). Config is trust-asymmetric (FR-004a): both in-repo layers may only tighten (security.env_scrub/_keep/_extra); loosening requires user-controlled scopes (global config, CCT_CONFIG__* env, --set). Degraded because the primary interactive session's env is untouched by design and the runtime cannot verify what the OS/sandbox exposes beneath it.
+  - _status probe:_ scrubEnv() at the runChildSession spawn; pi-code env scrub-list + unset at the worktree-run handoff; env.scrub audit at worker session_start.
+- **Claude Code:** `disabled` (cct-first-party) — Pi-runtime env scrubbing (#173). The Claude Code adapter does not implement the CCT spawn-boundary scrub (its sandboxing and subagent spawning are native surfaces); reported disabled rather than overclaimed.
   - _status probe:_ Not implemented in the Claude Code adapter.
 
 ### `memory.promotion`

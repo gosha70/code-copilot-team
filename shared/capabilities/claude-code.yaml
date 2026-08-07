@@ -100,6 +100,16 @@ capabilities:
       detection/gate; reported disabled rather than overclaimed.
     status_probe: "Not implemented in the Claude Code adapter."
 
+  - id: security.env-scrub
+    implementation_kind: cct-first-party
+    runtime_status: disabled
+    reason: >-
+      Pi-runtime env scrubbing (#173). The Claude Code adapter does not
+      implement the CCT spawn-boundary scrub (its sandboxing and subagent
+      spawning are native surfaces); reported disabled rather than
+      overclaimed.
+    status_probe: "Not implemented in the Claude Code adapter."
+
   - id: memory.promotion
     implementation_kind: cct-first-party
     runtime_status: enabled

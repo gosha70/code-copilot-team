@@ -73,7 +73,7 @@ Detailed guides live in [`docs/`](docs/):
 
 - [Quickstart](docs/quickstart.md) — install, verify, first enforced session.
 - [Configuration reference](docs/configuration-reference.md) — keys, layering, profiles.
-- [Security model](docs/security-model.md) — what's enforced, what's honestly degraded.
+- [Security model](docs/security-model.md) — what's enforced, what's honestly degraded; incl. #173 env scrubbing at spawn boundaries (`pi-code env scrub-list` shows what a handoff scrubs).
 - [Migration from Claude Code](docs/migration-from-claude-code.md) — what maps, what's degraded, what's Pi-native.
 - [Extension development](docs/extension-development.md) — add commands, capabilities, tests, generated resources.
 - [Unattended runs & continuity](docs/unattended-runs.md) — the `unattended` posture, `pi-code continuity`, and how work survives compaction/restart (honestly degraded).

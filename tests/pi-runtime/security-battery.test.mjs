@@ -22,6 +22,7 @@ import { supportOf } from "../../adapters/pi/runtime/hooks/events.ts";
 import { loadTeamLedger, claimTask, createTeam, postTask } from "../../adapters/pi/runtime/agents/team.ts";
 import { cleanupEligibility } from "../../adapters/pi/runtime/agents/worktree.ts";
 import { seedCapabilities } from "../../adapters/pi/runtime/capabilities.ts";
+import { defaultScrubPolicy, scrubEnv } from "../../adapters/pi/runtime/policy/env-scrub.ts";
 
 function tmpTree(files = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cct-sec-battery-"));
@@ -143,4 +144,32 @@ test("BATTERY 9 — degraded surfaces are reported honestly in the registry (not
     assert.ok(byId[id] !== undefined, `${id} present`);
     assert.notEqual(byId[id], "enabled", `${id} must not overclaim (fork-bomb/live-UI/Stop are degraded)`);
   }
+});
+
+test("BATTERY 10 — env scrubbing: a credential-shaped var does not survive to a child spawn env (#173)", () => {
+  // ONE canonical fail-closed assertion over the spawn-boundary scrub: the
+  // same defaultScrubPolicy/scrubEnv the child-session runner and the
+  // worktree-run handoff (via pi-code env scrub-list) consume. Deep coverage:
+  // env-scrub.test.mjs, child-session.test.mjs, test-pi-launcher.sh.
+  const { env, removed } = scrubEnv(
+    {
+      AWS_SECRET_ACCESS_KEY: "s3cr3t",
+      GITHUB_TOKEN: "ghp_x",
+      X_SERVICE_TOKEN: "t",
+      PATH: "/usr/bin",
+      CCT_WORKER_ID: "w1",
+      ANTHROPIC_API_KEY: "keep",
+    },
+    defaultScrubPolicy(),
+  );
+  for (const name of ["AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "X_SERVICE_TOKEN"]) {
+    assert.equal(name in env, false, `${name} must be scrubbed`);
+    assert.ok(removed.includes(name));
+  }
+  // The child stays functional: baseline + CCT contract + provider credential.
+  assert.equal(env.PATH, "/usr/bin");
+  assert.equal(env.CCT_WORKER_ID, "w1");
+  assert.equal(env.ANTHROPIC_API_KEY, "keep");
+  // Names only — the report never carries a value.
+  assert.equal(JSON.stringify(removed).includes("s3cr3t"), false);
 });
