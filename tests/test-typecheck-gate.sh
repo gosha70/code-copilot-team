@@ -71,6 +71,12 @@ if [[ -n "$TSC" ]]; then
   # Green baseline: tsc --noEmit over the real runtime tsconfig (no `.cct` write).
   assert "tsc --noEmit is clean over adapters/pi/runtime (green baseline)" \
     "( cd '$REPO_DIR' && '$TSC' --noEmit -p '$TSCONFIG' )"
+
+  # #179: the user-facing extension template compiles clean under ITS OWN
+  # committed tsconfig (users run tsc over .pi/ in their projects; a template
+  # that fails strict tsc regresses silently without this).
+  assert "tsc --noEmit is clean over the extension template (#179)" \
+    "'$TSC' --noEmit -p '$REPO_DIR/adapters/pi/resources/extension-template/tsconfig.json'"
   PROJ="$(make_project with-tsc)"
   run_gate "$PROJ"
   RES="$PROJ/.cct/verify/result.json"

@@ -642,6 +642,63 @@ assert "re-init preserves edited config (no clobber)" "[[ '$BEFORE' == '$AFTER' 
 assert "re-init reports already-initialized" "echo \"\$RE_OUT\" | grep -qi 'already initialized'"
 assert "re-init exits 0" "[[ '$RC' == '0' ]]"
 
+# ── #179: init --extension-template (guardrails starter) ────
+EXT_DIR="$TMP/ext-proj"; mkdir -p "$EXT_DIR"
+EXT_DRY=$(PATH="$BASE_PATH" "$LAUNCHER" init "$EXT_DIR" --extension-template --dry-run 2>&1 || true)
+assert "init --extension-template --dry-run reports the template files" \
+  "echo \"\$EXT_DRY\" | grep -q 'cct-guardrails.ts'"
+assert "init --extension-template --dry-run writes nothing" \
+  "[ ! -e \"\$EXT_DIR/.pi\" ]"
+PATH="$BASE_PATH" "$LAUNCHER" init "$EXT_DIR" --extension-template >/dev/null 2>&1
+assert "init --extension-template scaffolds the extension" \
+  "test -f \"\$EXT_DIR/.pi/extensions/cct-guardrails.ts\""
+assert "init --extension-template scaffolds the reference validator" \
+  "test -f \"\$EXT_DIR/.pi/extensions/validators/check-python-ast.py\""
+assert "init --extension-template scaffolds the template README" \
+  "test -f \"\$EXT_DIR/.pi/extensions/README.md\""
+assert "init --extension-template scaffolds the template tsconfig" \
+  "test -f \"\$EXT_DIR/.pi/extensions/tsconfig.json\""
+assert "manifest records the template files with hashes" \
+  "grep -q 'extension-template' \"\$EXT_DIR/.code-copilot-team/.cct-init.json\" && grep -q '.pi/extensions/cct-guardrails.ts' \"\$EXT_DIR/.code-copilot-team/.cct-init.json\""
+assert "manifest is valid JSON with no empty hashes (P1/P5)" \
+  "python3 -c \"import json,sys;m=json.load(open('\$EXT_DIR/.code-copilot-team/.cct-init.json'));sys.exit(0 if all(e.get('hash') for e in m['generated']) else 1)\""
+# Pre-existing-init path: files scaffolded, NO manifest-fragment leak, manifest untouched.
+EXT_DIR2="$TMP/ext-preinit"; mkdir -p "$EXT_DIR2"
+PATH="$BASE_PATH" "$LAUNCHER" init "$EXT_DIR2" >/dev/null 2>&1
+MANI_BEFORE=$(cat "$EXT_DIR2/.code-copilot-team/.cct-init.json")
+PRE_OUT=$(PATH="$BASE_PATH" "$LAUNCHER" init "$EXT_DIR2" --extension-template 2>/dev/null)
+assert "pre-existing init scaffolds without leaking manifest fragments" \
+  "test -f \"\$EXT_DIR2/.pi/extensions/cct-guardrails.ts\" && ! echo \"\$PRE_OUT\" | grep -q 'extension-template\", \"hash'"
+assert "pre-existing init leaves the manifest untouched" \
+  "[ \"\$MANI_BEFORE\" = \"\$(cat \"\$EXT_DIR2/.code-copilot-team/.cct-init.json\")\" ]"
+# A partial/stale template source must FAIL the scaffold, not half-succeed (P1).
+PART_HOME="$TMP/ext-partial-home"; mkdir -p "$PART_HOME/pi/resources/extension-template"
+printf '// stale partial\n' > "$PART_HOME/pi/resources/extension-template/cct-guardrails.ts"
+EXT_DIR3="$TMP/ext-partial"; mkdir -p "$EXT_DIR3"
+PART_RC=0
+CCT_HOME="$PART_HOME" PATH="$BASE_PATH" "$LAUNCHER" init "$EXT_DIR3" --extension-template >/dev/null 2>&1 || PART_RC=$?
+assert "a stale partial managed template falls back to the complete repo copy" \
+  "[ \"\$PART_RC\" -eq 0 ] && grep -q 'issue #179' \"\$EXT_DIR3/.pi/extensions/cct-guardrails.ts\""
+# No-clobber: an edited template survives a re-init with the flag.
+printf '// my edits\n' >> "$EXT_DIR/.pi/extensions/cct-guardrails.ts"
+PATH="$BASE_PATH" "$LAUNCHER" init "$EXT_DIR" --extension-template >/dev/null 2>&1
+assert "re-init preserves an edited template (no clobber)" \
+  "grep -q 'my edits' \"\$EXT_DIR/.pi/extensions/cct-guardrails.ts\""
+# Plain init unchanged: no template without the flag.
+PLAIN_DIR="$TMP/ext-plain"; mkdir -p "$PLAIN_DIR"
+PATH="$BASE_PATH" "$LAUNCHER" init "$PLAIN_DIR" >/dev/null 2>&1
+assert "plain init scaffolds no extension template" "[ ! -e \"\$PLAIN_DIR/.pi\" ]"
+assert "help documents --extension-template" \
+  "PATH=\"\$DIAG_PATH\" '$LAUNCHER' help | grep -q 'extension-template'"
+
+# ── #179: the headless doc's exact command shape reaches pi ──
+rm -f "$TMP/capture.txt"
+PATH="$TMP/bin-new:$BASE_PATH" "$LAUNCHER" -- --mode json -p "headless probe" --no-session >/dev/null 2>&1 || true
+assert "headless recipe: forwarded --mode json -p reaches pi (doc shape)" \
+  "test -f \"\$TMP/capture.txt\" && grep -q -- '--mode json -p headless probe --no-session' \"\$TMP/capture.txt\""
+assert "headless recipe runs ENFORCED (runtime extension loaded)" \
+  "grep -q -- '--extension' \"\$TMP/capture.txt\" && grep -q 'CCT_RUNTIME:1' \"\$TMP/capture.txt\""
+
 RC=0; PATH="$BASE_PATH" "$LAUNCHER" init "$INIT_DIR" --bogus >/dev/null 2>&1 || RC=$?
 assert "init rejects an unknown option (exit 2)" "[[ '$RC' == '2' ]]"
 

@@ -4,7 +4,10 @@ on:
   push:
     branches: [master, main]
   pull_request:
-    branches: [master, main]
+    # plan/** covers STACKED PRs (base = another plan/* branch, per the
+    # stacked-PR flow adopted 2026-08-07) — without it a stacked PR gets
+    # zero CI until its base retargets to master after the parent merges.
+    branches: [master, main, "plan/**"]
 
 permissions:
   contents: read
@@ -61,7 +64,15 @@ jobs:
       - name: Adapter generation and install
         run: bash tests/test-pi-adapter.sh
 
+      # #179: the honesty-table canary must RUN in CI, not conditionally
+      # vanish — install the pinned pi version the table was verified
+      # against (bumping this pin is the deliberate re-verification act).
+      - name: Install pinned pi (honesty-canary fixture)
+        run: npm install -g @earendil-works/pi-coding-agent@0.83.0
+
       - name: Runtime unit tests
+        env:
+          CCT_REQUIRE_PI_CANARY: "1"
         run: |
           set -o pipefail
           bash tests/test-pi-runtime.sh 2>&1 | tee pi-runtime.log
