@@ -57,11 +57,21 @@ vc_extract_frs() {
             cur = ""; buf = ""
         }
         /^#/ {
+            # ###+ subsections INSIDE ## Requirements do not end the
+            # section — several real specs group FRs under them (e.g.
+            # infra-verification-gate). They do end the current bullet.
+            if ($0 ~ /^###/) { if (inreq) flush(); next }
             flush()
             inreq = ($0 ~ /^## Requirements[ ]*$/) ? 1 : 0
             next
         }
         !inreq { next }
+        /^---+[ ]*$/ || /^\|/ {
+            # Horizontal rules and table rows between bullets are layout,
+            # not requirement text — never slurp them into a statement.
+            flush()
+            next
+        }
         /^- / {
             flush()
             if (match($0, /^- (\*\*)?FR-[0-9]+[a-z]?/)) {
@@ -100,7 +110,14 @@ vc_parse_artifact() {
     awk '
         function unquote(s) {
             sub(/^[ ]+/, "", s); sub(/[ ]+$/, "", s)
-            if (s ~ /^".*"$/) { s = substr(s, 2, length(s) - 2); gsub(/\\"/, "\"", s) }
+            if (s ~ /^".*"$/) {
+                s = substr(s, 2, length(s) - 2)
+                # Unescape \\ and \" without double-processing: park
+                # escaped backslashes first, restore them last.
+                gsub(/\\\\/, "\x01", s)
+                gsub(/\\"/, "\"", s)
+                gsub(/\x01/, "\\", s)
+            }
             return s
         }
         function flush_ver() {

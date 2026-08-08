@@ -8,6 +8,8 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/test-counts.env"
 V="$REPO_DIR/scripts/validate-automation-config.sh"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/cct-autocfg.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
@@ -125,4 +127,10 @@ echo ""
 echo "========================================="
 echo "  automation-config tests: $PASS passed, $FAIL failed"
 echo "========================================="
+
+if [[ "$PASS" -ne "${TEST_AUTOMATION_CONFIG_EXPECTED_PASS:-0}" ]]; then
+    echo "  FAIL: assertion-count drift (expected ${TEST_AUTOMATION_CONFIG_EXPECTED_PASS:-0}, got $PASS)"
+    FAIL=$((FAIL+1))
+fi
 [[ $FAIL -eq 0 ]]
+

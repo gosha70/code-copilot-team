@@ -10,6 +10,8 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/test-counts.env"
 GEN="$REPO_DIR/scripts/generate-verification-draft.sh"
 VAL="$REPO_DIR/scripts/validate-spec.sh"
 
@@ -188,7 +190,7 @@ D=$(mk_fixture); finalize "$D"
 sedi 's|test: "project-test.sh"|test: "no/such/verifier.sh"|' "$D/specs/demo-feat/verification.yaml"
 run_admission "$D"
 assert_exit "unresolvable verifier refused" 1 "$RC"
-assert_contains "unresolvable failure names the target" "$OUTPUT" "resolves to nothing executable"
+assert_contains "unresolvable failure names the target" "$OUTPUT" "does not resolve to a genuinely executable test"
 rm -rf "$D"
 
 D=$(mk_fixture); finalize "$D"
@@ -256,6 +258,108 @@ assert_exit "unapproved plan refused" 1 "$RC"
 assert_contains "refusal names plan approval" "$OUTPUT" "requires 'approved'"
 rm -rf "$D"
 
+# Regression (review P1): FRs under ### subsections of ## Requirements
+# are requirements too — dropping them made incomplete artifacts pass
+# coverage. Assert extraction AND the end-to-end coverage failure.
+D=$(mk_fixture)
+python3 - "$D/specs/demo-feat/spec.md" << 'EOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('\n## Constraints',
+              '\n### Security addendum\n\n- FR-3: secrets are never written to the ledger.\n\n## Constraints', 1)
+open(p, 'w').write(s)
+EOF
+CCT_SPECS_DIR="$D/specs" bash "$REPO_DIR/scripts/generate-verification-draft.sh" demo-feat >/dev/null
+assert_eq "subsection FR extracted into the draft" "1" \
+    "$(grep -c '^FR-3:' "$D/specs/demo-feat/verification.yaml")"
+# An artifact finalized WITHOUT the subsection FR must fail coverage.
+python3 - "$D/specs/demo-feat/verification.yaml" << 'EOF'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r'\nFR-3:.*?(?=\nFR-|\Z)', '', s, flags=re.S)
+open(p, 'w').write(s)
+EOF
+sedi 's/^status: draft/status: finalized/' "$D/specs/demo-feat/verification.yaml"
+sedi 's|test: "TODO.*|test: "project-test.sh"|' "$D/specs/demo-feat/verification.yaml"
+run_admission "$D"
+assert_exit "subsection FR missing from artifact is a coverage failure" 1 "$RC"
+assert_contains "coverage failure names the subsection FR" "$OUTPUT" "FR-3 has no verification.yaml entry"
+rm -rf "$D"
+
+# Pin the normalizer against a real repo spec that groups FRs under a
+# ### subsection (18 FRs incl. the Sprint 2 addendum).
+source "$REPO_DIR/scripts/lib/verification-common.sh"
+assert_eq "real spec with subsections extracts fully (infra-verification-gate)" "18" \
+    "$(vc_extract_frs "$REPO_DIR/specs/infra-verification-gate/spec.md" | wc -l | tr -d ' ')"
+
+# Regression (review P1): vacuous verifier resolution. None of these
+# "resolve" to a genuine test and each must be refused.
+for bad in "bash no/such/test.sh" "." "true" "specs/demo-feat/spec.md" "specs"; do
+    D=$(mk_fixture); finalize "$D"
+    python3 - "$D/specs/demo-feat/verification.yaml" "$bad" << 'EOF'
+import sys
+p, bad = sys.argv[1], sys.argv[2]
+s = open(p).read()
+s = s.replace('test: "project-test.sh"', f'test: "{bad}"')
+open(p, 'w').write(s)
+EOF
+    run_admission "$D"
+    assert_exit "vacuous target refused: '$bad'" 1 "$RC"
+    rm -rf "$D"
+done
+
+# Regression (review P1): missing inputs are NAMED failures that still
+# reach the summary and the DEFER block — never a raw tool error death.
+D=$(mk_fixture); finalize "$D"
+rm "$D/specs/demo-feat/spec.md"
+run_admission "$D"
+assert_exit "missing spec.md is a named failure (exit 1, not a crash)" 1 "$RC"
+assert_contains "missing spec.md named" "$OUTPUT" "spec.md missing"
+assert_eq "DEFER block printed on the spec.md refusal" "4" "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
+rm -rf "$D"
+
+D=$(mk_fixture); finalize "$D"
+rm "$D/specs/demo-feat/automation.json"
+run_admission "$D"
+assert_exit "missing automation.json is a named failure (exit 1)" 1 "$RC"
+assert_contains "missing automation.json named" "$OUTPUT" "automation.json missing"
+assert_contains "test.command not run from a rejected/missing config" "$OUTPUT" "not attempted"
+assert_contains "summary still printed after config failure" "$OUTPUT" "Results:"
+rm -rf "$D"
+
+D=$(mk_fixture); finalize "$D"
+rm "$D/specs/demo-feat/plan.md"
+run_admission "$D"
+assert_exit "missing plan.md is a named failure (exit 1)" 1 "$RC"
+assert_contains "missing plan.md named" "$OUTPUT" "plan.md status is 'missing'"
+rm -rf "$D"
+
+# Regression (review P2): a rejected config's test.command is NEVER
+# executed — admission must not run commands from configs it refused.
+D=$(mk_fixture); finalize "$D"
+python3 - "$D/specs/demo-feat/automation.json" "$D" << 'EOF'
+import sys, json
+p, d = sys.argv[1], sys.argv[2]
+cfg = json.load(open(p))
+cfg["profile"] = "bogus"
+cfg["test"]["command"] = f"touch {d}/PWNED && exit 0"
+json.dump(cfg, open(p, 'w'))
+EOF
+run_admission "$D"
+assert_exit "invalid config refused" 1 "$RC"
+assert_eq "rejected config's test.command never executed" "0" \
+    "$([[ -f "$D/PWNED" ]] && echo 1 || echo 0)"
+rm -rf "$D"
+
+# DEFER visibility on the earliest refusal (missing artifact).
+D=$(mk_fixture)
+run_admission "$D"
+assert_eq "DEFER block printed even on the earliest refusal" "4" \
+    "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
+rm -rf "$D"
+
 # CLI contract: --unattended is per-feature.
 RC=0; OUT=$(bash "$VAL" --unattended 2>&1) || RC=$?
 assert_exit "--unattended without --feature-id is a usage error" 1 "$RC"
@@ -271,4 +375,10 @@ echo ""
 echo "========================================="
 echo "  verification-spec tests: $PASS passed, $FAIL failed"
 echo "========================================="
+
+if [[ "$PASS" -ne "${TEST_VERIFICATION_SPEC_EXPECTED_PASS:-0}" ]]; then
+    echo "  FAIL: assertion-count drift (expected ${TEST_VERIFICATION_SPEC_EXPECTED_PASS:-0}, got $PASS)"
+    FAIL=$((FAIL+1))
+fi
 [[ $FAIL -eq 0 ]]
+

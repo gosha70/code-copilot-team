@@ -1008,7 +1008,7 @@ grep -Eq '^TEST_REVIEW_LOOP_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.
 assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
 
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
-assert_eq "test-counts has exactly 8 expected-pass variables" "8" "$COUNT_VARS"
+assert_eq "test-counts has exactly 10 expected-pass variables" "10" "$COUNT_VARS"
 
 rc=0
 grep -q 'source "\$COUNTS_FILE"' "$REPO_DIR/tests/test-generate.sh" || rc=1

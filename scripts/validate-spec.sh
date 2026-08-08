@@ -206,6 +206,49 @@ defer() {
   echo "  [DEFER] $1 (increment C)"
 }
 
+# The §11 items owned by later increments — printed on EVERY admission
+# exit path (early refusals included) so the bar's known extent stays
+# visible, never silently passed.
+print_defers() {
+  defer "coverage floors / regression baselines (greenfield 'baseline: none' handling)"
+  defer "UI-in-scope DESIGN.md placeholder check + harness/ + copilot:review presence"
+  defer "schema-migration allowlist"
+  defer "mid-flight credential/secret enumeration (delegation-best-practices)"
+}
+
+# admission_target_ok <project_dir> <target> — a deterministic verifier
+# target is genuinely executable: a path form must be an executable
+# FILE (a directory or plain file verifies nothing); a command form
+# must resolve to a real command that is not a no-op/builtin head, and
+# every path-shaped argument (contains a slash or a script extension)
+# must exist as a file. Fail-open resolution here would let
+# `bash no/such/test.sh` pass because bash exists.
+admission_target_ok() {
+  local project_dir="$1" t="$2"
+  if [[ -f "$project_dir/$t" && -x "$project_dir/$t" ]]; then
+    return 0
+  fi
+  # A path form that exists but is not an executable file is NOT
+  # rescued by command resolution.
+  [[ -e "$project_dir/$t" ]] && return 1
+  local head="${t%% *}"
+  case "$head" in
+    true|false|:|.|source|test|\[|echo|printf|cd|exit)
+      return 1 ;;   # no-op / shell-builtin heads cannot execute a test
+  esac
+  command -v "$head" >/dev/null 2>&1 || return 1
+  [[ "$t" == "$head" ]] && return 0
+  local w
+  for w in ${t#* }; do
+    case "$w" in
+      -*) ;;
+      */*|*.sh|*.py|*.js|*.ts|*.bats)
+        [[ -f "$project_dir/$w" ]] || return 1 ;;
+    esac
+  done
+  return 0
+}
+
 validate_admission() {
   local spec_dir="$1"
   local id spec artifact project_dir
@@ -220,9 +263,18 @@ validate_admission() {
   echo ""
   echo "--- $id: unattended admission (#190 §11, increment B) ---"
 
+  # 0. Inputs must exist before any check can be decided — a missing
+  #    input is a NAMED failure, never a raw tool error mid-report.
+  if [[ ! -f "$spec" ]]; then
+    fail "$id: spec.md missing — there is no authoritative requirement text to admit against"
+    print_defers
+    return
+  fi
+
   # 1. Finalized artifact exists — a raw draft is inadmissible.
   if [[ ! -f "$artifact" ]]; then
     fail "$id: verification.yaml missing — generate a draft (scripts/generate-verification-draft.sh), map verifiers, finalize"
+    print_defers
     return
   fi
   local parsed status
@@ -240,6 +292,7 @@ validate_admission() {
   frs="$(vc_extract_frs "$spec")"
   if [[ -z "$frs" ]]; then
     fail "$id: no FR-N requirements found in spec.md ## Requirements — nothing to admit against"
+    print_defers
     return
   fi
   local cov_ok=true sha_ok=true
@@ -252,7 +305,10 @@ validate_admission() {
     local want got
     want="$(vc_fr_sha "$fr" "$stmt")"
     got="$(printf '%s\n' "$parsed" | awk -F'\t' -v fr="$fr" '$1 == "SHA" && $2 == fr { print $3; exit }')"
-    if [[ "$got" != "$want" ]]; then
+    if [[ -z "$got" ]]; then
+      fail "$id: $fr entry has no statement_sha (the binding to spec.md is mandatory)"
+      sha_ok=false
+    elif [[ "$got" != "$want" ]]; then
       fail "$id: $fr statement_sha mismatch — spec.md text changed after finalization (recompute: re-finalize the artifact)"
       sha_ok=false
     fi
@@ -273,11 +329,11 @@ validate_admission() {
   #      increment C, so the mapping is inadmissible in B (a verifier
   #      something depends on cannot be unavailable).
   local ver_ok=true
-  while IFS=$'\t' read -r fr stmt; do
+  while IFS=$'\t' read -r fr _; do
     local nvers
     nvers="$(printf '%s\n' "$parsed" | awk -F'\t' -v fr="$fr" '$1 == "VER" && $2 == fr' | wc -l | tr -d ' ')"
     if [[ "$nvers" -eq 0 ]] && printf '%s\n' "$parsed" | grep -q "^FR	$fr\$"; then
-      fail "$id: $fr has an entry but zero verifiers"
+      fail "$id: $fr has an entry but zero parsed verifiers (layout is part of the contract — regenerate via the draft generator; see shared/schemas/verification.schema.json)"
       ver_ok=false
     fi
   done <<< "$frs"
@@ -287,8 +343,8 @@ validate_admission() {
         if [[ -z "$target" || "$target" == TODO* ]]; then
           fail "$id: $fr deterministic verifier is a placeholder ('${target:-empty}') — map it to a real executable"
           ver_ok=false
-        elif [[ ! -e "$project_dir/$target" ]] && ! command -v "${target%% *}" >/dev/null 2>&1; then
-          fail "$id: $fr deterministic verifier '$target' resolves to nothing executable (no such path under $project_dir, no such command)"
+        elif ! admission_target_ok "$project_dir" "$target"; then
+          fail "$id: $fr deterministic verifier '$target' does not resolve to a genuinely executable test (needs an executable file, or a real command whose script arguments exist; directories, plain files, and no-op heads verify nothing)"
           ver_ok=false
         fi
         ;;
@@ -316,7 +372,7 @@ validate_admission() {
 
   # 7. Automation config: dedicated validator + declared unattended
   #    profile (explicit caps are enforced by the validator, #191).
-  local autocfg="$spec_dir/automation.json"
+  local autocfg="$spec_dir/automation.json" autocfg_ok=false
   if [[ ! -f "$autocfg" ]]; then
     fail "$id: automation.json missing — unattended admission requires the full config surface"
   elif ! bash "$REPO_DIR/scripts/validate-automation-config.sh" "$autocfg" >/dev/null 2>&1; then
@@ -324,27 +380,43 @@ validate_admission() {
   elif [[ "$(jq -r '.profile // "advisory"' "$autocfg" 2>/dev/null)" != "unattended" ]]; then
     fail "$id: automation.json profile is not 'unattended' — admission is the unattended bar; attended profiles do not use it"
   else
+    autocfg_ok=true
     pass "$id: automation.json valid, profile unattended, caps explicit"
   fi
 
   # 8. test.command exists and passes on the CURRENT ref (§11).
-  local test_cmd
-  test_cmd="$(jq -r '.test.command // empty' "$autocfg" 2>/dev/null)"
-  if [[ -z "$test_cmd" ]]; then
-    fail "$id: automation.json test.command missing — admission must prove the suite passes before any session runs"
-  else
-    local trc=0
-    ( cd "$project_dir" && bash -c "$test_cmd" ) >/dev/null 2>&1 || trc=$?
-    if [[ $trc -ne 0 ]]; then
-      fail "$id: test.command ('$test_cmd') fails on the current ref (exit $trc) — a red base is not admissible"
+  #    Runs ONLY from a config that passed check 7 — admission must
+  #    never execute a command lifted from a rejected config. Bounded
+  #    where timeout(1) exists (same convention as the driver's C-5).
+  if [[ "$autocfg_ok" == "true" ]]; then
+    local test_cmd
+    test_cmd="$(jq -r '.test.command // empty' "$autocfg" 2>/dev/null)"
+    if [[ -z "$test_cmd" ]]; then
+      fail "$id: automation.json test.command missing — admission must prove the suite passes before any session runs"
     else
-      pass "$id: test.command passes on the current ref"
+      local trc=0 admission_timeout="${CCT_ADMISSION_TEST_TIMEOUT:-600}"
+      if command -v timeout >/dev/null 2>&1; then
+        ( cd "$project_dir" && timeout "$admission_timeout" bash -c "$test_cmd" ) >/dev/null 2>&1 || trc=$?
+      else
+        ( cd "$project_dir" && bash -c "$test_cmd" ) >/dev/null 2>&1 || trc=$?
+      fi
+      if [[ $trc -eq 124 ]]; then
+        fail "$id: test.command ('$test_cmd') exceeded the ${admission_timeout}s admission budget"
+      elif [[ $trc -ne 0 ]]; then
+        fail "$id: test.command ('$test_cmd') fails on the current ref (exit $trc) — a red base is not admissible"
+      else
+        pass "$id: test.command passes on the current ref"
+      fi
     fi
+  else
+    fail "$id: test.command not attempted — its config failed check 7 (admission never executes commands from a rejected config)"
   fi
 
   # 9. Plan approved + origin gate <=1 (existing gates, kept).
-  local plan_status
-  plan_status="$(extract_frontmatter_field "$spec_dir/plan.md" "status")"
+  local plan_status=""
+  if [[ -f "$spec_dir/plan.md" ]]; then
+    plan_status="$(extract_frontmatter_field "$spec_dir/plan.md" "status")"
+  fi
   if [[ "$plan_status" != "approved" ]]; then
     fail "$id: plan.md status is '${plan_status:-missing}' — admission requires 'approved'"
   else
@@ -358,11 +430,7 @@ validate_admission() {
     pass "$id: origin gate exit $origin_exit"
   fi
 
-  # §11 items owned by later increments — visible, never silently passed.
-  defer "coverage floors / regression baselines (greenfield 'baseline: none' handling)"
-  defer "UI-in-scope DESIGN.md placeholder check + harness/ + copilot:review presence"
-  defer "schema-migration allowlist"
-  defer "mid-flight credential/secret enumeration (delegation-best-practices)"
+  print_defers
 }
 
 # ── CLI ──────────────────────────────────────────────────────
