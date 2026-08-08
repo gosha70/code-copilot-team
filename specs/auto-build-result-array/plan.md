@@ -24,10 +24,15 @@ origin:
 ---
 # Plan: normalize array-form CLI results (#197)
 
-`session_result_obj()` — array → the last `type=="result"` element
-(falling back to `.[-1]`), object → itself, else `{}` — used by both
-backends before extracting subtype/cost/session_id. The test suite's
+`session_result_obj()` slurp-normalizes all three real result shapes —
+the claude CLI's message ARRAY, pi's JSON-LINES stream (documented in
+adapters/pi/docs/headless-harness.md), and the legacy single object —
+to the last `type=="result"` element (`.[-1]` fallback per the issue's
+proposal), else `{}`; used by both backends before extracting
+subtype/cost/session_id. The test suite's
 mock claude now emits the ARRAY shape by default (the prior
 single-object mock was the blind spot that let this ship), with a
 legacy-object mode, a 344-element captured-scale case, and a
-continuation case proving session_id chains `--resume`.
+continuation case proving session_id chains `--resume`; the mock
+pi-code emits its documented JSON-LINES shape (its legacy-object mock
+was the same blind spot on the pi side).

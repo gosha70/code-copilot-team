@@ -61,7 +61,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `type=="result"` element): `.subtype` on the array read "unknown" and
   parked every succeeded phase, cost read 0 (caps never accrued), and
   `session_id` read empty (breaking `--resume` chaining). Both session
-  backends now normalize array-or-object via `session_result_obj()`;
+  backends now slurp-normalize all three real shapes — the claude
+  message array, pi's JSON-LINES stream, and the legacy object — via
+  `session_result_obj()`;
   the test suite's mock CLI emits the array shape by default so every
   driver path is exercised against the real output, with legacy-object,
   344-element captured-scale, and resume-chaining regressions.

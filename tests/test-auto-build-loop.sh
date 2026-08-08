@@ -438,7 +438,12 @@ if [[ -n "${MOCK_PI_SCRIPT:-}" && -f "$MOCK_PI_SCRIPT" ]]; then
     # shellcheck source=/dev/null
     source "$MOCK_PI_SCRIPT"
 fi
-printf '{"subtype":"%s","session_id":"pi-session-%s","total_cost_usd":%s,"num_turns":2,"result":"done"}\n' \
+# #197: pi's --mode json emits JSON LINES with the result envelope last
+# (adapters/pi/docs/headless-harness.md) — the mock matches that
+# contract so the suite exercises the real shape, not a legacy object.
+printf '{"type":"system","subtype":"init","session_id":"pi-session-%s"}\n' "$COUNT"
+printf '{"type":"assistant","message":"working"}\n'
+printf '{"type":"result","subtype":"%s","session_id":"pi-session-%s","total_cost_usd":%s,"num_turns":2,"result":"done"}\n' \
     "${MOCK_PI_SUBTYPE:-success}" "$COUNT" "${MOCK_PI_COST:-0.02}"
 MOCK
 chmod +x "$MOCK_BIN/pi-code"
@@ -1237,6 +1242,8 @@ OUTPUT=$(cd "$PPI" && CCT_PROJECT_DIR="$PPI" CCT_AUTOBUILD_BACKEND=pi \
     CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$DRIVER" demo-feat 2>&1) || RC=$?
 assert_exit "pi backend: single-phase completes (exit 0)" 0 "$RC"
 assert_eq "pi backend: status done" "done" "$(jq -r '.status' "$PPI/.cct/auto-build/demo-feat/state.json")"
+assert_eq "pi backend: cost accrued from the NDJSON result envelope (#197)" "0.02" \
+    "$(jq -r '.totals.cost_usd' "$PPI/.cct/auto-build/demo-feat/state.json")"
 assert_eq "pi backend: pi-code was invoked" "1" "$([[ $(cat "$PICOUNT") -gt 0 ]] && echo 1 || echo 0)"
 assert_eq "pi backend: claude was NOT invoked" "0" "$(cat "$CLCOUNT")"
 if grep -rqE '"subject_provider":[[:space:]]*"pi"' "$PPI/.cct" 2>/dev/null; then

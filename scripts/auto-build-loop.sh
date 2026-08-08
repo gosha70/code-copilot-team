@@ -796,21 +796,28 @@ check_caps() {
 
 # ── Headless sessions (FR-5, FR-6) ───────────────────────────
 
-# Sets SESSION_SUBTYPE and SESSION_ID globals (NOT command substitution:
-# #197: the current CLI's `-p --output-format json` emits a JSON ARRAY of
-# messages ([{type:"system",subtype:"init"}, ..., {type:"result",
-# subtype:"success", total_cost_usd, session_id}]); older CLIs emitted the
-# single result object. Normalize BOTH shapes to the result object before
-# extracting — reading .subtype on the array yielded "unknown" and parked
-# every successful phase, cost read 0 (caps never accrued), and session_id
-# read empty (breaking --resume chaining).
+# #197: backend result files come in THREE shapes — the current claude
+# CLI's `-p --output-format json` emits a JSON ARRAY of messages
+# ([{type:"system",subtype:"init"}, ..., {type:"result",
+# subtype:"success", total_cost_usd, session_id}]); pi's `--mode json`
+# emits JSON LINES with the result envelope last (documented in
+# adapters/pi/docs/headless-harness.md); older CLIs emitted the single
+# result object. Slurp-normalize ALL of them to the result object before
+# extracting — reading .subtype on the raw stream yielded "unknown" (or
+# a multi-line string for NDJSON) and parked every successful phase,
+# cost read 0 (caps never accrued), and session_id read empty (breaking
+# --resume chaining). The `.[-1]` fallback (no explicit type=="result"
+# element) is #197's own proposal, kept deliberately: it only matters
+# for a result envelope missing its `type` field, and every real
+# non-result tail element lacks subtype:"success" so it still parks.
 session_result_obj() {
     # session_result_obj <result-file> — the result object on stdout ('{}' if none)
-    jq -c 'if type == "array"
-           then ([.[] | select(.type? == "result")] | last) // (.[-1] // {})
-           else . end' "$1" 2>/dev/null || echo '{}'
+    jq -c -s 'map(if type == "array" then .[] else . end)
+              | ([.[] | select(.type? == "result")] | last) // (.[-1] // {})' \
+        "$1" 2>/dev/null || echo '{}'
 }
 
+# Sets SESSION_SUBTYPE and SESSION_ID globals (NOT command substitution:
 # park() must be able to exit the whole driver, not a $(...) subshell).
 run_claude_session() {
     # run_claude_session <prompt-file> <result-file> [resume-session-id]
