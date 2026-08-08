@@ -64,6 +64,7 @@ MOCK_BIN=$(mktemp -d)
 cat > "$MOCK_BIN/claude" << 'MOCK'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then echo "mock-claude 0.0.1"; exit 0; fi
+printf 'ARGV %s\n' "$*" >> "${MOCK_CLAUDE_ARGV_LOG:-/dev/null}"
 COUNTER_FILE="${MOCK_CLAUDE_COUNTER:-/tmp/mock-claude-count}"
 COUNT=$(( $(cat "$COUNTER_FILE" 2>/dev/null || echo 0) + 1 ))
 echo "$COUNT" > "$COUNTER_FILE"
@@ -72,8 +73,23 @@ if [[ -n "${MOCK_CLAUDE_SCRIPT:-}" && -f "$MOCK_CLAUDE_SCRIPT" ]]; then
     # shellcheck source=/dev/null
     source "$MOCK_CLAUDE_SCRIPT"
 fi
-printf '{"subtype":"%s","session_id":"mock-session-%s","total_cost_usd":%s,"num_turns":3,"result":"done"}\n' \
-    "${MOCK_CLAUDE_SUBTYPE:-success}" "$COUNT" "${MOCK_CLAUDE_COST:-0.01}"
+# #197: the REAL CLI emits a JSON ARRAY of messages with the result as
+# the type=="result" element — the mock now defaults to that shape so the
+# whole suite exercises reality. MOCK_CLAUDE_LEGACY=1 emits the old
+# single-object form; MOCK_CLAUDE_ARRAY_N pads the array with N filler
+# assistant messages (captured real runs are 300+ elements).
+RESULT_OBJ=$(printf '{"type":"result","subtype":"%s","session_id":"mock-session-%s","total_cost_usd":%s,"num_turns":3,"is_error":false,"result":"done"}' \
+    "${MOCK_CLAUDE_SUBTYPE:-success}" "$COUNT" "${MOCK_CLAUDE_COST:-0.01}")
+if [[ "${MOCK_CLAUDE_LEGACY:-0}" == "1" ]]; then
+    printf '%s\n' "$RESULT_OBJ"
+else
+    printf '[{"type":"system","subtype":"init","session_id":"mock-session-%s"}' "$COUNT"
+    N="${MOCK_CLAUDE_ARRAY_N:-2}"
+    for ((i = 0; i < N; i++)); do
+        printf ',{"type":"assistant","message":{"content":[{"type":"text","text":"step %s"}]}}' "$i"
+    done
+    printf ',%s]\n' "$RESULT_OBJ"
+fi
 MOCK
 chmod +x "$MOCK_BIN/claude"
 
@@ -422,7 +438,12 @@ if [[ -n "${MOCK_PI_SCRIPT:-}" && -f "$MOCK_PI_SCRIPT" ]]; then
     # shellcheck source=/dev/null
     source "$MOCK_PI_SCRIPT"
 fi
-printf '{"subtype":"%s","session_id":"pi-session-%s","total_cost_usd":%s,"num_turns":2,"result":"done"}\n' \
+# #197: pi's --mode json emits JSON LINES with the result envelope last
+# (adapters/pi/docs/headless-harness.md) — the mock matches that
+# contract so the suite exercises the real shape, not a legacy object.
+printf '{"type":"system","subtype":"init","session_id":"pi-session-%s"}\n' "$COUNT"
+printf '{"type":"assistant","message":"working"}\n'
+printf '{"type":"result","subtype":"%s","session_id":"pi-session-%s","total_cost_usd":%s,"num_turns":2,"result":"done"}\n' \
     "${MOCK_PI_SUBTYPE:-success}" "$COUNT" "${MOCK_PI_COST:-0.02}"
 MOCK
 chmod +x "$MOCK_BIN/pi-code"
@@ -1221,6 +1242,8 @@ OUTPUT=$(cd "$PPI" && CCT_PROJECT_DIR="$PPI" CCT_AUTOBUILD_BACKEND=pi \
     CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$DRIVER" demo-feat 2>&1) || RC=$?
 assert_exit "pi backend: single-phase completes (exit 0)" 0 "$RC"
 assert_eq "pi backend: status done" "done" "$(jq -r '.status' "$PPI/.cct/auto-build/demo-feat/state.json")"
+assert_eq "pi backend: cost accrued from the NDJSON result envelope (#197)" "0.02" \
+    "$(jq -r '.totals.cost_usd' "$PPI/.cct/auto-build/demo-feat/state.json")"
 assert_eq "pi backend: pi-code was invoked" "1" "$([[ $(cat "$PICOUNT") -gt 0 ]] && echo 1 || echo 0)"
 assert_eq "pi backend: claude was NOT invoked" "0" "$(cat "$CLCOUNT")"
 if grep -rqE '"subject_provider":[[:space:]]*"pi"' "$PPI/.cct" 2>/dev/null; then
@@ -1747,6 +1770,126 @@ assert_eq "no estimate when the channel measured" "0" \
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
 
+# #197 same-class fold: an ARRAY-form CLI result redirected into the
+# cost file (a natural cli-provider wiring) measures via its result
+# element.
+ARRAYCOST_PROVIDER=$(mktemp)
+cat > "$ARRAYCOST_PROVIDER" << 'SH'
+#!/usr/bin/env bash
+printf '[{"type":"system","subtype":"init"},{"type":"result","subtype":"success","total_cost_usd":3.5,"session_id":"r1"}]\n' > "$CCT_REVIEW_COST_FILE"
+printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+ARRAYCOST_PROFILE=$(mktemp)
+cat > "$ARRAYCOST_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $ARRAYCOST_PROVIDER"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$ARRAYCOST_PROFILE" run_driver "$P"
+assert_exit "array-form cost file lands (exit 0)" 0 "$RC"
+assert_eq "array-form cost file IS measured via its result element" "3.51" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "no estimate when the array-form channel measured" "0" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+rm -f "$ARRAYCOST_PROVIDER" "$ARRAYCOST_PROFILE"
+
+# #197 review P3: a STREAM (pi-style JSON Lines) carrying more than one
+# cost-bearing document. Per-document jq emitted one value per document,
+# and a multi-line cost is not a clean degrade to "unmetered": the
+# `tonumber` in the findings heredoc failed and wrote findings-round-N
+# as a 1-BYTE BLANK file that still satisfied downstream `-f` checks.
+# The slurp resolves it to the LAST result envelope.
+NDCOST_PROVIDER=$(mktemp)
+cat > "$NDCOST_PROVIDER" << 'SH'
+#!/usr/bin/env bash
+{
+  printf '{"type":"system","subtype":"init"}\n'
+  printf '{"type":"result","subtype":"success","total_cost_usd":1.0,"session_id":"r1"}\n'
+  printf '{"type":"result","subtype":"success","total_cost_usd":3.5,"session_id":"r2"}\n'
+} > "$CCT_REVIEW_COST_FILE"
+printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+NDCOST_PROFILE=$(mktemp)
+cat > "$NDCOST_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $NDCOST_PROVIDER"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$NDCOST_PROFILE" run_driver "$P"
+assert_exit "multi-cost-document stream lands (exit 0)" 0 "$RC"
+assert_eq "multi-cost stream measures the LAST result (0.01 + 3.5)" "3.51" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "no estimate when the multi-cost stream measured" "0" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+# Search recursively: on a PASS round the driver archives .cct/review into
+# the phase dir, so the findings file is not at a fixed path.
+FR_TOTAL=0; FR_BAD=0
+while IFS= read -r frf; do
+    FR_TOTAL=$((FR_TOTAL + 1))
+    jq -e 'type == "object"' "$frf" >/dev/null 2>&1 || FR_BAD=$((FR_BAD + 1))
+done < <(find "$P" -name 'findings-round-*.json' 2>/dev/null)
+assert_eq "findings-round file stays valid JSON (not a 1-byte blank)" "1 0" \
+    "$( [[ $FR_TOTAL -ge 1 ]] && echo "1 $FR_BAD" || echo "0 $FR_BAD")"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+rm -f "$NDCOST_PROVIDER" "$NDCOST_PROFILE"
+
+# #197 review P3: the cost channel is a TRUST BOUNDARY, so its fallback
+# must fail CLOSED (unlike the driver's, where a bad tail merely parks).
+# A stream with no result envelope must NOT promote some other document's
+# total_cost_usd to a "measurement" — a bogus measurement is exactly what
+# suppresses the driver's conservative estimate.
+NORESULT_PROVIDER=$(mktemp)
+cat > "$NORESULT_PROVIDER" << 'SH'
+#!/usr/bin/env bash
+printf '[{"type":"assistant","total_cost_usd":9.99}]\n' > "$CCT_REVIEW_COST_FILE"
+printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+NORESULT_PROFILE=$(mktemp)
+cat > "$NORESULT_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $NORESULT_PROVIDER"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$NORESULT_PROFILE" run_driver "$P"
+assert_exit "result-less cost stream lands (exit 0)" 0 "$RC"
+assert_eq "non-result document is NEVER promoted to a measurement" "0.01" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "result-less cost stream falls back to the estimate" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+rm -f "$NORESULT_PROVIDER" "$NORESULT_PROFILE"
+
 # A NEGATIVE cost file is invalid — unmetered, never a budget credit.
 NEGFILE_PROVIDER=$(mktemp)
 cat > "$NEGFILE_PROVIDER" << 'SH'
@@ -1837,6 +1980,53 @@ assert_eq "only the real invocation was debited (no phantom debit)" "2" \
 rm -rf "$P"
 
 unset CCT_GH_BIN
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+echo "=== #197: CLI array-form result parsing ==="
+# ══════════════════════════════════════════════════════════════
+# The default mock now emits the array shape everywhere; these cases pin
+# the captured-run scale, the legacy fallback, and --resume chaining.
+
+# A 344-element array (captured real runs' scale): subtype extracted,
+# phase advances, cost accrues the REAL total (was: parked as
+# subtype=unknown with cost 0).
+P=$(setup_project); single_phase "$P"
+MOCK_CLAUDE_ARRAY_N=342 run_driver "$P"
+assert_exit "344-element array result completes the phase (exit 0)" 0 "$RC"
+assert_eq "array run status done" "done" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "cost accrued from the array result element" "0.01" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# Legacy single-object output still parses (older CLIs).
+P=$(setup_project); single_phase "$P"
+MOCK_CLAUDE_LEGACY=1 run_driver "$P"
+assert_exit "legacy single-object result still completes (exit 0)" 0 "$RC"
+assert_eq "legacy run status done" "done" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# session_id from the array result element chains the error_max_turns
+# --resume continuation (was: empty id, continuation impossible).
+P=$(setup_project); single_phase "$P"
+MAXTURNS_SCRIPT=$(mktemp)
+cat > "$MAXTURNS_SCRIPT" << 'SCRIPTLET'
+if [[ "$MOCK_SESSION_N" == "1" ]]; then
+    export MOCK_CLAUDE_SUBTYPE=error_max_turns
+fi
+if [[ ! -f demo.sh ]]; then
+    printf '#!/usr/bin/env bash\necho ok\n' > demo.sh
+fi
+SCRIPTLET
+ARGV_LOG=$(mktemp)
+MOCK_CLAUDE_SCRIPT="$MAXTURNS_SCRIPT" MOCK_CLAUDE_ARGV_LOG="$ARGV_LOG" run_driver "$P"
+assert_exit "max-turns continuation run completes (exit 0)" 0 "$RC"
+assert_contains "continuation resumed the CLI session id from the array" \
+    "$(cat "$ARGV_LOG")" "resume mock-session-1"
+rm -f "$MAXTURNS_SCRIPT" "$ARGV_LOG"; rm -rf "$P"
 
 echo ""
 

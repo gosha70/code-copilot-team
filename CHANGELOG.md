@@ -55,6 +55,27 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   attended configs and inactive for v1.
 
 ### Fixed
+- **Successful build sessions no longer park (#197)** — the driver
+  parsed `claude -p --output-format json` as a single result object,
+  but the current CLI emits a JSON array of messages (result = the
+  `type=="result"` element): `.subtype` on the array read "unknown" and
+  parked every succeeded phase, cost read 0 (caps never accrued), and
+  `session_id` read empty (breaking `--resume` chaining). Both session
+  backends now slurp-normalize all three real shapes — the claude
+  message array, pi's JSON-LINES stream, and the legacy object — via
+  `session_result_obj()`;
+  the test suite's mock CLI emits the array shape by default so every
+  driver path is exercised against the real output, with legacy-object,
+  344-element captured-scale, and resume-chaining regressions. The same
+  normalization is folded onto the review runner's `CCT_REVIEW_COST_FILE`
+  reader, which a cli provider may legitimately point at a whole CLI
+  result: a stream carrying more than one cost-bearing document used to
+  yield a multi-line cost that blanked the cost state and wrote
+  `findings-round-N.json` as a 1-byte file (still passing downstream
+  `-f` checks) — reproduced driving the driver to exit 6. Unlike the
+  driver, the cost reader keeps NO tail fallback: that channel is a
+  trust boundary where a promoted non-result document would forge a
+  measurement and suppress the conservative estimate.
 - **Autonomous builds run through the branded launcher (#195)** — the
   auto-build driver's Claude backend defaulted to the generic `claude`
   binary while the PI backend correctly used `pi-code`, so unattended

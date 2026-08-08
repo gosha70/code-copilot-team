@@ -531,7 +531,36 @@ fi
 # surfaced per-round in findings-round-N.json (invocation_cost_usd).
 INVOCATION_COST=""
 if [[ -f "$CCT_REVIEW_COST_FILE" ]]; then
-    INVOCATION_COST=$(jq -r 'if (type == "object") and ((.total_cost_usd | type) == "number")
+    # #197 (same bug class as the driver): a cli provider may redirect a
+    # whole CLI result — claude's ARRAY or pi's JSON-LINES stream — into
+    # the cost file. Slurp-normalize to the result element first, exactly
+    # like the driver's session_result_obj(); `-s` is what guarantees a
+    # SINGLE value out. Per-document evaluation could emit one line per
+    # cost-bearing document, and a multi-line INVOCATION_COST is not a
+    # clean degrade to "unmetered": `$c | tonumber` below then fails
+    # (COST_STATE blanks) and, worse, the same tonumber inside the
+    # findings-round-N.json heredoc writes a 1-byte blank file that still
+    # satisfies downstream `-f` checks.
+    #
+    # No tail fallback here — deliberately NOT the driver's shape. The
+    # driver's `.[-1]` fails CLOSED (a type-less tail element lacks
+    # subtype:"success", so it parks); the same fallback here would fail
+    # OPEN, promoting some non-result element's total_cost_usd to a
+    # "measurement" — and per the trust-boundary note above, a bogus
+    # measurement is precisely what suppresses the driver's conservative
+    # estimate. The single-document fallback below is NOT that: it is the
+    # canonical cost file itself, the purpose-written {"total_cost_usd":N}
+    # object, which after slurping is a 1-element array. `type` is the
+    # discriminator: every CLI stream element carries one, the canonical
+    # file carries none — so a lone `{"type":"assistant",...}` element is
+    # NOT promoted. Anything else with no result element resolves to {}
+    # → unmetered.
+    INVOCATION_COST=$(jq -r -s 'map(if type == "array" then .[] else . end)
+           | ([.[] | select(.type? == "result")] | last)
+             // (if (length == 1) and ((.[0] | type) == "object")
+                    and ((.[0] | has("type")) | not)
+                 then .[0] else {} end)
+           | if (type == "object") and ((.total_cost_usd | type) == "number")
               and (.total_cost_usd >= 0)
            then .total_cost_usd else empty end' "$CCT_REVIEW_COST_FILE" 2>/dev/null || true)
     rm -f "$CCT_REVIEW_COST_FILE"
