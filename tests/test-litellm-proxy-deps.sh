@@ -103,7 +103,15 @@ if [[ "$ONLINE" -eq 1 ]]; then
         [[ -n "$VENV" && -d "$VENV" ]] && rm -rf "$VENV"
         return 0
     }
-    trap proxy_selftest_cleanup EXIT INT TERM
+    # Cleanup runs on EXIT; the signal handlers must EXIT, not merely clean.
+    # A handler that returns 0 lets bash resume the script after the signal —
+    # so a SIGINT could run cleanup and then carry on with a deleted venv, or
+    # re-create the very resources it just removed. Exiting with the
+    # conventional status also makes the run's disposition honest (130/143),
+    # and the EXIT trap still does the reaping.
+    trap proxy_selftest_cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
 
     VENV=$(mktemp -d -t cct-proxydeps-XXXXXX)
     python3 -m venv "$VENV" >/dev/null 2>&1

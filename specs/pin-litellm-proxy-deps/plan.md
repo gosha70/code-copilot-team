@@ -60,6 +60,14 @@ changed, and the benchmark self-broke the moment fastapi 0.141.1 shipped.
    configured model, then SIGTERM with no leaked listener. No upstream vLLM
    is needed — LiteLLM serves `/v1/models` from its own config.
 
+   Review round 4 (P2) fixed the trap SHAPE: `trap cleanup EXIT INT TERM`
+   runs cleanup and *returns 0*, so bash resumes the script after the signal
+   — potentially continuing with a deleted venv, or re-creating what it just
+   removed, and never producing the claimed 130/143. Cleanup now stays on
+   `EXIT` while `INT`/`TERM` handlers `exit` with the conventional status.
+   My round-3 "verified by interrupting" used an explicit `exit 130`, which
+   only exercised the EXIT trap — the signal path was never tested.
+
    Review round 3 (P2) made that startup test fail-safe: an OS-assigned free
    port instead of a guess inside a fixed 8800-9199 window (a "random" port
    from a fixed range still collides, and a collision reads as a proxy
