@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "verification.schema.json",
+  "title": "specs/<feature>/verification.yaml — requirement→verifier evidence graph",
+  "description": "Contract for the traceability artifact introduced by #190 §3 (increment B, #193). The artifact is YAML on disk in a deliberately CONSTRAINED two-level shape so shell tooling can parse it without a YAML library; this schema describes that shape and is the authoritative contract — scripts/lib/verification-common.sh is the enforcement. Workflow: scripts/generate-verification-draft.sh emits status: draft with placeholder verifiers; the AUTHOR reviews, fills real verifiers, and flips status to finalized; validate-spec.sh --unattended validates at admission and never authors. spec.md is the only authoritative source of requirement text: statement is generated display text, statement_sha binds it to the normalized FR-N text (sha256 over 'FR-N: <normalized statement>'), and admission recomputes every hash, failing on any mismatch. Increment B admits only kind: deterministic verifiers; kind: runtime_conformance is schema-valid but INADMISSIBLE until the #190 §6 evaluator ships in increment C (a verifier something depends on cannot be unavailable).",
+  "type": "object",
+  "required": ["status", "feature_id"],
+  "properties": {
+    "status": {
+      "enum": ["draft", "finalized"],
+      "description": "draft = generator output, inadmissible by definition; finalized = author-reviewed. Admission requires finalized."
+    },
+    "feature_id": { "type": "string", "minLength": 1 }
+  },
+  "patternProperties": {
+    "^FR-[0-9]+[a-z]?$": {
+      "type": "object",
+      "required": ["statement", "statement_sha", "verifiers"],
+      "additionalProperties": false,
+      "properties": {
+        "statement": {
+          "type": "string",
+          "description": "Generated display text — never authoritative; spec.md is."
+        },
+        "statement_sha": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "verifiers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["kind", "test"],
+                "additionalProperties": false,
+                "properties": {
+                  "kind": { "const": "deterministic" },
+                  "test": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Executable target: a path relative to the project root, or a command resolvable on PATH. Placeholder TODO values fail admission."
+                  },
+                  "metric": { "type": "string" }
+                }
+              },
+              {
+                "type": "object",
+                "required": ["kind", "criterion"],
+                "additionalProperties": false,
+                "properties": {
+                  "kind": { "const": "runtime_conformance" },
+                  "criterion": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Concrete runtime criterion. Requires the #190 §6 evaluator (increment C) — inadmissible in increment B."
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}
