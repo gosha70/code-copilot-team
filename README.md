@@ -16,23 +16,38 @@ Built for **Claude Code** as the reference implementation, with portable convent
 
 ---
 
+## Quick Start
+
+Get running in about 5 minutes:
+
+```bash
+# 1. Clone
+git clone https://github.com/gosha70/code-copilot-team.git
+cd code-copilot-team
+
+# 2. Install for your AI tool (Claude Code shown — all tools listed below)
+./scripts/setup.sh --claude-code
+
+# 3. Discover what you just installed
+./scripts/cct list          # every slash command, skill, and capability
+```
+
+**Discover the features:** browse the generated **[Feature Index](docs/features.md)** —
+every slash command, skill, and capability in one place — or run `scripts/cct list`
+anytime. More install targets (Cursor, Codex, Copilot, Windsurf, Aider, and the
+Claude Code plugin) are under [Install options](#install-options-all-tools).
+
+New to the ideas behind it? See [Why this exists](#why-this-exists),
+[Spec-Driven Development](#spec-driven-development-sdd), and the
+[Documentation](#documentation) index.
+
 ## Why This Exists
 
 Every rule in this repo is failure-driven — it exists because we hit the specific failure it prevents, often more than once. After analyzing 13 sessions of a real project build, we identified six recurring patterns: dependency breaks, agents ignoring conventions, context window exhaustion, schema drift during parallel builds, agents not asking clarifying questions, and commit granularity issues. This setup prevents all of them.
 
 ## Framework Compliance
 
-Evaluated against the two leading AI coding agent frameworks (February 2026):
-
-### OpenAI Harness Engineering — 5.0 / 5.0
-
-![OpenAI Harness Engineering Scorecard](docs/images/harness-engineering-scorecard.png)
-
-### Claude Code Best Practice — 10.0 / 10.0
-
-![Claude Code Best Practice Scorecard](docs/images/best-practice-scorecard.png)
-
-> **Sources:** [OpenAI Harness Engineering](https://openai.com/index/harness-engineering/) · [Claude Code Best Practice](https://github.com/shanraisshan/claude-code-best-practice)
+Independently scored **5.0 / 5.0** on [OpenAI Harness Engineering](https://openai.com/index/harness-engineering/) and **10.0 / 10.0** on [Claude Code Best Practice](https://github.com/shanraisshan/claude-code-best-practice) (February 2026) — see the [scorecards](docs/images/harness-engineering-scorecard.png).
 
 ## Further Reading
 
@@ -395,7 +410,7 @@ Skills: `design-system`, `visual-review` · Agent: `visual-reviewer` · Template
 ![Three - Phase Agent Workflow](docs/images/three-phase-workflow.png)
 - **Adaptive launcher** (`claude-code`) — uses `cmux` on macOS, `tmux` elsewhere, with git context display, `--peer-review` flags, and `sync` for keeping projects aligned with template updates.
 
-## Quick Start
+## Install options (all tools)
 
 ```bash
 # 1. Clone

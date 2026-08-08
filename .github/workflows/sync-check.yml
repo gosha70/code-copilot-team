@@ -102,6 +102,13 @@ jobs:
       - name: Run origin-alignment tests
         run: bash tests/test-origin-alignment.sh
 
+      # docs/features.md is generated from shared/skills/, the claude-code
+      # commands dir, and the capability catalog. Adding a command or skill
+      # without regenerating leaves the published index lying about what the
+      # harness offers, so a stale index fails the build.
+      - name: Check the feature index is not stale
+        run: bash scripts/generate-feature-index.sh --check
+
       - name: Run shared structure tests
         env:
           HOME: ${{ runner.temp }}/cct-home
