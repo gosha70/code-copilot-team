@@ -296,7 +296,7 @@ assert_eq "real spec with subsections extracts fully (infra-verification-gate)" 
 
 # Regression (review P1): vacuous verifier resolution. None of these
 # "resolve" to a genuine test and each must be refused.
-for bad in "bash no/such/test.sh" "." "true" "specs/demo-feat/spec.md" "specs"; do
+for bad in "bash no/such/test.sh" "." "true" "specs/demo-feat/spec.md" "specs" "bash" "python3"; do
     D=$(mk_fixture); finalize "$D"
     python3 - "$D/specs/demo-feat/verification.yaml" "$bad" << 'EOF'
 import sys
@@ -351,6 +351,24 @@ run_admission "$D"
 assert_exit "invalid config refused" 1 "$RC"
 assert_eq "rejected config's test.command never executed" "0" \
     "$([[ -f "$D/PWNED" ]] && echo 1 || echo 0)"
+rm -rf "$D"
+
+# Regression (user P2): governance gates decide BEFORE the only
+# executing check — a draft plan's test.command must never run.
+D=$(mk_fixture); finalize "$D"
+sedi 's/^status: approved/status: draft/' "$D/specs/demo-feat/plan.md"
+python3 - "$D/specs/demo-feat/automation.json" "$D" << 'EOF'
+import sys, json
+p, d = sys.argv[1], sys.argv[2]
+cfg = json.load(open(p))
+cfg["test"]["command"] = f"touch {d}/PWNED3 && exit 0"
+json.dump(cfg, open(p, 'w'))
+EOF
+run_admission "$D"
+assert_exit "draft-plan feature refused" 1 "$RC"
+assert_eq "ungoverned feature's test.command never executed" "0" \
+    "$([[ -f "$D/PWNED3" ]] && echo 1 || echo 0)"
+assert_contains "skip names the governance gate" "$OUTPUT" "rejected or ungoverned"
 rm -rf "$D"
 
 # DEFER visibility on the earliest refusal (missing artifact).

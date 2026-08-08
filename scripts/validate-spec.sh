@@ -237,7 +237,16 @@ admission_target_ok() {
       return 1 ;;   # no-op / shell-builtin heads cannot execute a test
   esac
   command -v "$head" >/dev/null 2>&1 || return 1
-  [[ "$t" == "$head" ]] && return 0
+  if [[ "$t" == "$head" ]]; then
+    # A bare interpreter/pager with nothing to run verifies nothing;
+    # a bare tool with its own suite semantics (make, npm, pytest) is
+    # legitimate and indistinguishable statically — increment C, which
+    # actually RUNS verifiers, decides those for real.
+    case "$head" in
+      bash|sh|zsh|dash|ksh|cat|python|python3|node|npx|perl|ruby) return 1 ;;
+    esac
+    return 0
+  fi
   local w
   for w in ${t#* }; do
     case "$w" in
@@ -384,11 +393,36 @@ validate_admission() {
     pass "$id: automation.json valid, profile unattended, caps explicit"
   fi
 
-  # 8. test.command exists and passes on the CURRENT ref (§11).
-  #    Runs ONLY from a config that passed check 7 — admission must
-  #    never execute a command lifted from a rejected config. Bounded
-  #    where timeout(1) exists (same convention as the driver's C-5).
-  if [[ "$autocfg_ok" == "true" ]]; then
+  # 8. Governance gates BEFORE any command execution: plan approved +
+  #    origin gate <=1 (existing gates, kept). These are non-executing
+  #    checks — a feature that is inadmissible on governance must never
+  #    get to run its own test.command first.
+  local governance_ok=true
+  local plan_status=""
+  if [[ -f "$spec_dir/plan.md" ]]; then
+    plan_status="$(extract_frontmatter_field "$spec_dir/plan.md" "status")"
+  fi
+  if [[ "$plan_status" != "approved" ]]; then
+    fail "$id: plan.md status is '${plan_status:-missing}' — admission requires 'approved'"
+    governance_ok=false
+  else
+    pass "$id: plan.md approved"
+  fi
+  local origin_exit=0
+  bash "$REPO_DIR/scripts/check-origin-alignment.sh" "$id" >/dev/null 2>&1 || origin_exit=$?
+  if [[ $origin_exit -gt 1 ]]; then
+    fail "$id: origin gate exit $origin_exit (needs <=1) — resolve alignment before admission"
+    governance_ok=false
+  else
+    pass "$id: origin gate exit $origin_exit"
+  fi
+
+  # 9. test.command exists and passes on the CURRENT ref (§11) — the
+  #    ONLY executing check, so it runs LAST and only when the config
+  #    (check 7) and governance (check 8) already passed: admission
+  #    never executes a command from a rejected or ungoverned feature.
+  #    Bounded where timeout(1) exists (driver C-5 convention).
+  if [[ "$autocfg_ok" == "true" && "$governance_ok" == "true" ]]; then
     local test_cmd
     test_cmd="$(jq -r '.test.command // empty' "$autocfg" 2>/dev/null)"
     if [[ -z "$test_cmd" ]]; then
@@ -409,25 +443,7 @@ validate_admission() {
       fi
     fi
   else
-    fail "$id: test.command not attempted — its config failed check 7 (admission never executes commands from a rejected config)"
-  fi
-
-  # 9. Plan approved + origin gate <=1 (existing gates, kept).
-  local plan_status=""
-  if [[ -f "$spec_dir/plan.md" ]]; then
-    plan_status="$(extract_frontmatter_field "$spec_dir/plan.md" "status")"
-  fi
-  if [[ "$plan_status" != "approved" ]]; then
-    fail "$id: plan.md status is '${plan_status:-missing}' — admission requires 'approved'"
-  else
-    pass "$id: plan.md approved"
-  fi
-  local origin_exit=0
-  bash "$REPO_DIR/scripts/check-origin-alignment.sh" "$id" >/dev/null 2>&1 || origin_exit=$?
-  if [[ $origin_exit -gt 1 ]]; then
-    fail "$id: origin gate exit $origin_exit (needs <=1) — resolve alignment before admission"
-  else
-    pass "$id: origin gate exit $origin_exit"
+    fail "$id: test.command not attempted — config or governance checks failed (admission never executes commands for a rejected or ungoverned feature)"
   fi
 
   print_defers
