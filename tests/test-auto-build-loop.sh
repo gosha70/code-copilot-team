@@ -2235,6 +2235,59 @@ assert_eq "the driver clock reset is journalled" "1" \
     "$(grep -c 'driver_clock_reset' "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null || true)"
 rm -rf "$P"; rm -f "$BADPROV2"
 
+# #210 follow-up (review P1): a MILESTONE resume is a successful resume too,
+# but it bypasses resume_parked() entirely — so the clock stayed anchored
+# before the human's sign-off wait. The existing milestone test ends after
+# phase 2, leaving no capped session to expose it; this fixture has a THIRD
+# phase, so the first check_caps() after sign-off runs for real.
+P=$(setup_project)
+cat >> "$P/specs/demo-feat/tasks.md" << 'TASKS'
+
+## US3: Print even more
+
+| # | Task | File(s) |
+|---|------|---------|
+| 3 | Create third.sh printing third | third.sh |
+
+**Checkpoint US3**
+- [ ] tests pass
+TASKS
+# Pause after phase 2 so a phase still remains when the human signs off.
+cfg_set "$P" '.phases.milestone_every=2'
+git -C "$P" add -A && git -C "$P" commit -q -m "three-phase milestone fixture"
+THREE_SCRIPT=$(mktemp)
+cat "$DEFAULT_SCRIPT" > "$THREE_SCRIPT"
+python3 - "$THREE_SCRIPT" << 'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("""elif [[ ! -f extra.sh ]]; then
+    printf '#!/usr/bin/env bash\\necho more\\n' > extra.sh""",
+"""elif [[ ! -f extra.sh ]]; then
+    printf '#!/usr/bin/env bash\\necho more\\n' > extra.sh
+elif [[ ! -f third.sh ]]; then
+    printf '#!/usr/bin/env bash\\necho third\\n' > third.sh""")
+open(p, 'w').write(s)
+PYEOF
+MOCK_CLAUDE_SCRIPT="$THREE_SCRIPT" run_driver "$P"
+assert_exit "three-phase run pauses at the milestone (exit 3)" 3 "$RC"
+assert_eq "status is milestone-paused" "milestone-paused" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+# The human takes six hours to review and sign off — far past the fixture's
+# 3600s cap.
+ST="$P/.cct/auto-build/demo-feat/state.json"
+jq '.totals.started_epoch = (.totals.started_epoch - 21600)' "$ST" > "$ST.tmp" && mv "$ST.tmp" "$ST"
+echo "approved-by: gosha 2026-08-08" >> "$P/specs/demo-feat/automation-summary.md"
+MOCK_CLAUDE_SCRIPT="$THREE_SCRIPT" run_driver "$P" --resume
+assert_exit "milestone resume completes despite a six-hour sign-off wait" 0 "$RC"
+assert_eq "no wall-clock cap park after milestone sign-off" "0" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'wall-clock cap' || true)"
+assert_eq "the milestone resume resets the clock too" "1" \
+    "$(grep -c 'driver_clock_reset' "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null || true)"
+assert_eq "the third phase actually ran" "1" \
+    "$( [[ -f "$P/third.sh" ]] && echo 1 || echo 0 )"
+rm -rf "$P"; rm -f "$THREE_SCRIPT"
+
 # D2: two producers, two key names. The runner writes `breaker`, the driver
 # writes `breaker_type`, and the driver read only the latter — so EVERY
 # runner breaker was reported as 'unknown' while the file said "timeout".

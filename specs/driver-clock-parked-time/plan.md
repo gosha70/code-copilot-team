@@ -43,6 +43,25 @@ also require persisting elapsed at every park. The per-attempt reading is
 what the review loop already does post-#207, and matching the sibling guard
 was the issue's own stated requirement.
 
+## Review round 2 (user P1): the milestone path was still uncovered
+
+The first cut put the reset inside `resume_parked()`, which handles
+`status: parked` only. The `milestone-paused` arm resumes WITHOUT going
+through it, so a human signing off a milestone slowly left the clock
+anchored before their wait — and with a phase still to run, its first
+`check_caps()` tripped immediately. That contradicted this plan's own
+"each successful resume restarts the budget" contract.
+
+Both reset sites are now one helper, `reset_run_clocks()`, called from
+`resume_parked()` and from the milestone arm. Keeping it in a helper is
+what stops the two resume paths, and the two guards, drifting apart again.
+
+The existing milestone test could not have caught this: it ends after
+phase 2, so no capped session remained. The new regression uses a THREE
+phase fixture that pauses after phase 2, so the first `check_caps()` after
+sign-off runs for real. Against the previous commit it fails with a
+wall-clock park and phase 3 never runs.
+
 ## Test note
 
 The first version of the regression parked a single-phase run and passed

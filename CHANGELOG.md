@@ -90,7 +90,10 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   the common resume path alongside the review-loop reset, so both guards
   restart together and cannot drift apart again; `cap_exceeded` resume
   behaviour is unchanged. Semantics are per-attempt, matching the review
-  loop post-#207.
+  loop post-#207. Both resets live in one helper (`reset_run_clocks`) called
+  from every successful resume path — including the `milestone-paused` arm,
+  which bypasses `resume_parked()` entirely and therefore still billed a
+  human's sign-off wait until it was wired in.
 - **A verbose reviewer no longer destroys the findings file (#209)** — the
   reviewer's entire output travelled as a `jq --arg`, so a verbose reviewer
   (codex echoes the prompt plus its reasoning, captured with `2>&1`) blew

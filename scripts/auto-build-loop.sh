@@ -1554,6 +1554,41 @@ consume_review_decision() {
     mv "$dec" "$LEDGER_DIR/escalations/decision-$esc_id.json" 2>/dev/null || rm -f "$dec"
 }
 
+# Restart BOTH wall-clock guards after a successful resume (#205, #210).
+#
+# Parking and milestone pauses exist to invite human intervention, and every
+# reason for one needs work measured in tens of minutes: fixing provider
+# config, resolving an origin divergence, reviewing a milestone. Billing that
+# turnaround against a run budget killed real runs — one died at "17886s of
+# 14400s" having done ~25 minutes of actual work, and a stale review clock
+# tripped its breaker before a single round could run.
+#
+# ONE implementation, called from EVERY successful resume path:
+#   - resume_parked()          (status: parked)
+#   - the milestone-paused arm (status: milestone-paused)
+# The milestone path was the hole left by #210's first cut: it bypasses
+# resume_parked() entirely, so a human signing off a milestone slowly could
+# still have the next phase's first check_caps() trip on a stale clock.
+# Keeping the reset in a helper is what stops the two paths — and the two
+# guards — drifting apart again.
+reset_run_clocks() {
+    state_set '.totals.started_epoch = ($now | tonumber)' --arg now "$(now_epoch)"
+    journal "driver_clock_reset" "driver wall-clock cap restarted on resume (parked/paused time not counted)"
+
+    local _rs="$PROJECT_DIR/.cct/review/state.json"
+    if [[ -f "$_rs" ]]; then
+        local _tmp
+        _tmp=$(mktemp)
+        if jq --argjson now "$(now_epoch)" '.loop_start = $now' "$_rs" > "$_tmp" 2>/dev/null; then
+            mv "$_tmp" "$_rs"
+            journal "review_clock_reset" "review loop wall-clock restarted on resume (parked/paused time not counted)"
+        else
+            rm -f "$_tmp"
+            journal "artifact_error" "could not reset review loop_start in $_rs"
+        fi
+    fi
+}
+
 resume_parked() {
     # Dispatch on the newest UNRESOLVED escalation; resolution is derived
     # from human-produced artifacts only. Falls through on success.
@@ -1695,31 +1730,7 @@ resume_parked() {
     #
     # Every arm that reaches here resolved its escalation; refuse_resume
     # exits, so falling through means the resume genuinely succeeded.
-    #
-    # #210: the driver's OWN wall-clock cap had the identical defect, and the
-    # #205 comment here used to claim it "already restarts on resume". It did
-    # not: `totals.started_epoch` was reset only inside the cap_exceeded arm,
-    # so resuming from review_breaker / git_anomaly / provider_unavailable /
-    # test_failure / origin_gate inherited the original start time and billed
-    # the human's turnaround against caps.wall_clock_sec. A real run was
-    # killed at "17886s of 14400s" having done ~25 minutes of actual work.
-    # Both guards now restart together, from this one place, so the two
-    # wall-clock semantics cannot drift apart again.
-    state_set '.totals.started_epoch = ($now | tonumber)' --arg now "$(now_epoch)"
-    journal "driver_clock_reset" "driver wall-clock cap restarted on resume (parked time not counted)"
-
-    local _rs="$PROJECT_DIR/.cct/review/state.json"
-    if [[ -f "$_rs" ]]; then
-        local _tmp
-        _tmp=$(mktemp)
-        if jq --argjson now "$(now_epoch)" '.loop_start = $now' "$_rs" > "$_tmp" 2>/dev/null; then
-            mv "$_tmp" "$_rs"
-            journal "review_clock_reset" "review loop wall-clock restarted on resume (parked time not counted)"
-        else
-            rm -f "$_tmp"
-            journal "artifact_error" "could not reset review loop_start in $_rs"
-        fi
-    fi
+    reset_run_clocks
 }
 
 # ── PR create / idempotent update (FR-3..FR-7, pr profile) ──
@@ -1879,6 +1890,10 @@ if [[ "$RESUME" == "true" ]]; then
                 git -C "$PROJECT_DIR" commit -q -m "docs($FEATURE_ID): milestone sign-off [auto-build]"
             fi
             journal "resumed" "after milestone sign-off"
+            # #210 follow-up: this is a successful resume too. Without it the
+            # clock stayed anchored before the human's sign-off wait, and with
+            # a phase still to run its first check_caps() tripped immediately.
+            reset_run_clocks
             ;;
         parked)
             resume_parked
