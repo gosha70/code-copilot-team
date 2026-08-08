@@ -19,6 +19,24 @@ SPECS_DIR="${CCT_SPECS_DIR:-$REPO_DIR/specs}"
 TOTAL_PASS=0
 TOTAL_FAIL=0
 
+# Admission's throwaway test worktree (#193): tracked globally so an
+# interrupt/kill during the suite run never leaves a registered worktree
+# in the USER'S repo or a stray temp dir behind.
+ADMISSION_WT=""
+ADMISSION_WT_PARENT=""
+ADMISSION_WT_REPO=""
+admission_wt_cleanup() {
+  if [[ -n "$ADMISSION_WT" ]]; then
+    git -C "${ADMISSION_WT_REPO:-.}" worktree remove --force "$ADMISSION_WT" >/dev/null 2>&1 || rm -rf "$ADMISSION_WT"
+  fi
+  if [[ -n "$ADMISSION_WT_PARENT" ]]; then
+    rm -rf "$ADMISSION_WT_PARENT"
+  fi
+  ADMISSION_WT=""; ADMISSION_WT_PARENT=""; ADMISSION_WT_REPO=""
+  return 0
+}
+trap admission_wt_cleanup EXIT INT TERM
+
 # ── Helpers ──────────────────────────────────────────────────
 
 # Extract a YAML frontmatter field value from a file.
@@ -436,13 +454,21 @@ validate_admission() {
       fail "$id: automation.json test.command missing — admission must prove the suite passes before any session runs"
     else
       local trc=0 admission_timeout="${CCT_ADMISSION_TEST_TIMEOUT:-600}"
-      local run_dir="$project_dir" throwaway=""
-      if git -C "$project_dir" rev-parse --git-dir >/dev/null 2>&1; then
-        throwaway="$(mktemp -d)/admission-wt"
-        if git -C "$project_dir" worktree add --detach "$throwaway" HEAD >/dev/null 2>&1; then
-          run_dir="$throwaway"
+      local run_dir="$project_dir"
+      # CCT_ADMISSION_TEST_IN_PLACE=1 opts out of worktree isolation for
+      # suites that need uncommitted/ignored files (node_modules, .env,
+      # generated fixtures) — accepting that the suite may then dirty
+      # the real tree.
+      if [[ "${CCT_ADMISSION_TEST_IN_PLACE:-0}" != "1" ]] \
+         && git -C "$project_dir" rev-parse --git-dir >/dev/null 2>&1; then
+        ADMISSION_WT_PARENT="$(mktemp -d)"
+        ADMISSION_WT="$ADMISSION_WT_PARENT/admission-wt"
+        if git -C "$project_dir" worktree add --detach "$ADMISSION_WT" HEAD >/dev/null 2>&1; then
+          run_dir="$ADMISSION_WT"
+          ADMISSION_WT_REPO="$project_dir"
         else
-          throwaway=""
+          rm -rf "$ADMISSION_WT_PARENT"
+          ADMISSION_WT=""; ADMISSION_WT_PARENT=""
         fi
       fi
       if command -v timeout >/dev/null 2>&1; then
@@ -450,13 +476,15 @@ validate_admission() {
       else
         ( cd "$run_dir" && bash -c "$test_cmd" ) >/dev/null 2>&1 || trc=$?
       fi
-      if [[ -n "$throwaway" ]]; then
-        git -C "$project_dir" worktree remove --force "$throwaway" >/dev/null 2>&1 || rm -rf "$throwaway"
-      fi
+      admission_wt_cleanup
       if [[ $trc -eq 124 ]]; then
         fail "$id: test.command ('$test_cmd') exceeded the ${admission_timeout}s admission budget"
       elif [[ $trc -ne 0 ]]; then
-        fail "$id: test.command ('$test_cmd') fails on the current ref (exit $trc) — a red base is not admissible"
+        if [[ "$run_dir" != "$project_dir" ]]; then
+          fail "$id: test.command ('$test_cmd') fails on the base ref (exit $trc) — a red base is not admissible. NOTE: admission runs the suite in a throwaway worktree of HEAD, so uncommitted and gitignored files (deps, .env, generated fixtures) are absent; commit what the suite needs, add a bootstrap step, or set CCT_ADMISSION_TEST_IN_PLACE=1"
+        else
+          fail "$id: test.command ('$test_cmd') fails on the current ref (exit $trc) — a red base is not admissible"
+        fi
       else
         pass "$id: test.command passes on the current ref"
       fi

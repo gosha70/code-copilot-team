@@ -37,7 +37,9 @@ control** before anything runs: `validate-spec.sh --unattended
 every `FR-N` with executable verifiers, every `statement_sha`
 recomputes clean against `spec.md`, governance holds (approved plan,
 origin gate ≤1), and `test.command` passes on the base ref (run in a
-throwaway worktree). A refusal is an un-admitted exit-1 preflight
+throwaway worktree of HEAD — uncommitted and gitignored files are
+absent there, so commit what the suite needs, add a bootstrap step, or
+opt out with `CCT_ADMISSION_TEST_IN_PLACE=1`). A refusal is an un-admitted exit-1 preflight
 error naming every failing check; an admitted run executes unattended.
 See "Terminal outcomes" below for how its breakers dispatch.
 
@@ -209,7 +211,10 @@ per invocation and reads a non-negative `total_cost_usd` from it — the
 file is written by the provider ADAPTER process
 (`provider-adapters/ollama.sh` reports honest local-$0; the
 openai-compatible adapter writes only when it can derive real USD; cli
-commands may opt in via the env var). The reviewer's TEXT can never be
+commands may opt in via the env var; note that for a `cli` provider
+whose command is itself an agentic, tool-capable model, the
+process-vs-text boundary is only as strong as that command's own
+sandboxing). The reviewer's TEXT can never be
 a measurement channel — a forged "measured $0" would suppress the
 estimate and a forged negative would credit the budget. Anything
 unmeasured is debited as a conservative estimate

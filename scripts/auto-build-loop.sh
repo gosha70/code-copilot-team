@@ -379,6 +379,15 @@ load_config() {
     # Validate against the raw config first; the snapshot is only taken once
     # a run actually starts (a rejected run must leave no ledger behind).
     CONFIG_SNAPSHOT="$CONFIG_PATH"
+    # EFFECTIVE config (#193): an existing frozen snapshot (resumes) is
+    # what the run executes with — parsing, the #191 validator, and
+    # admission must all read IT, not the live file (the parked-resume
+    # arms refresh specific blocks from live into the snapshot
+    # deliberately). The freeze itself still happens only at the end of
+    # a fully-gated load.
+    if [[ "$DRY_RUN" != "true" && -f "$LEDGER_DIR/config.snapshot.json" ]]; then
+        CONFIG_SNAPSHOT="$LEDGER_DIR/config.snapshot.json"
+    fi
 
     PROFILE="${PROFILE_ARG:-${CCT_AUTOBUILD_PROFILE:-$(cfg '.profile' 'advisory')}}"
     BRANCH_NAME=$(cfg '.branch.name' "feature/$FEATURE_ID")
@@ -514,7 +523,8 @@ load_config() {
         exit 1
     fi
 
-    # Config is valid — freeze the snapshot for this run.
+    # Config is valid — freeze the snapshot for this run (resumes were
+    # already reading the existing snapshot via the early repoint above).
     if [[ "$DRY_RUN" != "true" ]]; then
         mkdir -p "$LEDGER_DIR"
         if [[ ! -f "$LEDGER_DIR/config.snapshot.json" ]]; then

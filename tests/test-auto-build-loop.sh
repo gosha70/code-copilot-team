@@ -81,7 +81,8 @@ chmod +x "$MOCK_BIN/claude"
 # state — a concurrent suite run on the same host deletes it mid-round
 # and flips the FAIL-once mocks back to FAIL (observed as panel-test
 # flakiness). Unique per invocation.
-MOCK_REVIEWED_MARKER="$(mktemp -d)/cct-mock-reviewed"
+MOCK_REVIEWED_DIR="$(mktemp -d)"
+MOCK_REVIEWED_MARKER="$MOCK_REVIEWED_DIR/cct-mock-reviewed"
 
 # ── Mock reviewer profiles (same shapes as test-review-loop.sh) ──
 
@@ -254,7 +255,7 @@ timeout_sec = 10
 healthcheck = "true"
 TOML
 
-trap 'rm -rf "$MOCK_BIN" "$GH_BIN_DIR" "$PASS_PROFILE" "$FAIL_ONCE_PROFILE" "$FAIL_ALWAYS_PROFILE" "$DOWN_PROFILE" "$PANEL_PROFILE" "$PANEL_ADV_DOWN_PROFILE" "$PANEL_CAPTURE_PROFILE" "$GATING_REQ_CAPTURE" "$ADV_REQ_CAPTURE" $MOCK_REVIEWED_MARKER' EXIT
+trap 'rm -rf "$MOCK_BIN" "$GH_BIN_DIR" "$PASS_PROFILE" "$FAIL_ONCE_PROFILE" "$FAIL_ALWAYS_PROFILE" "$DOWN_PROFILE" "$PANEL_PROFILE" "$PANEL_ADV_DOWN_PROFILE" "$PANEL_CAPTURE_PROFILE" "$GATING_REQ_CAPTURE" "$ADV_REQ_CAPTURE" "$MOCK_REVIEWED_DIR"' EXIT
 
 # ── Project factory ───────────────────────────────────────────
 
@@ -375,7 +376,7 @@ run_driver() {
     local project="$1"; shift
     local counter
     counter=$(mktemp)
-    rm -f $MOCK_REVIEWED_MARKER
+    rm -f "$MOCK_REVIEWED_MARKER"
     RC=0
     OUTPUT=$(cd "$project" && \
         CCT_PROJECT_DIR="$project" \
@@ -1470,6 +1471,26 @@ run_driver "$P" --config "$BAD_CFG"
 assert_exit "bad --config override is refused at admission" 1 "$RC"
 assert_contains "override refusal comes from the admission bar" "$OUTPUT" "admission REFUSED"
 rm -f "$BAD_CFG"; rm -rf "$P"
+
+# Regression (final review P2): a RESUME validates the FROZEN snapshot —
+# the config the run actually executes with — never the live file, even
+# when the live file has diverged since the freeze.
+P=$(setup_project); unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+run_driver "$P"
+assert_exit "unattended two-phase run pauses at milestone (exit 3)" 3 "$RC"
+cfg_set "$P" '.caps.cost_usd=424242'
+echo "approved-by: gosha 2026-08-08" >> "$P/specs/demo-feat/automation-summary.md"
+run_driver "$P" --resume
+assert_exit "diverged-live resume completes (exit 0)" 0 "$RC"
+assert_contains "resume admission validated the frozen snapshot" "$OUTPUT" "config.snapshot.json"
+assert_eq "the run's caps stayed frozen (snapshot governs)" "5" \
+    "$(jq -r '.caps.max_cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
 
 # Regression (review P2): admission's suite run happens in a THROWAWAY
 # worktree — a suite that emits artifacts must not dirty the real tree
