@@ -878,6 +878,76 @@ assert_eq "explicit balanced init applied dontAsk" "dontAsk" \
 
 # ══════════════════════════════════════════════════════════════
 echo ""
+echo "=== #212: setup.sh must never silently ignore a flag ==="
+# ══════════════════════════════════════════════════════════════
+
+# `--playwright` was accepted and dropped: the root parser's *) branch
+# assigned it to PROJECT_DIR, so it became a phantom project dir while two
+# docs told users it installs the Playwright MCP server. Worse than a
+# rejection — the user believes it was installed.
+PW_STUB="$TEST_TMPDIR/pw-stub"
+mkdir -p "$PW_STUB/scripts" "$PW_STUB/adapters/claude-code"
+cp "$REPO_DIR/scripts/setup.sh" "$PW_STUB/scripts/setup.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$PW_STUB/scripts/generate.sh"
+printf '#!/usr/bin/env bash\necho "ADAPTER-GOT: $*"\n' > "$PW_STUB/adapters/claude-code/setup.sh"
+
+PW_OUT=$(cd "$PW_STUB" && bash scripts/setup.sh --claude-code --playwright 2>&1)
+assert_contains "--playwright reaches the claude-code adapter" "$PW_OUT" "ADAPTER-GOT: --playwright"
+
+# The REAL adapter rejects --playwright with --sync or --memkernel. The
+# wrapper must reject it too, before regenerating everything and only then
+# failing downstream. (An echo-only stub would happily "accept" the pair,
+# which is exactly how this shipped claimed-but-broken.)
+PW_RC=0; PW_OUT=$(cd "$PW_STUB" && bash scripts/setup.sh --claude-code --sync --playwright 2>&1) || PW_RC=$?
+assert_eq "--playwright with --sync is rejected at the wrapper" "1" "$PW_RC"
+assert_contains "rejection uses the adapter's own wording" "$PW_OUT" \
+  "--playwright cannot be combined with --sync or --memkernel"
+assert_eq "the wrapper rejects BEFORE regenerating" "0" \
+  "$(printf '%s' "$PW_OUT" | grep -c 'Regenerating adapter configs' || true)"
+
+PW_RC=0; PW_OUT=$(cd "$PW_STUB" && bash scripts/setup.sh --claude-code --playwright --memkernel 2>&1) || PW_RC=$?
+assert_eq "--playwright with --memkernel is rejected too" "1" "$PW_RC"
+
+# And the contract the wrapper is mirroring is real, not assumed: the actual
+# adapter rejects the same pair. It fails on flag validation before doing any
+# work, so this is safe to execute.
+PW_RC=0; PW_OUT=$(bash "$REPO_DIR/adapters/claude-code/setup.sh" --sync --playwright 2>&1) || PW_RC=$?
+assert_eq "the real adapter rejects --sync --playwright (contract check)" "1" "$PW_RC"
+assert_contains "real adapter's message matches the wrapper's" "$PW_OUT" \
+  "--playwright cannot be combined with --sync or --memkernel"
+
+# The issue's EXACT documented command, with no tools detectable: it used to
+# hit "No tools detected" and exit 0 — silently doing nothing, which is the
+# whole bug one branch further along.
+PW_EMPTY_HOME="$TEST_TMPDIR/empty-home"; mkdir -p "$PW_EMPTY_HOME"
+PW_RC=0; PW_OUT=$(cd "$PW_STUB" && env HOME="$PW_EMPTY_HOME" PATH=/usr/bin:/bin bash scripts/setup.sh --playwright 2>&1) || PW_RC=$?
+assert_eq "bare 'setup.sh --playwright' never exits 0 silently" "1" "$PW_RC"
+assert_contains "bare --playwright explains what to run instead" "$PW_OUT" \
+  "adapters/claude-code/setup.sh --playwright"
+
+PW_OUT=$(cd "$PW_STUB" && bash scripts/setup.sh --claude-code 2>&1)
+assert_eq "no phantom argument when the flag is absent" "1" \
+  "$(printf '%s' "$PW_OUT" | grep -c 'ADAPTER-GOT: *$' || true)"
+
+# A tool set that cannot carry the flag must say so, not drop it silently.
+PW_RC=0; PW_OUT=$(cd "$PW_STUB" && bash scripts/setup.sh --codex --playwright 2>&1) || PW_RC=$?
+assert_eq "--playwright with an unsupported tool exits nonzero" "1" "$PW_RC"
+assert_contains "and points at the adapter" "$PW_OUT" "adapters/claude-code/setup.sh --playwright"
+
+# The class defect: any unknown flag used to become PROJECT_DIR.
+PW_RC=0; PW_OUT=$(cd "$PW_STUB" && bash scripts/setup.sh --nonsense 2>&1) || PW_RC=$?
+assert_eq "an unknown flag exits nonzero instead of becoming a project dir" "1" "$PW_RC"
+assert_contains "unknown-flag error names the flag" "$PW_OUT" "Unknown option: --nonsense"
+
+# A real positional project dir still works.
+PW_RC=0; (cd "$PW_STUB" && bash scripts/setup.sh --claude-code "$TEST_TMPDIR/some-proj" >/dev/null 2>&1) || PW_RC=$?
+assert_eq "a positional project dir is still accepted" "0" "$PW_RC"
+
+assert_contains "--playwright is documented in --help" \
+  "$(cd "$PW_STUB" && bash scripts/setup.sh --help 2>&1)" "--playwright"
+
+# ══════════════════════════════════════════════════════════════
+echo ""
 echo "──────────────────────────────"
 echo "Results: $PASS passed, $FAIL failed"
 echo "──────────────────────────────"
