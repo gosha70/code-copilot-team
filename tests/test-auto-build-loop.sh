@@ -2019,8 +2019,8 @@ run_driver "$P"
 assert_exit "run completes (spend-line case)" 0 "$RC"
 assert_eq "each phase reports spend against the cap" "1" \
     "$(printf '%s' "$OUTPUT" | grep -c 'phase 1 complete — \$' || true)"
-assert_eq "the spend line names the cap" "1" \
-    "$(printf '%s' "$OUTPUT" | grep -c 'spent of \$5 cap' || true)"
+assert_eq "the spend line formats the cap like the spend" "1" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'spent of \$5.00 cap' || true)"
 rm -rf "$P"
 
 # Gap 3: caps are frozen at launch, so a user watching spend climb could not
@@ -2089,6 +2089,27 @@ assert_eq "unattended ignores live cap edits (admission binding holds)" "0" \
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
 rm -f "$CAP_UNATT_SCRIPT"
+
+# A cap can be LOWERED as well as raised — winding a run down is a legitimate
+# operator action. But a safety cap that is accepted and not enforced is worse
+# than one that cannot move: the gate would commit, report spend over the new
+# cap, and let the run finish `done`. A lower cap must park immediately.
+CAP_DROP_SCRIPT=$(mktemp)
+cat "$DEFAULT_SCRIPT" > "$CAP_DROP_SCRIPT"
+cat >> "$CAP_DROP_SCRIPT" << 'SCRIPTLET'
+# The human decides the run is too expensive and winds it down mid-flight.
+if [[ -f specs/demo-feat/automation.json ]]; then
+    jq '.caps.cost_usd = 0.001' specs/demo-feat/automation.json > /tmp/cct-capd.$$         && mv /tmp/cct-capd.$$ specs/demo-feat/automation.json
+fi
+SCRIPTLET
+P=$(setup_project); single_phase "$P"
+MOCK_CLAUDE_SCRIPT="$CAP_DROP_SCRIPT" run_driver "$P"
+assert_exit "a mid-run cap DROP below spend parks, never finishes done" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
+assert_eq "the drop parks as cap_exceeded" "cap_exceeded"     "$(jq -r '.reason' "$ESC" 2>/dev/null)"
+assert_eq "the run did not reach done" "0"     "$(jq -r 'select(.status == "done") | 1' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null | grep -c 1 || true)"
+rm -rf "$P"
+rm -f "$CAP_DROP_SCRIPT"
 
 
 # ══════════════════════════════════════════════════════════════

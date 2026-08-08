@@ -17,6 +17,11 @@
 - **FR-4**: A non-positive or non-numeric live cap MUST be ignored, leaving
   the frozen value intact.
 
+- **FR-4a**: A LOWER live cap MUST be honoured and enforced at once. A
+  safety cap that is accepted but not enforced is worse than one that
+  cannot move: without an immediate re-check the gate would commit, report
+  spend over the new cap, and let the run finish `done`.
+
 - **FR-5**: The `unattended` profile MUST NOT re-read caps mid-run; it stays
   bound to the config it was admitted against.
 

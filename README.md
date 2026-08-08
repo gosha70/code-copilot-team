@@ -623,10 +623,13 @@ to `automation.json` during a run are ignored by design. `caps.cost_usd` is
 the exception: attended profiles (`advisory`, `pr`, `merge`) re-read it from
 the live config **at each phase gate**, so a raise applies without waiting to
 be parked. The change is announced on stdout and journalled as `cap_updated`.
-A non-positive value is ignored. The `unattended` profile does **not** do
-this — such a run is bound to the config it was admitted against, and an
-unaudited mid-run policy change would break that binding; it must park or
-terminate to change a cap.
+A non-positive value is ignored. A **lower** cap is honoured too — winding
+an expensive run down is a legitimate action — and is enforced immediately:
+if spend already exceeds the new value the gate parks `cap_exceeded` there
+and then, rather than committing and finishing over budget. The
+`unattended` profile does **not** re-read caps — such a run is bound to the
+config it was admitted against, and an unaudited mid-run policy change
+would break that binding; it must park or terminate to change a cap.
 
 > **Upgrading from before v1.1?** The cost cap was silently inert in earlier
 > versions: the driver parsed `total_cost_usd` from the reviewer CLI's result
@@ -731,7 +734,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh            72 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        314 auto-build driver tests
+│   ├── test-auto-build-loop.sh        317 auto-build driver tests
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

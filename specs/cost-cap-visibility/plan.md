@@ -61,6 +61,11 @@ Deliberately narrow:
 - **Only positive values.** A `0` or non-numeric live value is ignored
   rather than silently zeroing the budget and parking the run at its next
   check.
+- **Lower caps are honoured AND enforced immediately.** Winding an
+  expensive run down is a legitimate operator action, but a cap that is
+  accepted without being enforced is worse than an immovable one — the gate
+  re-checks straight after applying, so an over-budget run parks there
+  instead of committing and finishing `done`.
 - **Never for `unattended`.** #193 binds such a run to the config it was
   ADMITTED against; an unaudited mid-run policy change from an external
   edit would break that binding. It must park or terminate to change a cap.

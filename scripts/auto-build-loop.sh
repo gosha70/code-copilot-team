@@ -813,6 +813,14 @@ refresh_live_caps() {
         echo "[auto-build] cost cap updated from live config: \$$CAP_COST -> \$$live_cost" >&2
         CAP_COST="$live_cost"
         state_set '.caps.max_cost_usd = ($c | tonumber)' --arg c "$CAP_COST"
+        # A cap can be lowered as well as raised — winding a run down is a
+        # legitimate operator action. But a safety cap that is accepted and
+        # not enforced is worse than one that cannot move: without this the
+        # phase gate would commit, report spend OVER the new cap, and let the
+        # run finish `done`. Re-check immediately so a lower cap parks here,
+        # before publish/finalize. For a raise this is a no-op unless spend
+        # is over the new value too, which also deserves a park.
+        check_caps
     else
         rm -f "$tmp"
     fi
@@ -827,7 +835,11 @@ report_phase_spend() {
     est=$(state_get '.totals.cost_estimated_usd // 0')
     total=$(awk -v s="$spent" -v e="$est" 'BEGIN { printf "%.2f", s + e }')
     remaining=$(awk -v t="$total" -v c="$CAP_COST" 'BEGIN { printf "%.2f", (c - t > 0 ? c - t : 0) }')
-    local line="[auto-build] phase $n complete — \$$total spent of \$$CAP_COST cap (\$$remaining left"
+    # Format the cap like the other two figures; a raw "$25 cap" next to
+    # "$4.24 spent" contradicted the documented line.
+    local cap_fmt
+    cap_fmt=$(awk -v c="$CAP_COST" 'BEGIN { printf "%.2f", c }')
+    local line="[auto-build] phase $n complete — \$$total spent of \$$cap_fmt cap (\$$remaining left"
     if awk -v e="$est" 'BEGIN { exit !(e > 0) }'; then
         line="$line; \$$est of the spend is estimated"
     fi

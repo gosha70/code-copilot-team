@@ -69,6 +69,9 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   narrow: only `caps.cost_usd`, only at phase gates (never mid-phase, so a
   session's budget cannot move under it), only positive values (a `0` is
   ignored rather than zeroing the budget), and never for `unattended` —
+  (a LOWER cap is honoured too, and enforced on the spot: the gate
+  re-checks immediately, so an over-budget run parks there instead of
+  committing and finishing `done`) —
   such a run stays bound to the config it was ADMITTED against (#193), and
   an unaudited mid-run policy change would break that binding.
   **Upgrade note:** the cost cap was silently INERT before the #197/#198
