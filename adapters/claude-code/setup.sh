@@ -28,6 +28,16 @@ PLAYWRIGHT_MODE=0
 MEMKERNEL_ENABLED=0
 MEMKERNEL_SOURCE=""
 
+# bake_launcher_repo_path — #195: the installed launcher is a COPY, so
+# `claude-code build` needs the source checkout baked in to find
+# scripts/auto-build-loop.sh (CCT_REPO_DIR env still overrides).
+bake_launcher_repo_path() {
+    local repo_root
+    repo_root="$(cd "$SCRIPT_DIR/../.." && pwd)"
+    sed -i '' "s|^CCT_REPO_DIR_DEFAULT=.*|CCT_REPO_DIR_DEFAULT=\"$repo_root\"|" "$LAUNCHER_TARGET" 2>/dev/null || \
+        sed -i "s|^CCT_REPO_DIR_DEFAULT=.*|CCT_REPO_DIR_DEFAULT=\"$repo_root\"|" "$LAUNCHER_TARGET"
+}
+
 # Provider config: delegate --provider to the shared translator (T2.2).
 source "$SHARED_DIR/scripts/provider-setup.sh"
 if cct_handle_provider_flag "claude-code" "$@"; then exit 0; fi
@@ -373,6 +383,7 @@ if [[ "$SYNC_MODE" == "1" ]]; then
         mkdir -p "$HOME/.local/bin"
         cp "$LAUNCHER_SOURCE" "$LAUNCHER_TARGET"
         chmod +x "$LAUNCHER_TARGET"
+        bake_launcher_repo_path
         echo "[done] Synced launcher to $LAUNCHER_TARGET"
     fi
 
@@ -802,6 +813,7 @@ if [[ -f "$LAUNCHER_SOURCE" ]]; then
     else
         cp "$LAUNCHER_SOURCE" "$LAUNCHER_TARGET"
         chmod +x "$LAUNCHER_TARGET"
+        bake_launcher_repo_path
         echo ""
         echo "[done] Installed claude-code launcher to $LAUNCHER_TARGET"
     fi
@@ -1297,6 +1309,7 @@ if [[ -f "$LAUNCHER_SOURCE" ]]; then
     mkdir -p "$HOME/.local/bin"
     cp "$LAUNCHER_SOURCE" "$LAUNCHER_TARGET"
     chmod +x "$LAUNCHER_TARGET"
+    bake_launcher_repo_path
     echo "[done] Installed launcher to $LAUNCHER_TARGET"
 else
     echo "[skip] Launcher not found at $LAUNCHER_SOURCE"

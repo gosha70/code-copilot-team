@@ -10,6 +10,21 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Autonomous builds run through the branded launcher (#195)** — the
+  auto-build driver's Claude backend defaulted to the generic `claude`
+  binary while the PI backend correctly used `pi-code`, so unattended
+  sessions skipped the launcher's config (BUN_OPTIONS ipv4-first fix,
+  project permission tier/hooks, transcript logging). `CCT_CLAUDE_BIN`
+  now defaults to `claude-code`; the launcher gained a headless
+  passthrough (`-p`/`--print`/`--version` forward verbatim to `claude`
+  — no cmux/tmux, the prompt is never treated as a path) and a branded
+  autonomous entry, `claude-code build <feature-id> [driver args]`, so
+  no-human-in-loop intent never needs
+  `--dangerously-skip-permissions`. `pi-code` is unchanged.
+
+
 ### Added
 
 - **Unattended policy core + metering (#191, increment A of #190)** —

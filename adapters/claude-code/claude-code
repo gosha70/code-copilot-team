@@ -12,6 +12,8 @@
 #   claude-code init <type> [path]      Initialize new project from template
 #   claude-code sync [path] [--dry-run] Sync project against its template
 #   claude-code list                    List available project templates
+#   claude-code build <feature-id> ...  Autonomous build via auto-build-loop.sh (#195)
+#   claude-code -p "<prompt>" ...       Headless passthrough to claude (no cmux/tmux)
 #   claude-code help                    Show usage
 #
 # Examples:
@@ -31,6 +33,10 @@ TEMPLATES_DIR="$HOME/.claude/templates"
 PERMISSIONS_DIR="$HOME/.claude/permissions"
 LOGS_DIR="$HOME/.claude/logs"
 CLAUDE_CMD=("claude")
+# Baked by setup.sh at install time (#195): the code-copilot-team
+# checkout this launcher was installed from, so `claude-code build` can
+# find scripts/auto-build-loop.sh. CCT_REPO_DIR env always wins.
+CCT_REPO_DIR_DEFAULT=""
 BACKEND_AUTO="auto"
 BACKEND_TMUX="tmux"
 BACKEND_CMUX="cmux"
@@ -503,6 +509,12 @@ USAGE:
     claude-code sync [path] [--dry-run]             Sync project against its template
     claude-code playwright [path]                   Install Playwright CLI skills into a project
     claude-code list                                List available templates
+    claude-code build <feature-id> [driver args]    Autonomous no-human-in-loop build of an SDD
+                                                    feature via scripts/auto-build-loop.sh
+                                                    (e.g. --profile advisory|pr|merge|unattended)
+    claude-code -p "<prompt>" [claude flags]        Headless passthrough: forwards everything
+                                                    verbatim to claude (no cmux/tmux); used by
+                                                    the auto-build driver
     claude-code help                                Show this help
 
 OPTIONS:
@@ -1483,6 +1495,40 @@ start_session() {
 
 # ── Main ─────────────────────────────────────────────────────
 
+# ── Headless passthrough (#195) ──────────────────────────────
+# A -p/--print invocation is a headless claude session (the auto-build
+# driver's form), and --version is a probe. The wrapper's job there is
+# CONFIG PARITY, not session management: the env fixes applied above
+# (BUN_OPTIONS ipv4-first) plus the project's own .claude/settings.json
+# (permission tier + hooks), which headless claude reads from cwd
+# exactly like an interactive session. ALL args forward verbatim via
+# exec — never attach cmux/tmux, never parse wrapper flags, never treat
+# the -p value as a project path. stdout stays pure claude output (the
+# driver parses result JSON from it): the invocation is logged, never
+# tee'd.
+run_headless() {
+    local log_file
+    mkdir -p "$LOGS_DIR" 2>/dev/null || true
+    log_file="$LOGS_DIR/headless-$(basename "$PWD")-$(date +%Y-%m-%d-%H%M%S).log"
+    printf '%s headless: %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "${CLAUDE_CMD[*]}" "$*" >> "$log_file" 2>/dev/null || true
+    exec "${CLAUDE_CMD[@]}" "$@"
+}
+
+for _arg in "$@"; do
+    case "$_arg" in
+        -p|--print|--version)
+            run_headless "$@"
+            ;;
+        init|list|sync|playwright|permissions|build|help|-h|--help)
+            # A wrapper subcommand owns everything after it — a -p beyond
+            # this point is that subcommand's business, not headless intent.
+            break
+            ;;
+    esac
+done
+unset _arg
+
 # ── Flag parsing ─────────────────────────────────────────────
 PLAYWRIGHT=0
 LICENSE_TYPE=""
@@ -1573,7 +1619,7 @@ while [[ $# -gt 0 ]]; do
             # ambiguity with the project-dir positional on the
             # start-session path.
             case "$1" in
-                init|list|sync|playwright|help|-h|--help)
+                init|list|sync|playwright|build|help|-h|--help)
                     POSITIONAL+=("$@")
                     break
                     ;;
@@ -1671,6 +1717,32 @@ case "${1:-}" in
         # bad/declined tier never leaves a project with the wrong boundary.
         preflight_permission_tier "$PERM_TIER" || exit 1
         init_project "${ARGS[0]}" "${ARGS[1]:-}"
+        ;;
+    build)
+        # Autonomous no-human-in-loop build (#195): the branded entry to
+        # scripts/auto-build-loop.sh — profiles, caps, and review gates
+        # included; autonomous intent never needs
+        # --dangerously-skip-permissions.
+        shift
+        CCT_REPO="${CCT_REPO_DIR:-$CCT_REPO_DIR_DEFAULT}"
+        if [[ -z "$CCT_REPO" || ! -f "$CCT_REPO/scripts/auto-build-loop.sh" ]]; then
+            # Fallback: cwd is (or is inside) the code-copilot-team repo.
+            probe="$PWD"
+            while [[ "$probe" != "/" ]]; do
+                if [[ -f "$probe/scripts/auto-build-loop.sh" ]]; then
+                    CCT_REPO="$probe"
+                    break
+                fi
+                probe="$(dirname "$probe")"
+            done
+        fi
+        if [[ -z "$CCT_REPO" || ! -f "$CCT_REPO/scripts/auto-build-loop.sh" ]]; then
+            echo "Error: cannot locate the code-copilot-team repo (scripts/auto-build-loop.sh)."
+            echo "Set CCT_REPO_DIR to your checkout, or re-run adapters/claude-code/setup.sh"
+            echo "from the checkout so the path is baked into the installed launcher."
+            exit 1
+        fi
+        exec env CCT_PROJECT_DIR="$PWD" bash "$CCT_REPO/scripts/auto-build-loop.sh" "$@"
         ;;
     permissions)
         shift

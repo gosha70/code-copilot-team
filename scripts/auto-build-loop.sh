@@ -39,7 +39,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # CCT_PROJECT_DIR points the driver at another project (tests, kick-starts).
 PROJECT_DIR="${CCT_PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
-CLAUDE_BIN="${CCT_CLAUDE_BIN:-claude}"
+# #195: default to the BRANDED launcher (symmetric with pi-code below) so
+# unattended sessions inherit the same entry point as interactive ones
+# (BUN_OPTIONS ipv4 fix, project permission tier/hooks, transcript log).
+# claude-code passes -p/--print invocations through to claude headlessly.
+CLAUDE_BIN="${CCT_CLAUDE_BIN:-claude-code}"
 # Agent backend (T10.3): claude (default) or pi. subject_provider tracks it.
 BACKEND="${CCT_AUTOBUILD_BACKEND:-claude}"
 PI_BIN="${CCT_PI_BIN:-pi-code}"

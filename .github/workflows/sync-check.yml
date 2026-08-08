@@ -87,6 +87,12 @@ jobs:
           bash -n scripts/lib/verification-common.sh
           bash tests/test-verification-spec.sh
 
+      - name: Run claude-code launcher tests (#195)
+        run: |
+          bash -n adapters/claude-code/claude-code
+          bash -n adapters/claude-code/setup.sh
+          bash tests/test-claude-code-launcher.sh
+
       - name: Run auto-build loop tests
         run: bash tests/test-auto-build-loop.sh
 
