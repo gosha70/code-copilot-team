@@ -55,6 +55,26 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   attended configs and inactive for v1.
 
 ### Fixed
+- **The review loop's clock no longer bills time spent parked (#205)** —
+  three defects from one real run. (1) `loop_start` was set when review
+  state was initialised and carried verbatim through every round, so the
+  900s wall-clock counted the time a run sat **parked waiting for a
+  human**. Parking exists to invite that intervention, and every park
+  reason needs an action taking longer than 15 minutes, so resuming
+  tripped the breaker **instantly** — zero review rounds ran, and the
+  human had to run `/review-decide retry` just to clear a timer that had
+  measured their own thinking time. The clock now restarts on a
+  successful resume, mirroring the driver's own guard. (2) Two producers
+  wrote `breaker-tripped.json` with two key names — the runner `breaker`,
+  the driver `breaker_type` — and the driver read only the latter, so
+  **every** runner breaker was reported as `'unknown'` while the file
+  plainly said `"timeout"`; it now reads either, which also fixes files
+  already on disk. (3) The loop wall-clock is now configurable as
+  `review.loop_timeout_sec` in `automation.json` (default 900) instead of
+  env-only, with a non-numeric value falling back rather than being
+  evaluated as `0` and tripping on the first round. Note
+  `review.round_timeout_sec` is a different knob and remains inert —
+  documented rather than silently rewired.
 - **A broken reviewer is no longer reported as a review verdict (#204)** —
   a non-zero reviewer process exit means the reviewer never ran, but it
   was mapped onto `FAIL`, the same vocabulary as a genuine rejection. The

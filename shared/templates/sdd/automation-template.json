@@ -30,7 +30,8 @@
       }
     ],
     "max_rounds": 5,
-    "round_timeout_sec": 1800
+    "round_timeout_sec": 1800,
+    "loop_timeout_sec": 900
   },
   "caps": {
     "wall_clock_sec": 14400,

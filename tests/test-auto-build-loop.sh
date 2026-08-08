@@ -2007,6 +2007,84 @@ assert_eq "the park names the timeout as the cause" "1" \
 rm -rf "$P"
 rm -f "$BROKEN_REVIEWER" "$BROKEN_PROFILE" "$QUIET_PROFILE" "$TO_PROFILE"
 
+# ══════════════════════════════════════════════════════════════
+# #205: the review loop's wall-clock must not count parked time
+# ══════════════════════════════════════════════════════════════
+
+# D1 (the blocking one). loop_start was set once at review-state init and
+# carried verbatim through every round, so the 900s guard counted the time
+# the run sat PARKED waiting for a human. Parking exists to invite human
+# action, and every park reason needs more than 15 minutes of it — so
+# resuming tripped the breaker instantly, before a single round ran.
+# Simulated here by backdating loop_start well past the timeout while the
+# run is parked, then resuming.
+P=$(setup_project); single_phase "$P"
+BADPROV=$(mktemp)
+cat > "$BADPROV" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "exit 1"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+REVIEW_PROFILE="$BADPROV" run_driver "$P"
+assert_exit "run parks on the broken reviewer (setup for the clock test)" 4 "$RC"
+# The human takes an hour to fix the provider; the review clock must not
+# hold that against them.
+if [[ -f "$P/.cct/review/state.json" ]]; then
+    jq '.loop_start = (.loop_start - 3600)' "$P/.cct/review/state.json" > "$P/.cct/review/state.tmp" \
+        && mv "$P/.cct/review/state.tmp" "$P/.cct/review/state.json"
+fi
+run_driver "$P" --resume
+# The user-visible symptom: pre-fix the stale clock tripped the wall-clock
+# breaker before a single round ran, so the resume parked (exit 4) instead
+# of completing. (loop_start itself is not readable afterwards — a passing
+# review archives .cct/review into the phase dir.)
+assert_exit "resume completes despite an hour spent parked" 0 "$RC"
+assert_eq "no wall-clock breaker fires on the resumed run" "0" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'wall-clock timeout' || true)"
+assert_eq "the clock reset is journalled" "1" \
+    "$(grep -c 'review_clock_reset' "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null || true)"
+rm -rf "$P"; rm -f "$BADPROV"
+
+# D2: two producers, two key names. The runner writes `breaker`, the driver
+# writes `breaker_type`, and the driver read only the latter — so EVERY
+# runner breaker was reported as 'unknown' while the file said "timeout".
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review"
+cat > "$P/.cct/review/breaker-tripped.json" << 'JSON'
+{"breaker": "timeout", "rounds_completed": 2, "elapsed_sec": 2662, "timeout_sec": 900, "attempt": 1}
+JSON
+BTYPE=$(jq -r '.breaker_type // .breaker // "unknown"' "$P/.cct/review/breaker-tripped.json")
+assert_eq "a runner-written breaker resolves to its real name" "timeout" "$BTYPE"
+cat > "$P/.cct/review/breaker-tripped.json" << 'JSON'
+{"breaker_type": "driver_fix_sessions_exhausted", "rounds_completed": 3}
+JSON
+BTYPE=$(jq -r '.breaker_type // .breaker // "unknown"' "$P/.cct/review/breaker-tripped.json")
+assert_eq "a driver-written breaker still resolves" "driver_fix_sessions_exhausted" "$BTYPE"
+assert_eq "the driver reads either breaker key" "1" \
+    "$(grep -c "breaker_type // .breaker // " "$SCRIPT_DIR/../scripts/auto-build-loop.sh")"
+rm -rf "$P"
+
+# D3: the loop wall-clock is configurable from automation.json, and a
+# garbage value falls back instead of arithmetically becoming 0 (which
+# would trip the breaker on the first round of every run).
+assert_eq "the driver reads the loop timeout from automation.json" "1" \
+    "$(grep -c "cfg '.review.loop_timeout_sec'" "$SCRIPT_DIR/../scripts/auto-build-loop.sh")"
+assert_eq "the template ships loop_timeout_sec" "1" \
+    "$(jq '(.review.loop_timeout_sec // 0) > 0 | if . then 1 else 0 end' \
+        "$SCRIPT_DIR/../shared/templates/sdd/automation-template.json" 2>/dev/null)"
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.review.loop_timeout_sec="not-a-number"'
+run_driver "$P"
+assert_eq "a non-numeric loop timeout falls back, not to 0" "1" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'is not a positive integer' || true)"
+assert_exit "a non-numeric loop timeout does not break the run" 0 "$RC"
+rm -rf "$P"
+
+
 # The runner has NO in-band parsing path left (statically asserted).
 assert_eq "runner never parses cost out of reviewer text" "0" \
     "$(grep -c 'REVIEW_OUTPUT.*total_cost_usd' "$SCRIPT_DIR/../scripts/review-round-runner.sh")"
