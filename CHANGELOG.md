@@ -79,6 +79,21 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   accrued or triggered. Anyone on an older version was not protected by it.
 
 ### Fixed
+- **The benchmark's LiteLLM proxy dependencies are pinned (#220)** — the
+  Anthropic-vs-vLLM benchmark installed an unconstrained
+  `litellm[proxy]>=1.50` into a fresh venv on every run. litellm's own
+  `proxy` extra allows `fastapi<1.0,>=0.136.3`, and fastapi 0.141.1 removed
+  `get_flat_dependant`, which litellm imports at module scope — so the proxy
+  crashed at startup (`ImportError: cannot import name 'get_flat_dependant'`,
+  then `No module named 'proxy_server'`) and a previously working benchmark
+  broke with no CCT change. Verified in clean venvs: fastapi 0.141.1
+  reproduces the crash, 0.139.2 imports fine. Pins now live in
+  `scripts/requirements-litellm-proxy.txt` with the reason and the upgrade
+  procedure beside them; `pip check` runs right after provisioning so a
+  conflicting resolution fails where the message names packages; every proxy
+  failure path reports the resolved python/litellm/fastapi versions; and
+  `tests/test-litellm-proxy-deps.sh` guards the pins in CI, with `--online`
+  provisioning a real clean venv as the acceptance test.
 - **`setup.sh --playwright` is no longer silently ignored (#212)** — the root
   parser's `*)` branch assigned unknown arguments to `PROJECT_DIR`, so the
   flag became a phantom project directory and the Claude adapter was invoked

@@ -109,6 +109,12 @@ jobs:
       - name: Check the feature index is not stale
         run: bash scripts/generate-feature-index.sh --check
 
+      # Offline contract checks only — the --online variant provisions a real
+      # venv from PyPI and takes minutes, so it stays opt-in (run it when
+      # bumping the pins).
+      - name: Check the LiteLLM proxy dependencies stay pinned
+        run: bash tests/test-litellm-proxy-deps.sh
+
       - name: Run shared structure tests
         env:
           HOME: ${{ runner.temp }}/cct-home
