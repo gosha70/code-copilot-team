@@ -6,7 +6,9 @@
 # token-limit logic in any adapter — and:
 #   - runs the harness (default: scripts/auto-build-loop.sh <feature> --resume);
 #   - classifies each exit from STORED EVIDENCE (never infers success from
-#     silence): usage-limit -> cooldown+retry; clean+incomplete -> relaunch/park;
+#     silence): exit 6 (terminated_policy) -> TERMINAL, checked before the
+#     usage grep, never cooled down/relaunched/reclassified (#191 FR-8);
+#     usage-limit -> cooldown+retry; clean+incomplete -> relaunch/park;
 #     any other breaker -> park; caps exceeded / corrupt -> fail;
 #   - waits the cooldown, relaunches in the SAME worktree with the SAME posture,
 #     and caps attempts, cooldowns, and wall-clock;
@@ -28,6 +30,8 @@
 #     --on-incomplete <relaunch|park>  clean exit w/ tasks left (default: park)
 #
 # Exit: 0 = done | 4 = parked | 5 = failed (caps/corrupt/usage-exhausted)
+#       | 6 = terminated_policy (terminal — never relaunched, incl. on a
+#         re-invocation over an already-terminated ledger)
 #
 # Test seams (never needed in production):
 #   CCT_SUPERVISOR_HARNESS_CMD  override the child command (a mock harness)

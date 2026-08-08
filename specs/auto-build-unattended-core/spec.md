@@ -135,8 +135,31 @@ this spec enforces that with a fail-closed preflight.
   `unattended`.
 - Security floors, deny rules, protected paths, sandbox enforcement
   unchanged — this profile cannot relax them.
-- Purely additive: `advisory`/`pr`/`merge` byte-identical; exit 4
-  semantics untouched.
+- Purely additive: `advisory`/`pr`/`merge` byte-identical (FR-9 records
+  the one deliberate measured-cost carve-out); exit 4 semantics
+  untouched.
+
+### Increment-B preconditions (accepted increment-A residuals)
+
+Two review-accepted residuals are safe ONLY while unattended execution
+stays fail-closed; #190 increment B MUST resolve both before admitting
+live unattended runs:
+
+1. **Out-of-band cost channel.** The runner's measured-cost envelope
+   travels in the reviewer's own output stream; increment A narrows the
+   surface (final-line-only + session identity key) but a reviewer that
+   deliberately ends its output with a well-formed envelope can still
+   self-report its cost. B must move measurement to a channel the model
+   cannot write (adapter-level result file, as the driver already does
+   for build sessions via `--output-format json`), and until then the
+   ledger's `unmetered_invocations`/`measured_usd` split is the audit
+   trail.
+2. **Honest finalize under capability downgrade.** A gh
+   capability-downgraded unattended run that completes would today write
+   "Profile: advisory — nothing was pushed" with `outcome: landed`; the
+   downgrade is journaled (`capability_downgrade`) but the summary prose
+   is wrong. B's run surface must carry the downgrade into the final
+   summary/ledger labeling (US2: verdicts are honest).
 
 ## Key Entities
 

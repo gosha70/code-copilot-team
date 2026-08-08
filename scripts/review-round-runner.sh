@@ -525,6 +525,7 @@ fi
 # fails these checks counts as unmetered, which can only OVERSTATE cost.
 INVOCATION_COST=$(printf '%s\n' "$REVIEW_OUTPUT" | awk 'NF { last = $0 } END { print last }' | \
     jq -r 'if (type == "object") and ((.total_cost_usd | type) == "number")
+              and (.total_cost_usd >= 0)
               and (has("session_id") or has("subtype"))
            then .total_cost_usd else empty end' 2>/dev/null || true)
 COST_STATE=$(jq -c '.cost // {measured_usd: 0, invocations: 0, unmetered_invocations: 0}' \

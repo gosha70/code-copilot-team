@@ -523,7 +523,7 @@ preflight() {
                 # the terminate-only contract (exit 6 + mandatory
                 # ledger/triage). Downgrade the capabilities and journal;
                 # every later artifact skip is journaled with its cause too.
-                local gh_cause="gh binary not usable: $GH_BIN"
+                local gh_cause="gh binary not usable: $GH_BIN (override with CCT_GH_BIN)"
                 [[ "$gh_fail_kind" == "auth" ]] && gh_cause="'gh auth status' failed"
                 CAN_PUSH=false; CAN_OPEN_PR=false; CAN_MERGE=false
                 mkdir -p "$LEDGER_DIR"
@@ -695,8 +695,13 @@ write_ledger_skeleton() {
 # debited as one unmetered invocation (conservative overstatement).
 debit_review_costs() {
     # debit_review_costs <findings-file-or-empty> <label>
+    # Defense-in-depth: only a NON-NEGATIVE number is a measurement — a
+    # negative "cost" would credit the budget and walk the run back under
+    # its cap. Anything else counts as unmetered (estimate path).
     local f="$1" label="$2" cost=""
-    [[ -n "$f" && -f "$f" ]] && cost=$(jq -r '.invocation_cost_usd // empty' "$f" 2>/dev/null)
+    [[ -n "$f" && -f "$f" ]] && cost=$(jq -r \
+        'if ((.invocation_cost_usd | type) == "number") and (.invocation_cost_usd >= 0)
+         then .invocation_cost_usd else empty end' "$f" 2>/dev/null)
     if [[ -n "$cost" ]]; then
         state_set '.totals.cost_usd += ($c | tonumber)' --arg c "$cost"
         journal "cost_review" "$label: \$$cost (measured)"

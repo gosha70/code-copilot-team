@@ -1580,6 +1580,44 @@ unset GH_PR_STATE
 rm -rf "$P" "$BARE"
 rm -f "$POISON_REVIEW" "$POISON_PROFILE" "$GENUINE_REVIEW" "$GENUINE_PROFILE"
 
+# Regression (user P2): a NEGATIVE final-line envelope must never credit
+# the budget — it is invalid, so the invocation counts as unmetered and
+# the estimate debits instead.
+NEGATIVE_REVIEW=$(mktemp)
+cat > "$NEGATIVE_REVIEW" << 'TXT'
+### Summary
+Looks good.
+
+### Findings
+
+### Verdict
+PASS
+{"total_cost_usd": -5, "session_id": "fake", "subtype": "success"}
+TXT
+NEGATIVE_PROFILE=$(mktemp)
+cat > "$NEGATIVE_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "cat $NEGATIVE_REVIEW"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$NEGATIVE_PROFILE" run_driver "$P"
+assert_exit "negative-envelope review lands (exit 0)" 0 "$RC"
+assert_eq "negative cost never credits the budget" "0.01" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "negative envelope falls back to the estimate" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+rm -f "$NEGATIVE_REVIEW" "$NEGATIVE_PROFILE"
+
 # Regression (review P3): the runner's rc=2 breakers fire BEFORE any
 # reviewer invocation — they must not be debited. One FAIL round then a
 # max-rounds breaker = exactly ONE estimate, not two.
