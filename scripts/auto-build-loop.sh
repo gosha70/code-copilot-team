@@ -399,6 +399,17 @@ load_config() {
     SESSION_TIMEOUT=$(cfg '.build.session_timeout_sec' '1800')
     BUDGET_TOKENS=$(cfg '.build.budget_tokens' '0')
     MAX_FIX_SESSIONS=$(cfg '.build.max_fix_sessions_per_phase' '3')
+    # #205: the review LOOP wall-clock (whole loop across rounds), default
+    # 900s to preserve the runner's historical value. Distinct from
+    # `.review.round_timeout_sec` and from the per-provider `timeout_sec` in
+    # providers.toml, which bound a SINGLE reviewer invocation.
+    REVIEW_LOOP_TIMEOUT_SEC=$(cfg '.review.loop_timeout_sec' '900')
+    # A non-numeric value would be evaluated as 0 by the runner's arithmetic
+    # comparison, tripping the breaker on the first round of every run.
+    if ! [[ "$REVIEW_LOOP_TIMEOUT_SEC" =~ ^[0-9]+$ ]] || [[ "$REVIEW_LOOP_TIMEOUT_SEC" -le 0 ]]; then
+        echo "[auto-build] WARNING: review.loop_timeout_sec '$REVIEW_LOOP_TIMEOUT_SEC' is not a positive integer — using 900" >&2
+        REVIEW_LOOP_TIMEOUT_SEC=900
+    fi
     TEST_CMD=$(cfg '.test.command' '')
     TEST_TIMEOUT=$(cfg '.test.timeout_sec' '1200')
     CAP_WALL_CLOCK=$(cfg '.caps.wall_clock_sec' '14400')
@@ -1119,7 +1130,12 @@ run_review_loop() {
         # writing one is debited as an unmetered invocation (FR-7).
         local pre_frf post_frf
         pre_frf=$(ls "$PROJECT_DIR"/.cct/review/findings-round-*.json 2>/dev/null | sort -V | tail -1)
+        # #205: the whole-loop wall-clock is configured here, in
+        # automation.json, not only via a bare env var. `review.round_timeout_sec`
+        # is a DIFFERENT knob (see the config docs) and its presence made users
+        # believe they had already configured this one.
         ( cd "$PROJECT_DIR" && CCT_REVIEW_BASE_REF="$base_ref" \
+            CCT_REVIEW_TIMEOUT_SEC="${CCT_REVIEW_TIMEOUT_SEC:-$REVIEW_LOOP_TIMEOUT_SEC}" \
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >&2 || rc=$?
         local round
         round=$(jq -r '.current_round // 0' "$PROJECT_DIR/.cct/review/state.json" 2>/dev/null || echo 0)
@@ -1211,7 +1227,12 @@ run_review_loop() {
             2)
                 local btype="unknown"
                 [[ -f "$PROJECT_DIR/.cct/review/breaker-tripped.json" ]] && \
-                    btype=$(jq -r '.breaker_type // "unknown"' "$PROJECT_DIR/.cct/review/breaker-tripped.json")
+                    # #205: two producers, two key names — the runner writes
+                    # `breaker`, this driver writes `breaker_type`. Reading only
+                    # the latter reported EVERY runner breaker as 'unknown',
+                    # so the park told the user a breaker fired but not which,
+                    # while the file plainly said "timeout". Read either.
+                    btype=$(jq -r '.breaker_type // .breaker // "unknown"' "$PROJECT_DIR/.cct/review/breaker-tripped.json")
                 # Live .cct/review/ state is intentionally left in place:
                 # /review-decide operates on it after parking (FR-4).
                 dispose "review_breaker" "circuit breaker '$btype' in phase $n round $round" \
@@ -1586,6 +1607,35 @@ resume_parked() {
             refuse_resume "no automatic resolution for reason '$reason' — inspect $esc_file"
             ;;
     esac
+
+    # #205: restart the review LOOP wall-clock on a successful resume.
+    #
+    # `loop_start` was set once when review state was initialised and then
+    # carried verbatim through every round, so the 900s guard counted the
+    # time the run sat PARKED waiting for a human. Parking exists to invite
+    # human intervention, and every park reason (provider_unavailable,
+    # test_failure, origin_gate, git_anomaly, cap_exceeded) needs an action
+    # that realistically takes longer than 15 minutes — so resuming from any
+    # of them tripped the breaker INSTANTLY, before a single round ran, and
+    # the human had to run /review-decide retry purely to clear a timer that
+    # had measured their own thinking time.
+    #
+    # This mirrors the driver's own guard, which already restarts on resume
+    # (see the cap_exceeded arm resetting totals.started_epoch above). Every
+    # arm that reaches here resolved its escalation; refuse_resume exits, so
+    # falling through means the resume genuinely succeeded.
+    local _rs="$PROJECT_DIR/.cct/review/state.json"
+    if [[ -f "$_rs" ]]; then
+        local _tmp
+        _tmp=$(mktemp)
+        if jq --argjson now "$(now_epoch)" '.loop_start = $now' "$_rs" > "$_tmp" 2>/dev/null; then
+            mv "$_tmp" "$_rs"
+            journal "review_clock_reset" "review loop wall-clock restarted on resume (parked time not counted)"
+        else
+            rm -f "$_tmp"
+            journal "artifact_error" "could not reset review loop_start in $_rs"
+        fi
+    fi
 }
 
 # ── PR create / idempotent update (FR-3..FR-7, pr profile) ──

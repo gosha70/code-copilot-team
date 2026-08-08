@@ -14,7 +14,16 @@
     "phases": { "type": "object" },
     "build": { "type": "object" },
     "test": { "type": "object" },
-    "review": { "type": "object" },
+    "review": {
+      "type": "object",
+      "properties": {
+        "loop_timeout_sec": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Wall-clock budget for the WHOLE review loop across rounds (default 900). Restarts when a parked run resumes, so time spent waiting for a human is not counted against it (#205). Distinct from round_timeout_sec, and from the per-provider timeout_sec in providers.toml which bounds a SINGLE reviewer invocation."
+        }
+      }
+    },
     "caps": {
       "type": "object",
       "properties": {
