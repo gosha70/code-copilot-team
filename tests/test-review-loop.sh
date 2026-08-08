@@ -778,6 +778,63 @@ assert_eq "a real FAIL records no provider_error" "null" \
 rm -rf "$P"
 
 rm -f "$PROVERR_PROFILE" "$PROVTO_PROFILE"
+
+# ══════════════════════════════════════════════════════════════
+echo "=== #209: a huge reviewer output must not destroy the findings file ==="
+# ══════════════════════════════════════════════════════════════
+
+# The reviewer's whole output used to travel as `--arg raw_output`, i.e. on
+# argv. A verbose reviewer (codex echoes the prompt plus its reasoning, and we
+# capture with 2>&1) blows past ARG_MAX; jq died with "Argument list too long"
+# and, because the call sat in a heredoc command substitution, the findings
+# file was written as an EMPTY 1-byte file while the console reported success.
+# ~1MB of output plus real FINDING| lines, per the issue's acceptance criteria.
+HUGE_REVIEWER=$(mktemp)
+cat > "$HUGE_REVIEWER" << 'SH'
+#!/usr/bin/env bash
+# >2MB of reviewer chatter — past ARG_MAX (codex echoes the prompt and reasons at length),
+# then a real review with blocking findings.
+awk 'BEGIN { for (i = 0; i < 40000; i++) print "the reviewer restates the prompt and reasons at length " i }'
+printf '### Findings\n'
+printf 'FINDING|blocking|correctness|src/a.sh|near main|Output dirs are never cleaned|Clean them\n'
+printf 'FINDING|blocking|testing|src/b.sh|golden test|OpenAPI only asserted non-null|Assert byte-identical\n'
+printf 'FINDING|warning|design|src/c.sh|helper|Unbounded retry|Bound it\n'
+printf '\n### Verdict\nFAIL\n'
+SH
+HUGE_PROFILE=$(mktemp)
+cat > "$HUGE_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $HUGE_REVIEWER"
+timeout_sec = 30
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$HUGE_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+FR="$P/.cct/review/findings-round-1.json"
+assert_exit "a >ARG_MAX reviewer output still completes the round" 1 "$RC"
+assert_eq "the findings file is valid JSON, not an empty stub" "object" \
+    "$(jq -r 'type' "$FR" 2>/dev/null)"
+assert_eq "every finding survives the large output" "3" \
+    "$(jq '.findings | length' "$FR" 2>/dev/null)"
+assert_eq "blocking findings are preserved" "2" \
+    "$(jq '[.findings[] | select(.severity == "blocking")] | length' "$FR" 2>/dev/null)"
+assert_eq "severity/file/suggested_fix survive (not just description)" "src/a.sh" \
+    "$(jq -r '.findings[0].file' "$FR" 2>/dev/null)"
+assert_eq "the verdict is the reviewer's, not a default" "FAIL" \
+    "$(jq -r '.verdict' "$FR" 2>/dev/null)"
+# raw_output is the only record of what the provider said, so it is passed by
+# FILE rather than truncated — the whole transcript survives.
+assert_eq "the full reviewer transcript is retained" "retained" \
+    "$( [[ "$(jq -r '.raw_output | length' "$FR" 2>/dev/null || echo 0)" -gt 2000000 ]] && echo retained || echo "truncated" )"
+assert_eq "no temp scratch files are left behind" "0" \
+    "$(ls "$P"/.cct/review/.raw-output-* "$P"/.cct/review/.findings-round-*.tmp 2>/dev/null | wc -l | tr -d ' ')"
+rm -rf "$P"
+rm -f "$HUGE_PROFILE" "$HUGE_REVIEWER"
 rm -f "$ECHO_PROFILE" "$DUP_PROFILE" "$NOVERDICT_PROFILE" "$TYPO_PROFILE"
 
 # ══════════════════════════════════════════════════════════════

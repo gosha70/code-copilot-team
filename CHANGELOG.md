@@ -79,6 +79,22 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   accrued or triggered. Anyone on an older version was not protected by it.
 
 ### Fixed
+- **A verbose reviewer no longer destroys the findings file (#209)** — the
+  reviewer's entire output travelled as a `jq --arg`, so a verbose reviewer
+  (codex echoes the prompt plus its reasoning, captured with `2>&1`) blew
+  past `ARG_MAX`; jq died with "Argument list too long" and, because the
+  call sat inside a heredoc command substitution with no exit check, the
+  findings file was written as an **empty 1-byte file** while the console
+  still reported `findings written` and `Verdict: FAIL (blocking: 2)`. A
+  real review with blocking findings was destroyed silently, and the fix
+  session was then composed from nothing — the #204 phantom-findings shape
+  from a new cause. The output now travels by file (`--rawfile`), jq writes
+  to a temp file whose exit status is checked and whose result must parse
+  before it is moved into place (a failure is a loud exit, never a
+  plausible-looking artifact), and the driver refuses to compose a fix
+  prompt from a findings file that is missing, empty, or not a JSON object —
+  parking with a reason that names the file instead of dispatching a no-op
+  fix session that would later park as `git_anomaly`.
 - **The review loop's clock no longer bills time spent parked (#205)** —
   three defects from one real run. (1) `loop_start` was set when review
   state was initialised and carried verbatim through every round, so the

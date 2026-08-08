@@ -2008,6 +2008,52 @@ rm -rf "$P"
 rm -f "$BROKEN_REVIEWER" "$BROKEN_PROFILE" "$QUIET_PROFILE" "$TO_PROFILE"
 
 # ══════════════════════════════════════════════════════════════
+echo "=== #209: never fix from a destroyed findings file ==="
+# ══════════════════════════════════════════════════════════════
+
+# A truncated or empty findings artifact yields a fix session with NOTHING to
+# fix: it changes no code and the run then parks as git_anomaly, pointing at
+# git rather than at the destroyed review. Same phantom-findings shape as
+# #204, different cause.
+#
+# The corruption happens BETWEEN the runner writing the file and the driver
+# reading it, and there is no seam between those two steps to inject at — so
+# this exercises the guard's condition directly against the three artifact
+# shapes it must distinguish, plus a static check that the driver actually
+# applies it before composing a fix prompt.
+GUARD_DIR=$(mktemp -d)
+: > "$GUARD_DIR/empty.json"
+printf 'not json at all' > "$GUARD_DIR/invalid.json"
+printf '[1,2,3]' > "$GUARD_DIR/array.json"
+printf '{"round":1,"verdict":"FAIL","findings":[]}' > "$GUARD_DIR/valid.json"
+guard_rejects() {  # mirrors the driver's condition exactly
+    local f="$1"
+    if [[ ! -s "$f" ]] || ! jq -e 'type == "object"' "$f" >/dev/null 2>&1; then
+        echo rejected
+    else
+        echo accepted
+    fi
+}
+assert_eq "the guard rejects an empty findings file" "rejected" \
+    "$(guard_rejects "$GUARD_DIR/empty.json")"
+assert_eq "the guard rejects a missing findings file" "rejected" \
+    "$(guard_rejects "$GUARD_DIR/nope.json")"
+assert_eq "the guard rejects malformed JSON" "rejected" \
+    "$(guard_rejects "$GUARD_DIR/invalid.json")"
+assert_eq "the guard rejects a non-object (array) artifact" "rejected" \
+    "$(guard_rejects "$GUARD_DIR/array.json")"
+assert_eq "the guard accepts a real findings file" "accepted" \
+    "$(guard_rejects "$GUARD_DIR/valid.json")"
+rm -rf "$GUARD_DIR"
+
+# And the driver applies that condition before composing a fix prompt.
+assert_eq "the driver validates findings before composing a fix prompt" "1" \
+    "$(grep -c 'refusing to run a fix session with no findings' "$SCRIPT_DIR/../scripts/auto-build-loop.sh")"
+assert_eq "the validation precedes compose_fix_prompt" "1" \
+    "$(awk '/refusing to run a fix session with no findings/{seen=1} /compose_fix_prompt "\$findings"/{if (seen) {print 1; exit}}' \
+        "$SCRIPT_DIR/../scripts/auto-build-loop.sh")"
+
+# ══════════════════════════════════════════════════════════════
 echo "=== #201: cost cap visibility and proactive raises ==="
 # ══════════════════════════════════════════════════════════════
 

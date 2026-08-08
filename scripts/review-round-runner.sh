@@ -676,13 +676,28 @@ fi
 # ── Write findings-round-N.json ──────────────────────────────
 
 FINDINGS_FILE="$REVIEW_DIR/findings-round-${NEXT_ROUND}.json"
-cat > "$FINDINGS_FILE" << FINDINGS_EOF
-$(jq -n \
+
+# #209: the reviewer's ENTIRE raw output used to travel as `--arg raw_output`,
+# i.e. on the argv list. A verbose reviewer (codex echoes the prompt plus its
+# reasoning, and we capture with 2>&1) blows past ARG_MAX, jq dies with
+# "Argument list too long" — and because the call sat inside a heredoc command
+# substitution, its exit status was discarded and the findings file was written
+# as an EMPTY 1-byte file. The console still said "findings written" and
+# "Verdict: FAIL (blocking: 2)", so a real review with blocking findings was
+# destroyed silently and the fix session was then composed from nothing.
+#
+# Two changes, both required: pass the output by FILE (--rawfile, no argv
+# limit), and write jq's output straight to the target while checking its exit
+# status, so a failure is loud instead of leaving a plausible-looking artifact.
+RAW_TMP="$REVIEW_DIR/.raw-output-${NEXT_ROUND}.txt"
+printf '%s' "$REVIEW_OUTPUT" > "$RAW_TMP"
+FINDINGS_TMP="$REVIEW_DIR/.findings-round-${NEXT_ROUND}.tmp"
+if ! jq -n \
     --argjson round "$NEXT_ROUND" \
     --arg verdict "$VERDICT" \
     --arg provider "$PEER_PROVIDER" \
     --argjson findings "$FINDINGS_JSON" \
-    --arg raw_output "$REVIEW_OUTPUT" \
+    --rawfile raw_output "$RAW_TMP" \
     --arg cost "${INVOCATION_COST:-}" \
     --arg perr "${PROVIDER_ERROR:-}" \
     --argjson pexit "${REVIEW_EXIT:-0}" \
@@ -691,8 +706,21 @@ $(jq -n \
       findings: $findings, raw_output: $raw_output}
      + (if ($perr | length) > 0
         then {provider_error: {exit_code: $pexit, message: $perr}}
-        else {} end)')
-FINDINGS_EOF
+        else {} end)' > "$FINDINGS_TMP"; then
+    rm -f "$RAW_TMP" "$FINDINGS_TMP"
+    echo "Error: failed to write $FINDINGS_FILE (jq error). The review round's" >&2
+    echo "findings were NOT persisted; refusing to leave an empty artifact." >&2
+    exit 1
+fi
+# Only publish a file that parses — an unreadable findings file must never
+# reach the driver looking like a legitimate empty review.
+if ! jq -e 'type == "object"' "$FINDINGS_TMP" >/dev/null 2>&1; then
+    rm -f "$RAW_TMP" "$FINDINGS_TMP"
+    echo "Error: $FINDINGS_FILE would not be valid JSON — refusing to write it." >&2
+    exit 1
+fi
+mv "$FINDINGS_TMP" "$FINDINGS_FILE"
+rm -f "$RAW_TMP"
 
 echo "Round $NEXT_ROUND findings written to $FINDINGS_FILE" >&2
 echo "Verdict: $VERDICT (blocking: $BLOCKING_COUNT)" >&2
