@@ -746,7 +746,7 @@ code-copilot-team/
 │   ├── test-generate.sh                 294 generation + adapter tests
 │   ├── test-shared-structure.sh         806 structure + content tests
 │   ├── test-sync.sh                     121 sync + init metadata tests
-│   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+9 with --online)
+│   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh            80 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests

@@ -60,6 +60,16 @@ changed, and the benchmark self-broke the moment fastapi 0.141.1 shipped.
    configured model, then SIGTERM with no leaked listener. No upstream vLLM
    is needed — LiteLLM serves `/v1/models` from its own config.
 
+   Review round 3 (P2) made that startup test fail-safe: an OS-assigned free
+   port instead of a guess inside a fixed 8800-9199 window (a "random" port
+   from a fixed range still collides, and a collision reads as a proxy
+   failure); an `EXIT/INT/TERM` trap registered before anything is created;
+   the generated `log=` removed alongside `config=`; SIGTERM escalated to
+   SIGKILL; and the PORT probed for a live listener rather than treating the
+   parent PID's disappearance as proof. Verified by interrupting a run
+   mid-flight (`exit 130`): process reaped, config and log removed, port
+   free.
+
    Review round 2 (P2) corrected this: the first cut asserted only that
    `litellm.proxy.proxy_server` **imports**, and labelled that "proxy can
    start" — an import-compatible dependency set can still die during
