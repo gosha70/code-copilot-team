@@ -24,8 +24,12 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   increments); full cost accounting — review rounds emit per-invocation
   cost and debit the same `caps.cost_usd`, with conservative flagged
   estimates for unmetered invocations; `cooldown-supervisor.sh` treats
-  exit 6 as terminal (never cooled down or relaunched). Attended
-  profiles are byte-identical.
+  exit 6 as terminal (never cooled down or relaunched, including across
+  supervisor re-invocations on the same ledger). Attended profiles are
+  byte-identical, with one deliberate exception: a reviewer backend that
+  genuinely reports measured cost now debits `caps.cost_usd` on every
+  profile (previously silently free); estimates stay opt-in for
+  attended configs and inactive for v1.
 
 ## [1.1.0]
 

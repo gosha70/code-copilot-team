@@ -40,6 +40,7 @@
             "estimate_usd_per_invocation": {
               "type": "number",
               "exclusiveMinimum": 0,
+              "default": 2.0,
               "description": "Conservative worst-case debit for an invocation whose real cost is unmeasurable. Debits the SAME caps.cost_usd (no separate allowance); flagged estimated:true in the ledger."
             }
           }

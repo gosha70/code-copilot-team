@@ -115,6 +115,12 @@ assert "exactly one attempt (no relaunch despite on-incomplete=relaunch)" \
   "[[ \"\$(jq -r .attempts "$W/.cct/supervisor/demo/run.json")\" == 1 ]]"
 assert "no cooldown despite the usage phrase in output (exit 6 precedence)" \
   "[[ \"\$(jq -r .cooldowns "$W/.cct/supervisor/demo/run.json")\" == 0 ]]"
+# Terminal ACROSS supervisor runs: a second invocation on the same ledger
+# refuses (exit 6) without relaunching or reclassifying as parked.
+RC2="$(run_sup "$W" 'echo should-never-run; exit 0' --on-incomplete relaunch)"
+assert_exit "re-invocation on a terminated ledger refuses (exit 6)" 6 "$RC2"
+assert "no relaunch on re-invocation (attempts still 1)" \
+  "[[ \"\$(jq -r .attempts "$W/.cct/supervisor/demo/run.json")\" == 1 ]]"
 rm -r "$W"
 
 # ── FR-18/19: caps fail deterministically ──

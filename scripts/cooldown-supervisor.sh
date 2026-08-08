@@ -133,6 +133,15 @@ START_EPOCH="$(now_epoch)"
 if [[ -f "$RUN" ]]; then
   # Corrupt (present but unparseable) → fail closed with recovery guidance.
   jq -e . "$RUN" >/dev/null 2>&1 || fail_corrupt "not valid JSON"
+  # FR-8 (#191): terminated_policy is terminal ACROSS supervisor runs too —
+  # a fresh invocation on a terminated ledger must refuse (exit 6), never
+  # relaunch the harness or reclassify the outcome as parked.
+  if [[ "$(ledger_get '.status // empty')" == "terminated_policy" ]]; then
+    err "feature '$FEATURE_ID' ended terminated_policy — terminal by contract (#191)."
+    err "Review the harness triage report, resolve the policy boundary, then start"
+    err "a fresh run. Refusing to relaunch."
+    exit 6
+  fi
   ATTEMPTS="$(ledger_get '.attempts // 0')"
   COOLDOWNS="$(ledger_get '.cooldowns // 0')"
   START_EPOCH="$(ledger_get '.started_epoch // empty')"

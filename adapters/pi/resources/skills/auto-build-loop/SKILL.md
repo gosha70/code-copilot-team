@@ -203,7 +203,11 @@ CLI providers) is debited as a conservative estimate
 no separate allowance; the cap check runs on the combined total.
 Estimates are active under `unattended` always (disabling them there is
 a preflight error: unmeterable-and-unestimable) and for attended configs
-that opt in via an `unattended.budget` block; v1 configs are untouched.
+that opt in via an `unattended.budget` block; estimates are inactive for
+v1 configs. **Measured** review costs, however, debit the cap on every
+profile: a reviewer backend that genuinely reports cost now counts
+against `caps.cost_usd` where it was silently free before — attended
+runs with cost-reporting reviewers reach the cap sooner, honestly.
 
 ## Safety rails (hard-coded)
 

@@ -114,10 +114,14 @@ this spec enforces that with a fail-closed preflight.
   resumable `parked` stay relaunch-eligible. Covered by a test in the
   supervisor's exit-classification suite.
 - **FR-9 — Tests + compatibility.** Existing profiles behave
-  byte-identically (asserted); the new exit code, dispatch, artifacts,
-  validator (accept/reject matrices), runner cost emission, driver
-  accumulation incl. estimates, and the supervisor rule are all tested;
-  all existing suites stay green.
+  byte-identically (asserted), with one deliberate FR-7 carve-out: a
+  reviewer backend that genuinely reports measured cost debits
+  `caps.cost_usd` on every profile (previously silently free) — the
+  estimate path stays opt-in for attended configs and inactive for v1.
+  The new exit code, dispatch, artifacts, validator (accept/reject
+  matrices), runner cost emission, driver accumulation incl. estimates,
+  and the supervisor rule are all tested; all existing suites stay
+  green.
 
 ## Constraints / What NOT to Build (→ later increments of #190)
 

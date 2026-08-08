@@ -510,25 +510,27 @@ preflight() {
 
     # gh preflight (FR-2a): required only when the profile can push / open PRs.
     if [[ "$CAN_PUSH" == "true" ]]; then
-        local gh_unusable=""
+        local gh_fail_kind=""
         if ! "$GH_BIN" --version >/dev/null 2>&1; then
-            gh_unusable="gh binary not usable: $GH_BIN (override with CCT_GH_BIN)"
+            gh_fail_kind="binary"
         elif ! ( cd "$PROJECT_DIR" && "$GH_BIN" auth status ) >/dev/null 2>&1; then
-            gh_unusable="'gh auth status' failed"
+            gh_fail_kind="auth"
         fi
-        if [[ -n "$gh_unusable" ]]; then
+        if [[ -n "$gh_fail_kind" ]]; then
             if [[ "$PROFILE" == "unattended" ]]; then
                 # #191 FR-5: push/PR artifacts are BEST-EFFORT under
                 # unattended — a missing/unauthenticated gh must never block
                 # the terminate-only contract (exit 6 + mandatory
                 # ledger/triage). Downgrade the capabilities and journal;
                 # every later artifact skip is journaled with its cause too.
+                local gh_cause="gh binary not usable: $GH_BIN"
+                [[ "$gh_fail_kind" == "auth" ]] && gh_cause="'gh auth status' failed"
                 CAN_PUSH=false; CAN_OPEN_PR=false; CAN_MERGE=false
                 mkdir -p "$LEDGER_DIR"
-                journal "capability_downgrade" "$gh_unusable — push/PR artifacts will be skipped (best-effort, FR-5)"
-                echo "[auto-build] WARN: $gh_unusable — unattended run continues without push/PR artifacts." >&2
-            elif [[ "$gh_unusable" == "gh binary"* ]]; then
-                echo "Error: $gh_unusable — required for profile '$PROFILE'." >&2
+                journal "capability_downgrade" "$gh_cause — push/PR artifacts will be skipped (best-effort, FR-5)"
+                echo "[auto-build] WARN: $gh_cause — unattended run continues without push/PR artifacts." >&2
+            elif [[ "$gh_fail_kind" == "binary" ]]; then
+                echo "Error: gh binary not usable: $GH_BIN (override with CCT_GH_BIN) — required for profile '$PROFILE'." >&2
                 exit 1
             else
                 echo "Error: 'gh auth status' failed — authenticate gh before running profile '$PROFILE'." >&2
@@ -951,7 +953,7 @@ run_advisory_pass() {
             CCT_REVIEW_BASE_REF="$base_ref" CCT_REVIEW_MAX_ROUNDS=1 \
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >/dev/null 2>&1 || true
         local frf
-        frf=$(ls "$scratch"/findings-round-*.json 2>/dev/null | sort | tail -1)
+        frf=$(ls "$scratch"/findings-round-*.json 2>/dev/null | sort -V | tail -1)
         # Each advisory pass is one reviewer invocation in a fresh scratch
         # dir; debit it (measured or estimated) like a gating round (FR-7).
         debit_review_costs "$frf" "advisory review $_prov phase $n round $round"
@@ -1026,14 +1028,19 @@ run_review_loop() {
         # round's cost is debited exactly once — a runner that died before
         # writing one is debited as an unmetered invocation (FR-7).
         local pre_frf post_frf
-        pre_frf=$(ls "$PROJECT_DIR"/.cct/review/findings-round-*.json 2>/dev/null | sort | tail -1)
+        pre_frf=$(ls "$PROJECT_DIR"/.cct/review/findings-round-*.json 2>/dev/null | sort -V | tail -1)
         ( cd "$PROJECT_DIR" && CCT_REVIEW_BASE_REF="$base_ref" \
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >&2 || rc=$?
         local round
         round=$(jq -r '.current_round // 0' "$PROJECT_DIR/.cct/review/state.json" 2>/dev/null || echo 0)
-        post_frf=$(ls "$PROJECT_DIR"/.cct/review/findings-round-*.json 2>/dev/null | sort | tail -1)
+        post_frf=$(ls "$PROJECT_DIR"/.cct/review/findings-round-*.json 2>/dev/null | sort -V | tail -1)
         [[ "$post_frf" == "$pre_frf" ]] && post_frf=""
-        debit_review_costs "$post_frf" "gating review phase $n round $round"
+        # rc=2 is a breaker the runner trips BEFORE invoking any reviewer
+        # (max rounds / timeout / stale findings / providers down) — there
+        # is no invocation to debit, measured or estimated.
+        if [[ $rc -ne 2 ]]; then
+            debit_review_costs "$post_frf" "gating review phase $n round $round"
+        fi
         case $rc in
             0)
                 verify_pass_gate

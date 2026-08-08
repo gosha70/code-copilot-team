@@ -516,8 +516,17 @@ fi
 # cost channel and are counted as unmetered here (the driver applies its
 # conservative estimate). Accumulated across rounds in state.json and
 # surfaced per-round in findings-round-N.json (invocation_cost_usd).
-INVOCATION_COST=$(printf '%s\n' "$REVIEW_OUTPUT" | grep '"total_cost_usd"' | tail -1 | \
-    jq -r 'if (type == "object") and ((.total_cost_usd | type) == "number") then .total_cost_usd else empty end' 2>/dev/null || true)
+#
+# The envelope is accepted ONLY as the FINAL non-empty line of the
+# output AND only when it carries a session identity key — review PROSE
+# that merely quotes a cost line (e.g. a review of this very code) must
+# never be treated as measurement: a forged "measured $0" would suppress
+# the conservative estimate and reopen the FR-7 hole. Anything that
+# fails these checks counts as unmetered, which can only OVERSTATE cost.
+INVOCATION_COST=$(printf '%s\n' "$REVIEW_OUTPUT" | awk 'NF { last = $0 } END { print last }' | \
+    jq -r 'if (type == "object") and ((.total_cost_usd | type) == "number")
+              and (has("session_id") or has("subtype"))
+           then .total_cost_usd else empty end' 2>/dev/null || true)
 COST_STATE=$(jq -c '.cost // {measured_usd: 0, invocations: 0, unmetered_invocations: 0}' \
     "$STATE_FILE" 2>/dev/null || echo '{"measured_usd":0,"invocations":0,"unmetered_invocations":0}')
 COST_STATE=$(echo "$COST_STATE" | jq --arg c "${INVOCATION_COST:-}" \
