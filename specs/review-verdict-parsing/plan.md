@@ -58,12 +58,35 @@ A review that fails on maintainability grounds — no `blocking` severity —
 is reported to the driver as PASS, and the driver hard-gates on
 `verdict == "PASS"`.
 
+## Second correction — "last block wins" was also wrong (user P1)
+
+The first attempt anchored on the LAST `### Verdict` block. That assumes
+the echo precedes the answer. It does not have to: the capture merges
+stderr with `2>&1`, and ordering across two file descriptors is not a
+contract. The user reproduced both inversions — a real FAIL followed by
+the echoed request parsed as PASS in both runners — and the peer-review
+prompt I had written made it *easier*, because my "in exactly this form"
+example was a cleanly parseable `### Verdict` / `PASS` pair.
+
+No position-based rule can be sound. The request must be **unparseable by
+construction**:
+
+- a verdict is a bare `PASS`/`FAIL`/`INCONCLUSIVE` alone on the line after
+  a line holding only `### Verdict`; anything else after the heading ends
+  the block without a verdict;
+- both requests describe that shape in prose and never instantiate it, so
+  echoing a request in full yields no verdict at any position;
+- one implementation, `scripts/lib/review-verdict.sh`, serves both
+  runners — two copies is what let them drift apart to begin with.
+
+The regression that pins this is a provider whose entire output is the
+real request, echoed verbatim: it can only ever be INCONCLUSIVE.
+
 ## Changes
 
-1. **Anchor on the LAST verdict block** (`scripts/review-round-runner.sh`).
-   The request itself contains a `### Verdict` section, so when it is
-   echoed back it is always the first one. The review's own verdict is
-   always last.
+1. **A verdict must be a bare word under a bare heading**
+   (`scripts/lib/review-verdict.sh`, used by both runners), and neither
+   request contains such a pair.
 2. **Reject placeholder findings.** A `FINDING|` line whose severity is a
    literal `<...>` placeholder is the echoed format line, not a finding.
    Deliberately narrow: filtering on an *allow-list* of severities would

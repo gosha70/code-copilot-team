@@ -593,6 +593,53 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# #200 P1: the echo can arrive AFTER the answer — stdout/stderr ordering
+# under `2>&1` is not a contract. The request must be inert at ANY
+# position, which is why it describes the verdict shape instead of
+# showing one.
+PROFILE="$TMP/echo-after-answer.toml"
+write_profile "$PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "tail-echo-reviewer"
+[providers.tail-echo-reviewer]
+type = "cli"
+command = "printf '%s\n' 'Found a real problem.' '' '### Verdict' 'FAIL' '' 'user' '4. A verdict, as the LAST section of your response.' 'Write a heading line consisting of three hash marks, a space, and the word Verdict.' 'On the next line write exactly one bare word: PASS, FAIL, or INCONCLUSIVE.'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+PROJECT=$(setup_project)
+CCT_PROVIDER_PROFILE="$PROFILE" bash "$RUNNER" "$PROJECT/.cct/review/pending.json" >/dev/null 2>&1 || true
+TAIL_ARTIFACT="$PROJECT/specs/test-feature/collaboration/build-review.md"
+if [[ -f "$TAIL_ARTIFACT" ]]; then
+    assert_contains "prompt echo AFTER the answer does not forge a PASS" \
+        "$(cat "$TAIL_ARTIFACT")" "verdict: FAIL"
+else
+    echo "  FAIL: tail-echo artifact not created"
+    FAIL=$((FAIL + 1))
+fi
+
+# Echoing the REAL request verbatim must yield no verdict at all.
+PROFILE="$TMP/cat-request.toml"
+write_profile "$PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "parrot-reviewer"
+[providers.parrot-reviewer]
+type = "cli"
+command = "cat {review_request}"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+PROJECT=$(setup_project)
+CCT_PROVIDER_PROFILE="$PROFILE" bash "$RUNNER" "$PROJECT/.cct/review/pending.json" >/dev/null 2>&1 || true
+PARROT_ARTIFACT="$PROJECT/specs/test-feature/collaboration/build-review.md"
+if [[ -f "$PARROT_ARTIFACT" ]]; then
+    assert_contains "echoing the REAL request verbatim yields no verdict" \
+        "$(cat "$PARROT_ARTIFACT")" "verdict: INCONCLUSIVE"
+else
+    echo "  FAIL: parrot artifact not created"
+    FAIL=$((FAIL + 1))
+fi
+
 # Plan phase writes plan-consult.md
 PROFILE="$TMP/plan-artifact.toml"
 write_profile "$PROFILE" << 'TOML'

@@ -25,6 +25,15 @@ fi
 
 PROJECT_DIR="$(cd "$1" && pwd)"
 
+# Shared verdict parser (#200) — one implementation for both runners.
+RV_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -f "$RV_LIB_DIR/lib/review-verdict.sh" ]]; then
+    echo "Error: missing $RV_LIB_DIR/lib/review-verdict.sh (verdict parser)" >&2
+    exit 1
+fi
+# shellcheck source=lib/review-verdict.sh
+source "$RV_LIB_DIR/lib/review-verdict.sh"
+
 # Review state dir — overridable so a caller (e.g. the auto-build driver
 # running an advisory panel reviewer) can run a review in isolation, without
 # touching the canonical .cct/review/ state the gating loop depends on. The
@@ -368,7 +377,7 @@ fi)
 
 ## Required Output Format
 
-You MUST structure your response with these exact sections:
+You MUST structure your response with these exact sections.
 
 ### Summary
 2-3 sentences summarizing the review.
@@ -386,7 +395,11 @@ Where:
 - suggested_fix: actionable fix suggestion
 
 ### Verdict
-State exactly one of: PASS, FAIL, or INCONCLUSIVE
+End your response with a heading line consisting of three hash marks, a
+space, and the word Verdict — nothing else on that line. On the next line
+write exactly one bare word and nothing else: PASS, FAIL, or
+INCONCLUSIVE. A response with no such section is treated as INCONCLUSIVE,
+which fails the gate.
 REVIEW_EOF
 
 # ── Execute provider ─────────────────────────────────────────
@@ -496,32 +509,14 @@ compute_finding_id() {
     echo "f-${hash}"
 }
 
-# Extract verdict (#200)
-#
-# From the LAST `### Verdict` block, never the first. The review REQUEST
-# contains its own `### Verdict` section ("State exactly one of: PASS,
-# FAIL, or INCONCLUSIVE"), and providers that echo their prompt — codex
-# exec does, and we capture with 2>&1 — put that echo BEFORE the review.
-# Anchoring on the first block parsed the instruction as the answer and
-# returned PASS for a failing review.
-#
-# No bare-word fallback either: `grep -qi PASS` matched "the tests pass",
-# "password", and the echoed instruction line itself. Absent a verdict
-# section the round is INCONCLUSIVE, which the driver already treats as a
-# hard gate failure — fail-closed, never a silent approval.
-VERDICT="INCONCLUSIVE"
-# `|| true`: with `set -o pipefail` a no-match grep makes the whole
-# pipeline exit 1, which under `set -e` would kill the runner before it
-# writes findings-round-N.json — and "no verdict section" is exactly the
-# case this branch exists to handle.
-VERDICT_START=$(echo "$REVIEW_OUTPUT" | grep -n '^### Verdict' | tail -1 | cut -d: -f1 || true)
-if [[ -n "$VERDICT_START" ]]; then
-    VERDICT_LINE=$(echo "$REVIEW_OUTPUT" | tail -n "+$VERDICT_START" | sed -n '1,/^$/p' \
-        | grep -oiE 'PASS|FAIL|INCONCLUSIVE' | head -1 | tr '[:lower:]' '[:upper:]')
-    if [[ -n "$VERDICT_LINE" ]]; then
-        VERDICT="$VERDICT_LINE"
-    fi
-fi
+# Extract verdict (#200) — see scripts/lib/review-verdict.sh for why a
+# verdict must be a bare word on its own line under a bare heading, and
+# why the request above deliberately describes that shape instead of
+# showing it. Position-based rules are unsound here: the capture merges
+# stderr, so an echoed request can land after the answer as easily as
+# before it. Empty means no parseable verdict — fail closed, never PASS.
+VERDICT=$(rv_extract_verdict "$REVIEW_OUTPUT")
+VERDICT="${VERDICT:-INCONCLUSIVE}"
 
 # If round is invalid, discard findings
 if [[ "$ROUND_VALID" != "true" ]]; then

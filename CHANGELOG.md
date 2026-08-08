@@ -70,11 +70,21 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   the duplicated real findings made `jq --argjson` receive a multi-line
   `first_seen_round`, crashing the runner with exit 2 — the code its own
   header documents as BREAKER_TRIPPED — leaving no findings file and no
-  breaker file. Now: the verdict comes from the LAST `### Verdict` block,
-  placeholder findings are rejected by shape (not by a severity
-  allow-list, which would silently drop misspelled real findings),
-  findings are deduplicated by id, and the blocking override is kept as
+  breaker file. Now: a verdict is a bare `PASS`/`FAIL`/`INCONCLUSIVE`
+  alone on the line after a line holding only `### Verdict`, parsed by one
+  shared implementation (`scripts/lib/review-verdict.sh`) for both
+  runners; placeholder findings are rejected by shape (not by a severity
+  allow-list, which would silently drop misspelled real findings);
+  findings are deduplicated by id; and the blocking override is kept as
   defence in depth.
+  Crucially, **both requests now describe the verdict shape in prose and
+  never instantiate it**. Ordering across the merged `2>&1` stream is not
+  a contract — an echoed request can land after the answer as easily as
+  before it — so "take the first block" and "take the last block" are
+  equally unsound. A request that is parseable at all is a forged verdict
+  waiting for buffering to change. The regression that pins this is a
+  provider whose entire output is the real request echoed verbatim: it can
+  only ever be INCONCLUSIVE.
   **Behaviour change:** a review with no `### Verdict` section is now
   INCONCLUSIVE instead of matching the bare word `PASS` anywhere in the
   output ("the tests pass", "password"). `scripts/peer-review-runner.sh`
