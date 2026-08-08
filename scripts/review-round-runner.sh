@@ -8,7 +8,8 @@ set -euo pipefail
 # state.json, and returns the verdict.
 #
 # Usage: review-round-runner.sh <project-dir>
-# Exit:  0 = PASS, 1 = FAIL/INVALID, 2 = BREAKER_TRIPPED
+# Exit:  0 = PASS, 1 = FAIL/INVALID, 2 = BREAKER_TRIPPED,
+#        3 = PROVIDER_ERROR (the reviewer never ran — #204)
 #
 # Requires: jq, shasum or sha256sum
 # Env:      CCT_PROVIDER_PROFILE (optional, default ~/.code-copilot-team/providers.toml)
@@ -470,9 +471,17 @@ fi
 
 rm -f "$REVIEW_REQUEST"
 
+# #204: a timed-out reviewer produced no review — a provider failure, not
+# review feedback. It must NOT exit here: the driver's provider_unavailable
+# arm reads the provider, exit code and message out of
+# findings-round-N.json, so exiting before that artifact exists degraded
+# the park message to "reviewer '?' failed (exit ?) ... unknown error".
+# Record the cause and fall through to the normal write path, which ends
+# in exit 3.
+PROVIDER_ERROR=""
 if [[ $REVIEW_EXIT -eq 124 || $REVIEW_EXIT -eq 143 ]]; then
+    PROVIDER_ERROR="timed out after ${PROVIDER_TIMEOUT}s"
     echo "Error: Provider '$PEER_PROVIDER' timed out after ${PROVIDER_TIMEOUT}s." >&2
-    exit 1
 fi
 
 # ── Post-review validation ───────────────────────────────────
@@ -523,8 +532,28 @@ if [[ "$ROUND_VALID" != "true" ]]; then
     VERDICT="INVALID"
 fi
 
+# #204: a non-zero provider exit means the reviewer NEVER RAN — an
+# infrastructure failure, not a judgement about the code. Mapping it onto
+# FAIL laundered it into the content vocabulary, and the driver could not
+# tell "reviewer is broken" from "your code has problems": it spawned fix
+# sessions against ZERO findings, made unplanned commits, burned rounds
+# and money, then parked as a misleading git_anomaly. The verdict stays
+# INCONCLUSIVE (fail-closed — never a pass) and the round exits 3, which
+# the driver parks as provider_unavailable.
 if [[ $REVIEW_EXIT -ne 0 ]]; then
-    VERDICT="FAIL"
+    VERDICT="INCONCLUSIVE"
+    if [[ -z "$PROVIDER_ERROR" ]]; then
+        # `|| true` is load-bearing: under `set -o pipefail` a provider
+        # that fails with NO output makes grep exit 1, the whole pipeline
+        # exit 1, and `set -e` abort the runner right here — before the
+        # findings artifact is written and before the exit-3 path is
+        # reached. The driver then saw the old rc=1 and treated a silent
+        # infrastructure failure as review feedback, which is the very
+        # bug class #204 is about. The `:-no output` fallback below is
+        # only reachable because of this.
+        PROVIDER_ERROR=$(printf '%s' "$REVIEW_OUTPUT" | grep -v '^[[:space:]]*$' | head -1 | cut -c1-500 || true)
+        PROVIDER_ERROR="${PROVIDER_ERROR:-no output}"
+    fi
 fi
 
 # ── #193 FR-6: per-invocation cost, out-of-band only ─────────
@@ -655,9 +684,14 @@ $(jq -n \
     --argjson findings "$FINDINGS_JSON" \
     --arg raw_output "$REVIEW_OUTPUT" \
     --arg cost "${INVOCATION_COST:-}" \
+    --arg perr "${PROVIDER_ERROR:-}" \
+    --argjson pexit "${REVIEW_EXIT:-0}" \
     '{round: $round, verdict: $verdict, reviewer_provider: $provider,
       invocation_cost_usd: (if ($cost | length) > 0 then ($cost | tonumber) else null end),
-      findings: $findings, raw_output: $raw_output}')
+      findings: $findings, raw_output: $raw_output}
+     + (if ($perr | length) > 0
+        then {provider_error: {exit_code: $pexit, message: $perr}}
+        else {} end)')
 FINDINGS_EOF
 
 echo "Round $NEXT_ROUND findings written to $FINDINGS_FILE" >&2
@@ -863,6 +897,14 @@ ARTIFACT_EOF
 
     echo "Plan review complete ($VERDICT, advisory) — plan-consult.md written." >&2
     exit 0
+fi
+
+# #204: the reviewer never ran — infrastructure failure, not a verdict on
+# the code. Exit 3 so the driver parks as provider_unavailable instead of
+# spawning fix sessions against zero findings.
+if [[ -n "${PROVIDER_ERROR:-}" ]]; then
+    echo "Provider '$PEER_PROVIDER' failed (exit $REVIEW_EXIT): $PROVIDER_ERROR" >&2
+    exit 3
 fi
 
 # FAIL or INVALID (build phase)

@@ -55,6 +55,27 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   attended configs and inactive for v1.
 
 ### Fixed
+- **A broken reviewer is no longer reported as a review verdict (#204)** —
+  a non-zero reviewer process exit means the reviewer never ran, but it
+  was mapped onto `FAIL`, the same vocabulary as a genuine rejection. The
+  driver could not tell "reviewer is broken" from "your code has
+  problems": it spawned fix sessions against **zero findings**, made
+  unplanned commits, burned rounds and money, and parked as a misleading
+  `git_anomaly`. Observed on a real run: 2 wasted rounds, 2 fix sessions,
+  1 unplanned commit, ~$4 of a $6.76 budget, because codex exited on a
+  one-line usage error. Now the verdict is `INCONCLUSIVE` (fail-closed),
+  `findings-round-N.json` records `provider_error` with the exit code and
+  message, and the round exits **3** — parked by the driver as
+  `provider_unavailable`, naming the provider and its error, with no fix
+  session and no burned round. A reviewer *timeout* (124/143) was the same
+  class and previously exited 1; it now exits 3 too. A failed invocation
+  is also no longer charged the conservative unmetered estimate (the
+  observed run was billed `$2.0 estimated` for a reviewer that never ran);
+  genuinely measured cost is still debited. A real review that fails the
+  code still exits 1 and records no `provider_error`. Every provider
+  failure — including one that produces NO output, and including a
+  timeout — writes the findings artifact before exiting, because the
+  driver reads the provider, exit code and message out of it.
 - **A provider's echoed prompt is no longer parsed as its review (#200)**
   — providers are captured with `2>&1`, and a CLI that echoes its prompt
   (codex exec does) fed the request's own `### Verdict` section and its
