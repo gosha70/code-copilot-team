@@ -28,6 +28,11 @@ SYNC=false
 PROJECT_DIR=""
 SHOW_HELP=false
 MEMKERNEL_ARGS=()
+# #212: --playwright is a claude-code adapter flag. The root parser used to
+# fall through to `*)`, which assigns an unknown first argument to
+# PROJECT_DIR — so the flag became a phantom project dir and was SILENTLY
+# ignored while two docs told users it installs Playwright.
+PLAYWRIGHT_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     --aider)            TOOLS+=("aider"); shift ;;
     --all)              TOOLS=("claude-code" "codex" "pi" "cursor" "github-copilot" "windsurf" "aider"); shift ;;
     --sync)             SYNC=true; shift ;;
+    --playwright)       PLAYWRIGHT_ARGS+=("--playwright"); shift ;;
     --memkernel)
       MEMKERNEL_ARGS+=("--memkernel")
       if [[ -n "${2:-}" && "${2:0:2}" != "--" ]]; then
@@ -51,6 +57,17 @@ while [[ $# -gt 0 ]]; do
       ;;
     --help|-h)          SHOW_HELP=true; shift ;;
     *)
+      # #212: the class defect behind the silent --playwright. Anything
+      # starting with `-` is a flag, never a project directory: swallowing it
+      # as PROJECT_DIR meant an unknown or misspelled flag ran a DIFFERENT
+      # installation than the user asked for, without a word. Fail loudly.
+      if [[ "$1" == -* ]]; then
+        echo "[ERROR] Unknown option: $1"
+        echo "        Run '$0 --help' for the supported flags."
+        echo "        Adapter-specific flags must go to the adapter, e.g."
+        echo "        bash adapters/claude-code/setup.sh $1"
+        exit 1
+      fi
       if [[ -z "$PROJECT_DIR" ]]; then
         PROJECT_DIR="$1"
       else
@@ -67,6 +84,7 @@ if $SHOW_HELP; then
   echo ""
   echo "Tools (global install — no project dir needed):"
   echo "  --claude-code     Install Claude Code config to ~/.claude/"
+  echo "  --playwright      Also install the Playwright MCP server (Claude Code only)"
   echo "  --codex           Install Codex config to ~/.codex/"
   echo "  --pi              Install Pi adapter (pi-code + runtime) to ~/.code-copilot-team/pi/"
   echo ""
@@ -123,6 +141,22 @@ fi
 # ── Project dir validation for project-level tools ─────────
 PROJECT_TOOLS=("cursor" "github-copilot" "windsurf" "aider")
 needs_project=false
+# #212: --playwright only exists on the claude-code adapter. If the resolved
+# tool set cannot carry it, say so — forwarding it nowhere would be the same
+# silent no-op this issue is about, just one layer deeper.
+if [[ ${#PLAYWRIGHT_ARGS[@]} -gt 0 ]]; then
+  _pw_ok=0
+  for tool in "${TOOLS[@]}"; do
+    [[ "$tool" == "claude-code" ]] && _pw_ok=1
+  done
+  if [[ $_pw_ok -eq 0 ]]; then
+    echo "[ERROR] --playwright applies to the Claude Code adapter, which is not"
+    echo "        in this run's tool set (${TOOLS[*]})."
+    echo "        Add --claude-code, or run: bash adapters/claude-code/setup.sh --playwright"
+    exit 1
+  fi
+fi
+
 for tool in "${TOOLS[@]}"; do
   for pt in "${PROJECT_TOOLS[@]}"; do
     if [[ "$tool" == "$pt" ]]; then
@@ -149,9 +183,9 @@ for tool in "${TOOLS[@]}"; do
   case "$tool" in
     claude-code)
       if $SYNC; then
-        bash "$ADAPTERS/claude-code/setup.sh" --sync "${MEMKERNEL_ARGS[@]+"${MEMKERNEL_ARGS[@]}"}" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+        bash "$ADAPTERS/claude-code/setup.sh" --sync "${MEMKERNEL_ARGS[@]+"${MEMKERNEL_ARGS[@]}"}" "${PLAYWRIGHT_ARGS[@]+"${PLAYWRIGHT_ARGS[@]}"}" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
       else
-        bash "$ADAPTERS/claude-code/setup.sh" "${MEMKERNEL_ARGS[@]+"${MEMKERNEL_ARGS[@]}"}" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
+        bash "$ADAPTERS/claude-code/setup.sh" "${MEMKERNEL_ARGS[@]+"${MEMKERNEL_ARGS[@]}"}" "${PLAYWRIGHT_ARGS[@]+"${PLAYWRIGHT_ARGS[@]}"}" && INSTALLED=$((INSTALLED + 1)) || FAILED=$((FAILED + 1))
       fi
       ;;
     codex)

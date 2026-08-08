@@ -79,6 +79,18 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   accrued or triggered. Anyone on an older version was not protected by it.
 
 ### Fixed
+- **`setup.sh --playwright` is no longer silently ignored (#212)** — the root
+  parser's `*)` branch assigned unknown arguments to `PROJECT_DIR`, so the
+  flag became a phantom project directory and the Claude adapter was invoked
+  without it, while two docs told users the command installs the Playwright
+  MCP server. Worse than a rejection: users believed it was installed. The
+  flag is now forwarded to the claude-code adapter (with `--sync` too),
+  exits nonzero with a pointer to the adapter when the resolved tool set
+  cannot carry it, and appears in `--help`. The class defect is fixed with
+  it: anything starting with `-` is a flag by definition and exits nonzero
+  naming itself, so a misspelled tool flag can no longer run a different
+  installation than the one asked for. A positional project dir is
+  unchanged.
 - **The driver's wall-clock cap no longer bills parked time either (#210)**
   — #205 fixed the review-loop clock; the driver's own guard had the
   identical defect. `totals.started_epoch` was reset only on the
