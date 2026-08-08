@@ -54,6 +54,27 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   profile (previously silently free); estimates stay opt-in for
   attended configs and inactive for v1.
 
+### Added
+- **The cost cap is discoverable, live, and raisable mid-run (#201)** — a
+  run inherited a **$25 default** the README never mentioned, showed no
+  spend while in flight, and could not have its cap raised without first
+  being parked. Now: a "Cost & safety caps" README section (default, where
+  it lives, the `cap_exceeded` park, `--resume` semantics); a per-phase
+  line — `[auto-build] phase 1 complete — $4.24 spent of $25.00 cap
+  ($20.76 left)` — that names the estimated portion when there is one, so a
+  conservative estimate never reads as measured spend; and a phase-gate
+  re-read of `caps.cost_usd` from the live config for attended profiles, so
+  a raise applies without waiting to be parked (announced on stdout,
+  journalled as `cap_updated`, frozen snapshot updated). Deliberately
+  narrow: only `caps.cost_usd`, only at phase gates (never mid-phase, so a
+  session's budget cannot move under it), only positive values (a `0` is
+  ignored rather than zeroing the budget), and never for `unattended` —
+  such a run stays bound to the config it was ADMITTED against (#193), and
+  an unaudited mid-run policy change would break that binding.
+  **Upgrade note:** the cost cap was silently INERT before the #197/#198
+  result-parsing fix — spend evaluated to `0`, so `caps.cost_usd` never
+  accrued or triggered. Anyone on an older version was not protected by it.
+
 ### Fixed
 - **The review loop's clock no longer bills time spent parked (#205)** —
   three defects from one real run. (1) `loop_start` was set when review
