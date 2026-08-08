@@ -205,7 +205,11 @@ peer_for.codex = "claude"
 
 [providers.codex]
 type = "cli"
-command = "codex --quiet --prompt-file {review_request}"
+# Flags verified by executing codex-cli 0.147.0; see
+# specs/codex-provider-command/verification/codex-reviewer-capture.md.
+# `2>/dev/null` is required: codex echoes the prompt to stderr and the runner
+# captures providers with `2>&1`, which made a FAIL parse as PASS.
+command = "codex exec --color never -s read-only --skip-git-repo-check - < {review_request} 2>/dev/null"
 timeout_sec = 300
 healthcheck = "codex --version"
 
@@ -666,7 +670,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
 │   ├── test-generate.sh                 294 generation + adapter tests
-│   ├── test-shared-structure.sh         798 structure + content tests
+│   ├── test-shared-structure.sh         805 structure + content tests
 │   ├── test-sync.sh                     105 sync + init metadata tests
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   ├── test-review-loop.sh            40 review loop integration tests

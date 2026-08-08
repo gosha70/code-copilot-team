@@ -50,9 +50,27 @@ peer_for.pi = "codex"
 #   model        — model name passed via {model} placeholder
 #   timeout_sec  — max execution time (default: 300)
 
+# Codex reviewer. Verified by EXECUTING codex-cli 0.147.0 — see
+# specs/codex-provider-command/verification/codex-reviewer-capture.md, which is
+# the ground truth for every flag below. Each one is load-bearing:
+#   exec                    non-interactive entry point (`--quiet`/`--prompt-file`
+#                           were removed; the old command errored on every round)
+#   -                       read the request from stdin
+#   --skip-git-repo-check   the runner's snapshot sandbox has .git REMOVED, and
+#                           codex refuses to start outside a git repo
+#   -s read-only            a reviewer must not mutate the sandbox
+#   --color never           the Summary/Findings/Verdict contract is parsed as text
+#   2>/dev/null             codex echoes the whole PROMPT to stderr, and the runner
+#                           captures providers with `2>&1`. Merged in, the echoed
+#                           "State exactly one of: PASS, FAIL, or INCONCLUSIVE"
+#                           line is the FIRST `^### Verdict` block, so a FAIL was
+#                           parsed as PASS, and the echoed `FINDING|<severity>|...`
+#                           template line parsed as a phantom finding.
+# Failures still surface: codex exits non-zero and the runner turns that into a
+# FAIL verdict; healthcheck catches a missing/broken install before a round.
 [providers.codex]
 type = "cli"
-command = "codex --quiet --prompt-file {review_request}"
+command = "codex exec --color never -s read-only --skip-git-repo-check - < {review_request} 2>/dev/null"
 timeout_sec = 300
 healthcheck = "codex --version"
 version = "cli"

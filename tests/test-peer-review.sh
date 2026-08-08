@@ -123,7 +123,7 @@ fallback_chain.claude = ["openai", "ollama", "gdx-spark"]
 
 [providers.codex]
 type = "cli"
-command = "codex --quiet --prompt-file {review_request}"
+command = "codex exec --color never -s read-only --skip-git-repo-check - < {review_request} 2>/dev/null"
 timeout_sec = 300
 healthcheck = "codex --version"
 

@@ -236,6 +236,45 @@ for t in "${TEMPLATE_TYPES[@]}"; do
   assert_file_exists "$t has team-review.md" "$SHARED_DIR/templates/$t/commands/team-review.md"
 done
 
+# ── Provider profile template (#199) ──────────────────────────
+# This template had NO coverage, which is how a codex command built from
+# flags that no longer exist shipped and survived. Guard the shipped
+# reviewer commands against the two failure modes proven in
+# specs/codex-provider-command/verification/codex-reviewer-capture.md.
+PROVIDER_TMPL="$SHARED_DIR/templates/provider-profile-template.toml"
+assert_file_exists "provider-profile-template.toml exists" "$PROVIDER_TMPL"
+
+CODEX_CMD=$(awk '/^\[providers\.codex\]/{f=1;next} /^\[/{f=0} f && /^command *=/{sub(/^[^=]*= *"/,"");sub(/"$/,"");print;exit}' "$PROVIDER_TMPL")
+
+rc=0; [[ "$CODEX_CMD" != *"--quiet"* && "$CODEX_CMD" != *"--prompt-file"* ]] || rc=1
+assert_ok "codex command ships no removed flags (--quiet/--prompt-file)" "$rc"
+
+rc=0; [[ "$CODEX_CMD" == *"codex exec"* ]] || rc=1
+assert_ok "codex command uses the non-interactive 'codex exec' entry point" "$rc"
+
+# The runner deletes .git from its snapshot sandbox; codex refuses to start
+# outside a git repo, so this flag is required for the command to run at all.
+rc=0; [[ "$CODEX_CMD" == *"--skip-git-repo-check"* ]] || rc=1
+assert_ok "codex command tolerates the sandbox's missing .git" "$rc"
+
+# A reviewer must not mutate the sandbox it is reviewing.
+rc=0; [[ "$CODEX_CMD" == *"read-only"* ]] || rc=1
+assert_ok "codex command runs the reviewer read-only" "$rc"
+
+# codex echoes the PROMPT to stderr; the runner captures providers with 2>&1,
+# so an unsuppressed stderr made the echoed "State exactly one of: PASS, ..."
+# line the first ^### Verdict block — a FAIL parsed as PASS.
+rc=0; [[ "$CODEX_CMD" == *"2>/dev/null"* ]] || rc=1
+assert_ok "codex command keeps its prompt echo out of the parsed stream" "$rc"
+
+# Every shipped cli command must consume {review_request}, or the reviewer
+# is invoked with no request at all.
+CLI_CMDS_MISSING=0
+while IFS= read -r c; do
+  [[ "$c" == *"{review_request}"* ]] || CLI_CMDS_MISSING=$((CLI_CMDS_MISSING + 1))
+done < <(awk '/^type *= *"cli"/{cli=1} /^command *=/{if(cli){sub(/^[^=]*= *"/,"");sub(/"$/,"");print;cli=0}} /^\[/{cli=0}' "$PROVIDER_TMPL")
+assert_eq "every shipped cli command consumes {review_request}" "0" "$CLI_CMDS_MISSING"
+
 # ══════════════════════════════════════════════════════════════
 # 5. Template content fidelity — headers match expected stacks
 # ══════════════════════════════════════════════════════════════
