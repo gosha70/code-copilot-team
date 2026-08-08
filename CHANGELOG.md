@@ -27,7 +27,11 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   measurement moved to the out-of-band `CCT_REVIEW_COST_FILE` adapter
   channel (in-band text envelopes are never measured); capability-
   downgraded runs report their effective state honestly in summary,
-  ledger, and triage.
+  ledger, and triage. Behavior note: ALL `--resume` invocations
+  (attended included) now parse every config value from the frozen
+  ledger snapshot — the parked-resume arms (caps/pr/merge refreshes)
+  are the sanctioned channel for post-freeze edits; other live-file
+  edits are ignored on resume by design.
 
 
 ### Added

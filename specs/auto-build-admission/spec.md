@@ -130,6 +130,22 @@ admission executes for the first time.
 - `CCT_REVIEW_COST_FILE` — per-invocation out-of-band cost channel.
 - Ledger field `capability_downgrade` — effective-state honesty.
 
+### Increment-C handoff notes (review-recorded)
+
+The final PR-#194 review recorded these for the C planner (full text on
+#190): (1) verifier RESOLUTION here is a screen, not a proof — bare
+tool invocations (`make`, `npm test`) are statically indistinguishable
+from real suites, and C, which actually RUNS verifiers, owns the real
+decision; (2) the `runtime_conformance`-inadmissible check must flip to
+"evaluator available and healthy" when C's §6 evaluator lands, and the
+four DEFER items are C's scope; (3) admission's `test.command` run is
+un-budgeted (caps are not yet armed) — C's §2 accounting should include
+it alongside conformance-evaluator invocations; (4) a SIGKILL during
+admission can still leave a registered throwaway worktree — a `git
+worktree prune` at driver preflight would reclaim it; (5) any
+C evaluator invoked like a reviewer needs the same adapter-written
+cost-channel treatment.
+
 ## Success Criteria
 
 - **SC-1** Generator → finalize → admission round-trips on a real spec;
