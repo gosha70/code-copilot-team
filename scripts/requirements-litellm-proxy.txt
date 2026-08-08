@@ -1,0 +1,26 @@
+# Proxy dependency pins for the Anthropic-vs-vLLM benchmark (#220).
+#
+# WHY PINNED: litellm's `proxy` extra declares `fastapi<1.0,>=0.136.3`, so an
+# unconstrained install resolves whatever fastapi is newest. fastapi 0.141.1
+# removed `fastapi.dependencies.utils.get_flat_dependant`, which
+# litellm/proxy/management_endpoints/management_v1/common.py imports at module
+# scope — so the proxy died during startup:
+#
+#     ImportError: cannot import name 'get_flat_dependant'
+#                  from 'fastapi.dependencies.utils'
+#
+# and the follow-on "ModuleNotFoundError: No module named 'proxy_server'".
+# A previously working benchmark broke with no CCT change, because the
+# versions were resolved fresh on every run.
+#
+# VERIFIED on 2026-08-08, python 3.13, in a clean ephemeral venv:
+#   - fastapi 0.141.1 -> get_flat_dependant MISSING (reproduces the crash)
+#   - fastapi 0.139.2 -> present; `from litellm.proxy import proxy_server` OK
+#   - `pip check` -> "No broken requirements found."
+#   - `litellm --version` -> LiteLLM: Current Version = 1.95.0
+#
+# TO UPGRADE: bump both together, then re-run
+# `bash tests/test-litellm-proxy-deps.sh --online`, which provisions a clean
+# venv and re-checks the import, pip check, and the proxy module import.
+litellm[proxy]==1.95.0
+fastapi==0.139.2

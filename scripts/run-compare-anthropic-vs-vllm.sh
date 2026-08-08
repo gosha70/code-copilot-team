@@ -231,8 +231,30 @@ setup_venv() {
             err "pip install failed in venv: ${pip_pkgs[*]}"
             exit 1
         fi
+        # #220: catch a conflicting resolution HERE, where the message names
+        # the packages, rather than three steps later as an ImportError deep
+        # inside the proxy.
+        if ! "$VENV_DIR/bin/python" -m pip check; then
+            err "pip check reported dependency conflicts in the fresh venv (see above)"
+            proxy_dep_versions >&2
+            exit 1
+        fi
     fi
     ok "Ephemeral venv ready"
+}
+
+# #220: what actually got installed. The original failure was a version
+# incompatibility, and the console showed only an ImportError with no way to
+# tell WHICH litellm and fastapi were in play — so every failure report now
+# carries the resolved versions.
+proxy_dep_versions() {
+    local py="${VENV_DIR:-}/bin/python"
+    [[ -x "$py" ]] || py="python3"
+    echo "  resolved proxy dependency versions:"
+    echo "    python  : $("$py" -c 'import sys; print(sys.version.split()[0])' 2>/dev/null || echo unknown)"
+    echo "    litellm : $("$py" -m pip show litellm 2>/dev/null | awk '/^Version:/{print $2}' || echo 'not installed')"
+    echo "    fastapi : $("$py" -m pip show fastapi 2>/dev/null | awk '/^Version:/{print $2}' || echo 'not installed')"
+    echo "    pins    : scripts/requirements-litellm-proxy.txt"
 }
 
 # --- LiteLLM proxy lifecycle ---
@@ -270,6 +292,7 @@ start_litellm_proxy() {
     # (Previously this function carried its own copy; extracted 2026-05-18.)
     if ! command -v litellm > /dev/null; then
         err "litellm missing after venv provisioning — inspect the pip output above"
+        proxy_dep_versions >&2
         exit 1
     fi
     ok "litellm present in venv: $(litellm --version 2>/dev/null | head -1 || echo 'version unknown')"
@@ -285,6 +308,7 @@ start_litellm_proxy() {
     ) || {
         err "proxy.py failed to start the LiteLLM proxy. Output:"
         printf '%s\n' "$proxy_output" >&2
+        proxy_dep_versions >&2
         exit 1
     }
 
@@ -305,7 +329,12 @@ start_litellm_proxy() {
 note_intro
 
 # --- Provision the ephemeral test env (needed by all stages) ---
-setup_venv 'litellm[proxy]>=1.50'
+# #220: pinned, not resolved fresh each run. An unconstrained
+# `litellm[proxy]>=1.50` let pip pick any fastapi in litellm's own
+# `<1.0,>=0.136.3` range, and 0.141.1 dropped a symbol litellm imports at
+# module scope — so the proxy crashed on startup and a working benchmark
+# broke with no CCT change. See scripts/requirements-litellm-proxy.txt.
+setup_venv --requirement "$REPO_DIR/scripts/requirements-litellm-proxy.txt"
 
 # --- Stage 1: Preflight ---
 if [[ "$SKIP_PREFLIGHT" == "1" ]]; then
