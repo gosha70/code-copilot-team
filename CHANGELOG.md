@@ -11,6 +11,26 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 ## [Unreleased]
 
 ### Added
+
+- **Unattended admission control + traceability (#193, increment B of
+  #190)** — `specs/<feature>/verification.yaml` requirement→verifier
+  evidence graph (`shared/schemas/verification.schema.json` contract,
+  canonical FR normalizer/hasher in `scripts/lib/verification-common.sh`,
+  deterministic draft generator `scripts/generate-verification-draft.sh`);
+  `validate-spec.sh --unattended` admission bar (two-way coverage,
+  `statement_sha` recomputation against `spec.md`, executable-verifier
+  resolution, governance-before-execution ordering, `test.command`
+  proven in a throwaway worktree, C-owned checks surfaced as DEFER);
+  the driver's increment-A test seam replaced by real admission bound
+  to the EFFECTIVE config — an admitted `unattended` run executes for
+  the first time, a refusal is an un-admitted exit-1. Review-cost
+  measurement moved to the out-of-band `CCT_REVIEW_COST_FILE` adapter
+  channel (in-band text envelopes are never measured); capability-
+  downgraded runs report their effective state honestly in summary,
+  ledger, and triage.
+
+
+### Added
 - **Unattended policy core + metering (#191, increment A of #190)** —
   terminal-outcome vocabulary in the auto-build driver (`landed` /
   `terminated_policy` exit 6 / `failed`); terminate-only disposition

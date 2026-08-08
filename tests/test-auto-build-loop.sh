@@ -1655,8 +1655,10 @@ assert_eq "no forged measured debit journaled" "0" \
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
 
-# Positive control: a GENUINE final-line envelope (with session identity)
-# is measured and debits totals.cost_usd instead of the estimate.
+# #193 FLIP of the A-era positive control: an in-band final-line
+# envelope — however well-formed — is NO LONGER a measurement. The
+# reviewer's text is model-controlled; only the adapter-written cost
+# file measures. This invocation is unmetered → estimate.
 GENUINE_REVIEW=$(mktemp)
 cat > "$GENUINE_REVIEW" << 'TXT'
 ### Summary
@@ -1684,14 +1686,85 @@ admit_project "$P"
 BARE=$(add_remote "$P")
 GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
 REVIEW_PROFILE="$GENUINE_PROFILE" run_driver "$P"
-assert_exit "genuine-envelope review lands (exit 0)" 0 "$RC"
-assert_eq "measured cost debited (0.01 build + 3.5 review)" "3.51" \
+assert_exit "in-band-envelope review lands (exit 0)" 0 "$RC"
+assert_eq "in-band envelope is NOT measured (text cannot meter)" "0.01" \
     "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
-assert_eq "no estimate debited when measured" "0" \
+assert_eq "in-band envelope falls back to the estimate" "2" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
-rm -f "$POISON_REVIEW" "$POISON_PROFILE" "$GENUINE_REVIEW" "$GENUINE_PROFILE"
+
+# The out-of-band channel measures: an adapter-style provider script
+# that WRITES CCT_REVIEW_COST_FILE is a real measurement.
+COSTFILE_PROVIDER=$(mktemp)
+cat > "$COSTFILE_PROVIDER" << 'SH'
+#!/usr/bin/env bash
+printf '{"total_cost_usd": 3.5}\n' > "$CCT_REVIEW_COST_FILE"
+printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+COSTFILE_PROFILE=$(mktemp)
+cat > "$COSTFILE_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $COSTFILE_PROVIDER"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$COSTFILE_PROFILE" run_driver "$P"
+assert_exit "cost-file review lands (exit 0)" 0 "$RC"
+assert_eq "adapter-written cost file IS measured (0.01 build + 3.5 review)" "3.51" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "no estimate when the channel measured" "0" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+
+# A NEGATIVE cost file is invalid — unmetered, never a budget credit.
+NEGFILE_PROVIDER=$(mktemp)
+cat > "$NEGFILE_PROVIDER" << 'SH'
+#!/usr/bin/env bash
+printf '{"total_cost_usd": -5}\n' > "$CCT_REVIEW_COST_FILE"
+printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+NEGFILE_PROFILE=$(mktemp)
+cat > "$NEGFILE_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $NEGFILE_PROVIDER"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$NEGFILE_PROFILE" run_driver "$P"
+assert_exit "negative cost-file review lands (exit 0)" 0 "$RC"
+assert_eq "negative cost file never credits the budget" "0.01" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "negative cost file falls back to the estimate" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+
+# The runner has NO in-band parsing path left (statically asserted).
+assert_eq "runner never parses cost out of reviewer text" "0" \
+    "$(grep -c 'REVIEW_OUTPUT.*total_cost_usd' "$SCRIPT_DIR/../scripts/review-round-runner.sh")"
+assert_eq "ollama adapter reports honest local-zero via the channel" "1" \
+    "$(grep -c 'CCT_REVIEW_COST_FILE' "$SCRIPT_DIR/../scripts/provider-adapters/ollama.sh" | awk '{print ($1 > 0) ? 1 : 0}')"
+
+rm -f "$POISON_REVIEW" "$POISON_PROFILE" "$GENUINE_REVIEW" "$GENUINE_PROFILE" \
+    "$COSTFILE_PROVIDER" "$COSTFILE_PROFILE" "$NEGFILE_PROVIDER" "$NEGFILE_PROFILE"
 
 # Regression (user P2): a NEGATIVE final-line envelope must never credit
 # the budget — it is invalid, so the invocation counts as unmetered and
