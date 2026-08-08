@@ -1128,10 +1128,36 @@ run_review_loop() {
         # rc=2 is a breaker the runner trips BEFORE invoking any reviewer
         # (max rounds / timeout / stale findings / providers down) — there
         # is no invocation to debit, measured or estimated.
-        if [[ $rc -ne 2 ]]; then
+        #
+        # rc=3 (#204) is a provider failure: the reviewer process ran but
+        # never produced a review. Debit anything the adapter actually
+        # MEASURED, but never fall back to the conservative estimate — a
+        # failed invocation is not an unmetered one, and the observed run
+        # charged $2.0 "estimated" for a reviewer that exited on a usage
+        # error.
+        if [[ $rc -eq 3 ]]; then
+            local _est_save="${ESTIMATES_ACTIVE:-false}"
+            ESTIMATES_ACTIVE=false
+            debit_review_costs "$post_frf" "gating review phase $n round $round"
+            ESTIMATES_ACTIVE="$_est_save"
+        elif [[ $rc -ne 2 ]]; then
             debit_review_costs "$post_frf" "gating review phase $n round $round"
         fi
         case $rc in
+            3)
+                # #204: the reviewer never ran. This is infrastructure,
+                # not review feedback — do NOT spawn a fix session, do not
+                # burn a round, and name the real cause. Previously this
+                # arrived as rc=1 (FAIL), which drove fix sessions against
+                # zero findings and eventually parked as git_anomaly
+                # because those sessions had nothing to change.
+                local _perr _pexit
+                _perr=$(jq -r '.provider_error.message // "unknown error"' "$post_frf" 2>/dev/null || echo "unknown error")
+                _pexit=$(jq -r '.provider_error.exit_code // "?"' "$post_frf" 2>/dev/null || echo "?")
+                dispose "provider_unavailable" \
+                    "reviewer '$(jq -r '.reviewer_provider // "?"' "$post_frf" 2>/dev/null || echo "?")' failed (exit $_pexit) in phase $n round $round: $_perr" \
+                    "$(jq -n --arg f "${post_frf:-}" '{findings_file: $f}')"
+                ;;
             0)
                 verify_pass_gate
                 mkdir -p "$phase_dir"

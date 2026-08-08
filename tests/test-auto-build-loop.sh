@@ -1921,6 +1921,43 @@ assert_eq "negative cost file falls back to the estimate" "2" \
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
 
+# ── #204: a broken reviewer must not look like review feedback ──
+# The reviewer CLI exits non-zero (it never ran). Before the fix this
+# arrived as a content FAIL: the driver spawned fix sessions against zero
+# findings, made unplanned commits, burned rounds, charged a $2 "estimated"
+# cost for an invocation that never happened, and finally parked as a
+# misleading git_anomaly.
+BROKEN_REVIEWER=$(mktemp)
+cat > "$BROKEN_REVIEWER" << 'SH'
+#!/usr/bin/env bash
+printf '%s\n' 'Not inside a trusted directory and --skip-git-repo-check was not specified.' >&2
+exit 1
+SH
+BROKEN_PROFILE=$(mktemp)
+cat > "$BROKEN_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $BROKEN_REVIEWER"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$BROKEN_PROFILE" run_driver "$P"
+assert_exit "a broken reviewer parks (exit 4), never drives fix sessions" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
+assert_eq "park reason names the provider, not git_anomaly" "provider_unavailable" \
+    "$(jq -r '.reason' "$ESC" 2>/dev/null)"
+assert_eq "the park message carries the real provider error" "1" \
+    "$(jq -r '.detail // ""' "$ESC" 2>/dev/null | grep -c 'skip-git-repo-check' || echo 0)"
+assert_eq "no fix session runs against zero findings" "0" \
+    "$(ls "$P"/.cct/auto-build/demo-feat/phase-1/fix-prompt-*.md 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "a failed invocation is never charged the conservative estimate" "0" \
+    "$(jq -r '.totals.cost_estimated_usd // 0' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+rm -f "$BROKEN_REVIEWER" "$BROKEN_PROFILE"
+
 # The runner has NO in-band parsing path left (statically asserted).
 assert_eq "runner never parses cost out of reviewer text" "0" \
     "$(grep -c 'REVIEW_OUTPUT.*total_cost_usd' "$SCRIPT_DIR/../scripts/review-round-runner.sh")"

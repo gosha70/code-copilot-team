@@ -674,6 +674,69 @@ assert_eq "a verdict word on the heading line is not a verdict" "INCONCLUSIVE" \
 rm -rf "$P"
 
 rm -f "$TAILECHO_PROFILE" "$CATREQ_PROFILE" "$SAMELINE_PROFILE"
+
+# ══════════════════════════════════════════════════════════════
+echo "=== #204: a broken reviewer is not a review verdict ==="
+# ══════════════════════════════════════════════════════════════
+
+# The reviewer CLI exits non-zero: it never ran. Reporting that as FAIL
+# put an infrastructure failure into the content vocabulary, so the driver
+# spawned fix sessions against ZERO findings and burned rounds and money.
+PROVERR_PROFILE=$(mktemp)
+cat > "$PROVERR_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '%s\n' 'Not inside a trusted directory and --skip-git-repo-check was not specified.' >&2; exit 1"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$PROVERR_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+FR="$P/.cct/review/findings-round-1.json"
+assert_exit "a failed reviewer exits 3 (provider error), not 1 (FAIL)" 3 "$RC"
+assert_eq "a failed reviewer is never a content FAIL" "INCONCLUSIVE" \
+    "$(jq -r '.verdict' "$FR" 2>/dev/null)"
+assert_eq "the provider error is recorded, not laundered" \
+    "Not inside a trusted directory and --skip-git-repo-check was not specified." \
+    "$(jq -r '.provider_error.message' "$FR" 2>/dev/null)"
+assert_eq "the provider exit code is recorded" "1" \
+    "$(jq -r '.provider_error.exit_code' "$FR" 2>/dev/null)"
+assert_eq "no findings are invented for a review that never ran" "0" \
+    "$(jq '.findings | length' "$FR" 2>/dev/null)"
+rm -rf "$P"
+
+# A timed-out reviewer is the same class: it produced no review.
+PROVTO_PROFILE=$(mktemp)
+cat > "$PROVTO_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "exit 124"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$PROVTO_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "a timed-out reviewer exits 3, not 1" 3 "$RC"
+rm -rf "$P"
+
+# A healthy reviewer that genuinely fails the code still exits 1.
+P=$(setup_project)
+write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$FAIL_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "a real FAIL is still exit 1, not a provider error" 1 "$RC"
+assert_eq "a real FAIL records no provider_error" "null" \
+    "$(jq -r '.provider_error // "null"' "$P/.cct/review/findings-round-1.json" 2>/dev/null)"
+rm -rf "$P"
+
+rm -f "$PROVERR_PROFILE" "$PROVTO_PROFILE"
 rm -f "$ECHO_PROFILE" "$DUP_PROFILE" "$NOVERDICT_PROFILE" "$TYPO_PROFILE"
 
 # ══════════════════════════════════════════════════════════════
