@@ -797,6 +797,20 @@ check_caps() {
 # ── Headless sessions (FR-5, FR-6) ───────────────────────────
 
 # Sets SESSION_SUBTYPE and SESSION_ID globals (NOT command substitution:
+# #197: the current CLI's `-p --output-format json` emits a JSON ARRAY of
+# messages ([{type:"system",subtype:"init"}, ..., {type:"result",
+# subtype:"success", total_cost_usd, session_id}]); older CLIs emitted the
+# single result object. Normalize BOTH shapes to the result object before
+# extracting — reading .subtype on the array yielded "unknown" and parked
+# every successful phase, cost read 0 (caps never accrued), and session_id
+# read empty (breaking --resume chaining).
+session_result_obj() {
+    # session_result_obj <result-file> — the result object on stdout ('{}' if none)
+    jq -c 'if type == "array"
+           then ([.[] | select(.type? == "result")] | last) // (.[-1] // {})
+           else . end' "$1" 2>/dev/null || echo '{}'
+}
+
 # park() must be able to exit the whole driver, not a $(...) subshell).
 run_claude_session() {
     # run_claude_session <prompt-file> <result-file> [resume-session-id]
@@ -811,11 +825,12 @@ run_claude_session() {
         dispose "build_session_error" "claude exited $rc with no result JSON (see $result_file.stderr)" \
             "$(jq -n --arg f "$result_file.stderr" '{stderr: $f}')"
     fi
-    local cost
-    cost=$(jq -r '.total_cost_usd // 0' "$result_file" 2>/dev/null || echo 0)
+    local cost result_obj
+    result_obj=$(session_result_obj "$result_file")
+    cost=$(printf '%s' "$result_obj" | jq -r '.total_cost_usd // 0' 2>/dev/null || echo 0)
     state_set '.totals.cost_usd = (.totals.cost_usd + ($c | tonumber))' --arg c "${cost:-0}"
-    SESSION_SUBTYPE=$(jq -r '.subtype // "unknown"' "$result_file" 2>/dev/null || echo "unknown")
-    SESSION_ID=$(jq -r '.session_id // empty' "$result_file" 2>/dev/null || true)
+    SESSION_SUBTYPE=$(printf '%s' "$result_obj" | jq -r '.subtype // "unknown"' 2>/dev/null || echo "unknown")
+    SESSION_ID=$(printf '%s' "$result_obj" | jq -r '.session_id // empty' 2>/dev/null || true)
 }
 
 run_pi_session() {
@@ -844,11 +859,12 @@ run_pi_session() {
         dispose "build_session_error" "pi-code exited $rc with no result JSON (see $result_file.stderr)" \
             "$(jq -n --arg f "$result_file.stderr" '{stderr: $f}')"
     fi
-    local cost
-    cost=$(jq -r '.total_cost_usd // 0' "$result_file" 2>/dev/null || echo 0)
+    local cost result_obj
+    result_obj=$(session_result_obj "$result_file")
+    cost=$(printf '%s' "$result_obj" | jq -r '.total_cost_usd // 0' 2>/dev/null || echo 0)
     state_set '.totals.cost_usd = (.totals.cost_usd + ($c | tonumber))' --arg c "${cost:-0}"
-    SESSION_SUBTYPE=$(jq -r '.subtype // "unknown"' "$result_file" 2>/dev/null || echo "unknown")
-    SESSION_ID=$(jq -r '.session_id // empty' "$result_file" 2>/dev/null || true)
+    SESSION_SUBTYPE=$(printf '%s' "$result_obj" | jq -r '.subtype // "unknown"' 2>/dev/null || echo "unknown")
+    SESSION_ID=$(printf '%s' "$result_obj" | jq -r '.session_id // empty' 2>/dev/null || true)
 }
 
 run_session() {

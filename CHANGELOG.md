@@ -55,6 +55,16 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   attended configs and inactive for v1.
 
 ### Fixed
+- **Successful build sessions no longer park (#197)** — the driver
+  parsed `claude -p --output-format json` as a single result object,
+  but the current CLI emits a JSON array of messages (result = the
+  `type=="result"` element): `.subtype` on the array read "unknown" and
+  parked every succeeded phase, cost read 0 (caps never accrued), and
+  `session_id` read empty (breaking `--resume` chaining). Both session
+  backends now normalize array-or-object via `session_result_obj()`;
+  the test suite's mock CLI emits the array shape by default so every
+  driver path is exercised against the real output, with legacy-object,
+  344-element captured-scale, and resume-chaining regressions.
 - **Autonomous builds run through the branded launcher (#195)** — the
   auto-build driver's Claude backend defaulted to the generic `claude`
   binary while the PI backend correctly used `pi-code`, so unattended
