@@ -92,7 +92,40 @@ if [[ "$ONLINE" -eq 1 ]]; then
     assert_ok "get_flat_dependant imports (the reported ImportError)" "$?"
 
     "$VENV/bin/python" -c 'from litellm.proxy import proxy_server' >/dev/null 2>&1
-    assert_ok "litellm.proxy.proxy_server imports (proxy can start)" "$?"
+    assert_ok "litellm.proxy.proxy_server imports (the secondary ModuleNotFoundError)" "$?"
+
+    # An import-compatible dependency set can still die during application
+    # startup, so the import above is NOT the acceptance test. Start the
+    # PRODUCTION helper (benchmark_runner.proxy — the same one the benchmark
+    # uses), on an ephemeral port, and require it to become healthy. The
+    # helper polls /v1/models itself, which LiteLLM serves from its own
+    # config, so no upstream vLLM is needed.
+    PROXY_PORT=$(( 8800 + (RANDOM % 400) ))
+    PROXY_OUT=$(PATH="$VENV/bin:$PATH" PYTHONPATH="$REPO_DIR/scripts:$REPO_DIR" \
+        "$VENV/bin/python" -m benchmark_runner.proxy start \
+        --vllm-base http://127.0.0.1:9 --model cct-selftest-model --port "$PROXY_PORT" 2>&1)
+    PROXY_PID=$(printf '%s\n' "$PROXY_OUT" | grep '^pid=' | cut -d= -f2-)
+    PROXY_CFG=$(printf '%s\n' "$PROXY_OUT" | grep '^config=' | cut -d= -f2-)
+    rc=0; [[ -n "$PROXY_PID" ]] || rc=1
+    assert_ok "the production proxy helper starts and reports a pid" "$rc"
+
+    rc=0; kill -0 "$PROXY_PID" 2>/dev/null || rc=1
+    assert_ok "the proxy process survives startup" "$rc"
+
+    MODELS=$(curl -s -m 10 "http://127.0.0.1:$PROXY_PORT/v1/models" 2>/dev/null)
+    rc=0; printf '%s' "$MODELS" | grep -q 'cct-selftest-model' || rc=1
+    assert_ok "the proxy answers /v1/models with its configured model" "$rc"
+
+    # Teardown must actually reap it — a leaked proxy holding the port breaks
+    # the next run's preflight.
+    kill "$PROXY_PID" 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$PROXY_PID" 2>/dev/null || break
+        sleep 0.5
+    done
+    rc=0; kill -0 "$PROXY_PID" 2>/dev/null && rc=1
+    assert_ok "the proxy terminates on SIGTERM (no leaked listener)" "$rc"
+    [[ -n "$PROXY_CFG" ]] && rm -f "$PROXY_CFG"
 
     V=$("$VENV/bin/litellm" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     PINNED=$(grep -E '^litellm' "$REQ" | cut -d= -f3)

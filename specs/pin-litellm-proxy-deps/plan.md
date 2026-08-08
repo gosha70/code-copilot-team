@@ -54,9 +54,27 @@ changed, and the benchmark self-broke the moment fastapi 0.141.1 shipped.
    path on every proxy failure path. The original report showed an
    ImportError with no way to tell which versions were in play.
 5. **`tests/test-litellm-proxy-deps.sh`** — offline contract checks (13) in
-   CI; `--online` (5 more) provisions a real clean venv and asserts the
-   install, `pip check`, both imports, and that the installed litellm matches
-   the pin. That online run is #220's acceptance test and passes.
+   CI; `--online` (9 more) provisions a real clean venv and, crucially,
+   **starts the production proxy helper**: `benchmark_runner.proxy start` on
+   an ephemeral port, process alive, `/v1/models` answering with the
+   configured model, then SIGTERM with no leaked listener. No upstream vLLM
+   is needed — LiteLLM serves `/v1/models` from its own config.
+
+   Review round 2 (P2) corrected this: the first cut asserted only that
+   `litellm.proxy.proxy_server` **imports**, and labelled that "proxy can
+   start" — an import-compatible dependency set can still die during
+   application initialisation, so the label was doing work the test had not
+   earned. Same class as the stub lesson in #212: assert the thing that
+   decides, not a proxy for it.
+
+## Still not verified here
+
+The end-to-end Anthropic→vLLM translation preflight and the `python/bowling`
+smoke run need a reachable vLLM server (the report used
+`192.168.1.23:8000`). Proxy startup IS now verified against the production
+helper; what remains unverified is traffic actually reaching a model, and
+the "OK End-to-end translation confirmed" line. That needs a run on the
+reporter's host.
 
 ## Not done
 
