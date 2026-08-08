@@ -84,9 +84,13 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   flag became a phantom project directory and the Claude adapter was invoked
   without it, while two docs told users the command installs the Playwright
   MCP server. Worse than a rejection: users believed it was installed. The
-  flag is now forwarded to the claude-code adapter (with `--sync` too),
-  exits nonzero with a pointer to the adapter when the resolved tool set
-  cannot carry it, and appears in `--help`. The class defect is fixed with
+  flag is now forwarded to the claude-code adapter, exits nonzero with a
+  pointer to the adapter when the resolved tool set cannot carry it — or
+  when no tools are detected at all, which is the docs' own bare
+  `setup.sh --playwright` and used to exit 0 saying "No tools detected" —
+  and appears in `--help`. `--playwright` with `--sync` or `--memkernel` is
+  rejected at the wrapper with the adapter's own wording, instead of
+  regenerating everything and only then failing downstream. The class defect is fixed with
   it: anything starting with `-` is a flag by definition and exits nonzero
   naming itself, so a misspelled tool flag can no longer run a different
   installation than the one asked for. A positional project dir is

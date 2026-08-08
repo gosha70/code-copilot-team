@@ -32,6 +32,27 @@ Both remedies the issue offers, applied where each is correct:
    adapter that supports it (`--codex --playwright`). Forwarding it nowhere
    would be the same silent no-op one layer deeper.
 
+## Review round 2 (user P1 + P2)
+
+Both were in the first cut, and both were failures of the same kind — a
+claim not checked against the real thing:
+
+- **P1: the issue's own acceptance command still no-opped.** With no tools
+  detected, `setup.sh --playwright` reached the "No tools detected" branch
+  and exited **0** before any playwright check. The bug survived one branch
+  further along than where I fixed it. It now exits nonzero naming both
+  ways to run it.
+- **P2: `--sync --playwright` never worked.** The claude-code adapter
+  explicitly rejects that pair, but the wrapper forwarded it happily — so
+  the run regenerated everything and then failed downstream. My test proved
+  only that the flags were *forwarded*, because it used an echo-only stub
+  with no contract of its own. The wrapper now rejects the pair up front
+  with the adapter's wording, and the suite checks the REAL adapter's
+  rejection so the two cannot drift.
+
+Lesson recorded: a stub proves plumbing, never a contract. Where the claim
+is "this combination works", the test has to reach the thing that decides.
+
 ## The class defect
 
 The reported bug was one symptom of the `*)` branch: **any** unknown

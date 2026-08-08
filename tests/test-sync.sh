@@ -894,8 +894,36 @@ printf '#!/usr/bin/env bash\necho "ADAPTER-GOT: $*"\n' > "$PW_STUB/adapters/clau
 PW_OUT=$(cd "$PW_STUB" && bash scripts/setup.sh --claude-code --playwright 2>&1)
 assert_contains "--playwright reaches the claude-code adapter" "$PW_OUT" "ADAPTER-GOT: --playwright"
 
-PW_OUT=$(cd "$PW_STUB" && bash scripts/setup.sh --claude-code --sync --playwright 2>&1)
-assert_contains "--playwright survives alongside --sync" "$PW_OUT" "ADAPTER-GOT: --sync --playwright"
+# The REAL adapter rejects --playwright with --sync or --memkernel. The
+# wrapper must reject it too, before regenerating everything and only then
+# failing downstream. (An echo-only stub would happily "accept" the pair,
+# which is exactly how this shipped claimed-but-broken.)
+PW_RC=0; PW_OUT=$(cd "$PW_STUB" && bash scripts/setup.sh --claude-code --sync --playwright 2>&1) || PW_RC=$?
+assert_eq "--playwright with --sync is rejected at the wrapper" "1" "$PW_RC"
+assert_contains "rejection uses the adapter's own wording" "$PW_OUT" \
+  "--playwright cannot be combined with --sync or --memkernel"
+assert_eq "the wrapper rejects BEFORE regenerating" "0" \
+  "$(printf '%s' "$PW_OUT" | grep -c 'Regenerating adapter configs' || true)"
+
+PW_RC=0; PW_OUT=$(cd "$PW_STUB" && bash scripts/setup.sh --claude-code --playwright --memkernel 2>&1) || PW_RC=$?
+assert_eq "--playwright with --memkernel is rejected too" "1" "$PW_RC"
+
+# And the contract the wrapper is mirroring is real, not assumed: the actual
+# adapter rejects the same pair. It fails on flag validation before doing any
+# work, so this is safe to execute.
+PW_RC=0; PW_OUT=$(bash "$REPO_DIR/adapters/claude-code/setup.sh" --sync --playwright 2>&1) || PW_RC=$?
+assert_eq "the real adapter rejects --sync --playwright (contract check)" "1" "$PW_RC"
+assert_contains "real adapter's message matches the wrapper's" "$PW_OUT" \
+  "--playwright cannot be combined with --sync or --memkernel"
+
+# The issue's EXACT documented command, with no tools detectable: it used to
+# hit "No tools detected" and exit 0 — silently doing nothing, which is the
+# whole bug one branch further along.
+PW_EMPTY_HOME="$TEST_TMPDIR/empty-home"; mkdir -p "$PW_EMPTY_HOME"
+PW_RC=0; PW_OUT=$(cd "$PW_STUB" && env HOME="$PW_EMPTY_HOME" PATH=/usr/bin:/bin bash scripts/setup.sh --playwright 2>&1) || PW_RC=$?
+assert_eq "bare 'setup.sh --playwright' never exits 0 silently" "1" "$PW_RC"
+assert_contains "bare --playwright explains what to run instead" "$PW_OUT" \
+  "adapters/claude-code/setup.sh --playwright"
 
 PW_OUT=$(cd "$PW_STUB" && bash scripts/setup.sh --claude-code 2>&1)
 assert_eq "no phantom argument when the flag is absent" "1" \

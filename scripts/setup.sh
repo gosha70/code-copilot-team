@@ -109,6 +109,19 @@ if $SHOW_HELP; then
   exit 0
 fi
 
+# #212 (review P2): the claude-code adapter rejects --playwright combined
+# with --sync or --memkernel. The wrapper used to forward both happily, so
+# `setup.sh --claude-code --sync --playwright` regenerated everything and
+# THEN failed in the adapter. Reject it here, before any work, with the
+# adapter's own wording.
+if [[ ${#PLAYWRIGHT_ARGS[@]} -gt 0 ]]; then
+  if $SYNC || [[ ${#MEMKERNEL_ARGS[@]} -gt 0 ]]; then
+    echo "[ERROR] --playwright cannot be combined with --sync or --memkernel"
+    echo "        Run them as separate invocations."
+    exit 1
+  fi
+fi
+
 # ── Auto-detect if no tools specified ──────────────────────
 if [[ ${#TOOLS[@]} -eq 0 ]]; then
   echo "=== Auto-detecting installed tools ==="
@@ -125,6 +138,15 @@ if [[ ${#TOOLS[@]} -eq 0 ]]; then
     echo "  Detected: Pi"
   fi
   if [[ ${#TOOLS[@]} -eq 0 ]]; then
+    if [[ ${#PLAYWRIGHT_ARGS[@]} -gt 0 ]]; then
+      # #212 (review P1): `setup.sh --playwright` is the command the docs
+      # recommend. Exiting 0 here left the issue's own acceptance command
+      # silently doing nothing — the exact defect, one branch further along.
+      echo "[ERROR] --playwright needs the Claude Code adapter, and no tools were detected."
+      echo "        Run: bash $0 --claude-code --playwright"
+      echo "        or:  bash adapters/claude-code/setup.sh --playwright"
+      exit 1
+    fi
     echo "  No tools detected. Use --help for options."
     exit 0
   fi
