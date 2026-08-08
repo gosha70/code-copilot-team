@@ -72,7 +72,10 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   result: a stream carrying more than one cost-bearing document used to
   yield a multi-line cost that blanked the cost state and wrote
   `findings-round-N.json` as a 1-byte file (still passing downstream
-  `-f` checks) — reproduced driving the driver to exit 6.
+  `-f` checks) — reproduced driving the driver to exit 6. Unlike the
+  driver, the cost reader keeps NO tail fallback: that channel is a
+  trust boundary where a promoted non-result document would forge a
+  measurement and suppress the conservative estimate.
 - **Autonomous builds run through the branded launcher (#195)** — the
   auto-build driver's Claude backend defaulted to the generic `claude`
   binary while the PI backend correctly used `pi-code`, so unattended

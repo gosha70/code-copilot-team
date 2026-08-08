@@ -1854,6 +1854,42 @@ unset GH_PR_STATE
 rm -rf "$P" "$BARE"
 rm -f "$NDCOST_PROVIDER" "$NDCOST_PROFILE"
 
+# #197 review P3: the cost channel is a TRUST BOUNDARY, so its fallback
+# must fail CLOSED (unlike the driver's, where a bad tail merely parks).
+# A stream with no result envelope must NOT promote some other document's
+# total_cost_usd to a "measurement" — a bogus measurement is exactly what
+# suppresses the driver's conservative estimate.
+NORESULT_PROVIDER=$(mktemp)
+cat > "$NORESULT_PROVIDER" << 'SH'
+#!/usr/bin/env bash
+printf '[{"type":"assistant","total_cost_usd":9.99}]\n' > "$CCT_REVIEW_COST_FILE"
+printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+NORESULT_PROFILE=$(mktemp)
+cat > "$NORESULT_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $NORESULT_PROVIDER"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$NORESULT_PROFILE" run_driver "$P"
+assert_exit "result-less cost stream lands (exit 0)" 0 "$RC"
+assert_eq "non-result document is NEVER promoted to a measurement" "0.01" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "result-less cost stream falls back to the estimate" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+rm -f "$NORESULT_PROVIDER" "$NORESULT_PROFILE"
+
 # A NEGATIVE cost file is invalid — unmetered, never a budget credit.
 NEGFILE_PROVIDER=$(mktemp)
 cat > "$NEGFILE_PROVIDER" << 'SH'
