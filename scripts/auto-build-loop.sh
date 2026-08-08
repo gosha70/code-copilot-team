@@ -1693,10 +1693,21 @@ resume_parked() {
     # the human had to run /review-decide retry purely to clear a timer that
     # had measured their own thinking time.
     #
-    # This mirrors the driver's own guard, which already restarts on resume
-    # (see the cap_exceeded arm resetting totals.started_epoch above). Every
-    # arm that reaches here resolved its escalation; refuse_resume exits, so
-    # falling through means the resume genuinely succeeded.
+    # Every arm that reaches here resolved its escalation; refuse_resume
+    # exits, so falling through means the resume genuinely succeeded.
+    #
+    # #210: the driver's OWN wall-clock cap had the identical defect, and the
+    # #205 comment here used to claim it "already restarts on resume". It did
+    # not: `totals.started_epoch` was reset only inside the cap_exceeded arm,
+    # so resuming from review_breaker / git_anomaly / provider_unavailable /
+    # test_failure / origin_gate inherited the original start time and billed
+    # the human's turnaround against caps.wall_clock_sec. A real run was
+    # killed at "17886s of 14400s" having done ~25 minutes of actual work.
+    # Both guards now restart together, from this one place, so the two
+    # wall-clock semantics cannot drift apart again.
+    state_set '.totals.started_epoch = ($now | tonumber)' --arg now "$(now_epoch)"
+    journal "driver_clock_reset" "driver wall-clock cap restarted on resume (parked time not counted)"
+
     local _rs="$PROJECT_DIR/.cct/review/state.json"
     if [[ -f "$_rs" ]]; then
         local _tmp

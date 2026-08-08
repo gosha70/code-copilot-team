@@ -79,6 +79,18 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   accrued or triggered. Anyone on an older version was not protected by it.
 
 ### Fixed
+- **The driver's wall-clock cap no longer bills parked time either (#210)**
+  — #205 fixed the review-loop clock; the driver's own guard had the
+  identical defect. `totals.started_epoch` was reset only on the
+  `cap_exceeded` resume path, so resuming from `review_breaker`,
+  `git_anomaly`, `provider_unavailable`, `test_failure` or `origin_gate`
+  inherited the original start time and billed the human's turnaround
+  against `caps.wall_clock_sec`. A real run was killed at **17886s of
+  14400s** having done ~25 minutes of actual work. The reset now lives in
+  the common resume path alongside the review-loop reset, so both guards
+  restart together and cannot drift apart again; `cap_exceeded` resume
+  behaviour is unchanged. Semantics are per-attempt, matching the review
+  loop post-#207.
 - **A verbose reviewer no longer destroys the findings file (#209)** — the
   reviewer's entire output travelled as a `jq --arg`, so a verbose reviewer
   (codex echoes the prompt plus its reasoning, captured with `2>&1`) blew

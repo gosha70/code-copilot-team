@@ -2200,6 +2200,41 @@ assert_eq "the clock reset is journalled" "1" \
     "$(grep -c 'review_clock_reset' "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null || true)"
 rm -rf "$P"; rm -f "$BADPROV"
 
+# #210: the DRIVER's wall-clock cap had the same defect as the review clock,
+# and was reset only on the cap_exceeded arm — so resuming from any other park
+# reason billed the human's turnaround against caps.wall_clock_sec. A real run
+# died at "17886s of 14400s" having done ~25 minutes of work.
+# TWO phases, so the resumed run still has a build session to run — that is
+# what calls check_caps. With a single phase the resume had no session left
+# and the cap was never consulted, which made this test look green pre-fix.
+P=$(setup_project)
+cfg_set "$P" '.phases.milestone_every=0'
+BADPROV2=$(mktemp)
+cat > "$BADPROV2" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "exit 1"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+REVIEW_PROFILE="$BADPROV2" run_driver "$P"
+assert_exit "run parks on the broken reviewer (setup for the driver clock test)" 4 "$RC"
+assert_eq "the park is NOT cap_exceeded (so the cap arm cannot mask the fix)" "provider_unavailable" \
+    "$(jq -r '.reason' "$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json | head -1)" 2>/dev/null)"
+# The human spends six hours — well past the 3600s cap in the fixture — fixing
+# the provider, filing issues, approving a commit.
+ST="$P/.cct/auto-build/demo-feat/state.json"
+jq '.totals.started_epoch = (.totals.started_epoch - 21600)' "$ST" > "$ST.tmp" && mv "$ST.tmp" "$ST"
+run_driver "$P" --resume
+assert_exit "resume completes despite six hours spent parked" 0 "$RC"
+assert_eq "no wall-clock cap park on the resumed run" "0" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'wall-clock cap' || true)"
+assert_eq "the driver clock reset is journalled" "1" \
+    "$(grep -c 'driver_clock_reset' "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null || true)"
+rm -rf "$P"; rm -f "$BADPROV2"
+
 # D2: two producers, two key names. The runner writes `breaker`, the driver
 # writes `breaker_type`, and the driver read only the latter — so EVERY
 # runner breaker was reported as 'unknown' while the file said "timeout".
