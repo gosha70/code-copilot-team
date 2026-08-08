@@ -659,7 +659,7 @@ code-copilot-team/
 │   ├── validate-spec.sh                 SDD spec validator (CI + local)
 │   ├── pre-pr-check.sh                  Pre-PR close-keyword audit gate
 │   ├── peer-review-runner.sh            Peer review execution engine
-│   ├── auto-build-loop.sh               Autonomous build driver (advisory + pr profiles)
+│   ├── auto-build-loop.sh               Autonomous build driver (advisory|pr|merge; unattended policy core)
 │   ├── providers-health.sh              Peer provider availability diagnostics
 │   ├── setup-reviewer.sh                Copilot independent-reviewer installer (Codex first)
 │   └── setup.sh                         Unified install entry point
@@ -671,7 +671,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             54 peer-review runner tests
 │   ├── test-review-loop.sh            40 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
-│   └── test-auto-build-loop.sh        166 auto-build driver tests
+│   └── test-auto-build-loop.sh        233 auto-build driver tests
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
 ├── README.md

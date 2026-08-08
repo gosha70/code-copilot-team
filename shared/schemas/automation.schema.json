@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "automation.schema.json",
+  "title": "auto-build-loop automation.json (schema_version 2)",
+  "description": "Contract for specs/<feature>/automation.json consumed by scripts/auto-build-loop.sh. schema_version 1 documents (without the unattended block) remain valid and resolve to pre-#190 behavior. Enforced by scripts/validate-automation-config.sh (jq-based, so hosts need no JSON-Schema tooling); this file is the authoritative contract the script mirrors. Increment A of #190: the three unattended.on_* keys accept ONLY \"terminate\" — recovery values (adjudicate, swap_builder) do not exist until increment D and must be unrequestable; on_origin_gate is terminate-only in ALL increments (an agent re-checking alignment against a spec it may have misread is circular).",
+  "type": "object",
+  "properties": {
+    "schema_version": { "enum": [1, 2], "default": 1 },
+    "profile": {
+      "enum": ["advisory", "pr", "merge", "unattended"],
+      "default": "advisory"
+    },
+    "branch": { "type": "object" },
+    "phases": { "type": "object" },
+    "build": { "type": "object" },
+    "test": { "type": "object" },
+    "review": { "type": "object" },
+    "caps": {
+      "type": "object",
+      "properties": {
+        "wall_clock_sec": { "type": "number", "exclusiveMinimum": 0 },
+        "cost_usd": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "notify": { "type": "object" },
+    "merge": { "type": "object" },
+    "unattended": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "on_review_breaker": { "enum": ["terminate"] },
+        "on_stale_finding": { "enum": ["terminate"] },
+        "on_origin_gate": { "enum": ["terminate"] },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "meter_all_invocations": { "type": "boolean" },
+            "estimate_unmetered": { "type": "boolean" },
+            "estimate_usd_per_invocation": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "default": 2.0,
+              "description": "Conservative worst-case debit for an invocation whose real cost is unmeasurable. Debits the SAME caps.cost_usd (no separate allowance); flagged estimated:true in the ledger."
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "profile": { "const": "unattended" } } },
+      "then": {
+        "required": ["caps"],
+        "properties": {
+          "schema_version": { "const": 2 },
+          "caps": {
+            "required": ["wall_clock_sec", "cost_usd"],
+            "description": "Under profile: unattended, both caps MUST be explicit — no silent defaults (#190 §2: the published cost anchors run 5-8x the old default)."
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "schema_version": { "const": 1 } } },
+      "then": {
+        "not": { "required": ["unattended"] },
+        "properties": { "profile": { "enum": ["advisory", "pr", "merge"] } }
+      }
+    }
+  ]
+}

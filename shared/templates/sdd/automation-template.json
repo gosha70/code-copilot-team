@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "profile": "advisory",
   "branch": {
     "name": "feature/FEATURE_ID",
@@ -35,6 +35,16 @@
   "caps": {
     "wall_clock_sec": 14400,
     "cost_usd": 25
+  },
+  "unattended": {
+    "on_review_breaker": "terminate",
+    "on_stale_finding": "terminate",
+    "on_origin_gate": "terminate",
+    "budget": {
+      "meter_all_invocations": true,
+      "estimate_unmetered": true,
+      "estimate_usd_per_invocation": 2.0
+    }
   },
   "notify": {
     "command": ""

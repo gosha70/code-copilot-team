@@ -6,7 +6,9 @@
 # token-limit logic in any adapter — and:
 #   - runs the harness (default: scripts/auto-build-loop.sh <feature> --resume);
 #   - classifies each exit from STORED EVIDENCE (never infers success from
-#     silence): usage-limit -> cooldown+retry; clean+incomplete -> relaunch/park;
+#     silence): exit 6 (terminated_policy) -> TERMINAL, checked before the
+#     usage grep, never cooled down/relaunched/reclassified (#191 FR-8);
+#     usage-limit -> cooldown+retry; clean+incomplete -> relaunch/park;
 #     any other breaker -> park; caps exceeded / corrupt -> fail;
 #   - waits the cooldown, relaunches in the SAME worktree with the SAME posture,
 #     and caps attempts, cooldowns, and wall-clock;
@@ -28,6 +30,8 @@
 #     --on-incomplete <relaunch|park>  clean exit w/ tasks left (default: park)
 #
 # Exit: 0 = done | 4 = parked | 5 = failed (caps/corrupt/usage-exhausted)
+#       | 6 = terminated_policy (terminal — never relaunched, incl. on a
+#         re-invocation over an already-terminated ledger)
 #
 # Test seams (never needed in production):
 #   CCT_SUPERVISOR_HARNESS_CMD  override the child command (a mock harness)
@@ -133,6 +137,15 @@ START_EPOCH="$(now_epoch)"
 if [[ -f "$RUN" ]]; then
   # Corrupt (present but unparseable) → fail closed with recovery guidance.
   jq -e . "$RUN" >/dev/null 2>&1 || fail_corrupt "not valid JSON"
+  # FR-8 (#191): terminated_policy is terminal ACROSS supervisor runs too —
+  # a fresh invocation on a terminated ledger must refuse (exit 6), never
+  # relaunch the harness or reclassify the outcome as parked.
+  if [[ "$(ledger_get '.status // empty')" == "terminated_policy" ]]; then
+    err "feature '$FEATURE_ID' ended terminated_policy — terminal by contract (#191)."
+    err "Review the harness triage report, resolve the policy boundary, then start"
+    err "a fresh run. Refusing to relaunch."
+    exit 6
+  fi
   ATTEMPTS="$(ledger_get '.attempts // 0')"
   COOLDOWNS="$(ledger_get '.cooldowns // 0')"
   START_EPOCH="$(ledger_get '.started_epoch // empty')"
@@ -214,6 +227,14 @@ EVIDENCE=""
 KIND=""
 classify() { # classify <exit-code> <output-file>
   local code="$1" out="$2" hit
+  # #191 FR-8: exit 6 (terminated_policy) is TERMINAL — classified BEFORE
+  # the usage grep so a policy termination whose output happens to contain
+  # a usage-limit phrase can never be cooled down and relaunched.
+  if [[ "$code" -eq 6 ]]; then
+    EVIDENCE=""
+    KIND="terminated"
+    return
+  fi
   hit="$(grep -iE "$USAGE_PATTERN" "$out" 2>/dev/null | tail -1 || true)"
   if [[ -n "$hit" ]]; then
     EVIDENCE="$hit"
@@ -299,6 +320,13 @@ while true; do
     breaker)
       notify "parked" "non-usage breaker (exit $CHILD_CODE)"
       terminate "parked" 4 "non-usage breaker: harness exit $CHILD_CODE"
+      ;;
+    terminated)
+      # FR-8 (#191): the harness deliberately stopped at a policy boundary.
+      # Never cooldown, relaunch, or reclassify — regardless of
+      # --on-incomplete. Exit 6 propagates so callers see the same contract.
+      notify "terminated_policy" "policy termination (exit 6) — terminal, not relaunched"
+      terminate "terminated_policy" 6 "harness exited terminated_policy (exit 6); terminal by contract"
       ;;
   esac
 done

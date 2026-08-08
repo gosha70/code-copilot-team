@@ -13,16 +13,22 @@ set -uo pipefail
 # Spec:   specs/auto-build-loop-driver/spec.md (FR references below)
 #
 # Usage: auto-build-loop.sh <feature-id> [options]
-#   --profile advisory|pr     Autonomy profile: advisory publishes nothing;
+#   --profile advisory|pr|merge|unattended
+#                             Autonomy profile: advisory publishes nothing;
 #                             pr pushes the branch + opens/updates a PR (never
-#                             merges). 'merge' is a later increment.
+#                             merges); merge additionally arms GitHub-native
+#                             gated auto-merge. 'unattended' (#191) fails
+#                             closed until #190 increment B lands, and must be
+#                             declared in automation.json (schema_version 2).
 #   --config <path>           Config (default: specs/<feature-id>/automation.json)
 #   --resume                  Continue a paused/parked run from the ledger
 #   --dry-run                 Print planned phases/transitions; no side effects
 #   --max-phases N            Override config phase cap
 #   --start-phase N           Start at phase N (default: from ledger or 1)
 #
-# Exit: 0 = done | 3 = milestone-paused | 4 = escalated/parked | 1 = usage/preflight
+# Exit: 0 = done (landed) | 3 = milestone-paused | 4 = escalated/parked
+#       | 6 = terminated_policy (unattended: deliberate stop at a policy
+#         boundary — terminal, never relaunched) | 1 = usage/preflight
 #
 # Env: CCT_CLAUDE_BIN (default claude), CCT_GH_BIN (default gh, pr profile),
 #      CCT_AUTOBUILD_DIR (default .cct/auto-build),
@@ -56,7 +62,9 @@ MAX_PHASES_ARG=""
 START_PHASE_ARG=""
 
 usage() {
-    sed -n '5,25p' "$0" | sed 's/^# \{0,1\}//'
+    # Print the header comment block (everything from line 4 to the first
+    # non-comment line) so the range cannot drift as the header grows.
+    awk 'NR < 4 { next } !/^#/ { exit } { print }' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -159,6 +167,112 @@ notify() {
 }
 
 # ── Parking (FR-15): every breaker writes a record, no proceed path ──
+
+# ── #191 (Increment A of #190): profile-aware breaker disposition ────────────
+# Attended profiles keep park() byte-identically. Under `unattended`, every
+# breaker resolves to a POLICY TERMINATION — bound, decide, and record;
+# never a hung process. Recovery dispositions (adjudicate/swap) are
+# increment D and unrequestable (schema-enforced); origin_gate can never be
+# anything but terminate in ANY increment.
+dispose() {
+    # dispose <reason> <detail> [history-json]
+    if [[ "${PROFILE:-advisory}" != "unattended" ]]; then
+        park "$@"
+    elif [[ "${TERMINATING:-0}" != "1" ]]; then
+        terminate_policy "$@"
+    else
+        # A breaker firing INSIDE the termination path (best-effort
+        # artifacts) must never change the terminal disposition — journal
+        # it and return non-zero so the caller aborts its own step. It
+        # must not park (exit 4 would contradict terminated_policy).
+        journal "artifact_error" "$1 during termination: $2"
+        return 1
+    fi
+}
+
+# Generate the mandatory triage report (FR-5). Best-effort artifacts are
+# attempted by the caller; this report itself is mandatory.
+triage_report() {
+    local reason="$1" detail="$2"
+    local report="$LEDGER_DIR/triage-report.md"
+    {
+        echo "# Triage report — $FEATURE_ID (terminated_policy)"
+        echo ""
+        echo "- Reason: \`$reason\`"
+        echo "- Detail: $detail"
+        echo "- Phase: ${CURRENT_PHASE:-0} of ${MAX_PHASES:-?}"
+        echo "- Status at termination: $(state_get '.status' 2>/dev/null || echo preflight)"
+        echo "- Branch: ${BRANCH_NAME:-?} (base ${BRANCH_BASE:-?})"
+        echo "- Cost: metered \$$(state_get '.totals.cost_usd' 2>/dev/null || echo 0), estimated \$$(state_get '.totals.cost_estimated_usd' 2>/dev/null || echo 0) (cap \$${CAP_COST:-?})"
+        echo "- verification.yaml state: not present — requirement-to-verifier traceability lands with #190 increment B"
+        echo ""
+        echo "The system functioned correctly and deliberately stopped at a"
+        echo "defined safety, quality, or budget boundary. Work is preserved."
+        echo "terminated_policy is TERMINAL in #190 increment A: review the"
+        echo "reason and this ledger, resolve the boundary (caps, findings,"
+        echo "origin), then start a fresh attended run. Resume support for"
+        echo "terminated runs arrives with #190 increment D."
+        if [[ -d "$LEDGER_DIR/escalations" ]]; then
+            echo ""
+            echo "Escalation records: $LEDGER_DIR/escalations/"
+        fi
+    } > "$report" 2>/dev/null || echo "[auto-build] WARN: triage report write failed" >&2
+}
+
+# Policy termination (FR-1/FR-3/FR-5): ledger outcome, triage report,
+# best-effort commit/push (existing precheck-respecting paths, failures
+# journaled, NEVER weakened), notify, exit 6. Distinct from park (exit 4,
+# attended+resumable) and from failed (the control system itself broke).
+terminate_policy() {
+    # terminate_policy <reason> <detail> [history-json]
+    local reason="$1" detail="$2" history="${3:-null}"
+    TERMINATING=1
+    echo "[auto-build] TERMINATED (policy): $reason — $detail" >&2
+    if [[ "$DRY_RUN" == "true" ]]; then exit 6; fi
+    if [[ ! -f "$STATE" ]]; then
+        write_ledger_skeleton
+    fi
+    mkdir -p "$LEDGER_DIR"
+    jq -n \
+        --arg reason "$reason" --arg detail "$detail" \
+        --arg phase "${CURRENT_PHASE:-0}" --arg created "$(now_iso)" \
+        --argjson history "$history" \
+        '{outcome: "terminated_policy", reason: $reason, detail: $detail,
+          phase: ($phase | tonumber), created: $created, history: $history}' \
+        > "$LEDGER_DIR/termination.json"
+    state_set '.status = "terminated_policy" | .outcome = "terminated_policy"
+               | .disposition_reason = $r | .updated = $t' \
+        --arg r "$reason" --arg t "$(now_iso)"
+    journal "terminated_policy" "$reason: $detail"
+    triage_report "$reason" "$detail"
+    # Best-effort artifacts (FR-5): commit + push via the existing
+    # precheck-respecting paths. Every skip is journaled with its cause;
+    # nothing here can re-enter dispose() (TERMINATING guards recursion).
+    # Attempted ONLY when the driver owns the checkout — preflight
+    # terminations can fire before the feature-branch checkout, and a
+    # blanket commit there would sweep the operator's branch/worktree.
+    local _cur
+    _cur=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [[ -n "${BRANCH_NAME:-}" && "$_cur" == "$BRANCH_NAME" ]]; then
+        driver_commit "chore($FEATURE_ID): terminated_policy artifacts [auto-build]" \
+            || journal "artifact_skipped" "termination commit failed (journaled, not blocking)"
+        if [[ "${CAN_PUSH:-false}" == "true" ]]; then
+            if ! push_branch soft; then
+                journal "artifact_skipped" "termination push failed or refused by prechecks"
+            fi
+        else
+            journal "artifact_skipped" "push not attempted (profile cannot push)"
+        fi
+    else
+        journal "artifact_skipped" "commit/push not attempted (driver does not own branch '${_cur:-?}')"
+    fi
+    # No draft-PR attempt in increment A: a TERMINATING-safe PR path does
+    # not exist yet (open_or_update_pr would re-enter dispose); the skip
+    # is journaled per FR-5 rather than silently omitted.
+    journal "artifact_skipped" "draft PR not attempted (no TERMINATING-safe PR path in #190 increment A)"
+    notify "$reason" "terminated_policy: $detail"
+    exit 6
+}
 
 park() {
     # park <reason> <detail> [history-json]
@@ -268,6 +382,27 @@ load_config() {
     TEST_TIMEOUT=$(cfg '.test.timeout_sec' '1200')
     CAP_WALL_CLOCK=$(cfg '.caps.wall_clock_sec' '14400')
     CAP_COST=$(cfg '.caps.cost_usd' '25')
+    # #191 FR-7: estimate policy for unmetered driver-initiated invocations
+    # (review rounds have no cost channel for free-text reviewers). Active
+    # under `unattended` always (required — see preflight error below), and
+    # for attended configs that opted in via an unattended.budget block.
+    # v1 configs have no block → inactive → attended behavior unchanged.
+    # NOT cfg(): its `// empty` fallback swallows an explicit `false`.
+    ESTIMATE_UNMETERED=$(jq -r 'if .unattended.budget.estimate_unmetered == false then "false" else "true" end' \
+        "$CONFIG_SNAPSHOT" 2>/dev/null || echo "true")
+    ESTIMATE_PER_INV=$(cfg '.unattended.budget.estimate_usd_per_invocation' '2.0')
+    ESTIMATES_ACTIVE=false
+    if [[ "$PROFILE" == "unattended" ]]; then
+        if [[ "$ESTIMATE_UNMETERED" != "true" ]]; then
+            echo "Error: profile 'unattended' with unattended.budget.estimate_unmetered=false" >&2
+            echo "is unmeterable-and-unestimable: review invocations have no cost channel and" >&2
+            echo "could not debit caps.cost_usd (FR-7). Enable estimate_unmetered." >&2
+            exit 1
+        fi
+        ESTIMATES_ACTIVE=true
+    elif [[ "$(cfg '.unattended.budget != null' 'false')" == "true" && "$ESTIMATE_UNMETERED" == "true" ]]; then
+        ESTIMATES_ACTIVE=true
+    fi
     GATING_REVIEWER=$(jq -r '[.review.reviewers[]? | select(.gating == true)][0].provider // empty' "$CONFIG_SNAPSHOT")
     GATING_SCOPE=$(jq -r '[.review.reviewers[]? | select(.gating == true)][0].scope // "both"' "$CONFIG_SNAPSHOT")
     GATING_SPECIALIZATION=$(jq -r '[.review.reviewers[]? | select(.gating == true)][0].specialization // "general"' "$CONFIG_SNAPSHOT")
@@ -280,13 +415,26 @@ load_config() {
     # pr pushes + opens a PR (never merges); merge additionally arms a
     # GitHub-native gated auto-merge (never merges locally).
     case "$PROFILE" in
-        advisory) CAN_PUSH=false; CAN_OPEN_PR=false; CAN_MERGE=false ;;
-        pr)       CAN_PUSH=true;  CAN_OPEN_PR=true;  CAN_MERGE=false ;;
-        merge)    CAN_PUSH=true;  CAN_OPEN_PR=true;  CAN_MERGE=true  ;;
+        advisory)   CAN_PUSH=false; CAN_OPEN_PR=false; CAN_MERGE=false ;;
+        pr)         CAN_PUSH=true;  CAN_OPEN_PR=true;  CAN_MERGE=false ;;
+        merge)      CAN_PUSH=true;  CAN_OPEN_PR=true;  CAN_MERGE=true  ;;
+        unattended) CAN_PUSH=true;  CAN_OPEN_PR=true;  CAN_MERGE=true  ;;
         *)
-            echo "Error: unknown profile '$PROFILE' (expected advisory|pr|merge)." >&2
+            echo "Error: unknown profile '$PROFILE' (expected advisory|pr|merge|unattended)." >&2
             exit 1 ;;
     esac
+    # #191 FR-2: NOTHING runs unattended before #190 increment B (admission
+    # control). Fail closed here — machinery below is reachable only through
+    # the documented, grep-able test seam that increment B will REPLACE with
+    # real admission. This is not an operator escape hatch.
+    if [[ "$PROFILE" == "unattended" \
+          && "${CCT_AUTOBUILD_TEST_SEAM:-}" != "pre-admission" ]]; then
+        echo "Error: profile 'unattended' cannot run yet — admission control" >&2
+        echo "(#190 increment B: verification.yaml + validate-spec --unattended)" >&2
+        echo "is not available. Use profile 'merge' with attended escalation," >&2
+        echo "or wait for increment B." >&2
+        exit 1
+    fi
     # merge-profile config (all fail-closed defaults). enabled is the final
     # switch; require_branch_protection guards merging into an unprotected base.
     MERGE_ENABLED=$(cfg '.merge.enabled' 'false')
@@ -296,6 +444,30 @@ load_config() {
     [[ "$CAN_MERGE" == "true" ]] && validate_merge_method
     if [[ -z "$TEST_CMD" ]]; then
         echo "Error: config test.command is required (the driver must be able to verify builds)." >&2
+        exit 1
+    fi
+    # #191 FR-6: the dedicated automation-config validator gates every run
+    # (v1 configs remain valid; violations are a config error, exit 1).
+    # Fail-closed: a missing validator is an install error, never a bypass;
+    # `bash` invocation is immune to a lost exec bit (repo convention).
+    local _validator="$SCRIPT_DIR/validate-automation-config.sh"
+    if [[ ! -f "$_validator" ]]; then
+        echo "Error: $_validator is missing — the automation-config gate cannot run." >&2
+        exit 1
+    fi
+    if ! bash "$_validator" "$CONFIG_SNAPSHOT" >/dev/null; then
+        echo "Error: automation config failed validation (see violations above)." >&2
+        exit 1
+    fi
+    # The validator checks the config FILE; the unattended contract must
+    # hold for the EFFECTIVE profile too. --profile/CCT_AUTOBUILD_PROFILE
+    # may downgrade to an attended profile, but can never upgrade INTO
+    # unattended past the validator's schema/caps rules: unattended must
+    # be declared in the config document itself.
+    if [[ "$PROFILE" == "unattended" && "$(cfg '.profile' 'advisory')" != "unattended" ]]; then
+        echo "Error: profile 'unattended' must be declared in the automation config" >&2
+        echo "(schema_version 2, explicit caps, unattended block) — it cannot be" >&2
+        echo "requested via --profile or CCT_AUTOBUILD_PROFILE." >&2
         exit 1
     fi
     if [[ -z "$GATING_REVIEWER" ]]; then
@@ -338,13 +510,32 @@ preflight() {
 
     # gh preflight (FR-2a): required only when the profile can push / open PRs.
     if [[ "$CAN_PUSH" == "true" ]]; then
+        local gh_fail_kind=""
         if ! "$GH_BIN" --version >/dev/null 2>&1; then
-            echo "Error: gh binary not usable: $GH_BIN (override with CCT_GH_BIN) — required for profile '$PROFILE'." >&2
-            exit 1
+            gh_fail_kind="binary"
+        elif ! ( cd "$PROJECT_DIR" && "$GH_BIN" auth status ) >/dev/null 2>&1; then
+            gh_fail_kind="auth"
         fi
-        if ! ( cd "$PROJECT_DIR" && "$GH_BIN" auth status ) >/dev/null 2>&1; then
-            echo "Error: 'gh auth status' failed — authenticate gh before running profile '$PROFILE'." >&2
-            exit 1
+        if [[ -n "$gh_fail_kind" ]]; then
+            if [[ "$PROFILE" == "unattended" ]]; then
+                # #191 FR-5: push/PR artifacts are BEST-EFFORT under
+                # unattended — a missing/unauthenticated gh must never block
+                # the terminate-only contract (exit 6 + mandatory
+                # ledger/triage). Downgrade the capabilities and journal;
+                # every later artifact skip is journaled with its cause too.
+                local gh_cause="gh binary not usable: $GH_BIN (override with CCT_GH_BIN)"
+                [[ "$gh_fail_kind" == "auth" ]] && gh_cause="'gh auth status' failed"
+                CAN_PUSH=false; CAN_OPEN_PR=false; CAN_MERGE=false
+                mkdir -p "$LEDGER_DIR"
+                journal "capability_downgrade" "$gh_cause — push/PR artifacts will be skipped (best-effort, FR-5)"
+                echo "[auto-build] WARN: $gh_cause — unattended run continues without push/PR artifacts." >&2
+            elif [[ "$gh_fail_kind" == "binary" ]]; then
+                echo "Error: gh binary not usable: $GH_BIN (override with CCT_GH_BIN) — required for profile '$PROFILE'." >&2
+                exit 1
+            else
+                echo "Error: 'gh auth status' failed — authenticate gh before running profile '$PROFILE'." >&2
+                exit 1
+            fi
         fi
     fi
 
@@ -371,7 +562,7 @@ preflight() {
     local origin_exit=0
     bash "$SCRIPT_DIR/check-origin-alignment.sh" "$FEATURE_ID" >/dev/null 2>&1 || origin_exit=$?
     if [[ $origin_exit -ge 2 ]]; then
-        park "origin_gate" "check-origin-alignment.sh exit $origin_exit at preflight" \
+        dispose "origin_gate" "check-origin-alignment.sh exit $origin_exit at preflight" \
             "{\"origin_check_exit\": $origin_exit}"
     fi
 
@@ -379,7 +570,7 @@ preflight() {
     local health_args=(--provider "$GATING_REVIEWER")
     [[ -n "${CCT_PROVIDER_PROFILE:-}" ]] && health_args=(--profile "$CCT_PROVIDER_PROFILE" "${health_args[@]}")
     if ! bash "$SCRIPT_DIR/providers-health.sh" "${health_args[@]}" >/dev/null 2>&1; then
-        park "provider_unavailable" "gating reviewer '$GATING_REVIEWER' (or its fallback chain) failed healthcheck" "null"
+        dispose "provider_unavailable" "gating reviewer '$GATING_REVIEWER' (or its fallback chain) failed healthcheck" "null"
     fi
 
     # Advisory panel reviewers (FR-5): health-check each; drop the unhealthy
@@ -486,7 +677,8 @@ write_ledger_skeleton() {
           phases: {},
           caps: {max_phases: $max_phases, max_fix_sessions_per_phase: $max_fix,
                  max_wall_clock_sec: $wall, max_cost_usd: $cost},
-          totals: {cost_usd: 0, started_epoch: $started},
+          outcome: null, disposition_reason: null,
+          totals: {cost_usd: 0, cost_estimated_usd: 0, started_epoch: $started},
           milestones: {every_n_phases: $milestone_every, last_paused_after_phase: 0},
           escalations: [], pr: {number: null, url: null}, updated: $t}' > "$STATE"
     journal "init" "profile=$PROFILE branch=$BRANCH_NAME base=$base_ref"
@@ -494,15 +686,49 @@ write_ledger_skeleton() {
 
 # ── Caps (FR-6) ──────────────────────────────────────────────
 
+# ── Review-cost accounting (#191 FR-7) ───────────────────────
+# One runner execution == one reviewer invocation. A measured cost (the
+# runner's invocation_cost_usd) debits totals.cost_usd; an unmetered
+# invocation debits the conservative per-invocation estimate into
+# totals.cost_estimated_usd — SAME cap, flagged estimated in the journal.
+# A runner that died before writing this round's findings file is still
+# debited as one unmetered invocation (conservative overstatement).
+debit_review_costs() {
+    # debit_review_costs <findings-file-or-empty> <label>
+    # Defense-in-depth: only a NON-NEGATIVE number is a measurement — a
+    # negative "cost" would credit the budget and walk the run back under
+    # its cap. Anything else counts as unmetered (estimate path).
+    local f="$1" label="$2" cost=""
+    [[ -n "$f" && -f "$f" ]] && cost=$(jq -r \
+        'if ((.invocation_cost_usd | type) == "number") and (.invocation_cost_usd >= 0)
+         then .invocation_cost_usd else empty end' "$f" 2>/dev/null)
+    if [[ -n "$cost" ]]; then
+        state_set '.totals.cost_usd += ($c | tonumber)' --arg c "$cost"
+        journal "cost_review" "$label: \$$cost (measured)"
+    elif [[ "${ESTIMATES_ACTIVE:-false}" == "true" ]]; then
+        state_set '.totals.cost_estimated_usd = ((.totals.cost_estimated_usd // 0) + ($c | tonumber))' \
+            --arg c "$ESTIMATE_PER_INV"
+        journal "cost_review" "$label: \$$ESTIMATE_PER_INV (estimated: true — unmetered invocation)"
+    fi
+}
+
 check_caps() {
-    local spent elapsed
+    local spent est elapsed
     spent=$(state_get '.totals.cost_usd')
-    if awk -v s="$spent" -v c="$CAP_COST" 'BEGIN { exit !(s >= c) }'; then
-        park "cap_exceeded" "cost cap: spent \$$spent of \$$CAP_COST" "null"
+    est=$(state_get '.totals.cost_estimated_usd // 0')
+    # Cap check on the COMBINED total (FR-7): metered + estimated debit the
+    # same budget. est is 0 for configs without estimates — the detail
+    # string then matches the pre-#191 format byte-identically.
+    if awk -v s="$spent" -v e="$est" -v c="$CAP_COST" 'BEGIN { exit !((s + e) >= c) }'; then
+        local detail="cost cap: spent \$$spent of \$$CAP_COST"
+        if awk -v e="$est" 'BEGIN { exit !(e > 0) }'; then
+            detail="cost cap: spent \$$spent metered + \$$est estimated of \$$CAP_COST"
+        fi
+        dispose "cap_exceeded" "$detail" "null"
     fi
     elapsed=$(( $(now_epoch) - $(state_get '.totals.started_epoch') ))
     if [[ $elapsed -ge $CAP_WALL_CLOCK ]]; then
-        park "cap_exceeded" "wall-clock cap: ${elapsed}s of ${CAP_WALL_CLOCK}s" "null"
+        dispose "cap_exceeded" "wall-clock cap: ${elapsed}s of ${CAP_WALL_CLOCK}s" "null"
     fi
 }
 
@@ -520,7 +746,7 @@ run_claude_session() {
         "$CLAUDE_BIN" "${args[@]}" > "$result_file" 2> "$result_file.stderr" )
     local rc=$?
     if [[ $rc -ne 0 && ! -s "$result_file" ]]; then
-        park "build_session_error" "claude exited $rc with no result JSON (see $result_file.stderr)" \
+        dispose "build_session_error" "claude exited $rc with no result JSON (see $result_file.stderr)" \
             "$(jq -n --arg f "$result_file.stderr" '{stderr: $f}')"
     fi
     local cost
@@ -549,11 +775,11 @@ run_pi_session() {
         ( cd "$PROJECT_DIR" && "${runner[@]}" > "$result_file" 2> "$result_file.stderr" ) || rc=$?
     fi
     if [[ $rc -eq 124 ]]; then
-        park "build_session_timeout" "pi session exceeded ${SESSION_TIMEOUT}s (C-5 budget)" \
+        dispose "build_session_timeout" "pi session exceeded ${SESSION_TIMEOUT}s (C-5 budget)" \
             "$(jq -n --arg f "$result_file.stderr" --argjson t "$SESSION_TIMEOUT" '{stderr: $f, timeout_sec: $t}')"
     fi
     if [[ $rc -ne 0 && ! -s "$result_file" ]]; then
-        park "build_session_error" "pi-code exited $rc with no result JSON (see $result_file.stderr)" \
+        dispose "build_session_error" "pi-code exited $rc with no result JSON (see $result_file.stderr)" \
             "$(jq -n --arg f "$result_file.stderr" '{stderr: $f}')"
     fi
     local cost
@@ -619,7 +845,10 @@ driver_commit() {
     COMMIT_SHA=""
     cur=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD)
     if [[ "$cur" == "master" || "$cur" == "main" ]]; then
-        park "git_anomaly" "refusing to commit on '$cur'" "null"
+        # Under TERMINATING dispose returns instead of exiting — the
+        # return below keeps the refusal effective in that path too.
+        dispose "git_anomaly" "refusing to commit on '$cur'" "null"
+        return 1
     fi
     git -C "$PROJECT_DIR" add -A
     if git -C "$PROJECT_DIR" diff --cached --quiet; then
@@ -655,7 +884,8 @@ push_branch() {
         journal "wip_push_failed" "$BRANCH_REMOTE/$branch"
         return 1
     fi
-    park "git_anomaly" "git push to $BRANCH_REMOTE/$branch failed" "null"
+    dispose "git_anomaly" "git push to $BRANCH_REMOTE/$branch failed" "null"
+    return 1
 }
 
 # ── Review integration (FR-9..FR-12) ─────────────────────────
@@ -728,7 +958,10 @@ run_advisory_pass() {
             CCT_REVIEW_BASE_REF="$base_ref" CCT_REVIEW_MAX_ROUNDS=1 \
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >/dev/null 2>&1 || true
         local frf
-        frf=$(ls "$scratch"/findings-round-*.json 2>/dev/null | sort | tail -1)
+        frf=$(ls "$scratch"/findings-round-*.json 2>/dev/null | sort -V | tail -1)
+        # Each advisory pass is one reviewer invocation in a fresh scratch
+        # dir; debit it (measured or estimated) like a gating round (FR-7).
+        debit_review_costs "$frf" "advisory review $_prov phase $n round $round"
         if [[ -n "$frf" && -f "$frf" ]]; then
             local tagged tmp
             tagged=$(jq --arg prov "$_prov" --arg spec "$_spec" \
@@ -747,18 +980,18 @@ run_advisory_pass() {
 verify_pass_gate() {
     # FR-11: independent driver verification after runner exit 0.
     local summary="$PROJECT_DIR/.cct/review/loop-summary.json"
-    [[ -f "$summary" ]] || park "review_breaker" "runner exited 0 but loop-summary.json is missing" "null"
+    [[ -f "$summary" ]] || dispose "review_breaker" "runner exited 0 but loop-summary.json is missing" "null"
     local verdict bypass blocking artifact
     verdict=$(jq -r '.verdict // empty' "$summary")
     bypass=$(jq -r '.bypass // false' "$summary")
     if [[ "$verdict" != "PASS" || "$bypass" == "true" ]]; then
-        park "review_breaker" "hard gate: verdict='$verdict' bypass='$bypass' (expected PASS without bypass)" "null"
+        dispose "review_breaker" "hard gate: verdict='$verdict' bypass='$bypass' (expected PASS without bypass)" "null"
     fi
     artifact="$SPEC_DIR/collaboration/build-review.md"
     if [[ -f "$artifact" ]]; then
         blocking=$(sed -n '/^---$/,/^---$/p' "$artifact" | grep '^blocking_findings_open:' | sed 's/^blocking_findings_open: *//')
         if [[ -n "$blocking" && "$blocking" != "0" ]]; then
-            park "review_breaker" "hard gate: blocking_findings_open=$blocking in build-review.md" "null"
+            dispose "review_breaker" "hard gate: blocking_findings_open=$blocking in build-review.md" "null"
         fi
     fi
 }
@@ -783,7 +1016,7 @@ run_review_loop() {
                 journal "review_bypass_accepted" "phase $n via $appr"
                 return 0
             fi
-            park "review_breaker" "bypass present without a phase-scoped human approval (phase $n)" "null"
+            dispose "review_breaker" "bypass present without a phase-scoped human approval (phase $n)" "null"
         fi
     fi
 
@@ -796,10 +1029,23 @@ run_review_loop() {
     local fix_count=0
     while true; do
         local rc=0
+        # Track the newest findings file across the runner call so this
+        # round's cost is debited exactly once — a runner that died before
+        # writing one is debited as an unmetered invocation (FR-7).
+        local pre_frf post_frf
+        pre_frf=$(ls "$PROJECT_DIR"/.cct/review/findings-round-*.json 2>/dev/null | sort -V | tail -1)
         ( cd "$PROJECT_DIR" && CCT_REVIEW_BASE_REF="$base_ref" \
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >&2 || rc=$?
         local round
         round=$(jq -r '.current_round // 0' "$PROJECT_DIR/.cct/review/state.json" 2>/dev/null || echo 0)
+        post_frf=$(ls "$PROJECT_DIR"/.cct/review/findings-round-*.json 2>/dev/null | sort -V | tail -1)
+        [[ "$post_frf" == "$pre_frf" ]] && post_frf=""
+        # rc=2 is a breaker the runner trips BEFORE invoking any reviewer
+        # (max rounds / timeout / stale findings / providers down) — there
+        # is no invocation to debit, measured or estimated.
+        if [[ $rc -ne 2 ]]; then
+            debit_review_costs "$post_frf" "gating review phase $n round $round"
+        fi
         case $rc in
             0)
                 verify_pass_gate
@@ -818,7 +1064,7 @@ run_review_loop() {
                         '{breaker_type: "driver_fix_sessions_exhausted",
                           rounds_completed: ($r | tonumber), tripped_at: $t}' \
                         > "$PROJECT_DIR/.cct/review/breaker-tripped.json"
-                    park "review_breaker" "max fix sessions ($MAX_FIX_SESSIONS) exhausted in phase $n" \
+                    dispose "review_breaker" "max fix sessions ($MAX_FIX_SESSIONS) exhausted in phase $n" \
                         "$(jq -n --arg f "$phase_dir" --arg fixes "$fix_count" \
                             '{findings_dir: $f, fix_sessions: ($fixes | tonumber)}')"
                 fi
@@ -833,11 +1079,11 @@ run_review_loop() {
                 run_advisory_pass "$n" "$base_ref" "$round" "$phase_dir" "$advf"
                 compose_fix_prompt "$findings" "$round" "$fixp" "$advf"
                 run_session "$fixp" "$fixr"
-                [[ "$SESSION_SUBTYPE" == "success" ]] || park "build_session_error" "fix session subtype=$SESSION_SUBTYPE (phase $n round $round)" "null"
+                [[ "$SESSION_SUBTYPE" == "success" ]] || dispose "build_session_error" "fix session subtype=$SESSION_SUBTYPE (phase $n round $round)" "null"
                 local tlog="$phase_dir/test-fix-$fix_count.log"
-                run_tests "$tlog" || park "test_failure" "tests failed after review fix (phase $n round $round, log: $tlog)" "null"
+                run_tests "$tlog" || dispose "test_failure" "tests failed after review fix (phase $n round $round, log: $tlog)" "null"
                 driver_commit "fix($FEATURE_ID): address review round $round findings [auto-build]" \
-                    || park "git_anomaly" "fix session for round $round produced no changes" "null"
+                    || dispose "git_anomaly" "fix session for round $round produced no changes" "null"
                 local sha="$COMMIT_SHA"
                 # Inject commit_ref into every 'fixed' disposition (FR-10).
                 local resolution="$PROJECT_DIR/.cct/review/resolution-round-$round.json"
@@ -857,14 +1103,14 @@ run_review_loop() {
                     btype=$(jq -r '.breaker_type // "unknown"' "$PROJECT_DIR/.cct/review/breaker-tripped.json")
                 # Live .cct/review/ state is intentionally left in place:
                 # /review-decide operates on it after parking (FR-4).
-                park "review_breaker" "circuit breaker '$btype' in phase $n round $round" \
+                dispose "review_breaker" "circuit breaker '$btype' in phase $n round $round" \
                     "$(jq -n --arg b "$PROJECT_DIR/.cct/review/breaker-tripped.json" \
                         --argjson findings "$(ls "$PROJECT_DIR"/.cct/review/findings-round-*.json 2>/dev/null | jq -Rs 'split("\n") | map(select(. != ""))')" \
                         --arg fixes "$fix_count" \
                         '{breaker_file: $b, findings_files: $findings, fix_sessions: ($fixes | tonumber)}')"
                 ;;
             *)
-                park "review_breaker" "review runner exited $rc (phase $n)" "null"
+                dispose "review_breaker" "review runner exited $rc (phase $n)" "null"
                 ;;
         esac
     done
@@ -911,7 +1157,7 @@ phase_gate() {
     local origin_exit=0
     bash "$SCRIPT_DIR/check-origin-alignment.sh" "$FEATURE_ID" >/dev/null 2>&1 || origin_exit=$?
     if [[ $origin_exit -ge 2 ]]; then
-        park "origin_gate" "check-origin-alignment.sh exit $origin_exit after phase $n" \
+        dispose "origin_gate" "check-origin-alignment.sh exit $origin_exit after phase $n" \
             "{\"origin_check_exit\": $origin_exit}"
     fi
     {
@@ -969,7 +1215,7 @@ run_phase() {
             run_session "$prompt" "$phase_dir/build-result-2.json" "$SESSION_ID"
         fi
         if [[ "$SESSION_SUBTYPE" != "success" ]]; then
-            park "build_session_error" "build session subtype=$SESSION_SUBTYPE (phase $n)" \
+            dispose "build_session_error" "build session subtype=$SESSION_SUBTYPE (phase $n)" \
                 "$(jq -n --arg f "$phase_dir" '{results_dir: $f}')"
         fi
 
@@ -982,7 +1228,7 @@ run_phase() {
             [[ $rc -eq 0 ]] && break
             attempt=$((attempt + 1))
             if [[ $attempt -gt $MAX_FIX_SESSIONS ]]; then
-                park "test_failure" "tests still failing after $MAX_FIX_SESSIONS fix sessions (phase $n, log: $tlog)" \
+                dispose "test_failure" "tests still failing after $MAX_FIX_SESSIONS fix sessions (phase $n, log: $tlog)" \
                     "$(jq -n --arg log "$tlog" --arg fixes "$((attempt - 1))" \
                         '{last_log: $log, fix_sessions: ($fixes | tonumber)}')"
             fi
@@ -1003,13 +1249,13 @@ run_phase() {
             } > "$fixp"
             state_set '.phases[$p].fix_sessions += 1' --arg p "$n"
             run_session "$fixp" "$phase_dir/fix-result-tests-$attempt.json"
-            [[ "$SESSION_SUBTYPE" == "success" ]] || park "build_session_error" "test-fix session subtype=$SESSION_SUBTYPE (phase $n)" "null"
+            [[ "$SESSION_SUBTYPE" == "success" ]] || dispose "build_session_error" "test-fix session subtype=$SESSION_SUBTYPE (phase $n)" "null"
         done
 
         # Driver-owned phase commit
         set_status "committing"
         driver_commit "feat($FEATURE_ID): phase $n — $title [auto-build]" \
-            || park "git_anomaly" "phase $n build session produced no changes" "null"
+            || dispose "git_anomaly" "phase $n build session produced no changes" "null"
         state_set '.phases[$p].build_commit = $sha | .phases[$p].commits += [$sha]' \
             --arg p "$n" --arg sha "$COMMIT_SHA"
         journal "phase_commit" "phase $n: $COMMIT_SHA"
@@ -1284,7 +1530,7 @@ open_or_update_pr() {
 
     if [[ -n "$PR_NUMBER" && "$PR_NUMBER" != "null" ]]; then
         ( cd "$PROJECT_DIR" && "$GH_BIN" pr edit "$PR_NUMBER" --body-file "$body" ) >/dev/null 2>&1 \
-            || park "pr_error" "gh pr edit #$PR_NUMBER failed" "null"
+            || dispose "pr_error" "gh pr edit #$PR_NUMBER failed" "null"
         PR_ACTION="updated"
         state_set '.pr.number = ($n | tonumber) | .pr.url = $u' --arg n "$PR_NUMBER" --arg u "$PR_URL"
         journal "pr_updated" "#$PR_NUMBER"
@@ -1295,7 +1541,7 @@ open_or_update_pr() {
     local closes first_close title
     closes=$(derive_close_ids)
     if [[ -z "$closes" ]]; then
-        park "pr_config" "no PR close target — set pr.closes in $CONFIG_PATH or an origin issue in plan.md frontmatter" "null"
+        dispose "pr_config" "no PR close target — set pr.closes in $CONFIG_PATH or an origin issue in plan.md frontmatter" "null"
     fi
     first_close="${closes%%,*}"
     title=$(cfg '.pr.title' "feat($FEATURE_ID): autonomous build")
@@ -1304,18 +1550,18 @@ open_or_update_pr() {
     if ! ( cd "$PROJECT_DIR" && bash "$SCRIPT_DIR/pre-pr-check.sh" \
             --closes "$closes" --title "$title" --body-file "$body" --base "$BRANCH_BASE" ) \
             >"$LEDGER_DIR/pre-pr-check.log" 2>&1; then
-        park "pr_precheck" "pre-pr-check.sh failed (see $LEDGER_DIR/pre-pr-check.log)" \
+        dispose "pr_precheck" "pre-pr-check.sh failed (see $LEDGER_DIR/pre-pr-check.log)" \
             "$(jq -n --arg f "$LEDGER_DIR/pre-pr-check.log" '{precheck_log: $f}')"
     fi
 
     local out
     out=$( ( cd "$PROJECT_DIR" && "$GH_BIN" pr create --base "$BRANCH_BASE" \
              --title "$title" --body-file "$body" ) 2>&1 ) \
-        || park "pr_error" "gh pr create failed: $out" "null"
+        || dispose "pr_error" "gh pr create failed: $out" "null"
     PR_URL=$(printf '%s' "$out" | grep -oE 'https://[^[:space:]]*/pull/[0-9]+' | head -1)
     PR_NUMBER="${PR_URL##*/}"
     if [[ -z "$PR_NUMBER" ]]; then
-        park "pr_error" "could not parse PR number from gh output: $out" "null"
+        dispose "pr_error" "could not parse PR number from gh output: $out" "null"
     fi
     PR_ACTION="opened"
     state_set '.pr.number = ($n | tonumber) | .pr.url = $u' --arg n "$PR_NUMBER" --arg u "$PR_URL"
@@ -1349,12 +1595,12 @@ arm_auto_merge() {
     # Branch-protection gate (fail-closed).
     if [[ "$MERGE_REQUIRE_PROTECTION" == "true" ]]; then
         if ! ( cd "$PROJECT_DIR" && "$GH_BIN" api "repos/{owner}/{repo}/branches/$BRANCH_BASE/protection" ) >/dev/null 2>&1; then
-            park "merge_blocked" "base branch '$BRANCH_BASE' is not protected but merge.require_branch_protection=true" "null"
+            dispose "merge_blocked" "base branch '$BRANCH_BASE' is not protected but merge.require_branch_protection=true" "null"
         fi
     fi
     # Arm GitHub-native auto-merge — GitHub merges when required checks pass.
     if ! ( cd "$PROJECT_DIR" && "$GH_BIN" pr merge "$PR_NUMBER" --auto --"$MERGE_METHOD" ) >/dev/null 2>&1; then
-        park "merge_blocked" "gh pr merge --auto --$MERGE_METHOD failed for #$PR_NUMBER (auto-merge unavailable? check repo/branch-protection settings)" "null"
+        dispose "merge_blocked" "gh pr merge --auto --$MERGE_METHOD failed for #$PR_NUMBER (auto-merge unavailable? check repo/branch-protection settings)" "null"
     fi
     state_set '.pr.auto_merge_armed = true | .pr.merge_method = $m' --arg m "$MERGE_METHOD"
     journal "merge_armed" "#$PR_NUMBER --auto --$MERGE_METHOD"
@@ -1388,6 +1634,13 @@ if [[ "$RESUME" == "true" ]]; then
         parked)
             resume_parked
             ;;
+        terminated_policy)
+            echo "Error: this run ended terminated_policy — terminal in #190" >&2
+            echo "increment A (no --resume path; recovery arrives with increment D)." >&2
+            echo "Review $LEDGER_DIR/triage-report.md, resolve the boundary, then" >&2
+            echo "start a fresh attended run." >&2
+            exit 1
+            ;;
         done)
             echo "Run already complete for '$FEATURE_ID'." >&2
             exit 0
@@ -1406,7 +1659,7 @@ START_AT="${START_PHASE_ARG:-1}"
 while IFS=$'\t' read -r n title ms; do
     [[ "$n" -lt "$START_AT" ]] && continue
     if [[ "$n" -gt "$MAX" ]]; then
-        park "cap_exceeded" "max_phases cap ($MAX) reached before phase $n" "null"
+        dispose "cap_exceeded" "max_phases cap ($MAX) reached before phase $n" "null"
     fi
     run_phase "$n" "$title" "$ms"
     DONE_COUNT=$((DONE_COUNT + 1))
@@ -1444,6 +1697,7 @@ else
     FINAL_MSG="$FINAL_MSG (advisory — nothing pushed)"
 fi
 set_status "done"
+state_set '.outcome = "landed"'
 notify "done" "$FINAL_MSG"
 echo "[auto-build] DONE — $FINAL_MSG." >&2
 exit 0
