@@ -17,9 +17,10 @@ set -uo pipefail
 #                             Autonomy profile: advisory publishes nothing;
 #                             pr pushes the branch + opens/updates a PR (never
 #                             merges); merge additionally arms GitHub-native
-#                             gated auto-merge. 'unattended' (#191) fails
-#                             closed until #190 increment B lands, and must be
-#                             declared in automation.json (schema_version 2).
+#                             gated auto-merge. 'unattended' (#193) must be
+#                             declared in automation.json (schema_version 2)
+#                             and pass admission control (validate-spec.sh
+#                             --unattended) before anything runs.
 #   --config <path>           Config (default: specs/<feature-id>/automation.json)
 #   --resume                  Continue a paused/parked run from the ledger
 #   --dry-run                 Print planned phases/transitions; no side effects
@@ -211,7 +212,11 @@ triage_report() {
         if [[ -n "${CAPS_DOWNGRADED_CAUSE:-}" ]]; then
             echo "- Capabilities: DOWNGRADED — $CAPS_DOWNGRADED_CAUSE (push/PR artifacts skipped)"
         fi
-        echo "- verification.yaml state: not present — requirement-to-verifier traceability lands with #190 increment B"
+        if [[ -f "$SPEC_DIR/verification.yaml" ]]; then
+            echo "- verification.yaml: $(awk '/^status:/ {print $2; exit}' "$SPEC_DIR/verification.yaml" 2>/dev/null || echo unknown), $(grep -cE '^FR-[0-9]+[a-z]?:' "$SPEC_DIR/verification.yaml" 2>/dev/null || echo 0) requirement(s) mapped"
+        else
+            echo "- verification.yaml: not present (attended run — admission applies only to profile: unattended)"
+        fi
         echo ""
         echo "The system functioned correctly and deliberately stopped at a"
         echo "defined safety, quality, or budget boundary. Work is preserved."
@@ -474,13 +479,29 @@ load_config() {
     # unattended — the first increment where that happens. Dry runs skip
     # admission (zero side effects; admission executes test.command).
     if [[ "$PROFILE" == "unattended" && "$DRY_RUN" != "true" ]]; then
-        echo "[auto-build] unattended admission: validate-spec.sh --unattended --feature-id $FEATURE_ID" >&2
-        if ! bash "$SCRIPT_DIR/validate-spec.sh" --unattended --feature-id "$FEATURE_ID" >&2; then
-            echo "Error: unattended admission REFUSED — the run was not admitted (#190 §11;" >&2
-            echo "see the failing checks above). Fix the artifact/governance and rerun." >&2
-            exit 1
+        # A --resume on a TERMINAL ledger is decidable without executing
+        # anything — the resume dispatcher refuses it; running the whole
+        # admission bar (including the project suite) first would be a
+        # pointless suite execution on a doomed invocation.
+        local _resume_status=""
+        if [[ "$RESUME" == "true" && -f "$STATE" ]]; then
+            _resume_status="$(jq -r '.status // empty' "$STATE" 2>/dev/null)"
         fi
-        echo "[auto-build] unattended admission PASSED — run admitted." >&2
+        if [[ "$_resume_status" == "terminated_policy" || "$_resume_status" == "done" ]]; then
+            echo "[auto-build] admission skipped: --resume on a terminal ledger (status: $_resume_status) — the resume dispatcher decides." >&2
+        else
+            # Admission validates the EFFECTIVE config — the same
+            # CONFIG_SNAPSHOT this run executes with (--config override
+            # or the frozen resume snapshot), never a default file the
+            # run ignores.
+            echo "[auto-build] unattended admission: validate-spec.sh --unattended --feature-id $FEATURE_ID --config $CONFIG_SNAPSHOT" >&2
+            if ! bash "$SCRIPT_DIR/validate-spec.sh" --unattended --feature-id "$FEATURE_ID" --config "$CONFIG_SNAPSHOT" >&2; then
+                echo "Error: unattended admission REFUSED — the run was not admitted (#190 §11;" >&2
+                echo "see the failing checks above). Fix the artifact/governance and rerun." >&2
+                exit 1
+            fi
+            echo "[auto-build] unattended admission PASSED — run admitted." >&2
+        fi
     fi
     if [[ -z "$GATING_REVIEWER" ]]; then
         echo "Error: config review.reviewers must contain at least one entry with gating=true." >&2
@@ -555,6 +576,10 @@ preflight() {
                 echo "Error: 'gh auth status' failed — authenticate gh before running profile '$PROFILE'." >&2
                 exit 1
             fi
+        elif [[ "$PROFILE" == "unattended" && -f "$STATE" ]]; then
+            # gh recovered since a previously-downgraded run: clear the
+            # stale cause so the ledger never contradicts the summary.
+            state_set '.capability_downgrade = null'
         fi
     fi
 
@@ -1337,7 +1362,11 @@ if [[ "$DRY_RUN" == "true" ]]; then
             echo "  milestone-paused (exit 3) — human sign-off required"
         fi
     done
-    echo "  finalizing -> done (advisory: nothing pushed)"
+    if [[ "$CAN_OPEN_PR" == "true" ]]; then
+        echo "  finalizing -> done ($PROFILE: push + PR per profile)"
+    else
+        echo "  finalizing -> done ($PROFILE: nothing pushed)"
+    fi
     exit 0
 fi
 

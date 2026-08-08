@@ -381,9 +381,12 @@ validate_admission() {
 
   # 7. Automation config: dedicated validator + declared unattended
   #    profile (explicit caps are enforced by the validator, #191).
-  local autocfg="$spec_dir/automation.json" autocfg_ok=false
+  # The EFFECTIVE config: the driver's --config override / resume
+  # snapshot when given, else the feature's own automation.json.
+  # Admission over a config the run does not use proves nothing.
+  local autocfg="${ADMISSION_CONFIG:-$spec_dir/automation.json}" autocfg_ok=false
   if [[ ! -f "$autocfg" ]]; then
-    fail "$id: automation.json missing — unattended admission requires the full config surface"
+    fail "$id: automation config missing ($autocfg) — unattended admission requires the full config surface"
   elif ! bash "$REPO_DIR/scripts/validate-automation-config.sh" "$autocfg" >/dev/null 2>&1; then
     fail "$id: automation.json fails validate-automation-config.sh (run it directly for the violations)"
   elif [[ "$(jq -r '.profile // "advisory"' "$autocfg" 2>/dev/null)" != "unattended" ]]; then
@@ -417,10 +420,14 @@ validate_admission() {
     pass "$id: origin gate exit $origin_exit"
   fi
 
-  # 9. test.command exists and passes on the CURRENT ref (§11) — the
-  #    ONLY executing check, so it runs LAST and only when the config
+  # 9. test.command exists and passes on the BASE ref (§11) — the ONLY
+  #    executing check, so it runs LAST and only when the config
   #    (check 7) and governance (check 8) already passed: admission
   #    never executes a command from a rejected or ungoverned feature.
+  #    Executed in a THROWAWAY git worktree of HEAD when the project is
+  #    a git repo: suites that emit artifacts (coverage, build output)
+  #    must never dirty the real tree — the driver's clean-worktree
+  #    preflight would otherwise abort the run admission just admitted.
   #    Bounded where timeout(1) exists (driver C-5 convention).
   if [[ "$autocfg_ok" == "true" && "$governance_ok" == "true" ]]; then
     local test_cmd
@@ -429,10 +436,22 @@ validate_admission() {
       fail "$id: automation.json test.command missing — admission must prove the suite passes before any session runs"
     else
       local trc=0 admission_timeout="${CCT_ADMISSION_TEST_TIMEOUT:-600}"
+      local run_dir="$project_dir" throwaway=""
+      if git -C "$project_dir" rev-parse --git-dir >/dev/null 2>&1; then
+        throwaway="$(mktemp -d)/admission-wt"
+        if git -C "$project_dir" worktree add --detach "$throwaway" HEAD >/dev/null 2>&1; then
+          run_dir="$throwaway"
+        else
+          throwaway=""
+        fi
+      fi
       if command -v timeout >/dev/null 2>&1; then
-        ( cd "$project_dir" && timeout "$admission_timeout" bash -c "$test_cmd" ) >/dev/null 2>&1 || trc=$?
+        ( cd "$run_dir" && timeout "$admission_timeout" bash -c "$test_cmd" ) >/dev/null 2>&1 || trc=$?
       else
-        ( cd "$project_dir" && bash -c "$test_cmd" ) >/dev/null 2>&1 || trc=$?
+        ( cd "$run_dir" && bash -c "$test_cmd" ) >/dev/null 2>&1 || trc=$?
+      fi
+      if [[ -n "$throwaway" ]]; then
+        git -C "$project_dir" worktree remove --force "$throwaway" >/dev/null 2>&1 || rm -rf "$throwaway"
       fi
       if [[ $trc -eq 124 ]]; then
         fail "$id: test.command ('$test_cmd') exceeded the ${admission_timeout}s admission budget"
@@ -454,6 +473,7 @@ validate_admission() {
 MODE="all"
 FEATURE_ID=""
 UNATTENDED=false
+ADMISSION_CONFIG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -470,8 +490,15 @@ while [[ $# -gt 0 ]]; do
       UNATTENDED=true
       shift
       ;;
+    --config)
+      # #193 P1: admission must validate the EFFECTIVE config — the one
+      # the run will actually use (the driver's --config override or its
+      # frozen resume snapshot) — never a default file the run ignores.
+      ADMISSION_CONFIG="${2:?--config requires a path}"
+      shift 2
+      ;;
     *)
-      echo "Usage: validate-spec.sh [--feature-id ID | --all] [--unattended]"
+      echo "Usage: validate-spec.sh [--feature-id ID | --all] [--unattended [--config <path>]]"
       exit 1
       ;;
   esac
@@ -479,6 +506,10 @@ done
 
 if [[ "$UNATTENDED" == "true" && "$MODE" != "single" ]]; then
   echo "Usage: --unattended requires --feature-id <id> (admission is per-feature)"
+  exit 1
+fi
+if [[ -n "$ADMISSION_CONFIG" && "$UNATTENDED" != "true" ]]; then
+  echo "Usage: --config is only meaningful with --unattended (admission's effective config)"
   exit 1
 fi
 

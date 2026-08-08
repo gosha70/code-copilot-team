@@ -77,6 +77,12 @@ printf '{"subtype":"%s","session_id":"mock-session-%s","total_cost_usd":%s,"num_
 MOCK
 chmod +x "$MOCK_BIN/claude"
 
+# Per-RUN reviewed marker: an absolute /tmp path here is shared global
+# state — a concurrent suite run on the same host deletes it mid-round
+# and flips the FAIL-once mocks back to FAIL (observed as panel-test
+# flakiness). Unique per invocation.
+MOCK_REVIEWED_MARKER="$(mktemp -d)/cct-mock-reviewed"
+
 # ── Mock reviewer profiles (same shapes as test-review-loop.sh) ──
 
 PASS_PROFILE=$(mktemp)
@@ -92,12 +98,12 @@ TOML
 
 FAIL_ONCE_PROFILE=$(mktemp)
 # Fails round 1, passes later rounds (marker file distinguishes rounds).
-cat > "$FAIL_ONCE_PROFILE" << 'TOML'
+cat > "$FAIL_ONCE_PROFILE" << TOML
 [defaults]
 peer_for.claude = "mock"
 [providers.mock]
 type = "cli"
-command = "if [ -f /tmp/cct-mock-reviewed ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch /tmp/cct-mock-reviewed && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|near top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
+command = "if [ -f $MOCK_REVIEWED_MARKER ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch $MOCK_REVIEWED_MARKER && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|near top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
 timeout_sec = 10
 healthcheck = "true"
 TOML
@@ -196,12 +202,12 @@ cfg_set() {
 # ── Panel profile (increment E): gating 'mock' (FAIL once → PASS) + advisory
 # 'mock-adv' (always emits a security finding) + optional unhealthy advisory ──
 PANEL_PROFILE=$(mktemp)
-cat > "$PANEL_PROFILE" << 'TOML'
+cat > "$PANEL_PROFILE" << TOML
 [defaults]
 peer_for.claude = "mock"
 [providers.mock]
 type = "cli"
-command = "if [ -f /tmp/cct-mock-reviewed ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch /tmp/cct-mock-reviewed && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|near top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
+command = "if [ -f $MOCK_REVIEWED_MARKER ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch $MOCK_REVIEWED_MARKER && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|near top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
 timeout_sec = 10
 healthcheck = "true"
 [providers.mock-adv]
@@ -238,7 +244,7 @@ cat > "$PANEL_CAPTURE_PROFILE" << TOML
 peer_for.claude = "mock"
 [providers.mock]
 type = "cli"
-command = "cp {review_request} $GATING_REQ_CAPTURE && if [ -f /tmp/cct-mock-reviewed ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch /tmp/cct-mock-reviewed && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
+command = "cp {review_request} $GATING_REQ_CAPTURE && if [ -f $MOCK_REVIEWED_MARKER ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch $MOCK_REVIEWED_MARKER && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
 timeout_sec = 10
 healthcheck = "true"
 [providers.mock-adv]
@@ -248,7 +254,7 @@ timeout_sec = 10
 healthcheck = "true"
 TOML
 
-trap 'rm -rf "$MOCK_BIN" "$GH_BIN_DIR" "$PASS_PROFILE" "$FAIL_ONCE_PROFILE" "$FAIL_ALWAYS_PROFILE" "$DOWN_PROFILE" "$PANEL_PROFILE" "$PANEL_ADV_DOWN_PROFILE" "$PANEL_CAPTURE_PROFILE" "$GATING_REQ_CAPTURE" "$ADV_REQ_CAPTURE" /tmp/cct-mock-reviewed' EXIT
+trap 'rm -rf "$MOCK_BIN" "$GH_BIN_DIR" "$PASS_PROFILE" "$FAIL_ONCE_PROFILE" "$FAIL_ALWAYS_PROFILE" "$DOWN_PROFILE" "$PANEL_PROFILE" "$PANEL_ADV_DOWN_PROFILE" "$PANEL_CAPTURE_PROFILE" "$GATING_REQ_CAPTURE" "$ADV_REQ_CAPTURE" $MOCK_REVIEWED_MARKER' EXIT
 
 # ── Project factory ───────────────────────────────────────────
 
@@ -369,7 +375,7 @@ run_driver() {
     local project="$1"; shift
     local counter
     counter=$(mktemp)
-    rm -f /tmp/cct-mock-reviewed
+    rm -f $MOCK_REVIEWED_MARKER
     RC=0
     OUTPUT=$(cd "$project" && \
         CCT_PROJECT_DIR="$project" \
@@ -1357,6 +1363,8 @@ assert_eq "triage report generated (mandatory artifact)" "1" \
     "$([[ -f "$P/.cct/auto-build/demo-feat/triage-report.md" ]] && echo 1 || echo 0)"
 assert_contains "triage report names the reason" \
     "$(cat "$P/.cct/auto-build/demo-feat/triage-report.md" 2>/dev/null)" "origin_gate"
+assert_contains "the PHASE GATE fired, not the preflight check" \
+    "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "after phase"
 rm -f "$ORIGIN_DRIFT_SCRIPT"; rm -rf "$P" "$BARE"
 
 # review_breaker mid-run + BLOCKED PUSH (no remote): mandatory artifacts
@@ -1373,6 +1381,8 @@ assert_contains "blocked push journaled as artifact skip" \
     "termination push failed or refused by prechecks"
 assert_eq "triage report generated on mid-run termination" "1" \
     "$([[ -f "$P/.cct/auto-build/demo-feat/triage-report.md" ]] && echo 1 || echo 0)"
+assert_contains "triage reports the REAL verification.yaml state" \
+    "$(cat "$P/.cct/auto-build/demo-feat/triage-report.md" 2>/dev/null)" "verification.yaml: finalized, 2 requirement(s) mapped"
 # terminated_policy is terminal in increment A: --resume is refused.
 run_driver "$P" --resume
 assert_exit "terminated run refuses --resume (exit 1)" 1 "$RC"
@@ -1449,6 +1459,53 @@ assert_eq "dirty worktree: HEAD unmoved" "$HEAD_BEFORE" "$(git -C "$P" rev-parse
 assert_contains "dirty worktree: operator file left uncommitted" \
     "$(git -C "$P" status --porcelain)" "scratch-work.txt"
 rm -rf "$P"
+
+# Regression (review P1): admission binds to the EFFECTIVE config — a
+# --config override is what the run executes, so it is what admission
+# must validate; a bad override can never ride in on the good default.
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
+BAD_CFG=$(mktemp)
+jq '.test.command = "bash ./no-such-red-suite.sh"' "$P/specs/demo-feat/automation.json" > "$BAD_CFG"
+run_driver "$P" --config "$BAD_CFG"
+assert_exit "bad --config override is refused at admission" 1 "$RC"
+assert_contains "override refusal comes from the admission bar" "$OUTPUT" "admission REFUSED"
+rm -f "$BAD_CFG"; rm -rf "$P"
+
+# Regression (review P2): admission's suite run happens in a THROWAWAY
+# worktree — a suite that emits artifacts must not dirty the real tree
+# and self-sabotage the clean-worktree preflight of the admitted run.
+# (gh-downgraded so the landed path needs no remote/PR wiring.)
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+python3 - "$P/project-test.sh" << 'EOF'
+import sys
+p = sys.argv[1]
+open(p, 'w').write('#!/usr/bin/env bash\ntouch .suite-artifact.out\nexit 0\n')
+EOF
+git -C "$P" add -A && git -C "$P" commit -q -m "artifact-emitting suite"
+admit_project "$P"
+GH_AUTH_FAIL=1 run_driver "$P"
+assert_exit "artifact-emitting suite is admitted AND runs (exit 0)" 0 "$RC"
+rm -rf "$P"
+
+# Regression (review P2): a --resume on a terminal ledger refuses WITHOUT
+# executing the project suite (decidable from the ledger alone).
+P=$(setup_project); unattended_cfg "$P"
+SUITE_COUNTER=$(mktemp)
+python3 - "$P/project-test.sh" "$SUITE_COUNTER" << 'EOF'
+import sys
+p, counter = sys.argv[1], sys.argv[2]
+open(p, 'w').write(f'#!/usr/bin/env bash\necho run >> "{counter}"\nexit 0\n')
+EOF
+git -C "$P" add -A && git -C "$P" commit -q -m "counting suite"
+admit_project "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "counting fixture terminates (exit 6)" 6 "$RC"
+RUNS_AT_TERMINATION=$(wc -l < "$SUITE_COUNTER" | tr -d ' ')
+run_driver "$P" --resume
+assert_exit "terminal resume still refused (exit 1)" 1 "$RC"
+assert_eq "doomed resume never executed the suite" "$RUNS_AT_TERMINATION" \
+    "$(wc -l < "$SUITE_COUNTER" | tr -d ' ')"
+rm -f "$SUITE_COUNTER"; rm -rf "$P"
 
 # Regression (review P2): the unattended profile cannot be requested via
 # --profile override past the validator — it must be declared in the config.
