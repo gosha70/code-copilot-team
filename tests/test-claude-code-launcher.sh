@@ -8,6 +8,8 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/test-counts.env"
 LAUNCHER="$REPO_DIR/adapters/claude-code/claude-code"
 
 PASS=0; FAIL=0
@@ -166,4 +168,8 @@ echo ""
 echo "========================================="
 echo "  claude-code launcher tests: $PASS passed, $FAIL failed"
 echo "========================================="
+if [[ "$PASS" -ne "${TEST_CLAUDE_CODE_LAUNCHER_EXPECTED_PASS:-0}" ]]; then
+    echo "  FAIL: assertion-count drift (expected ${TEST_CLAUDE_CODE_LAUNCHER_EXPECTED_PASS:-0}, got $PASS)"
+    FAIL=$((FAIL+1))
+fi
 [[ $FAIL -eq 0 ]]

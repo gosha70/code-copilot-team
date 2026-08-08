@@ -32,10 +32,15 @@ MEMKERNEL_SOURCE=""
 # `claude-code build` needs the source checkout baked in to find
 # scripts/auto-build-loop.sh (CCT_REPO_DIR env still overrides).
 bake_launcher_repo_path() {
-    local repo_root
+    # awk, not sed: a checkout path containing &, |, or \ must land
+    # verbatim (sed replacement metacharacters would corrupt or abort).
+    local repo_root tmp
     repo_root="$(cd "$SCRIPT_DIR/../.." && pwd)"
-    sed -i '' "s|^CCT_REPO_DIR_DEFAULT=.*|CCT_REPO_DIR_DEFAULT=\"$repo_root\"|" "$LAUNCHER_TARGET" 2>/dev/null || \
-        sed -i "s|^CCT_REPO_DIR_DEFAULT=.*|CCT_REPO_DIR_DEFAULT=\"$repo_root\"|" "$LAUNCHER_TARGET"
+    tmp="$(mktemp)"
+    awk -v p="$repo_root" '
+        /^CCT_REPO_DIR_DEFAULT=/ { printf "CCT_REPO_DIR_DEFAULT=\"%s\"\n", p; next }
+        { print }
+    ' "$LAUNCHER_TARGET" > "$tmp" && mv "$tmp" "$LAUNCHER_TARGET" && chmod +x "$LAUNCHER_TARGET"
 }
 
 # Provider config: delegate --provider to the shared translator (T2.2).

@@ -1510,8 +1510,8 @@ run_headless() {
     local log_file
     mkdir -p "$LOGS_DIR" 2>/dev/null || true
     log_file="$LOGS_DIR/headless-$(basename "$PWD")-$(date +%Y-%m-%d-%H%M%S).log"
-    printf '%s headless: %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        "${CLAUDE_CMD[*]}" "$*" >> "$log_file" 2>/dev/null || true
+    { printf '%s headless: %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "${CLAUDE_CMD[*]}" "$*" >> "$log_file"; } 2>/dev/null || true
     exec "${CLAUDE_CMD[@]}" "$@"
 }
 

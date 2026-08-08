@@ -31,7 +31,7 @@ set -uo pipefail
 #       | 6 = terminated_policy (unattended: deliberate stop at a policy
 #         boundary — terminal, never relaunched) | 1 = usage/preflight
 #
-# Env: CCT_CLAUDE_BIN (default claude), CCT_GH_BIN (default gh, pr profile),
+# Env: CCT_CLAUDE_BIN (default claude-code), CCT_GH_BIN (default gh, pr profile),
 #      CCT_AUTOBUILD_DIR (default .cct/auto-build),
 #      CCT_AUTOBUILD_PROFILE, CCT_PROVIDER_PROFILE, CCT_REVIEW_* (passed through)
 
@@ -536,9 +536,15 @@ preflight() {
             echo "Error: pi-code not usable: $PI_BIN (override with CCT_PI_BIN)." >&2
             exit 1
         fi
-    elif ! "$CLAUDE_BIN" --version &>/dev/null; then
-        echo "Error: claude binary not usable: $CLAUDE_BIN (override with CCT_CLAUDE_BIN)." >&2
-        exit 1
+    else
+        local _claude_ver
+        _claude_ver="$("$CLAUDE_BIN" --version 2>/dev/null)" || _claude_ver=""
+        if [[ ! "$_claude_ver" =~ [0-9]+\.[0-9]+ ]]; then
+            echo "Error: claude binary not usable: $CLAUDE_BIN (override with CCT_CLAUDE_BIN)." >&2
+            echo "If this is an installed claude-code launcher, it may predate the headless" >&2
+            echo "passthrough (#195) — re-run: bash adapters/claude-code/setup.sh --sync" >&2
+            exit 1
+        fi
     fi
 
     # gh preflight (FR-2a): required only when the profile can push / open PRs.
