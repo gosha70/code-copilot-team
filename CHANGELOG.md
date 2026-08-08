@@ -55,6 +55,22 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   attended configs and inactive for v1.
 
 ### Fixed
+- **The shipped Codex reviewer command actually runs (#199)** — the
+  provider template (and the README block users copy from) configured
+  codex with `--quiet --prompt-file`, flags that no longer exist, so
+  every codex review round failed on an unknown flag. Replaced with
+  `codex exec --color never -s read-only --skip-git-repo-check -
+  < {review_request} 2>/dev/null`, chosen from a recorded capture of
+  codex-cli 0.147.0 (`specs/codex-provider-command/verification/`), not
+  from `--help`. Two things only execution revealed: the runner strips
+  `.git` from its snapshot sandbox and codex refuses to start outside a
+  git repo, and codex echoes the whole prompt to stderr — which the
+  runner merges via `2>&1`, making the echoed "State exactly one of:
+  PASS, FAIL, or INCONCLUSIVE" the first `^### Verdict` block. Captured
+  live: a review the model returned **FAIL** parsed as **PASS**, with a
+  phantom finding from the echoed template line. The template had no
+  test coverage at all; it now has guards for each flag and for
+  `{review_request}` across every shipped `cli` provider.
 - **Successful build sessions no longer park (#197)** — the driver
   parsed `claude -p --output-format json` as a single result object,
   but the current CLI emits a JSON array of messages (result = the
