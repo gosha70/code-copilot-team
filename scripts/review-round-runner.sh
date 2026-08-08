@@ -471,12 +471,17 @@ fi
 
 rm -f "$REVIEW_REQUEST"
 
+# #204: a timed-out reviewer produced no review — a provider failure, not
+# review feedback. It must NOT exit here: the driver's provider_unavailable
+# arm reads the provider, exit code and message out of
+# findings-round-N.json, so exiting before that artifact exists degraded
+# the park message to "reviewer '?' failed (exit ?) ... unknown error".
+# Record the cause and fall through to the normal write path, which ends
+# in exit 3.
+PROVIDER_ERROR=""
 if [[ $REVIEW_EXIT -eq 124 || $REVIEW_EXIT -eq 143 ]]; then
-    # #204: a timed-out reviewer produced no review. Exit 3 (provider
-    # failure), not 1 — exit 1 made the driver treat it as review
-    # feedback and spawn a fix session with nothing to fix.
+    PROVIDER_ERROR="timed out after ${PROVIDER_TIMEOUT}s"
     echo "Error: Provider '$PEER_PROVIDER' timed out after ${PROVIDER_TIMEOUT}s." >&2
-    exit 3
 fi
 
 # ── Post-review validation ───────────────────────────────────
@@ -535,11 +540,20 @@ fi
 # and money, then parked as a misleading git_anomaly. The verdict stays
 # INCONCLUSIVE (fail-closed — never a pass) and the round exits 3, which
 # the driver parks as provider_unavailable.
-PROVIDER_ERROR=""
 if [[ $REVIEW_EXIT -ne 0 ]]; then
     VERDICT="INCONCLUSIVE"
-    PROVIDER_ERROR=$(printf '%s' "$REVIEW_OUTPUT" | grep -v '^[[:space:]]*$' | head -1 | cut -c1-500)
-    PROVIDER_ERROR="${PROVIDER_ERROR:-no output}"
+    if [[ -z "$PROVIDER_ERROR" ]]; then
+        # `|| true` is load-bearing: under `set -o pipefail` a provider
+        # that fails with NO output makes grep exit 1, the whole pipeline
+        # exit 1, and `set -e` abort the runner right here — before the
+        # findings artifact is written and before the exit-3 path is
+        # reached. The driver then saw the old rc=1 and treated a silent
+        # infrastructure failure as review feedback, which is the very
+        # bug class #204 is about. The `:-no output` fallback below is
+        # only reachable because of this.
+        PROVIDER_ERROR=$(printf '%s' "$REVIEW_OUTPUT" | grep -v '^[[:space:]]*$' | head -1 | cut -c1-500 || true)
+        PROVIDER_ERROR="${PROVIDER_ERROR:-no output}"
+    fi
 fi
 
 # ── #193 FR-6: per-invocation cost, out-of-band only ─────────

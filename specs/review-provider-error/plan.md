@@ -47,6 +47,27 @@ code has problems".
    charged `$2.0 (estimated: true)` for a reviewer that exited on a usage
    error; a failed invocation is not an unmetered one.
 
+## Review round 2 (user P1 + P2)
+
+Both findings were in the first cut of this change and both are now
+pinned by regressions that fail against it:
+
+- **P1 — quiet failures escaped.** The error-message extraction
+  (`grep -v ... | head -1 | cut ...`) runs under `set -o pipefail`. A
+  provider that exits non-zero with NO output makes `grep` exit 1, so the
+  assignment failed and `set -e` aborted the runner before the artifact
+  and before exit 3 — the driver saw rc=1 and was back to treating a
+  silent infrastructure failure as review feedback, spawning 2 fix
+  sessions against zero findings. This is the same `pipefail` trap fixed
+  two commits earlier in this file for the verdict-anchor grep; the first
+  fix did not generalise the lesson, and the test used a provider that
+  had output, so it sailed past.
+- **P2 — the timeout path exited before writing the artifact**, which is
+  where the driver reads provider/exit/message from, degrading the park
+  message to `reviewer '?' failed (exit ?) ... unknown error` — contrary
+  to this change's own stated contract. The timeout arm now records the
+  cause and falls through to the normal write path.
+
 ## Constraint
 
 The reviewer's own text is still not a measurement or a verdict channel

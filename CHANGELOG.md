@@ -72,7 +72,10 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   is also no longer charged the conservative unmetered estimate (the
   observed run was billed `$2.0 estimated` for a reviewer that never ran);
   genuinely measured cost is still debited. A real review that fails the
-  code still exits 1 and records no `provider_error`.
+  code still exits 1 and records no `provider_error`. Every provider
+  failure — including one that produces NO output, and including a
+  timeout — writes the findings artifact before exiting, because the
+  driver reads the provider, exit code and message out of it.
 - **A provider's echoed prompt is no longer parsed as its review (#200)**
   — providers are captured with `2>&1`, and a CLI that echoes its prompt
   (codex exec does) fed the request's own `### Verdict` section and its

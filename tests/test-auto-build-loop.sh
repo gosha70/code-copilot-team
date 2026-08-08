@@ -1950,13 +1950,62 @@ ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | hea
 assert_eq "park reason names the provider, not git_anomaly" "provider_unavailable" \
     "$(jq -r '.reason' "$ESC" 2>/dev/null)"
 assert_eq "the park message carries the real provider error" "1" \
-    "$(jq -r '.detail // ""' "$ESC" 2>/dev/null | grep -c 'skip-git-repo-check' || echo 0)"
+    "$(jq -r '.detail // ""' "$ESC" 2>/dev/null | grep -c 'skip-git-repo-check' || true)"
 assert_eq "no fix session runs against zero findings" "0" \
     "$(ls "$P"/.cct/auto-build/demo-feat/phase-1/fix-prompt-*.md 2>/dev/null | wc -l | tr -d ' ')"
 assert_eq "a failed invocation is never charged the conservative estimate" "0" \
     "$(jq -r '.totals.cost_estimated_usd // 0' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 rm -rf "$P"
-rm -f "$BROKEN_REVIEWER" "$BROKEN_PROFILE"
+
+# A SILENT provider failure (non-zero exit, no output) must reach the same
+# park. Under pipefail the runner's error extraction aborted the script, so
+# this fell back to rc=1 — review feedback — and the bug class stayed
+# reachable for providers that fail quietly.
+QUIET_PROFILE=$(mktemp)
+cat > "$QUIET_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "exit 1"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$QUIET_PROFILE" run_driver "$P"
+assert_exit "a SILENT reviewer failure parks (exit 4), never drives fix sessions" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
+assert_eq "silent failure parks as provider_unavailable" "provider_unavailable" \
+    "$(jq -r '.reason' "$ESC" 2>/dev/null)"
+assert_eq "no fix session runs on a silent failure" "0" \
+    "$(ls "$P"/.cct/auto-build/demo-feat/phase-1/fix-prompt-*.md 2>/dev/null | wc -l | tr -d ' ')"
+rm -rf "$P"
+
+# A TIMED-OUT reviewer must produce a diagnostic that names the provider
+# and cause. The timeout arm used to exit before writing the artifact the
+# driver reads, degrading the park to "reviewer '?' failed (exit ?)".
+TO_PROFILE=$(mktemp)
+cat > "$TO_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "exit 124"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$TO_PROFILE" run_driver "$P"
+assert_exit "a timed-out reviewer parks (exit 4)" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
+assert_eq "timeout parks as provider_unavailable" "provider_unavailable" \
+    "$(jq -r '.reason' "$ESC" 2>/dev/null)"
+assert_eq "the park names the provider, not '?'" "0" \
+    "$(jq -r '.detail // ""' "$ESC" 2>/dev/null | grep -c "reviewer '?'" || true)"
+assert_eq "the park names the timeout as the cause" "1" \
+    "$(jq -r '.detail // ""' "$ESC" 2>/dev/null | grep -c 'timed out' || true)"
+rm -rf "$P"
+rm -f "$BROKEN_REVIEWER" "$BROKEN_PROFILE" "$QUIET_PROFILE" "$TO_PROFILE"
 
 # The runner has NO in-band parsing path left (statically asserted).
 assert_eq "runner never parses cost out of reviewer text" "0" \

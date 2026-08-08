@@ -724,8 +724,49 @@ TOML
 P=$(setup_project)
 write_state "$P" 0
 RC=0; CCT_PROVIDER_PROFILE="$PROVTO_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+FR="$P/.cct/review/findings-round-1.json"
 assert_exit "a timed-out reviewer exits 3, not 1" 3 "$RC"
+# The driver's provider_unavailable arm reads provider/exit/message OUT of
+# this artifact, so exiting before writing it degraded the park message to
+# "reviewer '?' failed (exit ?) ... unknown error".
+assert_eq "a timed-out reviewer still writes the findings artifact" "1" \
+    "$(ls "$P"/.cct/review/findings-round-*.json 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "the timeout is named in the artifact" "timed out after 10s" \
+    "$(jq -r '.provider_error.message' "$FR" 2>/dev/null)"
+assert_eq "the timeout exit code is recorded" "124" \
+    "$(jq -r '.provider_error.exit_code' "$FR" 2>/dev/null)"
+assert_eq "a timed-out reviewer is never a content FAIL" "INCONCLUSIVE" \
+    "$(jq -r '.verdict' "$FR" 2>/dev/null)"
 rm -rf "$P"
+
+# A QUIET failure: non-zero exit with no output at all. Under pipefail the
+# error-extraction grep exited 1 and `set -e` aborted the runner before it
+# wrote the artifact or reached exit 3 — so the driver saw rc=1 and was
+# back to treating silent infrastructure failure as review feedback.
+QUIET_PROFILE=$(mktemp)
+cat > "$QUIET_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "exit 1"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$QUIET_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+FR="$P/.cct/review/findings-round-1.json"
+assert_exit "a SILENT provider failure exits 3, not 1" 3 "$RC"
+assert_eq "a silent failure still writes the findings artifact" "1" \
+    "$(ls "$P"/.cct/review/findings-round-*.json 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "a silent failure records 'no output', not nothing" "no output" \
+    "$(jq -r '.provider_error.message' "$FR" 2>/dev/null)"
+assert_eq "a silent failure is never a content FAIL" "INCONCLUSIVE" \
+    "$(jq -r '.verdict' "$FR" 2>/dev/null)"
+rm -rf "$P"
+rm -f "$QUIET_PROFILE"
 
 # A healthy reviewer that genuinely fails the code still exits 1.
 P=$(setup_project)
