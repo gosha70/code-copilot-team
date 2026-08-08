@@ -214,6 +214,14 @@ EVIDENCE=""
 KIND=""
 classify() { # classify <exit-code> <output-file>
   local code="$1" out="$2" hit
+  # #191 FR-8: exit 6 (terminated_policy) is TERMINAL — classified BEFORE
+  # the usage grep so a policy termination whose output happens to contain
+  # a usage-limit phrase can never be cooled down and relaunched.
+  if [[ "$code" -eq 6 ]]; then
+    EVIDENCE=""
+    KIND="terminated"
+    return
+  fi
   hit="$(grep -iE "$USAGE_PATTERN" "$out" 2>/dev/null | tail -1 || true)"
   if [[ -n "$hit" ]]; then
     EVIDENCE="$hit"
@@ -299,6 +307,13 @@ while true; do
     breaker)
       notify "parked" "non-usage breaker (exit $CHILD_CODE)"
       terminate "parked" 4 "non-usage breaker: harness exit $CHILD_CODE"
+      ;;
+    terminated)
+      # FR-8 (#191): the harness deliberately stopped at a policy boundary.
+      # Never cooldown, relaunch, or reclassify — regardless of
+      # --on-incomplete. Exit 6 propagates so callers see the same contract.
+      notify "terminated_policy" "policy termination (exit 6) — terminal, not relaunched"
+      terminate "terminated_policy" 6 "harness exited terminated_policy (exit 6); terminal by contract"
       ;;
   esac
 done

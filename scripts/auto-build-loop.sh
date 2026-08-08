@@ -382,6 +382,27 @@ load_config() {
     TEST_TIMEOUT=$(cfg '.test.timeout_sec' '1200')
     CAP_WALL_CLOCK=$(cfg '.caps.wall_clock_sec' '14400')
     CAP_COST=$(cfg '.caps.cost_usd' '25')
+    # #191 FR-7: estimate policy for unmetered driver-initiated invocations
+    # (review rounds have no cost channel for free-text reviewers). Active
+    # under `unattended` always (required — see preflight error below), and
+    # for attended configs that opted in via an unattended.budget block.
+    # v1 configs have no block → inactive → attended behavior unchanged.
+    # NOT cfg(): its `// empty` fallback swallows an explicit `false`.
+    ESTIMATE_UNMETERED=$(jq -r 'if .unattended.budget.estimate_unmetered == false then "false" else "true" end' \
+        "$CONFIG_SNAPSHOT" 2>/dev/null || echo "true")
+    ESTIMATE_PER_INV=$(cfg '.unattended.budget.estimate_usd_per_invocation' '2.0')
+    ESTIMATES_ACTIVE=false
+    if [[ "$PROFILE" == "unattended" ]]; then
+        if [[ "$ESTIMATE_UNMETERED" != "true" ]]; then
+            echo "Error: profile 'unattended' with unattended.budget.estimate_unmetered=false" >&2
+            echo "is unmeterable-and-unestimable: review invocations have no cost channel and" >&2
+            echo "could not debit caps.cost_usd (FR-7). Enable estimate_unmetered." >&2
+            exit 1
+        fi
+        ESTIMATES_ACTIVE=true
+    elif [[ "$(cfg '.unattended.budget != null' 'false')" == "true" && "$ESTIMATE_UNMETERED" == "true" ]]; then
+        ESTIMATES_ACTIVE=true
+    fi
     GATING_REVIEWER=$(jq -r '[.review.reviewers[]? | select(.gating == true)][0].provider // empty' "$CONFIG_SNAPSHOT")
     GATING_SCOPE=$(jq -r '[.review.reviewers[]? | select(.gating == true)][0].scope // "both"' "$CONFIG_SNAPSHOT")
     GATING_SPECIALIZATION=$(jq -r '[.review.reviewers[]? | select(.gating == true)][0].specialization // "general"' "$CONFIG_SNAPSHOT")
@@ -663,11 +684,40 @@ write_ledger_skeleton() {
 
 # ── Caps (FR-6) ──────────────────────────────────────────────
 
+# ── Review-cost accounting (#191 FR-7) ───────────────────────
+# One runner execution == one reviewer invocation. A measured cost (the
+# runner's invocation_cost_usd) debits totals.cost_usd; an unmetered
+# invocation debits the conservative per-invocation estimate into
+# totals.cost_estimated_usd — SAME cap, flagged estimated in the journal.
+# A runner that died before writing this round's findings file is still
+# debited as one unmetered invocation (conservative overstatement).
+debit_review_costs() {
+    # debit_review_costs <findings-file-or-empty> <label>
+    local f="$1" label="$2" cost=""
+    [[ -n "$f" && -f "$f" ]] && cost=$(jq -r '.invocation_cost_usd // empty' "$f" 2>/dev/null)
+    if [[ -n "$cost" ]]; then
+        state_set '.totals.cost_usd += ($c | tonumber)' --arg c "$cost"
+        journal "cost_review" "$label: \$$cost (measured)"
+    elif [[ "${ESTIMATES_ACTIVE:-false}" == "true" ]]; then
+        state_set '.totals.cost_estimated_usd = ((.totals.cost_estimated_usd // 0) + ($c | tonumber))' \
+            --arg c "$ESTIMATE_PER_INV"
+        journal "cost_review" "$label: \$$ESTIMATE_PER_INV (estimated: true — unmetered invocation)"
+    fi
+}
+
 check_caps() {
-    local spent elapsed
+    local spent est elapsed
     spent=$(state_get '.totals.cost_usd')
-    if awk -v s="$spent" -v c="$CAP_COST" 'BEGIN { exit !(s >= c) }'; then
-        dispose "cap_exceeded" "cost cap: spent \$$spent of \$$CAP_COST" "null"
+    est=$(state_get '.totals.cost_estimated_usd // 0')
+    # Cap check on the COMBINED total (FR-7): metered + estimated debit the
+    # same budget. est is 0 for configs without estimates — the detail
+    # string then matches the pre-#191 format byte-identically.
+    if awk -v s="$spent" -v e="$est" -v c="$CAP_COST" 'BEGIN { exit !((s + e) >= c) }'; then
+        local detail="cost cap: spent \$$spent of \$$CAP_COST"
+        if awk -v e="$est" 'BEGIN { exit !(e > 0) }'; then
+            detail="cost cap: spent \$$spent metered + \$$est estimated of \$$CAP_COST"
+        fi
+        dispose "cap_exceeded" "$detail" "null"
     fi
     elapsed=$(( $(now_epoch) - $(state_get '.totals.started_epoch') ))
     if [[ $elapsed -ge $CAP_WALL_CLOCK ]]; then
@@ -902,6 +952,9 @@ run_advisory_pass() {
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >/dev/null 2>&1 || true
         local frf
         frf=$(ls "$scratch"/findings-round-*.json 2>/dev/null | sort | tail -1)
+        # Each advisory pass is one reviewer invocation in a fresh scratch
+        # dir; debit it (measured or estimated) like a gating round (FR-7).
+        debit_review_costs "$frf" "advisory review $_prov phase $n round $round"
         if [[ -n "$frf" && -f "$frf" ]]; then
             local tagged tmp
             tagged=$(jq --arg prov "$_prov" --arg spec "$_spec" \
@@ -969,10 +1022,18 @@ run_review_loop() {
     local fix_count=0
     while true; do
         local rc=0
+        # Track the newest findings file across the runner call so this
+        # round's cost is debited exactly once — a runner that died before
+        # writing one is debited as an unmetered invocation (FR-7).
+        local pre_frf post_frf
+        pre_frf=$(ls "$PROJECT_DIR"/.cct/review/findings-round-*.json 2>/dev/null | sort | tail -1)
         ( cd "$PROJECT_DIR" && CCT_REVIEW_BASE_REF="$base_ref" \
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >&2 || rc=$?
         local round
         round=$(jq -r '.current_round // 0' "$PROJECT_DIR/.cct/review/state.json" 2>/dev/null || echo 0)
+        post_frf=$(ls "$PROJECT_DIR"/.cct/review/findings-round-*.json 2>/dev/null | sort | tail -1)
+        [[ "$post_frf" == "$pre_frf" ]] && post_frf=""
+        debit_review_costs "$post_frf" "gating review phase $n round $round"
         case $rc in
             0)
                 verify_pass_gate

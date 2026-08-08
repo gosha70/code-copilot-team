@@ -24,7 +24,14 @@ breakers. Design: `specs/auto-build-loop/design.md`.
 | Peer review (11) | driver-run, gating, driver verifies PASS | same | same + green CI |
 | Push / PR / merge | never / never / never | auto / auto / never | auto / auto / gated auto |
 
-All three profiles — `advisory`, `pr`, and `merge` — are implemented.
+All three attended profiles — `advisory`, `pr`, and `merge` — are
+implemented. A fourth profile, `unattended` (#191, increment A of #190),
+exists as policy only: it **fails closed at config load** until #190
+increment B ships admission control, must be declared in
+`automation.json` itself (`schema_version: 2`, explicit `caps.*`,
+validated by `scripts/validate-automation-config.sh`), and can never be
+requested via `--profile`/`CCT_AUTOBUILD_PROFILE` override. See
+"Terminal outcomes" below for how its breakers dispatch.
 
 ### `merge` profile specifics
 
@@ -71,9 +78,10 @@ auto-merge at finalize (the driver never merges locally):
 
 ```bash
 scripts/auto-build-loop.sh <feature-id> \
-    [--profile advisory|pr] [--config <path>] \
+    [--profile advisory|pr|merge|unattended] [--config <path>] \
     [--resume] [--dry-run] [--max-phases N] [--start-phase N]
-# Exit: 0 done | 3 milestone-paused | 4 escalated/parked | 1 usage/preflight
+# Exit: 0 done (landed) | 3 milestone-paused | 4 escalated/parked
+#       | 6 terminated_policy (terminal) | 1 usage/preflight
 ```
 
 Config lives at `specs/<feature-id>/automation.json` (template:
@@ -162,6 +170,41 @@ and a `resumed` notification fires. `review_breaker` parking leaves
 **milestone-paused** (exit 3, not an escalation): manual-test + retro, add
 `approved-by: <name> <date>` under the checkpoint, rerun with `--resume`
 (the driver commits the sign-off itself).
+
+## Terminal outcomes & metering (#191, increment A of #190)
+
+Every run now records an explicit ledger `outcome`:
+
+| Outcome | Exit | Meaning | Resumable? |
+|---|---|---|---|
+| `landed` | 0 | all phases done, review-verified | n/a |
+| *(parked)* | 4 | attended breaker — human resolves, `--resume` | yes (playbook above) |
+| `terminated_policy` | 6 | **unattended** breaker — the system deliberately stopped at a defined safety/quality/budget boundary | **no** — terminal in increment A; recovery arrives with #190 increment D (`--resume` is an explicit refusal) |
+| `failed` | 1/5 | the control system itself broke (usage/preflight/supervisor caps) | fix the environment |
+
+Under `unattended`, every breaker that would park instead becomes a
+policy termination: `termination.json` + a mandatory `triage-report.md`
+in the ledger, then best-effort commit/push artifacts via the existing
+precheck-respecting paths — attempted only when the driver owns the
+checkout, every skip journaled, prechecks never weakened (an
+unusable/unauthenticated `gh` downgrades the push/PR capabilities with a
+journaled `capability_downgrade`, never blocks the termination).
+`terminated_policy` is not a success and not a failure of the control
+system. `scripts/cooldown-supervisor.sh` treats exit 6 as terminal —
+never cooled down, relaunched, or reclassified, even when the output
+contains a usage-limit phrase.
+
+**Cost metering (FR-7: a $100 cap means $100).** Review rounds now debit
+the same `caps.cost_usd` as build/fix sessions: the runner emits
+per-invocation cost (`invocation_cost_usd` per round, cumulative `cost`
+block in `loop-summary.json`); a reviewer with no cost channel (free-text
+CLI providers) is debited as a conservative estimate
+(`unattended.budget.estimate_usd_per_invocation`, default $2) into
+`totals.cost_estimated_usd` — flagged `estimated: true` in the journal,
+no separate allowance; the cap check runs on the combined total.
+Estimates are active under `unattended` always (disabling them there is
+a preflight error: unmeterable-and-unestimable) and for attended configs
+that opt in via an `unattended.budget` block; v1 configs are untouched.
 
 ## Safety rails (hard-coded)
 

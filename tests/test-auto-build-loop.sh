@@ -1440,12 +1440,73 @@ assert_eq "attended run writes no triage report" "0" \
 rm -rf "$P"
 
 # FR-1: the completion path records the explicit 'landed' outcome.
+# FR-7/FR-9: v1 attended configs have no estimate policy — the estimated
+# total stays 0 and cap behavior is byte-identical.
 P=$(setup_project); single_phase "$P"
 run_driver "$P"
 assert_exit "attended happy path completes (exit 0)" 0 "$RC"
 assert_eq "ledger outcome landed" "landed" \
     "$(jq -r '.outcome' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "attended v1 run debits no estimates" "0" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 rm -rf "$P"
+
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+echo "=== #191 FR-7: cost metering (review rounds debit the same cap) ==="
+# ══════════════════════════════════════════════════════════════
+
+export CCT_AUTOBUILD_TEST_SEAM=pre-admission
+export CCT_GH_BIN="$GH_STUB"
+
+# An unattended run's gating review invocation has no cost channel (the
+# mock reviewer is free-text CLI) → the conservative estimate (default
+# $2/invocation) debits totals.cost_estimated_usd, flagged in the journal,
+# and the runner's per-round emission lands in the archived loop-summary.
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+run_driver "$P"
+assert_exit "unattended metered run lands (exit 0)" 0 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat/state.json"
+assert_eq "one review invocation estimated at \$2" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$LEDGER" 2>/dev/null)"
+assert_contains "estimate flagged in the journal" \
+    "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "estimated: true"
+SUMMARY_COST="$P/.cct/auto-build/demo-feat/phase-1/review/loop-summary.json"
+assert_eq "runner emitted the invocation count" "1" \
+    "$(jq -r '.cost.invocations' "$SUMMARY_COST" 2>/dev/null)"
+assert_eq "runner counted the unmetered invocation" "1" \
+    "$(jq -r '.cost.unmetered_invocations' "$SUMMARY_COST" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+
+# The cap check runs on the COMBINED total: a cap below the estimate trips
+# cap_exceeded at the next session preflight, and the detail names the
+# estimated component.
+P=$(setup_project); unattended_cfg "$P"
+cfg_set "$P" '.caps.cost_usd=1.5'
+BARE=$(add_remote "$P")
+run_driver "$P"
+assert_exit "combined metered+estimated total trips the cap (exit 6)" 6 "$RC"
+assert_eq "cap termination reason cap_exceeded" "cap_exceeded" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
+assert_contains "cap detail names the estimated component" \
+    "$(jq -r '.detail' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)" "estimated"
+rm -rf "$P" "$BARE"
+
+# FR-7: unmeterable-and-unestimable is a preflight error — unattended with
+# estimate_unmetered=false cannot honestly debit the cap.
+P=$(setup_project); unattended_cfg "$P"
+cfg_set "$P" '.unattended.budget={meter_all_invocations:true,estimate_unmetered:false,estimate_usd_per_invocation:2.0}'
+run_driver "$P"
+assert_exit "unattended without estimates is rejected at load" 1 "$RC"
+assert_contains "rejection names the unestimable contract" "$OUTPUT" "unmeterable-and-unestimable"
+rm -rf "$P"
+
+unset CCT_AUTOBUILD_TEST_SEAM CCT_GH_BIN
 
 echo ""
 

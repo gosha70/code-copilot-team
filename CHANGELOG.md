@@ -10,6 +10,23 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ## [Unreleased]
 
+### Added
+
+- **Unattended policy core + metering (#191, increment A of #190)** —
+  terminal-outcome vocabulary in the auto-build driver (`landed` /
+  `terminated_policy` exit 6 / `failed`); terminate-only disposition
+  dispatch for the new `unattended` profile (fail-closed at config load
+  until increment B ships admission control) with mandatory
+  `termination.json` + `triage-report.md` artifacts and journaled
+  best-effort commit/push; `automation.json` schema_version 2
+  (`shared/schemas/automation.schema.json`) + dedicated jq validator
+  gating every run (`origin_gate` locked to terminate in all
+  increments); full cost accounting — review rounds emit per-invocation
+  cost and debit the same `caps.cost_usd`, with conservative flagged
+  estimates for unmetered invocations; `cooldown-supervisor.sh` treats
+  exit 6 as terminal (never cooled down or relaunched). Attended
+  profiles are byte-identical.
+
 ## [1.1.0]
 
 Pi adopted as a first-class **enforced** coding-agent harness alongside Claude

@@ -101,6 +101,22 @@ assert "does not cool down on an unclassified error" \
   "[[ \"\$(jq -r .cooldowns "$W/.cct/supervisor/demo/run.json")\" == 0 ]]"
 rm -r "$W"
 
+# ── FR-8 (#191): terminated_policy (exit 6) is TERMINAL ──
+# The output deliberately contains a usage-limit phrase AND relaunch is
+# requested: exit 6 must win over both — never cooled down, never
+# relaunched, never reclassified.
+echo "--- policy termination (exit 6) is terminal ---"
+W="$(mkproj open)"
+RC="$(run_sup "$W" 'echo "HTTP 429: usage limit reached"; echo "[auto-build] TERMINATED (policy): cap_exceeded"; exit 6' --on-incomplete relaunch)"
+assert_exit "exit 6 propagates as exit 6 (never relaunched)" 6 "$RC"
+assert "ledger status is terminated_policy" \
+  "[[ \"\$(jq -r .status "$W/.cct/supervisor/demo/run.json")\" == terminated_policy ]]"
+assert "exactly one attempt (no relaunch despite on-incomplete=relaunch)" \
+  "[[ \"\$(jq -r .attempts "$W/.cct/supervisor/demo/run.json")\" == 1 ]]"
+assert "no cooldown despite the usage phrase in output (exit 6 precedence)" \
+  "[[ \"\$(jq -r .cooldowns "$W/.cct/supervisor/demo/run.json")\" == 0 ]]"
+rm -r "$W"
+
 # ── FR-18/19: caps fail deterministically ──
 echo "--- caps ---"
 W="$(mkproj done)"

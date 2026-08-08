@@ -510,6 +510,21 @@ if [[ $REVIEW_EXIT -ne 0 ]]; then
     VERDICT="FAIL"
 fi
 
+# ── #191 FR-7: per-invocation cost emission ──────────────────
+# A backend that reports cost emits the same .total_cost_usd JSON
+# envelope the auto-build driver parses; free-text reviewers have no
+# cost channel and are counted as unmetered here (the driver applies its
+# conservative estimate). Accumulated across rounds in state.json and
+# surfaced per-round in findings-round-N.json (invocation_cost_usd).
+INVOCATION_COST=$(printf '%s\n' "$REVIEW_OUTPUT" | grep '"total_cost_usd"' | tail -1 | \
+    jq -r 'if (type == "object") and ((.total_cost_usd | type) == "number") then .total_cost_usd else empty end' 2>/dev/null || true)
+COST_STATE=$(jq -c '.cost // {measured_usd: 0, invocations: 0, unmetered_invocations: 0}' \
+    "$STATE_FILE" 2>/dev/null || echo '{"measured_usd":0,"invocations":0,"unmetered_invocations":0}')
+COST_STATE=$(echo "$COST_STATE" | jq --arg c "${INVOCATION_COST:-}" \
+    '.invocations += 1
+     | if ($c | length) > 0 then .measured_usd += ($c | tonumber)
+       else .unmetered_invocations += 1 end')
+
 # Parse FINDING| lines into JSON
 FINDINGS_JSON="[]"
 if [[ "$ROUND_VALID" == "true" ]]; then
@@ -562,7 +577,9 @@ $(jq -n \
     --arg provider "$PEER_PROVIDER" \
     --argjson findings "$FINDINGS_JSON" \
     --arg raw_output "$REVIEW_OUTPUT" \
+    --arg cost "${INVOCATION_COST:-}" \
     '{round: $round, verdict: $verdict, reviewer_provider: $provider,
+      invocation_cost_usd: (if ($cost | length) > 0 then ($cost | tonumber) else null end),
       findings: $findings, raw_output: $raw_output}')
 FINDINGS_EOF
 
@@ -622,12 +639,13 @@ jq -n \
     --arg target_ref "$TARGET_REF" \
     --arg last_verdict "$VERDICT" \
     --argjson findings "$ACCUMULATED" \
+    --argjson cost "$COST_STATE" \
     '{current_round: $round, attempt: $attempt, loop_start: $loop_start,
       feature_id: $feature_id, phase: $phase,
       subject_provider: $subject_provider, peer_provider: $peer_provider,
       review_scope: $review_scope, review_specialization: $review_specialization,
       target_ref: $target_ref,
-      last_verdict: $last_verdict, findings: $findings}' \
+      last_verdict: $last_verdict, findings: $findings, cost: $cost}' \
     > "$STATE_FILE"
 
 # ── Write loop-summary.json on PASS ──────────────────────────
@@ -647,11 +665,12 @@ if [[ "$VERDICT" == "PASS" ]]; then
         --argjson bypass false \
         --arg target_ref "$TARGET_REF" \
         --argjson findings "$ACCUMULATED" \
+        --argjson cost "$COST_STATE" \
         '{feature_id: $feature_id, date: $date, phase: $phase, verdict: $verdict,
           rounds_completed: $rounds_completed, attempt_count: $attempt,
           subject_provider: $subject_provider, peer_provider: $peer_provider,
           runner_fingerprint: $runner_fingerprint, bypass: $bypass,
-          target_ref: $target_ref, findings: $findings}' \
+          target_ref: $target_ref, findings: $findings, cost: $cost}' \
         > "$REVIEW_DIR/loop-summary.json"
 
     # Write collaboration artifact
@@ -721,11 +740,12 @@ if [[ "$PHASE" == "plan" ]]; then
         --argjson bypass false \
         --arg target_ref "$TARGET_REF" \
         --argjson findings "$ACCUMULATED" \
+        --argjson cost "$COST_STATE" \
         '{feature_id: $feature_id, date: $date, phase: $phase, verdict: $verdict,
           rounds_completed: $rounds_completed, attempt_count: $attempt,
           subject_provider: $subject_provider, peer_provider: $peer_provider,
           runner_fingerprint: $runner_fingerprint, bypass: $bypass,
-          target_ref: $target_ref, findings: $findings}' \
+          target_ref: $target_ref, findings: $findings, cost: $cost}' \
         > "$REVIEW_DIR/loop-summary.json"
 
     COLLAB_DIR="${CCT_REVIEW_COLLAB_DIR:-$PROJECT_DIR/specs/$FEATURE_ID/collaboration}"
