@@ -785,6 +785,67 @@ debit_review_costs() {
     fi
 }
 
+# #201 Gap 3: caps are frozen in config.snapshot.json at launch, so editing
+# automation.json mid-run had no effect — a user watching spend climb could
+# not raise the cap PROACTIVELY, they had to let the run park first. Caps are
+# the human's control knob, and the cap_exceeded resume path already re-reads
+# them from live config, so we extend that to each phase gate.
+#
+# NOT for `unattended`: #193 binds an unattended run to the config it was
+# ADMITTED against, and an unaudited mid-run policy change from an external
+# edit would break that binding. Unattended runs keep the frozen snapshot and
+# must park/terminate to change a cap.
+refresh_live_caps() {
+    [[ "${PROFILE:-advisory}" == "unattended" ]] && return 0
+    [[ -f "$CONFIG_PATH" ]] || return 0
+    local live_cost
+    live_cost=$(jq -r '.caps.cost_usd // empty' "$CONFIG_PATH" 2>/dev/null || true)
+    [[ -n "$live_cost" ]] || return 0
+    # Only a positive number is a cap; anything else is ignored rather than
+    # silently zeroing the budget.
+    awk -v v="$live_cost" 'BEGIN { exit !(v + 0 > 0) }' || return 0
+    [[ "$live_cost" == "$CAP_COST" ]] && return 0
+    local tmp
+    tmp=$(mktemp)
+    if jq --argjson c "$live_cost" '.caps.cost_usd = $c' "$CONFIG_SNAPSHOT" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$CONFIG_SNAPSHOT"
+        journal "cap_updated" "cost cap \$$CAP_COST -> \$$live_cost (live config, phase gate)"
+        echo "[auto-build] cost cap updated from live config: \$$CAP_COST -> \$$live_cost" >&2
+        CAP_COST="$live_cost"
+        state_set '.caps.max_cost_usd = ($c | tonumber)' --arg c "$CAP_COST"
+        # A cap can be lowered as well as raised — winding a run down is a
+        # legitimate operator action. But a safety cap that is accepted and
+        # not enforced is worse than one that cannot move: without this the
+        # phase gate would commit, report spend OVER the new cap, and let the
+        # run finish `done`. Re-check immediately so a lower cap parks here,
+        # before publish/finalize. For a raise this is a no-op unless spend
+        # is over the new value too, which also deserves a park.
+        check_caps
+    else
+        rm -f "$tmp"
+    fi
+}
+
+# #201 Gap 2: spend was visible only in the dry-run preamble, the final
+# summary, and the cap_exceeded park detail — so a run in flight said nothing
+# about money while a single phase could cost $4.24 against a $25 default.
+report_phase_spend() {
+    local n="$1" spent est total remaining
+    spent=$(state_get '.totals.cost_usd')
+    est=$(state_get '.totals.cost_estimated_usd // 0')
+    total=$(awk -v s="$spent" -v e="$est" 'BEGIN { printf "%.2f", s + e }')
+    remaining=$(awk -v t="$total" -v c="$CAP_COST" 'BEGIN { printf "%.2f", (c - t > 0 ? c - t : 0) }')
+    # Format the cap like the other two figures; a raw "$25 cap" next to
+    # "$4.24 spent" contradicted the documented line.
+    local cap_fmt
+    cap_fmt=$(awk -v c="$CAP_COST" 'BEGIN { printf "%.2f", c }')
+    local line="[auto-build] phase $n complete — \$$total spent of \$$cap_fmt cap (\$$remaining left"
+    if awk -v e="$est" 'BEGIN { exit !(e > 0) }'; then
+        line="$line; \$$est of the spend is estimated"
+    fi
+    echo "$line)" >&2
+}
+
 check_caps() {
     local spent est elapsed
     spent=$(state_get '.totals.cost_usd')
@@ -1403,10 +1464,12 @@ run_phase() {
 
     # Phase gate: origin re-check + artifact commit
     set_status "phase-gate"
+    refresh_live_caps
     phase_gate "$n" "$title"
     state_set '.phases[$p].status = "done" | .phases[$p].last_reviewed_ref = $sha' \
         --arg p "$n" --arg sha "$(git -C "$PROJECT_DIR" rev-parse HEAD)"
     journal "phase_done" "phase $n"
+    report_phase_spend "$n"
 
     # Publish the branch after each phase (pr/merge) so progress — including
     # milestone pauses — is inspectable remotely. advisory never pushes.

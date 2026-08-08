@@ -2008,6 +2008,111 @@ rm -rf "$P"
 rm -f "$BROKEN_REVIEWER" "$BROKEN_PROFILE" "$QUIET_PROFILE" "$TO_PROFILE"
 
 # ══════════════════════════════════════════════════════════════
+echo "=== #201: cost cap visibility and proactive raises ==="
+# ══════════════════════════════════════════════════════════════
+
+# Gap 2: spend was invisible while a run was in flight — only the dry-run
+# preamble, the final summary, and the cap_exceeded park mentioned money,
+# while a single phase can cost several dollars against a $25 default.
+P=$(setup_project); single_phase "$P"
+run_driver "$P"
+assert_exit "run completes (spend-line case)" 0 "$RC"
+assert_eq "each phase reports spend against the cap" "1" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'phase 1 complete — \$' || true)"
+assert_eq "the spend line formats the cap like the spend" "1" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'spent of \$5.00 cap' || true)"
+rm -rf "$P"
+
+# Gap 3: caps are frozen at launch, so a user watching spend climb could not
+# raise the cap without first being parked. Attended runs now re-read
+# caps.cost_usd from the LIVE config at each phase gate. The raise has to
+# happen genuinely MID-RUN, so the build session itself performs it.
+CAP_RAISE_SCRIPT=$(mktemp)
+cat "$DEFAULT_SCRIPT" > "$CAP_RAISE_SCRIPT"
+cat >> "$CAP_RAISE_SCRIPT" << 'SCRIPTLET'
+# The human raises the cap while the run is in flight.
+if [[ -f specs/demo-feat/automation.json ]]; then
+    jq '.caps.cost_usd = 50' specs/demo-feat/automation.json > /tmp/cct-cap.$$ \
+        && mv /tmp/cct-cap.$$ specs/demo-feat/automation.json
+fi
+SCRIPTLET
+P=$(setup_project); single_phase "$P"
+MOCK_CLAUDE_SCRIPT="$CAP_RAISE_SCRIPT" run_driver "$P"
+assert_exit "run completes after a mid-run cap raise" 0 "$RC"
+assert_eq "a mid-run raise is picked up at the phase gate" "1" \
+    "$(grep -c 'cap_updated' "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null || true)"
+assert_eq "the frozen snapshot is updated, not just the variable" "50" \
+    "$(jq -r '.caps.cost_usd' "$P/.cct/auto-build/demo-feat/config.snapshot.json" 2>/dev/null)"
+assert_eq "the raise is announced on stdout" "1" \
+    "$(printf '%s' "$OUTPUT" | grep -c 'cost cap updated from live config' || true)"
+rm -rf "$P"
+rm -f "$CAP_RAISE_SCRIPT"
+
+# A zero (or otherwise non-positive) live cap must be IGNORED, never applied:
+# silently zeroing the budget would park every run at its next check.
+CAP_ZERO_SCRIPT=$(mktemp)
+cat "$DEFAULT_SCRIPT" > "$CAP_ZERO_SCRIPT"
+cat >> "$CAP_ZERO_SCRIPT" << 'SCRIPTLET'
+if [[ -f specs/demo-feat/automation.json ]]; then
+    jq '.caps.cost_usd = 0' specs/demo-feat/automation.json > /tmp/cct-cap0.$$ \
+        && mv /tmp/cct-cap0.$$ specs/demo-feat/automation.json
+fi
+SCRIPTLET
+P=$(setup_project); single_phase "$P"
+MOCK_CLAUDE_SCRIPT="$CAP_ZERO_SCRIPT" run_driver "$P"
+assert_exit "a zero live cap is ignored, run still completes" 0 "$RC"
+assert_eq "a zero live cap never becomes the cap" "0" \
+    "$(grep -c 'cap_updated' "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null || true)"
+assert_eq "the frozen cap is left intact" "5" \
+    "$(jq -r '.caps.cost_usd' "$P/.cct/auto-build/demo-feat/config.snapshot.json" 2>/dev/null)"
+rm -rf "$P"
+rm -f "$CAP_ZERO_SCRIPT"
+
+# An UNATTENDED run stays bound to the config it was ADMITTED against (#193):
+# a mid-run external edit must not become an unaudited policy change.
+CAP_UNATT_SCRIPT=$(mktemp)
+cat "$DEFAULT_SCRIPT" > "$CAP_UNATT_SCRIPT"
+cat >> "$CAP_UNATT_SCRIPT" << 'SCRIPTLET'
+if [[ -f specs/demo-feat/automation.json ]]; then
+    jq '.caps.cost_usd = 999' specs/demo-feat/automation.json > /tmp/cct-cap9.$$ \
+        && mv /tmp/cct-cap9.$$ specs/demo-feat/automation.json
+fi
+SCRIPTLET
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+MOCK_CLAUDE_SCRIPT="$CAP_UNATT_SCRIPT" run_driver "$P"
+assert_eq "unattended ignores live cap edits (admission binding holds)" "0" \
+    "$(grep -c 'cap_updated' "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null || true)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+rm -f "$CAP_UNATT_SCRIPT"
+
+# A cap can be LOWERED as well as raised — winding a run down is a legitimate
+# operator action. But a safety cap that is accepted and not enforced is worse
+# than one that cannot move: the gate would commit, report spend over the new
+# cap, and let the run finish `done`. A lower cap must park immediately.
+CAP_DROP_SCRIPT=$(mktemp)
+cat "$DEFAULT_SCRIPT" > "$CAP_DROP_SCRIPT"
+cat >> "$CAP_DROP_SCRIPT" << 'SCRIPTLET'
+# The human decides the run is too expensive and winds it down mid-flight.
+if [[ -f specs/demo-feat/automation.json ]]; then
+    jq '.caps.cost_usd = 0.001' specs/demo-feat/automation.json > /tmp/cct-capd.$$         && mv /tmp/cct-capd.$$ specs/demo-feat/automation.json
+fi
+SCRIPTLET
+P=$(setup_project); single_phase "$P"
+MOCK_CLAUDE_SCRIPT="$CAP_DROP_SCRIPT" run_driver "$P"
+assert_exit "a mid-run cap DROP below spend parks, never finishes done" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
+assert_eq "the drop parks as cap_exceeded" "cap_exceeded"     "$(jq -r '.reason' "$ESC" 2>/dev/null)"
+assert_eq "the run did not reach done" "0"     "$(jq -r 'select(.status == "done") | 1' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null | grep -c 1 || true)"
+rm -rf "$P"
+rm -f "$CAP_DROP_SCRIPT"
+
+
+# ══════════════════════════════════════════════════════════════
 # #205: the review loop's wall-clock must not count parked time
 # ══════════════════════════════════════════════════════════════
 

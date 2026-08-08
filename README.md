@@ -579,6 +579,65 @@ Each template ships a `.github/workflows/` file so CI is wired up the moment the
 
 Project-level rules override global rules. More specific always wins.
 
+## Cost & Safety Caps
+
+An autonomous build (`auto-build-loop.sh`, `claude-code build …`) runs under
+spend and time caps declared in `specs/<feature-id>/automation.json`,
+scaffolded from `shared/templates/sdd/automation-template.json`:
+
+```json
+"caps": {
+  "wall_clock_sec": 14400,
+  "cost_usd": 25
+}
+```
+
+**The cost default is $25 and it is real money.** A single build phase can
+cost several dollars on a large model, so a multi-phase feature can approach
+that default. Set `caps.cost_usd` deliberately before launching rather than
+inheriting it.
+
+**Live visibility.** Every phase gate prints the running total:
+
+```
+[auto-build] phase 1 complete — $4.24 spent of $25.00 cap ($20.76 left)
+```
+
+Unmetered reviewer invocations are debited as flagged conservative estimates,
+and the line says so when any estimate is included. The final
+`automation-summary.md` repeats the metered/estimated split.
+
+**When the cap is hit** the run parks rather than stopping dead:
+
+```
+[auto-build] PARK: cap_exceeded — cost cap: spent $24.10 metered + $2 estimated of $25
+```
+
+Raise `caps.cost_usd` in `automation.json` and re-run with `--resume`; the
+resume path re-reads `caps` from the live config and restarts the wall-clock
+guard.
+
+**Raising the cap mid-run.** Config is frozen into
+`.cct/auto-build/<feature-id>/config.snapshot.json` at launch, so most edits
+to `automation.json` during a run are ignored by design. `caps.cost_usd` is
+the exception: attended profiles (`advisory`, `pr`, `merge`) re-read it from
+the live config **at each phase gate**, so a raise applies without waiting to
+be parked. The change is announced on stdout and journalled as `cap_updated`.
+A non-positive value is ignored. A **lower** cap is honoured too — winding
+an expensive run down is a legitimate action — and is enforced immediately:
+if spend already exceeds the new value the gate parks `cap_exceeded` there
+and then, rather than committing and finishing over budget. The
+`unattended` profile does **not** re-read caps — such a run is bound to the
+config it was admitted against, and an unaudited mid-run policy change
+would break that binding; it must park or terminate to change a cap.
+
+> **Upgrading from before v1.1?** The cost cap was silently inert in earlier
+> versions: the driver parsed `total_cost_usd` from the reviewer CLI's result
+> as a single object, but the current CLI returns an array, so spend
+> evaluated to `0` and `caps.cost_usd` never accrued or triggered (fixed in
+> #197/#198). If you relied on that cap for protection, you were not
+> protected. Re-check the value you have set before your next run.
+
 ## Four-Phase Workflow
 
 | Phase | Model | Effort | Delegation | What Happens |
@@ -675,7 +734,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh            72 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        303 auto-build driver tests
+│   ├── test-auto-build-loop.sh        317 auto-build driver tests
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
