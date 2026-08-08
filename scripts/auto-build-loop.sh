@@ -204,6 +204,9 @@ triage_report() {
         echo "- Status at termination: $(state_get '.status' 2>/dev/null || echo preflight)"
         echo "- Branch: ${BRANCH_NAME:-?} (base ${BRANCH_BASE:-?})"
         echo "- Cost: metered \$$(state_get '.totals.cost_usd' 2>/dev/null || echo 0), estimated \$$(state_get '.totals.cost_estimated_usd' 2>/dev/null || echo 0) (cap \$${CAP_COST:-?})"
+        if [[ -n "${CAPS_DOWNGRADED_CAUSE:-}" ]]; then
+            echo "- Capabilities: DOWNGRADED — $CAPS_DOWNGRADED_CAUSE (push/PR artifacts skipped)"
+        fi
         echo "- verification.yaml state: not present — requirement-to-verifier traceability lands with #190 increment B"
         echo ""
         echo "The system functioned correctly and deliberately stopped at a"
@@ -423,18 +426,6 @@ load_config() {
             echo "Error: unknown profile '$PROFILE' (expected advisory|pr|merge|unattended)." >&2
             exit 1 ;;
     esac
-    # #191 FR-2: NOTHING runs unattended before #190 increment B (admission
-    # control). Fail closed here — machinery below is reachable only through
-    # the documented, grep-able test seam that increment B will REPLACE with
-    # real admission. This is not an operator escape hatch.
-    if [[ "$PROFILE" == "unattended" \
-          && "${CCT_AUTOBUILD_TEST_SEAM:-}" != "pre-admission" ]]; then
-        echo "Error: profile 'unattended' cannot run yet — admission control" >&2
-        echo "(#190 increment B: verification.yaml + validate-spec --unattended)" >&2
-        echo "is not available. Use profile 'merge' with attended escalation," >&2
-        echo "or wait for increment B." >&2
-        exit 1
-    fi
     # merge-profile config (all fail-closed defaults). enabled is the final
     # switch; require_branch_protection guards merging into an unprotected base.
     MERGE_ENABLED=$(cfg '.merge.enabled' 'false')
@@ -469,6 +460,23 @@ load_config() {
         echo "(schema_version 2, explicit caps, unattended block) — it cannot be" >&2
         echo "requested via --profile or CCT_AUTOBUILD_PROFILE." >&2
         exit 1
+    fi
+    # #193 (Increment B of #190): REAL admission control. An unattended
+    # run must pass the machine-checkable §11 bar (finalized
+    # verification.yaml, full FR coverage, sha binding, executable
+    # verifiers, governance, green test.command) BEFORE anything runs.
+    # A refusal is a preflight config error (exit 1): the run was never
+    # admitted, so there is nothing to terminate. Admitted runs execute
+    # unattended — the first increment where that happens. Dry runs skip
+    # admission (zero side effects; admission executes test.command).
+    if [[ "$PROFILE" == "unattended" && "$DRY_RUN" != "true" ]]; then
+        echo "[auto-build] unattended admission: validate-spec.sh --unattended --feature-id $FEATURE_ID" >&2
+        if ! bash "$SCRIPT_DIR/validate-spec.sh" --unattended --feature-id "$FEATURE_ID" >&2; then
+            echo "Error: unattended admission REFUSED — the run was not admitted (#190 §11;" >&2
+            echo "see the failing checks above). Fix the artifact/governance and rerun." >&2
+            exit 1
+        fi
+        echo "[auto-build] unattended admission PASSED — run admitted." >&2
     fi
     if [[ -z "$GATING_REVIEWER" ]]; then
         echo "Error: config review.reviewers must contain at least one entry with gating=true." >&2
@@ -526,8 +534,15 @@ preflight() {
                 local gh_cause="gh binary not usable: $GH_BIN (override with CCT_GH_BIN)"
                 [[ "$gh_fail_kind" == "auth" ]] && gh_cause="'gh auth status' failed"
                 CAN_PUSH=false; CAN_OPEN_PR=false; CAN_MERGE=false
+                # #193 FR-7: the downgrade is LEDGER STATE, not just a
+                # journal line — finalize and the summary must report the
+                # effective downgraded-unattended state, never "advisory".
+                CAPS_DOWNGRADED_CAUSE="$gh_cause"
                 mkdir -p "$LEDGER_DIR"
                 journal "capability_downgrade" "$gh_cause — push/PR artifacts will be skipped (best-effort, FR-5)"
+                if [[ -f "$STATE" ]]; then
+                    state_set '.capability_downgrade = $c' --arg c "$gh_cause"
+                fi
                 echo "[auto-build] WARN: $gh_cause — unattended run continues without push/PR artifacts." >&2
             elif [[ "$gh_fail_kind" == "binary" ]]; then
                 echo "Error: gh binary not usable: $GH_BIN (override with CCT_GH_BIN) — required for profile '$PROFILE'." >&2
@@ -671,12 +686,14 @@ write_ledger_skeleton() {
         --argjson max_phases "$MAX_PHASES" --argjson max_fix "$MAX_FIX_SESSIONS" \
         --argjson wall "$CAP_WALL_CLOCK" --argjson cost "$CAP_COST" \
         --argjson milestone_every "$MILESTONE_EVERY" --argjson started "$(now_epoch)" \
+        --arg capdown "${CAPS_DOWNGRADED_CAUSE:-}" \
         '{schema_version: 1, feature_id: $fid, profile: $profile,
           status: "preflight", current_phase: 0,
           branch: $branch, branch_base_ref: $base,
           phases: {},
           caps: {max_phases: $max_phases, max_fix_sessions_per_phase: $max_fix,
                  max_wall_clock_sec: $wall, max_cost_usd: $cost},
+          capability_downgrade: (if $capdown == "" then null else $capdown end),
           outcome: null, disposition_reason: null,
           totals: {cost_usd: 0, cost_estimated_usd: 0, started_epoch: $started},
           milestones: {every_n_phases: $milestone_every, last_paused_after_phase: 0},
@@ -1673,6 +1690,10 @@ set_status "finalizing"
         echo "Profile: merge — branch $BRANCH_NAME pushed; PR opened; gated auto-merge per merge.enabled + branch protection (GitHub merges when required checks pass; the driver never merges locally)."
     elif [[ "$CAN_OPEN_PR" == "true" ]]; then
         echo "Profile: $PROFILE — branch $BRANCH_NAME pushed to $BRANCH_REMOTE; a pull request tracks the work (the driver never merges)."
+    elif [[ -n "${CAPS_DOWNGRADED_CAUSE:-}" ]]; then
+        # #193 FR-7: honest verdicts — a downgraded run reports its
+        # EFFECTIVE state, never a profile it was not running.
+        echo "Profile: $PROFILE (capabilities downgraded: $CAPS_DOWNGRADED_CAUSE) — nothing was pushed. Branch: $BRANCH_NAME."
     else
         echo "Profile: advisory — nothing was pushed. Branch: $BRANCH_NAME."
     fi
@@ -1693,6 +1714,8 @@ if [[ "$CAN_OPEN_PR" == "true" ]]; then
             FINAL_MSG="$FINAL_MSG (merge.enabled=false — PR open, not merged)"
         fi
     fi
+elif [[ -n "${CAPS_DOWNGRADED_CAUSE:-}" ]]; then
+    FINAL_MSG="$FINAL_MSG ($PROFILE, capabilities downgraded: $CAPS_DOWNGRADED_CAUSE — nothing pushed)"
 else
     FINAL_MSG="$FINAL_MSG (advisory — nothing pushed)"
 fi
