@@ -115,5 +115,13 @@ else
         exit 1
     fi
 
+    # #193 out-of-band cost channel: local inference has a true marginal
+    # cost of $0 — report it as MEASURED so the driver does not apply
+    # the conservative estimate. Written by this adapter process, never
+    # derived from model output.
+    if [[ -n "${CCT_REVIEW_COST_FILE:-}" ]]; then
+        printf '{"total_cost_usd": 0.0}\n' > "$CCT_REVIEW_COST_FILE" 2>/dev/null || true
+    fi
+
     echo "$RESPONSE_TEXT"
 fi

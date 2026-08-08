@@ -441,6 +441,14 @@ echo "Running review round $NEXT_ROUND via '$PEER_PROVIDER' (type: $PROVIDER_TYP
 # SSH_AUTH_SOCK and GPG_AGENT_INFO are unset to prevent commit signing.
 SANDBOX_ENV="env -u SSH_AUTH_SOCK -u GPG_AGENT_INFO CCT_READ_ONLY=true"
 
+# ── #193: out-of-band cost channel (A-precondition 1) ────────
+# Measured cost arrives ONLY via this file, written by the provider
+# ADAPTER process (operator-configured code) — never parsed out of the
+# reviewer's text, which is model-controlled and was demonstrably
+# forgeable. Fresh per invocation; deleted before the provider runs.
+export CCT_REVIEW_COST_FILE="$REVIEW_DIR/invocation-cost.json"
+rm -f "$CCT_REVIEW_COST_FILE"
+
 if [[ -n "$TIMEOUT_CMD" ]]; then
     REVIEW_OUTPUT=$(cd "$SANDBOX_DIR" && $TIMEOUT_CMD "$PROVIDER_TIMEOUT" $SANDBOX_ENV bash -c "$RESOLVED_CMD" 2>&1) && REVIEW_EXIT=0 || REVIEW_EXIT=$?
 else
@@ -510,24 +518,24 @@ if [[ $REVIEW_EXIT -ne 0 ]]; then
     VERDICT="FAIL"
 fi
 
-# ── #191 FR-7: per-invocation cost emission ──────────────────
-# A backend that reports cost emits the same .total_cost_usd JSON
-# envelope the auto-build driver parses; free-text reviewers have no
-# cost channel and are counted as unmetered here (the driver applies its
-# conservative estimate). Accumulated across rounds in state.json and
+# ── #193 FR-6: per-invocation cost, out-of-band only ─────────
+# Measured cost is read EXCLUSIVELY from CCT_REVIEW_COST_FILE, written
+# by the provider adapter (see provider-adapters/; cli commands may opt
+# in via the exported env var). The increment-A in-band final-line
+# envelope acceptance is REMOVED: the reviewer's text is model-
+# controlled and can never be a measurement channel — a forged
+# "measured $0" would suppress the conservative estimate, and a forged
+# negative would credit the budget. Anything missing/invalid/negative
+# counts as unmetered, which can only OVERSTATE cost (the driver debits
+# its conservative estimate). Accumulated across rounds in state.json;
 # surfaced per-round in findings-round-N.json (invocation_cost_usd).
-#
-# The envelope is accepted ONLY as the FINAL non-empty line of the
-# output AND only when it carries a session identity key — review PROSE
-# that merely quotes a cost line (e.g. a review of this very code) must
-# never be treated as measurement: a forged "measured $0" would suppress
-# the conservative estimate and reopen the FR-7 hole. Anything that
-# fails these checks counts as unmetered, which can only OVERSTATE cost.
-INVOCATION_COST=$(printf '%s\n' "$REVIEW_OUTPUT" | awk 'NF { last = $0 } END { print last }' | \
-    jq -r 'if (type == "object") and ((.total_cost_usd | type) == "number")
+INVOCATION_COST=""
+if [[ -f "$CCT_REVIEW_COST_FILE" ]]; then
+    INVOCATION_COST=$(jq -r 'if (type == "object") and ((.total_cost_usd | type) == "number")
               and (.total_cost_usd >= 0)
-              and (has("session_id") or has("subtype"))
-           then .total_cost_usd else empty end' 2>/dev/null || true)
+           then .total_cost_usd else empty end' "$CCT_REVIEW_COST_FILE" 2>/dev/null || true)
+    rm -f "$CCT_REVIEW_COST_FILE"
+fi
 COST_STATE=$(jq -c '.cost // {measured_usd: 0, invocations: 0, unmetered_invocations: 0}' \
     "$STATE_FILE" 2>/dev/null || echo '{"measured_usd":0,"invocations":0,"unmetered_invocations":0}')
 COST_STATE=$(echo "$COST_STATE" | jq --arg c "${INVOCATION_COST:-}" \

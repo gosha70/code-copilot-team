@@ -77,6 +77,13 @@ printf '{"subtype":"%s","session_id":"mock-session-%s","total_cost_usd":%s,"num_
 MOCK
 chmod +x "$MOCK_BIN/claude"
 
+# Per-RUN reviewed marker: an absolute /tmp path here is shared global
+# state — a concurrent suite run on the same host deletes it mid-round
+# and flips the FAIL-once mocks back to FAIL (observed as panel-test
+# flakiness). Unique per invocation.
+MOCK_REVIEWED_DIR="$(mktemp -d)"
+MOCK_REVIEWED_MARKER="$MOCK_REVIEWED_DIR/cct-mock-reviewed"
+
 # ── Mock reviewer profiles (same shapes as test-review-loop.sh) ──
 
 PASS_PROFILE=$(mktemp)
@@ -92,12 +99,12 @@ TOML
 
 FAIL_ONCE_PROFILE=$(mktemp)
 # Fails round 1, passes later rounds (marker file distinguishes rounds).
-cat > "$FAIL_ONCE_PROFILE" << 'TOML'
+cat > "$FAIL_ONCE_PROFILE" << TOML
 [defaults]
 peer_for.claude = "mock"
 [providers.mock]
 type = "cli"
-command = "if [ -f /tmp/cct-mock-reviewed ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch /tmp/cct-mock-reviewed && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|near top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
+command = "if [ -f $MOCK_REVIEWED_MARKER ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch $MOCK_REVIEWED_MARKER && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|near top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
 timeout_sec = 10
 healthcheck = "true"
 TOML
@@ -196,12 +203,12 @@ cfg_set() {
 # ── Panel profile (increment E): gating 'mock' (FAIL once → PASS) + advisory
 # 'mock-adv' (always emits a security finding) + optional unhealthy advisory ──
 PANEL_PROFILE=$(mktemp)
-cat > "$PANEL_PROFILE" << 'TOML'
+cat > "$PANEL_PROFILE" << TOML
 [defaults]
 peer_for.claude = "mock"
 [providers.mock]
 type = "cli"
-command = "if [ -f /tmp/cct-mock-reviewed ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch /tmp/cct-mock-reviewed && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|near top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
+command = "if [ -f $MOCK_REVIEWED_MARKER ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch $MOCK_REVIEWED_MARKER && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|near top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
 timeout_sec = 10
 healthcheck = "true"
 [providers.mock-adv]
@@ -238,7 +245,7 @@ cat > "$PANEL_CAPTURE_PROFILE" << TOML
 peer_for.claude = "mock"
 [providers.mock]
 type = "cli"
-command = "cp {review_request} $GATING_REQ_CAPTURE && if [ -f /tmp/cct-mock-reviewed ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch /tmp/cct-mock-reviewed && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
+command = "cp {review_request} $GATING_REQ_CAPTURE && if [ -f $MOCK_REVIEWED_MARKER ]; then printf '### Summary\nFixed.\n\n### Findings\n\n### Verdict\nPASS\n'; else touch $MOCK_REVIEWED_MARKER && printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|top|Missing check|Add check\n\n### Verdict\nFAIL\n'; fi"
 timeout_sec = 10
 healthcheck = "true"
 [providers.mock-adv]
@@ -248,7 +255,7 @@ timeout_sec = 10
 healthcheck = "true"
 TOML
 
-trap 'rm -rf "$MOCK_BIN" "$GH_BIN_DIR" "$PASS_PROFILE" "$FAIL_ONCE_PROFILE" "$FAIL_ALWAYS_PROFILE" "$DOWN_PROFILE" "$PANEL_PROFILE" "$PANEL_ADV_DOWN_PROFILE" "$PANEL_CAPTURE_PROFILE" "$GATING_REQ_CAPTURE" "$ADV_REQ_CAPTURE" /tmp/cct-mock-reviewed' EXIT
+trap 'rm -rf "$MOCK_BIN" "$GH_BIN_DIR" "$PASS_PROFILE" "$FAIL_ONCE_PROFILE" "$FAIL_ALWAYS_PROFILE" "$DOWN_PROFILE" "$PANEL_PROFILE" "$PANEL_ADV_DOWN_PROFILE" "$PANEL_CAPTURE_PROFILE" "$GATING_REQ_CAPTURE" "$ADV_REQ_CAPTURE" "$MOCK_REVIEWED_DIR"' EXIT
 
 # ── Project factory ───────────────────────────────────────────
 
@@ -369,7 +376,7 @@ run_driver() {
     local project="$1"; shift
     local counter
     counter=$(mktemp)
-    rm -f /tmp/cct-mock-reviewed
+    rm -f "$MOCK_REVIEWED_MARKER"
     RC=0
     OUTPUT=$(cd "$project" && \
         CCT_PROJECT_DIR="$project" \
@@ -1255,15 +1262,38 @@ unattended_cfg() {
         | .unattended={on_review_breaker:"terminate", on_stale_finding:"terminate", on_origin_gate:"terminate"}'
 }
 
-# FR-2: NOTHING runs unattended before #190 increment B — fail closed at
-# load, before any session, ledger, or termination machinery.
+# Admit a fixture (#193 increment B): generate the verification draft,
+# finalize it with the fixture's own test script as the deterministic
+# verifier, and commit — the run then passes real admission.
+admit_project() {
+    local dir="$1" f="$1/specs/demo-feat/verification.yaml"
+    CCT_SPECS_DIR="$dir/specs" bash "$SCRIPT_DIR/../scripts/generate-verification-draft.sh" demo-feat >/dev/null
+    sed -i '' 's/^status: draft/status: finalized/' "$f" 2>/dev/null || \
+        sed -i 's/^status: draft/status: finalized/' "$f"
+    sed -i '' 's|test: "TODO.*|test: "project-test.sh"|' "$f" 2>/dev/null || \
+        sed -i 's|test: "TODO.*|test: "project-test.sh"|' "$f"
+    git -C "$dir" add -A && git -C "$dir" commit -q -m "verification artifact"
+}
+
+# #193 FR-5: an unattended run WITHOUT a finalized verification artifact
+# is REFUSED at admission — exit 1, un-admitted, no ledger, no
+# termination machinery. (The A-era test seam is gone; admission is the
+# only gate.)
 P=$(setup_project); unattended_cfg "$P"
 run_driver "$P"
-assert_exit "unattended without admission fails closed (exit 1, not 6)" 1 "$RC"
-assert_contains "fail-closed message names admission control" "$OUTPUT" "admission control"
-assert_eq "fail-closed run writes no termination artifact" "0" \
+assert_exit "unattended without a verification artifact is refused (exit 1, not 6)" 1 "$RC"
+assert_contains "refusal names the admission bar" "$OUTPUT" "admission REFUSED"
+assert_eq "refused run writes no termination artifact" "0" \
     "$([[ -f "$P/.cct/auto-build/demo-feat/termination.json" ]] && echo 1 || echo 0)"
+# Dry runs stay side-effect-free and skip admission (which executes
+# test.command) — the planning surface is unchanged.
+run_driver "$P" --dry-run
+assert_exit "unattended dry run skips admission (exit 0)" 0 "$RC"
 rm -rf "$P"
+
+# The A-era test seam is deleted — real admission replaced it.
+assert_eq "CCT_AUTOBUILD_TEST_SEAM is gone from the driver" "0" \
+    "$(grep -c 'CCT_AUTOBUILD_TEST_SEAM' "$DRIVER")"
 
 # FR-6: the dedicated validator gates every run (attended included) — a v1
 # config carrying an unattended block is a violation, not a silent pass.
@@ -1288,21 +1318,42 @@ assert_eq "no breaker call site bypasses dispose()" "0" \
 assert_eq "termination artifacts add no force-push (prechecks not weakened)" "0" \
     "$(grep -cE 'push[^|]*--force|push[^|]*[[:space:]]-f([[:space:]]|$)' "$DRIVER")"
 
-# End-to-end terminations reach the dispatch machinery through the
-# documented test seam that increment B will REPLACE with real admission.
-# The gh stub keeps these cases deterministic: without it, hosts with an
+# End-to-end terminations now pass REAL admission first. The gh stub
+# keeps these cases deterministic: without it, hosts with an
 # authenticated real gh keep CAN_PUSH=true while CI (no gh auth) takes
 # the capability-downgrade path — two different journal trails.
-export CCT_AUTOBUILD_TEST_SEAM=pre-admission
 export CCT_GH_BIN="$GH_STUB"
 
-# origin_gate at preflight → terminated_policy, exit 6, mandatory artifacts
-P=$(setup_project); unattended_cfg "$P"
+# Broken origin at admission time → REFUSAL (exit 1, un-admitted), not a
+# termination: origin is one of the non-executing governance gates.
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
 sed -i '' 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md" 2>/dev/null || \
     sed -i 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md"
 git -C "$P" add -A && git -C "$P" commit -q -m "break origin"
 run_driver "$P"
-assert_exit "unattended origin gate terminates (exit 6)" 6 "$RC"
+assert_exit "origin drift at admission is a refusal (exit 1)" 1 "$RC"
+assert_contains "origin refusal comes from the admission bar" "$OUTPUT" "admission REFUSED"
+assert_eq "origin refusal writes no termination artifact" "0" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/termination.json" ]] && echo 1 || echo 0)"
+rm -rf "$P"
+
+# origin_gate MID-RUN (the build itself derails the origin frontmatter)
+# → phase-gate re-check trips → terminated_policy, exit 6, mandatory
+# artifacts. Admission cannot subsume the phase gate.
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+ORIGIN_DRIFT_SCRIPT=$(mktemp)
+cat > "$ORIGIN_DRIFT_SCRIPT" << 'SCRIPTLET'
+if [[ ! -f demo.sh ]]; then
+    printf '#!/usr/bin/env bash\necho ok\n' > demo.sh
+    sed -i '' 's/^  type: internal$/  issue: missing-repo#0/' specs/demo-feat/plan.md 2>/dev/null || \
+        sed -i 's/^  type: internal$/  issue: missing-repo#0/' specs/demo-feat/plan.md
+fi
+SCRIPTLET
+MOCK_CLAUDE_SCRIPT="$ORIGIN_DRIFT_SCRIPT" run_driver "$P"
+assert_exit "mid-run origin drift terminates (exit 6)" 6 "$RC"
 TERM="$P/.cct/auto-build/demo-feat/termination.json"
 assert_eq "termination reason origin_gate" "origin_gate" "$(jq -r '.reason' "$TERM" 2>/dev/null)"
 assert_eq "ledger outcome terminated_policy" "terminated_policy" \
@@ -1313,11 +1364,13 @@ assert_eq "triage report generated (mandatory artifact)" "1" \
     "$([[ -f "$P/.cct/auto-build/demo-feat/triage-report.md" ]] && echo 1 || echo 0)"
 assert_contains "triage report names the reason" \
     "$(cat "$P/.cct/auto-build/demo-feat/triage-report.md" 2>/dev/null)" "origin_gate"
-rm -rf "$P"
+assert_contains "the PHASE GATE fired, not the preflight check" \
+    "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "after phase"
+rm -f "$ORIGIN_DRIFT_SCRIPT"; rm -rf "$P" "$BARE"
 
 # review_breaker mid-run + BLOCKED PUSH (no remote): mandatory artifacts
 # still land locally and the skip is journaled — never forced.
-P=$(setup_project); unattended_cfg "$P"
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
 REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
 assert_exit "unattended review breaker terminates (exit 6)" 6 "$RC"
 assert_eq "termination reason review_breaker" "review_breaker" \
@@ -1329,6 +1382,8 @@ assert_contains "blocked push journaled as artifact skip" \
     "termination push failed or refused by prechecks"
 assert_eq "triage report generated on mid-run termination" "1" \
     "$([[ -f "$P/.cct/auto-build/demo-feat/triage-report.md" ]] && echo 1 || echo 0)"
+assert_contains "triage reports the REAL verification.yaml state" \
+    "$(cat "$P/.cct/auto-build/demo-feat/triage-report.md" 2>/dev/null)" "verification.yaml: finalized, 2 requirement(s) mapped"
 # terminated_policy is terminal in increment A: --resume is refused.
 run_driver "$P" --resume
 assert_exit "terminated run refuses --resume (exit 1)" 1 "$RC"
@@ -1338,7 +1393,7 @@ rm -rf "$P"
 # cap_exceeded → terminated_policy. Needs a working remote: the unattended
 # ladder pushes after phase 1, and the cap trips at phase 2's session
 # preflight — the push must not be the first breaker hit.
-P=$(setup_project); unattended_cfg "$P"
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
 BARE=$(add_remote "$P")
 MOCK_CLAUDE_COST=6 run_driver "$P"
 assert_exit "unattended cost cap terminates (exit 6)" 6 "$RC"
@@ -1349,20 +1404,17 @@ rm -rf "$P" "$BARE"
 # Regression (user P1 / CI): an unusable or unauthenticated gh must NEVER
 # block a policy termination — push/PR artifacts are best-effort (FR-5).
 # The capabilities are downgraded (journaled) and exit 6 still happens.
-P=$(setup_project); unattended_cfg "$P"
-sed -i '' 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md" 2>/dev/null || \
-    sed -i 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md"
-git -C "$P" add -A && git -C "$P" commit -q -m "break origin"
-GH_AUTH_FAIL=1 run_driver "$P"
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
+GH_AUTH_FAIL=1 REVIEW_PROFILE="$DOWN_PROFILE" run_driver "$P"
 assert_exit "gh-less unattended termination still exits 6" 6 "$RC"
-assert_eq "gh-less termination reason recorded" "origin_gate" \
+assert_eq "gh-less termination reason recorded" "provider_unavailable" \
     "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
 assert_contains "gh downgrade journaled (capabilities, not a hard error)" \
     "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "capability_downgrade"
 rm -rf "$P"
 
 # git_anomaly (no-op build session) → terminated_policy
-P=$(setup_project); unattended_cfg "$P"
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
 NOOP_SCRIPT=$(mktemp); echo ":" > "$NOOP_SCRIPT"
 MOCK_CLAUDE_SCRIPT="$NOOP_SCRIPT" run_driver "$P"
 assert_exit "unattended no-op build terminates (exit 6)" 6 "$RC"
@@ -1371,7 +1423,7 @@ assert_eq "termination reason git_anomaly" "git_anomaly" \
 rm -f "$NOOP_SCRIPT"; rm -rf "$P"
 
 # provider_unavailable at preflight → terminated_policy
-P=$(setup_project); unattended_cfg "$P"
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
 REVIEW_PROFILE="$DOWN_PROFILE" run_driver "$P"
 assert_exit "unattended unhealthy reviewer terminates (exit 6)" 6 "$RC"
 assert_eq "termination reason provider_unavailable" "provider_unavailable" \
@@ -1385,11 +1437,9 @@ P=$(setup_project)
 git -C "$P" branch -m master
 unattended_cfg "$P"
 cfg_set "$P" '.branch.base="master"'
-sed -i '' 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md" 2>/dev/null || \
-    sed -i 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md"
-git -C "$P" add -A && git -C "$P" commit -q -m "break origin"
+admit_project "$P"
 HEAD_BEFORE=$(git -C "$P" rev-parse HEAD)
-run_driver "$P"
+REVIEW_PROFILE="$DOWN_PROFILE" run_driver "$P"
 assert_exit "preflight termination on master still exits 6" 6 "$RC"
 assert_eq "master fixture: status terminated_policy, not parked" "terminated_policy" \
     "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
@@ -1401,18 +1451,82 @@ rm -rf "$P"
 
 # Regression (review P1): a preflight termination with an operator's
 # dirty worktree must never sweep those files into an artifact commit.
-P=$(setup_project); unattended_cfg "$P"
-sed -i '' 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md" 2>/dev/null || \
-    sed -i 's/^  type: internal$/  issue: missing-repo#0/' "$P/specs/demo-feat/plan.md"
-git -C "$P" add -A && git -C "$P" commit -q -m "break origin"
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
 printf 'operator scratch — not the driver'"'"'s to commit\n' > "$P/scratch-work.txt"
 HEAD_BEFORE=$(git -C "$P" rev-parse HEAD)
-run_driver "$P"
+REVIEW_PROFILE="$DOWN_PROFILE" run_driver "$P"
 assert_exit "dirty-worktree preflight termination exits 6" 6 "$RC"
 assert_eq "dirty worktree: HEAD unmoved" "$HEAD_BEFORE" "$(git -C "$P" rev-parse HEAD)"
 assert_contains "dirty worktree: operator file left uncommitted" \
     "$(git -C "$P" status --porcelain)" "scratch-work.txt"
 rm -rf "$P"
+
+# Regression (review P1): admission binds to the EFFECTIVE config — a
+# --config override is what the run executes, so it is what admission
+# must validate; a bad override can never ride in on the good default.
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
+BAD_CFG=$(mktemp)
+jq '.test.command = "bash ./no-such-red-suite.sh"' "$P/specs/demo-feat/automation.json" > "$BAD_CFG"
+run_driver "$P" --config "$BAD_CFG"
+assert_exit "bad --config override is refused at admission" 1 "$RC"
+assert_contains "override refusal comes from the admission bar" "$OUTPUT" "admission REFUSED"
+rm -f "$BAD_CFG"; rm -rf "$P"
+
+# Regression (final review P2): a RESUME validates the FROZEN snapshot —
+# the config the run actually executes with — never the live file, even
+# when the live file has diverged since the freeze.
+P=$(setup_project); unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+run_driver "$P"
+assert_exit "unattended two-phase run pauses at milestone (exit 3)" 3 "$RC"
+cfg_set "$P" '.caps.cost_usd=424242'
+echo "approved-by: gosha 2026-08-08" >> "$P/specs/demo-feat/automation-summary.md"
+run_driver "$P" --resume
+assert_exit "diverged-live resume completes (exit 0)" 0 "$RC"
+assert_contains "resume admission validated the frozen snapshot" "$OUTPUT" "config.snapshot.json"
+assert_eq "the run's caps stayed frozen (snapshot governs)" "5" \
+    "$(jq -r '.caps.max_cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+
+# Regression (review P2): admission's suite run happens in a THROWAWAY
+# worktree — a suite that emits artifacts must not dirty the real tree
+# and self-sabotage the clean-worktree preflight of the admitted run.
+# (gh-downgraded so the landed path needs no remote/PR wiring.)
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+python3 - "$P/project-test.sh" << 'EOF'
+import sys
+p = sys.argv[1]
+open(p, 'w').write('#!/usr/bin/env bash\ntouch .suite-artifact.out\nexit 0\n')
+EOF
+git -C "$P" add -A && git -C "$P" commit -q -m "artifact-emitting suite"
+admit_project "$P"
+GH_AUTH_FAIL=1 run_driver "$P"
+assert_exit "artifact-emitting suite is admitted AND runs (exit 0)" 0 "$RC"
+rm -rf "$P"
+
+# Regression (review P2): a --resume on a terminal ledger refuses WITHOUT
+# executing the project suite (decidable from the ledger alone).
+P=$(setup_project); unattended_cfg "$P"
+SUITE_COUNTER=$(mktemp)
+python3 - "$P/project-test.sh" "$SUITE_COUNTER" << 'EOF'
+import sys
+p, counter = sys.argv[1], sys.argv[2]
+open(p, 'w').write(f'#!/usr/bin/env bash\necho run >> "{counter}"\nexit 0\n')
+EOF
+git -C "$P" add -A && git -C "$P" commit -q -m "counting suite"
+admit_project "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "counting fixture terminates (exit 6)" 6 "$RC"
+RUNS_AT_TERMINATION=$(wc -l < "$SUITE_COUNTER" | tr -d ' ')
+run_driver "$P" --resume
+assert_exit "terminal resume still refused (exit 1)" 1 "$RC"
+assert_eq "doomed resume never executed the suite" "$RUNS_AT_TERMINATION" \
+    "$(wc -l < "$SUITE_COUNTER" | tr -d ' ')"
+rm -f "$SUITE_COUNTER"; rm -rf "$P"
 
 # Regression (review P2): the unattended profile cannot be requested via
 # --profile override past the validator — it must be declared in the config.
@@ -1422,7 +1536,7 @@ assert_exit "--profile unattended over an attended config is rejected" 1 "$RC"
 assert_contains "override rejection names the declaration rule" "$OUTPUT" "must be declared"
 rm -rf "$P"
 
-unset CCT_AUTOBUILD_TEST_SEAM CCT_GH_BIN
+unset CCT_GH_BIN
 
 # FR-9 byte-identical attended behavior: a v2 config with an unattended
 # block present but an ATTENDED profile still parks (exit 4), and writes
@@ -1451,13 +1565,29 @@ assert_eq "attended v1 run debits no estimates" "0" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 rm -rf "$P"
 
+# #193 FR-7: honest finalize under capability downgrade — a gh-less
+# admitted unattended run that LANDS reports its effective downgraded
+# state in the summary and ledger, never "advisory".
+export CCT_GH_BIN="$GH_STUB"
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+GH_AUTH_FAIL=1 run_driver "$P"
+assert_exit "downgraded unattended run still lands (exit 0)" 0 "$RC"
+SUMMARY_TXT="$(cat "$P/specs/demo-feat/automation-summary.md" 2>/dev/null)"
+assert_contains "summary reports the downgraded-unattended state" \
+    "$SUMMARY_TXT" "capabilities downgraded"
+assert_eq "summary never claims the advisory profile" "0" \
+    "$(echo "$SUMMARY_TXT" | grep -c 'Profile: advisory')"
+assert_contains "ledger records the downgrade cause" \
+    "$(jq -r '.capability_downgrade' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)" "gh auth"
+unset CCT_GH_BIN
+rm -rf "$P"
+
 echo ""
 
 # ══════════════════════════════════════════════════════════════
 echo "=== #191 FR-7: cost metering (review rounds debit the same cap) ==="
 # ══════════════════════════════════════════════════════════════
 
-export CCT_AUTOBUILD_TEST_SEAM=pre-admission
 export CCT_GH_BIN="$GH_STUB"
 
 # An unattended run's gating review invocation has no cost channel (the
@@ -1466,6 +1596,7 @@ export CCT_GH_BIN="$GH_STUB"
 # and the runner's per-round emission lands in the archived loop-summary.
 P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
 cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
 BARE=$(add_remote "$P")
 GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
 run_driver "$P"
@@ -1488,6 +1619,7 @@ rm -rf "$P" "$BARE"
 # estimated component.
 P=$(setup_project); unattended_cfg "$P"
 cfg_set "$P" '.caps.cost_usd=1.5'
+admit_project "$P"
 BARE=$(add_remote "$P")
 run_driver "$P"
 assert_exit "combined metered+estimated total trips the cap (exit 6)" 6 "$RC"
@@ -1532,6 +1664,7 @@ healthcheck = "true"
 TOML
 P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
 cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
 BARE=$(add_remote "$P")
 GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
 REVIEW_PROFILE="$POISON_PROFILE" run_driver "$P"
@@ -1543,8 +1676,10 @@ assert_eq "no forged measured debit journaled" "0" \
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
 
-# Positive control: a GENUINE final-line envelope (with session identity)
-# is measured and debits totals.cost_usd instead of the estimate.
+# #193 FLIP of the A-era positive control: an in-band final-line
+# envelope — however well-formed — is NO LONGER a measurement. The
+# reviewer's text is model-controlled; only the adapter-written cost
+# file measures. This invocation is unmetered → estimate.
 GENUINE_REVIEW=$(mktemp)
 cat > "$GENUINE_REVIEW" << 'TXT'
 ### Summary
@@ -1568,17 +1703,89 @@ healthcheck = "true"
 TOML
 P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
 cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
 BARE=$(add_remote "$P")
 GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
 REVIEW_PROFILE="$GENUINE_PROFILE" run_driver "$P"
-assert_exit "genuine-envelope review lands (exit 0)" 0 "$RC"
-assert_eq "measured cost debited (0.01 build + 3.5 review)" "3.51" \
+assert_exit "in-band-envelope review lands (exit 0)" 0 "$RC"
+assert_eq "in-band envelope is NOT measured (text cannot meter)" "0.01" \
     "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
-assert_eq "no estimate debited when measured" "0" \
+assert_eq "in-band envelope falls back to the estimate" "2" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
-rm -f "$POISON_REVIEW" "$POISON_PROFILE" "$GENUINE_REVIEW" "$GENUINE_PROFILE"
+
+# The out-of-band channel measures: an adapter-style provider script
+# that WRITES CCT_REVIEW_COST_FILE is a real measurement.
+COSTFILE_PROVIDER=$(mktemp)
+cat > "$COSTFILE_PROVIDER" << 'SH'
+#!/usr/bin/env bash
+printf '{"total_cost_usd": 3.5}\n' > "$CCT_REVIEW_COST_FILE"
+printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+COSTFILE_PROFILE=$(mktemp)
+cat > "$COSTFILE_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $COSTFILE_PROVIDER"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$COSTFILE_PROFILE" run_driver "$P"
+assert_exit "cost-file review lands (exit 0)" 0 "$RC"
+assert_eq "adapter-written cost file IS measured (0.01 build + 3.5 review)" "3.51" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "no estimate when the channel measured" "0" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+
+# A NEGATIVE cost file is invalid — unmetered, never a budget credit.
+NEGFILE_PROVIDER=$(mktemp)
+cat > "$NEGFILE_PROVIDER" << 'SH'
+#!/usr/bin/env bash
+printf '{"total_cost_usd": -5}\n' > "$CCT_REVIEW_COST_FILE"
+printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+NEGFILE_PROFILE=$(mktemp)
+cat > "$NEGFILE_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $NEGFILE_PROVIDER"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$NEGFILE_PROFILE" run_driver "$P"
+assert_exit "negative cost-file review lands (exit 0)" 0 "$RC"
+assert_eq "negative cost file never credits the budget" "0.01" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "negative cost file falls back to the estimate" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+
+# The runner has NO in-band parsing path left (statically asserted).
+assert_eq "runner never parses cost out of reviewer text" "0" \
+    "$(grep -c 'REVIEW_OUTPUT.*total_cost_usd' "$SCRIPT_DIR/../scripts/review-round-runner.sh")"
+assert_eq "ollama adapter reports honest local-zero via the channel" "1" \
+    "$(grep -c 'CCT_REVIEW_COST_FILE' "$SCRIPT_DIR/../scripts/provider-adapters/ollama.sh" | awk '{print ($1 > 0) ? 1 : 0}')"
+
+rm -f "$POISON_REVIEW" "$POISON_PROFILE" "$GENUINE_REVIEW" "$GENUINE_PROFILE" \
+    "$COSTFILE_PROVIDER" "$COSTFILE_PROFILE" "$NEGFILE_PROVIDER" "$NEGFILE_PROFILE"
 
 # Regression (user P2): a NEGATIVE final-line envelope must never credit
 # the budget — it is invalid, so the invocation counts as unmetered and
@@ -1606,6 +1813,7 @@ healthcheck = "true"
 TOML
 P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
 cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
 BARE=$(add_remote "$P")
 GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
 REVIEW_PROFILE="$NEGATIVE_PROFILE" run_driver "$P"
@@ -1621,14 +1829,14 @@ rm -f "$NEGATIVE_REVIEW" "$NEGATIVE_PROFILE"
 # Regression (review P3): the runner's rc=2 breakers fire BEFORE any
 # reviewer invocation — they must not be debited. One FAIL round then a
 # max-rounds breaker = exactly ONE estimate, not two.
-P=$(setup_project); unattended_cfg "$P"
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
 CCT_REVIEW_MAX_ROUNDS=1 REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
 assert_exit "max-rounds breaker terminates (exit 6)" 6 "$RC"
 assert_eq "only the real invocation was debited (no phantom debit)" "2" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 rm -rf "$P"
 
-unset CCT_AUTOBUILD_TEST_SEAM CCT_GH_BIN
+unset CCT_GH_BIN
 
 echo ""
 

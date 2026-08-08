@@ -140,4 +140,13 @@ if [[ -z "$ASSISTANT_CONTENT" ]]; then
     exit 1
 fi
 
+# #193 out-of-band cost channel hook: this adapter writes
+# CCT_REVIEW_COST_FILE only when it can derive a REAL USD figure. The
+# API returns token usage but no price, and inventing a price table
+# here would be false measurement — so today it writes nothing and the
+# invocation is honestly unmetered (the driver debits its conservative
+# estimate). Priced deployments can extend this block with their own
+# usage->USD mapping:
+#   jq -n --argjson usd "$COMPUTED_USD" '{total_cost_usd: $usd}' > "$CCT_REVIEW_COST_FILE"
+
 echo "$ASSISTANT_CONTENT"

@@ -10,23 +10,31 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
-- **Autonomous builds run through the branded launcher (#195)** — the
-  auto-build driver's Claude backend defaulted to the generic `claude`
-  binary while the PI backend correctly used `pi-code`, so unattended
-  sessions skipped the launcher's config (BUN_OPTIONS ipv4-first fix,
-  project permission tier/hooks, transcript logging). `CCT_CLAUDE_BIN`
-  now defaults to `claude-code`; the launcher gained a headless
-  passthrough (`-p`/`--print`/`--version` forward verbatim to `claude`
-  — no cmux/tmux, the prompt is never treated as a path) and a branded
-  autonomous entry, `claude-code build <feature-id> [driver args]`, so
-  no-human-in-loop intent never needs
-  `--dangerously-skip-permissions`. `pi-code` is unchanged.
+- **Unattended admission control + traceability (#193, increment B of
+  #190)** — `specs/<feature>/verification.yaml` requirement→verifier
+  evidence graph (`shared/schemas/verification.schema.json` contract,
+  canonical FR normalizer/hasher in `scripts/lib/verification-common.sh`,
+  deterministic draft generator `scripts/generate-verification-draft.sh`);
+  `validate-spec.sh --unattended` admission bar (two-way coverage,
+  `statement_sha` recomputation against `spec.md`, executable-verifier
+  resolution, governance-before-execution ordering, `test.command`
+  proven in a throwaway worktree, C-owned checks surfaced as DEFER);
+  the driver's increment-A test seam replaced by real admission bound
+  to the EFFECTIVE config — an admitted `unattended` run executes for
+  the first time, a refusal is an un-admitted exit-1. Review-cost
+  measurement moved to the out-of-band `CCT_REVIEW_COST_FILE` adapter
+  channel (in-band text envelopes are never measured); capability-
+  downgraded runs report their effective state honestly in summary,
+  ledger, and triage. Behavior note: ALL `--resume` invocations
+  (attended included) now parse every config value from the frozen
+  ledger snapshot — the parked-resume arms (caps/pr/merge refreshes)
+  are the sanctioned channel for post-freeze edits; other live-file
+  edits are ignored on resume by design.
 
 
 ### Added
-
 - **Unattended policy core + metering (#191, increment A of #190)** —
   terminal-outcome vocabulary in the auto-build driver (`landed` /
   `terminated_policy` exit 6 / `failed`); terminate-only disposition
@@ -45,6 +53,19 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   genuinely reports measured cost now debits `caps.cost_usd` on every
   profile (previously silently free); estimates stay opt-in for
   attended configs and inactive for v1.
+
+### Fixed
+- **Autonomous builds run through the branded launcher (#195)** — the
+  auto-build driver's Claude backend defaulted to the generic `claude`
+  binary while the PI backend correctly used `pi-code`, so unattended
+  sessions skipped the launcher's config (BUN_OPTIONS ipv4-first fix,
+  project permission tier/hooks, transcript logging). `CCT_CLAUDE_BIN`
+  now defaults to `claude-code`; the launcher gained a headless
+  passthrough (`-p`/`--print`/`--version` forward verbatim to `claude`
+  — no cmux/tmux, the prompt is never treated as a path) and a branded
+  autonomous entry, `claude-code build <feature-id> [driver args]`, so
+  no-human-in-loop intent never needs
+  `--dangerously-skip-permissions`. `pi-code` is unchanged.
 
 ## [1.1.0]
 
