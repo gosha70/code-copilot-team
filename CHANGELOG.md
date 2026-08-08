@@ -55,6 +55,45 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   attended configs and inactive for v1.
 
 ### Fixed
+- **A provider's echoed prompt is no longer parsed as its review (#200)**
+  — providers are captured with `2>&1`, and a CLI that echoes its prompt
+  (codex exec does) fed the request's own `### Verdict` section and its
+  literal `FINDING|<severity>|...` format line back into the parser. The
+  round runner took the FIRST `### Verdict` block, so the echoed
+  instruction "State exactly one of: PASS, FAIL, or INCONCLUSIVE" became
+  the verdict — PASS. The blocking-severity override masked this whenever
+  a `blocking` finding was parsed, so the escape window was a review that
+  fails on non-blocking grounds: reproduced end-to-end, a model verdict of
+  FAIL with warning-only findings produced a **successful** round. The
+  echoed format line also recorded a phantom finding with severity
+  `<severity>` (stable id, so it polluted the stale-findings breaker), and
+  the duplicated real findings made `jq --argjson` receive a multi-line
+  `first_seen_round`, crashing the runner with exit 2 — the code its own
+  header documents as BREAKER_TRIPPED — leaving no findings file and no
+  breaker file. Now: a verdict is a bare `PASS`/`FAIL`/`INCONCLUSIVE`
+  alone on the line after a line holding only `### Verdict`, parsed by one
+  shared implementation (`scripts/lib/review-verdict.sh`) for both
+  runners; placeholder findings are rejected by shape (not by a severity
+  allow-list, which would silently drop misspelled real findings);
+  findings are deduplicated by id; and the blocking override is kept as
+  defence in depth.
+  Crucially, **both requests now describe the verdict shape in prose and
+  never instantiate it**. Ordering across the merged `2>&1` stream is not
+  a contract — an echoed request can land after the answer as easily as
+  before it — so "take the first block" and "take the last block" are
+  equally unsound. A request that is parseable at all is a forged verdict
+  waiting for buffering to change. The regression that pins this is a
+  provider whose entire output is the real request echoed verbatim: it can
+  only ever be INCONCLUSIVE.
+  **Behaviour change:** a review with no `### Verdict` section is now
+  INCONCLUSIVE instead of matching the bare word `PASS` anywhere in the
+  output ("the tests pass", "password"). `scripts/peer-review-runner.sh`
+  had only that bare-word match and its own request contains the string
+  "A verdict: PASS, FAIL, or INCONCLUSIVE", so a prompt-echoing provider
+  verdicted PASS unconditionally on an artifact the driver hard-gates on;
+  it now requests an explicit `### Verdict` section and parses it the same
+  way. Peer reviewers that never emitted such a section will report
+  INCONCLUSIVE until they do — a failed gate, never a silent pass.
 - **The shipped Codex reviewer command actually runs (#199)** — the
   provider template (and the README block users copy from) configured
   codex with `--quiet --prompt-file`, flags that no longer exist, so

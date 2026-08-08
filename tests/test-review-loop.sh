@@ -502,6 +502,181 @@ rm -rf "$P"
 echo ""
 
 # ══════════════════════════════════════════════════════════════
+echo "=== #200: the request is not the review ==="
+# ══════════════════════════════════════════════════════════════
+
+# A provider that ECHOES ITS PROMPT before answering — exactly what
+# `codex exec` does on stderr, which the runner merges via 2>&1. The echo
+# carries the request's own "### Verdict / State exactly one of: PASS,
+# FAIL, or INCONCLUSIVE" section and the literal FINDING| format line.
+# The review itself FAILS on warning-severity grounds only, so the
+# blocking-count override cannot rescue the verdict — this is the exact
+# window in which the forged PASS escaped.
+ECHO_PROFILE=$(mktemp)
+cat > "$ECHO_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf 'user\n### Findings\nFINDING|<severity>|<category>|<file>|<line_hint>|<description>|<suggested_fix>\n\n### Verdict\nState exactly one of: PASS, FAIL, or INCONCLUSIVE\n\ncodex\n### Summary\nMaintainability only.\n\n### Findings\nFINDING|warning|design|src/api.sh|retry helper|Unbounded retry can hang|Bound the attempts\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$ECHO_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+FR="$P/.cct/review/findings-round-1.json"
+assert_exit "echoed-prompt round exits FAIL, not PASS" 1 "$RC"
+assert_eq "verdict comes from the LAST ### Verdict block" "FAIL" \
+    "$(jq -r '.verdict' "$FR" 2>/dev/null)"
+assert_eq "the echoed FINDING| template line is not a finding" "0" \
+    "$(jq '[.findings[] | select(.severity | startswith("<"))] | length' "$FR" 2>/dev/null)"
+assert_eq "only the real finding is recorded" "1" \
+    "$(jq '.findings | length' "$FR" 2>/dev/null)"
+rm -rf "$P"
+
+# Same echo, but the provider repeats its whole answer (codex copies the
+# final message to stderr too). Duplicate ids previously produced a
+# multi-line first_seen_round, which crashed `jq --argjson fsr` under
+# set -e and exited 2 — the code the runner documents as BREAKER_TRIPPED —
+# leaving no findings file and no breaker file behind.
+DUP_PROFILE=$(mktemp)
+cat > "$DUP_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Findings\nFINDING|blocking|correctness|src/app.sh|near main|Missing error check|Add error handling\nFINDING|blocking|correctness|src/app.sh|near main|Missing error check|Add error handling\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$DUP_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+FR="$P/.cct/review/findings-round-1.json"
+assert_exit "duplicated findings do not crash the runner (exit 1, not 2)" 1 "$RC"
+assert_eq "duplicate findings are recorded once" "1" \
+    "$(jq '.findings | length' "$FR" 2>/dev/null)"
+assert_eq "findings file is still valid JSON" "object" \
+    "$(jq -r 'type' "$FR" 2>/dev/null)"
+rm -rf "$P"
+
+# No verdict section at all: the bare-word fallback used to match "pass"
+# anywhere (here, inside "password"). Fail closed instead.
+NOVERDICT_PROFILE=$(mktemp)
+cat > "$NOVERDICT_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nThe password handling looks fine to me.\n\n### Findings\n\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$NOVERDICT_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_eq "no verdict section fails closed (INCONCLUSIVE, never PASS)" "INCONCLUSIVE" \
+    "$(jq -r '.verdict' "$P/.cct/review/findings-round-1.json" 2>/dev/null)"
+assert_exit "an INCONCLUSIVE round does not report success" 1 "$RC"
+rm -rf "$P"
+
+# A misspelled severity is still a real finding — the placeholder filter
+# must key on the <...> shape, not an allow-list, or a review gate
+# silently drops findings it does not recognise.
+TYPO_PROFILE=$(mktemp)
+cat > "$TYPO_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Findings\nFINDING|critical|security|src/app.sh|auth check|Auth bypass|Fix it\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+CCT_PROVIDER_PROFILE="$TYPO_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || true
+assert_eq "an unrecognised severity is still recorded" "critical" \
+    "$(jq -r '.findings[0].severity' "$P/.cct/review/findings-round-1.json" 2>/dev/null)"
+rm -rf "$P"
+
+
+# #200 P1: the echo can arrive AFTER the answer. stdout/stderr ordering
+# under `2>&1` is not a contract, so ANY position-based rule (first block,
+# last block) is unsound. The request must be unparseable, not merely
+# early. Here the real review FAILS and the echoed request is appended
+# last — the exact inversion that defeated the "last block wins" fix.
+TAILECHO_PROFILE=$(mktemp)
+cat > "$TAILECHO_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '%s\n' '### Summary' 'Maintainability only.' '' '### Findings' 'FINDING|warning|design|src/api.sh|retry helper|Unbounded retry can hang|Bound the attempts' '' '### Verdict' 'FAIL' '' 'user' '### Verdict' 'State exactly one of: PASS, FAIL, or INCONCLUSIVE'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$TAILECHO_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "prompt echo AFTER the answer does not forge a pass" 1 "$RC"
+assert_eq "trailing echoed instruction block is inert" "FAIL" \
+    "$(jq -r '.verdict' "$P/.cct/review/findings-round-1.json" 2>/dev/null)"
+rm -rf "$P"
+
+# The strongest form: a provider that echoes the REAL request verbatim and
+# says nothing else. If the request is unparseable by construction, this
+# can only ever be INCONCLUSIVE — no ordering, no heuristics involved.
+CATREQ_PROFILE=$(mktemp)
+cat > "$CATREQ_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "cat {review_request}"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$CATREQ_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_eq "echoing the REAL request verbatim yields no verdict" "INCONCLUSIVE" \
+    "$(jq -r '.verdict' "$P/.cct/review/findings-round-1.json" 2>/dev/null)"
+assert_eq "the request's own FINDING format line is not a finding" "0" \
+    "$(jq '.findings | length' "$P/.cct/review/findings-round-1.json" 2>/dev/null)"
+assert_exit "verbatim-request echo fails the round" 1 "$RC"
+rm -rf "$P"
+
+# A verdict word on the heading line is prose, not a verdict.
+SAMELINE_PROFILE=$(mktemp)
+cat > "$SAMELINE_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '%s\n' '### Verdict: PASS, FAIL, or INCONCLUSIVE' '' 'I could not build the project.'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+CCT_PROVIDER_PROFILE="$SAMELINE_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || true
+assert_eq "a verdict word on the heading line is not a verdict" "INCONCLUSIVE" \
+    "$(jq -r '.verdict' "$P/.cct/review/findings-round-1.json" 2>/dev/null)"
+rm -rf "$P"
+
+rm -f "$TAILECHO_PROFILE" "$CATREQ_PROFILE" "$SAMELINE_PROFILE"
+rm -f "$ECHO_PROFILE" "$DUP_PROFILE" "$NOVERDICT_PROFILE" "$TYPO_PROFILE"
+
+# ══════════════════════════════════════════════════════════════
 # Summary
 # ══════════════════════════════════════════════════════════════
 

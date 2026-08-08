@@ -672,8 +672,8 @@ code-copilot-team/
 │   ├── test-generate.sh                 294 generation + adapter tests
 │   ├── test-shared-structure.sh         805 structure + content tests
 │   ├── test-sync.sh                     105 sync + init metadata tests
-│   ├── test-peer-review.sh             54 peer-review runner tests
-│   ├── test-review-loop.sh            40 review loop integration tests
+│   ├── test-peer-review.sh             58 peer-review runner tests
+│   ├── test-review-loop.sh            56 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        280 auto-build driver tests
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)

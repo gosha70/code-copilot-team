@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Shared verdict parser (#200) — one implementation for both runners.
+RV_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -f "$RV_LIB_DIR/lib/review-verdict.sh" ]]; then
+    echo "Error: missing $RV_LIB_DIR/lib/review-verdict.sh (verdict parser)" >&2
+    exit 1
+fi
+# shellcheck source=lib/review-verdict.sh
+source "$RV_LIB_DIR/lib/review-verdict.sh"
+
 # peer-review-runner.sh — Executes peer provider review and writes collaboration artifact
 #
 # Reads the pending marker JSON, resolves the peer provider from the global
@@ -271,7 +280,18 @@ Provide your review as markdown with:
 1. A 2-3 sentence summary
 2. Blocking findings (must fix before proceeding)
 3. Advisory findings (suggestions for improvement)
-4. A verdict: PASS, FAIL, or INCONCLUSIVE
+4. A verdict, as the LAST section of your response. Write a heading line
+   consisting of three hash marks, a space, and the word Verdict — nothing
+   else on that line. On the next line write exactly one bare word and
+   nothing else: PASS, FAIL, or INCONCLUSIVE. No punctuation, no
+   explanation on that line, and never the word on the heading line
+   itself.
+
+A response with no such section is treated as INCONCLUSIVE, which fails
+the gate. (This instruction deliberately describes the shape rather than
+showing a filled-in example: providers echo their prompt into the same
+captured stream, so any example here would be indistinguishable from a
+real verdict.)
 REVIEW_EOF
 
 # ── Execute provider command ──────────────────────────────────
@@ -357,13 +377,15 @@ ARTIFACT_PATH="$COLLAB_DIR/$ARTIFACT_NAME"
 
 # ── Parse verdict from review output ──────────────────────────
 
-# Try to extract verdict from the provider's output
-VERDICT="INCONCLUSIVE"
-if echo "$REVIEW_OUTPUT" | grep -qi "PASS"; then
-    VERDICT="PASS"
-elif echo "$REVIEW_OUTPUT" | grep -qi "FAIL"; then
-    VERDICT="FAIL"
-fi
+# Extract the verdict (#200) — the SAME parser as review-round-runner.sh,
+# from scripts/lib/review-verdict.sh. This previously matched the bare
+# word PASS anywhere in the output, and this runner's request contains
+# "a verdict: PASS, FAIL, or INCONCLUSIVE", so any prompt-echoing provider
+# verdicted PASS unconditionally — on an artifact the auto-build driver
+# hard-gates on. Two copies of this logic is what let the two runners
+# drift apart in the first place; there is now one.
+VERDICT=$(rv_extract_verdict "$REVIEW_OUTPUT")
+VERDICT="${VERDICT:-INCONCLUSIVE}"
 
 # Count blocking findings (lines starting with "- " under a "Blocking" header)
 BLOCKING_COUNT=0

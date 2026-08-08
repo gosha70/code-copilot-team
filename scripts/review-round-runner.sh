@@ -25,6 +25,15 @@ fi
 
 PROJECT_DIR="$(cd "$1" && pwd)"
 
+# Shared verdict parser (#200) — one implementation for both runners.
+RV_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -f "$RV_LIB_DIR/lib/review-verdict.sh" ]]; then
+    echo "Error: missing $RV_LIB_DIR/lib/review-verdict.sh (verdict parser)" >&2
+    exit 1
+fi
+# shellcheck source=lib/review-verdict.sh
+source "$RV_LIB_DIR/lib/review-verdict.sh"
+
 # Review state dir — overridable so a caller (e.g. the auto-build driver
 # running an advisory panel reviewer) can run a review in isolation, without
 # touching the canonical .cct/review/ state the gating loop depends on. The
@@ -368,7 +377,7 @@ fi)
 
 ## Required Output Format
 
-You MUST structure your response with these exact sections:
+You MUST structure your response with these exact sections.
 
 ### Summary
 2-3 sentences summarizing the review.
@@ -386,7 +395,11 @@ Where:
 - suggested_fix: actionable fix suggestion
 
 ### Verdict
-State exactly one of: PASS, FAIL, or INCONCLUSIVE
+End your response with a heading line consisting of three hash marks, a
+space, and the word Verdict — nothing else on that line. On the next line
+write exactly one bare word and nothing else: PASS, FAIL, or
+INCONCLUSIVE. A response with no such section is treated as INCONCLUSIVE,
+which fails the gate.
 REVIEW_EOF
 
 # ── Execute provider ─────────────────────────────────────────
@@ -496,18 +509,14 @@ compute_finding_id() {
     echo "f-${hash}"
 }
 
-# Extract verdict
-VERDICT="INCONCLUSIVE"
-if echo "$REVIEW_OUTPUT" | grep -q '^### Verdict'; then
-    VERDICT_LINE=$(echo "$REVIEW_OUTPUT" | sed -n '/^### Verdict/,/^$/p' | grep -oiE 'PASS|FAIL|INCONCLUSIVE' | head -1 | tr '[:lower:]' '[:upper:]')
-    if [[ -n "$VERDICT_LINE" ]]; then
-        VERDICT="$VERDICT_LINE"
-    fi
-elif echo "$REVIEW_OUTPUT" | grep -qi "PASS"; then
-    VERDICT="PASS"
-elif echo "$REVIEW_OUTPUT" | grep -qi "FAIL"; then
-    VERDICT="FAIL"
-fi
+# Extract verdict (#200) — see scripts/lib/review-verdict.sh for why a
+# verdict must be a bare word on its own line under a bare heading, and
+# why the request above deliberately describes that shape instead of
+# showing it. Position-based rules are unsound here: the capture merges
+# stderr, so an echoed request can land after the answer as easily as
+# before it. Empty means no parseable verdict — fail closed, never PASS.
+VERDICT=$(rv_extract_verdict "$REVIEW_OUTPUT")
+VERDICT="${VERDICT:-INCONCLUSIVE}"
 
 # If round is invalid, discard findings
 if [[ "$ROUND_VALID" != "true" ]]; then
@@ -575,13 +584,34 @@ COST_STATE=$(echo "$COST_STATE" | jq --arg c "${INVOCATION_COST:-}" \
 # Parse FINDING| lines into JSON
 FINDINGS_JSON="[]"
 if [[ "$ROUND_VALID" == "true" ]]; then
+    SEEN_FINDING_IDS=""
     while IFS='|' read -r _ severity category file line_hint description suggested_fix; do
         [[ -z "$severity" ]] && continue
         severity=$(echo "$severity" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
         category=$(echo "$category" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
         file=$(echo "$file" | tr -d ' ')
 
+        # #200: the request documents the line format with literal
+        # placeholders (FINDING|<severity>|<category>|...). A provider that
+        # echoes its prompt feeds that line straight back, and it parsed as
+        # a finding with severity "<severity>" — recurring every round with
+        # a stable id, so it also polluted the stale-findings breaker.
+        # Match the placeholder shape ONLY: an allow-list of severities
+        # would silently drop a real finding whose severity is misspelled,
+        # which fails in a worse direction for a review gate.
+        if [[ "$severity" == "<"*">" ]]; then
+            continue
+        fi
+
         FINDING_ID=$(compute_finding_id "$file" "$category" "$description")
+
+        # #200: a prompt-echoing provider emits each real finding twice
+        # (its own output plus the echoed copy). Same id, so record once —
+        # otherwise duplicates inflate BLOCKING_COUNT and the findings file.
+        case " $SEEN_FINDING_IDS " in
+            *" $FINDING_ID "*) continue ;;
+        esac
+        SEEN_FINDING_IDS="$SEEN_FINDING_IDS $FINDING_ID"
 
         # Check first_seen from state
         FIRST_SEEN=$NEXT_ROUND
