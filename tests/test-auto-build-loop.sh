@@ -1763,6 +1763,40 @@ assert_eq "no estimate when the channel measured" "0" \
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
 
+# #197 same-class fold: an ARRAY-form CLI result redirected into the
+# cost file (a natural cli-provider wiring) measures via its result
+# element.
+ARRAYCOST_PROVIDER=$(mktemp)
+cat > "$ARRAYCOST_PROVIDER" << 'SH'
+#!/usr/bin/env bash
+printf '[{"type":"system","subtype":"init"},{"type":"result","subtype":"success","total_cost_usd":3.5,"session_id":"r1"}]\n' > "$CCT_REVIEW_COST_FILE"
+printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+ARRAYCOST_PROFILE=$(mktemp)
+cat > "$ARRAYCOST_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $ARRAYCOST_PROVIDER"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$ARRAYCOST_PROFILE" run_driver "$P"
+assert_exit "array-form cost file lands (exit 0)" 0 "$RC"
+assert_eq "array-form cost file IS measured via its result element" "3.51" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "no estimate when the array-form channel measured" "0" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+rm -f "$ARRAYCOST_PROVIDER" "$ARRAYCOST_PROFILE"
+
 # A NEGATIVE cost file is invalid — unmetered, never a budget credit.
 NEGFILE_PROVIDER=$(mktemp)
 cat > "$NEGFILE_PROVIDER" << 'SH'

@@ -531,7 +531,13 @@ fi
 # surfaced per-round in findings-round-N.json (invocation_cost_usd).
 INVOCATION_COST=""
 if [[ -f "$CCT_REVIEW_COST_FILE" ]]; then
-    INVOCATION_COST=$(jq -r 'if (type == "object") and ((.total_cost_usd | type) == "number")
+    # #197 (same bug class as the driver): a cli provider may redirect a
+    # whole CLI `--output-format json` result — the ARRAY form — into the
+    # cost file. Normalize array-or-object to the result element first.
+    INVOCATION_COST=$(jq -r 'if type == "array"
+              then ([.[] | select(.type? == "result")] | last) // (.[-1] // {})
+              else . end
+           | if (type == "object") and ((.total_cost_usd | type) == "number")
               and (.total_cost_usd >= 0)
            then .total_cost_usd else empty end' "$CCT_REVIEW_COST_FILE" 2>/dev/null || true)
     rm -f "$CCT_REVIEW_COST_FILE"
