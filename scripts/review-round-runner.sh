@@ -532,11 +532,18 @@ fi
 INVOCATION_COST=""
 if [[ -f "$CCT_REVIEW_COST_FILE" ]]; then
     # #197 (same bug class as the driver): a cli provider may redirect a
-    # whole CLI `--output-format json` result — the ARRAY form — into the
-    # cost file. Normalize array-or-object to the result element first.
-    INVOCATION_COST=$(jq -r 'if type == "array"
-              then ([.[] | select(.type? == "result")] | last) // (.[-1] // {})
-              else . end
+    # whole CLI result — claude's ARRAY or pi's JSON-LINES stream — into
+    # the cost file. Slurp-normalize to the result element first, exactly
+    # like the driver's session_result_obj(); `-s` is what guarantees a
+    # SINGLE value out. Per-document evaluation could emit one line per
+    # cost-bearing document, and a multi-line INVOCATION_COST is not a
+    # clean degrade to "unmetered": `$c | tonumber` below then fails
+    # (COST_STATE blanks) and, worse, the same tonumber inside the
+    # findings-round-N.json heredoc writes a 1-byte blank file that still
+    # satisfies downstream `-f` checks.
+    #
+    INVOCATION_COST=$(jq -r -s 'map(if type == "array" then .[] else . end)
+           | ([.[] | select(.type? == "result")] | last) // (.[-1] // {})
            | if (type == "object") and ((.total_cost_usd | type) == "number")
               and (.total_cost_usd >= 0)
            then .total_cost_usd else empty end' "$CCT_REVIEW_COST_FILE" 2>/dev/null || true)

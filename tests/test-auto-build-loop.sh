@@ -1804,6 +1804,56 @@ unset GH_PR_STATE
 rm -rf "$P" "$BARE"
 rm -f "$ARRAYCOST_PROVIDER" "$ARRAYCOST_PROFILE"
 
+# #197 review P3: a STREAM (pi-style JSON Lines) carrying more than one
+# cost-bearing document. Per-document jq emitted one value per document,
+# and a multi-line cost is not a clean degrade to "unmetered": the
+# `tonumber` in the findings heredoc failed and wrote findings-round-N
+# as a 1-BYTE BLANK file that still satisfied downstream `-f` checks.
+# The slurp resolves it to the LAST result envelope.
+NDCOST_PROVIDER=$(mktemp)
+cat > "$NDCOST_PROVIDER" << 'SH'
+#!/usr/bin/env bash
+{
+  printf '{"type":"system","subtype":"init"}\n'
+  printf '{"type":"result","subtype":"success","total_cost_usd":1.0,"session_id":"r1"}\n'
+  printf '{"type":"result","subtype":"success","total_cost_usd":3.5,"session_id":"r2"}\n'
+} > "$CCT_REVIEW_COST_FILE"
+printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+NDCOST_PROFILE=$(mktemp)
+cat > "$NDCOST_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $NDCOST_PROVIDER"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$NDCOST_PROFILE" run_driver "$P"
+assert_exit "multi-cost-document stream lands (exit 0)" 0 "$RC"
+assert_eq "multi-cost stream measures the LAST result (0.01 + 3.5)" "3.51" \
+    "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "no estimate when the multi-cost stream measured" "0" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+# Search recursively: on a PASS round the driver archives .cct/review into
+# the phase dir, so the findings file is not at a fixed path.
+FR_TOTAL=0; FR_BAD=0
+while IFS= read -r frf; do
+    FR_TOTAL=$((FR_TOTAL + 1))
+    jq -e 'type == "object"' "$frf" >/dev/null 2>&1 || FR_BAD=$((FR_BAD + 1))
+done < <(find "$P" -name 'findings-round-*.json' 2>/dev/null)
+assert_eq "findings-round file stays valid JSON (not a 1-byte blank)" "1 0" \
+    "$( [[ $FR_TOTAL -ge 1 ]] && echo "1 $FR_BAD" || echo "0 $FR_BAD")"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+rm -f "$NDCOST_PROVIDER" "$NDCOST_PROFILE"
+
 # A NEGATIVE cost file is invalid — unmetered, never a budget credit.
 NEGFILE_PROVIDER=$(mktemp)
 cat > "$NEGFILE_PROVIDER" << 'SH'

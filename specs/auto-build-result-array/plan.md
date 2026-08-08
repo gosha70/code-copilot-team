@@ -36,3 +36,11 @@ legacy-object mode, a 344-element captured-scale case, and a
 continuation case proving session_id chains `--resume`; the mock
 pi-code emits its documented JSON-LINES shape (its legacy-object mock
 was the same blind spot on the pi side).
+
+The same bug class is folded on the review runner's `CCT_REVIEW_COST_FILE`
+reader, which a cli provider may legitimately wire to a whole CLI result.
+Slurping is load-bearing there beyond shape support: per-document evaluation
+emitted one line per cost-bearing document, and a multi-line cost was not
+a clean degrade to unmetered — it blanked the cost state and wrote
+`findings-round-N.json` as a 1-byte file that still satisfied downstream
+`-f` checks, which the regression shows driving the driver to exit 6.

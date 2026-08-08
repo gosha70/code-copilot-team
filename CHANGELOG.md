@@ -66,7 +66,13 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   `session_result_obj()`;
   the test suite's mock CLI emits the array shape by default so every
   driver path is exercised against the real output, with legacy-object,
-  344-element captured-scale, and resume-chaining regressions.
+  344-element captured-scale, and resume-chaining regressions. The same
+  normalization is folded onto the review runner's `CCT_REVIEW_COST_FILE`
+  reader, which a cli provider may legitimately point at a whole CLI
+  result: a stream carrying more than one cost-bearing document used to
+  yield a multi-line cost that blanked the cost state and wrote
+  `findings-round-N.json` as a 1-byte file (still passing downstream
+  `-f` checks) — reproduced driving the driver to exit 6.
 - **Autonomous builds run through the branded launcher (#195)** — the
   auto-build driver's Claude backend defaulted to the generic `claude`
   binary while the PI backend correctly used `pi-code`, so unattended
