@@ -271,7 +271,14 @@ Provide your review as markdown with:
 1. A 2-3 sentence summary
 2. Blocking findings (must fix before proceeding)
 3. Advisory findings (suggestions for improvement)
-4. A verdict: PASS, FAIL, or INCONCLUSIVE
+4. A verdict, as the LAST section of your response, in exactly this form:
+
+### Verdict
+PASS
+
+(stating exactly one of PASS, FAIL, or INCONCLUSIVE on the line after the
+heading). A response with no `### Verdict` section is treated as
+INCONCLUSIVE.
 REVIEW_EOF
 
 # ── Execute provider command ──────────────────────────────────
@@ -357,12 +364,25 @@ ARTIFACT_PATH="$COLLAB_DIR/$ARTIFACT_NAME"
 
 # ── Parse verdict from review output ──────────────────────────
 
-# Try to extract verdict from the provider's output
+# Extract the verdict from the LAST `### Verdict` block (#200).
+#
+# This previously matched the bare word PASS anywhere in the output. The
+# request itself says "A verdict: PASS, FAIL, or INCONCLUSIVE", so any
+# provider that echoes its prompt — and providers are captured with
+# `2>&1` — verdicted PASS unconditionally. This artifact feeds the
+# driver's hard gate, so that was a silent gate bypass, not just noise.
+# Absent the section the verdict stays INCONCLUSIVE (fail-closed).
 VERDICT="INCONCLUSIVE"
-if echo "$REVIEW_OUTPUT" | grep -qi "PASS"; then
-    VERDICT="PASS"
-elif echo "$REVIEW_OUTPUT" | grep -qi "FAIL"; then
-    VERDICT="FAIL"
+# `|| true` — see review-round-runner.sh: under pipefail a no-match grep
+# would abort the script on precisely the missing-verdict case this
+# branch handles.
+PR_VERDICT_START=$(echo "$REVIEW_OUTPUT" | grep -n '^### Verdict' | tail -1 | cut -d: -f1 || true)
+if [[ -n "$PR_VERDICT_START" ]]; then
+    PR_VERDICT_LINE=$(echo "$REVIEW_OUTPUT" | tail -n "+$PR_VERDICT_START" | sed -n '1,/^$/p' \
+        | grep -oiE 'PASS|FAIL|INCONCLUSIVE' | head -1 | tr '[:lower:]' '[:upper:]')
+    if [[ -n "$PR_VERDICT_LINE" ]]; then
+        VERDICT="$PR_VERDICT_LINE"
+    fi
 fi
 
 # Count blocking findings (lines starting with "- " under a "Blocking" header)

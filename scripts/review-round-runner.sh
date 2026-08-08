@@ -496,17 +496,31 @@ compute_finding_id() {
     echo "f-${hash}"
 }
 
-# Extract verdict
+# Extract verdict (#200)
+#
+# From the LAST `### Verdict` block, never the first. The review REQUEST
+# contains its own `### Verdict` section ("State exactly one of: PASS,
+# FAIL, or INCONCLUSIVE"), and providers that echo their prompt — codex
+# exec does, and we capture with 2>&1 — put that echo BEFORE the review.
+# Anchoring on the first block parsed the instruction as the answer and
+# returned PASS for a failing review.
+#
+# No bare-word fallback either: `grep -qi PASS` matched "the tests pass",
+# "password", and the echoed instruction line itself. Absent a verdict
+# section the round is INCONCLUSIVE, which the driver already treats as a
+# hard gate failure — fail-closed, never a silent approval.
 VERDICT="INCONCLUSIVE"
-if echo "$REVIEW_OUTPUT" | grep -q '^### Verdict'; then
-    VERDICT_LINE=$(echo "$REVIEW_OUTPUT" | sed -n '/^### Verdict/,/^$/p' | grep -oiE 'PASS|FAIL|INCONCLUSIVE' | head -1 | tr '[:lower:]' '[:upper:]')
+# `|| true`: with `set -o pipefail` a no-match grep makes the whole
+# pipeline exit 1, which under `set -e` would kill the runner before it
+# writes findings-round-N.json — and "no verdict section" is exactly the
+# case this branch exists to handle.
+VERDICT_START=$(echo "$REVIEW_OUTPUT" | grep -n '^### Verdict' | tail -1 | cut -d: -f1 || true)
+if [[ -n "$VERDICT_START" ]]; then
+    VERDICT_LINE=$(echo "$REVIEW_OUTPUT" | tail -n "+$VERDICT_START" | sed -n '1,/^$/p' \
+        | grep -oiE 'PASS|FAIL|INCONCLUSIVE' | head -1 | tr '[:lower:]' '[:upper:]')
     if [[ -n "$VERDICT_LINE" ]]; then
         VERDICT="$VERDICT_LINE"
     fi
-elif echo "$REVIEW_OUTPUT" | grep -qi "PASS"; then
-    VERDICT="PASS"
-elif echo "$REVIEW_OUTPUT" | grep -qi "FAIL"; then
-    VERDICT="FAIL"
 fi
 
 # If round is invalid, discard findings
@@ -575,13 +589,34 @@ COST_STATE=$(echo "$COST_STATE" | jq --arg c "${INVOCATION_COST:-}" \
 # Parse FINDING| lines into JSON
 FINDINGS_JSON="[]"
 if [[ "$ROUND_VALID" == "true" ]]; then
+    SEEN_FINDING_IDS=""
     while IFS='|' read -r _ severity category file line_hint description suggested_fix; do
         [[ -z "$severity" ]] && continue
         severity=$(echo "$severity" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
         category=$(echo "$category" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
         file=$(echo "$file" | tr -d ' ')
 
+        # #200: the request documents the line format with literal
+        # placeholders (FINDING|<severity>|<category>|...). A provider that
+        # echoes its prompt feeds that line straight back, and it parsed as
+        # a finding with severity "<severity>" — recurring every round with
+        # a stable id, so it also polluted the stale-findings breaker.
+        # Match the placeholder shape ONLY: an allow-list of severities
+        # would silently drop a real finding whose severity is misspelled,
+        # which fails in a worse direction for a review gate.
+        if [[ "$severity" == "<"*">" ]]; then
+            continue
+        fi
+
         FINDING_ID=$(compute_finding_id "$file" "$category" "$description")
+
+        # #200: a prompt-echoing provider emits each real finding twice
+        # (its own output plus the echoed copy). Same id, so record once —
+        # otherwise duplicates inflate BLOCKING_COUNT and the findings file.
+        case " $SEEN_FINDING_IDS " in
+            *" $FINDING_ID "*) continue ;;
+        esac
+        SEEN_FINDING_IDS="$SEEN_FINDING_IDS $FINDING_ID"
 
         # Check first_seen from state
         FIRST_SEEN=$NEXT_ROUND

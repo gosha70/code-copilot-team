@@ -289,7 +289,7 @@ write_profile "$PROFILE" << 'TOML'
 peer_for.claude = "echo-provider"
 [providers.echo-provider]
 type = "cli"
-command = "echo 'PASS: review complete. Verdict: PASS'"
+command = "printf '%s\n' 'Review complete.' '' '### Verdict' 'PASS'"
 timeout_sec = 10
 healthcheck = "true"
 TOML
@@ -305,7 +305,7 @@ write_profile "$PROFILE" << 'TOML'
 peer_for.claude = "custom-echo"
 [providers.custom-echo]
 type = "custom"
-command = "echo 'Review PASS — no issues found'"
+command = "printf '%s\n' 'No issues found.' '' '### Verdict' 'PASS'"
 timeout_sec = 10
 healthcheck = "true"
 TOML
@@ -320,7 +320,7 @@ write_profile "$PROFILE" << 'TOML'
 [defaults]
 peer_for.claude = "legacy"
 [providers.legacy]
-command = "echo 'Legacy review PASS'"
+command = "printf '%s\n' 'Legacy review.' '' '### Verdict' 'PASS'"
 timeout_sec = 10
 healthcheck = "true"
 TOML
@@ -520,7 +520,7 @@ write_profile "$PROFILE" << 'TOML'
 peer_for.claude = "test-reviewer"
 [providers.test-reviewer]
 type = "cli"
-command = "echo '## Summary\nAll good.\n\n## Blocking\nNone.\n\n## Verdict\nPASS'"
+command = "printf '%s\n' '## Summary' 'All good.' '' '## Blocking' 'None.' '' '### Verdict' 'PASS'"
 timeout_sec = 10
 healthcheck = "true"
 TOML
@@ -543,6 +543,54 @@ if [[ -f "$ARTIFACT" ]]; then
     assert_contains "artifact has verdict" "$ARTIFACT_CONTENT" "verdict: PASS"
     assert_contains "artifact has peer_provider" "$ARTIFACT_CONTENT" "peer_provider: test-reviewer"
     assert_contains "artifact has runner_fingerprint" "$ARTIFACT_CONTENT" "runner_fingerprint:"
+fi
+
+# #200: a provider that echoes its prompt must not verdict PASS.
+# This runner's own request contains "A verdict: PASS, FAIL, or
+# INCONCLUSIVE", and the old parser matched the bare word anywhere, so
+# any prompt-echoing provider verdicted PASS unconditionally — on an
+# artifact the auto-build driver hard-gates on.
+PROFILE="$TMP/echoed-prompt.toml"
+write_profile "$PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "echo-reviewer"
+[providers.echo-reviewer]
+type = "cli"
+command = "printf '%s\n' 'user' 'Output Format' '4. A verdict: PASS, FAIL, or INCONCLUSIVE' '' 'reviewer' 'Found a real problem.' '' '### Verdict' 'FAIL'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+PROJECT=$(setup_project)
+CCT_PROVIDER_PROFILE="$PROFILE" bash "$RUNNER" "$PROJECT/.cct/review/pending.json" >/dev/null 2>&1 || true
+ECHO_ARTIFACT="$PROJECT/specs/test-feature/collaboration/build-review.md"
+if [[ -f "$ECHO_ARTIFACT" ]]; then
+    assert_contains "echoed prompt does not forge a PASS verdict" \
+        "$(cat "$ECHO_ARTIFACT")" "verdict: FAIL"
+else
+    echo "  FAIL: echoed-prompt artifact not created"
+    FAIL=$((FAIL + 1))
+fi
+
+# No verdict section at all: fail closed, never PASS on a bare word.
+PROFILE="$TMP/no-verdict.toml"
+write_profile "$PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "vague-reviewer"
+[providers.vague-reviewer]
+type = "cli"
+command = "printf '%s\n' 'The password handling looks fine to me.'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+PROJECT=$(setup_project)
+CCT_PROVIDER_PROFILE="$PROFILE" bash "$RUNNER" "$PROJECT/.cct/review/pending.json" >/dev/null 2>&1 || true
+VAGUE_ARTIFACT="$PROJECT/specs/test-feature/collaboration/build-review.md"
+if [[ -f "$VAGUE_ARTIFACT" ]]; then
+    assert_contains "missing verdict section fails closed" \
+        "$(cat "$VAGUE_ARTIFACT")" "verdict: INCONCLUSIVE"
+else
+    echo "  FAIL: no-verdict artifact not created"
+    FAIL=$((FAIL + 1))
 fi
 
 # Plan phase writes plan-consult.md
