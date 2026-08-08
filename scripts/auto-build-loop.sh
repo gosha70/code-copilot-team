@@ -1258,6 +1258,16 @@ run_review_loop() {
                 fi
                 set_status "addressing-findings"
                 local findings="$PROJECT_DIR/.cct/review/findings-round-$round.json"
+                # #209: never compose a fix prompt from an unusable findings
+                # file. A truncated or empty artifact yields a fix session with
+                # NOTHING to fix, which changes no code and then parks as
+                # git_anomaly — pointing at git instead of at the destroyed
+                # review. Same phantom-findings shape as #204, different cause.
+                if [[ ! -s "$findings" ]] || ! jq -e 'type == "object"' "$findings" >/dev/null 2>&1; then
+                    dispose "review_breaker" \
+                        "findings file for phase $n round $round is missing, empty or not valid JSON ($findings) — refusing to run a fix session with no findings" \
+                        "$(jq -n --arg f "$findings" '{findings_file: $f}')"
+                fi
                 local fixp="$phase_dir/fix-prompt-$fix_count.md"
                 local fixr="$phase_dir/fix-result-$fix_count.json"
                 mkdir -p "$phase_dir"
