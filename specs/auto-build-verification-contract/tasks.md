@@ -1,4 +1,4 @@
-# Tasks: verification contract, increment C1 (#222) — rev 3
+# Tasks: verification contract, increment C1 (#222) — rev 4
 
 Each task is independently reviewable and leaves the suites green.
 
@@ -26,7 +26,13 @@ Each task is independently reviewable and leaves the suites green.
   unknown unless every floor is supplied.
 - Assert no floor literal in any script.
 
-## T4 — Admission-result channel (FR-7, FR-7a, FR-9, FR-9a)
+## T4 — Admission-result channel + lifecycle (FR-7, FR-7a, FR-7b, FR-7c, FR-9, FR-9a, FR-9b)
+- Implement the two sequences literally (fresh / resume) from plan.md.
+- Resume: load + schema-validate the existing frozen contract; no
+  recapture; fail closed when missing/corrupt.
+- `reset_run_clocks()` gains an explicit timestamp parameter; existing
+  callers pass `now`; the resume path passes ATTEMPT_START.
+- Pending-event buffer flushed after ledger init; stderr on refusal.
 - DRIVER creates the path, passes `--result-file`, schema-validates the
   return, imports atomically, removes it on every exit (trap). No path
   scraped from diagnostic output.

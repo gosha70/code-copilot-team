@@ -28,12 +28,14 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 3
+# Plan: verification contract, increment C1 (#222) — rev 4
 
-Rev 2 narrowed the slice; rev 3 fixes what the narrowed slice still got
-wrong — freezing policy, wall-clock semantics, the coverage contract's
-exact shape, and an unconditional side effect that contradicted FR-2. All
-eight findings across both rounds are accepted.
+Rev 2 narrowed the slice; rev 3 froze policy and fixed clock semantics;
+rev 4 writes down the **run lifecycle** those fixes implied but never
+stated. All thirteen findings across three rounds are accepted. The
+reviewer's diagnosis is the right one: most of round 3's findings are
+symptoms of a missing fresh-vs-resume split, so that split is now the
+plan's backbone rather than an implementation detail.
 
 ## What C1 ships
 
@@ -107,6 +109,8 @@ Admission therefore freezes the **fully resolved coverage contract**:
 
 ```jsonc
 "coverage_contract": {
+  "command": "npm run coverage",   // frozen too — a gate that cannot run
+                                   // its own command is not a contract
   "preset_id": "ml-app",
   "preset_sha256": "…",          // the preset FILE's hash at admission
   "parser": "istanbul",
@@ -121,6 +125,47 @@ Admission therefore freezes the **fully resolved coverage contract**:
 
 The driver's gates read **only** this frozen block. The live preset file is
 never re-resolved after admission, including on resume.
+
+### Run lifecycle — fresh vs resume (rev 4)
+
+Rev 3 specified freezing and a pre-admission timestamp but never said what
+a RESUME does, and `load_config()` reruns admission before every
+non-terminal resume. Left implicit, resume would recapture the baseline
+from the current branch against the live preset — defeating the very
+freezing rev 3 added — and `reset_run_clocks()` would set
+`started_epoch` to *now*, excluding the admission that just ran.
+
+Two explicit sequences, and the implementation follows them literally:
+
+**Fresh run**
+1. capture `ATTEMPT_START` (pre-admission)
+2. `git worktree prune` (unattended only) — warning held PENDING, not journalled
+3. admission → result file (frozen contract incl. baseline + accounting)
+4. initialise ledger, `totals.started_epoch = ATTEMPT_START`
+5. import frozen contract + accounting; flush pending events
+
+**Resume**
+1. capture `ATTEMPT_START` (pre-admission)
+2. `git worktree prune` (unattended only) — held PENDING
+3. **load and schema-validate the EXISTING frozen contract from the ledger**;
+   missing or corrupt ⇒ **fail closed**, no recapture
+4. admission runs **without baseline capture** — the frozen contract stands
+5. `reset_run_clocks ATTEMPT_START` — the attempt's clock starts before its
+   own admission, not after
+6. import accounting only; flush pending events
+
+`reset_run_clocks()` therefore takes an explicit timestamp argument rather
+than always using `now`. That is a change to the #205/#210 helper, and its
+existing callers pass `now` to keep their behaviour identical.
+
+### Pending events before the ledger exists (rev 4, finding 4)
+
+`journal()` writes into `.cct/auto-build/<feature>/events.jsonl`. Calling it
+before ledger init either fails (no directory) or CREATES durable run state
+that must not survive a refused admission — breaking increment B's
+invariant. So pre-ledger events (currently only the prune warning) are held
+in memory and flushed after successful ledger init. On refusal they go to
+**stderr** and leave nothing behind.
 
 ### Wall-clock accounting (rev 3, finding 2)
 
@@ -188,7 +233,18 @@ The runtime conformance evaluator and handoff items 1/2/5 (C2); the
 driver-owned visual result and `skip_is_failure` (C3); §5 bounded progress;
 §7 per-phase contracts.
 
-## Risk
+## Risk, and the exact scope of "byte-identical"
 
-`verification` is opt-in; a project without one behaves byte-identically,
-asserted. The only new refusals are for projects that adopt the block.
+`verification.coverage` is opt-in, but rev 3's own handoff items are
+cross-cutting, so the promise has to be stated precisely rather than
+broadly (finding 5):
+
+- **Attended profiles without the block: byte-identical**, asserted.
+- **Unattended runs, even without the block**, get exactly two changes, both
+  listed as deliberate exceptions: the admission-path `git worktree prune`,
+  and admission time counting toward the wall-clock cap. Both are #190
+  handoff items whose whole point is to apply to unattended runs.
+
+Claiming "byte-identical" across the board while shipping those two would
+have been false, which is the same overclaim pattern this arc keeps
+surfacing.
