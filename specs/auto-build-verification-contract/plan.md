@@ -28,11 +28,12 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 2
+# Plan: verification contract, increment C1 (#222) — rev 3
 
-Rev 2 narrows the slice after review. Four findings, all accepted; the
-shape of the change is different enough that this supersedes rev 1 rather
-than patching it.
+Rev 2 narrowed the slice; rev 3 fixes what the narrowed slice still got
+wrong — freezing policy, wall-clock semantics, the coverage contract's
+exact shape, and an unconditional side effect that contradicted FR-2. All
+eight findings across both rounds are accepted.
 
 ## What C1 ships
 
@@ -74,21 +75,64 @@ open for it, and the follow-up slice (C3) owns both (a) the driver-owned
 visual result and (c) the toolchain prerequisite that gates it. Nothing in
 C1 claims otherwise.
 
-## Admission-result channel (new, from finding 3)
+## Admission-result channel
 
 Rev 1 said "capture the baseline into the ledger" without noticing that
 **admission runs inside `load_config()`, before the ledger and frozen
 snapshot exist**, and its throwaway worktree is deleted immediately after.
 There was no data path.
 
-C1 defines one explicitly:
+**The driver owns the channel** (rev 3, finding 2). It creates the result
+path, passes it to admission as an explicit argument, schema-validates what
+comes back, imports atomically, and removes it on every exit via trap. It
+does NOT scrape a path out of mixed diagnostic output — that is how the
+LiteLLM proxy helper's output parsing bit us in #220.
 
-1. Admission runs the coverage command **inside the throwaway worktree**.
-2. It parses the artifact **before** cleanup and writes
-   `{baseline: {...}, test_command: {duration_sec, exit}}` to a
-   machine-readable temp file whose path admission returns.
-3. The driver imports that file into the ledger **only after** admission
-   succeeds and the ledger exists, then deletes it.
+1. Driver: `mktemp` a result path, trap its removal, pass `--result-file`.
+2. Admission runs the coverage command **inside the throwaway worktree**,
+   parses the artifact **before** cleanup, and writes the frozen contract
+   (below) plus `test_command: {duration_sec, exit}` to that path.
+3. Driver validates the file against a schema, then imports it into the
+   ledger **only after** admission succeeds and the ledger exists.
+
+### What gets frozen (rev 3, finding 1)
+
+Freezing the baseline alone is not enough: the config snapshot freezes the
+preset *name*, but the preset FILE stays live, so editing or upgrading it
+between admission and landing — or before a resume — silently moves the
+floor under an already-admitted run. That is the same class as #193's
+config-snapshot rule, and the same class as #201's "raise the cap mid-run".
+
+Admission therefore freezes the **fully resolved coverage contract**:
+
+```jsonc
+"coverage_contract": {
+  "preset_id": "ml-app",
+  "preset_sha256": "…",          // the preset FILE's hash at admission
+  "parser": "istanbul",
+  "artifact": "coverage/coverage-summary.json",
+  "min_line_pct": 80,
+  "min_branch_pct": 70,
+  "max_regression_pct": 0,
+  "floor_enforced_at": "landing",
+  "baseline": { "line_pct": 74.2, "branch_pct": 61.0 }  // or null (greenfield)
+}
+```
+
+The driver's gates read **only** this frozen block. The live preset file is
+never re-resolved after admission, including on resume.
+
+### Wall-clock accounting (rev 3, finding 2)
+
+Recording `duration_sec` in the ledger is history, not enforcement — the cap
+is computed from `totals.started_epoch`, which the driver sets AFTER
+admission, so admission time was excluded no matter what we logged.
+
+C1 captures a **pre-admission** timestamp and initialises
+`totals.started_epoch` from it, so admission's `test.command` run is inside
+the wall-clock budget by construction rather than by bookkeeping. The
+`duration_sec` field stays for triage. Interaction with #210 is intended: a
+successful resume still restarts the clock per-attempt.
 
 This preserves increment B's invariant — **a refused admission creates no
 ledger** — which a naive "write to the ledger from admission" would have
@@ -126,9 +170,17 @@ refuses.
 
 ## Handoff items
 
-(4) `git worktree prune` at driver preflight. (3) admission's `test.command`
-invocation accounted for — via the same channel, since it has the same
-no-ledger-yet problem.
+**(4) `git worktree prune`** — scoped, not unconditional (rev 3, finding 4).
+FR-2 promises byte-identical behaviour without a `verification` block, and a
+new side effect on every run would break that promise. The prune runs on the
+**unattended admission path only**, immediately before admission creates its
+throwaway worktree — which is exactly where the leak it cleans up comes
+from. Prune failure is **non-fatal and journalled**: a stale registration
+does not affect correctness, and killing a run over housekeeping would be a
+worse trade.
+
+**(3) admission's `test.command`** — accounted for via the pre-admission
+timestamp above, not merely logged.
 
 ## Deliberately NOT in this slice
 
