@@ -38,10 +38,32 @@ Each task is independently reviewable and leaves the suites green.
 - Fixtures per format plus a malformed artifact.
 - Own test file, wired into sync-check.
 
-## T3 — Presets (FR-5)
+## T3 — Presets (FR-5, FR-5b, and T1's deferred FR-4 half)
+
+Implements the resolver, not new policy: the requirements are FR-5 (preset
+resolution, no script-side floor literals) and FR-5b (`preset_id` /
+`preset_sha256` null when no preset contributes).
+
 - `shared/templates/<preset>/verification-preset.json` for templates with a
-  test story; explicit `preset` key resolution; fail closed when absent or
-  unknown unless every floor is supplied.
+  test story; explicit `preset` key resolution; config overrides preset
+  per key.
+- **CAPTURE ONCE.** Read the preset bytes a single time; compute
+  `preset_sha256` from THAT capture and parse the values from THAT capture.
+  Never hash the path and reopen it to parse — a concurrent replacement
+  between the two reads makes the frozen hash attest to policy that was
+  never used. Same TOCTOU shape as T2's artifact containment, with policy
+  instead of evidence.
+- **Fail closed, no fallback to defaults**, on any of: missing, unreadable,
+  malformed, unknown key, a `preset` ID that traverses (an ID is a NAME —
+  apply the same segment-wise rule as the artifact path), or incomplete
+  effective policy after resolution.
+- **Effective-policy completeness** is T1's deferred FR-4 half: after
+  merging preset and config, a brownfield contract with no
+  `max_regression_pct` is inadmissible, and every declared floor must have
+  a value.
+- No preset ⇒ `preset_id` and `preset_sha256` are both `null`, recorded
+  explicitly so "no preset contributed" is distinguishable from "resolved
+  but not recorded".
 - Assert no floor literal in any script.
 
 ## T4 — Preflight-result channel + lifecycle (matrix is normative)
