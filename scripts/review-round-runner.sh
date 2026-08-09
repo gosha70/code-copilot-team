@@ -113,6 +113,35 @@ fi
 
 NEXT_ROUND=$((CURRENT_ROUND + 1))
 
+# #227 D1: the ceiling counts rounds IN THIS ATTEMPT, not cumulatively.
+# Round numbering is deliberately monotonic (a breaker after round 5 is
+# followed by round 6, not 1), so a fixed cumulative ceiling made
+# `/review-decide retry` structurally impossible to satisfy: NEXT_ROUND was
+# already > MAX_ROUNDS before the reviewer was ever invoked, and the breaker
+# re-tripped immediately. Monotonic numbering and a per-attempt budget are
+# both preserved by remembering where the current attempt began.
+#
+# Self-maintaining on purpose: /review-decide increments `attempt`, and the
+# runner notices the change here. Requiring the command to also write
+# attempt_start_round would put a safety invariant in a model's hands.
+ATTEMPT_START_ROUND=$(jq -r '.attempt_start_round // 0' "$STATE_FILE" 2>/dev/null)
+LAST_ATTEMPT=$(jq -r '.last_attempt // empty' "$STATE_FILE" 2>/dev/null)
+# Reset ONLY when the attempt is KNOWN to have changed. A state written
+# before this field existed has no last_attempt, and treating that as "a new
+# attempt starts here" would silently forgive an already-exhausted budget on
+# the first run after upgrade — the anchor stays 0, i.e. the old cumulative
+# behaviour, until a real retry moves it.
+if [[ -n "$LAST_ATTEMPT" && "$LAST_ATTEMPT" != "$ATTEMPT" ]]; then
+    ATTEMPT_START_ROUND="$CURRENT_ROUND"
+elif [[ -z "$LAST_ATTEMPT" ]] && [[ "$ATTEMPT" -gt 1 ]]; then
+    # The breaker exits BEFORE state is rewritten, so the run that tripped it
+    # never persisted last_attempt — and the retry that follows would look
+    # like legacy state. `attempt` only advances via /review-decide retry, so
+    # attempt > 1 with no anchor IS a retry, and it gets a fresh budget.
+    ATTEMPT_START_ROUND="$CURRENT_ROUND"
+fi
+ROUNDS_THIS_ATTEMPT=$((NEXT_ROUND - ATTEMPT_START_ROUND))
+
 # ── Dirty worktree check ─────────────────────────────────────
 
 if [[ -n "$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null | grep -Ev '^[?][?] \.cct/')" ]]; then
@@ -125,18 +154,20 @@ fi
 
 if [[ "$PHASE" != "plan" ]]; then
 
-    # Round limit
-    if [[ "$NEXT_ROUND" -gt "$MAX_ROUNDS" ]]; then
+    # Round limit — per attempt (#227 D1)
+    if [[ "$ROUNDS_THIS_ATTEMPT" -gt "$MAX_ROUNDS" ]]; then
         cat > "$REVIEW_DIR/breaker-tripped.json" << BREAKER_EOF
 {
   "breaker": "max_rounds",
   "rounds_completed": $CURRENT_ROUND,
+  "rounds_this_attempt": $((CURRENT_ROUND - ATTEMPT_START_ROUND)),
+  "attempt_start_round": $ATTEMPT_START_ROUND,
   "max_rounds": $MAX_ROUNDS,
   "attempt": $ATTEMPT,
-  "action": "Run /review-decide approve|reject|retry"
+  "action": "Run /review-decide approve|reject|retry — retry starts a fresh round budget for the next attempt"
 }
 BREAKER_EOF
-        echo "Circuit breaker: max rounds ($MAX_ROUNDS) reached after $CURRENT_ROUND rounds." >&2
+        echo "Circuit breaker: max rounds ($MAX_ROUNDS) reached after $((CURRENT_ROUND - ATTEMPT_START_ROUND)) round(s) in attempt $ATTEMPT (round $CURRENT_ROUND overall)." >&2
         exit 2
     fi
 
@@ -162,17 +193,21 @@ BREAKER_EOF
 
     # Stale findings
     if [[ "$CURRENT_ROUND" -ge 2 && -f "$STATE_FILE" ]]; then
+        # Buckets first (#227 D3): per-id staleness misses a reviewer that
+        # rewords, because every restatement arrives with a fresh id.
         STALE_IDS=$(jq -r --argjson threshold "$STALE_THRESHOLD" '
-            .findings // {} | to_entries[] |
+            ((.findings // {}) + (.repeats // {})) | to_entries[] |
             select(.value.consecutive_fixed >= $threshold) |
             .key
         ' "$STATE_FILE" 2>/dev/null)
 
         if [[ -n "$STALE_IDS" ]]; then
             STALE_DETAILS=$(jq --argjson threshold "$STALE_THRESHOLD" '
-                [.findings // {} | to_entries[] |
+                [((.findings // {}) + (.repeats // {})) | to_entries[] |
                  select(.value.consecutive_fixed >= $threshold) |
-                 {id: .key, description: .value.description, rounds_seen: .value.rounds_seen,
+                 {id: .key,
+                  description: (.value.description // ("recurring \(.value.category) finding in \(.value.file) — reworded each round")),
+                  rounds_seen: .value.rounds_seen,
                   consecutive_fixed: .value.consecutive_fixed}]
             ' "$STATE_FILE" 2>/dev/null)
 
@@ -501,6 +536,33 @@ fi
 
 # ── Parse findings ───────────────────────────────────────────
 
+compute_repeat_key() {
+    # #227 D3: finding ids hash the DESCRIPTION, so a reviewer that rewords
+    # the same defect produces a fresh id every round, consecutive_fixed
+    # never increments, and the stale-finding breaker never fires — the loop
+    # reads N "new" findings instead of one stuck reviewer. The repeat key
+    # deliberately ignores prose: same file + same category + same
+    # location (= normalised line_hint) is the same recurring complaint for
+    # staleness purposes, however it is phrased.  The line_hint
+    # discriminates between two different correctness defects in one file
+    # (e.g. "near the retry helper" vs "in the main loop") — without it
+    # they'd share a bucket and an unrelated fix could trip the breaker.
+    local file="$1" category="$2" line_hint="$3"
+    # Normalize line_hint: lowercase, collapse whitespace.
+    local norm_hint
+    norm_hint=$(printf '%s' "${line_hint:-}" | tr '[:upper:]' '[:lower:]' | tr -s ' ')
+    local input="${file}|${category}|${norm_hint}"
+    local hash
+    if command -v shasum &>/dev/null; then
+        hash=$(printf '%s' "$input" | shasum -a 256 | cut -c1-8)
+    elif command -v sha256sum &>/dev/null; then
+        hash=$(printf '%s' "$input" | sha256sum | cut -c1-8)
+    else
+        hash="00000000"
+    fi
+    echo "r-${hash}"
+}
+
 compute_finding_id() {
     local file="$1" category="$2" description="$3"
     # Normalize: lowercase, collapse whitespace, strip line number refs
@@ -729,6 +791,45 @@ echo "Verdict: $VERDICT (blocking: $BLOCKING_COUNT)" >&2
 
 # Merge findings into accumulated state
 ACCUMULATED=$(jq '.findings // {}' "$STATE_FILE" 2>/dev/null || echo '{}')
+# #227 D3: buckets survive rewording; PRIOR_* are the pre-round values, so
+# "was this bucket marked fixed last round?" can be answered by mapping the
+# previous resolution's finding ids through the findings they belonged to.
+PRIOR_FINDINGS="$ACCUMULATED"
+REPEATS=$(jq '.repeats // {}' "$STATE_FILE" 2>/dev/null || echo '{}')
+PREV_FIXED_KEYS='[]'
+PREV_RESOLUTION_FILE="$REVIEW_DIR/resolution-round-${CURRENT_ROUND}.json"
+if [[ -f "$PREV_RESOLUTION_FILE" ]]; then
+    PREV_FIXED_KEYS=$(jq -c --argjson prior "$PRIOR_FINDINGS" --argjson last_round "$CURRENT_ROUND" '
+        # Resolution lookup: finding_id → disposition (this round only)
+        ([(.resolutions // .dispositions // [])[]?
+          | {key: (.finding_id // .id), value: .disposition}]
+          | from_entries) as $resolutions
+        |
+        # A bucket is only "previously fixed" when EVERY finding that
+        # belonged to it IN THE MOST RECENT COMPLETED ROUND was resolved
+        # as "fixed".  One fixed sibling and one rejected sibling used
+        # to mark the whole bucket fixed — the rejected one would
+        # naturally reappear and the counter advanced as though a fix
+        # had failed.  Filtering to last_round avoids also counting
+        # findings from earlier rounds whose resolutions are not in
+        # this resolution file.
+        [$prior | to_entries
+          | map(select(.value.repeat_key != null
+                       and (.value.rounds_seen | index($last_round))))
+          | group_by(.value.repeat_key)[]
+          | select([.[].key | $resolutions[.]] | all(. == "fixed"))
+          | .[0].value.repeat_key
+        ] | unique
+    ' "$PREV_RESOLUTION_FILE" 2>/dev/null || echo '[]')
+    [[ -n "$PREV_FIXED_KEYS" ]] || PREV_FIXED_KEYS='[]'
+fi
+
+# Collect unique repeat keys seen this round so bucket-level staleness
+# advances at most ONCE per round (two findings sharing a file+category
+# used to increment the same bucket twice — each bump brings it one step
+# closer to threshold 2, so a round with two correctness findings in the
+# same file tripped the stale-finding breaker after one recurrence).
+THIS_ROUND_KEY_MAP='{}'
 
 # Update accumulated findings with this round's data
 for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
@@ -756,13 +857,48 @@ for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
         fi
     fi
 
+    # The bucket this finding belongs to, regardless of how it is worded.
+    F_FILE=$(echo "$FINDING_DATA" | jq -r '.file // ""')
+    F_CAT=$(echo "$FINDING_DATA" | jq -r '.category // ""')
+    F_LINE_HINT=$(echo "$FINDING_DATA" | jq -r '.line_hint // ""')
+    REPEAT_KEY=$(compute_repeat_key "$F_FILE" "$F_CAT" "$F_LINE_HINT")
+
     ACCUMULATED=$(echo "$ACCUMULATED" | jq \
         --arg id "$FINDING_ID" \
         --arg desc "$DESCRIPTION" \
+        --arg rkey "$REPEAT_KEY" \
         --argjson fsr "$FIRST_SEEN" \
         --argjson rounds "$UPDATED_ROUNDS" \
         --argjson cf "$CONSEC_FIXED" \
-        '.[$id] = {description: $desc, first_seen_round: $fsr, rounds_seen: $rounds, consecutive_fixed: $cf}')
+        '.[$id] = {description: $desc, repeat_key: $rkey, first_seen_round: $fsr, rounds_seen: $rounds, consecutive_fixed: $cf}')
+
+    # Remember this repeat key for the post-loop bucket update so we
+    # advance staleness at most once per round per key.
+    THIS_ROUND_KEY_MAP=$(echo "$THIS_ROUND_KEY_MAP" | jq \
+        --arg k "$REPEAT_KEY" --arg f "$F_FILE" --arg c "$F_CAT" \
+        '.[$k] = {file: $f, category: $c}')
+done
+
+# ── Bucket-level staleness (once per unique key per round) ─────
+# Each repeat key gets exactly one increment (or reset) regardless
+# of how many findings mapped to it this round.  Two findings that
+# share a file+category and were both marked fixed last round now
+# advance consecutive_fixed by 1, not 2.
+for REPEAT_KEY in $(echo "$THIS_ROUND_KEY_MAP" | jq -r 'keys[]'); do
+    F_FILE=$(echo "$THIS_ROUND_KEY_MAP" | jq -r --arg k "$REPEAT_KEY" '.[$k].file')
+    F_CAT=$(echo "$THIS_ROUND_KEY_MAP" | jq -r --arg k "$REPEAT_KEY" '.[$k].category')
+    BUCKET_CF=$(echo "$REPEATS" | jq -r --arg k "$REPEAT_KEY" '.[$k].consecutive_fixed // 0')
+    if [[ "$(echo "$PREV_FIXED_KEYS" | jq -r --arg k "$REPEAT_KEY" 'index($k) != null')" == "true" ]]; then
+        BUCKET_CF=$((BUCKET_CF + 1))
+    elif [[ -f "$PREV_RESOLUTION_FILE" ]]; then
+        BUCKET_CF=0
+    fi
+    REPEATS=$(echo "$REPEATS" | jq \
+        --arg k "$REPEAT_KEY" --arg f "$F_FILE" --arg c "$F_CAT" \
+        --argjson r "$NEXT_ROUND" --argjson cf "$BUCKET_CF" '
+        .[$k] = { file: $f, category: $c,
+                  rounds_seen: (((.[$k].rounds_seen // []) + [$r]) | unique),
+                  consecutive_fixed: $cf }')
 done
 
 jq -n \
@@ -779,12 +915,16 @@ jq -n \
     --arg last_verdict "$VERDICT" \
     --argjson findings "$ACCUMULATED" \
     --argjson cost "$COST_STATE" \
+    --argjson attempt_start_round "$ATTEMPT_START_ROUND" \
+    --argjson repeats "$REPEATS" \
     '{current_round: $round, attempt: $attempt, loop_start: $loop_start,
+      attempt_start_round: $attempt_start_round, last_attempt: $attempt,
       feature_id: $feature_id, phase: $phase,
       subject_provider: $subject_provider, peer_provider: $peer_provider,
       review_scope: $review_scope, review_specialization: $review_specialization,
       target_ref: $target_ref,
-      last_verdict: $last_verdict, findings: $findings, cost: $cost}' \
+      last_verdict: $last_verdict, findings: $findings, repeats: $repeats,
+      cost: $cost}' \
     > "$STATE_FILE"
 
 # ── Write loop-summary.json on PASS ──────────────────────────

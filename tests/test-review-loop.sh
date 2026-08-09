@@ -838,6 +838,219 @@ rm -f "$HUGE_PROFILE" "$HUGE_REVIEWER"
 rm -f "$ECHO_PROFILE" "$DUP_PROFILE" "$NOVERDICT_PROFILE" "$TYPO_PROFILE"
 
 # ══════════════════════════════════════════════════════════════
+echo "=== #227: the max_rounds breaker must not be a dead end ==="
+# ══════════════════════════════════════════════════════════════
+
+# D1. Round numbering is monotonic, so a CUMULATIVE ceiling made
+# /review-decide retry structurally impossible: with current_round=5 and
+# max_rounds=5, NEXT_ROUND=6 re-tripped the breaker before the reviewer was
+# ever invoked. The budget is per ATTEMPT, so retry gets a fresh one.
+P=$(setup_project)
+write_state "$P" 5
+# Attempt 1 exhausted its budget: the breaker fires.
+RC=0; CCT_REVIEW_MAX_ROUNDS=5 CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "a spent per-attempt budget still trips the breaker" 2 "$RC"
+assert_eq "the breaker reports rounds in THIS attempt" "5" \
+    "$(jq -r '.rounds_this_attempt' "$P/.cct/review/breaker-tripped.json" 2>/dev/null)"
+
+# /review-decide retry increments `attempt` and leaves current_round alone.
+jq '.attempt = 2' "$P/.cct/review/state.json" > "$P/.cct/review/s.tmp" && mv "$P/.cct/review/s.tmp" "$P/.cct/review/state.json"
+rm -f "$P/.cct/review/breaker-tripped.json"
+RC=0; CCT_REVIEW_MAX_ROUNDS=5 CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "after retry the next round actually RUNS" 0 "$RC"
+assert_eq "round numbering stays monotonic across attempts" "6" \
+    "$(jq -r '.current_round' "$P/.cct/review/state.json" 2>/dev/null)"
+assert_eq "the new attempt's budget is anchored at its first round" "5" \
+    "$(jq -r '.attempt_start_round' "$P/.cct/review/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# D3. A reviewer that REWORDS the same defect produced a fresh finding id
+# every round, so consecutive_fixed never incremented and the stale breaker
+# never fired — the loop read N "new" findings instead of one stuck
+# reviewer. Staleness is now bucketed by (file, category).
+REWORD1=$(mktemp); REWORD2=$(mktemp)
+cat > "$REWORD1" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Findings\nFINDING|blocking|correctness|src/app.sh|near main|Output dirs are never cleaned between runs|Clean them\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+cat > "$REWORD2" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Findings\nFINDING|blocking|correctness|src/app.sh|near main|Persistent output directories accumulate across invocations|Purge them\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+CCT_PROVIDER_PROFILE="$REWORD1" bash "$RUNNER" "$P" >/dev/null 2>&1 || true
+R1_ID=$(jq -r '.findings[0].id' "$P/.cct/review/findings-round-1.json")
+R1_KEY=$(jq -r --arg id "$R1_ID" '.findings[$id].repeat_key' "$P/.cct/review/state.json")
+# The fixer claims it fixed the finding; the reviewer restates it, reworded.
+jq -n --argjson r 1 --arg id "$R1_ID" \
+    '{round: $r, resolutions: [{finding_id: $id, disposition: "fixed", rationale: "m", commit_ref: "x"}]}' \
+    > "$P/.cct/review/resolution-round-1.json"
+CCT_PROVIDER_PROFILE="$REWORD2" bash "$RUNNER" "$P" >/dev/null 2>&1 || true
+R2_ID=$(jq -r '.findings[0].id' "$P/.cct/review/findings-round-2.json")
+R2_KEY=$(jq -r --arg id "$R2_ID" '.findings[$id].repeat_key' "$P/.cct/review/state.json")
+
+assert_eq "rewording still changes the finding id (unchanged behaviour)" "different" \
+    "$( [[ "$R1_ID" != "$R2_ID" ]] && echo different || echo "same:$R1_ID" )"
+assert_eq "but the repeat key is stable across rewording" "$R1_KEY" "$R2_KEY"
+assert_eq "the reworded repeat counts as consecutive_fixed" "1" \
+    "$(jq -r --arg k "$R2_KEY" '.repeats[$k].consecutive_fixed' "$P/.cct/review/state.json" 2>/dev/null)"
+
+# Keep rewording. The default threshold is 2 CONSECUTIVE recurrences, and
+# the breaker is evaluated BEFORE a round runs, so it fires on the round
+# after the count reaches the threshold. Each cycle: claim fixed, restate it
+# in different words.
+jq -n --argjson r 2 --arg id "$R2_ID" \
+    '{round: $r, resolutions: [{finding_id: $id, disposition: "fixed", rationale: "m", commit_ref: "x"}]}' \
+    > "$P/.cct/review/resolution-round-2.json"
+CCT_PROVIDER_PROFILE="$REWORD1" bash "$RUNNER" "$P" >/dev/null 2>&1 || true
+assert_eq "a second reworded recurrence reaches the threshold" "2" \
+    "$(jq -r --arg k "$R2_KEY" '.repeats[$k].consecutive_fixed' "$P/.cct/review/state.json" 2>/dev/null)"
+R3_ID=$(jq -r '.findings[0].id' "$P/.cct/review/findings-round-3.json")
+jq -n --argjson r 3 --arg id "$R3_ID" \
+    '{round: $r, resolutions: [{finding_id: $id, disposition: "fixed", rationale: "m", commit_ref: "x"}]}' \
+    > "$P/.cct/review/resolution-round-3.json"
+RC=0; CCT_PROVIDER_PROFILE="$REWORD2" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "a reworded-but-recurring defect trips the stale breaker" 2 "$RC"
+assert_eq "the stale breaker names the recurrence" "stale_findings" \
+    "$(jq -r '.breaker' "$P/.cct/review/breaker-tripped.json" 2>/dev/null)"
+assert_eq "the stale detail explains the rewording" "1" \
+    "$(jq -r '.stale_findings[0].description' "$P/.cct/review/breaker-tripped.json" 2>/dev/null | grep -c 'reworded' || true)"
+rm -rf "$P"; rm -f "$REWORD1" "$REWORD2"
+
+# ══════════════════════════════════════════════════════════════
+echo "=== Two findings sharing a repeat key advance staleness once per round ==="
+# ══════════════════════════════════════════════════════════════
+# Two findings in the same file+category+line_hint used to
+# increment the bucket twice per round (once per finding in the
+# per-finding loop), so after one fixed→re-raised cycle
+# consecutive_fixed jumped to 2 and tripped the threshold-2
+# breaker.  Now each bucket advances once per round.
+TWO_SAME=$(mktemp)
+cat > "$TWO_SAME" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Findings\nFINDING|blocking|correctness|src/app.sh|near main|First defect|Fix it\nFINDING|blocking|correctness|src/app.sh|near main|Second defect in same location|Fix it too\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+TWO_SAME_R2=$(mktemp)
+cat > "$TWO_SAME_R2" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Findings\nFINDING|blocking|correctness|src/app.sh|near main|First reworded|Repair\nFINDING|blocking|correctness|src/app.sh|near main|Second reworded|Repair too\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+CCT_PROVIDER_PROFILE="$TWO_SAME" bash "$RUNNER" "$P" >/dev/null 2>&1 || true
+R1_ID1=$(jq -r '.findings[0].id' "$P/.cct/review/findings-round-1.json")
+R1_ID2=$(jq -r '.findings[1].id' "$P/.cct/review/findings-round-1.json")
+R1_KEY1=$(jq -r --arg id "$R1_ID1" '.findings[$id].repeat_key' "$P/.cct/review/state.json")
+R1_KEY2=$(jq -r --arg id "$R1_ID2" '.findings[$id].repeat_key' "$P/.cct/review/state.json")
+assert_eq "two findings in the same bucket share a repeat key" "$R1_KEY1" "$R1_KEY2"
+
+# Mark BOTH as fixed — they share a bucket so both resolutions were "fixed"
+jq -n --argjson r 1 --arg id1 "$R1_ID1" --arg id2 "$R1_ID2" \
+    '{round: $r, resolutions: [{finding_id: $id1, disposition: "fixed", rationale: "m", commit_ref: "x"}, {finding_id: $id2, disposition: "fixed", rationale: "m", commit_ref: "x"}]}' \
+    > "$P/.cct/review/resolution-round-1.json"
+CCT_PROVIDER_PROFILE="$TWO_SAME_R2" bash "$RUNNER" "$P" >/dev/null 2>&1 || true
+assert_eq "bucket advances once per round (not per finding)" "1" \
+    "$(jq -r --arg k "$R1_KEY1" '.repeats[$k].consecutive_fixed' "$P/.cct/review/state.json" 2>/dev/null)"
+rm -rf "$P"; rm -f "$TWO_SAME" "$TWO_SAME_R2"
+
+# ══════════════════════════════════════════════════════════════
+echo "=== Distinct line_hints in the same file+category produce distinct repeat keys ==="
+# ══════════════════════════════════════════════════════════════
+# Without a location discriminator, two different correctness
+# defects in the same file share a bucket and one fix can advance
+# the other's staleness.  line_hint disambiguates them.
+DISTINCT=$(mktemp)
+cat > "$DISTINCT" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Findings\nFINDING|blocking|correctness|src/app.sh|near retry helper|Unbounded retry|Bound it\nFINDING|blocking|correctness|src/app.sh|in main loop|Dangling temp files|Clean them\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+CCT_PROVIDER_PROFILE="$DISTINCT" bash "$RUNNER" "$P" >/dev/null 2>&1 || true
+ID1=$(jq -r '.findings[0].id' "$P/.cct/review/findings-round-1.json")
+ID2=$(jq -r '.findings[1].id' "$P/.cct/review/findings-round-1.json")
+KEY1=$(jq -r --arg id "$ID1" '.findings[$id].repeat_key' "$P/.cct/review/state.json")
+KEY2=$(jq -r --arg id "$ID2" '.findings[$id].repeat_key' "$P/.cct/review/state.json")
+
+assert_eq "distinct line_hints produce distinct repeat keys" "different" \
+    "$([[ "$KEY1" != "$KEY2" ]] && echo different || echo "same:$KEY1")"
+rm -rf "$P"; rm -f "$DISTINCT"
+
+# ══════════════════════════════════════════════════════════════
+echo "=== A mixed-disposition bucket does not advance staleness ==="
+# ══════════════════════════════════════════════════════════════
+# One fixed sibling used to mark the whole bucket fixed, so the
+# rejected sibling's natural reappearance advanced the counter as
+# though a fix had failed.  A bucket is only "previously fixed"
+# when EVERY finding in it was resolved as fixed.
+MIXED=$(mktemp)
+cat > "$MIXED" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Findings\nFINDING|blocking|correctness|src/app.sh|near main|Defect alpha|Fix alpha\nFINDING|blocking|correctness|src/app.sh|near main|Defect beta|Fix beta\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+MIXED_R2=$(mktemp)
+cat > "$MIXED_R2" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Findings\nFINDING|blocking|correctness|src/app.sh|near main|Alpha reworded|Repair\nFINDING|blocking|correctness|src/app.sh|near main|Beta reworded|Repair too\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+
+P=$(setup_project)
+write_state "$P" 0
+CCT_PROVIDER_PROFILE="$MIXED" bash "$RUNNER" "$P" >/dev/null 2>&1 || true
+R1_ID1=$(jq -r '.findings[0].id' "$P/.cct/review/findings-round-1.json")
+R1_ID2=$(jq -r '.findings[1].id' "$P/.cct/review/findings-round-1.json")
+R1_KEY=$(jq -r --arg id "$R1_ID1" '.findings[$id].repeat_key' "$P/.cct/review/state.json")
+
+# Fix alpha; reject beta — not all findings in the bucket were fixed.
+jq -n --argjson r 1 --arg id1 "$R1_ID1" --arg id2 "$R1_ID2" \
+    '{round: $r, resolutions: [{finding_id: $id1, disposition: "fixed", rationale: "m", commit_ref: "x"}, {finding_id: $id2, disposition: "rejected", rationale: "out of scope", commit_ref: null}]}' \
+    > "$P/.cct/review/resolution-round-1.json"
+CCT_PROVIDER_PROFILE="$MIXED_R2" bash "$RUNNER" "$P" >/dev/null 2>&1 || true
+assert_eq "a mixed-disposition bucket does not advance staleness" "0" \
+    "$(jq -r --arg k "$R1_KEY" '.repeats[$k].consecutive_fixed' "$P/.cct/review/state.json" 2>/dev/null)"
+rm -rf "$P"; rm -f "$MIXED" "$MIXED_R2"
+
+
+# ══════════════════════════════════════════════════════════════
 # Summary
 # ══════════════════════════════════════════════════════════════
 

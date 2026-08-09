@@ -79,6 +79,24 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   accrued or triggered. Anyone on an older version was not protected by it.
 
 ### Fixed
+- **The `max_rounds` breaker is no longer a dead end (#227)** — three
+  defects together made it terminal. (1) Round numbering is deliberately
+  monotonic, so a CUMULATIVE ceiling made `/review-decide retry`
+  structurally impossible: with `current_round=5` and `max_rounds=5` the
+  next round was already over the limit and the breaker re-tripped before
+  the reviewer ran. The budget is now per ATTEMPT, anchored by the runner
+  itself rather than by the slash command, so retry gets a fresh budget
+  while numbering stays monotonic. (2) `review.max_rounds` shipped in the
+  template but was never read — the driver only set `CCT_REVIEW_MAX_ROUNDS`
+  for the advisory pass, so the gating loop always used the built-in 5 and
+  raising it in `automation.json` did nothing (the same class as #205's
+  `loop_timeout_sec`); it is now read and passed through, env still
+  overriding. (3) Finding ids hash the description, so a reviewer that
+  reworded produced fresh ids every round, `consecutive_fixed` never
+  incremented, and the stale-finding breaker never fired — the loop read N
+  "new" findings instead of one stuck reviewer. Staleness is now bucketed
+  by `(file, category)`, which ignores prose; finding ids are unchanged
+  because dispositions are keyed by them.
 - **The benchmark's LiteLLM proxy dependencies are pinned (#220)** — the
   Anthropic-vs-vLLM benchmark installed an unconstrained
   `litellm[proxy]>=1.50` into a fresh venv on every run. litellm's own

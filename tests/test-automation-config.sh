@@ -253,6 +253,34 @@ assert "schema requires non-empty command/artifact/preset" \
 assert "schema closes both objects" \
     jq -e '.properties.verification.additionalProperties == false and '"$COV_SCHEMA"'.additionalProperties == false' "$SCHEMA"
 
+# ── review block validation ──────────────────────────────────
+# max_rounds and loop_timeout_sec are COUNTS — the runtime
+# silently falls back to its default for anything that is not a
+# positive integer.  The validator enforces the shape only when
+# the value IS numeric; non-numeric values (strings, booleans)
+# pass through to the driver's runtime fallback.
+
+w rev1.json '{"review":{"max_rounds":1.5}}'
+assert_rejects "fractional max_rounds is rejected" "$TMP/rev1.json" "positive integer"
+
+w rev2.json '{"review":{"max_rounds":0}}'
+assert_rejects "zero max_rounds is rejected" "$TMP/rev2.json" "positive integer"
+
+w rev3.json '{"review":{"max_rounds":"abc"}}'
+assert "string max_rounds passes through for driver fallback" bash "$V" "$TMP/rev3.json"
+
+w rev4.json '{"review":{"loop_timeout_sec":1.5}}'
+assert_rejects "fractional loop_timeout_sec is rejected" "$TMP/rev4.json" "positive integer"
+
+assert "schema max_rounds is integer type" \
+    jq -e '.properties.review.properties.max_rounds.type == "integer"' "$SCHEMA"
+assert "schema max_rounds has minimum 1" \
+    jq -e '.properties.review.properties.max_rounds.minimum == 1' "$SCHEMA"
+assert "schema loop_timeout_sec is integer type" \
+    jq -e '.properties.review.properties.loop_timeout_sec.type == "integer"' "$SCHEMA"
+assert "schema loop_timeout_sec has minimum 1" \
+    jq -e '.properties.review.properties.loop_timeout_sec.minimum == 1' "$SCHEMA"
+
 echo ""
 echo "========================================="
 echo "  automation-config tests: $PASS passed, $FAIL failed"
