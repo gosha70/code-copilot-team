@@ -28,14 +28,15 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 8
+# Plan: verification contract, increment C1 (#222) — rev 9
 
 Rev 2 narrowed the slice; rev 3 froze policy and fixed clock semantics;
 rev 4 wrote down the run lifecycle; rev 5 gave that lifecycle its missing dimensions; rev 6 split the result file; rev 7 finished the ownership sweep and gave the result schema its path
-discriminator; rev 8 fixes an import gate that waited on a producer attended
-runs never invoke, pins resume path selection to the frozen snapshot, and
-lands the acceptance criteria rev 7 CLAIMED but did not write. All
-twenty-three findings across seven rounds are accepted. The
+discriminator; rev 8 fixed the import gate and pinned resume path selection; rev 9
+replaces the two literal sequences with ONE path-parameterised flow, so the
+prune trigger, the clock origin and the imported sections all derive from
+the same table instead of being restated (and contradicted) in prose. All
+twenty-six findings across eight rounds are accepted. The
 reviewer's diagnosis is the right one: most of round 3's findings are
 symptoms of a missing fresh-vs-resume split, so that split is now the
 plan's backbone rather than an implementation detail.
@@ -93,17 +94,19 @@ comes back, imports atomically, and removes it on every exit via trap. It
 does NOT scrape a path out of mixed diagnostic output — that is how the
 LiteLLM proxy helper's output parsing bit us in #220.
 
-1. Driver: **iff this path has a producer** (the emission table below), it
-   `mktemp`s a result path, traps its removal, and passes `--result-file`.
-   On a no-producer path it allocates nothing — "no file" is literal, not a
-   placeholder that later has to be distinguished from a real one (rev 7,
-   finding 2).
+1. Driver: **iff this path has a producer** (the table above), it `mktemp`s
+   a result path, traps its removal, and passes `--result-file`. On a
+   no-producer path it allocates nothing — "no file" is literal, not a
+   placeholder that later has to be distinguished from a real one.
 2. The **preflight initialiser** (not admission — FR-7d) runs the coverage
    command **inside the throwaway worktree**, parses the artifact **before**
    cleanup, and writes the frozen contract to that path. On an unattended
    run the admission bar additionally writes its own `admission` section.
-3. Driver validates the file against a schema, then imports it into the
-   ledger **only after** admission succeeds and the ledger exists.
+3. Driver validates the file against the schema branch for its computed
+   `PATH`, then imports it **only after every producer applicable to that
+   path has succeeded** and the ledger exists. Gating on "admission
+   succeeds" would strand `fresh-attended-block`, whose profile never runs
+   admission.
 
 ### The preflight-result file is a schema, not a convention
 
@@ -239,26 +242,51 @@ the leak it cleans up is caused by creating one.
 
 Two explicit sequences, and the implementation follows them literally:
 
-**Fresh run**
-1. capture `ATTEMPT_START` (pre-admission)
-2. if this run will create a throwaway worktree: `git worktree prune` —
-   warning held PENDING, not journalled
-3. block present ⇒ initialise the contract (resolve preset, capture
-   baseline if brownfield); unattended ⇒ also run the admission bar. Both
-   write the result file (`mode: fresh`)
-4. initialise ledger, `totals.started_epoch = ATTEMPT_START`
-5. import frozen contract + accounting; flush pending events
+Rev 8 still carried two literal sequences written for rev 4's world —
+`mode: fresh`, "import contract + accounting" on every fresh run, admission
+on every resume. Four supported paths contradict that. Rather than patch
+them again, there is now ONE sequence parameterised by the computed path,
+with a table that drives every per-path decision (rev 9, findings 1–3):
 
-**Resume**
-1. capture `ATTEMPT_START` (pre-admission)
-2. prune if a throwaway worktree will be created — held PENDING
-3. block present ⇒ **load and schema-validate the EXISTING frozen contract**;
-   missing or corrupt ⇒ **fail closed**, no recapture.
-   Block absent ⇒ legacy path, no contract expected, resume proceeds
-4. admission runs **without baseline capture** — the frozen contract stands
-5. `reset_run_clocks ATTEMPT_START` — the attempt's clock starts before its
-   own admission, not after
-6. import accounting only; flush pending events
+**Every run**
+1. compute `PATH` from (mode, profile, block) — on resume, from the FROZEN
+   snapshot (FR-9e), never live config
+2. `git worktree prune` **iff an applicable producer will create a throwaway
+   worktree** — warning held PENDING, never journalled pre-ledger
+3. run this path's producers (table below); each writes only its own
+   section; a path with no producer allocates no result file at all
+4. resume with a block ⇒ load and schema-validate the EXISTING frozen
+   contract first; missing or corrupt ⇒ **fail closed**, never recaptured
+5. fresh ⇒ initialise ledger with this path's clock origin; resume ⇒
+   `reset_run_clocks <origin>`
+6. import exactly the sections this path emits; flush pending events
+
+| `PATH` | producers | file | prune? | clock origin |
+|---|---|---|---|---|
+| `fresh-attended-noblock` | none | none | no | **`now` — unchanged** |
+| `fresh-attended-block` | contract init | contract | iff brownfield | `ATTEMPT_START` |
+| `fresh-unattended-noblock` | admission | admission | **yes** | `ATTEMPT_START` |
+| `fresh-unattended-block` | contract init + admission | both | yes | `ATTEMPT_START` |
+| `resume-attended-noblock` | none | none | no | **`now` — unchanged** |
+| `resume-attended-block` | contract VALIDATION only | none | no | **`now` — unchanged** |
+| `resume-unattended-*` | admission | admission | **yes** | `ATTEMPT_START` |
+
+Three rules generalise the table, and are what the implementation actually
+follows:
+
+- **Prune iff a producer creates a worktree.** Admission always does;
+  contract initialisation does only for brownfield. `fresh-unattended-noblock`
+  therefore DOES prune — it runs admission — which rev 8's "no no-block run
+  prunes" wrongly excluded (finding 2), contradicting FR-2's own stated
+  exception.
+- **Clock origin is `ATTEMPT_START` iff this path runs a pre-ledger
+  producer**, else the existing `now`. That preserves attended no-block
+  behaviour exactly (finding 3): those paths run no producer, so nothing
+  new is counted. An attended run that OPTS INTO coverage does have its
+  contract initialisation counted — a deliberate, stated consequence of
+  opting in, not an accident.
+- **Import exactly what was emitted.** No path imports a section no producer
+  wrote, and no path waits on a producer it never invokes.
 
 `reset_run_clocks()` therefore takes an explicit timestamp argument rather
 than always using `now`. That is a change to the #205/#210 helper, and its
