@@ -28,17 +28,17 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 11
+# Plan: verification contract, increment C1 (#222) — rev 12
 
 Rev 2 narrowed the slice; rev 3 froze policy and fixed clock semantics;
 rev 4 wrote down the run lifecycle; rev 5 gave that lifecycle its missing dimensions; rev 6 split the result file; rev 7 finished the ownership sweep and gave the result schema its path
 discriminator; rev 8 fixed the import gate and pinned resume path selection; rev 9 replaced the two literal sequences with one path-parameterised flow;
 rev 10 ordered validation before execution and required fresh evidence;
-rev 11 orders the PRODUCERS (governance before project code), makes artifact
-containment realpath-aware now that the driver deletes that path, bases the
-prune on configured intent rather than a future outcome, and gives the
-frozen contract a representation for "no preset contributed". All
-thirty-three findings across ten rounds are accepted. The
+rev 11 ordered the producers and made containment realpath-aware; rev 12
+closes the TOCTOU that created (containment must be re-checked AFTER the
+command runs), bounds the coverage command, and makes the brownfield
+regression threshold mandatory rather than merely permitted. All thirty-six
+findings across eleven rounds are accepted. The
 reviewer's diagnosis is the right one: most of round 3's findings are
 symptoms of a missing fresh-vs-resume split, so that split is now the
 plan's backbone rather than an implementation detail.
@@ -307,7 +307,11 @@ follows:
   new is counted. An attended run that OPTS INTO coverage does have its
   contract initialisation counted — a deliberate, stated consequence of
   opting in, not an accident.
-- **Coverage evidence must be FRESH, and containment must be REAL.** Every
+- **Coverage evidence must be FRESH, bounded, and contained on BOTH SIDES.**
+  The command runs under a frozen positive `timeout_sec` (an unbounded
+  arbitrary command can hang an unattended run past a cap that is only
+  evaluated between operations); a host with no timeout mechanism refuses
+  the unattended run rather than pretending to bound it. Every
   capture and every gate must: verify the artifact path is contained
   **after resolving symlinks in every existing ancestor** (a lexical
   no-absolute/no-`..` check passes `coverage/out.json` when `coverage` is a
