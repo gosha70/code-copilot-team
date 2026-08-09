@@ -1,4 +1,4 @@
-# Spec: verification contract, increment C1 (#222) — rev 8
+# Spec: verification contract, increment C1 (#222) — rev 9
 
 ## User Scenarios
 
@@ -146,26 +146,37 @@ creates no ledger, and no preflight-result file survives.
   missing directory or create durable state that survives a refused
   admission. On refusal such events MUST go to stderr and leave no ledger.
 
-- **FR-8** The driver MUST `git worktree prune` immediately before **this
-  run creates a throwaway worktree** — unattended admission, and brownfield
-  baseline capture on either profile. It MUST NOT run otherwise: FR-2
-  promises byte-identical behaviour for attended runs without the block, and
-  an unconditional side effect would break that. The trigger is honest —
-  the leak being cleaned is caused by creating such a worktree. Prune
-  failure MUST be non-fatal and journalled (FR-7c).
+- **FR-8** The driver MUST `git worktree prune` iff **an applicable
+  producer for this path will create a throwaway worktree**. Admission
+  always creates one, so `fresh-unattended-noblock` and every
+  `resume-unattended-*` path DO prune even with no `verification` block —
+  that is one of FR-2's two stated exceptions. Contract initialisation
+  creates one only for brownfield. Paths whose producers create none
+  (attended greenfield with a block; every attended no-block path) MUST NOT
+  prune. Prune failure MUST be non-fatal and journalled (FR-7c).
 
 - **FR-9** Admission's `test.command` invocation MUST be inside the
-  wall-clock budget, not merely recorded. The driver MUST capture a
-  pre-admission timestamp (`ATTEMPT_START`) and initialise
-  `totals.started_epoch` from it; a `duration_sec` field alone changes no
-  cap arithmetic and would be bookkeeping dressed as enforcement.
+  wall-clock budget, not merely recorded: a `duration_sec` field alone
+  changes no cap arithmetic and would be bookkeeping dressed as
+  enforcement. The clock origin is therefore **per path**: it is
+  `ATTEMPT_START` (captured before any producer) **iff this path runs a
+  pre-ledger producer**, and otherwise the existing `now`.
+
+  This is what keeps FR-2 honest (rev 9): an attended no-block path runs no
+  producer, so its clock behaviour is unchanged — an unconditional
+  `ATTEMPT_START` would have started counting config/preflight time those
+  runs exclude today. An attended run that OPTS INTO coverage does have its
+  contract initialisation counted; that is a stated consequence of opting
+  in, not an accident.
 
 - **FR-9b — resume clocks start before resume's own admission.**
   `reset_run_clocks()` (#205/#210) sets `started_epoch` to *now*, and runs
   AFTER admission on the resume path — which would exclude the admission
   that just ran, reintroducing FR-9's bug on every resume. It MUST accept an
-  explicit timestamp and be called with `ATTEMPT_START`. Existing callers
-  pass `now`, preserving their behaviour.
+  explicit timestamp and be called with **this path's clock origin**:
+  `ATTEMPT_START` for `resume-unattended-*`, and `now` for attended resumes,
+  which run no producer. Existing callers pass `now`, preserving their
+  behaviour.
 
 - **FR-9a** The DRIVER MUST own the result-file path: create it, pass it to
   admission as an explicit argument, schema-validate the returned file,
@@ -294,15 +305,19 @@ creates no ledger, and no preflight-result file survives.
   still demands its frozen contract (FR-9e).
 - **SC-6** A refused admission leaves no ledger and no preflight-result
   file; a successful one imports the baseline and the accounting.
-- **SC-7** A stale worktree registration is pruned immediately before ANY
-  throwaway-worktree creation — asserted for unattended admission AND for
-  attended brownfield baseline capture. Paths that create no such worktree
-  (attended greenfield, and any no-block run) do not prune, asserted. A
-  failing prune is journalled and does not fail the run.
-- **SC-7a** The wall-clock cap includes admission time: a run whose
-  admission consumes most of the budget hits the cap sooner, asserted
-  against the pre-admission timestamp rather than a logged field — on a
-  FRESH run and, separately, on a RESUME.
+- **SC-7** A stale worktree registration is pruned iff an applicable
+  producer creates a throwaway worktree — asserted for
+  `fresh-unattended-noblock` (admission, no block), `fresh-unattended-block`,
+  `resume-unattended-*`, and attended brownfield capture. Asserted NOT to
+  prune on attended greenfield-with-block and every attended no-block path.
+  A failing prune is journalled and does not fail the run.
+- **SC-7a** The wall-clock cap includes admission time on unattended paths:
+  a run whose admission consumes most of the budget hits the cap sooner,
+  asserted against the pre-admission timestamp rather than a logged field —
+  on a FRESH run and, separately, on a RESUME.
+- **SC-7c** An attended no-block run's clock origin is unchanged from
+  today's behaviour (fresh and resume), asserted against the pre-change
+  driver — no preflight or config time is newly counted.
 - **SC-7b** A prune warning emitted before ledger init appears in the ledger
   after a successful admission, and appears only on stderr — with no ledger
   created — after a refused one.

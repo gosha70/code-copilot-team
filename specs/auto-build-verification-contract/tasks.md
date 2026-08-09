@@ -1,4 +1,4 @@
-# Tasks: verification contract, increment C1 (#222) — rev 8
+# Tasks: verification contract, increment C1 (#222) — rev 9
 
 Each task is independently reviewable and leaves the suites green.
 
@@ -54,8 +54,10 @@ Each task is independently reviewable and leaves the suites green.
 - The PREFLIGHT INITIALISER writes the frozen contract (FR-4a) before the
   throwaway worktree is cleaned; the unattended admission bar writes only
   its own `admission` section. Admission never writes the contract.
-- Pre-admission timestamp initialises `totals.started_epoch` (FR-9), with a
-  test that the cap actually includes admission time.
+- Clock origin is PER PATH (FR-9): `ATTEMPT_START` where a pre-ledger
+  producer runs, else today's `now`. Tests that the cap includes admission
+  time on unattended paths AND that attended no-block clock behaviour is
+  byte-identical to the pre-change driver.
 - Test the refusal case: no ledger, no leftover file.
 
 ## T5 — Preflight initialisation + admission checks (FR-3, FR-4 capture)
@@ -74,12 +76,12 @@ Each task is independently reviewable and leaves the suites green.
 - Tests in `test-auto-build-loop.sh`.
 
 ## T7 — Worktree prune (FR-8)
-- Prune immediately before ANY throwaway-worktree creation: unattended
-  admission and attended brownfield baseline capture. Non-fatal and
+- Prune iff an applicable producer creates a throwaway worktree — includes
+  `fresh-unattended-noblock` (admission runs with no block). Non-fatal and
   journalled on failure.
-- Tests: stale registration reclaimed on BOTH those paths; no prune on
-  attended greenfield or any no-block run; a failing prune does not fail
-  the run.
+- Tests: reclaimed on unattended no-block, unattended block, unattended
+  resume, and attended brownfield; NOT pruned on attended greenfield-block
+  or any attended no-block path; a failing prune does not fail the run.
 
 ## T8 — Docs + gates
 - README, CHANGELOG, schema description, count pins.
