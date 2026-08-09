@@ -28,17 +28,17 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 12
+# Plan: verification contract, increment C1 (#222) — rev 13
 
 Rev 2 narrowed the slice; rev 3 froze policy and fixed clock semantics;
 rev 4 wrote down the run lifecycle; rev 5 gave that lifecycle its missing dimensions; rev 6 split the result file; rev 7 finished the ownership sweep and gave the result schema its path
 discriminator; rev 8 fixed the import gate and pinned resume path selection; rev 9 replaced the two literal sequences with one path-parameterised flow;
 rev 10 ordered validation before execution and required fresh evidence;
-rev 11 ordered the producers and made containment realpath-aware; rev 12
-closes the TOCTOU that created (containment must be re-checked AFTER the
-command runs), bounds the coverage command, and makes the brownfield
-regression threshold mandatory rather than merely permitted. All thirty-six
-findings across eleven rounds are accepted. The
+rev 11 ordered the producers and made containment realpath-aware; rev 12 closed the containment TOCTOU and bounded the command; rev 13 freezes
+that bound with the rest of the contract, refuses an unenforceable bound on
+BOTH profiles, and writes the post-command containment re-check into the
+executable sequence rather than leaving it to the heading. All thirty-nine
+findings across twelve rounds are accepted. The
 reviewer's diagnosis is the right one: most of round 3's findings are
 symptoms of a missing fresh-vs-resume split, so that split is now the
 plan's backbone rather than an implementation detail.
@@ -196,6 +196,8 @@ contract** (admission never writes it — FR-7d):
   "min_line_pct": 80,
   "min_branch_pct": 70,
   "max_regression_pct": 0,
+  "timeout_sec": 1200,           // frozen too — a bound resolved live
+                                 // could be widened after admission
   "floor_enforced_at": "landing",
   "baseline": { "line_pct": 74.2, "branch_pct": 61.0 }  // or null (greenfield)
 }
@@ -308,21 +310,30 @@ follows:
   contract initialisation counted — a deliberate, stated consequence of
   opting in, not an accident.
 - **Coverage evidence must be FRESH, bounded, and contained on BOTH SIDES.**
-  The command runs under a frozen positive `timeout_sec` (an unbounded
-  arbitrary command can hang an unattended run past a cap that is only
-  evaluated between operations); a host with no timeout mechanism refuses
-  the unattended run rather than pretending to bound it. Every
-  capture and every gate must: verify the artifact path is contained
-  **after resolving symlinks in every existing ancestor** (a lexical
-  no-absolute/no-`..` check passes `coverage/out.json` when `coverage` is a
-  symlink pointing outside the project — and the driver now DELETES that
-  path, rev 11 finding 2); delete the artifact; run the frozen `command`;
-  require **exit 0**; require the artifact to have been newly produced; and
-  only then parse it fail-closed. Without this a previous
-  passing report survives a command that fails without rewriting it, and a
-  baseline capture or landing gate parses stale evidence and passes (rev 10,
-  finding 2) — the same shape as every "asserted a label, not the thing" bug
-  in this arc.
+  Every capture and every gate runs exactly these steps, in this order:
+
+  1. resolve the artifact path with **symlinks resolved in every existing
+     ancestor**; refuse if it escapes the project. A lexical
+     no-absolute/no-`..` check passes `coverage/out.json` when `coverage` is
+     a symlink out of tree — and the driver DELETES this path.
+  2. delete the artifact
+  3. run the frozen `command` under the frozen `timeout_sec`; a timeout
+     fails closed. An unbounded arbitrary command can hang a run past a cap
+     that is only evaluated BETWEEN operations, and a host with no timeout
+     mechanism refuses a coverage-enabled run on EITHER profile rather than
+     pretending to bound it (FR-5d)
+  4. require **exit 0**
+  5. **re-resolve containment — step 1 again — BEFORE any stat or read.**
+     The command is arbitrary project code and can replace a safe ancestor
+     with an out-of-tree symlink between step 1 and step 6; checking once is
+     a TOCTOU hole (rev 12). This step is enumerated here, not merely
+     implied by the heading, because implementations follow the sequence
+  6. require the artifact to have been newly produced
+  7. parse it, fail-closed
+
+  Steps 1–2 and 6 are what stop a previous passing report surviving a
+  command that fails without rewriting it — the same shape as every
+  "asserted a label, not the thing" bug in this arc.
 - **Import exactly what was emitted.** No path imports a section no producer
   wrote, and no path waits on a producer it never invokes.
 
