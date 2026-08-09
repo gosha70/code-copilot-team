@@ -4,7 +4,7 @@ spec_mode: full
 risk_category: feature
 justification: |
   Increment C1 of #190. Adds a config surface (automation.json
-  `verification.coverage`), an admission-result channel, new admission
+  `verification.coverage`), a preflight-result channel, new admission
   checks, and a driver gate that can FAIL A RUN — schema change plus
   gating semantics across validate-automation-config.sh,
   validate-spec.sh, and auto-build-loop.sh. Full spec + tasks.
@@ -28,12 +28,13 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 5
+# Plan: verification contract, increment C1 (#222) — rev 6
 
 Rev 2 narrowed the slice; rev 3 froze policy and fixed clock semantics;
-rev 4 wrote down the run lifecycle; rev 5 gives that lifecycle its missing
-dimensions — **block presence** and **profile** — and pins the result-file
-schema. All fifteen findings across four rounds are accepted. The
+rev 4 wrote down the run lifecycle; rev 5 gave that lifecycle its missing dimensions; rev 6 propagates rev 5's
+own decisions into every section that still contradicted them, and splits
+the result file so an attended run never has to fabricate accounting it did
+not do. All eighteen findings across five rounds are accepted. The
 reviewer's diagnosis is the right one: most of round 3's findings are
 symptoms of a missing fresh-vs-resume split, so that split is now the
 plan's backbone rather than an implementation detail.
@@ -92,28 +93,50 @@ does NOT scrape a path out of mixed diagnostic output — that is how the
 LiteLLM proxy helper's output parsing bit us in #220.
 
 1. Driver: `mktemp` a result path, trap its removal, pass `--result-file`.
-2. Admission runs the coverage command **inside the throwaway worktree**,
-   parses the artifact **before** cleanup, and writes the frozen contract
-   (below) plus `test_command: {duration_sec, exit}` to that path.
+2. The **preflight initialiser** (not admission — FR-7d) runs the coverage
+   command **inside the throwaway worktree**, parses the artifact **before**
+   cleanup, and writes the frozen contract to that path. On an unattended
+   run the admission bar additionally writes its own `admission` section.
 3. Driver validates the file against a schema, then imports it into the
    ledger **only after** admission succeeds and the ledger exists.
 
-### The admission-result file is a schema, not a convention (rev 5, finding 2)
+### The preflight-result file is a schema, not a convention
 
-`shared/schemas/admission-result.schema.json` — **closed** (no additional
-properties), **versioned** (`schema_version`), with a `mode` discriminator:
+`shared/schemas/preflight-result.schema.json` — **closed** (no additional
+properties), **versioned** (`schema_version`), with TWO independent optional
+sections rather than one shape that every path must fill:
 
-- `mode: "fresh"` — MAY carry `coverage_contract`; MUST carry `accounting`.
-- `mode: "resume"` — **MUST NOT** carry `coverage_contract`; MUST carry
-  `accounting`.
+```jsonc
+{ "schema_version": 1,
+  "mode": "fresh" | "resume",
+  "contract":  { …frozen coverage contract… },   // optional
+  "admission": { "test_command": {…} } }         // optional
+```
 
-Forbidding it on resume is the load-bearing rule: it makes "a resume cannot
-overwrite frozen policy" a property the driver can *check*, rather than a
-discipline the admission code is trusted to observe. A stale or wrong-mode
-file is then rejected instead of silently replacing the contract.
+Presence is determined by what actually ran, not by mode alone (rev 6,
+finding 1). Rev 5 required `accounting` in every result, but **attended
+profiles never run admission or its `test.command`** — so an attended fresh
+run would have had to fabricate zero-valued accounting to pass validation,
+and an attended resume should emit no result at all:
 
-Regressions: malformed JSON, wrong mode, unknown field, missing
-`schema_version`, and a `resume` result carrying `coverage_contract`.
+| path | `contract` | `admission` | file emitted? |
+|---|---|---|---|
+| fresh, block, attended | **required** | forbidden | yes |
+| fresh, block, unattended | **required** | **required** | yes |
+| fresh, no block, unattended | forbidden | **required** | yes |
+| fresh, no block, attended | — | — | **no file** |
+| resume, block, unattended | **forbidden** | **required** | yes |
+| resume, block, attended | **forbidden** | forbidden | **no file** |
+| resume, no block, either | forbidden | unattended only | unattended only |
+
+`contract` forbidden on `resume` is the load-bearing rule: it makes "a
+resume cannot overwrite frozen policy" something the driver *checks*, not a
+discipline the initialiser is trusted to keep. Synthetic zero accounting is
+prohibited — an absent section means "did not run", which is the truth.
+
+Regressions: malformed JSON, unknown field, missing `schema_version`, a
+`resume` result carrying `contract`, an attended result carrying
+`admission`, and a path that emits a file where the table says none.
 
 ### What gets frozen (rev 3, finding 1)
 
@@ -266,14 +289,15 @@ refuses.
 
 ## Handoff items
 
-**(4) `git worktree prune`** — scoped, not unconditional (rev 3, finding 4).
-FR-2 promises byte-identical behaviour without a `verification` block, and a
-new side effect on every run would break that promise. The prune runs on the
-**unattended admission path only**, immediately before admission creates its
-throwaway worktree — which is exactly where the leak it cleans up comes
-from. Prune failure is **non-fatal and journalled**: a stale registration
-does not affect correctness, and killing a run over housekeeping would be a
-worse trade.
+**(4) `git worktree prune`** — scoped to its honest trigger: immediately
+before **this run creates a throwaway worktree**. That is unattended
+admission AND brownfield baseline capture on either profile (rev 6, finding
+3 — rev 5 changed FR-8 but left this section and T7/SC-7 asserting the old
+unattended-only scope). Paths that create no throwaway worktree — attended
+greenfield, and anything without the block — do not prune, which is what
+keeps FR-2's promise. Prune failure is **non-fatal and journalled**: a stale
+registration does not affect correctness, and killing a run over
+housekeeping is the worse trade.
 
 **(3) admission's `test.command`** — accounted for via the pre-admission
 timestamp above, not merely logged.
@@ -292,8 +316,8 @@ broadly (finding 5):
 
 - **Attended profiles without the block: byte-identical**, asserted.
 - **Unattended runs, even without the block**, get exactly two changes, both
-  listed as deliberate exceptions: the admission-path `git worktree prune`,
-  and admission time counting toward the wall-clock cap. Both are #190
+  listed as deliberate exceptions: the throwaway-worktree `git worktree
+  prune`, and admission time counting toward the wall-clock cap. Both are #190
   handoff items whose whole point is to apply to unattended runs.
 
 Claiming "byte-identical" across the board while shipping those two would
