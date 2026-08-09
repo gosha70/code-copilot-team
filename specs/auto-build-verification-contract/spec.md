@@ -1,4 +1,4 @@
-# Spec: verification contract, increment C1 (#222) — rev 12
+# Spec: verification contract, increment C1 (#222) — rev 13
 
 ## User Scenarios
 
@@ -69,10 +69,13 @@ creates no ledger, and no preflight-result file survives.
   MUST use the frozen contract (FR-4a), not a live re-read.
 
 - **FR-4a — the frozen coverage contract.** The **preflight initialiser**
-  (FR-7d), not admission, MUST persist the FULLY RESOLVED contract — `command`, `preset_id`, `preset_sha256`,
-  `parser`, `artifact`, effective floors, `max_regression_pct`,
-  `floor_enforced_at`, and the captured `baseline` (or null) — and every
-  driver gate MUST read only that. `command` is included deliberately: a
+  (FR-7d), not admission, MUST persist the FULLY RESOLVED contract —
+  `command`, `preset_id`, `preset_sha256`, `parser`, `artifact`, effective
+  floors, `max_regression_pct`, **`timeout_sec`**, `floor_enforced_at`, and
+  the captured `baseline` (or null) — and every driver gate MUST read only
+  that. `timeout_sec` is frozen with the rest (FR-5c): resolved live it
+  could be widened after admission, and a later gate or resume could then
+  run unbounded. `command` is included deliberately: a
   gate that must read "only the frozen block" cannot run coverage at all if
   the command lives elsewhere. The live preset file MUST NOT be re-resolved after admission,
   including on resume: freezing the preset NAME while its FILE stays
@@ -147,13 +150,15 @@ creates no ledger, and no preflight-result file survives.
   indefinitely: the wall-clock cap is only evaluated BETWEEN operations, so
   it cannot interrupt one.
 
-- **FR-5d — an unenforceable bound is refused, not ignored.** This repo has
-  hosts with no `timeout(1)` (`run_tests()` degrades silently, and #205
-  showed a `timeout_sec` that enforced nothing). If no timeout mechanism is
-  available, an `unattended` run carrying a coverage block MUST refuse at
-  admission naming the missing tool; attended runs MUST warn. A frozen bound
-  that silently does not bind is the inert-config trap this arc keeps
-  finding.
+- **FR-5d — an unenforceable bound is refused, not ignored, on EITHER
+  profile.** This repo has hosts with no `timeout(1)` (`run_tests()`
+  degrades silently, and #205 showed a `timeout_sec` that enforced nothing).
+  If no timeout mechanism is available, a run carrying a coverage block MUST
+  refuse at preflight — **attended as well as unattended** — naming the
+  missing tool. Warning and continuing for attended would contradict FR-5c's
+  "every capture and gate", and an attended brownfield initialiser runs the
+  same arbitrary command and can hang the same way. Refusal applies only to
+  coverage-enabled runs; a no-block run is untouched (FR-2).
 
 - **FR-6** Coverage parsing MUST support `istanbul` and `lcov`;
   `cobertura` and `jacoco` MUST be refused with "not implemented in C1",
@@ -379,8 +384,12 @@ creates no ledger, and no preflight-result file survives.
   asserted BOTH for a pre-existing symlink and for one the coverage command
   CREATES during execution (the TOCTOU case).
 - **SC-5l** A hanging coverage command is killed at `timeout_sec` and fails
-  the capture/gate closed; on a host with no timeout mechanism an unattended
-  run carrying a coverage block refuses at admission.
+  the capture/gate closed. On a host with no timeout mechanism, a
+  coverage-enabled run refuses at preflight on BOTH profiles, while a
+  no-block run on that host is unaffected.
+- **SC-5n** Editing `coverage.timeout_sec`, the preset, or
+  `test.timeout_sec` after initialisation does NOT change the frozen bound —
+  the contract's value governs at every later gate and on resume.
 - **SC-5m** A brownfield contract with no effective `max_regression_pct`
   (neither config nor preset) is inadmissible; line-only and branch-only
   regressions each fail independently; a metric with no configured floor is

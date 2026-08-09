@@ -1,4 +1,4 @@
-# Tasks: verification contract, increment C1 (#222) — rev 12
+# Tasks: verification contract, increment C1 (#222) — rev 13
 
 Each task is independently reviewable and leaves the suites green.
 
@@ -7,6 +7,8 @@ Each task is independently reviewable and leaves the suites green.
   regression: symlinked parent pointing outside the project, external
   sentinel neither deleted nor parsed.
 - `preset_id`/`preset_sha256` are null when no preset contributes.
+- `timeout_sec` frozen in the contract; regression proves live config,
+  preset and `test.timeout_sec` edits cannot move it.
 - `max_regression_pct` REQUIRED (effective, post-preset) for brownfield,
   rejected for greenfield; regression governs exactly the floored metrics;
   line-only and branch-only regression tests.
@@ -24,7 +26,7 @@ Each task is independently reviewable and leaves the suites green.
 ## T2 — Coverage parsing + evidence freshness (FR-5a, FR-5c, FR-5d, FR-6)
 - Bounded execution: frozen positive `timeout_sec` under the repo's timeout
   convention; timeout fails closed; no timeout mechanism ⇒ unattended
-  refuses at admission, attended warns.
+  refuses at preflight on BOTH profiles (attended included).
 - Containment re-resolved AFTER the command exits, before reading;
   regression uses a command that CREATES the symlink escape.
 - Every capture/gate: delete contained artifact -> run frozen command ->
