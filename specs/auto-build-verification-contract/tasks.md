@@ -1,4 +1,4 @@
-# Tasks: verification contract, increment C1 (#222) — rev 5
+# Tasks: verification contract, increment C1 (#222) — rev 6
 
 Each task is independently reviewable and leaves the suites green.
 
@@ -27,10 +27,13 @@ Each task is independently reviewable and leaves the suites green.
 - Assert no floor literal in any script.
 
 ## T4 — Admission-result channel + lifecycle (matrix is normative)
-- `shared/schemas/admission-result.schema.json`: closed, versioned, `mode`
-  discriminator; `resume` forbids `coverage_contract`.
+- `shared/schemas/preflight-result.schema.json`: closed, versioned, with
+  independent optional `contract` / `admission` sections per plan.md's
+  emission table. `resume` forbids `contract`; attended forbids
+  `admission`; no synthetic zero accounting; attended resume emits no file.
 - Contract INITIALISATION as a preflight step keyed on the block, shared by
-  both profiles; admission bar stays unattended-only.
+  both profiles and OWNING the frozen contract; the admission bar stays
+  unattended-only and contributes only its own validation + accounting.
 - No-block resume takes the legacy path (regression: it must not fail).
 
 ## T4b — original channel items (FR-7, FR-7a, FR-7b, FR-7c, FR-9, FR-9a, FR-9b)
@@ -64,10 +67,12 @@ Each task is independently reviewable and leaves the suites green.
 - Tests in `test-auto-build-loop.sh`.
 
 ## T7 — Worktree prune (FR-8)
-- Prune on the unattended admission path only, before admission creates its
-  worktree; non-fatal and journalled on failure.
-- Tests: stale registration reclaimed; attended run does not prune; a
-  failing prune does not fail the run.
+- Prune immediately before ANY throwaway-worktree creation: unattended
+  admission and attended brownfield baseline capture. Non-fatal and
+  journalled on failure.
+- Tests: stale registration reclaimed on BOTH those paths; no prune on
+  attended greenfield or any no-block run; a failing prune does not fail
+  the run.
 
 ## T8 — Docs + gates
 - README, CHANGELOG, schema description, count pins.

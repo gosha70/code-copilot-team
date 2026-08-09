@@ -1,4 +1,4 @@
-# Spec: verification contract, increment C1 (#222) — rev 5
+# Spec: verification contract, increment C1 (#222) — rev 6
 
 ## User Scenarios
 
@@ -10,7 +10,7 @@ landing it.
 
 **US2 — Brownfield feature.** `baseline: admission`. Admission runs the
 coverage command in its throwaway worktree, parses the result before
-cleanup, and hands it back through the admission-result channel; the driver
+cleanup, and hands it back through the preflight-result channel; the driver
 imports it into the ledger after admission succeeds. A run that regresses
 fails even if the floor is met; one below the floor fails even with no
 regression.
@@ -35,7 +35,7 @@ admission.
 leaving a registered throwaway worktree; preflight reclaims it.
 
 **US6 — Refused admission leaves nothing.** A run that fails admission
-creates no ledger, and no admission-result file survives.
+creates no ledger, and no preflight-result file survives.
 
 ## Requirements
 
@@ -65,8 +65,8 @@ creates no ledger, and no admission-result file survives.
   `max_regression_pct` or falls below the absolute floor. The comparison
   MUST use the frozen contract (FR-4a), not a live re-read.
 
-- **FR-4a — the frozen coverage contract.** Admission MUST persist the
-  FULLY RESOLVED contract — `command`, `preset_id`, `preset_sha256`,
+- **FR-4a — the frozen coverage contract.** The **preflight initialiser**
+  (FR-7d), not admission, MUST persist the FULLY RESOLVED contract — `command`, `preset_id`, `preset_sha256`,
   `parser`, `artifact`, effective floors, `max_regression_pct`,
   `floor_enforced_at`, and the captured `baseline` (or null) — and every
   driver gate MUST read only that. `command` is included deliberately: a
@@ -112,7 +112,7 @@ creates no ledger, and no admission-result file survives.
   into the ledger only AFTER admission succeeds and the ledger exists, then
   remove it.
 
-- **FR-7a** A refused admission MUST leave no ledger and no admission-result
+- **FR-7a** A refused admission MUST leave no ledger and no preflight-result
   file (increment B's invariant preserved).
 
 - **FR-7b — resume MUST NOT re-decide policy, when there is policy.**
@@ -165,14 +165,24 @@ creates no ledger, and no admission-result file survives.
   import atomically, and remove it on every exit path. It MUST NOT parse a
   path out of admission's diagnostic output.
 
-- **FR-9c — the result file has an authoritative schema.**
-  `shared/schemas/admission-result.schema.json` MUST be closed (no
-  additional properties) and versioned, with a `mode` discriminator:
-  `fresh` MAY carry `coverage_contract`; `resume` **MUST NOT**. That
-  prohibition is what makes "a resume cannot overwrite frozen policy"
-  checkable by the driver rather than a discipline the admission code is
-  trusted to keep. A malformed, wrong-mode, unknown-field, unversioned, or
-  contract-bearing-resume file MUST be rejected without import.
+- **FR-9c — the result file has an authoritative schema, with conditional
+  sections.** `shared/schemas/preflight-result.schema.json` MUST be closed
+  and versioned, carrying two INDEPENDENT optional sections — `contract`
+  and `admission` — whose presence follows what actually ran (the table in
+  plan.md is normative):
+
+  - `contract` MUST be present on a FRESH run with the block, on either
+    profile, and MUST be **forbidden** on `resume`. That prohibition is what
+    makes "a resume cannot overwrite frozen policy" checkable by the driver.
+  - `admission` MUST be present only for **unattended** runs, which are the
+    only ones that run admission and its `test.command`.
+
+  **Attended paths MUST NOT emit synthetic zero-valued accounting**, and an
+  attended resume MUST emit no result file at all. Requiring accounting
+  everywhere would force an attended run to fabricate work it never did —
+  an absent section means "did not run", which is the truth. A malformed,
+  unknown-field, unversioned, contract-bearing-resume, or
+  admission-bearing-attended file MUST be rejected without import.
 
 ## Constraints — what NOT to build
 
@@ -245,11 +255,13 @@ creates no ledger, and no admission-result file survives.
 - **SC-5d** The result schema rejects: malformed JSON, `mode: resume`
   carrying `coverage_contract`, an unknown field, and a missing
   `schema_version` — each without importing anything.
-- **SC-6** A refused admission leaves no ledger and no admission-result
+- **SC-6** A refused admission leaves no ledger and no preflight-result
   file; a successful one imports the baseline and the accounting.
-- **SC-7** The unattended admission path prunes a stale worktree
-  registration; an attended run does not prune at all; a failing prune is
-  journalled and does not fail the run.
+- **SC-7** A stale worktree registration is pruned immediately before ANY
+  throwaway-worktree creation — asserted for unattended admission AND for
+  attended brownfield baseline capture. Paths that create no such worktree
+  (attended greenfield, and any no-block run) do not prune, asserted. A
+  failing prune is journalled and does not fail the run.
 - **SC-7a** The wall-clock cap includes admission time: a run whose
   admission consumes most of the budget hits the cap sooner, asserted
   against the pre-admission timestamp rather than a logged field — on a
