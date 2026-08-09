@@ -403,6 +403,15 @@ load_config() {
     # 900s to preserve the runner's historical value. Distinct from
     # `.review.round_timeout_sec` and from the per-provider `timeout_sec` in
     # providers.toml, which bound a SINGLE reviewer invocation.
+    # #227 D2: review.max_rounds shipped in the template but was NEVER read
+    # — the gating loop always used the runner's built-in 5, so a user who
+    # hit the breaker and raised it in automation.json got the identical
+    # breaker with no explanation. Same class as loop_timeout_sec (#205).
+    REVIEW_MAX_ROUNDS=$(cfg '.review.max_rounds' '5')
+    if ! [[ "$REVIEW_MAX_ROUNDS" =~ ^[0-9]+$ ]] || [[ "$REVIEW_MAX_ROUNDS" -le 0 ]]; then
+        echo "[auto-build] WARNING: review.max_rounds '$REVIEW_MAX_ROUNDS' is not a positive integer — using 5" >&2
+        REVIEW_MAX_ROUNDS=5
+    fi
     REVIEW_LOOP_TIMEOUT_SEC=$(cfg '.review.loop_timeout_sec' '900')
     # A non-numeric value would be evaluated as 0 by the runner's arithmetic
     # comparison, tripping the breaker on the first round of every run.
@@ -1197,6 +1206,7 @@ run_review_loop() {
         # believe they had already configured this one.
         ( cd "$PROJECT_DIR" && CCT_REVIEW_BASE_REF="$base_ref" \
             CCT_REVIEW_TIMEOUT_SEC="${CCT_REVIEW_TIMEOUT_SEC:-$REVIEW_LOOP_TIMEOUT_SEC}" \
+            CCT_REVIEW_MAX_ROUNDS="${CCT_REVIEW_MAX_ROUNDS:-$REVIEW_MAX_ROUNDS}" \
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >&2 || rc=$?
         local round
         round=$(jq -r '.current_round // 0' "$PROJECT_DIR/.cct/review/state.json" 2>/dev/null || echo 0)

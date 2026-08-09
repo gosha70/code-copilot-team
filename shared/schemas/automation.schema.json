@@ -62,6 +62,11 @@
     "review": {
       "type": "object",
       "properties": {
+        "max_rounds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Rounds allowed PER ATTEMPT in the gating review loop (default 5). Read by the driver and passed to the runner; CCT_REVIEW_MAX_ROUNDS still overrides. The budget is per attempt so /review-decide retry can actually run another round — a cumulative ceiling made retry a no-op (#227)."
+        },
         "loop_timeout_sec": {
           "type": "number",
           "exclusiveMinimum": 0,

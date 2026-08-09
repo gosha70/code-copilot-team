@@ -2158,6 +2158,28 @@ rm -rf "$P"
 rm -f "$CAP_DROP_SCRIPT"
 
 
+# ── #227 D2: review.max_rounds must control the GATING loop ──
+# It shipped in the template but was never read: the only place the driver
+# set CCT_REVIEW_MAX_ROUNDS was the advisory pass, so the gating loop always
+# used the runner's built-in 5 and editing the config did nothing. A user who
+# hit the breaker and raised it got the identical breaker with no
+# explanation — the same class as #205's loop_timeout_sec.
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.review.max_rounds=1'
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "a low review.max_rounds parks the run" 4 "$RC"
+# A park leaves .cct/review in place (the archive happens on PASS), so the
+# rounds that actually ran are counted there.
+assert_eq "the gating loop honoured the configured ceiling" "1" \
+    "$(find "$P" -name 'findings-round-*.json' 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "the breaker was max_rounds, at the configured value" "1" \
+    "$(jq -r '.max_rounds' "$P/.cct/review/breaker-tripped.json" 2>/dev/null)"
+rm -rf "$P"
+
+assert_eq "the driver passes review.max_rounds to the gating round" "1" \
+    "$(grep -c 'CCT_REVIEW_MAX_ROUNDS="${CCT_REVIEW_MAX_ROUNDS:-$REVIEW_MAX_ROUNDS}"' "$SCRIPT_DIR/../scripts/auto-build-loop.sh")"
+
+
 # ══════════════════════════════════════════════════════════════
 # #205: the review loop's wall-clock must not count parked time
 # ══════════════════════════════════════════════════════════════
