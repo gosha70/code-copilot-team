@@ -1,4 +1,4 @@
-# Tasks: verification contract, increment C1 (#222) — rev 4
+# Tasks: verification contract, increment C1 (#222) — rev 5
 
 Each task is independently reviewable and leaves the suites green.
 
@@ -26,7 +26,14 @@ Each task is independently reviewable and leaves the suites green.
   unknown unless every floor is supplied.
 - Assert no floor literal in any script.
 
-## T4 — Admission-result channel + lifecycle (FR-7, FR-7a, FR-7b, FR-7c, FR-9, FR-9a, FR-9b)
+## T4 — Admission-result channel + lifecycle (matrix is normative)
+- `shared/schemas/admission-result.schema.json`: closed, versioned, `mode`
+  discriminator; `resume` forbids `coverage_contract`.
+- Contract INITIALISATION as a preflight step keyed on the block, shared by
+  both profiles; admission bar stays unattended-only.
+- No-block resume takes the legacy path (regression: it must not fail).
+
+## T4b — original channel items (FR-7, FR-7a, FR-7b, FR-7c, FR-9, FR-9a, FR-9b)
 - Implement the two sequences literally (fresh / resume) from plan.md.
 - Resume: load + schema-validate the existing frozen contract; no
   recapture; fail closed when missing/corrupt.
