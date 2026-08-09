@@ -28,13 +28,14 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 7
+# Plan: verification contract, increment C1 (#222) — rev 8
 
 Rev 2 narrowed the slice; rev 3 froze policy and fixed clock semantics;
-rev 4 wrote down the run lifecycle; rev 5 gave that lifecycle its missing dimensions; rev 6 split the result file; rev 7 finishes the ownership sweep BY
-ENUMERATION rather than by memory, and gives the result schema the context
-it needs to enforce its own table. All twenty findings across six rounds are
-accepted. The
+rev 4 wrote down the run lifecycle; rev 5 gave that lifecycle its missing dimensions; rev 6 split the result file; rev 7 finished the ownership sweep and gave the result schema its path
+discriminator; rev 8 fixes an import gate that waited on a producer attended
+runs never invoke, pins resume path selection to the frozen snapshot, and
+lands the acceptance criteria rev 7 CLAIMED but did not write. All
+twenty-three findings across seven rounds are accepted. The
 reviewer's diagnosis is the right one: most of round 3's findings are
 symptoms of a missing fresh-vs-resume split, so that split is now the
 plan's backbone rather than an implementation detail.
@@ -79,7 +80,7 @@ open for it, and the follow-up slice (C3) owns both (a) the driver-owned
 visual result and (c) the toolchain prerequisite that gates it. Nothing in
 C1 claims otherwise.
 
-## Admission-result channel
+## Preflight-result channel
 
 Rev 1 said "capture the baseline into the ledger" without noticing that
 **admission runs inside `load_config()`, before the ledger and frozen
