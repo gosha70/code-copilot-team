@@ -1,4 +1,4 @@
-# Spec: verification contract, increment C1 (#222) — rev 4
+# Spec: verification contract, increment C1 (#222) — rev 5
 
 ## User Scenarios
 
@@ -115,13 +115,23 @@ creates no ledger, and no admission-result file survives.
 - **FR-7a** A refused admission MUST leave no ledger and no admission-result
   file (increment B's invariant preserved).
 
-- **FR-7b — resume MUST NOT re-decide policy.** `load_config()` reruns
-  admission on every non-terminal resume. On resume the driver MUST load and
-  schema-validate the EXISTING frozen contract from the ledger and MUST NOT
-  recapture the baseline or overwrite the contract — otherwise the current
-  branch and the live preset would silently replace what the run was
-  admitted against, defeating FR-4a. A missing or corrupt frozen contract on
-  resume MUST fail closed.
+- **FR-7b — resume MUST NOT re-decide policy, when there is policy.**
+  On resume of a run **whose config carries `verification.coverage`**, the
+  driver MUST load and schema-validate the EXISTING frozen contract and MUST
+  NOT recapture the baseline or overwrite it — otherwise the current branch
+  and live preset would silently replace what the run was admitted against.
+  A missing or corrupt contract in that case MUST fail closed.
+  **A run without the block has no contract and its resume MUST proceed on
+  the legacy path** — requiring one unconditionally would break the resume
+  of every existing run.
+
+- **FR-7d — contract creation is a preflight step, not part of admission.**
+  Attended profiles never invoke admission, so admission cannot be the only
+  thing that creates a contract or T6's attended gate would enforce a
+  precondition nothing produces. When the block is present, a FRESH run of
+  **either** profile initialises the contract at preflight (resolve preset,
+  capture baseline if brownfield, freeze); unattended runs additionally run
+  the admission bar. The lifecycle matrix in plan.md is normative.
 
 - **FR-7c — pending events.** Any event produced BEFORE ledger
   initialisation (currently the prune warning) MUST be held and flushed only
@@ -129,12 +139,13 @@ creates no ledger, and no admission-result file survives.
   missing directory or create durable state that survives a refused
   admission. On refusal such events MUST go to stderr and leave no ledger.
 
-- **FR-8** The driver MUST `git worktree prune` on the **unattended
-  admission path only**, immediately before admission creates its throwaway
-  worktree. It MUST NOT run for every profile: FR-2 promises byte-identical
-  behaviour without a `verification` block, and an unconditional new side
-  effect would break that promise. Prune failure MUST be non-fatal and
-  journalled.
+- **FR-8** The driver MUST `git worktree prune` immediately before **this
+  run creates a throwaway worktree** — unattended admission, and brownfield
+  baseline capture on either profile. It MUST NOT run otherwise: FR-2
+  promises byte-identical behaviour for attended runs without the block, and
+  an unconditional side effect would break that. The trigger is honest —
+  the leak being cleaned is caused by creating such a worktree. Prune
+  failure MUST be non-fatal and journalled (FR-7c).
 
 - **FR-9** Admission's `test.command` invocation MUST be inside the
   wall-clock budget, not merely recorded. The driver MUST capture a
@@ -154,6 +165,15 @@ creates no ledger, and no admission-result file survives.
   import atomically, and remove it on every exit path. It MUST NOT parse a
   path out of admission's diagnostic output.
 
+- **FR-9c — the result file has an authoritative schema.**
+  `shared/schemas/admission-result.schema.json` MUST be closed (no
+  additional properties) and versioned, with a `mode` discriminator:
+  `fresh` MAY carry `coverage_contract`; `resume` **MUST NOT**. That
+  prohibition is what makes "a resume cannot overwrite frozen policy"
+  checkable by the driver rather than a discipline the admission code is
+  trusted to keep. A malformed, wrong-mode, unknown-field, unversioned, or
+  contract-bearing-resume file MUST be rejected without import.
+
 ## Constraints — what NOT to build
 
 - Do NOT accept any `verification` sub-block C1 does not enforce. Reject it
@@ -170,6 +190,10 @@ creates no ledger, and no admission-result file survives.
   at landing, not on resume.
 - Do NOT recapture the baseline on resume, and do NOT let a resume write a
   new frozen contract.
+- Do NOT require a frozen contract from a run that never had one — a
+  no-block resume must take the legacy path.
+- Do NOT make admission the only creator of contracts; attended runs never
+  reach it.
 - Do NOT journal anything before the ledger exists.
 - Do NOT accept `max_regression_pct` alongside `baseline: none`; it cannot
   be enforced there, and accepting it is the inert-config trap again.
@@ -212,7 +236,15 @@ creates no ledger, and no admission-result file survives.
   enumerated and asserted.
 - **SC-5a** Resume with an edited preset file and a moved branch enforces
   the ORIGINAL frozen contract; the baseline is not recaptured.
-- **SC-5b** Resume with a missing or corrupt frozen contract fails closed.
+- **SC-5b** Resume with a missing or corrupt frozen contract fails closed —
+  **only when the config carries the block**. A no-block run's resume
+  proceeds unchanged, asserted (this is the case rev 4 would have broken).
+- **SC-5c** An ATTENDED fresh run with the block gets a contract and its
+  gate enforces; the same project attended without the block is
+  byte-identical.
+- **SC-5d** The result schema rejects: malformed JSON, `mode: resume`
+  carrying `coverage_contract`, an unknown field, and a missing
+  `schema_version` — each without importing anything.
 - **SC-6** A refused admission leaves no ledger and no admission-result
   file; a successful one imports the baseline and the accounting.
 - **SC-7** The unattended admission path prunes a stale worktree

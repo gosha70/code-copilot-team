@@ -28,11 +28,12 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 4
+# Plan: verification contract, increment C1 (#222) — rev 5
 
 Rev 2 narrowed the slice; rev 3 froze policy and fixed clock semantics;
-rev 4 writes down the **run lifecycle** those fixes implied but never
-stated. All thirteen findings across three rounds are accepted. The
+rev 4 wrote down the run lifecycle; rev 5 gives that lifecycle its missing
+dimensions — **block presence** and **profile** — and pins the result-file
+schema. All fifteen findings across four rounds are accepted. The
 reviewer's diagnosis is the right one: most of round 3's findings are
 symptoms of a missing fresh-vs-resume split, so that split is now the
 plan's backbone rather than an implementation detail.
@@ -97,6 +98,23 @@ LiteLLM proxy helper's output parsing bit us in #220.
 3. Driver validates the file against a schema, then imports it into the
    ledger **only after** admission succeeds and the ledger exists.
 
+### The admission-result file is a schema, not a convention (rev 5, finding 2)
+
+`shared/schemas/admission-result.schema.json` — **closed** (no additional
+properties), **versioned** (`schema_version`), with a `mode` discriminator:
+
+- `mode: "fresh"` — MAY carry `coverage_contract`; MUST carry `accounting`.
+- `mode: "resume"` — **MUST NOT** carry `coverage_contract`; MUST carry
+  `accounting`.
+
+Forbidding it on resume is the load-bearing rule: it makes "a resume cannot
+overwrite frozen policy" a property the driver can *check*, rather than a
+discipline the admission code is trusted to observe. A stale or wrong-mode
+file is then rejected instead of silently replacing the contract.
+
+Regressions: malformed JSON, wrong mode, unknown field, missing
+`schema_version`, and a `resume` result carrying `coverage_contract`.
+
 ### What gets frozen (rev 3, finding 1)
 
 Freezing the baseline alone is not enough: the config snapshot freezes the
@@ -135,20 +153,53 @@ from the current branch against the live preset — defeating the very
 freezing rev 3 added — and `reset_run_clocks()` would set
 `started_epoch` to *now*, excluding the admission that just ran.
 
+Rev 4 wrote two sequences and assumed every run has a frozen contract.
+Two cases break that (rev 5, finding 1):
+
+- **A run with no `verification.coverage` never creates a contract.** FR-7b
+  as written would have failed its RESUME closed — i.e. broken the resume
+  of every existing run in the repo. That was a bug introduced by rev 4, not
+  a gap in it.
+- **An attended run can opt into coverage, but attended profiles never
+  invoke admission**, so nothing would ever create the contract T6 then
+  enforces. Rev 4 promised an enforcement with no path to its own
+  precondition.
+
+So contract creation is **not** part of admission. It is a separate
+preflight step, keyed on the BLOCK, shared by both profiles; unattended runs
+additionally run the admission bar as before. The full matrix:
+
+| block? | run | profile | behaviour |
+|---|---|---|---|
+| absent | fresh | either | legacy path; no contract created |
+| absent | resume | either | legacy path; **no contract required** — must not fail closed |
+| present | fresh | attended | initialise contract at preflight (resolve preset, capture baseline if brownfield, freeze) |
+| present | fresh | unattended | same initialisation, **plus** the admission bar |
+| present | resume | either | load + schema-validate the frozen contract; **never** recapture; missing/corrupt ⇒ fail closed |
+
+`git worktree prune` is therefore scoped to "immediately before this run
+creates a throwaway worktree" — which is unattended admission, and now also
+brownfield baseline capture on either profile. That is the honest trigger:
+the leak it cleans up is caused by creating one.
+
 Two explicit sequences, and the implementation follows them literally:
 
 **Fresh run**
 1. capture `ATTEMPT_START` (pre-admission)
-2. `git worktree prune` (unattended only) — warning held PENDING, not journalled
-3. admission → result file (frozen contract incl. baseline + accounting)
+2. if this run will create a throwaway worktree: `git worktree prune` —
+   warning held PENDING, not journalled
+3. block present ⇒ initialise the contract (resolve preset, capture
+   baseline if brownfield); unattended ⇒ also run the admission bar. Both
+   write the result file (`mode: fresh`)
 4. initialise ledger, `totals.started_epoch = ATTEMPT_START`
 5. import frozen contract + accounting; flush pending events
 
 **Resume**
 1. capture `ATTEMPT_START` (pre-admission)
-2. `git worktree prune` (unattended only) — held PENDING
-3. **load and schema-validate the EXISTING frozen contract from the ledger**;
-   missing or corrupt ⇒ **fail closed**, no recapture
+2. prune if a throwaway worktree will be created — held PENDING
+3. block present ⇒ **load and schema-validate the EXISTING frozen contract**;
+   missing or corrupt ⇒ **fail closed**, no recapture.
+   Block absent ⇒ legacy path, no contract expected, resume proceeds
 4. admission runs **without baseline capture** — the frozen contract stands
 5. `reset_run_clocks ATTEMPT_START` — the attempt's clock starts before its
    own admission, not after
