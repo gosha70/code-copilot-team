@@ -1,4 +1,4 @@
-# Tasks: verification contract, increment C1 (#222) — rev 11
+# Tasks: verification contract, increment C1 (#222) — rev 12
 
 Each task is independently reviewable and leaves the suites green.
 
@@ -7,6 +7,9 @@ Each task is independently reviewable and leaves the suites green.
   regression: symlinked parent pointing outside the project, external
   sentinel neither deleted nor parsed.
 - `preset_id`/`preset_sha256` are null when no preset contributes.
+- `max_regression_pct` REQUIRED (effective, post-preset) for brownfield,
+  rejected for greenfield; regression governs exactly the floored metrics;
+  line-only and branch-only regression tests.
 - Every FR-4b rule: required keys, 0-100 ranges, at-least-one-floor,
   `max_regression_pct` rejected under `baseline: none`, `artifact`
   containment (no absolute, no `..`), parser enum.
@@ -18,7 +21,12 @@ Each task is independently reviewable and leaves the suites green.
 - Tests in `test-automation-config.sh`, incl. the no-block byte-identical
   case.
 
-## T2 — Coverage parsing + evidence freshness (FR-5a, FR-6)
+## T2 — Coverage parsing + evidence freshness (FR-5a, FR-5c, FR-5d, FR-6)
+- Bounded execution: frozen positive `timeout_sec` under the repo's timeout
+  convention; timeout fails closed; no timeout mechanism ⇒ unattended
+  refuses at admission, attended warns.
+- Containment re-resolved AFTER the command exits, before reading;
+  regression uses a command that CREATES the symlink escape.
 - Every capture/gate: delete contained artifact -> run frozen command ->
   require exit 0 -> require newly produced artifact -> parse fail-closed.
 - Regression: stale PASSING artifact + command exiting non-zero without

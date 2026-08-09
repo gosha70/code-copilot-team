@@ -1,4 +1,4 @@
-# Spec: verification contract, increment C1 (#222) — rev 11
+# Spec: verification contract, increment C1 (#222) — rev 12
 
 ## User Scenarios
 
@@ -88,9 +88,17 @@ creates no ledger, and no preflight-result file survives.
   | `baseline` | yes | `none` \| `admission` | greenfield vs brownfield |
   | `min_line_pct` | at least one floor required | number 0–100 | |
   | `min_branch_pct` | at least one floor required | number 0–100 | |
-  | `max_regression_pct` | only when `baseline: admission` | number 0–100 | **rejected** when `baseline: none` — it would be inert |
+  | `max_regression_pct` | **REQUIRED (effective) when `baseline: admission`**; rejected when `baseline: none` | number 0–100 | may come from the preset; a brownfield contract with no effective value is INADMISSIBLE, since FR-4 promises no-regression enforcement |
+  | `timeout_sec` | no (preset, else `test.timeout_sec`) | number > 0 | FR-5c; the frozen contract always carries a positive effective value |
   | `floor_enforced_at` | no (default `landing`) | `landing` \| `phase` | |
   | `preset` | no | string | names `shared/templates/<preset>/verification-preset.json` |
+
+  **Which metrics regression governs:** exactly those with a configured
+  floor (`min_line_pct` and/or `min_branch_pct`). A metric with no floor is
+  gated by neither floor nor regression, so the contract commits to
+  precisely what it declares and adding a floor never silently activates an
+  unrelated gate. Governed metrics are checked independently: either one
+  regressing beyond the threshold fails.
 
   Regression is measured in **percentage POINTS** (`baseline_pct −
   measured_pct`), never relative percentage; the spec says so because the
@@ -113,18 +121,39 @@ creates no ledger, and no preflight-result file survives.
   MUST fail closed at admission unless `automation.json` supplies every
   required floor. No floor literal may exist in any script.
 
-- **FR-5a — coverage evidence MUST be fresh, and containment MUST resolve
-  symlinks.** Every baseline capture and every gate MUST: confirm the
-  artifact path is inside the project **after resolving symlinks in every
-  existing ancestor** — the lexical FR-4b check is not sufficient once the
-  driver DELETES the path, since `coverage/out.json` escapes when `coverage`
-  is a symlink out of tree; then remove the artifact; run
-  the frozen `command`; require it to **exit 0**; require the artifact to
-  have been newly produced; and only then parse it, fail-closed. A coverage
+- **FR-5a — coverage evidence MUST be fresh, and containment MUST be
+  re-resolved on BOTH SIDES of execution.** Every baseline capture and every
+  gate MUST: confirm the artifact path is inside the project **after
+  resolving symlinks in every existing ancestor** — the lexical FR-4b check
+  is not sufficient once the driver DELETES the path, since
+  `coverage/out.json` escapes when `coverage` is a symlink out of tree; then
+  remove the artifact; run the frozen `command` under FR-5c's bound; require
+  it to **exit 0**; require the artifact to have been newly produced;
+  **re-resolve containment AFTER the command exits and BEFORE reading** —
+  the command is arbitrary project code and can replace a previously safe
+  ancestor with an out-of-tree symlink between the two moments, so a single
+  pre-execution check is a TOCTOU hole; and only then parse it,
+  fail-closed. A coverage
   result MUST NOT be accepted from an artifact that predates the run of the
   command that was supposed to produce it — otherwise a previous passing
   report survives a command that fails without rewriting it, and the gate
   passes on stale evidence.
+
+- **FR-5c — the coverage command MUST be bounded.** The frozen contract
+  MUST carry a positive `timeout_sec` (from `coverage.timeout_sec`, else the
+  preset, else the existing `test.timeout_sec`), and every capture and gate
+  MUST execute the command under it. A timeout MUST fail the capture or gate
+  closed. Without this an arbitrary hanging command blocks an unattended run
+  indefinitely: the wall-clock cap is only evaluated BETWEEN operations, so
+  it cannot interrupt one.
+
+- **FR-5d — an unenforceable bound is refused, not ignored.** This repo has
+  hosts with no `timeout(1)` (`run_tests()` degrades silently, and #205
+  showed a `timeout_sec` that enforced nothing). If no timeout mechanism is
+  available, an `unattended` run carrying a coverage block MUST refuse at
+  admission naming the missing tool; attended runs MUST warn. A frozen bound
+  that silently does not bind is the inert-config trap this arc keeps
+  finding.
 
 - **FR-6** Coverage parsing MUST support `istanbul` and `lcov`;
   `cobertura` and `jacoco` MUST be refused with "not implemented in C1",
@@ -346,7 +375,16 @@ creates no ledger, and no preflight-result file survives.
   the coverage command NEVER executes — asserted with a coverage command
   that would write a marker.
 - **SC-5j** An artifact path whose ancestor is a symlink out of the project
-  is refused: an external sentinel file is neither deleted nor parsed.
+  is refused: an external sentinel file is neither deleted nor parsed —
+  asserted BOTH for a pre-existing symlink and for one the coverage command
+  CREATES during execution (the TOCTOU case).
+- **SC-5l** A hanging coverage command is killed at `timeout_sec` and fails
+  the capture/gate closed; on a host with no timeout mechanism an unattended
+  run carrying a coverage block refuses at admission.
+- **SC-5m** A brownfield contract with no effective `max_regression_pct`
+  (neither config nor preset) is inadmissible; line-only and branch-only
+  regressions each fail independently; a metric with no configured floor is
+  gated by neither floor nor regression.
 - **SC-5k** A config with explicit floors and no preset freezes
   `preset_id: null`, `preset_sha256: null`, and admits.
 - **SC-5h** A stale PASSING coverage artifact plus a command that exits
