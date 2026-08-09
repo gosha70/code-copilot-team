@@ -112,6 +112,11 @@ jobs:
       # Offline contract checks only — the --online variant provisions a real
       # venv from PyPI and takes minutes, so it stays opt-in (run it when
       # bumping the pins).
+      - name: Run coverage-parse tests (#222 T2)
+        run: |
+          bash -n scripts/lib/coverage-parse.sh
+          bash tests/test-coverage-parse.sh
+
       - name: Check the LiteLLM proxy dependencies stay pinned
         run: bash tests/test-litellm-proxy-deps.sh
 
