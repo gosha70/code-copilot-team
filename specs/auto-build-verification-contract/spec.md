@@ -1,4 +1,4 @@
-# Spec: verification contract, increment C1 (#222) — rev 6
+# Spec: verification contract, increment C1 (#222) — rev 7
 
 ## User Scenarios
 
@@ -8,10 +8,12 @@ floor. Admission does not demand a coverage artifact that cannot exist yet.
 At the landing gate, coverage below the floor fails the run rather than
 landing it.
 
-**US2 — Brownfield feature.** `baseline: admission`. Admission runs the
-coverage command in its throwaway worktree, parses the result before
-cleanup, and hands it back through the preflight-result channel; the driver
-imports it into the ledger after admission succeeds. A run that regresses
+**US2 — Brownfield feature.** `baseline: admission`. The preflight
+initialiser runs the coverage command in a throwaway worktree, parses the
+result before cleanup, and hands it back through the preflight-result
+channel; the driver imports it into the ledger after preflight succeeds.
+On an unattended run the admission bar also runs, contributing only its own
+validation and accounting. A run that regresses
 fails even if the floor is met; one below the floor fails even with no
 regression.
 
@@ -27,7 +29,7 @@ cap).
 
 **US7 — Resume does not re-decide policy.** A parked run is resumed after
 someone edited the preset file and the branch moved on. The frozen contract
-from the original admission still governs: the baseline is not recaptured,
+from the original preflight still governs: the baseline is not recaptured,
 the floors do not move, and the attempt's clock starts before its own
 admission.
 
@@ -61,7 +63,8 @@ creates no ledger, and no preflight-result file survives.
   `landing`).
 
 - **FR-4** `baseline: admission` MUST capture the base ref's coverage during
-  admission and MUST fail a run that regresses beyond
+  **preflight initialisation** (FR-7d) — the value `admission` names the
+  POINT IN THE RUN, not the actor — and MUST fail a run that regresses beyond
   `max_regression_pct` or falls below the absolute floor. The comparison
   MUST use the frozen contract (FR-4a), not a live re-read.
 
@@ -106,9 +109,10 @@ creates no ledger, and no preflight-result file survives.
   `cobertura` and `jacoco` MUST be refused with "not implemented in C1",
   never treated as zero or as passing.
 
-- **FR-7** Admission MUST return its results — captured baseline and
-  `test.command` accounting — through a machine-readable file written
-  BEFORE the throwaway worktree is cleaned up. The driver MUST import it
+- **FR-7** The preflight initialiser MUST return the frozen contract, and
+  the unattended admission bar MUST return its own accounting, through a
+  machine-readable file written BEFORE the throwaway worktree is cleaned
+  up. The driver MUST import it
   into the ledger only AFTER admission succeeds and the ledger exists, then
   remove it.
 
@@ -165,17 +169,30 @@ creates no ledger, and no preflight-result file survives.
   import atomically, and remove it on every exit path. It MUST NOT parse a
   path out of admission's diagnostic output.
 
-- **FR-9c — the result file has an authoritative schema, with conditional
-  sections.** `shared/schemas/preflight-result.schema.json` MUST be closed
-  and versioned, carrying two INDEPENDENT optional sections — `contract`
-  and `admission` — whose presence follows what actually ran (the table in
-  plan.md is normative):
+- **FR-9c — the result file has an authoritative schema, discriminated by
+  PATH.** `shared/schemas/preflight-result.schema.json` MUST be closed and
+  versioned, and MUST carry a `path` discriminator over the five
+  file-emitting paths, with closed `oneOf` branches stating exactly which
+  sections each requires and forbids. `mode` plus optional sections is NOT
+  sufficient: the schema cannot see profile or block presence, so it could
+  not tell a fresh-unattended-with-block result (both sections required)
+  from a fresh-unattended-no-block one (admission only), and
+  `{schema_version, mode}` alone would validate as an empty result. The
+  driver MUST independently compute the expected `path` from (mode,
+  profile, block) and reject a file whose `path` disagrees.
+
+  Sections then follow the path (the table in plan.md is normative):
 
   - `contract` MUST be present on a FRESH run with the block, on either
     profile, and MUST be **forbidden** on `resume`. That prohibition is what
     makes "a resume cannot overwrite frozen policy" checkable by the driver.
   - `admission` MUST be present only for **unattended** runs, which are the
     only ones that run admission and its `test.command`.
+
+- **FR-9d — no producer, no file.** On a path the emission table marks as
+  emitting nothing, the driver MUST NOT allocate a result path at all. "No
+  file" MUST be literal rather than an empty placeholder that later has to
+  be distinguished from a genuine result.
 
   **Attended paths MUST NOT emit synthetic zero-valued accounting**, and an
   attended resume MUST emit no result file at all. Requiring accounting
@@ -226,7 +243,7 @@ creates no ledger, and no preflight-result file survives.
 
 - **SC-1** Greenfield admits with no artifact; a below-floor run fails at
   the landing gate and does not land.
-- **SC-2** Brownfield captures a baseline at admission; a regressing run
+- **SC-2** Brownfield captures a baseline during preflight initialisation; a regressing run
   fails; a below-floor run fails; a clean run lands.
 - **SC-3** Each rejected sub-block (`test`, `app`, `visual`, `conformance`),
   an unknown key, and an unimplemented parser fail with their own named
@@ -253,7 +270,7 @@ creates no ledger, and no preflight-result file survives.
   gate enforces; the same project attended without the block is
   byte-identical.
 - **SC-5d** The result schema rejects: malformed JSON, `mode: resume`
-  carrying `coverage_contract`, an unknown field, and a missing
+  carrying `contract`, an unknown field, and a missing
   `schema_version` — each without importing anything.
 - **SC-6** A refused admission leaves no ledger and no preflight-result
   file; a successful one imports the baseline and the accounting.

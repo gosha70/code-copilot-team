@@ -1,4 +1,4 @@
-# Tasks: verification contract, increment C1 (#222) — rev 6
+# Tasks: verification contract, increment C1 (#222) — rev 7
 
 Each task is independently reviewable and leaves the suites green.
 
@@ -27,10 +27,14 @@ Each task is independently reviewable and leaves the suites green.
 - Assert no floor literal in any script.
 
 ## T4 — Admission-result channel + lifecycle (matrix is normative)
-- `shared/schemas/preflight-result.schema.json`: closed, versioned, with
-  independent optional `contract` / `admission` sections per plan.md's
-  emission table. `resume` forbids `contract`; attended forbids
-  `admission`; no synthetic zero accounting; attended resume emits no file.
+- `shared/schemas/preflight-result.schema.json`: closed, versioned, `path`
+  discriminator over the five file-emitting paths with closed `oneOf`
+  branches (required/forbidden sections per branch). Driver computes the
+  expected `path` independently and rejects disagreement. No result path is
+  allocated on no-producer rows. No synthetic zero accounting.
+- Tests: every table row, plus cross-row substitutions (contract on a
+  resume path, missing contract on fresh-unattended-block, admission on an
+  attended path, empty result, path mismatch).
 - Contract INITIALISATION as a preflight step keyed on the block, shared by
   both profiles and OWNING the frozen contract; the admission bar stays
   unattended-only and contributes only its own validation + accounting.
@@ -46,15 +50,17 @@ Each task is independently reviewable and leaves the suites green.
 - DRIVER creates the path, passes `--result-file`, schema-validates the
   return, imports atomically, removes it on every exit (trap). No path
   scraped from diagnostic output.
-- Admission writes the FROZEN CONTRACT (FR-4a) plus `test_command`
-  accounting before the throwaway worktree is cleaned.
+- The PREFLIGHT INITIALISER writes the frozen contract (FR-4a) before the
+  throwaway worktree is cleaned; the unattended admission bar writes only
+  its own `admission` section. Admission never writes the contract.
 - Pre-admission timestamp initialises `totals.started_epoch` (FR-9), with a
   test that the cap actually includes admission time.
 - Test the refusal case: no ledger, no leftover file.
 
-## T5 — Admission checks (FR-3, FR-4 capture)
-- Greenfield: no artifact required. Brownfield: run coverage in the
-  throwaway worktree and capture via T4.
+## T5 — Preflight initialisation + admission checks (FR-3, FR-4 capture)
+- Greenfield: no artifact required. Brownfield: the initialiser runs
+  coverage in the throwaway worktree and captures via T4 — on BOTH
+  profiles, since attended runs never reach the admission bar.
 - Tests in `test-verification-spec.sh`.
 
 ## T6 — Driver enforcement (FR-3, FR-4, FR-4a, FR-4b arithmetic)

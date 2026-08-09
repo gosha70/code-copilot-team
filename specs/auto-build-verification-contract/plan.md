@@ -28,13 +28,13 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 6
+# Plan: verification contract, increment C1 (#222) — rev 7
 
 Rev 2 narrowed the slice; rev 3 froze policy and fixed clock semantics;
-rev 4 wrote down the run lifecycle; rev 5 gave that lifecycle its missing dimensions; rev 6 propagates rev 5's
-own decisions into every section that still contradicted them, and splits
-the result file so an attended run never has to fabricate accounting it did
-not do. All eighteen findings across five rounds are accepted. The
+rev 4 wrote down the run lifecycle; rev 5 gave that lifecycle its missing dimensions; rev 6 split the result file; rev 7 finishes the ownership sweep BY
+ENUMERATION rather than by memory, and gives the result schema the context
+it needs to enforce its own table. All twenty findings across six rounds are
+accepted. The
 reviewer's diagnosis is the right one: most of round 3's findings are
 symptoms of a missing fresh-vs-resume split, so that split is now the
 plan's backbone rather than an implementation detail.
@@ -92,7 +92,11 @@ comes back, imports atomically, and removes it on every exit via trap. It
 does NOT scrape a path out of mixed diagnostic output — that is how the
 LiteLLM proxy helper's output parsing bit us in #220.
 
-1. Driver: `mktemp` a result path, trap its removal, pass `--result-file`.
+1. Driver: **iff this path has a producer** (the emission table below), it
+   `mktemp`s a result path, traps its removal, and passes `--result-file`.
+   On a no-producer path it allocates nothing — "no file" is literal, not a
+   placeholder that later has to be distinguished from a real one (rev 7,
+   finding 2).
 2. The **preflight initialiser** (not admission — FR-7d) runs the coverage
    command **inside the throwaway worktree**, parses the artifact **before**
    cleanup, and writes the frozen contract to that path. On an unattended
@@ -112,6 +116,32 @@ sections rather than one shape that every path must fill:
   "contract":  { …frozen coverage contract… },   // optional
   "admission": { "test_command": {…} } }         // optional
 ```
+
+`mode` plus two optional sections **cannot enforce the table** (rev 7,
+finding 2): the schema cannot see the profile or whether a block exists, so
+it could not distinguish a fresh-unattended-with-block result (which MUST
+carry both sections) from a fresh-unattended-no-block one (which must carry
+only `admission`) — and `{schema_version, mode}` alone would validate as an
+empty result. The discriminator is therefore the **path itself**:
+
+```jsonc
+{ "schema_version": 1,
+  "path": "fresh-attended-block"      // contract only
+        | "fresh-unattended-block"    // contract + admission
+        | "fresh-unattended-noblock"  // admission only
+        | "resume-unattended-block"   // admission only (contract FORBIDDEN)
+        | "resume-unattended-noblock",// admission only
+  "contract":  { … },
+  "admission": { … } }
+```
+
+Closed `oneOf` branches, one per path, each stating exactly which sections
+are required and which are forbidden — so an empty result, a missing
+contract on `fresh-unattended-block`, or a contract on any `resume-*` are
+all schema failures rather than things the driver must remember to check.
+The driver independently computes the expected `path` from (mode, profile,
+block) and rejects a file whose `path` disagrees, so a stale result from a
+different path cannot be imported.
 
 Presence is determined by what actually ran, not by mode alone (rev 6,
 finding 1). Rev 5 required `accounting` in every result, but **attended
@@ -146,10 +176,11 @@ between admission and landing — or before a resume — silently moves the
 floor under an already-admitted run. That is the same class as #193's
 config-snapshot rule, and the same class as #201's "raise the cap mid-run".
 
-Admission therefore freezes the **fully resolved coverage contract**:
+The preflight initialiser therefore freezes the **fully resolved coverage
+contract** (admission never writes it — FR-7d):
 
 ```jsonc
-"coverage_contract": {
+"contract": {
   "command": "npm run coverage",   // frozen too — a gate that cannot run
                                    // its own command is not a contract
   "preset_id": "ml-app",
@@ -277,7 +308,7 @@ key** instead:
 
 | Case | At admission | Enforced |
 |---|---|---|
-| Brownfield `baseline: admission` | run coverage in the throwaway worktree, capture via the channel above, verify floors satisfiable | no-regression **and** absolute floor |
+| Brownfield `baseline: admission` | preflight initialiser runs coverage in the throwaway worktree and captures via the channel; unattended additionally verifies floors satisfiable | no-regression **and** absolute floor |
 | Greenfield `baseline: none` | record `baseline: none`; **no artifact required** | absolute floor only, at `floor_enforced_at` |
 
 Greenfield staying admittable with no artifact is a hard requirement: the
