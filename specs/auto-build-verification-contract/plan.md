@@ -8,7 +8,7 @@ justification: |
   checks, and a driver gate that can FAIL A RUN — schema change plus
   gating semantics across validate-automation-config.sh,
   validate-spec.sh, and auto-build-loop.sh. Full spec + tasks.
-status: draft
+status: approved
 date: 2026-08-08
 origin:
   issue: https://github.com/gosha70/code-copilot-team/issues/222
@@ -28,7 +28,19 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 13
+# Plan: verification contract, increment C1 (#222) — rev 13 (APPROVED)
+
+> **Approved at rev 13** by the repo owner, with the explicit instruction:
+> do not produce a rev 14 unless a blocker makes implementation ambiguous
+> or unsafe. Remaining edge cases are to be resolved against working code
+> and executable tests, where they can be PROVEN rather than modelled.
+>
+> Review-process debt recorded with the approval: 13 revisions / 39
+> findings / ~982 planning lines is disproportionate. Scope stabilised at
+> rev 2; from rev 6 on, most findings came from the same contract being
+> duplicated across spec, plan, tasks, examples, matrices and criteria, so
+> fixing one representation drifted another. The rules adopted for future
+> plans are in `shared/skills/spec-workflow/plan-review-rules.md`.
 
 Rev 2 narrowed the slice; rev 3 froze policy and fixed clock semantics;
 rev 4 wrote down the run lifecycle; rev 5 gave that lifecycle its missing dimensions; rev 6 split the result file; rev 7 finished the ownership sweep and gave the result schema its path
