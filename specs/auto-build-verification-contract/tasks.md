@@ -44,9 +44,16 @@ Implements the resolver, not new policy: the requirements are FR-5 (preset
 resolution, no script-side floor literals) and FR-5b (`preset_id` /
 `preset_sha256` null when no preset contributes).
 
-- `shared/templates/<preset>/verification-preset.json` for templates with a
-  test story; explicit `preset` key resolution; config overrides preset
-  per key.
+- The RESOLVER and its contract. Curated per-template preset FILES are
+  **deferred, not delivered here**: choosing floor numbers for eleven stacks
+  is policy, and a floor the operator did not choose is not a floor they
+  agreed to — the same argument that makes the resolver refuse rather than
+  default. Projects set floors in `automation.json` until someone has a
+  considered per-stack view. `shared/templates/<preset>/verification-preset.json`
+  is the path the resolver reads when such files exist.
+- Explicit `preset` key resolution; config overrides preset per key;
+  `test.timeout_sec` is the last fallback and is applied only AFTER the
+  merge, so it can never outrank a preset value (FR-5c precedence).
 - **CAPTURE ONCE.** Read the preset bytes a single time; compute
   `preset_sha256` from THAT capture and parse the values from THAT capture.
   Never hash the path and reopen it to parse — a concurrent replacement

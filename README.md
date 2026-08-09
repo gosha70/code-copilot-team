@@ -748,7 +748,7 @@ code-copilot-team/
 │   ├── test-sync.sh                     121 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
-│   ├── test-verification-preset.sh      32 preset resolution tests
+│   ├── test-verification-preset.sh      43 preset resolution tests
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh            80 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests

@@ -33,7 +33,11 @@ trap 'exit 143' TERM
 
 # A throwaway repo root so tests never depend on which templates ship presets.
 FAKE="$TMP/repo"; mkdir -p "$FAKE/shared/templates"
-mkpreset() { mkdir -p "$FAKE/shared/templates/$1"; printf '%s' "$2" > "$FAKE/shared/templates/$1/verification-preset.json"; }
+# Newline-TERMINATED, like a real file. Writing fixtures without the trailing
+# newline is what hid the digest bug: command substitution strips it, so the
+# recorded hash silently differed from `shasum` of the file.
+mkpreset() { mkdir -p "$FAKE/shared/templates/$1"; printf '%s\n' "$2" > "$FAKE/shared/templates/$1/verification-preset.json"; }
+mkpreset_raw() { mkdir -p "$FAKE/shared/templates/$1"; printf '%s' "$2" > "$FAKE/shared/templates/$1/verification-preset.json"; }
 
 CFG_BASE='{"command":"c","artifact":"cov.json","parser":"istanbul","baseline":"none"}'
 cfg() { jq -c ". + $1" <<< "$CFG_BASE"; }
@@ -58,8 +62,15 @@ echo "=== the digest describes the bytes that were parsed ==="
 
 # CAPTURE ONCE: the recorded digest must equal the digest of the file as it
 # was when its values were read. Computed here independently.
-EXPECT=$(printf '%s' '{"min_line_pct":75,"min_branch_pct":65,"timeout_sec":900}' | vp_sha256)
-eq "the recorded digest matches the parsed bytes" "$EXPECT" "$(jq -r '.preset_sha256' <<< "$R")"
+# The contract calls this the FILE's hash, so it must equal the file's
+# checksum exactly — trailing newline included.
+EXPECT=$(vp_sha256 < "$FAKE/shared/templates/good/verification-preset.json")
+eq "preset_sha256 IS the file checksum" "$EXPECT" "$(jq -r '.preset_sha256' <<< "$R")"
+if command -v shasum >/dev/null 2>&1; then
+    eq "and matches an independent shasum of the file" \
+       "$(shasum -a 256 "$FAKE/shared/templates/good/verification-preset.json" | cut -d' ' -f1)" \
+       "$(jq -r '.preset_sha256' <<< "$R")"
+else ok "and matches an independent shasum of the file (skipped: no shasum)"; fi
 
 # Changing the file changes both together — never one without the other.
 mkpreset good '{"min_line_pct":42,"timeout_sec":900}'
@@ -98,7 +109,7 @@ mkpreset arr '[1,2,3]'
 rejects "a non-object preset is refused" "not a JSON object" \
     vp_resolve "$FAKE" "$(cfg '{"preset":"arr"}')"
 
-mkpreset empty ''
+mkpreset_raw empty ''
 rejects "an empty preset is refused" "is empty" \
     vp_resolve "$FAKE" "$(cfg '{"preset":"empty"}')"
 
@@ -137,6 +148,45 @@ eq "a preset can supply the brownfield threshold" "0" "$(jq -r '.max_regression_
 
 rejects "no effective timeout_sec is refused" "no timeout_sec" \
     vp_resolve "$FAKE" "$(cfg '{"min_line_pct":80}')"
+
+echo ""
+echo "=== the merged policy must be VALID, not merely present ==="
+
+mkpreset negfloor '{"min_line_pct":-10,"timeout_sec":300}'
+rejects "a negative floor is refused" "min_line_pct must be a number in 0..100" \
+    vp_resolve "$FAKE" "$(cfg '{"preset":"negfloor"}')"
+mkpreset bigfloor '{"min_branch_pct":140,"timeout_sec":300}'
+rejects "a floor above 100 is refused" "min_branch_pct must be a number in 0..100" \
+    vp_resolve "$FAKE" "$(cfg '{"preset":"bigfloor"}')"
+mkpreset badenum '{"min_line_pct":80,"timeout_sec":300,"floor_enforced_at":"never"}'
+rejects "a bad floor_enforced_at is refused" "landing or phase" \
+    vp_resolve "$FAKE" "$(cfg '{"preset":"badenum"}')"
+mkpreset badto '{"min_line_pct":80,"timeout_sec":"forever"}'
+rejects "a non-numeric timeout is refused" "timeout_sec must be a number > 0" \
+    vp_resolve "$FAKE" "$(cfg '{"preset":"badto"}')"
+mkpreset negregr '{"min_line_pct":80,"timeout_sec":300,"max_regression_pct":-5}'
+rejects "a negative regression threshold is refused" "max_regression_pct must be a number in 0..100" \
+    vp_resolve "$FAKE" '{"command":"c","artifact":"cov.json","parser":"istanbul","baseline":"admission","preset":"negregr"}'
+mkpreset greenregr '{"min_line_pct":80,"timeout_sec":300,"max_regression_pct":0}'
+rejects "a regression threshold under greenfield is refused" "cannot be used with baseline none" \
+    vp_resolve "$FAKE" "$(cfg '{"preset":"greenregr"}')"
+
+# A null in config must not "override" a valid preset value while still
+# satisfying has() — that would freeze a policy with no usable floor.
+mkpreset nulled '{"min_line_pct":80,"timeout_sec":300}'
+R=$(vp_resolve "$FAKE" "$(cfg '{"preset":"nulled","min_line_pct":null}')")
+eq "a null config value does not override the preset" "80" "$(jq -r '.min_line_pct' <<< "$R")"
+
+echo ""
+echo "=== FR-5c: timeout precedence, config > preset > test.timeout_sec ==="
+
+R=$(vp_resolve "$FAKE" "$(cfg '{"min_line_pct":80}')" 1200)
+eq "test.timeout_sec is used when nothing else supplies one" "1200" "$(jq -r '.timeout_sec' <<< "$R")"
+mkpreset tpre '{"min_line_pct":80,"timeout_sec":300}'
+R=$(vp_resolve "$FAKE" "$(cfg '{"preset":"tpre"}')" 1200)
+eq "a preset timeout outranks the test fallback" "300" "$(jq -r '.timeout_sec' <<< "$R")"
+R=$(vp_resolve "$FAKE" "$(cfg '{"preset":"tpre","timeout_sec":60}')" 1200)
+eq "a config timeout outranks both" "60" "$(jq -r '.timeout_sec' <<< "$R")"
 
 echo ""
 echo "=== FR-5: no floor literal lives in a script ==="
