@@ -140,6 +140,26 @@ rejects "an undeletable stale artifact refuses, never passes" "freshness cannot 
     cp_collect "$P" "$(contract 'true' coverage/s.json)"
 chmod u+w "$P/coverage"
 
+# If the watchdog's own state cannot be created, the bound cannot be
+# established — so the command must NEVER launch. Unchecked, mktemp failure
+# left firedir empty under `set -uo pipefail`, the watchdog could not signal,
+# escalation was cancelled after TERM, and a resistant descendant survived.
+P=$(fresh_project)
+BOUND_RC=0
+(
+  no_timeout
+  mktemp() { if [[ "${1:-}" == "-d" ]]; then return 1; fi; command mktemp "$@"; }
+  cp_run_bounded 1 "$P" 'printf ran > command-marker; (trap "" TERM; sleep 4; printf leaked > stubborn) & wait'
+) || BOUND_RC=$?
+rc=0; [[ "$BOUND_RC" -ne 0 && "$BOUND_RC" -ne 124 ]] || rc=1
+if [[ $rc -eq 0 ]]; then ok "unbuildable watchdog state fails closed (not a fake timeout)"
+else bad "unbuildable watchdog state fails closed (got $BOUND_RC)"; fi
+eq "the command never launched without a bound" "no" \
+   "$([[ -f "$P/command-marker" ]] && echo LAUNCHED || echo no)"
+sleep 5
+eq "no descendant leaked from the refused run" "none" \
+   "$([[ -f "$P/stubborn" ]] && echo LEAKED || echo none)"
+
 echo ""
 echo "=== impossible evidence must not satisfy a floor ==="
 

@@ -173,7 +173,15 @@ cp_run_bounded() {
     # nothing owns, so a collision or another process creating it first would
     # make a normal completion look like a timeout.
     local firedir fired
-    firedir=$(mktemp -d)
+    # Unchecked, a failed mktemp leaves firedir empty (the driver runs
+    # `set -uo pipefail`, not `set -e`), fired becomes "/fired", the watchdog
+    # cannot signal that it fired, the parent cancels escalation after TERM —
+    # and a TERM-resistant descendant survives. Setup failure must therefore
+    # refuse BEFORE the command launches, not degrade into an unbounded run.
+    if ! firedir=$(mktemp -d 2>/dev/null) || [[ -z "$firedir" || ! -d "$firedir" ]]; then
+        echo "coverage-parse: cannot create the watchdog state directory — refusing to run the coverage command unbounded" >&2
+        return 125
+    fi
     fired="$firedir/fired"
     set -m
     ( cd "$cwd" && bash -c "$cmd" ) >/dev/null 2>&1 &
@@ -237,6 +245,8 @@ cp_collect() {
     if [[ $rc -ne 0 ]]; then
         if [[ $rc -eq 124 || $rc -eq 143 ]]; then
             echo "coverage-parse: coverage command timed out after ${timeout_sec}s" >&2
+        elif [[ $rc -eq 125 ]]; then
+            echo "coverage-parse: the coverage command was never run — its bound could not be established" >&2
         else
             echo "coverage-parse: coverage command failed (exit $rc)" >&2
         fi
