@@ -1,4 +1,4 @@
-# Spec: verification contract, increment C1 (#222) — rev 3
+# Spec: verification contract, increment C1 (#222) — rev 4
 
 ## User Scenarios
 
@@ -20,8 +20,16 @@ or `verification.app`. Admission refuses with a message naming the key and
 saying it is not supported in C1 — rather than accepting a setting that
 enforces nothing.
 
-**US4 — Existing project, untouched.** No `verification` block ⇒ identical
-behaviour to today.
+**US4 — Existing project, untouched.** An attended run with no
+`verification` block behaves identically to today. An unattended one differs
+only by the two documented handoff exceptions (prune, admission time in the
+cap).
+
+**US7 — Resume does not re-decide policy.** A parked run is resumed after
+someone edited the preset file and the branch moved on. The frozen contract
+from the original admission still governs: the baseline is not recaptured,
+the floors do not move, and the attempt's clock starts before its own
+admission.
 
 **US5 — Interrupted admission.** A previous run was SIGKILLed mid-admission
 leaving a registered throwaway worktree; preflight reclaims it.
@@ -41,8 +49,12 @@ creates no ledger, and no admission-result file survives.
   single source for the test step. `conformance.required` is DERIVED from
   `verification.yaml` per #190 and is never operator-set.
 
-- **FR-2** The block MUST be optional; a project without one behaves
-  byte-identically, asserted against the pre-change driver.
+- **FR-2** The block MUST be optional. An **attended** run without one MUST
+  behave byte-identically, asserted against the pre-change driver.
+  **Unattended** runs without the block get exactly two documented
+  exceptions — the admission-path prune (FR-8) and admission time counting
+  toward the cap (FR-9) — because both handoff items exist precisely to
+  apply to unattended runs. No other difference is permitted.
 
 - **FR-3** `baseline: none` MUST admit with no coverage artifact present and
   MUST enforce the absolute floor only, at `floor_enforced_at` (default
@@ -54,10 +66,12 @@ creates no ledger, and no admission-result file survives.
   MUST use the frozen contract (FR-4a), not a live re-read.
 
 - **FR-4a — the frozen coverage contract.** Admission MUST persist the
-  FULLY RESOLVED contract — `preset_id`, `preset_sha256`, `parser`,
-  `artifact`, effective floors, `max_regression_pct`, `floor_enforced_at`,
-  and the captured `baseline` (or null) — and every driver gate MUST read
-  only that. The live preset file MUST NOT be re-resolved after admission,
+  FULLY RESOLVED contract — `command`, `preset_id`, `preset_sha256`,
+  `parser`, `artifact`, effective floors, `max_regression_pct`,
+  `floor_enforced_at`, and the captured `baseline` (or null) — and every
+  driver gate MUST read only that. `command` is included deliberately: a
+  gate that must read "only the frozen block" cannot run coverage at all if
+  the command lives elsewhere. The live preset file MUST NOT be re-resolved after admission,
   including on resume: freezing the preset NAME while its FILE stays
   editable would let a preset edit move the floor under an admitted run.
 
@@ -101,6 +115,20 @@ creates no ledger, and no admission-result file survives.
 - **FR-7a** A refused admission MUST leave no ledger and no admission-result
   file (increment B's invariant preserved).
 
+- **FR-7b — resume MUST NOT re-decide policy.** `load_config()` reruns
+  admission on every non-terminal resume. On resume the driver MUST load and
+  schema-validate the EXISTING frozen contract from the ledger and MUST NOT
+  recapture the baseline or overwrite the contract — otherwise the current
+  branch and the live preset would silently replace what the run was
+  admitted against, defeating FR-4a. A missing or corrupt frozen contract on
+  resume MUST fail closed.
+
+- **FR-7c — pending events.** Any event produced BEFORE ledger
+  initialisation (currently the prune warning) MUST be held and flushed only
+  after the ledger exists. Journalling early would either fail on the
+  missing directory or create durable state that survives a refused
+  admission. On refusal such events MUST go to stderr and leave no ledger.
+
 - **FR-8** The driver MUST `git worktree prune` on the **unattended
   admission path only**, immediately before admission creates its throwaway
   worktree. It MUST NOT run for every profile: FR-2 promises byte-identical
@@ -110,9 +138,16 @@ creates no ledger, and no admission-result file survives.
 
 - **FR-9** Admission's `test.command` invocation MUST be inside the
   wall-clock budget, not merely recorded. The driver MUST capture a
-  pre-admission timestamp and initialise `totals.started_epoch` from it;
-  a `duration_sec` field alone changes no cap arithmetic and would be
-  bookkeeping dressed as enforcement.
+  pre-admission timestamp (`ATTEMPT_START`) and initialise
+  `totals.started_epoch` from it; a `duration_sec` field alone changes no
+  cap arithmetic and would be bookkeeping dressed as enforcement.
+
+- **FR-9b — resume clocks start before resume's own admission.**
+  `reset_run_clocks()` (#205/#210) sets `started_epoch` to *now*, and runs
+  AFTER admission on the resume path — which would exclude the admission
+  that just ran, reintroducing FR-9's bug on every resume. It MUST accept an
+  explicit timestamp and be called with `ATTEMPT_START`. Existing callers
+  pass `now`, preserving their behaviour.
 
 - **FR-9a** The DRIVER MUST own the result-file path: create it, pass it to
   admission as an explicit argument, schema-validate the returned file,
@@ -133,6 +168,9 @@ creates no ledger, and no admission-result file survives.
   adapter-specific files.
 - Do NOT re-resolve the preset after admission — not at a phase gate, not
   at landing, not on resume.
+- Do NOT recapture the baseline on resume, and do NOT let a resume write a
+  new frozen contract.
+- Do NOT journal anything before the ledger exists.
 - Do NOT accept `max_regression_pct` alongside `baseline: none`; it cannot
   be enforced there, and accepting it is the inert-config trap again.
 - Do NOT let an unsupported coverage format degrade to a pass.
@@ -169,7 +207,12 @@ creates no ledger, and no admission-result file survives.
   artifact lacks.
 - **SC-4c** Regression arithmetic is percentage points: a baseline of 80
   and a measurement of 78 is a 2-point regression, asserted.
-- **SC-5** No `verification` block ⇒ byte-identical behaviour.
+- **SC-5** An attended run with no `verification` block is byte-identical;
+  an unattended one differs ONLY by the two documented exceptions,
+  enumerated and asserted.
+- **SC-5a** Resume with an edited preset file and a moved branch enforces
+  the ORIGINAL frozen contract; the baseline is not recaptured.
+- **SC-5b** Resume with a missing or corrupt frozen contract fails closed.
 - **SC-6** A refused admission leaves no ledger and no admission-result
   file; a successful one imports the baseline and the accounting.
 - **SC-7** The unattended admission path prunes a stale worktree
@@ -177,7 +220,11 @@ creates no ledger, and no admission-result file survives.
   journalled and does not fail the run.
 - **SC-7a** The wall-clock cap includes admission time: a run whose
   admission consumes most of the budget hits the cap sooner, asserted
-  against the pre-admission timestamp rather than a logged field.
+  against the pre-admission timestamp rather than a logged field — on a
+  FRESH run and, separately, on a RESUME.
+- **SC-7b** A prune warning emitted before ledger init appears in the ledger
+  after a successful admission, and appears only on stderr — with no ledger
+  created — after a refused one.
 - **SC-8** All suites green; every SC has a regression that fails against
   the pre-change code.
 
