@@ -1,8 +1,11 @@
-# Tasks: verification contract, increment C1 (#222) — rev 2
+# Tasks: verification contract, increment C1 (#222) — rev 3
 
 Each task is independently reviewable and leaves the suites green.
 
-## T1 — Config surface (FR-1, FR-1a, FR-2)
+## T1 — Config surface (FR-1, FR-1a, FR-2, FR-4b)
+- Every FR-4b rule: required keys, 0-100 ranges, at-least-one-floor,
+  `max_regression_pct` rejected under `baseline: none`, `artifact`
+  containment (no absolute, no `..`), parser enum.
 - `verification.coverage` in `shared/schemas/automation.schema.json`
   (surgical edit, no reformat).
 - `validate-automation-config.sh`: per-key checks with named messages;
@@ -23,11 +26,14 @@ Each task is independently reviewable and leaves the suites green.
   unknown unless every floor is supplied.
 - Assert no floor literal in any script.
 
-## T4 — Admission-result channel (FR-7, FR-7a, FR-9)
-- Admission writes `{baseline, test_command}` to a temp file before the
-  throwaway worktree is cleaned; returns its path.
-- Driver imports into the ledger only after admission succeeds and the
-  ledger exists, then removes it.
+## T4 — Admission-result channel (FR-7, FR-7a, FR-9, FR-9a)
+- DRIVER creates the path, passes `--result-file`, schema-validates the
+  return, imports atomically, removes it on every exit (trap). No path
+  scraped from diagnostic output.
+- Admission writes the FROZEN CONTRACT (FR-4a) plus `test_command`
+  accounting before the throwaway worktree is cleaned.
+- Pre-admission timestamp initialises `totals.started_epoch` (FR-9), with a
+  test that the cap actually includes admission time.
 - Test the refusal case: no ledger, no leftover file.
 
 ## T5 — Admission checks (FR-3, FR-4 capture)
@@ -35,14 +41,20 @@ Each task is independently reviewable and leaves the suites green.
   throwaway worktree and capture via T4.
 - Tests in `test-verification-spec.sh`.
 
-## T6 — Driver enforcement (FR-3, FR-4 enforcement)
-- Coverage gate at `floor_enforced_at`; regression against the ADMITTED
-  baseline; failure parks (attended) / terminates (unattended) with a
-  reason naming the measured number and the floor.
+## T6 — Driver enforcement (FR-3, FR-4, FR-4a, FR-4b arithmetic)
+- Coverage gate at `floor_enforced_at`, reading ONLY the frozen contract —
+  with a test that editing the preset file after admission changes nothing.
+- Regression in percentage POINTS against the frozen baseline.
+- A floor whose metric the artifact lacks fails closed.
+- Failure parks (attended) / terminates (unattended) naming the measured
+  number and the floor.
 - Tests in `test-auto-build-loop.sh`.
 
 ## T7 — Worktree prune (FR-8)
-- `git worktree prune` at preflight; test a stale registration is reclaimed.
+- Prune on the unattended admission path only, before admission creates its
+  worktree; non-fatal and journalled on failure.
+- Tests: stale registration reclaimed; attended run does not prune; a
+  failing prune does not fail the run.
 
 ## T8 — Docs + gates
 - README, CHANGELOG, schema description, count pins.
