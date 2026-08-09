@@ -28,15 +28,17 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 10
+# Plan: verification contract, increment C1 (#222) — rev 11
 
 Rev 2 narrowed the slice; rev 3 froze policy and fixed clock semantics;
 rev 4 wrote down the run lifecycle; rev 5 gave that lifecycle its missing dimensions; rev 6 split the result file; rev 7 finished the ownership sweep and gave the result schema its path
 discriminator; rev 8 fixed the import gate and pinned resume path selection; rev 9 replaced the two literal sequences with one path-parameterised flow;
-rev 10 fixes what that flow still got wrong — validation ordered after
-execution, coverage evidence that need not be fresh, and a prune trigger
-that assumed admission always isolates. All twenty-nine findings across nine
-rounds are accepted. The
+rev 10 ordered validation before execution and required fresh evidence;
+rev 11 orders the PRODUCERS (governance before project code), makes artifact
+containment realpath-aware now that the driver deletes that path, bases the
+prune on configured intent rather than a future outcome, and gives the
+frozen contract a representation for "no preset contributed". All
+thirty-three findings across ten rounds are accepted. The
 reviewer's diagnosis is the right one: most of round 3's findings are
 symptoms of a missing fresh-vs-resume split, so that split is now the
 plan's backbone rather than an implementation detail.
@@ -261,8 +263,14 @@ with a table that drives every per-path decision (rev 9, findings 1–3):
 3. `git worktree prune` **iff an applicable producer will attempt
    isolated-worktree execution** — warning held PENDING, never journalled
    pre-ledger
-4. run this path's producers (table below); each writes only its own
-   section; a path with no producer allocates no result file at all
+4. run this path's producers **in the order the table gives**, which is
+   security-relevant on `fresh-unattended-block`: the **admission bar first**,
+   then contract initialisation. `coverage.command` is arbitrary project
+   code, and #193 deliberately established that admission executes project
+   commands only AFTER config and governance checks pass — running the
+   coverage command first would execute project code for a run that
+   governance is about to refuse (rev 11, finding 1). Each producer writes
+   only its own section; a path with no producer allocates no result file
 5. fresh ⇒ initialise ledger with this path's clock origin; resume ⇒
    `reset_run_clocks <origin>`
 6. import exactly the sections this path emits; flush pending events
@@ -272,7 +280,7 @@ with a table that drives every per-path decision (rev 9, findings 1–3):
 | `fresh-attended-noblock` | none | none | no | **`now` — unchanged** |
 | `fresh-attended-block` | contract init | contract | iff brownfield | `ATTEMPT_START` |
 | `fresh-unattended-noblock` | admission | admission | **yes** | `ATTEMPT_START` |
-| `fresh-unattended-block` | contract init + admission | both | yes | `ATTEMPT_START` |
+| `fresh-unattended-block` | **admission, THEN contract init** | both | yes | `ATTEMPT_START` |
 | `resume-attended-noblock` | none | none | no | **`now` — unchanged** |
 | `resume-attended-block` | **none** (validation is step 2) | none | no | **`now` — unchanged** |
 | `resume-unattended-*` | admission | admission | **yes** | `ATTEMPT_START` |
@@ -283,21 +291,30 @@ follows:
 - **Prune iff a producer will ATTEMPT isolated-worktree execution.**
   Admission usually does, so `fresh-unattended-noblock` prunes — which rev
   8's "no no-block run prunes" wrongly excluded. But admission does NOT
-  always create one (rev 10, finding 3): `CCT_ADMISSION_TEST_IN_PLACE=1`
-  deliberately opts out, a non-git project has no worktrees, and
-  `worktree add` can simply fail (`validate-spec.sh:462-466`). The trigger
-  is the ATTEMPT, so the in-place opt-out does not prune. Contract
-  initialisation attempts one only for brownfield.
+  always attempt one: `CCT_ADMISSION_TEST_IN_PLACE=1` deliberately opts out
+  and a non-git project has no worktrees (`validate-spec.sh:462-466`).
+
+  The trigger is **configured INTENT to attempt isolation**, decided from
+  config before anything runs — not whether creation later succeeds, which
+  is unknowable at prune time since the prune necessarily precedes the
+  attempt (rev 11, finding 3). So: in-place override or non-git ⇒ no
+  attempt ⇒ no prune; otherwise prune first, regardless of whether
+  `worktree add` subsequently fails. Contract initialisation intends one
+  only for brownfield.
 - **Clock origin is `ATTEMPT_START` iff this path runs a pre-ledger
   producer**, else the existing `now`. That preserves attended no-block
   behaviour exactly (finding 3): those paths run no producer, so nothing
   new is counted. An attended run that OPTS INTO coverage does have its
   contract initialisation counted — a deliberate, stated consequence of
   opting in, not an accident.
-- **Coverage evidence must be FRESH.** Every capture and every gate must:
-  delete the (path-contained, FR-4b) artifact first, run the frozen
-  `command`, require **exit 0**, require the artifact to have been newly
-  produced, and only then parse it fail-closed. Without this a previous
+- **Coverage evidence must be FRESH, and containment must be REAL.** Every
+  capture and every gate must: verify the artifact path is contained
+  **after resolving symlinks in every existing ancestor** (a lexical
+  no-absolute/no-`..` check passes `coverage/out.json` when `coverage` is a
+  symlink pointing outside the project — and the driver now DELETES that
+  path, rev 11 finding 2); delete the artifact; run the frozen `command`;
+  require **exit 0**; require the artifact to have been newly produced; and
+  only then parse it fail-closed. Without this a previous
   passing report survives a command that fails without rewriting it, and a
   baseline capture or landing gate parses stale evidence and passes (rev 10,
   finding 2) — the same shape as every "asserted a label, not the thing" bug
