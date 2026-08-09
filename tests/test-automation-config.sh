@@ -253,6 +253,35 @@ assert "schema requires non-empty command/artifact/preset" \
 assert "schema closes both objects" \
     jq -e '.properties.verification.additionalProperties == false and '"$COV_SCHEMA"'.additionalProperties == false' "$SCHEMA"
 
+# ══════════════════════════════════════════════════════════════
+echo "=== review block validation ==="
+# ══════════════════════════════════════════════════════════════
+# max_rounds and loop_timeout_sec are COUNTS — the runtime
+# accepts only positive integers and silently falls back to its
+# default for anything else, so the schema and validator must
+# enforce the same constraint.
+
+w rev1.json '{"review":{"max_rounds":1.5}}'
+assert_rejects "fractional max_rounds is rejected" "$TMP/rev1.json" "positive integer"
+
+w rev2.json '{"review":{"max_rounds":0}}'
+assert_rejects "zero max_rounds is rejected" "$TMP/rev2.json" "positive integer"
+
+w rev3.json '{"review":{"max_rounds":"abc"}}'
+assert_rejects "string max_rounds is rejected" "$TMP/rev3.json" "positive integer"
+
+w rev4.json '{"review":{"loop_timeout_sec":1.5}}'
+assert_rejects "fractional loop_timeout_sec is rejected" "$TMP/rev4.json" "positive integer"
+
+assert "schema max_rounds is integer type" \
+    jq -e '.properties.review.properties.max_rounds.type == "integer"' "$SCHEMA"
+assert "schema max_rounds has minimum 1" \
+    jq -e '.properties.review.properties.max_rounds.minimum == 1' "$SCHEMA"
+assert "schema loop_timeout_sec is integer type" \
+    jq -e '.properties.review.properties.loop_timeout_sec.type == "integer"' "$SCHEMA"
+assert "schema loop_timeout_sec has minimum 1" \
+    jq -e '.properties.review.properties.loop_timeout_sec.minimum == 1' "$SCHEMA"
+
 echo ""
 echo "========================================="
 echo "  automation-config tests: $PASS passed, $FAIL failed"

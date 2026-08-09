@@ -109,6 +109,25 @@ if [[ "$caps_is_object" == "true" ]]; then
     done
 fi
 
+# ── review block ─────────────────────────────────────────────────
+# max_rounds is a count — the runtime (auto-build-loop.sh) accepts
+# only positive integers and silently falls back to 5 for anything
+# else, so the schema and validator enforce the same constraint.
+if [[ "$(q 'has("review")')" == "true" ]]; then
+    if ! is_type '.review' object; then
+        violation "review must be an object (got $(q '.review | type'))"
+    else
+        if [[ "$(q '.review | has("max_rounds")')" == "true" ]] \
+           && ! jq -e '.review.max_rounds | type == "number" and . == (. | floor) and . > 0' "$CONFIG" >/dev/null 2>&1; then
+            violation "review.max_rounds must be a positive integer (got '$(q '.review.max_rounds')')"
+        fi
+        if [[ "$(q '.review | has("loop_timeout_sec")')" == "true" ]] \
+           && ! jq -e '.review.loop_timeout_sec | type == "number" and . == (. | floor) and . > 0' "$CONFIG" >/dev/null 2>&1; then
+            violation "review.loop_timeout_sec must be a positive integer (got '$(q '.review.loop_timeout_sec')')"
+        fi
+    fi
+fi
+
 # ── verification block (#222, increment C1 of #190) ──────────
 # C1 implements `coverage` ONLY. The other sub-blocks are REJECTED by name
 # rather than accepted-and-ignored: an unattended contract that accepts

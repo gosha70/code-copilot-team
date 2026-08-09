@@ -541,10 +541,17 @@ compute_repeat_key() {
     # the same defect produces a fresh id every round, consecutive_fixed
     # never increments, and the stale-finding breaker never fires — the loop
     # reads N "new" findings instead of one stuck reviewer. The repeat key
-    # deliberately ignores prose: same file + same category is the same
-    # recurring complaint for staleness purposes, however it is phrased.
-    local file="$1" category="$2"
-    local input="${file}|${category}"
+    # deliberately ignores prose: same file + same category + same
+    # location (= normalised line_hint) is the same recurring complaint for
+    # staleness purposes, however it is phrased.  The line_hint
+    # discriminates between two different correctness defects in one file
+    # (e.g. "near the retry helper" vs "in the main loop") — without it
+    # they'd share a bucket and an unrelated fix could trip the breaker.
+    local file="$1" category="$2" line_hint="$3"
+    # Normalize line_hint: lowercase, collapse whitespace.
+    local norm_hint
+    norm_hint=$(printf '%s' "${line_hint:-}" | tr '[:upper:]' '[:lower:]' | tr -s ' ')
+    local input="${file}|${category}|${norm_hint}"
     local hash
     if command -v shasum &>/dev/null; then
         hash=$(printf '%s' "$input" | shasum -a 256 | cut -c1-8)
@@ -792,14 +799,37 @@ REPEATS=$(jq '.repeats // {}' "$STATE_FILE" 2>/dev/null || echo '{}')
 PREV_FIXED_KEYS='[]'
 PREV_RESOLUTION_FILE="$REVIEW_DIR/resolution-round-${CURRENT_ROUND}.json"
 if [[ -f "$PREV_RESOLUTION_FILE" ]]; then
-    PREV_FIXED_KEYS=$(jq -c --argjson prior "$PRIOR_FINDINGS" '
-        [ (.resolutions // .dispositions // [])[]?
-          | select(.disposition == "fixed")
-          | (.finding_id // .id) as $fid
-          | $prior[$fid].repeat_key // empty ] | unique
+    PREV_FIXED_KEYS=$(jq -c --argjson prior "$PRIOR_FINDINGS" --argjson last_round "$CURRENT_ROUND" '
+        # Resolution lookup: finding_id → disposition (this round only)
+        ([(.resolutions // .dispositions // [])[]?
+          | {key: (.finding_id // .id), value: .disposition}]
+          | from_entries) as $resolutions
+        |
+        # A bucket is only "previously fixed" when EVERY finding that
+        # belonged to it IN THE MOST RECENT COMPLETED ROUND was resolved
+        # as "fixed".  One fixed sibling and one rejected sibling used
+        # to mark the whole bucket fixed — the rejected one would
+        # naturally reappear and the counter advanced as though a fix
+        # had failed.  Filtering to last_round avoids also counting
+        # findings from earlier rounds whose resolutions are not in
+        # this resolution file.
+        [$prior | to_entries
+          | map(select(.value.repeat_key != null
+                       and (.value.rounds_seen | index($last_round))))
+          | group_by(.value.repeat_key)[]
+          | select([.[].key | $resolutions[.]] | all(. == "fixed"))
+          | .[0].value.repeat_key
+        ] | unique
     ' "$PREV_RESOLUTION_FILE" 2>/dev/null || echo '[]')
     [[ -n "$PREV_FIXED_KEYS" ]] || PREV_FIXED_KEYS='[]'
 fi
+
+# Collect unique repeat keys seen this round so bucket-level staleness
+# advances at most ONCE per round (two findings sharing a file+category
+# used to increment the same bucket twice — each bump brings it one step
+# closer to threshold 2, so a round with two correctness findings in the
+# same file tripped the stale-finding breaker after one recurrence).
+THIS_ROUND_KEY_MAP='{}'
 
 # Update accumulated findings with this round's data
 for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
@@ -830,7 +860,8 @@ for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
     # The bucket this finding belongs to, regardless of how it is worded.
     F_FILE=$(echo "$FINDING_DATA" | jq -r '.file // ""')
     F_CAT=$(echo "$FINDING_DATA" | jq -r '.category // ""')
-    REPEAT_KEY=$(compute_repeat_key "$F_FILE" "$F_CAT")
+    F_LINE_HINT=$(echo "$FINDING_DATA" | jq -r '.line_hint // ""')
+    REPEAT_KEY=$(compute_repeat_key "$F_FILE" "$F_CAT" "$F_LINE_HINT")
 
     ACCUMULATED=$(echo "$ACCUMULATED" | jq \
         --arg id "$FINDING_ID" \
@@ -841,9 +872,21 @@ for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
         --argjson cf "$CONSEC_FIXED" \
         '.[$id] = {description: $desc, repeat_key: $rkey, first_seen_round: $fsr, rounds_seen: $rounds, consecutive_fixed: $cf}')
 
-    # Bucket-level staleness: a key marked fixed last round that is raised
-    # again this round is a reviewer going in circles, no matter how the
-    # description changed.
+    # Remember this repeat key for the post-loop bucket update so we
+    # advance staleness at most once per round per key.
+    THIS_ROUND_KEY_MAP=$(echo "$THIS_ROUND_KEY_MAP" | jq \
+        --arg k "$REPEAT_KEY" --arg f "$F_FILE" --arg c "$F_CAT" \
+        '.[$k] = {file: $f, category: $c}')
+done
+
+# ── Bucket-level staleness (once per unique key per round) ─────
+# Each repeat key gets exactly one increment (or reset) regardless
+# of how many findings mapped to it this round.  Two findings that
+# share a file+category and were both marked fixed last round now
+# advance consecutive_fixed by 1, not 2.
+for REPEAT_KEY in $(echo "$THIS_ROUND_KEY_MAP" | jq -r 'keys[]'); do
+    F_FILE=$(echo "$THIS_ROUND_KEY_MAP" | jq -r --arg k "$REPEAT_KEY" '.[$k].file')
+    F_CAT=$(echo "$THIS_ROUND_KEY_MAP" | jq -r --arg k "$REPEAT_KEY" '.[$k].category')
     BUCKET_CF=$(echo "$REPEATS" | jq -r --arg k "$REPEAT_KEY" '.[$k].consecutive_fixed // 0')
     if [[ "$(echo "$PREV_FIXED_KEYS" | jq -r --arg k "$REPEAT_KEY" 'index($k) != null')" == "true" ]]; then
         BUCKET_CF=$((BUCKET_CF + 1))
