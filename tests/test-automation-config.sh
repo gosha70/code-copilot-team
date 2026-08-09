@@ -246,6 +246,10 @@ assert "schema forbids regression under baseline none" \
     jq -e "$COV_SCHEMA.allOf[1].then.not.required == [\"max_regression_pct\"]" "$SCHEMA"
 assert "schema requires a brownfield threshold source" \
     jq -e "$COV_SCHEMA.allOf[2].then.anyOf | map(.required[0]) | sort == [\"max_regression_pct\",\"preset\"]" "$SCHEMA"
+# Non-empty string constraints must match the gate, or the schema documents
+# a laxer contract than the thing that runs (#224 review, P3).
+assert "schema requires non-empty command/artifact/preset" \
+    jq -e "[$COV_SCHEMA.properties | .command, .artifact, .preset | .minLength] | all(. == 1)" "$SCHEMA"
 assert "schema closes both objects" \
     jq -e '.properties.verification.additionalProperties == false and '"$COV_SCHEMA"'.additionalProperties == false' "$SCHEMA"
 

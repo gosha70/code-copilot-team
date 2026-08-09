@@ -33,7 +33,7 @@
             "min_branch_pct": { "type": "number", "minimum": 0, "maximum": 100 },
             "max_regression_pct": { "type": "number", "minimum": 0, "maximum": 100, "description": "Percentage POINTS, not relative. Required (effective, after preset resolution) for baseline 'admission'; rejected for 'none'. Governs exactly the metrics that have a configured floor." },
             "floor_enforced_at": { "enum": ["landing", "phase"], "default": "landing" },
-            "preset": { "type": "string", "description": "Names shared/templates/<preset>/verification-preset.json. Absent or unknown fails closed unless every required floor is supplied here." },
+            "preset": { "type": "string", "minLength": 1, "description": "Names shared/templates/<preset>/verification-preset.json. Absent or unknown fails closed unless every required floor is supplied here." },
             "timeout_sec": { "type": "number", "exclusiveMinimum": 0, "description": "Bounds the arbitrary coverage command. Frozen with the contract; a host with no timeout mechanism refuses a coverage-enabled run on either profile rather than pretending to bound it." }
           },
           "allOf": [
