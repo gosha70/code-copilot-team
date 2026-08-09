@@ -35,7 +35,27 @@
             "floor_enforced_at": { "enum": ["landing", "phase"], "default": "landing" },
             "preset": { "type": "string", "description": "Names shared/templates/<preset>/verification-preset.json. Absent or unknown fails closed unless every required floor is supplied here." },
             "timeout_sec": { "type": "number", "exclusiveMinimum": 0, "description": "Bounds the arbitrary coverage command. Frozen with the contract; a host with no timeout mechanism refuses a coverage-enabled run on either profile rather than pretending to bound it." }
-          }
+          },
+          "allOf": [
+            {
+              "description": "At least one floor, or a preset that supplies one — a contract must commit to something.",
+              "anyOf": [
+                { "required": ["min_line_pct"] },
+                { "required": ["min_branch_pct"] },
+                { "required": ["preset"] }
+              ]
+            },
+            {
+              "description": "max_regression_pct is meaningless with no baseline to regress from; accepting it there would be inert config.",
+              "if": { "properties": { "baseline": { "const": "none" } }, "required": ["baseline"] },
+              "then": { "not": { "required": ["max_regression_pct"] } }
+            },
+            {
+              "description": "FR-4 promises no-regression enforcement, so a brownfield contract needs an effective threshold: here, or from a preset resolved at preflight.",
+              "if": { "properties": { "baseline": { "const": "admission" } }, "required": ["baseline"] },
+              "then": { "anyOf": [ { "required": ["max_regression_pct"] }, { "required": ["preset"] } ] }
+            }
+          ]
         }
       }
     },

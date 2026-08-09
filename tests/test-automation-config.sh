@@ -196,6 +196,59 @@ assert_rejects "unknown verification key is rejected" "$TMP/c-unk2.json" "unknow
 w c-at.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":80,"floor_enforced_at":"whenever"}}}'
 assert_rejects "floor_enforced_at enum is enforced" "$TMP/c-at.json" "'landing' or 'phase'"
 
+# ── #224 review: parity between the schema and this jq gate ──
+# There is no JSON-Schema runtime here or in CI (the repo chose jq-based
+# enforcement precisely so hosts need no schema tooling), so "parity"
+# cannot mean "run both engines". It means two things that ARE checkable:
+#   1. a fixture table where each instance's expected verdict is asserted
+#      against the shell validator — the gate that actually runs;
+#   2. structural assertions that the schema DECLARES the same cross-field
+#      rules, so the documentation cannot silently drift from the gate.
+# Stated plainly because the weaker guarantee is the honest one.
+SCHEMA="$REPO_DIR/shared/schemas/automation.schema.json"
+
+parity() {  # parity <name> <json> <expect ok|reject> [needle]
+    local name="$1" json="$2" expect="$3" needle="${4:-}"
+    w "parity.json" "$json"
+    if [[ "$expect" == "ok" ]]; then
+        assert "parity: $name" bash "$V" "$TMP/parity.json"
+    else
+        assert_rejects "parity: $name" "$TMP/parity.json" "$needle"
+    fi
+}
+
+COVB='"command":"c","artifact":"cov.json","parser":"istanbul"'
+parity "floor via min_line_pct"   "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\",\"min_line_pct\":80}}}" ok
+parity "floor via min_branch_pct" "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\",\"min_branch_pct\":70}}}" ok
+parity "floor via preset"         "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\",\"preset\":\"ml-app\"}}}" ok
+parity "no floor and no preset"   "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\"}}}" reject "needs at least one floor"
+parity "greenfield + regression"  "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\",\"min_line_pct\":80,\"max_regression_pct\":0}}}" reject "nothing to regress from"
+parity "brownfield no threshold"  "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"admission\",\"min_line_pct\":80}}}" reject "required for baseline 'admission'"
+parity "brownfield + threshold"   "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"admission\",\"min_line_pct\":80,\"max_regression_pct\":0}}}" ok
+parity "brownfield + preset"      "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"admission\",\"preset\":\"ml-app\"}}}" ok
+
+# Shape rules the schema states and the gate must actually enforce.
+parity "command must be a string" "{\"verification\":{\"coverage\":{\"command\":{},\"artifact\":\"cov.json\",\"parser\":\"istanbul\",\"baseline\":\"none\",\"min_line_pct\":80}}}" reject "command must be a non-empty string"
+parity "artifact must be non-empty" "{\"verification\":{\"coverage\":{\"command\":\"c\",\"artifact\":\"\",\"parser\":\"istanbul\",\"baseline\":\"none\",\"min_line_pct\":80}}}" reject "artifact must be a non-empty string"
+parity "preset must be a string"  "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\",\"min_line_pct\":80,\"preset\":null}}}" reject "preset must be a non-empty string"
+
+# '..' is a SEGMENT rule, not a substring rule.
+parity "dots inside a filename are fine" "{\"verification\":{\"coverage\":{\"command\":\"c\",\"artifact\":\"reports/v1..v2.json\",\"parser\":\"istanbul\",\"baseline\":\"none\",\"min_line_pct\":80}}}" ok
+parity "a .. segment traverses" "{\"verification\":{\"coverage\":{\"command\":\"c\",\"artifact\":\"a/../../etc/x.json\",\"parser\":\"istanbul\",\"baseline\":\"none\",\"min_line_pct\":80}}}" reject "must not traverse"
+
+# Structural: the schema DECLARES the cross-field rules the gate enforces.
+COV_SCHEMA='.properties.verification.properties.coverage'
+assert "schema declares 3 cross-field rules" \
+    jq -e "$COV_SCHEMA.allOf | length == 3" "$SCHEMA"
+assert "schema declares the floor-or-preset rule" \
+    jq -e "$COV_SCHEMA.allOf[0].anyOf | map(.required[0]) | sort == [\"min_branch_pct\",\"min_line_pct\",\"preset\"]" "$SCHEMA"
+assert "schema forbids regression under baseline none" \
+    jq -e "$COV_SCHEMA.allOf[1].then.not.required == [\"max_regression_pct\"]" "$SCHEMA"
+assert "schema requires a brownfield threshold source" \
+    jq -e "$COV_SCHEMA.allOf[2].then.anyOf | map(.required[0]) | sort == [\"max_regression_pct\",\"preset\"]" "$SCHEMA"
+assert "schema closes both objects" \
+    jq -e '.properties.verification.additionalProperties == false and '"$COV_SCHEMA"'.additionalProperties == false' "$SCHEMA"
+
 echo ""
 echo "========================================="
 echo "  automation-config tests: $PASS passed, $FAIL failed"

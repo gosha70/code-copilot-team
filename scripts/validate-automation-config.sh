@@ -139,12 +139,21 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
             if ! is_type '.verification.coverage' object; then
                 violation "verification.coverage must be an object (got $(q '.verification.coverage | type'))"
             else
-                # Required keys (FR-4b).
+                # Required keys (FR-4b) — presence AND shape. The JSON
+                # Schema is documentation here; this jq gate is the
+                # enforcement, so its constraints must be checked here or
+                # they protect nothing at runtime.
                 for req in command artifact parser baseline; do
                     if [[ "$(q ".verification.coverage | has(\"$req\")")" != "true" ]]; then
                         violation "verification.coverage.$req is required"
+                    elif ! jq -e ".verification.coverage.${req} | type == \"string\" and length > 0" "$CONFIG" >/dev/null 2>&1; then
+                        violation "verification.coverage.${req} must be a non-empty string (got $(q ".verification.coverage.${req} | type"))"
                     fi
                 done
+                if [[ "$(q '.verification.coverage | has("preset")')" == "true" ]] \
+                   && ! jq -e '.verification.coverage.preset | type == "string" and length > 0' "$CONFIG" >/dev/null 2>&1; then
+                    violation "verification.coverage.preset must be a non-empty string (got $(q '.verification.coverage.preset | type'))"
+                fi
                 # parser: istanbul|lcov implemented; the other two refuse by name.
                 cov_parser="$(q '.verification.coverage.parser // empty')"
                 case "$cov_parser" in
@@ -165,8 +174,22 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
                 cov_artifact="$(q '.verification.coverage.artifact // empty')"
                 if [[ "$cov_artifact" == /* ]]; then
                     violation "verification.coverage.artifact must be a relative path inside the project (got absolute '$cov_artifact')"
-                elif [[ "$cov_artifact" == *".."* ]]; then
-                    violation "verification.coverage.artifact must not traverse outside the project (got '$cov_artifact')"
+                else
+                    # A '..' SEGMENT traverses; '..' inside a filename does
+                    # not. Matching the substring rejected safe names such as
+                    # reports/v1..v2.json.
+                    # bash 3.2 + `set -u`: an empty artifact leaves the array
+                    # UNSET, and "${arr[@]}" then aborts the validator instead
+                    # of reporting the violation already queued above.
+                    cov_traverses=0
+                    _cov_parts=()
+                    IFS='/' read -r -a _cov_parts <<< "$cov_artifact" || true
+                    for _p in ${_cov_parts[@]+"${_cov_parts[@]}"}; do
+                        [[ "$_p" == ".." ]] && cov_traverses=1
+                    done
+                    if [[ $cov_traverses -eq 1 ]]; then
+                        violation "verification.coverage.artifact must not traverse outside the project (got '$cov_artifact')"
+                    fi
                 fi
                 # Percentages.
                 for pct in min_line_pct min_branch_pct max_regression_pct; do
@@ -186,6 +209,15 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
                 if [[ "$cov_baseline" == "none" ]] \
                    && [[ "$(q '.verification.coverage | has("max_regression_pct")')" == "true" ]]; then
                     violation "verification.coverage.max_regression_pct cannot be used with baseline 'none' (nothing to regress from); it is REQUIRED for baseline 'admission'"
+                fi
+                # FR-4 promises no-regression enforcement for brownfield, so a
+                # brownfield contract needs an EFFECTIVE threshold. With no
+                # preset to supply one, that is decidable here; with a preset,
+                # the preflight initialiser decides after resolution (T3).
+                if [[ "$cov_baseline" == "admission" ]] \
+                   && [[ "$(q '.verification.coverage | has("max_regression_pct")')" != "true" ]] \
+                   && [[ "$(q '.verification.coverage | has("preset")')" != "true" ]]; then
+                    violation "verification.coverage.max_regression_pct is required for baseline 'admission' (FR-4 enforces no-regression) — supply it here or via a preset"
                 fi
                 # timeout_sec bounds the arbitrary coverage command (FR-5c).
                 if [[ "$(q '.verification.coverage | has("timeout_sec")')" == "true" ]] \
