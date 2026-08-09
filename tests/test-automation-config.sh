@@ -123,6 +123,136 @@ assert "schema file is valid JSON" jq -e . "$REPO_DIR/shared/schemas/automation.
 assert "schema pins on_* enums to terminate" \
     bash -c "jq -e '.properties.unattended.properties | [.on_review_breaker.enum, .on_stale_finding.enum, .on_origin_gate.enum] | flatten | unique == [\"terminate\"]' '$REPO_DIR/shared/schemas/automation.schema.json'"
 
+# ══════════════════════════════════════════════════════════════
+echo "=== #222 C1: verification.coverage ==="
+# ══════════════════════════════════════════════════════════════
+
+COV_OK='"command":"npm run coverage","artifact":"coverage/coverage-summary.json","parser":"istanbul","baseline":"none","min_line_pct":80'
+
+# A project with NO verification block is unchanged (FR-2).
+w c-none.json '{"schema_version":2,"profile":"pr"}'
+assert "no verification block is still valid" bash "$V" "$TMP/c-none.json"
+
+w c-ok.json "{\"schema_version\":2,\"profile\":\"pr\",\"verification\":{\"coverage\":{$COV_OK}}}"
+assert "greenfield coverage block is valid" bash "$V" "$TMP/c-ok.json"
+
+w c-brown.json '{"schema_version":2,"profile":"pr","verification":{"coverage":{"command":"npm run coverage","artifact":"coverage/coverage-summary.json","parser":"lcov","baseline":"admission","min_line_pct":80,"max_regression_pct":0,"timeout_sec":1200,"floor_enforced_at":"phase"}}}'
+assert "brownfield coverage block is valid" bash "$V" "$TMP/c-brown.json"
+
+# ── the four sub-blocks C1 does NOT implement are rejected BY NAME ──
+for sub in test app visual conformance; do
+    w "c-$sub.json" "{\"schema_version\":2,\"verification\":{\"$sub\":{}}}"
+    assert_rejects "verification.$sub is rejected by name" "$TMP/c-$sub.json" "verification.$sub is not supported in C1"
+done
+w c-conf2.json '{"schema_version":2,"verification":{"conformance":{"required":true}}}'
+assert_rejects "conformance.required names its derivation" "$TMP/c-conf2.json" "DERIVED from verification.yaml"
+
+# ── required keys ──
+for req in command artifact parser baseline; do
+    w "c-miss-$req.json" "$(python3 - "$req" << 'PYEOF'
+import json,sys
+cov={"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":80}
+cov.pop(sys.argv[1])
+print(json.dumps({"schema_version":2,"verification":{"coverage":cov}}))
+PYEOF
+)"
+    assert_rejects "coverage.$req is required" "$TMP/c-miss-$req.json" "verification.coverage.$req is required"
+done
+
+# ── parsers: two implemented, two refused by name ──
+for p in cobertura jacoco; do
+    w "c-parser-$p.json" "{\"schema_version\":2,\"verification\":{\"coverage\":{\"command\":\"c\",\"artifact\":\"a.json\",\"parser\":\"$p\",\"baseline\":\"none\",\"min_line_pct\":80}}}"
+    assert_rejects "parser $p refuses rather than pretends" "$TMP/c-parser-$p.json" "not implemented in C1"
+done
+w c-parser-x.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"nope","baseline":"none","min_line_pct":80}}}'
+assert_rejects "unknown parser is rejected" "$TMP/c-parser-x.json" "must be one of: istanbul, lcov"
+
+# ── artifact containment (lexical here; realpath at execution) ──
+w c-abs.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"/etc/passwd","parser":"istanbul","baseline":"none","min_line_pct":80}}}'
+assert_rejects "absolute artifact path is rejected" "$TMP/c-abs.json" "relative path inside the project"
+w c-dots.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"../outside/cov.json","parser":"istanbul","baseline":"none","min_line_pct":80}}}'
+assert_rejects "traversing artifact path is rejected" "$TMP/c-dots.json" "must not traverse outside"
+
+# ── floors and percentages ──
+w c-nofloor.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none"}}}'
+assert_rejects "a contract with no floor at all is rejected" "$TMP/c-nofloor.json" "needs at least one floor"
+w c-range.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":140}}}'
+assert_rejects "out-of-range percentage is rejected" "$TMP/c-range.json" "0..100"
+
+# ── max_regression_pct is inert under greenfield, so it is refused ──
+w c-regr.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":80,"max_regression_pct":0}}}'
+assert_rejects "max_regression_pct with baseline none is rejected" "$TMP/c-regr.json" "nothing to regress from"
+
+# ── bound must be positive ──
+w c-to.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":80,"timeout_sec":0}}}'
+assert_rejects "non-positive timeout_sec is rejected" "$TMP/c-to.json" "timeout_sec must be a number > 0"
+
+# ── closed objects ──
+w c-unk.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":80,"bogus":1}}}'
+assert_rejects "unknown coverage key is rejected" "$TMP/c-unk.json" "unknown key 'verification.coverage.bogus'"
+w c-unk2.json '{"schema_version":2,"verification":{"bogus":{}}}'
+assert_rejects "unknown verification key is rejected" "$TMP/c-unk2.json" "unknown key 'verification.bogus'"
+
+w c-at.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":80,"floor_enforced_at":"whenever"}}}'
+assert_rejects "floor_enforced_at enum is enforced" "$TMP/c-at.json" "'landing' or 'phase'"
+
+# ── #224 review: parity between the schema and this jq gate ──
+# There is no JSON-Schema runtime here or in CI (the repo chose jq-based
+# enforcement precisely so hosts need no schema tooling), so "parity"
+# cannot mean "run both engines". It means two things that ARE checkable:
+#   1. a fixture table where each instance's expected verdict is asserted
+#      against the shell validator — the gate that actually runs;
+#   2. structural assertions that the schema DECLARES the same cross-field
+#      rules, so the documentation cannot silently drift from the gate.
+# Stated plainly because the weaker guarantee is the honest one.
+SCHEMA="$REPO_DIR/shared/schemas/automation.schema.json"
+
+parity() {  # parity <name> <json> <expect ok|reject> [needle]
+    local name="$1" json="$2" expect="$3" needle="${4:-}"
+    w "parity.json" "$json"
+    if [[ "$expect" == "ok" ]]; then
+        assert "parity: $name" bash "$V" "$TMP/parity.json"
+    else
+        assert_rejects "parity: $name" "$TMP/parity.json" "$needle"
+    fi
+}
+
+COVB='"command":"c","artifact":"cov.json","parser":"istanbul"'
+parity "floor via min_line_pct"   "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\",\"min_line_pct\":80}}}" ok
+parity "floor via min_branch_pct" "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\",\"min_branch_pct\":70}}}" ok
+parity "floor via preset"         "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\",\"preset\":\"ml-app\"}}}" ok
+parity "no floor and no preset"   "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\"}}}" reject "needs at least one floor"
+parity "greenfield + regression"  "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\",\"min_line_pct\":80,\"max_regression_pct\":0}}}" reject "nothing to regress from"
+parity "brownfield no threshold"  "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"admission\",\"min_line_pct\":80}}}" reject "required for baseline 'admission'"
+parity "brownfield + threshold"   "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"admission\",\"min_line_pct\":80,\"max_regression_pct\":0}}}" ok
+parity "brownfield + preset"      "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"admission\",\"preset\":\"ml-app\"}}}" ok
+
+# Shape rules the schema states and the gate must actually enforce.
+parity "command must be a string" "{\"verification\":{\"coverage\":{\"command\":{},\"artifact\":\"cov.json\",\"parser\":\"istanbul\",\"baseline\":\"none\",\"min_line_pct\":80}}}" reject "command must be a non-empty string"
+parity "artifact must be non-empty" "{\"verification\":{\"coverage\":{\"command\":\"c\",\"artifact\":\"\",\"parser\":\"istanbul\",\"baseline\":\"none\",\"min_line_pct\":80}}}" reject "artifact must be a non-empty string"
+parity "preset must be a string"  "{\"verification\":{\"coverage\":{$COVB,\"baseline\":\"none\",\"min_line_pct\":80,\"preset\":null}}}" reject "preset must be a non-empty string"
+
+# '..' is a SEGMENT rule, not a substring rule.
+parity "dots inside a filename are fine" "{\"verification\":{\"coverage\":{\"command\":\"c\",\"artifact\":\"reports/v1..v2.json\",\"parser\":\"istanbul\",\"baseline\":\"none\",\"min_line_pct\":80}}}" ok
+parity "a .. segment traverses" "{\"verification\":{\"coverage\":{\"command\":\"c\",\"artifact\":\"a/../../etc/x.json\",\"parser\":\"istanbul\",\"baseline\":\"none\",\"min_line_pct\":80}}}" reject "must not traverse"
+
+# Structural: the schema DECLARES the cross-field rules the gate enforces.
+COV_SCHEMA='.properties.verification.properties.coverage'
+assert "schema declares 3 cross-field rules" \
+    jq -e "$COV_SCHEMA.allOf | length == 3" "$SCHEMA"
+assert "schema declares the floor-or-preset rule" \
+    jq -e "$COV_SCHEMA.allOf[0].anyOf | map(.required[0]) | sort == [\"min_branch_pct\",\"min_line_pct\",\"preset\"]" "$SCHEMA"
+assert "schema forbids regression under baseline none" \
+    jq -e "$COV_SCHEMA.allOf[1].then.not.required == [\"max_regression_pct\"]" "$SCHEMA"
+assert "schema requires a brownfield threshold source" \
+    jq -e "$COV_SCHEMA.allOf[2].then.anyOf | map(.required[0]) | sort == [\"max_regression_pct\",\"preset\"]" "$SCHEMA"
+# Non-empty string constraints must match the gate, or the schema documents
+# a laxer contract than the thing that runs (#224 review, P3).
+assert "schema requires non-empty command/artifact/preset" \
+    jq -e "[$COV_SCHEMA.properties | .command, .artifact, .preset | .minLength] | all(. == 1)" "$SCHEMA"
+assert "schema closes both objects" \
+    jq -e '.properties.verification.additionalProperties == false and '"$COV_SCHEMA"'.additionalProperties == false' "$SCHEMA"
+
 echo ""
 echo "========================================="
 echo "  automation-config tests: $PASS passed, $FAIL failed"
