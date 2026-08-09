@@ -1047,9 +1047,9 @@ grep -Eq '^TEST_REVIEW_LOOP_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.
 assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
 
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
-# 13 as of #222 T2 (test-coverage-parse.sh). Bump deliberately when a suite
-# is added, so a pin cannot go missing unnoticed.
-assert_eq "test-counts has exactly 13 expected-pass variables" "13" "$COUNT_VARS"
+# 14 as of #222 T3 (test-verification-preset.sh). Bump deliberately when a
+# suite is added, so a pin cannot go missing unnoticed.
+assert_eq "test-counts has exactly 14 expected-pass variables" "14" "$COUNT_VARS"
 
 rc=0
 grep -Eq '^TEST_LITELLM_PROXY_DEPS_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
@@ -1058,6 +1058,13 @@ assert_ok "test-counts has TEST_LITELLM_PROXY_DEPS_EXPECTED_PASS numeric value" 
 rc=0
 grep -Eq '^TEST_COVERAGE_PARSE_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
 assert_ok "test-counts has TEST_COVERAGE_PARSE_EXPECTED_PASS numeric value" "$rc"
+
+rc=0
+grep -Eq '^TEST_VERIFICATION_PRESET_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
+assert_ok "test-counts has TEST_VERIFICATION_PRESET_EXPECTED_PASS numeric value" "$rc"
+rc=0
+grep -q 'TEST_VERIFICATION_PRESET_EXPECTED_PASS' "$REPO_DIR/tests/test-verification-preset.sh" || rc=1
+assert_ok "test-verification-preset enforces its own count pin" "$rc"
 # The pin must be ENFORCED by its suite, not merely declared (#225 review P3).
 rc=0
 grep -q 'TEST_COVERAGE_PARSE_EXPECTED_PASS' "$REPO_DIR/tests/test-coverage-parse.sh" || rc=1

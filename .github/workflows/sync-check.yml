@@ -117,6 +117,11 @@ jobs:
           bash -n scripts/lib/coverage-parse.sh
           bash tests/test-coverage-parse.sh
 
+      - name: Run verification-preset tests (#222 T3)
+        run: |
+          bash -n scripts/lib/verification-preset.sh
+          bash tests/test-verification-preset.sh
+
       - name: Check the LiteLLM proxy dependencies stay pinned
         run: bash tests/test-litellm-proxy-deps.sh
 
