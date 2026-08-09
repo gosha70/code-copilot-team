@@ -14,6 +14,31 @@
     "phases": { "type": "object" },
     "build": { "type": "object" },
     "test": { "type": "object" },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "#222 (increment C1 of #190). C1 implements `coverage` ONLY; test/app/visual/conformance are rejected by name by validate-automation-config.sh rather than accepted-and-ignored (an unattended contract must not accept enforcement-looking settings that do nothing). conformance.required is DERIVED from verification.yaml per #190 §6, never operator-set; its evaluator ships in C2.",
+      "properties": {
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command", "artifact", "parser", "baseline"],
+          "description": "Coverage floors. The FULLY RESOLVED contract (this block plus preset-derived values, plus the captured baseline) is frozen at preflight initialisation and is what every later gate reads — the live preset file is never re-resolved, including on resume.",
+          "properties": {
+            "command": { "type": "string", "minLength": 1 },
+            "artifact": { "type": "string", "minLength": 1, "description": "Relative path inside the project. Containment is re-resolved with symlinks BEFORE deletion and again AFTER the command exits, since the driver deletes this path and the command is arbitrary project code." },
+            "parser": { "enum": ["istanbul", "lcov"], "description": "cobertura and jacoco are refused with 'not implemented in C1' rather than silently treated as passing." },
+            "baseline": { "enum": ["none", "admission"], "description": "none = greenfield: no artifact required at admission, absolute floor only. admission = brownfield: capture the base ref and enforce no-regression AND the floor." },
+            "min_line_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+            "min_branch_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+            "max_regression_pct": { "type": "number", "minimum": 0, "maximum": 100, "description": "Percentage POINTS, not relative. Required (effective, after preset resolution) for baseline 'admission'; rejected for 'none'. Governs exactly the metrics that have a configured floor." },
+            "floor_enforced_at": { "enum": ["landing", "phase"], "default": "landing" },
+            "preset": { "type": "string", "description": "Names shared/templates/<preset>/verification-preset.json. Absent or unknown fails closed unless every required floor is supplied here." },
+            "timeout_sec": { "type": "number", "exclusiveMinimum": 0, "description": "Bounds the arbitrary coverage command. Frozen with the contract; a host with no timeout mechanism refuses a coverage-enabled run on either profile rather than pretending to bound it." }
+          }
+        }
+      }
+    },
     "review": {
       "type": "object",
       "properties": {

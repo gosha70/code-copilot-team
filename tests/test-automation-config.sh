@@ -123,6 +123,79 @@ assert "schema file is valid JSON" jq -e . "$REPO_DIR/shared/schemas/automation.
 assert "schema pins on_* enums to terminate" \
     bash -c "jq -e '.properties.unattended.properties | [.on_review_breaker.enum, .on_stale_finding.enum, .on_origin_gate.enum] | flatten | unique == [\"terminate\"]' '$REPO_DIR/shared/schemas/automation.schema.json'"
 
+# ══════════════════════════════════════════════════════════════
+echo "=== #222 C1: verification.coverage ==="
+# ══════════════════════════════════════════════════════════════
+
+COV_OK='"command":"npm run coverage","artifact":"coverage/coverage-summary.json","parser":"istanbul","baseline":"none","min_line_pct":80'
+
+# A project with NO verification block is unchanged (FR-2).
+w c-none.json '{"schema_version":2,"profile":"pr"}'
+assert "no verification block is still valid" bash "$V" "$TMP/c-none.json"
+
+w c-ok.json "{\"schema_version\":2,\"profile\":\"pr\",\"verification\":{\"coverage\":{$COV_OK}}}"
+assert "greenfield coverage block is valid" bash "$V" "$TMP/c-ok.json"
+
+w c-brown.json '{"schema_version":2,"profile":"pr","verification":{"coverage":{"command":"npm run coverage","artifact":"coverage/coverage-summary.json","parser":"lcov","baseline":"admission","min_line_pct":80,"max_regression_pct":0,"timeout_sec":1200,"floor_enforced_at":"phase"}}}'
+assert "brownfield coverage block is valid" bash "$V" "$TMP/c-brown.json"
+
+# ── the four sub-blocks C1 does NOT implement are rejected BY NAME ──
+for sub in test app visual conformance; do
+    w "c-$sub.json" "{\"schema_version\":2,\"verification\":{\"$sub\":{}}}"
+    assert_rejects "verification.$sub is rejected by name" "$TMP/c-$sub.json" "verification.$sub is not supported in C1"
+done
+w c-conf2.json '{"schema_version":2,"verification":{"conformance":{"required":true}}}'
+assert_rejects "conformance.required names its derivation" "$TMP/c-conf2.json" "DERIVED from verification.yaml"
+
+# ── required keys ──
+for req in command artifact parser baseline; do
+    w "c-miss-$req.json" "$(python3 - "$req" << 'PYEOF'
+import json,sys
+cov={"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":80}
+cov.pop(sys.argv[1])
+print(json.dumps({"schema_version":2,"verification":{"coverage":cov}}))
+PYEOF
+)"
+    assert_rejects "coverage.$req is required" "$TMP/c-miss-$req.json" "verification.coverage.$req is required"
+done
+
+# ── parsers: two implemented, two refused by name ──
+for p in cobertura jacoco; do
+    w "c-parser-$p.json" "{\"schema_version\":2,\"verification\":{\"coverage\":{\"command\":\"c\",\"artifact\":\"a.json\",\"parser\":\"$p\",\"baseline\":\"none\",\"min_line_pct\":80}}}"
+    assert_rejects "parser $p refuses rather than pretends" "$TMP/c-parser-$p.json" "not implemented in C1"
+done
+w c-parser-x.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"nope","baseline":"none","min_line_pct":80}}}'
+assert_rejects "unknown parser is rejected" "$TMP/c-parser-x.json" "must be one of: istanbul, lcov"
+
+# ── artifact containment (lexical here; realpath at execution) ──
+w c-abs.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"/etc/passwd","parser":"istanbul","baseline":"none","min_line_pct":80}}}'
+assert_rejects "absolute artifact path is rejected" "$TMP/c-abs.json" "relative path inside the project"
+w c-dots.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"../outside/cov.json","parser":"istanbul","baseline":"none","min_line_pct":80}}}'
+assert_rejects "traversing artifact path is rejected" "$TMP/c-dots.json" "must not traverse outside"
+
+# ── floors and percentages ──
+w c-nofloor.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none"}}}'
+assert_rejects "a contract with no floor at all is rejected" "$TMP/c-nofloor.json" "needs at least one floor"
+w c-range.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":140}}}'
+assert_rejects "out-of-range percentage is rejected" "$TMP/c-range.json" "0..100"
+
+# ── max_regression_pct is inert under greenfield, so it is refused ──
+w c-regr.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":80,"max_regression_pct":0}}}'
+assert_rejects "max_regression_pct with baseline none is rejected" "$TMP/c-regr.json" "nothing to regress from"
+
+# ── bound must be positive ──
+w c-to.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":80,"timeout_sec":0}}}'
+assert_rejects "non-positive timeout_sec is rejected" "$TMP/c-to.json" "timeout_sec must be a number > 0"
+
+# ── closed objects ──
+w c-unk.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":80,"bogus":1}}}'
+assert_rejects "unknown coverage key is rejected" "$TMP/c-unk.json" "unknown key 'verification.coverage.bogus'"
+w c-unk2.json '{"schema_version":2,"verification":{"bogus":{}}}'
+assert_rejects "unknown verification key is rejected" "$TMP/c-unk2.json" "unknown key 'verification.bogus'"
+
+w c-at.json '{"schema_version":2,"verification":{"coverage":{"command":"c","artifact":"a.json","parser":"istanbul","baseline":"none","min_line_pct":80,"floor_enforced_at":"whenever"}}}'
+assert_rejects "floor_enforced_at enum is enforced" "$TMP/c-at.json" "'landing' or 'phase'"
+
 echo ""
 echo "========================================="
 echo "  automation-config tests: $PASS passed, $FAIL failed"

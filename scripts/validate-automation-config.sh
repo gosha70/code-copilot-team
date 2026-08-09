@@ -109,6 +109,103 @@ if [[ "$caps_is_object" == "true" ]]; then
     done
 fi
 
+# ── verification block (#222, increment C1 of #190) ──────────
+# C1 implements `coverage` ONLY. The other sub-blocks are REJECTED by name
+# rather than accepted-and-ignored: an unattended contract that accepts
+# enforcement-looking settings which do nothing is worse than one that
+# refuses them (see #205's inert round_timeout_sec and #212's unrun --check).
+if [[ "$(q 'has("verification")')" == "true" ]]; then
+    if ! is_type '.verification' object; then
+        violation "verification must be an object (got $(q '.verification | type'))"
+    else
+        for sub in test app visual conformance; do
+            if [[ "$(q ".verification | has(\"$sub\")")" == "true" ]]; then
+                case "$sub" in
+                    conformance)
+                        violation "verification.conformance is not supported in C1 — and 'required' is DERIVED from verification.yaml (#190 §6), never operator-set; the evaluator ships in C2" ;;
+                    test)
+                        violation "verification.test is not supported in C1 — top-level test.command remains the single source for the test step" ;;
+                    *)
+                        violation "verification.$sub is not supported in C1 (no runner exists for it; see specs/auto-build-verification-contract/plan.md)" ;;
+                esac
+            fi
+        done
+        cov_unknown="$(jq -r '.verification | keys[] | select(. != "coverage" and . != "test" and . != "app" and . != "visual" and . != "conformance")' "$CONFIG" 2>/dev/null || true)"
+        for k in $cov_unknown; do
+            violation "unknown key 'verification.$k' (the schema is closed — see shared/schemas/automation.schema.json)"
+        done
+
+        if [[ "$(q '.verification | has("coverage")')" == "true" ]]; then
+            if ! is_type '.verification.coverage' object; then
+                violation "verification.coverage must be an object (got $(q '.verification.coverage | type'))"
+            else
+                # Required keys (FR-4b).
+                for req in command artifact parser baseline; do
+                    if [[ "$(q ".verification.coverage | has(\"$req\")")" != "true" ]]; then
+                        violation "verification.coverage.$req is required"
+                    fi
+                done
+                # parser: istanbul|lcov implemented; the other two refuse by name.
+                cov_parser="$(q '.verification.coverage.parser // empty')"
+                case "$cov_parser" in
+                    ""|istanbul|lcov) ;;
+                    cobertura|jacoco)
+                        violation "verification.coverage.parser '$cov_parser' is not implemented in C1 (istanbul and lcov are) — a parser that pretends is worse than one that refuses" ;;
+                    *)
+                        violation "verification.coverage.parser must be one of: istanbul, lcov (got '$cov_parser')" ;;
+                esac
+                # baseline: greenfield vs brownfield.
+                cov_baseline="$(q '.verification.coverage.baseline // empty')"
+                case "$cov_baseline" in
+                    ""|none|admission) ;;
+                    *) violation "verification.coverage.baseline must be 'none' or 'admission' (got '$cov_baseline')" ;;
+                esac
+                # artifact: relative and non-escaping (lexical here; realpath
+                # containment is enforced at execution — FR-5a).
+                cov_artifact="$(q '.verification.coverage.artifact // empty')"
+                if [[ "$cov_artifact" == /* ]]; then
+                    violation "verification.coverage.artifact must be a relative path inside the project (got absolute '$cov_artifact')"
+                elif [[ "$cov_artifact" == *".."* ]]; then
+                    violation "verification.coverage.artifact must not traverse outside the project (got '$cov_artifact')"
+                fi
+                # Percentages.
+                for pct in min_line_pct min_branch_pct max_regression_pct; do
+                    if [[ "$(q ".verification.coverage | has(\"$pct\")")" == "true" ]] \
+                       && ! jq -e ".verification.coverage.${pct} | type == \"number\" and . >= 0 and . <= 100" "$CONFIG" >/dev/null 2>&1; then
+                        violation "verification.coverage.${pct} must be a number in 0..100 (got '$(q ".verification.coverage.${pct}")')"
+                    fi
+                done
+                # At least one floor — the contract must commit to something.
+                if [[ "$(q '.verification.coverage | has("min_line_pct")')" != "true" ]] \
+                   && [[ "$(q '.verification.coverage | has("min_branch_pct")')" != "true" ]] \
+                   && [[ "$(q '.verification.coverage | has("preset")')" != "true" ]]; then
+                    violation "verification.coverage needs at least one floor (min_line_pct or min_branch_pct), or a preset that supplies one"
+                fi
+                # max_regression_pct is meaningless without a baseline to
+                # regress from — accepting it there is the inert-config trap.
+                if [[ "$cov_baseline" == "none" ]] \
+                   && [[ "$(q '.verification.coverage | has("max_regression_pct")')" == "true" ]]; then
+                    violation "verification.coverage.max_regression_pct cannot be used with baseline 'none' (nothing to regress from); it is REQUIRED for baseline 'admission'"
+                fi
+                # timeout_sec bounds the arbitrary coverage command (FR-5c).
+                if [[ "$(q '.verification.coverage | has("timeout_sec")')" == "true" ]] \
+                   && ! jq -e '.verification.coverage.timeout_sec | type == "number" and . > 0' "$CONFIG" >/dev/null 2>&1; then
+                    violation "verification.coverage.timeout_sec must be a number > 0"
+                fi
+                cov_at="$(q '.verification.coverage.floor_enforced_at // empty')"
+                case "$cov_at" in
+                    ""|landing|phase) ;;
+                    *) violation "verification.coverage.floor_enforced_at must be 'landing' or 'phase' (got '$cov_at')" ;;
+                esac
+                cov_key_unknown="$(jq -r '.verification.coverage | keys[] | select(. != "command" and . != "artifact" and . != "parser" and . != "baseline" and . != "min_line_pct" and . != "min_branch_pct" and . != "max_regression_pct" and . != "floor_enforced_at" and . != "preset" and . != "timeout_sec")' "$CONFIG" 2>/dev/null || true)"
+                for k in $cov_key_unknown; do
+                    violation "unknown key 'verification.coverage.$k' (the schema is closed — see shared/schemas/automation.schema.json)"
+                done
+            fi
+        fi
+    fi
+fi
+
 # The unattended disposition keys: terminate-only in increment A, and
 # on_origin_gate terminate-only FOREVER (schema-enforced #190 §4).
 if [[ "$unattended_is_object" == "true" ]]; then
