@@ -38,28 +38,36 @@ cp_parse() {
         # "zero percent" are different, and treating them alike would let a
         # floor pass or fail for the wrong reason.
         jq -e -c '
-            if (.total.lines.pct | type) != "number" then error("no total.lines.pct") else . end
+            def pct($v): ($v | type) == "number" and $v >= 0 and $v <= 100;
+            if pct(.total.lines.pct) | not then error("bad total.lines.pct") else . end
+            | if (.total.branches.pct != null) and (pct(.total.branches.pct) | not)
+              then error("bad total.branches.pct") else . end
             | { line_pct: .total.lines.pct,
                 branch_pct: (if (.total.branches.pct | type) == "number"
                              then .total.branches.pct else null end) }
         ' "$file" 2>/dev/null || {
-            echo "coverage-parse: $file is not a readable istanbul summary" >&2; return 1; }
+            echo "coverage-parse: $file is not a readable istanbul summary with 0..100 percentages" >&2; return 1; }
         ;;
       lcov)
         # lcov.info: LF/LH are lines found/hit, BRF/BRH branches found/hit,
         # summed across records. BRF=0 means the tool reported no branch
         # data at all -> null, not 0%.
         local out
+        # Counters must be non-negative and hit <= found. An artifact
+        # claiming LH > LF yields >100% and would satisfy any floor.
         out=$(awk '
-            /^LF:/ { lf += substr($0,4) }
-            /^LH:/ { lh += substr($0,4) }
-            /^BRF:/ { brf += substr($0,5) }
-            /^BRH:/ { brh += substr($0,5) }
+            function num(s) { return (s + 0) }
+            /^LF:/  { v = num(substr($0,4));  if (v < 0) bad = 1; lf  += v }
+            /^LH:/  { v = num(substr($0,4));  if (v < 0) bad = 1; lh  += v }
+            /^BRF:/ { v = num(substr($0,5));  if (v < 0) bad = 1; brf += v }
+            /^BRH:/ { v = num(substr($0,5));  if (v < 0) bad = 1; brh += v }
             END {
+                if (bad) { exit 4 }
                 if (lf <= 0) { exit 3 }
+                if (lh > lf || brh > brf) { exit 5 }
                 printf "%.2f\t%s\n", (lh * 100.0) / lf, (brf > 0 ? sprintf("%.2f", (brh * 100.0) / brf) : "null")
             }' "$file") || {
-            echo "coverage-parse: $file has no usable LF/LH records" >&2; return 1; }
+            echo "coverage-parse: $file has no usable LF/LH records, or counters are inconsistent (hit > found, or negative)" >&2; return 1; }
         local lp bp
         lp=${out%%$'\t'*}; bp=${out##*$'\t'}
         jq -n -c --argjson l "$lp" --argjson b "$bp" '{line_pct:$l, branch_pct:$b}'
@@ -111,27 +119,41 @@ cp_run_bounded() {
     # cp_run_bounded <seconds> <cwd> <command>
     # Returns the command's status, or 124 if the bound was hit.
     #
-    # PLAN DEVIATION, deliberate and flagged (FR-5c/FR-5d): the approved plan
+    # PLAN DEVIATION, deliberate and flagged (FR-5c/FR-5d). The approved plan
     # says a host with no timeout mechanism REFUSES a coverage-enabled run.
-    # This machine — and CI — has neither `timeout` nor `gtimeout`, so that
-    # rule would make coverage unusable on the repo's own hosts rather than
-    # merely rare. A pure-bash watchdog is a real enforcement mechanism with
-    # no new dependency, so the bound is enforceable everywhere and FR-5d's
-    # refusal becomes the genuine last resort it was meant to be. The point
-    # of FR-5d was "never pretend to bound"; this bounds for real.
+    # Correction to what the T2 commit claimed: CI (ubuntu) ships coreutils
+    # `timeout`; it is macOS dev hosts that lack it. So the deviation is not
+    # "CI cannot run coverage" but "developers on macOS cannot" — still worth
+    # fixing, and stated accurately here.
+    #
+    # The bound must stop the whole PROCESS TREE, not just the wrapper: a
+    # surviving descendant can mutate the worktree or the artifact AFTER the
+    # containment checks, which is precisely what those checks exist to
+    # prevent. Both paths therefore terminate a process GROUP and escalate
+    # TERM -> KILL.
     local secs="$1" cwd="$2" cmd="$3" tcmd rc=0
     tcmd=$(cp_timeout_cmd)
     if [[ -n "$tcmd" ]]; then
-        ( cd "$cwd" && "$tcmd" "$secs" bash -c "$cmd" ) >/dev/null 2>&1 || rc=$?
+        # -k escalates to KILL if the command ignores TERM. Without it the
+        # native path had no escalation at all.
+        ( cd "$cwd" && "$tcmd" -k 5 "$secs" bash -c "$cmd" ) >/dev/null 2>&1 || rc=$?
         return $rc
     fi
+    # `set -m` puts the job in its own process group so `kill -- -PID`
+    # reaches every descendant. Verified by a regression asserting no
+    # descendant marker survives the bound.
+    set -m
     ( cd "$cwd" && bash -c "$cmd" ) >/dev/null 2>&1 &
     local pid=$!
-    ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null; sleep 2; kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+    ( sleep "$secs"
+      kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+      sleep 2
+      kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
     local watchdog=$!
     wait "$pid" 2>/dev/null || rc=$?
     kill "$watchdog" 2>/dev/null || true
     wait "$watchdog" 2>/dev/null || true
+    set +m
     # 143 = SIGTERM, 137 = SIGKILL — both mean the watchdog fired.
     if [[ $rc -eq 143 || $rc -eq 137 ]]; then return 124; fi
     return $rc
@@ -154,8 +176,15 @@ cp_collect() {
         echo "coverage-parse: artifact '$artifact' escapes the project (symlinked ancestor or traversal)" >&2
         return 1; }
 
-    # 2. delete — this is what makes step 6 a proof of freshness
-    rm -f "$root/$artifact"
+    # 2. delete — this is what makes step 6 a proof of freshness, so a
+    #    FAILED deletion must stop the run. The driver uses `set -uo
+    #    pipefail`, not `set -e`, so an unchecked rm would continue and a
+    #    stale passing artifact would be parsed as if freshly produced.
+    rm -f "$root/$artifact" 2>/dev/null || true
+    if [[ -e "$root/$artifact" ]]; then
+        echo "coverage-parse: could not remove the previous artifact '$artifact' — refusing, since freshness cannot be established" >&2
+        return 1
+    fi
 
     # 3. run under the frozen bound (real timeout(1) if present, portable
     #    watchdog otherwise — never unbounded)

@@ -1056,6 +1056,14 @@ grep -Eq '^TEST_LITELLM_PROXY_DEPS_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-
 assert_ok "test-counts has TEST_LITELLM_PROXY_DEPS_EXPECTED_PASS numeric value" "$rc"
 
 rc=0
+grep -Eq '^TEST_COVERAGE_PARSE_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
+assert_ok "test-counts has TEST_COVERAGE_PARSE_EXPECTED_PASS numeric value" "$rc"
+# The pin must be ENFORCED by its suite, not merely declared (#225 review P3).
+rc=0
+grep -q 'TEST_COVERAGE_PARSE_EXPECTED_PASS' "$REPO_DIR/tests/test-coverage-parse.sh" || rc=1
+assert_ok "test-coverage-parse enforces its own count pin" "$rc"
+
+rc=0
 grep -q 'source "\$COUNTS_FILE"' "$REPO_DIR/tests/test-generate.sh" || rc=1
 assert_ok "test-generate sources count contract" "$rc"
 

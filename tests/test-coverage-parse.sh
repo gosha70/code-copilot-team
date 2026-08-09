@@ -10,6 +10,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=test-counts.env
+source "$SCRIPT_DIR/test-counts.env"
 # shellcheck source=../scripts/lib/coverage-parse.sh
 source "$REPO_DIR/scripts/lib/coverage-parse.sh"
 
@@ -107,6 +109,43 @@ BOUND_RC=0
 ( no_timeout; cp_run_bounded 5 "$TMP" 'exit 7' ) || BOUND_RC=$?
 eq "the portable watchdog preserves the command's exit code" "7" "$BOUND_RC"
 
+# A bound that returns while descendants keep running is not a bound: a
+# survivor can mutate the worktree or the artifact AFTER the containment
+# checks, which is exactly what those checks exist to prevent.
+P=$(fresh_project)
+BOUND_RC=0
+( no_timeout; cp_run_bounded 1 "$P" '(sleep 4; printf leaked > descendant-marker) & wait' ) || BOUND_RC=$?
+eq "a descendant-spawning command still hits the bound" "124" "$BOUND_RC"
+sleep 5
+eq "no descendant survives the bound" "none" \
+   "$([[ -f "$P/descendant-marker" ]] && echo LEAKED || echo none)"
+
+# Deletion is what makes freshness provable, so a failed deletion must stop
+# the run rather than let the previous PASSING report be parsed.
+P=$(fresh_project)
+printf '{"total":{"lines":{"pct":99}}}' > "$P/coverage/s.json"
+chmod a-w "$P/coverage"
+rejects "an undeletable stale artifact refuses, never passes" "freshness cannot be established" \
+    cp_collect "$P" "$(contract 'true' coverage/s.json)"
+chmod u+w "$P/coverage"
+
+echo ""
+echo "=== impossible evidence must not satisfy a floor ==="
+
+printf '{"total":{"lines":{"pct":140}}}' > "$TMP/over.json"
+rejects "istanbul percentage above 100 is refused" "0..100" cp_parse istanbul "$TMP/over.json"
+printf '{"total":{"lines":{"pct":-5}}}' > "$TMP/neg.json"
+rejects "istanbul negative percentage is refused" "0..100" cp_parse istanbul "$TMP/neg.json"
+printf '{"total":{"lines":{"pct":80},"branches":{"pct":250}}}' > "$TMP/overb.json"
+rejects "istanbul branch pct above 100 is refused" "0..100" cp_parse istanbul "$TMP/overb.json"
+
+printf 'SF:a.js\nLF:100\nLH:200\nend_of_record\n' > "$TMP/lhi.info"
+rejects "lcov hit > found is refused" "counters are inconsistent" cp_parse lcov "$TMP/lhi.info"
+printf 'SF:a.js\nLF:100\nLH:50\nBRF:10\nBRH:25\nend_of_record\n' > "$TMP/brhi.info"
+rejects "lcov branch hit > found is refused" "counters are inconsistent" cp_parse lcov "$TMP/brhi.info"
+printf 'SF:a.js\nLF:-10\nLH:-5\nend_of_record\n' > "$TMP/lneg.info"
+rejects "lcov negative counters are refused" "counters are inconsistent" cp_parse lcov "$TMP/lneg.info"
+
 echo ""
 echo "=== FR-5a: containment on BOTH sides ==="
 
@@ -136,6 +175,11 @@ P=$(fresh_project); ln -s "$OUTSIDE/external.json" "$P/coverage/s.json"
 if cp_contained "$P" "coverage/s.json"; then bad "a symlinked artifact is refused"; else ok "a symlinked artifact is refused"; fi
 
 echo ""
+if [[ "$PASS" -ne "$TEST_COVERAGE_PARSE_EXPECTED_PASS" ]]; then
+    echo "  FAIL: assertion-count drift (expected $TEST_COVERAGE_PARSE_EXPECTED_PASS, got $PASS)"
+    FAIL=$((FAIL + 1))
+fi
+
 echo "========================================="
 printf "  coverage-parse tests: %d passed, %d failed\n" "$PASS" "$FAIL"
 echo "========================================="
