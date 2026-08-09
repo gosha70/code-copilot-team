@@ -57,12 +57,20 @@ cp_parse() {
         # and an absent LH would otherwise aggregate as 0 — so syntax is
         # matched exactly, LF/LH and BRF/BRH must be PAIRED within a record,
         # and hit <= found is checked per record before aggregation.
+        # A record is only aggregated at end_of_record, so an UNTERMINATED
+        # one is silently dropped — and a truncated final record is exactly
+        # how a low-coverage file disappears and the file reports a clean
+        # pass. Nested SF, EOF while still inside a record, and duplicate
+        # counter fields are all rejected.
         out=$(awk '
-            /^SF:/ { inrec = 1; haveLF = haveLH = haveBF = haveBH = 0; rlf = rlh = rbf = rbh = 0; next }
-            /^LF:/  { if ($0 !~ /^LF:[0-9]+$/)  { bad = 1; next } rlf = substr($0,4)  + 0; haveLF = 1; next }
-            /^LH:/  { if ($0 !~ /^LH:[0-9]+$/)  { bad = 1; next } rlh = substr($0,4)  + 0; haveLH = 1; next }
-            /^BRF:/ { if ($0 !~ /^BRF:[0-9]+$/) { bad = 1; next } rbf = substr($0,5) + 0; haveBF = 1; next }
-            /^BRH:/ { if ($0 !~ /^BRH:[0-9]+$/) { bad = 1; next } rbh = substr($0,5) + 0; haveBH = 1; next }
+            /^SF:/ {
+                if (inrec) { bad = 1 }                     # previous record never ended
+                inrec = 1; haveLF = haveLH = haveBF = haveBH = 0; rlf = rlh = rbf = rbh = 0; next
+            }
+            /^LF:/  { if ($0 !~ /^LF:[0-9]+$/  || haveLF) { bad = 1; next } rlf = substr($0,4) + 0; haveLF = 1; next }
+            /^LH:/  { if ($0 !~ /^LH:[0-9]+$/  || haveLH) { bad = 1; next } rlh = substr($0,4) + 0; haveLH = 1; next }
+            /^BRF:/ { if ($0 !~ /^BRF:[0-9]+$/ || haveBF) { bad = 1; next } rbf = substr($0,5) + 0; haveBF = 1; next }
+            /^BRH:/ { if ($0 !~ /^BRH:[0-9]+$/ || haveBH) { bad = 1; next } rbh = substr($0,5) + 0; haveBH = 1; next }
             /^end_of_record/ {
                 if (!inrec) { bad = 1 }
                 if (haveLF != haveLH) { bad = 1 }          # LF without LH, or vice versa
@@ -74,11 +82,12 @@ cp_parse() {
                 inrec = 0; next
             }
             END {
+                if (inrec) { bad = 1 }                     # truncated final record
                 if (bad) { exit 5 }
                 if (records == 0 || lf <= 0) { exit 3 }
                 printf "%.2f\t%s\n", (lh * 100.0) / lf, (brf > 0 ? sprintf("%.2f", (brh * 100.0) / brf) : "null")
             }' "$file") || {
-            echo "coverage-parse: $file has no usable LF/LH records, or counters are malformed (non-integer, unpaired, or hit > found)" >&2; return 1; }
+            echo "coverage-parse: $file has no usable LF/LH records, or is malformed (non-integer, unpaired, duplicated, hit > found, or an unterminated record)" >&2; return 1; }
         local lp bp
         lp=${out%%$'\t'*}; bp=${out##*$'\t'}
         jq -n -c --argjson l "$lp" --argjson b "$bp" '{line_pct:$l, branch_pct:$b}'
@@ -160,7 +169,12 @@ cp_run_bounded() {
     # delayed KILL never runs and the survivor outlives this function. So the
     # watchdog signals that it fired, and the parent then WAITS for it to
     # finish escalating instead of killing it.
-    local fired; fired=$(mktemp -u)
+    # A private DIRECTORY reserves the name; `mktemp -u` only returns a path
+    # nothing owns, so a collision or another process creating it first would
+    # make a normal completion look like a timeout.
+    local firedir fired
+    firedir=$(mktemp -d)
+    fired="$firedir/fired"
     set -m
     ( cd "$cwd" && bash -c "$cmd" ) >/dev/null 2>&1 &
     local pid=$!
@@ -175,13 +189,13 @@ cp_run_bounded() {
         # Timed out: let the KILL phase run to completion before returning,
         # so no descendant survives this function.
         wait "$watchdog" 2>/dev/null || true
-        rm -f "$fired"
+        rm -rf "$firedir"
         set +m
         return 124
     fi
     kill "$watchdog" 2>/dev/null || true
     wait "$watchdog" 2>/dev/null || true
-    rm -f "$fired"
+    rm -rf "$firedir"
     set +m
     # 143 = SIGTERM, 137 = SIGKILL — both mean the bound fired.
     if [[ $rc -eq 143 || $rc -eq 137 ]]; then return 124; fi

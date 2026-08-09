@@ -151,21 +151,31 @@ printf '{"total":{"lines":{"pct":80},"branches":{"pct":250}}}' > "$TMP/overb.jso
 rejects "istanbul branch pct above 100 is refused" "0..100" cp_parse istanbul "$TMP/overb.json"
 
 printf 'SF:a.js\nLF:100\nLH:200\nend_of_record\n' > "$TMP/lhi.info"
-rejects "lcov hit > found is refused" "counters are malformed" cp_parse lcov "$TMP/lhi.info"
+rejects "lcov hit > found is refused" "is malformed" cp_parse lcov "$TMP/lhi.info"
 printf 'SF:a.js\nLF:100\nLH:50\nBRF:10\nBRH:25\nend_of_record\n' > "$TMP/brhi.info"
-rejects "lcov branch hit > found is refused" "counters are malformed" cp_parse lcov "$TMP/brhi.info"
+rejects "lcov branch hit > found is refused" "is malformed" cp_parse lcov "$TMP/brhi.info"
 printf 'SF:a.js\nLF:-10\nLH:-5\nend_of_record\n' > "$TMP/lneg.info"
-rejects "lcov negative counters are refused" "counters are malformed" cp_parse lcov "$TMP/lneg.info"
+rejects "lcov negative counters are refused" "is malformed" cp_parse lcov "$TMP/lneg.info"
 
 # awk coerces "90junk" to 90; strict syntax must refuse it.
 printf 'SF:a.js\nLF:100\nLH:90junk\nBRF:10\nBRH:9junk\nend_of_record\n' > "$TMP/ljunk.info"
-rejects "lcov non-integer counters are refused" "counters are malformed" cp_parse lcov "$TMP/ljunk.info"
+rejects "lcov non-integer counters are refused" "is malformed" cp_parse lcov "$TMP/ljunk.info"
 
 # An absent LH must not aggregate as 0% — unpaired counters are malformed.
 printf 'SF:a.js\nLF:100\nend_of_record\n' > "$TMP/lunpaired.info"
-rejects "lcov LF without LH is refused" "counters are malformed" cp_parse lcov "$TMP/lunpaired.info"
+rejects "lcov LF without LH is refused" "is malformed" cp_parse lcov "$TMP/lunpaired.info"
 printf 'SF:a.js\nLF:100\nLH:90\nBRF:10\nend_of_record\n' > "$TMP/lunpairedb.info"
-rejects "lcov BRF without BRH is refused" "counters are malformed" cp_parse lcov "$TMP/lunpairedb.info"
+rejects "lcov BRF without BRH is refused" "is malformed" cp_parse lcov "$TMP/lunpairedb.info"
+
+# A record is aggregated only at end_of_record, so a TRUNCATED final record
+# is silently dropped — which is how a 0%-covered file disappears and the
+# artifact reports a clean pass.
+printf 'SF:a.js\nLF:100\nLH:100\nend_of_record\nSF:b.js\nLF:100\nLH:0\n' > "$TMP/ltrunc.info"
+rejects "an unterminated final record is refused, not dropped" "is malformed" cp_parse lcov "$TMP/ltrunc.info"
+printf 'SF:a.js\nLF:100\nLH:90\nSF:b.js\nLF:100\nLH:90\nend_of_record\n' > "$TMP/lnested.info"
+rejects "a restarted (nested) record is refused" "is malformed" cp_parse lcov "$TMP/lnested.info"
+printf 'SF:a.js\nLF:100\nLH:90\nLF:200\nLH:200\nend_of_record\n' > "$TMP/ldup.info"
+rejects "duplicate counter fields are refused" "is malformed" cp_parse lcov "$TMP/ldup.info"
 
 echo ""
 echo "=== FR-5a: containment on BOTH sides ==="
