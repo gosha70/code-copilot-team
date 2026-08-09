@@ -1047,9 +1047,9 @@ grep -Eq '^TEST_REVIEW_LOOP_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.
 assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
 
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
-# 12 as of #220 (test-litellm-proxy-deps.sh). Bump deliberately when a suite
+# 13 as of #222 T2 (test-coverage-parse.sh). Bump deliberately when a suite
 # is added, so a pin cannot go missing unnoticed.
-assert_eq "test-counts has exactly 12 expected-pass variables" "12" "$COUNT_VARS"
+assert_eq "test-counts has exactly 13 expected-pass variables" "13" "$COUNT_VARS"
 
 rc=0
 grep -Eq '^TEST_LITELLM_PROXY_DEPS_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
