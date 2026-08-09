@@ -1,4 +1,4 @@
-# Tasks: verification contract, increment C1 (#222) — rev 7
+# Tasks: verification contract, increment C1 (#222) — rev 8
 
 Each task is independently reviewable and leaves the suites green.
 
@@ -26,7 +26,7 @@ Each task is independently reviewable and leaves the suites green.
   unknown unless every floor is supplied.
 - Assert no floor literal in any script.
 
-## T4 — Admission-result channel + lifecycle (matrix is normative)
+## T4 — Preflight-result channel + lifecycle (matrix is normative)
 - `shared/schemas/preflight-result.schema.json`: closed, versioned, `path`
   discriminator over the five file-emitting paths with closed `oneOf`
   branches (required/forbidden sections per branch). Driver computes the
@@ -34,7 +34,8 @@ Each task is independently reviewable and leaves the suites green.
   allocated on no-producer rows. No synthetic zero accounting.
 - Tests: every table row, plus cross-row substitutions (contract on a
   resume path, missing contract on fresh-unattended-block, admission on an
-  attended path, empty result, path mismatch).
+  attended path, empty result, path mismatch) and a live-config-edit
+  regression for FR-9e.
 - Contract INITIALISATION as a preflight step keyed on the block, shared by
   both profiles and OWNING the frozen contract; the admission bar stays
   unattended-only and contributes only its own validation + accounting.

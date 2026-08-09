@@ -1,4 +1,4 @@
-# Spec: verification contract, increment C1 (#222) — rev 7
+# Spec: verification contract, increment C1 (#222) — rev 8
 
 ## User Scenarios
 
@@ -112,9 +112,12 @@ creates no ledger, and no preflight-result file survives.
 - **FR-7** The preflight initialiser MUST return the frozen contract, and
   the unattended admission bar MUST return its own accounting, through a
   machine-readable file written BEFORE the throwaway worktree is cleaned
-  up. The driver MUST import it
-  into the ledger only AFTER admission succeeds and the ledger exists, then
-  remove it.
+  up. The driver MUST import it into the ledger only AFTER **every producer
+  applicable to this path** has succeeded and the ledger exists, then remove
+  it. Gating import on "admission succeeds" would leave
+  `fresh-attended-block` with no defined import transition at all, since
+  attended profiles never run admission; unattended paths additionally
+  require the admission bar to pass.
 
 - **FR-7a** A refused admission MUST leave no ledger and no preflight-result
   file (increment B's invariant preserved).
@@ -194,6 +197,14 @@ creates no ledger, and no preflight-result file survives.
   file" MUST be literal rather than an empty placeholder that later has to
   be distinguished from a genuine result.
 
+- **FR-9e — on resume, the expected path MUST come from the FROZEN config
+  snapshot**, never from live `automation.json`. Path selection is
+  security-relevant: reading it live would let someone delete the
+  `verification.coverage` block between runs, turn `resume-unattended-block`
+  into `resume-unattended-noblock`, and so skip the frozen-contract
+  validation FR-7b exists to enforce. Profile and block presence on resume
+  are properties of the ADMITTED run, not of the current file.
+
   **Attended paths MUST NOT emit synthetic zero-valued accounting**, and an
   attended resume MUST emit no result file at all. Requiring accounting
   everywhere would force an attended run to fabricate work it never did —
@@ -235,7 +246,7 @@ creates no ledger, and no preflight-result file survives.
   selected by an explicit portable `preset` key.
 - **Coverage summary** — `{line_pct, branch_pct}` from
   `scripts/lib/coverage-parse.sh`.
-- **Admission result** — the machine-readable handoff file carrying the
+- **Preflight result** — the machine-readable handoff file carrying the
   captured baseline and `test.command` accounting out of the throwaway
   worktree.
 
@@ -269,9 +280,18 @@ creates no ledger, and no preflight-result file survives.
 - **SC-5c** An ATTENDED fresh run with the block gets a contract and its
   gate enforces; the same project attended without the block is
   byte-identical.
-- **SC-5d** The result schema rejects: malformed JSON, `mode: resume`
-  carrying `contract`, an unknown field, and a missing
-  `schema_version` — each without importing anything.
+- **SC-5d** The path-discriminated schema rejects each of these without
+  importing anything: malformed JSON; an unknown field; a missing
+  `schema_version`; an empty `{schema_version, path}` result; a `resume-*`
+  path carrying `contract`; a `fresh-unattended-block` result MISSING its
+  `contract`; an attended path carrying `admission`; and a file whose
+  `path` disagrees with the one the driver computed.
+- **SC-5e** Every row of the emission table is asserted: each of the five
+  file-emitting paths validates and imports, and each no-producer row
+  allocates no result path at all.
+- **SC-5f** Deleting the live `verification.coverage` block between runs
+  does NOT turn `resume-unattended-block` into a no-block path: the resume
+  still demands its frozen contract (FR-9e).
 - **SC-6** A refused admission leaves no ledger and no preflight-result
   file; a successful one imports the baseline and the accounting.
 - **SC-7** A stale worktree registration is pruned immediately before ANY
