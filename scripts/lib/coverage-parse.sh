@@ -53,21 +53,32 @@ cp_parse() {
         # summed across records. BRF=0 means the tool reported no branch
         # data at all -> null, not 0%.
         local out
-        # Counters must be non-negative and hit <= found. An artifact
-        # claiming LH > LF yields >100% and would satisfy any floor.
+        # STRICT, per record. awk's numeric coercion turns "90junk" into 90,
+        # and an absent LH would otherwise aggregate as 0 — so syntax is
+        # matched exactly, LF/LH and BRF/BRH must be PAIRED within a record,
+        # and hit <= found is checked per record before aggregation.
         out=$(awk '
-            function num(s) { return (s + 0) }
-            /^LF:/  { v = num(substr($0,4));  if (v < 0) bad = 1; lf  += v }
-            /^LH:/  { v = num(substr($0,4));  if (v < 0) bad = 1; lh  += v }
-            /^BRF:/ { v = num(substr($0,5));  if (v < 0) bad = 1; brf += v }
-            /^BRH:/ { v = num(substr($0,5));  if (v < 0) bad = 1; brh += v }
+            /^SF:/ { inrec = 1; haveLF = haveLH = haveBF = haveBH = 0; rlf = rlh = rbf = rbh = 0; next }
+            /^LF:/  { if ($0 !~ /^LF:[0-9]+$/)  { bad = 1; next } rlf = substr($0,4)  + 0; haveLF = 1; next }
+            /^LH:/  { if ($0 !~ /^LH:[0-9]+$/)  { bad = 1; next } rlh = substr($0,4)  + 0; haveLH = 1; next }
+            /^BRF:/ { if ($0 !~ /^BRF:[0-9]+$/) { bad = 1; next } rbf = substr($0,5) + 0; haveBF = 1; next }
+            /^BRH:/ { if ($0 !~ /^BRH:[0-9]+$/) { bad = 1; next } rbh = substr($0,5) + 0; haveBH = 1; next }
+            /^end_of_record/ {
+                if (!inrec) { bad = 1 }
+                if (haveLF != haveLH) { bad = 1 }          # LF without LH, or vice versa
+                if (haveBF != haveBH) { bad = 1 }          # BRF without BRH
+                if (haveLF && rlh > rlf) { bad = 1 }       # hit > found, per record
+                if (haveBF && rbh > rbf) { bad = 1 }
+                if (haveLF) { lf += rlf; lh += rlh; records++ }
+                if (haveBF) { brf += rbf; brh += rbh }
+                inrec = 0; next
+            }
             END {
-                if (bad) { exit 4 }
-                if (lf <= 0) { exit 3 }
-                if (lh > lf || brh > brf) { exit 5 }
+                if (bad) { exit 5 }
+                if (records == 0 || lf <= 0) { exit 3 }
                 printf "%.2f\t%s\n", (lh * 100.0) / lf, (brf > 0 ? sprintf("%.2f", (brh * 100.0) / brf) : "null")
             }' "$file") || {
-            echo "coverage-parse: $file has no usable LF/LH records, or counters are inconsistent (hit > found, or negative)" >&2; return 1; }
+            echo "coverage-parse: $file has no usable LF/LH records, or counters are malformed (non-integer, unpaired, or hit > found)" >&2; return 1; }
         local lp bp
         lp=${out%%$'\t'*}; bp=${out##*$'\t'}
         jq -n -c --argjson l "$lp" --argjson b "$bp" '{line_pct:$l, branch_pct:$b}'
@@ -142,19 +153,37 @@ cp_run_bounded() {
     # `set -m` puts the job in its own process group so `kill -- -PID`
     # reaches every descendant. Verified by a regression asserting no
     # descendant marker survives the bound.
+    #
+    # ESCALATION MUST COMPLETE. The group LEADER dies on TERM and `wait`
+    # returns immediately — but a descendant that traps TERM is still alive.
+    # Cancelling the watchdog at that point (as the first cut did) means its
+    # delayed KILL never runs and the survivor outlives this function. So the
+    # watchdog signals that it fired, and the parent then WAITS for it to
+    # finish escalating instead of killing it.
+    local fired; fired=$(mktemp -u)
     set -m
     ( cd "$cwd" && bash -c "$cmd" ) >/dev/null 2>&1 &
     local pid=$!
     ( sleep "$secs"
+      : > "$fired"
       kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
       sleep 2
       kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
     local watchdog=$!
     wait "$pid" 2>/dev/null || rc=$?
+    if [[ -e "$fired" ]]; then
+        # Timed out: let the KILL phase run to completion before returning,
+        # so no descendant survives this function.
+        wait "$watchdog" 2>/dev/null || true
+        rm -f "$fired"
+        set +m
+        return 124
+    fi
     kill "$watchdog" 2>/dev/null || true
     wait "$watchdog" 2>/dev/null || true
+    rm -f "$fired"
     set +m
-    # 143 = SIGTERM, 137 = SIGKILL — both mean the watchdog fired.
+    # 143 = SIGTERM, 137 = SIGKILL — both mean the bound fired.
     if [[ $rc -eq 143 || $rc -eq 137 ]]; then return 124; fi
     return $rc
 }
