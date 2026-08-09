@@ -1,4 +1,4 @@
-# Spec: verification contract, increment C1 (#222) — rev 10
+# Spec: verification contract, increment C1 (#222) — rev 11
 
 ## User Scenarios
 
@@ -99,14 +99,26 @@ creates no ledger, and no preflight-result file survives.
   produce (e.g. `min_branch_pct` with an artifact carrying no branch data)
   MUST fail closed with a named message — never pass by absence.
 
+- **FR-5b — preset provenance when no preset contributes.** FR-5 admits a
+  config that supplies every floor explicitly with no resolvable preset,
+  while FR-4a requires `preset_id` and `preset_sha256` in the frozen
+  contract. In that case both MUST be `null` — recorded explicitly, so the
+  frozen contract distinguishes "no preset contributed policy" from "a
+  preset was resolved but not recorded". The schema MUST accept null for
+  both, and that branch MUST be tested.
+
 - **FR-5** Floors MUST resolve from `coverage.preset` naming
   `shared/templates/<preset>/verification-preset.json`, with
   `automation.json` overriding individual keys. A missing or unknown preset
   MUST fail closed at admission unless `automation.json` supplies every
   required floor. No floor literal may exist in any script.
 
-- **FR-5a — coverage evidence MUST be fresh.** Every baseline capture and
-  every gate MUST: remove the (path-contained, FR-4b) artifact first; run
+- **FR-5a — coverage evidence MUST be fresh, and containment MUST resolve
+  symlinks.** Every baseline capture and every gate MUST: confirm the
+  artifact path is inside the project **after resolving symlinks in every
+  existing ancestor** — the lexical FR-4b check is not sufficient once the
+  driver DELETES the path, since `coverage/out.json` escapes when `coverage`
+  is a symlink out of tree; then remove the artifact; run
   the frozen `command`; require it to **exit 0**; require the artifact to
   have been newly produced; and only then parse it, fail-closed. A coverage
   result MUST NOT be accepted from an artifact that predates the run of the
@@ -130,6 +142,14 @@ creates no ledger, and no preflight-result file survives.
 
 - **FR-7a** A refused admission MUST leave no ledger and no preflight-result
   file (increment B's invariant preserved).
+
+- **FR-7a0 — governance precedes project code.** On `fresh-unattended-block`
+  the admission bar MUST pass BEFORE contract initialisation executes
+  `coverage.command`. That command is arbitrary project code, and #193
+  established that admission runs project commands only after config and
+  governance checks — executing coverage first would run project code for a
+  run governance is about to refuse. Producer order is normative, not
+  incidental.
 
 - **FR-7b0 — validation precedes execution.** On a resume whose config
   carries the block, the frozen contract MUST be loaded and validated
@@ -165,11 +185,12 @@ creates no ledger, and no preflight-result file survives.
   for this path will ATTEMPT isolated-worktree execution**. Admission
   usually does, so `fresh-unattended-noblock` and every `resume-unattended-*`
   path prune even with no `verification` block — one of FR-2's two stated
-  exceptions. But admission does NOT always create one:
-  `CCT_ADMISSION_TEST_IN_PLACE=1` opts out, non-git projects have no
-  worktrees, and `worktree add` may fail (`validate-spec.sh:462-466`); those
-  runs MUST NOT prune. Contract initialisation attempts one only for
-  brownfield. Paths whose producers create none
+  exceptions. The decision MUST be made from **configured intent**, before
+  anything runs: `CCT_ADMISSION_TEST_IN_PLACE=1` and non-git projects
+  attempt no isolation and MUST NOT prune (`validate-spec.sh:462-466`).
+  Whether `worktree add` later SUCCEEDS is not part of the trigger — the
+  prune necessarily precedes the attempt, so that outcome is unknowable at
+  decision time. Contract initialisation intends one only for brownfield. Paths whose producers create none
   (attended greenfield with a block; every attended no-block path) MUST NOT
   prune. Prune failure MUST be non-fatal and journalled (FR-7c).
 
@@ -321,6 +342,13 @@ creates no ledger, and no preflight-result file survives.
 - **SC-5g** A resume whose frozen contract is missing or corrupt fails
   closed **without having executed `test.command`** — asserted by a command
   that would leave a marker if it ran.
+- **SC-5i** On `fresh-unattended-block` with a config that fails governance,
+  the coverage command NEVER executes — asserted with a coverage command
+  that would write a marker.
+- **SC-5j** An artifact path whose ancestor is a symlink out of the project
+  is refused: an external sentinel file is neither deleted nor parsed.
+- **SC-5k** A config with explicit floors and no preset freezes
+  `preset_id: null`, `preset_sha256: null`, and admits.
 - **SC-5h** A stale PASSING coverage artifact plus a command that exits
   non-zero without rewriting it FAILS the gate — at baseline capture and at
   the landing gate.
@@ -328,7 +356,9 @@ creates no ledger, and no preflight-result file survives.
   does NOT turn `resume-unattended-block` into a no-block path: the resume
   still demands its frozen contract (FR-9e).
 - **SC-6** A refused admission leaves no ledger and no preflight-result
-  file; a successful one imports the baseline and the accounting.
+  file; a successful one imports **exactly the sections its path emits** —
+  not "baseline and accounting" unconditionally, which is false for four of
+  the seven paths.
 - **SC-7** A stale worktree registration is pruned iff an applicable
   producer ATTEMPTS isolated-worktree execution — and specifically NOT when
   `CCT_ADMISSION_TEST_IN_PLACE=1` is set, asserted — asserted for

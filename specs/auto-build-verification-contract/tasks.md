@@ -1,8 +1,12 @@
-# Tasks: verification contract, increment C1 (#222) — rev 10
+# Tasks: verification contract, increment C1 (#222) — rev 11
 
 Each task is independently reviewable and leaves the suites green.
 
-## T1 — Config surface (FR-1, FR-1a, FR-2, FR-4b)
+## T1 — Config surface (FR-1, FR-1a, FR-2, FR-4b, FR-5b)
+- Artifact containment is REALPATH-aware (resolve existing ancestors);
+  regression: symlinked parent pointing outside the project, external
+  sentinel neither deleted nor parsed.
+- `preset_id`/`preset_sha256` are null when no preset contributes.
 - Every FR-4b rule: required keys, 0-100 ranges, at-least-one-floor,
   `max_regression_pct` rejected under `baseline: none`, `artifact`
   containment (no absolute, no `..`), parser enum.
@@ -31,6 +35,9 @@ Each task is independently reviewable and leaves the suites green.
 - Assert no floor literal in any script.
 
 ## T4 — Preflight-result channel + lifecycle (matrix is normative)
+- Producer ORDER on fresh-unattended-block: admission bar, THEN contract
+  init. Regression: a governance-failing fixture whose coverage command
+  would write a marker — assert the marker is absent.
 - Contract validation runs as a PREREQUISITE before any producer; a corrupt
   contract on resume must fail before `test.command` executes (regression
   uses a marker-writing command).
