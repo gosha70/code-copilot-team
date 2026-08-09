@@ -28,15 +28,15 @@ origin:
     evaluator is explicitly C2.
 ---
 
-# Plan: verification contract, increment C1 (#222) — rev 9
+# Plan: verification contract, increment C1 (#222) — rev 10
 
 Rev 2 narrowed the slice; rev 3 froze policy and fixed clock semantics;
 rev 4 wrote down the run lifecycle; rev 5 gave that lifecycle its missing dimensions; rev 6 split the result file; rev 7 finished the ownership sweep and gave the result schema its path
-discriminator; rev 8 fixed the import gate and pinned resume path selection; rev 9
-replaces the two literal sequences with ONE path-parameterised flow, so the
-prune trigger, the clock origin and the imported sections all derive from
-the same table instead of being restated (and contradicted) in prose. All
-twenty-six findings across eight rounds are accepted. The
+discriminator; rev 8 fixed the import gate and pinned resume path selection; rev 9 replaced the two literal sequences with one path-parameterised flow;
+rev 10 fixes what that flow still got wrong — validation ordered after
+execution, coverage evidence that need not be fresh, and a prune trigger
+that assumed admission always isolates. All twenty-nine findings across nine
+rounds are accepted. The
 reviewer's diagnosis is the right one: most of round 3's findings are
 symptoms of a missing fresh-vs-resume split, so that split is now the
 plan's backbone rather than an implementation detail.
@@ -251,12 +251,18 @@ with a table that drives every per-path decision (rev 9, findings 1–3):
 **Every run**
 1. compute `PATH` from (mode, profile, block) — on resume, from the FROZEN
    snapshot (FR-9e), never live config
-2. `git worktree prune` **iff an applicable producer will create a throwaway
-   worktree** — warning held PENDING, never journalled pre-ledger
-3. run this path's producers (table below); each writes only its own
+2. **PREREQUISITE — resume with a block ⇒ load and schema-validate the
+   EXISTING frozen contract NOW**, before anything executes; missing or
+   corrupt ⇒ **fail closed**, never recaptured. Validation is a
+   prerequisite, not a producer (rev 10, finding 1): rev 9 ran producers at
+   step 3 and validated at step 4, so `resume-unattended-block` could
+   execute the project's `test.command` before discovering that its frozen
+   policy was missing or corrupt
+3. `git worktree prune` **iff an applicable producer will attempt
+   isolated-worktree execution** — warning held PENDING, never journalled
+   pre-ledger
+4. run this path's producers (table below); each writes only its own
    section; a path with no producer allocates no result file at all
-4. resume with a block ⇒ load and schema-validate the EXISTING frozen
-   contract first; missing or corrupt ⇒ **fail closed**, never recaptured
 5. fresh ⇒ initialise ledger with this path's clock origin; resume ⇒
    `reset_run_clocks <origin>`
 6. import exactly the sections this path emits; flush pending events
@@ -268,23 +274,34 @@ with a table that drives every per-path decision (rev 9, findings 1–3):
 | `fresh-unattended-noblock` | admission | admission | **yes** | `ATTEMPT_START` |
 | `fresh-unattended-block` | contract init + admission | both | yes | `ATTEMPT_START` |
 | `resume-attended-noblock` | none | none | no | **`now` — unchanged** |
-| `resume-attended-block` | contract VALIDATION only | none | no | **`now` — unchanged** |
+| `resume-attended-block` | **none** (validation is step 2) | none | no | **`now` — unchanged** |
 | `resume-unattended-*` | admission | admission | **yes** | `ATTEMPT_START` |
 
 Three rules generalise the table, and are what the implementation actually
 follows:
 
-- **Prune iff a producer creates a worktree.** Admission always does;
-  contract initialisation does only for brownfield. `fresh-unattended-noblock`
-  therefore DOES prune — it runs admission — which rev 8's "no no-block run
-  prunes" wrongly excluded (finding 2), contradicting FR-2's own stated
-  exception.
+- **Prune iff a producer will ATTEMPT isolated-worktree execution.**
+  Admission usually does, so `fresh-unattended-noblock` prunes — which rev
+  8's "no no-block run prunes" wrongly excluded. But admission does NOT
+  always create one (rev 10, finding 3): `CCT_ADMISSION_TEST_IN_PLACE=1`
+  deliberately opts out, a non-git project has no worktrees, and
+  `worktree add` can simply fail (`validate-spec.sh:462-466`). The trigger
+  is the ATTEMPT, so the in-place opt-out does not prune. Contract
+  initialisation attempts one only for brownfield.
 - **Clock origin is `ATTEMPT_START` iff this path runs a pre-ledger
   producer**, else the existing `now`. That preserves attended no-block
   behaviour exactly (finding 3): those paths run no producer, so nothing
   new is counted. An attended run that OPTS INTO coverage does have its
   contract initialisation counted — a deliberate, stated consequence of
   opting in, not an accident.
+- **Coverage evidence must be FRESH.** Every capture and every gate must:
+  delete the (path-contained, FR-4b) artifact first, run the frozen
+  `command`, require **exit 0**, require the artifact to have been newly
+  produced, and only then parse it fail-closed. Without this a previous
+  passing report survives a command that fails without rewriting it, and a
+  baseline capture or landing gate parses stale evidence and passes (rev 10,
+  finding 2) — the same shape as every "asserted a label, not the thing" bug
+  in this arc.
 - **Import exactly what was emitted.** No path imports a section no producer
   wrote, and no path waits on a producer it never invokes.
 

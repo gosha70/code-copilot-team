@@ -1,4 +1,4 @@
-# Spec: verification contract, increment C1 (#222) — rev 9
+# Spec: verification contract, increment C1 (#222) — rev 10
 
 ## User Scenarios
 
@@ -105,6 +105,15 @@ creates no ledger, and no preflight-result file survives.
   MUST fail closed at admission unless `automation.json` supplies every
   required floor. No floor literal may exist in any script.
 
+- **FR-5a — coverage evidence MUST be fresh.** Every baseline capture and
+  every gate MUST: remove the (path-contained, FR-4b) artifact first; run
+  the frozen `command`; require it to **exit 0**; require the artifact to
+  have been newly produced; and only then parse it, fail-closed. A coverage
+  result MUST NOT be accepted from an artifact that predates the run of the
+  command that was supposed to produce it — otherwise a previous passing
+  report survives a command that fails without rewriting it, and the gate
+  passes on stale evidence.
+
 - **FR-6** Coverage parsing MUST support `istanbul` and `lcov`;
   `cobertura` and `jacoco` MUST be refused with "not implemented in C1",
   never treated as zero or as passing.
@@ -121,6 +130,12 @@ creates no ledger, and no preflight-result file survives.
 
 - **FR-7a** A refused admission MUST leave no ledger and no preflight-result
   file (increment B's invariant preserved).
+
+- **FR-7b0 — validation precedes execution.** On a resume whose config
+  carries the block, the frozen contract MUST be loaded and validated
+  BEFORE any producer runs. A missing or corrupt contract MUST fail closed
+  without the project's `test.command` (or any other producer command)
+  having been executed. Validation is a prerequisite, never a producer.
 
 - **FR-7b — resume MUST NOT re-decide policy, when there is policy.**
   On resume of a run **whose config carries `verification.coverage`**, the
@@ -146,12 +161,15 @@ creates no ledger, and no preflight-result file survives.
   missing directory or create durable state that survives a refused
   admission. On refusal such events MUST go to stderr and leave no ledger.
 
-- **FR-8** The driver MUST `git worktree prune` iff **an applicable
-  producer for this path will create a throwaway worktree**. Admission
-  always creates one, so `fresh-unattended-noblock` and every
-  `resume-unattended-*` path DO prune even with no `verification` block —
-  that is one of FR-2's two stated exceptions. Contract initialisation
-  creates one only for brownfield. Paths whose producers create none
+- **FR-8** The driver MUST `git worktree prune` iff **an applicable producer
+  for this path will ATTEMPT isolated-worktree execution**. Admission
+  usually does, so `fresh-unattended-noblock` and every `resume-unattended-*`
+  path prune even with no `verification` block — one of FR-2's two stated
+  exceptions. But admission does NOT always create one:
+  `CCT_ADMISSION_TEST_IN_PLACE=1` opts out, non-git projects have no
+  worktrees, and `worktree add` may fail (`validate-spec.sh:462-466`); those
+  runs MUST NOT prune. Contract initialisation attempts one only for
+  brownfield. Paths whose producers create none
   (attended greenfield with a block; every attended no-block path) MUST NOT
   prune. Prune failure MUST be non-fatal and journalled (FR-7c).
 
@@ -300,13 +318,20 @@ creates no ledger, and no preflight-result file survives.
 - **SC-5e** Every row of the emission table is asserted: each of the five
   file-emitting paths validates and imports, and each no-producer row
   allocates no result path at all.
+- **SC-5g** A resume whose frozen contract is missing or corrupt fails
+  closed **without having executed `test.command`** — asserted by a command
+  that would leave a marker if it ran.
+- **SC-5h** A stale PASSING coverage artifact plus a command that exits
+  non-zero without rewriting it FAILS the gate — at baseline capture and at
+  the landing gate.
 - **SC-5f** Deleting the live `verification.coverage` block between runs
   does NOT turn `resume-unattended-block` into a no-block path: the resume
   still demands its frozen contract (FR-9e).
 - **SC-6** A refused admission leaves no ledger and no preflight-result
   file; a successful one imports the baseline and the accounting.
 - **SC-7** A stale worktree registration is pruned iff an applicable
-  producer creates a throwaway worktree — asserted for
+  producer ATTEMPTS isolated-worktree execution — and specifically NOT when
+  `CCT_ADMISSION_TEST_IN_PLACE=1` is set, asserted — asserted for
   `fresh-unattended-noblock` (admission, no block), `fresh-unattended-block`,
   `resume-unattended-*`, and attended brownfield capture. Asserted NOT to
   prune on attended greenfield-with-block and every attended no-block path.
