@@ -1,4 +1,4 @@
-# Tasks: verification contract, increment C1 (#222) — rev 9
+# Tasks: verification contract, increment C1 (#222) — rev 10
 
 Each task is independently reviewable and leaves the suites green.
 
@@ -14,7 +14,11 @@ Each task is independently reviewable and leaves the suites green.
 - Tests in `test-automation-config.sh`, incl. the no-block byte-identical
   case.
 
-## T2 — Coverage parsing (FR-6)
+## T2 — Coverage parsing + evidence freshness (FR-5a, FR-6)
+- Every capture/gate: delete contained artifact -> run frozen command ->
+  require exit 0 -> require newly produced artifact -> parse fail-closed.
+- Regression: stale PASSING artifact + command exiting non-zero without
+  writing must FAIL, at capture and at the gate.
 - `scripts/lib/coverage-parse.sh`: istanbul + lcov -> `{line_pct,
   branch_pct}`; cobertura/jacoco refuse by name.
 - Fixtures per format plus a malformed artifact.
@@ -27,6 +31,9 @@ Each task is independently reviewable and leaves the suites green.
 - Assert no floor literal in any script.
 
 ## T4 — Preflight-result channel + lifecycle (matrix is normative)
+- Contract validation runs as a PREREQUISITE before any producer; a corrupt
+  contract on resume must fail before `test.command` executes (regression
+  uses a marker-writing command).
 - `shared/schemas/preflight-result.schema.json`: closed, versioned, `path`
   discriminator over the five file-emitting paths with closed `oneOf`
   branches (required/forbidden sections per branch). Driver computes the
