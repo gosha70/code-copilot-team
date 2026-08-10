@@ -1049,6 +1049,35 @@ assert_eq "a mixed-disposition bucket does not advance staleness" "0" \
     "$(jq -r --arg k "$R1_KEY" '.repeats[$k].consecutive_fixed' "$P/.cct/review/state.json" 2>/dev/null)"
 rm -rf "$P"; rm -f "$MIXED" "$MIXED_R2"
 
+# ══════════════════════════════════════════════════════════════
+echo "=== #229: runner exit codes within documented contract ==="
+# Verify the runner exits within the documented contract (0-3) on a
+# normal review round.  Code 4 (RUNNER_ERROR) is reserved for a future
+# EXIT trap.  State must remain valid JSON after each round.
+P=$(mktemp -d)
+mkdir -p "$P/.cct/review"
+
+# Verify a normal round exits within contract (0-3, not 5 or other)
+write_state "$P" 0
+rc=0
+CCT_PROVIDER_PROFILE="$FAIL_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || rc=$?
+if [[ "$rc" -ge 0 && "$rc" -le 3 ]]; then
+    echo "  PASS: runner exit $rc is in documented contract (0-3)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: runner exited $rc outside documented contract (0-3)"
+    FAIL=$((FAIL + 1))
+fi
+# State must be valid JSON after run
+jq empty "$P/.cct/review/state.json" >/dev/null 2>&1
+assert_exit "state.json is valid JSON after round" 0 $?
+# current_round must have advanced
+ROUND=$(jq -r '.current_round' "$P/.cct/review/state.json")
+assert_eq "state round updated to 1" "1" "$ROUND"
+# findings-round-1.json must exist
+assert_eq "findings-round-1.json exists" "1" "$([[ -f "$P/.cct/review/findings-round-1.json" ]] && echo 1 || echo 0)"
+rm -rf "$P"
+
 
 # ══════════════════════════════════════════════════════════════
 # Summary

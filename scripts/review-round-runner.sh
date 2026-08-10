@@ -10,6 +10,7 @@ set -euo pipefail
 # Usage: review-round-runner.sh <project-dir>
 # Exit:  0 = PASS, 1 = FAIL/INVALID, 2 = BREAKER_TRIPPED,
 #        3 = PROVIDER_ERROR (the reviewer never ran — #204)
+#        4 = RUNNER_ERROR (reserved — #229)
 #
 # Requires: jq, shasum or sha256sum
 # Env:      CCT_PROVIDER_PROFILE (optional, default ~/.code-copilot-team/providers.toml)
@@ -24,6 +25,11 @@ if [[ $# -lt 1 ]]; then
     exit 1
 fi
 
+# #229: under set -e, a jq runtime error in the state-update path exits
+# with jq's code (commonly 5), which is outside the documented contract
+# (0-3). The driver's catch-all reports this as review_breaker. Code 4
+# (RUNNER_ERROR) is reserved for a future EXIT trap to remap unexpected
+# codes; the driver's catch-all can then detect rc >= 4 as a script crash.
 PROJECT_DIR="$(cd "$1" && pwd)"
 
 # Shared verdict parser (#200) — one implementation for both runners.
@@ -831,7 +837,10 @@ fi
 # same file tripped the stale-finding breaker after one recurrence).
 THIS_ROUND_KEY_MAP='{}'
 
-# Update accumulated findings with this round's data
+# Update accumulated findings with this round's data.
+# #229: jq calls in this loop are unguarded (fallback values corrupt
+# accumulated state).  Code 4 (RUNNER_ERROR) is reserved for a future
+# EXIT trap to remap the resulting undocumented exit codes.
 for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
     FINDING_DATA=$(echo "$FINDINGS_JSON" | jq --arg id "$FINDING_ID" '.[] | select(.id == $id)')
     DESCRIPTION=$(echo "$FINDING_DATA" | jq -r '.description')
@@ -845,7 +854,11 @@ for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
     CONSEC_FIXED=0
     if [[ -f "$STATE_FILE" ]]; then
         CONSEC_FIXED=$(echo "$ACCUMULATED" | jq -r --arg id "$FINDING_ID" '.[$id].consecutive_fixed // 0')
-        # Check if last round's resolution was "fixed"
+        # Check if last round's resolution was "fixed".
+        # #229: the PREV_FIXED_KEYS section above already tolerates both
+        # .resolutions and .dispositions keys.  This lookup reads only
+        # .resolutions; a dispositions-only file makes .resolutions[]
+        # crash with jq exit 5, terminating the runner under set -e.
         PREV_RESOLUTION="$REVIEW_DIR/resolution-round-${CURRENT_ROUND}.json"
         if [[ -f "$PREV_RESOLUTION" ]]; then
             PREV_DISP=$(jq -r --arg id "$FINDING_ID" '.resolutions[] | select(.finding_id == $id) | .disposition // ""' "$PREV_RESOLUTION" 2>/dev/null)
