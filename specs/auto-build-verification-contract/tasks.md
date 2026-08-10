@@ -89,9 +89,6 @@ resolution, no script-side floor literals) and FR-5b (`preset_id` /
   resume path, missing contract on fresh-unattended-block, admission on an
   attended path, empty result, path mismatch) and a live-config-edit
   regression for FR-9e.
-- Contract INITIALISATION as a preflight step keyed on the block, shared by
-  both profiles and OWNING the frozen contract; the admission bar stays
-  unattended-only and contributes only its own validation + accounting.
 - No-block resume takes the legacy path (regression: it must not fail).
 
 ## T4b — original channel items (FR-7, FR-7a, FR-7b, FR-7c, FR-9, FR-9a, FR-9b)
@@ -104,9 +101,6 @@ resolution, no script-side floor literals) and FR-5b (`preset_id` /
 - DRIVER creates the path, passes `--result-file`, schema-validates the
   return, imports atomically, removes it on every exit (trap). No path
   scraped from diagnostic output.
-- The PREFLIGHT INITIALISER writes the frozen contract (FR-4a) before the
-  throwaway worktree is cleaned; the unattended admission bar writes only
-  its own `admission` section. Admission never writes the contract.
 - Clock origin is PER PATH (FR-9): `ATTEMPT_START` where a pre-ledger
   producer runs, else today's `now`. Tests that the cap includes admission
   time on unattended paths AND that attended no-block clock behaviour is
@@ -114,6 +108,13 @@ resolution, no script-side floor literals) and FR-5b (`preset_id` /
 - Test the refusal case: no ledger, no leftover file.
 
 ## T5 — Preflight initialisation + admission checks (FR-3, FR-4 capture)
+- Contract INITIALISATION as a preflight step keyed on the block, shared by
+  both profiles and OWNING the frozen contract; the admission bar stays
+  unattended-only and contributes only its own validation + accounting.
+- The PREFLIGHT INITIALISER writes the frozen contract (FR-4a) into the
+  result file before the throwaway worktree is cleaned; the unattended
+  admission bar writes only its own `admission` section. Admission never
+  writes the contract.
 - Greenfield: no artifact required. Brownfield: the initialiser runs
   coverage in the throwaway worktree and captures via T4 — on BOTH
   profiles, since attended runs never reach the admission bar.

@@ -107,10 +107,55 @@ STATE="$LEDGER_DIR/state.json"
 EVENTS="$LEDGER_DIR/events.jsonl"
 SUMMARY_MD="$SPEC_DIR/automation-summary.md"
 
+# T4 defaults — set before preflight-result channel runs
+SKIP_ADMISSION=false
+HAS_COVERAGE_BLOCK=false
+PREFLIGHT_PATH=""
+PREFLIGHT_RESULT_FILE=""
+PREFLIGHT_CONTRACT_VALIDATED=false
+CLOCK_ORIGIN=""
+ADMISSION_PASSED=false
+ADMISSION_DURATION=0
+TEMP_CONFIG=""
+
 # ── Ledger helpers ────────────────────────────────────────────
 
 now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 now_epoch() { date '+%s'; }
+
+# Pre-ledger events are held until the ledger exists (FR-7c). Journalling
+# early would either fail on the missing directory or create durable state
+# that must survive a refused admission — breaking increment B's invariant.
+PENDING_EVENTS=""
+
+journal_or_hold() {
+    # journal_or_hold <event> [detail]
+    local event="$1" detail="${2:-}"
+    if [[ -f "$STATE" ]]; then
+        journal "$event" "$detail"
+    else
+        local line
+        line=$(printf '{"ts":"%s","event":"%s","detail":%s}' \
+            "$(now_iso)" "$event" "$(printf '%s' "$detail" | jq -Rs .)")
+        PENDING_EVENTS+="$line"$'\n'
+    fi
+}
+
+flush_pending_events() {
+    # Called after ledger init succeeds. On refusal (no ledger), events
+    # go to stderr and are discarded rather than creating durable state.
+    if [[ -z "$PENDING_EVENTS" ]]; then return 0; fi
+    if [[ -f "$STATE" ]]; then
+        printf '%s' "$PENDING_EVENTS" >> "$EVENTS"
+        PENDING_EVENTS=""
+    else
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            echo "[auto-build] pre-ledger event (no ledger): $line" >&2
+        done <<< "$PENDING_EVENTS"
+        PENDING_EVENTS=""
+    fi
+}
 
 journal() {
     # journal <event> [detail]
@@ -125,8 +170,14 @@ state_set() {
     [[ "$DRY_RUN" == "true" ]] && return 0
     local filter="$1"; shift
     local tmp
-    tmp=$(mktemp)
-    jq "$@" "$filter" "$STATE" > "$tmp" && mv "$tmp" "$STATE"
+    tmp=$(mktemp) || { echo "Error: mktemp failed in state_set" >&2; return 1; }
+    if jq "$@" "$filter" "$STATE" > "$tmp"; then
+        mv "$tmp" "$STATE"
+    else
+        rm -f "$tmp" 2>/dev/null || true
+        echo "Error: jq filter failed in state_set: $filter" >&2
+        return 1
+    fi
 }
 
 state_get() {
@@ -293,8 +344,15 @@ park() {
     if [[ "$DRY_RUN" == "true" ]]; then exit 4; fi
     # Preflight-time parks (origin gate, provider health) can fire before
     # init_ledger; a park without a ledger would be unresumable. Bootstrap
-    # the full skeleton so --resume has a state to dispatch on.
+    # the full skeleton AND the config snapshot so --resume binds to the
+    # admitted policy, not whatever the live file happens to contain later.
     if [[ ! -f "$STATE" ]]; then
+        mkdir -p "$LEDGER_DIR"
+        if [[ -n "${CONFIG_SNAPSHOT:-}" && -f "$CONFIG_SNAPSHOT" ]]; then
+            if [[ ! -f "$LEDGER_DIR/config.snapshot.json" ]]; then
+                cp "$CONFIG_SNAPSHOT" "$LEDGER_DIR/config.snapshot.json"
+            fi
+        fi
         write_ledger_skeleton
     fi
     # A review decision belongs to exactly one breaker instance. Any
@@ -376,17 +434,25 @@ load_config() {
         echo "Error: automation config is not valid JSON: $CONFIG_PATH" >&2
         exit 1
     fi
-    # Validate against the raw config first; the snapshot is only taken once
-    # a run actually starts (a rejected run must leave no ledger behind).
-    CONFIG_SNAPSHOT="$CONFIG_PATH"
-    # EFFECTIVE config (#193): an existing frozen snapshot (resumes) is
-    # what the run executes with — parsing, the #191 validator, and
-    # admission must all read IT, not the live file (the parked-resume
-    # arms refresh specific blocks from live into the snapshot
-    # deliberately). The freeze itself still happens only at the end of
-    # a fully-gated load.
+    # FR-7a: take an IMMUTABLE snapshot of the config as it exists BEFORE
+    # any git operation. preflight() checks out the feature branch, which
+    # can change what's at CONFIG_PATH. A temp copy survives branch changes
+    # and is the single source of truth for every downstream read — cfg(),
+    # admission, the #191 validator. The freeze into the ledger is deferred
+    # to init_ledger() (admission must pass first — FR-7a).
+    # On resume, bind to the existing frozen snapshot and skip the temp copy.
     if [[ "$DRY_RUN" != "true" && -f "$LEDGER_DIR/config.snapshot.json" ]]; then
         CONFIG_SNAPSHOT="$LEDGER_DIR/config.snapshot.json"
+    elif [[ "$DRY_RUN" != "true" ]]; then
+        CONFIG_SNAPSHOT=$(mktemp) || { echo "Error: mktemp failed" >&2; exit 1; }
+        if ! cp "$CONFIG_PATH" "$CONFIG_SNAPSHOT"; then
+            rm -f "$CONFIG_SNAPSHOT" 2>/dev/null || true
+            echo "Error: failed to snapshot config from $CONFIG_PATH" >&2
+            exit 1
+        fi
+        TEMP_CONFIG="$CONFIG_SNAPSHOT"
+    else
+        CONFIG_SNAPSHOT="$CONFIG_PATH"
     fi
 
     PROFILE="${PROFILE_ARG:-${CCT_AUTOBUILD_PROFILE:-$(cfg '.profile' 'advisory')}}"
@@ -421,6 +487,13 @@ load_config() {
     fi
     TEST_CMD=$(cfg '.test.command' '')
     TEST_TIMEOUT=$(cfg '.test.timeout_sec' '1200')
+    # T4: the verification.coverage block governs contract initialisation.
+    # Detected from the EFFECTIVE config (snapshot on resume, live on fresh)
+    # so resume path selection uses frozen state, not a live edit (FR-9e).
+    HAS_COVERAGE_BLOCK=false
+    if jq -e '.verification.coverage' "$CONFIG_SNAPSHOT" >/dev/null 2>&1; then
+        HAS_COVERAGE_BLOCK=true
+    fi
     CAP_WALL_CLOCK=$(cfg '.caps.wall_clock_sec' '14400')
     CAP_COST=$(cfg '.caps.cost_usd' '25')
     # #191 FR-7: estimate policy for unmetered driver-initiated invocations
@@ -507,29 +580,19 @@ load_config() {
     # admitted, so there is nothing to terminate. Admitted runs execute
     # unattended — the first increment where that happens. Dry runs skip
     # admission (zero side effects; admission executes test.command).
+    # T4: admission moves to preflight_result_channel so its accounting
+    # flows through the structured result channel (FR-9a). The terminal-ledger
+    # early-exit check stays here — those resumes are decidable without
+    # executing the project's test suite.
+    SKIP_ADMISSION=false
     if [[ "$PROFILE" == "unattended" && "$DRY_RUN" != "true" ]]; then
-        # A --resume on a TERMINAL ledger is decidable without executing
-        # anything — the resume dispatcher refuses it; running the whole
-        # admission bar (including the project suite) first would be a
-        # pointless suite execution on a doomed invocation.
         local _resume_status=""
         if [[ "$RESUME" == "true" && -f "$STATE" ]]; then
             _resume_status="$(jq -r '.status // empty' "$STATE" 2>/dev/null)"
         fi
         if [[ "$_resume_status" == "terminated_policy" || "$_resume_status" == "done" ]]; then
             echo "[auto-build] admission skipped: --resume on a terminal ledger (status: $_resume_status) — the resume dispatcher decides." >&2
-        else
-            # Admission validates the EFFECTIVE config — the same
-            # CONFIG_SNAPSHOT this run executes with (--config override
-            # or the frozen resume snapshot), never a default file the
-            # run ignores.
-            echo "[auto-build] unattended admission: validate-spec.sh --unattended --feature-id $FEATURE_ID --config $CONFIG_SNAPSHOT" >&2
-            if ! bash "$SCRIPT_DIR/validate-spec.sh" --unattended --feature-id "$FEATURE_ID" --config "$CONFIG_SNAPSHOT" >&2; then
-                echo "Error: unattended admission REFUSED — the run was not admitted (#190 §11;" >&2
-                echo "see the failing checks above). Fix the artifact/governance and rerun." >&2
-                exit 1
-            fi
-            echo "[auto-build] unattended admission PASSED — run admitted." >&2
+            SKIP_ADMISSION=true
         fi
     fi
     if [[ -z "$GATING_REVIEWER" ]]; then
@@ -543,15 +606,9 @@ load_config() {
         exit 1
     fi
 
-    # Config is valid — freeze the snapshot for this run (resumes were
-    # already reading the existing snapshot via the early repoint above).
-    if [[ "$DRY_RUN" != "true" ]]; then
-        mkdir -p "$LEDGER_DIR"
-        if [[ ! -f "$LEDGER_DIR/config.snapshot.json" ]]; then
-            cp "$CONFIG_PATH" "$LEDGER_DIR/config.snapshot.json"
-        fi
-        CONFIG_SNAPSHOT="$LEDGER_DIR/config.snapshot.json"
-    fi
+    # T4: snapshot freeze moved to init_ledger so a refused admission leaves
+    # no durable state (FR-7a). CONFIG_SNAPSHOT stays pointing at the live
+    # file until admission passes; init_ledger copies it into the ledger.
 }
 
 # ── Preflight (FR-2, FR-2a) ──────────────────────────────────
@@ -599,8 +656,11 @@ preflight() {
                 # journal line — finalize and the summary must report the
                 # effective downgraded-unattended state, never "advisory".
                 CAPS_DOWNGRADED_CAUSE="$gh_cause"
-                mkdir -p "$LEDGER_DIR"
-                journal "capability_downgrade" "$gh_cause — push/PR artifacts will be skipped (best-effort, FR-5)"
+                # Defer durable state to init_ledger(): on a fresh run this
+                # event is held in PENDING_EVENTS and only persisted if
+                # admission passes (FR-7a). On resume STATE already exists
+                # legitimately, so journal_or_hold calls journal directly.
+                journal_or_hold "capability_downgrade" "$gh_cause — push/PR artifacts will be skipped (best-effort, FR-5)"
                 if [[ -f "$STATE" ]]; then
                     state_set '.capability_downgrade = $c' --arg c "$gh_cause"
                 fi
@@ -639,14 +699,23 @@ preflight() {
     fi
 
     # Origin gate — exit >= 2 parks and is never auto-resolved.
-    local origin_exit=0
-    bash "$SCRIPT_DIR/check-origin-alignment.sh" "$FEATURE_ID" >/dev/null 2>&1 || origin_exit=$?
-    if [[ $origin_exit -ge 2 ]]; then
-        dispose "origin_gate" "check-origin-alignment.sh exit $origin_exit at preflight" \
-            "{\"origin_check_exit\": $origin_exit}"
+    # Skip for unattended: the admission bar (validate-spec.sh --unattended)
+    # covers origin alignment and refusing there (exit 1) is the unambiguous
+    # signal — running it here first would trigger dispose/terminate before
+    # admission can report its structured refusal.
+    if [[ "$PROFILE" != "unattended" ]]; then
+        local origin_exit=0
+        bash "$SCRIPT_DIR/check-origin-alignment.sh" "$FEATURE_ID" >/dev/null 2>&1 || origin_exit=$?
+        if [[ $origin_exit -ge 2 ]]; then
+            dispose "origin_gate" "check-origin-alignment.sh exit $origin_exit at preflight" \
+                "{\"origin_check_exit\": $origin_exit}"
+        fi
     fi
 
-    # Targeted provider health (FR-2a)
+    # ── Provider health (FR-2a) — runs AFTER admission so an inadmissible
+    #    feature + unhealthy reviewer exits 1 (no ledger), not exit 6.
+    #    Clean worktree runs AFTER provider health: a termination must never
+    #    touch the worktree, and a dirty worktree should not block termination.
     local health_args=(--provider "$GATING_REVIEWER")
     [[ -n "${CCT_PROVIDER_PROFILE:-}" ]] && health_args=(--profile "$CCT_PROVIDER_PROFILE" "${health_args[@]}")
     if ! bash "$SCRIPT_DIR/providers-health.sh" "${health_args[@]}" >/dev/null 2>&1; then
@@ -665,19 +734,22 @@ preflight() {
                 _kept+=$(printf '%s\t%s\t%s' "$_prov" "$_scope" "$_spec")$'\n'
             else
                 echo "[auto-build] advisory reviewer '$_prov' ($_spec) unhealthy — skipped for this run." >&2
-                journal "advisory_skipped" "$_prov ($_spec) failed healthcheck" 2>/dev/null || true
+                journal_or_hold "advisory_skipped" "$_prov ($_spec) failed healthcheck"
             fi
         done <<< "$ADVISORY_REVIEWERS"
         ADVISORY_REVIEWERS=$(printf '%s' "$_kept" | sed '/^[[:space:]]*$/d')
     fi
 
-    # Clean worktree
+    # Clean worktree — runs after provider health so a termination (exit 6)
+    # never touches dirty files. For normal operation this gates the run
+    # before the driver commits anything.
     if [[ -n "$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null | grep -v '^?? \.cct/')" ]]; then
         echo "Error: worktree is not clean. Commit or stash before starting the loop." >&2
         exit 1
     fi
 
-    # Branch setup: resolve base → create/checkout feature branch → refuse master/main
+    # Branch setup: resolve base → create/checkout feature branch → refuse master/main.
+    # Runs after the termination path so a termination never mutates branches.
     if [[ "$DRY_RUN" == "true" ]]; then return 0; fi
     if ! git -C "$PROJECT_DIR" rev-parse --verify -q "$BRANCH_BASE" >/dev/null; then
         echo "Error: configured base branch/ref '$BRANCH_BASE' does not exist." >&2
@@ -694,6 +766,528 @@ preflight() {
         echo "Error: refusing to run build sessions or commit on '$cur'." >&2
         exit 1
     fi
+}
+
+# ── Preflight-result channel (T4, #222) ─────────────────────
+
+# FR-7b0 / FR-7b: frozen-contract prerequisite. On resume with the block
+# the existing frozen contract MUST be validated BEFORE any producer or
+# dispatcher runs — including resume_parked which may execute test.command.
+# Missing or corrupt → fail closed (exit 1). Called BEFORE resume dispatch.
+validate_frozen_contract_prerequisite() {
+    if [[ "$RESUME" != "true" || "$HAS_COVERAGE_BLOCK" != "true" ]]; then
+        return 0
+    fi
+    local frozen="$LEDGER_DIR/frozen-contract.json"
+    if [[ ! -f "$frozen" ]]; then
+        echo "Error: verification.coverage block present but frozen contract" >&2
+        echo "missing at $frozen — the run cannot resume without its" >&2
+        echo "admitted policy (FR-7b)." >&2
+        exit 1
+    fi
+    if ! jq empty "$frozen" 2>/dev/null; then
+        echo "Error: frozen contract at $frozen is not valid JSON" >&2
+        echo "— the run cannot resume with a corrupt contract (FR-7b)." >&2
+        exit 1
+    fi
+    if ! validate_contract_json "$frozen"; then
+        echo "Error: frozen contract at $frozen failed validation (FR-7b)." >&2
+        exit 1
+    fi
+    echo "[auto-build] frozen contract validated: $frozen" >&2
+    PREFLIGHT_CONTRACT_VALIDATED=true
+}
+
+# compute_preflight_path: determines the PATH discriminator from
+# (mode, profile, block). The table in plan.md is normative.
+# Sets global PREFLIGHT_PATH and CLOCK_ORIGIN.
+compute_preflight_path() {
+    local mode="$1" profile="$2" has_block="$3"  # mode: fresh|resume
+    FROZEN_PROFILE=""
+
+    # ── FR-9e: on resume, profile and block presence are properties of the
+    #    ADMITTED run frozen in config.snapshot.json, NOT mutable state.json.
+    #    Reading state.json live would let someone change profile from
+    #    "unattended" to "advisory" (or delete preflight.contract) to skip
+    #    admission while the frozen config remains unattended. ──
+    if [[ "$mode" == "resume" && -f "$STATE" ]]; then
+        local _snapshot_cfg="$LEDGER_DIR/config.snapshot.json"
+        local _frozen_profile _frozen_block _state_profile _state_block
+        # Derive profile and block presence from the FROZEN config snapshot.
+        # It was copied into the ledger at admission time and is immutable.
+        if [[ -f "$_snapshot_cfg" ]]; then
+            _frozen_profile=$(jq -r '.profile // empty' "$_snapshot_cfg" 2>/dev/null || echo "")
+            # Legacy snapshots (v1, pre-#193) may omit profile — default to advisory.
+            if [[ -z "$_frozen_profile" ]]; then
+                _frozen_profile="advisory"
+            fi
+            _frozen_block=$(jq -e '.verification.coverage' "$_snapshot_cfg" >/dev/null 2>&1 && echo "true" || echo "false")
+            # Cross-validate: if state.json disagrees, the ledger was tampered with.
+            _state_profile=$(jq -r '.profile // empty' "$STATE" 2>/dev/null || echo "")
+            _state_block=$(jq -r '.preflight.contract != null' "$STATE" 2>/dev/null || echo "false")
+            if [[ -n "$_state_profile" && "$_state_profile" != "$_frozen_profile" ]]; then
+                echo "Error: state.json profile '$_state_profile' conflicts with config.snapshot.json" >&2
+                echo "profile '$_frozen_profile' — the ledger has been tampered with (FR-9e)." >&2
+                exit 1
+            fi
+            # Block presence: state.json preflight.contract is additive (set
+            # during import, absent on no-block runs). Only reject if snapshot
+            # says "has block" but state says "no block" — someone deleted
+            # preflight.contract to skip admission detection.
+            if [[ "$_frozen_block" == "true" && "$_state_block" != "true" ]]; then
+                echo "Error: config.snapshot.json has verification.coverage but state.json" >&2
+                echo "has no preflight.contract — the ledger has been tampered with (FR-9e)." >&2
+                exit 1
+            fi
+        else
+            # Legacy resume: no config.snapshot.json (pre-Finding-4 fix).
+            # Fall back to state.json with a warning.
+            echo "[auto-build] WARNING: no config.snapshot.json in ledger — falling back to state.json" >&2
+            echo "(this is a legacy parked run; future runs include the snapshot)." >&2
+            _frozen_profile=$(jq -r '.profile // empty' "$STATE" 2>/dev/null || echo "advisory")
+            _frozen_block=$(jq -r '.preflight.contract != null' "$STATE" 2>/dev/null || echo "false")
+        fi
+        # Reject CLI/env overrides that conflict with the admitted profile
+        if [[ -n "${PROFILE_ARG:-}" && "$PROFILE_ARG" != "$_frozen_profile" ]]; then
+            echo "Error: --profile $PROFILE_ARG conflicts with admitted profile '$_frozen_profile'" >&2
+            echo "(FR-9e: a resumed run keeps the profile it was admitted with)." >&2
+            exit 1
+        fi
+        # Reject env-var overrides that conflict
+        if [[ -n "${CCT_AUTOBUILD_PROFILE:-}" && "$CCT_AUTOBUILD_PROFILE" != "$_frozen_profile" ]]; then
+            echo "Error: CCT_AUTOBUILD_PROFILE=$CCT_AUTOBUILD_PROFILE conflicts with admitted profile '$_frozen_profile'" >&2
+            echo "(FR-9e: a resumed run keeps the profile it was admitted with)." >&2
+            exit 1
+        fi
+        profile="$_frozen_profile"
+        FROZEN_PROFILE="$_frozen_profile"
+        if [[ "$_frozen_block" == "true" ]]; then
+            has_block=true
+        fi
+    fi
+
+    local unattended=false
+    [[ "$profile" == "unattended" ]] && unattended=true
+
+    if [[ "$mode" == "fresh" ]]; then
+        if $has_block; then
+            if $unattended; then
+                PREFLIGHT_PATH="fresh-unattended-block"
+            else
+                PREFLIGHT_PATH="fresh-attended-block"
+            fi
+        else
+            if $unattended; then
+                PREFLIGHT_PATH="fresh-unattended-noblock"
+            else
+                PREFLIGHT_PATH="fresh-attended-noblock"
+            fi
+        fi
+    else  # resume
+        if $has_block; then
+            if $unattended; then
+                PREFLIGHT_PATH="resume-unattended-block"
+            else
+                PREFLIGHT_PATH="resume-attended-block"
+            fi
+        else
+            if $unattended; then
+                PREFLIGHT_PATH="resume-unattended-noblock"
+            else
+                PREFLIGHT_PATH="resume-attended-noblock"
+            fi
+        fi
+    fi
+
+    # ── Clock origin (FR-9): per-path ──
+    # ATTEMPT_START iff this path runs a pre-ledger producer;
+    # else the existing `now` (keeps attended no-block byte-identical).
+    case "$PREFLIGHT_PATH" in
+        fresh-attended-block|fresh-unattended-noblock|fresh-unattended-block|resume-unattended-block|resume-unattended-noblock)
+            CLOCK_ORIGIN="$ATTEMPT_START" ;;
+        *)  CLOCK_ORIGIN="$(now_epoch)" ;;
+    esac
+}
+
+# preflight_result_channel: the T4 structured handoff.
+# - Validates contract prerequisite (resume+block → load+validate frozen contract)
+# - git worktree prune if any applicable producer will attempt isolation
+# - Creates result file iff the path emits one
+# - Runs producers in order (admission first on fresh-unattended-block, per FR-7a0)
+# - Schema-validates returned file
+# Returns 0; sets PREFLIGHT_RESULT_FILE (path to imported result, or empty).
+preflight_result_channel() {
+    local path="$1"
+
+    # Dry runs have zero side effects (FR-1): no admission execution,
+    # no worktree prune, no result file.
+    [[ "$DRY_RUN" == "true" ]] && return 0
+
+    # ── Result file: for unattended paths the admission gate already
+    #    created it and write the admission section via --result-file.
+    #    Clear it only for paths that emit no file at all. ──
+    case "$path" in
+        fresh-attended-block)
+            if [[ -z "${PREFLIGHT_RESULT_FILE:-}" ]]; then
+                PREFLIGHT_RESULT_FILE=$(mktemp) || {
+                    echo "Error: mktemp failed — cannot create preflight result file" >&2
+                    exit 1
+                }
+            fi
+            ;;
+        fresh-unattended-noblock|fresh-unattended-block|resume-unattended-block|resume-unattended-noblock)
+            # Already created and written by the admission gate in the main flow.
+            ;;
+        *)  # fresh-attended-noblock, resume-attended-noblock, resume-attended-block
+            PREFLIGHT_RESULT_FILE=""
+            ;;
+    esac
+
+    # ── Run remaining producers (after admission) ──
+    # The admission bar already ran in the main flow and wrote its result
+    # via --result-file to validate-spec.sh. T5 will add the contract
+    # initialiser here for fresh-attended-block and fresh-unattended-block.
+    case "$path" in
+        fresh-attended-block|fresh-unattended-block)
+            # T5: contract initialiser will run here.
+            ;;
+    esac
+}
+
+# validate_preflight_result: enforce the schema's path-discriminator
+# contract (oneOf branches). Returns 0 when the result is valid;
+# non-zero with a diagnostic on stderr otherwise. The schema is the
+# normative source — this is a bash implementation of its rules,
+# not a general-purpose JSON Schema validator.
+validate_preflight_result() {
+    local result_file="$1" expected_path="$2"
+
+    # 1. Must be valid JSON
+    if ! jq -e '.' "$result_file" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: preflight result is not valid JSON" >&2
+        return 1
+    fi
+
+    # 2. Required top-level keys
+    local _ver _path
+    _ver=$(jq -r '.schema_version // empty' "$result_file")
+    _path=$(jq -r '.path // empty' "$result_file")
+
+    if [[ -z "$_ver" || -z "$_path" ]]; then
+        echo "[auto-build] ERROR: preflight result missing required keys (schema_version, path)" >&2
+        return 1
+    fi
+
+    if [[ "$_ver" != "1" ]]; then
+        echo "[auto-build] ERROR: preflight result schema_version $_ver != 1 (only v1 is defined)" >&2
+        return 1
+    fi
+
+    # 3. Path must match expected
+    if [[ "$_path" != "$expected_path" ]]; then
+        echo "[auto-build] ERROR: preflight result path '$_path' != expected '$expected_path'" >&2
+        return 1
+    fi
+
+    # 4. Closed schema: no unknown top-level keys
+    local _unknown
+    _unknown=$(jq -r --argjson allowed '["schema_version","path","contract","admission"]' \
+        '[keys[] | select(. as $k | $allowed | index($k) | not)] | join(", ")' \
+        "$result_file")
+    if [[ -n "$_unknown" ]]; then
+        echo "[auto-build] ERROR: preflight result has unknown top-level keys: $_unknown" >&2
+        return 1
+    fi
+
+    # 5. Per-path required / forbidden sections (oneOf branches)
+    # 5. Per-path required / forbidden sections (oneOf branches)
+    #    AND nested type validation — section presence alone is not enough;
+    #    the contents must match the schema's type contract.
+    case "$_path" in
+        fresh-attended-block)
+            if ! jq -e '.contract' "$result_file" >/dev/null 2>&1; then
+                echo "[auto-build] ERROR: fresh-attended-block requires contract section" >&2
+                return 1
+            fi
+            if jq -e '.admission' "$result_file" >/dev/null 2>&1; then
+                echo "[auto-build] ERROR: fresh-attended-block forbids admission section" >&2
+                return 1
+            fi
+            validate_contract_section "$result_file" || return 1
+            ;;
+        fresh-unattended-block)
+            if ! jq -e '.contract' "$result_file" >/dev/null 2>&1; then
+                echo "[auto-build] ERROR: fresh-unattended-block requires contract section" >&2
+                return 1
+            fi
+            if ! jq -e '.admission' "$result_file" >/dev/null 2>&1; then
+                echo "[auto-build] ERROR: fresh-unattended-block requires admission section" >&2
+                return 1
+            fi
+            validate_contract_section "$result_file" || return 1
+            validate_admission_section "$result_file" || return 1
+            ;;
+        fresh-unattended-noblock)
+            if ! jq -e '.admission' "$result_file" >/dev/null 2>&1; then
+                echo "[auto-build] ERROR: fresh-unattended-noblock requires admission section" >&2
+                return 1
+            fi
+            if jq -e '.contract' "$result_file" >/dev/null 2>&1; then
+                echo "[auto-build] ERROR: fresh-unattended-noblock forbids contract section" >&2
+                return 1
+            fi
+            validate_admission_section "$result_file" || return 1
+            ;;
+        resume-unattended-block|resume-unattended-noblock)
+            if ! jq -e '.admission' "$result_file" >/dev/null 2>&1; then
+                echo "[auto-build] ERROR: $_path requires admission section" >&2
+                return 1
+            fi
+            if jq -e '.contract' "$result_file" >/dev/null 2>&1; then
+                echo "[auto-build] ERROR: $_path forbids contract section" >&2
+                return 1
+            fi
+            validate_admission_section "$result_file" || return 1
+            ;;
+        *)
+            echo "[auto-build] ERROR: preflight result has unknown path '$_path'" >&2
+            return 1
+            ;;
+    esac
+
+    return 0
+}
+
+# validate_contract_json: the single authoritative contract predicate.
+# Called from the frozen-contract prerequisite (resume) and from
+# validate_preflight_result (import). Validates EVERY rule the schema
+# and FR-4b require: closed keys, required fields with type constraints,
+# at least one floor, preset pairing, baseline/regression rules.
+# Accepts a JSON file containing a contract object at the top level
+# OR a preflight-result file (looks for .contract).
+# Returns 0 when valid; non-zero with diagnostics on stderr otherwise.
+validate_contract_json() {
+    local file="$1" _errors=0 _ct
+
+    # If the file has a .contract key, extract it; otherwise treat the
+    # whole file as the contract object.
+    if jq -e '.contract' "$file" >/dev/null 2>&1; then
+        _ct=$(jq '.contract' "$file")
+    else
+        _ct=$(jq '.' "$file")
+    fi
+
+    # ── 1. Closed: no unknown keys ──
+    local _unknown
+    _unknown=$(jq -r --argjson allowed '["command","artifact","parser","timeout_sec","floor_enforced_at","preset_id","preset_sha256","baseline","min_line_pct","min_branch_pct","max_regression_pct"]' \
+        '[keys[] | select(. as $k | $allowed | index($k) | not)] | join(", ")' <<< "$_ct")
+    if [[ -n "$_unknown" ]]; then
+        echo "[auto-build] ERROR: contract has unknown keys: $_unknown" >&2
+        ((_errors++))
+    fi
+
+    # ── 2. Required fields with type constraints ──
+    #    ALL required fields must be PRESENT (has()). Nullable fields
+    #    (preset_id, preset_sha256, baseline) additionally accept null,
+    #    but MISSING ≠ null — a missing required field means the
+    #    contract was incompletely written, not that the operator chose
+    #    "no preset" or "greenfield".
+    if ! jq -e '
+        (.command | type == "string" and length > 0) and
+        (.artifact | type == "string" and length > 0) and
+        ((.parser == "istanbul") or (.parser == "lcov")) and
+        (.timeout_sec | type == "number" and . > 0) and
+        ((.floor_enforced_at == "landing") or (.floor_enforced_at == "phase")) and
+        has("preset_id") and (.preset_id | type == "string" or type == "null") and
+        has("preset_sha256") and (.preset_sha256 | type == "string" or type == "null") and
+        has("baseline")' <<< "$_ct" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: contract missing or invalid required field" >&2
+        echo "  command: non-empty string | artifact: non-empty string" >&2
+        echo "  parser: istanbul|lcov | timeout_sec: positive number" >&2
+        echo "  floor_enforced_at: landing|phase" >&2
+        echo "  preset_id: string|null | preset_sha256: string|null" >&2
+        echo "  baseline: null or {line_pct, branch_pct}" >&2
+        ((_errors++))
+    fi
+
+    # ── 3. At least one floor (min_line_pct or min_branch_pct) ──
+    if ! jq -e '(.min_line_pct or .min_branch_pct)' <<< "$_ct" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: contract must set at least one floor (min_line_pct or min_branch_pct)" >&2
+        ((_errors++))
+    fi
+
+    # ── 4. Floor range 0-100 ──
+    for _f in min_line_pct min_branch_pct max_regression_pct; do
+        if jq -e "has(\"$_f\")" <<< "$_ct" >/dev/null 2>&1; then
+            if ! jq -e ".$_f | type == \"number\" and . >= 0 and . <= 100" <<< "$_ct" >/dev/null 2>&1; then
+                echo "[auto-build] ERROR: contract.$_f must be a number 0-100" >&2
+                ((_errors++))
+            fi
+        fi
+    done
+
+    # ── 5. Preset pairing: both string or both null ──
+    if ! jq -e '((.preset_id | type == "string") and (.preset_sha256 | type == "string")) or
+        ((.preset_id | type == "null") and (.preset_sha256 | type == "null"))' <<< "$_ct" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: contract preset_id and preset_sha256 must both be string or both be null" >&2
+        ((_errors++))
+    fi
+
+    # ── 6. Baseline: null OR object with at least one metric ──
+    #    The schema requires .baseline to be present; it can be null (greenfield)
+    #    or an object with line_pct and/or branch_pct (brownfield). An empty
+    #    object ({}) is invalid. The baseline object is CLOSED — only line_pct
+    #    and branch_pct are allowed. Missing baseline was already caught in step 2.
+    if jq -e '.baseline | type == "null"' <<< "$_ct" >/dev/null 2>&1; then
+        :  # greenfield — valid
+    elif jq -e '.baseline | type == "object"' <<< "$_ct" >/dev/null 2>&1; then
+        # Closed: no unknown keys inside baseline
+        local _bl_unknown
+        _bl_unknown=$(jq -r --argjson allowed '["line_pct","branch_pct"]' \
+            '[.baseline | keys[] | select(. as $k | $allowed | index($k) | not)] | join(", ")' <<< "$_ct")
+        if [[ -n "$_bl_unknown" ]]; then
+            echo "[auto-build] ERROR: contract.baseline has unknown keys: $_bl_unknown" >&2
+            ((_errors++))
+        fi
+        # At least one metric, ranges 0-100
+        if ! jq -e '.baseline |
+            ((.line_pct // .branch_pct) != null) and
+            ((.line_pct | (type == "null") or (type == "number" and . >= 0 and . <= 100)) | .) and
+            ((.branch_pct | (type == "null") or (type == "number" and . >= 0 and . <= 100)) | .)' <<< "$_ct" >/dev/null 2>&1; then
+            echo "[auto-build] ERROR: contract.baseline must have at least one metric (line_pct or branch_pct, each 0-100)" >&2
+            ((_errors++))
+        fi
+    else
+        echo "[auto-build] ERROR: contract.baseline must be null or an object" >&2
+        ((_errors++))
+    fi
+
+    # ── 7. Regression rules (business logic from FR-4b) ──
+    #    Brownfield (baseline != null): max_regression_pct REQUIRED
+    #    Greenfield (baseline == null): max_regression_pct FORBIDDEN
+    if jq -e '.baseline | type == "null"' <<< "$_ct" >/dev/null 2>&1; then
+        if jq -e 'has("max_regression_pct")' <<< "$_ct" >/dev/null 2>&1; then
+            echo "[auto-build] ERROR: contract.max_regression_pct is forbidden when baseline is null (greenfield)" >&2
+            ((_errors++))
+        fi
+    else
+        if ! jq -e 'has("max_regression_pct")' <<< "$_ct" >/dev/null 2>&1; then
+            echo "[auto-build] ERROR: contract.max_regression_pct is required when baseline is non-null (brownfield)" >&2
+            ((_errors++))
+        fi
+    fi
+
+    return $_errors
+}
+
+# validate_contract_section: wrapper — calls validate_contract_json for
+# a preflight-result file (which carries contract under .contract).
+validate_contract_section() {
+    validate_contract_json "$1"
+}
+
+# validate_admission_section: enforce nested type constraints on the
+# admission section (called after confirming the section is present).
+validate_admission_section() {
+    local result_file="$1" _errors=0 _unknown
+    # admission must be an object (not true/false/string)
+    if ! jq -e '.admission | type == "object"' "$result_file" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: admission must be an object (not a scalar)" >&2
+        ((_errors++))
+    fi
+    # Closed: admission only allows "test_command"
+    _unknown=$(jq -r --argjson allowed '["test_command"]' \
+        '[.admission | keys[] | select(. as $k | $allowed | index($k) | not)] | join(", ")' "$result_file")
+    if [[ -n "$_unknown" ]]; then
+        echo "[auto-build] ERROR: admission has unknown keys: $_unknown" >&2
+        ((_errors++))
+    fi
+    # test_command must be an object
+    if ! jq -e '.admission.test_command | type == "object"' "$result_file" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: admission.test_command must be an object" >&2
+        ((_errors++))
+    fi
+    # Closed: test_command only allows "exit_code" and "duration_sec"
+    _unknown=$(jq -r --argjson allowed '["exit_code","duration_sec"]' \
+        '[.admission.test_command | keys[] | select(. as $k | $allowed | index($k) | not)] | join(", ")' "$result_file")
+    if [[ -n "$_unknown" ]]; then
+        echo "[auto-build] ERROR: admission.test_command has unknown keys: $_unknown" >&2
+        ((_errors++))
+    fi
+    # exit_code: integer (not fractional — 1.5 is not a valid exit code)
+    if ! jq -e '.admission.test_command.exit_code | type == "number" and . == (. | floor)' "$result_file" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: admission.test_command.exit_code must be an integer" >&2
+        ((_errors++))
+    fi
+    # duration_sec: number >= 0
+    if ! jq -e '.admission.test_command.duration_sec | type == "number" and . >= 0' "$result_file" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: admission.test_command.duration_sec must be a non-negative number" >&2
+        ((_errors++))
+    fi
+    return $_errors
+}
+
+# import_preflight_result: schema-validate and import sections into
+# the ledger. Called AFTER init_ledger so the ledger exists.
+# Failures are FATAL (exit 1): a result that does not conform to its
+# own schema means the channel was corrupted, and the run must stop.
+import_preflight_result() {
+    local result_file="$1"
+    [[ -z "$result_file" || ! -f "$result_file" ]] && return 0
+
+    local schema="$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json"
+    if [[ ! -f "$schema" ]]; then
+        echo "[auto-build] ERROR: preflight-result schema missing at $schema — cannot import result." >&2
+        exit 1
+    fi
+
+    # FR-1 (review): validate against the path-discriminator schema.
+    # Failures are fatal — a corrupted or tampered result must not be
+    # imported silently (the channel would fail open otherwise).
+    validate_preflight_result "$result_file" "$PREFLIGHT_PATH" || exit 1
+
+    # Import admission section (if present)
+    if jq -e '.admission' "$result_file" >/dev/null 2>&1; then
+        local _admission
+        _admission=$(jq '.admission' "$result_file")
+        if ! state_set '.preflight.admission = $a' --argjson a "$_admission"; then
+            echo "[auto-build] ERROR: failed to write preflight.admission to state — result file preserved at $result_file" >&2
+            exit 1
+        fi
+        journal "preflight_admission" "$(jq -c '.admission' "$result_file")"
+    fi
+
+    # Import contract section (if present)
+    if jq -e '.contract' "$result_file" >/dev/null 2>&1; then
+        local _contract _fc_tmp
+        _contract=$(jq '.contract' "$result_file")
+        if ! state_set '.preflight.contract = $c' --argjson c "$_contract"; then
+            echo "[auto-build] ERROR: failed to write preflight.contract to state — result file preserved at $result_file" >&2
+            exit 1
+        fi
+        # Write the frozen contract atomically for gates and resume to read.
+        # A partial write (crash mid-append) would corrupt a gate's only source
+        # of truth — use temp-write-plus-rename so the file is always complete.
+        mkdir -p "$LEDGER_DIR"
+        _fc_tmp=$(mktemp "$LEDGER_DIR/frozen-contract.XXXXXX") || {
+            echo "Error: mktemp failed for frozen contract" >&2
+            exit 1
+        }
+        if ! jq '.contract' "$result_file" > "$_fc_tmp"; then
+            rm -f "$_fc_tmp" 2>/dev/null || true
+            echo "[auto-build] ERROR: failed to write frozen contract" >&2
+            exit 1
+        fi
+        if ! mv "$_fc_tmp" "$LEDGER_DIR/frozen-contract.json"; then
+            rm -f "$_fc_tmp" 2>/dev/null || true
+            echo "[auto-build] ERROR: failed to rename frozen contract into place" >&2
+            exit 1
+        fi
+        journal "preflight_contract" "frozen contract written"
+    fi
+
+    rm -f "$result_file"
+    echo "[auto-build] preflight result imported (path: $PREFLIGHT_PATH)" >&2
 }
 
 # ── Phase enumeration (FR-4) ─────────────────────────────────
@@ -738,10 +1332,41 @@ init_ledger() {
         exit 1
     fi
     if [[ -f "$STATE" ]]; then return 0; fi
+    # T4: freeze the config snapshot HERE, after admission passes, so a
+    # refused admission leaves no durable state (FR-7a). The immutable
+    # temp snapshot was taken in load_config() before any branch change.
+    # Use temp-write-plus-rename: a partial copy must not survive a crash.
+    if [[ ! -f "$LEDGER_DIR/config.snapshot.json" ]]; then
+        local _snap_tmp
+        _snap_tmp=$(mktemp "$LEDGER_DIR/config.snapshot.XXXXXX") || {
+            echo "Error: mktemp failed for config snapshot" >&2
+            exit 1
+        }
+        if ! cp "$CONFIG_SNAPSHOT" "$_snap_tmp"; then
+            rm -f "$_snap_tmp" 2>/dev/null || true
+            echo "Error: failed to copy config snapshot to ledger" >&2
+            exit 1
+        fi
+        if ! mv "$_snap_tmp" "$LEDGER_DIR/config.snapshot.json"; then
+            rm -f "$_snap_tmp" 2>/dev/null || true
+            echo "Error: failed to rename config snapshot into place" >&2
+            exit 1
+        fi
+    fi
+    # Clean up the temp config copy — the ledger now has the canonical copy.
+    if [[ -n "${TEMP_CONFIG:-}" && -f "$TEMP_CONFIG" ]]; then
+        rm -f "$TEMP_CONFIG"
+        TEMP_CONFIG=""
+    fi
+    CONFIG_SNAPSHOT="$LEDGER_DIR/config.snapshot.json"
     write_ledger_skeleton
 }
 
 write_ledger_skeleton() {
+    # If the ledger was already initialised (e.g., admission passed and
+    # init_ledger ran before a later termination), don't overwrite STATE.
+    # The existing STATE carries admission accounting that must survive.
+    [[ -f "$STATE" ]] && return 0
     mkdir -p "$LEDGER_DIR"
     local base_ref
     base_ref=$(git -C "$PROJECT_DIR" rev-parse HEAD)
@@ -750,7 +1375,7 @@ write_ledger_skeleton() {
         --arg base "$base_ref" --arg t "$(now_iso)" \
         --argjson max_phases "$MAX_PHASES" --argjson max_fix "$MAX_FIX_SESSIONS" \
         --argjson wall "$CAP_WALL_CLOCK" --argjson cost "$CAP_COST" \
-        --argjson milestone_every "$MILESTONE_EVERY" --argjson started "$(now_epoch)" \
+        --argjson milestone_every "$MILESTONE_EVERY" --argjson started "${CLOCK_ORIGIN:-$(now_epoch)}" \
         --arg capdown "${CAPS_DOWNGRADED_CAUSE:-}" \
         '{schema_version: 1, feature_id: $fid, profile: $profile,
           status: "preflight", current_phase: 0,
@@ -763,6 +1388,11 @@ write_ledger_skeleton() {
           totals: {cost_usd: 0, cost_estimated_usd: 0, started_epoch: $started},
           milestones: {every_n_phases: $milestone_every, last_paused_after_phase: 0},
           escalations: [], pr: {number: null, url: null}, updated: $t}' > "$STATE"
+    # Flush any events held from before the ledger existed (FR-7c).
+    # The skeleton creates STATE, so pending events can now be written
+    # to events.jsonl — without this they'd be orphaned on terminate/park
+    # paths that never reach the normal init_ledger → flush sequence.
+    flush_pending_events
     journal "init" "profile=$PROFILE branch=$BRANCH_NAME base=$base_ref"
 }
 
@@ -1507,9 +2137,37 @@ run_phase() {
     fi
 }
 
+# T4b (FR-9b): reset_run_clocks accepts an explicit timestamp so resume paths
+# that run pre-ledger producers can pass ATTEMPT_START rather than now — keeping
+# admission time inside the wall-clock cap. Callers that run no producer pass
+# now and keep their pre-change behaviour byte-identical.
+reset_run_clocks() {
+    local ts="${1:-$(now_epoch)}"
+    state_set '.totals.started_epoch = ($now | tonumber)' --arg now "$ts"
+    journal "driver_clock_reset" "driver wall-clock cap restarted on resume (parked/paused time not counted)"
+
+    local _rs="$PROJECT_DIR/.cct/review/state.json"
+    if [[ -f "$_rs" ]]; then
+        local _tmp
+        _tmp=$(mktemp)
+        if jq --argjson now "$(now_epoch)" '.loop_start = $now' "$_rs" > "$_tmp" 2>/dev/null; then
+            mv "$_tmp" "$_rs"
+            journal "review_clock_reset" "review loop wall-clock restarted on resume (parked/paused time not counted)"
+        else
+            rm -f "$_tmp"
+            journal "artifact_error" "could not reset review loop_start in $_rs"
+        fi
+    fi
+}
+
 # ── Main ─────────────────────────────────────────────────────
 
+# Install EXIT trap BEFORE load_config — a failure inside load_config
+# (missing test.command, bad config) may leave TEMP_CONFIG behind.
+trap '[[ -n "${TEMP_CONFIG:-}" && -f "$TEMP_CONFIG" ]] && rm -f "$TEMP_CONFIG" 2>/dev/null; rm -f "${PREFLIGHT_RESULT_FILE:-}" 2>/dev/null' EXIT
+
 load_config
+true  # load_config done — all config values derived from the frozen snapshot
 
 PHASES=$(enumerate_phases) || exit 1
 PHASE_COUNT=$(printf '%s\n' "$PHASES" | grep -c .)
@@ -1581,24 +2239,6 @@ consume_review_decision() {
 # still have the next phase's first check_caps() trip on a stale clock.
 # Keeping the reset in a helper is what stops the two paths — and the two
 # guards — drifting apart again.
-reset_run_clocks() {
-    state_set '.totals.started_epoch = ($now | tonumber)' --arg now "$(now_epoch)"
-    journal "driver_clock_reset" "driver wall-clock cap restarted on resume (parked/paused time not counted)"
-
-    local _rs="$PROJECT_DIR/.cct/review/state.json"
-    if [[ -f "$_rs" ]]; then
-        local _tmp
-        _tmp=$(mktemp)
-        if jq --argjson now "$(now_epoch)" '.loop_start = $now' "$_rs" > "$_tmp" 2>/dev/null; then
-            mv "$_tmp" "$_rs"
-            journal "review_clock_reset" "review loop wall-clock restarted on resume (parked/paused time not counted)"
-        else
-            rm -f "$_tmp"
-            journal "artifact_error" "could not reset review loop_start in $_rs"
-        fi
-    fi
-}
-
 resume_parked() {
     # Dispatch on the newest UNRESOLVED escalation; resolution is derived
     # from human-produced artifacts only. Falls through on success.
@@ -1740,7 +2380,8 @@ resume_parked() {
     #
     # Every arm that reaches here resolved its escalation; refuse_resume
     # exits, so falling through means the resume genuinely succeeded.
-    reset_run_clocks
+    # Clock reset is handled by the single reset_run_clocks in the main
+    # flow after resume dispatch, using the per-path CLOCK_ORIGIN.
 }
 
 # ── PR create / idempotent update (FR-3..FR-7, pr profile) ──
@@ -1878,11 +2519,176 @@ arm_auto_merge() {
     return 0
 }
 
-if [[ "$RESUME" == "true" ]]; then
-    if [[ ! -f "$STATE" ]]; then
-        echo "Error: --resume but no ledger at $STATE." >&2
-        exit 1
+# ── T4: preflight-result channel (#222) ──────────────────────
+# Centralized sequence: authority → prerequisites → prune → admission →
+# resume dispatch → preflight → result import. Every step is ordered
+# so no check is bypassed and no code executes before it should.
+ATTEMPT_START=$(now_epoch)
+CLOCK_ORIGIN="$(now_epoch)"
+PREFLIGHT_PATH=""
+PREFLIGHT_RESULT_FILE=""
+PREFLIGHT_CONTRACT_VALIDATED=false
+ADMISSION_PASSED=false
+ADMISSION_DURATION=0
+_mode="fresh"
+[[ "$RESUME" == "true" ]] && _mode="resume"
+compute_preflight_path "$_mode" "$PROFILE" "$HAS_COVERAGE_BLOCK"
+
+# FR-9e: on resume the frozen config is authoritative — apply its
+# profile to the globals that resume dispatch and downstream use (PROFILE,
+# CAN_*). Without this, CCT_AUTOBUILD_PROFILE=advisory could make a
+# frozen unattended resume execute with advisory disposition semantics.
+if [[ -n "${FROZEN_PROFILE:-}" && "$FROZEN_PROFILE" != "$PROFILE" ]]; then
+    PROFILE="$FROZEN_PROFILE"
+    case "$PROFILE" in
+        advisory)   CAN_PUSH=false; CAN_OPEN_PR=false; CAN_MERGE=false ;;
+        pr)         CAN_PUSH=true;  CAN_OPEN_PR=true;  CAN_MERGE=false ;;
+        merge)      CAN_PUSH=true;  CAN_OPEN_PR=true;  CAN_MERGE=true  ;;
+        unattended) CAN_PUSH=true;  CAN_OPEN_PR=true;  CAN_MERGE=true  ;;
+    esac
+fi
+
+# ── 0. Terminal resume short-circuit: a run that is already done or
+#    terminated_policy is decidable without branch binding, prerequisites,
+#    or admission. Short-circuit BEFORE any of those checks so a user
+#    resuming a completed run from another branch sees the terminal
+#    message, not a branch-mismatch error. ──
+if [[ "$RESUME" == "true" && -f "$STATE" ]]; then
+    _t4_term_status=$(jq -r '.status // empty' "$STATE" 2>/dev/null)
+    case "$_t4_term_status" in
+        done)
+            echo "Run already complete for '$FEATURE_ID'." >&2
+            exit 0
+            ;;
+        terminated_policy)
+            echo "Error: this run ended terminated_policy — terminal in #190" >&2
+            echo "increment A (no --resume path; recovery arrives with increment D)." >&2
+            echo "Review $LEDGER_DIR/triage-report.md, resolve the boundary, then" >&2
+            echo "start a fresh attended run." >&2
+            exit 1
+            ;;
+    esac
+fi
+
+# ── 1. Branch binding: admission must validate the same ref the run
+#    executes. If the target branch exists, HEAD must match it. If the
+#    target does not exist, HEAD must match the base ref it will be
+#    created from. ──
+if [[ "$DRY_RUN" != "true" ]]; then
+    _t4_head=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if git -C "$PROJECT_DIR" rev-parse --verify -q "$BRANCH_NAME" >/dev/null 2>&1; then
+        if [[ -n "$_t4_head" && "$_t4_head" != "$BRANCH_NAME" ]]; then
+            echo "Error: current branch '$_t4_head' does not match configured" >&2
+            echo "branch.name '$BRANCH_NAME'. Checkout '$BRANCH_NAME' first," >&2
+            echo "then rerun — admission must validate the executed branch." >&2
+            exit 1
+        fi
+    else
+        # Target branch does not exist yet — HEAD must equal the base ref
+        # that branch setup will create from.
+        _t4_head_sha=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
+        _t4_base_sha=$(git -C "$PROJECT_DIR" rev-parse "$BRANCH_BASE" 2>/dev/null)
+        if [[ "$_t4_head_sha" != "$_t4_base_sha" ]]; then
+            echo "Error: current HEAD ($_t4_head) does not match configured" >&2
+            echo "branch.base '$BRANCH_BASE' — the target branch '$BRANCH_NAME'" >&2
+            echo "will be created from '$BRANCH_BASE'. Checkout '$BRANCH_BASE'" >&2
+            echo "first, then rerun." >&2
+            exit 1
+        fi
     fi
+fi
+
+# ── 2. Prerequisites — run BEFORE admission so nothing executes
+#    project code for a run that should be refused. ──
+
+# T5 guard: fresh coverage paths have no contract producer yet.
+# Refuse early — before admission executes test.command, before
+# preflight can dispose/terminate, before branch mutation.
+case "${PREFLIGHT_PATH:-}" in
+    fresh-attended-block|fresh-unattended-block)
+        echo "Error: verification.coverage block is present but the coverage" >&2
+        echo "contract initialiser has not been implemented yet (planned for T5)." >&2
+        echo "This is a genuine gap — no frozen-contract.json can be produced," >&2
+        echo "so the run cannot enforce its own coverage policy." >&2
+        echo "Remove the verification.coverage block from automation.json" >&2
+        echo "to proceed without coverage enforcement, or wait for T5." >&2
+        exit 1
+        ;;
+esac
+
+validate_frozen_contract_prerequisite
+if [[ "$RESUME" == "true" && ! -f "$STATE" ]]; then
+    echo "Error: --resume but no ledger at $STATE." >&2
+    exit 1
+fi
+
+# ── 3. Worktree prune — runs BEFORE admission (which may create a
+#    throwaway worktree) so a stale registration from a prior crash
+#    is reclaimed first. ──
+_t4_prune=false
+case "${PREFLIGHT_PATH:-}" in
+    fresh-unattended-noblock|fresh-unattended-block|resume-unattended-block|resume-unattended-noblock)
+        if [[ "${CCT_ADMISSION_TEST_IN_PLACE:-}" != "1" ]]; then
+            _t4_prune=true
+        fi
+        ;;
+    fresh-attended-block)
+        if [[ "$(cfg '.verification.coverage.baseline' 'none')" == "admission" ]]; then
+            _t4_prune=true
+        fi
+        ;;
+esac
+if $_t4_prune; then
+    _t4_prune_out=$(git -C "$PROJECT_DIR" worktree prune --expire=now 2>&1) || true
+    if [[ -n "$_t4_prune_out" ]]; then
+        journal_or_hold "worktree_prune" "$_t4_prune_out"
+    fi
+fi
+
+# ── 4. Admission gate (FR-7a0): run BEFORE resume dispatch so an
+#    inadmissible feature refuses (exit 1, no ledger) before any
+#    project code executes. The driver passes --result-file so
+#    validate-spec.sh writes the structured admission result. ──
+if [[ "$PROFILE" == "unattended" && "${SKIP_ADMISSION:-false}" != "true" ]]; then
+    case "${PREFLIGHT_PATH:-}" in
+        fresh-unattended-noblock|fresh-unattended-block|resume-unattended-block|resume-unattended-noblock)
+            PREFLIGHT_RESULT_FILE=$(mktemp) || { echo "Error: mktemp failed" >&2; exit 1; }
+            echo "[auto-build] unattended admission: validate-spec.sh --unattended --feature-id $FEATURE_ID --config $CONFIG_SNAPSHOT" >&2
+            _t4_adm_start=$(now_epoch)
+            if ! bash "$SCRIPT_DIR/validate-spec.sh" --unattended \
+                --feature-id "$FEATURE_ID" --config "$CONFIG_SNAPSHOT" \
+                --result-file "$PREFLIGHT_RESULT_FILE" \
+                --result-path "$PREFLIGHT_PATH" >&2; then
+                echo "Error: unattended admission REFUSED — the run was not admitted (#190 §11;" >&2
+                echo "see the failing checks above). Fix the artifact/governance and rerun." >&2
+                rm -f "$PREFLIGHT_RESULT_FILE" 2>/dev/null || true
+                PREFLIGHT_RESULT_FILE=""
+                flush_pending_events  # prune diagnostics → stderr, no ledger
+                exit 1
+            fi
+            ADMISSION_DURATION=$(( $(now_epoch) - _t4_adm_start ))
+            ADMISSION_PASSED=true
+            echo "[auto-build] unattended admission PASSED — run admitted." >&2
+            ;;
+    esac
+fi
+
+# ── 5. Ledger init + import: when a pre-ledger producer (admission)
+#    produced a result file, persist it NOW, before preflight can
+#    dispose/terminate. A provider-health termination must record the
+#    passed admission in the ledger (SC-6). For no-producer paths
+#    (attended no-block), defer to the post-preflight initialization
+#    to preserve FR-2 byte-identical behavior. ──
+if [[ -n "${PREFLIGHT_RESULT_FILE:-}" ]]; then
+    init_ledger
+    import_preflight_result "$PREFLIGHT_RESULT_FILE"
+    flush_pending_events
+fi
+
+# ── 6. Resume dispatch — admission has passed, prerequisites are
+#    satisfied, ledger exists with admission evidence. Clock reset
+#    happens ONCE here, using the per-path CLOCK_ORIGIN. ──
+if [[ "$RESUME" == "true" ]]; then
     RESUME_STATUS=$(state_get '.status')
     case "$RESUME_STATUS" in
         milestone-paused)
@@ -1891,8 +2697,6 @@ if [[ "$RESUME" == "true" ]]; then
                 echo "has no 'approved-by:' line. Add the sign-off, then rerun with --resume." >&2
                 exit 1
             fi
-            # The human's sign-off edit is expected; commit it so preflight's
-            # clean-worktree check passes. Any OTHER dirty file still fails.
             SUMMARY_REL="${SUMMARY_MD#$PROJECT_DIR/}"
             DIRTY_FILES=$(git -C "$PROJECT_DIR" status --porcelain | grep -v '^?? \.cct/' | awk '{print $2}')
             if [[ "$DIRTY_FILES" == "$SUMMARY_REL" ]]; then
@@ -1900,10 +2704,6 @@ if [[ "$RESUME" == "true" ]]; then
                 git -C "$PROJECT_DIR" commit -q -m "docs($FEATURE_ID): milestone sign-off [auto-build]"
             fi
             journal "resumed" "after milestone sign-off"
-            # #210 follow-up: this is a successful resume too. Without it the
-            # clock stayed anchored before the human's sign-off wait, and with
-            # a phase still to run its first check_caps() tripped immediately.
-            reset_run_clocks
             ;;
         parked)
             resume_parked
@@ -1920,10 +2720,24 @@ if [[ "$RESUME" == "true" ]]; then
             exit 0
             ;;
     esac
+    # Single clock reset after successful resume dispatch — admission
+    # time is inside the budget (CLOCK_ORIGIN is ATTEMPT_START for
+    # unattended paths, now for attended).
+    reset_run_clocks "$CLOCK_ORIGIN"
 fi
 
 preflight
-init_ledger
+
+preflight_result_channel "$PREFLIGHT_PATH"
+
+# Deferred ledger init + import for paths that had no pre-ledger
+# producer (attended no-block). For unattended paths the early init
+# at step 5 already ran — STATE exists so init_ledger is a no-op.
+if [[ ! -f "$STATE" ]]; then
+    init_ledger
+fi
+import_preflight_result "$PREFLIGHT_RESULT_FILE"
+flush_pending_events
 
 MAX=$((MAX_PHASES))
 DONE_COUNT=0

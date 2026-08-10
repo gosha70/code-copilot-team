@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "preflight-result.schema.json",
+  "title": "Preflight-result channel schema (schema_version 1)",
+  "description": "Machine-readable handoff file between the driver, preflight contract initialiser, and unattended admission bar. The path discriminator enforces exactly which sections each run path requires and forbids.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "path"],
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "path": {
+      "type": "string",
+      "description": "Identifies the run path that produced this result. The driver independently computes the expected path and rejects disagreement.",
+      "enum": [
+        "fresh-attended-block",
+        "fresh-unattended-block",
+        "fresh-unattended-noblock",
+        "resume-unattended-block",
+        "resume-unattended-noblock"
+      ]
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The fully resolved frozen coverage contract, written by the preflight initialiser on fresh runs with the block.",
+      "required": [
+        "command",
+        "artifact",
+        "parser",
+        "timeout_sec",
+        "floor_enforced_at",
+        "preset_id",
+        "preset_sha256",
+        "baseline"
+      ],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "artifact": { "type": "string", "minLength": 1 },
+        "parser": { "type": "string", "enum": ["istanbul", "lcov"] },
+        "min_line_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+        "min_branch_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+        "max_regression_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "timeout_sec": { "type": "number", "exclusiveMinimum": 0 },
+        "floor_enforced_at": { "type": "string", "enum": ["landing", "phase"] },
+        "preset_id": { "type": ["string", "null"] },
+        "preset_sha256": { "type": ["string", "null"] },
+        "baseline": {
+          "type": ["object", "null"],
+          "minProperties": 1,
+          "additionalProperties": false,
+          "description": "Captured baseline coverage. null means greenfield (no prior coverage to baseline against). An empty baseline object ({}) is invalid — the contract initialiser must capture real numbers or write null.",
+          "properties": {
+            "line_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+            "branch_pct": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "description": "At least one floor (min_line_pct or min_branch_pct) must be present.",
+          "anyOf": [
+            { "required": ["min_line_pct"] },
+            { "required": ["min_branch_pct"] }
+          ]
+        },
+        {
+          "description": "preset_id and preset_sha256 must both be strings (with values) or both be null — mismatched pairing is invalid.",
+          "oneOf": [
+            {
+              "properties": {
+                "preset_id": { "type": "string", "minLength": 1 },
+                "preset_sha256": { "type": "string", "minLength": 1 }
+              },
+              "required": ["preset_id", "preset_sha256"]
+            },
+            {
+              "properties": {
+                "preset_id": { "type": "null" },
+                "preset_sha256": { "type": "null" }
+              }
+            }
+          ]
+        },
+        {
+          "description": "Regression rules: max_regression_pct is forbidden when baseline is null (greenfield) and required when baseline is non-null (brownfield).",
+          "if": {
+            "properties": { "baseline": { "type": "null" } }
+          },
+          "then": {
+            "not": { "required": ["max_regression_pct"] }
+          },
+          "else": {
+            "required": ["max_regression_pct"]
+          }
+        }
+      ]
+    },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Admission bar accounting written by unattended admission (FR-9). Attended profiles never run admission and must never carry this section.",
+      "required": ["test_command"],
+      "properties": {
+        "test_command": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["exit_code", "duration_sec"],
+          "properties": {
+            "exit_code": { "type": "integer" },
+            "duration_sec": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "description": "fresh-attended-block — contract initialisation only; no admission (attended profiles never run it).",
+      "properties": {
+        "path": { "const": "fresh-attended-block" }
+      },
+      "required": ["contract"],
+      "allOf": [{ "not": { "required": ["admission"] } }]
+    },
+    {
+      "description": "fresh-unattended-block — admission bar runs first, then contract initialisation; both sections required.",
+      "properties": {
+        "path": { "const": "fresh-unattended-block" }
+      },
+      "required": ["contract", "admission"]
+    },
+    {
+      "description": "fresh-unattended-noblock — admission bar only; contract FORBIDDEN (no block → no contract to freeze).",
+      "properties": {
+        "path": { "const": "fresh-unattended-noblock" }
+      },
+      "required": ["admission"],
+      "allOf": [{ "not": { "required": ["contract"] } }]
+    },
+    {
+      "description": "resume-unattended-block — admission bar only; contract FORBIDDEN (resume must not overwrite frozen policy — the prohibition is what makes it checkable by the driver).",
+      "properties": {
+        "path": { "const": "resume-unattended-block" }
+      },
+      "required": ["admission"],
+      "allOf": [{ "not": { "required": ["contract"] } }]
+    },
+    {
+      "description": "resume-unattended-noblock — admission bar only.",
+      "properties": {
+        "path": { "const": "resume-unattended-noblock" }
+      },
+      "required": ["admission"],
+      "allOf": [{ "not": { "required": ["contract"] } }]
+    }
+  ]
+}
