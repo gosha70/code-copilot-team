@@ -290,6 +290,10 @@ validate_admission() {
   echo ""
   echo "--- $id: unattended admission (#190 §11, increment B) ---"
 
+  # T4: capture admission start time for --result-file duration accounting.
+  local _admission_start_epoch
+  _admission_start_epoch=$(date +%s)
+
   # 0. Inputs must exist before any check can be decided — a missing
   #    input is a NAMED failure, never a raw tool error mid-report.
   if [[ ! -f "$spec" ]]; then
@@ -493,6 +497,27 @@ validate_admission() {
     fail "$id: test.command not attempted — config or governance checks failed (admission never executes commands for a rejected or ungoverned feature)"
   fi
 
+  # T4: write structured admission result when --result-file is given.
+  # The driver owns the file path and validates it against the schema.
+  # Write ONLY on success (all checks passed) — on failure the driver
+  # handles refusal and removes the result file (FR-7a).
+  if [[ -n "${ADMISSION_RESULT_FILE:-}" && "$TOTAL_FAIL" -eq 0 ]]; then
+    local _adm_dur
+    _adm_dur=$(( $(date +%s) - _admission_start_epoch ))
+    if ! jq -n --arg path "${ADMISSION_RESULT_PATH:-fresh-unattended-noblock}" \
+        --argjson exit_code 0 \
+        --argjson duration_sec "$_adm_dur" \
+        '{schema_version: 1, path: $path,
+          admission: {test_command: {exit_code: $exit_code, duration_sec: $duration_sec}}}' \
+        > "$ADMISSION_RESULT_FILE"; then
+      # Fail-closed: admission passed governance but the result file cannot
+      # be written (disk full, permission denied). A missing result would
+      # let the driver import nothing and proceed as if admission didn't
+      # contribute — exactly the silent-skip this channel exists to prevent.
+      fail "admission: failed to write result file to $ADMISSION_RESULT_FILE"
+    fi
+  fi
+
   print_defers
 }
 
@@ -502,6 +527,8 @@ MODE="all"
 FEATURE_ID=""
 UNATTENDED=false
 ADMISSION_CONFIG=""
+ADMISSION_RESULT_FILE=""
+ADMISSION_RESULT_PATH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -525,8 +552,18 @@ while [[ $# -gt 0 ]]; do
       ADMISSION_CONFIG="${2:?--config requires a path}"
       shift 2
       ;;
+    --result-file)
+      # T4: admission writes its structured result here when it passes.
+      ADMISSION_RESULT_FILE="${2:?--result-file requires a path}"
+      shift 2
+      ;;
+    --result-path)
+      # T4: path discriminator the admission result should carry.
+      ADMISSION_RESULT_PATH="$2"
+      shift 2
+      ;;
     *)
-      echo "Usage: validate-spec.sh [--feature-id ID | --all] [--unattended [--config <path>]]"
+      echo "Usage: validate-spec.sh [--feature-id ID | --all] [--unattended [--config <path>] [--result-file <path> --result-path <path>]]"
       exit 1
       ;;
   esac
@@ -538,6 +575,14 @@ if [[ "$UNATTENDED" == "true" && "$MODE" != "single" ]]; then
 fi
 if [[ -n "$ADMISSION_CONFIG" && "$UNATTENDED" != "true" ]]; then
   echo "Usage: --config is only meaningful with --unattended (admission's effective config)"
+  exit 1
+fi
+if [[ -n "$ADMISSION_RESULT_FILE" && "$UNATTENDED" != "true" ]]; then
+  echo "Usage: --result-file is only meaningful with --unattended (admission result)"
+  exit 1
+fi
+if [[ -n "$ADMISSION_RESULT_PATH" && -z "$ADMISSION_RESULT_FILE" ]]; then
+  echo "Usage: --result-path requires --result-file"
   exit 1
 fi
 

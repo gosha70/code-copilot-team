@@ -1413,6 +1413,31 @@ assert_exit "terminated run refuses --resume (exit 1)" 1 "$RC"
 assert_contains "resume refusal names the terminal contract" "$OUTPUT" "terminal"
 rm -rf "$P"
 
+# done run resumed from wrong branch → "Run already complete", not branch mismatch.
+# The terminal short-circuit runs before branch binding.
+P=$(setup_project); single_phase "$P"
+LEDGER="$P/.cct/auto-build/demo-feat"
+mkdir -p "$LEDGER"
+NOW=$(date +%s)
+jq -n --argjson now "$NOW" \
+    '{schema_version:1, feature_id:"demo-feat", profile:"advisory",
+      status:"done", current_phase:1,
+      branch:"feature/demo-feat", branch_base_ref:"master",
+      phases:{"1":"done"}, caps:{max_phases:8, max_fix_sessions_per_phase:3,
+        max_wall_clock_sec:14400, max_cost_usd:25},
+      outcome:null, disposition_reason:null,
+      totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:$now},
+      milestones:{every_n_phases:0, last_paused_after_phase:0},
+      escalations:[], pr:{number:null, url:null},
+      preflight:{contract:null}, updated:"2026-01-01T00:00:00Z"}' > "$LEDGER/state.json"
+# Switch to a different branch so branch binding would fail
+git -C "$P" checkout -q -b other-branch
+run_driver "$P" --resume
+assert_exit "terminal done from wrong branch still reports done" 0 "$RC"
+assert_contains "done from wrong branch says complete" "$OUTPUT" "Run already complete"
+git -C "$P" checkout -q main-dev
+rm -rf "$P"
+
 # cap_exceeded → terminated_policy. Needs a working remote: the unattended
 # ladder pushes after phase 1, and the cap trips at phase 2's session
 # preflight — the push must not be the first breaker hit.
@@ -1446,11 +1471,20 @@ assert_eq "termination reason git_anomaly" "git_anomaly" \
 rm -f "$NOOP_SCRIPT"; rm -rf "$P"
 
 # provider_unavailable at preflight → terminated_policy
+# SC-6: successful admission evidence MUST survive a later termination.
+# The ledger must carry preflight.admission AND config.snapshot.json.
 P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
 REVIEW_PROFILE="$DOWN_PROFILE" run_driver "$P"
 assert_exit "unattended unhealthy reviewer terminates (exit 6)" 6 "$RC"
 assert_eq "termination reason provider_unavailable" "provider_unavailable" \
     "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
+# Admission evidence persisted despite termination
+jq -e '.preflight.admission.test_command.exit_code == 0' \
+    "$P/.cct/auto-build/demo-feat/state.json" >/dev/null 2>&1
+assert_exit "SC-6: admission accounting in termination ledger" 0 $?
+# Config snapshot persisted
+jq empty "$P/.cct/auto-build/demo-feat/config.snapshot.json" >/dev/null 2>&1
+assert_exit "SC-6: config snapshot in termination ledger" 0 $?
 rm -rf "$P"
 
 # Regression (review P1): a preflight termination while HEAD is the
@@ -1482,6 +1516,22 @@ assert_exit "dirty-worktree preflight termination exits 6" 6 "$RC"
 assert_eq "dirty worktree: HEAD unmoved" "$HEAD_BEFORE" "$(git -C "$P" rev-parse HEAD)"
 assert_contains "dirty worktree: operator file left uncommitted" \
     "$(git -C "$P" status --porcelain)" "scratch-work.txt"
+rm -rf "$P"
+
+# FR-2: attended dirty-worktree refusal leaves no ledger behind.
+# A corrected fresh retry must succeed.
+P=$(setup_project); single_phase "$P"
+printf 'scratch\n' > "$P/dirty-file"
+run_driver "$P"
+assert_exit "attended dirty worktree refuses (exit 1)" 1 "$RC"
+assert_contains "attended dirty worktree error message" "$OUTPUT" "not clean"
+LEDGER="$P/.cct/auto-build/demo-feat"
+assert_eq "attended dirty worktree: no ledger left behind" "0" \
+    "$([[ -f "$LEDGER/state.json" ]] && echo 1 || echo 0)"
+# Clean up and retry — must succeed (FR-2 byte-identical attended).
+rm -f "$P/dirty-file"
+run_driver "$P"
+assert_exit "attended retry after cleaning worktree succeeds" 0 "$RC"
 rm -rf "$P"
 
 # Regression (review P1): admission binds to the EFFECTIVE config — a
@@ -2452,6 +2502,444 @@ assert_exit "max-turns continuation run completes (exit 0)" 0 "$RC"
 assert_contains "continuation resumed the CLI session id from the array" \
     "$(cat "$ARGV_LOG")" "resume mock-session-1"
 rm -f "$MAXTURNS_SCRIPT" "$ARGV_LOG"; rm -rf "$P"
+
+# ══════════════════════════════════════════════════════════════
+echo "=== T4: preflight-result channel (#222) ==="
+# ══════════════════════════════════════════════════════════════
+
+# ── Schema existence and structure ──
+SCHEMA="$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json"
+jq empty "$SCHEMA" >/dev/null 2>&1; assert_exit "preflight-result schema exists and is valid JSON" 0 $?
+jq -e '.properties.schema_version' "$SCHEMA" >/dev/null 2>&1; assert_exit "schema has schema_version property" 0 $?
+jq -e '.properties.path.enum' "$SCHEMA" >/dev/null 2>&1; assert_exit "schema has path discriminator" 0 $?
+jq -e '.additionalProperties == false' "$SCHEMA" >/dev/null 2>&1; assert_exit "schema is closed" 0 $?
+jq -e '.oneOf | length == 5' "$SCHEMA" >/dev/null 2>&1; assert_exit "schema has five oneOf branches" 0 $?
+jq -e '.oneOf[] | select(.properties.path.const == "fresh-attended-block") | (.required | index("contract"))' "$SCHEMA" >/dev/null 2>&1
+assert_exit "fresh-attended-block requires contract" 0 $?
+jq -e '.oneOf[] | select(.properties.path.const == "fresh-unattended-block") | (.required | contains(["contract", "admission"]))' "$SCHEMA" >/dev/null 2>&1
+assert_exit "fresh-unattended-block requires both" 0 $?
+jq -e '.oneOf[] | select(.properties.path.const == "resume-unattended-block") | ((.allOf // []) | map(select(.not.required[] == "contract")) | length >= 1)' "$SCHEMA" >/dev/null 2>&1
+assert_exit "resume-unattended-block forbids contract" 0 $?
+jq -e '[(.oneOf[] | select(.properties.path.const | startswith("resume")))] | map((.allOf // []) | map(select(.not.required[] == "contract")) | length >= 1) | all' "$SCHEMA" >/dev/null 2>&1
+assert_exit "all resume paths forbid contract" 0 $?
+
+# ── Schema validation: validate_preflight_result rejects bad results ──
+# Source the driver's variable declarations and function definitions
+# (everything before the Main section divider) so we can call
+# validate_preflight_result directly. Substitute a dummy FEATURE_ID
+# to pass the top-level guard.
+DRIVER_FUNCS_V=$(mktemp)
+_stop_v=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop_v - 1)) "$DRIVER") > "$DRIVER_FUNCS_V"
+# shellcheck source=/dev/null
+source "$DRIVER_FUNCS_V"
+
+# Valid: admission-only result for fresh-unattended-noblock
+VALID=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-unattended-noblock",
+  admission:{test_command:{exit_code:0, duration_sec:5}}}' > "$VALID"
+RC=0; validate_preflight_result "$VALID" "fresh-unattended-noblock" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result accepts valid result" 0 "$RC"
+
+# Invalid: missing required admission section
+MISSING_ADM=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-unattended-noblock"}' > "$MISSING_ADM"
+RC=0; validate_preflight_result "$MISSING_ADM" "fresh-unattended-noblock" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects missing required admission" 1 "$RC"
+
+# Invalid: forbidden contract on a resume path
+FORBIDDEN_CT=$(mktemp)
+jq -n '{schema_version:1, path:"resume-unattended-noblock",
+  admission:{test_command:{exit_code:0, duration_sec:5}},
+  contract:{command:"x", artifact:"y", parser:"istanbul", timeout_sec:30,
+    floor_enforced_at:"landing", preset_id:null, preset_sha256:null,
+    baseline:null}}' > "$FORBIDDEN_CT"
+RC=0; validate_preflight_result "$FORBIDDEN_CT" "resume-unattended-noblock" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects forbidden contract" 1 "$RC"
+
+# Invalid: not JSON
+NOT_JSON=$(mktemp)
+echo "not valid json" > "$NOT_JSON"
+RC=0; validate_preflight_result "$NOT_JSON" "fresh-unattended-noblock" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects non-JSON" 1 "$RC"
+
+# Invalid: path mismatch
+PATH_MISMATCH=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-unattended-noblock",
+  admission:{test_command:{exit_code:0, duration_sec:5}}}' > "$PATH_MISMATCH"
+RC=0; validate_preflight_result "$PATH_MISMATCH" "resume-unattended-noblock" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects path mismatch" 1 "$RC"
+
+# ── SC-5d cross-row: valid fresh-attended-block (contract, no admission) ──
+# Greenfield: baseline:null, no max_regression_pct, at least one floor.
+VALID_FAB=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block",
+  contract:{command:"npm run cov", artifact:"coverage/out.json",
+    parser:"istanbul", timeout_sec:120, floor_enforced_at:"landing",
+    preset_id:null, preset_sha256:null, baseline:null,
+    min_line_pct:80}}' > "$VALID_FAB"
+RC=0; validate_preflight_result "$VALID_FAB" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result accepts valid fresh-attended-block" 0 "$RC"
+
+# ── SC-5d cross-row: reject fresh-attended-block with admission (forbidden) ──
+FAB_WITH_ADM=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block",
+  contract:{command:"npm run cov", artifact:"coverage/out.json",
+    parser:"istanbul", timeout_sec:120, floor_enforced_at:"landing",
+    preset_id:null, preset_sha256:null, baseline:null,
+    min_line_pct:80},
+  admission:{test_command:{exit_code:0, duration_sec:5}}}' > "$FAB_WITH_ADM"
+RC=0; validate_preflight_result "$FAB_WITH_ADM" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects admission on attended path" 1 "$RC"
+
+# ── SC-5d cross-row: reject fresh-attended-block missing contract ──
+FAB_NO_CT=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block"}' > "$FAB_NO_CT"
+RC=0; validate_preflight_result "$FAB_NO_CT" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects fresh-attended-block without contract" 1 "$RC"
+
+# ── SC-5d cross-row: valid fresh-unattended-block (both sections) ──
+VALID_FUB=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-unattended-block",
+  contract:{command:"npm run cov", artifact:"coverage/out.json",
+    parser:"lcov", timeout_sec:60, floor_enforced_at:"phase",
+    preset_id:"ml-app", preset_sha256:"abc123",
+    min_line_pct:80, max_regression_pct:5,
+    baseline:{line_pct:85.2, branch_pct:78.1}},
+  admission:{test_command:{exit_code:0, duration_sec:12}}}' > "$VALID_FUB"
+RC=0; validate_preflight_result "$VALID_FUB" "fresh-unattended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result accepts valid fresh-unattended-block" 0 "$RC"
+
+# ── Contract validation: reject no-floor contract ──
+NO_FLOOR=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block",
+  contract:{command:"x", artifact:"y",
+    parser:"istanbul", timeout_sec:30, floor_enforced_at:"landing",
+    preset_id:null, preset_sha256:null, baseline:null}}' > "$NO_FLOOR"
+RC=0; validate_preflight_result "$NO_FLOOR" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects no-floor contract" 1 "$RC"
+
+# ── Contract validation: reject mismatched preset (string + null) ──
+MISMATCHED_PRESET=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block",
+  contract:{command:"x", artifact:"y",
+    parser:"lcov", timeout_sec:30, floor_enforced_at:"landing",
+    preset_id:"ml-app", preset_sha256:null, baseline:null,
+    min_line_pct:80}}' > "$MISMATCHED_PRESET"
+RC=0; validate_preflight_result "$MISMATCHED_PRESET" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects mismatched preset pairing" 1 "$RC"
+
+# ── Contract validation: reject empty baseline object ──
+EMPTY_BASELINE=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block",
+  contract:{command:"x", artifact:"y",
+    parser:"istanbul", timeout_sec:30, floor_enforced_at:"landing",
+    preset_id:null, preset_sha256:null, baseline:{},
+    min_line_pct:80}}' > "$EMPTY_BASELINE"
+RC=0; validate_preflight_result "$EMPTY_BASELINE" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects empty baseline object" 1 "$RC"
+
+# ── Contract validation: reject max_regression_pct with greenfield ──
+GRNFIELD_REGR=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block",
+  contract:{command:"x", artifact:"y",
+    parser:"istanbul", timeout_sec:30, floor_enforced_at:"landing",
+    preset_id:null, preset_sha256:null, baseline:null,
+    min_line_pct:80, max_regression_pct:5}}' > "$GRNFIELD_REGR"
+RC=0; validate_preflight_result "$GRNFIELD_REGR" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects max_regression_pct with greenfield" 1 "$RC"
+
+# ── Contract validation: reject missing max_regression_pct with brownfield ──
+BRNFIELD_NOREGR=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block",
+  contract:{command:"x", artifact:"y",
+    parser:"istanbul", timeout_sec:30, floor_enforced_at:"landing",
+    preset_id:null, preset_sha256:null,
+    baseline:{line_pct:80}, min_line_pct:80}}' > "$BRNFIELD_NOREGR"
+RC=0; validate_preflight_result "$BRNFIELD_NOREGR" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects brownfield without max_regression_pct" 1 "$RC"
+
+# ── Contract validation: reject unknown contract key ──
+CT_UNKNOWN_KEY=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block",
+  contract:{command:"x", artifact:"y",
+    parser:"istanbul", timeout_sec:30, floor_enforced_at:"landing",
+    preset_id:null, preset_sha256:null, baseline:null,
+    min_line_pct:80, bogus_nested:true}}' > "$CT_UNKNOWN_KEY"
+RC=0; validate_preflight_result "$CT_UNKNOWN_KEY" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects unknown contract key" 1 "$RC"
+
+# ── Contract validation: reject missing baseline (null != missing) ──
+MISSING_BASELINE=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block",
+  contract:{command:"x", artifact:"y",
+    parser:"istanbul", timeout_sec:30, floor_enforced_at:"landing",
+    preset_id:null, preset_sha256:null,
+    min_line_pct:80}}' > "$MISSING_BASELINE"
+RC=0; validate_preflight_result "$MISSING_BASELINE" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects missing baseline field" 1 "$RC"
+
+# ── Contract validation: reject missing preset_id (null != missing) ──
+MISSING_PRESET=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block",
+  contract:{command:"x", artifact:"y",
+    parser:"istanbul", timeout_sec:30, floor_enforced_at:"landing",
+    preset_sha256:null, baseline:null,
+    min_line_pct:80}}' > "$MISSING_PRESET"
+RC=0; validate_preflight_result "$MISSING_PRESET" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects missing preset_id" 1 "$RC"
+
+# ── Contract validation: reject unknown baseline key ──
+BL_UNKNOWN_KEY=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-attended-block",
+  contract:{command:"x", artifact:"y",
+    parser:"istanbul", timeout_sec:30, floor_enforced_at:"landing",
+    preset_id:null, preset_sha256:null,
+    baseline:{line_pct:80, bogus:"extra"},
+    min_line_pct:80, max_regression_pct:5}}' > "$BL_UNKNOWN_KEY"
+RC=0; validate_preflight_result "$BL_UNKNOWN_KEY" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects unknown baseline key" 1 "$RC"
+
+# ── Admission validation: reject unknown admission.test_command key ──
+ADM_UNKNOWN_KEY=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-unattended-noblock",
+  admission:{test_command:{exit_code:0, duration_sec:5, bogus:true}}}' > "$ADM_UNKNOWN_KEY"
+RC=0; validate_preflight_result "$ADM_UNKNOWN_KEY" "fresh-unattended-noblock" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects unknown admission.test_command key" 1 "$RC"
+
+# ── Admission validation: reject fractional exit_code ──
+FRAC_EXIT=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-unattended-noblock",
+  admission:{test_command:{exit_code:1.5, duration_sec:5}}}' > "$FRAC_EXIT"
+RC=0; validate_preflight_result "$FRAC_EXIT" "fresh-unattended-noblock" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects fractional exit_code" 1 "$RC"
+
+# ── SC-5d: reject unknown top-level key ──
+UNKNOWN_KEY=$(mktemp)
+jq -n '{schema_version:1, path:"fresh-unattended-noblock",
+  admission:{test_command:{exit_code:0, duration_sec:5}},
+  bogus_field: "should be rejected"}' > "$UNKNOWN_KEY"
+RC=0; validate_preflight_result "$UNKNOWN_KEY" "fresh-unattended-noblock" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects unknown top-level key" 1 "$RC"
+
+# ── SC-5d: reject result for non-emitting path (resume-attended-block) ──
+NOEMIT=$(mktemp)
+jq -n '{schema_version:1, path:"resume-attended-block",
+  admission:{test_command:{exit_code:0, duration_sec:5}}}' > "$NOEMIT"
+RC=0; validate_preflight_result "$NOEMIT" "resume-attended-block" 2>/dev/null || RC=$?
+assert_exit "validate_preflight_result rejects non-emitting path" 1 "$RC"
+
+rm -f "$VALID" "$MISSING_ADM" "$FORBIDDEN_CT" "$NOT_JSON" "$PATH_MISMATCH" \
+    "$VALID_FAB" "$FAB_WITH_ADM" "$FAB_NO_CT" "$VALID_FUB" \
+    "$NO_FLOOR" "$MISMATCHED_PRESET" "$EMPTY_BASELINE" \
+    "$GRNFIELD_REGR" "$BRNFIELD_NOREGR" "$CT_UNKNOWN_KEY" \
+    "$MISSING_BASELINE" "$MISSING_PRESET" "$BL_UNKNOWN_KEY" "$ADM_UNKNOWN_KEY" \
+    "$FRAC_EXIT" "$UNKNOWN_KEY" "$NOEMIT" \
+    "$DRIVER_FUNCS_V"
+
+# ── FR-7b: resume no-block → legacy path, must not fail ──
+P=$(setup_project); single_phase "$P"
+run_driver "$P"   # first run → done
+# Create a fresh ledger-less state to simulate a parked/accepted run
+LEDGER="$P/.cct/auto-build/demo-feat"
+mkdir -p "$LEDGER"
+jq -n '{schema_version:1, feature_id:"demo-feat", profile:"advisory",
+  status:"milestone-paused", current_phase:1,
+  branch:"feature/demo-feat", branch_base_ref:"master",
+  phases:{"1":"done"}, caps:{max_phases:8, max_fix_sessions_per_phase:3,
+    max_wall_clock_sec:14400, max_cost_usd:25},
+  outcome:null, disposition_reason:null,
+  totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:'"$(date +%s)"'},
+  milestones:{every_n_phases:2, last_paused_after_phase:0},
+  escalations:[], pr:{number:null, url:null},
+  updated:"2026-01-01T00:00:00Z"}' > "$LEDGER/state.json"
+SUMMARY="$P/specs/demo-feat/automation-summary.md"
+echo "approved-by: test" >> "$SUMMARY"
+git -C "$P" add -A && git -C "$P" commit -q -m "signoff"
+run_driver "$P" --resume
+assert_exit "resume no-block legacy path succeeds" 0 "$RC"
+assert_contains "resume no-block completes" "$OUTPUT" "run complete"
+rm -rf "$P"
+
+# ── FR-7b / FR-7b0: resume with block + missing/corrupt frozen contract ──
+# The ledger must exist with a non-terminal status (milestone-paused) so the
+# resume dispatcher doesn't short-circuit before preflight_result_channel.
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.verification.coverage={command:"true",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+LEDGER2="$P/.cct/auto-build/demo-feat"
+mkdir -p "$LEDGER2"
+NOW=$(date +%s)
+jq -n --argjson now "$NOW" \
+    '{schema_version:1, feature_id:"demo-feat", profile:"advisory",
+      status:"milestone-paused", current_phase:1,
+      branch:"feature/demo-feat", branch_base_ref:"master",
+      phases:{"1":"done"}, caps:{max_phases:8, max_fix_sessions_per_phase:3,
+        max_wall_clock_sec:14400, max_cost_usd:25},
+      outcome:null, disposition_reason:null,
+      totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:$now},
+      milestones:{every_n_phases:2, last_paused_after_phase:0},
+      escalations:[], pr:{number:null, url:null},
+      updated:"2026-01-01T00:00:00Z"}' > "$LEDGER2/state.json"
+SUMMARY2="$P/specs/demo-feat/automation-summary.md"
+echo "approved-by: test" >> "$SUMMARY2"
+git -C "$P" add -A && git -C "$P" commit -q -m "signoff"
+# NO frozen-contract.json — simulate missing contract
+run_driver "$P" --resume
+assert_exit "resume with block + missing frozen contract fails closed" 1 "$RC"
+assert_contains "missing frozen contract names the file" "$OUTPUT" "frozen contract"
+rm -rf "$P"
+
+# Corrupt frozen contract
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.verification.coverage={command:"true",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+LEDGER3="$P/.cct/auto-build/demo-feat"
+mkdir -p "$LEDGER3"
+NOW=$(date +%s)
+jq -n --argjson now "$NOW" \
+    '{schema_version:1, feature_id:"demo-feat", profile:"advisory",
+      status:"milestone-paused", current_phase:1,
+      branch:"feature/demo-feat", branch_base_ref:"master",
+      phases:{"1":"done"}, caps:{max_phases:8, max_fix_sessions_per_phase:3,
+        max_wall_clock_sec:14400, max_cost_usd:25},
+      outcome:null, disposition_reason:null,
+      totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:$now},
+      milestones:{every_n_phases:2, last_paused_after_phase:0},
+      escalations:[], pr:{number:null, url:null},
+      updated:"2026-01-01T00:00:00Z"}' > "$LEDGER3/state.json"
+echo "not json" > "$LEDGER3/frozen-contract.json"
+SUMMARY3="$P/specs/demo-feat/automation-summary.md"
+echo "approved-by: test" >> "$SUMMARY3"
+git -C "$P" add -A && git -C "$P" commit -q -m "signoff"
+run_driver "$P" --resume
+assert_exit "resume with block + corrupt frozen contract fails closed" 1 "$RC"
+assert_contains "corrupt frozen contract error message" "$OUTPUT" "not valid JSON"
+rm -rf "$P"
+
+# ── FR-9e (SC-5f): live-config-edit regression — deleting the
+#    verification.coverage block between runs does NOT turn
+#    resume-attended-block into a no-block path. The frozen
+#    config.snapshot.json is authoritative on resume. ──
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.verification.coverage={command:"true",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+LEDGER4="$P/.cct/auto-build/demo-feat"
+mkdir -p "$LEDGER4"
+NOW=$(date +%s)
+# config.snapshot.json: the frozen config WITH verification.coverage.
+jq -n '{schema_version:1, profile:"advisory",
+  branch:{name:"feature/demo-feat",base:"main-dev"},
+  test:{command:"bash ./project-test.sh",timeout_sec:60},
+  verification:{coverage:{command:"true",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}},
+  review:{reviewers:[{provider:"mock",specialization:"correctness",scope:"both",gating:true}]},
+  caps:{wall_clock_sec:3600,cost_usd:5},
+  phases:{milestone_every:2,max_phases:8},
+  build:{max_turns:10,max_fix_sessions_per_phase:2}}' > "$LEDGER4/config.snapshot.json"
+jq -n --argjson now "$NOW" \
+    '{schema_version:1, feature_id:"demo-feat", profile:"advisory",
+      status:"milestone-paused", current_phase:1,
+      branch:"feature/demo-feat", branch_base_ref:"master",
+      phases:{"1":"done"}, caps:{max_phases:8, max_fix_sessions_per_phase:3,
+        max_wall_clock_sec:14400, max_cost_usd:25},
+      outcome:null, disposition_reason:null,
+      totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:$now},
+      milestones:{every_n_phases:2, last_paused_after_phase:0},
+      escalations:[], pr:{number:null, url:null},
+      preflight:{contract:true},
+      updated:"2026-01-01T00:00:00Z"}' > "$LEDGER4/state.json"
+# NOW delete the block from the LIVE automation.json —
+# FR-9e says this must NOT change the resume path.
+cfg_set "$P" 'del(.verification)'
+SUMMARY4="$P/specs/demo-feat/automation-summary.md"
+echo "approved-by: test" >> "$SUMMARY4"
+git -C "$P" add -A && git -C "$P" commit -q -m "signoff"
+# No frozen-contract.json — FR-7b should demand it because the FROZEN
+# snapshot says this is a block-bearing run, even though live config
+# no longer carries verification.coverage.
+run_driver "$P" --resume
+assert_exit "FR-9e: resume with block in frozen snapshot fails despite live config edit" 1 "$RC"
+assert_contains "FR-9e: missing frozen contract named in error" "$OUTPUT" "frozen contract"
+rm -rf "$P"
+
+# ── T4: --result-file writes valid admission result on success ──
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
+RESULT_FILE=$(mktemp)
+RESULT_PATH="fresh-unattended-noblock"
+CCT_SPECS_DIR="$P/specs" bash "$SCRIPT_DIR/../scripts/validate-spec.sh" \
+    --feature-id demo-feat --unattended \
+    --config "$P/specs/demo-feat/automation.json" \
+    --result-file "$RESULT_FILE" --result-path "$RESULT_PATH" >/dev/null 2>&1
+RC2=$?
+assert_exit "--result-file: unattended admission with result file succeeds" 0 "$RC2"
+# Verify the result file was written with the right shape
+jq -e '.schema_version == 1 and .path == "fresh-unattended-noblock" and
+    .admission.test_command.exit_code == 0 and
+    .admission.test_command.duration_sec >= 0' "$RESULT_FILE" >/dev/null 2>&1
+assert_exit "--result-file: written file has valid schema shape" 0 $?
+rm -f "$RESULT_FILE"
+rm -rf "$P"
+
+# ── T4: admission result is imported into ledger state ──
+# Runs the driver (unattended, no block) and asserts that
+# preflight.admission survives the channel → import handoff into
+# the ledger, regardless of the run's final outcome.
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+REVIEW_PROFILE="$PASS_PROFILE" run_driver "$P"
+# The run may terminate (exit 6) due to gh/remote unavailability during
+# finalize — the admission import happens before that. Exit 0 (done)
+# or exit 6 (terminated_policy) are both valid admission-import paths.
+if [[ "$RC" -ne 0 && "$RC" -ne 6 ]]; then
+    echo "  FAIL: T4: unattended run unexpected exit $RC (expected 0 or 6)"
+    FAIL=$((FAIL + 1))
+else
+    echo "  PASS: T4: unattended run exit $RC (admission path)"
+    PASS=$((PASS + 1))
+fi
+STATE="$P/.cct/auto-build/demo-feat/state.json"
+jq -e '.preflight.admission.test_command.exit_code == 0 and
+    .preflight.admission.test_command.duration_sec >= 0' "$STATE" >/dev/null 2>&1
+assert_exit "T4: preflight.admission is imported into ledger" 0 $?
+rm -rf "$P"
+
+# ── FR-9b: reset_run_clocks accepts explicit timestamp ──
+P=$(setup_project); single_phase "$P"
+TIMESTAMP=1700000000
+# Run once to create the ledger skeleton
+run_driver "$P"
+LEDGER="$P/.cct/auto-build/demo-feat"
+
+# Source the driver's variable declarations and function definitions
+# (everything before the Main section divider) so we can call
+# reset_run_clocks directly rather than manually editing JSON.
+# Substitute a dummy FEATURE_ID to pass the top-level guard.
+DRIVER_FUNCS=$(mktemp)
+_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
+# shellcheck source=/dev/null
+source "$DRIVER_FUNCS"
+# Point STATE/EVENTS at the fixture
+STATE="$LEDGER/state.json"
+EVENTS="$LEDGER/events.jsonl"
+DRY_RUN=false
+
+# Call the real function with an explicit timestamp
+reset_run_clocks "$TIMESTAMP"
+ACTUAL=$(jq -r '.totals.started_epoch' "$STATE")
+assert_eq "reset_run_clocks stores explicit timestamp" "$TIMESTAMP" "$ACTUAL"
+
+# Default (no argument) uses now_epoch
+NOW_BEFORE=$(date +%s)
+reset_run_clocks
+NOW_AFTER=$(date +%s)
+ACTUAL2=$(jq -r '.totals.started_epoch' "$STATE")
+if [[ "$ACTUAL2" -ge "$NOW_BEFORE" && "$ACTUAL2" -le "$NOW_AFTER" ]]; then
+    echo "  PASS: reset_run_clocks default uses now_epoch ($ACTUAL2)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: reset_run_clocks default timestamp ($ACTUAL2) not in [$NOW_BEFORE, $NOW_AFTER]"
+    FAIL=$((FAIL + 1))
+fi
+
+rm -f "$DRIVER_FUNCS"
+rm -rf "$P"
 
 echo ""
 
