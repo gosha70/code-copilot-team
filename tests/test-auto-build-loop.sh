@@ -65,6 +65,17 @@ cat > "$MOCK_BIN/claude" << 'MOCK'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then echo "mock-claude 0.0.1"; exit 0; fi
 printf 'ARGV %s\n' "$*" >> "${MOCK_CLAUDE_ARGV_LOG:-/dev/null}"
+# #234: the real CLI reads the prompt from stdin. Capturing it is what makes
+# the oversized-prompt tests real — without this the mock passes whether or not
+# the driver actually delivers the prompt. Opt-in so other tests are unaffected.
+if [[ -n "${MOCK_CLAUDE_STDIN_LOG:-}" ]]; then
+    MOCK_STDIN_TMP=$(mktemp)
+    cat > "$MOCK_STDIN_TMP"
+    printf '%s %s\n' "$(wc -c < "$MOCK_STDIN_TMP" | tr -d ' ')" \
+        "$( { shasum -a 256 2>/dev/null || sha256sum; } < "$MOCK_STDIN_TMP" | cut -d' ' -f1)" \
+        >> "$MOCK_CLAUDE_STDIN_LOG"
+    rm -f "$MOCK_STDIN_TMP"
+fi
 COUNTER_FILE="${MOCK_CLAUDE_COUNTER:-/tmp/mock-claude-count}"
 COUNT=$(( $(cat "$COUNTER_FILE" 2>/dev/null || echo 0) + 1 ))
 echo "$COUNT" > "$COUNTER_FILE"
@@ -429,6 +440,16 @@ export MOCK_CLAUDE_SCRIPT="$DEFAULT_SCRIPT"
 cat > "$MOCK_BIN/pi-code" << 'MOCK'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "version" ]]; then echo "pi-code mock 0.0.1"; exit 0; fi
+# #234: same stdin capture as the mock claude — `pi -p` reads the prompt from
+# stdin, so the pi backend's oversized-prompt test must prove it arrived.
+if [[ -n "${MOCK_PI_STDIN_LOG:-}" ]]; then
+    MOCK_STDIN_TMP=$(mktemp)
+    cat > "$MOCK_STDIN_TMP"
+    printf '%s %s\n' "$(wc -c < "$MOCK_STDIN_TMP" | tr -d ' ')" \
+        "$( { shasum -a 256 2>/dev/null || sha256sum; } < "$MOCK_STDIN_TMP" | cut -d' ' -f1)" \
+        >> "$MOCK_PI_STDIN_LOG"
+    rm -f "$MOCK_STDIN_TMP"
+fi
 COUNTER_FILE="${MOCK_PI_COUNTER:-/tmp/mock-pi-count}"
 COUNT=$(( $(cat "$COUNTER_FILE" 2>/dev/null || echo 0) + 1 ))
 echo "$COUNT" > "$COUNTER_FILE"
@@ -3034,6 +3055,86 @@ assert_eq "#234: the fix prompt is far smaller than the findings file" "smaller"
     "$([[ "$(wc -c < "$P/fix-prompt.txt")" -lt 20000 ]] && echo smaller || echo large)"
 rm -f "$DRIVER_FUNCS"
 rm -rf "$P"
+
+# ── An unparseable findings artifact refuses the fix session ──
+# The strip must fail closed: falling back to the raw file would resend the
+# very transcript this fix exists to keep off the prompt.
+P=$(mktemp -d)
+DRIVER_FUNCS=$(mktemp)
+_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
+# shellcheck source=/dev/null
+source "$DRIVER_FUNCS"
+printf 'this is not json { "raw_output": "SECRET-TRANSCRIPT-MARKER"' > "$P/corrupt.json"
+CFP_RC=0
+compose_fix_prompt "$P/corrupt.json" 1 "$P/fix-prompt.txt" 2>/dev/null || CFP_RC=$?
+assert_eq "#234: corrupt findings refuse the fix prompt (non-zero)" "refused" \
+    "$([[ "$CFP_RC" -ne 0 ]] && echo refused || echo composed)"
+assert_eq "#234: corrupt findings never resend the transcript" "absent" \
+    "$(grep -q 'SECRET-TRANSCRIPT-MARKER' "$P/fix-prompt.txt" 2>/dev/null && echo present || echo absent)"
+rm -f "$DRIVER_FUNCS"
+rm -rf "$P"
+
+# ── The prompt actually ARRIVES on stdin ──
+# Without this the redirect could be deleted and every test above still passes:
+# the mock only ever emitted success. Assert the exact bytes the driver composed.
+P=$(setup_project); single_phase "$P"
+MOCK_CLAUDE_STDIN_LOG=$(mktemp); export MOCK_CLAUDE_STDIN_LOG
+run_driver "$P"
+BUILD_PROMPT="$P/.cct/auto-build/demo-feat/phase-1/build-prompt.md"
+PROMPT_SHA=$( { shasum -a 256 2>/dev/null || sha256sum; } < "$BUILD_PROMPT" | cut -d' ' -f1)
+assert_eq "#234: the composed build prompt reached claude on stdin" "delivered" \
+    "$(grep -q " $PROMPT_SHA\$" "$MOCK_CLAUDE_STDIN_LOG" && echo delivered || echo missing)"
+assert_eq "#234: stdin was non-empty for every session" "all-nonempty" \
+    "$(awk '$1 == 0 { bad = 1 } END { print (bad ? "empty-session" : "all-nonempty") }' "$MOCK_CLAUDE_STDIN_LOG")"
+rm -f "$MOCK_CLAUDE_STDIN_LOG"; unset MOCK_CLAUDE_STDIN_LOG
+rm -rf "$P"
+
+# ── The resumed (--resume) continuation delivers its prompt too ──
+P=$(setup_project); single_phase "$P"
+RESUME_SCRIPT=$(mktemp)
+cat > "$RESUME_SCRIPT" << 'SCRIPTLET'
+if [[ "$MOCK_SESSION_N" == "1" ]]; then
+    export MOCK_CLAUDE_SUBTYPE=error_max_turns
+fi
+if [[ ! -f demo.sh ]]; then
+    printf '#!/usr/bin/env bash\necho demo\n' > demo.sh
+    chmod +x demo.sh
+fi
+SCRIPTLET
+MOCK_CLAUDE_STDIN_LOG=$(mktemp); export MOCK_CLAUDE_STDIN_LOG
+MOCK_CLAUDE_SCRIPT="$RESUME_SCRIPT" run_driver "$P"
+RESUME_PROMPT="$P/.cct/auto-build/demo-feat/phase-1/build-prompt.md"
+RESUME_SHA=$( { shasum -a 256 2>/dev/null || sha256sum; } < "$RESUME_PROMPT" | cut -d' ' -f1)
+assert_eq "#234: the --resume continuation also received its prompt on stdin" "twice" \
+    "$([[ "$(grep -c " $RESUME_SHA\$" "$MOCK_CLAUDE_STDIN_LOG")" -ge 2 ]] && echo twice || echo once-or-none)"
+rm -f "$MOCK_CLAUDE_STDIN_LOG" "$RESUME_SCRIPT"; unset MOCK_CLAUDE_STDIN_LOG
+rm -rf "$P"
+
+# ── The pi backend has the same exposure and the same fix ──
+PPI=$(setup_project); single_phase "$PPI"
+ARGMAX=$(getconf ARG_MAX 2>/dev/null || echo 1048576)
+BULK_LINES=$(( ARGMAX / 50 + 2000 ))
+awk -v n="$BULK_LINES" \
+    'BEGIN { for (i = 0; i < n; i++) print "- FR-X" i ": constraint text that makes this spec large " i }' \
+    >> "$PPI/specs/demo-feat/spec.md"
+git -C "$PPI" add -A && git -C "$PPI" commit -q -m "oversized spec fixture"
+PISTDIN=$(mktemp); PICOUNT=$(mktemp); echo 0 > "$PICOUNT"
+RC=0
+OUTPUT=$(cd "$PPI" && CCT_PROJECT_DIR="$PPI" CCT_AUTOBUILD_BACKEND=pi \
+    CCT_PI_BIN="$MOCK_BIN/pi-code" MOCK_PI_COUNTER="$PICOUNT" MOCK_PI_SCRIPT="$DEFAULT_SCRIPT" \
+    MOCK_PI_STDIN_LOG="$PISTDIN" \
+    CCT_CLAUDE_BIN="$MOCK_BIN/claude" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$DRIVER" demo-feat 2>&1) || RC=$?
+assert_exit "#234: pi backend runs an oversized build prompt" 0 "$RC"
+assert_eq "#234: pi backend did not abort before a result" "absent" \
+    "$(grep -qE 'build_session_error|exited 126' <<< "$OUTPUT" && echo present || echo absent)"
+PI_PROMPT="$PPI/.cct/auto-build/demo-feat/phase-1/build-prompt.md"
+PI_SHA=$( { shasum -a 256 2>/dev/null || sha256sum; } < "$PI_PROMPT" | cut -d' ' -f1)
+assert_eq "#234: the composed build prompt reached pi on stdin" "delivered" \
+    "$(grep -q " $PI_SHA\$" "$PISTDIN" && echo delivered || echo missing)"
+rm -f "$PISTDIN" "$PICOUNT"
+rm -rf "$PPI"
 
 echo ""
 

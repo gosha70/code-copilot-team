@@ -1561,16 +1561,20 @@ run_pi_session() {
     # a token budget passed to the runtime bound the session.
     local prompt_file="$1" result_file="$2" resume_id="${3:-}"
     check_caps
-    local pi_args=(--mode json -p "$(cat "$prompt_file")")
+    # Prompt on stdin, never argv — same ARG_MAX / E2BIG exposure as the claude
+    # backend. `pi -p` with no positional message reads stdin; verified against
+    # the real pi CLI, which echoes the piped text back as the user message.
+    local pi_args=(--mode json -p)
     [[ -n "$resume_id" ]] && pi_args+=(--resume "$resume_id")
     local runner=(env CCT_PEER_REVIEW_ENABLED=false CCT_AUTO_BUILD=1 \
         CCT_BUDGET_TOKENS="$BUDGET_TOKENS" "$PI_BIN" "${pi_args[@]}")
     local rc=0
     if command -v timeout &>/dev/null && [[ "${SESSION_TIMEOUT:-0}" -gt 0 ]]; then
         ( cd "$PROJECT_DIR" && timeout "$SESSION_TIMEOUT" "${runner[@]}" \
-            > "$result_file" 2> "$result_file.stderr" ) || rc=$?
+            < "$prompt_file" > "$result_file" 2> "$result_file.stderr" ) || rc=$?
     else
-        ( cd "$PROJECT_DIR" && "${runner[@]}" > "$result_file" 2> "$result_file.stderr" ) || rc=$?
+        ( cd "$PROJECT_DIR" && "${runner[@]}" \
+            < "$prompt_file" > "$result_file" 2> "$result_file.stderr" ) || rc=$?
     fi
     if [[ $rc -eq 124 ]]; then
         dispose "build_session_timeout" "pi session exceeded ${SESSION_TIMEOUT}s (C-5 budget)" \
@@ -1706,6 +1710,11 @@ init_review_state() {
 compose_fix_prompt() {
     # compose_fix_prompt <findings-file> <round> <out-file> [advisory-findings-file]
     local findings="$1" round="$2" out="$3" advisory="${4:-}"
+    # Fail closed: an unparseable findings artifact must refuse the fix session,
+    # never fall back to the raw file — that would resend the very transcript
+    # this strip exists to keep off the prompt.
+    local trimmed
+    trimmed=$(jq 'del(.raw_output)' "$findings") || return 1
     {
         echo "# Auto-build fix session: address review round $round findings"
         echo
@@ -1719,9 +1728,9 @@ compose_fix_prompt() {
         echo "  short rationale. Leave commit_ref fields empty — the driver fills them."
         echo
         echo "## Findings (JSON)"
-        # Drop raw_output: it is the reviewer's full transcript, routinely >1MB,
-        # and the fixer needs only the structured findings (a few KB).
-        jq 'del(.raw_output)' "$findings" 2>/dev/null || cat "$findings"
+        # raw_output — the reviewer's full transcript, routinely >1MB — is already
+        # stripped above; the fixer needs only the structured findings (a few KB).
+        printf '%s\n' "$trimmed"
         if [[ -n "$advisory" && -f "$advisory" ]] \
            && [[ "$(jq 'length' "$advisory" 2>/dev/null || echo 0)" -gt 0 ]]; then
             echo
@@ -1934,7 +1943,8 @@ run_review_loop() {
                 # them into the fix prompt. Advisory reviewers never block.
                 local advf="$phase_dir/advisory-findings-$round.json"
                 run_advisory_pass "$n" "$base_ref" "$round" "$phase_dir" "$advf"
-                compose_fix_prompt "$findings" "$round" "$fixp" "$advf"
+                compose_fix_prompt "$findings" "$round" "$fixp" "$advf" \
+                    || dispose "build_session_error" "findings artifact is not valid JSON, refusing to compose a fix prompt from it (phase $n round $round, file: $findings)" "null"
                 run_session "$fixp" "$fixr"
                 [[ "$SESSION_SUBTYPE" == "success" ]] || dispose "build_session_error" "fix session subtype=$SESSION_SUBTYPE (phase $n round $round)" "null"
                 local tlog="$phase_dir/test-fix-$fix_count.log"
