@@ -2992,6 +2992,10 @@ assert_exit "T5: greenfield contract has null preset provenance" 0 $?
 rm -rf "$P"
 
 # ── Brownfield: baseline:admission — captures baseline coverage ──
+# The baseline must be frozen from branch.base, NOT from HEAD. The fixture
+# therefore diverges the two: base 'main-dev' reports 85.5/72.3 while the
+# checked-out feature branch reports 42.5/11.25, so a HEAD-based capture
+# (the pre-fix behaviour) fails the baseline assertion below.
 P=$(setup_project); single_phase "$P"
 # The contract initialiser runs the coverage command inside a throwaway
 # worktree.  Write a helper script that produces a valid artifact.
@@ -2999,17 +3003,349 @@ printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:85.5},branches:{pct:72.3}
 chmod +x "$P/make-coverage.sh"
 git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "add coverage helper"
 cfg_set "$P" '.verification.coverage={command:"./make-coverage.sh",artifact:"cov.json",parser:"istanbul",baseline:"admission",min_line_pct:70,max_regression_pct:5}'
+# Diverge HEAD from the base: same helper, different numbers.
+git -C "$P" checkout -q -b feature/demo-feat
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:42.5},branches:{pct:11.25}}}" > cov.json\n' > "$P/make-coverage.sh"
+git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "feature-branch coverage helper"
+# Fixture guard: prove HEAD really does report something else, so the
+# baseline assertion below is load-bearing rather than tautological.
+HEAD_COV_DIR=$(mktemp -d)
+cp "$P/make-coverage.sh" "$HEAD_COV_DIR/" && ( cd "$HEAD_COV_DIR" && ./make-coverage.sh )
+assert_eq "T5: brownfield fixture — HEAD coverage differs from base" "42.5" \
+    "$(jq -r '.total.lines.pct' "$HEAD_COV_DIR/cov.json" 2>/dev/null)"
+rm -rf "$HEAD_COV_DIR"
 run_driver "$P"
 assert_exit "T5: brownfield run completes" 0 "$RC"
 LEDGER="$P/.cct/auto-build/demo-feat"
-# Frozen contract must have captured baseline
+# Frozen contract must carry the BASE branch's coverage, not HEAD's.
 jq -e '.baseline.line_pct == 85.5 and .baseline.branch_pct == 72.3' \
     "$LEDGER/frozen-contract.json" >/dev/null 2>&1
-assert_exit "T5: brownfield frozen contract has captured baseline" 0 $?
+assert_exit "T5: brownfield baseline captured from branch.base, not HEAD" 0 $?
 # max_regression_pct must be present (brownfield requires it)
 jq -e '.max_regression_pct == 5' \
     "$LEDGER/frozen-contract.json" >/dev/null 2>&1
 assert_exit "T5: brownfield contract has max_regression_pct" 0 $?
+rm -rf "$P"
+
+# ── Ordinary refusal on a coverage path strands no ledger ──
+# Coverage paths persist the ledger BEFORE preflight so a policy
+# termination has somewhere to record evidence. An ORDINARY refusal
+# (exit 1) must still leave nothing durable behind — otherwise the
+# corrected rerun is met with "ledger already exists".
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.verification.coverage={command:"true",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+printf 'scratch\n' > "$P/dirty-file"
+run_driver "$P"
+LEDGER="$P/.cct/auto-build/demo-feat"
+assert_exit "T5: coverage-path dirty worktree refuses (exit 1)" 1 "$RC"
+assert_contains "T5: coverage-path dirty worktree message" "$OUTPUT" "not clean"
+assert_eq "T5: coverage-path refusal leaves no ledger" "0" \
+    "$(ls -A "$LEDGER" 2>/dev/null | wc -l | tr -d ' ')"
+# Corrected rerun: the stranded ledger must not block it.
+rm -f "$P/dirty-file"
+run_driver "$P"
+assert_exit "T5: corrected rerun after coverage-path refusal completes" 0 "$RC"
+jq -e '.command == "true" and .baseline == null' \
+    "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "T5: corrected rerun froze its own contract" 0 $?
+rm -rf "$P"
+
+# ── Governance gates precede every producer ──
+# The contract initialiser executes the project's own coverage command.
+# A plan that was never approved must be refused BEFORE that happens —
+# an unapproved run must not get to run project code at all.
+P=$(setup_project draft); single_phase "$P"
+COV_MARKER=$(mktemp -u)
+printf '#!/usr/bin/env bash\ntouch "%s"\njq -n "{total:{lines:{pct:85.5},branches:{pct:72.3}}}" > cov.json\n' \
+    "$COV_MARKER" > "$P/make-coverage.sh"
+chmod +x "$P/make-coverage.sh"
+git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "add coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-coverage.sh",artifact:"cov.json",parser:"istanbul",baseline:"admission",min_line_pct:70,max_regression_pct:5}'
+run_driver "$P"
+assert_exit "T5: draft plan on a brownfield path refuses (exit 1)" 1 "$RC"
+assert_contains "T5: draft plan cites the Plan Approval Gate" "$OUTPUT" "Plan Approval Gate"
+assert_eq "T5: draft plan — coverage command never executed" "absent" \
+    "$([[ -e "$COV_MARKER" ]] && echo present || echo absent)"
+rm -f "$COV_MARKER"
+rm -rf "$P"
+
+# ── The ledger carries the writing attempt's id ──
+# The ownership guard is only as good as the stamp it compares against:
+# a real run must persist a non-empty attempt_id that survives to the
+# end of the run, and two runs must never share one.
+P=$(setup_project); single_phase "$P"
+run_driver "$P"
+assert_exit "T5: attempt-id fixture run completes" 0 "$RC"
+ATTEMPT_1=$(jq -r '.attempt_id // empty' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)
+assert_eq "T5: ledger stamps a non-empty attempt_id" "yes" \
+    "$([[ -n "$ATTEMPT_1" ]] && echo yes || echo no)"
+rm -rf "$P"
+P=$(setup_project); single_phase "$P"
+run_driver "$P"
+ATTEMPT_2=$(jq -r '.attempt_id // empty' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)
+assert_eq "T5: a separate run gets a distinct attempt_id" "distinct" \
+    "$([[ -n "$ATTEMPT_2" && "$ATTEMPT_1" != "$ATTEMPT_2" ]] && echo distinct || echo same)"
+rm -rf "$P"
+
+# ── Rollback ownership: a concurrent attempt's ledger must survive ──
+# Arming records intent only. By the time the rollback fires, another
+# attempt may have won the race and published a live ledger at the same
+# path — deleting it because "the directory was absent when I looked"
+# would destroy a healthy run. Only the attempt stamped in state.json
+# may remove anything. Exercised directly against the driver functions.
+# A real project: the rival-initialiser probe below must be able to
+# publish a genuine ledger, or "it published nothing" proves nothing.
+P=$(setup_project)
+LEDGER="$P/.cct/auto-build/demo-feat"
+DRIVER_FUNCS=$(mktemp)
+_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
+# shellcheck source=/dev/null
+source "$DRIVER_FUNCS"
+LEDGER_DIR="$LEDGER"
+STATE="$LEDGER/state.json"
+DRY_RUN=false
+
+# Attempt A arms while no ledger directory exists yet.
+ATTEMPT_ID="attempt-A"
+arm_ledger_rollback
+# Concurrent attempt B wins the race and publishes its own ledger.
+mkdir -p "$LEDGER"
+jq -n '{schema_version:1, attempt_id:"attempt-B", status:"preflight"}' > "$STATE"
+printf 'B\n' > "$LEDGER/events.jsonl"
+# A refuses and rolls back — none of B's ledger may be touched.
+rollback_fresh_ledger
+assert_eq "T5: rollback spares a concurrent attempt's state.json" "attempt-B" \
+    "$(jq -r '.attempt_id // empty' "$STATE" 2>/dev/null)"
+assert_eq "T5: rollback spares a concurrent attempt's journal" "present" \
+    "$([[ -f "$LEDGER/events.jsonl" ]] && echo present || echo absent)"
+# The owning attempt DOES roll its own ledger back.
+ATTEMPT_ID="attempt-B"
+LEDGER_ROLLBACK_ARMED=true
+rollback_fresh_ledger
+assert_eq "T5: rollback removes the owning attempt's ledger" "0" \
+    "$(ls -A "$LEDGER" 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "T5: rollback leaves no lock behind" "absent" \
+    "$([[ -d "${LEDGER}.init.lock" ]] && echo present || echo absent)"
+
+# ── The lock is an atomic claim, not a check ──
+# Identity (attempt_id) says WHOSE ledger it is; it cannot say that no
+# one else is mid-write. Only an atomic claim can, and every creator plus
+# the rollback must contend on the same one — otherwise "read the owner"
+# and "delete the files" are two steps a rival initialiser slips between.
+LEDGER_LOCK_WAIT_SEC=1
+LOCK_PROBE=$(mktemp)
+# Inputs arrive by environment, and $@ is cleared before sourcing: the
+# driver parses its own argv at load time and would reject the probe's.
+cat > "$LOCK_PROBE" << 'PROBE'
+set --
+# shellcheck source=/dev/null
+source "$PROBE_FUNCS"
+PROJECT_DIR="$PROBE_PROJECT"
+FEATURE_ID="demo-feat"
+LEDGER_DIR="$PROBE_LEDGER"
+STATE="$LEDGER_DIR/state.json"
+EVENTS="$LEDGER_DIR/events.jsonl"
+CONFIG_SNAPSHOT="$PROBE_PROJECT/specs/demo-feat/automation.json"
+TEMP_CONFIG=""
+PENDING_EVENTS=""
+PROFILE="advisory"
+BRANCH_NAME="feature/demo-feat"
+MAX_PHASES=8; MAX_FIX_SESSIONS=2
+CAP_WALL_CLOCK=3600; CAP_COST=5; MILESTONE_EVERY=0
+DRY_RUN=false
+RESUME=false
+ATTEMPT_ID="rival"
+LEDGER_LOCK_WAIT_SEC=1
+LEDGER_LOCK_HELD=false
+LEDGER_ROLLBACK_ARMED=false
+SPEC_DIR="$PROBE_PROJECT/specs/demo-feat"
+SUMMARY_MD="$SPEC_DIR/automation-summary.md"
+BRANCH_BASE="main-dev"
+CURRENT_PHASE=0
+CAN_PUSH=false
+NOTIFY_OK=false
+case "$PROBE_MODE" in
+    acquire) ledger_lock_acquire && echo acquired || echo refused ;;
+    init)    init_ledger && echo initialised ;;
+    park)    park "probe_reason" "probe detail" "null" ;;
+esac
+PROBE
+
+# 1. Exclusivity holds across processes, not just within one.
+ATTEMPT_ID="attempt-A"
+LEDGER_LOCK_HELD=false
+ledger_lock_acquire
+assert_eq "T5: an attempt can claim the ledger lock" "held" \
+    "$([[ "$LEDGER_LOCK_HELD" == "true" ]] && echo held || echo unheld)"
+assert_eq "T5: a rival process cannot claim the held lock" "refused" \
+    "$(PROBE_FUNCS="$DRIVER_FUNCS" PROBE_PROJECT="$P" PROBE_LEDGER="$LEDGER" PROBE_MODE=acquire \
+        bash "$LOCK_PROBE" 2>/dev/null)"
+
+# 2. Every creator contends: a rival initialiser is excluded outright,
+#    so it can never publish a ledger inside another attempt's window.
+RIVAL_RC=0
+RIVAL_OUT=$(PROBE_FUNCS="$DRIVER_FUNCS" PROBE_PROJECT="$P" PROBE_LEDGER="$LEDGER" PROBE_MODE=init \
+    bash "$LOCK_PROBE" 2>&1) || RIVAL_RC=$?
+assert_exit "T5: a rival initialiser refuses while the lock is held" 1 "$RIVAL_RC"
+assert_contains "T5: the refusal names the lock" "$RIVAL_OUT" "init.lock"
+assert_eq "T5: the excluded rival published no ledger" "absent" \
+    "$([[ -f "$LEDGER/state.json" ]] && echo present || echo absent)"
+# Control: the SAME probe publishes a real ledger once the lock is free,
+# so the assertion above is exclusion — not a probe that never works.
+ledger_lock_release
+FREE_RC=0
+PROBE_FUNCS="$DRIVER_FUNCS" PROBE_PROJECT="$P" PROBE_LEDGER="$LEDGER" PROBE_MODE=init \
+    bash "$LOCK_PROBE" >/dev/null 2>&1 || FREE_RC=$?
+assert_exit "T5: the same probe initialises when the lock is free" 0 "$FREE_RC"
+assert_eq "T5: the unblocked probe published a real ledger" "rival" \
+    "$(jq -r '.attempt_id // empty' "$LEDGER/state.json" 2>/dev/null)"
+rm -rf "$LEDGER"
+ledger_lock_acquire
+
+# 2b. park()/terminate_policy() reach write_ledger_skeleton directly, so
+#     they are the second creator. Blocked from the lock, they must NOT
+#     fall back to writing the shared state.json — evidence is mandatory,
+#     but corrupting a rival's ledger to record it is not the way.
+PARK_RC=0
+PARK_OUT=$(PROBE_FUNCS="$DRIVER_FUNCS" PROBE_PROJECT="$P" PROBE_LEDGER="$LEDGER" PROBE_MODE=park \
+    bash "$LOCK_PROBE" 2>&1) || PARK_RC=$?
+assert_exit "T5: a blocked park still reaches its disposition (exit 4)" 4 "$PARK_RC"
+assert_eq "T5: a blocked park writes no shared state.json" "absent" \
+    "$([[ -f "$LEDGER/state.json" ]] && echo present || echo absent)"
+# The config snapshot is a ledger write like any other — it must not land
+# in the rival's directory, where the real lock owner's init_ledger would
+# later adopt the foreign copy instead of freezing its own.
+assert_eq "T5: a blocked park leaves no snapshot in the shared ledger" "absent" \
+    "$([[ -f "$LEDGER/config.snapshot.json" ]] && echo present || echo absent)"
+assert_eq "T5: a blocked park records evidence in its own bundle" "present" \
+    "$([[ -f "${LEDGER}.attempt-rival/state.json" ]] && echo present || echo absent)"
+assert_eq "T5: the private bundle carries its own config snapshot" "present" \
+    "$([[ -f "${LEDGER}.attempt-rival/config.snapshot.json" ]] && echo present || echo absent)"
+assert_contains "T5: the blocked park says where its evidence went" "$PARK_OUT" "attempt-rival"
+# A private bundle is invisible to --resume, and that command would
+# continue the RIVAL run — the escalation must never advertise it.
+PARK_ESC="${LEDGER}.attempt-rival/escalations/esc-1.json"
+assert_eq "T5: the private escalation is marked non-resumable" "false" \
+    "$(jq -r '.resumable' "$PARK_ESC" 2>/dev/null)"
+assert_eq "T5: the private escalation never advises --resume" "absent" \
+    "$(jq -r '[.human_actions[] | select(test("--resume") and (test("Do NOT") | not))] | length' "$PARK_ESC" 2>/dev/null \
+        | sed 's/^0$/absent/;s/^[1-9].*/present/')"
+assert_contains "T5: the private escalation says start fresh" \
+    "$(jq -r '.human_actions | join(" ")' "$PARK_ESC" 2>/dev/null)" "FRESH run"
+rm -rf "${LEDGER}.attempt-rival"
+
+# 2c. Exclusion is not ownership. With the lock FREE, a fresh attempt can
+#     take it around a ledger that belongs to a different run — winning
+#     the lock says nothing about whose state.json is already sitting
+#     there, and parking into it would flip a live run's status and
+#     append to its escalations.
+ledger_lock_release
+mkdir -p "$LEDGER/escalations"
+jq -n '{schema_version:1, attempt_id:"rival-owner", status:"running", escalations:["esc-1"]}' \
+    > "$LEDGER/state.json"
+printf '{"id":"esc-1"}\n' > "$LEDGER/escalations/esc-1.json"
+FOREIGN_SUM=$(cksum < "$LEDGER/state.json")
+FPARK_RC=0
+PROBE_FUNCS="$DRIVER_FUNCS" PROBE_PROJECT="$P" PROBE_LEDGER="$LEDGER" PROBE_MODE=park \
+    bash "$LOCK_PROBE" >/dev/null 2>&1 || FPARK_RC=$?
+assert_exit "T5: a park onto a foreign ledger still disposes (exit 4)" 4 "$FPARK_RC"
+assert_eq "T5: a foreign canonical ledger is left byte-unchanged" "$FOREIGN_SUM" \
+    "$(cksum < "$LEDGER/state.json")"
+assert_eq "T5: the foreign ledger keeps its owner" "rival-owner" \
+    "$(jq -r '.attempt_id // empty' "$LEDGER/state.json" 2>/dev/null)"
+assert_eq "T5: the foreign ledger keeps its status" "running" \
+    "$(jq -r '.status // empty' "$LEDGER/state.json" 2>/dev/null)"
+assert_eq "T5: the foreign ledger gains no escalation" "1" \
+    "$(ls -A "$LEDGER/escalations" 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "T5: the fresh attempt wrote its own bundle instead" "present" \
+    "$([[ -f "${LEDGER}.attempt-rival/state.json" ]] && echo present || echo absent)"
+rm -rf "${LEDGER}.attempt-rival" "$LEDGER"
+
+# 2d. Combined fault: foreign ledger + release failure at diversion time.
+#     The lock's identity is pinned at acquire — after diversion mutates
+#     LEDGER_DIR, a retried release (EXIT cleanup) must still remove the
+#     CANONICAL lock, not "release" a private one that was never taken.
+LEDGER_DIR="$LEDGER"; STATE="$LEDGER/state.json"; EVENTS="$LEDGER/events.jsonl"
+LEDGER_PRIVATE_FALLBACK=false; LEDGER_LOCK_HELD=false; LEDGER_LOCK_HELD_PATH=""
+ATTEMPT_ID="fresh"
+mkdir -p "$LEDGER"
+jq -n '{schema_version:1, attempt_id:"rival-owner", status:"running"}' > "$LEDGER/state.json"
+CANON_LOCK="${LEDGER}.init.lock"
+# Injected fault: the FIRST rmdir of the canonical lock fails, as if the
+# directory were momentarily undeletable; later calls pass through.
+RMDIR_FAILS=1
+rmdir() {
+    if [[ "$RMDIR_FAILS" == "1" && "$1" == "$CANON_LOCK" ]]; then
+        RMDIR_FAILS=0
+        return 1
+    fi
+    command rmdir "$@"
+}
+resolve_evidence_destination 2>/dev/null
+assert_eq "T5: diversion proceeds despite the failed release" "true" \
+    "$LEDGER_PRIVATE_FALLBACK"
+assert_eq "T5: the failed release keeps ownership of the canonical lock" "held" \
+    "$([[ "$LEDGER_LOCK_HELD" == "true" ]] && echo held || echo unheld)"
+assert_eq "T5: the held path still names the canonical lock" "$CANON_LOCK" \
+    "$LEDGER_LOCK_HELD_PATH"
+# EXIT-cleanup retry: with the fault gone, release must remove the
+# CANONICAL lock even though LEDGER_DIR now points at the private bundle.
+RETRY_RC=0
+ledger_lock_release 2>/dev/null || RETRY_RC=$?
+assert_exit "T5: the cleanup retry releases the canonical lock" 0 "$RETRY_RC"
+assert_eq "T5: the canonical lock is gone after the retry" "absent" \
+    "$([[ -d "$CANON_LOCK" ]] && echo present || echo absent)"
+unset -f rmdir
+rm -rf "${LEDGER}.attempt-fresh" "$LEDGER"
+LEDGER_DIR="$LEDGER"; STATE="$LEDGER/state.json"; EVENTS="$LEDGER/events.jsonl"
+LEDGER_PRIVATE_FALLBACK=false
+ATTEMPT_ID="attempt-A"
+ledger_lock_acquire
+
+# 3. The reverse: an attempt that cannot take the lock deletes nothing,
+#    because it cannot prove no one else is writing.
+ledger_lock_release
+mkdir -p "${LEDGER}.init.lock"          # a rival now holds it
+mkdir -p "$LEDGER"
+jq -n '{schema_version:1, attempt_id:"attempt-A", status:"preflight"}' > "$LEDGER/state.json"
+LEDGER_ROLLBACK_ARMED=true
+LEDGER_ROLLBACK_PREEXISTING=""
+rollback_fresh_ledger
+assert_eq "T5: rollback without the lock removes nothing" "present" \
+    "$([[ -f "$LEDGER/state.json" ]] && echo present || echo absent)"
+rmdir "${LEDGER}.init.lock"
+
+# 4. With the lock free, the same rollback proceeds.
+LEDGER_ROLLBACK_ARMED=true
+rollback_fresh_ledger
+assert_eq "T5: rollback with the lock free removes the owned ledger" "absent" \
+    "$([[ -f "$LEDGER/state.json" ]] && echo present || echo absent)"
+
+# 5. A release that does not actually remove the lock must not report
+#    success — otherwise the process believes the lock is free while it
+#    still sits on disk, wedging every later run.
+ATTEMPT_ID="attempt-A"
+LEDGER_LOCK_HELD=false
+ledger_lock_acquire
+printf 'squatter\n' > "${LEDGER}.init.lock/stray"   # rmdir cannot succeed
+# Run it in THIS shell, not a $( ) subshell — the point is to observe
+# what happens to LEDGER_LOCK_HELD, and a subshell would discard it.
+REL_ERR=$(mktemp)
+REL_RC=0
+ledger_lock_release 2>"$REL_ERR" || REL_RC=$?
+REL_OUT=$(cat "$REL_ERR"); rm -f "$REL_ERR"
+assert_exit "T5: a failed lock release reports failure" 1 "$REL_RC"
+assert_contains "T5: the release failure names the lock" "$REL_OUT" "init.lock"
+assert_eq "T5: ownership is retained when release did not remove the lock" "held" \
+    "$([[ "$LEDGER_LOCK_HELD" == "true" ]] && echo held || echo unheld)"
+rm -f "${LEDGER}.init.lock/stray"
+ledger_lock_release
+assert_eq "T5: a verified release clears ownership" "unheld" \
+    "$([[ "$LEDGER_LOCK_HELD" == "true" ]] && echo held || echo unheld)"
+
+rm -f "$LOCK_PROBE"
+rm -f "$DRIVER_FUNCS"
 rm -rf "$P"
 
 echo ""
