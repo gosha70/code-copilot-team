@@ -36,6 +36,17 @@ set -uo pipefail
 #      CCT_AUTOBUILD_PROFILE, CCT_PROVIDER_PROFILE, CCT_REVIEW_* (passed through)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# T5: load coverage and preset libraries (used by contract_initialiser).
+# Guard with a file-existence check so test-harness extractions that run
+# from tests/ don't emit noise when the lib dir isn't at tests/lib/.
+if [[ -f "$SCRIPT_DIR/lib/verification-preset.sh" ]]; then
+    # shellcheck source=lib/verification-preset.sh
+    source "$SCRIPT_DIR/lib/verification-preset.sh"
+fi
+if [[ -f "$SCRIPT_DIR/lib/coverage-parse.sh" ]]; then
+    # shellcheck source=lib/coverage-parse.sh
+    source "$SCRIPT_DIR/lib/coverage-parse.sh"
+fi
 # Project being built: defaults to the repo this toolkit is installed in;
 # CCT_PROJECT_DIR points the driver at another project (tests, kick-starts).
 PROJECT_DIR="${CCT_PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -106,6 +117,12 @@ LEDGER_DIR="$PROJECT_DIR/$AUTOBUILD_ROOT/$FEATURE_ID"
 STATE="$LEDGER_DIR/state.json"
 EVENTS="$LEDGER_DIR/events.jsonl"
 SUMMARY_MD="$SPEC_DIR/automation-summary.md"
+# Identity of THIS attempt, stamped into the ledger it creates. Ownership
+# — not "was the directory there a moment ago" — is what authorises the
+# fresh-ledger rollback to delete anything: two concurrent attempts can
+# both observe an empty ledger dir, and the loser must never remove the
+# winner's live state.
+ATTEMPT_ID="$$-${RANDOM}${RANDOM}"
 
 # T4 defaults — set before preflight-result channel runs
 SKIP_ADMISSION=false
@@ -290,8 +307,15 @@ terminate_policy() {
     # terminate_policy <reason> <detail> [history-json]
     local reason="$1" detail="$2" history="${3:-null}"
     TERMINATING=1
+    # Terminal evidence (ledger, termination.json, triage report) is the
+    # whole point of this path — never roll it back, even if a later step
+    # here exits 1.
+    disarm_ledger_rollback
     echo "[auto-build] TERMINATED (policy): $reason — $detail" >&2
     if [[ "$DRY_RUN" == "true" ]]; then exit 6; fi
+    # Settle the destination before termination.json, the triage report and
+    # the skeleton — all of them must land in the same place.
+    resolve_evidence_destination
     if [[ ! -f "$STATE" ]]; then
         write_ledger_skeleton
     fi
@@ -341,7 +365,15 @@ park() {
     # park <reason> <detail> [history-json]
     local reason="$1" detail="$2" history="${3:-null}"
     echo "[auto-build] PARK: $reason — $detail" >&2
+    # A park is resumable evidence, not an ordinary refusal — the ledger
+    # must survive even if this path itself fails out with exit 1.
+    disarm_ledger_rollback
     if [[ "$DRY_RUN" == "true" ]]; then exit 4; fi
+    # Settle the destination BEFORE the first write. The config snapshot
+    # below is a write into the ledger like any other: deciding shared vs
+    # private halfway through would drop it in a rival's directory and
+    # leave this attempt's own bundle without it.
+    resolve_evidence_destination
     # Preflight-time parks (origin gate, provider health) can fire before
     # init_ledger; a park without a ledger would be unresumable. Bootstrap
     # the full skeleton AND the config snapshot so --resume binds to the
@@ -365,17 +397,32 @@ park() {
     local n=1
     while [[ -f "$LEDGER_DIR/escalations/esc-$n.json" ]]; do n=$((n + 1)); done
     local esc="$LEDGER_DIR/escalations/esc-$n.json"
+    # Resumability is a property of WHERE the evidence landed. A private
+    # bundle is deliberately invisible to --resume, and that command would
+    # resume the rival canonical run instead — so it must never be the
+    # advice printed here.
+    local actions
+    if [[ "$LEDGER_PRIVATE_FALLBACK" == "true" ]]; then
+        actions=$(jq -n --arg dir "$LEDGER_DIR" --arg lock "$LEDGER_SHARED_LOCK" \
+            '[("This run could not claim the ledger lock (" + $lock + "), so its evidence is in " + $dir + " — NOT the canonical ledger"),
+              "Do NOT rerun with --resume: this bundle is invisible to it, and --resume would continue a different run",
+              "Inspect the bundle, confirm no other auto-build run is active, remove the lock if it is stale",
+              "Then start a FRESH run once the canonical ledger is clear"]')
+    else
+        actions=$(jq -n --arg fid "$FEATURE_ID" \
+            '["Inspect the history refs above, resolve the blocker (e.g. /review-decide, origin A/B/C, manual fix + commit)",
+              ("Then rerun: scripts/auto-build-loop.sh " + $fid + " --resume")]')
+    fi
     jq -n \
         --arg id "esc-$n" --arg reason "$reason" --arg detail "$detail" \
         --arg phase "${CURRENT_PHASE:-0}" --arg status "$(state_get '.status' 2>/dev/null || echo preflight)" \
         --arg created "$(now_iso)" --argjson history "$history" \
+        --argjson actions "$actions" \
+        --argjson resumable "$([[ "$LEDGER_PRIVATE_FALLBACK" == "true" ]] && echo false || echo true)" \
         '{id: $id, reason: $reason, detail: $detail, phase: ($phase | tonumber),
           status_at_escalation: $status, created: $created, history: $history,
-          resolved: false, notified: false,
-          human_actions: [
-            "Inspect the history refs above, resolve the blocker (e.g. /review-decide, origin A/B/C, manual fix + commit)",
-            "Then rerun: scripts/auto-build-loop.sh '"$FEATURE_ID"' --resume"
-          ]}' > "$esc"
+          resolved: false, notified: false, resumable: $resumable,
+          human_actions: $actions}' > "$esc"
     if [[ -f "$STATE" ]]; then
         state_set '.status = "parked" | .escalations += [$e] | .updated = $t' \
             --arg e "esc-$n" --arg t "$(now_iso)"
@@ -613,6 +660,31 @@ load_config() {
 
 # ── Preflight (FR-2, FR-2a) ──────────────────────────────────
 
+# Governance prerequisites: is this feature allowed to run at all?
+# Read-only by construction — no ledger, no worktree, no project code —
+# so it is safe to run before every producer, and it MUST: the contract
+# initialiser executes the project's own coverage command, and a run
+# whose plan was never approved must be refused before that happens.
+validate_governance_prerequisites() {
+    if [[ ! -f "$SPEC_DIR/plan.md" ]]; then
+        echo "Error: specs/$FEATURE_ID/plan.md not found." >&2; exit 1
+    fi
+    local status
+    status=$(sed -n '/^---$/,/^---$/p' "$SPEC_DIR/plan.md" | grep '^status:' | head -1 | sed 's/^status: *//')
+    if [[ "$status" != "approved" ]]; then
+        echo "Error: plan.md status is '$status' — the Plan Approval Gate requires 'approved'." >&2
+        exit 1
+    fi
+    if ! bash "$SCRIPT_DIR/validate-spec.sh" --feature-id "$FEATURE_ID" >/dev/null 2>&1; then
+        echo "Error: validate-spec.sh failed for $FEATURE_ID." >&2
+        exit 1
+    fi
+    if [[ -f "$SPEC_DIR/spec.md" ]] && grep -qE '\[NEEDS CLARIFICATION\]:|\[NEEDS CLARIFICATION:' "$SPEC_DIR/spec.md"; then
+        echo "Error: spec.md has unresolved [NEEDS CLARIFICATION] markers." >&2
+        exit 1
+    fi
+}
+
 preflight() {
     # Tools
     if ! command -v git &>/dev/null; then
@@ -677,25 +749,6 @@ preflight() {
             # stale cause so the ledger never contradicts the summary.
             state_set '.capability_downgrade = null'
         fi
-    fi
-
-    # Spec approved
-    if [[ ! -f "$SPEC_DIR/plan.md" ]]; then
-        echo "Error: specs/$FEATURE_ID/plan.md not found." >&2; exit 1
-    fi
-    local status
-    status=$(sed -n '/^---$/,/^---$/p' "$SPEC_DIR/plan.md" | grep '^status:' | head -1 | sed 's/^status: *//')
-    if [[ "$status" != "approved" ]]; then
-        echo "Error: plan.md status is '$status' — the Plan Approval Gate requires 'approved'." >&2
-        exit 1
-    fi
-    if ! bash "$SCRIPT_DIR/validate-spec.sh" --feature-id "$FEATURE_ID" >/dev/null 2>&1; then
-        echo "Error: validate-spec.sh failed for $FEATURE_ID." >&2
-        exit 1
-    fi
-    if [[ -f "$SPEC_DIR/spec.md" ]] && grep -qE '\[NEEDS CLARIFICATION\]:|\[NEEDS CLARIFICATION:' "$SPEC_DIR/spec.md"; then
-        echo "Error: spec.md has unresolved [NEEDS CLARIFICATION] markers." >&2
-        exit 1
     fi
 
     # Origin gate — exit >= 2 parks and is never auto-resolved.
@@ -909,6 +962,64 @@ compute_preflight_path() {
     esac
 }
 
+# contract_initialiser: T5 — resolve preset, capture baseline if brownfield,
+# freeze the contract into the preflight result file.
+contract_initialiser() {
+    local path="$1"
+    local cov_cfg effective
+    cov_cfg=$(jq '.verification.coverage' "$CONFIG_SNAPSHOT")
+    effective=$(vp_resolve "$PROJECT_DIR" "$cov_cfg" "${TEST_TIMEOUT:-1200}") || {
+        echo "Error: preset resolution failed" >&2; exit 1; }
+
+    local command artifact parser timeout_sec baseline
+    command=$(jq -r '.command' <<< "$effective")
+    artifact=$(jq -r '.artifact' <<< "$effective")
+    parser=$(jq -r '.parser' <<< "$effective")
+    timeout_sec=$(jq -r '.timeout_sec' <<< "$effective")
+    baseline=$(jq -r '.baseline' <<< "$effective")
+
+    local captured_baseline=null
+    if [[ "$baseline" == "admission" ]]; then
+        local wt_dir
+        wt_dir=$(mktemp -d)
+        git -C "$PROJECT_DIR" worktree add --detach "$wt_dir" "$BRANCH_BASE" >/dev/null 2>&1 || {
+            rm -rf "$wt_dir"; echo "Error: worktree add failed" >&2; exit 1; }
+        local cov_rc=0
+        captured_baseline=$(cp_collect "$wt_dir" "$effective" 2>&1) || cov_rc=$?
+        if [[ $cov_rc -ne 0 ]]; then
+            git -C "$PROJECT_DIR" worktree remove -f "$wt_dir" >/dev/null 2>&1 || rm -rf "$wt_dir"
+            echo "Error: baseline coverage capture failed (exit $cov_rc)" >&2; exit 1
+        fi
+        git -C "$PROJECT_DIR" worktree remove -f "$wt_dir" >/dev/null 2>&1 || rm -rf "$wt_dir"
+    fi
+
+    local floor_at
+    floor_at=$(jq -r '.floor_enforced_at // "landing"' <<< "$effective")
+
+    # For unattended paths with existing admission section: merge contract in.
+    if [[ "$path" == "fresh-unattended-block" && -s "$PREFLIGHT_RESULT_FILE" ]]; then
+        local _tmp
+        _tmp=$(mktemp)
+        jq --arg command "$command" --arg artifact "$artifact" --arg parser "$parser" \
+           --argjson timeout_sec "$timeout_sec" --arg floor_enforced_at "$floor_at" \
+           --argjson preset_id "$(jq '.preset_id' <<< "$effective")" \
+           --argjson preset_sha256 "$(jq '.preset_sha256' <<< "$effective")" \
+           --argjson baseline "$captured_baseline" \
+           --argjson effective "$effective" \
+           '.contract = ({command:$command,artifact:$artifact,parser:$parser,timeout_sec:$timeout_sec,floor_enforced_at:$floor_enforced_at,preset_id:$preset_id,preset_sha256:$preset_sha256,baseline:$baseline} + (if $effective.min_line_pct then {min_line_pct:$effective.min_line_pct} else {} end) + (if $effective.min_branch_pct then {min_branch_pct:$effective.min_branch_pct} else {} end) + (if $effective.max_regression_pct then {max_regression_pct:$effective.max_regression_pct} else {} end))' \
+           "$PREFLIGHT_RESULT_FILE" > "$_tmp" && mv "$_tmp" "$PREFLIGHT_RESULT_FILE"
+    else
+        jq -n --arg command "$command" --arg artifact "$artifact" --arg parser "$parser" \
+           --argjson timeout_sec "$timeout_sec" --arg floor_enforced_at "$floor_at" \
+           --argjson preset_id "$(jq '.preset_id' <<< "$effective")" \
+           --argjson preset_sha256 "$(jq '.preset_sha256' <<< "$effective")" \
+           --argjson baseline "$captured_baseline" --argjson effective "$effective" \
+           --arg path "$path" \
+           '{schema_version:1,path:$path,contract:({command:$command,artifact:$artifact,parser:$parser,timeout_sec:$timeout_sec,floor_enforced_at:$floor_enforced_at,preset_id:$preset_id,preset_sha256:$preset_sha256,baseline:$baseline} + (if $effective.min_line_pct then {min_line_pct:$effective.min_line_pct} else {} end) + (if $effective.min_branch_pct then {min_branch_pct:$effective.min_branch_pct} else {} end) + (if $effective.max_regression_pct then {max_regression_pct:$effective.max_regression_pct} else {} end))}' \
+           > "$PREFLIGHT_RESULT_FILE"
+    fi
+}
+
 # preflight_result_channel: the T4 structured handoff.
 # - Validates contract prerequisite (resume+block → load+validate frozen contract)
 # - git worktree prune if any applicable producer will attempt isolation
@@ -949,7 +1060,7 @@ preflight_result_channel() {
     # initialiser here for fresh-attended-block and fresh-unattended-block.
     case "$path" in
         fresh-attended-block|fresh-unattended-block)
-            # T5: contract initialiser will run here.
+            # Contract already initialised in the main flow (step 5).
             ;;
     esac
 }
@@ -1323,15 +1434,141 @@ enumerate_phases() {
 
 # ── Ledger init (FR-3) ───────────────────────────────────────
 
+# Atomic per-feature ledger lock. `mkdir` is the POSIX create-if-absent
+# primitive: of N contenders exactly one wins, which no amount of reading
+# a mutable state.json can provide. Every path that CREATES the ledger
+# contends on it, and so does the rollback — otherwise "is this ledger
+# mine?" and "delete it" are two steps a rival initialiser can slip
+# between. Lives BESIDE the ledger dir, not inside it, so it never shows
+# up in the rollback's own enumeration and never blocks its rmdir.
+# Held across two millisecond-long critical sections only (create the
+# ledger; undo it) — never across preflight — so a crash leaves at most a
+# momentary stale lock.
+LEDGER_LOCK_WAIT_SEC="${CCT_LEDGER_LOCK_WAIT_SEC:-10}"
+LEDGER_LOCK_HELD=false
+# The exact lock directory this attempt created, recorded at acquire time.
+# Release targets this, never a re-derivation from LEDGER_DIR (which a
+# private diversion mutates while the canonical lock is still held).
+LEDGER_LOCK_HELD_PATH=""
+# Set once this attempt has been diverted to its own evidence bundle
+# because the shared ledger could not be claimed (see
+# resolve_evidence_destination). LEDGER_SHARED_LOCK remembers the lock that
+# blocked it, for the operator guidance written into the escalation.
+LEDGER_PRIVATE_FALLBACK=false
+LEDGER_SHARED_LOCK=""
+
+ledger_lock_path() { printf '%s' "${LEDGER_DIR}.init.lock"; }
+
+ledger_lock_acquire() {
+    [[ "$DRY_RUN" == "true" ]] && return 0
+    # Re-entrant within one attempt: the rollback runs inside init_ledger's
+    # own exit path, and must not deadlock against itself.
+    [[ "$LEDGER_LOCK_HELD" == "true" ]] && return 0
+    local lock waited=0
+    lock=$(ledger_lock_path)
+    mkdir -p "${LEDGER_DIR%/*}" 2>/dev/null || true
+    until mkdir "$lock" 2>/dev/null; do
+        [[ $waited -ge $LEDGER_LOCK_WAIT_SEC ]] && return 1
+        sleep 1
+        waited=$((waited + 1))
+    done
+    printf '%s\n' "$ATTEMPT_ID" > "$lock/owner" 2>/dev/null || true
+    LEDGER_LOCK_HELD=true
+    # The lock's identity is fixed at the moment it is taken. Release must
+    # target THIS path, never re-derive it from LEDGER_DIR — a private
+    # diversion mutates LEDGER_DIR while the canonical lock is still held,
+    # and a re-derived release would then "release" a lock that was never
+    # taken and strand the one that was.
+    LEDGER_LOCK_HELD_PATH="$lock"
+    return 0
+}
+
+ledger_lock_release() {
+    [[ "$LEDGER_LOCK_HELD" == "true" ]] || return 0
+    local lock="$LEDGER_LOCK_HELD_PATH"
+    rm -f "$lock/owner" 2>/dev/null || true
+    # rmdir is the whole verification: it fails if anything is left inside
+    # (an owner file that would not delete) or if the directory itself
+    # cannot go. Ownership is cleared ONLY on proven removal — reporting
+    # "released" while the lock is still on disk would wedge every later
+    # run behind a lock nobody believes they hold.
+    if ! rmdir "$lock" 2>/dev/null; then
+        echo "[auto-build] ERROR: could not release the ledger lock — $lock" >&2
+        echo "is still on disk and will block later runs. Remove it manually." >&2
+        return 1
+    fi
+    LEDGER_LOCK_HELD=false
+    LEDGER_LOCK_HELD_PATH=""
+    return 0
+}
+
+# Decide WHERE this attempt may write its evidence — before a single byte
+# of it is written. Either this attempt holds the lock and owns the shared
+# ledger, or it does not and is diverted to a private bundle beside it.
+# Every terminal path calls this first, so the config snapshot, the
+# skeleton, the escalation and the triage report all land in one resolved
+# destination instead of straddling both. Idempotent.
+# May this attempt write the CANONICAL ledger? Two separate questions:
+# is anyone else writing right now (the lock), and whose ledger is already
+# there (the owner stamp). Holding the lock answers only the first.
+ledger_is_ours() {
+    [[ -f "$STATE" ]] || return 0            # nothing there — ours to create
+    [[ "$RESUME" == "true" ]] && return 0    # deliberately continuing it
+    local owner
+    owner=$(jq -r '.attempt_id // empty' "$STATE" 2>/dev/null)
+    [[ -n "$owner" && "$owner" == "$ATTEMPT_ID" ]]
+}
+
+resolve_evidence_destination() {
+    [[ "$DRY_RUN" == "true" ]] && return 0
+    [[ "$LEDGER_PRIVATE_FALLBACK" == "true" ]] && return 0
+    [[ "$LEDGER_LOCK_HELD" == "true" ]] && return 0
+    local why=""
+    LEDGER_SHARED_LOCK=$(ledger_lock_path)
+    if ledger_lock_acquire; then
+        # Winning the lock only proves present exclusion. A fresh attempt
+        # that finds a FOREIGN ledger under it is not entitled to park into
+        # it, flip its status, or append to its escalations — that ledger
+        # belongs to a run this one knows nothing about.
+        ledger_is_ours && return 0
+        why="the canonical ledger belongs to another attempt ($(jq -r '.attempt_id // "unknown"' "$STATE" 2>/dev/null))"
+        ledger_lock_release || true
+    else
+        why="the ledger lock $LEDGER_SHARED_LOCK was not free within ${LEDGER_LOCK_WAIT_SEC}s"
+    fi
+    # Either way the SHARED ledger is off limits, and "evidence first" is no
+    # excuse for corrupting another attempt's run. The evidence is still
+    # mandatory, so it goes to an attempt-private bundle beside the ledger —
+    # a path no other attempt locks, enumerates, or rolls back.
+    LEDGER_PRIVATE_FALLBACK=true
+    LEDGER_DIR="${LEDGER_DIR}.attempt-${ATTEMPT_ID}"
+    STATE="$LEDGER_DIR/state.json"
+    EVENTS="$LEDGER_DIR/events.jsonl"
+    echo "[auto-build] WARN: $why — refusing to write the shared ledger." >&2
+    echo "This attempt's evidence goes to $LEDGER_DIR instead, and it is NOT" >&2
+    echo "resumable: inspect it, resolve the concurrency, start fresh." >&2
+    return 0
+}
+
 init_ledger() {
     [[ "$DRY_RUN" == "true" ]] && return 0
+    # The "does a ledger already exist?" test and the creation that follows
+    # it must be one indivisible step, or two attempts both observe an
+    # absent state.json and both create one. Every creator contends here.
+    if ! ledger_lock_acquire; then
+        echo "Error: another auto-build attempt holds the ledger lock for" >&2
+        echo "'$FEATURE_ID' ($(ledger_lock_path)) and did not release it within" >&2
+        echo "${LEDGER_LOCK_WAIT_SEC}s. If no other run is active the lock is stale —" >&2
+        echo "remove that directory, then rerun." >&2
+        exit 1
+    fi
     mkdir -p "$LEDGER_DIR"
     if [[ -f "$STATE" && "$RESUME" != "true" ]]; then
         echo "Error: ledger already exists for '$FEATURE_ID' ($STATE)." >&2
         echo "Use --resume to continue, or remove the ledger dir to start over." >&2
         exit 1
     fi
-    if [[ -f "$STATE" ]]; then return 0; fi
+    if [[ -f "$STATE" ]]; then ledger_lock_release; return 0; fi
     # T4: freeze the config snapshot HERE, after admission passes, so a
     # refused admission leaves no durable state (FR-7a). The immutable
     # temp snapshot was taken in load_config() before any branch change.
@@ -1360,13 +1597,25 @@ init_ledger() {
     fi
     CONFIG_SNAPSHOT="$LEDGER_DIR/config.snapshot.json"
     write_ledger_skeleton
+    # Released as soon as the ledger exists — holding it across preflight
+    # would buy nothing. From here on state.json is present, so every
+    # rival creator refuses inside this same lock; the rollback re-takes
+    # it for its own check-and-delete.
+    # A release failure is reported by ledger_lock_release itself and must
+    # not fail the run — the ledger it guards is already written.
+    ledger_lock_release || true
+    return 0
 }
 
 write_ledger_skeleton() {
+    # Safety net for any caller that did not resolve first; idempotent.
+    resolve_evidence_destination
     # If the ledger was already initialised (e.g., admission passed and
     # init_ledger ran before a later termination), don't overwrite STATE.
     # The existing STATE carries admission accounting that must survive.
-    [[ -f "$STATE" ]] && return 0
+    if [[ -f "$STATE" ]]; then
+        return 0
+    fi
     mkdir -p "$LEDGER_DIR"
     local base_ref
     base_ref=$(git -C "$PROJECT_DIR" rev-parse HEAD)
@@ -1376,8 +1625,9 @@ write_ledger_skeleton() {
         --argjson max_phases "$MAX_PHASES" --argjson max_fix "$MAX_FIX_SESSIONS" \
         --argjson wall "$CAP_WALL_CLOCK" --argjson cost "$CAP_COST" \
         --argjson milestone_every "$MILESTONE_EVERY" --argjson started "${CLOCK_ORIGIN:-$(now_epoch)}" \
-        --arg capdown "${CAPS_DOWNGRADED_CAUSE:-}" \
+        --arg capdown "${CAPS_DOWNGRADED_CAUSE:-}" --arg attempt "$ATTEMPT_ID" \
         '{schema_version: 1, feature_id: $fid, profile: $profile,
+          attempt_id: $attempt,
           status: "preflight", current_phase: 0,
           branch: $branch, branch_base_ref: $base,
           phases: {},
@@ -1394,6 +1644,71 @@ write_ledger_skeleton() {
     # paths that never reach the normal init_ledger → flush sequence.
     flush_pending_events
     journal "init" "profile=$PROFILE branch=$BRANCH_NAME base=$base_ref"
+    # The lock, if this attempt took it, is released by whoever resolved
+    # the destination — init_ledger explicitly, park/terminate at exit.
+    return 0
+}
+
+# ── Fresh-ledger rollback (T5 review) ────────────────────────
+# Coverage paths must freeze the contract and persist the ledger BEFORE
+# preflight, so a policy termination inside preflight has somewhere to
+# record its evidence. That ordering strands a ledger when preflight
+# refuses ORDINARILY instead (exit 1 — dirty worktree, unapproved plan,
+# base ref missing): the operator fixes the cause, reruns, and is met
+# with "ledger already exists". The rollback is armed only for that
+# pre-preflight window and removes only what the attempt itself created.
+# park/terminate_policy disarm it first — their evidence must survive.
+LEDGER_ROLLBACK_ARMED=false
+LEDGER_ROLLBACK_PREEXISTING=""
+
+arm_ledger_rollback() {
+    [[ "$DRY_RUN" == "true" ]] && return 0
+    # A ledger that predates this attempt is never ours to remove.
+    [[ -f "$STATE" ]] && return 0
+    LEDGER_ROLLBACK_PREEXISTING=$(ls -A "$LEDGER_DIR" 2>/dev/null)
+    LEDGER_ROLLBACK_ARMED=true
+}
+
+disarm_ledger_rollback() { LEDGER_ROLLBACK_ARMED=false; }
+
+rollback_fresh_ledger() {
+    [[ "$LEDGER_ROLLBACK_ARMED" == "true" ]] || return 0
+    LEDGER_ROLLBACK_ARMED=false
+    # Reading the owner and deleting the files is ONE critical section:
+    # a rival initialiser that publishes between the two would have its
+    # ledger deleted by this attempt. The lock is what makes it one step;
+    # the attempt id only says whose ledger it is. Without the lock this
+    # attempt cannot prove exclusion, so it removes nothing.
+    local _lock_mine=false
+    if [[ "$LEDGER_LOCK_HELD" != "true" ]]; then
+        ledger_lock_acquire || return 0
+        _lock_mine=true
+    fi
+    # Ownership decides, never absence. Arming only records an intent —
+    # by the time it fires, a concurrent attempt may have won the race
+    # and published a live ledger here. Only the attempt whose id is
+    # stamped in state.json may remove anything; without that proof this
+    # attempt created no durable state worth undoing (and nothing is
+    # blocking its retry), so it removes nothing.
+    local owner=""
+    [[ -f "$STATE" ]] && owner=$(jq -r '.attempt_id // empty' "$STATE" 2>/dev/null)
+    if [[ -z "$owner" || "$owner" != "$ATTEMPT_ID" ]]; then
+        [[ "$_lock_mine" == "true" ]] && ledger_lock_release
+        return 0
+    fi
+    # Delete entry by entry, never recursively: anything that appeared
+    # after arming but was not written by this attempt stays put.
+    local entry
+    while IFS= read -r entry; do
+        [[ -z "$entry" ]] && continue
+        grep -qxF "$entry" <<< "$LEDGER_ROLLBACK_PREEXISTING" && continue
+        rm -f "${LEDGER_DIR:?}/$entry" 2>/dev/null || true
+    done < <(ls -A "$LEDGER_DIR" 2>/dev/null)
+    # Drop the directory only if this attempt left it empty. The lock is a
+    # sibling, so it is not what keeps this from succeeding.
+    rmdir "$LEDGER_DIR" 2>/dev/null || true
+    [[ "$_lock_mine" == "true" ]] && ledger_lock_release
+    return 0
 }
 
 # ── Caps (FR-6) ──────────────────────────────────────────────
@@ -2193,7 +2508,20 @@ reset_run_clocks() {
 
 # Install EXIT trap BEFORE load_config — a failure inside load_config
 # (missing test.command, bad config) may leave TEMP_CONFIG behind.
-trap '[[ -n "${TEMP_CONFIG:-}" && -f "$TEMP_CONFIG" ]] && rm -f "$TEMP_CONFIG" 2>/dev/null; rm -f "${PREFLIGHT_RESULT_FILE:-}" 2>/dev/null' EXIT
+exit_cleanup() {
+    local rc=$?
+    [[ -n "${TEMP_CONFIG:-}" && -f "$TEMP_CONFIG" ]] && rm -f "$TEMP_CONFIG" 2>/dev/null
+    rm -f "${PREFLIGHT_RESULT_FILE:-}" 2>/dev/null
+    # Ordinary refusal (exit 1) while the rollback is armed: undo the
+    # pre-preflight ledger so a corrected rerun is not blocked by it.
+    [[ $rc -eq 1 ]] && rollback_fresh_ledger
+    # Never strand the lock: an exit while holding it (init_ledger's own
+    # "ledger already exists" refusal reaches here still holding it) would
+    # otherwise wedge every later run behind a stale lock.
+    ledger_lock_release
+    return $rc
+}
+trap exit_cleanup EXIT
 
 load_config
 true  # load_config done — all config values derived from the frozen snapshot
@@ -2638,23 +2966,13 @@ if [[ "$DRY_RUN" != "true" ]]; then
 fi
 
 # ── 2. Prerequisites — run BEFORE admission so nothing executes
-#    project code for a run that should be refused. ──
+#    project code for a run that should be refused. That includes the
+#    governance gates (plan approval, spec validity, clarifications):
+#    the T5 contract initialiser at step 5 runs the project's coverage
+#    command, so approval must be settled before it, not inside
+#    preflight() afterwards. ──
 
-# T5 guard: fresh coverage paths have no contract producer yet.
-# Refuse early — before admission executes test.command, before
-# preflight can dispose/terminate, before branch mutation.
-case "${PREFLIGHT_PATH:-}" in
-    fresh-attended-block|fresh-unattended-block)
-        echo "Error: verification.coverage block is present but the coverage" >&2
-        echo "contract initialiser has not been implemented yet (planned for T5)." >&2
-        echo "This is a genuine gap — no frozen-contract.json can be produced," >&2
-        echo "so the run cannot enforce its own coverage policy." >&2
-        echo "Remove the verification.coverage block from automation.json" >&2
-        echo "to proceed without coverage enforcement, or wait for T5." >&2
-        exit 1
-        ;;
-esac
-
+validate_governance_prerequisites
 validate_frozen_contract_prerequisite
 if [[ "$RESUME" == "true" && ! -f "$STATE" ]]; then
     echo "Error: --resume but no ledger at $STATE." >&2
@@ -2712,19 +3030,35 @@ if [[ "$PROFILE" == "unattended" && "${SKIP_ADMISSION:-false}" != "true" ]]; the
     esac
 fi
 
-# ── 5. Ledger init + import: when a pre-ledger producer (admission)
-#    produced a result file, persist it NOW, before preflight can
-#    dispose/terminate. A provider-health termination must record the
-#    passed admission in the ledger (SC-6). For no-producer paths
-#    (attended no-block), defer to the post-preflight initialization
-#    to preserve FR-2 byte-identical behavior. ──
+# ── 5. Contract initialisation (T5): for fresh coverage paths, freeze
+#    the contract NOW before preflight can dispose/terminate. The result
+#    file may already carry admission (unattended) or be empty (attended);
+#    contract_initialiser handles both. ──
+case "${PREFLIGHT_PATH:-}" in
+    fresh-attended-block|fresh-unattended-block)
+        # Create the result file if not already present (attended paths
+        # have no prior admission section)
+        if [[ -z "${PREFLIGHT_RESULT_FILE:-}" ]]; then
+            PREFLIGHT_RESULT_FILE=$(mktemp) || { echo "Error: mktemp failed" >&2; exit 1; }
+        fi
+        contract_initialiser "$PREFLIGHT_PATH" || {
+            echo "Error: contract initialisation failed" >&2; exit 1; }
+        ;;
+esac
+
+# ── 6. Ledger init + import: persist the combined result (admission +
+#    contract) NOW, before preflight can dispose/terminate. ──
+#    This ledger predates preflight's ordinary refusal gates, so arm the
+#    rollback first: an exit-1 refusal below must leave no durable state
+#    (a policy termination disarms it and keeps everything).
 if [[ -n "${PREFLIGHT_RESULT_FILE:-}" ]]; then
+    arm_ledger_rollback
     init_ledger
     import_preflight_result "$PREFLIGHT_RESULT_FILE"
     flush_pending_events
 fi
 
-# ── 6. Resume dispatch — admission has passed, prerequisites are
+# ── 7. Resume dispatch — admission has passed, prerequisites are
 #    satisfied, ledger exists with admission evidence. Clock reset
 #    happens ONCE here, using the per-path CLOCK_ORIGIN. ──
 if [[ "$RESUME" == "true" ]]; then
@@ -2766,6 +3100,10 @@ if [[ "$RESUME" == "true" ]]; then
 fi
 
 preflight
+
+# Every ordinary refusal gate has passed — the ledger is now the run's
+# durable record and must survive whatever happens next.
+disarm_ledger_rollback
 
 preflight_result_channel "$PREFLIGHT_PATH"
 
