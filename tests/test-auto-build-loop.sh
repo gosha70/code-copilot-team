@@ -878,6 +878,35 @@ ARCHIVED_SUMMARY="$P/.cct/auto-build/demo-feat/phase-1/review/loop-summary.json"
 assert_eq "retry re-review reached PASS" "PASS" "$(jq -r '.verdict' "$ARCHIVED_SUMMARY" 2>/dev/null)"
 rm -rf "$P"
 
+# RUNNER_ERROR: fail only the runner's final state builder, after it has
+# published findings. The driver must park with the attempted round and
+# findings path, then refuse resume with that same actionable evidence.
+DRIVER_REAL_JQ=$(command -v jq)
+DRIVER_JQ_SHIM_DIR=$(mktemp -d)
+cat > "$DRIVER_JQ_SHIM_DIR/jq" << SH
+#!/usr/bin/env bash
+if [[ " \$* " == *" --argjson repeats "* ]]; then
+    exit 5
+fi
+exec "$DRIVER_REAL_JQ" "\$@"
+SH
+chmod +x "$DRIVER_JQ_SHIM_DIR/jq"
+P=$(setup_project); single_phase "$P"
+PATH="$DRIVER_JQ_SHIM_DIR:$PATH" REVIEW_PROFILE="$PASS_PROFILE" run_driver "$P"
+assert_exit "runner crash parks the driver" 4 "$RC"
+RUNNER_ESC="$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+assert_eq "runner crash parks as runner_error" "runner_error" \
+    "$(jq -r '.reason' "$RUNNER_ESC" 2>/dev/null)"
+assert_eq "runner crash records the attempted round" "1" \
+    "$(jq -r '.history.crashed_before_round' "$RUNNER_ESC" 2>/dev/null)"
+assert_eq "runner crash records the findings path" "$P/.cct/review/findings-round-1.json" \
+    "$(jq -r '.history.findings_file' "$RUNNER_ESC" 2>/dev/null)"
+REVIEW_PROFILE="$PASS_PROFILE" run_driver "$P" --resume
+assert_exit "runner crash resume is explicitly refused" 1 "$RC"
+assert_contains "runner crash refusal explains why resume is unsafe" "$OUTPUT" "runner crash is not resumable"
+assert_contains "runner crash refusal names its findings evidence" "$OUTPUT" "findings-round-1.json"
+rm -rf "$P" "$DRIVER_JQ_SHIM_DIR"
+
 # DECISION SINGLE-USE: a retry decision must not auto-resolve the NEXT breaker
 P=$(setup_project); single_phase "$P"
 REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"

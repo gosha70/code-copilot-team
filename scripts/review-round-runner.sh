@@ -10,6 +10,7 @@ set -euo pipefail
 # Usage: review-round-runner.sh <project-dir>
 # Exit:  0 = PASS, 1 = FAIL/INVALID, 2 = BREAKER_TRIPPED,
 #        3 = PROVIDER_ERROR (the reviewer never ran — #204)
+#        4 = RUNNER_ERROR (script crash — #229)
 #
 # Requires: jq, shasum or sha256sum
 # Env:      CCT_PROVIDER_PROFILE (optional, default ~/.code-copilot-team/providers.toml)
@@ -24,6 +25,10 @@ if [[ $# -lt 1 ]]; then
     exit 1
 fi
 
+# #229: the EXIT trap (line ~335) remaps unexpected exit codes (> 4)
+# to code 4 (RUNNER_ERROR) so the driver has a defined arm for script
+# crashes.  PREV_DISP (below) is null-tolerant to fix the specific
+# crash site (.resolutions[] on a dispositions-only file).
 PROJECT_DIR="$(cd "$1" && pwd)"
 
 # Shared verdict parser (#200) — one implementation for both runners.
@@ -126,18 +131,21 @@ NEXT_ROUND=$((CURRENT_ROUND + 1))
 # attempt_start_round would put a safety invariant in a model's hands.
 ATTEMPT_START_ROUND=$(jq -r '.attempt_start_round // 0' "$STATE_FILE" 2>/dev/null)
 LAST_ATTEMPT=$(jq -r '.last_attempt // empty' "$STATE_FILE" 2>/dev/null)
+ATTEMPT_CHANGED=false
 # Reset ONLY when the attempt is KNOWN to have changed. A state written
 # before this field existed has no last_attempt, and treating that as "a new
 # attempt starts here" would silently forgive an already-exhausted budget on
 # the first run after upgrade — the anchor stays 0, i.e. the old cumulative
 # behaviour, until a real retry moves it.
 if [[ -n "$LAST_ATTEMPT" && "$LAST_ATTEMPT" != "$ATTEMPT" ]]; then
+    ATTEMPT_CHANGED=true
     ATTEMPT_START_ROUND="$CURRENT_ROUND"
 elif [[ -z "$LAST_ATTEMPT" ]] && [[ "$ATTEMPT" -gt 1 ]]; then
     # The breaker exits BEFORE state is rewritten, so the run that tripped it
     # never persisted last_attempt — and the retry that follows would look
     # like legacy state. `attempt` only advances via /review-decide retry, so
     # attempt > 1 with no anchor IS a retry, and it gets a fresh budget.
+    ATTEMPT_CHANGED=true
     ATTEMPT_START_ROUND="$CURRENT_ROUND"
 fi
 ROUNDS_THIS_ATTEMPT=$((NEXT_ROUND - ATTEMPT_START_ROUND))
@@ -192,7 +200,7 @@ BREAKER_EOF
     fi
 
     # Stale findings
-    if [[ "$CURRENT_ROUND" -ge 2 && -f "$STATE_FILE" ]]; then
+    if [[ "$ATTEMPT_CHANGED" != "true" && "$CURRENT_ROUND" -ge 2 && -f "$STATE_FILE" ]]; then
         # Buckets first (#227 D3): per-id staleness misses a reviewer that
         # rewords, because every restatement arrives with a fresh id.
         STALE_IDS=$(jq -r --argjson threshold "$STALE_THRESHOLD" '
@@ -326,7 +334,12 @@ fi
 # ── Create snapshot sandbox ──────────────────────────────────
 
 SNAPSHOT_DIR=$(mktemp -d)
-trap 'rm -rf "$SNAPSHOT_DIR"' EXIT
+trap '_rr_rc=$?; rm -rf "$SNAPSHOT_DIR" 2>/dev/null
+if [[ $_rr_rc -gt 4 ]]; then
+    echo "[review-runner] FATAL: unexpected exit $_rr_rc -- RUNNER_ERROR (code 4)" >&2
+    exit 4
+fi
+exit $_rr_rc' EXIT
 
 # Record pre-review state for post-review validation
 PRE_REVIEW_HEAD=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "none")
@@ -796,9 +809,17 @@ ACCUMULATED=$(jq '.findings // {}' "$STATE_FILE" 2>/dev/null || echo '{}')
 # previous resolution's finding ids through the findings they belonged to.
 PRIOR_FINDINGS="$ACCUMULATED"
 REPEATS=$(jq '.repeats // {}' "$STATE_FILE" 2>/dev/null || echo '{}')
+# A human retry starts a new attempt. Keep the prior findings and round
+# history for auditability, but do not let stale-finding counters or the
+# previous attempt's resolutions trip the new attempt before its reviewer
+# runs. This mirrors the per-attempt max-round reset above.
+if [[ "$ATTEMPT_CHANGED" == "true" ]]; then
+    ACCUMULATED=$(echo "$ACCUMULATED" | jq 'with_entries(.value.consecutive_fixed = 0)')
+    REPEATS=$(echo "$REPEATS" | jq 'with_entries(.value.consecutive_fixed = 0)')
+fi
 PREV_FIXED_KEYS='[]'
 PREV_RESOLUTION_FILE="$REVIEW_DIR/resolution-round-${CURRENT_ROUND}.json"
-if [[ -f "$PREV_RESOLUTION_FILE" ]]; then
+if [[ "$ATTEMPT_CHANGED" != "true" && -f "$PREV_RESOLUTION_FILE" ]]; then
     PREV_FIXED_KEYS=$(jq -c --argjson prior "$PRIOR_FINDINGS" --argjson last_round "$CURRENT_ROUND" '
         # Resolution lookup: finding_id → disposition (this round only)
         ([(.resolutions // .dispositions // [])[]?
@@ -831,7 +852,9 @@ fi
 # same file tripped the stale-finding breaker after one recurrence).
 THIS_ROUND_KEY_MAP='{}'
 
-# Update accumulated findings with this round's data
+# Update accumulated findings with this round's data.
+# #229: jq calls remain unguarded here (fallback values corrupt
+# accumulated state).  The EXIT trap remaps undocumented codes to 4.
 for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
     FINDING_DATA=$(echo "$FINDINGS_JSON" | jq --arg id "$FINDING_ID" '.[] | select(.id == $id)')
     DESCRIPTION=$(echo "$FINDING_DATA" | jq -r '.description')
@@ -845,10 +868,12 @@ for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
     CONSEC_FIXED=0
     if [[ -f "$STATE_FILE" ]]; then
         CONSEC_FIXED=$(echo "$ACCUMULATED" | jq -r --arg id "$FINDING_ID" '.[$id].consecutive_fixed // 0')
-        # Check if last round's resolution was "fixed"
+        # Check if last round's resolution was "fixed".
+        # #229: null-tolerant — reads .resolutions, .dispositions,
+        # or neither without crashing ([]? handles non-arrays).
         PREV_RESOLUTION="$REVIEW_DIR/resolution-round-${CURRENT_ROUND}.json"
-        if [[ -f "$PREV_RESOLUTION" ]]; then
-            PREV_DISP=$(jq -r --arg id "$FINDING_ID" '.resolutions[] | select(.finding_id == $id) | .disposition // ""' "$PREV_RESOLUTION" 2>/dev/null)
+        if [[ "$ATTEMPT_CHANGED" != "true" && -f "$PREV_RESOLUTION" ]]; then
+            PREV_DISP=$(jq -r --arg id "$FINDING_ID" '(.resolutions // .dispositions // [])[]? | select((.finding_id // .id) == $id) | .disposition // ""' "$PREV_RESOLUTION" 2>/dev/null || echo "")
             if [[ "$PREV_DISP" == "fixed" ]]; then
                 CONSEC_FIXED=$((CONSEC_FIXED + 1))
             else
@@ -901,7 +926,10 @@ for REPEAT_KEY in $(echo "$THIS_ROUND_KEY_MAP" | jq -r 'keys[]'); do
                   consecutive_fixed: $cf }')
 done
 
-jq -n \
+# #229: generate and validate the replacement before publishing it. A jq
+# failure must leave the previous state intact and exit through RUNNER_ERROR.
+_state_tmp="${STATE_FILE}.tmp.$$"
+if ! jq -n \
     --argjson round "$NEXT_ROUND" \
     --argjson attempt "$ATTEMPT" \
     --argjson loop_start "$LOOP_START" \
@@ -925,7 +953,17 @@ jq -n \
       target_ref: $target_ref,
       last_verdict: $last_verdict, findings: $findings, repeats: $repeats,
       cost: $cost}' \
-    > "$STATE_FILE"
+    > "$_state_tmp"; then
+    rm -f "$_state_tmp"
+    echo "[review-runner] FATAL: could not generate state.json" >&2
+    exit 4
+fi
+if ! jq -e . "$_state_tmp" >/dev/null 2>&1; then
+    rm -f "$_state_tmp"
+    echo "[review-runner] FATAL: generated state.json is not valid JSON" >&2
+    exit 4
+fi
+mv "$_state_tmp" "$STATE_FILE"
 
 # ── Write loop-summary.json on PASS ──────────────────────────
 

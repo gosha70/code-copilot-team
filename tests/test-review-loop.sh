@@ -1049,6 +1049,106 @@ assert_eq "a mixed-disposition bucket does not advance staleness" "0" \
     "$(jq -r --arg k "$R1_KEY" '.repeats[$k].consecutive_fixed' "$P/.cct/review/state.json" 2>/dev/null)"
 rm -rf "$P"; rm -f "$MIXED" "$MIXED_R2"
 
+# ══════════════════════════════════════════════════════════════
+echo "=== #229: runner exit codes and state integrity ==="
+# Verify a normal review round stays within its content/provider contract.
+# Code 4 is reserved for runner failures and is exercised below with fault
+# injection. State must remain valid JSON after every path.
+P=$(mktemp -d)
+mkdir -p "$P/.cct/review"
+
+# Verify a normal round exits within contract (0-3, not 5 or other)
+write_state "$P" 0
+rc=0
+CCT_PROVIDER_PROFILE="$FAIL_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || rc=$?
+if [[ "$rc" -ge 0 && "$rc" -le 3 ]]; then
+    echo "  PASS: runner exit $rc is in documented contract (0-3)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: runner exited $rc outside documented contract (0-3)"
+    FAIL=$((FAIL + 1))
+fi
+# State must be valid JSON after run
+jq empty "$P/.cct/review/state.json" >/dev/null 2>&1
+assert_exit "state.json is valid JSON after round" 0 $?
+# current_round must have advanced
+ROUND=$(jq -r '.current_round' "$P/.cct/review/state.json")
+assert_eq "state round updated to 1" "1" "$ROUND"
+# findings-round-1.json must exist
+assert_eq "findings-round-1.json exists" "1" "$([[ -f "$P/.cct/review/findings-round-1.json" ]] && echo 1 || echo 0)"
+rm -rf "$P"
+
+# A dispositions-form resolution is the driver's durable format. The runner
+# must accept its `id` field just as it accepts `resolutions[].finding_id`.
+P=$(setup_project)
+write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$FAIL_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+FINDING_ID=$(jq -r '.findings[0].id' "$P/.cct/review/findings-round-1.json")
+jq -n --arg id "$FINDING_ID" \
+    '{round: 1, dispositions: [{id: $id, disposition: "fixed", rationale: "fixed", commit_ref: "abc"}]}' \
+    > "$P/.cct/review/resolution-round-1.json"
+RC=0; CCT_PROVIDER_PROFILE="$FAIL_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "a dispositions-only resolution completes the next round" 1 "$RC"
+assert_eq "a dispositions id advances the matching finding once" "1" \
+    "$(jq -r --arg id "$FINDING_ID" '.findings[$id].consecutive_fixed' "$P/.cct/review/state.json")"
+rm -rf "$P"
+
+# /review-decide retry increments attempt without erasing audit history. Old
+# attempt-local stale counters must not trip before the new reviewer runs.
+P=$(setup_project)
+write_state "$P" 3
+jq '
+    .attempt = 2 |
+    .last_attempt = 1 |
+    .attempt_start_round = 0 |
+    .findings = {"old-finding": {
+      description: "old defect", repeat_key: "old-bucket",
+      first_seen_round: 1, rounds_seen: [1, 2, 3], consecutive_fixed: 2
+    }} |
+    .repeats = {"old-bucket": {
+      file: "src/app.sh", category: "correctness",
+      rounds_seen: [1, 2, 3], consecutive_fixed: 2
+    }}
+' "$P/.cct/review/state.json" > "$P/.cct/review/state.tmp"
+mv "$P/.cct/review/state.tmp" "$P/.cct/review/state.json"
+RC=0; CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "retry bypasses stale counters from the prior attempt" 0 "$RC"
+assert_eq "retry still advances the monotonic round" "4" \
+    "$(jq -r '.current_round' "$P/.cct/review/state.json")"
+assert_eq "retry anchors the new attempt at the prior round" "3" \
+    "$(jq -r '.attempt_start_round' "$P/.cct/review/state.json")"
+assert_eq "retry persists the new attempt identity" "2" \
+    "$(jq -r '.last_attempt' "$P/.cct/review/state.json")"
+assert_eq "retry clears per-finding stale state" "0" \
+    "$(jq -r '.findings["old-finding"].consecutive_fixed' "$P/.cct/review/state.json")"
+assert_eq "retry clears repeat-bucket stale state" "0" \
+    "$(jq -r '.repeats["old-bucket"].consecutive_fixed' "$P/.cct/review/state.json")"
+rm -rf "$P"
+
+# Force only the final state builder to fail. The runner must publish neither
+# a partial state nor PASS and must classify its own failure as code 4.
+REAL_JQ=$(command -v jq)
+JQ_SHIM_DIR=$(mktemp -d)
+cat > "$JQ_SHIM_DIR/jq" << SH
+#!/usr/bin/env bash
+if [[ " \$* " == *" --argjson repeats "* ]]; then
+    exit 5
+fi
+exec "$REAL_JQ" "\$@"
+SH
+chmod +x "$JQ_SHIM_DIR/jq"
+P=$(setup_project)
+write_state "$P" 0
+RC=0; PATH="$JQ_SHIM_DIR:$PATH" CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "a final state-generation failure is RUNNER_ERROR" 4 "$RC"
+assert_eq "a state-generation failure preserves valid prior state" "0" \
+    "$(jq -r '.current_round' "$P/.cct/review/state.json")"
+assert_eq "a state-generation failure publishes no PASS summary" "0" \
+    "$([[ -f "$P/.cct/review/loop-summary.json" ]] && echo 1 || echo 0)"
+assert_eq "a state-generation failure removes its temp file" "0" \
+    "$(find "$P/.cct/review" -name 'state.json.tmp.*' | wc -l | tr -d ' ')"
+rm -rf "$P" "$JQ_SHIM_DIR"
+
 
 # ══════════════════════════════════════════════════════════════
 # Summary
