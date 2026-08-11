@@ -3010,9 +3010,6 @@ assert_exit "T5: brownfield frozen contract has captured baseline" 0 $?
 jq -e '.max_regression_pct == 5' \
     "$LEDGER/frozen-contract.json" >/dev/null 2>&1
 assert_exit "T5: brownfield contract has max_regression_pct" 0 $?
-# Contract is valid per schema
-SCHEMA="$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json"
-jq -e '.contract' "$LEDGER/../preflight-result" 2>/dev/null || true  # result already imported
 rm -rf "$P"
 
 echo ""

@@ -37,10 +37,16 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # T5: load coverage and preset libraries (used by contract_initialiser).
-# shellcheck source=lib/verification-preset.sh
-source "$SCRIPT_DIR/lib/verification-preset.sh"
-# shellcheck source=lib/coverage-parse.sh
-source "$SCRIPT_DIR/lib/coverage-parse.sh"
+# Guard with a file-existence check so test-harness extractions that run
+# from tests/ don't emit noise when the lib dir isn't at tests/lib/.
+if [[ -f "$SCRIPT_DIR/lib/verification-preset.sh" ]]; then
+    # shellcheck source=lib/verification-preset.sh
+    source "$SCRIPT_DIR/lib/verification-preset.sh"
+fi
+if [[ -f "$SCRIPT_DIR/lib/coverage-parse.sh" ]]; then
+    # shellcheck source=lib/coverage-parse.sh
+    source "$SCRIPT_DIR/lib/coverage-parse.sh"
+fi
 # Project being built: defaults to the repo this toolkit is installed in;
 # CCT_PROJECT_DIR points the driver at another project (tests, kick-starts).
 PROJECT_DIR="${CCT_PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -934,7 +940,7 @@ contract_initialiser() {
     if [[ "$baseline" == "admission" ]]; then
         local wt_dir
         wt_dir=$(mktemp -d)
-        git -C "$PROJECT_DIR" worktree add --detach "$wt_dir" HEAD >/dev/null 2>&1 || {
+        git -C "$PROJECT_DIR" worktree add --detach "$wt_dir" "$BRANCH_BASE" >/dev/null 2>&1 || {
             rm -rf "$wt_dir"; echo "Error: worktree add failed" >&2; exit 1; }
         local cov_rc=0
         captured_baseline=$(cp_collect "$wt_dir" "$effective" 2>&1) || cov_rc=$?
@@ -1012,7 +1018,7 @@ preflight_result_channel() {
     # initialiser here for fresh-attended-block and fresh-unattended-block.
     case "$path" in
         fresh-attended-block|fresh-unattended-block)
-            contract_initialiser "$path"
+            # Contract already initialised in the main flow (step 5).
             ;;
     esac
 }
@@ -2688,21 +2694,6 @@ fi
 # ── 2. Prerequisites — run BEFORE admission so nothing executes
 #    project code for a run that should be refused. ──
 
-# T5 guard: fresh coverage paths have no contract producer yet.
-# Refuse early — before admission executes test.command, before
-# preflight can dispose/terminate, before branch mutation.
-case "${PREFLIGHT_PATH:-}" in
-    fresh-attended-block|fresh-unattended-block)
-        echo "Error: verification.coverage block is present but the coverage" >&2
-        echo "contract initialiser has not been implemented yet (planned for T5)." >&2
-        echo "This is a genuine gap — no frozen-contract.json can be produced," >&2
-        echo "so the run cannot enforce its own coverage policy." >&2
-        echo "Remove the verification.coverage block from automation.json" >&2
-        echo "to proceed without coverage enforcement, or wait for T5." >&2
-        exit 1
-        ;;
-esac
-
 validate_frozen_contract_prerequisite
 if [[ "$RESUME" == "true" && ! -f "$STATE" ]]; then
     echo "Error: --resume but no ledger at $STATE." >&2
@@ -2760,19 +2751,31 @@ if [[ "$PROFILE" == "unattended" && "${SKIP_ADMISSION:-false}" != "true" ]]; the
     esac
 fi
 
-# ── 5. Ledger init + import: when a pre-ledger producer (admission)
-#    produced a result file, persist it NOW, before preflight can
-#    dispose/terminate. A provider-health termination must record the
-#    passed admission in the ledger (SC-6). For no-producer paths
-#    (attended no-block), defer to the post-preflight initialization
-#    to preserve FR-2 byte-identical behavior. ──
+# ── 5. Contract initialisation (T5): for fresh coverage paths, freeze
+#    the contract NOW before preflight can dispose/terminate. The result
+#    file may already carry admission (unattended) or be empty (attended);
+#    contract_initialiser handles both. ──
+case "${PREFLIGHT_PATH:-}" in
+    fresh-attended-block|fresh-unattended-block)
+        # Create the result file if not already present (attended paths
+        # have no prior admission section)
+        if [[ -z "${PREFLIGHT_RESULT_FILE:-}" ]]; then
+            PREFLIGHT_RESULT_FILE=$(mktemp) || { echo "Error: mktemp failed" >&2; exit 1; }
+        fi
+        contract_initialiser "$PREFLIGHT_PATH" || {
+            echo "Error: contract initialisation failed" >&2; exit 1; }
+        ;;
+esac
+
+# ── 6. Ledger init + import: persist the combined result (admission +
+#    contract) NOW, before preflight can dispose/terminate. ──
 if [[ -n "${PREFLIGHT_RESULT_FILE:-}" ]]; then
     init_ledger
     import_preflight_result "$PREFLIGHT_RESULT_FILE"
     flush_pending_events
 fi
 
-# ── 6. Resume dispatch — admission has passed, prerequisites are
+# ── 7. Resume dispatch — admission has passed, prerequisites are
 #    satisfied, ledger exists with admission evidence. Clock reset
 #    happens ONCE here, using the per-path CLOCK_ORIGIN. ──
 if [[ "$RESUME" == "true" ]]; then
