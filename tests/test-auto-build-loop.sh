@@ -2971,6 +2971,51 @@ rm -f "$DRIVER_FUNCS"
 rm -rf "$P"
 
 echo ""
+echo "=== T5: contract initialiser (#222) ==="
+# ══════════════════════════════════════════════════════════════
+
+# ── Greenfield: baseline:none — admits with no coverage artifact ──
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.verification.coverage={command:"true",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T5: greenfield run completes" 0 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat"
+# Frozen contract must exist with baseline:null
+jq -e '.baseline == null and .command == "true" and .parser == "istanbul"
+    and .min_line_pct == 80 and .floor_enforced_at == "landing"' \
+    "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "T5: greenfield frozen contract has null baseline" 0 $?
+# preset_id/preset_sha256 must be null (no preset contributed)
+jq -e '.preset_id == null and .preset_sha256 == null' \
+    "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "T5: greenfield contract has null preset provenance" 0 $?
+rm -rf "$P"
+
+# ── Brownfield: baseline:admission — captures baseline coverage ──
+P=$(setup_project); single_phase "$P"
+# The contract initialiser runs the coverage command inside a throwaway
+# worktree.  Write a helper script that produces a valid artifact.
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:85.5},branches:{pct:72.3}}}" > cov.json\n' > "$P/make-coverage.sh"
+chmod +x "$P/make-coverage.sh"
+git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "add coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-coverage.sh",artifact:"cov.json",parser:"istanbul",baseline:"admission",min_line_pct:70,max_regression_pct:5}'
+run_driver "$P"
+assert_exit "T5: brownfield run completes" 0 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat"
+# Frozen contract must have captured baseline
+jq -e '.baseline.line_pct == 85.5 and .baseline.branch_pct == 72.3' \
+    "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "T5: brownfield frozen contract has captured baseline" 0 $?
+# max_regression_pct must be present (brownfield requires it)
+jq -e '.max_regression_pct == 5' \
+    "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "T5: brownfield contract has max_regression_pct" 0 $?
+# Contract is valid per schema
+SCHEMA="$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json"
+jq -e '.contract' "$LEDGER/../preflight-result" 2>/dev/null || true  # result already imported
+rm -rf "$P"
+
+echo ""
 
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"

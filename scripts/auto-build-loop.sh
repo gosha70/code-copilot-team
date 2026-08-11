@@ -36,6 +36,11 @@ set -uo pipefail
 #      CCT_AUTOBUILD_PROFILE, CCT_PROVIDER_PROFILE, CCT_REVIEW_* (passed through)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# T5: load coverage and preset libraries (used by contract_initialiser).
+# shellcheck source=lib/verification-preset.sh
+source "$SCRIPT_DIR/lib/verification-preset.sh"
+# shellcheck source=lib/coverage-parse.sh
+source "$SCRIPT_DIR/lib/coverage-parse.sh"
 # Project being built: defaults to the repo this toolkit is installed in;
 # CCT_PROJECT_DIR points the driver at another project (tests, kick-starts).
 PROJECT_DIR="${CCT_PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -909,6 +914,64 @@ compute_preflight_path() {
     esac
 }
 
+# contract_initialiser: T5 — resolve preset, capture baseline if brownfield,
+# freeze the contract into the preflight result file.
+contract_initialiser() {
+    local path="$1"
+    local cov_cfg effective
+    cov_cfg=$(jq '.verification.coverage' "$CONFIG_SNAPSHOT")
+    effective=$(vp_resolve "$PROJECT_DIR" "$cov_cfg" "${TEST_TIMEOUT:-1200}") || {
+        echo "Error: preset resolution failed" >&2; exit 1; }
+
+    local command artifact parser timeout_sec baseline
+    command=$(jq -r '.command' <<< "$effective")
+    artifact=$(jq -r '.artifact' <<< "$effective")
+    parser=$(jq -r '.parser' <<< "$effective")
+    timeout_sec=$(jq -r '.timeout_sec' <<< "$effective")
+    baseline=$(jq -r '.baseline' <<< "$effective")
+
+    local captured_baseline=null
+    if [[ "$baseline" == "admission" ]]; then
+        local wt_dir
+        wt_dir=$(mktemp -d)
+        git -C "$PROJECT_DIR" worktree add --detach "$wt_dir" HEAD >/dev/null 2>&1 || {
+            rm -rf "$wt_dir"; echo "Error: worktree add failed" >&2; exit 1; }
+        local cov_rc=0
+        captured_baseline=$(cp_collect "$wt_dir" "$effective" 2>&1) || cov_rc=$?
+        if [[ $cov_rc -ne 0 ]]; then
+            git -C "$PROJECT_DIR" worktree remove -f "$wt_dir" >/dev/null 2>&1 || rm -rf "$wt_dir"
+            echo "Error: baseline coverage capture failed (exit $cov_rc)" >&2; exit 1
+        fi
+        git -C "$PROJECT_DIR" worktree remove -f "$wt_dir" >/dev/null 2>&1 || rm -rf "$wt_dir"
+    fi
+
+    local floor_at
+    floor_at=$(jq -r '.floor_enforced_at // "landing"' <<< "$effective")
+
+    # For unattended paths with existing admission section: merge contract in.
+    if [[ "$path" == "fresh-unattended-block" && -s "$PREFLIGHT_RESULT_FILE" ]]; then
+        local _tmp
+        _tmp=$(mktemp)
+        jq --arg command "$command" --arg artifact "$artifact" --arg parser "$parser" \
+           --argjson timeout_sec "$timeout_sec" --arg floor_enforced_at "$floor_at" \
+           --argjson preset_id "$(jq '.preset_id' <<< "$effective")" \
+           --argjson preset_sha256 "$(jq '.preset_sha256' <<< "$effective")" \
+           --argjson baseline "$captured_baseline" \
+           --argjson effective "$effective" \
+           '.contract = ({command:$command,artifact:$artifact,parser:$parser,timeout_sec:$timeout_sec,floor_enforced_at:$floor_enforced_at,preset_id:$preset_id,preset_sha256:$preset_sha256,baseline:$baseline} + (if $effective.min_line_pct then {min_line_pct:$effective.min_line_pct} else {} end) + (if $effective.min_branch_pct then {min_branch_pct:$effective.min_branch_pct} else {} end) + (if $effective.max_regression_pct then {max_regression_pct:$effective.max_regression_pct} else {} end))' \
+           "$PREFLIGHT_RESULT_FILE" > "$_tmp" && mv "$_tmp" "$PREFLIGHT_RESULT_FILE"
+    else
+        jq -n --arg command "$command" --arg artifact "$artifact" --arg parser "$parser" \
+           --argjson timeout_sec "$timeout_sec" --arg floor_enforced_at "$floor_at" \
+           --argjson preset_id "$(jq '.preset_id' <<< "$effective")" \
+           --argjson preset_sha256 "$(jq '.preset_sha256' <<< "$effective")" \
+           --argjson baseline "$captured_baseline" --argjson effective "$effective" \
+           --arg path "$path" \
+           '{schema_version:1,path:$path,contract:({command:$command,artifact:$artifact,parser:$parser,timeout_sec:$timeout_sec,floor_enforced_at:$floor_enforced_at,preset_id:$preset_id,preset_sha256:$preset_sha256,baseline:$baseline} + (if $effective.min_line_pct then {min_line_pct:$effective.min_line_pct} else {} end) + (if $effective.min_branch_pct then {min_branch_pct:$effective.min_branch_pct} else {} end) + (if $effective.max_regression_pct then {max_regression_pct:$effective.max_regression_pct} else {} end))}' \
+           > "$PREFLIGHT_RESULT_FILE"
+    fi
+}
+
 # preflight_result_channel: the T4 structured handoff.
 # - Validates contract prerequisite (resume+block → load+validate frozen contract)
 # - git worktree prune if any applicable producer will attempt isolation
@@ -949,7 +1012,7 @@ preflight_result_channel() {
     # initialiser here for fresh-attended-block and fresh-unattended-block.
     case "$path" in
         fresh-attended-block|fresh-unattended-block)
-            # T5: contract initialiser will run here.
+            contract_initialiser "$path"
             ;;
     esac
 }
