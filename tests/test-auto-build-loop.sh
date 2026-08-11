@@ -2971,6 +2971,71 @@ rm -f "$DRIVER_FUNCS"
 rm -rf "$P"
 
 echo ""
+echo "=== #234: session prompts must not travel on argv ==="
+# ══════════════════════════════════════════════════════════════
+
+# #209 moved the reviewer's transcript off argv on the RUNNER side and
+# deliberately kept it whole in findings-round-N.json. The driver then
+# handed that same payload to env as a single argument, so a large prompt
+# died with E2BIG before the session started. Prompts now go in on stdin.
+
+# ── A build prompt larger than ARG_MAX still starts its session ──
+# compose_build_prompt embeds spec.md verbatim, so an oversized spec is
+# enough to blow the argv limit without involving the review path at all.
+P=$(setup_project); single_phase "$P"
+ARGMAX=$(getconf ARG_MAX 2>/dev/null || echo 1048576)
+# ~55 bytes/line, sized off the host's own limit so the fixture is
+# oversized on Linux (2MB ARG_MAX) as well as macOS (1MB).
+BULK_LINES=$(( ARGMAX / 50 + 2000 ))
+awk -v n="$BULK_LINES" \
+    'BEGIN { for (i = 0; i < n; i++) print "- FR-X" i ": constraint text that makes this spec large " i }' \
+    >> "$P/specs/demo-feat/spec.md"
+git -C "$P" add -A && git -C "$P" commit -q -m "oversized spec fixture"
+SPEC_BYTES=$(wc -c < "$P/specs/demo-feat/spec.md" | tr -d ' ')
+assert_eq "#234: oversized-spec fixture really exceeds ARG_MAX" "yes" \
+    "$([[ "$SPEC_BYTES" -gt "$ARGMAX" ]] && echo yes || echo no)"
+run_driver "$P"
+assert_exit "#234: a build prompt larger than ARG_MAX still runs" 0 "$RC"
+# E2BIG lands in the session's own stderr file, so assert on what the
+# driver reports: an aborted exec surfaces as build_session_error / 126.
+assert_eq "#234: no session aborted before producing a result" "absent" \
+    "$(grep -qE 'build_session_error|exited 126' <<< "$OUTPUT" && echo present || echo absent)"
+rm -rf "$P"
+
+# ── The fix prompt carries findings, not the reviewer's transcript ──
+# findings-round-N.json keeps raw_output (the #209 guarantee); the fixer
+# only needs the structured findings, so the prompt must drop it.
+P=$(mktemp -d)
+DRIVER_FUNCS=$(mktemp)
+_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
+# shellcheck source=/dev/null
+source "$DRIVER_FUNCS"
+# Build the fixture the way review-round-runner.sh does — by FILE. Passing
+# 2MB as `jq --arg` is the very bug under test and fails here too.
+awk 'BEGIN { for (i = 0; i < 40000; i++) print "reviewer restates the prompt at length " i }' \
+    > "$P/raw-output.txt"
+jq -n --rawfile raw "$P/raw-output.txt" \
+    '{round: 1, verdict: "FAIL", reviewer_provider: "mock",
+      findings: [{id: "F1", severity: "blocking", category: "correctness",
+                  file: "src/a.sh", description: "Output dirs are never cleaned",
+                  suggested_fix: "Clean them"}],
+      raw_output: $raw}' > "$P/findings.json"
+compose_fix_prompt "$P/findings.json" 1 "$P/fix-prompt.txt"
+assert_eq "#234: the fix prompt drops raw_output" "absent" \
+    "$(grep -q 'raw_output' "$P/fix-prompt.txt" && echo present || echo absent)"
+assert_eq "#234: the fix prompt keeps the finding id" "present" \
+    "$(grep -q '"F1"' "$P/fix-prompt.txt" && echo present || echo absent)"
+assert_eq "#234: the fix prompt keeps the suggested fix" "present" \
+    "$(grep -q 'Clean them' "$P/fix-prompt.txt" && echo present || echo absent)"
+assert_eq "#234: findings-round-N.json still retains the transcript" "retained" \
+    "$([[ "$(jq -r '.raw_output | length' "$P/findings.json")" -gt 1000000 ]] && echo retained || echo truncated)"
+assert_eq "#234: the fix prompt is far smaller than the findings file" "smaller" \
+    "$([[ "$(wc -c < "$P/fix-prompt.txt")" -lt 20000 ]] && echo smaller || echo large)"
+rm -f "$DRIVER_FUNCS"
+rm -rf "$P"
+
+echo ""
 
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"

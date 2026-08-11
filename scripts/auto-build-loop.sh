@@ -1534,10 +1534,13 @@ run_claude_session() {
     # run_claude_session <prompt-file> <result-file> [resume-session-id]
     local prompt_file="$1" result_file="$2" resume_id="${3:-}"
     check_caps
-    local args=(-p "$(cat "$prompt_file")" --output-format json --permission-mode acceptEdits --max-turns "$BUILD_MAX_TURNS")
+    # The prompt goes in on stdin, never argv: a fix prompt carrying a large
+    # findings file exceeds ARG_MAX and env fails E2BIG (exit 126) before the
+    # session starts. `claude -p` with no positional prompt reads stdin.
+    local args=(-p --output-format json --permission-mode acceptEdits --max-turns "$BUILD_MAX_TURNS")
     [[ -n "$resume_id" ]] && args=(--resume "$resume_id" "${args[@]}")
     ( cd "$PROJECT_DIR" && env CCT_PEER_REVIEW_ENABLED=false CCT_AUTO_BUILD=1 \
-        "$CLAUDE_BIN" "${args[@]}" > "$result_file" 2> "$result_file.stderr" )
+        "$CLAUDE_BIN" "${args[@]}" < "$prompt_file" > "$result_file" 2> "$result_file.stderr" )
     local rc=$?
     if [[ $rc -ne 0 && ! -s "$result_file" ]]; then
         dispose "build_session_error" "claude exited $rc with no result JSON (see $result_file.stderr)" \
@@ -1716,7 +1719,9 @@ compose_fix_prompt() {
         echo "  short rationale. Leave commit_ref fields empty — the driver fills them."
         echo
         echo "## Findings (JSON)"
-        cat "$findings"
+        # Drop raw_output: it is the reviewer's full transcript, routinely >1MB,
+        # and the fixer needs only the structured findings (a few KB).
+        jq 'del(.raw_output)' "$findings" 2>/dev/null || cat "$findings"
         if [[ -n "$advisory" && -f "$advisory" ]] \
            && [[ "$(jq 'length' "$advisory" 2>/dev/null || echo 0)" -gt 0 ]]; then
             echo
