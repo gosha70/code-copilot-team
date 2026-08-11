@@ -10,7 +10,7 @@ set -euo pipefail
 # Usage: review-round-runner.sh <project-dir>
 # Exit:  0 = PASS, 1 = FAIL/INVALID, 2 = BREAKER_TRIPPED,
 #        3 = PROVIDER_ERROR (the reviewer never ran — #204)
-#        4 = RUNNER_ERROR (reserved — #229)
+#        4 = RUNNER_ERROR (script crash — #229)
 #
 # Requires: jq, shasum or sha256sum
 # Env:      CCT_PROVIDER_PROFILE (optional, default ~/.code-copilot-team/providers.toml)
@@ -25,11 +25,10 @@ if [[ $# -lt 1 ]]; then
     exit 1
 fi
 
-# #229: under set -e, a jq runtime error in the state-update path exits
-# with jq's code (commonly 5), which is outside the documented contract
-# (0-3). The driver's catch-all reports this as review_breaker. Code 4
-# (RUNNER_ERROR) is reserved for a future EXIT trap to remap unexpected
-# codes; the driver's catch-all can then detect rc >= 4 as a script crash.
+# #229: the EXIT trap (line ~335) remaps unexpected exit codes (> 4)
+# to code 4 (RUNNER_ERROR) so the driver has a defined arm for script
+# crashes.  PREV_DISP (below) is null-tolerant to fix the specific
+# crash site (.resolutions[] on a dispositions-only file).
 PROJECT_DIR="$(cd "$1" && pwd)"
 
 # Shared verdict parser (#200) — one implementation for both runners.
@@ -332,7 +331,12 @@ fi
 # ── Create snapshot sandbox ──────────────────────────────────
 
 SNAPSHOT_DIR=$(mktemp -d)
-trap 'rm -rf "$SNAPSHOT_DIR"' EXIT
+trap '_rr_rc=$?; rm -rf "$SNAPSHOT_DIR" 2>/dev/null
+if [[ $_rr_rc -gt 4 ]]; then
+    echo "[review-runner] FATAL: unexpected exit $_rr_rc -- RUNNER_ERROR (code 4)" >&2
+    exit 4
+fi
+exit $_rr_rc' EXIT
 
 # Record pre-review state for post-review validation
 PRE_REVIEW_HEAD=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "none")
@@ -838,9 +842,8 @@ fi
 THIS_ROUND_KEY_MAP='{}'
 
 # Update accumulated findings with this round's data.
-# #229: jq calls in this loop are unguarded (fallback values corrupt
-# accumulated state).  Code 4 (RUNNER_ERROR) is reserved for a future
-# EXIT trap to remap the resulting undocumented exit codes.
+# #229: jq calls remain unguarded here (fallback values corrupt
+# accumulated state).  The EXIT trap remaps undocumented codes to 4.
 for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
     FINDING_DATA=$(echo "$FINDINGS_JSON" | jq --arg id "$FINDING_ID" '.[] | select(.id == $id)')
     DESCRIPTION=$(echo "$FINDING_DATA" | jq -r '.description')
@@ -855,13 +858,11 @@ for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
     if [[ -f "$STATE_FILE" ]]; then
         CONSEC_FIXED=$(echo "$ACCUMULATED" | jq -r --arg id "$FINDING_ID" '.[$id].consecutive_fixed // 0')
         # Check if last round's resolution was "fixed".
-        # #229: the PREV_FIXED_KEYS section above already tolerates both
-        # .resolutions and .dispositions keys.  This lookup reads only
-        # .resolutions; a dispositions-only file makes .resolutions[]
-        # crash with jq exit 5, terminating the runner under set -e.
+        # #229: null-tolerant — reads .resolutions, .dispositions,
+        # or neither without crashing ([]? handles non-arrays).
         PREV_RESOLUTION="$REVIEW_DIR/resolution-round-${CURRENT_ROUND}.json"
         if [[ -f "$PREV_RESOLUTION" ]]; then
-            PREV_DISP=$(jq -r --arg id "$FINDING_ID" '.resolutions[] | select(.finding_id == $id) | .disposition // ""' "$PREV_RESOLUTION" 2>/dev/null)
+            PREV_DISP=$(jq -r --arg id "$FINDING_ID" '(.resolutions // .dispositions // [])[]? | select((.finding_id // .id) == $id) | .disposition // ""' "$PREV_RESOLUTION" 2>/dev/null || echo "")
             if [[ "$PREV_DISP" == "fixed" ]]; then
                 CONSEC_FIXED=$((CONSEC_FIXED + 1))
             else
@@ -914,7 +915,12 @@ for REPEAT_KEY in $(echo "$THIS_ROUND_KEY_MAP" | jq -r 'keys[]'); do
                   consecutive_fixed: $cf }')
 done
 
-jq -n \
+# #229: atomic state write with explicit error checking.
+# Under set -e, a failed jq on the left of && is exempt — the
+# failure is silently swallowed and the runner exits 0 with stale
+# state.  Explicit if/exit ensures the EXIT trap remaps the failure.
+_state_tmp="${STATE_FILE}.tmp.$$"
+if ! jq -n \
     --argjson round "$NEXT_ROUND" \
     --argjson attempt "$ATTEMPT" \
     --argjson loop_start "$LOOP_START" \
@@ -938,7 +944,17 @@ jq -n \
       target_ref: $target_ref,
       last_verdict: $last_verdict, findings: $findings, repeats: $repeats,
       cost: $cost}' \
-    > "$STATE_FILE"
+    > "$_state_tmp"; then
+    rm -f "$_state_tmp"
+    echo "[review-runner] FATAL: could not generate state.json" >&2
+    exit 4
+fi
+if ! jq -e . "$_state_tmp" >/dev/null 2>&1; then
+    rm -f "$_state_tmp"
+    echo "[review-runner] FATAL: generated state.json is not valid JSON" >&2
+    exit 4
+fi
+mv "$_state_tmp" "$STATE_FILE"
 
 # ── Write loop-summary.json on PASS ──────────────────────────
 

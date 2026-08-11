@@ -1875,6 +1875,20 @@ run_review_loop() {
                     "reviewer '$(jq -r '.reviewer_provider // "?"' "$post_frf" 2>/dev/null || echo "?")' failed (exit $_pexit) in phase $n round $round: $_perr" \
                     "$(jq -n --arg f "${post_frf:-}" '{findings_file: $f}')"
                 ;;
+            4)
+                # #229: derive the attempted round from the newest findings
+                # file (post_frf) rather than stale state.json.  The runner
+                # writes findings before state, so post_frf proves which
+                # round was in progress when the crash occurred.
+                local _crash_round="$round"
+                if [[ -n "${post_frf:-}" ]]; then
+                    _crash_round=$(echo "$post_frf" | sed -n 's/.*findings-round-\([0-9]*\)\.json/\1/p')
+                    [[ -n "$_crash_round" ]] || _crash_round="$round"
+                fi
+                dispose "runner_error" \
+                    "review runner crashed (RUNNER_ERROR) in phase $n — this is a script error, not a review verdict. Findings may have been written for round $_crash_round while state.json lagged. --resume is intentionally refused for runner crashes; resolve the cause and start a fresh attended run." \
+                    "$(jq -n --arg f "${post_frf:-}" --arg r "$_crash_round" '{findings_file: $f, crashed_before_round: ($r | tonumber)}')"
+                ;;
             0)
                 verify_pass_gate
                 mkdir -p "$phase_dir"
