@@ -2314,6 +2314,16 @@ resume_parked() {
                 || refuse_resume "gating reviewer chain still unhealthy — fix providers.toml or the provider service, then --resume"
             resolve_escalation "$esc_file" "reviewer chain healthy again"
             ;;
+        runner_error)
+            # A runner crash can leave findings newer than state.json. Do not
+            # resume from that ambiguous boundary; surface the evidence saved
+            # by run_review_loop instead of falling through to the generic
+            # unknown-reason refusal.
+            local crash_round crash_findings
+            crash_round=$(jq -r '.history.crashed_before_round // "?"' "$esc_file" 2>/dev/null || echo "?")
+            crash_findings=$(jq -r '.history.findings_file // empty' "$esc_file" 2>/dev/null || echo "")
+            refuse_resume "runner crash is not resumable because review state may be inconsistent (attempted round $crash_round; findings: ${crash_findings:-none}). Resolve the runner error and start a fresh attended run"
+            ;;
         test_failure|build_session_error|git_anomaly)
             [[ -z "$(git -C "$PROJECT_DIR" status --porcelain | grep -v '^?? \.cct/')" ]] \
                 || refuse_resume "worktree is dirty — commit your manual fix first, then --resume"

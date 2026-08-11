@@ -131,18 +131,21 @@ NEXT_ROUND=$((CURRENT_ROUND + 1))
 # attempt_start_round would put a safety invariant in a model's hands.
 ATTEMPT_START_ROUND=$(jq -r '.attempt_start_round // 0' "$STATE_FILE" 2>/dev/null)
 LAST_ATTEMPT=$(jq -r '.last_attempt // empty' "$STATE_FILE" 2>/dev/null)
+ATTEMPT_CHANGED=false
 # Reset ONLY when the attempt is KNOWN to have changed. A state written
 # before this field existed has no last_attempt, and treating that as "a new
 # attempt starts here" would silently forgive an already-exhausted budget on
 # the first run after upgrade — the anchor stays 0, i.e. the old cumulative
 # behaviour, until a real retry moves it.
 if [[ -n "$LAST_ATTEMPT" && "$LAST_ATTEMPT" != "$ATTEMPT" ]]; then
+    ATTEMPT_CHANGED=true
     ATTEMPT_START_ROUND="$CURRENT_ROUND"
 elif [[ -z "$LAST_ATTEMPT" ]] && [[ "$ATTEMPT" -gt 1 ]]; then
     # The breaker exits BEFORE state is rewritten, so the run that tripped it
     # never persisted last_attempt — and the retry that follows would look
     # like legacy state. `attempt` only advances via /review-decide retry, so
     # attempt > 1 with no anchor IS a retry, and it gets a fresh budget.
+    ATTEMPT_CHANGED=true
     ATTEMPT_START_ROUND="$CURRENT_ROUND"
 fi
 ROUNDS_THIS_ATTEMPT=$((NEXT_ROUND - ATTEMPT_START_ROUND))
@@ -197,7 +200,7 @@ BREAKER_EOF
     fi
 
     # Stale findings
-    if [[ "$CURRENT_ROUND" -ge 2 && -f "$STATE_FILE" ]]; then
+    if [[ "$ATTEMPT_CHANGED" != "true" && "$CURRENT_ROUND" -ge 2 && -f "$STATE_FILE" ]]; then
         # Buckets first (#227 D3): per-id staleness misses a reviewer that
         # rewords, because every restatement arrives with a fresh id.
         STALE_IDS=$(jq -r --argjson threshold "$STALE_THRESHOLD" '
@@ -806,9 +809,17 @@ ACCUMULATED=$(jq '.findings // {}' "$STATE_FILE" 2>/dev/null || echo '{}')
 # previous resolution's finding ids through the findings they belonged to.
 PRIOR_FINDINGS="$ACCUMULATED"
 REPEATS=$(jq '.repeats // {}' "$STATE_FILE" 2>/dev/null || echo '{}')
+# A human retry starts a new attempt. Keep the prior findings and round
+# history for auditability, but do not let stale-finding counters or the
+# previous attempt's resolutions trip the new attempt before its reviewer
+# runs. This mirrors the per-attempt max-round reset above.
+if [[ "$ATTEMPT_CHANGED" == "true" ]]; then
+    ACCUMULATED=$(echo "$ACCUMULATED" | jq 'with_entries(.value.consecutive_fixed = 0)')
+    REPEATS=$(echo "$REPEATS" | jq 'with_entries(.value.consecutive_fixed = 0)')
+fi
 PREV_FIXED_KEYS='[]'
 PREV_RESOLUTION_FILE="$REVIEW_DIR/resolution-round-${CURRENT_ROUND}.json"
-if [[ -f "$PREV_RESOLUTION_FILE" ]]; then
+if [[ "$ATTEMPT_CHANGED" != "true" && -f "$PREV_RESOLUTION_FILE" ]]; then
     PREV_FIXED_KEYS=$(jq -c --argjson prior "$PRIOR_FINDINGS" --argjson last_round "$CURRENT_ROUND" '
         # Resolution lookup: finding_id → disposition (this round only)
         ([(.resolutions // .dispositions // [])[]?
@@ -861,7 +872,7 @@ for FINDING_ID in $(echo "$FINDINGS_JSON" | jq -r '.[].id'); do
         # #229: null-tolerant — reads .resolutions, .dispositions,
         # or neither without crashing ([]? handles non-arrays).
         PREV_RESOLUTION="$REVIEW_DIR/resolution-round-${CURRENT_ROUND}.json"
-        if [[ -f "$PREV_RESOLUTION" ]]; then
+        if [[ "$ATTEMPT_CHANGED" != "true" && -f "$PREV_RESOLUTION" ]]; then
             PREV_DISP=$(jq -r --arg id "$FINDING_ID" '(.resolutions // .dispositions // [])[]? | select((.finding_id // .id) == $id) | .disposition // ""' "$PREV_RESOLUTION" 2>/dev/null || echo "")
             if [[ "$PREV_DISP" == "fixed" ]]; then
                 CONSEC_FIXED=$((CONSEC_FIXED + 1))
@@ -915,10 +926,8 @@ for REPEAT_KEY in $(echo "$THIS_ROUND_KEY_MAP" | jq -r 'keys[]'); do
                   consecutive_fixed: $cf }')
 done
 
-# #229: atomic state write with explicit error checking.
-# Under set -e, a failed jq on the left of && is exempt — the
-# failure is silently swallowed and the runner exits 0 with stale
-# state.  Explicit if/exit ensures the EXIT trap remaps the failure.
+# #229: generate and validate the replacement before publishing it. A jq
+# failure must leave the previous state intact and exit through RUNNER_ERROR.
 _state_tmp="${STATE_FILE}.tmp.$$"
 if ! jq -n \
     --argjson round "$NEXT_ROUND" \
