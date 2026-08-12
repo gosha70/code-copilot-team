@@ -152,17 +152,19 @@ cp_run_bounded() {
     # prevent. Both paths therefore terminate a process GROUP and escalate
     # TERM -> KILL.
     local secs="$1" cwd="$2" cmd="$3" tcmd rc=0
-    # The isolation the caller set up (throwaway worktree) must be the
-    # WHOLE truth the command sees. The driver is launched with
-    # CCT_PROJECT_DIR pointing at the canonical checkout and itself exports
-    # CCT_SPECS_DIR into the canonical specs dir — either inherited copy
-    # hands the command a documented path straight back out of its sandbox,
-    # so BOTH are rebound to the execution root here, on every path.
+    # The throwaway worktree is SIDE-EFFECT isolation, not a security
+    # sandbox — but no path the harness itself hands the command may point
+    # back at the canonical checkout. CCT_PROJECT_DIR and CCT_SPECS_DIR
+    # (driver exports) are rebound to the execution root on every path.
+    # OLDPWD is dropped explicitly as a belt: bash already scrubs an
+    # imported OLDPWD at startup and cd sets it unexported, so no child
+    # of this bash-to-bash chain can observe it today — the -u documents
+    # the intent and holds if this wrapper is ever not bash.
     tcmd=$(cp_timeout_cmd)
     if [[ -n "$tcmd" ]]; then
         # -k escalates to KILL if the command ignores TERM. Without it the
         # native path had no escalation at all.
-        ( cd "$cwd" && env CCT_PROJECT_DIR="$cwd" CCT_SPECS_DIR="$cwd/specs" \
+        ( cd "$cwd" && env -u OLDPWD CCT_PROJECT_DIR="$cwd" CCT_SPECS_DIR="$cwd/specs" \
             "$tcmd" -k 5 "$secs" bash -c "$cmd" ) >/dev/null 2>&1 || rc=$?
         return $rc
     fi
@@ -191,7 +193,7 @@ cp_run_bounded() {
     fi
     fired="$firedir/fired"
     set -m
-    ( cd "$cwd" && env CCT_PROJECT_DIR="$cwd" CCT_SPECS_DIR="$cwd/specs" \
+    ( cd "$cwd" && env -u OLDPWD CCT_PROJECT_DIR="$cwd" CCT_SPECS_DIR="$cwd/specs" \
         bash -c "$cmd" ) >/dev/null 2>&1 &
     local pid=$!
     ( sleep "$secs"

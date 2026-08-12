@@ -3794,6 +3794,33 @@ assert_eq "T6: the specs-leak reached no commit" "0" \
     "$(git -C "$P" log --all -S leaked --oneline -- specs/demo-feat/plan.md | wc -l | tr -d ' ')"
 rm -rf "$P"
 
+# ── …and OLDPWD never reaches the coverage command at all ──
+# An e2e leak through OLDPWD is not constructible here: bash scrubs an
+# imported OLDPWD (value AND export attribute) at startup, and cd sets
+# it unexported — verified empirically against bash-to-bash, env-launch,
+# and assignment-prefix chains, so no child of the driver's bash chain
+# can observe it. The env -u in cp_run_bounded is therefore a belt; this
+# asserts the coverage command's ACTUAL environ carries no OLDPWD, and
+# that the belt is present on both execution paths.
+P=$(setup_project); single_phase "$P"
+T6_ENVDUMP=$(mktemp)
+cat > "$P/make-cov.sh" << EOF
+#!/usr/bin/env bash
+env > "$T6_ENVDUMP"
+jq -n '{total:{lines:{pct:92}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "environ-dumping coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+OLDPWD="$P" run_driver "$P"
+assert_exit "T6: environ-dumping coverage run lands" 0 "$RC"
+assert_eq "T6: the coverage environ carries no OLDPWD" "0" \
+    "$(grep -c '^OLDPWD=' "$T6_ENVDUMP")"
+assert_eq "T6: the env -u OLDPWD belt is present on both runner paths" "2" \
+    "$(grep -c 'env -u OLDPWD' "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh")"
+rm -f "$T6_ENVDUMP"
+rm -rf "$P"
+
 # ── Resume: the ledger's admitted contract is the authority ──
 # A schema-VALID frozen file with a rewritten floor (80 → 1) must not
 # repin on resume: valid-but-different is exactly what a structural
@@ -4305,6 +4332,47 @@ assert_contains "T6: the summary recovery delta was reviewed" "$OUTPUT" \
     "artifact recovery: reviewing delta"
 assert_eq "T6: the summary recovery cost one more reviewer invocation" "2" \
     "$(wc -l < "$T6_ARCOUNT" | tr -d ' ')"
+rm -rf "$P"; rm -f "$T6_AR_SH" "$T6_AR_PROFILE" "$T6_ARMARK"
+
+# ── A review-bound park with an EMPTY parked_head fails closed ──
+# Missing key = legacy pre-review park; present-but-empty = a review-bound
+# park whose HEAD capture failed — that must refuse, never degrade into
+# the legacy clean-tree-and-green-tests arm.
+: > "$T6_ARCOUNT"
+T6_ARMARK="$(mktemp -u)"
+P=$(setup_project); single_phase "$P"
+T6_AR_SH=$(mktemp)
+cat > "$T6_AR_SH" << SH
+#!/usr/bin/env bash
+echo x >> "$T6_ARCOUNT"
+if [[ ! -e "$T6_ARMARK" ]]; then
+    : > "$T6_ARMARK"
+    touch "$P/.git/index.lock"
+fi
+printf '### Summary\nOK.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+T6_AR_PROFILE=$(mktemp)
+cat > "$T6_AR_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $T6_AR_SH"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+REVIEW_PROFILE="$T6_AR_PROFILE" run_driver "$P"
+rm -f "$P/.git/index.lock"
+assert_exit "T6: empty-head fixture parks at the artifact commit (exit 4)" 4 "$RC"
+# Doctor the failure the site tolerates: the HEAD capture came back empty.
+ESC9="$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+_t=$(mktemp)
+jq '.history.parked_head = ""' "$ESC9" > "$_t" && mv "$_t" "$ESC9"
+git -C "$P" add -A && git -C "$P" commit -q -m "recover artifact"
+run_driver "$P" --resume
+assert_exit "T6: an empty parked_head refuses instead of degrading (exit 1)" 1 "$RC"
+assert_contains "T6: the refusal names the unbindable recovery" "$OUTPUT" \
+    "no valid parked_head"
 rm -rf "$P"; rm -f "$T6_AR_SH" "$T6_AR_PROFILE" "$T6_ARMARK" "$T6_ARCOUNT"
 
 # phase_gate unit: an rc-2 commit failure parks instead of proceeding.

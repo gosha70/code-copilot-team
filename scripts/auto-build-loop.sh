@@ -3030,8 +3030,18 @@ resume_parked() {
             # before anything reruns — the same commit-bound invariant as
             # coverage recovery. Legacy git_anomaly parks (no parked_head)
             # fire pre-review and keep their existing semantics.
+            # Missing KEY = a legacy pre-review park (old semantics apply).
+            # Present-but-empty VALUE = a review-bound park whose HEAD
+            # capture failed — that must fail CLOSED, not degrade into the
+            # legacy arm: git failure is exactly git_anomaly's domain.
             local ga_parked ga_cur
-            ga_parked=$(jq -r '.history.parked_head // empty' "$esc_file")
+            if jq -e '.history | type == "object" and has("parked_head")' "$esc_file" >/dev/null 2>&1; then
+                ga_parked=$(jq -r '.history.parked_head' "$esc_file")
+                [[ -n "$ga_parked" && "$ga_parked" != "null" ]] \
+                    || refuse_resume "this review-bound git_anomaly park has no valid parked_head — the recovery cannot be bound to the reviewed commit; start a fresh run"
+            else
+                ga_parked=""
+            fi
             if [[ -n "$ga_parked" ]]; then
                 ga_cur=$(git -C "$PROJECT_DIR" rev-parse HEAD)
                 if [[ "$ga_cur" != "$ga_parked" ]]; then
