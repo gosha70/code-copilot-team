@@ -129,6 +129,10 @@ SKIP_ADMISSION=false
 HAS_COVERAGE_BLOCK=false
 PREFLIGHT_PATH=""
 PREFLIGHT_RESULT_FILE=""
+# The admitted coverage contract, pinned in process memory at the moment
+# it is validated (import on fresh paths, prerequisite on resume). Gates
+# read ONLY this — never the on-disk file, which project code can edit.
+FROZEN_CONTRACT=""
 PREFLIGHT_CONTRACT_VALIDATED=false
 CLOCK_ORIGIN=""
 ADMISSION_PASSED=false
@@ -849,6 +853,28 @@ validate_frozen_contract_prerequisite() {
     fi
     echo "[auto-build] frozen contract validated: $frozen" >&2
     PREFLIGHT_CONTRACT_VALIDATED=true
+    # The ledger's admitted contract is the AUTHORITY on resume — a
+    # schema-valid file is not enough, because "valid but different"
+    # (floor 80 quietly rewritten to a valid floor 1) passes every
+    # structural check. The disk copy must be semantically identical to
+    # what state.json recorded at admission, and the pin comes from the
+    # ledger, never the file.
+    local _admitted
+    _admitted=$(jq -cS '.preflight.contract // empty' "$STATE" 2>/dev/null)
+    if [[ -z "$_admitted" ]]; then
+        echo "Error: the ledger carries no admitted contract (state.json" >&2
+        echo ".preflight.contract) while a frozen contract file exists —" >&2
+        echo "the ledger is inconsistent; refusing to resume (FR-4a)." >&2
+        exit 1
+    fi
+    if [[ "$(jq -cS . "$frozen" 2>/dev/null)" != "$_admitted" ]]; then
+        echo "Error: frozen contract at $frozen does not match the admitted" >&2
+        echo "contract recorded in the ledger — it was modified between runs." >&2
+        echo "Refusing to resume with a rewritten policy (FR-4a)." >&2
+        exit 1
+    fi
+    # Pin from the ledger's copy — gates read memory, not disk.
+    FROZEN_CONTRACT=$(jq -c '.preflight.contract' "$STATE")
 }
 
 # compute_preflight_path: determines the PATH discriminator from
@@ -991,6 +1017,20 @@ contract_initialiser() {
             echo "Error: baseline coverage capture failed (exit $cov_rc)" >&2; exit 1
         fi
         git -C "$PROJECT_DIR" worktree remove -f "$wt_dir" >/dev/null 2>&1 || rm -rf "$wt_dir"
+        # A brownfield contract promises no-regression enforcement for every
+        # floored metric (FR-4) — a baseline that lacks one cannot keep that
+        # promise, so it is inadmissible NOW, not silently ungoverned later.
+        local _missing
+        _missing=$(jq -r --argjson b "$captured_baseline" '
+            [ (if (.min_line_pct != null)   and ($b.line_pct   == null) then "line"   else empty end),
+              (if (.min_branch_pct != null) and ($b.branch_pct == null) then "branch" else empty end) ]
+            | join(", ")' <<< "$effective")
+        if [[ -n "$_missing" ]]; then
+            echo "Error: baseline capture produced no $_missing metric, but a floor" >&2
+            echo "governs it — a brownfield contract must carry a baseline for every" >&2
+            echo "floored metric (FR-4). Fix the coverage tooling or drop the floor." >&2
+            exit 1
+        fi
     fi
 
     local floor_at
@@ -1286,6 +1326,16 @@ validate_contract_json() {
             echo "[auto-build] ERROR: contract.max_regression_pct is required when baseline is non-null (brownfield)" >&2
             ((_errors++))
         fi
+        # Every floored metric needs a baseline value to regress FROM —
+        # a null baseline for a governed metric would silently exempt it
+        # from the no-regression promise (FR-4).
+        if jq -e '(.baseline | type == "object") and
+                  (((.min_line_pct != null)   and (.baseline.line_pct   == null)) or
+                   ((.min_branch_pct != null) and (.baseline.branch_pct == null)))' \
+                <<< "$_ct" >/dev/null 2>&1; then
+            echo "[auto-build] ERROR: brownfield contract.baseline must carry a non-null value for every floored metric (FR-4)" >&2
+            ((_errors++))
+        fi
     fi
 
     return $_errors
@@ -1395,10 +1445,132 @@ import_preflight_result() {
             exit 1
         fi
         journal "preflight_contract" "frozen contract written"
+        # Pin the admitted contract in PROCESS MEMORY. Every gate reads
+        # this copy, never the file — a build session that edits
+        # frozen-contract.json on disk cannot move a floor or disable an
+        # enforcement point mid-run (T6 review, finding 2).
+        FROZEN_CONTRACT=$(jq -c . "$LEDGER_DIR/frozen-contract.json")
     fi
 
     rm -f "$result_file"
     echo "[auto-build] preflight result imported (path: $PREFLIGHT_PATH)" >&2
+}
+
+# ── Coverage gate (T6 — FR-3, FR-4, FR-4a, FR-4b) ────────────
+
+coverage_gate_verdict() {
+    # coverage_gate_verdict <frozen-contract-json> <measured-json>
+    # Pure policy arithmetic: prints the verdict detail; rc 1 on failure.
+    # Governed metrics are exactly those with a configured floor (FR-4b),
+    # checked independently; regression is percentage POINTS
+    # (baseline − measured), never relative. A floor whose metric the
+    # artifact lacks fails closed — absence is not compliance.
+    local contract="$1" measured="$2" verdict
+    verdict=$(jq -n -c --argjson c "$contract" --argjson m "$measured" '
+        def r2: (. * 100 | round) / 100;
+        def chk($name; $floor; $val; $base):
+            if $floor == null then empty
+            elif $val == null then
+                {ok: false, detail: "\($name) floor \($floor)% is set but the artifact carries no \($name) metric — failing closed (FR-4b)"}
+            elif $val < $floor then
+                {ok: false, detail: "\($name) coverage \($val)% is below the floor \($floor)% (FR-3/FR-4)"}
+            elif ($c.baseline != null) and ($base == null) then
+                {ok: false, detail: "\($name) floor is set but the frozen baseline carries no \($name) metric — regression cannot be enforced, failing closed (FR-4)"}
+            elif ($base != null) and ($c.max_regression_pct != null)
+                 and (($base - $val) > $c.max_regression_pct) then
+                {ok: false, detail: "\($name) coverage \($val)% regressed \(($base - $val) | r2) points from the frozen baseline \($base)% — beyond max_regression_pct \($c.max_regression_pct) (FR-4)"}
+            else empty end;
+        [ chk("line";   $c.min_line_pct;   $m.line_pct;   $c.baseline.line_pct),
+          chk("branch"; $c.min_branch_pct; $m.branch_pct; $c.baseline.branch_pct) ]
+        | if length > 0
+          then {ok: false, detail: (map(.detail) | join("; "))}
+          else {ok: true,
+                detail: "line \($m.line_pct // "n/a")% branch \($m.branch_pct // "n/a")% within the frozen contract"}
+          end') || return 1
+    printf '%s' "$(jq -r '.detail' <<< "$verdict")"
+    [[ "$(jq -r '.ok' <<< "$verdict")" == "true" ]]
+}
+
+coverage_gate() {
+    # coverage_gate <point: phase|landing> [phase-num]
+    # Enforcement at floor_enforced_at, reading ONLY the pinned in-memory
+    # contract (FR-4a) — the live preset, automation.json, and even the
+    # on-disk frozen file are never trusted here, so editing any of them
+    # after admission moves nothing. Evidence is collected fresh via
+    # cp_collect (FR-5a) in a DETACHED THROWAWAY WORKTREE at HEAD: the
+    # coverage command is arbitrary project code running after review, and
+    # in the live checkout its side effects would ride into the next
+    # driver commit unreviewed. Failure disposes: park (attended) or
+    # terminate_policy (unattended), naming the measured number and floor.
+    [[ "$DRY_RUN" == "true" ]] && return 0
+    [[ "$HAS_COVERAGE_BLOCK" == "true" ]] || return 0
+    local point="$1" pn="${2:-}"
+    # Every park from this gate records the HEAD it parked at: that commit
+    # carries the last review PASS, and the resume arm requires a fresh
+    # PASS for anything committed past it before the gate may rerun.
+    local _cg_head _cg_hist
+    _cg_head=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+    _cg_hist=$(jq -n --arg h "$_cg_head" '{parked_head: $h}')
+    local where="landing"
+    [[ -n "$pn" ]] && where="phase $pn"
+    if [[ -z "$FROZEN_CONTRACT" ]]; then
+        dispose "coverage_gate" "no pinned frozen contract in memory — the gate cannot enforce without its admitted policy (FR-4a)" "$_cg_hist"
+        return 1
+    fi
+    # Tamper check: the on-disk copy exists for resume and for humans; if
+    # it no longer matches what was admitted, something edited it mid-run
+    # and the only safe disposition is to stop — not to pick either copy.
+    local frozen="$LEDGER_DIR/frozen-contract.json"
+    if [[ "$(jq -cS . "$frozen" 2>/dev/null)" != "$(jq -cS . <<< "$FROZEN_CONTRACT")" ]]; then
+        dispose "coverage_gate" "frozen contract on disk no longer matches the admitted contract — tampered or corrupted mid-run (FR-4a)" "$_cg_hist"
+        return 1
+    fi
+    local at
+    at=$(jq -r '.floor_enforced_at // "landing"' <<< "$FROZEN_CONTRACT")
+    case "$at" in
+        phase|landing) ;;
+        *)
+            # An unknown point must dispose, never skip: "skip both gates"
+            # is exactly what a tampered value would buy otherwise.
+            dispose "coverage_gate" "unknown floor_enforced_at '$at' in the frozen contract — refusing to skip enforcement (FR-4b)" "$_cg_hist"
+            return 1
+            ;;
+    esac
+    [[ "$at" == "$point" ]] || return 0
+
+    echo "[auto-build] coverage gate ($where): collecting fresh evidence per the frozen contract" >&2
+    # Isolated evidence: detached worktree at HEAD, removed before any
+    # driver commit can sweep what the command wrote. HEAD is also the
+    # honest subject — it is what lands.
+    local wt_dir measured err rc=0
+    wt_dir=$(mktemp -d)
+    if ! git -C "$PROJECT_DIR" worktree add --detach "$wt_dir" HEAD >/dev/null 2>&1; then
+        rm -rf "$wt_dir"
+        dispose "coverage_gate" "could not create the throwaway worktree for evidence collection at $where" "$_cg_hist"
+        return 1
+    fi
+    err=$(mktemp)
+    measured=$(cp_collect "$wt_dir" "$FROZEN_CONTRACT" 2> "$err") || rc=$?
+    git -C "$PROJECT_DIR" worktree remove -f "$wt_dir" >/dev/null 2>&1 || rm -rf "$wt_dir"
+    if [[ $rc -ne 0 ]]; then
+        local why
+        why=$(tr '\n' ' ' < "$err"); rm -f "$err"
+        dispose "coverage_gate" "coverage evidence collection failed at $where: $why" "$_cg_hist"
+        return 1
+    fi
+    rm -f "$err"
+
+    local detail
+    if ! detail=$(coverage_gate_verdict "$FROZEN_CONTRACT" "$measured"); then
+        dispose "coverage_gate" "$detail (at $where)" "$_cg_hist"
+        return 1
+    fi
+    journal "coverage_gate" "$where: $detail"
+    # The evidence run is separately bounded, but its time still belongs
+    # to the run — recheck the global caps so a passing gate cannot carry
+    # an over-cap run across the finish line (T6 review, finding 4).
+    check_caps
+    return 0
 }
 
 # ── Phase enumeration (FR-4) ─────────────────────────────────
@@ -1959,6 +2131,11 @@ run_tests() {
 # so the master/main refusal can park the whole driver.
 driver_commit() {
     # driver_commit <message>
+    # rc 0: committed. rc 1: nothing to commit (an explicit no-diff — the
+    # only failure a caller may tolerate silently). rc 2: a git operation
+    # FAILED — previously indistinguishable from rc 1, so a failed commit
+    # could "return success" off the trailing rev-parse and leave the tree
+    # dirty behind a caller that believed it committed.
     local msg="$1" cur
     COMMIT_SHA=""
     cur=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD)
@@ -1966,14 +2143,21 @@ driver_commit() {
         # Under TERMINATING dispose returns instead of exiting — the
         # return below keeps the refusal effective in that path too.
         dispose "git_anomaly" "refusing to commit on '$cur'" "null"
-        return 1
+        return 2
     fi
-    git -C "$PROJECT_DIR" add -A
+    if ! git -C "$PROJECT_DIR" add -A; then
+        echo "[auto-build] ERROR: git add failed — tree left as-is" >&2
+        return 2
+    fi
     if git -C "$PROJECT_DIR" diff --cached --quiet; then
         return 1
     fi
-    git -C "$PROJECT_DIR" commit -q -m "$msg"
+    if ! git -C "$PROJECT_DIR" commit -q -m "$msg"; then
+        echo "[auto-build] ERROR: git commit failed — tree left staged" >&2
+        return 2
+    fi
     COMMIT_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD)
+    return 0
 }
 
 # ── Branch push (FR-2, pr/merge only) ────────────────────────
@@ -2352,7 +2536,15 @@ phase_gate() {
         echo "### Phase $n complete — $title ($(now_iso))"
         echo "Review: PASS (see specs/$FEATURE_ID/collaboration/build-review.md)."
     } >> "$SUMMARY_MD"
-    driver_commit "docs($FEATURE_ID): phase $n review artifact [auto-build]" || true
+    # rc 1 (no diff) is tolerable on an idempotent re-entry; rc 2 is a real
+    # git failure and the review artifact is REQUIRED — a run that pushes
+    # and lands without it has lost its audit trail. Park, don't proceed.
+    local _pg_rc=0
+    driver_commit "docs($FEATURE_ID): phase $n review artifact [auto-build]" || _pg_rc=$?
+    if [[ $_pg_rc -ge 2 ]]; then
+        dispose "git_anomaly" "phase $n review artifact could not be committed (git failure — see stderr above)" \
+            "$(jq -n --arg h "$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")" '{parked_head: $h}')"
+    fi
     [[ -n "$COMMIT_SHA" ]] && state_set '.phases[$p].commits += [$sha]' --arg p "$n" --arg sha "$COMMIT_SHA"
 }
 
@@ -2373,6 +2565,16 @@ run_phase() {
         echo "[auto-build] phase $n already done — skipping (resume)" >&2
         return 0
     fi
+
+    # A phase parked AT THE COVERAGE GATE re-enters with everything up to
+    # the phase gate already committed and reviewed. Re-running the body
+    # would execute a build session over the human's recovery commit
+    # WITHOUT review and append a duplicate completion artifact — jump
+    # straight back to the gate instead (the recovery delta got its own
+    # review in resume_parked's coverage_gate arm).
+    if [[ "$(state_get ".phases[\"$n\"].status // empty" 2>/dev/null)" == "coverage-gate" ]]; then
+        echo "[auto-build] phase $n: resuming at the coverage gate (build+review already complete)" >&2
+    else
 
     # The phase diff boundary is fixed the FIRST time this phase starts. On
     # resume (e.g. crash after the phase commit, before review) the persisted
@@ -2460,6 +2662,19 @@ run_phase() {
     set_status "phase-gate"
     refresh_live_caps
     phase_gate "$n" "$title"
+    # Sub-phase progress marker: from here only the coverage gate remains.
+    # A gate park resumes HERE, not at the build session (see above).
+    state_set '.phases[$p].status = "coverage-gate"' --arg p "$n"
+
+    fi  # end of the pre-gate phase body
+
+    # Coverage gate (T6): the phase-scoped enforcement point. Runs AFTER
+    # the phase commit (the gate measures HEAD in a throwaway worktree, so
+    # the phase's own work must be committed) but BEFORE the phase is
+    # marked done — a parked gate must leave the phase incomplete, or
+    # --resume would skip straight past the very enforcement that parked.
+    coverage_gate phase "$n"
+
     state_set '.phases[$p].status = "done" | .phases[$p].last_reviewed_ref = $sha' \
         --arg p "$n" --arg sha "$(git -C "$PROJECT_DIR" rev-parse HEAD)"
     journal "phase_done" "phase $n"
@@ -2558,12 +2773,39 @@ fi
 
 resolve_escalation() {
     # resolve_escalation <esc-file> <note>
+    # Atomic and CHECKED: the drain loop's progress guarantee rests on this
+    # rewrite actually landing — a silent failure would hand the same
+    # escalation back to the next scan, repeating its arm's side effects
+    # (reviewer invocations, commits) without bound. Temp-write in the SAME
+    # directory so the mv is a rename, then verify the record says resolved.
     local esc_file="$1" note="$2" tmp
-    tmp=$(mktemp)
-    jq --arg t "$(now_iso)" '.resolved = true | .resolved_at = $t' "$esc_file" > "$tmp" && mv "$tmp" "$esc_file"
-    set_status "resumed"
+    if ! tmp=$(mktemp "${esc_file}.XXXXXX"); then
+        echo "[auto-build] ERROR: cannot create a temp file beside $esc_file" >&2
+        return 1
+    fi
+    if ! jq --arg t "$(now_iso)" '.resolved = true | .resolved_at = $t' "$esc_file" > "$tmp"; then
+        rm -f "$tmp" 2>/dev/null || true
+        echo "[auto-build] ERROR: could not rewrite $esc_file as resolved" >&2
+        return 1
+    fi
+    if ! mv "$tmp" "$esc_file"; then
+        rm -f "$tmp" 2>/dev/null || true
+        echo "[auto-build] ERROR: could not move the resolved record into place at $esc_file" >&2
+        return 1
+    fi
+    if [[ "$(jq -r '.resolved' "$esc_file" 2>/dev/null)" != "true" ]]; then
+        echo "[auto-build] ERROR: $esc_file still reads resolved=false after the rewrite" >&2
+        return 1
+    fi
+    # Deliberately NOT set_status "resumed" here: this resolves ONE record,
+    # and the run's status may only say resumed once the whole escalation
+    # stack is drained — a crash between a nested child's resolution and
+    # the parent's rescan would otherwise leave status=resumed over an
+    # unresolved parent, and the next --resume would skip it entirely.
+    # resume_parked publishes the status after its drain loop empties.
     journal "resumed" "$note"
     notify "resumed" "$note"
+    return 0
 }
 
 refuse_resume() {
@@ -2596,17 +2838,61 @@ consume_review_decision() {
 # still have the next phase's first check_caps() trip on a stale clock.
 # Keeping the reset in a helper is what stops the two paths — and the two
 # guards — drifting apart again.
-resume_parked() {
-    # Dispatch on the newest UNRESOLVED escalation; resolution is derived
-    # from human-produced artifacts only. Falls through on success.
-    local esc_file="" i=1
+# escalations_scan: print the newest UNRESOLVED escalation file (empty if
+# none). Durable state must fail CLOSED: a record that cannot be parsed as
+# an object with a boolean .resolved is corruption, not resolution — and a
+# GAP in the sequence (esc-2 missing while esc-3 exists) hides everything
+# above it from the sequential scan. Both refuse (rc 1) rather than let a
+# damaged nested record silently bypass a live coverage parent.
+escalations_scan() {
+    local i=1 esc newest=""
     while [[ -f "$LEDGER_DIR/escalations/esc-$i.json" ]]; do
-        if [[ "$(jq -r '.resolved' "$LEDGER_DIR/escalations/esc-$i.json")" == "false" ]]; then
-            esc_file="$LEDGER_DIR/escalations/esc-$i.json"
-        fi
+        esc="$LEDGER_DIR/escalations/esc-$i.json"
+        case "$(jq -r 'if type == "object" and (.resolved | type == "boolean")
+                       then (.resolved | tostring) else "invalid" end' "$esc" 2>/dev/null)" in
+            true)  ;;
+            false) newest="$esc" ;;
+            *)
+                echo "[auto-build] ERROR: escalation record $esc is unreadable or lacks a boolean .resolved — refusing to treat corruption as resolution" >&2
+                return 1
+                ;;
+        esac
         i=$((i + 1))
     done
-    [[ -z "$esc_file" ]] && refuse_resume "run is parked but no unresolved escalation record found; inspect $LEDGER_DIR/escalations/"
+    local top=$((i - 1)) f n
+    for f in "$LEDGER_DIR/escalations"/esc-*.json; do
+        [[ -e "$f" ]] || continue
+        n=$(basename "$f" .json); n=${n#esc-}
+        [[ "$n" =~ ^[0-9]+$ ]] || continue
+        if (( n > top )); then
+            echo "[auto-build] ERROR: escalation records are gapped — esc-$((top + 1)) is missing while esc-$n exists; the sequence cannot be trusted" >&2
+            return 1
+        fi
+    done
+    printf '%s' "$newest"
+    return 0
+}
+
+resume_parked() {
+    # Drain EVERY unresolved escalation, newest first; resolution is
+    # derived from human-produced artifacts only. Falls through on
+    # success. Draining matters because an escalation can NEST: a breaker
+    # raised inside a coverage recovery review (review_breaker,
+    # provider_unavailable, …) parks with a newer escalation while the
+    # coverage escalation is still unresolved. Resolving only the newest
+    # and falling through would skip the parent's recovery review
+    # entirely — the loop re-scans instead, so the parent coverage arm
+    # (recovery review included) re-runs before execution continues.
+    local _drained=0
+    while :; do
+    local esc_file
+    esc_file=$(escalations_scan) \
+        || refuse_resume "escalation records are corrupt or gapped — inspect $LEDGER_DIR/escalations/ (nothing was auto-resolved)"
+    if [[ -z "$esc_file" ]]; then
+        [[ $_drained -gt 0 ]] && break
+        refuse_resume "run is parked but no unresolved escalation record found; inspect $LEDGER_DIR/escalations/"
+    fi
+    _drained=$((_drained + 1))
     local reason phase
     reason=$(jq -r '.reason' "$esc_file")
     phase=$(jq -r '.phase' "$esc_file")
@@ -2621,15 +2907,35 @@ resume_parked() {
                 approve)
                     [[ "$(jq -r '.bypass // false' "$PROJECT_DIR/.cct/review/loop-summary.json" 2>/dev/null)" == "true" ]] \
                         || refuse_resume "decision is approve but no bypass loop-summary.json exists; rerun /review-decide approve"
-                    # Single-use, phase-scoped approval (FR-5).
+                    # Single-use, phase-scoped approval (FR-5). The approval
+                    # mark and the escalation resolution are ONE logical
+                    # transaction: run_review_loop grants a bypass off a
+                    # nonempty bypass_approved alone, so a failed resolution
+                    # must not strand the mark — that would authorize a
+                    # bypass whose escalation still reads unresolved. Both
+                    # durable writes succeed before the single-use decision
+                    # is consumed; on failure the mark is compensated away
+                    # and the decision survives for a retry.
                     state_set '.phases[$p].bypass_approved = $e' \
-                        --arg p "$phase" --arg e "$(basename "$esc_file" .json)"
+                        --arg p "$phase" --arg e "$(basename "$esc_file" .json)" \
+                        || refuse_resume "could not record the phase-scoped approval in state.json — the decision was NOT consumed; fix the ledger and rerun --resume"
+                    if ! resolve_escalation "$esc_file" "review breaker approved for phase $phase (human bypass)"; then
+                        state_set '.phases[$p].bypass_approved = null' --arg p "$phase" \
+                            || echo "[auto-build] ERROR: could not roll back .phases[$phase].bypass_approved — clear it manually before resuming" >&2
+                        refuse_resume "review breaker approved, but the escalation could not be marked resolved — the approval was rolled back and the decision was NOT consumed; fix $LEDGER_DIR/escalations/ and rerun --resume"
+                    fi
                     consume_review_decision "$(basename "$esc_file" .json)"
-                    resolve_escalation "$esc_file" "review breaker approved for phase $phase (human bypass)"
                     ;;
                 reject)
+                    # Resolution FIRST, and checked: this arm exits before
+                    # the drain's progress verification, so an unchecked
+                    # failure here would consume the human's decision and
+                    # report a clean abort while the escalation stays
+                    # unresolved. On failure the decision is deliberately
+                    # NOT consumed — the reject is retryable as-is.
+                    resolve_escalation "$esc_file" "review breaker rejected by human — run aborted" \
+                        || refuse_resume "review breaker rejected, but the escalation could not be marked resolved — the decision was NOT consumed; fix $LEDGER_DIR/escalations/ and rerun --resume"
                     consume_review_decision "$(basename "$esc_file" .json)"
-                    resolve_escalation "$esc_file" "review breaker rejected by human — run aborted"
                     set_status "aborted"
                     echo "[auto-build] Review REJECTED via /review-decide. Run aborted; branch and ledger left for inspection." >&2
                     exit 0
@@ -2638,8 +2944,10 @@ resume_parked() {
                     # Runner retry semantics live in .cct/review/state.json
                     # (attempt incremented, loop_start reset by /review-decide);
                     # run_review_loop reuses that state without re-init.
+                    # Resolution BEFORE consumption, checked (same as reject).
+                    resolve_escalation "$esc_file" "review breaker retry approved (phase $phase)" \
+                        || refuse_resume "review breaker retry approved, but the escalation could not be marked resolved — the decision was NOT consumed; fix $LEDGER_DIR/escalations/ and rerun --resume"
                     consume_review_decision "$(basename "$esc_file" .json)"
-                    resolve_escalation "$esc_file" "review breaker retry approved (phase $phase)"
                     ;;
                 *) refuse_resume "unrecognized decision '$decision' in .cct/review/decision.json" ;;
             esac
@@ -2667,12 +2975,88 @@ resume_parked() {
             crash_findings=$(jq -r '.history.findings_file // empty' "$esc_file" 2>/dev/null || echo "")
             refuse_resume "runner crash is not resumable because review state may be inconsistent (attempted round $crash_round; findings: ${crash_findings:-none}). Resolve the runner error and start a fresh attended run"
             ;;
+        coverage_gate)
+            # Human raised the coverage (or fixed the tooling) and committed.
+            # The gate itself re-runs on the resumed path — landing parks
+            # re-reach the landing gate, phase parks re-enter at the gate.
+            [[ -z "$(git -C "$PROJECT_DIR" status --porcelain | grep -v '^?? \.cct/')" ]] \
+                || refuse_resume "worktree is dirty — commit your coverage fix first, then --resume"
+            # Review binds to COMMITS, not phases. The park recorded the
+            # HEAD carrying the last PASS; anything committed past it —
+            # the coverage fix, or whatever rode along with it — needs its
+            # own PASS before the gate may rerun, or the recovery arm
+            # becomes a lane for unreviewed code to land.
+            local cg_parked cg_cur
+            cg_parked=$(jq -r '.history.parked_head // empty' "$esc_file")
+            [[ -n "$cg_parked" ]] || refuse_resume "escalation lacks parked_head — cannot bind the recovery to the reviewed commit; start a fresh run"
+            cg_cur=$(git -C "$PROJECT_DIR" rev-parse HEAD)
+            if [[ "$cg_cur" != "$cg_parked" ]]; then
+                echo "[auto-build] coverage recovery: reviewing delta ${cg_parked:0:8}..${cg_cur:0:8} before the gate reruns" >&2
+                # This review runs BEFORE run_phase assigns CURRENT_PHASE:
+                # a breaker inside it would otherwise park stamped phase 0,
+                # and a /review-decide approve would store its bypass under
+                # the wrong phase — rejected as mis-scoped on re-entry.
+                CURRENT_PHASE="$phase"
+                run_review_loop "$phase" "$cg_parked" \
+                    "$LEDGER_DIR/phase-$phase/coverage-recovery-$(basename "$esc_file" .json)"
+                # The PASS rewrote the tracked review artifact
+                # (collaboration/build-review.md). The normal phase path
+                # commits it in phase_gate; this path owns that duty
+                # itself, or the clean-worktree preflight right after
+                # resume refuses a run whose escalation is already
+                # resolved — a wedged ledger. rc 1 means "nothing changed"
+                # (a byte-identical artifact) and may continue; a real git
+                # failure (rc >= 2) must leave the escalation unresolved.
+                local _cg_commit_rc=0
+                driver_commit "docs($FEATURE_ID): coverage recovery review artifact [auto-build]" || _cg_commit_rc=$?
+                if [[ $_cg_commit_rc -ge 2 ]]; then
+                    refuse_resume "could not commit the recovery review artifact (git failure) — the coverage escalation stays unresolved; fix the repository state, then --resume"
+                fi
+                journal "coverage_recovery_reviewed" "delta ${cg_parked:0:8}..${cg_cur:0:8} passed review"
+            fi
+            resolve_escalation "$esc_file" "coverage gate retry after manual fix (phase $phase)"
+            ;;
         test_failure|build_session_error|git_anomaly)
             [[ -z "$(git -C "$PROJECT_DIR" status --porcelain | grep -v '^?? \.cct/')" ]] \
                 || refuse_resume "worktree is dirty — commit your manual fix first, then --resume"
             local probe_log
             probe_log=$(mktemp)
             run_tests "$probe_log" || refuse_resume "test.command still failing (log: $probe_log) — fix, commit, then --resume"
+            # Artifact-commit parks (phase review artifact, automation
+            # summary) fire AFTER review, and on resume the phase re-run
+            # skips both build and review — so the manual recovery commit
+            # is otherwise a lane for unreviewed code. When the park
+            # recorded the reviewed HEAD, a moved HEAD gets its own PASS
+            # before anything reruns — the same commit-bound invariant as
+            # coverage recovery. Legacy git_anomaly parks (no parked_head)
+            # fire pre-review and keep their existing semantics.
+            # Missing KEY = a legacy pre-review park (old semantics apply).
+            # Present-but-empty VALUE = a review-bound park whose HEAD
+            # capture failed — that must fail CLOSED, not degrade into the
+            # legacy arm: git failure is exactly git_anomaly's domain.
+            local ga_parked ga_cur
+            if jq -e '.history | type == "object" and has("parked_head")' "$esc_file" >/dev/null 2>&1; then
+                ga_parked=$(jq -r '.history.parked_head' "$esc_file")
+                [[ -n "$ga_parked" && "$ga_parked" != "null" ]] \
+                    || refuse_resume "this review-bound git_anomaly park has no valid parked_head — the recovery cannot be bound to the reviewed commit; start a fresh run"
+            else
+                ga_parked=""
+            fi
+            if [[ -n "$ga_parked" ]]; then
+                ga_cur=$(git -C "$PROJECT_DIR" rev-parse HEAD)
+                if [[ "$ga_cur" != "$ga_parked" ]]; then
+                    echo "[auto-build] artifact recovery: reviewing delta ${ga_parked:0:8}..${ga_cur:0:8} before the parked step reruns" >&2
+                    CURRENT_PHASE="$phase"
+                    run_review_loop "$phase" "$ga_parked" \
+                        "$LEDGER_DIR/phase-$phase/artifact-recovery-$(basename "$esc_file" .json)"
+                    local _ga_commit_rc=0
+                    driver_commit "docs($FEATURE_ID): artifact recovery review artifact [auto-build]" || _ga_commit_rc=$?
+                    if [[ $_ga_commit_rc -ge 2 ]]; then
+                        refuse_resume "could not commit the artifact-recovery review (git failure) — the escalation stays unresolved; fix the repository state, then --resume"
+                    fi
+                    journal "artifact_recovery_reviewed" "delta ${ga_parked:0:8}..${ga_cur:0:8} passed review"
+                fi
+            fi
             resolve_escalation "$esc_file" "$reason cleared: tests green after manual fix"
             ;;
         cap_exceeded)
@@ -2732,6 +3116,20 @@ resume_parked() {
             refuse_resume "no automatic resolution for reason '$reason' — inspect $esc_file"
             ;;
     esac
+    # Verified progress: every arm that reaches here believes it resolved
+    # this escalation — prove the record agrees before rescanning, or the
+    # next iteration selects the SAME one and repeats its side effects
+    # (reviewer invocations, artifact commits) without bound.
+    if [[ "$(jq -r '.resolved' "$esc_file" 2>/dev/null)" != "true" ]]; then
+        refuse_resume "escalation $(basename "$esc_file" .json) was processed but could not be marked resolved — refusing rather than repeating its side effects; fix $LEDGER_DIR/escalations/ and rerun --resume"
+    fi
+    done  # drain loop — re-scan for older unresolved escalations
+
+    # The stack is EMPTY — only now may the run's status say resumed.
+    # Until this point it stays parked, so an interrupted drain re-enters
+    # this dispatcher on the next --resume instead of walking past the
+    # still-unresolved parent.
+    set_status "resumed"
 
     # #205: restart the review LOOP wall-clock on a successful resume.
     #
@@ -3092,6 +3490,26 @@ if [[ "$RESUME" == "true" ]]; then
             echo "Run already complete for '$FEATURE_ID'." >&2
             exit 0
             ;;
+        *)
+            # Belt for an INTERRUPTED drain: a crash after a nested
+            # escalation resolved but before the parent rescanned can
+            # leave a nonterminal status over unresolved records. The
+            # records, not the status, are the truth — route back through
+            # the dispatcher so the parent's arm (recovery review
+            # included) runs before anything else does.
+            # Fail CLOSED on unreadable durable state: a parse failure here
+            # must never read as "zero unresolved".
+            if ! _t4_newest=$(escalations_scan); then
+                echo "Error: escalation records are corrupt or gapped — inspect" >&2
+                echo "$LEDGER_DIR/escalations/ before resuming." >&2
+                exit 1
+            fi
+            if [[ -n "$_t4_newest" ]]; then
+                echo "[auto-build] interrupted escalation drain detected (status '$RESUME_STATUS'," >&2
+                echo "unresolved record: $(basename "$_t4_newest")) — re-entering the dispatcher." >&2
+                resume_parked
+            fi
+            ;;
     esac
     # Single clock reset after successful resume dispatch — admission
     # time is inside the budget (CLOCK_ORIGIN is ATTEMPT_START for
@@ -3130,6 +3548,11 @@ while IFS=$'\t' read -r n title ms; do
     DONE_COUNT=$((DONE_COUNT + 1))
 done < "$LEDGER_DIR/phases.tsv"
 
+# Coverage gate (T6): the landing enforcement point (the default). Runs
+# BEFORE finalizing/push/PR so a failing floor blocks the landing, not
+# merely annotates it.
+coverage_gate landing
+
 set_status "finalizing"
 {
     echo ""
@@ -3147,7 +3570,14 @@ set_status "finalizing"
     fi
     echo "Review artifacts: specs/$FEATURE_ID/collaboration/."
 } >> "$SUMMARY_MD"
-driver_commit "docs($FEATURE_ID): automation summary [auto-build]" || true
+# rc 1 (no diff) is fine; rc 2 (git failure) must not let the run push and
+# report done with its required summary artifact uncommitted.
+_fin_rc=0
+driver_commit "docs($FEATURE_ID): automation summary [auto-build]" || _fin_rc=$?
+if [[ $_fin_rc -ge 2 ]]; then
+    dispose "git_anomaly" "automation summary could not be committed (git failure) — refusing to finalize over it" \
+        "$(jq -n --arg h "$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")" '{parked_head: $h}')"
+fi
 
 FINAL_MSG="run complete: $DONE_COUNT phase(s) on $BRANCH_NAME"
 if [[ "$CAN_OPEN_PR" == "true" ]]; then

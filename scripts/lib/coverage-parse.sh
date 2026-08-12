@@ -152,11 +152,21 @@ cp_run_bounded() {
     # prevent. Both paths therefore terminate a process GROUP and escalate
     # TERM -> KILL.
     local secs="$1" cwd="$2" cmd="$3" tcmd rc=0
+    # The throwaway worktree is SIDE-EFFECT isolation, not a security
+    # sandbox — but no path the harness itself hands the command may point
+    # back at the canonical checkout. CCT_PROJECT_DIR and CCT_SPECS_DIR
+    # (driver exports) are rebound to the execution root on every path.
+    # OLDPWD is dropped explicitly: modern bash scrubs an imported OLDPWD
+    # at startup and cd sets it unexported, but bash 3.2 (macOS /bin/bash)
+    # RETAINS the export attribute — and any non-bash wrapper would pass
+    # it through untouched. The -u is what actually guarantees the
+    # coverage command's environ carries no path back to the launch dir.
     tcmd=$(cp_timeout_cmd)
     if [[ -n "$tcmd" ]]; then
         # -k escalates to KILL if the command ignores TERM. Without it the
         # native path had no escalation at all.
-        ( cd "$cwd" && "$tcmd" -k 5 "$secs" bash -c "$cmd" ) >/dev/null 2>&1 || rc=$?
+        ( cd "$cwd" && env -u OLDPWD CCT_PROJECT_DIR="$cwd" CCT_SPECS_DIR="$cwd/specs" \
+            "$tcmd" -k 5 "$secs" bash -c "$cmd" ) >/dev/null 2>&1 || rc=$?
         return $rc
     fi
     # `set -m` puts the job in its own process group so `kill -- -PID`
@@ -184,7 +194,8 @@ cp_run_bounded() {
     fi
     fired="$firedir/fired"
     set -m
-    ( cd "$cwd" && bash -c "$cmd" ) >/dev/null 2>&1 &
+    ( cd "$cwd" && env -u OLDPWD CCT_PROJECT_DIR="$cwd" CCT_SPECS_DIR="$cwd/specs" \
+        bash -c "$cmd" ) >/dev/null 2>&1 &
     local pid=$!
     ( sleep "$secs"
       : > "$fired"

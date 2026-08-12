@@ -2996,13 +2996,18 @@ echo "=== T5: contract initialiser (#222) ==="
 # ══════════════════════════════════════════════════════════════
 
 # ── Greenfield: baseline:none — admits with no coverage artifact ──
+# (The T6 landing gate now runs the frozen command, so the fixture must
+# produce a real artifact that satisfies the floor.)
 P=$(setup_project); single_phase "$P"
-cfg_set "$P" '.verification.coverage={command:"true",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:92}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
 run_driver "$P"
 assert_exit "T5: greenfield run completes" 0 "$RC"
 LEDGER="$P/.cct/auto-build/demo-feat"
 # Frozen contract must exist with baseline:null
-jq -e '.baseline == null and .command == "true" and .parser == "istanbul"
+jq -e '.baseline == null and .command == "./make-cov.sh" and .parser == "istanbul"
     and .min_line_pct == 80 and .floor_enforced_at == "landing"' \
     "$LEDGER/frozen-contract.json" >/dev/null 2>&1
 assert_exit "T5: greenfield frozen contract has null baseline" 0 $?
@@ -3015,7 +3020,7 @@ rm -rf "$P"
 # ── Brownfield: baseline:admission — captures baseline coverage ──
 # The baseline must be frozen from branch.base, NOT from HEAD. The fixture
 # therefore diverges the two: base 'main-dev' reports 85.5/72.3 while the
-# checked-out feature branch reports 42.5/11.25, so a HEAD-based capture
+# checked-out feature branch reports 83.25/68.5, so a HEAD-based capture
 # (the pre-fix behaviour) fails the baseline assertion below.
 P=$(setup_project); single_phase "$P"
 # The contract initialiser runs the coverage command inside a throwaway
@@ -3026,13 +3031,13 @@ git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "add coverage helpe
 cfg_set "$P" '.verification.coverage={command:"./make-coverage.sh",artifact:"cov.json",parser:"istanbul",baseline:"admission",min_line_pct:70,max_regression_pct:5}'
 # Diverge HEAD from the base: same helper, different numbers.
 git -C "$P" checkout -q -b feature/demo-feat
-printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:42.5},branches:{pct:11.25}}}" > cov.json\n' > "$P/make-coverage.sh"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:83.25},branches:{pct:68.5}}}" > cov.json\n' > "$P/make-coverage.sh"
 git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "feature-branch coverage helper"
 # Fixture guard: prove HEAD really does report something else, so the
 # baseline assertion below is load-bearing rather than tautological.
 HEAD_COV_DIR=$(mktemp -d)
 cp "$P/make-coverage.sh" "$HEAD_COV_DIR/" && ( cd "$HEAD_COV_DIR" && ./make-coverage.sh )
-assert_eq "T5: brownfield fixture — HEAD coverage differs from base" "42.5" \
+assert_eq "T5: brownfield fixture — HEAD coverage differs from base" "83.25" \
     "$(jq -r '.total.lines.pct' "$HEAD_COV_DIR/cov.json" 2>/dev/null)"
 rm -rf "$HEAD_COV_DIR"
 run_driver "$P"
@@ -3054,7 +3059,10 @@ rm -rf "$P"
 # (exit 1) must still leave nothing durable behind — otherwise the
 # corrected rerun is met with "ledger already exists".
 P=$(setup_project); single_phase "$P"
-cfg_set "$P" '.verification.coverage={command:"true",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:92}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
 printf 'scratch\n' > "$P/dirty-file"
 run_driver "$P"
 LEDGER="$P/.cct/auto-build/demo-feat"
@@ -3066,7 +3074,7 @@ assert_eq "T5: coverage-path refusal leaves no ledger" "0" \
 rm -f "$P/dirty-file"
 run_driver "$P"
 assert_exit "T5: corrected rerun after coverage-path refusal completes" 0 "$RC"
-jq -e '.command == "true" and .baseline == null' \
+jq -e '.command == "./make-cov.sh" and .baseline == null' \
     "$LEDGER/frozen-contract.json" >/dev/null 2>&1
 assert_exit "T5: corrected rerun froze its own contract" 0 $?
 rm -rf "$P"
@@ -3513,6 +3521,1003 @@ assert_eq "#234: the composed build prompt reached pi on stdin" "delivered" \
     "$(grep -q " $PI_SHA\$" "$PISTDIN" && echo delivered || echo missing)"
 rm -f "$PISTDIN" "$PICOUNT"
 rm -rf "$PPI"
+
+echo ""
+echo "=== T6: coverage gate — driver enforcement (#222) ==="
+# ══════════════════════════════════════════════════════════════
+
+# ── FR-4a: the gate reads ONLY the frozen contract ──
+# A preset supplies the floor; the build session then edits the preset to
+# an unmeetable 99. A gate that re-resolved the live preset would fail the
+# landing; the frozen contract keeps the admitted floor and the run lands.
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/shared/templates/strict"
+jq -n '{min_line_pct: 80}' > "$P/shared/templates/strict/verification-preset.json"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:92}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add -A && git -C "$P" commit -q -m "preset + coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",preset:"strict"}'
+T6_EDIT=$(mktemp)
+cat > "$T6_EDIT" << 'SCRIPTLET'
+jq -n '{min_line_pct: 99}' > shared/templates/strict/verification-preset.json
+[[ -f demo.sh ]] || printf '#!/usr/bin/env bash\necho ok\n' > demo.sh
+SCRIPTLET
+MOCK_CLAUDE_SCRIPT="$T6_EDIT" run_driver "$P"
+assert_exit "T6: preset edit after admission changes nothing (run lands)" 0 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat"
+assert_eq "T6: the frozen floor is the admitted one" "80" \
+    "$(jq -r '.min_line_pct' "$LEDGER/frozen-contract.json" 2>/dev/null)"
+assert_eq "T6: the live preset really was edited (fixture guard)" "99" \
+    "$(jq -r '.min_line_pct' "$P/shared/templates/strict/verification-preset.json" 2>/dev/null)"
+rm -f "$T6_EDIT"
+rm -rf "$P"
+
+# ── FR-4b: regression is percentage POINTS, never relative ──
+# Baseline 40, measured 36, max_regression_pct 5: a 4-POINT drop passes;
+# the same drop is 10% relative and would fail a relative gate. The run
+# landing is therefore proof of the points arithmetic.
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:40}}}" > cov.json\n' > "$P/make-coverage.sh"
+chmod +x "$P/make-coverage.sh"
+git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "base coverage 40"
+cfg_set "$P" '.verification.coverage={command:"./make-coverage.sh",artifact:"cov.json",parser:"istanbul",baseline:"admission",min_line_pct:30,max_regression_pct:5}'
+git -C "$P" checkout -q -b feature/demo-feat
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:36}}}" > cov.json\n' > "$P/make-coverage.sh"
+git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "feature coverage 36"
+run_driver "$P"
+assert_exit "T6: a 4-point drop under max_regression_pct 5 lands" 0 "$RC"
+assert_eq "T6: the frozen baseline is the base branch's 40" "40" \
+    "$(jq -r '.baseline.line_pct' "$P/.cct/auto-build/demo-feat/frozen-contract.json" 2>/dev/null)"
+rm -rf "$P"
+
+# ── FR-4: regression beyond the threshold fails, naming the numbers ──
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:85.5}}}" > cov.json\n' > "$P/make-coverage.sh"
+chmod +x "$P/make-coverage.sh"
+git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "base coverage 85.5"
+cfg_set "$P" '.verification.coverage={command:"./make-coverage.sh",artifact:"cov.json",parser:"istanbul",baseline:"admission",min_line_pct:70,max_regression_pct:5}'
+git -C "$P" checkout -q -b feature/demo-feat
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:79}}}" > cov.json\n' > "$P/make-coverage.sh"
+git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "feature coverage 79"
+run_driver "$P"
+assert_exit "T6: a 6.5-point regression parks the attended run (exit 4)" 4 "$RC"
+assert_contains "T6: the park names measured, baseline, and threshold" "$OUTPUT" \
+    "79% regressed 6.5 points from the frozen baseline 85.5"
+assert_eq "T6: the ledger records the parked coverage breaker" "parked" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# ── FR-3: absolute floor failure names measured and floor ──
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:75}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: below-floor coverage parks the attended run (exit 4)" 4 "$RC"
+assert_contains "T6: the park names measured and floor" "$OUTPUT" \
+    "75% is below the floor 80"
+rm -rf "$P"
+
+# ── FR-4b: a floor whose metric the artifact lacks fails CLOSED ──
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:92}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "coverage helper (no branch data)"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80,min_branch_pct:50}'
+run_driver "$P"
+assert_exit "T6: a branch floor with no branch metric fails closed (exit 4)" 4 "$RC"
+assert_contains "T6: the fail-closed message names the missing metric" "$OUTPUT" \
+    "carries no branch metric — failing closed"
+rm -rf "$P"
+
+# ── floor_enforced_at: phase — the gate fires inside the phase ──
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:75}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80,floor_enforced_at:"phase"}'
+run_driver "$P"
+assert_exit "T6: phase-scoped floor parks during the phase (exit 4)" 4 "$RC"
+assert_contains "T6: the failure names the phase enforcement point" "$OUTPUT" "(at phase 1)"
+rm -rf "$P"
+
+# ── Unattended: the same failure terminates (exit 6), not parks ──
+# The unattended profile pushes after each phase, so the fixture needs a
+# working bare remote and the deterministic gh stub — without them the run
+# terminates on git_anomaly before the landing gate ever fires, and the
+# exit-6 assertion would pass for the wrong reason.
+export CCT_GH_BIN="$GH_STUB"
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+add_remote "$P" >/dev/null
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:75}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: below-floor coverage terminates the unattended run (exit 6)" 6 "$RC"
+assert_eq "T6: the termination reason is the coverage gate, not an artifact error" \
+    "coverage_gate" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
+assert_contains "T6: the termination names measured and floor" "$OUTPUT" \
+    "75% is below the floor 80"
+rm -rf "$P"
+unset CCT_GH_BIN
+
+# ── The gate cannot dirty the checkout or the next commit ──
+# The coverage command is arbitrary project code running AFTER review.
+# It runs in a throwaway worktree at HEAD: a command that modifies a
+# tracked source file and drops its artifact must leave the real
+# checkout byte-clean, with neither change in any commit.
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\necho "smuggled" >> demo.sh\njq -n "{total:{lines:{pct:92}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "side-effectful coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: side-effectful coverage run still lands" 0 "$RC"
+assert_eq "T6: the checkout is clean after the gate" "" \
+    "$(git -C "$P" status --porcelain | grep -v '^?? \.cct/')"
+# Scoped to demo.sh: the helper's own committed source legitimately
+# contains the marker string.
+assert_eq "T6: the coverage side effect reached no commit" "0" \
+    "$(git -C "$P" log --all -S smuggled --oneline -- demo.sh | wc -l | tr -d ' ')"
+assert_eq "T6: the artifact reached no commit" "0" \
+    "$(git -C "$P" log --all --name-only --format= -- cov.json | wc -l | tr -d ' ')"
+rm -rf "$P"
+
+# ── A tampered frozen contract disposes; it never disables the gate ──
+# The build session edits frozen-contract.json to floor_enforced_at:
+# "never". The gate reads the pinned in-memory contract and treats the
+# disk drift as tamper — the run parks instead of silently landing.
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:75}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+T6_TAMPER=$(mktemp)
+cat > "$T6_TAMPER" << 'SCRIPTLET'
+fc=".cct/auto-build/demo-feat/frozen-contract.json"
+if [[ -f "$fc" ]]; then
+    jq '.floor_enforced_at = "never"' "$fc" > "$fc.tmp" && mv "$fc.tmp" "$fc"
+fi
+[[ -f demo.sh ]] || printf '#!/usr/bin/env bash\necho ok\n' > demo.sh
+SCRIPTLET
+MOCK_CLAUDE_SCRIPT="$T6_TAMPER" run_driver "$P"
+assert_exit "T6: a tampered frozen contract parks the run (exit 4)" 4 "$RC"
+assert_contains "T6: the park names the tamper, not a coverage number" "$OUTPUT" \
+    "no longer matches the admitted contract"
+rm -f "$T6_TAMPER"
+rm -rf "$P"
+
+# ── Brownfield baseline must carry every floored metric ──
+# The base branch's artifact has line data only; a branch floor is
+# configured. Contract initialisation must refuse — a baseline that
+# lacks a governed metric cannot keep the no-regression promise.
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:85}}}" > cov.json\n' > "$P/make-coverage.sh"
+chmod +x "$P/make-coverage.sh"
+git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "line-only base coverage"
+cfg_set "$P" '.verification.coverage={command:"./make-coverage.sh",artifact:"cov.json",parser:"istanbul",baseline:"admission",min_line_pct:70,min_branch_pct:50,max_regression_pct:5}'
+run_driver "$P"
+assert_exit "T6: a floored metric missing from the baseline refuses (exit 1)" 1 "$RC"
+assert_contains "T6: the refusal names the missing baseline metric" "$OUTPUT" \
+    "baseline capture produced no branch metric"
+assert_eq "T6: the refused brownfield run leaves no ledger" "0" \
+    "$(ls -A "$P/.cct/auto-build/demo-feat" 2>/dev/null | wc -l | tr -d ' ')"
+rm -rf "$P"
+
+# Defensive layer: even if such a contract slipped past admission, the
+# verdict itself fails closed. Exercised directly against the function.
+DRIVER_FUNCS=$(mktemp)
+_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
+# shellcheck source=/dev/null
+source "$DRIVER_FUNCS"
+V_RC=0
+V_OUT=$(coverage_gate_verdict \
+    '{"min_branch_pct":50,"baseline":{"line_pct":80,"branch_pct":null},"max_regression_pct":5}' \
+    '{"line_pct":80,"branch_pct":70}') || V_RC=$?
+assert_exit "T6: the verdict fails closed on a null governed baseline" 1 "$V_RC"
+assert_contains "T6: the verdict names the ungoverned metric" "$V_OUT" \
+    "frozen baseline carries no branch metric"
+rm -f "$DRIVER_FUNCS"
+
+# ── The gate's own runtime cannot carry an over-cap run to landing ──
+# Deterministic, no wall-clock sleeping: the coverage command itself
+# rewinds started_epoch in the canonical ledger (baked absolute path —
+# after the env rebind the worktree is all it can see otherwise), so the
+# cap is guaranteed crossed exactly at the post-gate recheck. The event
+# order proves the gate PASSED first and the cap parked it after.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << EOF
+#!/usr/bin/env bash
+jq -n '{total:{lines:{pct:92}}}' > cov.json
+_t=\$(mktemp)
+jq '.totals.started_epoch = 1000000' "$P/.cct/auto-build/demo-feat/state.json" > "\$_t" \\
+    && mv "\$_t" "$P/.cct/auto-build/demo-feat/state.json"
+EOF
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "clock-rewinding coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: a cap crossed during evidence collection parks (exit 4)" 4 "$RC"
+assert_contains "T6: the park names the wall-clock cap" "$OUTPUT" "wall-clock cap"
+EV="$P/.cct/auto-build/demo-feat/events.jsonl"
+GATE_LINE=$(grep -n '"event":"coverage_gate"' "$EV" | head -1 | cut -d: -f1)
+CAP_LINE=$(grep -n 'cap_exceeded' "$EV" | head -1 | cut -d: -f1)
+assert_eq "T6: a successful coverage_gate event precedes cap_exceeded" "ordered" \
+    "$([[ -n "$GATE_LINE" && -n "$CAP_LINE" && "$GATE_LINE" -lt "$CAP_LINE" ]] && echo ordered || echo "gate=$GATE_LINE cap=$CAP_LINE")"
+rm -rf "$P"
+
+# ── The worktree sandbox is not escapable via CCT_PROJECT_DIR ──
+# The driver is launched with CCT_PROJECT_DIR naming the canonical
+# checkout; inherited into the coverage command it is a documented path
+# straight out of the sandbox. cp_run_bounded rebinds it to the
+# execution root, so writes through it stay in the throwaway worktree.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+echo "leaked" >> "${CCT_PROJECT_DIR:?}/demo.sh"
+jq -n '{total:{lines:{pct:92}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "env-escaping coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: env-escaping coverage run still lands" 0 "$RC"
+assert_eq "T6: the canonical checkout saw no write through CCT_PROJECT_DIR" "0" \
+    "$(grep -c leaked "$P/demo.sh")"
+assert_eq "T6: the env-leak reached no commit" "0" \
+    "$(git -C "$P" log --all -S leaked --oneline -- demo.sh | wc -l | tr -d ' ')"
+rm -rf "$P"
+
+# ── …and not through CCT_SPECS_DIR either ──
+# The driver exports CCT_SPECS_DIR at the canonical specs dir; inherited
+# into the coverage command it is a second documented path out of the
+# sandbox. Rebound alongside CCT_PROJECT_DIR, writes through it stay in
+# the throwaway worktree.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+echo "leaked" >> "${CCT_SPECS_DIR:?}/demo-feat/plan.md"
+jq -n '{total:{lines:{pct:92}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "specs-escaping coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: specs-escaping coverage run still lands" 0 "$RC"
+assert_eq "T6: the canonical specs saw no write through CCT_SPECS_DIR" "0" \
+    "$(grep -c leaked "$P/specs/demo-feat/plan.md")"
+assert_eq "T6: the specs-leak reached no commit" "0" \
+    "$(git -C "$P" log --all -S leaked --oneline -- specs/demo-feat/plan.md | wc -l | tr -d ' ')"
+rm -rf "$P"
+
+# ── …and OLDPWD never reaches the coverage command at all ──
+# An e2e leak through OLDPWD is not constructible here: bash scrubs an
+# imported OLDPWD (value AND export attribute) at startup, and cd sets
+# it unexported — verified empirically against bash-to-bash, env-launch,
+# and assignment-prefix chains, so no child of the driver's bash chain
+# can observe it. The env -u in cp_run_bounded is therefore a belt; this
+# asserts the coverage command's ACTUAL environ carries no OLDPWD, and
+# that the belt is present on both execution paths.
+P=$(setup_project); single_phase "$P"
+T6_ENVDUMP=$(mktemp)
+cat > "$P/make-cov.sh" << EOF
+#!/usr/bin/env bash
+env > "$T6_ENVDUMP"
+jq -n '{total:{lines:{pct:92}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "environ-dumping coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+OLDPWD="$P" run_driver "$P"
+assert_exit "T6: environ-dumping coverage run lands" 0 "$RC"
+assert_eq "T6: the coverage environ carries no OLDPWD" "0" \
+    "$(grep -c '^OLDPWD=' "$T6_ENVDUMP")"
+assert_eq "T6: the env -u OLDPWD belt is present on both runner paths" "2" \
+    "$(grep -c 'env -u OLDPWD' "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh")"
+rm -f "$T6_ENVDUMP"
+rm -rf "$P"
+
+# ── Resume: the ledger's admitted contract is the authority ──
+# A schema-VALID frozen file with a rewritten floor (80 → 1) must not
+# repin on resume: valid-but-different is exactly what a structural
+# check cannot catch, so the ledger's own record decides.
+P=$(setup_project); single_phase "$P"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+LEDGER6="$P/.cct/auto-build/demo-feat"
+mkdir -p "$LEDGER6"
+jq -n '{schema_version:1, profile:"advisory",
+  branch:{name:"feature/demo-feat",base:"main-dev"},
+  test:{command:"bash ./project-test.sh",timeout_sec:60},
+  verification:{coverage:{command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}},
+  review:{reviewers:[{provider:"mock",specialization:"correctness",scope:"both",gating:true}]},
+  caps:{wall_clock_sec:3600,cost_usd:5},
+  phases:{milestone_every:2,max_phases:8},
+  build:{max_turns:10,max_fix_sessions_per_phase:2}}' > "$LEDGER6/config.snapshot.json"
+T6_ADMITTED='{"command":"./make-cov.sh","artifact":"cov.json","parser":"istanbul","baseline":null,"min_line_pct":80,"timeout_sec":60,"floor_enforced_at":"landing","preset_id":null,"preset_sha256":null}'
+jq -n --argjson now "$(date +%s)" --argjson ct "$T6_ADMITTED" \
+    '{schema_version:1, feature_id:"demo-feat", profile:"advisory",
+      status:"milestone-paused", current_phase:1,
+      branch:"feature/demo-feat", branch_base_ref:"master",
+      phases:{"1":"done"}, caps:{max_phases:8, max_fix_sessions_per_phase:3,
+        max_wall_clock_sec:14400, max_cost_usd:25},
+      outcome:null, disposition_reason:null,
+      totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:$now},
+      milestones:{every_n_phases:2, last_paused_after_phase:0},
+      escalations:[], pr:{number:null, url:null},
+      preflight:{contract:$ct},
+      updated:"2026-01-01T00:00:00Z"}' > "$LEDGER6/state.json"
+# The on-disk frozen contract: schema-valid, floor quietly moved to 1.
+jq '.min_line_pct = 1' <<< "$T6_ADMITTED" > "$LEDGER6/frozen-contract.json"
+echo "approved-by: test" >> "$P/specs/demo-feat/automation-summary.md"
+git -C "$P" add -A && git -C "$P" commit -q -m "signoff"
+run_driver "$P" --resume
+assert_exit "T6: a valid-but-rewritten frozen contract refuses resume (exit 1)" 1 "$RC"
+assert_contains "T6: the refusal names the ledger mismatch" "$OUTPUT" \
+    "does not match the admitted"
+rm -rf "$P"
+
+# ── Attended coverage failure is resumable: fail → fix → --resume ──
+# The helper reads its number from a committed file, so the manual fix
+# is an ordinary commit. Landing variant: the park leaves every phase
+# done; resume re-reaches the landing gate, which now passes.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: landing coverage failure parks (exit 4)" 4 "$RC"
+echo 92 > "$P/cov-value.txt"
+git -C "$P" add cov-value.txt && git -C "$P" commit -q -m "raise coverage"
+run_driver "$P" --resume
+assert_exit "T6: resume after the coverage fix completes (exit 0)" 0 "$RC"
+assert_eq "T6: the resumed run lands as done" "done" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# Phase variant: the park leaves the phase INCOMPLETE (the gate runs
+# before the done transition), so resume re-runs the phase and its gate.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80,floor_enforced_at:"phase"}'
+run_driver "$P"
+assert_exit "T6: phase coverage failure parks (exit 4)" 4 "$RC"
+assert_eq "T6: the parked phase is NOT marked done" "not-done" \
+    "$([[ "$(jq -r '.phases["1"].status // empty' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)" == "done" ]] && echo done || echo not-done)"
+echo 92 > "$P/cov-value.txt"
+git -C "$P" add cov-value.txt && git -C "$P" commit -q -m "raise coverage"
+run_driver "$P" --resume
+assert_exit "T6: resume re-runs the phase and its gate (exit 0)" 0 "$RC"
+rm -rf "$P"
+
+# ── The recovery arm is not a lane for unreviewed code ──
+# The coverage fix rides in with a malicious change. On resume the delta
+# past the parked (reviewed) HEAD gets its own review; a rejecting
+# reviewer must park the run again — the change never lands.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: recovery fixture parks at the landing gate (exit 4)" 4 "$RC"
+echo 92 > "$P/cov-value.txt"
+echo "malicious payload" >> "$P/demo.sh"
+git -C "$P" add cov-value.txt demo.sh && git -C "$P" commit -q -m "raise coverage (and smuggle a change)"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P" --resume
+assert_exit "T6: a rejected recovery delta parks again (exit 4)" 4 "$RC"
+assert_contains "T6: the resume reviewed the recovery delta" "$OUTPUT" \
+    "coverage recovery: reviewing delta"
+assert_eq "T6: the rejected recovery does not land" "not-done" \
+    "$([[ "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)" == "done" ]] && echo done || echo not-done)"
+assert_eq "T6: the rejection is a review breaker, not a coverage park" "review_breaker" \
+    "$(ls "$P/.cct/auto-build/demo-feat/escalations"/esc-*.json 2>/dev/null | sort -V | tail -1 | xargs jq -r '.reason' 2>/dev/null)"
+rm -rf "$P"
+
+# Positive control with an invocation counter: the same recovery delta
+# under an accepting reviewer lands, and the counter proves a SECOND
+# reviewer invocation actually happened (phase review + recovery review).
+T6_RCOUNT=$(mktemp)
+# Counting reviewer as a SCRIPT FILE: nesting sh -c inside the TOML
+# command string garbles the verdict printf, and a reviewer whose PASS
+# cannot be parsed is indistinguishable from a FAIL.
+T6_COUNT_SH=$(mktemp)
+# The summary embeds the invocation number so the RECOVERY review writes
+# a DIFFERENT build-review.md than the phase review — a byte-identical
+# artifact would hide an uncommitted rewrite from the clean-worktree
+# preflight that follows resume.
+cat > "$T6_COUNT_SH" << SH
+#!/usr/bin/env bash
+echo x >> "$T6_RCOUNT"
+n=\$(wc -l < "$T6_RCOUNT" | tr -d ' ')
+printf '### Summary\nLooks good (invocation %s).\n\n### Findings\n\n### Verdict\nPASS\n' "\$n"
+SH
+T6_COUNT_PROFILE=$(mktemp)
+cat > "$T6_COUNT_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $T6_COUNT_SH"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+REVIEW_PROFILE="$T6_COUNT_PROFILE" run_driver "$P"
+assert_exit "T6: counting fixture parks at the landing gate (exit 4)" 4 "$RC"
+assert_eq "T6: one reviewer invocation before the park" "1" \
+    "$(wc -l < "$T6_RCOUNT" | tr -d ' ')"
+echo 92 > "$P/cov-value.txt"
+git -C "$P" add cov-value.txt && git -C "$P" commit -q -m "raise coverage"
+REVIEW_PROFILE="$T6_COUNT_PROFILE" run_driver "$P" --resume
+assert_exit "T6: the accepted recovery lands (exit 0)" 0 "$RC"
+assert_eq "T6: the recovery delta cost exactly one more reviewer invocation" "2" \
+    "$(wc -l < "$T6_RCOUNT" | tr -d ' ')"
+assert_eq "T6: the rewritten recovery artifact is committed, not left dirty" "" \
+    "$(git -C "$P" status --porcelain | grep -v '^?? \.cct/')"
+rm -rf "$P"
+
+# ── A breaker INSIDE the recovery review cannot bypass it ──
+# coverage park (esc-1) → recovery review parks review_breaker (esc-2) →
+# /review-decide retry → the next resume must DRAIN: resolve esc-2, then
+# re-enter esc-1's recovery review (accepting reviewer actually runs),
+# then land. Single-escalation dispatch would resolve esc-2 and walk
+# straight to the gate, landing the delta with a rejected review.
+: > "$T6_RCOUNT"
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: nested fixture parks at the landing gate (exit 4)" 4 "$RC"
+echo 92 > "$P/cov-value.txt"
+git -C "$P" add cov-value.txt && git -C "$P" commit -q -m "raise coverage"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P" --resume
+assert_exit "T6: the rejecting recovery review parks a nested breaker (exit 4)" 4 "$RC"
+fake_review_decide "$P" retry
+REVIEW_PROFILE="$T6_COUNT_PROFILE" run_driver "$P" --resume
+assert_exit "T6: the drained resume lands (exit 0)" 0 "$RC"
+assert_eq "T6: the accepting reviewer actually ran on the retry" "not-empty" \
+    "$([[ -s "$T6_RCOUNT" ]] && echo not-empty || echo empty)"
+assert_eq "T6: every escalation is resolved after the drain" "0" \
+    "$(cat "$P/.cct/auto-build/demo-feat/escalations"/esc-*.json 2>/dev/null | jq -s '[.[] | select(.resolved == false)] | length')"
+assert_eq "T6: the drained run lands as done" "done" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# ── Drain progress is verified: a failed resolution refuses, never loops ──
+# Fault injection: the escalations directory is read-only, so the
+# resolved=true rewrite cannot land. No fix commit is made (HEAD equals
+# parked_head), so the arm runs no recovery review — the injection hits
+# ONLY resolution. (Poisoning the dir with a review in the path breaks
+# the runner's own snapshot cleanup instead — a different bug.)
+# resolve_escalation is also exercised directly: it must REPORT the
+# failure, and the record must still read unresolved.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: drain-fault fixture parks at the landing gate (exit 4)" 4 "$RC"
+chmod 555 "$P/.cct/auto-build/demo-feat/escalations"
+# Bounded resume: the regression this guards against is an INFINITE
+# drain spin — unbounded, it would hang the suite instead of failing it.
+RC=0
+OUTPUT=$(cd "$P" && \
+    CCT_PROJECT_DIR="$P" \
+    CCT_CLAUDE_BIN="$MOCK_BIN/claude" \
+    MOCK_CLAUDE_COUNTER="$(mktemp)" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" \
+    perl -e 'alarm 60; exec @ARGV' bash "$DRIVER" demo-feat --resume 2>&1) || RC=$?
+chmod 755 "$P/.cct/auto-build/demo-feat/escalations"
+assert_exit "T6: a failed resolution refuses the resume (exit 1)" 1 "$RC"
+assert_contains "T6: the refusal names the unresolvable escalation" "$OUTPUT" \
+    "could not be marked resolved"
+assert_eq "T6: the escalation record still reads unresolved" "false" \
+    "$(jq -r '.resolved' "$P/.cct/auto-build/demo-feat/escalations/esc-1.json" 2>/dev/null)"
+rm -rf "$P"
+
+# Unit: resolve_escalation reports its failure and leaves the record intact.
+DRIVER_FUNCS=$(mktemp)
+_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
+# resolve_escalation lives below the Main divider — extract it too.
+sed -n '/^resolve_escalation()/,/^}/p' "$DRIVER" >> "$DRIVER_FUNCS"
+# shellcheck source=/dev/null
+source "$DRIVER_FUNCS"
+RES_DIR=$(mktemp -d)
+jq -n '{id:"esc-1", resolved:false}' > "$RES_DIR/esc-1.json"
+DRY_RUN=true   # set_status/journal/notify are no-ops in the unit context
+CONFIG_SNAPSHOT=/dev/null  # notify's cfg lookup needs a readable path
+chmod 555 "$RES_DIR"
+RES_RC=0
+resolve_escalation "$RES_DIR/esc-1.json" "unit" 2>/dev/null || RES_RC=$?
+chmod 755 "$RES_DIR"
+assert_exit "T6: resolve_escalation returns failure when the rewrite cannot land" 1 "$RES_RC"
+assert_eq "T6: the record is untouched after the failed rewrite" "false" \
+    "$(jq -r '.resolved' "$RES_DIR/esc-1.json")"
+RES_RC=0
+resolve_escalation "$RES_DIR/esc-1.json" "unit" 2>/dev/null || RES_RC=$?
+assert_exit "T6: resolve_escalation succeeds once the fault clears" 0 "$RES_RC"
+assert_eq "T6: the record now reads resolved" "true" \
+    "$(jq -r '.resolved' "$RES_DIR/esc-1.json")"
+DRY_RUN=false
+rm -rf "$RES_DIR"
+rm -f "$DRIVER_FUNCS"
+
+# ── An interrupted drain cannot bypass the unresolved parent ──
+# Post-crash state, reproduced directly: nested esc-2 resolved, parent
+# coverage esc-1 unresolved, global status already flipped to "resumed".
+# The records, not the status, must decide: the next --resume must run
+# the parent's recovery review and only then land.
+: > "$T6_RCOUNT"
+T6_COUNT_SH2=$(mktemp)
+cat > "$T6_COUNT_SH2" << SH
+#!/usr/bin/env bash
+echo x >> "$T6_RCOUNT"
+printf '### Summary\nRecovery pass.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+T6_COUNT_PROFILE2=$(mktemp)
+cat > "$T6_COUNT_PROFILE2" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $T6_COUNT_SH2"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: interrupted-drain fixture parks (exit 4)" 4 "$RC"
+echo 92 > "$P/cov-value.txt"
+git -C "$P" add cov-value.txt && git -C "$P" commit -q -m "raise coverage"
+# Doctor the crash: a resolved nested record atop the unresolved parent,
+# and a status that already (wrongly, mid-drain) says resumed.
+LEDGER7="$P/.cct/auto-build/demo-feat"
+jq -n '{id:"esc-2", reason:"review_breaker", detail:"nested", phase:1,
+        resolved:true, notified:true}' > "$LEDGER7/escalations/esc-2.json"
+_t=$(mktemp)
+jq '.status = "resumed"' "$LEDGER7/state.json" > "$_t" && mv "$_t" "$LEDGER7/state.json"
+REVIEW_PROFILE="$T6_COUNT_PROFILE2" run_driver "$P" --resume
+assert_exit "T6: the interrupted drain resumes to done (exit 0)" 0 "$RC"
+assert_contains "T6: the parent's recovery review ran despite status=resumed" "$OUTPUT" \
+    "coverage recovery: reviewing delta"
+assert_eq "T6: the recovery reviewer was actually invoked" "not-empty" \
+    "$([[ -s "$T6_RCOUNT" ]] && echo not-empty || echo empty)"
+assert_eq "T6: the parent escalation is resolved after the drain" "true" \
+    "$(jq -r '.resolved' "$LEDGER7/escalations/esc-1.json" 2>/dev/null)"
+rm -f "$T6_COUNT_SH2" "$T6_COUNT_PROFILE2"
+rm -rf "$P"
+
+# ── A reject whose resolution cannot land keeps the decision ──
+# Fault injection on the reject arm: the escalation rewrite fails, so the
+# arm must refuse WITHOUT consuming the human's decision or claiming an
+# abort. With the fault cleared, the same decision aborts cleanly.
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "T6: reject fixture parks a review breaker (exit 4)" 4 "$RC"
+fake_review_decide "$P" reject
+chmod 555 "$P/.cct/auto-build/demo-feat/escalations"
+run_driver "$P" --resume
+chmod 755 "$P/.cct/auto-build/demo-feat/escalations"
+assert_exit "T6: a reject with a failed resolution refuses (exit 1)" 1 "$RC"
+assert_contains "T6: the refusal says the decision was kept" "$OUTPUT" \
+    "the decision was NOT consumed"
+assert_eq "T6: the decision file survives the failed reject" "present" \
+    "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
+assert_eq "T6: the run is not falsely aborted" "not-aborted" \
+    "$([[ "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)" == "aborted" ]] && echo aborted || echo not-aborted)"
+run_driver "$P" --resume
+assert_exit "T6: the same decision aborts once the fault clears (exit 0)" 0 "$RC"
+assert_eq "T6: the run is now aborted" "aborted" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# ── Corrupt or gapped escalation records fail CLOSED ──
+# A record the scan cannot read must refuse, never count as resolved —
+# a corrupt nested record above a live coverage parent would otherwise
+# bypass its recovery entirely.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: corruption fixture parks (exit 4)" 4 "$RC"
+LEDGER8="$P/.cct/auto-build/demo-feat"
+echo "not json" > "$LEDGER8/escalations/esc-2.json"
+run_driver "$P" --resume
+assert_exit "T6: a corrupt nested record refuses the resume (exit 1)" 1 "$RC"
+assert_contains "T6: the refusal names the corruption, not a resolution" "$OUTPUT" \
+    "corrupt"
+assert_eq "T6: nothing was auto-resolved past the corruption" "false" \
+    "$(jq -r '.resolved' "$LEDGER8/escalations/esc-1.json" 2>/dev/null)"
+# Belt path: even with the status doctored to resumed (interrupted drain),
+# corruption still refuses instead of counting as zero unresolved.
+_t=$(mktemp)
+jq '.status = "resumed"' "$LEDGER8/state.json" > "$_t" && mv "$_t" "$LEDGER8/state.json"
+run_driver "$P" --resume
+assert_exit "T6: the startup belt also fails closed on corruption (exit 1)" 1 "$RC"
+# Gap: replace the corrupt esc-2 with a valid-but-gapped esc-3.
+rm -f "$LEDGER8/escalations/esc-2.json"
+jq -n '{id:"esc-3", reason:"review_breaker", detail:"gapped", phase:1,
+        resolved:false, notified:true}' > "$LEDGER8/escalations/esc-3.json"
+run_driver "$P" --resume
+assert_exit "T6: a gapped escalation sequence refuses the resume (exit 1)" 1 "$RC"
+assert_contains "T6: the refusal names the gap" "$OUTPUT" "gapped"
+rm -rf "$P"
+
+# ── Approve and retry keep their decision when resolution fails ──
+# Sibling of the reject fix: the single-use decision may only be consumed
+# after the escalation rewrite has verifiably landed.
+for T6_DEC in approve retry; do
+    P=$(setup_project); single_phase "$P"
+    REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+    assert_exit "T6: $T6_DEC fixture parks a review breaker (exit 4)" 4 "$RC"
+    fake_review_decide "$P" "$T6_DEC"
+    chmod 555 "$P/.cct/auto-build/demo-feat/escalations"
+    run_driver "$P" --resume
+    chmod 755 "$P/.cct/auto-build/demo-feat/escalations"
+    assert_exit "T6: $T6_DEC with a failed resolution refuses (exit 1)" 1 "$RC"
+    assert_contains "T6: the $T6_DEC refusal says the decision was kept" "$OUTPUT" \
+        "the decision was NOT consumed"
+    assert_eq "T6: the $T6_DEC decision survives the failed resolution" "present" \
+        "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
+    if [[ "$T6_DEC" == "approve" ]]; then
+        # The approval mark and the resolution are one transaction: a
+        # stranded bypass_approved would authorize a bypass whose
+        # escalation still reads unresolved.
+        assert_eq "T6: the failed approve leaves no stranded bypass mark" "null" \
+            "$(jq -r '.phases["1"].bypass_approved // "null"' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+    fi
+    run_driver "$P" --resume
+    assert_exit "T6: the kept $T6_DEC decision works once the fault clears (exit 0)" 0 "$RC"
+    rm -rf "$P"
+done
+
+# ── A git failure on a REQUIRED artifact parks; only termination is best-effort ──
+# Finalize e2e: the landing coverage command plants a stale index.lock via
+# its baked canonical path, so the automation-summary commit hits a real
+# git failure after the gate passed — the run must park, not report done.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << EOF
+#!/usr/bin/env bash
+jq -n '{total:{lines:{pct:92}}}' > cov.json
+touch "$P/.git/index.lock"
+EOF
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "lock-planting coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+rm -f "$P/.git/index.lock"
+assert_exit "T6: a git failure on the summary artifact parks (exit 4)" 4 "$RC"
+assert_contains "T6: the park names the summary artifact" "$OUTPUT" \
+    "automation summary could not be committed"
+rm -rf "$P"
+
+# ── Artifact-commit recovery is REVIEW-BOUND: phase review artifact ──
+# The park fires AFTER review, and the resumed phase skips build and
+# review — so the operator's recovery commit (artifact + a smuggled
+# source change) must get its own review PASS before anything reruns.
+# The counting reviewer plants the index.lock exactly once, embedding the
+# invocation number so artifacts differ between reviews.
+T6_ARCOUNT=$(mktemp)
+T6_ARMARK="$(mktemp -u)"
+P=$(setup_project); single_phase "$P"
+T6_AR_SH=$(mktemp)
+cat > "$T6_AR_SH" << SH
+#!/usr/bin/env bash
+echo x >> "$T6_ARCOUNT"
+if [[ ! -e "$T6_ARMARK" ]]; then
+    : > "$T6_ARMARK"
+    touch "$P/.git/index.lock"
+fi
+n=\$(wc -l < "$T6_ARCOUNT" | tr -d ' ')
+printf '### Summary\nOK (invocation %s).\n\n### Findings\n\n### Verdict\nPASS\n' "\$n"
+SH
+T6_AR_PROFILE=$(mktemp)
+cat > "$T6_AR_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $T6_AR_SH"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+REVIEW_PROFILE="$T6_AR_PROFILE" run_driver "$P"
+rm -f "$P/.git/index.lock"
+assert_exit "T6: a failed phase-artifact commit parks (exit 4)" 4 "$RC"
+assert_eq "T6: the phase-artifact park recorded the reviewed HEAD" "recorded" \
+    "$([[ -n "$(jq -r '.history.parked_head // empty' "$P/.cct/auto-build/demo-feat/escalations/esc-1.json" 2>/dev/null)" ]] && echo recorded || echo missing)"
+echo "smuggled" >> "$P/demo.sh"
+git -C "$P" add -A && git -C "$P" commit -q -m "recover artifact (and smuggle a change)"
+REVIEW_PROFILE="$T6_AR_PROFILE" run_driver "$P" --resume
+assert_exit "T6: the reviewed phase-artifact recovery lands (exit 0)" 0 "$RC"
+assert_contains "T6: the recovery delta was reviewed before the rerun" "$OUTPUT" \
+    "artifact recovery: reviewing delta"
+assert_eq "T6: the phase-artifact recovery cost one more reviewer invocation" "2" \
+    "$(wc -l < "$T6_ARCOUNT" | tr -d ' ')"
+rm -rf "$P"; rm -f "$T6_AR_SH" "$T6_AR_PROFILE" "$T6_ARMARK"
+
+# ── …and the automation-summary variant of the same invariant ──
+: > "$T6_ARCOUNT"
+T6_ARMARK="$(mktemp -u)"
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << EOF
+#!/usr/bin/env bash
+jq -n '{total:{lines:{pct:92}}}' > cov.json
+if [[ ! -e "$T6_ARMARK" ]]; then
+    : > "$T6_ARMARK"
+    touch "$P/.git/index.lock"
+fi
+EOF
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "once-locking coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+T6_AR_SH=$(mktemp)
+cat > "$T6_AR_SH" << SH
+#!/usr/bin/env bash
+echo x >> "$T6_ARCOUNT"
+n=\$(wc -l < "$T6_ARCOUNT" | tr -d ' ')
+printf '### Summary\nOK (invocation %s).\n\n### Findings\n\n### Verdict\nPASS\n' "\$n"
+SH
+T6_AR_PROFILE=$(mktemp)
+cat > "$T6_AR_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $T6_AR_SH"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+REVIEW_PROFILE="$T6_AR_PROFILE" run_driver "$P"
+rm -f "$P/.git/index.lock"
+assert_exit "T6: a failed summary commit parks with the reviewed HEAD" 4 "$RC"
+echo "smuggled" >> "$P/demo.sh"
+git -C "$P" add -A && git -C "$P" commit -q -m "recover summary (and smuggle a change)"
+REVIEW_PROFILE="$T6_AR_PROFILE" run_driver "$P" --resume
+assert_exit "T6: the reviewed summary recovery lands (exit 0)" 0 "$RC"
+assert_contains "T6: the summary recovery delta was reviewed" "$OUTPUT" \
+    "artifact recovery: reviewing delta"
+assert_eq "T6: the summary recovery cost one more reviewer invocation" "2" \
+    "$(wc -l < "$T6_ARCOUNT" | tr -d ' ')"
+rm -rf "$P"; rm -f "$T6_AR_SH" "$T6_AR_PROFILE" "$T6_ARMARK"
+
+# ── A review-bound park with an EMPTY parked_head fails closed ──
+# Missing key = legacy pre-review park; present-but-empty = a review-bound
+# park whose HEAD capture failed — that must refuse, never degrade into
+# the legacy clean-tree-and-green-tests arm.
+: > "$T6_ARCOUNT"
+T6_ARMARK="$(mktemp -u)"
+P=$(setup_project); single_phase "$P"
+T6_AR_SH=$(mktemp)
+cat > "$T6_AR_SH" << SH
+#!/usr/bin/env bash
+echo x >> "$T6_ARCOUNT"
+if [[ ! -e "$T6_ARMARK" ]]; then
+    : > "$T6_ARMARK"
+    touch "$P/.git/index.lock"
+fi
+printf '### Summary\nOK.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+T6_AR_PROFILE=$(mktemp)
+cat > "$T6_AR_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $T6_AR_SH"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+REVIEW_PROFILE="$T6_AR_PROFILE" run_driver "$P"
+rm -f "$P/.git/index.lock"
+assert_exit "T6: empty-head fixture parks at the artifact commit (exit 4)" 4 "$RC"
+# Doctor the failure the site tolerates: the HEAD capture came back empty.
+ESC9="$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+_t=$(mktemp)
+jq '.history.parked_head = ""' "$ESC9" > "$_t" && mv "$_t" "$ESC9"
+git -C "$P" add -A && git -C "$P" commit -q -m "recover artifact"
+run_driver "$P" --resume
+assert_exit "T6: an empty parked_head refuses instead of degrading (exit 1)" 1 "$RC"
+assert_contains "T6: the refusal names the unbindable recovery" "$OUTPUT" \
+    "no valid parked_head"
+rm -rf "$P"; rm -f "$T6_AR_SH" "$T6_AR_PROFILE" "$T6_ARMARK" "$T6_ARCOUNT"
+
+# phase_gate unit: an rc-2 commit failure parks instead of proceeding.
+DRIVER_FUNCS=$(mktemp)
+_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
+# shellcheck source=/dev/null
+source "$DRIVER_FUNCS"
+PG_P=$(mktemp -d)
+git -C "$PG_P" init -q -b feature/x
+git -C "$PG_P" config user.email t@t && git -C "$PG_P" config user.name t
+echo base > "$PG_P/f" && git -C "$PG_P" add -A && git -C "$PG_P" commit -q -m init
+PROJECT_DIR="$PG_P"
+# Origin stub: the unit must reach the COMMIT path — with the real
+# origin script and no spec fixture, the origin gate parks first and the
+# assertion passes for the wrong reason under any commit behaviour.
+PG_STUB=$(mktemp -d)
+printf '#!/usr/bin/env bash\nexit 0\n' > "$PG_STUB/check-origin-alignment.sh"
+chmod +x "$PG_STUB/check-origin-alignment.sh"
+# SCRIPT_DIR is the suite's own global (schema paths, validate-spec calls
+# in later tests resolve against it) — save and restore around the stub.
+_PG_SAVE_SCRIPT_DIR="$SCRIPT_DIR"
+SCRIPT_DIR="$PG_STUB"
+LEDGER_DIR="$PG_P/.cct/auto-build/dummy"; STATE="$LEDGER_DIR/state.json"; EVENTS="$LEDGER_DIR/events.jsonl"
+SUMMARY_MD="$PG_P/summary.md"; SPEC_DIR="$PG_P/specs/dummy"
+CONFIG_SNAPSHOT=/dev/null; DRY_RUN=false
+BRANCH_NAME="feature/x"; BRANCH_BASE="main"; PROFILE="advisory"
+MAX_PHASES=8; MAX_FIX_SESSIONS=2; CAP_WALL_CLOCK=3600; CAP_COST=5; MILESTONE_EVERY=0
+touch "$PG_P/.git/index.lock"
+PG_RC=0
+PG_OUT=$( ( phase_gate 1 "unit" ) 2>&1 ) || PG_RC=$?
+rm -f "$PG_P/.git/index.lock"
+assert_exit "T6: phase_gate parks on a real commit failure (exit 4)" 4 "$PG_RC"
+assert_contains "T6: the phase_gate park names the review artifact" "$PG_OUT" \
+    "review artifact could not be committed"
+SCRIPT_DIR="$_PG_SAVE_SCRIPT_DIR"
+rm -rf "$PG_P" "$PG_STUB"
+rm -f "$DRIVER_FUNCS"
+
+# ── Nested recovery breakers carry the parent's phase ──
+# The recovery review runs before run_phase assigns CURRENT_PHASE; the
+# arm must stamp it from the parent escalation, or the nested breaker
+# records phase 0 and a /review-decide approve stores its bypass under
+# the wrong phase — rejected as mis-scoped on re-entry.
+: > "$T6_RCOUNT"
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+echo 92 > "$P/cov-value.txt"
+echo "smuggled change" >> "$P/demo.sh"
+git -C "$P" add cov-value.txt demo.sh && git -C "$P" commit -q -m "raise coverage with a rider"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P" --resume
+assert_exit "T6: rejecting recovery parks the nested breaker (exit 4)" 4 "$RC"
+NESTED_ESC=$(ls "$P/.cct/auto-build/demo-feat/escalations"/esc-*.json | sort -V | tail -1)
+assert_eq "T6: the nested breaker is stamped with the parent's phase" "1" \
+    "$(jq -r '.phase' "$NESTED_ESC" 2>/dev/null)"
+fake_review_decide "$P" approve
+run_driver "$P" --resume
+assert_exit "T6: the phase-scoped approval is accepted on re-entry (exit 0)" 0 "$RC"
+assert_eq "T6: the approved recovery lands as done" "done" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# ── A git failure during the artifact commit leaves the escalation open ──
+# Fault injection: a stale index.lock makes every git write fail. The
+# recovery must refuse WITHOUT resolving the coverage escalation — a
+# resolved escalation over a dirty tree is a wedged ledger.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+echo 92 > "$P/cov-value.txt"
+git -C "$P" add cov-value.txt && git -C "$P" commit -q -m "raise coverage"
+touch "$P/.git/index.lock"
+REVIEW_PROFILE="$T6_COUNT_PROFILE" run_driver "$P" --resume
+rm -f "$P/.git/index.lock"
+assert_exit "T6: a git failure during the artifact commit refuses (exit 1)" 1 "$RC"
+assert_contains "T6: the refusal names the artifact commit" "$OUTPUT" \
+    "recovery review artifact"
+assert_eq "T6: the coverage escalation stays unresolved after the git failure" "false" \
+    "$(jq -r '.resolved' "$P/.cct/auto-build/demo-feat/escalations/esc-1.json" 2>/dev/null)"
+rm -rf "$P"
+
+rm -f "$T6_RCOUNT" "$T6_COUNT_PROFILE" "$T6_COUNT_SH"
+
+# ── Phase coverage retry does not duplicate completion artifacts ──
+# The parked phase resumes AT the gate: phase_gate must not run twice,
+# so exactly one completion block and one review-artifact docs commit
+# exist across the failure and the resume.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80,floor_enforced_at:"phase"}'
+run_driver "$P"
+assert_exit "T6: phase-scoped gate parks the artifact fixture (exit 4)" 4 "$RC"
+echo 92 > "$P/cov-value.txt"
+git -C "$P" add cov-value.txt && git -C "$P" commit -q -m "raise coverage"
+run_driver "$P" --resume
+assert_exit "T6: phase artifact fixture resumes to done (exit 0)" 0 "$RC"
+assert_eq "T6: exactly one phase-completion block across park and resume" "1" \
+    "$(grep -c '^### Phase 1 complete' "$P/specs/demo-feat/automation-summary.md")"
+assert_eq "T6: exactly one phase review-artifact commit" "1" \
+    "$(git -C "$P" log --oneline --grep 'phase 1 review artifact' | wc -l | tr -d ' ')"
+rm -rf "$P"
+
+# ── Schema parity: the JSON Schema carries the baseline-completeness rule ──
+SCHEMA6="$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json"
+jq -e '[.. | objects | select((.description? // "") | contains("Brownfield baseline completeness"))] | length == 1' \
+    "$SCHEMA6" >/dev/null 2>&1
+assert_exit "T6: schema encodes brownfield baseline completeness" 0 $?
+# And the executable validator agrees — reject each missing metric,
+# accept the complete contract (same fixture but whole).
+T6_BROWN='{"command":"c","artifact":"a.json","parser":"istanbul","min_line_pct":70,"min_branch_pct":50,"max_regression_pct":5,"timeout_sec":60,"floor_enforced_at":"landing","preset_id":null,"preset_sha256":null}'
+T6V=$(mktemp)
+jq -n --argjson ct "$T6_BROWN" \
+    '{schema_version:1, path:"fresh-attended-block", contract:($ct + {baseline:{line_pct:80}})}' > "$T6V"
+RC=0; validate_preflight_result "$T6V" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "T6: validator rejects a branch floor with no branch baseline" 1 "$RC"
+jq -n --argjson ct "$T6_BROWN" \
+    '{schema_version:1, path:"fresh-attended-block", contract:($ct + {baseline:{branch_pct:60}})}' > "$T6V"
+RC=0; validate_preflight_result "$T6V" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "T6: validator rejects a line floor with no line baseline" 1 "$RC"
+jq -n --argjson ct "$T6_BROWN" \
+    '{schema_version:1, path:"fresh-attended-block", contract:($ct + {baseline:{line_pct:80, branch_pct:60}})}' > "$T6V"
+RC=0; validate_preflight_result "$T6V" "fresh-attended-block" 2>/dev/null || RC=$?
+assert_exit "T6: validator accepts the complete brownfield baseline" 0 "$RC"
+rm -f "$T6V"
 
 echo ""
 
