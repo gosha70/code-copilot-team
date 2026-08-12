@@ -152,11 +152,16 @@ cp_run_bounded() {
     # prevent. Both paths therefore terminate a process GROUP and escalate
     # TERM -> KILL.
     local secs="$1" cwd="$2" cmd="$3" tcmd rc=0
+    # The isolation the caller set up (throwaway worktree) must be the
+    # WHOLE truth the command sees. The driver is launched with
+    # CCT_PROJECT_DIR pointing at the canonical checkout, and an inherited
+    # copy hands the command a documented path straight back out of its
+    # sandbox — so it is rebound to the execution root here, on every path.
     tcmd=$(cp_timeout_cmd)
     if [[ -n "$tcmd" ]]; then
         # -k escalates to KILL if the command ignores TERM. Without it the
         # native path had no escalation at all.
-        ( cd "$cwd" && "$tcmd" -k 5 "$secs" bash -c "$cmd" ) >/dev/null 2>&1 || rc=$?
+        ( cd "$cwd" && env CCT_PROJECT_DIR="$cwd" "$tcmd" -k 5 "$secs" bash -c "$cmd" ) >/dev/null 2>&1 || rc=$?
         return $rc
     fi
     # `set -m` puts the job in its own process group so `kill -- -PID`
@@ -184,7 +189,7 @@ cp_run_bounded() {
     fi
     fired="$firedir/fired"
     set -m
-    ( cd "$cwd" && bash -c "$cmd" ) >/dev/null 2>&1 &
+    ( cd "$cwd" && env CCT_PROJECT_DIR="$cwd" bash -c "$cmd" ) >/dev/null 2>&1 &
     local pid=$!
     ( sleep "$secs"
       : > "$fired"

@@ -96,6 +96,29 @@
           "else": {
             "required": ["max_regression_pct"]
           }
+        },
+        {
+          "description": "Brownfield baseline completeness: every floored metric must have a captured baseline value to regress from (FR-4) — a floor whose metric the baseline lacks would be silently exempt from the no-regression promise.",
+          "if": {
+            "properties": { "baseline": { "type": "object" } },
+            "required": ["baseline"]
+          },
+          "then": {
+            "allOf": [
+              {
+                "if": { "required": ["min_line_pct"] },
+                "then": {
+                  "properties": { "baseline": { "required": ["line_pct"] } }
+                }
+              },
+              {
+                "if": { "required": ["min_branch_pct"] },
+                "then": {
+                  "properties": { "baseline": { "required": ["branch_pct"] } }
+                }
+              }
+            ]
+          }
         }
       ]
     },
