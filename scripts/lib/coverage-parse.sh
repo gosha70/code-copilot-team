@@ -156,10 +156,11 @@ cp_run_bounded() {
     # sandbox — but no path the harness itself hands the command may point
     # back at the canonical checkout. CCT_PROJECT_DIR and CCT_SPECS_DIR
     # (driver exports) are rebound to the execution root on every path.
-    # OLDPWD is dropped explicitly as a belt: bash already scrubs an
-    # imported OLDPWD at startup and cd sets it unexported, so no child
-    # of this bash-to-bash chain can observe it today — the -u documents
-    # the intent and holds if this wrapper is ever not bash.
+    # OLDPWD is dropped explicitly: modern bash scrubs an imported OLDPWD
+    # at startup and cd sets it unexported, but bash 3.2 (macOS /bin/bash)
+    # RETAINS the export attribute — and any non-bash wrapper would pass
+    # it through untouched. The -u is what actually guarantees the
+    # coverage command's environ carries no path back to the launch dir.
     tcmd=$(cp_timeout_cmd)
     if [[ -n "$tcmd" ]]; then
         # -k escalates to KILL if the command ignores TERM. Without it the
