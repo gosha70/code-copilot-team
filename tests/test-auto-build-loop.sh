@@ -3772,6 +3772,28 @@ assert_eq "T6: the env-leak reached no commit" "0" \
     "$(git -C "$P" log --all -S leaked --oneline -- demo.sh | wc -l | tr -d ' ')"
 rm -rf "$P"
 
+# ── …and not through CCT_SPECS_DIR either ──
+# The driver exports CCT_SPECS_DIR at the canonical specs dir; inherited
+# into the coverage command it is a second documented path out of the
+# sandbox. Rebound alongside CCT_PROJECT_DIR, writes through it stay in
+# the throwaway worktree.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+echo "leaked" >> "${CCT_SPECS_DIR:?}/demo-feat/plan.md"
+jq -n '{total:{lines:{pct:92}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "specs-escaping coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T6: specs-escaping coverage run still lands" 0 "$RC"
+assert_eq "T6: the canonical specs saw no write through CCT_SPECS_DIR" "0" \
+    "$(grep -c leaked "$P/specs/demo-feat/plan.md")"
+assert_eq "T6: the specs-leak reached no commit" "0" \
+    "$(git -C "$P" log --all -S leaked --oneline -- specs/demo-feat/plan.md | wc -l | tr -d ' ')"
+rm -rf "$P"
+
 # ── Resume: the ledger's admitted contract is the authority ──
 # A schema-VALID frozen file with a rewritten floor (80 → 1) must not
 # repin on resume: valid-but-different is exactly what a structural
@@ -4163,6 +4185,13 @@ for T6_DEC in approve retry; do
         "the decision was NOT consumed"
     assert_eq "T6: the $T6_DEC decision survives the failed resolution" "present" \
         "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
+    if [[ "$T6_DEC" == "approve" ]]; then
+        # The approval mark and the resolution are one transaction: a
+        # stranded bypass_approved would authorize a bypass whose
+        # escalation still reads unresolved.
+        assert_eq "T6: the failed approve leaves no stranded bypass mark" "null" \
+            "$(jq -r '.phases["1"].bypass_approved // "null"' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+    fi
     run_driver "$P" --resume
     assert_exit "T6: the kept $T6_DEC decision works once the fault clears (exit 0)" 0 "$RC"
     rm -rf "$P"
@@ -4187,6 +4216,96 @@ assert_exit "T6: a git failure on the summary artifact parks (exit 4)" 4 "$RC"
 assert_contains "T6: the park names the summary artifact" "$OUTPUT" \
     "automation summary could not be committed"
 rm -rf "$P"
+
+# ── Artifact-commit recovery is REVIEW-BOUND: phase review artifact ──
+# The park fires AFTER review, and the resumed phase skips build and
+# review — so the operator's recovery commit (artifact + a smuggled
+# source change) must get its own review PASS before anything reruns.
+# The counting reviewer plants the index.lock exactly once, embedding the
+# invocation number so artifacts differ between reviews.
+T6_ARCOUNT=$(mktemp)
+T6_ARMARK="$(mktemp -u)"
+P=$(setup_project); single_phase "$P"
+T6_AR_SH=$(mktemp)
+cat > "$T6_AR_SH" << SH
+#!/usr/bin/env bash
+echo x >> "$T6_ARCOUNT"
+if [[ ! -e "$T6_ARMARK" ]]; then
+    : > "$T6_ARMARK"
+    touch "$P/.git/index.lock"
+fi
+n=\$(wc -l < "$T6_ARCOUNT" | tr -d ' ')
+printf '### Summary\nOK (invocation %s).\n\n### Findings\n\n### Verdict\nPASS\n' "\$n"
+SH
+T6_AR_PROFILE=$(mktemp)
+cat > "$T6_AR_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $T6_AR_SH"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+REVIEW_PROFILE="$T6_AR_PROFILE" run_driver "$P"
+rm -f "$P/.git/index.lock"
+assert_exit "T6: a failed phase-artifact commit parks (exit 4)" 4 "$RC"
+assert_eq "T6: the phase-artifact park recorded the reviewed HEAD" "recorded" \
+    "$([[ -n "$(jq -r '.history.parked_head // empty' "$P/.cct/auto-build/demo-feat/escalations/esc-1.json" 2>/dev/null)" ]] && echo recorded || echo missing)"
+echo "smuggled" >> "$P/demo.sh"
+git -C "$P" add -A && git -C "$P" commit -q -m "recover artifact (and smuggle a change)"
+REVIEW_PROFILE="$T6_AR_PROFILE" run_driver "$P" --resume
+assert_exit "T6: the reviewed phase-artifact recovery lands (exit 0)" 0 "$RC"
+assert_contains "T6: the recovery delta was reviewed before the rerun" "$OUTPUT" \
+    "artifact recovery: reviewing delta"
+assert_eq "T6: the phase-artifact recovery cost one more reviewer invocation" "2" \
+    "$(wc -l < "$T6_ARCOUNT" | tr -d ' ')"
+rm -rf "$P"; rm -f "$T6_AR_SH" "$T6_AR_PROFILE" "$T6_ARMARK"
+
+# ── …and the automation-summary variant of the same invariant ──
+: > "$T6_ARCOUNT"
+T6_ARMARK="$(mktemp -u)"
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << EOF
+#!/usr/bin/env bash
+jq -n '{total:{lines:{pct:92}}}' > cov.json
+if [[ ! -e "$T6_ARMARK" ]]; then
+    : > "$T6_ARMARK"
+    touch "$P/.git/index.lock"
+fi
+EOF
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "once-locking coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+T6_AR_SH=$(mktemp)
+cat > "$T6_AR_SH" << SH
+#!/usr/bin/env bash
+echo x >> "$T6_ARCOUNT"
+n=\$(wc -l < "$T6_ARCOUNT" | tr -d ' ')
+printf '### Summary\nOK (invocation %s).\n\n### Findings\n\n### Verdict\nPASS\n' "\$n"
+SH
+T6_AR_PROFILE=$(mktemp)
+cat > "$T6_AR_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $T6_AR_SH"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+REVIEW_PROFILE="$T6_AR_PROFILE" run_driver "$P"
+rm -f "$P/.git/index.lock"
+assert_exit "T6: a failed summary commit parks with the reviewed HEAD" 4 "$RC"
+echo "smuggled" >> "$P/demo.sh"
+git -C "$P" add -A && git -C "$P" commit -q -m "recover summary (and smuggle a change)"
+REVIEW_PROFILE="$T6_AR_PROFILE" run_driver "$P" --resume
+assert_exit "T6: the reviewed summary recovery lands (exit 0)" 0 "$RC"
+assert_contains "T6: the summary recovery delta was reviewed" "$OUTPUT" \
+    "artifact recovery: reviewing delta"
+assert_eq "T6: the summary recovery cost one more reviewer invocation" "2" \
+    "$(wc -l < "$T6_ARCOUNT" | tr -d ' ')"
+rm -rf "$P"; rm -f "$T6_AR_SH" "$T6_AR_PROFILE" "$T6_ARMARK" "$T6_ARCOUNT"
 
 # phase_gate unit: an rc-2 commit failure parks instead of proceeding.
 DRIVER_FUNCS=$(mktemp)

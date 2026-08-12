@@ -2542,7 +2542,8 @@ phase_gate() {
     local _pg_rc=0
     driver_commit "docs($FEATURE_ID): phase $n review artifact [auto-build]" || _pg_rc=$?
     if [[ $_pg_rc -ge 2 ]]; then
-        dispose "git_anomaly" "phase $n review artifact could not be committed (git failure — see stderr above)" "null"
+        dispose "git_anomaly" "phase $n review artifact could not be committed (git failure — see stderr above)" \
+            "$(jq -n --arg h "$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")" '{parked_head: $h}')"
     fi
     [[ -n "$COMMIT_SHA" ]] && state_set '.phases[$p].commits += [$sha]' --arg p "$n" --arg sha "$COMMIT_SHA"
 }
@@ -2906,13 +2907,23 @@ resume_parked() {
                 approve)
                     [[ "$(jq -r '.bypass // false' "$PROJECT_DIR/.cct/review/loop-summary.json" 2>/dev/null)" == "true" ]] \
                         || refuse_resume "decision is approve but no bypass loop-summary.json exists; rerun /review-decide approve"
-                    # Single-use, phase-scoped approval (FR-5). Resolution
-                    # BEFORE consumption, checked — same contract as reject:
-                    # a failed rewrite must not eat the single-use decision.
+                    # Single-use, phase-scoped approval (FR-5). The approval
+                    # mark and the escalation resolution are ONE logical
+                    # transaction: run_review_loop grants a bypass off a
+                    # nonempty bypass_approved alone, so a failed resolution
+                    # must not strand the mark — that would authorize a
+                    # bypass whose escalation still reads unresolved. Both
+                    # durable writes succeed before the single-use decision
+                    # is consumed; on failure the mark is compensated away
+                    # and the decision survives for a retry.
                     state_set '.phases[$p].bypass_approved = $e' \
-                        --arg p "$phase" --arg e "$(basename "$esc_file" .json)"
-                    resolve_escalation "$esc_file" "review breaker approved for phase $phase (human bypass)" \
-                        || refuse_resume "review breaker approved, but the escalation could not be marked resolved — the decision was NOT consumed; fix $LEDGER_DIR/escalations/ and rerun --resume"
+                        --arg p "$phase" --arg e "$(basename "$esc_file" .json)" \
+                        || refuse_resume "could not record the phase-scoped approval in state.json — the decision was NOT consumed; fix the ledger and rerun --resume"
+                    if ! resolve_escalation "$esc_file" "review breaker approved for phase $phase (human bypass)"; then
+                        state_set '.phases[$p].bypass_approved = null' --arg p "$phase" \
+                            || echo "[auto-build] ERROR: could not roll back .phases[$phase].bypass_approved — clear it manually before resuming" >&2
+                        refuse_resume "review breaker approved, but the escalation could not be marked resolved — the approval was rolled back and the decision was NOT consumed; fix $LEDGER_DIR/escalations/ and rerun --resume"
+                    fi
                     consume_review_decision "$(basename "$esc_file" .json)"
                     ;;
                 reject)
@@ -3011,6 +3022,31 @@ resume_parked() {
             local probe_log
             probe_log=$(mktemp)
             run_tests "$probe_log" || refuse_resume "test.command still failing (log: $probe_log) — fix, commit, then --resume"
+            # Artifact-commit parks (phase review artifact, automation
+            # summary) fire AFTER review, and on resume the phase re-run
+            # skips both build and review — so the manual recovery commit
+            # is otherwise a lane for unreviewed code. When the park
+            # recorded the reviewed HEAD, a moved HEAD gets its own PASS
+            # before anything reruns — the same commit-bound invariant as
+            # coverage recovery. Legacy git_anomaly parks (no parked_head)
+            # fire pre-review and keep their existing semantics.
+            local ga_parked ga_cur
+            ga_parked=$(jq -r '.history.parked_head // empty' "$esc_file")
+            if [[ -n "$ga_parked" ]]; then
+                ga_cur=$(git -C "$PROJECT_DIR" rev-parse HEAD)
+                if [[ "$ga_cur" != "$ga_parked" ]]; then
+                    echo "[auto-build] artifact recovery: reviewing delta ${ga_parked:0:8}..${ga_cur:0:8} before the parked step reruns" >&2
+                    CURRENT_PHASE="$phase"
+                    run_review_loop "$phase" "$ga_parked" \
+                        "$LEDGER_DIR/phase-$phase/artifact-recovery-$(basename "$esc_file" .json)"
+                    local _ga_commit_rc=0
+                    driver_commit "docs($FEATURE_ID): artifact recovery review artifact [auto-build]" || _ga_commit_rc=$?
+                    if [[ $_ga_commit_rc -ge 2 ]]; then
+                        refuse_resume "could not commit the artifact-recovery review (git failure) — the escalation stays unresolved; fix the repository state, then --resume"
+                    fi
+                    journal "artifact_recovery_reviewed" "delta ${ga_parked:0:8}..${ga_cur:0:8} passed review"
+                fi
+            fi
             resolve_escalation "$esc_file" "$reason cleared: tests green after manual fix"
             ;;
         cap_exceeded)
@@ -3529,7 +3565,8 @@ set_status "finalizing"
 _fin_rc=0
 driver_commit "docs($FEATURE_ID): automation summary [auto-build]" || _fin_rc=$?
 if [[ $_fin_rc -ge 2 ]]; then
-    dispose "git_anomaly" "automation summary could not be committed (git failure) — refusing to finalize over it" "null"
+    dispose "git_anomaly" "automation summary could not be committed (git failure) — refusing to finalize over it" \
+        "$(jq -n --arg h "$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")" '{parked_head: $h}')"
 fi
 
 FINAL_MSG="run complete: $DONE_COUNT phase(s) on $BRANCH_NAME"
