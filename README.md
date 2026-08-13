@@ -653,6 +653,51 @@ would break that binding; it must park or terminate to change a cap.
 > #197/#198). If you relied on that cap for protection, you were not
 > protected. Re-check the value you have set before your next run.
 
+## Coverage Contract (auto-build)
+
+An autonomous build can additionally enforce a **frozen coverage contract**
+(#222, increment C1 of #190) declared in `automation.json`:
+
+```json
+"verification": {
+  "coverage": {
+    "command": "npm run coverage",
+    "artifact": "coverage/coverage-summary.json",
+    "parser": "istanbul",
+    "baseline": "none",
+    "min_line_pct": 80
+  }
+}
+```
+
+- **Frozen during preflight.** The preflight initialiser resolves floors
+  (from `coverage.preset` naming
+  `shared/templates/<preset>/verification-preset.json`, with
+  `automation.json` overriding per key), captures the base branch's
+  baseline for brownfield runs (`baseline: "admission"` names the point in
+  the run, not the actor), and freezes the full contract into the run
+  ledger. Every later gate reads ONLY that frozen copy — editing the
+  preset, the config, or the on-disk contract after initialisation moves
+  nothing, and tampering parks an attended run or terminates an unattended
+  one.
+- **Enforced at `floor_enforced_at`** (`landing`, the default, or `phase`),
+  in a throwaway worktree at HEAD. That is side-effect isolation, not a
+  security sandbox: harness-provided paths (`CCT_PROJECT_DIR`,
+  `CCT_SPECS_DIR`) are rebound into the worktree, so ordinary writes never
+  reach the canonical checkout, but arbitrary project code that goes
+  looking for the real checkout is not confined. Floors are absolute;
+  brownfield runs additionally fail on
+  regression beyond `max_regression_pct`, measured in percentage points
+  against the frozen baseline. A floor whose metric the artifact lacks
+  fails closed.
+- **Failure parks (attended) or terminates (unattended)**, naming the
+  measured number and the floor. Attended parks are resumable: raise the
+  coverage (or fix the tooling), commit, and `--resume` — anything
+  committed past the last reviewed HEAD gets its own review PASS before
+  the gate reruns.
+- Parsers: `istanbul` and `lcov` (`cobertura`/`jacoco` are refused as not
+  implemented in C1). `skip_is_failure` arrives with C3.
+
 ## Four-Phase Workflow
 
 | Phase | Model | Effort | Delegation | What Happens |
