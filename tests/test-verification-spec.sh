@@ -193,19 +193,95 @@ assert_exit "unresolvable verifier refused" 1 "$RC"
 assert_contains "unresolvable failure names the target" "$OUTPUT" "does not resolve to a genuinely executable test"
 rm -rf "$D"
 
-D=$(mk_fixture); finalize "$D"
-python3 - "$D/specs/demo-feat/verification.yaml" << 'EOF'
+# ── C2 (#242 FR-3): runtime_conformance = availability + capability ──
+# The categorical B refusal is gone; admission now screens the EFFECTIVE
+# config's evaluator: resolves in providers.toml, DECLARES
+# conformance_command, passes its healthcheck. No fallback chain — the
+# gate freezes exactly this evaluator id.
+mk_conf_fixture() {
+    local dir; dir=$(mk_fixture); finalize "$dir" >/dev/null
+    python3 - "$dir/specs/demo-feat/verification.yaml" << 'PYEOF'
 import sys
 p = sys.argv[1]
 s = open(p).read()
 s = s.replace('    - kind: deterministic\n      test: "project-test.sh"',
               '    - kind: runtime_conformance\n      criterion: "Cancel aborts the job."', 1)
 open(p, 'w').write(s)
-EOF
+PYEOF
+    echo "$dir"
+}
+add_conf_block() {  # <dir> <evaluator>
+    python3 - "$1/specs/demo-feat/automation.json" "$2" << 'PYEOF'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+cfg.setdefault("verification", {})["conformance"] = {
+    "evaluator": sys.argv[2], "timeout_sec": 600,
+    "app": {"command": "sleep 5",
+            "ready": {"url": "http://127.0.0.1:9/x", "timeout_sec": 5},
+            "stop_timeout_sec": 5}}
+json.dump(cfg, open(p, "w"))
+PYEOF
+}
+PTOML=$(mktemp -d)/providers.toml
+cat > "$PTOML" << 'TOML'
+[providers.capable]
+type = "cli"
+command = "cat {review_request}"
+conformance_command = "cat {review_request}"
+healthcheck = "true"
+
+[providers.reviewer-only]
+type = "cli"
+command = "cat {review_request}"
+healthcheck = "true"
+
+[providers.sick]
+type = "cli"
+command = "cat {review_request}"
+conformance_command = "cat {review_request}"
+healthcheck = "false"
+TOML
+export CCT_PROVIDER_PROFILE="$PTOML"
+
+D=$(mk_conf_fixture)
 run_admission "$D"
-assert_exit "runtime_conformance mapping refused in B" 1 "$RC"
-assert_contains "refusal names the missing evaluator" "$OUTPUT" "inadmissible in B"
+assert_exit "mapping without a conformance block refused" 1 "$RC"
+assert_contains "refusal names the missing block" "$OUTPUT" "requires verification.conformance"
 rm -rf "$D"
+
+D=$(mk_conf_fixture); add_conf_block "$D" "ghost"
+run_admission "$D"
+assert_exit "unresolvable evaluator refused" 1 "$RC"
+assert_contains "refusal names the resolution failure" "$OUTPUT" "does not resolve in providers.toml"
+rm -rf "$D"
+
+D=$(mk_conf_fixture); add_conf_block "$D" "reviewer-only"
+run_admission "$D"
+assert_exit "healthy reviewer-only provider refused (capability, not health)" 1 "$RC"
+assert_contains "refusal names the missing conformance_command" "$OUTPUT" "declares no conformance_command"
+rm -rf "$D"
+
+D=$(mk_conf_fixture); add_conf_block "$D" "sick"
+run_admission "$D"
+assert_exit "unhealthy capable evaluator refused" 1 "$RC"
+assert_contains "refusal names the healthcheck" "$OUTPUT" "failed its healthcheck"
+rm -rf "$D"
+
+D=$(mk_conf_fixture); add_conf_block "$D" "capable"
+run_admission "$D"
+assert_exit "capable healthy evaluator ADMITS the mapping" 0 "$RC"
+assert_contains "admission names the evaluator screen" "$OUTPUT" "resolves, declares conformance_command"
+rm -rf "$D"
+
+D=$(mk_conf_fixture); add_conf_block "$D" "capable"
+sedi 's|criterion: "Cancel aborts the job."|criterion: "TODO: write me"|' "$D/specs/demo-feat/verification.yaml"
+run_admission "$D"
+assert_exit "placeholder conformance criterion refused" 1 "$RC"
+assert_contains "refusal demands a real criterion" "$OUTPUT" "write the real conformance criterion"
+rm -rf "$D"
+
+unset CCT_PROVIDER_PROFILE
 
 D=$(mk_fixture); finalize "$D"
 python3 - "$D/specs/demo-feat/verification.yaml" << 'EOF'

@@ -234,6 +234,23 @@ print_defers() {
   defer "mid-flight credential/secret enumeration (delegation-best-practices)"
 }
 
+# admission_toml_get <file> <section> <key> — same minimal TOML reader
+# the provider scripts use (canonical copy: scripts/providers-health.sh);
+# duplicated because admission must not depend on sourcing a runner.
+admission_toml_get() {
+  local file="$1" section="$2" key="$3"
+  awk -v section="$section" -v key="$key" '
+      /^\[/ { current = $0; gsub(/[\[\] ]/, "", current) }
+      current == section && $0 ~ "^" key " *=" {
+          val = $0
+          sub(/^[^=]*= */, "", val)
+          gsub(/^"|"$/, "", val)
+          print val
+          exit
+      }
+  ' "$file"
+}
+
 # admission_target_ok <project_dir> <target> — a deterministic verifier
 # target is genuinely executable: a path form must be an executable
 # FILE (a directory or plain file verifies nothing); a command form
@@ -356,9 +373,11 @@ validate_admission() {
   if [[ "$sha_ok" == "true" ]]; then pass "$id: every statement_sha recomputes clean against spec.md"; fi
 
   # 4+5. Every verifier is executable NOW. deterministic → target must
-  #      resolve; runtime_conformance → the §6 evaluator ships in
-  #      increment C, so the mapping is inadmissible in B (a verifier
-  #      something depends on cannot be unavailable).
+  #      resolve; runtime_conformance (C2, #242 FR-3) → the criterion
+  #      must be real here, and the evaluator's availability+capability
+  #      is checked against the effective config after the config gate
+  #      (check 7b — a verifier something depends on cannot be
+  #      unavailable).
   local ver_ok=true
   while IFS=$'\t' read -r fr _; do
     local nvers
@@ -380,8 +399,13 @@ validate_admission() {
         fi
         ;;
       runtime_conformance)
-        fail "$id: $fr is mapped to runtime_conformance but the §6 evaluator is unavailable (ships in increment C) — inadmissible in B"
-        ver_ok=false
+        # The mapping itself is admissible since C2 (#242). A placeholder
+        # criterion still refuses — a verifier nothing defines verifies
+        # nothing.
+        if [[ -z "$target" || "$target" == TODO* ]]; then
+          fail "$id: $fr runtime_conformance criterion is a placeholder ('${target:-empty}') — write the real conformance criterion"
+          ver_ok=false
+        fi
         ;;
       *)
         fail "$id: $fr verifier has unknown kind '$kind' (deterministic|runtime_conformance)"
@@ -416,6 +440,49 @@ validate_admission() {
   else
     autocfg_ok=true
     pass "$id: automation.json valid, profile unattended, caps explicit"
+  fi
+
+  # 7b. Conformance availability + capability (#242 FR-3, handoff item 2).
+  #     REQUIRED is derived from the finalized artifact (the same parse
+  #     admission validated above — never a re-read): any FR mapped to
+  #     runtime_conformance. When required, the EFFECTIVE config must name
+  #     an evaluator that resolves in providers.toml, DECLARES
+  #     conformance_command (health alone is not capability — a healthy
+  #     reviewer-only provider can only fabricate runtime evidence), and
+  #     passes its healthcheck. No fallback chain: the gate freezes THIS
+  #     evaluator id, so admission screens exactly it.
+  local conf_required=false
+  if printf '%s\n' "$parsed" | awk -F'\t' '$1 == "VER" && $3 == "runtime_conformance" { found = 1; exit } END { exit found ? 0 : 1 }'; then
+    conf_required=true
+  fi
+  if [[ "$conf_required" == "true" ]]; then
+    local profile_toml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+    if [[ "$autocfg_ok" != "true" ]]; then
+      fail "$id: conformance is required (runtime_conformance mapping) but the automation config was rejected above — evaluator availability cannot be verified"
+    elif ! jq -e '.verification.conformance | type == "object"' "$autocfg" >/dev/null 2>&1; then
+      fail "$id: runtime_conformance mapping requires verification.conformance in automation.json (evaluator + app contract) — the block is missing"
+    else
+      local conf_eval
+      conf_eval="$(jq -r '.verification.conformance.evaluator // empty' "$autocfg" 2>/dev/null)"
+      if [[ -z "$conf_eval" ]]; then
+        fail "$id: verification.conformance.evaluator is missing — admission cannot screen an unnamed evaluator"
+      elif [[ ! -f "$profile_toml" ]]; then
+        fail "$id: provider profile not found ($profile_toml) — evaluator '$conf_eval' cannot resolve"
+      elif ! grep -o '^\[providers\.[^]]*' "$profile_toml" 2>/dev/null | sed 's/^\[providers\.//' | grep -qxF "$conf_eval"; then
+        fail "$id: evaluator '$conf_eval' does not resolve in providers.toml"
+      else
+        local conf_cmd conf_hc
+        conf_cmd="$(admission_toml_get "$profile_toml" "providers.$conf_eval" "conformance_command")"
+        conf_hc="$(admission_toml_get "$profile_toml" "providers.$conf_eval" "healthcheck")"
+        if [[ -z "$conf_cmd" ]]; then
+          fail "$id: evaluator '$conf_eval' is a reviewer-only provider — it declares no conformance_command, so it cannot exercise a running application (health is not capability); declare conformance_command in providers.toml or configure a capable evaluator"
+        elif [[ -n "$conf_hc" ]] && ! bash -c "$conf_hc" >/dev/null 2>&1; then
+          fail "$id: evaluator '$conf_eval' failed its healthcheck ($conf_hc)"
+        else
+          pass "$id: conformance evaluator '$conf_eval' resolves, declares conformance_command, and is healthy"
+        fi
+      fi
+    fi
   fi
 
   # 8. Governance gates BEFORE any command execution: plan approved +
