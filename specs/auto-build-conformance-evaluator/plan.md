@@ -29,7 +29,7 @@ origin:
     remainder).
 ---
 
-# Plan: runtime conformance evaluator, increment C2 (#242) — rev 3
+# Plan: runtime conformance evaluator, increment C2 (#242) — rev 4
 
 `spec.md` states the requirements; THIS file's lifecycle additions and
 sequences are the normative implementation contract. One source: the C1
@@ -67,10 +67,14 @@ same skeleton:
    - no mapping → no conformance requirement, block optional, admission
      behavior unchanged;
    - mapping present → require `verification.conformance` with an
-     `evaluator` that resolves in providers.toml AND passes
-     providers-health; otherwise refuse (named check, exit 1, no ledger).
-   Attended runs have no admission: the same availability check runs at
-   the gate and parks (`provider_unavailable`) instead.
+     `evaluator` that resolves in providers.toml, DECLARES
+     `conformance_command` (decision 8 — rev 4, finding 1), AND passes
+     providers-health; otherwise refuse (named check per missing piece,
+     exit 1, no ledger). Health alone never admits: a healthy
+     reviewer-only provider is refused by name.
+   Attended runs have no admission: the same
+   resolution+capability+health check runs at the gate and parks
+   (`provider_unavailable`) instead.
 
 3. **The lifecycle predicate is verification-wide (rev 2, finding 2).**
    C1's paths keyed on `HAS_COVERAGE_BLOCK`; that predicate no longer
@@ -94,8 +98,13 @@ same skeleton:
      `timeout_sec` (from `verification.test.timeout_sec`, else
      `test.timeout_sec`, the FR-5c fallback chain);
    - `conformance` — `{ evaluator, app: {command, ready,
-     stop_timeout_sec}, timeout_sec, criteria: [ {fr, statement_sha,
-     criterion} … ] }`, present iff derived required.
+     stop_timeout_sec}, interface, timeout_sec, criteria:
+     [ {fr, statement_sha, criterion} … ] }`, present iff derived
+     required. `interface` is RESOLVED at freeze (rev 4, finding 2):
+     `app.interface` when present, else `ready.url`; a
+     command-only-readiness config with neither is rejected by name at
+     config validation (both profiles) — a capable evaluator must never
+     be launched without an address for the app.
    The preflight-result schema's closed `contract` object accepts both
    new sub-objects as optional CLOSED shapes; `validate_contract_json`
    gains the matching rules. All C1 pinning/tamper/resume-equality rules
@@ -117,9 +126,11 @@ same skeleton:
       {exit, duration, log path}. Admission's resolution was the
       screen; THIS is the decision — a verifier is never inferred green
       from the generic `test.command`;
-   4. if the frozen contract carries `conformance`: gate-time health
-      check of the frozen evaluator provider → unhealthy disposes
-      `provider_unavailable`;
+   4. if the frozen contract carries `conformance`: gate-time
+      re-resolution of the frozen evaluator provider — it must still
+      resolve, still declare `conformance_command` (rev 4, finding 1),
+      and pass health; any miss disposes `provider_unavailable` (whose
+      resume arm re-checks all three);
    5. **pre-launch binding probe (rev 3, finding 4):** run the ready
       probe ONCE before launch; it MUST FAIL — an already-answering
       responder cannot be attributed to this launch → dispose
@@ -139,15 +150,16 @@ same skeleton:
       nor produce files, and providers may be explicitly read-only. The
       driver writes `$LEDGER_DIR/conformance/request.md` from the
       FROZEN contract: the criteria tuples
-      `[ {fr, statement_sha, criterion} … ]`, the evaluator-relevant
-      app interface (`ready.url` when present — the base URL of the
-      running app; nothing mutable), and a Required Output Format
+      `[ {fr, statement_sha, criterion} … ]`, the FROZEN app
+      `interface` (decision 4 — the resolved address of the running
+      app; nothing mutable), and a Required Output Format
       section demanding EXACTLY ONE fenced JSON block
       `{ "criteria": [ {fr, statement_sha, criterion, verdict,
       evidence} … ] }`. ENSURE the result path is absent (freshness,
       the C1 delete-before-run lesson); substitute the request path at
-      the provider command template's request-file placeholder (the
-      `{review_request}` slot — the generic request-file slot); the
+      the provider's `conformance_command` template's request-file
+      placeholder (decision 8; the `{review_request}` slot is reused as
+      the generic request-file slot); the
       adapter captures stdout bounded by the frozen `timeout_sec` and
       writes `CCT_REVIEW_COST_FILE`; the ADAPTER extracts the fenced
       JSON block from the capture and writes it to the result path —
@@ -190,6 +202,20 @@ same skeleton:
    local commands (unmetered, like `test.command`), but their wall-clock
    counts — `check_caps` closes the gate.
 
+8. **The evaluator capability is an explicit command contract (rev 4,
+   finding 1).** providers.toml entries gain an optional
+   `conformance_command` — an evaluator-specific command template
+   (request-file placeholder; the entry's existing `healthcheck` and
+   `timeout_sec` semantics apply). Declaring it IS the
+   `runtime_conformance` capability: reviewer health proves liveness,
+   not the ability to exercise a running application (a read-only
+   review profile or a plain prompt-in/text-out adapter passes health
+   yet can only fabricate runtime evidence). The operator grants the
+   template whatever flags/tooling app-exercising needs — the review
+   `command`'s read-only, .git-stripped sandbox assumptions do not
+   transfer. The driver never invokes a review `command` as an
+   evaluator; `provider-profile-template.toml` documents the field.
+
 ## Deliberately NOT in this slice
 
 Visual/`skip_is_failure` (#239, C3); §5 bounded progress and any
@@ -219,10 +245,11 @@ admitted run can have depended on the old refusal.
 ## Test strategy
 
 Driver-suite e2e per SC (fixtures: a stub evaluator provider registered
-in the REAL provider-template shape — a command template with the
-request-file placeholder — emitting the fenced JSON verdict block on
-stdout; a stub app with ready endpoint and a marker child for the
-process-group assertion; a pre-existing responder for the pre-launch
-binding probe), validate-spec admission cases, schema parity assertions,
-pi runtime untouched (no pi surface in C2), mutation runs for every SC
-regression (C1 discipline).
+in the REAL provider-template shape — declaring `conformance_command`
+with the request-file placeholder — emitting the fenced JSON verdict
+block on stdout; a healthy reviewer-only provider entry for the
+capability-refusal cases; a stub app with ready endpoint and a marker
+child for the process-group assertion; a pre-existing responder for the
+pre-launch binding probe), validate-spec admission cases, schema parity
+assertions, pi runtime untouched (no pi surface in C2), mutation runs
+for every SC regression (C1 discipline).

@@ -1,4 +1,4 @@
-# Tasks: runtime conformance evaluator, increment C2 (#242) — rev 3
+# Tasks: runtime conformance evaluator, increment C2 (#242) — rev 4
 
 Sequenced; each task lands with its regressions and mutation runs. The
 plan's gate sequence is normative.
@@ -7,8 +7,10 @@ plan's gate sequence is normative.
 
 - `automation.schema.json`: accept `verification.conformance`
   (closed: `evaluator`, `app{command, ready{url|command, timeout_sec},
-  stop_timeout_sec}`, `timeout_sec`); reject `required` by name;
-  `test`/top-level `app`/`visual` stay rejected.
+  stop_timeout_sec, interface?}`, `timeout_sec`); reject `required` by
+  name; reject command-only readiness without `app.interface` by name
+  (no evaluator-facing app address); `test`/top-level `app`/`visual`
+  stay rejected.
 - `validate-automation-config.sh` parity with the schema.
 - Derivation helper: `required` iff the finalized `verification.yaml`
   maps any FR to `runtime_conformance` (reads the sha-validated
@@ -18,17 +20,24 @@ plan's gate sequence is normative.
 ## T2 — Admission flip (FR-3, handoff item 2)
 
 - `validate-spec.sh --unattended`: replace the categorical
-  `runtime_conformance` refusal with the availability check
-  (block present, provider resolves, providers-health passes); named
-  refusal messages per missing piece; no-mapping runs unchanged.
-- Tests in `test-verification-spec.sh` (admit/refuse matrix, SC-1).
+  `runtime_conformance` refusal with the availability+capability check
+  (block present, provider resolves, provider DECLARES
+  `conformance_command` — plan decision 8, providers-health passes);
+  named refusal messages per missing piece, including the healthy
+  reviewer-only provider; no-mapping runs unchanged.
+- Document `conformance_command` in
+  `shared/templates/provider-profile-template.toml`.
+- Tests in `test-verification-spec.sh` (admit/refuse matrix incl.
+  reviewer-only refusal, SC-1).
 
 ## T3 — Frozen verification contract + lifecycle rekey (FR-4)
 
 - Contract initialiser: derive the requirement; freeze `verifiers`
   (the deterministic set `{fr, statement_sha, test, metric}` +
-  `timeout_sec`) and `conformance{evaluator, app, timeout_sec,
-  criteria[]}` into the contract object alongside coverage.
+  `timeout_sec`) and `conformance{evaluator, app, interface,
+  timeout_sec, criteria[]}` into the contract object alongside
+  coverage (`interface` resolved at freeze: `app.interface` else
+  `ready.url` — plan decision 4).
 - **Lifecycle/path change (plan decision 3):** introduce
   `HAS_FROZEN_CONTRACT = HAS_COVERAGE_BLOCK || HAS_VERIFICATION_ARTIFACT`
   and rekey `compute_preflight_path`, the resume frozen-contract
@@ -61,13 +70,14 @@ plan's gate sequence is normative.
   BEFORE (EMPTY full porcelain status incl. untracked, capture gate
   HEAD); EXECUTE every frozen deterministic verifier (bounded,
   per-verifier results — never inferred from `test.command`); evaluator
-  health check; pre-launch binding probe + app up; driver-authored
-  conformance request document (frozen criteria tuples + app interface
+  re-resolution (resolves + declares `conformance_command` + health);
+  pre-launch binding probe + app up; driver-authored conformance
+  request document (frozen criteria tuples + FROZEN app `interface`
   + Required Output Format: exactly one fenced JSON verdict block);
-  ensure-absent → bounded provider invocation via the request-file
-  placeholder, adapter-captured stdout → the ADAPTER extracts the block
-  and writes the result file (the evaluator writes nothing; read-only
-  providers admissible); app stop; checkout integrity AFTER (HEAD
+  ensure-absent → bounded invocation via the `conformance_command`
+  template's request-file placeholder, adapter-captured stdout → the
+  ADAPTER extracts the block and writes the result file (the evaluator
+  writes nothing); app stop; checkout integrity AFTER (HEAD
   unchanged + EMPTY porcelain incl. untracked, else `git_anomaly`);
   fail-closed identity-multiset result validation (full-tuple echo);
   `verification-results.json` FR → per-verifier results;

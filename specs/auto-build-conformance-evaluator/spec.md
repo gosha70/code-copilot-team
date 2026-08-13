@@ -1,4 +1,4 @@
-# Spec: runtime conformance evaluator, increment C2 (#242) — rev 3
+# Spec: runtime conformance evaluator, increment C2 (#242) — rev 4
 
 Requirements for #190 §6's runtime conformance evaluator and increment-B
 handoff items 1/2/5. C1 (#222) froze the coverage contract; this
@@ -64,12 +64,18 @@ this file states the requirements they satisfy.
   `validate-spec.sh --unattended` MUST stop refusing `runtime_conformance`
   mappings outright. Instead: if any FR maps to `runtime_conformance`, the
   run is admissible only when `verification.conformance` is present, its
-  `evaluator` resolves in providers.toml, and that provider passes the
-  same health check reviewers use. A mapped requirement with a missing,
-  unresolvable, or unhealthy evaluator MUST refuse admission (exit 1, no
-  ledger) with a named check. Runs with no `runtime_conformance` mappings
-  MUST NOT require the block (evaluator is not universally mandatory —
-  #190 §3).
+  `evaluator` resolves in providers.toml, that provider DECLARES the
+  runtime-conformance capability — a `conformance_command` template
+  (FR-5) — and it passes the same health check reviewers use. Health
+  alone does not prove capability: a healthy reviewer-only provider
+  (review `command` but no `conformance_command` — e.g. a read-only
+  review profile or a plain prompt-in/text-out adapter) can only
+  fabricate runtime evidence and MUST refuse by name. A mapped
+  requirement with a missing, unresolvable, capability-less, or
+  unhealthy evaluator MUST refuse admission (exit 1, no ledger) with a
+  named check per missing piece. Runs with no `runtime_conformance`
+  mappings MUST NOT require the block (evaluator is not universally
+  mandatory — #190 §3).
 
 - **FR-4 — the frozen verification contract.** The preflight initialiser
   (C1's T5) MUST freeze, alongside the coverage contract and under the
@@ -80,9 +86,11 @@ this file states the requirements they satisfy.
     `{fr, statement_sha, test, metric}`, plus the resolved
     `timeout_sec`;
   - `conformance` — the evaluator provider id, the app-launch contract
-    (FR-6), `timeout_sec`, and the CRITERIA SET — every
-    `runtime_conformance` criterion with its owning `FR-N` and
-    `statement_sha` (present iff the derived requirement holds).
+    (FR-6), the RESOLVED evaluator-facing app interface
+    (`app.interface`, else `ready.url` — FR-6), `timeout_sec`, and the
+    CRITERIA SET — every `runtime_conformance` criterion with its
+    owning `FR-N` and `statement_sha` (present iff the derived
+    requirement holds).
   Gates MUST read only the frozen copies; editing `verification.yaml` or
   `automation.json` after initialisation moves nothing. The
   preflight-result schema's closed `contract` object gains optional
@@ -98,17 +106,26 @@ this file states the requirements they satisfy.
   document and emit stdout; nothing else may be assumed of them
   (existing providers are prompt-in/stdout-out and may be explicitly
   read-only). Once per landing gate:
+  - the provider's eligibility contract is an EXPLICIT
+    `conformance_command` — an evaluator-specific command template
+    (request-file placeholder, same healthcheck field), distinct from
+    the review `command`, whose flags/tooling the operator grants for
+    exercising a running application (the review command's read-only
+    sandbox assumptions do not transfer). Declaring it IS the
+    provider's `runtime_conformance` capability (FR-3); the driver
+    never invokes a review `command` as an evaluator;
   - the driver AUTHORS a conformance request document into the ledger
     carrying the frozen criteria `[ {fr, statement_sha, criterion} … ]`,
-    the frozen evaluator-relevant app interface (`ready.url` when
-    present — the base URL of the running app; nothing mutable), and a
-    Required Output Format section demanding EXACTLY ONE fenced JSON
-    block `{ "criteria": [ {fr, statement_sha, criterion,
+    the FROZEN evaluator-facing app interface (FR-4/FR-6 — the resolved
+    address of the running app; nothing mutable), and a Required Output
+    Format section demanding EXACTLY ONE fenced JSON block
+    `{ "criteria": [ {fr, statement_sha, criterion,
     verdict: "pass"|"fail", evidence} … ] }` — every verdict echoing
     its FULL frozen tuple;
-  - the request path is substituted at the provider command template's
-    request-file placeholder; the adapter captures stdout, bounded by
-    the frozen `timeout_sec`, and writes `CCT_REVIEW_COST_FILE` (FR-8);
+  - the request path is substituted at the `conformance_command`
+    template's request-file placeholder; the adapter captures stdout,
+    bounded by the frozen `timeout_sec`, and writes
+    `CCT_REVIEW_COST_FILE` (FR-8);
   - the ADAPTER extracts the fenced JSON block from the captured stdout
     and writes the result file — the evaluator itself never writes into
     the checkout or the ledger (read-only providers are admissible).
@@ -125,7 +142,11 @@ this file states the requirements they satisfy.
 - **FR-6 — driver-owned app lifecycle.** The driver, not the evaluator,
   starts and stops the application: `conformance.app` carries
   `{ "command": "...", "ready": { "url" | "command", "timeout_sec" },
-  "stop_timeout_sec" }`. Readiness MUST be bound to the launched
+  "stop_timeout_sec", "interface"? }`. The evaluator-facing app
+  interface is `app.interface` when present, else `ready.url`; a
+  command-only-readiness config with no `app.interface` gives a capable
+  evaluator no address for the running application and MUST be rejected
+  by name at config validation (both profiles). Readiness MUST be bound to the launched
   instance: BEFORE the app is started, the ready probe MUST FAIL — an
   already-answering responder cannot be attributed to this launch and
   fails the gate; after launch the probe must succeed within its bound
@@ -165,8 +186,9 @@ this file states the requirements they satisfy.
   parks record `parked_head`; resume re-runs the gate; anything committed
   past the reviewed HEAD needs its review PASS first (the existing
   commit-bound recovery arm applies unchanged). An evaluator provider
-  that is unhealthy AT THE GATE disposes `provider_unavailable` (its
-  existing resume arm re-health-checks).
+  that is unhealthy AT THE GATE, no longer resolvable, or no longer
+  declaring `conformance_command` disposes `provider_unavailable` (its
+  existing resume arm re-checks all three).
 
 - **FR-10 — attended parity.** Attended runs with a conformance
   requirement enforce the same gate (park instead of terminate). Attended
@@ -198,13 +220,17 @@ this file states the requirements they satisfy.
 
 - **SC-1** A finalized `verification.yaml` with one `runtime_conformance`
   FR admits iff the conformance block is present and its evaluator is
-  healthy; each of {missing block, unresolvable provider, unhealthy
-  provider} refuses with a named check. A yaml with no such mapping
-  admits without the block (no evaluator required).
+  healthy AND capability-declaring; each of {missing block, unresolvable
+  provider, healthy reviewer-only provider (no `conformance_command`),
+  unhealthy provider} refuses with a named check. A yaml with no such
+  mapping admits without the block (no evaluator required).
 - **SC-2** An operator-supplied `conformance.required` is rejected by
-  name; the accepted block round-trips the schema.
+  name; a command-only-readiness config without `app.interface` is
+  rejected by name; the accepted block (including `app.interface`)
+  round-trips the schema.
 - **SC-3** The frozen contract pins the deterministic verifier set,
-  evaluator, app contract, and criteria; editing `verification.yaml` or
+  evaluator, app contract, resolved app interface, and criteria;
+  editing `verification.yaml` or
   the config after initialisation changes nothing at the gate
   (asserted), and disk drift disposes exactly as C1's tamper rule does.
   A conformance-only run (no coverage block) freezes and takes a
