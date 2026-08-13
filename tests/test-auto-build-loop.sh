@@ -4683,6 +4683,23 @@ assert_eq "233: the mktemp-failure path leaves no consumable decision" "absent" 
     "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
 rm -rf "$P" "$MKT_SHIM"
 
+# ── Syntactically corrupt escalation JSON refuses reconstruction ──
+# jq exits nonzero with NO stdout on malformed JSON — an uncaptured case
+# word would go empty and the scan would walk past the corruption.
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review" "$P/.cct/auto-build/demo-feat/escalations"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+echo "not json" > "$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+jq -n '{id:"esc-2", reason:"review_breaker", detail:"review runner exited 5 (phase 1)",
+        phase:1, resolved:false, notified:true}' \
+    > "$P/.cct/auto-build/demo-feat/escalations/esc-2.json"
+RC=0; CORR_OUT=$(bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>&1) || RC=$?
+assert_exit "233: corrupt escalation JSON refuses reconstruction (exit 1)" 1 "$RC"
+assert_contains "233: the refusal names the corruption" "$CORR_OUT" "unreadable"
+assert_eq "233: corruption leaves no consumable decision" "absent" \
+    "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
+rm -rf "$P"
+
 # ── A gapped escalation ledger never reads as "nothing to decide" ──
 P=$(setup_project); single_phase "$P"
 mkdir -p "$P/.cct/review" "$P/.cct/auto-build/demo-feat/escalations"
@@ -4704,10 +4721,17 @@ rm -rf "$P"
 # /review-decide is installed globally and runs in target projects where
 # no CCT checkout exists; setup.sh installs the helper to
 # ~/.claude/scripts and the command resolves that location first.
-assert_eq "233: setup.sh installs the review-decide helper" "1" \
-    "$(grep -c 'review-decide.sh' "$SCRIPT_DIR/../adapters/claude-code/setup.sh" | tr -d ' ')"
 assert_eq "233: the command resolves the installed helper first" "1" \
     "$(grep -c 'HOME/.claude/scripts/review-decide.sh' "$SCRIPT_DIR/../adapters/claude-code/.claude/commands/review-decide.md" | tr -d ' ')"
+# The DOCUMENTED remediation is setup.sh --sync — so the test runs exactly
+# that, against an isolated HOME, and then uses the copy it installed.
+# A source-grep here would pass with the sync branch broken (it did).
+FAKE_HOME=$(mktemp -d)
+RC=0
+HOME="$FAKE_HOME" bash "$SCRIPT_DIR/../adapters/claude-code/setup.sh" --sync >/dev/null 2>&1 || RC=$?
+assert_exit "233: setup.sh --sync completes against an isolated HOME" 0 "$RC"
+assert_eq "233: --sync installs the executable helper" "installed" \
+    "$([[ -x "$FAKE_HOME/.claude/scripts/review-decide.sh" ]] && echo installed || echo missing)"
 P=$(setup_project); single_phase "$P"
 REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
 rm -f "$P/.cct/review/breaker-tripped.json" "$P/.cct/review/decision.json"
@@ -4715,14 +4739,10 @@ _t=$(mktemp)
 jq '.detail = "review runner exited 5 (phase 1)"' \
     "$P/.cct/auto-build/demo-feat/escalations/esc-1.json" > "$_t" \
     && mv "$_t" "$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
-FAKE_HOME=$(mktemp -d)
-mkdir -p "$FAKE_HOME/.claude/scripts"
-cp "$SCRIPT_DIR/../scripts/review-decide.sh" "$FAKE_HOME/.claude/scripts/review-decide.sh"
-chmod +x "$FAKE_HOME/.claude/scripts/review-decide.sh"
 FOREIGN_CWD=$(mktemp -d)
 RC=0
 ( cd "$FOREIGN_CWD" && bash "$FAKE_HOME/.claude/scripts/review-decide.sh" "$P" retry ) >/dev/null 2>&1 || RC=$?
-assert_exit "233: the installed helper works from a foreign cwd" 0 "$RC"
+assert_exit "233: the --sync-installed helper works from a foreign cwd" 0 "$RC"
 assert_eq "233: the installed-path decision carries provenance" "runner_crash_legacy" \
     "$(jq -r '.breaker_type' "$P/.cct/review/decision.json" 2>/dev/null)"
 rm -rf "$P" "$FAKE_HOME" "$FOREIGN_CWD"

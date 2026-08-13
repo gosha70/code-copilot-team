@@ -75,11 +75,21 @@ else
     i=1
     while [[ -f "$ESC_DIR/esc-$i.json" ]]; do
         esc="$ESC_DIR/esc-$i.json"
-        case "$(jq -r 'if type == "object" and (.resolved | type == "boolean")
-                       then ((.reason // "") + ":" + (.resolved | tostring)) else "invalid" end' \
-                "$esc" 2>/dev/null)" in
+        # Capture-and-check, not a bare $( ) in the case word: on
+        # syntactically malformed JSON jq exits nonzero with NO stdout,
+        # and an empty case value would silently match nothing and let
+        # the loop walk past the corruption (the fail-open the driver's
+        # scanner already guards with its catch-all arm).
+        if ! scan=$(jq -r 'if type == "object" and (.resolved | type == "boolean")
+                           then ((.reason // "") + ":" + (.resolved | tostring)) else "invalid" end' \
+                "$esc" 2>/dev/null); then
+            echo "Error: escalation record $esc is unreadable — refusing to reconstruct from corrupt state." >&2
+            exit 1
+        fi
+        case "$scan" in
             review_breaker:false) NEWEST="$esc" ;;
-            invalid)
+            review_breaker:true|*:true|*:false) ;;
+            *)
                 echo "Error: escalation record $esc is unreadable — refusing to reconstruct from corrupt state." >&2
                 exit 1
                 ;;

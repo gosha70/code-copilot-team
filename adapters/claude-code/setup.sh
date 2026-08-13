@@ -155,6 +155,26 @@ ensure_hook_command() {
     return 0
 }
 
+# Deterministic helper scripts that globally installed commands invoke
+# from arbitrary target projects (#233). ONE implementation, called from
+# BOTH the full setup and --sync — /review-decide's own remediation advice
+# is "run setup.sh --sync", so the sync path must deliver the helper too.
+install_helper_scripts() {
+    local source_dir="$SCRIPT_DIR/../../scripts"
+    local target_dir="$CLAUDE_DIR/scripts"
+    local helper_file
+    mkdir -p "$target_dir"
+    for helper_file in review-decide.sh; do
+        if [[ -f "$source_dir/$helper_file" ]]; then
+            cp "$source_dir/$helper_file" "$target_dir/$helper_file"
+            chmod +x "$target_dir/$helper_file"
+            echo "[done] Installed helper $helper_file to $target_dir"
+        else
+            echo "[skip] Helper not found at $source_dir/$helper_file"
+        fi
+    done
+}
+
 # ══════════════════════════════════════════════════════════════
 # --sync: re-copy rules, skills, agents, commands, hooks, and launcher from repo
 # ══════════════════════════════════════════════════════════════
@@ -391,6 +411,8 @@ if [[ "$SYNC_MODE" == "1" ]]; then
         bake_launcher_repo_path
         echo "[done] Synced launcher to $LAUNCHER_TARGET"
     fi
+
+    install_helper_scripts
 
     echo "Sync complete."
     exit 0
@@ -882,24 +904,8 @@ fi
 # ══════════════════════════════════════════════════════════════
 # 11a2. GLOBAL HELPER SCRIPTS
 # ══════════════════════════════════════════════════════════════
-# Deterministic cores that globally installed commands invoke from
-# arbitrary target projects (#233): the command markdown resolves
-# ~/.claude/scripts/<name> first, so the helper must be installed there.
 
-HELPER_SCRIPTS_SOURCE="$SCRIPT_DIR/../../scripts"
-HELPER_SCRIPTS_TARGET="$CLAUDE_DIR/scripts"
-
-mkdir -p "$HELPER_SCRIPTS_TARGET"
-
-for helper_file in review-decide.sh; do
-    if [[ -f "$HELPER_SCRIPTS_SOURCE/$helper_file" ]]; then
-        cp "$HELPER_SCRIPTS_SOURCE/$helper_file" "$HELPER_SCRIPTS_TARGET/$helper_file"
-        chmod +x "$HELPER_SCRIPTS_TARGET/$helper_file"
-        echo "[done] Installed helper $helper_file to $HELPER_SCRIPTS_TARGET"
-    else
-        echo "[skip] Helper not found at $HELPER_SCRIPTS_SOURCE/$helper_file"
-    fi
-done
+install_helper_scripts
 
 # ══════════════════════════════════════════════════════════════
 # 11b. GLOBAL AGENTS
