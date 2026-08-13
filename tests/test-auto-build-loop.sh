@@ -4544,18 +4544,54 @@ assert_contains "233: the refusal names the crash park" "$OUTPUT" \
     "runner-crash park"
 assert_contains "233: the refusal offers the reconstruction path" "$OUTPUT" \
     "/review-decide retry"
-# 2. The documented reconstruction (fix 1) clears it: decision.json with
-#    provenance, attempt bumped, loop_start reset — retry semantics.
-jq -n --arg esc "$ESC233" \
-    '{decision:"retry", breaker_type:"runner_crash_legacy",
-      reconstructed_from:$esc, timestamp:"test"}' > "$RD/decision.json"
-_t=$(mktemp)
-jq --argjson now "$(date +%s)" '.attempt += 1 | .loop_start = $now' \
-    "$RD/state.json" > "$_t" && mv "$_t" "$RD/state.json"
+# 2. The REAL deterministic core (scripts/review-decide.sh) clears it —
+#    reconstruction bound to this feature, provenance recorded, retry
+#    semantics applied. Not a hand-written simulation of the command.
+ATT_BEFORE=$(jq -r '.attempt // 1' "$RD/state.json")
+RC=0; bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>/dev/null || RC=$?
+assert_exit "233: review-decide.sh reconstructs and records the retry" 0 "$RC"
+assert_eq "233: the decision carries crash provenance" "runner_crash_legacy" \
+    "$(jq -r '.breaker_type' "$RD/decision.json" 2>/dev/null)"
+assert_eq "233: the decision is bound to this feature's escalation" "$ESC233" \
+    "$(jq -r '.reconstructed_from' "$RD/decision.json" 2>/dev/null)"
+assert_eq "233: retry semantics bumped the attempt" "$((ATT_BEFORE + 1))" \
+    "$(jq -r '.attempt' "$RD/state.json" 2>/dev/null)"
+NOW233=$(date +%s)
+LS233=$(jq -r '.loop_start' "$RD/state.json" 2>/dev/null)
+assert_eq "233: retry semantics reset loop_start" "fresh" \
+    "$([[ -n "$LS233" && $((NOW233 - LS233)) -lt 60 ]] && echo fresh || echo stale)"
 run_driver "$P" --resume
 assert_exit "233: the reconstructed retry resumes to done (exit 0)" 0 "$RC"
 assert_eq "233: the run lands" "done" \
     "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# The reconstruction is FEATURE-BOUND: with a second feature's newer
+# unresolved breaker on disk, the script must still bind to the feature
+# named by .cct/review/state.json — and the driver must reject a
+# decision whose provenance points at the wrong feature.
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+RD="$P/.cct/review"
+rm -f "$RD/breaker-tripped.json" "$RD/decision.json"
+ESC233="$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+_t=$(mktemp)
+jq '.detail = "review runner exited 5 (phase 1)"' "$ESC233" > "$_t" && mv "$_t" "$ESC233"
+mkdir -p "$P/.cct/auto-build/other-feat/escalations"
+jq -n '{id:"esc-1", reason:"review_breaker", detail:"other feature breaker",
+        phase:1, resolved:false, notified:true}' \
+    > "$P/.cct/auto-build/other-feat/escalations/esc-1.json"
+bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>/dev/null
+assert_eq "233: reconstruction binds to state.json's feature, not the newest ledger" "match" \
+    "$([[ "$(jq -r '.reconstructed_from' "$RD/decision.json")" == *"/demo-feat/"* ]] && echo match || echo cross)"
+# Now doctor the provenance to the OTHER feature: the driver must refuse.
+_t=$(mktemp)
+jq --arg r "$P/.cct/auto-build/other-feat/escalations/esc-1.json" \
+    '.reconstructed_from = $r' "$RD/decision.json" > "$_t" && mv "$_t" "$RD/decision.json"
+run_driver "$P" --resume
+assert_exit "233: cross-feature provenance refuses the resume (exit 1)" 1 "$RC"
+assert_contains "233: the refusal names the provenance mismatch" "$OUTPUT" \
+    "mismatched provenance"
 rm -rf "$P"
 
 # A NON-crash park missing its breaker file (e.g. a dispose site that
@@ -4570,15 +4606,46 @@ assert_contains "233: the refusal explains the reconstruction" "$OUTPUT" \
     "reconstructs the breaker context"
 rm -rf "$P"
 
-# The catch-all can no longer create the artifact-less shape: unexpected
-# runner exits write breaker-tripped.json BEFORE disposing. Exercised
-# against a real breaker park's file format expectations.
-DRIVER_FUNCS=$(mktemp)
-_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
-sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
-assert_eq "233: the runner catch-all writes the breaker artifact before disposing" "1" \
-    "$(awk '/review runner exited \$rc \(phase \$n\)/{found=1} /runner_unexpected_exit/{art=1} END{print (art==1 ? 1 : 0)}' "$DRIVER")"
-rm -f "$DRIVER_FUNCS"
+# "Nothing to decide" is precise, and only said when true.
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+RC=0; NTD_OUT=$(bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>&1) || RC=$?
+assert_exit "233: no breaker anywhere refuses (exit 1)" 1 "$RC"
+assert_contains "233: ...and says precisely why" "$NTD_OUT" "Nothing to decide"
+rm -rf "$P"
+
+# An exit the runner could not remap (126/127 fire before its trap
+# installs) means the runner NEVER EXECUTED — that is runner_error
+# infrastructure, never a review verdict a human could approve. Injected
+# with a bash PATH shim that kills exactly the runner invocation.
+P=$(setup_project); single_phase "$P"
+BASH_SHIM_DIR=$(mktemp -d)
+cat > "$BASH_SHIM_DIR/bash" << 'SH'
+#!/bin/sh
+for a in "$@"; do
+    case "$a" in *review-round-runner.sh) exit 127 ;; esac
+done
+exec /bin/bash "$@"
+SH
+chmod +x "$BASH_SHIM_DIR/bash"
+RC=0
+OUTPUT=$(cd "$P" && \
+    PATH="$BASH_SHIM_DIR:$PATH" \
+    CCT_PROJECT_DIR="$P" \
+    CCT_CLAUDE_BIN="$MOCK_BIN/claude" \
+    MOCK_CLAUDE_COUNTER="$(mktemp)" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" \
+    /bin/bash "$DRIVER" demo-feat 2>&1) || RC=$?
+assert_exit "233: a never-executed runner parks (exit 4)" 4 "$RC"
+assert_eq "233: the park is runner_error, not a decidable review breaker" "runner_error" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/escalations/esc-1.json" 2>/dev/null)"
+assert_contains "233: the park names the infrastructure failure" "$OUTPUT" \
+    "without executing"
+run_driver "$P" --resume
+assert_exit "233: the runner_error park refuses resume with guidance (exit 1)" 1 "$RC"
+assert_contains "233: the guidance says start fresh" "$OUTPUT" "start a fresh attended run"
+rm -rf "$P" "$BASH_SHIM_DIR"
 
 echo ""
 echo "=== T7: worktree prune (#222, FR-8) ==="

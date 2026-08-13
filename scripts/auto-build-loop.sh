@@ -2508,14 +2508,15 @@ run_review_loop() {
                         '{breaker_file: $b, findings_files: $findings, fix_sessions: ($fixes | tonumber)}')"
                 ;;
             *)
-                # #233: NEVER park a review_breaker without its artifact.
-                # This arm catches exits the runner could not remap (126/127
-                # exec failures fire before its trap installs) — a park with
-                # no breaker-tripped.json used to deadlock: the driver
-                # demanded decision.json, /review-decide demanded this file.
-                jq -n --arg r "$round" --argjson rc "$rc" --arg t "$(now_iso)"                     '{breaker_type: "runner_unexpected_exit", exit_code: $rc,
-                      rounds_completed: ($r | tonumber), tripped_at: $t}'                     > "$PROJECT_DIR/.cct/review/breaker-tripped.json" 2>/dev/null || true
-                dispose "review_breaker" "review runner exited $rc (phase $n)" "null"
+                # #233 (review round 2): an exit this arm catches (126/127
+                # exec failures fire before the runner's remap trap installs)
+                # means the runner NEVER EXECUTED — infrastructure, not a
+                # review verdict, so it must not be eligible for
+                # /review-decide approve. Same classification and evidence
+                # shape as rc=4 (#231's runner_error taxonomy).
+                dispose "runner_error" \
+                    "review runner exited $rc without executing (phase $n) — infrastructure failure, not a review verdict. --resume is intentionally refused for runner crashes; resolve the cause and start a fresh attended run." \
+                    "$(jq -n --arg f "${post_frf:-}" --arg r "$round" '{findings_file: $f, crashed_before_round: ($r | tonumber)}')"
                 ;;
         esac
     done
@@ -2949,6 +2950,18 @@ resume_parked() {
                 refuse_resume "review breaker pending but .cct/review/breaker-tripped.json is missing — run /review-decide approve|reject|retry; it reconstructs the breaker context from the unresolved escalation and records the provenance"
             fi
             [[ -f "$dec" ]] || refuse_resume "review breaker pending — run /review-decide approve|reject|retry in a copilot session first"
+            # #233 (review round 2): a RECONSTRUCTED decision must be bound
+            # to the escalation this resume is resolving — with two parked
+            # features, a decision reconstructed from one could otherwise
+            # resolve the other.
+            local _dec_prov
+            _dec_prov=$(jq -r '.reconstructed_from // empty' "$dec" 2>/dev/null)
+            if [[ -n "$_dec_prov" ]]; then
+                if [[ "$(basename "$_dec_prov")" != "$(basename "$esc_file")" ]] \
+                   || [[ "$_dec_prov" != *"/$FEATURE_ID/"* ]]; then
+                    refuse_resume "decision.json was reconstructed from '$_dec_prov' but this resume is resolving '$esc_file' (feature $FEATURE_ID) — mismatched provenance. Remove .cct/review/decision.json and rerun /review-decide for this feature"
+                fi
+            fi
             local decision
             decision=$(jq -r '.decision // empty' "$dec")
             case "$decision" in

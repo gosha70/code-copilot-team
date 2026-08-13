@@ -10,65 +10,44 @@ Resolve a circuit breaker in the review loop. Accepts exactly one argument: appr
 
 ## Prerequisites
 
-- A live breaker: either `.cct/review/breaker-tripped.json` exists, **or** an
-  unresolved `review_breaker` escalation exists in
-  `.cct/auto-build/*/escalations/esc-*.json` (a crash can park the run
-  without ever writing the breaker file — #233)
+- A live breaker: either `.cct/review/breaker-tripped.json` exists, **or**
+  an unresolved `review_breaker` escalation exists for THIS feature
+  (bound via `.cct/review/state.json`'s `feature_id`) — a crash can park
+  the run without ever writing the breaker file (#233)
 - This command is run by the **human**, not the agent
 
 ## Steps
 
-### 1. Validate Breaker State
+### 1–3. Validate, Decide, Record — run the deterministic core
 
-Check that `.cct/review/breaker-tripped.json` exists:
-- If present, read and display the breaker context (type, rounds completed, unresolved findings).
-- If missing, **do not stop yet** — scan `.cct/auto-build/*/escalations/esc-*.json`
-  for the newest record with `reason == "review_breaker"` and `resolved == false`:
-  - **Found** → reconstruct the breaker context from the escalation (#233):
-    `breaker_type` is `"runner_crash_legacy"` when the escalation's `detail`
-    matches `review runner exited <n>`, otherwise `"reconstructed"`; rounds
-    and findings come from `.cct/review/state.json` and
-    `findings-round-*.json` where present. Display the reconstructed context,
-    warn that a crash park's review state may be inconsistent (findings can
-    be newer than `state.json`), and proceed to step 2. Record the provenance
-    in `decision.json` (step 3).
-  - **Not found** → inform the user precisely: "No active circuit breaker:
-    `.cct/review/breaker-tripped.json` does not exist and no unresolved
-    `review_breaker` escalation was found under `.cct/auto-build/`. Nothing
-    to decide." Never say "nothing to decide" while an unresolved
-    `review_breaker` escalation exists.
+Run:
 
-### 2. Parse Decision
-
-The argument must be exactly one of: `approve`, `reject`, or `retry`.
-- If missing or invalid, show usage and stop.
-
-### 3. Write Decision
-
-Write `.cct/review/decision.json`:
-
-```json
-{
-  "decision": "<approve|reject|retry>",
-  "timestamp": "<ISO-8601>",
-  "breaker_type": "<from breaker-tripped.json>"
-}
+```
+bash scripts/review-decide.sh <project-dir> <approve|reject|retry>
 ```
 
-When the context was **reconstructed** (no `breaker-tripped.json`), add the
-provenance so the audit trail says where the type came from:
+The script owns every state transition that must not depend on
+prompt-following (#233):
 
-```json
-{
-  "decision": "<approve|reject|retry>",
-  "timestamp": "<ISO-8601>",
-  "breaker_type": "<runner_crash_legacy|reconstructed>",
-  "reconstructed_from": "<path of the unresolved escalation record>"
-}
-```
+- **Breaker file present** → `breaker_type` is read from it.
+- **Breaker file missing** → the context is RECONSTRUCTED, bound to THIS
+  feature via `.cct/review/state.json`'s `feature_id` (never a scan of
+  other features' ledgers): the newest unresolved `review_breaker`
+  escalation under `.cct/auto-build/<feature_id>/escalations/` supplies it
+  (`breaker_type: runner_crash_legacy` for `review runner exited <n>`
+  details, `reconstructed` otherwise), and `reconstructed_from` provenance
+  is recorded in `decision.json` — the driver validates it against the
+  escalation it resolves on `--resume`. A corrupt record, a missing
+  `feature_id`, or no unresolved `review_breaker` escalation refuses with
+  the precise reason; "Nothing to decide" is only said when no unresolved
+  `review_breaker` escalation exists for this feature.
+- **retry** → the script bumps `attempt` and resets `loop_start`
+  (mandatory in reconstruction mode too — a stale `loop_start` trips the
+  review loop clock before the next reviewer runs).
+- `breaker-tripped.json` is removed after the decision is recorded.
 
-Remove `.cct/review/breaker-tripped.json` after writing the decision (skip
-if it never existed).
+Display the script's output to the user. If it refuses, relay its message
+and stop.
 
 ### 4. Execute Decision Path
 
@@ -84,12 +63,8 @@ if it never existed).
 - Do not proceed to `/phase-complete`.
 
 **retry**:
-- Read `state.json` and increment the `attempt` counter.
-- Reset breaker state: set `loop_start` to current time (resets wall-clock timer).
-- These two steps are **mandatory in reconstruction mode too** (#233's
-  second-order trap): a crash park can sit for hours, and a recovery that
-  only writes `decision.json` trips the review loop clock before the next
-  reviewer even runs.
+- The attempt bump and `loop_start` reset were already applied by
+  `scripts/review-decide.sh` in step 1–3 — do NOT apply them again.
 - Round numbering continues monotonically — if the breaker fired after round 5, the next round is 6, not 1.
 - Inform the user: "Breaker reset. Run `/review-submit` to continue the review loop."
 - The agent should then run `/review-submit` to start the next round.

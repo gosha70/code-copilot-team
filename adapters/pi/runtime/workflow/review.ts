@@ -360,6 +360,24 @@ export function writeDecision(
     path.join(dir, "decision.json"),
     JSON.stringify({ decision, detail, at: now }, null, 2) + "\n",
   );
+  if (decision === "retry") {
+    // #233 second-order trap: a retry that only writes decision.json leaves
+    // loop_start stale, so the next round trips the review loop clock before
+    // the reviewer runs (a park can sit for hours). The driver consumes the
+    // decision EXPECTING these mutations already happened — same semantics
+    // as scripts/review-decide.sh and the Claude Code command.
+    const st = loadReviewState(projectRoot);
+    if (st) {
+      const attempt = typeof st.attempt === "number" ? st.attempt : 1;
+      st.attempt = attempt + 1;
+      st.loop_start = Math.floor(Date.now() / 1000);
+      fs.writeFileSync(
+        path.join(dir, "state.json"),
+        JSON.stringify(st, null, 2) + "\n",
+      );
+    }
+    return;
+  }
   if (decision !== "approve") return;
   const st = loadReviewState(projectRoot) ?? {};
   const summary = {
