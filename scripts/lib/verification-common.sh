@@ -134,3 +134,21 @@ vc_parse_artifact() {
         END { flush_ver() }
     ' "$artifact"
 }
+
+# vc_conformance_required <verification.yaml> — echo "true" iff any FR
+# maps a verifier of kind runtime_conformance, else "false" (#242 FR-2:
+# conformance.required is DERIVED from the finalized artifact, never
+# from automation.json). A missing/unreadable artifact derives "false" —
+# admission separately refuses runs whose artifact is missing, so this
+# never turns absence into a requirement. Callers are responsible for
+# the artifact being the sha-validated finalized one (admission is; the
+# contract initialiser reads the same file it validated).
+vc_conformance_required() {
+    local artifact="$1"
+    if [[ -f "$artifact" ]] && vc_parse_artifact "$artifact" \
+        | awk -F'\t' '$1 == "VER" && $3 == "runtime_conformance" { found = 1; exit } END { exit found ? 0 : 1 }'; then
+        echo "true"
+    else
+        echo "false"
+    fi
+}

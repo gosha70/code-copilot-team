@@ -139,8 +139,9 @@ assert "greenfield coverage block is valid" bash "$V" "$TMP/c-ok.json"
 w c-brown.json '{"schema_version":2,"profile":"pr","verification":{"coverage":{"command":"npm run coverage","artifact":"coverage/coverage-summary.json","parser":"lcov","baseline":"admission","min_line_pct":80,"max_regression_pct":0,"timeout_sec":1200,"floor_enforced_at":"phase"}}}'
 assert "brownfield coverage block is valid" bash "$V" "$TMP/c-brown.json"
 
-# ── the four sub-blocks C1 does NOT implement are rejected BY NAME ──
-for sub in test app visual conformance; do
+# ── the sub-blocks C2 does NOT implement are rejected BY NAME ──
+# (conformance is accepted since C2/#242 — see its own section below)
+for sub in test app visual; do
     w "c-$sub.json" "{\"schema_version\":2,\"verification\":{\"$sub\":{}}}"
     assert_rejects "verification.$sub is rejected by name" "$TMP/c-$sub.json" "verification.$sub is not supported in C1"
 done
@@ -252,6 +253,129 @@ assert "schema requires non-empty command/artifact/preset" \
     jq -e "[$COV_SCHEMA.properties | .command, .artifact, .preset | .minLength] | all(. == 1)" "$SCHEMA"
 assert "schema closes both objects" \
     jq -e '.properties.verification.additionalProperties == false and '"$COV_SCHEMA"'.additionalProperties == false' "$SCHEMA"
+
+# ══════════════════════════════════════════════════════════════
+echo "=== #242 C2: verification.conformance ==="
+# ══════════════════════════════════════════════════════════════
+
+CONF_APP='"command":"npm start","ready":{"url":"http://127.0.0.1:3123/health","timeout_sec":30},"stop_timeout_sec":10'
+
+w n-ok.json "{\"schema_version\":2,\"profile\":\"pr\",\"verification\":{\"conformance\":{\"evaluator\":\"codex-eval\",\"timeout_sec\":600,\"app\":{$CONF_APP}}}}"
+assert "url-readiness conformance block is valid" bash "$V" "$TMP/n-ok.json"
+
+w n-cmd.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"npm start","interface":"http://127.0.0.1:3123","ready":{"command":"curl -fsS http://127.0.0.1:3123/health","timeout_sec":30},"stop_timeout_sec":10}}}}'
+assert "command-readiness WITH app.interface is valid" bash "$V" "$TMP/n-cmd.json"
+
+w n-both.json "{\"schema_version\":2,\"verification\":{\"coverage\":{$COV_OK},\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":600,\"app\":{$CONF_APP}}}}"
+assert "coverage and conformance compose" bash "$V" "$TMP/n-both.json"
+
+# Command-only readiness with no interface starves the evaluator of an
+# app address (#242 rev-4 finding 2).
+w n-noiface.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"npm start","ready":{"command":"true","timeout_sec":30},"stop_timeout_sec":10}}}}'
+assert_rejects "command-only readiness without interface is rejected" "$TMP/n-noiface.json" "required when readiness is command-based"
+
+w n-arr.json '{"schema_version":2,"verification":{"conformance":[]}}'
+assert_rejects "conformance as an array is a violation, not a crash" "$TMP/n-arr.json" "conformance must be an object"
+
+w n-unk.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":600,\"app\":{$CONF_APP},\"bogus\":1}}}"
+assert_rejects "unknown conformance key is rejected" "$TMP/n-unk.json" "unknown key 'verification.conformance.bogus'"
+
+w n-noeval.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"timeout_sec\":600,\"app\":{$CONF_APP}}}}"
+assert_rejects "conformance.evaluator is required" "$TMP/n-noeval.json" "verification.conformance.evaluator is required"
+
+w n-emptyeval.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"\",\"timeout_sec\":600,\"app\":{$CONF_APP}}}}"
+assert_rejects "empty evaluator is rejected" "$TMP/n-emptyeval.json" "evaluator must be a non-empty string"
+
+w n-noto.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"app\":{$CONF_APP}}}}"
+assert_rejects "conformance.timeout_sec is required (no silent default)" "$TMP/n-noto.json" "timeout_sec is required"
+
+w n-zeroto.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":0,\"app\":{$CONF_APP}}}}"
+assert_rejects "non-positive conformance timeout is rejected" "$TMP/n-zeroto.json" "timeout_sec must be a number > 0"
+
+w n-noapp.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600}}}'
+assert_rejects "conformance.app is required" "$TMP/n-noapp.json" "verification.conformance.app is required"
+
+w n-appstr.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":"npm start"}}}'
+assert_rejects "app as a string is a violation, not a crash" "$TMP/n-appstr.json" "app must be an object"
+
+w n-appunk.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":600,\"app\":{$CONF_APP,\"extra\":1}}}}"
+assert_rejects "unknown app key is rejected" "$TMP/n-appunk.json" "unknown key 'verification.conformance.app.extra'"
+
+w n-nocmd.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"ready":{"url":"http://x/h","timeout_sec":30},"stop_timeout_sec":10}}}}'
+assert_rejects "app.command is required" "$TMP/n-nocmd.json" "app.command is required"
+
+w n-nostop.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":30}}}}}'
+assert_rejects "app.stop_timeout_sec is required" "$TMP/n-nostop.json" "stop_timeout_sec is required and must be a number > 0"
+
+w n-emptyiface.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","interface":"","ready":{"url":"http://x/h","timeout_sec":30},"stop_timeout_sec":10}}}}'
+assert_rejects "empty interface is rejected" "$TMP/n-emptyiface.json" "interface must be a non-empty string"
+
+w n-noready.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","stop_timeout_sec":10}}}}'
+assert_rejects "app.ready is required" "$TMP/n-noready.json" "app.ready is required"
+
+w n-readyarr.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":[],"stop_timeout_sec":10}}}}'
+assert_rejects "ready as an array is a violation, not a crash" "$TMP/n-readyarr.json" "ready must be an object"
+
+w n-readyunk.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":30,"extra":1},"stop_timeout_sec":10}}}}'
+assert_rejects "unknown ready key is rejected" "$TMP/n-readyunk.json" "unknown key 'verification.conformance.app.ready.extra'"
+
+w n-readyboth.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h","command":"true","timeout_sec":30},"stop_timeout_sec":10}}}}'
+assert_rejects "ready with BOTH url and command is rejected" "$TMP/n-readyboth.json" "exactly ONE of url | command (got both)"
+
+w n-readynone.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"timeout_sec":30},"stop_timeout_sec":10}}}}'
+assert_rejects "ready with NEITHER url nor command is rejected" "$TMP/n-readynone.json" "exactly ONE of url | command (got neither)"
+
+w n-readyempty.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"","timeout_sec":30},"stop_timeout_sec":10}}}}'
+assert_rejects "empty ready.url is rejected" "$TMP/n-readyempty.json" "ready.url must be a non-empty string"
+
+w n-readynoto.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h"},"stop_timeout_sec":10}}}}'
+assert_rejects "ready.timeout_sec is required (bounded probe)" "$TMP/n-readynoto.json" "ready.timeout_sec is required and must be a number > 0"
+
+# ── FR-2 derivation helper: required iff the artifact maps runtime_conformance ──
+# shellcheck source=/dev/null
+source "$REPO_DIR/scripts/lib/verification-common.sh"
+cat > "$TMP/v-conf.yaml" <<'YAML'
+status: finalized
+FR-1:
+  statement_sha: "sha256:aaaa"
+  verifiers:
+    - kind: deterministic
+      test: "bash tests/x.sh"
+FR-2:
+  statement_sha: "sha256:bbbb"
+  verifiers:
+    - kind: runtime_conformance
+      criterion: "cancel button aborts the job and the row shows cancelled"
+YAML
+cat > "$TMP/v-det.yaml" <<'YAML'
+status: finalized
+FR-1:
+  statement_sha: "sha256:aaaa"
+  verifiers:
+    - kind: deterministic
+      test: "bash tests/x.sh"
+YAML
+assert "derivation: runtime_conformance mapping derives true" \
+    bash -c "source '$REPO_DIR/scripts/lib/verification-common.sh'; [[ \"\$(vc_conformance_required '$TMP/v-conf.yaml')\" == true ]]"
+assert "derivation: deterministic-only artifact derives false" \
+    bash -c "source '$REPO_DIR/scripts/lib/verification-common.sh'; [[ \"\$(vc_conformance_required '$TMP/v-det.yaml')\" == false ]]"
+assert "derivation: missing artifact derives false (absence is not a requirement)" \
+    bash -c "source '$REPO_DIR/scripts/lib/verification-common.sh'; [[ \"\$(vc_conformance_required '$TMP/no-such.yaml')\" == false ]]"
+
+# ── schema parity: the schema DECLARES what the gate enforces ──
+CONF_SCHEMA='.properties.verification.properties.conformance'
+assert "schema: conformance requires evaluator/app/timeout_sec" \
+    jq -e "$CONF_SCHEMA.required | sort == [\"app\",\"evaluator\",\"timeout_sec\"]" "$SCHEMA"
+assert "schema: conformance/app/ready are all closed" \
+    jq -e "$CONF_SCHEMA.additionalProperties == false and $CONF_SCHEMA.properties.app.additionalProperties == false and $CONF_SCHEMA.properties.app.properties.ready.additionalProperties == false" "$SCHEMA"
+assert "schema: app requires command/ready/stop_timeout_sec" \
+    jq -e "$CONF_SCHEMA.properties.app.required | sort == [\"command\",\"ready\",\"stop_timeout_sec\"]" "$SCHEMA"
+assert "schema: ready declares exactly-one url|command" \
+    jq -e "$CONF_SCHEMA.properties.app.properties.ready.oneOf | map(.required[0]) | sort == [\"command\",\"url\"]" "$SCHEMA"
+assert "schema: command-readiness requires interface (if/then)" \
+    jq -e "$CONF_SCHEMA.properties.app.if.properties.ready.required == [\"command\"] and $CONF_SCHEMA.properties.app.then.required == [\"interface\"]" "$SCHEMA"
+assert "schema: evaluator and interface are non-empty strings" \
+    jq -e "[$CONF_SCHEMA.properties.evaluator.minLength, $CONF_SCHEMA.properties.app.properties.interface.minLength] | all(. == 1)" "$SCHEMA"
 
 # ── review block validation ──────────────────────────────────
 # max_rounds and loop_timeout_sec are COUNTS — the runtime
