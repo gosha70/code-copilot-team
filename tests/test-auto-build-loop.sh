@@ -5030,6 +5030,238 @@ rm -rf "$P" "$GIT_SHIM_DIR"
 rm -f "$DRIVER_FUNCS"
 
 echo ""
+echo "=== C2 (#242) T3: frozen verification contract + lifecycle rekey ==="
+# ══════════════════════════════════════════════════════════════
+
+# A finalized verification.yaml is the SECOND lifecycle input (plan
+# decision 3): it forces the -block preflight paths and the contract
+# initialiser freezes `verifiers` (deterministic set) and `conformance`
+# (criteria + evaluator side) alongside any coverage section.
+write_verification_yaml() {  # <dir>
+    cat > "$1/specs/demo-feat/verification.yaml" << 'YAML'
+status: finalized
+feature_id: demo-feat
+
+FR-1:
+  statement: "d"
+  statement_sha: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  verifiers:
+    - kind: deterministic
+      test: "bash ./project-test.sh"
+      metric: "suite exits 0"
+FR-2:
+  statement: "c"
+  statement_sha: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  verifiers:
+    - kind: runtime_conformance
+      criterion: "Cancel aborts the job."
+YAML
+    git -C "$1" add -A && git -C "$1" commit -q -m "finalized verification artifact"
+}
+
+# ── Conformance-only run (NO coverage block) takes a -block path and
+#    freezes verifiers + conformance (SC-3). ──
+P=$(setup_project); single_phase "$P"
+write_verification_yaml "$P"
+cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9099/health",timeout_sec:5},stop_timeout_sec:5}}}'
+run_driver "$P"
+assert_exit "C2-T3: conformance-only run completes" 0 "$RC"
+assert_contains "C2-T3: conformance-only run takes the -block path" "$OUTPUT" "path: fresh-attended-block"
+LEDGER="$P/.cct/auto-build/demo-feat"
+jq -e '.verifiers.timeout_sec == 60
+   and (.verifiers.set | length == 1)
+   and .verifiers.set[0].fr == "FR-1"
+   and .verifiers.set[0].test == "bash ./project-test.sh"
+   and .verifiers.set[0].metric == "suite exits 0"
+   and (.verifiers.set[0].statement_sha | startswith("sha256:"))' \
+   "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "C2-T3: deterministic verifiers frozen with metric + sha" 0 $?
+jq -e '.conformance.evaluator == "mock-eval"
+   and .conformance.timeout_sec == 600
+   and .conformance.interface == "http://127.0.0.1:9099/health"
+   and .conformance.app.command == "sleep 5"
+   and (.conformance.criteria | length == 1)
+   and .conformance.criteria[0].fr == "FR-2"
+   and .conformance.criteria[0].criterion == "Cancel aborts the job."' \
+   "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "C2-T3: conformance frozen with resolved interface (ready.url)" 0 $?
+jq -e 'has("command") | not' "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "C2-T3: no coverage fields on a conformance-only contract" 0 $?
+assert_eq "C2-T3: state.preflight.contract matches the frozen file" \
+    "$(jq -cS '.preflight.contract' "$LEDGER/state.json")" \
+    "$(jq -cS . "$LEDGER/frozen-contract.json")"
+sed -i '' 's/Cancel aborts the job./Something else./' "$P/specs/demo-feat/verification.yaml" 2>/dev/null || \
+    sed -i 's/Cancel aborts the job./Something else./' "$P/specs/demo-feat/verification.yaml"
+assert_eq "C2-T3: editing verification.yaml moves nothing frozen" \
+    "Cancel aborts the job." \
+    "$(jq -r '.conformance.criteria[0].criterion' "$LEDGER/frozen-contract.json")"
+rm -rf "$P"
+
+# ── app.interface wins the interface resolution (command readiness) ──
+P=$(setup_project); single_phase "$P"
+write_verification_yaml "$P"
+cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",interface:"http://127.0.0.1:9099",ready:{command:"true",timeout_sec:5},stop_timeout_sec:5}}}'
+run_driver "$P"
+assert_exit "C2-T3: command-readiness run completes" 0 "$RC"
+assert_eq "C2-T3: app.interface wins the interface resolution" "http://127.0.0.1:9099" \
+    "$(jq -r '.conformance.interface' "$P/.cct/auto-build/demo-feat/frozen-contract.json")"
+rm -rf "$P"
+
+# ── Blockless attended (FR-10): the criteria freeze with an all-null
+#    evaluator side — the requirement is unskippable, the evaluator
+#    surfaces at the gate, not earlier. ──
+P=$(setup_project); single_phase "$P"
+write_verification_yaml "$P"
+run_driver "$P"
+assert_exit "C2-T3: blockless attended run with a mapping still freezes" 0 "$RC"
+jq -e '.conformance.evaluator == null and .conformance.app == null
+   and .conformance.interface == null and .conformance.timeout_sec == null
+   and (.conformance.criteria | length == 1)' \
+   "$P/.cct/auto-build/demo-feat/frozen-contract.json" >/dev/null 2>&1
+assert_exit "C2-T3: blockless freeze pins criteria with a null evaluator side" 0 $?
+rm -rf "$P"
+
+# ── Deterministic-only artifact: verifiers freeze, no conformance ──
+P=$(setup_project); single_phase "$P"
+cat > "$P/specs/demo-feat/verification.yaml" << 'YAML'
+status: finalized
+feature_id: demo-feat
+
+FR-1:
+  statement: "d"
+  statement_sha: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  verifiers:
+    - kind: deterministic
+      test: "bash ./project-test.sh"
+YAML
+git -C "$P" add -A && git -C "$P" commit -q -m "det artifact"
+run_driver "$P"
+assert_exit "C2-T3: deterministic-only artifact freezes verifiers" 0 "$RC"
+jq -e '(.verifiers.set | length == 1) and (.verifiers.set[0].metric == null)
+   and (has("conformance") | not)' \
+   "$P/.cct/auto-build/demo-feat/frozen-contract.json" >/dev/null 2>&1
+assert_exit "C2-T3: no conformance without a mapping; metric null when absent" 0 $?
+rm -rf "$P"
+
+# ── A draft artifact is NOT a lifecycle input ──
+P=$(setup_project); single_phase "$P"
+write_verification_yaml "$P"
+sed -i '' 's/^status: finalized/status: draft/' "$P/specs/demo-feat/verification.yaml" 2>/dev/null || \
+    sed -i 's/^status: finalized/status: draft/' "$P/specs/demo-feat/verification.yaml"
+git -C "$P" add -A && git -C "$P" commit -q -m "draft artifact"
+run_driver "$P"
+assert_exit "C2-T3: draft-artifact run completes" 0 "$RC"
+assert_eq "C2-T3: a draft artifact is not a lifecycle input (no freeze)" "absent" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/frozen-contract.json" ]] && echo present || echo absent)"
+rm -rf "$P"
+
+# ── Resume prerequisite rekey (SC-3): a conformance-only parked run
+#    (no coverage block ANYWHERE) with its frozen contract deleted must
+#    refuse — pre-C2 the prerequisite keyed on HAS_COVERAGE_BLOCK and
+#    would have resumed straight past the missing policy. ──
+P=$(setup_project); single_phase "$P"
+write_verification_yaml "$P"
+LEDGERC="$P/.cct/auto-build/demo-feat"
+mkdir -p "$LEDGERC"
+NOW=$(date +%s)
+jq -n '{schema_version:1, profile:"advisory",
+  branch:{name:"feature/demo-feat",base:"main-dev"},
+  test:{command:"bash ./project-test.sh",timeout_sec:60},
+  review:{reviewers:[{provider:"mock",specialization:"correctness",scope:"both",gating:true}]},
+  caps:{wall_clock_sec:3600,cost_usd:5},
+  phases:{milestone_every:0,max_phases:8},
+  build:{max_turns:10,max_fix_sessions_per_phase:2}}' > "$LEDGERC/config.snapshot.json"
+jq -n --argjson now "$NOW" \
+    '{schema_version:1, feature_id:"demo-feat", profile:"advisory",
+      status:"milestone-paused", current_phase:1,
+      branch:"feature/demo-feat", branch_base_ref:"master",
+      phases:{"1":"done"}, caps:{max_phases:8, max_fix_sessions_per_phase:3,
+        max_wall_clock_sec:14400, max_cost_usd:25},
+      outcome:null, disposition_reason:null,
+      totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:$now},
+      milestones:{every_n_phases:2, last_paused_after_phase:0},
+      escalations:[], pr:{number:null, url:null},
+      preflight:{contract:{conformance:{evaluator:null,app:null,interface:null,timeout_sec:null,criteria:[{fr:"FR-2",statement_sha:"sha256:2222222222222222222222222222222222222222222222222222222222222222",criterion:"Cancel aborts the job."}]}}},
+      updated:"2026-01-01T00:00:00Z"}' > "$LEDGERC/state.json"
+echo "approved-by: test" >> "$P/specs/demo-feat/automation-summary.md"
+git -C "$P" add -A && git -C "$P" commit -q -m "signoff"
+# NO frozen-contract.json in the ledger.
+run_driver "$P" --resume
+assert_exit "C2-T3: conformance-only resume without frozen contract fails closed" 1 "$RC"
+assert_contains "C2-T3: refusal names the admitted policy" "$OUTPUT" "cannot resume without its admitted policy"
+rm -rf "$P"
+
+# ── A verification.yaml finalized MID-RUN is a live edit and moves
+#    nothing: the noblock resume stays noblock (frozen evidence only). ──
+P=$(setup_project); single_phase "$P"
+LEDGERD="$P/.cct/auto-build/demo-feat"
+mkdir -p "$LEDGERD"
+NOW=$(date +%s)
+jq -n '{schema_version:1, profile:"advisory",
+  branch:{name:"feature/demo-feat",base:"main-dev"},
+  test:{command:"bash ./project-test.sh",timeout_sec:60},
+  review:{reviewers:[{provider:"mock",specialization:"correctness",scope:"both",gating:true}]},
+  caps:{wall_clock_sec:3600,cost_usd:5},
+  phases:{milestone_every:0,max_phases:8},
+  build:{max_turns:10,max_fix_sessions_per_phase:2}}' > "$LEDGERD/config.snapshot.json"
+jq -n --argjson now "$NOW" \
+    '{schema_version:1, feature_id:"demo-feat", profile:"advisory",
+      status:"milestone-paused", current_phase:1,
+      branch:"feature/demo-feat", branch_base_ref:"master",
+      phases:{"1":"done"}, caps:{max_phases:8, max_fix_sessions_per_phase:3,
+        max_wall_clock_sec:14400, max_cost_usd:25},
+      outcome:null, disposition_reason:null,
+      totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:$now},
+      milestones:{every_n_phases:2, last_paused_after_phase:0},
+      escalations:[], pr:{number:null, url:null},
+      updated:"2026-01-01T00:00:00Z"}' > "$LEDGERD/state.json"
+echo "approved-by: test" >> "$P/specs/demo-feat/automation-summary.md"
+write_verification_yaml "$P"
+run_driver "$P" --resume
+assert_exit "C2-T3: mid-run artifact does not hijack a noblock resume" 0 "$RC"
+assert_eq "C2-T3: no frozen contract materialises on that resume" "absent" \
+    "$([[ -f "$LEDGERD/frozen-contract.json" ]] && echo present || echo absent)"
+rm -rf "$P"
+
+# ── validate_contract_json: the extended predicate ──
+DRIVER_FUNCS=$(mktemp)
+_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
+# shellcheck source=/dev/null
+source "$DRIVER_FUNCS"
+CT=$(mktemp)
+
+jq -n '{conformance:{evaluator:"e",app:{command:"c",ready:{url:"http://x",timeout_sec:5},stop_timeout_sec:5},interface:"http://x",timeout_sec:600,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]}}' > "$CT"
+if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
+assert_exit "C2-T3: conformance-only contract validates" 0 "$_v"
+
+jq -n '{verifiers:{timeout_sec:60,set:[{fr:"FR-1",statement_sha:"sha256:aa",test:"t",metric:null}]}}' > "$CT"
+if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
+assert_exit "C2-T3: verifiers-only contract validates (null metric ok)" 0 "$_v"
+
+jq -n '{conformance:{evaluator:"e",app:null,interface:null,timeout_sec:null,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]}}' > "$CT"
+if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
+assert_exit "C2-T3: half-frozen evaluator side rejected" 1 "$_v"
+
+jq -n '{conformance:{evaluator:null,app:null,interface:null,timeout_sec:null,criteria:[]}}' > "$CT"
+if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
+assert_exit "C2-T3: empty criteria rejected" 1 "$_v"
+
+jq -n '{conformance:{evaluator:null,app:null,interface:null,timeout_sec:null,phantom:1,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]}}' > "$CT"
+if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
+assert_exit "C2-T3: phantom conformance key rejected (closed)" 1 "$_v"
+
+jq -n '{verifiers:{timeout_sec:60,set:[{fr:"FR-1",statement_sha:"sha256:aa",metric:null}]}}' > "$CT"
+if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
+assert_exit "C2-T3: verifier entry without test rejected" 1 "$_v"
+
+jq -n '{}' > "$CT"
+if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
+assert_exit "C2-T3: sectionless contract rejected" 1 "$_v"
+
+rm -f "$CT" "$DRIVER_FUNCS"
+
+echo ""
 
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"

@@ -387,7 +387,7 @@ validate_admission() {
       ver_ok=false
     fi
   done <<< "$frs"
-  while IFS=$'\t' read -r _ fr kind target; do
+  while IFS=$'\t' read -r _ fr kind target _metric; do
     case "$kind" in
       deterministic)
         if [[ -z "$target" || "$target" == TODO* ]]; then

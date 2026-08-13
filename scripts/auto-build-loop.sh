@@ -47,6 +47,12 @@ if [[ -f "$SCRIPT_DIR/lib/coverage-parse.sh" ]]; then
     # shellcheck source=lib/coverage-parse.sh
     source "$SCRIPT_DIR/lib/coverage-parse.sh"
 fi
+# C2 (#242): verification-artifact parsing (used by the contract
+# initialiser to freeze deterministic verifiers + conformance criteria).
+if [[ -f "$SCRIPT_DIR/lib/verification-common.sh" ]]; then
+    # shellcheck source=lib/verification-common.sh
+    source "$SCRIPT_DIR/lib/verification-common.sh"
+fi
 # Project being built: defaults to the repo this toolkit is installed in;
 # CCT_PROJECT_DIR points the driver at another project (tests, kick-starts).
 PROJECT_DIR="${CCT_PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -127,6 +133,11 @@ ATTEMPT_ID="$$-${RANDOM}${RANDOM}"
 # T4 defaults — set before preflight-result channel runs
 SKIP_ADMISSION=false
 HAS_COVERAGE_BLOCK=false
+# C2 (#242, plan decision 3): the contract lifecycle keys on the
+# verification-wide predicate — a coverage block OR a finalized
+# verification.yaml. Either input triggers freeze/-block paths.
+HAS_VERIFICATION_ARTIFACT=false
+HAS_FROZEN_CONTRACT=false
 PREFLIGHT_PATH=""
 PREFLIGHT_RESULT_FILE=""
 # The admitted coverage contract, pinned in process memory at the moment
@@ -545,6 +556,20 @@ load_config() {
     if jq -e '.verification.coverage' "$CONFIG_SNAPSHOT" >/dev/null 2>&1; then
         HAS_COVERAGE_BLOCK=true
     fi
+    # C2 (#242 plan decision 3): the SECOND lifecycle input — a FINALIZED
+    # verification.yaml. A draft is not an input (admission refuses drafts;
+    # an attended draft simply hasn't committed to anything yet). On
+    # resume this live value is advisory only: compute_preflight_path
+    # re-derives contract presence from frozen evidence (a mid-run
+    # artifact edit moves nothing, the C1 discipline).
+    HAS_VERIFICATION_ARTIFACT=false
+    if [[ -f "$SPEC_DIR/verification.yaml" ]] && command -v vc_parse_artifact >/dev/null 2>&1; then
+        if [[ "$(vc_parse_artifact "$SPEC_DIR/verification.yaml" | awk -F'\t' '$1 == "STATUS" { print $2; exit }')" == "finalized" ]]; then
+            HAS_VERIFICATION_ARTIFACT=true
+        fi
+    fi
+    HAS_FROZEN_CONTRACT=$HAS_COVERAGE_BLOCK
+    [[ "$HAS_VERIFICATION_ARTIFACT" == "true" ]] && HAS_FROZEN_CONTRACT=true
     CAP_WALL_CLOCK=$(cfg '.caps.wall_clock_sec' '14400')
     CAP_COST=$(cfg '.caps.cost_usd' '25')
     # #191 FR-7: estimate policy for unmetered driver-initiated invocations
@@ -827,19 +852,22 @@ preflight() {
 
 # ── Preflight-result channel (T4, #222) ─────────────────────
 
-# FR-7b0 / FR-7b: frozen-contract prerequisite. On resume with the block
-# the existing frozen contract MUST be validated BEFORE any producer or
-# dispatcher runs — including resume_parked which may execute test.command.
-# Missing or corrupt → fail closed (exit 1). Called BEFORE resume dispatch.
+# FR-7b0 / FR-7b: frozen-contract prerequisite. On resume with a frozen
+# contract (coverage block OR verification artifact — C2 #242, plan
+# decision 3) the existing frozen contract MUST be validated BEFORE any
+# producer or dispatcher runs — including resume_parked which may execute
+# test.command. Missing or corrupt → fail closed (exit 1). Called BEFORE
+# resume dispatch, AFTER compute_preflight_path re-derives
+# HAS_FROZEN_CONTRACT from frozen evidence.
 validate_frozen_contract_prerequisite() {
-    if [[ "$RESUME" != "true" || "$HAS_COVERAGE_BLOCK" != "true" ]]; then
+    if [[ "$RESUME" != "true" || "$HAS_FROZEN_CONTRACT" != "true" ]]; then
         return 0
     fi
     local frozen="$LEDGER_DIR/frozen-contract.json"
     if [[ ! -f "$frozen" ]]; then
-        echo "Error: verification.coverage block present but frozen contract" >&2
-        echo "missing at $frozen — the run cannot resume without its" >&2
-        echo "admitted policy (FR-7b)." >&2
+        echo "Error: the run froze a verification contract (coverage block or" >&2
+        echo "finalized verification.yaml) but no frozen contract exists at" >&2
+        echo "$frozen — the run cannot resume without its admitted policy (FR-7b)." >&2
         exit 1
     fi
     if ! jq empty "$frozen" 2>/dev/null; then
@@ -892,9 +920,11 @@ compute_preflight_path() {
     if [[ "$mode" == "resume" && -f "$STATE" ]]; then
         local _snapshot_cfg="$LEDGER_DIR/config.snapshot.json"
         local _frozen_profile _frozen_block _state_profile _state_block
+        local _have_snapshot=false
         # Derive profile and block presence from the FROZEN config snapshot.
         # It was copied into the ledger at admission time and is immutable.
         if [[ -f "$_snapshot_cfg" ]]; then
+            _have_snapshot=true
             _frozen_profile=$(jq -r '.profile // empty' "$_snapshot_cfg" 2>/dev/null || echo "")
             # Legacy snapshots (v1, pre-#193) may omit profile — default to advisory.
             if [[ -z "$_frozen_profile" ]]; then
@@ -940,9 +970,36 @@ compute_preflight_path() {
         fi
         profile="$_frozen_profile"
         FROZEN_PROFILE="$_frozen_profile"
+        # RESET from frozen evidence — the passed-in value carries the LIVE
+        # detection, and on resume live inputs (config edits, a
+        # verification.yaml finalized mid-run) are not admitted facts. In
+        # C1 the passed value equalled the snapshot anyway (the effective
+        # config IS the snapshot on resume), so this reset changes nothing
+        # for coverage; it exists so the C2 live-artifact input cannot
+        # leak into resume path selection. Legacy ledgers (no snapshot)
+        # keep the C1 fall-back semantics: the live value stands.
+        if [[ "$_have_snapshot" == "true" ]]; then
+            has_block=false
+        fi
         if [[ "$_frozen_block" == "true" ]]; then
             has_block=true
         fi
+        # C2 (#242 plan decision 3): on resume, contract presence is a
+        # property of the ADMITTED run. The frozen evidence is the admitted
+        # contract itself — state.preflight.contract or the ledger's
+        # frozen-contract.json (either alone forces the -block path, and the
+        # resume prerequisite then validates ledger consistency: a contract
+        # file without an admitted record refuses). The LIVE specs tree is
+        # deliberately not consulted: a verification.yaml finalized after
+        # the run froze is a mid-run edit and moves nothing until the next
+        # fresh run.
+        if [[ "${_state_block:-}" == "true" || -f "$LEDGER_DIR/frozen-contract.json" ]]; then
+            has_block=true
+        fi
+        # Rekey the global: prerequisites and gates must see the FROZEN
+        # truth, not the live-input detection (which would refuse a
+        # legitimately-noblock resume whose artifact appeared mid-run).
+        if $has_block; then HAS_FROZEN_CONTRACT=true; else HAS_FROZEN_CONTRACT=false; fi
     fi
 
     local unattended=false
@@ -988,10 +1045,19 @@ compute_preflight_path() {
     esac
 }
 
-# contract_initialiser: T5 — resolve preset, capture baseline if brownfield,
-# freeze the contract into the preflight result file.
+# contract_initialiser: T5 (C1) + C2 (#242 FR-4) — freeze every
+# verification dimension the run's inputs carry: `coverage` (flat C1
+# fields, resolved preset + captured baseline), `verifiers` (every
+# deterministic verifier of the finalized artifact), `conformance`
+# (evaluator, app contract, resolved interface, criteria set — present
+# iff the artifact derives the requirement). One contract object, one
+# pin, the C1 tamper/resume rules unchanged.
 contract_initialiser() {
     local path="$1"
+    local contract="{}"
+
+    # ── coverage (C1 — byte-compatible flat fields) ──
+    if [[ "$HAS_COVERAGE_BLOCK" == "true" ]]; then
     local cov_cfg effective
     cov_cfg=$(jq '.verification.coverage' "$CONFIG_SNAPSHOT")
     effective=$(vp_resolve "$PROJECT_DIR" "$cov_cfg" "${TEST_TIMEOUT:-1200}") || {
@@ -1036,26 +1102,78 @@ contract_initialiser() {
     local floor_at
     floor_at=$(jq -r '.floor_enforced_at // "landing"' <<< "$effective")
 
+    contract=$(jq -n --arg command "$command" --arg artifact "$artifact" --arg parser "$parser" \
+       --argjson timeout_sec "$timeout_sec" --arg floor_enforced_at "$floor_at" \
+       --argjson preset_id "$(jq '.preset_id' <<< "$effective")" \
+       --argjson preset_sha256 "$(jq '.preset_sha256' <<< "$effective")" \
+       --argjson baseline "$captured_baseline" --argjson effective "$effective" \
+       '{command:$command,artifact:$artifact,parser:$parser,timeout_sec:$timeout_sec,floor_enforced_at:$floor_enforced_at,preset_id:$preset_id,preset_sha256:$preset_sha256,baseline:$baseline} + (if $effective.min_line_pct then {min_line_pct:$effective.min_line_pct} else {} end) + (if $effective.min_branch_pct then {min_branch_pct:$effective.min_branch_pct} else {} end) + (if $effective.max_regression_pct then {max_regression_pct:$effective.max_regression_pct} else {} end)')
+    fi
+
+    # ── C2 (#242 FR-4): verifiers + conformance from the finalized artifact ──
+    if [[ "$HAS_VERIFICATION_ARTIFACT" == "true" ]]; then
+        local _va="$SPEC_DIR/verification.yaml" _vparsed _vset
+        _vparsed=$(vc_parse_artifact "$_va")
+        # Deterministic set: {fr, statement_sha, test, metric} per verifier.
+        _vset=$(printf '%s\n' "$_vparsed" | awk -F'\t' '
+            $1 == "SHA" { sha[$2] = $3 }
+            $1 == "VER" && $3 == "deterministic" { printf "%s\t%s\t%s\t%s\n", $2, sha[$2], $4, $5 }' \
+            | jq -R -s '[ split("\n")[] | select(length > 0) | split("\t")
+                | {fr: .[0], statement_sha: .[1], test: .[2],
+                   metric: (if ((.[3] // "") == "") then null else .[3] end)} ]')
+        if [[ "$(jq 'length' <<< "$_vset")" -gt 0 ]]; then
+            # The FR-5c fallback chain: verification.test.timeout_sec, else
+            # the top-level test timeout.
+            local _vtimeout
+            _vtimeout=$(jq -r '.verification.test.timeout_sec // .test.timeout_sec // 1200' "$CONFIG_SNAPSHOT" 2>/dev/null)
+            contract=$(jq --argjson set "$_vset" --argjson t "$_vtimeout" \
+                '. + {verifiers: {timeout_sec: $t, set: $set}}' <<< "$contract")
+        fi
+        # Conformance: present iff the artifact derives the requirement.
+        local _cset
+        _cset=$(printf '%s\n' "$_vparsed" | awk -F'\t' '
+            $1 == "SHA" { sha[$2] = $3 }
+            $1 == "VER" && $3 == "runtime_conformance" { printf "%s\t%s\t%s\n", $2, sha[$2], $4 }' \
+            | jq -R -s '[ split("\n")[] | select(length > 0) | split("\t")
+                | {fr: .[0], statement_sha: .[1], criterion: .[2]} ]')
+        if [[ "$(jq 'length' <<< "$_cset")" -gt 0 ]]; then
+            # evaluator/app/interface/timeout come from the conformance
+            # block; ALL null when it is absent — attended runs surface a
+            # missing evaluator at the GATE (FR-10, provider_unavailable),
+            # and unattended runs cannot get here blockless (admission
+            # refused). The frozen criteria keep the requirement
+            # unskippable either way. interface resolves app.interface,
+            # else ready.url (FR-6; config validation guarantees one
+            # exists whenever the block is present).
+            local _conf
+            _conf=$(jq --argjson criteria "$_cset" '
+                (.verification.conformance // null) as $c |
+                {evaluator: ($c.evaluator // null),
+                 app: ($c.app // null),
+                 interface: (if $c == null or $c.app == null then null
+                             else ($c.app.interface // $c.app.ready.url // null) end),
+                 timeout_sec: ($c.timeout_sec // null),
+                 criteria: $criteria}' "$CONFIG_SNAPSHOT")
+            contract=$(jq --argjson conf "$_conf" '. + {conformance: $conf}' <<< "$contract")
+        fi
+    fi
+
+    if [[ "$contract" == "{}" ]]; then
+        echo "Error: contract initialisation produced an empty contract —" >&2
+        echo "the finalized verification.yaml yielded no verifiers and no" >&2
+        echo "coverage block is present. Regenerate the artifact." >&2
+        exit 1
+    fi
+
     # For unattended paths with existing admission section: merge contract in.
     if [[ "$path" == "fresh-unattended-block" && -s "$PREFLIGHT_RESULT_FILE" ]]; then
         local _tmp
         _tmp=$(mktemp)
-        jq --arg command "$command" --arg artifact "$artifact" --arg parser "$parser" \
-           --argjson timeout_sec "$timeout_sec" --arg floor_enforced_at "$floor_at" \
-           --argjson preset_id "$(jq '.preset_id' <<< "$effective")" \
-           --argjson preset_sha256 "$(jq '.preset_sha256' <<< "$effective")" \
-           --argjson baseline "$captured_baseline" \
-           --argjson effective "$effective" \
-           '.contract = ({command:$command,artifact:$artifact,parser:$parser,timeout_sec:$timeout_sec,floor_enforced_at:$floor_enforced_at,preset_id:$preset_id,preset_sha256:$preset_sha256,baseline:$baseline} + (if $effective.min_line_pct then {min_line_pct:$effective.min_line_pct} else {} end) + (if $effective.min_branch_pct then {min_branch_pct:$effective.min_branch_pct} else {} end) + (if $effective.max_regression_pct then {max_regression_pct:$effective.max_regression_pct} else {} end))' \
+        jq --argjson contract "$contract" '.contract = $contract' \
            "$PREFLIGHT_RESULT_FILE" > "$_tmp" && mv "$_tmp" "$PREFLIGHT_RESULT_FILE"
     else
-        jq -n --arg command "$command" --arg artifact "$artifact" --arg parser "$parser" \
-           --argjson timeout_sec "$timeout_sec" --arg floor_enforced_at "$floor_at" \
-           --argjson preset_id "$(jq '.preset_id' <<< "$effective")" \
-           --argjson preset_sha256 "$(jq '.preset_sha256' <<< "$effective")" \
-           --argjson baseline "$captured_baseline" --argjson effective "$effective" \
-           --arg path "$path" \
-           '{schema_version:1,path:$path,contract:({command:$command,artifact:$artifact,parser:$parser,timeout_sec:$timeout_sec,floor_enforced_at:$floor_enforced_at,preset_id:$preset_id,preset_sha256:$preset_sha256,baseline:$baseline} + (if $effective.min_line_pct then {min_line_pct:$effective.min_line_pct} else {} end) + (if $effective.min_branch_pct then {min_branch_pct:$effective.min_branch_pct} else {} end) + (if $effective.max_regression_pct then {max_regression_pct:$effective.max_regression_pct} else {} end))}' \
+        jq -n --argjson contract "$contract" --arg path "$path" \
+           '{schema_version:1,path:$path,contract:$contract}' \
            > "$PREFLIGHT_RESULT_FILE"
     fi
 }
@@ -1230,11 +1348,83 @@ validate_contract_json() {
 
     # ── 1. Closed: no unknown keys ──
     local _unknown
-    _unknown=$(jq -r --argjson allowed '["command","artifact","parser","timeout_sec","floor_enforced_at","preset_id","preset_sha256","baseline","min_line_pct","min_branch_pct","max_regression_pct"]' \
+    _unknown=$(jq -r --argjson allowed '["command","artifact","parser","timeout_sec","floor_enforced_at","preset_id","preset_sha256","baseline","min_line_pct","min_branch_pct","max_regression_pct","verifiers","conformance"]' \
         '[keys[] | select(. as $k | $allowed | index($k) | not)] | join(", ")' <<< "$_ct")
     if [[ -n "$_unknown" ]]; then
         echo "[auto-build] ERROR: contract has unknown keys: $_unknown" >&2
         ((_errors++))
+    fi
+
+    # ── C2 (#242): the contract composes optional sections. The C1 flat
+    #    coverage fields apply as a unit — ANY of them present means the
+    #    coverage rules below all apply; NONE present requires at least
+    #    one C2 section (a contract must commit to something). ──
+    local _has_cov
+    _has_cov=$(jq -r '[keys[] | select(. != "verifiers" and . != "conformance")] | length > 0' <<< "$_ct")
+    if [[ "$_has_cov" != "true" ]] \
+       && ! jq -e 'has("verifiers") or has("conformance")' <<< "$_ct" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: contract carries no section (coverage fields, verifiers, or conformance)" >&2
+        ((_errors++))
+    fi
+
+    # ── C2 verifiers section: closed {timeout_sec, set[]} ──
+    if jq -e 'has("verifiers")' <<< "$_ct" >/dev/null 2>&1; then
+        if ! jq -e '.verifiers | type == "object"
+            and ([keys[] | select(. != "timeout_sec" and . != "set")] | length == 0)
+            and (.timeout_sec | type == "number" and . > 0)
+            and (.set | type == "array" and length > 0)
+            and (.set | all(
+                (type == "object")
+                and ([keys[] | select(. != "fr" and . != "statement_sha" and . != "test" and . != "metric")] | length == 0)
+                and (.fr | type == "string" and test("^FR-[0-9]+[a-z]?$"))
+                and (.statement_sha | type == "string" and startswith("sha256:"))
+                and (.test | type == "string" and length > 0)
+                and (.metric | (type == "string") or (type == "null"))))' \
+            <<< "$_ct" >/dev/null 2>&1; then
+            echo "[auto-build] ERROR: contract.verifiers invalid — closed {timeout_sec > 0, set: non-empty [{fr, statement_sha, test, metric|null}]}" >&2
+            ((_errors++))
+        fi
+    fi
+
+    # ── C2 conformance section: closed {evaluator, app, interface,
+    #    timeout_sec, criteria[]}. Either the evaluator side is fully
+    #    configured (block present) or ALL of evaluator/app/interface/
+    #    timeout_sec are null (attended blockless — the gate parks
+    #    provider_unavailable); the criteria are frozen either way. ──
+    if jq -e 'has("conformance")' <<< "$_ct" >/dev/null 2>&1; then
+        if ! jq -e '.conformance | type == "object"
+            and ([keys[] | select(. != "evaluator" and . != "app" and . != "interface" and . != "timeout_sec" and . != "criteria")] | length == 0)
+            and has("evaluator") and has("app") and has("interface") and has("timeout_sec")
+            and (.criteria | type == "array" and length > 0)
+            and (.criteria | all(
+                (type == "object")
+                and ([keys[] | select(. != "fr" and . != "statement_sha" and . != "criterion")] | length == 0)
+                and (.fr | type == "string" and test("^FR-[0-9]+[a-z]?$"))
+                and (.statement_sha | type == "string" and startswith("sha256:"))
+                and (.criterion | type == "string" and length > 0)))
+            and (
+                ((.evaluator == null) and (.app == null) and (.interface == null) and (.timeout_sec == null))
+                or
+                ((.evaluator | type == "string" and length > 0)
+                 and (.timeout_sec | type == "number" and . > 0)
+                 and (.interface | type == "string" and length > 0)
+                 and (.app | type == "object"
+                      and ([keys[] | select(. != "command" and . != "ready" and . != "stop_timeout_sec" and . != "interface")] | length == 0)
+                      and (.command | type == "string" and length > 0)
+                      and (.stop_timeout_sec | type == "number" and . > 0)
+                      and (.ready | type == "object"
+                           and ([keys[] | select(. != "url" and . != "command" and . != "timeout_sec")] | length == 0)
+                           and (.timeout_sec | type == "number" and . > 0)
+                           and (((has("url")) and (has("command") | not)) or ((has("command")) and (has("url") | not))))))
+            )' <<< "$_ct" >/dev/null 2>&1; then
+            echo "[auto-build] ERROR: contract.conformance invalid — closed {evaluator, app, interface, timeout_sec, criteria: non-empty [{fr, statement_sha, criterion}]}; evaluator/app/interface/timeout_sec are all null (blockless attended) or all configured (app closed, ready exactly-one url|command)" >&2
+            ((_errors++))
+        fi
+    fi
+
+    # ── C1 coverage rules — apply iff any coverage field is present ──
+    if [[ "$_has_cov" != "true" ]]; then
+        return $_errors
     fi
 
     # ── 2. Required fields with type constraints ──
@@ -3358,7 +3548,7 @@ ADMISSION_PASSED=false
 ADMISSION_DURATION=0
 _mode="fresh"
 [[ "$RESUME" == "true" ]] && _mode="resume"
-compute_preflight_path "$_mode" "$PROFILE" "$HAS_COVERAGE_BLOCK"
+compute_preflight_path "$_mode" "$PROFILE" "$HAS_FROZEN_CONTRACT"
 
 # FR-9e: on resume the frozen config is authoritative — apply its
 # profile to the globals that resume dispatch and downstream use (PROFILE,

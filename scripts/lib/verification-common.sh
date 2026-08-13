@@ -101,7 +101,8 @@ vc_fr_sha() {
 #   STATUS\t<status>
 #   FR\t<id>
 #   SHA\t<id>\t<sha256:...>
-#   VER\t<id>\t<kind>\t<target>       (target: test | criterion value)
+#   VER\t<id>\t<kind>\t<target>\t<metric>  (target: test | criterion value;
+#                                           metric: optional, empty when absent)
 # Unparseable lines are ignored — admission's coverage/sha checks catch
 # anything that mattered; the JSON-Schema file is the authoritative
 # contract, this parser is the enforcement of its constrained shape.
@@ -122,8 +123,8 @@ vc_parse_artifact() {
         }
         function flush_ver() {
             if (vkind == "") return
-            printf "VER\t%s\t%s\t%s\n", fr, vkind, vtarget
-            vkind = ""; vtarget = ""
+            printf "VER\t%s\t%s\t%s\t%s\n", fr, vkind, vtarget, vmetric
+            vkind = ""; vtarget = ""; vmetric = ""
         }
         /^status:/        { v = $0; sub(/^status:/, "", v); printf "STATUS\t%s\n", unquote(v); next }
         /^FR-[0-9]+[a-z]?:/ { flush_ver(); fr = $0; sub(/:.*$/, "", fr); printf "FR\t%s\n", fr; next }
@@ -131,6 +132,7 @@ vc_parse_artifact() {
         /^    - kind:/    { flush_ver(); v = $0; sub(/^    - kind:/, "", v); vkind = unquote(v); next }
         /^      test:/      { v = $0; sub(/^      test:/, "", v); vtarget = unquote(v); next }
         /^      criterion:/ { v = $0; sub(/^      criterion:/, "", v); vtarget = unquote(v); next }
+        /^      metric:/    { v = $0; sub(/^      metric:/, "", v); vmetric = unquote(v); next }
         END { flush_ver() }
     ' "$artifact"
 }
