@@ -182,59 +182,100 @@ vc_conformance_required() {
 # dropped from the capture).
 vc_capture_from_parsed() {
     local spec="$1"
-    local parsed frs ok=true
-    parsed=$(cat)
-    local status
-    status=$(printf '%s\n' "$parsed" | awk -F'\t' '$1 == "STATUS" { print $2; exit }')
-    if [[ "$status" != "finalized" ]]; then
-        echo "verification capture: status is '${status:-missing}' — only a finalized artifact may be frozen" >&2
-        return 1
-    fi
-    frs=$(vc_extract_frs "$spec")
-    if [[ -z "$frs" ]]; then
+    local want_file rows rc=0
+    # Expected FR -> statement_sha, computed from the AUTHORITATIVE spec.
+    want_file=$(mktemp) || return 1
+    local fr stmt
+    while IFS=$'\t' read -r fr stmt; do
+        [[ -z "$fr" ]] && continue
+        printf '%s\t%s\n' "$fr" "$(vc_fr_sha "$fr" "$stmt")" >> "$want_file"
+    done < <(vc_extract_frs "$spec")
+    if [[ ! -s "$want_file" ]]; then
+        rm -f "$want_file"
         echo "verification capture: spec.md has no FR-N requirements under ## Requirements" >&2
         return 1
     fi
-    local fr stmt want got nvers
-    while IFS=$'\t' read -r fr stmt; do
-        if ! printf '%s\n' "$parsed" | grep -q "^FR	$fr\$"; then
-            echo "verification capture: $fr has no verification.yaml entry (coverage is mandatory)" >&2
-            ok=false
-            continue
-        fi
-        want=$(vc_fr_sha "$fr" "$stmt")
-        got=$(printf '%s\n' "$parsed" | awk -F'\t' -v fr="$fr" '$1 == "SHA" && $2 == fr { print $3; exit }')
-        if [[ "$got" != "$want" ]]; then
-            echo "verification capture: $fr statement_sha does not recompute against spec.md (stale or tampered artifact)" >&2
-            ok=false
-        fi
-        nvers=$(printf '%s\n' "$parsed" | awk -F'\t' -v fr="$fr" '$1 == "VER" && $2 == fr' | wc -l | tr -d ' ')
-        if [[ "$nvers" -eq 0 ]]; then
-            echo "verification capture: $fr has zero parsed verifiers (layout is part of the contract)" >&2
-            ok=false
-        fi
-    done <<< "$frs"
-    local phantom p
-    phantom=$(printf '%s\n' "$parsed" | awk -F'\t' '$1 == "FR" { print $2 }' | while read -r p; do
-        printf '%s\n' "$frs" | cut -f1 | grep -q "^$p\$" || echo "$p"
-    done)
-    for p in $phantom; do
-        echo "verification capture: entry '$p' has no matching FR in spec.md (phantom requirement)" >&2
-        ok=false
-    done
-    local badkinds
-    badkinds=$(printf '%s\n' "$parsed" | awk -F'\t' \
-        '$1 == "VER" && $3 != "deterministic" && $3 != "runtime_conformance" { printf "%s(%s) ", $2, $3 }')
-    if [[ -n "$badkinds" ]]; then
-        echo "verification capture: unknown verifier kind(s): $badkinds" >&2
-        ok=false
-    fi
-    [[ "$ok" == "true" ]] || return 1
-    printf '%s\n' "$parsed" | awk -F'\t' '
-        $1 == "SHA" { sha[$2] = $3 }
-        $1 == "VER" && $3 == "deterministic" { printf "V\t%s\t%s\t%s\t%s\n", $2, sha[$2], $4, $5 }
-        $1 == "VER" && $3 == "runtime_conformance" { printf "C\t%s\t%s\t%s\n", $2, sha[$2], $4 }' \
-    | jq -R -s '
+    # ONE indexed pass that reads stdin through EOF (round-3 finding 2:
+    # every early-exit consumer SIGPIPEs the producer under pipefail on a
+    # large artifact and turns a valid capture into a refusal), emitting
+    # rows from the SAME records it validated (round-3 finding 1: a
+    # duplicate SHA record used to be validated in one place and frozen
+    # in another, so a forged second hash entered the frozen tuple).
+    # Duplicate STATUS/FR/SHA records are refused outright — an artifact
+    # that says a thing twice has no single canonical answer.
+    rows=$(awk -F'\t' -v want="$want_file" '
+        BEGIN {
+            while ((getline line < want) > 0) {
+                split(line, a, "\t")
+                wsha[a[1]] = a[2]
+                worder[++nwant] = a[1]
+            }
+            close(want)
+        }
+        function err(msg) { errors[++nerr] = msg }
+        $1 == "STATUS" {
+            if (nstatus++) { err("duplicate status records — the artifact has no single canonical status") }
+            else { status = $2 }
+            next
+        }
+        $1 == "FR" {
+            if ($2 in seenfr) { err("duplicate entry for " $2 " — the artifact has no single canonical record for it") }
+            seenfr[$2] = 1
+            frorder[++nfr] = $2
+            next
+        }
+        $1 == "SHA" {
+            if ($2 in sha) { err("duplicate statement_sha records for " $2 " — the artifact has no single canonical hash for it") }
+            sha[$2] = $3
+            next
+        }
+        $1 == "VER" {
+            nvers[$2]++
+            if ($3 != "deterministic" && $3 != "runtime_conformance") {
+                err("unknown verifier kind on " $2 ": " $3)
+                next
+            }
+            vfr[++nrow] = $2; vkind[nrow] = $3; vtarget[nrow] = $4; vmetric[nrow] = $5
+            next
+        }
+        END {
+            if (status != "finalized") {
+                err("status is \x27" (status == "" ? "missing" : status) "\x27 — only a finalized artifact may be frozen")
+            }
+            for (i = 1; i <= nwant; i++) {
+                fr = worder[i]
+                if (!(fr in seenfr)) {
+                    err(fr " has no verification.yaml entry (coverage is mandatory)")
+                    continue
+                }
+                if (!(fr in sha) || sha[fr] != wsha[fr]) {
+                    err(fr " statement_sha does not recompute against spec.md (stale or tampered artifact)")
+                }
+                if (nvers[fr] + 0 == 0) {
+                    err(fr " has zero parsed verifiers (layout is part of the contract)")
+                }
+            }
+            for (i = 1; i <= nfr; i++) {
+                if (!(frorder[i] in wsha)) {
+                    err("entry \x27" frorder[i] "\x27 has no matching FR in spec.md (phantom requirement)")
+                }
+            }
+            if (nerr) {
+                for (i = 1; i <= nerr; i++) print "verification capture: " errors[i] > "/dev/stderr"
+                exit 1
+            }
+            # Freeze from the indexed records — the same sha[] entry that
+            # was just compared against the spec.
+            for (i = 1; i <= nrow; i++) {
+                if (vkind[i] == "deterministic")
+                    printf "V\t%s\t%s\t%s\t%s\n", vfr[i], sha[vfr[i]], vtarget[i], vmetric[i]
+                else
+                    printf "C\t%s\t%s\t%s\n", vfr[i], sha[vfr[i]], vtarget[i]
+            }
+        }') || rc=$?
+    rm -f "$want_file"
+    [[ $rc -eq 0 ]] || return 1
+    printf '%s\n' "$rows" | jq -R -s '
         [ split("\n")[] | select(length > 0) | split("\t") ] as $rows |
         { verifiers: [ $rows[] | select(.[0] == "V")
             | {fr: .[1], statement_sha: .[2], test: .[3],

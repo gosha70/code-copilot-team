@@ -5257,6 +5257,94 @@ assert_eq "C2-T3: no frozen contract materialises on that resume" "absent" \
     "$([[ -f "$LEDGERD/frozen-contract.json" ]] && echo present || echo absent)"
 rm -rf "$P"
 
+# ── Round-3: the canonical capture path itself ──
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
+CAPD=$(mktemp -d)
+cat > "$CAPD/spec.md" << 'SPEC'
+# Spec: cap
+
+## Requirements
+
+- FR-1: demo.sh prints ok.
+
+## Constraints
+- None.
+SPEC
+CAP_SHA=$(vc_fr_sha "FR-1" "demo.sh prints ok.")
+# Finding 1: a duplicate statement_sha (correct then forged) must never
+# let the unvalidated hash reach the frozen tuple.
+cat > "$CAPD/dup.yaml" << YAML
+status: finalized
+feature_id: cap
+
+FR-1:
+  statement: "d"
+  statement_sha: "$CAP_SHA"
+  statement_sha: "sha256:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+  verifiers:
+    - kind: deterministic
+      test: "bash ./t.sh"
+YAML
+CAPOUT=$( (set -o pipefail; vc_capture_validated "$CAPD/spec.md" "$CAPD/dup.yaml") 2>&1 ); CAPRC=$?
+assert_exit "C2-R3: duplicate statement_sha records refuse the capture" 1 "$CAPRC"
+assert_contains "C2-R3: refusal names the duplicate" "$CAPOUT" "duplicate statement_sha records for FR-1"
+assert_eq "C2-R3: no forged hash escapes into a capture" "0" \
+    "$(printf '%s' "$CAPOUT" | grep -c 'f0f0f0f0f0f0')"
+
+# Duplicate FR entries are equally unanswerable.
+cat > "$CAPD/dupfr.yaml" << YAML
+status: finalized
+feature_id: cap
+
+FR-1:
+  statement: "d"
+  statement_sha: "$CAP_SHA"
+  verifiers:
+    - kind: deterministic
+      test: "bash ./t.sh"
+FR-1:
+  statement: "d"
+  statement_sha: "$CAP_SHA"
+  verifiers:
+    - kind: deterministic
+      test: "bash ./other.sh"
+YAML
+CAPOUT=$( (set -o pipefail; vc_capture_validated "$CAPD/spec.md" "$CAPD/dupfr.yaml") 2>&1 ); CAPRC=$?
+assert_exit "C2-R3: duplicate FR entries refuse the capture" 1 "$CAPRC"
+assert_contains "C2-R3: refusal names the duplicate entry" "$CAPOUT" "duplicate entry for FR-1"
+
+# Finding 2: a stream far larger than the pipe buffer must capture
+# cleanly under pipefail (every consumer reads through EOF).
+python3 - "$CAPD" << 'PYEOF'
+import hashlib, sys
+d = sys.argv[1]; N = 3000
+spec = ["# Spec: big", "", "## Requirements", ""]
+art = ["status: finalized", "feature_id: cap", ""]
+for i in range(1, N + 1):
+    stmt = f"requirement number {i} holds."
+    spec.append(f"- FR-{i}: {stmt}")
+    sha = "sha256:" + hashlib.sha256(f"FR-{i}: {stmt}".encode()).hexdigest()
+    art += [f"FR-{i}:", '  statement: "x"', f'  statement_sha: "{sha}"',
+            "  verifiers:", "    - kind: deterministic", '      test: "bash ./t.sh"']
+spec += ["", "## Constraints", "- None."]
+open(f"{d}/spec-big.md", "w").write("\n".join(spec) + "\n")
+open(f"{d}/big.yaml", "w").write("\n".join(art) + "\n")
+PYEOF
+CAPOUT=$( (set -o pipefail; vc_capture_validated "$CAPD/spec-big.md" "$CAPD/big.yaml") 2>/dev/null ); CAPRC=$?
+assert_exit "C2-R3: a >500KB parsed stream captures cleanly under pipefail" 0 "$CAPRC"
+assert_eq "C2-R3: every verifier of the large artifact is captured" "3000" \
+    "$(printf '%s' "$CAPOUT" | jq '.verifiers | length' 2>/dev/null)"
+rm -rf "$CAPD"
+
+# Finding 3: the artifact schema documents the C2 policy, not the
+# superseded increment-B refusal.
+VSCHEMA="$SCRIPT_DIR/../shared/schemas/verification.schema.json"
+assert_eq "C2-R3 schema: no stale 'inadmissible in increment B' text" "0" \
+    "$(grep -c 'inadmissible in increment B' "$VSCHEMA")"
+assert_eq "C2-R3 schema: documents the capable-evaluator admission rule" "1" \
+    "$(grep -c 'DECLARES conformance_command' "$VSCHEMA")"
+
 # ── Round-2 finding 1 (admission side): the freezing path hands the
 #    driver the capture from the SAME parse admission validated. ──
 P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
