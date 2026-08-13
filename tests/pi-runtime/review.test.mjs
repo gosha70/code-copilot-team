@@ -138,6 +138,35 @@ test("writeDecision: approve writes bypass summary; reject/retry do not", () => 
   assert.ok(fs.existsSync(reviewFile(root2, "decision.json")));
 });
 
+test("writeDecision #233: a typeless breaker artifact reconstructs, never 'unknown'", () => {
+  // Parseable {} (and malformed JSON, via readJson->null) is UNAVAILABLE:
+  // the decision must come from feature-bound reconstruction with
+  // provenance, or not at all — no provenance-less "unknown".
+  const root = tmpProject();
+  initReviewState(root, { ...SUBMIT });
+  fs.writeFileSync(reviewFile(root, "breaker-tripped.json"), "{}\n");
+  const escDir = path.join(root, ".cct", "auto-build", "042-x", "escalations");
+  fs.mkdirSync(escDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(escDir, "esc-1.json"),
+    JSON.stringify({ id: "esc-1", reason: "review_breaker", detail: "review runner exited 5 (phase 1)", phase: 1, resolved: false }) + "\n",
+  );
+  writeDecision(root, "retry", "x", "2026-07-25T00:00:00Z");
+  const dec = JSON.parse(fs.readFileSync(reviewFile(root, "decision.json"), "utf8"));
+  assert.equal(dec.breaker_type, "runner_crash_legacy");
+  assert.match(dec.reconstructed_from, /042-x/);
+
+  // Malformed JSON with nothing to reconstruct from -> refusal, no decision.
+  const root2 = tmpProject();
+  initReviewState(root2, { ...SUBMIT });
+  fs.writeFileSync(reviewFile(root2, "breaker-tripped.json"), "not json\n");
+  assert.throws(
+    () => writeDecision(root2, "retry", "x", "2026-07-25T00:00:00Z"),
+    /Nothing to decide/,
+  );
+  assert.equal(fs.existsSync(reviewFile(root2, "decision.json")), false);
+});
+
 test("writeDecision #233: refusals leave nothing consumable; retry is durable-first", () => {
   // No breaker anywhere -> precise refusal, no decision file.
   const root = tmpProject();

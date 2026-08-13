@@ -362,11 +362,16 @@ function resolveBreakerContext(projectRoot: string): {
   const btf = path.join(reviewDir(projectRoot), "breaker-tripped.json");
   const breaker = readJson(btf);
   if (breaker) {
-    const bt =
-      (breaker.breaker_type as string | undefined) ??
-      (breaker.breaker as string | undefined) ??
-      "unknown";
-    return { breakerType: bt };
+    // The type must be a real non-empty string. A parseable-but-typeless
+    // artifact is treated as UNAVAILABLE and falls through to the
+    // feature-bound reconstruction (same as malformed JSON, which readJson
+    // already returns as null) — a breaker_type of "unknown" without
+    // reconstructed_from provenance must never exist, or the driver's
+    // provenance gate has nothing to validate.
+    const btRaw = breaker.breaker_type ?? breaker.breaker;
+    if (typeof btRaw === "string" && btRaw.length > 0) {
+      return { breakerType: btRaw };
+    }
   }
   const st = loadReviewState(projectRoot);
   const fid = st?.feature_id;

@@ -4683,6 +4683,37 @@ assert_eq "233: the mktemp-failure path leaves no consumable decision" "absent" 
     "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
 rm -rf "$P" "$MKT_SHIM"
 
+# ── A malformed breaker artifact is UNAVAILABLE, never "unknown" ──
+# Present-but-corrupt breaker-tripped.json used to become
+# breaker_type=unknown with no provenance — outside the driver's
+# provenance gate. It now falls into feature-bound reconstruction; the
+# outcome is always provenance-bound or a refusal.
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review" "$P/.cct/auto-build/demo-feat/escalations"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+echo "not json" > "$P/.cct/review/breaker-tripped.json"
+jq -n '{id:"esc-1", reason:"review_breaker", detail:"review runner exited 5 (phase 1)",
+        phase:1, resolved:false, notified:true}' \
+    > "$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+RC=0; bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>/dev/null || RC=$?
+assert_exit "233: a malformed breaker artifact reconstructs instead (exit 0)" 0 "$RC"
+assert_eq "233: the reconstructed decision is provenance-bound, never unknown" "runner_crash_legacy" \
+    "$(jq -r '.breaker_type' "$P/.cct/review/decision.json" 2>/dev/null)"
+assert_eq "233: the malformed-breaker decision carries reconstructed_from" "present" \
+    "$([[ -n "$(jq -r '.reconstructed_from // empty' "$P/.cct/review/decision.json" 2>/dev/null)" ]] && echo present || echo absent)"
+rm -rf "$P"
+# ...and with no escalation to reconstruct from, it REFUSES — never a
+# consumable {breaker_type:"unknown"} decision.
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+echo "not json" > "$P/.cct/review/breaker-tripped.json"
+RC=0; bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>/dev/null || RC=$?
+assert_exit "233: malformed breaker with nothing to reconstruct refuses (exit 1)" 1 "$RC"
+assert_eq "233: no unknown decision is recorded" "absent" \
+    "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
+rm -rf "$P"
+
 # ── Syntactically corrupt escalation JSON refuses reconstruction ──
 # jq exits nonzero with NO stdout on malformed JSON — an uncaptured case
 # word would go empty and the scan would walk past the corruption.

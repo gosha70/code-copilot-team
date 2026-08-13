@@ -47,9 +47,25 @@ RECONSTRUCTED_FROM=""
 
 if [[ -f "$BTF" ]]; then
     # Normal path: the breaker artifact exists. Two producers, two key
-    # names (runner writes `breaker`, driver writes `breaker_type`).
-    BREAKER_TYPE=$(jq -r '.breaker_type // .breaker // "unknown"' "$BTF" 2>/dev/null || echo "unknown")
-else
+    # names (runner writes `breaker`, driver writes `breaker_type`) —
+    # and the value must be a real non-empty string. A malformed or
+    # typeless artifact is treated as UNAVAILABLE and falls into the
+    # feature-bound reconstruction below (matching pi): the decision then
+    # carries reconstructed_from, so the driver's provenance gate applies.
+    # A breaker_type of "unknown" without provenance must never exist.
+    if ! BREAKER_TYPE=$(jq -er '
+        if type == "object"
+           and ((.breaker_type // .breaker) | type == "string")
+           and ((.breaker_type // .breaker) | length > 0)
+        then .breaker_type // .breaker
+        else error("invalid breaker artifact")
+        end' "$BTF" 2>/dev/null); then
+        BREAKER_TYPE=""
+        echo "[review-decide] WARNING: breaker-tripped.json is malformed — treating the breaker artifact as unavailable and reconstructing (feature-bound)." >&2
+    fi
+fi
+
+if [[ -z "$BREAKER_TYPE" ]]; then
     # Reconstruction path (#233): bind to THIS feature via state.json —
     # scanning every ledger could resolve another feature's breaker with
     # this feature's decision.
