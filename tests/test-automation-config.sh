@@ -331,6 +331,20 @@ assert_rejects "empty ready.url is rejected" "$TMP/n-readyempty.json" "ready.url
 w n-readynoto.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h"},"stop_timeout_sec":10}}}}'
 assert_rejects "ready.timeout_sec is required (bounded probe)" "$TMP/n-readynoto.json" "ready.timeout_sec is required and must be a number > 0"
 
+# ── Build-review finding 1: the interface is bound to the launched
+#    instance — probeable http(s), same origin as ready.url. ──
+w b1-div.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","interface":"http://127.0.0.1:4000","ready":{"url":"http://127.0.0.1:3000/health","timeout_sec":5},"stop_timeout_sec":5}}}}'
+assert_rejects "divergent interface/ready origins are rejected" "$TMP/b1-div.json" "must equal ready.url's origin"
+
+w b1-same.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","interface":"http://127.0.0.1:3000","ready":{"url":"http://127.0.0.1:3000/health","timeout_sec":5},"stop_timeout_sec":5}}}}'
+assert "same-origin interface + ready.url is valid" bash "$V" "$TMP/b1-same.json"
+
+w b1-nonurl.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","interface":"port 4000","ready":{"command":"true","timeout_sec":5},"stop_timeout_sec":5}}}}'
+assert_rejects "non-URL interface is rejected (unprobeable)" "$TMP/b1-nonurl.json" "absolute http(s) URL"
+
+w b1-badready.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"localhost:3000/health","timeout_sec":5},"stop_timeout_sec":5}}}}'
+assert_rejects "non-http ready.url is rejected" "$TMP/b1-badready.json" "must be an absolute http(s) URL"
+
 # ── FR-2 derivation helper: required iff the artifact maps runtime_conformance ──
 # shellcheck source=/dev/null
 source "$REPO_DIR/scripts/lib/verification-common.sh"
@@ -362,6 +376,25 @@ assert "derivation: deterministic-only artifact derives false" \
 assert "derivation: missing artifact derives false (absence is not a requirement)" \
     bash -c "source '$REPO_DIR/scripts/lib/verification-common.sh'; [[ \"\$(vc_conformance_required '$TMP/no-such.yaml')\" == false ]]"
 
+# Build-review finding 2: an EARLY mapping followed by a large record
+# tail must still derive true under pipefail — the pre-fix consumer
+# exited on first match, SIGPIPE'd the producer once the remaining
+# records overflowed the pipe buffer, and the 141 pipeline status
+# silently derived "false".
+python3 - "$TMP/v-big.yaml" << 'PYEOF'
+import sys
+p = sys.argv[1]
+with open(p, "w") as f:
+    f.write("status: finalized\nfeature_id: demo\n\n")
+    f.write('FR-1:\n  statement_sha: "sha256:aaaa"\n  verifiers:\n'
+            '    - kind: runtime_conformance\n      criterion: "early mapping"\n')
+    for i in range(2, 20002):
+        f.write(f'FR-{i}:\n  statement_sha: "sha256:bbbb"\n  verifiers:\n'
+                '    - kind: deterministic\n      test: "bash tests/x.sh"\n')
+PYEOF
+assert "derivation: early mapping in a large artifact derives true (no SIGPIPE truncation)" \
+    bash -c "set -o pipefail; source '$REPO_DIR/scripts/lib/verification-common.sh'; [[ \"\$(vc_conformance_required '$TMP/v-big.yaml')\" == true ]]"
+
 # ── schema parity: the schema DECLARES what the gate enforces ──
 CONF_SCHEMA='.properties.verification.properties.conformance'
 assert "schema: conformance requires evaluator/app/timeout_sec" \
@@ -376,6 +409,8 @@ assert "schema: command-readiness requires interface (if/then)" \
     jq -e "$CONF_SCHEMA.properties.app.if.properties.ready.required == [\"command\"] and $CONF_SCHEMA.properties.app.then.required == [\"interface\"]" "$SCHEMA"
 assert "schema: evaluator and interface are non-empty strings" \
     jq -e "[$CONF_SCHEMA.properties.evaluator.minLength, $CONF_SCHEMA.properties.app.properties.interface.minLength] | all(. == 1)" "$SCHEMA"
+assert "schema: interface and ready.url declare the http(s) pattern" \
+    jq -e "[$CONF_SCHEMA.properties.app.properties.interface.pattern, $CONF_SCHEMA.properties.app.properties.ready.properties.url.pattern] | all(. == \"^https?://\")" "$SCHEMA"
 
 # ── review block validation ──────────────────────────────────
 # max_rounds and loop_timeout_sec are COUNTS — the runtime

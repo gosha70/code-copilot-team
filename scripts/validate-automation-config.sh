@@ -306,6 +306,13 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
                        && ! jq -e '.verification.conformance.app.interface | type == "string" and length > 0' "$CONFIG" >/dev/null 2>&1; then
                         violation "verification.conformance.app.interface must be a non-empty string (the evaluator-facing address of the running app)"
                     fi
+                    # Build-review finding 1: the interface must be
+                    # driver-PROBEABLE, or readiness can vouch for one
+                    # instance while the evaluator exercises another.
+                    conf_iface="$(q '.verification.conformance.app.interface // empty')"
+                    if [[ -n "$conf_iface" ]] && ! [[ "$conf_iface" =~ ^https?:// ]]; then
+                        violation "verification.conformance.app.interface must be an absolute http(s) URL — the driver probes it to bind readiness to the launched instance"
+                    fi
                     if [[ "$(q '.verification.conformance.app | has("ready")')" != "true" ]]; then
                         violation "verification.conformance.app.ready is required (readiness must be proven before the evaluator runs)"
                     elif ! is_type '.verification.conformance.app.ready' object; then
@@ -338,6 +345,21 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
                         if [[ "$ready_has_cmd" == "true" && "$ready_has_url" != "true" ]] \
                            && [[ "$(q '.verification.conformance.app | has("interface")')" != "true" ]]; then
                             violation "verification.conformance.app.interface is required when readiness is command-based — the evaluator-facing app address is app.interface, else ready.url, and this config has neither"
+                        fi
+                        # Build-review finding 1: readiness must vouch for
+                        # the SAME instance the evaluator receives — a probe
+                        # on port 3000 must not admit an interface on 4000.
+                        conf_rurl="$(q '.verification.conformance.app.ready.url // empty')"
+                        if [[ -n "$conf_rurl" ]] && ! [[ "$conf_rurl" =~ ^https?:// ]]; then
+                            violation "verification.conformance.app.ready.url must be an absolute http(s) URL (it is probed for HTTP readiness)"
+                        fi
+                        if [[ -n "$conf_iface" && -n "$conf_rurl" ]] \
+                           && [[ "$conf_iface" =~ ^https?:// && "$conf_rurl" =~ ^https?:// ]]; then
+                            _iface_origin="$(printf '%s' "$conf_iface" | sed -E 's#^(https?://[^/?]+).*#\1#')"
+                            _rurl_origin="$(printf '%s' "$conf_rurl" | sed -E 's#^(https?://[^/?]+).*#\1#')"
+                            if [[ "$_iface_origin" != "$_rurl_origin" ]]; then
+                                violation "verification.conformance.app.interface origin ($_iface_origin) must equal ready.url's origin ($_rurl_origin) — readiness must vouch for the SAME instance the evaluator receives"
+                            fi
                         fi
                     fi
                 fi

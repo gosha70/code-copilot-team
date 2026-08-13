@@ -310,6 +310,9 @@ validate_admission() {
   # T4: capture admission start time for --result-file duration accounting.
   local _admission_start_epoch
   _admission_start_epoch=$(date +%s)
+  # #242 finding 5: the evaluator healthcheck EXECUTES operator config,
+  # so it may only run when every check before it passed.
+  local _fails_at_entry=$TOTAL_FAIL
 
   # 0. Inputs must exist before any check can be decided — a missing
   #    input is a NAMED failure, never a raw tool error mid-report.
@@ -416,11 +419,20 @@ validate_admission() {
   if [[ "$ver_ok" == "true" ]]; then pass "$id: every verifier resolves to something executable"; fi
 
   # 6. Unverifiable phrasing lint — on the AUTHORITATIVE spec text.
+  #    C2 (#242 finding 3): such phrasing IS admissible when that FR
+  #    carries a concrete runtime_conformance verifier — the evaluator
+  #    is exactly the thing that can decide it. Deterministic-only FRs
+  #    still refuse.
   local lint_ok=true
   while IFS=$'\t' read -r fr stmt; do
     if printf '%s' "$stmt" | grep -qiE 'user confirms|looks good|verify manually'; then
-      fail "$id: $fr is phrased unverifiably ('user confirms'/'looks good'/'verify manually') — only a runtime_conformance criterion could carry it, and that is increment C"
-      lint_ok=false
+      if printf '%s\n' "$parsed" | awk -F'\t' -v fr="$fr" \
+          '$1 == "VER" && $2 == fr && $3 == "runtime_conformance" { found = 1 } END { exit found ? 0 : 1 }'; then
+        :  # carried by a runtime_conformance verifier — admissible in C2
+      else
+        fail "$id: $fr is phrased unverifiably ('user confirms'/'looks good'/'verify manually') and no runtime_conformance verifier carries it — map one or rephrase"
+        lint_ok=false
+      fi
     fi
   done <<< "$frs"
   if [[ "$lint_ok" == "true" ]]; then pass "$id: no unverifiably-phrased requirements"; fi
@@ -452,9 +464,13 @@ validate_admission() {
   #     passes its healthcheck. No fallback chain: the gate freezes THIS
   #     evaluator id, so admission screens exactly it.
   local conf_required=false
-  if printf '%s\n' "$parsed" | awk -F'\t' '$1 == "VER" && $3 == "runtime_conformance" { found = 1; exit } END { exit found ? 0 : 1 }'; then
+  if printf '%s\n' "$parsed" | vc_conformance_required_parsed; then
     conf_required=true
   fi
+  # Health is EXECUTED later (8b): resolving and validating the
+  # declaration here is pure file inspection; running the healthcheck is
+  # operator-command execution and must wait for governance (finding 5).
+  local conf_health_eval="" conf_health_cmd=""
   if [[ "$conf_required" == "true" ]]; then
     local profile_toml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
     if [[ "$autocfg_ok" != "true" ]]; then
@@ -476,10 +492,14 @@ validate_admission() {
         conf_hc="$(admission_toml_get "$profile_toml" "providers.$conf_eval" "healthcheck")"
         if [[ -z "$conf_cmd" ]]; then
           fail "$id: evaluator '$conf_eval' is a reviewer-only provider — it declares no conformance_command, so it cannot exercise a running application (health is not capability); declare conformance_command in providers.toml or configure a capable evaluator"
-        elif [[ -n "$conf_hc" ]] && ! bash -c "$conf_hc" >/dev/null 2>&1; then
-          fail "$id: evaluator '$conf_eval' failed its healthcheck ($conf_hc)"
+        elif [[ "$conf_cmd" != *"{review_request}"* ]]; then
+          # Finding 4: the declaration is only a capability if the command
+          # can actually RECEIVE the frozen request document.
+          fail "$id: evaluator '$conf_eval' declares conformance_command without the {review_request} placeholder — it cannot receive the frozen conformance request, so the declaration is not a capability"
         else
-          pass "$id: conformance evaluator '$conf_eval' resolves, declares conformance_command, and is healthy"
+          pass "$id: conformance evaluator '$conf_eval' resolves, declares conformance_command"
+          conf_health_eval="$conf_eval"
+          conf_health_cmd="$conf_hc"
         fi
       fi
     fi
@@ -509,7 +529,21 @@ validate_admission() {
     pass "$id: origin gate exit $origin_exit"
   fi
 
-  # 9. test.command exists and passes on the BASE ref (§11) — the ONLY
+  # 8b. Evaluator healthcheck (#242 finding 5) — this EXECUTES an
+  #     operator-configured command, so it runs only when governance
+  #     passed AND no check so far has failed: a draft plan, a stale
+  #     origin, or a sha-drifted artifact must never trigger it.
+  if [[ -n "$conf_health_eval" ]]; then
+    if [[ "$governance_ok" != "true" || "$TOTAL_FAIL" -gt "$_fails_at_entry" ]]; then
+      echo "  [SKIP] $id: evaluator healthcheck not executed — earlier checks failed (nothing executes for a refused feature)"
+    elif [[ -n "$conf_health_cmd" ]] && ! bash -c "$conf_health_cmd" >/dev/null 2>&1; then
+      fail "$id: evaluator '$conf_health_eval' failed its healthcheck ($conf_health_cmd)"
+    else
+      pass "$id: conformance evaluator '$conf_health_eval' is healthy"
+    fi
+  fi
+
+  # 9. test.command exists and passes on the BASE ref (§11) — an
   #    executing check, so it runs LAST and only when the config
   #    (check 7) and governance (check 8) already passed: admission
   #    never executes a command from a rejected or ungoverned feature.

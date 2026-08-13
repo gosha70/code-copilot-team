@@ -241,6 +241,21 @@ type = "cli"
 command = "cat {review_request}"
 conformance_command = "cat {review_request}"
 healthcheck = "false"
+
+[providers.noplace]
+type = "cli"
+command = "cat {review_request}"
+conformance_command = "run-eval --headless"
+healthcheck = "true"
+TOML
+HC_MARKER="$(mktemp -d)/health-ran"
+cat >> "$PTOML" << TOML
+
+[providers.marker]
+type = "cli"
+command = "cat {review_request}"
+conformance_command = "cat {review_request}"
+healthcheck = "touch $HC_MARKER"
 TOML
 export CCT_PROVIDER_PROFILE="$PTOML"
 
@@ -279,6 +294,59 @@ sedi 's|criterion: "Cancel aborts the job."|criterion: "TODO: write me"|' "$D/sp
 run_admission "$D"
 assert_exit "placeholder conformance criterion refused" 1 "$RC"
 assert_contains "refusal demands a real criterion" "$OUTPUT" "write the real conformance criterion"
+rm -rf "$D"
+
+# ── Build-review finding 4: the declaration is only a capability if the
+#    command can RECEIVE the frozen request. ──
+D=$(mk_conf_fixture); add_conf_block "$D" "noplace"
+run_admission "$D"
+assert_exit "conformance_command without the request placeholder refused" 1 "$RC"
+assert_contains "refusal names the placeholder" "$OUTPUT" "{review_request} placeholder"
+rm -rf "$D"
+
+# ── Build-review finding 5: the healthcheck EXECUTES operator config —
+#    an ungoverned (draft-plan) feature must never trigger it. ──
+rm -f "$HC_MARKER"
+D=$(mk_conf_fixture); add_conf_block "$D" "marker"
+sedi 's/^status: approved/status: draft/' "$D/specs/demo-feat/plan.md"
+run_admission "$D"
+assert_exit "draft plan refuses the conformance run" 1 "$RC"
+assert_eq "healthcheck NOT executed for an ungoverned feature" "absent" \
+    "$([[ -f "$HC_MARKER" ]] && echo present || echo absent)"
+rm -rf "$D"
+D=$(mk_conf_fixture); add_conf_block "$D" "marker"
+run_admission "$D"
+assert_exit "governed marker evaluator admits" 0 "$RC"
+assert_eq "healthcheck executed once governance passed" "present" \
+    "$([[ -f "$HC_MARKER" ]] && echo present || echo absent)"
+rm -rf "$D"; rm -f "$HC_MARKER"
+
+# ── Build-review finding 3: unverifiable phrasing is admissible when a
+#    runtime_conformance verifier carries it; deterministic-only FRs
+#    still refuse. ──
+D=$(mk_fixture)
+sedi 's/- FR-1: demo test suite exits zero when invoked from the project root./- FR-1: an operator can verify manually that the cancel flow aborts the job./' "$D/specs/demo-feat/spec.md"
+finalize "$D"
+python3 - "$D/specs/demo-feat/verification.yaml" << 'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('    - kind: deterministic\n      test: "project-test.sh"',
+              '    - kind: runtime_conformance\n      criterion: "Cancel aborts the job."', 1)
+open(p, 'w').write(s)
+PYEOF
+add_conf_block "$D" "capable"
+run_admission "$D"
+assert_exit "unverifiable phrasing admits when runtime_conformance carries it" 0 "$RC"
+assert_contains "the mapped FR passes the lint" "$OUTPUT" "no unverifiably-phrased requirements"
+rm -rf "$D"
+
+D=$(mk_fixture)
+sedi 's/exits zero across/looks good across/' "$D/specs/demo-feat/spec.md"
+finalize "$D"
+run_admission "$D"
+assert_exit "unverifiable phrasing on a deterministic-only FR still refuses" 1 "$RC"
+assert_contains "refusal says no verifier carries it" "$OUTPUT" "no runtime_conformance verifier carries it"
 rm -rf "$D"
 
 unset CCT_PROVIDER_PROFILE

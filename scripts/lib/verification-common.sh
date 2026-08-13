@@ -137,6 +137,18 @@ vc_parse_artifact() {
     ' "$artifact"
 }
 
+# vc_conformance_required_parsed — the canonical derivation scan: reads
+# vc_parse_artifact TSV on stdin, exit 0 iff any VER record has kind
+# runtime_conformance. Scans through EOF deliberately: an early `exit`
+# on first match SIGPIPEs the producer under `set -o pipefail` once the
+# remaining records overflow the pipe buffer, and the 141 pipeline
+# status silently derives "false" for large valid artifacts (build
+# review round 1, finding 2). Admission feeds it the SAME parse it
+# sha-validated (never a re-read of the file).
+vc_conformance_required_parsed() {
+    awk -F'\t' '$1 == "VER" && $3 == "runtime_conformance" { found = 1 } END { exit found ? 0 : 1 }'
+}
+
 # vc_conformance_required <verification.yaml> — echo "true" iff any FR
 # maps a verifier of kind runtime_conformance, else "false" (#242 FR-2:
 # conformance.required is DERIVED from the finalized artifact, never
@@ -147,8 +159,7 @@ vc_parse_artifact() {
 # contract initialiser reads the same file it validated).
 vc_conformance_required() {
     local artifact="$1"
-    if [[ -f "$artifact" ]] && vc_parse_artifact "$artifact" \
-        | awk -F'\t' '$1 == "VER" && $3 == "runtime_conformance" { found = 1; exit } END { exit found ? 0 : 1 }'; then
+    if [[ -f "$artifact" ]] && vc_parse_artifact "$artifact" | vc_conformance_required_parsed; then
         echo "true"
     else
         echo "false"
