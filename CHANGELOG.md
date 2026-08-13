@@ -12,6 +12,46 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Frozen coverage contract for autonomous builds (#222, increment C1 of
+  #190)** — `verification.coverage` in `automation.json` (schema-validated;
+  `test`/`app`/`visual`/`conformance` rejected by name until their
+  increments ship): preset resolution from
+  `shared/templates/<preset>/verification-preset.json` with per-key config
+  override and sha256 provenance; preflight contract initialiser freezes
+  the fully resolved contract (command, parser, artifact, floors,
+  `max_regression_pct`, `timeout_sec`, `floor_enforced_at`, captured
+  brownfield baseline) into the run ledger behind an atomic per-feature
+  init lock, with attempt-scoped rollback on ordinary refusal and
+  attempt-private evidence bundles when the canonical ledger cannot be
+  claimed; driver coverage gate at `phase`/`landing` reads only the
+  in-memory pinned contract (disk drift parks), collects fresh evidence
+  in a throwaway worktree at HEAD (FR-5a containment both sides,
+  `CCT_PROJECT_DIR`/`CCT_SPECS_DIR` rebound, `OLDPWD` dropped), enforces
+  absolute floors plus point-based brownfield regression, fails closed on
+  missing metrics, and parks/terminates naming the measured number and
+  floor; attended coverage parks are resumable with commit-bound recovery
+  (anything past the last reviewed HEAD needs its own review PASS —
+  including recovery of failed required-artifact commits), an
+  escalation-stack drain with verified progress and corruption/gap-refusing
+  scans, and resolve-before-consume `/review-decide` handling; `git
+  worktree prune` fires at every throwaway-worktree creation site
+  (admission, brownfield capture, and the coverage gate), site-scoped
+  under `CCT_ADMISSION_TEST_IN_PLACE=1`, non-fatal and journalled even
+  when git fails silently. Driver suite 399 → 620.
+
+### Fixed
+
+- **Review runner: read-only directories no longer poison verdicts** — the
+  snapshot sandbox is built with tar (deferred directory modes, `.git`
+  excluded at source) instead of `cp -R`, snapshot setup failures map to
+  RUNNER_ERROR instead of a `set -e` exit 1 that read as a FAIL verdict,
+  and cleanup never decides the exit code.
+- **Auto-build sessions: prompts on stdin, not argv (#234)** — a fix
+  prompt carrying a large findings file exceeded ARG_MAX and died E2BIG
+  before the session started; both the claude and pi backends now pass
+  the prompt on stdin, and fix prompts drop the reviewer's `raw_output`
+  transcript (the findings file retains it).
+
 - **Unattended admission control + traceability (#193, increment B of
   #190)** — `specs/<feature>/verification.yaml` requirement→verifier
   evidence graph (`shared/schemas/verification.schema.json` contract,
