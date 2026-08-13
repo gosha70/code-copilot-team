@@ -333,8 +333,14 @@ fi
 
 # ── Create snapshot sandbox ──────────────────────────────────
 
-SNAPSHOT_DIR=$(mktemp -d)
-trap '_rr_rc=$?; rm -rf "$SNAPSHOT_DIR" 2>/dev/null
+# Snapshot SETUP failures are infrastructure, never a verdict: under raw
+# `set -e` a failed mktemp/mkdir exited 1, which the driver reads as
+# FAIL/INVALID review content. Guard both to RUNNER_ERROR (code 4).
+if ! SNAPSHOT_DIR=$(mktemp -d 2>/dev/null) || [[ -z "$SNAPSHOT_DIR" || ! -d "$SNAPSHOT_DIR" ]]; then
+    echo "[review-runner] FATAL: could not create the snapshot directory -- RUNNER_ERROR (code 4)" >&2
+    exit 4
+fi
+trap '_rr_rc=$?; chmod -R u+w "$SNAPSHOT_DIR" 2>/dev/null || true; rm -rf "$SNAPSHOT_DIR" 2>/dev/null || true
 if [[ $_rr_rc -gt 4 ]]; then
     echo "[review-runner] FATAL: unexpected exit $_rr_rc -- RUNNER_ERROR (code 4)" >&2
     exit 4
@@ -345,10 +351,28 @@ exit $_rr_rc' EXIT
 PRE_REVIEW_HEAD=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "none")
 PRE_REVIEW_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null || echo "")
 
-# Copy working tree to snapshot (reviewer runs here, not in real repo)
-cp -R "$PROJECT_DIR" "$SNAPSHOT_DIR/workspace"
-# Remove real .git so reviewer cannot affect the actual repo
-rm -rf "$SNAPSHOT_DIR/workspace/.git"
+# Copy working tree to snapshot (reviewer runs here, not in real repo).
+# tar, not cp -R: a project can legitimately carry read-only directories
+# (a stale worktree registration, a read-only vendor tree), and cp -R
+# recreates the directory read-only FIRST and then cannot write its
+# children — under `set -e` that aborted the runner with exit 1 before
+# any review round, indistinguishable from a FAIL verdict. tar defers
+# directory modes until extraction ends. .git is excluded at the source
+# so reviewer git commands act on nothing; a snapshot that cannot be
+# built at all is RUNNER_ERROR, never a verdict.
+if ! mkdir -p "$SNAPSHOT_DIR/workspace" 2>/dev/null; then
+    echo "[review-runner] FATAL: could not create the snapshot workspace -- RUNNER_ERROR (code 4)" >&2
+    exit 4
+fi
+if ! tar -C "$PROJECT_DIR" --exclude './.git' --exclude './.git/*' -cf - . 2>/dev/null \
+    | tar -C "$SNAPSHOT_DIR/workspace" -xf - 2>/dev/null; then
+    echo "[review-runner] FATAL: could not snapshot the project -- RUNNER_ERROR (code 4)" >&2
+    exit 4
+fi
+if [[ -e "$SNAPSHOT_DIR/workspace/.git" ]]; then
+    echo "[review-runner] FATAL: the snapshot still carries a .git copy -- RUNNER_ERROR (code 4)" >&2
+    exit 4
+fi
 SANDBOX_DIR="$SNAPSHOT_DIR/workspace"
 
 # ── Build review request ─────────────────────────────────────

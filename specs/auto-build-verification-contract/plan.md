@@ -252,9 +252,11 @@ additionally run the admission bar as before. The full matrix:
 | present | resume | either | load + schema-validate the frozen contract; **never** recapture; missing/corrupt ⇒ fail closed |
 
 `git worktree prune` is therefore scoped to "immediately before this run
-creates a throwaway worktree" — which is unattended admission, and now also
-brownfield baseline capture on either profile. That is the honest trigger:
-the leak it cleans up is caused by creating one.
+creates a throwaway worktree" — which is unattended admission, brownfield
+baseline capture on either profile, and (T6 amendment) the coverage gate's
+evidence worktree at each enforcement point, on every coverage-block path,
+pruned at the gate's own creation site. That is the honest trigger: the
+leak it cleans up is caused by creating one.
 
 Two explicit sequences, and the implementation follows them literally:
 
@@ -292,11 +294,11 @@ with a table that drives every per-path decision (rev 9, findings 1–3):
 | `PATH` | producers | file | prune? | clock origin |
 |---|---|---|---|---|
 | `fresh-attended-noblock` | none | none | no | **`now` — unchanged** |
-| `fresh-attended-block` | contract init | contract | iff brownfield | `ATTEMPT_START` |
+| `fresh-attended-block` | contract init | contract | iff brownfield (step 3); gate site (T6) | `ATTEMPT_START` |
 | `fresh-unattended-noblock` | admission | admission | **yes** | `ATTEMPT_START` |
 | `fresh-unattended-block` | **admission, THEN contract init** | both | yes | `ATTEMPT_START` |
 | `resume-attended-noblock` | none | none | no | **`now` — unchanged** |
-| `resume-attended-block` | **none** (validation is step 2) | none | no | **`now` — unchanged** |
+| `resume-attended-block` | **none** (validation is step 2) | none | no (step 3); gate site (T6) | **`now` — unchanged** |
 | `resume-unattended-*` | admission | admission | **yes** | `ATTEMPT_START` |
 
 Three rules generalise the table, and are what the implementation actually
@@ -311,10 +313,12 @@ follows:
   The trigger is **configured INTENT to attempt isolation**, decided from
   config before anything runs — not whether creation later succeeds, which
   is unknowable at prune time since the prune necessarily precedes the
-  attempt (rev 11, finding 3). So: in-place override or non-git ⇒ no
-  attempt ⇒ no prune; otherwise prune first, regardless of whether
-  `worktree add` subsequently fails. Contract initialisation intends one
-  only for brownfield.
+  attempt (rev 11, finding 3). So, PER SITE: in-place override or non-git
+  ⇒ no admission attempt ⇒ no admission-site prune; otherwise prune first,
+  regardless of whether `worktree add` subsequently fails. The override
+  disables admission isolation and its prune only — coverage-gate
+  worktrees and their gate-site prune (T6 amendment) are unaffected by it.
+  Contract initialisation intends one only for brownfield.
 - **Clock origin is `ATTEMPT_START` iff this path runs a pre-ledger
   producer**, else the existing `now`. That preserves attended no-block
   behaviour exactly (finding 3): those paths run no producer, so nothing
@@ -414,8 +418,13 @@ refuses.
 before **this run creates a throwaway worktree**. That is unattended
 admission AND brownfield baseline capture on either profile (rev 6, finding
 3 — rev 5 changed FR-8 but left this section and T7/SC-7 asserting the old
-unattended-only scope). Paths that create no throwaway worktree — attended
-greenfield, and anything without the block — do not prune, which is what
+unattended-only scope), AND — T6 amendment — the coverage gate's evidence
+worktree at each enforcement point, pruned at the gate's own creation site
+on every coverage-block path. The in-place override is SITE-scoped: it
+suppresses only the admission-site prune, and a coverage-block run under it
+still prunes at the gate. Paths that create no throwaway worktree —
+anything without the block, or in-place admission with no block — do not
+prune, which is what
 keeps FR-2's promise. Prune failure is **non-fatal and journalled**: a stale
 registration does not affect correctness, and killing a run over
 housekeeping is the worse trade.

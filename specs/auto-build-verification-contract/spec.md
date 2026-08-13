@@ -224,9 +224,23 @@ creates no ledger, and no preflight-result file survives.
   attempt no isolation and MUST NOT prune (`validate-spec.sh:462-466`).
   Whether `worktree add` later SUCCEEDS is not part of the trigger — the
   prune necessarily precedes the attempt, so that outcome is unknowable at
-  decision time. Contract initialisation intends one only for brownfield. Paths whose producers create none
-  (attended greenfield with a block; every attended no-block path) MUST NOT
-  prune. Prune failure MUST be non-fatal and journalled (FR-7c).
+  decision time. Contract initialisation intends one only for brownfield.
+
+  **T6 amendment (T7):** the coverage gate is a second worktree creator —
+  it runs the frozen contract in a throwaway worktree at each enforcement
+  point, on EVERY coverage-block path, and prunes immediately before its
+  own `worktree add` (the same honest trigger, applied at the creation
+  site). "Attended greenfield with a block MUST NOT prune" therefore held
+  only before T6; post-T6 it prunes at the gate. The
+  `CCT_ADMISSION_TEST_IN_PLACE=1` exception is SITE-scoped, not
+  run-scoped: it suppresses only the admission-site prune, because
+  in-place admission is the only isolation it opts out of — a
+  coverage-block run under it still creates gate worktrees and still
+  prunes at the gate. Only paths that create no worktree at all (every
+  attended no-block path; in-place admission WITH no block) MUST NOT
+  prune. Prune failure MUST be non-fatal and journalled (FR-7c) —
+  including a NONZERO exit with no output, which is journalled with a
+  fallback detail naming the exit code.
 
 - **FR-9** Admission's `test.command` invocation MUST be inside the
   wall-clock budget, not merely recorded: a `duration_sec` field alone
@@ -406,13 +420,19 @@ creates no ledger, and no preflight-result file survives.
   file; a successful one imports **exactly the sections its path emits** —
   not "baseline and accounting" unconditionally, which is false for four of
   the seven paths.
-- **SC-7** A stale worktree registration is pruned iff an applicable
-  producer ATTEMPTS isolated-worktree execution — and specifically NOT when
-  `CCT_ADMISSION_TEST_IN_PLACE=1` is set, asserted — asserted for
+- **SC-7** A stale worktree registration is pruned iff THIS RUN creates a
+  throwaway worktree — `CCT_ADMISSION_TEST_IN_PLACE=1` suppresses only the
+  admission-site prune (it opts out of admission isolation alone), asserted
+  both ways below. Asserted reclaimed for
   `fresh-unattended-noblock` (admission, no block), `fresh-unattended-block`,
-  `resume-unattended-*`, and attended brownfield capture. Asserted NOT to
-  prune on attended greenfield-with-block and every attended no-block path.
-  A failing prune is journalled and does not fail the run.
+  `resume-unattended-*`, attended brownfield capture, and (T6 amendment, at
+  the gate site) attended greenfield-with-block and `resume-attended-block`.
+  Asserted NOT to prune on attended no-block paths and under
+  `CCT_ADMISSION_TEST_IN_PLACE=1` with no block; asserted that the
+  in-place + coverage-block combination STILL prunes at the gate (the
+  exception is site-scoped). A failing prune is journalled — a silent
+  nonzero exit with a fallback detail naming the code — and does not fail
+  the run.
 - **SC-7a** The wall-clock cap includes admission time on unattended paths:
   a run whose admission consumes most of the budget hits the cap sooner,
   asserted against the pre-admission timestamp rather than a logged field —

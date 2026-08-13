@@ -1456,6 +1456,28 @@ import_preflight_result() {
     echo "[auto-build] preflight result imported (path: $PREFLIGHT_PATH)" >&2
 }
 
+# ── Worktree prune (T7 — FR-8) ───────────────────────────────
+
+# prune_worktrees: reclaim stale worktree registrations left by a prior
+# crash, immediately before THIS RUN creates a throwaway worktree — the
+# honest FR-8 trigger. Non-fatal and journalled: a stale registration
+# does not affect correctness, and killing a run over housekeeping is
+# the worse trade.
+prune_worktrees() {
+    local out rc=0
+    out=$(git -C "$PROJECT_DIR" worktree prune --expire=now 2>&1) || rc=$?
+    # FR-8's failure-audit guarantee is unconditional: a nonzero exit with
+    # NOTHING on stderr must still leave a journal trail, so a silent
+    # failure gets a fallback detail naming the code.
+    if [[ $rc -ne 0 && -z "$out" ]]; then
+        out="git worktree prune failed (exit $rc)"
+    fi
+    if [[ -n "$out" ]]; then
+        journal_or_hold "worktree_prune" "$out"
+    fi
+    return 0
+}
+
 # ── Coverage gate (T6 — FR-3, FR-4, FR-4a, FR-4b) ────────────
 
 coverage_gate_verdict() {
@@ -1542,6 +1564,11 @@ coverage_gate() {
     # Isolated evidence: detached worktree at HEAD, removed before any
     # driver commit can sweep what the command wrote. HEAD is also the
     # honest subject — it is what lands.
+    # FR-8: this gate is about to create a throwaway worktree — reclaim
+    # stale registrations first. T6 widened the trigger set beyond the
+    # step-3 preflight matrix: attended greenfield-block and attended
+    # resume paths reach here without any earlier producer worktree.
+    prune_worktrees
     local wt_dir measured err rc=0
     wt_dir=$(mktemp -d)
     if ! git -C "$PROJECT_DIR" worktree add --detach "$wt_dir" HEAD >/dev/null 2>&1; then
@@ -3394,10 +3421,7 @@ case "${PREFLIGHT_PATH:-}" in
         ;;
 esac
 if $_t4_prune; then
-    _t4_prune_out=$(git -C "$PROJECT_DIR" worktree prune --expire=now 2>&1) || true
-    if [[ -n "$_t4_prune_out" ]]; then
-        journal_or_hold "worktree_prune" "$_t4_prune_out"
-    fi
+    prune_worktrees
 fi
 
 # ── 4. Admission gate (FR-7a0): run BEFORE resume dispatch so an

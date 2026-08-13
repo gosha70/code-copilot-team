@@ -133,9 +133,16 @@ resolution, no script-side floor literals) and FR-5b (`preset_id` /
 - Prune iff an applicable producer creates a throwaway worktree — includes
   `fresh-unattended-noblock` (admission runs with no block). Non-fatal and
   journalled on failure.
+- T6 amendment: the coverage gate creates throwaway worktrees at its
+  enforcement points, so every coverage-block path is now a prune trigger
+  (the gate prunes immediately before its own worktree add). "NOT pruned
+  on attended greenfield-block" held only before T6; the honest FR-8
+  trigger — prune immediately before THIS RUN creates a throwaway
+  worktree — is what the table derives from (plan rev 6).
 - Tests: reclaimed on unattended no-block, unattended block, unattended
-  resume, and attended brownfield; NOT pruned on attended greenfield-block
-  or any attended no-block path; a failing prune does not fail the run.
+  resume, attended brownfield, and (post-T6, at the gate) attended
+  greenfield-block; NOT pruned on attended no-block paths; a failing
+  prune does not fail the run.
 
 ## T8 — Docs + gates
 - README, CHANGELOG, schema description, count pins.

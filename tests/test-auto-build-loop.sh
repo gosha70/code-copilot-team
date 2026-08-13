@@ -4520,6 +4520,204 @@ assert_exit "T6: validator accepts the complete brownfield baseline" 0 "$RC"
 rm -f "$T6V"
 
 echo ""
+echo "=== T7: worktree prune (#222, FR-8) ==="
+# ══════════════════════════════════════════════════════════════
+
+# A stale registration simulates a prior crash: the worktree directory is
+# gone but .git/worktrees/<name> remains. Prune reclaims it iff the run
+# creates a throwaway worktree of its own.
+plant_stale_wt() {
+    local dir="$1" wt
+    wt=$(mktemp -d)/stalewt
+    git -C "$dir" worktree add --detach "$wt" >/dev/null 2>&1
+    rm -rf "$wt"
+    [[ -d "$dir/.git/worktrees/stalewt" ]] || { echo "  FAIL: stale fixture not planted"; FAIL=$((FAIL + 1)); }
+}
+stale_present() { [[ -d "$1/.git/worktrees/stalewt" ]] && echo present || echo reclaimed; }
+
+# ── Reclaimed: unattended no-block (admission creates the worktree) ──
+export CCT_GH_BIN="$GH_STUB"
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"; add_remote "$P" >/dev/null
+plant_stale_wt "$P"
+run_driver "$P"
+assert_eq "T7: unattended no-block reclaims the stale registration" "reclaimed" \
+    "$(stale_present "$P")"
+rm -rf "$P"
+
+# ── Reclaimed: unattended block ──
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"; add_remote "$P" >/dev/null
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:92}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+plant_stale_wt "$P"
+run_driver "$P"
+assert_eq "T7: unattended block reclaims the stale registration" "reclaimed" \
+    "$(stale_present "$P")"
+rm -rf "$P"
+unset CCT_GH_BIN
+
+# ── Reclaimed: unattended resume (frozen snapshot decides the path) ──
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+LEDGERP="$P/.cct/auto-build/demo-feat"
+mkdir -p "$LEDGERP"
+cp "$P/specs/demo-feat/automation.json" "$LEDGERP/config.snapshot.json"
+jq -n --argjson now "$(date +%s)" \
+    '{schema_version:1, feature_id:"demo-feat", profile:"unattended",
+      status:"milestone-paused", current_phase:1,
+      branch:"feature/demo-feat", branch_base_ref:"master",
+      phases:{"1":{status:"done"}}, caps:{max_phases:8, max_fix_sessions_per_phase:3,
+        max_wall_clock_sec:14400, max_cost_usd:25},
+      outcome:null, disposition_reason:null,
+      totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:$now},
+      milestones:{every_n_phases:2, last_paused_after_phase:0},
+      escalations:[], pr:{number:null, url:null},
+      updated:"2026-01-01T00:00:00Z"}' > "$LEDGERP/state.json"
+plant_stale_wt "$P"
+run_driver "$P" --resume
+assert_eq "T7: unattended resume reclaims the stale registration" "reclaimed" \
+    "$(stale_present "$P")"
+rm -rf "$P"
+
+# ── Reclaimed: attended brownfield (baseline capture worktree) ──
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:85.5}}}" > cov.json\n' > "$P/make-coverage.sh"
+chmod +x "$P/make-coverage.sh"
+git -C "$P" add make-coverage.sh && git -C "$P" commit -q -m "base coverage"
+cfg_set "$P" '.verification.coverage={command:"./make-coverage.sh",artifact:"cov.json",parser:"istanbul",baseline:"admission",min_line_pct:70,max_regression_pct:5}'
+plant_stale_wt "$P"
+run_driver "$P"
+assert_exit "T7: attended brownfield run completes" 0 "$RC"
+assert_eq "T7: attended brownfield reclaims the stale registration" "reclaimed" \
+    "$(stale_present "$P")"
+rm -rf "$P"
+
+# ── Reclaimed post-T6: attended greenfield-block, at the GATE ──
+# The step-3 matrix skips this path, but the coverage gate creates its
+# own throwaway worktree at landing and prunes immediately before it.
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:92}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+plant_stale_wt "$P"
+run_driver "$P"
+assert_exit "T7: attended greenfield-block run completes" 0 "$RC"
+assert_eq "T7: attended greenfield-block reclaims at the gate (T6 expansion)" "reclaimed" \
+    "$(stale_present "$P")"
+rm -rf "$P"
+
+# ── NOT pruned: CCT_ADMISSION_TEST_IN_PLACE=1 (no isolation intent) ──
+# In-place admission deliberately attempts no worktree; the configured
+# INTENT decides, so the stale registration must survive.
+export CCT_GH_BIN="$GH_STUB"
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"; add_remote "$P" >/dev/null
+plant_stale_wt "$P"
+CCT_ADMISSION_TEST_IN_PLACE=1 run_driver "$P"
+assert_eq "T7: in-place admission leaves the stale registration alone" "present" \
+    "$(stale_present "$P")"
+rm -rf "$P"
+
+# ── The in-place exception is SITE-scoped: with a block, the gate prunes ──
+# CCT_ADMISSION_TEST_IN_PLACE opts out of admission isolation only; a
+# coverage-block run under it still creates a gate worktree, so the stale
+# registration is reclaimed there.
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"; add_remote "$P" >/dev/null
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:92}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+plant_stale_wt "$P"
+CCT_ADMISSION_TEST_IN_PLACE=1 run_driver "$P"
+assert_eq "T7: in-place WITH a block still reclaims at the gate (site-scoped)" "reclaimed" \
+    "$(stale_present "$P")"
+rm -rf "$P"
+unset CCT_GH_BIN
+
+# ── Reclaimed post-T6: resume-attended-block, at the GATE ──
+# The step-3 matrix never pruned this path; the gate rerun on resume
+# creates its own worktree and prunes at that site.
+P=$(setup_project); single_phase "$P"
+cat > "$P/make-cov.sh" << 'EOF'
+#!/usr/bin/env bash
+jq -n --argjson v "$(cat cov-value.txt)" '{total:{lines:{pct:$v}}}' > cov.json
+EOF
+chmod +x "$P/make-cov.sh"
+echo 75 > "$P/cov-value.txt"
+git -C "$P" add make-cov.sh cov-value.txt && git -C "$P" commit -q -m "file-driven coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+run_driver "$P"
+assert_exit "T7: resume fixture parks at the landing gate (exit 4)" 4 "$RC"
+echo 92 > "$P/cov-value.txt"
+git -C "$P" add cov-value.txt && git -C "$P" commit -q -m "raise coverage"
+plant_stale_wt "$P"
+run_driver "$P" --resume
+assert_exit "T7: resume-attended-block resumes to done" 0 "$RC"
+assert_eq "T7: resume-attended-block reclaims at the gate (T6 expansion)" "reclaimed" \
+    "$(stale_present "$P")"
+rm -rf "$P"
+
+# ── NOT pruned: attended no-block (this run creates no worktree) ──
+P=$(setup_project); single_phase "$P"
+plant_stale_wt "$P"
+run_driver "$P"
+assert_exit "T7: attended no-block run completes" 0 "$RC"
+assert_eq "T7: attended no-block leaves the stale registration alone" "present" \
+    "$(stale_present "$P")"
+rm -rf "$P"
+
+# ── A failing prune never fails the run ──
+# Only the STALE ENTRY is made unremovable (its dir loses write), so
+# prune fails with output while the gate's own worktree add — a fresh
+# sibling under a writable .git/worktrees — still works. The run must
+# proceed to its normal outcome, with the failure journalled.
+P=$(setup_project); single_phase "$P"
+printf '#!/usr/bin/env bash\njq -n "{total:{lines:{pct:92}}}" > cov.json\n' > "$P/make-cov.sh"
+chmod +x "$P/make-cov.sh"
+git -C "$P" add make-cov.sh && git -C "$P" commit -q -m "coverage helper"
+cfg_set "$P" '.verification.coverage={command:"./make-cov.sh",artifact:"cov.json",parser:"istanbul",baseline:"none",min_line_pct:80}'
+plant_stale_wt "$P"
+chmod 555 "$P/.git/worktrees/stalewt"
+run_driver "$P"
+chmod -R 755 "$P/.git/worktrees" 2>/dev/null
+assert_exit "T7: a failing prune does not fail the run" 0 "$RC"
+assert_eq "T7: the prune failure is journalled" "1" \
+    "$(grep -c '"event":"worktree_prune"' "$P/.cct/auto-build/demo-feat/events.jsonl" | tr -d ' ')"
+rm -rf "$P"
+
+# ── A SILENT nonzero prune is still journalled ──
+# FR-8's failure audit is unconditional: a git that exits nonzero with
+# nothing on stderr must leave a trail via the fallback detail. Injected
+# with a git shim that fails `worktree prune` quietly and passes
+# everything else through. Exercised directly against the helper.
+DRIVER_FUNCS=$(mktemp)
+_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
+# shellcheck source=/dev/null
+source "$DRIVER_FUNCS"
+REAL_GIT=$(command -v git)
+GIT_SHIM_DIR=$(mktemp -d)
+cat > "$GIT_SHIM_DIR/git" << SH
+#!/usr/bin/env bash
+for a in "\$@"; do
+    if [[ "\$a" == "prune" ]]; then exit 3; fi
+done
+exec "$REAL_GIT" "\$@"
+SH
+chmod +x "$GIT_SHIM_DIR/git"
+P=$(mktemp -d)
+PROJECT_DIR="$P"
+LEDGER_DIR="$P/.cct/auto-build/dummy"; STATE="$LEDGER_DIR/state.json"; EVENTS="$LEDGER_DIR/events.jsonl"
+mkdir -p "$LEDGER_DIR"
+jq -n '{schema_version:1, status:"preflight"}' > "$STATE"
+DRY_RUN=false; PENDING_EVENTS=""
+PATH="$GIT_SHIM_DIR:$PATH" prune_worktrees
+assert_eq "T7: a silent nonzero prune is journalled with its exit code" "1" \
+    "$(grep -c 'git worktree prune failed (exit 3)' "$EVENTS" 2>/dev/null | tr -d ' ')"
+rm -rf "$P" "$GIT_SHIM_DIR"
+rm -f "$DRIVER_FUNCS"
+
+echo ""
 
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"
