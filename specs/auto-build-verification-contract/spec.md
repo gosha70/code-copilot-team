@@ -448,6 +448,8 @@ creates no ledger, and no preflight-result file survives.
 
 ## Deferred from #222, explicitly
 
-`visual.skip_is_failure` is NOT delivered by this slice and #222 stays open
-for it. It requires a driver-owned visual result at the landing gate
-(slice C3), which subsumes the toolchain prerequisite.
+`visual.skip_is_failure` is NOT delivered by this slice. It requires a
+driver-owned visual result at the landing gate (slice C3), which subsumes
+the toolchain prerequisite. (Tracking: #222 carried this while C1 was in
+flight; with C1 delivered and #222 closed by the owner, the deferral
+tracks in #239.)

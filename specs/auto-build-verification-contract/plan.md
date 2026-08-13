@@ -90,10 +90,11 @@ result at the landing gate** — which needs a driver-side visual runner
 slice of its own, not a rider here.
 
 **Decision: narrow C1 and defer the criterion explicitly.** #222's
-`skip_is_failure` acceptance criterion is NOT met by this slice, #222 stays
-open for it, and the follow-up slice (C3) owns both (a) the driver-owned
-visual result and (c) the toolchain prerequisite that gates it. Nothing in
-C1 claims otherwise.
+`skip_is_failure` acceptance criterion is NOT met by this slice, and the
+follow-up slice (C3) owns both (a) the driver-owned visual result and (c)
+the toolchain prerequisite that gates it. Nothing in C1 claims otherwise.
+(Tracking: #222 carried the deferral while C1 was in flight; with C1
+delivered and #222 closed by the owner, it tracks in #239.)
 
 ## Preflight-result channel
 
