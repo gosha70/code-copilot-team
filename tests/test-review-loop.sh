@@ -1149,6 +1149,52 @@ assert_eq "a state-generation failure removes its temp file" "0" \
     "$(find "$P/.cct/review" -name 'state.json.tmp.*' | wc -l | tr -d ' ')"
 rm -rf "$P" "$JQ_SHIM_DIR"
 
+# ══════════════════════════════════════════════════════════════
+echo "=== a read-only directory in the project must not decide the verdict ==="
+# ══════════════════════════════════════════════════════════════
+
+# The snapshot copies the whole project — including any read-only entry
+# (a stale worktree registration, a read-only vendor dir). Under set -e
+# an unguarded cleanup rm aborted the runner with exit 1 BEFORE any
+# review round: a PASS became indistinguishable from a FAIL. Cleanup now
+# restores write permission and never decides the verdict.
+P=$(setup_project)
+write_state "$P" 0
+mkdir -p "$P/readonly-vendor" && touch "$P/readonly-vendor/lib.txt"
+git -C "$P" add readonly-vendor && git -C "$P" commit -q -m "vendor dir"
+chmod 555 "$P/readonly-vendor"
+mkdir -p "$P/.git/worktrees/stalewt" && touch "$P/.git/worktrees/stalewt/gitdir"
+chmod 555 "$P/.git/worktrees/stalewt"
+RC=0; CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+chmod -R 755 "$P/.git/worktrees" "$P/readonly-vendor" 2>/dev/null
+assert_exit "a PASS survives read-only directories in the project" 0 "$RC"
+assert_eq "the PASS summary was published" "PASS" \
+    "$(jq -r '.verdict' "$P/.cct/review/loop-summary.json" 2>/dev/null)"
+rm -rf "$P"
+
+# Snapshot SETUP failure is infrastructure (RUNNER_ERROR 4), never a
+# verdict: a failed mktemp exited 1 under raw set -e, indistinguishable
+# from FAIL. Injected via a mktemp PATH shim (TMPDIR is no vector — BSD
+# mktemp ignores it without -t); the shim fails only -d, so the guard
+# site is the first casualty.
+P=$(setup_project)
+write_state "$P" 0
+MKTEMP_SHIM_DIR=$(mktemp -d)
+cat > "$MKTEMP_SHIM_DIR/mktemp" << 'SH'
+#!/usr/bin/env bash
+for a in "$@"; do
+    [[ "$a" == "-d" ]] && exit 1
+done
+exec /usr/bin/mktemp "$@"
+SH
+chmod +x "$MKTEMP_SHIM_DIR/mktemp"
+SNAP_LOG="$MKTEMP_SHIM_DIR/runner-out.log"
+RC=0; PATH="$MKTEMP_SHIM_DIR:$PATH" CCT_PROVIDER_PROFILE="$PASS_PROFILE" \
+    bash "$RUNNER" "$P" > "$SNAP_LOG" 2>&1 || RC=$?
+assert_exit "a failed snapshot setup is RUNNER_ERROR, not a verdict" 4 "$RC"
+assert_eq "the setup failure names the snapshot" "1" \
+    "$(grep -c 'could not create the snapshot directory' "$SNAP_LOG" | tr -d ' ')"
+rm -rf "$P" "$MKTEMP_SHIM_DIR"
 
 # ══════════════════════════════════════════════════════════════
 # Summary

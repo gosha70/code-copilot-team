@@ -750,9 +750,9 @@ code-copilot-team/
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
 │   ├── test-peer-review.sh             58 peer-review runner tests
-│   ├── test-review-loop.sh           112 review loop integration tests
+│   ├── test-review-loop.sh           116 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        603 auto-build driver tests
+│   ├── test-auto-build-loop.sh        620 auto-build driver tests
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
