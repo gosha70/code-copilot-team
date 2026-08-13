@@ -4520,6 +4520,67 @@ assert_exit "T6: validator accepts the complete brownfield baseline" 0 "$RC"
 rm -f "$T6V"
 
 echo ""
+echo "=== #233: crash-parked review_breaker is recoverable ==="
+# ══════════════════════════════════════════════════════════════
+
+# A crash used to park review_breaker with NEITHER artifact: the driver
+# demanded decision.json, /review-decide demanded breaker-tripped.json,
+# and each pointed at the other. The fixture produces a real breaker
+# park, then doctors it into the crash shape (no breaker file, crash
+# detail) — the exact observed state from the issue.
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "233: breaker fixture parks (exit 4)" 4 "$RC"
+RD="$P/.cct/review"
+rm -f "$RD/breaker-tripped.json" "$RD/decision.json"
+ESC233="$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+_t=$(mktemp)
+jq '.detail = "review runner exited 5 (phase 1)"' "$ESC233" > "$_t" && mv "$_t" "$ESC233"
+# 1. The crash shape refuses with BOTH ways out — never the old circular
+#    "run /review-decide" that then said "nothing to decide".
+run_driver "$P" --resume
+assert_exit "233: crash-shaped park refuses with guidance (exit 1)" 1 "$RC"
+assert_contains "233: the refusal names the crash park" "$OUTPUT" \
+    "runner-crash park"
+assert_contains "233: the refusal offers the reconstruction path" "$OUTPUT" \
+    "/review-decide retry"
+# 2. The documented reconstruction (fix 1) clears it: decision.json with
+#    provenance, attempt bumped, loop_start reset — retry semantics.
+jq -n --arg esc "$ESC233" \
+    '{decision:"retry", breaker_type:"runner_crash_legacy",
+      reconstructed_from:$esc, timestamp:"test"}' > "$RD/decision.json"
+_t=$(mktemp)
+jq --argjson now "$(date +%s)" '.attempt += 1 | .loop_start = $now' \
+    "$RD/state.json" > "$_t" && mv "$_t" "$RD/state.json"
+run_driver "$P" --resume
+assert_exit "233: the reconstructed retry resumes to done (exit 0)" 0 "$RC"
+assert_eq "233: the run lands" "done" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# A NON-crash park missing its breaker file (e.g. a dispose site that
+# never wrote one) gets the reconstruction guidance, not the circular
+# refusal and not the crash wording.
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+rm -f "$P/.cct/review/breaker-tripped.json" "$P/.cct/review/decision.json"
+run_driver "$P" --resume
+assert_exit "233: a breaker park missing its file refuses precisely (exit 1)" 1 "$RC"
+assert_contains "233: the refusal explains the reconstruction" "$OUTPUT" \
+    "reconstructs the breaker context"
+rm -rf "$P"
+
+# The catch-all can no longer create the artifact-less shape: unexpected
+# runner exits write breaker-tripped.json BEFORE disposing. Exercised
+# against a real breaker park's file format expectations.
+DRIVER_FUNCS=$(mktemp)
+_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") > "$DRIVER_FUNCS"
+assert_eq "233: the runner catch-all writes the breaker artifact before disposing" "1" \
+    "$(awk '/review runner exited \$rc \(phase \$n\)/{found=1} /runner_unexpected_exit/{art=1} END{print (art==1 ? 1 : 0)}' "$DRIVER")"
+rm -f "$DRIVER_FUNCS"
+
+echo ""
 echo "=== T7: worktree prune (#222, FR-8) ==="
 # ══════════════════════════════════════════════════════════════
 

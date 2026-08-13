@@ -2508,6 +2508,13 @@ run_review_loop() {
                         '{breaker_file: $b, findings_files: $findings, fix_sessions: ($fixes | tonumber)}')"
                 ;;
             *)
+                # #233: NEVER park a review_breaker without its artifact.
+                # This arm catches exits the runner could not remap (126/127
+                # exec failures fire before its trap installs) — a park with
+                # no breaker-tripped.json used to deadlock: the driver
+                # demanded decision.json, /review-decide demanded this file.
+                jq -n --arg r "$round" --argjson rc "$rc" --arg t "$(now_iso)"                     '{breaker_type: "runner_unexpected_exit", exit_code: $rc,
+                      rounds_completed: ($r | tonumber), tripped_at: $t}'                     > "$PROJECT_DIR/.cct/review/breaker-tripped.json" 2>/dev/null || true
                 dispose "review_breaker" "review runner exited $rc (phase $n)" "null"
                 ;;
         esac
@@ -2927,6 +2934,20 @@ resume_parked() {
     case "$reason" in
         review_breaker)
             local dec="$PROJECT_DIR/.cct/review/decision.json"
+            local btf="$PROJECT_DIR/.cct/review/breaker-tripped.json"
+            # #233: a crash (or any dispose that never reached a breaker
+            # writer) parks review_breaker with NEITHER artifact. The old
+            # refusal sent the human to /review-decide, which then said
+            # "nothing to decide" — a deadlock. Name the actual state and
+            # the actual ways out.
+            if [[ ! -f "$dec" && ! -f "$btf" ]]; then
+                local _rb_detail
+                _rb_detail=$(jq -r '.detail // ""' "$esc_file")
+                if [[ "$_rb_detail" =~ review\ runner\ exited\ [0-9]+ ]]; then
+                    refuse_resume "this review_breaker is a runner-crash park ('$_rb_detail') with no breaker artifact — review state may be inconsistent. Start a fresh attended run (safest), or run /review-decide retry: it reconstructs the breaker context from this escalation, resets the review loop clock, and bumps the attempt"
+                fi
+                refuse_resume "review breaker pending but .cct/review/breaker-tripped.json is missing — run /review-decide approve|reject|retry; it reconstructs the breaker context from the unresolved escalation and records the provenance"
+            fi
             [[ -f "$dec" ]] || refuse_resume "review breaker pending — run /review-decide approve|reject|retry in a copilot session first"
             local decision
             decision=$(jq -r '.decision // empty' "$dec")
