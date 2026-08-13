@@ -347,7 +347,106 @@ export function midReviewWarning(projectRoot: string): string | null {
 
 export type ReviewDecision = "approve" | "reject" | "retry";
 
-/** Record a decision; on approve, write the `bypass:true` loop-summary. */
+/**
+ * #233: the deterministic breaker-context resolution shared with
+ * scripts/review-decide.sh. With breaker-tripped.json missing, the context
+ * is RECONSTRUCTED — bound to THIS feature via state.json's feature_id,
+ * never a scan of other features' ledgers — and the provenance is returned
+ * so the driver can validate it against the escalation it resolves.
+ * Throws with a precise, human-relayable message on every refusal.
+ */
+function resolveBreakerContext(projectRoot: string): {
+  breakerType: string;
+  reconstructedFrom?: string;
+} {
+  const btf = path.join(reviewDir(projectRoot), "breaker-tripped.json");
+  const breaker = readJson(btf);
+  if (breaker) {
+    // The type must be a real non-empty string. A parseable-but-typeless
+    // artifact is treated as UNAVAILABLE and falls through to the
+    // feature-bound reconstruction (same as malformed JSON, which readJson
+    // already returns as null) — a breaker_type of "unknown" without
+    // reconstructed_from provenance must never exist, or the driver's
+    // provenance gate has nothing to validate.
+    const btRaw = breaker.breaker_type ?? breaker.breaker;
+    if (typeof btRaw === "string" && btRaw.length > 0) {
+      return { breakerType: btRaw };
+    }
+  }
+  const st = loadReviewState(projectRoot);
+  const fid = st?.feature_id;
+  if (typeof fid !== "string" || fid.length === 0) {
+    throw new Error(
+      "no .cct/review/breaker-tripped.json and state.json carries no feature_id — " +
+        "cannot bind a reconstruction to a feature. Nothing to decide.",
+    );
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(fid)) {
+    throw new Error(
+      `state.json feature_id '${fid}' is not a safe path segment — refusing.`,
+    );
+  }
+  const escDir = path.join(
+    projectRoot,
+    ".cct",
+    "auto-build",
+    fid,
+    "escalations",
+  );
+  let newest: string | undefined;
+  let newestDetail = "";
+  let i = 1;
+  for (;;) {
+    const esc = path.join(escDir, `esc-${i}.json`);
+    if (!fs.existsSync(esc)) break;
+    const rec = readJson(esc);
+    if (!rec || typeof rec.resolved !== "boolean") {
+      throw new Error(
+        `escalation record ${esc} is unreadable — refusing to reconstruct from corrupt state.`,
+      );
+    }
+    if (rec.reason === "review_breaker" && rec.resolved === false) {
+      newest = esc;
+      newestDetail = typeof rec.detail === "string" ? rec.detail : "";
+    }
+    i += 1;
+  }
+  // A gap (esc-2 missing while esc-3 exists) hides everything above it
+  // from the sequential scan — an unresolved later record must never read
+  // as "nothing to decide". Same fail-closed rule as the driver.
+  const top = i - 1;
+  if (fs.existsSync(escDir)) {
+    for (const f of fs.readdirSync(escDir)) {
+      const m = /^esc-(\d+)\.json$/.exec(f);
+      if (m && Number(m[1]) > top) {
+        throw new Error(
+          `escalation records are gapped (esc-${top + 1} missing while ${f} exists) — ` +
+            "the sequence cannot be trusted; refusing to reconstruct.",
+        );
+      }
+    }
+  }
+  if (!newest) {
+    throw new Error(
+      "No active circuit breaker: .cct/review/breaker-tripped.json does not exist and " +
+        `no unresolved review_breaker escalation was found under .cct/auto-build/${fid}/escalations/. ` +
+        "Nothing to decide.",
+    );
+  }
+  const breakerType = /review runner exited \d+/.test(newestDetail)
+    ? "runner_crash_legacy"
+    : "reconstructed";
+  return { breakerType, reconstructedFrom: newest };
+}
+
+/**
+ * Record a decision; on approve, write the `bypass:true` loop-summary.
+ * Same deterministic contract as scripts/review-decide.sh (#233): the
+ * breaker context is resolved (or feature-bound reconstructed, with
+ * provenance) BEFORE anything is written, retry state is made durable
+ * BEFORE the decision is published, and every failure throws leaving NO
+ * consumable decision.
+ */
 export function writeDecision(
   projectRoot: string,
   decision: ReviewDecision,
@@ -356,10 +455,43 @@ export function writeDecision(
 ): void {
   const dir = reviewDir(projectRoot);
   fs.mkdirSync(dir, { recursive: true });
+  const ctx = resolveBreakerContext(projectRoot);
+  if (decision === "retry") {
+    // #233 second-order trap: retry semantics (attempt bump + loop_start
+    // reset) are mandatory and must be DURABLE before the decision marker
+    // exists — the driver consumes the decision expecting them applied.
+    const st = loadReviewState(projectRoot);
+    if (!st) {
+      throw new Error(
+        "retry needs .cct/review/state.json (attempt bump + loop_start reset) " +
+          "and it is missing or unreadable — no decision was recorded.",
+      );
+    }
+    const attempt = typeof st.attempt === "number" ? st.attempt : 1;
+    st.attempt = attempt + 1;
+    st.loop_start = Math.floor(Date.now() / 1000);
+    fs.writeFileSync(
+      path.join(dir, "state.json"),
+      JSON.stringify(st, null, 2) + "\n",
+    );
+  }
   fs.writeFileSync(
     path.join(dir, "decision.json"),
-    JSON.stringify({ decision, detail, at: now }, null, 2) + "\n",
+    JSON.stringify(
+      {
+        decision,
+        detail,
+        at: now,
+        breaker_type: ctx.breakerType,
+        ...(ctx.reconstructedFrom
+          ? { reconstructed_from: ctx.reconstructedFrom }
+          : {}),
+      },
+      null,
+      2,
+    ) + "\n",
   );
+  fs.rmSync(path.join(dir, "breaker-tripped.json"), { force: true });
   if (decision !== "approve") return;
   const st = loadReviewState(projectRoot) ?? {};
   const summary = {

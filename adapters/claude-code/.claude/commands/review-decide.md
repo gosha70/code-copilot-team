@@ -10,35 +10,52 @@ Resolve a circuit breaker in the review loop. Accepts exactly one argument: appr
 
 ## Prerequisites
 
-- `.cct/review/breaker-tripped.json` must exist (a circuit breaker has fired)
+- A live breaker: either `.cct/review/breaker-tripped.json` exists, **or**
+  an unresolved `review_breaker` escalation exists for THIS feature
+  (bound via `.cct/review/state.json`'s `feature_id`) — a crash can park
+  the run without ever writing the breaker file (#233)
 - This command is run by the **human**, not the agent
 
 ## Steps
 
-### 1. Validate Breaker State
+### 1–3. Validate, Decide, Record — run the deterministic core
 
-Check that `.cct/review/breaker-tripped.json` exists:
-- If missing, inform the user: "No active circuit breaker. Nothing to decide."
-- If present, read and display the breaker context (type, rounds completed, unresolved findings).
+Resolve the helper — this command is installed globally and runs in
+arbitrary target projects, so the repo-relative path is only a fallback
+for sessions inside a CCT checkout:
 
-### 2. Parse Decision
-
-The argument must be exactly one of: `approve`, `reject`, or `retry`.
-- If missing or invalid, show usage and stop.
-
-### 3. Write Decision
-
-Write `.cct/review/decision.json`:
-
-```json
-{
-  "decision": "<approve|reject|retry>",
-  "timestamp": "<ISO-8601>",
-  "breaker_type": "<from breaker-tripped.json>"
-}
+```
+HELPER="$HOME/.claude/scripts/review-decide.sh"            # installed by setup.sh
+[ -f "$HELPER" ] || HELPER="${CCT_REPO_DIR:-.}/scripts/review-decide.sh"
+bash "$HELPER" <project-dir> <approve|reject|retry>
 ```
 
-Remove `.cct/review/breaker-tripped.json` after writing the decision.
+If neither location has it, say so and point at
+`adapters/claude-code/setup.sh --sync` rather than improvising the state
+transitions by hand.
+
+The script owns every state transition that must not depend on
+prompt-following (#233):
+
+- **Breaker file present** → `breaker_type` is read from it.
+- **Breaker file missing** → the context is RECONSTRUCTED, bound to THIS
+  feature via `.cct/review/state.json`'s `feature_id` (never a scan of
+  other features' ledgers): the newest unresolved `review_breaker`
+  escalation under `.cct/auto-build/<feature_id>/escalations/` supplies it
+  (`breaker_type: runner_crash_legacy` for `review runner exited <n>`
+  details, `reconstructed` otherwise), and `reconstructed_from` provenance
+  is recorded in `decision.json` — the driver validates it against the
+  escalation it resolves on `--resume`. A corrupt record, a missing
+  `feature_id`, or no unresolved `review_breaker` escalation refuses with
+  the precise reason; "Nothing to decide" is only said when no unresolved
+  `review_breaker` escalation exists for this feature.
+- **retry** → the script bumps `attempt` and resets `loop_start`
+  (mandatory in reconstruction mode too — a stale `loop_start` trips the
+  review loop clock before the next reviewer runs).
+- `breaker-tripped.json` is removed after the decision is recorded.
+
+Display the script's output to the user. If it refuses, relay its message
+and stop.
 
 ### 4. Execute Decision Path
 
@@ -54,8 +71,10 @@ Remove `.cct/review/breaker-tripped.json` after writing the decision.
 - Do not proceed to `/phase-complete`.
 
 **retry**:
-- Read `state.json` and increment the `attempt` counter.
-- Reset breaker state: set `loop_start` to current time (resets wall-clock timer).
+- The attempt bump and `loop_start` reset were already applied by
+  `scripts/review-decide.sh` in step 1–3 — do NOT apply them again.
 - Round numbering continues monotonically — if the breaker fired after round 5, the next round is 6, not 1.
 - Inform the user: "Breaker reset. Run `/review-submit` to continue the review loop."
 - The agent should then run `/review-submit` to start the next round.
+- For an auto-build park: rerun `scripts/auto-build-loop.sh <feature-id> --resume`
+  instead — the driver consumes the decision and re-enters the review loop itself.

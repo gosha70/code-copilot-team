@@ -1414,7 +1414,18 @@ export default async function (pi: any): Promise<void> {
         return emit(ctx, "usage: /cct:review-decide <approve|reject|retry> [detail]");
       }
       const detail = parts.slice(1).join(" ") || "(no detail)";
-      writeDecision(state.cwd, decision, detail, new Date().toISOString());
+      // #233: writeDecision throws on every refusal (no breaker anywhere,
+      // corrupt/gapped escalations, retry without state) and leaves no
+      // consumable decision — relay the precise reason, never a false
+      // success over a decision that was not recorded.
+      try {
+        writeDecision(state.cwd, decision, detail, new Date().toISOString());
+      } catch (e) {
+        return emit(
+          ctx,
+          `review-decide refused: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
       audit({
         mode: resolveAuditMode(state.interactive),
         actor: "cct:review-decide",

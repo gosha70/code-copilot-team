@@ -115,19 +115,96 @@ test("midReviewWarning fires on an unresolved loop, silent when PASS/none", () =
 // ── decision + bypass summary ──────────────────────────────────────────────
 
 test("writeDecision: approve writes bypass summary; reject/retry do not", () => {
+  // #233: writeDecision now enforces a live breaker (file or reconstructable
+  // unresolved review_breaker escalation) — the fixtures carry the file.
   const root = tmpProject();
   initReviewState(root, { ...SUBMIT });
+  fs.writeFileSync(reviewFile(root, "breaker-tripped.json"), '{"breaker":"max_rounds"}\n');
   writeDecision(root, "approve", "risk accepted", "2026-07-25T00:00:00Z");
   const s = loadLoopSummary(root);
   assert.equal(s.bypass, true);
   assert.equal(s.feature_id, "042-x");
   assert.equal(reviewPasses(root), true);
+  // The decision records the breaker type it resolved, and consumes the file.
+  const dec = JSON.parse(fs.readFileSync(reviewFile(root, "decision.json"), "utf8"));
+  assert.equal(dec.breaker_type, "max_rounds");
+  assert.equal(fs.existsSync(reviewFile(root, "breaker-tripped.json")), false);
 
   const root2 = tmpProject();
   initReviewState(root2, { ...SUBMIT });
+  fs.writeFileSync(reviewFile(root2, "breaker-tripped.json"), '{"breaker":"max_rounds"}\n');
   writeDecision(root2, "reject", "no", "2026-07-25T00:00:00Z");
   assert.equal(loadLoopSummary(root2), null); // no bypass summary
   assert.ok(fs.existsSync(reviewFile(root2, "decision.json")));
+});
+
+test("writeDecision #233: a typeless breaker artifact reconstructs, never 'unknown'", () => {
+  // Parseable {} (and malformed JSON, via readJson->null) is UNAVAILABLE:
+  // the decision must come from feature-bound reconstruction with
+  // provenance, or not at all — no provenance-less "unknown".
+  const root = tmpProject();
+  initReviewState(root, { ...SUBMIT });
+  fs.writeFileSync(reviewFile(root, "breaker-tripped.json"), "{}\n");
+  const escDir = path.join(root, ".cct", "auto-build", "042-x", "escalations");
+  fs.mkdirSync(escDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(escDir, "esc-1.json"),
+    JSON.stringify({ id: "esc-1", reason: "review_breaker", detail: "review runner exited 5 (phase 1)", phase: 1, resolved: false }) + "\n",
+  );
+  writeDecision(root, "retry", "x", "2026-07-25T00:00:00Z");
+  const dec = JSON.parse(fs.readFileSync(reviewFile(root, "decision.json"), "utf8"));
+  assert.equal(dec.breaker_type, "runner_crash_legacy");
+  assert.match(dec.reconstructed_from, /042-x/);
+
+  // Malformed JSON with nothing to reconstruct from -> refusal, no decision.
+  const root2 = tmpProject();
+  initReviewState(root2, { ...SUBMIT });
+  fs.writeFileSync(reviewFile(root2, "breaker-tripped.json"), "not json\n");
+  assert.throws(
+    () => writeDecision(root2, "retry", "x", "2026-07-25T00:00:00Z"),
+    /Nothing to decide/,
+  );
+  assert.equal(fs.existsSync(reviewFile(root2, "decision.json")), false);
+});
+
+test("writeDecision #233: refusals leave nothing consumable; retry is durable-first", () => {
+  // No breaker anywhere -> precise refusal, no decision file.
+  const root = tmpProject();
+  initReviewState(root, { ...SUBMIT });
+  assert.throws(
+    () => writeDecision(root, "retry", "x", "2026-07-25T00:00:00Z"),
+    /Nothing to decide/,
+  );
+  assert.equal(fs.existsSync(reviewFile(root, "decision.json")), false);
+
+  // Live breaker but no state.json -> retry refuses, breaker unconsumed.
+  const root2 = tmpProject();
+  fs.mkdirSync(path.join(root2, ".cct", "review"), { recursive: true });
+  fs.writeFileSync(reviewFile(root2, "breaker-tripped.json"), '{"breaker":"timeout"}\n');
+  assert.throws(
+    () => writeDecision(root2, "retry", "x", "2026-07-25T00:00:00Z"),
+    /no decision was recorded/,
+  );
+  assert.equal(fs.existsSync(reviewFile(root2, "decision.json")), false);
+  assert.equal(fs.existsSync(reviewFile(root2, "breaker-tripped.json")), true);
+
+  // Crash-shaped escalation, no breaker file -> feature-bound reconstruction
+  // with provenance; retry semantics applied before the decision publishes.
+  const root3 = tmpProject();
+  initReviewState(root3, { ...SUBMIT });
+  const escDir = path.join(root3, ".cct", "auto-build", "042-x", "escalations");
+  fs.mkdirSync(escDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(escDir, "esc-1.json"),
+    JSON.stringify({ id: "esc-1", reason: "review_breaker", detail: "review runner exited 5 (phase 1)", phase: 1, resolved: false }) + "\n",
+  );
+  writeDecision(root3, "retry", "x", "2026-07-25T00:00:00Z");
+  const dec3 = JSON.parse(fs.readFileSync(reviewFile(root3, "decision.json"), "utf8"));
+  assert.equal(dec3.breaker_type, "runner_crash_legacy");
+  assert.match(dec3.reconstructed_from, /042-x/);
+  const st3 = JSON.parse(fs.readFileSync(reviewFile(root3, "state.json"), "utf8"));
+  assert.equal(st3.attempt, 2);
+  assert.ok(Math.abs(Date.now() / 1000 - st3.loop_start) < 60);
 });
 
 // ── runner invocation through a stub (provider-agnostic) ───────────────────

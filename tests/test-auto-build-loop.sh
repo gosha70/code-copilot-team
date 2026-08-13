@@ -4520,6 +4520,318 @@ assert_exit "T6: validator accepts the complete brownfield baseline" 0 "$RC"
 rm -f "$T6V"
 
 echo ""
+echo "=== #233: crash-parked review_breaker is recoverable ==="
+# ══════════════════════════════════════════════════════════════
+
+# A crash used to park review_breaker with NEITHER artifact: the driver
+# demanded decision.json, /review-decide demanded breaker-tripped.json,
+# and each pointed at the other. The fixture produces a real breaker
+# park, then doctors it into the crash shape (no breaker file, crash
+# detail) — the exact observed state from the issue.
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "233: breaker fixture parks (exit 4)" 4 "$RC"
+RD="$P/.cct/review"
+rm -f "$RD/breaker-tripped.json" "$RD/decision.json"
+ESC233="$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+_t=$(mktemp)
+jq '.detail = "review runner exited 5 (phase 1)"' "$ESC233" > "$_t" && mv "$_t" "$ESC233"
+# 1. The crash shape refuses with BOTH ways out — never the old circular
+#    "run /review-decide" that then said "nothing to decide".
+run_driver "$P" --resume
+assert_exit "233: crash-shaped park refuses with guidance (exit 1)" 1 "$RC"
+assert_contains "233: the refusal names the crash park" "$OUTPUT" \
+    "runner-crash park"
+assert_contains "233: the refusal offers the reconstruction path" "$OUTPUT" \
+    "/review-decide retry"
+# 2. The REAL deterministic core (scripts/review-decide.sh) clears it —
+#    reconstruction bound to this feature, provenance recorded, retry
+#    semantics applied. Not a hand-written simulation of the command.
+ATT_BEFORE=$(jq -r '.attempt // 1' "$RD/state.json")
+RC=0; bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>/dev/null || RC=$?
+assert_exit "233: review-decide.sh reconstructs and records the retry" 0 "$RC"
+assert_eq "233: the decision carries crash provenance" "runner_crash_legacy" \
+    "$(jq -r '.breaker_type' "$RD/decision.json" 2>/dev/null)"
+assert_eq "233: the decision is bound to this feature's escalation" "$ESC233" \
+    "$(jq -r '.reconstructed_from' "$RD/decision.json" 2>/dev/null)"
+assert_eq "233: retry semantics bumped the attempt" "$((ATT_BEFORE + 1))" \
+    "$(jq -r '.attempt' "$RD/state.json" 2>/dev/null)"
+NOW233=$(date +%s)
+LS233=$(jq -r '.loop_start' "$RD/state.json" 2>/dev/null)
+assert_eq "233: retry semantics reset loop_start" "fresh" \
+    "$([[ -n "$LS233" && $((NOW233 - LS233)) -lt 60 ]] && echo fresh || echo stale)"
+run_driver "$P" --resume
+assert_exit "233: the reconstructed retry resumes to done (exit 0)" 0 "$RC"
+assert_eq "233: the run lands" "done" \
+    "$(jq -r '.status' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P"
+
+# The reconstruction is FEATURE-BOUND: with a second feature's newer
+# unresolved breaker on disk, the script must still bind to the feature
+# named by .cct/review/state.json — and the driver must reject a
+# decision whose provenance points at the wrong feature.
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+RD="$P/.cct/review"
+rm -f "$RD/breaker-tripped.json" "$RD/decision.json"
+ESC233="$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+_t=$(mktemp)
+jq '.detail = "review runner exited 5 (phase 1)"' "$ESC233" > "$_t" && mv "$_t" "$ESC233"
+mkdir -p "$P/.cct/auto-build/other-feat/escalations"
+jq -n '{id:"esc-1", reason:"review_breaker", detail:"other feature breaker",
+        phase:1, resolved:false, notified:true}' \
+    > "$P/.cct/auto-build/other-feat/escalations/esc-1.json"
+bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>/dev/null
+assert_eq "233: reconstruction binds to state.json's feature, not the newest ledger" "match" \
+    "$([[ "$(jq -r '.reconstructed_from' "$RD/decision.json")" == *"/demo-feat/"* ]] && echo match || echo cross)"
+# Now doctor the provenance to the OTHER feature: the driver must refuse.
+_t=$(mktemp)
+jq --arg r "$P/.cct/auto-build/other-feat/escalations/esc-1.json" \
+    '.reconstructed_from = $r' "$RD/decision.json" > "$_t" && mv "$_t" "$RD/decision.json"
+run_driver "$P" --resume
+assert_exit "233: cross-feature provenance refuses the resume (exit 1)" 1 "$RC"
+assert_contains "233: the refusal names the provenance mismatch" "$OUTPUT" \
+    "mismatched provenance"
+rm -rf "$P"
+
+# A NON-crash park missing its breaker file (e.g. a dispose site that
+# never wrote one) gets the reconstruction guidance, not the circular
+# refusal and not the crash wording.
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+rm -f "$P/.cct/review/breaker-tripped.json" "$P/.cct/review/decision.json"
+run_driver "$P" --resume
+assert_exit "233: a breaker park missing its file refuses precisely (exit 1)" 1 "$RC"
+assert_contains "233: the refusal explains the reconstruction" "$OUTPUT" \
+    "reconstructs the breaker context"
+rm -rf "$P"
+
+# "Nothing to decide" is precise, and only said when true.
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+RC=0; NTD_OUT=$(bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>&1) || RC=$?
+assert_exit "233: no breaker anywhere refuses (exit 1)" 1 "$RC"
+assert_contains "233: ...and says precisely why" "$NTD_OUT" "Nothing to decide"
+rm -rf "$P"
+
+# An exit the runner could not remap (126/127 fire before its trap
+# installs) means the runner NEVER EXECUTED — that is runner_error
+# infrastructure, never a review verdict a human could approve. Injected
+# with a bash PATH shim that kills exactly the runner invocation.
+P=$(setup_project); single_phase "$P"
+BASH_SHIM_DIR=$(mktemp -d)
+cat > "$BASH_SHIM_DIR/bash" << 'SH'
+#!/bin/sh
+for a in "$@"; do
+    case "$a" in *review-round-runner.sh) exit 127 ;; esac
+done
+exec /bin/bash "$@"
+SH
+chmod +x "$BASH_SHIM_DIR/bash"
+RC=0
+OUTPUT=$(cd "$P" && \
+    PATH="$BASH_SHIM_DIR:$PATH" \
+    CCT_PROJECT_DIR="$P" \
+    CCT_CLAUDE_BIN="$MOCK_BIN/claude" \
+    MOCK_CLAUDE_COUNTER="$(mktemp)" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" \
+    /bin/bash "$DRIVER" demo-feat 2>&1) || RC=$?
+assert_exit "233: a never-executed runner parks (exit 4)" 4 "$RC"
+assert_eq "233: the park is runner_error, not a decidable review breaker" "runner_error" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/escalations/esc-1.json" 2>/dev/null)"
+assert_contains "233: the park names the infrastructure failure" "$OUTPUT" \
+    "without executing"
+run_driver "$P" --resume
+assert_exit "233: the runner_error park refuses resume with guidance (exit 1)" 1 "$RC"
+assert_contains "233: the guidance says start fresh" "$OUTPUT" "start a fresh attended run"
+rm -rf "$P" "$BASH_SHIM_DIR"
+
+# ── A retry that cannot make its state durable records NO decision ──
+# decision.json is the marker the driver consumes; publish-last ordering
+# means a failed state update leaves nothing consumable. Injected with a
+# corrupt state.json (jq cannot rewrite it).
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review"
+echo "not json" > "$P/.cct/review/state.json"
+jq -n '{breaker: "timeout"}' > "$P/.cct/review/breaker-tripped.json"
+RC=0; bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>/dev/null || RC=$?
+assert_exit "233: retry over corrupt state refuses (exit 1)" 1 "$RC"
+assert_eq "233: the failed retry leaves no consumable decision" "absent" \
+    "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
+rm -rf "$P"
+
+# The reviewer's exact repro: the SECOND mktemp (retry-state staging)
+# fails. Publish-last ordering must leave no decision; the old ordering
+# left a consumable retry decision over stale state.
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+jq -n '{breaker: "timeout"}' > "$P/.cct/review/breaker-tripped.json"
+MKT_SHIM=$(mktemp -d)
+cat > "$MKT_SHIM/mktemp" << 'SH'
+#!/usr/bin/env bash
+for a in "$@"; do
+    case "$a" in *state.*) exit 1 ;; esac
+done
+exec /usr/bin/mktemp "$@"
+SH
+chmod +x "$MKT_SHIM/mktemp"
+RC=0; PATH="$MKT_SHIM:$PATH" bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>/dev/null || RC=$?
+assert_exit "233: a failed state staging refuses (exit 1)" 1 "$RC"
+assert_eq "233: the mktemp-failure path leaves no consumable decision" "absent" \
+    "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
+rm -rf "$P" "$MKT_SHIM"
+
+# ── A malformed breaker artifact is UNAVAILABLE, never "unknown" ──
+# Present-but-corrupt breaker-tripped.json used to become
+# breaker_type=unknown with no provenance — outside the driver's
+# provenance gate. It now falls into feature-bound reconstruction; the
+# outcome is always provenance-bound or a refusal.
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review" "$P/.cct/auto-build/demo-feat/escalations"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+echo "not json" > "$P/.cct/review/breaker-tripped.json"
+jq -n '{id:"esc-1", reason:"review_breaker", detail:"review runner exited 5 (phase 1)",
+        phase:1, resolved:false, notified:true}' \
+    > "$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+RC=0; bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>/dev/null || RC=$?
+assert_exit "233: a malformed breaker artifact reconstructs instead (exit 0)" 0 "$RC"
+assert_eq "233: the reconstructed decision is provenance-bound, never unknown" "runner_crash_legacy" \
+    "$(jq -r '.breaker_type' "$P/.cct/review/decision.json" 2>/dev/null)"
+assert_eq "233: the malformed-breaker decision carries reconstructed_from" "present" \
+    "$([[ -n "$(jq -r '.reconstructed_from // empty' "$P/.cct/review/decision.json" 2>/dev/null)" ]] && echo present || echo absent)"
+rm -rf "$P"
+# ...and with no escalation to reconstruct from, it REFUSES — never a
+# consumable {breaker_type:"unknown"} decision.
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+echo "not json" > "$P/.cct/review/breaker-tripped.json"
+RC=0; bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>/dev/null || RC=$?
+assert_exit "233: malformed breaker with nothing to reconstruct refuses (exit 1)" 1 "$RC"
+assert_eq "233: no unknown decision is recorded" "absent" \
+    "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
+rm -rf "$P"
+
+# ── Syntactically corrupt escalation JSON refuses reconstruction ──
+# jq exits nonzero with NO stdout on malformed JSON — an uncaptured case
+# word would go empty and the scan would walk past the corruption.
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review" "$P/.cct/auto-build/demo-feat/escalations"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+echo "not json" > "$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+jq -n '{id:"esc-2", reason:"review_breaker", detail:"review runner exited 5 (phase 1)",
+        phase:1, resolved:false, notified:true}' \
+    > "$P/.cct/auto-build/demo-feat/escalations/esc-2.json"
+RC=0; CORR_OUT=$(bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>&1) || RC=$?
+assert_exit "233: corrupt escalation JSON refuses reconstruction (exit 1)" 1 "$RC"
+assert_contains "233: the refusal names the corruption" "$CORR_OUT" "unreadable"
+assert_eq "233: corruption leaves no consumable decision" "absent" \
+    "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
+rm -rf "$P"
+
+# ── A gapped escalation ledger never reads as "nothing to decide" ──
+P=$(setup_project); single_phase "$P"
+mkdir -p "$P/.cct/review" "$P/.cct/auto-build/demo-feat/escalations"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+jq -n '{id:"esc-3", reason:"review_breaker", detail:"review runner exited 5 (phase 1)",
+        phase:1, resolved:false, notified:true}' \
+    > "$P/.cct/auto-build/demo-feat/escalations/esc-3.json"
+RC=0; GAP_OUT=$(bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>&1) || RC=$?
+assert_exit "233: a gapped ledger refuses reconstruction (exit 1)" 1 "$RC"
+assert_contains "233: the refusal names the gap, not nothing-to-decide" "$GAP_OUT" "gapped"
+# ── feature_id is validated before becoming a path segment ──
+jq -n '{feature_id:"../evil", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+RC=0; FID_OUT=$(bash "$SCRIPT_DIR/../scripts/review-decide.sh" "$P" retry 2>&1) || RC=$?
+assert_exit "233: an unsafe feature_id refuses (exit 1)" 1 "$RC"
+assert_contains "233: the refusal names the unsafe segment" "$FID_OUT" "safe path segment"
+rm -rf "$P"
+
+# ── The INSTALLED helper works from an arbitrary cwd (deployment path) ──
+# /review-decide is installed globally and runs in target projects where
+# no CCT checkout exists; setup.sh installs the helper to
+# ~/.claude/scripts and the command resolves that location first.
+assert_eq "233: the command resolves the installed helper first" "1" \
+    "$(grep -c 'HOME/.claude/scripts/review-decide.sh' "$SCRIPT_DIR/../adapters/claude-code/.claude/commands/review-decide.md" | tr -d ' ')"
+# The DOCUMENTED remediation is setup.sh --sync — so the test runs exactly
+# that, against an isolated HOME, and then uses the copy it installed.
+# A source-grep here would pass with the sync branch broken (it did).
+FAKE_HOME=$(mktemp -d)
+RC=0
+HOME="$FAKE_HOME" bash "$SCRIPT_DIR/../adapters/claude-code/setup.sh" --sync >/dev/null 2>&1 || RC=$?
+assert_exit "233: setup.sh --sync completes against an isolated HOME" 0 "$RC"
+assert_eq "233: --sync installs the executable helper" "installed" \
+    "$([[ -x "$FAKE_HOME/.claude/scripts/review-decide.sh" ]] && echo installed || echo missing)"
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+rm -f "$P/.cct/review/breaker-tripped.json" "$P/.cct/review/decision.json"
+_t=$(mktemp)
+jq '.detail = "review runner exited 5 (phase 1)"' \
+    "$P/.cct/auto-build/demo-feat/escalations/esc-1.json" > "$_t" \
+    && mv "$_t" "$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+FOREIGN_CWD=$(mktemp -d)
+RC=0
+( cd "$FOREIGN_CWD" && bash "$FAKE_HOME/.claude/scripts/review-decide.sh" "$P" retry ) >/dev/null 2>&1 || RC=$?
+assert_exit "233: the --sync-installed helper works from a foreign cwd" 0 "$RC"
+assert_eq "233: the installed-path decision carries provenance" "runner_crash_legacy" \
+    "$(jq -r '.breaker_type' "$P/.cct/review/decision.json" 2>/dev/null)"
+rm -rf "$P" "$FAKE_HOME" "$FOREIGN_CWD"
+
+# ── Pi runtime parity: the SAME contract, exercised for real ──
+# node strips the types and runs writeDecision itself: feature-bound
+# reconstruction with provenance, retry state durable before the decision
+# publishes, and refusals that leave nothing consumable.
+PI_TEST=$(mktemp -d)/t.ts
+mkdir -p "$(dirname "$PI_TEST")"
+cat > "$PI_TEST" << EOF
+import { writeDecision } from "$(cd "$SCRIPT_DIR/.." && pwd)/adapters/pi/runtime/workflow/review.ts";
+const root = process.argv[2];
+try {
+  writeDecision(root, "retry", "test", new Date().toISOString());
+  console.log("OK");
+} catch (e) {
+  console.log("THREW: " + (e as Error).message);
+}
+EOF
+# pi1: crash-shaped park -> reconstruction, provenance, retry semantics
+P=$(setup_project)
+mkdir -p "$P/.cct/review" "$P/.cct/auto-build/demo-feat/escalations"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1, loop_start:1000000}' > "$P/.cct/review/state.json"
+jq -n '{id:"esc-1", reason:"review_breaker", detail:"review runner exited 5 (phase 1)",
+        phase:1, resolved:false, notified:true}' \
+    > "$P/.cct/auto-build/demo-feat/escalations/esc-1.json"
+PI_OUT=$(node --experimental-strip-types "$PI_TEST" "$P" 2>/dev/null)
+assert_eq "233: pi retry succeeds on the crash shape" "OK" "$PI_OUT"
+assert_eq "233: pi decision carries crash provenance" "runner_crash_legacy" \
+    "$(jq -r '.breaker_type' "$P/.cct/review/decision.json" 2>/dev/null)"
+assert_eq "233: pi reconstruction is feature-bound" "match" \
+    "$([[ "$(jq -r '.reconstructed_from' "$P/.cct/review/decision.json")" == *"/demo-feat/"* ]] && echo match || echo cross)"
+assert_eq "233: pi retry bumped the attempt before publishing" "2" \
+    "$(jq -r '.attempt' "$P/.cct/review/state.json" 2>/dev/null)"
+assert_eq "233: pi retry reset loop_start" "fresh" \
+    "$([[ $(( $(date +%s) - $(jq -r '.loop_start' "$P/.cct/review/state.json") )) -lt 60 ]] && echo fresh || echo stale)"
+rm -rf "$P"
+# pi2: retry with a live breaker but NO state -> refuses, nothing consumable
+P=$(setup_project)
+mkdir -p "$P/.cct/review"
+jq -n '{breaker: "timeout"}' > "$P/.cct/review/breaker-tripped.json"
+PI_OUT=$(node --experimental-strip-types "$PI_TEST" "$P" 2>/dev/null)
+assert_contains "233: pi retry without state refuses" "$PI_OUT" "no decision was recorded"
+assert_eq "233: pi failed retry leaves no consumable decision" "absent" \
+    "$([[ -f "$P/.cct/review/decision.json" ]] && echo present || echo absent)"
+assert_eq "233: pi failed retry does not consume the breaker" "present" \
+    "$([[ -f "$P/.cct/review/breaker-tripped.json" ]] && echo present || echo absent)"
+rm -rf "$P"
+# pi3: no breaker anywhere -> precise nothing-to-decide
+P=$(setup_project)
+mkdir -p "$P/.cct/review"
+jq -n '{feature_id:"demo-feat", current_round:1, attempt:1}' > "$P/.cct/review/state.json"
+PI_OUT=$(node --experimental-strip-types "$PI_TEST" "$P" 2>/dev/null)
+assert_contains "233: pi says precisely nothing-to-decide" "$PI_OUT" "Nothing to decide"
+rm -rf "$P" "$(dirname "$PI_TEST")"
+
+echo ""
 echo "=== T7: worktree prune (#222, FR-8) ==="
 # ══════════════════════════════════════════════════════════════
 
