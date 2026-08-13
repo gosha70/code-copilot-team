@@ -147,6 +147,7 @@ resolution, no script-side floor literals) and FR-5b (`preset_id` /
 ## T8 — Docs + gates
 - README, CHANGELOG, schema description, count pins.
 - Record in #222 that `skip_is_failure` is deferred to C3 and the issue
-  stays open for it.
+  stays open for it. (Post-delivery amendment: with C1 complete, #222 was
+  closed by the owner and the deferral now tracks in #239.)
 - validate-spec, origin alignment, full sweep; every SC regression verified
   to fail against the pre-change code.
