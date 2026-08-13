@@ -605,11 +605,24 @@ validate_admission() {
   if [[ -n "${ADMISSION_RESULT_FILE:-}" && "$TOTAL_FAIL" -eq 0 ]]; then
     local _adm_dur
     _adm_dur=$(( $(date +%s) - _admission_start_epoch ))
+    # #242 round-2 finding 1: for the freezing path, derive the
+    # verification capture from the SAME parse admission just validated
+    # and hand it to the contract initialiser through the result file —
+    # the driver must never freeze from a second, unvalidated read.
+    local _vcap="null"
+    if [[ "${ADMISSION_RESULT_PATH:-}" == "fresh-unattended-block" ]]; then
+      if ! _vcap=$(printf '%s\n' "$parsed" | vc_capture_from_parsed "$spec"); then
+        fail "admission: verification capture failed despite passing checks — refusing to write a result the initialiser would have to re-read around"
+        _vcap="null"
+      fi
+    fi
     if ! jq -n --arg path "${ADMISSION_RESULT_PATH:-fresh-unattended-noblock}" \
         --argjson exit_code 0 \
         --argjson duration_sec "$_adm_dur" \
+        --argjson vcap "$_vcap" \
         '{schema_version: 1, path: $path,
-          admission: {test_command: {exit_code: $exit_code, duration_sec: $duration_sec}}}' \
+          admission: {test_command: {exit_code: $exit_code, duration_sec: $duration_sec}}}
+         + (if $vcap != null then {verification: $vcap} else {} end)' \
         > "$ADMISSION_RESULT_FILE"; then
       # Fail-closed: admission passed governance but the result file cannot
       # be written (disk full, permission denied). A missing result would

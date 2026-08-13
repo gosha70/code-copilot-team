@@ -95,8 +95,11 @@ same skeleton:
    - `coverage` — C1, unchanged;
    - `verifiers` — every deterministic verifier of the finalized
      artifact: `[ {fr, statement_sha, test, metric} … ]` plus a single
-     `timeout_sec` (from `verification.test.timeout_sec`, else
-     `test.timeout_sec`, the FR-5c fallback chain);
+     `timeout_sec` from `test.timeout_sec` (the generic suite bound).
+     Build-time amendment (round-2 finding 4): the earlier
+     `verification.test.timeout_sec` first source was unreachable —
+     config validation rejects `verification.test` by name — so it is
+     dropped rather than left inert;
    - `conformance` — `{ evaluator, app: {command, ready,
      stop_timeout_sec}, interface, timeout_sec, criteria:
      [ {fr, statement_sha, criterion} … ] }`, present iff derived

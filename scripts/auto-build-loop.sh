@@ -563,7 +563,19 @@ load_config() {
     # re-derives contract presence from frozen evidence (a mid-run
     # artifact edit moves nothing, the C1 discipline).
     HAS_VERIFICATION_ARTIFACT=false
-    if [[ -f "$SPEC_DIR/verification.yaml" ]] && command -v vc_parse_artifact >/dev/null 2>&1; then
+    if [[ -f "$SPEC_DIR/verification.yaml" ]]; then
+        # Round-2 finding 2: a missing parser helper must be an
+        # INSTALLATION error, never "no artifact" — failing open here
+        # would silently disable the whole verification lifecycle for a
+        # run that shipped a finalized artifact.
+        if ! command -v vc_parse_artifact >/dev/null 2>&1; then
+            echo "Error: specs/$FEATURE_ID/verification.yaml exists but" >&2
+            echo "scripts/lib/verification-common.sh is not loaded — the driver" >&2
+            echo "cannot evaluate the verification lifecycle without its parser." >&2
+            echo "This is an installation error; a finalized artifact must never" >&2
+            echo "be silently ignored." >&2
+            exit 1
+        fi
         if [[ "$(vc_parse_artifact "$SPEC_DIR/verification.yaml" | awk -F'\t' '$1 == "STATUS" { print $2; exit }')" == "finalized" ]]; then
             HAS_VERIFICATION_ARTIFACT=true
         fi
@@ -1110,32 +1122,48 @@ contract_initialiser() {
        '{command:$command,artifact:$artifact,parser:$parser,timeout_sec:$timeout_sec,floor_enforced_at:$floor_enforced_at,preset_id:$preset_id,preset_sha256:$preset_sha256,baseline:$baseline} + (if $effective.min_line_pct then {min_line_pct:$effective.min_line_pct} else {} end) + (if $effective.min_branch_pct then {min_branch_pct:$effective.min_branch_pct} else {} end) + (if $effective.max_regression_pct then {max_regression_pct:$effective.max_regression_pct} else {} end)')
     fi
 
-    # ── C2 (#242 FR-4): verifiers + conformance from the finalized artifact ──
+    # ── C2 (#242 FR-4): verifiers + conformance — frozen ONLY from the
+    #    validated capture (round-2 finding 1). Unattended: admission
+    #    wrote the capture from the SAME parse it validated; freezing a
+    #    re-read would let a file swapped after admission be frozen
+    #    unvalidated. Attended: the same canonical
+    #    validation-and-capture path runs here — coverage in both
+    #    directions and every statement_sha recompute against spec.md,
+    #    or the run refuses. ──
     if [[ "$HAS_VERIFICATION_ARTIFACT" == "true" ]]; then
-        local _va="$SPEC_DIR/verification.yaml" _vparsed _vset
-        _vparsed=$(vc_parse_artifact "$_va")
-        # Deterministic set: {fr, statement_sha, test, metric} per verifier.
-        _vset=$(printf '%s\n' "$_vparsed" | awk -F'\t' '
-            $1 == "SHA" { sha[$2] = $3 }
-            $1 == "VER" && $3 == "deterministic" { printf "%s\t%s\t%s\t%s\n", $2, sha[$2], $4, $5 }' \
-            | jq -R -s '[ split("\n")[] | select(length > 0) | split("\t")
-                | {fr: .[0], statement_sha: .[1], test: .[2],
-                   metric: (if ((.[3] // "") == "") then null else .[3] end)} ]')
+        local _vcap
+        if [[ "$path" == "fresh-unattended-block" ]]; then
+            if [[ -s "${PREFLIGHT_RESULT_FILE:-}" ]] \
+               && jq -e '.verification' "$PREFLIGHT_RESULT_FILE" >/dev/null 2>&1; then
+                _vcap=$(jq '.verification' "$PREFLIGHT_RESULT_FILE")
+            else
+                echo "Error: unattended admission passed but wrote no verification" >&2
+                echo "capture — refusing to freeze from an unvalidated re-read of" >&2
+                echo "specs/$FEATURE_ID/verification.yaml (FR-4)." >&2
+                exit 1
+            fi
+        else
+            _vcap=$(vc_capture_validated "$SPEC_DIR/spec.md" "$SPEC_DIR/verification.yaml") || {
+                echo "Error: specs/$FEATURE_ID/verification.yaml failed validation" >&2
+                echo "against spec.md (see errors above) — an unvalidated artifact" >&2
+                echo "must never be frozen (FR-4)." >&2
+                exit 1
+            }
+        fi
+        local _vset _cset
+        _vset=$(jq '.verifiers' <<< "$_vcap")
+        _cset=$(jq '.criteria' <<< "$_vcap")
         if [[ "$(jq 'length' <<< "$_vset")" -gt 0 ]]; then
-            # The FR-5c fallback chain: verification.test.timeout_sec, else
-            # the top-level test timeout.
+            # Bounded by test.timeout_sec (the generic suite bound). The
+            # plan's earlier verification.test.timeout_sec first source is
+            # unreachable — config validation rejects verification.test by
+            # name — so it was dropped rather than left inert (round-2
+            # finding 4; plan.md corrected).
             local _vtimeout
-            _vtimeout=$(jq -r '.verification.test.timeout_sec // .test.timeout_sec // 1200' "$CONFIG_SNAPSHOT" 2>/dev/null)
+            _vtimeout=$(jq -r '.test.timeout_sec // 1200' "$CONFIG_SNAPSHOT" 2>/dev/null)
             contract=$(jq --argjson set "$_vset" --argjson t "$_vtimeout" \
                 '. + {verifiers: {timeout_sec: $t, set: $set}}' <<< "$contract")
         fi
-        # Conformance: present iff the artifact derives the requirement.
-        local _cset
-        _cset=$(printf '%s\n' "$_vparsed" | awk -F'\t' '
-            $1 == "SHA" { sha[$2] = $3 }
-            $1 == "VER" && $3 == "runtime_conformance" { printf "%s\t%s\t%s\n", $2, sha[$2], $4 }' \
-            | jq -R -s '[ split("\n")[] | select(length > 0) | split("\t")
-                | {fr: .[0], statement_sha: .[1], criterion: .[2]} ]')
         if [[ "$(jq 'length' <<< "$_cset")" -gt 0 ]]; then
             # evaluator/app/interface/timeout come from the conformance
             # block; ALL null when it is absent — attended runs surface a
@@ -1166,10 +1194,13 @@ contract_initialiser() {
     fi
 
     # For unattended paths with existing admission section: merge contract in.
+    # The transient .verification capture is consumed above and stripped
+    # here — it never reaches import validation (the frozen contract IS
+    # its durable form).
     if [[ "$path" == "fresh-unattended-block" && -s "$PREFLIGHT_RESULT_FILE" ]]; then
         local _tmp
         _tmp=$(mktemp)
-        jq --argjson contract "$contract" '.contract = $contract' \
+        jq --argjson contract "$contract" '.contract = $contract | del(.verification)' \
            "$PREFLIGHT_RESULT_FILE" > "$_tmp" && mv "$_tmp" "$PREFLIGHT_RESULT_FILE"
     else
         jq -n --argjson contract "$contract" --arg path "$path" \

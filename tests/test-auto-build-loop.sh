@@ -5037,26 +5037,25 @@ echo "=== C2 (#242) T3: frozen verification contract + lifecycle rekey ==="
 # decision 3): it forces the -block preflight paths and the contract
 # initialiser freezes `verifiers` (deterministic set) and `conformance`
 # (criteria + evaluator side) alongside any coverage section.
-write_verification_yaml() {  # <dir>
-    cat > "$1/specs/demo-feat/verification.yaml" << 'YAML'
-status: finalized
-feature_id: demo-feat
-
-FR-1:
-  statement: "d"
-  statement_sha: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-  verifiers:
-    - kind: deterministic
-      test: "bash ./project-test.sh"
-      metric: "suite exits 0"
-FR-2:
-  statement: "c"
-  statement_sha: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-  verifiers:
-    - kind: runtime_conformance
-      criterion: "Cancel aborts the job."
-YAML
-    git -C "$1" add -A && git -C "$1" commit -q -m "finalized verification artifact"
+# Round-2 finding 1: fixtures go through the REAL generator so every
+# statement_sha recomputes against spec.md — the initialiser now
+# refuses unvalidated artifacts, so a fake-hash fixture would (rightly)
+# never freeze.
+write_verification_yaml() {  # <dir> — FR-1 deterministic, FR-2 runtime_conformance
+    local dir="$1" f="$1/specs/demo-feat/verification.yaml"
+    CCT_SPECS_DIR="$dir/specs" bash "$SCRIPT_DIR/../scripts/generate-verification-draft.sh" demo-feat >/dev/null
+    sed -i '' 's/^status: draft/status: finalized/' "$f" 2>/dev/null || \
+        sed -i 's/^status: draft/status: finalized/' "$f"
+    python3 - "$f" << 'PYEOF'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'      test: "TODO[^"]*"',
+           '      test: "bash ./project-test.sh"\n      metric: "suite exits 0"', s, count=1)
+s = re.sub(r'    - kind: deterministic\n      test: "TODO[^"]*"',
+           '    - kind: runtime_conformance\n      criterion: "Cancel aborts the job."', s, count=1)
+open(p, 'w').write(s)
+PYEOF
+    git -C "$dir" add -A && git -C "$dir" commit -q -m "finalized verification artifact"
 }
 
 # ── Conformance-only run (NO coverage block) takes a -block path and
@@ -5123,25 +5122,60 @@ rm -rf "$P"
 
 # ── Deterministic-only artifact: verifiers freeze, no conformance ──
 P=$(setup_project); single_phase "$P"
-cat > "$P/specs/demo-feat/verification.yaml" << 'YAML'
-status: finalized
-feature_id: demo-feat
-
-FR-1:
-  statement: "d"
-  statement_sha: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-  verifiers:
-    - kind: deterministic
-      test: "bash ./project-test.sh"
-YAML
-git -C "$P" add -A && git -C "$P" commit -q -m "det artifact"
+admit_project "$P"   # real generator: both FRs deterministic, no metric
 run_driver "$P"
 assert_exit "C2-T3: deterministic-only artifact freezes verifiers" 0 "$RC"
-jq -e '(.verifiers.set | length == 1) and (.verifiers.set[0].metric == null)
+jq -e '(.verifiers.set | length == 2) and (.verifiers.set | all(.metric == null))
    and (has("conformance") | not)' \
    "$P/.cct/auto-build/demo-feat/frozen-contract.json" >/dev/null 2>&1
 assert_exit "C2-T3: no conformance without a mapping; metric null when absent" 0 $?
 rm -rf "$P"
+
+# ── Round-2 finding 1: the initialiser freezes ONLY validated data ──
+# A spec edited after finalization (sha drift) refuses at attended
+# initialisation — the pre-fix driver froze the stale hashes.
+P=$(setup_project); single_phase "$P"
+write_verification_yaml "$P"
+sed -i '' 's/- FR-1: demo.sh prints ok./- FR-1: demo.sh prints OK LOUDLY./' "$P/specs/demo-feat/spec.md" 2>/dev/null || \
+    sed -i 's/- FR-1: demo.sh prints ok./- FR-1: demo.sh prints OK LOUDLY./' "$P/specs/demo-feat/spec.md"
+git -C "$P" add -A && git -C "$P" commit -q -m "post-finalization spec edit"
+run_driver "$P"
+assert_exit "C2-T3: sha-drifted artifact refuses at attended initialisation" 1 "$RC"
+assert_contains "C2-T3: drift refusal names the freeze rule" "$OUTPUT" "must never be frozen"
+rm -rf "$P"
+
+# A coverage hole (an FR with no artifact entry) refuses the same way.
+P=$(setup_project); single_phase "$P"
+write_verification_yaml "$P"
+python3 - "$P/specs/demo-feat/verification.yaml" << 'PYEOF'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'\nFR-2:.*?(?=\nFR-|\Z)', '\n', s, flags=re.S)
+open(p, 'w').write(s)
+PYEOF
+git -C "$P" add -A && git -C "$P" commit -q -m "coverage hole"
+run_driver "$P"
+assert_exit "C2-T3: uncovered FR refuses at attended initialisation" 1 "$RC"
+assert_contains "C2-T3: hole refusal names coverage" "$OUTPUT" "no verification.yaml entry"
+rm -rf "$P"
+
+# ── Round-2 finding 2: a missing parser helper is an INSTALLATION
+#    error, never "no artifact". ──
+P=$(setup_project); single_phase "$P"
+write_verification_yaml "$P"
+NOLIB=$(mktemp -d); mkdir -p "$NOLIB/lib"
+cp "$SCRIPT_DIR/../scripts/auto-build-loop.sh" "$NOLIB/"
+cp "$SCRIPT_DIR/../scripts/lib/verification-preset.sh" \
+   "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh" "$NOLIB/lib/"
+cp "$SCRIPT_DIR/../scripts/validate-automation-config.sh" \
+   "$SCRIPT_DIR/../scripts/check-origin-alignment.sh" "$NOLIB/" 2>/dev/null
+RC=0
+OUTPUT=$(cd "$P" && CCT_PROJECT_DIR="$P" CCT_CLAUDE_BIN="$MOCK_BIN/claude" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" \
+    bash "$NOLIB/auto-build-loop.sh" demo-feat 2>&1) || RC=$?
+assert_exit "C2-T3: missing parser helper is an installation error" 1 "$RC"
+assert_contains "C2-T3: helper error names the lib" "$OUTPUT" "verification-common.sh is not loaded"
+rm -rf "$P" "$NOLIB"
 
 # ── A draft artifact is NOT a lifecycle input ──
 P=$(setup_project); single_phase "$P"
@@ -5223,6 +5257,36 @@ assert_eq "C2-T3: no frozen contract materialises on that resume" "absent" \
     "$([[ -f "$LEDGERD/frozen-contract.json" ]] && echo present || echo absent)"
 rm -rf "$P"
 
+# ── Round-2 finding 1 (admission side): the freezing path hands the
+#    driver the capture from the SAME parse admission validated. ──
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+write_verification_yaml "$P"
+cfg_set "$P" '.verification.conformance={evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9/x",timeout_sec:5},stop_timeout_sec:5}}'
+EVALPROF=$(mktemp)
+cat "$PASS_PROFILE" > "$EVALPROF"
+cat >> "$EVALPROF" << 'TOML'
+
+[providers.mock-eval]
+type = "cli"
+command = "cat {review_request}"
+conformance_command = "cat {review_request}"
+healthcheck = "true"
+TOML
+RESULT_FILE=$(mktemp)
+CCT_SPECS_DIR="$P/specs" CCT_PROVIDER_PROFILE="$EVALPROF" \
+    bash "$SCRIPT_DIR/../scripts/validate-spec.sh" \
+    --feature-id demo-feat --unattended \
+    --config "$P/specs/demo-feat/automation.json" \
+    --result-file "$RESULT_FILE" --result-path "fresh-unattended-block" >/dev/null 2>&1
+RC2=$?
+assert_exit "C2-T3: block-path admission passes with a capable evaluator" 0 "$RC2"
+jq -e '.verification.criteria[0].criterion == "Cancel aborts the job."
+   and (.verification.verifiers | length == 1)
+   and (.verification.verifiers[0].metric == "suite exits 0")' \
+   "$RESULT_FILE" >/dev/null 2>&1
+assert_exit "C2-T3: block-path admission writes the validated capture" 0 $?
+rm -f "$RESULT_FILE" "$EVALPROF"; rm -rf "$P"
+
 # ── validate_contract_json: the extended predicate ──
 DRIVER_FUNCS=$(mktemp)
 _stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
@@ -5258,6 +5322,53 @@ assert_exit "C2-T3: verifier entry without test rejected" 1 "$_v"
 jq -n '{}' > "$CT"
 if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
 assert_exit "C2-T3: sectionless contract rejected" 1 "$_v"
+
+# ── Round-2 finding 1 (driver side): the unattended initialiser freezes
+#    the ADMISSION capture, never a re-read — the disk file already says
+#    something else and must not win; a missing capture refuses. ──
+UP=$(mktemp -d); mkdir -p "$UP/specs/demo-feat"
+cat > "$UP/specs/demo-feat/verification.yaml" << 'YAML'
+status: finalized
+feature_id: demo-feat
+
+FR-2:
+  statement: "c"
+  statement_sha: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  verifiers:
+    - kind: runtime_conformance
+      criterion: "SWAPPED AFTER ADMISSION."
+YAML
+SPEC_DIR="$UP/specs/demo-feat"; FEATURE_ID="demo-feat"
+CONFIG_SNAPSHOT=$(mktemp)
+jq -n '{test:{timeout_sec:60},verification:{conformance:{evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9/x",timeout_sec:5},stop_timeout_sec:5}}}}' > "$CONFIG_SNAPSHOT"
+HAS_COVERAGE_BLOCK=false; HAS_VERIFICATION_ARTIFACT=true
+PREFLIGHT_RESULT_FILE=$(mktemp)
+jq -n '{schema_version:1,path:"fresh-unattended-block",
+  admission:{test_command:{exit_code:0,duration_sec:1}},
+  verification:{verifiers:[],criteria:[{fr:"FR-2",statement_sha:"sha256:2222222222222222222222222222222222222222222222222222222222222222",criterion:"Cancel aborts the job."}]}}' > "$PREFLIGHT_RESULT_FILE"
+contract_initialiser fresh-unattended-block
+assert_eq "C2-T3: unattended freeze uses the admission capture, not the disk file" \
+    "Cancel aborts the job." \
+    "$(jq -r '.contract.conformance.criteria[0].criterion' "$PREFLIGHT_RESULT_FILE")"
+assert_eq "C2-T3: the transient capture is stripped from the result" "false" \
+    "$(jq 'has("verification")' "$PREFLIGHT_RESULT_FILE")"
+jq 'del(.verification) | del(.contract)' "$PREFLIGHT_RESULT_FILE" > "$PREFLIGHT_RESULT_FILE.tmp" \
+    && mv "$PREFLIGHT_RESULT_FILE.tmp" "$PREFLIGHT_RESULT_FILE"
+( contract_initialiser fresh-unattended-block ) >/dev/null 2>&1
+assert_exit "C2-T3: missing admission capture refuses the freeze" 1 $?
+rm -rf "$UP"; rm -f "$CONFIG_SNAPSHOT" "$PREFLIGHT_RESULT_FILE"
+
+# ── Round-2 finding 3: the result schema scopes C1 rules the way the
+#    executable validator does. ──
+SCHEMA_PF="$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json"
+jq -e '.properties.contract.allOf | length == 1
+   and (.[0].if.anyOf | length == 11)
+   and (.[0].then.required | length == 8)
+   and (.[0].then.allOf | length == 4)' "$SCHEMA_PF" >/dev/null 2>&1
+assert_exit "C2-T3 schema: C1 coverage rules scoped under a presence conditional" 0 $?
+jq -e '[.properties.contract | has("dependencies"), has("required")] | any | not' \
+    "$SCHEMA_PF" >/dev/null 2>&1
+assert_exit "C2-T3 schema: no unconditional coverage requirement remains" 0 $?
 
 rm -f "$CT" "$DRIVER_FUNCS"
 

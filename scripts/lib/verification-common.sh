@@ -165,3 +165,91 @@ vc_conformance_required() {
         echo "false"
     fi
 }
+
+# vc_capture_from_parsed <spec.md> — read vc_parse_artifact TSV on
+# stdin, VALIDATE it against the authoritative spec, and emit the
+# canonical freeze capture JSON
+#   { verifiers: [ {fr, statement_sha, test, metric|null} … ],
+#     criteria:  [ {fr, statement_sha, criterion} … ] }
+# on success (exit 0); named errors on stderr and exit 1 otherwise.
+# THE single validation-and-capture path (#242 build review round 2,
+# finding 1): admission derives the capture from the SAME parse it
+# validated, and the attended contract initialiser goes through
+# vc_capture_validated — freezing unvalidated parser output is not
+# representable. Checks: finalized status, coverage in both directions,
+# statement_sha recompute against spec.md, >=1 verifier per FR, and no
+# unknown verifier kinds (an unknown kind would otherwise be silently
+# dropped from the capture).
+vc_capture_from_parsed() {
+    local spec="$1"
+    local parsed frs ok=true
+    parsed=$(cat)
+    local status
+    status=$(printf '%s\n' "$parsed" | awk -F'\t' '$1 == "STATUS" { print $2; exit }')
+    if [[ "$status" != "finalized" ]]; then
+        echo "verification capture: status is '${status:-missing}' — only a finalized artifact may be frozen" >&2
+        return 1
+    fi
+    frs=$(vc_extract_frs "$spec")
+    if [[ -z "$frs" ]]; then
+        echo "verification capture: spec.md has no FR-N requirements under ## Requirements" >&2
+        return 1
+    fi
+    local fr stmt want got nvers
+    while IFS=$'\t' read -r fr stmt; do
+        if ! printf '%s\n' "$parsed" | grep -q "^FR	$fr\$"; then
+            echo "verification capture: $fr has no verification.yaml entry (coverage is mandatory)" >&2
+            ok=false
+            continue
+        fi
+        want=$(vc_fr_sha "$fr" "$stmt")
+        got=$(printf '%s\n' "$parsed" | awk -F'\t' -v fr="$fr" '$1 == "SHA" && $2 == fr { print $3; exit }')
+        if [[ "$got" != "$want" ]]; then
+            echo "verification capture: $fr statement_sha does not recompute against spec.md (stale or tampered artifact)" >&2
+            ok=false
+        fi
+        nvers=$(printf '%s\n' "$parsed" | awk -F'\t' -v fr="$fr" '$1 == "VER" && $2 == fr' | wc -l | tr -d ' ')
+        if [[ "$nvers" -eq 0 ]]; then
+            echo "verification capture: $fr has zero parsed verifiers (layout is part of the contract)" >&2
+            ok=false
+        fi
+    done <<< "$frs"
+    local phantom p
+    phantom=$(printf '%s\n' "$parsed" | awk -F'\t' '$1 == "FR" { print $2 }' | while read -r p; do
+        printf '%s\n' "$frs" | cut -f1 | grep -q "^$p\$" || echo "$p"
+    done)
+    for p in $phantom; do
+        echo "verification capture: entry '$p' has no matching FR in spec.md (phantom requirement)" >&2
+        ok=false
+    done
+    local badkinds
+    badkinds=$(printf '%s\n' "$parsed" | awk -F'\t' \
+        '$1 == "VER" && $3 != "deterministic" && $3 != "runtime_conformance" { printf "%s(%s) ", $2, $3 }')
+    if [[ -n "$badkinds" ]]; then
+        echo "verification capture: unknown verifier kind(s): $badkinds" >&2
+        ok=false
+    fi
+    [[ "$ok" == "true" ]] || return 1
+    printf '%s\n' "$parsed" | awk -F'\t' '
+        $1 == "SHA" { sha[$2] = $3 }
+        $1 == "VER" && $3 == "deterministic" { printf "V\t%s\t%s\t%s\t%s\n", $2, sha[$2], $4, $5 }
+        $1 == "VER" && $3 == "runtime_conformance" { printf "C\t%s\t%s\t%s\n", $2, sha[$2], $4 }' \
+    | jq -R -s '
+        [ split("\n")[] | select(length > 0) | split("\t") ] as $rows |
+        { verifiers: [ $rows[] | select(.[0] == "V")
+            | {fr: .[1], statement_sha: .[2], test: .[3],
+               metric: (if ((.[4] // "") == "") then null else .[4] end)} ],
+          criteria:  [ $rows[] | select(.[0] == "C")
+            | {fr: .[1], statement_sha: .[2], criterion: .[3]} ] }'
+}
+
+# vc_capture_validated <spec.md> <verification.yaml> — one read of the
+# artifact through the canonical validation-and-capture path.
+vc_capture_validated() {
+    local spec="$1" artifact="$2"
+    if [[ ! -f "$artifact" ]]; then
+        echo "verification capture: artifact not found: $artifact" >&2
+        return 1
+    fi
+    vc_parse_artifact "$artifact" | vc_capture_from_parsed "$spec"
+}

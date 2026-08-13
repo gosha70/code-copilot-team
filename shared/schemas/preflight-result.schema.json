@@ -39,17 +39,6 @@
         { "required": ["verifiers"] },
         { "required": ["conformance"] }
       ],
-      "dependencies": {
-        "command": [
-          "artifact",
-          "parser",
-          "timeout_sec",
-          "floor_enforced_at",
-          "preset_id",
-          "preset_sha256",
-          "baseline"
-        ]
-      },
       "properties": {
         "verifiers": {
           "type": "object",
@@ -183,60 +172,96 @@
       },
       "allOf": [
         {
-          "description": "At least one floor (min_line_pct or min_branch_pct) must be present.",
-          "anyOf": [
-            { "required": ["min_line_pct"] },
-            { "required": ["min_branch_pct"] }
-          ]
-        },
-        {
-          "description": "preset_id and preset_sha256 must both be strings (with values) or both be null — mismatched pairing is invalid.",
-          "oneOf": [
-            {
-              "properties": {
-                "preset_id": { "type": "string", "minLength": 1 },
-                "preset_sha256": { "type": "string", "minLength": 1 }
-              },
-              "required": ["preset_id", "preset_sha256"]
-            },
-            {
-              "properties": {
-                "preset_id": { "type": "null" },
-                "preset_sha256": { "type": "null" }
-              }
-            }
-          ]
-        },
-        {
-          "description": "Regression rules: max_regression_pct is forbidden when baseline is null (greenfield) and required when baseline is non-null (brownfield).",
+          "description": "The C1 coverage fields travel as a unit with their cross-field rules: ANY coverage field present requires the FULL required set and applies all four rules below; a contract carrying only C2 sections (verifiers/conformance) is exempt (#242 round-2 finding 3 — the executable validator scopes its C1 rules the same way).",
           "if": {
-            "properties": { "baseline": { "type": "null" } }
+            "anyOf": [
+              { "required": ["command"] },
+              { "required": ["artifact"] },
+              { "required": ["parser"] },
+              { "required": ["timeout_sec"] },
+              { "required": ["floor_enforced_at"] },
+              { "required": ["preset_id"] },
+              { "required": ["preset_sha256"] },
+              { "required": ["baseline"] },
+              { "required": ["min_line_pct"] },
+              { "required": ["min_branch_pct"] },
+              { "required": ["max_regression_pct"] }
+            ]
           },
           "then": {
-            "not": { "required": ["max_regression_pct"] }
-          },
-          "else": {
-            "required": ["max_regression_pct"]
-          }
-        },
-        {
-          "description": "Brownfield baseline completeness: every floored metric must have a captured baseline value to regress from (FR-4) — a floor whose metric the baseline lacks would be silently exempt from the no-regression promise.",
-          "if": {
-            "properties": { "baseline": { "type": "object" } },
-            "required": ["baseline"]
-          },
-          "then": {
+            "required": [
+              "command",
+              "artifact",
+              "parser",
+              "timeout_sec",
+              "floor_enforced_at",
+              "preset_id",
+              "preset_sha256",
+              "baseline"
+            ],
             "allOf": [
               {
-                "if": { "required": ["min_line_pct"] },
+                "description": "At least one floor (min_line_pct or min_branch_pct) must be present.",
+                "anyOf": [
+                  { "required": ["min_line_pct"] },
+                  { "required": ["min_branch_pct"] }
+                ]
+              },
+              {
+                "description": "preset_id and preset_sha256 must both be strings (with values) or both be null — mismatched pairing is invalid.",
+                "oneOf": [
+                  {
+                    "properties": {
+                      "preset_id": { "type": "string", "minLength": 1 },
+                      "preset_sha256": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["preset_id", "preset_sha256"]
+                  },
+                  {
+                    "properties": {
+                      "preset_id": { "type": "null" },
+                      "preset_sha256": { "type": "null" }
+                    }
+                  }
+                ]
+              },
+              {
+                "description": "Regression rules: max_regression_pct is forbidden when baseline is null (greenfield) and required when baseline is non-null (brownfield).",
+                "if": {
+                  "properties": { "baseline": { "type": "null" } }
+                },
                 "then": {
-                  "properties": { "baseline": { "required": ["line_pct"] } }
+                  "not": { "required": ["max_regression_pct"] }
+                },
+                "else": {
+                  "required": ["max_regression_pct"]
                 }
               },
               {
-                "if": { "required": ["min_branch_pct"] },
+                "description": "Brownfield baseline completeness: every floored metric must have a captured baseline value to regress from (FR-4) — a floor whose metric the baseline lacks would be silently exempt from the no-regression promise.",
+                "if": {
+                  "properties": { "baseline": { "type": "object" } },
+                  "required": ["baseline"]
+                },
                 "then": {
-                  "properties": { "baseline": { "required": ["branch_pct"] } }
+                  "allOf": [
+                    {
+                      "if": { "required": ["min_line_pct"] },
+                      "then": {
+                        "properties": {
+                          "baseline": { "required": ["line_pct"] }
+                        }
+                      }
+                    },
+                    {
+                      "if": { "required": ["min_branch_pct"] },
+                      "then": {
+                        "properties": {
+                          "baseline": { "required": ["branch_pct"] }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             ]
