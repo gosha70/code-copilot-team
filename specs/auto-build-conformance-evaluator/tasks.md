@@ -1,4 +1,4 @@
-# Tasks: runtime conformance evaluator, increment C2 (#242)
+# Tasks: runtime conformance evaluator, increment C2 (#242) — rev 2
 
 Sequenced; each task lands with its regressions and mutation runs. The
 plan's gate sequence is normative.
@@ -23,34 +23,52 @@ plan's gate sequence is normative.
   refusal messages per missing piece; no-mapping runs unchanged.
 - Tests in `test-verification-spec.sh` (admit/refuse matrix, SC-1).
 
-## T3 — Frozen conformance contract (FR-4)
+## T3 — Frozen verification contract + lifecycle rekey (FR-4)
 
-- Contract initialiser: derive the requirement; freeze
-  `conformance{evaluator, app, timeout_sec, criteria[]}` into the
-  contract object alongside coverage.
-- `preflight-result.schema.json` optional closed `conformance`
-  sub-object; `validate_contract_json` rules; C1 pinning/tamper/resume
-  equality untouched (they cover the whole object).
+- Contract initialiser: derive the requirement; freeze `verifiers`
+  (the deterministic set `{fr, statement_sha, test, metric}` +
+  `timeout_sec`) and `conformance{evaluator, app, timeout_sec,
+  criteria[]}` into the contract object alongside coverage.
+- **Lifecycle/path change (plan decision 3):** introduce
+  `HAS_FROZEN_CONTRACT = HAS_COVERAGE_BLOCK || HAS_VERIFICATION_ARTIFACT`
+  and rekey `compute_preflight_path`, the resume frozen-contract
+  prerequisite, the fresh-refusal ledger rollback, and the
+  contract-initialiser trigger on it. Runs with neither input stay
+  byte-identical noblock.
+- `preflight-result.schema.json` optional closed `verifiers` +
+  `conformance` sub-objects; `validate_contract_json` rules; C1
+  pinning/tamper/resume equality untouched (they cover the whole
+  object).
 - Tests in `test-auto-build-loop.sh` (freeze shape, edit-immunity,
-  tamper disposes — SC-3).
+  tamper disposes, conformance-only `-block` path + resume refusal —
+  SC-3).
 
 ## T4 — App lifecycle (FR-6)
 
 - Start in own process group, ledger-captured output, ready probe
-  (url/command, bounded), stop with TERM→KILL escalation that must
-  complete (cp_run_bounded discipline).
-- Tests: ready-timeout fails closed; no descendant survives the gate
-  (marker child) — SC-5.
+  (url/command, bounded, AND the spawned group alive at success), stop
+  with TERM→KILL escalation that must complete (cp_run_bounded
+  discipline).
+- Tests: ready-timeout fails closed; readiness with a dead spawned
+  group fails closed (stale-responder case); no descendant survives the
+  gate (marker child) — SC-5.
 
-## T5 — Evaluator invocation + landing gate + evidence (FR-5, FR-7, FR-9)
+## T5 — Landing verifier gate + evidence (FR-5, FR-7, FR-9, FR-11)
 
-- The plan's 12-step landing sequence: health check, app up, criteria
-  file from frozen set, bounded evaluator invocation via the reviewer
-  adapter path, fail-closed result validation, verification-results.json
-  per FR, `conformance_gate` disposition naming FRs, shared commit-bound
-  recovery arm (generalise the coverage arm to both reasons), attended
-  parity.
-- Tests: SC-4, SC-7; byte-identical no-block fixtures.
+- The plan's 12-step landing sequence: tamper check; checkout integrity
+  BEFORE (clean tree, capture gate HEAD); EXECUTE every frozen
+  deterministic verifier (bounded, per-verifier results — never
+  inferred from `test.command`); evaluator health check; app up;
+  criteria file + frozen app interface (`CCT_CONFORMANCE_APP`) from the
+  frozen contract; ensure-absent → bounded evaluator invocation via the
+  reviewer adapter path → require a newly-produced result; app stop;
+  checkout integrity AFTER (HEAD unchanged + clean, else `git_anomaly`);
+  fail-closed identity-multiset result validation (full-tuple echo);
+  `verification-results.json` FR → per-verifier results;
+  `conformance_gate` disposition naming FRs/verifiers, shared
+  commit-bound recovery arm (generalise the coverage arm to both
+  reasons), attended parity.
+- Tests: SC-4, SC-7, SC-8, SC-9; byte-identical no-block fixtures.
 
 ## T6 — Metering (FR-8, handoff items 3/5)
 
