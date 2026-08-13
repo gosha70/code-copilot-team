@@ -64,6 +64,12 @@ else
         echo "reconstruction to a feature. Nothing to decide." >&2
         exit 1
     fi
+    # feature_id is about to become a path segment — a separator or
+    # traversal here would walk the reconstruction out of the ledger.
+    if [[ ! "$FEATURE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        echo "Error: state.json feature_id '$FEATURE_ID' is not a safe path segment — refusing." >&2
+        exit 1
+    fi
     ESC_DIR="$PROJECT_DIR/.cct/auto-build/$FEATURE_ID/escalations"
     NEWEST=""
     i=1
@@ -79,6 +85,20 @@ else
                 ;;
         esac
         i=$((i + 1))
+    done
+    # A GAP (esc-2 missing while esc-3 exists) hides everything above it
+    # from the sequential scan — an unresolved later record must never
+    # read as "nothing to decide". Same fail-closed rule as the driver.
+    top=$((i - 1))
+    for f in "$ESC_DIR"/esc-*.json; do
+        [[ -e "$f" ]] || continue
+        n=$(basename "$f" .json); n=${n#esc-}
+        [[ "$n" =~ ^[0-9]+$ ]] || continue
+        if (( n > top )); then
+            echo "Error: escalation records are gapped (esc-$((top + 1)) missing while esc-$n exists) —" >&2
+            echo "the sequence cannot be trusted; refusing to reconstruct." >&2
+            exit 1
+        fi
     done
     if [[ -z "$NEWEST" ]]; then
         echo "No active circuit breaker: .cct/review/breaker-tripped.json does not exist and" >&2
@@ -98,36 +118,47 @@ else
 fi
 
 NOW_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-TMP=$(mktemp "$REVIEW_DIR/decision.XXXXXX") || { echo "Error: mktemp failed" >&2; exit 1; }
+# Stage the decision, but PUBLISH it last: decision.json is the marker the
+# driver consumes, so it must never exist over stale retry state. Ordering
+# is stage-decision -> apply-retry-state (checked, durable) -> publish.
+DEC_TMP=$(mktemp "$REVIEW_DIR/decision.XXXXXX") || { echo "Error: mktemp failed" >&2; exit 1; }
 if ! jq -n --arg d "$DECISION" --arg t "$NOW_ISO" --arg b "$BREAKER_TYPE" --arg r "$RECONSTRUCTED_FROM" \
     '{decision: $d, timestamp: $t, breaker_type: $b}
-     + (if $r != "" then {reconstructed_from: $r} else {} end)' > "$TMP"; then
-    rm -f "$TMP"
-    echo "Error: could not write decision.json" >&2
+     + (if $r != "" then {reconstructed_from: $r} else {} end)' > "$DEC_TMP"; then
+    rm -f "$DEC_TMP"
+    echo "Error: could not stage decision.json" >&2
     exit 1
 fi
-mv "$TMP" "$REVIEW_DIR/decision.json"
 
 if [[ "$DECISION" == "retry" ]]; then
-    # Retry semantics are MANDATORY here, reconstruction or not (#233's
+    # Retry semantics are MANDATORY, reconstruction or not (#233's
     # second-order trap): a park can sit for hours, and a retry that only
     # writes decision.json trips the review loop clock before the next
-    # reviewer runs.
+    # reviewer runs. Any failure here leaves NO consumable decision.
     if [[ ! -f "$STATE" ]]; then
-        echo "Error: retry needs .cct/review/state.json (attempt bump + loop_start reset) and it is missing." >&2
-        rm -f "$REVIEW_DIR/decision.json"
+        rm -f "$DEC_TMP"
+        echo "Error: retry needs .cct/review/state.json (attempt bump + loop_start reset) and it is missing — no decision was recorded." >&2
         exit 1
     fi
-    TMP=$(mktemp "$REVIEW_DIR/state.XXXXXX") || { echo "Error: mktemp failed" >&2; exit 1; }
+    ST_TMP=$(mktemp "$REVIEW_DIR/state.XXXXXX") || { rm -f "$DEC_TMP"; echo "Error: mktemp failed — no decision was recorded" >&2; exit 1; }
     if ! jq --argjson now "$(date +%s)" '.attempt = ((.attempt // 1) + 1) | .loop_start = $now' \
-        "$STATE" > "$TMP"; then
-        rm -f "$TMP"
-        echo "Error: could not apply retry semantics to state.json" >&2
-        rm -f "$REVIEW_DIR/decision.json"
+        "$STATE" > "$ST_TMP"; then
+        rm -f "$ST_TMP" "$DEC_TMP"
+        echo "Error: could not apply retry semantics to state.json — no decision was recorded." >&2
         exit 1
     fi
-    mv "$TMP" "$STATE"
+    if ! mv "$ST_TMP" "$STATE"; then
+        rm -f "$ST_TMP" "$DEC_TMP"
+        echo "Error: could not publish the retry state update — no decision was recorded." >&2
+        exit 1
+    fi
     echo "[review-decide] retry: attempt bumped, loop_start reset" >&2
+fi
+
+if ! mv "$DEC_TMP" "$REVIEW_DIR/decision.json"; then
+    rm -f "$DEC_TMP"
+    echo "Error: could not publish decision.json" >&2
+    exit 1
 fi
 
 rm -f "$BTF" 2>/dev/null || true

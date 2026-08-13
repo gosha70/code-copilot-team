@@ -880,6 +880,28 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
+# 11a2. GLOBAL HELPER SCRIPTS
+# ══════════════════════════════════════════════════════════════
+# Deterministic cores that globally installed commands invoke from
+# arbitrary target projects (#233): the command markdown resolves
+# ~/.claude/scripts/<name> first, so the helper must be installed there.
+
+HELPER_SCRIPTS_SOURCE="$SCRIPT_DIR/../../scripts"
+HELPER_SCRIPTS_TARGET="$CLAUDE_DIR/scripts"
+
+mkdir -p "$HELPER_SCRIPTS_TARGET"
+
+for helper_file in review-decide.sh; do
+    if [[ -f "$HELPER_SCRIPTS_SOURCE/$helper_file" ]]; then
+        cp "$HELPER_SCRIPTS_SOURCE/$helper_file" "$HELPER_SCRIPTS_TARGET/$helper_file"
+        chmod +x "$HELPER_SCRIPTS_TARGET/$helper_file"
+        echo "[done] Installed helper $helper_file to $HELPER_SCRIPTS_TARGET"
+    else
+        echo "[skip] Helper not found at $HELPER_SCRIPTS_SOURCE/$helper_file"
+    fi
+done
+
+# ══════════════════════════════════════════════════════════════
 # 11b. GLOBAL AGENTS
 # ══════════════════════════════════════════════════════════════
 

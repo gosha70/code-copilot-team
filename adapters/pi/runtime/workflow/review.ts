@@ -347,7 +347,101 @@ export function midReviewWarning(projectRoot: string): string | null {
 
 export type ReviewDecision = "approve" | "reject" | "retry";
 
-/** Record a decision; on approve, write the `bypass:true` loop-summary. */
+/**
+ * #233: the deterministic breaker-context resolution shared with
+ * scripts/review-decide.sh. With breaker-tripped.json missing, the context
+ * is RECONSTRUCTED — bound to THIS feature via state.json's feature_id,
+ * never a scan of other features' ledgers — and the provenance is returned
+ * so the driver can validate it against the escalation it resolves.
+ * Throws with a precise, human-relayable message on every refusal.
+ */
+function resolveBreakerContext(projectRoot: string): {
+  breakerType: string;
+  reconstructedFrom?: string;
+} {
+  const btf = path.join(reviewDir(projectRoot), "breaker-tripped.json");
+  const breaker = readJson(btf);
+  if (breaker) {
+    const bt =
+      (breaker.breaker_type as string | undefined) ??
+      (breaker.breaker as string | undefined) ??
+      "unknown";
+    return { breakerType: bt };
+  }
+  const st = loadReviewState(projectRoot);
+  const fid = st?.feature_id;
+  if (typeof fid !== "string" || fid.length === 0) {
+    throw new Error(
+      "no .cct/review/breaker-tripped.json and state.json carries no feature_id — " +
+        "cannot bind a reconstruction to a feature. Nothing to decide.",
+    );
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(fid)) {
+    throw new Error(
+      `state.json feature_id '${fid}' is not a safe path segment — refusing.`,
+    );
+  }
+  const escDir = path.join(
+    projectRoot,
+    ".cct",
+    "auto-build",
+    fid,
+    "escalations",
+  );
+  let newest: string | undefined;
+  let newestDetail = "";
+  let i = 1;
+  for (;;) {
+    const esc = path.join(escDir, `esc-${i}.json`);
+    if (!fs.existsSync(esc)) break;
+    const rec = readJson(esc);
+    if (!rec || typeof rec.resolved !== "boolean") {
+      throw new Error(
+        `escalation record ${esc} is unreadable — refusing to reconstruct from corrupt state.`,
+      );
+    }
+    if (rec.reason === "review_breaker" && rec.resolved === false) {
+      newest = esc;
+      newestDetail = typeof rec.detail === "string" ? rec.detail : "";
+    }
+    i += 1;
+  }
+  // A gap (esc-2 missing while esc-3 exists) hides everything above it
+  // from the sequential scan — an unresolved later record must never read
+  // as "nothing to decide". Same fail-closed rule as the driver.
+  const top = i - 1;
+  if (fs.existsSync(escDir)) {
+    for (const f of fs.readdirSync(escDir)) {
+      const m = /^esc-(\d+)\.json$/.exec(f);
+      if (m && Number(m[1]) > top) {
+        throw new Error(
+          `escalation records are gapped (esc-${top + 1} missing while ${f} exists) — ` +
+            "the sequence cannot be trusted; refusing to reconstruct.",
+        );
+      }
+    }
+  }
+  if (!newest) {
+    throw new Error(
+      "No active circuit breaker: .cct/review/breaker-tripped.json does not exist and " +
+        `no unresolved review_breaker escalation was found under .cct/auto-build/${fid}/escalations/. ` +
+        "Nothing to decide.",
+    );
+  }
+  const breakerType = /review runner exited \d+/.test(newestDetail)
+    ? "runner_crash_legacy"
+    : "reconstructed";
+  return { breakerType, reconstructedFrom: newest };
+}
+
+/**
+ * Record a decision; on approve, write the `bypass:true` loop-summary.
+ * Same deterministic contract as scripts/review-decide.sh (#233): the
+ * breaker context is resolved (or feature-bound reconstructed, with
+ * provenance) BEFORE anything is written, retry state is made durable
+ * BEFORE the decision is published, and every failure throws leaving NO
+ * consumable decision.
+ */
 export function writeDecision(
   projectRoot: string,
   decision: ReviewDecision,
@@ -356,28 +450,43 @@ export function writeDecision(
 ): void {
   const dir = reviewDir(projectRoot);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(
-    path.join(dir, "decision.json"),
-    JSON.stringify({ decision, detail, at: now }, null, 2) + "\n",
-  );
+  const ctx = resolveBreakerContext(projectRoot);
   if (decision === "retry") {
-    // #233 second-order trap: a retry that only writes decision.json leaves
-    // loop_start stale, so the next round trips the review loop clock before
-    // the reviewer runs (a park can sit for hours). The driver consumes the
-    // decision EXPECTING these mutations already happened — same semantics
-    // as scripts/review-decide.sh and the Claude Code command.
+    // #233 second-order trap: retry semantics (attempt bump + loop_start
+    // reset) are mandatory and must be DURABLE before the decision marker
+    // exists — the driver consumes the decision expecting them applied.
     const st = loadReviewState(projectRoot);
-    if (st) {
-      const attempt = typeof st.attempt === "number" ? st.attempt : 1;
-      st.attempt = attempt + 1;
-      st.loop_start = Math.floor(Date.now() / 1000);
-      fs.writeFileSync(
-        path.join(dir, "state.json"),
-        JSON.stringify(st, null, 2) + "\n",
+    if (!st) {
+      throw new Error(
+        "retry needs .cct/review/state.json (attempt bump + loop_start reset) " +
+          "and it is missing or unreadable — no decision was recorded.",
       );
     }
-    return;
+    const attempt = typeof st.attempt === "number" ? st.attempt : 1;
+    st.attempt = attempt + 1;
+    st.loop_start = Math.floor(Date.now() / 1000);
+    fs.writeFileSync(
+      path.join(dir, "state.json"),
+      JSON.stringify(st, null, 2) + "\n",
+    );
   }
+  fs.writeFileSync(
+    path.join(dir, "decision.json"),
+    JSON.stringify(
+      {
+        decision,
+        detail,
+        at: now,
+        breaker_type: ctx.breakerType,
+        ...(ctx.reconstructedFrom
+          ? { reconstructed_from: ctx.reconstructedFrom }
+          : {}),
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  fs.rmSync(path.join(dir, "breaker-tripped.json"), { force: true });
   if (decision !== "approve") return;
   const st = loadReviewState(projectRoot) ?? {};
   const summary = {

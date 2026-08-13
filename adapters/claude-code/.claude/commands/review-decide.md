@@ -20,11 +20,19 @@ Resolve a circuit breaker in the review loop. Accepts exactly one argument: appr
 
 ### 1–3. Validate, Decide, Record — run the deterministic core
 
-Run:
+Resolve the helper — this command is installed globally and runs in
+arbitrary target projects, so the repo-relative path is only a fallback
+for sessions inside a CCT checkout:
 
 ```
-bash scripts/review-decide.sh <project-dir> <approve|reject|retry>
+HELPER="$HOME/.claude/scripts/review-decide.sh"            # installed by setup.sh
+[ -f "$HELPER" ] || HELPER="${CCT_REPO_DIR:-.}/scripts/review-decide.sh"
+bash "$HELPER" <project-dir> <approve|reject|retry>
 ```
+
+If neither location has it, say so and point at
+`adapters/claude-code/setup.sh --sync` rather than improvising the state
+transitions by hand.
 
 The script owns every state transition that must not depend on
 prompt-following (#233):
