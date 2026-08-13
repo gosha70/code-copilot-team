@@ -1,7 +1,7 @@
 ---
 spec_mode: full
 feature_id: auto-build-conformance-evaluator
-status: draft
+status: approved
 date: 2026-08-13
 risk_category: integration
 justification: >
