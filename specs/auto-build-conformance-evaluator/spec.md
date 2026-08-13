@@ -1,4 +1,4 @@
-# Spec: runtime conformance evaluator, increment C2 (#242) — rev 2
+# Spec: runtime conformance evaluator, increment C2 (#242) — rev 3
 
 Requirements for #190 §6's runtime conformance evaluator and increment-B
 handoff items 1/2/5. C1 (#222) froze the coverage contract; this
@@ -22,12 +22,19 @@ this file states the requirements they satisfy.
 - A criterion fails: the attended run parks naming `FR-23`; the operator
   fixes the app, commits, resumes; the recovery commit is reviewed
   (commit-bound recovery), the gate re-runs, the run lands.
-- A project with no `runtime_conformance` mappings runs byte-identically
-  to C1 — no block required, no evaluator, no new behavior.
+- A project with no `runtime_conformance` mappings needs no conformance
+  block and no evaluator. Its deterministic verifiers (if any) are now
+  EXECUTED at the landing gate — the intentional C2 change (SC-8). A
+  project with neither a coverage block nor a finalized
+  `verification.yaml` runs byte-identically to C1.
 
 ## Constraints
 
-- Runs without a conformance requirement MUST be byte-identical to C1.
+- Runs with neither a coverage block nor a finalized
+  `verification.yaml` MUST be byte-identical to C1. Deterministic-only
+  runs need no conformance block or evaluator; their one intentional
+  delta from C1 is the executed deterministic-verifier gate (FR-7,
+  SC-8) — documented and tested, never silent.
 - One evaluator invocation per landing gate (no §5 loops in C2).
 - The evaluator is a configured provider in the reviewers' trust class;
   no new sandboxing beyond app process-group containment.
@@ -43,8 +50,9 @@ this file states the requirements they satisfy.
   (schema-validated, closed). An operator-supplied `required` key MUST be
   rejected by name with a message saying it is derived from
   `verification.yaml` (#190 §6). `test`/`app`(top-level)/`visual` remain
-  rejected by name (C3+). Runs without the block behave byte-identically
-  to C1 (the FR-2 discipline of C1 carries over).
+  rejected by name (C3+). Runs without the block require no evaluator
+  and no conformance machinery (the deterministic-gate delta is FR-7's,
+  not this block's).
 
 - **FR-2 — `required` derivation.** Conformance is REQUIRED for a run iff
   `specs/<feature>/verification.yaml` maps at least one `FR-N` to a
@@ -85,35 +93,46 @@ this file states the requirements they satisfy.
   verification-wide predicate — plan design decision 3 is normative.
 
 - **FR-5 — the evaluator contract (fresh context, running app).** The
-  evaluator is invoked like a reviewer: a providers.toml provider command,
-  executed once per landing gate, with
-  - `CCT_CONFORMANCE_CRITERIA` — path to a JSON file of the frozen
-    criteria `[ {fr, statement_sha, criterion} … ]`,
-  - `CCT_CONFORMANCE_APP` — path to a JSON file carrying the frozen,
-    evaluator-relevant app interface (`ready.url` when present — the
-    base URL of the running app; nothing mutable),
-  - `CCT_CONFORMANCE_RESULT` — path the evaluator MUST write verdicts to:
-    `{ "criteria": [ {fr, statement_sha, criterion,
-    verdict: "pass"|"fail", evidence} … ] }` — every verdict echoes its
-    FULL frozen tuple,
-  - `CCT_REVIEW_COST_FILE` — the adapter-written cost channel (FR-8),
-  - cwd = the project; the app is already running (FR-6).
-  The evaluator exercises the RUNNING APPLICATION, not the diff (#190 §6).
-  The driver MUST ensure the result path is absent before invocation and
-  require it newly produced (freshness). A result that is missing, stale,
-  unparseable, schema-invalid, or that is not an EXACT identity multiset
-  of the frozen criteria — any criterion missing, duplicated, phantom, or
-  modified — MUST be treated as evaluator failure, never as a pass (fail
-  closed; a criterion cannot pass by absence or by alteration).
+  evaluator is a providers.toml provider invoked through the SAME
+  request/adapter machinery reviewers use — providers consume a request
+  document and emit stdout; nothing else may be assumed of them
+  (existing providers are prompt-in/stdout-out and may be explicitly
+  read-only). Once per landing gate:
+  - the driver AUTHORS a conformance request document into the ledger
+    carrying the frozen criteria `[ {fr, statement_sha, criterion} … ]`,
+    the frozen evaluator-relevant app interface (`ready.url` when
+    present — the base URL of the running app; nothing mutable), and a
+    Required Output Format section demanding EXACTLY ONE fenced JSON
+    block `{ "criteria": [ {fr, statement_sha, criterion,
+    verdict: "pass"|"fail", evidence} … ] }` — every verdict echoing
+    its FULL frozen tuple;
+  - the request path is substituted at the provider command template's
+    request-file placeholder; the adapter captures stdout, bounded by
+    the frozen `timeout_sec`, and writes `CCT_REVIEW_COST_FILE` (FR-8);
+  - the ADAPTER extracts the fenced JSON block from the captured stdout
+    and writes the result file — the evaluator itself never writes into
+    the checkout or the ledger (read-only providers are admissible).
+  The evaluator exercises the RUNNING APPLICATION, not the diff
+  (#190 §6). The driver MUST ensure the result path is absent before
+  invocation, and the result MUST be produced from THIS invocation's
+  capture (freshness). A non-zero provider exit, a timeout, no fenced
+  JSON block, more than one, or a result that is unparseable,
+  schema-invalid, or not an EXACT identity multiset of the frozen
+  criteria — any criterion missing, duplicated, phantom, or modified —
+  MUST be treated as evaluator failure, never as a pass (fail closed; a
+  criterion cannot pass by absence or by alteration).
 
 - **FR-6 — driver-owned app lifecycle.** The driver, not the evaluator,
   starts and stops the application: `conformance.app` carries
   `{ "command": "...", "ready": { "url" | "command", "timeout_sec" },
-  "stop_timeout_sec" }`. Start before the evaluator, prove readiness —
-  the probe must succeed within its bound AND the spawned process group
-  must still be alive at the moment it succeeds (a stale responder must
-  not vouch for a dead launch); a failed probe is an evaluator-gate
-  failure, fail closed — and stop the WHOLE process group afterwards with
+  "stop_timeout_sec" }`. Readiness MUST be bound to the launched
+  instance: BEFORE the app is started, the ready probe MUST FAIL — an
+  already-answering responder cannot be attributed to this launch and
+  fails the gate; after launch the probe must succeed within its bound
+  AND the spawned process group must still be alive at the moment it
+  succeeds (a stale responder must not vouch for a dead launch); a
+  failed probe is an evaluator-gate failure, fail closed. Stop the
+  WHOLE process group afterwards with
   TERM→KILL escalation (the cp_run_bounded discipline) — a surviving
   descendant must not outlive the gate. App stdout/stderr are captured to
   the ledger.
@@ -138,8 +157,8 @@ this file states the requirements they satisfy.
   via the adapter cost channel is measured; a missing/invalid/negative
   cost is unmetered and debits the conservative per-invocation estimate
   when estimates are active. Evaluator wall-clock counts toward the run
-  cap; `check_caps` runs after the gate. In-band cost text in the result
-  file is never parsed as a measurement.
+  cap; `check_caps` runs after the gate. In-band cost text in the
+  evaluator's stdout is never parsed as a measurement.
 
 - **FR-9 — dispositions and resume.** Evaluator-gate failures use a
   dedicated reason (`conformance_gate`) with the C1 recovery contract:
@@ -156,12 +175,13 @@ this file states the requirements they satisfy.
 
 - **FR-11 — checkout integrity across the gate.** The landing verifier
   gate executes in the working checkout. Before verifier/app execution
-  the tracked tree MUST be clean and the gate HEAD captured; after the
-  evaluator finishes and the app is stopped, HEAD MUST be unchanged and
-  the tracked tree clean. Any mutation of the checkout — by the app, a
-  verifier command, or the evaluator — is a control-system failure:
-  dispose `git_anomaly` naming the paths; the mutation MUST never reach
-  the summary commit.
+  the FULL porcelain status — INCLUDING untracked files — MUST be empty
+  and the gate HEAD captured; after the evaluator finishes and the app
+  is stopped, HEAD MUST be unchanged and the full porcelain status
+  empty again. Any mutation of the checkout — a tracked edit OR a new
+  untracked file, by the app, a verifier command, or the evaluator — is
+  a control-system failure: dispose `git_anomaly` naming the paths; the
+  mutation MUST never reach the `git add -A` summary commit.
 
 ## Explicitly deferred
 
@@ -180,7 +200,7 @@ this file states the requirements they satisfy.
   FR admits iff the conformance block is present and its evaluator is
   healthy; each of {missing block, unresolvable provider, unhealthy
   provider} refuses with a named check. A yaml with no such mapping
-  admits without the block, byte-identically to C1.
+  admits without the block (no evaluator required).
 - **SC-2** An operator-supplied `conformance.required` is rejected by
   name; the accepted block round-trips the schema.
 - **SC-3** The frozen contract pins the deterministic verifier set,
@@ -190,17 +210,23 @@ this file states the requirements they satisfy.
   A conformance-only run (no coverage block) freezes and takes a
   `-block` preflight path; resuming it without the frozen contract
   refuses (the lifecycle keys on the verification-wide predicate).
-- **SC-4** The evaluator receives the criteria file, the frozen app
-  interface (`CCT_CONFORMANCE_APP`), and the RUNNING app (readiness
-  proven); its verdicts land in `verification-results.json` per FR; a
-  failing criterion parks/terminates naming the FR; a result that is
-  missing, stale, or not an exact identity multiset of the frozen
-  criteria (missing, duplicated, phantom, or modified entries) fails
-  closed (never pass-by-absence or -alteration).
-- **SC-5** App lifecycle: ready-probe timeout fails the gate; a probe
-  that succeeds while the spawned process group is dead fails the gate;
-  after the gate no descendant of the app process group survives
-  (asserted with a marker child, the cp_run_bounded pattern).
+- **SC-4** The evaluator receives the frozen criteria and app interface
+  via the driver-authored request document (asserted against a
+  provider-template-shaped stub entry) and the RUNNING app (readiness
+  proven); the adapter-extracted verdicts land in
+  `verification-results.json` per FR; a failing criterion
+  parks/terminates naming the FR; a capture with no fenced JSON block,
+  multiple blocks, a non-zero exit, or a result that is not an exact
+  identity multiset of the frozen criteria (missing, duplicated,
+  phantom, or modified entries) fails closed (never pass-by-absence or
+  -alteration).
+- **SC-5** App lifecycle: a ready probe that already succeeds BEFORE
+  launch fails the gate (unattributable responder — asserted with a
+  pre-existing server and a sleep-marker launch command); ready-probe
+  timeout fails the gate; a probe that succeeds while the spawned
+  process group is dead fails the gate; after the gate no descendant of
+  the app process group survives (asserted with a marker child, the
+  cp_run_bounded pattern).
 - **SC-6** A measured evaluator cost debits `cost_usd`; an unmetered one
   debits the estimate (flagged); in-band cost text is ignored; the cap
   parks when crossed at the gate (event order proven, C1 pattern).
@@ -209,8 +235,9 @@ this file states the requirements they satisfy.
 - **SC-8** A frozen deterministic verifier whose command fails blocks
   landing (named in `verification-results.json`) even when the generic
   `test.command` gate is green — execution, not inference.
-- **SC-9** A tracked-file mutation of the checkout during the gate (by
-  the app or the evaluator) disposes `git_anomaly` naming the path, and
-  the mutation never reaches the summary commit.
+- **SC-9** A checkout mutation during the gate — a tracked-file edit OR
+  a NEW UNTRACKED file created by the app or the evaluator — disposes
+  `git_anomaly` naming the path, and the mutation never reaches the
+  `git add -A` summary commit (both cases exercised).
 - **SC-10** All suites green; every SC regression verified to fail
   against the pre-change code (mutation runs recorded in the PR).

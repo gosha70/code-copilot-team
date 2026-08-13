@@ -1,4 +1,4 @@
-# Tasks: runtime conformance evaluator, increment C2 (#242) — rev 2
+# Tasks: runtime conformance evaluator, increment C2 (#242) — rev 3
 
 Sequenced; each task lands with its regressions and mutation runs. The
 plan's gate sequence is normative.
@@ -45,30 +45,38 @@ plan's gate sequence is normative.
 
 ## T4 — App lifecycle (FR-6)
 
-- Start in own process group, ledger-captured output, ready probe
+- Pre-launch binding probe (the ready probe MUST fail before launch),
+  start in own process group, ledger-captured output, ready probe
   (url/command, bounded, AND the spawned group alive at success), stop
   with TERM→KILL escalation that must complete (cp_run_bounded
   discipline).
-- Tests: ready-timeout fails closed; readiness with a dead spawned
-  group fails closed (stale-responder case); no descendant survives the
-  gate (marker child) — SC-5.
+- Tests: a pre-existing responder answering `ready.url` before launch
+  fails the gate (launched command = sleep marker); ready-timeout fails
+  closed; readiness with a dead spawned group fails closed; no
+  descendant survives the gate (marker child) — SC-5.
 
 ## T5 — Landing verifier gate + evidence (FR-5, FR-7, FR-9, FR-11)
 
 - The plan's 12-step landing sequence: tamper check; checkout integrity
-  BEFORE (clean tree, capture gate HEAD); EXECUTE every frozen
-  deterministic verifier (bounded, per-verifier results — never
-  inferred from `test.command`); evaluator health check; app up;
-  criteria file + frozen app interface (`CCT_CONFORMANCE_APP`) from the
-  frozen contract; ensure-absent → bounded evaluator invocation via the
-  reviewer adapter path → require a newly-produced result; app stop;
-  checkout integrity AFTER (HEAD unchanged + clean, else `git_anomaly`);
+  BEFORE (EMPTY full porcelain status incl. untracked, capture gate
+  HEAD); EXECUTE every frozen deterministic verifier (bounded,
+  per-verifier results — never inferred from `test.command`); evaluator
+  health check; pre-launch binding probe + app up; driver-authored
+  conformance request document (frozen criteria tuples + app interface
+  + Required Output Format: exactly one fenced JSON verdict block);
+  ensure-absent → bounded provider invocation via the request-file
+  placeholder, adapter-captured stdout → the ADAPTER extracts the block
+  and writes the result file (the evaluator writes nothing; read-only
+  providers admissible); app stop; checkout integrity AFTER (HEAD
+  unchanged + EMPTY porcelain incl. untracked, else `git_anomaly`);
   fail-closed identity-multiset result validation (full-tuple echo);
   `verification-results.json` FR → per-verifier results;
   `conformance_gate` disposition naming FRs/verifiers, shared
   commit-bound recovery arm (generalise the coverage arm to both
   reasons), attended parity.
-- Tests: SC-4, SC-7, SC-8, SC-9; byte-identical no-block fixtures.
+- Tests: SC-4, SC-7, SC-8, SC-9 (tracked-edit AND untracked-file
+  mutations); the evaluator stub registered in the real
+  provider-template shape; neither-input byte-identical fixtures.
 
 ## T6 — Metering (FR-8, handoff items 3/5)
 

@@ -29,7 +29,7 @@ origin:
     remainder).
 ---
 
-# Plan: runtime conformance evaluator, increment C2 (#242) — rev 2
+# Plan: runtime conformance evaluator, increment C2 (#242) — rev 3
 
 `spec.md` states the requirements; THIS file's lifecycle additions and
 sequences are the normative implementation contract. One source: the C1
@@ -52,7 +52,7 @@ same skeleton:
 | Gate point | `floor_enforced_at` (phase/landing) | landing only (single invocation; §5 loops deferred) |
 | Disposition | `coverage_gate` | `conformance_gate` (same parked_head + recovery contract) |
 | Metering | n/a (local commands) | reviewer-style cost channel + estimates |
-| Checkout | evidence in throwaway worktree | in-place, under a clean-before/clean-after integrity invariant |
+| Checkout | evidence in throwaway worktree | in-place, under an empty-porcelain-before/after integrity invariant (untracked files included) |
 
 ## Design decisions (normative)
 
@@ -64,8 +64,8 @@ same skeleton:
 
 2. **Admission (unattended) — handoff item 2.** Replace validate-spec's
    categorical `runtime_conformance` refusal with:
-   - no mapping → no conformance requirement, block optional, C1
-     behavior byte-identical;
+   - no mapping → no conformance requirement, block optional, admission
+     behavior unchanged;
    - mapping present → require `verification.conformance` with an
      `evaluator` that resolves in providers.toml AND passes
      providers-health; otherwise refuse (named check, exit 1, no ledger).
@@ -105,9 +105,10 @@ same skeleton:
    coverage gate and BEFORE finalize/push/PR. Skip entirely iff the
    frozen contract carries neither `verifiers` nor `conformance`.
    1. tamper check (C1's, covers the whole pinned object);
-   2. **checkout integrity — BEFORE (rev 2, finding 4):** require a
-      clean tracked tree (the C1 preflight invariant re-checked here)
-      and capture `GATE_HEAD`;
+   2. **checkout integrity — BEFORE (rev 3: untracked included):**
+      require an EMPTY full porcelain status — tracked AND untracked
+      files (an untracked file would otherwise reach `driver_commit`'s
+      `git add -A` summary commit) — and capture `GATE_HEAD`;
    3. **execute every frozen deterministic verifier (rev 2, finding
       1):** run each `test` command from the project root, bounded by
       the frozen `timeout_sec`, exit 0 = that verifier green (the
@@ -119,7 +120,11 @@ same skeleton:
    4. if the frozen contract carries `conformance`: gate-time health
       check of the frozen evaluator provider → unhealthy disposes
       `provider_unavailable`;
-   5. start the app: spawn `app.command` in its own process group from
+   5. **pre-launch binding probe (rev 3, finding 4):** run the ready
+      probe ONCE before launch; it MUST FAIL — an already-answering
+      responder cannot be attributed to this launch → dispose
+      `conformance_gate` ("ready probe answered before launch"). Then
+      start the app: spawn `app.command` in its own process group from
       the project root, capture stdout/stderr to
       `$LEDGER_DIR/conformance/app.log`;
    6. readiness: poll `ready.url` (HTTP 200) or run `ready.command`
@@ -128,24 +133,35 @@ same skeleton:
       (rev 2, finding 5 — a stale process answering the probe must not
       vouch for a dead launch); failure → stop → dispose
       `conformance_gate` ("app never became ready");
-   7. write the criteria file from the FROZEN criteria and the
-      evaluator-visible app interface `CCT_CONFORMANCE_APP` (rev 2,
-      finding 5): a JSON artifact carrying the frozen app contract's
-      evaluator-relevant fields (`ready.url` when present — the base
-      URL of the running app — plus nothing mutable); ENSURE the result
-      path is absent (freshness, the C1 delete-before-run lesson);
-      invoke the evaluator provider (reviewer invocation path) with
-      `CCT_CONFORMANCE_CRITERIA`, `CCT_CONFORMANCE_RESULT`,
-      `CCT_CONFORMANCE_APP`, `CCT_REVIEW_COST_FILE`, bounded by the
-      frozen `timeout_sec`; require invocation completion and require
-      the result file to be NEWLY produced;
+   7. **author the request; invoke through the adapter (rev 3, finding
+      2):** providers consume a request document and emit stdout — the
+      reviewer protocol; environment variables neither instruct a model
+      nor produce files, and providers may be explicitly read-only. The
+      driver writes `$LEDGER_DIR/conformance/request.md` from the
+      FROZEN contract: the criteria tuples
+      `[ {fr, statement_sha, criterion} … ]`, the evaluator-relevant
+      app interface (`ready.url` when present — the base URL of the
+      running app; nothing mutable), and a Required Output Format
+      section demanding EXACTLY ONE fenced JSON block
+      `{ "criteria": [ {fr, statement_sha, criterion, verdict,
+      evidence} … ] }`. ENSURE the result path is absent (freshness,
+      the C1 delete-before-run lesson); substitute the request path at
+      the provider command template's request-file placeholder (the
+      `{review_request}` slot — the generic request-file slot); the
+      adapter captures stdout bounded by the frozen `timeout_sec` and
+      writes `CCT_REVIEW_COST_FILE`; the ADAPTER extracts the fenced
+      JSON block from the capture and writes it to the result path —
+      the evaluator itself writes nothing (read-only providers are
+      admissible). Non-zero exit, timeout, or no/multiple fenced blocks
+      = evaluator failure;
    8. stop the app: TERM the process group, escalate to KILL after
       `stop_timeout_sec` (cp_run_bounded's escalation-must-complete
       discipline);
-   9. **checkout integrity — AFTER (rev 2, finding 4):** require HEAD
-      == `GATE_HEAD` and the tracked tree clean; any mutation is a
-      control-system failure — dispose `git_anomaly` naming the paths,
-      and the mutation must never reach the summary commit;
+   9. **checkout integrity — AFTER (rev 3: untracked included):**
+      require HEAD == `GATE_HEAD` and an EMPTY full porcelain status
+      (tracked AND untracked files); any mutation is a control-system
+      failure — dispose `git_anomaly` naming the paths, and the
+      mutation must never reach the `git add -A` summary commit;
    10. debit costs (measured via the cost file, else estimate);
    11. validate the result: parseable, schema-shaped, and an EXACT
        identity multiset match against the frozen criteria (rev 2,
@@ -186,16 +202,27 @@ provider, same trust class as reviewers).
 
 ## Risk and the scope of "byte-identical"
 
-Runs without a conformance requirement MUST behave byte-identically to
-C1 — asserted the C1 way (no-block fixtures re-run against the new
-driver). The only intentional behavior changes for existing configs:
-none — `runtime_conformance` mappings were inadmissible before C2, so no
+Runs with NEITHER a coverage block NOR a finalized `verification.yaml`
+MUST behave byte-identically to C1 — asserted the C1 way (neither-input
+fixtures re-run against the new driver). Two intentional behavior
+changes for existing configs, both documented and tested (rev 3,
+finding 1 — the rev-2 "byte-identical, no changes" claim was wrong):
+1. deterministic verifiers of a finalized artifact are EXECUTED at the
+   landing gate (SC-8) — previously admission screened them and landing
+   keyed only on the generic `test.command`, so a run whose verifier
+   command fails can NEWLY block landing;
+2. a finalized artifact now triggers the frozen-contract lifecycle
+   (`-block` preflight paths, decision 3 — SC-3).
+`runtime_conformance` mappings were inadmissible before C2, so no
 admitted run can have depended on the old refusal.
 
 ## Test strategy
 
-Driver-suite e2e per SC (fixtures: a stub evaluator provider writing
-verdict files; a stub app with ready endpoint and a marker child for the
-process-group assertion), validate-spec admission cases, schema parity
-assertions, pi runtime untouched (no pi surface in C2), mutation runs
-for every SC regression (C1 discipline).
+Driver-suite e2e per SC (fixtures: a stub evaluator provider registered
+in the REAL provider-template shape — a command template with the
+request-file placeholder — emitting the fenced JSON verdict block on
+stdout; a stub app with ready endpoint and a marker child for the
+process-group assertion; a pre-existing responder for the pre-launch
+binding probe), validate-spec admission cases, schema parity assertions,
+pi runtime untouched (no pi surface in C2), mutation runs for every SC
+regression (C1 discipline).
