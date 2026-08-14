@@ -5394,16 +5394,49 @@ assert_eq "C2-T4: a missing readiness command is unproven, not not-ready" "unpro
 CA_MSG=$(ca_bind_preflight "$MISSJ"); CA_RC=$?
 assert_exit "C2-T4: a missing readiness command refuses the binding" 1 "$CA_RC"
 assert_contains "C2-T4: refusal names the missing command" "$CA_MSG" "was not found"
+# A broken wrapper ALONE is survivable since round 8: it is rejected at
+# selection and the watchdog path produces the real verdict, so the
+# binding legitimately clears. (Neither mechanism working is the
+# unproven case — covered by the mktemp+timeout shim above.)
 CA_SHIM=$(mktemp -d)
 printf '#!/usr/bin/env bash\nexit 126\n' > "$CA_SHIM/timeout"; chmod +x "$CA_SHIM/timeout"
 cp "$CA_SHIM/timeout" "$CA_SHIM/gtimeout"
-CA_MSG=$(PATH="$CA_SHIM:$PATH" ca_bind_preflight "$CMDJ" 2>/dev/null); CA_RC=$?
-assert_exit "C2-T4: an unexecutable probe wrapper (126) refuses the binding" 1 "$CA_RC"
-assert_contains "C2-T4: refusal says no verdict was produced" "$CA_MSG" "produced no verdict"
+PATH="$CA_SHIM:$PATH" ca_bind_preflight "$CMDJ" >/dev/null 2>&1; CA_RC=$?
+assert_exit "C2-T4: a broken wrapper alone still yields a verdict (binding clears)" 0 "$CA_RC"
 rm -rf "$CA_SHIM"
 FALSEJ=$(jq -n '{command:"sleep 30", ready:{command:"exit 1", timeout_sec:5}, stop_timeout_sec:2}')
 assert_eq "C2-T4: a probe that RAN and failed is not-ready (the binding clears)" "not-ready" \
     "$(ca_probe_outcome "$FALSEJ" 3)"
+
+# ── Round-8 finding 1: a readiness attempt executes the probe AT MOST
+#    ONCE. The timeout wrapper is validated on a command of our own, so a
+#    127 from the probe is never mistaken for a broken wrapper (which
+#    used to rerun the caller's arbitrary command — duplicate side
+#    effects, two probe durations inside one deadline). ──
+CA_SHIM=$(mktemp -d)
+cat > "$CA_SHIM/timeout" << 'FAITHFUL'
+#!/usr/bin/env bash
+# A wrapper that faithfully propagates the child's status.
+shift 3
+"$@"
+FAITHFUL
+chmod +x "$CA_SHIM/timeout"; cp "$CA_SHIM/timeout" "$CA_SHIM/gtimeout"
+CA_RUNS="$APPD/probe-runs"; : > "$CA_RUNS"
+RUN127J=$(jq -n --arg r "echo x >> $CA_RUNS; exit 127" '{command:"sleep 30", ready:{command:$r, timeout_sec:3}, stop_timeout_sec:2}')
+CA_MSG=$(PATH="$CA_SHIM:$PATH" ca_probe_outcome "$RUN127J" 3 2>/dev/null)
+assert_eq "C2-T4: a probe exiting 127 runs exactly once" "1" \
+    "$(wc -l < "$CA_RUNS" | tr -d ' ')"
+assert_contains "C2-T4: a probe exiting 127 is unproven, not a verdict" "$CA_MSG" "unproven:"
+# A wrapper that cannot execute is rejected at SELECTION, so the probe
+# still runs once — through the watchdog path.
+printf '#!/usr/bin/env bash\nexit 126\n' > "$CA_SHIM/timeout"; cp "$CA_SHIM/timeout" "$CA_SHIM/gtimeout"
+: > "$CA_RUNS"
+OKJ=$(jq -n --arg r "echo x >> $CA_RUNS; exit 0" '{command:"sleep 30", ready:{command:$r, timeout_sec:3}, stop_timeout_sec:2}')
+CA_MSG=$(PATH="$CA_SHIM:$PATH" ca_probe_outcome "$OKJ" 3 2>/dev/null)
+assert_eq "C2-T4: a broken wrapper falls back without rerunning the probe" "1" \
+    "$(wc -l < "$CA_RUNS" | tr -d ' ')"
+assert_eq "C2-T4: the fallback still produces the probe's real verdict" "ready" "$CA_MSG"
+rm -rf "$CA_SHIM"
 
 # ── Round-7 finding 2: cleanup that cannot be proven is an
 #    infrastructure failure, not a successful probe. ──
@@ -5438,7 +5471,20 @@ while True:
 PYSTALL
 python3 "$APPD/stall.py" "$STALL_PORT" >/dev/null 2>&1 &
 STALL_PID=$!
-_sw=0; while ! curl -sS -o /dev/null --max-time 1 "http://127.0.0.1:$STALL_PORT/" 2>/dev/null && [[ $_sw -lt 10 ]]; do sleep 1; _sw=$((_sw + 1)); done
+# The responder NEVER answers by design, so an HTTP probe cannot prove it
+# started (round-8 finding 2: the old loop always ran out and continued,
+# and a failed bind would have made the timing assertion pass against the
+# buggy implementation too). Prove the process is alive and the socket
+# ACCEPTS a TCP connection instead.
+_sw=0
+while ! python3 -c "import socket,sys; s=socket.create_connection(('127.0.0.1', int(sys.argv[1])), 1); s.close()" "$STALL_PORT" 2>/dev/null; do
+    sleep 1; _sw=$((_sw + 1))
+    [[ $_sw -ge 10 ]] && break
+done
+kill -0 "$STALL_PID" 2>/dev/null && CA_RC=0 || CA_RC=1
+assert_exit "C2-T4 fixture: the stalling responder process is alive" 0 "$CA_RC"
+python3 -c "import socket,sys; s=socket.create_connection(('127.0.0.1', int(sys.argv[1])), 2); s.close()" "$STALL_PORT" 2>/dev/null && CA_RC=0 || CA_RC=1
+assert_exit "C2-T4 fixture: the stalling responder accepts TCP connections" 0 "$CA_RC"
 SLOWIFJ=$(jq -n --arg r "sleep 2; true" '{command:"sleep 30", ready:{command:$r, timeout_sec:3}, stop_timeout_sec:2}')
 SIPID=$(ca_start "$SLOWIFJ" "$APPD" "$APPD/slowif.log")
 CA_T0=$(date +%s)

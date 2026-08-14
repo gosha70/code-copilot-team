@@ -20,11 +20,22 @@
 # spawned group is dead is some other process. Both are gate failures —
 # the alternative is an evaluator confidently testing the wrong app.
 
-# ca_timeout_cmd — coreutils timeout, if the host has one.
+# ca_timeout_cmd — a coreutils timeout that actually WORKS, if the host
+# has one. The mechanism is validated here, on a trivial command of our
+# own, precisely so the probe path never has to guess whether a status
+# came from the wrapper or from the wrapped command (round-8 finding 1:
+# inferring "broken wrapper" from 127 reran the caller's arbitrary probe,
+# duplicating its side effects and spending two probe durations inside
+# one deadline).
 ca_timeout_cmd() {
-    if command -v timeout >/dev/null 2>&1; then echo "timeout"
-    elif command -v gtimeout >/dev/null 2>&1; then echo "gtimeout"
-    fi
+    local c
+    for c in timeout gtimeout; do
+        if command -v "$c" >/dev/null 2>&1 && "$c" -k 1 1 true >/dev/null 2>&1; then
+            echo "$c"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # ca_run_bounded <secs> <command> — run an arbitrary probe command under
@@ -51,13 +62,10 @@ ca_run_bounded() {
         wait "$pid" 2>/dev/null || rc=$?
         ca_kill_group "$pid" || rc=125
         set +m
-        # 127 means the wrapper itself could not execute (a broken or
-        # shimmed timeout). Do NOT report it as the probe's verdict —
-        # fall through to the watchdog path and actually bound the
-        # command. A genuinely missing probe command returns 127 there
-        # too, so nothing is misread as success.
-        [[ $rc -ne 127 ]] && return $rc
-        rc=0
+        # The wrapper was validated before use, so this status belongs to
+        # the PROBE. Never rerun it: an arbitrary readiness command must
+        # execute at most once per attempt.
+        return $rc
     fi
     # No timeout(1): own process group + watchdog, with the escalation
     # allowed to COMPLETE before returning (the cp_run_bounded lesson —
