@@ -1857,17 +1857,50 @@ vg_dirty() {
 }
 
 # vg_fenced_json <capture-file> — print the ONE fenced JSON block in the
-# evaluator's stdout. Fails (non-zero) when there is none or more than
-# one: an evaluator that hedges with two blocks has not given a verdict.
+# evaluator's stdout. Fails (non-zero) when there is none, more than one,
+# or the block is never CLOSED (round-10 finding 4: an unterminated fence
+# is truncated output, not a verdict).
 vg_fenced_json() {
-    local file="$1" count
+    local file="$1" count closed
     count=$(awk '/^[[:space:]]*```[[:space:]]*json[[:space:]]*$/ { n++ } END { print n + 0 }' "$file")
     [[ "$count" == "1" ]] || { echo "expected exactly one fenced json block, found $count" >&2; return 1; }
+    closed=$(awk '
+        /^[[:space:]]*```[[:space:]]*json[[:space:]]*$/ { inblock = 1; next }
+        inblock && /^[[:space:]]*```[[:space:]]*$/ { closed = 1; inblock = 0; next }
+        END { print closed + 0 }' "$file")
+    [[ "$closed" == "1" ]] || { echo "the fenced json block is never closed" >&2; return 1; }
     awk '
         /^[[:space:]]*```[[:space:]]*json[[:space:]]*$/ { inblock = 1; next }
         inblock && /^[[:space:]]*```[[:space:]]*$/ { inblock = 0; next }
         inblock { print }
     ' "$file"
+}
+
+# vg_integrity_after <gate-head> — the FR-11 post-execution check. Runs
+# after ANY arbitrary execution (deterministic verifiers, the app, the
+# evaluator), not only the conformance path (round-10 finding 1: a
+# deterministic verifier that edited a tracked file and exited 0 sailed
+# past this and its mutation would ride into the summary commit).
+# Prints the anomaly detail and returns 1 when the checkout moved.
+vg_integrity_after() {
+    local gate_head="$1" head_now dirty_now
+    head_now=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+    dirty_now=$(vg_dirty)
+    if [[ "$head_now" != "$gate_head" || -n "$dirty_now" ]]; then
+        echo "the verifier gate mutated the checkout (HEAD ${gate_head:0:8} -> ${head_now:0:8}; changes: $(printf '%s' "$dirty_now" | tr '\n' ' ')) — a verifier, the app, or the evaluator wrote to the repository (FR-11)"
+        return 1
+    fi
+    return 0
+}
+
+# vg_app_cleanup — EXIT/signal safety net: an interrupt between ca_start
+# and the gate's own teardown must not leave the application group alive
+# (round-10 finding 3).
+VG_APP_PID=""
+vg_app_cleanup() {
+    [[ -n "${VG_APP_PID:-}" ]] || return 0
+    ca_stop "$VG_APP_PID" "${VG_APP_STOP_SEC:-10}" >/dev/null 2>&1 || true
+    VG_APP_PID=""
 }
 
 verifier_gate() {
@@ -1930,6 +1963,13 @@ verifier_gate() {
                 <<< "$results")
             echo "[auto-build] verifier gate: $vfr $vtest -> $vdetail" >&2
         done < <(jq -r '.verifiers.set[] | [.fr, .statement_sha, .test] | @tsv' <<< "$FROZEN_CONTRACT")
+        # FR-11 after ARBITRARY execution — deterministic verifiers are
+        # project code too.
+        local det_anomaly
+        if ! det_anomaly=$(vg_integrity_after "$gate_head"); then
+            dispose "git_anomaly" "$det_anomaly" "$hist"
+            return 1
+        fi
     fi
 
     # ── Conformance (present iff the artifact derived the requirement) ──
@@ -1948,22 +1988,31 @@ verifier_gate() {
         local ptoml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
         local ccmd chc
         if [[ -z "$evaluator" || -z "$app" ]]; then
-            dispose "provider_unavailable" "the frozen contract requires runtime conformance but carries no evaluator (attended run without verification.conformance) — configure a capable evaluator, then resume" "$hist"
+            dispose "provider_unavailable" "the frozen contract requires runtime conformance but carries NO evaluator (an attended run started without verification.conformance). The contract is frozen, so configuring one now cannot change this run: add verification.conformance and start a FRESH run." "$(jq -n --argjson h "$hist" '$h + {provider_scope: "evaluator", evaluator: null}')"
             return 1
         fi
         if ! grep -o '^\[providers\.[^]]*' "$ptoml" 2>/dev/null | sed 's/^\[providers\.//' | grep -qxF "$evaluator"; then
-            dispose "provider_unavailable" "frozen evaluator '$evaluator' no longer resolves in $ptoml" "$hist"
+            dispose "provider_unavailable" "frozen evaluator '$evaluator' no longer resolves in $ptoml" "$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')"
             return 1
         fi
         ccmd=$(vg_toml_get "$ptoml" "providers.$evaluator" "conformance_command")
         chc=$(vg_toml_get "$ptoml" "providers.$evaluator" "healthcheck")
         if [[ -z "$ccmd" || "$ccmd" != *"{review_request}"* ]]; then
-            dispose "provider_unavailable" "frozen evaluator '$evaluator' no longer declares a usable conformance_command (missing, or without the {review_request} placeholder)" "$hist"
+            dispose "provider_unavailable" "frozen evaluator '$evaluator' no longer declares a usable conformance_command (missing, or without the {review_request} placeholder)" "$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')"
             return 1
         fi
-        if [[ -n "$chc" ]] && ! bash -c "$chc" >/dev/null 2>&1; then
-            dispose "provider_unavailable" "frozen evaluator '$evaluator' failed its healthcheck at the gate" "$hist"
-            return 1
+        # The healthcheck is operator-supplied code: bound it, or a
+        # hanging check blocks an unattended run past every cap
+        # (round-10 finding 5).
+        if [[ -n "$chc" ]]; then
+            local hrc=0
+            ca_run_bounded 30 "$chc" || hrc=$?
+            if [[ $hrc -ne 0 ]]; then
+                local hwhy="exit $hrc"
+                [[ $hrc -eq 124 ]] && hwhy="hung past its 30s bound"
+                dispose "provider_unavailable" "frozen evaluator '$evaluator' failed its healthcheck at the gate ($hwhy)" "$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')"
+                return 1
+            fi
         fi
 
         # 5. Pre-launch binding probe, then start the app in its own
@@ -1974,16 +2023,27 @@ verifier_gate() {
             return 1
         fi
         local applog="$cdir/app.log" apid
+        local stop_sec; stop_sec=$(jq -r '.stop_timeout_sec // 10' <<< "$app")
         apid=$(ca_start "$app" "$PROJECT_DIR" "$applog") || {
             dispose "conformance_gate" "could not start the application under test (see ${applog#$PROJECT_DIR/})" "$hist"
             return 1
         }
+        # From here on the app group is the gate's responsibility on EVERY
+        # exit path, including a signal (round-10 finding 3).
+        VG_APP_PID="$apid"; VG_APP_STOP_SEC="$stop_sec"
 
-        # 6. Readiness — bound to THIS launch.
-        local ready_msg
-        if ! ready_msg=$(ca_wait_ready "$app" "$apid" "$iface"); then
-            ca_stop "$apid" "$(jq -r '.stop_timeout_sec // 10' <<< "$app")" >/dev/null 2>&1 || true
-            dispose "conformance_gate" "the application never became usable: $ready_msg (see ${applog#$PROJECT_DIR/})" "$hist"
+        # 6. Readiness — bound to THIS launch. A teardown that cannot be
+        #    proven is itself a gate failure, never a swallowed error.
+        local ready_msg ready_rc=0 stop_rc=0
+        ready_msg=$(ca_wait_ready "$app" "$apid" "$iface") || ready_rc=$?
+        if [[ $ready_rc -ne 0 ]]; then
+            ca_stop "$apid" "$stop_sec" >/dev/null 2>&1 || stop_rc=$?
+            VG_APP_PID=""
+            if [[ $stop_rc -ne 0 ]]; then
+                dispose "conformance_gate" "the application never became usable ($ready_msg) AND its process group survived TERM and KILL — a stray process outlived the gate (see ${applog#$PROJECT_DIR/})" "$hist"
+            else
+                dispose "conformance_gate" "the application never became usable: $ready_msg (see ${applog#$PROJECT_DIR/})" "$hist"
+            fi
             return 1
         fi
 
@@ -2024,15 +2084,14 @@ verifier_gate() {
         local inv="${ccmd//\{review_request\}/$req}"
         local irc=0
         CCT_REVIEW_COST_FILE="$costfile" ca_run_bounded "$ctimeout" "cd $(printf '%q' "$PROJECT_DIR") && $inv" "$cap" || irc=$?
-        local stop_rc=0
-        ca_stop "$apid" "$(jq -r '.stop_timeout_sec // 10' <<< "$app")" || stop_rc=$?
+        stop_rc=0
+        ca_stop "$apid" "$stop_sec" || stop_rc=$?
+        VG_APP_PID=""
 
         # 9. Checkout integrity AFTER — before ANY verdict is honoured.
-        local head_now dirty_now
-        head_now=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")
-        dirty_now=$(vg_dirty)
-        if [[ "$head_now" != "$gate_head" || -n "$dirty_now" ]]; then
-            dispose "git_anomaly" "the verifier gate mutated the checkout (HEAD ${gate_head:0:8} -> ${head_now:0:8}; changes: $(printf '%s' "$dirty_now" | tr '\n' ' ')) — the app or the evaluator wrote to the repository (FR-11)" "$hist"
+        local conf_anomaly
+        if ! conf_anomaly=$(vg_integrity_after "$gate_head"); then
+            dispose "git_anomaly" "$conf_anomaly" "$hist"
             return 1
         fi
         if [[ $stop_rc -ne 0 ]]; then
@@ -2056,16 +2115,34 @@ verifier_gate() {
             dispose "conformance_gate" "the evaluator's verdict block is not valid JSON (see ${resfile#$PROJECT_DIR/})" "$hist"
             return 1
         fi
+        # The CLOSED shape comes first: identity comparison over a
+        # malformed document proves nothing (round-10 finding 4 — an
+        # object-valued `criteria`, boolean evidence, or extra fields
+        # used to slip through as an empty mismatch).
         local mismatch
         mismatch=$(jq -r --argjson want "$criteria" '
-            (.criteria // []) as $got
-            | [$got[]? | {fr, statement_sha, criterion}] as $echoed
-            | ($want | sort) as $w | ($echoed | sort) as $g
-            | if ($got | length) == 0 then "the verdict carries no criteria"
-              elif $w != $g then "the echoed criteria are not an exact match of the frozen set (missing, duplicated, altered, or invented entries)"
-              elif ([$got[] | select((.verdict != "pass") and (.verdict != "fail"))] | length) > 0 then "a verdict is neither pass nor fail"
-              elif ([$got[] | select((.evidence // "") == "")] | length) > 0 then "a verdict carries no evidence"
-              else "" end' "$resfile" 2>/dev/null || echo "the verdict could not be compared with the frozen criteria")
+            def bad_shape:
+              (type != "object")
+              or ((keys - ["criteria"]) | length > 0)
+              or (has("criteria") | not)
+              or (.criteria | type != "array")
+              or (.criteria | length == 0)
+              or ([.criteria[] | select(
+                     (type != "object")
+                     or ((keys - ["fr","statement_sha","criterion","verdict","evidence"]) | length > 0)
+                     or (["fr","statement_sha","criterion","verdict","evidence"] - keys | length > 0)
+                     or (.fr | type != "string") or (.statement_sha | type != "string")
+                     or (.criterion | type != "string")
+                     or ((.verdict != "pass") and (.verdict != "fail"))
+                     or (.evidence | type != "string") or ((.evidence | length) == 0))] | length > 0);
+            if bad_shape then
+              "the verdict document does not match the required closed shape (criteria: non-empty array of {fr, statement_sha, criterion, verdict: pass|fail, evidence: non-empty string}, no other fields)"
+            else
+              (.criteria | map({fr, statement_sha, criterion}) | sort) as $g
+              | ($want | sort) as $w
+              | if $w != $g then "the echoed criteria are not an exact match of the frozen set (missing, duplicated, altered, or invented entries)"
+                else "" end
+            end' "$resfile" 2>/dev/null || echo "the verdict could not be compared with the frozen criteria")
         if [[ -n "$mismatch" ]]; then
             dispose "conformance_gate" "evaluator verdict rejected: $mismatch (see ${resfile#$PROJECT_DIR/})" "$hist"
             return 1
@@ -2078,22 +2155,37 @@ verifier_gate() {
 
     # 12. Evidence: FR -> per-verifier results. An FR is green iff ALL of
     #     its verifiers are green.
-    jq --argjson v "$results" -n '
+    # Written to a temp file, validated, then renamed into place. An
+    # unchecked write could fail and leave an OLDER, green results file
+    # for the reads below to consume — a failing gate reporting success
+    # (round-10 finding 2).
+    local resout="$LEDGER_DIR/verification-results.json" restmp
+    restmp=$(mktemp "$LEDGER_DIR/verification-results.XXXXXX") || {
+        dispose "conformance_gate" "could not create the evidence file — refusing to land without recorded verification results (FR-7)" "$hist"
+        return 1
+    }
+    if ! jq --argjson v "$results" -n '
         {schema_version: 1,
          frs: ([$v[] | .fr] | unique | map(. as $fr | {key: $fr, value: {
                  green: ([$v[] | select(.fr == $fr) | .green] | all),
                  verifiers: [$v[] | select(.fr == $fr)]}}) | from_entries),
-         green: ([$v[] | .green] | all)}' > "$LEDGER_DIR/verification-results.json"
+         green: ([$v[] | .green] | all)}' > "$restmp" \
+       || ! jq -e '.frs | type == "object"' "$restmp" >/dev/null 2>&1 \
+       || ! mv "$restmp" "$resout"; then
+        rm -f "$restmp" 2>/dev/null || true
+        dispose "conformance_gate" "could not write the evidence file at ${resout#$PROJECT_DIR/} — refusing to land on unrecorded (or stale) verification results (FR-7)" "$hist"
+        return 1
+    fi
 
     local failing
     failing=$(jq -r '[.frs | to_entries[] | select(.value.green | not)
                       | .key + " (" + ([.value.verifiers[] | select(.green | not) | .verifier] | join("; ")) + ")"] | join(", ")' \
-              "$LEDGER_DIR/verification-results.json")
+              "$resout")
     if [[ -n "$failing" ]]; then
         dispose "conformance_gate" "verification failed: $failing (see .cct/auto-build/$FEATURE_ID/verification-results.json)" "$hist"
         return 1
     fi
-    journal "verifier_gate" "all mapped verifiers green ($(jq -r '.frs | length' "$LEDGER_DIR/verification-results.json") FR(s))"
+    journal "verifier_gate" "all mapped verifiers green ($(jq -r '.frs | length' "$resout") FR(s))"
     check_caps
     return 0
 }
@@ -3258,6 +3350,10 @@ reset_run_clocks() {
 # (missing test.command, bad config) may leave TEMP_CONFIG behind.
 exit_cleanup() {
     local rc=$?
+    # #242 FR-6: an application launched by the verifier gate must never
+    # outlive the driver — including when the driver is interrupted
+    # mid-gate (round-10 finding 3).
+    if declare -f vg_app_cleanup >/dev/null 2>&1; then vg_app_cleanup; fi
     [[ -n "${TEMP_CONFIG:-}" && -f "$TEMP_CONFIG" ]] && rm -f "$TEMP_CONFIG" 2>/dev/null
     rm -f "${PREFLIGHT_RESULT_FILE:-}" 2>/dev/null
     # Ordinary refusal (exit 1) while the rollback is armed: undo the
@@ -3518,11 +3614,36 @@ resume_parked() {
             resolve_escalation "$esc_file" "origin gate cleared (exit $oe)"
             ;;
         provider_unavailable)
-            local health_args=(--provider "$GATING_REVIEWER")
-            [[ -n "${CCT_PROVIDER_PROFILE:-}" ]] && health_args=(--profile "$CCT_PROVIDER_PROFILE" "${health_args[@]}")
-            bash "$SCRIPT_DIR/providers-health.sh" "${health_args[@]}" >/dev/null 2>&1 \
-                || refuse_resume "gating reviewer chain still unhealthy — fix providers.toml or the provider service, then --resume"
-            resolve_escalation "$esc_file" "reviewer chain healthy again"
+            # #242 FR-9: a conformance-scoped park is about the frozen
+            # EVALUATOR, not the gating reviewer. Re-check exactly the
+            # contract that parked it (round-10 finding 6) — resolution,
+            # the conformance_command capability, and health.
+            local pu_scope pu_eval
+            pu_scope=$(jq -r '.history.provider_scope // "reviewer"' "$esc_file" 2>/dev/null || echo "reviewer")
+            if [[ "$pu_scope" == "evaluator" ]]; then
+                pu_eval=$(jq -r '.history.evaluator // empty' "$esc_file" 2>/dev/null || echo "")
+                [[ -n "$pu_eval" ]] || refuse_resume "this run's frozen contract requires runtime conformance but froze NO evaluator — a frozen contract cannot gain one; add verification.conformance and start a fresh run"
+                local pu_toml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+                grep -o '^\[providers\.[^]]*' "$pu_toml" 2>/dev/null | sed 's/^\[providers\.//' | grep -qxF "$pu_eval" \
+                    || refuse_resume "frozen evaluator '$pu_eval' still does not resolve in $pu_toml — configure that exact provider, then --resume"
+                local pu_cmd pu_hc
+                pu_cmd=$(vg_toml_get "$pu_toml" "providers.$pu_eval" "conformance_command")
+                pu_hc=$(vg_toml_get "$pu_toml" "providers.$pu_eval" "healthcheck")
+                [[ -n "$pu_cmd" && "$pu_cmd" == *"{review_request}"* ]] \
+                    || refuse_resume "frozen evaluator '$pu_eval' still declares no usable conformance_command (with the {review_request} placeholder) — reviewer health is not conformance capability"
+                if [[ -n "$pu_hc" ]]; then
+                    local pu_rc=0
+                    ca_run_bounded 30 "$pu_hc" || pu_rc=$?
+                    [[ $pu_rc -eq 0 ]] || refuse_resume "frozen evaluator '$pu_eval' still fails its healthcheck (status $pu_rc) — fix the provider service, then --resume"
+                fi
+                resolve_escalation "$esc_file" "frozen evaluator '$pu_eval' resolves, declares conformance_command, and is healthy again"
+            else
+                local health_args=(--provider "$GATING_REVIEWER")
+                [[ -n "${CCT_PROVIDER_PROFILE:-}" ]] && health_args=(--profile "$CCT_PROVIDER_PROFILE" "${health_args[@]}")
+                bash "$SCRIPT_DIR/providers-health.sh" "${health_args[@]}" >/dev/null 2>&1 \
+                    || refuse_resume "gating reviewer chain still unhealthy — fix providers.toml or the provider service, then --resume"
+                resolve_escalation "$esc_file" "reviewer chain healthy again"
+            fi
             ;;
         runner_error)
             # A runner crash can leave findings newer than state.json. Do not

@@ -5129,11 +5129,44 @@ VG_OUT=$(vg_case "$VGD")
 assert_contains "C2-T5: a dirty checkout refuses BEFORE any verifier runs" "$VG_OUT" "not clean before the verifier gate"
 rm -rf "$VGD"
 
-# A verifier that mutates the checkout is caught by the AFTER check.
+# ── Round-10 finding 1: a DETERMINISTIC verifier that mutates the
+#    checkout and exits 0 is caught by the AFTER check too — that path
+#    has no conformance section to fall into. ──
+for vmut in "echo smuggled >> pass.sh" "echo x > untracked-from-verifier.txt"; do
+    VGD=$(vg_fixture "$(jq -n --arg s "$SHA1" '{verifiers:{timeout_sec:20,set:[{fr:"FR-1",statement_sha:$s,test:"./mutate.sh",metric:null}]}}')")
+    printf '#!/usr/bin/env bash\n%s\nexit 0\n' "$vmut" > "$VGD/mutate.sh"
+    chmod +x "$VGD/mutate.sh"
+    git -C "$VGD" add -A >/dev/null; git -C "$VGD" commit -q -m "mutating verifier"
+    VG_OUT=$(vg_case "$VGD")
+    assert_eq "C2-T5: a deterministic verifier that mutates the repo [$vmut] disposes git_anomaly" "git_anomaly" \
+        "$(printf '%s' "$VG_OUT" | cut -f1)"
+    rm -rf "$VGD"
+done
+
+# ── Round-10 finding 2: a failed evidence write must never fall back on
+#    an older, green results file. ──
+# (a) a READ-ONLY results file with a writable ledger: the pre-fix write
+#     failed silently and the gate read the stale green file, journaling
+#     "all mapped verifiers green" for a run whose verifier FAILED.
+VGD=$(vg_fixture "$(jq -n --arg s "$SHA1" '{verifiers:{timeout_sec:20,set:[{fr:"FR-1",statement_sha:$s,test:"./fail.sh",metric:null}]}}')")
+VG_RES="$VGD/.cct/auto-build/demo-feat/verification-results.json"
+jq -n '{schema_version:1, frs:{"FR-1":{green:true, verifiers:[]}}, green:true}' > "$VG_RES"
+chmod 444 "$VG_RES"
+VG_OUT=$(vg_case "$VGD")
+assert_eq "C2-T5: a stale green results file never rescues a failing run" "conformance_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_eq "C2-T5: this run's own (failing) evidence replaces the stale file" "false" \
+    "$(jq -r '.green' "$VG_RES")"
+chmod 644 "$VG_RES"; rm -rf "$VGD"
+
+# (b) an unwritable LEDGER DIR: the evidence cannot be produced at all,
+#     so the gate refuses rather than landing unrecorded.
 VGD=$(vg_fixture "$(jq -n --arg s "$SHA1" '{verifiers:{timeout_sec:20,set:[{fr:"FR-1",statement_sha:$s,test:"./pass.sh",metric:null}]}}')")
-CONF_STUB=$(mktemp -d)
-VG_MUT=$(jq -n --arg s "$SHA1" --arg s2 "$SHA2" \
-    '{verifiers:{timeout_sec:20,set:[{fr:"FR-1",statement_sha:$s,test:"./pass.sh",metric:null}]}}')
+chmod 555 "$VGD/.cct/auto-build/demo-feat"
+VG_OUT=$(vg_case "$VGD")
+chmod 755 "$VGD/.cct/auto-build/demo-feat"
+assert_eq "C2-T5: an unwritable ledger refuses to land unrecorded" "conformance_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
 rm -rf "$VGD"
 
 # ── Conformance: a stub evaluator in the REAL provider-template shape ──
@@ -5198,26 +5231,109 @@ assert_eq "C2-T5: the app log is captured in the ledger" "yes" \
 rm -rf "$VGC"
 
 # Fail-closed verdict shapes: fail, missing, altered, duplicated, no block.
-vg_eval_variant() {  # <jq-transform on the criteria array>
+vg_eval_variant() {  # <jq-transform on the criteria array> -> stub path
     local f; f=$(mktemp)
-    cat > "$f" << EVAL
+    cat > "$f" << 'EVAL'
 #!/usr/bin/env bash
-req="\$1"
-crit=\$(awk '/^\`\`\`json\$/ {n++; if (n==1) {inb=1; next}} inb && /^\`\`\`\$/ {exit} inb {print}' "\$req")
-echo '\`\`\`json'
-jq -c '{criteria: [ .[] | {fr, statement_sha, criterion, verdict: "pass", evidence: "e"} ] | $1}' <<< "\$crit"
-echo '\`\`\`'
+crit=$(awk '/^```json$/ {n++; if (n==1) {inb=1; next}} inb && /^```$/ {exit} inb {print}' "$1")
+printf '%s\n' '```json'
+jq -c '{criteria: [ .[] | {fr, statement_sha, criterion, verdict: "pass", evidence: "e"} ] | __XFORM__}' <<< "$crit"
+printf '%s\n' '```'
 EVAL
+    python3 - "$f" "$1" << 'PYX'
+import sys
+p, x = sys.argv[1], sys.argv[2]
+data = open(p).read().replace('__XFORM__', x)
+open(p, 'w').write(data)
+PYX
     echo "$f"
 }
 for variant in 'map(.verdict = "fail")' '[]' 'map(.criterion = "something else")' '. + .'; do
     VGC=$(vg_conf_fixture)
-    VG_PROF=$(vg_write_provider "$VGC" "$(vg_eval_variant "$variant")")
+    VG_VAR=$(vg_eval_variant "$variant")
+    # Prove the stub itself works before trusting what the gate says
+    # about it: a broken stub would "fail closed" for the wrong reason.
+    assert_eq "C2-T5 fixture: variant stub [$variant] emits a closed block" "2" \
+        "$(printf '```json\n[{"fr":"FR-2","statement_sha":"sha256:22","criterion":"c"}]\n```\n' > "$VGC/req.md"; bash "$VG_VAR" "$VGC/req.md" | grep -c '```')"
+    rm -f "$VGC/req.md"
+    VG_PROF=$(vg_write_provider "$VGC" "$VG_VAR")
     vg_conf_contract "$VG_APP" | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
     VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
     assert_eq "C2-T5: verdict variant [$variant] fails closed" "conformance_gate" "$(printf '%s' "$VG_OUT" | cut -f1)"
     rm -rf "$VGC"
 done
+
+# ── Round-10 finding 4: the verdict must match the CLOSED shape before
+#    any identity comparison. Object-valued criteria, non-string
+#    evidence, extra fields, and bogus verdicts are malformed documents,
+#    not verdicts. The assertions check the REASON, so a stub that
+#    merely fails to run cannot pass them. ──
+for shape in '{"criteria":{"fr":"FR-2"}}' \
+             '{"criteria":[{"fr":"FR-2","statement_sha":"SHA","criterion":"CRIT","verdict":"pass","evidence":true}]}' \
+             '{"criteria":[{"fr":"FR-2","statement_sha":"SHA","criterion":"CRIT","verdict":"pass","evidence":"e","extra":1}]}' \
+             '{"criteria":[{"fr":"FR-2","statement_sha":"SHA","criterion":"CRIT","verdict":"maybe","evidence":"e"}]}'; do
+    VGC=$(vg_conf_fixture)
+    VG_SHAPE=$(mktemp)
+    cat > "$VG_SHAPE" << 'STUB'
+#!/usr/bin/env bash
+sha=$(grep -o 'sha256:[0-9a-f]*' "$1" | head -1)
+printf '%s\n' '```json'
+printf '%s\n' '__SHAPE__' | sed "s/SHA/$sha/; s/CRIT/Cancel aborts the job./"
+printf '%s\n' '```'
+STUB
+    python3 - "$VG_SHAPE" "$shape" << 'PYSHAPE'
+import sys
+p, shape = sys.argv[1], sys.argv[2]
+# Read BEFORE opening for write: open(p, "w") truncates immediately.
+data = open(p).read().replace('__SHAPE__', shape)
+open(p, 'w').write(data)
+PYSHAPE
+    # The stub must really emit a fenced block — otherwise the case would
+    # "pass" on a broken script instead of a rejected verdict.
+    assert_eq "C2-T5 fixture: the malformed-shape stub emits a closed block" "2" \
+        "$(bash "$VG_SHAPE" /dev/null | grep -c '```')"
+    VG_PROF=$(vg_write_provider "$VGC" "$VG_SHAPE")
+    vg_conf_contract "$VG_APP" | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+    VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
+    assert_eq "C2-T5: malformed verdict shape fails closed" "conformance_gate" \
+        "$(printf '%s' "$VG_OUT" | cut -f1)"
+    assert_contains "C2-T5: the rejection names the closed shape" "$VG_OUT" "required closed shape"
+    rm -f "$VG_SHAPE"; rm -rf "$VGC"
+done
+
+# An unterminated fence is truncated output, not a verdict.
+VG_UNTERM=$(mktemp)
+cat > "$VG_UNTERM" << 'STUB'
+#!/usr/bin/env bash
+printf '%s\n' '```json'
+printf '%s\n' '{"criteria": ['
+STUB
+assert_eq "C2-T5 fixture: the unterminated stub opens a block and never closes it" "1" \
+    "$(bash "$VG_UNTERM" /dev/null | grep -c '```')"
+VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_UNTERM")
+vg_conf_contract "$VG_APP" | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
+assert_contains "C2-T5: an unclosed fenced block fails closed" "$VG_OUT" "no single fenced json verdict block"
+rm -f "$VG_UNTERM"; rm -rf "$VGC"
+
+# ── Round-10 finding 5: a hanging evaluator healthcheck is bounded. ──
+VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_OK")
+python3 - "$VG_PROF" << 'PYHC'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace('healthcheck = "true"', 'healthcheck = "sleep 300"', 1)
+open(p, 'w').write(s)
+PYHC
+vg_conf_contract "$VG_APP" | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+VG_T0=$(date +%s)
+VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
+VG_ELAPSED=$(( $(date +%s) - VG_T0 ))
+assert_eq "C2-T5: a hanging evaluator healthcheck parks provider_unavailable" "provider_unavailable" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C2-T5: the healthcheck park names its bound" "$VG_OUT" "hung past its 30s bound"
+assert_eq "C2-T5: the healthcheck cannot outlive its bound (<=40s)" "within" \
+    "$([[ $VG_ELAPSED -le 40 ]] && echo within || echo "overran:${VG_ELAPSED}s")"
+rm -rf "$VGC"
 
 VG_EVAL_NOBLOCK=$(mktemp)
 printf '#!/usr/bin/env bash\necho "I think it passes."\n' > "$VG_EVAL_NOBLOCK"
@@ -5275,6 +5391,36 @@ for mutation in "echo smuggled >> pass.sh" "echo x > untracked-artifact.txt"; do
         "$(printf '%s' "$VG_OUT" | cut -f1)"
     rm -rf "$VGC"
 done
+
+# ── Round-10 finding 3: teardown is a CHECKED finally, and an interrupt
+#    mid-gate still reaps the app (the driver's EXIT trap). ──
+VG_STOPFAIL=$( ( set +e; set --
+    source "$VG_FUNCS" >/dev/null 2>&1
+    source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+    PROJECT_DIR="/tmp"; LEDGER_DIR="/tmp"; FEATURE_ID="demo-feat"
+    # A group that never dies: ca_stop must report failure, and the gate
+    # must turn that into a disposition rather than swallowing it.
+    ca_group_alive() { return 0; }
+    ca_stop 999999 1 >/dev/null 2>&1; echo "$?" ) )
+assert_eq "C2-T5: ca_stop reports an unreapable app group" "1" "$VG_STOPFAIL"
+VG_TRAP=$( ( set +e; set --
+    source "$VG_FUNCS" >/dev/null 2>&1
+    source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+    declare -f vg_app_cleanup >/dev/null 2>&1 && echo "present" ) )
+assert_eq "C2-T5: an EXIT-path app cleanup exists" "present" "$VG_TRAP"
+assert_eq "C2-T5: the driver's exit_cleanup calls it" "1" \
+    "$(awk '/^exit_cleanup\(\)/,/^}/' "$DRIVER" | grep -c 'vg_app_cleanup')"
+
+# ── Round-10 finding 6: a conformance park carries evaluator provenance
+#    so resume re-checks THAT contract, not the gating reviewer. ──
+assert_eq "C2-T5: evaluator parks stamp provider_scope" "4" \
+    "$(grep -c 'provider_scope: "evaluator"' "$DRIVER")"
+assert_eq "C2-T5: the resume arm re-checks the frozen evaluator's capability" "1" \
+    "$(grep -c 'still declares no usable conformance_command' "$DRIVER")"
+assert_eq "C2-T5: the resume arm re-checks that evaluator's resolution" "1" \
+    "$(grep -c 'still does not resolve in' "$DRIVER")"
+assert_eq "C2-T5: a null-evaluator park refuses resume instead of looping" "1" \
+    "$(grep -c 'a frozen contract cannot gain one' "$DRIVER")"
 
 rm -f "$VG_FUNCS" "$VG_EVAL_OK" "$VG_EVAL_NOBLOCK"
 
