@@ -5308,8 +5308,18 @@ assert_contains "C2-T4: failure names the exited group" "$CA_MSG" "exited before
 # ── A probe that succeeds while the launched group is gone is some
 #    OTHER process answering — the post-probe liveness re-check catches
 #    what the top-of-loop check cannot (the group dies during the probe).
-RACEJ=$(jq -n '{command:"sleep 31.5", ready:{command:"pkill -f \"sleep 31.5\" >/dev/null 2>&1; sleep 1; true", timeout_sec:8}, stop_timeout_sec:5}')
+# The app publishes its own (group-leader) pid and the probe kills THAT
+# pid: a pkill pattern would also match the probe's own command line on
+# Linux, so the probe would kill itself and the failure would arrive via
+# the top-of-loop check instead of the re-check under test.
+RACEJ=$(jq -n --arg c "echo \$\$ > $APPD/race.pid; exec sleep 30" \
+    --arg r "kill -9 \$(cat $APPD/race.pid) 2>/dev/null; sleep 1; true" \
+    '{command:$c, ready:{command:$r, timeout_sec:8}, stop_timeout_sec:5}')
 RPID=$(ca_start "$RACEJ" "$APPD" "$APPD/race.log")
+# The probe must not fire before the app has published its pid, or it
+# would "succeed" without killing anything and the case would not be the
+# one under test.
+_rw=0; while [[ ! -s "$APPD/race.pid" && $_rw -lt 10 ]]; do sleep 1; _rw=$((_rw + 1)); done
 CA_MSG=$(ca_wait_ready "$RACEJ" "$RPID" 2>&1); CA_RC=$?
 assert_exit "C2-T4: a probe answering after the group died fails the gate" 1 "$CA_RC"
 assert_contains "C2-T4: failure says another process answered" "$CA_MSG" "a different process answered"
