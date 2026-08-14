@@ -20,56 +20,28 @@
 # spawned group is dead is some other process. Both are gate failures —
 # the alternative is an evaluator confidently testing the wrong app.
 
-# ca_timeout_cmd — a coreutils timeout that actually WORKS, if the host
-# has one. The mechanism is validated here, on a trivial command of our
-# own, precisely so the probe path never has to guess whether a status
-# came from the wrapper or from the wrapped command (round-8 finding 1:
-# inferring "broken wrapper" from 127 reran the caller's arbitrary probe,
-# duplicating its side effects and spending two probe durations inside
-# one deadline).
-ca_timeout_cmd() {
-    local c
-    for c in timeout gtimeout; do
-        if command -v "$c" >/dev/null 2>&1 && "$c" -k 1 1 true >/dev/null 2>&1; then
-            echo "$c"
-            return 0
-        fi
-    done
-    return 1
-}
-
 # ca_run_bounded <secs> <command> — run an arbitrary probe command under
 # a HARD bound, killing the whole process group on expiry (a hanging
 # readiness command must not block the gate forever — build review round
-# 5 finding 1). Returns the command's status, or 124 when the bound
-# fired. The bound is the TERM deadline: a command that ignores TERM
-# costs up to 2s more before KILL, so a caller's wall clock may exceed
-# its budget by that fixed grace — never by the command's own duration. All timeouts here are positive INTEGER seconds (enforced by the
-# config validator and the frozen-contract predicate), because both
-# paths do integer arithmetic.
+# 5 finding 1). Returns the command's status, 124 when the bound fired,
+# or 125 when the bound could not be established or its descendants
+# could not be reaped. The bound is the TERM deadline: a command that
+# ignores TERM costs up to 2s more before KILL, so a caller's wall clock
+# may exceed its budget by that fixed grace — never by the command's own
+# duration. All timeouts are positive INTEGER seconds (enforced by the
+# config validator and the frozen-contract predicate).
 ca_run_bounded() {
-    local secs="$1" cmd="$2" tcmd rc=0 pid
-    tcmd=$(ca_timeout_cmd)
-    if [[ -n "$tcmd" ]]; then
-        # Run timeout(1) itself inside a fresh process GROUP: timeout
-        # signals only its own child, so a probe that forked descendants
-        # would otherwise leave them running (round-6 finding 2) — and a
-        # survivor can mutate the checkout after the gate's integrity
-        # check.
-        set -m
-        ( "$tcmd" -k 2 "$secs" bash -c "$cmd" ) >/dev/null 2>&1 &
-        pid=$!
-        wait "$pid" 2>/dev/null || rc=$?
-        ca_kill_group "$pid" || rc=125
-        set +m
-        # The wrapper was validated before use, so this status belongs to
-        # the PROBE. Never rerun it: an arbitrary readiness command must
-        # execute at most once per attempt.
-        return $rc
-    fi
-    # No timeout(1): own process group + watchdog, with the escalation
+    local secs="$1" cmd="$2" rc=0 pid
+    # ONE mechanism: our own process group + watchdog, with the escalation
     # allowed to COMPLETE before returning (the cp_run_bounded lesson —
     # a cancelled watchdog leaves a TERM-resistant descendant alive).
+    # There is deliberately NO timeout(1) fast path (round-9 finding 1):
+    # accepting a wrapper because it can run `true` proves it takes those
+    # arguments, not that it ENFORCES a deadline, and validating it
+    # properly would mean running a deliberately long child under the
+    # very mechanism being validated. The watchdog is already proven by
+    # this suite (bound enforced, group killed, cleanup verified), so it
+    # is the only path.
     local firedir fired
     if ! firedir=$(mktemp -d 2>/dev/null) || [[ -z "$firedir" || ! -d "$firedir" ]]; then
         echo "conformance-app: cannot create the probe watchdog directory — refusing to run the probe unbounded" >&2

@@ -5394,29 +5394,28 @@ assert_eq "C2-T4: a missing readiness command is unproven, not not-ready" "unpro
 CA_MSG=$(ca_bind_preflight "$MISSJ"); CA_RC=$?
 assert_exit "C2-T4: a missing readiness command refuses the binding" 1 "$CA_RC"
 assert_contains "C2-T4: refusal names the missing command" "$CA_MSG" "was not found"
-# A broken wrapper ALONE is survivable since round 8: it is rejected at
-# selection and the watchdog path produces the real verdict, so the
-# binding legitimately clears. (Neither mechanism working is the
-# unproven case — covered by the mktemp+timeout shim above.)
+# A broken timeout(1) on PATH is irrelevant since round 9 — the watchdog
+# is the only mechanism, so the probe still returns a real verdict and
+# the binding legitimately clears. (The unproven case is the watchdog
+# itself being unavailable, covered by the mktemp shim above.)
 CA_SHIM=$(mktemp -d)
 printf '#!/usr/bin/env bash\nexit 126\n' > "$CA_SHIM/timeout"; chmod +x "$CA_SHIM/timeout"
 cp "$CA_SHIM/timeout" "$CA_SHIM/gtimeout"
 PATH="$CA_SHIM:$PATH" ca_bind_preflight "$CMDJ" >/dev/null 2>&1; CA_RC=$?
-assert_exit "C2-T4: a broken wrapper alone still yields a verdict (binding clears)" 0 "$CA_RC"
+assert_exit "C2-T4: a broken timeout on PATH is irrelevant (binding clears)" 0 "$CA_RC"
 rm -rf "$CA_SHIM"
 FALSEJ=$(jq -n '{command:"sleep 30", ready:{command:"exit 1", timeout_sec:5}, stop_timeout_sec:2}')
 assert_eq "C2-T4: a probe that RAN and failed is not-ready (the binding clears)" "not-ready" \
     "$(ca_probe_outcome "$FALSEJ" 3)"
 
-# ── Round-8 finding 1: a readiness attempt executes the probe AT MOST
-#    ONCE. The timeout wrapper is validated on a command of our own, so a
-#    127 from the probe is never mistaken for a broken wrapper (which
-#    used to rerun the caller's arbitrary command — duplicate side
-#    effects, two probe durations inside one deadline). ──
+# ── Round-8 finding 1 / round-9 finding 1: a readiness attempt executes
+#    the probe AT MOST ONCE, and the bound comes from OUR watchdog only.
+#    There is no timeout(1) fast path to validate, subvert, or fall back
+#    from: a hostile wrapper on PATH changes nothing. ──
 CA_SHIM=$(mktemp -d)
 cat > "$CA_SHIM/timeout" << 'FAITHFUL'
 #!/usr/bin/env bash
-# A wrapper that faithfully propagates the child's status.
+# A wrapper that takes timeout's arguments and IGNORES the deadline.
 shift 3
 "$@"
 FAITHFUL
@@ -5427,15 +5426,19 @@ CA_MSG=$(PATH="$CA_SHIM:$PATH" ca_probe_outcome "$RUN127J" 3 2>/dev/null)
 assert_eq "C2-T4: a probe exiting 127 runs exactly once" "1" \
     "$(wc -l < "$CA_RUNS" | tr -d ' ')"
 assert_contains "C2-T4: a probe exiting 127 is unproven, not a verdict" "$CA_MSG" "unproven:"
-# A wrapper that cannot execute is rejected at SELECTION, so the probe
-# still runs once — through the watchdog path.
-printf '#!/usr/bin/env bash\nexit 126\n' > "$CA_SHIM/timeout"; cp "$CA_SHIM/timeout" "$CA_SHIM/gtimeout"
+# A deadline-ignoring wrapper on PATH cannot extend a probe's bound.
+CA_T0=$(date +%s); CA_RC=0
+PATH="$CA_SHIM:$PATH" ca_run_bounded 1 "sleep 3" >/dev/null 2>&1 || CA_RC=$?
+CA_ELAPSED=$(( $(date +%s) - CA_T0 ))
+assert_exit "C2-T4: a deadline-ignoring timeout on PATH cannot subvert the bound" 124 "$CA_RC"
+assert_eq "C2-T4: that probe still stops at its bound (<=5s for 1s + kill grace)" "within" \
+    "$([[ $CA_ELAPSED -le 5 ]] && echo within || echo "overran:${CA_ELAPSED}s")"
 : > "$CA_RUNS"
 OKJ=$(jq -n --arg r "echo x >> $CA_RUNS; exit 0" '{command:"sleep 30", ready:{command:$r, timeout_sec:3}, stop_timeout_sec:2}')
 CA_MSG=$(PATH="$CA_SHIM:$PATH" ca_probe_outcome "$OKJ" 3 2>/dev/null)
-assert_eq "C2-T4: a broken wrapper falls back without rerunning the probe" "1" \
+assert_eq "C2-T4: a hostile wrapper on PATH does not rerun the probe" "1" \
     "$(wc -l < "$CA_RUNS" | tr -d ' ')"
-assert_eq "C2-T4: the fallback still produces the probe's real verdict" "ready" "$CA_MSG"
+assert_eq "C2-T4: the watchdog still produces the probe's real verdict" "ready" "$CA_MSG"
 rm -rf "$CA_SHIM"
 
 # ── Round-7 finding 2: cleanup that cannot be proven is an
