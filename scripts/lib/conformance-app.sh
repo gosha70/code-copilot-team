@@ -37,11 +37,27 @@ ca_timeout_cmd() {
 # config validator and the frozen-contract predicate), because both
 # paths do integer arithmetic.
 ca_run_bounded() {
-    local secs="$1" cmd="$2" tcmd rc=0
+    local secs="$1" cmd="$2" tcmd rc=0 pid
     tcmd=$(ca_timeout_cmd)
     if [[ -n "$tcmd" ]]; then
-        "$tcmd" -k 2 "$secs" bash -c "$cmd" >/dev/null 2>&1 || rc=$?
-        return $rc
+        # Run timeout(1) itself inside a fresh process GROUP: timeout
+        # signals only its own child, so a probe that forked descendants
+        # would otherwise leave them running (round-6 finding 2) — and a
+        # survivor can mutate the checkout after the gate's integrity
+        # check.
+        set -m
+        ( "$tcmd" -k 2 "$secs" bash -c "$cmd" ) >/dev/null 2>&1 &
+        pid=$!
+        wait "$pid" 2>/dev/null || rc=$?
+        ca_kill_group "$pid"
+        set +m
+        # 127 means the wrapper itself could not execute (a broken or
+        # shimmed timeout). Do NOT report it as the probe's verdict —
+        # fall through to the watchdog path and actually bound the
+        # command. A genuinely missing probe command returns 127 there
+        # too, so nothing is misread as success.
+        [[ $rc -ne 127 ]] && return $rc
+        rc=0
     fi
     # No timeout(1): own process group + watchdog, with the escalation
     # allowed to COMPLETE before returning (the cp_run_bounded lesson —
@@ -54,7 +70,7 @@ ca_run_bounded() {
     fired="$firedir/fired"
     set -m
     ( bash -c "$cmd" ) >/dev/null 2>&1 &
-    local pid=$!
+    pid=$!
     ( sleep "$secs"
       : > "$fired"
       kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
@@ -64,14 +80,34 @@ ca_run_bounded() {
     wait "$pid" 2>/dev/null || rc=$?
     if [[ -e "$fired" ]]; then
         wait "$watchdog" 2>/dev/null || true
+        ca_kill_group "$pid"
         rm -rf "$firedir"; set +m
         return 124
     fi
     kill "$watchdog" 2>/dev/null || true
     wait "$watchdog" 2>/dev/null || true
+    # Cleanup on the SUCCESS path too — a probe whose leader exited 0 can
+    # still have forked children (round-6 finding 2).
+    ca_kill_group "$pid"
     rm -rf "$firedir"; set +m
     [[ $rc -eq 143 || $rc -eq 137 ]] && return 124
     return $rc
+}
+
+# ca_kill_group <pid> — leave no descendant of a probe behind, whatever
+# the probe's own exit status was. TERM, brief grace, KILL.
+ca_kill_group() {
+    local pid="$1" i=0
+    [[ -n "$pid" ]] || return 0
+    ca_group_alive "$pid" || return 0
+    kill -TERM -"$pid" 2>/dev/null || true
+    while [[ $i -lt 2 ]]; do
+        ca_group_alive "$pid" || return 0
+        sleep 1
+        i=$((i + 1))
+    done
+    kill -KILL -"$pid" 2>/dev/null || true
+    return 0
 }
 
 # ca_reachable <url> <secs> — 0 iff something answers HTTP(S) at url.
@@ -105,14 +141,32 @@ ca_probe() {
 # the evaluator-facing interface may answer. Returns 0 when nothing
 # answers; 1 (with a named reason on stdout) when something does.
 ca_bind_preflight() {
-    local app="$1" iface="${2:-}"
-    if ca_probe "$app" 3; then
+    local app="$1" iface="${2:-}" rc=0
+    ca_probe "$app" 3 || rc=$?
+    if [[ $rc -eq 0 ]]; then
         echo "the readiness probe already succeeded BEFORE the app was launched — the responder cannot be attributed to this run"
         return 1
     fi
-    if [[ -n "$iface" ]] && ca_reachable "$iface" 3; then
-        echo "the evaluator-facing interface $iface already answered BEFORE the app was launched — the responder cannot be attributed to this run"
+    # Round-6 finding 1: only a probe that RAN and reported "not ready"
+    # proves the precondition. A timeout (124), a missing/unusable probe
+    # mechanism (2), or a watchdog that could not be established (125)
+    # prove nothing — treating them as "nothing answered" would let the
+    # app launch with the binding unverified.
+    if [[ $rc -eq 124 || $rc -eq 125 || $rc -eq 2 ]]; then
+        echo "the pre-launch readiness probe could not be evaluated (status $rc: timed out, unbounded, or no usable probe mechanism) — the launch binding is unproven"
         return 1
+    fi
+    if [[ -n "$iface" ]]; then
+        rc=0
+        ca_reachable "$iface" 3 || rc=$?
+        if [[ $rc -eq 0 ]]; then
+            echo "the evaluator-facing interface $iface already answered BEFORE the app was launched — the responder cannot be attributed to this run"
+            return 1
+        fi
+        if [[ $rc -eq 2 ]]; then
+            echo "the evaluator-facing interface $iface could not be probed (no usable HTTP client) — the launch binding is unproven"
+            return 1
+        fi
     fi
     return 0
 }
@@ -165,9 +219,22 @@ ca_wait_ready() {
                 echo "the readiness probe succeeded but the launched process group is gone — a different process answered"
                 return 1
             fi
-            if [[ -n "$iface" ]] && ! ca_reachable "$iface" "$budget"; then
-                echo "readiness succeeded but the evaluator-facing interface $iface does not answer — the evaluator would test nothing"
-                return 1
+            if [[ -n "$iface" ]]; then
+                # Recompute the budget: the readiness probe just consumed
+                # part of the deadline, and reusing its pre-probe value
+                # would let the two checks together overrun (round-6
+                # finding 3).
+                remaining=$(( deadline - $(date +%s) ))
+                if [[ "$remaining" -le 0 ]]; then
+                    echo "readiness succeeded but the deadline was exhausted before the evaluator-facing interface $iface could be checked"
+                    return 1
+                fi
+                budget=$remaining
+                [[ "$budget" -gt 5 ]] && budget=5
+                if ! ca_reachable "$iface" "$budget"; then
+                    echo "readiness succeeded but the evaluator-facing interface $iface does not answer — the evaluator would test nothing"
+                    return 1
+                fi
             fi
             return 0
         fi

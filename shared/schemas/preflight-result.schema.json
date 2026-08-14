@@ -74,14 +74,11 @@
             "timeout_sec",
             "criteria"
           ],
-          "description": "#242 C2: the frozen conformance contract — present iff the finalized artifact maps any FR to runtime_conformance. evaluator/app/interface/timeout_sec are ALL null when the config block is absent (attended blockless: the gate parks provider_unavailable; unattended cannot reach this state, admission refuses) or all configured. interface is resolved at freeze: app.interface, else ready.url.",
+          "description": "#242 C2: the frozen conformance contract — present iff the finalized artifact maps any FR to runtime_conformance. evaluator/app/interface/timeout_sec are ALL null when the config block is absent (attended blockless: the gate parks provider_unavailable; unattended cannot reach this state, admission refuses) or all configured. interface is resolved at freeze: app.interface, else ready.url. Every bound is a positive INTEGER of seconds — the gate enforces them with integer shell arithmetic, and the automation schema, the config validator, and validate_contract_json all agree.",
           "properties": {
             "evaluator": { "type": ["string", "null"], "minLength": 1 },
             "interface": { "type": ["string", "null"], "minLength": 1 },
-            "timeout_sec": {
-              "type": ["number", "null"],
-              "exclusiveMinimum": 0
-            },
+            "timeout_sec": { "type": ["integer", "null"], "minimum": 1 },
             "app": {
               "type": ["object", "null"],
               "additionalProperties": false,
@@ -89,7 +86,7 @@
               "properties": {
                 "command": { "type": "string", "minLength": 1 },
                 "interface": { "type": "string", "minLength": 1 },
-                "stop_timeout_sec": { "type": "number", "exclusiveMinimum": 0 },
+                "stop_timeout_sec": { "type": "integer", "minimum": 1 },
                 "ready": {
                   "type": "object",
                   "additionalProperties": false,
@@ -97,7 +94,7 @@
                   "properties": {
                     "url": { "type": "string", "minLength": 1 },
                     "command": { "type": "string", "minLength": 1 },
-                    "timeout_sec": { "type": "number", "exclusiveMinimum": 0 }
+                    "timeout_sec": { "type": "integer", "minimum": 1 }
                   },
                   "oneOf": [
                     { "required": ["url"] },

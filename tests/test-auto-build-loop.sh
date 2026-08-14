@@ -5362,6 +5362,53 @@ assert_exit "C2-T4: ca_run_bounded reports 124 when the bound fires" 124 "$CA_RC
 assert_eq "C2-T4: ca_run_bounded returns at its bound (<=6s for 2s)" "within" \
     "$([[ $CA_ELAPSED -le 6 ]] && echo within || echo "overran:${CA_ELAPSED}s")"
 
+# ── Round-6 finding 2: a probe that exits 0 while a forked child lives
+#    on must not leak that child — it could mutate the checkout AFTER
+#    T5's integrity check. ──
+LEAKMARK="$APPD/probe-leak"
+rm -f "$LEAKMARK"
+ca_run_bounded 10 "( sleep 3; touch $LEAKMARK ) & exit 0"
+assert_exit "C2-T4: a probe whose leader exits 0 returns success" 0 $?
+sleep 5
+assert_eq "C2-T4: no descendant of a SUCCESSFUL probe survives" "absent" \
+    "$([[ -f "$LEAKMARK" ]] && echo present || echo absent)"
+
+# ── Round-6 finding 1: the binding precondition is only proven by a
+#    probe that RAN. An unbounded/unevaluable probe fails closed. ──
+CA_SHIM=$(mktemp -d)
+printf '#!/usr/bin/env bash\nexit 1\n' > "$CA_SHIM/mktemp"; chmod +x "$CA_SHIM/mktemp"
+printf '#!/usr/bin/env bash\nexit 127\n' > "$CA_SHIM/timeout"; chmod +x "$CA_SHIM/timeout"
+printf '#!/usr/bin/env bash\nexit 127\n' > "$CA_SHIM/gtimeout"; chmod +x "$CA_SHIM/gtimeout"
+CMDJ=$(jq -n '{command:"sleep 30", ready:{command:"false", timeout_sec:5}, stop_timeout_sec:2}')
+CA_MSG=$(PATH="$CA_SHIM:$PATH" ca_bind_preflight "$CMDJ" 2>/dev/null); CA_RC=$?
+assert_exit "C2-T4: an unevaluable pre-launch probe refuses (fails closed)" 1 "$CA_RC"
+assert_contains "C2-T4: refusal says the binding is unproven" "$CA_MSG" "launch binding is unproven"
+rm -rf "$CA_SHIM"
+
+# ── Round-6 finding 3: readiness and the interface share ONE deadline.
+#    The interface must HANG (TEST-NET-1, RFC 5737 — never routable) to
+#    expose a reused budget: a refused connection returns instantly and
+#    would hide the overrun. Pre-fix this took 6s against a 3s deadline;
+#    now the interface check gets only what the probe left. ──
+SLOWIFJ=$(jq -n --arg r "sleep 2; true" '{command:"sleep 30", ready:{command:$r, timeout_sec:3}, stop_timeout_sec:2}')
+SIPID=$(ca_start "$SLOWIFJ" "$APPD" "$APPD/slowif.log")
+CA_T0=$(date +%s)
+CA_MSG=$(ca_wait_ready "$SLOWIFJ" "$SIPID" "http://192.0.2.1/" 2>&1); CA_RC=$?
+CA_ELAPSED=$(( $(date +%s) - CA_T0 ))
+assert_exit "C2-T4: a slow probe plus a hanging interface still fails closed" 1 "$CA_RC"
+assert_eq "C2-T4: the two checks share one deadline (<=4s for a 3s budget)" "within" \
+    "$([[ $CA_ELAPSED -le 4 ]] && echo within || echo "overran:${CA_ELAPSED}s")"
+ca_stop "$SIPID" 2 >/dev/null 2>&1
+
+# ── Round-6 finding 4: the PERSISTED contract schema agrees with the
+#    executable validator on integer bounds. ──
+jq -e '.properties.contract.properties.conformance.properties as $c
+   | ($c.timeout_sec.type == ["integer","null"] and $c.timeout_sec.minimum == 1)
+   and ($c.app.properties.stop_timeout_sec.type == "integer" and $c.app.properties.stop_timeout_sec.minimum == 1)
+   and ($c.app.properties.ready.properties.timeout_sec.type == "integer" and $c.app.properties.ready.properties.timeout_sec.minimum == 1)' \
+   "$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json" >/dev/null 2>&1
+assert_exit "C2-T4 schema: the persisted contract declares integer bounds" 0 $?
+
 # ── Stop reaches DESCENDANTS, including a TERM-resistant one (the
 #    cp_run_bounded discipline: escalation must complete). ──
 MARKER="$APPD/child-alive"
