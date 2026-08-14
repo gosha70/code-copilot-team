@@ -349,6 +349,63 @@ assert_exit "unverifiable phrasing on a deterministic-only FR still refuses" 1 "
 assert_contains "refusal says no verifier carries it" "$OUTPUT" "no runtime_conformance verifier carries it"
 rm -rf "$D"
 
+# ── Round-4 finding 2: the canonical capture runs BEFORE any executing
+#    check — a malformed artifact must not run project code first. ──
+TEST_MARKER="$(mktemp -d)/test-command-ran"
+mk_marker_fixture() {  # <dir-out via echo>
+    local dir; dir=$(mk_fixture); finalize "$dir" >/dev/null
+    python3 - "$dir/specs/demo-feat/automation.json" "$TEST_MARKER" << 'PYEOF'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+cfg["test"]["command"] = f"touch {sys.argv[2]}"
+json.dump(cfg, open(p, "w"))
+PYEOF
+    echo "$dir"
+}
+# Control: a clean artifact DOES run test.command.
+rm -f "$TEST_MARKER"
+D=$(mk_marker_fixture)
+run_admission "$D"
+assert_exit "clean fixture with a marker test.command admits" 0 "$RC"
+assert_eq "control: test.command ran for a clean artifact" "present" \
+    "$([[ -f "$TEST_MARKER" ]] && echo present || echo absent)"
+rm -rf "$D"
+# Duplicate statement_sha: refuse BEFORE executing anything.
+rm -f "$TEST_MARKER"
+D=$(mk_marker_fixture)
+python3 - "$D/specs/demo-feat/verification.yaml" << 'PYEOF'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'(  statement_sha: "[^"]*"\n)',
+           r'\1  statement_sha: "sha256:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"\n',
+           s, count=1)
+open(p, 'w').write(s)
+PYEOF
+run_admission "$D"
+assert_exit "duplicate statement_sha refuses admission" 1 "$RC"
+assert_contains "refusal names the duplicate record" "$OUTPUT" "duplicate statement_sha records"
+assert_eq "test.command NOT executed for a malformed artifact" "absent" \
+    "$([[ -f "$TEST_MARKER" ]] && echo present || echo absent)"
+assert_contains "the skip names the capture gate" "$OUTPUT" "unbindable-artifact"
+rm -rf "$D"
+# Round-4 finding 1: two bullets for the same FR in spec.md.
+rm -f "$TEST_MARKER"
+D=$(mk_marker_fixture)
+python3 - "$D/specs/demo-feat/spec.md" << 'PYEOF'
+import sys
+p = sys.argv[1]; s = open(p).read()
+s = s.replace("- FR-1: demo test suite exits zero when invoked from the project root.",
+              "- FR-1: demo test suite exits zero when invoked from the project root.\n- FR-1: demo test suite does something else entirely.", 1)
+open(p, 'w').write(s)
+PYEOF
+run_admission "$D"
+assert_exit "duplicate FR ID in spec.md refuses admission" 1 "$RC"
+assert_contains "refusal names the duplicate requirement" "$OUTPUT" "defines FR-1 more than once"
+assert_eq "test.command NOT executed for a duplicate-FR spec" "absent" \
+    "$([[ -f "$TEST_MARKER" ]] && echo present || echo absent)"
+rm -rf "$D"; rm -f "$TEST_MARKER"
+
 unset CCT_PROVIDER_PROFILE
 
 D=$(mk_fixture); finalize "$D"
@@ -512,7 +569,7 @@ run_admission "$D"
 assert_exit "draft-plan feature refused" 1 "$RC"
 assert_eq "ungoverned feature's test.command never executed" "0" \
     "$([[ -f "$D/PWNED3" ]] && echo 1 || echo 0)"
-assert_contains "skip names the governance gate" "$OUTPUT" "rejected or ungoverned"
+assert_contains "skip names the governance gate" "$OUTPUT" "rejected, ungoverned, or unbindable-artifact"
 rm -rf "$D"
 
 # DEFER visibility on the earliest refusal (missing artifact).

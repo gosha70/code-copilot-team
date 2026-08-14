@@ -207,6 +207,14 @@ vc_capture_from_parsed() {
         BEGIN {
             while ((getline line < want) > 0) {
                 split(line, a, "\t")
+                # Round-4 finding 1: two bullets for the same FR-N in the
+                # AUTHORITATIVE spec have no single statement to bind —
+                # overwriting would silently leave one requirement
+                # unverified while the capture reported success.
+                if (a[1] in wsha) {
+                    err("spec.md defines " a[1] " more than once — a requirement must have exactly one authoritative statement")
+                    continue
+                }
                 wsha[a[1]] = a[2]
                 worder[++nwant] = a[1]
             }

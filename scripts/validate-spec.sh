@@ -437,6 +437,26 @@ validate_admission() {
   done <<< "$frs"
   if [[ "$lint_ok" == "true" ]]; then pass "$id: no unverifiably-phrased requirements"; fi
 
+  # 6b. CANONICAL CAPTURE — runs here, BEFORE any executing check
+  #     (#242 round-4 finding 2). It is pure computation over the parse
+  #     already in hand, and it carries identity rules the checks above
+  #     do not (duplicate FR/SHA records, duplicate authoritative FR
+  #     IDs). Deferring it to result-file writing let a malformed
+  #     artifact run test.command before admission refused. The capture
+  #     produced here is the ONE the result file later carries — never
+  #     recomputed, never re-read.
+  local _vcap_file _vcap_err capture_ok=true
+  _vcap_file=$(mktemp)
+  if _vcap_err=$(printf '%s\n' "$parsed" | vc_capture_from_parsed "$spec" 2>&1 >"$_vcap_file"); then
+    pass "$id: verification capture is identity-clean (no duplicate or unbindable records)"
+  else
+    capture_ok=false
+    while IFS= read -r _line; do
+      [[ -z "$_line" ]] && continue
+      fail "$id: ${_line#verification capture: }"
+    done <<< "$_vcap_err"
+  fi
+
   # 7. Automation config: dedicated validator + declared unattended
   #    profile (explicit caps are enforced by the validator, #191).
   # The EFFECTIVE config: the driver's --config override / resume
@@ -534,7 +554,7 @@ validate_admission() {
   #     passed AND no check so far has failed: a draft plan, a stale
   #     origin, or a sha-drifted artifact must never trigger it.
   if [[ -n "$conf_health_eval" ]]; then
-    if [[ "$governance_ok" != "true" || "$TOTAL_FAIL" -gt "$_fails_at_entry" ]]; then
+    if [[ "$governance_ok" != "true" || "$capture_ok" != "true" || "$TOTAL_FAIL" -gt "$_fails_at_entry" ]]; then
       echo "  [SKIP] $id: evaluator healthcheck not executed — earlier checks failed (nothing executes for a refused feature)"
     elif [[ -n "$conf_health_cmd" ]] && ! bash -c "$conf_health_cmd" >/dev/null 2>&1; then
       fail "$id: evaluator '$conf_health_eval' failed its healthcheck ($conf_health_cmd)"
@@ -545,14 +565,15 @@ validate_admission() {
 
   # 9. test.command exists and passes on the BASE ref (§11) — an
   #    executing check, so it runs LAST and only when the config
-  #    (check 7) and governance (check 8) already passed: admission
-  #    never executes a command from a rejected or ungoverned feature.
+  #    (check 7), governance (check 8), and the canonical capture
+  #    (check 6b) already passed: admission never executes a command for
+  #    a rejected, ungoverned, or unbindable-artifact feature.
   #    Executed in a THROWAWAY git worktree of HEAD when the project is
   #    a git repo: suites that emit artifacts (coverage, build output)
   #    must never dirty the real tree — the driver's clean-worktree
   #    preflight would otherwise abort the run admission just admitted.
   #    Bounded where timeout(1) exists (driver C-5 convention).
-  if [[ "$autocfg_ok" == "true" && "$governance_ok" == "true" ]]; then
+  if [[ "$autocfg_ok" == "true" && "$governance_ok" == "true" && "$capture_ok" == "true" ]]; then
     local test_cmd
     test_cmd="$(jq -r '.test.command // empty' "$autocfg" 2>/dev/null)"
     if [[ -z "$test_cmd" ]]; then
@@ -595,7 +616,7 @@ validate_admission() {
       fi
     fi
   else
-    fail "$id: test.command not attempted — config or governance checks failed (admission never executes commands for a rejected or ungoverned feature)"
+    fail "$id: test.command not attempted — config, governance, or verification-capture checks failed (admission never executes commands for a rejected, ungoverned, or unbindable-artifact feature)"
   fi
 
   # T4: write structured admission result when --result-file is given.
@@ -611,8 +632,13 @@ validate_admission() {
     # the driver must never freeze from a second, unvalidated read.
     local _vcap="null"
     if [[ "${ADMISSION_RESULT_PATH:-}" == "fresh-unattended-block" ]]; then
-      if ! _vcap=$(printf '%s\n' "$parsed" | vc_capture_from_parsed "$spec"); then
-        fail "admission: verification capture failed despite passing checks — refusing to write a result the initialiser would have to re-read around"
+      # Reuse the capture produced at check 6b — recomputing it here
+      # would be a second parse of data that may have changed under us
+      # (and would run after test.command, the round-4 finding).
+      if [[ -s "$_vcap_file" ]]; then
+        _vcap=$(cat "$_vcap_file")
+      else
+        fail "admission: no verification capture available despite passing checks — refusing to write a result the initialiser would have to re-read around"
         _vcap="null"
       fi
     fi
@@ -632,6 +658,7 @@ validate_admission() {
     fi
   fi
 
+  rm -f "$_vcap_file"
   print_defers
 }
 
