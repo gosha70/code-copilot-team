@@ -20,6 +20,60 @@
 # spawned group is dead is some other process. Both are gate failures —
 # the alternative is an evaluator confidently testing the wrong app.
 
+# ca_timeout_cmd — coreutils timeout, if the host has one.
+ca_timeout_cmd() {
+    if command -v timeout >/dev/null 2>&1; then echo "timeout"
+    elif command -v gtimeout >/dev/null 2>&1; then echo "gtimeout"
+    fi
+}
+
+# ca_run_bounded <secs> <command> — run an arbitrary probe command under
+# a HARD bound, killing the whole process group on expiry (a hanging
+# readiness command must not block the gate forever — build review round
+# 5 finding 1). Returns the command's status, or 124 when the bound
+# fired. The bound is the TERM deadline: a command that ignores TERM
+# costs up to 2s more before KILL, so a caller's wall clock may exceed
+# its budget by that fixed grace — never by the command's own duration. All timeouts here are positive INTEGER seconds (enforced by the
+# config validator and the frozen-contract predicate), because both
+# paths do integer arithmetic.
+ca_run_bounded() {
+    local secs="$1" cmd="$2" tcmd rc=0
+    tcmd=$(ca_timeout_cmd)
+    if [[ -n "$tcmd" ]]; then
+        "$tcmd" -k 2 "$secs" bash -c "$cmd" >/dev/null 2>&1 || rc=$?
+        return $rc
+    fi
+    # No timeout(1): own process group + watchdog, with the escalation
+    # allowed to COMPLETE before returning (the cp_run_bounded lesson —
+    # a cancelled watchdog leaves a TERM-resistant descendant alive).
+    local firedir fired
+    if ! firedir=$(mktemp -d 2>/dev/null) || [[ -z "$firedir" || ! -d "$firedir" ]]; then
+        echo "conformance-app: cannot create the probe watchdog directory — refusing to run the probe unbounded" >&2
+        return 125
+    fi
+    fired="$firedir/fired"
+    set -m
+    ( bash -c "$cmd" ) >/dev/null 2>&1 &
+    local pid=$!
+    ( sleep "$secs"
+      : > "$fired"
+      kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+      sleep 2
+      kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+    local watchdog=$!
+    wait "$pid" 2>/dev/null || rc=$?
+    if [[ -e "$fired" ]]; then
+        wait "$watchdog" 2>/dev/null || true
+        rm -rf "$firedir"; set +m
+        return 124
+    fi
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+    rm -rf "$firedir"; set +m
+    [[ $rc -eq 143 || $rc -eq 137 ]] && return 124
+    return $rc
+}
+
 # ca_reachable <url> <secs> — 0 iff something answers HTTP(S) at url.
 # ANY status counts (404 from a running app still proves the app is
 # there); only a connection/timeout failure counts as unreachable.
@@ -43,7 +97,7 @@ ca_probe() {
         return $?
     fi
     [[ -n "$cmd" ]] || return 2
-    bash -c "$cmd" >/dev/null 2>&1
+    ca_run_bounded "$secs" "$cmd"
 }
 
 # ca_bind_preflight <app-json> [interface] — the launch-binding
@@ -90,27 +144,35 @@ ca_group_alive() {
 # interface answering. Prints a named reason on failure.
 ca_wait_ready() {
     local app="$1" pid="$2" iface="${3:-}"
-    local secs elapsed=0
+    local secs deadline remaining budget
     secs=$(jq -r '.ready.timeout_sec // empty' <<< "$app")
     [[ -n "$secs" ]] || { echo "app.ready.timeout_sec missing — an unbounded probe never fails closed"; return 1; }
-    while [[ "$elapsed" -lt "$secs" ]]; do
+    # An ABSOLUTE deadline, not an iteration count: a probe that takes
+    # seconds must consume the budget it actually spent, and each attempt
+    # gets only what is left (round-5 finding 1).
+    deadline=$(( $(date +%s) + secs ))
+    while :; do
+        remaining=$(( deadline - $(date +%s) ))
+        [[ "$remaining" -le 0 ]] && break
         if ! ca_group_alive "$pid"; then
             echo "the app process group exited before becoming ready (see the app log)"
             return 1
         fi
-        if ca_probe "$app" 3; then
+        budget=$remaining
+        [[ "$budget" -gt 5 ]] && budget=5
+        if ca_probe "$app" "$budget"; then
             if ! ca_group_alive "$pid"; then
                 echo "the readiness probe succeeded but the launched process group is gone — a different process answered"
                 return 1
             fi
-            if [[ -n "$iface" ]] && ! ca_reachable "$iface" 3; then
+            if [[ -n "$iface" ]] && ! ca_reachable "$iface" "$budget"; then
                 echo "readiness succeeded but the evaluator-facing interface $iface does not answer — the evaluator would test nothing"
                 return 1
             fi
             return 0
         fi
-        sleep 1
-        elapsed=$((elapsed + 1))
+        # Never sleep past the deadline.
+        [[ $(( deadline - $(date +%s) )) -gt 0 ]] && sleep 1
     done
     echo "the app never became ready within ${secs}s"
     return 1
@@ -122,22 +184,21 @@ ca_wait_ready() {
 # discipline). Returns 0 when the group is gone, 1 when something
 # survived even KILL.
 ca_stop() {
-    local pid="$1" secs="${2:-10}" waited=0
+    local pid="$1" secs="${2:-10}" deadline
     [[ -n "$pid" ]] || return 0
     kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
-    while [[ "$waited" -lt "$secs" ]]; do
+    deadline=$(( $(date +%s) + secs ))
+    while [[ $(( deadline - $(date +%s) )) -gt 0 ]]; do
         ca_group_alive "$pid" || { wait "$pid" 2>/dev/null || true; return 0; }
         sleep 1
-        waited=$((waited + 1))
     done
     kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
     # KILL is not instantaneous; give the reaper a bounded moment and
     # report honestly if anything is still there.
-    waited=0
-    while [[ "$waited" -lt 5 ]]; do
+    deadline=$(( $(date +%s) + 5 ))
+    while [[ $(( deadline - $(date +%s) )) -gt 0 ]]; do
         ca_group_alive "$pid" || { wait "$pid" 2>/dev/null || true; return 0; }
         sleep 1
-        waited=$((waited + 1))
     done
     wait "$pid" 2>/dev/null || true
     return 1

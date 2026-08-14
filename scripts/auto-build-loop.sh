@@ -1437,18 +1437,18 @@ validate_contract_json() {
                 ((.evaluator == null) and (.app == null) and (.interface == null) and (.timeout_sec == null))
                 or
                 ((.evaluator | type == "string" and length > 0)
-                 and (.timeout_sec | type == "number" and . > 0)
+                 and (.timeout_sec | type == "number" and . > 0 and . == floor)
                  and (.interface | type == "string" and length > 0)
                  and (.app | type == "object"
                       and ([keys[] | select(. != "command" and . != "ready" and . != "stop_timeout_sec" and . != "interface")] | length == 0)
                       and (.command | type == "string" and length > 0)
-                      and (.stop_timeout_sec | type == "number" and . > 0)
+                      and (.stop_timeout_sec | type == "number" and . > 0 and . == floor)
                       and (.ready | type == "object"
                            and ([keys[] | select(. != "url" and . != "command" and . != "timeout_sec")] | length == 0)
-                           and (.timeout_sec | type == "number" and . > 0)
+                           and (.timeout_sec | type == "number" and . > 0 and . == floor)
                            and (((has("url")) and (has("command") | not)) or ((has("command")) and (has("url") | not))))))
             )' <<< "$_ct" >/dev/null 2>&1; then
-            echo "[auto-build] ERROR: contract.conformance invalid — closed {evaluator, app, interface, timeout_sec, criteria: non-empty [{fr, statement_sha, criterion}]}; evaluator/app/interface/timeout_sec are all null (blockless attended) or all configured (app closed, ready exactly-one url|command)" >&2
+            echo "[auto-build] ERROR: contract.conformance invalid — closed {evaluator, app, interface, timeout_sec, criteria: non-empty [{fr, statement_sha, criterion}]}; evaluator/app/interface/timeout_sec are all null (blockless attended) or all configured (app closed, ready exactly-one url|command, every *_timeout_sec a positive INTEGER — the bounds are integer shell arithmetic)" >&2
             ((_errors++))
         fi
     fi

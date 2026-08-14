@@ -5341,6 +5341,27 @@ assert_exit "C2-T4: an unreachable evaluator interface fails the gate" 1 "$CA_RC
 assert_contains "C2-T4: failure names the interface" "$CA_MSG" "does not answer"
 ca_stop "$IPID" 5 >/dev/null 2>&1
 
+# ── Round-5 finding 1: a command probe is BOUNDED, and readiness uses
+#    an absolute deadline (not an iteration count), so a hanging probe
+#    cannot outlive its budget. ──
+HANGJ=$(jq -n '{command:"sleep 60", ready:{command:"sleep 60", timeout_sec:3}, stop_timeout_sec:2}')
+HPID=$(ca_start "$HANGJ" "$APPD" "$APPD/hang.log")
+CA_T0=$(date +%s)
+CA_MSG=$(ca_wait_ready "$HANGJ" "$HPID" 2>&1); CA_RC=$?
+CA_ELAPSED=$(( $(date +%s) - CA_T0 ))
+assert_exit "C2-T4: a hanging readiness command fails the gate" 1 "$CA_RC"
+assert_contains "C2-T4: hanging probe reports the bound" "$CA_MSG" "never became ready"
+assert_eq "C2-T4: the readiness deadline is honoured (<=8s for a 3s budget)" "within" \
+    "$([[ $CA_ELAPSED -le 8 ]] && echo within || echo "overran:${CA_ELAPSED}s")"
+ca_stop "$HPID" 2 >/dev/null 2>&1
+# The bounded runner reports the bound directly, and leaves nothing behind.
+CA_T0=$(date +%s)
+ca_run_bounded 2 "sleep 60"; CA_RC=$?
+CA_ELAPSED=$(( $(date +%s) - CA_T0 ))
+assert_exit "C2-T4: ca_run_bounded reports 124 when the bound fires" 124 "$CA_RC"
+assert_eq "C2-T4: ca_run_bounded returns at its bound (<=6s for 2s)" "within" \
+    "$([[ $CA_ELAPSED -le 6 ]] && echo within || echo "overran:${CA_ELAPSED}s")"
+
 # ── Stop reaches DESCENDANTS, including a TERM-resistant one (the
 #    cp_run_bounded discipline: escalation must complete). ──
 MARKER="$APPD/child-alive"
@@ -5514,6 +5535,15 @@ assert_exit "C2-T3: verifier entry without test rejected" 1 "$_v"
 jq -n '{}' > "$CT"
 if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
 assert_exit "C2-T3: sectionless contract rejected" 1 "$_v"
+
+# Round-5 finding 2: a fractional bound cannot be enforced by the gate's
+# integer arithmetic, so it must never reach a frozen contract either.
+jq -n '{conformance:{evaluator:"e",app:{command:"c",ready:{url:"http://x",timeout_sec:0.5},stop_timeout_sec:5},interface:"http://x",timeout_sec:600,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]}}' > "$CT"
+if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
+assert_exit "C2-T4: fractional ready.timeout_sec rejected in a frozen contract" 1 "$_v"
+jq -n '{conformance:{evaluator:"e",app:{command:"c",ready:{url:"http://x",timeout_sec:5},stop_timeout_sec:2.5},interface:"http://x",timeout_sec:600,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]}}' > "$CT"
+if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
+assert_exit "C2-T4: fractional stop_timeout_sec rejected in a frozen contract" 1 "$_v"
 
 # ── Round-2 finding 1 (driver side): the unattended initialiser freezes
 #    the ADMISSION capture, never a re-read — the disk file already says

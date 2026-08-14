@@ -290,7 +290,7 @@ w n-noto.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evalua
 assert_rejects "conformance.timeout_sec is required (no silent default)" "$TMP/n-noto.json" "timeout_sec is required"
 
 w n-zeroto.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":0,\"app\":{$CONF_APP}}}}"
-assert_rejects "non-positive conformance timeout is rejected" "$TMP/n-zeroto.json" "timeout_sec must be a number > 0"
+assert_rejects "non-positive conformance timeout is rejected" "$TMP/n-zeroto.json" "timeout_sec must be a positive INTEGER"
 
 w n-noapp.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600}}}'
 assert_rejects "conformance.app is required" "$TMP/n-noapp.json" "verification.conformance.app is required"
@@ -305,7 +305,7 @@ w n-nocmd.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"
 assert_rejects "app.command is required" "$TMP/n-nocmd.json" "app.command is required"
 
 w n-nostop.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":30}}}}}'
-assert_rejects "app.stop_timeout_sec is required" "$TMP/n-nostop.json" "stop_timeout_sec is required and must be a number > 0"
+assert_rejects "app.stop_timeout_sec is required" "$TMP/n-nostop.json" "stop_timeout_sec is required and must be a positive INTEGER"
 
 w n-emptyiface.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","interface":"","ready":{"url":"http://x/h","timeout_sec":30},"stop_timeout_sec":10}}}}'
 assert_rejects "empty interface is rejected" "$TMP/n-emptyiface.json" "interface must be a non-empty string"
@@ -329,7 +329,17 @@ w n-readyempty.json '{"schema_version":2,"verification":{"conformance":{"evaluat
 assert_rejects "empty ready.url is rejected" "$TMP/n-readyempty.json" "ready.url must be a non-empty string"
 
 w n-readynoto.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h"},"stop_timeout_sec":10}}}}'
-assert_rejects "ready.timeout_sec is required (bounded probe)" "$TMP/n-readynoto.json" "ready.timeout_sec is required and must be a number > 0"
+assert_rejects "ready.timeout_sec is required (bounded probe)" "$TMP/n-readynoto.json" "ready.timeout_sec is required and must be a positive INTEGER"
+
+# ── Build-review round 5 finding 2: every conformance bound is integer
+#    shell arithmetic, so a fractional value the schema accepted would be
+#    uncomputable at the gate. Rejected by name, in all three places. ──
+w b5-frac1.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":0.5,"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":5},"stop_timeout_sec":5}}}}'
+assert_rejects "fractional conformance.timeout_sec is rejected" "$TMP/b5-frac1.json" "timeout_sec must be a positive INTEGER"
+w b5-frac2.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":0.5},"stop_timeout_sec":5}}}}'
+assert_rejects "fractional ready.timeout_sec is rejected" "$TMP/b5-frac2.json" "ready.timeout_sec is required and must be a positive INTEGER"
+w b5-frac3.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":5},"stop_timeout_sec":2.5}}}}'
+assert_rejects "fractional stop_timeout_sec is rejected" "$TMP/b5-frac3.json" "stop_timeout_sec is required and must be a positive INTEGER"
 
 # ── Build-review finding 1: the interface is bound to the launched
 #    instance — probeable http(s), same origin as ready.url. ──
@@ -409,6 +419,8 @@ assert "schema: command-readiness requires interface (if/then)" \
     jq -e "$CONF_SCHEMA.properties.app.if.properties.ready.required == [\"command\"] and $CONF_SCHEMA.properties.app.then.required == [\"interface\"]" "$SCHEMA"
 assert "schema: evaluator and interface are non-empty strings" \
     jq -e "[$CONF_SCHEMA.properties.evaluator.minLength, $CONF_SCHEMA.properties.app.properties.interface.minLength] | all(. == 1)" "$SCHEMA"
+assert "schema: the three conformance bounds are integer-typed" \
+    jq -e "[$CONF_SCHEMA.properties.timeout_sec, $CONF_SCHEMA.properties.app.properties.stop_timeout_sec, $CONF_SCHEMA.properties.app.properties.ready.properties.timeout_sec] | all(.type == \"integer\" and .minimum == 1)" "$SCHEMA"
 assert "schema: interface and ready.url declare the http(s) pattern" \
     jq -e "[$CONF_SCHEMA.properties.app.properties.interface.pattern, $CONF_SCHEMA.properties.app.properties.ready.properties.url.pattern] | all(. == \"^https?://\")" "$SCHEMA"
 

@@ -26,7 +26,7 @@
           "description": "#242 (increment C2 of #190 §6): the runtime conformance evaluator. Whether conformance is REQUIRED is derived from specs/<feature>/verification.yaml (any FR mapped to kind runtime_conformance) — an operator `required` key is rejected by name. The resolved contract (evaluator, app, interface, timeout_sec, criteria set) is frozen at preflight initialisation under the C1 pinning/tamper rules.",
           "properties": {
             "evaluator": { "type": "string", "minLength": 1, "description": "providers.toml provider id. The provider MUST declare `conformance_command` — an evaluator-specific command template; declaring it IS the runtime_conformance capability. A healthy reviewer-only provider is refused: reviewer health proves liveness, not the ability to exercise a running application." },
-            "timeout_sec": { "type": "number", "exclusiveMinimum": 0, "description": "Bounds the evaluator invocation. Frozen with the contract; explicit — no silent default." },
+            "timeout_sec": { "type": "integer", "minimum": 1, "description": "Bounds the evaluator invocation, in whole seconds. Frozen with the contract; explicit — no silent default. Integer because every bound in the conformance lifecycle is enforced by integer shell arithmetic (deadlines, TERM→KILL escalation) — a fractional value the schema accepted but the driver could not compute would be an inert setting." },
             "app": {
               "type": "object",
               "additionalProperties": false,
@@ -35,7 +35,7 @@
               "properties": {
                 "command": { "type": "string", "minLength": 1 },
                 "interface": { "type": "string", "minLength": 1, "pattern": "^https?://", "description": "Evaluator-facing address of the running application — an absolute http(s) URL the driver PROBES to bind readiness to the launched instance. Must share ready.url's origin when both are present (validator-enforced). Resolved at freeze: `app.interface` else `ready.url`. Required when readiness is command-based." },
-                "stop_timeout_sec": { "type": "number", "exclusiveMinimum": 0 },
+                "stop_timeout_sec": { "type": "integer", "minimum": 1, "description": "Whole seconds before the app stop escalates TERM → KILL (integer: enforced by shell arithmetic)." },
                 "ready": {
                   "type": "object",
                   "additionalProperties": false,
@@ -44,7 +44,7 @@
                   "properties": {
                     "url": { "type": "string", "minLength": 1, "pattern": "^https?://" },
                     "command": { "type": "string", "minLength": 1 },
-                    "timeout_sec": { "type": "number", "exclusiveMinimum": 0 }
+                    "timeout_sec": { "type": "integer", "minimum": 1, "description": "Whole seconds for the readiness deadline (integer: enforced by shell arithmetic)." }
                   },
                   "oneOf": [{ "required": ["url"] }, { "required": ["command"] }]
                 }

@@ -282,8 +282,8 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
                 fi
                 if [[ "$(q '.verification.conformance | has("timeout_sec")')" != "true" ]]; then
                     violation "verification.conformance.timeout_sec is required (the evaluator invocation must be explicitly bounded — no silent default)"
-                elif ! jq -e '.verification.conformance.timeout_sec | type == "number" and . > 0' "$CONFIG" >/dev/null 2>&1; then
-                    violation "verification.conformance.timeout_sec must be a number > 0 (got '$(q '.verification.conformance.timeout_sec')')"
+                elif ! jq -e '.verification.conformance.timeout_sec | type == "number" and . > 0 and . == floor' "$CONFIG" >/dev/null 2>&1; then
+                    violation "verification.conformance.timeout_sec must be a positive INTEGER number of seconds — every conformance bound is enforced by integer shell arithmetic (got '$(q '.verification.conformance.timeout_sec')')"
                 fi
                 if [[ "$(q '.verification.conformance | has("app")')" != "true" ]]; then
                     violation "verification.conformance.app is required (the driver, not the evaluator, starts and stops the application)"
@@ -299,8 +299,8 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
                         violation "verification.conformance.app.command is required and must be a non-empty string"
                     fi
                     if [[ "$(q '.verification.conformance.app | has("stop_timeout_sec")')" != "true" ]] \
-                       || ! jq -e '.verification.conformance.app.stop_timeout_sec | type == "number" and . > 0' "$CONFIG" >/dev/null 2>&1; then
-                        violation "verification.conformance.app.stop_timeout_sec is required and must be a number > 0 (the TERM→KILL stop escalation must be bounded)"
+                       || ! jq -e '.verification.conformance.app.stop_timeout_sec | type == "number" and . > 0 and . == floor' "$CONFIG" >/dev/null 2>&1; then
+                        violation "verification.conformance.app.stop_timeout_sec is required and must be a positive INTEGER number of seconds (the TERM→KILL stop escalation is bounded by integer shell arithmetic)"
                     fi
                     if [[ "$(q '.verification.conformance.app | has("interface")')" == "true" ]] \
                        && ! jq -e '.verification.conformance.app.interface | type == "string" and length > 0' "$CONFIG" >/dev/null 2>&1; then
@@ -336,8 +336,8 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
                             fi
                         done
                         if [[ "$(q '.verification.conformance.app.ready | has("timeout_sec")')" != "true" ]] \
-                           || ! jq -e '.verification.conformance.app.ready.timeout_sec | type == "number" and . > 0' "$CONFIG" >/dev/null 2>&1; then
-                            violation "verification.conformance.app.ready.timeout_sec is required and must be a number > 0 (an unbounded ready probe never fails closed)"
+                           || ! jq -e '.verification.conformance.app.ready.timeout_sec | type == "number" and . > 0 and . == floor' "$CONFIG" >/dev/null 2>&1; then
+                            violation "verification.conformance.app.ready.timeout_sec is required and must be a positive INTEGER number of seconds (the readiness deadline is integer shell arithmetic; an unbounded or uncomputable probe never fails closed)"
                         fi
                         # Command-only readiness carries no address: without
                         # app.interface a capable evaluator has no way to
