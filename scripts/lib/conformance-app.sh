@@ -49,7 +49,7 @@ ca_run_bounded() {
         ( "$tcmd" -k 2 "$secs" bash -c "$cmd" ) >/dev/null 2>&1 &
         pid=$!
         wait "$pid" 2>/dev/null || rc=$?
-        ca_kill_group "$pid"
+        ca_kill_group "$pid" || rc=125
         set +m
         # 127 means the wrapper itself could not execute (a broken or
         # shimmed timeout). Do NOT report it as the probe's verdict —
@@ -80,22 +80,28 @@ ca_run_bounded() {
     wait "$pid" 2>/dev/null || rc=$?
     if [[ -e "$fired" ]]; then
         wait "$watchdog" 2>/dev/null || true
-        ca_kill_group "$pid"
+        local cleanup_rc=0
+        ca_kill_group "$pid" || cleanup_rc=1
         rm -rf "$firedir"; set +m
+        [[ $cleanup_rc -eq 0 ]] || return 125
         return 124
     fi
     kill "$watchdog" 2>/dev/null || true
     wait "$watchdog" 2>/dev/null || true
     # Cleanup on the SUCCESS path too — a probe whose leader exited 0 can
     # still have forked children (round-6 finding 2).
-    ca_kill_group "$pid"
+    ca_kill_group "$pid" || rc=125
     rm -rf "$firedir"; set +m
+    [[ $rc -eq 125 ]] && return 125
     [[ $rc -eq 143 || $rc -eq 137 ]] && return 124
     return $rc
 }
 
 # ca_kill_group <pid> — leave no descendant of a probe behind, whatever
-# the probe's own exit status was. TERM, brief grace, KILL.
+# the probe's own exit status was. TERM, brief grace, KILL, then VERIFY.
+# Returns 0 only when the group is provably gone; 1 when something
+# survived the escalation (round-7 finding 2: an unverified cleanup that
+# always returned success let a survivor ride out the gate).
 ca_kill_group() {
     local pid="$1" i=0
     [[ -n "$pid" ]] || return 0
@@ -107,7 +113,14 @@ ca_kill_group() {
         i=$((i + 1))
     done
     kill -KILL -"$pid" 2>/dev/null || true
-    return 0
+    i=0
+    while [[ $i -lt 3 ]]; do
+        ca_group_alive "$pid" || return 0
+        sleep 1
+        i=$((i + 1))
+    done
+    echo "conformance-app: a probe descendant survived TERM and KILL (group $pid) — cleanup could not be proven" >&2
+    return 1
 }
 
 # ca_reachable <url> <secs> — 0 iff something answers HTTP(S) at url.
@@ -119,21 +132,57 @@ ca_reachable() {
     curl -sS -o /dev/null --max-time "$secs" "$url" >/dev/null 2>&1
 }
 
-# ca_probe <app-json> <secs> — one readiness attempt. url form requires a
-# 2xx/3xx (-f), because "ready" is stronger than "listening"; command form
-# requires exit 0.
-ca_probe() {
-    local app="$1" secs="${2:-5}"
-    local url cmd
+# ca_probe_outcome <app-json> <secs> — ONE readiness attempt, reported as
+# a structured outcome on stdout (round-7 finding 1: an exit-code
+# denylist silently accepted every status it had not enumerated —
+# 126/127 from an unexecutable probe, 128+ from a signalled one):
+#   ready                — the probe ran and the app answered
+#   not-ready            — the probe RAN and reported the app not ready
+#   unproven:<detail>    — the probe did not produce a verdict at all
+# Only `not-ready` proves absence; callers must never infer it.
+ca_probe_outcome() {
+    local app="$1" secs="${2:-5}" url cmd rc=0
     url=$(jq -r '.ready.url // empty' <<< "$app")
     cmd=$(jq -r '.ready.command // empty' <<< "$app")
     if [[ -n "$url" ]]; then
-        command -v curl >/dev/null 2>&1 || return 2
-        curl -fsS -o /dev/null --max-time "$secs" "$url" >/dev/null 2>&1
-        return $?
+        if ! command -v curl >/dev/null 2>&1; then
+            echo "unproven:no HTTP client (curl) to run the url probe"; return 0
+        fi
+        curl -fsS -o /dev/null --max-time "$secs" "$url" >/dev/null 2>&1 || rc=$?
+        case "$rc" in
+            0)  echo "ready" ;;
+            # curl's own vocabulary: 7 = could not connect, 22 = HTTP
+            # error under -f, 28 = timed out. Those are verdicts about
+            # the APP. Anything else (bad usage, SSL/init failures,
+            # signals) is a failure of the probe itself.
+            7|22|28) echo "not-ready" ;;
+            *)  echo "unproven:curl exited $rc (probe failure, not an app verdict)" ;;
+        esac
+        return 0
     fi
-    [[ -n "$cmd" ]] || return 2
-    ca_run_bounded "$secs" "$cmd"
+    if [[ -z "$cmd" ]]; then
+        echo "unproven:no ready.url and no ready.command in the frozen app contract"; return 0
+    fi
+    ca_run_bounded "$secs" "$cmd" || rc=$?
+    case "$rc" in
+        0)   echo "ready" ;;
+        124) echo "unproven:the readiness command hit its ${secs}s bound" ;;
+        125) echo "unproven:the probe could not be bounded or its descendants could not be cleaned up" ;;
+        126) echo "unproven:the readiness command is not executable" ;;
+        127) echo "unproven:the readiness command was not found" ;;
+        *)   if [[ $rc -ge 128 ]]; then
+                 echo "unproven:the readiness command was killed by signal $((rc - 128))"
+             else
+                 echo "not-ready"
+             fi ;;
+    esac
+    return 0
+}
+
+# ca_probe <app-json> <secs> — 0 iff the outcome is `ready`. Callers that
+# must distinguish "not ready" from "no verdict" use ca_probe_outcome.
+ca_probe() {
+    [[ "$(ca_probe_outcome "$1" "${2:-5}")" == "ready" ]]
 }
 
 # ca_bind_preflight <app-json> [interface] — the launch-binding
@@ -141,23 +190,22 @@ ca_probe() {
 # the evaluator-facing interface may answer. Returns 0 when nothing
 # answers; 1 (with a named reason on stdout) when something does.
 ca_bind_preflight() {
-    local app="$1" iface="${2:-}" rc=0
-    ca_probe "$app" 3 || rc=$?
-    if [[ $rc -eq 0 ]]; then
-        echo "the readiness probe already succeeded BEFORE the app was launched — the responder cannot be attributed to this run"
-        return 1
-    fi
-    # Round-6 finding 1: only a probe that RAN and reported "not ready"
-    # proves the precondition. A timeout (124), a missing/unusable probe
-    # mechanism (2), or a watchdog that could not be established (125)
-    # prove nothing — treating them as "nothing answered" would let the
-    # app launch with the binding unverified.
-    if [[ $rc -eq 124 || $rc -eq 125 || $rc -eq 2 ]]; then
-        echo "the pre-launch readiness probe could not be evaluated (status $rc: timed out, unbounded, or no usable probe mechanism) — the launch binding is unproven"
-        return 1
-    fi
+    local app="$1" iface="${2:-}" outcome rc=0
+    # ONLY an explicit `not-ready` clears the precondition (round-6
+    # finding 1, round-7 finding 1). `ready` means something already
+    # answers; anything else means the probe produced no verdict, and an
+    # unproven binding must never authorise a launch.
+    outcome=$(ca_probe_outcome "$app" 3)
+    case "$outcome" in
+        ready)
+            echo "the readiness probe already succeeded BEFORE the app was launched — the responder cannot be attributed to this run"
+            return 1 ;;
+        not-ready) ;;
+        *)
+            echo "the pre-launch readiness probe produced no verdict (${outcome#unproven:}) — the launch binding is unproven"
+            return 1 ;;
+    esac
     if [[ -n "$iface" ]]; then
-        rc=0
         ca_reachable "$iface" 3 || rc=$?
         if [[ $rc -eq 0 ]]; then
             echo "the evaluator-facing interface $iface already answered BEFORE the app was launched — the responder cannot be attributed to this run"
@@ -214,7 +262,19 @@ ca_wait_ready() {
         fi
         budget=$remaining
         [[ "$budget" -gt 5 ]] && budget=5
-        if ca_probe "$app" "$budget"; then
+        local outcome
+        outcome=$(ca_probe_outcome "$app" "$budget")
+        # A probe that cannot produce a verdict will not produce one on
+        # the next iteration either — except for its own bound, which is
+        # exactly what the deadline is for. Everything else fails closed
+        # NOW, with the reason (round-7 finding 1).
+        case "$outcome" in
+            unproven:the\ readiness\ command\ hit*) ;;
+            unproven:*)
+                echo "the readiness probe produced no verdict (${outcome#unproven:})"
+                return 1 ;;
+        esac
+        if [[ "$outcome" == "ready" ]]; then
             if ! ca_group_alive "$pid"; then
                 echo "the readiness probe succeeded but the launched process group is gone — a different process answered"
                 return 1

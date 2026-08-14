@@ -5385,20 +5385,70 @@ assert_exit "C2-T4: an unevaluable pre-launch probe refuses (fails closed)" 1 "$
 assert_contains "C2-T4: refusal says the binding is unproven" "$CA_MSG" "launch binding is unproven"
 rm -rf "$CA_SHIM"
 
+# ── Round-7 finding 1: the verdict is STRUCTURED, not inferred from an
+#    enumerated set of exit codes. A probe that never executed (missing
+#    command, unexecutable wrapper, signalled) proves nothing. ──
+MISSJ=$(jq -n '{command:"sleep 30", ready:{command:"/no/such/probe-binary", timeout_sec:5}, stop_timeout_sec:2}')
+assert_eq "C2-T4: a missing readiness command is unproven, not not-ready" "unproven" \
+    "$(ca_probe_outcome "$MISSJ" 3 | cut -d: -f1)"
+CA_MSG=$(ca_bind_preflight "$MISSJ"); CA_RC=$?
+assert_exit "C2-T4: a missing readiness command refuses the binding" 1 "$CA_RC"
+assert_contains "C2-T4: refusal names the missing command" "$CA_MSG" "was not found"
+CA_SHIM=$(mktemp -d)
+printf '#!/usr/bin/env bash\nexit 126\n' > "$CA_SHIM/timeout"; chmod +x "$CA_SHIM/timeout"
+cp "$CA_SHIM/timeout" "$CA_SHIM/gtimeout"
+CA_MSG=$(PATH="$CA_SHIM:$PATH" ca_bind_preflight "$CMDJ" 2>/dev/null); CA_RC=$?
+assert_exit "C2-T4: an unexecutable probe wrapper (126) refuses the binding" 1 "$CA_RC"
+assert_contains "C2-T4: refusal says no verdict was produced" "$CA_MSG" "produced no verdict"
+rm -rf "$CA_SHIM"
+FALSEJ=$(jq -n '{command:"sleep 30", ready:{command:"exit 1", timeout_sec:5}, stop_timeout_sec:2}')
+assert_eq "C2-T4: a probe that RAN and failed is not-ready (the binding clears)" "not-ready" \
+    "$(ca_probe_outcome "$FALSEJ" 3)"
+
+# ── Round-7 finding 2: cleanup that cannot be proven is an
+#    infrastructure failure, not a successful probe. ──
+# kill is a shell BUILTIN, so a PATH shim cannot fake a failed signal —
+# inject at the function boundary instead: a group that never disappears.
+CA_REAL_ALIVE=$(declare -f ca_group_alive)
+ca_group_alive() { return 0; }
+CA_RC=0
+ca_run_bounded 5 "exit 0" 2>/dev/null || CA_RC=$?
+assert_exit "C2-T4: a probe whose descendants cannot be reaped fails as infrastructure" 125 "$CA_RC"
+CA_MSG=$(ca_kill_group 999999 2>&1); CA_RC=$?
+assert_exit "C2-T4: unprovable cleanup returns failure, not success" 1 "$CA_RC"
+assert_contains "C2-T4: cleanup failure is reported" "$CA_MSG" "cleanup could not be proven"
+eval "$CA_REAL_ALIVE"
+
 # ── Round-6 finding 3: readiness and the interface share ONE deadline.
-#    The interface must HANG (TEST-NET-1, RFC 5737 — never routable) to
-#    expose a reused budget: a refused connection returns instantly and
-#    would hide the overrun. Pre-fix this took 6s against a 3s deadline;
-#    now the interface check gets only what the probe left. ──
+#    The interface must ACCEPT and then stall, so the check burns real
+#    budget: a refused connection returns instantly and hides an overrun,
+#    and an unroutable address depends on host routing (round-7 finding
+#    3 — a host that rejects it immediately makes this pass either way).
+#    A local responder that accepts and never replies is deterministic.
+#    Pre-fix this took 6s against a 3s deadline. ──
+STALL_PORT=$(free_port)
+cat > "$APPD/stall.py" << 'PYSTALL'
+import socket, sys, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(8)
+held = []
+while True:
+    c, _ = s.accept()
+    held.append(c)   # accept, never respond: the client waits for its own timeout
+PYSTALL
+python3 "$APPD/stall.py" "$STALL_PORT" >/dev/null 2>&1 &
+STALL_PID=$!
+_sw=0; while ! curl -sS -o /dev/null --max-time 1 "http://127.0.0.1:$STALL_PORT/" 2>/dev/null && [[ $_sw -lt 10 ]]; do sleep 1; _sw=$((_sw + 1)); done
 SLOWIFJ=$(jq -n --arg r "sleep 2; true" '{command:"sleep 30", ready:{command:$r, timeout_sec:3}, stop_timeout_sec:2}')
 SIPID=$(ca_start "$SLOWIFJ" "$APPD" "$APPD/slowif.log")
 CA_T0=$(date +%s)
-CA_MSG=$(ca_wait_ready "$SLOWIFJ" "$SIPID" "http://192.0.2.1/" 2>&1); CA_RC=$?
+CA_MSG=$(ca_wait_ready "$SLOWIFJ" "$SIPID" "http://127.0.0.1:$STALL_PORT/" 2>&1); CA_RC=$?
 CA_ELAPSED=$(( $(date +%s) - CA_T0 ))
-assert_exit "C2-T4: a slow probe plus a hanging interface still fails closed" 1 "$CA_RC"
+assert_exit "C2-T4: a slow probe plus a stalling interface still fails closed" 1 "$CA_RC"
 assert_eq "C2-T4: the two checks share one deadline (<=4s for a 3s budget)" "within" \
     "$([[ $CA_ELAPSED -le 4 ]] && echo within || echo "overran:${CA_ELAPSED}s")"
 ca_stop "$SIPID" 2 >/dev/null 2>&1
+kill "$STALL_PID" 2>/dev/null || true
 
 # ── Round-6 finding 4: the PERSISTED contract schema agrees with the
 #    executable validator on integer bounds. ──
