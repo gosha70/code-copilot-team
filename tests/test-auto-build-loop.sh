@@ -5257,6 +5257,100 @@ assert_eq "C2-T3: no frozen contract materialises on that resume" "absent" \
     "$([[ -f "$LEDGERD/frozen-contract.json" ]] && echo present || echo absent)"
 rm -rf "$P"
 
+echo ""
+echo "=== C2 (#242) T4: driver-owned app lifecycle (FR-6) ==="
+# ══════════════════════════════════════════════════════════════
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
+APPD=$(mktemp -d)
+
+# ── Happy path: preflight clean → start → ready (probe + group alive +
+#    interface answering) → stop leaves nothing behind. ──
+APORT=$(free_port)
+AIFACE="http://127.0.0.1:$APORT"
+APPJ=$(jq -n --arg u "$AIFACE/" --arg c "python3 -m http.server $APORT --bind 127.0.0.1" \
+    '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5}')
+ca_bind_preflight "$APPJ" "$AIFACE" >/dev/null 2>&1
+assert_exit "C2-T4: bind preflight passes when nothing answers yet" 0 $?
+APID=$(ca_start "$APPJ" "$APPD" "$APPD/app.log")
+CA_MSG=$(ca_wait_ready "$APPJ" "$APID" "$AIFACE" 2>&1); CA_RC=$?
+assert_exit "C2-T4: readiness proven for the launched instance" 0 "$CA_RC"
+assert_eq "C2-T4: app stdout/stderr captured to the ledger log" "yes" \
+    "$([[ -s "$APPD/app.log" ]] && echo yes || echo no)"
+# The finding-1 scenario: with the app up, a preflight would now refuse —
+# which is exactly what stops a stale responder vouching for a `sleep`.
+CA_MSG=$(ca_bind_preflight "$APPJ" "$AIFACE"); CA_RC=$?
+assert_exit "C2-T4: a pre-existing responder refuses the binding preflight" 1 "$CA_RC"
+assert_contains "C2-T4: refusal says the responder predates the launch" "$CA_MSG" "BEFORE the app was launched"
+# Each preflight guard carries its own scenario — with both live, either
+# alone would hide the other's removal.
+CA_MSG=$(ca_bind_preflight "$(jq -n '{command:"sleep 30", ready:{command:"true", timeout_sec:5}, stop_timeout_sec:5}')"); CA_RC=$?
+assert_exit "C2-T4: an already-true readiness probe refuses (probe guard alone)" 1 "$CA_RC"
+assert_contains "C2-T4: probe-guard refusal names the probe" "$CA_MSG" "readiness probe already succeeded"
+CA_MSG=$(ca_bind_preflight "$(jq -n '{command:"sleep 30", ready:{command:"false", timeout_sec:5}, stop_timeout_sec:5}')" "$AIFACE"); CA_RC=$?
+assert_exit "C2-T4: a live interface refuses even when the probe fails (interface guard alone)" 1 "$CA_RC"
+assert_contains "C2-T4: interface-guard refusal names the interface" "$CA_MSG" "interface $AIFACE already answered"
+ca_stop "$APID" 5
+assert_exit "C2-T4: stop reports the group gone" 0 $?
+ca_group_alive "$APID" && CA_RC=0 || CA_RC=1
+assert_exit "C2-T4: no process of the launched group survives" 1 "$CA_RC"
+
+# ── An app that exits before readiness fails closed by name. ──
+DPORT=$(free_port)
+DEADJ=$(jq -n --arg u "http://127.0.0.1:$DPORT/" \
+    '{command:"exit 3", ready:{url:$u, timeout_sec:5}, stop_timeout_sec:5}')
+DPID=$(ca_start "$DEADJ" "$APPD" "$APPD/dead.log")
+CA_MSG=$(ca_wait_ready "$DEADJ" "$DPID" 2>&1); CA_RC=$?
+assert_exit "C2-T4: an app that exits before readiness fails the gate" 1 "$CA_RC"
+assert_contains "C2-T4: failure names the exited group" "$CA_MSG" "exited before becoming ready"
+
+# ── A probe that succeeds while the launched group is gone is some
+#    OTHER process answering — the post-probe liveness re-check catches
+#    what the top-of-loop check cannot (the group dies during the probe).
+RACEJ=$(jq -n '{command:"sleep 31.5", ready:{command:"pkill -f \"sleep 31.5\" >/dev/null 2>&1; sleep 1; true", timeout_sec:8}, stop_timeout_sec:5}')
+RPID=$(ca_start "$RACEJ" "$APPD" "$APPD/race.log")
+CA_MSG=$(ca_wait_ready "$RACEJ" "$RPID" 2>&1); CA_RC=$?
+assert_exit "C2-T4: a probe answering after the group died fails the gate" 1 "$CA_RC"
+assert_contains "C2-T4: failure says another process answered" "$CA_MSG" "a different process answered"
+
+# ── A probe that never succeeds fails closed at its bound. ──
+SLOWJ=$(jq -n '{command:"sleep 30", ready:{command:"false", timeout_sec:2}, stop_timeout_sec:5}')
+SPID=$(ca_start "$SLOWJ" "$APPD" "$APPD/slow.log")
+CA_MSG=$(ca_wait_ready "$SLOWJ" "$SPID" 2>&1); CA_RC=$?
+assert_exit "C2-T4: ready-probe timeout fails the gate" 1 "$CA_RC"
+assert_contains "C2-T4: timeout failure names the bound" "$CA_MSG" "never became ready"
+ca_stop "$SPID" 5 >/dev/null 2>&1
+
+# ── Readiness that cannot be reached by the EVALUATOR is not readiness. ──
+UPORT=$(free_port)
+IFJ=$(jq -n '{command:"sleep 30", ready:{command:"true", timeout_sec:5}, stop_timeout_sec:5}')
+IPID=$(ca_start "$IFJ" "$APPD" "$APPD/iface.log")
+CA_MSG=$(ca_wait_ready "$IFJ" "$IPID" "http://127.0.0.1:$UPORT" 2>&1); CA_RC=$?
+assert_exit "C2-T4: an unreachable evaluator interface fails the gate" 1 "$CA_RC"
+assert_contains "C2-T4: failure names the interface" "$CA_MSG" "does not answer"
+ca_stop "$IPID" 5 >/dev/null 2>&1
+
+# ── Stop reaches DESCENDANTS, including a TERM-resistant one (the
+#    cp_run_bounded discipline: escalation must complete). ──
+MARKER="$APPD/child-alive"
+cat > "$APPD/stubborn.sh" << STUB
+#!/usr/bin/env bash
+trap '' TERM
+while true; do touch "$MARKER"; sleep 1; done
+STUB
+chmod +x "$APPD/stubborn.sh"
+KIDJ=$(jq -n --arg c "bash $APPD/stubborn.sh & sleep 30" \
+    '{command:$c, ready:{command:"true", timeout_sec:5}, stop_timeout_sec:2}')
+KPID=$(ca_start "$KIDJ" "$APPD" "$APPD/kid.log")
+sleep 2
+ca_stop "$KPID" 2
+assert_exit "C2-T4: stop completes even against a TERM-resistant descendant" 0 $?
+rm -f "$MARKER"; sleep 2
+assert_eq "C2-T4: no descendant survives the gate (marker child)" "absent" \
+    "$([[ -f "$MARKER" ]] && echo present || echo absent)"
+rm -rf "$APPD"
+
 # ── Round-3: the canonical capture path itself ──
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
