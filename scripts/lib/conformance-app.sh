@@ -29,9 +29,11 @@
 # ignores TERM costs up to 2s more before KILL, so a caller's wall clock
 # may exceed its budget by that fixed grace — never by the command's own
 # duration. All timeouts are positive INTEGER seconds (enforced by the
-# config validator and the frozen-contract predicate).
+# config validator and the frozen-contract predicate). An optional third
+# argument captures stdout+stderr to a file (the landing gate keeps every
+# verifier and evaluator transcript in the ledger).
 ca_run_bounded() {
-    local secs="$1" cmd="$2" rc=0 pid
+    local secs="$1" cmd="$2" out="${3:-/dev/null}" rc=0 pid
     # ONE mechanism: our own process group + watchdog, with the escalation
     # allowed to COMPLETE before returning (the cp_run_bounded lesson —
     # a cancelled watchdog leaves a TERM-resistant descendant alive).
@@ -49,7 +51,7 @@ ca_run_bounded() {
     fi
     fired="$firedir/fired"
     set -m
-    ( bash -c "$cmd" ) >/dev/null 2>&1 &
+    ( bash -c "$cmd" ) >"$out" 2>&1 &
     pid=$!
     ( sleep "$secs"
       : > "$fired"

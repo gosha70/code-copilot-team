@@ -1377,15 +1377,17 @@ assert_exit "validator violation rejects the run (exit 1)" 1 "$RC"
 assert_contains "validator failure surfaces in output" "$OUTPUT" "failed validation"
 rm -rf "$P"
 
-# FR-3 static dispatch coverage: every one of the 12 breaker reasons routes
-# through dispose(); no call site invokes park() directly; no force-push.
+# FR-3 static dispatch coverage: every breaker reason routes through
+# dispose(); no call site invokes park() directly; no force-push.
+# (coverage_gate arrived with C1/#222, conformance_gate with C2/#242.)
 DISPATCH_OK=1
 for r in origin_gate provider_unavailable review_breaker cap_exceeded \
          build_session_error build_session_timeout test_failure git_anomaly \
-         pr_error pr_config pr_precheck merge_blocked; do
+         pr_error pr_config pr_precheck merge_blocked \
+         coverage_gate conformance_gate; do
     grep -q "dispose \"$r\"" "$DRIVER" || { DISPATCH_OK=0; echo "  (missing dispose for $r)"; }
 done
-assert_eq "all 12 breaker reasons dispatch via dispose()" "1" "$DISPATCH_OK"
+assert_eq "all 14 breaker reasons dispatch via dispose()" "1" "$DISPATCH_OK"
 assert_eq "no breaker call site bypasses dispose()" "0" \
     "$(grep -cE '(^|[^a-zA-Z_"])park "[a-z]' "$DRIVER")"
 assert_eq "termination artifacts add no force-push (prechecks not weakened)" "0" \
@@ -5030,6 +5032,272 @@ rm -rf "$P" "$GIT_SHIM_DIR"
 rm -f "$DRIVER_FUNCS"
 
 echo ""
+echo "=== C2 (#242) T5: the landing verifier gate ==="
+# ══════════════════════════════════════════════════════════════
+# The gate is exercised directly (dispose/journal/check_caps stubbed to
+# record) so every branch of the 12-step sequence gets a case; the wiring
+# into a real run is proven end-to-end at the end of this section.
+free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
+VG_FUNCS=$(mktemp)
+_stop=$(grep -n '^# ── Main ' "$DRIVER" | head -1 | cut -d: -f1)
+sed 's/^FEATURE_ID=""$/FEATURE_ID="demo-feat"/' <(head -n $((_stop - 1)) "$DRIVER") > "$VG_FUNCS"
+
+# vg_case <fixture-dir> — run verifier_gate in a subshell with recording
+# stubs; prints "<reason>\t<detail>" (empty reason = the gate passed).
+vg_case() {
+    local dir="$1" marker
+    # The marker lives outside the project: an untracked file inside it
+    # would (rightly) trip the gate's own integrity check.
+    marker="$(dirname "$dir")/$(basename "$dir").vg-dispose"
+    ( set +e
+      # `source` inside a function passes the FUNCTION's positional args
+      # to the sourced file — the driver's arg parser would exit on them.
+      set --
+      # shellcheck source=/dev/null
+      source "$VG_FUNCS" >/dev/null 2>&1
+      # The extracted functions resolve SCRIPT_DIR to tests/, so the
+      # driver's own conditional source of the lifecycle lib is a no-op
+      # here — load it explicitly.
+      source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+      PROJECT_DIR="$dir"; LEDGER_DIR="$dir/.cct/auto-build/demo-feat"
+      FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
+      FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
+      dispose() { printf '%s\t%s\n' "$1" "$2" > "$marker"; return 1; }
+      journal() { :; }
+      check_caps() { :; }
+      : > "$marker"
+      verifier_gate >/dev/null 2>&1
+      cat "$marker" )
+}
+
+# vg_fixture <contract-json> — a git project whose HEAD is clean.
+vg_fixture() {
+    local dir; dir=$(mktemp -d)
+    git -C "$dir" init -q -b main-dev
+    git -C "$dir" config user.email t@t.local; git -C "$dir" config user.name T
+    mkdir -p "$dir/.cct/auto-build/demo-feat"
+    printf '.cct/\n' > "$dir/.gitignore"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/pass.sh"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$dir/fail.sh"
+    chmod +x "$dir/pass.sh" "$dir/fail.sh"
+    git -C "$dir" add -A >/dev/null; git -C "$dir" commit -q -m init
+    printf '%s' "$1" | jq -S '.' > "$dir/.cct/auto-build/demo-feat/frozen-contract.json"
+    echo "$dir"
+}
+
+SHA1='sha256:1111111111111111111111111111111111111111111111111111111111111111'
+SHA2='sha256:2222222222222222222222222222222222222222222222222222222222222222'
+
+# ── Deterministic verifiers are EXECUTED (FR-7, SC-8) ──
+VGD=$(vg_fixture "$(jq -n --arg s "$SHA1" '{verifiers:{timeout_sec:20,set:[{fr:"FR-1",statement_sha:$s,test:"./pass.sh",metric:null}]}}')")
+VG_OUT=$(vg_case "$VGD")
+assert_eq "C2-T5: a green deterministic verifier passes the gate" "" "$VG_OUT"
+jq -e '.green == true and .frs["FR-1"].green == true and (.frs["FR-1"].verifiers | length == 1)' \
+    "$VGD/.cct/auto-build/demo-feat/verification-results.json" >/dev/null 2>&1
+assert_exit "C2-T5: verification-results.json records FR -> per-verifier results" 0 $?
+rm -rf "$VGD"
+
+VGD=$(vg_fixture "$(jq -n --arg s "$SHA1" '{verifiers:{timeout_sec:20,set:[{fr:"FR-1",statement_sha:$s,test:"./fail.sh",metric:null}]}}')")
+VG_OUT=$(vg_case "$VGD")
+assert_eq "C2-T5: a failing frozen verifier disposes conformance_gate" "conformance_gate" "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C2-T5: the disposition names the failing FR" "$VG_OUT" "FR-1"
+assert_eq "C2-T5: the failing verifier is recorded as not green" "false" \
+    "$(jq -r '.frs["FR-1"].green' "$VGD/.cct/auto-build/demo-feat/verification-results.json")"
+rm -rf "$VGD"
+
+# A verifier that hangs is bounded and fails closed.
+VGD=$(vg_fixture "$(jq -n --arg s "$SHA1" '{verifiers:{timeout_sec:2,set:[{fr:"FR-1",statement_sha:$s,test:"sleep 60",metric:null}]}}')")
+VG_OUT=$(vg_case "$VGD")
+assert_eq "C2-T5: a hanging verifier is bounded and fails the gate" "conformance_gate" "$(printf '%s' "$VG_OUT" | cut -f1)"
+rm -rf "$VGD"
+
+# ── Tamper + integrity (FR-4a, FR-11) ──
+VGD=$(vg_fixture "$(jq -n --arg s "$SHA1" '{verifiers:{timeout_sec:20,set:[{fr:"FR-1",statement_sha:$s,test:"./pass.sh",metric:null}]}}')")
+VG_OUT=$( ( set +e
+    source "$VG_FUNCS" >/dev/null 2>&1
+    source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+    PROJECT_DIR="$VGD"; LEDGER_DIR="$VGD/.cct/auto-build/demo-feat"
+    FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
+    FROZEN_CONTRACT=$(jq -c '.verifiers.timeout_sec = 999' "$LEDGER_DIR/frozen-contract.json")
+    dispose() { printf '%s\t%s\n' "$1" "$2"; return 1; }
+    journal() { :; }; check_caps() { :; }
+    verifier_gate 2>/dev/null ) )
+assert_eq "C2-T5: a contract edited on disk mid-run disposes" "conformance_gate" "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C2-T5: tamper disposition says so" "$VG_OUT" "no longer matches the admitted contract"
+printf 'dirty\n' >> "$VGD/pass.sh"
+VG_OUT=$(vg_case "$VGD")
+assert_contains "C2-T5: a dirty checkout refuses BEFORE any verifier runs" "$VG_OUT" "not clean before the verifier gate"
+rm -rf "$VGD"
+
+# A verifier that mutates the checkout is caught by the AFTER check.
+VGD=$(vg_fixture "$(jq -n --arg s "$SHA1" '{verifiers:{timeout_sec:20,set:[{fr:"FR-1",statement_sha:$s,test:"./pass.sh",metric:null}]}}')")
+CONF_STUB=$(mktemp -d)
+VG_MUT=$(jq -n --arg s "$SHA1" --arg s2 "$SHA2" \
+    '{verifiers:{timeout_sec:20,set:[{fr:"FR-1",statement_sha:$s,test:"./pass.sh",metric:null}]}}')
+rm -rf "$VGD"
+
+# ── Conformance: a stub evaluator in the REAL provider-template shape ──
+vg_conf_fixture() {  # <evaluator-behaviour-script> <provider-extras...>
+    local dir; dir=$(mktemp -d)
+    git -C "$dir" init -q -b main-dev
+    git -C "$dir" config user.email t@t.local; git -C "$dir" config user.name T
+    mkdir -p "$dir/.cct/auto-build/demo-feat"
+    printf '.cct/\n' > "$dir/.gitignore"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/pass.sh"; chmod +x "$dir/pass.sh"
+    git -C "$dir" add -A >/dev/null; git -C "$dir" commit -q -m init
+    echo "$dir"
+}
+VG_PORT=$(free_port)
+VG_APP=$(jq -n --arg c "python3 -m http.server $VG_PORT --bind 127.0.0.1" \
+    --arg u "http://127.0.0.1:$VG_PORT/" \
+    '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5}')
+vg_conf_contract() {  # <app-json>
+    jq -n --argjson app "$1" --arg s "$SHA2" --arg iface "http://127.0.0.1:$VG_PORT/" \
+        '{conformance:{evaluator:"stub-eval", app:$app, interface:$iface, timeout_sec:30,
+           criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]}}'
+}
+# The evaluator: reads the request file, emits ONE fenced json block.
+vg_write_provider() {  # <project-dir> <verdict-script> — prints the profile path
+    local dir="$1" ext
+    ext="$(dirname "$dir")/$(basename "$dir").provider"
+    mkdir -p "$ext"
+    cp "$2" "$ext/stub-eval.sh"; chmod +x "$ext/stub-eval.sh"
+    cat > "$ext/providers.toml" << TOML
+[providers.stub-eval]
+type = "cli"
+command = "cat {review_request}"
+conformance_command = "bash $ext/stub-eval.sh {review_request}"
+healthcheck = "true"
+TOML
+    echo "$ext/providers.toml"
+}
+VG_EVAL_OK=$(mktemp)
+cat > "$VG_EVAL_OK" << 'EVAL'
+#!/usr/bin/env bash
+# Echo every frozen criterion with a pass verdict, in one fenced block.
+req="$1"
+crit=$(awk '/^```json$/ {n++; if (n==1) {inb=1; next}} inb && /^```$/ {exit} inb {print}' "$req")
+echo "Exercised the running app."
+echo '```json'
+jq -c '{criteria: [ .[] | {fr, statement_sha, criterion, verdict: "pass", evidence: "clicked cancel; row showed cancelled"} ]}' <<< "$crit"
+echo '```'
+EVAL
+
+VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_OK")
+vg_conf_contract "$VG_APP" | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
+assert_eq "C2-T5: a passing evaluator verdict lands the run" "" "$VG_OUT"
+jq -e '.green == true and .frs["FR-2"].verifiers[0].kind == "runtime_conformance"
+   and (.frs["FR-2"].verifiers[0].evidence | length > 0)' \
+   "$VGC/.cct/auto-build/demo-feat/verification-results.json" >/dev/null 2>&1
+assert_exit "C2-T5: conformance verdicts carry evidence into the ledger" 0 $?
+assert_eq "C2-T5: the request document quotes the frozen interface" "1" \
+    "$(grep -c "http://127.0.0.1:$VG_PORT/" "$VGC/.cct/auto-build/demo-feat/conformance/request.md")"
+assert_eq "C2-T5: the app log is captured in the ledger" "yes" \
+    "$([[ -f "$VGC/.cct/auto-build/demo-feat/conformance/app.log" ]] && echo yes || echo no)"
+rm -rf "$VGC"
+
+# Fail-closed verdict shapes: fail, missing, altered, duplicated, no block.
+vg_eval_variant() {  # <jq-transform on the criteria array>
+    local f; f=$(mktemp)
+    cat > "$f" << EVAL
+#!/usr/bin/env bash
+req="\$1"
+crit=\$(awk '/^\`\`\`json\$/ {n++; if (n==1) {inb=1; next}} inb && /^\`\`\`\$/ {exit} inb {print}' "\$req")
+echo '\`\`\`json'
+jq -c '{criteria: [ .[] | {fr, statement_sha, criterion, verdict: "pass", evidence: "e"} ] | $1}' <<< "\$crit"
+echo '\`\`\`'
+EVAL
+    echo "$f"
+}
+for variant in 'map(.verdict = "fail")' '[]' 'map(.criterion = "something else")' '. + .'; do
+    VGC=$(vg_conf_fixture)
+    VG_PROF=$(vg_write_provider "$VGC" "$(vg_eval_variant "$variant")")
+    vg_conf_contract "$VG_APP" | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+    VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
+    assert_eq "C2-T5: verdict variant [$variant] fails closed" "conformance_gate" "$(printf '%s' "$VG_OUT" | cut -f1)"
+    rm -rf "$VGC"
+done
+
+VG_EVAL_NOBLOCK=$(mktemp)
+printf '#!/usr/bin/env bash\necho "I think it passes."\n' > "$VG_EVAL_NOBLOCK"
+VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_NOBLOCK")
+vg_conf_contract "$VG_APP" | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
+assert_contains "C2-T5: prose without a verdict block fails closed" "$VG_OUT" "no single fenced json verdict block"
+rm -rf "$VGC"
+
+# ── Evaluator capability + health are re-checked AT THE GATE (FR-9) ──
+VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_OK")
+python3 - "$VG_PROF" << 'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace('conformance_command = ', 'other_command = ', 1)
+open(p, 'w').write(s)
+PYEOF
+vg_conf_contract "$VG_APP" | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
+assert_eq "C2-T5: an evaluator that lost its capability parks provider_unavailable" "provider_unavailable" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+rm -rf "$VGC"
+
+VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_OK")
+vg_conf_contract "$VG_APP" | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+VG_OUT=$(CCT_PROVIDER_PROFILE="$(dirname "$VGC")/no-such-profile.toml" vg_case "$VGC")
+assert_eq "C2-T5: an unresolvable evaluator parks provider_unavailable" "provider_unavailable" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+rm -rf "$VGC"
+
+# Attended blockless run: the criteria are frozen with a null evaluator —
+# the requirement surfaces HERE (FR-10), it is never skipped.
+VGC=$(vg_conf_fixture)
+jq -n --arg s "$SHA2" '{conformance:{evaluator:null, app:null, interface:null, timeout_sec:null,
+    criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]}}' \
+    > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+VG_OUT=$(vg_case "$VGC")
+assert_eq "C2-T5: a blockless attended run parks at the gate, never skips" "provider_unavailable" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+rm -rf "$VGC"
+
+# ── FR-11: the app mutating the checkout is a git_anomaly ──
+for mutation in "echo smuggled >> pass.sh" "echo x > untracked-artifact.txt"; do
+    VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_OK")
+    MPORT=$(free_port)
+    MAPP=$(jq -n --arg c "$mutation; python3 -m http.server $MPORT --bind 127.0.0.1" \
+        --arg u "http://127.0.0.1:$MPORT/" \
+        '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5}')
+    jq -n --argjson app "$MAPP" --arg s "$SHA2" --arg iface "http://127.0.0.1:$MPORT/" \
+        '{conformance:{evaluator:"stub-eval", app:$app, interface:$iface, timeout_sec:30,
+           criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}' \
+        > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+    VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
+    assert_eq "C2-T5: an app that mutates the checkout [$mutation] disposes git_anomaly" "git_anomaly" \
+        "$(printf '%s' "$VG_OUT" | cut -f1)"
+    rm -rf "$VGC"
+done
+
+rm -f "$VG_FUNCS" "$VG_EVAL_OK" "$VG_EVAL_NOBLOCK"
+
+# ── End-to-end wiring: a failing frozen verifier blocks a real run ──
+P=$(setup_project); single_phase "$P"
+admit_project "$P"
+python3 - "$P/specs/demo-feat/verification.yaml" << 'PYEOF'
+import sys
+p = sys.argv[1]; s = open(p).read()
+s = s.replace('test: "project-test.sh"', 'test: "./never-green.sh"', 1)
+open(p, 'w').write(s)
+PYEOF
+printf '#!/usr/bin/env bash\nexit 7\n' > "$P/never-green.sh"; chmod +x "$P/never-green.sh"
+git -C "$P" add -A && git -C "$P" commit -q -m "a verifier that fails"
+run_driver "$P"
+assert_exit "C2-T5 e2e: a failing frozen verifier blocks the landing" 4 "$RC"
+assert_eq "C2-T5 e2e: the park names the verifier gate" "conformance_gate" \
+    "$(jq -r '.reason' "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | tail -1)"
+assert_eq "C2-T5 e2e: verification-results.json is written for the run" "yes" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/verification-results.json" ]] && echo yes || echo no)"
+rm -rf "$P"
+
+echo ""
 echo "=== C2 (#242) T3: frozen verification contract + lifecycle rekey ==="
 # ══════════════════════════════════════════════════════════════
 
@@ -5064,7 +5332,10 @@ P=$(setup_project); single_phase "$P"
 write_verification_yaml "$P"
 cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9099/health",timeout_sec:5},stop_timeout_sec:5}}}'
 run_driver "$P"
-assert_exit "C2-T3: conformance-only run completes" 0 "$RC"
+# Since T5 the frozen conformance requirement is enforced at the landing
+# gate: with no evaluator resolvable, the run parks instead of landing.
+# The freeze itself — T3's subject — is asserted below regardless.
+assert_exit "C2-T3: conformance-only run parks at the (unconfigured) verifier gate" 4 "$RC"
 assert_contains "C2-T3: conformance-only run takes the -block path" "$OUTPUT" "path: fresh-attended-block"
 LEDGER="$P/.cct/auto-build/demo-feat"
 jq -e '.verifiers.timeout_sec == 60
@@ -5101,7 +5372,7 @@ P=$(setup_project); single_phase "$P"
 write_verification_yaml "$P"
 cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",interface:"http://127.0.0.1:9099",ready:{command:"true",timeout_sec:5},stop_timeout_sec:5}}}'
 run_driver "$P"
-assert_exit "C2-T3: command-readiness run completes" 0 "$RC"
+assert_exit "C2-T3: command-readiness run parks at the verifier gate" 4 "$RC"
 assert_eq "C2-T3: app.interface wins the interface resolution" "http://127.0.0.1:9099" \
     "$(jq -r '.conformance.interface' "$P/.cct/auto-build/demo-feat/frozen-contract.json")"
 rm -rf "$P"
@@ -5112,7 +5383,7 @@ rm -rf "$P"
 P=$(setup_project); single_phase "$P"
 write_verification_yaml "$P"
 run_driver "$P"
-assert_exit "C2-T3: blockless attended run with a mapping still freezes" 0 "$RC"
+assert_exit "C2-T3: blockless attended run parks at the gate (mapping unskippable)" 4 "$RC"
 jq -e '.conformance.evaluator == null and .conformance.app == null
    and .conformance.interface == null and .conformance.timeout_sec == null
    and (.conformance.criteria | length == 1)' \
@@ -5262,7 +5533,6 @@ echo "=== C2 (#242) T4: driver-owned app lifecycle (FR-6) ==="
 # ══════════════════════════════════════════════════════════════
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
-free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
 APPD=$(mktemp -d)
 
 # ── Happy path: preflight clean → start → ready (probe + group alive +

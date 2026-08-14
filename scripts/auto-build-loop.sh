@@ -53,6 +53,11 @@ if [[ -f "$SCRIPT_DIR/lib/verification-common.sh" ]]; then
     # shellcheck source=lib/verification-common.sh
     source "$SCRIPT_DIR/lib/verification-common.sh"
 fi
+# C2 (#242): driver-owned app lifecycle for the landing verifier gate.
+if [[ -f "$SCRIPT_DIR/lib/conformance-app.sh" ]]; then
+    # shellcheck source=lib/conformance-app.sh
+    source "$SCRIPT_DIR/lib/conformance-app.sh"
+fi
 # Project being built: defaults to the repo this toolkit is installed in;
 # CCT_PROJECT_DIR points the driver at another project (tests, kick-starts).
 PROJECT_DIR="${CCT_PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -1821,6 +1826,278 @@ coverage_gate() {
     return 0
 }
 
+# ── C2 (#242) T5: the landing verifier gate ──────────────────
+# The ONE normative sequence from specs/auto-build-conformance-evaluator
+# /plan.md, decision 5. Runs AFTER the coverage gate and BEFORE
+# finalize/push/PR.
+
+# vg_toml_get <file> <section> <key> — the provider-profile reader (same
+# minimal parser as scripts/providers-health.sh; the driver must not
+# source a runner to read one field).
+vg_toml_get() {
+    local file="$1" section="$2" key="$3"
+    [[ -f "$file" ]] || return 0
+    awk -v section="$section" -v key="$key" '
+        /^\[/ { current = $0; gsub(/[\[\] ]/, "", current) }
+        current == section && $0 ~ "^" key " *=" {
+            val = $0
+            sub(/^[^=]*= */, "", val)
+            gsub(/^"|"$/, "", val)
+            print val
+            exit
+        }
+    ' "$file"
+}
+
+# vg_dirty — the FULL porcelain status, untracked included, minus the
+# driver's own ledger. FR-11: an untracked file left by the app or the
+# evaluator would otherwise ride into driver_commit's `git add -A`.
+vg_dirty() {
+    git -C "$PROJECT_DIR" status --porcelain 2>/dev/null | grep -v '^?? \.cct/' || true
+}
+
+# vg_fenced_json <capture-file> — print the ONE fenced JSON block in the
+# evaluator's stdout. Fails (non-zero) when there is none or more than
+# one: an evaluator that hedges with two blocks has not given a verdict.
+vg_fenced_json() {
+    local file="$1" count
+    count=$(awk '/^[[:space:]]*```[[:space:]]*json[[:space:]]*$/ { n++ } END { print n + 0 }' "$file")
+    [[ "$count" == "1" ]] || { echo "expected exactly one fenced json block, found $count" >&2; return 1; }
+    awk '
+        /^[[:space:]]*```[[:space:]]*json[[:space:]]*$/ { inblock = 1; next }
+        inblock && /^[[:space:]]*```[[:space:]]*$/ { inblock = 0; next }
+        inblock { print }
+    ' "$file"
+}
+
+verifier_gate() {
+    [[ "$DRY_RUN" == "true" ]] && return 0
+    [[ -n "$FROZEN_CONTRACT" ]] || return 0
+    jq -e 'has("verifiers") or has("conformance")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1 || return 0
+
+    local head hist
+    head=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+    hist=$(jq -n --arg h "$head" '{parked_head: $h}')
+
+    # 1. Tamper check — the whole pinned object (C1's rule, unchanged).
+    local frozen="$LEDGER_DIR/frozen-contract.json"
+    if [[ "$(jq -cS . "$frozen" 2>/dev/null)" != "$(jq -cS . <<< "$FROZEN_CONTRACT")" ]]; then
+        dispose "conformance_gate" "frozen contract on disk no longer matches the admitted contract — tampered or corrupted mid-run (FR-4a)" "$hist"
+        return 1
+    fi
+
+    # 2. Checkout integrity BEFORE — the gate must run on exactly what
+    #    lands, and anything left behind must be attributable.
+    local dirty
+    dirty=$(vg_dirty)
+    if [[ -n "$dirty" ]]; then
+        dispose "conformance_gate" "the checkout is not clean before the verifier gate ($(printf '%s' "$dirty" | tr '\n' ' ')) — refusing to run verifiers over uncommitted state (FR-11)" "$hist"
+        return 1
+    fi
+    local gate_head="$head"
+    local cdir="$LEDGER_DIR/conformance"
+    mkdir -p "$cdir"
+
+    # 3. EXECUTE every frozen deterministic verifier. Admission's
+    #    resolution was the screen; this is the decision (FR-7) — a
+    #    verifier is never inferred green from the generic test.command.
+    local results='[]' vtimeout n=0
+    vtimeout=$(jq -r '.verifiers.timeout_sec // empty' <<< "$FROZEN_CONTRACT")
+    if [[ -n "$vtimeout" ]]; then
+        local vfr vtest vsha vrc vlog
+        while IFS=$'\t' read -r vfr vsha vtest; do
+            [[ -z "$vfr" ]] && continue
+            n=$((n + 1))
+            vlog="$cdir/verifier-$n.log"
+            vrc=0
+            # The artifact's PATH form ("tests/run.sh") is what admission
+            # resolves; as a bare command it would be "not found". Run an
+            # executable project file through ./, anything else verbatim.
+            local vexec="$vtest"
+            if [[ -f "$PROJECT_DIR/$vtest" && -x "$PROJECT_DIR/$vtest" ]]; then
+                vexec="./$vtest"
+            fi
+            ca_run_bounded "$vtimeout" "cd $(printf '%q' "$PROJECT_DIR") && $vexec" "$vlog" || vrc=$?
+            local vgreen=false vdetail="exit $vrc"
+            case "$vrc" in
+                0)   vgreen=true; vdetail="exit 0" ;;
+                124) vdetail="hit its ${vtimeout}s bound" ;;
+                125) vdetail="could not be bounded or cleaned up" ;;
+            esac
+            results=$(jq --arg fr "$vfr" --arg sha "$vsha" --arg t "$vtest" \
+                --argjson green "$vgreen" --arg d "$vdetail" --arg log "${vlog#$PROJECT_DIR/}" \
+                '. + [{fr:$fr, kind:"deterministic", verifier:$t, statement_sha:$sha, green:$green, detail:$d, log:$log}]' \
+                <<< "$results")
+            echo "[auto-build] verifier gate: $vfr $vtest -> $vdetail" >&2
+        done < <(jq -r '.verifiers.set[] | [.fr, .statement_sha, .test] | @tsv' <<< "$FROZEN_CONTRACT")
+    fi
+
+    # ── Conformance (present iff the artifact derived the requirement) ──
+    if jq -e 'has("conformance")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1; then
+        local evaluator iface ctimeout app criteria
+        evaluator=$(jq -r '.conformance.evaluator // empty' <<< "$FROZEN_CONTRACT")
+        iface=$(jq -r '.conformance.interface // empty' <<< "$FROZEN_CONTRACT")
+        ctimeout=$(jq -r '.conformance.timeout_sec // empty' <<< "$FROZEN_CONTRACT")
+        app=$(jq -c '.conformance.app // empty' <<< "$FROZEN_CONTRACT")
+        criteria=$(jq -c '.conformance.criteria' <<< "$FROZEN_CONTRACT")
+
+        # 4. Evaluator re-resolution: resolves, DECLARES
+        #    conformance_command, and is healthy. Attended blockless runs
+        #    reach here with a null evaluator — the requirement is frozen
+        #    and unskippable, so it parks here rather than being ignored.
+        local ptoml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+        local ccmd chc
+        if [[ -z "$evaluator" || -z "$app" ]]; then
+            dispose "provider_unavailable" "the frozen contract requires runtime conformance but carries no evaluator (attended run without verification.conformance) — configure a capable evaluator, then resume" "$hist"
+            return 1
+        fi
+        if ! grep -o '^\[providers\.[^]]*' "$ptoml" 2>/dev/null | sed 's/^\[providers\.//' | grep -qxF "$evaluator"; then
+            dispose "provider_unavailable" "frozen evaluator '$evaluator' no longer resolves in $ptoml" "$hist"
+            return 1
+        fi
+        ccmd=$(vg_toml_get "$ptoml" "providers.$evaluator" "conformance_command")
+        chc=$(vg_toml_get "$ptoml" "providers.$evaluator" "healthcheck")
+        if [[ -z "$ccmd" || "$ccmd" != *"{review_request}"* ]]; then
+            dispose "provider_unavailable" "frozen evaluator '$evaluator' no longer declares a usable conformance_command (missing, or without the {review_request} placeholder)" "$hist"
+            return 1
+        fi
+        if [[ -n "$chc" ]] && ! bash -c "$chc" >/dev/null 2>&1; then
+            dispose "provider_unavailable" "frozen evaluator '$evaluator' failed its healthcheck at the gate" "$hist"
+            return 1
+        fi
+
+        # 5. Pre-launch binding probe, then start the app in its own
+        #    process group with output captured to the ledger.
+        local bind_msg
+        if ! bind_msg=$(ca_bind_preflight "$app" "$iface"); then
+            dispose "conformance_gate" "launch binding refused: $bind_msg" "$hist"
+            return 1
+        fi
+        local applog="$cdir/app.log" apid
+        apid=$(ca_start "$app" "$PROJECT_DIR" "$applog") || {
+            dispose "conformance_gate" "could not start the application under test (see ${applog#$PROJECT_DIR/})" "$hist"
+            return 1
+        }
+
+        # 6. Readiness — bound to THIS launch.
+        local ready_msg
+        if ! ready_msg=$(ca_wait_ready "$app" "$apid" "$iface"); then
+            ca_stop "$apid" "$(jq -r '.stop_timeout_sec // 10' <<< "$app")" >/dev/null 2>&1 || true
+            dispose "conformance_gate" "the application never became usable: $ready_msg (see ${applog#$PROJECT_DIR/})" "$hist"
+            return 1
+        fi
+
+        # 7. Author the request from the FROZEN contract, ensure the
+        #    result path is absent, invoke through the provider's
+        #    conformance_command, and require a NEWLY produced verdict.
+        local req="$cdir/request.md" cap="$cdir/evaluator-stdout.log"
+        local resfile="$cdir/result.json" costfile="$cdir/cost.json"
+        rm -f "$resfile" "$cap" "$costfile"
+        {
+            echo "# Runtime Conformance Evaluation — $FEATURE_ID"
+            echo ""
+            echo "The application under test is RUNNING and reachable at: $iface"
+            echo ""
+            echo "Exercise the running application and decide each criterion below."
+            echo "Do not review the diff; only observed behaviour counts."
+            echo ""
+            echo "## Criteria"
+            echo ""
+            echo '```json'
+            jq -S '.' <<< "$criteria"
+            echo '```'
+            echo ""
+            echo "## Required Output Format"
+            echo ""
+            echo "Emit EXACTLY ONE fenced json block, echoing every criterion"
+            echo "unchanged and adding your verdict:"
+            echo ""
+            echo '```json'
+            echo '{"criteria": [{"fr": "FR-N", "statement_sha": "sha256:...",'
+            echo '  "criterion": "<verbatim>", "verdict": "pass"|"fail",'
+            echo '  "evidence": "<what you observed>"}]}'
+            echo '```'
+            echo ""
+            echo "Every frozen criterion must appear exactly once. A missing,"
+            echo "duplicated, altered, or invented entry fails the gate."
+        } > "$req"
+        local inv="${ccmd//\{review_request\}/$req}"
+        local irc=0
+        CCT_REVIEW_COST_FILE="$costfile" ca_run_bounded "$ctimeout" "cd $(printf '%q' "$PROJECT_DIR") && $inv" "$cap" || irc=$?
+        local stop_rc=0
+        ca_stop "$apid" "$(jq -r '.stop_timeout_sec // 10' <<< "$app")" || stop_rc=$?
+
+        # 9. Checkout integrity AFTER — before ANY verdict is honoured.
+        local head_now dirty_now
+        head_now=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+        dirty_now=$(vg_dirty)
+        if [[ "$head_now" != "$gate_head" || -n "$dirty_now" ]]; then
+            dispose "git_anomaly" "the verifier gate mutated the checkout (HEAD ${gate_head:0:8} -> ${head_now:0:8}; changes: $(printf '%s' "$dirty_now" | tr '\n' ' ')) — the app or the evaluator wrote to the repository (FR-11)" "$hist"
+            return 1
+        fi
+        if [[ $stop_rc -ne 0 ]]; then
+            dispose "conformance_gate" "the application process group survived TERM and KILL — refusing to land with a stray process holding the gate's resources" "$hist"
+            return 1
+        fi
+
+        # 11. The verdict must be an EXACT identity multiset of the frozen
+        #     criteria, produced by THIS invocation.
+        if [[ $irc -ne 0 ]]; then
+            dispose "conformance_gate" "the evaluator invocation failed (status $irc — non-zero exit, its ${ctimeout}s bound, or an unreapable process; see ${cap#$PROJECT_DIR/})" "$hist"
+            return 1
+        fi
+        local block
+        if ! block=$(vg_fenced_json "$cap" 2>/dev/null); then
+            dispose "conformance_gate" "the evaluator produced no single fenced json verdict block (see ${cap#$PROJECT_DIR/})" "$hist"
+            return 1
+        fi
+        printf '%s\n' "$block" > "$resfile"
+        if ! jq -e '.' "$resfile" >/dev/null 2>&1; then
+            dispose "conformance_gate" "the evaluator's verdict block is not valid JSON (see ${resfile#$PROJECT_DIR/})" "$hist"
+            return 1
+        fi
+        local mismatch
+        mismatch=$(jq -r --argjson want "$criteria" '
+            (.criteria // []) as $got
+            | [$got[]? | {fr, statement_sha, criterion}] as $echoed
+            | ($want | sort) as $w | ($echoed | sort) as $g
+            | if ($got | length) == 0 then "the verdict carries no criteria"
+              elif $w != $g then "the echoed criteria are not an exact match of the frozen set (missing, duplicated, altered, or invented entries)"
+              elif ([$got[] | select((.verdict != "pass") and (.verdict != "fail"))] | length) > 0 then "a verdict is neither pass nor fail"
+              elif ([$got[] | select((.evidence // "") == "")] | length) > 0 then "a verdict carries no evidence"
+              else "" end' "$resfile" 2>/dev/null || echo "the verdict could not be compared with the frozen criteria")
+        if [[ -n "$mismatch" ]]; then
+            dispose "conformance_gate" "evaluator verdict rejected: $mismatch (see ${resfile#$PROJECT_DIR/})" "$hist"
+            return 1
+        fi
+        results=$(jq --slurpfile r "$resfile" '
+            . + [ $r[0].criteria[] | {fr, kind:"runtime_conformance", verifier:.criterion,
+                                      statement_sha, green:(.verdict == "pass"),
+                                      detail:.verdict, evidence:.evidence} ]' <<< "$results")
+    fi
+
+    # 12. Evidence: FR -> per-verifier results. An FR is green iff ALL of
+    #     its verifiers are green.
+    jq --argjson v "$results" -n '
+        {schema_version: 1,
+         frs: ([$v[] | .fr] | unique | map(. as $fr | {key: $fr, value: {
+                 green: ([$v[] | select(.fr == $fr) | .green] | all),
+                 verifiers: [$v[] | select(.fr == $fr)]}}) | from_entries),
+         green: ([$v[] | .green] | all)}' > "$LEDGER_DIR/verification-results.json"
+
+    local failing
+    failing=$(jq -r '[.frs | to_entries[] | select(.value.green | not)
+                      | .key + " (" + ([.value.verifiers[] | select(.green | not) | .verifier] | join("; ")) + ")"] | join(", ")' \
+              "$LEDGER_DIR/verification-results.json")
+    if [[ -n "$failing" ]]; then
+        dispose "conformance_gate" "verification failed: $failing (see .cct/auto-build/$FEATURE_ID/verification-results.json)" "$hist"
+        return 1
+    fi
+    journal "verifier_gate" "all mapped verifiers green ($(jq -r '.frs | length' "$LEDGER_DIR/verification-results.json") FR(s))"
+    check_caps
+    return 0
+}
+
 # ── Phase enumeration (FR-4) ─────────────────────────────────
 # Emits lines "N<TAB>title<TAB>milestone_after(0|1)". Config override wins.
 
@@ -3257,8 +3534,10 @@ resume_parked() {
             crash_findings=$(jq -r '.history.findings_file // empty' "$esc_file" 2>/dev/null || echo "")
             refuse_resume "runner crash is not resumable because review state may be inconsistent (attempted round $crash_round; findings: ${crash_findings:-none}). Resolve the runner error and start a fresh attended run"
             ;;
-        coverage_gate)
-            # Human raised the coverage (or fixed the tooling) and committed.
+        coverage_gate|conformance_gate)
+            # Human raised the coverage, fixed the tooling, or fixed the app
+            # (#242: one arm, two reason labels — the recovery contract is
+            # identical and both gates re-run on the resumed path).
             # The gate itself re-runs on the resumed path — landing parks
             # re-reach the landing gate, phase parks re-enter at the gate.
             [[ -z "$(git -C "$PROJECT_DIR" status --porcelain | grep -v '^?? \.cct/')" ]] \
@@ -3831,6 +4110,12 @@ done < "$LEDGER_DIR/phases.tsv"
 # BEFORE finalizing/push/PR so a failing floor blocks the landing, not
 # merely annotates it.
 coverage_gate landing
+
+# The landing verifier gate (#242 T5): every mapped verifier must be
+# green — deterministic ones EXECUTED here, conformance criteria decided
+# by the evaluator against the running app — before anything is
+# finalized, pushed, or opened as a PR.
+verifier_gate
 
 set_status "finalizing"
 {
