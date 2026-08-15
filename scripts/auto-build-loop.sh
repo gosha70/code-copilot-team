@@ -403,7 +403,7 @@ terminate_policy() {
 # that always refuses). Prints the reason-specific guidance on stdout
 # when the answer is no.
 escalation_resumable() {
-    local reason="$1" history="${2:-null}" scope="" evaluator=""
+    local reason="$1" history="${2:-null}"
     case "$reason" in
         cost_accounting_failed)
             echo "This run could not RECORD an invocation's cost, so its ledger understates real spend by an unknown amount"
@@ -424,9 +424,12 @@ escalation_resumable() {
             echo "Then start a FRESH run: scripts/auto-build-loop.sh $FEATURE_ID"
             return 1 ;;
         provider_unavailable)
-            scope=$(jq -r 'if type == "object" then (.provider_scope // "") else "" end' <<< "$history" 2>/dev/null || echo "")
-            evaluator=$(jq -r 'if type == "object" then (.evaluator // "null") else "null" end' <<< "$history" 2>/dev/null || echo "null")
-            if [[ "$scope" == "evaluator" && "$evaluator" == "null" ]]; then
+            # Ask JSON, not a stringified copy: `jq -r` renders both a
+            # JSON null and the provider id "null" as the same shell text,
+            # and an evaluator legitimately named "null" IS resolvable, so
+            # the dispatcher can still fix it (round-21 finding 1).
+            if jq -e 'type == "object" and .provider_scope == "evaluator" and .evaluator == null' \
+                <<< "$history" >/dev/null 2>&1; then
                 echo "This run's FROZEN contract requires runtime conformance but froze NO evaluator"
                 echo "--resume refuses here: a frozen contract cannot gain an evaluator, so configuring one now cannot change this run"
                 echo "Add verification.conformance (evaluator + app) to automation.json"

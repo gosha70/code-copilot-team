@@ -5625,6 +5625,10 @@ assert_eq "C2-T6: a null-evaluator provider_unavailable is non-resumable" "false
     "$(vg_park_verdict provider_unavailable '{"provider_scope":"evaluator","evaluator":null}')"
 assert_eq "C2-T6: a reviewer-scope provider_unavailable stays resumable" "true 1" \
     "$(vg_park_verdict provider_unavailable 'null')"
+# An evaluator whose provider id is literally "null" is a REAL, resolvable
+# evaluator — only a JSON null means "none was frozen".
+assert_eq "C2-T6: an evaluator named \"null\" stays resumable" "true 1" \
+    "$(vg_park_verdict provider_unavailable '{"provider_scope":"evaluator","evaluator":"null"}')"
 assert_eq "C2-T6: an ordinary reason still advises --resume" "true 1" \
     "$(vg_park_verdict test_failure)"
 # The predicate and the dispatcher must not drift apart.
