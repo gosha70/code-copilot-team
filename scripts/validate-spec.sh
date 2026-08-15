@@ -234,6 +234,23 @@ print_defers() {
   defer "mid-flight credential/secret enumeration (delegation-best-practices)"
 }
 
+# admission_toml_get <file> <section> <key> — same minimal TOML reader
+# the provider scripts use (canonical copy: scripts/providers-health.sh);
+# duplicated because admission must not depend on sourcing a runner.
+admission_toml_get() {
+  local file="$1" section="$2" key="$3"
+  awk -v section="$section" -v key="$key" '
+      /^\[/ { current = $0; gsub(/[\[\] ]/, "", current) }
+      current == section && $0 ~ "^" key " *=" {
+          val = $0
+          sub(/^[^=]*= */, "", val)
+          gsub(/^"|"$/, "", val)
+          print val
+          exit
+      }
+  ' "$file"
+}
+
 # admission_target_ok <project_dir> <target> — a deterministic verifier
 # target is genuinely executable: a path form must be an executable
 # FILE (a directory or plain file verifies nothing); a command form
@@ -293,6 +310,9 @@ validate_admission() {
   # T4: capture admission start time for --result-file duration accounting.
   local _admission_start_epoch
   _admission_start_epoch=$(date +%s)
+  # #242 finding 5: the evaluator healthcheck EXECUTES operator config,
+  # so it may only run when every check before it passed.
+  local _fails_at_entry=$TOTAL_FAIL
 
   # 0. Inputs must exist before any check can be decided — a missing
   #    input is a NAMED failure, never a raw tool error mid-report.
@@ -356,9 +376,11 @@ validate_admission() {
   if [[ "$sha_ok" == "true" ]]; then pass "$id: every statement_sha recomputes clean against spec.md"; fi
 
   # 4+5. Every verifier is executable NOW. deterministic → target must
-  #      resolve; runtime_conformance → the §6 evaluator ships in
-  #      increment C, so the mapping is inadmissible in B (a verifier
-  #      something depends on cannot be unavailable).
+  #      resolve; runtime_conformance (C2, #242 FR-3) → the criterion
+  #      must be real here, and the evaluator's availability+capability
+  #      is checked against the effective config after the config gate
+  #      (check 7b — a verifier something depends on cannot be
+  #      unavailable).
   local ver_ok=true
   while IFS=$'\t' read -r fr _; do
     local nvers
@@ -368,7 +390,7 @@ validate_admission() {
       ver_ok=false
     fi
   done <<< "$frs"
-  while IFS=$'\t' read -r _ fr kind target; do
+  while IFS=$'\t' read -r _ fr kind target _metric; do
     case "$kind" in
       deterministic)
         if [[ -z "$target" || "$target" == TODO* ]]; then
@@ -380,8 +402,13 @@ validate_admission() {
         fi
         ;;
       runtime_conformance)
-        fail "$id: $fr is mapped to runtime_conformance but the §6 evaluator is unavailable (ships in increment C) — inadmissible in B"
-        ver_ok=false
+        # The mapping itself is admissible since C2 (#242). A placeholder
+        # criterion still refuses — a verifier nothing defines verifies
+        # nothing.
+        if [[ -z "$target" || "$target" == TODO* ]]; then
+          fail "$id: $fr runtime_conformance criterion is a placeholder ('${target:-empty}') — write the real conformance criterion"
+          ver_ok=false
+        fi
         ;;
       *)
         fail "$id: $fr verifier has unknown kind '$kind' (deterministic|runtime_conformance)"
@@ -392,14 +419,43 @@ validate_admission() {
   if [[ "$ver_ok" == "true" ]]; then pass "$id: every verifier resolves to something executable"; fi
 
   # 6. Unverifiable phrasing lint — on the AUTHORITATIVE spec text.
+  #    C2 (#242 finding 3): such phrasing IS admissible when that FR
+  #    carries a concrete runtime_conformance verifier — the evaluator
+  #    is exactly the thing that can decide it. Deterministic-only FRs
+  #    still refuse.
   local lint_ok=true
   while IFS=$'\t' read -r fr stmt; do
     if printf '%s' "$stmt" | grep -qiE 'user confirms|looks good|verify manually'; then
-      fail "$id: $fr is phrased unverifiably ('user confirms'/'looks good'/'verify manually') — only a runtime_conformance criterion could carry it, and that is increment C"
-      lint_ok=false
+      if printf '%s\n' "$parsed" | awk -F'\t' -v fr="$fr" \
+          '$1 == "VER" && $2 == fr && $3 == "runtime_conformance" { found = 1 } END { exit found ? 0 : 1 }'; then
+        :  # carried by a runtime_conformance verifier — admissible in C2
+      else
+        fail "$id: $fr is phrased unverifiably ('user confirms'/'looks good'/'verify manually') and no runtime_conformance verifier carries it — map one or rephrase"
+        lint_ok=false
+      fi
     fi
   done <<< "$frs"
   if [[ "$lint_ok" == "true" ]]; then pass "$id: no unverifiably-phrased requirements"; fi
+
+  # 6b. CANONICAL CAPTURE — runs here, BEFORE any executing check
+  #     (#242 round-4 finding 2). It is pure computation over the parse
+  #     already in hand, and it carries identity rules the checks above
+  #     do not (duplicate FR/SHA records, duplicate authoritative FR
+  #     IDs). Deferring it to result-file writing let a malformed
+  #     artifact run test.command before admission refused. The capture
+  #     produced here is the ONE the result file later carries — never
+  #     recomputed, never re-read.
+  local _vcap_file _vcap_err capture_ok=true
+  _vcap_file=$(mktemp)
+  if _vcap_err=$(printf '%s\n' "$parsed" | vc_capture_from_parsed "$spec" 2>&1 >"$_vcap_file"); then
+    pass "$id: verification capture is identity-clean (no duplicate or unbindable records)"
+  else
+    capture_ok=false
+    while IFS= read -r _line; do
+      [[ -z "$_line" ]] && continue
+      fail "$id: ${_line#verification capture: }"
+    done <<< "$_vcap_err"
+  fi
 
   # 7. Automation config: dedicated validator + declared unattended
   #    profile (explicit caps are enforced by the validator, #191).
@@ -416,6 +472,57 @@ validate_admission() {
   else
     autocfg_ok=true
     pass "$id: automation.json valid, profile unattended, caps explicit"
+  fi
+
+  # 7b. Conformance availability + capability (#242 FR-3, handoff item 2).
+  #     REQUIRED is derived from the finalized artifact (the same parse
+  #     admission validated above — never a re-read): any FR mapped to
+  #     runtime_conformance. When required, the EFFECTIVE config must name
+  #     an evaluator that resolves in providers.toml, DECLARES
+  #     conformance_command (health alone is not capability — a healthy
+  #     reviewer-only provider can only fabricate runtime evidence), and
+  #     passes its healthcheck. No fallback chain: the gate freezes THIS
+  #     evaluator id, so admission screens exactly it.
+  local conf_required=false
+  if printf '%s\n' "$parsed" | vc_conformance_required_parsed; then
+    conf_required=true
+  fi
+  # Health is EXECUTED later (8b): resolving and validating the
+  # declaration here is pure file inspection; running the healthcheck is
+  # operator-command execution and must wait for governance (finding 5).
+  local conf_health_eval="" conf_health_cmd=""
+  if [[ "$conf_required" == "true" ]]; then
+    local profile_toml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+    if [[ "$autocfg_ok" != "true" ]]; then
+      fail "$id: conformance is required (runtime_conformance mapping) but the automation config was rejected above — evaluator availability cannot be verified"
+    elif ! jq -e '.verification.conformance | type == "object"' "$autocfg" >/dev/null 2>&1; then
+      fail "$id: runtime_conformance mapping requires verification.conformance in automation.json (evaluator + app contract) — the block is missing"
+    else
+      local conf_eval
+      conf_eval="$(jq -r '.verification.conformance.evaluator // empty' "$autocfg" 2>/dev/null)"
+      if [[ -z "$conf_eval" ]]; then
+        fail "$id: verification.conformance.evaluator is missing — admission cannot screen an unnamed evaluator"
+      elif [[ ! -f "$profile_toml" ]]; then
+        fail "$id: provider profile not found ($profile_toml) — evaluator '$conf_eval' cannot resolve"
+      elif ! grep -o '^\[providers\.[^]]*' "$profile_toml" 2>/dev/null | sed 's/^\[providers\.//' | grep -qxF "$conf_eval"; then
+        fail "$id: evaluator '$conf_eval' does not resolve in providers.toml"
+      else
+        local conf_cmd conf_hc
+        conf_cmd="$(admission_toml_get "$profile_toml" "providers.$conf_eval" "conformance_command")"
+        conf_hc="$(admission_toml_get "$profile_toml" "providers.$conf_eval" "healthcheck")"
+        if [[ -z "$conf_cmd" ]]; then
+          fail "$id: evaluator '$conf_eval' is a reviewer-only provider — it declares no conformance_command, so it cannot exercise a running application (health is not capability); declare conformance_command in providers.toml or configure a capable evaluator"
+        elif [[ "$conf_cmd" != *"{review_request}"* ]]; then
+          # Finding 4: the declaration is only a capability if the command
+          # can actually RECEIVE the frozen request document.
+          fail "$id: evaluator '$conf_eval' declares conformance_command without the {review_request} placeholder — it cannot receive the frozen conformance request, so the declaration is not a capability"
+        else
+          pass "$id: conformance evaluator '$conf_eval' resolves, declares conformance_command"
+          conf_health_eval="$conf_eval"
+          conf_health_cmd="$conf_hc"
+        fi
+      fi
+    fi
   fi
 
   # 8. Governance gates BEFORE any command execution: plan approved +
@@ -442,16 +549,31 @@ validate_admission() {
     pass "$id: origin gate exit $origin_exit"
   fi
 
-  # 9. test.command exists and passes on the BASE ref (§11) — the ONLY
+  # 8b. Evaluator healthcheck (#242 finding 5) — this EXECUTES an
+  #     operator-configured command, so it runs only when governance
+  #     passed AND no check so far has failed: a draft plan, a stale
+  #     origin, or a sha-drifted artifact must never trigger it.
+  if [[ -n "$conf_health_eval" ]]; then
+    if [[ "$governance_ok" != "true" || "$capture_ok" != "true" || "$TOTAL_FAIL" -gt "$_fails_at_entry" ]]; then
+      echo "  [SKIP] $id: evaluator healthcheck not executed — earlier checks failed (nothing executes for a refused feature)"
+    elif [[ -n "$conf_health_cmd" ]] && ! bash -c "$conf_health_cmd" >/dev/null 2>&1; then
+      fail "$id: evaluator '$conf_health_eval' failed its healthcheck ($conf_health_cmd)"
+    else
+      pass "$id: conformance evaluator '$conf_health_eval' is healthy"
+    fi
+  fi
+
+  # 9. test.command exists and passes on the BASE ref (§11) — an
   #    executing check, so it runs LAST and only when the config
-  #    (check 7) and governance (check 8) already passed: admission
-  #    never executes a command from a rejected or ungoverned feature.
+  #    (check 7), governance (check 8), and the canonical capture
+  #    (check 6b) already passed: admission never executes a command for
+  #    a rejected, ungoverned, or unbindable-artifact feature.
   #    Executed in a THROWAWAY git worktree of HEAD when the project is
   #    a git repo: suites that emit artifacts (coverage, build output)
   #    must never dirty the real tree — the driver's clean-worktree
   #    preflight would otherwise abort the run admission just admitted.
   #    Bounded where timeout(1) exists (driver C-5 convention).
-  if [[ "$autocfg_ok" == "true" && "$governance_ok" == "true" ]]; then
+  if [[ "$autocfg_ok" == "true" && "$governance_ok" == "true" && "$capture_ok" == "true" ]]; then
     local test_cmd
     test_cmd="$(jq -r '.test.command // empty' "$autocfg" 2>/dev/null)"
     if [[ -z "$test_cmd" ]]; then
@@ -494,7 +616,7 @@ validate_admission() {
       fi
     fi
   else
-    fail "$id: test.command not attempted — config or governance checks failed (admission never executes commands for a rejected or ungoverned feature)"
+    fail "$id: test.command not attempted — config, governance, or verification-capture checks failed (admission never executes commands for a rejected, ungoverned, or unbindable-artifact feature)"
   fi
 
   # T4: write structured admission result when --result-file is given.
@@ -504,11 +626,29 @@ validate_admission() {
   if [[ -n "${ADMISSION_RESULT_FILE:-}" && "$TOTAL_FAIL" -eq 0 ]]; then
     local _adm_dur
     _adm_dur=$(( $(date +%s) - _admission_start_epoch ))
+    # #242 round-2 finding 1: for the freezing path, derive the
+    # verification capture from the SAME parse admission just validated
+    # and hand it to the contract initialiser through the result file —
+    # the driver must never freeze from a second, unvalidated read.
+    local _vcap="null"
+    if [[ "${ADMISSION_RESULT_PATH:-}" == "fresh-unattended-block" ]]; then
+      # Reuse the capture produced at check 6b — recomputing it here
+      # would be a second parse of data that may have changed under us
+      # (and would run after test.command, the round-4 finding).
+      if [[ -s "$_vcap_file" ]]; then
+        _vcap=$(cat "$_vcap_file")
+      else
+        fail "admission: no verification capture available despite passing checks — refusing to write a result the initialiser would have to re-read around"
+        _vcap="null"
+      fi
+    fi
     if ! jq -n --arg path "${ADMISSION_RESULT_PATH:-fresh-unattended-noblock}" \
         --argjson exit_code 0 \
         --argjson duration_sec "$_adm_dur" \
+        --argjson vcap "$_vcap" \
         '{schema_version: 1, path: $path,
-          admission: {test_command: {exit_code: $exit_code, duration_sec: $duration_sec}}}' \
+          admission: {test_command: {exit_code: $exit_code, duration_sec: $duration_sec}}}
+         + (if $vcap != null then {verification: $vcap} else {} end)' \
         > "$ADMISSION_RESULT_FILE"; then
       # Fail-closed: admission passed governance but the result file cannot
       # be written (disk full, permission denied). A missing result would
@@ -518,6 +658,7 @@ validate_admission() {
     fi
   fi
 
+  rm -f "$_vcap_file"
   print_defers
 }
 

@@ -47,6 +47,17 @@ if [[ -f "$SCRIPT_DIR/lib/coverage-parse.sh" ]]; then
     # shellcheck source=lib/coverage-parse.sh
     source "$SCRIPT_DIR/lib/coverage-parse.sh"
 fi
+# C2 (#242): verification-artifact parsing (used by the contract
+# initialiser to freeze deterministic verifiers + conformance criteria).
+if [[ -f "$SCRIPT_DIR/lib/verification-common.sh" ]]; then
+    # shellcheck source=lib/verification-common.sh
+    source "$SCRIPT_DIR/lib/verification-common.sh"
+fi
+# C2 (#242): driver-owned app lifecycle for the landing verifier gate.
+if [[ -f "$SCRIPT_DIR/lib/conformance-app.sh" ]]; then
+    # shellcheck source=lib/conformance-app.sh
+    source "$SCRIPT_DIR/lib/conformance-app.sh"
+fi
 # Project being built: defaults to the repo this toolkit is installed in;
 # CCT_PROJECT_DIR points the driver at another project (tests, kick-starts).
 PROJECT_DIR="${CCT_PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -124,9 +135,23 @@ SUMMARY_MD="$SPEC_DIR/automation-summary.md"
 # winner's live state.
 ATTEMPT_ID="$$-${RANDOM}${RANDOM}"
 
+# The verifier gate's private process-group handoff directory. Cleared
+# from the ENVIRONMENT first: an inherited value must never be treated as
+# driver-owned, or an early failure would recursively delete a directory
+# the host chose (round-15 finding 1). Ownership is claimed only after
+# this driver's own mktemp -d succeeds.
+unset VG_HANDOFF_DIR VG_HANDOFF_OWNED 2>/dev/null || true
+VG_HANDOFF_DIR=""
+VG_HANDOFF_OWNED=0
+
 # T4 defaults — set before preflight-result channel runs
 SKIP_ADMISSION=false
 HAS_COVERAGE_BLOCK=false
+# C2 (#242, plan decision 3): the contract lifecycle keys on the
+# verification-wide predicate — a coverage block OR a finalized
+# verification.yaml. Either input triggers freeze/-block paths.
+HAS_VERIFICATION_ARTIFACT=false
+HAS_FROZEN_CONTRACT=false
 PREFLIGHT_PATH=""
 PREFLIGHT_RESULT_FILE=""
 # The admitted coverage contract, pinned in process memory at the moment
@@ -344,7 +369,13 @@ terminate_policy() {
     # blanket commit there would sweep the operator's branch/worktree.
     local _cur
     _cur=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [[ -n "${BRANCH_NAME:-}" && "$_cur" == "$BRANCH_NAME" ]]; then
+    # #242 round-11 finding 2: a checkout the verifier gate found MUTATED
+    # must never be swept up by the artifact commit — `git add -A` would
+    # stage the app's or evaluator's writes and push them. The taint is
+    # the whole point of the git_anomaly disposition.
+    if [[ "${VG_TAINTED:-0}" == "1" ]]; then
+        journal "artifact_skipped" "commit/push suppressed — the verifier gate found the checkout mutated (git_anomaly); the mutation must not be committed or pushed"
+    elif [[ -n "${BRANCH_NAME:-}" && "$_cur" == "$BRANCH_NAME" ]]; then
         driver_commit "chore($FEATURE_ID): terminated_policy artifacts [auto-build]" \
             || journal "artifact_skipped" "termination commit failed (journaled, not blocking)"
         if [[ "${CAN_PUSH:-false}" == "true" ]]; then
@@ -363,6 +394,51 @@ terminate_policy() {
     journal "artifact_skipped" "draft PR not attempted (no TERMINATING-safe PR path in #190 increment A)"
     notify "$reason" "terminated_policy: $detail"
     exit 6
+}
+
+# escalation_resumable <reason> <history-json> — is `--resume` a REAL
+# option for this escalation? Kept aligned with the resume dispatcher
+# (round-20 finding 1: resumability was special-cased for one reason
+# while three others published resumable: true and advised a command
+# that always refuses). Prints the reason-specific guidance on stdout
+# when the answer is no.
+escalation_resumable() {
+    local reason="$1" history="${2:-null}"
+    case "$reason" in
+        cost_accounting_failed)
+            echo "This run could not RECORD an invocation's cost, so its ledger understates real spend by an unknown amount"
+            echo "--resume deliberately refuses here: resuming would silently forgive the unrecorded spend and enforce caps against a total that never moved"
+            echo "Fix the underlying ledger/disk problem (permissions, free space, corrupted state.json)"
+            echo "Reconcile the spend from your provider's own billing if you need the real number, then start a FRESH run: scripts/auto-build-loop.sh $FEATURE_ID"
+            return 1 ;;
+        runner_error)
+            echo "The review runner exited without producing a decision, so review state may be inconsistent"
+            echo "--resume refuses here: there is no safe boundary to continue from"
+            echo "Inspect the findings/decision evidence above, resolve the runner error"
+            echo "Then start a FRESH run: scripts/auto-build-loop.sh $FEATURE_ID"
+            return 1 ;;
+        build_session_timeout)
+            echo "The build session exceeded its wall-clock bound and has no automatic recovery"
+            echo "--resume refuses here: no resume arm exists for this reason"
+            echo "Inspect the session transcript, address what made it hang (or raise build.max_turns / the session bound)"
+            echo "Then start a FRESH run: scripts/auto-build-loop.sh $FEATURE_ID"
+            return 1 ;;
+        provider_unavailable)
+            # Ask JSON, not a stringified copy: `jq -r` renders both a
+            # JSON null and the provider id "null" as the same shell text,
+            # and an evaluator legitimately named "null" IS resolvable, so
+            # the dispatcher can still fix it (round-21 finding 1).
+            if jq -e 'type == "object" and .provider_scope == "evaluator" and .evaluator == null' \
+                <<< "$history" >/dev/null 2>&1; then
+                echo "This run's FROZEN contract requires runtime conformance but froze NO evaluator"
+                echo "--resume refuses here: a frozen contract cannot gain an evaluator, so configuring one now cannot change this run"
+                echo "Add verification.conformance (evaluator + app) to automation.json"
+                echo "Then start a FRESH run: scripts/auto-build-loop.sh $FEATURE_ID"
+                return 1
+            fi
+            ;;
+    esac
+    return 0
 }
 
 park() {
@@ -401,18 +477,24 @@ park() {
     local n=1
     while [[ -f "$LEDGER_DIR/escalations/esc-$n.json" ]]; do n=$((n + 1)); done
     local esc="$LEDGER_DIR/escalations/esc-$n.json"
-    # Resumability is a property of WHERE the evidence landed. A private
-    # bundle is deliberately invisible to --resume, and that command would
-    # resume the rival canonical run instead — so it must never be the
-    # advice printed here.
-    local actions
+    # Resumability is a property of WHERE the evidence landed AND of the
+    # REASON. A private bundle is invisible to --resume (that command would
+    # resume the rival canonical run instead), and some reasons refuse
+    # resume by policy — printing "--resume" for those would hand the
+    # operator a command that always fails (round-19 finding 1).
+    local actions resumable=true why=""
+    if [[ "$LEDGER_PRIVATE_FALLBACK" != "true" ]] && ! why=$(escalation_resumable "$reason" "$history"); then
+        resumable=false
+        actions=$(printf '%s\n' "$why" | jq -R -s 'split("\n") | map(select(length > 0))')
+    fi
     if [[ "$LEDGER_PRIVATE_FALLBACK" == "true" ]]; then
+        resumable=false
         actions=$(jq -n --arg dir "$LEDGER_DIR" --arg lock "$LEDGER_SHARED_LOCK" \
             '[("This run could not claim the ledger lock (" + $lock + "), so its evidence is in " + $dir + " — NOT the canonical ledger"),
               "Do NOT rerun with --resume: this bundle is invisible to it, and --resume would continue a different run",
               "Inspect the bundle, confirm no other auto-build run is active, remove the lock if it is stale",
               "Then start a FRESH run once the canonical ledger is clear"]')
-    else
+    elif [[ -z "${actions:-}" ]]; then
         actions=$(jq -n --arg fid "$FEATURE_ID" \
             '["Inspect the history refs above, resolve the blocker (e.g. /review-decide, origin A/B/C, manual fix + commit)",
               ("Then rerun: scripts/auto-build-loop.sh " + $fid + " --resume")]')
@@ -422,7 +504,7 @@ park() {
         --arg phase "${CURRENT_PHASE:-0}" --arg status "$(state_get '.status' 2>/dev/null || echo preflight)" \
         --arg created "$(now_iso)" --argjson history "$history" \
         --argjson actions "$actions" \
-        --argjson resumable "$([[ "$LEDGER_PRIVATE_FALLBACK" == "true" ]] && echo false || echo true)" \
+        --argjson resumable "$resumable" \
         '{id: $id, reason: $reason, detail: $detail, phase: ($phase | tonumber),
           status_at_escalation: $status, created: $created, history: $history,
           resolved: false, notified: false, resumable: $resumable,
@@ -545,6 +627,32 @@ load_config() {
     if jq -e '.verification.coverage' "$CONFIG_SNAPSHOT" >/dev/null 2>&1; then
         HAS_COVERAGE_BLOCK=true
     fi
+    # C2 (#242 plan decision 3): the SECOND lifecycle input — a FINALIZED
+    # verification.yaml. A draft is not an input (admission refuses drafts;
+    # an attended draft simply hasn't committed to anything yet). On
+    # resume this live value is advisory only: compute_preflight_path
+    # re-derives contract presence from frozen evidence (a mid-run
+    # artifact edit moves nothing, the C1 discipline).
+    HAS_VERIFICATION_ARTIFACT=false
+    if [[ -f "$SPEC_DIR/verification.yaml" ]]; then
+        # Round-2 finding 2: a missing parser helper must be an
+        # INSTALLATION error, never "no artifact" — failing open here
+        # would silently disable the whole verification lifecycle for a
+        # run that shipped a finalized artifact.
+        if ! command -v vc_parse_artifact >/dev/null 2>&1; then
+            echo "Error: specs/$FEATURE_ID/verification.yaml exists but" >&2
+            echo "scripts/lib/verification-common.sh is not loaded — the driver" >&2
+            echo "cannot evaluate the verification lifecycle without its parser." >&2
+            echo "This is an installation error; a finalized artifact must never" >&2
+            echo "be silently ignored." >&2
+            exit 1
+        fi
+        if [[ "$(vc_parse_artifact "$SPEC_DIR/verification.yaml" | awk -F'\t' '$1 == "STATUS" { print $2; exit }')" == "finalized" ]]; then
+            HAS_VERIFICATION_ARTIFACT=true
+        fi
+    fi
+    HAS_FROZEN_CONTRACT=$HAS_COVERAGE_BLOCK
+    [[ "$HAS_VERIFICATION_ARTIFACT" == "true" ]] && HAS_FROZEN_CONTRACT=true
     CAP_WALL_CLOCK=$(cfg '.caps.wall_clock_sec' '14400')
     CAP_COST=$(cfg '.caps.cost_usd' '25')
     # #191 FR-7: estimate policy for unmetered driver-initiated invocations
@@ -827,19 +935,22 @@ preflight() {
 
 # ── Preflight-result channel (T4, #222) ─────────────────────
 
-# FR-7b0 / FR-7b: frozen-contract prerequisite. On resume with the block
-# the existing frozen contract MUST be validated BEFORE any producer or
-# dispatcher runs — including resume_parked which may execute test.command.
-# Missing or corrupt → fail closed (exit 1). Called BEFORE resume dispatch.
+# FR-7b0 / FR-7b: frozen-contract prerequisite. On resume with a frozen
+# contract (coverage block OR verification artifact — C2 #242, plan
+# decision 3) the existing frozen contract MUST be validated BEFORE any
+# producer or dispatcher runs — including resume_parked which may execute
+# test.command. Missing or corrupt → fail closed (exit 1). Called BEFORE
+# resume dispatch, AFTER compute_preflight_path re-derives
+# HAS_FROZEN_CONTRACT from frozen evidence.
 validate_frozen_contract_prerequisite() {
-    if [[ "$RESUME" != "true" || "$HAS_COVERAGE_BLOCK" != "true" ]]; then
+    if [[ "$RESUME" != "true" || "$HAS_FROZEN_CONTRACT" != "true" ]]; then
         return 0
     fi
     local frozen="$LEDGER_DIR/frozen-contract.json"
     if [[ ! -f "$frozen" ]]; then
-        echo "Error: verification.coverage block present but frozen contract" >&2
-        echo "missing at $frozen — the run cannot resume without its" >&2
-        echo "admitted policy (FR-7b)." >&2
+        echo "Error: the run froze a verification contract (coverage block or" >&2
+        echo "finalized verification.yaml) but no frozen contract exists at" >&2
+        echo "$frozen — the run cannot resume without its admitted policy (FR-7b)." >&2
         exit 1
     fi
     if ! jq empty "$frozen" 2>/dev/null; then
@@ -892,9 +1003,11 @@ compute_preflight_path() {
     if [[ "$mode" == "resume" && -f "$STATE" ]]; then
         local _snapshot_cfg="$LEDGER_DIR/config.snapshot.json"
         local _frozen_profile _frozen_block _state_profile _state_block
+        local _have_snapshot=false
         # Derive profile and block presence from the FROZEN config snapshot.
         # It was copied into the ledger at admission time and is immutable.
         if [[ -f "$_snapshot_cfg" ]]; then
+            _have_snapshot=true
             _frozen_profile=$(jq -r '.profile // empty' "$_snapshot_cfg" 2>/dev/null || echo "")
             # Legacy snapshots (v1, pre-#193) may omit profile — default to advisory.
             if [[ -z "$_frozen_profile" ]]; then
@@ -940,9 +1053,36 @@ compute_preflight_path() {
         fi
         profile="$_frozen_profile"
         FROZEN_PROFILE="$_frozen_profile"
+        # RESET from frozen evidence — the passed-in value carries the LIVE
+        # detection, and on resume live inputs (config edits, a
+        # verification.yaml finalized mid-run) are not admitted facts. In
+        # C1 the passed value equalled the snapshot anyway (the effective
+        # config IS the snapshot on resume), so this reset changes nothing
+        # for coverage; it exists so the C2 live-artifact input cannot
+        # leak into resume path selection. Legacy ledgers (no snapshot)
+        # keep the C1 fall-back semantics: the live value stands.
+        if [[ "$_have_snapshot" == "true" ]]; then
+            has_block=false
+        fi
         if [[ "$_frozen_block" == "true" ]]; then
             has_block=true
         fi
+        # C2 (#242 plan decision 3): on resume, contract presence is a
+        # property of the ADMITTED run. The frozen evidence is the admitted
+        # contract itself — state.preflight.contract or the ledger's
+        # frozen-contract.json (either alone forces the -block path, and the
+        # resume prerequisite then validates ledger consistency: a contract
+        # file without an admitted record refuses). The LIVE specs tree is
+        # deliberately not consulted: a verification.yaml finalized after
+        # the run froze is a mid-run edit and moves nothing until the next
+        # fresh run.
+        if [[ "${_state_block:-}" == "true" || -f "$LEDGER_DIR/frozen-contract.json" ]]; then
+            has_block=true
+        fi
+        # Rekey the global: prerequisites and gates must see the FROZEN
+        # truth, not the live-input detection (which would refuse a
+        # legitimately-noblock resume whose artifact appeared mid-run).
+        if $has_block; then HAS_FROZEN_CONTRACT=true; else HAS_FROZEN_CONTRACT=false; fi
     fi
 
     local unattended=false
@@ -988,10 +1128,19 @@ compute_preflight_path() {
     esac
 }
 
-# contract_initialiser: T5 — resolve preset, capture baseline if brownfield,
-# freeze the contract into the preflight result file.
+# contract_initialiser: T5 (C1) + C2 (#242 FR-4) — freeze every
+# verification dimension the run's inputs carry: `coverage` (flat C1
+# fields, resolved preset + captured baseline), `verifiers` (every
+# deterministic verifier of the finalized artifact), `conformance`
+# (evaluator, app contract, resolved interface, criteria set — present
+# iff the artifact derives the requirement). One contract object, one
+# pin, the C1 tamper/resume rules unchanged.
 contract_initialiser() {
     local path="$1"
+    local contract="{}"
+
+    # ── coverage (C1 — byte-compatible flat fields) ──
+    if [[ "$HAS_COVERAGE_BLOCK" == "true" ]]; then
     local cov_cfg effective
     cov_cfg=$(jq '.verification.coverage' "$CONFIG_SNAPSHOT")
     effective=$(vp_resolve "$PROJECT_DIR" "$cov_cfg" "${TEST_TIMEOUT:-1200}") || {
@@ -1036,26 +1185,97 @@ contract_initialiser() {
     local floor_at
     floor_at=$(jq -r '.floor_enforced_at // "landing"' <<< "$effective")
 
+    contract=$(jq -n --arg command "$command" --arg artifact "$artifact" --arg parser "$parser" \
+       --argjson timeout_sec "$timeout_sec" --arg floor_enforced_at "$floor_at" \
+       --argjson preset_id "$(jq '.preset_id' <<< "$effective")" \
+       --argjson preset_sha256 "$(jq '.preset_sha256' <<< "$effective")" \
+       --argjson baseline "$captured_baseline" --argjson effective "$effective" \
+       '{command:$command,artifact:$artifact,parser:$parser,timeout_sec:$timeout_sec,floor_enforced_at:$floor_enforced_at,preset_id:$preset_id,preset_sha256:$preset_sha256,baseline:$baseline} + (if $effective.min_line_pct then {min_line_pct:$effective.min_line_pct} else {} end) + (if $effective.min_branch_pct then {min_branch_pct:$effective.min_branch_pct} else {} end) + (if $effective.max_regression_pct then {max_regression_pct:$effective.max_regression_pct} else {} end)')
+    fi
+
+    # ── C2 (#242 FR-4): verifiers + conformance — frozen ONLY from the
+    #    validated capture (round-2 finding 1). Unattended: admission
+    #    wrote the capture from the SAME parse it validated; freezing a
+    #    re-read would let a file swapped after admission be frozen
+    #    unvalidated. Attended: the same canonical
+    #    validation-and-capture path runs here — coverage in both
+    #    directions and every statement_sha recompute against spec.md,
+    #    or the run refuses. ──
+    if [[ "$HAS_VERIFICATION_ARTIFACT" == "true" ]]; then
+        local _vcap
+        if [[ "$path" == "fresh-unattended-block" ]]; then
+            if [[ -s "${PREFLIGHT_RESULT_FILE:-}" ]] \
+               && jq -e '.verification' "$PREFLIGHT_RESULT_FILE" >/dev/null 2>&1; then
+                _vcap=$(jq '.verification' "$PREFLIGHT_RESULT_FILE")
+            else
+                echo "Error: unattended admission passed but wrote no verification" >&2
+                echo "capture — refusing to freeze from an unvalidated re-read of" >&2
+                echo "specs/$FEATURE_ID/verification.yaml (FR-4)." >&2
+                exit 1
+            fi
+        else
+            _vcap=$(vc_capture_validated "$SPEC_DIR/spec.md" "$SPEC_DIR/verification.yaml") || {
+                echo "Error: specs/$FEATURE_ID/verification.yaml failed validation" >&2
+                echo "against spec.md (see errors above) — an unvalidated artifact" >&2
+                echo "must never be frozen (FR-4)." >&2
+                exit 1
+            }
+        fi
+        local _vset _cset
+        _vset=$(jq '.verifiers' <<< "$_vcap")
+        _cset=$(jq '.criteria' <<< "$_vcap")
+        if [[ "$(jq 'length' <<< "$_vset")" -gt 0 ]]; then
+            # Bounded by test.timeout_sec (the generic suite bound). The
+            # plan's earlier verification.test.timeout_sec first source is
+            # unreachable — config validation rejects verification.test by
+            # name — so it was dropped rather than left inert (round-2
+            # finding 4; plan.md corrected).
+            local _vtimeout
+            _vtimeout=$(jq -r '.test.timeout_sec // 1200' "$CONFIG_SNAPSHOT" 2>/dev/null)
+            contract=$(jq --argjson set "$_vset" --argjson t "$_vtimeout" \
+                '. + {verifiers: {timeout_sec: $t, set: $set}}' <<< "$contract")
+        fi
+        if [[ "$(jq 'length' <<< "$_cset")" -gt 0 ]]; then
+            # evaluator/app/interface/timeout come from the conformance
+            # block; ALL null when it is absent — attended runs surface a
+            # missing evaluator at the GATE (FR-10, provider_unavailable),
+            # and unattended runs cannot get here blockless (admission
+            # refused). The frozen criteria keep the requirement
+            # unskippable either way. interface resolves app.interface,
+            # else ready.url (FR-6; config validation guarantees one
+            # exists whenever the block is present).
+            local _conf
+            _conf=$(jq --argjson criteria "$_cset" '
+                (.verification.conformance // null) as $c |
+                {evaluator: ($c.evaluator // null),
+                 app: ($c.app // null),
+                 interface: (if $c == null or $c.app == null then null
+                             else ($c.app.interface // $c.app.ready.url // null) end),
+                 timeout_sec: ($c.timeout_sec // null),
+                 criteria: $criteria}' "$CONFIG_SNAPSHOT")
+            contract=$(jq --argjson conf "$_conf" '. + {conformance: $conf}' <<< "$contract")
+        fi
+    fi
+
+    if [[ "$contract" == "{}" ]]; then
+        echo "Error: contract initialisation produced an empty contract —" >&2
+        echo "the finalized verification.yaml yielded no verifiers and no" >&2
+        echo "coverage block is present. Regenerate the artifact." >&2
+        exit 1
+    fi
+
     # For unattended paths with existing admission section: merge contract in.
+    # The transient .verification capture is consumed above and stripped
+    # here — it never reaches import validation (the frozen contract IS
+    # its durable form).
     if [[ "$path" == "fresh-unattended-block" && -s "$PREFLIGHT_RESULT_FILE" ]]; then
         local _tmp
         _tmp=$(mktemp)
-        jq --arg command "$command" --arg artifact "$artifact" --arg parser "$parser" \
-           --argjson timeout_sec "$timeout_sec" --arg floor_enforced_at "$floor_at" \
-           --argjson preset_id "$(jq '.preset_id' <<< "$effective")" \
-           --argjson preset_sha256 "$(jq '.preset_sha256' <<< "$effective")" \
-           --argjson baseline "$captured_baseline" \
-           --argjson effective "$effective" \
-           '.contract = ({command:$command,artifact:$artifact,parser:$parser,timeout_sec:$timeout_sec,floor_enforced_at:$floor_enforced_at,preset_id:$preset_id,preset_sha256:$preset_sha256,baseline:$baseline} + (if $effective.min_line_pct then {min_line_pct:$effective.min_line_pct} else {} end) + (if $effective.min_branch_pct then {min_branch_pct:$effective.min_branch_pct} else {} end) + (if $effective.max_regression_pct then {max_regression_pct:$effective.max_regression_pct} else {} end))' \
+        jq --argjson contract "$contract" '.contract = $contract | del(.verification)' \
            "$PREFLIGHT_RESULT_FILE" > "$_tmp" && mv "$_tmp" "$PREFLIGHT_RESULT_FILE"
     else
-        jq -n --arg command "$command" --arg artifact "$artifact" --arg parser "$parser" \
-           --argjson timeout_sec "$timeout_sec" --arg floor_enforced_at "$floor_at" \
-           --argjson preset_id "$(jq '.preset_id' <<< "$effective")" \
-           --argjson preset_sha256 "$(jq '.preset_sha256' <<< "$effective")" \
-           --argjson baseline "$captured_baseline" --argjson effective "$effective" \
-           --arg path "$path" \
-           '{schema_version:1,path:$path,contract:({command:$command,artifact:$artifact,parser:$parser,timeout_sec:$timeout_sec,floor_enforced_at:$floor_enforced_at,preset_id:$preset_id,preset_sha256:$preset_sha256,baseline:$baseline} + (if $effective.min_line_pct then {min_line_pct:$effective.min_line_pct} else {} end) + (if $effective.min_branch_pct then {min_branch_pct:$effective.min_branch_pct} else {} end) + (if $effective.max_regression_pct then {max_regression_pct:$effective.max_regression_pct} else {} end))}' \
+        jq -n --argjson contract "$contract" --arg path "$path" \
+           '{schema_version:1,path:$path,contract:$contract}' \
            > "$PREFLIGHT_RESULT_FILE"
     fi
 }
@@ -1230,11 +1450,83 @@ validate_contract_json() {
 
     # ── 1. Closed: no unknown keys ──
     local _unknown
-    _unknown=$(jq -r --argjson allowed '["command","artifact","parser","timeout_sec","floor_enforced_at","preset_id","preset_sha256","baseline","min_line_pct","min_branch_pct","max_regression_pct"]' \
+    _unknown=$(jq -r --argjson allowed '["command","artifact","parser","timeout_sec","floor_enforced_at","preset_id","preset_sha256","baseline","min_line_pct","min_branch_pct","max_regression_pct","verifiers","conformance"]' \
         '[keys[] | select(. as $k | $allowed | index($k) | not)] | join(", ")' <<< "$_ct")
     if [[ -n "$_unknown" ]]; then
         echo "[auto-build] ERROR: contract has unknown keys: $_unknown" >&2
         ((_errors++))
+    fi
+
+    # ── C2 (#242): the contract composes optional sections. The C1 flat
+    #    coverage fields apply as a unit — ANY of them present means the
+    #    coverage rules below all apply; NONE present requires at least
+    #    one C2 section (a contract must commit to something). ──
+    local _has_cov
+    _has_cov=$(jq -r '[keys[] | select(. != "verifiers" and . != "conformance")] | length > 0' <<< "$_ct")
+    if [[ "$_has_cov" != "true" ]] \
+       && ! jq -e 'has("verifiers") or has("conformance")' <<< "$_ct" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: contract carries no section (coverage fields, verifiers, or conformance)" >&2
+        ((_errors++))
+    fi
+
+    # ── C2 verifiers section: closed {timeout_sec, set[]} ──
+    if jq -e 'has("verifiers")' <<< "$_ct" >/dev/null 2>&1; then
+        if ! jq -e '.verifiers | type == "object"
+            and ([keys[] | select(. != "timeout_sec" and . != "set")] | length == 0)
+            and (.timeout_sec | type == "number" and . > 0)
+            and (.set | type == "array" and length > 0)
+            and (.set | all(
+                (type == "object")
+                and ([keys[] | select(. != "fr" and . != "statement_sha" and . != "test" and . != "metric")] | length == 0)
+                and (.fr | type == "string" and test("^FR-[0-9]+[a-z]?$"))
+                and (.statement_sha | type == "string" and startswith("sha256:"))
+                and (.test | type == "string" and length > 0)
+                and (.metric | (type == "string") or (type == "null"))))' \
+            <<< "$_ct" >/dev/null 2>&1; then
+            echo "[auto-build] ERROR: contract.verifiers invalid — closed {timeout_sec > 0, set: non-empty [{fr, statement_sha, test, metric|null}]}" >&2
+            ((_errors++))
+        fi
+    fi
+
+    # ── C2 conformance section: closed {evaluator, app, interface,
+    #    timeout_sec, criteria[]}. Either the evaluator side is fully
+    #    configured (block present) or ALL of evaluator/app/interface/
+    #    timeout_sec are null (attended blockless — the gate parks
+    #    provider_unavailable); the criteria are frozen either way. ──
+    if jq -e 'has("conformance")' <<< "$_ct" >/dev/null 2>&1; then
+        if ! jq -e '.conformance | type == "object"
+            and ([keys[] | select(. != "evaluator" and . != "app" and . != "interface" and . != "timeout_sec" and . != "criteria")] | length == 0)
+            and has("evaluator") and has("app") and has("interface") and has("timeout_sec")
+            and (.criteria | type == "array" and length > 0)
+            and (.criteria | all(
+                (type == "object")
+                and ([keys[] | select(. != "fr" and . != "statement_sha" and . != "criterion")] | length == 0)
+                and (.fr | type == "string" and test("^FR-[0-9]+[a-z]?$"))
+                and (.statement_sha | type == "string" and startswith("sha256:"))
+                and (.criterion | type == "string" and length > 0)))
+            and (
+                ((.evaluator == null) and (.app == null) and (.interface == null) and (.timeout_sec == null))
+                or
+                ((.evaluator | type == "string" and length > 0)
+                 and (.timeout_sec | type == "number" and . > 0 and . == floor)
+                 and (.interface | type == "string" and length > 0)
+                 and (.app | type == "object"
+                      and ([keys[] | select(. != "command" and . != "ready" and . != "stop_timeout_sec" and . != "interface")] | length == 0)
+                      and (.command | type == "string" and length > 0)
+                      and (.stop_timeout_sec | type == "number" and . > 0 and . == floor)
+                      and (.ready | type == "object"
+                           and ([keys[] | select(. != "url" and . != "command" and . != "timeout_sec")] | length == 0)
+                           and (.timeout_sec | type == "number" and . > 0 and . == floor)
+                           and (((has("url")) and (has("command") | not)) or ((has("command")) and (has("url") | not))))))
+            )' <<< "$_ct" >/dev/null 2>&1; then
+            echo "[auto-build] ERROR: contract.conformance invalid — closed {evaluator, app, interface, timeout_sec, criteria: non-empty [{fr, statement_sha, criterion}]}; evaluator/app/interface/timeout_sec are all null (blockless attended) or all configured (app closed, ready exactly-one url|command, every *_timeout_sec a positive INTEGER — the bounds are integer shell arithmetic)" >&2
+            ((_errors++))
+        fi
+    fi
+
+    # ── C1 coverage rules — apply iff any coverage field is present ──
+    if [[ "$_has_cov" != "true" ]]; then
+        return $_errors
     fi
 
     # ── 2. Required fields with type constraints ──
@@ -1600,6 +1892,514 @@ coverage_gate() {
     return 0
 }
 
+# ── C2 (#242) T5: the landing verifier gate ──────────────────
+# The ONE normative sequence from specs/auto-build-conformance-evaluator
+# /plan.md, decision 5. Runs AFTER the coverage gate and BEFORE
+# finalize/push/PR.
+
+# vg_toml_get <file> <section> <key> — the provider-profile reader (same
+# minimal parser as scripts/providers-health.sh; the driver must not
+# source a runner to read one field).
+vg_toml_get() {
+    local file="$1" section="$2" key="$3"
+    [[ -f "$file" ]] || return 0
+    awk -v section="$section" -v key="$key" '
+        /^\[/ { current = $0; gsub(/[\[\] ]/, "", current) }
+        current == section && $0 ~ "^" key " *=" {
+            val = $0
+            sub(/^[^=]*= */, "", val)
+            gsub(/^"|"$/, "", val)
+            print val
+            exit
+        }
+    ' "$file"
+}
+
+# vg_dirty — the FULL porcelain status, untracked included, minus the
+# driver's own ledger. FR-11: an untracked file left by the app or the
+# evaluator would otherwise ride into driver_commit's `git add -A`.
+vg_dirty() {
+    git -C "$PROJECT_DIR" status --porcelain 2>/dev/null | grep -v '^?? \.cct/' || true
+}
+
+# vg_fenced_json <capture-file> — print the ONE fenced JSON block in the
+# evaluator's stdout. Fails (non-zero) when there is none, more than one,
+# or the block is never CLOSED (round-10 finding 4: an unterminated fence
+# is truncated output, not a verdict).
+vg_fenced_json() {
+    local file="$1" count closed
+    count=$(awk '/^[[:space:]]*```[[:space:]]*json[[:space:]]*$/ { n++ } END { print n + 0 }' "$file")
+    [[ "$count" == "1" ]] || { echo "expected exactly one fenced json block, found $count" >&2; return 1; }
+    closed=$(awk '
+        /^[[:space:]]*```[[:space:]]*json[[:space:]]*$/ { inblock = 1; next }
+        inblock && /^[[:space:]]*```[[:space:]]*$/ { closed = 1; inblock = 0; next }
+        END { print closed + 0 }' "$file")
+    [[ "$closed" == "1" ]] || { echo "the fenced json block is never closed" >&2; return 1; }
+    awk '
+        /^[[:space:]]*```[[:space:]]*json[[:space:]]*$/ { inblock = 1; next }
+        inblock && /^[[:space:]]*```[[:space:]]*$/ { inblock = 0; next }
+        inblock { print }
+    ' "$file"
+}
+
+# vg_integrity_after <gate-head> — the FR-11 post-execution check. Runs
+# after ANY arbitrary execution (deterministic verifiers, the app, the
+# evaluator), not only the conformance path (round-10 finding 1: a
+# deterministic verifier that edited a tracked file and exited 0 sailed
+# past this and its mutation would ride into the summary commit).
+# Prints the anomaly detail and returns 1 when the checkout moved.
+vg_integrity_after() {
+    local gate_head="$1" head_now dirty_now
+    head_now=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+    dirty_now=$(vg_dirty)
+    if [[ "$head_now" != "$gate_head" || -n "$dirty_now" ]]; then
+        echo "the verifier gate mutated the checkout (HEAD ${gate_head:0:8} -> ${head_now:0:8}; changes: $(printf '%s' "$dirty_now" | tr '\n' ' ')) — a verifier, the app, or the evaluator wrote to the repository (FR-11)"
+        return 1
+    fi
+    return 0
+}
+
+# vg_app_cleanup — EXIT/signal safety net: an interrupt between ca_start
+# and the gate's own teardown must not leave the application group alive
+# (round-10 finding 3).
+VG_APP_PID=""
+VG_TAINTED=0
+vg_app_cleanup() {
+    [[ -n "${VG_APP_PID:-}" ]] || return 0
+    # Clear the pid ONLY when the group is provably gone — otherwise the
+    # EXIT path would have nothing left to retry and the failure would go
+    # unreported (round-11 finding 3).
+    if ca_stop "$VG_APP_PID" "${VG_APP_STOP_SEC:-10}" >/dev/null 2>&1; then
+        VG_APP_PID=""
+        return 0
+    fi
+    echo "[auto-build] WARNING: the conformance app group $VG_APP_PID survived TERM and KILL" >&2
+    return 1
+}
+
+# Both groups the gate can own: the launched application AND whatever
+# bounded command (verifier, probe, healthcheck, evaluator) is running
+# right now — exiting from a handler skips ca_run_bounded's own cleanup.
+vg_signal_cleanup() {
+    if declare -f ca_active_cleanup >/dev/null 2>&1; then ca_active_cleanup >/dev/null 2>&1 || true; fi
+    if declare -f vg_app_cleanup >/dev/null 2>&1; then vg_app_cleanup >/dev/null 2>&1 || true; fi
+    return 0
+}
+
+# vg_debit_conformance <cost-file> <label> — FR-8. One evaluator
+# invocation debits the SAME caps as one reviewer invocation. The
+# measured value comes EXCLUSIVELY from the adapter-written cost file,
+# normalized exactly like scripts/review-round-runner.sh does (a cli
+# provider may redirect a whole CLI result stream into it); the
+# evaluator's own stdout is model-controlled text and is never a
+# measurement channel. Missing, malformed, or negative -> unmetered, so
+# the conservative estimate applies and cost can only be OVERstated.
+vg_debit_conformance() {
+    local cf="$1" label="$2" cost=""
+    if [[ -f "$cf" ]]; then
+        cost=$(jq -r -s 'map(if type == "array" then .[] else . end)
+               | ([.[] | select(.type? == "result")] | last)
+                 // (if (length == 1) and ((.[0] | type) == "object")
+                        and ((.[0] | has("type")) | not)
+                     then .[0] else {} end)
+               | if (type == "object") and ((.total_cost_usd | type) == "number")
+                  and (.total_cost_usd >= 0)
+               then .total_cost_usd else empty end' "$cf" 2>/dev/null || true)
+    fi
+    # Straight into the shared accounting rule — no temp file to fail on
+    # (round-16 finding 2: a failed shim silently dropped BOTH the
+    # measurement and the estimate).
+    debit_invocation_cost "$cost" "$label"
+}
+
+# vg_finish [reason] [detail] — THE single exit path for the verifier
+# gate after any arbitrary execution (round-11 finding 1). It runs the
+# checkout-integrity epilogue FIRST: a mutated checkout outranks every
+# other verdict, taints the run so no artifact commit can sweep it up,
+# and disposes git_anomaly. With no reason it simply reports success.
+# Relies on bash dynamic scope for gate_head/hist from verifier_gate.
+vg_finish() {
+    local reason="${1:-}" detail="${2:-}" anomaly
+    # The application NEVER outlives the gate, whichever exit is taken —
+    # every path after ca_start funnels through here, so teardown belongs
+    # here rather than in each branch (a request-publish failure used to
+    # dispose with the app still running, and the survivor held the
+    # gate's captured stdout open).
+    if [[ -n "${VG_APP_PID:-}" ]] && ! vg_app_cleanup; then
+        VG_TAINTED=1
+        dispose "conformance_gate" "the application process group survived TERM and KILL — refusing to land or park with a stray process from the gate${reason:+ (the run was already failing: $reason — $detail)}" "$hist"
+        return 1
+    fi
+    if ! anomaly=$(vg_integrity_after "$gate_head"); then
+        VG_TAINTED=1
+        state_set '.verifier_gate_tainted = true' 2>/dev/null || true
+        local orig=""
+        [[ -n "$reason" ]] && orig=" (the run was already failing: $reason — $detail)"
+        dispose "git_anomaly" "${anomaly}${orig}" "$hist"
+        return 1
+    fi
+    [[ -n "$reason" ]] || return 0
+    dispose "$reason" "$detail" "$hist"
+    return 1
+}
+
+verifier_gate() {
+    [[ "$DRY_RUN" == "true" ]] && return 0
+    [[ -n "$FROZEN_CONTRACT" ]] || return 0
+    jq -e 'has("verifiers") or has("conformance")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1 || return 0
+
+    local head hist
+    head=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+    hist=$(jq -n --arg h "$head" '{parked_head: $h}')
+
+    # 1. Tamper check — the whole pinned object (C1's rule, unchanged).
+    local frozen="$LEDGER_DIR/frozen-contract.json"
+    if [[ "$(jq -cS . "$frozen" 2>/dev/null)" != "$(jq -cS . <<< "$FROZEN_CONTRACT")" ]]; then
+        dispose "conformance_gate" "frozen contract on disk no longer matches the admitted contract — tampered or corrupted mid-run (FR-4a)" "$hist"
+        return 1
+    fi
+
+    # 2. Checkout integrity BEFORE — the gate must run on exactly what
+    #    lands, and anything left behind must be attributable.
+    local dirty
+    dirty=$(vg_dirty)
+    if [[ -n "$dirty" ]]; then
+        dispose "conformance_gate" "the checkout is not clean before the verifier gate ($(printf '%s' "$dirty" | tr '\n' ' ')) — refusing to run verifiers over uncommitted state (FR-11)" "$hist"
+        return 1
+    fi
+    local gate_head="$head"
+    local cdir="$LEDGER_DIR/conformance"
+    mkdir -p "$cdir"
+    # Where the bounded-command runner registers its process group, so a
+    # signal handler can reap it even when the runner is executing inside
+    # a command substitution (round-12 finding 2).
+    # The handoff record lives in a PRIVATE temp directory, never under
+    # the project, and is NOT exported: the bounded commands are
+    # untrusted project/provider code, and a record they could reach (or
+    # even name) would let them steer a later cleanup (round-14 finding
+    # 1). A subshell still inherits these as plain shell variables, which
+    # is all the cleanup path needs.
+    VG_HANDOFF_DIR=$(mktemp -d 2>/dev/null) || {
+        dispose "conformance_gate" "cannot create the private process-group handoff directory — refusing to run bounded commands that a signal could not reap" "$hist"
+        return 1
+    }
+    VG_HANDOFF_OWNED=1
+    CA_ACTIVE_GROUP_FILE="$VG_HANDOFF_DIR/group"
+    CA_OWNER_ID="$$"
+    if ! : > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null; then
+        dispose "conformance_gate" "cannot initialise the process-group handoff record — refusing to run bounded commands that a signal could not reap" "$hist"
+        return 1
+    fi
+
+    # 3. EXECUTE every frozen deterministic verifier. Admission's
+    #    resolution was the screen; this is the decision (FR-7) — a
+    #    verifier is never inferred green from the generic test.command.
+    local results='[]' vtimeout n=0
+    vtimeout=$(jq -r '.verifiers.timeout_sec // empty' <<< "$FROZEN_CONTRACT")
+    if [[ -n "$vtimeout" ]]; then
+        local vfr vtest vsha vrc vlog
+        while IFS=$'\t' read -r vfr vsha vtest; do
+            [[ -z "$vfr" ]] && continue
+            n=$((n + 1))
+            vlog="$cdir/verifier-$n.log"
+            vrc=0
+            # The artifact's PATH form ("tests/run.sh") is what admission
+            # resolves; as a bare command it would be "not found". Run an
+            # executable project file through ./, anything else verbatim.
+            local vexec="$vtest"
+            if [[ -f "$PROJECT_DIR/$vtest" && -x "$PROJECT_DIR/$vtest" ]]; then
+                vexec="./$vtest"
+            fi
+            ca_run_bounded "$vtimeout" "cd $(printf '%q' "$PROJECT_DIR") && $vexec" "$vlog" || vrc=$?
+            local vgreen=false vdetail="exit $vrc"
+            case "$vrc" in
+                0)   vgreen=true; vdetail="exit 0" ;;
+                124) vdetail="hit its ${vtimeout}s bound" ;;
+                125) vdetail="could not be bounded or cleaned up" ;;
+            esac
+            results=$(jq --arg fr "$vfr" --arg sha "$vsha" --arg t "$vtest" \
+                --argjson green "$vgreen" --arg d "$vdetail" --arg log "${vlog#$PROJECT_DIR/}" \
+                '. + [{fr:$fr, kind:"deterministic", verifier:$t, statement_sha:$sha, green:$green, detail:$d, log:$log}]' \
+                <<< "$results")
+            echo "[auto-build] verifier gate: $vfr $vtest -> $vdetail" >&2
+        done < <(jq -r '.verifiers.set[] | [.fr, .statement_sha, .test] | @tsv' <<< "$FROZEN_CONTRACT")
+        # FR-11 after ARBITRARY execution — deterministic verifiers are
+        # project code too.
+        vg_finish || return 1
+    fi
+
+    # ── Conformance (present iff the artifact derived the requirement) ──
+    if jq -e 'has("conformance")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1; then
+        local evaluator iface ctimeout app criteria
+        evaluator=$(jq -r '.conformance.evaluator // empty' <<< "$FROZEN_CONTRACT")
+        iface=$(jq -r '.conformance.interface // empty' <<< "$FROZEN_CONTRACT")
+        ctimeout=$(jq -r '.conformance.timeout_sec // empty' <<< "$FROZEN_CONTRACT")
+        app=$(jq -c '.conformance.app // empty' <<< "$FROZEN_CONTRACT")
+        criteria=$(jq -c '.conformance.criteria' <<< "$FROZEN_CONTRACT")
+
+        # 4. Evaluator re-resolution: resolves, DECLARES
+        #    conformance_command, and is healthy. Attended blockless runs
+        #    reach here with a null evaluator — the requirement is frozen
+        #    and unskippable, so it parks here rather than being ignored.
+        local ptoml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+        local ccmd chc
+        if [[ -z "$evaluator" || -z "$app" ]]; then
+            hist=$(jq -n --argjson h "$hist" '$h + {provider_scope: "evaluator", evaluator: null}')
+            vg_finish "provider_unavailable" "the frozen contract requires runtime conformance but carries NO evaluator (an attended run started without verification.conformance). The contract is frozen, so configuring one now cannot change this run: add verification.conformance and start a FRESH run."
+            return 1
+        fi
+        if ! grep -o '^\[providers\.[^]]*' "$ptoml" 2>/dev/null | sed 's/^\[providers\.//' | grep -qxF "$evaluator"; then
+            hist=$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')
+            vg_finish "provider_unavailable" "frozen evaluator '$evaluator' no longer resolves in $ptoml"
+            return 1
+        fi
+        ccmd=$(vg_toml_get "$ptoml" "providers.$evaluator" "conformance_command")
+        chc=$(vg_toml_get "$ptoml" "providers.$evaluator" "healthcheck")
+        if [[ -z "$ccmd" || "$ccmd" != *"{review_request}"* ]]; then
+            hist=$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')
+            vg_finish "provider_unavailable" "frozen evaluator '$evaluator' no longer declares a usable conformance_command (missing, or without the {review_request} placeholder)"
+            return 1
+        fi
+        # The healthcheck is operator-supplied code: bound it, or a
+        # hanging check blocks an unattended run past every cap
+        # (round-10 finding 5).
+        if [[ -n "$chc" ]]; then
+            local hrc=0
+            ca_run_bounded 30 "$chc" || hrc=$?
+            if [[ $hrc -ne 0 ]]; then
+                local hwhy="exit $hrc"
+                [[ $hrc -eq 124 ]] && hwhy="hung past its 30s bound"
+                hist=$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')
+                vg_finish "provider_unavailable" "frozen evaluator '$evaluator' failed its healthcheck at the gate ($hwhy)"
+                return 1
+            fi
+        fi
+
+        # 5. Pre-launch binding probe, then start the app in its own
+        #    process group with output captured to the ledger.
+        local bind_msg
+        if ! bind_msg=$(ca_bind_preflight "$app" "$iface"); then
+            vg_finish "conformance_gate" "launch binding refused: $bind_msg"
+            return 1
+        fi
+        local applog="$cdir/app.log" apid
+        local stop_sec; stop_sec=$(jq -r '.stop_timeout_sec // 10' <<< "$app")
+        apid=$(ca_start "$app" "$PROJECT_DIR" "$applog") || {
+            vg_finish "conformance_gate" "could not start the application under test (see ${applog#$PROJECT_DIR/})"
+            return 1
+        }
+        # From here on the app group is the gate's responsibility on EVERY
+        # exit path, including a signal (round-10 finding 3).
+        VG_APP_PID="$apid"; VG_APP_STOP_SEC="$stop_sec"
+
+        # 6. Readiness — bound to THIS launch. A teardown that cannot be
+        #    proven is itself a gate failure, never a swallowed error.
+        local ready_msg ready_rc=0 stop_rc=0
+        ready_msg=$(ca_wait_ready "$app" "$apid" "$iface") || ready_rc=$?
+        if [[ $ready_rc -ne 0 ]]; then
+            ca_stop "$apid" "$stop_sec" >/dev/null 2>&1 || stop_rc=$?
+            # Keep the pid for the EXIT retry unless teardown is proven.
+            [[ $stop_rc -eq 0 ]] && VG_APP_PID=""
+            if [[ $stop_rc -ne 0 ]]; then
+                vg_finish "conformance_gate" "the application never became usable ($ready_msg) AND its process group survived TERM and KILL — a stray process outlived the gate (see ${applog#$PROJECT_DIR/})"
+            else
+                vg_finish "conformance_gate" "the application never became usable: $ready_msg (see ${applog#$PROJECT_DIR/})"
+            fi
+            return 1
+        fi
+
+        # 7. Author the request from the FROZEN contract, ensure the
+        #    result path is absent, invoke through the provider's
+        #    conformance_command, and require a NEWLY produced verdict.
+        local req="$cdir/request.md" cap="$cdir/evaluator-stdout.log"
+        local resfile="$cdir/result.json" costfile="$cdir/cost.json"
+        # Freshness is only proven if the previous artefacts are PROVABLY
+        # gone (round-12 finding 1: an unchecked rm in an unwritable
+        # directory let a stale PASS outlive a run whose evaluator said
+        # fail).
+        rm -f "$resfile" "$cap" "$costfile" 2>/dev/null || true
+        local _stale=""
+        rm -f "$req" 2>/dev/null || true
+        [[ -e "$req" ]] && _stale="${req#$PROJECT_DIR/}"
+        [[ -e "$resfile" ]] && _stale="$_stale ${resfile#$PROJECT_DIR/}"
+        [[ -e "$cap" ]] && _stale="$_stale ${cap#$PROJECT_DIR/}"
+        [[ -e "$costfile" ]] && _stale="$_stale ${costfile#$PROJECT_DIR/}"
+        if [[ -n "$_stale" ]]; then
+            vg_finish "conformance_gate" "could not clear the previous evaluator artefacts ($_stale) — refusing to run with a stale verdict in place (FR-5)"
+            return 1
+        fi
+        local reqtmp
+        reqtmp=$(mktemp "$cdir/request.XXXXXX" 2>/dev/null) || {
+            vg_finish "conformance_gate" "could not create the conformance request in ${cdir#$PROJECT_DIR/}"
+            return 1
+        }
+        {
+            echo "# Runtime Conformance Evaluation — $FEATURE_ID"
+            echo ""
+            echo "The application under test is RUNNING and reachable at: $iface"
+            echo ""
+            echo "Exercise the running application and decide each criterion below."
+            echo "Do not review the diff; only observed behaviour counts."
+            echo ""
+            echo "## Criteria"
+            echo ""
+            echo '```json'
+            jq -S '.' <<< "$criteria"
+            echo '```'
+            echo ""
+            echo "## Required Output Format"
+            echo ""
+            echo "Emit EXACTLY ONE fenced json block, echoing every criterion"
+            echo "unchanged and adding your verdict:"
+            echo ""
+            echo '```json'
+            echo '{"criteria": [{"fr": "FR-N", "statement_sha": "sha256:...",'
+            echo '  "criterion": "<verbatim>", "verdict": "pass"|"fail",'
+            echo '  "evidence": "<what you observed>"}]}'
+            echo '```'
+            echo ""
+            echo "Every frozen criterion must appear exactly once. A missing,"
+            echo "duplicated, altered, or invented entry fails the gate."
+        } > "$reqtmp" 2>/dev/null
+        # Publish through a checked rename: an unchecked redirect that
+        # failed would leave an OLD request in place, pointing the
+        # evaluator at a previous run's interface while its criteria
+        # still matched (round-13 finding 1).
+        if [[ ! -s "$reqtmp" ]] || ! mv "$reqtmp" "$req"; then
+            rm -f "$reqtmp" 2>/dev/null || true
+            vg_finish "conformance_gate" "could not publish the conformance request at ${req#$PROJECT_DIR/} — the evaluator cannot be given THIS run's frozen criteria and interface"
+            return 1
+        fi
+        local inv="${ccmd//\{review_request\}/$req}"
+        local irc=0
+        # EXPORTED for the duration of the invocation: the adapter writes
+        # its measurement there, and a prefix assignment on a shell
+        # FUNCTION does not reach the spawned child.
+        export CCT_REVIEW_COST_FILE="$costfile"
+        ca_run_bounded "$ctimeout" "cd $(printf '%q' "$PROJECT_DIR") && $inv" "$cap" || irc=$?
+        unset CCT_REVIEW_COST_FILE
+        # The invocation happened: account for it BEFORE any disposition,
+        # so a failed or rejected evaluation still debits its cost.
+        if ! vg_debit_conformance "$costfile" "conformance evaluator '$evaluator'"; then
+            vg_finish "cost_accounting_failed" "the evaluator invocation could not be accounted for (the ledger refused the cost debit) — refusing to judge a run whose caps cannot be enforced"
+            return 1
+        fi
+        stop_rc=0
+        ca_stop "$apid" "$stop_sec" || stop_rc=$?
+        [[ $stop_rc -eq 0 ]] && VG_APP_PID=""
+
+        # 9. Checkout integrity AFTER — before ANY verdict is honoured.
+        vg_finish || return 1
+        if [[ $stop_rc -ne 0 ]]; then
+            vg_finish "conformance_gate" "the application process group survived TERM and KILL — refusing to land with a stray process holding the gate's resources"
+            return 1
+        fi
+
+        # 11. The verdict must be an EXACT identity multiset of the frozen
+        #     criteria, produced by THIS invocation.
+        if [[ $irc -ne 0 ]]; then
+            vg_finish "conformance_gate" "the evaluator invocation failed (status $irc — non-zero exit, its ${ctimeout}s bound, or an unreapable process; see ${cap#$PROJECT_DIR/})"
+            return 1
+        fi
+        if [[ ! -f "$cap" ]]; then
+            vg_finish "conformance_gate" "the evaluator produced no capture at ${cap#$PROJECT_DIR/} — its output could not be recorded, so no verdict can be read from it"
+            return 1
+        fi
+        local block
+        if ! block=$(vg_fenced_json "$cap" 2>/dev/null); then
+            vg_finish "conformance_gate" "the evaluator produced no single fenced json verdict block (see ${cap#$PROJECT_DIR/})"
+            return 1
+        fi
+        # Publish THIS invocation's verdict atomically: temp file, parse
+        # check, rename — an unchecked write could leave an older result
+        # in place for the comparison below to read.
+        local restmp2
+        restmp2=$(mktemp "$cdir/result.XXXXXX" 2>/dev/null) || {
+            vg_finish "conformance_gate" "could not create the evaluator result file in ${cdir#$PROJECT_DIR/} — refusing to judge this run on an unwritable (or stale) verdict"
+            return 1
+        }
+        if ! printf '%s\n' "$block" > "$restmp2" \
+           || ! jq -e '.' "$restmp2" >/dev/null 2>&1 \
+           || ! mv "$restmp2" "$resfile"; then
+            rm -f "$restmp2" 2>/dev/null || true
+            vg_finish "conformance_gate" "the evaluator's verdict block is not valid JSON, or could not be published to ${resfile#$PROJECT_DIR/}"
+            return 1
+        fi
+        # The CLOSED shape comes first: identity comparison over a
+        # malformed document proves nothing (round-10 finding 4 — an
+        # object-valued `criteria`, boolean evidence, or extra fields
+        # used to slip through as an empty mismatch).
+        local mismatch
+        mismatch=$(jq -r --argjson want "$criteria" '
+            def bad_shape:
+              (type != "object")
+              or ((keys - ["criteria"]) | length > 0)
+              or (has("criteria") | not)
+              or (.criteria | type != "array")
+              or (.criteria | length == 0)
+              or ([.criteria[] | select(
+                     (type != "object")
+                     or ((keys - ["fr","statement_sha","criterion","verdict","evidence"]) | length > 0)
+                     or (["fr","statement_sha","criterion","verdict","evidence"] - keys | length > 0)
+                     or (.fr | type != "string") or (.statement_sha | type != "string")
+                     or (.criterion | type != "string")
+                     or ((.verdict != "pass") and (.verdict != "fail"))
+                     or (.evidence | type != "string") or ((.evidence | length) == 0))] | length > 0);
+            if bad_shape then
+              "the verdict document does not match the required closed shape (criteria: non-empty array of {fr, statement_sha, criterion, verdict: pass|fail, evidence: non-empty string}, no other fields)"
+            else
+              (.criteria | map({fr, statement_sha, criterion}) | sort) as $g
+              | ($want | sort) as $w
+              | if $w != $g then "the echoed criteria are not an exact match of the frozen set (missing, duplicated, altered, or invented entries)"
+                else "" end
+            end' "$resfile" 2>/dev/null || echo "the verdict could not be compared with the frozen criteria")
+        if [[ -n "$mismatch" ]]; then
+            vg_finish "conformance_gate" "evaluator verdict rejected: $mismatch (see ${resfile#$PROJECT_DIR/})"
+            return 1
+        fi
+        results=$(jq --slurpfile r "$resfile" '
+            . + [ $r[0].criteria[] | {fr, kind:"runtime_conformance", verifier:.criterion,
+                                      statement_sha, green:(.verdict == "pass"),
+                                      detail:.verdict, evidence:.evidence} ]' <<< "$results")
+    fi
+
+    # 12. Evidence: FR -> per-verifier results. An FR is green iff ALL of
+    #     its verifiers are green.
+    # Written to a temp file, validated, then renamed into place. An
+    # unchecked write could fail and leave an OLDER, green results file
+    # for the reads below to consume — a failing gate reporting success
+    # (round-10 finding 2).
+    local resout="$LEDGER_DIR/verification-results.json" restmp
+    restmp=$(mktemp "$LEDGER_DIR/verification-results.XXXXXX") || {
+        vg_finish "conformance_gate" "could not create the evidence file — refusing to land without recorded verification results (FR-7)"
+        return 1
+    }
+    if ! jq --argjson v "$results" -n '
+        {schema_version: 1,
+         frs: ([$v[] | .fr] | unique | map(. as $fr | {key: $fr, value: {
+                 green: ([$v[] | select(.fr == $fr) | .green] | all),
+                 verifiers: [$v[] | select(.fr == $fr)]}}) | from_entries),
+         green: ([$v[] | .green] | all)}' > "$restmp" \
+       || ! jq -e '.frs | type == "object"' "$restmp" >/dev/null 2>&1 \
+       || ! mv "$restmp" "$resout"; then
+        rm -f "$restmp" 2>/dev/null || true
+        vg_finish "conformance_gate" "could not write the evidence file at ${resout#$PROJECT_DIR/} — refusing to land on unrecorded (or stale) verification results (FR-7)"
+        return 1
+    fi
+
+    local failing
+    failing=$(jq -r '[.frs | to_entries[] | select(.value.green | not)
+                      | .key + " (" + ([.value.verifiers[] | select(.green | not) | .verifier] | join("; ")) + ")"] | join(", ")' \
+              "$resout")
+    if [[ -n "$failing" ]]; then
+        vg_finish "conformance_gate" "verification failed: $failing (see .cct/auto-build/$FEATURE_ID/verification-results.json)"
+        return 1
+    fi
+    journal "verifier_gate" "all mapped verifiers green ($(jq -r '.frs | length' "$resout") FR(s))"
+    check_caps
+    return 0
+}
+
 # ── Phase enumeration (FR-4) ─────────────────────────────────
 # Emits lines "N<TAB>title<TAB>milestone_after(0|1)". Config override wins.
 
@@ -1919,6 +2719,33 @@ rollback_fresh_ledger() {
 # totals.cost_estimated_usd — SAME cap, flagged estimated in the journal.
 # A runner that died before writing this round's findings file is still
 # debited as one unmetered invocation (conservative overstatement).
+# debit_invocation_cost <cost-or-empty> <label> — THE accounting rule.
+# A non-empty cost is a measurement; anything else is unmetered and
+# debits the conservative estimate when estimates are active. The ledger
+# write is CHECKED: an unwritable or invalid ledger must not be reported
+# as a successful debit, or check_caps would enforce against a total
+# that never moved (round-16 finding 1). Returns non-zero when the debit
+# could not be persisted.
+debit_invocation_cost() {
+    local cost="$1" label="$2"
+    if [[ -n "$cost" ]]; then
+        if ! state_set '.totals.cost_usd += ($c | tonumber)' --arg c "$cost"; then
+            journal "cost_debit_failed" "$label: \$$cost (measured) could not be recorded — caps cannot be enforced against it"
+            return 1
+        fi
+        journal "cost_review" "$label: \$$cost (measured)"
+        return 0
+    fi
+    [[ "${ESTIMATES_ACTIVE:-false}" == "true" ]] || return 0
+    if ! state_set '.totals.cost_estimated_usd = ((.totals.cost_estimated_usd // 0) + ($c | tonumber))' \
+        --arg c "$ESTIMATE_PER_INV"; then
+        journal "cost_debit_failed" "$label: \$$ESTIMATE_PER_INV (estimated) could not be recorded — caps cannot be enforced against it"
+        return 1
+    fi
+    journal "cost_review" "$label: \$$ESTIMATE_PER_INV (estimated: true — unmetered invocation)"
+    return 0
+}
+
 debit_review_costs() {
     # debit_review_costs <findings-file-or-empty> <label>
     # Defense-in-depth: only a NON-NEGATIVE number is a measurement — a
@@ -1928,14 +2755,7 @@ debit_review_costs() {
     [[ -n "$f" && -f "$f" ]] && cost=$(jq -r \
         'if ((.invocation_cost_usd | type) == "number") and (.invocation_cost_usd >= 0)
          then .invocation_cost_usd else empty end' "$f" 2>/dev/null)
-    if [[ -n "$cost" ]]; then
-        state_set '.totals.cost_usd += ($c | tonumber)' --arg c "$cost"
-        journal "cost_review" "$label: \$$cost (measured)"
-    elif [[ "${ESTIMATES_ACTIVE:-false}" == "true" ]]; then
-        state_set '.totals.cost_estimated_usd = ((.totals.cost_estimated_usd // 0) + ($c | tonumber))' \
-            --arg c "$ESTIMATE_PER_INV"
-        journal "cost_review" "$label: \$$ESTIMATE_PER_INV (estimated: true — unmetered invocation)"
-    fi
+    debit_invocation_cost "$cost" "$label"
 }
 
 # #201 Gap 3: caps are frozen in config.snapshot.json at launch, so editing
@@ -2297,7 +3117,10 @@ run_advisory_pass() {
         frf=$(ls "$scratch"/findings-round-*.json 2>/dev/null | sort -V | tail -1)
         # Each advisory pass is one reviewer invocation in a fresh scratch
         # dir; debit it (measured or estimated) like a gating round (FR-7).
-        debit_review_costs "$frf" "advisory review $_prov phase $n round $round"
+        if ! debit_review_costs "$frf" "advisory review $_prov phase $n round $round"; then
+            dispose "cost_accounting_failed" "an advisory review's cost could not be recorded in the ledger ($_prov phase $n round $round) — refusing to continue with caps that cannot be enforced" "null"
+            return 1
+        fi
         if [[ -n "$frf" && -f "$frf" ]]; then
             local tagged tmp
             tagged=$(jq --arg prov "$_prov" --arg spec "$_spec" \
@@ -2392,13 +3215,23 @@ run_review_loop() {
         # failed invocation is not an unmetered one, and the observed run
         # charged $2.0 "estimated" for a reviewer that exited on a usage
         # error.
+        # A debit the ledger REFUSES must stop the run: continuing would
+        # process a verdict (and possibly land) against a cost total that
+        # never moved, so check_caps would enforce nothing (round-17
+        # finding 1). The rc=3 arm restores the estimate flag FIRST —
+        # dispose does not return.
+        local _debit_rc=0
         if [[ $rc -eq 3 ]]; then
             local _est_save="${ESTIMATES_ACTIVE:-false}"
             ESTIMATES_ACTIVE=false
-            debit_review_costs "$post_frf" "gating review phase $n round $round"
+            debit_review_costs "$post_frf" "gating review phase $n round $round" || _debit_rc=$?
             ESTIMATES_ACTIVE="$_est_save"
         elif [[ $rc -ne 2 ]]; then
-            debit_review_costs "$post_frf" "gating review phase $n round $round"
+            debit_review_costs "$post_frf" "gating review phase $n round $round" || _debit_rc=$?
+        fi
+        if [[ $_debit_rc -ne 0 ]]; then
+            dispose "cost_accounting_failed" "the gating review's cost could not be recorded in the ledger (phase $n round $round) — refusing to continue with caps that cannot be enforced" "null"
+            return 1
         fi
         case $rc in
             3)
@@ -2760,6 +3593,16 @@ reset_run_clocks() {
 # (missing test.command, bad config) may leave TEMP_CONFIG behind.
 exit_cleanup() {
     local rc=$?
+    # #242 FR-6: an application launched by the verifier gate must never
+    # outlive the driver — including when the driver is interrupted
+    # mid-gate (round-10 finding 3).
+    if declare -f ca_active_cleanup >/dev/null 2>&1; then ca_active_cleanup; fi
+    if declare -f vg_app_cleanup >/dev/null 2>&1; then vg_app_cleanup; fi
+    # Only ever remove a directory THIS driver created.
+    if [[ "${VG_HANDOFF_OWNED:-0}" == "1" && -n "${VG_HANDOFF_DIR:-}" && -d "${VG_HANDOFF_DIR:-}" ]]; then
+        rm -rf "$VG_HANDOFF_DIR" 2>/dev/null || true
+        VG_HANDOFF_OWNED=0
+    fi
     [[ -n "${TEMP_CONFIG:-}" && -f "$TEMP_CONFIG" ]] && rm -f "$TEMP_CONFIG" 2>/dev/null
     rm -f "${PREFLIGHT_RESULT_FILE:-}" 2>/dev/null
     # Ordinary refusal (exit 1) while the rollback is armed: undo the
@@ -2772,6 +3615,14 @@ exit_cleanup() {
     return $rc
 }
 trap exit_cleanup EXIT
+# A default SIGTERM/SIGINT/SIGHUP kills the shell WITHOUT running the EXIT
+# trap, so an interrupted run would leak the conformance app's process
+# group (round-11 finding 3, caught by a real signal regression). These
+# handlers reap it and then exit, which lets the EXIT trap run the rest of
+# the cleanup normally.
+trap 'vg_signal_cleanup; exit 143' TERM
+trap 'vg_signal_cleanup; exit 130' INT
+trap 'vg_signal_cleanup; exit 129' HUP
 
 load_config
 true  # load_config done — all config values derived from the frozen snapshot
@@ -3020,11 +3871,36 @@ resume_parked() {
             resolve_escalation "$esc_file" "origin gate cleared (exit $oe)"
             ;;
         provider_unavailable)
-            local health_args=(--provider "$GATING_REVIEWER")
-            [[ -n "${CCT_PROVIDER_PROFILE:-}" ]] && health_args=(--profile "$CCT_PROVIDER_PROFILE" "${health_args[@]}")
-            bash "$SCRIPT_DIR/providers-health.sh" "${health_args[@]}" >/dev/null 2>&1 \
-                || refuse_resume "gating reviewer chain still unhealthy — fix providers.toml or the provider service, then --resume"
-            resolve_escalation "$esc_file" "reviewer chain healthy again"
+            # #242 FR-9: a conformance-scoped park is about the frozen
+            # EVALUATOR, not the gating reviewer. Re-check exactly the
+            # contract that parked it (round-10 finding 6) — resolution,
+            # the conformance_command capability, and health.
+            local pu_scope pu_eval
+            pu_scope=$(jq -r '.history.provider_scope // "reviewer"' "$esc_file" 2>/dev/null || echo "reviewer")
+            if [[ "$pu_scope" == "evaluator" ]]; then
+                pu_eval=$(jq -r '.history.evaluator // empty' "$esc_file" 2>/dev/null || echo "")
+                [[ -n "$pu_eval" ]] || refuse_resume "this run's frozen contract requires runtime conformance but froze NO evaluator — a frozen contract cannot gain one; add verification.conformance and start a fresh run"
+                local pu_toml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+                grep -o '^\[providers\.[^]]*' "$pu_toml" 2>/dev/null | sed 's/^\[providers\.//' | grep -qxF "$pu_eval" \
+                    || refuse_resume "frozen evaluator '$pu_eval' still does not resolve in $pu_toml — configure that exact provider, then --resume"
+                local pu_cmd pu_hc
+                pu_cmd=$(vg_toml_get "$pu_toml" "providers.$pu_eval" "conformance_command")
+                pu_hc=$(vg_toml_get "$pu_toml" "providers.$pu_eval" "healthcheck")
+                [[ -n "$pu_cmd" && "$pu_cmd" == *"{review_request}"* ]] \
+                    || refuse_resume "frozen evaluator '$pu_eval' still declares no usable conformance_command (with the {review_request} placeholder) — reviewer health is not conformance capability"
+                if [[ -n "$pu_hc" ]]; then
+                    local pu_rc=0
+                    ca_run_bounded 30 "$pu_hc" || pu_rc=$?
+                    [[ $pu_rc -eq 0 ]] || refuse_resume "frozen evaluator '$pu_eval' still fails its healthcheck (status $pu_rc) — fix the provider service, then --resume"
+                fi
+                resolve_escalation "$esc_file" "frozen evaluator '$pu_eval' resolves, declares conformance_command, and is healthy again"
+            else
+                local health_args=(--provider "$GATING_REVIEWER")
+                [[ -n "${CCT_PROVIDER_PROFILE:-}" ]] && health_args=(--profile "$CCT_PROVIDER_PROFILE" "${health_args[@]}")
+                bash "$SCRIPT_DIR/providers-health.sh" "${health_args[@]}" >/dev/null 2>&1 \
+                    || refuse_resume "gating reviewer chain still unhealthy — fix providers.toml or the provider service, then --resume"
+                resolve_escalation "$esc_file" "reviewer chain healthy again"
+            fi
             ;;
         runner_error)
             # A runner crash can leave findings newer than state.json. Do not
@@ -3036,8 +3912,10 @@ resume_parked() {
             crash_findings=$(jq -r '.history.findings_file // empty' "$esc_file" 2>/dev/null || echo "")
             refuse_resume "runner crash is not resumable because review state may be inconsistent (attempted round $crash_round; findings: ${crash_findings:-none}). Resolve the runner error and start a fresh attended run"
             ;;
-        coverage_gate)
-            # Human raised the coverage (or fixed the tooling) and committed.
+        coverage_gate|conformance_gate)
+            # Human raised the coverage, fixed the tooling, or fixed the app
+            # (#242: one arm, two reason labels — the recovery contract is
+            # identical and both gates re-run on the resumed path).
             # The gate itself re-runs on the resumed path — landing parks
             # re-reach the landing gate, phase parks re-enter at the gate.
             [[ -z "$(git -C "$PROJECT_DIR" status --porcelain | grep -v '^?? \.cct/')" ]] \
@@ -3119,6 +3997,16 @@ resume_parked() {
                 fi
             fi
             resolve_escalation "$esc_file" "$reason cleared: tests green after manual fix"
+            ;;
+        cost_accounting_failed)
+            # An invocation happened and its cost could NOT be written to
+            # the ledger, so recorded spend understates real spend by an
+            # unknown amount. cap_exceeded's arm would compare that
+            # understated total against a cap and clear itself instantly
+            # (round-18 finding 1) — the unpaid invocation would simply
+            # disappear. There is no safe automatic recovery: the ledger
+            # is the only record, and it refused the write.
+            refuse_resume "this run's ledger could not record an invocation's cost, so recorded spend understates real spend and caps cannot be enforced on it. Fix the ledger/disk problem and start a FRESH run (a resumed run would silently forgive the unrecorded spend)"
             ;;
         cap_exceeded)
             # Re-read caps (and phase cap) from the live config into the
@@ -3358,7 +4246,7 @@ ADMISSION_PASSED=false
 ADMISSION_DURATION=0
 _mode="fresh"
 [[ "$RESUME" == "true" ]] && _mode="resume"
-compute_preflight_path "$_mode" "$PROFILE" "$HAS_COVERAGE_BLOCK"
+compute_preflight_path "$_mode" "$PROFILE" "$HAS_FROZEN_CONTRACT"
 
 # FR-9e: on resume the frozen config is authoritative — apply its
 # profile to the globals that resume dispatch and downstream use (PROFILE,
@@ -3610,6 +4498,12 @@ done < "$LEDGER_DIR/phases.tsv"
 # BEFORE finalizing/push/PR so a failing floor blocks the landing, not
 # merely annotates it.
 coverage_gate landing
+
+# The landing verifier gate (#242 T5): every mapped verifier must be
+# green — deterministic ones EXECUTED here, conformance criteria decided
+# by the evaluator against the running app — before anything is
+# finalized, pushed, or opened as a PR.
+verifier_gate
 
 set_status "finalizing"
 {

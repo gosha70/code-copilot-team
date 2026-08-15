@@ -698,6 +698,74 @@ An autonomous build can additionally enforce a **frozen coverage contract**
 - Parsers: `istanbul` and `lcov` (`cobertura`/`jacoco` are refused as not
   implemented in C1). `skip_is_failure` arrives with C3.
 
+## Runtime Conformance Evaluator (auto-build)
+
+A run can also require that mapped requirements be proven against the
+**running application** (#242, increment C2 of #190 §6). Whether it is
+required is DERIVED from `specs/<feature>/verification.yaml` — any `FR-N`
+mapped to a `kind: runtime_conformance` verifier — never from a config
+flag; an operator-supplied `conformance.required` is rejected by name.
+
+```json
+"verification": {
+  "conformance": {
+    "evaluator": "codex-eval",
+    "timeout_sec": 600,
+    "app": {
+      "command": "npm start",
+      "ready": { "url": "http://127.0.0.1:3000/health", "timeout_sec": 30 },
+      "stop_timeout_sec": 10
+    }
+  }
+}
+```
+
+- **The evaluator is a capability, not just a healthy provider.** Its
+  providers.toml entry must declare `conformance_command` — an
+  evaluator-specific command template (with the `{review_request}`
+  placeholder) whose flags and tooling you grant for exercising a running
+  app. A reviewer-only provider is refused by name: a read-only review
+  profile or a plain prompt-in/text-out adapter can only fabricate runtime
+  evidence. Unattended runs refuse at admission (exit 1, no ledger);
+  attended runs park at the gate.
+- **The driver owns the app.** It launches `app.command` in its own
+  process group, captures output to the ledger, proves readiness, and
+  stops the whole group (TERM→KILL) afterwards. Readiness is bound to THAT
+  launch: the probe must FAIL before the app starts (an already-answering
+  responder is unattributable), succeed within `ready.timeout_sec`, and
+  the spawned group must still be alive when it does. The evaluator-facing
+  address is `app.interface`, else `ready.url`; both must be http(s) and
+  share an origin, and command-based readiness requires an explicit
+  `app.interface`.
+- **The landing gate executes, it does not infer.** After the coverage
+  gate and before finalize/push/PR, every frozen `kind: deterministic`
+  verifier is RUN (its own command, bounded), then the evaluator is
+  invoked once with a driver-authored request carrying the frozen criteria
+  and app interface. It must answer with exactly one fenced JSON block
+  echoing every criterion's full tuple plus a `pass`/`fail` verdict and
+  evidence; anything missing, duplicated, altered, invented, or malformed
+  fails closed. `verification-results.json` records FR → per-verifier
+  results, and an FR is green only when all its verifiers are.
+- **The checkout may not move.** The gate requires an empty `git status`
+  (untracked included) before and after; any mutation by a verifier, the
+  app, or the evaluator disposes `git_anomaly`, and a tainted checkout
+  suppresses the termination artifact commit and push.
+- **Every invocation is accounted for** through the same cost channel and
+  caps as reviewers. A measurement comes only from the adapter-written
+  cost file; the evaluator's own text is never parsed as a measurement.
+  Missing, malformed, or negative values debit the conservative
+  per-invocation estimate only when estimates are ACTIVE — always for
+  `unattended`, opt-in for attended runs via `unattended.budget`; with
+  estimates inactive an unmetered invocation debits nothing, exactly as
+  for reviewers. A cost the ledger cannot record disposes
+  `cost_accounting_failed` (parking an attended run, terminating an
+  unattended one), and that reason deliberately refuses `--resume`
+  rather than forgive unrecorded spend.
+- All bounds (`timeout_sec`, `ready.timeout_sec`, `stop_timeout_sec`) are
+  positive INTEGER seconds — the gate enforces them with integer shell
+  arithmetic, so a fractional value would be uncomputable rather than
+  merely imprecise. Visual verification (`skip_is_failure`) remains C3.
+
 ## Four-Phase Workflow
 
 | Phase | Model | Effort | Delegation | What Happens |
@@ -797,7 +865,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh           116 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        673 auto-build driver tests
+│   ├── test-auto-build-loop.sh        890 auto-build driver tests
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

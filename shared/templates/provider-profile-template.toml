@@ -17,6 +17,15 @@
 #   command      — command template (required until type-aware dispatch lands)
 #   timeout_sec  — max execution time in seconds
 #   healthcheck  — command to verify provider availability
+#   conformance_command — OPTIONAL evaluator command template (#242, C2).
+#       Declaring it IS the provider's runtime_conformance capability: the
+#       auto-build conformance gate invokes THIS template (never the review
+#       `command`) with {review_request} substituted by the conformance
+#       request file, and admission refuses an evaluator without it —
+#       reviewer health proves liveness, not the ability to exercise a
+#       running application. Grant it whatever flags/tooling app-exercising
+#       needs; the review command's read-only sandbox assumptions do not
+#       transfer.
 
 [copyright]
 # Company name used in copyright headers of generated source files.

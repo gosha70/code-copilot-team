@@ -101,7 +101,8 @@ vc_fr_sha() {
 #   STATUS\t<status>
 #   FR\t<id>
 #   SHA\t<id>\t<sha256:...>
-#   VER\t<id>\t<kind>\t<target>       (target: test | criterion value)
+#   VER\t<id>\t<kind>\t<target>\t<metric>  (target: test | criterion value;
+#                                           metric: optional, empty when absent)
 # Unparseable lines are ignored — admission's coverage/sha checks catch
 # anything that mattered; the JSON-Schema file is the authoritative
 # contract, this parser is the enforcement of its constrained shape.
@@ -122,8 +123,8 @@ vc_parse_artifact() {
         }
         function flush_ver() {
             if (vkind == "") return
-            printf "VER\t%s\t%s\t%s\n", fr, vkind, vtarget
-            vkind = ""; vtarget = ""
+            printf "VER\t%s\t%s\t%s\t%s\n", fr, vkind, vtarget, vmetric
+            vkind = ""; vtarget = ""; vmetric = ""
         }
         /^status:/        { v = $0; sub(/^status:/, "", v); printf "STATUS\t%s\n", unquote(v); next }
         /^FR-[0-9]+[a-z]?:/ { flush_ver(); fr = $0; sub(/:.*$/, "", fr); printf "FR\t%s\n", fr; next }
@@ -131,6 +132,173 @@ vc_parse_artifact() {
         /^    - kind:/    { flush_ver(); v = $0; sub(/^    - kind:/, "", v); vkind = unquote(v); next }
         /^      test:/      { v = $0; sub(/^      test:/, "", v); vtarget = unquote(v); next }
         /^      criterion:/ { v = $0; sub(/^      criterion:/, "", v); vtarget = unquote(v); next }
+        /^      metric:/    { v = $0; sub(/^      metric:/, "", v); vmetric = unquote(v); next }
         END { flush_ver() }
     ' "$artifact"
+}
+
+# vc_conformance_required_parsed — the canonical derivation scan: reads
+# vc_parse_artifact TSV on stdin, exit 0 iff any VER record has kind
+# runtime_conformance. Scans through EOF deliberately: an early `exit`
+# on first match SIGPIPEs the producer under `set -o pipefail` once the
+# remaining records overflow the pipe buffer, and the 141 pipeline
+# status silently derives "false" for large valid artifacts (build
+# review round 1, finding 2). Admission feeds it the SAME parse it
+# sha-validated (never a re-read of the file).
+vc_conformance_required_parsed() {
+    awk -F'\t' '$1 == "VER" && $3 == "runtime_conformance" { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+# vc_conformance_required <verification.yaml> — echo "true" iff any FR
+# maps a verifier of kind runtime_conformance, else "false" (#242 FR-2:
+# conformance.required is DERIVED from the finalized artifact, never
+# from automation.json). A missing/unreadable artifact derives "false" —
+# admission separately refuses runs whose artifact is missing, so this
+# never turns absence into a requirement. Callers are responsible for
+# the artifact being the sha-validated finalized one (admission is; the
+# contract initialiser reads the same file it validated).
+vc_conformance_required() {
+    local artifact="$1"
+    if [[ -f "$artifact" ]] && vc_parse_artifact "$artifact" | vc_conformance_required_parsed; then
+        echo "true"
+    else
+        echo "false"
+    fi
+}
+
+# vc_capture_from_parsed <spec.md> — read vc_parse_artifact TSV on
+# stdin, VALIDATE it against the authoritative spec, and emit the
+# canonical freeze capture JSON
+#   { verifiers: [ {fr, statement_sha, test, metric|null} … ],
+#     criteria:  [ {fr, statement_sha, criterion} … ] }
+# on success (exit 0); named errors on stderr and exit 1 otherwise.
+# THE single validation-and-capture path (#242 build review round 2,
+# finding 1): admission derives the capture from the SAME parse it
+# validated, and the attended contract initialiser goes through
+# vc_capture_validated — freezing unvalidated parser output is not
+# representable. Checks: finalized status, coverage in both directions,
+# statement_sha recompute against spec.md, >=1 verifier per FR, and no
+# unknown verifier kinds (an unknown kind would otherwise be silently
+# dropped from the capture).
+vc_capture_from_parsed() {
+    local spec="$1"
+    local want_file rows rc=0
+    # Expected FR -> statement_sha, computed from the AUTHORITATIVE spec.
+    want_file=$(mktemp) || return 1
+    local fr stmt
+    while IFS=$'\t' read -r fr stmt; do
+        [[ -z "$fr" ]] && continue
+        printf '%s\t%s\n' "$fr" "$(vc_fr_sha "$fr" "$stmt")" >> "$want_file"
+    done < <(vc_extract_frs "$spec")
+    if [[ ! -s "$want_file" ]]; then
+        rm -f "$want_file"
+        echo "verification capture: spec.md has no FR-N requirements under ## Requirements" >&2
+        return 1
+    fi
+    # ONE indexed pass that reads stdin through EOF (round-3 finding 2:
+    # every early-exit consumer SIGPIPEs the producer under pipefail on a
+    # large artifact and turns a valid capture into a refusal), emitting
+    # rows from the SAME records it validated (round-3 finding 1: a
+    # duplicate SHA record used to be validated in one place and frozen
+    # in another, so a forged second hash entered the frozen tuple).
+    # Duplicate STATUS/FR/SHA records are refused outright — an artifact
+    # that says a thing twice has no single canonical answer.
+    rows=$(awk -F'\t' -v want="$want_file" '
+        BEGIN {
+            while ((getline line < want) > 0) {
+                split(line, a, "\t")
+                # Round-4 finding 1: two bullets for the same FR-N in the
+                # AUTHORITATIVE spec have no single statement to bind —
+                # overwriting would silently leave one requirement
+                # unverified while the capture reported success.
+                if (a[1] in wsha) {
+                    err("spec.md defines " a[1] " more than once — a requirement must have exactly one authoritative statement")
+                    continue
+                }
+                wsha[a[1]] = a[2]
+                worder[++nwant] = a[1]
+            }
+            close(want)
+        }
+        function err(msg) { errors[++nerr] = msg }
+        $1 == "STATUS" {
+            if (nstatus++) { err("duplicate status records — the artifact has no single canonical status") }
+            else { status = $2 }
+            next
+        }
+        $1 == "FR" {
+            if ($2 in seenfr) { err("duplicate entry for " $2 " — the artifact has no single canonical record for it") }
+            seenfr[$2] = 1
+            frorder[++nfr] = $2
+            next
+        }
+        $1 == "SHA" {
+            if ($2 in sha) { err("duplicate statement_sha records for " $2 " — the artifact has no single canonical hash for it") }
+            sha[$2] = $3
+            next
+        }
+        $1 == "VER" {
+            nvers[$2]++
+            if ($3 != "deterministic" && $3 != "runtime_conformance") {
+                err("unknown verifier kind on " $2 ": " $3)
+                next
+            }
+            vfr[++nrow] = $2; vkind[nrow] = $3; vtarget[nrow] = $4; vmetric[nrow] = $5
+            next
+        }
+        END {
+            if (status != "finalized") {
+                err("status is \x27" (status == "" ? "missing" : status) "\x27 — only a finalized artifact may be frozen")
+            }
+            for (i = 1; i <= nwant; i++) {
+                fr = worder[i]
+                if (!(fr in seenfr)) {
+                    err(fr " has no verification.yaml entry (coverage is mandatory)")
+                    continue
+                }
+                if (!(fr in sha) || sha[fr] != wsha[fr]) {
+                    err(fr " statement_sha does not recompute against spec.md (stale or tampered artifact)")
+                }
+                if (nvers[fr] + 0 == 0) {
+                    err(fr " has zero parsed verifiers (layout is part of the contract)")
+                }
+            }
+            for (i = 1; i <= nfr; i++) {
+                if (!(frorder[i] in wsha)) {
+                    err("entry \x27" frorder[i] "\x27 has no matching FR in spec.md (phantom requirement)")
+                }
+            }
+            if (nerr) {
+                for (i = 1; i <= nerr; i++) print "verification capture: " errors[i] > "/dev/stderr"
+                exit 1
+            }
+            # Freeze from the indexed records — the same sha[] entry that
+            # was just compared against the spec.
+            for (i = 1; i <= nrow; i++) {
+                if (vkind[i] == "deterministic")
+                    printf "V\t%s\t%s\t%s\t%s\n", vfr[i], sha[vfr[i]], vtarget[i], vmetric[i]
+                else
+                    printf "C\t%s\t%s\t%s\n", vfr[i], sha[vfr[i]], vtarget[i]
+            }
+        }') || rc=$?
+    rm -f "$want_file"
+    [[ $rc -eq 0 ]] || return 1
+    printf '%s\n' "$rows" | jq -R -s '
+        [ split("\n")[] | select(length > 0) | split("\t") ] as $rows |
+        { verifiers: [ $rows[] | select(.[0] == "V")
+            | {fr: .[1], statement_sha: .[2], test: .[3],
+               metric: (if ((.[4] // "") == "") then null else .[4] end)} ],
+          criteria:  [ $rows[] | select(.[0] == "C")
+            | {fr: .[1], statement_sha: .[2], criterion: .[3]} ] }'
+}
+
+# vc_capture_validated <spec.md> <verification.yaml> — one read of the
+# artifact through the canonical validation-and-capture path.
+vc_capture_validated() {
+    local spec="$1" artifact="$2"
+    if [[ ! -f "$artifact" ]]; then
+        echo "verification capture: artifact not found: $artifact" >&2
+        return 1
+    fi
+    vc_parse_artifact "$artifact" | vc_capture_from_parsed "$spec"
 }

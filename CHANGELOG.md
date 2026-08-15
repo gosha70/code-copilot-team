@@ -12,6 +12,41 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Runtime conformance evaluator for autonomous builds (#242, increment
+  C2 of #190 §6)** — `verification.conformance` in `automation.json`
+  (schema-validated, closed; `required` rejected by name because it is
+  DERIVED from `verification.yaml`; http(s) same-origin `app.interface` /
+  `ready.url`; integer-second bounds). Admission flips from refusing
+  `runtime_conformance` mappings to screening the evaluator: it must
+  resolve in providers.toml, DECLARE `conformance_command` (with the
+  `{review_request}` placeholder — reviewer health is not conformance
+  capability), and pass its healthcheck, which now runs only after
+  governance and after the canonical verification capture. The contract
+  lifecycle keys on a verification-wide predicate (coverage block OR a
+  finalized artifact), and the preflight initialiser freezes the
+  deterministic verifier set and the conformance contract — evaluator,
+  app, resolved interface, criteria with their `statement_sha` — from ONE
+  validated capture shared with admission. The landing verifier gate
+  (after coverage, before finalize/push/PR) EXECUTES every frozen
+  deterministic verifier, launches and stops the application itself
+  (own process group, launch-bound readiness, TERM→KILL teardown proven
+  on every exit including signals), invokes the evaluator once through
+  its `conformance_command` with a driver-authored request, and accepts
+  only an exact identity multiset of the frozen criteria in a single
+  fenced JSON block. Evidence lands in `verification-results.json` as
+  FR → per-verifier results, written atomically; a mutated checkout
+  (tracked or untracked) disposes `git_anomaly` and suppresses the
+  termination commit/push; failures dispose `conformance_gate` (sharing
+  C1's commit-bound recovery arm) or `provider_unavailable` with
+  evaluator-scoped provenance that resume re-checks. Evaluator
+  invocations debit the same caps as reviewers through the adapter cost
+  channel (measured from the cost file; the conservative estimate applies
+  only where estimates are active — always under `unattended`, opt-in for
+  attended runs), with a checked ledger write — an unrecorded cost
+  disposes `cost_accounting_failed` (park attended / terminate
+  unattended), one of the reasons that publish `resumable: false` and
+  refuse `--resume` rather than forgive unrecorded spend. Driver suite 673 → 890.
+
 - **Frozen coverage contract for autonomous builds (#222, increment C1 of
   #190)** — `verification.coverage` in `automation.json` (schema-validated;
   `test`/`app`/`visual`/`conformance` rejected by name until their

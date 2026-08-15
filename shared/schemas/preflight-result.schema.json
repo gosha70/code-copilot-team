@@ -22,18 +22,126 @@
     "contract": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The fully resolved frozen coverage contract, written by the preflight initialiser on fresh runs with the block.",
-      "required": [
-        "command",
-        "artifact",
-        "parser",
-        "timeout_sec",
-        "floor_enforced_at",
-        "preset_id",
-        "preset_sha256",
-        "baseline"
+      "description": "The fully resolved frozen verification contract, written by the preflight initialiser on fresh runs with a coverage block and/or a finalized verification.yaml (#242 C2). Composes up to three sections: the flat C1 coverage fields (present as a unit — command implies the rest), `verifiers` (the deterministic set), and `conformance` (evaluator + app + criteria). At least one section must be present.",
+      "anyOf": [
+        {
+          "required": [
+            "command",
+            "artifact",
+            "parser",
+            "timeout_sec",
+            "floor_enforced_at",
+            "preset_id",
+            "preset_sha256",
+            "baseline"
+          ]
+        },
+        { "required": ["verifiers"] },
+        { "required": ["conformance"] }
       ],
       "properties": {
+        "verifiers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["timeout_sec", "set"],
+          "description": "#242 C2: every kind: deterministic verifier of the finalized verification.yaml, frozen at preflight. The landing gate EXECUTES each frozen test command (bounded by timeout_sec); a verifier is never inferred green from the generic test.command.",
+          "properties": {
+            "timeout_sec": { "type": "number", "exclusiveMinimum": 0 },
+            "set": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["fr", "statement_sha", "test", "metric"],
+                "properties": {
+                  "fr": { "type": "string", "pattern": "^FR-[0-9]+[a-z]?$" },
+                  "statement_sha": { "type": "string", "pattern": "^sha256:" },
+                  "test": { "type": "string", "minLength": 1 },
+                  "metric": { "type": ["string", "null"] }
+                }
+              }
+            }
+          }
+        },
+        "conformance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "evaluator",
+            "app",
+            "interface",
+            "timeout_sec",
+            "criteria"
+          ],
+          "description": "#242 C2: the frozen conformance contract — present iff the finalized artifact maps any FR to runtime_conformance. evaluator/app/interface/timeout_sec are ALL null when the config block is absent (attended blockless: the gate parks provider_unavailable; unattended cannot reach this state, admission refuses) or all configured. interface is resolved at freeze: app.interface, else ready.url. Every bound is a positive INTEGER of seconds — the gate enforces them with integer shell arithmetic, and the automation schema, the config validator, and validate_contract_json all agree.",
+          "properties": {
+            "evaluator": { "type": ["string", "null"], "minLength": 1 },
+            "interface": { "type": ["string", "null"], "minLength": 1 },
+            "timeout_sec": { "type": ["integer", "null"], "minimum": 1 },
+            "app": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "required": ["command", "ready", "stop_timeout_sec"],
+              "properties": {
+                "command": { "type": "string", "minLength": 1 },
+                "interface": { "type": "string", "minLength": 1 },
+                "stop_timeout_sec": { "type": "integer", "minimum": 1 },
+                "ready": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["timeout_sec"],
+                  "properties": {
+                    "url": { "type": "string", "minLength": 1 },
+                    "command": { "type": "string", "minLength": 1 },
+                    "timeout_sec": { "type": "integer", "minimum": 1 }
+                  },
+                  "oneOf": [
+                    { "required": ["url"] },
+                    { "required": ["command"] }
+                  ]
+                }
+              }
+            },
+            "criteria": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["fr", "statement_sha", "criterion"],
+                "properties": {
+                  "fr": { "type": "string", "pattern": "^FR-[0-9]+[a-z]?$" },
+                  "statement_sha": { "type": "string", "pattern": "^sha256:" },
+                  "criterion": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "description": "The evaluator side is all-null (blockless attended) or all-configured — a half-frozen evaluator is invalid.",
+              "oneOf": [
+                {
+                  "properties": {
+                    "evaluator": { "type": "null" },
+                    "app": { "type": "null" },
+                    "interface": { "type": "null" },
+                    "timeout_sec": { "type": "null" }
+                  }
+                },
+                {
+                  "properties": {
+                    "evaluator": { "type": "string" },
+                    "app": { "type": "object" },
+                    "interface": { "type": "string" },
+                    "timeout_sec": { "type": "number" }
+                  }
+                }
+              ]
+            }
+          ]
+        },
         "command": { "type": "string", "minLength": 1 },
         "artifact": { "type": "string", "minLength": 1 },
         "parser": { "type": "string", "enum": ["istanbul", "lcov"] },
@@ -61,60 +169,96 @@
       },
       "allOf": [
         {
-          "description": "At least one floor (min_line_pct or min_branch_pct) must be present.",
-          "anyOf": [
-            { "required": ["min_line_pct"] },
-            { "required": ["min_branch_pct"] }
-          ]
-        },
-        {
-          "description": "preset_id and preset_sha256 must both be strings (with values) or both be null — mismatched pairing is invalid.",
-          "oneOf": [
-            {
-              "properties": {
-                "preset_id": { "type": "string", "minLength": 1 },
-                "preset_sha256": { "type": "string", "minLength": 1 }
-              },
-              "required": ["preset_id", "preset_sha256"]
-            },
-            {
-              "properties": {
-                "preset_id": { "type": "null" },
-                "preset_sha256": { "type": "null" }
-              }
-            }
-          ]
-        },
-        {
-          "description": "Regression rules: max_regression_pct is forbidden when baseline is null (greenfield) and required when baseline is non-null (brownfield).",
+          "description": "The C1 coverage fields travel as a unit with their cross-field rules: ANY coverage field present requires the FULL required set and applies all four rules below; a contract carrying only C2 sections (verifiers/conformance) is exempt (#242 round-2 finding 3 — the executable validator scopes its C1 rules the same way).",
           "if": {
-            "properties": { "baseline": { "type": "null" } }
+            "anyOf": [
+              { "required": ["command"] },
+              { "required": ["artifact"] },
+              { "required": ["parser"] },
+              { "required": ["timeout_sec"] },
+              { "required": ["floor_enforced_at"] },
+              { "required": ["preset_id"] },
+              { "required": ["preset_sha256"] },
+              { "required": ["baseline"] },
+              { "required": ["min_line_pct"] },
+              { "required": ["min_branch_pct"] },
+              { "required": ["max_regression_pct"] }
+            ]
           },
           "then": {
-            "not": { "required": ["max_regression_pct"] }
-          },
-          "else": {
-            "required": ["max_regression_pct"]
-          }
-        },
-        {
-          "description": "Brownfield baseline completeness: every floored metric must have a captured baseline value to regress from (FR-4) — a floor whose metric the baseline lacks would be silently exempt from the no-regression promise.",
-          "if": {
-            "properties": { "baseline": { "type": "object" } },
-            "required": ["baseline"]
-          },
-          "then": {
+            "required": [
+              "command",
+              "artifact",
+              "parser",
+              "timeout_sec",
+              "floor_enforced_at",
+              "preset_id",
+              "preset_sha256",
+              "baseline"
+            ],
             "allOf": [
               {
-                "if": { "required": ["min_line_pct"] },
+                "description": "At least one floor (min_line_pct or min_branch_pct) must be present.",
+                "anyOf": [
+                  { "required": ["min_line_pct"] },
+                  { "required": ["min_branch_pct"] }
+                ]
+              },
+              {
+                "description": "preset_id and preset_sha256 must both be strings (with values) or both be null — mismatched pairing is invalid.",
+                "oneOf": [
+                  {
+                    "properties": {
+                      "preset_id": { "type": "string", "minLength": 1 },
+                      "preset_sha256": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["preset_id", "preset_sha256"]
+                  },
+                  {
+                    "properties": {
+                      "preset_id": { "type": "null" },
+                      "preset_sha256": { "type": "null" }
+                    }
+                  }
+                ]
+              },
+              {
+                "description": "Regression rules: max_regression_pct is forbidden when baseline is null (greenfield) and required when baseline is non-null (brownfield).",
+                "if": {
+                  "properties": { "baseline": { "type": "null" } }
+                },
                 "then": {
-                  "properties": { "baseline": { "required": ["line_pct"] } }
+                  "not": { "required": ["max_regression_pct"] }
+                },
+                "else": {
+                  "required": ["max_regression_pct"]
                 }
               },
               {
-                "if": { "required": ["min_branch_pct"] },
+                "description": "Brownfield baseline completeness: every floored metric must have a captured baseline value to regress from (FR-4) — a floor whose metric the baseline lacks would be silently exempt from the no-regression promise.",
+                "if": {
+                  "properties": { "baseline": { "type": "object" } },
+                  "required": ["baseline"]
+                },
                 "then": {
-                  "properties": { "baseline": { "required": ["branch_pct"] } }
+                  "allOf": [
+                    {
+                      "if": { "required": ["min_line_pct"] },
+                      "then": {
+                        "properties": {
+                          "baseline": { "required": ["line_pct"] }
+                        }
+                      }
+                    },
+                    {
+                      "if": { "required": ["min_branch_pct"] },
+                      "then": {
+                        "properties": {
+                          "baseline": { "required": ["branch_pct"] }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             ]

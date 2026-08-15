@@ -193,19 +193,220 @@ assert_exit "unresolvable verifier refused" 1 "$RC"
 assert_contains "unresolvable failure names the target" "$OUTPUT" "does not resolve to a genuinely executable test"
 rm -rf "$D"
 
-D=$(mk_fixture); finalize "$D"
-python3 - "$D/specs/demo-feat/verification.yaml" << 'EOF'
+# ── C2 (#242 FR-3): runtime_conformance = availability + capability ──
+# The categorical B refusal is gone; admission now screens the EFFECTIVE
+# config's evaluator: resolves in providers.toml, DECLARES
+# conformance_command, passes its healthcheck. No fallback chain — the
+# gate freezes exactly this evaluator id.
+mk_conf_fixture() {
+    local dir; dir=$(mk_fixture); finalize "$dir" >/dev/null
+    python3 - "$dir/specs/demo-feat/verification.yaml" << 'PYEOF'
 import sys
 p = sys.argv[1]
 s = open(p).read()
 s = s.replace('    - kind: deterministic\n      test: "project-test.sh"',
               '    - kind: runtime_conformance\n      criterion: "Cancel aborts the job."', 1)
 open(p, 'w').write(s)
-EOF
+PYEOF
+    echo "$dir"
+}
+add_conf_block() {  # <dir> <evaluator>
+    python3 - "$1/specs/demo-feat/automation.json" "$2" << 'PYEOF'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+cfg.setdefault("verification", {})["conformance"] = {
+    "evaluator": sys.argv[2], "timeout_sec": 600,
+    "app": {"command": "sleep 5",
+            "ready": {"url": "http://127.0.0.1:9/x", "timeout_sec": 5},
+            "stop_timeout_sec": 5}}
+json.dump(cfg, open(p, "w"))
+PYEOF
+}
+PTOML=$(mktemp -d)/providers.toml
+cat > "$PTOML" << 'TOML'
+[providers.capable]
+type = "cli"
+command = "cat {review_request}"
+conformance_command = "cat {review_request}"
+healthcheck = "true"
+
+[providers.reviewer-only]
+type = "cli"
+command = "cat {review_request}"
+healthcheck = "true"
+
+[providers.sick]
+type = "cli"
+command = "cat {review_request}"
+conformance_command = "cat {review_request}"
+healthcheck = "false"
+
+[providers.noplace]
+type = "cli"
+command = "cat {review_request}"
+conformance_command = "run-eval --headless"
+healthcheck = "true"
+TOML
+HC_MARKER="$(mktemp -d)/health-ran"
+cat >> "$PTOML" << TOML
+
+[providers.marker]
+type = "cli"
+command = "cat {review_request}"
+conformance_command = "cat {review_request}"
+healthcheck = "touch $HC_MARKER"
+TOML
+export CCT_PROVIDER_PROFILE="$PTOML"
+
+D=$(mk_conf_fixture)
 run_admission "$D"
-assert_exit "runtime_conformance mapping refused in B" 1 "$RC"
-assert_contains "refusal names the missing evaluator" "$OUTPUT" "inadmissible in B"
+assert_exit "mapping without a conformance block refused" 1 "$RC"
+assert_contains "refusal names the missing block" "$OUTPUT" "requires verification.conformance"
 rm -rf "$D"
+
+D=$(mk_conf_fixture); add_conf_block "$D" "ghost"
+run_admission "$D"
+assert_exit "unresolvable evaluator refused" 1 "$RC"
+assert_contains "refusal names the resolution failure" "$OUTPUT" "does not resolve in providers.toml"
+rm -rf "$D"
+
+D=$(mk_conf_fixture); add_conf_block "$D" "reviewer-only"
+run_admission "$D"
+assert_exit "healthy reviewer-only provider refused (capability, not health)" 1 "$RC"
+assert_contains "refusal names the missing conformance_command" "$OUTPUT" "declares no conformance_command"
+rm -rf "$D"
+
+D=$(mk_conf_fixture); add_conf_block "$D" "sick"
+run_admission "$D"
+assert_exit "unhealthy capable evaluator refused" 1 "$RC"
+assert_contains "refusal names the healthcheck" "$OUTPUT" "failed its healthcheck"
+rm -rf "$D"
+
+D=$(mk_conf_fixture); add_conf_block "$D" "capable"
+run_admission "$D"
+assert_exit "capable healthy evaluator ADMITS the mapping" 0 "$RC"
+assert_contains "admission names the evaluator screen" "$OUTPUT" "resolves, declares conformance_command"
+rm -rf "$D"
+
+D=$(mk_conf_fixture); add_conf_block "$D" "capable"
+sedi 's|criterion: "Cancel aborts the job."|criterion: "TODO: write me"|' "$D/specs/demo-feat/verification.yaml"
+run_admission "$D"
+assert_exit "placeholder conformance criterion refused" 1 "$RC"
+assert_contains "refusal demands a real criterion" "$OUTPUT" "write the real conformance criterion"
+rm -rf "$D"
+
+# ── Build-review finding 4: the declaration is only a capability if the
+#    command can RECEIVE the frozen request. ──
+D=$(mk_conf_fixture); add_conf_block "$D" "noplace"
+run_admission "$D"
+assert_exit "conformance_command without the request placeholder refused" 1 "$RC"
+assert_contains "refusal names the placeholder" "$OUTPUT" "{review_request} placeholder"
+rm -rf "$D"
+
+# ── Build-review finding 5: the healthcheck EXECUTES operator config —
+#    an ungoverned (draft-plan) feature must never trigger it. ──
+rm -f "$HC_MARKER"
+D=$(mk_conf_fixture); add_conf_block "$D" "marker"
+sedi 's/^status: approved/status: draft/' "$D/specs/demo-feat/plan.md"
+run_admission "$D"
+assert_exit "draft plan refuses the conformance run" 1 "$RC"
+assert_eq "healthcheck NOT executed for an ungoverned feature" "absent" \
+    "$([[ -f "$HC_MARKER" ]] && echo present || echo absent)"
+rm -rf "$D"
+D=$(mk_conf_fixture); add_conf_block "$D" "marker"
+run_admission "$D"
+assert_exit "governed marker evaluator admits" 0 "$RC"
+assert_eq "healthcheck executed once governance passed" "present" \
+    "$([[ -f "$HC_MARKER" ]] && echo present || echo absent)"
+rm -rf "$D"; rm -f "$HC_MARKER"
+
+# ── Build-review finding 3: unverifiable phrasing is admissible when a
+#    runtime_conformance verifier carries it; deterministic-only FRs
+#    still refuse. ──
+D=$(mk_fixture)
+sedi 's/- FR-1: demo test suite exits zero when invoked from the project root./- FR-1: an operator can verify manually that the cancel flow aborts the job./' "$D/specs/demo-feat/spec.md"
+finalize "$D"
+python3 - "$D/specs/demo-feat/verification.yaml" << 'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('    - kind: deterministic\n      test: "project-test.sh"',
+              '    - kind: runtime_conformance\n      criterion: "Cancel aborts the job."', 1)
+open(p, 'w').write(s)
+PYEOF
+add_conf_block "$D" "capable"
+run_admission "$D"
+assert_exit "unverifiable phrasing admits when runtime_conformance carries it" 0 "$RC"
+assert_contains "the mapped FR passes the lint" "$OUTPUT" "no unverifiably-phrased requirements"
+rm -rf "$D"
+
+D=$(mk_fixture)
+sedi 's/exits zero across/looks good across/' "$D/specs/demo-feat/spec.md"
+finalize "$D"
+run_admission "$D"
+assert_exit "unverifiable phrasing on a deterministic-only FR still refuses" 1 "$RC"
+assert_contains "refusal says no verifier carries it" "$OUTPUT" "no runtime_conformance verifier carries it"
+rm -rf "$D"
+
+# ── Round-4 finding 2: the canonical capture runs BEFORE any executing
+#    check — a malformed artifact must not run project code first. ──
+TEST_MARKER="$(mktemp -d)/test-command-ran"
+mk_marker_fixture() {  # <dir-out via echo>
+    local dir; dir=$(mk_fixture); finalize "$dir" >/dev/null
+    python3 - "$dir/specs/demo-feat/automation.json" "$TEST_MARKER" << 'PYEOF'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+cfg["test"]["command"] = f"touch {sys.argv[2]}"
+json.dump(cfg, open(p, "w"))
+PYEOF
+    echo "$dir"
+}
+# Control: a clean artifact DOES run test.command.
+rm -f "$TEST_MARKER"
+D=$(mk_marker_fixture)
+run_admission "$D"
+assert_exit "clean fixture with a marker test.command admits" 0 "$RC"
+assert_eq "control: test.command ran for a clean artifact" "present" \
+    "$([[ -f "$TEST_MARKER" ]] && echo present || echo absent)"
+rm -rf "$D"
+# Duplicate statement_sha: refuse BEFORE executing anything.
+rm -f "$TEST_MARKER"
+D=$(mk_marker_fixture)
+python3 - "$D/specs/demo-feat/verification.yaml" << 'PYEOF'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'(  statement_sha: "[^"]*"\n)',
+           r'\1  statement_sha: "sha256:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"\n',
+           s, count=1)
+open(p, 'w').write(s)
+PYEOF
+run_admission "$D"
+assert_exit "duplicate statement_sha refuses admission" 1 "$RC"
+assert_contains "refusal names the duplicate record" "$OUTPUT" "duplicate statement_sha records"
+assert_eq "test.command NOT executed for a malformed artifact" "absent" \
+    "$([[ -f "$TEST_MARKER" ]] && echo present || echo absent)"
+assert_contains "the skip names the capture gate" "$OUTPUT" "unbindable-artifact"
+rm -rf "$D"
+# Round-4 finding 1: two bullets for the same FR in spec.md.
+rm -f "$TEST_MARKER"
+D=$(mk_marker_fixture)
+python3 - "$D/specs/demo-feat/spec.md" << 'PYEOF'
+import sys
+p = sys.argv[1]; s = open(p).read()
+s = s.replace("- FR-1: demo test suite exits zero when invoked from the project root.",
+              "- FR-1: demo test suite exits zero when invoked from the project root.\n- FR-1: demo test suite does something else entirely.", 1)
+open(p, 'w').write(s)
+PYEOF
+run_admission "$D"
+assert_exit "duplicate FR ID in spec.md refuses admission" 1 "$RC"
+assert_contains "refusal names the duplicate requirement" "$OUTPUT" "defines FR-1 more than once"
+assert_eq "test.command NOT executed for a duplicate-FR spec" "absent" \
+    "$([[ -f "$TEST_MARKER" ]] && echo present || echo absent)"
+rm -rf "$D"; rm -f "$TEST_MARKER"
+
+unset CCT_PROVIDER_PROFILE
 
 D=$(mk_fixture); finalize "$D"
 python3 - "$D/specs/demo-feat/verification.yaml" << 'EOF'
@@ -368,7 +569,7 @@ run_admission "$D"
 assert_exit "draft-plan feature refused" 1 "$RC"
 assert_eq "ungoverned feature's test.command never executed" "0" \
     "$([[ -f "$D/PWNED3" ]] && echo 1 || echo 0)"
-assert_contains "skip names the governance gate" "$OUTPUT" "rejected or ungoverned"
+assert_contains "skip names the governance gate" "$OUTPUT" "rejected, ungoverned, or unbindable-artifact"
 rm -rf "$D"
 
 # DEFER visibility on the earliest refusal (missing artifact).
