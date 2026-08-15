@@ -750,12 +750,17 @@ flag; an operator-supplied `conformance.required` is rejected by name.
   (untracked included) before and after; any mutation by a verifier, the
   app, or the evaluator disposes `git_anomaly`, and a tainted checkout
   suppresses the termination artifact commit and push.
-- **Every invocation is metered** through the same cost channel and caps
-  as reviewers. A measurement comes only from the adapter-written cost
-  file; missing, malformed, or negative values debit the conservative
-  estimate instead, and the evaluator's own text is never parsed as a
-  measurement. A cost the ledger cannot record parks
-  `cost_accounting_failed`, which deliberately refuses `--resume`.
+- **Every invocation is accounted for** through the same cost channel and
+  caps as reviewers. A measurement comes only from the adapter-written
+  cost file; the evaluator's own text is never parsed as a measurement.
+  Missing, malformed, or negative values debit the conservative
+  per-invocation estimate only when estimates are ACTIVE — always for
+  `unattended`, opt-in for attended runs via `unattended.budget`; with
+  estimates inactive an unmetered invocation debits nothing, exactly as
+  for reviewers. A cost the ledger cannot record disposes
+  `cost_accounting_failed` (parking an attended run, terminating an
+  unattended one), and that reason deliberately refuses `--resume`
+  rather than forgive unrecorded spend.
 - All bounds (`timeout_sec`, `ready.timeout_sec`, `stop_timeout_sec`) are
   positive INTEGER seconds — the gate enforces them with integer shell
   arithmetic, so a fractional value would be uncomputable rather than

@@ -40,10 +40,12 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   C1's commit-bound recovery arm) or `provider_unavailable` with
   evaluator-scoped provenance that resume re-checks. Evaluator
   invocations debit the same caps as reviewers through the adapter cost
-  channel, with a checked ledger write — an unrecorded cost parks
-  `cost_accounting_failed`, one of the reasons that publish
-  `resumable: false` and refuse `--resume` rather than forgive unrecorded
-  spend. Driver suite 673 → 890.
+  channel (measured from the cost file; the conservative estimate applies
+  only where estimates are active — always under `unattended`, opt-in for
+  attended runs), with a checked ledger write — an unrecorded cost
+  disposes `cost_accounting_failed` (park attended / terminate
+  unattended), one of the reasons that publish `resumable: false` and
+  refuse `--resume` rather than forgive unrecorded spend. Driver suite 673 → 890.
 
 - **Frozen coverage contract for autonomous builds (#222, increment C1 of
   #190)** — `verification.coverage` in `automation.json` (schema-validated;
