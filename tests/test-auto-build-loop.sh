@@ -5434,6 +5434,34 @@ assert_eq "C2-T5: a SIGTERM'd driver still reaps the app it launched" "reaped" "
 kill -KILL -"$VG_APPPID" 2>/dev/null || true
 rm -rf "$VG_SIGD"
 
+# ── Round-12 finding 2: a signal during a BOUNDED command (verifier,
+#    probe, healthcheck, evaluator) reaps that group too — including when
+#    the runner is executing inside a command substitution, where a
+#    variable set in the subshell is invisible to the parent's handler. ──
+for vg_mode in direct subshell; do
+    VG_BD=$(mktemp -d)
+    VG_CALL='ca_run_bounded 300 '"'"'echo $$ > '"$VG_BD"'/child.pid; sleep 251'"'"' "'"$VG_BD"'/out.log"'
+    [[ "$vg_mode" == subshell ]] && VG_CALL="VG_MSG=\$($VG_CALL)"
+    { echo '#!/usr/bin/env bash'
+      echo 'set -uo pipefail'
+      echo "source \"$VG_FUNCS\" >/dev/null 2>&1"
+      echo "source \"$SCRIPT_DIR/../scripts/lib/conformance-app.sh\""
+      echo "PROJECT_DIR=\"$VG_BD\"; LEDGER_DIR=\"$VG_BD\"; FEATURE_ID=demo-feat"
+      echo "export CA_ACTIVE_GROUP_FILE=\"$VG_BD/.active-group\"; : > \"\$CA_ACTIVE_GROUP_FILE\""
+      # the DRIVER's own trap lines, verbatim
+      echo "eval \"\$(grep -E '^trap ' \"$DRIVER\")\""
+      echo "$VG_CALL"; } > "$VG_BD/victim.sh"
+    bash "$VG_BD/victim.sh" >/dev/null 2>&1 &
+    VG_BV=$!
+    _bw=0; while [[ ! -s "$VG_BD/child.pid" && $_bw -lt 15 ]]; do sleep 1; _bw=$((_bw + 1)); done
+    VG_BCH=$(tr -d '[:space:]' < "$VG_BD/child.pid" 2>/dev/null)
+    kill -TERM "$VG_BV" 2>/dev/null; wait "$VG_BV" 2>/dev/null || true; sleep 3
+    if [[ -n "$VG_BCH" ]] && kill -0 "$VG_BCH" 2>/dev/null; then VG_BRES=leaked; else VG_BRES=reaped; fi
+    assert_eq "C2-T5: SIGTERM during a bounded command ($vg_mode) reaps its group" "reaped" "$VG_BRES"
+    kill -9 "$VG_BCH" 2>/dev/null || true
+    rm -rf "$VG_BD"
+done
+
 # Cleanup that cannot be proven keeps the pid (so EXIT can retry) and
 # reports failure rather than pretending success.
 VG_KEEP=$( ( set +e; set --
@@ -5460,6 +5488,30 @@ assert_eq "C2-T5: an app that mutates the repo AND never becomes ready is a git_
     "$(printf '%s' "$VG_OUT" | cut -f1)"
 assert_contains "C2-T5: the anomaly still reports the original failure" "$VG_OUT" "the run was already failing"
 rm -rf "$VGC"
+
+# ── Round-12 finding 1: a stale evaluator result that cannot be removed
+#    must never be consumed — the verdict must come from THIS invocation.
+VG_FAILEVAL=$(mktemp)
+cat > "$VG_FAILEVAL" << 'FAILEVAL'
+#!/usr/bin/env bash
+sha=$(grep -o 'sha256:[0-9a-f]*' "$1" | head -1)
+printf '%s\n' '```json'
+printf '{"criteria":[{"fr":"FR-2","statement_sha":"%s","criterion":"Cancel aborts the job.","verdict":"fail","evidence":"observed a failure"}]}\n' "$sha"
+printf '%s\n' '```'
+FAILEVAL
+VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_FAILEVAL")
+vg_conf_contract "$VG_APP" | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+VG_CDIR="$VGC/.cct/auto-build/demo-feat/conformance"; mkdir -p "$VG_CDIR"
+printf '{"criteria":[{"fr":"FR-2","statement_sha":"%s","criterion":"Cancel aborts the job.","verdict":"pass","evidence":"STALE PASS"}]}\n' "$SHA2" > "$VG_CDIR/result.json"
+: > "$VG_CDIR/evaluator-stdout.log"; : > "$VG_CDIR/cost.json"; : > "$VG_CDIR/request.md"; : > "$VG_CDIR/app.log"
+chmod 666 "$VG_CDIR/evaluator-stdout.log" "$VG_CDIR/request.md" "$VG_CDIR/app.log" "$VG_CDIR/cost.json"
+chmod 444 "$VG_CDIR/result.json"; chmod 555 "$VG_CDIR"
+VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
+chmod 755 "$VG_CDIR"; chmod 644 "$VG_CDIR/result.json"
+assert_eq "C2-T5: an unremovable stale verdict disposes instead of being consumed" "conformance_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C2-T5: the refusal names the stale artefacts" "$VG_OUT" "stale verdict in place"
+rm -f "$VG_FAILEVAL"; rm -rf "$VGC"
 
 # ── Round-11 finding 2: a tainted checkout suppresses the termination
 #    artifact commit/push — the mutation must never be committed. ──

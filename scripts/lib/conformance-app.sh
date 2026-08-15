@@ -32,6 +32,35 @@
 # config validator and the frozen-contract predicate). An optional third
 # argument captures stdout+stderr to a file (the landing gate keeps every
 # verifier and evaluator transcript in the ledger).
+# CA_ACTIVE_GROUP — the process group of the bounded command currently
+# running, so a signal handler in the DRIVER can reap it (round-12
+# finding 2: exiting from a trap skips ca_run_bounded's own cleanup and
+# left verifier/evaluator/probe children alive).
+CA_ACTIVE_GROUP=""
+# Registration goes through a FILE when CA_ACTIVE_GROUP_FILE is set: the
+# gate runs several probes inside command substitutions, and a variable
+# set in that subshell is invisible to the parent's signal handler.
+ca_register_group() {
+    CA_ACTIVE_GROUP="$1"
+    [[ -n "${CA_ACTIVE_GROUP_FILE:-}" ]] && printf '%s\n' "$1" > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null
+    return 0
+}
+ca_unregister_group() {
+    CA_ACTIVE_GROUP=""
+    [[ -n "${CA_ACTIVE_GROUP_FILE:-}" ]] && : > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null
+    return 0
+}
+ca_active_cleanup() {
+    local pid="${CA_ACTIVE_GROUP:-}"
+    if [[ -z "$pid" && -n "${CA_ACTIVE_GROUP_FILE:-}" && -s "${CA_ACTIVE_GROUP_FILE:-}" ]]; then
+        pid=$(tr -d '[:space:]' < "$CA_ACTIVE_GROUP_FILE" 2>/dev/null)
+    fi
+    [[ -n "$pid" ]] || return 0
+    ca_kill_group "$pid" >/dev/null 2>&1 || true
+    ca_unregister_group
+    return 0
+}
+
 ca_run_bounded() {
     local secs="$1" cmd="$2" out="${3:-/dev/null}" rc=0 pid
     # ONE mechanism: our own process group + watchdog, with the escalation
@@ -53,6 +82,7 @@ ca_run_bounded() {
     set -m
     ( bash -c "$cmd" ) >"$out" 2>&1 &
     pid=$!
+    ca_register_group "$pid"
     ( sleep "$secs"
       : > "$fired"
       kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
@@ -64,6 +94,7 @@ ca_run_bounded() {
         wait "$watchdog" 2>/dev/null || true
         local cleanup_rc=0
         ca_kill_group "$pid" || cleanup_rc=1
+        ca_unregister_group
         rm -rf "$firedir"; set +m
         [[ $cleanup_rc -eq 0 ]] || return 125
         return 124
@@ -73,6 +104,7 @@ ca_run_bounded() {
     # Cleanup on the SUCCESS path too — a probe whose leader exited 0 can
     # still have forked children (round-6 finding 2).
     ca_kill_group "$pid" || rc=125
+    ca_unregister_group
     rm -rf "$firedir"; set +m
     [[ $rc -eq 125 ]] && return 125
     [[ $rc -eq 143 || $rc -eq 137 ]] && return 124

@@ -1917,6 +1917,15 @@ vg_app_cleanup() {
     return 1
 }
 
+# Both groups the gate can own: the launched application AND whatever
+# bounded command (verifier, probe, healthcheck, evaluator) is running
+# right now — exiting from a handler skips ca_run_bounded's own cleanup.
+vg_signal_cleanup() {
+    if declare -f ca_active_cleanup >/dev/null 2>&1; then ca_active_cleanup >/dev/null 2>&1 || true; fi
+    if declare -f vg_app_cleanup >/dev/null 2>&1; then vg_app_cleanup >/dev/null 2>&1 || true; fi
+    return 0
+}
+
 # vg_finish [reason] [detail] — THE single exit path for the verifier
 # gate after any arbitrary execution (round-11 finding 1). It runs the
 # checkout-integrity epilogue FIRST: a mutated checkout outranks every
@@ -1965,6 +1974,11 @@ verifier_gate() {
     local gate_head="$head"
     local cdir="$LEDGER_DIR/conformance"
     mkdir -p "$cdir"
+    # Where the bounded-command runner registers its process group, so a
+    # signal handler can reap it even when the runner is executing inside
+    # a command substitution (round-12 finding 2).
+    export CA_ACTIVE_GROUP_FILE="$LEDGER_DIR/.active-group"
+    : > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null || true
 
     # 3. EXECUTE every frozen deterministic verifier. Admission's
     #    resolution was the screen; this is the decision (FR-7) — a
@@ -2088,7 +2102,19 @@ verifier_gate() {
         #    conformance_command, and require a NEWLY produced verdict.
         local req="$cdir/request.md" cap="$cdir/evaluator-stdout.log"
         local resfile="$cdir/result.json" costfile="$cdir/cost.json"
-        rm -f "$resfile" "$cap" "$costfile"
+        # Freshness is only proven if the previous artefacts are PROVABLY
+        # gone (round-12 finding 1: an unchecked rm in an unwritable
+        # directory let a stale PASS outlive a run whose evaluator said
+        # fail).
+        rm -f "$resfile" "$cap" "$costfile" 2>/dev/null || true
+        local _stale=""
+        [[ -e "$resfile" ]] && _stale="${resfile#$PROJECT_DIR/}"
+        [[ -e "$cap" ]] && _stale="$_stale ${cap#$PROJECT_DIR/}"
+        [[ -e "$costfile" ]] && _stale="$_stale ${costfile#$PROJECT_DIR/}"
+        if [[ -n "$_stale" ]]; then
+            vg_finish "conformance_gate" "could not clear the previous evaluator artefacts ($_stale) — refusing to run with a stale verdict in place (FR-5)"
+            return 1
+        fi
         {
             echo "# Runtime Conformance Evaluation — $FEATURE_ID"
             echo ""
@@ -2116,7 +2142,11 @@ verifier_gate() {
             echo ""
             echo "Every frozen criterion must appear exactly once. A missing,"
             echo "duplicated, altered, or invented entry fails the gate."
-        } > "$req"
+        } > "$req" 2>/dev/null
+        if [[ ! -s "$req" ]]; then
+            vg_finish "conformance_gate" "could not write the conformance request at ${req#$PROJECT_DIR/} — the evaluator cannot be given the frozen criteria"
+            return 1
+        fi
         local inv="${ccmd//\{review_request\}/$req}"
         local irc=0
         CCT_REVIEW_COST_FILE="$costfile" ca_run_bounded "$ctimeout" "cd $(printf '%q' "$PROJECT_DIR") && $inv" "$cap" || irc=$?
@@ -2137,14 +2167,28 @@ verifier_gate() {
             vg_finish "conformance_gate" "the evaluator invocation failed (status $irc — non-zero exit, its ${ctimeout}s bound, or an unreapable process; see ${cap#$PROJECT_DIR/})"
             return 1
         fi
+        if [[ ! -f "$cap" ]]; then
+            vg_finish "conformance_gate" "the evaluator produced no capture at ${cap#$PROJECT_DIR/} — its output could not be recorded, so no verdict can be read from it"
+            return 1
+        fi
         local block
         if ! block=$(vg_fenced_json "$cap" 2>/dev/null); then
             vg_finish "conformance_gate" "the evaluator produced no single fenced json verdict block (see ${cap#$PROJECT_DIR/})"
             return 1
         fi
-        printf '%s\n' "$block" > "$resfile"
-        if ! jq -e '.' "$resfile" >/dev/null 2>&1; then
-            vg_finish "conformance_gate" "the evaluator's verdict block is not valid JSON (see ${resfile#$PROJECT_DIR/})"
+        # Publish THIS invocation's verdict atomically: temp file, parse
+        # check, rename — an unchecked write could leave an older result
+        # in place for the comparison below to read.
+        local restmp2
+        restmp2=$(mktemp "$cdir/result.XXXXXX" 2>/dev/null) || {
+            vg_finish "conformance_gate" "could not create the evaluator result file in ${cdir#$PROJECT_DIR/} — refusing to judge this run on an unwritable (or stale) verdict"
+            return 1
+        }
+        if ! printf '%s\n' "$block" > "$restmp2" \
+           || ! jq -e '.' "$restmp2" >/dev/null 2>&1 \
+           || ! mv "$restmp2" "$resfile"; then
+            rm -f "$restmp2" 2>/dev/null || true
+            vg_finish "conformance_gate" "the evaluator's verdict block is not valid JSON, or could not be published to ${resfile#$PROJECT_DIR/}"
             return 1
         fi
         # The CLOSED shape comes first: identity comparison over a
@@ -3385,6 +3429,7 @@ exit_cleanup() {
     # #242 FR-6: an application launched by the verifier gate must never
     # outlive the driver — including when the driver is interrupted
     # mid-gate (round-10 finding 3).
+    if declare -f ca_active_cleanup >/dev/null 2>&1; then ca_active_cleanup; fi
     if declare -f vg_app_cleanup >/dev/null 2>&1; then vg_app_cleanup; fi
     [[ -n "${TEMP_CONFIG:-}" && -f "$TEMP_CONFIG" ]] && rm -f "$TEMP_CONFIG" 2>/dev/null
     rm -f "${PREFLIGHT_RESULT_FILE:-}" 2>/dev/null
@@ -3403,9 +3448,9 @@ trap exit_cleanup EXIT
 # group (round-11 finding 3, caught by a real signal regression). These
 # handlers reap it and then exit, which lets the EXIT trap run the rest of
 # the cleanup normally.
-trap 'vg_app_cleanup >/dev/null 2>&1 || true; exit 143' TERM
-trap 'vg_app_cleanup >/dev/null 2>&1 || true; exit 130' INT
-trap 'vg_app_cleanup >/dev/null 2>&1 || true; exit 129' HUP
+trap 'vg_signal_cleanup; exit 143' TERM
+trap 'vg_signal_cleanup; exit 130' INT
+trap 'vg_signal_cleanup; exit 129' HUP
 
 load_config
 true  # load_config done — all config values derived from the frozen snapshot
