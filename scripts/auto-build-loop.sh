@@ -1987,10 +1987,20 @@ verifier_gate() {
     # Where the bounded-command runner registers its process group, so a
     # signal handler can reap it even when the runner is executing inside
     # a command substitution (round-12 finding 2).
-    export CA_ACTIVE_GROUP_FILE="$LEDGER_DIR/.active-group"
-    export CA_OWNER_ID="$$"
+    # The handoff record lives in a PRIVATE temp directory, never under
+    # the project, and is NOT exported: the bounded commands are
+    # untrusted project/provider code, and a record they could reach (or
+    # even name) would let them steer a later cleanup (round-14 finding
+    # 1). A subshell still inherits these as plain shell variables, which
+    # is all the cleanup path needs.
+    VG_HANDOFF_DIR=$(mktemp -d 2>/dev/null) || {
+        dispose "conformance_gate" "cannot create the private process-group handoff directory — refusing to run bounded commands that a signal could not reap" "$hist"
+        return 1
+    }
+    CA_ACTIVE_GROUP_FILE="$VG_HANDOFF_DIR/group"
+    CA_OWNER_ID="$$"
     if ! : > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null; then
-        dispose "conformance_gate" "cannot initialise the process-group handoff file at ${CA_ACTIVE_GROUP_FILE#$PROJECT_DIR/} — refusing to run bounded commands that a signal could not reap" "$hist"
+        dispose "conformance_gate" "cannot initialise the process-group handoff record — refusing to run bounded commands that a signal could not reap" "$hist"
         return 1
     fi
 
@@ -3457,6 +3467,7 @@ exit_cleanup() {
     # mid-gate (round-10 finding 3).
     if declare -f ca_active_cleanup >/dev/null 2>&1; then ca_active_cleanup; fi
     if declare -f vg_app_cleanup >/dev/null 2>&1; then vg_app_cleanup; fi
+    [[ -n "${VG_HANDOFF_DIR:-}" && -d "${VG_HANDOFF_DIR:-}" ]] && rm -rf "$VG_HANDOFF_DIR" 2>/dev/null
     [[ -n "${TEMP_CONFIG:-}" && -f "$TEMP_CONFIG" ]] && rm -f "$TEMP_CONFIG" 2>/dev/null
     rm -f "${PREFLIGHT_RESULT_FILE:-}" 2>/dev/null
     # Ordinary refusal (exit 1) while the rollback is armed: undo the

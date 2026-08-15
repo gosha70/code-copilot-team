@@ -61,13 +61,15 @@ ca_register_group() {
     return 0
 }
 ca_unregister_group() {
-    CA_ACTIVE_GROUP=""
     if [[ -n "${CA_ACTIVE_GROUP_FILE:-}" ]]; then
         : > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null || {
             echo "conformance-app: cannot clear the active-group record at $CA_ACTIVE_GROUP_FILE" >&2
+            # Keep the in-memory pid: the record still names a group that
+            # a later cleanup may need to retry.
             return 1
         }
     fi
+    CA_ACTIVE_GROUP=""
     return 0
 }
 ca_active_cleanup() {
@@ -107,7 +109,12 @@ ca_run_bounded() {
     fi
     fired="$firedir/fired"
     set -m
-    ( bash -c "$cmd" ) >"$out" 2>&1 &
+    # The bounded command is UNTRUSTED project/provider code: it must not
+    # inherit the handoff capability, or it could forge an owner-valid
+    # record and steer a later cleanup at an arbitrary group (round-14
+    # finding 1). These are plain shell variables (a subshell still sees
+    # them), and env -u guarantees the child does not.
+    ( env -u CA_ACTIVE_GROUP_FILE -u CA_OWNER_ID bash -c "$cmd" ) >"$out" 2>&1 &
     pid=$!
     if ! ca_register_group "$pid"; then
         # Unreapable-by-a-signal work must not run at all.
@@ -125,8 +132,11 @@ ca_run_bounded() {
     if [[ -e "$fired" ]]; then
         wait "$watchdog" 2>/dev/null || true
         local cleanup_rc=0
-        ca_kill_group "$pid" || cleanup_rc=1
-        ca_unregister_group
+        if ca_kill_group "$pid"; then
+            ca_unregister_group || cleanup_rc=1
+        else
+            cleanup_rc=1   # keep the registration for the EXIT retry
+        fi
         rm -rf "$firedir"; set +m
         [[ $cleanup_rc -eq 0 ]] || return 125
         return 124
@@ -135,8 +145,11 @@ ca_run_bounded() {
     wait "$watchdog" 2>/dev/null || true
     # Cleanup on the SUCCESS path too — a probe whose leader exited 0 can
     # still have forked children (round-6 finding 2).
-    ca_kill_group "$pid" || rc=125
-    ca_unregister_group
+    if ca_kill_group "$pid"; then
+        ca_unregister_group || rc=125
+    else
+        rc=125   # keep the registration for the EXIT retry
+    fi
     rm -rf "$firedir"; set +m
     [[ $rc -eq 125 ]] && return 125
     [[ $rc -eq 143 || $rc -eq 137 ]] && return 124
@@ -275,7 +288,7 @@ ca_start() {
     [[ -n "$cmd" ]] || { echo "conformance-app: app.command is empty" >&2; return 2; }
     : > "$log" 2>/dev/null || { echo "conformance-app: cannot write app log at $log" >&2; return 2; }
     set -m
-    ( cd "$cwd" && env -u OLDPWD bash -c "$cmd" ) >>"$log" 2>&1 &
+    ( cd "$cwd" && env -u OLDPWD -u CA_ACTIVE_GROUP_FILE -u CA_OWNER_ID bash -c "$cmd" ) >>"$log" 2>&1 &
     local pid=$!
     set +m
     printf '%s\n' "$pid"

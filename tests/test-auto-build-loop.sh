@@ -5527,6 +5527,33 @@ VG_R4=$( ( source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
 assert_eq "C2-T5: a bounded run refuses when its group cannot be registered" "125" "$VG_R4"
 chmod 755 "$VG_REG/ro"; rm -rf "$VG_REG"
 
+# ── Round-14 finding 1: the bounded command is UNTRUSTED — it must not
+#    even see the handoff capability, let alone forge a record. ──
+VG_FORGE=$(mktemp -d)
+VG_F1=$( ( source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+    export CA_ACTIVE_GROUP_FILE="$VG_FORGE/g"; export CA_OWNER_ID="OWNER"
+    : > "$CA_ACTIVE_GROUP_FILE"
+    ca_run_bounded 10 "printf 'file=[%s] owner=[%s]' \"\${CA_ACTIVE_GROUP_FILE:-none}\" \"\${CA_OWNER_ID:-none}\" > $VG_FORGE/seen; exit 0" >/dev/null 2>&1
+    cat "$VG_FORGE/seen" 2>/dev/null ) )
+assert_eq "C2-T5: the bounded command cannot see the handoff capability" "file=[none] owner=[none]" "$VG_F1"
+assert_eq "C2-T5: the gate keeps the handoff record outside the project" "1" \
+    "$(grep -c 'VG_HANDOFF_DIR=\$(mktemp -d' "$DRIVER")"
+assert_eq "C2-T5: the handoff variables are never exported" "0" \
+    "$(grep -c 'export CA_ACTIVE_GROUP_FILE\|export CA_OWNER_ID' "$DRIVER")"
+rm -rf "$VG_FORGE"
+
+# ── Round-14 finding 2: a bounded run whose teardown failed KEEPS its
+#    registration so the EXIT path can retry. ──
+VG_KEEP2=$(mktemp -d)
+VG_F2=$( ( source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+    export CA_ACTIVE_GROUP_FILE="$VG_KEEP2/g"; export CA_OWNER_ID="ME"
+    ca_kill_group() { return 1; }
+    ca_run_bounded 3 "sleep 1" >/dev/null 2>&1
+    rc=$?
+    printf 'rc=%s memory=%s record=%s' "$rc" "${CA_ACTIVE_GROUP:+set}" "$(tr -d '\n' < "$CA_ACTIVE_GROUP_FILE" | cut -d' ' -f1)" ) )
+assert_eq "C2-T5: a bounded run with failed teardown keeps its registration" "rc=125 memory=set record=ME" "$VG_F2"
+rm -rf "$VG_KEEP2"
+
 # ── Round-13 finding 1: a stale request that cannot be replaced must
 #    never be handed to the evaluator. ──
 VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_OK")
