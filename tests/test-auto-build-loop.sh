@@ -5584,10 +5584,52 @@ assert_eq "C2-T6: the rc=3 arm restores the estimate flag before disposing" "bef
 #    understated total against a cap and clear itself instantly. ──
 assert_eq "C2-T6: all three debit failures park as cost_accounting_failed" "3" \
     "$(grep -cE '(dispose|vg_finish) "cost_accounting_failed"' "$DRIVER" | tr -d ' ')"
-assert_eq "C2-T6: the reason has its own resume arm" "1" \
-    "$(grep -cE '^ +cost_accounting_failed\)' "$DRIVER" | tr -d ' ')"
+# The dispatcher arm is identified by its own refusal text (the shared
+# predicate now carries a case label of the same name, so a bare grep on
+# the label would match both). The arm's BEHAVIOUR is proven by the
+# park -> resume regression below.
+assert_eq "C2-T6: the reason has its own resume-arm refusal" "1" \
+    "$(grep -c 'a resumed run would silently forgive' "$DRIVER" | tr -d ' ')"
 assert_eq "C2-T6: no debit failure parks as cap_exceeded" "0" \
     "$(grep -c 'dispose "cap_exceeded" "the gating review\|dispose "cap_exceeded" "an advisory review' "$DRIVER" | tr -d ' ')"
+
+# ── Round-20: resumability is a POLICY shared with the resume
+#    dispatcher, not a special case. Every reason that always refuses
+#    must publish resumable:false and fresh-run guidance — checked on
+#    the artifacts park() really writes. ──
+vg_park_artifact() {  # <reason> <history-json> -> the escalation file
+    local reason="$1" hist="${2:-null}" d; d=$(mktemp -d); mkdir -p "$d/escalations"
+    ( set +e; set --
+      source "$VG_FUNCS" >/dev/null 2>&1
+      LEDGER_DIR="$d"; STATE="$d/state.json"; FEATURE_ID="demo-feat"
+      PROJECT_DIR="$d"; CURRENT_PHASE=1; LEDGER_PRIVATE_FALLBACK=false
+      PROFILE="advisory"; DRY_RUN=false
+      jq -n --arg a "$ATTEMPT_ID" \
+        '{schema_version:1, status:"running", attempt_id:$a, escalations:[], totals:{cost_usd:0}}' > "$STATE"
+      notify() { :; }; journal() { :; }; NOTIFY_OK=false
+      park "$reason" "artifact policy check" "$hist" ) >/dev/null 2>&1
+    echo "$d/escalations/esc-1.json"
+}
+vg_park_verdict() {  # <reason> <history> -> "<resumable> <advises-resume>"
+    local f; f=$(vg_park_artifact "$1" "${2:-null}")
+    printf '%s %s' \
+        "$(jq -r '.resumable' "$f" 2>/dev/null)" \
+        "$(jq -r '[.human_actions[] | select(test("--resume$|--resume\\b.*rerun|rerun:.*--resume"))] | length' "$f" 2>/dev/null)"
+    rm -rf "$(dirname "$(dirname "$f")")"
+}
+assert_eq "C2-T6: runner_error publishes a non-resumable escalation" "false 0" \
+    "$(vg_park_verdict runner_error)"
+assert_eq "C2-T6: build_session_timeout publishes a non-resumable escalation" "false 0" \
+    "$(vg_park_verdict build_session_timeout)"
+assert_eq "C2-T6: a null-evaluator provider_unavailable is non-resumable" "false 0" \
+    "$(vg_park_verdict provider_unavailable '{"provider_scope":"evaluator","evaluator":null}')"
+assert_eq "C2-T6: a reviewer-scope provider_unavailable stays resumable" "true 1" \
+    "$(vg_park_verdict provider_unavailable 'null')"
+assert_eq "C2-T6: an ordinary reason still advises --resume" "true 1" \
+    "$(vg_park_verdict test_failure)"
+# The predicate and the dispatcher must not drift apart.
+assert_eq "C2-T6: every always-refusing reason is in the predicate" "3" \
+    "$(awk '/^escalation_resumable\(\)/,/^}/' "$DRIVER" | grep -cE '^        (cost_accounting_failed|runner_error|build_session_timeout)\)')"
 
 # The escalation ARTIFACT must not advise a command that always refuses.
 # Produced by a REAL debit failure (park() invoked through the same path

@@ -396,6 +396,48 @@ terminate_policy() {
     exit 6
 }
 
+# escalation_resumable <reason> <history-json> — is `--resume` a REAL
+# option for this escalation? Kept aligned with the resume dispatcher
+# (round-20 finding 1: resumability was special-cased for one reason
+# while three others published resumable: true and advised a command
+# that always refuses). Prints the reason-specific guidance on stdout
+# when the answer is no.
+escalation_resumable() {
+    local reason="$1" history="${2:-null}" scope="" evaluator=""
+    case "$reason" in
+        cost_accounting_failed)
+            echo "This run could not RECORD an invocation's cost, so its ledger understates real spend by an unknown amount"
+            echo "--resume deliberately refuses here: resuming would silently forgive the unrecorded spend and enforce caps against a total that never moved"
+            echo "Fix the underlying ledger/disk problem (permissions, free space, corrupted state.json)"
+            echo "Reconcile the spend from your provider's own billing if you need the real number, then start a FRESH run: scripts/auto-build-loop.sh $FEATURE_ID"
+            return 1 ;;
+        runner_error)
+            echo "The review runner exited without producing a decision, so review state may be inconsistent"
+            echo "--resume refuses here: there is no safe boundary to continue from"
+            echo "Inspect the findings/decision evidence above, resolve the runner error"
+            echo "Then start a FRESH run: scripts/auto-build-loop.sh $FEATURE_ID"
+            return 1 ;;
+        build_session_timeout)
+            echo "The build session exceeded its wall-clock bound and has no automatic recovery"
+            echo "--resume refuses here: no resume arm exists for this reason"
+            echo "Inspect the session transcript, address what made it hang (or raise build.max_turns / the session bound)"
+            echo "Then start a FRESH run: scripts/auto-build-loop.sh $FEATURE_ID"
+            return 1 ;;
+        provider_unavailable)
+            scope=$(jq -r 'if type == "object" then (.provider_scope // "") else "" end' <<< "$history" 2>/dev/null || echo "")
+            evaluator=$(jq -r 'if type == "object" then (.evaluator // "null") else "null" end' <<< "$history" 2>/dev/null || echo "null")
+            if [[ "$scope" == "evaluator" && "$evaluator" == "null" ]]; then
+                echo "This run's FROZEN contract requires runtime conformance but froze NO evaluator"
+                echo "--resume refuses here: a frozen contract cannot gain an evaluator, so configuring one now cannot change this run"
+                echo "Add verification.conformance (evaluator + app) to automation.json"
+                echo "Then start a FRESH run: scripts/auto-build-loop.sh $FEATURE_ID"
+                return 1
+            fi
+            ;;
+    esac
+    return 0
+}
+
 park() {
     # park <reason> <detail> [history-json]
     local reason="$1" detail="$2" history="${3:-null}"
@@ -437,18 +479,13 @@ park() {
     # resume the rival canonical run instead), and some reasons refuse
     # resume by policy — printing "--resume" for those would hand the
     # operator a command that always fails (round-19 finding 1).
-    local actions resumable=true
+    local actions resumable=true why=""
+    if [[ "$LEDGER_PRIVATE_FALLBACK" != "true" ]] && ! why=$(escalation_resumable "$reason" "$history"); then
+        resumable=false
+        actions=$(printf '%s\n' "$why" | jq -R -s 'split("\n") | map(select(length > 0))')
+    fi
     if [[ "$LEDGER_PRIVATE_FALLBACK" == "true" ]]; then
         resumable=false
-    elif [[ "$reason" == "cost_accounting_failed" ]]; then
-        resumable=false
-        actions=$(jq -n --arg fid "$FEATURE_ID" \
-            '["This run could not RECORD an invocation'"'"'s cost, so its ledger understates real spend by an unknown amount",
-              "--resume deliberately refuses here: resuming would silently forgive the unrecorded spend and enforce caps against a total that never moved",
-              "Fix the underlying ledger/disk problem (permissions, free space, corrupted state.json)",
-              ("Reconcile the spend from your provider'"'"'s own billing if you need the real number, then start a FRESH run: scripts/auto-build-loop.sh " + $fid)]')
-    fi
-    if [[ -z "${actions:-}" ]] && [[ "$LEDGER_PRIVATE_FALLBACK" == "true" ]]; then
         actions=$(jq -n --arg dir "$LEDGER_DIR" --arg lock "$LEDGER_SHARED_LOCK" \
             '[("This run could not claim the ledger lock (" + $lock + "), so its evidence is in " + $dir + " — NOT the canonical ledger"),
               "Do NOT rerun with --resume: this bundle is invisible to it, and --resume would continue a different run",
