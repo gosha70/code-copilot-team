@@ -1935,6 +1935,40 @@ vg_signal_cleanup() {
     return 0
 }
 
+# vg_debit_conformance <cost-file> <label> — FR-8. One evaluator
+# invocation debits the SAME caps as one reviewer invocation. The
+# measured value comes EXCLUSIVELY from the adapter-written cost file,
+# normalized exactly like scripts/review-round-runner.sh does (a cli
+# provider may redirect a whole CLI result stream into it); the
+# evaluator's own stdout is model-controlled text and is never a
+# measurement channel. Missing, malformed, or negative -> unmetered, so
+# the conservative estimate applies and cost can only be OVERstated.
+vg_debit_conformance() {
+    local cf="$1" label="$2" cost="" shim
+    if [[ -f "$cf" ]]; then
+        cost=$(jq -r -s 'map(if type == "array" then .[] else . end)
+               | ([.[] | select(.type? == "result")] | last)
+                 // (if (length == 1) and ((.[0] | type) == "object")
+                        and ((.[0] | has("type")) | not)
+                     then .[0] else {} end)
+               | if (type == "object") and ((.total_cost_usd | type) == "number")
+                  and (.total_cost_usd >= 0)
+               then .total_cost_usd else empty end' "$cf" 2>/dev/null || true)
+    fi
+    # Reuse the reviewer debit path (measured vs conservative estimate,
+    # negative-value guard, journal line) by handing it the shape it
+    # reads — one accounting rule, not two.
+    shim=$(mktemp) || return 0
+    if [[ -n "$cost" ]]; then
+        jq -n --argjson c "$cost" '{invocation_cost_usd: $c}' > "$shim" 2>/dev/null
+    else
+        jq -n '{invocation_cost_usd: null}' > "$shim" 2>/dev/null
+    fi
+    debit_review_costs "$shim" "$label"
+    rm -f "$shim"
+    return 0
+}
+
 # vg_finish [reason] [detail] — THE single exit path for the verifier
 # gate after any arbitrary execution (round-11 finding 1). It runs the
 # checkout-integrity epilogue FIRST: a mutated checkout outranks every
@@ -2195,7 +2229,15 @@ verifier_gate() {
         fi
         local inv="${ccmd//\{review_request\}/$req}"
         local irc=0
-        CCT_REVIEW_COST_FILE="$costfile" ca_run_bounded "$ctimeout" "cd $(printf '%q' "$PROJECT_DIR") && $inv" "$cap" || irc=$?
+        # EXPORTED for the duration of the invocation: the adapter writes
+        # its measurement there, and a prefix assignment on a shell
+        # FUNCTION does not reach the spawned child.
+        export CCT_REVIEW_COST_FILE="$costfile"
+        ca_run_bounded "$ctimeout" "cd $(printf '%q' "$PROJECT_DIR") && $inv" "$cap" || irc=$?
+        unset CCT_REVIEW_COST_FILE
+        # The invocation happened: account for it BEFORE any disposition,
+        # so a failed or rejected evaluation still debits its cost.
+        vg_debit_conformance "$costfile" "conformance evaluator '$evaluator'"
         stop_rc=0
         ca_stop "$apid" "$stop_sec" || stop_rc=$?
         [[ $stop_rc -eq 0 ]] && VG_APP_PID=""

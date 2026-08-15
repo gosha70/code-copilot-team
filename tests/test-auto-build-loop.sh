@@ -5527,6 +5527,94 @@ VG_R4=$( ( source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
 assert_eq "C2-T5: a bounded run refuses when its group cannot be registered" "125" "$VG_R4"
 chmod 755 "$VG_REG/ro"; rm -rf "$VG_REG"
 
+echo ""
+echo "=== C2 (#242) T6: evaluator metering (FR-8) ==="
+# ══════════════════════════════════════════════════════════════
+# One evaluator invocation debits the SAME caps as one reviewer
+# invocation: measured from the ADAPTER-written cost file only, else the
+# conservative estimate. The evaluator's own text is never a channel.
+vg_debit_case() {  # <cost-file-content|NONE> <estimates: on|off> -> "<measured> <estimated>"
+    local content="$1" est="$2" d; d=$(mktemp -d)
+    printf '{"schema_version":1,"totals":{"cost_usd":0,"cost_estimated_usd":0}}\n' > "$d/state.json"
+    [[ "$content" != "NONE" ]] && printf '%s\n' "$content" > "$d/cost.json"
+    ( set +e; set --
+      source "$VG_FUNCS" >/dev/null 2>&1
+      STATE="$d/state.json"; ESTIMATE_PER_INV=2.0
+      ESTIMATES_ACTIVE=$([[ "$est" == on ]] && echo true || echo false)
+      journal() { :; }
+      state_set() { local f="$1"; shift; local t; t=$(mktemp); jq "$f" "$@" "$STATE" > "$t" && mv "$t" "$STATE"; }
+      vg_debit_conformance "$d/cost.json" "test" >/dev/null 2>&1
+      jq -r '"\(.totals.cost_usd) \(.totals.cost_estimated_usd)"' "$STATE" )
+    rm -rf "$d"
+}
+assert_eq "C2-T6: a measured cost file debits cost_usd" "1.25 0" \
+    "$(vg_debit_case '{"total_cost_usd":1.25}' on)"
+assert_eq "C2-T6: a CLI result stream is normalized like the reviewer path" "0.5 0" \
+    "$(vg_debit_case '{"type":"result","subtype":"success","total_cost_usd":0.5}' on)"
+assert_eq "C2-T6: a missing cost file debits the estimate" "0 2" \
+    "$(vg_debit_case NONE on)"
+assert_eq "C2-T6: a NEGATIVE cost never credits the budget (estimate instead)" "0 2" \
+    "$(vg_debit_case '{"total_cost_usd":-5}' on)"
+assert_eq "C2-T6: a malformed cost file debits the estimate" "0 2" \
+    "$(vg_debit_case 'not json' on)"
+assert_eq "C2-T6: with estimates off, an unmetered invocation debits nothing" "0 0" \
+    "$(vg_debit_case NONE off)"
+# The evaluator's own words are not a measurement channel.
+assert_eq "C2-T6: in-band cost text in the verdict is ignored" "0 2" \
+    "$(vg_debit_case '{"note":"total_cost_usd: 0.0 (I spent nothing)"}' on)"
+
+# End to end: a passing evaluation debits, and the debit precedes the
+# gate's own check_caps. The stub writes its measurement through the
+# adapter channel itself — putting that in the provider COMMAND would
+# need TOML-escaped quotes, which the minimal reader passes through
+# literally.
+VG_EVAL_COST=$(mktemp)
+cat > "$VG_EVAL_COST" << 'COSTEVAL'
+#!/usr/bin/env bash
+[[ -n "${CCT_REVIEW_COST_FILE:-}" ]] && printf '{"total_cost_usd":0.75}\n' > "$CCT_REVIEW_COST_FILE"
+sha=$(grep -o 'sha256:[0-9a-f]*' "$1" | head -1)
+printf '%s\n' '```json'
+printf '{"criteria":[{"fr":"FR-2","statement_sha":"%s","criterion":"Cancel aborts the job.","verdict":"pass","evidence":"e"}]}\n' "$sha"
+printf '%s\n' '```'
+COSTEVAL
+VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_COST")
+# A FRESH port: the shared $VG_APP port may still be held by an earlier
+# case's app, and the binding preflight would (correctly) refuse before
+# any invocation — which would make this metering case pass vacuously.
+VG_CPORT=$(free_port)
+jq -n --arg c "python3 -m http.server $VG_CPORT --bind 127.0.0.1" \
+    --arg u "http://127.0.0.1:$VG_CPORT/" --arg s "$SHA2" \
+    '{conformance:{evaluator:"stub-eval",
+      app:{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5},
+      interface:$u, timeout_sec:30,
+      criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]}}' \
+    | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+VG_COSTLOG="$VGC/.cct/auto-build/demo-feat/cost-events"
+VG_OUT=$( ( set +e; set --
+    source "$VG_FUNCS" >/dev/null 2>&1
+    source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+    PROJECT_DIR="$VGC"; LEDGER_DIR="$VGC/.cct/auto-build/demo-feat"
+    FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
+    export CCT_PROVIDER_PROFILE="$VG_PROF"
+    FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
+    STATE="$LEDGER_DIR/state.json"
+    printf '{"schema_version":1,"totals":{"cost_usd":0,"cost_estimated_usd":0}}\n' > "$STATE"
+    ESTIMATES_ACTIVE=true; ESTIMATE_PER_INV=2.0
+    dispose() { printf 'DISPOSED|%s|%s\n' "$1" "$2" >> "$VG_COSTLOG"; return 1; }
+    journal() { printf '%s|%s\n' "$1" "$2" >> "$VG_COSTLOG"; }
+    state_set() { local f="$1"; shift; local t; t=$(mktemp); jq "$f" "$@" "$STATE" > "$t" && mv "$t" "$STATE"; }
+    check_caps() { printf 'check_caps|\n' >> "$VG_COSTLOG"; }
+    verifier_gate >/dev/null 2>&1 </dev/null
+    # grep -c exits 1 on zero matches, so compute it on its own line
+    # rather than inside the printf's expansion.
+    _disp=$(grep -c DISPOSED "$VG_COSTLOG" 2>/dev/null | head -1 | tr -d '[:space:]')
+    printf '%s %s' "$(jq -r '.totals.cost_usd' "$STATE")" "${_disp:-0}" ) )
+assert_eq "C2-T6 e2e: a real invocation debits its measured cost (and does not dispose)" "0.75 0" "$VG_OUT"
+assert_contains "C2-T6 e2e: the debit is journaled as measured" "$(cat "$VG_COSTLOG" 2>/dev/null)" "measured"
+assert_eq "C2-T6 e2e: the cost is debited BEFORE the gate's cap check" "cost_review" \
+    "$(grep -E '^(cost_review|check_caps)' "$VG_COSTLOG" 2>/dev/null | head -1 | cut -d'|' -f1)"
+rm -f "$VG_EVAL_COST"; rm -rf "$VGC"
+
 # ── Round-15 finding 1: an inherited VG_HANDOFF_DIR is NEVER treated as
 #    driver-owned. A run that fails early (invalid config, long before
 #    the gate) must not recursively delete a directory the host chose. ──
