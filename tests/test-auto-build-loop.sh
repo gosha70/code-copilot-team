@@ -5563,6 +5563,22 @@ assert_eq "C2-T6: with estimates off, an unmetered invocation debits nothing" "0
 assert_eq "C2-T6: in-band cost text in the verdict is ignored" "0 2" \
     "$(vg_debit_case '{"note":"total_cost_usd: 0.0 (I spent nothing)"}' on)"
 
+# ── Round-17: EVERY caller of the shared debit checks it. A reviewer
+#    debit the ledger refuses must stop the run, not sail on with a cost
+#    total that never moved. ──
+# A caller is "checked" when it captures the status (|| rc=$?) or guards
+# with `if !`; anything else would sail past a refused debit.
+assert_eq "C2-T6: no reviewer call site invokes the debit unchecked" "0" \
+    "$(grep -nE 'debit_review_costs "' "$DRIVER" | grep -v '||' | grep -v 'if ! debit_review_costs' | wc -l | tr -d ' ')"
+assert_eq "C2-T6: both reviewer paths dispose when the debit fails" "2" \
+    "$(grep -c 'refusing to continue with caps that cannot be enforced' "$DRIVER")"
+# The rc=3 arm must restore ESTIMATES_ACTIVE BEFORE disposing — dispose
+# does not return, so a restore placed after it would never run.
+assert_eq "C2-T6: the rc=3 arm restores the estimate flag before disposing" "before" \
+    "$(awk '/_est_save="\$\{ESTIMATES_ACTIVE/,/refusing to continue with caps/' "$DRIVER" \
+        | grep -nE 'ESTIMATES_ACTIVE="\$_est_save"|dispose "cap_exceeded"' | head -2 \
+        | awk -F: 'NR==1 && /_est_save/ {print "before"; found=1} END { if (!found) print "after" }')"
+
 # ── Round-16: a debit that cannot be PERSISTED is never reported as a
 #    successful one, and accounting setup never fails open. ──
 vg_debit_fail_case() {  # <cost-file-content|NONE> -> "<rc> <journal-kind> <totals>"

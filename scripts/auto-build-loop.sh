@@ -3066,7 +3066,10 @@ run_advisory_pass() {
         frf=$(ls "$scratch"/findings-round-*.json 2>/dev/null | sort -V | tail -1)
         # Each advisory pass is one reviewer invocation in a fresh scratch
         # dir; debit it (measured or estimated) like a gating round (FR-7).
-        debit_review_costs "$frf" "advisory review $_prov phase $n round $round"
+        if ! debit_review_costs "$frf" "advisory review $_prov phase $n round $round"; then
+            dispose "cap_exceeded" "an advisory review's cost could not be recorded in the ledger ($_prov phase $n round $round) — refusing to continue with caps that cannot be enforced" "null"
+            return 1
+        fi
         if [[ -n "$frf" && -f "$frf" ]]; then
             local tagged tmp
             tagged=$(jq --arg prov "$_prov" --arg spec "$_spec" \
@@ -3161,13 +3164,23 @@ run_review_loop() {
         # failed invocation is not an unmetered one, and the observed run
         # charged $2.0 "estimated" for a reviewer that exited on a usage
         # error.
+        # A debit the ledger REFUSES must stop the run: continuing would
+        # process a verdict (and possibly land) against a cost total that
+        # never moved, so check_caps would enforce nothing (round-17
+        # finding 1). The rc=3 arm restores the estimate flag FIRST —
+        # dispose does not return.
+        local _debit_rc=0
         if [[ $rc -eq 3 ]]; then
             local _est_save="${ESTIMATES_ACTIVE:-false}"
             ESTIMATES_ACTIVE=false
-            debit_review_costs "$post_frf" "gating review phase $n round $round"
+            debit_review_costs "$post_frf" "gating review phase $n round $round" || _debit_rc=$?
             ESTIMATES_ACTIVE="$_est_save"
         elif [[ $rc -ne 2 ]]; then
-            debit_review_costs "$post_frf" "gating review phase $n round $round"
+            debit_review_costs "$post_frf" "gating review phase $n round $round" || _debit_rc=$?
+        fi
+        if [[ $_debit_rc -ne 0 ]]; then
+            dispose "cap_exceeded" "the gating review's cost could not be recorded in the ledger (phase $n round $round) — refusing to continue with caps that cannot be enforced" "null"
+            return 1
         fi
         case $rc in
             3)
