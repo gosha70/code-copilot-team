@@ -1944,7 +1944,7 @@ vg_signal_cleanup() {
 # measurement channel. Missing, malformed, or negative -> unmetered, so
 # the conservative estimate applies and cost can only be OVERstated.
 vg_debit_conformance() {
-    local cf="$1" label="$2" cost="" shim
+    local cf="$1" label="$2" cost=""
     if [[ -f "$cf" ]]; then
         cost=$(jq -r -s 'map(if type == "array" then .[] else . end)
                | ([.[] | select(.type? == "result")] | last)
@@ -1955,18 +1955,10 @@ vg_debit_conformance() {
                   and (.total_cost_usd >= 0)
                then .total_cost_usd else empty end' "$cf" 2>/dev/null || true)
     fi
-    # Reuse the reviewer debit path (measured vs conservative estimate,
-    # negative-value guard, journal line) by handing it the shape it
-    # reads — one accounting rule, not two.
-    shim=$(mktemp) || return 0
-    if [[ -n "$cost" ]]; then
-        jq -n --argjson c "$cost" '{invocation_cost_usd: $c}' > "$shim" 2>/dev/null
-    else
-        jq -n '{invocation_cost_usd: null}' > "$shim" 2>/dev/null
-    fi
-    debit_review_costs "$shim" "$label"
-    rm -f "$shim"
-    return 0
+    # Straight into the shared accounting rule — no temp file to fail on
+    # (round-16 finding 2: a failed shim silently dropped BOTH the
+    # measurement and the estimate).
+    debit_invocation_cost "$cost" "$label"
 }
 
 # vg_finish [reason] [detail] — THE single exit path for the verifier
@@ -2237,7 +2229,10 @@ verifier_gate() {
         unset CCT_REVIEW_COST_FILE
         # The invocation happened: account for it BEFORE any disposition,
         # so a failed or rejected evaluation still debits its cost.
-        vg_debit_conformance "$costfile" "conformance evaluator '$evaluator'"
+        if ! vg_debit_conformance "$costfile" "conformance evaluator '$evaluator'"; then
+            vg_finish "conformance_gate" "the evaluator invocation could not be accounted for (the ledger refused the cost debit) — refusing to judge a run whose caps cannot be enforced"
+            return 1
+        fi
         stop_rc=0
         ca_stop "$apid" "$stop_sec" || stop_rc=$?
         [[ $stop_rc -eq 0 ]] && VG_APP_PID=""
@@ -2673,6 +2668,33 @@ rollback_fresh_ledger() {
 # totals.cost_estimated_usd — SAME cap, flagged estimated in the journal.
 # A runner that died before writing this round's findings file is still
 # debited as one unmetered invocation (conservative overstatement).
+# debit_invocation_cost <cost-or-empty> <label> — THE accounting rule.
+# A non-empty cost is a measurement; anything else is unmetered and
+# debits the conservative estimate when estimates are active. The ledger
+# write is CHECKED: an unwritable or invalid ledger must not be reported
+# as a successful debit, or check_caps would enforce against a total
+# that never moved (round-16 finding 1). Returns non-zero when the debit
+# could not be persisted.
+debit_invocation_cost() {
+    local cost="$1" label="$2"
+    if [[ -n "$cost" ]]; then
+        if ! state_set '.totals.cost_usd += ($c | tonumber)' --arg c "$cost"; then
+            journal "cost_debit_failed" "$label: \$$cost (measured) could not be recorded — caps cannot be enforced against it"
+            return 1
+        fi
+        journal "cost_review" "$label: \$$cost (measured)"
+        return 0
+    fi
+    [[ "${ESTIMATES_ACTIVE:-false}" == "true" ]] || return 0
+    if ! state_set '.totals.cost_estimated_usd = ((.totals.cost_estimated_usd // 0) + ($c | tonumber))' \
+        --arg c "$ESTIMATE_PER_INV"; then
+        journal "cost_debit_failed" "$label: \$$ESTIMATE_PER_INV (estimated) could not be recorded — caps cannot be enforced against it"
+        return 1
+    fi
+    journal "cost_review" "$label: \$$ESTIMATE_PER_INV (estimated: true — unmetered invocation)"
+    return 0
+}
+
 debit_review_costs() {
     # debit_review_costs <findings-file-or-empty> <label>
     # Defense-in-depth: only a NON-NEGATIVE number is a measurement — a
@@ -2682,14 +2704,7 @@ debit_review_costs() {
     [[ -n "$f" && -f "$f" ]] && cost=$(jq -r \
         'if ((.invocation_cost_usd | type) == "number") and (.invocation_cost_usd >= 0)
          then .invocation_cost_usd else empty end' "$f" 2>/dev/null)
-    if [[ -n "$cost" ]]; then
-        state_set '.totals.cost_usd += ($c | tonumber)' --arg c "$cost"
-        journal "cost_review" "$label: \$$cost (measured)"
-    elif [[ "${ESTIMATES_ACTIVE:-false}" == "true" ]]; then
-        state_set '.totals.cost_estimated_usd = ((.totals.cost_estimated_usd // 0) + ($c | tonumber))' \
-            --arg c "$ESTIMATE_PER_INV"
-        journal "cost_review" "$label: \$$ESTIMATE_PER_INV (estimated: true — unmetered invocation)"
-    fi
+    debit_invocation_cost "$cost" "$label"
 }
 
 # #201 Gap 3: caps are frozen in config.snapshot.json at launch, so editing

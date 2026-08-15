@@ -5563,6 +5563,30 @@ assert_eq "C2-T6: with estimates off, an unmetered invocation debits nothing" "0
 assert_eq "C2-T6: in-band cost text in the verdict is ignored" "0 2" \
     "$(vg_debit_case '{"note":"total_cost_usd: 0.0 (I spent nothing)"}' on)"
 
+# ── Round-16: a debit that cannot be PERSISTED is never reported as a
+#    successful one, and accounting setup never fails open. ──
+vg_debit_fail_case() {  # <cost-file-content|NONE> -> "<rc> <journal-kind> <totals>"
+    local content="$1" d; d=$(mktemp -d)
+    printf '{"schema_version":1,"totals":{"cost_usd":0,"cost_estimated_usd":0}}\n' > "$d/state.json"
+    [[ "$content" != "NONE" ]] && printf '%s\n' "$content" > "$d/cost.json"
+    ( set +e; set --
+      source "$VG_FUNCS" >/dev/null 2>&1
+      STATE="$d/state.json"; ESTIMATE_PER_INV=2.0; ESTIMATES_ACTIVE=true; DRY_RUN=false
+      journal() { printf '%s' "$1" > "$d/journal"; }
+      state_set() { return 1; }          # the ledger refuses every write
+      vg_debit_conformance "$d/cost.json" "test" >/dev/null 2>&1
+      printf '%s %s %s' "$?" "$(cat "$d/journal" 2>/dev/null)" "$(jq -c '.totals' "$d/state.json")" )
+    rm -rf "$d"
+}
+assert_eq "C2-T6: a measured debit the ledger refuses FAILS (never journaled as measured)" \
+    ' 1 cost_debit_failed {"cost_usd":0,"cost_estimated_usd":0}' " $(vg_debit_fail_case '{"total_cost_usd":1.25}')"
+assert_eq "C2-T6: an estimated debit the ledger refuses FAILS too" \
+    ' 1 cost_debit_failed {"cost_usd":0,"cost_estimated_usd":0}' " $(vg_debit_fail_case NONE)"
+assert_eq "C2-T6: accounting needs no temp file (nothing to fail open on)" "0" \
+    "$(awk '/^vg_debit_conformance\(\)/,/^}/' "$DRIVER" | grep -c mktemp)"
+assert_eq "C2-T6: the gate routes a failed debit through vg_finish" "1" \
+    "$(grep -c 'could not be accounted for (the ledger refused the cost debit)' "$DRIVER")"
+
 # End to end: a passing evaluation debits, and the debit precedes the
 # gate's own check_caps. The stub writes its measurement through the
 # adapter channel itself — putting that in the provider COMMAND would
