@@ -5066,7 +5066,10 @@ vg_case() {
       journal() { :; }
       check_caps() { :; }
       : > "$marker"
-      verifier_gate >/dev/null 2>&1
+      # </dev/null and a closed stdout for the gate: if a bug ever leaks
+      # the app, it must not hold this command substitution's pipe open
+      # and wedge the suite.
+      verifier_gate >/dev/null 2>&1 </dev/null
       cat "$marker" )
 }
 
@@ -5487,6 +5490,59 @@ VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
 assert_eq "C2-T5: an app that mutates the repo AND never becomes ready is a git_anomaly" "git_anomaly" \
     "$(printf '%s' "$VG_OUT" | cut -f1)"
 assert_contains "C2-T5: the anomaly still reports the original failure" "$VG_OUT" "the run was already failing"
+rm -rf "$VGC"
+
+# ── Round-13: the handoff record is owner-bound, its writes are
+#    checked, and a failed cleanup keeps its evidence. ──
+VG_REG=$(mktemp -d)
+VG_R1=$( ( source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+    export CA_ACTIVE_GROUP_FILE="$VG_REG/g"; export CA_OWNER_ID="OWNER-A"
+    printf 'OTHER-RUN 111111\n' > "$CA_ACTIVE_GROUP_FILE"
+    ca_kill_group() { echo "$1" > "$VG_REG/signalled"; return 0; }
+    ca_active_cleanup >/dev/null 2>&1
+    cat "$VG_REG/signalled" 2>/dev/null || echo none ) )
+assert_eq "C2-T5: a leftover record from another run is never signalled" "none" "$VG_R1"
+VG_R1b=$( ( source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+    export CA_ACTIVE_GROUP_FILE="$VG_REG/g"; export CA_OWNER_ID="MINE"
+    printf 'MINE 222222\n' > "$CA_ACTIVE_GROUP_FILE"
+    ca_kill_group() { echo "$1" > "$VG_REG/signalled2"; return 0; }
+    ca_active_cleanup >/dev/null 2>&1
+    cat "$VG_REG/signalled2" 2>/dev/null || echo none ) )
+assert_eq "C2-T5: this run's own record IS signalled" "222222" "$VG_R1b"
+VG_R2=$( ( source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+    export CA_ACTIVE_GROUP_FILE="$VG_REG/g"; export CA_OWNER_ID="ME"
+    printf 'ME 999999\n' > "$CA_ACTIVE_GROUP_FILE"
+    ca_kill_group() { return 1; }
+    ca_active_cleanup >/dev/null 2>&1
+    echo "rc=$? record=[$(tr -d '\n' < "$CA_ACTIVE_GROUP_FILE")]" ) )
+assert_eq "C2-T5: a failed bounded-group cleanup fails and KEEPS its record" "rc=1 record=[ME 999999]" "$VG_R2"
+mkdir -p "$VG_REG/ro"; : > "$VG_REG/ro/g"; chmod 444 "$VG_REG/ro/g"; chmod 555 "$VG_REG/ro"
+VG_R3=$( ( source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+    export CA_ACTIVE_GROUP_FILE="$VG_REG/ro/g"
+    ca_register_group 4242 >/dev/null 2>&1; echo "$?" ) )
+assert_eq "C2-T5: registration that cannot be recorded FAILS (never silently)" "1" "$VG_R3"
+VG_R4=$( ( source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+    export CA_ACTIVE_GROUP_FILE="$VG_REG/ro/g"
+    ca_run_bounded 5 "sleep 1" >/dev/null 2>&1; echo "$?" ) )
+assert_eq "C2-T5: a bounded run refuses when its group cannot be registered" "125" "$VG_R4"
+chmod 755 "$VG_REG/ro"; rm -rf "$VG_REG"
+
+# ── Round-13 finding 1: a stale request that cannot be replaced must
+#    never be handed to the evaluator. ──
+VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_OK")
+vg_conf_contract "$VG_APP" | jq -S '.' > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+VG_CDIR2="$VGC/.cct/auto-build/demo-feat/conformance"; mkdir -p "$VG_CDIR2"
+printf '# OLD REQUEST pointing at a previous run\n' > "$VG_CDIR2/request.md"
+: > "$VG_CDIR2/app.log"; chmod 666 "$VG_CDIR2/app.log"
+chmod 444 "$VG_CDIR2/request.md"; chmod 555 "$VG_CDIR2"
+VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
+chmod 755 "$VG_CDIR2"; chmod 644 "$VG_CDIR2/request.md"
+assert_eq "C2-T5: an unreplaceable stale request disposes instead of being reused" "conformance_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_eq "C2-T5: the stale request is never handed to the evaluator" "1" \
+    "$(grep -c 'OLD REQUEST' "$VG_CDIR2/request.md")"
+assert_eq "C2-T5: no application survives a request-publish failure" "0" \
+    "$(pgrep -f "http.server $VG_PORT" | wc -l | tr -d ' ')"
 rm -rf "$VGC"
 
 # ── Round-12 finding 1: a stale evaluator result that cannot be removed

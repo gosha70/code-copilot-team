@@ -1934,6 +1934,16 @@ vg_signal_cleanup() {
 # Relies on bash dynamic scope for gate_head/hist from verifier_gate.
 vg_finish() {
     local reason="${1:-}" detail="${2:-}" anomaly
+    # The application NEVER outlives the gate, whichever exit is taken —
+    # every path after ca_start funnels through here, so teardown belongs
+    # here rather than in each branch (a request-publish failure used to
+    # dispose with the app still running, and the survivor held the
+    # gate's captured stdout open).
+    if [[ -n "${VG_APP_PID:-}" ]] && ! vg_app_cleanup; then
+        VG_TAINTED=1
+        dispose "conformance_gate" "the application process group survived TERM and KILL — refusing to land or park with a stray process from the gate${reason:+ (the run was already failing: $reason — $detail)}" "$hist"
+        return 1
+    fi
     if ! anomaly=$(vg_integrity_after "$gate_head"); then
         VG_TAINTED=1
         state_set '.verifier_gate_tainted = true' 2>/dev/null || true
@@ -1978,7 +1988,11 @@ verifier_gate() {
     # signal handler can reap it even when the runner is executing inside
     # a command substitution (round-12 finding 2).
     export CA_ACTIVE_GROUP_FILE="$LEDGER_DIR/.active-group"
-    : > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null || true
+    export CA_OWNER_ID="$$"
+    if ! : > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null; then
+        dispose "conformance_gate" "cannot initialise the process-group handoff file at ${CA_ACTIVE_GROUP_FILE#$PROJECT_DIR/} — refusing to run bounded commands that a signal could not reap" "$hist"
+        return 1
+    fi
 
     # 3. EXECUTE every frozen deterministic verifier. Admission's
     #    resolution was the screen; this is the decision (FR-7) — a
@@ -2108,13 +2122,20 @@ verifier_gate() {
         # fail).
         rm -f "$resfile" "$cap" "$costfile" 2>/dev/null || true
         local _stale=""
-        [[ -e "$resfile" ]] && _stale="${resfile#$PROJECT_DIR/}"
+        rm -f "$req" 2>/dev/null || true
+        [[ -e "$req" ]] && _stale="${req#$PROJECT_DIR/}"
+        [[ -e "$resfile" ]] && _stale="$_stale ${resfile#$PROJECT_DIR/}"
         [[ -e "$cap" ]] && _stale="$_stale ${cap#$PROJECT_DIR/}"
         [[ -e "$costfile" ]] && _stale="$_stale ${costfile#$PROJECT_DIR/}"
         if [[ -n "$_stale" ]]; then
             vg_finish "conformance_gate" "could not clear the previous evaluator artefacts ($_stale) — refusing to run with a stale verdict in place (FR-5)"
             return 1
         fi
+        local reqtmp
+        reqtmp=$(mktemp "$cdir/request.XXXXXX" 2>/dev/null) || {
+            vg_finish "conformance_gate" "could not create the conformance request in ${cdir#$PROJECT_DIR/}"
+            return 1
+        }
         {
             echo "# Runtime Conformance Evaluation — $FEATURE_ID"
             echo ""
@@ -2142,9 +2163,14 @@ verifier_gate() {
             echo ""
             echo "Every frozen criterion must appear exactly once. A missing,"
             echo "duplicated, altered, or invented entry fails the gate."
-        } > "$req" 2>/dev/null
-        if [[ ! -s "$req" ]]; then
-            vg_finish "conformance_gate" "could not write the conformance request at ${req#$PROJECT_DIR/} — the evaluator cannot be given the frozen criteria"
+        } > "$reqtmp" 2>/dev/null
+        # Publish through a checked rename: an unchecked redirect that
+        # failed would leave an OLD request in place, pointing the
+        # evaluator at a previous run's interface while its criteria
+        # still matched (round-13 finding 1).
+        if [[ ! -s "$reqtmp" ]] || ! mv "$reqtmp" "$req"; then
+            rm -f "$reqtmp" 2>/dev/null || true
+            vg_finish "conformance_gate" "could not publish the conformance request at ${req#$PROJECT_DIR/} — the evaluator cannot be given THIS run's frozen criteria and interface"
             return 1
         fi
         local inv="${ccmd//\{review_request\}/$req}"

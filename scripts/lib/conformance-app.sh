@@ -40,25 +40,52 @@ CA_ACTIVE_GROUP=""
 # Registration goes through a FILE when CA_ACTIVE_GROUP_FILE is set: the
 # gate runs several probes inside command substitutions, and a variable
 # set in that subshell is invisible to the parent's signal handler.
+# The handoff record is OWNER-BOUND ("<owner> <pid>"): a leftover file
+# from an earlier attempt must never make a handler signal a reused pid
+# (round-13 finding 2). Both writes report failure — a registration that
+# cannot be recorded means a signal could not reap the child, so the
+# caller must fail closed rather than run unreapable work.
 ca_register_group() {
-    CA_ACTIVE_GROUP="$1"
-    [[ -n "${CA_ACTIVE_GROUP_FILE:-}" ]] && printf '%s\n' "$1" > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null
+    local pid="$1"
+    if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+        echo "conformance-app: refusing to register a non-numeric process group '$pid'" >&2
+        return 1
+    fi
+    CA_ACTIVE_GROUP="$pid"
+    if [[ -n "${CA_ACTIVE_GROUP_FILE:-}" ]]; then
+        printf '%s %s\n' "${CA_OWNER_ID:-$$}" "$pid" > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null || {
+            echo "conformance-app: cannot record the active process group in $CA_ACTIVE_GROUP_FILE" >&2
+            return 1
+        }
+    fi
     return 0
 }
 ca_unregister_group() {
     CA_ACTIVE_GROUP=""
-    [[ -n "${CA_ACTIVE_GROUP_FILE:-}" ]] && : > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null
+    if [[ -n "${CA_ACTIVE_GROUP_FILE:-}" ]]; then
+        : > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null || {
+            echo "conformance-app: cannot clear the active-group record at $CA_ACTIVE_GROUP_FILE" >&2
+            return 1
+        }
+    fi
     return 0
 }
 ca_active_cleanup() {
-    local pid="${CA_ACTIVE_GROUP:-}"
+    local pid="${CA_ACTIVE_GROUP:-}" owner=""
     if [[ -z "$pid" && -n "${CA_ACTIVE_GROUP_FILE:-}" && -s "${CA_ACTIVE_GROUP_FILE:-}" ]]; then
-        pid=$(tr -d '[:space:]' < "$CA_ACTIVE_GROUP_FILE" 2>/dev/null)
+        read -r owner pid < "$CA_ACTIVE_GROUP_FILE" 2>/dev/null || true
+        # Only a registration made by THIS run may be signalled.
+        [[ "$owner" == "${CA_OWNER_ID:-$$}" ]] || pid=""
     fi
-    [[ -n "$pid" ]] || return 0
-    ca_kill_group "$pid" >/dev/null 2>&1 || true
-    ca_unregister_group
-    return 0
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+    if ca_kill_group "$pid" >/dev/null 2>&1; then
+        ca_unregister_group || return 1
+        return 0
+    fi
+    # Keep the registration so the EXIT path can retry, and report the
+    # failure instead of pretending the group is gone (round-13 finding 3).
+    echo "conformance-app: the active bounded process group $pid survived TERM and KILL" >&2
+    return 1
 }
 
 ca_run_bounded() {
@@ -82,7 +109,12 @@ ca_run_bounded() {
     set -m
     ( bash -c "$cmd" ) >"$out" 2>&1 &
     pid=$!
-    ca_register_group "$pid"
+    if ! ca_register_group "$pid"; then
+        # Unreapable-by-a-signal work must not run at all.
+        ca_kill_group "$pid" >/dev/null 2>&1 || true
+        rm -rf "$firedir"; set +m
+        return 125
+    fi
     ( sleep "$secs"
       : > "$fired"
       kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
