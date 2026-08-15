@@ -432,18 +432,29 @@ park() {
     local n=1
     while [[ -f "$LEDGER_DIR/escalations/esc-$n.json" ]]; do n=$((n + 1)); done
     local esc="$LEDGER_DIR/escalations/esc-$n.json"
-    # Resumability is a property of WHERE the evidence landed. A private
-    # bundle is deliberately invisible to --resume, and that command would
-    # resume the rival canonical run instead — so it must never be the
-    # advice printed here.
-    local actions
+    # Resumability is a property of WHERE the evidence landed AND of the
+    # REASON. A private bundle is invisible to --resume (that command would
+    # resume the rival canonical run instead), and some reasons refuse
+    # resume by policy — printing "--resume" for those would hand the
+    # operator a command that always fails (round-19 finding 1).
+    local actions resumable=true
     if [[ "$LEDGER_PRIVATE_FALLBACK" == "true" ]]; then
+        resumable=false
+    elif [[ "$reason" == "cost_accounting_failed" ]]; then
+        resumable=false
+        actions=$(jq -n --arg fid "$FEATURE_ID" \
+            '["This run could not RECORD an invocation'"'"'s cost, so its ledger understates real spend by an unknown amount",
+              "--resume deliberately refuses here: resuming would silently forgive the unrecorded spend and enforce caps against a total that never moved",
+              "Fix the underlying ledger/disk problem (permissions, free space, corrupted state.json)",
+              ("Reconcile the spend from your provider'"'"'s own billing if you need the real number, then start a FRESH run: scripts/auto-build-loop.sh " + $fid)]')
+    fi
+    if [[ -z "${actions:-}" ]] && [[ "$LEDGER_PRIVATE_FALLBACK" == "true" ]]; then
         actions=$(jq -n --arg dir "$LEDGER_DIR" --arg lock "$LEDGER_SHARED_LOCK" \
             '[("This run could not claim the ledger lock (" + $lock + "), so its evidence is in " + $dir + " — NOT the canonical ledger"),
               "Do NOT rerun with --resume: this bundle is invisible to it, and --resume would continue a different run",
               "Inspect the bundle, confirm no other auto-build run is active, remove the lock if it is stale",
               "Then start a FRESH run once the canonical ledger is clear"]')
-    else
+    elif [[ -z "${actions:-}" ]]; then
         actions=$(jq -n --arg fid "$FEATURE_ID" \
             '["Inspect the history refs above, resolve the blocker (e.g. /review-decide, origin A/B/C, manual fix + commit)",
               ("Then rerun: scripts/auto-build-loop.sh " + $fid + " --resume")]')
@@ -453,7 +464,7 @@ park() {
         --arg phase "${CURRENT_PHASE:-0}" --arg status "$(state_get '.status' 2>/dev/null || echo preflight)" \
         --arg created "$(now_iso)" --argjson history "$history" \
         --argjson actions "$actions" \
-        --argjson resumable "$([[ "$LEDGER_PRIVATE_FALLBACK" == "true" ]] && echo false || echo true)" \
+        --argjson resumable "$resumable" \
         '{id: $id, reason: $reason, detail: $detail, phase: ($phase | tonumber),
           status_at_escalation: $status, created: $created, history: $history,
           resolved: false, notified: false, resumable: $resumable,

@@ -5589,6 +5589,37 @@ assert_eq "C2-T6: the reason has its own resume arm" "1" \
 assert_eq "C2-T6: no debit failure parks as cap_exceeded" "0" \
     "$(grep -c 'dispose "cap_exceeded" "the gating review\|dispose "cap_exceeded" "an advisory review' "$DRIVER" | tr -d ' ')"
 
+# The escalation ARTIFACT must not advise a command that always refuses.
+# Produced by a REAL debit failure (park() invoked through the same path
+# a refused ledger write takes), not a hand-built stub.
+VG_ESC=$(mktemp -d); mkdir -p "$VG_ESC/escalations"
+( set +e; set --
+  source "$VG_FUNCS" >/dev/null 2>&1
+  LEDGER_DIR="$VG_ESC"; STATE="$VG_ESC/state.json"; FEATURE_ID="demo-feat"
+  PROJECT_DIR="$VG_ESC"; CURRENT_PHASE=1; LEDGER_PRIVATE_FALLBACK=false
+  PROFILE="advisory"; DRY_RUN=false
+  # park() only writes the CANONICAL escalation when this attempt owns
+  # the ledger — otherwise it diverts to a private bundle.
+  jq -n --arg a "$ATTEMPT_ID" \
+    '{schema_version:1, status:"running", attempt_id:$a, escalations:[], totals:{cost_usd:0}}' > "$STATE"
+  notify() { :; }; journal() { :; }; NOTIFY_OK=false
+  ESTIMATES_ACTIVE=true; ESTIMATE_PER_INV=2.0
+  # The ledger refuses the debit exactly as the reviewed failure does.
+  state_set() { return 1; }
+  debit_invocation_cost "1.25" "gating review phase 1 round 1" >/dev/null 2>&1 \
+    || park "cost_accounting_failed" "the gating review's cost could not be recorded in the ledger (phase 1 round 1)" "null"
+) >/dev/null 2>&1
+VG_ESC_FILE="$VG_ESC/escalations/esc-1.json"
+assert_eq "C2-T6: a real debit failure writes a cost_accounting_failed escalation" "cost_accounting_failed" \
+    "$(jq -r '.reason // "none"' "$VG_ESC_FILE" 2>/dev/null)"
+assert_eq "C2-T6: that escalation is marked NOT resumable" "false" \
+    "$(jq -r '.resumable' "$VG_ESC_FILE" 2>/dev/null)"
+assert_eq "C2-T6: it never advises --resume (which always refuses)" "0" \
+    "$(jq -r '[.human_actions[] | select(test("--resume: |rerun: .*--resume"))] | length' "$VG_ESC_FILE" 2>/dev/null)"
+assert_eq "C2-T6: it tells the operator to start a FRESH run" "1" \
+    "$(jq -r '[.human_actions[] | select(test("FRESH run"))] | length' "$VG_ESC_FILE" 2>/dev/null)"
+rm -rf "$VG_ESC"
+
 # Attended park -> resume: the unpaid invocation cannot disappear.
 P=$(setup_project); single_phase "$P"
 LEDGER_CA="$P/.cct/auto-build/demo-feat"; mkdir -p "$LEDGER_CA/escalations"
