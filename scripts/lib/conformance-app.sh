@@ -114,7 +114,7 @@ ca_run_bounded() {
     # record and steer a later cleanup at an arbitrary group (round-14
     # finding 1). These are plain shell variables (a subshell still sees
     # them), and env -u guarantees the child does not.
-    ( env -u CA_ACTIVE_GROUP_FILE -u CA_OWNER_ID bash -c "$cmd" ) >"$out" 2>&1 &
+    ( env -u CA_ACTIVE_GROUP_FILE -u CA_OWNER_ID -u VG_HANDOFF_DIR bash -c "$cmd" ) >"$out" 2>&1 &
     pid=$!
     if ! ca_register_group "$pid"; then
         # Unreapable-by-a-signal work must not run at all.
@@ -288,7 +288,7 @@ ca_start() {
     [[ -n "$cmd" ]] || { echo "conformance-app: app.command is empty" >&2; return 2; }
     : > "$log" 2>/dev/null || { echo "conformance-app: cannot write app log at $log" >&2; return 2; }
     set -m
-    ( cd "$cwd" && env -u OLDPWD -u CA_ACTIVE_GROUP_FILE -u CA_OWNER_ID bash -c "$cmd" ) >>"$log" 2>&1 &
+    ( cd "$cwd" && env -u OLDPWD -u CA_ACTIVE_GROUP_FILE -u CA_OWNER_ID -u VG_HANDOFF_DIR bash -c "$cmd" ) >>"$log" 2>&1 &
     local pid=$!
     set +m
     printf '%s\n' "$pid"

@@ -5527,6 +5527,22 @@ VG_R4=$( ( source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
 assert_eq "C2-T5: a bounded run refuses when its group cannot be registered" "125" "$VG_R4"
 chmod 755 "$VG_REG/ro"; rm -rf "$VG_REG"
 
+# ── Round-15 finding 1: an inherited VG_HANDOFF_DIR is NEVER treated as
+#    driver-owned. A run that fails early (invalid config, long before
+#    the gate) must not recursively delete a directory the host chose. ──
+VG_VICTIM=$(mktemp -d); : > "$VG_VICTIM/sentinel"
+P=$(setup_project)
+cfg_set "$P" '.unattended={on_origin_gate:"terminate"}'   # v1 + unattended = invalid
+VG_HANDOFF_DIR="$VG_VICTIM" run_driver "$P"
+assert_exit "C2-T5: the early-failure run still refuses (exit 1)" 1 "$RC"
+assert_eq "C2-T5: an inherited handoff dir is never deleted by cleanup" "intact" \
+    "$([[ -f "$VG_VICTIM/sentinel" ]] && echo intact || echo DELETED)"
+rm -rf "$P" "$VG_VICTIM"
+assert_eq "C2-T5: ownership is claimed only after the driver's own mktemp" "1" \
+    "$(grep -c 'VG_HANDOFF_OWNED=1' "$DRIVER")"
+assert_eq "C2-T5: cleanup removes the handoff dir only when owned" "1" \
+    "$(awk '/^exit_cleanup\(\)/,/^}/' "$DRIVER" | grep -c 'VG_HANDOFF_OWNED:-0')"
+
 # ── Round-14 finding 1: the bounded command is UNTRUSTED — it must not
 #    even see the handoff capability, let alone forge a record. ──
 VG_FORGE=$(mktemp -d)

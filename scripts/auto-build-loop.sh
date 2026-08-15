@@ -135,6 +135,15 @@ SUMMARY_MD="$SPEC_DIR/automation-summary.md"
 # winner's live state.
 ATTEMPT_ID="$$-${RANDOM}${RANDOM}"
 
+# The verifier gate's private process-group handoff directory. Cleared
+# from the ENVIRONMENT first: an inherited value must never be treated as
+# driver-owned, or an early failure would recursively delete a directory
+# the host chose (round-15 finding 1). Ownership is claimed only after
+# this driver's own mktemp -d succeeds.
+unset VG_HANDOFF_DIR VG_HANDOFF_OWNED 2>/dev/null || true
+VG_HANDOFF_DIR=""
+VG_HANDOFF_OWNED=0
+
 # T4 defaults — set before preflight-result channel runs
 SKIP_ADMISSION=false
 HAS_COVERAGE_BLOCK=false
@@ -1997,6 +2006,7 @@ verifier_gate() {
         dispose "conformance_gate" "cannot create the private process-group handoff directory — refusing to run bounded commands that a signal could not reap" "$hist"
         return 1
     }
+    VG_HANDOFF_OWNED=1
     CA_ACTIVE_GROUP_FILE="$VG_HANDOFF_DIR/group"
     CA_OWNER_ID="$$"
     if ! : > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null; then
@@ -3467,7 +3477,11 @@ exit_cleanup() {
     # mid-gate (round-10 finding 3).
     if declare -f ca_active_cleanup >/dev/null 2>&1; then ca_active_cleanup; fi
     if declare -f vg_app_cleanup >/dev/null 2>&1; then vg_app_cleanup; fi
-    [[ -n "${VG_HANDOFF_DIR:-}" && -d "${VG_HANDOFF_DIR:-}" ]] && rm -rf "$VG_HANDOFF_DIR" 2>/dev/null
+    # Only ever remove a directory THIS driver created.
+    if [[ "${VG_HANDOFF_OWNED:-0}" == "1" && -n "${VG_HANDOFF_DIR:-}" && -d "${VG_HANDOFF_DIR:-}" ]]; then
+        rm -rf "$VG_HANDOFF_DIR" 2>/dev/null || true
+        VG_HANDOFF_OWNED=0
+    fi
     [[ -n "${TEMP_CONFIG:-}" && -f "$TEMP_CONFIG" ]] && rm -f "$TEMP_CONFIG" 2>/dev/null
     rm -f "${PREFLIGHT_RESULT_FILE:-}" 2>/dev/null
     # Ordinary refusal (exit 1) while the rollback is armed: undo the
