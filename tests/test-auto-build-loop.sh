@@ -5392,24 +5392,81 @@ for mutation in "echo smuggled >> pass.sh" "echo x > untracked-artifact.txt"; do
     rm -rf "$VGC"
 done
 
-# ── Round-10 finding 3: teardown is a CHECKED finally, and an interrupt
-#    mid-gate still reaps the app (the driver's EXIT trap). ──
+# ── Round-10 finding 3 / round-11 finding 3: teardown is a CHECKED
+#    finally, an interrupt mid-gate really reaps the app, and a cleanup
+#    that cannot be proven KEEPS the pid so the EXIT path can retry. ──
 VG_STOPFAIL=$( ( set +e; set --
     source "$VG_FUNCS" >/dev/null 2>&1
     source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
     PROJECT_DIR="/tmp"; LEDGER_DIR="/tmp"; FEATURE_ID="demo-feat"
-    # A group that never dies: ca_stop must report failure, and the gate
-    # must turn that into a disposition rather than swallowing it.
     ca_group_alive() { return 0; }
     ca_stop 999999 1 >/dev/null 2>&1; echo "$?" ) )
 assert_eq "C2-T5: ca_stop reports an unreapable app group" "1" "$VG_STOPFAIL"
-VG_TRAP=$( ( set +e; set --
+
+# A REAL signal: a driver-shaped process starts an app, installs the
+# driver's EXIT trap, then takes SIGTERM. The app group must be gone.
+VG_SIGD=$(mktemp -d)
+cat > "$VG_SIGD/victim.sh" << SIGVICTIM
+#!/usr/bin/env bash
+set -uo pipefail
+source "$VG_FUNCS" >/dev/null 2>&1
+source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+PROJECT_DIR="$VG_SIGD"; LEDGER_DIR="$VG_SIGD"; FEATURE_ID="demo-feat"
+# Install the DRIVER's own trap lines verbatim — this must test the
+# driver's signal handling, not a copy written by the test.
+eval "\$(grep -E "^trap " "$DRIVER")"
+APPJ='{"command":"sleep 120","ready":{"command":"true","timeout_sec":5},"stop_timeout_sec":3}'
+VG_APP_PID=\$(ca_start "\$APPJ" "$VG_SIGD" "$VG_SIGD/app.log")
+VG_APP_STOP_SEC=3
+echo "\$VG_APP_PID" > "$VG_SIGD/app.pid"
+sleep 60
+SIGVICTIM
+chmod +x "$VG_SIGD/victim.sh"
+bash "$VG_SIGD/victim.sh" >/dev/null 2>&1 &
+VG_VICTIM=$!
+_sw=0; while [[ ! -s "$VG_SIGD/app.pid" && $_sw -lt 15 ]]; do sleep 1; _sw=$((_sw + 1)); done
+VG_APPPID=$(cat "$VG_SIGD/app.pid" 2>/dev/null || echo "")
+kill -TERM "$VG_VICTIM" 2>/dev/null
+wait "$VG_VICTIM" 2>/dev/null || true
+sleep 2
+if [[ -n "$VG_APPPID" ]] && kill -0 -"$VG_APPPID" 2>/dev/null; then VG_ALIVE=alive; else VG_ALIVE=reaped; fi
+assert_eq "C2-T5: a SIGTERM'd driver still reaps the app it launched" "reaped" "$VG_ALIVE"
+kill -KILL -"$VG_APPPID" 2>/dev/null || true
+rm -rf "$VG_SIGD"
+
+# Cleanup that cannot be proven keeps the pid (so EXIT can retry) and
+# reports failure rather than pretending success.
+VG_KEEP=$( ( set +e; set --
     source "$VG_FUNCS" >/dev/null 2>&1
     source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
-    declare -f vg_app_cleanup >/dev/null 2>&1 && echo "present" ) )
-assert_eq "C2-T5: an EXIT-path app cleanup exists" "present" "$VG_TRAP"
+    ca_group_alive() { return 0; }
+    VG_APP_PID=999999; VG_APP_STOP_SEC=1
+    vg_app_cleanup >/dev/null 2>&1; echo "rc=$? pid=${VG_APP_PID:-cleared}" ) )
+assert_eq "C2-T5: unprovable app cleanup fails and KEEPS the pid for retry" "rc=1 pid=999999" "$VG_KEEP"
 assert_eq "C2-T5: the driver's exit_cleanup calls it" "1" \
     "$(awk '/^exit_cleanup\(\)/,/^}/' "$DRIVER" | grep -c 'vg_app_cleanup')"
+
+# ── Round-11 finding 1: EVERY post-execution exit runs the integrity
+#    epilogue — a readiness failure caused by an app that mutated the
+#    checkout is a git_anomaly, not a conformance_gate. ──
+VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_OK")
+MPORT=$(free_port)
+jq -n --arg c "echo smuggled >> pass.sh; sleep 30" --arg u "http://127.0.0.1:$MPORT/" --arg s "$SHA2" \
+    '{conformance:{evaluator:"stub-eval", app:{command:$c, ready:{url:$u, timeout_sec:3}, stop_timeout_sec:2},
+      interface:$u, timeout_sec:30, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}' \
+    > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
+VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
+assert_eq "C2-T5: an app that mutates the repo AND never becomes ready is a git_anomaly" "git_anomaly" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C2-T5: the anomaly still reports the original failure" "$VG_OUT" "the run was already failing"
+rm -rf "$VGC"
+
+# ── Round-11 finding 2: a tainted checkout suppresses the termination
+#    artifact commit/push — the mutation must never be committed. ──
+assert_eq "C2-T5: terminate_policy suppresses commit/push on a tainted checkout" "1" \
+    "$(awk '/^terminate_policy\(\)/,/^}/' "$DRIVER" | grep -c 'VG_TAINTED')"
+assert_eq "C2-T5: the suppression is journaled with its cause" "1" \
+    "$(grep -c 'commit/push suppressed — the verifier gate found the checkout mutated' "$DRIVER")"
 
 # ── Round-10 finding 6: a conformance park carries evaluator provenance
 #    so resume re-checks THAT contract, not the gating reviewer. ──

@@ -360,7 +360,13 @@ terminate_policy() {
     # blanket commit there would sweep the operator's branch/worktree.
     local _cur
     _cur=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [[ -n "${BRANCH_NAME:-}" && "$_cur" == "$BRANCH_NAME" ]]; then
+    # #242 round-11 finding 2: a checkout the verifier gate found MUTATED
+    # must never be swept up by the artifact commit — `git add -A` would
+    # stage the app's or evaluator's writes and push them. The taint is
+    # the whole point of the git_anomaly disposition.
+    if [[ "${VG_TAINTED:-0}" == "1" ]]; then
+        journal "artifact_skipped" "commit/push suppressed — the verifier gate found the checkout mutated (git_anomaly); the mutation must not be committed or pushed"
+    elif [[ -n "${BRANCH_NAME:-}" && "$_cur" == "$BRANCH_NAME" ]]; then
         driver_commit "chore($FEATURE_ID): terminated_policy artifacts [auto-build]" \
             || journal "artifact_skipped" "termination commit failed (journaled, not blocking)"
         if [[ "${CAN_PUSH:-false}" == "true" ]]; then
@@ -1897,10 +1903,39 @@ vg_integrity_after() {
 # and the gate's own teardown must not leave the application group alive
 # (round-10 finding 3).
 VG_APP_PID=""
+VG_TAINTED=0
 vg_app_cleanup() {
     [[ -n "${VG_APP_PID:-}" ]] || return 0
-    ca_stop "$VG_APP_PID" "${VG_APP_STOP_SEC:-10}" >/dev/null 2>&1 || true
-    VG_APP_PID=""
+    # Clear the pid ONLY when the group is provably gone — otherwise the
+    # EXIT path would have nothing left to retry and the failure would go
+    # unreported (round-11 finding 3).
+    if ca_stop "$VG_APP_PID" "${VG_APP_STOP_SEC:-10}" >/dev/null 2>&1; then
+        VG_APP_PID=""
+        return 0
+    fi
+    echo "[auto-build] WARNING: the conformance app group $VG_APP_PID survived TERM and KILL" >&2
+    return 1
+}
+
+# vg_finish [reason] [detail] — THE single exit path for the verifier
+# gate after any arbitrary execution (round-11 finding 1). It runs the
+# checkout-integrity epilogue FIRST: a mutated checkout outranks every
+# other verdict, taints the run so no artifact commit can sweep it up,
+# and disposes git_anomaly. With no reason it simply reports success.
+# Relies on bash dynamic scope for gate_head/hist from verifier_gate.
+vg_finish() {
+    local reason="${1:-}" detail="${2:-}" anomaly
+    if ! anomaly=$(vg_integrity_after "$gate_head"); then
+        VG_TAINTED=1
+        state_set '.verifier_gate_tainted = true' 2>/dev/null || true
+        local orig=""
+        [[ -n "$reason" ]] && orig=" (the run was already failing: $reason — $detail)"
+        dispose "git_anomaly" "${anomaly}${orig}" "$hist"
+        return 1
+    fi
+    [[ -n "$reason" ]] || return 0
+    dispose "$reason" "$detail" "$hist"
+    return 1
 }
 
 verifier_gate() {
@@ -1965,11 +2000,7 @@ verifier_gate() {
         done < <(jq -r '.verifiers.set[] | [.fr, .statement_sha, .test] | @tsv' <<< "$FROZEN_CONTRACT")
         # FR-11 after ARBITRARY execution — deterministic verifiers are
         # project code too.
-        local det_anomaly
-        if ! det_anomaly=$(vg_integrity_after "$gate_head"); then
-            dispose "git_anomaly" "$det_anomaly" "$hist"
-            return 1
-        fi
+        vg_finish || return 1
     fi
 
     # ── Conformance (present iff the artifact derived the requirement) ──
@@ -1988,17 +2019,20 @@ verifier_gate() {
         local ptoml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
         local ccmd chc
         if [[ -z "$evaluator" || -z "$app" ]]; then
-            dispose "provider_unavailable" "the frozen contract requires runtime conformance but carries NO evaluator (an attended run started without verification.conformance). The contract is frozen, so configuring one now cannot change this run: add verification.conformance and start a FRESH run." "$(jq -n --argjson h "$hist" '$h + {provider_scope: "evaluator", evaluator: null}')"
+            hist=$(jq -n --argjson h "$hist" '$h + {provider_scope: "evaluator", evaluator: null}')
+            vg_finish "provider_unavailable" "the frozen contract requires runtime conformance but carries NO evaluator (an attended run started without verification.conformance). The contract is frozen, so configuring one now cannot change this run: add verification.conformance and start a FRESH run."
             return 1
         fi
         if ! grep -o '^\[providers\.[^]]*' "$ptoml" 2>/dev/null | sed 's/^\[providers\.//' | grep -qxF "$evaluator"; then
-            dispose "provider_unavailable" "frozen evaluator '$evaluator' no longer resolves in $ptoml" "$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')"
+            hist=$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')
+            vg_finish "provider_unavailable" "frozen evaluator '$evaluator' no longer resolves in $ptoml"
             return 1
         fi
         ccmd=$(vg_toml_get "$ptoml" "providers.$evaluator" "conformance_command")
         chc=$(vg_toml_get "$ptoml" "providers.$evaluator" "healthcheck")
         if [[ -z "$ccmd" || "$ccmd" != *"{review_request}"* ]]; then
-            dispose "provider_unavailable" "frozen evaluator '$evaluator' no longer declares a usable conformance_command (missing, or without the {review_request} placeholder)" "$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')"
+            hist=$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')
+            vg_finish "provider_unavailable" "frozen evaluator '$evaluator' no longer declares a usable conformance_command (missing, or without the {review_request} placeholder)"
             return 1
         fi
         # The healthcheck is operator-supplied code: bound it, or a
@@ -2010,7 +2044,8 @@ verifier_gate() {
             if [[ $hrc -ne 0 ]]; then
                 local hwhy="exit $hrc"
                 [[ $hrc -eq 124 ]] && hwhy="hung past its 30s bound"
-                dispose "provider_unavailable" "frozen evaluator '$evaluator' failed its healthcheck at the gate ($hwhy)" "$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')"
+                hist=$(jq -n --argjson h "$hist" --arg e "$evaluator" '$h + {provider_scope: "evaluator", evaluator: $e}')
+                vg_finish "provider_unavailable" "frozen evaluator '$evaluator' failed its healthcheck at the gate ($hwhy)"
                 return 1
             fi
         fi
@@ -2019,13 +2054,13 @@ verifier_gate() {
         #    process group with output captured to the ledger.
         local bind_msg
         if ! bind_msg=$(ca_bind_preflight "$app" "$iface"); then
-            dispose "conformance_gate" "launch binding refused: $bind_msg" "$hist"
+            vg_finish "conformance_gate" "launch binding refused: $bind_msg"
             return 1
         fi
         local applog="$cdir/app.log" apid
         local stop_sec; stop_sec=$(jq -r '.stop_timeout_sec // 10' <<< "$app")
         apid=$(ca_start "$app" "$PROJECT_DIR" "$applog") || {
-            dispose "conformance_gate" "could not start the application under test (see ${applog#$PROJECT_DIR/})" "$hist"
+            vg_finish "conformance_gate" "could not start the application under test (see ${applog#$PROJECT_DIR/})"
             return 1
         }
         # From here on the app group is the gate's responsibility on EVERY
@@ -2038,11 +2073,12 @@ verifier_gate() {
         ready_msg=$(ca_wait_ready "$app" "$apid" "$iface") || ready_rc=$?
         if [[ $ready_rc -ne 0 ]]; then
             ca_stop "$apid" "$stop_sec" >/dev/null 2>&1 || stop_rc=$?
-            VG_APP_PID=""
+            # Keep the pid for the EXIT retry unless teardown is proven.
+            [[ $stop_rc -eq 0 ]] && VG_APP_PID=""
             if [[ $stop_rc -ne 0 ]]; then
-                dispose "conformance_gate" "the application never became usable ($ready_msg) AND its process group survived TERM and KILL — a stray process outlived the gate (see ${applog#$PROJECT_DIR/})" "$hist"
+                vg_finish "conformance_gate" "the application never became usable ($ready_msg) AND its process group survived TERM and KILL — a stray process outlived the gate (see ${applog#$PROJECT_DIR/})"
             else
-                dispose "conformance_gate" "the application never became usable: $ready_msg (see ${applog#$PROJECT_DIR/})" "$hist"
+                vg_finish "conformance_gate" "the application never became usable: $ready_msg (see ${applog#$PROJECT_DIR/})"
             fi
             return 1
         fi
@@ -2086,33 +2122,29 @@ verifier_gate() {
         CCT_REVIEW_COST_FILE="$costfile" ca_run_bounded "$ctimeout" "cd $(printf '%q' "$PROJECT_DIR") && $inv" "$cap" || irc=$?
         stop_rc=0
         ca_stop "$apid" "$stop_sec" || stop_rc=$?
-        VG_APP_PID=""
+        [[ $stop_rc -eq 0 ]] && VG_APP_PID=""
 
         # 9. Checkout integrity AFTER — before ANY verdict is honoured.
-        local conf_anomaly
-        if ! conf_anomaly=$(vg_integrity_after "$gate_head"); then
-            dispose "git_anomaly" "$conf_anomaly" "$hist"
-            return 1
-        fi
+        vg_finish || return 1
         if [[ $stop_rc -ne 0 ]]; then
-            dispose "conformance_gate" "the application process group survived TERM and KILL — refusing to land with a stray process holding the gate's resources" "$hist"
+            vg_finish "conformance_gate" "the application process group survived TERM and KILL — refusing to land with a stray process holding the gate's resources"
             return 1
         fi
 
         # 11. The verdict must be an EXACT identity multiset of the frozen
         #     criteria, produced by THIS invocation.
         if [[ $irc -ne 0 ]]; then
-            dispose "conformance_gate" "the evaluator invocation failed (status $irc — non-zero exit, its ${ctimeout}s bound, or an unreapable process; see ${cap#$PROJECT_DIR/})" "$hist"
+            vg_finish "conformance_gate" "the evaluator invocation failed (status $irc — non-zero exit, its ${ctimeout}s bound, or an unreapable process; see ${cap#$PROJECT_DIR/})"
             return 1
         fi
         local block
         if ! block=$(vg_fenced_json "$cap" 2>/dev/null); then
-            dispose "conformance_gate" "the evaluator produced no single fenced json verdict block (see ${cap#$PROJECT_DIR/})" "$hist"
+            vg_finish "conformance_gate" "the evaluator produced no single fenced json verdict block (see ${cap#$PROJECT_DIR/})"
             return 1
         fi
         printf '%s\n' "$block" > "$resfile"
         if ! jq -e '.' "$resfile" >/dev/null 2>&1; then
-            dispose "conformance_gate" "the evaluator's verdict block is not valid JSON (see ${resfile#$PROJECT_DIR/})" "$hist"
+            vg_finish "conformance_gate" "the evaluator's verdict block is not valid JSON (see ${resfile#$PROJECT_DIR/})"
             return 1
         fi
         # The CLOSED shape comes first: identity comparison over a
@@ -2144,7 +2176,7 @@ verifier_gate() {
                 else "" end
             end' "$resfile" 2>/dev/null || echo "the verdict could not be compared with the frozen criteria")
         if [[ -n "$mismatch" ]]; then
-            dispose "conformance_gate" "evaluator verdict rejected: $mismatch (see ${resfile#$PROJECT_DIR/})" "$hist"
+            vg_finish "conformance_gate" "evaluator verdict rejected: $mismatch (see ${resfile#$PROJECT_DIR/})"
             return 1
         fi
         results=$(jq --slurpfile r "$resfile" '
@@ -2161,7 +2193,7 @@ verifier_gate() {
     # (round-10 finding 2).
     local resout="$LEDGER_DIR/verification-results.json" restmp
     restmp=$(mktemp "$LEDGER_DIR/verification-results.XXXXXX") || {
-        dispose "conformance_gate" "could not create the evidence file — refusing to land without recorded verification results (FR-7)" "$hist"
+        vg_finish "conformance_gate" "could not create the evidence file — refusing to land without recorded verification results (FR-7)"
         return 1
     }
     if ! jq --argjson v "$results" -n '
@@ -2173,7 +2205,7 @@ verifier_gate() {
        || ! jq -e '.frs | type == "object"' "$restmp" >/dev/null 2>&1 \
        || ! mv "$restmp" "$resout"; then
         rm -f "$restmp" 2>/dev/null || true
-        dispose "conformance_gate" "could not write the evidence file at ${resout#$PROJECT_DIR/} — refusing to land on unrecorded (or stale) verification results (FR-7)" "$hist"
+        vg_finish "conformance_gate" "could not write the evidence file at ${resout#$PROJECT_DIR/} — refusing to land on unrecorded (or stale) verification results (FR-7)"
         return 1
     fi
 
@@ -2182,7 +2214,7 @@ verifier_gate() {
                       | .key + " (" + ([.value.verifiers[] | select(.green | not) | .verifier] | join("; ")) + ")"] | join(", ")' \
               "$resout")
     if [[ -n "$failing" ]]; then
-        dispose "conformance_gate" "verification failed: $failing (see .cct/auto-build/$FEATURE_ID/verification-results.json)" "$hist"
+        vg_finish "conformance_gate" "verification failed: $failing (see .cct/auto-build/$FEATURE_ID/verification-results.json)"
         return 1
     fi
     journal "verifier_gate" "all mapped verifiers green ($(jq -r '.frs | length' "$resout") FR(s))"
@@ -3366,6 +3398,14 @@ exit_cleanup() {
     return $rc
 }
 trap exit_cleanup EXIT
+# A default SIGTERM/SIGINT/SIGHUP kills the shell WITHOUT running the EXIT
+# trap, so an interrupted run would leak the conformance app's process
+# group (round-11 finding 3, caught by a real signal regression). These
+# handlers reap it and then exit, which lets the EXIT trap run the rest of
+# the cleanup normally.
+trap 'vg_app_cleanup >/dev/null 2>&1 || true; exit 143' TERM
+trap 'vg_app_cleanup >/dev/null 2>&1 || true; exit 130' INT
+trap 'vg_app_cleanup >/dev/null 2>&1 || true; exit 129' HUP
 
 load_config
 true  # load_config done — all config values derived from the frozen snapshot
