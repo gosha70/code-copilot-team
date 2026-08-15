@@ -1384,10 +1384,10 @@ DISPATCH_OK=1
 for r in origin_gate provider_unavailable review_breaker cap_exceeded \
          build_session_error build_session_timeout test_failure git_anomaly \
          pr_error pr_config pr_precheck merge_blocked \
-         coverage_gate conformance_gate; do
+         coverage_gate conformance_gate cost_accounting_failed; do
     grep -q "dispose \"$r\"" "$DRIVER" || { DISPATCH_OK=0; echo "  (missing dispose for $r)"; }
 done
-assert_eq "all 14 breaker reasons dispatch via dispose()" "1" "$DISPATCH_OK"
+assert_eq "all 15 breaker reasons dispatch via dispose()" "1" "$DISPATCH_OK"
 assert_eq "no breaker call site bypasses dispose()" "0" \
     "$(grep -cE '(^|[^a-zA-Z_"])park "[a-z]' "$DRIVER")"
 assert_eq "termination artifacts add no force-push (prechecks not weakened)" "0" \
@@ -5578,6 +5578,48 @@ assert_eq "C2-T6: the rc=3 arm restores the estimate flag before disposing" "bef
     "$(awk '/_est_save="\$\{ESTIMATES_ACTIVE/,/refusing to continue with caps/' "$DRIVER" \
         | grep -nE 'ESTIMATES_ACTIVE="\$_est_save"|dispose "cap_exceeded"' | head -2 \
         | awk -F: 'NR==1 && /_est_save/ {print "before"; found=1} END { if (!found) print "after" }')"
+
+# ── Round-18: an unrecorded cost parks under its OWN reason, and that
+#    park can never auto-resolve — cap_exceeded's arm would compare the
+#    understated total against a cap and clear itself instantly. ──
+assert_eq "C2-T6: all three debit failures park as cost_accounting_failed" "3" \
+    "$(grep -cE '(dispose|vg_finish) "cost_accounting_failed"' "$DRIVER" | tr -d ' ')"
+assert_eq "C2-T6: the reason has its own resume arm" "1" \
+    "$(grep -cE '^ +cost_accounting_failed\)' "$DRIVER" | tr -d ' ')"
+assert_eq "C2-T6: no debit failure parks as cap_exceeded" "0" \
+    "$(grep -c 'dispose "cap_exceeded" "the gating review\|dispose "cap_exceeded" "an advisory review' "$DRIVER" | tr -d ' ')"
+
+# Attended park -> resume: the unpaid invocation cannot disappear.
+P=$(setup_project); single_phase "$P"
+LEDGER_CA="$P/.cct/auto-build/demo-feat"; mkdir -p "$LEDGER_CA/escalations"
+NOW=$(date +%s)
+jq -n '{schema_version:1, profile:"advisory",
+  branch:{name:"feature/demo-feat",base:"main-dev"},
+  test:{command:"bash ./project-test.sh",timeout_sec:60},
+  review:{reviewers:[{provider:"mock",specialization:"correctness",scope:"both",gating:true}]},
+  caps:{wall_clock_sec:3600,cost_usd:5},
+  phases:{milestone_every:0,max_phases:8},
+  build:{max_turns:10,max_fix_sessions_per_phase:2}}' > "$LEDGER_CA/config.snapshot.json"
+jq -n --argjson now "$NOW" \
+    '{schema_version:1, feature_id:"demo-feat", profile:"advisory",
+      status:"parked", current_phase:1,
+      branch:"feature/demo-feat", branch_base_ref:"master",
+      phases:{"1":"in_progress"}, caps:{max_phases:8, max_fix_sessions_per_phase:3,
+        max_wall_clock_sec:14400, max_cost_usd:25},
+      outcome:null, disposition_reason:"cost_accounting_failed",
+      totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:$now},
+      milestones:{every_n_phases:0, last_paused_after_phase:0},
+      escalations:[{id:"esc-1", reason:"cost_accounting_failed"}], pr:{number:null, url:null},
+      updated:"2026-01-01T00:00:00Z"}' > "$LEDGER_CA/state.json"
+jq -n '{id:"esc-1", reason:"cost_accounting_failed", phase:1,
+        detail:"the gating review cost could not be recorded", history:null,
+        resolved:false}' > "$LEDGER_CA/escalations/esc-1.json"
+run_driver "$P" --resume
+assert_exit "C2-T6: a cost_accounting_failed park REFUSES resume (exit 1)" 1 "$RC"
+assert_contains "C2-T6: the refusal explains why resume cannot forgive it" "$OUTPUT" "silently forgive the unrecorded spend"
+assert_eq "C2-T6: the escalation is NOT auto-resolved by the resume attempt" "false" \
+    "$(jq -r '.resolved' "$LEDGER_CA/escalations/esc-1.json")"
+rm -rf "$P"
 
 # ── Round-16: a debit that cannot be PERSISTED is never reported as a
 #    successful one, and accounting setup never fails open. ──

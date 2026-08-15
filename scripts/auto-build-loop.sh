@@ -2230,7 +2230,7 @@ verifier_gate() {
         # The invocation happened: account for it BEFORE any disposition,
         # so a failed or rejected evaluation still debits its cost.
         if ! vg_debit_conformance "$costfile" "conformance evaluator '$evaluator'"; then
-            vg_finish "conformance_gate" "the evaluator invocation could not be accounted for (the ledger refused the cost debit) — refusing to judge a run whose caps cannot be enforced"
+            vg_finish "cost_accounting_failed" "the evaluator invocation could not be accounted for (the ledger refused the cost debit) — refusing to judge a run whose caps cannot be enforced"
             return 1
         fi
         stop_rc=0
@@ -3067,7 +3067,7 @@ run_advisory_pass() {
         # Each advisory pass is one reviewer invocation in a fresh scratch
         # dir; debit it (measured or estimated) like a gating round (FR-7).
         if ! debit_review_costs "$frf" "advisory review $_prov phase $n round $round"; then
-            dispose "cap_exceeded" "an advisory review's cost could not be recorded in the ledger ($_prov phase $n round $round) — refusing to continue with caps that cannot be enforced" "null"
+            dispose "cost_accounting_failed" "an advisory review's cost could not be recorded in the ledger ($_prov phase $n round $round) — refusing to continue with caps that cannot be enforced" "null"
             return 1
         fi
         if [[ -n "$frf" && -f "$frf" ]]; then
@@ -3179,7 +3179,7 @@ run_review_loop() {
             debit_review_costs "$post_frf" "gating review phase $n round $round" || _debit_rc=$?
         fi
         if [[ $_debit_rc -ne 0 ]]; then
-            dispose "cap_exceeded" "the gating review's cost could not be recorded in the ledger (phase $n round $round) — refusing to continue with caps that cannot be enforced" "null"
+            dispose "cost_accounting_failed" "the gating review's cost could not be recorded in the ledger (phase $n round $round) — refusing to continue with caps that cannot be enforced" "null"
             return 1
         fi
         case $rc in
@@ -3946,6 +3946,16 @@ resume_parked() {
                 fi
             fi
             resolve_escalation "$esc_file" "$reason cleared: tests green after manual fix"
+            ;;
+        cost_accounting_failed)
+            # An invocation happened and its cost could NOT be written to
+            # the ledger, so recorded spend understates real spend by an
+            # unknown amount. cap_exceeded's arm would compare that
+            # understated total against a cap and clear itself instantly
+            # (round-18 finding 1) — the unpaid invocation would simply
+            # disappear. There is no safe automatic recovery: the ledger
+            # is the only record, and it refused the write.
+            refuse_resume "this run's ledger could not record an invocation's cost, so recorded spend understates real spend and caps cannot be enforced on it. Fix the ledger/disk problem and start a FRESH run (a resumed run would silently forgive the unrecorded spend)"
             ;;
         cap_exceeded)
             # Re-read caps (and phase cap) from the live config into the
