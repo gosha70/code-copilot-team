@@ -410,8 +410,18 @@ validate_admission() {
           ver_ok=false
         fi
         ;;
+      visual)
+        # C3 (#239): a visual mapping is what "UI is in scope" MEANS, so
+        # the criterion must be real here for the same reason — the UI
+        # bundle requirement keys on this mapping, and a placeholder
+        # would demand the bundle while verifying nothing.
+        if [[ -z "$target" || "$target" == TODO* ]]; then
+          fail "$id: $fr visual criterion is a placeholder ('${target:-empty}') — write the real visual criterion"
+          ver_ok=false
+        fi
+        ;;
       *)
-        fail "$id: $fr verifier has unknown kind '$kind' (deterministic|runtime_conformance)"
+        fail "$id: $fr verifier has unknown kind '$kind' (deterministic|runtime_conformance|visual)"
         ver_ok=false
         ;;
     esac

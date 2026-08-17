@@ -1338,6 +1338,18 @@ unattended_cfg() {
 # Admit a fixture (#193 increment B): generate the verification draft,
 # finalize it with the fixture's own test script as the deterministic
 # verifier, and commit — the run then passes real admission.
+# The draft generator emits a visual placeholder per FR (C3 T1) — an
+# author-decision scaffold that is inadmissible until resolved. These
+# fixtures are non-UI, so they take the other valid decision: remove it.
+drop_visual_scaffold() {  # <verification.yaml>
+    python3 - "$1" << 'PYEOF'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"\n', '', s)
+open(p, 'w').write(s)
+PYEOF
+}
+
 admit_project() {
     local dir="$1" f="$1/specs/demo-feat/verification.yaml"
     CCT_SPECS_DIR="$dir/specs" bash "$SCRIPT_DIR/../scripts/generate-verification-draft.sh" demo-feat >/dev/null
@@ -1345,6 +1357,7 @@ admit_project() {
         sed -i 's/^status: draft/status: finalized/' "$f"
     sed -i '' 's|test: "TODO.*|test: "project-test.sh"|' "$f" 2>/dev/null || \
         sed -i 's|test: "TODO.*|test: "project-test.sh"|' "$f"
+    drop_visual_scaffold "$f"
     git -C "$dir" add -A && git -C "$dir" commit -q -m "verification artifact"
 }
 
@@ -5922,6 +5935,7 @@ s = re.sub(r'      test: "TODO[^"]*"',
            '      test: "bash ./project-test.sh"\n      metric: "suite exits 0"', s, count=1)
 s = re.sub(r'    - kind: deterministic\n      test: "TODO[^"]*"',
            '    - kind: runtime_conformance\n      criterion: "Cancel aborts the job."', s, count=1)
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"\n', '', s)
 open(p, 'w').write(s)
 PYEOF
     git -C "$dir" add -A && git -C "$dir" commit -q -m "finalized verification artifact"
@@ -6610,6 +6624,53 @@ jq -e '[.properties.contract | has("dependencies"), has("required")] | any | not
 assert_exit "C2-T3 schema: no unconditional coverage requirement remains" 0 $?
 
 rm -f "$CT" "$DRIVER_FUNCS"
+
+echo ""
+echo "=== C3 (#239) T1: a visual mapping travels the driver's freeze path ==="
+# ══════════════════════════════════════════════════════════════
+# T1 makes `visual` a real kind end-to-end through the CANONICAL capture
+# the driver freezes from. The visual contract itself is frozen in T7 —
+# what T1 must prove here is that a visual mapping does not refuse, does
+# not disturb the C1/C2 sections, and reaches the driver through the
+# same validated capture (a kind the capture rejected would fail the run
+# closed at contract initialisation).
+write_visual_yaml() {  # <dir> — FR-1 deterministic, FR-2 visual
+    local dir="$1" f="$1/specs/demo-feat/verification.yaml"
+    CCT_SPECS_DIR="$dir/specs" bash "$SCRIPT_DIR/../scripts/generate-verification-draft.sh" demo-feat >/dev/null
+    sed -i '' 's/^status: draft/status: finalized/' "$f" 2>/dev/null || \
+        sed -i 's/^status: draft/status: finalized/' "$f"
+    python3 - "$f" << 'PYEOF'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'      test: "TODO[^"]*"',
+           '      test: "bash ./project-test.sh"\n      metric: "suite exits 0"', s, count=1)
+# FR-1 keeps its deterministic verifier and drops its scaffold; FR-2
+# drops its deterministic placeholder and RESOLVES its scaffold — the
+# author decision the placeholder exists to force.
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"\n', '', s, count=1)
+s = re.sub(r'    - kind: deterministic\n      test: "TODO[^"]*"\n', '', s, count=1)
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"',
+           '    - kind: visual\n      criterion: "The empty state renders a single primary CTA."', s, count=1)
+open(p, 'w').write(s)
+PYEOF
+    git -C "$dir" add -A && git -C "$dir" commit -q -m "finalized artifact with a visual mapping"
+}
+
+P=$(setup_project); single_phase "$P"
+write_visual_yaml "$P"
+run_driver "$P"
+LEDGER="$P/.cct/auto-build/demo-feat"
+assert_contains "C3-T1: a visual mapping still takes the -block path" "$OUTPUT" "path: fresh-attended-block"
+assert_eq "C3-T1: the run is not refused by an unknown verifier kind" "0" \
+    "$(printf '%s' "$OUTPUT" | grep -c "unknown verifier kind" || true)"
+jq -e '(.verifiers.set | length == 1)
+   and .verifiers.set[0].fr == "FR-1"
+   and .verifiers.set[0].test == "bash ./project-test.sh"' \
+   "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "C3-T1: the deterministic set freezes unchanged beside a visual mapping" 0 $?
+jq -e 'has("conformance") | not' "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "C3-T1: a visual mapping does not derive a conformance requirement" 0 $?
+rm -rf "$P"
 
 echo ""
 

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "verification.schema.json",
   "title": "specs/<feature>/verification.yaml — requirement→verifier evidence graph",
-  "description": "Contract for the traceability artifact introduced by #190 §3 (increment B, #193). The artifact is YAML on disk in a deliberately CONSTRAINED two-level shape so shell tooling can parse it without a YAML library; this schema describes that shape and is the authoritative contract — scripts/lib/verification-common.sh is the enforcement. Workflow: scripts/generate-verification-draft.sh emits status: draft with placeholder verifiers; the AUTHOR reviews, fills real verifiers, and flips status to finalized; validate-spec.sh --unattended validates at admission and never authors. spec.md is the only authoritative source of requirement text: statement is generated display text, statement_sha binds it to the normalized FR-N text (sha256 over 'FR-N: <normalized statement>'), and admission recomputes every hash, failing on any mismatch. Increment C2 (#242) admits kind: runtime_conformance when the run's config names an evaluator that resolves in providers.toml, DECLARES conformance_command, and is healthy — a mapping whose evaluator is missing, incapable, or unhealthy still refuses (a verifier something depends on cannot be unavailable). kind: deterministic verifiers are executed at the landing gate from the frozen contract. LAYOUT IS PART OF THE CONTRACT: the shell parser accepts exactly the generator's emitted indentation — top-level 'FR-N:' keys, two-space entry fields, 'verifiers:' items as four-space '- kind:' with six-space value keys. Regenerate from the draft generator rather than hand-reflowing; other YAML layouts are schema-valid YAML but fail admission closed (zero parsed verifiers).",
+  "description": "Contract for the traceability artifact introduced by #190 §3 (increment B, #193). The artifact is YAML on disk in a deliberately CONSTRAINED two-level shape so shell tooling can parse it without a YAML library; this schema describes that shape and is the authoritative contract — scripts/lib/verification-common.sh is the enforcement. Workflow: scripts/generate-verification-draft.sh emits status: draft with placeholder verifiers — a deterministic one and, since C3 (#239), a visual one per FR that is an author-decision SCAFFOLD rather than a claim the FR is UI-visible; the AUTHOR reviews, fills real verifiers, REMOVES the scaffolds that do not apply, and flips status to finalized (an unresolved TODO of either kind keeps the artifact inadmissible, which is what makes emitting the scaffold safe); validate-spec.sh --unattended validates at admission and never authors. spec.md is the only authoritative source of requirement text: statement is generated display text, statement_sha binds it to the normalized FR-N text (sha256 over 'FR-N: <normalized statement>'), and admission recomputes every hash, failing on any mismatch. Increment C2 (#242) admits kind: runtime_conformance when the run's config names an evaluator that resolves in providers.toml, DECLARES conformance_command, and is healthy — a mapping whose evaluator is missing, incapable, or unhealthy still refuses (a verifier something depends on cannot be unavailable). kind: deterministic verifiers are executed at the landing gate from the frozen contract. Increment C3 (#239) adds kind: visual — judged against the rendered application by the driver-run UI harness; at least one visual mapping is the DEFINITION of \"UI is in scope\", which is what admission's UI-bundle requirement keys on. LAYOUT IS PART OF THE CONTRACT: the shell parser accepts exactly the generator's emitted indentation — top-level 'FR-N:' keys, two-space entry fields, 'verifiers:' items as four-space '- kind:' with six-space value keys. Regenerate from the draft generator rather than hand-reflowing; other YAML layouts are schema-valid YAML but fail admission closed (zero parsed verifiers).",
   "type": "object",
   "required": ["status", "feature_id"],
   "properties": {
@@ -55,6 +55,19 @@
                     "type": "string",
                     "minLength": 1,
                     "description": "Concrete runtime criterion. Evaluated by the #190 §6 evaluator against the RUNNING application at the landing gate (#242 C2); admissible when a capable, healthy evaluator is configured."
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": ["kind", "criterion"],
+                "additionalProperties": false,
+                "properties": {
+                  "kind": { "const": "visual" },
+                  "criterion": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Concrete visual criterion, judged against the RENDERED application by the UI harness the driver runs at the landing gate (#239 C3). A visual mapping is what \"UI is in scope\" MEANS: the requirement is derived from this artifact, never from an operator config flag, so admission demands the UI bundle (DESIGN.md without placeholders, harness/, a root copilot:review script) exactly when at least one FR-N maps kind: visual. A placeholder criterion fails admission, as with runtime_conformance."
                   }
                 }
               }

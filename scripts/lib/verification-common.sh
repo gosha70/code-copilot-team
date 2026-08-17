@@ -170,8 +170,13 @@ vc_conformance_required() {
 # stdin, VALIDATE it against the authoritative spec, and emit the
 # canonical freeze capture JSON
 #   { verifiers: [ {fr, statement_sha, test, metric|null} … ],
-#     criteria:  [ {fr, statement_sha, criterion} … ] }
+#     criteria:  [ {fr, statement_sha, criterion} … ],
+#     visual:    [ {fr, statement_sha, criterion} … ] }
 # on success (exit 0); named errors on stderr and exit 1 otherwise.
+# ONE capture, three kinds (#239 C3): `criteria` stays runtime_conformance
+# and `visual` is its own list, because the two are consumed by different
+# gate blocks and merging them would make "is UI in scope" unanswerable
+# from the capture. Both lists are always present, empty when unmapped.
 # THE single validation-and-capture path (#242 build review round 2,
 # finding 1): admission derives the capture from the SAME parse it
 # validated, and the attended contract initialiser goes through
@@ -239,7 +244,7 @@ vc_capture_from_parsed() {
         }
         $1 == "VER" {
             nvers[$2]++
-            if ($3 != "deterministic" && $3 != "runtime_conformance") {
+            if ($3 != "deterministic" && $3 != "runtime_conformance" && $3 != "visual") {
                 err("unknown verifier kind on " $2 ": " $3)
                 next
             }
@@ -277,8 +282,10 @@ vc_capture_from_parsed() {
             for (i = 1; i <= nrow; i++) {
                 if (vkind[i] == "deterministic")
                     printf "V\t%s\t%s\t%s\t%s\n", vfr[i], sha[vfr[i]], vtarget[i], vmetric[i]
-                else
+                else if (vkind[i] == "runtime_conformance")
                     printf "C\t%s\t%s\t%s\n", vfr[i], sha[vfr[i]], vtarget[i]
+                else
+                    printf "X\t%s\t%s\t%s\n", vfr[i], sha[vfr[i]], vtarget[i]
             }
         }') || rc=$?
     rm -f "$want_file"
@@ -289,6 +296,8 @@ vc_capture_from_parsed() {
             | {fr: .[1], statement_sha: .[2], test: .[3],
                metric: (if ((.[4] // "") == "") then null else .[4] end)} ],
           criteria:  [ $rows[] | select(.[0] == "C")
+            | {fr: .[1], statement_sha: .[2], criterion: .[3]} ],
+          visual:    [ $rows[] | select(.[0] == "X")
             | {fr: .[1], statement_sha: .[2], criterion: .[3]} ] }'
 }
 
