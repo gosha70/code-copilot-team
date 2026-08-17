@@ -65,11 +65,16 @@ plan's decisions and gate sequence are normative.
   with the reason as evidence, and write `passed: false` — a skipped
   criterion is never reported as a pass, and the summary agrees with the
   detail (plan decision 5).
+- FAIL-FAST paths (page load, axe gate, anti-slop rubric) answer every
+  requested criterion as `unreached` with the abort reason as evidence:
+  they run in an honest `mode: "full"`, where `skip` is illegal and
+  `pass`/`fail` would claim an evaluation that never happened.
+  `unreached` is always red and never waivable (SC-26).
 - `CRITIC=agent` with a request present refuses by name (it produces no
   feedback artifact, so it cannot satisfy a driver-owned gate).
 - Regenerate/verify adapter copies if the bundle is mirrored.
-- Tests: SC-13 — each path asserted against the artifact the runner
-  really writes.
+- Tests: SC-13, SC-26 (page.goto failure and axe failure) — each path
+  asserted against the artifact the runner really writes.
 
 ## T5 — Shared app lifecycle + the `vg_finish` split (FR-10)
 
@@ -108,10 +113,12 @@ plan's decisions and gate sequence are normative.
   created at step 10 — AFTER the deterministic verifiers and the
   evaluator, never at step 3 — then revalidated at point of use (HEAD
   equals the gate HEAD, porcelain EMPTY, bundle checks repeated inside
-  it), and re-verified AFTER the harness returns (every tracked file
-  still matches the gate HEAD; untracked outputs allowed) before any
-  verdict is honoured. Run-scoped private dir (`VG_VIS_PRIV`) created
-  and the request published at the point of use, not at step 3;
+  it), and re-verified AFTER the harness returns — `rev-parse HEAD`
+  still equals the captured gate HEAD AND no tracked diff; untracked
+  outputs allowed — before any evidence is imported (SC-25; the HEAD
+  check is what a committing harness would otherwise bypass).
+  Run-scoped private dir (`VG_VIS_PRIV`) created and the request
+  published at the point of use, not at step 3;
   `DESIGN_MD` resolved inside the worktree; nothing canonical handed
   over. Both paths follow `VG_HANDOFF_OWNED`'s discipline: unset from the
   environment and initialised empty BEFORE the traps, held paths never
@@ -135,7 +142,7 @@ plan's decisions and gate sequence are normative.
   copy → validated → renamed, for artifact and transcript, all before
   worktree removal; a failed import is a `visual_gate` failure.
 - Tests: SC-7, SC-10, SC-14, SC-15, SC-18, SC-19, SC-20, SC-23,
-  SC-24.
+  SC-24, SC-25.
 
 ## T7 — Frozen visual contract + the gate verdict (FR-4, FR-6, FR-7, FR-8, FR-12)
 
@@ -158,7 +165,8 @@ plan's decisions and gate sequence are normative.
   reports the policy waiver (SC-21).
 - `visual_gate` disposition joins the shared `coverage_gate|
   conformance_gate` recovery arm; attended parity.
-- Tests: SC-3, SC-4, SC-5, SC-6, SC-12, SC-21.
+- Tests: SC-3, SC-4, SC-5, SC-6, SC-12 (including a genuinely pre-C3
+  global-only artifact, which is refused), SC-21.
 
 ## T8 — Metering (FR-9)
 

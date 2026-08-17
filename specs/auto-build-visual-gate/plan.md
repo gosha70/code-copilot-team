@@ -225,13 +225,30 @@ skeleton — C3 adds a third verifier kind to it, not a second gate.
      updated in the same commit.
 
    **A skipped criterion is answered honestly, never as a pass.** The
-   visual verdict vocabulary is `pass | fail | skip` — conformance keeps
-   `pass | fail`. A degraded harness cannot answer criteria it never
-   evaluated, and identity validation requires it to answer ALL of them,
+   visual verdict vocabulary is `pass | fail | skip | unreached` —
+   conformance keeps `pass | fail`. A degraded harness cannot answer
+   criteria it never evaluated, and identity validation requires it to
+   answer ALL of them,
    so without `skip` the degraded-but-waived case SC-4 allows could only
    be satisfied by fabricating passes. Rules:
    - `skip` is legal ONLY when the effective mode is not `"full"`; a
      `full` artifact carrying any `skip` is malformed;
+   - **`unreached` covers the fail-fast paths, and is always RED.** The
+     shipped runner aborts before the critic ever sees a criterion when
+     the page will not load, when the axe a11y gate fails, or when the
+     anti-slop rubric fails. Playwright launched, so the invocation is
+     honestly `mode: "full"` — and none of the other three verdicts fit:
+     `pass` and `fail` would both claim the criterion was evaluated, and
+     `skip` is illegal in full mode (and would be waivable, which this
+     must never be). `unreached` says what actually happened: the
+     invocation ended before this criterion was judged. It is legal in
+     ANY mode, it is ALWAYS `green: false`, and it is NEVER waivable —
+     `skip_is_failure: false` waives skipped checks, not aborted ones.
+     The abort's own reason (the a11y violations, the rubric flags)
+     travels as the criterion's evidence, so the park message still
+     tells the operator what to fix. This keeps ONE structured evidence
+     graph rather than a second "error" result shape whose criteria
+     would have to be exempted from identity validation;
    - under `skip_is_failure: true` the run already failed at step 3 of
      decision 6, so `skip` never reaches the ledger green;
    - under an explicit `skip_is_failure: false`, a `skip` criterion is
@@ -252,7 +269,9 @@ skeleton — C3 adds a third verifier kind to it, not a second gate.
      journal reports the policy waiver whenever it applies — including
      when the criterion-level skip count is zero, which is exactly the
      case that would otherwise be invisible.
-   - `passed` MUST equal "every criterion verdict is `pass`" — the
+   - `passed` MUST equal "every criterion verdict is `pass`" — so an
+     artifact carrying any `unreached` necessarily reports
+     `passed: false`, and the
      summary is pinned to the detail rather than left free to contradict
      it, and a mismatch is malformed. This also kills the original lie at
      its source: the HTTP-smoke path can no longer write `passed: true`,
@@ -285,10 +304,18 @@ skeleton — C3 adds a third verifier kind to it, not a second gate.
    1. parse; then validate the CLOSED shape `{passed: bool, mode?:
       "full"|"degraded", skipped?: [string], source: string,
       critiqueSummary: string, actionableFixes: [string], criteria: [...]}`.
-      `mode` and `skipped` are OPTIONAL IN THE SHAPE precisely so that an
-      older harness reaches rule 2 instead of being rejected as
-      malformed; every other deviation is a malformed artifact, which is
-      a gate failure, not a verdict.
+      `mode` and `skipped` are OPTIONAL IN THE SHAPE so that a
+      TRANSITIONAL per-criterion artifact predating those two fields
+      receives deterministic degraded semantics at rule 2 instead of
+      being rejected as malformed. To be exact about what this does NOT
+      buy: the pre-C3 harness emits `{passed, source, critiqueSummary,
+      actionableFixes}` with no `criteria` at all, so it fails
+      closed-shape validation and never reaches rule 2 — correctly, and
+      SC-12 pins it. The optionality is a narrow allowance for an
+      artifact that answers criteria but predates the mode declaration,
+      not backward compatibility with the harness being replaced in T4.
+      Every other deviation is a malformed artifact, which is a gate
+      failure, not a verdict.
    2. cross-field, both directions — the failure message must be able to
       NAME what was skipped, so the two fields must agree:
       absent `mode` ⇒ `degraded`; absent `skipped` ⇒ `[]`;
@@ -417,11 +444,26 @@ skeleton — C3 adds a third verifier kind to it, not a second gate.
     files — a swapped harness or manifest, a modified `DESIGN.md`, a
     wrong-commit checkout, a previous run's leftovers, and ordinary
     accidental writes. Concretely, after the harness returns and before
-    any verdict is honoured, the gate re-verifies that every TRACKED
-    file in the worktree still matches the gate HEAD (`git -C <wt> diff
-    --quiet HEAD --`). Untracked paths are deliberately exempt, because
-    the harness's own outputs are untracked and are what the run
-    produced.
+    any evidence is imported, the gate makes TWO checks, and both are
+    required:
+
+        [[ "$(git -C "$VG_WT_DIR" rev-parse HEAD)" == "$gate_head" ]]
+        git -C "$VG_WT_DIR" diff --quiet HEAD --
+
+    The first is not redundant. HEAD inside a detached worktree is
+    MUTABLE BY THE HARNESS: a command that edits `DESIGN.md`, commits it
+    with `-c user.name=... -c user.email=...`, and then writes a PASS
+    artifact leaves `diff --quiet HEAD --` perfectly clean, because it
+    now compares the tree against the commit the harness just made
+    rather than against the commit the gate captured. Checking the diff
+    alone would defeat exactly the guarantee this decision claims. C2
+    already has the right shape in `vg_integrity_after`, which compares
+    `rev-parse HEAD` with the captured `gate_head` SEPARATELY from the
+    dirty check; the visual block follows it. The second check then
+    catches uncommitted tracked mutation while still permitting the
+    untracked screenshots and artifacts the run legitimately produced.
+    Untracked paths are deliberately exempt, because the harness's own
+    outputs are untracked and are what the run produced.
 
     **What it does NOT defend against:** any ACTIVE same-user
     interference while the gate runs. That exemption for untracked
@@ -485,8 +527,9 @@ the list are the ones that are load-bearing rather than incidental.
     frozen `timeout_sec`, cwd = the worktree, `DEV_URL` +
     `CCT_VISUAL_REQUEST` exported, cost channel NOT; **debit
     immediately on return**; contain again; regular-file
-    freshness; **re-verify that every TRACKED file in the worktree still
-    matches the gate HEAD** (decision 10) before any verdict is honoured;
+    freshness; **re-verify the worktree against the captured gate HEAD —
+    `rev-parse HEAD` equal AND no tracked diff** (decision 10) before any
+    evidence is imported or verdict honoured;
     import artifact and transcript into the ledger as
     publications; release the worktree and the private dir; then the
     ordered reading of decision 6 over the LEDGER copy.

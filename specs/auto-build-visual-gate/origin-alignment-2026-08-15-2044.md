@@ -1,7 +1,7 @@
 # Origin Alignment Check — auto-build-visual-gate
 
 Date: 2026-08-15 20:44 (record opened)
-Last revised: 2026-08-16 08:17 — plan approved at rev 8 (7 review rounds)
+Last revised: 2026-08-16 21:47 — PR #245 review round 1
 Trigger: rev-1 SDD bundle authored for increment C3 (#239), carved out of
 #190 at the owner's direction ("Clean obsolete local branches, then start
 #239") after C2 (#242) merged.
@@ -158,6 +158,19 @@ honesty of a stated boundary. The three flagged deviations stand as
 recorded above — the derived requirement in place of
 `required_when_ui_in_scope`, the estimate-only metering, and the
 `verification.app` relocation.
+
+PR #245 review (round 1) requested changes: the post-run integrity check
+compared the worktree against its own HEAD, which the harness can move by
+committing — closed by also requiring `rev-parse HEAD` to equal the
+CAPTURED gate HEAD, the shape C2's `vg_integrity_after` already uses. Two
+contract issues rode with it: the shipped runner's fail-fast paths (page
+load, a11y gate, anti-slop rubric) had no truthful verdict available in
+an honest full-mode invocation, so the vocabulary gains `unreached` —
+always red, never waivable, legal in every mode; and the `mode`/`skipped`
+optionality was described as backward compatibility with the pre-C3
+harness, which is false (it carries no criteria and is refused), so it is
+restated as covering a transitional per-criterion artifact only. No scope
+moved in or out.
 
 ## Verdict
 

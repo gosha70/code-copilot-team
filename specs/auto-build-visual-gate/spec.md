@@ -119,10 +119,16 @@ this file states the requirements they satisfy.
 
   The application under test is project code and stays ALIVE across the
   visual block, so it can reach the execution root after validation.
-  After the harness returns and BEFORE any verdict is honoured, the gate
-  MUST therefore re-verify that every TRACKED file in the execution root
-  still matches the gate HEAD (untracked paths excepted — the harness's
-  own outputs are untracked and are what the run produced).
+  After the harness returns and BEFORE any evidence is imported, the gate
+  MUST therefore make BOTH checks against the CAPTURED gate HEAD: the
+  execution root's `HEAD` still RESOLVES to that commit, AND it carries
+  no tracked diff (untracked paths excepted — the harness's own outputs
+  are untracked and are what the run produced). Checking the diff alone
+  is insufficient: HEAD inside a detached worktree is mutable by the
+  harness, so a command that edits a tracked file, commits it, and then
+  reports a pass would leave a clean diff against its OWN new commit.
+  C2's `vg_integrity_after` already separates these two checks; the
+  visual block follows it.
 
   The boundary this establishes MUST be documented as stated, not
   implied: it defends against PERSISTENT changes to TRACKED bundle
@@ -142,7 +148,11 @@ this file states the requirements they satisfy.
   `mode: "full"` with a non-empty `skipped` list is MALFORMED, and an
   explicit `mode: "degraded"` with an EMPTY `skipped` list is likewise
   MALFORMED, since the failure message must be able to name what was
-  skipped; then `skip_is_failure`. When `skip_is_failure` is true (the
+  skipped; then `skip_is_failure`. `mode`/`skipped` are optional in the
+  SHAPE only so that a transitional per-criterion artifact predating
+  those fields gets deterministic degraded semantics — NOT for
+  compatibility with the pre-C3 harness, which carries no `criteria` at
+  all and is refused (SC-12). When `skip_is_failure` is true (the
   default), an effective mode other than `"full"` MUST fail the gate even
   if the artifact reports `passed: true` — the HTTP-smoke fallback is
   exactly the case this exists for — naming what was skipped (or, for an
@@ -152,9 +162,18 @@ this file states the requirements they satisfy.
 - **FR-7 — visual evidence is per-criterion, identity-bound, waiver-
   honest, and atomically published.** The artifact MUST echo every frozen
   visual criterion exactly once, carrying its `fr`, `statement_sha`,
-  `criterion`, a `verdict` of `pass | fail | skip`, and `evidence`; the
-  driver MUST validate this as an exact identity multiset of the frozen
-  set and REFUSE missing, duplicated, altered, or invented entries.
+  `criterion`, a `verdict` of `pass | fail | skip | unreached`, and
+  `evidence`; the driver MUST validate this as an exact identity
+  multiset of the frozen set and REFUSE missing, duplicated, altered, or
+  invented entries.
+
+  `unreached` MUST be available in every mode and MUST always be red and
+  never waivable: it is how the harness answers criteria it aborted
+  before judging — a page that will not load, a failed a11y gate, a
+  failed anti-slop rubric — all of which occur in an honest
+  `mode: "full"` invocation where `skip` is illegal and `pass`/`fail`
+  would falsely claim the criterion was evaluated. The abort's own
+  reason MUST travel as that criterion's evidence.
 
   A degraded harness MUST answer criteria it did not evaluate as `skip`,
   never as `pass`, and `skip` is legal only when the effective mode is
@@ -170,8 +189,8 @@ this file states the requirements they satisfy.
 
   The global `passed` flag is a summary and MUST NOT be copied across
   criteria as if it were per-FR proof; it MUST equal "every criterion
-  verdict is `pass`", and an artifact whose summary contradicts its
-  criteria is malformed.
+  verdict is `pass`" — so any `unreached` forces `passed: false` — and
+  an artifact whose summary contradicts its criteria is malformed.
 
   Evidence imported from the execution root into the ledger MUST be
   published like every other ledger write — destination proven absent,
@@ -214,7 +233,10 @@ this file states the requirements they satisfy.
 
 - **FR-11 — the shipped harness satisfies the contract.** The runner MUST
   accept the driver's request (criteria, browser base URL, DESIGN.md
-  path), declare its `mode`/`skipped`, and emit per-criterion verdicts.
+  path), declare its `mode`/`skipped`, and emit per-criterion verdicts —
+  including on its fail-fast paths (page load, a11y gate, anti-slop
+  rubric), which MUST answer every requested criterion as `unreached`
+  with the abort reason as evidence rather than omitting them.
   The Playwright-missing path MUST declare `mode: "degraded"` naming what
   it skipped, and the no-API-key path MUST stop reporting a pass. Because
   `CRITIC=agent` writes only a request and exits 0, it MUST refuse by
@@ -331,6 +353,14 @@ this file states the requirements they satisfy.
   — a tracked `DESIGN.md` symlinked to the canonical checkout — is
   refused by name, at admission and at both gate checks, before the
   harness runs.
+- **SC-25** A harness that modifies a TRACKED bundle file and COMMITS
+  that modification inside the detached worktree, then writes an
+  otherwise-valid PASS artifact, is refused before evidence import — the
+  HEAD-equality check catches what the tracked-diff check alone cannot.
+- **SC-26** Each shipped fail-fast path — page load failure and a failed
+  axe gate — produces an artifact answering every requested criterion
+  as `unreached` with the abort reason as evidence; the gate marks those
+  FRs red, and no `skip_is_failure` setting can waive them.
 - **SC-23** A PERSISTENT change to a TRACKED file in the execution root
   cannot produce forged evidence: a deterministic verifier that writes
   to the path the worktree will occupy is caught by the point-of-use
