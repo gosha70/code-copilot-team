@@ -5945,7 +5945,7 @@ PYEOF
 #    freezes verifiers + conformance (SC-3). ──
 P=$(setup_project); single_phase "$P"
 write_verification_yaml "$P"
-cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9099/health",timeout_sec:5},stop_timeout_sec:5}}}'
+cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600},app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9099/health",timeout_sec:5},stop_timeout_sec:5}}'
 run_driver "$P"
 # Since T5 the frozen conformance requirement is enforced at the landing
 # gate: with no evaluator resolvable, the run parks instead of landing.
@@ -5985,7 +5985,7 @@ rm -rf "$P"
 # ── app.interface wins the interface resolution (command readiness) ──
 P=$(setup_project); single_phase "$P"
 write_verification_yaml "$P"
-cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",interface:"http://127.0.0.1:9099",ready:{command:"true",timeout_sec:5},stop_timeout_sec:5}}}'
+cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600},app:{command:"sleep 5",interface:"http://127.0.0.1:9099",ready:{command:"true",timeout_sec:5},stop_timeout_sec:5}}'
 run_driver "$P"
 assert_exit "C2-T3: command-readiness run parks at the verifier gate" 4 "$RC"
 assert_eq "C2-T3: app.interface wins the interface resolution" "http://127.0.0.1:9099" \
@@ -6505,7 +6505,7 @@ assert_eq "C2-R3 schema: documents the capable-evaluator admission rule" "1" \
 #    driver the capture from the SAME parse admission validated. ──
 P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
 write_verification_yaml "$P"
-cfg_set "$P" '.verification.conformance={evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9/x",timeout_sec:5},stop_timeout_sec:5}}'
+cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600},app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9/x",timeout_sec:5},stop_timeout_sec:5}}'
 EVALPROF=$(mktemp)
 cat "$PASS_PROFILE" > "$EVALPROF"
 cat >> "$EVALPROF" << 'TOML'

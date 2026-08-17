@@ -432,7 +432,7 @@ escalation_resumable() {
                 <<< "$history" >/dev/null 2>&1; then
                 echo "This run's FROZEN contract requires runtime conformance but froze NO evaluator"
                 echo "--resume refuses here: a frozen contract cannot gain an evaluator, so configuring one now cannot change this run"
-                echo "Add verification.conformance (evaluator + app) to automation.json"
+                echo "Add verification.conformance (evaluator + timeout_sec) AND verification.app to automation.json"
                 echo "Then start a FRESH run: scripts/auto-build-loop.sh $FEATURE_ID"
                 return 1
             fi
@@ -1244,13 +1244,21 @@ contract_initialiser() {
             # unskippable either way. interface resolves app.interface,
             # else ready.url (FR-6; config validation guarantees one
             # exists whenever the block is present).
+            # C3 (#239 FR-10): the app is declared ONCE at
+            # verification.app, shared by the conformance evaluator and
+            # the visual harness — config validation refuses the old
+            # verification.conformance.app by name. The FROZEN shape is
+            # unchanged in this increment (the app still travels inside
+            # `conformance`); T5 hoists it to contract.app when the
+            # lifecycle itself moves.
             local _conf
             _conf=$(jq --argjson criteria "$_cset" '
                 (.verification.conformance // null) as $c |
+                (.verification.app // null) as $a |
                 {evaluator: ($c.evaluator // null),
-                 app: ($c.app // null),
-                 interface: (if $c == null or $c.app == null then null
-                             else ($c.app.interface // $c.app.ready.url // null) end),
+                 app: (if $c == null then null else $a end),
+                 interface: (if $c == null or $a == null then null
+                             else ($a.interface // $a.ready.url // null) end),
                  timeout_sec: ($c.timeout_sec // null),
                  criteria: $criteria}' "$CONFIG_SNAPSHOT")
             contract=$(jq --argjson conf "$_conf" '. + {conformance: $conf}' <<< "$contract")

@@ -506,7 +506,7 @@ validate_admission() {
     if [[ "$autocfg_ok" != "true" ]]; then
       fail "$id: conformance is required (runtime_conformance mapping) but the automation config was rejected above — evaluator availability cannot be verified"
     elif ! jq -e '.verification.conformance | type == "object"' "$autocfg" >/dev/null 2>&1; then
-      fail "$id: runtime_conformance mapping requires verification.conformance in automation.json (evaluator + app contract) — the block is missing"
+      fail "$id: runtime_conformance mapping requires verification.conformance in automation.json (the evaluator; the app it exercises is verification.app since #239) — the block is missing"
     else
       local conf_eval
       conf_eval="$(jq -r '.verification.conformance.evaluator // empty' "$autocfg" 2>/dev/null)"

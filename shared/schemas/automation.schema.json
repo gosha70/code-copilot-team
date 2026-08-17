@@ -17,41 +17,23 @@
     "verification": {
       "type": "object",
       "additionalProperties": false,
-      "description": "#222 (increment C1 of #190) + #242 (increment C2). C1 implements `coverage`; C2 adds `conformance`. test/app/visual are rejected by name by validate-automation-config.sh rather than accepted-and-ignored (an unattended contract must not accept enforcement-looking settings that do nothing). conformance.required is DERIVED from verification.yaml per #190 §6, never operator-set.",
+      "description": "#222 (increment C1 of #190) + #242 (increment C2). C1 implements `coverage`; C2 adds `conformance`; C3 (#239) adds `visual` and promotes `app` to this level — both were previously rejected by name as placeholders for the increment that would define them, and `verification.conformance.app` is now refused by name with a migration message. `test` is still rejected by name by validate-automation-config.sh rather than accepted-and-ignored (an unattended contract must not accept enforcement-looking settings that do nothing). conformance.required is DERIVED from verification.yaml per #190 §6, never operator-set.",
+      "allOf": [
+        {
+          "description": "#239 C3 FR-10: the application under test is declared ONCE at verification.app and is REQUIRED by both consumers — the conformance evaluator and the visual harness. validate-automation-config.sh refuses either block without it, so the schema must not accept what the executable contract rejects.",
+          "if": { "anyOf": [{ "required": ["conformance"] }, { "required": ["visual"] }] },
+          "then": { "required": ["app"] }
+        }
+      ],
       "properties": {
         "conformance": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["evaluator", "app", "timeout_sec"],
-          "description": "#242 (increment C2 of #190 §6): the runtime conformance evaluator. Whether conformance is REQUIRED is derived from specs/<feature>/verification.yaml (any FR mapped to kind runtime_conformance) — an operator `required` key is rejected by name. The resolved contract (evaluator, app, interface, timeout_sec, criteria set) is frozen at preflight initialisation under the C1 pinning/tamper rules.",
+          "required": ["evaluator", "timeout_sec"],
+          "description": "#242 (increment C2 of #190 §6): the runtime conformance evaluator. Whether conformance is REQUIRED is derived from specs/<feature>/verification.yaml (any FR mapped to kind runtime_conformance) — an operator `required` key is rejected by name. The application under test is NOT declared here — #239 moved it to verification.app so conformance and visual share ONE lifecycle. The resolved contract (evaluator, app, interface, timeout_sec, criteria set) is frozen at preflight initialisation under the C1 pinning/tamper rules.",
           "properties": {
             "evaluator": { "type": "string", "minLength": 1, "description": "providers.toml provider id. The provider MUST declare `conformance_command` — an evaluator-specific command template; declaring it IS the runtime_conformance capability. A healthy reviewer-only provider is refused: reviewer health proves liveness, not the ability to exercise a running application." },
-            "timeout_sec": { "type": "integer", "minimum": 1, "description": "Bounds the evaluator invocation, in whole seconds. Frozen with the contract; explicit — no silent default. Integer because every bound in the conformance lifecycle is enforced by integer shell arithmetic (deadlines, TERM→KILL escalation) — a fractional value the schema accepted but the driver could not compute would be an inert setting." },
-            "app": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["command", "ready", "stop_timeout_sec"],
-              "description": "Driver-owned app lifecycle: the driver, not the evaluator, starts and stops the application (own process group, TERM→KILL stop, output captured to the ledger). The evaluator-facing app interface is `interface` when present, else `ready.url`; command-only readiness with no `interface` is rejected by name — a capable evaluator must never be launched without an address for the app.",
-              "properties": {
-                "command": { "type": "string", "minLength": 1 },
-                "interface": { "type": "string", "minLength": 1, "pattern": "^https?://", "description": "Evaluator-facing address of the running application — an absolute http(s) URL the driver PROBES to bind readiness to the launched instance. Must share ready.url's origin when both are present (validator-enforced). Resolved at freeze: `app.interface` else `ready.url`. Required when readiness is command-based." },
-                "stop_timeout_sec": { "type": "integer", "minimum": 1, "description": "Whole seconds before the app stop escalates TERM → KILL (integer: enforced by shell arithmetic)." },
-                "ready": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["timeout_sec"],
-                  "description": "Readiness proof, bound to the launched instance: the probe MUST fail before launch (an already-answering responder is unattributable) and must succeed within timeout_sec with the spawned process group still alive. Exactly one of url | command. url must be an absolute http(s) URL sharing app.interface's origin when both are present (validator-enforced).",
-                  "properties": {
-                    "url": { "type": "string", "minLength": 1, "pattern": "^https?://" },
-                    "command": { "type": "string", "minLength": 1 },
-                    "timeout_sec": { "type": "integer", "minimum": 1, "description": "Whole seconds for the readiness deadline (integer: enforced by shell arithmetic)." }
-                  },
-                  "oneOf": [{ "required": ["url"] }, { "required": ["command"] }]
-                }
-              },
-              "if": { "properties": { "ready": { "required": ["command"] } }, "required": ["ready"] },
-              "then": { "required": ["interface"] }
-            }
+            "timeout_sec": { "type": "integer", "minimum": 1, "description": "Bounds the evaluator invocation, in whole seconds. Frozen with the contract; explicit — no silent default. Integer because every bound in the conformance lifecycle is enforced by integer shell arithmetic (deadlines, TERM→KILL escalation) — a fractional value the schema accepted but the driver could not compute would be an inert setting." }
           }
         },
         "coverage": {
@@ -91,6 +73,44 @@
               "then": { "anyOf": [ { "required": ["max_regression_pct"] }, { "required": ["preset"] } ] }
             }
           ]
+        },
+        "app": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command", "ready", "stop_timeout_sec"],
+          "description": "Driver-owned app lifecycle: the driver, not the evaluator, starts and stops the application (own process group, TERM→KILL stop, output captured to the ledger). The evaluator-facing app interface is `interface` when present, else `ready.url`; command-only readiness with no `interface` is rejected by name — a capable evaluator must never be launched without an address for the app.",
+          "properties": {
+            "command": { "type": "string", "minLength": 1 },
+            "interface": { "type": "string", "minLength": 1, "pattern": "^https?://", "description": "Evaluator-facing address of the running application — an absolute http(s) URL the driver PROBES to bind readiness to the launched instance. Must share ready.url's origin when both are present (validator-enforced). Resolved at freeze: `app.interface` else `ready.url`. Required when readiness is command-based." },
+            "stop_timeout_sec": { "type": "integer", "minimum": 1, "description": "Whole seconds before the app stop escalates TERM → KILL (integer: enforced by shell arithmetic)." },
+            "ready": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["timeout_sec"],
+              "description": "Readiness proof, bound to the launched instance: the probe MUST fail before launch (an already-answering responder is unattributable) and must succeed within timeout_sec with the spawned process group still alive. Exactly one of url | command. url must be an absolute http(s) URL sharing app.interface's origin when both are present (validator-enforced).",
+              "properties": {
+                "url": { "type": "string", "minLength": 1, "pattern": "^https?://" },
+                "command": { "type": "string", "minLength": 1 },
+                "timeout_sec": { "type": "integer", "minimum": 1, "description": "Whole seconds for the readiness deadline (integer: enforced by shell arithmetic)." }
+              },
+              "oneOf": [{ "required": ["url"] }, { "required": ["command"] }]
+            }
+          },
+          "if": { "properties": { "ready": { "required": ["command"] } }, "required": ["ready"] },
+          "then": { "required": ["interface"] }
+        },
+        "visual": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command", "artifact", "url", "timeout_sec"],
+          "description": "#239 (increment C3 of #190 §6): the UI harness the DRIVER runs at the landing gate. Whether visual verification is REQUIRED is derived from specs/<feature>/verification.yaml (any FR mapped to kind visual) — `required_when_ui_in_scope` is rejected by name, because an operator toggle over a verification requirement is an opt-out of verification. Requires verification.app: the harness needs a running application it did not start.",
+          "properties": {
+            "command": { "type": "string", "minLength": 1, "description": "The harness invocation, run in a detached throwaway worktree at HEAD under the frozen bound. It executes in a FRESH checkout without ignored build state, so it must be self-sufficient there (e.g. `npm ci && npm run copilot:review`) — the same obligation C1 places on the coverage command." },
+            "artifact": { "type": "string", "minLength": 1, "description": "Path, relative to the execution root and contained within it, where the harness writes its result. Deleted before the run and required to be a newly produced REGULAR file afterwards, so a stale verdict can never be read as this run's evidence." },
+            "url": { "type": "string", "minLength": 1, "pattern": "^https?://", "description": "The harness's BROWSER BASE — an absolute http(s) URL, frozen and never derived: app.interface is evaluator-facing and may legally be an API base, and readiness may point at a health endpoint, so neither is a navigation base. Validated SAME-ORIGIN with the resolved app address so the harness cannot be pointed at a host the driver never launched." },
+            "timeout_sec": { "type": "integer", "minimum": 1, "description": "Bounds the harness invocation, in whole seconds. Integer because every bound in this lifecycle is enforced by integer shell arithmetic — a fractional value the schema accepted but the driver could not compute would be an inert setting." },
+            "skip_is_failure": { "type": "boolean", "default": true, "description": "Defaults to TRUE and is frozen with the contract: a result that is degraded, skipped, or does not declare its mode FAILS the gate even when it reports passed. Setting it false is the ONLY way a degraded result lands — an explicit, frozen, auditable choice." }
+          }
         }
       }
     },

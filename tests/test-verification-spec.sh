@@ -237,11 +237,13 @@ add_conf_block() {  # <dir> <evaluator>
 import json, sys
 p = sys.argv[1]
 cfg = json.load(open(p))
-cfg.setdefault("verification", {})["conformance"] = {
-    "evaluator": sys.argv[2], "timeout_sec": 600,
-    "app": {"command": "sleep 5",
+# C3 (#239 FR-10): the app lives at verification.app — one lifecycle
+# shared by the evaluator and the visual harness.
+v = cfg.setdefault("verification", {})
+v["conformance"] = {"evaluator": sys.argv[2], "timeout_sec": 600}
+v["app"] = {"command": "sleep 5",
             "ready": {"url": "http://127.0.0.1:9/x", "timeout_sec": 5},
-            "stop_timeout_sec": 5}}
+            "stop_timeout_sec": 5}
 json.dump(cfg, open(p, "w"))
 PYEOF
 }

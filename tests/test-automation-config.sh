@@ -139,12 +139,11 @@ assert "greenfield coverage block is valid" bash "$V" "$TMP/c-ok.json"
 w c-brown.json '{"schema_version":2,"profile":"pr","verification":{"coverage":{"command":"npm run coverage","artifact":"coverage/coverage-summary.json","parser":"lcov","baseline":"admission","min_line_pct":80,"max_regression_pct":0,"timeout_sec":1200,"floor_enforced_at":"phase"}}}'
 assert "brownfield coverage block is valid" bash "$V" "$TMP/c-brown.json"
 
-# ── the sub-blocks C2 does NOT implement are rejected BY NAME ──
-# (conformance is accepted since C2/#242 — see its own section below)
-for sub in test app visual; do
-    w "c-$sub.json" "{\"schema_version\":2,\"verification\":{\"$sub\":{}}}"
-    assert_rejects "verification.$sub is rejected by name" "$TMP/c-$sub.json" "verification.$sub is not supported in C1"
-done
+# ── verification.test is rejected BY NAME (top-level test.command stays
+#    the single source). `app` and `visual` were rejected the same way as
+#    placeholders until C3 (#239) defined them — see their sections. ──
+w c-test.json '{"schema_version":2,"verification":{"test":{}}}'
+assert_rejects "verification.test is rejected by name" "$TMP/c-test.json" "verification.test is not supported"
 w c-conf2.json '{"schema_version":2,"verification":{"conformance":{"required":true}}}'
 assert_rejects "conformance.required names its derivation" "$TMP/c-conf2.json" "DERIVED from verification.yaml"
 
@@ -260,99 +259,99 @@ echo "=== #242 C2: verification.conformance ==="
 
 CONF_APP='"command":"npm start","ready":{"url":"http://127.0.0.1:3123/health","timeout_sec":30},"stop_timeout_sec":10'
 
-w n-ok.json "{\"schema_version\":2,\"profile\":\"pr\",\"verification\":{\"conformance\":{\"evaluator\":\"codex-eval\",\"timeout_sec\":600,\"app\":{$CONF_APP}}}}"
+w n-ok.json "{\"schema_version\":2,\"profile\":\"pr\",\"verification\":{\"conformance\":{\"evaluator\":\"codex-eval\",\"timeout_sec\":600},\"app\":{$CONF_APP}}}"
 assert "url-readiness conformance block is valid" bash "$V" "$TMP/n-ok.json"
 
-w n-cmd.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"npm start","interface":"http://127.0.0.1:3123","ready":{"command":"curl -fsS http://127.0.0.1:3123/health","timeout_sec":30},"stop_timeout_sec":10}}}}'
+w n-cmd.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"npm start","interface":"http://127.0.0.1:3123","ready":{"command":"curl -fsS http://127.0.0.1:3123/health","timeout_sec":30},"stop_timeout_sec":10}}}'
 assert "command-readiness WITH app.interface is valid" bash "$V" "$TMP/n-cmd.json"
 
-w n-both.json "{\"schema_version\":2,\"verification\":{\"coverage\":{$COV_OK},\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":600,\"app\":{$CONF_APP}}}}"
+w n-both.json "{\"schema_version\":2,\"verification\":{\"coverage\":{$COV_OK},\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":600},\"app\":{$CONF_APP}}}"
 assert "coverage and conformance compose" bash "$V" "$TMP/n-both.json"
 
 # Command-only readiness with no interface starves the evaluator of an
 # app address (#242 rev-4 finding 2).
-w n-noiface.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"npm start","ready":{"command":"true","timeout_sec":30},"stop_timeout_sec":10}}}}'
+w n-noiface.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"npm start","ready":{"command":"true","timeout_sec":30},"stop_timeout_sec":10}}}'
 assert_rejects "command-only readiness without interface is rejected" "$TMP/n-noiface.json" "required when readiness is command-based"
 
 w n-arr.json '{"schema_version":2,"verification":{"conformance":[]}}'
 assert_rejects "conformance as an array is a violation, not a crash" "$TMP/n-arr.json" "conformance must be an object"
 
-w n-unk.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":600,\"app\":{$CONF_APP},\"bogus\":1}}}"
+w n-unk.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":600,\"bogus\":1},\"app\":{$CONF_APP}}}"
 assert_rejects "unknown conformance key is rejected" "$TMP/n-unk.json" "unknown key 'verification.conformance.bogus'"
 
-w n-noeval.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"timeout_sec\":600,\"app\":{$CONF_APP}}}}"
+w n-noeval.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"timeout_sec\":600},\"app\":{$CONF_APP}}}"
 assert_rejects "conformance.evaluator is required" "$TMP/n-noeval.json" "verification.conformance.evaluator is required"
 
-w n-emptyeval.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"\",\"timeout_sec\":600,\"app\":{$CONF_APP}}}}"
+w n-emptyeval.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"\",\"timeout_sec\":600},\"app\":{$CONF_APP}}}"
 assert_rejects "empty evaluator is rejected" "$TMP/n-emptyeval.json" "evaluator must be a non-empty string"
 
-w n-noto.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"app\":{$CONF_APP}}}}"
+w n-noto.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\"},\"app\":{$CONF_APP}}}"
 assert_rejects "conformance.timeout_sec is required (no silent default)" "$TMP/n-noto.json" "timeout_sec is required"
 
-w n-zeroto.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":0,\"app\":{$CONF_APP}}}}"
+w n-zeroto.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":0},\"app\":{$CONF_APP}}}"
 assert_rejects "non-positive conformance timeout is rejected" "$TMP/n-zeroto.json" "timeout_sec must be a positive INTEGER"
 
 w n-noapp.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600}}}'
-assert_rejects "conformance.app is required" "$TMP/n-noapp.json" "verification.conformance.app is required"
+assert_rejects "conformance requires the shared verification.app" "$TMP/n-noapp.json" "verification.app is required when verification.conformance is present"
 
-w n-appstr.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":"npm start"}}}'
+w n-appstr.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":"npm start"}}'
 assert_rejects "app as a string is a violation, not a crash" "$TMP/n-appstr.json" "app must be an object"
 
-w n-appunk.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":600,\"app\":{$CONF_APP,\"extra\":1}}}}"
-assert_rejects "unknown app key is rejected" "$TMP/n-appunk.json" "unknown key 'verification.conformance.app.extra'"
+w n-appunk.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":600},\"app\":{$CONF_APP,\"extra\":1}}}"
+assert_rejects "unknown app key is rejected" "$TMP/n-appunk.json" "unknown key 'verification.app.extra'"
 
-w n-nocmd.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"ready":{"url":"http://x/h","timeout_sec":30},"stop_timeout_sec":10}}}}'
+w n-nocmd.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"ready":{"url":"http://x/h","timeout_sec":30},"stop_timeout_sec":10}}}'
 assert_rejects "app.command is required" "$TMP/n-nocmd.json" "app.command is required"
 
-w n-nostop.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":30}}}}}'
+w n-nostop.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":30}}}}'
 assert_rejects "app.stop_timeout_sec is required" "$TMP/n-nostop.json" "stop_timeout_sec is required and must be a positive INTEGER"
 
-w n-emptyiface.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","interface":"","ready":{"url":"http://x/h","timeout_sec":30},"stop_timeout_sec":10}}}}'
+w n-emptyiface.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","interface":"","ready":{"url":"http://x/h","timeout_sec":30},"stop_timeout_sec":10}}}'
 assert_rejects "empty interface is rejected" "$TMP/n-emptyiface.json" "interface must be a non-empty string"
 
-w n-noready.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","stop_timeout_sec":10}}}}'
+w n-noready.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","stop_timeout_sec":10}}}'
 assert_rejects "app.ready is required" "$TMP/n-noready.json" "app.ready is required"
 
-w n-readyarr.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":[],"stop_timeout_sec":10}}}}'
+w n-readyarr.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","ready":[],"stop_timeout_sec":10}}}'
 assert_rejects "ready as an array is a violation, not a crash" "$TMP/n-readyarr.json" "ready must be an object"
 
-w n-readyunk.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":30,"extra":1},"stop_timeout_sec":10}}}}'
-assert_rejects "unknown ready key is rejected" "$TMP/n-readyunk.json" "unknown key 'verification.conformance.app.ready.extra'"
+w n-readyunk.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":30,"extra":1},"stop_timeout_sec":10}}}'
+assert_rejects "unknown ready key is rejected" "$TMP/n-readyunk.json" "unknown key 'verification.app.ready.extra'"
 
-w n-readyboth.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h","command":"true","timeout_sec":30},"stop_timeout_sec":10}}}}'
+w n-readyboth.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","ready":{"url":"http://x/h","command":"true","timeout_sec":30},"stop_timeout_sec":10}}}'
 assert_rejects "ready with BOTH url and command is rejected" "$TMP/n-readyboth.json" "exactly ONE of url | command (got both)"
 
-w n-readynone.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"timeout_sec":30},"stop_timeout_sec":10}}}}'
+w n-readynone.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","ready":{"timeout_sec":30},"stop_timeout_sec":10}}}'
 assert_rejects "ready with NEITHER url nor command is rejected" "$TMP/n-readynone.json" "exactly ONE of url | command (got neither)"
 
-w n-readyempty.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"","timeout_sec":30},"stop_timeout_sec":10}}}}'
+w n-readyempty.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","ready":{"url":"","timeout_sec":30},"stop_timeout_sec":10}}}'
 assert_rejects "empty ready.url is rejected" "$TMP/n-readyempty.json" "ready.url must be a non-empty string"
 
-w n-readynoto.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h"},"stop_timeout_sec":10}}}}'
+w n-readynoto.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","ready":{"url":"http://x/h"},"stop_timeout_sec":10}}}'
 assert_rejects "ready.timeout_sec is required (bounded probe)" "$TMP/n-readynoto.json" "ready.timeout_sec is required and must be a positive INTEGER"
 
 # ── Build-review round 5 finding 2: every conformance bound is integer
 #    shell arithmetic, so a fractional value the schema accepted would be
 #    uncomputable at the gate. Rejected by name, in all three places. ──
-w b5-frac1.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":0.5,"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":5},"stop_timeout_sec":5}}}}'
+w b5-frac1.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":0.5},"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":5},"stop_timeout_sec":5}}}'
 assert_rejects "fractional conformance.timeout_sec is rejected" "$TMP/b5-frac1.json" "timeout_sec must be a positive INTEGER"
-w b5-frac2.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":0.5},"stop_timeout_sec":5}}}}'
+w b5-frac2.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":0.5},"stop_timeout_sec":5}}}'
 assert_rejects "fractional ready.timeout_sec is rejected" "$TMP/b5-frac2.json" "ready.timeout_sec is required and must be a positive INTEGER"
-w b5-frac3.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":5},"stop_timeout_sec":2.5}}}}'
+w b5-frac3.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","ready":{"url":"http://x/h","timeout_sec":5},"stop_timeout_sec":2.5}}}'
 assert_rejects "fractional stop_timeout_sec is rejected" "$TMP/b5-frac3.json" "stop_timeout_sec is required and must be a positive INTEGER"
 
 # ── Build-review finding 1: the interface is bound to the launched
 #    instance — probeable http(s), same origin as ready.url. ──
-w b1-div.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","interface":"http://127.0.0.1:4000","ready":{"url":"http://127.0.0.1:3000/health","timeout_sec":5},"stop_timeout_sec":5}}}}'
+w b1-div.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","interface":"http://127.0.0.1:4000","ready":{"url":"http://127.0.0.1:3000/health","timeout_sec":5},"stop_timeout_sec":5}}}'
 assert_rejects "divergent interface/ready origins are rejected" "$TMP/b1-div.json" "must equal ready.url's origin"
 
-w b1-same.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","interface":"http://127.0.0.1:3000","ready":{"url":"http://127.0.0.1:3000/health","timeout_sec":5},"stop_timeout_sec":5}}}}'
+w b1-same.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","interface":"http://127.0.0.1:3000","ready":{"url":"http://127.0.0.1:3000/health","timeout_sec":5},"stop_timeout_sec":5}}}'
 assert "same-origin interface + ready.url is valid" bash "$V" "$TMP/b1-same.json"
 
-w b1-nonurl.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","interface":"port 4000","ready":{"command":"true","timeout_sec":5},"stop_timeout_sec":5}}}}'
+w b1-nonurl.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","interface":"port 4000","ready":{"command":"true","timeout_sec":5},"stop_timeout_sec":5}}}'
 assert_rejects "non-URL interface is rejected (unprobeable)" "$TMP/b1-nonurl.json" "absolute http(s) URL"
 
-w b1-badready.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600,"app":{"command":"c","ready":{"url":"localhost:3000/health","timeout_sec":5},"stop_timeout_sec":5}}}}'
+w b1-badready.json '{"schema_version":2,"verification":{"conformance":{"evaluator":"e","timeout_sec":600},"app":{"command":"c","ready":{"url":"localhost:3000/health","timeout_sec":5},"stop_timeout_sec":5}}}'
 assert_rejects "non-http ready.url is rejected" "$TMP/b1-badready.json" "must be an absolute http(s) URL"
 
 # ── FR-2 derivation helper: required iff the artifact maps runtime_conformance ──
@@ -407,22 +406,171 @@ assert "derivation: early mapping in a large artifact derives true (no SIGPIPE t
 
 # ── schema parity: the schema DECLARES what the gate enforces ──
 CONF_SCHEMA='.properties.verification.properties.conformance'
-assert "schema: conformance requires evaluator/app/timeout_sec" \
-    jq -e "$CONF_SCHEMA.required | sort == [\"app\",\"evaluator\",\"timeout_sec\"]" "$SCHEMA"
+APP_SCHEMA='.properties.verification.properties.app'
+assert "schema: conformance requires evaluator/timeout_sec (app moved up)" \
+    jq -e "$CONF_SCHEMA.required | sort == [\"evaluator\",\"timeout_sec\"]" "$SCHEMA"
+assert "schema: conformance no longer declares an app property" \
+    jq -e "$CONF_SCHEMA.properties | has(\"app\") | not" "$SCHEMA"
 assert "schema: conformance/app/ready are all closed" \
-    jq -e "$CONF_SCHEMA.additionalProperties == false and $CONF_SCHEMA.properties.app.additionalProperties == false and $CONF_SCHEMA.properties.app.properties.ready.additionalProperties == false" "$SCHEMA"
+    jq -e "$CONF_SCHEMA.additionalProperties == false and $APP_SCHEMA.additionalProperties == false and $APP_SCHEMA.properties.ready.additionalProperties == false" "$SCHEMA"
 assert "schema: app requires command/ready/stop_timeout_sec" \
-    jq -e "$CONF_SCHEMA.properties.app.required | sort == [\"command\",\"ready\",\"stop_timeout_sec\"]" "$SCHEMA"
+    jq -e "$APP_SCHEMA.required | sort == [\"command\",\"ready\",\"stop_timeout_sec\"]" "$SCHEMA"
 assert "schema: ready declares exactly-one url|command" \
-    jq -e "$CONF_SCHEMA.properties.app.properties.ready.oneOf | map(.required[0]) | sort == [\"command\",\"url\"]" "$SCHEMA"
+    jq -e "$APP_SCHEMA.properties.ready.oneOf | map(.required[0]) | sort == [\"command\",\"url\"]" "$SCHEMA"
 assert "schema: command-readiness requires interface (if/then)" \
-    jq -e "$CONF_SCHEMA.properties.app.if.properties.ready.required == [\"command\"] and $CONF_SCHEMA.properties.app.then.required == [\"interface\"]" "$SCHEMA"
+    jq -e "$APP_SCHEMA.if.properties.ready.required == [\"command\"] and $APP_SCHEMA.then.required == [\"interface\"]" "$SCHEMA"
 assert "schema: evaluator and interface are non-empty strings" \
-    jq -e "[$CONF_SCHEMA.properties.evaluator.minLength, $CONF_SCHEMA.properties.app.properties.interface.minLength] | all(. == 1)" "$SCHEMA"
+    jq -e "[$CONF_SCHEMA.properties.evaluator.minLength, $APP_SCHEMA.properties.interface.minLength] | all(. == 1)" "$SCHEMA"
 assert "schema: the three conformance bounds are integer-typed" \
-    jq -e "[$CONF_SCHEMA.properties.timeout_sec, $CONF_SCHEMA.properties.app.properties.stop_timeout_sec, $CONF_SCHEMA.properties.app.properties.ready.properties.timeout_sec] | all(.type == \"integer\" and .minimum == 1)" "$SCHEMA"
+    jq -e "[$CONF_SCHEMA.properties.timeout_sec, $APP_SCHEMA.properties.stop_timeout_sec, $APP_SCHEMA.properties.ready.properties.timeout_sec] | all(.type == \"integer\" and .minimum == 1)" "$SCHEMA"
 assert "schema: interface and ready.url declare the http(s) pattern" \
-    jq -e "[$CONF_SCHEMA.properties.app.properties.interface.pattern, $CONF_SCHEMA.properties.app.properties.ready.properties.url.pattern] | all(. == \"^https?://\")" "$SCHEMA"
+    jq -e "[$APP_SCHEMA.properties.interface.pattern, $APP_SCHEMA.properties.ready.properties.url.pattern] | all(. == \"^https?://\")" "$SCHEMA"
+
+# ══════════════════════════════════════════════════════════════
+echo "=== #239 C3: verification.app + verification.visual ==="
+# ══════════════════════════════════════════════════════════════
+# The app moved OUT of conformance so one lifecycle serves both the
+# evaluator and the visual harness; `visual` became a real block. Both
+# were previously rejected by name as placeholders.
+
+APP_OK='"command":"npm start","ready":{"url":"http://127.0.0.1:3000/health","timeout_sec":30},"stop_timeout_sec":10'
+VIS_OK='"command":"npm ci && npm run copilot:review","artifact":"tmp/ui-review/critique-feedback.json","url":"http://127.0.0.1:3000/","timeout_sec":600'
+
+w v-ok.json "{\"schema_version\":2,\"profile\":\"pr\",\"verification\":{\"app\":{$APP_OK},\"visual\":{$VIS_OK}}}"
+assert "a visual block with a shared app is valid" bash "$V" "$TMP/v-ok.json"
+
+w v-skipfalse.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"visual\":{$VIS_OK,\"skip_is_failure\":false}}}"
+assert "skip_is_failure may be set explicitly" bash "$V" "$TMP/v-skipfalse.json"
+
+w v-both.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":600},\"visual\":{$VIS_OK}}}"
+assert "conformance and visual share ONE app block" bash "$V" "$TMP/v-both.json"
+
+# The requirement is DERIVED from verification.yaml, never operator-set.
+w v-rwuis.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"visual\":{$VIS_OK,\"required_when_ui_in_scope\":true}}}"
+assert_rejects "required_when_ui_in_scope is rejected by name" "$TMP/v-rwuis.json" "required_when_ui_in_scope is DERIVED from verification.yaml"
+
+# The old app location is refused BY NAME with a migration message — an
+# ignored block would leave the operator's launch command inert.
+w v-oldapp.json "{\"schema_version\":2,\"verification\":{\"conformance\":{\"evaluator\":\"e\",\"timeout_sec\":600,\"app\":{$APP_OK}}}}"
+assert_rejects "verification.conformance.app is refused with a migration message" "$TMP/v-oldapp.json" "has MOVED to verification.app"
+
+# Each consumer requires the app: a gate with nothing to point at cannot run.
+w v-noapp.json "{\"schema_version\":2,\"verification\":{\"visual\":{$VIS_OK}}}"
+assert_rejects "visual without verification.app is rejected" "$TMP/v-noapp.json" "verification.app is required when verification.visual is present"
+
+for req in command artifact url; do
+    w "v-no-$req.json" "$(python3 - "$req" << 'PYEOF'
+import json,sys
+vis={"command":"npm run copilot:review","artifact":"tmp/ui/f.json","url":"http://127.0.0.1:3000/","timeout_sec":600}
+vis.pop(sys.argv[1])
+app={"command":"npm start","ready":{"url":"http://127.0.0.1:3000/health","timeout_sec":30},"stop_timeout_sec":10}
+print(json.dumps({"schema_version":2,"verification":{"app":app,"visual":vis}}))
+PYEOF
+)"
+    assert_rejects "visual.$req is required" "$TMP/v-no-$req.json" "verification.visual.$req is required"
+done
+
+w v-noto.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"visual\":{\"command\":\"c\",\"artifact\":\"a.json\",\"url\":\"http://127.0.0.1:3000/\"}}}"
+assert_rejects "visual.timeout_sec is required (no silent default)" "$TMP/v-noto.json" "verification.visual.timeout_sec is required"
+
+w v-fracto.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"visual\":{$VIS_OK}}}"
+python3 -c "
+import json;p='$TMP/v-fracto.json';d=json.load(open(p));d['verification']['visual']['timeout_sec']=1.5;json.dump(d,open(p,'w'))"
+assert_rejects "fractional visual.timeout_sec is rejected" "$TMP/v-fracto.json" "positive INTEGER"
+
+w v-skipstr.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"visual\":{$VIS_OK,\"skip_is_failure\":\"no\"}}}"
+assert_rejects "non-boolean skip_is_failure is rejected" "$TMP/v-skipstr.json" "skip_is_failure must be a boolean"
+
+w v-unk.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"visual\":{$VIS_OK,\"bogus\":1}}}"
+assert_rejects "unknown visual key is rejected" "$TMP/v-unk.json" "unknown key 'verification.visual.bogus'"
+
+w v-visarr.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"visual\":[]}}"
+assert_rejects "visual as an array is a violation, not a crash" "$TMP/v-visarr.json" "verification.visual must be an object"
+
+# artifact: the C1 containment rule, lexically at config time.
+w v-abs.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"visual\":{\"command\":\"c\",\"artifact\":\"/tmp/f.json\",\"url\":\"http://127.0.0.1:3000/\",\"timeout_sec\":600}}}"
+assert_rejects "absolute visual.artifact is rejected" "$TMP/v-abs.json" "must be a relative path inside the project"
+
+w v-esc.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"visual\":{\"command\":\"c\",\"artifact\":\"../f.json\",\"url\":\"http://127.0.0.1:3000/\",\"timeout_sec\":600}}}"
+assert_rejects "traversing visual.artifact is rejected" "$TMP/v-esc.json" "must not traverse outside the project"
+
+for ok in "reports/v1..v2.json" "..cache/ui-result.json"; do
+    python3 - "$TMP/v-ok.json" "$TMP/v-artok.json" "$ok" << 'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1])); d["verification"]["visual"]["artifact"] = sys.argv[3]
+json.dump(d, open(sys.argv[2], "w"))
+PYEOF
+    assert "contained artifact '$ok' is accepted (a '..' SEGMENT traverses, '..' in a name does not)" bash "$V" "$TMP/v-artok.json"
+done
+
+# url: FROZEN browser base, never derived — but it must address the
+# instance the driver launches (FR-12).
+w v-badurl.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"visual\":{\"command\":\"c\",\"artifact\":\"a.json\",\"url\":\"localhost:3000\",\"timeout_sec\":600}}}"
+assert_rejects "non-http visual.url is rejected" "$TMP/v-badurl.json" "must be an absolute http(s) URL"
+
+w v-xorigin.json "{\"schema_version\":2,\"verification\":{\"app\":{$APP_OK},\"visual\":{\"command\":\"c\",\"artifact\":\"a.json\",\"url\":\"http://127.0.0.1:4000/\",\"timeout_sec\":600}}}"
+assert_rejects "cross-origin visual.url is rejected" "$TMP/v-xorigin.json" "must equal the app's origin"
+
+# Same-origin against a COMMAND-readiness app resolves via app.interface.
+w v-iface.json '{"schema_version":2,"verification":{"app":{"command":"npm start","interface":"http://127.0.0.1:3000","ready":{"command":"true","timeout_sec":30},"stop_timeout_sec":10},"visual":{"command":"c","artifact":"a.json","url":"http://127.0.0.1:3000/dashboard","timeout_sec":600}}}'
+assert "visual.url same-origin with app.interface is valid" bash "$V" "$TMP/v-iface.json"
+
+# ── THE RELOCATION ITSELF (#239 FR-10): the exact C2 config fails with
+#    the migration diagnostic, and its MECHANICALLY relocated equivalent
+#    passes — same app object, moved up one level, nothing else changed.
+#    This pair is what proves the move neither weakened nor strengthened
+#    C2's app contract; separate accept/reject cases would not.
+C2_APP='"command":"npm start","interface":"http://127.0.0.1:3123","ready":{"url":"http://127.0.0.1:3123/health","timeout_sec":30},"stop_timeout_sec":10'
+
+w v-c2-legacy.json "{\"schema_version\":2,\"profile\":\"pr\",\"verification\":{\"conformance\":{\"evaluator\":\"codex-eval\",\"timeout_sec\":30,\"app\":{$C2_APP}}}}"
+assert_rejects "the exact C2 config now fails with the migration diagnostic" "$TMP/v-c2-legacy.json" "verification.conformance.app has MOVED to verification.app"
+
+w v-c2-moved.json "{\"schema_version\":2,\"profile\":\"pr\",\"verification\":{\"app\":{$C2_APP},\"conformance\":{\"evaluator\":\"codex-eval\",\"timeout_sec\":30}}}"
+assert "the mechanically relocated C2 config is valid" bash "$V" "$TMP/v-c2-moved.json"
+
+# ...and the relocated block still enforces every C2 app rule. Each
+# mutation is applied to the MOVED config, so a rule lost in the move
+# shows up here rather than in a passing accept-case.
+mut_moved() {  # <name> <python-mutation-on-d["verification"]["app"]> <expected>
+    python3 - "$TMP/v-c2-moved.json" "$TMP/$1.json" "$2" << 'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1])); app = d["verification"]["app"]
+exec(sys.argv[3])
+json.dump(d, open(sys.argv[2], "w"))
+PYEOF
+    assert_rejects "relocated app still enforces: $1" "$TMP/$1.json" "$3"
+}
+mut_moved r-nocmd    'del app["command"]'                        "verification.app.command is required"
+mut_moved r-nostop   'del app["stop_timeout_sec"]'               "verification.app.stop_timeout_sec is required"
+mut_moved r-fracstop 'app["stop_timeout_sec"]=2.5'               "positive INTEGER"
+mut_moved r-noready  'del app["ready"]'                          "verification.app.ready is required"
+mut_moved r-bothready 'app["ready"]["command"]="true"'           "exactly ONE of url | command (got both)"
+mut_moved r-noreadyto 'del app["ready"]["timeout_sec"]'          "verification.app.ready.timeout_sec is required"
+mut_moved r-unkkey   'app["extra"]=1'                            "unknown key 'verification.app.extra'"
+mut_moved r-badiface 'app["interface"]="port 3123"'              "absolute http(s) URL"
+mut_moved r-xorigin  'app["interface"]="http://127.0.0.1:4000"'  "must equal ready.url's origin"
+mut_moved r-cmdready 'app["ready"]={"command":"true","timeout_sec":30}; del app["interface"]' "required when readiness is command-based"
+
+# Schema parity for the new block.
+VIS_SCHEMA='.properties.verification.properties.visual'
+assert "schema: verification accepts app and visual" \
+    jq -e '.properties.verification.properties | has("app") and has("visual")' "$SCHEMA"
+assert "schema: visual requires command/artifact/url/timeout_sec" \
+    jq -e "$VIS_SCHEMA.required | sort == [\"artifact\",\"command\",\"timeout_sec\",\"url\"]" "$SCHEMA"
+assert "schema: visual is closed" \
+    jq -e "$VIS_SCHEMA.additionalProperties == false" "$SCHEMA"
+assert "schema: visual.timeout_sec is integer-typed with minimum 1" \
+    jq -e "$VIS_SCHEMA.properties.timeout_sec | .type == \"integer\" and .minimum == 1" "$SCHEMA"
+assert "schema: skip_is_failure defaults to true" \
+    jq -e "$VIS_SCHEMA.properties.skip_is_failure | .type == \"boolean\" and .default == true" "$SCHEMA"
+# PARITY: every rule the jq validator enforces must also be expressible
+# in the schema, or the two disagree about what a valid config is.
+assert "schema: visual.url declares the http(s) pattern (validator parity)" \
+    jq -e "$VIS_SCHEMA.properties.url.pattern == \"^https?://\"" "$SCHEMA"
+assert "schema: conformance OR visual requires app (validator parity)" \
+    jq -e '.properties.verification.allOf
+           | any(.if.anyOf == [{"required":["conformance"]},{"required":["visual"]}]
+                 and .then.required == ["app"])' "$SCHEMA"
 
 # ── review block validation ──────────────────────────────────
 # max_rounds and loop_timeout_sec are COUNTS — the runtime

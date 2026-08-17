@@ -710,15 +710,22 @@ flag; an operator-supplied `conformance.required` is rejected by name.
 "verification": {
   "conformance": {
     "evaluator": "codex-eval",
-    "timeout_sec": 600,
-    "app": {
-      "command": "npm start",
-      "ready": { "url": "http://127.0.0.1:3000/health", "timeout_sec": 30 },
-      "stop_timeout_sec": 10
-    }
+    "timeout_sec": 600
+  },
+  "app": {
+    "command": "npm start",
+    "ready": { "url": "http://127.0.0.1:3000/health", "timeout_sec": 30 },
+    "stop_timeout_sec": 10
   }
 }
 ```
+
+The application is declared at `verification.app`, one level up from the
+evaluator, because the visual gate (#239, increment C3) consumes the same
+running instance: the driver launches it once per landing gate however
+many consumers read it. `verification.conformance.app` is refused by name
+with a migration message — a silently ignored block would leave your
+launch command inert.
 
 - **The evaluator is a capability, not just a healthy provider.** Its
   providers.toml entry must declare `conformance_command` — an
@@ -736,7 +743,9 @@ flag; an operator-supplied `conformance.required` is rejected by name.
   the spawned group must still be alive when it does. The evaluator-facing
   address is `app.interface`, else `ready.url`; both must be http(s) and
   share an origin, and command-based readiness requires an explicit
-  `app.interface`.
+  `app.interface`. The block is REQUIRED whenever `verification.conformance`
+  or `verification.visual` is present, and validated by one shared
+  implementation so both consumers enforce identical rules.
 - **The landing gate executes, it does not infer.** After the coverage
   gate and before finalize/push/PR, every frozen `kind: deterministic`
   verifier is RUN (its own command, bounded), then the evaluator is
