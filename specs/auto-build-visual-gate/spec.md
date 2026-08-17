@@ -357,10 +357,12 @@ this file states the requirements they satisfy.
   that modification inside the detached worktree, then writes an
   otherwise-valid PASS artifact, is refused before evidence import — the
   HEAD-equality check catches what the tracked-diff check alone cannot.
-- **SC-26** Each shipped fail-fast path — page load failure and a failed
-  axe gate — produces an artifact answering every requested criterion
-  as `unreached` with the abort reason as evidence; the gate marks those
-  FRs red, and no `skip_is_failure` setting can waive them.
+- **SC-26** Each shipped fail-fast path — page load failure, a failed
+  axe gate, and a failed anti-slop rubric — produces an artifact
+  answering every requested criterion as `unreached` with the abort
+  reason as evidence; the gate marks those FRs red, and no
+  `skip_is_failure` setting can waive them. All three are separate
+  `fail()` sites in the runner, so each needs its own regression.
 - **SC-23** A PERSISTENT change to a TRACKED file in the execution root
   cannot produce forged evidence: a deterministic verifier that writes
   to the path the worktree will occupy is caught by the point-of-use

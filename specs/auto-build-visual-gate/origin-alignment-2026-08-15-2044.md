@@ -1,7 +1,7 @@
 # Origin Alignment Check — auto-build-visual-gate
 
 Date: 2026-08-15 20:44 (record opened)
-Last revised: 2026-08-16 21:47 — PR #245 review round 1
+Last revised: 2026-08-16 22:03 — PR #245 review round 2
 Trigger: rev-1 SDD bundle authored for increment C3 (#239), carved out of
 #190 at the owner's direction ("Clean obsolete local branches, then start
 #239") after C2 (#242) merged.
@@ -171,6 +171,12 @@ optionality was described as backward compatibility with the pre-C3
 harness, which is false (it carries no criteria and is refused), so it is
 restated as covering a transitional per-criterion artifact only. No scope
 moved in or out.
+
+PR #245 review (round 2): SC-26 and T4 named only two of the three
+shipped fail-fast paths, leaving the anti-slop rubric branch without a
+regression proving it emits `unreached`. All three are independent
+`fail()` sites in the runner, so coverage of two does not imply the
+third was converted. Acceptance coverage corrected; no contract change.
 
 ## Verdict
 

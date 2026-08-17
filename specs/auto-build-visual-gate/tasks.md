@@ -73,8 +73,9 @@ plan's decisions and gate sequence are normative.
 - `CRITIC=agent` with a request present refuses by name (it produces no
   feedback artifact, so it cannot satisfy a driver-owned gate).
 - Regenerate/verify adapter copies if the bundle is mirrored.
-- Tests: SC-13, SC-26 (page.goto failure and axe failure) — each path
-  asserted against the artifact the runner really writes.
+- Tests: SC-13, SC-26 (page.goto failure, axe failure, and anti-slop
+  failure — three separate `fail()` sites, three regressions) — each
+  path asserted against the artifact the runner really writes.
 
 ## T5 — Shared app lifecycle + the `vg_finish` split (FR-10)
 
