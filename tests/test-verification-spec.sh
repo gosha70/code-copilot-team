@@ -138,7 +138,11 @@ assert_exit "finalized fixture is admitted (exit 0)" 0 "$RC"
 assert_contains "coverage check passes" "$OUTPUT" "coverage — every FR-N mapped"
 assert_contains "sha check passes" "$OUTPUT" "recomputes clean"
 assert_contains "test.command proven on current ref" "$OUTPUT" "test.command passes"
-assert_eq "all four C-owned checks surface as DEFER" "4" "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
+# C3 T3 retires the UI-in-scope DEFER (it is now an enforced check);
+# the other three remain unowned.
+assert_eq "the three remaining C-owned checks surface as DEFER" "3" "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
+assert_eq "the UI-in-scope DEFER line is gone (T3 enforces it)" "0" \
+    "$(echo "$OUTPUT" | grep -c 'UI-in-scope DESIGN.md placeholder check' || true)"
 rm -rf "$D"
 
 # ── Admission: reject matrix (one mutation per case) ──
@@ -542,7 +546,7 @@ rm "$D/specs/demo-feat/spec.md"
 run_admission "$D"
 assert_exit "missing spec.md is a named failure (exit 1, not a crash)" 1 "$RC"
 assert_contains "missing spec.md named" "$OUTPUT" "spec.md missing"
-assert_eq "DEFER block printed on the spec.md refusal" "4" "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
+assert_eq "DEFER block printed on the spec.md refusal" "3" "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
 rm -rf "$D"
 
 D=$(mk_fixture); finalize "$D"
@@ -599,7 +603,7 @@ rm -rf "$D"
 # DEFER visibility on the earliest refusal (missing artifact).
 D=$(mk_fixture)
 run_admission "$D"
-assert_eq "DEFER block printed even on the earliest refusal" "4" \
+assert_eq "DEFER block printed even on the earliest refusal" "3" \
     "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
 rm -rf "$D"
 
@@ -628,9 +632,50 @@ PYEOF
     echo "$dir"
 }
 
+# add_ui_bundle <dir> [--no-design|--placeholder-design|--no-harness|--no-script|--no-visual-cfg|--no-app-cfg|--no-url]
+# The #190 §11 bundle a UI-in-scope run must carry: DESIGN.md without
+# placeholders, harness/, a root copilot:review script, plus the C3
+# config (verification.visual with its url, and the shared app). Each
+# flag omits exactly ONE piece, so every refusal is provoked in
+# isolation (SC-1).
+add_ui_bundle() {
+    local dir="$1" omit="${2:-}"
+    [[ "$omit" == "--no-design" ]] || {
+        if [[ "$omit" == "--placeholder-design" ]]; then
+            printf '# Design\n\nAccent: ← REPLACE with the product accent\n' > "$dir/DESIGN.md"
+        else
+            printf '# Design\n\nAccent: #0b5cff. Empty states carry one primary CTA.\n' > "$dir/DESIGN.md"
+        fi
+    }
+    [[ "$omit" == "--no-harness" ]] || mkdir -p "$dir/harness"
+    if [[ "$omit" == "--no-script" ]]; then
+        echo '{"scripts":{"build":"true"}}' > "$dir/package.json"
+    else
+        echo '{"scripts":{"copilot:review":"tsx harness/src/runner.ts"}}' > "$dir/package.json"
+    fi
+    python3 - "$dir/specs/demo-feat/automation.json" "$omit" << 'PYEOF'
+import json, sys
+p, omit = sys.argv[1], sys.argv[2]
+cfg = json.load(open(p)); v = cfg.setdefault("verification", {})
+if omit != "--no-app-cfg":
+    v["app"] = {"command": "npm start",
+                "ready": {"url": "http://127.0.0.1:3000/health", "timeout_sec": 30},
+                "stop_timeout_sec": 10}
+if omit != "--no-visual-cfg":
+    vis = {"command": "npm ci && npm run copilot:review",
+           "artifact": "tmp/ui-review/critique-feedback.json",
+           "url": "http://127.0.0.1:3000/", "timeout_sec": 600}
+    if omit == "--no-url":
+        del vis["url"]
+    v["visual"] = vis
+json.dump(cfg, open(p, "w"))
+PYEOF
+}
+
 D=$(mk_visual_fixture "The empty state renders a single primary CTA.")
+add_ui_bundle "$D"
 run_admission "$D"
-assert_exit "visual verifier kind is accepted" 0 "$RC"
+assert_exit "visual verifier kind is accepted (with a real UI bundle)" 0 "$RC"
 assert_contains "visual verifier counts as executable-now" "$OUTPUT" "every verifier resolves to something executable"
 rm -rf "$D"
 
@@ -646,6 +691,76 @@ sedi 's/    - kind: deterministic/    - kind: vizual/' "$D/specs/demo-feat/verif
 run_admission "$D"
 assert_exit "unknown verifier kind still refused" 1 "$RC"
 assert_contains "unknown-kind message lists visual" "$OUTPUT" "deterministic|runtime_conformance|visual"
+rm -rf "$D"
+
+# ── SC-1: the UI bundle is proven real, and the requirement is DERIVED ──
+# Each case omits exactly ONE piece, so every refusal is provoked in
+# isolation rather than by a fixture that is broken several ways at once.
+# --no-url and --no-app-cfg are enforced by the CONFIG gate (T2), not by
+# a second copy of the rule in 7c — but SC-1 requires a NAMED refusal per
+# missing piece, so admission propagates the validator's own diagnostics
+# instead of collapsing them to "run it directly". Each case therefore
+# asserts the discriminating text, not merely a non-zero exit: several
+# layers can reject the same input, and exit-code-only coverage stays
+# green when the intended enforcement path disappears.
+for case in "--no-design:DESIGN.md is missing" \
+            "--placeholder-design:unfilled '← REPLACE' / '← UPDATE' placeholders" \
+            "--no-harness:harness/ is missing" \
+            "--no-script:no root 'copilot:review' script" \
+            "--no-visual-cfg:verification.visual is missing from automation.json" \
+            "--no-url:verification.visual.url is required" \
+            "--no-app-cfg:verification.app is required when verification.visual is present"; do
+    flag="${case%%:*}"; want="${case#*:}"
+    D=$(mk_visual_fixture "The empty state renders a single primary CTA.")
+    add_ui_bundle "$D" "$flag"
+    run_admission "$D"
+    assert_exit "UI in scope, $flag: refused" 1 "$RC"
+    assert_contains "UI in scope, $flag: names the missing piece" "$OUTPUT" "$want"
+    rm -rf "$D"
+done
+
+# Propagation is what makes the two cases above readable at the admission
+# layer: the validator's exact wording reaches the operator running
+# admission, rather than a generic "run it directly".
+D=$(mk_visual_fixture "The empty state renders a single primary CTA.")
+add_ui_bundle "$D" --no-url
+run_admission "$D"
+assert_contains "admission relays the config validator's own wording" "$OUTPUT" \
+    "automation config: verification.visual.url is required"
+assert_contains "and still names the generic config-gate failure" "$OUTPUT" \
+    "automation.json fails validate-automation-config.sh"
+rm -rf "$D"
+
+# The third layer boundary: a visual mapping with NO visual block is
+# admission's own refusal, not the config gate's — that config is
+# perfectly valid on its own.
+D=$(mk_visual_fixture "The empty state renders a single primary CTA.")
+add_ui_bundle "$D" --no-visual-cfg
+RC=0; bash "$REPO_DIR/scripts/validate-automation-config.sh" "$D/specs/demo-feat/automation.json" >/dev/null 2>&1 || RC=$?
+assert_exit "a config with app but no visual block is VALID on its own" 0 "$RC"
+run_admission "$D"
+assert_contains "so admission is the layer that refuses it" "$OUTPUT" \
+    "UI is in scope (an FR maps kind: visual) but verification.visual is missing"
+rm -rf "$D"
+
+# The requirement is DERIVED from the mapping, not from prose or config:
+# a project with NO visual mapping needs none of the bundle, even when
+# its requirements talk about dashboards and screens.
+D=$(mk_fixture)
+sedi 's/- FR-1: demo test suite exits zero when invoked from the project root./- FR-1: the dashboard screen renders the empty state with a single primary CTA button./' "$D/specs/demo-feat/spec.md"
+finalize "$D"
+run_admission "$D"
+assert_exit "UI-sounding prose without a visual mapping still admits" 0 "$RC"
+assert_eq "no UI-bundle refusal is raised for it" "0" \
+    "$(echo "$OUTPUT" | grep -c 'UI is in scope' || true)"
+rm -rf "$D"
+
+# ...and a complete bundle passes with a single named check.
+D=$(mk_visual_fixture "The empty state renders a single primary CTA.")
+add_ui_bundle "$D"
+run_admission "$D"
+assert_contains "a complete UI bundle passes as one named check" "$OUTPUT" \
+    "UI is in scope — DESIGN.md, harness/, copilot:review, and the visual contract are all present"
 rm -rf "$D"
 
 # The canonical capture carries visual verifiers with their

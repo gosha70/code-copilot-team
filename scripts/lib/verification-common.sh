@@ -166,6 +166,61 @@ vc_conformance_required() {
     fi
 }
 
+# vc_visual_required_parsed — the C3 (#239) derivation scan, the exact
+# analogue of vc_conformance_required_parsed: reads vc_parse_artifact TSV
+# on stdin, exit 0 iff any VER record has kind `visual`. THIS is what
+# "UI is in scope" MEANS — a mapping in the finalized artifact, never an
+# operator flag and never inferred from requirement prose. Scans through
+# EOF for the same reason the conformance scan does: an early `exit` on
+# first match SIGPIPEs the producer under `set -o pipefail` once the
+# remaining records overflow the pipe buffer, silently deriving "false"
+# for large valid artifacts.
+vc_visual_required_parsed() {
+    awk -F'\t' '$1 == "VER" && $3 == "visual" { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+# vc_visual_required <verification.yaml> — echo "true" iff any FR maps a
+# verifier of kind visual, else "false". A missing/unreadable artifact
+# derives "false"; admission separately refuses runs whose artifact is
+# missing, so this never turns absence into a requirement.
+vc_visual_required() {
+    local artifact="$1"
+    if [[ -f "$artifact" ]] && vc_parse_artifact "$artifact" | vc_visual_required_parsed; then
+        echo "true"
+    else
+        echo "false"
+    fi
+}
+
+# vc_ui_bundle_violations <root> — the #190 §11 UI bundle, checked as
+# FILES ONLY, one named violation per missing piece on stdout (empty
+# output = complete bundle). Lives here, not in validate-spec.sh, because
+# TWO callers need the identical message set: admission (against the
+# project) and the C3 landing gate (against the execution root, since
+# attended runs are never admission-checked).
+#
+# FILES only, deliberately: config requirements are admission's business
+# against live automation.json, and the GATE's against the FROZEN
+# contract. A helper that re-read the config at the gate would be a hole
+# in the pinning rule — a post-freeze edit could change what the gate
+# demanded (#239 SC-19).
+vc_ui_bundle_violations() {
+    local root="$1"
+    local design="$root/DESIGN.md" pkg="$root/package.json"
+    if [[ ! -f "$design" ]]; then
+        echo "DESIGN.md is missing — a visual verifier judges the UI against it, so it cannot be absent"
+    elif grep -qE '← (REPLACE|UPDATE)' "$design" 2>/dev/null; then
+        echo "DESIGN.md still carries unfilled '← REPLACE' / '← UPDATE' placeholders — the design bar has not been written, so nothing can be judged against it"
+    fi
+    [[ -d "$root/harness" ]] \
+        || echo "harness/ is missing — the driver runs the harness itself, so the bundle must ship one"
+    if [[ ! -f "$pkg" ]]; then
+        echo "package.json is missing — the root 'copilot:review' script is what the visual gate invokes"
+    elif ! jq -e '.scripts["copilot:review"] | type == "string" and length > 0' "$pkg" >/dev/null 2>&1; then
+        echo "package.json declares no root 'copilot:review' script — the visual gate has no harness entry point to invoke"
+    fi
+}
+
 # vc_capture_from_parsed <spec.md> — read vc_parse_artifact TSV on
 # stdin, VALIDATE it against the authoritative spec, and emit the
 # canonical freeze capture JSON
