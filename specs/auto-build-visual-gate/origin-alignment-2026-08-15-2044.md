@@ -1,7 +1,7 @@
 # Origin Alignment Check — auto-build-visual-gate
 
 Date: 2026-08-15 20:44 (record opened)
-Last revised: 2026-08-16 22:03 — PR #245 review round 2
+Last revised: 2026-08-18 21:09 — T5/T7 task-boundary amendment
 Trigger: rev-1 SDD bundle authored for increment C3 (#239), carved out of
 #190 at the owner's direction ("Clean obsolete local branches, then start
 #239") after C2 (#242) merged.
@@ -177,6 +177,23 @@ shipped fail-fast paths, leaving the anti-slop rubric branch without a
 regression proving it emits `unreached`. All three are independent
 `fail()` sites in the runner, so coverage of two does not imply the
 third was converted. Acceptance coverage corrected; no contract change.
+
+## Amendment during build (after T4)
+
+The freeze of `contract.visual` moved from T7 to T5. Not a scope change:
+T5's approved bullets and tests already presupposed it — the shared app
+lifecycle keys on `conformance || visual`, the launch-binding proof takes
+the frozen visual `url` as an additional bound address, and SC-11
+("visual-only contract launches the app") and SC-16 ("stale responder on
+the url") cannot be written against a contract that has no visual
+section. Leaving the freeze in T7 made T5 unbuildable as approved rather
+than merely awkward.
+
+Recorded here, and in both task bodies, because the alternative was to
+resolve a task-boundary ambiguity silently at build time — the failure
+mode that produced the T4 agent-refusal drift. Requirements, success
+criteria, and the plan's normative decisions are unchanged; only which
+increment lands the plumbing moved.
 
 ## Verdict
 
