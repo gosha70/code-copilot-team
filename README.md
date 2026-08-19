@@ -866,7 +866,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
 │   ├── test-generate.sh                 294 generation + adapter tests
-│   ├── test-shared-structure.sh         810 structure + content tests
+│   ├── test-shared-structure.sh         812 structure + content tests
 │   ├── test-sync.sh                     121 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
@@ -875,6 +875,7 @@ code-copilot-team/
 │   ├── test-review-loop.sh           116 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        894 auto-build driver tests
+│   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
