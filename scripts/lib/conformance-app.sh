@@ -244,12 +244,21 @@ ca_probe() {
     [[ "$(ca_probe_outcome "$1" "${2:-5}")" == "ready" ]]
 }
 
-# ca_bind_preflight <app-json> [interface] — the launch-binding
-# precondition: BEFORE the app starts, neither the readiness probe nor
-# the evaluator-facing interface may answer. Returns 0 when nothing
-# answers; 1 (with a named reason on stdout) when something does.
+# ca_bind_preflight <app-json> [interface] [extra-address...] — the
+# launch-binding precondition: BEFORE the app starts, NOTHING that the
+# run will later treat as this instance may answer — not the readiness
+# probe, not the consumer-facing interface, and not any extra address a
+# consumer was given (#239 C3: the visual browser base). Same origin is
+# not the same process: a stale responder on the UI path would otherwise
+# serve evidence for a previous deployment while the launched command
+# did nothing. Returns 0 when nothing answers; 1 (with a named reason on
+# stdout) when something does.
 ca_bind_preflight() {
-    local app="$1" iface="${2:-}" outcome rc=0
+    local app="$1" iface="${2:-}" outcome rc=0 extra
+    # Extra addresses are optional; bash 3.2 + set -u makes an unguarded
+    # shift of a short arg list fatal, so index instead of shifting.
+    local -a extras=()
+    if [[ $# -gt 2 ]]; then extras=("${@:3}"); fi
     # ONLY an explicit `not-ready` clears the precondition (round-6
     # finding 1, round-7 finding 1). `ready` means something already
     # answers; anything else means the probe produced no verdict, and an
@@ -275,6 +284,19 @@ ca_bind_preflight() {
             return 1
         fi
     fi
+    for extra in ${extras[@]+"${extras[@]}"}; do
+        [[ -n "$extra" ]] || continue
+        rc=0
+        ca_reachable "$extra" 3 || rc=$?
+        if [[ $rc -eq 0 ]]; then
+            echo "$extra already answered BEFORE the app was launched — the responder cannot be attributed to this run (same origin is not the same process)"
+            return 1
+        fi
+        if [[ $rc -eq 2 ]]; then
+            echo "$extra could not be probed (no usable HTTP client) — the launch binding is unproven"
+            return 1
+        fi
+    done
     return 0
 }
 
@@ -305,6 +327,13 @@ ca_group_alive() {
 # interface answering. Prints a named reason on failure.
 ca_wait_ready() {
     local app="$1" pid="$2" iface="${3:-}"
+    # Extra consumer-facing addresses (#239 C3: the visual browser base).
+    # Each must ANSWER while the spawned group is alive — proving the run
+    # serves what its consumers were pointed at, not merely something on
+    # the same origin.
+    local -a extras=()
+    if [[ $# -gt 3 ]]; then extras=("${@:4}"); fi
+    local extra
     local secs deadline remaining budget
     secs=$(jq -r '.ready.timeout_sec // empty' <<< "$app")
     [[ -n "$secs" ]] || { echo "app.ready.timeout_sec missing — an unbounded probe never fails closed"; return 1; }
@@ -355,6 +384,24 @@ ca_wait_ready() {
                     return 1
                 fi
             fi
+            for extra in ${extras[@]+"${extras[@]}"}; do
+                [[ -n "$extra" ]] || continue
+                remaining=$(( deadline - $(date +%s) ))
+                if [[ "$remaining" -le 0 ]]; then
+                    echo "readiness succeeded but the deadline was exhausted before $extra could be checked"
+                    return 1
+                fi
+                budget=$remaining
+                [[ "$budget" -gt 5 ]] && budget=5
+                if ! ca_reachable "$extra" "$budget"; then
+                    echo "readiness succeeded but $extra does not answer — the consumer pointed at it would collect nothing"
+                    return 1
+                fi
+                if ! ca_group_alive "$pid"; then
+                    echo "$extra answered but the launched process group is gone — a different process is serving it"
+                    return 1
+                fi
+            done
             return 0
         fi
         # Never sleep past the deadline.

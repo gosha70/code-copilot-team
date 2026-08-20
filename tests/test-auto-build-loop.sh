@@ -5201,9 +5201,12 @@ VG_APP=$(jq -n --arg c "python3 -m http.server $VG_PORT --bind 127.0.0.1" \
     --arg u "http://127.0.0.1:$VG_PORT/" \
     '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5}')
 vg_conf_contract() {  # <app-json>
+    # C3 (#239 T5): the app is a TOP-LEVEL section with its interface
+    # resolved at freeze — one lifecycle shared by both runtime kinds.
     jq -n --argjson app "$1" --arg s "$SHA2" --arg iface "http://127.0.0.1:$VG_PORT/" \
-        '{conformance:{evaluator:"stub-eval", app:$app, interface:$iface, timeout_sec:30,
-           criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]}}'
+        '{conformance:{evaluator:"stub-eval", timeout_sec:30,
+           criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]},
+          app:($app + {interface:$iface})}'
 }
 # The evaluator: reads the request file, emits ONE fenced json block.
 vg_write_provider() {  # <project-dir> <verdict-script> — prints the profile path
@@ -5383,7 +5386,7 @@ rm -rf "$VGC"
 # Attended blockless run: the criteria are frozen with a null evaluator —
 # the requirement surfaces HERE (FR-10), it is never skipped.
 VGC=$(vg_conf_fixture)
-jq -n --arg s "$SHA2" '{conformance:{evaluator:null, app:null, interface:null, timeout_sec:null,
+jq -n --arg s "$SHA2" '{conformance:{evaluator:null, timeout_sec:null,
     criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]}}' \
     > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
 VG_OUT=$(vg_case "$VGC")
@@ -5399,8 +5402,9 @@ for mutation in "echo smuggled >> pass.sh" "echo x > untracked-artifact.txt"; do
         --arg u "http://127.0.0.1:$MPORT/" \
         '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5}')
     jq -n --argjson app "$MAPP" --arg s "$SHA2" --arg iface "http://127.0.0.1:$MPORT/" \
-        '{conformance:{evaluator:"stub-eval", app:$app, interface:$iface, timeout_sec:30,
-           criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}' \
+        '{conformance:{evaluator:"stub-eval", timeout_sec:30,
+           criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]},
+          app:($app + {interface:$iface})}' \
         > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
     VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
     assert_eq "C2-T5: an app that mutates the checkout [$mutation] disposes git_anomaly" "git_anomaly" \
@@ -5496,8 +5500,9 @@ assert_eq "C2-T5: the driver's exit_cleanup calls it" "1" \
 VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_OK")
 MPORT=$(free_port)
 jq -n --arg c "echo smuggled >> pass.sh; sleep 30" --arg u "http://127.0.0.1:$MPORT/" --arg s "$SHA2" \
-    '{conformance:{evaluator:"stub-eval", app:{command:$c, ready:{url:$u, timeout_sec:3}, stop_timeout_sec:2},
-      interface:$u, timeout_sec:30, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}' \
+    '{conformance:{evaluator:"stub-eval", timeout_sec:30,
+      criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]},
+      app:{command:$c, ready:{url:$u, timeout_sec:3}, stop_timeout_sec:2, interface:$u}}' \
     > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
 VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
 assert_eq "C2-T5: an app that mutates the repo AND never becomes ready is a git_anomaly" "git_anomaly" \
@@ -5963,8 +5968,9 @@ jq -e '.verifiers.timeout_sec == 60
 assert_exit "C2-T3: deterministic verifiers frozen with metric + sha" 0 $?
 jq -e '.conformance.evaluator == "mock-eval"
    and .conformance.timeout_sec == 600
-   and .conformance.interface == "http://127.0.0.1:9099/health"
-   and .conformance.app.command == "sleep 5"
+   and .app.interface == "http://127.0.0.1:9099/health"
+   and .app.command == "sleep 5"
+   and (.conformance | has("app") | not)
    and (.conformance.criteria | length == 1)
    and .conformance.criteria[0].fr == "FR-2"
    and .conformance.criteria[0].criterion == "Cancel aborts the job."' \
@@ -5989,7 +5995,7 @@ cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600}
 run_driver "$P"
 assert_exit "C2-T3: command-readiness run parks at the verifier gate" 4 "$RC"
 assert_eq "C2-T3: app.interface wins the interface resolution" "http://127.0.0.1:9099" \
-    "$(jq -r '.conformance.interface' "$P/.cct/auto-build/demo-feat/frozen-contract.json")"
+    "$(jq -r '.app.interface' "$P/.cct/auto-build/demo-feat/frozen-contract.json")"
 rm -rf "$P"
 
 # ── Blockless attended (FR-10): the criteria freeze with an all-null
@@ -5999,8 +6005,7 @@ P=$(setup_project); single_phase "$P"
 write_verification_yaml "$P"
 run_driver "$P"
 assert_exit "C2-T3: blockless attended run parks at the gate (mapping unskippable)" 4 "$RC"
-jq -e '.conformance.evaluator == null and .conformance.app == null
-   and .conformance.interface == null and .conformance.timeout_sec == null
+jq -e '.conformance.evaluator == null and .conformance.timeout_sec == null
    and (.conformance.criteria | length == 1)' \
    "$P/.cct/auto-build/demo-feat/frozen-contract.json" >/dev/null 2>&1
 assert_exit "C2-T3: blockless freeze pins criteria with a null evaluator side" 0 $?
@@ -6101,7 +6106,7 @@ jq -n --argjson now "$NOW" \
       totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:$now},
       milestones:{every_n_phases:2, last_paused_after_phase:0},
       escalations:[], pr:{number:null, url:null},
-      preflight:{contract:{conformance:{evaluator:null,app:null,interface:null,timeout_sec:null,criteria:[{fr:"FR-2",statement_sha:"sha256:2222222222222222222222222222222222222222222222222222222222222222",criterion:"Cancel aborts the job."}]}}},
+      preflight:{contract:{conformance:{evaluator:null,timeout_sec:null,criteria:[{fr:"FR-2",statement_sha:"sha256:2222222222222222222222222222222222222222222222222222222222222222",criterion:"Cancel aborts the job."}]}}},
       updated:"2026-01-01T00:00:00Z"}' > "$LEDGERC/state.json"
 echo "approved-by: test" >> "$P/specs/demo-feat/automation-summary.md"
 git -C "$P" add -A && git -C "$P" commit -q -m "signoff"
@@ -6386,12 +6391,14 @@ kill "$STALL_PID" 2>/dev/null || true
 
 # ── Round-6 finding 4: the PERSISTED contract schema agrees with the
 #    executable validator on integer bounds. ──
-jq -e '.properties.contract.properties.conformance.properties as $c
-   | ($c.timeout_sec.type == ["integer","null"] and $c.timeout_sec.minimum == 1)
-   and ($c.app.properties.stop_timeout_sec.type == "integer" and $c.app.properties.stop_timeout_sec.minimum == 1)
-   and ($c.app.properties.ready.properties.timeout_sec.type == "integer" and $c.app.properties.ready.properties.timeout_sec.minimum == 1)' \
+# C3 T5: the app moved to contract.app, so its bounds are asserted there.
+jq -e '.properties.contract.properties as $ct
+   | ($ct.conformance.properties.timeout_sec.type == ["integer","null"] and $ct.conformance.properties.timeout_sec.minimum == 1)
+   and ($ct.app.properties.stop_timeout_sec.type == "integer" and $ct.app.properties.stop_timeout_sec.minimum == 1)
+   and ($ct.app.properties.ready.properties.timeout_sec.type == "integer" and $ct.app.properties.ready.properties.timeout_sec.minimum == 1)
+   and ($ct.visual.properties.timeout_sec.type == ["integer","null"] and $ct.visual.properties.timeout_sec.minimum == 1)' \
    "$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json" >/dev/null 2>&1
-assert_exit "C2-T4 schema: the persisted contract declares integer bounds" 0 $?
+assert_exit "C2-T4 schema: the persisted contract declares integer bounds (app + visual)" 0 $?
 
 # ── Stop reaches DESCENDANTS, including a TERM-resistant one (the
 #    cp_run_bounded discipline: escalation must complete). ──
@@ -6539,7 +6546,8 @@ sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") 
 source "$DRIVER_FUNCS"
 CT=$(mktemp)
 
-jq -n '{conformance:{evaluator:"e",app:{command:"c",ready:{url:"http://x",timeout_sec:5},stop_timeout_sec:5},interface:"http://x",timeout_sec:600,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]}}' > "$CT"
+jq -n '{conformance:{evaluator:"e",timeout_sec:600,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]},
+        app:{command:"c",ready:{url:"http://x",timeout_sec:5},stop_timeout_sec:5,interface:"http://x"}}' > "$CT"
 if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
 assert_exit "C2-T3: conformance-only contract validates" 0 "$_v"
 
@@ -6547,11 +6555,11 @@ jq -n '{verifiers:{timeout_sec:60,set:[{fr:"FR-1",statement_sha:"sha256:aa",test
 if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
 assert_exit "C2-T3: verifiers-only contract validates (null metric ok)" 0 "$_v"
 
-jq -n '{conformance:{evaluator:"e",app:null,interface:null,timeout_sec:null,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]}}' > "$CT"
+jq -n '{conformance:{evaluator:"e",timeout_sec:null,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]}}' > "$CT"
 if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
 assert_exit "C2-T3: half-frozen evaluator side rejected" 1 "$_v"
 
-jq -n '{conformance:{evaluator:null,app:null,interface:null,timeout_sec:null,criteria:[]}}' > "$CT"
+jq -n '{conformance:{evaluator:null,timeout_sec:null,criteria:[]}}' > "$CT"
 if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
 assert_exit "C2-T3: empty criteria rejected" 1 "$_v"
 
@@ -6614,16 +6622,320 @@ rm -rf "$UP"; rm -f "$CONFIG_SNAPSHOT" "$PREFLIGHT_RESULT_FILE"
 # ── Round-2 finding 3: the result schema scopes C1 rules the way the
 #    executable validator does. ──
 SCHEMA_PF="$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json"
-jq -e '.properties.contract.allOf | length == 1
-   and (.[0].if.anyOf | length == 11)
-   and (.[0].then.required | length == 8)
-   and (.[0].then.allOf | length == 4)' "$SCHEMA_PF" >/dev/null 2>&1
+# C3 T5 added the FR-10 app-coupling entry to this allOf, so the C1
+# conditional is found by CONTENT, not position — a positional pin is
+# exactly what silently broke when the array gained an entry.
+jq -e '[.properties.contract.allOf[]
+        | select((.if.anyOf | length) == 11)]
+       | length == 1
+         and (.[0].then.required | length == 8)
+         and (.[0].then.allOf | length == 4)' "$SCHEMA_PF" >/dev/null 2>&1
 assert_exit "C2-T3 schema: C1 coverage rules scoped under a presence conditional" 0 $?
 jq -e '[.properties.contract | has("dependencies"), has("required")] | any | not' \
     "$SCHEMA_PF" >/dev/null 2>&1
 assert_exit "C2-T3 schema: no unconditional coverage requirement remains" 0 $?
 
 rm -f "$CT" "$DRIVER_FUNCS"
+echo ""
+echo "=== C3 (#239) T5: frozen app+visual, shared lifecycle, checkpoint split ==="
+# ══════════════════════════════════════════════════════════════
+
+# ── Preflight schema: the two NEW sections under the same closed-shape
+#    discipline. This is where BOTH T5 bugs would have surfaced — adding a
+#    top-level section means updating the positive allow-list AND every
+#    predicate that means "everything except the known sections". ──
+PF="$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json"
+jq -e '.properties.contract.properties | has("app") and has("visual")' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: contract declares app and visual sections" 0 $?
+jq -e '.properties.contract.properties.conformance.properties | (has("app") | not) and (has("interface") | not)' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: conformance no longer declares app or interface" 0 $?
+jq -e '.properties.contract.properties.conformance.required | sort == ["criteria","evaluator","timeout_sec"]' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: conformance requires only evaluator/timeout_sec/criteria" 0 $?
+jq -e '[.properties.contract.properties.app.additionalProperties,
+        .properties.contract.properties.app.properties.ready.additionalProperties,
+        .properties.contract.properties.visual.additionalProperties,
+        .properties.contract.properties.visual.properties.criteria.items.additionalProperties]
+       | all(. == false)' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: both new sections are CLOSED, and so are their children" 0 $?
+jq -e '.properties.contract.properties.app.properties | has("interface")' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: app carries the RESOLVED interface" 0 $?
+jq -e '.properties.contract.properties.visual.required | sort == ["artifact","command","criteria","skip_is_failure","timeout_sec","url"]' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: visual pins command/artifact/url/timeout/policy/criteria" 0 $?
+jq -e '.properties.contract.properties.visual.allOf | any(.oneOf | length == 2)' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: visual is all-null or all-configured (the blockless case)" 0 $?
+# The TOP-LEVEL presence rule — the negative predicate the first seven
+# assertions never looked at, which is exactly where this bug class
+# escaped twice. A visual-only contract must satisfy the anyOf.
+jq -e '.properties.contract.anyOf | any(.required == ["visual"])' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: the contract presence rule accepts a visual-only contract" 0 $?
+jq -e '.properties.contract.allOf | any(
+    .if.anyOf == [{"required":["conformance"]},{"required":["visual"]}]
+    and .then.required == ["app"])' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: a runtime consumer REQUIRES the app key (FR-10 coupling)" 0 $?
+jq -e '.properties.contract.properties.app.required | sort == ["command","interface","ready","stop_timeout_sec"]' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: app REQUIRES the resolved interface, not merely declares it" 0 $?
+jq -e '.properties.contract.properties.visual.properties.url.pattern == "^https?://"' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: visual.url pins the http(s) pattern (T2 parity)" 0 $?
+# Duplicate JSON keys are legal to parsers and silently dropped (last one
+# wins) — which is how the FR-10 coupling vanished on first insertion:
+# `contract` already had an allOf, and a second key produced valid JSON
+# with MY rule discarded. Guard both schemas so the failure mode cannot
+# recur silently in T6/T7.
+python3 - "$SCHEMA_PF" "$SCRIPT_DIR/../shared/schemas/automation.schema.json" << 'PYEOF'
+import json, sys, collections
+def no_dupes(pairs):
+    d=[k for k,c in collections.Counter(k for k,_ in pairs).items() if c>1]
+    if d: raise ValueError(f"duplicate keys: {d}")
+    return dict(pairs)
+for p in sys.argv[1:]:
+    json.load(open(p), object_pairs_hook=no_dupes)
+PYEOF
+assert_exit "C3-T5 schema: no duplicate keys in either schema (last-one-wins is silent)" 0 $?
+
+# ── validate_contract_json, exercised directly. ──
+CT5=$(mktemp); CT5_DF=$(mktemp)
+sed -n '/^validate_contract_json()/,/^}/p' "$SCRIPT_DIR/../scripts/auto-build-loop.sh" > "$CT5_DF"
+ct5_valid() {  # <json> -> 0 valid, 1 invalid (however many rules tripped)
+    printf '%s' "$1" > "$CT5"
+    ( source "$CT5_DF"; validate_contract_json "$CT5" ) >/dev/null 2>&1 || return 1
+}
+VIS_OK='{"command":"npm run r","artifact":"tmp/f.json","url":"http://127.0.0.1:3000/","timeout_sec":600,"skip_is_failure":true,"criteria":[{"fr":"FR-3","statement_sha":"sha256:cc","criterion":"c"}]}'
+APP_OK='{"command":"npm start","ready":{"url":"http://127.0.0.1:3000/health","timeout_sec":30},"stop_timeout_sec":10,"interface":"http://127.0.0.1:3000/health"}'
+VIS_NULL='{"command":null,"artifact":null,"url":null,"timeout_sec":null,"skip_is_failure":true,"criteria":[{"fr":"FR-3","statement_sha":"sha256:cc","criterion":"c"}]}'
+
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" --argjson a "$APP_OK" '{visual:$v, app:$a}')"
+assert_exit "C3-T5: a VISUAL-ONLY contract validates (no conformance at all)" 0 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_NULL" '{visual:$v, app:null}')"
+assert_exit "C3-T5: a visual mapping with NO config block freezes all-null + app:null (gate parks)" 0 $?
+# FR-10 coupling: the app KEY must exist whenever a runtime consumer is
+# frozen — the gate keys the lifecycle on `.app != null`, so a missing
+# key would bypass it silently rather than fail loudly.
+ct5_valid "$(jq -nc --argjson v "$VIS_NULL" '{visual:$v}')"
+assert_exit "C3-T5: a visual consumer WITHOUT the app key is refused" 1 $?
+ct5_valid "$(jq -nc '{conformance:{evaluator:"e",timeout_sec:30,criteria:[{fr:"FR-2",statement_sha:"sha256:bb",criterion:"c"}]}}')"
+assert_exit "C3-T5: a conformance consumer WITHOUT the app key is refused" 1 $?
+# VALUE-level coupling (review round 2): app:null is legal only while
+# every frozen consumer is itself all-null. A configured consumer beside
+# app:null reads to the gate as "skip the lifecycle" — refuse it as
+# tampered frozen state. The four cases discriminate value coupling from
+# the key-presence rule above.
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" '{visual:$v, app:null}')"
+assert_exit "C3-T5: a CONFIGURED visual beside app:null is refused" 1 $?
+ct5_valid "$(jq -nc '{conformance:{evaluator:"e",timeout_sec:30,criteria:[{fr:"FR-2",statement_sha:"sha256:bb",criterion:"c"}]}, app:null}')"
+assert_exit "C3-T5: a CONFIGURED conformance beside app:null is refused" 1 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_NULL" '{visual:$v, app:null}')"
+assert_exit "C3-T5: all-null visual beside app:null still passes (blockless)" 0 $?
+ct5_valid "$(jq -nc '{conformance:{evaluator:null,timeout_sec:null,criteria:[{fr:"FR-2",statement_sha:"sha256:bb",criterion:"c"}]}, app:null}')"
+assert_exit "C3-T5: all-null conformance beside app:null still passes (blockless)" 0 $?
+# ...and the schema agrees: the value-level conditionals exist and demand
+# an OBJECT app for a configured consumer.
+jq -e '[.properties.contract.allOf[]
+        | select(.then.properties.app.type == "object")] | length == 2' "$SCHEMA_PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: value-level coupling — configured consumer demands an OBJECT app" 0 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" --argjson a "$APP_OK" '{visual:($v + {url:"httpx://evil/"}), app:$a}')"
+assert_exit "C3-T5: a non-http(s) visual url is refused (httpx:// is not http)" 1 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_NULL" --argjson a "$APP_OK" '{visual:($v + {command:"npm run r"}), app:$a}')"
+assert_exit "C3-T5: a HALF-frozen visual contract is refused" 1 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" --argjson a "$APP_OK" '{visual:($v + {skip_is_failure:"no"}), app:$a}')"
+assert_exit "C3-T5: skip_is_failure must be a frozen BOOLEAN" 1 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" --argjson a "$APP_OK" '{visual:($v + {bogus:1}), app:$a}')"
+assert_exit "C3-T5: an unknown visual key is refused (closed)" 1 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" --argjson a "$APP_OK" '{visual:$v, app:($a | del(.interface))}')"
+assert_exit "C3-T5: contract.app without a RESOLVED interface is refused" 1 $?
+ct5_valid "$(jq -nc --argjson a "$APP_OK" '{conformance:{evaluator:"e",timeout_sec:30,criteria:[{fr:"FR-2",statement_sha:"sha256:bb",criterion:"c"}],app:$a}}')"
+assert_exit "C3-T5: the OLD nested conformance.app shape is refused" 1 $?
+rm -f "$CT5" "$CT5_DF"
+
+# ── SC-3: post-freeze config edits move NOTHING. ──
+write_visual_cfg_yaml() {  # <dir> — FR-1 deterministic, FR-2 visual
+    local dir="$1" f="$1/specs/demo-feat/verification.yaml"
+    CCT_SPECS_DIR="$dir/specs" bash "$SCRIPT_DIR/../scripts/generate-verification-draft.sh" demo-feat >/dev/null
+    sed -i '' 's/^status: draft/status: finalized/' "$f" 2>/dev/null || \
+        sed -i 's/^status: draft/status: finalized/' "$f"
+    python3 - "$f" << 'PYEOF'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'      test: "TODO[^"]*"', '      test: "bash ./project-test.sh"\n      metric: "suite exits 0"', s, count=1)
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"\n', '', s, count=1)
+s = re.sub(r'    - kind: deterministic\n      test: "TODO[^"]*"\n', '', s, count=1)
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"',
+           '    - kind: visual\n      criterion: "The empty state renders a single primary CTA."', s, count=1)
+open(p, 'w').write(s)
+PYEOF
+    git -C "$dir" add -A && git -C "$dir" commit -q -m "finalized artifact with a visual mapping"
+}
+VPORT=$(free_port)
+P=$(setup_project); single_phase "$P"
+write_visual_cfg_yaml "$P"
+cfg_set "$P" ".verification={app:{command:\"sleep 30\",ready:{url:\"http://127.0.0.1:$VPORT/\",timeout_sec:3},stop_timeout_sec:2},visual:{command:\"true\",artifact:\"tmp/ui/f.json\",url:\"http://127.0.0.1:$VPORT/\",timeout_sec:60}}"
+run_driver "$P"
+LEDGER="$P/.cct/auto-build/demo-feat"
+jq -e '.app.interface == "http://127.0.0.1:'"$VPORT"'/"
+   and .app.command == "sleep 30"
+   and (.conformance | not)
+   and .visual.command == "true"
+   and .visual.artifact == "tmp/ui/f.json"
+   and .visual.url == "http://127.0.0.1:'"$VPORT"'/"
+   and .visual.timeout_sec == 60
+   and .visual.skip_is_failure == true
+   and (.visual.criteria | length == 1)
+   and .visual.criteria[0].fr == "FR-2"
+   and (.visual.criteria[0].statement_sha | startswith("sha256:"))' \
+   "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "C3-T5 SC-3: app+visual frozen, interface resolved, skip_is_failure defaulted TRUE" 0 $?
+# Now edit the config underneath the run: nothing frozen may move.
+cfg_set "$P" '.verification.visual.url="http://127.0.0.1:9/moved"'
+cfg_set "$P" '.verification.visual.skip_is_failure=false'
+cfg_set "$P" '.verification.app.command="something else"'
+assert_eq "C3-T5 SC-3: a post-freeze url edit moves nothing" "http://127.0.0.1:$VPORT/" \
+    "$(jq -r '.visual.url' "$LEDGER/frozen-contract.json")"
+assert_eq "C3-T5 SC-3: a post-freeze skip_is_failure edit moves nothing" "true" \
+    "$(jq -r '.visual.skip_is_failure' "$LEDGER/frozen-contract.json")"
+assert_eq "C3-T5 SC-3: a post-freeze app edit moves nothing" "sleep 30" \
+    "$(jq -r '.app.command' "$LEDGER/frozen-contract.json")"
+rm -rf "$P"
+
+# ── SC-11 / SC-16: the SHARED lifecycle. A visual-only frozen contract
+#    launches the app through the same path conformance uses — proving the
+#    hoist really is keyed on either kind — and a combined contract
+#    launches exactly ONCE and stops exactly ONCE. ──
+
+# ── SC-11: ONE start, ONE readiness sequence, ONE stop — however many
+#    consumers read the app. Counted by wrapping the lifecycle functions,
+#    so the assertion is about calls made, not about an outcome that
+#    several implementations could produce. ──
+vg_life_counts() {  # <contract-json> [with-provider] -> "reason<TAB>starts<TAB>readies<TAB>stops"
+    local ct="$1" want_prov="${2:-}" prof="" d marker counts
+    d=$(vg_conf_fixture)
+    # A conformance consumer needs a resolvable evaluator; write the stub
+    # provider INTO this fixture (vg_write_provider keys off the dir).
+    [[ -n "$want_prov" ]] && prof=$(vg_write_provider "$d" "$VG_EVAL_OK")
+    printf '%s' "$ct" > "$d/.cct/auto-build/demo-feat/frozen-contract.json"
+    marker="$(dirname "$d")/$(basename "$d").vg-dispose"
+    counts="$(dirname "$d")/$(basename "$d").counts"
+    ( set +e
+      set --
+      # shellcheck source=/dev/null
+      source "$VG_FUNCS" >/dev/null 2>&1
+      source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+      PROJECT_DIR="$d"; LEDGER_DIR="$d/.cct/auto-build/demo-feat"
+      FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
+      [[ -n "$prof" ]] && CCT_PROVIDER_PROFILE="$prof"
+      FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
+      dispose() { printf '%s\t%s\n' "$1" "$2" > "$marker"; return 1; }
+      journal() { :; }
+      check_caps() { :; }
+      : > "$marker"; printf '0 0 0\n' > "$counts"
+      # Count the lifecycle calls by wrapping them.
+      eval "orig_ca_start() { $(declare -f ca_start | tail -n +2)"$'\n'"}"
+      eval "orig_ca_wait_ready() { $(declare -f ca_wait_ready | tail -n +2)"$'\n'"}"
+      eval "orig_ca_stop() { $(declare -f ca_stop | tail -n +2)"$'\n'"}"
+      _bump() { local i="$1" a b c; read -r a b c < "$counts"
+                case "$i" in 1) a=$((a+1));; 2) b=$((b+1));; 3) c=$((c+1));; esac
+                printf '%s %s %s\n' "$a" "$b" "$c" > "$counts"; }
+      ca_start() { _bump 1; orig_ca_start "$@"; }
+      ca_wait_ready() { _bump 2; orig_ca_wait_ready "$@"; }
+      ca_stop() { _bump 3; orig_ca_stop "$@"; }
+      verifier_gate >/dev/null 2>&1 </dev/null
+    )
+    local a b c; read -r a b c < "$counts"
+    printf '%s\t%s\t%s\t%s\n' "$(cut -f1 "$marker" 2>/dev/null)" "$a" "$b" "$c"
+    rm -rf "$d" "$marker" "$counts"
+}
+
+CPORT=$(free_port)
+CAPP=$(jq -nc --arg c "python3 -m http.server $CPORT --bind 127.0.0.1" \
+    --arg u "http://127.0.0.1:$CPORT/" \
+    '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5, interface:$u}')
+# Visual-only: the app must still be launched, by the SAME shared path.
+VONLY=$(jq -nc --argjson app "$CAPP" --arg s "$SHA2" --arg u "http://127.0.0.1:$CPORT/" \
+    '{app:$app, visual:{command:"true", artifact:"tmp/ui/f.json", url:$u, timeout_sec:30,
+      skip_is_failure:true, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}')
+VL=$(vg_life_counts "$VONLY")
+assert_eq "C3-T5 SC-16: a VISUAL-ONLY contract starts the app exactly once" "1" "$(printf '%s' "$VL" | cut -f2)"
+assert_eq "C3-T5 SC-16: …proves readiness exactly once" "1" "$(printf '%s' "$VL" | cut -f3)"
+assert_eq "C3-T5 SC-16: …and stops it exactly once" "1" "$(printf '%s' "$VL" | cut -f4)"
+
+# Combined: one app for BOTH consumers.
+CPORT2=$(free_port)
+CAPP2=$(jq -nc --arg c "python3 -m http.server $CPORT2 --bind 127.0.0.1" \
+    --arg u "http://127.0.0.1:$CPORT2/" \
+    '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5, interface:$u}')
+BOTH=$(jq -nc --argjson app "$CAPP2" --arg s "$SHA2" --arg u "http://127.0.0.1:$CPORT2/" \
+    '{app:$app,
+      conformance:{evaluator:"stub-eval", timeout_sec:30,
+        criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]},
+      visual:{command:"true", artifact:"tmp/ui/f.json", url:$u, timeout_sec:30,
+        skip_is_failure:true, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}')
+BL=$(vg_life_counts "$BOTH" with-provider)
+assert_eq "C3-T5 SC-11: a COMBINED contract starts the app exactly once" "1" "$(printf '%s' "$BL" | cut -f2)"
+assert_eq "C3-T5 SC-11: …proves readiness exactly once" "1" "$(printf '%s' "$BL" | cut -f3)"
+assert_eq "C3-T5 SC-11: …and stops it exactly once (no per-consumer stop)" "1" "$(printf '%s' "$BL" | cut -f4)"
+
+# ── SC-17: a FAILING checkpoint must not return with the app alive. It
+#    delegates to vg_finish — one cleanup-and-dispose path — so the group
+#    is gone and the disposition is git_anomaly. ──
+KPORT=$(free_port)
+KAPP=$(jq -nc --arg c "echo checkpoint-mutation > untracked-by-the-app.txt; python3 -m http.server $KPORT --bind 127.0.0.1" \
+    --arg u "http://127.0.0.1:$KPORT/" \
+    '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5, interface:$u}')
+KCT=$(jq -nc --argjson app "$KAPP" --arg s "$SHA2" --arg u "http://127.0.0.1:$KPORT/" \
+    '{app:$app, visual:{command:"true", artifact:"tmp/ui/f.json", url:$u, timeout_sec:30,
+      skip_is_failure:true, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}')
+KL=$(vg_life_counts "$KCT")
+assert_eq "C3-T5 SC-17: an app that dirties the checkout disposes git_anomaly" "git_anomaly" \
+    "$(printf '%s' "$KL" | cut -f1)"
+assert_eq "C3-T5 SC-17: …and the app is still stopped exactly once (no double-stop)" "1" \
+    "$(printf '%s' "$KL" | cut -f4)"
+
+# ── SC-22: the disposition names the block that was EXECUTING, not merely
+#    which blocks are frozen. In a COMBINED contract a lifecycle failure
+#    before either consumer begins must not be labelled `visual_gate`,
+#    and one during the visual block must not be labelled
+#    `conformance_gate`. VG_ACTIVE_BLOCK is what makes the label track
+#    the run rather than the contract.
+#
+#    A stale responder on the app's own port makes the binding proof
+#    refuse BEFORE any consumer starts: the label must then be the
+#    default (conformance for a combined contract), never a block that
+#    never ran.
+SPORT=$(free_port)
+python3 -m http.server "$SPORT" --bind 127.0.0.1 >/dev/null 2>&1 &
+SQUAT_PID=$!
+sleep 1
+SAPP=$(jq -nc --arg c "sleep 30" --arg u "http://127.0.0.1:$SPORT/" \
+    '{command:$c, ready:{url:$u, timeout_sec:5}, stop_timeout_sec:2, interface:$u}')
+SCT=$(jq -nc --argjson app "$SAPP" --arg s "$SHA2" --arg u "http://127.0.0.1:$SPORT/" \
+    '{app:$app,
+      conformance:{evaluator:"stub-eval", timeout_sec:30,
+        criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]},
+      visual:{command:"true", artifact:"tmp/ui/f.json", url:$u, timeout_sec:30,
+        skip_is_failure:true, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}')
+SL=$(vg_life_counts "$SCT" with-provider)
+assert_eq "C3-T5 SC-22: a pre-consumer binding failure is not attributed to a block that never ran" \
+    "conformance_gate" "$(printf '%s' "$SL" | cut -f1)"
+assert_eq "C3-T5 SC-22: …and nothing was launched" "0" "$(printf '%s' "$SL" | cut -f2)"
+kill "$SQUAT_PID" 2>/dev/null; wait "$SQUAT_PID" 2>/dev/null
+
+# SC-16 (the binding half): the frozen visual url joins the proof. A
+# stale responder on the BROWSER BASE — while the app's own interface is
+# silent — must refuse the launch, because same origin is not the same
+# process.
+UPORT=$(free_port); VPORT2=$(free_port)
+python3 -m http.server "$VPORT2" --bind 127.0.0.1 >/dev/null 2>&1 &
+VSQUAT_PID=$!
+sleep 1
+UAPP=$(jq -nc --arg c "sleep 30" --arg u "http://127.0.0.1:$UPORT/" \
+    '{command:$c, ready:{url:$u, timeout_sec:5}, stop_timeout_sec:2, interface:$u}')
+UCT=$(jq -nc --argjson app "$UAPP" --arg s "$SHA2" --arg v "http://127.0.0.1:$VPORT2/" \
+    '{app:$app, visual:{command:"true", artifact:"tmp/ui/f.json", url:$v, timeout_sec:30,
+      skip_is_failure:true, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}')
+UL=$(vg_life_counts "$UCT")
+assert_eq "C3-T5 SC-16: a stale responder on the frozen visual url refuses the launch" \
+    "visual_gate" "$(printf '%s' "$UL" | cut -f1)"
+assert_eq "C3-T5 SC-16: …before anything is started" "0" "$(printf '%s' "$UL" | cut -f2)"
+kill "$VSQUAT_PID" 2>/dev/null; wait "$VSQUAT_PID" 2>/dev/null
+
 
 echo ""
 echo "=== C3 (#239) T1: a visual mapping travels the driver's freeze path ==="

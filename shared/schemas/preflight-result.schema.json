@@ -22,7 +22,7 @@
     "contract": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The fully resolved frozen verification contract, written by the preflight initialiser on fresh runs with a coverage block and/or a finalized verification.yaml (#242 C2). Composes up to three sections: the flat C1 coverage fields (present as a unit — command implies the rest), `verifiers` (the deterministic set), and `conformance` (evaluator + app + criteria). At least one section must be present.",
+      "description": "The fully resolved frozen verification contract, written by the preflight initialiser on fresh runs with a coverage block and/or a finalized verification.yaml (#242 C2; #239 C3). Composes up to five sections: the flat C1 coverage fields (present as a unit — command implies the rest), `verifiers` (the deterministic set), `conformance` (evaluator + criteria — the app it exercises lives at `app` since C3), `app` (the ONE application both runtime consumers share), and `visual` (the harness contract). At least one verification section must be present, and `app` is REQUIRED — possibly null, for the blockless attended park — whenever `conformance` or `visual` is.",
       "anyOf": [
         {
           "required": [
@@ -37,7 +37,8 @@
           ]
         },
         { "required": ["verifiers"] },
-        { "required": ["conformance"] }
+        { "required": ["conformance"] },
+        { "required": ["visual"] }
       ],
       "properties": {
         "verifiers": {
@@ -69,40 +70,13 @@
           "additionalProperties": false,
           "required": [
             "evaluator",
-            "app",
-            "interface",
             "timeout_sec",
             "criteria"
           ],
-          "description": "#242 C2: the frozen conformance contract — present iff the finalized artifact maps any FR to runtime_conformance. evaluator/app/interface/timeout_sec are ALL null when the config block is absent (attended blockless: the gate parks provider_unavailable; unattended cannot reach this state, admission refuses) or all configured. interface is resolved at freeze: app.interface, else ready.url. Every bound is a positive INTEGER of seconds — the gate enforces them with integer shell arithmetic, and the automation schema, the config validator, and validate_contract_json all agree.",
+          "description": "#242 C2: the frozen conformance contract — present iff the finalized artifact maps any FR to runtime_conformance. evaluator/timeout_sec are BOTH null when the config block is absent (attended blockless: the gate parks provider_unavailable; unattended cannot reach this state, admission refuses) or both configured. #239 C3 (T5): the APPLICATION it exercises is NOT declared here — it moved to contract.app, with `interface` resolved there, so ONE lifecycle serves both the evaluator and the visual harness. Every bound is a positive INTEGER of seconds — the gate enforces them with integer shell arithmetic, and the automation schema, the config validator, and validate_contract_json all agree.",
           "properties": {
             "evaluator": { "type": ["string", "null"], "minLength": 1 },
-            "interface": { "type": ["string", "null"], "minLength": 1 },
             "timeout_sec": { "type": ["integer", "null"], "minimum": 1 },
-            "app": {
-              "type": ["object", "null"],
-              "additionalProperties": false,
-              "required": ["command", "ready", "stop_timeout_sec"],
-              "properties": {
-                "command": { "type": "string", "minLength": 1 },
-                "interface": { "type": "string", "minLength": 1 },
-                "stop_timeout_sec": { "type": "integer", "minimum": 1 },
-                "ready": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["timeout_sec"],
-                  "properties": {
-                    "url": { "type": "string", "minLength": 1 },
-                    "command": { "type": "string", "minLength": 1 },
-                    "timeout_sec": { "type": "integer", "minimum": 1 }
-                  },
-                  "oneOf": [
-                    { "required": ["url"] },
-                    { "required": ["command"] }
-                  ]
-                }
-              }
-            },
             "criteria": {
               "type": "array",
               "minItems": 1,
@@ -125,16 +99,87 @@
                 {
                   "properties": {
                     "evaluator": { "type": "null" },
-                    "app": { "type": "null" },
-                    "interface": { "type": "null" },
                     "timeout_sec": { "type": "null" }
                   }
                 },
                 {
                   "properties": {
                     "evaluator": { "type": "string" },
-                    "app": { "type": "object" },
-                    "interface": { "type": "string" },
+                    "timeout_sec": { "type": "number" }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "app": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["command", "ready", "stop_timeout_sec", "interface"],
+          "description": "#239 C3 (T5), relocated from contract.conformance.app: the application under test, frozen ONCE and shared by BOTH runtime consumers — the conformance evaluator and the visual harness. There is no second app object anywhere. `interface` is RESOLVED at freeze (app.interface, else ready.url): it is what the evaluator receives, what the launch-binding proof must find SILENT before launch, and what readiness must find answering after. null on the blockless attended path, where the gate parks rather than launching.",
+          "properties": {
+            "command": { "type": "string", "minLength": 1 },
+            "interface": { "type": "string", "minLength": 1 },
+            "stop_timeout_sec": { "type": "integer", "minimum": 1 },
+            "ready": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["timeout_sec"],
+              "properties": {
+                "url": { "type": "string", "minLength": 1 },
+                "command": { "type": "string", "minLength": 1 },
+                "timeout_sec": { "type": "integer", "minimum": 1 }
+              },
+              "oneOf": [
+                { "required": ["url"] },
+                { "required": ["command"] }
+              ]
+            }
+          }
+        },
+        "visual": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command", "artifact", "url", "timeout_sec", "skip_is_failure", "criteria"],
+          "description": "#239 C3 (T5): the frozen visual contract the landing gate reads. command/artifact/url/timeout_sec are ALL null when the artifact maps kind: visual but the config carries no verification.visual — the CRITERIA are frozen either way, so the requirement stays unskippable and the gate parks — or ALL configured. skip_is_failure is frozen as a BOOLEAN (defaulting TRUE) so the gate never decides a default at judgement time, and `url` is the frozen browser base, never derived from readiness or the evaluator interface.",
+          "properties": {
+            "command": { "type": ["string", "null"], "minLength": 1 },
+            "artifact": { "type": ["string", "null"], "minLength": 1 },
+            "url": { "type": ["string", "null"], "minLength": 1, "pattern": "^https?://" },
+            "timeout_sec": { "type": ["integer", "null"], "minimum": 1 },
+            "skip_is_failure": { "type": "boolean" },
+            "criteria": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["fr", "statement_sha", "criterion"],
+                "properties": {
+                  "fr": { "type": "string", "pattern": "^FR-[0-9]+[a-z]?$" },
+                  "statement_sha": { "type": "string", "pattern": "^sha256:" },
+                  "criterion": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "description": "The command side is all-null (a visual mapping with no config block) or all-configured — a half-frozen visual contract is invalid.",
+              "oneOf": [
+                {
+                  "properties": {
+                    "command": { "type": "null" },
+                    "artifact": { "type": "null" },
+                    "url": { "type": "null" },
+                    "timeout_sec": { "type": "null" }
+                  }
+                },
+                {
+                  "properties": {
+                    "command": { "type": "string" },
+                    "artifact": { "type": "string" },
+                    "url": { "type": "string" },
                     "timeout_sec": { "type": "number" }
                   }
                 }
@@ -168,6 +213,27 @@
         }
       },
       "allOf": [
+        {
+          "description": "#239 C3 FR-10: the app key is REQUIRED (null only for the blockless attended park) whenever a runtime consumer — conformance or visual — is frozen. A configured consumer with no app key would bypass the shared lifecycle entirely.",
+          "if": { "anyOf": [{ "required": ["conformance"] }, { "required": ["visual"] }] },
+          "then": { "required": ["app"] }
+        },
+        {
+          "description": "#239 C3 FR-10, value-level: app may be null ONLY while every frozen runtime consumer is itself all-null (blockless attended). A CONFIGURED conformance evaluator beside app:null would leave the evaluator nothing to exercise; the gate keys the lifecycle on app != null, so it would silently skip launch/binding/readiness.",
+          "if": {
+            "properties": { "conformance": { "properties": { "evaluator": { "type": "string" } }, "required": ["evaluator"] } },
+            "required": ["conformance"]
+          },
+          "then": { "properties": { "app": { "type": "object" } } }
+        },
+        {
+          "description": "#239 C3 FR-10, value-level: a CONFIGURED visual command beside app:null would leave the harness no running application to point a browser at.",
+          "if": {
+            "properties": { "visual": { "properties": { "command": { "type": "string" } }, "required": ["command"] } },
+            "required": ["visual"]
+          },
+          "then": { "properties": { "app": { "type": "object" } } }
+        },
         {
           "description": "The C1 coverage fields travel as a unit with their cross-field rules: ANY coverage field present requires the FULL required set and applies all four rules below; a contract carrying only C2 sections (verifiers/conformance) is exempt (#242 round-2 finding 3 — the executable validator scopes its C1 rules the same way).",
           "if": {
