@@ -1,7 +1,7 @@
 # Origin Alignment Check — auto-build-visual-gate
 
 Date: 2026-08-15 20:44 (record opened)
-Last revised: 2026-08-18 21:09 — T5/T7 task-boundary amendment
+Last revised: 2026-08-20 09:10 — T6/T7 ownership amendment
 Trigger: rev-1 SDD bundle authored for increment C3 (#239), carved out of
 #190 at the owner's direction ("Clean obsolete local branches, then start
 #239") after C2 (#242) merged.
@@ -194,6 +194,20 @@ resolve a task-boundary ambiguity silently at build time — the failure
 mode that produced the T4 agent-refusal drift. Requirements, success
 criteria, and the plan's normative decisions are unchanged; only which
 increment lands the plumbing moved.
+
+During T6 a second task-boundary inconsistency surfaced, introduced by
+the T5 amendment itself: its summary line said T7 keeps "the gate
+itself (request, invocation, ordered reading, identity validation,
+disposition)", while T6's own bullets — and the normative landing
+sequence — put request publication, the isolated invocation, and
+evidence import inside step 10, which T6 owns. Corrected to one owner
+per artifact: T6 owns everything that happens to and in the EXECUTION
+ROOT; T7 owns everything that happens to the LEDGER COPY. SC-10 splits
+on the same line (T6: isolation/publication; T7: "still lands"), and
+until T7 lands the block ends fail-closed rather than falling through
+to pass-by-absence. Same discipline as the T5 amendment: the contract
+moves first, visibly, rather than the commit silently defining the
+boundary.
 
 ## Verdict
 

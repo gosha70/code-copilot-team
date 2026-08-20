@@ -121,6 +121,26 @@ plan's decisions and gate sequence are normative.
 
 ## T6 — Isolated execution + evidence import (FR-5, FR-7 publication, FR-3 attended)
 
+> **Amended during T6** (recorded in the origin-alignment record). The
+> T5 amendment's summary line — "T7 keeps the gate itself (request,
+> invocation, ordered reading, identity validation, disposition)" —
+> contradicted this task's own bullets, which already owned request
+> publication, the isolated invocation, and evidence import; the
+> normative landing sequence puts all three inside step 10, before
+> worktree release. One owner each, matching the sequence: **T6 owns
+> everything that happens TO and IN the execution root** — creation,
+> revalidation, the private request dir and its publication, the
+> isolated bounded invocation, freshness/containment/integrity checks,
+> evidence + transcript publication to the ledger, and release. **T7
+> owns everything that happens to the LEDGER COPY** — the ordered
+> reading, identity validation, skip_is_failure, verdicts,
+> verification-results.json, and the visual_gate disposition. SC-10
+> splits on the same line: T6 pins its isolation/publication half
+> (canonical checkout untouched, environment rebound, no canonical or
+> ledger path handed over, evidence imported, worktree gone); T7
+> completes the "still lands" half once the imported artifact is
+> accepted.
+
 - `vg_run_isolated <secs> <root> <cmd> <capture>`: `ca_run_bounded`
   composed with C1's environment discipline (`cd`, `env -u OLDPWD`,
   `CCT_PROJECT_DIR`/`CCT_SPECS_DIR` rebound to the execution root).
@@ -156,18 +176,24 @@ plan's decisions and gate sequence are normative.
 - Evidence import as a publication: destination proven absent → temp
   copy → validated → renamed, for artifact and transcript, all before
   worktree removal; a failed import is a `visual_gate` failure.
-- Tests: SC-7, SC-10, SC-14, SC-15, SC-18, SC-19, SC-20, SC-23,
-  SC-24, SC-25.
+- Tests: SC-7, SC-10 (the isolation/publication half — the "still
+  lands" half completes in T7 with the verdict reading), SC-14, SC-15,
+  SC-18, SC-19, SC-20, SC-23, SC-24, SC-25. Until T7 lands, the block
+  ends FAIL-CLOSED: evidence imported, then a visual_gate park stating
+  that this increment does not yet read verdicts — falling through
+  would be pass-by-absence, the exact hole this feature closes.
 
 ## T7 — The gate verdict (FR-6, FR-7, FR-8)
 
 > **Amended after T4:** the freeze of `contract.visual` moved to T5,
-> which cannot be built or tested without it. T7 reads the frozen copy
-> and decides.
+> which cannot be built or tested without it. **Amended during T6:**
+> request publication, the isolated invocation, and evidence import are
+> T6's (they happen to the execution root, inside step 10); T7 reads
+> ONLY the imported ledger copy and decides — the ordered reading,
+> identity validation, skip_is_failure, verdicts,
+> verification-results.json, and the visual_gate disposition, plus the
+> "still lands" half of SC-10.
 
-- Request document authored at the point of use (after the worktree is
-  revalidated) and published through a checked rename; `DEV_URL` (the
-  frozen `url`) + `CCT_VISUAL_REQUEST` exported for the invocation.
 - Extract C2's inline identity validator to `vg_criteria_mismatch <file>
   <want-json> <allowed-top-level-keys>` and update the conformance call
   site in the same commit; the visual reading follows plan decision 6's
