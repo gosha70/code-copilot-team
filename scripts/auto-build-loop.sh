@@ -144,6 +144,20 @@ unset VG_HANDOFF_DIR VG_HANDOFF_OWNED 2>/dev/null || true
 VG_HANDOFF_DIR=""
 VG_HANDOFF_OWNED=0
 
+# C3 (#239 T6): the visual execution root and the run-scoped private
+# request dir, deleted from EXIT and signal paths — so the same rule as
+# the handoff dir: an INHERITED value must never be treated as
+# driver-owned. Worktree ownership is tracked PER STAGE, because setup
+# has two failure points (the driver creates the directory; `git
+# worktree add` registers it) and collapsing them into one flag leaks
+# the directory whenever registration fails.
+unset VG_WT_DIR VG_WT_DIR_OWNED VG_WT_REGISTERED VG_VIS_PRIV VG_VIS_PRIV_OWNED 2>/dev/null || true
+VG_WT_DIR=""
+VG_WT_DIR_OWNED=0
+VG_WT_REGISTERED=0
+VG_VIS_PRIV=""
+VG_VIS_PRIV_OWNED=0
+
 # T4 defaults — set before preflight-result channel runs
 SKIP_ADMISSION=false
 HAS_COVERAGE_BLOCK=false
@@ -2069,6 +2083,67 @@ vg_integrity_after() {
 # (round-10 finding 3).
 VG_APP_PID=""
 VG_TAINTED=0
+# vg_run_isolated <secs> <root> <cmd> <capture> <url> <request> — run the
+# frozen visual command bounded, in the execution root, with C1's FULL
+# environment discipline composed over ca_run_bounded's. ca_run_bounded
+# strips only the handoff capability; C1's cp_run_bounded additionally
+# REBINDS CCT_PROJECT_DIR and CCT_SPECS_DIR to the execution root and
+# drops OLDPWD (bash 3.2 keeps its export attribute, so a child can read
+# the launch directory out of its environ). Without that, harness code
+# can follow an inherited path straight back into the canonical checkout
+# or .cct. DEV_URL is the FROZEN browser base and CCT_VISUAL_REQUEST the
+# driver's request document — the only two values handed over, and the
+# cost channel deliberately NOT among them (#239 decision 8; T8).
+vg_run_isolated() {
+    local secs="$1" root="$2" cmd="$3" cap="$4" url="$5" req="$6"
+    ca_run_bounded "$secs" \
+        "cd $(printf '%q' "$root") && env -u OLDPWD -u CCT_REVIEW_COST_FILE \
+         CCT_PROJECT_DIR=$(printf '%q' "$root") \
+         CCT_SPECS_DIR=$(printf '%q' "$root/specs") \
+         DEV_URL=$(printf '%q' "$url") \
+         CCT_VISUAL_REQUEST=$(printf '%q' "$req") \
+         $cmd" "$cap"
+}
+
+# vg_wt_cleanup — release the visual execution root and the private
+# request dir, deleting ONLY what the ownership flags say this driver
+# created (an inherited path is never touched). Handles partial setup:
+# registered => `git worktree remove -f`, falling back to `rm -rf`
+# FOLLOWED BY a checked `git worktree prune` (removing the directory
+# alone leaves .git/worktrees/<name> registered — a stale registration
+# is what prune_worktrees exists to clean up after a CRASH; this path
+# must not manufacture one); created-but-unregistered => `rm -rf`;
+# neither => nothing. An INCOMPLETE release keeps its flags set and
+# returns 1, so the EXIT retry runs instead of treating a failed release
+# as a finished one. Idempotent: flags are cleared per stage on success.
+vg_wt_cleanup() {
+    local rc=0
+    if [[ -n "${VG_WT_DIR:-}" && "${VG_WT_DIR_OWNED:-0}" == "1" ]]; then
+        if [[ "${VG_WT_REGISTERED:-0}" == "1" ]]; then
+            if git -C "$PROJECT_DIR" worktree remove -f "$VG_WT_DIR" >/dev/null 2>&1; then
+                VG_WT_REGISTERED=0; VG_WT_DIR_OWNED=0; VG_WT_DIR=""
+            else
+                rm -rf "$VG_WT_DIR" 2>/dev/null || true
+                if [[ -e "$VG_WT_DIR" ]]; then
+                    rc=1   # keep the flags: EXIT retries
+                elif git -C "$PROJECT_DIR" worktree prune --expire=now >/dev/null 2>&1; then
+                    VG_WT_REGISTERED=0; VG_WT_DIR_OWNED=0; VG_WT_DIR=""
+                else
+                    rc=1   # directory gone but the registration is not — retry the prune
+                fi
+            fi
+        else
+            rm -rf "$VG_WT_DIR" 2>/dev/null || true
+            if [[ -e "$VG_WT_DIR" ]]; then rc=1; else VG_WT_DIR_OWNED=0; VG_WT_DIR=""; fi
+        fi
+    fi
+    if [[ -n "${VG_VIS_PRIV:-}" && "${VG_VIS_PRIV_OWNED:-0}" == "1" ]]; then
+        rm -rf "$VG_VIS_PRIV" 2>/dev/null || true
+        if [[ -e "$VG_VIS_PRIV" ]]; then rc=1; else VG_VIS_PRIV_OWNED=0; VG_VIS_PRIV=""; fi
+    fi
+    return $rc
+}
+
 vg_app_cleanup() {
     [[ -n "${VG_APP_PID:-}" ]] || return 0
     # Clear the pid ONLY when the group is provably gone — otherwise the
@@ -2086,6 +2161,7 @@ vg_app_cleanup() {
 # bounded command (verifier, probe, healthcheck, evaluator) is running
 # right now — exiting from a handler skips ca_run_bounded's own cleanup.
 vg_signal_cleanup() {
+    if declare -f vg_wt_cleanup >/dev/null 2>&1; then vg_wt_cleanup >/dev/null 2>&1 || true; fi
     if declare -f ca_active_cleanup >/dev/null 2>&1; then ca_active_cleanup >/dev/null 2>&1 || true; fi
     if declare -f vg_app_cleanup >/dev/null 2>&1; then vg_app_cleanup >/dev/null 2>&1 || true; fi
     return 0
@@ -2147,6 +2223,14 @@ vg_finish() {
     # here rather than in each branch (a request-publish failure used to
     # dispose with the app still running, and the survivor held the
     # gate's captured stdout open).
+    # C3 (#239 T6): the execution root and the private request dir are
+    # released FIRST — like the app, they must not outlive the gate on
+    # any exit path, and a failed release is its own gate failure.
+    if ! vg_wt_cleanup; then
+        VG_TAINTED=1
+        dispose "${VG_ACTIVE_BLOCK:-visual}_gate" "the visual execution root (or its git registration) could not be released — refusing to land or park with driver-created state left behind${reason:+ (the run was already failing: $reason — $detail)}" "$hist"
+        return 1
+    fi
     if [[ -n "${VG_APP_PID:-}" ]] && ! vg_app_cleanup; then
         VG_TAINTED=1
         # Name the block that was EXECUTING, not merely which blocks are
@@ -2228,6 +2312,36 @@ verifier_gate() {
     if ! : > "$CA_ACTIVE_GROUP_FILE" 2>/dev/null; then
         dispose "conformance_gate" "cannot initialise the process-group handoff record — refusing to run bounded commands that a signal could not reap" "$hist"
         return 1
+    fi
+
+    # ── Plan step 3 (#239 C3 T6): the EARLY canonical bundle check —
+    #    BEFORE any project code runs and before any process is spawned.
+    #    Step 2 just proved the canonical checkout clean and at the gate
+    #    HEAD, so this is the cheapest possible refusal with the smallest
+    #    blast radius: no teardown obligation is incurred to report it.
+    #    The point-of-use check inside the visual block repeats this
+    #    INSIDE the execution root; neither replaces the other — this one
+    #    refuses cheaply, that one is what the invocation relies on.
+    #    Attended runs are never admission-checked, so for them this IS
+    #    the first time the requirement surfaces. ──
+    if jq -e 'has("visual")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1; then
+        local _ebv
+        while IFS= read -r _ebv; do
+            [[ -z "$_ebv" ]] && continue
+            vg_finish "visual_gate" "the UI bundle is not real (checked against the canonical checkout, before anything ran): $_ebv"
+            return 1
+        done < <(vc_ui_bundle_violations "$PROJECT_DIR")
+        local _ecomp
+        for _ecomp in DESIGN.md package.json; do
+            if ! cp_contained "$PROJECT_DIR" "$_ecomp" || [[ -L "$PROJECT_DIR/$_ecomp" || ! -f "$PROJECT_DIR/$_ecomp" ]]; then
+                vg_finish "visual_gate" "$_ecomp does not resolve to a regular file inside the project (a tracked symlink out of the tree would defeat the isolation)"
+                return 1
+            fi
+        done
+        if ! cp_contained "$PROJECT_DIR" "harness" || [[ -L "$PROJECT_DIR/harness" || ! -d "$PROJECT_DIR/harness" ]]; then
+            vg_finish "visual_gate" "harness/ does not resolve to a real directory inside the project"
+            return 1
+        fi
     fi
 
     # 3. EXECUTE every frozen deterministic verifier. Admission's
@@ -2514,6 +2628,230 @@ verifier_gate() {
             . + [ $r[0].criteria[] | {fr, kind:"runtime_conformance", verifier:.criterion,
                                       statement_sha, green:(.verdict == "pass"),
                                       detail:.verdict, evidence:.evidence} ]' <<< "$results")
+    fi
+
+
+    # ── 10. VISUAL CONSUMER (#239 C3 T6) — the driver runs the harness
+    #    itself, in an isolated execution root created LATE and validated
+    #    at the point of use. T6 owns execution and evidence import; the
+    #    verdict READING is T7's, so this increment fails closed at the
+    #    end of the block rather than treating an unread artifact as
+    #    green. ──
+    if jq -e 'has("visual")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1; then
+        VG_ACTIVE_BLOCK="visual"
+        local vcmd vartifact vurl vtimeout
+        vcmd=$(jq -r '.visual.command // empty' <<< "$FROZEN_CONTRACT")
+        vartifact=$(jq -r '.visual.artifact // empty' <<< "$FROZEN_CONTRACT")
+        vurl=$(jq -r '.visual.url // empty' <<< "$FROZEN_CONTRACT")
+        vtimeout=$(jq -r '.visual.timeout_sec // empty' <<< "$FROZEN_CONTRACT")
+
+        # Blockless attended: the criteria are frozen (unskippable) but
+        # the command side is all-null — the config never carried
+        # verification.visual. The mirror of C2's provider_unavailable.
+        if [[ -z "$vcmd" ]]; then
+            vg_finish "visual_gate" "the frozen contract requires visual verification but carries NO harness command (an attended run started without verification.visual). The contract is frozen, so configuring one now cannot change this run: add verification.visual (and verification.app) and start a FRESH run."
+            return 1
+        fi
+
+        # a) The execution root — created NOW, after every other stretch
+        #    of arbitrary execution (deterministic verifiers, evaluator),
+        #    never earlier: a worktree created before them would stand
+        #    registered and discoverable while project code ran, and
+        #    could have its checked bundle replaced (plan decision 3/10).
+        prune_worktrees
+        VG_VIS_PRIV=$(mktemp -d 2>/dev/null) || {
+            vg_finish "visual_gate" "could not create the private request directory"
+            return 1
+        }
+        VG_VIS_PRIV_OWNED=1
+        # The mktemp path ITSELF is the execution root: `git worktree
+        # add` accepts an existing EMPTY directory (verified), so there
+        # is no separate parent to own — an earlier cut parked the
+        # worktree under a mktemp parent that no cleanup path knew
+        # about, orphaning one temp directory per visual run (and on
+        # add-failure too). No rmdir-then-add either: that would reopen
+        # the name-without-ownership collision window this repo's
+        # watchdog code already documents.
+        VG_WT_DIR=$(mktemp -d 2>/dev/null) || {
+            vg_finish "visual_gate" "could not create the visual execution root"
+            return 1
+        }
+        VG_WT_DIR_OWNED=1   # the driver owns the path from here, registered or not
+        if ! git -C "$PROJECT_DIR" worktree add --detach "$VG_WT_DIR" "$gate_head" >/dev/null 2>&1; then
+            vg_finish "visual_gate" "could not create the visual execution worktree at $gate_head"
+            return 1
+        fi
+        VG_WT_REGISTERED=1
+
+        # b) Point-of-use revalidation: the worktree IS the gate HEAD,
+        #    clean, and carries a REAL bundle. Bundle messages come from
+        #    the same helper admission uses (attended runs are never
+        #    admission-checked, so the requirement surfaces HERE), and
+        #    every component must RESOLVE inside the root — a tracked
+        #    symlink pointing at the canonical checkout would defeat the
+        #    isolation while every path in the message still looked local.
+        local _wt_head
+        _wt_head=$(git -C "$VG_WT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+        if [[ "$_wt_head" != "$gate_head" ]]; then
+            vg_finish "visual_gate" "the execution worktree is not at the gate HEAD ($_wt_head != $gate_head)"
+            return 1
+        fi
+        if [[ -n "$(git -C "$VG_WT_DIR" status --porcelain 2>/dev/null)" ]]; then
+            vg_finish "visual_gate" "the execution worktree is not clean at the point of use"
+            return 1
+        fi
+        local _bv _bundle_bad=""
+        while IFS= read -r _bv; do
+            [[ -z "$_bv" ]] && continue
+            _bundle_bad="$_bv"; break
+        done < <(vc_ui_bundle_violations "$VG_WT_DIR")
+        if [[ -n "$_bundle_bad" ]]; then
+            vg_finish "visual_gate" "the UI bundle is not real at the point of use: $_bundle_bad"
+            return 1
+        fi
+        local _comp
+        for _comp in DESIGN.md package.json; do
+            if ! cp_contained "$VG_WT_DIR" "$_comp" || [[ -L "$VG_WT_DIR/$_comp" || ! -f "$VG_WT_DIR/$_comp" ]]; then
+                vg_finish "visual_gate" "$_comp does not resolve to a regular file inside the execution root (a tracked symlink out of the tree would defeat the isolation)"
+                return 1
+            fi
+        done
+        if ! cp_contained "$VG_WT_DIR" "harness" || [[ -L "$VG_WT_DIR/harness" || ! -d "$VG_WT_DIR/harness" ]]; then
+            vg_finish "visual_gate" "harness/ does not resolve to a real directory inside the execution root"
+            return 1
+        fi
+
+        # c) The request document — authored at the point of use (it
+        #    names a path inside the worktree, so it cannot honestly be
+        #    written before the worktree exists) and published through a
+        #    checked rename. It lives in the PRIVATE dir: the ledger is
+        #    the DESTINATION of evidence, never an input the harness sees.
+        local vreq="$VG_VIS_PRIV/request.json" _reqtmp
+        _reqtmp=$(mktemp "$VG_VIS_PRIV/request.XXXXXX" 2>/dev/null) || {
+            vg_finish "visual_gate" "could not create the visual request document"
+            return 1
+        }
+        if ! jq -n --argjson criteria "$(jq -c '.visual.criteria' <<< "$FROZEN_CONTRACT")" \
+              --arg url "$vurl" --arg design "$VG_WT_DIR/DESIGN.md" \
+              '{criteria: $criteria, url: $url, designMdPath: $design}' > "$_reqtmp" 2>/dev/null \
+           || [[ ! -s "$_reqtmp" ]] || ! mv "$_reqtmp" "$vreq"; then
+            rm -f "$_reqtmp" 2>/dev/null || true
+            vg_finish "visual_gate" "could not publish the visual request — the harness cannot be given THIS run's frozen criteria"
+            return 1
+        fi
+
+        # d) Artifact freshness: contained BEFORE deletion, CHECKED
+        #    deletion (cp_collect's discipline — an unchecked rm in an
+        #    unwritable directory lets a stale verdict outlive the run).
+        if ! cp_contained "$VG_WT_DIR" "$vartifact"; then
+            vg_finish "visual_gate" "the frozen artifact path '$vartifact' escapes the execution root"
+            return 1
+        fi
+        rm -f "$VG_WT_DIR/$vartifact" 2>/dev/null || true
+        if [[ -e "$VG_WT_DIR/$vartifact" ]]; then
+            vg_finish "visual_gate" "could not clear the previous visual artifact — freshness cannot be established"
+            return 1
+        fi
+
+        # e) Run. Bounded, isolated, transcript captured; the cost
+        #    channel is NOT exported (decision 8 — T8 debits the
+        #    unmetered path immediately after this call).
+        local vdir="$LEDGER_DIR/visual" vcap
+        mkdir -p "$vdir" 2>/dev/null || {
+            vg_finish "visual_gate" "could not create the visual ledger directory"
+            return 1
+        }
+        vcap="$VG_VIS_PRIV/harness-stdout.log"
+        local vrc=0
+        vg_run_isolated "$vtimeout" "$VG_WT_DIR" "$vcmd" "$vcap" "$vurl" "$vreq" || vrc=$?
+
+        # T8 INSERTS THE COST DEBIT HERE — the FIRST action after the
+        # harness returns, BEFORE containment/freshness/import (the C2
+        # rule: an invocation that happened must be accounted for even
+        # when its result is rejected; a debit placed after these checks
+        # would silently un-meter every failing run).
+
+        # f) Containment AGAIN (the command is arbitrary project code and
+        #    can have replaced a safe ancestor with a symlink since (d) —
+        #    checking once is a TOCTOU hole), then regular-file freshness.
+        if ! cp_contained "$VG_WT_DIR" "$vartifact"; then
+            vg_finish "visual_gate" "the artifact path escaped the execution root DURING the harness run"
+            return 1
+        fi
+
+        # g) Regular-file freshness FIRST (the plan's step-10 order):
+        #    with a TRACKED artifact path, the gate's own checked-delete
+        #    shows as a tracked deletion — running the integrity pair
+        #    first would blame the harness for the gate's own rm. A
+        #    produce-nothing run must fail as "produced no artifact",
+        #    not as a tampered bundle.
+        if [[ ! -f "$VG_WT_DIR/$vartifact" || -L "$VG_WT_DIR/$vartifact" ]]; then
+            vg_finish "visual_gate" "the harness produced no artifact at '$vartifact' (exit $vrc — a stale artifact never counts as this run's evidence; see visual/harness.log)"
+            return 1
+        fi
+
+        # h) Post-run integrity of the EXECUTION ROOT (SC-25). BOTH
+        #    checks, and the HEAD equality is not redundant: HEAD inside
+        #    a detached worktree is mutable by the harness — edit a
+        #    tracked file, commit it, and `diff --quiet HEAD --` is clean
+        #    against the harness's OWN commit. C2's vg_integrity_after
+        #    separates the same two checks.
+        local _wt_head_now
+        _wt_head_now=$(git -C "$VG_WT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+        if [[ "$_wt_head_now" != "$gate_head" ]]; then
+            vg_finish "visual_gate" "the execution root's HEAD moved during the harness run ($_wt_head_now != $gate_head) — a committed tracked change cannot hide behind a clean diff"
+            return 1
+        fi
+        if ! git -C "$VG_WT_DIR" diff --quiet HEAD -- 2>/dev/null; then
+            vg_finish "visual_gate" "a TRACKED file in the execution root changed during the harness run — refusing to read evidence from a tampered bundle (untracked harness outputs are expected; tracked changes are not)"
+            return 1
+        fi
+
+        # h) Import — a PUBLICATION, not a copy: destination proven
+        #    absent, temp file in the same directory, validated, renamed.
+        #    A failed import must never leave an earlier run's PASS in
+        #    place to be read as this run's evidence (SC-15).
+        local vledger_art="$vdir/critique-feedback.json" vledger_log="$vdir/harness.log"
+        rm -f "$vledger_art" "$vledger_log" 2>/dev/null || true
+        if [[ -e "$vledger_art" || -e "$vledger_log" ]]; then
+            vg_finish "visual_gate" "could not clear the previous visual evidence from the ledger — a stale verdict must not survive into this run"
+            return 1
+        fi
+        local _imp
+        if [[ -f "$vcap" ]]; then
+            _imp=$(mktemp "$vdir/log.XXXXXX" 2>/dev/null) && cp "$vcap" "$_imp" 2>/dev/null && mv "$_imp" "$vledger_log" || {
+                rm -f "$_imp" 2>/dev/null || true
+                vg_finish "visual_gate" "could not import the harness transcript into the ledger"
+                return 1
+            }
+        fi
+        _imp=$(mktemp "$vdir/art.XXXXXX" 2>/dev/null) || {
+            vg_finish "visual_gate" "could not create the evidence import file"
+            return 1
+        }
+        if ! cp "$VG_WT_DIR/$vartifact" "$_imp" 2>/dev/null \
+           || ! jq -e . "$_imp" >/dev/null 2>&1 \
+           || ! mv "$_imp" "$vledger_art"; then
+            rm -f "$_imp" 2>/dev/null || true
+            vg_finish "visual_gate" "the harness artifact could not be imported as valid JSON (exit $vrc; see visual/harness.log) — an unparseable verdict is a failure, not a verdict"
+            return 1
+        fi
+
+        # i) Release the execution root — evidence is read from the
+        #    LEDGER copy only, so nothing below needs the worktree.
+        if ! vg_wt_cleanup; then
+            vg_finish "visual_gate" "the visual execution root could not be released after evidence import"
+            return 1
+        fi
+
+        # j) T7 OWNS THE VERDICT. Until it lands, an imported artifact is
+        #    fail-closed: treating it as green because nothing read it
+        #    would be pass-by-absence — the exact hole this increment
+        #    family exists to close. T7 replaces this disposition with
+        #    the ordered reading (shape -> cross-field -> skip_is_failure
+        #    -> identity) over the ledger copy.
+        vg_finish "visual_gate" "the visual evidence was imported (exit $vrc) but this build increment does not yet read verdicts — failing closed rather than landing on an unread artifact (T7 adds the reading)"
+        return 1
     fi
 
     # ── 11. SHARED APPLICATION LIFECYCLE DOWN — once, after the LAST

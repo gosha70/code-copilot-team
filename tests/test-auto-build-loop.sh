@@ -5069,9 +5069,14 @@ vg_case() {
       # shellcheck source=/dev/null
       source "$VG_FUNCS" >/dev/null 2>&1
       # The extracted functions resolve SCRIPT_DIR to tests/, so the
-      # driver's own conditional source of the lifecycle lib is a no-op
-      # here — load it explicitly.
+      # driver's own conditional sourcing of its libs is a no-op here —
+      # load them explicitly. C3 T6's step-3 bundle check needs
+      # cp_contained (coverage-parse) and vc_ui_bundle_violations
+      # (verification-common); missing them fails as command-not-found,
+      # which reads as a containment refusal.
       source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+      source "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh"
+      source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
       PROJECT_DIR="$dir"; LEDGER_DIR="$dir/.cct/auto-build/demo-feat"
       FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
       FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
@@ -5196,6 +5201,21 @@ vg_conf_fixture() {  # <evaluator-behaviour-script> <provider-extras...>
     git -C "$dir" add -A >/dev/null; git -C "$dir" commit -q -m init
     echo "$dir"
 }
+# vg_add_bundle <fixture-dir> — commit a REAL UI bundle at HEAD. Since
+# C3 T6 the gate refuses a visual contract whose bundle is not real at
+# the canonical checkout (plan step 3, before any project code runs) and
+# again inside the execution worktree at the point of use — so every
+# fixture that freezes a visual section needs one, committed (the
+# worktree checks out HEAD).
+vg_add_bundle() {
+    local dir="$1"
+    printf '# Design\n\nAccent #0b5cff; one primary CTA per empty state.\n' > "$dir/DESIGN.md"
+    mkdir -p "$dir/harness"
+    printf '// harness entry\n' > "$dir/harness/runner.stub.js"
+    printf '{"scripts":{"copilot:review":"bash harness/run.sh"}}\n' > "$dir/package.json"
+    git -C "$dir" add -A >/dev/null && git -C "$dir" commit -q -m "ui bundle"
+}
+
 VG_PORT=$(free_port)
 VG_APP=$(jq -n --arg c "python3 -m http.server $VG_PORT --bind 127.0.0.1" \
     --arg u "http://127.0.0.1:$VG_PORT/" \
@@ -6807,6 +6827,10 @@ rm -rf "$P"
 vg_life_counts() {  # <contract-json> [with-provider] -> "reason<TAB>starts<TAB>readies<TAB>stops"
     local ct="$1" want_prov="${2:-}" prof="" d marker counts
     d=$(vg_conf_fixture)
+    # Visual contracts refuse at plan step 3 without a real bundle at
+    # HEAD (C3 T6) — these fixtures are about the LIFECYCLE, so give
+    # them one.
+    printf '%s' "$ct" | jq -e 'has("visual")' >/dev/null 2>&1 && vg_add_bundle "$d"
     # A conformance consumer needs a resolvable evaluator; write the stub
     # provider INTO this fixture (vg_write_provider keys off the dir).
     [[ -n "$want_prov" ]] && prof=$(vg_write_provider "$d" "$VG_EVAL_OK")
@@ -6818,6 +6842,8 @@ vg_life_counts() {  # <contract-json> [with-provider] -> "reason<TAB>starts<TAB>
       # shellcheck source=/dev/null
       source "$VG_FUNCS" >/dev/null 2>&1
       source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+      source "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh"
+      source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
       PROJECT_DIR="$d"; LEDGER_DIR="$d/.cct/auto-build/demo-feat"
       FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
       [[ -n "$prof" ]] && CCT_PROVIDER_PROFILE="$prof"
@@ -6936,6 +6962,269 @@ assert_eq "C3-T5 SC-16: a stale responder on the frozen visual url refuses the l
 assert_eq "C3-T5 SC-16: …before anything is started" "0" "$(printf '%s' "$UL" | cut -f2)"
 kill "$VSQUAT_PID" 2>/dev/null; wait "$VSQUAT_PID" 2>/dev/null
 
+
+
+echo ""
+echo "=== C3 (#239) T6: isolated execution + evidence import ==="
+# ══════════════════════════════════════════════════════════════
+# T6 owns everything that happens TO and IN the execution root; T7 owns
+# the ledger copy. Until T7, a successful run ends in the fail-closed
+# "does not yet read verdicts" park — asserted here BY NAME so T7's
+# arrival is a visible contract change, not a silent one.
+
+# vg_vis_fixture [harness-body] — a bundled fixture whose package.json
+# copilot:review runs harness/run.sh; the BODY is the per-test stub.
+# The stub sees the worktree as cwd, DEV_URL, CCT_VISUAL_REQUEST.
+vg_vis_fixture() {
+    local body="${1:-exit 0}"
+    local dir; dir=$(vg_conf_fixture)
+    printf '# Design\n\nAccent #0b5cff; one primary CTA per empty state.\n' > "$dir/DESIGN.md"
+    mkdir -p "$dir/harness"
+    printf '%s\n' "#!/usr/bin/env bash" "$body" > "$dir/harness/run.sh"
+    chmod +x "$dir/harness/run.sh"
+    printf '{"scripts":{"copilot:review":"bash harness/run.sh"}}\n' > "$dir/package.json"
+    git -C "$dir" add -A >/dev/null && git -C "$dir" commit -q -m "ui bundle"
+    echo "$dir"
+}
+VIS_PORT=$(free_port)
+VIS_APP=$(jq -nc --arg c "python3 -m http.server $VIS_PORT --bind 127.0.0.1" \
+    --arg u "http://127.0.0.1:$VIS_PORT/" \
+    '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5, interface:$u}')
+vis_contract() {  # [artifact-path]
+    jq -nc --argjson app "$VIS_APP" --arg s "$SHA2" --arg u "http://127.0.0.1:$VIS_PORT/" \
+        --arg art "${1:-tmp/ui/critique-feedback.json}" \
+        '{app:$app, visual:{command:"bash harness/run.sh", artifact:$art,
+          url:$u, timeout_sec:30, skip_is_failure:true,
+          criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]}}'
+}
+vis_case() {  # <fixture> [contract] -> "reason<TAB>detail"
+    local d="$1" ct="${2:-$(vis_contract)}"
+    printf '%s' "$ct" > "$d/.cct/auto-build/demo-feat/frozen-contract.json"
+    vg_case "$d"
+}
+
+# ── SC-10 (isolation/publication half): a harness that writes into its
+#    working tree — screenshots, scratch — leaves the CANONICAL checkout
+#    untouched, its evidence lands in the ledger, the worktree is gone,
+#    and the run ends in the T7-pending park, not git_anomaly. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui shots
+echo fake-png > shots/root__375.png
+echo scratch > tmp/scratch.txt
+printf "{\"passed\":false,\"mode\":\"degraded\",\"skipped\":[\"critic\"],\"source\":\"stub\",\"critiqueSummary\":\"s\",\"actionableFixes\":[],\"criteria\":[]}" > tmp/ui/critique-feedback.json')
+VG_OUT=$(vis_case "$D")
+assert_eq "C3-T6 SC-10: a dirtying harness ends in the T7-pending park, not an anomaly" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-10: …which names the missing reading BY NAME" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "does not yet read verdicts"
+assert_eq "C3-T6 SC-10: the canonical checkout is untouched" "" \
+    "$(git -C "$D" status --porcelain)"
+assert_eq "C3-T6 SC-10: the evidence reached the ledger" "yes" \
+    "$([[ -f "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json" ]] && echo yes || echo no)"
+assert_eq "C3-T6 SC-10: …and parses as the artifact the harness wrote" "stub" \
+    "$(jq -r '.source' "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json")"
+assert_eq "C3-T6 SC-10: the transcript reached the ledger" "yes" \
+    "$([[ -f "$D/.cct/auto-build/demo-feat/visual/harness.log" ]] && echo yes || echo no)"
+# The execution root is a mktemp name now (no /wt child), so count
+# REGISTRATIONS: exactly one worktree entry — the main checkout — may
+# remain. A path-suffix grep would be vacuously 0 whatever leaked.
+assert_eq "C3-T6 SC-10: no worktree registration survives the gate" "1" \
+    "$(git -C "$D" worktree list --porcelain 2>/dev/null | grep -c '^worktree ' || true)"
+rm -rf "$D"
+
+# ── SC-10 (environment): the harness sees REBOUND paths and never the
+#    canonical checkout, the ledger, OLDPWD, or the cost channel. Probed
+#    via stdout, which the gate imports as the transcript. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+echo "proj=$CCT_PROJECT_DIR"
+echo "specs=$CCT_SPECS_DIR"
+echo "oldpwd=${OLDPWD:-UNSET}"
+echo "cost=${CCT_REVIEW_COST_FILE:-UNSET}"
+echo "cwd=$(pwd)"
+printf "{}" > tmp/ui/critique-feedback.json')
+VG_OUT=$(vis_case "$D")
+LOG="$D/.cct/auto-build/demo-feat/visual/harness.log"
+assert_eq "C3-T6 SC-10: CCT_PROJECT_DIR is NOT the canonical checkout" "0" \
+    "$(grep -c "^proj=$D\$" "$LOG" || true)"
+assert_eq "C3-T6 SC-10: …it is rebound to the execution root (cwd)" \
+    "$(grep '^cwd=' "$LOG" | cut -d= -f2-)" "$(grep '^proj=' "$LOG" | cut -d= -f2-)"
+assert_eq "C3-T6 SC-10: CCT_SPECS_DIR is rebound too" \
+    "$(grep '^cwd=' "$LOG" | cut -d= -f2-)/specs" "$(grep '^specs=' "$LOG" | cut -d= -f2-)"
+assert_contains "C3-T6 SC-10: OLDPWD is dropped" "$(grep '^oldpwd=' "$LOG")" "oldpwd=UNSET"
+assert_contains "C3-T6 SC-10: the cost channel is NOT handed over" "$(grep '^cost=' "$LOG")" "cost=UNSET"
+WT_PATH=$(grep '^cwd=' "$LOG" | cut -d= -f2-)
+assert_eq "C3-T6 SC-10: the harness ran OUTSIDE the canonical checkout" "no" \
+    "$([[ "$WT_PATH" == "$D" ]] && echo yes || echo no)"
+assert_eq "C3-T6 SC-10: the execution root itself is GONE from disk after the gate" "absent" \
+    "$([[ -n "$WT_PATH" && -e "$WT_PATH" ]] && echo present || echo absent)"
+assert_eq "C3-T6 SC-10: …and no driver-created temp parent survives it" "absent" \
+    "$([[ -n "$WT_PATH" && -e "$(dirname "$WT_PATH")/wt" ]] && echo present || echo absent)"
+rm -rf "$D"
+
+# ── SC-7: freshness. A TRACKED artifact at the frozen path (a stale
+#    verdict committed to the repo) is cleared before the run; a harness
+#    that produces nothing then fails "produced no artifact" — the stale
+#    file never counts. ──
+D=$(vg_vis_fixture 'exit 0')
+mkdir -p "$D/tmp/ui"
+printf '{"passed":true,"stale":"yes"}\n' > "$D/tmp/ui/critique-feedback.json"
+git -C "$D" add -A >/dev/null && git -C "$D" commit -q -m "stale artifact committed"
+VG_OUT=$(vis_case "$D")
+assert_eq "C3-T6 SC-7: a committed stale artifact never counts as evidence" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-7: …the failure says no artifact was produced" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "produced no artifact"
+rm -rf "$D"
+
+# ── SC-15: a stale passing artifact in the LEDGER + an import that
+#    cannot complete (unparseable harness output) → the gate fails and
+#    the stale ledger copy is GONE, not left readable. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+printf "this is not json" > tmp/ui/critique-feedback.json')
+mkdir -p "$D/.cct/auto-build/demo-feat/visual"
+printf '{"passed":true,"source":"STALE PREVIOUS RUN"}\n' > "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json"
+VG_OUT=$(vis_case "$D")
+assert_eq "C3-T6 SC-15: an unparseable artifact fails the import" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-15: …named as unparseable, not a verdict" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "unparseable"
+assert_eq "C3-T6 SC-15: the stale ledger PASS did not survive" "0" \
+    "$(if [[ -e "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json" ]]; then
+           grep -c 'STALE PREVIOUS RUN' "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json" || true
+       else echo 0; fi)"
+rm -rf "$D"
+
+# ── SC-14: an attended run with an INCOMPLETE bundle refuses at plan
+#    step 3 — against the canonical checkout, BEFORE any project code
+#    runs (the deterministic verifier must not have executed). ──
+D=$(vg_vis_fixture 'exit 0')
+rm -f "$D/DESIGN.md"; git -C "$D" add -A >/dev/null; git -C "$D" commit -q -m "no design"
+MARK="$(dirname "$D")/$(basename "$D").det-ran"
+CT=$(vis_contract)
+CT=$(jq -c --arg m "$MARK" '. + {verifiers:{timeout_sec:30, set:[{fr:"FR-1", statement_sha:"sha256:aa", test:("touch " + $m), metric:null}]}}' <<< "$CT")
+VG_OUT=$(vis_case "$D" "$CT")
+assert_eq "C3-T6 SC-14: an incomplete bundle refuses (attended surfaces it at the gate)" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-14: …naming the missing piece and the canonical check" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "before anything ran"
+assert_eq "C3-T6 SC-14: …and the deterministic verifier NEVER executed (step 3 < step 4)" "absent" \
+    "$([[ -f "$MARK" ]] && echo present || echo absent)"
+rm -rf "$D" "$MARK"
+
+# ── SC-20: a tracked DESIGN.md symlink pointing out of the tree is
+#    refused by name at the gate. ──
+D=$(vg_vis_fixture 'exit 0')
+rm -f "$D/DESIGN.md"; ln -s /etc/hosts "$D/DESIGN.md"
+git -C "$D" add -A >/dev/null; git -C "$D" commit -q -m "symlinked design"
+VG_OUT=$(vis_case "$D")
+assert_eq "C3-T6 SC-20: a tracked out-of-tree DESIGN.md symlink refuses" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-20: …named as not resolving inside the tree" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "does not resolve to a regular file"
+rm -rf "$D"
+
+# ── SC-23/SC-25: post-run integrity of the execution root. A harness
+#    that modifies a TRACKED file is caught by the diff; one that
+#    modifies AND COMMITS is caught by the HEAD check — the bypass SC-25
+#    exists for, since the diff alone is clean against the new commit. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+echo tampered >> pass.sh
+printf "{}" > tmp/ui/critique-feedback.json')
+VG_OUT=$(vis_case "$D")
+assert_eq "C3-T6 SC-23: a tracked-file edit during the run refuses" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-23: …naming the tracked change" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "TRACKED file in the execution root changed"
+rm -rf "$D"
+
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+echo tampered >> pass.sh
+git -c user.name=x -c user.email=x@x add pass.sh
+git -c user.name=x -c user.email=x@x commit -q -m forged
+printf "{\"passed\":true}" > tmp/ui/critique-feedback.json')
+VG_OUT=$(vis_case "$D")
+assert_eq "C3-T6 SC-25: an edit-then-COMMIT during the run refuses (clean diff cannot hide it)" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-25: …the HEAD check names the moved commit" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "HEAD moved during the harness run"
+rm -rf "$D"
+
+# ── SC-19: the gate reads config ONLY from the frozen contract — a
+#    post-freeze automation.json edit changes nothing, including the
+#    bundle prerequisite (which checks FILES, never config). ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+printf "{}" > tmp/ui/critique-feedback.json')
+printf '{"schema_version":2,"verification":{"visual":{"command":"echo HIJACKED","artifact":"x.json","url":"http://evil/","timeout_sec":1}}}\n' \
+    > "$D/automation.json"
+# Committed: an untracked config would dirty the canonical checkout and
+# refuse at entry integrity — this SC is about the gate IGNORING config,
+# not about the checkout being dirty.
+git -C "$D" add -A >/dev/null && git -C "$D" commit -q -m "post-freeze config edit"
+VG_OUT=$(vis_case "$D")
+assert_contains "C3-T6 SC-19: a post-freeze config edit changes nothing at the gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "does not yet read verdicts"
+assert_eq "C3-T6 SC-19: …the FROZEN command ran, not the edited one" "yes" \
+    "$([[ -f "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json" ]] && echo yes || echo no)"
+rm -rf "$D"
+
+# ── SC-18: ownership. Inherited VG_WT_DIR/VG_VIS_PRIV pointing at a
+#    host-owned directory are never deleted (the gate re-inits them);
+#    and a driver-created-but-UNREGISTERED directory IS removed. ──
+HOSTDIR=$(mktemp -d); touch "$HOSTDIR/host-owned.txt"
+D=$(vg_vis_fixture 'mkdir -p tmp/ui; printf "{}" > tmp/ui/critique-feedback.json')
+printf '%s' "$(vis_contract)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+( set +e; set --
+  # shellcheck source=/dev/null
+  source "$VG_FUNCS" >/dev/null 2>&1
+  source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+  source "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh"
+  source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
+  PROJECT_DIR="$D"; LEDGER_DIR="$D/.cct/auto-build/demo-feat"
+  FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
+  FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
+  dispose() { return 1; }; journal() { :; }; check_caps() { :; }
+  # Simulate an INHERITED environment value: ownership flags say NOT ours.
+  VG_WT_DIR="$HOSTDIR"; VG_WT_DIR_OWNED=0; VG_WT_REGISTERED=0
+  VG_VIS_PRIV="$HOSTDIR"; VG_VIS_PRIV_OWNED=0
+  vg_wt_cleanup >/dev/null 2>&1
+) </dev/null >/dev/null 2>&1
+assert_eq "C3-T6 SC-18: an inherited (unowned) directory survives cleanup" "yes" \
+    "$([[ -f "$HOSTDIR/host-owned.txt" ]] && echo yes || echo no)"
+( set +e; set --
+  source "$VG_FUNCS" >/dev/null 2>&1
+  source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+  PROJECT_DIR="$D"
+  OWNED=$(mktemp -d)
+  echo "$OWNED" > "$HOSTDIR/owned-path.txt"
+  VG_WT_DIR="$OWNED"; VG_WT_DIR_OWNED=1; VG_WT_REGISTERED=0
+  VG_VIS_PRIV=""; VG_VIS_PRIV_OWNED=0
+  vg_wt_cleanup >/dev/null 2>&1
+) </dev/null >/dev/null 2>&1
+OWNED_PATH=$(cat "$HOSTDIR/owned-path.txt")
+assert_eq "C3-T6 SC-18: a created-but-unregistered directory IS removed (partial setup leaks nothing)" "absent" \
+    "$([[ -e "$OWNED_PATH" ]] && echo present || echo absent)"
+rm -rf "$D" "$HOSTDIR"
+
+# ── SC-24: a registered worktree whose directory was destroyed out from
+#    under git (remove -f fails on the missing dir) still gets its
+#    REGISTRATION pruned — the fallback must not manufacture the stale
+#    .git/worktrees entry that prune_worktrees exists to clean up. ──
+D=$(vg_vis_fixture 'exit 0')
+( set +e; set --
+  source "$VG_FUNCS" >/dev/null 2>&1
+  source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+  PROJECT_DIR="$D"
+  WTP=$(mktemp -d)
+  git -C "$D" worktree add --detach "$WTP/wt" HEAD >/dev/null 2>&1
+  rm -rf "$WTP/wt"    # simulate the directory dying while registered
+  VG_WT_DIR="$WTP/wt"; VG_WT_DIR_OWNED=1; VG_WT_REGISTERED=1
+  VG_VIS_PRIV=""; VG_VIS_PRIV_OWNED=0
+  vg_wt_cleanup >/dev/null 2>&1
+  echo $? > "$D/.cct/cleanup-rc"
+) </dev/null >/dev/null 2>&1
+assert_eq "C3-T6 SC-24: the fallback prunes the registration (no stale .git/worktrees entry)" "0" \
+    "$(git -C "$D" worktree list --porcelain | grep -c '/wt$' || true)"
+assert_eq "C3-T6 SC-24: …and reports a COMPLETE release" "0" "$(cat "$D/.cct/cleanup-rc")"
+rm -rf "$D"
 
 echo ""
 echo "=== C3 (#239) T1: a visual mapping travels the driver's freeze path ==="

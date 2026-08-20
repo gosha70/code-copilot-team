@@ -874,7 +874,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh           116 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        937 auto-build driver tests
+│   ├── test-auto-build-loop.sh        972 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
