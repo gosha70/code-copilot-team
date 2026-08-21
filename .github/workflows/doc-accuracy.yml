@@ -15,15 +15,22 @@ on:
   push:
     branches: [master]
 
+permissions:
+  contents: read
+
 jobs:
   doc-accuracy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Install lychee
         run: |
+          mkdir -p "$RUNNER_TEMP/bin"
           curl -sSfL https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz \
-            | tar -xz -C /usr/local/bin lychee
-          lychee --version
+            | tar -xz -C "$RUNNER_TEMP/bin" lychee
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/lychee" --version
       - name: Doc accuracy drift gate
         run: bash scripts/check-doc-accuracy.sh

@@ -568,16 +568,21 @@ Each template ships a `.github/workflows/` file so CI is wired up the moment the
   ├── stack-constraints/           Stack version and compatibility guards
   ├── team-lead-efficiency/        Limit agents, poll frequency, no re-work
   └── token-efficiency/            Diff-over-rewrite, context economy
-~/.claude/agents/*.md              ← Phase + utility agents (9 files)
+~/.claude/agents/*.md              ← Phase + utility agents (14 files)
   ├── research.md                  Research phase agent
   ├── plan.md                      Plan phase agent
   ├── build.md                     Build phase agent
   ├── review.md                    Review phase agent
   ├── code-simplifier.md           Simplify recently changed code
+  ├── cooldown-report.md           Cooldown report: fixes shipped + pitches ready
+  ├── cycle-retro.md               Cycle retrospective from pitch, hill, and git log
   ├── doc-writer.md                Generate and update documentation
   ├── phase-recap.md               Summarize completed phase
+  ├── pitch-shaper.md              Shape a rough idea into a Shape-Up pitch
+  ├── scope-executor.md            Execute a single scope of an active pitch
   ├── security-review.md           Scan for security vulnerabilities
-  └── verify-app.md                End-to-end project verification
+  ├── verify-app.md                End-to-end project verification
+  └── visual-reviewer.md           Visual-review loop for generated UI
 ~/.claude/hooks/*.sh               ← Deterministic lifecycle hooks (always active, 11 files)
   ├── verify-on-stop.sh            Run test suite when Claude finishes responding
   ├── verify-after-edit.sh         Run type checker after source file edits
@@ -1001,4 +1006,3 @@ Use the recurring checklist in [shared/docs/alignment-maintenance.md](shared/doc
 ## License
 
 [MIT](LICENSE)
-

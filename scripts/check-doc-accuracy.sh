@@ -33,13 +33,22 @@ FAILURES=0
 fail() { echo "  DRIFT: $1" >&2; FAILURES=$((FAILURES + 1)); }
 ok()   { echo "  ok: $1"; }
 
-# grab <pattern> <file> — exactly one match required, prints the first
-# capture-ish numeric via sed; a pattern that stops matching IS drift
-# (the gate must fail when the wording it pins is rewritten).
+# grab <pattern> <file> — prints the numeric claim the pattern pins.
+# EVERY occurrence of the wording must agree: disagreeing occurrences
+# print CONFLICTING(...) and a pattern that stops matching prints
+# MISSING — both compare unequal to the source count, so either IS
+# drift (the gate must fail when a pinned wording is rewritten or when
+# two copies of the same fact diverge).
 grab() {
-    local pattern="$1" file="$2" n
-    n=$(grep -oE "$pattern" "$file" | head -1 | grep -oE '[0-9]+' | head -1)
-    printf '%s' "${n:-MISSING}"
+    local pattern="$1" file="$2" vals
+    vals=$(grep -oE "$pattern" "$file" | grep -oE '[0-9]+' | sort -u)
+    if [[ -z "$vals" ]]; then
+        printf 'MISSING'
+    elif [[ "$(wc -l <<< "$vals" | tr -d ' ')" -gt 1 ]]; then
+        printf 'CONFLICTING(%s)' "$(paste -sd, - <<< "$vals")"
+    else
+        printf '%s' "$vals"
+    fi
 }
 
 echo "check-doc-accuracy: counts"
@@ -58,6 +67,7 @@ r_rules=$(grab '[0-9]+ global rules' README.md)
 r_ondemand=$(grab '[0-9]+ on-demand skills' README.md)
 r_tree_ondemand=$(grab 'SKILL\.md format, [0-9]+ skills\)' README.md)
 r_utility=$(grab 'plus [0-9]+ utility agents' README.md)
+r_tree_agents=$(grab 'Phase \+ utility agents \([0-9]+ files\)' README.md)
 r_codex=$(grab 'AGENTS\.md` \+ [0-9]+ skills' README.md)
 
 check() {  # <label> <claimed> <actual>
@@ -67,7 +77,15 @@ check "shared skills (repo-layout tree)"        "$r_shared"        "$SHARED_SKIL
 check "global rules"                            "$r_rules"         "$ALWAYS_RULES"
 check "installed on-demand skills"              "$r_ondemand"      "$INSTALLED_SKILLS"
 check "installed on-demand skills (file tree)"  "$r_tree_ondemand" "$INSTALLED_SKILLS"
-check "utility agents (4 phase + N utility)"    "$((${r_utility/MISSING/0} + 4))" "$AGENTS"
+# The utility claim rides through arithmetic (4 phase + N), so a
+# non-numeric grab result (MISSING/CONFLICTING) must fail as drift
+# BEFORE the arithmetic — bash would otherwise crash on it.
+if [[ "$r_utility" =~ ^[0-9]+$ ]]; then
+    check "utility agents (4 phase + N utility)" "$((r_utility + 4))" "$AGENTS"
+else
+    fail "utility agents (4 phase + N utility): README claim is '$r_utility', source says '$AGENTS' total"
+fi
+check "agents (file tree)"                      "$r_tree_agents"   "$AGENTS"
 check "codex skills"                            "$r_codex"         "$CODEX_SKILLS"
 
 if [[ "$COUNTS_ONLY" -eq 1 ]]; then
