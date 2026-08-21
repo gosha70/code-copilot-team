@@ -1,7 +1,8 @@
 # Origin Alignment Check — auto-build-visual-gate
 
 Date: 2026-08-15 20:44 (record opened)
-Last revised: 2026-08-20 09:10 — T6/T7 ownership amendment
+Last revised: 2026-08-21 — T9 build-completion revision (full chain T1–T8
+committed; this revision is the fresh record T9 requires)
 Trigger: rev-1 SDD bundle authored for increment C3 (#239), carved out of
 #190 at the owner's direction ("Clean obsolete local branches, then start
 #239") after C2 (#242) merged.
@@ -208,6 +209,31 @@ until T7 lands the block ends fail-closed rather than falling through
 to pass-by-absence. Same discipline as the T5 amendment: the contract
 moves first, visibly, rather than the commit silently defining the
 boundary.
+
+## Build completion (T7–T9)
+
+T7 (the verdict) and T8 (the debit) landed inside the recorded claim; the
+commit-level reviews produced four corrections, all execution-contract
+rather than scope: the step-13 disposition keys on ANY failing visual
+entry (not all-visual), so a mixed conformance+visual failure carries the
+visual critique; a non-zero harness exit is fatal even over an all-pass
+artifact, read AFTER the full ordered reading so the message can name the
+affected FRs (taken from the validated artifact); the critic's
+critique/fixes are concatenated into each visual entry's consolidated
+evidence; and the T8 debit sits IMMEDIATELY after the harness returns,
+before containment/freshness/import — mutation r2 proves a debit placed
+after containment lets an evidence-destroying run escape charging.
+
+Every recorded deviation shipped as recorded: the derived requirement
+(`required_when_ui_in_scope` rejected by name), the estimate-only
+metering (the cost channel is never handed to the harness), and the
+`verification.app` relocation (`conformance.app` refused with a
+migration message). The deferred list is unchanged and is being recorded
+on #239 with T9: #190 §5 bounded progress / multi-round visual loops,
+§7 per-phase contracts, §13/D recovery, the trusted provider-invoked
+visual critic with measured cost, and the two unowned admission DEFER
+items (schema-migration allowlist, mid-flight credential enumeration),
+which remain unowned.
 
 ## Verdict
 

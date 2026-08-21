@@ -696,7 +696,7 @@ An autonomous build can additionally enforce a **frozen coverage contract**
   committed past the last reviewed HEAD gets its own review PASS before
   the gate reruns.
 - Parsers: `istanbul` and `lcov` (`cobertura`/`jacoco` are refused as not
-  implemented in C1). `skip_is_failure` arrives with C3.
+  implemented in C1). `skip_is_failure` belongs to the visual gate below.
 
 ## Runtime Conformance Evaluator (auto-build)
 
@@ -773,7 +773,76 @@ launch command inert.
 - All bounds (`timeout_sec`, `ready.timeout_sec`, `stop_timeout_sec`) are
   positive INTEGER seconds — the gate enforces them with integer shell
   arithmetic, so a fractional value would be uncomputable rather than
-  merely imprecise. Visual verification (`skip_is_failure`) remains C3.
+  merely imprecise.
+
+## Visual Verification Gate (auto-build)
+
+A run whose spec maps any FR to a `kind: visual` verifier additionally
+requires the **driver-owned visual gate** (#239, increment C3 of #190 §6).
+As with conformance, the requirement is DERIVED from
+`specs/<feature>/verification.yaml` — never from a config flag (an
+operator-supplied `required_when_ui_in_scope` is rejected by name):
+
+```json
+"verification": {
+  "visual": {
+    "command": "npm run copilot:review",
+    "artifact": "tmp/ui/critique-feedback.json",
+    "url": "http://127.0.0.1:3000/",
+    "timeout_sec": 900,
+    "skip_is_failure": true
+  },
+  "app": { "command": "npm start", "ready": { "url": "http://127.0.0.1:3000/health", "timeout_sec": 30 } }
+}
+```
+
+- **Frozen during preflight, and unskippable by omission.** The criteria
+  (each FR's statement, sha-pinned) are frozen whenever the spec maps
+  `kind: visual` — with no `verification.visual` block the command side
+  freezes all-null and the gate PARKS rather than waives. `visual.url` is
+  the harness's browser base, frozen and same-origin with the resolved
+  app address; the shared `verification.app` block (one app object, one
+  launch per landing gate) serves conformance and visual alike.
+- **The harness runs isolated.** The command executes in a detached
+  throwaway worktree at HEAD under C1's environment discipline
+  (`CCT_PROJECT_DIR`/`CCT_SPECS_DIR` rebound, `OLDPWD` dropped, the
+  review cost channel unset), bounded by `timeout_sec`. Afterwards the
+  gate re-proves artifact containment, requires a freshly produced
+  regular file, requires the worktree's HEAD unmoved and its tracked
+  diff clean, and IMPORTS the evidence into the run ledger
+  (`visual/critique-feedback.json` + `harness.log`) as a publication —
+  a failed import never leaves an earlier run's PASS in place.
+- **The verdict is read in a fixed order** over the ledger copy: closed
+  shape → effective mode (absent = degraded) → cross-field consistency →
+  `passed` must equal "every criterion is pass" → skip legality →
+  `skip_is_failure` policy → exact identity with the frozen criteria →
+  per-criterion verdicts (`pass|fail|skip|unreached`). `unreached` is
+  ALWAYS red — no policy turns an abort into verification — and a
+  non-zero harness exit is fatal even when the artifact reads green.
+- **`skip_is_failure` defaults to true** and is frozen with the
+  contract: a degraded or mode-less result FAILS even when it says
+  `passed: true` — a skipped visual check is never a pass by absence.
+  Freezing `skip_is_failure: false` is the only way a degraded run
+  lands; the waiver is explicit, journalled, and every waived criterion
+  is marked `waived` in `verification-results.json`, so a degraded pass
+  is never indistinguishable from full verification. Failures dispose
+  `visual_gate` (sharing the commit-bound recovery arm), carrying the
+  critic's `critique:`/`fixes:` in the evidence.
+- **ESTIMATE-metered, always.** The harness is arbitrary project code,
+  so the cost channel is never handed to it and its output is never
+  parsed as a measurement: every invocation debits the conservative
+  per-invocation estimate when estimates are active (always under
+  `unattended`, opt-in for attended runs) and nothing when inactive —
+  debited immediately after the harness returns, BEFORE the evidence
+  checks, so a failing or evidence-destroying run is still charged. A
+  cost the ledger cannot record disposes `cost_accounting_failed`.
+- **The isolation threat model is deliberate** (plan decision 10): the
+  worktree protects the canonical checkout from persistent TRACKED-file
+  mutation and keeps ordinary side effects out of your working copy. It
+  is NOT a security sandbox — untracked-evidence forgery inside the
+  worktree and swap-and-restore races by an active same-user process
+  are out of scope. The gate bounds an unattended pipeline against a
+  drifting or sloppy harness, not against a hostile local user.
 
 ## Four-Phase Workflow
 

@@ -12,6 +12,47 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Driver-owned visual verification gate (#239, increment C3 of #190
+  §6)** — `verification.visual` in `automation.json` (schema-validated,
+  closed: `command`, `artifact`, `url`, `timeout_sec`,
+  `skip_is_failure`; an operator `required_when_ui_in_scope` is rejected
+  by name because UI-in-scope is DERIVED from any `kind: visual` mapping
+  in `specs/<feature>/verification.yaml`). **Migration:**
+  `verification.conformance.app` MOVED to `verification.app` — the old
+  location is refused by name with a migration message, never silently
+  ignored — because the one driver-launched application instance is now
+  shared by both runtime consumers (conformance evaluator + visual
+  harness; `visual.url` must be same-origin with the resolved app
+  address). The preflight initialiser freezes the shared `contract.app`
+  (interface resolved at freeze) and the visual contract — criteria
+  sha-pinned from the spec, command side all-null when unconfigured so
+  a visual mapping without a config block PARKS at the gate instead of
+  waiving. The landing gate runs the harness in a detached throwaway
+  worktree at HEAD under C1's environment discipline (paths rebound,
+  cost channel withheld), debits the conservative per-invocation
+  estimate IMMEDIATELY after the harness returns and before any
+  evidence check (the harness is arbitrary project code: never a
+  measured cost, and a run that destroys its own evidence is still
+  charged; a refused ledger write disposes `cost_accounting_failed`),
+  re-proves containment/freshness/worktree integrity, imports evidence
+  into the ledger as a publication, and reads the verdict in a fixed
+  order ending in per-criterion `pass|fail|skip|unreached` —
+  `unreached` always red, non-zero harness exit always fatal,
+  `passed` pinned to the per-criterion detail, and identity with the
+  frozen criteria enforced by the same validator as conformance.
+  `skip_is_failure` (default TRUE, frozen) makes a degraded or
+  mode-less result fail even when it claims `passed: true`; freezing
+  `false` is the only landing path for degraded runs, journalled as a
+  waiver with every waived criterion marked in
+  `verification-results.json`. Failures dispose `visual_gate` on the
+  shared commit-bound recovery arm, carrying the critic's critique and
+  actionable fixes. The ui-harness runner composes every artifact from
+  the driver's request (positional criterion identity, exact
+  cardinality, `passed` derived — never asserted — and an agent-scored
+  run with a pending request refuses with no artifact rather than
+  fabricate verdicts). Driver suite 890 → 1034; new visual-harness
+  contract suite (87).
+
 - **Runtime conformance evaluator for autonomous builds (#242, increment
   C2 of #190 §6)** — `verification.conformance` in `automation.json`
   (schema-validated, closed; `required` rejected by name because it is
