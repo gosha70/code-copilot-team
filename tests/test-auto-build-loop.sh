@@ -7010,18 +7010,22 @@ vis_case() {  # <fixture> [contract] -> "reason<TAB>detail"
 D=$(vg_vis_fixture 'mkdir -p tmp/ui shots
 echo fake-png > shots/root__375.png
 echo scratch > tmp/scratch.txt
-printf "{\"passed\":false,\"mode\":\"degraded\",\"skipped\":[\"critic\"],\"source\":\"stub\",\"critiqueSummary\":\"s\",\"actionableFixes\":[],\"criteria\":[]}" > tmp/ui/critique-feedback.json')
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"meets the bar\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"observed\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
 VG_OUT=$(vis_case "$D")
-assert_eq "C3-T6 SC-10: a dirtying harness ends in the T7-pending park, not an anomaly" "visual_gate" \
+# T7 replaced the T6 fail-closed park with the ordered reading — the
+# "still lands" half of SC-10 completes HERE, by name.
+assert_eq "C3-T7 SC-10: a dirtying all-pass harness LANDS (empty reason — no disposition)" "" \
     "$(printf '%s' "$VG_OUT" | cut -f1)"
-assert_contains "C3-T6 SC-10: …which names the missing reading BY NAME" \
-    "$(printf '%s' "$VG_OUT" | cut -f2)" "does not yet read verdicts"
 assert_eq "C3-T6 SC-10: the canonical checkout is untouched" "" \
     "$(git -C "$D" status --porcelain)"
 assert_eq "C3-T6 SC-10: the evidence reached the ledger" "yes" \
     "$([[ -f "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json" ]] && echo yes || echo no)"
-assert_eq "C3-T6 SC-10: …and parses as the artifact the harness wrote" "stub" \
+assert_eq "C3-T6 SC-10: …and parses as the artifact the harness wrote" "stub-critic" \
     "$(jq -r '.source' "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json")"
+assert_eq "C3-T7 SC-10: the landed evidence carries the visual verifier GREEN" "true" \
+    "$(jq -r '.frs["FR-2"].green' "$D/.cct/auto-build/demo-feat/verification-results.json")"
+assert_eq "C3-T7 SC-10: …as kind visual, unwaived" "visual" \
+    "$(jq -r '.frs["FR-2"].verifiers[0].kind' "$D/.cct/auto-build/demo-feat/verification-results.json")"
 assert_eq "C3-T6 SC-10: the transcript reached the ledger" "yes" \
     "$([[ -f "$D/.cct/auto-build/demo-feat/visual/harness.log" ]] && echo yes || echo no)"
 # The execution root is a mktemp name now (no /wt child), so count
@@ -7056,8 +7060,6 @@ assert_eq "C3-T6 SC-10: the harness ran OUTSIDE the canonical checkout" "no" \
     "$([[ "$WT_PATH" == "$D" ]] && echo yes || echo no)"
 assert_eq "C3-T6 SC-10: the execution root itself is GONE from disk after the gate" "absent" \
     "$([[ -n "$WT_PATH" && -e "$WT_PATH" ]] && echo present || echo absent)"
-assert_eq "C3-T6 SC-10: …and no driver-created temp parent survives it" "absent" \
-    "$([[ -n "$WT_PATH" && -e "$(dirname "$WT_PATH")/wt" ]] && echo present || echo absent)"
 rm -rf "$D"
 
 # ── SC-7: freshness. A TRACKED artifact at the frozen path (a stale
@@ -7161,7 +7163,7 @@ printf '{"schema_version":2,"verification":{"visual":{"command":"echo HIJACKED",
 git -C "$D" add -A >/dev/null && git -C "$D" commit -q -m "post-freeze config edit"
 VG_OUT=$(vis_case "$D")
 assert_contains "C3-T6 SC-19: a post-freeze config edit changes nothing at the gate" \
-    "$(printf '%s' "$VG_OUT" | cut -f2)" "does not yet read verdicts"
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "the visual artifact is malformed"
 assert_eq "C3-T6 SC-19: …the FROZEN command ran, not the edited one" "yes" \
     "$([[ -f "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json" ]] && echo yes || echo no)"
 rm -rf "$D"
@@ -7220,10 +7222,206 @@ D=$(vg_vis_fixture 'exit 0')
   VG_VIS_PRIV=""; VG_VIS_PRIV_OWNED=0
   vg_wt_cleanup >/dev/null 2>&1
   echo $? > "$D/.cct/cleanup-rc"
+  rm -rf "$WTP"   # test-only: the fixture's own temp parent
 ) </dev/null >/dev/null 2>&1
 assert_eq "C3-T6 SC-24: the fallback prunes the registration (no stale .git/worktrees entry)" "0" \
     "$(git -C "$D" worktree list --porcelain | grep -c '/wt$' || true)"
 assert_eq "C3-T6 SC-24: …and reports a COMPLETE release" "0" "$(cat "$D/.cct/cleanup-rc")"
+rm -rf "$D"
+
+
+echo ""
+echo "=== C3 (#239) T7: the verdict — ordered reading over the ledger copy ==="
+# ══════════════════════════════════════════════════════════════
+# The SIXTEEN-CELL outcome table, each cell a named assertion. The
+# waiver predicate is (effective mode != full) AND (policy == false);
+# `unreached` is red in EVERY cell; a degraded artifact under the
+# default policy fails as a POLICY failure, never as identity noise.
+
+vis_contract_p() {  # <skip_is_failure> -> contract json
+    jq -nc --argjson app "$VIS_APP" --arg s "$SHA2" --arg u "http://127.0.0.1:$VIS_PORT/" \
+        --argjson pol "$1" \
+        '{app:$app, visual:{command:"bash harness/run.sh", artifact:"tmp/ui/critique-feedback.json",
+          url:$u, timeout_sec:30, skip_is_failure:$pol,
+          criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]}}'
+}
+# vis_cell <verdict> <mode:full|degraded|none> <policy:true|false>
+# Sets VIS_CELL_OUT ("reason<TAB>detail") and VIS_CELL_D (fixture dir).
+# NOT called in a command substitution: the fixture path must reach the
+# caller's scope for the evidence-file assertions and cleanup.
+vis_cell() {
+    local verdict="$1" mode="$2" pol="$3"
+    local stub
+    case "$mode" in
+        full)     stub='jq "{passed:(\"'"$verdict"'\"==\"pass\"), mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"cell summary\", actionableFixes:[\"fix the CTA\"], criteria:[.criteria[] | . + {verdict:\"'"$verdict"'\", evidence:\"cell evidence\"}]}" "$CCT_VISUAL_REQUEST"' ;;
+        degraded) stub='jq "{passed:(\"'"$verdict"'\"==\"pass\"), mode:\"degraded\", skipped:[\"screenshots\"], source:\"stub-critic\", critiqueSummary:\"cell summary\", actionableFixes:[\"fix the CTA\"], criteria:[.criteria[] | . + {verdict:\"'"$verdict"'\", evidence:\"cell evidence\"}]}" "$CCT_VISUAL_REQUEST"' ;;
+        none)     stub='jq "{passed:(\"'"$verdict"'\"==\"pass\"), source:\"stub-critic\", critiqueSummary:\"cell summary\", actionableFixes:[\"fix the CTA\"], criteria:[.criteria[] | . + {verdict:\"'"$verdict"'\", evidence:\"cell evidence\"}]}" "$CCT_VISUAL_REQUEST"' ;;
+    esac
+    VIS_CELL_D=$(vg_vis_fixture "mkdir -p tmp/ui
+$stub > tmp/ui/critique-feedback.json")
+    printf '%s' "$(vis_contract_p "$pol")" > "$VIS_CELL_D/.cct/auto-build/demo-feat/frozen-contract.json"
+    VIS_CELL_OUT=$(vg_case "$VIS_CELL_D")
+}
+
+# ── Column: FULL (policy true) ──
+vis_cell pass full true; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell full/pass/true: LANDS" "" "$(printf '%s' "$OUT" | cut -f1)"
+# FR-7: the critic's summary and fixes survive into the CONSOLIDATED
+# evidence graph on a landed run — not only into failure messages.
+assert_contains "T7 FR-7: the landed evidence carries the critique summary" \
+    "$(jq -r '.frs["FR-2"].verifiers[0].evidence' "$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json")" \
+    "critique: cell summary"
+assert_contains "T7 FR-7: …and the actionable fixes" \
+    "$(jq -r '.frs["FR-2"].verifiers[0].evidence' "$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json")" \
+    "fixes: fix the CTA"
+rm -rf "$VIS_CELL_D"
+vis_cell fail full true; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell full/fail/true: verification-failed park" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 cell full/fail/true: …carrying the critic's words (SC-6)" "$(printf '%s' "$OUT" | cut -f2)" "critic: cell summary"
+assert_contains "T7 cell full/fail/true: …and the actionable fixes (SC-6)" "$(printf '%s' "$OUT" | cut -f2)" "fix the CTA"
+rm -rf "$VIS_CELL_D"
+vis_cell skip full true; OUT="$VIS_CELL_OUT"
+assert_contains "T7 cell full/skip/true: MALFORMED (skip illegal in full)" "$(printf '%s' "$OUT" | cut -f2)" "only legal when the run is degraded"
+rm -rf "$VIS_CELL_D"
+vis_cell unreached full true; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell full/unreached/true: red — a full-mode abort never lands" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 cell full/unreached/true: …as a verdict failure" "$(printf '%s' "$OUT" | cut -f2)" "verification failed"
+rm -rf "$VIS_CELL_D"
+
+# ── Column: FULL (policy false) — an ORDINARY verified run, never waived ──
+vis_cell pass full false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell full/pass/false: LANDS" "" "$(printf '%s' "$OUT" | cut -f1)"
+assert_eq "T7 cell full/pass/false: NO invocation waiver record (full run, policy irrelevant)" "null" \
+    "$(jq -r '.visual // "null"' "$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json")"
+assert_eq "T7 cell full/pass/false: …and no entry is marked waived" "0" \
+    "$(jq '[.frs["FR-2"].verifiers[] | select(.waived == true)] | length' "$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json")"
+rm -rf "$VIS_CELL_D"
+vis_cell fail full false; OUT="$VIS_CELL_OUT";  assert_eq "T7 cell full/fail/false: red" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"; rm -rf "$VIS_CELL_D"
+vis_cell skip full false; OUT="$VIS_CELL_OUT"
+assert_contains "T7 cell full/skip/false: MALFORMED regardless of policy" "$(printf '%s' "$OUT" | cut -f2)" "only legal when the run is degraded"
+rm -rf "$VIS_CELL_D"
+vis_cell unreached full false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell full/unreached/false: red — no policy greens an abort" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+rm -rf "$VIS_CELL_D"
+
+# ── Column: DEGRADED (policy true, the frozen default) — POLICY failure
+#    for every verdict, BEFORE identity/verdicts can obscure it ──
+for v in pass fail skip unreached; do
+    vis_cell "$v" degraded true; OUT="$VIS_CELL_OUT"
+    assert_eq "T7 cell degraded/$v/true: policy failure" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+    assert_contains "T7 cell degraded/$v/true: …naming the skip and the remedy (SC-4)" \
+        "$(printf '%s' "$OUT" | cut -f2)" "harness:init"
+    rm -rf "$VIS_CELL_D"
+done
+
+# ── Column: DEGRADED (policy false) — the WAIVER column ──
+vis_cell pass degraded false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell degraded/pass/false: LANDS by waiver (SC-21's subtle case)" "" "$(printf '%s' "$OUT" | cut -f1)"
+RES="$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json"
+assert_eq "T7 SC-21: every visual entry is marked waived — a degraded pass is never indistinguishable from full verification" "true" \
+    "$(jq -r '.frs["FR-2"].verifiers[0].waived' "$RES")"
+assert_eq "T7 SC-21: the invocation record says waived_by_policy" "true" \
+    "$(jq -r '.visual.waived_by_policy' "$RES")"
+assert_eq "T7 SC-21: …with the mode" "degraded" "$(jq -r '.visual.mode' "$RES")"
+assert_contains "T7 SC-21: …and what was skipped" "$(jq -r '.visual.skipped | join(",")' "$RES")" "screenshots"
+rm -rf "$VIS_CELL_D"
+vis_cell fail degraded false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell degraded/fail/false: red — a waiver greens skips, not failures" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+rm -rf "$VIS_CELL_D"
+vis_cell skip degraded false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell degraded/skip/false: green BY WAIVER — lands" "" "$(printf '%s' "$OUT" | cut -f1)"
+assert_eq "T7 cell degraded/skip/false: …recorded as skip, waived, green" "skip" \
+    "$(jq -r '.frs["FR-2"].verifiers[0].detail' "$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json")"
+rm -rf "$VIS_CELL_D"
+vis_cell unreached degraded false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell degraded/unreached/false: RED — no waiver ever greens an abort" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 cell degraded/unreached/false: …as a verdict failure, not a waived pass" \
+    "$(printf '%s' "$OUT" | cut -f2)" "verification failed"
+rm -rf "$VIS_CELL_D"
+
+# ── SC-5: no mode declared — defaulted to degraded, message says the
+#    harness declared nothing; lands only under an explicit waiver ──
+vis_cell pass none true; OUT="$VIS_CELL_OUT"
+assert_eq "T7 SC-5: an undeclared mode fails under the default policy" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 SC-5: …saying the harness declared nothing" "$(printf '%s' "$OUT" | cut -f2)" "did not declare what it ran"
+rm -rf "$VIS_CELL_D"
+vis_cell pass none false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 SC-5: …and lands only under the explicit frozen waiver" "" "$(printf '%s' "$OUT" | cut -f1)"
+rm -rf "$VIS_CELL_D"
+
+# ── passed/verdict agreement: the critic's boolean cannot overrule its
+#    own answers ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"s\", critiqueSummary:\"c\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"fail\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_contains "T7: passed:true beside a fail verdict is MALFORMED (summary pinned to detail)" \
+    "$(printf '%s' "$OUT" | cut -f2)" "contradicts its criterion verdicts"
+rm -rf "$D"
+
+# ── SC-12: the genuinely pre-C3 global-only artifact is refused ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+printf "{\"passed\":true,\"source\":\"old\",\"critiqueSummary\":\"c\",\"actionableFixes\":[]}" > tmp/ui/critique-feedback.json')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_contains "T7 SC-12: the pre-C3 global-only artifact fails closed shape" \
+    "$(printf '%s' "$OUT" | cut -f2)" "pre-C3 global-only artifact is refused"
+rm -rf "$D"
+
+# ── SC-12: identity — a forged statement_sha is not an exact match ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"s\", critiqueSummary:\"c\", actionableFixes:[], criteria:[.criteria[] | . + {statement_sha:\"sha256:forged\", verdict:\"pass\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_contains "T7 SC-12: a forged statement_sha is refused by identity" \
+    "$(printf '%s' "$OUT" | cut -f2)" "not an exact match of the frozen set"
+rm -rf "$D"
+
+# ── FR-5: a NON-ZERO exit never lands, however green the artifact — a
+#    harness that writes an all-pass artifact and then dies must not be
+#    indistinguishable from one that succeeded. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"all good says the critic\", actionableFixes:[\"none needed\"], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"observed\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json
+exit 1')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_eq "T7 FR-5: an all-pass artifact from a FAILED process never lands" "visual_gate" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 FR-5: …the park names the exit code as the reason" \
+    "$(printf '%s' "$OUT" | cut -f2)" "exited 1"
+assert_contains "T7 FR-5: …and the affected FR (SC-6)" \
+    "$(printf '%s' "$OUT" | cut -f2)" "for FR-2"
+assert_contains "T7 FR-5: …and still carries the critic's words" \
+    "$(printf '%s' "$OUT" | cut -f2)" "all good says the critic"
+rm -rf "$D"
+
+# ── Mixed failure: a deterministic FAIL beside a visual FAIL is still a
+#    visual_gate failure — the disposition must agree with the visual
+#    critique it carries (any-failing-visual, not all-failing-visual). ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:false, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"mixed-run critique\", actionableFixes:[\"fix the visual half too\"], criteria:[.criteria[] | . + {verdict:\"fail\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+MIXCT=$(vis_contract_p true)
+MIXCT=$(jq -c '. + {verifiers:{timeout_sec:30, set:[{fr:"FR-1", statement_sha:"sha256:aa", test:"false", metric:null}]}}' <<< "$MIXCT")
+printf '%s' "$MIXCT" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_eq "T7 mixed: deterministic fail + visual fail disposes visual_gate (any-visual rule)" "visual_gate" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 mixed: …naming BOTH failures" "$(printf '%s' "$OUT" | cut -f2)" "FR-1"
+assert_contains "T7 mixed: …and carrying the visual critique" "$(printf '%s' "$OUT" | cut -f2)" "mixed-run critique"
+rm -rf "$D"
+
+# ── SC-6: a NON-ZERO harness exit with a usable artifact is still read —
+#    the critique reaches the park, the exit code does not short-circuit ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:false, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"the CTA is invisible\", actionableFixes:[\"raise contrast on the primary CTA\"], criteria:[.criteria[] | . + {verdict:\"fail\", evidence:\"contrast 1.2:1\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json
+exit 1')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_eq "T7 SC-6: a non-zero exit with a usable artifact is READ, not short-circuited" "visual_gate" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 SC-6: …the park NAMES the affected FR" "$(printf '%s' "$OUT" | cut -f2)" "for FR-2"
+assert_contains "T7 SC-6: …the park carries the critique summary" "$(printf '%s' "$OUT" | cut -f2)" "the CTA is invisible"
+assert_contains "T7 SC-6: …and the actionable fix" "$(printf '%s' "$OUT" | cut -f2)" "raise contrast on the primary CTA"
 rm -rf "$D"
 
 echo ""
