@@ -12,6 +12,10 @@ restate.
   decision 2; credential-REFERENCE hygiene (structural, plus
   defense-in-depth value scan) per decision 3; named-violation
   validator.
+- Pre-commit package rule (plan-review pin): the parser NEGATIVE
+  matrix is first-class — each forbidden TOML construct has its OWN
+  named refusal case, and the mutation set proves at least one
+  rejection rule is load-bearing.
 - `shared/templates/routing/routing.toml.example` mirroring the
   umbrella's illustrative chain (values are examples, not policy).
 - Covers SC-A1, SC-A2, SC-A3 (registry side).
@@ -27,6 +31,14 @@ restate.
   deliberately novel unmatched fixture pinning `unknown`). Each
   fixture pins exactly one classification; mutations include a
   weakened identifying pattern.
+- Classification overlap is resolved by EXPLICIT precedence, never
+  accidental regex order (plan-review pin): specific semantic signal
+  (`quota_exhausted`/`rate_limited`/`auth`/`denied`/`invalid_request`)
+  → generic availability (`unavailable`/`transport`/`execution`) →
+  `unknown`. `denied` requires an AFFIRMATIVE policy-denial signal — a
+  bare HTTP 403 is never `denied` (it may be quota, credentials, or
+  policy). The corpus includes deliberately ambiguous fixtures: 403 +
+  quota text, and 403 + credential text.
 - Covers SC-A5.
 
 ## T3 — Repo `routing` block
@@ -44,6 +56,12 @@ restate.
   the registry, both-layers-enable rule, and the MONOTONIC INVARIANT
   proof — `effective_candidates(user, repo) ⊆ candidates(user)` over
   the generated case matrix.
+- Candidate identity in the invariant is the COMPLETE executable
+  target (backend + provider + model + credential reference + tier +
+  pool + capability-bearing fields), not the friendly id (plan-review
+  pin): the matrix proves a repo cannot keep an id while changing what
+  it executes as. (Structurally the repo block has no such fields;
+  the matrix makes that non-reachability executable.)
 - Covers SC-A4 (merge half).
 
 ## T5 — `cct routing validate | status | explain`
