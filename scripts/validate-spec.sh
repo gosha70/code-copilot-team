@@ -229,7 +229,6 @@ defer() {
 # visible, never silently passed.
 print_defers() {
   defer "coverage floors / regression baselines (greenfield 'baseline: none' handling)"
-  defer "UI-in-scope DESIGN.md placeholder check + harness/ + copilot:review presence"
   defer "schema-migration allowlist"
   defer "mid-flight credential/secret enumeration (delegation-best-practices)"
 }
@@ -410,8 +409,18 @@ validate_admission() {
           ver_ok=false
         fi
         ;;
+      visual)
+        # C3 (#239): a visual mapping is what "UI is in scope" MEANS, so
+        # the criterion must be real here for the same reason — the UI
+        # bundle requirement keys on this mapping, and a placeholder
+        # would demand the bundle while verifying nothing.
+        if [[ -z "$target" || "$target" == TODO* ]]; then
+          fail "$id: $fr visual criterion is a placeholder ('${target:-empty}') — write the real visual criterion"
+          ver_ok=false
+        fi
+        ;;
       *)
-        fail "$id: $fr verifier has unknown kind '$kind' (deterministic|runtime_conformance)"
+        fail "$id: $fr verifier has unknown kind '$kind' (deterministic|runtime_conformance|visual)"
         ver_ok=false
         ;;
     esac
@@ -463,10 +472,22 @@ validate_admission() {
   # snapshot when given, else the feature's own automation.json.
   # Admission over a config the run does not use proves nothing.
   local autocfg="${ADMISSION_CONFIG:-$spec_dir/automation.json}" autocfg_ok=false
+  local _autocfg_err="" _cfg_line
   if [[ ! -f "$autocfg" ]]; then
     fail "$id: automation config missing ($autocfg) — unattended admission requires the full config surface"
-  elif ! bash "$REPO_DIR/scripts/validate-automation-config.sh" "$autocfg" >/dev/null 2>&1; then
-    fail "$id: automation.json fails validate-automation-config.sh (run it directly for the violations)"
+  elif ! _autocfg_err="$(bash "$REPO_DIR/scripts/validate-automation-config.sh" "$autocfg" 2>&1)"; then
+    # PROPAGATE the validator's own diagnostics. Swallowing them and
+    # printing "run it directly" left the operator with one generic line
+    # for every config defect — and it silently defeated FR-3's promise
+    # of a NAMED refusal per missing piece for the states the config gate
+    # owns (a missing verification.visual.url or verification.app under
+    # a visual mapping). The rules stay defined in ONE place; admission
+    # just stops discarding what they said.
+    fail "$id: automation.json fails validate-automation-config.sh"
+    while IFS= read -r _cfg_line; do
+      [[ "$_cfg_line" == *"✗"* ]] || continue
+      fail "$id: automation config: ${_cfg_line#*✗ }"
+    done <<< "$_autocfg_err"
   elif [[ "$(jq -r '.profile // "advisory"' "$autocfg" 2>/dev/null)" != "unattended" ]]; then
     fail "$id: automation.json profile is not 'unattended' — admission is the unattended bar; attended profiles do not use it"
   else
@@ -496,7 +517,7 @@ validate_admission() {
     if [[ "$autocfg_ok" != "true" ]]; then
       fail "$id: conformance is required (runtime_conformance mapping) but the automation config was rejected above — evaluator availability cannot be verified"
     elif ! jq -e '.verification.conformance | type == "object"' "$autocfg" >/dev/null 2>&1; then
-      fail "$id: runtime_conformance mapping requires verification.conformance in automation.json (evaluator + app contract) — the block is missing"
+      fail "$id: runtime_conformance mapping requires verification.conformance in automation.json (the evaluator; the app it exercises is verification.app since #239) — the block is missing"
     else
       local conf_eval
       conf_eval="$(jq -r '.verification.conformance.evaluator // empty' "$autocfg" 2>/dev/null)"
@@ -560,6 +581,49 @@ validate_admission() {
       fail "$id: evaluator '$conf_health_eval' failed its healthcheck ($conf_health_cmd)"
     else
       pass "$id: conformance evaluator '$conf_health_eval' is healthy"
+    fi
+  fi
+
+  # 7c. UI IN SCOPE (#239 C3 FR-3) — DERIVED, exactly like conformance:
+  #     the run needs a real UI bundle iff the finalized artifact maps at
+  #     least one FR to `kind: visual`. Never a config flag, never
+  #     inferred from requirement prose. The derivation reads the SAME
+  #     parse the sha checks validated, so a file swapped after check 6b
+  #     cannot change what is demanded here.
+  local visual_required=false
+  if printf '%s\n' "$parsed" | vc_visual_required_parsed; then
+    visual_required=true
+  fi
+  if [[ "$visual_required" == "true" ]]; then
+    # The bundle FILES — one named refusal per missing piece, from the
+    # helper the landing gate calls too (attended runs skip admission
+    # entirely, so the same requirements must surface there).
+    local _bundle_ok=true _bv
+    while IFS= read -r _bv; do
+      [[ -z "$_bv" ]] && continue
+      fail "$id: UI is in scope (an FR maps kind: visual) but $_bv"
+      _bundle_ok=false
+    done < <(vc_ui_bundle_violations "$project_dir")
+    # ...and the config side, which is admission's business (the gate
+    # reads the FROZEN copy instead).
+    if [[ "$autocfg_ok" != "true" ]]; then
+      fail "$id: UI is in scope (an FR maps kind: visual) but the automation config was rejected above — the visual contract cannot be verified"
+      _bundle_ok=false
+    else
+      # ONLY the presence of the block is checked here. Its CONTENTS —
+      # the required url, and verification.app — are enforced by
+      # validate-automation-config.sh, which has already run (check 7)
+      # and sets autocfg_ok=false when they are missing. Re-checking them
+      # here would be inert code that can never fire, the same reason C2
+      # dropped its verification.test.timeout_sec branch rather than
+      # leaving it looking enforced.
+      if ! jq -e '.verification.visual | type == "object"' "$autocfg" >/dev/null 2>&1; then
+        fail "$id: UI is in scope (an FR maps kind: visual) but verification.visual is missing from automation.json — the driver has no harness command, artifact, or browser URL to run"
+        _bundle_ok=false
+      fi
+    fi
+    if [[ "$_bundle_ok" == "true" ]]; then
+      pass "$id: UI is in scope — DESIGN.md, harness/, copilot:review, and the visual contract are all present"
     fi
   fi
 

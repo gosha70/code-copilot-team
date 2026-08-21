@@ -1338,6 +1338,18 @@ unattended_cfg() {
 # Admit a fixture (#193 increment B): generate the verification draft,
 # finalize it with the fixture's own test script as the deterministic
 # verifier, and commit — the run then passes real admission.
+# The draft generator emits a visual placeholder per FR (C3 T1) — an
+# author-decision scaffold that is inadmissible until resolved. These
+# fixtures are non-UI, so they take the other valid decision: remove it.
+drop_visual_scaffold() {  # <verification.yaml>
+    python3 - "$1" << 'PYEOF'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"\n', '', s)
+open(p, 'w').write(s)
+PYEOF
+}
+
 admit_project() {
     local dir="$1" f="$1/specs/demo-feat/verification.yaml"
     CCT_SPECS_DIR="$dir/specs" bash "$SCRIPT_DIR/../scripts/generate-verification-draft.sh" demo-feat >/dev/null
@@ -1345,6 +1357,7 @@ admit_project() {
         sed -i 's/^status: draft/status: finalized/' "$f"
     sed -i '' 's|test: "TODO.*|test: "project-test.sh"|' "$f" 2>/dev/null || \
         sed -i 's|test: "TODO.*|test: "project-test.sh"|' "$f"
+    drop_visual_scaffold "$f"
     git -C "$dir" add -A && git -C "$dir" commit -q -m "verification artifact"
 }
 
@@ -5056,9 +5069,14 @@ vg_case() {
       # shellcheck source=/dev/null
       source "$VG_FUNCS" >/dev/null 2>&1
       # The extracted functions resolve SCRIPT_DIR to tests/, so the
-      # driver's own conditional source of the lifecycle lib is a no-op
-      # here — load it explicitly.
+      # driver's own conditional sourcing of its libs is a no-op here —
+      # load them explicitly. C3 T6's step-3 bundle check needs
+      # cp_contained (coverage-parse) and vc_ui_bundle_violations
+      # (verification-common); missing them fails as command-not-found,
+      # which reads as a containment refusal.
       source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+      source "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh"
+      source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
       PROJECT_DIR="$dir"; LEDGER_DIR="$dir/.cct/auto-build/demo-feat"
       FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
       FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
@@ -5183,14 +5201,32 @@ vg_conf_fixture() {  # <evaluator-behaviour-script> <provider-extras...>
     git -C "$dir" add -A >/dev/null; git -C "$dir" commit -q -m init
     echo "$dir"
 }
+# vg_add_bundle <fixture-dir> — commit a REAL UI bundle at HEAD. Since
+# C3 T6 the gate refuses a visual contract whose bundle is not real at
+# the canonical checkout (plan step 3, before any project code runs) and
+# again inside the execution worktree at the point of use — so every
+# fixture that freezes a visual section needs one, committed (the
+# worktree checks out HEAD).
+vg_add_bundle() {
+    local dir="$1"
+    printf '# Design\n\nAccent #0b5cff; one primary CTA per empty state.\n' > "$dir/DESIGN.md"
+    mkdir -p "$dir/harness"
+    printf '// harness entry\n' > "$dir/harness/runner.stub.js"
+    printf '{"scripts":{"copilot:review":"bash harness/run.sh"}}\n' > "$dir/package.json"
+    git -C "$dir" add -A >/dev/null && git -C "$dir" commit -q -m "ui bundle"
+}
+
 VG_PORT=$(free_port)
 VG_APP=$(jq -n --arg c "python3 -m http.server $VG_PORT --bind 127.0.0.1" \
     --arg u "http://127.0.0.1:$VG_PORT/" \
     '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5}')
 vg_conf_contract() {  # <app-json>
+    # C3 (#239 T5): the app is a TOP-LEVEL section with its interface
+    # resolved at freeze — one lifecycle shared by both runtime kinds.
     jq -n --argjson app "$1" --arg s "$SHA2" --arg iface "http://127.0.0.1:$VG_PORT/" \
-        '{conformance:{evaluator:"stub-eval", app:$app, interface:$iface, timeout_sec:30,
-           criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]}}'
+        '{conformance:{evaluator:"stub-eval", timeout_sec:30,
+           criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]},
+          app:($app + {interface:$iface})}'
 }
 # The evaluator: reads the request file, emits ONE fenced json block.
 vg_write_provider() {  # <project-dir> <verdict-script> — prints the profile path
@@ -5370,7 +5406,7 @@ rm -rf "$VGC"
 # Attended blockless run: the criteria are frozen with a null evaluator —
 # the requirement surfaces HERE (FR-10), it is never skipped.
 VGC=$(vg_conf_fixture)
-jq -n --arg s "$SHA2" '{conformance:{evaluator:null, app:null, interface:null, timeout_sec:null,
+jq -n --arg s "$SHA2" '{conformance:{evaluator:null, timeout_sec:null,
     criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]}}' \
     > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
 VG_OUT=$(vg_case "$VGC")
@@ -5386,8 +5422,9 @@ for mutation in "echo smuggled >> pass.sh" "echo x > untracked-artifact.txt"; do
         --arg u "http://127.0.0.1:$MPORT/" \
         '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5}')
     jq -n --argjson app "$MAPP" --arg s "$SHA2" --arg iface "http://127.0.0.1:$MPORT/" \
-        '{conformance:{evaluator:"stub-eval", app:$app, interface:$iface, timeout_sec:30,
-           criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}' \
+        '{conformance:{evaluator:"stub-eval", timeout_sec:30,
+           criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]},
+          app:($app + {interface:$iface})}' \
         > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
     VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
     assert_eq "C2-T5: an app that mutates the checkout [$mutation] disposes git_anomaly" "git_anomaly" \
@@ -5483,8 +5520,9 @@ assert_eq "C2-T5: the driver's exit_cleanup calls it" "1" \
 VGC=$(vg_conf_fixture); VG_PROF=$(vg_write_provider "$VGC" "$VG_EVAL_OK")
 MPORT=$(free_port)
 jq -n --arg c "echo smuggled >> pass.sh; sleep 30" --arg u "http://127.0.0.1:$MPORT/" --arg s "$SHA2" \
-    '{conformance:{evaluator:"stub-eval", app:{command:$c, ready:{url:$u, timeout_sec:3}, stop_timeout_sec:2},
-      interface:$u, timeout_sec:30, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}' \
+    '{conformance:{evaluator:"stub-eval", timeout_sec:30,
+      criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]},
+      app:{command:$c, ready:{url:$u, timeout_sec:3}, stop_timeout_sec:2, interface:$u}}' \
     > "$VGC/.cct/auto-build/demo-feat/frozen-contract.json"
 VG_OUT=$(CCT_PROVIDER_PROFILE="$VG_PROF" vg_case "$VGC")
 assert_eq "C2-T5: an app that mutates the repo AND never becomes ready is a git_anomaly" "git_anomaly" \
@@ -5582,7 +5620,7 @@ assert_eq "C2-T6: the rc=3 arm restores the estimate flag before disposing" "bef
 # ── Round-18: an unrecorded cost parks under its OWN reason, and that
 #    park can never auto-resolve — cap_exceeded's arm would compare the
 #    understated total against a cap and clear itself instantly. ──
-assert_eq "C2-T6: all three debit failures park as cost_accounting_failed" "3" \
+assert_eq "C2-T6: all four debit failures park as cost_accounting_failed (T8 adds the visual site)" "4" \
     "$(grep -cE '(dispose|vg_finish) "cost_accounting_failed"' "$DRIVER" | tr -d ' ')"
 # The dispatcher arm is identified by its own refusal text (the shared
 # predicate now carries a case label of the same name, so a bare grep on
@@ -5719,7 +5757,7 @@ assert_eq "C2-T6: an estimated debit the ledger refuses FAILS too" \
     ' 1 cost_debit_failed {"cost_usd":0,"cost_estimated_usd":0}' " $(vg_debit_fail_case NONE)"
 assert_eq "C2-T6: accounting needs no temp file (nothing to fail open on)" "0" \
     "$(awk '/^vg_debit_conformance\(\)/,/^}/' "$DRIVER" | grep -c mktemp)"
-assert_eq "C2-T6: the gate routes a failed debit through vg_finish" "1" \
+assert_eq "C2-T6: both gates route a failed debit through vg_finish (conformance + visual)" "2" \
     "$(grep -c 'could not be accounted for (the ledger refused the cost debit)' "$DRIVER")"
 
 # End to end: a passing evaluation debits, and the debit precedes the
@@ -5922,6 +5960,7 @@ s = re.sub(r'      test: "TODO[^"]*"',
            '      test: "bash ./project-test.sh"\n      metric: "suite exits 0"', s, count=1)
 s = re.sub(r'    - kind: deterministic\n      test: "TODO[^"]*"',
            '    - kind: runtime_conformance\n      criterion: "Cancel aborts the job."', s, count=1)
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"\n', '', s)
 open(p, 'w').write(s)
 PYEOF
     git -C "$dir" add -A && git -C "$dir" commit -q -m "finalized verification artifact"
@@ -5931,7 +5970,7 @@ PYEOF
 #    freezes verifiers + conformance (SC-3). ──
 P=$(setup_project); single_phase "$P"
 write_verification_yaml "$P"
-cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9099/health",timeout_sec:5},stop_timeout_sec:5}}}'
+cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600},app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9099/health",timeout_sec:5},stop_timeout_sec:5}}'
 run_driver "$P"
 # Since T5 the frozen conformance requirement is enforced at the landing
 # gate: with no evaluator resolvable, the run parks instead of landing.
@@ -5949,8 +5988,9 @@ jq -e '.verifiers.timeout_sec == 60
 assert_exit "C2-T3: deterministic verifiers frozen with metric + sha" 0 $?
 jq -e '.conformance.evaluator == "mock-eval"
    and .conformance.timeout_sec == 600
-   and .conformance.interface == "http://127.0.0.1:9099/health"
-   and .conformance.app.command == "sleep 5"
+   and .app.interface == "http://127.0.0.1:9099/health"
+   and .app.command == "sleep 5"
+   and (.conformance | has("app") | not)
    and (.conformance.criteria | length == 1)
    and .conformance.criteria[0].fr == "FR-2"
    and .conformance.criteria[0].criterion == "Cancel aborts the job."' \
@@ -5971,11 +6011,11 @@ rm -rf "$P"
 # ── app.interface wins the interface resolution (command readiness) ──
 P=$(setup_project); single_phase "$P"
 write_verification_yaml "$P"
-cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",interface:"http://127.0.0.1:9099",ready:{command:"true",timeout_sec:5},stop_timeout_sec:5}}}'
+cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600},app:{command:"sleep 5",interface:"http://127.0.0.1:9099",ready:{command:"true",timeout_sec:5},stop_timeout_sec:5}}'
 run_driver "$P"
 assert_exit "C2-T3: command-readiness run parks at the verifier gate" 4 "$RC"
 assert_eq "C2-T3: app.interface wins the interface resolution" "http://127.0.0.1:9099" \
-    "$(jq -r '.conformance.interface' "$P/.cct/auto-build/demo-feat/frozen-contract.json")"
+    "$(jq -r '.app.interface' "$P/.cct/auto-build/demo-feat/frozen-contract.json")"
 rm -rf "$P"
 
 # ── Blockless attended (FR-10): the criteria freeze with an all-null
@@ -5985,8 +6025,7 @@ P=$(setup_project); single_phase "$P"
 write_verification_yaml "$P"
 run_driver "$P"
 assert_exit "C2-T3: blockless attended run parks at the gate (mapping unskippable)" 4 "$RC"
-jq -e '.conformance.evaluator == null and .conformance.app == null
-   and .conformance.interface == null and .conformance.timeout_sec == null
+jq -e '.conformance.evaluator == null and .conformance.timeout_sec == null
    and (.conformance.criteria | length == 1)' \
    "$P/.cct/auto-build/demo-feat/frozen-contract.json" >/dev/null 2>&1
 assert_exit "C2-T3: blockless freeze pins criteria with a null evaluator side" 0 $?
@@ -6087,7 +6126,7 @@ jq -n --argjson now "$NOW" \
       totals:{cost_usd:0, cost_estimated_usd:0, started_epoch:$now},
       milestones:{every_n_phases:2, last_paused_after_phase:0},
       escalations:[], pr:{number:null, url:null},
-      preflight:{contract:{conformance:{evaluator:null,app:null,interface:null,timeout_sec:null,criteria:[{fr:"FR-2",statement_sha:"sha256:2222222222222222222222222222222222222222222222222222222222222222",criterion:"Cancel aborts the job."}]}}},
+      preflight:{contract:{conformance:{evaluator:null,timeout_sec:null,criteria:[{fr:"FR-2",statement_sha:"sha256:2222222222222222222222222222222222222222222222222222222222222222",criterion:"Cancel aborts the job."}]}}},
       updated:"2026-01-01T00:00:00Z"}' > "$LEDGERC/state.json"
 echo "approved-by: test" >> "$P/specs/demo-feat/automation-summary.md"
 git -C "$P" add -A && git -C "$P" commit -q -m "signoff"
@@ -6372,12 +6411,14 @@ kill "$STALL_PID" 2>/dev/null || true
 
 # ── Round-6 finding 4: the PERSISTED contract schema agrees with the
 #    executable validator on integer bounds. ──
-jq -e '.properties.contract.properties.conformance.properties as $c
-   | ($c.timeout_sec.type == ["integer","null"] and $c.timeout_sec.minimum == 1)
-   and ($c.app.properties.stop_timeout_sec.type == "integer" and $c.app.properties.stop_timeout_sec.minimum == 1)
-   and ($c.app.properties.ready.properties.timeout_sec.type == "integer" and $c.app.properties.ready.properties.timeout_sec.minimum == 1)' \
+# C3 T5: the app moved to contract.app, so its bounds are asserted there.
+jq -e '.properties.contract.properties as $ct
+   | ($ct.conformance.properties.timeout_sec.type == ["integer","null"] and $ct.conformance.properties.timeout_sec.minimum == 1)
+   and ($ct.app.properties.stop_timeout_sec.type == "integer" and $ct.app.properties.stop_timeout_sec.minimum == 1)
+   and ($ct.app.properties.ready.properties.timeout_sec.type == "integer" and $ct.app.properties.ready.properties.timeout_sec.minimum == 1)
+   and ($ct.visual.properties.timeout_sec.type == ["integer","null"] and $ct.visual.properties.timeout_sec.minimum == 1)' \
    "$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json" >/dev/null 2>&1
-assert_exit "C2-T4 schema: the persisted contract declares integer bounds" 0 $?
+assert_exit "C2-T4 schema: the persisted contract declares integer bounds (app + visual)" 0 $?
 
 # ── Stop reaches DESCENDANTS, including a TERM-resistant one (the
 #    cp_run_bounded discipline: escalation must complete). ──
@@ -6491,7 +6532,7 @@ assert_eq "C2-R3 schema: documents the capable-evaluator admission rule" "1" \
 #    driver the capture from the SAME parse admission validated. ──
 P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
 write_verification_yaml "$P"
-cfg_set "$P" '.verification.conformance={evaluator:"mock-eval",timeout_sec:600,app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9/x",timeout_sec:5},stop_timeout_sec:5}}'
+cfg_set "$P" '.verification={conformance:{evaluator:"mock-eval",timeout_sec:600},app:{command:"sleep 5",ready:{url:"http://127.0.0.1:9/x",timeout_sec:5},stop_timeout_sec:5}}'
 EVALPROF=$(mktemp)
 cat "$PASS_PROFILE" > "$EVALPROF"
 cat >> "$EVALPROF" << 'TOML'
@@ -6525,7 +6566,8 @@ sed 's/^FEATURE_ID=""$/FEATURE_ID="dummy"/' <(head -n $((_stop - 1)) "$DRIVER") 
 source "$DRIVER_FUNCS"
 CT=$(mktemp)
 
-jq -n '{conformance:{evaluator:"e",app:{command:"c",ready:{url:"http://x",timeout_sec:5},stop_timeout_sec:5},interface:"http://x",timeout_sec:600,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]}}' > "$CT"
+jq -n '{conformance:{evaluator:"e",timeout_sec:600,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]},
+        app:{command:"c",ready:{url:"http://x",timeout_sec:5},stop_timeout_sec:5,interface:"http://x"}}' > "$CT"
 if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
 assert_exit "C2-T3: conformance-only contract validates" 0 "$_v"
 
@@ -6533,11 +6575,11 @@ jq -n '{verifiers:{timeout_sec:60,set:[{fr:"FR-1",statement_sha:"sha256:aa",test
 if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
 assert_exit "C2-T3: verifiers-only contract validates (null metric ok)" 0 "$_v"
 
-jq -n '{conformance:{evaluator:"e",app:null,interface:null,timeout_sec:null,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]}}' > "$CT"
+jq -n '{conformance:{evaluator:"e",timeout_sec:null,criteria:[{fr:"FR-1",statement_sha:"sha256:aa",criterion:"c"}]}}' > "$CT"
 if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
 assert_exit "C2-T3: half-frozen evaluator side rejected" 1 "$_v"
 
-jq -n '{conformance:{evaluator:null,app:null,interface:null,timeout_sec:null,criteria:[]}}' > "$CT"
+jq -n '{conformance:{evaluator:null,timeout_sec:null,criteria:[]}}' > "$CT"
 if validate_contract_json "$CT" >/dev/null 2>&1; then _v=0; else _v=1; fi
 assert_exit "C2-T3: empty criteria rejected" 1 "$_v"
 
@@ -6600,16 +6642,955 @@ rm -rf "$UP"; rm -f "$CONFIG_SNAPSHOT" "$PREFLIGHT_RESULT_FILE"
 # ── Round-2 finding 3: the result schema scopes C1 rules the way the
 #    executable validator does. ──
 SCHEMA_PF="$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json"
-jq -e '.properties.contract.allOf | length == 1
-   and (.[0].if.anyOf | length == 11)
-   and (.[0].then.required | length == 8)
-   and (.[0].then.allOf | length == 4)' "$SCHEMA_PF" >/dev/null 2>&1
+# C3 T5 added the FR-10 app-coupling entry to this allOf, so the C1
+# conditional is found by CONTENT, not position — a positional pin is
+# exactly what silently broke when the array gained an entry.
+jq -e '[.properties.contract.allOf[]
+        | select((.if.anyOf | length) == 11)]
+       | length == 1
+         and (.[0].then.required | length == 8)
+         and (.[0].then.allOf | length == 4)' "$SCHEMA_PF" >/dev/null 2>&1
 assert_exit "C2-T3 schema: C1 coverage rules scoped under a presence conditional" 0 $?
 jq -e '[.properties.contract | has("dependencies"), has("required")] | any | not' \
     "$SCHEMA_PF" >/dev/null 2>&1
 assert_exit "C2-T3 schema: no unconditional coverage requirement remains" 0 $?
 
 rm -f "$CT" "$DRIVER_FUNCS"
+echo ""
+echo "=== C3 (#239) T5: frozen app+visual, shared lifecycle, checkpoint split ==="
+# ══════════════════════════════════════════════════════════════
+
+# ── Preflight schema: the two NEW sections under the same closed-shape
+#    discipline. This is where BOTH T5 bugs would have surfaced — adding a
+#    top-level section means updating the positive allow-list AND every
+#    predicate that means "everything except the known sections". ──
+PF="$SCRIPT_DIR/../shared/schemas/preflight-result.schema.json"
+jq -e '.properties.contract.properties | has("app") and has("visual")' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: contract declares app and visual sections" 0 $?
+jq -e '.properties.contract.properties.conformance.properties | (has("app") | not) and (has("interface") | not)' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: conformance no longer declares app or interface" 0 $?
+jq -e '.properties.contract.properties.conformance.required | sort == ["criteria","evaluator","timeout_sec"]' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: conformance requires only evaluator/timeout_sec/criteria" 0 $?
+jq -e '[.properties.contract.properties.app.additionalProperties,
+        .properties.contract.properties.app.properties.ready.additionalProperties,
+        .properties.contract.properties.visual.additionalProperties,
+        .properties.contract.properties.visual.properties.criteria.items.additionalProperties]
+       | all(. == false)' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: both new sections are CLOSED, and so are their children" 0 $?
+jq -e '.properties.contract.properties.app.properties | has("interface")' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: app carries the RESOLVED interface" 0 $?
+jq -e '.properties.contract.properties.visual.required | sort == ["artifact","command","criteria","skip_is_failure","timeout_sec","url"]' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: visual pins command/artifact/url/timeout/policy/criteria" 0 $?
+jq -e '.properties.contract.properties.visual.allOf | any(.oneOf | length == 2)' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: visual is all-null or all-configured (the blockless case)" 0 $?
+# The TOP-LEVEL presence rule — the negative predicate the first seven
+# assertions never looked at, which is exactly where this bug class
+# escaped twice. A visual-only contract must satisfy the anyOf.
+jq -e '.properties.contract.anyOf | any(.required == ["visual"])' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: the contract presence rule accepts a visual-only contract" 0 $?
+jq -e '.properties.contract.allOf | any(
+    .if.anyOf == [{"required":["conformance"]},{"required":["visual"]}]
+    and .then.required == ["app"])' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: a runtime consumer REQUIRES the app key (FR-10 coupling)" 0 $?
+jq -e '.properties.contract.properties.app.required | sort == ["command","interface","ready","stop_timeout_sec"]' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: app REQUIRES the resolved interface, not merely declares it" 0 $?
+jq -e '.properties.contract.properties.visual.properties.url.pattern == "^https?://"' "$PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: visual.url pins the http(s) pattern (T2 parity)" 0 $?
+# Duplicate JSON keys are legal to parsers and silently dropped (last one
+# wins) — which is how the FR-10 coupling vanished on first insertion:
+# `contract` already had an allOf, and a second key produced valid JSON
+# with MY rule discarded. Guard both schemas so the failure mode cannot
+# recur silently in T6/T7.
+python3 - "$SCHEMA_PF" "$SCRIPT_DIR/../shared/schemas/automation.schema.json" << 'PYEOF'
+import json, sys, collections
+def no_dupes(pairs):
+    d=[k for k,c in collections.Counter(k for k,_ in pairs).items() if c>1]
+    if d: raise ValueError(f"duplicate keys: {d}")
+    return dict(pairs)
+for p in sys.argv[1:]:
+    json.load(open(p), object_pairs_hook=no_dupes)
+PYEOF
+assert_exit "C3-T5 schema: no duplicate keys in either schema (last-one-wins is silent)" 0 $?
+
+# ── validate_contract_json, exercised directly. ──
+CT5=$(mktemp); CT5_DF=$(mktemp)
+sed -n '/^validate_contract_json()/,/^}/p' "$SCRIPT_DIR/../scripts/auto-build-loop.sh" > "$CT5_DF"
+ct5_valid() {  # <json> -> 0 valid, 1 invalid (however many rules tripped)
+    printf '%s' "$1" > "$CT5"
+    ( source "$CT5_DF"; validate_contract_json "$CT5" ) >/dev/null 2>&1 || return 1
+}
+VIS_OK='{"command":"npm run r","artifact":"tmp/f.json","url":"http://127.0.0.1:3000/","timeout_sec":600,"skip_is_failure":true,"criteria":[{"fr":"FR-3","statement_sha":"sha256:cc","criterion":"c"}]}'
+APP_OK='{"command":"npm start","ready":{"url":"http://127.0.0.1:3000/health","timeout_sec":30},"stop_timeout_sec":10,"interface":"http://127.0.0.1:3000/health"}'
+VIS_NULL='{"command":null,"artifact":null,"url":null,"timeout_sec":null,"skip_is_failure":true,"criteria":[{"fr":"FR-3","statement_sha":"sha256:cc","criterion":"c"}]}'
+
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" --argjson a "$APP_OK" '{visual:$v, app:$a}')"
+assert_exit "C3-T5: a VISUAL-ONLY contract validates (no conformance at all)" 0 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_NULL" '{visual:$v, app:null}')"
+assert_exit "C3-T5: a visual mapping with NO config block freezes all-null + app:null (gate parks)" 0 $?
+# FR-10 coupling: the app KEY must exist whenever a runtime consumer is
+# frozen — the gate keys the lifecycle on `.app != null`, so a missing
+# key would bypass it silently rather than fail loudly.
+ct5_valid "$(jq -nc --argjson v "$VIS_NULL" '{visual:$v}')"
+assert_exit "C3-T5: a visual consumer WITHOUT the app key is refused" 1 $?
+ct5_valid "$(jq -nc '{conformance:{evaluator:"e",timeout_sec:30,criteria:[{fr:"FR-2",statement_sha:"sha256:bb",criterion:"c"}]}}')"
+assert_exit "C3-T5: a conformance consumer WITHOUT the app key is refused" 1 $?
+# VALUE-level coupling (review round 2): app:null is legal only while
+# every frozen consumer is itself all-null. A configured consumer beside
+# app:null reads to the gate as "skip the lifecycle" — refuse it as
+# tampered frozen state. The four cases discriminate value coupling from
+# the key-presence rule above.
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" '{visual:$v, app:null}')"
+assert_exit "C3-T5: a CONFIGURED visual beside app:null is refused" 1 $?
+ct5_valid "$(jq -nc '{conformance:{evaluator:"e",timeout_sec:30,criteria:[{fr:"FR-2",statement_sha:"sha256:bb",criterion:"c"}]}, app:null}')"
+assert_exit "C3-T5: a CONFIGURED conformance beside app:null is refused" 1 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_NULL" '{visual:$v, app:null}')"
+assert_exit "C3-T5: all-null visual beside app:null still passes (blockless)" 0 $?
+ct5_valid "$(jq -nc '{conformance:{evaluator:null,timeout_sec:null,criteria:[{fr:"FR-2",statement_sha:"sha256:bb",criterion:"c"}]}, app:null}')"
+assert_exit "C3-T5: all-null conformance beside app:null still passes (blockless)" 0 $?
+# ...and the schema agrees: the value-level conditionals exist and demand
+# an OBJECT app for a configured consumer.
+jq -e '[.properties.contract.allOf[]
+        | select(.then.properties.app.type == "object")] | length == 2' "$SCHEMA_PF" >/dev/null 2>&1
+assert_exit "C3-T5 schema: value-level coupling — configured consumer demands an OBJECT app" 0 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" --argjson a "$APP_OK" '{visual:($v + {url:"httpx://evil/"}), app:$a}')"
+assert_exit "C3-T5: a non-http(s) visual url is refused (httpx:// is not http)" 1 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_NULL" --argjson a "$APP_OK" '{visual:($v + {command:"npm run r"}), app:$a}')"
+assert_exit "C3-T5: a HALF-frozen visual contract is refused" 1 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" --argjson a "$APP_OK" '{visual:($v + {skip_is_failure:"no"}), app:$a}')"
+assert_exit "C3-T5: skip_is_failure must be a frozen BOOLEAN" 1 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" --argjson a "$APP_OK" '{visual:($v + {bogus:1}), app:$a}')"
+assert_exit "C3-T5: an unknown visual key is refused (closed)" 1 $?
+ct5_valid "$(jq -nc --argjson v "$VIS_OK" --argjson a "$APP_OK" '{visual:$v, app:($a | del(.interface))}')"
+assert_exit "C3-T5: contract.app without a RESOLVED interface is refused" 1 $?
+ct5_valid "$(jq -nc --argjson a "$APP_OK" '{conformance:{evaluator:"e",timeout_sec:30,criteria:[{fr:"FR-2",statement_sha:"sha256:bb",criterion:"c"}],app:$a}}')"
+assert_exit "C3-T5: the OLD nested conformance.app shape is refused" 1 $?
+rm -f "$CT5" "$CT5_DF"
+
+# ── SC-3: post-freeze config edits move NOTHING. ──
+write_visual_cfg_yaml() {  # <dir> — FR-1 deterministic, FR-2 visual
+    local dir="$1" f="$1/specs/demo-feat/verification.yaml"
+    CCT_SPECS_DIR="$dir/specs" bash "$SCRIPT_DIR/../scripts/generate-verification-draft.sh" demo-feat >/dev/null
+    sed -i '' 's/^status: draft/status: finalized/' "$f" 2>/dev/null || \
+        sed -i 's/^status: draft/status: finalized/' "$f"
+    python3 - "$f" << 'PYEOF'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'      test: "TODO[^"]*"', '      test: "bash ./project-test.sh"\n      metric: "suite exits 0"', s, count=1)
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"\n', '', s, count=1)
+s = re.sub(r'    - kind: deterministic\n      test: "TODO[^"]*"\n', '', s, count=1)
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"',
+           '    - kind: visual\n      criterion: "The empty state renders a single primary CTA."', s, count=1)
+open(p, 'w').write(s)
+PYEOF
+    git -C "$dir" add -A && git -C "$dir" commit -q -m "finalized artifact with a visual mapping"
+}
+VPORT=$(free_port)
+P=$(setup_project); single_phase "$P"
+write_visual_cfg_yaml "$P"
+cfg_set "$P" ".verification={app:{command:\"sleep 30\",ready:{url:\"http://127.0.0.1:$VPORT/\",timeout_sec:3},stop_timeout_sec:2},visual:{command:\"true\",artifact:\"tmp/ui/f.json\",url:\"http://127.0.0.1:$VPORT/\",timeout_sec:60}}"
+run_driver "$P"
+LEDGER="$P/.cct/auto-build/demo-feat"
+jq -e '.app.interface == "http://127.0.0.1:'"$VPORT"'/"
+   and .app.command == "sleep 30"
+   and (.conformance | not)
+   and .visual.command == "true"
+   and .visual.artifact == "tmp/ui/f.json"
+   and .visual.url == "http://127.0.0.1:'"$VPORT"'/"
+   and .visual.timeout_sec == 60
+   and .visual.skip_is_failure == true
+   and (.visual.criteria | length == 1)
+   and .visual.criteria[0].fr == "FR-2"
+   and (.visual.criteria[0].statement_sha | startswith("sha256:"))' \
+   "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "C3-T5 SC-3: app+visual frozen, interface resolved, skip_is_failure defaulted TRUE" 0 $?
+# Now edit the config underneath the run: nothing frozen may move.
+cfg_set "$P" '.verification.visual.url="http://127.0.0.1:9/moved"'
+cfg_set "$P" '.verification.visual.skip_is_failure=false'
+cfg_set "$P" '.verification.app.command="something else"'
+assert_eq "C3-T5 SC-3: a post-freeze url edit moves nothing" "http://127.0.0.1:$VPORT/" \
+    "$(jq -r '.visual.url' "$LEDGER/frozen-contract.json")"
+assert_eq "C3-T5 SC-3: a post-freeze skip_is_failure edit moves nothing" "true" \
+    "$(jq -r '.visual.skip_is_failure' "$LEDGER/frozen-contract.json")"
+assert_eq "C3-T5 SC-3: a post-freeze app edit moves nothing" "sleep 30" \
+    "$(jq -r '.app.command' "$LEDGER/frozen-contract.json")"
+rm -rf "$P"
+
+# ── SC-11 / SC-16: the SHARED lifecycle. A visual-only frozen contract
+#    launches the app through the same path conformance uses — proving the
+#    hoist really is keyed on either kind — and a combined contract
+#    launches exactly ONCE and stops exactly ONCE. ──
+
+# ── SC-11: ONE start, ONE readiness sequence, ONE stop — however many
+#    consumers read the app. Counted by wrapping the lifecycle functions,
+#    so the assertion is about calls made, not about an outcome that
+#    several implementations could produce. ──
+vg_life_counts() {  # <contract-json> [with-provider] -> "reason<TAB>starts<TAB>readies<TAB>stops"
+    local ct="$1" want_prov="${2:-}" prof="" d marker counts
+    d=$(vg_conf_fixture)
+    # Visual contracts refuse at plan step 3 without a real bundle at
+    # HEAD (C3 T6) — these fixtures are about the LIFECYCLE, so give
+    # them one.
+    printf '%s' "$ct" | jq -e 'has("visual")' >/dev/null 2>&1 && vg_add_bundle "$d"
+    # A conformance consumer needs a resolvable evaluator; write the stub
+    # provider INTO this fixture (vg_write_provider keys off the dir).
+    [[ -n "$want_prov" ]] && prof=$(vg_write_provider "$d" "$VG_EVAL_OK")
+    printf '%s' "$ct" > "$d/.cct/auto-build/demo-feat/frozen-contract.json"
+    marker="$(dirname "$d")/$(basename "$d").vg-dispose"
+    counts="$(dirname "$d")/$(basename "$d").counts"
+    ( set +e
+      set --
+      # shellcheck source=/dev/null
+      source "$VG_FUNCS" >/dev/null 2>&1
+      source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+      source "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh"
+      source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
+      PROJECT_DIR="$d"; LEDGER_DIR="$d/.cct/auto-build/demo-feat"
+      FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
+      [[ -n "$prof" ]] && CCT_PROVIDER_PROFILE="$prof"
+      FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
+      dispose() { printf '%s\t%s\n' "$1" "$2" > "$marker"; return 1; }
+      journal() { :; }
+      check_caps() { :; }
+      : > "$marker"; printf '0 0 0\n' > "$counts"
+      # Count the lifecycle calls by wrapping them.
+      eval "orig_ca_start() { $(declare -f ca_start | tail -n +2)"$'\n'"}"
+      eval "orig_ca_wait_ready() { $(declare -f ca_wait_ready | tail -n +2)"$'\n'"}"
+      eval "orig_ca_stop() { $(declare -f ca_stop | tail -n +2)"$'\n'"}"
+      _bump() { local i="$1" a b c; read -r a b c < "$counts"
+                case "$i" in 1) a=$((a+1));; 2) b=$((b+1));; 3) c=$((c+1));; esac
+                printf '%s %s %s\n' "$a" "$b" "$c" > "$counts"; }
+      ca_start() { _bump 1; orig_ca_start "$@"; }
+      ca_wait_ready() { _bump 2; orig_ca_wait_ready "$@"; }
+      ca_stop() { _bump 3; orig_ca_stop "$@"; }
+      verifier_gate >/dev/null 2>&1 </dev/null
+    )
+    local a b c; read -r a b c < "$counts"
+    printf '%s\t%s\t%s\t%s\n' "$(cut -f1 "$marker" 2>/dev/null)" "$a" "$b" "$c"
+    rm -rf "$d" "$marker" "$counts"
+}
+
+CPORT=$(free_port)
+CAPP=$(jq -nc --arg c "python3 -m http.server $CPORT --bind 127.0.0.1" \
+    --arg u "http://127.0.0.1:$CPORT/" \
+    '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5, interface:$u}')
+# Visual-only: the app must still be launched, by the SAME shared path.
+VONLY=$(jq -nc --argjson app "$CAPP" --arg s "$SHA2" --arg u "http://127.0.0.1:$CPORT/" \
+    '{app:$app, visual:{command:"true", artifact:"tmp/ui/f.json", url:$u, timeout_sec:30,
+      skip_is_failure:true, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}')
+VL=$(vg_life_counts "$VONLY")
+assert_eq "C3-T5 SC-16: a VISUAL-ONLY contract starts the app exactly once" "1" "$(printf '%s' "$VL" | cut -f2)"
+assert_eq "C3-T5 SC-16: …proves readiness exactly once" "1" "$(printf '%s' "$VL" | cut -f3)"
+assert_eq "C3-T5 SC-16: …and stops it exactly once" "1" "$(printf '%s' "$VL" | cut -f4)"
+
+# Combined: one app for BOTH consumers.
+CPORT2=$(free_port)
+CAPP2=$(jq -nc --arg c "python3 -m http.server $CPORT2 --bind 127.0.0.1" \
+    --arg u "http://127.0.0.1:$CPORT2/" \
+    '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5, interface:$u}')
+BOTH=$(jq -nc --argjson app "$CAPP2" --arg s "$SHA2" --arg u "http://127.0.0.1:$CPORT2/" \
+    '{app:$app,
+      conformance:{evaluator:"stub-eval", timeout_sec:30,
+        criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]},
+      visual:{command:"true", artifact:"tmp/ui/f.json", url:$u, timeout_sec:30,
+        skip_is_failure:true, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}')
+BL=$(vg_life_counts "$BOTH" with-provider)
+assert_eq "C3-T5 SC-11: a COMBINED contract starts the app exactly once" "1" "$(printf '%s' "$BL" | cut -f2)"
+assert_eq "C3-T5 SC-11: …proves readiness exactly once" "1" "$(printf '%s' "$BL" | cut -f3)"
+assert_eq "C3-T5 SC-11: …and stops it exactly once (no per-consumer stop)" "1" "$(printf '%s' "$BL" | cut -f4)"
+
+# ── SC-17: a FAILING checkpoint must not return with the app alive. It
+#    delegates to vg_finish — one cleanup-and-dispose path — so the group
+#    is gone and the disposition is git_anomaly. ──
+KPORT=$(free_port)
+KAPP=$(jq -nc --arg c "echo checkpoint-mutation > untracked-by-the-app.txt; python3 -m http.server $KPORT --bind 127.0.0.1" \
+    --arg u "http://127.0.0.1:$KPORT/" \
+    '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5, interface:$u}')
+KCT=$(jq -nc --argjson app "$KAPP" --arg s "$SHA2" --arg u "http://127.0.0.1:$KPORT/" \
+    '{app:$app, visual:{command:"true", artifact:"tmp/ui/f.json", url:$u, timeout_sec:30,
+      skip_is_failure:true, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}')
+KL=$(vg_life_counts "$KCT")
+assert_eq "C3-T5 SC-17: an app that dirties the checkout disposes git_anomaly" "git_anomaly" \
+    "$(printf '%s' "$KL" | cut -f1)"
+assert_eq "C3-T5 SC-17: …and the app is still stopped exactly once (no double-stop)" "1" \
+    "$(printf '%s' "$KL" | cut -f4)"
+
+# ── SC-22: the disposition names the block that was EXECUTING, not merely
+#    which blocks are frozen. In a COMBINED contract a lifecycle failure
+#    before either consumer begins must not be labelled `visual_gate`,
+#    and one during the visual block must not be labelled
+#    `conformance_gate`. VG_ACTIVE_BLOCK is what makes the label track
+#    the run rather than the contract.
+#
+#    A stale responder on the app's own port makes the binding proof
+#    refuse BEFORE any consumer starts: the label must then be the
+#    default (conformance for a combined contract), never a block that
+#    never ran.
+SPORT=$(free_port)
+python3 -m http.server "$SPORT" --bind 127.0.0.1 >/dev/null 2>&1 &
+SQUAT_PID=$!
+sleep 1
+SAPP=$(jq -nc --arg c "sleep 30" --arg u "http://127.0.0.1:$SPORT/" \
+    '{command:$c, ready:{url:$u, timeout_sec:5}, stop_timeout_sec:2, interface:$u}')
+SCT=$(jq -nc --argjson app "$SAPP" --arg s "$SHA2" --arg u "http://127.0.0.1:$SPORT/" \
+    '{app:$app,
+      conformance:{evaluator:"stub-eval", timeout_sec:30,
+        criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]},
+      visual:{command:"true", artifact:"tmp/ui/f.json", url:$u, timeout_sec:30,
+        skip_is_failure:true, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}')
+SL=$(vg_life_counts "$SCT" with-provider)
+assert_eq "C3-T5 SC-22: a pre-consumer binding failure is not attributed to a block that never ran" \
+    "conformance_gate" "$(printf '%s' "$SL" | cut -f1)"
+assert_eq "C3-T5 SC-22: …and nothing was launched" "0" "$(printf '%s' "$SL" | cut -f2)"
+kill "$SQUAT_PID" 2>/dev/null; wait "$SQUAT_PID" 2>/dev/null
+
+# SC-16 (the binding half): the frozen visual url joins the proof. A
+# stale responder on the BROWSER BASE — while the app's own interface is
+# silent — must refuse the launch, because same origin is not the same
+# process.
+UPORT=$(free_port); VPORT2=$(free_port)
+python3 -m http.server "$VPORT2" --bind 127.0.0.1 >/dev/null 2>&1 &
+VSQUAT_PID=$!
+sleep 1
+UAPP=$(jq -nc --arg c "sleep 30" --arg u "http://127.0.0.1:$UPORT/" \
+    '{command:$c, ready:{url:$u, timeout_sec:5}, stop_timeout_sec:2, interface:$u}')
+UCT=$(jq -nc --argjson app "$UAPP" --arg s "$SHA2" --arg v "http://127.0.0.1:$VPORT2/" \
+    '{app:$app, visual:{command:"true", artifact:"tmp/ui/f.json", url:$v, timeout_sec:30,
+      skip_is_failure:true, criteria:[{fr:"FR-2", statement_sha:$s, criterion:"c"}]}}')
+UL=$(vg_life_counts "$UCT")
+assert_eq "C3-T5 SC-16: a stale responder on the frozen visual url refuses the launch" \
+    "visual_gate" "$(printf '%s' "$UL" | cut -f1)"
+assert_eq "C3-T5 SC-16: …before anything is started" "0" "$(printf '%s' "$UL" | cut -f2)"
+kill "$VSQUAT_PID" 2>/dev/null; wait "$VSQUAT_PID" 2>/dev/null
+
+
+
+echo ""
+echo "=== C3 (#239) T6: isolated execution + evidence import ==="
+# ══════════════════════════════════════════════════════════════
+# T6 owns everything that happens TO and IN the execution root; T7 owns
+# the ledger copy. Until T7, a successful run ends in the fail-closed
+# "does not yet read verdicts" park — asserted here BY NAME so T7's
+# arrival is a visible contract change, not a silent one.
+
+# vg_vis_fixture [harness-body] — a bundled fixture whose package.json
+# copilot:review runs harness/run.sh; the BODY is the per-test stub.
+# The stub sees the worktree as cwd, DEV_URL, CCT_VISUAL_REQUEST.
+vg_vis_fixture() {
+    local body="${1:-exit 0}"
+    local dir; dir=$(vg_conf_fixture)
+    printf '# Design\n\nAccent #0b5cff; one primary CTA per empty state.\n' > "$dir/DESIGN.md"
+    mkdir -p "$dir/harness"
+    printf '%s\n' "#!/usr/bin/env bash" "$body" > "$dir/harness/run.sh"
+    chmod +x "$dir/harness/run.sh"
+    printf '{"scripts":{"copilot:review":"bash harness/run.sh"}}\n' > "$dir/package.json"
+    git -C "$dir" add -A >/dev/null && git -C "$dir" commit -q -m "ui bundle"
+    echo "$dir"
+}
+VIS_PORT=$(free_port)
+VIS_APP=$(jq -nc --arg c "python3 -m http.server $VIS_PORT --bind 127.0.0.1" \
+    --arg u "http://127.0.0.1:$VIS_PORT/" \
+    '{command:$c, ready:{url:$u, timeout_sec:20}, stop_timeout_sec:5, interface:$u}')
+vis_contract() {  # [artifact-path]
+    jq -nc --argjson app "$VIS_APP" --arg s "$SHA2" --arg u "http://127.0.0.1:$VIS_PORT/" \
+        --arg art "${1:-tmp/ui/critique-feedback.json}" \
+        '{app:$app, visual:{command:"bash harness/run.sh", artifact:$art,
+          url:$u, timeout_sec:30, skip_is_failure:true,
+          criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]}}'
+}
+vis_case() {  # <fixture> [contract] -> "reason<TAB>detail"
+    local d="$1" ct="${2:-$(vis_contract)}"
+    printf '%s' "$ct" > "$d/.cct/auto-build/demo-feat/frozen-contract.json"
+    vg_case "$d"
+}
+
+# ── SC-10 (isolation/publication half): a harness that writes into its
+#    working tree — screenshots, scratch — leaves the CANONICAL checkout
+#    untouched, its evidence lands in the ledger, the worktree is gone,
+#    and the run ends in the T7-pending park, not git_anomaly. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui shots
+echo fake-png > shots/root__375.png
+echo scratch > tmp/scratch.txt
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"meets the bar\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"observed\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+VG_OUT=$(vis_case "$D")
+# T7 replaced the T6 fail-closed park with the ordered reading — the
+# "still lands" half of SC-10 completes HERE, by name.
+assert_eq "C3-T7 SC-10: a dirtying all-pass harness LANDS (empty reason — no disposition)" "" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_eq "C3-T6 SC-10: the canonical checkout is untouched" "" \
+    "$(git -C "$D" status --porcelain)"
+assert_eq "C3-T6 SC-10: the evidence reached the ledger" "yes" \
+    "$([[ -f "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json" ]] && echo yes || echo no)"
+assert_eq "C3-T6 SC-10: …and parses as the artifact the harness wrote" "stub-critic" \
+    "$(jq -r '.source' "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json")"
+assert_eq "C3-T7 SC-10: the landed evidence carries the visual verifier GREEN" "true" \
+    "$(jq -r '.frs["FR-2"].green' "$D/.cct/auto-build/demo-feat/verification-results.json")"
+assert_eq "C3-T7 SC-10: …as kind visual, unwaived" "visual" \
+    "$(jq -r '.frs["FR-2"].verifiers[0].kind' "$D/.cct/auto-build/demo-feat/verification-results.json")"
+assert_eq "C3-T6 SC-10: the transcript reached the ledger" "yes" \
+    "$([[ -f "$D/.cct/auto-build/demo-feat/visual/harness.log" ]] && echo yes || echo no)"
+# The execution root is a mktemp name now (no /wt child), so count
+# REGISTRATIONS: exactly one worktree entry — the main checkout — may
+# remain. A path-suffix grep would be vacuously 0 whatever leaked.
+assert_eq "C3-T6 SC-10: no worktree registration survives the gate" "1" \
+    "$(git -C "$D" worktree list --porcelain 2>/dev/null | grep -c '^worktree ' || true)"
+rm -rf "$D"
+
+# ── SC-10 (environment): the harness sees REBOUND paths and never the
+#    canonical checkout, the ledger, OLDPWD, or the cost channel. Probed
+#    via stdout, which the gate imports as the transcript. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+echo "proj=$CCT_PROJECT_DIR"
+echo "specs=$CCT_SPECS_DIR"
+echo "oldpwd=${OLDPWD:-UNSET}"
+echo "cost=${CCT_REVIEW_COST_FILE:-UNSET}"
+echo "cwd=$(pwd)"
+printf "{}" > tmp/ui/critique-feedback.json')
+VG_OUT=$(vis_case "$D")
+LOG="$D/.cct/auto-build/demo-feat/visual/harness.log"
+assert_eq "C3-T6 SC-10: CCT_PROJECT_DIR is NOT the canonical checkout" "0" \
+    "$(grep -c "^proj=$D\$" "$LOG" || true)"
+assert_eq "C3-T6 SC-10: …it is rebound to the execution root (cwd)" \
+    "$(grep '^cwd=' "$LOG" | cut -d= -f2-)" "$(grep '^proj=' "$LOG" | cut -d= -f2-)"
+assert_eq "C3-T6 SC-10: CCT_SPECS_DIR is rebound too" \
+    "$(grep '^cwd=' "$LOG" | cut -d= -f2-)/specs" "$(grep '^specs=' "$LOG" | cut -d= -f2-)"
+assert_contains "C3-T6 SC-10: OLDPWD is dropped" "$(grep '^oldpwd=' "$LOG")" "oldpwd=UNSET"
+assert_contains "C3-T6 SC-10: the cost channel is NOT handed over" "$(grep '^cost=' "$LOG")" "cost=UNSET"
+WT_PATH=$(grep '^cwd=' "$LOG" | cut -d= -f2-)
+assert_eq "C3-T6 SC-10: the harness ran OUTSIDE the canonical checkout" "no" \
+    "$([[ "$WT_PATH" == "$D" ]] && echo yes || echo no)"
+assert_eq "C3-T6 SC-10: the execution root itself is GONE from disk after the gate" "absent" \
+    "$([[ -n "$WT_PATH" && -e "$WT_PATH" ]] && echo present || echo absent)"
+rm -rf "$D"
+
+# ── SC-7: freshness. A TRACKED artifact at the frozen path (a stale
+#    verdict committed to the repo) is cleared before the run; a harness
+#    that produces nothing then fails "produced no artifact" — the stale
+#    file never counts. ──
+D=$(vg_vis_fixture 'exit 0')
+mkdir -p "$D/tmp/ui"
+printf '{"passed":true,"stale":"yes"}\n' > "$D/tmp/ui/critique-feedback.json"
+git -C "$D" add -A >/dev/null && git -C "$D" commit -q -m "stale artifact committed"
+VG_OUT=$(vis_case "$D")
+assert_eq "C3-T6 SC-7: a committed stale artifact never counts as evidence" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-7: …the failure says no artifact was produced" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "produced no artifact"
+rm -rf "$D"
+
+# ── SC-15: a stale passing artifact in the LEDGER + an import that
+#    cannot complete (unparseable harness output) → the gate fails and
+#    the stale ledger copy is GONE, not left readable. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+printf "this is not json" > tmp/ui/critique-feedback.json')
+mkdir -p "$D/.cct/auto-build/demo-feat/visual"
+printf '{"passed":true,"source":"STALE PREVIOUS RUN"}\n' > "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json"
+VG_OUT=$(vis_case "$D")
+assert_eq "C3-T6 SC-15: an unparseable artifact fails the import" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-15: …named as unparseable, not a verdict" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "unparseable"
+assert_eq "C3-T6 SC-15: the stale ledger PASS did not survive" "0" \
+    "$(if [[ -e "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json" ]]; then
+           grep -c 'STALE PREVIOUS RUN' "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json" || true
+       else echo 0; fi)"
+rm -rf "$D"
+
+# ── SC-14: an attended run with an INCOMPLETE bundle refuses at plan
+#    step 3 — against the canonical checkout, BEFORE any project code
+#    runs (the deterministic verifier must not have executed). ──
+D=$(vg_vis_fixture 'exit 0')
+rm -f "$D/DESIGN.md"; git -C "$D" add -A >/dev/null; git -C "$D" commit -q -m "no design"
+MARK="$(dirname "$D")/$(basename "$D").det-ran"
+CT=$(vis_contract)
+CT=$(jq -c --arg m "$MARK" '. + {verifiers:{timeout_sec:30, set:[{fr:"FR-1", statement_sha:"sha256:aa", test:("touch " + $m), metric:null}]}}' <<< "$CT")
+VG_OUT=$(vis_case "$D" "$CT")
+assert_eq "C3-T6 SC-14: an incomplete bundle refuses (attended surfaces it at the gate)" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-14: …naming the missing piece and the canonical check" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "before anything ran"
+assert_eq "C3-T6 SC-14: …and the deterministic verifier NEVER executed (step 3 < step 4)" "absent" \
+    "$([[ -f "$MARK" ]] && echo present || echo absent)"
+rm -rf "$D" "$MARK"
+
+# ── SC-20: a tracked DESIGN.md symlink pointing out of the tree is
+#    refused by name at the gate. ──
+D=$(vg_vis_fixture 'exit 0')
+rm -f "$D/DESIGN.md"; ln -s /etc/hosts "$D/DESIGN.md"
+git -C "$D" add -A >/dev/null; git -C "$D" commit -q -m "symlinked design"
+VG_OUT=$(vis_case "$D")
+assert_eq "C3-T6 SC-20: a tracked out-of-tree DESIGN.md symlink refuses" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-20: …named as not resolving inside the tree" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "does not resolve to a regular file"
+rm -rf "$D"
+
+# ── SC-23/SC-25: post-run integrity of the execution root. A harness
+#    that modifies a TRACKED file is caught by the diff; one that
+#    modifies AND COMMITS is caught by the HEAD check — the bypass SC-25
+#    exists for, since the diff alone is clean against the new commit. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+echo tampered >> pass.sh
+printf "{}" > tmp/ui/critique-feedback.json')
+VG_OUT=$(vis_case "$D")
+assert_eq "C3-T6 SC-23: a tracked-file edit during the run refuses" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-23: …naming the tracked change" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "TRACKED file in the execution root changed"
+rm -rf "$D"
+
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+echo tampered >> pass.sh
+git -c user.name=x -c user.email=x@x add pass.sh
+git -c user.name=x -c user.email=x@x commit -q -m forged
+printf "{\"passed\":true}" > tmp/ui/critique-feedback.json')
+VG_OUT=$(vis_case "$D")
+assert_eq "C3-T6 SC-25: an edit-then-COMMIT during the run refuses (clean diff cannot hide it)" "visual_gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f1)"
+assert_contains "C3-T6 SC-25: …the HEAD check names the moved commit" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "HEAD moved during the harness run"
+rm -rf "$D"
+
+# ── SC-19: the gate reads config ONLY from the frozen contract — a
+#    post-freeze automation.json edit changes nothing, including the
+#    bundle prerequisite (which checks FILES, never config). ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+printf "{}" > tmp/ui/critique-feedback.json')
+printf '{"schema_version":2,"verification":{"visual":{"command":"echo HIJACKED","artifact":"x.json","url":"http://evil/","timeout_sec":1}}}\n' \
+    > "$D/automation.json"
+# Committed: an untracked config would dirty the canonical checkout and
+# refuse at entry integrity — this SC is about the gate IGNORING config,
+# not about the checkout being dirty.
+git -C "$D" add -A >/dev/null && git -C "$D" commit -q -m "post-freeze config edit"
+VG_OUT=$(vis_case "$D")
+assert_contains "C3-T6 SC-19: a post-freeze config edit changes nothing at the gate" \
+    "$(printf '%s' "$VG_OUT" | cut -f2)" "the visual artifact is malformed"
+assert_eq "C3-T6 SC-19: …the FROZEN command ran, not the edited one" "yes" \
+    "$([[ -f "$D/.cct/auto-build/demo-feat/visual/critique-feedback.json" ]] && echo yes || echo no)"
+rm -rf "$D"
+
+# ── SC-18: ownership. Inherited VG_WT_DIR/VG_VIS_PRIV pointing at a
+#    host-owned directory are never deleted (the gate re-inits them);
+#    and a driver-created-but-UNREGISTERED directory IS removed. ──
+HOSTDIR=$(mktemp -d); touch "$HOSTDIR/host-owned.txt"
+D=$(vg_vis_fixture 'mkdir -p tmp/ui; printf "{}" > tmp/ui/critique-feedback.json')
+printf '%s' "$(vis_contract)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+( set +e; set --
+  # shellcheck source=/dev/null
+  source "$VG_FUNCS" >/dev/null 2>&1
+  source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+  source "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh"
+  source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
+  PROJECT_DIR="$D"; LEDGER_DIR="$D/.cct/auto-build/demo-feat"
+  FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
+  FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
+  dispose() { return 1; }; journal() { :; }; check_caps() { :; }
+  # Simulate an INHERITED environment value: ownership flags say NOT ours.
+  VG_WT_DIR="$HOSTDIR"; VG_WT_DIR_OWNED=0; VG_WT_REGISTERED=0
+  VG_VIS_PRIV="$HOSTDIR"; VG_VIS_PRIV_OWNED=0
+  vg_wt_cleanup >/dev/null 2>&1
+) </dev/null >/dev/null 2>&1
+assert_eq "C3-T6 SC-18: an inherited (unowned) directory survives cleanup" "yes" \
+    "$([[ -f "$HOSTDIR/host-owned.txt" ]] && echo yes || echo no)"
+( set +e; set --
+  source "$VG_FUNCS" >/dev/null 2>&1
+  source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+  PROJECT_DIR="$D"
+  OWNED=$(mktemp -d)
+  echo "$OWNED" > "$HOSTDIR/owned-path.txt"
+  VG_WT_DIR="$OWNED"; VG_WT_DIR_OWNED=1; VG_WT_REGISTERED=0
+  VG_VIS_PRIV=""; VG_VIS_PRIV_OWNED=0
+  vg_wt_cleanup >/dev/null 2>&1
+) </dev/null >/dev/null 2>&1
+OWNED_PATH=$(cat "$HOSTDIR/owned-path.txt")
+assert_eq "C3-T6 SC-18: a created-but-unregistered directory IS removed (partial setup leaks nothing)" "absent" \
+    "$([[ -e "$OWNED_PATH" ]] && echo present || echo absent)"
+rm -rf "$D" "$HOSTDIR"
+
+# ── SC-24: a registered worktree whose directory was destroyed out from
+#    under git (remove -f fails on the missing dir) still gets its
+#    REGISTRATION pruned — the fallback must not manufacture the stale
+#    .git/worktrees entry that prune_worktrees exists to clean up. ──
+D=$(vg_vis_fixture 'exit 0')
+( set +e; set --
+  source "$VG_FUNCS" >/dev/null 2>&1
+  source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+  PROJECT_DIR="$D"
+  WTP=$(mktemp -d)
+  git -C "$D" worktree add --detach "$WTP/wt" HEAD >/dev/null 2>&1
+  rm -rf "$WTP/wt"    # simulate the directory dying while registered
+  VG_WT_DIR="$WTP/wt"; VG_WT_DIR_OWNED=1; VG_WT_REGISTERED=1
+  VG_VIS_PRIV=""; VG_VIS_PRIV_OWNED=0
+  vg_wt_cleanup >/dev/null 2>&1
+  echo $? > "$D/.cct/cleanup-rc"
+  rm -rf "$WTP"   # test-only: the fixture's own temp parent
+) </dev/null >/dev/null 2>&1
+assert_eq "C3-T6 SC-24: the fallback prunes the registration (no stale .git/worktrees entry)" "0" \
+    "$(git -C "$D" worktree list --porcelain | grep -c '/wt$' || true)"
+assert_eq "C3-T6 SC-24: …and reports a COMPLETE release" "0" "$(cat "$D/.cct/cleanup-rc")"
+rm -rf "$D"
+
+
+echo ""
+echo "=== C3 (#239) T7: the verdict — ordered reading over the ledger copy ==="
+# ══════════════════════════════════════════════════════════════
+# The SIXTEEN-CELL outcome table, each cell a named assertion. The
+# waiver predicate is (effective mode != full) AND (policy == false);
+# `unreached` is red in EVERY cell; a degraded artifact under the
+# default policy fails as a POLICY failure, never as identity noise.
+
+vis_contract_p() {  # <skip_is_failure> -> contract json
+    jq -nc --argjson app "$VIS_APP" --arg s "$SHA2" --arg u "http://127.0.0.1:$VIS_PORT/" \
+        --argjson pol "$1" \
+        '{app:$app, visual:{command:"bash harness/run.sh", artifact:"tmp/ui/critique-feedback.json",
+          url:$u, timeout_sec:30, skip_is_failure:$pol,
+          criteria:[{fr:"FR-2", statement_sha:$s, criterion:"Cancel aborts the job."}]}}'
+}
+# vis_cell <verdict> <mode:full|degraded|none> <policy:true|false>
+# Sets VIS_CELL_OUT ("reason<TAB>detail") and VIS_CELL_D (fixture dir).
+# NOT called in a command substitution: the fixture path must reach the
+# caller's scope for the evidence-file assertions and cleanup.
+vis_cell() {
+    local verdict="$1" mode="$2" pol="$3"
+    local stub
+    case "$mode" in
+        full)     stub='jq "{passed:(\"'"$verdict"'\"==\"pass\"), mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"cell summary\", actionableFixes:[\"fix the CTA\"], criteria:[.criteria[] | . + {verdict:\"'"$verdict"'\", evidence:\"cell evidence\"}]}" "$CCT_VISUAL_REQUEST"' ;;
+        degraded) stub='jq "{passed:(\"'"$verdict"'\"==\"pass\"), mode:\"degraded\", skipped:[\"screenshots\"], source:\"stub-critic\", critiqueSummary:\"cell summary\", actionableFixes:[\"fix the CTA\"], criteria:[.criteria[] | . + {verdict:\"'"$verdict"'\", evidence:\"cell evidence\"}]}" "$CCT_VISUAL_REQUEST"' ;;
+        none)     stub='jq "{passed:(\"'"$verdict"'\"==\"pass\"), source:\"stub-critic\", critiqueSummary:\"cell summary\", actionableFixes:[\"fix the CTA\"], criteria:[.criteria[] | . + {verdict:\"'"$verdict"'\", evidence:\"cell evidence\"}]}" "$CCT_VISUAL_REQUEST"' ;;
+    esac
+    VIS_CELL_D=$(vg_vis_fixture "mkdir -p tmp/ui
+$stub > tmp/ui/critique-feedback.json")
+    printf '%s' "$(vis_contract_p "$pol")" > "$VIS_CELL_D/.cct/auto-build/demo-feat/frozen-contract.json"
+    VIS_CELL_OUT=$(vg_case "$VIS_CELL_D")
+}
+
+# ── Column: FULL (policy true) ──
+vis_cell pass full true; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell full/pass/true: LANDS" "" "$(printf '%s' "$OUT" | cut -f1)"
+# FR-7: the critic's summary and fixes survive into the CONSOLIDATED
+# evidence graph on a landed run — not only into failure messages.
+assert_contains "T7 FR-7: the landed evidence carries the critique summary" \
+    "$(jq -r '.frs["FR-2"].verifiers[0].evidence' "$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json")" \
+    "critique: cell summary"
+assert_contains "T7 FR-7: …and the actionable fixes" \
+    "$(jq -r '.frs["FR-2"].verifiers[0].evidence' "$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json")" \
+    "fixes: fix the CTA"
+rm -rf "$VIS_CELL_D"
+vis_cell fail full true; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell full/fail/true: verification-failed park" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 cell full/fail/true: …carrying the critic's words (SC-6)" "$(printf '%s' "$OUT" | cut -f2)" "critic: cell summary"
+assert_contains "T7 cell full/fail/true: …and the actionable fixes (SC-6)" "$(printf '%s' "$OUT" | cut -f2)" "fix the CTA"
+rm -rf "$VIS_CELL_D"
+vis_cell skip full true; OUT="$VIS_CELL_OUT"
+assert_contains "T7 cell full/skip/true: MALFORMED (skip illegal in full)" "$(printf '%s' "$OUT" | cut -f2)" "only legal when the run is degraded"
+rm -rf "$VIS_CELL_D"
+vis_cell unreached full true; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell full/unreached/true: red — a full-mode abort never lands" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 cell full/unreached/true: …as a verdict failure" "$(printf '%s' "$OUT" | cut -f2)" "verification failed"
+rm -rf "$VIS_CELL_D"
+
+# ── Column: FULL (policy false) — an ORDINARY verified run, never waived ──
+vis_cell pass full false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell full/pass/false: LANDS" "" "$(printf '%s' "$OUT" | cut -f1)"
+assert_eq "T7 cell full/pass/false: NO invocation waiver record (full run, policy irrelevant)" "null" \
+    "$(jq -r '.visual // "null"' "$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json")"
+assert_eq "T7 cell full/pass/false: …and no entry is marked waived" "0" \
+    "$(jq '[.frs["FR-2"].verifiers[] | select(.waived == true)] | length' "$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json")"
+rm -rf "$VIS_CELL_D"
+vis_cell fail full false; OUT="$VIS_CELL_OUT";  assert_eq "T7 cell full/fail/false: red" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"; rm -rf "$VIS_CELL_D"
+vis_cell skip full false; OUT="$VIS_CELL_OUT"
+assert_contains "T7 cell full/skip/false: MALFORMED regardless of policy" "$(printf '%s' "$OUT" | cut -f2)" "only legal when the run is degraded"
+rm -rf "$VIS_CELL_D"
+vis_cell unreached full false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell full/unreached/false: red — no policy greens an abort" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+rm -rf "$VIS_CELL_D"
+
+# ── Column: DEGRADED (policy true, the frozen default) — POLICY failure
+#    for every verdict, BEFORE identity/verdicts can obscure it ──
+for v in pass fail skip unreached; do
+    vis_cell "$v" degraded true; OUT="$VIS_CELL_OUT"
+    assert_eq "T7 cell degraded/$v/true: policy failure" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+    assert_contains "T7 cell degraded/$v/true: …naming the skip and the remedy (SC-4)" \
+        "$(printf '%s' "$OUT" | cut -f2)" "harness:init"
+    rm -rf "$VIS_CELL_D"
+done
+
+# ── Column: DEGRADED (policy false) — the WAIVER column ──
+vis_cell pass degraded false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell degraded/pass/false: LANDS by waiver (SC-21's subtle case)" "" "$(printf '%s' "$OUT" | cut -f1)"
+RES="$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json"
+assert_eq "T7 SC-21: every visual entry is marked waived — a degraded pass is never indistinguishable from full verification" "true" \
+    "$(jq -r '.frs["FR-2"].verifiers[0].waived' "$RES")"
+assert_eq "T7 SC-21: the invocation record says waived_by_policy" "true" \
+    "$(jq -r '.visual.waived_by_policy' "$RES")"
+assert_eq "T7 SC-21: …with the mode" "degraded" "$(jq -r '.visual.mode' "$RES")"
+assert_contains "T7 SC-21: …and what was skipped" "$(jq -r '.visual.skipped | join(",")' "$RES")" "screenshots"
+rm -rf "$VIS_CELL_D"
+vis_cell fail degraded false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell degraded/fail/false: red — a waiver greens skips, not failures" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+rm -rf "$VIS_CELL_D"
+vis_cell skip degraded false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell degraded/skip/false: green BY WAIVER — lands" "" "$(printf '%s' "$OUT" | cut -f1)"
+assert_eq "T7 cell degraded/skip/false: …recorded as skip, waived, green" "skip" \
+    "$(jq -r '.frs["FR-2"].verifiers[0].detail' "$VIS_CELL_D/.cct/auto-build/demo-feat/verification-results.json")"
+rm -rf "$VIS_CELL_D"
+vis_cell unreached degraded false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 cell degraded/unreached/false: RED — no waiver ever greens an abort" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 cell degraded/unreached/false: …as a verdict failure, not a waived pass" \
+    "$(printf '%s' "$OUT" | cut -f2)" "verification failed"
+rm -rf "$VIS_CELL_D"
+
+# ── SC-5: no mode declared — defaulted to degraded, message says the
+#    harness declared nothing; lands only under an explicit waiver ──
+vis_cell pass none true; OUT="$VIS_CELL_OUT"
+assert_eq "T7 SC-5: an undeclared mode fails under the default policy" "visual_gate" "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 SC-5: …saying the harness declared nothing" "$(printf '%s' "$OUT" | cut -f2)" "did not declare what it ran"
+rm -rf "$VIS_CELL_D"
+vis_cell pass none false; OUT="$VIS_CELL_OUT"
+assert_eq "T7 SC-5: …and lands only under the explicit frozen waiver" "" "$(printf '%s' "$OUT" | cut -f1)"
+rm -rf "$VIS_CELL_D"
+
+# ── passed/verdict agreement: the critic's boolean cannot overrule its
+#    own answers ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"s\", critiqueSummary:\"c\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"fail\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_contains "T7: passed:true beside a fail verdict is MALFORMED (summary pinned to detail)" \
+    "$(printf '%s' "$OUT" | cut -f2)" "contradicts its criterion verdicts"
+rm -rf "$D"
+
+# ── SC-12: the genuinely pre-C3 global-only artifact is refused ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+printf "{\"passed\":true,\"source\":\"old\",\"critiqueSummary\":\"c\",\"actionableFixes\":[]}" > tmp/ui/critique-feedback.json')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_contains "T7 SC-12: the pre-C3 global-only artifact fails closed shape" \
+    "$(printf '%s' "$OUT" | cut -f2)" "pre-C3 global-only artifact is refused"
+rm -rf "$D"
+
+# ── SC-12: identity — a forged statement_sha is not an exact match ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"s\", critiqueSummary:\"c\", actionableFixes:[], criteria:[.criteria[] | . + {statement_sha:\"sha256:forged\", verdict:\"pass\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_contains "T7 SC-12: a forged statement_sha is refused by identity" \
+    "$(printf '%s' "$OUT" | cut -f2)" "not an exact match of the frozen set"
+rm -rf "$D"
+
+# ── FR-5: a NON-ZERO exit never lands, however green the artifact — a
+#    harness that writes an all-pass artifact and then dies must not be
+#    indistinguishable from one that succeeded. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"all good says the critic\", actionableFixes:[\"none needed\"], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"observed\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json
+exit 1')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_eq "T7 FR-5: an all-pass artifact from a FAILED process never lands" "visual_gate" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 FR-5: …the park names the exit code as the reason" \
+    "$(printf '%s' "$OUT" | cut -f2)" "exited 1"
+assert_contains "T7 FR-5: …and the affected FR (SC-6)" \
+    "$(printf '%s' "$OUT" | cut -f2)" "for FR-2"
+assert_contains "T7 FR-5: …and still carries the critic's words" \
+    "$(printf '%s' "$OUT" | cut -f2)" "all good says the critic"
+rm -rf "$D"
+
+# ── Mixed failure: a deterministic FAIL beside a visual FAIL is still a
+#    visual_gate failure — the disposition must agree with the visual
+#    critique it carries (any-failing-visual, not all-failing-visual). ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:false, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"mixed-run critique\", actionableFixes:[\"fix the visual half too\"], criteria:[.criteria[] | . + {verdict:\"fail\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+MIXCT=$(vis_contract_p true)
+MIXCT=$(jq -c '. + {verifiers:{timeout_sec:30, set:[{fr:"FR-1", statement_sha:"sha256:aa", test:"false", metric:null}]}}' <<< "$MIXCT")
+printf '%s' "$MIXCT" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_eq "T7 mixed: deterministic fail + visual fail disposes visual_gate (any-visual rule)" "visual_gate" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 mixed: …naming BOTH failures" "$(printf '%s' "$OUT" | cut -f2)" "FR-1"
+assert_contains "T7 mixed: …and carrying the visual critique" "$(printf '%s' "$OUT" | cut -f2)" "mixed-run critique"
+rm -rf "$D"
+
+# ── SC-6: a NON-ZERO harness exit with a usable artifact is still read —
+#    the critique reaches the park, the exit code does not short-circuit ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:false, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"the CTA is invisible\", actionableFixes:[\"raise contrast on the primary CTA\"], criteria:[.criteria[] | . + {verdict:\"fail\", evidence:\"contrast 1.2:1\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json
+exit 1')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+OUT=$(vg_case "$D")
+assert_eq "T7 SC-6: a non-zero exit with a usable artifact is READ, not short-circuited" "visual_gate" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "T7 SC-6: …the park NAMES the affected FR" "$(printf '%s' "$OUT" | cut -f2)" "for FR-2"
+assert_contains "T7 SC-6: …the park carries the critique summary" "$(printf '%s' "$OUT" | cut -f2)" "the CTA is invisible"
+assert_contains "T7 SC-6: …and the actionable fix" "$(printf '%s' "$OUT" | cut -f2)" "raise contrast on the primary CTA"
+rm -rf "$D"
+
+
+echo ""
+echo "=== C3 (#239) T8: metering — the unmetered path, debited FIRST ==="
+# ══════════════════════════════════════════════════════════════
+# The visual debit is the FIRST driver action after vg_run_isolated
+# returns — before containment/freshness/import — so an invocation
+# cannot escape charging by destroying or forging its evidence. Always
+# the unmetered path: the harness never receives the cost channel.
+
+# vis_metered_case <fixture> <estimates:true|false> [contract] -> "reason<TAB>detail"
+# vg_case with the metering state C2's debit machinery needs: a real
+# state.json and the ESTIMATES_ACTIVE/ESTIMATE_PER_INV globals.
+vis_metered_case() {
+    local d="$1" est="$2" ct="${3:-$(vis_contract_p true)}" marker
+    printf '%s' "$ct" > "$d/.cct/auto-build/demo-feat/frozen-contract.json"
+    jq -n '{totals:{cost_usd:0, cost_estimated_usd:0}}' > "$d/.cct/auto-build/demo-feat/state.json"
+    marker="$(dirname "$d")/$(basename "$d").vg-dispose"
+    ( set +e
+      set --
+      # shellcheck source=/dev/null
+      source "$VG_FUNCS" >/dev/null 2>&1
+      source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+      source "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh"
+      source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
+      PROJECT_DIR="$d"; LEDGER_DIR="$d/.cct/auto-build/demo-feat"
+      FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
+      STATE="$LEDGER_DIR/state.json"
+      ESTIMATES_ACTIVE="$est"; ESTIMATE_PER_INV="2.0"
+      FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
+      dispose() { printf '%s\t%s\n' "$1" "$2" > "$marker"; return 1; }
+      journal() { printf '%s\t%s\n' "$1" "$2" >> "$LEDGER_DIR/journal.log"; }
+      check_caps() { :; }
+      : > "$marker"
+      verifier_gate >/dev/null 2>&1 </dev/null
+    )
+    cat "$marker" 2>/dev/null
+    rm -f "$marker"
+}
+
+# ── SC-8a: estimates ACTIVE — the landing run debits the conservative
+#    estimate, flagged as estimated in the journal. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"ok\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+OUT=$(vis_metered_case "$D" true)
+assert_eq "C3-T8 SC-8: estimates active — the landing visual run still lands" "" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_eq "C3-T8 SC-8: …and debits the conservative estimate" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$D/.cct/auto-build/demo-feat/state.json")"
+assert_eq "C3-T8 SC-8: …never the measured channel" "0" \
+    "$(jq -r '.totals.cost_usd' "$D/.cct/auto-build/demo-feat/state.json")"
+assert_contains "C3-T8 SC-8: …flagged as estimated, labelled visual" \
+    "$(grep 'cost_review' "$D/.cct/auto-build/demo-feat/journal.log")" "visual harness: \$2.0 (estimated"
+rm -rf "$D"
+
+# ── SC-8b: estimates NOT active — nothing debits, the run still lands. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"ok\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+OUT=$(vis_metered_case "$D" false)
+assert_eq "C3-T8 SC-8: estimates inactive — lands with nothing debited" "" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_eq "C3-T8 SC-8: …cost_estimated_usd unmoved" "0" \
+    "$(jq -r '.totals.cost_estimated_usd' "$D/.cct/auto-build/demo-feat/state.json")"
+rm -rf "$D"
+
+# ── SC-8c: forgery is inert. The harness has NO cost channel (T6 pins
+#    cost=UNSET in its environment); a cost file written to a guessed
+#    path changes nothing — the estimate is debited regardless. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+printf "{\"cost_usd\": 0}" > cost.json
+printf "{\"cost_usd\": 0}" > tmp/cost.json
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"ok\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+OUT=$(vis_metered_case "$D" true)
+assert_eq "C3-T8 SC-8: a zero-cost file at a guessed path cannot suppress the estimate" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$D/.cct/auto-build/demo-feat/state.json")"
+rm -rf "$D"
+
+# ── SC-8d: a REFUSED ledger write disposes cost_accounting_failed —
+#    never a judged run whose caps cannot be enforced. state.json is a
+#    dangling symlink: state_set's jq read fails, the debit cannot be
+#    recorded. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"ok\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+jq -n '{totals:{cost_usd:0, cost_estimated_usd:0}}' > "$D/.cct/auto-build/demo-feat/state.json"
+MARKER="$(dirname "$D")/$(basename "$D").vg-dispose"
+( set +e; set --
+  # shellcheck source=/dev/null
+  source "$VG_FUNCS" >/dev/null 2>&1
+  source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+  source "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh"
+  source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
+  PROJECT_DIR="$D"; LEDGER_DIR="$D/.cct/auto-build/demo-feat"
+  FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
+  STATE="$LEDGER_DIR/state.json"
+  ESTIMATES_ACTIVE=true; ESTIMATE_PER_INV="2.0"
+  FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
+  rm -f "$STATE"; ln -s /nonexistent-target-for-t8 "$STATE"
+  dispose() { printf '%s\t%s\n' "$1" "$2" > "$MARKER"; return 1; }
+  journal() { :; }
+  check_caps() { :; }
+  : > "$MARKER"
+  verifier_gate >/dev/null 2>&1 </dev/null
+)
+assert_eq "C3-T8 SC-8: a refused ledger write disposes cost_accounting_failed" "cost_accounting_failed" \
+    "$(cut -f1 "$MARKER")"
+assert_contains "C3-T8 SC-8: …naming unenforceable caps" "$(cut -f2 "$MARKER")" "caps cannot be enforced"
+rm -rf "$D" "$MARKER"
+
+# ── THE ORDERING INVARIANT: the debit precedes containment/freshness —
+#    a harness that DESTROYS its evidence (artifact path escapes via a
+#    symlink planted during the run) still gets charged. ──
+D=$(vg_vis_fixture 'rm -rf tmp
+ln -s /etc tmp')
+OUT=$(vis_metered_case "$D" true)
+assert_eq "C3-T8 ordering: evidence destroyed AFTER the run — the gate refuses" "visual_gate" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "C3-T8 ordering: …on containment" "$(printf '%s' "$OUT" | cut -f2)" "escaped the execution root"
+assert_eq "C3-T8 ordering: …but the invocation was ALREADY debited (charging precedes the checks)" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$D/.cct/auto-build/demo-feat/state.json")"
+rm -rf "$D"
+
+echo ""
+echo "=== C3 (#239) T1: a visual mapping travels the driver's freeze path ==="
+# ══════════════════════════════════════════════════════════════
+# T1 makes `visual` a real kind end-to-end through the CANONICAL capture
+# the driver freezes from. The visual contract itself is frozen in T7 —
+# what T1 must prove here is that a visual mapping does not refuse, does
+# not disturb the C1/C2 sections, and reaches the driver through the
+# same validated capture (a kind the capture rejected would fail the run
+# closed at contract initialisation).
+write_visual_yaml() {  # <dir> — FR-1 deterministic, FR-2 visual
+    local dir="$1" f="$1/specs/demo-feat/verification.yaml"
+    CCT_SPECS_DIR="$dir/specs" bash "$SCRIPT_DIR/../scripts/generate-verification-draft.sh" demo-feat >/dev/null
+    sed -i '' 's/^status: draft/status: finalized/' "$f" 2>/dev/null || \
+        sed -i 's/^status: draft/status: finalized/' "$f"
+    python3 - "$f" << 'PYEOF'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'      test: "TODO[^"]*"',
+           '      test: "bash ./project-test.sh"\n      metric: "suite exits 0"', s, count=1)
+# FR-1 keeps its deterministic verifier and drops its scaffold; FR-2
+# drops its deterministic placeholder and RESOLVES its scaffold — the
+# author decision the placeholder exists to force.
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"\n', '', s, count=1)
+s = re.sub(r'    - kind: deterministic\n      test: "TODO[^"]*"\n', '', s, count=1)
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"',
+           '    - kind: visual\n      criterion: "The empty state renders a single primary CTA."', s, count=1)
+open(p, 'w').write(s)
+PYEOF
+    git -C "$dir" add -A && git -C "$dir" commit -q -m "finalized artifact with a visual mapping"
+}
+
+P=$(setup_project); single_phase "$P"
+write_visual_yaml "$P"
+run_driver "$P"
+LEDGER="$P/.cct/auto-build/demo-feat"
+assert_contains "C3-T1: a visual mapping still takes the -block path" "$OUTPUT" "path: fresh-attended-block"
+assert_eq "C3-T1: the run is not refused by an unknown verifier kind" "0" \
+    "$(printf '%s' "$OUTPUT" | grep -c "unknown verifier kind" || true)"
+jq -e '(.verifiers.set | length == 1)
+   and .verifiers.set[0].fr == "FR-1"
+   and .verifiers.set[0].test == "bash ./project-test.sh"' \
+   "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "C3-T1: the deterministic set freezes unchanged beside a visual mapping" 0 $?
+jq -e 'has("conformance") | not' "$LEDGER/frozen-contract.json" >/dev/null 2>&1
+assert_exit "C3-T1: a visual mapping does not derive a conformance requirement" 0 $?
+rm -rf "$P"
 
 echo ""
 

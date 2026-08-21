@@ -77,8 +77,20 @@ plan's decisions and gate sequence are normative.
   failure — three separate `fail()` sites, three regressions) — each
   path asserted against the artifact the runner really writes.
 
-## T5 — Shared app lifecycle + the `vg_finish` split (FR-10)
+## T5 — Frozen contract (app + visual) + shared lifecycle + the `vg_finish` split (FR-4, FR-10, FR-12)
 
+> **Amended after T4** (recorded in the origin-alignment record). The
+> freeze of `contract.visual` moved here from T7. T5's own bullets and
+> tests presuppose it — the lifecycle keys on `conformance || visual`,
+> the binding proof needs the frozen `url`, and SC-11/SC-16 cannot be
+> written without a visual-only contract — so leaving the freeze in T7
+> made T5 unbuildable as approved. T7 keeps the gate itself (request,
+> invocation, ordered reading, identity validation, disposition).
+
+- Freeze `visual{command, artifact, url, timeout_sec, skip_is_failure,
+  criteria[]}` alongside `contract.app`; `preflight-result.schema.json`
+  + `validate_contract_json` closed rules; C1/C2 pinning/tamper/resume
+  equality untouched (they cover the whole object).
 - Hoist C2's binding preflight / launch / readiness / stop OUT of the
   conformance block into steps 7/11 of the plan's sequence, keyed on
   `conformance || visual`; freeze `contract.app` once with its resolved
@@ -96,16 +108,38 @@ plan's decisions and gate sequence are normative.
   not merely which blocks are frozen (SC-22).
 - Re-point the C2 regressions that cover the mid-sequence integrity
   check, and re-verify they still fail on mutation.
-- Tests: SC-11 (visual-only launch; app ALIVE at the visual block; one
-  launch with both kinds; single stop), SC-16 (stale responder on the
-  url; launched command that never serves it), SC-17 (failing checkpoint
-  leaves nothing alive), SC-22 (combined-run teardown failure during the
-  visual block).
+- Tests: SC-3 (the frozen contract pins command, artifact, url, timeout,
+  skip_is_failure and criteria; a post-initialisation config edit moves
+  nothing; drift disposes), SC-11 (visual-only launch; app ALIVE at the
+  visual block; one launch with both kinds; single stop), SC-16 (stale
+  responder on the url; launched command that never serves it), SC-17
+  (failing checkpoint leaves nothing alive), SC-22 (combined-run
+  teardown failure during the visual block).
 - Keep BOTH integrity checkpoints: C2's after the deterministic
   verifiers (`auto-build-loop.sh:2128`, re-pointed at `vg_checkpoint`)
   and the new one between the conformance and visual consumers.
 
 ## T6 — Isolated execution + evidence import (FR-5, FR-7 publication, FR-3 attended)
+
+> **Amended during T6** (recorded in the origin-alignment record). The
+> T5 amendment's summary line — "T7 keeps the gate itself (request,
+> invocation, ordered reading, identity validation, disposition)" —
+> contradicted this task's own bullets, which already owned request
+> publication, the isolated invocation, and evidence import; the
+> normative landing sequence puts all three inside step 10, before
+> worktree release. One owner each, matching the sequence: **T6 owns
+> everything that happens TO and IN the execution root** — creation,
+> revalidation, the private request dir and its publication, the
+> isolated bounded invocation, freshness/containment/integrity checks,
+> evidence + transcript publication to the ledger, and release. **T7
+> owns everything that happens to the LEDGER COPY** — the ordered
+> reading, identity validation, skip_is_failure, verdicts,
+> verification-results.json, and the visual_gate disposition. SC-10
+> splits on the same line: T6 pins its isolation/publication half
+> (canonical checkout untouched, environment rebound, no canonical or
+> ledger path handed over, evidence imported, worktree gone); T7
+> completes the "still lands" half once the imported artifact is
+> accepted.
 
 - `vg_run_isolated <secs> <root> <cmd> <capture>`: `ca_run_bounded`
   composed with C1's environment discipline (`cd`, `env -u OLDPWD`,
@@ -142,17 +176,24 @@ plan's decisions and gate sequence are normative.
 - Evidence import as a publication: destination proven absent → temp
   copy → validated → renamed, for artifact and transcript, all before
   worktree removal; a failed import is a `visual_gate` failure.
-- Tests: SC-7, SC-10, SC-14, SC-15, SC-18, SC-19, SC-20, SC-23,
-  SC-24, SC-25.
+- Tests: SC-7, SC-10 (the isolation/publication half — the "still
+  lands" half completes in T7 with the verdict reading), SC-14, SC-15,
+  SC-18, SC-19, SC-20, SC-23, SC-24, SC-25. Until T7 lands, the block
+  ends FAIL-CLOSED: evidence imported, then a visual_gate park stating
+  that this increment does not yet read verdicts — falling through
+  would be pass-by-absence, the exact hole this feature closes.
 
-## T7 — Frozen visual contract + the gate verdict (FR-4, FR-6, FR-7, FR-8, FR-12)
+## T7 — The gate verdict (FR-6, FR-7, FR-8)
 
-- Freeze `visual{command, artifact, url, timeout_sec, skip_is_failure,
-  criteria[]}`; `preflight-result.schema.json` + `validate_contract_json`
-  closed rules; C1/C2 pinning/tamper/resume equality untouched.
-- Request document authored at the point of use (after the worktree is
-  revalidated) and published through a checked rename; `DEV_URL` (the
-  frozen `url`) + `CCT_VISUAL_REQUEST` exported for the invocation.
+> **Amended after T4:** the freeze of `contract.visual` moved to T5,
+> which cannot be built or tested without it. **Amended during T6:**
+> request publication, the isolated invocation, and evidence import are
+> T6's (they happen to the execution root, inside step 10); T7 reads
+> ONLY the imported ledger copy and decides — the ordered reading,
+> identity validation, skip_is_failure, verdicts,
+> verification-results.json, and the visual_gate disposition, plus the
+> "still lands" half of SC-10.
+
 - Extract C2's inline identity validator to `vg_criteria_mismatch <file>
   <want-json> <allowed-top-level-keys>` and update the conformance call
   site in the same commit; the visual reading follows plan decision 6's
@@ -166,7 +207,7 @@ plan's decisions and gate sequence are normative.
   reports the policy waiver (SC-21).
 - `visual_gate` disposition joins the shared `coverage_gate|
   conformance_gate` recovery arm; attended parity.
-- Tests: SC-3, SC-4, SC-5, SC-6, SC-12 (including a genuinely pre-C3
+- Tests: SC-4, SC-5, SC-6, SC-12 (including a genuinely pre-C3
   global-only artifact, which is refused), SC-21.
 
 ## T8 — Metering (FR-9)

@@ -696,7 +696,7 @@ An autonomous build can additionally enforce a **frozen coverage contract**
   committed past the last reviewed HEAD gets its own review PASS before
   the gate reruns.
 - Parsers: `istanbul` and `lcov` (`cobertura`/`jacoco` are refused as not
-  implemented in C1). `skip_is_failure` arrives with C3.
+  implemented in C1). `skip_is_failure` belongs to the visual gate below.
 
 ## Runtime Conformance Evaluator (auto-build)
 
@@ -710,15 +710,22 @@ flag; an operator-supplied `conformance.required` is rejected by name.
 "verification": {
   "conformance": {
     "evaluator": "codex-eval",
-    "timeout_sec": 600,
-    "app": {
-      "command": "npm start",
-      "ready": { "url": "http://127.0.0.1:3000/health", "timeout_sec": 30 },
-      "stop_timeout_sec": 10
-    }
+    "timeout_sec": 600
+  },
+  "app": {
+    "command": "npm start",
+    "ready": { "url": "http://127.0.0.1:3000/health", "timeout_sec": 30 },
+    "stop_timeout_sec": 10
   }
 }
 ```
+
+The application is declared at `verification.app`, one level up from the
+evaluator, because the visual gate (#239, increment C3) consumes the same
+running instance: the driver launches it once per landing gate however
+many consumers read it. `verification.conformance.app` is refused by name
+with a migration message — a silently ignored block would leave your
+launch command inert.
 
 - **The evaluator is a capability, not just a healthy provider.** Its
   providers.toml entry must declare `conformance_command` — an
@@ -736,7 +743,9 @@ flag; an operator-supplied `conformance.required` is rejected by name.
   the spawned group must still be alive when it does. The evaluator-facing
   address is `app.interface`, else `ready.url`; both must be http(s) and
   share an origin, and command-based readiness requires an explicit
-  `app.interface`.
+  `app.interface`. The block is REQUIRED whenever `verification.conformance`
+  or `verification.visual` is present, and validated by one shared
+  implementation so both consumers enforce identical rules.
 - **The landing gate executes, it does not infer.** After the coverage
   gate and before finalize/push/PR, every frozen `kind: deterministic`
   verifier is RUN (its own command, bounded), then the evaluator is
@@ -764,7 +773,76 @@ flag; an operator-supplied `conformance.required` is rejected by name.
 - All bounds (`timeout_sec`, `ready.timeout_sec`, `stop_timeout_sec`) are
   positive INTEGER seconds — the gate enforces them with integer shell
   arithmetic, so a fractional value would be uncomputable rather than
-  merely imprecise. Visual verification (`skip_is_failure`) remains C3.
+  merely imprecise.
+
+## Visual Verification Gate (auto-build)
+
+A run whose spec maps any FR to a `kind: visual` verifier additionally
+requires the **driver-owned visual gate** (#239, increment C3 of #190 §6).
+As with conformance, the requirement is DERIVED from
+`specs/<feature>/verification.yaml` — never from a config flag (an
+operator-supplied `required_when_ui_in_scope` is rejected by name):
+
+```json
+"verification": {
+  "visual": {
+    "command": "npm run copilot:review",
+    "artifact": "tmp/ui/critique-feedback.json",
+    "url": "http://127.0.0.1:3000/",
+    "timeout_sec": 900,
+    "skip_is_failure": true
+  },
+  "app": { "command": "npm start", "ready": { "url": "http://127.0.0.1:3000/health", "timeout_sec": 30 } }
+}
+```
+
+- **Frozen during preflight, and unskippable by omission.** The criteria
+  (each FR's statement, sha-pinned) are frozen whenever the spec maps
+  `kind: visual` — with no `verification.visual` block the command side
+  freezes all-null and the gate PARKS rather than waives. `visual.url` is
+  the harness's browser base, frozen and same-origin with the resolved
+  app address; the shared `verification.app` block (one app object, one
+  launch per landing gate) serves conformance and visual alike.
+- **The harness runs isolated.** The command executes in a detached
+  throwaway worktree at HEAD under C1's environment discipline
+  (`CCT_PROJECT_DIR`/`CCT_SPECS_DIR` rebound, `OLDPWD` dropped, the
+  review cost channel unset), bounded by `timeout_sec`. Afterwards the
+  gate re-proves artifact containment, requires a freshly produced
+  regular file, requires the worktree's HEAD unmoved and its tracked
+  diff clean, and IMPORTS the evidence into the run ledger
+  (`visual/critique-feedback.json` + `harness.log`) as a publication —
+  a failed import never leaves an earlier run's PASS in place.
+- **The verdict is read in a fixed order** over the ledger copy: closed
+  shape → effective mode (absent = degraded) → cross-field consistency →
+  `passed` must equal "every criterion is pass" → skip legality →
+  `skip_is_failure` policy → exact identity with the frozen criteria →
+  per-criterion verdicts (`pass|fail|skip|unreached`). `unreached` is
+  ALWAYS red — no policy turns an abort into verification — and a
+  non-zero harness exit is fatal even when the artifact reads green.
+- **`skip_is_failure` defaults to true** and is frozen with the
+  contract: a degraded or mode-less result FAILS even when it says
+  `passed: true` — a skipped visual check is never a pass by absence.
+  Freezing `skip_is_failure: false` is the only way a degraded run
+  lands; the waiver is explicit, journalled, and every waived criterion
+  is marked `waived` in `verification-results.json`, so a degraded pass
+  is never indistinguishable from full verification. Failures dispose
+  `visual_gate` (sharing the commit-bound recovery arm), carrying the
+  critic's `critique:`/`fixes:` in the evidence.
+- **ESTIMATE-metered, always.** The harness is arbitrary project code,
+  so the cost channel is never handed to it and its output is never
+  parsed as a measurement: every invocation debits the conservative
+  per-invocation estimate when estimates are active (always under
+  `unattended`, opt-in for attended runs) and nothing when inactive —
+  debited immediately after the harness returns, BEFORE the evidence
+  checks, so a failing or evidence-destroying run is still charged. A
+  cost the ledger cannot record disposes `cost_accounting_failed`.
+- **The isolation threat model is deliberate** (plan decision 10): the
+  worktree protects the canonical checkout from persistent TRACKED-file
+  mutation and keeps ordinary side effects out of your working copy. It
+  is NOT a security sandbox — untracked-evidence forgery inside the
+  worktree and swap-and-restore races by an active same-user process
+  are out of scope. The gate bounds an unattended pipeline against a
+  drifting or sloppy harness, not against a hostile local user.
 
 ## Four-Phase Workflow
 
@@ -857,7 +935,7 @@ code-copilot-team/
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
 │   ├── test-generate.sh                 294 generation + adapter tests
-│   ├── test-shared-structure.sh         810 structure + content tests
+│   ├── test-shared-structure.sh         812 structure + content tests
 │   ├── test-sync.sh                     121 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
@@ -865,7 +943,8 @@ code-copilot-team/
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh           116 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        890 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1034 auto-build driver tests
+│   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

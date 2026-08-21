@@ -86,6 +86,15 @@ trap 'rm -f "$TMP_OUT"' EXIT
     echo "# then set status: finalized. spec.md is the only authoritative"
     echo "# source of requirement text; statement below is display-only and"
     echo "# statement_sha binds it (admission recomputes and fails on drift)."
+    echo "# Verifier kinds: deterministic (test: <path|command>),"
+    echo "#   runtime_conformance (criterion: judged against the RUNNING app),"
+    echo "#   visual (criterion: judged against the RENDERED app). Mapping any"
+    echo "#   FR to kind: visual is what puts UI IN SCOPE — admission then"
+    echo "#   requires the UI bundle (DESIGN.md, harness/, copilot:review)."
+    echo "# The visual placeholder below each FR is an author-decision"
+    echo "#   SCAFFOLD, not a claim that the FR is UI-visible: write a"
+    echo "#   concrete criterion if it is, otherwise REMOVE the verifier."
+    echo "#   Leaving it unresolved keeps the artifact inadmissible."
     echo "# Contract: shared/schemas/verification.schema.json"
     echo "status: draft"
     echo "feature_id: $FEATURE_ID"
@@ -97,6 +106,13 @@ trap 'rm -f "$TMP_OUT"' EXIT
         echo "  verifiers:"
         echo "    - kind: deterministic"
         echo "      test: \"TODO — map $fr to an executable verifier (path or command)\""
+        # An author-decision SCAFFOLD, not a claim that $fr is UI-visible.
+        # The draft is inadmissible by construction, and this placeholder
+        # keeps that true until the author either writes a real criterion
+        # or removes the verifier — so scope is decided deliberately
+        # rather than inferred from prose.
+        echo "    - kind: visual"
+        echo "      criterion: \"TODO — if $fr is UI-visible, replace with a concrete visual criterion; otherwise REMOVE this verifier\""
     done <<< "$FRS"
 } > "$TMP_OUT"
 mv "$TMP_OUT" "$OUT"

@@ -144,6 +144,20 @@ unset VG_HANDOFF_DIR VG_HANDOFF_OWNED 2>/dev/null || true
 VG_HANDOFF_DIR=""
 VG_HANDOFF_OWNED=0
 
+# C3 (#239 T6): the visual execution root and the run-scoped private
+# request dir, deleted from EXIT and signal paths — so the same rule as
+# the handoff dir: an INHERITED value must never be treated as
+# driver-owned. Worktree ownership is tracked PER STAGE, because setup
+# has two failure points (the driver creates the directory; `git
+# worktree add` registers it) and collapsing them into one flag leaks
+# the directory whenever registration fails.
+unset VG_WT_DIR VG_WT_DIR_OWNED VG_WT_REGISTERED VG_VIS_PRIV VG_VIS_PRIV_OWNED 2>/dev/null || true
+VG_WT_DIR=""
+VG_WT_DIR_OWNED=0
+VG_WT_REGISTERED=0
+VG_VIS_PRIV=""
+VG_VIS_PRIV_OWNED=0
+
 # T4 defaults — set before preflight-result channel runs
 SKIP_ADMISSION=false
 HAS_COVERAGE_BLOCK=false
@@ -432,7 +446,7 @@ escalation_resumable() {
                 <<< "$history" >/dev/null 2>&1; then
                 echo "This run's FROZEN contract requires runtime conformance but froze NO evaluator"
                 echo "--resume refuses here: a frozen contract cannot gain an evaluator, so configuring one now cannot change this run"
-                echo "Add verification.conformance (evaluator + app) to automation.json"
+                echo "Add verification.conformance (evaluator + timeout_sec) AND verification.app to automation.json"
                 echo "Then start a FRESH run: scripts/auto-build-loop.sh $FEATURE_ID"
                 return 1
             fi
@@ -1244,17 +1258,55 @@ contract_initialiser() {
             # unskippable either way. interface resolves app.interface,
             # else ready.url (FR-6; config validation guarantees one
             # exists whenever the block is present).
+            # C3 (#239 FR-10): the evaluator side only. The APP it
+            # exercises is frozen ONCE at contract.app below, shared with
+            # the visual harness — one lifecycle, one frozen copy.
             local _conf
             _conf=$(jq --argjson criteria "$_cset" '
                 (.verification.conformance // null) as $c |
                 {evaluator: ($c.evaluator // null),
-                 app: ($c.app // null),
-                 interface: (if $c == null or $c.app == null then null
-                             else ($c.app.interface // $c.app.ready.url // null) end),
                  timeout_sec: ($c.timeout_sec // null),
                  criteria: $criteria}' "$CONFIG_SNAPSHOT")
             contract=$(jq --argjson conf "$_conf" '. + {conformance: $conf}' <<< "$contract")
         fi
+
+        # ── C3 (#239 FR-4/FR-12): the visual contract. Frozen from the
+        #    SAME validated capture as the criteria above; the gate reads
+        #    only this copy, so a post-initialisation config edit moves
+        #    nothing. skip_is_failure defaults TRUE — a skipped visual
+        #    check is a failure unless an operator explicitly froze the
+        #    waiver. ──
+        local _xset
+        _xset=$(jq '.visual' <<< "$_vcap")
+        if [[ "$(jq 'length' <<< "$_xset")" -gt 0 ]]; then
+            local _vis
+            _vis=$(jq --argjson criteria "$_xset" '
+                (.verification.visual // null) as $v |
+                {command: ($v.command // null),
+                 artifact: ($v.artifact // null),
+                 url: ($v.url // null),
+                 timeout_sec: ($v.timeout_sec // null),
+                 skip_is_failure: (if $v == null or ($v.skip_is_failure == null)
+                                   then true else $v.skip_is_failure end),
+                 criteria: $criteria}' "$CONFIG_SNAPSHOT")
+            contract=$(jq --argjson vis "$_vis" '. + {visual: $vis}' <<< "$contract")
+        fi
+    fi
+
+    # ── C3 (#239 FR-10): ONE application, frozen once, with its
+    #    consumer-facing `interface` RESOLVED at freeze (app.interface,
+    #    else ready.url — config validation guarantees one exists). Both
+    #    the conformance evaluator and the visual harness read this same
+    #    frozen copy; there is no second app object anywhere. Frozen iff
+    #    a consumer is: an app with nothing to consume it would be a
+    #    launch the gate never needed.
+    if jq -e 'has("conformance") or has("visual")' <<< "$contract" >/dev/null 2>&1; then
+        local _app
+        _app=$(jq '(.verification.app // null) as $a |
+                   if $a == null then null
+                   else $a + {interface: ($a.interface // $a.ready.url // null)} end' \
+               "$CONFIG_SNAPSHOT")
+        contract=$(jq --argjson app "$_app" '. + {app: $app}' <<< "$contract")
     fi
 
     if [[ "$contract" == "{}" ]]; then
@@ -1450,7 +1502,7 @@ validate_contract_json() {
 
     # ── 1. Closed: no unknown keys ──
     local _unknown
-    _unknown=$(jq -r --argjson allowed '["command","artifact","parser","timeout_sec","floor_enforced_at","preset_id","preset_sha256","baseline","min_line_pct","min_branch_pct","max_regression_pct","verifiers","conformance"]' \
+    _unknown=$(jq -r --argjson allowed '["command","artifact","parser","timeout_sec","floor_enforced_at","preset_id","preset_sha256","baseline","min_line_pct","min_branch_pct","max_regression_pct","verifiers","conformance","app","visual"]' \
         '[keys[] | select(. as $k | $allowed | index($k) | not)] | join(", ")' <<< "$_ct")
     if [[ -n "$_unknown" ]]; then
         echo "[auto-build] ERROR: contract has unknown keys: $_unknown" >&2
@@ -1462,10 +1514,14 @@ validate_contract_json() {
     #    coverage rules below all apply; NONE present requires at least
     #    one C2 section (a contract must commit to something). ──
     local _has_cov
-    _has_cov=$(jq -r '[keys[] | select(. != "verifiers" and . != "conformance")] | length > 0' <<< "$_ct")
+    # C3 (#239): `app` and `visual` are contract sections in their own
+    # right, not coverage fields. Omitting them here made a
+    # conformance-only contract look like a coverage contract with no
+    # floors — the C1 rules then demanded a floor that never existed.
+    _has_cov=$(jq -r '[keys[] | select(. != "verifiers" and . != "conformance" and . != "app" and . != "visual")] | length > 0' <<< "$_ct")
     if [[ "$_has_cov" != "true" ]] \
-       && ! jq -e 'has("verifiers") or has("conformance")' <<< "$_ct" >/dev/null 2>&1; then
-        echo "[auto-build] ERROR: contract carries no section (coverage fields, verifiers, or conformance)" >&2
+       && ! jq -e 'has("verifiers") or has("conformance") or has("visual")' <<< "$_ct" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: contract carries no section (coverage fields, verifiers, conformance, or visual)" >&2
         ((_errors++))
     fi
 
@@ -1495,8 +1551,8 @@ validate_contract_json() {
     #    provider_unavailable); the criteria are frozen either way. ──
     if jq -e 'has("conformance")' <<< "$_ct" >/dev/null 2>&1; then
         if ! jq -e '.conformance | type == "object"
-            and ([keys[] | select(. != "evaluator" and . != "app" and . != "interface" and . != "timeout_sec" and . != "criteria")] | length == 0)
-            and has("evaluator") and has("app") and has("interface") and has("timeout_sec")
+            and ([keys[] | select(. != "evaluator" and . != "timeout_sec" and . != "criteria")] | length == 0)
+            and has("evaluator") and has("timeout_sec")
             and (.criteria | type == "array" and length > 0)
             and (.criteria | all(
                 (type == "object")
@@ -1505,21 +1561,84 @@ validate_contract_json() {
                 and (.statement_sha | type == "string" and startswith("sha256:"))
                 and (.criterion | type == "string" and length > 0)))
             and (
-                ((.evaluator == null) and (.app == null) and (.interface == null) and (.timeout_sec == null))
+                ((.evaluator == null) and (.timeout_sec == null))
                 or
                 ((.evaluator | type == "string" and length > 0)
-                 and (.timeout_sec | type == "number" and . > 0 and . == floor)
-                 and (.interface | type == "string" and length > 0)
-                 and (.app | type == "object"
-                      and ([keys[] | select(. != "command" and . != "ready" and . != "stop_timeout_sec" and . != "interface")] | length == 0)
-                      and (.command | type == "string" and length > 0)
-                      and (.stop_timeout_sec | type == "number" and . > 0 and . == floor)
-                      and (.ready | type == "object"
-                           and ([keys[] | select(. != "url" and . != "command" and . != "timeout_sec")] | length == 0)
-                           and (.timeout_sec | type == "number" and . > 0 and . == floor)
-                           and (((has("url")) and (has("command") | not)) or ((has("command")) and (has("url") | not))))))
+                 and (.timeout_sec | type == "number" and . > 0 and . == floor))
             )' <<< "$_ct" >/dev/null 2>&1; then
-            echo "[auto-build] ERROR: contract.conformance invalid — closed {evaluator, app, interface, timeout_sec, criteria: non-empty [{fr, statement_sha, criterion}]}; evaluator/app/interface/timeout_sec are all null (blockless attended) or all configured (app closed, ready exactly-one url|command, every *_timeout_sec a positive INTEGER — the bounds are integer shell arithmetic)" >&2
+            echo "[auto-build] ERROR: contract.conformance invalid — closed {evaluator, timeout_sec, criteria: non-empty [{fr, statement_sha, criterion}]}; evaluator/timeout_sec are both null (blockless attended) or both configured. The APP it exercises is contract.app since #239 C3 — one lifecycle, one frozen copy." >&2
+            ((_errors++))
+        fi
+    fi
+
+    # ── C3 (#239 FR-10): contract.app — ONE application for both runtime
+    #    consumers, `interface` RESOLVED at freeze (app.interface, else
+    #    ready.url). null only on the blockless attended path, where the
+    #    gate parks provider_unavailable rather than launching. The KEY
+    #    itself is REQUIRED whenever a runtime consumer is frozen: the
+    #    gate keys the shared lifecycle on `.app != null`, so a
+    #    configured consumer with no app key would silently bypass the
+    #    lifecycle instead of failing loudly here. ──
+    if jq -e '(has("conformance") or has("visual")) and (has("app") | not)' <<< "$_ct" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: contract freezes a runtime consumer (conformance or visual) but carries NO app key — the shared lifecycle would be bypassed; freeze app (null only for the blockless attended park)" >&2
+        ((_errors++))
+    fi
+    # VALUE-level coupling, not just key presence: app:null is legal ONLY
+    # while every frozen runtime consumer is itself in its all-null
+    # (blockless attended) form. A CONFIGURED consumer beside app:null is
+    # a contract the gate would read as "skip the lifecycle" — a visual
+    # command with no application to point a browser at, or an evaluator
+    # with nothing to exercise. The constructor cannot produce this (the
+    # config validator couples the blocks), so hitting it means tampered
+    # or hand-built frozen state — exactly what this validator exists to
+    # refuse.
+    if jq -e '.app == null and (
+                 (has("conformance") and .conformance.evaluator != null)
+                 or (has("visual") and .visual.command != null)
+              )' <<< "$_ct" >/dev/null 2>&1; then
+        echo "[auto-build] ERROR: contract freezes a CONFIGURED runtime consumer beside app:null — the gate would skip launch/binding/readiness for a consumer that needs a running application; app:null is legal only when every frozen consumer is in its all-null blockless form" >&2
+        ((_errors++))
+    fi
+    if jq -e 'has("app")' <<< "$_ct" >/dev/null 2>&1; then
+        if ! jq -e '.app == null or (.app | type == "object"
+            and ([keys[] | select(. != "command" and . != "ready" and . != "stop_timeout_sec" and . != "interface")] | length == 0)
+            and (.command | type == "string" and length > 0)
+            and (.stop_timeout_sec | type == "number" and . > 0 and . == floor)
+            and (.interface | type == "string" and length > 0)
+            and (.ready | type == "object"
+                 and ([keys[] | select(. != "url" and . != "command" and . != "timeout_sec")] | length == 0)
+                 and (.timeout_sec | type == "number" and . > 0 and . == floor)
+                 and (((has("url")) and (has("command") | not)) or ((has("command")) and (has("url") | not)))))' \
+            <<< "$_ct" >/dev/null 2>&1; then
+            echo "[auto-build] ERROR: contract.app invalid — closed {command, ready, stop_timeout_sec, interface}; ready carries exactly ONE of url|command; every *_timeout_sec is a positive INTEGER; interface is RESOLVED at freeze" >&2
+            ((_errors++))
+        fi
+    fi
+
+    # ── C3 (#239 FR-4/FR-12): contract.visual. skip_is_failure is frozen
+    #    as a BOOLEAN so the gate never decides a default at judgement
+    #    time, and url is the frozen browser base (never derived). ──
+    if jq -e 'has("visual")' <<< "$_ct" >/dev/null 2>&1; then
+        if ! jq -e '.visual | type == "object"
+            and ([keys[] | select(. != "command" and . != "artifact" and . != "url" and . != "timeout_sec" and . != "skip_is_failure" and . != "criteria")] | length == 0)
+            and (
+                ((.command == null) and (.artifact == null) and (.url == null) and (.timeout_sec == null))
+                or
+                ((.command | type == "string" and length > 0)
+                 and (.artifact | type == "string" and length > 0)
+                 and (.url | type == "string" and test("^https?://"))
+                 and (.timeout_sec | type == "number" and . > 0 and . == floor))
+            )
+            and (.skip_is_failure | type == "boolean")
+            and (.criteria | type == "array" and length > 0)
+            and (.criteria | all(
+                (type == "object")
+                and ([keys[] | select(. != "fr" and . != "statement_sha" and . != "criterion")] | length == 0)
+                and (.fr | type == "string" and test("^FR-[0-9]+[a-z]?$"))
+                and (.statement_sha | type == "string" and startswith("sha256:"))
+                and (.criterion | type == "string" and length > 0)))' \
+            <<< "$_ct" >/dev/null 2>&1; then
+            echo "[auto-build] ERROR: contract.visual invalid — closed {command, artifact, url, timeout_sec, skip_is_failure, criteria: non-empty [{fr, statement_sha, criterion}]}; command/artifact/url/timeout_sec are ALL null (a visual mapping with no verification.visual — the gate parks) or ALL configured; url http(s), timeout_sec a positive INTEGER, skip_is_failure a BOOLEAN frozen at initialisation" >&2
             ((_errors++))
         fi
     fi
@@ -1964,6 +2083,105 @@ vg_integrity_after() {
 # (round-10 finding 3).
 VG_APP_PID=""
 VG_TAINTED=0
+# vg_criteria_mismatch <file> <want-json> <allowed-top-keys-json> <verdict-alternation>
+# THE shared identity validator (#239 C3 T7), extracted from C2's inline
+# jq so the conformance and visual verdicts cannot drift apart. Prints a
+# named mismatch on stdout (empty = clean). The CLOSED shape comes
+# first: identity comparison over a malformed document proves nothing
+# (C2 round-10 finding 4). The verdict must be an EXACT identity
+# multiset of the frozen criteria — missing, duplicated, altered, or
+# invented entries are refused, and identity always comes from the
+# FROZEN side. Parameters exist because the two call sites differ in
+# exactly two ways: the visual document carries additional top-level
+# fields, and its verdict vocabulary includes skip|unreached.
+vg_criteria_mismatch() {
+    local file="$1" want="$2" allowed="$3" verdicts="$4"
+    jq -r --argjson want "$want" --argjson allowed "$allowed" --arg vre "^(${verdicts})$" '
+        def bad_shape:
+          (type != "object")
+          or ((keys - $allowed) | length > 0)
+          or (has("criteria") | not)
+          or (.criteria | type != "array")
+          or (.criteria | length == 0)
+          or ([.criteria[] | select(
+                 (type != "object")
+                 or ((keys - ["fr","statement_sha","criterion","verdict","evidence"]) | length > 0)
+                 or ((["fr","statement_sha","criterion","verdict","evidence"] - keys) | length > 0)
+                 or (.fr | type != "string") or (.statement_sha | type != "string")
+                 or (.criterion | type != "string")
+                 or ((.verdict | type != "string") or ((.verdict | test($vre)) | not))
+                 or (.evidence | type != "string") or ((.evidence | length) == 0))] | length > 0);
+        if bad_shape then
+          "the verdict document does not match the required closed shape (criteria: non-empty array of {fr, statement_sha, criterion, verdict: " + ($vre | ltrimstr("^(") | rtrimstr(")$")) + ", evidence: non-empty string})"
+        else
+          (.criteria | map({fr, statement_sha, criterion}) | sort) as $g
+          | ($want | sort) as $w
+          | if $w != $g then "the echoed criteria are not an exact match of the frozen set (missing, duplicated, altered, or invented entries)"
+            else "" end
+        end' "$file" 2>/dev/null || echo "the verdict could not be compared with the frozen criteria"
+}
+
+# vg_run_isolated <secs> <root> <cmd> <capture> <url> <request> — run the
+# frozen visual command bounded, in the execution root, with C1's FULL
+# environment discipline composed over ca_run_bounded's. ca_run_bounded
+# strips only the handoff capability; C1's cp_run_bounded additionally
+# REBINDS CCT_PROJECT_DIR and CCT_SPECS_DIR to the execution root and
+# drops OLDPWD (bash 3.2 keeps its export attribute, so a child can read
+# the launch directory out of its environ). Without that, harness code
+# can follow an inherited path straight back into the canonical checkout
+# or .cct. DEV_URL is the FROZEN browser base and CCT_VISUAL_REQUEST the
+# driver's request document — the only two values handed over, and the
+# cost channel deliberately NOT among them (#239 decision 8; T8).
+vg_run_isolated() {
+    local secs="$1" root="$2" cmd="$3" cap="$4" url="$5" req="$6"
+    ca_run_bounded "$secs" \
+        "cd $(printf '%q' "$root") && env -u OLDPWD -u CCT_REVIEW_COST_FILE \
+         CCT_PROJECT_DIR=$(printf '%q' "$root") \
+         CCT_SPECS_DIR=$(printf '%q' "$root/specs") \
+         DEV_URL=$(printf '%q' "$url") \
+         CCT_VISUAL_REQUEST=$(printf '%q' "$req") \
+         $cmd" "$cap"
+}
+
+# vg_wt_cleanup — release the visual execution root and the private
+# request dir, deleting ONLY what the ownership flags say this driver
+# created (an inherited path is never touched). Handles partial setup:
+# registered => `git worktree remove -f`, falling back to `rm -rf`
+# FOLLOWED BY a checked `git worktree prune` (removing the directory
+# alone leaves .git/worktrees/<name> registered — a stale registration
+# is what prune_worktrees exists to clean up after a CRASH; this path
+# must not manufacture one); created-but-unregistered => `rm -rf`;
+# neither => nothing. An INCOMPLETE release keeps its flags set and
+# returns 1, so the EXIT retry runs instead of treating a failed release
+# as a finished one. Idempotent: flags are cleared per stage on success.
+vg_wt_cleanup() {
+    local rc=0
+    if [[ -n "${VG_WT_DIR:-}" && "${VG_WT_DIR_OWNED:-0}" == "1" ]]; then
+        if [[ "${VG_WT_REGISTERED:-0}" == "1" ]]; then
+            if git -C "$PROJECT_DIR" worktree remove -f "$VG_WT_DIR" >/dev/null 2>&1; then
+                VG_WT_REGISTERED=0; VG_WT_DIR_OWNED=0; VG_WT_DIR=""
+            else
+                rm -rf "$VG_WT_DIR" 2>/dev/null || true
+                if [[ -e "$VG_WT_DIR" ]]; then
+                    rc=1   # keep the flags: EXIT retries
+                elif git -C "$PROJECT_DIR" worktree prune --expire=now >/dev/null 2>&1; then
+                    VG_WT_REGISTERED=0; VG_WT_DIR_OWNED=0; VG_WT_DIR=""
+                else
+                    rc=1   # directory gone but the registration is not — retry the prune
+                fi
+            fi
+        else
+            rm -rf "$VG_WT_DIR" 2>/dev/null || true
+            if [[ -e "$VG_WT_DIR" ]]; then rc=1; else VG_WT_DIR_OWNED=0; VG_WT_DIR=""; fi
+        fi
+    fi
+    if [[ -n "${VG_VIS_PRIV:-}" && "${VG_VIS_PRIV_OWNED:-0}" == "1" ]]; then
+        rm -rf "$VG_VIS_PRIV" 2>/dev/null || true
+        if [[ -e "$VG_VIS_PRIV" ]]; then rc=1; else VG_VIS_PRIV_OWNED=0; VG_VIS_PRIV=""; fi
+    fi
+    return $rc
+}
+
 vg_app_cleanup() {
     [[ -n "${VG_APP_PID:-}" ]] || return 0
     # Clear the pid ONLY when the group is provably gone — otherwise the
@@ -1981,6 +2199,7 @@ vg_app_cleanup() {
 # bounded command (verifier, probe, healthcheck, evaluator) is running
 # right now — exiting from a handler skips ca_run_bounded's own cleanup.
 vg_signal_cleanup() {
+    if declare -f vg_wt_cleanup >/dev/null 2>&1; then vg_wt_cleanup >/dev/null 2>&1 || true; fi
     if declare -f ca_active_cleanup >/dev/null 2>&1; then ca_active_cleanup >/dev/null 2>&1 || true; fi
     if declare -f vg_app_cleanup >/dev/null 2>&1; then vg_app_cleanup >/dev/null 2>&1 || true; fi
     return 0
@@ -2012,6 +2231,23 @@ vg_debit_conformance() {
     debit_invocation_cost "$cost" "$label"
 }
 
+# vg_checkpoint — the mid-sequence integrity check, run after each
+# stretch of ARBITRARY execution while the gate is still going. On
+# SUCCESS it returns with every resource deliberately alive: the app must
+# survive between the conformance and visual consumers, so a checkpoint
+# that tore down would defeat the shared lifecycle. On FAILURE it
+# delegates to vg_finish — the one path that releases resources and
+# disposes — rather than returning and leaving a live app behind.
+# Relies on bash dynamic scope for gate_head/hist from verifier_gate.
+vg_checkpoint() {
+    local anomaly
+    if anomaly=$(vg_integrity_after "$gate_head"); then
+        return 0
+    fi
+    vg_finish
+    return 1
+}
+
 # vg_finish [reason] [detail] — THE single exit path for the verifier
 # gate after any arbitrary execution (round-11 finding 1). It runs the
 # checkout-integrity epilogue FIRST: a mutated checkout outranks every
@@ -2025,9 +2261,22 @@ vg_finish() {
     # here rather than in each branch (a request-publish failure used to
     # dispose with the app still running, and the survivor held the
     # gate's captured stdout open).
+    # C3 (#239 T6): the execution root and the private request dir are
+    # released FIRST — like the app, they must not outlive the gate on
+    # any exit path, and a failed release is its own gate failure.
+    if ! vg_wt_cleanup; then
+        VG_TAINTED=1
+        dispose "${VG_ACTIVE_BLOCK:-visual}_gate" "the visual execution root (or its git registration) could not be released — refusing to land or park with driver-created state left behind${reason:+ (the run was already failing: $reason — $detail)}" "$hist"
+        return 1
+    fi
     if [[ -n "${VG_APP_PID:-}" ]] && ! vg_app_cleanup; then
         VG_TAINTED=1
-        dispose "conformance_gate" "the application process group survived TERM and KILL — refusing to land or park with a stray process from the gate${reason:+ (the run was already failing: $reason — $detail)}" "$hist"
+        # Name the block that was EXECUTING, not merely which blocks are
+        # frozen: in a combined run a teardown failure during the visual
+        # block labelled `conformance_gate` sends the operator to the
+        # wrong place. Both reasons share the recovery arm, so the label
+        # drives diagnosis — which is exactly why a wrong one is costly.
+        dispose "${VG_ACTIVE_BLOCK:-conformance}_gate" "the application process group survived TERM and KILL — refusing to land or park with a stray process from the gate${reason:+ (the run was already failing: $reason — $detail)}" "$hist"
         return 1
     fi
     if ! anomaly=$(vg_integrity_after "$gate_head"); then
@@ -2046,11 +2295,32 @@ vg_finish() {
 verifier_gate() {
     [[ "$DRY_RUN" == "true" ]] && return 0
     [[ -n "$FROZEN_CONTRACT" ]] || return 0
-    jq -e 'has("verifiers") or has("conformance")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1 || return 0
+    jq -e 'has("verifiers") or has("conformance") or has("visual")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1 || return 0
 
     local head hist
     head=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")
     hist=$(jq -n --arg h "$head" '{parked_head: $h}')
+
+    # C3 (#239 T7): the visual verdict's carry-outs — the critic's
+    # summary/fixes for the failing-park message, and the invocation
+    # waiver record for the evidence file. Initialised per gate run.
+    local VG_VIS_SUMMARY="" VG_VIS_FIXES="" VG_VIS_WAIVER=""
+
+    # C3 (#239 T5): which block a failure is ATTRIBUTED to. Before any
+    # consumer begins it reflects what the contract HAS — conformance is
+    # the first consumer when present, so a lifecycle failure in a
+    # combined run is conformance's; a visual-only run has no conformance
+    # to blame. Each consumer then claims it as it BEGINS, so a failure
+    # during the visual block is never labelled conformance.
+    if jq -e 'has("conformance")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1; then
+        VG_ACTIVE_BLOCK="conformance"
+    elif jq -e 'has("visual")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1; then
+        VG_ACTIVE_BLOCK="visual"
+    else
+        # Verifier-only contracts have neither runtime consumer; their
+        # failures keep C2's historical conformance_gate label.
+        VG_ACTIVE_BLOCK="conformance"
+    fi
 
     # 1. Tamper check — the whole pinned object (C1's rule, unchanged).
     local frozen="$LEDGER_DIR/frozen-contract.json"
@@ -2091,6 +2361,36 @@ verifier_gate() {
         return 1
     fi
 
+    # ── Plan step 3 (#239 C3 T6): the EARLY canonical bundle check —
+    #    BEFORE any project code runs and before any process is spawned.
+    #    Step 2 just proved the canonical checkout clean and at the gate
+    #    HEAD, so this is the cheapest possible refusal with the smallest
+    #    blast radius: no teardown obligation is incurred to report it.
+    #    The point-of-use check inside the visual block repeats this
+    #    INSIDE the execution root; neither replaces the other — this one
+    #    refuses cheaply, that one is what the invocation relies on.
+    #    Attended runs are never admission-checked, so for them this IS
+    #    the first time the requirement surfaces. ──
+    if jq -e 'has("visual")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1; then
+        local _ebv
+        while IFS= read -r _ebv; do
+            [[ -z "$_ebv" ]] && continue
+            vg_finish "visual_gate" "the UI bundle is not real (checked against the canonical checkout, before anything ran): $_ebv"
+            return 1
+        done < <(vc_ui_bundle_violations "$PROJECT_DIR")
+        local _ecomp
+        for _ecomp in DESIGN.md package.json; do
+            if ! cp_contained "$PROJECT_DIR" "$_ecomp" || [[ -L "$PROJECT_DIR/$_ecomp" || ! -f "$PROJECT_DIR/$_ecomp" ]]; then
+                vg_finish "visual_gate" "$_ecomp does not resolve to a regular file inside the project (a tracked symlink out of the tree would defeat the isolation)"
+                return 1
+            fi
+        done
+        if ! cp_contained "$PROJECT_DIR" "harness" || [[ -L "$PROJECT_DIR/harness" || ! -d "$PROJECT_DIR/harness" ]]; then
+            vg_finish "visual_gate" "harness/ does not resolve to a real directory inside the project"
+            return 1
+        fi
+    fi
+
     # 3. EXECUTE every frozen deterministic verifier. Admission's
     #    resolution was the screen; this is the decision (FR-7) — a
     #    verifier is never inferred green from the generic test.command.
@@ -2124,17 +2424,19 @@ verifier_gate() {
             echo "[auto-build] verifier gate: $vfr $vtest -> $vdetail" >&2
         done < <(jq -r '.verifiers.set[] | [.fr, .statement_sha, .test] | @tsv' <<< "$FROZEN_CONTRACT")
         # FR-11 after ARBITRARY execution — deterministic verifiers are
-        # project code too.
-        vg_finish || return 1
+        # project code too. A CHECKPOINT since C3: same position, same
+        # meaning, but it must not tear down, because the shared app
+        # lifecycle below has to survive between consumers. Failure still
+        # goes through vg_finish (inside vg_checkpoint), so there is one
+        # cleanup-and-dispose path, not two.
+        vg_checkpoint || return 1
     fi
 
     # ── Conformance (present iff the artifact derived the requirement) ──
     if jq -e 'has("conformance")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1; then
-        local evaluator iface ctimeout app criteria
+        local evaluator ctimeout criteria
         evaluator=$(jq -r '.conformance.evaluator // empty' <<< "$FROZEN_CONTRACT")
-        iface=$(jq -r '.conformance.interface // empty' <<< "$FROZEN_CONTRACT")
         ctimeout=$(jq -r '.conformance.timeout_sec // empty' <<< "$FROZEN_CONTRACT")
-        app=$(jq -c '.conformance.app // empty' <<< "$FROZEN_CONTRACT")
         criteria=$(jq -c '.conformance.criteria' <<< "$FROZEN_CONTRACT")
 
         # 4. Evaluator re-resolution: resolves, DECLARES
@@ -2143,7 +2445,7 @@ verifier_gate() {
         #    and unskippable, so it parks here rather than being ignored.
         local ptoml="${CCT_PROVIDER_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
         local ccmd chc
-        if [[ -z "$evaluator" || -z "$app" ]]; then
+        if [[ -z "$evaluator" ]]; then
             hist=$(jq -n --argjson h "$hist" '$h + {provider_scope: "evaluator", evaluator: null}')
             vg_finish "provider_unavailable" "the frozen contract requires runtime conformance but carries NO evaluator (an attended run started without verification.conformance). The contract is frozen, so configuring one now cannot change this run: add verification.conformance and start a FRESH run."
             return 1
@@ -2175,38 +2477,53 @@ verifier_gate() {
             fi
         fi
 
-        # 5. Pre-launch binding probe, then start the app in its own
-        #    process group with output captured to the ledger.
+    fi
+
+    # ── 5+6. SHARED APPLICATION LIFECYCLE (#239 C3 FR-10). ONE launch,
+    #    before the FIRST consumer, keyed on either runtime kind — there
+    #    is no second start/stop anywhere, and the visual block consumes
+    #    the same instance the evaluator did. contract.app carries its
+    #    interface already RESOLVED at freeze. ──
+    local app="" iface="" stop_sec=10 applog="$cdir/app.log" apid=""
+    if jq -e '(has("conformance") or has("visual")) and .app != null' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1; then
+        app=$(jq -c '.app' <<< "$FROZEN_CONTRACT")
+        iface=$(jq -r '.app.interface // empty' <<< "$FROZEN_CONTRACT")
+        stop_sec=$(jq -r '.app.stop_timeout_sec // 10' <<< "$FROZEN_CONTRACT")
+        # The visual browser base joins the binding proof: same origin is
+        # not the same process, so a stale responder on the UI path must
+        # not be attributable to this launch (#239 FR-12).
+        local vurl; vurl=$(jq -r '.visual.url // empty' <<< "$FROZEN_CONTRACT")
+
         local bind_msg
-        if ! bind_msg=$(ca_bind_preflight "$app" "$iface"); then
-            vg_finish "conformance_gate" "launch binding refused: $bind_msg"
+        if ! bind_msg=$(ca_bind_preflight "$app" "$iface" "$vurl"); then
+            vg_finish "${VG_ACTIVE_BLOCK:-conformance}_gate" "launch binding refused: $bind_msg"
             return 1
         fi
-        local applog="$cdir/app.log" apid
-        local stop_sec; stop_sec=$(jq -r '.stop_timeout_sec // 10' <<< "$app")
         apid=$(ca_start "$app" "$PROJECT_DIR" "$applog") || {
-            vg_finish "conformance_gate" "could not start the application under test (see ${applog#$PROJECT_DIR/})"
+            vg_finish "${VG_ACTIVE_BLOCK:-conformance}_gate" "could not start the application under test (see ${applog#$PROJECT_DIR/})"
             return 1
         }
         # From here on the app group is the gate's responsibility on EVERY
         # exit path, including a signal (round-10 finding 3).
         VG_APP_PID="$apid"; VG_APP_STOP_SEC="$stop_sec"
 
-        # 6. Readiness — bound to THIS launch. A teardown that cannot be
-        #    proven is itself a gate failure, never a swallowed error.
         local ready_msg ready_rc=0 stop_rc=0
-        ready_msg=$(ca_wait_ready "$app" "$apid" "$iface") || ready_rc=$?
+        ready_msg=$(ca_wait_ready "$app" "$apid" "$iface" "$vurl") || ready_rc=$?
         if [[ $ready_rc -ne 0 ]]; then
             ca_stop "$apid" "$stop_sec" >/dev/null 2>&1 || stop_rc=$?
-            # Keep the pid for the EXIT retry unless teardown is proven.
             [[ $stop_rc -eq 0 ]] && VG_APP_PID=""
             if [[ $stop_rc -ne 0 ]]; then
-                vg_finish "conformance_gate" "the application never became usable ($ready_msg) AND its process group survived TERM and KILL — a stray process outlived the gate (see ${applog#$PROJECT_DIR/})"
+                vg_finish "${VG_ACTIVE_BLOCK:-conformance}_gate" "the application never became usable ($ready_msg) AND its process group survived TERM and KILL — a stray process outlived the gate (see ${applog#$PROJECT_DIR/})"
             else
-                vg_finish "conformance_gate" "the application never became usable: $ready_msg (see ${applog#$PROJECT_DIR/})"
+                vg_finish "${VG_ACTIVE_BLOCK:-conformance}_gate" "the application never became usable: $ready_msg (see ${applog#$PROJECT_DIR/})"
             fi
             return 1
         fi
+    fi
+
+    # ── The conformance consumer resumes here, against the shared app. ──
+    if jq -e 'has("conformance")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1; then
+        VG_ACTIVE_BLOCK="conformance"
 
         # 7. Author the request from the FROZEN contract, ensure the
         #    result path is absent, invoke through the provider's
@@ -2284,16 +2601,13 @@ verifier_gate() {
             vg_finish "cost_accounting_failed" "the evaluator invocation could not be accounted for (the ledger refused the cost debit) — refusing to judge a run whose caps cannot be enforced"
             return 1
         fi
-        stop_rc=0
-        ca_stop "$apid" "$stop_sec" || stop_rc=$?
-        [[ $stop_rc -eq 0 ]] && VG_APP_PID=""
-
-        # 9. Checkout integrity AFTER — before ANY verdict is honoured.
-        vg_finish || return 1
-        if [[ $stop_rc -ne 0 ]]; then
-            vg_finish "conformance_gate" "the application process group survived TERM and KILL — refusing to land with a stray process holding the gate's resources"
-            return 1
-        fi
+        # The app is NOT stopped here since C3: it is shared, and the
+        # visual consumer runs next against the SAME instance. The single
+        # stop happens after the last consumer; this is only the
+        # integrity CHECKPOINT after arbitrary execution, which
+        # deliberately leaves the app alive (failure delegates to
+        # vg_finish, so a mutated checkout still tears everything down).
+        vg_checkpoint || return 1
 
         # 11. The verdict must be an EXACT identity multiset of the frozen
         #     criteria, produced by THIS invocation.
@@ -2329,30 +2643,12 @@ verifier_gate() {
         # malformed document proves nothing (round-10 finding 4 — an
         # object-valued `criteria`, boolean evidence, or extra fields
         # used to slip through as an empty mismatch).
+        # C3 T7: the shared identity validator — one implementation for
+        # both runtime verdicts, so conformance and visual identity
+        # semantics cannot drift (the visual call site passes its wider
+        # top-key set and verdict vocabulary).
         local mismatch
-        mismatch=$(jq -r --argjson want "$criteria" '
-            def bad_shape:
-              (type != "object")
-              or ((keys - ["criteria"]) | length > 0)
-              or (has("criteria") | not)
-              or (.criteria | type != "array")
-              or (.criteria | length == 0)
-              or ([.criteria[] | select(
-                     (type != "object")
-                     or ((keys - ["fr","statement_sha","criterion","verdict","evidence"]) | length > 0)
-                     or (["fr","statement_sha","criterion","verdict","evidence"] - keys | length > 0)
-                     or (.fr | type != "string") or (.statement_sha | type != "string")
-                     or (.criterion | type != "string")
-                     or ((.verdict != "pass") and (.verdict != "fail"))
-                     or (.evidence | type != "string") or ((.evidence | length) == 0))] | length > 0);
-            if bad_shape then
-              "the verdict document does not match the required closed shape (criteria: non-empty array of {fr, statement_sha, criterion, verdict: pass|fail, evidence: non-empty string}, no other fields)"
-            else
-              (.criteria | map({fr, statement_sha, criterion}) | sort) as $g
-              | ($want | sort) as $w
-              | if $w != $g then "the echoed criteria are not an exact match of the frozen set (missing, duplicated, altered, or invented entries)"
-                else "" end
-            end' "$resfile" 2>/dev/null || echo "the verdict could not be compared with the frozen criteria")
+        mismatch=$(vg_criteria_mismatch "$resfile" "$criteria" '["criteria"]' 'pass|fail')
         if [[ -n "$mismatch" ]]; then
             vg_finish "conformance_gate" "evaluator verdict rejected: $mismatch (see ${resfile#$PROJECT_DIR/})"
             return 1
@@ -2363,7 +2659,416 @@ verifier_gate() {
                                       detail:.verdict, evidence:.evidence} ]' <<< "$results")
     fi
 
-    # 12. Evidence: FR -> per-verifier results. An FR is green iff ALL of
+
+    # ── 10. VISUAL CONSUMER (#239 C3 T6) — the driver runs the harness
+    #    itself, in an isolated execution root created LATE and validated
+    #    at the point of use. T6 owns execution and evidence import; the
+    #    verdict READING is T7's, so this increment fails closed at the
+    #    end of the block rather than treating an unread artifact as
+    #    green. ──
+    if jq -e 'has("visual")' <<< "$FROZEN_CONTRACT" >/dev/null 2>&1; then
+        VG_ACTIVE_BLOCK="visual"
+        local vcmd vartifact vurl vtimeout
+        vcmd=$(jq -r '.visual.command // empty' <<< "$FROZEN_CONTRACT")
+        vartifact=$(jq -r '.visual.artifact // empty' <<< "$FROZEN_CONTRACT")
+        vurl=$(jq -r '.visual.url // empty' <<< "$FROZEN_CONTRACT")
+        vtimeout=$(jq -r '.visual.timeout_sec // empty' <<< "$FROZEN_CONTRACT")
+
+        # Blockless attended: the criteria are frozen (unskippable) but
+        # the command side is all-null — the config never carried
+        # verification.visual. The mirror of C2's provider_unavailable.
+        if [[ -z "$vcmd" ]]; then
+            vg_finish "visual_gate" "the frozen contract requires visual verification but carries NO harness command (an attended run started without verification.visual). The contract is frozen, so configuring one now cannot change this run: add verification.visual (and verification.app) and start a FRESH run."
+            return 1
+        fi
+
+        # a) The execution root — created NOW, after every other stretch
+        #    of arbitrary execution (deterministic verifiers, evaluator),
+        #    never earlier: a worktree created before them would stand
+        #    registered and discoverable while project code ran, and
+        #    could have its checked bundle replaced (plan decision 3/10).
+        prune_worktrees
+        VG_VIS_PRIV=$(mktemp -d 2>/dev/null) || {
+            vg_finish "visual_gate" "could not create the private request directory"
+            return 1
+        }
+        VG_VIS_PRIV_OWNED=1
+        # The mktemp path ITSELF is the execution root: `git worktree
+        # add` accepts an existing EMPTY directory (verified), so there
+        # is no separate parent to own — an earlier cut parked the
+        # worktree under a mktemp parent that no cleanup path knew
+        # about, orphaning one temp directory per visual run (and on
+        # add-failure too). No rmdir-then-add either: that would reopen
+        # the name-without-ownership collision window this repo's
+        # watchdog code already documents.
+        VG_WT_DIR=$(mktemp -d 2>/dev/null) || {
+            vg_finish "visual_gate" "could not create the visual execution root"
+            return 1
+        }
+        VG_WT_DIR_OWNED=1   # the driver owns the path from here, registered or not
+        if ! git -C "$PROJECT_DIR" worktree add --detach "$VG_WT_DIR" "$gate_head" >/dev/null 2>&1; then
+            vg_finish "visual_gate" "could not create the visual execution worktree at $gate_head"
+            return 1
+        fi
+        VG_WT_REGISTERED=1
+
+        # b) Point-of-use revalidation: the worktree IS the gate HEAD,
+        #    clean, and carries a REAL bundle. Bundle messages come from
+        #    the same helper admission uses (attended runs are never
+        #    admission-checked, so the requirement surfaces HERE), and
+        #    every component must RESOLVE inside the root — a tracked
+        #    symlink pointing at the canonical checkout would defeat the
+        #    isolation while every path in the message still looked local.
+        local _wt_head
+        _wt_head=$(git -C "$VG_WT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+        if [[ "$_wt_head" != "$gate_head" ]]; then
+            vg_finish "visual_gate" "the execution worktree is not at the gate HEAD ($_wt_head != $gate_head)"
+            return 1
+        fi
+        if [[ -n "$(git -C "$VG_WT_DIR" status --porcelain 2>/dev/null)" ]]; then
+            vg_finish "visual_gate" "the execution worktree is not clean at the point of use"
+            return 1
+        fi
+        local _bv _bundle_bad=""
+        while IFS= read -r _bv; do
+            [[ -z "$_bv" ]] && continue
+            _bundle_bad="$_bv"; break
+        done < <(vc_ui_bundle_violations "$VG_WT_DIR")
+        if [[ -n "$_bundle_bad" ]]; then
+            vg_finish "visual_gate" "the UI bundle is not real at the point of use: $_bundle_bad"
+            return 1
+        fi
+        local _comp
+        for _comp in DESIGN.md package.json; do
+            if ! cp_contained "$VG_WT_DIR" "$_comp" || [[ -L "$VG_WT_DIR/$_comp" || ! -f "$VG_WT_DIR/$_comp" ]]; then
+                vg_finish "visual_gate" "$_comp does not resolve to a regular file inside the execution root (a tracked symlink out of the tree would defeat the isolation)"
+                return 1
+            fi
+        done
+        if ! cp_contained "$VG_WT_DIR" "harness" || [[ -L "$VG_WT_DIR/harness" || ! -d "$VG_WT_DIR/harness" ]]; then
+            vg_finish "visual_gate" "harness/ does not resolve to a real directory inside the execution root"
+            return 1
+        fi
+
+        # c) The request document — authored at the point of use (it
+        #    names a path inside the worktree, so it cannot honestly be
+        #    written before the worktree exists) and published through a
+        #    checked rename. It lives in the PRIVATE dir: the ledger is
+        #    the DESTINATION of evidence, never an input the harness sees.
+        local vreq="$VG_VIS_PRIV/request.json" _reqtmp
+        _reqtmp=$(mktemp "$VG_VIS_PRIV/request.XXXXXX" 2>/dev/null) || {
+            vg_finish "visual_gate" "could not create the visual request document"
+            return 1
+        }
+        if ! jq -n --argjson criteria "$(jq -c '.visual.criteria' <<< "$FROZEN_CONTRACT")" \
+              --arg url "$vurl" --arg design "$VG_WT_DIR/DESIGN.md" \
+              '{criteria: $criteria, url: $url, designMdPath: $design}' > "$_reqtmp" 2>/dev/null \
+           || [[ ! -s "$_reqtmp" ]] || ! mv "$_reqtmp" "$vreq"; then
+            rm -f "$_reqtmp" 2>/dev/null || true
+            vg_finish "visual_gate" "could not publish the visual request — the harness cannot be given THIS run's frozen criteria"
+            return 1
+        fi
+
+        # d) Artifact freshness: contained BEFORE deletion, CHECKED
+        #    deletion (cp_collect's discipline — an unchecked rm in an
+        #    unwritable directory lets a stale verdict outlive the run).
+        if ! cp_contained "$VG_WT_DIR" "$vartifact"; then
+            vg_finish "visual_gate" "the frozen artifact path '$vartifact' escapes the execution root"
+            return 1
+        fi
+        rm -f "$VG_WT_DIR/$vartifact" 2>/dev/null || true
+        if [[ -e "$VG_WT_DIR/$vartifact" ]]; then
+            vg_finish "visual_gate" "could not clear the previous visual artifact — freshness cannot be established"
+            return 1
+        fi
+
+        # e) Run. Bounded, isolated, transcript captured; the cost
+        #    channel is NOT exported (decision 8 — T8 debits the
+        #    unmetered path immediately after this call).
+        local vdir="$LEDGER_DIR/visual" vcap
+        mkdir -p "$vdir" 2>/dev/null || {
+            vg_finish "visual_gate" "could not create the visual ledger directory"
+            return 1
+        }
+        vcap="$VG_VIS_PRIV/harness-stdout.log"
+        local vrc=0
+        vg_run_isolated "$vtimeout" "$VG_WT_DIR" "$vcmd" "$vcap" "$vurl" "$vreq" || vrc=$?
+
+        # ── COST DEBIT (#239 C3 T8) — the FIRST action after the
+        #    harness returns, BEFORE containment/freshness/import: an
+        #    invocation that happened must be accounted for even when
+        #    its result is rejected, and a debit placed after those
+        #    checks would silently un-meter every failing run — a
+        #    harness could then escape charging by destroying or forging
+        #    its own evidence. ALWAYS the unmetered path: the cost
+        #    channel is never handed to the project's own mutable
+        #    harness (vg_run_isolated unsets CCT_REVIEW_COST_FILE), so
+        #    there is no measurement to trust — the conservative
+        #    estimate applies when estimates are active, nothing when
+        #    they are not, and the ledger write is CHECKED either way.
+        if ! debit_invocation_cost "" "visual harness"; then
+            vg_finish "cost_accounting_failed" "the visual invocation could not be accounted for (the ledger refused the cost debit) — refusing to judge a run whose caps cannot be enforced"
+            return 1
+        fi
+
+        # f) Containment AGAIN (the command is arbitrary project code and
+        #    can have replaced a safe ancestor with a symlink since (d) —
+        #    checking once is a TOCTOU hole), then regular-file freshness.
+        if ! cp_contained "$VG_WT_DIR" "$vartifact"; then
+            vg_finish "visual_gate" "the artifact path escaped the execution root DURING the harness run"
+            return 1
+        fi
+
+        # g) Regular-file freshness FIRST (the plan's step-10 order):
+        #    with a TRACKED artifact path, the gate's own checked-delete
+        #    shows as a tracked deletion — running the integrity pair
+        #    first would blame the harness for the gate's own rm. A
+        #    produce-nothing run must fail as "produced no artifact",
+        #    not as a tampered bundle.
+        if [[ ! -f "$VG_WT_DIR/$vartifact" || -L "$VG_WT_DIR/$vartifact" ]]; then
+            vg_finish "visual_gate" "the harness produced no artifact at '$vartifact' (exit $vrc — a stale artifact never counts as this run's evidence; see visual/harness.log)"
+            return 1
+        fi
+
+        # h) Post-run integrity of the EXECUTION ROOT (SC-25). BOTH
+        #    checks, and the HEAD equality is not redundant: HEAD inside
+        #    a detached worktree is mutable by the harness — edit a
+        #    tracked file, commit it, and `diff --quiet HEAD --` is clean
+        #    against the harness's OWN commit. C2's vg_integrity_after
+        #    separates the same two checks.
+        local _wt_head_now
+        _wt_head_now=$(git -C "$VG_WT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+        if [[ "$_wt_head_now" != "$gate_head" ]]; then
+            vg_finish "visual_gate" "the execution root's HEAD moved during the harness run ($_wt_head_now != $gate_head) — a committed tracked change cannot hide behind a clean diff"
+            return 1
+        fi
+        if ! git -C "$VG_WT_DIR" diff --quiet HEAD -- 2>/dev/null; then
+            vg_finish "visual_gate" "a TRACKED file in the execution root changed during the harness run — refusing to read evidence from a tampered bundle (untracked harness outputs are expected; tracked changes are not)"
+            return 1
+        fi
+
+        # h) Import — a PUBLICATION, not a copy: destination proven
+        #    absent, temp file in the same directory, validated, renamed.
+        #    A failed import must never leave an earlier run's PASS in
+        #    place to be read as this run's evidence (SC-15).
+        local vledger_art="$vdir/critique-feedback.json" vledger_log="$vdir/harness.log"
+        rm -f "$vledger_art" "$vledger_log" 2>/dev/null || true
+        if [[ -e "$vledger_art" || -e "$vledger_log" ]]; then
+            vg_finish "visual_gate" "could not clear the previous visual evidence from the ledger — a stale verdict must not survive into this run"
+            return 1
+        fi
+        local _imp
+        if [[ -f "$vcap" ]]; then
+            _imp=$(mktemp "$vdir/log.XXXXXX" 2>/dev/null) && cp "$vcap" "$_imp" 2>/dev/null && mv "$_imp" "$vledger_log" || {
+                rm -f "$_imp" 2>/dev/null || true
+                vg_finish "visual_gate" "could not import the harness transcript into the ledger"
+                return 1
+            }
+        fi
+        _imp=$(mktemp "$vdir/art.XXXXXX" 2>/dev/null) || {
+            vg_finish "visual_gate" "could not create the evidence import file"
+            return 1
+        }
+        if ! cp "$VG_WT_DIR/$vartifact" "$_imp" 2>/dev/null \
+           || ! jq -e . "$_imp" >/dev/null 2>&1 \
+           || ! mv "$_imp" "$vledger_art"; then
+            rm -f "$_imp" 2>/dev/null || true
+            vg_finish "visual_gate" "the harness artifact could not be imported as valid JSON (exit $vrc; see visual/harness.log) — an unparseable verdict is a failure, not a verdict"
+            return 1
+        fi
+
+        # i) Release the execution root — evidence is read from the
+        #    LEDGER copy only, so nothing below needs the worktree.
+        if ! vg_wt_cleanup; then
+            vg_finish "visual_gate" "the visual execution root could not be released after evidence import"
+            return 1
+        fi
+
+        # j) THE VERDICT (#239 C3 T7) — over the LEDGER COPY only; the
+        #    worktree is already gone. The reading follows plan decision
+        #    6's NORMATIVE order: shape -> mode/skipped normalization ->
+        #    cross-field consistency -> passed/verdict agreement -> skip
+        #    legality -> skip_is_failure policy -> identity -> verdicts.
+        #    The order is load-bearing: a degraded artifact under the
+        #    default policy must fail as a POLICY failure, not surface
+        #    first as an identity or verdict problem.
+
+        # 1. Closed shape, criteria items included. mode/skipped are
+        #    optional IN THE SHAPE only so a transitional per-criterion
+        #    artifact predating them reaches the degraded default at
+        #    rule 2 — NOT compatibility with the pre-C3 harness, whose
+        #    artifact carries no criteria at all and is refused here.
+        local _vshape
+        _vshape=$(jq -r '
+            if type != "object" then "the artifact is not a JSON object"
+            elif ([keys[] | select(. != "passed" and . != "mode" and . != "skipped" and . != "source"
+                                   and . != "critiqueSummary" and . != "actionableFixes" and . != "criteria")]
+                  | length) > 0 then
+              "unknown top-level keys: " + ([keys[] | select(. != "passed" and . != "mode" and . != "skipped"
+                and . != "source" and . != "critiqueSummary" and . != "actionableFixes" and . != "criteria")] | join(", "))
+            elif (has("passed") | not) or (.passed | type) != "boolean" then "passed must be a boolean"
+            elif (has("source") | not) or (.source | type) != "string" then "source must be a string"
+            elif (has("critiqueSummary") | not) or (.critiqueSummary | type) != "string" then "critiqueSummary must be a string"
+            elif (has("actionableFixes") | not) or (.actionableFixes | type) != "array"
+                 or (.actionableFixes | map(type) | any(. != "string")) then "actionableFixes must be an array of strings"
+            elif has("mode") and (.mode != "full" and .mode != "degraded") then "mode must be \"full\" or \"degraded\""
+            elif has("skipped") and ((.skipped | type) != "array" or (.skipped | map(type) | any(. != "string"))) then "skipped must be an array of strings"
+            elif (has("criteria") | not) or (.criteria | type) != "array" or (.criteria | length) == 0 then
+              "criteria must be a non-empty array answering every frozen criterion (the pre-C3 global-only artifact is refused here)"
+            elif ([.criteria[] | select(
+                     (type != "object")
+                     or ((keys - ["fr","statement_sha","criterion","verdict","evidence"]) | length > 0)
+                     or ((["fr","statement_sha","criterion","verdict","evidence"] - keys) | length > 0)
+                     or (.fr | type != "string") or (.statement_sha | type != "string")
+                     or (.criterion | type != "string")
+                     or ((.verdict != "pass") and (.verdict != "fail") and (.verdict != "skip") and (.verdict != "unreached"))
+                     or (.evidence | type != "string") or ((.evidence | length) == 0))] | length) > 0 then
+              "criteria entries must be closed {fr, statement_sha, criterion, verdict: pass|fail|skip|unreached, evidence: non-empty string}"
+            else empty end' "$vledger_art" 2>/dev/null || echo "the artifact could not be read")
+        if [[ -n "$_vshape" ]]; then
+            vg_finish "visual_gate" "the visual artifact is malformed — $_vshape (exit $vrc; see visual/harness.log). A malformed artifact is a failure, not a verdict."
+            return 1
+        fi
+
+        # 2. Effective mode + skipped normalization: absent mode =>
+        #    degraded (an older harness cannot be assumed to have
+        #    verified anything), absent skipped => [].
+        local _vmode _vskipped _vmode_declared
+        _vmode_declared=$(jq -r 'has("mode")' "$vledger_art")
+        _vmode=$(jq -r '.mode // "degraded"' "$vledger_art")
+        _vskipped=$(jq -c '.skipped // []' "$vledger_art")
+
+        # 3. Cross-field consistency, BOTH directions: a full run may
+        #    not admit skipped checks, and a declared-degraded run must
+        #    name what degraded (the failure message has to be able to
+        #    say what was skipped). The asymmetry is deliberate: an
+        #    artifact with NO mode at all is defaulted, not rejected.
+        if [[ "$_vmode" == "full" && "$(jq 'length' <<< "$_vskipped")" -gt 0 ]]; then
+            vg_finish "visual_gate" "the artifact claims mode \"full\" while admitting skipped checks ($(jq -r 'join(", ")' <<< "$_vskipped")) — a full pass may not skip"
+            return 1
+        fi
+        if [[ "$_vmode_declared" == "true" && "$_vmode" == "degraded" && "$(jq 'length' <<< "$_vskipped")" -eq 0 ]]; then
+            vg_finish "visual_gate" "the artifact declares mode \"degraded\" without naming what was skipped — a harness that declares degradation must say what degraded"
+            return 1
+        fi
+
+        # 4. passed must EQUAL "every criterion verdict is pass" — the
+        #    summary is pinned to the detail, so the critic's boolean
+        #    cannot overrule its own per-criterion answers.
+        local _vagree
+        _vagree=$(jq -r '(.passed == ([.criteria[].verdict] | all(. == "pass"))) | tostring' "$vledger_art")
+        if [[ "$_vagree" != "true" ]]; then
+            vg_finish "visual_gate" "the artifact's passed flag contradicts its criterion verdicts — the summary must equal \"every criterion is pass\""
+            return 1
+        fi
+
+        # 5. skip legality: only a degraded run may answer skip.
+        if [[ "$_vmode" == "full" ]] && jq -e '[.criteria[] | select(.verdict == "skip")] | length > 0' "$vledger_art" >/dev/null 2>&1; then
+            vg_finish "visual_gate" "a \"skip\" verdict is only legal when the run is degraded — a full run answered criteria it claims not to have skipped"
+            return 1
+        fi
+
+        # 6. skip_is_failure POLICY. The waiver predicate is exactly
+        #    (effective mode != full) AND (frozen policy == false): a
+        #    fully-run invocation under a false policy is an ORDINARY
+        #    verified run, not a waived one.
+        local _vskip_pol _vwaived=false
+        _vskip_pol=$(jq -r '.visual.skip_is_failure' <<< "$FROZEN_CONTRACT")
+        if [[ "$_vmode" != "full" ]]; then
+            if [[ "$_vskip_pol" == "true" ]]; then
+                local _vwhat
+                if [[ "$_vmode_declared" == "true" ]]; then
+                    _vwhat="skipped: $(jq -r 'join(", ")' <<< "$_vskipped")"
+                else
+                    _vwhat="the harness did not declare what it ran (no mode field)"
+                fi
+                vg_finish "visual_gate" "the visual pass did not fully run ($_vwhat) and skip_is_failure is true (the frozen default) — a skipped visual check is a failure, never a pass by absence. Run \`npm run harness:init\` to enable the full visual review, or freeze skip_is_failure: false to waive degraded runs explicitly."
+                return 1
+            fi
+            _vwaived=true
+        fi
+
+        # 7. EXACT identity multiset of the frozen criteria — the shared
+        #    validator C2's call site now also uses.
+        local _vmis
+        _vmis=$(vg_criteria_mismatch "$vledger_art" "$(jq -c '.visual.criteria' <<< "$FROZEN_CONTRACT")" \
+            '["passed","mode","skipped","source","critiqueSummary","actionableFixes","criteria"]' \
+            'pass|fail|skip|unreached') || true
+        if [[ -n "$_vmis" ]]; then
+            vg_finish "visual_gate" "visual verdict rejected: $_vmis (see visual/critique-feedback.json)"
+            return 1
+        fi
+
+        # 8. Per-criterion verdicts join the evidence. skip is green
+        #    ONLY under the waiver; unreached is ALWAYS red — it is how
+        #    the harness answers criteria it aborted before judging, and
+        #    no policy turns an abort into verification. A waived
+        #    invocation marks EVERY visual entry waived, so a pass
+        #    criterion from a degraded run is never indistinguishable
+        #    from full verification.
+        # FR-7: the consolidated evidence graph carries the critic's
+        # summary and fixes WITH each visual entry — evidence that only
+        # survives in the failure message vanishes from every landed run.
+        results=$(jq --slurpfile r "$vledger_art" --argjson waived "$([[ "$_vwaived" == "true" ]] && echo true || echo false)" '
+            ($r[0].critiqueSummary) as $sum | ($r[0].actionableFixes | join("; ")) as $fx |
+            . + [ $r[0].criteria[] | {fr, kind:"visual", verifier:.criterion,
+                    statement_sha,
+                    green:(.verdict == "pass" or (.verdict == "skip" and $waived)),
+                    detail:.verdict,
+                    evidence:(.evidence + "; critique: " + $sum + (if $fx != "" then "; fixes: " + $fx else "" end))}
+                  + (if $waived then {waived: true} else {} end) ]' <<< "$results")
+        # The critic's summary and fixes travel to the step-13 failing
+        # message (SC-6): a park must tell the operator what to fix.
+        VG_VIS_SUMMARY=$(jq -r '.critiqueSummary' "$vledger_art")
+        VG_VIS_FIXES=$(jq -r '[.actionableFixes[]] | join("; ")' "$vledger_art")
+
+        # A NON-ZERO invocation is a visual-gate FAILURE (FR-5), read or
+        # not: the full ordered reading ran first so this park carries
+        # the critic's words, but no artifact content — however green —
+        # converts a failed process into a landing. Without this, a
+        # harness that writes an all-pass artifact and then exits 1 (or
+        # times out after writing) would land on the artifact alone.
+        if [[ "$vrc" -ne 0 ]]; then
+            # SC-6: the park NAMES the affected FRs — the invocation
+            # failure touches every frozen visual criterion, whatever
+            # the critic said about each.
+            local _vfrs
+            _vfrs=$(jq -r '[.criteria[].fr] | unique | join(", ")' "$vledger_art")
+            vg_finish "visual_gate" "the visual harness exited $vrc for ${_vfrs:-the frozen visual criteria} — a non-zero exit (or timeout) is a visual-gate failure even when the artifact reports a pass${VG_VIS_SUMMARY:+ — critic: $VG_VIS_SUMMARY}${VG_VIS_FIXES:+ (fixes: $VG_VIS_FIXES)} (see visual/harness.log)"
+            return 1
+        fi
+        if [[ "$_vwaived" == "true" ]]; then
+            VG_VIS_WAIVER=$(jq -nc --arg m "$_vmode" --argjson sk "$_vskipped" \
+                '{mode: $m, skipped: $sk, waived_by_policy: true}')
+            journal "visual_waiver" "degraded visual invocation ACCEPTED by frozen skip_is_failure:false (mode: $_vmode, skipped: $(jq -r 'join(", ") | if . == "" then "none named" else . end' <<< "$_vskipped")) — waived, not verified"
+        fi
+    fi
+
+    # ── 11. SHARED APPLICATION LIFECYCLE DOWN — once, after the LAST
+    #    consumer. A teardown that cannot be proven is itself a gate
+    #    failure, never a swallowed error; vg_finish's EXIT-path cleanup
+    #    is the retry, and clearing VG_APP_PID only on success keeps the
+    #    two from double-stopping. ──
+    if [[ -n "${VG_APP_PID:-}" ]]; then
+        local _stop_rc=0
+        ca_stop "$VG_APP_PID" "$stop_sec" || _stop_rc=$?
+        [[ $_stop_rc -eq 0 ]] && VG_APP_PID=""
+        if [[ $_stop_rc -ne 0 ]]; then
+            vg_finish "${VG_ACTIVE_BLOCK:-conformance}_gate" "the application process group survived TERM and KILL — refusing to land with a stray process holding the gate's resources"
+            return 1
+        fi
+    fi
+
+    # ── 12. Checkout integrity AFTER, for EVERY path. Until C3 this was
+    #    implicit: the app lived inside the conformance block, whose
+    #    mid-sequence check always ran after it. Hoisting the lifecycle
+    #    left a VISUAL-ONLY (or conformance-less) run with no integrity
+    #    check between the app running and the verdict — an app that
+    #    dirtied the checkout would have landed. The epilogue is now
+    #    unconditional. ──
+    vg_finish || return 1
+
+    # 13. Evidence: FR -> per-verifier results. An FR is green iff ALL of
     #     its verifiers are green.
     # Written to a temp file, validated, then renamed into place. An
     # unchecked write could fail and leave an OLDER, green results file
@@ -2374,12 +3079,13 @@ verifier_gate() {
         vg_finish "conformance_gate" "could not create the evidence file — refusing to land without recorded verification results (FR-7)"
         return 1
     }
-    if ! jq --argjson v "$results" -n '
+    if ! jq --argjson v "$results" --argjson waiver "${VG_VIS_WAIVER:-null}" -n '
         {schema_version: 1,
          frs: ([$v[] | .fr] | unique | map(. as $fr | {key: $fr, value: {
                  green: ([$v[] | select(.fr == $fr) | .green] | all),
                  verifiers: [$v[] | select(.fr == $fr)]}}) | from_entries),
-         green: ([$v[] | .green] | all)}' > "$restmp" \
+         green: ([$v[] | .green] | all)}
+        + (if $waiver != null then {visual: $waiver} else {} end)' > "$restmp" \
        || ! jq -e '.frs | type == "object"' "$restmp" >/dev/null 2>&1 \
        || ! mv "$restmp" "$resout"; then
         rm -f "$restmp" 2>/dev/null || true
@@ -2392,7 +3098,24 @@ verifier_gate() {
                       | .key + " (" + ([.value.verifiers[] | select(.green | not) | .verifier] | join("; ")) + ")"] | join(", ")' \
               "$resout")
     if [[ -n "$failing" ]]; then
-        vg_finish "conformance_gate" "verification failed: $failing (see .cct/auto-build/$FEATURE_ID/verification-results.json)"
+        # The label names the kind that FAILED, not the last block to
+        # run. ANY failing visual verifier makes this a visual_gate
+        # failure — a mixed failure is still a visual failure, and the
+        # disposition must agree with the visual critique it attaches
+        # (review round: an all-visual predicate mislabelled mixed
+        # failures conformance_gate while carrying visual evidence).
+        # Failures with no visual verifier keep C2's conformance_gate.
+        # ONE predicate drives both the label and the critique text, so
+        # the two cannot diverge.
+        local _fail_reason="conformance_gate" _vfx=""
+        if jq -e '[.frs | to_entries[] | .value.verifiers[] | select((.green | not) and .kind == "visual")] | length > 0' "$resout" >/dev/null 2>&1; then
+            _fail_reason="visual_gate"
+            # SC-6: a failing visual criterion must tell the operator
+            # what to fix — the critic's own words, not just the FR list.
+            [[ -n "${VG_VIS_SUMMARY:-}" ]] && _vfx=" — critic: ${VG_VIS_SUMMARY}"
+            [[ -n "${VG_VIS_FIXES:-}" ]] && _vfx="$_vfx (fixes: ${VG_VIS_FIXES})"
+        fi
+        vg_finish "$_fail_reason" "verification failed: $failing${_vfx} (see .cct/auto-build/$FEATURE_ID/verification-results.json)"
         return 1
     fi
     journal "verifier_gate" "all mapped verifiers green ($(jq -r '.frs | length' "$resout") FR(s))"

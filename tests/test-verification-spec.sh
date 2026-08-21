@@ -84,11 +84,24 @@ CFG
 }
 
 # Generate + finalize with real verifiers (the fixture's own test script).
+# Resolve the generator's visual SCAFFOLD the way a non-UI author would:
+# remove it. Every finalize path needs this — an unresolved placeholder
+# is inadmissible by design (that is what makes the scaffold safe).
+drop_visual_scaffold() {  # <verification.yaml>
+    python3 - "$1" << 'PYEOF'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'    - kind: visual\n      criterion: "TODO[^"]*"\n', '', s)
+open(p, 'w').write(s)
+PYEOF
+}
+
 finalize() {
     local dir="$1" f="$1/specs/demo-feat/verification.yaml"
     CCT_SPECS_DIR="$dir/specs" bash "$GEN" demo-feat >/dev/null
     sedi 's/^status: draft/status: finalized/' "$f"
     sedi 's|test: "TODO.*|test: "project-test.sh"|' "$f"
+    drop_visual_scaffold "$f"
 }
 
 # run_admission <fixture-dir> — captures OUTPUT and RC
@@ -125,7 +138,11 @@ assert_exit "finalized fixture is admitted (exit 0)" 0 "$RC"
 assert_contains "coverage check passes" "$OUTPUT" "coverage — every FR-N mapped"
 assert_contains "sha check passes" "$OUTPUT" "recomputes clean"
 assert_contains "test.command proven on current ref" "$OUTPUT" "test.command passes"
-assert_eq "all four C-owned checks surface as DEFER" "4" "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
+# C3 T3 retires the UI-in-scope DEFER (it is now an enforced check);
+# the other three remain unowned.
+assert_eq "the three remaining C-owned checks surface as DEFER" "3" "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
+assert_eq "the UI-in-scope DEFER line is gone (T3 enforces it)" "0" \
+    "$(echo "$OUTPUT" | grep -c 'UI-in-scope DESIGN.md placeholder check' || true)"
 rm -rf "$D"
 
 # ── Admission: reject matrix (one mutation per case) ──
@@ -138,6 +155,7 @@ rm -rf "$D"
 D=$(mk_fixture)
 CCT_SPECS_DIR="$D/specs" bash "$GEN" demo-feat >/dev/null
 sedi 's|test: "TODO.*|test: "project-test.sh"|' "$D/specs/demo-feat/verification.yaml"
+drop_visual_scaffold "$D/specs/demo-feat/verification.yaml"
 run_admission "$D"
 assert_exit "raw draft refused" 1 "$RC"
 assert_contains "draft refusal names finalization" "$OUTPUT" "requires 'finalized'"
@@ -181,9 +199,17 @@ rm -rf "$D"
 D=$(mk_fixture)
 CCT_SPECS_DIR="$D/specs" bash "$GEN" demo-feat >/dev/null
 sedi 's/^status: draft/status: finalized/' "$D/specs/demo-feat/verification.yaml"
+# ISOLATION (C3 T1): the generator now emits a visual scaffold too, so
+# resolve THAT one and leave the deterministic TODO standing. Without
+# this, deleting the deterministic placeholder arm would still refuse on
+# the visual scaffold and the regression would stay green — the arm has
+# to be pinned by a failure only IT can produce. The complementary C3
+# case does the mirror image (deterministic resolved, scaffold left).
+drop_visual_scaffold "$D/specs/demo-feat/verification.yaml"
 run_admission "$D"
-assert_exit "placeholder verifier refused" 1 "$RC"
-assert_contains "placeholder failure says so" "$OUTPUT" "placeholder"
+assert_exit "placeholder deterministic verifier refused" 1 "$RC"
+assert_contains "deterministic placeholder failure names the verifier" \
+    "$OUTPUT" "deterministic verifier is a placeholder"
 rm -rf "$D"
 
 D=$(mk_fixture); finalize "$D"
@@ -215,11 +241,13 @@ add_conf_block() {  # <dir> <evaluator>
 import json, sys
 p = sys.argv[1]
 cfg = json.load(open(p))
-cfg.setdefault("verification", {})["conformance"] = {
-    "evaluator": sys.argv[2], "timeout_sec": 600,
-    "app": {"command": "sleep 5",
+# C3 (#239 FR-10): the app lives at verification.app — one lifecycle
+# shared by the evaluator and the visual harness.
+v = cfg.setdefault("verification", {})
+v["conformance"] = {"evaluator": sys.argv[2], "timeout_sec": 600}
+v["app"] = {"command": "sleep 5",
             "ready": {"url": "http://127.0.0.1:9/x", "timeout_sec": 5},
-            "stop_timeout_sec": 5}}
+            "stop_timeout_sec": 5}
 json.dump(cfg, open(p, "w"))
 PYEOF
 }
@@ -518,7 +546,7 @@ rm "$D/specs/demo-feat/spec.md"
 run_admission "$D"
 assert_exit "missing spec.md is a named failure (exit 1, not a crash)" 1 "$RC"
 assert_contains "missing spec.md named" "$OUTPUT" "spec.md missing"
-assert_eq "DEFER block printed on the spec.md refusal" "4" "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
+assert_eq "DEFER block printed on the spec.md refusal" "3" "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
 rm -rf "$D"
 
 D=$(mk_fixture); finalize "$D"
@@ -575,7 +603,7 @@ rm -rf "$D"
 # DEFER visibility on the earliest refusal (missing artifact).
 D=$(mk_fixture)
 run_admission "$D"
-assert_eq "DEFER block printed even on the earliest refusal" "4" \
+assert_eq "DEFER block printed even on the earliest refusal" "3" \
     "$(echo "$OUTPUT" | grep -c '\[DEFER\]')"
 rm -rf "$D"
 
@@ -584,11 +612,247 @@ RC=0; OUT=$(bash "$VAL" --unattended 2>&1) || RC=$?
 assert_exit "--unattended without --feature-id is a usage error" 1 "$RC"
 assert_contains "usage names the requirement" "$OUT" "requires --feature-id"
 
+echo ""
+echo "=== C3 (#239) T1: visual as a verifier kind ==="
+# A visual mapping is what "UI is in scope" MEANS (plan decision 1/2).
+# T1 only makes the kind real: schema, parser capture, draft-generator
+# documentation, and the admission VER arm. The UI-bundle requirement
+# that keys on this mapping arrives in T3, so a visual mapping admits
+# here without one — asserted so T3's change is visible as a change.
+mk_visual_fixture() {  # <criterion> -> dir
+    local dir; dir=$(mk_fixture); finalize "$dir" >/dev/null
+    python3 - "$dir/specs/demo-feat/verification.yaml" "$1" << 'PYEOF'
+import sys
+p, crit = sys.argv[1], sys.argv[2]
+s = open(p).read()
+s = s.replace('    - kind: deterministic\n      test: "project-test.sh"',
+              '    - kind: visual\n      criterion: "%s"' % crit, 1)
+open(p, 'w').write(s)
+PYEOF
+    echo "$dir"
+}
+
+# add_ui_bundle <dir> [--no-design|--placeholder-design|--no-harness|--no-script|--no-visual-cfg|--no-app-cfg|--no-url]
+# The #190 §11 bundle a UI-in-scope run must carry: DESIGN.md without
+# placeholders, harness/, a root copilot:review script, plus the C3
+# config (verification.visual with its url, and the shared app). Each
+# flag omits exactly ONE piece, so every refusal is provoked in
+# isolation (SC-1).
+add_ui_bundle() {
+    local dir="$1" omit="${2:-}"
+    [[ "$omit" == "--no-design" ]] || {
+        if [[ "$omit" == "--placeholder-design" ]]; then
+            printf '# Design\n\nAccent: ← REPLACE with the product accent\n' > "$dir/DESIGN.md"
+        else
+            printf '# Design\n\nAccent: #0b5cff. Empty states carry one primary CTA.\n' > "$dir/DESIGN.md"
+        fi
+    }
+    [[ "$omit" == "--no-harness" ]] || mkdir -p "$dir/harness"
+    if [[ "$omit" == "--no-script" ]]; then
+        echo '{"scripts":{"build":"true"}}' > "$dir/package.json"
+    else
+        echo '{"scripts":{"copilot:review":"tsx harness/src/runner.ts"}}' > "$dir/package.json"
+    fi
+    python3 - "$dir/specs/demo-feat/automation.json" "$omit" << 'PYEOF'
+import json, sys
+p, omit = sys.argv[1], sys.argv[2]
+cfg = json.load(open(p)); v = cfg.setdefault("verification", {})
+if omit != "--no-app-cfg":
+    v["app"] = {"command": "npm start",
+                "ready": {"url": "http://127.0.0.1:3000/health", "timeout_sec": 30},
+                "stop_timeout_sec": 10}
+if omit != "--no-visual-cfg":
+    vis = {"command": "npm ci && npm run copilot:review",
+           "artifact": "tmp/ui-review/critique-feedback.json",
+           "url": "http://127.0.0.1:3000/", "timeout_sec": 600}
+    if omit == "--no-url":
+        del vis["url"]
+    v["visual"] = vis
+json.dump(cfg, open(p, "w"))
+PYEOF
+}
+
+D=$(mk_visual_fixture "The empty state renders a single primary CTA.")
+add_ui_bundle "$D"
+run_admission "$D"
+assert_exit "visual verifier kind is accepted (with a real UI bundle)" 0 "$RC"
+assert_contains "visual verifier counts as executable-now" "$OUTPUT" "every verifier resolves to something executable"
+rm -rf "$D"
+
+D=$(mk_visual_fixture "TODO — write the visual criterion")
+run_admission "$D"
+assert_exit "placeholder visual criterion refused" 1 "$RC"
+assert_contains "placeholder refusal names the visual criterion" "$OUTPUT" "visual criterion is a placeholder"
+rm -rf "$D"
+
+# An unknown kind still refuses, and the message now offers all three.
+D=$(mk_fixture); finalize "$D" >/dev/null
+sedi 's/    - kind: deterministic/    - kind: vizual/' "$D/specs/demo-feat/verification.yaml"
+run_admission "$D"
+assert_exit "unknown verifier kind still refused" 1 "$RC"
+assert_contains "unknown-kind message lists visual" "$OUTPUT" "deterministic|runtime_conformance|visual"
+rm -rf "$D"
+
+# ── SC-1: the UI bundle is proven real, and the requirement is DERIVED ──
+# Each case omits exactly ONE piece, so every refusal is provoked in
+# isolation rather than by a fixture that is broken several ways at once.
+# --no-url and --no-app-cfg are enforced by the CONFIG gate (T2), not by
+# a second copy of the rule in 7c — but SC-1 requires a NAMED refusal per
+# missing piece, so admission propagates the validator's own diagnostics
+# instead of collapsing them to "run it directly". Each case therefore
+# asserts the discriminating text, not merely a non-zero exit: several
+# layers can reject the same input, and exit-code-only coverage stays
+# green when the intended enforcement path disappears.
+for case in "--no-design:DESIGN.md is missing" \
+            "--placeholder-design:unfilled '← REPLACE' / '← UPDATE' placeholders" \
+            "--no-harness:harness/ is missing" \
+            "--no-script:no root 'copilot:review' script" \
+            "--no-visual-cfg:verification.visual is missing from automation.json" \
+            "--no-url:verification.visual.url is required" \
+            "--no-app-cfg:verification.app is required when verification.visual is present"; do
+    flag="${case%%:*}"; want="${case#*:}"
+    D=$(mk_visual_fixture "The empty state renders a single primary CTA.")
+    add_ui_bundle "$D" "$flag"
+    run_admission "$D"
+    assert_exit "UI in scope, $flag: refused" 1 "$RC"
+    assert_contains "UI in scope, $flag: names the missing piece" "$OUTPUT" "$want"
+    rm -rf "$D"
+done
+
+# Propagation is what makes the two cases above readable at the admission
+# layer: the validator's exact wording reaches the operator running
+# admission, rather than a generic "run it directly".
+D=$(mk_visual_fixture "The empty state renders a single primary CTA.")
+add_ui_bundle "$D" --no-url
+run_admission "$D"
+assert_contains "admission relays the config validator's own wording" "$OUTPUT" \
+    "automation config: verification.visual.url is required"
+assert_contains "and still names the generic config-gate failure" "$OUTPUT" \
+    "automation.json fails validate-automation-config.sh"
+rm -rf "$D"
+
+# The third layer boundary: a visual mapping with NO visual block is
+# admission's own refusal, not the config gate's — that config is
+# perfectly valid on its own.
+D=$(mk_visual_fixture "The empty state renders a single primary CTA.")
+add_ui_bundle "$D" --no-visual-cfg
+RC=0; bash "$REPO_DIR/scripts/validate-automation-config.sh" "$D/specs/demo-feat/automation.json" >/dev/null 2>&1 || RC=$?
+assert_exit "a config with app but no visual block is VALID on its own" 0 "$RC"
+run_admission "$D"
+assert_contains "so admission is the layer that refuses it" "$OUTPUT" \
+    "UI is in scope (an FR maps kind: visual) but verification.visual is missing"
+rm -rf "$D"
+
+# The requirement is DERIVED from the mapping, not from prose or config:
+# a project with NO visual mapping needs none of the bundle, even when
+# its requirements talk about dashboards and screens.
+D=$(mk_fixture)
+sedi 's/- FR-1: demo test suite exits zero when invoked from the project root./- FR-1: the dashboard screen renders the empty state with a single primary CTA button./' "$D/specs/demo-feat/spec.md"
+finalize "$D"
+run_admission "$D"
+assert_exit "UI-sounding prose without a visual mapping still admits" 0 "$RC"
+assert_eq "no UI-bundle refusal is raised for it" "0" \
+    "$(echo "$OUTPUT" | grep -c 'UI is in scope' || true)"
+rm -rf "$D"
+
+# ...and a complete bundle passes with a single named check.
+D=$(mk_visual_fixture "The empty state renders a single primary CTA.")
+add_ui_bundle "$D"
+run_admission "$D"
+assert_contains "a complete UI bundle passes as one named check" "$OUTPUT" \
+    "UI is in scope — DESIGN.md, harness/, copilot:review, and the visual contract are all present"
+rm -rf "$D"
+
+# The canonical capture carries visual verifiers with their
+# statement_sha — ONE capture, three kinds. Asserted against the real
+# capture path, not a hand-built stub.
+# shellcheck source=/dev/null
+source "$REPO_DIR/scripts/lib/verification-common.sh"
+D=$(mk_visual_fixture "The empty state renders a single primary CTA.")
+VCAP=$(vc_capture_validated "$D/specs/demo-feat/spec.md" "$D/specs/demo-feat/verification.yaml" 2>&1)
+assert_exit "capture of a visual mapping succeeds" 0 $?
+assert_eq "capture carries exactly one visual verifier" "1" \
+    "$(jq '.visual | length' <<< "$VCAP")"
+assert_eq "the visual verifier keeps its FR" "FR-1" \
+    "$(jq -r '.visual[0].fr' <<< "$VCAP")"
+assert_eq "the visual verifier keeps its criterion" "The empty state renders a single primary CTA." \
+    "$(jq -r '.visual[0].criterion' <<< "$VCAP")"
+assert_eq "the visual verifier carries a statement_sha" "true" \
+    "$(jq -r '.visual[0].statement_sha | startswith("sha256:")' <<< "$VCAP")"
+assert_eq "visual verifiers do not leak into the conformance criteria" "0" \
+    "$(jq '.criteria | length' <<< "$VCAP")"
+assert_eq "the deterministic set is untouched by the new kind" "1" \
+    "$(jq '.verifiers | length' <<< "$VCAP")"
+rm -rf "$D"
+
+# A run with no visual mapping still captures an EMPTY visual list —
+# the key is always present, so consumers never distinguish "no visual"
+# from "old capture".
+D=$(mk_fixture); finalize "$D" >/dev/null
+VCAP=$(vc_capture_validated "$D/specs/demo-feat/spec.md" "$D/specs/demo-feat/verification.yaml")
+assert_eq "a capture with no visual mapping carries an empty visual list" "0" \
+    "$(jq '.visual | length' <<< "$VCAP")"
+assert_eq "the visual key is present even when empty" "array" \
+    "$(jq -r '.visual | type' <<< "$VCAP")"
+rm -rf "$D"
+
+# The draft generator emits a visual placeholder per FR (the approved T1
+# contract) and documents the kinds. The placeholder is an
+# author-decision SCAFFOLD: it does NOT assert the FR is UI-visible, and
+# because a TODO criterion is inadmissible, the author must resolve it
+# (write a criterion) or remove it before the artifact can be used —
+# which is what keeps scope an author decision rather than an inference.
+D=$(mk_fixture)
+CCT_SPECS_DIR="$D/specs" bash "$GEN" demo-feat >/dev/null
+Y="$D/specs/demo-feat/verification.yaml"
+assert_contains "generator documents the visual kind" \
+    "$(cat "$Y")" "visual (criterion: judged against the RENDERED app)"
+assert_contains "generator explains what a visual mapping means" \
+    "$(cat "$Y")" "puts UI IN SCOPE"
+assert_contains "generator calls the placeholder an author-decision scaffold" \
+    "$(cat "$Y")" "SCAFFOLD, not a claim that the FR is UI-visible"
+# Match the EMITTED item form (four-space "- kind:"), not the header
+# prose — the documentation lines also mention the kind.
+assert_eq "generator emits one visual placeholder per FR" "2" \
+    "$(grep -c '^    - kind: visual' "$Y")"
+assert_contains "the visual placeholder names the author's two options" \
+    "$(cat "$Y")" "otherwise REMOVE this verifier"
+assert_eq "the visual placeholder is a TODO (inadmissible until resolved)" "2" \
+    "$(grep -c '^      criterion: "TODO' "$Y")"
+cp "$Y" "$Y.before"
+CCT_SPECS_DIR="$D/specs" bash "$GEN" demo-feat --force >/dev/null
+assert_eq "generator stays deterministic with both placeholders" "" \
+    "$(diff "$Y.before" "$Y")"
+rm -rf "$D"
+
+# Finalizing WITHOUT resolving the scaffold is refused — the property
+# that makes emitting it safe. Resolve the deterministic placeholder
+# only, so the visual one is the sole remaining defect.
+D=$(mk_fixture)
+CCT_SPECS_DIR="$D/specs" bash "$GEN" demo-feat >/dev/null
+sedi 's/^status: draft/status: finalized/' "$D/specs/demo-feat/verification.yaml"
+sedi 's|test: "TODO.*|test: "project-test.sh"|' "$D/specs/demo-feat/verification.yaml"
+run_admission "$D"
+assert_exit "finalizing without resolving the visual scaffold is refused" 1 "$RC"
+assert_contains "the refusal names the visual criterion" "$OUTPUT" "visual criterion is a placeholder"
+rm -rf "$D"
+
+# Removing the scaffold is the other valid author decision, and it
+# leaves a clean non-UI artifact (this is what finalize() does).
+D=$(mk_fixture); finalize "$D"
+assert_eq "an author who removes the scaffold has no visual mapping left" "0" \
+    "$(grep -c '^    - kind: visual' "$D/specs/demo-feat/verification.yaml" || true)"
+run_admission "$D"
+assert_exit "the de-scaffolded artifact admits" 0 "$RC"
+rm -rf "$D"
+
 # The schema contract file itself is valid JSON and pins the B rules.
 assert_eq "schema file is valid JSON" "0" \
     "$(jq -e . "$REPO_DIR/shared/schemas/verification.schema.json" >/dev/null 2>&1; echo $?)"
 assert_contains "schema records draft/finalized statuses" \
     "$(jq -r '.properties.status.enum | join(",")' "$REPO_DIR/shared/schemas/verification.schema.json")" "draft,finalized"
+assert_eq "schema defines all three verifier kinds" "deterministic,runtime_conformance,visual" \
+    "$(jq -r '[.patternProperties["^FR-[0-9]+[a-z]?$"].properties.verifiers.items.oneOf[].properties.kind.const] | join(",")' "$REPO_DIR/shared/schemas/verification.schema.json")"
 
 echo ""
 echo "========================================="

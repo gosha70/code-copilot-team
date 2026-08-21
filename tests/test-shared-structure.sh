@@ -883,6 +883,10 @@ grep -Eq "test-auto-build-loop\\.sh[[:space:]]+${TEST_AUTO_BUILD_LOOP_EXPECTED_P
 assert_ok "README lists ${TEST_AUTO_BUILD_LOOP_EXPECTED_PASS} auto-build driver tests" "$rc"
 
 rc=0
+grep -Eq "test-ui-harness\\.sh[[:space:]]+${TEST_UI_HARNESS_EXPECTED_PASS} visual-harness contract tests" "$REPO_DIR/README.md" || rc=1
+assert_ok "README lists ${TEST_UI_HARNESS_EXPECTED_PASS} visual-harness contract tests" "$rc"
+
+rc=0
 grep -Eq "test-setup-reviewer\\.sh[[:space:]]+${TEST_SETUP_REVIEWER_EXPECTED_PASS} copilot reviewer installer tests" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists ${TEST_SETUP_REVIEWER_EXPECTED_PASS} copilot reviewer installer tests" "$rc"
 
@@ -1047,9 +1051,9 @@ grep -Eq '^TEST_REVIEW_LOOP_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.
 assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
 
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
-# 14 as of #222 T3 (test-verification-preset.sh). Bump deliberately when a
+# 15 as of #239 C3 T4 (test-ui-harness.sh). Bump deliberately when a
 # suite is added, so a pin cannot go missing unnoticed.
-assert_eq "test-counts has exactly 14 expected-pass variables" "14" "$COUNT_VARS"
+assert_eq "test-counts has exactly 15 expected-pass variables" "15" "$COUNT_VARS"
 
 rc=0
 grep -Eq '^TEST_LITELLM_PROXY_DEPS_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1
@@ -1210,6 +1214,10 @@ assert_ok "sync-check runs test-hooks.sh" "$rc"
 rc=0
 grep -q 'bash tests/test-shared-structure.sh' "$WORKFLOW_FILE" || rc=1
 assert_ok "sync-check runs test-shared-structure.sh" "$rc"
+
+rc=0
+grep -q 'bash tests/test-ui-harness.sh' "$WORKFLOW_FILE" || rc=1
+assert_ok "sync-check runs test-ui-harness.sh" "$rc"
 
 rc=0
 grep -q 'bash tests/test-peer-review.sh' "$WORKFLOW_FILE" || rc=1

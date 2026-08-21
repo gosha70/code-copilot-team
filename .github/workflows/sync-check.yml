@@ -122,6 +122,11 @@ jobs:
           bash -n scripts/lib/verification-preset.sh
           bash tests/test-verification-preset.sh
 
+      - name: Run UI harness tests (#239 C3 T4)
+        run: |
+          bash -n tests/test-ui-harness.sh
+          bash tests/test-ui-harness.sh
+
       - name: Check the LiteLLM proxy dependencies stay pinned
         run: bash tests/test-litellm-proxy-deps.sh
 

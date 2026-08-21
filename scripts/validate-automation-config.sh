@@ -50,6 +50,113 @@ q() { jq -r "$1" "$CONFIG" 2>/dev/null || true; }
 # is_type <jq-path> <type> — true iff the path exists and has the jq type.
 is_type() { jq -e "$1 | type == \"$2\"" "$CONFIG" >/dev/null 2>&1; }
 
+# path_traverses <relative-path> — 0 iff any SEGMENT is exactly "..".
+# A '..' SEGMENT traverses; '..' inside a filename does not (matching the
+# substring rejected safe names such as reports/v1..v2.json, and would
+# equally reject a contained ..cache/result.json). ONE definition, shared
+# by every artifact rule — two almost-identical copies is how the two
+# drift into disagreeing about what containment means.
+# bash 3.2 + `set -u`: an empty path leaves the array UNSET, and
+# "${arr[@]}" then aborts the validator instead of reporting the
+# violation already queued by the caller.
+path_traverses() {
+    local _parts=() _p
+    IFS='/' read -r -a _parts <<< "$1" || true
+    for _p in ${_parts[@]+"${_parts[@]}"}; do
+        [[ "$_p" == ".." ]] && return 0
+    done
+    return 1
+}
+
+# origin_of <http(s)-url> — scheme://authority, for same-instance checks.
+origin_of() { printf '%s' "$1" | sed -E 's#^(https?://[^/?]+).*#\1#'; }
+
+# validate_app_block <jq-path> — the application-under-test contract
+# (#242 C2 FR-6, relocated to verification.app by #239 C3 FR-10). Takes the
+# path so ONE implementation serves the block wherever it lives and every
+# message names the caller's path; duplicating it per consumer is how the
+# two copies drift. Sets APP_IFACE_RESOLVED to the evaluator/harness-facing
+# address (interface, else ready.url) for callers that must check against it.
+validate_app_block() {
+    local path="$1" iface rurl has_url has_cmd k
+    # Messages name the config KEY, not the jq expression — a violation
+    # reading ".verification.app.x" would send an operator looking for a
+    # leading dot that is not in their file.
+    local label="${1#.}"
+    APP_IFACE_RESOLVED=""
+    if ! is_type "$path" object; then
+        violation "$label must be an object (got $(q "$path | type"))"
+        return
+    fi
+    for k in $(jq -r "$path | keys[] | select(. != \"command\" and . != \"ready\" and . != \"stop_timeout_sec\" and . != \"interface\")" "$CONFIG" 2>/dev/null || true); do
+        violation "unknown key '$label.$k' (the schema is closed — see shared/schemas/automation.schema.json)"
+    done
+    if [[ "$(q "$path | has(\"command\")")" != "true" ]] \
+       || ! jq -e "$path.command | type == \"string\" and length > 0" "$CONFIG" >/dev/null 2>&1; then
+        violation "$label.command is required and must be a non-empty string"
+    fi
+    if [[ "$(q "$path | has(\"stop_timeout_sec\")")" != "true" ]] \
+       || ! jq -e "$path.stop_timeout_sec | type == \"number\" and . > 0 and . == floor" "$CONFIG" >/dev/null 2>&1; then
+        violation "$label.stop_timeout_sec is required and must be a positive INTEGER number of seconds (the TERM→KILL stop escalation is bounded by integer shell arithmetic)"
+    fi
+    if [[ "$(q "$path | has(\"interface\")")" == "true" ]] \
+       && ! jq -e "$path.interface | type == \"string\" and length > 0" "$CONFIG" >/dev/null 2>&1; then
+        violation "$label.interface must be a non-empty string (the consumer-facing address of the running app)"
+    fi
+    # The interface must be driver-PROBEABLE, or readiness can vouch for
+    # one instance while the evaluator or harness exercises another.
+    iface="$(q "$path.interface // empty")"
+    if [[ -n "$iface" ]] && ! [[ "$iface" =~ ^https?:// ]]; then
+        violation "$label.interface must be an absolute http(s) URL — the driver probes it to bind readiness to the launched instance"
+    fi
+    if [[ "$(q "$path | has(\"ready\")")" != "true" ]]; then
+        violation "$label.ready is required (readiness must be proven before anything consumes the app)"
+    elif ! is_type "$path.ready" object; then
+        violation "$label.ready must be an object (got $(q "$path.ready | type"))"
+    else
+        for k in $(jq -r "$path.ready | keys[] | select(. != \"url\" and . != \"command\" and . != \"timeout_sec\")" "$CONFIG" 2>/dev/null || true); do
+            violation "unknown key '$label.ready.$k' (the schema is closed — see shared/schemas/automation.schema.json)"
+        done
+        has_url="$(q "$path.ready | has(\"url\")")"
+        has_cmd="$(q "$path.ready | has(\"command\")")"
+        if [[ "$has_url" == "true" && "$has_cmd" == "true" ]]; then
+            violation "$label.ready must carry exactly ONE of url | command (got both)"
+        elif [[ "$has_url" != "true" && "$has_cmd" != "true" ]]; then
+            violation "$label.ready must carry exactly ONE of url | command (got neither)"
+        fi
+        for k in url command; do
+            if [[ "$(q "$path.ready | has(\"$k\")")" == "true" ]] \
+               && ! jq -e "$path.ready.${k} | type == \"string\" and length > 0" "$CONFIG" >/dev/null 2>&1; then
+                violation "$label.ready.$k must be a non-empty string"
+            fi
+        done
+        if [[ "$(q "$path.ready | has(\"timeout_sec\")")" != "true" ]] \
+           || ! jq -e "$path.ready.timeout_sec | type == \"number\" and . > 0 and . == floor" "$CONFIG" >/dev/null 2>&1; then
+            violation "$label.ready.timeout_sec is required and must be a positive INTEGER number of seconds (the readiness deadline is integer shell arithmetic; an unbounded or uncomputable probe never fails closed)"
+        fi
+        # Command-only readiness carries no address: without interface the
+        # consumer has no way to reach the running application.
+        if [[ "$has_cmd" == "true" && "$has_url" != "true" ]] \
+           && [[ "$(q "$path | has(\"interface\")")" != "true" ]]; then
+            violation "$label.interface is required when readiness is command-based — the consumer-facing app address is interface, else ready.url, and this config has neither"
+        fi
+        # Readiness must vouch for the SAME instance the consumer receives
+        # — a probe on port 3000 must not admit an interface on 4000.
+        rurl="$(q "$path.ready.url // empty")"
+        if [[ -n "$rurl" ]] && ! [[ "$rurl" =~ ^https?:// ]]; then
+            violation "$label.ready.url must be an absolute http(s) URL (it is probed for HTTP readiness)"
+        fi
+        if [[ -n "$iface" && -n "$rurl" ]] \
+           && [[ "$iface" =~ ^https?:// && "$rurl" =~ ^https?:// ]]; then
+            if [[ "$(origin_of "$iface")" != "$(origin_of "$rurl")" ]]; then
+                violation "$label.interface origin ($(origin_of "$iface")) must equal ready.url's origin ($(origin_of "$rurl")) — readiness must vouch for the SAME instance the consumer receives"
+            fi
+        fi
+    fi
+    APP_IFACE_RESOLVED="$iface"
+    [[ -n "$APP_IFACE_RESOLVED" ]] || APP_IFACE_RESOLVED="$(q "$path.ready.url // empty")"
+}
+
 # Pre-#191 documents may omit both keys; the driver's long-standing
 # defaults (schema_version 1, profile advisory) apply — a v1 config
 # without the new blocks stays valid byte-identically (FR-6).
@@ -143,16 +250,15 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
     if ! is_type '.verification' object; then
         violation "verification must be an object (got $(q '.verification | type'))"
     else
-        for sub in test app visual; do
-            if [[ "$(q ".verification | has(\"$sub\")")" == "true" ]]; then
-                case "$sub" in
-                    test)
-                        violation "verification.test is not supported in C1 — top-level test.command remains the single source for the test step" ;;
-                    *)
-                        violation "verification.$sub is not supported in C1 (no runner exists for it; see specs/auto-build-verification-contract/plan.md)" ;;
-                esac
-            fi
-        done
+        # `test` stays rejected by name — top-level test.command remains
+        # the single source for the test step, and accepting an
+        # enforcement-looking setting that does nothing is worse than
+        # refusing it. `app` and `visual` were rejected the same way as
+        # placeholders for the increments that would define them; C3
+        # (#239) defines both, so they are now real blocks below.
+        if [[ "$(q '.verification | has("test")')" == "true" ]]; then
+            violation "verification.test is not supported — top-level test.command remains the single source for the test step"
+        fi
         cov_unknown="$(jq -r '.verification | keys[] | select(. != "coverage" and . != "test" and . != "app" and . != "visual" and . != "conformance")' "$CONFIG" 2>/dev/null || true)"
         for k in $cov_unknown; do
             violation "unknown key 'verification.$k' (the schema is closed — see shared/schemas/automation.schema.json)"
@@ -197,22 +303,8 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
                 cov_artifact="$(q '.verification.coverage.artifact // empty')"
                 if [[ "$cov_artifact" == /* ]]; then
                     violation "verification.coverage.artifact must be a relative path inside the project (got absolute '$cov_artifact')"
-                else
-                    # A '..' SEGMENT traverses; '..' inside a filename does
-                    # not. Matching the substring rejected safe names such as
-                    # reports/v1..v2.json.
-                    # bash 3.2 + `set -u`: an empty artifact leaves the array
-                    # UNSET, and "${arr[@]}" then aborts the validator instead
-                    # of reporting the violation already queued above.
-                    cov_traverses=0
-                    _cov_parts=()
-                    IFS='/' read -r -a _cov_parts <<< "$cov_artifact" || true
-                    for _p in ${_cov_parts[@]+"${_cov_parts[@]}"}; do
-                        [[ "$_p" == ".." ]] && cov_traverses=1
-                    done
-                    if [[ $cov_traverses -eq 1 ]]; then
-                        violation "verification.coverage.artifact must not traverse outside the project (got '$cov_artifact')"
-                    fi
+                elif path_traverses "$cov_artifact"; then
+                    violation "verification.coverage.artifact must not traverse outside the project (got '$cov_artifact')"
                 fi
                 # Percentages.
                 for pct in min_line_pct min_branch_pct max_regression_pct; do
@@ -271,6 +363,14 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
                 if [[ "$(q '.verification.conformance | has("required")')" == "true" ]]; then
                     violation "verification.conformance.required is DERIVED from verification.yaml (#190 §6 — any FR mapped to kind runtime_conformance), never operator-set — remove it"
                 fi
+                # C3 (#239 FR-10): the app moved to verification.app so that
+                # conformance and visual share ONE lifecycle. Refuse the old
+                # path BY NAME — silently ignoring it would leave an
+                # operator's launch command inert and the run would fail
+                # later with a missing-app error that names the wrong key.
+                if [[ "$(q '.verification.conformance | has("app")')" == "true" ]]; then
+                    violation "verification.conformance.app has MOVED to verification.app (#239: conformance and visual share one application lifecycle) — move the block up one level"
+                fi
                 conf_unknown="$(jq -r '.verification.conformance | keys[] | select(. != "evaluator" and . != "app" and . != "timeout_sec" and . != "required")' "$CONFIG" 2>/dev/null || true)"
                 for k in $conf_unknown; do
                     violation "unknown key 'verification.conformance.$k' (the schema is closed — see shared/schemas/automation.schema.json)"
@@ -285,82 +385,72 @@ if [[ "$(q 'has("verification")')" == "true" ]]; then
                 elif ! jq -e '.verification.conformance.timeout_sec | type == "number" and . > 0 and . == floor' "$CONFIG" >/dev/null 2>&1; then
                     violation "verification.conformance.timeout_sec must be a positive INTEGER number of seconds — every conformance bound is enforced by integer shell arithmetic (got '$(q '.verification.conformance.timeout_sec')')"
                 fi
-                if [[ "$(q '.verification.conformance | has("app")')" != "true" ]]; then
-                    violation "verification.conformance.app is required (the driver, not the evaluator, starts and stops the application)"
-                elif ! is_type '.verification.conformance.app' object; then
-                    violation "verification.conformance.app must be an object (got $(q '.verification.conformance.app | type'))"
-                else
-                    app_unknown="$(jq -r '.verification.conformance.app | keys[] | select(. != "command" and . != "ready" and . != "stop_timeout_sec" and . != "interface")' "$CONFIG" 2>/dev/null || true)"
-                    for k in $app_unknown; do
-                        violation "unknown key 'verification.conformance.app.$k' (the schema is closed — see shared/schemas/automation.schema.json)"
-                    done
-                    if [[ "$(q '.verification.conformance.app | has("command")')" != "true" ]] \
-                       || ! jq -e '.verification.conformance.app.command | type == "string" and length > 0' "$CONFIG" >/dev/null 2>&1; then
-                        violation "verification.conformance.app.command is required and must be a non-empty string"
+                # The app contract itself lives at verification.app and is
+                # validated there (once, for both consumers).
+                if [[ "$(q '.verification | has("app")')" != "true" ]]; then
+                    violation "verification.app is required when verification.conformance is present (the driver, not the evaluator, starts and stops the application)"
+                fi
+            fi
+        fi
+
+        # ── verification.app (#239 C3 FR-10): ONE application lifecycle,
+        #    shared by the conformance evaluator and the visual harness.
+        #    Required iff either consumer is configured; validated by the
+        #    shared block validator so both paths enforce identical rules.
+        if [[ "$(q '.verification | has("app")')" == "true" ]]; then
+            validate_app_block '.verification.app'
+        fi
+
+        # ── verification.visual (#239 C3 FR-1/FR-12) ──
+        if [[ "$(q '.verification | has("visual")')" == "true" ]]; then
+            if [[ "$(q '.verification.visual | has("required_when_ui_in_scope")')" == "true" ]]; then
+                violation "verification.visual.required_when_ui_in_scope is DERIVED from verification.yaml (#239 — UI is in scope iff any FR maps to kind: visual), never operator-set — remove it"
+            fi
+            if ! is_type '.verification.visual' object; then
+                violation "verification.visual must be an object (got $(q '.verification.visual | type'))"
+            else
+                vis_unknown="$(jq -r '.verification.visual | keys[] | select(. != "command" and . != "artifact" and . != "url" and . != "timeout_sec" and . != "skip_is_failure" and . != "required_when_ui_in_scope")' "$CONFIG" 2>/dev/null || true)"
+                for k in $vis_unknown; do
+                    violation "unknown key 'verification.visual.$k' (the schema is closed — see shared/schemas/automation.schema.json)"
+                done
+                for req in command artifact url; do
+                    if [[ "$(q ".verification.visual | has(\"$req\")")" != "true" ]] \
+                       || ! jq -e ".verification.visual.${req} | type == \"string\" and length > 0" "$CONFIG" >/dev/null 2>&1; then
+                        violation "verification.visual.$req is required and must be a non-empty string"
                     fi
-                    if [[ "$(q '.verification.conformance.app | has("stop_timeout_sec")')" != "true" ]] \
-                       || ! jq -e '.verification.conformance.app.stop_timeout_sec | type == "number" and . > 0 and . == floor' "$CONFIG" >/dev/null 2>&1; then
-                        violation "verification.conformance.app.stop_timeout_sec is required and must be a positive INTEGER number of seconds (the TERM→KILL stop escalation is bounded by integer shell arithmetic)"
-                    fi
-                    if [[ "$(q '.verification.conformance.app | has("interface")')" == "true" ]] \
-                       && ! jq -e '.verification.conformance.app.interface | type == "string" and length > 0' "$CONFIG" >/dev/null 2>&1; then
-                        violation "verification.conformance.app.interface must be a non-empty string (the evaluator-facing address of the running app)"
-                    fi
-                    # Build-review finding 1: the interface must be
-                    # driver-PROBEABLE, or readiness can vouch for one
-                    # instance while the evaluator exercises another.
-                    conf_iface="$(q '.verification.conformance.app.interface // empty')"
-                    if [[ -n "$conf_iface" ]] && ! [[ "$conf_iface" =~ ^https?:// ]]; then
-                        violation "verification.conformance.app.interface must be an absolute http(s) URL — the driver probes it to bind readiness to the launched instance"
-                    fi
-                    if [[ "$(q '.verification.conformance.app | has("ready")')" != "true" ]]; then
-                        violation "verification.conformance.app.ready is required (readiness must be proven before the evaluator runs)"
-                    elif ! is_type '.verification.conformance.app.ready' object; then
-                        violation "verification.conformance.app.ready must be an object (got $(q '.verification.conformance.app.ready | type'))"
-                    else
-                        ready_unknown="$(jq -r '.verification.conformance.app.ready | keys[] | select(. != "url" and . != "command" and . != "timeout_sec")' "$CONFIG" 2>/dev/null || true)"
-                        for k in $ready_unknown; do
-                            violation "unknown key 'verification.conformance.app.ready.$k' (the schema is closed — see shared/schemas/automation.schema.json)"
-                        done
-                        ready_has_url="$(q '.verification.conformance.app.ready | has("url")')"
-                        ready_has_cmd="$(q '.verification.conformance.app.ready | has("command")')"
-                        if [[ "$ready_has_url" == "true" && "$ready_has_cmd" == "true" ]]; then
-                            violation "verification.conformance.app.ready must carry exactly ONE of url | command (got both)"
-                        elif [[ "$ready_has_url" != "true" && "$ready_has_cmd" != "true" ]]; then
-                            violation "verification.conformance.app.ready must carry exactly ONE of url | command (got neither)"
-                        fi
-                        for rk in url command; do
-                            if [[ "$(q ".verification.conformance.app.ready | has(\"$rk\")")" == "true" ]] \
-                               && ! jq -e ".verification.conformance.app.ready.${rk} | type == \"string\" and length > 0" "$CONFIG" >/dev/null 2>&1; then
-                                violation "verification.conformance.app.ready.$rk must be a non-empty string"
-                            fi
-                        done
-                        if [[ "$(q '.verification.conformance.app.ready | has("timeout_sec")')" != "true" ]] \
-                           || ! jq -e '.verification.conformance.app.ready.timeout_sec | type == "number" and . > 0 and . == floor' "$CONFIG" >/dev/null 2>&1; then
-                            violation "verification.conformance.app.ready.timeout_sec is required and must be a positive INTEGER number of seconds (the readiness deadline is integer shell arithmetic; an unbounded or uncomputable probe never fails closed)"
-                        fi
-                        # Command-only readiness carries no address: without
-                        # app.interface a capable evaluator has no way to
-                        # reach the running application (#242 FR-6).
-                        if [[ "$ready_has_cmd" == "true" && "$ready_has_url" != "true" ]] \
-                           && [[ "$(q '.verification.conformance.app | has("interface")')" != "true" ]]; then
-                            violation "verification.conformance.app.interface is required when readiness is command-based — the evaluator-facing app address is app.interface, else ready.url, and this config has neither"
-                        fi
-                        # Build-review finding 1: readiness must vouch for
-                        # the SAME instance the evaluator receives — a probe
-                        # on port 3000 must not admit an interface on 4000.
-                        conf_rurl="$(q '.verification.conformance.app.ready.url // empty')"
-                        if [[ -n "$conf_rurl" ]] && ! [[ "$conf_rurl" =~ ^https?:// ]]; then
-                            violation "verification.conformance.app.ready.url must be an absolute http(s) URL (it is probed for HTTP readiness)"
-                        fi
-                        if [[ -n "$conf_iface" && -n "$conf_rurl" ]] \
-                           && [[ "$conf_iface" =~ ^https?:// && "$conf_rurl" =~ ^https?:// ]]; then
-                            _iface_origin="$(printf '%s' "$conf_iface" | sed -E 's#^(https?://[^/?]+).*#\1#')"
-                            _rurl_origin="$(printf '%s' "$conf_rurl" | sed -E 's#^(https?://[^/?]+).*#\1#')"
-                            if [[ "$_iface_origin" != "$_rurl_origin" ]]; then
-                                violation "verification.conformance.app.interface origin ($_iface_origin) must equal ready.url's origin ($_rurl_origin) — readiness must vouch for the SAME instance the evaluator receives"
-                            fi
-                        fi
+                done
+                if [[ "$(q '.verification.visual | has("timeout_sec")')" != "true" ]] \
+                   || ! jq -e '.verification.visual.timeout_sec | type == "number" and . > 0 and . == floor' "$CONFIG" >/dev/null 2>&1; then
+                    violation "verification.visual.timeout_sec is required and must be a positive INTEGER number of seconds (the harness bound is enforced by integer shell arithmetic)"
+                fi
+                if [[ "$(q '.verification.visual | has("skip_is_failure")')" == "true" ]] \
+                   && ! jq -e '.verification.visual.skip_is_failure | type == "boolean"' "$CONFIG" >/dev/null 2>&1; then
+                    violation "verification.visual.skip_is_failure must be a boolean (it defaults to TRUE — a skipped visual check is a failure unless explicitly waived)"
+                fi
+                # artifact: relative and non-escaping (lexical here; realpath
+                # containment is enforced at execution — the C1 rule).
+                vis_artifact="$(q '.verification.visual.artifact // empty')"
+                if [[ "$vis_artifact" == /* ]]; then
+                    violation "verification.visual.artifact must be a relative path inside the project (got absolute '$vis_artifact')"
+                elif path_traverses "$vis_artifact"; then
+                    violation "verification.visual.artifact must not traverse outside the project (got '$vis_artifact')"
+                fi
+                # url: the harness's BROWSER BASE, frozen and never derived
+                # from the app interface (#239 FR-12 — app.interface is
+                # evaluator-facing and may legally be an API base). It must
+                # still address the instance the driver launches, so it is
+                # SAME-ORIGIN with the resolved app address.
+                vis_url="$(q '.verification.visual.url // empty')"
+                if [[ -n "$vis_url" ]] && ! [[ "$vis_url" =~ ^https?:// ]]; then
+                    violation "verification.visual.url must be an absolute http(s) URL — the harness navigates a browser to it"
+                fi
+                if [[ "$(q '.verification | has("app")')" != "true" ]]; then
+                    violation "verification.app is required when verification.visual is present (the harness needs a running application, and the driver starts it)"
+                elif [[ -n "$vis_url" && "$vis_url" =~ ^https?:// ]]; then
+                    # APP_IFACE_RESOLVED was set by validate_app_block above.
+                    if [[ -n "${APP_IFACE_RESOLVED:-}" && "${APP_IFACE_RESOLVED}" =~ ^https?:// ]] \
+                       && [[ "$(origin_of "$vis_url")" != "$(origin_of "$APP_IFACE_RESOLVED")" ]]; then
+                        violation "verification.visual.url origin ($(origin_of "$vis_url")) must equal the app's origin ($(origin_of "$APP_IFACE_RESOLVED")) — the harness must not be pointed at a host the driver never launched"
                     fi
                 fi
             fi
