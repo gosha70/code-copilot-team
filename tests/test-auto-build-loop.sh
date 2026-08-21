@@ -5620,7 +5620,7 @@ assert_eq "C2-T6: the rc=3 arm restores the estimate flag before disposing" "bef
 # ── Round-18: an unrecorded cost parks under its OWN reason, and that
 #    park can never auto-resolve — cap_exceeded's arm would compare the
 #    understated total against a cap and clear itself instantly. ──
-assert_eq "C2-T6: all three debit failures park as cost_accounting_failed" "3" \
+assert_eq "C2-T6: all four debit failures park as cost_accounting_failed (T8 adds the visual site)" "4" \
     "$(grep -cE '(dispose|vg_finish) "cost_accounting_failed"' "$DRIVER" | tr -d ' ')"
 # The dispatcher arm is identified by its own refusal text (the shared
 # predicate now carries a case label of the same name, so a bare grep on
@@ -5757,7 +5757,7 @@ assert_eq "C2-T6: an estimated debit the ledger refuses FAILS too" \
     ' 1 cost_debit_failed {"cost_usd":0,"cost_estimated_usd":0}' " $(vg_debit_fail_case NONE)"
 assert_eq "C2-T6: accounting needs no temp file (nothing to fail open on)" "0" \
     "$(awk '/^vg_debit_conformance\(\)/,/^}/' "$DRIVER" | grep -c mktemp)"
-assert_eq "C2-T6: the gate routes a failed debit through vg_finish" "1" \
+assert_eq "C2-T6: both gates route a failed debit through vg_finish (conformance + visual)" "2" \
     "$(grep -c 'could not be accounted for (the ledger refused the cost debit)' "$DRIVER")"
 
 # End to end: a passing evaluation debits, and the debit precedes the
@@ -7422,6 +7422,127 @@ assert_eq "T7 SC-6: a non-zero exit with a usable artifact is READ, not short-ci
 assert_contains "T7 SC-6: …the park NAMES the affected FR" "$(printf '%s' "$OUT" | cut -f2)" "for FR-2"
 assert_contains "T7 SC-6: …the park carries the critique summary" "$(printf '%s' "$OUT" | cut -f2)" "the CTA is invisible"
 assert_contains "T7 SC-6: …and the actionable fix" "$(printf '%s' "$OUT" | cut -f2)" "raise contrast on the primary CTA"
+rm -rf "$D"
+
+
+echo ""
+echo "=== C3 (#239) T8: metering — the unmetered path, debited FIRST ==="
+# ══════════════════════════════════════════════════════════════
+# The visual debit is the FIRST driver action after vg_run_isolated
+# returns — before containment/freshness/import — so an invocation
+# cannot escape charging by destroying or forging its evidence. Always
+# the unmetered path: the harness never receives the cost channel.
+
+# vis_metered_case <fixture> <estimates:true|false> [contract] -> "reason<TAB>detail"
+# vg_case with the metering state C2's debit machinery needs: a real
+# state.json and the ESTIMATES_ACTIVE/ESTIMATE_PER_INV globals.
+vis_metered_case() {
+    local d="$1" est="$2" ct="${3:-$(vis_contract_p true)}" marker
+    printf '%s' "$ct" > "$d/.cct/auto-build/demo-feat/frozen-contract.json"
+    jq -n '{totals:{cost_usd:0, cost_estimated_usd:0}}' > "$d/.cct/auto-build/demo-feat/state.json"
+    marker="$(dirname "$d")/$(basename "$d").vg-dispose"
+    ( set +e
+      set --
+      # shellcheck source=/dev/null
+      source "$VG_FUNCS" >/dev/null 2>&1
+      source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+      source "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh"
+      source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
+      PROJECT_DIR="$d"; LEDGER_DIR="$d/.cct/auto-build/demo-feat"
+      FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
+      STATE="$LEDGER_DIR/state.json"
+      ESTIMATES_ACTIVE="$est"; ESTIMATE_PER_INV="2.0"
+      FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
+      dispose() { printf '%s\t%s\n' "$1" "$2" > "$marker"; return 1; }
+      journal() { printf '%s\t%s\n' "$1" "$2" >> "$LEDGER_DIR/journal.log"; }
+      check_caps() { :; }
+      : > "$marker"
+      verifier_gate >/dev/null 2>&1 </dev/null
+    )
+    cat "$marker" 2>/dev/null
+    rm -f "$marker"
+}
+
+# ── SC-8a: estimates ACTIVE — the landing run debits the conservative
+#    estimate, flagged as estimated in the journal. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"ok\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+OUT=$(vis_metered_case "$D" true)
+assert_eq "C3-T8 SC-8: estimates active — the landing visual run still lands" "" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_eq "C3-T8 SC-8: …and debits the conservative estimate" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$D/.cct/auto-build/demo-feat/state.json")"
+assert_eq "C3-T8 SC-8: …never the measured channel" "0" \
+    "$(jq -r '.totals.cost_usd' "$D/.cct/auto-build/demo-feat/state.json")"
+assert_contains "C3-T8 SC-8: …flagged as estimated, labelled visual" \
+    "$(grep 'cost_review' "$D/.cct/auto-build/demo-feat/journal.log")" "visual harness: \$2.0 (estimated"
+rm -rf "$D"
+
+# ── SC-8b: estimates NOT active — nothing debits, the run still lands. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"ok\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+OUT=$(vis_metered_case "$D" false)
+assert_eq "C3-T8 SC-8: estimates inactive — lands with nothing debited" "" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_eq "C3-T8 SC-8: …cost_estimated_usd unmoved" "0" \
+    "$(jq -r '.totals.cost_estimated_usd' "$D/.cct/auto-build/demo-feat/state.json")"
+rm -rf "$D"
+
+# ── SC-8c: forgery is inert. The harness has NO cost channel (T6 pins
+#    cost=UNSET in its environment); a cost file written to a guessed
+#    path changes nothing — the estimate is debited regardless. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+printf "{\"cost_usd\": 0}" > cost.json
+printf "{\"cost_usd\": 0}" > tmp/cost.json
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"ok\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+OUT=$(vis_metered_case "$D" true)
+assert_eq "C3-T8 SC-8: a zero-cost file at a guessed path cannot suppress the estimate" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$D/.cct/auto-build/demo-feat/state.json")"
+rm -rf "$D"
+
+# ── SC-8d: a REFUSED ledger write disposes cost_accounting_failed —
+#    never a judged run whose caps cannot be enforced. state.json is a
+#    dangling symlink: state_set's jq read fails, the debit cannot be
+#    recorded. ──
+D=$(vg_vis_fixture 'mkdir -p tmp/ui
+jq "{passed:true, mode:\"full\", skipped:[], source:\"stub-critic\", critiqueSummary:\"ok\", actionableFixes:[], criteria:[.criteria[] | . + {verdict:\"pass\", evidence:\"e\"}]}" "$CCT_VISUAL_REQUEST" > tmp/ui/critique-feedback.json')
+printf '%s' "$(vis_contract_p true)" > "$D/.cct/auto-build/demo-feat/frozen-contract.json"
+jq -n '{totals:{cost_usd:0, cost_estimated_usd:0}}' > "$D/.cct/auto-build/demo-feat/state.json"
+MARKER="$(dirname "$D")/$(basename "$D").vg-dispose"
+( set +e; set --
+  # shellcheck source=/dev/null
+  source "$VG_FUNCS" >/dev/null 2>&1
+  source "$SCRIPT_DIR/../scripts/lib/conformance-app.sh"
+  source "$SCRIPT_DIR/../scripts/lib/coverage-parse.sh"
+  source "$SCRIPT_DIR/../scripts/lib/verification-common.sh"
+  PROJECT_DIR="$D"; LEDGER_DIR="$D/.cct/auto-build/demo-feat"
+  FEATURE_ID="demo-feat"; DRY_RUN=false; PROFILE="advisory"
+  STATE="$LEDGER_DIR/state.json"
+  ESTIMATES_ACTIVE=true; ESTIMATE_PER_INV="2.0"
+  FROZEN_CONTRACT=$(cat "$LEDGER_DIR/frozen-contract.json")
+  rm -f "$STATE"; ln -s /nonexistent-target-for-t8 "$STATE"
+  dispose() { printf '%s\t%s\n' "$1" "$2" > "$MARKER"; return 1; }
+  journal() { :; }
+  check_caps() { :; }
+  : > "$MARKER"
+  verifier_gate >/dev/null 2>&1 </dev/null
+)
+assert_eq "C3-T8 SC-8: a refused ledger write disposes cost_accounting_failed" "cost_accounting_failed" \
+    "$(cut -f1 "$MARKER")"
+assert_contains "C3-T8 SC-8: …naming unenforceable caps" "$(cut -f2 "$MARKER")" "caps cannot be enforced"
+rm -rf "$D" "$MARKER"
+
+# ── THE ORDERING INVARIANT: the debit precedes containment/freshness —
+#    a harness that DESTROYS its evidence (artifact path escapes via a
+#    symlink planted during the run) still gets charged. ──
+D=$(vg_vis_fixture 'rm -rf tmp
+ln -s /etc tmp')
+OUT=$(vis_metered_case "$D" true)
+assert_eq "C3-T8 ordering: evidence destroyed AFTER the run — the gate refuses" "visual_gate" \
+    "$(printf '%s' "$OUT" | cut -f1)"
+assert_contains "C3-T8 ordering: …on containment" "$(printf '%s' "$OUT" | cut -f2)" "escaped the execution root"
+assert_eq "C3-T8 ordering: …but the invocation was ALREADY debited (charging precedes the checks)" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$D/.cct/auto-build/demo-feat/state.json")"
 rm -rf "$D"
 
 echo ""

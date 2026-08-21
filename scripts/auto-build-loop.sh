@@ -2794,11 +2794,22 @@ verifier_gate() {
         local vrc=0
         vg_run_isolated "$vtimeout" "$VG_WT_DIR" "$vcmd" "$vcap" "$vurl" "$vreq" || vrc=$?
 
-        # T8 INSERTS THE COST DEBIT HERE — the FIRST action after the
-        # harness returns, BEFORE containment/freshness/import (the C2
-        # rule: an invocation that happened must be accounted for even
-        # when its result is rejected; a debit placed after these checks
-        # would silently un-meter every failing run).
+        # ── COST DEBIT (#239 C3 T8) — the FIRST action after the
+        #    harness returns, BEFORE containment/freshness/import: an
+        #    invocation that happened must be accounted for even when
+        #    its result is rejected, and a debit placed after those
+        #    checks would silently un-meter every failing run — a
+        #    harness could then escape charging by destroying or forging
+        #    its own evidence. ALWAYS the unmetered path: the cost
+        #    channel is never handed to the project's own mutable
+        #    harness (vg_run_isolated unsets CCT_REVIEW_COST_FILE), so
+        #    there is no measurement to trust — the conservative
+        #    estimate applies when estimates are active, nothing when
+        #    they are not, and the ledger write is CHECKED either way.
+        if ! debit_invocation_cost "" "visual harness"; then
+            vg_finish "cost_accounting_failed" "the visual invocation could not be accounted for (the ledger refused the cost debit) — refusing to judge a run whose caps cannot be enforced"
+            return 1
+        fi
 
         # f) Containment AGAIN (the command is arbitrary project code and
         #    can have replaced a safe ancestor with a symlink since (d) —
