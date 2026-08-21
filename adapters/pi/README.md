@@ -60,12 +60,13 @@ sits comfortably above it while still flagging if ALWAYS_SKILLS roughly doubles.
 
 ## Status
 
-Phase 0 (foundation & launcher) of `specs/pi-harness-adoption/`. Bare `pi`
-remains an unenforced Pi environment. See the spec bundle for the full
-contract: advisory/enforced split, in-process trust gating (Pi ≥ 0.79.0),
-non-recursive `peer-reviewer` profile, launcher symmetry with
-`claude-code`, gated provider/wiki/benchmark rollout, two-dimensional
-capability reporting.
+First-class enforced harness (since v1.1.0): `specs/pi-harness-adoption/`
+is complete (65 of 65 tasks). The split is deliberate: bare `pi` remains
+an unenforced Pi environment; `pi-code` launches the enforced harness.
+The spec bundle documents the full contract: advisory/enforced split,
+in-process trust gating (Pi ≥ 0.79.0), non-recursive `peer-reviewer`
+profile, launcher symmetry with `claude-code`, gated
+provider/wiki/benchmark rollout, two-dimensional capability reporting.
 
 ## Documentation
 

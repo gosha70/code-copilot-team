@@ -10,7 +10,11 @@
 
 Reusable, opinionated configuration for AI-assisted coding with multi-agent team delegation. Ships with templates for ML/AI, Enterprise Java, and Web projects.
 
-Built for **Claude Code** as the reference implementation, with portable conventions for Cursor, GitHub Copilot, Windsurf, Aider, and local LLMs.
+Built for **Claude Code** as the reference implementation, with the provider-neutral **Pi** enforced harness and portable conventions for Cursor, GitHub Copilot, Windsurf, Aider, and local LLMs.
+
+[![Latest release](https://img.shields.io/github/v/release/gosha70/code-copilot-team)](https://github.com/gosha70/code-copilot-team/releases)
+[![CI](https://github.com/gosha70/code-copilot-team/actions/workflows/sync-check.yml/badge.svg)](https://github.com/gosha70/code-copilot-team/actions/workflows/sync-check.yml)
+[![Pi tests](https://github.com/gosha70/code-copilot-team/actions/workflows/pi-tests.yml/badge.svg)](https://github.com/gosha70/code-copilot-team/actions/workflows/pi-tests.yml)
 
 > 📖 **Deep dive:** [Stop Fighting AI Agents and Build a Reusable Multi-Agent Dev Environment](https://www.linkedin.com/pulse/stop-fighting-ai-agents-build-reusable-multi-agent-dev-george-ivan-mxwbe) — the full story behind this project, lessons learned from 13+ real build sessions, and why every rule exists.
 
@@ -21,12 +25,13 @@ Built for **Claude Code** as the reference implementation, with portable convent
 Get running in about 5 minutes:
 
 ```bash
-# 1. Clone
-git clone https://github.com/gosha70/code-copilot-team.git
+# 1. Clone the latest stable release (master is unreleased, in-development)
+git clone --branch v1.1.0 https://github.com/gosha70/code-copilot-team.git
 cd code-copilot-team
 
-# 2. Install for your AI tool (Claude Code shown — all tools listed below)
-./scripts/setup.sh --claude-code
+# 2. Install for your AI tool (two first-class harnesses — all tools listed below)
+./scripts/setup.sh --claude-code    # Claude Code → ~/.claude/
+./scripts/setup.sh --pi             # Pi (enforced, provider-neutral) → ~/.code-copilot-team/pi/
 
 # 3. Discover what you just installed
 ./scripts/cct list          # every slash command, skill, and capability
@@ -43,11 +48,9 @@ New to the ideas behind it? See [Why this exists](#why-this-exists),
 
 ## Why This Exists
 
-Every rule in this repo is failure-driven — it exists because we hit the specific failure it prevents, often more than once. After analyzing 13 sessions of a real project build, we identified six recurring patterns: dependency breaks, agents ignoring conventions, context window exhaustion, schema drift during parallel builds, agents not asking clarifying questions, and commit granularity issues. This setup prevents all of them.
+Every rule in this repo is failure-driven — it exists because we hit the specific failure it prevents, often more than once. After analyzing 13 sessions of a real project build, we identified six recurring patterns: dependency breaks, agents ignoring conventions, context window exhaustion, schema drift during parallel builds, agents not asking clarifying questions, and commit granularity issues. Every rule and gate here exists to catch one of those patterns before it lands.
 
-## Framework Compliance
-
-Independently scored **5.0 / 5.0** on [OpenAI Harness Engineering](https://openai.com/index/harness-engineering/) and **10.0 / 10.0** on [Claude Code Best Practice](https://github.com/shanraisshan/claude-code-best-practice) (February 2026) — see the [scorecards](docs/images/harness-engineering-scorecard.png).
+External reviews, scorecards, and the sources that shaped this harness are collected in [Evidence & Influences](docs/evidence-and-influences.md).
 
 ## Further Reading
 
@@ -402,8 +405,8 @@ Skills: `design-system`, `visual-review` · Agent: `visual-reviewer` · Template
 
 ![Configuration Layers](docs/images/configuration-layers.png)
 
-- **Layered rules** — 4 global rules (`~/.claude/rules/`) auto-load every session; 17 on-demand skills (`~/.claude/skills/*/SKILL.md`) loaded by phase agents when needed.
-- **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 6 utility agents (code-simplifier, doc-writer, phase-recap, security-review, verify-app, visual-reviewer).
+- **Layered rules** — 4 global rules (`~/.claude/rules/`) auto-load every session; 20 on-demand skills (`~/.claude/skills/*/SKILL.md`) loaded by phase agents when needed.
+- **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 10 utility agents (code-simplifier, cooldown-report, cycle-retro, doc-writer, phase-recap, pitch-shaper, scope-executor, security-review, verify-app, visual-reviewer).
 - **Hooks** (`~/.claude/hooks/`) — 11 lifecycle scripts: test verification, type checking, auto-format, file protection, git safety guards, context re-injection, peer review trigger, desktop notifications, plus 3 self-guarding MemKernel hooks (session recall, pre-compact checkpoint, post-compact recovery) that activate only when MemKernel is installed.
 - **11 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
 - **Four-phase workflow** — Research → Plan → Build → Review. Plus **Ralph Loop** for single-agent autonomous iteration.
@@ -413,12 +416,13 @@ Skills: `design-system`, `visual-review` · Agent: `visual-reviewer` · Template
 ## Install options (all tools)
 
 ```bash
-# 1. Clone
-git clone https://github.com/gosha70/code-copilot-team.git
+# 1. Clone the latest stable release (drop --branch for unreleased master)
+git clone --branch v1.1.0 https://github.com/gosha70/code-copilot-team.git
 cd code-copilot-team
 
 # 2. Install for your tool(s)
 ./scripts/setup.sh --claude-code                    # Claude Code → ~/.claude/
+./scripts/setup.sh --pi                             # Pi (enforced) → ~/.code-copilot-team/pi/
 ./scripts/setup.sh --codex                          # OpenAI Codex → ~/.codex/
 ./scripts/setup.sh --cursor ~/my-project            # Cursor → project/.cursor/
 ./scripts/setup.sh --github-copilot ~/my-project    # GH Copilot → project/.github/
@@ -548,7 +552,7 @@ Each template ships a `.github/workflows/` file so CI is wired up the moment the
   ├── copilot-conventions.md       Cross-tool portable conventions
   ├── safety.md                    Destructive action guards, secrets policy
   └── copyright-headers.md         Copyright header rules for generated source files
-~/.claude/skills/*/SKILL.md        ← On-demand skills (SKILL.md format, 15 skills)
+~/.claude/skills/*/SKILL.md        ← On-demand skills (SKILL.md format, 20 skills)
   ├── agent-team-protocol/         Three-phase workflow, delegation rules
   ├── clarification-protocol/      Ask before implementing ambiguous requirements
   ├── environment-setup/           Environment and config verification
@@ -997,3 +1001,4 @@ Use the recurring checklist in [shared/docs/alignment-maintenance.md](shared/doc
 ## License
 
 [MIT](LICENSE)
+

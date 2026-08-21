@@ -1,7 +1,7 @@
 # Case study: an A/B autonomous build of MAP-ATLAS (Claude Code vs pi.dev)
 
 A hands-off experiment: two AI coding harnesses built the **same** open-source
-product — [MAP-ATLAS](https://github.com/gosha70/mapatlas), a domain-agnostic
+product — **MAP-ATLAS** (repository not yet public), a domain-agnostic
 TypeScript mapping engine — from an identical, harness-neutral specification,
 phase by phase, and were scored on a fixed rubric with every claim independently
 verified.

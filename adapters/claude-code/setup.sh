@@ -4,8 +4,8 @@
 # Creates:
 #   ~/.claude/CLAUDE.md                    Global configuration
 #   ~/.claude/rules/                       Global rules (auto-loaded, 4 files)
-#   ~/.claude/skills/*/SKILL.md            On-demand skills (SKILL.md format, 15 skills)
-#   ~/.claude/agents/                      Global agents (5 utility + 4 phase)
+#   ~/.claude/skills/*/SKILL.md            On-demand skills (SKILL.md format, 20 skills)
+#   ~/.claude/agents/                      Global agents (10 utility + 4 phase)
 #   ~/.claude/hooks/                       Global hook scripts (verify, notify)
 #   ~/.claude/settings.json                Global settings with hooks wired
 #   ~/.claude/templates/<type>/CLAUDE.md   Project templates (with Agent Team configs)
@@ -210,7 +210,7 @@ if [[ "$SYNC_MODE" == "1" ]]; then
     done
     echo "[done] Synced skills to $SKILLS_TARGET"
 
-    # Agents (9 files)
+    # Agents (14 files)
     AGENTS_SOURCE="$SCRIPT_DIR/.claude/agents"
     AGENTS_TARGET="$CLAUDE_DIR/agents"
     mkdir -p "$AGENTS_TARGET"
