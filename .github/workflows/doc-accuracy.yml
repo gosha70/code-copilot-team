@@ -27,9 +27,12 @@ jobs:
           persist-credentials: false
       - name: Install lychee
         run: |
+          # The release tarball wraps everything in a containing dir;
+          # the binary is at lychee-x86_64-unknown-linux-gnu/lychee.
           mkdir -p "$RUNNER_TEMP/bin"
           curl -sSfL https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz \
-            | tar -xz -C "$RUNNER_TEMP/bin" lychee
+            | tar -xz -C "$RUNNER_TEMP" lychee-x86_64-unknown-linux-gnu/lychee
+          mv "$RUNNER_TEMP/lychee-x86_64-unknown-linux-gnu/lychee" "$RUNNER_TEMP/bin/lychee"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/bin/lychee" --version
       - name: Doc accuracy drift gate

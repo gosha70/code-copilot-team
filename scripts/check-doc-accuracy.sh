@@ -41,7 +41,10 @@ ok()   { echo "  ok: $1"; }
 # two copies of the same fact diverge).
 grab() {
     local pattern="$1" file="$2" vals
-    vals=$(grep -oE "$pattern" "$file" | grep -oE '[0-9]+' | sort -u)
+    # `|| true` keeps a no-match grep local to this function: under the
+    # script's set -euo pipefail, a vanished wording would otherwise
+    # abort the whole run instead of printing the advertised MISSING.
+    vals=$(grep -oE "$pattern" "$file" | grep -oE '[0-9]+' | sort -u || true)
     if [[ -z "$vals" ]]; then
         printf 'MISSING'
     elif [[ "$(wc -l <<< "$vals" | tr -d ' ')" -gt 1 ]]; then
