@@ -1,0 +1,39 @@
+name: doc-accuracy
+
+on:
+  pull_request:
+    paths:
+      - 'README.md'
+      - 'docs/**'
+      - 'adapters/**/README.md'
+      - 'shared/skills/**'
+      - 'adapters/claude-code/.claude/agents/**'
+      - 'adapters/claude-code/setup.sh'
+      - 'adapters/codex/**'
+      - 'scripts/check-doc-accuracy.sh'
+      - '.github/workflows/doc-accuracy.yml'
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  doc-accuracy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install lychee
+        run: |
+          # The release tarball wraps everything in a containing dir;
+          # the binary is at lychee-x86_64-unknown-linux-gnu/lychee.
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSfL https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP" lychee-x86_64-unknown-linux-gnu/lychee
+          mv "$RUNNER_TEMP/lychee-x86_64-unknown-linux-gnu/lychee" "$RUNNER_TEMP/bin/lychee"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/lychee" --version
+      - name: Doc accuracy drift gate
+        run: bash scripts/check-doc-accuracy.sh
