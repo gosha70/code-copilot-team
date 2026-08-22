@@ -1,9 +1,9 @@
 # Origin Alignment Check — routing-profile-foundation
 
 Date: 2026-08-21 19:00 (record opened)
-Last revised: 2026-08-22 — T6 build-completion revision (T1–T6 built; this revision is the fresh record T6 requires)
-spec-conformance gate's canonical headings (User Scenarios,
-Requirements, + a Constraints section); content unchanged
+Last revised: 2026-08-22 — T6 build-completion revision (T1–T6 built;
+this revision is the fresh record T6 requires; supersedes the
+spec-heading-conformance stamp)
 Trigger: rev-1 SDD bundle authored for increment A of #109 at the
 owner's direction ("I want you to work on this enhancement so I can
 optimize my token usage with external LLM").
