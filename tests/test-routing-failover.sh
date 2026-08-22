@@ -503,6 +503,424 @@ SEL=$(RT "$TMP/sel-clean.json" "$EFF" '[]')
 assert "selected is a named-field object (the tuple stays opaque)" \
     jq -e '.selected | (.id and .backend and .provider and .model and .pool and .tool_profile and (.credential_ref | length > 0))' <<< "$SEL"
 
+
+echo ""
+echo "=== T4: the supervisor --routing mode ==="
+SUP="$REPO_DIR/scripts/cooldown-supervisor.sh"
+
+# The scriptable mock harness: behavior per CCT_ROUTING_PROFILE comes
+# from $MOCK_DIR/<profile>.spec (line N = invocation N: "<fixture>|<exit>";
+# the last line repeats). Each invocation records its environment and
+# bumps a per-profile counter — the assertions read those.
+MOCK="$TMP/mock-harness.sh"
+cat > "$MOCK" <<'MEOF'
+#!/usr/bin/env bash
+p="${CCT_ROUTING_PROFILE:-legacy}"
+cnt_file="$MOCK_DIR/count-$p"
+n=$(( $(cat "$cnt_file" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$cnt_file"
+{ echo "backend=${CCT_AUTOBUILD_BACKEND:-}"
+  echo "base_url=${ANTHROPIC_BASE_URL:-}"
+  echo "api_key=${ANTHROPIC_API_KEY:-}"
+  echo "profile=$p"
+} > "$MOCK_DIR/env-$p-$n"
+spec="$MOCK_DIR/$p.spec"
+[[ -f "$spec" ]] || { echo "mock: no spec for $p"; exit 97; }
+line=$(sed -n "${n}p" "$spec"); [[ -z "$line" ]] && line=$(tail -1 "$spec")
+fixture="${line%%|*}"; code="${line##*|}"
+[[ "$fixture" != "-" ]] && cat "$fixture"
+exit "$code"
+MEOF
+chmod +x "$MOCK"
+FXD="$SCRIPT_DIR/fixtures/routing"
+
+# a registry: alpha (claude, endpoint+key refs) then beta (claude,
+# DeepSeek-style refs) — and a pi-backend variant for cross-backend.
+supreg() {  # <path> <second-backend: claude-code|pi>
+    cat > "$1" <<SREOF
+schema_version = 1
+
+[route_classes.tier1_only]
+tier_order = ["tier1"]
+
+[[profiles]]
+id = "alpha"
+backend = "claude-code"
+provider = "anthropic-subscription"
+model = "sonnet"
+capability_tier = "tier1"
+priority = 10
+quota_pool = "poolA"
+roles = ["build"]
+tool_profile = "full-cct"
+credential_mode = "claude-login"
+data_policy = "approved-cloud"
+
+[[profiles]]
+id = "beta"
+backend = "$2"
+provider = "deepseek-api"
+model = "deepseek-v4"
+capability_tier = "tier1"
+priority = 20
+quota_pool = "poolB"
+roles = ["build"]
+tool_profile = "deepseek-compatible"
+base_url = "https://api.deepseek.example/anthropic"
+credential_env = "CCT_T4_DS_KEY"
+data_policy = "approved-cloud"
+SREOF
+}
+supreg "$TMP/sup-reg.toml" claude-code
+supreg "$TMP/sup-reg-pi.toml" pi
+
+# sup_run <name> <registry> [extra supervisor args...] -> rc; artifacts
+# under $TMP/<name>/ (workroot, mock dir, state, supervisor ledger)
+SUP_RC=0
+sup_run() {
+    local name="$1" reg="$2"; shift 2
+    local root="$TMP/$name"
+    mkdir -p "$root/wr/specs/demo-feat" "$root/mock" "$root/led"
+    printf -- "- [x] done\n" > "$root/wr/specs/demo-feat/tasks.md"
+    SUP_RC=0
+    ( set +e
+      cd "$REPO_DIR"
+      env MOCK_DIR="$root/mock" \
+          CCT_T4_DS_KEY="t4-secret-value-77aa" \
+          CCT_SUPERVISOR_HARNESS_CMD="MOCK_DIR='$root/mock' bash '$MOCK'" \
+          CCT_SUPERVISOR_SLEEP=true \
+          CCT_SUPERVISOR_DIR="$root/led" \
+          CCT_ROUTING_REGISTRY="$reg" \
+          CCT_ROUTING_STATE="$root/state.json" \
+          bash "$SUP" demo-feat --routing --worktree "$root/wr" --profile unattended "$@" \
+          > "$root/out.log" 2>&1 ) && SUP_RC=0 || SUP_RC=$?
+}
+spec() { printf '%s\n' "$2" > "$TMP/$1"; }
+
+# ── refusals ──
+OUT=$(CCT_ROUTING_REGISTRY="$TMP/absent.toml" bash -c "set +e; bash '$SUP' demo-feat --routing --worktree '$TMP' 2>&1"; exit 0)
+assert "refusal: --routing without a registry names the opt-in path" \
+    grep -q "requires a registry" <<< "$OUT"
+DISREG="$TMP/dis-reg.toml"; supreg "$DISREG" claude-code
+printf '\n[policy]\nenabled = false\n' >> "$DISREG"
+OUT=$(CCT_ROUTING_REGISTRY="$DISREG" bash -c "set +e; bash '$SUP' demo-feat --routing --worktree '$TMP' 2>&1"; exit 0)
+assert "refusal: an effective-disabled policy refuses, never silently falls back" \
+    grep -q "DISABLED by the effective policy" <<< "$OUT"
+
+# ── SC-B1/SC-B6: the quota failover chain, secrets child-env-only ──
+mkdir -p "$TMP/chain/mock"
+printf '%s\n' "$FXD/claude-weekly-limit.out|1" > "$TMP/chain/mock/alpha.spec"
+printf '%s\n' "-|0" > "$TMP/chain/mock/beta.spec"
+sup_run chain "$TMP/sup-reg.toml"
+assert_eq "chain: the run COMPLETES on the fallback profile (exit 0)" "0" "$SUP_RC"
+assert_eq "chain: alpha attempted once, beta once" "1 1" \
+    "$(printf '%s %s' "$(cat "$TMP/chain/mock/count-alpha")" "$(cat "$TMP/chain/mock/count-beta")")"
+assert_eq "chain: the quota event cooled the WHOLE pool" "cooldown" \
+    "$(jq -r '.pools.poolA.state' "$TMP/chain/state.json")"
+assert_eq "chain: ...until the provider reset instant" \
+    "$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "2026-08-24T10:00:00Z" +%s 2>/dev/null || date -u -d "2026-08-24T10:00:00Z" +%s)" \
+    "$(jq -r '.pools.poolA.until' "$TMP/chain/state.json")"
+RTD="$TMP/chain/wr/.cct/auto-build/demo-feat/routing"
+assert "chain: decision-5 artifacts exist for both attempts" \
+    bash -c "[[ -f '$RTD/started-1.json' && -f '$RTD/result-1.json' && -f '$RTD/checkpoint-1.json' && -f '$RTD/started-2.json' && -f '$RTD/result-2.json' ]]"
+assert_eq "chain: the state applied the attempt id idempotently" "true" \
+    "$(jq --arg id "$(jq -r '.attempt_id' "$RTD/started-1.json")" '.applied | has($id)' "$TMP/chain/state.json")"
+EVTS="$TMP/chain/led/demo-feat/events.jsonl"
+assert "chain: every candidate verdict is journaled" \
+    bash -c "grep -q 'routing_candidate' '$EVTS' && grep -q 'routing_failover' '$EVTS'"
+assert "chain: beta received the endpoint and key IN ITS ENVIRONMENT" \
+    bash -c "grep -q 'base_url=https://api.deepseek.example/anthropic' '$TMP/chain/mock/env-beta-1' && grep -q 'api_key=t4-secret-value-77aa' '$TMP/chain/mock/env-beta-1'"
+assert_eq "chain: the secret value appears NOWHERE in ledger/journal/checkpoints" "0" \
+    "$(grep -r "t4-secret-value-77aa" "$TMP/chain/led" "$RTD" 2>/dev/null | wc -l | tr -d ' ')"
+assert "chain: the wired NAMES are journaled" \
+    grep -q "ANTHROPIC_API_KEY(env:CCT_T4_DS_KEY)" "$EVTS"
+
+# ── SC-B3: one same-profile rate retry, no failover ──
+mkdir -p "$TMP/rate/mock"
+printf '%s\n%s\n' "$FXD/api-429-text.out|1" "-|0" > "$TMP/rate/mock/alpha.spec"
+printf '%s\n' "-|0" > "$TMP/rate/mock/beta.spec"
+sup_run rate "$TMP/sup-reg.toml"
+assert_eq "rate: completes on the SAME profile after one retry (exit 0)" "0" "$SUP_RC"
+assert_eq "rate: alpha twice, beta NEVER" "2 no" \
+    "$(printf '%s %s' "$(cat "$TMP/rate/mock/count-alpha")" "$( [[ -f "$TMP/rate/mock/count-beta" ]] && echo yes || echo no )")"
+assert "rate: the single retry is journaled with its epoch-anchored wait" \
+    grep -q "routing_retry_same" "$TMP/rate/led/demo-feat/events.jsonl"
+
+# ── auth: disable exactly one profile, continue ──
+mkdir -p "$TMP/auth/mock"
+printf '%s\n' "$FXD/api-auth-structured.out|1" > "$TMP/auth/mock/alpha.spec"
+printf '%s\n' "-|0" > "$TMP/auth/mock/beta.spec"
+sup_run auth "$TMP/sup-reg.toml"
+assert_eq "auth: run completes on the next profile" "0" "$SUP_RC"
+assert_eq "auth: exactly alpha is disabled" "disabled" "$(jq -r '.profiles.alpha.state' "$TMP/auth/state.json")"
+
+# ── denied and unknown: fail closed, nothing else launched ──
+mkdir -p "$TMP/denied/mock"
+printf '%s\n' "$FXD/amb-403-policy.out|1" > "$TMP/denied/mock/alpha.spec"
+printf '%s\n' "-|0" > "$TMP/denied/mock/beta.spec"
+sup_run denied "$TMP/sup-reg.toml"
+assert_eq "denied: unattended terminates (exit 5), never rerouted" "5" "$SUP_RC"
+assert "denied: the closed-enum reason reaches the ledger" \
+    grep -q "routing_policy_denied" "$TMP/denied/led/demo-feat/run.json"
+assert_eq "denied: the fallback profile was NEVER launched" "no" \
+    "$( [[ -f "$TMP/denied/mock/count-beta" ]] && echo yes || echo no )"
+mkdir -p "$TMP/unk/mock"
+printf '%s\n' "$FXD/novel-unmatched.out|1" > "$TMP/unk/mock/alpha.spec"
+printf '%s\n' "-|0" > "$TMP/unk/mock/beta.spec"
+sup_run unk "$TMP/sup-reg.toml"
+assert_eq "unknown: fails closed (exit 5), no failover" "5 no" \
+    "$(printf '%s %s' "$SUP_RC" "$( [[ -f "$TMP/unk/mock/count-beta" ]] && echo yes || echo no )")"
+
+# ── SC-B5: cross-backend handoff (claude-code -> pi) ──
+mkdir -p "$TMP/xb/mock"
+printf '%s\n' "$FXD/claude-session-limit.out|1" > "$TMP/xb/mock/alpha.spec"
+printf '%s\n' "-|0" > "$TMP/xb/mock/beta.spec"
+sup_run xb "$TMP/sup-reg-pi.toml"
+assert_eq "cross-backend: completes via the pi backend" "0" "$SUP_RC"
+assert "cross-backend: the second launch is a FRESH pi session" \
+    grep -q "backend=pi" "$TMP/xb/mock/env-beta-1"
+assert_eq "cross-backend: no session identifier crosses (fresh env per launch)" "0" \
+    "$(grep -c "session" "$TMP/xb/mock/env-beta-1" || true)"
+
+# ── SC-B7: tri-state model identity ──
+MFIX="$TMP/model-mismatch.out"; printf '{"model":"deepseek-flash"}\nall done\n' > "$MFIX"
+mkdir -p "$TMP/mid/mock"
+printf '%s\n' "$MFIX|0" > "$TMP/mid/mock/alpha.spec"
+printf '%s\n' "-|0" > "$TMP/mid/mock/beta.spec"
+sup_run mid "$TMP/sup-reg.toml"
+assert_eq "model mismatch: fails closed (exit 5), never rerouted" "5" "$SUP_RC"
+assert "model mismatch: the named identity violation is recorded" \
+    grep -q "routing_model_identity_mismatch" "$TMP/mid/led/demo-feat/run.json"
+assert_eq "model mismatch: requested and effective retained SEPARATELY" "sonnet deepseek-flash" \
+    "$(jq -r '.result | "\(.requested_model) \(.effective_model)"' "$TMP/mid/wr/.cct/auto-build/demo-feat/routing/result-1.json")"
+mkdir -p "$TMP/unv/mock"
+printf '%s\n' "-|0" > "$TMP/unv/mock/alpha.spec"
+sup_run unv "$TMP/sup-reg.toml"
+assert_eq "unverified model: the run proceeds" "0" "$SUP_RC"
+assert "unverified model: journaled as UNVERIFIED, never assumed" \
+    grep -q "effective model UNVERIFIED" "$TMP/unv/led/demo-feat/events.jsonl"
+assert_eq "unverified model: recorded null in the result" "null" \
+    "$(jq -r '.result.effective_model // "null"' "$TMP/unv/wr/.cct/auto-build/demo-feat/routing/result-1.json")"
+
+# ── SC-B9: indeterminate recovery — never replay, never assume failure ──
+mkdir -p "$TMP/ind/mock" "$TMP/ind/wr/.cct/auto-build/demo-feat/routing" "$TMP/ind/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/ind/wr/specs/demo-feat/tasks.md"
+printf '{"attempt_id":"demo-feat-x-a1","attempt":1}' > "$TMP/ind/wr/.cct/auto-build/demo-feat/routing/started-1.json"
+printf '%s\n' "-|0" > "$TMP/ind/mock/alpha.spec"
+sup_run ind "$TMP/sup-reg.toml"
+assert_eq "indeterminate: unattended terminates (exit 5)" "5" "$SUP_RC"
+assert "indeterminate: the named reason with provenance" \
+    grep -q "routing_attempt_indeterminate" "$TMP/ind/led/demo-feat/run.json"
+assert "indeterminate: the SPECIFIC no-result diagnostic (not the malformed arm)" \
+    grep -q "no terminal result was recorded" "$TMP/ind/led/demo-feat/events.jsonl"
+assert_eq "indeterminate: the attempt was NEVER replayed" "no" \
+    "$( [[ -f "$TMP/ind/mock/count-alpha" ]] && echo yes || echo no )"
+
+# ── exhaustion shapes at the supervisor level ──
+mkdir -p "$TMP/perm/mock"
+printf '%s\n' "-|0" > "$TMP/perm/mock/alpha.spec"
+( set +e; CCT_ROUTING_STATE="$TMP/perm/state.json" \
+    bash -c "source '$REPO_DIR/scripts/lib/routing-state.sh'; rs_set_profile pre-1 alpha disabled auth -; rs_set_profile pre-2 beta disabled auth -" ) >/dev/null 2>&1
+sup_run perm "$TMP/sup-reg.toml"
+assert_eq "permanent exhaustion: terminates with the closed-enum reason" "5" "$SUP_RC"
+assert "permanent exhaustion: routing_no_eligible_profile recorded" \
+    grep -q "routing_no_eligible_profile" "$TMP/perm/led/demo-feat/run.json"
+mkdir -p "$TMP/tmpx/mock"
+printf '%s\n' "-|0" > "$TMP/tmpx/mock/alpha.spec"
+( set +e; CCT_ROUTING_STATE="$TMP/tmpx/state.json" \
+    bash -c "source '$REPO_DIR/scripts/lib/routing-state.sh'; rs_set_pool pre-3 poolA cooldown x $(( $(date -u +%s) + 999999 )); rs_set_pool pre-4 poolB cooldown x $(( $(date -u +%s) + 999999 ))" ) >/dev/null 2>&1
+sup_run tmpx "$TMP/sup-reg.toml" --max-wall-sec 60
+assert_eq "temporary exhaustion beyond the wall cap: refuses rather than oversleeping" "5" "$SUP_RC"
+assert "temporary exhaustion: names the time-block and the cap" \
+    grep -q "beyond the wall-clock cap" "$TMP/tmpx/led/demo-feat/run.json"
+
+# ── terminated_policy precedence survives routing ──
+QFIX="$TMP/quota-exit6.out"; cat "$FXD/claude-session-limit.out" > "$QFIX"
+mkdir -p "$TMP/term/mock"
+printf '%s\n' "$QFIX|6" > "$TMP/term/mock/alpha.spec"
+printf '%s\n' "-|0" > "$TMP/term/mock/beta.spec"
+sup_run term "$TMP/sup-reg.toml"
+assert_eq "terminated_policy: exit 6 stays terminal even with quota-looking text" "6" "$SUP_RC"
+assert_eq "terminated_policy: no cooldown state was invented" "null" \
+    "$(jq -r '.pools.poolA // "null"' "$TMP/term/state.json" 2>/dev/null || echo null)"
+
+# ── recovery: result-without-checkpoint applies the RECORDED decision,
+#    NEVER relaunches ──
+mk_result() {  # <dir> <n> <fixture> <exit> <retries> -> writes started+result
+    local dir="$1" n="$2" fx="$3" code="$4" retries="$5"
+    local pj='{"id":"alpha","backend":"claude-code","provider":"anthropic-subscription","model":"sonnet","tier":"tier1","priority":10,"pool":"poolA","roles":["build"],"tool_profile":"full-cct","data_policy":"approved-cloud","credential_ref":"mode:claude-login","endpoint_ref":"none"}'
+    local epoch=1787400000
+    ( set +e
+      source "$REPO_DIR/scripts/lib/routing-result.sh"
+      source "$REPO_DIR/scripts/lib/routing-actions.sh"
+      res=$(rr_result "$code" "$fx" claude-code anthropic-subscription alpha sonnet - poolA - '{}')
+      dec=$(ra_decide "$res" "$retries" "$epoch")
+      mkdir -p "$dir"
+      jq -n --argjson n "$n" --argjson p "$pj" --argjson t "$epoch" \
+            --arg id "recov-a$n" \
+            '{attempt_id:$id, attempt:$n, profile:$p, started_epoch:$t}' > "$dir/started-$n.json"
+      jq -n --arg id "recov-a$n" --argjson t "$epoch" --argjson r "$res" --argjson d "$dec" \
+            '{attempt_id:$id, decision_epoch:$t, result:$r, decision:$d, legacy_usage_fallback:null}' > "$dir/result-$n.json" )
+}
+# R1: denied result, action never applied -> recovery parks with the
+# recorded reason; the child is NEVER launched; the checkpoint appears.
+mkdir -p "$TMP/rec1/mock" "$TMP/rec1/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/rec1/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "-|0" > "$TMP/rec1/mock/alpha.spec"
+mk_result "$TMP/rec1/wr/.cct/auto-build/demo-feat/routing" 1 "$FXD/amb-403-policy.out" 1 0
+sup_run rec1 "$TMP/sup-reg.toml"
+assert_eq "recovery/denied: the recorded park applies without relaunch" "5" "$SUP_RC"
+assert "recovery/denied: the recorded reason survives" \
+    grep -q "routing_policy_denied" "$TMP/rec1/led/demo-feat/run.json"
+assert_eq "recovery/denied: the child was NEVER launched" "no" \
+    "$( [[ -f "$TMP/rec1/mock/count-alpha" ]] && echo yes || echo no )"
+assert "recovery/denied: the checkpoint was published" \
+    test -f "$TMP/rec1/wr/.cct/auto-build/demo-feat/routing/checkpoint-1.json"
+assert "recovery/denied: the recovery is journaled as no-relaunch" \
+    grep -q "applying the recorded decision WITHOUT relaunching" "$TMP/rec1/led/demo-feat/events.jsonl"
+
+# R2: auth result, action ALREADY applied, checkpoint missing ->
+# idempotent no-op, checkpoint published, the run then continues on beta.
+mkdir -p "$TMP/rec2/mock" "$TMP/rec2/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/rec2/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "-|0" > "$TMP/rec2/mock/beta.spec"
+printf '%s\n' "-|0" > "$TMP/rec2/mock/alpha.spec"
+mk_result "$TMP/rec2/wr/.cct/auto-build/demo-feat/routing" 1 "$FXD/api-auth-structured.out" 1 0
+( set +e; CCT_ROUTING_STATE="$TMP/rec2/state.json" \
+    bash -c "source '$REPO_DIR/scripts/lib/routing-state.sh'; rs_set_profile recov-a1 alpha disabled 'credential or billing rejection' -" ) >/dev/null 2>&1
+sup_run rec2 "$TMP/sup-reg.toml"
+assert_eq "recovery/applied: completes on beta (exit 0)" "0" "$SUP_RC"
+assert_eq "recovery/applied: alpha never relaunched, beta exactly once" "no 1" \
+    "$(printf '%s %s' "$( [[ -f "$TMP/rec2/mock/count-alpha" ]] && echo yes || echo no )" "$(cat "$TMP/rec2/mock/count-beta")")"
+assert "recovery/applied: the state replay was an idempotent no-op" \
+    grep -q "idempotent no-op" "$TMP/rec2/led/demo-feat/events.jsonl"
+assert "recovery/applied: the checkpoint was published" \
+    test -f "$TMP/rec2/wr/.cct/auto-build/demo-feat/routing/checkpoint-1.json"
+
+# R3: a MALFORMED result is not durable evidence -> indeterminate.
+mkdir -p "$TMP/rec3/mock" "$TMP/rec3/wr/.cct/auto-build/demo-feat/routing" "$TMP/rec3/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/rec3/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "-|0" > "$TMP/rec3/mock/alpha.spec"
+printf '{"attempt_id":"x","attempt":1}' > "$TMP/rec3/wr/.cct/auto-build/demo-feat/routing/started-1.json"
+printf '{"attempt_id":"x","result":{' > "$TMP/rec3/wr/.cct/auto-build/demo-feat/routing/result-1.json"
+sup_run rec3 "$TMP/sup-reg.toml"
+assert_eq "recovery/malformed: fails closed as indeterminate" "5" "$SUP_RC"
+assert "recovery/malformed: named as a malformed terminal result" \
+    grep -q "routing_attempt_indeterminate" "$TMP/rec3/led/demo-feat/run.json"
+assert_eq "recovery/malformed: never launched" "no" \
+    "$( [[ -f "$TMP/rec3/mock/count-alpha" ]] && echo yes || echo no )"
+
+# R4: control replay — retry counts are attempt-id idempotent across
+# the crash window between the control write and the checkpoint.
+mkdir -p "$TMP/rec4/mock" "$TMP/rec4/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/rec4/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "-|0" > "$TMP/rec4/mock/alpha.spec"
+mk_result "$TMP/rec4/wr/.cct/auto-build/demo-feat/routing" 1 "$FXD/api-429-text.out" 1 0
+jq -n '{epoch_attempted:[], attempt_local_excluded:[], retry_counts:{alpha:1}, applied_attempts:["recov-a1"]}' \
+    > "$TMP/rec4/wr/.cct/auto-build/demo-feat/routing/control.json"
+sup_run rec4 "$TMP/sup-reg.toml"
+assert_eq "control-replay: the run completes (the retry proceeds once)" "0" "$SUP_RC"
+assert_eq "control-replay: attempt 1 was never relaunched (only the single retry ran)" "1" \
+    "$(cat "$TMP/rec4/mock/count-alpha")"
+assert_eq "control-replay: the retry budget stayed EXACTLY 1" "1" \
+    "$(jq -r '.retry_counts.alpha' "$TMP/rec4/wr/.cct/auto-build/demo-feat/routing/control.json")"
+assert "control-replay: the replay is journaled as a control no-op" \
+    grep -q "routing_control_noop" "$TMP/rec4/led/demo-feat/events.jsonl"
+assert "control-replay: the checkpoint was published" \
+    test -f "$TMP/rec4/wr/.cct/auto-build/demo-feat/routing/checkpoint-1.json"
+
+# the other crash half is rec2 (T1 state applied, control not): extend
+# its proof — the control effect applied exactly once on recovery.
+assert_eq "recovery/applied: the control effect landed exactly once" '["alpha"]' \
+    "$(jq -c '.epoch_attempted' "$TMP/rec2/wr/.cct/auto-build/demo-feat/routing/control.json")"
+assert "recovery/applied: ...with its attempt id marked in the SAME write" \
+    bash -c "jq -e '.applied_attempts | index(\"recov-a1\") != null' '$TMP/rec2/wr/.cct/auto-build/demo-feat/routing/control.json'"
+
+# ── sticky exclusions: a sleep resets ONLY the eligibility-window set ──
+mkdir -p "$TMP/sticky/mock"
+printf '%s\n' "$FXD/vllm-context-overflow.out|1" > "$TMP/sticky/mock/alpha.spec"
+printf '%s\n' "-|0" > "$TMP/sticky/mock/beta.spec"
+( set +e; CCT_ROUTING_STATE="$TMP/sticky/state.json" \
+    bash -c "source '$REPO_DIR/scripts/lib/routing-state.sh'; rs_set_profile pre-s beta cooldown throttled $(( $(date -u +%s) + 6 ))" ) >/dev/null 2>&1
+mkdir -p "$TMP/sticky/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/sticky/wr/specs/demo-feat/tasks.md"
+( set +e
+  cd "$REPO_DIR"
+  env MOCK_DIR="$TMP/sticky/mock" \
+      CCT_SUPERVISOR_HARNESS_CMD="MOCK_DIR='$TMP/sticky/mock' bash '$MOCK'" \
+      CCT_SUPERVISOR_DIR="$TMP/sticky/led" \
+      CCT_ROUTING_REGISTRY="$TMP/sup-reg.toml" \
+      CCT_ROUTING_STATE="$TMP/sticky/state.json" \
+      bash "$SUP" demo-feat --routing --worktree "$TMP/sticky/wr" --profile unattended \
+      > "$TMP/sticky/out.log" 2>&1 ) && SRC=0 || SRC=$?
+assert_eq "sticky: the run completes on beta after the REAL eligibility sleep" "0" "$SRC"
+assert_eq "sticky: the incompatible profile was NEVER retried after the sleep" "1" \
+    "$(cat "$TMP/sticky/mock/count-alpha")"
+CTRL="$TMP/sticky/wr/.cct/auto-build/demo-feat/routing/control.json"
+assert_eq "sticky: the request-local exclusion is DURABLE" '["alpha"]' \
+    "$(jq -c '.attempt_local_excluded' "$CTRL")"
+assert "sticky: the sleep journals that exclusions/budgets are preserved" \
+    grep -q "request-local exclusions and retry budgets are PRESERVED" "$TMP/sticky/led/demo-feat/events.jsonl"
+
+# ── retry budgets are durable control state ──
+assert_eq "budget: the consumed same-profile retry is durably recorded" "1" \
+    "$(jq -r '.retry_counts.alpha' "$TMP/rate/wr/.cct/auto-build/demo-feat/routing/control.json")"
+
+# ── credential taint: an ECHOING child cannot persist the secret ──
+mkdir -p "$TMP/taint/mock" "$TMP/taint/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/taint/wr/specs/demo-feat/tasks.md"
+ECHOFX="$TMP/echo-key.out"
+printf '#!/bin/bash\necho "leaked=$ANTHROPIC_API_KEY"\ncat "%s"\nexit 1\n' "$FXD/claude-session-limit.out" > "$TMP/taint-mock.sh"
+cat > "$TMP/taint/mock-wrapper.sh" <<WEOF
+#!/usr/bin/env bash
+if [[ "\${CCT_ROUTING_PROFILE}" == "beta" ]]; then
+  echo "leaked=\${ANTHROPIC_API_KEY}"
+  cat "$FXD/claude-session-limit.out"
+  n_file="\$MOCK_DIR/count-beta"; echo \$(( \$(cat "\$n_file" 2>/dev/null || echo 0) + 1 )) > "\$n_file"
+  exit 1
+fi
+MOCK_DIR="\$MOCK_DIR" bash "$MOCK"
+WEOF
+chmod +x "$TMP/taint/mock-wrapper.sh"
+printf '%s\n' "$FXD/claude-weekly-limit.out|1" > "$TMP/taint/mock/alpha.spec"
+( set +e
+  cd "$REPO_DIR"
+  env MOCK_DIR="$TMP/taint/mock" \
+      CCT_T4_DS_KEY="t4-secret-value-77aa" \
+      CCT_SUPERVISOR_HARNESS_CMD="MOCK_DIR='$TMP/taint/mock' bash '$TMP/taint/mock-wrapper.sh'" \
+      CCT_SUPERVISOR_SLEEP=true CCT_SUPERVISOR_DIR="$TMP/taint/led" \
+      CCT_ROUTING_REGISTRY="$TMP/sup-reg.toml" \
+      CCT_ROUTING_STATE="$TMP/taint/state.json" \
+      bash "$SUP" demo-feat --routing --worktree "$TMP/taint/wr" --profile unattended --max-attempts 3 \
+      > "$TMP/taint/out.log" 2>&1 ) || true
+TRTD="$TMP/taint/wr/.cct/auto-build/demo-feat/routing"
+assert_eq "taint: the echoed secret reaches NO durable artifact" "0" \
+    "$(grep -r "t4-secret-value-77aa" "$TMP/taint/led" "$TRTD" 2>/dev/null | wc -l | tr -d ' ')"
+assert "taint: the transcript carries the redaction marker instead" \
+    grep -q "REDACTED:ANTHROPIC_API_KEY" "$TRTD/transcript-2.log"
+
+# ── SC-B10: without the flag, a present registry changes NOTHING ──
+mkdir -p "$TMP/leg/mock" "$TMP/leg/wr/specs/demo-feat" "$TMP/leg/led"
+printf -- "- [x] done\n" > "$TMP/leg/wr/specs/demo-feat/tasks.md"
+( set +e; cd "$REPO_DIR"
+  env MOCK_DIR="$TMP/leg/mock" \
+      CCT_SUPERVISOR_HARNESS_CMD="MOCK_DIR='$TMP/leg/mock' bash '$MOCK'" \
+      CCT_SUPERVISOR_SLEEP=true CCT_SUPERVISOR_DIR="$TMP/leg/led" \
+      CCT_ROUTING_REGISTRY="$TMP/sup-reg.toml" \
+      bash "$SUP" demo-feat --worktree "$TMP/leg/wr" --profile unattended \
+      > "$TMP/leg/out.log" 2>&1 ) && LRC=0 || LRC=$?
+printf '%s\n' "-|0" > "$TMP/leg/mock/legacy.spec"
+( set +e; cd "$REPO_DIR"
+  env MOCK_DIR="$TMP/leg/mock" \
+      CCT_SUPERVISOR_HARNESS_CMD="MOCK_DIR='$TMP/leg/mock' bash '$MOCK'" \
+      CCT_SUPERVISOR_SLEEP=true CCT_SUPERVISOR_DIR="$TMP/leg/led2" \
+      CCT_ROUTING_REGISTRY="$TMP/sup-reg.toml" \
+      bash "$SUP" demo-feat --worktree "$TMP/leg/wr" --profile unattended \
+      > "$TMP/leg/out2.log" 2>&1 ) && LRC=0 || LRC=$?
+assert_eq "legacy: without --routing the registry is inert (clean done path)" "0" "$LRC"
+assert_eq "legacy: no routing artifacts are created" "no" \
+    "$( [[ -d "$TMP/leg/wr/.cct/auto-build/demo-feat/routing" ]] && echo yes || echo no )"
+
 echo ""
 echo "========================================="
 echo "  routing-failover tests: $PASS passed, $FAIL failed"
