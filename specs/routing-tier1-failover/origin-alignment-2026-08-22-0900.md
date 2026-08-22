@@ -90,6 +90,22 @@ crash-indeterminate recovery, stale/partial-state refusal) before T2
 builds on the store; the no-independent-reviewer outcome fails closed;
 tier1-only boundary and providers.toml read-only reaffirmed.
 
+## Plan review round 2 (PR #252) — one small amendment, applied
+
+Timing values reclassified as named implementation DEFAULTS
+(`RA_*_SEC`, tested and journaled) rather than frozen compatibility
+surface — cause scope, action, retry cardinality, and decay-to-unknown
+stay normative; the literal seconds may be retuned from observed
+provider behavior without a spec revision, and any future config knob
+takes the promotion path. "Conservative default" reworded to "bounded
+fallback cooldown" (a one-hour fallback is bounded and deterministic,
+not conservative relative to a possible weekly window). The
+`routing_*` terminal reasons are a CLOSED machine-readable enum
+defined once in the actions lib — cause, action, and terminal reason
+are three different things; dynamic `routing_${class}` assembly is
+forbidden, and `routing_attempt_indeterminate` stays distinct from
+exhaustion.
+
 ## Verdict
 
 Verdict: aligned

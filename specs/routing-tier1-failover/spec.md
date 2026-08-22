@@ -41,7 +41,12 @@ exhausted).
   change, same-profile retry budget, whether another candidate may
   be selected, re-eligibility, and the terminal/exhaustion reason —
   including the missing-metadata branches (absent/malformed
-  `reset_at` uses the named conservative default, journaled). Pinned
+  `reset_at` uses the named bounded fallback cooldown, journaled).
+  Timing values are named implementation DEFAULTS, not compatibility
+  surface: cardinalities, scopes, and decay-to-unknown are the
+  normative promises; the literal seconds may be retuned without a
+  spec revision. The `routing_*` terminal reasons form a CLOSED enum
+  defined once — never assembled dynamically from a cause. Pinned
   particulars: `rate_limited` has exactly ONE same-profile retry per
   supervised attempt; request-local causes stay request-local
   (`invalid_request` writes NO durable circuit state and cannot
