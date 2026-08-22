@@ -171,6 +171,123 @@ mkdir -p "$FO.lock"; echo "999999" > "$FO.lock/pid"
 assert_eq "owner-aware unlock: a non-owner cannot remove the lock" "999999" \
     "$(cat "$FO.lock/pid" 2>/dev/null)"
 
+
+echo ""
+echo "=== T2: class->action — the total table, executable ==="
+ALIB="$REPO_DIR/scripts/lib/routing-actions.sh"
+RLIB="$REPO_DIR/scripts/lib/routing-result.sh"
+FX="$SCRIPT_DIR/fixtures/routing"
+# shellcheck source=/dev/null
+source "$ALIB"
+# a decision from a REAL corpus fixture, through A's own composer
+res() {  # <fixture> <exit> -> normalized result json
+    ( set +e; source "$RLIB"; rr_result "$2" "$FX/$1" claude-code anthropic-subscription alpha sonnet - poolA - '{}' )
+}
+T0=1787400000   # the durable decision epoch: every deadline derives from THIS
+dec() { ra_decide "$1" "${2:-0}" "$T0"; }
+
+# success -> proceed
+D=$(dec "$(res success-clean.out 0)")
+assert_eq "success -> proceed, no state op" "proceed none" "$(jq -r '"\(.action) \(.state_op.kind)"' <<< "$D")"
+
+# quota WITH provider reset evidence -> pool cooldown to that instant
+D=$(dec "$(res claude-weekly-limit.out 1)")
+assert_eq "quota+reset: failover with POOL cooldown" "failover pool_cooldown" "$(jq -r '"\(.action) \(.state_op.kind)"' <<< "$D")"
+assert_eq "quota+reset: until == the provider reset instant" \
+    "$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "2026-08-24T10:00:00Z" +%s 2>/dev/null || date -u -d "2026-08-24T10:00:00Z" +%s)" \
+    "$(jq -r '.state_op.until' <<< "$D")"
+assert_eq "quota: terminal reason from the closed enum" "routing_pool_exhausted" "$(jq -r '.terminal_reason' <<< "$D")"
+
+# quota WITHOUT usable reset evidence -> bounded fallback FROM THE
+# DURABLE EPOCH, exactly (never the wall clock)
+D=$(dec "$(res claude-session-limit.out 1)")
+assert_eq "quota w/o reset: bounded fallback from the durable epoch, EXACT" \
+    "$((T0 + 3600))" "$(jq -r '.state_op.until' <<< "$D")"
+assert "quota w/o reset: the fallback is journaled BY NAME" \
+    grep -q "bounded fallback cooldown (RA_QUOTA_FALLBACK_COOLDOWN_SEC=3600s)" <<< "$(jq -r '.journal' <<< "$D")"
+
+# rate_limited: exactly ONE same-profile retry, deadlines ABSOLUTE
+D=$(dec "$(res api-429-text.out 1)" 0)
+assert_eq "rate first occurrence: retry SAME profile, Retry-After honored (absolute)" "retry_same $((T0 + 30)) none" \
+    "$(jq -r '"\(.action) \(.retry_not_before) \(.state_op.kind)"' <<< "$D")"
+D=$(dec "$(res api-429-structured.out 1)" 0)
+assert_eq "rate first occurrence (structured): retry-after 8 honored" "$((T0 + 8))" "$(jq -r '.retry_not_before' <<< "$D")"
+NORA=$(res api-429-text.out 1 | jq '.retry_after_sec = null')
+D=$(dec "$NORA" 0)
+assert_eq "rate without retry-after: the named default delay" "$((T0 + 60))" "$(jq -r '.retry_not_before' <<< "$D")"
+D=$(dec "$(res api-429-text.out 1)" 1)
+assert_eq "rate PAST the single-retry budget: failover + profile cooldown" "failover profile_cooldown routing_rate_limited" \
+    "$(jq -r '"\(.action) \(.state_op.kind) \(.terminal_reason)"' <<< "$D")"
+
+# unavailable / transport: one retry then circuit-open
+D=$(dec "$(res api-overloaded-structured.out 1)" 0)
+assert_eq "unavailable first: one retry after the named default" "retry_same $((T0 + 30))" "$(jq -r '"\(.action) \(.retry_not_before)"' <<< "$D")"
+D=$(dec "$(res api-overloaded-structured.out 1)" 1)
+assert_eq "unavailable past budget: profile cooldown + enum reason" "failover profile_cooldown routing_provider_unavailable" \
+    "$(jq -r '"\(.action) \(.state_op.kind) \(.terminal_reason)"' <<< "$D")"
+D=$(dec "$(res transport-refused.out 1)" 1)
+assert_eq "transport past budget: its own enum reason" "routing_transport_failure" "$(jq -r '.terminal_reason' <<< "$D")"
+
+# auth: disable exactly that profile, keep going
+D=$(dec "$(res api-auth-structured.out 1)")
+assert_eq "auth: profile DISABLED (no until), failover continues" "failover profile_disable null" \
+    "$(jq -r '"\(.action) \(.state_op.kind) \(.state_op.until)"' <<< "$D")"
+
+# invalid_request: attempt-local, zero durable state
+D=$(dec "$(res vllm-context-overflow.out 1)")
+assert_eq "invalid_request: attempt-local incompatibility, NO state op" "failover none true routing_task_incompatible" \
+    "$(jq -r '"\(.action) \(.state_op.kind) \(.attempt_local_incompatible) \(.terminal_reason)"' <<< "$D")"
+
+# denied / unknown: fail closed, never rerouted
+D=$(dec "$(res amb-403-policy.out 1)")
+assert_eq "denied: park, never rerouted around" "park routing_policy_denied" "$(jq -r '"\(.action) \(.terminal_reason)"' <<< "$D")"
+D=$(dec "$(res exec-tests-failed.out 1)")
+assert_eq "execution: the breaker path, no router action" "breaker none null" \
+    "$(jq -r '"\(.action) \(.state_op.kind) \(.terminal_reason)"' <<< "$D")"
+D=$(dec "$(res novel-unmatched.out 1)")
+assert_eq "unknown: park, fail closed" "park routing_unknown_failure" "$(jq -r '"\(.action) \(.terminal_reason)"' <<< "$D")"
+FORGED=$(res novel-unmatched.out 1 | jq '.failure_class = "vibes"')
+D=$(dec "$FORGED")
+assert_eq "an unlisted cause (frozen-taxonomy violation) fails closed like unknown" "park routing_unknown_failure" \
+    "$(jq -r '"\(.action) \(.terminal_reason)"' <<< "$D")"
+
+# the closed enum is the ONLY reason source
+assert "the enum guard rejects a non-member" \
+    bash -c "source '$ALIB'; ! ra_terminal_valid routing_made_up"
+assert "routing_attempt_indeterminate and no_eligible_profile are distinct members" \
+    bash -c "source '$ALIB'; ra_terminal_valid routing_attempt_indeterminate && ra_terminal_valid routing_no_eligible_profile"
+ALL_OK=true
+for fx in claude-weekly-limit:1 api-429-text:1 api-overloaded-structured:1 transport-refused:1 api-auth-structured:1 vllm-context-overflow:1 amb-403-policy:1 novel-unmatched:1; do
+    T=$(dec "$(res "${fx%%:*}.out" "${fx##*:}")" 1 | jq -r '.terminal_reason // empty')
+    if [[ -n "$T" ]]; then
+        ( source "$ALIB"; ra_terminal_valid "$T" ) || ALL_OK=false
+    fi
+done
+assert_eq "every emitted terminal reason is an enum member" "true" "$ALL_OK"
+
+# REPLAY DETERMINISM: the decision is a pure function of
+# (result, retries, decision_epoch) — recomputation after wall time
+# has advanced yields BYTE-IDENTICAL deadlines.
+RES_Q=$(res claude-session-limit.out 1)
+D1=$(dec "$RES_Q")
+sleep 1.1
+D2=$(dec "$RES_Q")
+assert_eq "replay: byte-identical decision after wall time advanced" "$D1" "$D2"
+RES_R=$(res api-429-text.out 1)
+R1=$(dec "$RES_R" 0); R2=$(dec "$RES_R" 0)
+assert_eq "replay: retry deadline is epoch-anchored, not clock-anchored" \
+    "$(jq -r '.retry_not_before' <<< "$R1")" "$(jq -r '.retry_not_before' <<< "$R2")"
+RCE=0
+OUT=$(ra_decide "$RES_Q" 0 2>&1) || RCE=$?
+assert_eq "a missing decision epoch is REFUSED (never wall-clock substituted)" "1" "$RCE"
+assert "…naming the temporal-basis rule" grep -q "wall clock never substitutes" <<< "$OUT"
+
+# ISO helper boundaries
+assert_eq "iso helper: Z timestamp parses" "yes" \
+    "$( ( source "$ALIB"; ra_iso_to_epoch 2026-08-24T10:00:00Z >/dev/null ) && echo yes )"
+assert_eq "iso helper: garbage fails (rc 1), never invents an epoch" "no" \
+    "$( ( source "$ALIB"; ra_iso_to_epoch "resets at 3am" >/dev/null 2>&1 ) && echo yes || echo no )"
+
 echo ""
 echo "========================================="
 echo "  routing-failover tests: $PASS passed, $FAIL failed"
