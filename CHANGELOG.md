@@ -12,6 +12,41 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Execution-profile routing foundation (#248, increment A of #109)**
+  — the DECLARATIVE layer for policy-driven tiered LLM routing;
+  deliberately inert at runtime (no build is routed, no provider
+  invoked, no state written; driver, cooldown supervisor, and reviewer
+  `providers.toml` untouched — absence of the registry changes
+  nothing). Ships: the user-level registry
+  `~/.code-copilot-team/routing.toml` (a constrained TOML dialect —
+  unsupported constructs rejected by name, never approximated;
+  `schema_version = 1` required; closed profile shape over the
+  backend/provider/model/tier/priority/quota-pool vocabulary; tiers
+  CLOSED at `tier1|tier2`; credential/endpoint REFERENCES only, with
+  value-shaped secrets refused as defense in depth; `[policy]` accepts
+  only what A consumes — behavior-bearing keys refused until their
+  increment ships); the trust-asymmetric `automation.json` `routing`
+  block (restriction-only by construction: profile/credential/
+  endpoint/identity/capability definition refused by name, `tier2`/
+  `recovery` refused until shipped); the effective-policy merge
+  proving `effective_candidates(user, repo) ⊆ candidates(user)` over
+  canonical collision-free executable-identity tuples (roles are a
+  set; both-layers-enable; disabled ⇒ empty; unknown repo ids and
+  route classes are named violations); the normalized backend-result
+  contract (`shared/schemas/routing-result.schema.json`: cause
+  taxonomy `quota_exhausted | rate_limited | unavailable | transport
+  | auth | invalid_request | denied | execution | unknown`,
+  bidirectional success/failure invariant, classifier with explicit
+  precedence over a captured real-output corpus — HTTP status alone
+  never determines cause, `denied` needs an affirmative policy
+  signal, `unknown` fails closed); and the read-only `cct routing
+  validate | status | explain` commands (T3 validation before
+  composition; purity proven under a network shim; credential
+  PRESENCE only, `set` = non-empty). **Increment B owns cause→action
+  and all runtime failover behavior** — nothing in A selects,
+  probes, or executes. New suite `tests/test-routing-config.sh`
+  (157); automation-config 161 → 181.
+
 - **Driver-owned visual verification gate (#239, increment C3 of #190
   §6)** — `verification.visual` in `automation.json` (schema-validated,
   closed: `command`, `artifact`, `url`, `timeout_sec`,

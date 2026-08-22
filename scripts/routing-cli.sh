@@ -130,6 +130,9 @@ status)
         cred="mode"
         if cv=$(rc_get "$ctx" credential_env 2>/dev/null); then
             # PRESENCE only — the value is never read into output.
+            # "set" means a NON-EMPTY value is present: ${!cv:-}
+            # treats unset and explicitly-empty alike, which is the
+            # right equivalence for credential readiness.
             if [[ -n "${!cv:-}" ]]; then cred="env:$cv (set)"; else cred="env:$cv (unset)"; fi
         else
             cred="mode:$(rc_get "$ctx" credential_mode)"
