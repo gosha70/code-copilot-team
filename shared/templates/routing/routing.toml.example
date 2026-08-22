@@ -1,0 +1,95 @@
+# routing.toml — execution-profile registry for CCT build routing
+# (#109 increment A). Copy to ~/.code-copilot-team/routing.toml.
+#
+# This file accepts ONLY the TOML subset CCT implements: [policy],
+# [route_classes.<name>], [[profiles]] tables; key = value with basic
+# strings, integers, booleans, and single-line arrays of strings.
+# Anything else is rejected, never approximated.
+#
+# Credentials are referenced by environment-variable NAME
+# (credential_env) or by backend login mode (credential_mode) — a
+# literal key in this file is refused. Model names below are
+# EXAMPLES, not routing policy.
+
+schema_version = 1
+
+[policy]
+enabled = true
+preferred_profile = "anthropic-sonnet"
+# Later increments add (refused until their behavior ships — a key
+# nothing enforces is never accepted as inert configuration):
+# max_switches_per_task = 3
+# failback = "next-task-boundary"
+# healthy_probes_required = 2
+# minimum_profile_dwell_sec = 300
+
+# Tiers are closed framework classes: tier1 | tier2. Priority orders
+# profiles WITHIN a tier (lower number = tried first).
+
+[route_classes.primary_only]
+tier_order = ["tier1"]
+
+[route_classes.tier1_only]
+tier_order = ["tier1"]
+
+[route_classes.tier2_fallback]
+tier_order = ["tier1", "tier2"]
+
+[route_classes.tier2_preferred]
+tier_order = ["tier2", "tier1"]
+
+[[profiles]]
+id = "anthropic-sonnet"
+backend = "claude-code"
+provider = "anthropic-subscription"
+model = "sonnet"
+capability_tier = "tier1"
+priority = 10
+quota_pool = "anthropic-subscription"
+roles = ["build", "reconcile", "land"]
+tool_profile = "full-cct"
+credential_mode = "claude-login"
+data_policy = "approved-cloud"
+
+[[profiles]]
+id = "deepseek-v4-pro"
+backend = "claude-code"
+provider = "deepseek-api"
+model = "deepseek-v4-pro"
+capability_tier = "tier1"
+priority = 20
+quota_pool = "deepseek-api"
+roles = ["build", "reconcile", "land"]
+tool_profile = "deepseek-compatible"
+protocol = "anthropic"
+base_url = "https://api.deepseek.com/anthropic"
+credential_env = "DEEPSEEK_API_KEY"
+data_policy = "approved-cloud"
+
+[[profiles]]
+id = "openai-gpt"
+backend = "codex"
+provider = "openai"
+model = "gpt-5.6-sol"
+capability_tier = "tier1"
+priority = 30
+quota_pool = "openai-account"
+roles = ["build", "reconcile", "land"]
+tool_profile = "full-cct"
+credential_mode = "codex-login-or-api"
+data_policy = "approved-cloud"
+
+[[profiles]]
+id = "local-qwen"
+backend = "claude-code"
+provider = "local-vllm"
+model = "qwen3-coder-next"
+capability_tier = "tier2"
+priority = 10
+quota_pool = "local-vllm"
+roles = ["bounded-build"]
+tool_profile = "local-builder-minimal"
+protocol = "anthropic-via-litellm"
+base_url_env = "CCT_LOCAL_ANTHROPIC_BASE_URL"
+credential_env = "CCT_LOCAL_API_KEY"
+data_policy = "local-only"

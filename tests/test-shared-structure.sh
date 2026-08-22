@@ -211,7 +211,7 @@ for t in "${TEMPLATE_TYPES[@]}"; do
 done
 
 TEMPLATE_DIR_COUNT=$(find "$SHARED_DIR/templates" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-assert_eq "exactly 13 template dirs" "13" "$TEMPLATE_DIR_COUNT"
+assert_eq "exactly 14 template dirs (routing arrived with #248 T1)" "14" "$TEMPLATE_DIR_COUNT"
 
 # Verify SDD templates exist
 assert_dir_exists "sdd dir exists" "$SHARED_DIR/templates/sdd"
@@ -1053,7 +1053,7 @@ assert_ok "test-counts has TEST_REVIEW_LOOP_EXPECTED_PASS numeric value" "$rc"
 COUNT_VARS=$(grep -Ec '^TEST_[A-Z_]+_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env")
 # 15 as of #239 C3 T4 (test-ui-harness.sh). Bump deliberately when a
 # suite is added, so a pin cannot go missing unnoticed.
-assert_eq "test-counts has exactly 15 expected-pass variables" "15" "$COUNT_VARS"
+assert_eq "test-counts has exactly 16 expected-pass variables (routing-config arrived with #248 T1)" "16" "$COUNT_VARS"
 
 rc=0
 grep -Eq '^TEST_LITELLM_PROXY_DEPS_EXPECTED_PASS=[0-9]+$' "$REPO_DIR/tests/test-counts.env" || rc=1

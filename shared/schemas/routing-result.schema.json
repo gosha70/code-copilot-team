@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "routing-result",
+  "description": "One normalized backend execution outcome (#248, increment A of #109). failure_class is CAUSE — never provider wording, never routing action; increment B owns the mapping from class to routing behavior, and `unknown` fails closed: no retry or failover semantics may attach to it by default.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "outcome",
+    "failure_class",
+    "backend",
+    "provider",
+    "profile",
+    "requested_model",
+    "effective_model",
+    "quota_pool",
+    "exit_code",
+    "retry_after_sec",
+    "reset_at",
+    "upstream_origin",
+    "evidence",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "outcome": { "enum": ["success", "failure"] },
+    "failure_class": {
+      "description": "null exactly when outcome is success. quota_exhausted (a shared allowance is spent — hours-scale, pool-scoped) is NOT rate_limited (short-horizon throttling); execution is a task failure, never a provider event; auth and invalid_request never read as 'try another profile'; denied is a policy refusal that is never rerouted around.",
+      "enum": [
+        "quota_exhausted",
+        "rate_limited",
+        "unavailable",
+        "transport",
+        "auth",
+        "invalid_request",
+        "denied",
+        "execution",
+        "unknown",
+        null
+      ]
+    },
+    "backend": { "type": "string", "minLength": 1 },
+    "provider": { "type": "string", "minLength": 1 },
+    "profile": { "type": "string", "minLength": 1 },
+    "requested_model": { "type": "string", "minLength": 1 },
+    "effective_model": {
+      "description": "The model that actually served the request, when verifiable; null when it cannot be verified — NEVER silently assumed equal to requested_model.",
+      "type": ["string", "null"]
+    },
+    "quota_pool": { "type": "string", "minLength": 1 },
+    "exit_code": { "type": "integer" },
+    "retry_after_sec": { "type": ["integer", "null"], "minimum": 0 },
+    "reset_at": {
+      "description": "Provider-supplied reset time (ISO-8601) when present in the evidence; null otherwise.",
+      "type": ["string", "null"]
+    },
+    "upstream_origin": {
+      "description": "Sanitized upstream endpoint identity (host, never credentials or full URLs with tokens); null when unknown.",
+      "type": ["string", "null"]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "confidence", "pattern", "source_artifact"],
+      "properties": {
+        "method": { "enum": ["structured", "regex"] },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "pattern": { "type": ["string", "null"] },
+        "source_artifact": { "type": ["string", "null"] }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "outcome": { "const": "success" } } },
+      "then": { "properties": { "failure_class": { "const": null } } }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "failure" } } },
+      "then": { "properties": { "failure_class": { "type": "string" } } }
+    }
+  ]
+}

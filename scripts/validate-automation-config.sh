@@ -500,6 +500,50 @@ if [[ "$unattended_is_object" == "true" ]]; then
     done
 fi
 
+# ── routing (#248, increment A of #109): TRUST-ASYMMETRIC by
+#    construction. A repository may only NARROW what the user-level
+#    registry (~/.code-copilot-team/routing.toml) permits — disable
+#    routing, restrict allowed_profiles, pick a default route class.
+#    It can never CREATE executable authority: profile definitions,
+#    credential or endpoint references, and protocol selection belong
+#    to the user registry and are refused here BY NAME. Keys owned by
+#    later #109 increments (tier2, recovery) are refused until their
+#    behavior ships — a key nothing enforces is never accepted as
+#    inert configuration. Cross-checks against the registry itself
+#    (unknown profile ids, unknown route class) belong to the
+#    effective-policy merge, which has both documents.
+if [[ "$(q 'has("routing")')" == "true" ]]; then
+    if ! is_type '.routing' object; then
+        violation "routing must be an object (got $(q '.routing | type'))"
+    else
+        for k in $(jq -r '.routing | keys[]' "$CONFIG" 2>/dev/null || true); do
+            case "$k" in
+                enabled|allowed_profiles|default_task_route) ;;
+                profiles|profile)
+                    violation "routing.$k: a repository cannot DEFINE execution profiles — repo configuration narrows user routing authority, never creates it (profiles live in ~/.code-copilot-team/routing.toml)" ;;
+                credential*|base_url*|protocol|model|backend|provider|quota_pool|capability_tier|tier|roles|tool_profile|data_policy)
+                    violation "routing.$k: a repository cannot introduce credential, endpoint, identity, or capability fields — these belong to the user-level registry, and repo configuration can only narrow it" ;;
+                tier2|recovery)
+                    violation "routing.$k is owned by a later #109 increment and is refused until its behavior ships — a key nothing enforces is never accepted as inert configuration" ;;
+                *)
+                    violation "unknown key 'routing.$k' (the schema is closed — see shared/schemas/automation.schema.json)" ;;
+            esac
+        done
+        if [[ "$(q '.routing | has("enabled")')" == "true" ]] \
+           && ! jq -e '.routing.enabled | type == "boolean"' "$CONFIG" >/dev/null 2>&1; then
+            violation "routing.enabled must be a boolean"
+        fi
+        if [[ "$(q '.routing | has("allowed_profiles")')" == "true" ]] \
+           && ! jq -e '.routing.allowed_profiles | type == "array" and length > 0 and (map(type == "string" and length > 0) | all) and (length == (unique | length))' "$CONFIG" >/dev/null 2>&1; then
+            violation "routing.allowed_profiles must be a non-empty array of unique non-empty profile ids"
+        fi
+        if [[ "$(q '.routing | has("default_task_route")')" == "true" ]] \
+           && ! jq -e '.routing.default_task_route | type == "string" and length > 0' "$CONFIG" >/dev/null 2>&1; then
+            violation "routing.default_task_route must be a non-empty route-class name"
+        fi
+    fi
+fi
+
 if [[ $fail_count -gt 0 ]]; then
     echo "automation config INVALID: $fail_count violation(s) in $CONFIG" >&2
     exit 1

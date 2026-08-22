@@ -600,6 +600,55 @@ assert "schema loop_timeout_sec is integer type" \
 assert "schema loop_timeout_sec has minimum 1" \
     jq -e '.properties.review.properties.loop_timeout_sec.minimum == 1' "$SCHEMA"
 
+
+# ── routing (#248, increment A of #109): trust-asymmetric repo block ──
+# A repository may only NARROW user-registry authority — never create
+# executable authority (profiles, credentials, endpoints, identity,
+# capability), and never configure behavior later increments own.
+RT_OK='"routing":{"enabled":true,"allowed_profiles":["anthropic-sonnet","local-qwen"],"default_task_route":"tier1_only"}'
+w rt1.json "{\"schema_version\":2,\"profile\":\"advisory\",$RT_OK}"
+assert "routing: restriction-only block is valid" bash "$V" "$TMP/rt1.json"
+w rt2.json '{"schema_version":2,"profile":"advisory","routing":{"enabled":false}}'
+assert "routing: enabled-only (disable) is valid" bash "$V" "$TMP/rt2.json"
+w rt3.json '{"schema_version":2,"profile":"advisory","routing":{"allowed_profiles":["a"]}}'
+assert "routing: allowed_profiles alone is valid" bash "$V" "$TMP/rt3.json"
+
+w rr1.json '{"schema_version":2,"profile":"advisory","routing":{"profiles":[{"id":"x"}]}}'
+assert_rejects "routing: a repo cannot DEFINE profiles" "$TMP/rr1.json" "cannot DEFINE execution profiles"
+w rr2.json '{"schema_version":2,"profile":"advisory","routing":{"credential_env":"MY_KEY"}}'
+assert_rejects "routing: credential keys refused by name" "$TMP/rr2.json" "cannot introduce credential, endpoint, identity, or capability"
+w rr3.json '{"schema_version":2,"profile":"advisory","routing":{"base_url":"https://evil.example"}}'
+assert_rejects "routing: endpoint keys refused by name" "$TMP/rr3.json" "cannot introduce credential, endpoint, identity, or capability"
+w rr4.json '{"schema_version":2,"profile":"advisory","routing":{"protocol":"anthropic"}}'
+assert_rejects "routing: protocol refused by name" "$TMP/rr4.json" "cannot introduce credential, endpoint, identity, or capability"
+w rr5.json '{"schema_version":2,"profile":"advisory","routing":{"backend":"claude-code"}}'
+assert_rejects "routing: identity fields refused by name" "$TMP/rr5.json" "cannot introduce credential, endpoint, identity, or capability"
+w rr6.json '{"schema_version":2,"profile":"advisory","routing":{"capability_tier":"tier1"}}'
+assert_rejects "routing: capability fields refused by name" "$TMP/rr6.json" "cannot introduce credential, endpoint, identity, or capability"
+w rr7.json '{"schema_version":2,"profile":"advisory","routing":{"tier2":{"requires_explicit_task_opt_in":true}}}'
+assert_rejects "routing: tier2 refused until its increment ships" "$TMP/rr7.json" "owned by a later #109 increment"
+w rr8.json '{"schema_version":2,"profile":"advisory","routing":{"recovery":{"failback":"next-task-boundary"}}}'
+assert_rejects "routing: recovery refused until its increment ships" "$TMP/rr8.json" "owned by a later #109 increment"
+w rr9.json '{"schema_version":2,"profile":"advisory","routing":{"enabled":"yes"}}'
+assert_rejects "routing.enabled must be boolean" "$TMP/rr9.json" "routing.enabled must be a boolean"
+w rr10.json '{"schema_version":2,"profile":"advisory","routing":{"allowed_profiles":[]}}'
+assert_rejects "routing.allowed_profiles must be non-empty" "$TMP/rr10.json" "non-empty array of unique non-empty profile ids"
+w rr11.json '{"schema_version":2,"profile":"advisory","routing":{"allowed_profiles":["a","a"]}}'
+assert_rejects "routing.allowed_profiles must be unique" "$TMP/rr11.json" "non-empty array of unique non-empty profile ids"
+w rr12.json '{"schema_version":2,"profile":"advisory","routing":{"default_task_route":""}}'
+assert_rejects "routing.default_task_route must be non-empty" "$TMP/rr12.json" "non-empty route-class name"
+w rr13.json '{"schema_version":2,"profile":"advisory","routing":{"shiny":true}}'
+assert_rejects "routing: unknown key refused" "$TMP/rr13.json" "unknown key 'routing.shiny'"
+w rr14.json '{"schema_version":2,"profile":"advisory","routing":"tier1"}'
+assert_rejects "routing must be an object" "$TMP/rr14.json" "routing must be an object"
+
+# Schema parity: the block is closed and restriction-only BY SHAPE.
+assert "schema: routing is closed" jq -e '.properties.routing.additionalProperties == false' "$SCHEMA"
+assert "schema: routing has ONLY the three restriction fields" \
+    jq -e '.properties.routing.properties | keys | sort == ["allowed_profiles","default_task_route","enabled"]' "$SCHEMA"
+assert "schema: allowed_profiles is a unique non-empty id array" \
+    jq -e '.properties.routing.properties.allowed_profiles | .minItems == 1 and .uniqueItems == true and .items.minLength == 1' "$SCHEMA"
+
 echo ""
 echo "========================================="
 echo "  automation-config tests: $PASS passed, $FAIL failed"

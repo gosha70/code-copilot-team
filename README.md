@@ -853,6 +853,64 @@ operator-supplied `required_when_ui_in_scope` is rejected by name):
   are out of scope. The gate bounds an unattended pipeline against a
   drifting or sloppy harness, not against a hostile local user.
 
+## LLM Routing Foundation (#109 increment A)
+
+Policy-driven tiered LLM routing — continuing a build on another
+provider when the preferred one is unavailable — arrives in increments
+(#109). **Increment A routes and executes NOTHING**: it ships the
+validated configuration surface, the normalized failure contract, and
+read-only inspection commands that later increments act on. With no
+routing registry configured, existing build and execution behavior is
+unchanged.
+
+- **The registry** (`~/.code-copilot-team/routing.toml`, template at
+  `shared/templates/routing/routing.toml.example`) declares execution
+  profiles — each a validated combination of backend (`claude-code`,
+  `codex`, `pi`), provider, model, capability tier (CLOSED vocabulary:
+  `tier1 | tier2`), priority, quota pool (profiles sharing one
+  subscription share one exhaustion domain), roles, tool profile, and
+  data policy — plus route classes (`tier_order`). The file is a
+  CONSTRAINED TOML dialect: only the subset CCT implements is
+  accepted; unsupported constructs are rejected by name, never
+  approximated. Credentials are REFERENCES (a backend login mode or an
+  environment-variable name) — a literal secret anywhere in the file
+  is refused, and no routing command ever reads the referenced value.
+  `[policy]` accepts only what increment A consumes; behavior-bearing
+  keys (failback, probes, dwell) are refused until the increment that
+  enforces them ships.
+- **Repositories restrict, never grant.** `automation.json` may carry
+  a `routing` block that can ONLY narrow the operator's registry —
+  disable routing, restrict `allowed_profiles`, pick a default route
+  class. Profile definitions, credential/endpoint/identity/capability
+  fields, and not-yet-shipped `tier2`/`recovery` policy are refused by
+  name. The effective policy is the most-restrictive combination, and
+  the merge proves `effective ⊆ user-registry` over complete
+  executable identities — a repo cannot keep a profile id while
+  changing what it executes as.
+- **The normalized failure contract**
+  (`shared/schemas/routing-result.schema.json`) classifies backend
+  failures by CAUSE — `quota_exhausted` (shared allowance spent,
+  hours-scale) is not `rate_limited` (short throttle); `auth` and
+  `invalid_request` never read as "try another profile"; `denied`
+  requires an affirmative policy signal and is never rerouted around;
+  ordinary build/test failures are `execution`, not provider events;
+  anything unmatched is `unknown` and FAILS CLOSED. Increment B owns
+  what each cause does; an HTTP status alone never determines cause.
+- **Inspection commands** (read-only; no probe, no network, no state
+  writes): `cct routing validate` (registry + repo restrictions +
+  merge), `cct routing status` (per-profile rows; every profile is
+  `unknown` until increment B records state — unknown is never
+  treated as healthy; credential columns report presence only, where
+  `set` means a NON-EMPTY value is present behind the referenced
+  variable — never the value itself), and `cct routing explain
+  --route-class <class>` (a pure configuration-resolution dry run
+  that states it is not an availability decision).
+
+What arrives later (#109 increments B–E): structured failover with
+circuit state and checkpoints (B), Tier-2 bounded task routing with
+reconciliation (C), probes/recovery/failback and `routing tick` (D),
+benchmarks and shadow-mode learned routing (E).
+
 ## Four-Phase Workflow
 
 | Phase | Model | Effort | Delegation | What Happens |
@@ -954,6 +1012,7 @@ code-copilot-team/
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        1034 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
+│   ├── test-routing-config.sh         157 execution-profile registry + result + cli tests
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

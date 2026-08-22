@@ -24,6 +24,10 @@ COMMANDS
                   capability, from their source-of-truth files.
                     cct list            print to the terminal
                     cct list --write    (re)generate docs/features.md
+  routing         Execution-profile routing (#109 increment A — read-only):
+                    cct routing validate [--config automation.json]
+                    cct routing status
+                    cct routing explain --route-class <class> [--role <role>]
   doctor          [planned] Check the environment: tools installed, gateway
                   reachable, provider profiles valid, keys + cost cap set.
   config          [planned] Inspect the layered config:
@@ -53,6 +57,9 @@ case "$cmd" in
     else
       exec "$SCRIPT_DIR/generate-feature-index.sh" --stdout
     fi
+    ;;
+  routing)
+    exec "$SCRIPT_DIR/routing-cli.sh" "$@"
     ;;
   doctor)
     echo "cct doctor is planned (Tier 2 — environment/health check)." >&2

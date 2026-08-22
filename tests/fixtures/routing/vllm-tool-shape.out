@@ -1,0 +1,1 @@
+212 validation errors for ChatCompletionRequest: body.input should be a valid string
