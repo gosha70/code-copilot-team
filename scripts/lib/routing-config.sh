@@ -406,3 +406,131 @@ rc_validate() {
 
     [[ $bad -eq 0 ]]
 }
+
+# ── effective policy (#248 T4, plan decision 4) ──────────────────────
+# rc_profile_tuple <idx> — the COMPLETE EXECUTABLE IDENTITY of one
+# registry profile as CANONICAL compact JSON. The monotonic subset
+# invariant compares THESE, not friendly ids: a candidate is what it
+# executes as (backend+provider+model+tier+pool+credential reference+
+# endpoint reference+roles+tool profile+data policy), so no
+# composition step can keep an id while changing what it runs.
+# Canonical means COLLISION-FREE, not merely deterministic: a naive
+# delimiter join would let two structurally different candidates
+# compare equal when a field carries the delimiter — JSON gives
+# unambiguous boundaries and escaping. `roles` is semantically a SET
+# (order carries no routing meaning) and is sorted/uniqued before
+# serialization.
+rc_profile_tuple() {
+    local ctx="profiles.$1" cred ep roles_json
+    if cred=$(rc_get "$ctx" credential_mode 2>/dev/null); then cred="mode:$cred"
+    elif cred=$(rc_get "$ctx" credential_env 2>/dev/null); then cred="env:$cred"
+    else cred="none"; fi
+    if ep=$(rc_get "$ctx" base_url 2>/dev/null); then ep="url:$ep"
+    elif ep=$(rc_get "$ctx" base_url_env 2>/dev/null); then ep="urlenv:$ep"
+    else ep="none"; fi
+    roles_json=$(rc_array_elems "$ctx" roles | sort -u | jq -R . | jq -sc .)
+    jq -nc \
+        --arg id "$(rc_get "$ctx" id)" --arg backend "$(rc_get "$ctx" backend)" \
+        --arg provider "$(rc_get "$ctx" provider)" --arg model "$(rc_get "$ctx" model)" \
+        --arg tier "$(rc_get "$ctx" capability_tier)" \
+        --argjson priority "$(rc_get "$ctx" priority)" \
+        --arg pool "$(rc_get "$ctx" quota_pool)" --argjson roles "$roles_json" \
+        --arg tool "$(rc_get "$ctx" tool_profile)" --arg dp "$(rc_get "$ctx" data_policy)" \
+        --arg cred "$cred" --arg ep "$ep" \
+        '[$id, $backend, $provider, $model, $tier, $priority, $pool, $roles, $tool, $dp, $cred, $ep]'
+}
+
+# rc_effective <registry-file> <automation-json-file|->
+# The most-restrictive combination of the two layers:
+#   - refuses to compose over an invalid registry;
+#   - re-checks (defense in depth) that the repo routing block carries
+#     ONLY the three restriction keys — a merge must never consume a
+#     block the standalone validator would refuse;
+#   - enabled = user [policy].enabled AND repo routing.enabled (each
+#     defaulting true when absent — the registry's presence is the
+#     user's opt-in, an absent repo block is no restriction); when the
+#     effective policy is DISABLED the candidate set is EMPTY;
+#   - candidates = registry profiles ∩ repo allowed_profiles (absent =
+#     all), each emitted as its full executable-identity tuple;
+#   - a repo-listed id the registry does not define, and a
+#     default_task_route naming no registry route class, are NAMED
+#     violations — a typo must never silently widen or narrow policy.
+# Output: violations (exit 1) or the effective JSON document (exit 0).
+rc_effective() {
+    local reg="$1" repo="$2" bad=0
+    local viol
+    viol() { echo "effective-policy: $1"; bad=1; }
+
+    if ! rc_validate "$reg" >/dev/null 2>&1; then
+        viol "the registry does not validate — refusing to compose an effective policy over an invalid registry (run: cct routing validate)"
+        echo ""
+        return 1
+    fi
+    rc_parse "$reg" || true
+
+    local rblock="null"
+    if [[ "$repo" != "-" ]]; then
+        [[ -r "$repo" ]] || { viol "cannot read '$repo'"; return 1; }
+        rblock=$(jq -c '.routing // null' "$repo" 2>/dev/null) || { viol "'$repo' is not valid JSON"; return 1; }
+    fi
+    if [[ "$rblock" != "null" ]]; then
+        local k
+        for k in $(jq -r 'keys[]' <<< "$rblock" 2>/dev/null); do
+            case "$k" in
+                enabled|allowed_profiles|default_task_route) ;;
+                *) viol "the repo routing block carries a non-restriction key '$k' — a repository can narrow user routing authority, never create it (validate-automation-config refuses this block)" ;;
+            esac
+        done
+    fi
+    [[ $bad -ne 0 ]] && return 1
+
+    # both-layers-enable
+    local u_en r_en enabled=true
+    u_en=$(rc_get policy enabled 2>/dev/null) || u_en="true"
+    # NB: jq's // would turn an explicit false back into true (it
+    # treats false as empty) — the null test must be explicit.
+    r_en=$(jq -r 'if . == null or (.enabled == null) then "true" else (.enabled | tostring) end' <<< "$rblock")
+    [[ "$u_en" == "true" && "$r_en" == "true" ]] || enabled=false
+
+    # allowed set = intersection; unknown repo ids are NAMED
+    local allowed="" i id
+    local repo_ids
+    repo_ids=$(jq -r 'if . == null or (.allowed_profiles == null) then "" else .allowed_profiles[] end' <<< "$rblock")
+    if [[ -n "$repo_ids" ]]; then
+        local rid found
+        while IFS= read -r rid; do
+            [[ -z "$rid" ]] && continue
+            found=false
+            i=0
+            while [[ $i -lt $RC_PROFILE_COUNT ]]; do
+                [[ "$(rc_get "profiles.$i" id)" == "$rid" ]] && found=true
+                i=$((i+1))
+            done
+            [[ "$found" == "true" ]] || viol "repo allowed_profiles names '$rid', which the user registry does not define — refusing to guess (a typo must not silently change policy)"
+        done <<< "$repo_ids"
+    fi
+    # default route class must exist in the registry
+    local dtr
+    dtr=$(jq -r 'if . == null then "" else (.default_task_route // "") end' <<< "$rblock")
+    if [[ -n "$dtr" ]]; then
+        rc_route_classes | grep -qx "$dtr" || viol "repo default_task_route '$dtr' names no route class in the user registry"
+    fi
+    [[ $bad -ne 0 ]] && return 1
+
+    # emit the effective document: full tuples, empty when disabled
+    local out="[]"
+    if [[ "$enabled" == "true" ]]; then
+        i=0
+        while [[ $i -lt $RC_PROFILE_COUNT ]]; do
+            id=$(rc_get "profiles.$i" id)
+            if [[ -z "$repo_ids" ]] || grep -qx "$id" <<< "$repo_ids"; then
+                out=$(jq -c --argjson t "$(rc_profile_tuple "$i")" '. + [$t]' <<< "$out")
+            fi
+            i=$((i+1))
+        done
+    fi
+    jq -n --argjson en "$([[ "$enabled" == "true" ]] && echo true || echo false)" \
+          --argjson cands "$out" --arg dtr "$dtr" \
+          '{enabled: $en, candidates: $cands,
+            default_task_route: (if $dtr == "" then null else $dtr end)}'
+}

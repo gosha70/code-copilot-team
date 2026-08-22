@@ -319,6 +319,110 @@ assert_eq "invariant: failure + null cause is REJECTED" "1" \
 assert_eq "invariant: failure + an invented cause is REJECTED" "1" \
     "$( (rr_doc_invariant "$(jq '.failure_class = "vibes"' <<< "$DOC")" >/dev/null 2>&1); echo $? )"
 
+
+echo ""
+echo "=== T4: effective policy — the monotonic merge ==="
+# effective_candidates(user, repo) SUBSET-OF candidates(user), with
+# candidate identity = the COMPLETE EXECUTABLE TUPLE, never the id.
+eff() { ( set +e; source "$LIB"; rc_effective "$1" "$2" ); }
+wj() { printf '%s' "$2" > "$TMP/$1"; }
+
+# candidates(user): every registry tuple, computed directly.
+USER_TUPLES=$( ( source "$LIB"; rc_parse "$GOOD" || true
+    i=0; while [[ $i -lt $RC_PROFILE_COUNT ]]; do rc_profile_tuple "$i"; i=$((i+1)); done ) )
+assert_eq "the user candidate set carries 3 full tuples" "3" "$(grep -c '^\[' <<< "$USER_TUPLES")"
+assert "tuples are canonical compact JSON (12 fields)" \
+    jq -e -s 'length == 3 and (map(type == "array" and length == 12) | all)' <<< "$USER_TUPLES"
+assert_eq "roles serialize as a SORTED set inside the tuple" '["build","land","reconcile"]' \
+    "$(head -1 <<< "$USER_TUPLES" | jq -c '.[7]')"
+
+# The generated matrix: (name, repo-doc-or--, want-enabled, want-count)
+wj m-narrow.json '{"routing":{"allowed_profiles":["alpha"]}}'
+wj m-repo-off.json '{"routing":{"enabled":false}}'
+wj m-none.json '{}'
+while IFS='|' read -r name repo wanten wantn; do
+    [[ -z "$name" ]] && continue
+    [[ "$repo" != "-" ]] && repo="$TMP/$repo"
+    OUT=$(eff "$GOOD" "$repo") || true
+    assert_eq "matrix/$name: enabled=$wanten, $wantn candidate(s)" "$wanten $wantn" \
+        "$(jq -r '"\(.enabled) \(.candidates | length)"' <<< "$OUT")"
+    # THE INVARIANT: every effective tuple is byte-identical to a user tuple.
+    ok=true
+    while IFS= read -r t; do
+        [[ -z "$t" ]] && continue
+        grep -qxF "$t" <<< "$USER_TUPLES" || ok=false
+    done <<< "$(jq -c '.candidates[]' <<< "$OUT" 2>/dev/null)"
+    assert_eq "matrix/$name: effective SUBSET-OF user (full-tuple equality)" "true" "$ok"
+done <<'MATRIX'
+repo-absent|-|true|3
+no-routing-block|m-none.json|true|3
+narrowing|m-narrow.json|true|1
+repo-disable|m-repo-off.json|false|0
+MATRIX
+# (wj wrote into $TMP; eff needs full paths for the file cases)
+OUT=$(eff "$GOOD" "$TMP/m-narrow.json")
+assert_eq "narrowing keeps ONLY the allowed id" "alpha" "$(jq -r '.candidates[0][0]' <<< "$OUT")"
+assert_eq "narrowing EXCLUDES the unlisted profiles" "0" "$(jq -c '.candidates[]' <<< "$OUT" | grep -c "alpha-opus" || true)"
+assert_eq "the effective alpha tuple is BYTE-IDENTICAL to the registry's" \
+    "$(head -1 <<< "$USER_TUPLES")" "$(jq -c '.candidates[0]' <<< "$OUT")"
+
+# user-layer disable: both layers must agree to enable
+U_OFF="$TMP/u-off.toml"; sed 's/^enabled = true$/enabled = false/' "$GOOD" > "$U_OFF"
+assert_eq "user disable: enabled=false, EMPTY candidates" "false 0" \
+    "$(eff "$U_OFF" "-" | jq -r '"\(.enabled) \(.candidates | length)"')"
+
+# named cross-document violations
+wj m-ghost.json '{"routing":{"allowed_profiles":["alpha","ghost"]}}'
+OUT=$(eff "$GOOD" "$TMP/m-ghost.json") || true
+assert "widening attempt: unknown repo id is a NAMED violation" \
+    grep -q "names 'ghost', which the user registry does not define" <<< "$OUT"
+wj m-badroute.json '{"routing":{"default_task_route":"warp_speed"}}'
+OUT=$(eff "$GOOD" "$TMP/m-badroute.json") || true
+assert "unknown default route class is a NAMED violation" \
+    grep -q "names no route class in the user registry" <<< "$OUT"
+wj m-route.json '{"routing":{"default_task_route":"tier1_only"}}'
+assert_eq "a valid default route class is echoed" "tier1_only" \
+    "$(eff "$GOOD" "$TMP/m-route.json" | jq -r '.default_task_route')"
+
+# ADVERSARIAL IDENTITY: a repo that keeps a known id but tries to
+# alter its resolved target cannot reach composition — the merge
+# refuses any non-restriction key independently of the validator.
+wj m-adversarial.json '{"routing":{"allowed_profiles":["alpha"],"profiles":[{"id":"alpha","model":"evil-model"}]}}'
+RC=0
+OUT=$(eff "$GOOD" "$TMP/m-adversarial.json") || RC=$?
+assert_eq "adversarial: smuggled profile definitions refuse composition" "1" "${RC:-0}"
+assert "adversarial: ...with the trust-boundary named" \
+    grep -q "non-restriction key 'profiles'" <<< "$OUT"
+
+# an invalid registry never composes
+BADREG="$TMP/badreg.toml"; sed 's/^capability_tier = "tier2"$/capability_tier = "tier7"/' "$GOOD" > "$BADREG"
+OUT=$(eff "$BADREG" "-") || true
+assert "an invalid registry refuses composition" \
+    grep -q "refusing to compose an effective policy over an invalid registry" <<< "$OUT"
+
+# SEPARATOR-COLLISION regression: two structurally different
+# candidates whose fields carry a would-be delimiter must NEVER
+# serialize equal — canonical JSON, not naive joining.
+# provider and model are ADJACENT tuple positions, so a naive join
+# genuinely collides on this pair — that is what makes the regression
+# discriminate against delimiter concatenation.
+COLL="$TMP/coll.toml"
+sed -e 's/^provider = "anthropic-subscription"$/provider = "anthropic|x"/' -e 's/^model = "sonnet"$/model = "y"/' "$GOOD" | head -63 > "$COLL"
+COLL2="$TMP/coll2.toml"
+sed -e 's/^provider = "anthropic-subscription"$/provider = "anthropic"/' -e 's/^model = "sonnet"$/model = "x|y"/' "$GOOD" | head -63 > "$COLL2"
+TA=$( ( source "$LIB"; rc_parse "$COLL"  || true; rc_profile_tuple 0 ) )
+TB=$( ( source "$LIB"; rc_parse "$COLL2" || true; rc_profile_tuple 0 ) )
+assert "collision: separator-bearing fields stay structurally distinct" \
+    test "$TA" != "$TB"
+assert "collision: both remain valid JSON tuples" \
+    jq -e -s 'map(type == "array") | all' <<< "$TA
+$TB"
+# roles are a SET: order in the registry does not change identity
+RS1="$TMP/rs1.toml"; sed 's/^roles = \["build", "reconcile", "land"\]$/roles = ["land", "build", "reconcile"]/' "$GOOD" > "$RS1"
+TR1=$( ( source "$LIB"; rc_parse "$GOOD" || true; rc_profile_tuple 0 ) )
+TR2=$( ( source "$LIB"; rc_parse "$RS1"  || true; rc_profile_tuple 0 ) )
+assert_eq "roles order carries no identity meaning (set semantics)" "$TR1" "$TR2"
+
 echo ""
 echo "========================================="
 echo "  routing-config tests: $PASS passed, $FAIL failed"
