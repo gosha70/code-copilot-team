@@ -9,7 +9,7 @@ the normalized backend-result contract, and read-only `cct routing`
 tooling. **No build is routed in this increment** — selection authority,
 circuit state, checkpoints, and probes are increments B–D.
 
-## User scenarios
+## User Scenarios
 
 - An operator declares an ordered set of execution profiles (e.g.
   Anthropic Sonnet via Claude Code; DeepSeek via Claude Code's
@@ -25,7 +25,7 @@ circuit state, checkpoints, and probes are increments B–D.
   failure, or an ordinary build failure — increment A defines that
   classification contract and proves it against captured real output.
 
-## Functional requirements
+## Requirements
 
 - **FR-1 (vocabulary).** Backend, provider, model, execution profile,
   capability tier, priority, and quota pool are DISTINCT validated
@@ -79,6 +79,21 @@ circuit state, checkpoints, and probes are increments B–D.
   the driver, the cooldown supervisor, and reviewer `providers.toml`
   semantics are untouched; a missing registry means routing is simply
   absent, not an error for any existing path.
+
+## Constraints
+
+- `routing.toml` is a CONSTRAINED TOML dialect: only the subset CCT
+  implements is accepted; unsupported constructs are rejected by name,
+  never approximated (plan decision 1 is normative).
+- The tier vocabulary is CLOSED (`tier1|tier2`) — framework semantic
+  classes, never operator-definable strings.
+- The credential boundary is STRUCTURAL: no field can hold a literal
+  credential; references only; no command reads the referenced values.
+- Increment A is runtime-INERT: no driver, supervisor, or reviewer
+  path changes; no provider invocation, no network calls, no state
+  writes from any A surface.
+- bash 3.2 compatible; no new runtime dependency (the parser follows
+  the repo's line-oriented no-dependency idiom).
 
 ## Success criteria
 
