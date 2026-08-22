@@ -1,8 +1,9 @@
 # Origin Alignment Check — routing-profile-foundation
 
 Date: 2026-08-21 19:00 (record opened)
-Last revised: 2026-08-21 — plan review round 1 amendments applied;
-child issue #248 filed; plan status approved
+Last revised: 2026-08-22 — spec.md sections renamed to the CI
+spec-conformance gate's canonical headings (User Scenarios,
+Requirements, + a Constraints section); content unchanged
 Trigger: rev-1 SDD bundle authored for increment A of #109 at the
 owner's direction ("I want you to work on this enhancement so I can
 optimize my token usage with external LLM").
