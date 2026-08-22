@@ -25,19 +25,24 @@
 # which backend is selected (the id is unique within a validated
 # registry and gives predictable explain/journal output).
 #
-# Output: {
-#   selected: {id, backend, provider, model, tier, priority, pool,
-#              roles, tool_profile, data_policy, credential_ref,
-#              endpoint_ref} | null,       # NAMED fields — the tuple
-#                                          # stays an opaque primitive
-#   considered: [ {id, verdict: "selected"|"eligible"|"rejected",
-#                  reason} ... ],          # EVERY candidate, in order
-#   exhausted: bool,
-#   earliest_retry: epoch|null,   # min until among time-blocked
-#                                 # candidates (FR-B8 sleep target);
-#                                 # null when every block is permanent
-#   terminal_reason: "routing_no_eligible_profile"|null
-# }
+# Output — exactly THREE mutually exclusive shapes (T4 consumes them
+# without inventing precedence; a non-null terminal_reason MEANS the
+# supervisor may park/terminate for it, never "zero candidates at this
+# instant"):
+#   1. selected:  selected!=null, exhausted=false,
+#                 earliest_retry=null, terminal_reason=null
+#                 (a selected state carries NO sleep target)
+#   2. TEMPORARY exhaustion: selected=null, exhausted=true,
+#                 earliest_retry=<min governing until>,
+#                 terminal_reason=null  (FR-B8: sleep, then reselect)
+#   3. PERMANENT exhaustion: selected=null, exhausted=true,
+#                 earliest_retry=null,
+#                 terminal_reason="routing_no_eligible_profile"
+# selected is NAMED fields (the tuple stays an opaque primitive);
+# considered[] is EVERY candidate's explain-vocabulary verdict —
+# EVIDENCE ONLY: T4 must never recompute eligibility from it;
+# selected/earliest_retry/terminal_reason are the authoritative
+# outputs.
 
 # shellcheck source=/dev/null
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/routing-state.sh"
@@ -113,13 +118,22 @@ rt_select() {  # <effective-json> <attempted-json-array> [role]
     local exhausted=false term="null"
     if [[ "$selected" == "null" ]]; then
         exhausted=true
-        # The closed-enum discipline applies to EVERY emitter, not only
-        # ra_decide: validate before emitting.
-        ra_terminal_valid routing_no_eligible_profile || {
-            echo "routing-select: exhaustion reason is not in the closed enum" >&2
-            return 1
-        }
-        term='"routing_no_eligible_profile"'
+        if [[ "$earliest" == "null" ]]; then
+            # PERMANENT exhaustion — the only state that carries a
+            # terminal reason. The closed-enum discipline applies to
+            # EVERY emitter, not only ra_decide: validate first.
+            ra_terminal_valid routing_no_eligible_profile || {
+                echo "routing-select: exhaustion reason is not in the closed enum" >&2
+                return 1
+            }
+            term='"routing_no_eligible_profile"'
+        fi
+        # TEMPORARY exhaustion (earliest set): terminal_reason stays
+        # null — a future re-eligibility instant is not a terminal
+        # disposition.
+    else
+        # a selected state carries no sleep target
+        earliest="null"
     fi
     jq -n --argjson selected "$selected" --argjson considered "$considered" \
           --argjson exhausted "$exhausted" --argjson earliest "$earliest" \

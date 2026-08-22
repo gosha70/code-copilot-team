@@ -420,7 +420,8 @@ SEL=$(RT "$PST" "$EFF" '[]')
 assert_eq "pool cooled: BOTH poolA members are rejected, sibling never burned" "rejected rejected" \
     "$(printf '%s %s' "$(verdict_of "$SEL" alpha)" "$(verdict_of "$SEL" delta)")"
 assert_eq "pool cooled: selection falls to the other pool" "beta" "$(jq -r '.selected.id' <<< "$SEL")"
-assert_eq "pool cooled: earliest_retry is the pool's until" "$UNTIL" "$(jq -r '.earliest_retry' <<< "$SEL")"
+assert_eq "shape 1: a SELECTED state carries no sleep target and no terminal reason" "null null" \
+    "$(jq -r '"\(.earliest_retry) \(.terminal_reason)"' <<< "$SEL")"
 
 # exhaustion: named reason from the closed enum + earliest wake time
 XST="$TMP/sel-exh.json"
@@ -429,11 +430,10 @@ U2=$(( $(date -u +%s) + 900 ))
   rs_set_profile x1 alpha disabled "auth" -
   rs_set_pool x2 poolB cooldown "throttled" "$U2" ) >/dev/null 2>&1
 SEL=$(RT "$XST" "$EFF" '["delta"]')
-assert_eq "exhaustion: no eligible profile -> exhausted + the closed-enum reason" \
-    "true routing_no_eligible_profile" "$(jq -r '"\(.exhausted) \(.terminal_reason)"' <<< "$SEL")"
+assert_eq "shape 2: TEMPORARY exhaustion — sleep target set, terminal reason NULL" \
+    "true $U2 null" "$(jq -r '"\(.exhausted) \(.earliest_retry) \(.terminal_reason)"' <<< "$SEL")"
 assert_eq "exhaustion: every blocking reason is present" "6" \
     "$(jq '[.considered[] | select(.verdict == "rejected")] | length' <<< "$SEL")"
-assert_eq "exhaustion: earliest_retry = the soonest time-based unblock" "$U2" "$(jq -r '.earliest_retry' <<< "$SEL")"
 
 # all blocks permanent -> no wake time to sleep toward
 PMT="$TMP/sel-perm.json"
@@ -441,8 +441,9 @@ PMT="$TMP/sel-perm.json"
   rs_set_profile p1 alpha disabled "auth" -
   rs_set_profile p2 beta disabled "auth" - ) >/dev/null 2>&1
 SEL=$(RT "$PMT" "$EFF" '["delta"]')
-assert_eq "permanent exhaustion: earliest_retry is null (nothing to wait for)" "true null" \
-    "$(jq -r '"\(.exhausted) \(.earliest_retry)"' <<< "$SEL")"
+assert_eq "shape 3: PERMANENT exhaustion — no sleep target, the terminal reason" \
+    "true null routing_no_eligible_profile" \
+    "$(jq -r '"\(.exhausted) \(.earliest_retry) \(.terminal_reason)"' <<< "$SEL")"
 
 # effective policy disabled -> nothing selectable
 SEL=$(RT "$TMP/sel-clean.json" "$EFF_OFF" '[]')
