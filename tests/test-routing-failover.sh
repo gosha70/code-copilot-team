@@ -760,7 +760,7 @@ mk_result() {  # <dir> <n> <fixture> <exit> <retries> -> writes started+result
             --arg id "recov-a$n" \
             '{attempt_id:$id, attempt:$n, profile:$p, started_epoch:$t}' > "$dir/started-$n.json"
       jq -n --arg id "recov-a$n" --argjson t "$epoch" --argjson r "$res" --argjson d "$dec" \
-            '{attempt_id:$id, decision_epoch:$t, result:$r, decision:$d, legacy_usage_fallback:null}' > "$dir/result-$n.json" )
+            '{schema_version:1, attempt_id:$id, decision_epoch:$t, result:$r, decision:$d, legacy_usage_fallback:null}' > "$dir/result-$n.json" )
 }
 # R1: denied result, action never applied -> recovery parks with the
 # recorded reason; the child is NEVER launched; the checkpoint appears.
@@ -835,6 +835,66 @@ assert_eq "recovery/applied: the control effect landed exactly once" '["alpha"]'
     "$(jq -c '.epoch_attempted' "$TMP/rec2/wr/.cct/auto-build/demo-feat/routing/control.json")"
 assert "recovery/applied: ...with its attempt id marked in the SAME write" \
     bash -c "jq -e '.applied_attempts | index(\"recov-a1\") != null' '$TMP/rec2/wr/.cct/auto-build/demo-feat/routing/control.json'"
+
+# R5: the envelope is VERSIONED and CLOSED — recovery acts only on a
+# valid v1 envelope; anything else is indeterminate with ZERO effects.
+mkdir -p "$TMP/rec5/mock" "$TMP/rec5/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/rec5/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "-|0" > "$TMP/rec5/mock/alpha.spec"
+mk_result "$TMP/rec5/wr/.cct/auto-build/demo-feat/routing" 1 "$FXD/api-auth-structured.out" 1 0
+jq '.schema_version = 2' "$TMP/rec5/wr/.cct/auto-build/demo-feat/routing/result-1.json" > "$TMP/rec5/v2.json" \
+    && mv "$TMP/rec5/v2.json" "$TMP/rec5/wr/.cct/auto-build/demo-feat/routing/result-1.json"
+sup_run rec5 "$TMP/sup-reg.toml"
+assert_eq "envelope/version: an unknown schema_version is indeterminate" "5" "$SUP_RC"
+assert "envelope/version: named as a foreign-version envelope" \
+    grep -q "foreign-version terminal result envelope" "$TMP/rec5/led/demo-feat/events.jsonl"
+assert_eq "envelope/version: zero relaunches" "no" \
+    "$( [[ -f "$TMP/rec5/mock/count-alpha" ]] && echo yes || echo no )"
+assert_eq "envelope/version: zero state mutations" "no" \
+    "$( [[ -f "$TMP/rec5/state.json" ]] && echo yes || echo no )"
+mkdir -p "$TMP/rec6/mock" "$TMP/rec6/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/rec6/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "-|0" > "$TMP/rec6/mock/alpha.spec"
+mk_result "$TMP/rec6/wr/.cct/auto-build/demo-feat/routing" 1 "$FXD/api-auth-structured.out" 1 0
+jq '.surprise = true' "$TMP/rec6/wr/.cct/auto-build/demo-feat/routing/result-1.json" > "$TMP/rec6/x.json" \
+    && mv "$TMP/rec6/x.json" "$TMP/rec6/wr/.cct/auto-build/demo-feat/routing/result-1.json"
+sup_run rec6 "$TMP/sup-reg.toml"
+assert_eq "envelope/closed: an unexpected field is indeterminate (zero effects)" "5 no" \
+    "$(printf '%s %s' "$SUP_RC" "$( [[ -f "$TMP/rec6/mock/count-alpha" ]] && echo yes || echo no )")"
+
+# R7: replay identity is the PERSISTED one — a mutated registry cannot
+# retarget the recovered action.
+mkdir -p "$TMP/rec7/mock" "$TMP/rec7/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/rec7/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "-|0" > "$TMP/rec7/mock/alpha.spec"
+mk_result "$TMP/rec7/wr/.cct/auto-build/demo-feat/routing" 1 "$FXD/claude-weekly-limit.out" 1 0
+MUTREG="$TMP/rec7-reg.toml"
+cat > "$MUTREG" <<MREOF
+schema_version = 1
+
+[route_classes.tier1_only]
+tier_order = ["tier1"]
+
+[[profiles]]
+id = "alpha"
+backend = "claude-code"
+provider = "somewhere-else"
+model = "other-model"
+capability_tier = "tier1"
+priority = 10
+quota_pool = "poolZ"
+roles = ["build"]
+tool_profile = "t"
+credential_mode = "claude-login"
+data_policy = "approved-cloud"
+MREOF
+sup_run rec7 "$MUTREG"
+assert_eq "replay-identity: the recorded quota action cooled the ORIGINAL pool" "cooldown" \
+    "$(jq -r '.pools.poolA.state // "absent"' "$TMP/rec7/state.json")"
+assert_eq "replay-identity: the mutated registry's pool was NEVER touched" "absent" \
+    "$(jq -r '.pools.poolZ.state // "absent"' "$TMP/rec7/state.json")"
+assert_eq "replay-identity: attempt 1 was never relaunched" "no" \
+    "$( [[ -f "$TMP/rec7/mock/count-alpha" ]] && echo yes || echo no )"
 
 # ── sticky exclusions: a sleep resets ONLY the eligibility-window set ──
 mkdir -p "$TMP/sticky/mock"

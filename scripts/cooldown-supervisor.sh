@@ -418,9 +418,26 @@ rt_startup() {
     rt_refuse "routing_attempt_indeterminate" "attempt $n has no terminal result (see $RT_DIR/$latest)"
   fi
   [[ -f "$RT_DIR/checkpoint-$n.json" ]] && return 0
-  if ! jq -e '.decision.action and .result and .decision_epoch and .attempt_id' "$RT_DIR/result-$n.json" >/dev/null 2>&1; then
-    journal "routing_attempt_indeterminate" "attempt $n has a MALFORMED terminal result — not durable evidence; refusing to replay or guess"
-    rt_refuse "routing_attempt_indeterminate" "attempt $n's terminal result is malformed (see $RT_DIR/result-$n.json)"
+  # The envelope is CLOSED and VERSIONED: a valid v1 envelope is the
+  # ONLY thing recovery may act on. Malformed, unknown schema_version,
+  # missing required fields, or unexpected fields are all
+  # INDETERMINATE — zero relaunches, zero state/control mutations. A
+  # supervisor upgrade must never reinterpret an old durable result
+  # through a newer wrapper contract.
+  if ! jq -e 'type == "object" and .schema_version == 1
+              and (.attempt_id | type == "string")
+              and (.decision_epoch | type == "number")
+              and (.result | type == "object")
+              and (.decision | type == "object") and (.decision.action | type == "string")
+              and ((keys - ["schema_version","attempt_id","decision_epoch","result","decision","legacy_usage_fallback"]) | length == 0)'               "$RT_DIR/result-$n.json" >/dev/null 2>&1; then
+    journal "routing_attempt_indeterminate" "attempt $n has a MALFORMED or foreign-version terminal result envelope — not durable evidence; refusing to replay or guess"
+    rt_refuse "routing_attempt_indeterminate" "attempt $n's terminal result envelope is invalid (see $RT_DIR/result-$n.json)"
+  fi
+  # Replay identity comes from the PERSISTED attempt record — current
+  # configuration can never retarget a recovered action.
+  if ! jq -e '.profile.id and .profile.pool' "$RT_DIR/started-$n.json" >/dev/null 2>&1; then
+    journal "routing_attempt_indeterminate" "attempt $n's started record lacks the persisted execution identity — refusing to reconstruct it from mutable configuration"
+    rt_refuse "routing_attempt_indeterminate" "attempt $n's started record is missing its profile identity (see $RT_DIR/started-$n.json)"
   fi
   journal "routing_recovery" "attempt $n has a durable result but no checkpoint — applying the recorded decision WITHOUT relaunching"
   rt_apply_result "$n" 1
@@ -506,7 +523,7 @@ routing_iteration() {
 
   if [[ "$CHILD_CODE" -eq 6 ]]; then
     rm -f "$OUT"
-    jq -n --arg id "$attempt_id" '{attempt_id:$id, outcome:"terminated_policy"}' > "$RT_DIR/result-$attempt_no.json"
+    jq -n --arg id "$attempt_id" '{schema_version:1, attempt_id:$id, outcome:"terminated_policy"}' > "$RT_DIR/result-$attempt_no.json"
     notify "terminated_policy" "policy termination (exit 6) — terminal, not rerouted"
     terminate "terminated_policy" 6 "harness exited terminated_policy (exit 6); terminal by contract"
   fi
