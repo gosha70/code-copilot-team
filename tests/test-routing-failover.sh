@@ -288,6 +288,220 @@ assert_eq "iso helper: Z timestamp parses" "yes" \
 assert_eq "iso helper: garbage fails (rc 1), never invents an epoch" "no" \
     "$( ( source "$ALIB"; ra_iso_to_epoch "resets at 3am" >/dev/null 2>&1 ) && echo yes || echo no )"
 
+
+echo ""
+echo "=== T3: deterministic tier1 selection ==="
+CLIB="$REPO_DIR/scripts/lib/routing-config.sh"
+REG="$TMP/sel-reg.toml"
+cat > "$REG" <<'REOF'
+schema_version = 1
+
+[policy]
+enabled = true
+
+[route_classes.tier1_only]
+tier_order = ["tier1"]
+
+[[profiles]]
+id = "alpha"
+backend = "claude-code"
+provider = "anthropic-subscription"
+model = "sonnet"
+capability_tier = "tier1"
+priority = 10
+quota_pool = "poolA"
+roles = ["build", "reconcile"]
+tool_profile = "full-cct"
+credential_mode = "claude-login"
+data_policy = "approved-cloud"
+
+[[profiles]]
+id = "beta"
+backend = "claude-code"
+provider = "deepseek-api"
+model = "deepseek-v4"
+capability_tier = "tier1"
+priority = 20
+quota_pool = "poolB"
+roles = ["build"]
+tool_profile = "deepseek-compatible"
+credential_env = "DEEPSEEK_API_KEY"
+data_policy = "approved-cloud"
+
+[[profiles]]
+id = "delta"
+backend = "pi"
+provider = "anthropic-subscription"
+model = "sonnet"
+capability_tier = "tier1"
+priority = 30
+quota_pool = "poolA"
+roles = ["build"]
+tool_profile = "full-cct"
+credential_mode = "claude-login"
+data_policy = "approved-cloud"
+
+[[profiles]]
+id = "rho"
+backend = "claude-code"
+provider = "openai"
+model = "gpt"
+capability_tier = "tier1"
+priority = 40
+quota_pool = "poolD"
+roles = ["reconcile"]
+tool_profile = "full-cct"
+credential_env = "OPENAI_API_KEY"
+data_policy = "approved-cloud"
+
+[[profiles]]
+id = "sigma"
+backend = "claude-code"
+provider = "local-vllm"
+model = "qwen-big"
+capability_tier = "tier2"
+priority = 5
+quota_pool = "poolC"
+roles = ["build"]
+tool_profile = "local-builder-minimal"
+credential_env = "CCT_LOCAL_API_KEY"
+data_policy = "local-only"
+
+[[profiles]]
+id = "gamma"
+backend = "claude-code"
+provider = "local-vllm"
+model = "qwen"
+capability_tier = "tier2"
+priority = 10
+quota_pool = "poolC"
+roles = ["bounded-build"]
+tool_profile = "local-builder-minimal"
+credential_env = "CCT_LOCAL_API_KEY"
+data_policy = "local-only"
+REOF
+EFF=$( ( set +e; source "$CLIB"; rc_effective "$REG" - ) )
+EFF_OFF=$(jq -c '.enabled = false' <<< "$EFF")
+RT() {  # <state-file> <effective> <attempted> [role]
+    ( set +e; CCT_ROUTING_STATE="$1" source "$REPO_DIR/scripts/lib/routing-select.sh"; rt_select "$2" "$3" "${4:-build}" )
+}
+verdict_of() { jq -r --arg id "$2" '.considered[] | select(.id == $id) | .verdict' <<< "$1"; }
+reason_of()  { jq -r --arg id "$2" '.considered[] | select(.id == $id) | .reason'  <<< "$1"; }
+
+# clean state: priority order, every candidate carries a verdict
+SEL=$(RT "$TMP/sel-clean.json" "$EFF" '[]')
+assert_eq "clean: the highest-priority tier1 build profile is selected" "alpha" "$(jq -r '.selected.id' <<< "$SEL")"
+assert "clean: the selected reason journals unknown-not-healthy" \
+    grep -q "state: unknown — never treated as healthy" <<< "$(reason_of "$SEL" alpha)"
+assert_eq "clean: lower-priority eligibles are journaled, not dropped" "eligible eligible" \
+    "$(printf '%s %s' "$(verdict_of "$SEL" beta)" "$(verdict_of "$SEL" delta)")"
+assert_eq "clean: role filter is named" "rejected" "$(verdict_of "$SEL" rho)"
+assert "clean: ...with the role in the reason" grep -q "does not hold role 'build'" <<< "$(reason_of "$SEL" rho)"
+assert_eq "clean: tier2 is never selected (increment C owns it)" "rejected" "$(verdict_of "$SEL" gamma)"
+assert_eq "clean: a tier2 profile HOLDING build at the best priority is still tier-rejected" "rejected" \
+    "$(verdict_of "$SEL" sigma)"
+assert "clean: ...for the TIER, not the role" \
+    grep -q "tier1 only" <<< "$(reason_of "$SEL" sigma)"
+assert_eq "clean: every candidate received a verdict" "6" "$(jq '.considered | length' <<< "$SEL")"
+SEL2=$(RT "$TMP/sel-clean.json" "$EFF" '[]')
+assert_eq "determinism: byte-identical selection on identical inputs" "$SEL" "$SEL2"
+
+# attempted-set: bounded, cycle-free
+SEL=$(RT "$TMP/sel-clean.json" "$EFF" '["alpha"]')
+assert_eq "attempted alpha: the next priority is selected" "beta" "$(jq -r '.selected.id' <<< "$SEL")"
+assert "attempted alpha: the reason is attempt-local" \
+    grep -q "already attempted or incompatible in this unit" <<< "$(reason_of "$SEL" alpha)"
+
+# pool block: the SIBLING is never burned (SC-B2 selector half)
+PST="$TMP/sel-pool.json"
+UNTIL=$(( $(date -u +%s) + 1800 ))
+( set +e; CCT_ROUTING_STATE="$PST" source "$REPO_DIR/scripts/lib/routing-state.sh"; rs_set_pool sp-1 poolA cooldown "exhausted" "$UNTIL" ) >/dev/null 2>&1
+SEL=$(RT "$PST" "$EFF" '[]')
+assert_eq "pool cooled: BOTH poolA members are rejected, sibling never burned" "rejected rejected" \
+    "$(printf '%s %s' "$(verdict_of "$SEL" alpha)" "$(verdict_of "$SEL" delta)")"
+assert_eq "pool cooled: selection falls to the other pool" "beta" "$(jq -r '.selected.id' <<< "$SEL")"
+assert_eq "pool cooled: earliest_retry is the pool's until" "$UNTIL" "$(jq -r '.earliest_retry' <<< "$SEL")"
+
+# exhaustion: named reason from the closed enum + earliest wake time
+XST="$TMP/sel-exh.json"
+U2=$(( $(date -u +%s) + 900 ))
+( set +e; CCT_ROUTING_STATE="$XST" source "$REPO_DIR/scripts/lib/routing-state.sh"
+  rs_set_profile x1 alpha disabled "auth" -
+  rs_set_pool x2 poolB cooldown "throttled" "$U2" ) >/dev/null 2>&1
+SEL=$(RT "$XST" "$EFF" '["delta"]')
+assert_eq "exhaustion: no eligible profile -> exhausted + the closed-enum reason" \
+    "true routing_no_eligible_profile" "$(jq -r '"\(.exhausted) \(.terminal_reason)"' <<< "$SEL")"
+assert_eq "exhaustion: every blocking reason is present" "6" \
+    "$(jq '[.considered[] | select(.verdict == "rejected")] | length' <<< "$SEL")"
+assert_eq "exhaustion: earliest_retry = the soonest time-based unblock" "$U2" "$(jq -r '.earliest_retry' <<< "$SEL")"
+
+# all blocks permanent -> no wake time to sleep toward
+PMT="$TMP/sel-perm.json"
+( set +e; CCT_ROUTING_STATE="$PMT" source "$REPO_DIR/scripts/lib/routing-state.sh"
+  rs_set_profile p1 alpha disabled "auth" -
+  rs_set_profile p2 beta disabled "auth" - ) >/dev/null 2>&1
+SEL=$(RT "$PMT" "$EFF" '["delta"]')
+assert_eq "permanent exhaustion: earliest_retry is null (nothing to wait for)" "true null" \
+    "$(jq -r '"\(.exhausted) \(.earliest_retry)"' <<< "$SEL")"
+
+# effective policy disabled -> nothing selectable
+SEL=$(RT "$TMP/sel-clean.json" "$EFF_OFF" '[]')
+assert_eq "disabled policy: exhausted with every tier1 rejected" "true" "$(jq -r '.exhausted' <<< "$SEL")"
+assert "disabled policy: the reason names the effective policy" \
+    grep -q "disabled by the effective policy" <<< "$(reason_of "$SEL" alpha)"
+
+# TIE-BREAK is policy, not declaration order: equal priorities resolve
+# by id lexical ASC regardless of registry ordering.
+tiereg() {  # <path> <first-id> <second-id>
+    cat > "$1" <<TEOF
+schema_version = 1
+
+[route_classes.tier1_only]
+tier_order = ["tier1"]
+
+[[profiles]]
+id = "$2"
+backend = "claude-code"
+provider = "p"
+model = "m"
+capability_tier = "tier1"
+priority = 10
+quota_pool = "poolT-$2"
+roles = ["build"]
+tool_profile = "t"
+credential_mode = "login"
+data_policy = "approved-cloud"
+
+[[profiles]]
+id = "$3"
+backend = "claude-code"
+provider = "p"
+model = "m"
+capability_tier = "tier1"
+priority = 10
+quota_pool = "poolT-$3"
+roles = ["build"]
+tool_profile = "t"
+credential_mode = "login"
+data_policy = "approved-cloud"
+TEOF
+}
+tiereg "$TMP/tie1.toml" zeta eta
+tiereg "$TMP/tie2.toml" eta zeta
+EFF_T1=$( ( set +e; source "$CLIB"; rc_effective "$TMP/tie1.toml" - ) )
+EFF_T2=$( ( set +e; source "$CLIB"; rc_effective "$TMP/tie2.toml" - ) )
+ST1=$(RT "$TMP/tie-state.json" "$EFF_T1" '[]')
+ST2=$(RT "$TMP/tie-state.json" "$EFF_T2" '[]')
+assert_eq "tie-break: equal priority resolves by id (zeta-first registry)" "eta" "$(jq -r '.selected.id' <<< "$ST1")"
+assert_eq "tie-break: ...and identically with the declaration reversed" "eta" "$(jq -r '.selected.id' <<< "$ST2")"
+assert_eq "tie-break: the ordered consideration output is declaration-independent" \
+    "$(jq -c '[.considered[].id]' <<< "$ST1")" "$(jq -c '[.considered[].id]' <<< "$ST2")"
+
+# selected output is NAMED fields, never a positional tuple
+SEL=$(RT "$TMP/sel-clean.json" "$EFF" '[]')
+assert "selected is a named-field object (the tuple stays opaque)" \
+    jq -e '.selected | (.id and .backend and .provider and .model and .pool and .tool_profile and (.credential_ref | length > 0))' <<< "$SEL"
+
 echo ""
 echo "========================================="
 echo "  routing-failover tests: $PASS passed, $FAIL failed"

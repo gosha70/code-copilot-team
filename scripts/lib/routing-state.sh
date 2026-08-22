@@ -199,3 +199,22 @@ rs_effective_state() {
         | if $ps != "unknown" and $ps != "healthy" then "pool:" + $ps
           else eff(.profiles[$p]) end' <<< "$doc"
 }
+
+# rs_effective_info <profile> <pool> -> "<state>\t<until|->"
+# The same read-side decay and pool precedence as rs_effective_state,
+# plus the GOVERNING entry's remaining `until` (- when none — e.g.
+# disabled, which has no re-eligibility time). Selection uses the
+# until to compute the earliest re-eligibility instant (FR-B8).
+rs_effective_info() {
+    local p="$1" pool="$2" doc
+    doc=$(rs_read) || return $?
+    jq -r --arg p "$p" --arg pool "$pool" --argjson now "$(rs_now)" '
+        def eff(e): if e == null then {state:"unknown", until:null}
+            elif (e.until != null and e.until <= $now) then {state:"unknown", until:null}
+            else {state:e.state, until:e.until} end;
+        (eff(.pools[$pool])) as $ps
+        | (if $ps.state != "unknown" and $ps.state != "healthy"
+           then {state:("pool:" + $ps.state), until:$ps.until}
+           else eff(.profiles[$p]) end) as $g
+        | "\($g.state)\t\($g.until // "-")"' <<< "$doc"
+}
