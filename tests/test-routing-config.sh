@@ -423,6 +423,110 @@ TR1=$( ( source "$LIB"; rc_parse "$GOOD" || true; rc_profile_tuple 0 ) )
 TR2=$( ( source "$LIB"; rc_parse "$RS1"  || true; rc_profile_tuple 0 ) )
 assert_eq "roles order carries no identity meaning (set semantics)" "$TR1" "$TR2"
 
+
+echo ""
+echo "=== T5: cct routing validate | status | explain ==="
+CLI="$REPO_DIR/scripts/routing-cli.sh"
+T5STATE="/nonexistent-state-t5"
+cli() {  # <registry> <args...>
+    ( set +e; CCT_ROUTING_REGISTRY="$1" CCT_ROUTING_STATE="$T5STATE" bash "$CLI" "${@:2}" 2>&1 )
+}
+rcof() { ( set +e; CCT_ROUTING_REGISTRY="$1" CCT_ROUTING_STATE="$T5STATE" bash "$CLI" "${@:2}" >/dev/null 2>&1 ); echo $?; }
+
+# validate — validate only
+OUT=$(cli "$GOOD" validate) || true
+assert "validate: a valid registry is OK" grep -q "routing configuration OK" <<< "$OUT"
+assert_eq "validate: no registry is exit 2 with guidance" "2" "$(rcof "$TMP/absent.toml" validate)"
+assert "validate: ...naming non-configuration, not an error state" \
+    grep -q "routing is not configured" <<< "$(cli "$TMP/absent.toml" validate)"
+assert_eq "validate: an invalid registry is exit 1" "1" "$(rcof "$BADREG" validate)"
+wj t5-repo-ok.json '{"schema_version":2,"profile":"advisory","routing":{"allowed_profiles":["alpha"]}}'
+OUT=$(cli "$GOOD" validate --config "$TMP/t5-repo-ok.json") || true
+assert "validate: registry + valid repo restrictions OK" grep -q "repo restrictions" <<< "$OUT"
+
+# T3 PRECEDES T4: a config the standalone validator refuses never
+# reaches composition — its cross-document symptom must be ABSENT.
+wj t5-repo-bad.json '{"schema_version":2,"profile":"advisory","routing":{"tier2":{"x":1},"allowed_profiles":["ghost"]}}'
+OUT=$(cli "$GOOD" validate --config "$TMP/t5-repo-bad.json") || true
+assert "ordering: the T3 refusal surfaces" grep -q "owned by a later #109 increment" <<< "$OUT"
+assert_eq "ordering: composition was NEVER reached (no cross-doc message)" "0" \
+    "$(grep -c "does not define" <<< "$OUT" || true)"
+wj t5-repo-ghost.json '{"schema_version":2,"profile":"advisory","routing":{"allowed_profiles":["ghost"]}}'
+OUT=$(cli "$GOOD" validate --config "$TMP/t5-repo-ghost.json") || true
+assert "validate: a T3-clean config still hits the T4 cross-doc violation" \
+    grep -q "does not define" <<< "$OUT"
+
+# status — registry/policy state only
+OUT=$(cli "$GOOD" status) || true
+assert "status: renders every profile row" \
+    bash -c "grep -q '^alpha ' <<< '$OUT' && grep -q '^local-t2' <<< '$OUT'"
+assert "status: absent state file is said plainly" grep -q "every profile is unknown" <<< "$OUT"
+assert "status: unknown is the rendered state" grep -qE "alpha .*unknown" <<< "$OUT"
+assert "status: the preferred profile is marked" grep -qE "alpha .*\*preferred" <<< "$OUT"
+export CCT_LOCAL_API_KEY="sentinel-secret-value-9f2c"
+OUT=$(cli "$GOOD" status) || true
+assert "status: credential-env PRESENCE is reported" grep -q "env:CCT_LOCAL_API_KEY (set)" <<< "$OUT"
+assert_eq "status: ...its VALUE never appears" "0" "$(grep -c "sentinel-secret-value-9f2c" <<< "$OUT" || true)"
+unset CCT_LOCAL_API_KEY
+OUT=$(cli "$GOOD" status) || true
+assert "status: unset credential-env reported as unset" grep -q "env:CCT_LOCAL_API_KEY (unset)" <<< "$OUT"
+printf '{"profiles":{"alpha":{"state":"cooldown"}}}\n' > "$TMP/t5-state.json"
+OUT=$( ( set +e; CCT_ROUTING_REGISTRY="$GOOD" CCT_ROUTING_STATE="$TMP/t5-state.json" bash "$CLI" status 2>&1 ) )
+assert "status: a recorded state renders (cooldown)" grep -qE "alpha .*cooldown" <<< "$OUT"
+assert "status: unrecorded profiles stay unknown beside it" grep -qE "local-t2 .*unknown" <<< "$OUT"
+
+# explain — pure configuration resolution
+OUT=$(cli "$GOOD" explain --route-class tier1_only) || true
+assert "explain: states it explains CONFIGURATION, not availability" \
+    grep -q "not an availability decision" <<< "$OUT"
+assert "explain: tier1_only rejects the tier2 profile BY TIER" \
+    grep -q "local-t2: rejected — route class 'tier1_only' never reaches tier2" <<< "$OUT"
+assert "explain: eligible rows carry tier + priority" \
+    grep -q "alpha: eligible in tier1 at priority 10" <<< "$OUT"
+assert_eq "explain: deterministic priority order within the tier" "alpha alpha-opus" \
+    "$(grep -oE '^  (alpha|alpha-opus):' <<< "$OUT" | tr -d ' :' | tr '\n' ' ' | sed 's/ $//')"
+assert "explain: unknown state is never treated as healthy" \
+    grep -q "never treated as healthy" <<< "$OUT"
+OUT=$(cli "$GOOD" explain --route-class tier2_fallback) || true
+assert "explain: a fallback class reaches tier2" \
+    grep -q "local-t2: eligible in tier2" <<< "$OUT"
+OUT=$(cli "$GOOD" explain --route-class tier1_only --role reconcile) || true
+assert "explain: role filtering is named" \
+    grep -q "alpha-opus: rejected — does not hold role 'reconcile'" <<< "$OUT"
+OUT=$(cli "$GOOD" explain --route-class tier1_only --config "$TMP/t5-repo-ok.json") || true
+assert "explain: repository narrowing is named" \
+    grep -q "alpha-opus: excluded by repository policy" <<< "$OUT"
+OUT=$(cli "$U_OFF" explain --route-class tier1_only) || true
+assert "explain: a disabled effective policy rejects everything" \
+    grep -q "alpha: rejected — routing is disabled by the effective policy" <<< "$OUT"
+assert_eq "explain: --route-class is required (usage exit)" "2" "$(rcof "$GOOD" explain)"
+assert_eq "explain: an undeclared route class is a violation" "1" "$(rcof "$GOOD" explain --route-class warp)"
+
+# PURITY: no network, no execution, no state writes — under a PATH
+# shim where curl/wget/nc would loudly record any attempt.
+SHIM="$TMP/shim"; mkdir -p "$SHIM"
+for t in curl wget nc; do
+    printf '#!/bin/sh\necho hit > "%s/net-marker"\nexit 7\n' "$TMP" > "$SHIM/$t"
+    chmod +x "$SHIM/$t"
+done
+rm -f "$TMP/net-marker"
+cp "$TMP/t5-state.json" "$TMP/t5-state.before"
+( set +e
+  PATH="$SHIM:$PATH" CCT_ROUTING_REGISTRY="$GOOD" CCT_ROUTING_STATE="$TMP/t5-state.json" \
+    bash "$CLI" validate >/dev/null 2>&1
+  PATH="$SHIM:$PATH" CCT_ROUTING_REGISTRY="$GOOD" CCT_ROUTING_STATE="$TMP/t5-state.json" \
+    bash "$CLI" status >/dev/null 2>&1
+  PATH="$SHIM:$PATH" CCT_ROUTING_REGISTRY="$GOOD" CCT_ROUTING_STATE="$TMP/t5-state.json" \
+    bash "$CLI" explain --route-class tier2_fallback >/dev/null 2>&1 )
+assert_eq "purity: no command touched the network (shim marker absent)" "no" \
+    "$( [[ -e "$TMP/net-marker" ]] && echo yes || echo no )"
+assert "purity: the state file is byte-identical after status+explain" \
+    cmp -s "$TMP/t5-state.json" "$TMP/t5-state.before"
+
+# the cct front door dispatches
+assert "cct dispatch: cct routing status works end to end" \
+    env CCT_ROUTING_REGISTRY="$GOOD" CCT_ROUTING_STATE="$T5STATE" bash "$REPO_DIR/scripts/cct" routing status
+
 echo ""
 echo "========================================="
 echo "  routing-config tests: $PASS passed, $FAIL failed"

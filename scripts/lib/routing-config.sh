@@ -236,6 +236,17 @@ rc_array_elems() {  # <ctx> <key> -> newline list of array elements
     printf '%s' "$v" | tr "$RC_RS" '\n'
 }
 
+rc_index_of() {  # <profile-id> -> index (rc 1 when absent)
+    local i=0
+    while [[ $i -lt $RC_PROFILE_COUNT ]]; do
+        if [[ "$(rc_get "profiles.$i" id 2>/dev/null)" == "$1" ]]; then
+            printf '%s' "$i"; return 0
+        fi
+        i=$((i+1))
+    done
+    return 1
+}
+
 _rc_in_list() {  # <needle> <space-separated list>
     local x
     for x in $2; do [[ "$x" == "$1" ]] && return 0; done
