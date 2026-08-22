@@ -138,6 +138,22 @@
     },
     "notify": { "type": "object" },
     "merge": { "type": "object" },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "#248 (increment A of #109): TRUST-ASYMMETRIC by construction — a repository may only NARROW what the user-level registry (~/.code-copilot-team/routing.toml) permits. There is deliberately NO field here that could define a profile, credential, endpoint, protocol, or capability; the validator additionally refuses those keys by name, and `tier2`/`recovery` stay refused until their #109 increments ship. Cross-checks against the registry (unknown ids, unknown route class) happen in the effective-policy merge.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "allowed_profiles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Restriction only: the effective set is the INTERSECTION of these ids with the user registry's profiles. An id the registry does not define is a named violation at merge time, never a silent widen or drop."
+        },
+        "default_task_route": { "type": "string", "minLength": 1 }
+      }
+    },
     "unattended": {
       "type": "object",
       "additionalProperties": false,
