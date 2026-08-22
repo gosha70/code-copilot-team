@@ -216,6 +216,110 @@ assert "…and the registry still validates with it set" rv "$GOOD"
 unset CCT_LOCAL_API_KEY
 
 echo ""
+echo "=== T2: normalized result — cause classification over the captured corpus ==="
+RLIB="$REPO_DIR/scripts/lib/routing-result.sh"
+FX="$SCRIPT_DIR/fixtures/routing"
+SCHEMA="$REPO_DIR/shared/schemas/routing-result.schema.json"
+# shellcheck source=/dev/null
+source "$RLIB"
+
+# Every captured fixture pins raw output -> exactly ONE cause. An HTTP
+# status alone never determines cause (bare 403 -> unknown, the
+# fail-closed residual); the dual-signal fixture pins the quota-before-
+# rate precedence as INTENTIONAL.
+cls_of() { rr_classify "$1" "$FX/$2" | jq -r '.failure_class // "null"'; }
+while IFS='|' read -r fx rc want; do
+    [[ -z "$fx" ]] && continue
+    assert_eq "corpus: $fx -> $want" "$want" "$(cls_of "$rc" "$fx.out")"
+done <<'CORPUS'
+claude-session-limit|1|quota_exhausted
+claude-weekly-limit|1|quota_exhausted
+api-429-structured|1|rate_limited
+api-429-text|1|rate_limited
+api-auth-structured|1|auth
+billing-text|1|auth
+api-overloaded-structured|1|unavailable
+http-503-text|1|unavailable
+transport-refused|1|transport
+transport-dns|1|transport
+vllm-context-overflow|1|invalid_request
+vllm-tool-shape|1|invalid_request
+exec-tests-failed|1|execution
+amb-403-quota|1|quota_exhausted
+amb-403-cred|1|auth
+amb-403-policy|1|denied
+amb-403-bare|1|unknown
+amb-dual-quota-rate|1|quota_exhausted
+novel-unmatched|1|unknown
+perm-error-bare|1|unknown
+perm-error-policy|1|denied
+success-clean|0|null
+CORPUS
+
+assert_eq "success outcome carries a null class" "success" \
+    "$(rr_classify 0 "$FX/success-clean.out" | jq -r '.outcome')"
+assert_eq "structured envelope: method structured, confidence high" "structured high" \
+    "$(rr_classify 1 "$FX/api-429-structured.out" | jq -r '"\(.evidence.method) \(.evidence.confidence)"')"
+assert_eq "text-only classification: method regex, confidence medium" "regex medium" \
+    "$(rr_classify 1 "$FX/api-429-text.out" | jq -r '"\(.evidence.method) \(.evidence.confidence)"')"
+assert_eq "regex evidence records the matching pattern" "true" \
+    "$(rr_classify 1 "$FX/amb-403-quota.out" | jq '.evidence.pattern != null')"
+assert_eq "unknown is low-confidence with NO pattern (a residual, not a match)" "regex low null" \
+    "$(rr_classify 1 "$FX/novel-unmatched.out" | jq -r '"\(.evidence.method) \(.evidence.confidence) \(.evidence.pattern // "null")"')"
+assert_eq "retry-after rides beside the class (structured)" "8" \
+    "$(rr_classify 1 "$FX/api-429-structured.out" | jq -r '.retry_after_sec')"
+assert_eq "retry-after rides beside the class (text)" "30" \
+    "$(rr_classify 1 "$FX/api-429-text.out" | jq -r '.retry_after_sec')"
+assert_eq "ISO reset time is extracted when present" "2026-08-24T10:00:00Z" \
+    "$(rr_classify 1 "$FX/claude-weekly-limit.out" | jq -r '.reset_at')"
+
+# The full composed document conforms to the CLOSED schema shape.
+DOC=$(rr_result 1 "$FX/claude-session-limit.out" "claude-code" "anthropic-subscription" "alpha" "sonnet" "-" "anthropic-subscription" "api.anthropic.com" '{"stderr":"x.log"}')
+assert_eq "rr_result: exact closed key set" \
+    "artifacts backend effective_model evidence exit_code failure_class outcome profile provider quota_pool requested_model reset_at retry_after_sec schema_version upstream_origin" \
+    "$(jq -r 'keys | sort | join(" ")' <<< "$DOC")"
+assert_eq "rr_result: unverifiable effective model is null, never assumed" "null" \
+    "$(jq -r '.effective_model // "null"' <<< "$DOC")"
+assert_eq "rr_result: identity + pool are distinct fields" "claude-code anthropic-subscription alpha anthropic-subscription" \
+    "$(jq -r '"\(.backend) \(.provider) \(.profile) \(.quota_pool)"' <<< "$DOC")"
+assert_eq "rr_result: schema_version pinned" "1" "$(jq -r '.schema_version' <<< "$DOC")"
+assert "rr_result: class enum member" \
+    jq -e --arg c "$(jq -r '.failure_class' <<< "$DOC")" -n '["quota_exhausted","rate_limited","unavailable","transport","auth","invalid_request","denied","execution","unknown"] | index($c) != null'
+
+# The schema artifact itself: parseable with a duplicate-key-rejecting
+# parser, closed, and the frozen taxonomy pinned.
+assert "schema: no duplicate keys (strict parse)" \
+    python3 -c "
+import json, sys
+def no_dupes(pairs):
+    ks=[k for k,_ in pairs]
+    assert len(ks)==len(set(ks)), 'duplicate keys'
+    return dict(pairs)
+json.load(open('$SCHEMA'), object_pairs_hook=no_dupes)"
+assert "schema: closed document" jq -e '.additionalProperties == false' "$SCHEMA"
+assert_eq "schema: the frozen cause taxonomy, exactly" \
+    "quota_exhausted rate_limited unavailable transport auth invalid_request denied execution unknown null" \
+    "$(jq -r '.properties.failure_class.enum | map(. // "null") | join(" ")' "$SCHEMA")"
+assert "schema: evidence object is closed" \
+    jq -e '.properties.evidence.additionalProperties == false' "$SCHEMA"
+assert "schema: success forces a null class" \
+    jq -e '.allOf[0].then.properties.failure_class.const == null' "$SCHEMA"
+assert "schema: failure forces a CLASSIFIED cause (never null)" \
+    jq -e '.allOf[1].if.properties.outcome.const == "failure" and .allOf[1].then.properties.failure_class.type == "string"' "$SCHEMA"
+
+# The boundary is BIDIRECTIONAL and executable: a success with a cause
+# and a failure without one are both internally contradictory.
+assert "invariant: the composed failure document conforms" rr_doc_invariant "$DOC"
+assert "invariant: a success document conforms" \
+    rr_doc_invariant "$(jq '.outcome = "success" | .failure_class = null' <<< "$DOC")"
+assert_eq "invariant: success + a cause is REJECTED" "1" \
+    "$( (rr_doc_invariant "$(jq '.outcome = "success"' <<< "$DOC")" >/dev/null 2>&1); echo $? )"
+assert_eq "invariant: failure + null cause is REJECTED" "1" \
+    "$( (rr_doc_invariant "$(jq '.failure_class = null' <<< "$DOC")" >/dev/null 2>&1); echo $? )"
+assert_eq "invariant: failure + an invented cause is REJECTED" "1" \
+    "$( (rr_doc_invariant "$(jq '.failure_class = "vibes"' <<< "$DOC")" >/dev/null 2>&1); echo $? )"
+
+echo ""
 echo "========================================="
 echo "  routing-config tests: $PASS passed, $FAIL failed"
 echo "========================================="

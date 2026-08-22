@@ -954,7 +954,7 @@ code-copilot-team/
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        1034 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
-│   ├── test-routing-config.sh          56 execution-profile registry tests
+│   ├── test-routing-config.sh         102 execution-profile registry + result tests
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
