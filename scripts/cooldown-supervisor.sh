@@ -337,13 +337,13 @@ rt_reviewer_independence() {  # <profile-json>
   providers="${CCT_PROVIDERS_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
   bid=$(jq -r '.id' <<< "$pj")
   if [[ ! -f "$providers" ]]; then
-    journal "routing_reviewer_independence" "independence=unevaluable: no providers profile at $providers — the driver's review machinery still governs"
+    journal "routing_reviewer_independence" "independence=unevaluable reason=no_providers_profile detail='no providers profile at $providers — the driver review machinery still governs'"
     return 0
   fi
   subject="$RT_CHILD_BACKEND"
   reviewer=$(rt_toml_get "$providers" "defaults" "peer_for.$subject")
   if [[ -z "$reviewer" ]]; then
-    journal "routing_reviewer_independence" "independence=unevaluable: no peer_for.$subject reviewer configured"
+    journal "routing_reviewer_independence" "independence=unevaluable reason=no_peer_reviewer detail='no peer_for.$subject reviewer configured'"
     return 0
   fi
   rprov=$(rt_toml_get "$providers" "providers.$reviewer" "provider")
@@ -351,18 +351,25 @@ rt_reviewer_independence() {  # <profile-json>
   rmodel=$(rt_toml_get "$providers" "providers.$reviewer" "model")
   bprov=$(jq -r '.provider' <<< "$pj")
   bmodel=$(jq -r '.model' <<< "$pj")
-  local why=""
+  # The audit tri-state is ONE closed key/value vocabulary:
+  #   independence=independent | not_independent | unevaluable
+  # with a machine-readable reason= beside the negative/unevaluable
+  # states. "COLLISION" is trailing human emphasis only — never the
+  # state channel a consumer must parse.
+  local why="" reason=""
   if [[ "$rprov" == "$bprov" ]]; then
+    reason="provider_collision"
     why="the same PROVIDER ('$rprov')"
   elif [[ -n "$rmodel" && "$rmodel" == "$bmodel" ]]; then
+    reason="model_collision"
     why="the same MODEL ('$rmodel') despite distinct providers ('$rprov' vs '$bprov')"
   fi
   if [[ -n "$why" ]]; then
-    journal "routing_reviewer_independence" "COLLISION: gating reviewer '$reviewer' resolves to $why as builder profile '$bid' — independence is never downgraded to keep moving"
+    journal "routing_reviewer_independence" "independence=not_independent reason=$reason builder_profile='$bid' builder_provider='$bprov' builder_model='$bmodel' reviewer='$reviewer' reviewer_provider='$rprov' reviewer_model='${rmodel:-unspecified}' detail='gating reviewer resolves to $why — independence is never downgraded to keep moving' COLLISION"
     ra_terminal_valid routing_reviewer_not_independent || rt_refuse "routing_unknown_failure" "independence disposition missing from the closed enum"
     rt_refuse "routing_reviewer_not_independent" "gating reviewer '$reviewer' resolves to $why as builder profile '$bid' — configure an independent reviewer or run without --routing"
   fi
-  journal "routing_reviewer_independence" "independence=established: reviewer '$reviewer' (provider '$rprov', model '${rmodel:-unspecified}') is independent of builder '$bid' (provider '$bprov', model '$bmodel')"
+  journal "routing_reviewer_independence" "independence=independent builder_profile='$bid' builder_provider='$bprov' builder_model='$bmodel' reviewer='$reviewer' reviewer_provider='$rprov' reviewer_model='${rmodel:-unspecified}'"
 }
 
 rt_effective_model() {

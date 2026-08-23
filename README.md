@@ -1013,7 +1013,7 @@ code-copilot-team/
 │   ├── test-auto-build-loop.sh        1037 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         157 execution-profile registry + result + cli tests
-│   ├── test-routing-failover.sh       185 circuit + action + selection + supervisor + identity tests (#251 B)
+│   ├── test-routing-failover.sh       186 circuit + action + selection + supervisor + identity tests (#251 B)
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

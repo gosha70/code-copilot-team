@@ -1017,8 +1017,8 @@ mkprov "$TMP/indep1/providers.toml" "sonnet"
 assert_eq "independence/collision: terminal, never downgraded (exit 5)" "5" "$IRC"
 assert "independence/collision: the closed-enum reason is recorded" \
     grep -q "routing_reviewer_not_independent" "$TMP/indep1/led/demo-feat/run.json"
-assert "independence/collision: same-model stays a conservative signal across distinct providers" \
-    grep -q "the same MODEL ('sonnet') despite distinct providers" "$TMP/indep1/led/demo-feat/events.jsonl"
+assert "independence/collision: state=not_independent, reason=model_collision" \
+    grep -q "independence=not_independent reason=model_collision" "$TMP/indep1/led/demo-feat/events.jsonl"
 assert_eq "independence/collision: the child was NEVER launched" "no" \
     "$( [[ -f "$TMP/indep1/mock/count-alpha" ]] && echo yes || echo no )"
 assert_eq "independence/collision: NO dangling started record (the gate precedes step 1)" "no" \
@@ -1040,8 +1040,8 @@ mkprov "$TMP/indep2/providers.toml" "some-other-model"
       bash "$SUP" demo-feat --routing --worktree "$TMP/indep2/wr" --profile unattended \
       > "$TMP/indep2/out.log" 2>&1 ) && IRC=0 || IRC=$?
 assert_eq "independence/ok: an independent reviewer lets the run proceed" "0" "$IRC"
-assert "independence/ok: the established evaluation carries BOTH identities" \
-    grep -q "independence=established: reviewer 'rev1' (provider 'rev1'" "$TMP/indep2/led/demo-feat/events.jsonl"
+assert "independence/ok: state=independent with BOTH identities" \
+    grep -q "independence=independent builder_profile='alpha' builder_provider='anthropic-subscription'" "$TMP/indep2/led/demo-feat/events.jsonl"
 
 # unevaluable identity: journaled, NOT terminal (only a positive
 # collision blocks; the driver's review machinery still governs)
@@ -1059,8 +1059,8 @@ printf '%s\n' "-|0" > "$TMP/indep3/mock/alpha.spec"
       bash "$SUP" demo-feat --routing --worktree "$TMP/indep3/wr" --profile unattended \
       > "$TMP/indep3/out.log" 2>&1 ) && IRC=0 || IRC=$?
 assert_eq "independence/unevaluable: journaled, run proceeds" "0" "$IRC"
-assert "independence/unevaluable: journaled as independence=unevaluable (never as independent)" \
-    grep -q "independence=unevaluable: no providers profile" "$TMP/indep3/led/demo-feat/events.jsonl"
+assert "independence/unevaluable: state=unevaluable with a machine-readable reason" \
+    grep -q "independence=unevaluable reason=no_providers_profile" "$TMP/indep3/led/demo-feat/events.jsonl"
 
 # same PROVIDER, different model: the PRIMARY collision signal —
 # model inequality never substitutes for provider independence.
@@ -1079,8 +1079,8 @@ mkprov "$TMP/indep5/providers.toml" "not-sonnet-at-all" "anthropic-subscription"
       bash "$SUP" demo-feat --routing --worktree "$TMP/indep5/wr" --profile unattended \
       > "$TMP/indep5/out.log" 2>&1 ) && IRC=0 || IRC=$?
 assert_eq "independence/provider: same provider + DIFFERENT model is a collision" "5" "$IRC"
-assert "independence/provider: the collision names the shared provider" \
-    grep -q "the same PROVIDER ('anthropic-subscription')" "$TMP/indep5/led/demo-feat/events.jsonl"
+assert "independence/provider: reason=provider_collision names the shared provider" \
+    bash -c "grep 'independence=not_independent reason=provider_collision' '$TMP/indep5/led/demo-feat/events.jsonl' | grep -q \"reviewer_provider='anthropic-subscription'\""
 assert_eq "independence/provider: nothing launched past the gate" "no" \
     "$( [[ -f "$TMP/indep5/mock/count-alpha" ]] && echo yes || echo no )"
 
@@ -1104,8 +1104,19 @@ mkprov "$TMP/indep4/providers.toml" "totally-different-model" "deepseek-api"   #
 assert_eq "independence/switch: re-evaluated for the FAILOVER target (terminal)" "5" "$IRC"
 assert_eq "independence/switch: alpha ran (independent), beta NEVER did (collision)" "1 no" \
     "$(printf '%s %s' "$(cat "$TMP/indep4/mock/count-alpha")" "$( [[ -f "$TMP/indep4/mock/count-beta" ]] && echo yes || echo no )")"
-assert "independence/switch: a PROVIDER-level collision, models differing" \
-    grep -q "COLLISION: gating reviewer 'rev1' resolves to the same PROVIDER ('deepseek-api')" "$TMP/indep4/led/demo-feat/events.jsonl"
+assert "independence/switch: state=not_independent, reason=provider_collision" \
+    grep -q "independence=not_independent reason=provider_collision" "$TMP/indep4/led/demo-feat/events.jsonl"
+
+# closed audit vocabulary: EVERY independence journal line carries
+# exactly one of the three states — no other syntactic channel.
+VOCAB_OK=true
+for led in indep1 indep2 indep3 indep4 indep5; do
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        grep -qE "independence=(independent|not_independent|unevaluable)" <<< "$line" || VOCAB_OK=false
+    done <<< "$(grep "routing_reviewer_independence" "$TMP/$led/led/demo-feat/events.jsonl" 2>/dev/null)"
+done
+assert_eq "closed vocabulary: every independence line carries the tri-state key" "true" "$VOCAB_OK"
 
 # the emission chokepoint: an un-enum'd reason cannot escape rt_refuse
 assert "chokepoint: rt_refuse validates every terminal reason" \
@@ -1117,8 +1128,8 @@ assert_eq "identity: the env carries the FULL identity (pool + tool profile)" "2
 # suites execute these paths in the sweep)
 assert "identity: the driver ledger records routing_identity from the routed env" \
     grep -q "routing_identity" "$REPO_DIR/scripts/auto-build-loop.sh"
-assert "identity: ...as null for unrouted runs (additive, never breaking)" \
-    bash -c "grep -A2 'routing_identity' '$REPO_DIR/scripts/auto-build-loop.sh' | grep -q 'else {profile:\$rprof'"
+assert "identity: ...appended ONLY when routed (unrouted ledgers keep the pre-#251 shape)" \
+    bash -c "grep -B1 'routing_identity' '$REPO_DIR/scripts/auto-build-loop.sh' | grep -q 'if \$rprof == \"\" then \.'"
 assert "identity: the review request carries the builder identity line" \
     grep -q "Builder identity: profile %s" "$REPO_DIR/scripts/review-round-runner.sh"
 assert "identity: the enum gained the independence disposition" \
