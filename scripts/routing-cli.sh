@@ -28,16 +28,22 @@ source "$SCRIPT_DIR/lib/routing-config.sh"
 
 REGISTRY="${CCT_ROUTING_REGISTRY:-$HOME/.code-copilot-team/routing.toml}"
 STATE="${CCT_ROUTING_STATE:-$HOME/.code-copilot-team/routing-state.json}"
+SPECS_DIR="${CCT_SPECS_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)/specs}"
 CONFIG=""
 ROUTE_CLASS=""
 ROLE=""
+FEATURE=""
 
 usage() {
     cat >&2 <<'EOF'
 usage: cct routing <command> [options]
 
   validate [--config automation.json]   validate the registry (and the
-                                        repo restriction block + merge)
+           [--feature <id>]             repo restriction block + merge;
+                                        with --feature, also the
+                                        feature's routing-tasks.yaml
+                                        when present — absence is valid
+                                        and resolves tier1_only)
   status                                per-profile registry/policy rows
   explain --route-class <class>         pure config-resolution dry run
           [--role <role>] [--config automation.json]
@@ -54,6 +60,7 @@ while [[ $# -gt 0 ]]; do
         --config)      CONFIG="$2"; shift 2 ;;
         --route-class) ROUTE_CLASS="$2"; shift 2 ;;
         --role)        ROLE="$2"; shift 2 ;;
+        --feature)     FEATURE="$2"; shift 2 ;;
         *) echo "routing: unknown option '$1'" >&2; usage ;;
     esac
 done
@@ -94,6 +101,13 @@ state_of() {  # <profile-id> -> state string (unknown when absent)
     fi
 }
 
+# --feature belongs to validate alone until the task-addressed explain
+# form ships (increment C T6) — a closed CLI surface, not a shared flag.
+if [[ -n "$FEATURE" && "$CMD" != "validate" ]]; then
+    echo "routing: --feature is accepted by 'validate' only (task-addressed explain arrives with increment C T6)" >&2
+    usage
+fi
+
 case "$CMD" in
 validate)
     require_registry
@@ -107,8 +121,22 @@ validate)
             exit 1
         fi
     fi
+    TASKS_NOTE=""
+    if [[ -n "$FEATURE" ]]; then
+        RT_ARTIFACT="$SPECS_DIR/$FEATURE/routing-tasks.yaml"
+        if [[ -r "$RT_ARTIFACT" ]]; then
+            # shellcheck source=/dev/null
+            source "$SCRIPT_DIR/lib/routing-tasks.sh"
+            RT_VERIF="$SPECS_DIR/$FEATURE/verification.yaml"
+            [[ -r "$RT_VERIF" ]] || RT_VERIF="-"
+            rk_validate "$RT_ARTIFACT" "$RT_VERIF" "$(dirname "$SPECS_DIR")" || ok=false
+            TASKS_NOTE=" (+ task route metadata in $RT_ARTIFACT)"
+        else
+            TASKS_NOTE=" (no routing-tasks.yaml for '$FEATURE' — every task resolves tier1_only)"
+        fi
+    fi
     [[ "$ok" == "true" ]] || exit 1
-    echo "routing configuration OK: $REGISTRY$( [[ -n "$CONFIG" ]] && printf ' (+ repo restrictions in %s)' "$CONFIG" )"
+    echo "routing configuration OK: $REGISTRY$( [[ -n "$CONFIG" ]] && printf ' (+ repo restrictions in %s)' "$CONFIG" )$TASKS_NOTE"
     ;;
 
 status)
