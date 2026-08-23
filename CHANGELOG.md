@@ -12,6 +12,38 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Tier-1 LLM failover (#251, increment B of #109)** — the cooldown
+  supervisor gains an EXPLICIT opt-in `--routing` mode (without the
+  flag, behavior is byte-identical — proven by the untouched legacy
+  suite); a supervised build now CONTINUES on the next eligible
+  Tier-1 profile when its provider becomes unavailable. Every failed
+  attempt is classified through increment A's frozen nine-cause
+  taxonomy and acted on by a TOTAL normative table with
+  epoch-anchored, replay-deterministic deadlines: quota exhaustion
+  cools the whole quota pool to the provider reset (bounded fallback
+  when reset evidence is absent); rate limiting retries the same
+  profile exactly once; auth disables one profile; request-local
+  causes stay request-local; denied/unknown fail closed and are
+  never rerouted around. Selection is a deterministic total order
+  (tier → priority → profile id) over the effective policy, journaled
+  per candidate, tier1-only (Tier-2 is increment C). Crash safety is
+  a frozen five-step ordering of durable artifacts with TWO
+  independent attempt-id idempotency domains (circuit state +
+  control budgets); indeterminate attempts are never replayed and
+  never assumed failed; a valid result without its checkpoint applies
+  the RECORDED decision without relaunching, bound to the persisted
+  identity under a versioned closed envelope. No session crosses
+  profiles; credential values live only in child environments and
+  child output is secret-scrubbed before persistence. Model identity
+  is tri-state (verified / fail-closed mismatch / explicitly
+  unverified). Reviewer independence is re-evaluated at every launch
+  with provider identity as the primary signal and one closed
+  journal tri-state; the active builder identity lands in the run
+  ledger (`routing_identity`, present only when routed) and the
+  peer-review request. New suite `tests/test-routing-failover.sh`
+  (186); driver suite 1034 → 1037. The codex execution adapter and
+  probes/recovery (`routing tick`) remain later increments.
+
 - **Execution-profile routing foundation (#248, increment A of #109)**
   — the DECLARATIVE layer for policy-driven tiered LLM routing;
   deliberately inert at runtime (no build is routed, no provider

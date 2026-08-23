@@ -906,10 +906,66 @@ unchanged.
   --route-class <class>` (a pure configuration-resolution dry run
   that states it is not an availability decision).
 
-What arrives later (#109 increments B–E): structured failover with
-circuit state and checkpoints (B), Tier-2 bounded task routing with
-reconciliation (C), probes/recovery/failback and `routing tick` (D),
-benchmarks and shadow-mode learned routing (E).
+### Tier-1 failover (#109 increment B)
+
+Increment B makes the foundation act. The cooldown supervisor gains an
+EXPLICIT opt-in routing mode:
+
+```bash
+scripts/cooldown-supervisor.sh <feature> --routing --profile unattended
+```
+
+Without `--routing`, supervisor behavior is unchanged — configuration
+existing is never activation. With it, every failed attempt is
+classified through the frozen nine-cause taxonomy and acted on by a
+total normative table:
+
+- **`quota_exhausted` cools the WHOLE quota pool** to the provider's
+  reset time (profiles sharing a subscription share the exhaustion —
+  the router never wastes an attempt on a sibling of a spent pool);
+  a bounded fallback cooldown applies when reset evidence is absent.
+- **`rate_limited` retries the SAME profile exactly once**
+  (Retry-After honored) before failing over; `auth` disables exactly
+  that profile and B never re-enables it automatically — time-based
+  decay applies only to cooldowns, and increment D owns disabled-state
+  recovery; request-local incompatibilities never poison a
+  profile for future work; `denied` and `unknown` fail closed —
+  never rerouted around; ordinary build/test failures follow the
+  existing breaker path, never provider health.
+- **Selection is a deterministic total order** (tier → priority →
+  profile id) over the effective policy, journaled per candidate;
+  Tier-2 profiles are never selected (increment C owns them).
+- **Crash safety is a frozen ordering** of durable artifacts
+  (attempt-started → fresh child → versioned terminal result carrying
+  the RECORDED decision → idempotent state application → checkpoint).
+  An attempt with no terminal result is `routing_attempt_indeterminate`
+  — never replayed, never assumed failed; a result without its
+  checkpoint applies the recorded decision WITHOUT relaunching, bound
+  to the persisted identity (a changed registry cannot retarget it).
+- **No session ever crosses profiles or providers** — a new profile
+  cold-starts its backend from repository + ledger state. Credential
+  values exist only in the spawned child environment, and child
+  output is secret-scrubbed before display or persistence.
+- **Model identity is tri-state**: verified match, fail-closed
+  `routing_model_identity_mismatch` (a substituting gateway is never
+  rerouted around), or explicitly-unverified null — requested and
+  effective are never conflated.
+- **Reviewer independence is re-evaluated at every launch**: the
+  gating reviewer's PROVIDER identity (primary) and model
+  (conservative secondary) are checked against the active builder;
+  a collision is terminal (`routing_reviewer_not_independent`), and
+  the journal carries one closed tri-state
+  (`independence=independent|not_independent|unevaluable`) —
+  unevaluable is visible but never claimed as independence. The
+  active builder identity lands in the run ledger
+  (`routing_identity`, present only for routed runs — unrouted
+  ledgers keep their pre-routing shape) and the peer-review request.
+
+What arrives later (#109 increments C–E): Tier-2 bounded task routing
+with reconciliation and task-addressed `explain` (C), probes/recovery/
+failback hysteresis and `routing tick` (D), benchmarks and shadow-mode
+learned routing (E), plus a codex execution adapter as its own child
+increment reusing B's attempt/result/checkpoint contracts.
 
 ## Four-Phase Workflow
 
@@ -1010,9 +1066,10 @@ code-copilot-team/
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh           116 review loop integration tests
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1034 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1037 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         157 execution-profile registry + result + cli tests
+│   ├── test-routing-failover.sh       186 circuit + action + selection + supervisor + identity tests (#251 B)
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

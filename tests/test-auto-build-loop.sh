@@ -7592,6 +7592,29 @@ jq -e 'has("conformance") | not' "$LEDGER/frozen-contract.json" >/dev/null 2>&1
 assert_exit "C3-T1: a visual mapping does not derive a conformance requirement" 0 $?
 rm -rf "$P"
 
+# ══════════════════════════════════════════════════════════════
+echo "=== B/#251 T5: routing identity — present only when routed ==="
+# ══════════════════════════════════════════════════════════════
+# The opt-in compatibility contract is LITERAL: an unrouted run's
+# ledger is byte-identical to the pre-#251 shape — the key is ABSENT,
+# never null. Presence means "this was a routing-supervised execution".
+P=$(setup_project); single_phase "$P"
+run_driver "$P"
+assert_eq "unrouted: routing_identity is ABSENT from the ledger (pre-#251 shape)" "false" \
+    "$(jq 'has("routing_identity")' "$P"/.cct/auto-build/demo-feat/state.json)"
+rm -rf "$P"
+P=$(setup_project); single_phase "$P"
+CCT_ROUTING_PROFILE="alpha" CCT_ROUTING_BACKEND="claude-code" \
+CCT_ROUTING_PROVIDER="deepseek-api" CCT_ROUTING_MODEL="deepseek-v4" \
+CCT_ROUTING_POOL="poolB" CCT_ROUTING_TOOL_PROFILE="deepseek-compatible" \
+run_driver "$P"
+assert_eq "routed: the six-field closed identity object" \
+    '{"profile":"alpha","backend":"claude-code","provider":"deepseek-api","requested_model":"deepseek-v4","quota_pool":"poolB","tool_profile":"deepseek-compatible"}' \
+    "$(jq -c '.routing_identity' "$P"/.cct/auto-build/demo-feat/state.json)"
+assert_eq "routed: exactly the six fields, no more" "6" \
+    "$(jq '.routing_identity | keys | length' "$P"/.cct/auto-build/demo-feat/state.json)"
+rm -rf "$P"
+
 echo ""
 
 echo "========================================="

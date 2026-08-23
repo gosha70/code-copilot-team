@@ -3348,6 +3348,9 @@ write_ledger_skeleton() {
         --argjson wall "$CAP_WALL_CLOCK" --argjson cost "$CAP_COST" \
         --argjson milestone_every "$MILESTONE_EVERY" --argjson started "${CLOCK_ORIGIN:-$(now_epoch)}" \
         --arg capdown "${CAPS_DOWNGRADED_CAUSE:-}" --arg attempt "$ATTEMPT_ID" \
+        --arg rprof "${CCT_ROUTING_PROFILE:-}" --arg rback "${CCT_ROUTING_BACKEND:-}" \
+        --arg rprov "${CCT_ROUTING_PROVIDER:-}" --arg rmodel "${CCT_ROUTING_MODEL:-}" \
+        --arg rpool "${CCT_ROUTING_POOL:-}" --arg rtool "${CCT_ROUTING_TOOL_PROFILE:-}" \
         '{schema_version: 1, feature_id: $fid, profile: $profile,
           attempt_id: $attempt,
           status: "preflight", current_phase: 0,
@@ -3359,7 +3362,12 @@ write_ledger_skeleton() {
           outcome: null, disposition_reason: null,
           totals: {cost_usd: 0, cost_estimated_usd: 0, started_epoch: $started},
           milestones: {every_n_phases: $milestone_every, last_paused_after_phase: 0},
-          escalations: [], pr: {number: null, url: null}, updated: $t}' > "$STATE"
+          escalations: [], pr: {number: null, url: null}, updated: $t}
+         | (if $rprof == "" then .
+            else . + {routing_identity: {profile:$rprof, backend:$rback,
+                        provider:$rprov, requested_model:$rmodel,
+                        quota_pool:(if $rpool == "" then null else $rpool end),
+                        tool_profile:(if $rtool == "" then null else $rtool end)}} end)' > "$STATE"
     # Flush any events held from before the ledger existed (FR-7c).
     # The skeleton creates STATE, so pending events can now be written
     # to events.jsonl — without this they'd be orphaned on terminate/park
