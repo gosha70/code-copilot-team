@@ -43,7 +43,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/verification-common.sh"
 
 # The closed enum: every packet_* reason there is. T4/T5 consume the
 # execution members; nothing outside this list may be emitted.
-RP_PACKET_REASONS="packet_envelope_invalid packet_digest_mismatch packet_provenance_drift packet_id_reuse packet_artifact_invalid packet_route_class_ineligible packet_dependencies_incomplete packet_scope_violation packet_thrash_repeated_failure packet_thrash_rewrite packet_thrash_no_reduction packet_budget_exceeded packet_verifiers_unsatisfied"
+RP_PACKET_REASONS="packet_envelope_invalid packet_digest_mismatch packet_provenance_drift packet_id_reuse packet_artifact_invalid packet_route_class_ineligible packet_dependencies_incomplete packet_scope_violation packet_thrash_repeated_failure packet_thrash_rewrite packet_thrash_no_reduction packet_budget_exceeded packet_verifiers_unsatisfied reconcile_not_independent reconcile_independence_unevaluable reconcile_verdict_missing"
 
 rp_reason_valid() {  # <name> -> rc 0 iff in the closed enum
     [[ " $RP_PACKET_REASONS " == *" $1 "* ]]

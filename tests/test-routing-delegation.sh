@@ -749,6 +749,229 @@ assert_eq "recovered proceed: exactly one child launch (round 1 was never replay
     "1" "$(cat "$TMP/recov2/mock/count-t2loc")"
 
 echo ""
+echo "== T5: verified_provisional + Tier-1 reconciliation =="
+
+# registry variants: a same-provider reconciler (independence collision)
+# and a registry with NO reconcile-role profile
+DREG_SAME="$TMP/dreg-same.toml"
+cp "$DREG" "$DREG_SAME"
+cat >> "$DREG_SAME" <<'DSEOF'
+
+[[profiles]]
+id = "t1same"
+backend = "claude-code"
+provider = "local-ollama"
+model = "qwen-onprem"
+capability_tier = "tier1"
+priority = 5
+quota_pool = "poolSame"
+roles = ["build", "reconcile"]
+tool_profile = "full-cct"
+credential_env = "CCT_SAME_KEY"
+data_policy = "approved-cloud"
+DSEOF
+DREG_NOREC="$TMP/dreg-norec.toml"
+sed 's/roles = \["build", "reconcile", "bounded-build"\]/roles = ["build", "bounded-build"]/' "$DREG" > "$DREG_NOREC"
+
+printf 'RECONCILE_VERDICT: accepted\n' > "$TMP/verdict-acc.out"
+printf 'RECONCILE_VERDICT: rejected\n' > "$TMP/verdict-rej.out"
+printf 'looked at it, no verdict marker\n' > "$TMP/verdict-none.out"
+
+sup_rec() {  # <name> <task> [registry]
+    local name="$1" task="$2" reg="${3:-$DREG}"
+    local root="$TMP/$name"
+    SUP_RC=0
+    ( set +e
+      cd "$REPO_DIR"
+      env MOCK_DIR="$root/mock" \
+          CCT_DLOC_KEY="dloc-secret-value-88bb" CCT_SAME_KEY="same-key" \
+          CCT_SUPERVISOR_HARNESS_CMD="MOCK_DIR='$root/mock' bash '$DMOCK'" \
+          CCT_SUPERVISOR_SLEEP=true \
+          CCT_SUPERVISOR_DIR="$root/led" \
+          CCT_ROUTING_REGISTRY="$reg" \
+          CCT_ROUTING_STATE="$root/state.json" \
+          bash "$SUP" dfeat --routing --worktree "$root/wr" --profile unattended \
+          --reconcile "$task" \
+          > "$root/rout.log" 2>&1 ) && SUP_RC=0 || SUP_RC=$?
+}
+# rprep <name> — a fixture with a VERIFIED provisional packet in place
+rprep() {
+    local name="$1"
+    delegate_fixture "$name"
+    local E; E=$(edit_script "$name-all.sh" 'printf "MAGIC1\nMAGIC2\nMAGIC3\n" >> src/target.py')
+    printf '%s|-|0\n' "$E" > "$TMP/$name/mock/t2loc.spec"
+    sup_del "$name" bounded-fix
+}
+
+# ── the provisional record + evidence (decision 7)
+rprep rc1
+RUNJ="$TMP/rc1/led/dfeat/run.json"
+assert_eq "provisional: ledger records verified_provisional for the task" \
+    "verified_provisional" "$(jq -r '.provisional["bounded-fix"].verdict' "$RUNJ")"
+assert_eq "provisional: the record carries id AND digest (durable references keep both)" "yes" \
+    "$(jq -e '.provisional["bounded-fix"] | (.packet_id | length > 0) and (.packet_digest | startswith("sha256:"))' "$RUNJ" >/dev/null && echo yes || echo no)"
+assert_eq "provisional: builder identity captured for the independence gate" \
+    "local-ollama" "$(jq -r '.provisional["bounded-fix"].builder.provider' "$RUNJ")"
+DDIR=$(ls -d "$TMP/rc1/wr/.cct/auto-build/dfeat/routing/delegate-"* | head -1)
+assert_eq "provisional: packet-outcome carries builder + provisional diff sha" "yes" \
+    "$(jq -e '(.builder.id == "t2loc") and (.provisional_diff_sha256 | startswith("sha256:"))' "$DDIR/packet-outcome.json" >/dev/null && echo yes || echo no)"
+
+# ── the done gate: provisional work satisfies NOTHING
+printf -- "- [x] all done\n" > "$TMP/rc1/wr/specs/dfeat/tasks.md"
+( set +e; cd "$REPO_DIR"
+  env CCT_SUPERVISOR_HARNESS_CMD="true" CCT_SUPERVISOR_SLEEP=true \
+      CCT_SUPERVISOR_DIR="$TMP/rc1/led" \
+      bash "$SUP" dfeat --worktree "$TMP/rc1/wr" --profile unattended \
+      > "$TMP/rc1/gate.log" 2>&1 ) && GRC=0 || GRC=$?
+assert_eq "done gate: clean run with pending provisional PARKS (exit 4), never done" "4" "$GRC"
+assert "done gate: names the pending reconciliation" \
+    grep -q "await Tier-1 reconciliation — provisional work satisfies no gate" "$TMP/rc1/gate.log"
+
+# ── flag refusals
+OUT=$(set +e; bash "$SUP" dfeat --reconcile x --worktree "$TMP" 2>&1; exit 0)
+assert "refusal: --reconcile without --routing" \
+    grep -q -- "--reconcile requires --routing" <<< "$OUT"
+OUT=$(set +e; bash "$SUP" dfeat --routing --delegate x --reconcile y --worktree "$TMP" 2>&1; exit 0)
+assert "refusal: --delegate and --reconcile are mutually exclusive" \
+    grep -q "mutually exclusive" <<< "$OUT"
+sup_rec rc1 other-fix
+assert_eq "refusal: no provisional record for the task (exit 64)" "64" "$SUP_RC"
+assert "refusal: names nothing-to-reconcile" \
+    grep -q "nothing to reconcile" "$TMP/rc1/rout.log"
+
+# ── accepted (no reconciler changes): promotion + the gate opens
+printf '%s|%s|0\n' "-" "$TMP/verdict-acc.out" > "$TMP/rc1/mock/t1main.spec"
+sup_rec rc1 bounded-fix
+assert_eq "accepted: exit 0 with the reconcile_accepted status" "0" "$SUP_RC"
+assert_eq "accepted: ledger verdict flips to accepted with the reconciler identity" \
+    "accepted t1main" "$(jq -r '.provisional["bounded-fix"] | "\(.verdict) \(.reconciler.id)"' "$RUNJ")"
+assert "accepted: termination names done-eligibility" \
+    grep -q "the task is done-eligible" "$TMP/rc1/rout.log"
+( set +e; cd "$REPO_DIR"
+  env CCT_SUPERVISOR_HARNESS_CMD="true" CCT_SUPERVISOR_SLEEP=true \
+      CCT_SUPERVISOR_DIR="$TMP/rc1/led" \
+      bash "$SUP" dfeat --worktree "$TMP/rc1/wr" --profile unattended \
+      > "$TMP/rc1/gate2.log" 2>&1 ) && GRC=0 || GRC=$?
+assert_eq "accepted: the whole-run gate now completes (done, exit 0)" "0" "$GRC"
+
+# ── accepted_with_changes: DERIVED from the diff, re-verified
+rprep rc2
+E_RCHG=$(edit_script rc2-chg.sh 'printf "# reconciler note\n" >> src/target.py')
+printf '%s|%s|0\n' "$E_RCHG" "$TMP/verdict-acc.out" > "$TMP/rc2/mock/t1main.spec"
+sup_rec rc2 bounded-fix
+assert_eq "accepted_with_changes: derived from the reconciler's diff" \
+    "accepted_with_changes" "$(jq -r '.provisional["bounded-fix"].verdict' "$TMP/rc2/led/dfeat/run.json")"
+assert_eq "accepted_with_changes: exit 0" "0" "$SUP_RC"
+
+# ── rejected: the packet's diff is reverted
+rprep rc3
+printf '%s|%s|0\n' "-" "$TMP/verdict-rej.out" > "$TMP/rc3/mock/t1main.spec"
+sup_rec rc3 bounded-fix
+assert_eq "rejected: exit 0 with the reconcile_rejected status" "0" "$SUP_RC"
+DDIR=$(ls -d "$TMP/rc3/wr/.cct/auto-build/dfeat/routing/delegate-"* | head -1)
+assert "rejected: the provisional diff is REVERTED (builder work removed)" \
+    bash -c "! grep -q MAGIC1 '$DDIR/wt/src/target.py'"
+assert_eq "rejected: ledger verdict records rejected" \
+    "rejected" "$(jq -r '.provisional["bounded-fix"].verdict' "$TMP/rc3/led/dfeat/run.json")"
+
+# ── independence: fail closed, never promote
+rprep rc4
+printf '%s|%s|0\n' "-" "$TMP/verdict-acc.out" > "$TMP/rc4/mock/t1same.spec"
+sup_rec rc4 bounded-fix "$DREG_SAME"
+assert_eq "not_independent: same-provider reconciler refused (exit 5)" "5" "$SUP_RC"
+assert "not_independent: named reason with the provider collision" \
+    bash -c "grep -q 'reconcile_not_independent' '$TMP/rc4/rout.log' && grep -q \"provider 'local-ollama' equals the builder's\" '$TMP/rc4/rout.log'"
+assert_eq "not_independent: the provisional record is UNCHANGED" \
+    "verified_provisional" "$(jq -r '.provisional["bounded-fix"].verdict' "$TMP/rc4/led/dfeat/run.json")"
+
+rprep rc5
+jq '.provisional["bounded-fix"].builder = null' "$TMP/rc5/led/dfeat/run.json" > "$TMP/rc5/run.t" \
+    && mv "$TMP/rc5/run.t" "$TMP/rc5/led/dfeat/run.json"
+printf '%s|%s|0\n' "-" "$TMP/verdict-acc.out" > "$TMP/rc5/mock/t1main.spec"
+sup_rec rc5 bounded-fix
+assert_eq "unevaluable: missing builder identity refuses (exit 5)" "5" "$SUP_RC"
+assert "unevaluable: its OWN named reason — promotion impossible without positive independence" \
+    grep -q "reconcile_independence_unevaluable" "$TMP/rc5/rout.log"
+
+# ── verdict missing: fail closed, provisional preserved
+rprep rc6
+E_JUNK=$(edit_script rc6-junk.sh 'printf "# stray reconciler edit\n" >> src/target.py')
+printf '%s|%s|0\n' "$E_JUNK" "$TMP/verdict-none.out" > "$TMP/rc6/mock/t1main.spec"
+sup_rec rc6 bounded-fix
+assert_eq "verdict missing: refused (exit 5)" "5" "$SUP_RC"
+assert "verdict missing: named reason, never guessed" \
+    grep -q "reconcile_verdict_missing" "$TMP/rc6/rout.log"
+DDIR=$(ls -d "$TMP/rc6/wr/.cct/auto-build/dfeat/routing/delegate-"* | head -1)
+assert "verdict missing: reverted to the PROVISIONAL pre-state (builder work intact, reconciler edit gone)" \
+    bash -c "grep -q MAGIC1 '$DDIR/wt/src/target.py' && ! grep -q 'stray reconciler edit' '$DDIR/wt/src/target.py'"
+
+# ── accepted-but-verifiers-fail: a contradicted verdict never promotes
+rprep rc7
+E_BRK=$(edit_script rc7-brk.sh 'grep -v MAGIC1 src/target.py > t && mv t src/target.py')
+printf '%s|%s|0\n' "$E_BRK" "$TMP/verdict-acc.out" > "$TMP/rc7/mock/t1main.spec"
+sup_rec rc7 bounded-fix
+assert_eq "contradicted accept: refused (exit 5)" "5" "$SUP_RC"
+assert "contradicted accept: names the verifier contradiction" \
+    grep -q "a verdict the verifiers contradict never promotes" "$TMP/rc7/rout.log"
+DDIR=$(ls -d "$TMP/rc7/wr/.cct/auto-build/dfeat/routing/delegate-"* | head -1)
+assert "contradicted accept: provisional state restored (MAGIC1 back)" \
+    grep -q MAGIC1 "$DDIR/wt/src/target.py"
+
+# ── reconciler scope violation: accepted_with_changes is not a bypass
+rprep rc8
+E_EVIL2=$(edit_script rc8-evil.sh 'echo sneak > evil.py')
+printf '%s|%s|0\n' "$E_EVIL2" "$TMP/verdict-acc.out" > "$TMP/rc8/mock/t1main.spec"
+sup_rec rc8 bounded-fix
+assert_eq "reconciler scope violation: refused (exit 5)" "5" "$SUP_RC"
+assert "reconciler scope violation: names the no-bypass rule" \
+    grep -q "accepted_with_changes is not a path around scope" "$TMP/rc8/rout.log"
+DDIR=$(ls -d "$TMP/rc8/wr/.cct/auto-build/dfeat/routing/delegate-"* | head -1)
+assert "reconciler scope violation: pre-state restored (no evil.py, builder work intact)" \
+    bash -c "[[ ! -f '$DDIR/wt/evil.py' ]] && grep -q MAGIC1 '$DDIR/wt/src/target.py'"
+
+# ── the worktree must hold EXACTLY the verified provisional diff
+rprep rc9
+DDIR=$(ls -d "$TMP/rc9/wr/.cct/auto-build/dfeat/routing/delegate-"* | head -1)
+printf 'tampered-after-verification\n' >> "$DDIR/wt/src/target.py"
+printf '%s|%s|0\n' "-" "$TMP/verdict-acc.out" > "$TMP/rc9/mock/t1main.spec"
+sup_rec rc9 bounded-fix
+assert_eq "tampered provisional worktree: refused (exit 5)" "5" "$SUP_RC"
+assert "tampered provisional worktree: refuses to promote altered work" \
+    grep -q "refusing to promote altered work" "$TMP/rc9/rout.log"
+
+# ── crash safety at the promotion boundary (T5 review): the
+# reconciler mutates its worktree and dies WITHOUT a verdict — the
+# canonical provisional state must be untouched because judgment runs
+# in a disposable copy (preservation never depends on cleanup code)
+rprep rc11
+E_MUT=$(edit_script rc11-mut.sh 'printf "reviewer damage\n" >> src/target.py')
+printf '%s|-|1\n%s|%s|0\n' "$E_MUT" "-" "$TMP/verdict-acc.out" > "$TMP/rc11/mock/t1main.spec"
+sup_rec rc11 bounded-fix
+assert_eq "crash during judgment: reconcile fails closed (exit 5)" "5" "$SUP_RC"
+DDIR=$(ls -d "$TMP/rc11/wr/.cct/auto-build/dfeat/routing/delegate-"* | head -1)
+BASE11=$(git -C "$TMP/rc11/wr" rev-parse HEAD)
+git -C "$DDIR/wt" add -A . >/dev/null 2>&1
+LIVE11="sha256:$(git -C "$DDIR/wt" diff --cached "$BASE11" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
+assert_eq "crash during judgment: canonical provisional state is intact (hash equals the record)" \
+    "$LIVE11" "$(jq -r '.provisional["bounded-fix"].provisional_diff_sha256' "$TMP/rc11/led/dfeat/run.json")"
+assert "crash during judgment: builder work present, reviewer damage absent from the canonical worktree" \
+    bash -c "grep -q MAGIC1 '$DDIR/wt/src/target.py' && ! grep -q 'reviewer damage' '$DDIR/wt/src/target.py'"
+assert_eq "crash during judgment: the record remains verified_provisional" \
+    "verified_provisional" "$(jq -r '.provisional["bounded-fix"].verdict' "$TMP/rc11/led/dfeat/run.json")"
+sup_rec rc11 bounded-fix
+assert_eq "after the crash: a second reconcile starts from the exact provisional state and promotes" "0" "$SUP_RC"
+assert_eq "after the crash: verdict accepted on retry" \
+    "accepted" "$(jq -r '.provisional["bounded-fix"].verdict' "$TMP/rc11/led/dfeat/run.json")"
+
+# ── the reconcile role is an explicit grant
+rprep rc10
+printf '%s|%s|0\n' "-" "$TMP/verdict-acc.out" > "$TMP/rc10/mock/t1main.spec"
+sup_rec rc10 bounded-fix "$DREG_NOREC"
+assert_eq "no reconcile-role profile: refused (exit 5)" "5" "$SUP_RC"
+assert "no reconcile-role profile: names the explicit role requirement" \
+    grep -q "requires an explicit reconcile-role profile" "$TMP/rc10/rout.log"
+
+echo ""
 echo "========================================="
 echo "  routing-delegation tests: $PASS passed, $FAIL failed"
 echo "========================================="

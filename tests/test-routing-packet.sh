@@ -401,12 +401,14 @@ for r in packet_envelope_invalid packet_digest_mismatch packet_provenance_drift 
          packet_dependencies_incomplete packet_scope_violation \
          packet_thrash_repeated_failure packet_thrash_rewrite \
          packet_thrash_no_reduction packet_budget_exceeded \
-         packet_verifiers_unsatisfied; do
+         packet_verifiers_unsatisfied \
+         reconcile_not_independent reconcile_independence_unevaluable \
+         reconcile_verdict_missing; do
     assert "enum member valid: $r" rp rp_reason_valid "$r"
 done
 assert "unknown reason refused" bash -c "source '$LIB'; ! rp_reason_valid packet_novel_reason"
 assert "prefix junk refused (no dynamic assembly)" bash -c "source '$LIB'; ! rp_reason_valid packet_"
-assert_eq "enum is exactly thirteen members (packet_verifiers_unsatisfied arrived with T4)" "13" \
+assert_eq "enum is exactly sixteen members (the three reconcile_* dispositions arrived with T5)" "16" \
     "$(bash -c "source '$LIB'; printf '%s\n' \$RP_PACKET_REASONS | wc -l | tr -d ' '")"
 
 echo ""
