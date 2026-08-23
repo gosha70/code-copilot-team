@@ -43,10 +43,137 @@ source "$(dirname "${BASH_SOURCE[0]}")/verification-common.sh"
 
 # The closed enum: every packet_* reason there is. T4/T5 consume the
 # execution members; nothing outside this list may be emitted.
-RP_PACKET_REASONS="packet_envelope_invalid packet_digest_mismatch packet_provenance_drift packet_id_reuse packet_artifact_invalid packet_route_class_ineligible packet_dependencies_incomplete packet_scope_violation packet_thrash_repeated_failure packet_thrash_rewrite packet_thrash_no_reduction packet_budget_exceeded"
+RP_PACKET_REASONS="packet_envelope_invalid packet_digest_mismatch packet_provenance_drift packet_id_reuse packet_artifact_invalid packet_route_class_ineligible packet_dependencies_incomplete packet_scope_violation packet_thrash_repeated_failure packet_thrash_rewrite packet_thrash_no_reduction packet_budget_exceeded packet_verifiers_unsatisfied"
 
 rp_reason_valid() {  # <name> -> rc 0 iff in the closed enum
     [[ " $RP_PACKET_REASONS " == *" $1 "* ]]
+}
+
+# ── the constrained verifier-command grammar (T4 review round 1) ─────
+# A packet's verifier commands must have an UNAMBIGUOUSLY identifiable
+# executable so the executed script can be write-protected from the
+# child. Positional heuristics over arbitrary shell are not sound
+# (`env MODE=ci ./verify.sh` hides the real executable), so the
+# grammar itself is constrained — reject, never approximate:
+#   1. <interpreter> <script> [args...]   interpreter in bash|sh|
+#      python|python3|node; <script> must not start with '-' (no
+#      flags — `python -u x.py`/`-m runner` are refused) and is the
+#      PROTECTED script
+#   2. <repo-relative-path> [args...]     first token contains '/'
+#      (./verify.sh, checks/v1.sh) and is the PROTECTED script
+#   3. <bare-tool> [args...]              a plain tool name (grep,
+#      make, jq...) resolved via PATH, outside the worktree; nothing
+#      to protect — but wrapper/launcher names whose REAL executable
+#      sits in a later position are refused BY NAME
+# Shell metacharacters (pipes, redirection, substitution, chaining)
+# and env-assignment prefixes are refused: a verifier is one command.
+RP_VERIFIER_INTERPRETERS="bash sh python python3 node"
+RP_VERIFIER_WRAPPERS="env command timeout nice nohup xargs sudo eval exec source setsid stdbuf time"
+
+# rp_verifier_transport_check <json-encoded-element>
+# The PRE-DECODE boundary check: JSON can carry bytes a bash variable
+# cannot (NUL — command substitution silently drops it, so
+# "tr ue" would decode, check, and execute as "true": recorded
+# bytes != executed bytes). Such a command must be refused while it is
+# still JSON; after decoding, the distinguishing byte is already gone.
+# The whole C0 range except tab/LF/CR is refused here as dialect
+# hardening (tab is ordinary word whitespace; LF/CR survive transport
+# and keep their post-decode ONE-command refusal).
+rp_verifier_transport_check() {
+    # codepoint arithmetic, not regex: \uXXXX escapes are not portable
+    # inside jq's regex engine, and a broken pattern here must not
+    # quietly become "refuse everything".
+    # LF/CR are refused HERE, pre-decode, with the ONE-command
+    # diagnostic: a TRAILING LF is stripped by command substitution
+    # during decode, so a post-decode check could never see it
+    # (recorded bytes != checked/executed bytes — same class as NUL).
+    # The post-decode grammar guard for LF/CR remains as defense in
+    # depth only; point-of-use correctness never depends on bash
+    # representation semantics.
+    if jq -e '[explode[] | select(. == 10 or . == 13)] | length > 0' >/dev/null 2>&1 <<< "$1"; then
+        echo "verifier command contains a line break — a verifier is ONE command"
+        return 1
+    fi
+    if ! jq -e '[explode[] | select(. < 32 and . != 9)] | length == 0' >/dev/null 2>&1 <<< "$1"; then
+        echo "verifier command contains a control byte the shell transport cannot represent — recorded bytes must equal checked and executed bytes"
+        return 1
+    fi
+    return 0
+}
+
+# rp_verifier_grammar_check <command>
+# rc 0 = in the grammar; rc 1 with the named violation on stdout.
+rp_verifier_grammar_check() {
+    local cmd="$1" w1 w2 _rest
+    # execution goes through a shell, so the grammar must refuse every
+    # SHELL-EQUIVALENT spelling a token parser would misread: an
+    # embedded line break makes "one string" into two commands whose
+    # status is the LAST one's — a direct false-pass route
+    case "$cmd" in
+        *$'\n'*|*$'\r'*)
+            echo "verifier command contains a line break — a verifier is ONE command"
+            return 1 ;;
+    esac
+    case "$cmd" in
+        *'|'*|*';'*|*'&'*|*'$('*|*'`'*|*'>'*|*'<'*)
+            echo "verifier command '$cmd' uses shell metacharacters (pipe/redirect/substitution/chaining) — a verifier is ONE command"
+            return 1 ;;
+    esac
+    read -r w1 w2 _rest <<< "$cmd"
+    if [[ -z "$w1" ]]; then
+        echo "verifier command is empty"
+        return 1
+    fi
+    # the COMMAND WORD is a constrained dialect: unquoted, unescaped —
+    # the grammar must reason about the word the shell actually sees
+    # ('"env" ...' and $'en\v' are the same wrapper as 'env ...')
+    case "$w1" in
+        *\"*|*\'*|*\\*)
+            echo "verifier command '$cmd': the command word must be unquoted and unescaped (quoted spellings of a wrapper/executable are refused)"
+            return 1 ;;
+    esac
+    case "$w1" in
+        *=*)
+            echo "verifier command '$cmd' starts with an environment assignment — the executable position is ambiguous"
+            return 1 ;;
+    esac
+    if [[ " $RP_VERIFIER_WRAPPERS " == *" $w1 "* ]]; then
+        echo "verifier command '$cmd' starts with wrapper '$w1' — the real executable is not in a protectable position; invoke the script directly"
+        return 1
+    fi
+    if [[ " $RP_VERIFIER_INTERPRETERS " == *" $w1 "* ]]; then
+        if [[ -z "$w2" || "${w2:0:1}" == "-" ]]; then
+            echo "verifier command '$cmd': interpreter '$w1' must be followed directly by its script (no flags — the script position must be unambiguous)"
+            return 1
+        fi
+        # the SCRIPT WORD is likewise unquoted: `bash "x.sh"` must not
+        # yield a protected token that differs from the executed path
+        case "$w2" in
+            *\"*|*\'*|*\\*)
+                echo "verifier command '$cmd': the interpreter's script word must be an unquoted project-relative path"
+                return 1 ;;
+        esac
+        return 0
+    fi
+    # bare tool or direct path — both unambiguous
+    return 0
+}
+
+# rp_verifier_script <command> — echo the PROTECTED script path for a
+# grammar-valid command (empty when the command is a bare PATH tool).
+# THE single derivation both packet build and the executor's
+# protection layer use — no positional heuristics anywhere else.
+rp_verifier_script() {
+    local cmd="$1" w1 w2 _rest
+    read -r w1 w2 _rest <<< "$cmd"
+    if [[ " $RP_VERIFIER_INTERPRETERS " == *" $w1 "* ]]; then
+        printf '%s\n' "$w2"
+        return 0
+    fi
+    case "$w1" in
+        */*) printf '%s\n' "$w1" ;;
+    esac
+    return 0
 }
 
 # The closed envelope key set (sorted). rp_validate refuses any
@@ -169,6 +296,26 @@ EOF_DEPS
     done <<EOF_REFS
 $(rk_task_items "$task" fr_refs)
 EOF_REFS
+
+    # every verifier command must be inside the constrained grammar —
+    # an unprotectable executable position refuses the BUILD, so no
+    # packet with an ambiguous verifier ever exists. Commands iterate
+    # as JSON-encoded elements (one per line, embedded newlines stay
+    # escaped) — line-splitting the raw strings would hide an embedded
+    # LF from the very check that must refuse it.
+    local velem vcmd gerr
+    while IFS= read -r velem; do
+        [[ -z "$velem" ]] && continue
+        if ! gerr=$(rp_verifier_transport_check "$velem"); then
+            echo "packet_artifact_invalid: $gerr"
+            rm -rf "$snap"; return 1
+        fi
+        vcmd=$(jq -r . <<< "$velem")
+        if ! gerr=$(rp_verifier_grammar_check "$vcmd"); then
+            echo "packet_artifact_invalid: $gerr"
+            rm -rf "$snap"; return 1
+        fi
+    done <<< "$(jq -c '.[].tests[]' <<< "$fr_json")"
 
     # git identity + the diff, captured ONCE: the hash and the patch
     # artifact come from the same bytes (never re-opened)

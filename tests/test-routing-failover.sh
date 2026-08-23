@@ -1121,7 +1121,7 @@ assert_eq "closed vocabulary: every independence line carries the tri-state key"
 # the emission chokepoint: an un-enum'd reason cannot escape rt_refuse
 assert "chokepoint: rt_refuse validates every terminal reason" \
     grep -q "routing_enum_violation" "$REPO_DIR/scripts/cooldown-supervisor.sh"
-assert_eq "identity: the env carries the FULL identity (pool + tool profile)" "2" \
+assert_eq "identity: the env carries the FULL identity (pool + tool profile; 2 whole-run + 2 delegate since #254 T4)" "4" \
     "$(grep -c "CCT_ROUTING_POOL\|CCT_ROUTING_TOOL_PROFILE" "$REPO_DIR/scripts/cooldown-supervisor.sh" | head -1)"
 
 # identity propagation surfaces (structure pins; the driver and runner

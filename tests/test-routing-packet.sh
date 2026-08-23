@@ -278,18 +278,135 @@ mv "$TMP/hidden.yaml" specs/featx/routing-tasks.yaml
 assert "provenance passes again after restoration" rp rp_provenance_check "$PKT" "$ROOT/specs"
 
 echo ""
+echo "== T2.7: the constrained verifier-command grammar (T4 review) =="
+
+# gcase <verifier-command> — a fresh feature whose single FR carries
+# the command; build either refuses (grammar) or succeeds
+mkdir -p "$ROOT/specs/featg"
+gcase() {
+    cat > "$ROOT/specs/featg/verification.yaml" <<GEOF
+status: finalized
+FR-1:
+  statement_sha: "sha256:gggg"
+  verifiers:
+    - kind: test
+      test: "$1"
+GEOF
+    cat > "$ROOT/specs/featg/routing-tasks.yaml" <<'GEOF'
+schema_version: 1
+tasks:
+  gtask:
+    route_class: tier2_preferred
+    outcome: grammar probe
+    reorderable: true
+    allowed_files:
+      - src/g.py
+    fr_refs:
+      - FR-1
+GEOF
+}
+gcase 'env MODE=ci bash checks/v1.sh'
+assert_refuse "grammar: env prefix refused at build (executable position ambiguous)" \
+    "starts with wrapper 'env'" rp_build featg gtask "$ROOT/specs" "$ROOT" -
+gcase 'timeout 30 ./verify.sh'
+assert_refuse "grammar: timeout wrapper refused at build" \
+    "starts with wrapper 'timeout'" rp_build featg gtask "$ROOT/specs" "$ROOT" -
+gcase 'python -u scripts/verify.py'
+assert_refuse "grammar: interpreter flag refused (script position ambiguous)" \
+    "must be followed directly by its script" rp_build featg gtask "$ROOT/specs" "$ROOT" -
+gcase 'pytest -q | tee out.log'
+assert_refuse "grammar: pipeline refused (a verifier is one command)" \
+    "shell metacharacters" rp_build featg gtask "$ROOT/specs" "$ROOT" -
+gcase 'MODE=ci ./verify.sh'
+assert_refuse "grammar: assignment prefix refused" \
+    "environment assignment" rp_build featg gtask "$ROOT/specs" "$ROOT" -
+gcase 'bash checks/v1.sh'
+assert "grammar: interpreter + script accepted" rp rp_build featg gtask "$ROOT/specs" "$ROOT" -
+gcase './verify.sh --strict'
+assert "grammar: direct script path accepted" rp rp_build featg gtask "$ROOT/specs" "$ROOT" -
+gcase 'grep -q MAGIC src/g.py'
+assert "grammar: bare PATH tool accepted" rp rp_build featg gtask "$ROOT/specs" "$ROOT" -
+
+# shell-equivalent spellings: the grammar reasons about the word the
+# shell would see, not raw whitespace tokens
+gcase '\"env\" MODE=ci bash checks/v1.sh'
+assert_refuse "grammar: double-quoted wrapper spelling refused at build" \
+    "must be unquoted and unescaped" rp_build featg gtask "$ROOT/specs" "$ROOT" -
+gcase "'env' MODE=ci bash checks/v1.sh"
+assert_refuse "grammar: single-quoted wrapper spelling refused at build" \
+    "must be unquoted and unescaped" rp_build featg gtask "$ROOT/specs" "$ROOT" -
+gcase 'bash \"checks/v1.sh\"'
+assert_refuse "grammar: quoted script word refused (protected token must equal the executed path)" \
+    "unquoted project-relative path" rp_build featg gtask "$ROOT/specs" "$ROOT" -
+gcase 'en\\v MODE=ci'
+assert_refuse "grammar: escaped command word refused" \
+    "must be unquoted and unescaped" rp_build featg gtask "$ROOT/specs" "$ROOT" -
+# a literal newline cannot ride the line-based verification.yaml, but
+# the grammar chokepoint itself must refuse it (the point-of-use
+# recheck guards handcrafted packets; end-to-end in the delegation suite)
+assert_refuse_direct() {  # <name> <needle> <cmd>
+    local name="$1" needle="$2" cmd="$3" out rc=0
+    out="$( set +e; source "$LIB"; rp_verifier_grammar_check "$cmd" )" || rc=$?
+    if [[ $rc -eq 1 && "$out" == *"$needle"* ]]; then PASS=$((PASS+1)); echo "  PASS: $name";
+    else FAIL=$((FAIL+1)); echo "  FAIL: $name (rc=$rc: $out)"; fi
+}
+assert_refuse_direct "grammar: embedded newline refused (two commands are not one verifier)" \
+    "a verifier is ONE command" $'false\ntrue'
+assert_refuse_direct "grammar: embedded carriage return refused" \
+    "a verifier is ONE command" $'false\rtrue'
+
+# the PRE-DECODE transport boundary: bytes bash variables cannot carry
+# must be refused while still JSON (NUL collapses "tr ue" into
+# "true" during decode — recorded bytes would differ from executed)
+assert_transport() {  # <name> <expect: ok|refuse> <json-element>
+    local name="$1" want="$2" elem="$3" out rc=0
+    out="$( set +e; source "$LIB"; rp_verifier_transport_check "$elem" )" || rc=$?
+    if [[ "$want" == "refuse" && $rc -eq 1 && "$out" == *"cannot represent"* ]]; then
+        PASS=$((PASS+1)); echo "  PASS: $name"
+    elif [[ "$want" == "ok" && $rc -eq 0 ]]; then
+        PASS=$((PASS+1)); echo "  PASS: $name"
+    else
+        FAIL=$((FAIL+1)); echo "  FAIL: $name (rc=$rc: $out)"
+    fi
+}
+assert_transport "transport: NUL-bearing element refused pre-decode" refuse '"tr\u0000ue"'
+assert_transport "transport: other C0 control refused pre-decode" refuse '"a\u0001b"'
+assert_transport "transport: tab is ordinary word whitespace (accepted)" ok '"grep\t-q X f"'
+assert_transport_lf() {  # <name> <json-element> — expects the ONE-command diagnostic
+    local name="$1" elem="$2" out rc=0
+    out="$( set +e; source "$LIB"; rp_verifier_transport_check "$elem" )" || rc=$?
+    if [[ $rc -eq 1 && "$out" == *"a verifier is ONE command"* ]]; then
+        PASS=$((PASS+1)); echo "  PASS: $name"
+    else
+        FAIL=$((FAIL+1)); echo "  FAIL: $name (rc=$rc: $out)"
+    fi
+}
+assert_transport_lf "transport: TRAILING LF refused pre-decode (command substitution would strip it)" '"true\n"'
+assert_transport_lf "transport: trailing CR refused pre-decode (symmetry)" '"true\r"'
+assert_transport_lf "transport: embedded LF refused pre-decode too" '"false\ntrue"'
+
+# THE single protected-script derivation (build and executor share it)
+assert_eq "derivation: interpreter form protects the script" \
+    "checks/v1.sh" "$(rp rp_verifier_script 'bash checks/v1.sh')"
+assert_eq "derivation: direct path form protects the path" \
+    "./verify.sh" "$(rp rp_verifier_script './verify.sh --strict')"
+assert_eq "derivation: bare tool protects nothing (checked targets stay workable)" \
+    "" "$(rp rp_verifier_script 'grep -q MAGIC src/g.py')"
+
+echo ""
 echo "== T2.6: the closed packet-reason enum =="
 
 for r in packet_envelope_invalid packet_digest_mismatch packet_provenance_drift \
          packet_id_reuse packet_artifact_invalid packet_route_class_ineligible \
          packet_dependencies_incomplete packet_scope_violation \
          packet_thrash_repeated_failure packet_thrash_rewrite \
-         packet_thrash_no_reduction packet_budget_exceeded; do
+         packet_thrash_no_reduction packet_budget_exceeded \
+         packet_verifiers_unsatisfied; do
     assert "enum member valid: $r" rp rp_reason_valid "$r"
 done
 assert "unknown reason refused" bash -c "source '$LIB'; ! rp_reason_valid packet_novel_reason"
 assert "prefix junk refused (no dynamic assembly)" bash -c "source '$LIB'; ! rp_reason_valid packet_"
-assert_eq "enum is exactly twelve members" "12" \
+assert_eq "enum is exactly thirteen members (packet_verifiers_unsatisfied arrived with T4)" "13" \
     "$(bash -c "source '$LIB'; printf '%s\n' \$RP_PACKET_REASONS | wc -l | tr -d ' '")"
 
 echo ""
