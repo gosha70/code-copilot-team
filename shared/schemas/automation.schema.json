@@ -141,7 +141,7 @@
     "routing": {
       "type": "object",
       "additionalProperties": false,
-      "description": "#248 (increment A of #109): TRUST-ASYMMETRIC by construction — a repository may only NARROW what the user-level registry (~/.code-copilot-team/routing.toml) permits. There is deliberately NO field here that could define a profile, credential, endpoint, protocol, or capability; the validator additionally refuses those keys by name, and `tier2`/`recovery` stay refused until their #109 increments ship. Cross-checks against the registry (unknown ids, unknown route class) happen in the effective-policy merge.",
+      "description": "#248 (increment A of #109): TRUST-ASYMMETRIC by construction — a repository may only NARROW what the user-level registry (~/.code-copilot-team/routing.toml) permits. There is deliberately NO field here that could define a profile, credential, endpoint, protocol, or capability; the validator additionally refuses those keys by name; `tier2` was promoted with #254 T6 (restriction-only), and `recovery` stays refused until increment D ships. Cross-checks against the registry (unknown ids, unknown route class) happen in the effective-policy merge.",
       "properties": {
         "enabled": { "type": "boolean" },
         "allowed_profiles": {
@@ -151,7 +151,15 @@
           "items": { "type": "string", "minLength": 1 },
           "description": "Restriction only: the effective set is the INTERSECTION of these ids with the user registry's profiles. An id the registry does not define is a named violation at merge time, never a silent widen or drop."
         },
-        "default_task_route": { "type": "string", "minLength": 1 }
+        "default_task_route": { "type": "string", "minLength": 1 },
+        "tier2": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "#254 (increment C of #109) T6, promoted refused->implemented->behaviorally-tested. RESTRICTION ONLY: delegation_enabled=false forbids Tier-2 packet delegation for this repository; true/absent restrict nothing. A repo can never widen what the user registry permits.",
+          "properties": {
+            "delegation_enabled": { "type": "boolean" }
+          }
+        }
       }
     },
     "unattended": {

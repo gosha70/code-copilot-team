@@ -890,6 +890,12 @@ delegate_run() {
   if [[ "$(jq -r '.task_id' <<< "$PKT_JSON")" != "$DELEGATE_TASK" ]]; then
     rt_refuse "packet_envelope_invalid" "the packet is for task '$(jq -r '.task_id' <<< "$PKT_JSON")', not '--delegate $DELEGATE_TASK'"
   fi
+  # the repo-level tier2 restriction (#254 T6, promoted key): a
+  # repository may FORBID Tier-2 delegation outright — a policy
+  # denial, never rerouted around
+  if [[ "$PKT_CLASS" == tier2_* && "$(rc_tier2_allowed "$RT_EFFECTIVE")" == "false" ]]; then
+    rt_refuse "routing_policy_denied" "repository policy forbids Tier-2 delegation (routing.tier2.delegation_enabled = false) — the packet's route class '$PKT_CLASS' cannot execute here"
+  fi
   PKT_ALLOWED=()
   while IFS= read -r out; do
     [[ -n "$out" ]] && PKT_ALLOWED+=("$out")

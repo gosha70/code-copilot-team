@@ -174,11 +174,22 @@ rt_select() {  # <effective-json> <attempted-json-array> [role] [route-class]
     tier2_fallback)
         # tier1 exactly as B; tier2 unlocks ONLY on the permanent-
         # exhaustion shape of that pass (no selection AND no earliest)
+        # AND only when the effective policy permits tier2 delegation
+        # (#254 T6 repo restriction — defense in depth beside the
+        # supervisor's early refusal)
+        local t2ok
+        t2ok=$(jq -r 'if .tier2_delegation_allowed == null then true else .tier2_delegation_allowed end' <<< "$eff")
         while IFS= read -r c; do
             [[ -z "$c" ]] && continue
             _rt_eval "$c" || return $?
         done <<< "$t1_order"
-        if [[ "$selected" == "null" && "$earliest" == "null" ]]; then
+        if [[ "$t2ok" == "false" ]]; then
+            while IFS= read -r c; do
+                [[ -z "$c" ]] && continue
+                id=$(jq -r '.[0]' <<< "$c")
+                _consider "$id" rejected "tier2 delegation is forbidden by repository policy (routing.tier2.delegation_enabled = false)"
+            done <<< "$t2_order"
+        elif [[ "$selected" == "null" && "$earliest" == "null" ]]; then
             while IFS= read -r c; do
                 [[ -z "$c" ]] && continue
                 _rt_eval "$c" || return $?
@@ -193,11 +204,22 @@ rt_select() {  # <effective-json> <attempted-json-array> [role] [route-class]
         ;;
     tier2_preferred)
         # tier2 first by policy, tier1 as fallback; within each tier
-        # the order is untouched
-        while IFS= read -r c; do
-            [[ -z "$c" ]] && continue
-            _rt_eval "$c" || return $?
-        done <<< "$t2_order"
+        # the order is untouched. The repo tier2 restriction (#254 T6)
+        # locks the tier2 pass entirely.
+        local t2ok2
+        t2ok2=$(jq -r 'if .tier2_delegation_allowed == null then true else .tier2_delegation_allowed end' <<< "$eff")
+        if [[ "$t2ok2" == "false" ]]; then
+            while IFS= read -r c; do
+                [[ -z "$c" ]] && continue
+                id=$(jq -r '.[0]' <<< "$c")
+                _consider "$id" rejected "tier2 delegation is forbidden by repository policy (routing.tier2.delegation_enabled = false)"
+            done <<< "$t2_order"
+        else
+            while IFS= read -r c; do
+                [[ -z "$c" ]] && continue
+                _rt_eval "$c" || return $?
+            done <<< "$t2_order"
+        fi
         while IFS= read -r c; do
             [[ -z "$c" ]] && continue
             _rt_eval "$c" || return $?

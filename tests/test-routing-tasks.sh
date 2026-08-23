@@ -714,6 +714,19 @@ roles = ["build", "reconcile", "land"]
 tool_profile = "full-cct"
 data_policy = "approved-cloud"
 credential_mode = "claude-login"
+
+[[profiles]]
+id = "qwen2"
+backend = "pi"
+provider = "local-ollama"
+model = "qwen-coder"
+capability_tier = "tier2"
+priority = 5
+quota_pool = "local-pool"
+roles = ["build", "bounded-build"]
+tool_profile = "local-builder-minimal"
+credential_env = "CCT_Q2_KEY"
+data_policy = "local-only"
 EOF
 mkdir -p "$TMP/specs/featx"
 cp "$GOOD" "$TMP/specs/featx/routing-tasks.yaml"
@@ -751,8 +764,8 @@ assert_eq "validate --feature: missing sibling verification.yaml -> dangling fr_
 out="$(cli status --feature featx 2>&1)" && rc=0 || rc=$?
 assert_eq "status --feature refused (closed surface, exit 2)" "2" "$rc"
 out="$(cli explain --feature featx --route-class tier1_only 2>&1)" && rc=0 || rc=$?
-assert_eq "explain --feature refused until C T6 (exit 2)" "2" "$rc"
-assert_eq "the refusal names the future surface" "yes" "$( [[ "$out" == *"increment C T6"* ]] && echo yes || echo no )"
+assert_eq "explain --feature without --task refused (exit 2; the task-addressed form shipped with T6)" "2" "$rc"
+assert_eq "the refusal names the shipped surface" "yes" "$( [[ "$out" == *"together with --task"* ]] && echo yes || echo no )"
 
 out="$(cli validate 2>&1)" && rc=0 || rc=$?
 assert_eq "validate without --feature: unchanged rc 0" "0" "$rc"
@@ -763,6 +776,105 @@ cp "$VERIF" "$TMP/specs/featx/verification.yaml"
 assert "cct dispatch: cct routing validate --feature end to end" \
     env CCT_ROUTING_REGISTRY="$REG" CCT_SPECS_DIR="$TMP/specs" \
     bash "$REPO_DIR/scripts/cct" routing validate --feature featx
+
+echo ""
+echo "== T6: task-addressed explain (closes increment A's deviation) =="
+
+# closed-surface refusals
+out="$(cli explain --task scorer-edge 2>&1)" && rc=0 || rc=$?
+assert_eq "explain --task without --feature refused (usage)" "2" "$rc"
+assert "the refusal names the requirement" \
+    grep -q -- "--task requires --feature" <<< "$out"
+out="$(cli validate --feature featx --task scorer-edge 2>&1)" && rc=0 || rc=$?
+assert_eq "--task on validate refused" "2" "$rc"
+out="$(cli explain --feature featx 2>&1)" && rc=0 || rc=$?
+assert_eq "explain --feature without --task still refused" "2" "$rc"
+
+# the task-addressed happy path: route class, floor evaluation,
+# candidate table — pure configuration resolution
+out="$(cli explain --feature featx --task scorer-edge 2>&1)" && rc=0 || rc=$?
+assert_eq "task-addressed explain resolves (rc 0)" "0" "$rc"
+assert "renders the route class from routing-tasks.yaml" \
+    grep -q "task 'scorer-edge' (feature 'featx') — route class 'tier2_preferred'" <<< "$out"
+assert "renders the safety-floor evaluation per allowed file" \
+    bash -c "grep -q 'src/scorer.py: not in the safety floor' <<< \"\$0\" && grep -q 'src/util/\*: not in the safety floor' <<< \"\$0\"" "$out"
+assert "renders the not-an-availability-decision banner" \
+    grep -q "nothing is probed, selected, or executed" <<< "$out"
+assert "renders the candidate table for the class" \
+    grep -q "candidates for route class 'tier2_preferred'" <<< "$out"
+assert "renders the tier2-delegation policy state" \
+    grep -q "tier2 delegation: permitted by the effective policy" <<< "$out"
+
+out="$(cli explain --feature featx --task ghost-task 2>&1)" && rc=0 || rc=$?
+assert_eq "unknown task id refused (rc 1)" "1" "$rc"
+assert "unknown task refusal explains the tier1_only default" \
+    grep -q "task 'ghost-task' is not declared" <<< "$out"
+out="$(cli explain --feature nosuchfeat --task x 2>&1)" && rc=0 || rc=$?
+assert_eq "missing artifact refused (rc 1)" "1" "$rc"
+assert "missing-artifact refusal names the tier1_only resolution" \
+    grep -q "every task resolves tier1_only" <<< "$out"
+printf '    bogus: x\n' >> "$TMP/specs/featx/routing-tasks.yaml"
+out="$(cli explain --feature featx --task scorer-edge 2>&1)" && rc=0 || rc=$?
+assert_eq "invalid artifact refused (rc 1) — never resolved over broken metadata" "1" "$rc"
+cp "$GOOD" "$TMP/specs/featx/routing-tasks.yaml"
+
+# repo restriction surfaces in the explanation
+cat > "$TMP/auto-t2off.json" <<'AEOF'
+{"schema_version":2,"profile":"advisory","routing":{"tier2":{"delegation_enabled":false}}}
+AEOF
+out="$(cli explain --feature featx --task scorer-edge --config "$TMP/auto-t2off.json" 2>&1)" && rc=0 || rc=$?
+assert "the repo tier2 restriction is rendered (FORBIDDEN)" \
+    grep -q "tier2 delegation: FORBIDDEN by repository policy" <<< "$out"
+
+# ── explain renders the EFFECTIVE legality --delegate and rt_select
+# enforce: the restriction lives IN the candidate verdicts, never
+# only beside them (T6 review round 1)
+assert "restricted tier2_preferred: the tier2 candidate's VERDICT carries the exclusion" \
+    grep -q "qwen2: excluded by repository policy — tier2 delegation disabled by repository" <<< "$out"
+assert "restricted tier2_preferred: tier1 shown as the effective executable fallback" \
+    grep -q "alpha: eligible in tier1" <<< "$out"
+assert_eq "restricted tier2_preferred: NO tier2 candidate is rendered eligible" "0" \
+    "$(grep -c "qwen2: eligible" <<< "$out" || true)"
+# the same task under a fallback class: a variant artifact
+cat > "$TMP/specs/featx/routing-tasks.yaml" <<'FEOF'
+schema_version: 1
+tasks:
+  fb-task:
+    route_class: tier2_fallback
+    outcome: fallback probe
+    reorderable: true
+    allowed_files:
+      - src/scorer.py
+    fr_refs:
+      - FR-7
+FEOF
+out="$(cli explain --feature featx --task fb-task --config "$TMP/auto-t2off.json" 2>&1)" && rc=0 || rc=$?
+assert "restricted tier2_fallback: tier2 verdict is policy-excluded (permanent tier1 exhaustion could never unlock it)" \
+    grep -q "qwen2: excluded by repository policy — tier2 delegation disabled by repository" <<< "$out"
+assert "restricted tier2_fallback: tier1 evaluated normally" \
+    grep -q "alpha: eligible in tier1" <<< "$out"
+cp "$GOOD" "$TMP/specs/featx/routing-tasks.yaml"
+# unrestricted sanity: the same tier2 candidate IS eligible
+out="$(cli explain --feature featx --task scorer-edge 2>&1)" && rc=0 || rc=$?
+assert "unrestricted: the tier2 candidate is eligible (the exclusion is the policy's doing, not the renderer's)" \
+    grep -q "qwen2: eligible in tier2" <<< "$out"
+
+# PURITY (A's must-not list): no network, no state writes — under a
+# PATH shim, with byte-identity of the state file
+SHIM6="$TMP/shim6"; mkdir -p "$SHIM6"
+for tool in curl wget nc; do
+    printf '#!/bin/sh\necho hit > "%s/net-marker"\n' "$TMP" > "$SHIM6/$tool"
+    chmod +x "$SHIM6/$tool"
+done
+printf '{"profiles":{"alpha":{"state":"cooldown","until":9999999999}}}' > "$TMP/t6-state.json"
+cp "$TMP/t6-state.json" "$TMP/t6-state.before"
+env PATH="$SHIM6:$PATH" CCT_ROUTING_REGISTRY="$REG" CCT_SPECS_DIR="$TMP/specs" \
+    CCT_ROUTING_STATE="$TMP/t6-state.json" \
+    bash "$CLI" explain --feature featx --task scorer-edge >/dev/null 2>&1 || true
+assert_eq "purity: task-addressed explain touched no network (shim marker absent)" "no" \
+    "$( [[ -f "$TMP/net-marker" ]] && echo yes || echo no )"
+assert "purity: the state file is byte-identical after task-addressed explain" \
+    cmp -s "$TMP/t6-state.json" "$TMP/t6-state.before"
 
 echo ""
 echo "========================================="

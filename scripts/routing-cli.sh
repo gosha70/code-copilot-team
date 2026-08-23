@@ -33,6 +33,7 @@ CONFIG=""
 ROUTE_CLASS=""
 ROLE=""
 FEATURE=""
+TASK_ID=""
 
 usage() {
     cat >&2 <<'EOF'
@@ -61,6 +62,7 @@ while [[ $# -gt 0 ]]; do
         --route-class) ROUTE_CLASS="$2"; shift 2 ;;
         --role)        ROLE="$2"; shift 2 ;;
         --feature)     FEATURE="$2"; shift 2 ;;
+        --task)        TASK_ID="$2"; shift 2 ;;
         *) echo "routing: unknown option '$1'" >&2; usage ;;
     esac
 done
@@ -101,11 +103,22 @@ state_of() {  # <profile-id> -> state string (unknown when absent)
     fi
 }
 
-# --feature belongs to validate alone until the task-addressed explain
-# form ships (increment C T6) — a closed CLI surface, not a shared flag.
-if [[ -n "$FEATURE" && "$CMD" != "validate" ]]; then
-    echo "routing: --feature is accepted by 'validate' only (task-addressed explain arrives with increment C T6)" >&2
+# Closed CLI surface: --feature belongs to validate, and to explain
+# WITH --task (the task-addressed form, #254 T6); --task belongs to
+# explain alone and always needs --feature.
+if [[ -n "$TASK_ID" && "$CMD" != "explain" ]]; then
+    echo "routing: --task is accepted by 'explain' only" >&2
     usage
+fi
+if [[ -n "$TASK_ID" && -z "$FEATURE" ]]; then
+    echo "routing explain: --task requires --feature (the task lives in specs/<feature>/routing-tasks.yaml)" >&2
+    usage
+fi
+if [[ -n "$FEATURE" && "$CMD" != "validate" ]]; then
+    if [[ "$CMD" != "explain" || -z "$TASK_ID" ]]; then
+        echo "routing: --feature is accepted by 'validate', and by 'explain' together with --task" >&2
+        usage
+    fi
 fi
 
 case "$CMD" in
@@ -178,7 +191,6 @@ status)
 
 explain)
     require_registry
-    [[ -n "$ROUTE_CLASS" ]] || { echo "routing explain: --route-class is required" >&2; usage; }
     if ! rc_validate "$REGISTRY" >/dev/null 2>&1; then
         echo "the registry does not validate — run: cct routing validate" >&2
         exit 1
@@ -188,15 +200,76 @@ explain)
         exit 1
     fi
     rc_parse "$REGISTRY" || true
-    rc_route_classes | grep -qx "$ROUTE_CLASS" || {
-        echo "routing explain: route class '$ROUTE_CLASS' is not declared in the registry" >&2
-        exit 1
-    }
-    echo "explain: CONFIGURATION resolution for route class '$ROUTE_CLASS' —"
-    echo "  this is not an availability decision: nothing is probed, selected, or executed."
     enabled=$(jq -r '.enabled' <<< "$eff")
     allowed_ids=$(jq -r '.candidates[][0]' <<< "$eff")
-    tier_order=$(rc_array_elems "route_classes.$ROUTE_CLASS" tier_order)
+
+    if [[ -n "$TASK_ID" ]]; then
+        # ── task-addressed explain (#254 T6; closes increment A's
+        # recorded deviation). PURE configuration resolution, exactly
+        # like the route-class form: the two artifacts are read-only,
+        # nothing is probed, selected, executed, or written.
+        # shellcheck source=/dev/null
+        source "$SCRIPT_DIR/lib/routing-tasks.sh"
+        RT_ARTIFACT="$SPECS_DIR/$FEATURE/routing-tasks.yaml"
+        if [[ ! -r "$RT_ARTIFACT" ]]; then
+            echo "routing explain: no routing-tasks.yaml for feature '$FEATURE' — every task resolves tier1_only; the task-addressed form requires the artifact" >&2
+            exit 1
+        fi
+        RT_VERIF="$SPECS_DIR/$FEATURE/verification.yaml"
+        [[ -r "$RT_VERIF" ]] || RT_VERIF="-"
+        if ! rk_validate "$RT_ARTIFACT" "$RT_VERIF" "$(dirname "$SPECS_DIR")" >/dev/null 2>&1; then
+            echo "routing explain: the task metadata does not validate — run: cct routing validate --feature $FEATURE" >&2
+            exit 1
+        fi
+        rk_parse "$RT_ARTIFACT" >/dev/null 2>&1 || true
+        if ! ROUTE_CLASS=$(rk_task_get "$TASK_ID" route_class 2>/dev/null); then
+            echo "routing explain: task '$TASK_ID' is not declared in $RT_ARTIFACT (an undeclared task resolves tier1_only; declare it to delegate it)" >&2
+            exit 1
+        fi
+        echo "explain: task '$TASK_ID' (feature '$FEATURE') — route class '$ROUTE_CLASS' from routing-tasks.yaml"
+        echo "  this is not an availability decision: nothing is probed, selected, or executed."
+        echo "  safety floor evaluation (allowed files):"
+        af_any=""
+        while IFS= read -r af; do
+            [[ -z "$af" ]] && continue
+            af_any=1
+            hits=$(rk_floor_hits "$af" | tr '\n' ',' | sed 's/,$//')
+            if [[ -n "$hits" ]]; then
+                echo "    $af: floor category ${hits} — Tier-1 territory"
+            else
+                echo "    $af: not in the safety floor"
+            fi
+        done <<< "$(rk_task_items "$TASK_ID" allowed_files)"
+        [[ -z "$af_any" ]] && echo "    (no allowed_files declared — a tier1-class task needs none)"
+        T2_RESTRICT=0
+        if [[ "$ROUTE_CLASS" == tier2_* ]]; then
+            if [[ "$(rc_tier2_allowed "$eff")" == "false" ]]; then
+                echo "  tier2 delegation: FORBIDDEN by repository policy (routing.tier2.delegation_enabled = false)"
+                T2_RESTRICT=1
+            else
+                echo "  tier2 delegation: permitted by the effective policy"
+            fi
+        fi
+        # the class tier order is CLASS SEMANTICS (closed), not a
+        # registry declaration
+        case "$ROUTE_CLASS" in
+            primary_only|tier1_only) tier_order=$'tier1' ;;
+            tier2_fallback)          tier_order=$'tier1\ntier2' ;;
+            tier2_preferred)         tier_order=$'tier2\ntier1' ;;
+        esac
+        [[ "$ROUTE_CLASS" == "primary_only" ]] && \
+            echo "  note: 'primary_only' admits only the first tier1 candidate in the total order at selection time"
+        echo "  candidates for route class '$ROUTE_CLASS':"
+    else
+        [[ -n "$ROUTE_CLASS" ]] || { echo "routing explain: --route-class is required" >&2; usage; }
+        rc_route_classes | grep -qx "$ROUTE_CLASS" || {
+            echo "routing explain: route class '$ROUTE_CLASS' is not declared in the registry" >&2
+            exit 1
+        }
+        echo "explain: CONFIGURATION resolution for route class '$ROUTE_CLASS' —"
+        echo "  this is not an availability decision: nothing is probed, selected, or executed."
+        tier_order=$(rc_array_elems "route_classes.$ROUTE_CLASS" tier_order)
+    fi
     # every profile gets a verdict, in tier order then priority
     while IFS= read -r tier; do
         [[ -z "$tier" ]] && continue
@@ -213,6 +286,11 @@ explain)
             st=$(state_of "$id")
             if [[ "$enabled" != "true" ]]; then
                 echo "  $id: rejected — routing is disabled by the effective policy"
+            elif [[ "${T2_RESTRICT:-0}" == "1" && "$tier" == "tier2" ]]; then
+                # the EFFECTIVE legality --delegate and rt_select
+                # enforce — class-level eligibility the policy has
+                # removed is never rendered as eligible (#254 T6)
+                echo "  $id: excluded by repository policy — tier2 delegation disabled by repository (routing.tier2.delegation_enabled = false)"
             elif ! grep -qx "$id" <<< "$allowed_ids"; then
                 echo "  $id: excluded by repository policy (not in the effective allowed set)"
             elif [[ -n "$ROLE" ]] && ! ( rc_array_elems "profiles.$(rc_index_of "$id")" roles | grep -qx "$ROLE" ); then

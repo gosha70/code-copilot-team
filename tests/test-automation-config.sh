@@ -626,7 +626,13 @@ assert_rejects "routing: identity fields refused by name" "$TMP/rr5.json" "canno
 w rr6.json '{"schema_version":2,"profile":"advisory","routing":{"capability_tier":"tier1"}}'
 assert_rejects "routing: capability fields refused by name" "$TMP/rr6.json" "cannot introduce credential, endpoint, identity, or capability"
 w rr7.json '{"schema_version":2,"profile":"advisory","routing":{"tier2":{"requires_explicit_task_opt_in":true}}}'
-assert_rejects "routing: tier2 refused until its increment ships" "$TMP/rr7.json" "owned by a later #109 increment"
+assert_rejects "routing: tier2 promoted (#254 T6) but its block is CLOSED — unknown keys refused" "$TMP/rr7.json" "unknown key 'routing.tier2.requires_explicit_task_opt_in'"
+w rr7a.json '{"schema_version":2,"profile":"advisory","routing":{"tier2":{"delegation_enabled":false}}}'
+assert "routing: tier2.delegation_enabled=false accepted (restriction-only promotion)" bash "$V" "$TMP/rr7a.json"
+w rr7b.json '{"schema_version":2,"profile":"advisory","routing":{"tier2":{"delegation_enabled":"no"}}}'
+assert_rejects "routing: tier2.delegation_enabled must be boolean" "$TMP/rr7b.json" "delegation_enabled must be a boolean"
+w rr7c.json '{"schema_version":2,"profile":"advisory","routing":{"tier2":true}}'
+assert_rejects "routing: tier2 must be an object" "$TMP/rr7c.json" "routing.tier2 must be an object"
 w rr8.json '{"schema_version":2,"profile":"advisory","routing":{"recovery":{"failback":"next-task-boundary"}}}'
 assert_rejects "routing: recovery refused until its increment ships" "$TMP/rr8.json" "owned by a later #109 increment"
 w rr9.json '{"schema_version":2,"profile":"advisory","routing":{"enabled":"yes"}}'
@@ -644,8 +650,12 @@ assert_rejects "routing must be an object" "$TMP/rr14.json" "routing must be an 
 
 # Schema parity: the block is closed and restriction-only BY SHAPE.
 assert "schema: routing is closed" jq -e '.properties.routing.additionalProperties == false' "$SCHEMA"
-assert "schema: routing has ONLY the three restriction fields" \
-    jq -e '.properties.routing.properties | keys | sort == ["allowed_profiles","default_task_route","enabled"]' "$SCHEMA"
+assert "schema: routing has ONLY the four restriction fields (tier2 promoted with #254 T6)" \
+    jq -e '.properties.routing.properties | keys | sort == ["allowed_profiles","default_task_route","enabled","tier2"]' "$SCHEMA"
+assert "schema: the tier2 block is closed" \
+    jq -e '.properties.routing.properties.tier2.additionalProperties == false' "$SCHEMA"
+assert "schema: the tier2 block carries only delegation_enabled" \
+    jq -e '.properties.routing.properties.tier2.properties | keys == ["delegation_enabled"]' "$SCHEMA"
 assert "schema: allowed_profiles is a unique non-empty id array" \
     jq -e '.properties.routing.properties.allowed_profiles | .minItems == 1 and .uniqueItems == true and .items.minLength == 1' "$SCHEMA"
 

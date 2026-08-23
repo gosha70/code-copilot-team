@@ -1070,9 +1070,9 @@ code-copilot-team/
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         157 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       186 circuit + action + selection + supervisor + identity tests (#251 B)
-│   ├── test-routing-tasks.sh          130 task route metadata + safety-floor tests (#254 C)
+│   ├── test-routing-tasks.sh          154 task metadata + floor + task-addressed explain tests (#254 C)
 │   ├── test-routing-packet.sh          99 immutable delegation-packet tests (#254 C T2)
-│   ├── test-routing-delegation.sh     164 route-class + packet execution + reconciliation tests (#254 C T3-T5)
+│   ├── test-routing-delegation.sh     171 route-class + packet execution + reconciliation tests (#254 C T3-T5)
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

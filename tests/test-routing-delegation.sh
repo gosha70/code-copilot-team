@@ -749,6 +749,39 @@ assert_eq "recovered proceed: exactly one child launch (round 1 was never replay
     "1" "$(cat "$TMP/recov2/mock/count-t2loc")"
 
 echo ""
+echo "== T6: the tier2 repo restriction (promoted key) =="
+
+# selector defense-in-depth: the effective policy forbids tier2
+EFF_T2OFF=$(jq -c '.tier2_delegation_allowed = false' <<< "$EFF")
+RT_OFF() {  # <state-file> <attempted> <class>
+    ( set +e; CCT_ROUTING_STATE="$1" source "$SELLIB"; rt_select "$EFF_T2OFF" "$2" build "$3" )
+}
+R=$(RT_OFF "$TMP/t6a.json" '[]' tier2_preferred)
+assert_eq "restricted: tier2_preferred falls back to tier1 (t2 never selected)" \
+    "t1a" "$(jq -r '.selected.id' <<< "$R")"
+assert "restricted: tier2 candidates rejected naming repository policy" \
+    grep -q "forbidden by repository policy (routing.tier2.delegation_enabled = false)" <<< "$(reason_of "$R" t2b)"
+R=$(RT_OFF "$TMP/t6b.json" '["t1a","t1b","t1c"]' tier2_fallback)
+assert_eq "restricted: tier2_fallback NEVER unlocks even on permanent tier1 exhaustion" \
+    "routing_no_eligible_profile" "$(jq -r '.terminal_reason' <<< "$R")"
+assert "restricted: the locked tier2 verdicts name the policy" \
+    grep -q "forbidden by repository policy" <<< "$(reason_of "$R" t2b)"
+
+# end to end: a repo automation.json forbidding tier2 refuses --delegate
+delegate_fixture t2off
+printf '{"schema_version":2,"profile":"advisory","routing":{"tier2":{"delegation_enabled":false}}}' \
+    > "$TMP/t2off/wr/specs/dfeat/automation.json"
+( cd "$TMP/t2off/wr" && git add -A && git -c user.email=t@t -c user.name=t commit -qm t2off ) >/dev/null 2>&1
+E_T2O=$(edit_script t2off-all.sh 'printf "MAGIC1\nMAGIC2\nMAGIC3\n" >> src/target.py')
+printf '%s|-|0\n' "$E_T2O" > "$TMP/t2off/mock/t2loc.spec"
+sup_del t2off bounded-fix
+assert_eq "restricted end to end: --delegate refused (exit 5)" "5" "$SUP_RC"
+assert "restricted end to end: routing_policy_denied names the repo restriction" \
+    bash -c "grep -q 'routing_policy_denied' '$TMP/t2off/out.log' && grep -q 'repository policy forbids Tier-2 delegation' '$TMP/t2off/out.log'"
+assert "restricted end to end: no child was ever launched" \
+    bash -c "[[ ! -f '$TMP/t2off/mock/count-t2loc' && ! -f '$TMP/t2off/mock/count-t1main' ]]"
+
+echo ""
 echo "== T5: verified_provisional + Tier-1 reconciliation =="
 
 # registry variants: a same-provider reconciler (independence collision)
