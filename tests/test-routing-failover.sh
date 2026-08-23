@@ -981,6 +981,148 @@ assert_eq "legacy: without --routing the registry is inert (clean done path)" "0
 assert_eq "legacy: no routing artifacts are created" "no" \
     "$( [[ -d "$TMP/leg/wr/.cct/auto-build/demo-feat/routing" ]] && echo yes || echo no )"
 
+
+echo ""
+echo "=== T5: builder identity + reviewer independence ==="
+
+# providers fixtures (READ ONLY — never a second routing registry)
+mkprov() {  # <path> <reviewer-model> [reviewer-provider]
+    cat > "$1" <<PEOF
+[defaults]
+peer_for.claude = "rev1"
+peer_for.pi = "rev1"
+
+[providers.rev1]
+type = "api"
+model = "$2"
+${3:+provider = "$3"}
+PEOF
+}
+# collision: the gating reviewer IS the builder's model -> refuse
+# BEFORE any launch and BEFORE any durable attempt record.
+mkdir -p "$TMP/indep1/mock" "$TMP/indep1/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/indep1/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "-|0" > "$TMP/indep1/mock/alpha.spec"
+mkprov "$TMP/indep1/providers.toml" "sonnet"
+( set +e
+  cd "$REPO_DIR"
+  env MOCK_DIR="$TMP/indep1/mock" \
+      CCT_SUPERVISOR_HARNESS_CMD="MOCK_DIR='$TMP/indep1/mock' bash '$MOCK'" \
+      CCT_SUPERVISOR_SLEEP=true CCT_SUPERVISOR_DIR="$TMP/indep1/led" \
+      CCT_ROUTING_REGISTRY="$TMP/sup-reg.toml" \
+      CCT_ROUTING_STATE="$TMP/indep1/state.json" \
+      CCT_PROVIDERS_PROFILE="$TMP/indep1/providers.toml" \
+      bash "$SUP" demo-feat --routing --worktree "$TMP/indep1/wr" --profile unattended \
+      > "$TMP/indep1/out.log" 2>&1 ) && IRC=0 || IRC=$?
+assert_eq "independence/collision: terminal, never downgraded (exit 5)" "5" "$IRC"
+assert "independence/collision: the closed-enum reason is recorded" \
+    grep -q "routing_reviewer_not_independent" "$TMP/indep1/led/demo-feat/run.json"
+assert "independence/collision: same-model stays a conservative signal across distinct providers" \
+    grep -q "the same MODEL ('sonnet') despite distinct providers" "$TMP/indep1/led/demo-feat/events.jsonl"
+assert_eq "independence/collision: the child was NEVER launched" "no" \
+    "$( [[ -f "$TMP/indep1/mock/count-alpha" ]] && echo yes || echo no )"
+assert_eq "independence/collision: NO dangling started record (the gate precedes step 1)" "no" \
+    "$( [[ -f "$TMP/indep1/wr/.cct/auto-build/demo-feat/routing/started-1.json" ]] && echo yes || echo no )"
+
+# independent reviewer -> proceeds and journals the evaluation
+mkdir -p "$TMP/indep2/mock" "$TMP/indep2/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/indep2/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "-|0" > "$TMP/indep2/mock/alpha.spec"
+mkprov "$TMP/indep2/providers.toml" "some-other-model"
+( set +e
+  cd "$REPO_DIR"
+  env MOCK_DIR="$TMP/indep2/mock" \
+      CCT_SUPERVISOR_HARNESS_CMD="MOCK_DIR='$TMP/indep2/mock' bash '$MOCK'" \
+      CCT_SUPERVISOR_SLEEP=true CCT_SUPERVISOR_DIR="$TMP/indep2/led" \
+      CCT_ROUTING_REGISTRY="$TMP/sup-reg.toml" \
+      CCT_ROUTING_STATE="$TMP/indep2/state.json" \
+      CCT_PROVIDERS_PROFILE="$TMP/indep2/providers.toml" \
+      bash "$SUP" demo-feat --routing --worktree "$TMP/indep2/wr" --profile unattended \
+      > "$TMP/indep2/out.log" 2>&1 ) && IRC=0 || IRC=$?
+assert_eq "independence/ok: an independent reviewer lets the run proceed" "0" "$IRC"
+assert "independence/ok: the established evaluation carries BOTH identities" \
+    grep -q "independence=established: reviewer 'rev1' (provider 'rev1'" "$TMP/indep2/led/demo-feat/events.jsonl"
+
+# unevaluable identity: journaled, NOT terminal (only a positive
+# collision blocks; the driver's review machinery still governs)
+mkdir -p "$TMP/indep3/mock" "$TMP/indep3/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/indep3/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "-|0" > "$TMP/indep3/mock/alpha.spec"
+( set +e
+  cd "$REPO_DIR"
+  env MOCK_DIR="$TMP/indep3/mock" \
+      CCT_SUPERVISOR_HARNESS_CMD="MOCK_DIR='$TMP/indep3/mock' bash '$MOCK'" \
+      CCT_SUPERVISOR_SLEEP=true CCT_SUPERVISOR_DIR="$TMP/indep3/led" \
+      CCT_ROUTING_REGISTRY="$TMP/sup-reg.toml" \
+      CCT_ROUTING_STATE="$TMP/indep3/state.json" \
+      CCT_PROVIDERS_PROFILE="$TMP/indep3/absent.toml" \
+      bash "$SUP" demo-feat --routing --worktree "$TMP/indep3/wr" --profile unattended \
+      > "$TMP/indep3/out.log" 2>&1 ) && IRC=0 || IRC=$?
+assert_eq "independence/unevaluable: journaled, run proceeds" "0" "$IRC"
+assert "independence/unevaluable: journaled as independence=unevaluable (never as independent)" \
+    grep -q "independence=unevaluable: no providers profile" "$TMP/indep3/led/demo-feat/events.jsonl"
+
+# same PROVIDER, different model: the PRIMARY collision signal —
+# model inequality never substitutes for provider independence.
+mkdir -p "$TMP/indep5/mock" "$TMP/indep5/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/indep5/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "-|0" > "$TMP/indep5/mock/alpha.spec"
+mkprov "$TMP/indep5/providers.toml" "not-sonnet-at-all" "anthropic-subscription"
+( set +e
+  cd "$REPO_DIR"
+  env MOCK_DIR="$TMP/indep5/mock" \
+      CCT_SUPERVISOR_HARNESS_CMD="MOCK_DIR='$TMP/indep5/mock' bash '$MOCK'" \
+      CCT_SUPERVISOR_SLEEP=true CCT_SUPERVISOR_DIR="$TMP/indep5/led" \
+      CCT_ROUTING_REGISTRY="$TMP/sup-reg.toml" \
+      CCT_ROUTING_STATE="$TMP/indep5/state.json" \
+      CCT_PROVIDERS_PROFILE="$TMP/indep5/providers.toml" \
+      bash "$SUP" demo-feat --routing --worktree "$TMP/indep5/wr" --profile unattended \
+      > "$TMP/indep5/out.log" 2>&1 ) && IRC=0 || IRC=$?
+assert_eq "independence/provider: same provider + DIFFERENT model is a collision" "5" "$IRC"
+assert "independence/provider: the collision names the shared provider" \
+    grep -q "the same PROVIDER ('anthropic-subscription')" "$TMP/indep5/led/demo-feat/events.jsonl"
+assert_eq "independence/provider: nothing launched past the gate" "no" \
+    "$( [[ -f "$TMP/indep5/mock/count-alpha" ]] && echo yes || echo no )"
+
+# re-evaluation happens at EVERY switch, not only at start: alpha is
+# independent; the FAILOVER target beta collides with the reviewer.
+mkdir -p "$TMP/indep4/mock" "$TMP/indep4/wr/specs/demo-feat"
+printf -- "- [x] done\n" > "$TMP/indep4/wr/specs/demo-feat/tasks.md"
+printf '%s\n' "$FXD/claude-weekly-limit.out|1" > "$TMP/indep4/mock/alpha.spec"
+printf '%s\n' "-|0" > "$TMP/indep4/mock/beta.spec"
+mkprov "$TMP/indep4/providers.toml" "totally-different-model" "deepseek-api"   # PROVIDER collision with BETA only
+( set +e
+  cd "$REPO_DIR"
+  env MOCK_DIR="$TMP/indep4/mock" \
+      CCT_SUPERVISOR_HARNESS_CMD="MOCK_DIR='$TMP/indep4/mock' bash '$MOCK'" \
+      CCT_SUPERVISOR_SLEEP=true CCT_SUPERVISOR_DIR="$TMP/indep4/led" \
+      CCT_ROUTING_REGISTRY="$TMP/sup-reg.toml" \
+      CCT_ROUTING_STATE="$TMP/indep4/state.json" \
+      CCT_PROVIDERS_PROFILE="$TMP/indep4/providers.toml" \
+      bash "$SUP" demo-feat --routing --worktree "$TMP/indep4/wr" --profile unattended \
+      > "$TMP/indep4/out.log" 2>&1 ) && IRC=0 || IRC=$?
+assert_eq "independence/switch: re-evaluated for the FAILOVER target (terminal)" "5" "$IRC"
+assert_eq "independence/switch: alpha ran (independent), beta NEVER did (collision)" "1 no" \
+    "$(printf '%s %s' "$(cat "$TMP/indep4/mock/count-alpha")" "$( [[ -f "$TMP/indep4/mock/count-beta" ]] && echo yes || echo no )")"
+assert "independence/switch: a PROVIDER-level collision, models differing" \
+    grep -q "COLLISION: gating reviewer 'rev1' resolves to the same PROVIDER ('deepseek-api')" "$TMP/indep4/led/demo-feat/events.jsonl"
+
+# the emission chokepoint: an un-enum'd reason cannot escape rt_refuse
+assert "chokepoint: rt_refuse validates every terminal reason" \
+    grep -q "routing_enum_violation" "$REPO_DIR/scripts/cooldown-supervisor.sh"
+assert_eq "identity: the env carries the FULL identity (pool + tool profile)" "2" \
+    "$(grep -c "CCT_ROUTING_POOL\|CCT_ROUTING_TOOL_PROFILE" "$REPO_DIR/scripts/cooldown-supervisor.sh" | head -1)"
+
+# identity propagation surfaces (structure pins; the driver and runner
+# suites execute these paths in the sweep)
+assert "identity: the driver ledger records routing_identity from the routed env" \
+    grep -q "routing_identity" "$REPO_DIR/scripts/auto-build-loop.sh"
+assert "identity: ...as null for unrouted runs (additive, never breaking)" \
+    bash -c "grep -A2 'routing_identity' '$REPO_DIR/scripts/auto-build-loop.sh' | grep -q 'else {profile:\$rprof'"
+assert "identity: the review request carries the builder identity line" \
+    grep -q "Builder identity: profile %s" "$REPO_DIR/scripts/review-round-runner.sh"
+assert "identity: the enum gained the independence disposition" \
+    bash -c "source '$REPO_DIR/scripts/lib/routing-actions.sh'; ra_terminal_valid routing_reviewer_not_independent"
 echo ""
 echo "========================================="
 echo "  routing-failover tests: $PASS passed, $FAIL failed"

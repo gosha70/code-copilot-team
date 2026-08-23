@@ -231,8 +231,18 @@ if [[ "$ROUTING" == "1" ]]; then
   rs_journal() { journal "routing_state" "$1: $2"; }
 fi
 
-# rt_refuse <terminal_reason> <detail> — park attended / fail unattended
+# rt_refuse <terminal_reason> <detail> — park attended / fail
+# unattended. THE single terminal-emission chokepoint: every reason is
+# validated against the closed enum here; an un-enum'd reason (a
+# supervisor bug) is normalized to routing_unknown_failure and
+# journaled — no call site can mint a new reason.
 rt_refuse() {
+  local reason="$1"
+  if declare -F ra_terminal_valid >/dev/null 2>&1 && ! ra_terminal_valid "$reason"; then
+    journal "routing_enum_violation" "'$reason' is not in the closed terminal-reason enum — normalizing to routing_unknown_failure (this is a supervisor bug)"
+    reason="routing_unknown_failure"
+  fi
+  set -- "$reason" "$2"
   notify "routing" "$1: $2"
   if [[ "$PROFILE" == "unattended" ]]; then
     terminate "failed" 5 "$1: $2"
@@ -292,6 +302,67 @@ rt_scrub_out() {  # <file>
   local content
   content="$(cat "$1")"
   printf '%s\n' "${content//"$RT_ENV_API_KEY"/[REDACTED:ANTHROPIC_API_KEY]}" > "$1"
+}
+
+# Reviewer independence (#251 T5, decision 8): providers.toml is READ
+# ONLY — it never becomes a second routing registry. The gating
+# reviewer for the child backend is defaults.peer_for.<subject>; a
+# reviewer whose MODEL equals the active builder's model is not
+# independent, and the router never downgrades independence to keep
+# moving (#190 disposition via rt_refuse). Unevaluable identity
+# (no providers profile / no peer / no model) is JOURNALED and does
+# not block — the driver's own review machinery still governs; only a
+# POSITIVE collision is terminal here.
+rt_toml_get() {  # <file> <section> <key>  (providers-health idiom)
+  awk -v section="$2" -v key="$3" '
+      /^\[/ { current = $0; gsub(/[\[\] ]/, "", current) }
+      current == section && $0 ~ "^" key " *= *" {
+          sub("^" key " *= *", ""); gsub(/^"|"$| *$/, ""); print; exit
+      }' "$1" 2>/dev/null
+}
+rt_reviewer_independence() {  # <profile-json>
+  # PROVIDER-AWARE: the primary collision signal is provider identity —
+  # same-provider review must never silently become acceptable just
+  # because the model name differs (and Pi's effective model is
+  # deliberately unverified in B, so model inequality proves little).
+  # The reviewer's provider identity is DETERMINISTIC, never inferred
+  # from model strings: its section's explicit `provider` key when
+  # present, else the peer id itself (the peer profile IS a
+  # provider-level entity in this repo's review contract). Model
+  # equality remains a second, conservative collision signal.
+  # UNEVALUABLE never means independent: it is journaled as
+  # independence=unevaluable so downstream evidence can never claim an
+  # independent review occurred; only a POSITIVE collision blocks.
+  local pj="$1" providers subject reviewer rmodel bmodel rprov bprov bid
+  providers="${CCT_PROVIDERS_PROFILE:-$HOME/.code-copilot-team/providers.toml}"
+  bid=$(jq -r '.id' <<< "$pj")
+  if [[ ! -f "$providers" ]]; then
+    journal "routing_reviewer_independence" "independence=unevaluable: no providers profile at $providers — the driver's review machinery still governs"
+    return 0
+  fi
+  subject="$RT_CHILD_BACKEND"
+  reviewer=$(rt_toml_get "$providers" "defaults" "peer_for.$subject")
+  if [[ -z "$reviewer" ]]; then
+    journal "routing_reviewer_independence" "independence=unevaluable: no peer_for.$subject reviewer configured"
+    return 0
+  fi
+  rprov=$(rt_toml_get "$providers" "providers.$reviewer" "provider")
+  [[ -z "$rprov" ]] && rprov="$reviewer"
+  rmodel=$(rt_toml_get "$providers" "providers.$reviewer" "model")
+  bprov=$(jq -r '.provider' <<< "$pj")
+  bmodel=$(jq -r '.model' <<< "$pj")
+  local why=""
+  if [[ "$rprov" == "$bprov" ]]; then
+    why="the same PROVIDER ('$rprov')"
+  elif [[ -n "$rmodel" && "$rmodel" == "$bmodel" ]]; then
+    why="the same MODEL ('$rmodel') despite distinct providers ('$rprov' vs '$bprov')"
+  fi
+  if [[ -n "$why" ]]; then
+    journal "routing_reviewer_independence" "COLLISION: gating reviewer '$reviewer' resolves to $why as builder profile '$bid' — independence is never downgraded to keep moving"
+    ra_terminal_valid routing_reviewer_not_independent || rt_refuse "routing_unknown_failure" "independence disposition missing from the closed enum"
+    rt_refuse "routing_reviewer_not_independent" "gating reviewer '$reviewer' resolves to $why as builder profile '$bid' — configure an independent reviewer or run without --routing"
+  fi
+  journal "routing_reviewer_independence" "independence=established: reviewer '$reviewer' (provider '$rprov', model '${rmodel:-unspecified}') is independent of builder '$bid' (provider '$bprov', model '$bmodel')"
 }
 
 rt_effective_model() {
@@ -488,6 +559,12 @@ routing_iteration() {
   attempt_no=$((ATTEMPTS + 1))
   attempt_id="${RT_RUN_TAG}-a${attempt_no}"
 
+  # Env resolution + reviewer-independence re-evaluation come BEFORE
+  # the durable attempt record: a collision park must not strand a
+  # dangling started-N for recovery to misread as indeterminate.
+  rt_launch_env "$pj"
+  rt_reviewer_independence "$pj"
+
   # step 1: persist attempt-started BEFORE any launch
   jq -n --arg id "$attempt_id" --argjson n "$attempt_no" --argjson p "$pj" \
         --argjson t "$(now_epoch)" \
@@ -500,7 +577,7 @@ routing_iteration() {
   info "launch attempt $ATTEMPTS via profile '$id' ..."
 
   # step 2: exactly one FRESH child session
-  rt_launch_env "$pj"
+
   local OUT CHILD_CODE
   OUT="$(mktemp)"
   set +e
@@ -512,6 +589,8 @@ routing_iteration() {
            CCT_ROUTING_BACKEND="$(jq -r '.backend' <<< "$pj")" \
            CCT_ROUTING_PROVIDER="$(jq -r '.provider' <<< "$pj")" \
            CCT_ROUTING_MODEL="$(jq -r '.model' <<< "$pj")" \
+           CCT_ROUTING_POOL="$(jq -r '.pool' <<< "$pj")" \
+           CCT_ROUTING_TOOL_PROFILE="$(jq -r '.tool_profile' <<< "$pj")" \
            ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
            ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
            bash -c "${CCT_SUPERVISOR_HARNESS_CMD:-bash \"$REPO_DIR/scripts/auto-build-loop.sh\" \"$FEATURE_ID\" --resume}" ) \

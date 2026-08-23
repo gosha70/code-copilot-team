@@ -403,7 +403,7 @@ cat > "$REVIEW_REQUEST" << REVIEW_EOF
 # Peer Review Request — Round $NEXT_ROUND
 
 Feature: $FEATURE_ID
-Phase: $PHASE
+Phase: $PHASE$(if [[ -n "${CCT_ROUTING_PROFILE:-}" ]]; then printf '\nBuilder identity: profile %s (%s/%s/%s) — routed by #109 increment B' "$CCT_ROUTING_PROFILE" "${CCT_ROUTING_BACKEND:-?}" "${CCT_ROUTING_PROVIDER:-?}" "${CCT_ROUTING_MODEL:-?}"; fi)
 Scope: $REVIEW_SCOPE$(if [[ -n "${REVIEW_SPECIALIZATION:-}" && "$REVIEW_SPECIALIZATION" != "general" ]]; then echo " | Specialization: $REVIEW_SPECIALIZATION"; fi)
 Target ref: $TARGET_REF
 Round: $NEXT_ROUND
