@@ -1,6 +1,8 @@
 # Origin Alignment Check — routing-tier1-failover
 
 Date: 2026-08-22 09:00 (record opened)
+Last revised: 2026-08-22 — T6 build-completion revision (T1–T6 built;
+this revision is the fresh record T6 requires)
 Trigger: rev-1 SDD bundle authored for increment B (#251) of #109 at the
 owner's direction ("Yes proceed to this increment"), immediately after
 increment A (#248) merged via PR #250.
@@ -105,6 +107,39 @@ defined once in the actions lib — cause, action, and terminal reason
 are three different things; dynamic `routing_${class}` assembly is
 forbidden, and `routing_attempt_indeterminate` stays distinct from
 exhaustion.
+
+## Build completion (T1–T6)
+
+The build landed inside the recorded claim; the per-task reviews
+produced contract tightenings, all execution-contract rather than
+scope: T1's lock takeover requires a confirmed-dead owner (age alone
+only permits investigation) and attempt-id idempotency has NO pruning
+horizon; T2's deadlines are anchored to the durable decision epoch
+(replay-deterministic; the wall clock only computes remaining waits)
+with the routing_* terminal reasons a closed enum defined once; T3's
+selection is a total order (tier → priority → id — the tie-break is
+policy, not declaration order) with three mutually exclusive output
+shapes; T4 persists the RECORDED decision in a versioned closed
+envelope, keeps TWO independent attempt-id idempotency domains, holds
+sticky request-local exclusions and retry budgets across sleeps and
+restarts, and secret-scrubs child output before persistence; T5's
+reviewer independence is provider-aware (model equality only a
+conservative secondary signal) with one closed journal tri-state, and
+routing_identity appears ONLY for routed runs — unrouted ledgers stay
+byte-identical to the pre-#251 shape.
+
+Two survived mutations exposed weak tests during the build (the
+tier-boundary fixture double-protected by the role filter; the
+indeterminate diagnostic shadowed by the malformed arm) — both tests
+were hardened until the mutations discriminated. One driver-suite run
+was discarded as tainted (a file it reads was edited mid-run) and
+rerun clean.
+
+The three recorded deviations shipped as recorded (no codex claim in
+B — the codex adapter is a follow-on child increment bound to B's
+contracts; the supervised attempt as B's unit until C; time-based
+re-eligibility decaying to unknown, never healthy). Deferred scope is
+unchanged and recorded on #251 with T6.
 
 ## Verdict
 
