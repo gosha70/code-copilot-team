@@ -258,6 +258,160 @@ assert "B: idempotency unchanged (a replayed attempt id is a no-op)" \
         jq -e '.profiles.iota.reason == \"first\"' '$TMP/idem.json'"
 
 echo ""
+echo "== T2: the probe engine (canaries, accounting, taint) =="
+
+PLIB="$REPO_DIR/scripts/lib/routing-probe.sh"
+PT="$TMP/probe"; mkdir -p "$PT"
+PJ_TOOL='{"id":"alpha","backend":"claude-code","model":"sonnet","tool_profile":"full-cct","credential_ref":"env:PROBE_KEY","endpoint_ref":"none"}'
+PJ_CHAT='{"id":"beta","backend":"pi","model":"qwen","tool_profile":"chat-only","credential_ref":"none","endpoint_ref":"none"}'
+
+# mock canary: $1 is the body run in place of the real backend command
+mock() { printf '#!/usr/bin/env bash\ncat > /dev/null\n%s\n' "$1" > "$PT/mock.sh"; chmod +x "$PT/mock.sh"; }
+# P <ledger> <profile-json> <generation> [env assignments...] -> "outcome\tdetail"
+P() {
+    local led="$1" pj="$2" gen="$3"; shift 3
+    ( set +e
+      export CCT_ROUTING_PROBE_LEDGER="$led" CCT_ROUTING_PROBE_CMD="bash $PT/mock.sh"
+      [[ $# -gt 0 ]] && export "$@"
+      source "$PLIB"; rb_probe "$pj" "$gen" 2>/dev/null )
+}
+PFULL() {  # same, but keeps RB_* globals by echoing extra fields
+    local led="$1" pj="$2" gen="$3"; shift 3
+    ( set +e
+      export CCT_ROUTING_PROBE_LEDGER="$led" CCT_ROUTING_PROBE_CMD="bash $PT/mock.sh"
+      [[ $# -gt 0 ]] && export "$@"
+      source "$PLIB"; rb_probe "$pj" "$gen" >/dev/null 2>&1
+      printf '%s|%s|%s\n' "$RB_OUTCOME" "$RB_COST" "$RB_TRANSCRIPT" )
+}
+
+assert_eq "outcome vocabulary is closed (four members)" "4" \
+    "$(bash -c "source '$PLIB'; printf '%s\n' \$RB_OUTCOMES | wc -l | tr -d ' '")"
+assert "outcome vocabulary rejects an unlisted outcome" \
+    bash -c "source '$PLIB'; ! rb_outcome_valid probe_maybe"
+assert "tool-profile map is closed (full-cct implies tools)" \
+    bash -c "source '$PLIB'; rb_tools_implied full-cct && ! rb_tools_implied chat-only"
+
+# ── real-canary contract
+L1="$PT/l1.json"
+mock 'printf CCT_TOOL_OK > "$CCT_PROBE_TOOL_FILE"; echo "{\"result\":\"CCT_PROBE_OK\",\"total_cost_usd\":0.011}"'
+assert_eq "canary: inference + tool markers => probe_pass" "probe_pass" "$(P "$L1" "$PJ_TOOL" 1 | cut -f1)"
+assert "canary: the pass detail names BOTH verifications" \
+    grep -q "real inference verified + tool canary verified" <<< "$(P "$L1" "$PJ_TOOL" 11)"
+mock 'echo "{\"result\":\"CCT_PROBE_OK\",\"total_cost_usd\":0.01}"'
+assert_eq "canary: a tool-profiled builder answering inference ONLY => probe_fail" "probe_fail" \
+    "$(P "$L1" "$PJ_TOOL" 2 | cut -f1)"
+assert "canary: that failure names the tool-canary requirement" \
+    grep -q "not healthy on inference alone" <<< "$(P "$L1" "$PJ_TOOL" 21)"
+assert_eq "canary: the SAME output on a non-tool profile => probe_pass" "probe_pass" \
+    "$(P "$L1" "$PJ_CHAT" 3 | cut -f1)"
+
+# ── evidence honesty
+mock 'echo "Error: 429 rate_limit_error"; exit 1'
+assert_eq "evidence: a CLASSIFIABLE provider failure => probe_fail" "probe_fail" \
+    "$(P "$L1" "$PJ_CHAT" 4 | cut -f1)"
+assert "evidence: the failure names the classified cause" \
+    grep -q "classified provider failure: rate_limited" <<< "$(P "$L1" "$PJ_CHAT" 41)"
+mock 'echo "???"; exit 3'
+assert_eq "evidence: unparseable output => probe_unverifiable, NEVER probe_fail" "probe_unverifiable" \
+    "$(P "$L1" "$PJ_CHAT" 5 | cut -f1)"
+assert "evidence: the unverifiable detail refuses to invent provider failure" \
+    grep -q "never recorded as provider failure" <<< "$(P "$L1" "$PJ_CHAT" 51)"
+mock 'exit 124'
+assert_eq "evidence: a cut-off canary => probe_unverifiable (absence of evidence)" "probe_unverifiable" \
+    "$(P "$L1" "$PJ_CHAT" 6 | cut -f1)"
+assert "evidence: the cut-off detail says a missing answer is not failure" \
+    grep -q "a missing answer is not provider failure" <<< "$(P "$L1" "$PJ_CHAT" 61)"
+mock 'echo "command not found"; exit 127'
+assert_eq "evidence: an absent backend => probe_unverifiable" "probe_unverifiable" \
+    "$(P "$L1" "$PJ_CHAT" 7 | cut -f1)"
+
+# ── accounting: launched implies accounted
+L2="$PT/l2.json"
+mock 'echo "unparseable garbage"; exit 9'
+P "$L2" "$PJ_CHAT" 100 >/dev/null
+assert_eq "accounting: a MALFORMED-evidence probe is still costed" "1" \
+    "$(jq '[.probes[] | select(.generation == 100)] | length' "$L2")"
+assert_eq "accounting: the unmeasurable cost uses the named estimate, flagged" "0.02 true" \
+    "$(jq -r '.probes[] | select(.generation == 100) | "\(.cost_usd) \(.estimated)"' "$L2")"
+mock 'exit 124'
+P "$L2" "$PJ_CHAT" 101 >/dev/null
+assert_eq "accounting: a TIMED-OUT probe is still costed" "1" \
+    "$(jq '[.probes[] | select(.generation == 101)] | length' "$L2")"
+mock 'echo "{\"result\":\"CCT_PROBE_OK\",\"total_cost_usd\":0.075}"'
+P "$L2" "$PJ_CHAT" 102 >/dev/null
+assert_eq "accounting: a measured cost REPLACES the estimate (no double count)" "1 0.075 false" \
+    "$(jq -r '[.probes[] | select(.generation == 102)] | "\(length) \(.[0].cost_usd) \(.[0].estimated)"' "$L2")"
+assert_eq "accounting: every launch left exactly one ledger row" "3" "$(jq '.probes | length' "$L2")"
+
+# ── CRASH ACCOUNTING (review round 1): the reservation must be
+# durable BEFORE the child can consume provider cost. Kill the prober
+# after the child provably reached execution and inspect the ledger.
+CRASH_LED="$PT/crash.json"
+rm -f "$PT/launch-marker.txt"
+printf '#!/usr/bin/env bash\ncat > /dev/null\necho LAUNCHED > "%s/launch-marker.txt"\nsleep 30\necho CCT_PROBE_OK\n' "$PT" > "$PT/mock.sh"
+chmod +x "$PT/mock.sh"
+( export CCT_ROUTING_PROBE_LEDGER="$CRASH_LED" CCT_ROUTING_PROBE_CMD="bash $PT/mock.sh"
+  source "$PLIB"; rb_probe "$PJ_CHAT" 400 >/dev/null 2>&1 ) &
+CRASH_PID=$!
+for _ in $(seq 1 100); do [[ -f "$PT/launch-marker.txt" ]] && break; sleep 0.1; done
+kill -9 "$CRASH_PID" 2>/dev/null || true
+pkill -f "$PT/mock.sh" 2>/dev/null || true
+wait "$CRASH_PID" 2>/dev/null || true
+assert "crash: the child provably reached execution (provider cost was possible)" \
+    bash -c "[[ -f '$PT/launch-marker.txt' ]]"
+assert_eq "crash: the prober died BEFORE classification (no outcome recorded)" "no" \
+    "$( [[ -f "$PT/crash-outcome.txt" ]] && echo yes || echo no )"
+assert_eq "crash: EXACTLY ONE accounting row exists for the killed generation" "1" \
+    "$(jq '[.probes[] | select(.generation == 400)] | length' "$CRASH_LED" 2>/dev/null || echo 0)"
+assert_eq "crash: that row is the conservative ESTIMATE (reserved pre-launch)" "true" \
+    "$(jq -r '.probes[] | select(.generation == 400) | .estimated' "$CRASH_LED" 2>/dev/null)"
+assert_eq "crash: the estimate is the named default, never zero" "0.02" \
+    "$(jq -r '.probes[] | select(.generation == 400) | .cost_usd' "$CRASH_LED" 2>/dev/null)"
+assert "crash: no provider-health evidence was fabricated (the lib writes no circuit state)" \
+    bash -c "! grep -q 'rs_probe_fail\|rs_probe_pass' '$PLIB'"
+
+# ── caps admission: no launch, no fabricated result
+L3="$PT/l3.json"
+mock 'echo RAN > "'"$PT"'/ran-marker.txt"; echo CCT_PROBE_OK'
+rm -f "$PT/ran-marker.txt"
+printf '{"schema_version":1,"probes":[{"profile":"x","generation":1,"cost_usd":0.01,"estimated":false,"at":%s}]}' "$NOW" > "$L3"
+CAP=$(P "$L3" "$PJ_CHAT" 200 RB_MAX_PROBES_PER_WINDOW=1)
+assert_eq "caps: a blocking count cap yields probe_deferred_caps" "probe_deferred_caps" "$(cut -f1 <<< "$CAP")"
+assert "caps: the deferral names the cap and says it did not launch" \
+    bash -c "grep -q 'not launched' <<< \"\$0\" && grep -q 'RB_MAX_PROBES_PER_WINDOW' <<< \"\$0\"" "$CAP"
+assert "caps: the child NEVER ran" bash -c "[[ ! -f '$PT/ran-marker.txt' ]]"
+assert_eq "caps: a deferred probe is NOT debited (nothing was launched)" "1" "$(jq '.probes | length' "$L3")"
+printf '{"schema_version":1,"probes":[{"profile":"x","generation":1,"cost_usd":9.99,"estimated":false,"at":%s}]}' "$NOW" > "$L3"
+assert_eq "caps: a blocking COST cap also defers" "probe_deferred_caps" \
+    "$(P "$L3" "$PJ_CHAT" 201 | cut -f1)"
+printf '{"schema_version":1,"probes":[{"profile":"x","generation":1,"cost_usd":9.99,"estimated":false,"at":%s}]}' "$((NOW - 200000))" > "$L3"
+assert_eq "caps: spend OUTSIDE the window does not block" "probe_pass" \
+    "$(P "$L3" "$PJ_CHAT" 202 | cut -f1)"
+printf 'garbage' > "$PT/bad.json"
+CORRUPT=$(P "$PT/bad.json" "$PJ_CHAT" 250)
+assert_eq "caps: corrupt accounting refuses to launch (admission, not evidence)" "probe_deferred_caps" \
+    "$(cut -f1 <<< "$CORRUPT")"
+assert "caps: the refusal names unaccountable probing" \
+    grep -q "refusing to launch an unaccountable probe" <<< "$CORRUPT"
+
+# ── secret taint: the value must be absent from EVERY probe surface
+L4="$PT/l4.json"
+mock 'echo "leaking $ANTHROPIC_API_KEY into stdout"; printf CCT_TOOL_OK > "$CCT_PROBE_TOOL_FILE"; echo CCT_PROBE_OK'
+RES=$(PFULL "$L4" "$PJ_TOOL" 300 PROBE_KEY=super-secret-probe-value-77)
+TRANS=$(cut -d'|' -f3 <<< "$RES")
+assert_eq "taint: the probe still passes with a leaky child" "probe_pass" "$(cut -d'|' -f1 <<< "$RES")"
+assert_eq "taint: the credential value is ABSENT from the persisted transcript" "0" \
+    "$(grep -c 'super-secret-probe-value-77' "$TRANS" 2>/dev/null | head -1)"
+assert "taint: the transcript shows the redaction marker instead" \
+    grep -q 'REDACTED:ANTHROPIC_API_KEY' "$TRANS"
+assert_eq "taint: the credential value is ABSENT from the accounting ledger" "0" \
+    "$(grep -c 'super-secret-probe-value-77' "$L4" 2>/dev/null | head -1)"
+assert_eq "taint: the credential value is ABSENT from every probe artifact" "0" \
+    "$(grep -rl 'super-secret-probe-value-77' "$(dirname "$TRANS")" 2>/dev/null | grep -v capture.log | wc -l | tr -d ' ')"
+assert "taint: the child received NO cost-file or ledger capability" \
+    bash -c "! grep -q 'CCT_ROUTING_PROBE_LEDGER' '$PLIB' || ! grep -A3 'bash -c \"\$cmd\"' '$PLIB' | grep -q LEDGER"
+
+echo ""
 echo "========================================="
 echo "  routing-recovery tests: $PASS passed, $FAIL failed"
 echo "========================================="
