@@ -158,29 +158,156 @@ rs_apply() {
     rs_unlock
 }
 
+# ── the closed state vocabulary (#257 D T1; plan decision 1) ─────────
+# Circuit states, probe-EXECUTION markers, and probe EVIDENCE are
+# kept explicitly distinct (owner pin):
+#   circuit:   unknown | cooldown | disabled | healthy | degraded
+#   execution: probe_due | probing   (in-flight/scheduling markers —
+#              NEVER health claims, never degradation)
+#   evidence:  consecutive_probe_successes / healthy_since /
+#              last_probe_at (separate fields, never inferred from
+#              the state word)
+# `degraded` is round-tripped but no D path emits it (recorded
+# deviation). The generic setters below accept ONLY the states B
+# writes (cooldown/disabled/unknown) — `healthy` is enterable
+# exclusively through REAL EVIDENCE (rs_probe_pass at threshold, or
+# B's frozen rs_mark_success on a genuinely successful attempt), and
+# the probe markers only through the rs_probe_* primitives, so no
+# call site can mint health or fake an in-flight probe.
+RS_STATES="unknown cooldown disabled healthy degraded probe_due probing"
+RS_SETTER_STATES="unknown cooldown disabled"
+
+rs_state_valid() { [[ " $RS_STATES " == *" $1 "* ]]; }
+
 # Convenience mutations (all through rs_apply's idempotency):
 # rs_set_profile <attempt_id> <profile> <state> <reason> <until-epoch|->
 rs_set_profile() {
     local id="$1" p="$2" st="$3" why="$4" until="${5:--}"
+    if [[ " $RS_SETTER_STATES " != *" $st "* ]]; then
+        echo "routing-state: rs_set_profile refuses state '$st' — healthy requires real evidence (rs_probe_pass/rs_mark_success) and probe markers require the rs_probe_* primitives" >&2
+        return 1
+    fi
     rs_apply "$id" \
-        '.profiles[$p] = {state:$st, reason:$why,
+        '.profiles[$p] = ((.profiles[$p] // {}) + {state:$st, reason:$why,
                           until:(if $until == "-" then null else ($until|tonumber) end),
-                          failed_at:$__now}' \
+                          failed_at:$__now})' \
         --arg p "$p" --arg st "$st" --arg why "$why" --arg until "$until"
 }
 # rs_set_pool <attempt_id> <pool> <state> <reason> <until-epoch|->
 rs_set_pool() {
     local id="$1" pool="$2" st="$3" why="$4" until="${5:--}"
+    if [[ " $RS_SETTER_STATES " != *" $st "* ]]; then
+        echo "routing-state: rs_set_pool refuses state '$st' — healthy requires real evidence and probe markers require the rs_probe_* primitives" >&2
+        return 1
+    fi
     rs_apply "$id" \
-        '.pools[$pool] = {state:$st, reason:$why,
+        '.pools[$pool] = ((.pools[$pool] // {}) + {state:$st, reason:$why,
                           until:(if $until == "-" then null else ($until|tonumber) end),
-                          failed_at:$__now}' \
+                          failed_at:$__now})' \
         --arg pool "$pool" --arg st "$st" --arg why "$why" --arg until "$until"
 }
 # rs_mark_success <attempt_id> <profile>
+# B's frozen behavior, deliberately UNCHANGED by D: a successful
+# supervised attempt is EXECUTION evidence. It records B's `healthy`
+# word (byte-compatible with pre-D behavior) but stamps NO
+# `healthy_since` and touches NO probe counters — so it can never
+# masquerade as probe-verified recovery health. The distinction is
+# enforced at the consumption point by rs_probe_qualified: only a
+# canary streak that crossed the threshold is failback-qualified.
 rs_mark_success() {
-    rs_apply "$1" '.profiles[$p] = {state:"healthy", reason:"attempt succeeded",
-                                    until:null, last_success_at:$__now}' --arg p "$2"
+    rs_apply "$1" '.profiles[$p] = ((.profiles[$p] // {}) + {state:"healthy",
+                                    reason:"attempt succeeded",
+                                    until:null, last_success_at:$__now})' --arg p "$2"
+}
+
+# ── probe scheduling + evidence (#257 D T1; plan decisions 1 + 3) ────
+# THREE distinct concepts, never conflated:
+#   scheduling  next_probe_at        (when a probe is due)
+#   execution   probe_due | probing  (the in-flight marker — an
+#                                    in-flight probe is NOT a health
+#                                    claim and NOT a degradation)
+#   evidence    consecutive_probe_successes, healthy_since,
+#               last_probe_at, probe_generation
+# The marker never changes eligibility ranking by itself; the read
+# side (rs_effective_*) resolves what a marker MEANS.
+
+# rs_schedule_probe <attempt_id> <profile> <next-probe-at-epoch> <reason>
+# Sets the SCHEDULING field and the probe_due execution marker
+# without touching evidence counters.
+rs_schedule_probe() {
+    local id="$1" p="$2" at="$3" why="${4:-scheduled}"
+    rs_apply "$id" \
+        '.profiles[$p] = ((.profiles[$p] // {}) + {state:"probe_due",
+                          reason:$why, until:null,
+                          next_probe_at:($at|tonumber)})' \
+        --arg p "$p" --arg at "$at" --arg why "$why"
+}
+
+# rs_probe_begin <attempt_id> <profile> <generation>
+# Marks a probe IN FLIGHT. Crash-visible by design: if the prober
+# dies here the marker persists and the read side treats it as
+# ABANDONED (absence of evidence), never as failure or health.
+rs_probe_begin() {
+    local id="$1" p="$2" gen="$3"
+    rs_apply "$id" \
+        '.profiles[$p] = ((.profiles[$p] // {}) + {state:"probing",
+                          reason:"probe in flight", until:null,
+                          probe_generation:($gen|tonumber),
+                          probe_started_at:$__now})' \
+        --arg p "$p" --arg gen "$gen"
+}
+
+# rs_probe_pass <attempt_id> <profile> <threshold>
+# REAL positive canary evidence: increments the success counter and
+# promotes to `healthy` ONLY when the counter reaches the threshold —
+# the sole evidence-backed edge into health.
+rs_probe_pass() {
+    local id="$1" p="$2" threshold="$3"
+    rs_apply "$id" \
+        '.profiles[$p] = ((.profiles[$p] // {}) as $e
+          | (($e.consecutive_probe_successes // 0) + 1) as $n
+          | $e + {consecutive_probe_successes:$n, last_probe_at:$__now,
+                  next_probe_at:null, probe_generation:null,
+                  state:(if $n >= ($t|tonumber) then "healthy" else "probe_due" end),
+                  reason:(if $n >= ($t|tonumber)
+                          then "probe-verified healthy (" + ($n|tostring) + "/" + $t + " successes)"
+                          else "probe passed (" + ($n|tostring) + "/" + $t + ") — threshold not reached"
+                          end),
+                  until:null,
+                  healthy_since:(if $n >= ($t|tonumber)
+                                 then ($e.healthy_since // $__now)
+                                 else null end)})' \
+        --arg p "$p" --arg t "$threshold"
+}
+
+# rs_probe_fail <attempt_id> <profile> <next-probe-at-epoch> <reason>
+# REAL negative canary evidence: resets the success streak and
+# reschedules. Never called for an abandoned probe.
+rs_probe_fail() {
+    local id="$1" p="$2" at="$3" why="${4:-probe failed}"
+    rs_apply "$id" \
+        '.profiles[$p] = ((.profiles[$p] // {}) + {state:"cooldown",
+                          reason:$why, until:($at|tonumber),
+                          consecutive_probe_successes:0,
+                          last_probe_at:$__now, healthy_since:null,
+                          probe_generation:null,
+                          next_probe_at:($at|tonumber)})' \
+        --arg p "$p" --arg at "$at" --arg why "$why"
+}
+
+# rs_probe_abandon <attempt_id> <profile> <next-probe-at-epoch>
+# ABSENCE of evidence (a prober died mid-flight): clears the
+# in-flight marker to `unknown`, reschedules, and leaves EVERY
+# evidence counter untouched — a supervisor crash is never
+# attributed to the provider, and abandonment never yields health.
+rs_probe_abandon() {
+    local id="$1" p="$2" at="$3"
+    rs_apply "$id" \
+        '.profiles[$p] = ((.profiles[$p] // {}) + {state:"unknown",
+                          reason:"probe abandoned (prober did not record evidence) — rescheduled; no provider evidence inferred",
+                          until:null, probe_generation:null,
+                          next_probe_at:($at|tonumber)})' \
+        --arg p "$p" --arg at "$at"
 }
 
 # ── effective state (read-side decay; pool outranks profile) ─────────
@@ -188,16 +315,46 @@ rs_mark_success() {
 #   pool-blocked states win; a passed `until` reads as unknown (decay —
 #   NEVER healthy; the caller journals the decay); `disabled` has no
 #   until and never decays.
+#
+# D (#257 T1) extends the read side with THREE additional rules,
+# each resolving what a stored word MEANS without changing B's:
+#   ABANDONED  a `probing` marker older than RS_PROBE_ABANDON_SEC is
+#              absence of evidence: it reads as `unknown` (never
+#              `probe_fail`, never `healthy`). The marker itself is
+#              an execution state, never a degradation.
+#   DWELL      `healthy` is a probe-verified claim with a shelf life:
+#              once `healthy_since` is older than RS_HEALTHY_TTL_SEC
+#              it decays to `unknown` like any expiry.
+#   MARKERS    `probe_due` and `probing` are not selectable states;
+#              they surface as themselves so callers can journal the
+#              reason rather than mistake them for availability.
+RS_PROBE_ABANDON_SEC="${CCT_ROUTING_PROBE_ABANDON_SEC:-900}"
+RS_HEALTHY_TTL_SEC="${CCT_ROUTING_HEALTHY_TTL_SEC:-86400}"
+
+# THE shared resolution program (one definition; both accessors use
+# it so the state word and the (state, until) pair can never drift).
+_rs_eff_prog='
+    def eff(e):
+        if e == null then {state:"unknown", until:null}
+        elif (e.state == "probing"
+              and ((e.probe_started_at // 0) + $abandon) <= $now)
+            then {state:"unknown", until:null}
+        elif (e.state == "healthy" and e.healthy_since != null
+              and (e.healthy_since + $ttl) <= $now)
+            then {state:"unknown", until:null}
+        elif (e.until != null and e.until <= $now) then {state:"unknown", until:null}
+        else {state:e.state, until:e.until} end;
+    (eff(.pools[$pool])) as $ps
+    | (if $ps.state != "unknown" and $ps.state != "healthy"
+       then {state:("pool:" + $ps.state), until:$ps.until}
+       else eff(.profiles[$p]) end) as $g'
+
 rs_effective_state() {
     local p="$1" pool="$2" doc
     doc=$(rs_read) || return $?
-    jq -r --arg p "$p" --arg pool "$pool" --argjson now "$(rs_now)" '
-        def eff(e): if e == null then "unknown"
-            elif (e.until != null and e.until <= $now) then "unknown"
-            else e.state end;
-        (eff(.pools[$pool])) as $ps
-        | if $ps != "unknown" and $ps != "healthy" then "pool:" + $ps
-          else eff(.profiles[$p]) end' <<< "$doc"
+    jq -r --arg p "$p" --arg pool "$pool" --argjson now "$(rs_now)" \
+          --argjson abandon "$RS_PROBE_ABANDON_SEC" --argjson ttl "$RS_HEALTHY_TTL_SEC" \
+          "$_rs_eff_prog | \$g.state" <<< "$doc"
 }
 
 # rs_effective_info <profile> <pool> -> "<state>\t<until|->"
@@ -208,13 +365,50 @@ rs_effective_state() {
 rs_effective_info() {
     local p="$1" pool="$2" doc
     doc=$(rs_read) || return $?
-    jq -r --arg p "$p" --arg pool "$pool" --argjson now "$(rs_now)" '
-        def eff(e): if e == null then {state:"unknown", until:null}
-            elif (e.until != null and e.until <= $now) then {state:"unknown", until:null}
-            else {state:e.state, until:e.until} end;
-        (eff(.pools[$pool])) as $ps
-        | (if $ps.state != "unknown" and $ps.state != "healthy"
-           then {state:("pool:" + $ps.state), until:$ps.until}
-           else eff(.profiles[$p]) end) as $g
-        | "\($g.state)\t\($g.until // "-")"' <<< "$doc"
+    jq -r --arg p "$p" --arg pool "$pool" --argjson now "$(rs_now)" \
+          --argjson abandon "$RS_PROBE_ABANDON_SEC" --argjson ttl "$RS_HEALTHY_TTL_SEC" \
+          "$_rs_eff_prog | \"\\(\$g.state)\\t\\(\$g.until // \"-\")\"" <<< "$doc"
+}
+
+# rs_probe_evidence <profile> -> "<successes>\t<healthy_since|->\t<next_probe_at|->\t<generation|->"
+# EVIDENCE only — never a state claim. Failback (T4) reads this
+# beside the effective state so the consumption point can apply
+# threshold + dwell without the store encoding policy.
+rs_probe_evidence() {
+    local p="$1" doc
+    doc=$(rs_read) || return $?
+    jq -r --arg p "$p" '
+        (.profiles[$p] // {}) as $e
+        | "\($e.consecutive_probe_successes // 0)\t\($e.healthy_since // "-")\t\($e.next_probe_at // "-")\t\($e.probe_generation // "-")"' <<< "$doc"
+}
+
+# rs_probe_qualified <profile> <threshold> -> rc 0 iff the profile
+# carries PROBE-VERIFIED health: state healthy AND a stamped
+# healthy_since (the threshold-crossing instant) AND a canary streak
+# at or above the threshold. THE predicate failback (T4) consumes —
+# `state == "healthy"` alone is never failback-qualified, so B's
+# execution-evidence health can never trigger a D failback.
+rs_probe_qualified() {
+    local p="$1" t="$2" doc
+    doc=$(rs_read) || return $?
+    jq -e --arg p "$p" --argjson t "$t" '
+        (.profiles[$p] // {}) as $e
+        | ($e.state == "healthy")
+          and ($e.healthy_since != null)
+          and (($e.consecutive_probe_successes // 0) >= $t)' >/dev/null 2>&1 <<< "$doc"
+}
+
+# rs_due_probes <now-epoch> -> one profile id per line whose
+# next_probe_at is due, PLUS profiles whose in-flight marker is
+# abandoned (the tick reconciles those first). Scheduling query
+# only — it makes no health claim.
+rs_due_probes() {
+    local now="${1:-$(rs_now)}" doc
+    doc=$(rs_read) || return $?
+    jq -r --argjson now "$now" --argjson abandon "$RS_PROBE_ABANDON_SEC" '
+        .profiles | to_entries[]
+        | select((.value.next_probe_at != null and .value.next_probe_at <= $now)
+                 or (.value.state == "probing"
+                     and ((.value.probe_started_at // 0) + $abandon) <= $now))
+        | .key' <<< "$doc"
 }

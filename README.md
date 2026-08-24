@@ -1137,6 +1137,7 @@ code-copilot-team/
 │   ├── test-routing-tasks.sh          154 task metadata + floor + task-addressed explain tests (#254 C)
 │   ├── test-routing-packet.sh          99 immutable delegation-packet tests (#254 C T2)
 │   ├── test-routing-delegation.sh     171 route-class + packet execution + reconciliation tests (#254 C T3-T5)
+│   ├── test-routing-recovery.sh        75 probe-state + recovery-timing tests (#257 D)
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification
