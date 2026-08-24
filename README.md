@@ -961,11 +961,75 @@ total normative table:
   (`routing_identity`, present only for routed runs — unrouted
   ledgers keep their pre-routing shape) and the peer-review request.
 
-What arrives later (#109 increments C–E): Tier-2 bounded task routing
-with reconciliation and task-addressed `explain` (C), probes/recovery/
-failback hysteresis and `routing tick` (D), benchmarks and shadow-mode
-learned routing (E), plus a codex execution adapter as its own child
-increment reusing B's attempt/result/checkpoint contracts.
+### Tier-2 delegation + reconciliation (#109 increment C)
+
+**Tier-2 is delegated bounded work, never another unrestricted
+failover target.** A Tier-2 model never receives an open-ended run,
+never self-reports success, and never lands anything without a Tier-1
+gatekeeper. Increment C ships that contract end to end:
+
+```bash
+# one bounded packet, one fresh session, driver-owned verdicts
+scripts/cooldown-supervisor.sh <feature> --routing --delegate <task-id>
+# the promotion boundary: a Tier-1 reviewer judges the provisional work
+scripts/cooldown-supervisor.sh <feature> --routing --reconcile <task-id>
+```
+
+- **Task route metadata** lives in `specs/<feature>/routing-tasks.yaml`
+  (constrained dialect; closed classes `primary_only | tier1_only |
+  tier2_fallback | tier2_preferred`; an absent file or task resolves
+  `tier1_only`). A structural **safety floor** (nine closed
+  categories: architecture, auth, crypto, security policy, DB
+  migrations, dependency manifests, public API, CI/verification
+  tooling, the routing artifacts themselves) is enforced at admission
+  AND packet build — an unsafe `tier2_*` annotation is refused by
+  name, never silently downgraded, and directory globs are tested by
+  INTERSECTION with the tree, not by their literal text.
+- **Packets are immutable and content-addressed**: the digest covers
+  the canonical semantic envelope; id, filename, and diff-artifact
+  locator all derive from it; verifier commands are quoted VERBATIM
+  from `verification.yaml` under a constrained one-command grammar
+  (wrappers, pipelines, quoting tricks, and control bytes are refused
+  at build AND point of use — recorded bytes always equal executed
+  bytes). Drift in the source artifacts refuses with
+  `packet_provenance_drift`; nothing rebuilds silently.
+- **Execution is bounded by construction**: a dedicated worktree from
+  the packet's recorded base, the minimal tool set always, and a
+  driver-owned verdict chain — cumulative scope (every changed path
+  decided by the T1 authority predicate, where the floor outranks the
+  allowlist even for files that do not exist yet, and verifier/test
+  files are never writable), a cumulative changed-line budget, then
+  the packet's own verifiers. The model's self-report is evidence,
+  never a verdict. Bounded repair (`RC_MAX_REPAIR_ROUNDS`) with three
+  named thrash reasons; availability failures ride B's failover
+  machinery without consuming a repair round.
+- **`verified_provisional` satisfies nothing**: a verified packet
+  records full evidence (id + digest, diff sha, builder identity) in
+  the driver ledger, and every completion gate PARKS while provisional
+  work awaits reconciliation.
+- **Reconciliation is crash-safe by construction**: judgment runs in
+  a disposable copy — the canonical provisional worktree is immutable
+  until a committed verdict, so a crashing reviewer can never damage
+  the builder's verified work. Independence is fail-closed
+  (`reconcile_not_independent`, `reconcile_independence_unevaluable`
+  — promotion is impossible when independence cannot be positively
+  established), the reconciler's `accepted` is re-verified by the
+  driver (scope/budget/verifiers — a contradicted verdict never
+  promotes), and `accepted` vs `accepted_with_changes` is derived
+  from the actual diff. `rejected` reverts the packet.
+- **Repositories can forbid Tier-2 outright**
+  (`routing.tier2.delegation_enabled = false` in `automation.json` —
+  restriction-only, promoted through the refused→implemented→tested
+  path; `recovery` stays refused until increment D), and
+  `cct routing explain --feature <id> --task <task-id>` renders the
+  task's route class, safety-floor evaluation, and the EFFECTIVE
+  candidate legality — the same legality `--delegate` and the
+  selector enforce, still pure configuration resolution.
+
+What arrives later (#109 increments D–E): probes/recovery/failback
+hysteresis and `routing tick` (D), benchmarks and shadow-mode learned
+routing (E), plus a codex execution adapter as its own child increment
+reusing the attempt/result/checkpoint and packet contracts.
 
 ## Four-Phase Workflow
 
@@ -1070,6 +1134,9 @@ code-copilot-team/
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         157 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       186 circuit + action + selection + supervisor + identity tests (#251 B)
+│   ├── test-routing-tasks.sh          154 task metadata + floor + task-addressed explain tests (#254 C)
+│   ├── test-routing-packet.sh          99 immutable delegation-packet tests (#254 C T2)
+│   ├── test-routing-delegation.sh     171 route-class + packet execution + reconciliation tests (#254 C T3-T5)
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

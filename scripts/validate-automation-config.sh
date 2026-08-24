@@ -523,8 +523,9 @@ if [[ "$(q 'has("routing")')" == "true" ]]; then
                     violation "routing.$k: a repository cannot DEFINE execution profiles — repo configuration narrows user routing authority, never creates it (profiles live in ~/.code-copilot-team/routing.toml)" ;;
                 credential*|base_url*|protocol|model|backend|provider|quota_pool|capability_tier|tier|roles|tool_profile|data_policy)
                     violation "routing.$k: a repository cannot introduce credential, endpoint, identity, or capability fields — these belong to the user-level registry, and repo configuration can only narrow it" ;;
-                tier2|recovery)
-                    violation "routing.$k is owned by a later #109 increment and is refused until its behavior ships — a key nothing enforces is never accepted as inert configuration" ;;
+                tier2) ;;  # promoted with #254 T6 (restriction-only; validated below)
+                recovery)
+                    violation "routing.$k is owned by a later #109 increment (D) and is refused until its behavior ships — a key nothing enforces is never accepted as inert configuration" ;;
                 *)
                     violation "unknown key 'routing.$k' (the schema is closed — see shared/schemas/automation.schema.json)" ;;
             esac
@@ -540,6 +541,27 @@ if [[ "$(q 'has("routing")')" == "true" ]]; then
         if [[ "$(q '.routing | has("default_task_route")')" == "true" ]] \
            && ! jq -e '.routing.default_task_route | type == "string" and length > 0' "$CONFIG" >/dev/null 2>&1; then
             violation "routing.default_task_route must be a non-empty route-class name"
+        fi
+        # routing.tier2 (#254 T6, promoted refused->implemented->tested):
+        # RESTRICTION-ONLY and CLOSED — one key, delegation_enabled
+        # (boolean). false forbids Tier-2 delegation for this repo;
+        # true/absent restrict nothing (a repo can never widen what
+        # the user registry permits).
+        if [[ "$(q '.routing | has("tier2")')" == "true" ]]; then
+            if ! is_type '.routing.tier2' object; then
+                violation "routing.tier2 must be an object (got $(q '.routing.tier2 | type'))"
+            else
+                for k in $(jq -r '.routing.tier2 | keys[]' "$CONFIG" 2>/dev/null || true); do
+                    case "$k" in
+                        delegation_enabled) ;;
+                        *) violation "unknown key 'routing.tier2.$k' (the tier2 block is closed: delegation_enabled only — restriction, never capability)" ;;
+                    esac
+                done
+                if [[ "$(q '.routing.tier2 | has("delegation_enabled")')" == "true" ]] \
+                   && ! jq -e '.routing.tier2.delegation_enabled | type == "boolean"' "$CONFIG" >/dev/null 2>&1; then
+                    violation "routing.tier2.delegation_enabled must be a boolean"
+                fi
+            fi
         fi
     fi
 fi

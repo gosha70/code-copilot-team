@@ -49,39 +49,56 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/routing-state.sh"
 # shellcheck source=/dev/null
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/routing-actions.sh"
 
-rt_select() {  # <effective-json> <attempted-json-array> [role]
-    local eff="$1" attempted="${2:-[]}" role="${3:-build}"
-    local enabled considered="[]" selected="null" earliest="null" n i
+# Increment C (#254 T3, plan decision 8): rt_select gains an OPTIONAL
+# route-class argument. ABSENT (or tier1_only) reproduces increment
+# B's behavior exactly — the unmodified B suite is the compatibility
+# gate. A route class only REMOVES candidates or restructures TIER
+# precedence per the frozen decision; within a tier, the total order
+# (priority ASC -> id lexical ASC) is never reordered. The three
+# output shapes are unchanged. tier2_fallback's unlock predicate is
+# pinned to the shapes themselves: a tier1 pass that ends TEMPORARY
+# (earliest set) waits — only the permanent shape (no selection, no
+# earliest) unlocks tier2. Terminal outcomes from actual attempts
+# (denied/unknown/identity/independence/crash) are handled ABOVE this
+# oracle by the action table and never re-enter selection as a
+# fallback opportunity.
+rt_select() {  # <effective-json> <attempted-json-array> [role] [route-class]
+    local eff="$1" attempted="${2:-[]}" role="${3:-build}" rclass="${4:-}"
+    case "$rclass" in
+        ""|tier1_only|primary_only|tier2_fallback|tier2_preferred) ;;
+        *)
+            echo "routing-select: route class '$rclass' is not in the closed vocabulary (primary_only tier1_only tier2_fallback tier2_preferred)" >&2
+            return 1
+            ;;
+    esac
+    local enabled considered="[]" selected="null" earliest="null"
     enabled=$(jq -r '.enabled' <<< "$eff")
-    n=$(jq '.candidates | length' <<< "$eff")
 
     _consider() {  # id verdict reason
         considered=$(jq -c --arg id "$1" --arg v "$2" --arg r "$3" \
             '. + [{id:$id, verdict:$v, reason:$r}]' <<< "$considered")
     }
 
-    # tier1 candidates in priority order, then the never-reached rest.
-    # jq -c emits one tuple per line (tuples cannot contain newlines).
-    local order rest
-    order=$(jq -c '[.candidates[] | select(.[4] == "tier1")] | sort_by([.[5], .[0]]) | .[]' <<< "$eff")
-    rest=$(jq -c '.candidates[] | select(.[4] != "tier1")' <<< "$eff")
-
+    # THE candidate evaluator — one body for every route class, so the
+    # filter semantics (policy, role, attempted set, circuit state)
+    # cannot drift between B's path and C's. Only membership and tier
+    # precedence differ per class; this body never does.
     local c id tier priority pool state until
-    while IFS= read -r c; do
-        [[ -z "$c" ]] && continue
+    _rt_eval() {  # <tuple-line>
+        c="$1"
         id=$(jq -r '.[0]' <<< "$c"); tier=$(jq -r '.[4]' <<< "$c")
         priority=$(jq -r '.[5]' <<< "$c"); pool=$(jq -r '.[6]' <<< "$c")
         if [[ "$enabled" != "true" ]]; then
             _consider "$id" rejected "routing is disabled by the effective policy"
-            continue
+            return 0
         fi
         if ! jq -e --arg r "$role" '.[7] | index($r) != null' >/dev/null 2>&1 <<< "$c"; then
             _consider "$id" rejected "does not hold role '$role'"
-            continue
+            return 0
         fi
         if jq -e --arg id "$id" 'index($id) != null' >/dev/null 2>&1 <<< "$attempted"; then
             _consider "$id" rejected "already attempted or incompatible in this unit"
-            continue
+            return 0
         fi
         local info
         info=$(rs_effective_info "$id" "$pool") || return $?
@@ -108,12 +125,107 @@ rt_select() {  # <effective-json> <attempted-json-array> [role]
                 fi
                 ;;
         esac
-    done <<< "$order"
-    while IFS= read -r c; do
-        [[ -z "$c" ]] && continue
-        id=$(jq -r '.[0]' <<< "$c"); tier=$(jq -r '.[4]' <<< "$c")
-        _consider "$id" rejected "increment B routes tier1 only — $tier is never selected (Tier-2 selection is increment C)"
-    done <<< "$rest"
+        return 0
+    }
+
+    # per-tier total order: priority ASC -> id lexical ASC. The id
+    # tie-break is POLICY (reordering a registry must never change the
+    # selection). jq -c emits one tuple per line.
+    local t1_order t2_order rest
+    t1_order=$(jq -c '[.candidates[] | select(.[4] == "tier1")] | sort_by([.[5], .[0]]) | .[]' <<< "$eff")
+    t2_order=$(jq -c '[.candidates[] | select(.[4] == "tier2")] | sort_by([.[5], .[0]]) | .[]' <<< "$eff")
+    rest=$(jq -c '.candidates[] | select(.[4] != "tier1")' <<< "$eff")
+
+    case "$rclass" in
+    ""|tier1_only)
+        # increment B, verbatim: tier1 in order, everything else is
+        # never reached
+        while IFS= read -r c; do
+            [[ -z "$c" ]] && continue
+            _rt_eval "$c" || return $?
+        done <<< "$t1_order"
+        while IFS= read -r c; do
+            [[ -z "$c" ]] && continue
+            id=$(jq -r '.[0]' <<< "$c"); tier=$(jq -r '.[4]' <<< "$c")
+            _consider "$id" rejected "increment B routes tier1 only — $tier is never selected (Tier-2 selection is increment C)"
+        done <<< "$rest"
+        ;;
+    primary_only)
+        # only the total-order-first tier1 candidate is admissible;
+        # the primary is a property of the DECLARED order, not of
+        # state (a cooling primary means wait, never "next best")
+        local primary
+        primary=$(jq -r '[.candidates[] | select(.[4] == "tier1")] | sort_by([.[5], .[0]]) | (.[0][0] // "")' <<< "$eff")
+        while IFS= read -r c; do
+            [[ -z "$c" ]] && continue
+            id=$(jq -r '.[0]' <<< "$c")
+            if [[ "$id" != "$primary" ]]; then
+                _consider "$id" rejected "route class 'primary_only' admits only the primary candidate '$primary'"
+                continue
+            fi
+            _rt_eval "$c" || return $?
+        done <<< "$t1_order"
+        while IFS= read -r c; do
+            [[ -z "$c" ]] && continue
+            id=$(jq -r '.[0]' <<< "$c"); tier=$(jq -r '.[4]' <<< "$c")
+            _consider "$id" rejected "route class 'primary_only' never reaches $tier"
+        done <<< "$rest"
+        ;;
+    tier2_fallback)
+        # tier1 exactly as B; tier2 unlocks ONLY on the permanent-
+        # exhaustion shape of that pass (no selection AND no earliest)
+        # AND only when the effective policy permits tier2 delegation
+        # (#254 T6 repo restriction — defense in depth beside the
+        # supervisor's early refusal)
+        local t2ok
+        t2ok=$(jq -r 'if .tier2_delegation_allowed == null then true else .tier2_delegation_allowed end' <<< "$eff")
+        while IFS= read -r c; do
+            [[ -z "$c" ]] && continue
+            _rt_eval "$c" || return $?
+        done <<< "$t1_order"
+        if [[ "$t2ok" == "false" ]]; then
+            while IFS= read -r c; do
+                [[ -z "$c" ]] && continue
+                id=$(jq -r '.[0]' <<< "$c")
+                _consider "$id" rejected "tier2 delegation is forbidden by repository policy (routing.tier2.delegation_enabled = false)"
+            done <<< "$t2_order"
+        elif [[ "$selected" == "null" && "$earliest" == "null" ]]; then
+            while IFS= read -r c; do
+                [[ -z "$c" ]] && continue
+                _rt_eval "$c" || return $?
+            done <<< "$t2_order"
+        else
+            while IFS= read -r c; do
+                [[ -z "$c" ]] && continue
+                id=$(jq -r '.[0]' <<< "$c")
+                _consider "$id" rejected "tier2 locked — tier1 is not permanently exhausted (route class 'tier2_fallback' waits; the tier requirement is never weakened)"
+            done <<< "$t2_order"
+        fi
+        ;;
+    tier2_preferred)
+        # tier2 first by policy, tier1 as fallback; within each tier
+        # the order is untouched. The repo tier2 restriction (#254 T6)
+        # locks the tier2 pass entirely.
+        local t2ok2
+        t2ok2=$(jq -r 'if .tier2_delegation_allowed == null then true else .tier2_delegation_allowed end' <<< "$eff")
+        if [[ "$t2ok2" == "false" ]]; then
+            while IFS= read -r c; do
+                [[ -z "$c" ]] && continue
+                id=$(jq -r '.[0]' <<< "$c")
+                _consider "$id" rejected "tier2 delegation is forbidden by repository policy (routing.tier2.delegation_enabled = false)"
+            done <<< "$t2_order"
+        else
+            while IFS= read -r c; do
+                [[ -z "$c" ]] && continue
+                _rt_eval "$c" || return $?
+            done <<< "$t2_order"
+        fi
+        while IFS= read -r c; do
+            [[ -z "$c" ]] && continue
+            _rt_eval "$c" || return $?
+        done <<< "$t1_order"
+        ;;
+    esac
 
     local exhausted=false term="null"
     if [[ "$selected" == "null" ]]; then

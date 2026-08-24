@@ -12,6 +12,39 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Tier-2 bounded delegation + reconciliation (#254, increment C of
+  #109)** — deliberate cost/capability routing: send explicitly
+  bounded tasks to a cheaper or local Tier-2 model BY POLICY, even
+  while Tier-1 is healthy, and make the work authoritative only
+  through Tier-1 reconciliation. COMPATIBILITY FIRST: everything is
+  opt-in behind `--routing` plus the new per-packet flags; without
+  them the supervisor, driver, selector, and ledgers are unchanged
+  (legacy suite 37/0 and increment-B suite 186/0 pass unmodified,
+  modulo two disclosed source-count pin bumps). The rule is
+  load-bearing everywhere: Tier-2 is delegated bounded work, never
+  another unrestricted failover target. Ships: the constrained
+  `routing-tasks.yaml` metadata artifact with a nine-category
+  structural safety floor (admission + packet build; glob authority
+  by intersection; a per-path authority predicate that covers files
+  not yet existing); immutable content-addressed packets whose
+  verifier commands are verbatim, grammar-constrained, and
+  byte-equivalent from record to execution (LF/CR/NUL refused at the
+  pre-decode transport boundary); `--delegate` bounded execution in
+  a dedicated worktree with driver-owned scope/budget/verifier
+  verdicts, bounded repair, three named thrash reasons, and
+  full-digest crash-safe recovery; `verified_provisional` ledger
+  state that satisfies NO completion gate; `--reconcile` — a
+  crash-safe promotion boundary (judgment in a disposable copy;
+  canonical provisional state immutable until a committed verdict)
+  with fail-closed reviewer independence and driver re-verification
+  of every acceptance; the `routing.tier2.delegation_enabled` repo
+  restriction (promoted refused→implemented→behaviorally-tested;
+  `recovery` stays refused until increment D); and task-addressed
+  `cct routing explain --feature --task` rendering effective
+  candidate legality (increment A's recorded deviation resolved).
+  Suite growth: new `tests/test-routing-delegation.sh` (171) and
+  `tests/test-routing-packet.sh` (99); `test-routing-tasks.sh` 154;
+  automation-config 181 → 186.
 - **Tier-1 LLM failover (#251, increment B of #109)** — the cooldown
   supervisor gains an EXPLICIT opt-in `--routing` mode (without the
   flag, behavior is byte-identical — proven by the untouched legacy

@@ -448,7 +448,7 @@ assert "validate: registry + valid repo restrictions OK" grep -q "repo restricti
 # reaches composition — its cross-document symptom must be ABSENT.
 wj t5-repo-bad.json '{"schema_version":2,"profile":"advisory","routing":{"tier2":{"x":1},"allowed_profiles":["ghost"]}}'
 OUT=$(cli "$GOOD" validate --config "$TMP/t5-repo-bad.json") || true
-assert "ordering: the T3 refusal surfaces" grep -q "owned by a later #109 increment" <<< "$OUT"
+assert "ordering: the T3 refusal surfaces (tier2 promoted with #254 T6 — its CLOSED block still refuses unknown keys)" grep -q "unknown key 'routing.tier2.x'" <<< "$OUT"
 assert_eq "ordering: composition was NEVER reached (no cross-doc message)" "0" \
     "$(grep -c "does not define" <<< "$OUT" || true)"
 wj t5-repo-ghost.json '{"schema_version":2,"profile":"advisory","routing":{"allowed_profiles":["ghost"]}}'

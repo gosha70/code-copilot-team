@@ -35,6 +35,19 @@
 #                              with guidance. Without this flag, behavior is
 #                              unchanged — configuration existing is never
 #                              activation.
+#     --delegate <task-id>     (#254, increment C) run exactly ONE bounded
+#                              Tier-2 packet for the task, in a dedicated
+#                              worktree from the packet's base commit, with
+#                              driver-owned scope + verifier enforcement and
+#                              bounded repair. Requires --routing. Never an
+#                              open-ended run; success is verifier-decided
+#                              and records provisional (never done) status.
+#     --packet <path>          use this exact packet envelope (validated at
+#                              point of use); default: build/regenerate via
+#                              rp_build (byte-identical when unchanged)
+#     --done-file <path>       completed-task list (one id per line) for
+#                              dependency gating at packet build; default:
+#                              no dependencies satisfied
 #
 # Exit: 0 = done | 4 = parked | 5 = failed (caps/corrupt/usage-exhausted)
 #       | 6 = terminated_policy (terminal — never relaunched, incl. on a
@@ -69,6 +82,10 @@ COOLDOWN_SEC=300
 MAX_WALL_SEC=86400
 ON_INCOMPLETE="park"
 ROUTING=0
+DELEGATE_TASK=""
+DELEGATE_PACKET=""
+DELEGATE_DONE="-"
+RECONCILE_TASK=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -89,6 +106,14 @@ while [[ $# -gt 0 ]]; do
     --on-incomplete)  ON_INCOMPLETE="${2:?}"; shift 2 ;;
     --on-incomplete=*) ON_INCOMPLETE="${1#*=}"; shift ;;
     --routing)        ROUTING=1; shift ;;
+    --delegate)       DELEGATE_TASK="${2:?}"; shift 2 ;;
+    --delegate=*)     DELEGATE_TASK="${1#*=}"; shift ;;
+    --packet)         DELEGATE_PACKET="${2:?}"; shift 2 ;;
+    --packet=*)       DELEGATE_PACKET="${1#*=}"; shift ;;
+    --done-file)      DELEGATE_DONE="${2:?}"; shift 2 ;;
+    --done-file=*)    DELEGATE_DONE="${1#*=}"; shift ;;
+    --reconcile)      RECONCILE_TASK="${2:?}"; shift 2 ;;
+    --reconcile=*)    RECONCILE_TASK="${1#*=}"; shift ;;
     -h|--help)        sed -n '13,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)               err "unknown option: $1"; exit 64 ;;
     *)                if [[ -z "$FEATURE_ID" ]]; then FEATURE_ID="$1"; shift
@@ -103,6 +128,27 @@ case "$FEATURE_ID" in
 esac
 [[ "$BACKEND" == "claude" || "$BACKEND" == "pi" ]] || { err "backend must be claude|pi."; exit 64; }
 [[ "$ON_INCOMPLETE" == "park" || "$ON_INCOMPLETE" == "relaunch" ]] || { err "--on-incomplete must be park|relaunch."; exit 64; }
+# --delegate/--reconcile are routing-mode surfaces (named refusals)
+if [[ -n "$DELEGATE_TASK" && "$ROUTING" != "1" ]]; then
+  err "--delegate requires --routing: packet delegation is part of the routing opt-in (#254), never implied."
+  exit 64
+fi
+if [[ -n "$RECONCILE_TASK" && "$ROUTING" != "1" ]]; then
+  err "--reconcile requires --routing: reconciliation is part of the routing opt-in (#254), never implied."
+  exit 64
+fi
+if [[ -n "$RECONCILE_TASK" && -n "$DELEGATE_TASK" ]]; then
+  err "--delegate and --reconcile are mutually exclusive — one bounded lifecycle per run."
+  exit 64
+fi
+if [[ -n "$DELEGATE_PACKET" && -z "$DELEGATE_TASK" ]]; then
+  err "--packet is only meaningful with --delegate <task-id>."
+  exit 64
+fi
+if [[ "$DELEGATE_DONE" != "-" && -z "$DELEGATE_TASK" ]]; then
+  err "--done-file is only meaningful with --delegate <task-id>."
+  exit 64
+fi
 
 WORKTREE="${WORKTREE:-$REPO_DIR}"
 [[ -d "$WORKTREE" ]] || { err "worktree not found: $WORKTREE"; exit 64; }
@@ -229,6 +275,10 @@ if [[ "$ROUTING" == "1" ]]; then
   mkdir -p "$RT_DIR"
   RT_RUN_TAG="${FEATURE_ID}-${START_EPOCH}"
   rs_journal() { journal "routing_state" "$1: $2"; }
+  if [[ -n "$DELEGATE_TASK" || -n "$RECONCILE_TASK" ]]; then
+    # shellcheck source=/dev/null
+    source "$SCRIPT_DIR/lib/routing-packet.sh"   # sources routing-tasks.sh
+  fi
 fi
 
 # rt_refuse <terminal_reason> <detail> — park attended / fail
@@ -238,7 +288,17 @@ fi
 # journaled — no call site can mint a new reason.
 rt_refuse() {
   local reason="$1"
+  # Two closed enums may emit here: B's routing_* (always) and, in
+  # delegate mode only (routing-packet.sh sourced), C's packet_*.
+  # Anything else is still normalized — no third namespace can appear.
+  local enum_ok=1
   if declare -F ra_terminal_valid >/dev/null 2>&1 && ! ra_terminal_valid "$reason"; then
+    enum_ok=0
+    if declare -F rp_reason_valid >/dev/null 2>&1 && rp_reason_valid "$reason"; then
+      enum_ok=1
+    fi
+  fi
+  if [[ "$enum_ok" -eq 0 ]]; then
     journal "routing_enum_violation" "'$reason' is not in the closed terminal-reason enum — normalizing to routing_unknown_failure (this is a supervisor bug)"
     reason="routing_unknown_failure"
   fi
@@ -523,6 +583,938 @@ rt_startup() {
   # exclusions/budgets were saved durably before the checkpoint.
 }
 
+# ═══ Packet delegation (#254 C T4; plan decisions 4-6) ═══════════════
+# One packet = one bounded lifecycle: verified packet in, driver-owned
+# scope/verifier verdict out. Everything here executes FROM THE PACKET
+# ALONE — after point-of-use validation the mutable artifacts are
+# never reread, and the route class is immutable for the packet's
+# lifetime (T3 commit pin). Rounds are fresh B-style supervised
+# attempts in the packet's own namespace (RT_DIR/delegate-<digest12>):
+# same started/result/checkpoint documents, crash ordering, attempt-id
+# idempotency, secret scrubbing, model-identity tri-state, and
+# recovery semantics. The packet WORKTREE persists across rounds and
+# restarts; agent sessions never do.
+#
+# Named implementation defaults (journaled when applied) — NOT
+# configuration, NOT compatibility surface (a knob takes the
+# refused->implemented->tested promotion path):
+RC_MAX_REPAIR_ROUNDS=2       # repair rounds after the initial build round
+RC_REWRITE_FRACTION_PCT=80   # whole-file-rewrite thrash threshold
+RC_MAX_CHANGED_LINES=400     # cumulative changed-line budget vs packet base
+
+# rt_normalize_path <path> — the canonical project-relative form (T1
+# commit-review pin): strips ./ prefixes, collapses //, strips a
+# trailing /; REFUSES (rc 1) empty, absolute, and any .. segment.
+# Every cumulative changed path passes through here BEFORE
+# rk_path_authorized, so two spellings of one git path can never
+# divide authority.
+rt_normalize_path() {
+  local p="$1"
+  [[ -n "$p" ]] || return 1
+  case "$p" in /*) return 1 ;; esac
+  while [[ "$p" == ./* ]]; do p="${p#./}"; done
+  local _dd='//' _s='/'
+  while [[ "$p" == *"$_dd"* ]]; do p="${p//$_dd/$_s}"; done
+  p="${p%/}"
+  [[ -n "$p" && "$p" != "." ]] || return 1
+  case "/$p/" in */../*) return 1 ;; esac
+  printf '%s\n' "$p"
+}
+
+# rt_packet_protected <normalized-path> — the per-packet verifier/
+# test-file protection that LAYERS ON TOP of the floor (T1 pin: never
+# replaces it): generic test locations plus any path token of the
+# packet's own verifier commands. Emits WHY on stdout when protected.
+rt_packet_protected() {
+  local p="$1" base="${1##*/}" seg rest="$1" tok
+  while [[ -n "$rest" ]]; do
+    seg="${rest%%/*}"
+    if [[ "$seg" == "$rest" ]]; then rest=""; else rest="${rest#*/}"; fi
+    case "$seg" in
+      test|tests) echo "generic test location (path segment '$seg')"; return 0 ;;
+    esac
+  done
+  case "$base" in
+    test_*|*_test.*|*.test.*|*.spec.*|conftest.py)
+      echo "generic test filename '$base'"; return 0 ;;
+  esac
+  for tok in $DELEGATE_VERIFIER_TOKENS; do
+    [[ "$tok" == "$p" ]] && { echo "referenced by a packet verifier command"; return 0; }
+  done
+  return 1
+}
+
+# delegate round history — atomic write; fail-closed, packet-bound load
+rt_delegate_state_save() {  # <rounds-json-array>
+  local tmp
+  tmp=$(mktemp "$RT_DIR/.dstate.XXXXXX")
+  jq -n --arg pid "$PKT_ID" --arg dig "$PKT_DIGEST" --argjson r "$1" \
+    '{schema_version:1, packet_id:$pid, packet_digest:$dig, rounds:$r}' > "$tmp"
+  mv -f "$tmp" "$RT_DIR/delegate-state.json"
+}
+rt_delegate_state_load() {  # -> rounds array on stdout
+  if [[ ! -f "$RT_DIR/delegate-state.json" ]]; then echo "[]"; return 0; fi
+  if ! jq -e --arg pid "$PKT_ID" \
+      'type=="object" and .schema_version==1 and .packet_id==$pid and (.rounds|type=="array")' \
+      "$RT_DIR/delegate-state.json" >/dev/null 2>&1; then
+    rt_refuse "packet_envelope_invalid" "delegate round state $RT_DIR/delegate-state.json is malformed or belongs to a different packet — refusing to guess round history"
+  fi
+  jq -c '.rounds' "$RT_DIR/delegate-state.json"
+}
+
+# rt_delegate_worktree — the DEDICATED packet worktree, created from
+# the packet's RECORDED base commit + recorded diff; persists across
+# rounds and restarts (driver-owned; the child never sees the main
+# tree).
+rt_delegate_worktree() {
+  PKT_WT="$RT_DIR/wt"
+  if [[ -d "$PKT_WT/.git" || -f "$PKT_WT/.git" ]]; then
+    journal "delegate_worktree" "reusing the persisted packet worktree (rounds share one worktree; sessions never persist)"
+    return 0
+  fi
+  if ! git -C "$WORKTREE" cat-file -e "$PKT_BASE^{commit}" 2>/dev/null; then
+    rt_refuse "packet_artifact_invalid" "the packet's base commit $PKT_BASE is not present in $WORKTREE — the packet was built for a different history"
+  fi
+  git -C "$WORKTREE" worktree add --detach "$PKT_WT" "$PKT_BASE" >/dev/null 2>&1 || \
+    rt_refuse "packet_artifact_invalid" "cannot materialize a worktree at the packet's base commit $PKT_BASE"
+  if [[ -s "$PKT_DIR/$PKT_ART" ]]; then
+    git -C "$PKT_WT" apply "$PKT_DIR/$PKT_ART" >/dev/null 2>&1 || \
+      rt_refuse "packet_artifact_invalid" "the packet's recorded diff artifact does not apply cleanly at its base commit"
+    journal "delegate_worktree" "applied the packet's recorded diff artifact ($PKT_ART) at base ${PKT_BASE:0:12}"
+  fi
+}
+
+# rt_packet_evaluate — driver-owned, deterministic, RE-RUNNABLE (a
+# recovered proceed-round is re-evaluated from the persisted worktree;
+# no session is ever replayed). Ordering is FROZEN: scope/safety
+# BEFORE verifiers — out-of-scope code is never executed.
+# Sets: EVAL_VIOLATION, EVAL_CHANGED_LINES, EVAL_REWRITE.
+rt_packet_evaluate() {
+  EVAL_VIOLATION=""; EVAL_CHANGED_LINES=0; EVAL_REWRITE=""
+  git -C "$PKT_WT" add -A . >/dev/null 2>&1 || true
+  local raw p why
+  while IFS= read -r raw; do
+    [[ -z "$raw" ]] && continue
+    if ! p=$(rt_normalize_path "$raw"); then
+      EVAL_VIOLATION="changed path '$raw' has no canonical project-relative form"
+      return 0
+    fi
+    if why=$(rt_packet_protected "$p"); then
+      EVAL_VIOLATION="'$p' is protected — $why; verifier/test files are never writable by a packet, even when the allowlist matches them"
+      return 0
+    fi
+    if ! why=$(rk_path_authorized "$p" "${PKT_ALLOWED[@]}"); then
+      EVAL_VIOLATION="$why"
+      return 0
+    fi
+  done <<< "$(git -C "$PKT_WT" diff --cached --name-only "$PKT_BASE" 2>/dev/null)"
+
+  # cumulative changed-line budget + rewrite detection vs the packet
+  # base (never per round — two legal rounds cannot double the scope)
+  local adds dels nfile total=0 baselines
+  while IFS=$'\t' read -r adds dels nfile; do
+    [[ -z "$nfile" ]] && continue
+    if [[ "$adds" == "-" || "$dels" == "-" ]]; then
+      # binary churn has no line count — fail closed into the budget
+      total=$((RC_MAX_CHANGED_LINES + 1))
+      break
+    fi
+    total=$((total + adds + dels))
+    baselines=$(git -C "$PKT_WT" show "$PKT_BASE:$nfile" 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "${baselines:-0}" -gt 0 && $((dels * 100)) -gt $((baselines * RC_REWRITE_FRACTION_PCT)) ]]; then
+      [[ -z "$EVAL_REWRITE" ]] && EVAL_REWRITE="'$nfile': $dels of $baselines base lines replaced (> ${RC_REWRITE_FRACTION_PCT}% — RC_REWRITE_FRACTION_PCT)"
+    fi
+  done <<< "$(git -C "$PKT_WT" diff --cached --numstat "$PKT_BASE" 2>/dev/null)"
+  EVAL_CHANGED_LINES=$total
+}
+
+# rt_packet_verifiers <failures-file> — verifier-decided success: run
+# the packet's frozen commands in the worktree; the model's
+# self-report is evidence, never a verdict. Sets EVAL_FAILING.
+rt_packet_verifiers() {
+  local ffile="$1" velem cmd rc
+  EVAL_FAILING=0; : > "$ffile"; : > "$ffile.log"
+  # JSON-element iteration matches the grammar check exactly: what was
+  # checked as ONE command executes as ONE command (grammar refuses
+  # embedded newlines long before this point)
+  while IFS= read -r velem; do
+    [[ -z "$velem" ]] && continue
+    cmd=$(jq -r . <<< "$velem")
+    rc=0
+    ( cd "$PKT_WT" && bash -c "$cmd" ) >>"$ffile.log" 2>&1 || rc=$?
+    if [[ $rc -ne 0 ]]; then
+      printf '%s\t%s\n' "$rc" "$cmd" >> "$ffile"
+      EVAL_FAILING=$((EVAL_FAILING + 1))
+    fi
+  done <<< "$DELEGATE_VERIFIER_JSON"
+}
+
+# rt_packet_prompt <round> <out-file> <failures-file-or--> — rendered
+# from the VERIFIED packet only; deterministic.
+rt_packet_prompt() {
+  local round="$1" out="$2" ffile="$3"
+  {
+    echo "You are executing ONE bounded delegated task packet (#109 increment C)."
+    echo "This is NOT an open-ended session. Rules, all driver-enforced after you exit:"
+    echo "- Modify ONLY the allowed files listed below. Any other change fails the packet."
+    echo "- NEVER modify test or verifier files, even if listed."
+    echo "- Success is decided ONLY by the driver re-running the verifier commands."
+    echo "- Do not run git commands; the driver owns git entirely."
+    echo ""
+    jq -r '"Task: \(.task_id) (feature \(.feature_id))",
+           "Outcome: \(.outcome)",
+           "Allowed files:", (.allowed_files[] | "  - " + .),
+           "Forbidden categories (structural, driver-enforced):",
+           "  " + (.forbidden_categories | join(", ")),
+           "Requirements and their verifier commands:",
+           (.fr_refs[] | "  \(.id) [\(.statement_sha)]", (.tests[] | "    $ " + .))' <<< "$PKT_JSON"
+    if [[ "$ffile" != "-" && -s "$ffile" ]]; then
+      echo ""
+      echo "REPAIR ROUND $round — these verifier commands FAILED on your previous attempt:"
+      awk -F'\t' '{ printf "  exit %s: %s\n", $1, $2 }' "$ffile"
+      echo "Recent verifier output:"
+      tail -40 "$ffile.log" 2>/dev/null | sed 's/^/  | /'
+    fi
+  } > "$out"
+}
+
+# rt_delegate_round_result <round> — the post-proceed verdict chain.
+# Terminal outcomes refuse via rt_refuse (packet_* enum); a repairable
+# failure returns 1 so the caller starts the next round.
+rt_delegate_round_result() {
+  local round="$1" rounds prev_failing sig ffile
+  rounds=$(rt_delegate_state_load)
+  rt_packet_evaluate
+  if [[ -n "$EVAL_VIOLATION" ]]; then
+    journal "packet_scope" "round $round: $EVAL_VIOLATION — reverting the packet worktree diff"
+    git -C "$PKT_WT" reset --hard "$PKT_BASE" >/dev/null 2>&1 || true
+    git -C "$PKT_WT" clean -fd >/dev/null 2>&1 || true
+    [[ -s "$PKT_DIR/$PKT_ART" ]] && git -C "$PKT_WT" apply "$PKT_DIR/$PKT_ART" >/dev/null 2>&1
+    rt_refuse "packet_scope_violation" "round $round: $EVAL_VIOLATION (diff reverted; scope is terminal even when verifiers pass)"
+  fi
+  if [[ "$EVAL_CHANGED_LINES" -gt "$RC_MAX_CHANGED_LINES" ]]; then
+    rt_refuse "packet_budget_exceeded" "cumulative diff vs base is $EVAL_CHANGED_LINES changed lines (> RC_MAX_CHANGED_LINES=$RC_MAX_CHANGED_LINES)"
+  fi
+  ffile="$RT_DIR/verifiers-$round.txt"
+  rt_packet_verifiers "$ffile"
+  if [[ "$EVAL_FAILING" -eq 0 ]]; then
+    # BUILDER identity from the PERSISTED attempt record (recovery-
+    # safe; T5's reconciliation independence gate evaluates against
+    # exactly this) + the provisional diff, captured once
+    local blatest builder pdiff_sha
+    blatest=$(ls "$RT_DIR" 2>/dev/null | grep -E '^started-[0-9]+\.json$' | sort -t- -k2 -n | tail -1 || true)
+    builder="null"
+    [[ -n "$blatest" ]] && builder=$(jq -c '.profile // null' "$RT_DIR/$blatest" 2>/dev/null || echo null)
+    pdiff_sha=$(git -C "$PKT_WT" diff --cached "$PKT_BASE" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+    jq -n --arg pid "$PKT_ID" --arg dig "$PKT_DIGEST" --argjson r "$round" \
+          --argjson cl "$EVAL_CHANGED_LINES" --argjson b "$builder" \
+          --arg pds "sha256:$pdiff_sha" \
+          '{schema_version:1, packet_id:$pid, packet_digest:$dig,
+            outcome:"packet_verified", rounds:$r, changed_lines:$cl,
+            builder:$b, provisional_diff_sha256:$pds}' \
+      > "$RT_DIR/packet-outcome.json"
+    # verified_provisional in the DRIVER ledger (decision 7): full
+    # evidence, satisfies NOTHING — the whole-run done gate treats it
+    # as incomplete until reconciliation accepts it. Only delegate
+    # runs write this key; undelegated ledgers stay byte-identical.
+    ledger_set '.provisional[$t] = {packet_id:$pid, packet_digest:$dig,
+                verdict:"verified_provisional", rounds:($r|tonumber),
+                changed_lines:($cl|tonumber),
+                provisional_diff_sha256:$pds, builder:($b|fromjson)}' \
+        --arg t "$DELEGATE_TASK" --arg pid "$PKT_ID" --arg dig "$PKT_DIGEST" \
+        --arg r "$round" --arg cl "$EVAL_CHANGED_LINES" \
+        --arg pds "sha256:$pdiff_sha" --arg b "$builder"
+    notify "packet_verified" "packet $PKT_ID verified after $round round(s) — PROVISIONAL"
+    terminate "packet_verified" 0 "packet $PKT_ID verified by its own verifier commands after $round round(s) — PROVISIONAL: Tier-1 reconciliation is required before this work satisfies any gate"
+  fi
+  sig=$(sort "$ffile" | shasum -a 256 | cut -d' ' -f1)
+  if jq -e --arg s "$sig" '[.[].signature] | index($s) != null' >/dev/null 2>&1 <<< "$rounds"; then
+    rt_refuse "packet_thrash_repeated_failure" "round $round reproduces a prior round's normalized failure signature ($sig) — this subsumes A/B/A oscillation"
+  fi
+  if [[ -n "$EVAL_REWRITE" ]]; then
+    rt_refuse "packet_thrash_rewrite" "round $round: $EVAL_REWRITE"
+  fi
+  prev_failing=$(jq -r 'if length > 0 then .[-1].failing else "" end' <<< "$rounds")
+  if [[ -n "$prev_failing" && "$EVAL_FAILING" -ge "$prev_failing" ]]; then
+    rt_refuse "packet_thrash_no_reduction" "round $round: $EVAL_FAILING failing verifier(s), not fewer than the previous round's $prev_failing"
+  fi
+  rounds=$(jq -c --argjson r "$round" --arg s "$sig" --argjson f "$EVAL_FAILING" \
+      '. + [{round:$r, signature:$s, failing:$f}]' <<< "$rounds")
+  rt_delegate_state_save "$rounds"
+  if [[ "$round" -ge $((1 + RC_MAX_REPAIR_ROUNDS)) ]]; then
+    rt_refuse "packet_verifiers_unsatisfied" "verifiers still failing after the initial round + RC_MAX_REPAIR_ROUNDS=$RC_MAX_REPAIR_ROUNDS repair round(s)"
+  fi
+  journal "packet_round" "round $round failed $EVAL_FAILING verifier(s) (signature $sig) — starting repair round $((round + 1))"
+  DELEGATE_LAST_FAILURES="$ffile"
+  return 1
+}
+
+# delegate_run — the whole --delegate lifecycle; never returns.
+delegate_run() {
+  journal "delegate" "bounded packet delegation for task '$DELEGATE_TASK' (#254 increment C)"
+  local pkt="$DELEGATE_PACKET" out first
+  if [[ -z "$pkt" ]]; then
+    if ! pkt=$(rp_build "$FEATURE_ID" "$DELEGATE_TASK" "$WORKTREE/specs" "$WORKTREE" "$DELEGATE_DONE" 2>&1); then
+      first=$(head -1 <<< "$pkt")
+      rt_refuse "${first%%:*}" "packet build refused: $pkt"
+    fi
+  fi
+
+  # decision-4 point-of-use sequence: steps 1-2 (envelope + digest),
+  # artifact bytes, step 4 (provenance). After this, the packet is the
+  # ONLY authority — the mutable artifacts are never reread.
+  if ! out=$(rp_validate "$pkt"); then
+    first=$(head -1 <<< "$out"); rt_refuse "${first%%:*}" "$out"
+  fi
+  if ! out=$(rp_artifact_check "$pkt"); then
+    first=$(head -1 <<< "$out"); rt_refuse "${first%%:*}" "$out"
+  fi
+  if ! out=$(rp_provenance_check "$pkt" "$WORKTREE/specs"); then
+    first=$(head -1 <<< "$out"); rt_refuse "${first%%:*}" "$out"
+  fi
+
+  PKT_JSON=$(cat "$pkt")
+  PKT_DIR=$(cd "$(dirname "$pkt")" && pwd)
+  PKT_ID=$(jq -r '.packet_id' <<< "$PKT_JSON")
+  PKT_DIGEST=$(jq -r '.packet_digest' <<< "$PKT_JSON")
+  PKT_CLASS=$(jq -r '.route_class' <<< "$PKT_JSON")   # IMMUTABLE for this run
+  PKT_BASE=$(jq -r '.base_commit' <<< "$PKT_JSON")
+  PKT_ART=$(jq -r '.diff_artifact' <<< "$PKT_JSON")
+  # The runtime namespace is keyed by the FULL digest — T2's identity
+  # contract (digest12 is only a human locator; the full 256-bit
+  # digest is authoritative). Two packets can therefore never share
+  # durable execution state, worktree, or idempotency records, even
+  # under a digest12 prefix collision.
+  local dfull="${PKT_DIGEST#sha256:}"
+  local d12="${dfull:0:12}"
+  if [[ "$(jq -r '.task_id' <<< "$PKT_JSON")" != "$DELEGATE_TASK" ]]; then
+    rt_refuse "packet_envelope_invalid" "the packet is for task '$(jq -r '.task_id' <<< "$PKT_JSON")', not '--delegate $DELEGATE_TASK'"
+  fi
+  # the repo-level tier2 restriction (#254 T6, promoted key): a
+  # repository may FORBID Tier-2 delegation outright — a policy
+  # denial, never rerouted around
+  if [[ "$PKT_CLASS" == tier2_* && "$(rc_tier2_allowed "$RT_EFFECTIVE")" == "false" ]]; then
+    rt_refuse "routing_policy_denied" "repository policy forbids Tier-2 delegation (routing.tier2.delegation_enabled = false) — the packet's route class '$PKT_CLASS' cannot execute here"
+  fi
+  PKT_ALLOWED=()
+  while IFS= read -r out; do
+    [[ -n "$out" ]] && PKT_ALLOWED+=("$out")
+  done <<< "$(jq -r '.allowed_files[]' <<< "$PKT_JSON")"
+  # Commands travel as JSON-encoded elements (one per line; an
+  # embedded LF stays escaped as \n) — line-splitting raw strings
+  # would hide an embedded newline from the very grammar check that
+  # must refuse it, and would silently turn one recorded verifier
+  # into two executed ones.
+  DELEGATE_VERIFIER_JSON=$(jq -c '.fr_refs[].tests[]' <<< "$PKT_JSON")
+  # Verifier-executable protection is NOT a positional heuristic: the
+  # packet build already refused any command outside the constrained
+  # grammar, this run RE-CHECKS the grammar at point of use (fail
+  # closed against packets from a foreign builder), and the protected
+  # script is derived by the SAME lib function the build used
+  # (rp_verifier_script) — protection covers what a verifier EXECUTES,
+  # never what it merely checks (`ruff check src/scorer.py` must not
+  # freeze scorer.py, the task's own work surface).
+  DELEGATE_VERIFIER_TOKENS=""
+  local velem vcmd ntok gerr vscript
+  while IFS= read -r velem; do
+    [[ -z "$velem" ]] && continue
+    # transport check FIRST, on the still-encoded element — a NUL
+    # would not survive decoding into this shell variable
+    if ! gerr=$(rp_verifier_transport_check "$velem"); then
+      rt_refuse "packet_artifact_invalid" "point-of-use grammar re-check: $gerr"
+    fi
+    vcmd=$(jq -r . <<< "$velem")
+    if ! gerr=$(rp_verifier_grammar_check "$vcmd"); then
+      rt_refuse "packet_artifact_invalid" "point-of-use grammar re-check: $gerr"
+    fi
+    vscript=$(rp_verifier_script "$vcmd")
+    if [[ -n "$vscript" ]]; then
+      if ntok=$(rt_normalize_path "$vscript" 2>/dev/null); then
+        DELEGATE_VERIFIER_TOKENS="$DELEGATE_VERIFIER_TOKENS $ntok"
+      fi
+    fi
+  done <<< "$DELEGATE_VERIFIER_JSON"
+  journal "delegate_packet" "packet $PKT_ID (digest ${d12}) route_class=$PKT_CLASS base=${PKT_BASE:0:12} — validated; executing from the packet alone"
+
+  # the packet's own B-style namespace: rounds are supervised attempts
+  RT_DIR="$RT_DIR/delegate-$dfull"
+  RT_CONTROL="$RT_DIR/control.json"
+  mkdir -p "$RT_DIR"
+  if [[ -f "$RT_DIR/packet-outcome.json" ]]; then
+    terminate "packet_verified" 0 "packet $PKT_ID already verified (idempotent re-run; see $RT_DIR/packet-outcome.json)"
+  fi
+  rt_startup
+  rt_delegate_worktree
+
+  # a recovered proceed-round is EVALUATED, never relaunched: the
+  # driver-side verdict chain is deterministic over the persisted
+  # worktree
+  local latest n rounds
+  latest=$(ls "$RT_DIR" 2>/dev/null | grep -E '^result-[0-9]+\.json$' | sort -t- -k2 -n | tail -1 || true)
+  if [[ -n "$latest" ]]; then
+    n="${latest#result-}"; n="${n%.json}"
+    rounds=$(rt_delegate_state_load)
+    local evaluated proceeds
+    evaluated=$(jq -r 'length' <<< "$rounds")
+    if [[ "$(jq -r '.decision.action' "$RT_DIR/result-$n.json" 2>/dev/null)" == "proceed" ]]; then
+      proceeds=$(grep -l '"action": *"proceed"' "$RT_DIR"/result-*.json 2>/dev/null | wc -l | tr -d ' ')
+      if [[ "$proceeds" -gt "$evaluated" ]]; then
+        journal "delegate_recovery" "recovered proceed-round detected — re-running the driver-owned verdict chain over the persisted worktree (no relaunch)"
+        rt_delegate_round_result "$((evaluated + 1))" || true
+      fi
+    fi
+  fi
+
+  # ── round loop
+  local sel selector_attempted pj id attempt_no attempt_id
+  local OUT CHILD_CODE requested effective decision_epoch result legacy_hit decision
+  while true; do
+    if [[ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]]; then
+      terminate "failed" 5 "max attempts ($MAX_ATTEMPTS) reached during packet delegation"
+    fi
+    if [[ $(( $(now_epoch) - START_EPOCH )) -ge "$MAX_WALL_SEC" ]]; then
+      terminate "failed" 5 "wall-clock cap (${MAX_WALL_SEC}s) exceeded during packet delegation"
+    fi
+
+    rounds=$(rt_delegate_state_load)
+    local round=$(( $(jq -r 'length' <<< "$rounds") + 1 ))
+
+    # selection legality: the packet's frozen route class, the
+    # bounded-build role (delegation is per-profile opt-in)
+    selector_attempted=$(jq -n --argjson a "$RT_EPOCH_ATTEMPTED" --argjson b "$RT_LOCAL_EXCLUDED" '($a + $b) | unique')
+    sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" bounded-build "$PKT_CLASS") || \
+      rt_refuse "routing_unknown_failure" "selection failed to evaluate for the packet"
+    while IFS= read -r out; do
+      journal "routing_candidate" "$out"
+    done <<< "$(jq -r '.considered[] | "\(.id): \(.verdict) — \(.reason)"' <<< "$sel")"
+    if [[ "$(jq -r '.selected' <<< "$sel")" == "null" ]]; then
+      local term earliest now wait remaining
+      term=$(jq -r '.terminal_reason // empty' <<< "$sel")
+      earliest=$(jq -r '.earliest_retry // empty' <<< "$sel")
+      [[ -n "$term" ]] && rt_refuse "$term" "no eligible profile for the packet's route class '$PKT_CLASS' (reasons journaled per candidate)"
+      now=$(now_epoch)
+      wait=$(( earliest > now ? earliest - now : 0 ))
+      remaining=$(( MAX_WALL_SEC - (now - START_EPOCH) ))
+      if [[ "$wait" -ge "$remaining" ]]; then
+        rt_refuse "routing_no_eligible_profile" "every eligible profile is time-blocked until $earliest, beyond the wall-clock cap"
+      fi
+      RT_NOPROGRESS=$((RT_NOPROGRESS + 1))
+      if [[ "$RT_NOPROGRESS" -gt 3 ]]; then
+        rt_refuse "routing_no_eligible_profile" "no selection progress after $RT_NOPROGRESS eligibility sleeps — refusing to spin"
+      fi
+      journal "routing_sleep" "packet waits ${wait}s to the earliest re-eligibility ($earliest) — the tier requirement is never weakened"
+      "$SLEEP_CMD" "$wait" || true
+      RT_EPOCH_ATTEMPTED="[]"
+      rt_control_save
+      continue
+    fi
+    RT_NOPROGRESS=0
+
+    pj=$(jq -c '.selected' <<< "$sel")
+    id=$(jq -r '.id' <<< "$pj")
+    attempt_no=$((ATTEMPTS + 1))
+    attempt_id="${RT_RUN_TAG}-p${d12}-a${attempt_no}"
+    rt_launch_env "$pj"
+
+    # step 1: durable attempt-started BEFORE any launch
+    jq -n --arg id "$attempt_id" --argjson n "$attempt_no" --argjson p "$pj" \
+          --argjson t "$(now_epoch)" --arg pid "$PKT_ID" \
+          '{attempt_id:$id, attempt:$n, profile:$p, packet_id:$pid, started_epoch:$t}' \
+          > "$RT_DIR/started-$attempt_no.json"
+    ATTEMPTS=$((ATTEMPTS + 1))
+    ledger_set ".attempts = $ATTEMPTS | .status = \"running\" | .routing_profile = \$p" --arg p "$id"
+    journal "launch" "packet round $round attempt $ATTEMPTS via profile '$id' ($(jq -r '.backend' <<< "$pj")/$(jq -r '.provider' <<< "$pj")/$(jq -r '.model' <<< "$pj")) — minimal tool set, fresh session"
+
+    # step 2: exactly one FRESH bounded child in the packet worktree.
+    # Delegate children ALWAYS get the minimal tool set — bounded work
+    # never inherits a wider profile (the registry tool_profile is
+    # journaled evidence, not a widening lever).
+    local prompt_file
+    prompt_file="$RT_DIR/prompt-$attempt_no.txt"
+    rt_packet_prompt "$round" "$prompt_file" "${DELEGATE_LAST_FAILURES:--}"
+    OUT="$(mktemp)"
+    set +e
+    if [[ -n "${CCT_SUPERVISOR_HARNESS_CMD:-}" ]]; then
+      ( cd "$PKT_WT" \
+        && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
+               CCT_ROUTING_PROFILE="$id" \
+               CCT_ROUTING_BACKEND="$(jq -r '.backend' <<< "$pj")" \
+               CCT_ROUTING_PROVIDER="$(jq -r '.provider' <<< "$pj")" \
+               CCT_ROUTING_MODEL="$(jq -r '.model' <<< "$pj")" \
+               CCT_ROUTING_POOL="$(jq -r '.pool' <<< "$pj")" \
+               CCT_ROUTING_TOOL_PROFILE="$(jq -r '.tool_profile' <<< "$pj")" \
+               ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
+               ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
+               bash -c "$CCT_SUPERVISOR_HARNESS_CMD" ) < "$prompt_file" >"$OUT" 2>&1
+    elif [[ "$(jq -r '.backend' <<< "$pj")" == "pi" ]]; then
+      ( cd "$PKT_WT" \
+        && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
+               ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
+               ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
+               "${CCT_PI_BIN:-pi-code}" --mode json -p ) < "$prompt_file" >"$OUT" 2>&1
+    else
+      ( cd "$PKT_WT" \
+        && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
+               ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
+               ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
+               "${CCT_CLAUDE_BIN:-claude-code}" -p --output-format json \
+               --permission-mode acceptEdits \
+               --allowedTools "Read Grep Glob Edit Write Bash" ) < "$prompt_file" >"$OUT" 2>&1
+    fi
+    CHILD_CODE=$?
+    set -e
+    rt_scrub_out "$OUT"
+    cat "$OUT"
+
+    if [[ "$CHILD_CODE" -eq 6 ]]; then
+      rm -f "$OUT"
+      jq -n --arg id "$attempt_id" '{schema_version:1, attempt_id:$id, outcome:"terminated_policy"}' > "$RT_DIR/result-$attempt_no.json"
+      notify "terminated_policy" "policy termination (exit 6) in a packet round — terminal, not rerouted"
+      terminate "terminated_policy" 6 "packet child exited terminated_policy (exit 6); terminal by contract"
+    fi
+
+    # step 3: the durable terminal result WITH the recorded decision
+    requested=$(jq -r '.model' <<< "$pj")
+    effective=$(rt_effective_model "$OUT")
+    decision_epoch=$(now_epoch)
+    result=$(rr_result "$CHILD_CODE" "$OUT" \
+        "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
+        "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}')
+    decision=$(ra_decide "$result" "$(jq -r --arg id "$id" '.[$id] // 0' <<< "$RT_RETRY_COUNTS")" "$decision_epoch") \
+        || rt_refuse "routing_unknown_failure" "the action policy failed to evaluate"
+    legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT" 2>/dev/null | tail -1 || true)"
+    cp "$OUT" "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
+    rm -f "$OUT"
+    jq -n --arg id "$attempt_id" --argjson r "$result" --argjson t "$decision_epoch" \
+          --argjson d "$decision" --arg legacy "$legacy_hit" \
+          '{attempt_id:$id, decision_epoch:$t, result:$r, decision:$d,
+            legacy_usage_fallback:(if $legacy == "" then null else $legacy end)}' \
+          > "$RT_DIR/result-$attempt_no.json"
+
+    # steps 4-5 + act (B's shared pipeline, in the packet namespace)
+    RT_ACTION=""
+    RT_DECISION_CACHE=""
+    rt_apply_result "$attempt_no" 0
+
+    case "$RT_ACTION" in
+      proceed)
+        # the ROUND completed — driver-owned verdict chain decides
+        rt_delegate_round_result "$round" || true
+        ;;
+      retry_same)
+        local nb noww waitt
+        nb=$(jq -r '.retry_not_before' <<< "$RT_DECISION_CACHE")
+        noww=$(now_epoch)
+        waitt=$(( nb > noww ? nb - noww : 0 ))
+        journal "routing_retry_same" "packet round $round: waiting ${waitt}s, then ONE same-profile retry (the round is not consumed)"
+        "$SLEEP_CMD" "$waitt" || true
+        ;;
+      failover)
+        journal "routing_failover" "packet round $round: profile '$id' left the unit; reselecting (the round is not consumed)"
+        ;;
+    esac
+  done
+}
+
+# ═══ Tier-1 reconciliation (#254 C T5; plan decisions 7 + 9) ═════════
+# Reconciliation is THE promotion boundary: verified_provisional
+# becomes done-eligible only through a fresh Tier-1 session whose
+# independence from the packet's builder is POSITIVELY established.
+
+# provisional_pending — count of verified_provisional ledger records
+# awaiting reconciliation. The whole-run done gate treats any pending
+# record as incomplete work; ledgers without the key are unaffected
+# (undelegated behavior byte-identical).
+provisional_pending() {
+  ledger_get '[.provisional // {} | .[] | select(.verdict == "verified_provisional")] | length' 2>/dev/null || echo 0
+}
+
+# rt_reconcile_independence <builder-json|null> <reconciler-json>
+# B's comparison predicate (provider identity primary — deterministic
+# registry fields, never model-string inference; model equality the
+# conservative secondary signal) applied reconciler-vs-builder, with
+# C's FAIL-CLOSED disposition (plan amendment 2): `independent`
+# proceeds; `not_independent` AND `unevaluable` both refuse with
+# their own named reasons — promotion never happens when independence
+# cannot be established. (B's own non-blocking unevaluable
+# disposition is untouched for B's flows.)
+rt_reconcile_independence() {
+  local builder="$1" reconciler="$2"
+  local bprov bmodel rprov rmodel
+  bprov=$(jq -r '.provider // empty' <<< "$builder" 2>/dev/null)
+  bmodel=$(jq -r '.model // empty' <<< "$builder" 2>/dev/null)
+  rprov=$(jq -r '.provider // empty' <<< "$reconciler")
+  rmodel=$(jq -r '.model // empty' <<< "$reconciler")
+  if [[ -z "$bprov" || -z "$bmodel" ]]; then
+    journal "reconcile_independence" "independence=unevaluable reason=no_builder_identity — the provisional record carries no builder identity; promotion is impossible without positively established independence"
+    rt_refuse "reconcile_independence_unevaluable" "the packet's builder identity is missing from the provisional evidence — refusing to promote (fail closed, never assumed independent)"
+  fi
+  if [[ "$rprov" == "$bprov" ]]; then
+    journal "reconcile_independence" "independence=not_independent reason=provider_collision ($rprov)"
+    rt_refuse "reconcile_not_independent" "reconciler provider '$rprov' equals the builder's — a same-provider reviewer never promotes its own tier's work"
+  fi
+  if [[ "$rmodel" == "$bmodel" ]]; then
+    journal "reconcile_independence" "independence=not_independent reason=model_collision ($rmodel)"
+    rt_refuse "reconcile_not_independent" "reconciler model '$rmodel' equals the builder's (conservative secondary signal)"
+  fi
+  journal "reconcile_independence" "independence=independent (builder $bprov/$bmodel vs reconciler $rprov/$rmodel)"
+}
+
+# rt_reconcile_prompt <out-file> <patch-file> <evidence-file>
+rt_reconcile_prompt() {
+  local out="$1" patch="$2" evid="$3"
+  {
+    echo "You are RECONCILING one bounded Tier-2 delegation packet (#109 increment C)."
+    echo "A lower-tier model produced the patch below; its work is PROVISIONAL."
+    echo "Your verdict decides promotion. Rules (driver-enforced after you exit):"
+    echo "- Review the patch against the packet's outcome and requirements."
+    echo "- You MAY simplify or repair, but ONLY within the packet's allowed files;"
+    echo "  never touch test or verifier files."
+    echo "- End your work by printing EXACTLY ONE line:"
+    echo "    RECONCILE_VERDICT: accepted"
+    echo "  or"
+    echo "    RECONCILE_VERDICT: rejected"
+    echo "- 'accepted' is re-verified by the driver (scope + verifiers); a verdict"
+    echo "  the verifiers contradict is refused. 'rejected' reverts the patch."
+    echo ""
+    jq -r '"Task: \(.task_id) (feature \(.feature_id))",
+           "Outcome: \(.outcome)",
+           "Allowed files:", (.allowed_files[] | "  - " + .),
+           "Requirements and their verifier commands:",
+           (.fr_refs[] | "  \(.id) [\(.statement_sha)]", (.tests[] | "    $ " + .))' <<< "$PKT_JSON"
+    echo ""
+    echo "The provisional patch (worktree vs base):"
+    sed 's/^/  | /' "$patch"
+    echo ""
+    echo "Verifier evidence from the provisional run:"
+    tail -30 "$evid" 2>/dev/null | sed 's/^/  | /' || echo "  | (none recorded)"
+  } > "$out"
+}
+
+# reconcile_run — the whole --reconcile lifecycle; never returns.
+reconcile_run() {
+  journal "reconcile" "Tier-1 reconciliation for task '$RECONCILE_TASK' (#254 increment C)"
+  # bind to the provisional record: task -> packet id + digest
+  local rec pid dig
+  rec=$(jq -c --arg t "$RECONCILE_TASK" '.provisional[$t] // empty' "$RUN" 2>/dev/null)
+  if [[ -z "$rec" ]]; then
+    err "nothing to reconcile: no verified_provisional record for task '$RECONCILE_TASK' in $RUN"
+    exit 64
+  fi
+  if [[ "$(jq -r '.verdict' <<< "$rec")" != "verified_provisional" ]]; then
+    err "task '$RECONCILE_TASK' is not pending reconciliation (verdict: $(jq -r '.verdict' <<< "$rec"))"
+    exit 64
+  fi
+  pid=$(jq -r '.packet_id' <<< "$rec")
+  dig=$(jq -r '.packet_digest' <<< "$rec")
+  local dfull="${dig#sha256:}" d12="${dig#sha256:}"; d12="${d12:0:12}"
+
+  # the SAME immutable packet the provisional result came from
+  local pkt="$RT_DIR/packet-$RECONCILE_TASK-$d12.json" out first
+  if [[ ! -r "$pkt" ]]; then
+    rt_refuse "packet_artifact_invalid" "the provisional record binds packet $pid but $pkt is gone — re-delegate before reconciling"
+  fi
+  if ! out=$(rp_validate "$pkt"); then
+    first=$(head -1 <<< "$out"); rt_refuse "${first%%:*}" "$out"
+  fi
+  if [[ "$(jq -r '.packet_digest' "$pkt")" != "$dig" ]]; then
+    rt_refuse "packet_digest_mismatch" "the packet file's digest does not match the provisional record's ($dig) — the record and the packet must be the same immutable object"
+  fi
+  if ! out=$(rp_artifact_check "$pkt"); then
+    first=$(head -1 <<< "$out"); rt_refuse "${first%%:*}" "$out"
+  fi
+  if ! out=$(rp_provenance_check "$pkt" "$WORKTREE/specs"); then
+    first=$(head -1 <<< "$out"); rt_refuse "${first%%:*}" "$out"
+  fi
+  PKT_JSON=$(cat "$pkt")
+  PKT_DIR=$(cd "$(dirname "$pkt")" && pwd)
+  PKT_ID="$pid"; PKT_DIGEST="$dig"
+  PKT_BASE=$(jq -r '.base_commit' <<< "$PKT_JSON")
+  PKT_ART=$(jq -r '.diff_artifact' <<< "$PKT_JSON")
+  PKT_ALLOWED=()
+  while IFS= read -r out; do
+    [[ -n "$out" ]] && PKT_ALLOWED+=("$out")
+  done <<< "$(jq -r '.allowed_files[]' <<< "$PKT_JSON")"
+  DELEGATE_VERIFIER_JSON=$(jq -c '.fr_refs[].tests[]' <<< "$PKT_JSON")
+  DELEGATE_VERIFIER_TOKENS=""
+  local velem vcmd ntok gerr vscript
+  while IFS= read -r velem; do
+    [[ -z "$velem" ]] && continue
+    if ! gerr=$(rp_verifier_transport_check "$velem"); then
+      rt_refuse "packet_artifact_invalid" "point-of-use grammar re-check: $gerr"
+    fi
+    vcmd=$(jq -r . <<< "$velem")
+    if ! gerr=$(rp_verifier_grammar_check "$vcmd"); then
+      rt_refuse "packet_artifact_invalid" "point-of-use grammar re-check: $gerr"
+    fi
+    vscript=$(rp_verifier_script "$vcmd")
+    if [[ -n "$vscript" ]]; then
+      if ntok=$(rt_normalize_path "$vscript" 2>/dev/null); then
+        DELEGATE_VERIFIER_TOKENS="$DELEGATE_VERIFIER_TOKENS $ntok"
+      fi
+    fi
+  done <<< "$DELEGATE_VERIFIER_JSON"
+
+  RT_DIR="$RT_DIR/delegate-$dfull"
+  RT_CONTROL="$RT_DIR/control.json"
+  mkdir -p "$RT_DIR"
+  rt_startup
+  # CANON_WT holds the verified provisional state and is IMMUTABLE
+  # during judgment (T5 review): the reconciler never runs in it, so
+  # a reconciler or supervisor crash can never damage the builder's
+  # verified work — preservation does not depend on cleanup code
+  # executing. It is mutated only on a committed verdict: rejected
+  # (revert) or fully-gated acceptance (promote + verify).
+  local CANON_WT="$RT_DIR/wt"
+  if [[ ! -d "$CANON_WT" ]]; then
+    rt_refuse "packet_artifact_invalid" "the packet worktree holding the provisional diff is gone — re-delegate before reconciling"
+  fi
+  # the canonical worktree must still hold EXACTLY the verified diff
+  git -C "$CANON_WT" add -A . >/dev/null 2>&1 || true
+  local live_pds
+  live_pds="sha256:$(git -C "$CANON_WT" diff --cached "$PKT_BASE" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
+  if [[ "$live_pds" != "$(jq -r '.provisional_diff_sha256' <<< "$rec")" ]]; then
+    rt_refuse "packet_digest_mismatch" "the packet worktree no longer matches the verified provisional diff (recorded $(jq -r '.provisional_diff_sha256' <<< "$rec"), live $live_pds) — refusing to promote altered work (the durable provisional patch in $RT_DIR can restore it)"
+  fi
+  # the provisional diff, captured ONCE from the verified canonical
+  # state — durable, and the seed for every disposable judgment copy
+  local prestate="$RT_DIR/prestate.patch"
+  git -C "$CANON_WT" diff --cached "$PKT_BASE" > "$prestate" 2>/dev/null || true
+
+  local builder
+  builder=$(jq -c '.builder // null' <<< "$rec")
+
+  # ── reconciler selection + fresh supervised attempt
+  local sel selector_attempted pj id attempt_no attempt_id
+  local OUT CHILD_CODE requested effective decision_epoch result legacy_hit decision
+  while true; do
+    if [[ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]]; then
+      terminate "failed" 5 "max attempts ($MAX_ATTEMPTS) reached during reconciliation"
+    fi
+    if [[ $(( $(now_epoch) - START_EPOCH )) -ge "$MAX_WALL_SEC" ]]; then
+      terminate "failed" 5 "wall-clock cap (${MAX_WALL_SEC}s) exceeded during reconciliation"
+    fi
+    selector_attempted=$(jq -n --argjson a "$RT_EPOCH_ATTEMPTED" --argjson b "$RT_LOCAL_EXCLUDED" '($a + $b) | unique')
+    sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" reconcile tier1_only) || \
+      rt_refuse "routing_unknown_failure" "reconciler selection failed to evaluate"
+    while IFS= read -r out; do
+      journal "routing_candidate" "$out"
+    done <<< "$(jq -r '.considered[] | "\(.id): \(.verdict) — \(.reason)"' <<< "$sel")"
+    if [[ "$(jq -r '.selected' <<< "$sel")" == "null" ]]; then
+      local term earliest now wait remaining
+      term=$(jq -r '.terminal_reason // empty' <<< "$sel")
+      earliest=$(jq -r '.earliest_retry // empty' <<< "$sel")
+      [[ -n "$term" ]] && rt_refuse "$term" "no Tier-1 profile holds the 'reconcile' role (or all are excluded) — reconciliation requires an explicit reconcile-role profile"
+      now=$(now_epoch)
+      wait=$(( earliest > now ? earliest - now : 0 ))
+      remaining=$(( MAX_WALL_SEC - (now - START_EPOCH) ))
+      [[ "$wait" -ge "$remaining" ]] && rt_refuse "routing_no_eligible_profile" "every reconciler is time-blocked until $earliest, beyond the wall-clock cap"
+      RT_NOPROGRESS=$((RT_NOPROGRESS + 1))
+      [[ "$RT_NOPROGRESS" -gt 3 ]] && rt_refuse "routing_no_eligible_profile" "no reconciler-selection progress after $RT_NOPROGRESS sleeps — refusing to spin"
+      journal "routing_sleep" "reconciliation waits ${wait}s to the earliest re-eligibility ($earliest)"
+      "$SLEEP_CMD" "$wait" || true
+      RT_EPOCH_ATTEMPTED="[]"
+      rt_control_save
+      continue
+    fi
+    RT_NOPROGRESS=0
+    pj=$(jq -c '.selected' <<< "$sel")
+    id=$(jq -r '.id' <<< "$pj")
+
+    # INDEPENDENCE BEFORE the durable attempt record — fail closed
+    rt_reconcile_independence "$builder" "$pj"
+
+    attempt_no=$((ATTEMPTS + 1))
+    attempt_id="${RT_RUN_TAG}-p${d12}-r${attempt_no}"
+    rt_launch_env "$pj"
+    # the DISPOSABLE judgment worktree: an exact copy of the
+    # provisional state; the reconciler may mutate it freely and a
+    # crash at ANY point leaves the canonical worktree untouched
+    local RECON_WT="$RT_DIR/recon-wt"
+    git -C "$WORKTREE" worktree remove --force "$RECON_WT" >/dev/null 2>&1 || true
+    rm -rf "$RECON_WT" 2>/dev/null || true
+    git -C "$WORKTREE" worktree prune >/dev/null 2>&1 || true
+    git -C "$WORKTREE" worktree add --detach "$RECON_WT" "$PKT_BASE" >/dev/null 2>&1 || \
+      rt_refuse "packet_artifact_invalid" "cannot materialize the disposable reconcile worktree at base $PKT_BASE"
+    if [[ -s "$prestate" ]]; then
+      git -C "$RECON_WT" apply "$prestate" >/dev/null 2>&1 || \
+        rt_refuse "packet_artifact_invalid" "the durable provisional patch does not apply at its base — cannot seed the judgment copy"
+    fi
+    # every evaluation helper below targets the DISPOSABLE copy
+    PKT_WT="$RECON_WT"
+
+    jq -n --arg id "$attempt_id" --argjson n "$attempt_no" --argjson p "$pj" \
+          --argjson t "$(now_epoch)" --arg pid "$PKT_ID" \
+          '{attempt_id:$id, attempt:$n, profile:$p, packet_id:$pid, reconcile:true, started_epoch:$t}' \
+          > "$RT_DIR/started-$attempt_no.json"
+    ATTEMPTS=$((ATTEMPTS + 1))
+    ledger_set ".attempts = $ATTEMPTS | .status = \"running\" | .routing_profile = \$p" --arg p "$id"
+    journal "launch" "reconcile attempt $ATTEMPTS via profile '$id' ($(jq -r '.backend' <<< "$pj")/$(jq -r '.provider' <<< "$pj")/$(jq -r '.model' <<< "$pj")) — fresh session"
+
+    local prompt_file patch_file evid_file
+    prompt_file="$RT_DIR/prompt-$attempt_no.txt"
+    patch_file="$prestate"
+    evid_file=$(ls "$RT_DIR"/verifiers-*.txt.log 2>/dev/null | sort | tail -1 || true)
+    rt_reconcile_prompt "$prompt_file" "$patch_file" "${evid_file:-/dev/null}"
+    OUT="$(mktemp)"
+    set +e
+    if [[ -n "${CCT_SUPERVISOR_HARNESS_CMD:-}" ]]; then
+      ( cd "$PKT_WT" \
+        && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
+               CCT_ROUTING_PROFILE="$id" \
+               CCT_ROUTING_BACKEND="$(jq -r '.backend' <<< "$pj")" \
+               CCT_ROUTING_PROVIDER="$(jq -r '.provider' <<< "$pj")" \
+               CCT_ROUTING_MODEL="$(jq -r '.model' <<< "$pj")" \
+               CCT_ROUTING_POOL="$(jq -r '.pool' <<< "$pj")" \
+               CCT_ROUTING_TOOL_PROFILE="$(jq -r '.tool_profile' <<< "$pj")" \
+               ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
+               ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
+               bash -c "$CCT_SUPERVISOR_HARNESS_CMD" ) < "$prompt_file" >"$OUT" 2>&1
+    elif [[ "$(jq -r '.backend' <<< "$pj")" == "pi" ]]; then
+      ( cd "$PKT_WT" \
+        && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
+               ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
+               ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
+               "${CCT_PI_BIN:-pi-code}" --mode json -p ) < "$prompt_file" >"$OUT" 2>&1
+    else
+      ( cd "$PKT_WT" \
+        && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
+               ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
+               ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
+               "${CCT_CLAUDE_BIN:-claude-code}" -p --output-format json \
+               --permission-mode acceptEdits \
+               --allowedTools "Read Grep Glob Edit Write Bash" ) < "$prompt_file" >"$OUT" 2>&1
+    fi
+    CHILD_CODE=$?
+    set -e
+    rt_scrub_out "$OUT"
+    cat "$OUT"
+
+    if [[ "$CHILD_CODE" -eq 6 ]]; then
+      rm -f "$OUT"
+      jq -n --arg id "$attempt_id" '{schema_version:1, attempt_id:$id, outcome:"terminated_policy"}' > "$RT_DIR/result-$attempt_no.json"
+      notify "terminated_policy" "policy termination (exit 6) during reconciliation — terminal"
+      terminate "terminated_policy" 6 "reconciler exited terminated_policy (exit 6); terminal by contract"
+    fi
+
+    requested=$(jq -r '.model' <<< "$pj")
+    effective=$(rt_effective_model "$OUT")
+    decision_epoch=$(now_epoch)
+    result=$(rr_result "$CHILD_CODE" "$OUT" \
+        "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
+        "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}')
+    decision=$(ra_decide "$result" "$(jq -r --arg id "$id" '.[$id] // 0' <<< "$RT_RETRY_COUNTS")" "$decision_epoch") \
+        || rt_refuse "routing_unknown_failure" "the action policy failed to evaluate"
+    legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT" 2>/dev/null | tail -1 || true)"
+    local verdict_line
+    verdict_line="$(grep -E '^RECONCILE_VERDICT: (accepted|rejected)[[:space:]]*$' "$OUT" | tail -1 || true)"
+    cp "$OUT" "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
+    rm -f "$OUT"
+    jq -n --arg id "$attempt_id" --argjson r "$result" --argjson t "$decision_epoch" \
+          --argjson d "$decision" --arg legacy "$legacy_hit" \
+          '{attempt_id:$id, decision_epoch:$t, result:$r, decision:$d,
+            legacy_usage_fallback:(if $legacy == "" then null else $legacy end)}' \
+          > "$RT_DIR/result-$attempt_no.json"
+    RT_ACTION=""
+    RT_DECISION_CACHE=""
+    rt_apply_result "$attempt_no" 0
+
+    case "$RT_ACTION" in
+      proceed) ;;
+      retry_same)
+        local nb noww waitt
+        nb=$(jq -r '.retry_not_before' <<< "$RT_DECISION_CACHE")
+        noww=$(now_epoch)
+        waitt=$(( nb > noww ? nb - noww : 0 ))
+        journal "routing_retry_same" "reconcile: waiting ${waitt}s, then ONE same-profile retry"
+        "$SLEEP_CMD" "$waitt" || true
+        continue
+        ;;
+      failover)
+        journal "routing_failover" "reconcile: profile '$id' left the unit; reselecting"
+        continue
+        ;;
+    esac
+
+    # ── the verdict chain: verdict marker -> scope -> budget ->
+    # verifiers -> promotion. Every path short of a committed verdict
+    # only DISCARDS the disposable copy — the canonical provisional
+    # worktree is never touched, so preservation of the builder's
+    # verified work does not depend on this code running at all.
+    _reconcile_discard() {
+      git -C "$WORKTREE" worktree remove --force "$RECON_WT" >/dev/null 2>&1 || true
+      rm -rf "$RECON_WT" 2>/dev/null || true
+    }
+    if [[ -z "$verdict_line" ]]; then
+      _reconcile_discard
+      rt_refuse "reconcile_verdict_missing" "the reconciler produced no RECONCILE_VERDICT line — refusing to guess a promotion decision (judgment ran in a disposable copy; the canonical provisional worktree was never touched)"
+    fi
+    local verdict="${verdict_line#RECONCILE_VERDICT: }"
+    verdict="${verdict%%[[:space:]]*}"
+    if [[ "$verdict" == "rejected" ]]; then
+      # the ONE verdict that destroys provisional work, by contract
+      git -C "$CANON_WT" reset --hard "$PKT_BASE" >/dev/null 2>&1 || true
+      git -C "$CANON_WT" clean -fd >/dev/null 2>&1 || true
+      _reconcile_discard
+      ledger_set '.provisional[$t].verdict = "rejected" | .provisional[$t].reconciler = ($p|fromjson) | .provisional[$t].reconcile_attempt = $a' \
+          --arg t "$RECONCILE_TASK" --arg p "$pj" --arg a "$attempt_id"
+      journal "reconcile_verdict" "task '$RECONCILE_TASK': REJECTED by '$id' — the packet's diff is reverted; the task returns to Tier-1 work"
+      notify "reconcile_rejected" "packet $PKT_ID rejected by reconciler '$id'"
+      terminate "reconcile_rejected" 0 "reconciliation verdict: rejected — the provisional diff is reverted; only Tier-1 work can complete the task now"
+    fi
+    # accepted path: driver-owned re-verification of the DISPOSABLE
+    # copy, fail closed; the canonical state is untouched until every
+    # gate passes
+    rt_packet_evaluate
+    if [[ -n "$EVAL_VIOLATION" ]]; then
+      _reconcile_discard
+      rt_refuse "packet_scope_violation" "the reconciler's edits violate the packet scope: $EVAL_VIOLATION (accepted_with_changes is not a path around scope; the canonical provisional worktree was never touched)"
+    fi
+    if [[ "$EVAL_CHANGED_LINES" -gt "$RC_MAX_CHANGED_LINES" ]]; then
+      _reconcile_discard
+      rt_refuse "packet_budget_exceeded" "the reconciler's cumulative diff is $EVAL_CHANGED_LINES changed lines (> RC_MAX_CHANGED_LINES=$RC_MAX_CHANGED_LINES); the canonical provisional worktree was never touched"
+    fi
+    local rffile="$RT_DIR/verifiers-reconcile-$attempt_no.txt"
+    rt_packet_verifiers "$rffile"
+    if [[ "$EVAL_FAILING" -gt 0 ]]; then
+      _reconcile_discard
+      rt_refuse "packet_verifiers_unsatisfied" "the reconciler ACCEPTED but $EVAL_FAILING verifier(s) fail — a verdict the verifiers contradict never promotes (the canonical provisional worktree was never touched)"
+    fi
+    # accepted vs accepted_with_changes is DERIVED from the diff, not
+    # self-reported; the accepted diff is captured DURABLY before any
+    # canonical mutation
+    local post final_verdict accepted_patch
+    post="$(git -C "$RECON_WT" diff --cached "$PKT_BASE" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
+    final_verdict="accepted"
+    [[ "sha256:$post" != "$(jq -r '.provisional_diff_sha256' <<< "$rec")" ]] && final_verdict="accepted_with_changes"
+    accepted_patch="$RT_DIR/accepted-$attempt_no.patch"
+    git -C "$RECON_WT" diff --cached "$PKT_BASE" > "$accepted_patch" 2>/dev/null || true
+    # PROMOTE: apply the fully-gated accepted diff to the canonical
+    # worktree and VERIFY the resulting hash; a verification failure
+    # restores the provisional state from the durable prestate patch
+    git -C "$CANON_WT" reset --hard "$PKT_BASE" >/dev/null 2>&1 || true
+    git -C "$CANON_WT" clean -fd >/dev/null 2>&1 || true
+    [[ -s "$accepted_patch" ]] && git -C "$CANON_WT" apply "$accepted_patch" >/dev/null 2>&1
+    git -C "$CANON_WT" add -A . >/dev/null 2>&1 || true
+    local canon_post
+    canon_post="$(git -C "$CANON_WT" diff --cached "$PKT_BASE" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
+    if [[ "$canon_post" != "$post" ]]; then
+      git -C "$CANON_WT" reset --hard "$PKT_BASE" >/dev/null 2>&1 || true
+      git -C "$CANON_WT" clean -fd >/dev/null 2>&1 || true
+      [[ -s "$prestate" ]] && git -C "$CANON_WT" apply "$prestate" >/dev/null 2>&1
+      _reconcile_discard
+      rt_refuse "packet_digest_mismatch" "promotion verification failed: the canonical worktree hash ($canon_post) does not match the accepted judgment hash ($post) — restored the provisional state from the durable prestate patch"
+    fi
+    _reconcile_discard
+    ledger_set '.provisional[$t].verdict = $v | .provisional[$t].reconciler = ($p|fromjson) | .provisional[$t].reconcile_attempt = $a | .provisional[$t].reconciled_diff_sha256 = $pds' \
+        --arg t "$RECONCILE_TASK" --arg v "$final_verdict" --arg p "$pj" \
+        --arg a "$attempt_id" --arg pds "sha256:$post"
+    journal "reconcile_verdict" "task '$RECONCILE_TASK': $final_verdict by '$id' (re-verified; $( [[ "$final_verdict" == "accepted" ]] && echo "no reconciler changes" || echo "reconciler changes re-verified" ))"
+    notify "reconcile_$final_verdict" "packet $PKT_ID $final_verdict by reconciler '$id'"
+    terminate "reconcile_$final_verdict" 0 "reconciliation verdict: $final_verdict — the task is done-eligible; the whole-run gate no longer treats it as provisional"
+  done
+}
+
 # ── the routed iteration: decision 5's frozen ordering ──
 routing_iteration() {
   local sel selector_attempted
@@ -740,6 +1732,16 @@ terminate() { # terminate <status> <exit-code> <reason>
 }
 
 # ── Supervision loop ────────────────────────────────────────
+# --delegate/--reconcile run their bounded lifecycles INSTEAD of the
+# loop (neither returns); the whole-run modes are untouched.
+if [[ -n "$DELEGATE_TASK" ]]; then
+  delegate_run
+  exit 70   # unreachable — delegate_run always terminates
+fi
+if [[ -n "$RECONCILE_TASK" ]]; then
+  reconcile_run
+  exit 70   # unreachable — reconcile_run always terminates
+fi
 [[ "$ROUTING" == "1" ]] && rt_startup
 info "supervising feature '$FEATURE_ID' (backend=$BACKEND, worktree=$WORKTREE)"
 while true; do
@@ -763,6 +1765,11 @@ while true; do
         clean)
           rem="$(tasks_remaining)"
           if [[ "$rem" == "0" ]]; then
+            pend=$(provisional_pending)
+            if [[ "${pend:-0}" != "0" ]]; then
+              notify "parked" "$pend provisional Tier-2 packet(s) pending reconciliation"
+              terminate "parked" 4 "all tasks checked but $pend verified_provisional packet(s) await Tier-1 reconciliation — provisional work satisfies no gate"
+            fi
             notify "done" "all tasks complete for '$FEATURE_ID'"
             terminate "done" 0 "harness exited clean and all tasks complete"
           fi
@@ -819,6 +1826,11 @@ while true; do
     clean)
       rem="$(tasks_remaining)"
       if [[ "$rem" == "0" ]]; then
+        pend=$(provisional_pending)
+        if [[ "${pend:-0}" != "0" ]]; then
+          notify "parked" "$pend provisional Tier-2 packet(s) pending reconciliation"
+          terminate "parked" 4 "all tasks checked but $pend verified_provisional packet(s) await Tier-1 reconciliation — provisional work satisfies no gate"
+        fi
         notify "done" "all tasks complete for '$FEATURE_ID'"
         terminate "done" 0 "harness exited clean and all tasks complete"
       fi

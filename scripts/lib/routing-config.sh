@@ -489,6 +489,7 @@ rc_effective() {
         for k in $(jq -r 'keys[]' <<< "$rblock" 2>/dev/null); do
             case "$k" in
                 enabled|allowed_profiles|default_task_route) ;;
+                tier2) ;;  # promoted with #254 T6 (restriction-only; validated below)
                 *) viol "the repo routing block carries a non-restriction key '$k' — a repository can narrow user routing authority, never create it (validate-automation-config refuses this block)" ;;
             esac
         done
@@ -540,8 +541,30 @@ rc_effective() {
             i=$((i+1))
         done
     fi
+    # tier2 delegation (#254 T6, promoted refused->implemented->tested):
+    # RESTRICTION-ONLY — a repository may FORBID Tier-2 delegation
+    # (routing.tier2.delegation_enabled = false); it can never widen
+    # what the user registry permits. Absent (and explicit true) mean
+    # "not restricted". The explicit-null discipline mirrors `enabled`
+    # (jq's // would turn an explicit false back into true).
+    local t2_allowed=true
+    if [[ "$(jq -r 'if . == null or (.tier2 == null) or (.tier2.delegation_enabled == null) then "true" else (.tier2.delegation_enabled | tostring) end' <<< "$rblock")" == "false" ]]; then
+        t2_allowed=false
+    fi
+
     jq -n --argjson en "$([[ "$enabled" == "true" ]] && echo true || echo false)" \
           --argjson cands "$out" --arg dtr "$dtr" \
+          --argjson t2 "$([[ "$t2_allowed" == "true" ]] && echo true || echo false)" \
           '{enabled: $en, candidates: $cands,
-            default_task_route: (if $dtr == "" then null else $dtr end)}'
+            default_task_route: (if $dtr == "" then null else $dtr end),
+            tier2_delegation_allowed: $t2}'
+}
+
+# rc_tier2_allowed <effective-json> — THE shared read of the promoted
+# tier2 restriction (#254 T6), used by the CLI's task-addressed
+# explain AND the supervisor's --delegate refusal so the two surfaces
+# can never drift. Explicit-null discipline: an explicit false must
+# stay false (jq's // would silently widen it back to true).
+rc_tier2_allowed() {
+    jq -r 'if .tier2_delegation_allowed == null then true else .tier2_delegation_allowed end' <<< "$1"
 }
