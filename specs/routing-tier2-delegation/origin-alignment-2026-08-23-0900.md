@@ -1,10 +1,11 @@
 # Origin Alignment Check — routing-tier2-delegation
 
 Date: 2026-08-23 09:00 (record opened)
-Last revised: 2026-08-23 — plan review round 1 (owner): four contract
-amendments applied (see below); GO granted; child issue #254 filed
-and stamped into plan.md frontmatter (origin previously anchored on
-the umbrella pending the child)
+Last revised: 2026-08-23 — T7 build-completion revision (T1–T7 built;
+this revision is the fresh record T7 requires). Earlier: plan review
+round 1 (owner): four contract amendments applied (see below); GO
+granted; child issue #254 filed and stamped into plan.md frontmatter
+(origin previously anchored on the umbrella pending the child)
 Trigger: rev-1 SDD bundle authored for increment C of #109 at the
 owner's direction ("my vote for the next roadmap slice is: carve
 Increment C"), immediately after increment B (#251) merged via PR
@@ -120,6 +121,57 @@ execution-contract rather than scope:
    Tier-1 attempts (denied, unknown, identity mismatch, independence
    refusal, crash ambiguity) remain terminal and never become a
    fallback opportunity.
+
+## Build completion (T1–T7)
+
+The build landed inside the recorded claim; per-task reviews produced
+contract tightenings, all execution-contract rather than scope:
+
+- T1 (three rounds): directory-glob floor authority by INTERSECTION
+  with the tree, never literal text; duplicate YAML identities hard-
+  refused with no first/last-write winner; rk_path_authorized — the
+  per-path authority predicate where the floor outranks every grant
+  and future/nonexistent files are covered (admission = early
+  current-tree refusal; authority = the predicate).
+- T2 (two rounds): the fixed-point digest construction replaced —
+  packet_digest covers the canonical SEMANTIC envelope; id, filename,
+  and diff-artifact locator are all DERIVED; one canonical chokepoint
+  shared by build and verification; separate identity/locator/content
+  honesty checks.
+- T3 (one round): route classes only remove candidates or restructure
+  tier precedence; the tier2_fallback unlock pinned to B's selector
+  output shapes; a default-path mutation proved the unmodified B
+  suite catches widening independently.
+- T4 (FIVE rounds): full-digest runtime namespace (digest12 is
+  presentation only); the constrained verifier-command grammar
+  (wrappers/flags/pipelines/assignment prefixes, then quoted/escaped
+  spellings, then the pre-decode transport boundary for LF/CR/NUL —
+  recorded bytes equal checked and executed bytes, with JSON-element
+  transport end to end); the allowlisted-verifier false-pass proof;
+  executed-position-only script protection.
+- T5 (two rounds): reconciliation made crash-safe BY CONSTRUCTION —
+  judgment in a disposable worktree, the canonical provisional state
+  immutable until a committed verdict, promotion hash-verified with
+  durable prestate/accepted patches; fail-closed independence with
+  its own unevaluable disposition.
+- T6 (one round): task-addressed explain renders EFFECTIVE legality —
+  the repo tier2 restriction lives in the candidate verdicts through
+  the shared rc_tier2_allowed predicate, never beside them.
+
+Recurring live-fire lesson, now doubly recorded: jq's `//` operator
+treats an explicit false as empty — the tier2 restriction was briefly
+un-restricted by `// true` at four sites before the suite caught it
+(the same authority-widening class B hit); every boolean read uses
+explicit null tests. One tooling incident: an Edit embedded a literal
+NUL byte into a source comment (the lib silently defined zero
+functions); all touched files are byte-scanned before every commit.
+
+The five recorded deviations shipped as recorded (static quality
+checks deferred with reconciliation as the compensating control;
+reconcile-on-recovery is D's; no auto-push of WIP; no route-class
+inference; no autonomous dispatcher). The tier2 repo key promotion
+completed in T6 as planned; `recovery` stays refused. Deferred scope
+is recorded on #254 with T7.
 
 ## Verdict
 
