@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "registry_digest": "sha256:1f0c9a7e5b3d2c4a6e8f0b1d3a5c7e9f1b3d5a7c9e1f3b5d7a9c1e3f5b7d9a1c",
+  "preset_digest": "sha256:9e1f3b5d7a9c1e3f5b7d9a1c3e5f7b9d1a3c5e7f9b1d3a5c7e9f1b3d5a7c9e1f",
+  "task_set_revision": "polyglot@3a1f9c2",
+  "toolchain_digest": "sha256:5b7d9a1c3e5f7b9d1a3c5e7f9b1d3a5c7e9f1b3d5a7c9e1f3b5d7a9c1e3f5b7d",
+  "task_id": "python/bowling",
+  "trial": 0,
+  "mode": "cct_router",
+  "profile_id": null,
+  "injected_events": [
+    {
+      "at_task_index": 0,
+      "outcome": "usage_limit",
+      "reset_at": "2026-08-25T21:00:00Z"
+    }
+  ],
+  "routing_decisions": [
+    {
+      "considered": [
+        {
+          "id": "anthropic-sonnet",
+          "verdict": "rejected",
+          "reason": "cooling until 2026-08-25T21:00:00Z (cooldown)"
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "verdict": "selected",
+          "reason": "eligible in tier1 at priority 20 (state: unknown \u2014 never treated as healthy)"
+        }
+      ],
+      "selected": "deepseek-v4-pro",
+      "reason": "preferred profile cooling; next tier1 by priority",
+      "requested_model": "deepseek-v4-pro",
+      "effective_model": "deepseek-v4-pro",
+      "endpoint": "api.deepseek.com",
+      "failure_classification": null,
+      "provisional_outcome": null
+    }
+  ],
+  "tokens": {
+    "input": 18422,
+    "output": 3110,
+    "cache_read": 0,
+    "cache_write": 0
+  },
+  "cost": {
+    "value": 0.0412,
+    "provenance": "measured",
+    "estimator": null,
+    "inputs": null
+  },
+  "baseline": {
+    "lint_passed": true,
+    "typecheck_passed": true
+  },
+  "quality_gates": {
+    "coverage": {
+      "before": 84.2,
+      "after": 84.2
+    },
+    "security": {
+      "findings_by_severity": {
+        "before": {
+          "high": 0,
+          "medium": 1,
+          "low": 3
+        },
+        "after": {
+          "high": 0,
+          "medium": 1,
+          "low": 3
+        }
+      }
+    }
+  },
+  "scope_violations": [],
+  "verifiers": [
+    {
+      "command": "pytest -q",
+      "exit_status": 0,
+      "evidence_ref": "attempt-01/verifiers/pytest.log"
+    },
+    {
+      "command": "ruff check .",
+      "exit_status": 0,
+      "evidence_ref": "attempt-01/verifiers/ruff.log"
+    }
+  ],
+  "repair_cycles": [],
+  "interventions": [],
+  "tier2": {
+    "delegated": false,
+    "delegated_lines": null,
+    "reconciliation_diff_lines": null
+  },
+  "rollbacks": [],
+  "insufficient_evidence": null
+}

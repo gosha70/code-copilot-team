@@ -85,6 +85,41 @@ def _validate(raw: Any, *, source: str = "<config>") -> CompareConfig:
     if not isinstance(raw, dict):
         raise CompareConfigError(f"{source}: top-level value must be a JSON object")
 
+    # Scenario comparisons (routing-eval E1) are a DIFFERENT comparison
+    # axis: the unit is a routing policy, not a (backend, model)
+    # candidate. Mixing the two axes in one config makes the unit of
+    # comparison ambiguous, so a config declaring both is refused here —
+    # not silently treated as a candidate comparison. Scenario-only
+    # configs are owned by benchmark_runner.routing_eval.scenario_config,
+    # which validates their shape; this loader never runs them.
+    if "arms" in raw or "scenario" in raw:
+        if "candidates" in raw:
+            raise CompareConfigError(
+                f"{source}: declares both 'candidates' and 'arms'/'scenario' — "
+                f"a candidate comparison and a routing-scenario comparison are "
+                f"distinct axes and cannot share one config. Split them."
+            )
+        raise CompareConfigError(
+            f"{source}: this is a routing-scenario config ('scenario'/'arms'), "
+            f"not a candidate comparison. It is validated by "
+            f"benchmark_runner.routing_eval.scenario_config and executed by "
+            f"the hybrid-routing scenario driver, not by `benchmark compare`."
+        )
+
+    # Scenario-only fields on a candidate config are refused even when
+    # 'scenario'/'arms' are absent: silently ignoring a cost_basis or
+    # trial_seeds the author clearly intended is fail-open.
+    stray = [
+        k
+        for k in ("cost_basis", "trials", "trial_seeds", "event_stream", "budget_ceiling_usd")
+        if k in raw
+    ]
+    if stray:
+        raise CompareConfigError(
+            f"{source}: scenario-only field(s) {stray} on a candidate comparison — "
+            f"these belong to a 'scenario' config and would be silently ignored here"
+        )
+
     benchmark = raw.get("benchmark")
     if not isinstance(benchmark, str) or not benchmark:
         raise CompareConfigError(f"{source}: 'benchmark' must be a non-empty string")

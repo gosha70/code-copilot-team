@@ -1,0 +1,16 @@
+{
+  "version": "price-table-v1",
+  "currency": "USD",
+  "unit": "per_million_tokens",
+  "description": "Versioned estimator input for routing-eval cost provenance 'estimated'. Used ONLY when a backend reports no measured total_cost_usd. This table is evaluation input, not billing truth: specs/benchmark-harness/spec.md keeps dollar-cost reporting out of the shared harness until billing-correlation is solved across providers, and nothing here changes that — an estimate produced from this table is always tagged provenance='estimated' with this version recorded, never presented as measured. Rates are operator-maintained; bump the version when any rate changes so stored estimates stay reproducible and comparisons never silently mix table versions.",
+  "rates": {
+    "_default": {
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "note": "No default rate. An unlisted model yields cost provenance 'unavailable' rather than a guessed number — a fabricated cost is worse than a missing one, because it silently drives always_cheapest and the cost axis."
+    }
+  },
+  "models": {}
+}

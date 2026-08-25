@@ -1,0 +1,731 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gosha70/code-copilot-team/benchmarks/schema/routing-run.schema.json",
+  "title": "CCT routing-run record (routing-eval E1)",
+  "description": "One routing-evaluation attempt. This record is OWNED BY routing-eval, not by the shared benchmark harness: specs/benchmark-harness/spec.md declares dollar-cost reporting permanently out of scope with no schema slot added, and test_no_dollar_cost_in_backend_metadata enforces that BackendResult/backend_metadata never carry cost. E1 therefore does not touch run-record, score, or stats; it reads what it needs (including total_cost_usd, straight from the backend transcript) into this record instead. Quality outcomes still come from score.schema.json and elapsed time from stats.schema.json \u2014 only what is genuinely missing upstream appears here. Every field below is the raw evidence for a row of specs/routing-eval/plan.md \u00a7 Metric contract; a metric with no source field here cannot be reported. EVERY evidence container is required: a writer records an empty array, explicit nulls, or an insufficient_evidence entry \u2014 never an absent key. Missing evidence must be explicit and reasoned, not indistinguishable from an incomplete writer.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "registry_digest",
+    "preset_digest",
+    "task_set_revision",
+    "toolchain_digest",
+    "task_id",
+    "trial",
+    "mode",
+    "profile_id",
+    "injected_events",
+    "routing_decisions",
+    "tokens",
+    "cost",
+    "baseline",
+    "quality_gates",
+    "scope_violations",
+    "verifiers",
+    "repair_cycles",
+    "interventions",
+    "tier2",
+    "rollbacks",
+    "insufficient_evidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Record schema version. Required from day one so two runs of the same versioned inputs stay comparable across revisions."
+    },
+    "registry_digest": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Digest of the routing registry AS PARSED. A component of the outcome-matrix reuse fingerprint: any registry edit invalidates reuse."
+    },
+    "preset_digest": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Digest covering trial count, trial seeds, the injected event stream, and the arm set. Changing a seed therefore invalidates reuse rather than silently reusing cells keyed by the same trial index."
+    },
+    "task_set_revision": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Pinned task-snapshot revision the attempt ran against."
+    },
+    "toolchain_digest": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Tool and environment fingerprint; the fifth reuse-fingerprint component. Null only when the scenario could not establish one, which makes the cell ineligible for reuse."
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Benchmark task this attempt executed."
+    },
+    "trial": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Zero-based trial index. Trials are a DIMENSION of the outcome matrix and are never collapsed before storage."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "profile_sweep",
+        "cct_router"
+      ],
+      "description": "What actually EXECUTED to produce this record. 'profile_sweep' is one fixed-profile cell of the task x profile x trial outcome matrix; 'cct_router' is the live router under a named registry. The four derived arms (always_best, always_cheapest, oracle, oracle_budget) never execute \u2014 they are computed in the REPORT from profile_sweep cells and have no run records of their own, so they are deliberately not representable here: a record claiming to be an execution of a derived arm would be a fabrication."
+    },
+    "profile_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The fixed profile a profile_sweep record executed under \u2014 required (non-null) in that mode. Null exactly in cct_router mode, where no single profile is fixed for the run: the profiles actually used per attempt live in routing_decisions, chosen live by the router."
+    },
+    "injected_events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/injected_event"
+      },
+      "description": "The injected provider events this attempt saw, in order, exactly as the preset declared them. Recorded so the run is reconstructable without re-execution."
+    },
+    "routing_decisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/routing_decision"
+      },
+      "description": "Per-attempt routing decisions in the vocabulary `cct routing explain` already speaks. This is what makes 'every routing decision is explainable from durable artifacts' true without re-running anything."
+    },
+    "tokens": {
+      "type": "object",
+      "required": [
+        "input",
+        "output"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "output": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cache_read": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cache_write": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "description": "Token counts. Null means the backend did not report; 0 means it reported zero. Inputs to the versioned estimator when a measured cost is unavailable."
+    },
+    "cost": {
+      "type": "object",
+      "required": [
+        "value",
+        "provenance"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Cost in USD. Null exactly when provenance is 'unavailable'."
+        },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "measured",
+            "estimated",
+            "unavailable"
+          ],
+          "description": "Closed provenance set. 'measured' is total_cost_usd read from the backend transcript by routing-eval's own reader (in-tree precedent: rb_measured_cost in scripts/lib/routing-probe.sh, which requires a number >= 0). 'estimated' is tokens x a versioned price table. 'unavailable' means neither was obtainable and PROPAGATES as insufficient_evidence \u2014 it is never defaulted to zero, which is what keeps always_cheapest and the cost axis honest."
+        },
+        "estimator": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Required (non-null) whenever provenance is 'estimated': the price-table version used, e.g. 'price-table-v1'. Null otherwise."
+        },
+        "inputs": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Required (non-null) whenever provenance is 'estimated', and then it must satisfy $defs/estimate_inputs \u2014 the closed shape from which the stored value is recomputable. Null otherwise."
+        }
+      },
+      "description": "Cost with explicit provenance. A comparison declares ONE cost_basis and every cell used for cost must satisfy it; mixed provenance is refused everywhere cost is used.",
+      "oneOf": [
+        {
+          "properties": {
+            "provenance": {
+              "const": "measured"
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0
+            },
+            "estimator": {
+              "type": "null"
+            },
+            "inputs": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "provenance",
+            "value"
+          ]
+        },
+        {
+          "properties": {
+            "provenance": {
+              "const": "estimated"
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0
+            },
+            "estimator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "inputs": {
+              "$ref": "#/$defs/estimate_inputs"
+            }
+          },
+          "required": [
+            "provenance",
+            "value",
+            "estimator",
+            "inputs"
+          ]
+        },
+        {
+          "properties": {
+            "provenance": {
+              "const": "unavailable"
+            },
+            "value": {
+              "type": "null"
+            },
+            "estimator": {
+              "type": "null"
+            },
+            "inputs": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "provenance"
+          ]
+        }
+      ]
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lint_passed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "typecheck_passed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "description": "Pre-attempt gate state. Rows 2-3 of \u00a7 Metric contract are REGRESSIONS, not absolute failures, so they need a before-value: a regression is 'baseline passed and post-run did not'. Null means unknown, which excludes the component rather than scoring it.",
+      "required": [
+        "lint_passed",
+        "typecheck_passed"
+      ]
+    },
+    "quality_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "before": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "after": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          "description": "Row 4. Regression when after < before - tol, with tol preset-declared. Absent upstream: score.schema.json has no coverage field.",
+          "required": [
+            "before",
+            "after"
+          ]
+        },
+        "security": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "findings_by_severity": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "before": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "after": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "before",
+                "after"
+              ]
+            }
+          },
+          "description": "Row 5. Regression when any severity count increased. Absent upstream.",
+          "required": [
+            "findings_by_severity"
+          ]
+        }
+      },
+      "required": [
+        "coverage",
+        "security"
+      ]
+    },
+    "scope_violations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Row 6 (architecture / scope violations): files changed outside the task packet's declared file scope. Reuses increment C's exact file-scope enforcement rather than inventing a detector. Empty array means none; absent means not evaluated."
+    },
+    "verifiers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/verifier_execution"
+      },
+      "description": "Each verifier execution with its command, exit status, and an addressable evidence reference. score.schema.json carries only a failed_commands COUNT, which cannot satisfy #109's 'failed verifier commands ... accurately recorded'."
+    },
+    "repair_cycles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/repair_cycle"
+      },
+      "description": "Row 7. Repeated-failure signatures are what make 'repeated repair cycles' measurable rather than merely counted."
+    },
+    "interventions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/intervention"
+      },
+      "description": "Row 8. Records, not a count \u2014 score.schema.json's human_interventions integer cannot say what happened."
+    },
+    "tier2": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "delegated": {
+          "type": "boolean",
+          "description": "Whether this attempt was delegated to Tier-2."
+        },
+        "delegated_lines": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Lines produced by the Tier-2 delegation \u2014 the DENOMINATOR of row 10's reconciliation rework ratio."
+        },
+        "reconciliation_diff_lines": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Lines changed by Tier-1 reconciliation \u2014 the NUMERATOR of row 10, and row 9's 'accepted unchanged' test (== 0)."
+        }
+      },
+      "description": "Rows 9-10. SEQUENCE-DEPENDENT: these exist only along a stateful run, so they are not_applicable for every derived arm and are measured only for cct_router.",
+      "required": [
+        "delegated",
+        "delegated_lines",
+        "reconciliation_diff_lines"
+      ]
+    },
+    "rollbacks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rollback"
+      },
+      "description": "Row 11: switch-induced revert events. Sequence-dependent \u2014 not_applicable for derived arms."
+    },
+    "insufficient_evidence": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "description": "Per-measure insufficiency, keyed by measure name, each entry carrying a REQUIRED reason. Null when nothing was insufficient; an empty object is rejected because it asserts neither sufficiency nor insufficiency. A measure recorded here is never rendered as zero, never silently dropped from the Pareto set, and never allowed to satisfy the control-set gate."
+    }
+  },
+  "$defs": {
+    "routing_decision": {
+      "type": "object",
+      "required": [
+        "considered",
+        "selected",
+        "reason",
+        "requested_model",
+        "effective_model",
+        "endpoint",
+        "failure_classification",
+        "provisional_outcome"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "considered": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "selected",
+                  "eligible",
+                  "rejected"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "verdict",
+              "reason"
+            ]
+          },
+          "description": "Every candidate's verdict, in `explain`'s vocabulary. Evidence only."
+        },
+        "selected": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Selected profile id, or null when nothing was selectable."
+        },
+        "reason": {
+          "type": "string"
+        },
+        "requested_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Null means UNVERIFIED \u2014 never assumed equal to the requested model."
+        },
+        "endpoint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "SANITIZED upstream endpoint identity. Never a credential, never a raw authorization header."
+        },
+        "failure_classification": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provisional_outcome": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "FR-E1-10: the provisional/reconciliation outcome of the attempt this decision routed \u2014 increment C's vocabulary (e.g. 'verified_provisional', 'reconciled'), or null when the attempt produced no provisional state. Required so a Tier-2 delegation's disposition is always readable from the decision that caused it."
+        }
+      }
+    },
+    "verifier_execution": {
+      "type": "object",
+      "required": [
+        "command",
+        "exit_status",
+        "evidence_ref"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The verifier command as executed, redacted at write time."
+        },
+        "exit_status": {
+          "type": "integer"
+        },
+        "evidence_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Addressable reference to the captured output; must resolve to a readable artifact. Required \u2014 a verifier execution whose evidence was not captured is recorded under insufficient_evidence instead, never as an evidence-free row."
+        }
+      }
+    },
+    "repair_cycle": {
+      "type": "object",
+      "required": [
+        "signature"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable failure signature. A signature occurring more than once is what row 7 counts as a REPEATED repair cycle."
+        },
+        "attempt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "evidence_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "intervention": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "injected_event": {
+      "type": "object",
+      "required": [
+        "at_task_index",
+        "outcome"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "at_task_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "usage_limit",
+            "auth_failure",
+            "server_error",
+            "timeout",
+            "success"
+          ]
+        },
+        "reset_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retry_after_sec": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "description": "Same closed shape as the preset's event_stream entries \u2014 the record replays what the preset declared, so an empty or misshapen event is a writer bug, not evidence."
+    },
+    "rollback": {
+      "type": "object",
+      "required": [
+        "kind",
+        "detail"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1
+        },
+        "at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "A switch-induced revert event. kind and detail are required \u2014 an empty rollback record explains nothing."
+    },
+    "estimate_bucket": {
+      "type": "object",
+      "required": [
+        "tokens",
+        "rate_per_million"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tokens": {
+          "type": [
+            "integer",
+            "number"
+          ],
+          "minimum": 0
+        },
+        "rate_per_million": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "description": "One priced token bucket: the count and the rate it was priced at. Both required \u2014 a bucket with tokens but no rate cannot recompute anything."
+    },
+    "estimate_inputs": {
+      "type": "object",
+      "required": [
+        "input",
+        "output"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "$ref": "#/$defs/estimate_bucket"
+        },
+        "output": {
+          "$ref": "#/$defs/estimate_bucket"
+        },
+        "cache_read": {
+          "$ref": "#/$defs/estimate_bucket"
+        },
+        "cache_write": {
+          "$ref": "#/$defs/estimate_bucket"
+        }
+      },
+      "description": "The closed, recomputable estimator-inputs shape: input and output buckets required, cache buckets optional, nothing else. The stored cost value must equal the sum over buckets of tokens/1e6 x rate_per_million \u2014 the executable reader (cost_reader.Cost) verifies that binding at construction; this schema pins the shape it verifies against."
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "mode": {
+          "const": "profile_sweep"
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "mode",
+        "profile_id"
+      ],
+      "description": "A matrix-sweep cell executes exactly one fixed profile."
+    },
+    {
+      "properties": {
+        "mode": {
+          "const": "cct_router"
+        },
+        "profile_id": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "description": "A live router run fixes no profile; per-attempt selections live in routing_decisions."
+    }
+  ]
+}

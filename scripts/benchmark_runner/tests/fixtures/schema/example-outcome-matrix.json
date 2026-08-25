@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "fingerprint": {
+    "registry_digest": "sha256:1f0c9a7e5b3d2c4a6e8f0b1d3a5c7e9f1b3d5a7c9e1f3b5d7a9c1e3f5b7d9a1c",
+    "preset_digest": "sha256:9e1f3b5d7a9c1e3f5b7d9a1c3e5f7b9d1a3c5e7f9b1d3a5c7e9f1b3d5a7c9e1f",
+    "execution_identity": [
+      {
+        "profile_id": "anthropic-sonnet",
+        "backend": "claude-code",
+        "provider": "anthropic-subscription",
+        "requested_model": "sonnet",
+        "effective_model": "sonnet",
+        "tool_profile": "full-cct",
+        "endpoint": "api.anthropic.com"
+      },
+      {
+        "profile_id": "local-qwen",
+        "backend": "claude-code",
+        "provider": "local-vllm",
+        "requested_model": "qwen3-coder-next",
+        "effective_model": null,
+        "tool_profile": "local-builder-minimal",
+        "endpoint": "local-gateway"
+      }
+    ],
+    "task_set_revision": "polyglot@3a1f9c2",
+    "toolchain_digest": "sha256:5b7d9a1c3e5f7b9d1a3c5e7f9b1d3a5c7e9f1b3d5a7c9e1f3b5d7a9c1e3f5b7d"
+  },
+  "trials": 2,
+  "trial_seeds": [
+    1701,
+    1702
+  ],
+  "cost_basis": "measured",
+  "cells": [
+    {
+      "task_id": "python/bowling",
+      "profile_id": "anthropic-sonnet",
+      "trial": 0,
+      "eligible": true,
+      "result": "pass",
+      "regressions": {
+        "lint": false,
+        "typecheck": false,
+        "coverage": false,
+        "security": false
+      },
+      "scope_violation": false,
+      "repeated_repair": false,
+      "intervention": false,
+      "cost": {
+        "value": 0.0412,
+        "provenance": "measured",
+        "estimator": null
+      },
+      "elapsed_seconds": 74.5,
+      "routing_run_ref": "runs/hybrid-001/python-bowling/anthropic-sonnet/trial-0/routing-run.json"
+    },
+    {
+      "task_id": "python/bowling",
+      "profile_id": "anthropic-sonnet",
+      "trial": 1,
+      "eligible": true,
+      "result": "pass",
+      "regressions": {
+        "lint": false,
+        "typecheck": false,
+        "coverage": false,
+        "security": false
+      },
+      "scope_violation": false,
+      "repeated_repair": false,
+      "intervention": false,
+      "cost": {
+        "value": 0.0398,
+        "provenance": "measured",
+        "estimator": null
+      },
+      "elapsed_seconds": 71.2,
+      "routing_run_ref": "runs/hybrid-001/python-bowling/anthropic-sonnet/trial-1/routing-run.json"
+    },
+    {
+      "task_id": "python/bowling",
+      "profile_id": "local-qwen",
+      "trial": 0,
+      "eligible": false,
+      "result": null,
+      "regressions": {
+        "lint": null,
+        "typecheck": null,
+        "coverage": null,
+        "security": null
+      },
+      "scope_violation": null,
+      "repeated_repair": null,
+      "intervention": null,
+      "cost": {
+        "value": null,
+        "provenance": "unavailable",
+        "estimator": null
+      },
+      "elapsed_seconds": null,
+      "routing_run_ref": null
+    },
+    {
+      "task_id": "python/bowling",
+      "profile_id": "local-qwen",
+      "trial": 1,
+      "eligible": false,
+      "result": null,
+      "regressions": {
+        "lint": null,
+        "typecheck": null,
+        "coverage": null,
+        "security": null
+      },
+      "scope_violation": null,
+      "repeated_repair": null,
+      "intervention": null,
+      "cost": {
+        "value": null,
+        "provenance": "unavailable",
+        "estimator": null
+      },
+      "elapsed_seconds": null,
+      "routing_run_ref": null
+    }
+  ]
+}

@@ -328,6 +328,137 @@ one conflict found while verifying finding 2.
    inside rounds 1–3 retain AIQ deliberately, as history of what those
    rounds addressed.
 
+## T1 build audit (owner review) — seven findings, all applied
+
+The owner reviewed the first T1 build before commit and found that the
+52 passing tests did not enforce the principal contracts. All findings
+verified in-tree (the validator blindness was reproduced: a mixed
+candidates+arms config and an empty fingerprint both returned zero
+errors) and resolved:
+
+1. **Parser enforcement.** `compare.py:_validate` now refuses a config
+   declaring both `candidates` and `arms`/`scenario` with its own
+   error, and refuses scenario-only configs with a pointer to the
+   routing-eval path instead of silently running them as candidate
+   comparisons. `routing_eval/scenario_config.py` is the executable
+   validator for the scenario shape (closed arm kinds, cct_router
+   requires a registry, cost_basis pattern, trial_seeds length ==
+   trials, budget ceiling if-and-only-if an oracle_budget arm, event
+   stream shapes); the T4 driver will load configs only through it.
+2. **Tests prove rejection.** test_routing_eval_schemas.py ships its
+   own validator covering $ref, oneOf, not, const, pattern, minLength,
+   minItems (with self-checks), and asserts the negatives: mixed
+   configs, empty fingerprints, empty cells, bad cost pairings, and
+   evidence-free verifier rows are all REJECTED, by schema and by the
+   executable parsers. Side-catch: the stricter validator exposed that
+   `cross-language-mini.json` has shipped with one candidate since
+   dfc85c7, violating the schema's own minItems:2 — pinned as a known
+   pre-existing violation (fixing a shipped preset is outside E1).
+3. **measured_cost reads the transcript stream.** It now mirrors
+   rb_measured_cost's selection rule: normalize JSON/JSONL, take the
+   LAST type:"result" record (or the single untyped object), and only
+   then validate the number. An assistant record carrying a
+   total_cost_usd key can no longer forge a measured cost.
+4. **Estimator strictness.** Negative/non-finite/boolean counts and
+   rates refuse the whole estimate; input AND output must both be
+   priced; consumed cache tokens without a cache rate refuse rather
+   than understate. Cost's documented invariants are enforced in
+   __post_init__, so `Cost(None, "measured")` cannot exist and
+   satisfies() never sees a degenerate value.
+5. **Raw executions vs derived arms.** routing-run's `arm` field is
+   replaced by `mode` (profile_sweep | cct_router) + `profile_id`,
+   with a oneOf pairing: a sweep record names its fixed profile, a
+   router record fixes none. The four derived arms are deliberately
+   unrepresentable as executions — a record claiming one is a
+   fabrication and fails validation.
+6. **Invariants encoded, not described.** Cost/provenance pairing is a
+   oneOf in both schemas; verifier evidence_ref is required and a
+   non-empty string; execution_identity requires all seven keys; the
+   matrix requires trial_seeds and cost_basis.
+7. **Stale gate.** This record refresh clears it.
+
+## T1 build audit round 2 (owner) — five findings, all applied
+
+The owner's second pre-commit audit found the executable and persisted
+contracts still fail-open in five places. Each was reproduced in-tree
+before fixing (a single-cct_router-arm config with a typo'd
+`trial_seedz` key and no cost_basis validated cleanly), then closed:
+
+1. **Complete control set at load time.** scenario_config now requires
+   each of `always_best`, `always_cheapest`, `oracle`, `cct_router`
+   exactly once (FR-E1-3), with `oracle_budget` the only optional kind
+   (at most once), and `cost_basis` is mandatory. The schema's `arms`
+   floor rose to minItems 4, with the composition rule enforced by the
+   parser the T4 driver loads through.
+2. **Closed keys + finite numbers.** Unknown top-level, arm, and event
+   keys are refused (`trial_seedz`, `regsitry`, `outcoem` all reject);
+   the budget ceiling refuses NaN/infinity/booleans.
+3. **Evidence containers are required.** routing-run now requires every
+   evidence container — a writer records an empty array, explicit
+   nulls, or an insufficient_evidence entry, never an absent key — so
+   missing evidence is explicit rather than indistinguishable from an
+   incomplete writer. routing_decision requires its full FR-E1-10
+   vocabulary including the new `provisional_outcome` field.
+4. **Estimated cells keep their table identity.** Matrix cell cost
+   gains a required `estimator`: estimated cells must name their price
+   table (a versionless estimated cell rejects), measured/unavailable
+   cells carry null — the artifact can now PROVE its costs came from
+   the declared basis table.
+5. **Reproducibility + robustness.** `Cost` refuses empty estimator
+   inputs (an estimate that cannot be recomputed is not evidence);
+   malformed price-table roots yield `unavailable` instead of an
+   AttributeError, and load_price_table raises a named error on a
+   non-object root.
+
+## T1 build audit round 3 (owner) — three findings, all applied
+
+The owner's third pre-commit audit found the persisted/config contracts
+still fail-open at three seams. All three resolved:
+
+1. **Axes own their fields, both in schema and in code.** Each
+   compare-config oneOf branch now requires its own fields and forbids
+   the other axis's (candidate branch forbids arms/scenario/cost_basis/
+   trials/trial_seeds/event_stream/budget_ceiling_usd; scenario branch
+   requires cost_basis and forbids candidates/runs/
+   attempt_timeout_seconds). compare.py additionally refuses
+   scenario-only keys on a candidate config even when scenario/arms are
+   absent — a cost_basis the author clearly intended is never silently
+   ignored. The test validator gained anyOf support (with self-checks)
+   so these rejections are proven, not described.
+2. **Evidence containers cannot be hollow.** The owner's reproduction
+   (injected_events [{}], considered [{}], empty baseline/
+   quality_gates/tier2, rollbacks [{}], insufficient_evidence {}) now
+   fails per container: injected events share the preset's closed
+   event shape; considered candidates require id/verdict/reason;
+   baseline, quality_gates (through findings_by_severity), and tier2
+   require their fields (explicit nulls, never absent keys); rollbacks
+   require kind and detail; insufficient_evidence is a keyed map whose
+   entries REQUIRE a reason, with an empty object rejected because it
+   asserts neither sufficiency nor insufficiency.
+3. **Estimator inputs are recomputable, not merely non-empty.**
+   The inputs shape is closed: input and output buckets required,
+   cache buckets optional, every present bucket pairing a valid token
+   count with a valid rate_per_million; unknown buckets refuse. A
+   round-trip test proves whatever estimate_cost emits reconstructs to
+   the same value.
+
+## T1 build audit round 4 (owner) — one finding, applied
+
+The last open seam in the cost-reproducibility contract: an estimated
+cost was not bound to its recorded inputs. Both halves of the owner's
+reproduction are closed:
+
+- **Schema**: `$defs/estimate_inputs` pins the closed shape (input and
+  output buckets required, cache optional, every bucket pairing tokens
+  with rate_per_million), and the estimated branch of the cost oneOf
+  references it — `inputs: {"input": {"tokens": 1}}` no longer
+  validates.
+- **Construction**: `Cost.__post_init__` recomputes the total from the
+  recorded inputs and refuses a value that does not equal it
+  (isclose, rel 1e-9). A structurally valid understated cost — the
+  owner reproduced value=1.0 over inputs recomputing to ~0.000002 —
+  can no longer exist to win `always_cheapest`.
+
 ## Verdict
 
 Verdict: aligned

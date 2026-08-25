@@ -411,15 +411,30 @@ silently breaks comparability.
 | `benchmarks/schema/outcome-matrix.schema.json` | NEW — decision 3: `task × profile × trial` cells + reuse fingerprint |
 | `benchmarks/schema/compare-config.schema.json` | extend: `scenario`, `arms[]` (decision 1) |
 | `benchmarks/presets/hybrid-routing.json` | NEW — the hybrid scenario preset + event stream |
-| `benchmarks/adapters/routing_hybrid/` | NEW — scenario driver; drives the existing test seams (decision 2) |
-| `benchmarks/scenarios/outcome_matrix.py` | NEW — matrix sweep, fingerprint gate, derived control arms (decision 3) |
-| `benchmarks/report/quality_fn.py` | NEW — versioned `quality_fn: v1` + deterministic ties (decision 5) |
-| `benchmarks/report/routing_quality.py` | NEW — #109 metrics, Pareto, control-set gate (decisions 4, 5, 6) |
-| `benchmarks/report/price_table_v1.json` | NEW — versioned estimator table (§Cost and reporting contract) |
-| `benchmarks/report/cost_reader.py` | NEW — routing-eval-owned `total_cost_usd` reader + estimator fallback |
-| `benchmarks/report/redaction.py` | NEW or extend — decision 8 |
-| `benchmarks/tests/` | regressions per task below |
+| `benchmarks/pricing/price-table-v1.json` | NEW — versioned estimator table (§Cost and reporting contract) |
+| `scripts/benchmark_runner/routing_eval/cost_reader.py` | NEW — routing-eval-owned `total_cost_usd` reader + estimator fallback |
+| `scripts/benchmark_runner/routing_eval/outcome_matrix.py` | NEW — matrix sweep, fingerprint gate, derived control arms (decision 3) |
+| `scripts/benchmark_runner/routing_eval/quality_fn.py` | NEW — versioned `quality_fn: v1` + deterministic ties (decision 5) |
+| `scripts/benchmark_runner/routing_eval/routing_quality.py` | NEW — #109 metrics, Pareto, control-set gate (decisions 4, 5, 6) |
+| `scripts/benchmark_runner/routing_eval/redaction.py` | NEW — decision 8 |
+| `scripts/benchmark_runner/routing_eval/scenario_config.py` | NEW — executable scenario-config validation; the schema documents, this enforces (T1) |
+| `scripts/benchmark_runner/routing_eval/scenario.py` | NEW — scenario driver; drives the existing test seams (decision 2) |
+| `scripts/benchmark_runner/compare.py` | extend: refuse mixed candidates+arms configs; direct scenario configs to routing_eval (T1) |
+| `scripts/benchmark_runner/tests/` | regressions per task below, with fixtures under `tests/fixtures/schema/` |
 | `README.md`, `CHANGELOG.md` | document the scenario and its artifacts |
+
+**Placement confirmed in T1 against the real layout** (this supersedes
+rev-1's guess at `benchmarks/scenarios/` and `benchmarks/report/`):
+Python for the runner lives under `scripts/benchmark_runner/`, so E1's
+modules form a `routing_eval` subpackage there, beside `compare.py` and
+`report.py`. `benchmarks/` holds data — `schema/`, `presets/`,
+`pricing/` — plus task adapters under `benchmarks/adapters/<id>/`. E1
+adds no task adapter: the hybrid scenario is a comparison scenario over
+existing adapters, not a new task source. Schemas here are
+documentation-grade, validated by the hand-rolled checker in
+`scripts/benchmark_runner/tests/test_schemas.py` against fixtures in
+`tests/fixtures/schema/`; E1 follows that convention and adds no
+JSON-Schema runtime dependency.
 
 **No production routing file appears in this table, and that is a
 contract**: per decision 2, a diff touching `scripts/lib/routing-*.sh`,

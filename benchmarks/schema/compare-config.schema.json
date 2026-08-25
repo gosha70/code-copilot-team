@@ -4,8 +4,84 @@
   "title": "CCT benchmark compare-config",
   "description": "Configuration consumed by `./scripts/benchmark compare --config <path>`. Lists multiple (backend, model, env) candidates to evaluate against the same benchmark task set; the harness runs them sequentially under one parent run-dir and aggregates the report.",
   "type": "object",
-  "required": ["benchmark", "candidates"],
+  "required": [
+    "benchmark"
+  ],
   "additionalProperties": false,
+  "oneOf": [
+    {
+      "required": [
+        "candidates"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "arms"
+            ]
+          },
+          {
+            "required": [
+              "scenario"
+            ]
+          },
+          {
+            "required": [
+              "cost_basis"
+            ]
+          },
+          {
+            "required": [
+              "trials"
+            ]
+          },
+          {
+            "required": [
+              "trial_seeds"
+            ]
+          },
+          {
+            "required": [
+              "event_stream"
+            ]
+          },
+          {
+            "required": [
+              "budget_ceiling_usd"
+            ]
+          }
+        ]
+      },
+      "description": "Candidate comparison \u2014 the original shape, unchanged. Scenario-only fields are forbidden here: a candidate config carrying cost_basis or trial_seeds would be silently ignored by the candidate runner, which is fail-open."
+    },
+    {
+      "required": [
+        "scenario",
+        "arms",
+        "cost_basis"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "candidates"
+            ]
+          },
+          {
+            "required": [
+              "runs"
+            ]
+          },
+          {
+            "required": [
+              "attempt_timeout_seconds"
+            ]
+          }
+        ]
+      },
+      "description": "Scenario comparison (routing-eval E1). cost_basis is REQUIRED \u2014 one declared basis per comparison is normative. Candidate-only fields (candidates, runs, attempt_timeout_seconds) are forbidden; 'trials' is the scenario-side repetition field."
+    }
+  ],
   "properties": {
     "benchmark": {
       "type": "string",
@@ -20,7 +96,10 @@
     },
     "task": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 },
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
       "description": "Optional task-id filter; same shape as `./scripts/benchmark run --task <id>` (repeatable). Omit to run every task the adapter exposes."
     },
     "attempt_timeout_seconds": {
@@ -31,14 +110,133 @@
     "candidates": {
       "type": "array",
       "minItems": 2,
-      "items": { "$ref": "#/$defs/candidate" },
-      "description": "Two or more LLM candidates to compare. Single-candidate comparisons are rejected — use `./scripts/benchmark run` for that. Each candidate runs sequentially in declaration order."
+      "items": {
+        "$ref": "#/$defs/candidate"
+      },
+      "description": "Two or more LLM candidates to compare. Single-candidate comparisons are rejected \u2014 use `./scripts/benchmark run` for that. Each candidate runs sequentially in declaration order. Mutually exclusive with `arms`."
+    },
+    "scenario": {
+      "type": "string",
+      "enum": [
+        "hybrid-routing"
+      ],
+      "description": "Comparison scenario id. Present only for scenario comparisons, where the unit of comparison is a ROUTING POLICY rather than a fixed (backend, model) candidate. Requires `arms`; forbidden alongside `candidates`."
+    },
+    "arms": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "$ref": "#/$defs/arm"
+      },
+      "description": "Routing-policy arms compared over the same task set, trial seeds, and injected event stream. The four mandatory kinds (always_best, always_cheapest, oracle, cct_router) must each appear exactly once \u2014 a report without its complete control set refuses to publish a cct_router figure \u2014 and oracle_budget is the only optional kind. minItems enforces the floor; the composition rule is enforced by benchmark_runner.routing_eval.scenario_config, through which the scenario driver loads every config. Mutually exclusive with 'candidates'."
+    },
+    "cost_basis": {
+      "type": "string",
+      "pattern": "^(measured|estimated@[A-Za-z0-9._-]+)$",
+      "description": "The single cost provenance every cell used for cost must satisfy: 'measured' (backend-reported total_cost_usd) or 'estimated@<price-table-version>'. Mixed provenance is refused everywhere cost is used \u2014 baseline selection, the cost axis, the Pareto frontier, and oracle_budget. When cells cannot meet the declared basis the cost axis is withheld as insufficient_evidence rather than partially drawn. Scenario comparisons only."
+    },
+    "trials": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Trial count per (task, profile) cell for a scenario comparison. Trials are a DIMENSION of the outcome matrix, never averaged away before it is stored. A single-trial run is labelled as such and is never reported as a rate. Scenario comparisons only; `runs` remains the candidate-comparison field."
+    },
+    "trial_seeds": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      },
+      "description": "Explicit per-trial seeds, paired across every arm so each arm sees the same trial under the same conditions. Length must equal `trials`. Part of the preset digest, so changing a seed invalidates outcome-matrix reuse. Scenario comparisons only."
+    },
+    "event_stream": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/injected_event"
+      },
+      "description": "The deterministic provider events injected during the scenario, in order. Supplied through the documented test-only seams (CCT_SUPERVISOR_HARNESS_CMD, CCT_ROUTING_PROBE_CMD) as the CHILD's output, so the real unmodified classifier does its real work on it. Part of the preset digest. Scenario comparisons only."
+    },
+    "budget_ceiling_usd": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Optional PER-CELL cost ceiling enabling the oracle_budget arm. The ceiling is per-cell and only per-cell: it is asserted for every selected cell, and NO claim is made about the arm's summed cost. Global-budget allocation is out of scope. Scenario comparisons only."
     }
   },
   "$defs": {
+    "arm": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "always_best",
+            "always_cheapest",
+            "oracle",
+            "oracle_budget",
+            "cct_router"
+          ],
+          "description": "Which routing policy this arm represents. always_best / always_cheapest / oracle / oracle_budget are DERIVED from the outcome matrix. Only cct_router executes live, because its choices depend on the injected event stream and on real failure classification."
+        },
+        "registry": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to the routing registry this arm evaluates under. Required for cct_router; the derived arms read eligibility from the same registry. Its parsed digest is a component of the outcome-matrix reuse fingerprint, so any registry edit invalidates reuse."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional human-readable label; defaults to `kind`. Must be unique across arms."
+        }
+      }
+    },
+    "injected_event": {
+      "type": "object",
+      "required": [
+        "at_task_index",
+        "outcome"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "at_task_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based index into the scenario's task order at which this event is injected."
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "usage_limit",
+            "auth_failure",
+            "server_error",
+            "timeout",
+            "success"
+          ],
+          "description": "The provider outcome the injected child output represents. The scenario emits a transcript of this shape; the router's own unmodified classifier decides what it means. E1 never injects a classification."
+        },
+        "reset_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional ISO-8601 reset instant carried by the injected transcript, exercising the recovery-timing precedence chain. Null when the simulated provider states no reset."
+        },
+        "retry_after_sec": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Optional Retry-After the injected transcript carries. Null when absent."
+        }
+      }
+    },
     "candidate": {
       "type": "object",
-      "required": ["backend"],
+      "required": [
+        "backend"
+      ],
       "additionalProperties": false,
       "properties": {
         "name": {
@@ -50,17 +248,19 @@
           "type": "string",
           "minLength": 1,
           "pattern": "^[^:]+$",
-          "description": "Backend family (copilot CLI), e.g. 'claude-code', 'stub'. The deprecated combined form 'claude-code:sonnet' is rejected — split into separate backend + model fields."
+          "description": "Backend family (copilot CLI), e.g. 'claude-code', 'stub'. The deprecated combined form 'claude-code:sonnet' is rejected \u2014 split into separate backend + model fields."
         },
         "model": {
           "type": "string",
           "default": "",
-          "description": "Model identifier passed to the backend, e.g. 'sonnet', 'opus', 'claude-sonnet-4-6', or — when routing through a gateway — the model name the gateway serves (e.g. 'meta-llama/Llama-3-70B-Instruct'). The stub backend ignores this field."
+          "description": "Model identifier passed to the backend, e.g. 'sonnet', 'opus', 'claude-sonnet-4-6', or \u2014 when routing through a gateway \u2014 the model name the gateway serves (e.g. 'meta-llama/Llama-3-70B-Instruct'). The stub backend ignores this field."
         },
         "env": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
-          "description": "Provider-routing env vars applied only for this candidate's runs and restored afterward. Typical keys: ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_DEFAULT_SONNET_MODEL (for Claude Code's gateway support — see https://code.claude.com/docs/en/llm-gateway). VALUES MAY CONTAIN SECRETS and are read into os.environ for the candidate's runs; only the KEY NAMES are persisted to compare-manifest.json."
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Provider-routing env vars applied only for this candidate's runs and restored afterward. Typical keys: ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_DEFAULT_SONNET_MODEL (for Claude Code's gateway support \u2014 see https://code.claude.com/docs/en/llm-gateway). VALUES MAY CONTAIN SECRETS and are read into os.environ for the candidate's runs; only the KEY NAMES are persisted to compare-manifest.json."
         }
       }
     }
