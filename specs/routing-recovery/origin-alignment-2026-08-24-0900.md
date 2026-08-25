@@ -1,9 +1,9 @@
 # Origin Alignment Check — routing-recovery
 
 Date: 2026-08-24 09:00 (record opened)
-Last revised: 2026-08-24 — plan review round 1 (owner): three
-runtime-contract amendments applied (see below); GO granted;
-child issue #257 filed and stamped into plan.md frontmatter
+Last revised: 2026-08-25 — follow-up implementation review completed
+the explain, wake handoff, child capability, parser, and cap-scheduling
+boundaries described in the build audit below; scope remains increment D
 Trigger: rev-1 SDD bundle authored for increment D of #109 at the
 owner's direction ("The strongest next increment is D … my
 recommended order is: 1. D — probes/recovery/failback"), immediately
@@ -99,13 +99,130 @@ plan/spec/tasks, all execution-contract:
    classification → transition); no cost-file capability in the
    probe child; credential values child-env only; the
    credential-echo and malformed-evidence-still-costed cases pinned.
-3. **Wake is an idempotent argv replay**: the supervisor records a
-   structured JSON argv vector (never a shell string); wake replays
-   it verbatim (no eval/sh -c/reconstruction), revalidates
-   disposition/mode/restriction/locks/root, and claims a per-park
+3. **Wake is an idempotent CLOSED RECONSTRUCTION** (amended during
+   T3 — see below): the supervisor records run IDENTITY, never a
+   command; wake rebuilds the invocation from a fixed flag list with
+   the executable from its own installation, re-validating every
+   ledger value; it revalidates disposition/mode/restriction/locks/
+   root, requires a probe-qualified candidate, and claims a per-park
    wake GENERATION atomically before launch — replays of a claimed
-   generation are journaled no-ops; pre-exec launch failure releases
+   generation are journaled no-ops; an unacknowledged launch releases
    the claim retryably; a live run lock always refuses.
+
+## Amendment during build (T3 review round 2)
+
+The owner's T3 review established that the originally approved
+"verbatim argv replay" stores an execution capability in a file the
+supervisor itself treats as untrusted, and reproduced arbitrary
+command execution from a forged ledger. Plan **Amendment A1** replaces
+it with closed reconstruction, and the spec/tasks were amended to
+match before any T3 code was committed.
+
+This does not change what the ORIGIN asked for. The origin (issue #257
+and the user's sequencing message) asks for probe-verified recovery
+with bounded, operator-controlled relaunch — "Tier-2 is delegated
+bounded work, not another unrestricted failover target", and D
+"closes the remaining operational-control gaps". Verbatim replay was
+a MECHANISM chosen to serve that intent; closed reconstruction serves
+the same intent strictly more tightly (it can launch everything the
+replay could launch legitimately, and nothing it could be tricked
+into). The amendment narrows mechanism, not scope.
+
+Rounds 5–6 corrected the wake boundary under plan Amendment A4.
+`routing.recovery` remains restriction-only and contains only the two
+vetoes `wake_enabled` and `auto_failback_enabled`; the abandoned
+repository-owned `wake_caps` mechanism was not aligned with FR-D8 and
+is removed. Explicit `--wake` reconstructs only this installation's
+code-owned default invocation; non-default grants are refused for
+manual resume because the mutable ledger is evidence, not authority.
+The same amendment tightens probe
+boundaries: atomic cap+reservation using current spend plus the pending
+estimate, infrastructure/accounting failures kept distinct from cap
+deferrals, no accounting capability in the child, mechanism validated
+before spend, interrupted ticks reaped, and acknowledgement after full
+routing admission.
+
+Round 4 added four more, under plan Amendment A3: the declared probe
+time bound is now ENFORCED through the repo's proven bounded runner (a
+hanging provider could otherwise hang `tick`, which would stop every
+profile from ever recovering); the wake acknowledgement
+moved after every fail-closed startup check, so a run that refuses for
+a corrupt ledger or a terminated policy stays retryable; and probe
+accounting is serialised, because T3 releases the state lock before
+probing and an unserialised debit dropped rows. All four narrow what
+an automatic wake or probe may do.
+
+Round 3 added five further narrowings under plan Amendment A2. Its
+initial exact-cap-replay rule is superseded by A3/A4's code-owned-
+defaults-only rule; the remaining current decisions are:
+bounded-work modes (`--delegate`/`--reconcile`) are refused by name
+rather than auto-woken; persisted caps are closed and type-checked as
+evidence before the default-only authority check; the launch
+acknowledgement is a durable
+`acked` generation released only through a locked CAS; fallback
+marking requires a live run lock; and wake/failback outcomes are
+persisted as closed named events. All five reduce what an automatic
+wake may do — none widen scope.
+
+Also recorded, both narrowings rather than additions:
+`routing.recovery.wake_enabled` is promoted in T3 rather than T5
+(behaviour and key must ship together), and a routed supervisor now
+refuses a second run over one ledger, taking its run lock before the
+ledger is read or created.
+
+## Build completion audit (2026-08-24)
+
+The 2026-08-25 direct implementation review closed ten concrete
+runtime and observability gaps without widening increment D. Probe
+health now requires a run-specific value in the parsed backend result;
+prompt/transcript/stderr echoes are not evidence. A live supervisor
+drives due probes through the same globally locked tick path when a
+recovery marker is its only selection blocker, so optional timer
+generators are no longer an undeclared runtime prerequisite. Tick
+discovers registered-worktree ledgers by default and documents an
+explicit shared ledger root. The remaining fixes preserve profile
+tenure in all launch modes, isolate reconcile-on-recovery artifacts,
+advance unverifiable scheduling backoff without inventing provider
+failure, remove private probe directories, keep malformed cost text on
+the estimate path, render effective state, and update the promoted-key
+template caption. These are corrections to the existing D contract,
+not new routing authority or origin scope.
+
+The follow-up review closed nine regressions introduced by that audit:
+`explain` again loads and renders effective circuit state; a wake passes
+the exact validated registry and ledger root to its child; probe routing
+paths are rebound to a private tree instead of unset into production
+`$HOME` defaults; credentials are delivered only through child env and
+stay out of argv; structured result and measured-cost records survive
+non-JSON notices; surrounding response whitespace is normalized; and
+cap deferrals advance scheduling backoff without inventing provider
+failure. These are implementation corrections to the same D decisions,
+not new authority or scope.
+
+The final direct implementation review removed the last inferred
+authority path: automatic wake reconstructs only this installation's
+code-owned default supervisor invocation. The ledger supplies bounded
+identity and evidence; repository configuration supplies only the two
+vetoes. Non-default caps or `on-incomplete` remain operator-resumed.
+
+The same audit made every new unattended lock path fail closed on an
+existing lock, including one recording a dead PID. PID liveness followed
+by deletion can remove a replacement lock acquired between those
+operations; tick, probe accounting, wake, and direct supervisor startup
+therefore preserve the path and require explicit operator recovery.
+The older increment-B state lock retains its already-published stale-
+takeover contract; this change is limited to D's new scheduler and run
+locks.
+
+The completed D regression suite is 375/375. It includes a concurrent
+auth-disable regression proving that a rejected stale transition is
+journalled without preventing the durable attempt checkpoint. A
+combined isolated
+mutation of recovery-state selection, pending-estimate cap admission,
+measured-cost publication, default-only wake authority, and dead-run-
+lock refusal produced 15 failures. Adjacent routing, config, structure,
+generation, and policy/spec gates are green; the local UI-harness suite
+skips because `tsx` is unavailable and is unrelated to D.
 
 ## Verdict
 

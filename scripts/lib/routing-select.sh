@@ -15,8 +15,8 @@
 #   2. tier: B is tier1-ONLY            -> tier2 never selected
 #   3. role: must hold "build"
 #   4. attempted set (attempt-local)    -> already tried/incompatible
-#   5. circuit state: disabled/cooldown -> blocked (pool outranks
-#      profile via rs_effective_info); unknown is ELIGIBLE but
+#   5. circuit state: disabled/cooldown and D's recovery markers ->
+#      blocked (pool outranks profile via rs_effective_info); unknown is ELIGIBLE but
 #      journaled "never treated as healthy" — B has no probes, and a
 #      never-run profile must be reachable.
 # Candidates are considered in a TOTAL order: tier -> priority ASC ->
@@ -113,6 +113,8 @@ rt_select() {  # <effective-json> <attempted-json-array> [role] [route-class]
                         'if $e == null or $u < $e then $u else $e end')
                 fi
                 ;;
+            degraded|probe_due|probing|pool:degraded|pool:probe_due|pool:probing)
+                _consider "$id" rejected "recovery state '$state' is not selectable until a canary is probe-qualified healthy" ;;
             *)
                 if [[ "$selected" == "null" ]]; then
                     selected=$(jq -c '{id:.[0], backend:.[1], provider:.[2], model:.[3],

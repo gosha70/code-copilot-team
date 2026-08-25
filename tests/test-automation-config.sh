@@ -633,8 +633,25 @@ w rr7b.json '{"schema_version":2,"profile":"advisory","routing":{"tier2":{"deleg
 assert_rejects "routing: tier2.delegation_enabled must be boolean" "$TMP/rr7b.json" "delegation_enabled must be a boolean"
 w rr7c.json '{"schema_version":2,"profile":"advisory","routing":{"tier2":true}}'
 assert_rejects "routing: tier2 must be an object" "$TMP/rr7c.json" "routing.tier2 must be an object"
-w rr8.json '{"schema_version":2,"profile":"advisory","routing":{"recovery":{"failback":"next-task-boundary"}}}'
-assert_rejects "routing: recovery refused until its increment ships" "$TMP/rr8.json" "owned by a later #109 increment"
+# routing.recovery was promoted refused->implemented->tested with
+# #257 D: wake_enabled and auto_failback_enabled (restrictions only)
+# are accepted; everything
+# else in the block is still refused BY NAME, so a key nothing
+# enforces is never taken as inert configuration.
+w rr8.json '{"schema_version":2,"profile":"advisory","routing":{"recovery":{"wake_enabled":false}}}'
+assert "routing: recovery.wake_enabled is accepted (promoted with #257 D T3)" bash "$V" "$TMP/rr8.json"
+w rr8a.json '{"schema_version":2,"profile":"advisory","routing":{"recovery":{"auto_failback_enabled":false}}}'
+assert "routing: recovery.auto_failback_enabled is accepted" bash "$V" "$TMP/rr8a.json"
+w rr8b.json '{"schema_version":2,"profile":"advisory","routing":{"recovery":{"failback":"next-task-boundary"}}}'
+assert_rejects "routing: the recovery block is closed (failback is not a key)" "$TMP/rr8b.json" "unknown key 'routing.recovery.failback'"
+w rr8c.json '{"schema_version":2,"profile":"advisory","routing":{"recovery":{"wake_enabled":"yes"}}}'
+assert_rejects "routing: recovery.wake_enabled must be boolean" "$TMP/rr8c.json" "wake_enabled must be a boolean"
+w rr8c2.json '{"schema_version":2,"profile":"advisory","routing":{"recovery":{"auto_failback_enabled":"yes"}}}'
+assert_rejects "routing: recovery.auto_failback_enabled must be boolean" "$TMP/rr8c2.json" "auto_failback_enabled must be a boolean"
+w rr8e.json '{"schema_version":2,"profile":"advisory","routing":{"recovery":{"wake_caps":{"max_attempts":20}}}}'
+assert_rejects "routing: recovery cannot grant wake authority" "$TMP/rr8e.json" "unknown key 'routing.recovery.wake_caps'"
+w rr8d.json '{"schema_version":2,"profile":"advisory","routing":{"recovery":true}}'
+assert_rejects "routing: recovery must be an object" "$TMP/rr8d.json" "routing.recovery must be an object"
 w rr9.json '{"schema_version":2,"profile":"advisory","routing":{"enabled":"yes"}}'
 assert_rejects "routing.enabled must be boolean" "$TMP/rr9.json" "routing.enabled must be a boolean"
 w rr10.json '{"schema_version":2,"profile":"advisory","routing":{"allowed_profiles":[]}}'
@@ -650,8 +667,12 @@ assert_rejects "routing must be an object" "$TMP/rr14.json" "routing must be an 
 
 # Schema parity: the block is closed and restriction-only BY SHAPE.
 assert "schema: routing is closed" jq -e '.properties.routing.additionalProperties == false' "$SCHEMA"
-assert "schema: routing has ONLY the four restriction fields (tier2 promoted with #254 T6)" \
-    jq -e '.properties.routing.properties | keys | sort == ["allowed_profiles","default_task_route","enabled","tier2"]' "$SCHEMA"
+assert "schema: routing has ONLY the five restriction fields (tier2 #254 T6, recovery #257 D T3)" \
+    jq -e '.properties.routing.properties | keys | sort == ["allowed_profiles","default_task_route","enabled","recovery","tier2"]' "$SCHEMA"
+assert "schema: the recovery block is closed" \
+    jq -e '.properties.routing.properties.recovery.additionalProperties == false' "$SCHEMA"
+assert "schema: the recovery block carries only its two restrictions" \
+    jq -e '.properties.routing.properties.recovery.properties | keys | sort == ["auto_failback_enabled","wake_enabled"]' "$SCHEMA"
 assert "schema: the tier2 block is closed" \
     jq -e '.properties.routing.properties.tier2.additionalProperties == false' "$SCHEMA"
 assert "schema: the tier2 block carries only delegation_enabled" \
@@ -669,4 +690,3 @@ if [[ "$PASS" -ne "${TEST_AUTOMATION_CONFIG_EXPECTED_PASS:-0}" ]]; then
     FAIL=$((FAIL+1))
 fi
 [[ $FAIL -eq 0 ]]
-

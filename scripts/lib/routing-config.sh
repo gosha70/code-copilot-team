@@ -47,8 +47,11 @@ RC_DATA_POLICIES="approved-cloud local-only"
 # implements one, its task moves that key from refused to accepted AND
 # behaviorally tested (a crisp audit trail for when config becomes
 # real).
-RC_POLICY_KEYS="enabled preferred_profile"
-RC_POLICY_FUTURE_KEYS="max_switches_per_task failback healthy_probes_required minimum_profile_dwell_sec"
+RC_POLICY_KEYS="enabled preferred_profile failback healthy_probes_required minimum_profile_dwell_sec"
+RC_POLICY_FUTURE_KEYS="max_switches_per_task"
+RC_HEALTHY_PROBES_REQUIRED_DEFAULT=2
+RC_MINIMUM_PROFILE_DWELL_SEC_DEFAULT=300
+RC_FAILBACK_DEFAULT="auto"
 
 RC_PROFILE_REQUIRED="id backend provider model capability_tier priority quota_pool roles tool_profile data_policy"
 RC_PROFILE_OPTIONAL="credential_mode credential_env protocol base_url base_url_env"
@@ -312,7 +315,7 @@ rc_validate() {
     while IFS= read -r k; do
         [[ -z "$k" ]] && continue
         if _rc_in_list "$k" "$RC_POLICY_FUTURE_KEYS"; then
-            viol "[policy] '$k' is not supported in increment A (its behavior arrives with the failover/recovery increments) — a key nothing enforces is refused, never accepted as inert configuration"
+            viol "[policy] '$k' is not implemented by an owning increment — a key nothing enforces is refused, never accepted as inert configuration"
         elif ! _rc_in_list "$k" "$RC_POLICY_KEYS"; then
             viol "[policy] unknown key '$k'"
         fi
@@ -320,6 +323,18 @@ rc_validate() {
     local pv
     if pv=$(rc_get policy enabled); then
         [[ "$(rc_type policy enabled)" == "bool" ]] || viol "[policy] enabled must be a boolean"
+    fi
+    if pv=$(rc_get policy healthy_probes_required); then
+        [[ "$(rc_type policy healthy_probes_required)" == "int" && "$pv" -ge 1 ]] \
+            || viol "[policy] healthy_probes_required must be an integer >= 1"
+    fi
+    if pv=$(rc_get policy minimum_profile_dwell_sec); then
+        [[ "$(rc_type policy minimum_profile_dwell_sec)" == "int" && "$pv" -ge 0 ]] \
+            || viol "[policy] minimum_profile_dwell_sec must be an integer >= 0"
+    fi
+    if pv=$(rc_get policy failback); then
+        [[ "$(rc_type policy failback)" == "string" && ( "$pv" == "auto" || "$pv" == "operator" ) ]] \
+            || viol "[policy] failback must be 'auto' or 'operator'"
     fi
 
     # [route_classes.*]
@@ -455,7 +470,7 @@ rc_profile_tuple() {
 # The most-restrictive combination of the two layers:
 #   - refuses to compose over an invalid registry;
 #   - re-checks (defense in depth) that the repo routing block carries
-#     ONLY the three restriction keys — a merge must never consume a
+#     ONLY the closed restriction keys — a merge must never consume a
 #     block the standalone validator would refuse;
 #   - enabled = user [policy].enabled AND repo routing.enabled (each
 #     defaulting true when absent — the registry's presence is the
@@ -489,7 +504,8 @@ rc_effective() {
         for k in $(jq -r 'keys[]' <<< "$rblock" 2>/dev/null); do
             case "$k" in
                 enabled|allowed_profiles|default_task_route) ;;
-                tier2) ;;  # promoted with #254 T6 (restriction-only; validated below)
+                tier2) ;;     # promoted with #254 T6 (restriction-only; validated below)
+                recovery) ;;  # promoted with #257 D T3 (restriction-only; validated below)
                 *) viol "the repo routing block carries a non-restriction key '$k' — a repository can narrow user routing authority, never create it (validate-automation-config refuses this block)" ;;
             esac
         done
@@ -552,12 +568,58 @@ rc_effective() {
         t2_allowed=false
     fi
 
+    # recovery wake (#257 D T3, promoted refused->implemented->tested):
+    # RESTRICTION-ONLY — a repository may FORBID `routing tick --wake`
+    # from relaunching its own parked routed runs
+    # (routing.recovery.wake_enabled = false). Same explicit-null
+    # discipline as `enabled` and tier2.
+    local wake_allowed=true
+    if [[ "$(jq -r 'if . == null or (.recovery == null) or (.recovery.wake_enabled == null) then "true" else (.recovery.wake_enabled | tostring) end' <<< "$rblock")" == "false" ]]; then
+        wake_allowed=false
+    fi
+    local auto_failback_allowed=true
+    if [[ "$(jq -r 'if . == null or (.recovery == null) or (.recovery.auto_failback_enabled == null) then "true" else (.recovery.auto_failback_enabled | tostring) end' <<< "$rblock")" == "false" ]]; then
+        auto_failback_allowed=false
+    fi
+
     jq -n --argjson en "$([[ "$enabled" == "true" ]] && echo true || echo false)" \
           --argjson cands "$out" --arg dtr "$dtr" \
           --argjson t2 "$([[ "$t2_allowed" == "true" ]] && echo true || echo false)" \
+          --argjson wk "$([[ "$wake_allowed" == "true" ]] && echo true || echo false)" \
+          --argjson af "$([[ "$auto_failback_allowed" == "true" ]] && echo true || echo false)" \
           '{enabled: $en, candidates: $cands,
             default_task_route: (if $dtr == "" then null else $dtr end),
-            tier2_delegation_allowed: $t2}'
+            tier2_delegation_allowed: $t2, wake_allowed: $wk,
+            auto_failback_allowed: $af}'
+}
+
+# rc_wake_allowed <effective-json> — THE shared read of the promoted
+# recovery restriction (#257 D T3). Explicit-null discipline: an
+# explicit false must stay false (jq's // would widen it to true).
+rc_wake_allowed() {
+    jq -r 'if .wake_allowed == null then true else .wake_allowed end' <<< "$1"
+}
+
+rc_auto_failback_allowed() {
+    jq -r 'if .auto_failback_allowed == null then true else .auto_failback_allowed end' <<< "$1"
+}
+
+rc_healthy_probes_required() {
+    local v
+    v=$(rc_get policy healthy_probes_required 2>/dev/null || echo "")
+    printf '%s\n' "${v:-$RC_HEALTHY_PROBES_REQUIRED_DEFAULT}"
+}
+
+rc_minimum_profile_dwell_sec() {
+    local v
+    v=$(rc_get policy minimum_profile_dwell_sec 2>/dev/null || echo "")
+    printf '%s\n' "${v:-$RC_MINIMUM_PROFILE_DWELL_SEC_DEFAULT}"
+}
+
+rc_failback_policy() {
+    local v
+    v=$(rc_get policy failback 2>/dev/null || echo "")
+    printf '%s\n' "${v:-$RC_FAILBACK_DEFAULT}"
 }
 
 # rc_tier2_allowed <effective-json> — THE shared read of the promoted

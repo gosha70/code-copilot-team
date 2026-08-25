@@ -523,9 +523,8 @@ if [[ "$(q 'has("routing")')" == "true" ]]; then
                     violation "routing.$k: a repository cannot DEFINE execution profiles — repo configuration narrows user routing authority, never creates it (profiles live in ~/.code-copilot-team/routing.toml)" ;;
                 credential*|base_url*|protocol|model|backend|provider|quota_pool|capability_tier|tier|roles|tool_profile|data_policy)
                     violation "routing.$k: a repository cannot introduce credential, endpoint, identity, or capability fields — these belong to the user-level registry, and repo configuration can only narrow it" ;;
-                tier2) ;;  # promoted with #254 T6 (restriction-only; validated below)
-                recovery)
-                    violation "routing.$k is owned by a later #109 increment (D) and is refused until its behavior ships — a key nothing enforces is never accepted as inert configuration" ;;
+                tier2) ;;     # promoted with #254 T6 (restriction-only; validated below)
+                recovery) ;;  # promoted with #257 D T3 (restriction-only; validated below)
                 *)
                     violation "unknown key 'routing.$k' (the schema is closed — see shared/schemas/automation.schema.json)" ;;
             esac
@@ -560,6 +559,34 @@ if [[ "$(q 'has("routing")')" == "true" ]]; then
                 if [[ "$(q '.routing.tier2 | has("delegation_enabled")')" == "true" ]] \
                    && ! jq -e '.routing.tier2.delegation_enabled | type == "boolean"' "$CONFIG" >/dev/null 2>&1; then
                     violation "routing.tier2.delegation_enabled must be a boolean"
+                fi
+            fi
+        fi
+        # routing.recovery (#257 D T3, promoted refused->implemented->
+        # tested): RESTRICTION-ONLY and CLOSED — wake and automatic
+        # failback may each be forbidden by the repository. false
+        # forbids `cct routing tick --wake` from
+        # relaunching THIS repository's parked routed runs;
+        # true/absent restrict nothing. It cannot make a wake happen
+        # that the user's own registry and the run's own recorded
+        # disposition do not already permit.
+        if [[ "$(q '.routing | has("recovery")')" == "true" ]]; then
+            if ! is_type '.routing.recovery' object; then
+                violation "routing.recovery must be an object (got $(q '.routing.recovery | type'))"
+            else
+                for k in $(jq -r '.routing.recovery | keys[]' "$CONFIG" 2>/dev/null || true); do
+                    case "$k" in
+                        wake_enabled|auto_failback_enabled) ;;
+                        *) violation "unknown key 'routing.recovery.$k' (the recovery block is closed: wake_enabled and auto_failback_enabled only — restrictions, never capabilities; probe cadence, thresholds, and execution authority are operator-owned)" ;;
+                    esac
+                done
+                if [[ "$(q '.routing.recovery | has("wake_enabled")')" == "true" ]] \
+                   && ! jq -e '.routing.recovery.wake_enabled | type == "boolean"' "$CONFIG" >/dev/null 2>&1; then
+                    violation "routing.recovery.wake_enabled must be a boolean"
+                fi
+                if [[ "$(q '.routing.recovery | has("auto_failback_enabled")')" == "true" ]] \
+                   && ! jq -e '.routing.recovery.auto_failback_enabled | type == "boolean"' "$CONFIG" >/dev/null 2>&1; then
+                    violation "routing.recovery.auto_failback_enabled must be a boolean"
                 fi
             fi
         fi

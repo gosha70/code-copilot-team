@@ -12,6 +12,30 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Probe-verified routing recovery + failback (#257, increment D of
+  #109)** — the seven-state circuit store now has durable probe
+  schedules and a verified exit from cooldown/auth-disabled states;
+  D-managed cooldowns become `probe_due`, never silently selectable
+  on time alone. Ships real bounded inference/tool canaries with
+  pre-launch accounting reservation, secret scrubbing, closed honest
+  outcomes, provider-reset/Retry-After/rate-limit/backoff timing, and
+  abandoned-probe reconciliation; whitespace-normalized, parsed
+  run-specific success evidence that cannot be satisfied by echoed
+  prompts or discarded by non-JSON notices; live-supervisor recovery
+  without requiring cron; globally locked, cron-idempotent
+  `cct routing tick --due --once [--wake]`; fixed structured wake
+  reconstruction using code-owned default authority under a per-park
+  generation claim (non-default grants require manual resume), live run locks, and
+  durable startup acknowledgement; boundary-only preferred-profile
+  failback with independent preferred-health and active-tenure dwell;
+  reconcile-on-recovery through increment C before the switch; and
+  explicit `cct routing enable <profile-id>` as the sole
+  auth-disabled exit. Registry policy promotes `failback`,
+  `healthy_probes_required`, and `minimum_profile_dwell_sec`;
+  repository `routing.recovery` remains restriction-only with
+  `wake_enabled` and `auto_failback_enabled`. `degraded`, timer
+  generators, attended wake, and `max_switches_per_task` remain
+  deliberately deferred.
 - **Tier-2 bounded delegation + reconciliation (#254, increment C of
   #109)** — deliberate cost/capability routing: send explicitly
   bounded tasks to a cheaper or local Tier-2 model BY POLICY, even

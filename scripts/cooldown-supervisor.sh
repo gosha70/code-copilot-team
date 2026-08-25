@@ -65,6 +65,8 @@ set -euo pipefail
 PROG="$(basename "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/supervisor-defaults.sh"
 
 err()  { echo "[$PROG] ERROR: $*" >&2; }
 info() { echo "[$PROG] $*"; }
@@ -76,11 +78,11 @@ FEATURE_ID=""
 WORKTREE=""
 BACKEND="claude"
 PROFILE="unattended"
-MAX_ATTEMPTS=20
-MAX_COOLDOWNS=12
-COOLDOWN_SEC=300
-MAX_WALL_SEC=86400
-ON_INCOMPLETE="park"
+MAX_ATTEMPTS="$CCT_SUPERVISOR_DEFAULT_MAX_ATTEMPTS"
+MAX_COOLDOWNS="$CCT_SUPERVISOR_DEFAULT_MAX_COOLDOWNS"
+COOLDOWN_SEC="$CCT_SUPERVISOR_DEFAULT_COOLDOWN_SEC"
+MAX_WALL_SEC="$CCT_SUPERVISOR_DEFAULT_MAX_WALL_SEC"
+ON_INCOMPLETE="$CCT_SUPERVISOR_DEFAULT_ON_INCOMPLETE"
 ROUTING=0
 DELEGATE_TASK=""
 DELEGATE_PACKET=""
@@ -173,8 +175,13 @@ journal() { # journal <event> <detail>
 
 ledger_set() { # ledger_set <jq-filter> [--arg ...]
   local filter="$1"; shift
-  local tmp; tmp="$(mktemp)"
-  jq "$filter | .updated = \"$(now_iso)\"" "$@" "$RUN" > "$tmp" && mv "$tmp" "$RUN"
+  local tmp
+  tmp="$(mktemp "$LEDGER_DIR/.run.json.XXXXXX")" || return 1
+  if ! jq "$filter | .updated = \"$(now_iso)\"" "$@" "$RUN" > "$tmp" \
+     || ! mv -f "$tmp" "$RUN"; then
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+  fi
 }
 ledger_get() { jq -r "$1" "$RUN" 2>/dev/null; }
 
@@ -187,6 +194,58 @@ fail_corrupt() { # fail_corrupt <why>
   exit 5
 }
 is_nonneg_int() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
+# ── the run lock (#257 D T3) ────────────────────────────────────────
+# A routed run holds an OWNER-AWARE lock beside its ledger for its
+# whole life. It is the ONE fact `routing tick --wake` consults to
+# tell "parked and idle" from "already running": the ledger's own
+# status cannot answer that, because a supervisor that is mid-relaunch
+# has not written a new status yet. It lives next to run.json — a path
+# the tick derives from where it FOUND the ledger, never from a field
+# inside it.
+# Owner-aware: any existing lock refuses (two supervisors on one ledger
+# would interleave writes). Even a dead recorded PID is not reclaimed
+# automatically: liveness-check then deletion can remove a replacement
+# lock acquired between those operations. The operator gets the exact
+# path to inspect and clear.
+#
+# It is acquired HERE, before the ledger is read or created: two fresh
+# supervisors racing on the same feature would otherwise both reach
+# the initialisation below and one would overwrite the other's ledger
+# before either could refuse. The lock has to cover initialisation,
+# not just the run.
+RUN_LOCK="$LEDGER_DIR/routing-run.lock"
+mkdir -p "$LEDGER_DIR"
+run_unlock() {
+  [[ -n "${RUN_LOCK:-}" ]] || return 0
+  if [[ "$(cat "$RUN_LOCK/pid" 2>/dev/null)" == "$$" ]]; then
+    rm -rf "$RUN_LOCK" 2>/dev/null || true
+  fi
+}
+if [[ "$ROUTING" == "1" ]]; then
+  if ! mkdir "$RUN_LOCK" 2>/dev/null; then
+    RL_OWNER="$(cat "$RUN_LOCK/pid" 2>/dev/null || echo "")"
+    if [[ ! "$RL_OWNER" =~ ^[0-9]+$ ]]; then
+      err "the run lock $RUN_LOCK exists but its owner is unverifiable (missing/malformed pid)."
+      err "Refusing to take it over. Inspect it, and remove it if no supervisor is running."
+      exit 5
+    fi
+    if kill -0 "$RL_OWNER" 2>/dev/null; then
+      err "another supervisor (pid $RL_OWNER) is already running feature '$FEATURE_ID'."
+      err "Refusing to run a second one over the same ledger."
+      exit 5
+    fi
+    err "the run lock $RUN_LOCK records dead owner pid $RL_OWNER."
+    err "Refusing racy automatic takeover. Confirm no supervisor is running, remove that lock, then retry."
+    exit 5
+  fi
+  if ! printf '%s\n' "$$" > "$RUN_LOCK/pid"; then
+    rm -rf "$RUN_LOCK" 2>/dev/null || true
+    err "cannot record ownership of the run lock $RUN_LOCK"
+    exit 5
+  fi
+  trap run_unlock EXIT
+fi
 
 START_EPOCH="$(now_epoch)"
 if [[ -f "$RUN" ]]; then
@@ -225,11 +284,38 @@ else
       last_usage_evidence: null,
       caps: {max_attempts: $ma, max_cooldowns: $mc, cooldown_sec: $cs, max_wall_sec: $mw}}' \
     > "$RUN"
+  # D (#257 T3): routed runs record the IDENTITY of the run — never a
+  # command. `routing tick --wake` reconstructs a CLOSED supervisor
+  # invocation from these fields, re-validating each one, and takes
+  # the executable from its own installation. A recorded argv vector
+  # would be an execution capability sitting in a file this very
+  # script treats as untrusted (see fail_corrupt): anything that can
+  # write the ledger could then choose what the scheduler runs.
+  # ABSENT for unrouted runs — pre-D ledgers stay byte-identical.
+  if [[ "$ROUTING" == "1" ]]; then
+    # `mode` is a CLOSED discriminator. --delegate and --reconcile can
+    # both stop for routing_no_eligible_profile, and their identity is
+    # a task id plus packet/done-file/round state — reconstructing them
+    # as an ordinary run would silently relaunch something ELSE. They
+    # are recorded here so the tick can refuse them BY NAME rather than
+    # drop their arguments (T3 deviation: bounded-work modes are not
+    # auto-wakeable; an operator resumes them).
+    WAKE_MODE="run"
+    [[ -n "$DELEGATE_TASK" ]]  && WAKE_MODE="delegate"
+    [[ -n "$RECONCILE_TASK" ]] && WAKE_MODE="reconcile"
+    ledger_set '.routing_wake = {schema: 1, backend: $h, profile: $p,
+                                 mode: $m, on_incomplete: $oi,
+                                 caps: .caps, generation: 0,
+                                 claimed: null, acked: null}' \
+      --arg h "$BACKEND" --arg p "$PROFILE" --arg m "$WAKE_MODE" \
+      --arg oi "$ON_INCOMPLETE"
+  fi
   journal "init" "backend=$BACKEND worktree=$WORKTREE profile=$PROFILE"
 fi
 
+
 # ── Routing mode (#251 B T4) — everything below is inert without --routing ──
-RT_DIR="$WORKTREE/.cct/auto-build/$FEATURE_ID/routing"
+RT_DIR="${CCT_ROUTING_ARTIFACT_DIR:-$WORKTREE/.cct/auto-build/$FEATURE_ID/routing}"
 RT_CONTROL="$RT_DIR/control.json"
 # THREE separate exclusion/budget concepts (review round: a sleep must
 # never erase request-local exclusions or retry budgets):
@@ -242,6 +328,7 @@ RT_CONTROL_APPLIED="[]"    # attempt ids whose CONTROL effects are applied —
                            # write must not double-apply either side
 RT_RUN_TAG=""
 RT_NOPROGRESS=0
+RT_BOUNDARY_TARGET=""
 if [[ "$ROUTING" == "1" ]]; then
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/routing-config.sh"
@@ -262,6 +349,11 @@ if [[ "$ROUTING" == "1" ]]; then
   fi
   RT_AUTOMATION="-"
   [[ -r "$WORKTREE/specs/$FEATURE_ID/automation.json" ]] && RT_AUTOMATION="$WORKTREE/specs/$FEATURE_ID/automation.json"
+  if [[ "$RT_AUTOMATION" != "-" ]] \
+     && ! "$SCRIPT_DIR/validate-automation-config.sh" "$RT_AUTOMATION" >/dev/null 2>&1; then
+    err "--routing refused: $RT_AUTOMATION does not validate; restrictions are never composed from a document the executable validator rejects."
+    exit 64
+  fi
   if ! RT_EFFECTIVE=$(rc_effective "$RT_REGISTRY" "$RT_AUTOMATION"); then
     err "--routing refused: the effective policy does not compose:"
     printf '%s\n' "$RT_EFFECTIVE" >&2
@@ -272,12 +364,38 @@ if [[ "$ROUTING" == "1" ]]; then
     err "Run without --routing, or enable it — configuration is never silently overridden."
     exit 64
   fi
+  rc_parse "$RT_REGISTRY" || true
+  RT_HEALTHY_PROBES_REQUIRED=$(rc_healthy_probes_required)
+  RT_MINIMUM_PROFILE_DWELL_SEC=$(rc_minimum_profile_dwell_sec)
+  RT_FAILBACK_POLICY=$(rc_failback_policy)
   mkdir -p "$RT_DIR"
   RT_RUN_TAG="${FEATURE_ID}-${START_EPOCH}"
   rs_journal() { journal "routing_state" "$1: $2"; }
   if [[ -n "$DELEGATE_TASK" || -n "$RECONCILE_TASK" ]]; then
     # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/routing-packet.sh"   # sources routing-tasks.sh
+  fi
+
+  # DURABLE ACKNOWLEDGEMENT of a wake (#257 D T3). A scheduler that
+  # claimed a generation must be able to tell "this launch started"
+  # from "this launch never happened" AFTER the fact — polling for a
+  # live pid cannot: a fast child acquires and releases the run lock
+  # between two polls, and a slow one acquires just after the last.
+  #
+  # It is stamped HERE, at the END of routing admission, and
+  # deliberately nowhere earlier. EVERY prerequisite must have passed:
+  # the ledger must be readable and non-terminal (exit 5/6), and the
+  # registry must exist, validate, compose, and be enabled (exit 64).
+  # A run that refuses at any of those never became runnable, so
+  # acknowledging it would permanently consume a wake generation for a
+  # launch that could do no work — the park would read as handled and
+  # never be retried. Acknowledging only once the run is genuinely
+  # admitted keeps every one of those refusals retryable, which is
+  # what they are.
+  if jq -e '.routing_wake.claimed != null' "$RUN" >/dev/null 2>&1; then
+    WAKE_GEN_ACK=$(jq -r '.routing_wake.claimed' "$RUN")
+    ledger_set '.routing_wake.acked = .routing_wake.claimed'
+    journal "wake_acked" "acknowledged wake generation $WAKE_GEN_ACK — every startup prerequisite passed"
   fi
 fi
 
@@ -438,6 +556,74 @@ rt_effective_model() {
   grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]+"' "$1" 2>/dev/null | head -1 | sed 's/.*:\s*"//; s/"$//' || true
 }
 
+# rt_recover_due_profiles <selection-json>
+#
+# A due recovery canary is part of the supervisor's retry lifecycle, not
+# merely an optional cron optimization. The selector correctly refuses
+# probe_due/probing as execution targets, but those markers carry no
+# ordinary earliest_retry. Without this handoff the supervisor mistakes a
+# due canary for permanent exhaustion and parks forever unless an external
+# scheduler happens to be installed. Run the existing tick implementation
+# here so probe execution, accounting, locking, and state transitions stay
+# single-sourced. The external scheduler remains useful for parked-run wake
+# and background failback; it is no longer required for a live run to leave
+# its own cooldown.
+rt_recover_due_profiles() { # <selection-json> -> 0 when state may be reselected
+  local selection="$1" attempt=0 completed=0 rc=0 out cfg_args=""
+  jq -e '.selected == null
+         and any(.considered[]?; .reason | startswith("recovery state"))' \
+      >/dev/null 2>&1 <<< "$selection" || return 1
+
+  [[ "$RT_AUTOMATION" == "-" ]] || cfg_args="$RT_AUTOMATION"
+  while [[ "$completed" -lt "$RT_HEALTHY_PROBES_REQUIRED" && "$attempt" -lt $((RT_HEALTHY_PROBES_REQUIRED + 3)) ]]; do
+    attempt=$((attempt + 1))
+    rc=0
+    if [[ -n "$cfg_args" ]]; then
+      out=$(CCT_ROUTING_STATE="$RS_FILE" CCT_ROUTING_REGISTRY="$RT_REGISTRY" \
+              "$SCRIPT_DIR/routing-cli.sh" tick --due --once \
+                --config "$cfg_args" --ledger-root "$(dirname "$LEDGER_DIR")" 2>&1) || rc=$?
+    else
+      out=$(CCT_ROUTING_STATE="$RS_FILE" CCT_ROUTING_REGISTRY="$RT_REGISTRY" \
+              "$SCRIPT_DIR/routing-cli.sh" tick --due --once \
+                --ledger-root "$(dirname "$LEDGER_DIR")" 2>&1) || rc=$?
+    fi
+    case "$rc" in
+      0)
+        completed=$((completed + 1))
+        journal "routing_recovery_tick" "live supervisor processed due recovery canaries (${completed}/${RT_HEALTHY_PROBES_REQUIRED}): $(tr '\n' ' ' <<< "$out")"
+        grep -q '0 due profile(s) processed' <<< "$out" && break
+        ;;
+      3)
+        journal "routing_recovery_tick" "another scheduler owns the recovery tick; waiting 1s for its state publication"
+        "$SLEEP_CMD" 1 || true
+        ;;
+      *)
+        journal "routing_recovery_tick_failed" "in-process recovery tick exited $rc: $(tr '\n' ' ' <<< "$out")"
+        return 2
+        ;;
+    esac
+  done
+  return 0
+}
+
+# A concurrent supervisor may install a stronger state (most notably an
+# operator-owned auth disable) after this attempt starts but before its
+# result is applied. The state primitive must reject the stale transition,
+# while this supervisor must still publish the durable result checkpoint.
+rt_state_transition() { # <description> <state-function> [args...]
+  local description="$1" detail rc
+  shift
+  if detail=$("$@" 2>&1); then
+    return 0
+  else
+    rc=$?
+  fi
+  detail=$(tr '\n' ' ' <<< "$detail")
+  journal "routing_state_transition_rejected" \
+    "$description was rejected (exit $rc); preserving the state store as authoritative and continuing to the durable attempt checkpoint${detail:+: $detail}"
+  return 1
+}
+
 # ── the shared post-result pipeline (decision 5 steps 4-5 + act) ──
 # Consumes the PERSISTED decision from result-N.json — normal flow and
 # crash recovery apply the identical recorded decision; nothing is
@@ -470,11 +656,26 @@ rt_apply_result() {
   until=$(jq -r '.state_op.until // "-"' <<< "$decision")
   reason=$(jq -r '.state_op.reason' <<< "$decision")
   case "$kind" in
-    pool_cooldown)    rs_set_pool    "$attempt_id" "$(jq -r '.pool' <<< "$pj")" cooldown "$reason" "$until" ;;
-    profile_cooldown) rs_set_profile "$attempt_id" "$id" cooldown "$reason" "$until" ;;
-    profile_disable)  rs_set_profile "$attempt_id" "$id" disabled "$reason" - ;;
+    pool_cooldown)
+      if rt_state_transition "pool cooldown for attempt '$attempt_id'" \
+           rs_set_pool "$attempt_id" "$(jq -r '.pool' <<< "$pj")" cooldown "$reason" "$until"; then
+        rt_state_transition "recovery schedule for profile '$id'" \
+          rs_schedule_after_cooldown "${attempt_id}-recovery-probe" "$id" "$until" "pool cooldown ended; recovery canary due" || true
+      fi ;;
+    profile_cooldown)
+      if rt_state_transition "profile cooldown for '$id'" \
+           rs_set_profile "$attempt_id" "$id" cooldown "$reason" "$until"; then
+        rt_state_transition "recovery schedule for profile '$id'" \
+          rs_schedule_after_cooldown "${attempt_id}-recovery-probe" "$id" "$until" "profile cooldown ended; recovery canary due" || true
+      fi ;;
+    profile_disable)
+      rt_state_transition "profile disable for '$id'" \
+        rs_set_profile "$attempt_id" "$id" disabled "$reason" - || true ;;
   esac
-  [[ "$action" == "proceed" ]] && rs_mark_success "$attempt_id" "$id"
+  if [[ "$action" == "proceed" ]]; then
+    rt_state_transition "success evidence for profile '$id'" \
+      rs_mark_success "$attempt_id" "$id" || true
+  fi
 
   # durable control updates BEFORE the checkpoint (crash-safe budgets),
   # IDEMPOTENT by attempt id in control.json's OWN applied set — the
@@ -984,6 +1185,12 @@ delegate_run() {
     selector_attempted=$(jq -n --argjson a "$RT_EPOCH_ATTEMPTED" --argjson b "$RT_LOCAL_EXCLUDED" '($a + $b) | unique')
     sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" bounded-build "$PKT_CLASS") || \
       rt_refuse "routing_unknown_failure" "selection failed to evaluate for the packet"
+    if rt_recover_due_profiles "$sel"; then
+      sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" bounded-build "$PKT_CLASS") || \
+        rt_refuse "routing_unknown_failure" "selection failed after processing due recovery canaries"
+    elif [[ "$?" -eq 2 ]]; then
+      rt_refuse "routing_no_eligible_profile" "due recovery canaries could not be processed by the live supervisor (details journaled)"
+    fi
     while IFS= read -r out; do
       journal "routing_candidate" "$out"
     done <<< "$(jq -r '.considered[] | "\(.id): \(.verdict) — \(.reason)"' <<< "$sel")"
@@ -1022,7 +1229,11 @@ delegate_run() {
           '{attempt_id:$id, attempt:$n, profile:$p, packet_id:$pid, started_epoch:$t}' \
           > "$RT_DIR/started-$attempt_no.json"
     ATTEMPTS=$((ATTEMPTS + 1))
-    ledger_set ".attempts = $ATTEMPTS | .status = \"running\" | .routing_profile = \$p" --arg p "$id"
+    local active_now
+    active_now=$(now_epoch)
+    ledger_set ".attempts = $ATTEMPTS | .status = \"running\"
+                | if .routing_profile != \$p then .routing_profile_since = \$n else . end
+                | .routing_profile = \$p" --arg p "$id" --argjson n "$active_now"
     journal "launch" "packet round $round attempt $ATTEMPTS via profile '$id' ($(jq -r '.backend' <<< "$pj")/$(jq -r '.provider' <<< "$pj")/$(jq -r '.model' <<< "$pj")) — minimal tool set, fresh session"
 
     # step 2: exactly one FRESH bounded child in the packet worktree.
@@ -1297,6 +1508,12 @@ reconcile_run() {
     selector_attempted=$(jq -n --argjson a "$RT_EPOCH_ATTEMPTED" --argjson b "$RT_LOCAL_EXCLUDED" '($a + $b) | unique')
     sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" reconcile tier1_only) || \
       rt_refuse "routing_unknown_failure" "reconciler selection failed to evaluate"
+    if rt_recover_due_profiles "$sel"; then
+      sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" reconcile tier1_only) || \
+        rt_refuse "routing_unknown_failure" "reconciler selection failed after processing due recovery canaries"
+    elif [[ "$?" -eq 2 ]]; then
+      rt_refuse "routing_no_eligible_profile" "due reconciler recovery canaries could not be processed by the live supervisor (details journaled)"
+    fi
     while IFS= read -r out; do
       journal "routing_candidate" "$out"
     done <<< "$(jq -r '.considered[] | "\(.id): \(.verdict) — \(.reason)"' <<< "$sel")"
@@ -1348,7 +1565,11 @@ reconcile_run() {
           '{attempt_id:$id, attempt:$n, profile:$p, packet_id:$pid, reconcile:true, started_epoch:$t}' \
           > "$RT_DIR/started-$attempt_no.json"
     ATTEMPTS=$((ATTEMPTS + 1))
-    ledger_set ".attempts = $ATTEMPTS | .status = \"running\" | .routing_profile = \$p" --arg p "$id"
+    local active_now
+    active_now=$(now_epoch)
+    ledger_set ".attempts = $ATTEMPTS | .status = \"running\"
+                | if .routing_profile != \$p then .routing_profile_since = \$n else . end
+                | .routing_profile = \$p" --arg p "$id" --argjson n "$active_now"
     journal "launch" "reconcile attempt $ATTEMPTS via profile '$id' ($(jq -r '.backend' <<< "$pj")/$(jq -r '.provider' <<< "$pj")/$(jq -r '.model' <<< "$pj")) — fresh session"
 
     local prompt_file patch_file evid_file
@@ -1515,11 +1736,169 @@ reconcile_run() {
   done
 }
 
+# rt_reconcile_recovered — run C's existing reconciliation lifecycle in
+# an isolated supervisor ledger before failback admits more build work.
+# The parent imports only the resulting provisional record. A child park
+# leaves the failback marker in place and parks through the same closed
+# reason, so the switch is not lost and can be retried at the next boundary.
+rt_reconcile_recovered() {
+  local tasks task digest root child_root child_run rec rc reason verdict
+  tasks=$(ledger_get '[.provisional // {} | to_entries[]
+                       | select(.value.verdict == "verified_provisional")
+                       | .key] | .[]' 2>/dev/null || true)
+  while IFS= read -r task; do
+    [[ -n "$task" ]] || continue
+    digest=$(printf '%s' "$task" | shasum -a 256 | cut -d' ' -f1 | cut -c1-12)
+    root="$LEDGER_DIR/recovery-reconcile/$digest"
+    child_root="$root/ledger"
+    child_run="$child_root/$FEATURE_ID/run.json"
+    mkdir -p "$(dirname "$child_run")"
+    rec=$(jq -c --arg t "$task" '.provisional[$t]' "$RUN")
+    jq -n --arg f "$FEATURE_ID" --arg h "$BACKEND" --arg wt "$WORKTREE" \
+          --arg p "$PROFILE" --arg t "$(now_iso)" --arg task "$task" \
+          --argjson now "$(now_epoch)" --argjson rec "$rec" \
+          --argjson ma 1 --argjson mc "$MAX_COOLDOWNS" \
+          --argjson cs "$COOLDOWN_SEC" --argjson mw "$MAX_WALL_SEC" '
+      {schema_version:1,feature_id:$f,harness:$h,worktree:$wt,profile:$p,
+       status:"running",attempts:0,cooldowns:0,started:$t,
+       started_epoch:$now,updated:$t,last_exit_code:null,last_reason:null,
+       last_evidence:null,last_usage_evidence:null,
+       caps:{max_attempts:$ma,max_cooldowns:$mc,cooldown_sec:$cs,max_wall_sec:$mw},
+       provisional:{($task):$rec}}' > "$child_run"
+    rc=0
+    if [[ -n "${CCT_ROUTING_RECONCILE_CMD:-}" ]]; then
+      CCT_RECOVERY_RECONCILE_TASK="$task" CCT_RECOVERY_RECONCILE_RUN="$child_run" \
+        CCT_ROUTING_ARTIFACT_DIR="$root/routing" \
+        bash -c "$CCT_ROUTING_RECONCILE_CMD" || rc=$?
+    else
+      CCT_SUPERVISOR_DIR="$child_root" CCT_ROUTING_ARTIFACT_DIR="$root/routing" \
+        CCT_ROUTING_REGISTRY="$RT_REGISTRY" \
+        "$SCRIPT_DIR/cooldown-supervisor.sh" "$FEATURE_ID" --routing \
+          --reconcile "$task" --worktree "$WORKTREE" --backend "$BACKEND" \
+          --profile "$PROFILE" --max-attempts 1 \
+          --max-cooldowns "$MAX_COOLDOWNS" --cooldown-sec "$COOLDOWN_SEC" \
+          --max-wall-sec "$MAX_WALL_SEC" >/dev/null 2>&1 || rc=$?
+    fi
+    if [[ "$rc" -ne 0 ]]; then
+      reason=$(jq -r '.last_reason // "routing_unknown_failure"' "$child_run" 2>/dev/null || echo routing_unknown_failure)
+      reason="${reason%%:*}"
+      journal "routing_reconcile_on_recovery" "task '$task' reconciliation parked before failback (exit $rc, reason $reason); the failback marker remains retryable"
+      rt_refuse "$reason" "reconcile-on-recovery for '$task' did not complete (child evidence: $root)"
+    fi
+    if ! rec=$(jq -ce --arg t "$task" '.provisional[$t]
+                     | select(.verdict != "verified_provisional")' "$child_run" 2>/dev/null); then
+      journal "routing_reconcile_on_recovery" "task '$task' produced no terminal provisional verdict"
+      rt_refuse "routing_unknown_failure" "reconcile-on-recovery for '$task' produced no terminal verdict (child evidence: $root)"
+    fi
+    verdict=$(jq -r '.verdict' <<< "$rec")
+    ledger_set '.provisional[$t] = $r' --arg t "$task" --argjson r "$rec"
+    journal "routing_reconcile_on_recovery" "task '$task' imported '$verdict' before failback"
+  done <<< "$tasks"
+}
+
+# rt_failback_boundary — consume a tick's recovery marker only between
+# attempts. The tick records that evidence exists; the supervisor
+# revalidates every hysteresis and policy condition at the point of use.
+rt_failback_boundary() {
+  local marker="$LEDGER_DIR/failback-marker.json" preferred active now
+  local pidx pool state evidence successes healthy_since active_since
+  preferred=$(rc_get policy preferred_profile 2>/dev/null || echo "")
+  active=$(ledger_get 'if .routing_profile == null then "" else .routing_profile end')
+  # Sticky fallback is part of hysteresis: once a fallback is active,
+  # ordinary total-order selection must not switch back merely because
+  # the preferred circuit became selectable. The active profile remains
+  # the one-boundary target until every failback gate passes. If it is no
+  # longer eligible, routing_iteration falls back to the normal oracle.
+  if [[ -n "$active" && -n "$preferred" && "$active" != "$preferred" ]]; then
+    RT_BOUNDARY_TARGET="$active"
+  fi
+  [[ -r "$marker" ]] || return 0
+  if ! jq -e 'type == "object" and .schema == 1
+              and (.preferred | type == "string")
+              and .action == "failback_at_next_task_boundary"' "$marker" >/dev/null 2>&1; then
+    journal "routing_failback_blocked" "the failback marker is malformed — leaving the active profile unchanged"
+    return 0
+  fi
+  if [[ -z "$preferred" || "$(jq -r '.preferred' "$marker")" != "$preferred" ]]; then
+    journal "routing_failback_blocked" "the marker does not match the registry preferred_profile — leaving the active profile unchanged"
+    return 0
+  fi
+  if [[ -z "$active" || "$active" == "$preferred" ]]; then
+    rm -f "$marker" 2>/dev/null || true
+    return 0
+  fi
+  if [[ "$RT_FAILBACK_POLICY" != "auto" ]]; then
+    journal "routing_failback_blocked" "preferred '$preferred' recovered, but [policy] failback=operator pins the run to '$active'"
+    return 0
+  fi
+  if [[ "$(rc_auto_failback_allowed "$RT_EFFECTIVE")" != "true" ]]; then
+    journal "routing_failback_blocked" "preferred '$preferred' recovered, but routing.recovery.auto_failback_enabled=false pins the run to '$active'"
+    return 0
+  fi
+  if jq -e --arg p "$preferred" 'index($p) != null' >/dev/null 2>&1 <<< "$RT_LOCAL_EXCLUDED"; then
+    journal "routing_failback_blocked" "preferred '$preferred' is incompatible with this request and cannot be restored automatically"
+    return 0
+  fi
+  pidx=$(rc_index_of "$preferred" 2>/dev/null || echo "")
+  [[ -n "$pidx" ]] || { journal "routing_failback_blocked" "preferred profile '$preferred' is no longer declared"; return 0; }
+  pool=$(rc_get "profiles.$pidx" quota_pool)
+  state=$(rs_effective_state "$preferred" "$pool")
+  if [[ "$state" != "healthy" ]] || ! rs_probe_qualified "$preferred" "$RT_HEALTHY_PROBES_REQUIRED"; then
+    journal "routing_failback_blocked" "preferred '$preferred' is not probe-qualified healthy at the boundary"
+    return 0
+  fi
+  evidence=$(rs_probe_evidence "$preferred")
+  successes=$(cut -f1 <<< "$evidence")
+  healthy_since=$(cut -f2 <<< "$evidence")
+  active_since=$(ledger_get 'if .routing_profile_since == null then "" else (.routing_profile_since|tostring) end')
+  now=$(now_epoch)
+  if [[ ! "$active_since" =~ ^[0-9]+$ ]]; then
+    ledger_set '.routing_profile_since = $n' --argjson n "$now"
+    active_since="$now"
+    if [[ "$RT_MINIMUM_PROFILE_DWELL_SEC" -gt 0 ]]; then
+      journal "routing_failback_blocked" "active-profile tenure was not recorded; starting its dwell clock now before any switch"
+      return 0
+    fi
+  fi
+  if [[ ! "$healthy_since" =~ ^[0-9]+$ ]] \
+     || [[ $((now - healthy_since)) -lt "$RT_MINIMUM_PROFILE_DWELL_SEC" ]]; then
+    journal "routing_failback_blocked" "preferred '$preferred' has not been probe-healthy for the required ${RT_MINIMUM_PROFILE_DWELL_SEC}s dwell"
+    return 0
+  fi
+  if [[ $((now - active_since)) -lt "$RT_MINIMUM_PROFILE_DWELL_SEC" ]]; then
+    journal "routing_failback_blocked" "active profile '$active' has not served the required ${RT_MINIMUM_PROFILE_DWELL_SEC}s dwell"
+    return 0
+  fi
+  rt_reconcile_recovered
+  RT_EPOCH_ATTEMPTED=$(jq -c --arg p "$preferred" 'map(select(. != $p))' <<< "$RT_EPOCH_ATTEMPTED")
+  RT_BOUNDARY_TARGET="$preferred"
+  rt_control_save
+  rm -f "$marker" 2>/dev/null || true
+  journal "routing_failback" "boundary switch from '$active' to probe-qualified preferred '$preferred' ($successes successes; both dwell checks passed)"
+}
+
 # ── the routed iteration: decision 5's frozen ordering ──
 routing_iteration() {
-  local sel selector_attempted
+  local sel selector_attempted select_eff
+  rt_failback_boundary
   selector_attempted=$(jq -n --argjson a "$RT_EPOCH_ATTEMPTED" --argjson b "$RT_LOCAL_EXCLUDED" '($a + $b) | unique')
-  sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" build) || rt_refuse "routing_unknown_failure" "selection failed to evaluate"
+  select_eff="$RT_EFFECTIVE"
+  if [[ -n "$RT_BOUNDARY_TARGET" ]]; then
+    select_eff=$(jq -c --arg p "$RT_BOUNDARY_TARGET" '.candidates |= map(select(.[0] == $p))' <<< "$RT_EFFECTIVE")
+  fi
+  sel=$(rt_select "$select_eff" "$selector_attempted" build) || rt_refuse "routing_unknown_failure" "selection failed to evaluate"
+  if [[ -n "$RT_BOUNDARY_TARGET" && "$(jq -r '.selected' <<< "$sel")" == "null" ]]; then
+    journal "routing_failback_blocked" "boundary target '$RT_BOUNDARY_TARGET' is no longer eligible; retaining normal routing"
+    RT_BOUNDARY_TARGET=""
+    sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" build) || rt_refuse "routing_unknown_failure" "selection failed to evaluate"
+  fi
+  if rt_recover_due_profiles "$sel"; then
+    sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" build) || \
+      rt_refuse "routing_unknown_failure" "selection failed after processing due recovery canaries"
+  elif [[ "$?" -eq 2 ]]; then
+    rt_refuse "routing_no_eligible_profile" "due recovery canaries could not be processed by the live supervisor (details journaled)"
+  fi
+  RT_BOUNDARY_TARGET=""
   local line
   while IFS= read -r line; do
     journal "routing_candidate" "$line"
@@ -1571,7 +1950,11 @@ routing_iteration() {
         > "$RT_DIR/started-$attempt_no.json"
 
   ATTEMPTS=$((ATTEMPTS + 1))
-  ledger_set ".attempts = $ATTEMPTS | .status = \"running\" | .routing_profile = \$p" --arg p "$id"
+  local active_now
+  active_now=$(now_epoch)
+  ledger_set ".attempts = $ATTEMPTS | .status = \"running\"
+              | if .routing_profile != \$p then .routing_profile_since = \$n else . end
+              | .routing_profile = \$p" --arg p "$id" --argjson n "$active_now"
   journal "launch" "attempt $ATTEMPTS via profile '$id' ($(jq -r '.backend' <<< "$pj")/$(jq -r '.provider' <<< "$pj")/$(jq -r '.model' <<< "$pj"))"
   info "launch attempt $ATTEMPTS via profile '$id' ..."
 
@@ -1725,7 +2108,22 @@ classify() { # classify <exit-code> <output-file>
 }
 
 terminate() { # terminate <status> <exit-code> <reason>
-  ledger_set ".status = \"$1\" | .last_reason = \$r" --arg r "$3"
+  # D (#257 T3): a routed run that stops for
+  # `routing_no_eligible_profile` mints a NEW wake generation — the
+  # durable claim token `routing tick --wake` must acquire before it
+  # may relaunch — IN THE SAME WRITE as the disposition. Two writes
+  # would leave a window where the ledger already reads
+  # "no eligible profile" while still carrying the PREVIOUS,
+  # already-claimed generation; a tick landing in that window would
+  # read a fresh park as one it had already handled and never wake it.
+  # Every such stop mints a fresh generation, so a claimed one can
+  # never be replayed.
+  ledger_set '.status = $s | .last_reason = $r
+    | (if ($r | startswith("routing_no_eligible_profile:")) and .routing_wake != null
+       then .routing_wake.generation =
+              ((if .routing_wake.generation == null then 0 else .routing_wake.generation end) + 1)
+            | .routing_wake.claimed = null
+       else . end)' --arg s "$1" --arg r "$3"
   journal "$1" "$3"
   info "$1: $3"
   exit "$2"
