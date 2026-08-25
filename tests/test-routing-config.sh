@@ -174,10 +174,20 @@ F=$(mut s-url.toml 's|^base_url_env = "CCT_LOCAL_ANTHROPIC_BASE_URL"$|base_url =
 assert_reject "base_url must be http(s)" "$F" "absolute http(s) URL"
 F=$(mut s-polkey.toml 's/^enabled = true$/enabled = true\nprobe_cmd = "curl"/')
 assert_reject "policy unknown key" "$F" "[policy] unknown key 'probe_cmd'"
-F=$(mut s-polfuture.toml 's/^enabled = true$/enabled = true\nfailback = "next-task-boundary"/')
-assert_reject "policy: future behavior-bearing key is refused, not inert" "$F" "not supported in increment A"
+F=$(mut s-failback.toml 's/^enabled = true$/enabled = true\nfailback = "auto"\nhealthy_probes_required = 3\nminimum_profile_dwell_sec = 45/')
+assert "policy: the three recovery keys are promoted together" rv "$F"
 F=$(mut s-polfuture2.toml 's/^enabled = true$/enabled = true\nmax_switches_per_task = 3/')
-assert_reject "policy: every future key carries the refusal (not just one)" "$F" "not supported in increment A"
+assert_reject "policy: max_switches_per_task stays refused" "$F" "not implemented by an owning increment"
+F=$(mut s-badfailback.toml 's/^enabled = true$/enabled = true\nfailback = "next-task-boundary"/')
+assert_reject "policy: failback has a closed auto|operator vocabulary" "$F" "failback must be 'auto' or 'operator'"
+F=$(mut s-badthreshold.toml 's/^enabled = true$/enabled = true\nhealthy_probes_required = 0/')
+assert_reject "policy: healthy_probes_required must be >= 1" "$F" "integer >= 1"
+F=$(mut s-baddwell.toml 's/^enabled = true$/enabled = true\nminimum_profile_dwell_sec = -1/')
+assert_reject "policy: minimum_profile_dwell_sec must be non-negative" "$F" "integer >= 0"
+rc_parse "$GOOD" || true
+assert_eq "policy: absent healthy threshold uses the named default" "2" "$(rc_healthy_probes_required)"
+assert_eq "policy: absent dwell uses the named default" "300" "$(rc_minimum_profile_dwell_sec)"
+assert_eq "policy: absent failback mode uses the named default" "auto" "$(rc_failback_policy)"
 F=$(mut s-pref.toml 's/^preferred_profile = "alpha"$/preferred_profile = "ghost"/')
 assert_reject "preferred_profile must name a profile" "$F" "does not name a declared profile"
 F=$(mut s-credboth.toml 's/^credential_mode = "claude-login"$/credential_mode = "claude-login"\ncredential_env = "A_KEY"/')
@@ -470,10 +480,17 @@ assert_eq "status: ...its VALUE never appears" "0" "$(grep -c "sentinel-secret-v
 unset CCT_LOCAL_API_KEY
 OUT=$(cli "$GOOD" status) || true
 assert "status: unset credential-env reported as unset" grep -q "env:CCT_LOCAL_API_KEY (unset)" <<< "$OUT"
-printf '{"profiles":{"alpha":{"state":"cooldown"}}}\n' > "$TMP/t5-state.json"
+printf '{"schema_version":1,"profiles":{"alpha":{"state":"cooldown","next_probe_at":4102444800}},"pools":{},"applied":{}}\n' > "$TMP/t5-state.json"
 OUT=$( ( set +e; CCT_ROUTING_REGISTRY="$GOOD" CCT_ROUTING_STATE="$TMP/t5-state.json" bash "$CLI" status 2>&1 ) )
 assert "status: a recorded state renders (cooldown)" grep -qE "alpha .*cooldown" <<< "$OUT"
+assert "status: the next probe instant is rendered beside the state" grep -q "4102444800" <<< "$OUT"
 assert "status: unrecorded profiles stay unknown beside it" grep -qE "local-t2 .*unknown" <<< "$OUT"
+printf '{"schema_version":1,"profiles":{"alpha":{"state":"cooldown","until":1,"next_probe_at":null}},"pools":{},"applied":{}}\n' > "$TMP/t5-state.json"
+OUT=$( ( set +e; CCT_ROUTING_REGISTRY="$GOOD" CCT_ROUTING_STATE="$TMP/t5-state.json" bash "$CLI" status 2>&1 ) )
+assert "status: renders effective expiry, not the stale stored state" grep -qE "alpha .*unknown" <<< "$OUT"
+printf 'corrupt\n' > "$TMP/corrupt-routing-state.json"
+assert "status: a present corrupt circuit store refuses instead of rendering unknown" \
+    bash -c "! CCT_ROUTING_REGISTRY='$GOOD' CCT_ROUTING_STATE='$TMP/corrupt-routing-state.json' bash '$CLI' status >/dev/null 2>'$TMP/corrupt-status.err' && grep -q 'corrupt circuit state' '$TMP/corrupt-status.err'"
 
 # explain — pure configuration resolution
 OUT=$(cli "$GOOD" explain --route-class tier1_only) || true
@@ -487,6 +504,11 @@ assert_eq "explain: deterministic priority order within the tier" "alpha alpha-o
     "$(grep -oE '^  (alpha|alpha-opus):' <<< "$OUT" | tr -d ' :' | tr '\n' ' ' | sed 's/ $//')"
 assert "explain: unknown state is never treated as healthy" \
     grep -q "never treated as healthy" <<< "$OUT"
+printf '{"schema_version":1,"profiles":{"alpha":{"state":"cooldown","until":4102444800}},"pools":{},"applied":{}}\n' > "$TMP/explain-state.json"
+OUT=$( ( set +e; CCT_ROUTING_REGISTRY="$GOOD" CCT_ROUTING_STATE="$TMP/explain-state.json" \
+    bash "$CLI" explain --route-class tier1_only 2>&1 ) )
+assert "explain: renders the same effective circuit state as status" \
+    grep -q "alpha: eligible.*state: cooldown" <<< "$OUT"
 OUT=$(cli "$GOOD" explain --route-class tier2_fallback) || true
 assert "explain: a fallback class reaches tier2" \
     grep -q "local-t2: eligible in tier2" <<< "$OUT"

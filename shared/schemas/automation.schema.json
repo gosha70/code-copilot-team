@@ -141,7 +141,7 @@
     "routing": {
       "type": "object",
       "additionalProperties": false,
-      "description": "#248 (increment A of #109): TRUST-ASYMMETRIC by construction — a repository may only NARROW what the user-level registry (~/.code-copilot-team/routing.toml) permits. There is deliberately NO field here that could define a profile, credential, endpoint, protocol, or capability; the validator additionally refuses those keys by name; `tier2` was promoted with #254 T6 (restriction-only), and `recovery` stays refused until increment D ships. Cross-checks against the registry (unknown ids, unknown route class) happen in the effective-policy merge.",
+      "description": "#248 (increment A of #109): TRUST-ASYMMETRIC by construction — a repository may only NARROW what the user-level registry (~/.code-copilot-team/routing.toml) permits. There is deliberately NO field here that could define a profile, credential, endpoint, protocol, or capability; the validator additionally refuses those keys by name; `tier2` was promoted with #254 T6 and `recovery` with #257 D T3 (both restriction-only). Cross-checks against the registry (unknown ids, unknown route class) happen in the effective-policy merge.",
       "properties": {
         "enabled": { "type": "boolean" },
         "allowed_profiles": {
@@ -158,6 +158,15 @@
           "description": "#254 (increment C of #109) T6, promoted refused->implemented->behaviorally-tested. RESTRICTION ONLY: delegation_enabled=false forbids Tier-2 packet delegation for this repository; true/absent restrict nothing. A repo can never widen what the user registry permits.",
           "properties": {
             "delegation_enabled": { "type": "boolean" }
+          }
+        },
+        "recovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "#257 (increment D of #109), promoted refused->implemented->behaviorally-tested. RESTRICTION ONLY: false may forbid automatic wake or failback for this repository; true/absent restricts nothing. Probe cadence and health thresholds are user-registry policy and are deliberately absent here — a repo can never widen what the user registry permits.",
+          "properties": {
+            "wake_enabled": { "type": "boolean" },
+            "auto_failback_enabled": { "type": "boolean" }
           }
         }
       }

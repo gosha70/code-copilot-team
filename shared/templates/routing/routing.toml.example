@@ -16,12 +16,13 @@ schema_version = 1
 [policy]
 enabled = true
 preferred_profile = "anthropic-sonnet"
-# Later increments add (refused until their behavior ships — a key
-# nothing enforces is never accepted as inert configuration):
+# Recovery and failback policy (implemented by increment D). A key is
+# accepted only when its runtime behavior ships with it:
+failback = "auto"
+healthy_probes_required = 2
+minimum_profile_dwell_sec = 300
+# Still deferred and therefore still refused:
 # max_switches_per_task = 3
-# failback = "next-task-boundary"
-# healthy_probes_required = 2
-# minimum_profile_dwell_sec = 300
 
 # Tiers are closed framework classes: tier1 | tier2. Priority orders
 # profiles WITHIN a tier (lower number = tried first).

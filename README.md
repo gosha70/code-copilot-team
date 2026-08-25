@@ -875,15 +875,18 @@ unchanged.
   approximated. Credentials are REFERENCES (a backend login mode or an
   environment-variable name) — a literal secret anywhere in the file
   is refused, and no routing command ever reads the referenced value.
-  `[policy]` accepts only what increment A consumes; behavior-bearing
-  keys (failback, probes, dwell) are refused until the increment that
-  enforces them ships.
+  `[policy]` accepts only behavior an owning increment enforces.
+  Increment D promotes `failback`, `healthy_probes_required`, and
+  `minimum_profile_dwell_sec`; `max_switches_per_task` remains refused
+  because nothing implements it.
 - **Repositories restrict, never grant.** `automation.json` may carry
   a `routing` block that can ONLY narrow the operator's registry —
   disable routing, restrict `allowed_profiles`, pick a default route
   class. Profile definitions, credential/endpoint/identity/capability
-  fields, and not-yet-shipped `tier2`/`recovery` policy are refused by
-  name. The effective policy is the most-restrictive combination, and
+  fields are refused by name. Only two behavior-bearing sub-blocks
+  have been promoted, both restriction-only: `tier2.delegation_enabled`
+  (#254 C) and `recovery.{wake_enabled,auto_failback_enabled}` (#257 D);
+  any other key inside them is refused. The effective policy is the most-restrictive combination, and
   the merge proves `effective ⊆ user-registry` over complete
   executable identities — a repo cannot keep a profile id while
   changing what it executes as.
@@ -899,8 +902,9 @@ unchanged.
 - **Inspection commands** (read-only; no probe, no network, no state
   writes): `cct routing validate` (registry + repo restrictions +
   merge), `cct routing status` (per-profile rows; every profile is
-  `unknown` until increment B records state — unknown is never
-  treated as healthy; credential columns report presence only, where
+  `unknown` until runtime records state — unknown is never treated as
+  healthy; D also renders each next-probe instant and refuses a corrupt
+  existing state store instead of displaying it as empty. Credential columns report presence only, where
   `set` means a NON-EMPTY value is present behind the referenced
   variable — never the value itself), and `cct routing explain
   --route-class <class>` (a pure configuration-resolution dry run
@@ -1020,16 +1024,89 @@ scripts/cooldown-supervisor.sh <feature> --routing --reconcile <task-id>
 - **Repositories can forbid Tier-2 outright**
   (`routing.tier2.delegation_enabled = false` in `automation.json` —
   restriction-only, promoted through the refused→implemented→tested
-  path; `recovery` stays refused until increment D), and
+  path), and
   `cct routing explain --feature <id> --task <task-id>` renders the
   task's route class, safety-floor evaluation, and the EFFECTIVE
   candidate legality — the same legality `--delegate` and the
   selector enforce, still pure configuration resolution.
 
-What arrives later (#109 increments D–E): probes/recovery/failback
-hysteresis and `routing tick` (D), benchmarks and shadow-mode learned
-routing (E), plus a codex execution adapter as its own child increment
-reusing the attempt/result/checkpoint and packet contracts.
+### Probe-verified recovery + failback (#109 increment D)
+
+**Healthy recovery is evidence, not elapsed time.** Cooldown expiry
+alone reaches at most `unknown`; D-managed cooldowns become
+`probe_due`, and only real canary evidence can satisfy the recovery
+threshold used by wake and failback.
+
+```bash
+# optional scheduler integration: one globally locked due pass
+cct routing tick --due --once
+# same pass, also relaunch eligible unattended no-profile parks
+cct routing tick --due --once --wake
+# explicit sole exit from auth-disabled; still requires a canary
+cct routing enable <profile-id>
+```
+
+- **Real probes** run a small inference through the profile's own
+  credential and endpoint references. Tool-capable profiles must also
+  pass a minimal tool canary. Results are closed at `probe_pass`,
+  `probe_fail`, `probe_unverifiable`, and the non-evidence
+  `probe_deferred_caps`; missing or malformed evidence never becomes a
+  provider failure. Every launch is reserved in the probe accounting
+  ledger before execution, bounded in its own process group, and
+  secret-scrubbed before classification. Success must be the
+  run-specific value in a parsed backend result after surrounding
+  whitespace normalization; an echoed prompt or stderr line cannot
+  pass, and a non-JSON notice cannot hide a valid result or measured
+  cost. Active routing paths are rebound to the private probe tree and
+  credentials stay out of process argv. Probe sandboxes are removed
+  after use.
+- **Recovery timing** follows provider reset time, `Retry-After`, the
+  earliest subscription `rate_limits.*.resets_at`, then bounded
+  exponential backoff with deterministic jitter. A below-threshold
+  pass stays due for another tick; abandoned in-flight probes become
+  `unknown` and are rescheduled without changing success/failure
+  counters. Unverifiable attempts and cap deferrals advance scheduling
+  backoff without being mislabeled as provider failures.
+- **Tick is scheduler-safe**: one dedicated global lock covers the
+  whole due/probe/apply/wake pass, while short state publications use
+  the existing atomic lock. A concurrent tick refuses immediately;
+  an immediate second run with nothing due is a byte-level no-op. A
+  live supervisor invokes this same path when a due recovery marker is
+  the only selection blocker, so cron/launchd is optional for ordinary
+  cooldown recovery. The CLI discovers ledgers under registered git
+  worktrees by default; `--ledger-root <path>` selects an explicit
+  shared ledger root. Wake passes the exact validated registry and
+  ledger root to the relaunched supervisor.
+- **Wake is explicit and closed**: only `--wake`, only unattended
+  `routing_no_eligible_profile` dispositions, only after a candidate
+  is probe-qualified, and never from a ledger-supplied command. The
+  tick reconstructs this installation's supervisor invocation from a
+  fixed flag list, validates structured run identity, and accepts only
+  the supervisor's code-owned default caps and `on-incomplete=park`.
+  Runs carrying non-default operator grants require manual resume; a
+  mutable ledger cannot grant wider automatic execution. The tick claims a
+  per-park generation before launch, and requires a durable startup
+  acknowledgement. Live run locks and claimed generations prevent
+  duplicate launches.
+- **Failback happens only between attempts.** The preferred profile
+  must meet the configured consecutive-probe threshold and dwell;
+  the active fallback must independently meet its tenure dwell.
+  `failback = "operator"` or repository
+  `routing.recovery.auto_failback_enabled = false` pins the fallback.
+  Pending `verified_provisional` work is reconciled through C's
+  existing flow before the switch; a refusal parks that boundary and
+  leaves failback retryable.
+- **Operator policy owns behavior.** The user registry controls
+  `healthy_probes_required` (default 2),
+  `minimum_profile_dwell_sec` (default 300), and `failback`
+  (`auto|operator`). Repository `routing.recovery` can only veto
+  automatic wake or failback; it grants no endpoint, credential,
+  probe, or execution authority.
+
+What arrives later (#109 increment E): benchmarks, routing-quality
+metrics, and shadow-mode learned routing. The codex execution adapter
+remains its own child increment, reusing the existing result and
+checkpoint contracts.
 
 ## Four-Phase Workflow
 
@@ -1132,12 +1209,12 @@ code-copilot-team/
 │   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        1037 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
-│   ├── test-routing-config.sh         157 execution-profile registry + result + cli tests
+│   ├── test-routing-config.sh         167 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       186 circuit + action + selection + supervisor + identity tests (#251 B)
 │   ├── test-routing-tasks.sh          154 task metadata + floor + task-addressed explain tests (#254 C)
 │   ├── test-routing-packet.sh          99 immutable delegation-packet tests (#254 C T2)
 │   ├── test-routing-delegation.sh     171 route-class + packet execution + reconciliation tests (#254 C T3-T5)
-│   ├── test-routing-recovery.sh       115 probe-state + timing + probe-engine tests (#257 D)
+│   ├── test-routing-recovery.sh       375 probe-state + timing + probe + tick-wake tests (#257 D)
 │   └── test-claude-code-launcher.sh   26 branded-launcher tests (#195)
 ├── claude_code/                         Backward-compat wrapper → adapters/claude-code/
 ├── .github/workflows/sync-check.yml     CI: adapter drift + full gate verification

@@ -40,6 +40,8 @@
 
 RS_FILE="${CCT_ROUTING_STATE:-$HOME/.code-copilot-team/routing-state.json}"
 RS_LOCK_STALE_SEC="${CCT_ROUTING_LOCK_STALE_SEC:-60}"
+RS_TICK_LOCK="${CCT_ROUTING_TICK_LOCK:-${RS_FILE}.tick.lock}"
+RS_TICK_LOCK_HELD=0
 
 RS_SKELETON='{"schema_version":1,"profiles":{},"pools":{},"applied":{}}'
 
@@ -84,8 +86,59 @@ rs_lock() {
             return 2
         fi
     done
-    echo "$$" > "${dir}/pid"
+    if ! printf '%s\n' "$$" > "${dir}/pid"; then
+        rm -rf "$dir" 2>/dev/null || true
+        return 2
+    fi
 }
+# rs_trylock -> ACQUIRES the lock or fails immediately (rc 1).
+# A NON-BLOCKING acquisition for schedulers: rs_lock deliberately WAITS
+# (a supervisor should), but a cron tick must refuse rather than
+# pile up behind another writer. The refusal decision and the
+# acquisition are THE SAME mkdir — a separate "is it held?" predicate
+# followed by a blocking rs_lock would be a TOCTOU that can still
+# queue behind a writer that arrives in between.
+# A scheduled writer never removes an existing lock. A PID liveness
+# check followed by deletion is itself racy: the original owner can
+# release and a new writer can acquire between those operations. The
+# scheduler fails closed and names the lock for operator recovery.
+rs_trylock() {
+    local dir="${RS_FILE}.lock"
+    mkdir -p "$(dirname "$RS_FILE")" 2>/dev/null || true
+    if mkdir "$dir" 2>/dev/null; then
+        if ! printf '%s\n' "$$" > "${dir}/pid"; then
+            rm -rf "$dir" 2>/dev/null || true
+            return 1
+        fi
+        return 0
+    fi
+    return 1
+}
+
+# The scheduler lock is distinct from the short state-write lock. A tick
+# holds this for its complete probe/apply/wake pass, so overlapping cron
+# invocations refuse instead of both operating on different snapshots.
+rs_tick_trylock() {
+    local dir="$RS_TICK_LOCK"
+    mkdir -p "$(dirname "$dir")" 2>/dev/null || return 1
+    mkdir "$dir" 2>/dev/null || return 1
+    if ! printf '%s\n' "$$" > "$dir/pid"; then
+        rm -rf "$dir" 2>/dev/null || true
+        return 1
+    fi
+    RS_TICK_LOCK_HELD=1
+}
+
+rs_tick_unlock() {
+    [[ "$RS_TICK_LOCK_HELD" == "1" ]] || return 0
+    if [[ "$(cat "$RS_TICK_LOCK/pid" 2>/dev/null)" != "$$" ]]; then
+        echo "routing-state: cannot release scheduler lock $RS_TICK_LOCK because ownership is no longer provable" >&2
+        return 1
+    fi
+    rm -rf "$RS_TICK_LOCK" 2>/dev/null || return 1
+    RS_TICK_LOCK_HELD=0
+}
+
 rs_unlock() {
     local dir="${RS_FILE}.lock"
     # Owner-aware: only the recording process may remove the lock, so
@@ -188,9 +241,18 @@ rs_set_profile() {
         return 1
     fi
     rs_apply "$id" \
-        '.profiles[$p] = ((.profiles[$p] // {}) + {state:$st, reason:$why,
-                          until:(if $until == "-" then null else ($until|tonumber) end),
-                          failed_at:$__now})' \
+        'if .profiles[$p].state == "disabled" and $st != "disabled" then
+           error("auth-disabled profiles require rs_operator_enable")
+         else .profiles[$p] = ((.profiles[$p] // {}) +
+           {state:$st, reason:$why,
+            until:(if $until == "-" then null else ($until|tonumber) end),
+            failed_at:$__now}
+           | if $st == "disabled" then
+               . + {next_probe_at:null, probe_generation:null,
+                    consecutive_probe_successes:0,
+                    consecutive_probe_failures:0, healthy_since:null}
+                    + {probe_backoff_attempts:0}
+             else . end) end' \
         --arg p "$p" --arg st "$st" --arg why "$why" --arg until "$until"
 }
 # rs_set_pool <attempt_id> <pool> <state> <reason> <until-epoch|->
@@ -215,9 +277,11 @@ rs_set_pool() {
 # enforced at the consumption point by rs_probe_qualified: only a
 # canary streak that crossed the threshold is failback-qualified.
 rs_mark_success() {
-    rs_apply "$1" '.profiles[$p] = ((.profiles[$p] // {}) + {state:"healthy",
-                                    reason:"attempt succeeded",
-                                    until:null, last_success_at:$__now})' --arg p "$2"
+    rs_apply "$1" 'if .profiles[$p].state == "disabled" then
+                      error("auth-disabled profiles require operator enable")
+                    else .profiles[$p] = ((.profiles[$p] // {}) + {state:"healthy",
+                                          reason:"attempt succeeded",
+                                          until:null, last_success_at:$__now}) end' --arg p "$2"
 }
 
 # ── probe scheduling + evidence (#257 D T1; plan decisions 1 + 3) ────
@@ -236,10 +300,30 @@ rs_mark_success() {
 # without touching evidence counters.
 rs_schedule_probe() {
     local id="$1" p="$2" at="$3" why="${4:-scheduled}"
+    if ! rs_apply "$id" \
+        'if .profiles[$p].state == "disabled"
+         then error("auth-disabled profiles require rs_operator_enable")
+         else .profiles[$p] = ((.profiles[$p] // {}) + {state:"probe_due",
+                               reason:$why, until:null,
+                               next_probe_at:($at|tonumber)}) end' \
+        --arg p "$p" --arg at "$at" --arg why "$why"; then
+        echo "routing-state: profile '$p' was not scheduled — an auth-disabled profile can exit only through cct routing enable" >&2
+        return 1
+    fi
+}
+
+# rs_schedule_after_cooldown <attempt_id> <profile> <at> <reason>
+# Attach D's canary schedule without replacing B's governing cooldown
+# before its deadline. At/after `at`, the shared read program surfaces
+# probe_due instead of decaying to selectable unknown; before it, B's
+# cooldown and earliest-retry behavior remain intact.
+rs_schedule_after_cooldown() {
+    local id="$1" p="$2" at="$3" why="${4:-recovery canary scheduled}"
     rs_apply "$id" \
-        '.profiles[$p] = ((.profiles[$p] // {}) + {state:"probe_due",
-                          reason:$why, until:null,
-                          next_probe_at:($at|tonumber)})' \
+        'if .profiles[$p].state == "disabled" then
+           error("auth-disabled profiles require rs_operator_enable")
+         else .profiles[$p] = ((.profiles[$p] // {}) +
+           {next_probe_at:($at|tonumber), probe_schedule_reason:$why}) end' \
         --arg p "$p" --arg at "$at" --arg why "$why"
 }
 
@@ -250,10 +334,13 @@ rs_schedule_probe() {
 rs_probe_begin() {
     local id="$1" p="$2" gen="$3"
     rs_apply "$id" \
-        '.profiles[$p] = ((.profiles[$p] // {}) + {state:"probing",
-                          reason:"probe in flight", until:null,
-                          probe_generation:($gen|tonumber),
-                          probe_started_at:$__now})' \
+        'if .profiles[$p].state == "disabled" then
+           error("auth-disabled profiles require operator enable")
+         else .profiles[$p] = ((.profiles[$p] // {}) + {state:"probing",
+                               reason:"probe in flight", until:null,
+                               next_probe_at:null,
+                               probe_generation:($gen|tonumber),
+                               probe_started_at:$__now}) end' \
         --arg p "$p" --arg gen "$gen"
 }
 
@@ -264,10 +351,15 @@ rs_probe_begin() {
 rs_probe_pass() {
     local id="$1" p="$2" threshold="$3"
     rs_apply "$id" \
-        '.profiles[$p] = ((.profiles[$p] // {}) as $e
+        'if .profiles[$p].state == "disabled" then
+           error("auth-disabled profiles require operator enable")
+         else .profiles[$p] = ((.profiles[$p] // {}) as $e
           | (($e.consecutive_probe_successes // 0) + 1) as $n
           | $e + {consecutive_probe_successes:$n, last_probe_at:$__now,
-                  next_probe_at:null, probe_generation:null,
+                  consecutive_probe_failures:0,
+                  probe_backoff_attempts:0,
+                  next_probe_at:(if $n >= ($t|tonumber) then null else $__now end),
+                  probe_generation:null,
                   state:(if $n >= ($t|tonumber) then "healthy" else "probe_due" end),
                   reason:(if $n >= ($t|tonumber)
                           then "probe-verified healthy (" + ($n|tostring) + "/" + $t + " successes)"
@@ -276,7 +368,7 @@ rs_probe_pass() {
                   until:null,
                   healthy_since:(if $n >= ($t|tonumber)
                                  then ($e.healthy_since // $__now)
-                                 else null end)})' \
+                                 else null end)}) end' \
         --arg p "$p" --arg t "$threshold"
 }
 
@@ -286,12 +378,16 @@ rs_probe_pass() {
 rs_probe_fail() {
     local id="$1" p="$2" at="$3" why="${4:-probe failed}"
     rs_apply "$id" \
-        '.profiles[$p] = ((.profiles[$p] // {}) + {state:"cooldown",
-                          reason:$why, until:($at|tonumber),
-                          consecutive_probe_successes:0,
-                          last_probe_at:$__now, healthy_since:null,
-                          probe_generation:null,
-                          next_probe_at:($at|tonumber)})' \
+        'if .profiles[$p].state == "disabled" then
+           error("auth-disabled profiles require operator enable")
+         else .profiles[$p] = ((.profiles[$p] // {}) as $e
+          | $e + {state:"cooldown", reason:$why, until:($at|tonumber),
+                  consecutive_probe_successes:0,
+                  consecutive_probe_failures:(($e.consecutive_probe_failures // 0) + 1),
+                  probe_backoff_attempts:(($e.probe_backoff_attempts // 0) + 1),
+                  last_probe_at:$__now, healthy_since:null,
+                  probe_generation:null,
+                  next_probe_at:($at|tonumber)}) end' \
         --arg p "$p" --arg at "$at" --arg why "$why"
 }
 
@@ -303,11 +399,78 @@ rs_probe_fail() {
 rs_probe_abandon() {
     local id="$1" p="$2" at="$3"
     rs_apply "$id" \
-        '.profiles[$p] = ((.profiles[$p] // {}) + {state:"unknown",
+        'if .profiles[$p].state == "disabled" then
+           error("auth-disabled profiles require operator enable")
+         else .profiles[$p] = ((.profiles[$p] // {}) + {state:"unknown",
                           reason:"probe abandoned (prober did not record evidence) — rescheduled; no provider evidence inferred",
                           until:null, probe_generation:null,
-                          next_probe_at:($at|tonumber)})' \
+                          next_probe_at:($at|tonumber)}) end' \
         --arg p "$p" --arg at "$at"
+}
+
+# rs_probe_unverifiable <attempt_id> <profile> <next-epoch> <reason>
+# Absence of evidence does not alter provider success/failure streaks,
+# but it must advance the scheduling backoff. Reusing rs_probe_abandon
+# here left every unverifiable probe permanently on backoff attempt 1.
+# A genuinely abandoned in-flight marker still uses rs_probe_abandon
+# and touches no counters at all.
+rs_probe_unverifiable() {
+    local id="$1" p="$2" at="$3" why="${4:-probe unverifiable}"
+    rs_apply "$id" \
+        'if .profiles[$p].state == "disabled" then
+           error("auth-disabled profiles require operator enable")
+         else .profiles[$p] = ((.profiles[$p] // {}) as $e
+          | $e + {state:"unknown", reason:$why, until:null,
+                  probe_generation:null, next_probe_at:($at|tonumber),
+                  probe_backoff_attempts:(($e.probe_backoff_attempts // 0) + 1)}) end' \
+        --arg p "$p" --arg at "$at" --arg why "$why"
+}
+
+# rs_probe_deferred <attempt_id> <profile> <next-epoch> <reason>
+# A cap refusal is not provider evidence, but repeatedly reclaiming it
+# at the first backoff window pointlessly contends on both scheduler
+# locks for the whole accounting window. Advance only the scheduling
+# backoff; keep the provider counters untouched and the profile due.
+rs_probe_deferred() {
+    local id="$1" p="$2" at="$3" why="${4:-probe deferred by caps}"
+    rs_apply "$id" \
+        'if .profiles[$p].state == "disabled" then
+           error("auth-disabled profiles require operator enable")
+         else .profiles[$p] = ((.profiles[$p] // {}) as $e
+          | $e + {state:"probe_due", reason:$why, until:null,
+                  probe_generation:null, next_probe_at:($at|tonumber),
+                  probe_backoff_attempts:(($e.probe_backoff_attempts // 0) + 1)}) end' \
+        --arg p "$p" --arg at "$at" --arg why "$why"
+}
+
+# rs_operator_enable <profile> — the sole exit from auth-disabled.
+# Validation and transition share one lock hold; a second invocation sees
+# probe_due and refuses instead of manufacturing another operator action.
+rs_operator_enable() {
+    local p="$1" doc now newdoc rc=0
+    rs_lock || return 2
+    doc=$(rs_read) || { rc=$?; rs_unlock; return "$rc"; }
+    if [[ "$(jq -r --arg p "$p" '.profiles[$p].state // "unknown"' <<< "$doc")" != "disabled" ]]; then
+        echo "routing-state: profile '$p' is not auth-disabled — only disabled profiles can be enabled" >&2
+        rs_unlock
+        return 1
+    fi
+    now=$(rs_now)
+    if ! newdoc=$(jq -ce --arg p "$p" --argjson now "$now" '
+        .profiles[$p] = ((.profiles[$p] // {}) +
+          {state:"probe_due", reason:"operator re-enabled; canary required",
+           until:null, next_probe_at:$now, probe_generation:null,
+           consecutive_probe_successes:0, consecutive_probe_failures:0,
+           probe_backoff_attempts:0,
+           healthy_since:null})
+        | .operator_events = ((.operator_events // []) +
+          [{at:$now,event:"routing_operator_enable",profile:$p}])' <<< "$doc"); then
+        rs_unlock
+        return 1
+    fi
+    _rs_write "$newdoc" || { rs_unlock; return 1; }
+    rs_unlock
+    rs_journal "routing_operator_enable" "profile '$p' moved disabled -> probe_due; a canary is required before health"
 }
 
 # ── effective state (read-side decay; pool outranks profile) ─────────
@@ -342,6 +505,8 @@ _rs_eff_prog='
         elif (e.state == "healthy" and e.healthy_since != null
               and (e.healthy_since + $ttl) <= $now)
             then {state:"unknown", until:null}
+        elif (e.next_probe_at != null and e.next_probe_at <= $now)
+            then {state:"probe_due", until:e.next_probe_at}
         elif (e.until != null and e.until <= $now) then {state:"unknown", until:null}
         else {state:e.state, until:e.until} end;
     (eff(.pools[$pool])) as $ps
@@ -382,6 +547,25 @@ rs_probe_evidence() {
         | "\($e.consecutive_probe_successes // 0)\t\($e.healthy_since // "-")\t\($e.next_probe_at // "-")\t\($e.probe_generation // "-")"' <<< "$doc"
 }
 
+# rs_probe_failure_count <profile> -> consecutive verified failures.
+# Kept separate from the success evidence tuple so callers cannot repeat
+# the old bug of feeding the success streak into exponential backoff.
+rs_probe_failure_count() {
+    local p="$1" doc
+    doc=$(rs_read) || return $?
+    jq -r --arg p "$p" '(.profiles[$p].consecutive_probe_failures // 0)' <<< "$doc"
+}
+
+# rs_probe_backoff_count <profile> -> scheduling attempts that failed
+# to produce recovery. This is deliberately distinct from the provider
+# failure counter: unverifiable probes back off without being mislabeled
+# as negative provider evidence.
+rs_probe_backoff_count() {
+    local p="$1" doc
+    doc=$(rs_read) || return $?
+    jq -r --arg p "$p" '(.profiles[$p].probe_backoff_attempts // 0)' <<< "$doc"
+}
+
 # rs_probe_qualified <profile> <threshold> -> rc 0 iff the profile
 # carries PROBE-VERIFIED health: state healthy AND a stamped
 # healthy_since (the threshold-crossing instant) AND a canary streak
@@ -398,10 +582,77 @@ rs_probe_qualified() {
           and (($e.consecutive_probe_successes // 0) >= $t)' >/dev/null 2>&1 <<< "$doc"
 }
 
+# rs_claim_due <now-epoch> -> "<profile>\t<generation>\t<prior>" lines
+#
+# THE serialization point for concurrent schedulers. Selecting due
+# profiles and marking them `probing` is ONE read-select-mark under a
+# SINGLE lock hold: the set a caller receives is exactly the set this
+# write claimed, so two ticks can never probe the same due event and
+# manufacture a success streak out of one recovery.
+#   - non-blocking (rs_trylock): a scheduled tick refuses (rc 3)
+#     rather than queueing behind another writer;
+#   - the claim CONSUMES the schedule: `probing` is set AND
+#     next_probe_at is cleared in that same write. Marking alone is
+#     not enough — a second tick arriving after the first RELEASED the
+#     lock (while it is still out probing) would otherwise re-select
+#     the very same due instant. The lock only serializes overlapping
+#     ticks; the consumed schedule is what makes a due event
+#     single-use. From here only the abandonment window can re-offer
+#     the profile, and the probe_* primitives set the next schedule;
+#   - generations come from `.probe_seq`, a DURABLE monotonic counter
+#     in the store itself. Process-derived ids (pid-based) collide
+#     after pid reuse against the permanently-retained idempotency
+#     set, silently turning a real transition into a no-op;
+#   - `prior` is the pre-claim disposition: `abandoned` for an
+#     in-flight marker past its window (the caller reconciles it
+#     WITHOUT probing — absence of evidence, never probe_fail), `due`
+#     otherwise. Claiming an abandoned entry restarts its abandon
+#     window; a tick that then dies simply leaves it abandoned again,
+#     so the reconcile converges on the next tick;
+#   - nothing due => NO WRITE AT ALL, so an idle tick leaves the
+#     store byte-identical.
+rs_claim_due() {
+    local now="${1:-$(rs_now)}" doc out claims
+    rs_trylock || return 3
+    doc=$(rs_read) || { local rc=$?; rs_unlock; return "$rc"; }
+    if ! out=$(jq -ce --argjson now "$now" --argjson abandon "$RS_PROBE_ABANDON_SEC" '
+        ( [ .profiles | to_entries[]
+            | select((.value.state != "disabled")
+                     and ((.value.next_probe_at != null and .value.next_probe_at <= $now)
+                     or (.value.state == "probing"
+                         and ((.value.probe_started_at // 0) + $abandon) <= $now)))
+            | {id: .key,
+               prior: (if .value.state == "probing" then "abandoned" else "due" end)} ]
+        ) as $sel
+        | (if .probe_seq == null then 0 else .probe_seq end) as $base
+        | [ range(0; ($sel | length)) as $i
+            | $sel[$i] + {generation: ($base + $i + 1)} ] as $claims
+        | { claims: $claims,
+            doc: ( reduce $claims[] as $c (.;
+                     .profiles[$c.id] = ((.profiles[$c.id] // {})
+                       + {state:"probing", reason:"probe claimed by a scheduler tick",
+                          until:null, next_probe_at:null,
+                          probe_generation:$c.generation,
+                          probe_started_at:$now}))
+                   | .probe_seq = ($base + ($claims | length)) ) }' <<< "$doc" 2>/dev/null); then
+        echo "routing-state: could not evaluate the due-probe claim — nothing written" >&2
+        rs_unlock
+        return 1
+    fi
+    claims=$(jq -c '.claims' <<< "$out")
+    if [[ "$(jq -r '.claims | length' <<< "$out")" -gt 0 ]]; then
+        _rs_write "$(jq -c '.doc' <<< "$out")" || { rs_unlock; return 1; }
+    fi
+    rs_unlock
+    jq -r '.[] | [.id, (.generation|tostring), .prior] | @tsv' <<< "$claims"
+}
+
 # rs_due_probes <now-epoch> -> one profile id per line whose
 # next_probe_at is due, PLUS profiles whose in-flight marker is
-# abandoned (the tick reconciles those first). Scheduling query
-# only — it makes no health claim.
+# abandoned (the tick reconciles those first). A READ-ONLY scheduling
+# query — it makes no health claim and CLAIMS NOTHING. A scheduler
+# that intends to probe must use rs_claim_due; selecting here and
+# probing afterwards is the race that lets two ticks share one event.
 rs_due_probes() {
     local now="${1:-$(rs_now)}" doc
     doc=$(rs_read) || return $?
