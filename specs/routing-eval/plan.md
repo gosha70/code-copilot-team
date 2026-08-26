@@ -418,6 +418,7 @@ silently breaks comparability.
 | `scripts/benchmark_runner/routing_eval/routing_quality.py` | NEW — #109 metrics, Pareto, control-set gate (decisions 4, 5, 6) |
 | `scripts/benchmark_runner/routing_eval/redaction.py` | NEW — decision 8 |
 | `scripts/benchmark_runner/routing_eval/scenario_config.py` | NEW — executable scenario-config validation; the schema documents, this enforces (T1) |
+| `scripts/benchmark_runner/routing_eval/injection.py` | NEW — preset digest + deterministic event replay for the two test seams (T2) |
 | `scripts/benchmark_runner/routing_eval/scenario.py` | NEW — scenario driver; drives the existing test seams (decision 2) |
 | `scripts/benchmark_runner/compare.py` | extend: refuse mixed candidates+arms configs; direct scenario configs to routing_eval (T1) |
 | `scripts/benchmark_runner/tests/` | regressions per task below, with fixtures under `tests/fixtures/schema/` |

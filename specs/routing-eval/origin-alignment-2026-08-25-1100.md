@@ -459,6 +459,86 @@ reproduction are closed:
   owner reproduced value=1.0 over inputs recomputing to ~0.000002 —
   can no longer exist to win `always_cheapest`.
 
+## T2 build audit round 1 (owner) — four findings, all applied
+
+The owner's pre-commit audit of T2 found the replay engine could not
+satisfy the real probe contract and was fail-open on scheduling,
+concurrency, and quoting. All four resolved, each now covered by a
+regression the original suite lacked:
+
+1. **The probe replay satisfies the REAL rb_probe.** A declared
+   success event is now pass-mode (answered from the prompt) instead
+   of the canned harness result that failed the nonce; the expected-
+   line extraction matches both rb_prompt forms (the tool-required
+   prompt says "Then reply...", lowercase); and when the prompt names
+   a tool command the replay RUNS that exact command, which writes the
+   marker to CCT_PROBE_TOOL_FILE. Four end-to-end tests drive the
+   unmodified rb_probe: inference-only pass, declared-success pass,
+   tool-required pass (proving the tool canary landed), and an
+   injected auth failure reaching probe_fail through the real
+   classifier.
+2. **at_task_index has a boundary.** events_for_task() is the
+   scheduling filter: an event declared for task 5 never reaches task
+   0's replay, within-task order is declaration order, and
+   materialize_replay documents that it consumes an already-scheduled
+   invocation stream. The T4 driver materializes one replay per task
+   through this filter.
+3. **The event index is claimed atomically.** The unlocked
+   read-modify-write counter (reproduced losing 16 of 40 concurrent
+   increments) is replaced by mkdir-based claims — each invocation
+   owns exactly one index. A 40-way concurrent test asserts all 30
+   events delivered exactly once plus exactly 10 defaults.
+4. **Paths are quoted.** The script resolves its directory from $0 and
+   the returned command is shlex-quoted; a replay directory containing
+   spaces now works and is tested.
+
+## T2 build audit round 2 (owner) — two findings, all applied
+
+Round 2 found two remaining fail-open/fail-unsafe paths in the replay:
+
+1. **Missing declared evidence fails closed.** The materialization now
+   records the stream length, and the script distinguishes four cases
+   in order: explicit pass mode (the .mode file is READ, not inferred
+   from absence); complete .out+.rc evidence; a declared index with
+   missing or corrupt evidence — exit 70 with a stderr message, never
+   success and never a clean provider failure (the owner's repro:
+   deleting an auth-failure transcript had become a nonce pass); and
+   past-the-stream default. Regressions cover a deleted .out, a
+   deleted .rc, and a declared mid-stream pass.
+2. **Prompt text is never executed.** The tool leg validates the
+   request against rb_prompt's CLOSED canary shape — the exact string
+   `printf %s CCT_TOOL_OK > $CCT_PROBE_TOOL_FILE` with the path equal
+   to the exported env var — and writes the marker itself. Any other
+   tool request exits 70 without execution. The owner's injection
+   repro (a `touch` in the expected prompt shape) is now a regression
+   asserting the file is NOT created; the legitimate canary shape is
+   asserted to write the marker and pass, and the end-to-end
+   rb_probe tool test still passes, proving the validated shape is
+   exactly what the real probe emits.
+
+## T2 build audit round 3 (owner) — three findings, all applied
+
+Round 3 found the replay's integrity boundaries still open:
+
+1. **Re-materialization defines the complete stream.** Materialization
+   now cleans every owned artifact (event files, defaults,
+   stream-count, manifest, claims) before writing, and the script
+   consults event files ONLY inside `n < count`. The owner's repro —
+   two events, re-materialize one, stale second failure replayed past
+   stream-count=1 — is a regression asserting the stale event never
+   fires and index 1 gets the default.
+2. **Evidence is digest-bound, not merely readable.** Every sidecar's
+   sha256 is recorded in a manifest, and the manifest's own digest is
+   EMBEDDED in the generated script, so a flipped .rc, an edited
+   transcript, an altered stream-count, and even a self-consistently
+   recomputed manifest over tampered evidence all fail closed (exit
+   70) — each is a regression. stream-count and .rc are additionally
+   syntax-validated as numbers.
+3. **The seam vocabulary is closed.** `REPLAY_SEAMS = ("harness",
+   "probe")`; anything else is refused by name at entry, so a typo'd
+   seam can never silently fall into harness semantics and recreate
+   the canned-reply nonce failure.
+
 ## Verdict
 
 Verdict: aligned
