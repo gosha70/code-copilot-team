@@ -539,6 +539,35 @@ Round 3 found the replay's integrity boundaries still open:
    seam can never silently fall into harness semantics and recreate
    the canned-reply nonce failure.
 
+## T3 build audit round 1 (owner) — HOLD on one invariant, applied
+
+The owner approved the selector semantics and held T3 on one missing
+invariant: a persisted matrix must PROVE exact Cartesian coverage, not
+merely schema validity — a matrix that lost one expensive trial cell
+would let always_cheapest win on incomplete evidence, and a vanished
+oracle candidate silently lowers the hindsight bound.
+
+Resolved with two structural additions and one shared validator:
+
+- The matrix now DECLARES its task list (`tasks`, schema-required):
+  without it, a fully vanished task is undetectable after load.
+- Every cell carries its `seed` (schema-required), making the cell's
+  canonical identity (task_id, profile_id, trial, seed) and the
+  trial-index/seed pairing verifiable after load.
+- `verify_matrix()` re-establishes the invariant — exactly one cell
+  per declared task x declared profile (the fingerprint's execution
+  identity) x declared (trial, seed); no duplicates; no undeclared
+  cells; seed pairing exact; eligibility never removes the cell
+  requirement. `build_matrix` runs it before returning and EVERY
+  selector runs it before selecting.
+
+Regressions cover each required mutation: the owner's bias fixture
+(alpha $1/$1/$9 vs beta $2/$2/$2 — the complete matrix picks beta, the
+pruned one REFUSES rather than letting alpha win at $1 mean); a removed
+ineligible cell (explicit ineligibility never becomes silence); a
+duplicated identity; a trial carrying another trial's seed; and a
+persistence round-trip whose post-load mutation refuses.
+
 ## Verdict
 
 Verdict: aligned

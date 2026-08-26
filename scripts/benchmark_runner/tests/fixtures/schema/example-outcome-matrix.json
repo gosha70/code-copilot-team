@@ -26,6 +26,9 @@
     "task_set_revision": "polyglot@3a1f9c2",
     "toolchain_digest": "sha256:5b7d9a1c3e5f7b9d1a3c5e7f9b1d3a5c7e9f1b3d5a7c9e1f3b5d7a9c1e3f5b7d"
   },
+  "tasks": [
+    "python/bowling"
+  ],
   "trials": 2,
   "trial_seeds": [
     1701,
@@ -37,6 +40,7 @@
       "task_id": "python/bowling",
       "profile_id": "anthropic-sonnet",
       "trial": 0,
+      "seed": 1701,
       "eligible": true,
       "result": "pass",
       "regressions": {
@@ -60,6 +64,7 @@
       "task_id": "python/bowling",
       "profile_id": "anthropic-sonnet",
       "trial": 1,
+      "seed": 1702,
       "eligible": true,
       "result": "pass",
       "regressions": {
@@ -83,6 +88,7 @@
       "task_id": "python/bowling",
       "profile_id": "local-qwen",
       "trial": 0,
+      "seed": 1701,
       "eligible": false,
       "result": null,
       "regressions": {
@@ -106,6 +112,7 @@
       "task_id": "python/bowling",
       "profile_id": "local-qwen",
       "trial": 1,
+      "seed": 1702,
       "eligible": false,
       "result": null,
       "regressions": {

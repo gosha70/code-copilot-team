@@ -7,6 +7,7 @@
   "required": [
     "schema_version",
     "fingerprint",
+    "tasks",
     "trials",
     "trial_seeds",
     "cost_basis",
@@ -21,6 +22,15 @@
     "fingerprint": {
       "$ref": "#/$defs/fingerprint",
       "description": "All five components are required. A stored matrix may be reused ONLY when every one matches; a mismatch in any single component refuses reuse rather than silently carrying stale cells forward."
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The DECLARED task list. Coverage is an invariant, not an observation: without a declared list, a fully vanished task is undetectable after load, and a selector averaging whatever cells remain can be silently biased (the missing-expensive-trial failure). verify_matrix re-establishes exact Cartesian coverage tasks x profiles x trials against this list."
     },
     "trials": {
       "type": "integer",
@@ -148,6 +158,7 @@
         "task_id",
         "profile_id",
         "trial",
+        "seed",
         "eligible"
       ],
       "additionalProperties": false,
@@ -163,6 +174,10 @@
         "trial": {
           "type": "integer",
           "minimum": 0
+        },
+        "seed": {
+          "type": "integer",
+          "description": "The trial seed this cell ran under (the seed the trial WOULD have used, for ineligible cells). Part of the cell's canonical identity (task_id, profile_id, trial, seed): it makes the trial-index/seed pairing verifiable after load, so a persisted matrix whose seeds drifted from the preset fails closed instead of comparing unlike trials."
         },
         "eligible": {
           "type": "boolean",
