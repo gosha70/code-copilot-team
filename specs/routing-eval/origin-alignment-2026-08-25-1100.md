@@ -568,6 +568,45 @@ ineligible cell (explicit ineligibility never becomes silence); a
 duplicated identity; a trial carrying another trial's seed; and a
 persistence round-trip whose post-load mutation refuses.
 
+## T3 build audit round 2 (owner, post-commit a0d9694) — two findings + CI
+
+The owner reviewed the T3 commit itself, held T4 narrowly on two
+evidence-integrity gaps, and pinned one T4 design rule. A CI failure
+on PR #262 was fixed in the same round.
+
+1. **Eligibility bound to the registry predicate.** T3's selectors
+   trusted the persisted `Cell.eligible` bit, so flipping
+   `eligible: true` to `false` in the artifact removed a profile from
+   all three controls while the structural invariant still passed —
+   and build_matrix accepted an executor's eligibility bit without
+   checking it against the predicate. Resolved: build_matrix rejects
+   an executor overruling the predicate; verify_matrix accepts the
+   AUTHORITATIVE `eligible(profile, task)` predicate and requires
+   every cell's stored bit to match; every selector forwards it. The
+   owner's flip reproduction is a regression asserting all three
+   selectors refuse; the misleadingly named identity test was renamed
+   to what it actually guards.
+2. **always_cheapest requires every declared trial priced.** The
+   partial mean over "whichever trials happen to be priced" was the
+   same incomplete-evidence bias the coverage HOLD eliminated: alpha
+   at measured $1 + 2x unavailable posted a $1 mean and beat beta's
+   honest $2/$2/$2 with a structurally COMPLETE matrix. Resolved: a
+   profile participates only when basis-satisfying cost exists for
+   ALL declared trials; the owner's discriminator fixture asserts
+   insufficient_evidence ("only 1 of 3 declared trials"), never alpha.
+3. **CI (benchmark-smoke) import convention.** CI discovers with
+   unittest from the tests directory, loading modules top-level; the
+   four routing-eval test modules used relative imports where every
+   sibling uses absolute ones — 12 errors. Converted to the repo's
+   absolute-import convention and verified under CI's exact
+   invocation.
+
+**T4 design rule pinned in tasks.md:** leg completeness must be proven
+from durable routing-run evidence and state transitions — provisional
+work reconciled by Tier-1, recovery SELECTING the preferred profile at
+a task boundary, Tier-1-only controls REFUSING Tier-2 — never from a
+driver-maintained visited-legs list.
+
 ## Verdict
 
 Verdict: aligned

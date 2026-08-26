@@ -15,7 +15,7 @@ import json
 import unittest
 from pathlib import Path
 
-from ..routing_eval.cost_reader import (
+from benchmark_runner.routing_eval.cost_reader import (
     ESTIMATED,
     MEASURED,
     UNAVAILABLE,
@@ -348,7 +348,7 @@ class TestHarnessCostConstraintPreserved(unittest.TestCase):
     """E1 must not reverse the harness's no-cost contract."""
 
     def test_backend_result_has_no_cost_field(self) -> None:
-        from ..contracts import BackendResult
+        from benchmark_runner.contracts import BackendResult
 
         fields = set(BackendResult.__dataclass_fields__)
         for forbidden in ("cost_usd", "cost", "cost_provenance", "total_cost_usd"):

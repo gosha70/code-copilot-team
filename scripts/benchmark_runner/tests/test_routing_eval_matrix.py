@@ -14,7 +14,7 @@ import json
 import unittest
 from pathlib import Path
 
-from ..routing_eval.outcome_matrix import (
+from benchmark_runner.routing_eval.outcome_matrix import (
     MatrixIntegrityError,
     NOT_APPLICABLE,
     SEQUENCE_DEPENDENT_MEASURES,
@@ -127,7 +127,7 @@ class TestBuildMatrix(unittest.TestCase):
         self.assertFalse(qwen[0].eligible)
         self.assertIsNone(qwen[0].result)
 
-    def test_executor_cannot_mislabel_a_cell(self) -> None:
+    def test_executor_cannot_mislabel_cell_identity(self) -> None:
         with self.assertRaisesRegex(ValueError, "expected t1/alpha/trial-0"):
             build_matrix(_FP, ["t1"], ["alpha"], [1], "measured",
                          lambda p, t: True,
@@ -141,7 +141,7 @@ class TestBuildMatrix(unittest.TestCase):
         self.assertEqual(matrix_dumps(m), matrix_dumps(matrix_from_record(record)))
 
     def test_record_satisfies_the_schema(self) -> None:
-        from .test_routing_eval_schemas import _load_json, validate
+        from benchmark_runner.tests.test_routing_eval_schemas import _load_json, validate
 
         m = build_matrix(_FP, ["t1"], ["alpha"], [1], "measured",
                          lambda p, t: True, lambda t, p, tr, s: _cell(t, p, tr, seed=s))
@@ -210,6 +210,25 @@ class TestAlwaysCheapest(unittest.TestCase):
         sel = select_always_cheapest(_matrix(cells))
         self.assertEqual({c.profile_id for c in sel.chosen}, {"beta"})
 
+    def test_partial_trial_pricing_is_insufficient_never_a_cheaper_mean(self) -> None:
+        # The owner's discriminator: alpha measured $1 then unavailable
+        # twice; beta measured $2/$2/$2. The Cartesian matrix is
+        # COMPLETE, so coverage passes — but alpha's $1 partial mean
+        # must never beat beta's honest $2 across all three trials.
+        cells = []
+        for trial, (a_cost, a_prov) in enumerate(
+            [(1.0, "measured"), (None, "unavailable"), (None, "unavailable")]
+        ):
+            cells.append(
+                _cell("t1", "alpha", trial, cost=a_cost, prov=a_prov, seed=trial + 1)
+            )
+            cells.append(_cell("t1", "beta", trial, cost=2.0, seed=trial + 1))
+        m = _matrix(cells, trials=3, seeds=(1, 2, 3))
+        verify_matrix(m)  # complete — this is not a coverage failure
+        sel = select_always_cheapest(m)
+        self.assertEqual(sel.chosen, ())
+        self.assertIn("only 1 of 3 declared trials", sel.insufficient["t1"])
+
     def test_any_unpriced_eligible_profile_blocks_the_task(self) -> None:
         cells = [
             _cell("t1", "alpha", 0, cost=0.01),
@@ -217,7 +236,7 @@ class TestAlwaysCheapest(unittest.TestCase):
         ]
         sel = select_always_cheapest(_matrix(cells, trials=1, seeds=(1,)))
         self.assertEqual(sel.chosen, ())
-        self.assertIn("mixed provenance", sel.insufficient["t1"])
+        self.assertIn("only 0 of 1 declared trials", sel.insufficient["t1"])
 
     def test_estimated_basis_pins_the_table_version(self) -> None:
         cells = [
@@ -332,6 +351,52 @@ class TestOracleBudget(unittest.TestCase):
         sel = select_oracle(_matrix(cells, trials=1, seeds=(1,)), _quality,
                             budget_ceiling_usd=1.0)
         self.assertEqual(sel.chosen, ())  # estimated under measured basis
+
+
+class TestEligibilityAuthority(unittest.TestCase):
+    """Eligibility is the registry predicate's, never the artifact's."""
+
+    def test_executor_cannot_overrule_the_predicate(self) -> None:
+        # Predicate says eligible; executor returns an ineligible cell.
+        with self.assertRaisesRegex(ValueError, "registry predicate says True"):
+            build_matrix(
+                _FP, ["t1"], ["alpha"], [1], "measured",
+                lambda p, t: True,
+                lambda t, p, tr, sd: _cell(t, p, tr, seed=sd, eligible=False),
+            )
+
+    def test_persisted_eligibility_flip_refuses_in_every_selector(self) -> None:
+        # The owner's reproduction: flip one profile's eligible bits to
+        # false in the persisted record. Structural coverage still
+        # passes; with the authoritative predicate supplied, every
+        # selector refuses instead of silently recomputing controls
+        # without that profile.
+        cells = [
+            _cell("t1", "alpha", 0), _cell("t1", "beta", 0),
+        ]
+        m = _matrix(cells, trials=1, seeds=(1,))
+        record = matrix_to_record(m)
+        for c in record["cells"]:
+            if c["profile_id"] == "beta":
+                c["eligible"] = False
+                c["result"] = None
+                c["cost"] = {"value": None, "provenance": "unavailable", "estimator": None}
+        tampered = matrix_from_record(record)
+        predicate = lambda p, t: True  # the registry says BOTH eligible
+        verify_matrix(tampered)  # structural invariant alone still passes
+        with self.assertRaisesRegex(MatrixIntegrityError, "registry predicate says True"):
+            select_always_best(tampered, _META, eligible=predicate)
+        with self.assertRaisesRegex(MatrixIntegrityError, "registry predicate says True"):
+            select_always_cheapest(tampered, eligible=predicate)
+        with self.assertRaisesRegex(MatrixIntegrityError, "registry predicate says True"):
+            select_oracle(tampered, _quality, eligible=predicate)
+
+    def test_matching_predicate_verifies(self) -> None:
+        cells = [_cell("t1", "alpha", 0), _cell("t1", "qwen", 0, eligible=False)]
+        m = _matrix(cells, trials=1, seeds=(1,))
+        verify_matrix(m, eligible=lambda p, t: p != "qwen")  # no raise
+        with self.assertRaisesRegex(MatrixIntegrityError, "registry predicate"):
+            verify_matrix(m, eligible=lambda p, t: True)
 
 
 class TestMatrixIntegrity(unittest.TestCase):

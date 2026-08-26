@@ -240,7 +240,7 @@ class TestCompareConfigRejection(unittest.TestCase):
 
     def test_mixed_config_is_refused_by_the_executable_parser(self) -> None:
         # The schema documents; compare.py enforces. Both must refuse.
-        from ..compare import CompareConfigError, _validate as compare_validate
+        from benchmark_runner.compare import CompareConfigError, _validate as compare_validate
 
         mixed = dict(self.candidates_only)
         mixed["arms"] = self.scenario_only["arms"]
@@ -248,13 +248,13 @@ class TestCompareConfigRejection(unittest.TestCase):
             compare_validate(mixed)
 
     def test_scenario_config_is_not_silently_run_as_candidates(self) -> None:
-        from ..compare import CompareConfigError, _validate as compare_validate
+        from benchmark_runner.compare import CompareConfigError, _validate as compare_validate
 
         with self.assertRaisesRegex(CompareConfigError, "routing-scenario config"):
             compare_validate(dict(self.scenario_only))
 
     def test_scenario_parser_accepts_the_valid_shape(self) -> None:
-        from ..routing_eval.scenario_config import validate_scenario_config
+        from benchmark_runner.routing_eval.scenario_config import validate_scenario_config
 
         cfg = validate_scenario_config(self.scenario_only)
         self.assertEqual(
@@ -264,7 +264,7 @@ class TestCompareConfigRejection(unittest.TestCase):
         self.assertEqual(cfg.cost_basis, "measured")
 
     def test_scenario_parser_rejects_mixed_and_broken_shapes(self) -> None:
-        from ..routing_eval.scenario_config import (
+        from benchmark_runner.routing_eval.scenario_config import (
             ScenarioConfigError,
             validate_scenario_config,
         )
@@ -301,7 +301,7 @@ class TestCompareConfigRejection(unittest.TestCase):
         # FR-E1-3: each mandatory kind exactly once. A missing control
         # arm or a duplicated one is refused at load time, not
         # discovered by the reporter.
-        from ..routing_eval.scenario_config import (
+        from benchmark_runner.routing_eval.scenario_config import (
             ScenarioConfigError,
             validate_scenario_config,
         )
@@ -317,7 +317,7 @@ class TestCompareConfigRejection(unittest.TestCase):
                 validate_scenario_config({**self.scenario_only, "arms": dup})
 
     def test_scenario_parser_requires_a_cost_basis(self) -> None:
-        from ..routing_eval.scenario_config import (
+        from benchmark_runner.routing_eval.scenario_config import (
             ScenarioConfigError,
             validate_scenario_config,
         )
@@ -330,7 +330,7 @@ class TestCompareConfigRejection(unittest.TestCase):
     def test_scenario_parser_is_closed_over_keys(self) -> None:
         # Misspelled keys silently ignored are fail-open: trial_seedz
         # would run with default seeds while looking configured.
-        from ..routing_eval.scenario_config import (
+        from benchmark_runner.routing_eval.scenario_config import (
             ScenarioConfigError,
             validate_scenario_config,
         )
@@ -353,7 +353,7 @@ class TestCompareConfigRejection(unittest.TestCase):
                     validate_scenario_config(payload)
 
     def test_scenario_parser_rejects_non_finite_ceiling(self) -> None:
-        from ..routing_eval.scenario_config import (
+        from benchmark_runner.routing_eval.scenario_config import (
             ScenarioConfigError,
             validate_scenario_config,
         )
@@ -393,7 +393,7 @@ class TestCompareConfigRejection(unittest.TestCase):
     def test_candidate_parser_rejects_stray_scenario_fields(self) -> None:
         # Even without 'scenario'/'arms', a candidate config carrying
         # scenario-only keys is refused — never silently ignored.
-        from ..compare import CompareConfigError, _validate as compare_validate
+        from benchmark_runner.compare import CompareConfigError, _validate as compare_validate
 
         for key, value in (
             ("cost_basis", "measured"),

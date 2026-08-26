@@ -100,6 +100,16 @@ Each task is independently verifiable and leaves the suite green.
   preferred-profile recovery → Tier-1 reconciliation.
 - Add `benchmarks/presets/hybrid-routing.json` covering the six task
   shapes #109 names, including the Tier-1-only negative controls.
+- **Leg completeness is proven from durable evidence, never from a
+  driver-maintained visited-legs list** (owner design rule, pinned
+  pre-T4): the proof reads routing-run records and state transitions,
+  so the scenario cannot claim it exercised failover/recovery/
+  reconciliation merely because orchestration code attempted them.
+  Specifically: the Tier-2 task became provisional AND that same
+  provisional work was later reconciled by Tier-1; recovery SELECTED
+  the preferred profile at a task boundary (not merely observed a
+  passing probe); and the Tier-1-only negative controls demonstrably
+  REFUSED Tier-2 rather than merely ending up on Tier-1.
 - Regressions: the artifact proves every leg was exercised; a run
   missing a leg fails rather than reporting a partial arc.
 

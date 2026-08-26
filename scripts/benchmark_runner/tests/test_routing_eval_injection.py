@@ -18,8 +18,8 @@ import time
 import unittest
 from pathlib import Path
 
-from ..routing_eval.cost_reader import measured_cost
-from ..routing_eval.injection import (
+from benchmark_runner.routing_eval.cost_reader import measured_cost
+from benchmark_runner.routing_eval.injection import (
     TIMEOUT_EXIT_CODE,
     events_for_task,
     materialize_replay,
@@ -27,7 +27,7 @@ from ..routing_eval.injection import (
     reset_replay,
     transcript_for_event,
 )
-from ..routing_eval.scenario_config import InjectedEvent, validate_scenario_config
+from benchmark_runner.routing_eval.scenario_config import InjectedEvent, validate_scenario_config
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RESULT_LIB = REPO_ROOT / "scripts" / "lib" / "routing-result.sh"

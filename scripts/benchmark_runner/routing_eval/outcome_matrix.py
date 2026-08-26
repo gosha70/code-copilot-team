@@ -191,6 +191,14 @@ def build_matrix(
                         f"/trial-{cell.trial}/seed-{cell.seed}, expected "
                         f"{task}/{profile}/trial-{trial}/seed-{seed}"
                     )
+                if cell.eligible != is_eligible:
+                    # The registry predicate is the authority on
+                    # eligibility; an executor cannot overrule it.
+                    raise ValueError(
+                        f"executor returned eligible={cell.eligible} for "
+                        f"{task}/{profile}, but the registry predicate says "
+                        f"{is_eligible}"
+                    )
                 cells.append(cell)
     matrix = OutcomeMatrix(
         fingerprint=fingerprint,
@@ -200,7 +208,7 @@ def build_matrix(
         cost_basis=cost_basis,
         cells=tuple(cells),
     )
-    verify_matrix(matrix)
+    verify_matrix(matrix, eligible=eligible)
     return matrix
 
 
@@ -293,7 +301,10 @@ def matrix_from_record(record: Mapping[str, Any]) -> OutcomeMatrix:
 # load. Schema validity alone cannot prove exact Cartesian coverage. ──
 
 
-def verify_matrix(matrix: OutcomeMatrix) -> None:
+def verify_matrix(
+    matrix: OutcomeMatrix,
+    eligible: Optional[Callable[[str, str], bool]] = None,
+) -> None:
     """Prove the exact declared sweep, or refuse (MatrixIntegrityError).
 
     For each declared task x declared profile (the fingerprint's
@@ -302,6 +313,14 @@ def verify_matrix(matrix: OutcomeMatrix) -> None:
     have explicit ineligible cells; "missing because ineligible" does
     not exist). No duplicates, no undeclared cells, and every cell's
     seed equals its trial's declared seed.
+
+    When the AUTHORITATIVE eligibility predicate is supplied — the
+    registry's ``eligible(profile, task)``, the same one the routing
+    selector reads, never re-implemented — every cell's stored
+    eligibility bit must match it. This is what stops an edited
+    persisted matrix from flipping ``eligible: true`` to ``false`` and
+    silently removing a profile from all three controls while the
+    structural invariant still passes.
     """
     violations: list[str] = []
     if len(matrix.trial_seeds) != matrix.trials:
@@ -337,6 +356,11 @@ def verify_matrix(matrix: OutcomeMatrix) -> None:
             violations.append(
                 f"cell {identity} carries seed {c.seed}, but trial {c.trial} "
                 f"declares seed {declared_seed}"
+            )
+        if eligible is not None and c.eligible != bool(eligible(c.profile_id, c.task_id)):
+            violations.append(
+                f"cell {identity} stores eligible={c.eligible}, but the "
+                f"registry predicate says {bool(eligible(c.profile_id, c.task_id))}"
             )
     for missing in sorted(expected - seen):
         violations.append(f"missing cell {missing}")
@@ -416,13 +440,16 @@ class ArmSelection:
 
 
 def select_always_best(
-    matrix: OutcomeMatrix, profile_meta: Mapping[str, Mapping[str, Any]]
+    matrix: OutcomeMatrix,
+    profile_meta: Mapping[str, Mapping[str, Any]],
+    eligible: Optional[Callable[[str, str], bool]] = None,
 ) -> ArmSelection:
     """Per task: the eligible profile with the highest capability tier;
     ties by priority ascending, then id lexical — the routing
     selector's existing total order, so the baseline is never an
-    artifact of registry declaration order."""
-    verify_matrix(matrix)
+    artifact of registry declaration order. Pass the registry's
+    ``eligible`` predicate to bind stored eligibility to its authority."""
+    verify_matrix(matrix, eligible=eligible)
     chosen: list[Cell] = []
     insufficient: dict[str, str] = {}
     for task in matrix.tasks():
@@ -441,13 +468,20 @@ def select_always_best(
     return ArmSelection("always_best", tuple(chosen), insufficient)
 
 
-def select_always_cheapest(matrix: OutcomeMatrix) -> ArmSelection:
+def select_always_cheapest(
+    matrix: OutcomeMatrix,
+    eligible: Optional[Callable[[str, str], bool]] = None,
+) -> ArmSelection:
     """Per task: the eligible profile with the lowest MEAN cost across
     that task's trials, using only cells satisfying the declared
     cost_basis. If ANY eligible profile for the task has no
     basis-satisfying cell, the task is insufficient — never selected on
-    mixed provenance. Ties by profile id lexical."""
-    verify_matrix(matrix)
+    mixed provenance — and EVERY declared trial must supply a
+    basis-satisfying cost before a profile participates in the mean: a
+    partial mean over the trials that happen to be priced is the same
+    incomplete-evidence bias the coverage invariant exists to prevent.
+    Ties by profile id lexical."""
+    verify_matrix(matrix, eligible=eligible)
     chosen: list[Cell] = []
     insufficient: dict[str, str] = {}
     basis = matrix.cost_basis
@@ -457,21 +491,26 @@ def select_always_cheapest(matrix: OutcomeMatrix) -> ArmSelection:
             insufficient[task] = "no eligible profile for this task"
             continue
         means: dict[str, float] = {}
-        blocked: Optional[str] = None
+        blocked: Optional[tuple[str, int]] = None
         for pid in candidates:
             priced = [
                 c.cost_value
                 for c in matrix.cells_for(task, pid)
                 if c.cost_satisfies(basis)
             ]
-            if not priced:
-                blocked = pid
+            # ALL declared trials, not "whichever happen to be priced":
+            # alpha at $1/unavailable/unavailable would otherwise post a
+            # $1 mean and beat beta's honest $2 across three trials.
+            if len(priced) != matrix.trials:
+                blocked = (pid, len(priced))
                 break
             means[pid] = sum(priced) / len(priced)
         if blocked is not None:
+            pid, priced_count = blocked
             insufficient[task] = (
-                f"eligible profile '{blocked}' has no cell satisfying "
-                f"cost_basis '{basis}' — refusing to select on mixed provenance"
+                f"eligible profile '{pid}' has cost satisfying cost_basis "
+                f"'{basis}' for only {priced_count} of {matrix.trials} declared "
+                f"trials — a partial mean is incomplete evidence, refusing"
             )
             continue
         cheapest = min(means, key=lambda pid: (means[pid], pid))
@@ -483,6 +522,7 @@ def select_oracle(
     matrix: OutcomeMatrix,
     quality: Callable[[Cell], float],
     budget_ceiling_usd: Optional[float] = None,
+    eligible: Optional[Callable[[str, str], bool]] = None,
 ) -> ArmSelection:
     """Per ``(task, trial)`` — NOT per task after aggregating trials:
     the true hindsight bound. ``quality`` is the versioned projection
@@ -490,7 +530,7 @@ def select_oracle(
     ceiling this is ``oracle_budget``: the ceiling is PER-CELL and only
     per-cell — it filters candidate cells, is asserted per selected
     cell, and implies nothing about the arm's summed cost."""
-    verify_matrix(matrix)
+    verify_matrix(matrix, eligible=eligible)
     kind = "oracle" if budget_ceiling_usd is None else "oracle_budget"
     chosen: list[Cell] = []
     insufficient: dict[str, str] = {}
