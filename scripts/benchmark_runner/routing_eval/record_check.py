@@ -21,6 +21,29 @@ from typing import Any, Mapping
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_DIR = _REPO_ROOT / "benchmarks" / "schema"
 
+#: Validation keywords this validator IMPLEMENTS. Anything else that
+#: could constrain a payload must refuse loudly: a schema evolving a
+#: keyword the validator silently ignores would make every record
+#: "valid" against a constraint nothing enforced.
+_IMPLEMENTED_KEYWORDS = frozenset({
+    "type", "required", "properties", "additionalProperties", "items",
+    "enum", "const", "pattern", "minLength", "minItems", "minProperties",
+    "minimum", "$ref", "oneOf", "anyOf", "not",
+})
+#: Non-validating annotations, safe to ignore.
+_ANNOTATION_KEYWORDS = frozenset({
+    "$schema", "$id", "$defs", "title", "description", "default",
+    "examples", "deprecated",
+})
+
+
+class SchemaUnsupported(ValueError):
+    """The schema uses a keyword this validator does not implement.
+
+    FAIL CLOSED: silently ignoring an unimplemented constraint would
+    validate records against nothing.
+    """
+
 
 def load_schema(name: str) -> Mapping[str, Any]:
     with (SCHEMA_DIR / f"{name}.schema.json").open(encoding="utf-8") as f:
@@ -73,6 +96,13 @@ def validate(payload: Any, schema: Mapping[str, Any], root: Mapping[str, Any] | 
     """
     root = root if root is not None else schema
     errors: list[str] = []
+
+    unsupported = set(schema) - _IMPLEMENTED_KEYWORDS - _ANNOTATION_KEYWORDS
+    if unsupported:
+        raise SchemaUnsupported(
+            f"{path}: schema uses unimplemented keyword(s) {sorted(unsupported)} "
+            f"— refusing to validate against constraints nothing enforces"
+        )
 
     if "$ref" in schema:
         return validate(payload, _resolve_ref(schema["$ref"], root), root, path)

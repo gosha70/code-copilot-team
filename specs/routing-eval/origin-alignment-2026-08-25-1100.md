@@ -901,6 +901,31 @@ The adapter execution boundary, closed for real this time:
    remains green — the fixture's local-ollama/qwen-coder builder vs
    anthropic-subscription/sonnet reconciler is genuinely independent.
 
+## T5 build audit round 1 (owner) — one finding, applied
+
+The owner approved quality_fn v1 (global mask, renormalization,
+aggregate-then-weight vs per-cell projection), the router metric
+reductions, the hard control-set gate, basis-aware cost/frontier
+withholding, the closed metric vocabulary, and the SchemaUnsupported
+fail-closed pin — and held T5 on ONE comparison-integrity gap:
+
+**Router evidence must be fingerprint-compatible with the control
+matrix, not merely preset-compatible.** Same preset + different
+registry means the router and its controls did not run in the same
+routing universe, which invalidates the plane more fundamentally than
+a missing control arm. Resolved by reusing T3's frozen fingerprint
+semantics rather than defining a second check: the gate now compares
+EVERY component durably represented on both sides — preset digest,
+registry digest, task-set revision, toolchain digest — refuses any
+mismatch before any comparative figure exists, and refuses a component
+that cannot be proven (a null toolchain is never silently assumed
+equal). The explicit boundary: execution_identity is matrix-only by
+construction (the router fixes no single profile; its selections live
+in routing_decisions). Discriminating regressions cover all three
+carried components plus the unprovable case, and the owner's mutation
+check passes: reducing the gate to preset-only fails the
+same-preset/different-registry counterexample.
+
 ## Verdict
 
 Verdict: aligned
