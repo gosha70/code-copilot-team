@@ -32,6 +32,11 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from .injection import materialize_replay
+from .redaction import (
+    measured_diff_lines,
+    scrub_text,
+    secret_values_from_registry,
+)
 from .scenario_config import InjectedEvent
 
 
@@ -104,6 +109,12 @@ class SupervisorRunner:
     #: a driver-owned verifier with addressable evidence. None means a
     #: CCT-native fixture run (no adapter contract to honor).
     benchmark_id: "str | None" = None
+    #: Extra literal credential values for the write-time scrub, ON TOP
+    #: of the values resolved from the executed registry's own
+    #: credential_env references (which happens on every write,
+    #: unconditionally — the persistence boundary is independently
+    #: safe without callers remembering to pass anything).
+    secret_values: tuple[str, ...] = ()
     supervisor_args: tuple[str, ...] = (
         "--profile", "advisory", "--max-attempts", "3",
         "--max-cooldowns", "2", "--cooldown-sec", "0", "--max-wall-sec", "120",
@@ -387,7 +398,17 @@ class SupervisorRunner:
         result = self._adapter().verify(task_spec, worktree)
         evidence = self.ledger_root / feature / "adapter-verify.txt"
         evidence.parent.mkdir(parents=True, exist_ok=True)
-        evidence.write_text(result.tests_output or "", encoding="utf-8")
+        # Decision 8: scrubbed AT THE WRITE. Verifier output is
+        # arbitrary tool output — env dumps, auth headers, key
+        # material can all appear in it — and once raw bytes reach
+        # durable storage, no later read-time scrub can un-persist
+        # them. The literal credential values of the executed registry
+        # are removed by VALUE, not by shape.
+        evidence.write_text(
+            scrub_text(result.tests_output or "",
+                       secret_values=self._secret_values()),
+            encoding="utf-8",
+        )
         return {
             "command": f"adapter:{self.benchmark_id}:verify:{task_spec.task_id}",
             "exit_status": 0 if result.tests_passed else 1,
@@ -448,6 +469,7 @@ class SupervisorRunner:
 
         decisions = self._decisions_from(events_file, rt_dir, events_offset)
         tier2, reconciliation = self._tier2_from(self.ledger_root / feature)
+        scope_violations = self._scope_violations_from(events_file, events_offset)
 
         return {
             "schema_version": 1,
@@ -480,7 +502,10 @@ class SupervisorRunner:
                 "coverage": {"before": None, "after": None},
                 "security": {"findings_by_severity": {"before": None, "after": None}},
             },
-            "scope_violations": [],
+            # Row 6, MEASURED: increment C's own scope-enforcement
+            # journal events, scanned — an empty list means the journal
+            # was read and carried none, never "not looked".
+            "scope_violations": scope_violations,
             "verifiers": [],
             "repair_cycles": [],
             "interventions": [],
@@ -491,6 +516,37 @@ class SupervisorRunner:
                 "cost": {"reason": "supervisor transcripts are transient; no measured cost harvested"}
             },
         }
+
+    def _scope_violations_from(self, events_file: Path,
+                               events_offset: int = 0) -> list[str]:
+        """Row 6's evidence, harvested from increment C's OWN
+        enforcement: every ``packet_scope`` journal event this
+        invocation produced. No new detector is invented — the
+        producer's refusal machinery is the single scope authority,
+        and this reads what it durably journaled. Details are scrubbed
+        at this boundary (they quote changed paths verbatim)."""
+        violations: list[str] = []
+        if not events_file.exists():
+            return violations
+        for line in events_file.read_text(encoding="utf-8").splitlines()[events_offset:]:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("event") == "packet_scope":
+                violations.append(
+                    scrub_text(event.get("detail") or "packet scope violation",
+                               secret_values=self._secret_values())
+                )
+        return violations
+
+    def _secret_values(self) -> tuple[str, ...]:
+        """The dynamic literal-secret set for every write this runner
+        performs: the caller's extra values plus the values resolved
+        from the EXECUTED registry's credential_env references."""
+        return tuple(self.secret_values) + secret_values_from_registry(
+            self.registry_path
+        )
 
     def _decisions_from(self, events_file: Path, rt_dir: Path,
                         events_offset: int = 0) -> list[dict]:
@@ -631,7 +687,12 @@ class SupervisorRunner:
                 "builder_tier": builder.get("tier"),
                 "builder_provider": builder.get("provider"),
                 "builder_model": builder.get("model"),
-                "delegated_lines": None,
+                # Row 10's denominator is increment C's OWN measure:
+                # the ledger's changed_lines, computed by the packet
+                # evaluator against the packet base (already
+                # environment-clean — only tracked, staged product
+                # counts there).
+                "delegated_lines": entry.get("changed_lines"),
                 "reconciliation_diff_lines": None,
             },
         }
@@ -698,9 +759,30 @@ class SupervisorRunner:
         chosen = dict(decisions[-1])
         chosen["selected"] = reconciler.get("id") or chosen.get("selected")
         decisions[-1] = chosen
+        # Rows 9-10's numerator: how much the RECONCILER changed
+        # relative to the provisional. "accepted" is increment C's own
+        # digest-derived verdict that the diffs are identical — exactly
+        # zero; "accepted_with_changes" is measured from the durable
+        # patches, or None (insufficiency downstream), never a guess.
+        builder = entry.get("builder") or {}
+        recon_lines = (
+            0 if verdict == "accepted"
+            else self._reconciler_diff_lines(exec_wt, feature)
+        )
         return {
             **record,
             "routing_decisions": decisions,
+            "tier2": {
+                "delegated": True,
+                "packet_id": entry["packet_id"],
+                "packet_digest": entry["packet_digest"],
+                "builder_id": builder.get("id"),
+                "builder_tier": builder.get("tier"),
+                "builder_provider": builder.get("provider"),
+                "builder_model": builder.get("model"),
+                "delegated_lines": entry.get("changed_lines"),
+                "reconciliation_diff_lines": recon_lines,
+            },
             "reconciliation": {
                 "packet_id": entry["packet_id"],
                 "packet_digest": entry["packet_digest"],
@@ -801,8 +883,65 @@ class SupervisorRunner:
                         "builder_tier": builder.get("tier"),
                         "builder_provider": builder.get("provider"),
                         "builder_model": builder.get("model"),
-                        "delegated_lines": None,
+                        "delegated_lines": entry.get("changed_lines"),
                         "reconciliation_diff_lines": None,
                     }
                     break
         return tier2, None
+
+    def _reconciler_diff_lines(self, exec_wt: Path, feature: str) -> Optional[int]:
+        """The reconciler-vs-provisional semantic diff, reconstructed
+        from increment C's durable patches — ``prestate.patch`` (the
+        provisional vs the packet base) and the latest
+        ``accepted-N.patch`` (the accepted judgment vs the same base) —
+        in a scratch clone, counted over MEASURED paths only
+        (environment/cache churn never counts). Any gap in the
+        reconstruction yields None — insufficiency downstream, never a
+        zero that would claim the reconciler changed nothing."""
+        rt_dir = self._rt_dir(feature, exec_wt)
+        prestate = rt_dir / "prestate.patch"
+        accepted = sorted(
+            rt_dir.glob("accepted-*.patch"),
+            key=lambda p: int(re.sub(r"[^0-9]", "", p.stem) or 0),
+        )
+        if not prestate.exists() or not accepted:
+            return None
+        scratch = self.ledger_root / feature / "recon-measure"
+        if scratch.exists():
+            return None
+        import shutil
+
+        def _git(*args: str) -> "subprocess.CompletedProcess[str]":
+            return subprocess.run(
+                ["git", "-C", str(scratch), *args],
+                capture_output=True, text=True,
+            )
+
+        try:
+            clone = subprocess.run(
+                ["git", "clone", "-q", "--no-hardlinks", str(exec_wt), str(scratch)],
+                capture_output=True, text=True,
+            )
+            if clone.returncode != 0:
+                return None
+            _git("config", "user.email", "bench@cct")
+            _git("config", "user.name", "bench")
+            base = _git("rev-parse", "HEAD").stdout.strip()
+            shas = []
+            for patch in (prestate, accepted[-1]):
+                if _git("reset", "--hard", "-q", base).returncode != 0:
+                    return None
+                _git("clean", "-fdq")
+                if patch.stat().st_size > 0:
+                    if _git("apply", str(patch)).returncode != 0:
+                        return None
+                _git("add", "-A")
+                if _git("commit", "-qm", "measure", "--allow-empty").returncode != 0:
+                    return None
+                shas.append(_git("rev-parse", "HEAD").stdout.strip())
+            numstat = _git("diff", "--numstat", shas[0], shas[1])
+            if numstat.returncode != 0:
+                return None
+            return measured_diff_lines(numstat.stdout)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)

@@ -926,6 +926,91 @@ carried components plus the unprovable case, and the owner's mutation
 check passes: reducing the gate to preset-only fails the
 same-preset/different-registry counterexample.
 
+## T6 build (2026-08-27) — the five owner gates, encoded
+
+The owner's GO for T6 pinned five gates; each is implemented as an
+enforced invariant, not a convention:
+
+1. **Scrub before persistence.** `redaction.py` (plan decision 8) owns
+   a closed secret-pattern set (auth headers, key/token/secret
+   assignments, the CCT_CONFIG__*/CCT_CLI_SETS connector-inventory
+   carriers, well-known token shapes, private-key blocks, home-path
+   collapse) applied at every E1 write site: the adapter-verify
+   evidence write and `write_run_records`, the single persistence gate
+   for routing-run artifacts. The decisive adversarial regression
+   seeds a live-shaped credential and proves the counterfactual: the
+   raw-then-scrub-at-read design leaves the secret durable on disk,
+   while the write-time gate never lets it land. Mutation checked:
+   moving the adapter-evidence scrub to read time fails the test.
+2. **Semantic-product diff, environment churn excluded.**
+   `delegated_lines` is increment C's OWN ledger measure
+   (`changed_lines`, computed by the packet evaluator);
+   `reconciliation_diff_lines` is 0 exactly when increment C's
+   digest-derived verdict is `accepted`, else reconstructed from the
+   durable `prestate.patch`/`accepted-N.patch` in a scratch clone and
+   counted over measured paths only (`is_measured_path` excludes
+   venvs, caches, bytecode, VCS, node_modules, .cct runtime noise);
+   binary churn in a measured path yields None, never a guess. Row 6
+   is harvested from increment C's own `packet_scope` journal events —
+   no new detector.
+3. **Contagious insufficiency.** Rows 9-10 aggregate per CELL (the
+   delegate and reconcile legs of one (task, trial) pair without
+   double-counting); a delegated cell missing either count — or
+   carrying conflicting durable evidence — makes both rows
+   `insufficient_evidence` with the reason surfaced in the arm report,
+   never zero rework. `unavailable` cost provenance propagates:
+   `always_cheapest` insufficiency refuses the control-set gate, the
+   router cost axis reports insufficiency, and the Pareto frontier is
+   withheld whole (Q still reported). An `oracle_budget` selection
+   insufficiency is carried into the report with Q withheld — never
+   computed over partial coverage, never silently dropped. Mutation
+   checked twice: rendering missing evidence as zero and reverting to
+   per-record summing each fail their regressions.
+4. **Redaction cannot alter measurement semantics or fingerprints.**
+   `write_run_records` computes the record's measurement view
+   (fingerprints, identities, trial coordinates, costs, states,
+   verdicts, prose-channel COUNTS) before and after the scrub and
+   refuses the whole artifact on any difference; scrubbed records must
+   also re-validate against routing-run.schema.json. Mutation checked:
+   a hostile digest-eating pattern raises RedactionError with the
+   guard present and persists silently with it deleted.
+5. **Reproducibility from identical immutable inputs.** Canonical
+   serialization end-to-end: identical records produce byte-identical
+   artifacts (proven on fabricated records and on the LIVE two-trial
+   arc's harvested records), with evidence references relativized
+   against the artifact root and verified to resolve to readable
+   artifacts.
+
+## T6 build audit round 1 (owner) — one P1, applied
+
+The owner approved the measurement/insufficiency work, the semantic
+diff sourcing, the per-cell rows 9-10 aggregation, the
+measurement-view guard, the single persistence gate, and the sweep's
+host-baseline accounting — and held T6 on ONE redaction-completeness
+gap:
+
+**Recognizable-secret patterns are not the actual-value guarantee.** A
+deliberately boring credential (`correct-horse-X7`) echoed in prose
+with no label, header, or known token shape survives a pattern-only
+scrub. Resolved by adding the dynamic literal-secret pass to the
+writer boundary: known credential VALUES are replaced literally
+(longest-first, regex metacharacters inert, empty values ignored)
+BEFORE any pattern runs, at every E1 write site. The value set is
+resolved from the credential references the executed registry itself
+declares — `credential_env` carries environment-variable NAMES
+(increment A's structural boundary) — so only referenced variables
+are ever read; the environment is never enumerated. The runner
+resolves this set unconditionally on every write, so the persistence
+boundary is independently safe without callers passing anything.
+
+The owner's required regression is in and discriminating both ways:
+the boring credential provably survives the static layer, never
+reaches durable bytes through the writer with the dynamic pass on,
+and DOES leak with the dynamic pass disabled while every static
+pattern stays enabled — proving the dynamic pass, not the regex
+layer, carries the guarantee. The mutation check (gutting
+`_scrub_literals`) fails three regressions.
+
 ## Verdict
 
 Verdict: aligned

@@ -142,30 +142,73 @@ def _arm_cost(cells: Sequence[Cell], cost_basis: str):
 def _sequence_dependent_from_records(records: Sequence[Mapping[str, Any]]):
     """Rows 9-11, measured ONLY along the router's stateful run.
 
+    The unit is the CELL, not the record: a delegated (task, trial)
+    usually spans two invocation records — the delegate leg carries the
+    builder's delegated_lines, the reconcile leg carries the pair — and
+    summing records raw would double-count the denominator. Per cell,
+    the durable values must agree; a delegated cell missing either
+    count makes rows 9-10 ``insufficient_evidence`` (with the reason
+    under ``insufficient_reason``) — rework is never assumed zero.
     Ratios aggregate as sum-of-numerators over sum-of-denominators; a
     zero denominator is not_applicable, never zero.
     """
-    delegated = [r for r in records if (r.get("tier2") or {}).get("delegated")]
-    num = sum(
-        (r["tier2"].get("reconciliation_diff_lines") or 0) for r in delegated
-    )
-    den = sum((r["tier2"].get("delegated_lines") or 0) for r in delegated)
-    accepted_unchanged = (
-        sum(
-            1
-            for r in delegated
-            if r["tier2"].get("reconciliation_diff_lines") == 0
+    rollbacks = sum(len(r.get("rollbacks") or []) for r in records)
+    cells: dict[tuple, dict] = {}
+    insufficient_reason = None
+    for r in records:
+        tier2 = r.get("tier2") or {}
+        if not tier2.get("delegated"):
+            continue
+        cell = cells.setdefault(
+            (r["task_id"], r["trial"]),
+            {"delegated_lines": None, "reconciliation_diff_lines": None},
         )
-        / len(delegated)
-        if delegated
-        else None
-    )
+        for field in ("delegated_lines", "reconciliation_diff_lines"):
+            value = tier2.get(field)
+            if value is None:
+                continue
+            if cell[field] is not None and cell[field] != value:
+                insufficient_reason = (
+                    f"cell {(r['task_id'], r['trial'])} carries conflicting "
+                    f"{field} evidence ({cell[field]} vs {value}) — "
+                    f"contradictory durable evidence is insufficiency, "
+                    f"never a pick"
+                )
+            cell[field] = value
+    if not cells:
+        return {
+            "tier2_accepted_unchanged": NOT_APPLICABLE,
+            "reconciliation_rework_ratio": NOT_APPLICABLE,
+            "rollbacks": rollbacks,
+        }
+    if insufficient_reason is None:
+        missing = sorted(
+            key for key, c in cells.items()
+            if c["delegated_lines"] is None
+            or c["reconciliation_diff_lines"] is None
+        )
+        if missing:
+            insufficient_reason = (
+                f"delegated cell(s) {missing} lack complete line-count "
+                f"evidence — unreconciled or unmeasured delegation is "
+                f"never rendered as zero rework"
+            )
+    if insufficient_reason is not None:
+        return {
+            "tier2_accepted_unchanged": INSUFFICIENT,
+            "reconciliation_rework_ratio": INSUFFICIENT,
+            "rollbacks": rollbacks,
+            "insufficient_reason": insufficient_reason,
+        }
+    num = sum(c["reconciliation_diff_lines"] for c in cells.values())
+    den = sum(c["delegated_lines"] for c in cells.values())
+    accepted_unchanged = sum(
+        1 for c in cells.values() if c["reconciliation_diff_lines"] == 0
+    ) / len(cells)
     return {
-        "tier2_accepted_unchanged": (
-            accepted_unchanged if delegated else NOT_APPLICABLE
-        ),
+        "tier2_accepted_unchanged": accepted_unchanged,
         "reconciliation_rework_ratio": (num / den) if den else NOT_APPLICABLE,
-        "rollbacks": sum(len(r.get("rollbacks") or []) for r in records),
+        "rollbacks": rollbacks,
     }
 
 
@@ -257,9 +300,26 @@ def build_report(
     arms: dict[str, ArmReport] = {}
 
     def _report_arm(kind: str, cells: Sequence[Cell],
-                    sequence_dependent: Mapping[str, Any]) -> ArmReport:
+                    sequence_dependent: Mapping[str, Any],
+                    selection_insufficient: "Mapping[str, str] | None" = None,
+                    ) -> ArmReport:
         insufficient: dict[str, str] = {}
+        sequence_dependent = dict(sequence_dependent)
+        sequence_reason = sequence_dependent.pop("insufficient_reason", None)
+        if sequence_reason is not None:
+            insufficient["sequence_dependent"] = sequence_reason
         try:
+            # Decision 9: an arm whose SELECTION is itself insufficient
+            # is carried through as insufficiency — a Q over partial
+            # coverage would misrepresent the arm, and insufficiency is
+            # never rendered as a number.
+            if selection_insufficient:
+                for key, reason in sorted(selection_insufficient.items()):
+                    insufficient[f"selection:{key}"] = reason
+                raise QualityInsufficient(
+                    f"arm '{kind}' has an insufficient selection — Q is "
+                    f"withheld rather than computed over partial coverage"
+                )
             quality = arm_quality(cells, mask)
             vector = dict(component_aggregates(cells, mask))
         except QualityInsufficient as exc:
@@ -282,7 +342,10 @@ def build_report(
         arms[control] = _report_arm(control, selection.chosen, na)
     if "oracle_budget" in control_selections:
         selection = control_selections["oracle_budget"]
-        arms["oracle_budget"] = _report_arm("oracle_budget", selection.chosen, na)
+        arms["oracle_budget"] = _report_arm(
+            "oracle_budget", selection.chosen, na,
+            selection_insufficient=selection.insufficient,
+        )
 
     router_cells = router_cells_from_records(router_records)
     arms["cct_router"] = _report_arm(

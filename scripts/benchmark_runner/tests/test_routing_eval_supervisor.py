@@ -628,6 +628,43 @@ class TestFullArcThroughTheRealSupervisor(unittest.TestCase):
         ]
         self.assertTrue(preferred_candidates)
         self.assertEqual(preferred_candidates[0]["state"], "unknown")
+        # ── T6: the measured changed-line pair, from LIVE evidence.
+        # delegated_lines is increment C's OWN ledger measure
+        # (changed_lines, computed by the packet evaluator), and the
+        # reconcile record carries the pair with zero rework — the
+        # verdict here is "accepted", increment C's digest-derived
+        # proof that the reconciler changed nothing.
+        self.assertIsInstance(provisional["tier2"]["delegated_lines"], int)
+        self.assertGreater(provisional["tier2"]["delegated_lines"], 0)
+        self.assertTrue(recon["tier2"]["delegated"])
+        self.assertEqual(
+            recon["tier2"]["delegated_lines"],
+            provisional["tier2"]["delegated_lines"],
+        )
+        self.assertEqual(recon["tier2"]["reconciliation_diff_lines"], 0)
+        # ── T6: the persistence gate over the LIVE records — scrubbed
+        # at write time, evidence references relativized and still
+        # resolvable, and byte-identical on identical inputs.
+        from benchmark_runner.routing_eval.redaction import write_run_records
+
+        evidence_root = self.base / "ledger"
+        artifact_a = write_run_records(
+            artifact.records, evidence_root / "routing-runs.jsonl",
+            evidence_root=evidence_root,
+            secret_values=self.runner._secret_values(),
+        )
+        artifact_b = write_run_records(
+            artifact.records, evidence_root / "routing-runs-b.jsonl",
+            evidence_root=evidence_root,
+            secret_values=self.runner._secret_values(),
+        )
+        self.assertEqual(artifact_a.read_bytes(), artifact_b.read_bytes())
+        for line in artifact_a.read_text(encoding="utf-8").splitlines():
+            persisted = _json.loads(line)
+            for verifier in persisted["verifiers"]:
+                ref = verifier["evidence_ref"]
+                self.assertFalse(Path(ref).is_absolute(), ref)
+                self.assertTrue((evidence_root / ref).is_file(), ref)
 
     def test_a_preexisting_trial_context_is_refused(self) -> None:
         from benchmark_runner.routing_eval.supervisor_runner import RunnerError

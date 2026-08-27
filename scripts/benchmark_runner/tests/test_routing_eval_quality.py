@@ -380,6 +380,152 @@ class TestReport(unittest.TestCase):
                                 set(arm["metrics"]) - allowed)
 
 
+class TestT6ContagiousInsufficiency(unittest.TestCase):
+    """T6 (plan decision 9): insufficiency is first-class and
+    contagious — never a zero, never a default, never a silently
+    dropped arm, and unreconciled delegation is never zero rework."""
+
+    def _report_fixture(self):
+        cells = [
+            _cell("t1", "alpha", 0, cost=0.05),
+            _cell("t1", "beta", 0, result="fail", cost=0.01),
+        ]
+        matrix = _matrix(cells)
+        controls = {
+            "always_best": _selection("always_best", [cells[0]]),
+            "always_cheapest": _selection("always_cheapest", [cells[1]]),
+            "oracle": _selection("oracle", [cells[0]]),
+        }
+        return cells, matrix, controls
+
+    def test_delegate_and_reconcile_legs_pair_per_cell(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            _sequence_dependent_from_records,
+        )
+
+        # ONE delegated (task, trial) across its two invocation
+        # records: the delegate leg carries the builder's denominator,
+        # the reconcile leg carries the pair. Counted once — 25/100,
+        # never 25/200.
+        legs = [
+            _router_record("t1", 0, delegated=True, delegated_lines=100,
+                           diff_lines=None),
+            _router_record("t1", 0, delegated=True, delegated_lines=100,
+                           diff_lines=25),
+        ]
+        seq = _sequence_dependent_from_records(legs)
+        self.assertAlmostEqual(seq["reconciliation_rework_ratio"], 0.25)
+        self.assertAlmostEqual(seq["tier2_accepted_unchanged"], 0.0)
+
+    def test_missing_reconcile_evidence_is_insufficient_never_zero(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            INSUFFICIENT,
+            _sequence_dependent_from_records,
+        )
+
+        seq = _sequence_dependent_from_records(
+            [_router_record("t1", 0, delegated=True, delegated_lines=100,
+                            diff_lines=None)]
+        )
+        # the old failure mode: None -> 0 rework -> "accepted unchanged"
+        self.assertEqual(seq["reconciliation_rework_ratio"], INSUFFICIENT)
+        self.assertEqual(seq["tier2_accepted_unchanged"], INSUFFICIENT)
+        self.assertIn("never rendered as zero", seq["insufficient_reason"])
+
+    def test_conflicting_durable_evidence_is_insufficient(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            INSUFFICIENT,
+            _sequence_dependent_from_records,
+        )
+
+        seq = _sequence_dependent_from_records([
+            _router_record("t1", 0, delegated=True, delegated_lines=100,
+                           diff_lines=5),
+            _router_record("t1", 0, delegated=True, delegated_lines=200,
+                           diff_lines=5),
+        ])
+        self.assertEqual(seq["reconciliation_rework_ratio"], INSUFFICIENT)
+        self.assertIn("conflicting", seq["insufficient_reason"])
+
+    def test_sequence_insufficiency_reaches_the_report(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import INSUFFICIENT
+
+        _cells, matrix, controls = self._report_fixture()
+        records = [_router_record("t1", 0, delegated=True,
+                                  delegated_lines=100, diff_lines=None)]
+        report = build_report(matrix, controls, records,
+                              expected_preset_digest=_PRESET)
+        arm = report["arms"]["cct_router"]
+        self.assertEqual(arm["metrics"]["reconciliation_rework_ratio"],
+                         INSUFFICIENT)
+        self.assertEqual(arm["metrics"]["tier2_accepted_unchanged"],
+                         INSUFFICIENT)
+        self.assertIn("sequence_dependent", arm["insufficient"])
+        # rows 9-11 are outside quality_fn: Q stays reported
+        self.assertIsNotNone(arm["quality"])
+
+    def test_oracle_budget_insufficiency_is_carried_not_dropped(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import INSUFFICIENT
+
+        cells, matrix, controls = self._report_fixture()
+        controls["oracle_budget"] = _selection(
+            "oracle_budget", [cells[0]],
+            {"t1/trial-0": "the ceiling admits no cell"},
+        )
+        records = [_router_record("t1", 0)]
+        report = build_report(matrix, controls, records,
+                              expected_preset_digest=_PRESET)
+        arm = report["arms"]["oracle_budget"]
+        # carried through AS insufficiency: present in the report, Q
+        # withheld (never computed over partial coverage), reasons kept
+        self.assertIsNone(arm["quality"])
+        self.assertIn("selection:t1/trial-0", arm["insufficient"])
+        self.assertIn("quality", arm["insufficient"])
+        # the frontier is withheld whole — the arm is never silently
+        # dropped from the Pareto set
+        self.assertEqual(report["pareto"]["status"], INSUFFICIENT)
+
+    def test_unavailable_cost_contaminates_cost_axis_and_pareto(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import INSUFFICIENT
+
+        _cells, matrix, controls = self._report_fixture()
+        record = _router_record("t1", 0)
+        # harvest's honest default: transcripts transient, no measured cost
+        record["cost"] = {"value": None, "provenance": "unavailable",
+                          "estimator": None, "inputs": None}
+        report = build_report(matrix, controls, [record],
+                              expected_preset_digest=_PRESET)
+        arm = report["arms"]["cct_router"]
+        self.assertEqual(arm["cost"]["status"], INSUFFICIENT)
+        self.assertIsNone(arm["cost"]["value"])
+        self.assertEqual(report["pareto"]["status"], INSUFFICIENT)
+        # Q is not suppressed by a cost violation
+        self.assertIsNotNone(arm["quality"])
+
+    def test_unavailable_provenance_insufficiency_refuses_the_gate(self) -> None:
+        from benchmark_runner.routing_eval.outcome_matrix import (
+            select_always_cheapest,
+        )
+
+        cells = [
+            _cell("t1", "alpha", 0, cost=None, prov="unavailable"),
+            _cell("t1", "beta", 0, cost=0.01),
+        ]
+        matrix = _matrix(cells)
+        selection = select_always_cheapest(matrix)
+        # ANY eligible profile without a basis-satisfying cost makes the
+        # task insufficient — unavailable is never priced, never zero
+        self.assertIn("t1", selection.insufficient)
+        controls = {
+            "always_best": _selection("always_best", [cells[1]]),
+            "always_cheapest": selection,
+            "oracle": _selection("oracle", [cells[1]]),
+        }
+        with self.assertRaisesRegex(ControlSetIncomplete, "insufficient"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET)
+
+
 class TestValidatorFailsClosedOnNewKeywords(unittest.TestCase):
     """The standing pin: a schema keyword the production validator does
     not implement must refuse loudly, never silently validate."""
