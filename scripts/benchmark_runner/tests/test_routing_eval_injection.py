@@ -76,6 +76,7 @@ def _config(**overrides):
         "arms": _FULL_ARMS,
         "trials": 2,
         "trial_seeds": [1701, 1702],
+        "task": ["task-a", "task-b"],
         "event_stream": [
             {"at_task_index": 0, "outcome": "usage_limit",
              "reset_at": "2099-07-01T00:00:00Z", "retry_after_sec": 900},
@@ -484,6 +485,46 @@ class TestRealProbeContract(unittest.TestCase):
         self.assertEqual(outcome, "probe_fail")
 
 
+class TestCompositePassthrough(unittest.TestCase):
+    """Replay and live execution compose: declared events replay,
+    healthy attempts exec the real child with stdin attached."""
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self.dir = Path(tempfile.mkdtemp(prefix="cct-composite."))
+
+    def test_events_replay_then_the_real_child_runs(self) -> None:
+        marker = self.dir / "real-child.sh"
+        marker.write_text(
+            "#!/usr/bin/env bash\n"
+            "prompt=$(cat)\n"
+            'printf \'REAL CHILD ran with prompt: %s\\n\' "$prompt"\n'
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        marker.chmod(0o755)
+        cmd = materialize_replay(
+            [InjectedEvent(0, "quota_exhausted", "2000-01-01T00:00:00Z", None)],
+            self.dir,
+            passthrough_cmd=f"bash {marker}",
+        )
+        first = subprocess.run(["bash", "-c", cmd], input="p1\n",
+                               capture_output=True, text=True)
+        self.assertEqual(first.returncode, 1)
+        self.assertIn("hit your 5-hour limit", first.stdout)
+        second = subprocess.run(["bash", "-c", cmd], input="the prompt\n",
+                                capture_output=True, text=True)
+        self.assertEqual(second.returncode, 0)
+        self.assertIn("REAL CHILD ran with prompt: the prompt", second.stdout)
+
+    def test_without_passthrough_the_default_stays_canned(self) -> None:
+        cmd = materialize_replay([], self.dir)
+        proc = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn('"type":"result"', proc.stdout)
+
+
 class TestClassificationParity(unittest.TestCase):
     """The real rr_classify reads injected transcripts exactly like the
     equivalent real provider responses."""
@@ -518,6 +559,18 @@ class TestClassificationParity(unittest.TestCase):
         self.assertEqual(injected["retry_after_sec"], 900)
         self.assertEqual(injected["reset_at"], "2099-07-01T00:00:00Z")
         self.assertEqual(real_cls["retry_after_sec"], 900)
+
+    def test_quota_exhaustion_matches_real_subscription_wording(self) -> None:
+        # The text-form pool exhaustion: classified by the quota
+        # pattern, NOT the envelope path — the class that cools the
+        # profile and drives failover.
+        real = "You have reached your weekly limit. Your limit will reset at 2099-07-01T00:00:00Z.\n"
+        injected, real_cls = self._parity(
+            InjectedEvent(0, "quota_exhausted", "2099-07-01T00:00:00Z", None), 1, real
+        )
+        self.assertEqual(injected["failure_class"], "quota_exhausted")
+        self.assertEqual(injected["failure_class"], real_cls["failure_class"])
+        self.assertEqual(injected["reset_at"], "2099-07-01T00:00:00Z")
 
     def test_auth_failure_matches_the_real_envelope(self) -> None:
         real = '{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}\n'

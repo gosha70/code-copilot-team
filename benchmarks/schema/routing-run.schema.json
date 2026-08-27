@@ -12,6 +12,7 @@
     "toolchain_digest",
     "task_id",
     "trial",
+    "trial_seed",
     "mode",
     "profile_id",
     "injected_events",
@@ -26,6 +27,7 @@
     "interventions",
     "tier2",
     "rollbacks",
+    "reconciliation",
     "insufficient_evidence"
   ],
   "additionalProperties": false,
@@ -66,6 +68,10 @@
       "type": "integer",
       "minimum": 0,
       "description": "Zero-based trial index. Trials are a DIMENSION of the outcome matrix and are never collapsed before storage."
+    },
+    "trial_seed": {
+      "type": "integer",
+      "description": "The seed this trial ran under \u2014 paired across arms by the preset, bound per invocation by the driver. Records the half of the trial identity that 'trial index' alone cannot prove."
     },
     "mode": {
       "type": "string",
@@ -369,6 +375,53 @@
           "type": "boolean",
           "description": "Whether this attempt was delegated to Tier-2."
         },
+        "packet_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Increment C's durable work identity: the delegation packet id. Non-null exactly when delegated. tier2.delegated + line counts alone carry NO unique work identity \u2014 the provisional->reconciled proof joins on the packet, never on task order or line counts."
+        },
+        "packet_digest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The packet content digest (sha256:...), the second half of the join key. The verified_provisional ledger entry and the reconciliation record both carry it, so 'the SAME provisional work was reconciled' is provable from durable records."
+        },
+        "builder_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The profile that EXECUTED the bounded packet \u2014 increment C's ledger builder identity. Non-null exactly when delegated: a provisional record whose builder is unknown proves delegation to nobody."
+        },
+        "builder_tier": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "tier1",
+            "tier2",
+            null
+          ],
+          "description": "The builder's capability tier. The arc's Tier-2 leg requires tier2 here \u2014 'delegated' plus a packet join without the executing tier would let contradictory evidence pass."
+        },
+        "builder_provider": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The builder's PROVIDER identity \u2014 the primary collision signal of the frozen independence predicate. Non-null exactly when delegated; without it, reconciliation independence is unevaluable and promotion evidence is unverifiable."
+        },
+        "builder_model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The builder's model \u2014 the conservative secondary collision signal (model equality refuses even across distinct providers). Non-null exactly when delegated."
+        },
         "delegated_lines": {
           "type": [
             "integer",
@@ -389,9 +442,136 @@
       "description": "Rows 9-10. SEQUENCE-DEPENDENT: these exist only along a stateful run, so they are not_applicable for every derived arm and are measured only for cct_router.",
       "required": [
         "delegated",
+        "packet_id",
+        "packet_digest",
+        "builder_id",
+        "builder_tier",
+        "builder_provider",
+        "builder_model",
         "delegated_lines",
         "reconciliation_diff_lines"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "delegated": {
+              "const": true
+            },
+            "packet_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "packet_digest": {
+              "type": "string",
+              "minLength": 1
+            },
+            "builder_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "builder_tier": {
+              "type": "string"
+            },
+            "builder_provider": {
+              "type": "string",
+              "minLength": 1
+            },
+            "builder_model": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "delegated": {
+              "const": false
+            },
+            "packet_id": {
+              "type": "null"
+            },
+            "packet_digest": {
+              "type": "null"
+            },
+            "builder_id": {
+              "type": "null"
+            },
+            "builder_tier": {
+              "type": "null"
+            },
+            "delegated_lines": {
+              "type": "null"
+            },
+            "reconciliation_diff_lines": {
+              "type": "null"
+            },
+            "builder_provider": {
+              "type": "null"
+            },
+            "builder_model": {
+              "type": "null"
+            }
+          }
+        }
       ]
+    },
+    "reconciliation": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "packet_id",
+        "packet_digest",
+        "outcome",
+        "reconciler_id",
+        "reconciler_tier",
+        "reconciler_provider",
+        "reconciler_model"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "packet_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "packet_digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "reconciled",
+            "parked",
+            "failed"
+          ]
+        },
+        "reconciler_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The Tier-1 profile that reconciled \u2014 the ledger's reconciler identity."
+        },
+        "reconciler_tier": {
+          "type": "string",
+          "enum": [
+            "tier1",
+            "tier2"
+          ],
+          "description": "The reconciler's tier. #109 requires TIER-1 reconciliation; the arc proof enforces tier1 here."
+        },
+        "reconciler_provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The reconciler's provider \u2014 compared against the builder's under increment C's frozen fail-closed predicate."
+        },
+        "reconciler_model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The reconciler's model \u2014 the conservative secondary collision signal."
+        }
+      },
+      "description": "Present (non-null) exactly when this record is a Tier-1 reconciliation run, naming WHICH provisional packet it reconciled. The arc verifier joins tier2.packet_digest -> verified_provisional -> reconciliation.packet_digest; a reconciliation that names no packet proves nothing. Null for every other record."
     },
     "rollbacks": {
       "type": "array",
@@ -433,7 +613,8 @@
         "effective_model",
         "endpoint",
         "failure_classification",
-        "provisional_outcome"
+        "provisional_outcome",
+        "route_class"
       ],
       "additionalProperties": false,
       "properties": {
@@ -456,12 +637,21 @@
               },
               "reason": {
                 "type": "string"
+              },
+              "state": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^(pool:)?(unknown|cooldown|disabled|degraded|probe_due|probing|healthy)$",
+                "description": "The candidate's EFFECTIVE circuit state at decision time \u2014 increment D's closed seven-state vocabulary (pool:-prefixed when the pool governs). The harvester translates the producer's explain output into this field ONCE at the boundary; verifiers compare states, never substrings of prose ('rate' inside 'accurate' must prove nothing)."
               }
             },
             "required": [
               "id",
               "verdict",
-              "reason"
+              "reason",
+              "state"
             ]
           },
           "description": "Every candidate's verdict, in `explain`'s vocabulary. Evidence only."
@@ -508,6 +698,20 @@
             "null"
           ],
           "description": "FR-E1-10: the provisional/reconciliation outcome of the attempt this decision routed \u2014 increment C's vocabulary (e.g. 'verified_provisional', 'reconciled'), or null when the attempt produced no provisional state. Required so a Tier-2 delegation's disposition is always readable from the decision that caused it."
+        },
+        "route_class": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "primary_only",
+            "tier1_only",
+            "tier2_fallback",
+            "tier2_preferred",
+            null
+          ],
+          "description": "The route class in force for this decision \u2014 the registry's closed vocabulary, recorded structurally so a Tier-1-only refusal is proven by route_class == 'tier1_only' plus a rejected Tier-2 candidate, never by prose matching. Null when no class was in force."
         }
       }
     },
@@ -603,6 +807,7 @@
           "type": "string",
           "enum": [
             "usage_limit",
+            "quota_exhausted",
             "auth_failure",
             "server_error",
             "timeout",

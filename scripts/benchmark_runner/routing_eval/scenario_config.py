@@ -41,7 +41,8 @@ MANDATORY_ARM_KINDS = ("always_best", "always_cheapest", "oracle", "cct_router")
 #: as the schema it enforces.
 _TOP_LEVEL_KEYS = frozenset(
     {"benchmark", "scenario", "arms", "cost_basis", "trials", "trial_seeds",
-     "event_stream", "budget_ceiling_usd", "task"}
+     "event_stream", "budget_ceiling_usd", "task", "tier1_only_tasks",
+     "delegate_tasks"}
 )
 _ARM_KEYS = frozenset({"kind", "name", "registry"})
 _EVENT_KEYS = frozenset({"at_task_index", "outcome", "reset_at", "retry_after_sec"})
@@ -50,7 +51,7 @@ _EVENT_KEYS = frozenset({"at_task_index", "outcome", "reset_at", "retry_after_se
 #: refused so two price tables are never compared against each other.
 _COST_BASIS_RE = re.compile(r"^(measured|estimated@[A-Za-z0-9._-]+)$")
 
-_EVENT_OUTCOMES = ("usage_limit", "auth_failure", "server_error", "timeout", "success")
+_EVENT_OUTCOMES = ("usage_limit", "quota_exhausted", "auth_failure", "server_error", "timeout", "success")
 
 
 class ScenarioConfigError(ValueError):
@@ -83,6 +84,16 @@ class ScenarioConfig:
     event_stream: list[InjectedEvent] = field(default_factory=list)
     budget_ceiling_usd: Optional[float] = None
     task_filter: Optional[list[str]] = None
+    #: The #109 Tier-1-only negative controls. The arc verifier
+    #: requires these tasks' records to show Tier-2 REJECTED with the
+    #: route reason — absence is not refusal.
+    tier1_only_tasks: list[str] = field(default_factory=list)
+    #: Tasks delegated as bounded Tier-2 packets — the arc's Tier-2 leg.
+    delegate_tasks: list[str] = field(default_factory=list)
+    #: The directory the config was loaded from — the base every
+    #: relative path in the config resolves against, so a preset means
+    #: the same thing regardless of the caller's working directory.
+    source_dir: Optional[Path] = None
 
 
 def load_scenario_config(path: Path) -> ScenarioConfig:
@@ -91,10 +102,36 @@ def load_scenario_config(path: Path) -> ScenarioConfig:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ScenarioConfigError(f"{path}: invalid JSON: {exc}") from exc
-    return validate_scenario_config(raw, source=str(path))
+    return validate_scenario_config(
+        raw, source=str(path), source_dir=Path(path).resolve().parent
+    )
 
 
-def validate_scenario_config(raw: Any, *, source: str = "<config>") -> ScenarioConfig:
+def resolve_registry_path(
+    arm_registry: str, source_dir: Optional[Path]
+) -> Path:
+    """Resolve the cct_router arm's registry deterministically.
+
+    ``~`` expands (the documented operator location); an absolute path
+    stands as-is; a relative path resolves against the CONFIG's source
+    directory — never the caller's cwd, which would let one preset bind
+    different policies depending on where the command started.
+    """
+    candidate = Path(arm_registry).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    if source_dir is None:
+        raise ScenarioConfigError(
+            f"registry path {arm_registry!r} is relative but the config has "
+            f"no source directory to resolve it against — load the config "
+            f"from disk or name an absolute/operator path"
+        )
+    return (Path(source_dir) / candidate).resolve()
+
+
+def validate_scenario_config(
+    raw: Any, *, source: str = "<config>", source_dir: Optional[Path] = None
+) -> ScenarioConfig:
     if not isinstance(raw, Mapping):
         raise ScenarioConfigError(f"{source}: top-level value must be a JSON object")
 
@@ -128,6 +165,37 @@ def validate_scenario_config(raw: Any, *, source: str = "<config>") -> ScenarioC
     events = _validate_event_stream(raw.get("event_stream"), source)
     ceiling = _validate_ceiling(raw, arms, source)
     task_filter = _validate_task_filter(raw.get("task"), source)
+    tier1_only = _validate_tier1_only(raw.get("tier1_only_tasks"), task_filter, source)
+    delegate = _validate_delegate_tasks(
+        raw.get("delegate_tasks"), task_filter, tier1_only, source
+    )
+    # Every event must land on a DECLARED task: an out-of-range index
+    # would join the preset digest yet reach no execution and no
+    # evidence — a phantom that silently weakens the scenario. And
+    # provider events are the TIER-1 seam's vocabulary; the delegation
+    # seam runs a bounded packet child, so an event scheduled onto a
+    # delegated task is refused rather than dropped.
+    if events and task_filter is None:
+        raise ScenarioConfigError(
+            f"{source}: 'event_stream' requires a declared 'task' list — an "
+            f"event index has no meaning without the task sequence it points "
+            f"into"
+        )
+    if task_filter:
+        for e in events:
+            if e.at_task_index >= len(task_filter):
+                raise ScenarioConfigError(
+                    f"{source}: event_stream index {e.at_task_index} is outside "
+                    f"the declared task sequence (len {len(task_filter)}) — a "
+                    f"phantom event would join the digest but reach nothing"
+                )
+            if task_filter[e.at_task_index] in delegate:
+                raise ScenarioConfigError(
+                    f"{source}: event_stream schedules '{e.outcome}' onto "
+                    f"'{task_filter[e.at_task_index]}', which is a delegated "
+                    f"task — provider events cannot be applied through the "
+                    f"delegation seam"
+                )
 
     return ScenarioConfig(
         benchmark=benchmark,
@@ -139,6 +207,9 @@ def validate_scenario_config(raw: Any, *, source: str = "<config>") -> ScenarioC
         event_stream=events,
         budget_ceiling_usd=ceiling,
         task_filter=task_filter,
+        tier1_only_tasks=tier1_only,
+        delegate_tasks=delegate,
+        source_dir=source_dir,
     )
 
 
@@ -300,6 +371,54 @@ def _validate_ceiling(raw: Mapping[str, Any], arms: list[Arm], source: str) -> O
             f"configuration"
         )
     return float(ceiling)
+
+
+def _validate_tier1_only(
+    raw: Any, task_filter: Optional[list[str]], source: str
+) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(t, str) and t for t in raw):
+        raise ScenarioConfigError(
+            f"{source}: 'tier1_only_tasks' must be a list of non-empty strings"
+        )
+    if len(set(raw)) != len(raw):
+        raise ScenarioConfigError(f"{source}: 'tier1_only_tasks' contains duplicates")
+    if task_filter is not None:
+        stray = [t for t in raw if t not in task_filter]
+        if stray:
+            raise ScenarioConfigError(
+                f"{source}: 'tier1_only_tasks' {stray} are not in 'task' — a "
+                f"negative control that never runs proves nothing"
+            )
+    return list(raw)
+
+
+def _validate_delegate_tasks(
+    raw: Any, task_filter: Optional[list[str]], tier1_only: list[str], source: str
+) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(t, str) and t for t in raw):
+        raise ScenarioConfigError(
+            f"{source}: 'delegate_tasks' must be a list of non-empty strings"
+        )
+    if len(set(raw)) != len(raw):
+        raise ScenarioConfigError(f"{source}: 'delegate_tasks' contains duplicates")
+    if task_filter is not None:
+        stray = [t for t in raw if t not in task_filter]
+        if stray:
+            raise ScenarioConfigError(
+                f"{source}: 'delegate_tasks' {stray} are not in 'task'"
+            )
+    overlap = [t for t in raw if t in tier1_only]
+    if overlap:
+        raise ScenarioConfigError(
+            f"{source}: {overlap} cannot be both delegate_tasks and "
+            f"tier1_only_tasks — a negative control that delegates proves the "
+            f"opposite of what it controls for"
+        )
+    return list(raw)
 
 
 def _validate_task_filter(raw: Any, source: str) -> Optional[list[str]]:

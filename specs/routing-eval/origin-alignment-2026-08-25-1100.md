@@ -607,6 +607,300 @@ work reconciled by Tier-1, recovery SELECTING the preferred profile at
 a task boundary, Tier-1-only controls REFUSING Tier-2 — never from a
 driver-maintained visited-legs list.
 
+## T4 build audit round 1 (owner) — five findings, all applied
+
+The owner's review of T4 part 1 found the verifier accepted its own
+counterexamples and the production path missing. All five resolved:
+
+1. **The production execution path exists (T4 part 2).**
+   supervisor_runner.py shells to the REAL cooldown-supervisor.sh —
+   no fork, no patch — feeding provider behaviour only through the T2
+   replay seam, and HARVESTS routing-run records from the durable
+   outputs (started-N.json attempt records + the events.jsonl
+   journal's per-candidate routing_candidate lines). A live
+   integration test proves the ordinary-run legs end to end: injected
+   quota exhaustion cools the pool in the persisted circuit store,
+   and the NEXT task's harvested decision shows the real selector
+   rejecting the preferred profile in the closed (pool:)cooldown
+   state and selecting the fallback. The live run also surfaced and
+   pinned an increment-B semantic the scenario vocabulary now
+   encodes: the enveloped usage_limit (Retry-After) draws ONE
+   same-profile retry; text-form quota_exhausted is what cools the
+   profile and drives failover — a new closed event outcome with its
+   own classifier-parity regression, and the hybrid preset's failover
+   leg now uses it.
+2. **One ordered witness per trial.** The chain initial preferred <
+   failover < provisional < recovery < reconciliation must hold in
+   strictly increasing record order; the owner's reordered
+   counterexample is a pinned failing regression, and the initial
+   selection is now itself a proven leg.
+3. **Trials verify independently.** Records group by trial; EVERY
+   declared trial must prove the full arc; the owner's cross-trial
+   stitching counterexample now fails both trials. A complete trial 0
+   never covers a silent trial 1.
+4. **Identity binds the evidence.** RecordInvalid refuses records
+   missing required shape, in profile_sweep mode, with foreign
+   preset/registry digests, or undeclared trial indices; the
+   provisional->reconciled join matches BOTH packet_id and
+   packet_digest; and every synthetic verifier fixture is asserted
+   schema-valid (the previous fixtures carried 20 schema errors).
+5. **Closed vocabulary, not prose.** considered[] gains the closed
+   circuit `state` (increment D's seven-state vocabulary) and
+   decisions gain the closed `route_class`; failover is proven by
+   state == cooldown and refusal by route_class == tier1_only. The
+   harvester owns the ONE prose->structure translation, tested
+   against the producer's exact formats, with the owner's traps
+   ("rate" inside "accurate", "tier1 is cheaper") pinned as
+   translating to None and failing their legs.
+
+Live-coverage boundary, stated plainly: the supervisor integration
+exercises initial+failover live; the delegation/recovery/
+reconciliation legs are verified over schema-valid records here and
+owned live by the routing bash suites — the full live arc through one
+supervisor lineage remains future work, and the arc verifier is the
+gate either way.
+
+## T4 build audit round 2 (owner) — five findings, all applied
+
+The owner's second T4 audit found the production path unable to
+produce the required arc and four fail-open seams. All five resolved:
+
+1. **The production runner drives the COMPLETE arc.** SupervisorRunner
+   gains delegate_task (the real --delegate flow, harvesting increment
+   C's provisional entry: packet_id, packet_digest,
+   verified_provisional), reconcile_task (the real --reconcile flow,
+   harvesting the ledger verdict flip to accepted with the reconciler
+   identity and the SAME packet identity, refusing any identity
+   drift), and tick_probe (the real `cct routing tick` with the T2
+   probe seam). The closing integration test drives the UNMODIFIED
+   supervisor + tick CLI through the entire #109 §12 arc — initial
+   preferred build, text-form quota exhaustion with a provider reset
+   instant, task-boundary failover in the closed pool:cooldown state,
+   bounded Tier-2 delegation to verified_provisional, two real probe
+   passes, preferred re-selection, Tier-1 reconciliation of the same
+   packet — and verify_arc proves it complete from the harvested
+   records alone. Live debugging surfaced and pinned two more
+   increment-B/D semantics: retry-after governs rate limits while
+   quota without an authoritative reset cools for the default hour
+   (so the scenario's failover leg carries reset_at), and the
+   reconciler must emit RECONCILE_VERDICT (the mock now does).
+2. **Freshness boundary.** run_task/delegate_task refuse pre-existing
+   evidence directories; a nonzero supervisor exit publishes NO
+   evidence (which immediately caught two fixture gaps the old code
+   silently harvested through); reconcile harvests only journal lines
+   past a pre-invocation offset in its shared ledger.
+3. **Records are bound to their invocation.** run_scenario refuses a
+   record whose (task_id, trial, trial_seed) or injected_events do not
+   match the invocation that returned it; the owner's
+   whole-arc-from-t0 reproduction is a pinned regression, plus wrong
+   seed and false event provenance.
+4. **The full schema gates verification at runtime.** The validator
+   moved from test code into production (record_check.py); verify_arc
+   validates every record against routing-run.schema.json before
+   anything else. The owner's tokens-removed reproduction is a
+   regression. (Side-catch: the schema's own injected_event enum was
+   missing quota_exhausted — the runtime gate caught it on live
+   records immediately.)
+5. **Provenance is honest.** Records carry trial_seed
+   (schema-required) and the exact scheduled injected_events;
+   ordinary-run decisions record increment B's frozen tier1_only
+   route class as a documented definitional translation.
+
+## T4 build audit round 3 (owner) — five findings, all applied
+
+1. **The production orchestration entrypoint exists.**
+   run_hybrid_scenario(config, runner) walks the preset's declared
+   task order: ordinary tasks through run_task, the preset's new
+   delegate_tasks through the real --delegate flow, tick pumping at
+   the first task boundary AFTER the trial's delegated work (exactly
+   where §12 places recovery, bounded and sleep-free), then --reconcile
+   for every pending packet. The integration test invokes THIS
+   entrypoint on a preset-shaped config; the manual sequencing is
+   gone, and the checked-in preset now declares its delegate task.
+2. **Tiers are part of the proof.** The schema, harvester, and
+   verifier carry the ledger's builder_id/builder_tier (non-null iff
+   delegated, oneOf-bound) and reconciler_id/reconciler_tier
+   (required): the Tier-2 leg requires an identified tier2 builder,
+   reconciliation requires an identified tier1 reconciler, and the
+   live test asserts both from the harvested records (the ledger's
+   t2loc/tier2 and preferred/tier1). Contradictory-tier and
+   unknown-builder mutations are pinned regressions. The runtime
+   schema gate immediately caught the ordinary-harvest tier2 block
+   missing the new fields — a live demonstration of round 2's fix.
+3. **The registry digest is computed, never asserted.** The runner
+   field is gone; registry_digest_of(registry_path) hashes the file
+   the subprocess executes under, and a regression asserts records
+   carry exactly that digest with no field left to mislabel.
+4. **No wall-clock dependency.** The provider reset in the arc config
+   is in the PAST, so the pool cools and the probe is due
+   immediately: no sleeps anywhere, and the failover-boundary state is
+   pool:probe_due — still increment D's closed unavailable-pending-
+   recovery vocabulary, to which the verifier's failover evidence set
+   was widened ({cooldown, probe_due, probing}, structured states
+   only, prose traps still refused). A probe_due-variant arc is a
+   pinned regression.
+5. **Non-finite numbers are not JSON evidence.** record_check rejects
+   NaN/inf as type violations (NaN defeats every ordered comparison,
+   so it slid past minimum checks toward T5 selection); regression
+   pinned.
+
+## T4 build audit round 4 (owner) — four findings, all applied
+
+Round 4 targeted the checked-in preset and the multi-trial production
+path:
+
+1. **The preset is deterministic and immediately probeable.** Its
+   quota event now carries a PAST provider reset (2000-01-01), so a
+   real run cools the pool and the probe is due at once — the 2099
+   reset that stranded reconciliation behind
+   routing_no_eligible_profile is gone, and the preset regression pins
+   the past-reset property.
+2. **Trials run in clean execution contexts.** SupervisorRunner
+   gains for_trial(trial): its own routing state, ledger root (and
+   probe ledger), and a fresh worktree git-cloned from the baseline's
+   committed state. The orchestrator uses it per trial, and the
+   full-arc integration now runs TWO trials, asserting each proved the
+   complete arc independently — trial 1 starts from the pristine
+   baseline, never from trial 0's healthy circuit or accepted
+   reconciliation edits.
+3. **Events cannot land on delegated tasks.** Provider events are the
+   Tier-1 seam's vocabulary; config validation refuses an event
+   scheduled onto a delegate task (regression pinned), the orchestrator
+   asserts it defensively, and the checked-in preset no longer
+   schedules one onto python/book-store.
+4. **The cct_router arm's registry binds the runner.** Before any
+   invocation, run_hybrid_scenario resolves the arm's named registry
+   and refuses a runner executing a different document — the owner's
+   registry-A-config/registry-B-runner reproduction is a pinned
+   regression ("the configured policy must be the one measured").
+
+## T4 build audit round 5 (owner) — four findings, all applied
+
+1. **The declared benchmark executes.** SupervisorRunner gains
+   benchmark_id: when set, every ordinary task runs the EXISTING
+   adapter lifecycle around the supervisor — the adapter (resolved
+   through the real registry) prepares the task's starter files before
+   the run, and its verification executes after, recorded as a
+   driver-owned verifier with addressable evidence. An unregistered
+   benchmark or a task the adapter does not expose REFUSES the run
+   rather than silently measuring a hand-built fixture under the
+   declared benchmark's name, and run_hybrid_scenario binds
+   config.benchmark to the runner before any invocation. The full-arc
+   integration registers a fixture adapter through the real
+   registry API (the same protocol Aider Polyglot implements) and
+   asserts every ordinary record carries the adapter's verification.
+2. **Registry paths resolve against the config source.** ScenarioConfig
+   carries source_dir; resolve_registry_path expands ~ (the preset now
+   names the documented operator location
+   ~/.code-copilot-team/routing.toml), passes absolutes, resolves
+   relatives against the CONFIG's directory, and refuses a relative
+   path with no source — one preset means one policy regardless of the
+   caller's cwd.
+3. **Out-of-range event indices are refused** (a phantom event would
+   join the digest yet reach nothing), and an event stream without a
+   declared task list is refused outright. Both pinned.
+4. **The isolation proof is load-bearing.** The two-trial arc test now
+   asserts what an identity for_trial() cannot satisfy: distinct
+   per-trial ledger roots, a pristine baseline worktree (clean git
+   status), and no reconciliation edits (MAGIC markers) in the
+   baseline source.
+
+## T4 build audit round 6 (owner) — five findings, all applied
+
+The adapter execution boundary, closed for real this time:
+
+1. **register_all() is called** — importing _register has no side
+   effect; a fresh-process regression asserts aider-polyglot resolves.
+2. **The routed session executes the adapter task.** Each benchmark
+   task gets a DEDICATED task worktree: adapter.prepare_task at the
+   root the backend works in, adapter.isolation_for ->
+   install_dependencies (run.py's own post-prepare call), and the
+   feature spec GENERATED from adapter.prompt_for — completion means
+   the routed child edited the benchmark task and checked it off, and
+   adapter.verify judges the EXECUTED worktree (the fixture verify now
+   requires the actual solution, and its evidence is asserted). The
+   harness seam defaults to the deterministic replay; launching the
+   profile's real backend CLI is an explicit USE_REAL_BACKEND opt-in.
+3. **Delegation goes through the adapter.** The packet worktree, route
+   metadata (allowed_files from the prepared file set), and FR
+   verifier are GENERATED from the adapter task; packet verification
+   IS the adapter's own verify via a bridge CLI
+   (adapter_verify module) invoked as a generated checks script.
+   Getting there tripped THREE real increment-C guards in sequence —
+   the wrapper-command refusal (bridge became a checks script), the
+   rewrite-fraction thrash control (the fixture task gained realistic
+   multi-line shape), and repeated-failure signatures (the bridge
+   subprocess needed the out-of-tree adapter extension seam,
+   CCT_EXTRA_ADAPTER_MODULE, now a documented production seam) — each
+   a live demonstration that the real machinery, not a shim, is under
+   test. The hand-built packet fixtures are deleted; the arc's
+   baseline worktree is minimal.
+4. **Trial isolation is load-bearing three ways**: distinct per-trial
+   contexts and task worktrees asserted; the baseline pristine; and
+   trial 1's initial decision must see the preferred profile in state
+   'unknown' — under ANY shared state it would arrive 'healthy' from
+   trial 0's successes.
+5. **for_trial refuses pre-existing contexts** (worktree, state,
+   ledger) — a crash between clone and ledger publication can no
+   longer hand the next run a contaminated context that looks clean.
+   Regression pinned.
+
+## T4 build audit round 7 (owner) — four findings, all applied
+
+1. **Replay and live execution compose.** materialize_replay gains a
+   passthrough: declared events replay deterministically, and every
+   attempt past the stream EXECs the real child with the prompt still
+   on stdin. USE_REAL_BACKEND with events now resolves to that
+   composite (real child = the supervisor's own auto-build driver);
+   without events it remains no-override; the deterministic replay
+   stays the default. Unit-pinned at the seam and at the runner's
+   resolution.
+2. **The provisioned lifecycle, in its documented order.**
+   provision_worktree -> prepare_task -> install_dependencies — venv
+   and docker provisioning are no longer skipped. The owner's
+   python/book-store reproduction is a cache-gated regression
+   asserting .venv exists after preparation. .venv is gitignored out
+   of the task history and packet clones.
+3. **Write authority is the adapter's solution boundary.**
+   allowed_files comes from TaskSpec.metadata.solution_files, never
+   from enumerating prepared files; no declared boundary, no
+   delegation (refusal pinned). The owner's go/bowling reproduction is
+   a cache-gated regression asserting the packet grants bowling.go and
+   NOT bowling_test.go, cases_test.go, go.mod, or .venv.
+4. **The adapter prompt is durable and conveyed.** Every task worktree
+   commits specs/<feature>/benchmark-prompt.md with the full
+   adapter.prompt_for text; the packet outcome and the ordinary task
+   line point at it, and the arc test asserts the delegated child's
+   actual stdin references it — a real model now receives the
+   benchmark instructions the adapter defines.
+
+## T4 build audit round 8 (owner) — two verifier invariants, applied
+
+1. **tier1_only controls are a NEGATIVE STREAM INVARIANT.** The
+   refusal witness alone no longer certifies a control: any Tier-2
+   execution evidence anywhere in the control task's records — a
+   delegated/provisional record, a tier2 builder, a decision selecting
+   a Tier-2 profile, a verified_provisional outcome — fails the leg as
+   a CONTAMINATED control, regardless of a valid refusal appearing
+   later. The owner's counterexample (provisional record before the
+   refusal) is pinned, and the mutation check passes: deleting the
+   negative scan makes the counterexample test fail.
+2. **The reconciliation witness proves INDEPENDENCE, mirroring
+   increment C's frozen fail-closed predicate exactly** — never a
+   weaker E1 interpretation: builder and reconciler identities
+   (provider AND model) must both be known (unevaluable is never a
+   successful witness); provider equality is the primary collision;
+   model equality refuses even across distinct providers (the
+   conservative secondary). The schema and harvester now carry
+   builder_provider/builder_model (oneOf-bound to delegation) and
+   reconciler_provider/reconciler_model (required), read from the
+   ledger identities the supervisor already persists. Counterexamples
+   pinned for same-provider, same-model-across-providers, and
+   unknown-identity; the mutation check passes: removing the
+   independence conjunct makes both subtests fail. The live arc
+   remains green — the fixture's local-ollama/qwen-coder builder vs
+   anthropic-subscription/sonnet reconciler is genuinely independent.
+
 ## Verdict
 
 Verdict: aligned

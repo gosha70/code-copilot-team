@@ -410,7 +410,7 @@ silently breaks comparability.
 | `benchmarks/schema/routing-run.schema.json` | NEW — decisions 4, 7: telemetry with provenance + per-task routing decisions |
 | `benchmarks/schema/outcome-matrix.schema.json` | NEW — decision 3: `task × profile × trial` cells + reuse fingerprint |
 | `benchmarks/schema/compare-config.schema.json` | extend: `scenario`, `arms[]` (decision 1) |
-| `benchmarks/presets/hybrid-routing.json` | NEW — the hybrid scenario preset + event stream |
+| `benchmarks/presets/hybrid-routing.json` | NEW — the hybrid scenario preset: six task shapes, Tier-1-only negative controls (`tier1_only_tasks`), event stream |
 | `benchmarks/pricing/price-table-v1.json` | NEW — versioned estimator table (§Cost and reporting contract) |
 | `scripts/benchmark_runner/routing_eval/cost_reader.py` | NEW — routing-eval-owned `total_cost_usd` reader + estimator fallback |
 | `scripts/benchmark_runner/routing_eval/outcome_matrix.py` | NEW — matrix sweep, fingerprint gate, derived control arms (decision 3) |
@@ -419,7 +419,8 @@ silently breaks comparability.
 | `scripts/benchmark_runner/routing_eval/redaction.py` | NEW — decision 8 |
 | `scripts/benchmark_runner/routing_eval/scenario_config.py` | NEW — executable scenario-config validation; the schema documents, this enforces (T1) |
 | `scripts/benchmark_runner/routing_eval/injection.py` | NEW — preset digest + deterministic event replay for the two test seams (T2) |
-| `scripts/benchmark_runner/routing_eval/scenario.py` | NEW — scenario driver; drives the existing test seams (decision 2) |
+| `scripts/benchmark_runner/routing_eval/scenario.py` | NEW — per-trial ordered arc verifier + driver (T4); leg completeness from durable records only |
+| `scripts/benchmark_runner/routing_eval/supervisor_runner.py` | NEW — the production run_task: real supervisor via the T2 seams, records harvested from started-N.json + events.jsonl (T4) |
 | `scripts/benchmark_runner/compare.py` | extend: refuse mixed candidates+arms configs; direct scenario configs to routing_eval (T1) |
 | `scripts/benchmark_runner/tests/` | regressions per task below, with fixtures under `tests/fixtures/schema/` |
 | `README.md`, `CHANGELOG.md` | document the scenario and its artifacts |

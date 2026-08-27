@@ -1,0 +1,64 @@
+{
+  "benchmark": "aider-polyglot",
+  "scenario": "hybrid-routing",
+  "cost_basis": "measured",
+  "trials": 3,
+  "trial_seeds": [
+    1701,
+    1702,
+    1703
+  ],
+  "task": [
+    "python/bowling",
+    "python/affine-cipher",
+    "python/book-store",
+    "go/bowling",
+    "javascript/grade-school",
+    "rust/bowling"
+  ],
+  "tier1_only_tasks": [
+    "go/bowling",
+    "rust/bowling"
+  ],
+  "event_stream": [
+    {
+      "at_task_index": 0,
+      "outcome": "quota_exhausted",
+      "reset_at": "2000-01-01T00:00:00Z"
+    },
+    {
+      "at_task_index": 1,
+      "outcome": "success"
+    },
+    {
+      "at_task_index": 3,
+      "outcome": "success"
+    },
+    {
+      "at_task_index": 4,
+      "outcome": "success"
+    },
+    {
+      "at_task_index": 5,
+      "outcome": "success"
+    }
+  ],
+  "arms": [
+    {
+      "kind": "always_best"
+    },
+    {
+      "kind": "always_cheapest"
+    },
+    {
+      "kind": "oracle"
+    },
+    {
+      "kind": "cct_router",
+      "registry": "~/.code-copilot-team/routing.toml"
+    }
+  ],
+  "delegate_tasks": [
+    "python/book-store"
+  ]
+}

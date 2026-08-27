@@ -6,6 +6,7 @@
   "toolchain_digest": "sha256:5b7d9a1c3e5f7b9d1a3c5e7f9b1d3a5c7e9f1b3d5a7c9e1f3b5d7a9c1e3f5b7d",
   "task_id": "python/bowling",
   "trial": 0,
+  "trial_seed": 1701,
   "mode": "cct_router",
   "profile_id": null,
   "injected_events": [
@@ -21,12 +22,14 @@
         {
           "id": "anthropic-sonnet",
           "verdict": "rejected",
-          "reason": "cooling until 2026-08-25T21:00:00Z (cooldown)"
+          "reason": "cooling until 2026-08-25T21:00:00Z (cooldown)",
+          "state": "cooldown"
         },
         {
           "id": "deepseek-v4-pro",
           "verdict": "selected",
-          "reason": "eligible in tier1 at priority 20 (state: unknown \u2014 never treated as healthy)"
+          "reason": "eligible in tier1 at priority 20 (state: unknown \u2014 never treated as healthy)",
+          "state": "unknown"
         }
       ],
       "selected": "deepseek-v4-pro",
@@ -35,7 +38,8 @@
       "effective_model": "deepseek-v4-pro",
       "endpoint": "api.deepseek.com",
       "failure_classification": null,
-      "provisional_outcome": null
+      "provisional_outcome": null,
+      "route_class": null
     }
   ],
   "tokens": {
@@ -91,9 +95,16 @@
   "interventions": [],
   "tier2": {
     "delegated": false,
+    "packet_id": null,
+    "packet_digest": null,
+    "builder_id": null,
+    "builder_tier": null,
     "delegated_lines": null,
-    "reconciliation_diff_lines": null
+    "reconciliation_diff_lines": null,
+    "builder_provider": null,
+    "builder_model": null
   },
+  "reconciliation": null,
   "rollbacks": [],
   "insufficient_evidence": null
 }

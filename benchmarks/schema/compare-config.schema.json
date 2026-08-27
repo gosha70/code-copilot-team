@@ -49,6 +49,16 @@
             "required": [
               "budget_ceiling_usd"
             ]
+          },
+          {
+            "required": [
+              "tier1_only_tasks"
+            ]
+          },
+          {
+            "required": [
+              "delegate_tasks"
+            ]
           }
         ]
       },
@@ -158,6 +168,22 @@
       "type": "number",
       "minimum": 0,
       "description": "Optional PER-CELL cost ceiling enabling the oracle_budget arm. The ceiling is per-cell and only per-cell: it is asserted for every selected cell, and NO claim is made about the arm's summed cost. Global-budget allocation is out of scope. Scenario comparisons only."
+    },
+    "tier1_only_tasks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The #109 Tier-1-only NEGATIVE CONTROLS: tasks whose route class pins tier1_only. The arc verifier requires their records to show a Tier-2 candidate REJECTED with the route/class reason \u2014 merely ending up on Tier-1 is insufficient, because absence is not refusal. Scenario comparisons only."
+    },
+    "delegate_tasks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Tasks the scenario delegates as bounded Tier-2 packets (the #109 \u00a712 arc's Tier-2 leg). Each must be declared in 'task', carry a tier2 route class in the worktree's routing-tasks.yaml (the supervisor refuses otherwise), and be disjoint from tier1_only_tasks. Scenario comparisons only."
     }
   },
   "$defs": {
@@ -208,12 +234,13 @@
           "type": "string",
           "enum": [
             "usage_limit",
+            "quota_exhausted",
             "auth_failure",
             "server_error",
             "timeout",
             "success"
           ],
-          "description": "The provider outcome the injected child output represents. The scenario emits a transcript of this shape; the router's own unmodified classifier decides what it means. E1 never injects a classification."
+          "description": "The provider outcome the injected child output represents. The scenario emits a transcript of this shape; the router's own unmodified classifier decides what it means. NOTE the increment-B distinction the live supervisor enforces: 'usage_limit' is the rate_limit_error ENVELOPE (Retry-After), which the action table answers with ONE same-profile retry; 'quota_exhausted' is the text-form pool exhaustion (hours-scale), which cools the profile and drives FAILOVER \u2014 the #109 \u00a712 arc's usage-limit leg is this one."
         },
         "reset_at": {
           "type": [

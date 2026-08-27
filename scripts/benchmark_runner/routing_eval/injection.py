@@ -75,6 +75,8 @@ def preset_digest(config: ScenarioConfig) -> str:
         "event_stream": [asdict(e) for e in config.event_stream],
         "budget_ceiling_usd": config.budget_ceiling_usd,
         "task": config.task_filter,
+        "tier1_only_tasks": config.tier1_only_tasks,
+        "delegate_tasks": config.delegate_tasks,
     }
     canonical = json.dumps(doc, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -111,6 +113,20 @@ def transcript_for_event(event: InjectedEvent) -> tuple[str, int]:
             "total_cost_usd": 0.0123,
         }
         return _compact(record) + "\n", 0
+    if outcome == "quota_exhausted":
+        # TEXT-form pool exhaustion — no envelope, so rr_classify's
+        # quota pattern (not the structured rate_limited path) reads it,
+        # exactly like a real subscription-limit message. This is the
+        # outcome that cools the profile and drives failover; the
+        # enveloped usage_limit below draws ONE same-profile retry.
+        lines = []
+        if event.retry_after_sec is not None:
+            lines.append(f"retry-after: {event.retry_after_sec}")
+        message = "You have hit your 5-hour limit."
+        if event.reset_at is not None:
+            message += f" Your limit will reset at {event.reset_at}."
+        lines.append(message)
+        return "\n".join(lines) + "\n", 1
     if outcome == "usage_limit":
         lines = []
         if event.retry_after_sec is not None:
@@ -180,6 +196,7 @@ def materialize_replay(
     events: list[InjectedEvent],
     directory: Path,
     seam: str = "harness",
+    passthrough_cmd: "str | None" = None,
 ) -> str:
     """Write per-event replies + a replay script; return the command.
 
@@ -189,6 +206,13 @@ def materialize_replay(
     stdout and exits with its code; past the end of the stream it
     replays the default success reply. State is one counter file in the
     private directory — no time, no randomness, no environment reads.
+
+    ``passthrough_cmd`` (harness seam only) makes replay and live
+    execution COMPOSABLE instead of mutually exclusive: declared events
+    replay deterministically, and every attempt past the stream EXECs
+    the supplied real child command with stdin (the prompt) still
+    attached — the injected failure happens, and the healthy attempts
+    genuinely run.
 
     For the probe seam the success reply cannot be canned: a probe pass
     must echo the run-specific nonce the canary prompt carries
@@ -284,6 +308,9 @@ def materialize_replay(
             'printf \'{"type":"result","result":"%s","total_cost_usd":0.0001}\\n\' "$expected"\n'
             "exit 0\n"
         )
+    elif passthrough_cmd is not None:
+        # Past the declared stream: the REAL child, prompt on stdin.
+        default_body = f"exec bash -c {shlex.quote(passthrough_cmd)}\n"
     else:
         default_body = (
             "verify default.out; verify default.rc\n"
