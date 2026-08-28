@@ -265,10 +265,18 @@ class TestPublishEvidenceSetLive(_EvidenceFixture):
         self.assertEqual(identity["fallback"]["effective_model"], "deepseek")
         self.assertIsNone(identity["preferred"]["effective_model"])
         self.assertEqual(identity["preferred"]["requested_model"], "sonnet")
-        # the endpoint is the sanitized RESOLVED value behind the env
-        # name, not the name itself
-        self.assertEqual(identity["preferred"]["endpoint"],
-                         "https://hybrid-fixture.invalid")
+        # the endpoint is the redacted FULL-VALUE-SENSITIVE identity of
+        # the RESOLVED value behind the env name, never the name itself
+        from benchmark_runner.routing_eval.evidence_set import (
+            _endpoint_identity,
+        )
+
+        self.assertEqual(
+            identity["preferred"]["endpoint"],
+            _endpoint_identity("https://hybrid-fixture.invalid"),
+        )
+        self.assertTrue(identity["preferred"]["endpoint"].startswith(
+            "https://hybrid-fixture.invalid#sha256:"))
 
         # discovery lists the set and structurally excludes hidden
         # (staging-shaped) siblings
@@ -472,35 +480,58 @@ class TestExecutionIdentityUnits(unittest.TestCase):
     """T1 review finding 1: identity is execution-proven — the pinned
     mutations."""
 
-    def test_endpoint_is_the_sanitized_resolved_value(self) -> None:
+    def test_endpoint_identity_covers_the_production_surface(self) -> None:
         from unittest import mock
 
         from benchmark_runner.routing_eval.evidence_set import (
-            _sanitized_endpoint,
+            _endpoint_identity,
+            _endpoint_ref_of,
+            _resolve_endpoint_ref,
         )
 
-        with mock.patch.dict(os.environ, {"EP": (
-            "https://user:s3cret@host.example:8443/v1/messages?key=abc#frag"
-        )}):
-            self.assertEqual(_sanitized_endpoint("EP"),
-                             "https://host.example:8443/v1/messages")
+        # BOTH declaration forms resolve, in production's own
+        # normalization: a literal base_url (the shipped DeepSeek
+        # shape) and an env reference
+        self.assertEqual(
+            _endpoint_ref_of({"base_url":
+                              "https://api.deepseek.com/anthropic"}),
+            "url:https://api.deepseek.com/anthropic",
+        )
+        self.assertEqual(_endpoint_ref_of({"base_url_env": "EP"}),
+                         "urlenv:EP")
+        self.assertEqual(_endpoint_ref_of({}), "none")
+        literal = _endpoint_identity(_resolve_endpoint_ref(
+            "url:https://api.deepseek.com/anthropic"))
+        self.assertIsNotNone(
+            literal, "a literal base_url execution has a REAL endpoint "
+                     "identity, never null")
+        self.assertTrue(
+            literal.startswith("https://api.deepseek.com/anthropic#sha256:")
+        )
+        # the identity is FULL-VALUE-SENSITIVE without exposure:
+        # same host+path, different query -> different identity, and
+        # neither query nor userinfo appears in it
+        q_a = _endpoint_identity("https://host/v1?deployment=A")
+        q_b = _endpoint_identity("https://host/v1?deployment=B")
+        self.assertNotEqual(q_a, q_b)
+        for ident in (q_a, q_b):
+            self.assertNotIn("deployment", ident)
+        u = _endpoint_identity("https://user:s3cret@host.example:8443/v1")
+        self.assertNotIn("s3cret", u)
+        self.assertTrue(u.startswith("https://host.example:8443/v1#sha256:"))
         # a moved endpoint behind the SAME env name IS a different
         # execution identity
         with mock.patch.dict(os.environ, {"EP": "https://endpoint-a.example"}):
-            a = _sanitized_endpoint("EP")
+            a = _endpoint_identity(_resolve_endpoint_ref("urlenv:EP"))
         with mock.patch.dict(os.environ, {"EP": "https://endpoint-b.example"}):
-            b = _sanitized_endpoint("EP")
+            b = _endpoint_identity(_resolve_endpoint_ref("urlenv:EP"))
         self.assertNotEqual(a, b)
-        # non-URL values become a deterministic safe digest, never raw
-        with mock.patch.dict(os.environ, {"EP": "not a url s3cret"}):
-            d = _sanitized_endpoint("EP")
-        self.assertTrue(d.startswith("digest:"))
-        self.assertNotIn("s3cret", d)
-        # unset or undeclared: unverified, never assumed
-        self.assertIsNone(_sanitized_endpoint(None))
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("EP_GONE", None)
-            self.assertIsNone(_sanitized_endpoint("EP_GONE"))
+        # none / unset: unverified, never assumed
+        self.assertIsNone(_endpoint_identity(_resolve_endpoint_ref("none")))
+        os.environ.pop("EP_GONE", None)
+        self.assertIsNone(
+            _endpoint_identity(_resolve_endpoint_ref("urlenv:EP_GONE"))
+        )
 
     def test_aggregation_refuses_corrupt_leg_evidence(self) -> None:
         from benchmark_runner.routing_eval.evidence_set import (
@@ -510,9 +541,17 @@ class TestExecutionIdentityUnits(unittest.TestCase):
         base = {"profile_id": "p", "backend": "b", "provider": "pr",
                 "requested_model": "m", "effective_model": None,
                 "tool_profile": "t", "endpoint": "https://a.example"}
-        # compatible legs aggregate; the verified effective model wins
+        # CONSERVATIVE: mixed [null, "m"] aggregates to null — one
+        # unverified execution means the profile is NOT verified; only
+        # every-leg-verified-and-identical emits the value
         agg = aggregate_profile_identity(
             "p", [dict(base), dict(base, effective_model="m")], {}
+        )
+        self.assertIsNone(agg["effective_model"],
+                          "mixed evidence is never promoted to verified")
+        agg = aggregate_profile_identity(
+            "p", [dict(base, effective_model="m"),
+                  dict(base, effective_model="m")], {}
         )
         self.assertEqual(agg["effective_model"], "m")
         # unverified everywhere stays null — NEVER the requested model
@@ -567,9 +606,15 @@ class TestStaleStagingCleanup(unittest.TestCase):
             young_dead.mkdir()
             (young_dead / _PUBLISHER_MARKER).write_text("999999999",
                                                         encoding="utf-8")
+            old_no_marker = root / ".staging-old-no-marker"
+            old_no_marker.mkdir()
+            old_bad_marker = root / ".staging-old-bad-marker"
+            old_bad_marker.mkdir()
+            (old_bad_marker / _PUBLISHER_MARKER).write_text(
+                "not-a-pid", encoding="utf-8")
             past = time.time() - 100_000
-            os.utime(old_dead, (past, past))
-            os.utime(old_alive, (past, past))
+            for d in (old_dead, old_alive, old_no_marker, old_bad_marker):
+                os.utime(d, (past, past))
             _clean_stale_staging(root, max_age_sec=86_400)
             self.assertFalse(old_dead.exists(),
                              "old + dead publisher is the ONLY cleanable case")
@@ -577,6 +622,10 @@ class TestStaleStagingCleanup(unittest.TestCase):
                             "a live publisher is never touched")
             self.assertTrue(young_dead.exists(),
                             "too young to judge is never touched")
+            self.assertTrue(old_no_marker.exists(),
+                            "unprovable ownership is never confirmed dead")
+            self.assertTrue(old_bad_marker.exists(),
+                            "a malformed marker proves nothing")
 
 
 class TestDerivedRegistryUnits(unittest.TestCase):

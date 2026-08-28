@@ -120,7 +120,7 @@ def _profile_declarations(registry_path: Path) -> Mapping[str, Mapping[str, Any]
             continue
         entry: dict[str, Any] = {}
         for name in ("backend", "provider", "model", "capability_tier",
-                     "tool_profile", "base_url_env"):
+                     "tool_profile", "base_url", "base_url_env"):
             if name in keys:
                 entry[name] = keys[name][1]
         if "roles" in keys:
@@ -188,25 +188,48 @@ def derive_single_profile_registry(
 
 
 # ── the fixed-profile executor ─────────────────────────────────────────
-def _sanitized_endpoint(env_name: "str | None") -> "str | None":
-    """The RESOLVED endpoint identity from the actual launch
-    environment, sanitized: userinfo, query, and fragment stripped —
-    only scheme://host[:port]/path survives; a non-URL value becomes a
-    deterministic safe digest, never the raw value. None when the
-    profile declares no endpoint reference or the variable is unset
-    (unverified, never assumed)."""
-    if not env_name:
+def _endpoint_ref_of(declared: Mapping[str, Any]) -> str:
+    """The declaration's endpoint reference in production's OWN closed
+    normalization (rc_profile_tuple): url:<literal> | urlenv:<name> |
+    none — base_url and base_url_env are BOTH part of the endpoint
+    surface."""
+    if declared.get("base_url"):
+        return f"url:{declared['base_url']}"
+    if declared.get("base_url_env"):
+        return f"urlenv:{declared['base_url_env']}"
+    return "none"
+
+
+def _resolve_endpoint_ref(ref: "str | None") -> "str | None":
+    """Resolve exactly as rt_launch_env does: a literal resolves to
+    itself, an env reference to the variable's current value, none to
+    None (no endpoint — the backend default)."""
+    if not ref or ref == "none":
         return None
-    value = os.environ.get(env_name)
-    if not value:
+    if ref.startswith("url:"):
+        return ref[len("url:"):] or None
+    if ref.startswith("urlenv:"):
+        return os.environ.get(ref[len("urlenv:"):]) or None
+    return None
+
+
+def _endpoint_identity(resolved: "str | None") -> "str | None":
+    """A redacted but FULL-VALUE-SENSITIVE endpoint identity: the
+    sanitized origin+path (userinfo/query/fragment never exposed) plus
+    a sha256 of the complete resolved endpoint — so a query or
+    userinfo change alters the identity without exposing it, and two
+    deployments behind one host can never collide. None when nothing
+    resolved (unverified, never assumed)."""
+    if not resolved:
         return None
+    digest = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:16]
     from urllib.parse import urlsplit
 
-    parts = urlsplit(value)
+    parts = urlsplit(resolved)
     if not parts.scheme or not parts.hostname:
-        return "digest:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+        return f"digest:{digest}"
     netloc = parts.hostname + (f":{parts.port}" if parts.port else "")
-    return f"{parts.scheme}://{netloc}{parts.path or ''}"
+    return f"{parts.scheme}://{netloc}{parts.path or ''}#sha256:{digest}"
 
 
 def _observed_leg_identity(
@@ -265,19 +288,36 @@ def _observed_leg_identity(
             )
     attempt = int(re.sub(r"[^0-9]", "", started_path.stem) or 0)
     result_path = started_path.with_name(f"result-{attempt}.json")
-    effective = None
-    if result_path.is_file():
-        try:
-            result_doc = json.loads(result_path.read_text(encoding="utf-8"))
-            effective = (result_doc.get("result") or {}).get("effective_model")
-        except (OSError, json.JSONDecodeError):
-            effective = None
+    # FAIL-CLOSED: production writes a durable result record for every
+    # attempt (success, failure, and policy termination alike). A
+    # missing or unparseable result after a successful invocation is
+    # destroyed evidence, NOT the tri-state unverified null — an
+    # explicit result without an effective model is.
+    if not result_path.is_file():
+        raise EvidenceSetError(
+            f"leg for {feature} has no durable result record for its "
+            f"final attempt — the effective-model evidence is absent, "
+            f"not unverified; the cell is not evidence"
+        )
+    try:
+        result_doc = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise EvidenceSetError(
+            f"leg for {feature} has a corrupt result record — destroyed "
+            f"evidence is never converted into the unverified state"
+        ) from None
+    effective = (result_doc.get("result") or {}).get("effective_model")
     if effective is not None and effective != declared.get("model"):
         raise EvidenceSetError(
             f"leg for {feature} reports effective model {effective!r} but "
             f"the pinned declaration is {declared.get('model')!r} — an "
             f"identity violation is never folded into evidence"
         )
+    # the endpoint authority is the PERSISTED profile's endpoint_ref —
+    # the exact reference rt_launch_env resolved (url:<literal> |
+    # urlenv:<name> | none) — resolved the same way and reduced to the
+    # redacted full-value-sensitive identity
+    endpoint_ref = profile.get("endpoint_ref") or _endpoint_ref_of(declared)
     return {
         "profile_id": profile_id,
         "backend": profile.get("backend") or declared.get("backend"),
@@ -286,9 +326,7 @@ def _observed_leg_identity(
         "effective_model": effective,
         "tool_profile": (profile.get("tool_profile")
                          or declared.get("tool_profile")),
-        "endpoint": _sanitized_endpoint(
-            profile.get("base_url_env") or declared.get("base_url_env")
-        ),
+        "endpoint": _endpoint_identity(_resolve_endpoint_ref(endpoint_ref)),
     }
 
 
@@ -313,7 +351,9 @@ def aggregate_profile_identity(
             "requested_model": declared.get("model"),
             "effective_model": None,
             "tool_profile": declared.get("tool_profile"),
-            "endpoint": _sanitized_endpoint(declared.get("base_url_env")),
+            "endpoint": _endpoint_identity(
+                _resolve_endpoint_ref(_endpoint_ref_of(declared))
+            ),
         }
     first = observations[0]
     for field_name in ("backend", "provider", "requested_model",
@@ -325,18 +365,26 @@ def aggregate_profile_identity(
                 f"different {field_name} identities {sorted(map(repr, values))} "
                 f"— one profile, one execution identity, or no matrix"
             )
-    effectives = {o.get("effective_model") for o in observations} - {None}
-    if len(effectives) > 1:
+    # CONSERVATIVE effective-model aggregation: a non-null value is
+    # emitted only when EVERY executed observation verified the same
+    # model. One explicitly-unverified leg makes the whole profile
+    # unverified (null) — a mixed [null, "m"] history is NOT the same
+    # execution certainty as ["m", "m"], and the fingerprint exists to
+    # make reuse exact. Conflicting non-null values still refuse.
+    effective_values = [o.get("effective_model") for o in observations]
+    non_null = set(effective_values) - {None}
+    if len(non_null) > 1:
         raise EvidenceSetInvalid(
             "fingerprint_mismatch", ARTIFACT_MATRIX,
             "conflicting verified effective models for one profile",
         )
+    all_verified = bool(non_null) and None not in effective_values
     return {
         "profile_id": profile_id,
         "backend": first.get("backend"),
         "provider": first.get("provider"),
         "requested_model": first.get("requested_model"),
-        "effective_model": effectives.pop() if effectives else None,
+        "effective_model": non_null.pop() if all_verified else None,
         "tool_profile": first.get("tool_profile"),
         "endpoint": first.get("endpoint"),
     }
@@ -725,7 +773,9 @@ def publish_evidence_set(
             "requested_model": decl.get("model"),
             "effective_model": None,
             "tool_profile": decl.get("tool_profile"),
-            "endpoint": _sanitized_endpoint(decl.get("base_url_env")),
+            "endpoint": _endpoint_identity(
+                _resolve_endpoint_ref(_endpoint_ref_of(decl))
+            ),
         }
         for pid, decl in sorted(declarations.items())
     )
@@ -876,8 +926,11 @@ def _clean_stale_staging(
         try:
             pid = int(marker.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
-            pid = None
-        if pid is not None and _publisher_alive(pid):
+            # ownership cannot be established — the contract is
+            # "recorded publisher pid CONFIRMED DEAD"; an unprovable
+            # owner is never confirmed anything, so never deleted
+            continue
+        if _publisher_alive(pid):
             continue
         shutil.rmtree(entry, ignore_errors=True)
 

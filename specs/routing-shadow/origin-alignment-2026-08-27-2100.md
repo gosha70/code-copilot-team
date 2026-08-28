@@ -380,6 +380,35 @@ is profile capability, not outage response. Flagged, not decided.
    missing evidence via their own nulls); the schema header's
    "EVERY container required" claim now names the exception.
 
+## T1 build audit round 2 (owner, on 2a1aa89) — two P1, one P2, applied
+
+1. **[P1] Mixed verified/unverified evidence is never promoted.**
+   Aggregation is now CONSERVATIVE: a non-null effective model is
+   emitted only when EVERY executed observation verified the same
+   model; one explicitly-unverified leg makes the profile null
+   ([null, "m"] -> null, the flipped discriminator); conflicting
+   non-null values still refuse. And the result read is FAIL-CLOSED:
+   a missing or corrupt result-N.json after a successful invocation
+   refuses (destroyed evidence is never converted into the unverified
+   state) — production writes a durable result for every attempt,
+   policy terminations included; only an explicit result without an
+   effective model is the legitimate tri-state null.
+2. **[P1] The endpoint identity covers the production surface and is
+   collision-safe.** The authority is the persisted profile's
+   endpoint_ref in production's own normalization (url:<literal> |
+   urlenv:<name> | none — rc_profile_tuple), resolved exactly as
+   rt_launch_env resolves it, so the shipped literal-base_url
+   (DeepSeek-shaped) profile gets a REAL identity instead of null.
+   The identity is redacted but FULL-VALUE-SENSITIVE: sanitized
+   origin+path plus a sha256 of the complete resolved endpoint —
+   same-host-different-query changes the identity (pinned) without
+   exposing query or userinfo (pinned).
+3. **[P2] Unprovable staging ownership is never deleted.** A missing
+   or malformed publisher marker means the pid was never CONFIRMED
+   dead, so the directory is skipped; old/no-marker and
+   old/bad-marker cases regression-locked alongside the original
+   three.
+
 ## Verdict
 
 Verdict: aligned
