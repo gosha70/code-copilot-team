@@ -27,8 +27,7 @@
     "interventions",
     "tier2",
     "rollbacks",
-    "reconciliation",
-    "insufficient_evidence"
+    "reconciliation"
   ],
   "additionalProperties": false,
   "properties": {
@@ -599,7 +598,7 @@
           }
         }
       },
-      "description": "Per-measure insufficiency, keyed by measure name, each entry carrying a REQUIRED reason. Null when nothing was insufficient; an empty object is rejected because it asserts neither sufficiency nor insufficiency. A measure recorded here is never rendered as zero, never silently dropped from the Pareto set, and never allowed to satisfy the control-set gate."
+      "description": "Per-measure insufficiency, keyed by measure name, each entry carrying a REQUIRED reason. Null when nothing was insufficient; an empty object is rejected because it asserts neither sufficiency nor insufficiency. A measure recorded here is never rendered as zero, never silently dropped from the Pareto set, and never allowed to satisfy the control-set gate. ABSENT means every evidence channel is complete (e.g. measured cost harvested from the durable attempt transcripts); PRESENT must be non-empty \u2014 a hollow insufficiency container is still refused."
     }
   },
   "$defs": {

@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "report.schema.json",
+  "title": "E1 comparison report v1 (routing-shadow decision 3)",
+  "description": "The persisted output of routing_eval build_report, versioned and source-bound. Additive over the in-memory T5 shape: fingerprint, source-artifact hashes (injected at publication), per-arm selection provenance, and per-task/per-trial figure tables — the intermediate values of E1's own aggregation pipeline, emitted so E2 recomputes nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "quality_fn",
+    "components_included",
+    "cost_basis",
+    "preset_digest",
+    "fingerprint",
+    "source_artifacts",
+    "arms",
+    "pareto"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "quality_fn": { "type": "string", "minLength": 1 },
+    "components_included": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "cost_basis": { "type": "string", "minLength": 1 },
+    "preset_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "fingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry_digest",
+        "preset_digest",
+        "execution_identity",
+        "task_set_revision",
+        "toolchain_digest"
+      ],
+      "properties": {
+        "registry_digest": { "type": "string", "minLength": 1 },
+        "preset_digest": { "type": "string", "minLength": 1 },
+        "execution_identity": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "profile_id",
+              "backend",
+              "provider",
+              "requested_model",
+              "effective_model",
+              "tool_profile",
+              "endpoint"
+            ],
+            "properties": {
+              "profile_id": { "type": "string", "minLength": 1 },
+              "backend": { "type": ["string", "null"] },
+              "provider": { "type": ["string", "null"] },
+              "requested_model": { "type": ["string", "null"] },
+              "effective_model": { "type": ["string", "null"] },
+              "tool_profile": { "type": ["string", "null"] },
+              "endpoint": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "task_set_revision": { "type": "string", "minLength": 1 },
+        "toolchain_digest": { "type": ["string", "null"] }
+      }
+    },
+    "source_artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["routing_runs_sha256", "outcome_matrix_sha256"],
+      "properties": {
+        "routing_runs_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "outcome_matrix_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "arms": {
+      "type": "object",
+      "minProperties": 4,
+      "additionalProperties": { "$ref": "#/$defs/arm" }
+    },
+    "pareto": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "frontier"],
+          "properties": {
+            "status": { "const": "ok" },
+            "frontier": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["arm", "quality", "cost"],
+                "properties": {
+                  "arm": { "type": "string", "minLength": 1 },
+                  "quality": { "type": "number" },
+                  "cost": { "type": "number" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": { "const": "insufficient_evidence" },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "figure": { "type": ["number", "string", "null"] },
+    "per_trial": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["trial", "quality", "cost"],
+        "properties": {
+          "trial": { "type": "integer", "minimum": 0 },
+          "quality": { "type": ["number", "null"] },
+          "cost": { "type": ["number", "null"] }
+        }
+      }
+    },
+    "task_figures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quality", "cost", "per_trial"],
+      "properties": {
+        "quality": { "type": ["number", "null"] },
+        "cost": { "type": ["number", "null"] },
+        "per_trial": { "$ref": "#/$defs/per_trial" }
+      }
+    },
+    "arm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quality",
+        "metrics",
+        "cost",
+        "insufficient",
+        "selections",
+        "tasks"
+      ],
+      "properties": {
+        "quality": { "type": ["number", "null"] },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/figure" }
+        },
+        "cost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value", "status", "reason"],
+          "properties": {
+            "value": { "type": ["number", "null"] },
+            "status": { "type": "string", "minLength": 1 },
+            "reason": { "type": ["string", "null"] }
+          }
+        },
+        "insufficient": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "selections": {
+          "description": "Per-task selector provenance: task -> profile for per-task arms; task -> {trial -> profile} for the oracle arms; the router arm has no selection (it selected live) and carries an empty object.",
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              {
+                "type": "object",
+                "additionalProperties": { "type": "string", "minLength": 1 }
+              }
+            ]
+          }
+        },
+        "tasks": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/task_figures" }
+        }
+      }
+    }
+  }
+}

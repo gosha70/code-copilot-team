@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from .cost_reader import measured_cost
 from .injection import materialize_replay
 from .redaction import (
     measured_diff_lines,
@@ -201,6 +202,7 @@ class SupervisorRunner:
             task_spec, exec_wt = None, self.worktree
 
         harness_cmd = self._ordinary_harness(feature, list(events), harness_cmd)
+        transcripts_before = self._transcripts(feature, exec_wt)
 
         env = dict(os.environ)
         env.update(
@@ -224,7 +226,9 @@ class SupervisorRunner:
                 f"(stderr tail: {proc.stderr[-400:]!r})"
             )
         record = dict(
-            self.harvest(task, trial, seed, events, feature, exec_worktree=exec_wt)
+            self.harvest(task, trial, seed, events, feature,
+                         exec_worktree=exec_wt,
+                         transcripts_before=transcripts_before)
         )
         if task_spec is not None:
             record["verifiers"] = list(record["verifiers"]) + [
@@ -454,6 +458,17 @@ class SupervisorRunner:
 
     # ── harvest: durable outputs -> one routing-run record ────────────
 
+    def _transcripts(self, feature: str,
+                     exec_worktree: "Path | None" = None) -> set:
+        """The durable per-attempt child transcripts the supervisor
+        copies into the rt dir (transcript-N.log, including delegate
+        namespaces). Snapshot before an invocation; harvest reads the
+        difference as THIS invocation's transcripts."""
+        rt_dir = self._rt_dir(feature, exec_worktree)
+        if not rt_dir.exists():
+            return set()
+        return set(rt_dir.rglob("transcript-*.log"))
+
     def harvest(
         self,
         task: str,
@@ -463,6 +478,7 @@ class SupervisorRunner:
         feature: str,
         events_offset: int = 0,
         exec_worktree: "Path | None" = None,
+        transcripts_before: "set | None" = None,
     ) -> Mapping[str, Any]:
         rt_dir = self._rt_dir(feature, exec_worktree)
         events_file = self.ledger_root / feature / "events.jsonl"
@@ -470,6 +486,9 @@ class SupervisorRunner:
         decisions = self._decisions_from(events_file, rt_dir, events_offset)
         tier2, reconciliation = self._tier2_from(self.ledger_root / feature)
         scope_violations = self._scope_violations_from(events_file, events_offset)
+        cost, cost_insufficiency = self._measured_cost_from(
+            feature, exec_worktree, transcripts_before
+        )
 
         return {
             "schema_version": 1,
@@ -495,8 +514,7 @@ class SupervisorRunner:
             "routing_decisions": decisions,
             "tokens": {"input": None, "output": None,
                        "cache_read": None, "cache_write": None},
-            "cost": {"value": None, "provenance": "unavailable",
-                     "estimator": None, "inputs": None},
+            "cost": cost,
             "baseline": {"lint_passed": None, "typecheck_passed": None},
             "quality_gates": {
                 "coverage": {"before": None, "after": None},
@@ -512,10 +530,54 @@ class SupervisorRunner:
             "tier2": tier2,
             "rollbacks": [],
             "reconciliation": reconciliation,
-            "insufficient_evidence": {
-                "cost": {"reason": "supervisor transcripts are transient; no measured cost harvested"}
-            },
+            **(
+                {"insufficient_evidence": cost_insufficiency}
+                if cost_insufficiency
+                else {}
+            ),
         }
+
+    def _measured_cost_from(
+        self,
+        feature: str,
+        exec_worktree: "Path | None",
+        transcripts_before: "set | None",
+    ):
+        """Row 12's measured value, from THE DURABLE per-attempt
+        transcripts (transcript-N.log — the supervisor copies every
+        child's output into the rt dir; the earlier belief that
+        transcripts were transient was wrong, corrected here). The
+        invocation's cost is the sum over its NEW transcripts'
+        backend-reported total_cost_usd (cost_reader.measured_cost,
+        the rb_measured rule). Any transcript without a measured value
+        makes the whole invocation unavailable — never a partial
+        sum."""
+        new = sorted(
+            self._transcripts(feature, exec_worktree)
+            - (transcripts_before or set())
+        )
+        values = []
+        for path in new:
+            try:
+                values.append(measured_cost(path.read_text(encoding="utf-8")))
+            except OSError:
+                values.append(None)
+        if new and all(v is not None for v in values):
+            return (
+                {"value": float(sum(values)), "provenance": "measured",
+                 "estimator": None, "inputs": None},
+                {},
+            )
+        return (
+            {"value": None, "provenance": "unavailable",
+             "estimator": None, "inputs": None},
+            {"cost": {"reason": (
+                "no attempt transcript reported a measured cost"
+                if not new else
+                "an attempt transcript carries no backend-reported "
+                "total_cost_usd — a partial sum is never a cost"
+            )}},
+        )
 
     def _scope_violations_from(self, events_file: Path,
                                events_offset: int = 0) -> list[str]:
@@ -646,6 +708,7 @@ class SupervisorRunner:
         else:
             exec_wt = self.worktree
             delegate_key = task
+        transcripts_before = self._transcripts(feature, exec_wt)
         proc = self._invoke(feature, delegate_harness_cmd,
                             ["--profile", "unattended", "--delegate", delegate_key],
                             exec_worktree=exec_wt)
@@ -663,7 +726,8 @@ class SupervisorRunner:
             )
         route_class = self._route_class_from(ledger_dir)
         record = self.harvest(task, trial, seed, [], feature,
-                              exec_worktree=exec_wt)
+                              exec_worktree=exec_wt,
+                              transcripts_before=transcripts_before)
         decisions = list(record["routing_decisions"])
         if not decisions:
             raise RunnerError("delegate run journaled no selection decision")
@@ -726,6 +790,7 @@ class SupervisorRunner:
             reconcile_key = task
         before = self._provisional_entry(ledger_dir, reconcile_key)
         offset = len(events_file.read_text(encoding="utf-8").splitlines()) if events_file.exists() else 0
+        transcripts_before = self._transcripts(feature, exec_wt)
         proc = self._invoke(feature, reconcile_harness_cmd,
                             ["--profile", "unattended", "--reconcile", reconcile_key],
                             exec_worktree=exec_wt)
@@ -747,7 +812,8 @@ class SupervisorRunner:
             raise RunnerError("reconcile changed the packet identity — refusing")
         reconciler = entry.get("reconciler") or {}
         record = self.harvest(task, trial, seed, [], feature,
-                              events_offset=offset, exec_worktree=exec_wt)
+                              events_offset=offset, exec_worktree=exec_wt,
+                              transcripts_before=transcripts_before)
         decisions = list(record["routing_decisions"]) or [{
             "considered": [],
             "selected": reconciler.get("id"),

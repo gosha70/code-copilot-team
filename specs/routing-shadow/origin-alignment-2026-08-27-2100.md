@@ -276,6 +276,61 @@ The owner explicitly did not reopen the recommendation rule,
 confidence thresholds, manifest architecture, or set-atomic
 publication model.
 
+## T1 build (2026-08-28) — the E1 evidence-set orchestration
+
+Built per decisions 2-4 with the owner's three load-bearing
+discriminators pinned. Live proof: publish_evidence_set drives the
+one-trial arc fixture end to end — hybrid scenario, 15-cell matrix (9
+executed through stage-specific one-profile derived registries, 6
+ineligible), selections, report v1, manifest — validates in staging,
+publishes atomically, is idempotent on byte-identical republication,
+and refuses manifest-fingerprint-only tampering
+(fingerprint_mismatch) and report edits (hash_mismatch) with
+sanitized diagnostics. Fault injection at the matrix/report/validate
+steps leaves no discoverable partial set and the retry succeeds. The
+lifecycle fold's per-component contract is regression-locked
+(laundering and cross-leg-repeat mutations discriminate); the
+bounded-build reconciler steal is pinned live.
+
+THREE implementation corrections surfaced by building the production
+path, each grounded in production code and labeled:
+
+1. **Eligibility class semantics are BUILT INTO rt_select, not read
+   from registry tables.** The plan said tier membership in the
+   class's declared tier_order; in production, rt_select's closed
+   vocabulary hardcodes tier1_only = tier1-only and tier2_preferred =
+   tier2-then-tier1 (routing-select.sh:142-208), and the registry's
+   [route_classes.*] tables govern task-metadata validation, not
+   selection. A table-based predicate wrongly ruled every profile
+   ineligible under a registry that declares no such table (the live
+   arc registry). The derived predicate now mirrors the selector's
+   built-ins; the role half is unchanged.
+2. **Measured cost IS harvestable — the "transcripts are transient"
+   premise was false.** The supervisor durably copies every attempt's
+   child output to RT_DIR/transcript-N.log (cooldown-supervisor.sh
+   :1297/:1632/:2004) and result-N.json references it. Harvest now
+   snapshots transcripts per invocation and sums
+   cost_reader.measured_cost over the invocation's new transcripts —
+   provenance measured; any transcript without a backend-reported
+   value makes the invocation unavailable, never a partial sum. This
+   is what makes a measured-basis evidence set publishable at all
+   (always_cheapest refused the gate without it).
+3. **routing-run.schema.json: insufficient_evidence became
+   optional-but-nonempty.** With measured cost real, complete
+   evidence is representable; the hollow-container refusal stands
+   (present ⇒ minProperties 1), and absence now means complete. The
+   schema rejection test was updated to the corrected contract.
+
+OPEN QUESTION for the owner (round-5 language collision): decision 2
+says sweep cells replay the task's injected events with router-arm
+parity, but a provider-outage event against a PINNED single-profile
+cell has no failover path — under default replay the cell dies and
+the matrix loses coverage. T1 passes the events through as planned
+(the live fixture encodes benign behavior via the explicit sweep
+harness command); the likely right amendment is that router-arc
+shaping events do not inject into fixed-profile cells, whose purpose
+is profile capability, not outage response. Flagged, not decided.
+
 ## Verdict
 
 Verdict: aligned
