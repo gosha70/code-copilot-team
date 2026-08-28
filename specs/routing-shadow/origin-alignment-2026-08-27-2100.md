@@ -518,6 +518,64 @@ tightening applied here). T3 built per decisions 7-10's API half:
   identical before/after load+derive+serve); the consumer module's
   source contains no write calls.
 
+## T3 build audit round 1 (owner, on a135289) — two P1, applied
+
+1. **[P1] Hash verification proves integrity, not redaction — the
+   scrub moved to the writer.** Referenced evidence files now pass
+   through the SAME write-time scrub as every other published string
+   AT PUBLICATION: `_publish` takes required `secret_values`
+   (resolved by `publish_evidence_set` from the executed registry's
+   own `credential_env` references), decodes each staged evidence
+   file as UTF-8 (a non-decodable file refuses the set — an
+   unscrubabble file never ships), writes the scrubbed bytes, and
+   the manifest hashes the SCRUBBED bytes, so hash-verified serving
+   can never faithfully deliver a secret or a home path. The owner's
+   full-chain discriminator is pinned
+   (TestEvidenceFileRedactionChain): registry declares
+   `credential_env = "E2_BORING_TOKEN"`, the environment holds the
+   deliberately boring `correct-horse-X7`, the raw verifier evidence
+   carries that token plus the machine's own home-anchored worktree
+   path; after publication the persisted evidence-file bytes and the
+   API-served content contain neither, and the scrubbed forms
+   (`[REDACTED]`, `~/…`) are asserted PRESENT so the test
+   discriminates "scrub ran" from "leak never reached the file".
+   Mutations: raw-copy (scrub disabled) fails the token assertion;
+   raw-hash (manifest hashes source bytes) trips the in-staging
+   `hash_mismatch` refusal. The sensitive path is the CURRENT user's
+   home (decision 8's declared guarantee — the home prefix collapses
+   so no username ships); a foreign `/Users/<other>` literal is
+   outside the closed reviewed pattern set and was not smuggled in
+   as scope.
+2. **[P1] Decision 9 implemented as approved (owner's Option A) —
+   payloads carry the pointers, one resolver validates before
+   serving.** `recommendation.schema.json` gains closed source
+   descriptors: `oracle_ceiling.sources` (RFC 6901 `figure_source`
+   into the report per non-null figure, null source iff null figure)
+   and per-arm `divergence[…].sources` (`delta_source`:
+   `operation: subtract` + lhs/rhs figure sources), both required.
+   The derivation emits them; `verify_recommendation_provenance` —
+   THE resolver — runs inside `recommendations_payload` before
+   anything is served: it resolves every pointer against the one
+   canonical report parse, requires float64 equality for direct
+   figures, and recomputes every declared subtraction requiring
+   exact equality. No source, an unresolvable pointer, a non-numeric
+   resolution, or a differing value refuses the whole payload.
+   Pinned: independent re-resolution of every served source;
+   missing-pointer, unresolvable-pointer, delta-vs-recomputation
+   (1e-12 perturbation), wrong-operand (resolvable but wrong field),
+   and gate-wired-at-serving regressions. Mutations (all
+   discriminated): rhs pointed at the router arm; recomputation
+   comparison removed; serving path severed from the resolver;
+   builder emitting unsourced divergence (schema refuses).
+
+Scoping note recorded for review: `confidence.basis.agreement` and
+`trials` are derived statistics of the derivation itself, not copies
+of artifact figures — their provenance is the basis block decision 5
+defines (trials, components, unevaluated_trials, insufficiency
+refs), and no direct-pointer source exists for them by construction.
+Suites after the round: routing-evidence 41/41, E1 routing_eval
+93/93, session-analytics discovery 331 (34 CI-gated skips), all OK.
+
 ## Verdict
 
 Verdict: aligned

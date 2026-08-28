@@ -61,6 +61,7 @@ from .routing_quality import (
     write_report,
 )
 from .scenario import run_hybrid_scenario
+from .redaction import scrub_text, secret_values_from_registry
 from .supervisor_runner import SupervisorRunner, registry_digest_of
 
 ARTIFACT_RUNS = "routing-runs.jsonl"
@@ -884,6 +885,11 @@ def publish_evidence_set(
     )
 
     # (e) SET-ATOMIC publication
+    secrets = (
+        runner._secret_values()
+        if hasattr(runner, "_secret_values")
+        else secret_values_from_registry(registry_path)
+    )
     return _publish(
         output_root,
         runs_path=artifact.artifact_path,
@@ -892,6 +898,7 @@ def publish_evidence_set(
         matrix=matrix,
         report=report,
         fingerprint=fingerprint,
+        secret_values=secrets,
     )
 
 
@@ -951,6 +958,7 @@ def _publish(
     matrix: OutcomeMatrix,
     report: Mapping[str, Any],
     fingerprint: Fingerprint,
+    secret_values: Sequence[str],
 ) -> PublishedEvidenceSet:
     output_root.mkdir(parents=True, exist_ok=True)
     _clean_stale_staging(output_root)
@@ -985,7 +993,25 @@ def _publish(
                 src = evidence_root / ref
                 dst = staging / ref
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, dst)
+                # VERIFIED dangerous bytes are still dangerous bytes:
+                # hash verification proves integrity, not redaction.
+                # Evidence files pass through the SAME write-time
+                # scrub as every other published string (dynamic
+                # literal secrets + path collapse) and the manifest
+                # hashes the SCRUBBED bytes — so the API's
+                # hash-verified serving can never faithfully deliver
+                # a secret or a sensitive absolute path.
+                try:
+                    text = src.read_bytes().decode("utf-8")
+                except UnicodeDecodeError:
+                    raise EvidenceSetError(
+                        f"evidence file {ref!r} is not valid UTF-8 text — "
+                        f"an unscrubabble file never ships with a set"
+                    ) from None
+                dst.write_text(
+                    scrub_text(text, secret_values=secret_values),
+                    encoding="utf-8",
+                )
                 evidence_files[ref] = _sha256_file(dst)
 
         (staging / ARTIFACT_MATRIX).write_text(

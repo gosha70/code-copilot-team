@@ -490,8 +490,15 @@ class TestDeterminismAndContract(unittest.TestCase):
         record["reconciliation"]["outcome"] = "failed"
         (rec,) = derive_recommendations(_loaded(report, [record]))
         self.assertFalse(rec["actual"]["per_trial"][0]["reconciled"])
-        self.assertEqual(rec["oracle_ceiling"], {"quality": 0.9,
-                                                 "cost": 0.05})
+        self.assertEqual(
+            rec["oracle_ceiling"],
+            {"quality": 0.9, "cost": 0.05, "sources": {
+                "quality": {"artifact": "report",
+                            "pointer": "/arms/oracle/tasks/t/quality"},
+                "cost": {"artifact": "report",
+                         "pointer": "/arms/oracle/tasks/t/cost"},
+            }},
+        )
 
 
 class TestEvidenceLoading(unittest.TestCase):
@@ -565,6 +572,7 @@ class TestEvidenceLoading(unittest.TestCase):
             matrix=matrix,
             report=dict(report),
             fingerprint=matrix.fingerprint,
+            secret_values=(),
         )
 
     def test_valid_sets_load_and_derive_schema_valid_records(self) -> None:
@@ -780,6 +788,140 @@ class TestFigureProvenanceGate(unittest.TestCase):
                             router["cost"] - cand["cost"],
                         )
 
+    def test_payload_carries_resolvable_sources(self) -> None:
+        # T3 round-1 finding 2 (Option A): the served payload CARRIES
+        # the pointers — every non-null figure resolves independently
+        # against one canonical parse of the persisted artifact
+        import tempfile
+
+        from session_analytics.routing_evidence import (
+            recommendations_payload,
+        )
+
+        def resolve(doc, pointer):
+            node = doc
+            for raw in pointer.split("/")[1:]:
+                node = node[raw.replace("~1", "/").replace("~0", "~")]
+            return node
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            TestEvidenceLoading._publish_fixture(self, base)
+            (loaded,) = load_evidence_sets([base / "out"])
+            artifact = json.loads(
+                (loaded.path / "report.json").read_text(encoding="utf-8")
+            )
+            recs = recommendations_payload(loaded)["recommendations"]
+            self.assertTrue(recs)
+            for rec in recs:
+                ceiling = rec["oracle_ceiling"]
+                for field in ("quality", "cost"):
+                    source = ceiling["sources"][field]
+                    if ceiling[field] is None:
+                        self.assertIsNone(source)
+                        continue
+                    self.assertEqual(source["artifact"], "report")
+                    self.assertEqual(
+                        resolve(artifact, source["pointer"]), ceiling[field]
+                    )
+                for delta in rec["divergence"].values():
+                    for field in ("quality_delta", "cost_delta"):
+                        source = delta["sources"][field]
+                        if delta[field] is None:
+                            self.assertIsNone(source)
+                            continue
+                        self.assertEqual(source["operation"], "subtract")
+                        lhs = resolve(artifact, source["lhs"]["pointer"])
+                        rhs = resolve(artifact, source["rhs"]["pointer"])
+                        self.assertEqual(lhs - rhs, delta[field])
+
+    def test_missing_pointer_refuses(self) -> None:
+        from session_analytics.routing_evidence import (
+            DerivationError,
+            verify_recommendation_provenance,
+        )
+
+        loaded, records = self._derived()
+        records[0]["oracle_ceiling"]["sources"]["quality"] = None
+        with self.assertRaisesRegex(DerivationError, "no source pointer"):
+            verify_recommendation_provenance(loaded, records)
+
+    def test_unresolvable_pointer_refuses(self) -> None:
+        from session_analytics.routing_evidence import (
+            DerivationError,
+            verify_recommendation_provenance,
+        )
+
+        loaded, records = self._derived()
+        records[0]["oracle_ceiling"]["sources"]["quality"]["pointer"] = (
+            "/arms/nonexistent/tasks/t/quality"
+        )
+        with self.assertRaisesRegex(DerivationError, "does not resolve"):
+            verify_recommendation_provenance(loaded, records)
+
+    def test_delta_differing_from_recomputation_refuses(self) -> None:
+        from session_analytics.routing_evidence import (
+            DerivationError,
+            verify_recommendation_provenance,
+        )
+
+        loaded, records = self._derived()
+        entry = records[0]["divergence"]["always_best"]
+        self.assertIsNotNone(entry["quality_delta"])
+        entry["quality_delta"] += 1e-12
+        with self.assertRaisesRegex(DerivationError, "recomputed subtraction"):
+            verify_recommendation_provenance(loaded, records)
+
+    def test_wrong_operand_pointer_refuses(self) -> None:
+        # a pointer that resolves but names the WRONG field: the
+        # recomputed subtraction no longer matches the served delta
+        from session_analytics.routing_evidence import (
+            DerivationError,
+            verify_recommendation_provenance,
+        )
+
+        loaded, records = self._derived()
+        source = records[0]["divergence"]["always_best"]["sources"][
+            "quality_delta"]
+        source["rhs"] = dict(source["lhs"])
+        with self.assertRaisesRegex(DerivationError, "recomputed subtraction"):
+            verify_recommendation_provenance(loaded, records)
+
+    def test_gate_runs_at_serving(self) -> None:
+        # the resolver is wired INTO the payload path — a derivation
+        # that emitted an unsourced figure never leaves the server
+        from unittest import mock
+
+        from session_analytics import routing_evidence
+        from session_analytics.routing_evidence import (
+            DerivationError,
+            recommendations_payload,
+        )
+
+        loaded, records = self._derived()
+        records[0]["oracle_ceiling"]["sources"]["cost"] = None
+        with mock.patch.object(
+            routing_evidence, "derive_recommendations",
+            return_value=records,
+        ):
+            with self.assertRaises(DerivationError):
+                recommendations_payload(loaded)
+
+    def _derived(self):
+        report = _report(
+            _figures_for(router=(0.5, 0.05), best=(1.0, 0.01),
+                         cheapest=(0.4, 0.02)),
+            selections=_SELECTIONS,
+        )
+        loaded = _loaded(
+            report, [_router_record("t", considered=_ADMISSIBLE)]
+        )
+        records = [
+            json.loads(json.dumps(rec))
+            for rec in derive_recommendations(loaded)
+        ]
+        return loaded, records
+
 
 class TestAuthorityGuard(unittest.TestCase):
     """Decision 7: nothing the router executes references this layer,
@@ -871,3 +1013,141 @@ class TestEvidenceRootsConfig(unittest.TestCase):
             self.assertEqual(cfg.routing_evidence_roots,
                              ("/from/env/x", "/from/env/y"),
                              "real env wins over file layering")
+
+
+class TestEvidenceFileRedactionChain(unittest.TestCase):
+    """T3 round-1 finding 1: verified dangerous bytes are still
+    dangerous bytes. Referenced evidence files pass through the SAME
+    write-time scrub as everything else at PUBLICATION, the manifest
+    hashes the scrubbed bytes, and the API serves only what survived
+    — proven with the full chain: registry credential_env -> boring
+    env value -> raw verifier evidence -> publication -> HTTP-shaped
+    payloads."""
+
+    _BORING = "correct-horse-X7"
+
+    def test_published_and_served_evidence_is_scrubbed(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        from benchmark_runner.routing_eval.redaction import (
+            secret_values_from_registry,
+        )
+        from session_analytics.routing_evidence import serve_evidence_file
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            # the credential chain: the registry declares the env
+            # reference; the environment holds a boring value no
+            # static pattern matches
+            registry = base / "registry.toml"
+            registry.write_text(
+                "schema_version = 1\n[[profiles]]\nid = \"p\"\n"
+                "credential_env = \"E2_BORING_TOKEN\"\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                "os.environ", {"E2_BORING_TOKEN": self._BORING}
+            ):
+                secrets = secret_values_from_registry(registry)
+            self.assertIn(self._BORING, secrets)
+            # RAW verifier evidence carrying the token and a sensitive
+            # absolute home path — exactly what a real tool log leaks
+            # (the machine's OWN home: decision 8's guarantee is that
+            # the user home prefix collapses to ~ so no username ships)
+            sensitive_path = str(Path.home() / "private/customer-x/repo")
+            raw = (f"provider failed with {self._BORING}\n"
+                   f"worktree: {sensitive_path}\n"
+                   f"tests ok\n")
+            published = self._publish_with_evidence(base, raw, secrets)
+            # 1) the PERSISTED evidence-file bytes are scrubbed
+            manifest = json.loads(
+                (published.path / "manifest.json").read_text(
+                    encoding="utf-8")
+            )
+            for ref in manifest["evidence_files"]:
+                persisted = (published.path / ref).read_text(
+                    encoding="utf-8")
+                self.assertNotIn(self._BORING, persisted)
+                self.assertNotIn(sensitive_path, persisted)
+                # the SCRUBBED forms are present — proof the scrub ran,
+                # not that the leak merely never reached the file
+                self.assertIn("[REDACTED]", persisted)
+                self.assertIn("~/private/customer-x/repo", persisted)
+                self.assertIn("tests ok", persisted)
+            # 2) the set VALIDATES (the manifest hashed the SCRUBBED
+            # bytes) and the API serves only what survived
+            (entry,) = load_evidence_sets([base / "out"])
+            self.assertIsInstance(entry, LoadedEvidenceSet)
+            for ref in manifest["evidence_files"]:
+                served = serve_evidence_file(entry, ref)
+                self.assertNotIn(self._BORING, served["content"])
+                self.assertNotIn(sensitive_path, served["content"])
+
+    def _publish_with_evidence(self, base, raw_evidence, secrets):
+        from benchmark_runner.routing_eval.evidence_set import _publish
+        from benchmark_runner.routing_eval.redaction import (
+            write_run_records,
+        )
+        from benchmark_runner.routing_eval.routing_quality import (
+            build_report,
+        )
+        from benchmark_runner.tests.test_routing_eval_quality import (
+            _CONFIG,
+            _PRESET,
+            _REG_DIGEST,
+            _REGISTRY,
+            _cell,
+            _matrix,
+            _selection,
+        )
+        from benchmark_runner.tests.test_routing_eval_redaction import (
+            _valid_record,
+        )
+
+        cells = [
+            _cell("t1", "alpha", 0, cost=0.05),
+            _cell("t1", "beta", 0, result="fail", cost=0.01),
+        ]
+        matrix = _matrix(cells)
+        controls = {
+            "always_best": _selection("always_best", [cells[0]]),
+            "always_cheapest": _selection("always_cheapest", [cells[1]]),
+            "oracle": _selection("oracle", [cells[0]]),
+        }
+        record = _valid_record(base)
+        record.update({
+            "task_id": "t1", "trial": 0, "trial_seed": 1,
+            "registry_digest": _REG_DIGEST, "preset_digest": _PRESET,
+            "task_set_revision": "rev", "toolchain_digest": "sha256:tc",
+            "baseline": {"lint_passed": True, "typecheck_passed": True},
+            "quality_gates": {
+                "coverage": {"before": 80.0, "after": 80.0},
+                "security": {"findings_by_severity":
+                             {"before": {}, "after": {}}},
+            },
+            "cost": {"value": 0.02, "provenance": "measured",
+                     "estimator": None, "inputs": None},
+        })
+        record.pop("insufficient_evidence", None)
+        # overwrite the fixture's evidence file with the RAW leak
+        ledger = base / "ledger"
+        (ledger / "feat" / "verify.txt").write_text(raw_evidence,
+                                                    encoding="utf-8")
+        report = build_report(matrix, controls, [record],
+                              expected_preset_digest=_PRESET,
+                              registry_path=_REGISTRY, config=_CONFIG)
+        report.pop("source_artifacts", None)
+        runs = write_run_records([record], ledger / "runs.jsonl",
+                                 evidence_root=ledger,
+                                 secret_values=secrets)
+        return _publish(
+            base / "out",
+            runs_path=runs,
+            evidence_root=ledger,
+            records=[record],
+            matrix=matrix,
+            report=dict(report),
+            fingerprint=matrix.fingerprint,
+            secret_values=secrets,
+        )

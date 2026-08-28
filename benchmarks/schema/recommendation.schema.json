@@ -63,26 +63,58 @@
       ]
     },
     "oracle_ceiling": {
-      "description": "The hindsight bound, always named separately — never suggested (it is not a policy anyone can run).",
+      "description": "The hindsight bound, always named separately — never suggested (it is not a policy anyone can run). Each non-null figure names its exact artifact source (decision 9); a null figure carries a null source.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["quality", "cost"],
+      "required": ["quality", "cost", "sources"],
       "properties": {
         "quality": { "type": ["number", "null"] },
-        "cost": { "type": ["number", "null"] }
+        "cost": { "type": ["number", "null"] },
+        "sources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["quality", "cost"],
+          "properties": {
+            "quality": {
+              "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/figure_source" }]
+            },
+            "cost": {
+              "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/figure_source" }]
+            }
+          }
+        }
       }
     },
     "divergence": {
-      "description": "Per executable candidate arm: the declared float64 subtractions (router minus candidate) of the report's served per-task figures.",
+      "description": "Per executable candidate arm: the declared float64 subtractions (router minus candidate) of the report's served per-task figures. Each non-null delta names its two operand pointers (decision 9); the serving resolver recomputes the subtraction and refuses on any difference.",
       "type": "object",
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["quality_delta", "cost_delta", "cost_basis"],
+        "required": ["quality_delta", "cost_delta", "cost_basis", "sources"],
         "properties": {
           "quality_delta": { "type": ["number", "null"] },
           "cost_delta": { "type": ["number", "null"] },
-          "cost_basis": { "type": "string", "minLength": 1 }
+          "cost_basis": { "type": "string", "minLength": 1 },
+          "sources": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["quality_delta", "cost_delta"],
+            "properties": {
+              "quality_delta": {
+                "oneOf": [
+                  { "type": "null" },
+                  { "$ref": "#/$defs/delta_source" }
+                ]
+              },
+              "cost_delta": {
+                "oneOf": [
+                  { "type": "null" },
+                  { "$ref": "#/$defs/delta_source" }
+                ]
+              }
+            }
+          }
         }
       }
     },
@@ -130,6 +162,27 @@
     }
   },
   "$defs": {
+    "figure_source": {
+      "description": "The exact source of one served numeric figure (decision 9): a JSON Pointer into ONE named set artifact. The serving resolver parses the artifact once, resolves the pointer, and requires float64 equality with the served figure — no source, an unresolvable pointer, or a differing value refuses the payload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "pointer"],
+      "properties": {
+        "artifact": { "enum": ["report"] },
+        "pointer": { "type": "string", "pattern": "^(/([^/~]|~[01])*)+$" }
+      }
+    },
+    "delta_source": {
+      "description": "A declared delta naming its two operand pointers; the serving resolver recomputes lhs minus rhs in float64 and requires exact equality with the served delta.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "lhs", "rhs"],
+      "properties": {
+        "operation": { "const": "subtract" },
+        "lhs": { "$ref": "#/$defs/figure_source" },
+        "rhs": { "$ref": "#/$defs/figure_source" }
+      }
+    },
     "evidence_ref": {
       "type": "object",
       "additionalProperties": false,

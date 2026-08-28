@@ -311,6 +311,7 @@ class TestPublishEvidenceSetLive(_EvidenceFixture):
             matrix=matrix_obj,
             report=report_doc,
             fingerprint=fp,
+            secret_values=(),
         )
         self.assertTrue(again.existed, "byte-identical republication is an "
                                        "idempotent no-op")
@@ -367,6 +368,7 @@ class TestPublishEvidenceSetLive(_EvidenceFixture):
                 matrix=matrix_obj,
                 report=dict(report_doc),
                 fingerprint=fp,
+                secret_values=(),
             )
 
         faults = (

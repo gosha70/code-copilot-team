@@ -198,9 +198,15 @@ def evidence_detail(loaded: LoadedEvidenceSet) -> Mapping[str, Any]:
 
 
 def recommendations_payload(loaded: LoadedEvidenceSet) -> Mapping[str, Any]:
+    """Derive, then hold every record to the figure-provenance gate
+    (decision 9) BEFORE anything is served: one resolver validates all
+    source pointers and recomputes every declared delta against the
+    canonical report parse."""
+    records = derive_recommendations(loaded)
+    verify_recommendation_provenance(loaded, records)
     return {
         "set_id": loaded.set_id,
-        "recommendations": derive_recommendations(loaded),
+        "recommendations": records,
     }
 
 
@@ -270,6 +276,145 @@ def _figures(report: Mapping[str, Any], arm: str, task: str):
     if entry is None:
         return None, None, None
     return entry.get("quality"), entry.get("cost"), entry.get("per_trial")
+
+
+# ── figure provenance (decision 9) ─────────────────────────────────────
+def _json_pointer(*tokens: str) -> str:
+    """RFC 6901 pointer from raw tokens (~ and / escaped)."""
+    return "".join(
+        "/" + token.replace("~", "~0").replace("/", "~1") for token in tokens
+    )
+
+
+def _figure_source(arm: str, task: str, field: str) -> Mapping[str, Any]:
+    return {
+        "artifact": "report",
+        "pointer": _json_pointer("arms", arm, "tasks", task, field),
+    }
+
+
+def _delta_source(arm: str, task: str, field: str) -> Mapping[str, Any]:
+    """Router minus candidate — the declared subtraction's two operands."""
+    return {
+        "operation": "subtract",
+        "lhs": _figure_source("cct_router", task, field),
+        "rhs": _figure_source(arm, task, field),
+    }
+
+
+def _resolve_pointer(doc: Any, pointer: str) -> Any:
+    """Resolve one RFC 6901 pointer against a parsed artifact; raises
+    DerivationError on any unresolvable step."""
+    if not pointer.startswith("/"):
+        raise DerivationError(
+            f"figure source pointer {pointer!r} is not a JSON Pointer"
+        )
+    node = doc
+    for raw in pointer.split("/")[1:]:
+        token = raw.replace("~1", "/").replace("~0", "~")
+        if isinstance(node, Mapping) and token in node:
+            node = node[token]
+        elif isinstance(node, list) and token.isdigit() and int(token) < len(node):
+            node = node[int(token)]
+        else:
+            raise DerivationError(
+                f"figure source pointer {pointer!r} does not resolve in its "
+                f"artifact — a served figure with an unresolvable source "
+                f"fails the provenance gate"
+            )
+    return node
+
+
+def _resolve_figure(artifacts: Mapping[str, Any], source: Mapping[str, Any],
+                    where: str) -> float:
+    artifact = artifacts.get(source.get("artifact"))
+    if artifact is None:
+        raise DerivationError(
+            f"{where}: figure source names unknown artifact "
+            f"{source.get('artifact')!r}"
+        )
+    value = _resolve_pointer(artifact, source["pointer"])
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise DerivationError(
+            f"{where}: figure source {source['pointer']!r} resolves to a "
+            f"non-numeric value"
+        )
+    return value
+
+
+def _check_direct(artifacts: Mapping[str, Any], figure: Any, source: Any,
+                  where: str) -> None:
+    if figure is None:
+        if source is not None:
+            raise DerivationError(
+                f"{where}: a null figure must carry a null source"
+            )
+        return
+    if source is None:
+        raise DerivationError(
+            f"{where}: served figure carries no source pointer — decision 9 "
+            f"refuses unsourced figures"
+        )
+    resolved = _resolve_figure(artifacts, source, where)
+    if float(resolved) != float(figure):
+        raise DerivationError(
+            f"{where}: served figure differs from its pointed-at artifact "
+            f"value — the provenance gate refuses the payload"
+        )
+
+
+def _check_delta(artifacts: Mapping[str, Any], delta: Any, source: Any,
+                 where: str) -> None:
+    if delta is None:
+        if source is not None:
+            raise DerivationError(
+                f"{where}: a null delta must carry a null source"
+            )
+        return
+    if source is None:
+        raise DerivationError(
+            f"{where}: served delta carries no operand pointers — decision 9 "
+            f"refuses unsourced figures"
+        )
+    if source.get("operation") != "subtract":
+        raise DerivationError(
+            f"{where}: unknown delta operation {source.get('operation')!r}"
+        )
+    lhs = _resolve_figure(artifacts, source["lhs"], where + "/lhs")
+    rhs = _resolve_figure(artifacts, source["rhs"], where + "/rhs")
+    if float(lhs) - float(rhs) != float(delta):
+        raise DerivationError(
+            f"{where}: served delta differs from the recomputed subtraction "
+            f"of its two operands — the provenance gate refuses the payload"
+        )
+
+
+def verify_recommendation_provenance(
+    loaded: LoadedEvidenceSet,
+    records: Sequence[Mapping[str, Any]],
+) -> None:
+    """THE serving resolver (decision 9): every numeric figure a
+    recommendation payload serves either points at its exact artifact
+    field (resolved against ONE canonical parse, float64 equality) or
+    declares the subtraction of two pointed-at fields (recomputed,
+    exact equality). No source, an unresolvable pointer, or a value
+    differing from its source refuses the whole payload — nothing
+    partially provenanced ever leaves the server."""
+    artifacts = {"report": loaded.report}
+    for rec in records:
+        task = rec["task_id"]
+        ceiling = rec["oracle_ceiling"]
+        for field in ("quality", "cost"):
+            _check_direct(
+                artifacts, ceiling[field], ceiling["sources"][field],
+                f"{task}/oracle_ceiling/{field}",
+            )
+        for arm, delta in rec["divergence"].items():
+            for field in ("quality_delta", "cost_delta"):
+                _check_delta(
+                    artifacts, delta[field], delta["sources"][field],
+                    f"{task}/divergence/{arm}/{field}",
+                )
 
 
 def _dominates(q_c, c_c, q_r, c_r) -> bool:
@@ -439,7 +584,16 @@ def _derive_task(loaded: LoadedEvidenceSet, task: str) -> Mapping[str, Any]:
 
     r_q, r_c, _router_rows = _figures(report, "cct_router", task)
     o_q, o_c, _ = _figures(report, "oracle", task)
-    oracle_ceiling = {"quality": o_q, "cost": o_c}
+    oracle_ceiling = {
+        "quality": o_q,
+        "cost": o_c,
+        "sources": {
+            "quality": _figure_source("oracle", task, "quality")
+            if o_q is not None else None,
+            "cost": _figure_source("oracle", task, "cost")
+            if o_c is not None else None,
+        },
+    }
 
     evidence_refs: list[Mapping[str, Any]] = list(actual_refs)
     for arm in ("cct_router", "oracle") + EXECUTABLE_CANDIDATES:
@@ -478,6 +632,12 @@ def _derive_task(loaded: LoadedEvidenceSet, task: str) -> Mapping[str, Any]:
             "cost_delta": (r_c - a_c)
             if r_c is not None and a_c is not None else None,
             "cost_basis": cost_basis,
+            "sources": {
+                "quality_delta": _delta_source(arm, task, "quality")
+                if r_q is not None and a_q is not None else None,
+                "cost_delta": _delta_source(arm, task, "cost")
+                if r_c is not None and a_c is not None else None,
+            },
         }
     if r_q is None or r_c is None:
         insufficiency_refs.insert(
