@@ -212,6 +212,7 @@ class TestDynamicLiteralSecrets(unittest.TestCase):
             out = write_run_records(
                 [record], root / "ledger" / "runs.jsonl",
                 evidence_root=root / "ledger", home="/nonexistent-home",
+                secret_values=(),
             )
             self.assertIn(self._BORING, out.read_bytes().decode("utf-8"),
                           "without the dynamic pass the value leaks — the "
@@ -243,11 +244,14 @@ class TestDynamicLiteralSecrets(unittest.TestCase):
             registry = Path(tmp) / "routing.toml"
             registry.write_text(
                 "schema_version = 1\n"
-                "[profile.alpha]\n"
+                "[[profiles]]\n"
+                'id = "alpha"\n'
                 'credential_env = "CCT_EVAL_TOKEN_A"\n'
-                "[profile.beta]\n"
+                "[[profiles]]\n"
+                'id = "beta"\n'
                 "credential_env = CCT_EVAL_TOKEN_B  # unquoted form\n"
-                "[profile.gamma]\n"
+                "[[profiles]]\n"
+                'id = "gamma"\n'
                 'credential_env = "CCT_EVAL_UNSET"\n',
                 encoding="utf-8",
             )
@@ -275,7 +279,7 @@ class TestDynamicLiteralSecrets(unittest.TestCase):
             root = Path(tmp)
             registry = root / "registry.toml"
             registry.write_text(
-                'schema_version = 1\n[profile.p]\n'
+                'schema_version = 1\n[[profiles]]\nid = "p"\n'
                 'credential_env = "CCT_EVAL_BORING"\n',
                 encoding="utf-8",
             )
@@ -358,6 +362,7 @@ class TestWriteRunRecords(unittest.TestCase):
             out = write_run_records(
                 [record], root / "ledger" / "routing-runs.jsonl",
                 evidence_root=root / "ledger", home="/nonexistent-home",
+                secret_values=(),
             )
             data = out.read_bytes().decode("utf-8")
             self.assertNotIn(_SECRET, data)
@@ -369,6 +374,7 @@ class TestWriteRunRecords(unittest.TestCase):
             out = write_run_records(
                 [_valid_record(root)], root / "ledger" / "runs.jsonl",
                 evidence_root=root / "ledger", home="/nonexistent-home",
+                secret_values=(),
             )
             (persisted,) = [json.loads(line) for line in
                             out.read_text(encoding="utf-8").splitlines()]
@@ -390,6 +396,7 @@ class TestWriteRunRecords(unittest.TestCase):
                 write_run_records(
                     [record], root / "ledger" / "runs.jsonl",
                     evidence_root=root / "ledger", home="/nonexistent-home",
+                    secret_values=(),
                 )
 
     def test_a_pre_existing_artifact_refuses(self) -> None:
@@ -401,6 +408,7 @@ class TestWriteRunRecords(unittest.TestCase):
             with self.assertRaisesRegex(RedactionError, "already exists"):
                 write_run_records([_valid_record(root)], target,
                                   evidence_root=root / "ledger",
+                                  secret_values=(),
                                   home="/nonexistent-home")
 
     def test_scrubbed_records_stay_schema_valid(self) -> None:
@@ -413,6 +421,7 @@ class TestWriteRunRecords(unittest.TestCase):
             out = write_run_records(
                 [record], root / "ledger" / "runs.jsonl",
                 evidence_root=root / "ledger", home="/nonexistent-home",
+                secret_values=(),
             )
             schema = load_schema("routing-run")
             for line in out.read_text(encoding="utf-8").splitlines():
@@ -434,6 +443,7 @@ class TestWriteRunRecords(unittest.TestCase):
                         [_valid_record(root)], root / "ledger" / "runs.jsonl",
                         evidence_root=root / "ledger",
                         home="/nonexistent-home",
+                        secret_values=(),
                     )
             self.assertFalse((root / "ledger" / "runs.jsonl").exists(),
                              "a refused artifact must not partially exist")
@@ -444,9 +454,11 @@ class TestWriteRunRecords(unittest.TestCase):
             record = _valid_record(root)
             a = write_run_records([record], root / "ledger" / "a.jsonl",
                                   evidence_root=root / "ledger",
+                                  secret_values=(),
                                   home="/nonexistent-home")
             b = write_run_records([record], root / "ledger" / "b.jsonl",
                                   evidence_root=root / "ledger",
+                                  secret_values=(),
                                   home="/nonexistent-home")
             self.assertEqual(a.read_bytes(), b.read_bytes(),
                              "same immutable inputs, same artifact bytes")

@@ -1011,6 +1011,216 @@ pattern stays enabled — proving the dynamic pass, not the regex
 layer, carries the guarantee. The mutation check (gutting
 `_scrub_literals`) fails three regressions.
 
+## T7 closure (2026-08-27) — docs, decision-10 proof, final sweep
+
+The owner's four closure proofs, established together:
+
+1. **Documentation matches the shipped increment.** The operator
+   guide (`benchmarks/README.md` § Routing-quality evaluation)
+   documents the hybrid scenario, the five arms with the hard
+   control-set gate, the outcome matrix and five-component reuse
+   fingerprint, the artifacts and the write-time redaction gate, the
+   `quality_fn: v1` weight table (verified against the code's
+   COMPONENTS table), and how to read the report — including the
+   no-AIQ rule, contagious insufficiency, and the explicit statement
+   that the harness's no-dollar-cost rule for backend metadata stands
+   untouched. CHANGELOG carries the E1 entry; the top-level README
+   points at the section; the Status table records #260. Every claim
+   was audited against the shipped code, and all 14 plan §Files
+   artifacts exist.
+2. **Decision 10 stays executable, not documentary.** All six
+   production routing suites pass UNMODIFIED at exactly their pinned
+   counts — config 167, failover 186, tasks 154, packet 99,
+   delegation 171, recovery 375 (1152/0) — plus cooldown-supervisor
+   37/0, and the T2 diff guard test
+   (TestNoProductionRoutingFileTouched) holds over the branch diff
+   and working tree.
+3. **Test-count pins match reality by execution.** The suites
+   hard-fail on assertion-count drift and none drifted; E1 changed no
+   shell suite, and tests/test-counts.env needed no update.
+4. **The final sweep is honest, host baseline separated.** Full
+   CI-exact discovery: 1019 tests, 4 failures, 1 skipped (superseded
+   by the round-3 rerun on the corrected tree: 1033/4/1). The 4
+   failures are exactly the established host baseline — polyglot ×2
+   (host resolves python2.7 without pytest for the verify path;
+   visible verbatim in the tracebacks) and cli_skeleton ×2 (the
+   untracked benchmarks/.cache inverts the tests' "CI never has the
+   cache" assumption) — each previously reproduced on the pristine T5
+   commit, the cli_skeleton pair via the cache-symlink discriminator.
+   Zero failures are E1 regressions; all routing-eval tests are
+   green (274+5 then; 288 after the closure-audit rounds — see round
+   3).
+
+## T7 closure audit rounds 1-2 (owner) — two P1, two P2, applied
+
+Round 1 held closure on four findings, each verified in-tree before
+fixing (the foreign-cell reproduction confirmed: Q 0.9999999999999999
+accepted). Round 2 tightened the first two:
+
+1. **[P1] Publication was not wired to the production path.**
+   run_hybrid_scenario returned an in-memory artifact; the only
+   write_run_records caller was test code, and secret_values defaulted
+   to empty. Fixed: the production entrypoint PUBLISHES the artifact
+   itself (ledger-rooted routing-runs.jsonl) with the secret set
+   resolved internally from the executed registry, and
+   write_run_records now REQUIRES secret_values — passing () is an
+   explicit declaration, never a default. Docs attribute resolution to
+   the entrypoint, not the writer. The live arc asserts the
+   entrypoint's own publication; the mutation (publication severed)
+   discriminates.
+2. **[P1 → round-2] Controls must be matrix-bound AND
+   selector-exact.** Round 1 added cell membership (foreign,
+   tampered-measures, and ineligible cells refuse; mutation
+   discriminating 3/4). Round 2 closed the sufficiency gap: genuine
+   eligible cells can still omit tasks/trials, name the wrong
+   profile, or hand the oracle a non-optimal cell — so build_report
+   now RECOMPUTES each declared selector (always_best with
+   profile_meta, always_cheapest, oracle under the global mask,
+   oracle_budget under its required ceiling) and refuses any supplied
+   selection that is not exactly the selector's output. Regressions:
+   partial genuine selection, wrong genuine profile, non-optimal
+   genuine oracle cell, oracle_budget without its ceiling — mutation
+   (gate removed) discriminates 4/8. A consequence made explicit: a
+   matrix with an unpriceable profile can no longer produce a report
+   at all (the recomputed always_cheapest is insufficient and the
+   gate is hard); the frontier-withheld-while-Q-reported separation
+   is proven on the router arm.
+3. **[P2] CHANGELOG narrowed**: unreconciled delegation is
+   insufficiency in the sequence-dependent rows (outside quality_fn);
+   the frontier is withheld on Q/cost-basis violations.
+
+   (Along the way, an intermittent live-arc hang was root-caused to
+   the TEST FIXTURE, not production: dmock.sh captured the prompt
+   with a bare `cat` that waits for EOF forever when a supervisor
+   subprocess forked in the race window inherits the prompt pipe's
+   write end — the whole tree parks in wait4. Fixed fixture-side with
+   a bounded stdin read; no production file touched.)
+4. **[P2] Top-level README updated**: E1 (#260) delivered; E2 (#261)
+   named as the remaining increment-E scope.
+
+## T7 closure audit round 3 (owner) — one P1, two P2, applied
+
+1. **[P1] Selector recomputation gained authoritative inputs.**
+   Defaulted profile_meta ({} -> lexical always_best) and eligible
+   (None -> persisted flags trusted bare) let the documented default
+   path accept the wrong profile with Q ~= 1.0 (owner-reproduced).
+   Fixed: build_report REQUIRES a SelectorContext whose
+   registry_digest and preset_digest are verified against the matrix
+   fingerprint before any recomputation; profile tiers/priorities are
+   parsed from the EXECUTED registry's own capability_tier/priority
+   declarations (selector_context_from_registry); every matrix
+   profile must carry a declared tier (no lexical fallback); the
+   eligibility predicate is required and bound to persisted flags via
+   T3's verify_matrix binding (contradiction refuses,
+   MatrixIntegrityError); the oracle_budget ceiling comes from the
+   validated config, and a declared budget arm without its selection
+   refuses. Regressions: the owner's tier reproduction (lexical
+   winner refused, declared winner reports), undeclared-tier refusal,
+   predicate contradiction, foreign registry/preset context digests,
+   silently-dropped budget arm, and the registry-builder parse.
+   Mutations discriminating: authority block deleted (3 failures),
+   profile_meta silently emptied (tier regression fails).
+2. **[P2] Production secret resolution is now load-bearing in the
+   live arc.** The fixture adapter deliberately echoes the
+   registry-referenced credential (a boring, unpatterned value) into
+   its verify output; the live test asserts it appears nowhere in the
+   entrypoint-published artifact nor in any evidence file the
+   artifact references, with a POSITIVE control ("(auth [REDACTED])"
+   must appear — the value flowed and was scrubbed, not absent by
+   accident). The owner's mutation now fails exactly:
+   _secret_values() -> () puts 'hybrid-fixture-secret' into durable
+   adapter evidence and the assertion names it.
+3. **[P2] The final sweep was rerun on the corrected tree.** Full
+   CI-exact discovery: 1033 tests, 4 failures, 1 skipped — the same
+   established host baseline (polyglot x2, cli_skeleton x2), zero E1
+   regressions; the count reconciles as the prior 1019 plus the 14
+   new binding/authority regressions. Focused routing-eval total: 288
+   tests, 0 failures (quality 42).
+
+## T7 closure audit round 4 (owner) — one P1, applied
+
+**The SelectorContext builder must be built FROM production routing
+authority.** Verified: the round-3 builder parsed `[profile.<id>]`
+tables — a shape the production validator rejects by name — and
+returned empty profile_meta for the shipped template, so every real
+report would refuse; and its eligibility predicate was
+caller-supplied, letting a matching registry digest accompany
+fabricated eligibility. Fixed:
+
+- the registry is parsed by the PRODUCTION grammar itself —
+  `routing-config.sh rc_parse`, invoked as the single grammar owner,
+  never a reimplemented lookalike; a grammar violation refuses the
+  context by name (and the once-accepted `[profile.<id>]` shape is
+  now itself the refusal regression);
+- the eligibility predicate is DERIVED from the registry's
+  route-class semantics under the increments' frozen task classes
+  (ordinary work routes `tier1_only`; the validated config's
+  `delegate_tasks` route `tier2_preferred`): a profile is eligible
+  exactly when its declared tier appears in the class's `tier_order`.
+  The `eligible` parameter is gone — nothing is caller-supplied;
+- the owner-required regression runs against the ACTUAL shipped
+  template (`shared/templates/routing/routing.toml.example`):
+  `local-qwen` (tier2) is rejected by the production predicate for
+  ordinary `tier1_only` work and admitted for a declared delegate
+  task; `anthropic-sonnet` parses as tier1/priority 10.
+
+Mutations discriminating: discarding the production parse fails the
+template regression (empty metadata refuses); fabricating eligibility
+(always-True) fails the tier2-rejection assertion. Redaction-test
+registry fixtures aligned to the accepted `[[profiles]]` grammar in
+the same pass.
+
+Final sweep on the round-4 tree: full CI-exact discovery 1034 tests,
+4 failures, 1 skipped — the same established host baseline (polyglot
+x2, cli_skeleton x2), zero E1 regressions; 1033 + the one net new
+quality test. Focused routing-eval: 289 tests, 0 failures (quality
+43, supervisor 16 green inside the sweep).
+
+## T7 closure audit round 5 (owner) — three P1, one P2, applied
+
+1. **[P1] RC_RS array truncation.** `str.splitlines()` treats the
+   array element separator RC_RS (0x1e) as a line boundary, so every
+   multi-element `tier_order`/`roles` value collapsed to its first
+   element. Fixed: newline-only splitting; the template regression
+   pins the COMPLETE `("build", "reconcile", "land")` roles array and
+   the tier1-fallback eligibility that a truncated
+   `tier_order = ["tier2"]` would wrongly deny. Mutation
+   (splitlines reintroduced) discriminates.
+2. **[P1] Eligibility now matches the production selector — both
+   halves.** rt_select rejects any candidate that "does not hold role
+   '<role>'"; tier membership alone admitted profiles the router can
+   never execute. The derived predicate now requires the execution
+   role (`build` for ordinary work, `bounded-build` for delegation)
+   AND tier membership in the class's tier_order. The owner's two
+   reproductions are regressions from a real registry: tier1 +
+   bounded-build IS the delegated fallback; reconcile-only tier2 is
+   NEVER the delegated builder. Mutation (role conjunct dropped)
+   discriminates.
+3. **[P1] Selector authority is derived, never accepted.**
+   build_report no longer takes a SelectorContext — it takes the
+   registry path and validated config and derives the context inside
+   the reporting boundary, so copied digests can never accompany
+   fabricated metadata or a fabricated predicate; the derived digests
+   are then verified against the matrix fingerprint. The entire
+   quality-test fixture layer was rebuilt on REAL declarations:
+   production-valid registry files (rc_validate passes) and config
+   namespaces whose digests the matrix fingerprints carry. Mutation
+   (digest binding removed) discriminates; the forgery itself is now
+   structurally unrepresentable.
+4. **[P2] Full production validation, not grammar only.** The builder
+   runs `rc_validate` — the same call the supervisor makes — not bare
+   `rc_parse`; a grammatically valid profile missing required fields
+   refuses the context. (Implementation note: rc_validate must not
+   run in a command-substitution subshell or RC_PARSED dies with it —
+   violations go to stderr, records are the only stdout.) Mutation
+   (downgraded to rc_parse) discriminates.
+
+Final sweep on the round-5 tree: full CI-exact discovery 1036 tests,
+4 failures, 1 skipped — the same established host baseline (polyglot
+x2, cli_skeleton x2), zero E1 regressions; 1034 + the two net new
+round-5 regressions. Focused routing-eval: 291 tests, 0 failures
+(quality 45; supervisor 16 green inside the sweep).
+
 ## Verdict
 
 Verdict: aligned

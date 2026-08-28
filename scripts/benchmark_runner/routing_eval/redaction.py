@@ -307,10 +307,17 @@ def write_run_records(
     path: "Path | str",
     *,
     evidence_root: "Path | str",
+    secret_values: Sequence[str],
     home: "Path | str | None" = None,
-    secret_values: Sequence[str] = (),
 ) -> Path:
     """THE persistence gate for routing-run records (decision 8).
+
+    ``secret_values`` is REQUIRED — there is no empty default a caller
+    can silently fall into. Production callers resolve it from the
+    executed registry (``secret_values_from_registry`` /
+    ``SupervisorRunner._secret_values``); passing ``()`` is an
+    explicit declaration that no runtime credential exists, never an
+    accident of omission.
 
     Per record, in order: evidence references relativized against the
     artifact root; the deep scrub; the measurement-view equality check

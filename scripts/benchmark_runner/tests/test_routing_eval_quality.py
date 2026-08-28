@@ -11,8 +11,14 @@
 
 from __future__ import annotations
 
+import atexit
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
+from benchmark_runner.routing_eval.injection import preset_digest
 from benchmark_runner.routing_eval.outcome_matrix import (
     NOT_APPLICABLE,
     ArmSelection,
@@ -34,14 +40,76 @@ from benchmark_runner.routing_eval.routing_quality import (
     build_report,
     router_cells_from_records,
 )
+from benchmark_runner.routing_eval.supervisor_runner import registry_digest_of
 
-_PRESET = "sha256:" + "ab" * 32
+# ── selector authority is DERIVED from real declarations, so the
+# fixtures are real files: production-valid registries (rc_validate
+# passes) and scenario-config namespaces whose digests the matrix
+# fingerprints carry. There is no way to hand build_report a fabricated
+# context — only paths to declarations. ──
+_FIXDIR = Path(tempfile.mkdtemp(prefix="rq-fixture."))
+atexit.register(lambda: shutil.rmtree(_FIXDIR, ignore_errors=True))
 
 
-def _fp(profiles=("alpha", "beta")):
+def _write_registry(name, profiles):
+    """A PRODUCTION-VALID registry: every required profile key, both
+    scenario route classes; rc_validate must pass or the builder
+    refuses."""
+    lines = [
+        "schema_version = 1",
+        "[policy]",
+        "enabled = true",
+        "[route_classes.tier1_only]",
+        'tier_order = ["tier1"]',
+        "[route_classes.tier2_preferred]",
+        'tier_order = ["tier2", "tier1"]',
+    ]
+    for i, p in enumerate(profiles):
+        roles = ", ".join(
+            f'"{r}"' for r in p.get("roles", ("build", "bounded-build"))
+        )
+        lines += [
+            "[[profiles]]",
+            f'id = "{p["id"]}"',
+            'backend = "claude-code"',
+            f'provider = "prov-{i}"',
+            'model = "m"',
+            f'capability_tier = "{p.get("tier", "tier1")}"',
+            f'priority = {p.get("priority", (i + 1) * 10)}',
+            f'quota_pool = "pool-{i}"',
+            f"roles = [{roles}]",
+            'tool_profile = "full-cct"',
+            'credential_mode = "claude-login"',
+            'data_policy = "approved-cloud"',
+        ]
+    path = _FIXDIR / f"{name}.toml"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _config(*, budget=None, delegate=()):
+    return SimpleNamespace(
+        scenario="hybrid-routing", benchmark=None, arms=[],
+        cost_basis="measured", trials=1, trial_seeds=[1],
+        event_stream=[], budget_ceiling_usd=budget, task_filter=None,
+        tier1_only_tasks=[], delegate_tasks=list(delegate),
+    )
+
+
+#: The default authority pair most fixtures share: alpha priority 10
+#: (always_best), beta priority 20, both tier1 with build+bounded-build.
+_REGISTRY = _write_registry(
+    "default", [{"id": "alpha", "priority": 10}, {"id": "beta", "priority": 20}]
+)
+_REG_DIGEST = registry_digest_of(_REGISTRY)
+_CONFIG = _config()
+_PRESET = preset_digest(_CONFIG)
+
+
+def _fp(profiles=("alpha", "beta"), *, registry_digest=None, preset=None):
     return Fingerprint(
-        registry_digest="sha256:reg",
-        preset_digest=_PRESET,
+        registry_digest=registry_digest or _REG_DIGEST,
+        preset_digest=preset or _PRESET,
         execution_identity=tuple(
             {"profile_id": p, "backend": "b", "provider": "prov",
              "requested_model": "m", "effective_model": "m",
@@ -67,13 +135,16 @@ def _cell(task, profile, trial, *, result="pass", cost=0.01,
     )
 
 
-def _matrix(cells, *, trials=1, seeds=(1,), basis="measured"):
+def _matrix(cells, *, trials=1, seeds=(1,), basis="measured",
+            registry_digest=None, preset=None):
     tasks, profiles = {}, {}
     for c in cells:
         tasks.setdefault(c.task_id, None)
         profiles.setdefault(c.profile_id, None)
     return OutcomeMatrix(
-        fingerprint=_fp(tuple(profiles)), task_ids=tuple(tasks),
+        fingerprint=_fp(tuple(profiles), registry_digest=registry_digest,
+                        preset=preset),
+        task_ids=tuple(tasks),
         trials=trials, trial_seeds=tuple(seeds), cost_basis=basis,
         cells=tuple(cells),
     )
@@ -98,7 +169,7 @@ def _router_record(task, trial, *, verifier_exit=0, cost=0.02,
     return {
         "task_id": task, "trial": trial, "trial_seed": trial + 1,
         "preset_digest": _PRESET,
-        "registry_digest": "sha256:reg",
+        "registry_digest": _REG_DIGEST,
         "task_set_revision": "rev",
         "toolchain_digest": "sha256:tc",
         "verifiers": [{"command": "v", "exit_status": verifier_exit,
@@ -273,7 +344,8 @@ class TestReport(unittest.TestCase):
     def test_complete_report_shape(self) -> None:
         matrix, controls, records = self._fixture()
         report = build_report(matrix, controls, records,
-                              expected_preset_digest=_PRESET)
+                              expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
         self.assertEqual(report["quality_fn"], QUALITY_FN_VERSION)
         self.assertNotIn("aiq", str(report).lower())
         arms = report["arms"]
@@ -300,7 +372,8 @@ class TestReport(unittest.TestCase):
                 partial = {k: v for k, v in controls.items() if k != missing}
                 with self.assertRaisesRegex(ControlSetIncomplete, missing):
                     build_report(matrix, partial, records,
-                                 expected_preset_digest=_PRESET)
+                                 expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
 
     def test_insufficient_control_never_satisfies_the_gate(self) -> None:
         matrix, controls, records = self._fixture()
@@ -309,17 +382,20 @@ class TestReport(unittest.TestCase):
         )
         with self.assertRaisesRegex(ControlSetIncomplete, "insufficient"):
             build_report(matrix, controls, records,
-                         expected_preset_digest=_PRESET)
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
 
     def test_preset_digest_binds_matrix_and_router(self) -> None:
         matrix, controls, records = self._fixture()
         with self.assertRaisesRegex(ControlSetIncomplete, "another preset"):
             build_report(matrix, controls, records,
-                         expected_preset_digest="sha256:" + "99" * 32)
+                         expected_preset_digest="sha256:" + "99" * 32,
+                         registry_path=_REGISTRY, config=_CONFIG)
         records[0]["preset_digest"] = "sha256:" + "77" * 32
         with self.assertRaisesRegex(ControlSetIncomplete, "preset_digest"):
             build_report(matrix, controls, records,
-                         expected_preset_digest=_PRESET)
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
 
     def test_comparison_identity_is_the_full_fingerprint(self) -> None:
         # The owner's counterexample: same preset, different registry —
@@ -337,7 +413,8 @@ class TestReport(unittest.TestCase):
                 records[0][component] = foreign
                 with self.assertRaisesRegex(ControlSetIncomplete, component):
                     build_report(matrix, controls, records,
-                                 expected_preset_digest=_PRESET)
+                                 expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
 
     def test_unprovable_identity_component_refuses(self) -> None:
         # A null toolchain cannot PROVE comparability — refusal, never
@@ -346,31 +423,43 @@ class TestReport(unittest.TestCase):
         records[0]["toolchain_digest"] = None
         with self.assertRaisesRegex(ControlSetIncomplete, "cannot prove"):
             build_report(matrix, controls, records,
-                         expected_preset_digest=_PRESET)
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
 
-    def test_cost_basis_violation_withholds_the_frontier_not_q(self) -> None:
+    def test_cost_basis_violation_refuses_at_the_cheapest_control(self) -> None:
+        # Under selector exactness this scenario cannot produce a
+        # report at all: a profile with no basis-satisfying cell makes
+        # the RECOMPUTED always_cheapest insufficient, and the gate is
+        # a hard error — a hand-made cheapest selection over the
+        # violating cell is no longer representable. (The
+        # frontier-withheld-while-Q-reported separation lives on the
+        # router arm — see TestT6ContagiousInsufficiency.)
+        from benchmark_runner.routing_eval.outcome_matrix import (
+            select_always_cheapest,
+        )
+
         cells = [
-            _cell("t1", "alpha", 0, cost=0.05),
-            _cell("t1", "beta", 0, cost=0.01, prov="estimated"),
+            _cell("t1", "alpha", 0, cost=0.05, prov="estimated"),
+            _cell("t1", "beta", 0, cost=0.01),
         ]
-        matrix = _matrix(cells)  # basis measured; beta's cell violates
+        matrix = _matrix(cells)  # basis measured; alpha's cell violates
+        cheapest = select_always_cheapest(matrix)
+        self.assertIn("t1", cheapest.insufficient)
         controls = {
             "always_best": _selection("always_best", [cells[0]]),
-            "always_cheapest": _selection("always_cheapest", [cells[1]]),
+            "always_cheapest": cheapest,
             "oracle": _selection("oracle", [cells[0]]),
         }
-        report = build_report(matrix, controls, [_router_record("t1", 0)],
-                              expected_preset_digest=_PRESET)
-        cheapest = report["arms"]["always_cheapest"]
-        self.assertIsNotNone(cheapest["quality"])  # Q stays reported
-        self.assertEqual(cheapest["cost"]["status"], "insufficient_evidence")
-        self.assertIsNone(cheapest["cost"]["value"])  # never zero
-        self.assertEqual(report["pareto"]["status"], "insufficient_evidence")
+        with self.assertRaisesRegex(ControlSetIncomplete, "insufficient"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
 
     def test_the_metric_set_is_closed(self) -> None:
         matrix, controls, records = self._fixture()
         report = build_report(matrix, controls, records,
-                              expected_preset_digest=_PRESET)
+                              expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
         allowed = {c.name for c in COMPONENTS} | {
             "tier2_accepted_unchanged", "reconciliation_rework_ratio", "rollbacks",
         }
@@ -378,6 +467,377 @@ class TestReport(unittest.TestCase):
             with self.subTest(arm=kind):
                 self.assertTrue(set(arm["metrics"]) <= allowed,
                                 set(arm["metrics"]) - allowed)
+
+
+class TestControlsAreMatrixBound(unittest.TestCase):
+    """T7 (owner finding): 'computed from the same outcome matrix' is
+    proven, not assumed. A control selection carrying any cell that is
+    not identically an eligible cell of the declared matrix refuses
+    the report before any figure exists."""
+
+    def _fixture(self):
+        cells = [
+            _cell("t1", "alpha", 0, cost=0.05),
+            _cell("t1", "beta", 0, result="fail", cost=0.01),
+        ]
+        matrix = _matrix(cells)
+        controls = {
+            "always_best": _selection("always_best", [cells[0]]),
+            "always_cheapest": _selection("always_cheapest", [cells[1]]),
+            "oracle": _selection("oracle", [cells[0]]),
+        }
+        return cells, matrix, controls
+
+    def test_a_foreign_cell_is_refused(self) -> None:
+        # The owner's reproduction: a task/profile the matrix never
+        # swept, smuggled in as always_best. Previously accepted with
+        # Q ~= 1.0; now no comparative figure may exist.
+        _cells, matrix, controls = self._fixture()
+        foreign = _cell("NOT-IN-MATRIX", "ghost", 0, cost=0.001)
+        controls["always_best"] = _selection("always_best", [foreign])
+        with self.assertRaisesRegex(ControlSetIncomplete,
+                                    "not.*in the declared outcome matrix"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
+
+    def test_a_tampered_cell_with_matrix_coordinates_is_refused(self) -> None:
+        # Same coordinates, different measures: the matrix swept a
+        # FAIL for (t1, beta) — a selection claiming a pass there is
+        # re-measured evidence, not a selection.
+        _cells, matrix, controls = self._fixture()
+        tampered = _cell("t1", "beta", 0, result="pass", cost=0.01)
+        controls["always_cheapest"] = _selection("always_cheapest", [tampered])
+        with self.assertRaisesRegex(ControlSetIncomplete,
+                                    "never re-measured or edited"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
+
+    def test_the_optional_arm_is_bound_too(self) -> None:
+        _cells, matrix, controls = self._fixture()
+        controls["oracle_budget"] = _selection(
+            "oracle_budget", [_cell("t9", "alpha", 0, cost=0.001)]
+        )
+        with self.assertRaisesRegex(ControlSetIncomplete, "oracle_budget"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
+
+    def test_genuine_matrix_cells_still_report(self) -> None:
+        _cells, matrix, controls = self._fixture()
+        report = build_report(matrix, controls, [_router_record("t1", 0)],
+                              expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
+        self.assertIsNotNone(report["arms"]["always_best"]["quality"])
+
+    # ── membership is necessary but NOT sufficient: genuine eligible
+    # cells can still violate the declared selector. The reporting
+    # boundary recomputes each selector and refuses any difference. ──
+
+    def test_a_partial_genuine_selection_is_refused(self) -> None:
+        # Two trials swept; always_best supplied with only trial 0 of
+        # the right profile. Every cell is a genuine eligible matrix
+        # member — and the selection still isn't the selector's output.
+        cells = [
+            _cell("t1", "alpha", 0, cost=0.05),
+            _cell("t1", "alpha", 1, cost=0.05),
+            _cell("t1", "beta", 0, result="fail", cost=0.01),
+            _cell("t1", "beta", 1, result="fail", cost=0.01),
+        ]
+        matrix = _matrix(cells, trials=2, seeds=(1, 2))
+        controls = {
+            "always_best": _selection("always_best", [cells[0]]),  # trial 1 omitted
+            "always_cheapest": _selection("always_cheapest", [cells[2], cells[3]]),
+            "oracle": _selection("oracle", [cells[0], cells[1]]),
+        }
+        with self.assertRaisesRegex(ControlSetIncomplete,
+                                    "always_best.*declared selector"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
+
+    def test_the_wrong_genuine_profile_is_refused(self) -> None:
+        # always_cheapest handed the genuine but EXPENSIVE profile's
+        # cell: a matrix member, eligible, honestly measured — and not
+        # what the cheapest selector chooses.
+        cells, matrix, controls = self._fixture()
+        controls["always_cheapest"] = _selection("always_cheapest", [cells[0]])
+        with self.assertRaisesRegex(ControlSetIncomplete,
+                                    "always_cheapest.*declared selector"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
+
+    def test_a_non_optimal_genuine_oracle_cell_is_refused(self) -> None:
+        # the oracle handed the failing genuine cell instead of the
+        # best observed one: hindsight that isn't hindsight.
+        cells, matrix, controls = self._fixture()
+        controls["oracle"] = _selection("oracle", [cells[1]])
+        with self.assertRaisesRegex(ControlSetIncomplete,
+                                    "oracle.*declared selector"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
+
+    def test_oracle_budget_without_its_ceiling_is_refused(self) -> None:
+        cells, matrix, controls = self._fixture()
+        controls["oracle_budget"] = _selection("oracle_budget", [cells[0]])
+        with self.assertRaisesRegex(ControlSetIncomplete, "ceiling"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
+
+    # ── selector AUTHORITY: derived inside the boundary from the
+    # registry file and validated config — never accepted from a
+    # caller, digest-verified against the matrix fingerprint. ──
+
+    def test_declared_priorities_beat_lexical_order(self) -> None:
+        # The owner's reproduction, from a REAL registry: declared
+        # priorities make beta the strongest profile. The lexical
+        # winner (alpha) must refuse; the declared winner (beta) must
+        # report. There is no metadata argument to fabricate — only
+        # the registry file itself.
+        best_beta = _write_registry(
+            "bestbeta",
+            [{"id": "alpha", "priority": 20}, {"id": "beta", "priority": 10}],
+        )
+        digest = registry_digest_of(best_beta)
+        cells = [
+            _cell("t1", "alpha", 0, cost=0.05),
+            _cell("t1", "beta", 0, result="fail", cost=0.01),
+        ]
+        matrix = _matrix(cells, registry_digest=digest)
+        record = _router_record("t1", 0)
+        record["registry_digest"] = digest
+        controls = {
+            "always_best": _selection("always_best", [cells[0]]),  # lexical
+            "always_cheapest": _selection("always_cheapest", [cells[1]]),
+            "oracle": _selection("oracle", [cells[0]]),
+        }
+        with self.assertRaisesRegex(ControlSetIncomplete,
+                                    "always_best.*declared selector"):
+            build_report(matrix, controls, [record],
+                         expected_preset_digest=_PRESET,
+                         registry_path=best_beta, config=_CONFIG)
+        controls["always_best"] = _selection("always_best", [cells[1]])
+        report = build_report(matrix, controls, [record],
+                              expected_preset_digest=_PRESET,
+                              registry_path=best_beta, config=_CONFIG)
+        self.assertIn("always_best", report["arms"])
+
+    def test_a_matrix_profile_the_registry_does_not_declare_refuses(self) -> None:
+        # A matrix profile absent from the registry would silently
+        # degrade always_best to lexical ordering — refused, never
+        # defaulted.
+        cells = [
+            _cell("t1", "alpha", 0),
+            _cell("t1", "beta", 0),
+            _cell("t1", "ghost", 0),
+        ]
+        matrix = _matrix(cells)
+        controls = {
+            "always_best": _selection("always_best", [cells[0]]),
+            "always_cheapest": _selection("always_cheapest", [cells[0]]),
+            "oracle": _selection("oracle", [cells[0]]),
+        }
+        with self.assertRaisesRegex(ControlSetIncomplete,
+                                    "no declared capability tier"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
+
+    def test_registry_eligibility_contradicting_the_matrix_refuses(self) -> None:
+        # The derived predicate is the production selector's: beta
+        # holds only the reconcile role, so it cannot execute ordinary
+        # build work — but the matrix persisted beta's cells as
+        # eligible. The flags are bound to the registry's authority
+        # (T3's binding) and the contradiction refuses.
+        from benchmark_runner.routing_eval.outcome_matrix import (
+            MatrixIntegrityError,
+        )
+
+        no_build = _write_registry(
+            "nobuild",
+            [{"id": "alpha", "priority": 10},
+             {"id": "beta", "priority": 20, "roles": ("reconcile",)}],
+        )
+        digest = registry_digest_of(no_build)
+        cells = [
+            _cell("t1", "alpha", 0, cost=0.05),
+            _cell("t1", "beta", 0, result="fail", cost=0.01),
+        ]
+        matrix = _matrix(cells, registry_digest=digest)
+        record = _router_record("t1", 0)
+        record["registry_digest"] = digest
+        controls = {
+            "always_best": _selection("always_best", [cells[0]]),
+            "always_cheapest": _selection("always_cheapest", [cells[1]]),
+            "oracle": _selection("oracle", [cells[0]]),
+        }
+        with self.assertRaises(MatrixIntegrityError):
+            build_report(matrix, controls, [record],
+                         expected_preset_digest=_PRESET,
+                         registry_path=no_build, config=_CONFIG)
+
+    def test_another_registry_or_config_authorizes_nothing(self) -> None:
+        # The matrix was swept under the default registry/config;
+        # deriving authority from any OTHER declarations refuses on
+        # the digest, before any figure exists.
+        _cells, matrix, controls = self._fixture()
+        other_registry = _write_registry(
+            "other", [{"id": "alpha", "priority": 11},
+                      {"id": "beta", "priority": 21}]
+        )
+        with self.assertRaisesRegex(ControlSetIncomplete,
+                                    "registry.*authorizes nothing"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET,
+                         registry_path=other_registry, config=_CONFIG)
+        other_config = _config()
+        other_config.trials = 7
+        with self.assertRaisesRegex(ControlSetIncomplete,
+                                    "preset.*authorizes nothing"):
+            build_report(matrix, controls, [_router_record("t1", 0)],
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=other_config)
+
+    def test_a_declared_budget_arm_cannot_be_silently_dropped(self) -> None:
+        budget_config = _config(budget=0.10)
+        budget_preset = preset_digest(budget_config)
+        cells = [
+            _cell("t1", "alpha", 0, cost=0.05),
+            _cell("t1", "beta", 0, result="fail", cost=0.01),
+        ]
+        matrix = _matrix(cells, preset=budget_preset)
+        record = _router_record("t1", 0)
+        record["preset_digest"] = budget_preset
+        controls = {
+            "always_best": _selection("always_best", [cells[0]]),
+            "always_cheapest": _selection("always_cheapest", [cells[1]]),
+            "oracle": _selection("oracle", [cells[0]]),
+        }
+        with self.assertRaisesRegex(ControlSetIncomplete, "silently dropped"):
+            build_report(matrix, controls, [record],
+                         expected_preset_digest=budget_preset,
+                         registry_path=_REGISTRY, config=budget_config)
+
+    def test_the_context_builder_uses_the_production_grammar(self) -> None:
+        # The owner's reproduction: the builder must parse the SHIPPED
+        # registry template (repeated [[profiles]] tables with id
+        # fields — the only shape the production validator accepts)
+        # and derive ELIGIBILITY from the registry's route-class AND
+        # role semantics. Nothing is caller-supplied.
+        from benchmark_runner.routing_eval.routing_quality import (
+            selector_context_from_registry,
+        )
+
+        template = (
+            Path(__file__).resolve().parents[3]
+            / "shared" / "templates" / "routing" / "routing.toml.example"
+        )
+        self.assertTrue(template.is_file(), template)
+        config = _config(budget=0.25, delegate=("python/book-store",))
+        ctx = selector_context_from_registry(template, config)
+        self.assertEqual(ctx.profile_meta["anthropic-sonnet"]["tier"], "tier1")
+        self.assertEqual(ctx.profile_meta["anthropic-sonnet"]["priority"], 10)
+        # COMPLETE multi-element arrays: str.splitlines() would treat
+        # the RC_RS separator (0x1e) as a line boundary and truncate
+        # this to ("build",).
+        self.assertEqual(ctx.profile_meta["anthropic-sonnet"]["roles"],
+                         ("build", "reconcile", "land"))
+        self.assertEqual(ctx.profile_meta["local-qwen"]["tier"], "tier2")
+        self.assertEqual(ctx.profile_meta["local-qwen"]["roles"],
+                         ("bounded-build",))
+        self.assertEqual(ctx.oracle_budget_ceiling_usd, 0.25)
+        self.assertTrue(ctx.registry_digest.startswith("sha256:"))
+        self.assertEqual(ctx.preset_digest, preset_digest(config))
+        # the production predicate — tier AND role, not tier alone:
+        self.assertFalse(
+            ctx.eligible("local-qwen", "go/bowling"),
+            "tier1_only ordinary work must reject the tier2 profile",
+        )
+        self.assertTrue(ctx.eligible("local-qwen", "python/book-store"),
+                        "tier2_preferred delegate work admits the "
+                        "bounded-build tier2 profile")
+        self.assertTrue(ctx.eligible("anthropic-sonnet", "go/bowling"))
+        self.assertFalse(
+            ctx.eligible("anthropic-sonnet", "python/book-store"),
+            "a profile without the bounded-build role can never be the "
+            "delegated builder, whatever its tier",
+        )
+
+    def test_eligibility_matches_the_production_selector_roles(self) -> None:
+        # The owner's two role reproductions, from a real registry:
+        # a tier1 profile holding bounded-build IS eligible as the
+        # delegated fallback (the complete tier_order ["tier2","tier1"]
+        # — a truncated array would wrongly reject it), and a tier2
+        # profile holding only reconcile is NEVER eligible for
+        # delegation, whatever its tier.
+        from benchmark_runner.routing_eval.routing_quality import (
+            selector_context_from_registry,
+        )
+
+        registry = _write_registry(
+            "roles-sem",
+            [
+                {"id": "t1both", "priority": 10},
+                {"id": "t2rev", "tier": "tier2", "priority": 20,
+                 "roles": ("reconcile",)},
+            ],
+        )
+        ctx = selector_context_from_registry(
+            registry, _config(delegate=("dtask",))
+        )
+        self.assertTrue(ctx.eligible("t1both", "dtask"),
+                        "tier1 + bounded-build is the delegated fallback")
+        self.assertFalse(ctx.eligible("t2rev", "dtask"),
+                         "reconcile-only never builds a packet")
+        self.assertTrue(ctx.eligible("t1both", "otask"))
+        self.assertFalse(ctx.eligible("t2rev", "otask"))
+
+    def test_a_grammar_invalid_registry_refuses_the_context(self) -> None:
+        # [profile.<id>] is precisely the shape the production
+        # validator rejects — and the shape a lookalike parser once
+        # accepted. Building a context from it must refuse by name.
+        from benchmark_runner.routing_eval.routing_quality import (
+            selector_context_from_registry,
+        )
+
+        registry = _FIXDIR / "grammar-invalid.toml"
+        registry.write_text(
+            "schema_version = 1\n"
+            "[profile.alpha]\n"
+            'capability_tier = "tier1"\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ControlSetIncomplete,
+                                    "production validator"):
+            selector_context_from_registry(registry, _config())
+
+    def test_a_semantically_invalid_registry_refuses_the_context(self) -> None:
+        # Grammar-valid but semantically invalid: a profile missing
+        # required fields (backend/provider/model/roles/...). rc_parse
+        # alone would admit it; the builder runs the production
+        # rc_validate path, exactly what the supervisor runs.
+        from benchmark_runner.routing_eval.routing_quality import (
+            selector_context_from_registry,
+        )
+
+        registry = _FIXDIR / "semantic-invalid.toml"
+        registry.write_text(
+            "schema_version = 1\n"
+            "[policy]\n"
+            "enabled = true\n"
+            "[[profiles]]\n"
+            'id = "hollow"\n'
+            'capability_tier = "tier1"\n'
+            "priority = 10\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ControlSetIncomplete,
+                                    "production validator"):
+            selector_context_from_registry(registry, _config())
 
 
 class TestT6ContagiousInsufficiency(unittest.TestCase):
@@ -454,7 +914,8 @@ class TestT6ContagiousInsufficiency(unittest.TestCase):
         records = [_router_record("t1", 0, delegated=True,
                                   delegated_lines=100, diff_lines=None)]
         report = build_report(matrix, controls, records,
-                              expected_preset_digest=_PRESET)
+                              expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
         arm = report["arms"]["cct_router"]
         self.assertEqual(arm["metrics"]["reconciliation_rework_ratio"],
                          INSUFFICIENT)
@@ -465,16 +926,37 @@ class TestT6ContagiousInsufficiency(unittest.TestCase):
         self.assertIsNotNone(arm["quality"])
 
     def test_oracle_budget_insufficiency_is_carried_not_dropped(self) -> None:
+        from benchmark_runner.routing_eval.outcome_matrix import select_oracle
+        from benchmark_runner.routing_eval.quality_fn import (
+            cell_quality,
+            compute_mask,
+        )
         from benchmark_runner.routing_eval.routing_quality import INSUFFICIENT
 
-        cells, matrix, controls = self._report_fixture()
-        controls["oracle_budget"] = _selection(
-            "oracle_budget", [cells[0]],
-            {"t1/trial-0": "the ceiling admits no cell"},
+        budget_config = _config(budget=0.001)
+        budget_preset = preset_digest(budget_config)
+        cells = [
+            _cell("t1", "alpha", 0, cost=0.05),
+            _cell("t1", "beta", 0, result="fail", cost=0.01),
+        ]
+        matrix = _matrix(cells, preset=budget_preset)
+        controls = {
+            "always_best": _selection("always_best", [cells[0]]),
+            "always_cheapest": _selection("always_cheapest", [cells[1]]),
+            "oracle": _selection("oracle", [cells[0]]),
+        }
+        # a ceiling below every cell's cost: the SELECTOR ITSELF yields
+        # a genuinely insufficient oracle_budget selection
+        mask = compute_mask(matrix)
+        controls["oracle_budget"] = select_oracle(
+            matrix, lambda c: cell_quality(c, mask), 0.001
         )
-        records = [_router_record("t1", 0)]
-        report = build_report(matrix, controls, records,
-                              expected_preset_digest=_PRESET)
+        self.assertTrue(controls["oracle_budget"].insufficient)
+        record = _router_record("t1", 0)
+        record["preset_digest"] = budget_preset
+        report = build_report(matrix, controls, [record],
+                              expected_preset_digest=budget_preset,
+                              registry_path=_REGISTRY, config=budget_config)
         arm = report["arms"]["oracle_budget"]
         # carried through AS insufficiency: present in the report, Q
         # withheld (never computed over partial coverage), reasons kept
@@ -494,7 +976,8 @@ class TestT6ContagiousInsufficiency(unittest.TestCase):
         record["cost"] = {"value": None, "provenance": "unavailable",
                           "estimator": None, "inputs": None}
         report = build_report(matrix, controls, [record],
-                              expected_preset_digest=_PRESET)
+                              expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
         arm = report["arms"]["cct_router"]
         self.assertEqual(arm["cost"]["status"], INSUFFICIENT)
         self.assertIsNone(arm["cost"]["value"])
@@ -523,7 +1006,8 @@ class TestT6ContagiousInsufficiency(unittest.TestCase):
         }
         with self.assertRaisesRegex(ControlSetIncomplete, "insufficient"):
             build_report(matrix, controls, [_router_record("t1", 0)],
-                         expected_preset_digest=_PRESET)
+                         expected_preset_digest=_PRESET,
+                         registry_path=_REGISTRY, config=_CONFIG)
 
 
 class TestValidatorFailsClosedOnNewKeywords(unittest.TestCase):

@@ -16,7 +16,9 @@ uncontrolled number this increment exists to prevent.
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from .outcome_matrix import (
@@ -25,11 +27,15 @@ from .outcome_matrix import (
     ArmSelection,
     Cell,
     OutcomeMatrix,
+    select_always_best,
+    select_always_cheapest,
+    select_oracle,
 )
 from .quality_fn import (
     QUALITY_FN_VERSION,
     QualityInsufficient,
     arm_quality,
+    cell_quality,
     component_aggregates,
     compute_mask,
 )
@@ -42,6 +48,153 @@ REQUIRED_CONTROLS = ("always_best", "always_cheapest", "oracle")
 
 class ControlSetIncomplete(Exception):
     """The reporter refuses to emit a cct_router figure uncontrolled."""
+
+
+@dataclass(frozen=True)
+class SelectorContext:
+    """The AUTHORITATIVE inputs for control-selector recomputation.
+
+    Selector recomputation is only as strong as its inputs, so this
+    context is DERIVED, never accepted: ``build_report`` builds it
+    internally via :func:`selector_context_from_registry` from the
+    registry file and validated scenario config it is given — profile
+    tiers/priorities/roles from the production-validated registry, the
+    eligibility predicate from the registry's route-class semantics
+    plus the production selector's role requirement, the ceiling from
+    the config. The derived digests are then verified against the
+    matrix fingerprint, so a registry or config other than the one the
+    matrix was swept under authorizes nothing.
+    """
+
+    registry_digest: str
+    preset_digest: str
+    profile_meta: Mapping[str, Mapping[str, Any]]
+    eligible: Any  # Callable[[str, str], bool] — required, never None
+    oracle_budget_ceiling_usd: Optional[float] = None
+
+
+#: rc_parse's record separators (routing-config.sh RC_US / RC_RS).
+_RC_US = "\x1f"
+_RC_RS = "\x1e"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _rc_records(registry_path: Path) -> list[tuple[str, str, str, str]]:
+    """Validate and tokenize the registry through THE production path
+    — ``rc_validate`` in routing-config.sh, exactly what the
+    supervisor runs before selecting anything — never a reimplemented
+    subset and never grammar-only. A grammar OR semantic violation
+    (missing required profile fields, duplicate ids, invalid roles)
+    refuses by name; the accepted shape and rules are owned in exactly
+    one place.
+
+    The record stream is split on NEWLINES ONLY: ``str.splitlines``
+    would treat the array element separator RC_RS (0x1e) as a line
+    boundary and truncate every multi-element ``tier_order``/``roles``
+    value to its first element."""
+    # rc_validate prints violations on stdout and leaves RC_PARSED in
+    # the CURRENT shell — so it must not run in a command-substitution
+    # subshell, or the parsed records die with it. Violations go to
+    # stderr; the record stream is the only stdout.
+    script = (
+        'source "$1/scripts/lib/routing-config.sh"\n'
+        'if ! rc_validate "$2" 1>&2; then exit 1; fi\n'
+        'printf "%s" "$RC_PARSED"\n'
+    )
+    proc = subprocess.run(
+        ["bash", "-c", script, "rc", str(_REPO_ROOT), str(registry_path)],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise ControlSetIncomplete(
+            f"registry {registry_path} is rejected by the production "
+            f"validator — a selector context is never built from an invalid "
+            f"registry: {proc.stderr.strip()[:300]}"
+        )
+    records = []
+    for line in proc.stdout.split("\n"):
+        parts = line.split(_RC_US)
+        if len(parts) == 4:
+            records.append((parts[0], parts[1], parts[2], parts[3]))
+    return records
+
+
+def selector_context_from_registry(
+    registry_path: "Path | str",
+    config: Any,
+) -> SelectorContext:
+    """The production way to build a SelectorContext, derived ENTIRELY
+    from the digested registry and the validated scenario config:
+
+    - profile tiers/priorities from the registry's own
+      ``capability_tier``/``priority`` declarations, parsed by the
+      production grammar (``rc_parse``), never a lookalike subset;
+    - the eligibility predicate from the registry's route-class
+      semantics under the increments' frozen task classes — ordinary
+      work routes ``tier1_only``, the config's declared
+      ``delegate_tasks`` route ``tier2_preferred`` — so a profile is
+      eligible exactly when its declared tier appears in the class's
+      ``tier_order``. Nothing is caller-supplied, so a matching
+      registry digest can never accompany fabricated eligibility;
+    - the registry digest from the same file, the preset digest and
+      ``budget_ceiling_usd`` from the validated config."""
+    from .injection import preset_digest
+    from .supervisor_runner import registry_digest_of
+
+    by_ctx: dict[str, dict[str, tuple[str, str]]] = {}
+    for ctx, key, typ, value in _rc_records(Path(registry_path)):
+        by_ctx.setdefault(ctx, {})[key] = (typ, value)
+
+    meta: dict[str, dict[str, Any]] = {}
+    route_classes: dict[str, tuple[str, ...]] = {}
+    for ctx, keys in by_ctx.items():
+        if ctx.startswith("profiles."):
+            profile_id = keys.get("id", ("", ""))[1]
+            if not profile_id:
+                continue
+            entry: dict[str, Any] = {}
+            if "capability_tier" in keys:
+                entry["tier"] = keys["capability_tier"][1]
+            if "priority" in keys:
+                entry["priority"] = int(keys["priority"][1])
+            if "roles" in keys:
+                entry["roles"] = tuple(
+                    r for r in keys["roles"][1].split(_RC_RS) if r
+                )
+            meta[profile_id] = entry
+        elif ctx.startswith("route_classes."):
+            name = ctx.split(".", 1)[1]
+            _typ, value = keys.get("tier_order", ("", ""))
+            route_classes[name] = tuple(t for t in value.split(_RC_RS) if t)
+
+    delegate_tasks = frozenset(getattr(config, "delegate_tasks", ()) or ())
+
+    def eligible(profile_id: str, task_id: str) -> bool:
+        # The PRODUCTION selector's predicate, both halves: the
+        # execution ROLE (rt_select rejects any candidate that "does
+        # not hold role '<role>'" — ordinary builds select with role
+        # `build`, packet delegation with `bounded-build`) AND tier
+        # membership in the task class's declared tier_order. Tier
+        # alone would admit a reconcile-only profile the router can
+        # never execute for the task.
+        profile = meta.get(profile_id) or {}
+        if task_id in delegate_tasks:
+            required_role, route_class = "bounded-build", "tier2_preferred"
+        else:
+            required_role, route_class = "build", "tier1_only"
+        return (
+            required_role in (profile.get("roles") or ())
+            and profile.get("tier") is not None
+            and profile.get("tier") in route_classes.get(route_class, ())
+        )
+
+    return SelectorContext(
+        registry_digest=registry_digest_of(Path(registry_path)),
+        preset_digest=preset_digest(config),
+        profile_meta=meta,
+        eligible=eligible,
+        oracle_budget_ceiling_usd=config.budget_ceiling_usd,
+    )
 
 
 def router_cells_from_records(
@@ -227,6 +380,8 @@ def build_report(
     router_records: Sequence[Mapping[str, Any]],
     *,
     expected_preset_digest: str,
+    registry_path: "Path | str",
+    config: Any,
 ) -> Mapping[str, Any]:
     """The comparison report: Q + full vector + cost per arm, and the
     Pareto frontier — refusing an uncontrolled router figure.
@@ -278,6 +433,72 @@ def build_report(
                     f"figure exists"
                 )
 
+    # ── selector authority is DERIVED here, never accepted ──
+    # The context is built inside the reporting boundary from the
+    # registry file and the validated scenario config — a caller has
+    # nothing to hand us but the paths to the declarations themselves,
+    # so copied digests can never accompany fabricated metadata or a
+    # fabricated predicate. The derived digests must then match the
+    # matrix fingerprint: a registry file or config other than the one
+    # the matrix was swept under authorizes nothing, and a matrix
+    # profile the registry does not declare refuses (no lexical
+    # fallback).
+    selector_context = selector_context_from_registry(registry_path, config)
+    if selector_context.registry_digest != matrix.fingerprint.registry_digest:
+        raise ControlSetIncomplete(
+            f"the selector context carries registry digest "
+            f"{selector_context.registry_digest!r} but the matrix carries "
+            f"{matrix.fingerprint.registry_digest!r} — a context from another "
+            f"registry authorizes nothing"
+        )
+    if selector_context.preset_digest != matrix.fingerprint.preset_digest:
+        raise ControlSetIncomplete(
+            f"the selector context carries preset digest "
+            f"{selector_context.preset_digest!r} but the matrix carries "
+            f"{matrix.fingerprint.preset_digest!r} — a context from another "
+            f"preset authorizes nothing"
+        )
+    from .outcome_matrix import _TIER_ORDER
+
+    for profile in sorted({c.profile_id for c in matrix.cells}):
+        tier = (selector_context.profile_meta.get(profile) or {}).get("tier")
+        if tier not in _TIER_ORDER:
+            raise ControlSetIncomplete(
+                f"matrix profile {profile!r} has no declared capability tier "
+                f"in the selector context ({tier!r}) — lexical fallback "
+                f"ordering is never an authority for always_best"
+            )
+
+    # ── control cells must BE the declared matrix's cells ──
+    # "Computed from the same outcome matrix" is proven, not assumed:
+    # every selected control cell must be identical — coordinates AND
+    # measures — to an eligible cell of this matrix. A foreign cell, a
+    # re-measured cell, or an ineligible cell controls nothing.
+    by_key = {
+        (c.task_id, c.profile_id, c.trial, c.seed): c for c in matrix.cells
+    }
+    for kind, selection in control_selections.items():
+        for cell in selection.chosen:
+            key = (cell.task_id, cell.profile_id, cell.trial, cell.seed)
+            canonical = by_key.get(key)
+            if canonical is None:
+                raise ControlSetIncomplete(
+                    f"control arm '{kind}' selected cell {key} which is not "
+                    f"in the declared outcome matrix — a control from outside "
+                    f"the matrix controls nothing"
+                )
+            if canonical != cell:
+                raise ControlSetIncomplete(
+                    f"control arm '{kind}' carries cell {key} whose measures "
+                    f"differ from the declared matrix's cell — controls are "
+                    f"SELECTED from the matrix, never re-measured or edited"
+                )
+            if not canonical.eligible:
+                raise ControlSetIncomplete(
+                    f"control arm '{kind}' selected ineligible cell {key} — "
+                    f"an unexecuted cell is never a control"
+                )
+
     # ── the ONE global mask, before any selection is consulted ──
     mask = compute_mask(matrix)
 
@@ -296,6 +517,64 @@ def build_report(
                 f"({dict(selection.insufficient)}) — an insufficient control "
                 f"never satisfies the gate"
             )
+
+    # ── declared selectors are RECOMPUTED, and supplied selections
+    # must equal their output exactly. Matrix membership is necessary
+    # but not sufficient: genuine eligible cells can still omit tasks
+    # or trials, name the wrong eligible profile for
+    # always_best/always_cheapest, or hand the oracle a non-optimal
+    # cell. A selection that is not its own selector's result over
+    # this matrix controls nothing. ──
+    def _expect_selector(kind: str, recomputed: ArmSelection) -> None:
+        supplied = control_selections[kind]
+        if (
+            tuple(supplied.chosen) != tuple(recomputed.chosen)
+            or dict(supplied.insufficient) != dict(recomputed.insufficient)
+        ):
+            raise ControlSetIncomplete(
+                f"control arm '{kind}' does not equal the declared selector's "
+                f"output over this matrix — partial, mis-profiled, or "
+                f"non-optimal selections of genuine cells are refused, not "
+                f"reported"
+            )
+
+    eligible = selector_context.eligible
+    ceiling = selector_context.oracle_budget_ceiling_usd
+    _expect_selector(
+        "always_best",
+        select_always_best(
+            matrix, selector_context.profile_meta, eligible=eligible
+        ),
+    )
+    _expect_selector(
+        "always_cheapest", select_always_cheapest(matrix, eligible=eligible)
+    )
+    _expect_selector(
+        "oracle",
+        select_oracle(matrix, lambda c: cell_quality(c, mask), eligible=eligible),
+    )
+    if "oracle_budget" in control_selections:
+        if ceiling is None:
+            raise ControlSetIncomplete(
+                "an oracle_budget selection was supplied but the validated "
+                "config declares no budget ceiling — the reporting boundary "
+                "cannot verify a selector it cannot recompute"
+            )
+        _expect_selector(
+            "oracle_budget",
+            select_oracle(
+                matrix,
+                lambda c: cell_quality(c, mask),
+                ceiling,
+                eligible=eligible,
+            ),
+        )
+    elif ceiling is not None:
+        raise ControlSetIncomplete(
+            f"the validated config declares budget ceiling {ceiling} (an "
+            f"oracle_budget arm) but no oracle_budget selection was supplied "
+            f"— a declared arm is never silently dropped"
+        )
 
     arms: dict[str, ArmReport] = {}
 

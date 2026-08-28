@@ -262,11 +262,18 @@ class FixtureAdapter:
         solution = Path(worktree) / "solution.txt"
         text = solution.read_text(encoding="utf-8") if solution.exists() else ""
         solved = "status: SOLVED" in text and "UNSOLVED" not in text
+        # The registry-referenced credential DELIBERATELY leaks into
+        # the verify output, in plain prose no static pattern matches:
+        # real tool output does this, and the runner's write-time
+        # scrub (dynamic literal values resolved from the executed
+        # registry) is what must keep it out of durable evidence.
+        import os as _os
         return VerifyResult(
             tests_passed=solved,
             tests_output=(
                 f"fixture verify for {task.task_id}: "
                 + ("SOLVED" if solved else "UNSOLVED")
+                + f" (auth {_os.environ.get('HYBRID_KEY', 'unset')})"
             ),
         )
 
@@ -351,7 +358,14 @@ p="${CCT_ROUTING_PROFILE:-none}"
 cnt="$MOCK_DIR/count-$p"
 n=$(( $(cat "$cnt" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "$cnt"
-cat > "$MOCK_DIR/prompt-$p-$n.txt"
+# Bounded stdin capture: a bare `cat` waits for EOF forever if any
+# supervisor subprocess forked in the race window inherits the prompt
+# pipe's write end (observed: whole tree parked in wait4). The prompt
+# arrives immediately; a 10s idle timeout only fires on that fd leak,
+# by which point the full prompt is already captured.
+while IFS= read -r -t 10 _line; do
+  printf '%s\\n' "$_line"
+done > "$MOCK_DIR/prompt-$p-$n.txt"
 spec="$MOCK_DIR/$p.spec"
 [[ -f "$spec" ]] || { echo "dmock: no spec for $p"; exit 97; }
 line=$(sed -n "${n}p" "$spec"); [[ -z "$line" ]] && line=$(tail -1 "$spec")
@@ -642,29 +656,51 @@ class TestFullArcThroughTheRealSupervisor(unittest.TestCase):
             provisional["tier2"]["delegated_lines"],
         )
         self.assertEqual(recon["tier2"]["reconciliation_diff_lines"], 0)
-        # ── T6: the persistence gate over the LIVE records — scrubbed
-        # at write time, evidence references relativized and still
+        # ── T6/T7: the artifact is published BY THE ENTRYPOINT
+        # through the persistence gate — not by any caller opting in —
+        # scrubbed at write time with the secret set resolved
+        # internally, evidence references relativized and still
         # resolvable, and byte-identical on identical inputs.
         from benchmark_runner.routing_eval.redaction import write_run_records
 
         evidence_root = self.base / "ledger"
-        artifact_a = write_run_records(
-            artifact.records, evidence_root / "routing-runs.jsonl",
-            evidence_root=evidence_root,
-            secret_values=self.runner._secret_values(),
-        )
+        artifact_a = artifact.artifact_path
+        self.assertEqual(artifact_a, evidence_root / "routing-runs.jsonl")
+        self.assertTrue(artifact_a.is_file(),
+                        "run_hybrid_scenario must publish the artifact itself")
         artifact_b = write_run_records(
             artifact.records, evidence_root / "routing-runs-b.jsonl",
             evidence_root=evidence_root,
             secret_values=self.runner._secret_values(),
         )
         self.assertEqual(artifact_a.read_bytes(), artifact_b.read_bytes())
-        for line in artifact_a.read_text(encoding="utf-8").splitlines():
+        # ── the ENTRYPOINT's secret resolution is load-bearing: the
+        # fixture adapter deliberately echoes the registry-referenced
+        # credential (a boring, unpatterned value) into its verify
+        # output. It must appear NOWHERE in the published artifact nor
+        # in any evidence file the artifact references — and the
+        # positive control proves the value actually flowed and was
+        # scrubbed, not that it never arrived.
+        boring = os.environ["HYBRID_KEY"]
+        artifact_text = artifact_a.read_text(encoding="utf-8")
+        self.assertNotIn(boring, artifact_text)
+        saw_scrubbed_auth = False
+        for line in artifact_text.splitlines():
             persisted = _json.loads(line)
             for verifier in persisted["verifiers"]:
                 ref = verifier["evidence_ref"]
                 self.assertFalse(Path(ref).is_absolute(), ref)
-                self.assertTrue((evidence_root / ref).is_file(), ref)
+                evidence_file = evidence_root / ref
+                self.assertTrue(evidence_file.is_file(), ref)
+                content = evidence_file.read_text(encoding="utf-8")
+                self.assertNotIn(boring, content, ref)
+                if "(auth [REDACTED])" in content:
+                    saw_scrubbed_auth = True
+        self.assertTrue(
+            saw_scrubbed_auth,
+            "no evidence file carries the scrubbed auth marker — the "
+            "credential never flowed, so this test would prove nothing",
+        )
 
     def test_a_preexisting_trial_context_is_refused(self) -> None:
         from benchmark_runner.routing_eval.supervisor_runner import RunnerError

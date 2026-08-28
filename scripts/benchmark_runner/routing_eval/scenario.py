@@ -30,8 +30,11 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+from pathlib import Path
+
 from .injection import events_for_task, preset_digest
 from .record_check import load_schema, validate
+from .redaction import secret_values_from_registry, write_run_records
 from .scenario_config import ScenarioConfig
 
 #: The closed leg vocabulary, in the arc's proof order.
@@ -557,10 +560,29 @@ def run_hybrid_scenario(
         raise ArcIncomplete(
             f"the durable records do not prove the complete arc — {missing}"
         )
+    # FR-E1-9: the artifact is PUBLISHED through the one redacting
+    # persistence gate as part of the production entrypoint itself —
+    # publication is never an opt-in a caller can forget, and the raw
+    # in-memory records reach disk no other way. The secret set is
+    # resolved INTERNALLY from the executed registry (the runner's
+    # resolver when it has one; the registry's credential_env
+    # references otherwise), so the artifact's redaction guarantee
+    # does not depend on any caller remembering to pass it.
+    if hasattr(runner, "_secret_values"):
+        secrets = runner._secret_values()
+    else:
+        secrets = secret_values_from_registry(runner.registry_path)
+    artifact_path = write_run_records(
+        records,
+        Path(runner.ledger_root) / "routing-runs.jsonl",
+        evidence_root=Path(runner.ledger_root),
+        secret_values=secrets,
+    )
     return ScenarioArtifact(
         preset_digest=preset_digest(config),
         records=tuple(records),
         arc=arc,
+        artifact_path=artifact_path,
     )
 
 
@@ -569,6 +591,10 @@ class ScenarioArtifact:
     preset_digest: str
     records: tuple[Mapping[str, Any], ...]
     arc: ArcReport
+    #: The published, redacted durable artifact. Set by the production
+    #: entrypoint (run_hybrid_scenario); None only for the generic
+    #: run_scenario test driver, which owns no ledger to publish into.
+    artifact_path: "Path | None" = None
 
 
 def run_scenario(

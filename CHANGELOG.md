@@ -12,6 +12,36 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Routing-quality measurement substrate (#260, E1 of #109)** — the
+  hybrid routing benchmark scenario driven through the UNMODIFIED
+  production supervisor and tick CLI, with the #109 §12 arc proven
+  per trial from harvested routing-run records alone. A `cct_router`
+  figure is never emitted uncontrolled: the report requires
+  `always_best`, `always_cheapest`, and `oracle` control arms
+  (optional `oracle_budget`), selected from an exhaustive
+  `task × profile × trial` outcome matrix bound to a five-component
+  reuse fingerprint the router evidence must match before any
+  comparative figure exists. `quality_fn: v1` (fixed weights, one
+  global selection-independent component mask, renormalization, Q
+  withheld on a missing primary outcome) is reported beside the full
+  #109 metric vector — no AIQ scalar. Insufficiency is first-class
+  and contagious: unpriced or unreconciled evidence is never rendered
+  as zero (unreconciled delegation surfaces as insufficiency in the
+  arm's sequence-dependent rows, which sit outside `quality_fn`), the
+  Pareto frontier is withheld whole on any Q or cost-basis violation
+  rather than partially drawn, and an insufficient control refuses
+  the report.
+  Evidence persists only through a write-time redaction gate —
+  literal runtime credential values (resolved from the executed
+  registry's `credential_env` references, never by enumerating the
+  environment) scrubbed before pattern-based defense in depth, with a
+  measurement-view guard proving redaction can never alter
+  fingerprints or measurement semantics — into canonical,
+  byte-reproducible artifacts. Measurement-only by construction
+  (plan decision 10): no runtime routing authority, enforced by an
+  executable diff guard over the production routing files. See
+  `benchmarks/README.md` § Routing-quality evaluation.
+
 - **Probe-verified routing recovery + failback (#257, increment D of
   #109)** — the seven-state circuit store now has durable probe
   schedules and a verified exit from cooldown/auth-disabled states;
