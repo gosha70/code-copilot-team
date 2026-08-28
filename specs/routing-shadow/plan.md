@@ -1,7 +1,7 @@
 ---
 spec_mode: full
 feature_id: routing-shadow
-status: draft
+status: approved
 date: 2026-08-27
 risk_category: integration
 justification: >
