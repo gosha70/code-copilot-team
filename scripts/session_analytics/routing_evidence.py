@@ -125,6 +125,121 @@ def load_evidence_sets(
     return out
 
 
+# ── API payload builders (pure; the FastAPI routes are thin
+# wrappers). NOTHING here may serialize a filesystem path: sets are
+# addressed by opaque id, invalid sets by directory basename, and
+# evidence files by their manifest-relative reference. ──
+class EvidenceFileUnavailable(Exception):
+    """A referenced evidence file cannot be served. ``code`` is a
+    closed sanitized reason; no path ever appears in it."""
+
+    def __init__(self, code: str):
+        assert code in ("unknown_reference", "hash_mismatch",
+                        "unreadable_artifact")
+        self.code = code
+        super().__init__(code)
+
+
+def evidence_index(
+    entries: Sequence["LoadedEvidenceSet | InvalidEvidenceSet"],
+) -> Mapping[str, Any]:
+    """The listing payload: valid sets summarized by identity and
+    shape, invalid sets carried with their closed sanitized state —
+    rendered, never skipped."""
+    sets: list[Mapping[str, Any]] = []
+    for entry in entries:
+        if isinstance(entry, InvalidEvidenceSet):
+            sets.append({
+                "state": "invalid_evidence",
+                "label": entry.label,
+                "code": entry.code,
+                "artifact": entry.artifact,
+                "detail": entry.detail,
+            })
+            continue
+        fp = entry.manifest["fingerprint"]
+        report = entry.report
+        sets.append({
+            "state": "valid",
+            "set_id": entry.set_id,
+            "registry_digest": fp["registry_digest"],
+            "preset_digest": fp["preset_digest"],
+            "task_set_revision": fp["task_set_revision"],
+            "toolchain_digest": fp["toolchain_digest"],
+            "tasks": sorted(
+                (report["arms"].get("cct_router") or {}).get("tasks") or {}
+            ),
+            "arms": sorted(report["arms"]),
+            "pareto_status": (report.get("pareto") or {}).get("status"),
+            "record_count": len(entry.records),
+        })
+    return {"sets": sets}
+
+
+def find_evidence_set(
+    entries: Sequence["LoadedEvidenceSet | InvalidEvidenceSet"],
+    set_id: str,
+) -> Optional[LoadedEvidenceSet]:
+    for entry in entries:
+        if isinstance(entry, LoadedEvidenceSet) and entry.set_id == set_id:
+            return entry
+    return None
+
+
+def evidence_detail(loaded: LoadedEvidenceSet) -> Mapping[str, Any]:
+    """The E1 report VERBATIM plus the set identity — no figure is
+    recomputed, rounded, or re-derived on the way out (the
+    figure-provenance gate holds the API to this)."""
+    return {
+        "set_id": loaded.set_id,
+        "report": loaded.report,
+        "record_count": len(loaded.records),
+    }
+
+
+def recommendations_payload(loaded: LoadedEvidenceSet) -> Mapping[str, Any]:
+    return {
+        "set_id": loaded.set_id,
+        "recommendations": derive_recommendations(loaded),
+    }
+
+
+def serve_evidence_file(
+    loaded: LoadedEvidenceSet, ref: str
+) -> Mapping[str, Any]:
+    """Serve ONE referenced evidence file, hash-verified against the
+    manifest before a byte leaves the server: an unknown reference, a
+    containment escape, or content that no longer matches its
+    manifest hash refuses with a closed code — unverified artifact
+    bytes are never served."""
+    manifest_files = loaded.manifest.get("evidence_files") or {}
+    expected = manifest_files.get(ref)
+    if expected is None:
+        raise EvidenceFileUnavailable("unknown_reference")
+    target = loaded.path / ref
+    try:
+        resolved = target.resolve()
+        resolved.relative_to(loaded.path.resolve())
+        content = resolved.read_bytes()
+    except (OSError, ValueError):
+        raise EvidenceFileUnavailable("unreadable_artifact") from None
+    import hashlib as _hashlib
+
+    actual = "sha256:" + _hashlib.sha256(content).hexdigest()
+    if actual != expected:
+        raise EvidenceFileUnavailable("hash_mismatch")
+    return {"ref": ref, "content": content.decode("utf-8", "replace")}
+
+
+def routing_evidence_settings(config: Any) -> Mapping[str, Any]:
+    """The SANITIZED settings shape: whether evidence roots are
+    configured and how many — the raw root paths never leave the
+    server (routing-shadow decision on #261's no-sensitive-path
+    acceptance)."""
+    roots = tuple(getattr(config, "routing_evidence_roots", ()) or ())
+    return {"configured": bool(roots), "root_count": len(roots)}
+
+
 # ── derivation ─────────────────────────────────────────────────────────
 def derive_recommendations(
     loaded: LoadedEvidenceSet,

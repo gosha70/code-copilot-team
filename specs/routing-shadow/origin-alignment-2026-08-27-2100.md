@@ -483,6 +483,41 @@ The owner explicitly did not reopen the recommendation architecture,
 availability-neutral sweep decision, evidence-reference design,
 dominance formula, or confidence thresholds.
 
+## T3 build (2026-08-28) — the API layer and its three gates
+
+T2 approved at 339de5b (the owner's non-blocking exact-assertion
+tightening applied here). T3 built per decisions 7-10's API half:
+
+- **Evidence roots, server-side only**: AnalyticsConfig gains
+  `routing_evidence_roots` through the documented layering
+  (defaults < user config < env `CCT_SA_ROUTING_EVIDENCE_ROOTS`,
+  layering pinned); `/api/settings` serves ONLY the sanitized
+  `{configured, root_count}` shape.
+- **Endpoints** (thin wrappers over pure payload builders, unit-tested
+  without fastapi per the suite's own convention; TestClient tests
+  CI-gated): evidence index (valid summaries + set-level
+  invalid_evidence entries, never skipped), set detail (the report
+  VERBATIM), recommendations, and hash-verified evidence-file serving
+  (manifest-membership + containment + hash before a byte leaves —
+  unknown/escaping refs and tampered content refuse with closed
+  codes; unverified artifact bytes are never served). Sets addressed
+  by opaque id; unknown ids 404 with a closed detail.
+- **The owner's named acceptance gate**: a deliberately sensitive
+  evidence root (SENSITIVE-SECRET-DIR) proven absent across settings,
+  index, detail, recommendations, served evidence files, AND
+  invalid-evidence responses — at the payload layer locally and at
+  the HTTP layer in the CI-gated tests.
+- **The figure-provenance gate** (decision 9): every served figure
+  semantically equals its artifact field from ONE canonical parse
+  (arm quality/cost, per-task, per-trial rows), and every
+  recommendation delta equals the recomputed declared subtraction of
+  its two pointed-at fields.
+- **The authority guard** (decision 7): no production routing script
+  references this layer's module, schema, or config keys;
+  consumption provably mutates nothing (evidence-set content digest
+  identical before/after load+derive+serve); the consumer module's
+  source contains no write calls.
+
 ## Verdict
 
 Verdict: aligned

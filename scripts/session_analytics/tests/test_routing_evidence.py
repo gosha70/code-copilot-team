@@ -599,7 +599,9 @@ class TestEvidenceLoading(unittest.TestCase):
             self.assertEqual(len(loaded), 1)
             (entry,) = loaded
             self.assertIsInstance(entry, InvalidEvidenceSet)
-            self.assertIn(entry.code, ("schema_invalid", "hash_mismatch"))
+            # the loader decodes runs BEFORE the hash bindings, so the
+            # UTF-8 failure is deterministically schema_invalid
+            self.assertEqual(entry.code, "schema_invalid")
             self.assertEqual(entry.state, "invalid_evidence")
 
     def test_a_tampered_set_surfaces_as_invalid_never_skipped(self) -> None:
@@ -628,3 +630,244 @@ class TestEvidenceLoading(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestApiPayloadBoundary(unittest.TestCase):
+    """T3's highest-value acceptance gate (the owner's words): a
+    deliberately sensitive evidence root must never leak through
+    settings, valid evidence, recommendations, invalid-evidence
+    responses, or referenced-evidence serving — and no unverified
+    artifact byte is ever served."""
+
+    def _sensitive_fixture(self):
+        import tempfile
+
+        base = Path(tempfile.mkdtemp(prefix="SENSITIVE-SECRET-DIR."))
+        self.addCleanup(__import__("shutil").rmtree, base,
+                        ignore_errors=True)
+        published = TestEvidenceLoading._publish_fixture(self, base)
+        return base, published
+
+    def test_no_payload_carries_the_sensitive_root(self) -> None:
+        from session_analytics.routing_evidence import (
+            evidence_detail,
+            evidence_index,
+            recommendations_payload,
+            serve_evidence_file,
+        )
+
+        base, published = self._sensitive_fixture()
+        sensitive = str(base)
+        entries = load_evidence_sets([base / "out"])
+        payloads = [evidence_index(entries)]
+        (loaded,) = entries
+        payloads.append(evidence_detail(loaded))
+        payloads.append(recommendations_payload(loaded))
+        for ref in loaded.manifest.get("evidence_files") or {}:
+            payloads.append(serve_evidence_file(loaded, ref))
+        # an invalid variant: tamper a copy and list it too
+        import shutil as _shutil
+
+        tampered_root = base / "out2"
+        _shutil.copytree(base / "out", tampered_root)
+        (set_dir,) = [p for p in tampered_root.iterdir() if p.is_dir()]
+        (set_dir / "report.json").write_text("{not json", encoding="utf-8")
+        payloads.append(evidence_index(load_evidence_sets([tampered_root])))
+        for payload in payloads:
+            text = json.dumps(payload)
+            self.assertNotIn(sensitive, text,
+                             "a payload leaked the evidence root path")
+            self.assertNotIn("SENSITIVE-SECRET-DIR", text)
+
+    def test_settings_shape_is_sanitized(self) -> None:
+        from types import SimpleNamespace
+
+        from session_analytics.routing_evidence import (
+            routing_evidence_settings,
+        )
+
+        cfg = SimpleNamespace(routing_evidence_roots=(
+            "/Users/someone/SENSITIVE-SECRET-DIR/evidence",
+            "/var/other/root",
+        ))
+        shape = routing_evidence_settings(cfg)
+        self.assertEqual(shape, {"configured": True, "root_count": 2})
+        self.assertNotIn("SENSITIVE", json.dumps(shape))
+        self.assertEqual(
+            routing_evidence_settings(
+                SimpleNamespace(routing_evidence_roots=())
+            ),
+            {"configured": False, "root_count": 0},
+        )
+
+    def test_evidence_file_serving_is_hash_verified(self) -> None:
+        from session_analytics.routing_evidence import (
+            EvidenceFileUnavailable,
+            serve_evidence_file,
+        )
+
+        base, published = self._sensitive_fixture()
+        (loaded,) = load_evidence_sets([base / "out"])
+        refs = sorted(loaded.manifest.get("evidence_files") or {})
+        self.assertTrue(refs, "the fixture set carries evidence files")
+        ref = refs[0]
+        served = serve_evidence_file(loaded, ref)
+        self.assertEqual(served["ref"], ref)
+        self.assertIn("ok", served["content"])
+        # unknown reference: closed refusal, never a probe primitive
+        with self.assertRaises(EvidenceFileUnavailable) as caught:
+            serve_evidence_file(loaded, "not/in/manifest.txt")
+        self.assertEqual(caught.exception.code, "unknown_reference")
+        with self.assertRaises(EvidenceFileUnavailable) as caught:
+            serve_evidence_file(loaded, "../outside.txt")
+        self.assertEqual(caught.exception.code, "unknown_reference")
+        # tampered content: manifest hash refuses — unverified bytes
+        # are never served
+        (loaded.path / ref).write_text("tampered\n", encoding="utf-8")
+        with self.assertRaises(EvidenceFileUnavailable) as caught:
+            serve_evidence_file(loaded, ref)
+        self.assertEqual(caught.exception.code, "hash_mismatch")
+
+
+class TestFigureProvenanceGate(unittest.TestCase):
+    """Decision 9: every numeric figure the API serves is semantically
+    equal to its artifact field, or the declared subtraction of two
+    named fields — nothing is recomputed, rounded, or re-derived on
+    the way out."""
+
+    def test_served_figures_are_the_artifact_figures(self) -> None:
+        import tempfile
+
+        from session_analytics.routing_evidence import (
+            evidence_detail,
+            recommendations_payload,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            TestEvidenceLoading._publish_fixture(self, base)
+            (loaded,) = load_evidence_sets([base / "out"])
+            # ONE canonical parse of the persisted artifact
+            artifact = json.loads(
+                (loaded.path / "report.json").read_text(encoding="utf-8")
+            )
+            detail = evidence_detail(loaded)
+            for arm, arm_doc in detail["report"]["arms"].items():
+                source_arm = artifact["arms"][arm]
+                self.assertEqual(arm_doc["quality"], source_arm["quality"])
+                self.assertEqual(arm_doc["cost"], source_arm["cost"])
+                for task, figures in (arm_doc.get("tasks") or {}).items():
+                    src = source_arm["tasks"][task]
+                    self.assertEqual(figures["quality"], src["quality"])
+                    self.assertEqual(figures["cost"], src["cost"])
+                    self.assertEqual(figures["per_trial"], src["per_trial"])
+            # recommendation deltas are the DECLARED float64
+            # subtraction of the two pointed-at artifact fields
+            recs = recommendations_payload(loaded)["recommendations"]
+            for rec in recs:
+                task = rec["task_id"]
+                router = artifact["arms"]["cct_router"]["tasks"][task]
+                for arm, delta in rec["divergence"].items():
+                    cand = artifact["arms"][arm]["tasks"][task]
+                    if delta["quality_delta"] is not None:
+                        self.assertEqual(
+                            delta["quality_delta"],
+                            router["quality"] - cand["quality"],
+                        )
+                    if delta["cost_delta"] is not None:
+                        self.assertEqual(
+                            delta["cost_delta"],
+                            router["cost"] - cand["cost"],
+                        )
+
+
+class TestAuthorityGuard(unittest.TestCase):
+    """Decision 7: nothing the router executes references this layer,
+    and this layer writes nothing outside the analytics store."""
+
+    _PRODUCTION = (
+        "scripts/routing-cli.sh",
+        "scripts/cooldown-supervisor.sh",
+    )
+
+    def test_no_production_routing_script_references_this_layer(self) -> None:
+        repo = Path(__file__).resolve().parents[3]
+        needles = ("routing_evidence", "recommendation.schema",
+                   "routing_evidence_roots", "CCT_SA_ROUTING")
+        files = [repo / p for p in self._PRODUCTION]
+        files += sorted((repo / "scripts" / "lib").glob("routing-*.sh"))
+        for f in files:
+            text = f.read_text(encoding="utf-8")
+            for needle in needles:
+                self.assertNotIn(
+                    needle, text,
+                    f"{f.name} references {needle} — the router must not "
+                    f"be able to read recommendation machinery",
+                )
+
+    def test_the_consumer_never_writes_into_an_evidence_set(self) -> None:
+        import hashlib
+        import tempfile
+
+        from session_analytics.routing_evidence import (
+            evidence_detail,
+            recommendations_payload,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            TestEvidenceLoading._publish_fixture(self, base)
+            (loaded,) = load_evidence_sets([base / "out"])
+
+            def _digest():
+                h = hashlib.sha256()
+                for p in sorted(loaded.path.rglob("*")):
+                    if p.is_file():
+                        h.update(p.name.encode())
+                        h.update(p.read_bytes())
+                return h.hexdigest()
+
+            before = _digest()
+            evidence_detail(loaded)
+            recommendations_payload(loaded)
+            load_evidence_sets([base / "out"])
+            self.assertEqual(_digest(), before,
+                             "consumption mutated the evidence set")
+
+    def test_the_module_source_performs_no_writes(self) -> None:
+        import re as _re
+
+        source = (Path(__file__).resolve().parents[1]
+                  / "routing_evidence.py").read_text(encoding="utf-8")
+        self.assertIsNone(
+            _re.search(r"write_text|write_bytes|open\([^)]*[\"'](?:w|a)",
+                       source),
+            "the consumer module must be read-only",
+        )
+
+
+class TestEvidenceRootsConfig(unittest.TestCase):
+    def test_env_overrides_file_layering(self) -> None:
+        import os as _os
+        from unittest import mock
+
+        from session_analytics.config import load_config
+
+        with mock.patch.dict(_os.environ,
+                             {"CCT_SA_ROUTING_EVIDENCE_ROOTS": ""}):
+            _os.environ.pop("CCT_SA_ROUTING_EVIDENCE_ROOTS")
+            cfg = load_config(extra_overrides={
+                "routing_evidence_roots": ["/from/file/a", "/from/file/b"],
+            })
+            self.assertEqual(cfg.routing_evidence_roots,
+                             ("/from/file/a", "/from/file/b"))
+        with mock.patch.dict(_os.environ, {
+            "CCT_SA_ROUTING_EVIDENCE_ROOTS":
+                _os.pathsep.join(["/from/env/x", "/from/env/y"]),
+        }):
+            cfg = load_config(extra_overrides={
+                "routing_evidence_roots": ["/from/file/a"],
+            })
+            self.assertEqual(cfg.routing_evidence_roots,
+                             ("/from/env/x", "/from/env/y"),
+                             "real env wins over file layering")

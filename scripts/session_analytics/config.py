@@ -34,6 +34,9 @@ ENV_JUDGE_BASE_URL = "CCT_SA_JUDGE_BASE_URL"
 ENV_JUDGE_API_KEY = "CCT_SA_JUDGE_API_KEY"
 ENV_JUDGE_WORKERS = "CCT_SA_JUDGE_WORKERS"
 ENV_SOURCE_PREFIX = "CCT_SA_SOURCE_"  # + COPILOT (e.g. CCT_SA_SOURCE_CLAUDE_CODE)
+# Routing-shadow (#261): evidence roots are SERVER-SIDE configuration —
+# the API never serves the raw paths (only {configured, root_count}).
+ENV_ROUTING_EVIDENCE_ROOTS = "CCT_SA_ROUTING_EVIDENCE_ROOTS"  # os.pathsep-separated
 
 # Keys the Studio config page exposes (order = display order). Secret-bearing
 # keys are flagged so the API masks them.
@@ -130,6 +133,9 @@ class AnalyticsConfig:
     # identity.derive_developer_id — never an os.environ bypass.
     developer_id_env: Optional[str] = None
     developer_id_cfg: Optional[str] = None
+    #: Routing-shadow (#261): E1 evidence-set roots. Server-side only;
+    #: /api/settings exposes a sanitized {configured, root_count} shape.
+    routing_evidence_roots: tuple[str, ...] = ()
 
     def source_root(self, copilot: str) -> Optional[Path]:
         raw = self.sources.get(copilot)
@@ -419,6 +425,14 @@ def load_config(
         v = env_file.get(key)
         return v if v else None
 
+    # routing-shadow evidence roots: config-file list, env override
+    # (os.pathsep-separated), CLI extra_overrides via the merged data
+    roots_raw = data.get(C.CFG_ROUTING_EVIDENCE_ROOTS) or []
+    roots_env = env(ENV_ROUTING_EVIDENCE_ROOTS)
+    if roots_env:
+        roots_raw = [r for r in roots_env.split(os.pathsep) if r]
+    routing_evidence_roots = tuple(str(r) for r in roots_raw)
+
     # sources (+ optional per-copilot env override CCT_SA_SOURCE_<COPILOT>)
     sources = dict(data.get(C.CFG_SOURCES) or {})
     for copilot in list(sources.keys()):
@@ -464,6 +478,7 @@ def load_config(
 
     return AnalyticsConfig(
         sources=sources,
+        routing_evidence_roots=routing_evidence_roots,
         dsn=str(resolved_dsn),
         kuzu_path=str(Path(resolved_kuzu).expanduser()),
         redaction_mode=resolved_redaction,
