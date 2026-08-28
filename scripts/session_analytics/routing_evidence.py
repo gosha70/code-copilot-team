@@ -343,7 +343,7 @@ def _resolve_figure(artifacts: Mapping[str, Any], source: Mapping[str, Any],
 
 
 def _check_direct(artifacts: Mapping[str, Any], figure: Any, source: Any,
-                  where: str) -> None:
+                  expected: Mapping[str, Any], where: str) -> None:
     if figure is None:
         if source is not None:
             raise DerivationError(
@@ -355,6 +355,14 @@ def _check_direct(artifacts: Mapping[str, Any], figure: Any, source: Any,
             f"{where}: served figure carries no source pointer — decision 9 "
             f"refuses unsourced figures"
         )
+    if source != expected:
+        # identity binding: "exact source" means THIS record's task,
+        # arm, and field — a resolvable-but-wrong pointer is refused
+        # even when the two artifact values happen to collide
+        raise DerivationError(
+            f"{where}: source descriptor does not name this figure's exact "
+            f"artifact field — the provenance gate refuses the payload"
+        )
     resolved = _resolve_figure(artifacts, source, where)
     if float(resolved) != float(figure):
         raise DerivationError(
@@ -364,7 +372,7 @@ def _check_direct(artifacts: Mapping[str, Any], figure: Any, source: Any,
 
 
 def _check_delta(artifacts: Mapping[str, Any], delta: Any, source: Any,
-                 where: str) -> None:
+                 expected: Mapping[str, Any], where: str) -> None:
     if delta is None:
         if source is not None:
             raise DerivationError(
@@ -376,9 +384,10 @@ def _check_delta(artifacts: Mapping[str, Any], delta: Any, source: Any,
             f"{where}: served delta carries no operand pointers — decision 9 "
             f"refuses unsourced figures"
         )
-    if source.get("operation") != "subtract":
+    if source != expected:
         raise DerivationError(
-            f"{where}: unknown delta operation {source.get('operation')!r}"
+            f"{where}: delta descriptor does not name this delta's exact "
+            f"operand fields — the provenance gate refuses the payload"
         )
     lhs = _resolve_figure(artifacts, source["lhs"], where + "/lhs")
     rhs = _resolve_figure(artifacts, source["rhs"], where + "/rhs")
@@ -407,14 +416,62 @@ def verify_recommendation_provenance(
         for field in ("quality", "cost"):
             _check_direct(
                 artifacts, ceiling[field], ceiling["sources"][field],
+                _figure_source("oracle", task, field),
                 f"{task}/oracle_ceiling/{field}",
             )
         for arm, delta in rec["divergence"].items():
-            for field in ("quality_delta", "cost_delta"):
+            for field, base in (("quality_delta", "quality"),
+                                ("cost_delta", "cost")):
                 _check_delta(
                     artifacts, delta[field], delta["sources"][field],
+                    _delta_source(arm, task, base),
                     f"{task}/divergence/{arm}/{field}",
                 )
+        _check_confidence(loaded, rec)
+
+
+def _check_confidence(loaded: LoadedEvidenceSet,
+                      rec: Mapping[str, Any]) -> None:
+    """Confidence statistics carry no source pointers (they are
+    statistics OF the derivation, not copies of artifact figures), so
+    their gate is recomputation: trials, agreement, the unevaluated
+    set, and the grade are re-derived from the canonical report and
+    records, and any disagreement with the served record refuses the
+    payload — a tampered or drifted confidence claim never leaves the
+    server."""
+    task = rec["task_id"]
+    report = loaded.report
+    actual, _refs = _actual_from_records(loaded.records, task, loaded.set_id)
+    trials = max(len(actual["per_trial"]), 1)
+    outcome = rec["outcome"]
+    if outcome == "insufficient_data":
+        agreement: Any = None
+        unevaluated: Sequence[int] = ()
+    elif outcome == "no_change_recommended":
+        agreement, unevaluated = _agreement(
+            report, task, list(EXECUTABLE_CANDIDATES), "no_change"
+        )
+    else:
+        agreement, unevaluated = _agreement(
+            report, task, [rec["suggested"]["arm"]], "switch"
+        )
+    basis = rec["confidence"]["basis"]
+    expected_grade = _grade(
+        trials, agreement, list(report["components_included"]),
+        list(unevaluated), basis["insufficiency_refs"],
+    )
+    served = (
+        basis["trials"],
+        basis["agreement"],
+        sorted(basis.get("unevaluated_trials") or []),
+        rec["confidence"]["grade"],
+    )
+    if served != (trials, agreement, sorted(unevaluated), expected_grade):
+        raise DerivationError(
+            f"{task}/confidence: served confidence statistics disagree with "
+            f"their recomputation from the canonical report — the "
+            f"provenance gate refuses the payload"
+        )
 
 
 def _dominates(q_c, c_c, q_r, c_r) -> bool:

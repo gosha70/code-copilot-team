@@ -84,7 +84,31 @@ FAILURE_CODES = (
     "hash_mismatch",
     "fingerprint_mismatch",
     "path_escape",
+    "reference_mismatch",
 )
+
+
+def evidence_references(
+    records: "Sequence[Mapping[str, Any]]",
+) -> tuple[str, ...]:
+    """THE canonical evidence-reference set of a run artifact: every
+    reference any record carries, from BOTH reference-bearing channels
+    the run schema permits (``verifiers[].evidence_ref`` and
+    ``repair_cycles[].evidence_ref``). Publication ships exactly this
+    set and validation requires the manifest's ``evidence_files`` keys
+    to equal it — a reference the manifest does not bind, or a manifest
+    entry no record references, is a broken set, not a benign drift."""
+    refs: set[str] = set()
+    for record in records:
+        for verifier in record.get("verifiers") or []:
+            ref = verifier.get("evidence_ref")
+            if ref is not None:
+                refs.add(ref)
+        for cycle in record.get("repair_cycles") or []:
+            ref = cycle.get("evidence_ref")
+            if ref is not None:
+                refs.add(ref)
+    return tuple(sorted(refs))
 
 
 class EvidenceSetError(RuntimeError):
@@ -649,6 +673,17 @@ def validate_evidence_set(root: Path) -> Mapping[str, Any]:
             "the report's source bindings disagree with the manifest",
         )
 
+    # evidence-reference binding: the manifest's evidence_files keys
+    # equal EXACTLY the canonical reference set of the records — an
+    # unbound record reference (unverifiable serving) and an orphan
+    # manifest entry (unreferenced payload) both refuse the set
+    if tuple(sorted(manifest["evidence_files"])) != evidence_references(records):
+        raise EvidenceSetInvalid(
+            "reference_mismatch", ARTIFACT_MANIFEST,
+            "the manifest's evidence files disagree with the references "
+            "the run records carry",
+        )
+
     # evidence-file bindings: relative, contained, hash-verified
     for ref, expected in manifest["evidence_files"].items():
         if not _relative_ok(ref):
@@ -980,39 +1015,46 @@ def _publish(
                 .splitlines()
             ) + "]"
         )
-        for record in published:
-            for verifier in record.get("verifiers") or []:
-                ref = verifier.get("evidence_ref")
-                if not isinstance(ref, str) or not _relative_ok(ref):
-                    raise EvidenceSetError(
-                        "a published record carries a non-relative evidence "
-                        "reference — the runs artifact is not set-portable"
-                    )
-                if ref in evidence_files:
-                    continue
-                src = evidence_root / ref
-                dst = staging / ref
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                # VERIFIED dangerous bytes are still dangerous bytes:
-                # hash verification proves integrity, not redaction.
-                # Evidence files pass through the SAME write-time
-                # scrub as every other published string (dynamic
-                # literal secrets + path collapse) and the manifest
-                # hashes the SCRUBBED bytes — so the API's
-                # hash-verified serving can never faithfully deliver
-                # a secret or a sensitive absolute path.
-                try:
-                    text = src.read_bytes().decode("utf-8")
-                except UnicodeDecodeError:
-                    raise EvidenceSetError(
-                        f"evidence file {ref!r} is not valid UTF-8 text — "
-                        f"an unscrubabble file never ships with a set"
-                    ) from None
-                dst.write_text(
-                    scrub_text(text, secret_values=secret_values),
-                    encoding="utf-8",
+        # ONE canonical reference set — every reference-bearing channel
+        # the run schema permits — so the manifest binds exactly what
+        # the records reference (validation requires the equality).
+        for ref in evidence_references(published):
+            if not isinstance(ref, str) or not _relative_ok(ref):
+                raise EvidenceSetError(
+                    "a published record carries a non-relative evidence "
+                    "reference — the runs artifact is not set-portable"
                 )
-                evidence_files[ref] = _sha256_file(dst)
+            src = (evidence_root / ref).resolve()
+            try:
+                src.relative_to(Path(evidence_root).resolve())
+            except ValueError:
+                raise EvidenceSetError(
+                    f"evidence file {ref!r} resolves outside the evidence "
+                    f"root — a relative reference (or a symlink under it) "
+                    f"can never import an external file into a set"
+                ) from None
+            dst = staging / ref
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            # VERIFIED dangerous bytes are still dangerous bytes:
+            # hash verification proves integrity, not redaction.
+            # Evidence files pass through the SAME write-time
+            # scrub as every other published string (dynamic
+            # literal secrets + path collapse) and the manifest
+            # hashes the SCRUBBED bytes — so the API's
+            # hash-verified serving can never faithfully deliver
+            # a secret or a sensitive absolute path.
+            try:
+                text = src.read_bytes().decode("utf-8")
+            except UnicodeDecodeError:
+                raise EvidenceSetError(
+                    f"evidence file {ref!r} is not valid UTF-8 text — "
+                    f"an unscrubabble file never ships with a set"
+                ) from None
+            dst.write_text(
+                scrub_text(text, secret_values=secret_values),
+                encoding="utf-8",
+            )
+            evidence_files[ref] = _sha256_file(dst)
 
         (staging / ARTIFACT_MATRIX).write_text(
             matrix_dumps(matrix), encoding="utf-8"

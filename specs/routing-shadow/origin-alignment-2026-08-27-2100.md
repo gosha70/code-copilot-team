@@ -576,6 +576,66 @@ refs), and no direct-pointer source exists for them by construction.
 Suites after the round: routing-evidence 41/41, E1 routing_eval
 93/93, session-analytics discovery 331 (34 CI-gated skips), all OK.
 
+## T3 build audit round 2 (owner, on 5c9fe4b) — three P1 + one P2, applied
+
+All four findings were reproduced in-tree exactly as reported before
+any fix, and re-run refused after.
+
+1. **[P1] The manifest is now bound to ALL evidence references, both
+   directions.** ONE canonical collector (`evidence_references`) reads
+   BOTH reference-bearing channels the run schema permits —
+   `verifiers[].evidence_ref` AND `repair_cycles[].evidence_ref` —
+   and is the single authority: publication ships exactly that set,
+   and validation requires the manifest's `evidence_files` keys to
+   EQUAL it (new closed code `reference_mismatch`; an unbound record
+   reference and an orphan hash-correct manifest entry both refuse).
+   Publication also resolves each source under the evidence root
+   before reading, so an already-relative reference over a symlink
+   can never import an external file (the writer's absolute-path gate
+   never sees a relative ref — this was a real hole).
+   `_relativize_evidence` in the record writer now treats
+   repair-cycle refs like verifier refs so the two channels behave
+   identically. Pinned: the owner's emptied-map reproduction, the
+   orphan-entry inverse, repair-ref publication+binding, and the
+   symlink escape. Mutations (all discriminated): equality gate
+   removed; repair channel dropped from the collector; containment
+   check removed.
+2. **[P1] "Exact source" is identity-bound.** Both `_check_direct`
+   and `_check_delta` now require the served descriptor to EQUAL the
+   canonical `_figure_source`/`_delta_source` for that record's task,
+   arm, and field BEFORE resolving values — a resolvable-but-wrong
+   pointer refuses even when the two artifact values collide. The
+   owner's exact collision is pinned (always_best quality operand
+   repointed at the oracle quality field with an equal 0.9 value,
+   asserted equal in the fixture). The unresolvable-pointer
+   regression was rebuilt to stay meaningful under identity binding:
+   the descriptor is canonical but the artifact drifted underneath it
+   (oracle task entry deleted from the loaded report). Mutation
+   (identity check deleted) discriminated.
+3. **[P1] Confidence claims are gated by recomputation.** Spec
+   FR-E2-3 amended as the owner directed: figures that are copies of
+   artifact fields carry identity-bound pointers; confidence
+   statistics are statistics OF the derivation, carry no pointers,
+   and are held to a recomputation gate — `_check_confidence`
+   re-derives trials, agreement, the unevaluated set, and the grade
+   from the canonical report and records and refuses on ANY
+   disagreement. The owner's reproduction is pinned (one-trial record
+   claiming grade high with agreement 0.0). Mutation (gate not
+   called) discriminated.
+4. **[P2] The persisted contract itself enforces the null/source
+   pairing.** `oracle_ceiling` and each divergence entry gained four
+   exclusive `oneOf` branches partitioning (figure × source) for both
+   pairs — a numeric figure with a null source and a null figure with
+   a non-null source are now schema-invalid, not merely
+   runtime-refused (the validator subset has no `allOf`/`if`, so the
+   branches conjoin with the existing `properties` keywords, which
+   the validator applies conjunctively). Schema-level inverse tests
+   pin all four wrong pairings for both ceilings and deltas.
+
+Suites after the round: routing-evidence 44/44, E1
+evidence_set+quality+redaction 97/97, session-analytics discovery
+334 (34 CI-gated skips), all OK.
+
 ## Verdict
 
 Verdict: aligned

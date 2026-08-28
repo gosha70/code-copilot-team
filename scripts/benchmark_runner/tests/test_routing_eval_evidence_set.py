@@ -667,5 +667,178 @@ class TestDerivedRegistryUnits(unittest.TestCase):
                 )
 
 
+class TestEvidenceReferenceBinding(unittest.TestCase):
+    """T3 round-2 finding 1: the manifest is bound to ALL evidence
+    references — one canonical reference set derived from every record
+    (verifiers AND repair_cycles), shipped at publication, and required
+    to equal the manifest keys exactly at validation. A relative
+    symlink under the evidence root can never import an external file."""
+
+    def _publish_small(self, base: Path, *, repair_ref=None, mutate=None):
+        from benchmark_runner.routing_eval.redaction import write_run_records
+        from benchmark_runner.routing_eval.routing_quality import build_report
+        from benchmark_runner.tests.test_routing_eval_quality import (
+            _CONFIG,
+            _PRESET,
+            _REG_DIGEST,
+            _REGISTRY,
+            _cell,
+            _matrix,
+            _selection,
+        )
+        from benchmark_runner.tests.test_routing_eval_redaction import (
+            _valid_record,
+        )
+
+        cells = [
+            _cell("t1", "alpha", 0, cost=0.05),
+            _cell("t1", "beta", 0, result="fail", cost=0.01),
+        ]
+        matrix = _matrix(cells)
+        controls = {
+            "always_best": _selection("always_best", [cells[0]]),
+            "always_cheapest": _selection("always_cheapest", [cells[1]]),
+            "oracle": _selection("oracle", [cells[0]]),
+        }
+        record = _valid_record(base)
+        record.update({
+            "task_id": "t1", "trial": 0, "trial_seed": 1,
+            "registry_digest": _REG_DIGEST, "preset_digest": _PRESET,
+            "task_set_revision": "rev", "toolchain_digest": "sha256:tc",
+            "baseline": {"lint_passed": True, "typecheck_passed": True},
+            "quality_gates": {
+                "coverage": {"before": 80.0, "after": 80.0},
+                "security": {"findings_by_severity":
+                             {"before": {}, "after": {}}},
+            },
+            "cost": {"value": 0.02, "provenance": "measured",
+                     "estimator": None, "inputs": None},
+        })
+        record.pop("insufficient_evidence", None)
+        if repair_ref is not None:
+            record["repair_cycles"] = [
+                {"signature": "lint:E501", "attempt": 0,
+                 "evidence_ref": repair_ref}
+            ]
+        if mutate is not None:
+            mutate(record)
+        ledger = base / "ledger"
+        report = build_report(matrix, controls, [record],
+                              expected_preset_digest=_PRESET,
+                              registry_path=_REGISTRY, config=_CONFIG)
+        report.pop("source_artifacts", None)
+        runs = write_run_records([record], ledger / "runs.jsonl",
+                                 evidence_root=ledger, secret_values=())
+        return _publish(
+            base / "out",
+            runs_path=runs,
+            evidence_root=ledger,
+            records=[record],
+            matrix=matrix,
+            report=dict(report),
+            fingerprint=matrix.fingerprint,
+            secret_values=(),
+        )
+
+    def _rewrite_manifest(self, setdir: Path, manifest: dict) -> None:
+        (setdir / ARTIFACT_MANIFEST).write_text(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def test_unbound_record_reference_refuses(self) -> None:
+        # the owner's reproduction: empty the manifest map, delete the
+        # referenced file — the runs artifact still references it, so
+        # the set is broken and must refuse
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            published = self._publish_small(base)
+            setdir = published.path
+            manifest = json.loads(
+                (setdir / ARTIFACT_MANIFEST).read_text(encoding="utf-8")
+            )
+            self.assertEqual(list(manifest["evidence_files"]),
+                             ["feat/verify.txt"])
+            (setdir / "feat" / "verify.txt").unlink()
+            manifest["evidence_files"] = {}
+            self._rewrite_manifest(setdir, manifest)
+            with self.assertRaises(EvidenceSetInvalid) as caught:
+                validate_evidence_set(setdir)
+            self.assertEqual(caught.exception.code, "reference_mismatch")
+
+    def test_orphan_manifest_entry_refuses(self) -> None:
+        # the reverse direction: a manifest-bound, hash-correct file no
+        # record references is an unreferenced payload, not evidence
+        import hashlib
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            published = self._publish_small(base)
+            setdir = published.path
+            orphan = setdir / "feat" / "orphan.txt"
+            orphan.write_text("stray\n", encoding="utf-8")
+            manifest = json.loads(
+                (setdir / ARTIFACT_MANIFEST).read_text(encoding="utf-8")
+            )
+            manifest["evidence_files"]["feat/orphan.txt"] = (
+                "sha256:" + hashlib.sha256(orphan.read_bytes()).hexdigest()
+            )
+            self._rewrite_manifest(setdir, manifest)
+            with self.assertRaises(EvidenceSetInvalid) as caught:
+                validate_evidence_set(setdir)
+            self.assertEqual(caught.exception.code, "reference_mismatch")
+
+    def test_repair_cycle_reference_is_published_and_bound(self) -> None:
+        # the second reference-bearing channel the run schema permits:
+        # repair_cycles[].evidence_ref ships and binds like a verifier's
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repair = base / "ledger" / "repair" / "cycle-0.log"
+            repair.parent.mkdir(parents=True, exist_ok=True)
+            repair.write_text("fix attempt\n", encoding="utf-8")
+            published = self._publish_small(
+                base, repair_ref="repair/cycle-0.log"
+            )
+            manifest = json.loads(
+                (published.path / ARTIFACT_MANIFEST).read_text(
+                    encoding="utf-8")
+            )
+            self.assertEqual(
+                sorted(manifest["evidence_files"]),
+                ["feat/verify.txt", "repair/cycle-0.log"],
+            )
+            self.assertTrue((published.path / "repair" / "cycle-0.log")
+                            .is_file())
+            validate_evidence_set(published.path)
+
+    def test_symlink_escape_refuses_at_publication(self) -> None:
+        # an already-RELATIVE reference (the writer's absolute-path
+        # gate never sees it) whose file is a symlink out of the
+        # evidence root must never import the external file into a set
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            outside = base / "outside-secret.txt"
+            outside.write_text("external\n", encoding="utf-8")
+
+            def relativize_over_symlink(record: dict) -> None:
+                record["verifiers"][0]["evidence_ref"] = "feat/verify.txt"
+                link = base / "ledger" / "feat" / "verify.txt"
+                link.unlink()
+                link.symlink_to(outside)
+
+            with self.assertRaisesRegex(
+                EvidenceSetError, "outside the evidence root"
+            ):
+                self._publish_small(base, mutate=relativize_over_symlink)
+
+
 if __name__ == "__main__":
     unittest.main()

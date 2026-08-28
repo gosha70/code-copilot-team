@@ -847,15 +847,15 @@ class TestFigureProvenanceGate(unittest.TestCase):
             verify_recommendation_provenance(loaded, records)
 
     def test_unresolvable_pointer_refuses(self) -> None:
+        # the descriptor is CANONICAL (identity binding passes) but the
+        # artifact drifted underneath it — resolution itself must refuse
         from session_analytics.routing_evidence import (
             DerivationError,
             verify_recommendation_provenance,
         )
 
         loaded, records = self._derived()
-        records[0]["oracle_ceiling"]["sources"]["quality"]["pointer"] = (
-            "/arms/nonexistent/tasks/t/quality"
-        )
+        del loaded.report["arms"]["oracle"]["tasks"]["t"]
         with self.assertRaisesRegex(DerivationError, "does not resolve"):
             verify_recommendation_provenance(loaded, records)
 
@@ -873,8 +873,8 @@ class TestFigureProvenanceGate(unittest.TestCase):
             verify_recommendation_provenance(loaded, records)
 
     def test_wrong_operand_pointer_refuses(self) -> None:
-        # a pointer that resolves but names the WRONG field: the
-        # recomputed subtraction no longer matches the served delta
+        # a pointer that resolves but names the WRONG field refuses at
+        # the identity binding, before any value is even compared
         from session_analytics.routing_evidence import (
             DerivationError,
             verify_recommendation_provenance,
@@ -884,8 +884,77 @@ class TestFigureProvenanceGate(unittest.TestCase):
         source = records[0]["divergence"]["always_best"]["sources"][
             "quality_delta"]
         source["rhs"] = dict(source["lhs"])
-        with self.assertRaisesRegex(DerivationError, "recomputed subtraction"):
+        with self.assertRaisesRegex(DerivationError, "does not name"):
             verify_recommendation_provenance(loaded, records)
+
+    def test_wrong_but_equal_valued_pointer_refuses(self) -> None:
+        # T3 round-2 finding 2: "exact source" is identity-bound. The
+        # owner's collision — the always_best quality operand repointed
+        # at the oracle quality field whose VALUE IS EQUAL — must
+        # refuse: value reproduction is not source identity.
+        from session_analytics.routing_evidence import (
+            DerivationError,
+            verify_recommendation_provenance,
+        )
+
+        report = _report(
+            _figures_for(router=(0.5, 0.05), best=(0.9, 0.01),
+                         cheapest=(0.4, 0.02)),  # oracle quality also 0.9
+            selections=_SELECTIONS,
+        )
+        loaded = _loaded(
+            report, [_router_record("t", considered=_ADMISSIBLE)]
+        )
+        records = [
+            json.loads(json.dumps(rec))
+            for rec in derive_recommendations(loaded)
+        ]
+        source = records[0]["divergence"]["always_best"]["sources"][
+            "quality_delta"]
+        source["rhs"]["pointer"] = "/arms/oracle/tasks/t/quality"
+        self.assertEqual(  # the collision is real: same value, wrong field
+            loaded.report["arms"]["oracle"]["tasks"]["t"]["quality"],
+            loaded.report["arms"]["always_best"]["tasks"]["t"]["quality"],
+        )
+        with self.assertRaisesRegex(DerivationError, "does not name"):
+            verify_recommendation_provenance(loaded, records)
+
+    def test_tampered_confidence_refuses(self) -> None:
+        # T3 round-2 finding 3: confidence statistics are gated by
+        # recomputation — a one-trial record claiming grade high with
+        # agreement 0.0 never leaves the server
+        from session_analytics.routing_evidence import (
+            DerivationError,
+            verify_recommendation_provenance,
+        )
+
+        loaded, records = self._derived()
+        self.assertEqual(records[0]["confidence"]["basis"]["trials"], 1)
+        records[0]["confidence"]["grade"] = "high"
+        records[0]["confidence"]["basis"]["agreement"] = 0.0
+        with self.assertRaisesRegex(DerivationError, "recomputation"):
+            verify_recommendation_provenance(loaded, records)
+
+    def test_schema_enforces_null_source_pairing(self) -> None:
+        # T3 round-2 finding 4: the persisted contract itself refuses
+        # both inverse pairings — runtime gates are not the only wall
+        loaded, records = self._derived()
+        schema = load_schema("recommendation")
+        numeric_null = json.loads(json.dumps(records[0]))
+        self.assertIsNotNone(numeric_null["oracle_ceiling"]["quality"])
+        numeric_null["oracle_ceiling"]["sources"]["quality"] = None
+        self.assertTrue(validate(numeric_null, schema))
+        null_sourced = json.loads(json.dumps(records[0]))
+        null_sourced["oracle_ceiling"]["quality"] = None
+        self.assertTrue(validate(null_sourced, schema))
+        delta_numeric_null = json.loads(json.dumps(records[0]))
+        entry = delta_numeric_null["divergence"]["always_best"]
+        self.assertIsNotNone(entry["quality_delta"])
+        entry["sources"]["quality_delta"] = None
+        self.assertTrue(validate(delta_numeric_null, schema))
+        delta_null_sourced = json.loads(json.dumps(records[0]))
+        delta_null_sourced["divergence"]["always_best"]["quality_delta"] = None
+        self.assertTrue(validate(delta_null_sourced, schema))
 
     def test_gate_runs_at_serving(self) -> None:
         # the resolver is wired INTO the payload path — a derivation

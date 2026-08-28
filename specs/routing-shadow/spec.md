@@ -76,13 +76,21 @@ does not yet persist.
   selectors, quality_fn, or build_report itself, and never recomputes
   any figure.
 - FR-E2-3: **No metric re-derivation, enforced.** Every figure the
-  API serves carries an exact source pointer into one E1 artifact, or
-  is a declared delta naming its two source pointers. The
+  API serves that is a copy of an E1 artifact field carries an exact
+  source pointer into one E1 artifact, or is a declared delta naming
+  its two source pointers; each descriptor is identity-bound (it must
+  name exactly its record's task, arm, and field — a resolvable but
+  wrong pointer refuses even when values collide). The
   figure-provenance gate parses each artifact once and requires
   semantic (canonically parsed float64) equality with the pointed-at
   value, and exact equality with the recomputed declared subtraction
   for deltas — no lexical byte comparison, which JSON round-trips
-  cannot honor.
+  cannot honor. Confidence statistics (`trials`, `agreement`,
+  `unevaluated_trials`, the grade) are statistics OF the derivation,
+  not copies of artifact figures, so they carry no source pointers;
+  their gate is recomputation — the serving resolver re-derives them
+  from the canonical report and records and refuses the payload on
+  any disagreement.
 - FR-E2-4: **Shadow recommendations: positive observed-evidence
   dominance, per (evidence set, task).** A recommendation record
   derived ONLY from E1 evidence, carrying:

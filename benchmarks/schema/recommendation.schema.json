@@ -63,7 +63,7 @@
       ]
     },
     "oracle_ceiling": {
-      "description": "The hindsight bound, always named separately — never suggested (it is not a policy anyone can run). Each non-null figure names its exact artifact source (decision 9); a null figure carries a null source.",
+      "description": "The hindsight bound, always named separately — never suggested (it is not a policy anyone can run). Each non-null figure names its exact artifact source (decision 9); the pairing is schema-enforced: a null figure carries a null source and a numeric figure carries a figure_source — the four oneOf branches partition the two pairs exhaustively and exclusively.",
       "type": "object",
       "additionalProperties": false,
       "required": ["quality", "cost", "sources"],
@@ -83,10 +83,60 @@
             }
           }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "quality": { "type": "number" },
+            "cost": { "type": "number" },
+            "sources": {
+              "properties": {
+                "quality": { "$ref": "#/$defs/figure_source" },
+                "cost": { "$ref": "#/$defs/figure_source" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "quality": { "type": "number" },
+            "cost": { "type": "null" },
+            "sources": {
+              "properties": {
+                "quality": { "$ref": "#/$defs/figure_source" },
+                "cost": { "type": "null" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "quality": { "type": "null" },
+            "cost": { "type": "number" },
+            "sources": {
+              "properties": {
+                "quality": { "type": "null" },
+                "cost": { "$ref": "#/$defs/figure_source" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "quality": { "type": "null" },
+            "cost": { "type": "null" },
+            "sources": {
+              "properties": {
+                "quality": { "type": "null" },
+                "cost": { "type": "null" }
+              }
+            }
+          }
+        }
+      ]
     },
     "divergence": {
-      "description": "Per executable candidate arm: the declared float64 subtractions (router minus candidate) of the report's served per-task figures. Each non-null delta names its two operand pointers (decision 9); the serving resolver recomputes the subtraction and refuses on any difference.",
+      "description": "Per executable candidate arm: the declared float64 subtractions (router minus candidate) of the report's served per-task figures. Each non-null delta names its two operand pointers (decision 9); the pairing is schema-enforced by the four exclusive oneOf branches, and the serving resolver recomputes every subtraction and refuses on any difference.",
       "type": "object",
       "additionalProperties": {
         "type": "object",
@@ -115,7 +165,57 @@
               }
             }
           }
-        }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "quality_delta": { "type": "number" },
+              "cost_delta": { "type": "number" },
+              "sources": {
+                "properties": {
+                  "quality_delta": { "$ref": "#/$defs/delta_source" },
+                  "cost_delta": { "$ref": "#/$defs/delta_source" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "quality_delta": { "type": "number" },
+              "cost_delta": { "type": "null" },
+              "sources": {
+                "properties": {
+                  "quality_delta": { "$ref": "#/$defs/delta_source" },
+                  "cost_delta": { "type": "null" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "quality_delta": { "type": "null" },
+              "cost_delta": { "type": "number" },
+              "sources": {
+                "properties": {
+                  "quality_delta": { "type": "null" },
+                  "cost_delta": { "$ref": "#/$defs/delta_source" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "quality_delta": { "type": "null" },
+              "cost_delta": { "type": "null" },
+              "sources": {
+                "properties": {
+                  "quality_delta": { "type": "null" },
+                  "cost_delta": { "type": "null" }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "outcome": {

@@ -287,18 +287,22 @@ def _relativize_evidence(record: dict, evidence_root: Path) -> None:
     by the home-path scrub. An absolute reference outside the artifact
     root cannot ship with the artifact — refused, never guessed at."""
     root = Path(evidence_root).resolve()
-    for verifier in record.get("verifiers") or []:
-        ref = verifier.get("evidence_ref")
+    carriers = list(record.get("verifiers") or []) + list(
+        record.get("repair_cycles") or []
+    )
+    for carrier in carriers:
+        ref = carrier.get("evidence_ref")
         if not isinstance(ref, str) or not os.path.isabs(ref):
             continue
         resolved = Path(ref).resolve()
         try:
-            verifier["evidence_ref"] = resolved.relative_to(root).as_posix()
+            carrier["evidence_ref"] = resolved.relative_to(root).as_posix()
         except ValueError:
             raise RedactionError(
-                f"verifier evidence {ref!r} lives outside the artifact root "
-                f"{str(root)!r} — an artifact whose evidence references "
-                f"cannot ship with it is not a reproducible artifact"
+                f"referenced evidence {ref!r} lives outside the artifact "
+                f"root {str(root)!r} — an artifact whose evidence "
+                f"references cannot ship with it is not a reproducible "
+                f"artifact"
             ) from None
 
 
