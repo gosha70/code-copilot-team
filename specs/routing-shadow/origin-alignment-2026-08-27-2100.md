@@ -409,6 +409,48 @@ is profile capability, not outage response. Flagged, not decided.
    old/bad-marker cases regression-locked alongside the original
    three.
 
+## T2 build (2026-08-28) — recommendation schema + the derivation module
+
+T1 approved at c76024f; T2 built per decisions 4-6 with the owner's
+named top discriminator pinned first:
+
+- **recommendation.schema.json** (closed): the three-state outcome,
+  suggested restricted to the executable arms, the oracle ceiling a
+  separate named field, per-candidate divergence with the basis,
+  confidence as grade + declared basis (trials, agreement,
+  components_included, insufficiency refs, unevaluated trials), and
+  evidence references as {set id, artifact enum, locator} with a
+  CLOSED locator vocabulary (record/decision indices, arm+task keys,
+  cell coordinates) — no path-shaped locator exists at all, a strict
+  subset of the plan's allowance that removes the absolute-path risk
+  class entirely.
+- **session_analytics/routing_evidence.py**: discovery + loading
+  through E1's OWN validate_evidence_set (one-way dependency;
+  invalid sets surface as set-level invalid_evidence with the
+  sanitized code, never skipped; LoadedEvidenceSet.path is
+  server-side only); derivation as a deterministic projection —
+  two-axis tolerance-aware dominance (never identity difference),
+  THE AVAILABILITY GUARD (a numerically dominating candidate whose
+  profile never appears admissible — verdict selected/eligible — in
+  the router's durable candidate evidence for the task yields
+  insufficient_data with the availability evidence referenced),
+  insufficiency non-collapse, per-trial two-axis agreement behind
+  the confidence grade, unpriced trials named and grade-capped,
+  byte-identical derivation, every record schema-validated before
+  return.
+- Pinned: dominating-but-unavailable -> insufficient_data (never an
+  inactionable switch); router-outperforms-controls -> no_change;
+  equal-quality-cheaper -> switch to always_cheapest; tolerance
+  boundary never flips an outcome; missing candidate/router/task
+  figures -> insufficient_data; the aggregate-dominates-but-per-trial-
+  loses fixture grades low (agreement 1/3). Mutations discriminating:
+  guard removed (2 failures), agreement reduced to quality-only
+  (fails the 1/3 fixture).
+- Integration: a REAL published set built through the T1 writers
+  loads, derives schema-valid records bound to the set id; a
+  tampered report surfaces as invalid_evidence/hash_mismatch with
+  sanitized detail.
+
 ## Verdict
 
 Verdict: aligned
