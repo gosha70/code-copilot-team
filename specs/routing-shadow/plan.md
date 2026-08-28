@@ -52,19 +52,29 @@ origin:
    adds, in `routing_eval`:
    - **`run_profile_cell(task, profile_id, trial, seed, events)`** —
      the fixed-profile matrix executor. The launch BRIDGE is the
-     production supervisor itself under a DERIVED single-profile
-     registry: the executed registry's profile table entry for the
-     pinned profile, copied byte-for-byte into a minimal derived
-     registry whose route classes admit exactly it — so
-     profile-to-environment translation (provider endpoints,
-     credential references, tool profiles) and T2's event seam run
-     through the same `cooldown-supervisor.sh` code path production
-     uses, never a reimplemented launcher. Ordinary tasks execute as
-     `build`; delegate-class tasks execute the delegation lifecycle
-     as `bounded-build` with the pinned profile as builder and the
-     declared preferred Tier-1 reconciler as the second profile in
-     the derived registry — matching the eligibility authority's
-     role split exactly. Each cell gets a CLEAN context (fresh
+     production supervisor itself under STAGE-SPECIFIC derived
+     registries — one profile per invocation, so "pinned" is
+     mechanically true rather than hoped: roles are not mutually
+     exclusive in the registry grammar, and a two-profile registry
+     can legally let the production selector pick the reconciler as
+     builder (both holding bounded-build), mis-attributing or
+     un-executing the cell. Instead: the BUILDER invocation runs
+     under a derived registry containing ONLY the pinned profile's
+     table entry (copied byte-for-byte from the declared full
+     registry) with route classes admitting exactly it; for
+     delegate-class cells the RECONCILIATION invocation runs
+     under a second derived registry containing ONLY the declared
+     Tier-1 reconciler's entry. Profile-to-environment translation
+     (provider endpoints, credential references, tool profiles) and
+     T2's event seam run through the same `cooldown-supervisor.sh`
+     code path production uses, never a reimplemented launcher.
+     Ordinary tasks execute as `build`; delegate-class tasks execute
+     the delegation lifecycle as `bounded-build` — matching the
+     eligibility authority's role split exactly — and the SEVEN-field
+     executed-identity parity assertion runs INDEPENDENTLY on each
+     lifecycle leg (builder leg against the pinned profile's
+     fingerprint entry; reconciliation leg against the reconciler's
+     declaration). Each cell gets a CLEAN context (fresh
      worktree through the same adapter lifecycle — provision →
      prepare_task → install_dependencies — and the same freshness
      refusals the router arm gets) and the task's declared injected
@@ -137,21 +147,33 @@ origin:
      The per-trial values are what makes a non-hollow confidence
      grade derivable (decision 5) without E2 computing anything;
    - the router per-trial values come from a NORMATIVE LIFECYCLE
-     FOLD (a labeled E1 correction, not an addition — today
-     router_cells_from_records converts every record to a cell, so a
-     delegated task's provisional and reconciliation records
-     double-weight that task): each `(task, trial)` folds to EXACTLY
-     ONE figure — final quality from the FINAL lifecycle outcome (for
-     delegated tasks, the reconciled record's evidence; the
-     provisional leg never scores separately), cost as the DECLARED
-     SUM across the trial's lifecycle records under provenance
-     homogeneity (any leg unpriced under the basis ⇒ the trial's cost
-     is insufficient, never partial), the routing chain combined
-     across the legs, and exact task × trial coverage — duplicate or
-     missing folded entries REFUSE the report. The fold applies
-     identically to the router arm's aggregate figures, and its
-     regressions pin the delegated-task case (one folded cell, not
-     two).
+     FOLD (a labeled E1 correction — today router_cells_from_records
+     converts every record to a cell, so a delegated task's
+     provisional and reconciliation records double-weight that
+     task): each `(task, trial)` folds to EXACTLY ONE metric cell,
+     with a PER-COMPONENT contract — final-state evidence reduces
+     from the final leg, but process evidence unions across the
+     lifecycle (a clean reconciliation must never launder the
+     provisional leg's process signals out of Q):
+     | Component | Fold rule |
+     |---|---|
+     | verifier outcome (row 1) | the FINAL lifecycle outcome — the reconciled record's evidence for delegated tasks; the provisional leg never scores separately |
+     | lint/type/coverage/security regressions (rows 2–5) | FINAL-state semantics: the final leg's before/after evidence (they measure resulting state, not process) |
+     | scope violation (row 6) | UNION (OR) across all lifecycle legs |
+     | repeated repair (row 7) | computed over the CONCATENATED signature stream of all legs, then reduced — the same signature once per leg IS a lifecycle repeat |
+     | intervention (row 8) | UNION (OR) across all lifecycle legs |
+     | cost (row 12) | SUM across all legs under provenance homogeneity (any leg unpriced under the basis ⇒ the trial's cost is insufficient, never partial) |
+     | elapsed (row 13), where present | SUM across all legs, never silently one leg |
+     | routing chain | ordered concatenation across the legs |
+     Exact task × trial coverage — duplicate or missing folded
+     entries REFUSE the report. The SAME fold semantics govern
+     delegated `profile_sweep` cells, so cct_router and the
+     fixed-profile controls compare identical units. Pinned
+     discriminators: a provisional-leg intervention (or repeated
+     repair) with a clean reconciliation still lowers the folded Q;
+     the same repair signature once in each leg counts as a
+     lifecycle repeat (a per-leg-reduce-then-OR mutation
+     discriminates); the delegated task folds to ONE cell, not two.
 
 4. **Evidence-set identity, discovery, and binding validation.** An
    evidence set is a directory containing the three artifacts (plus
@@ -176,12 +198,19 @@ origin:
      deliberately carry only the four shared fingerprint components —
      execution_identity is matrix-only by E1's design): the
      manifest's THREE artifact hashes against the actual bytes (read
-     once, hash and parse the SAME bytes); report ↔ matrix on the
-     FULL five-component fingerprint; runs ↔ report (and runs ↔
-     matrix) on the four shared components; the report's
+     once, hash and parse the SAME bytes); the manifest's stored
+     fingerprint EQUAL to the report's AND the matrix's full
+     five-component fingerprint, and its shared four components
+     equal to EVERY routing-run record's (a manifest whose
+     fingerprint metadata is fabricated over genuine artifact bytes
+     is `fingerprint_mismatch` — the pinned mutation); report ↔
+     matrix on the FULL five-component fingerprint; runs ↔ report
+     (and runs ↔ matrix) on the four shared components; the report's
      `source_artifacts` hashes as a redundant cross-check; every
      artifact against its schema (routing_eval.record_check,
-     fail-closed).
+     fail-closed). The discovered/served set id is ALWAYS
+     recomputed as sha256(canonical manifest bytes) — the directory
+     name is a convenience, never trusted.
    - *Failure vocabulary*, closed and SANITIZED: `missing_artifact`,
      `unreadable_artifact`, `schema_invalid`, `hash_mismatch`,
      `fingerprint_mismatch`, `path_escape` — each carrying the
@@ -334,7 +363,7 @@ origin:
 | Field | Content | Source |
 |---|---|---|
 | `schema_version` | 1 | — |
-| `evidence_set_id` | opaque CONTENT digest: full fingerprint + source-artifact hashes (decision 4) | report.json |
+| `evidence_set_id` | sha256 of the canonical `manifest.json` bytes (decision 4); always recomputed, never trusted from a directory name | manifest.json |
 | `task_id` | the task | routing-run records |
 | `actual` | closed per-trial structure: ordered selected-profile chain, delegated?, reconciled?; decision indices as refs | routing-run records |
 | `suggested` | the dominating candidate arm + its per-task profile, or null; the oracle ceiling always named separately | report.json selections + per-task figures |
@@ -360,7 +389,7 @@ set-level `invalid_evidence`, no records). No field is free prose.
 | `scripts/session_analytics/routing_evidence.py` | NEW — decisions 1, 4, 5: discovery, binding validation, derivation |
 | `scripts/session_analytics/api/server.py` | extend: routing evidence + recommendation endpoints (set ids only) |
 | `scripts/session_analytics/config.py` | extend: `AnalyticsConfig` evidence-roots field, defaults, layering (env/file precedence) |
-| `scripts/session_analytics/cli.py`, `scripts/session_analytics/api/server.py` (`/api/settings`) | extend: surface evidence roots end to end (mirroring source roots) |
+| `scripts/session_analytics/cli.py`, `scripts/session_analytics/api/server.py` (`/api/settings`) | extend: evidence roots configured server-side; `/api/settings` exposes ONLY a sanitized shape (`{configured, root_count}` or opaque labels) — raw root paths never leave the server |
 | `studio/lib/api.ts`, `studio/app/layout.tsx`, `studio/app/routing/page.tsx` | NEW tab — decision 10 |
 | `tests/…` (session-analytics API tests), `scripts/benchmark_runner/tests/` | regressions per task list |
 | `README.md`, `CHANGELOG.md`, `studio/README.md` | document the surface and the shadow contract |

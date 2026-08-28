@@ -150,10 +150,14 @@ does not yet persist.
 - Zero change to `scripts/lib/routing-*`, `scripts/routing-cli.sh`,
   `scripts/cooldown-supervisor.sh` (the executable diff guard holds).
 - `scripts/benchmark_runner/` changes are limited to the labeled E1
-  addition of FR-E2-2 — the `publish_evidence_set` orchestration, the
-  additive report-v1 fields, `write_report`, and their tests; no
-  metric, selector, or gate semantics change, and the E1 suites pass
-  unmodified.
+  work of FR-E2-2: the `publish_evidence_set` orchestration, the
+  additive report-v1 fields, `write_report`, and ONE explicitly
+  labeled correction — the router lifecycle reduction (multiple
+  records of one `(task, trial)` lifecycle fold to one metric cell
+  per plan decision 3). E1 metric definitions, weights, selectors,
+  and control semantics remain unchanged; existing E1 behavior
+  remains green, with targeted E1 regressions extended for the
+  corrected lifecycle reduction.
 - The analytics dependency direction is one-way:
   `session_analytics` imports `benchmark_runner.routing_eval`
   read-only; nothing in `benchmark_runner` or the routing scripts

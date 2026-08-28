@@ -24,20 +24,31 @@ production routing files holds for every task.
   owner-checked stale-staging cleanup. Fault-injection regressions
   after each step: no discoverable partial set remains and the rerun
   succeeds.
-- The launch-bridge parity pins (decision 2): derived single-profile
-  registry through the UNMODIFIED supervisor; launch-env wiring
-  parity vs production for the same profile; build vs bounded-build
-  role split for ordinary vs delegate cells; all seven executed
-  identity fields verified against the matrix fingerprint entry.
+- The launch-bridge parity pins (decision 2): STAGE-SPECIFIC derived
+  registries (builder leg: pinned profile only; reconciliation leg:
+  declared reconciler only) through the UNMODIFIED supervisor;
+  launch-env wiring parity vs production for the same profile; build
+  vs bounded-build role split for ordinary vs delegate cells; the
+  seven executed identity fields verified independently per
+  lifecycle leg. Pinned counterexample: a reconciler also holding
+  bounded-build can never execute a builder leg.
 - The router LIFECYCLE FOLD (decision 3, the labeled E1 correction):
-  one folded figure per (task, trial) — reconciled outcome scores,
-  provisional never separately; cost summed across legs under
-  provenance homogeneity; duplicate/missing folded entries refuse.
-  Pinned regression: a delegated task folds to ONE cell, not two.
+  the PER-COMPONENT contract — final leg for the verifier outcome
+  and state regressions; UNION for scope violation and intervention;
+  repeated repair over the concatenated signature stream; cost and
+  elapsed summed under provenance homogeneity; ordered chain
+  concatenation; exact coverage with duplicate/missing refusal; the
+  SAME fold for delegated profile_sweep cells. Pinned
+  discriminators: provisional intervention/repeat with clean
+  reconciliation still lowers folded Q; cross-leg same-signature
+  counts as a repeat; one cell per delegated task, not two.
 - `manifest.json` + evidence-manifest.schema.json (decision 4): three
-  artifact hashes + evidence_files map; the set id is the manifest's
-  canonical-bytes sha256; a schema-valid edit to ANY artifact
-  (report included) changes the identity — pinned regression.
+  artifact hashes + stored fingerprint + evidence_files map; the set
+  id is the manifest's canonical-bytes sha256, ALWAYS recomputed by
+  the loader (directory names untrusted). Pinned regressions: a
+  schema-valid edit to ANY artifact (report included) changes the
+  identity; manifest-fingerprint-only tampering over genuine
+  artifact bytes returns fingerprint_mismatch.
 - Report contract v1 (decision 3): NEW `report.schema.json`;
   additive report fields — schema_version, full fingerprint,
   `source_artifacts` sha256 bindings (hashed from the same bytes
@@ -49,9 +60,12 @@ production routing files holds for every task.
   byte-reproducibility on identical input; freshness refusal; a
   live end-to-end publication through the T4-era fixture machinery
   producing a complete, binding-consistent evidence set.
-- Explicitly labeled an E1 contract addition (#261's rule); ADDITIVE
-  only — no metric, selector, or gate semantics change; the E1
-  suites pass unmodified.
+- Explicitly labeled E1 work (#261's rule): additive contracts plus
+  ONE labeled correction — the router lifecycle reduction (decision
+  3's per-component fold). E1 metric definitions, weights,
+  selectors, and control semantics remain unchanged; existing E1
+  behavior remains green, with targeted E1 regressions extended for
+  the corrected lifecycle reduction.
 
 ## T2 — recommendation.schema.json + the derivation module
 
@@ -84,8 +98,12 @@ production routing files holds for every task.
 
 - Routing evidence + recommendation endpoints on the existing FastAPI
   app; evidence roots wired end to end — `AnalyticsConfig` field,
-  defaults, env/file layering tests, `/api/settings` exposure — like
-  the existing source roots.
+  defaults, env/file layering tests — configured SERVER-SIDE only:
+  `/api/settings` exposes a sanitized shape ({configured,
+  root_count} or opaque labels), never the raw root paths. A
+  regression configures a deliberately sensitive absolute root and
+  asserts no settings, evidence, recommendation, or error payload
+  contains any fragment of it.
 - The figure-provenance gate (decision 9 — source pointers, semantic
   equality, recomputed declared deltas), the authority guard
   (decision 7 — diff guard extension + no-production-reference +

@@ -227,6 +227,55 @@ report alone.
    accurately and not claimed as precedent; boundary tests at the
    tolerance edge.
 
+## Plan review round 4 (owner, on PR #263 @ bd4167d) — four P1, one P2, rev-5 applied
+
+1. **[P1] A two-profile derived registry could not guarantee the
+   pinned builder builds.** Verified: roles are not mutually
+   exclusive, so a reconciler also holding bounded-build could win
+   the builder selection — mis-attributing the cell or making it
+   unexecutable. Resolved: STAGE-SPECIFIC derived registries (builder
+   invocation: pinned profile only; reconciliation invocation:
+   declared reconciler only), entries byte-for-byte from the full
+   registry, seven-field identity parity asserted independently per
+   lifecycle leg; the reconciler-with-bounded-build counterexample is
+   pinned.
+2. **[P1] The fold fixed cardinality, not metric semantics.**
+   Resolved: a per-component fold contract — final leg for verifier
+   outcome and the state regressions; UNION for scope violation and
+   intervention; repeated repair over the CONCATENATED signature
+   stream (cross-leg same-signature IS a repeat; per-leg-reduce-then-
+   OR is a declared discriminating mutation); cost and elapsed summed
+   under provenance homogeneity; ordered chain concatenation — with
+   the SAME fold governing delegated profile_sweep cells so router
+   and controls compare identical units. The clean-reconciliation-
+   laundering discriminator is pinned.
+3. **[P1] The manifest fingerprint was unbound.** Resolved: binding
+   validation now requires manifest.fingerprint == report == matrix
+   (full five) and manifest shared-four == every runs record;
+   manifest-fingerprint-only tampering over genuine bytes returns
+   fingerprint_mismatch (pinned mutation); the served set id is
+   always recomputed as sha256(canonical manifest bytes) — directory
+   names untrusted. The stale contract-table identity row was
+   corrected (source: manifest.json).
+4. **[P1] /api/settings would have leaked evidence-root paths.**
+   Verified against the current API precedent (settings serves
+   kuzu_path and sources raw). Resolved: evidence roots are
+   server-side configuration only; /api/settings serves a sanitized
+   shape ({configured, root_count} or opaque labels); the
+   sensitive-root regression covers settings, evidence,
+   recommendation, and error payloads.
+5. **[P2] "Additive only" contradicted the labeled correction.**
+   Resolved: the constraint now states E1 metric definitions,
+   weights, selectors, and control semantics remain unchanged with
+   ONE explicitly labeled correction (the lifecycle reduction), and
+   "E1 suites pass unmodified" became "existing E1 behavior remains
+   green, with targeted E1 regressions extended for the corrected
+   lifecycle reduction".
+
+The owner explicitly did not reopen the recommendation rule,
+confidence thresholds, manifest architecture, or set-atomic
+publication model.
+
 ## Verdict
 
 Verdict: aligned
