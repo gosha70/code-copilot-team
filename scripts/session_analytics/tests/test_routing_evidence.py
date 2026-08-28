@@ -919,6 +919,35 @@ class TestFigureProvenanceGate(unittest.TestCase):
         with self.assertRaisesRegex(DerivationError, "does not name"):
             verify_recommendation_provenance(loaded, records)
 
+    def test_forged_basis_refuses_with_checked_values_intact(self) -> None:
+        # T3 round-3: the gate trusts NOTHING the payload asserts about
+        # itself — components_included and insufficiency_refs are both
+        # fabricated while trials, agreement, unevaluated trials, and
+        # the grade (everything the round-2 gate compared) stay
+        # untouched; the full-basis re-derivation must still refuse
+        from session_analytics.routing_evidence import (
+            DerivationError,
+            verify_recommendation_provenance,
+        )
+
+        loaded, records = self._derived()
+        basis = records[0]["confidence"]["basis"]
+        checked_before = (
+            basis["trials"], basis["agreement"],
+            basis.get("unevaluated_trials"),
+            records[0]["confidence"]["grade"],
+        )
+        basis["components_included"] = ["fabricated_component"]
+        basis["insufficiency_refs"] = ["fabricated: never derived"]
+        self.assertEqual(
+            checked_before,
+            (basis["trials"], basis["agreement"],
+             basis.get("unevaluated_trials"),
+             records[0]["confidence"]["grade"]),
+        )
+        with self.assertRaisesRegex(DerivationError, "re-derivation"):
+            verify_recommendation_provenance(loaded, records)
+
     def test_tampered_confidence_refuses(self) -> None:
         # T3 round-2 finding 3: confidence statistics are gated by
         # recomputation — a one-trial record claiming grade high with
@@ -932,7 +961,7 @@ class TestFigureProvenanceGate(unittest.TestCase):
         self.assertEqual(records[0]["confidence"]["basis"]["trials"], 1)
         records[0]["confidence"]["grade"] = "high"
         records[0]["confidence"]["basis"]["agreement"] = 0.0
-        with self.assertRaisesRegex(DerivationError, "recomputation"):
+        with self.assertRaisesRegex(DerivationError, "re-derivation"):
             verify_recommendation_provenance(loaded, records)
 
     def test_schema_enforces_null_source_pairing(self) -> None:

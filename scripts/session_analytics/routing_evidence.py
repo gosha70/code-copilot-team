@@ -434,43 +434,21 @@ def _check_confidence(loaded: LoadedEvidenceSet,
                       rec: Mapping[str, Any]) -> None:
     """Confidence statistics carry no source pointers (they are
     statistics OF the derivation, not copies of artifact figures), so
-    their gate is recomputation: trials, agreement, the unevaluated
-    set, and the grade are re-derived from the canonical report and
-    records, and any disagreement with the served record refuses the
-    payload — a tampered or drifted confidence claim never leaves the
-    server."""
-    task = rec["task_id"]
-    report = loaded.report
-    actual, _refs = _actual_from_records(loaded.records, task, loaded.set_id)
-    trials = max(len(actual["per_trial"]), 1)
-    outcome = rec["outcome"]
-    if outcome == "insufficient_data":
-        agreement: Any = None
-        unevaluated: Sequence[int] = ()
-    elif outcome == "no_change_recommended":
-        agreement, unevaluated = _agreement(
-            report, task, list(EXECUTABLE_CANDIDATES), "no_change"
-        )
-    else:
-        agreement, unevaluated = _agreement(
-            report, task, [rec["suggested"]["arm"]], "switch"
-        )
-    basis = rec["confidence"]["basis"]
-    expected_grade = _grade(
-        trials, agreement, list(report["components_included"]),
-        list(unevaluated), basis["insufficiency_refs"],
-    )
-    served = (
-        basis["trials"],
-        basis["agreement"],
-        sorted(basis.get("unevaluated_trials") or []),
-        rec["confidence"]["grade"],
-    )
-    if served != (trials, agreement, sorted(unevaluated), expected_grade):
+    their gate is recomputation — and the recomputation trusts NOTHING
+    the payload asserts about itself: the ENTIRE confidence block
+    (grade AND every basis field, including ``components_included``
+    from the canonical report and ``insufficiency_refs``
+    independently reconstructed from the report, the outcome path,
+    and the availability evidence) is re-derived and compared whole.
+    Any disagreement refuses the payload — a tampered or drifted
+    confidence claim never leaves the server."""
+    expected = _derive_task(loaded, rec["task_id"])
+    if rec["confidence"] != expected["confidence"]:
         raise DerivationError(
-            f"{task}/confidence: served confidence statistics disagree with "
-            f"their recomputation from the canonical report — the "
-            f"provenance gate refuses the payload"
+            f"{rec['task_id']}/confidence: served confidence block "
+            f"disagrees with its independent re-derivation from the "
+            f"canonical report and records — the provenance gate refuses "
+            f"the payload"
         )
 
 

@@ -636,6 +636,35 @@ Suites after the round: routing-evidence 44/44, E1
 evidence_set+quality+redaction 97/97, session-analytics discovery
 334 (34 CI-gated skips), all OK.
 
+## T3 build audit round 3 (owner, on 75e1b5f) — one P1, applied
+
+**[P1] The confidence gate no longer trusts ANY part of the served
+basis.** Round 2's `_check_confidence` recomputed trials, agreement,
+unevaluated trials, and the grade — but fed the payload's OWN
+`insufficiency_refs` into the grade recomputation and never compared
+`components_included` or `insufficiency_refs` at all. The owner's
+reproduction (both fields fabricated while the four checked values
+stay untouched; schema-valid; gate passed) was confirmed in-tree
+pre-fix. The fix replaces piecewise recomputation with full
+independent re-derivation: the gate calls `_derive_task` for the
+record's task — which reconstructs `insufficiency_refs` from the
+canonical report's declared insufficiency maps, the Pareto status,
+per-task figure presence, the outcome path (selection provenance,
+availability guard), and the availability evidence, and takes
+`components_included` from the canonical report — and requires the
+ENTIRE confidence block to equal the re-derivation. Pinned: the
+owner's exact forged-basis shape (fabricated `components_included` +
+`insufficiency_refs`, four previously-checked values asserted
+unchanged). Mutation (comparison stripped of exactly those two
+fields) discriminated with surgical precision: ONLY the new
+regression fails, every other test passes. A first mutation attempt
+was invalid (it introduced a NameError, failing six tests for the
+wrong reason) and was discarded and redone honestly.
+
+Suites after the round: routing-evidence 45/45, E1
+evidence_set+quality+redaction 97/97, session-analytics discovery
+335 (34 CI-gated skips), all OK.
+
 ## Verdict
 
 Verdict: aligned
