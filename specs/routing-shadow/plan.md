@@ -77,8 +77,7 @@ origin:
      declaration). Each cell gets a CLEAN context (fresh
      worktree through the same adapter lifecycle — provision →
      prepare_task → install_dependencies — and the same freshness
-     refusals the router arm gets) and the task's declared injected
-     events with full parity to the router arm's stream. PARITY IS
+     refusals the router arm gets). IDENTITY PARITY IS
      PINNED BY TEST: the launch-environment wiring journaled for the
      pinned profile equals production's for the same profile, and
      ALL SEVEN executed identity fields (profile id, backend,
@@ -236,6 +235,17 @@ origin:
      and `always_cheapest`. The oracle is a hindsight bound, shown as
      the stated ceiling, never suggested (it is not a policy anyone
      can run).
+   - *the availability guard* (settled in the T1 review, before T2
+     builds): fixed-profile sweeps measure capability under an
+     availability-neutral baseline, while the router ran under the
+     scenario's injected outages. A `switch_profile` recommendation is
+     therefore ACTIONABLE only when the suggested profile appears
+     ADMISSIBLE in the router's own durable candidate evidence for
+     that task — present in the records' considered lists with a
+     verdict other than an availability rejection. Otherwise the
+     outcome is `insufficient_data` (with the availability evidence
+     referenced), never a claim that an unavailable profile should
+     have been used.
    - *comparison tolerance* (declared once, used everywhere): E2
      declares its OWN absolute tolerance — two float64 figures are
      EQUAL iff they differ by at most `1e-9`, and *strictly greater*

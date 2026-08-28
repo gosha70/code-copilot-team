@@ -203,8 +203,73 @@ def selector_context_from_registry(
     )
 
 
+class LifecycleInvalid(ValueError):
+    """The router records do not describe exact, well-formed
+    lifecycles — partial coverage is refused, never averaged over."""
+
+
+def _verify_lifecycle_shape(
+    key: tuple[str, int], legs: Sequence[Mapping[str, Any]]
+) -> None:
+    """One (task, trial) lifecycle is either ONE ordinary record, or a
+    provisional leg followed by its reconciliation — same seed, same
+    packet identity. Anything else refuses (the deleted-provisional
+    laundering mutation dies here: a reconciliation record alone can
+    never score)."""
+    seeds = {r.get("trial_seed") for r in legs}
+    if len(seeds) != 1:
+        raise LifecycleInvalid(
+            f"lifecycle {key} mixes trial seeds {sorted(map(repr, seeds))} — "
+            f"its legs do not describe one trial"
+        )
+    recon_legs = [r for r in legs if r.get("reconciliation")]
+    delegated_legs = [
+        r for r in legs
+        if (r.get("tier2") or {}).get("delegated") and not r.get("reconciliation")
+    ]
+    if len(recon_legs) > 1:
+        raise LifecycleInvalid(
+            f"lifecycle {key} carries {len(recon_legs)} reconciliation "
+            f"records — duplicate final legs refuse, never average"
+        )
+    if not recon_legs and not delegated_legs:
+        if len(legs) != 1:
+            raise LifecycleInvalid(
+                f"lifecycle {key} carries {len(legs)} ordinary records — "
+                f"exactly one, or the trial is double-counted"
+            )
+        return
+    if not recon_legs:
+        raise LifecycleInvalid(
+            f"lifecycle {key} delegated but was never reconciled — an "
+            f"unreconciled delegation is not router evidence"
+        )
+    if not delegated_legs:
+        raise LifecycleInvalid(
+            f"lifecycle {key} carries a reconciliation without its "
+            f"provisional leg — the provisional evidence (cost, "
+            f"interventions, repair signatures) cannot be allowed to vanish"
+        )
+    if len(legs) != 2 or legs[-1] is not recon_legs[0]:
+        raise LifecycleInvalid(
+            f"lifecycle {key} is not provisional-then-reconciliation — "
+            f"{len(legs)} legs in an order that describes no lifecycle"
+        )
+    provisional_t2 = delegated_legs[0].get("tier2") or {}
+    recon = recon_legs[0]["reconciliation"]
+    if (provisional_t2.get("packet_id"), provisional_t2.get("packet_digest")) != (
+        recon.get("packet_id"), recon.get("packet_digest")
+    ):
+        raise LifecycleInvalid(
+            f"lifecycle {key}: the provisional and reconciliation legs name "
+            f"different packets — a join on task order is not a join"
+        )
+
+
 def router_cells_from_records(
     records: Sequence[Mapping[str, Any]],
+    *,
+    matrix: "OutcomeMatrix | None" = None,
 ) -> list[Cell]:
     """Reduce routing-run records to EXACTLY ONE cell per
     (task, trial) — the NORMATIVE LIFECYCLE FOLD.
@@ -243,7 +308,36 @@ def router_cells_from_records(
             lifecycles[key] = []
             order.append(key)
         lifecycles[key].append(r)
-    return [_fold_lifecycle(key, lifecycles[key]) for key in order]
+    for key in order:
+        _verify_lifecycle_shape(key, lifecycles[key])
+    cells = [_fold_lifecycle(key, lifecycles[key]) for key in order]
+    if matrix is not None:
+        # EXACT task x trial coverage against the declared matrix
+        # (rev-5: duplicate or missing folded entries REFUSE the
+        # report) with the declared seed pairing.
+        expected = {
+            (task, trial)
+            for task in matrix.task_ids
+            for trial in range(matrix.trials)
+        }
+        got = {(c.task_id, c.trial) for c in cells}
+        missing = sorted(expected - got)
+        extra = sorted(got - expected)
+        if missing or extra:
+            raise LifecycleInvalid(
+                f"router coverage is not the declared task x trial set — "
+                f"missing {missing}, extra {extra}; a report over partial "
+                f"coverage is refused, never computed"
+            )
+        for cell in cells:
+            declared_seed = matrix.trial_seeds[cell.trial]
+            if cell.seed != declared_seed:
+                raise LifecycleInvalid(
+                    f"lifecycle ({cell.task_id}, {cell.trial}) carries seed "
+                    f"{cell.seed}, the matrix declares {declared_seed} — "
+                    f"the trials are not the same trials"
+                )
+    return cells
 
 
 def _fold_lifecycle(
@@ -743,7 +837,7 @@ def build_report(
             selection_insufficient=selection.insufficient,
         )
 
-    router_cells = router_cells_from_records(router_records)
+    router_cells = router_cells_from_records(router_records, matrix=matrix)
     arms["cct_router"] = _report_arm(
         "cct_router", router_cells,
         _sequence_dependent_from_records(router_records),

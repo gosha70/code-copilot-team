@@ -111,6 +111,13 @@ class _EvidenceFixture(unittest.TestCase):
         self.cost = self.base / "cost.txt"
         self.cost.write_text('{"type":"result","total_cost_usd":0.01}\n',
                              encoding="utf-8")
+        # a transcript that VERIFIES its model identity (must equal the
+        # profile's declared model or the supervisor refuses)
+        self.cost_fallback = self.base / "cost-fallback.txt"
+        self.cost_fallback.write_text(
+            '{"type":"result","model":"deepseek","total_cost_usd":0.01}\n',
+            encoding="utf-8",
+        )
 
         # router-arc mock (per-profile ordered specs, ONE trial)
         self.mock = self.base / "mock"
@@ -121,7 +128,7 @@ class _EvidenceFixture(unittest.TestCase):
             encoding="utf-8",
         )
         (self.mock / "fallback.spec").write_text(
-            f"{self.solve}|{self.cost}|0\n" * 4, encoding="utf-8"
+            f"{self.solve}|{self.cost_fallback}|0\n" * 4, encoding="utf-8"
         )
         (self.mock / "t2loc.spec").write_text(
             f"{self.solve_packet}|{self.cost}|0\n" * 2, encoding="utf-8"
@@ -132,10 +139,12 @@ class _EvidenceFixture(unittest.TestCase):
         # reconcile leg gets its own mock dir answering the verdict
         self.sweep_mock = self.base / "sweep-mock"
         self.sweep_mock.mkdir()
-        for profile in ("preferred", "fallback"):
-            (self.sweep_mock / f"{profile}.spec").write_text(
-                f"{self.solve}|{self.cost}|0\n", encoding="utf-8"
-            )
+        (self.sweep_mock / "preferred.spec").write_text(
+            f"{self.solve}|{self.cost}|0\n", encoding="utf-8"
+        )
+        (self.sweep_mock / "fallback.spec").write_text(
+            f"{self.solve}|{self.cost_fallback}|0\n", encoding="utf-8"
+        )
         (self.sweep_mock / "t2loc.spec").write_text(
             f"{self.solve_packet}|{self.cost}|0\n", encoding="utf-8"
         )
@@ -246,6 +255,20 @@ class TestPublishEvidenceSetLive(_EvidenceFixture):
                 ref = verifier["evidence_ref"]
                 self.assertFalse(Path(ref).is_absolute())
                 self.assertTrue((root / ref).is_file(), ref)
+
+        # ── execution-PROVEN identity (T1 review, finding 1) ──
+        identity = {e["profile_id"]: e
+                    for e in validated["manifest"]["fingerprint"]
+                    ["execution_identity"]}
+        # fallback's transcripts verified its model; preferred's did
+        # not — null means UNVERIFIED, never assumed equal to requested
+        self.assertEqual(identity["fallback"]["effective_model"], "deepseek")
+        self.assertIsNone(identity["preferred"]["effective_model"])
+        self.assertEqual(identity["preferred"]["requested_model"], "sonnet")
+        # the endpoint is the sanitized RESOLVED value behind the env
+        # name, not the name itself
+        self.assertEqual(identity["preferred"]["endpoint"],
+                         "https://hybrid-fixture.invalid")
 
         # discovery lists the set and structurally excludes hidden
         # (staging-shaped) siblings
@@ -443,6 +466,117 @@ base_url_env = "HYBRID_URL"
         builder_profile = json.loads(
             started[0].read_text(encoding="utf-8"))["profile"]
         self.assertEqual(builder_profile["id"], "t1build")
+
+
+class TestExecutionIdentityUnits(unittest.TestCase):
+    """T1 review finding 1: identity is execution-proven — the pinned
+    mutations."""
+
+    def test_endpoint_is_the_sanitized_resolved_value(self) -> None:
+        from unittest import mock
+
+        from benchmark_runner.routing_eval.evidence_set import (
+            _sanitized_endpoint,
+        )
+
+        with mock.patch.dict(os.environ, {"EP": (
+            "https://user:s3cret@host.example:8443/v1/messages?key=abc#frag"
+        )}):
+            self.assertEqual(_sanitized_endpoint("EP"),
+                             "https://host.example:8443/v1/messages")
+        # a moved endpoint behind the SAME env name IS a different
+        # execution identity
+        with mock.patch.dict(os.environ, {"EP": "https://endpoint-a.example"}):
+            a = _sanitized_endpoint("EP")
+        with mock.patch.dict(os.environ, {"EP": "https://endpoint-b.example"}):
+            b = _sanitized_endpoint("EP")
+        self.assertNotEqual(a, b)
+        # non-URL values become a deterministic safe digest, never raw
+        with mock.patch.dict(os.environ, {"EP": "not a url s3cret"}):
+            d = _sanitized_endpoint("EP")
+        self.assertTrue(d.startswith("digest:"))
+        self.assertNotIn("s3cret", d)
+        # unset or undeclared: unverified, never assumed
+        self.assertIsNone(_sanitized_endpoint(None))
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EP_GONE", None)
+            self.assertIsNone(_sanitized_endpoint("EP_GONE"))
+
+    def test_aggregation_refuses_corrupt_leg_evidence(self) -> None:
+        from benchmark_runner.routing_eval.evidence_set import (
+            aggregate_profile_identity,
+        )
+
+        base = {"profile_id": "p", "backend": "b", "provider": "pr",
+                "requested_model": "m", "effective_model": None,
+                "tool_profile": "t", "endpoint": "https://a.example"}
+        # compatible legs aggregate; the verified effective model wins
+        agg = aggregate_profile_identity(
+            "p", [dict(base), dict(base, effective_model="m")], {}
+        )
+        self.assertEqual(agg["effective_model"], "m")
+        # unverified everywhere stays null — NEVER the requested model
+        agg = aggregate_profile_identity("p", [dict(base)], {})
+        self.assertIsNone(agg["effective_model"])
+        # a corrupted endpoint on one leg refuses publication
+        with self.assertRaisesRegex(EvidenceSetError, "endpoint"):
+            aggregate_profile_identity(
+                "p",
+                [dict(base), dict(base, endpoint="https://b.example")],
+                {},
+            )
+        # conflicting VERIFIED effective models refuse
+        with self.assertRaises(EvidenceSetInvalid):
+            aggregate_profile_identity(
+                "p",
+                [dict(base, effective_model="m1"),
+                 dict(base, effective_model="m2")],
+                {},
+            )
+        # a never-executed profile: declared requested-side identity,
+        # effective_model null (unverified)
+        agg = aggregate_profile_identity(
+            "q", [], {"backend": "b", "provider": "pr", "model": "m",
+                      "tool_profile": "t"}
+        )
+        self.assertIsNone(agg["effective_model"])
+        self.assertEqual(agg["requested_model"], "m")
+
+
+class TestStaleStagingCleanup(unittest.TestCase):
+    def test_owner_checked_cleanup(self) -> None:
+        import tempfile
+        import time
+
+        from benchmark_runner.routing_eval.evidence_set import (
+            _PUBLISHER_MARKER,
+            _clean_stale_staging,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_dead = root / ".staging-old-dead"
+            old_dead.mkdir()
+            (old_dead / _PUBLISHER_MARKER).write_text("999999999",
+                                                      encoding="utf-8")
+            old_alive = root / ".staging-old-alive"
+            old_alive.mkdir()
+            (old_alive / _PUBLISHER_MARKER).write_text(str(os.getpid()),
+                                                       encoding="utf-8")
+            young_dead = root / ".staging-young-dead"
+            young_dead.mkdir()
+            (young_dead / _PUBLISHER_MARKER).write_text("999999999",
+                                                        encoding="utf-8")
+            past = time.time() - 100_000
+            os.utime(old_dead, (past, past))
+            os.utime(old_alive, (past, past))
+            _clean_stale_staging(root, max_age_sec=86_400)
+            self.assertFalse(old_dead.exists(),
+                             "old + dead publisher is the ONLY cleanable case")
+            self.assertTrue(old_alive.exists(),
+                            "a live publisher is never touched")
+            self.assertTrue(young_dead.exists(),
+                            "too young to judge is never touched")
 
 
 class TestDerivedRegistryUnits(unittest.TestCase):

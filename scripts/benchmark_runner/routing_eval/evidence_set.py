@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
-from .injection import events_for_task, preset_digest
+from .injection import preset_digest
 from .outcome_matrix import (
     Cell,
     Fingerprint,
@@ -68,6 +68,11 @@ ARTIFACT_MATRIX = "outcome-matrix.json"
 ARTIFACT_REPORT = "report.json"
 ARTIFACT_MANIFEST = "manifest.json"
 _STAGING_PREFIX = ".staging-"
+_PUBLISHER_MARKER = ".publisher"
+#: A stale staging directory is cleaned only when BOTH owner checks
+#: pass: its recorded publisher process is confirmed dead AND it is
+#: older than this window (crash leftovers, never in-flight work).
+STALE_STAGING_MAX_AGE_SEC = 24 * 3600
 
 #: The closed, SANITIZED failure vocabulary (routing-shadow decision
 #: 4). Details never carry filesystem paths.
@@ -183,19 +188,52 @@ def derive_single_profile_registry(
 
 
 # ── the fixed-profile executor ─────────────────────────────────────────
-def _assert_leg_identity(
+def _sanitized_endpoint(env_name: "str | None") -> "str | None":
+    """The RESOLVED endpoint identity from the actual launch
+    environment, sanitized: userinfo, query, and fragment stripped —
+    only scheme://host[:port]/path survives; a non-URL value becomes a
+    deterministic safe digest, never the raw value. None when the
+    profile declares no endpoint reference or the variable is unset
+    (unverified, never assumed)."""
+    if not env_name:
+        return None
+    value = os.environ.get(env_name)
+    if not value:
+        return None
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(value)
+    if not parts.scheme or not parts.hostname:
+        return "digest:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+    netloc = parts.hostname + (f":{parts.port}" if parts.port else "")
+    return f"{parts.scheme}://{netloc}{parts.path or ''}"
+
+
+def _observed_leg_identity(
     runner: SupervisorRunner,
     feature: str,
     exec_worktree: "Path | None",
     profile_id: str,
     declared: Mapping[str, Any],
-) -> None:
-    """The per-leg parity assertion: the profile identity persisted in
-    the leg's latest started-N.json must BE the pinned declaration."""
+) -> Mapping[str, Any]:
+    """The per-leg identity, EXECUTION-PROVEN from durable evidence and
+    asserted against the pinned declaration — all seven fields:
+
+    - requested identity (profile id, backend, provider, requested
+      model, tool profile) from the leg's persisted started-N.json —
+      the record the supervisor writes BEFORE launch;
+    - effective model from the SAME attempt's durable result-N.json,
+      tri-state exactly as production records it (null = UNVERIFIED,
+      never assumed equal to requested; the supervisor itself refuses
+      a mismatch);
+    - the sanitized RESOLVED endpoint from the actual launch
+      environment (the value behind the declared base_url_env — same
+      env name, different resolved endpoint IS a different execution).
+    """
     rt_dir = runner._rt_dir(feature, exec_worktree)
     # delegate legs namespace their attempt records under
     # delegate-<packet-digest>/ inside the rt dir — search recursively
-    # and take the newest record: each assertion runs immediately
+    # and take the newest record: each observation runs immediately
     # after its own leg, so the newest started record IS that leg's.
     started = sorted(
         rt_dir.rglob("started-*.json"),
@@ -207,9 +245,9 @@ def _assert_leg_identity(
             f"leg for {feature} persisted no started record — the executed "
             f"identity cannot be verified, so the cell is not evidence"
         )
-    profile = json.loads(started[-1].read_text(encoding="utf-8")).get(
-        "profile"
-    ) or {}
+    started_path = started[-1]
+    doc = json.loads(started_path.read_text(encoding="utf-8"))
+    profile = doc.get("profile") or {}
     checks = {
         "id": profile_id,
         "backend": declared.get("backend"),
@@ -225,6 +263,83 @@ def _assert_leg_identity(
                 f"{field_name}={actual!r}, declared {expected!r} — the "
                 f"pinned cell did not execute its declaration"
             )
+    attempt = int(re.sub(r"[^0-9]", "", started_path.stem) or 0)
+    result_path = started_path.with_name(f"result-{attempt}.json")
+    effective = None
+    if result_path.is_file():
+        try:
+            result_doc = json.loads(result_path.read_text(encoding="utf-8"))
+            effective = (result_doc.get("result") or {}).get("effective_model")
+        except (OSError, json.JSONDecodeError):
+            effective = None
+    if effective is not None and effective != declared.get("model"):
+        raise EvidenceSetError(
+            f"leg for {feature} reports effective model {effective!r} but "
+            f"the pinned declaration is {declared.get('model')!r} — an "
+            f"identity violation is never folded into evidence"
+        )
+    return {
+        "profile_id": profile_id,
+        "backend": profile.get("backend") or declared.get("backend"),
+        "provider": profile.get("provider") or declared.get("provider"),
+        "requested_model": profile.get("model") or declared.get("model"),
+        "effective_model": effective,
+        "tool_profile": (profile.get("tool_profile")
+                         or declared.get("tool_profile")),
+        "endpoint": _sanitized_endpoint(
+            profile.get("base_url_env") or declared.get("base_url_env")
+        ),
+    }
+
+
+def aggregate_profile_identity(
+    profile_id: str,
+    observations: Sequence[Mapping[str, Any]],
+    declared: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """ONE compatible execution identity per profile, from every
+    executed leg's observation — or refusal. The requested-side fields
+    and the endpoint must agree exactly across all legs; the effective
+    model is the common non-null observation (null overall when NO leg
+    verified it — never the requested model by assumption); conflicting
+    non-null effective models refuse. A profile with no executed cells
+    gets its declared requested-side identity with effective_model
+    null (unverified) and the currently-resolved sanitized endpoint."""
+    if not observations:
+        return {
+            "profile_id": profile_id,
+            "backend": declared.get("backend"),
+            "provider": declared.get("provider"),
+            "requested_model": declared.get("model"),
+            "effective_model": None,
+            "tool_profile": declared.get("tool_profile"),
+            "endpoint": _sanitized_endpoint(declared.get("base_url_env")),
+        }
+    first = observations[0]
+    for field_name in ("backend", "provider", "requested_model",
+                       "tool_profile", "endpoint"):
+        values = {o.get(field_name) for o in observations}
+        if len(values) != 1:
+            raise EvidenceSetError(
+                f"profile {profile_id!r} executed under {len(values)} "
+                f"different {field_name} identities {sorted(map(repr, values))} "
+                f"— one profile, one execution identity, or no matrix"
+            )
+    effectives = {o.get("effective_model") for o in observations} - {None}
+    if len(effectives) > 1:
+        raise EvidenceSetInvalid(
+            "fingerprint_mismatch", ARTIFACT_MATRIX,
+            "conflicting verified effective models for one profile",
+        )
+    return {
+        "profile_id": profile_id,
+        "backend": first.get("backend"),
+        "provider": first.get("provider"),
+        "requested_model": first.get("requested_model"),
+        "effective_model": effectives.pop() if effectives else None,
+        "tool_profile": first.get("tool_profile"),
+        "endpoint": first.get("endpoint"),
+    }
 
 
 def _to_sweep_record(record: Mapping[str, Any], profile_id: str) -> dict:
@@ -255,6 +370,7 @@ def run_profile_cell(
     harness_cmd: "str | None" = None,
     delegate_harness_cmd: "str | None" = None,
     reconcile_harness_cmd: "str | None" = None,
+    identity_sink: "list | None" = None,
 ) -> Cell:
     """ONE fixed-profile matrix cell through the unmodified production
     supervisor, per plan decision 2. Ordinary tasks run the `build`
@@ -312,7 +428,11 @@ def run_profile_cell(
                 f"reconciler {reconciler_id!r} is undeclared"
             )
         first = runner.delegate_task(task, trial, seed, delegate_harness_cmd)
-        _assert_leg_identity(runner, feature, exec_wt, profile_id, declared)
+        observed = _observed_leg_identity(
+            runner, feature, exec_wt, profile_id, declared
+        )
+        if identity_sink is not None:
+            identity_sink.append((profile_id, observed))
         reconciler_registry = derive_single_profile_registry(
             registry_path, reconciler_id,
             cell_dir / "reconciler-registry.toml",
@@ -324,15 +444,21 @@ def run_profile_cell(
         second = recon_runner.reconcile_task(
             task, trial, seed, reconcile_harness_cmd
         )
-        _assert_leg_identity(
+        recon_observed = _observed_leg_identity(
             recon_runner, feature, exec_wt, reconciler_id, reconciler_decl
         )
+        if identity_sink is not None:
+            identity_sink.append((reconciler_id, recon_observed))
         records = [first, second]
     else:
         records = list(
             runner.run_task(task, trial, seed, list(events), harness_cmd)
         )
-        _assert_leg_identity(runner, feature, exec_wt, profile_id, declared)
+        observed = _observed_leg_identity(
+            runner, feature, exec_wt, profile_id, declared
+        )
+        if identity_sink is not None:
+            identity_sink.append((profile_id, observed))
     sweep_records = [_to_sweep_record(r, profile_id) for r in records]
     (cell,) = router_cells_from_records(sweep_records)
     return dataclasses.replace(cell, profile_id=profile_id, seed=seed)
@@ -580,37 +706,47 @@ def publish_evidence_set(
         max_tick_pumps=max_tick_pumps,
     )
 
-    # (b) the matrix sweep with the fixed-profile executor
+    # (b) the matrix sweep with the fixed-profile executor.
+    # The execution identity is EXECUTION-PROVEN: observed per leg from
+    # the durable started/result records and the resolved launch
+    # environment, aggregated per profile AFTER the sweep — so the
+    # provisional fingerprint used during cell construction is replaced
+    # by the observed one before anything is published. Effective model
+    # is never assumed equal to requested; a moved endpoint behind the
+    # same env name IS a different execution.
     tasks = list(config.task_filter or [])
     delegate_tasks = frozenset(config.delegate_tasks or [])
-    identity = tuple(
+    identity_sink: list = []
+    provisional_identity = tuple(
         {
             "profile_id": pid,
             "backend": decl.get("backend"),
             "provider": decl.get("provider"),
             "requested_model": decl.get("model"),
-            "effective_model": decl.get("model"),
+            "effective_model": None,
             "tool_profile": decl.get("tool_profile"),
-            # the sanitized endpoint: the env-var NAME the registry
-            # declares, never a URL value
-            "endpoint": decl.get("base_url_env"),
+            "endpoint": _sanitized_endpoint(decl.get("base_url_env")),
         }
         for pid, decl in sorted(declarations.items())
     )
-    fingerprint = Fingerprint(
+    provisional_fp = Fingerprint(
         registry_digest=registry_digest_of(registry_path),
         preset_digest=pdg,
-        execution_identity=identity,
+        execution_identity=provisional_identity,
         task_set_revision=task_set_revision,
         toolchain_digest=toolchain_digest,
     )
     sweep_dir = work / "sweep"
 
     def execute(task: str, profile: str, trial: int, seed: int) -> Cell:
-        task_events = (
-            [] if task in delegate_tasks
-            else events_for_task(list(config.event_stream), tasks.index(task))
-        )
+        # router-arc shaping events are ROUTER-ARM-ONLY (the E1
+        # contract correction accepted in the T1 review): a pinned
+        # single-profile cell has no failover path, and the sweep
+        # measures profile capability under an availability-neutral
+        # baseline, not outage response. The event stream stays in
+        # preset_digest, so changing the scenario still invalidates
+        # reuse.
+        task_events: list = []
         return run_profile_cell(
             repo_root=repo_root,
             registry_path=registry_path,
@@ -631,10 +767,11 @@ def publish_evidence_set(
             harness_cmd=sweep_harness_cmd,
             delegate_harness_cmd=sweep_delegate_harness_cmd,
             reconcile_harness_cmd=sweep_reconcile_harness_cmd,
+            identity_sink=identity_sink,
         )
 
     matrix = build_matrix(
-        fingerprint,
+        provisional_fp,
         tasks,
         list(declarations),
         list(config.trial_seeds or []),
@@ -642,6 +779,21 @@ def publish_evidence_set(
         ctx.eligible,
         execute,
     )
+    # aggregate the observed identities: every executed leg for one
+    # profile must present ONE compatible execution identity, or no
+    # matrix is published at all
+    by_profile: dict[str, list] = {pid: [] for pid in declarations}
+    for pid, observed in identity_sink:
+        by_profile.setdefault(pid, []).append(observed)
+    observed_identity = tuple(
+        aggregate_profile_identity(pid, by_profile.get(pid, ()),
+                                   declarations.get(pid, {}))
+        for pid in sorted(declarations)
+    )
+    fingerprint = dataclasses.replace(
+        provisional_fp, execution_identity=observed_identity
+    )
+    matrix = dataclasses.replace(matrix, fingerprint=fingerprint)
 
     # (c) the control selections under the derived authority context
     selections = {
@@ -686,6 +838,50 @@ def publish_evidence_set(
     )
 
 
+def _publisher_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def _clean_stale_staging(
+    output_root: Path, max_age_sec: float = STALE_STAGING_MAX_AGE_SEC
+) -> None:
+    """The owner-checked cleanup of crash-leftover staging
+    directories: removed ONLY when the recorded publisher pid is
+    confirmed dead AND the directory is older than the age window. An
+    in-flight publisher (alive pid, or too young to judge) is never
+    touched; discovery never sees staging either way."""
+    import time
+
+    if not output_root.is_dir():
+        return
+    now = time.time()
+    for entry in output_root.iterdir():
+        if not entry.is_dir() or not entry.name.startswith(_STAGING_PREFIX):
+            continue
+        try:
+            age = now - entry.stat().st_mtime
+        except OSError:
+            continue
+        if age < max_age_sec:
+            continue
+        marker = entry / _PUBLISHER_MARKER
+        try:
+            pid = int(marker.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            pid = None
+        if pid is not None and _publisher_alive(pid):
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+
+
 def _publish(
     output_root: Path,
     *,
@@ -697,8 +893,12 @@ def _publish(
     fingerprint: Fingerprint,
 ) -> PublishedEvidenceSet:
     output_root.mkdir(parents=True, exist_ok=True)
+    _clean_stale_staging(output_root)
     staging = Path(
         tempfile.mkdtemp(prefix=_STAGING_PREFIX, dir=output_root)
+    )
+    (staging / _PUBLISHER_MARKER).write_text(
+        str(os.getpid()), encoding="utf-8"
     )
     try:
         # runs artifact + the evidence files its records reference,
@@ -751,6 +951,8 @@ def _publish(
         manifest_bytes = (
             json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n"
         ).encode("utf-8")
+        # the publisher marker is staging machinery, never set content
+        (staging / _PUBLISHER_MARKER).unlink(missing_ok=True)
         # the manifest is written LAST; its bytes are the identity
         (staging / ARTIFACT_MANIFEST).write_bytes(manifest_bytes)
 

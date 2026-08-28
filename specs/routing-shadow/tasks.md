@@ -7,11 +7,13 @@ production routing files holds for every task.
 ## T1 — The E1 evidence-set orchestration (the labeled E1 change)
 
 - `run_profile_cell` (decision 2): the NEW fixed-profile matrix
-  executor — per-cell clean adapter-lifecycle worktree, injected-event
-  parity with the router arm, pinned-profile launch environment with
-  exact executed identity recorded, driver-owned adapter
-  verification, harvest to a `mode: "profile_sweep"` record and
-  matrix `Cell`.
+  executor — per-cell clean adapter-lifecycle worktree,
+  pinned-profile launch environment with the EXECUTION-PROVEN
+  identity recorded per leg (started + result records + resolved
+  sanitized endpoint), driver-owned adapter verification, harvest to
+  a `mode: "profile_sweep"` record and matrix `Cell`. Router-arc
+  shaping events are ROUTER-ARM-ONLY (the E1 contract correction
+  accepted in the T1 review) — sweep cells run availability-neutral.
 - `publish_evidence_set` (decision 2): hybrid scenario + matrix sweep
   via `build_matrix` with `run_profile_cell` (eligible tuples
   executed; ineligible tuples materialized unexecuted per the
@@ -84,10 +86,13 @@ production routing files holds for every task.
   `..`-bearing evidence reference invalidates the recommendation;
   the owner's dominance counterexample (router outperforms
   always_best ⇒ NO switch); equal-quality-cheaper ⇒ switch to
-  always_cheapest; agreement computed by the full two-axis per-trial
-  dominance predicate (a quality-only agreement mutation
-  discriminates); unpriced per-trial cost caps the grade at low with
-  the trial named; `insufficient_data` for every insufficiency
+  always_cheapest; the AVAILABILITY GUARD (decision 5): a suggested
+  profile the router's durable candidate evidence shows unavailable
+  for the task yields insufficient_data with the availability
+  evidence referenced, never an inactionable switch; agreement
+  computed by the full two-axis per-trial dominance predicate (a
+  quality-only agreement mutation discriminates); unpriced per-trial
+  cost caps the grade at low with the trial named; `insufficient_data` for every insufficiency
   source in a VALID set and never collapsed into
   `no_change_recommended`; invalid sets produce no records;
   divergence is the declared float64 subtraction of served figures

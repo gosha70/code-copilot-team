@@ -331,6 +331,55 @@ harness command); the likely right amendment is that router-arc
 shaping events do not inject into fixed-profile cells, whose purpose
 is profile capability, not outage response. Flagged, not decided.
 
+## T1 build audit round 1 (owner, on 3a6acea) — three P1, two P2, applied
+
+1. **[P1] Execution identity is now EXECUTION-PROVEN, all seven
+   fields.** The T1 build asserted five declaration-derived fields and
+   assumed effective==requested with the env-var NAME as endpoint.
+   Fixed: per-leg observation from durable evidence — requested
+   identity from started-N.json, tri-state effective model from the
+   same attempt's result-N.json (null = unverified, production's own
+   rule; a mismatch with the declaration refuses), and the sanitized
+   RESOLVED endpoint from the actual launch environment
+   (userinfo/query stripped, non-URLs digested; same env name +
+   moved endpoint = different identity). Per-profile aggregation
+   requires ONE compatible identity across all executed legs or
+   nothing publishes; the fingerprint is built from observations
+   (provisional fingerprint replaced post-sweep). Pinned: live
+   fallback-verifies/preferred-unverified split (never
+   requested-by-assumption), endpoint-changes-identity unit,
+   corrupt-leg refusal units.
+2. **[P1] Lifecycle exactness at the reporting boundary.**
+   router_cells_from_records now verifies lifecycle SHAPE (ordinary =
+   exactly one record; delegated = provisional then reconciliation,
+   same seed, same packet id+digest; reconciliation-without-
+   provisional and unreconciled-delegation refuse — the
+   deleted-provisional laundering mutation dies) and, under the
+   matrix build_report always passes, EXACT task x trial coverage
+   with declared-seed pairing. Pinned: missing task, extra task,
+   duplicate ordinary, wrong seed, missing provisional, mismatched
+   packet digest.
+3. **[P1 resolution of the flagged open question] Shaping events are
+   ROUTER-ARM-ONLY — recorded as an E1 contract correction, not a
+   silent code change.** The plan's "injected-event parity" wording
+   is replaced: sweep cells run availability-neutral; the event
+   stream stays in preset_digest so scenario changes still invalidate
+   reuse. The downstream consequence is settled NOW as decision 5's
+   AVAILABILITY GUARD: switch_profile is actionable only when the
+   suggested profile appears admissible in the router's durable
+   candidate evidence for the task; otherwise insufficient_data with
+   the availability evidence referenced. T2 regressions pinned in
+   tasks.md before T2 starts.
+4. **[P2] Owner-checked stale-staging cleanup implemented**: a
+   staging leftover is removed only when its recorded publisher pid
+   is confirmed dead AND it exceeds the age window; live publishers
+   and young directories are never touched (regression-locked). The
+   publisher marker never ships with a published set.
+5. **[P2] insufficient_evidence semantics honest**: ABSENT = no
+   explicit insufficiency entries recorded (channels still express
+   missing evidence via their own nulls); the schema header's
+   "EVERY container required" claim now names the exception.
+
 ## Verdict
 
 Verdict: aligned

@@ -491,9 +491,10 @@ class TestRoutingRunRejection(unittest.TestCase):
             with self.subTest(container=container):
                 self.assertTrue(any(container in e for e in errors))
         # insufficient_evidence is the one OPTIONAL container (T1 of
-        # routing-shadow: measured cost from the durable attempt
-        # transcripts made complete evidence representable — absence
-        # means complete). PRESENT but hollow still rejects.
+        # routing-shadow): ABSENT means no explicit insufficiency
+        # entries were recorded — individual channels still express
+        # missing evidence via their own nulls. PRESENT but hollow
+        # still rejects.
         hollow = dict(self.valid)
         hollow["insufficient_evidence"] = {}
         hollow_errors = validate(hollow, self.schema)

@@ -912,6 +912,92 @@ class TestLifecycleFold(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate final legs"):
             router_cells_from_records([provisional, recon, recon2])
 
+    # ── the exactness gate (routing-shadow T1 review, finding 2):
+    # partial coverage is refused, never averaged over ──
+
+    def _exact_matrix(self, tasks=("t1", "t2")):
+        cells = [_cell(t, p, 0) for t in tasks for p in ("alpha", "beta")]
+        return _matrix(cells)
+
+    def test_a_missing_task_refuses_the_report_coverage(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        matrix = self._exact_matrix()
+        # t2's router lifecycle deleted entirely: Q over the smaller
+        # set must never be computed
+        with self.assertRaisesRegex(LifecycleInvalid, "missing.*t2"):
+            router_cells_from_records([_router_record("t1", 0)],
+                                      matrix=matrix)
+
+    def test_an_extra_task_refuses(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        matrix = self._exact_matrix(tasks=("t1",))
+        with self.assertRaisesRegex(LifecycleInvalid, "extra.*t9"):
+            router_cells_from_records(
+                [_router_record("t1", 0), _router_record("t9", 0)],
+                matrix=matrix,
+            )
+
+    def test_a_duplicate_ordinary_record_refuses(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        with self.assertRaisesRegex(LifecycleInvalid, "2 ordinary records"):
+            router_cells_from_records(
+                [_router_record("t1", 0), _router_record("t1", 0)]
+            )
+
+    def test_a_wrong_seed_refuses(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        matrix = self._exact_matrix(tasks=("t1",))
+        record = _router_record("t1", 0)
+        record["trial_seed"] = 999
+        with self.assertRaisesRegex(LifecycleInvalid, "seed"):
+            router_cells_from_records([record], matrix=matrix)
+
+    def test_a_reconciliation_without_its_provisional_leg_refuses(self) -> None:
+        # The laundering mutation the fold exists for: delete the
+        # provisional record and let the clean reconciliation stand
+        # alone — its cost, interventions, and repair signatures would
+        # silently vanish. Refused, never scored.
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        _prov, recon = self._lifecycle()
+        with self.assertRaisesRegex(LifecycleInvalid, "without its "
+                                                      "provisional leg"):
+            router_cells_from_records([recon])
+
+    def test_an_unreconciled_delegation_refuses(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        prov, _recon = self._lifecycle()
+        with self.assertRaisesRegex(LifecycleInvalid, "never reconciled"):
+            router_cells_from_records([prov])
+
+    def test_a_mismatched_packet_digest_refuses(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        prov, recon = self._lifecycle()
+        recon["reconciliation"] = dict(recon["reconciliation"],
+                                       packet_digest="OTHER")
+        with self.assertRaisesRegex(LifecycleInvalid, "different packets"):
+            router_cells_from_records([prov, recon])
+
     def test_single_record_lifecycles_reduce_as_before(self) -> None:
         record = _router_record("t1", 0)
         cell = router_cells_from_records([record])[0]
@@ -993,8 +1079,19 @@ class TestT6ContagiousInsufficiency(unittest.TestCase):
         from benchmark_runner.routing_eval.routing_quality import INSUFFICIENT
 
         _cells, matrix, controls = self._report_fixture()
-        records = [_router_record("t1", 0, delegated=True,
-                                  delegated_lines=100, diff_lines=None)]
+        # a COMPLETE delegated lifecycle (the exactness gate refuses
+        # anything less) whose durable line counts are missing: the
+        # sequence rows are insufficiency, never zero rework
+        provisional = _router_record("t1", 0, delegated=True,
+                                     delegated_lines=None, diff_lines=None)
+        recon = _router_record("t1", 0, delegated=True,
+                               delegated_lines=None, diff_lines=None)
+        recon["reconciliation"] = {
+            "packet_id": "p", "packet_digest": "d", "outcome": "reconciled",
+            "reconciler_id": "rec", "reconciler_tier": "tier1",
+            "reconciler_provider": "other", "reconciler_model": "om",
+        }
+        records = [provisional, recon]
         report = build_report(matrix, controls, records,
                               expected_preset_digest=_PRESET,
                          registry_path=_REGISTRY, config=_CONFIG)
