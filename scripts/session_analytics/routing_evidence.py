@@ -57,7 +57,6 @@ TOLERANCE = 1e-9
 #: named as the ceiling, never suggested.
 EXECUTABLE_CANDIDATES = ("always_best", "always_cheapest")
 
-_FULL_MASK_SIZE = len(COMPONENTS)
 
 #: Confidence grade rule v2 (plan decision 5): declared, deterministic.
 _GRADE_HIGH_TRIALS = 5
@@ -228,7 +227,8 @@ def _actual_from_records(
                     chain.append(selected)
             if (record.get("tier2") or {}).get("delegated"):
                 delegated = True
-            if record.get("reconciliation"):
+            reconciliation = record.get("reconciliation")
+            if reconciliation and reconciliation.get("outcome") == "reconciled":
                 reconciled = True
         per_trial.append({"trial": trial, "chain": chain,
                           "delegated": delegated, "reconciled": reconciled})
@@ -295,7 +295,13 @@ def _grade(
     unevaluated trial, or missing agreement caps the grade at low."""
     if insufficiency_refs or unevaluated or agreement is None:
         return "low"
-    full_mask = len(components_included) == _FULL_MASK_SIZE
+    # the FULL v1 mask is an exact-set identity, not a count: a
+    # schema-valid list of the right length with a duplicate and an
+    # omission must never qualify
+    full_mask = (
+        set(components_included) == {c.name for c in COMPONENTS}
+        and len(components_included) == len(COMPONENTS)
+    )
     if trials >= _GRADE_HIGH_TRIALS and full_mask and (
         agreement >= _GRADE_HIGH_AGREEMENT
     ):
@@ -328,9 +334,23 @@ def _derive_task(loaded: LoadedEvidenceSet, task: str) -> Mapping[str, Any]:
                 "locator": {"arm": arm, "task": task},
             })
 
-    # consumed-figure sufficiency: the router's and EVERY executable
-    # candidate's per-task figures must be present
+    # consumed-figure sufficiency: the DECLARED insufficiency states
+    # govern first — an arm carrying an insufficiency entry (e.g. the
+    # router's sequence_dependent rows) or a withheld Pareto frontier
+    # makes the comparison plane incomplete even when per-task numbers
+    # exist — then the router's and EVERY executable candidate's
+    # per-task figures must be present.
     insufficiency_refs: list[str] = []
+    for arm in ("cct_router",) + EXECUTABLE_CANDIDATES:
+        declared = (report["arms"].get(arm) or {}).get("insufficient") or {}
+        for key in sorted(declared):
+            insufficiency_refs.append(
+                f"{arm}/insufficient/{key}: {declared[key]}"
+            )
+    pareto_status = (report.get("pareto") or {}).get("status")
+    if pareto_status == "insufficient_evidence":
+        reason = (report.get("pareto") or {}).get("reason") or "frontier withheld"
+        insufficiency_refs.append(f"pareto: {reason}")
     divergence: dict[str, Any] = {}
     for arm in EXECUTABLE_CANDIDATES:
         a_q, a_c, _rows = _figures(report, arm, task)
@@ -389,13 +409,27 @@ def _derive_task(loaded: LoadedEvidenceSet, task: str) -> Mapping[str, Any]:
         )
         return _record("no_change_recommended", None, agreement, unevaluated)
 
-    # suggested = the dominating arm with the higher quality; ties by
-    # lower cost, then arm name
-    def _order(arm: str):
-        q, c, _ = _figures(report, arm, task)
-        return (-q, c, arm)
+    # suggested = the dominating arm with the higher quality — under
+    # the SAME declared tolerance the dominance predicate uses; ties
+    # by lower cost (tolerance-aware), then arm name. Harmless
+    # rounding can never change WHICH profile is recommended.
+    def _beats(a: str, b: str) -> bool:
+        a_q, a_c, _ = _figures(report, a, task)
+        b_q, b_c, _ = _figures(report, b, task)
+        if a_q > b_q + TOLERANCE:
+            return True
+        if b_q > a_q + TOLERANCE:
+            return False
+        if a_c < b_c - TOLERANCE:
+            return True
+        if b_c < a_c - TOLERANCE:
+            return False
+        return a < b
 
-    suggested_arm = sorted(dominating, key=_order)[0]
+    suggested_arm = dominating[0]
+    for arm in dominating[1:]:
+        if _beats(arm, suggested_arm):
+            suggested_arm = arm
     profile = (report["arms"][suggested_arm].get("selections") or {}).get(task)
     if not profile:
         return _record(

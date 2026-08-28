@@ -451,6 +451,38 @@ named top discriminator pinned first:
   tampered report surfaces as invalid_evidence/hash_mismatch with
   sanitized detail.
 
+## T2 build audit round 1 (owner, on 8ef37e3) — three P1, two P2, applied
+
+1. **[P1] Declared insufficiency states propagate.** Before dominance,
+   the derivation now consults the router's and every executable
+   candidate's `insufficient` maps AND the Pareto status: any
+   declared insufficiency (e.g. cct_router sequence_dependent) or a
+   withheld frontier yields insufficient_data with the named
+   references, even when per-task figures are numeric. Pinned:
+   router-arm insufficiency, candidate-arm insufficiency, withheld
+   frontier; mutation (block skipped) fails all three.
+2. **[P1] The dominating-arm tie-break is tolerance-aware.** The
+   owner's exact counterexample pinned: qualities differing by 5e-10
+   are EQUAL under the declared tolerance, so the lower-cost arm
+   wins; harmless rounding can never change WHICH profile is
+   recommended. Mutation (exact-float ordering restored) fails it.
+3. **[P1] Malformed UTF-8 in routing-runs.jsonl stays inside the
+   closed boundary.** The E1 loader decodes the runs artifact
+   fail-closed into EvidenceSetInvalid(schema_invalid) like the other
+   artifacts; the T2-level regression writes genuinely invalid bytes
+   and asserts the set surfaces as invalid_evidence, never a raw
+   exception (the future API-500 class).
+4. **[P2] The full mask is an exact-set identity**, not a count: a
+   right-length list with a duplicate and an omission never grades
+   high (pinned both ways).
+5. **[P2] `actual.reconciled` means the reconciliation SUCCEEDED**
+   (outcome == "reconciled"), not that a record exists; a failed
+   reconciliation renders false (pinned).
+
+The owner explicitly did not reopen the recommendation architecture,
+availability-neutral sweep decision, evidence-reference design,
+dominance formula, or confidence thresholds.
+
 ## Verdict
 
 Verdict: aligned

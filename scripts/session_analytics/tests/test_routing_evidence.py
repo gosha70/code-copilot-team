@@ -340,6 +340,113 @@ class TestConfidence(unittest.TestCase):
         self.assertEqual(rec["confidence"]["grade"], "low")
 
 
+class TestDeclaredInsufficiencyPropagates(unittest.TestCase):
+    """T2 round-1 finding 1: arm-level insufficiency entries and a
+    withheld frontier govern BEFORE dominance — numeric per-task
+    figures do not launder them."""
+
+    def _base(self):
+        return _report(
+            _figures_for(router=(0.5, 0.05), best=(1.0, 0.01),
+                         cheapest=(0.4, 0.02)),
+            selections=_SELECTIONS,
+        )
+
+    def test_router_arm_insufficiency_yields_insufficient_data(self) -> None:
+        report = self._base()
+        report["arms"]["cct_router"]["insufficient"] = {
+            "sequence_dependent": "delegated cells lack line counts"
+        }
+        records = [_router_record("t", considered=_ADMISSIBLE)]
+        (rec,) = derive_recommendations(_loaded(report, records))
+        self.assertEqual(rec["outcome"], "insufficient_data")
+        self.assertTrue(any(
+            ref.startswith("cct_router/insufficient/sequence_dependent")
+            for ref in rec["confidence"]["basis"]["insufficiency_refs"]
+        ))
+
+    def test_a_withheld_frontier_yields_insufficient_data(self) -> None:
+        report = self._base()
+        report["pareto"] = {"status": "insufficient_evidence",
+                            "reason": "an arm's cost does not satisfy the basis"}
+        records = [_router_record("t", considered=_ADMISSIBLE)]
+        (rec,) = derive_recommendations(_loaded(report, records))
+        self.assertEqual(rec["outcome"], "insufficient_data")
+        self.assertTrue(any(
+            ref.startswith("pareto:")
+            for ref in rec["confidence"]["basis"]["insufficiency_refs"]
+        ))
+
+    def test_candidate_arm_insufficiency_yields_insufficient_data(self) -> None:
+        report = self._base()
+        report["arms"]["always_cheapest"]["insufficient"] = {
+            "cost": "mixed provenance"
+        }
+        records = [_router_record("t", considered=_ADMISSIBLE)]
+        (rec,) = derive_recommendations(_loaded(report, records))
+        self.assertEqual(rec["outcome"], "insufficient_data")
+
+
+class TestToleranceAwareTieBreak(unittest.TestCase):
+    def test_sub_tolerance_quality_never_picks_the_costlier_arm(self) -> None:
+        # The owner's exact counterexample: both candidates dominate;
+        # their qualities differ by 5e-10 (a tie under the declared
+        # tolerance), so the LOWER-COST arm must win — exact-float
+        # ordering would pick always_best on the phantom 5e-10 edge.
+        report = _report(
+            {
+                "cct_router": {"t": _task(0.5, 0.10)},
+                "always_best": {"t": _task(1.0 + 5e-10, 0.09)},
+                "always_cheapest": {"t": _task(1.0, 0.01)},
+                "oracle": {"t": _task(1.0, 0.01)},
+            },
+            selections=_SELECTIONS,
+        )
+        records = [_router_record("t", considered=_ADMISSIBLE)]
+        (rec,) = derive_recommendations(_loaded(report, records))
+        self.assertEqual(rec["outcome"], "switch_profile")
+        self.assertEqual(rec["suggested"]["arm"], "always_cheapest",
+                         "harmless rounding must never change WHICH "
+                         "profile is recommended")
+
+
+class TestMaskIdentity(unittest.TestCase):
+    def _five_trial_report(self, components):
+        router_rows = [{"trial": i, "quality": 0.5, "cost": 0.02}
+                       for i in range(5)]
+        best_rows = [{"trial": i, "quality": 1.0, "cost": 0.01}
+                     for i in range(5)]
+        figures = {
+            "cct_router": {"t": {"quality": 0.5, "cost": 0.02,
+                                 "per_trial": router_rows}},
+            "always_best": {"t": {"quality": 1.0, "cost": 0.01,
+                                  "per_trial": best_rows}},
+            "always_cheapest": {"t": _task(0.1, 0.05)},
+            "oracle": {"t": _task(1.0, 0.01)},
+        }
+        return _report(figures, selections=_SELECTIONS,
+                       components=components)
+
+    def test_a_duplicated_and_omitted_component_never_grades_high(self) -> None:
+        # right LENGTH, wrong SET: one component duplicated, another
+        # omitted — a count check would grade high
+        broken = list(_FULL_MASK)
+        broken[-1] = broken[0]
+        self.assertEqual(len(broken), len(_FULL_MASK))
+        report = self._five_trial_report(broken)
+        records = [_router_record("t", trial=i, considered=_ADMISSIBLE)
+                   for i in range(5)]
+        (rec,) = derive_recommendations(_loaded(report, records))
+        self.assertEqual(rec["confidence"]["grade"], "low")
+
+    def test_the_exact_set_still_grades_high(self) -> None:
+        report = self._five_trial_report(list(_FULL_MASK))
+        records = [_router_record("t", trial=i, considered=_ADMISSIBLE)
+                   for i in range(5)]
+        (rec,) = derive_recommendations(_loaded(report, records))
+        self.assertEqual(rec["confidence"]["grade"], "high")
+
+
 class TestDeterminismAndContract(unittest.TestCase):
     def test_identical_inputs_give_byte_identical_records(self) -> None:
         report = _report(
@@ -369,6 +476,20 @@ class TestDeterminismAndContract(unittest.TestCase):
         self.assertEqual(trial["chain"], ["router-prof"])
         self.assertTrue(trial["delegated"])
         self.assertTrue(trial["reconciled"])
+
+    def test_a_failed_reconciliation_is_not_rendered_reconciled(self) -> None:
+        # "reconciled" means the reconciliation SUCCEEDED, not that a
+        # reconciliation record exists
+        report = _report(
+            _figures_for(router=(0.5, 0.05), best=(1.0, 0.01),
+                         cheapest=(0.4, 0.02)),
+            selections=_SELECTIONS,
+        )
+        record = _router_record("t", considered=_ADMISSIBLE,
+                                delegated=True, reconciled=True)
+        record["reconciliation"]["outcome"] = "failed"
+        (rec,) = derive_recommendations(_loaded(report, [record]))
+        self.assertFalse(rec["actual"]["per_trial"][0]["reconciled"])
         self.assertEqual(rec["oracle_ceiling"], {"quality": 0.9,
                                                  "cost": 0.05})
 
@@ -462,6 +583,24 @@ class TestEvidenceLoading(unittest.TestCase):
             for rec in recs:
                 self.assertEqual(validate(rec, schema), [])
                 self.assertEqual(rec["evidence_set_id"], published.set_id)
+
+    def test_malformed_utf8_runs_surface_as_invalid_never_raise(self) -> None:
+        # genuinely invalid BYTES (not merely malformed JSON): the
+        # closed invalid_evidence boundary must hold — a raw exception
+        # here becomes a future API 500 instead of the sanitized state
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            published = self._publish_fixture(base)
+            runs = published.path / "routing-runs.jsonl"
+            runs.write_bytes(b"\xff\xfe\x00broken\x80bytes")
+            loaded = load_evidence_sets([base / "out"])
+            self.assertEqual(len(loaded), 1)
+            (entry,) = loaded
+            self.assertIsInstance(entry, InvalidEvidenceSet)
+            self.assertIn(entry.code, ("schema_invalid", "hash_mismatch"))
+            self.assertEqual(entry.state, "invalid_evidence")
 
     def test_a_tampered_set_surfaces_as_invalid_never_skipped(self) -> None:
         import tempfile

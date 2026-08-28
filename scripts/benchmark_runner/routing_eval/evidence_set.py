@@ -582,7 +582,14 @@ def validate_evidence_set(root: Path) -> Mapping[str, Any]:
 
     records = []
     runs_schema = load_schema("routing-run")
-    for i, line in enumerate(raw[ARTIFACT_RUNS].decode("utf-8").splitlines()):
+    try:
+        runs_text = raw[ARTIFACT_RUNS].decode("utf-8")
+    except UnicodeDecodeError:
+        raise EvidenceSetInvalid(
+            "schema_invalid", ARTIFACT_RUNS,
+            "artifact is not valid UTF-8",
+        ) from None
+    for i, line in enumerate(runs_text.splitlines()):
         if not line.strip():
             continue
         try:
