@@ -1,0 +1,1232 @@
+# Origin Alignment Check — routing-eval
+
+Date: 2026-08-25 11:00 (record opened)
+Last revised: 2026-08-25 — child issues filed (#260 for E1, #261 for
+E2) at the owner's direction; plan.md's origin block re-anchored from
+the umbrella to #260. Rev-2 applied the owner's plan-review findings
+(see "Plan review round 1" below). Scope unchanged from the verdict.
+Revisions 3–5 applied plan-review rounds 2–4; the owner returned no
+findings on rev-5 and approved the plan. plan.md moved to
+`status: approved` on 2026-08-25, after PR #259 (increment D) merged as
+`ed8873b`, unblocking E1's build entry. The bundle is committed on
+`plan/routing-eval`, branched from that merge.
+Trigger: rev-1 SDD bundle authored for increment E1 of #109 at the
+owner's direction, immediately after increment D's PR (#259) was
+opened. The owner split increment E into E1 (measurement substrate)
+and E2 (analysis and recommendations) and directed that each get its
+own child issue "so each merged PR fully closes its own scope". Child
+issues #260 (E1) and #261 (E2) were filed the same day.
+
+## Origin sources read
+
+- #109 §12 Benchmark-driven evolution — the hybrid scenario arc
+  (preferred Tier-1 → injected usage-limit → next Tier-1 → optional
+  bounded Tier-2 → preferred recovery → Tier-1 reconciliation), the
+  six task shapes plus explicit Tier-1-only negative controls, the
+  primary measures, the secondary cost/time measures, and the
+  five-condition calibration gate that keeps learned routing
+  shadow-only.
+- #109 §Delivery Plan Increment E — "Hybrid evaluation and adaptive
+  recommendations": hybrid benchmark scenarios, routing-quality
+  metrics, studio/session-analytics surface, shadow-mode routing
+  recommendations, optional similarity/kNN only after calibration.
+  E1 takes the first two; E2 takes the rest.
+- #109 Acceptance §Evaluation and observability — all five
+  checkboxes: decisions explainable from durable artifacts; tokens,
+  costs, failed verifier commands, repair cycles, effective endpoint
+  and effective model accurately recorded; artifacts exclude venvs,
+  caches, bytecode and sensitive data; hybrid benchmarks run multiple
+  trials; learned routing shadow-only until calibration.
+- #109 §11 Telemetry and explainability — the per-event record E1's
+  artifacts must satisfy, and the constraint that secret values,
+  authorization headers, API keys, connector inventories, and
+  sensitive absolute paths never enter analytics or public artifacts.
+- #109 §Non-Goals — "Shipping learned or kNN routing before reliable
+  benchmark evidence exists", which is precisely the gap E1 closes.
+- The owner's E1/E2 split directive (2026-08-25), quoted in plan.md's
+  origin references: E1 is "objectively verifiable", carries "no
+  analytics UI or runtime recommendation behavior", and E2 "depend[s]
+  on a stable evidence contract".
+- specs/routing-recovery/ (D) and specs/routing-tier2-delegation/ (C)
+  — the recovery/failback and provisional/reconciliation behaviour
+  the hybrid scenario exercises.
+- benchmarks/schema/{run-record,score,stats}.schema.json,
+  benchmarks/presets/, benchmarks/adapters/ — the frozen harness
+  contracts E1 extends rather than replaces.
+
+## Working claim
+
+Increment E1 supplies the evidence layer for the router increments
+A–D built: a deterministic hybrid failover/recovery benchmark
+scenario, #109's authoritative routing-quality metrics implemented
+unchanged, and the control frame — always-best, always-cheapest, and a
+hindsight oracle — plus cost-quality/Pareto reporting that makes a
+router score interpretable (no AIQ scalar; see round 3, finding 2).
+Artifacts are versioned, redacted, and reproducible. No analytics surface, no recommendation behaviour, no
+learned routing, and no change to runtime routing.
+
+## Mismatches / deviations from the origin sketch
+
+1. **The control frame is an addition, not a substitution.** #109
+   §12 names the primary measures but does not name baselines or an
+   upper bound. Prior art in LLM routing evaluation (RouterBench and
+   successors) is consistent that a router figure is uninterpretable
+   without fixed-policy controls and an oracle bound, so E1 adds
+   `always_best`, `always_cheapest`, and `oracle`, and reports `Q`,
+   cost, and a Pareto frontier over the arms (no AIQ scalar — see
+   round 3, finding 2). This *frames* #109's metrics; it does not
+   reweight, combine, or replace any of them. Recorded as a deliberate extension for owner
+   review.
+
+2. **Increment E is split.** #109's delivery plan lists E as one
+   increment. The owner directed an E1/E2 split on 2026-08-25 so each
+   merged PR fully closes its own scope. E1's non-goals name every E2
+   deliverable explicitly, so the union remains exactly #109's E.
+
+3. **The oracle is derived, not executed.** #109 does not describe how
+   an upper bound would be obtained. E1 derives the control arms from
+   a `task × profile × trial` outcome matrix rather than executing
+   four policies. Reuse of that matrix is fingerprint-gated — registry
+   digest, preset digest (trial seeds and event stream), execution
+   identity, task-set revision, tool/environment digest — so a
+   registry edit invalidates it and forces a re-sweep; the saving is
+   against re-executing the control policies, not against registry
+   change. The oracle is labelled a hindsight bound and is never
+   executable policy — consistent with #109's non-goal on speculative
+   execution.
+
+4. **Dependency on unmerged work.** E1's recovery and failback legs
+   exercise increment D, whose PR (#259) is open and unmerged at the
+   time this record was opened. tasks.md records the dependency; build
+   entry is gated on that merge.
+
+## Plan review round 1 (owner) — five findings, rev-2 applied
+
+The owner's plan review returned three P1 and two P2 findings against
+rev-1. All were verified against the repository before being applied;
+none was accepted on report alone.
+
+1. **[P1] No cost or telemetry evidence source.** Verified:
+   `benchmarks/schema/stats.schema.json` fixes
+   `cost_reporting.enabled` to `"const": false` and carries no cost
+   amount; `score.schema.json` carries only `derived.failed_commands`
+   and `scores.human_interventions` as integers. Rev-1's claim that
+   cost came from `stats` was simply wrong, and `always_cheapest`, the
+   cost plane, AIQ, and #260's accurate-telemetry acceptance were
+   unimplementable as written. Resolved: FR-E1-2 and plan decision 4
+   give E1 its own telemetry record with closed provenance
+   `measured | estimated | unavailable`, verifier evidence references,
+   repair signatures, and intervention records; `unavailable`
+   propagates to `insufficient_evidence` rather than a default.
+
+2. **[P1] Oracle and quality objective internally inconsistent.**
+   Correct: rev-1 forbade combining the primary metrics while
+   demanding one quality axis, one AIQ scalar, and a "per-row best"
+   oracle, which is unsatisfiable; and a quality-maximising oracle is
+   not guaranteed to cost no more than always-best. Resolved: FR-E1-5
+   and plan decision 5 introduce a versioned `quality_fn: v1` used
+   only for ordering and the oracle's per-task choice, with declared
+   deterministic tie-breaks and the full metric vector always reported
+   beside it. The oracle cost inequality is **dropped**; a separate
+   `oracle_budget` arm carries the only meaningful cost ceiling.
+   Fixed-baseline selection now reuses the selector's existing total
+   order (priority ascending, then id lexical ascending).
+
+3. **[P1] Matrix not comparison-valid.** Correct on all three counts.
+   Resolved: FR-E1-6 and plan decision 3 make the matrix
+   `task × profile × trial` with paired trial and event identity;
+   FR-E1-7 restricts derived arms to per-task-independent measures and
+   marks every sequence-dependent measure `not_applicable`; and matrix
+   reuse is gated on an exact fingerprint over execution identity,
+   task-set revision, tool/environment digest, and event-stream
+   digest.
+
+4. **[P2] No-runtime-change boundary unenforceable.** Correct — rev-1
+   injected "at the backend-result boundary the router classifies"
+   while claiming everything was downstream of execution. Resolved:
+   plan decision 2 names the existing documented test-only seams
+   (`CCT_SUPERVISOR_HARNESS_CMD` at cooldown-supervisor.sh:57,
+   `CCT_ROUTING_PROBE_CMD` at routing-probe.sh:37), states that the
+   benchmark supplies the *child output* and the unmodified classifier
+   does its real work, and adds a diff guard asserting no production
+   routing file is touched. The test strategy now states explicitly
+   that passing suites alone does not prove runtime behaviour was
+   untouched.
+
+5. **[P2] Spec gate not green.** Verified: `validate-spec.sh
+   --feature-id routing-eval` reported `spec.md missing required
+   sections: Constraints`. Resolved: a Constraints section was added
+   covering the no-runtime-change boundary, the injection seams, the
+   frozen upstream contracts, fingerprint-gated reuse, bounded cost,
+   and write-time redaction. The gate now reports 2 passed, 0 failed.
+
+6. **[P3] Stale process text in this record.** Resolved above: the
+   trigger paragraph no longer says the child issue is pending.
+
+#260 is updated where it repeated the oracle-cost and single-sweep
+matrix claims.
+
+## Plan review round 2 (owner) — rev-3 applied
+
+Round 2 found that rev-2 had answered the round-1 findings with prose
+rather than definitions. The owner prescribed the closure: one
+normative table defining each metric's raw source, formula,
+aggregation, applicability and missing-value behaviour, followed by
+exact definitions of `quality_fn` and every control selector. rev-3
+applies exactly that.
+
+1. **[P1] `quality_fn: v1` named but not defined.** Correct — rev-2
+   gave purpose and tie-breaks but no numeric projection, leaving the
+   central scoring policy to the implementer. Resolved: plan.md
+   §quality_fn v1 now defines components (rows 1–8 only),
+   normalization to `[0,1]` with direction, the fixed weight table
+   summing to 1.0, weight renormalization when a component is dropped
+   as `not_applicable`, withholding `Q` entirely on any
+   `insufficient_evidence` component, and the full tie-break sequence.
+   The round-2 sub-finding is also fixed: reconciliation rework is no
+   longer a tie-break, because it is `not_applicable` for derived arms
+   and would make arms incomparable.
+
+2. **[P1] Telemetry contract could not produce all authoritative
+   metrics.** Correct. Resolved: plan.md §Metric contract enumerates
+   all thirteen measures with raw evidence, per-cell formula,
+   aggregation, applicable arms, and missing-value behaviour; T1 now
+   requires the schema to carry every source field it names —
+   baselines for lint/type, `quality_gates.coverage`,
+   `quality_gates.security.findings_by_severity`, `scope_violations[]`
+   (reusing increment C's file-scope enforcement),
+   `tier2.{delegated, delegated_lines, reconciliation_diff_lines}`,
+   and `rollbacks[]` — with a per-metric test asserting presence. A
+   metric not in the table is not reported.
+
+3. **[P1] Reuse fingerprint did not enforce its stated identity.**
+   Correct: rev-2 claimed a registry edit invalidates reuse while
+   omitting the registry digest, and omitted trial-seed identity.
+   Resolved: the fingerprint is now a closed five-component list —
+   `registry_digest`, `preset_digest` (covering trial count, seeds,
+   event stream, arm set), `execution_identity`, `task_set_revision`,
+   `toolchain_digest` — all schema-required, with a mismatch test per
+   component.
+
+4. **[P1] Control derivation ambiguous over the trial matrix.**
+   Correct on all four sub-points. Resolved: plan.md §Control
+   selectors states that a control is a per-task selection under a
+   fixed rule rather than a literal matrix column (handling per-task
+   eligibility); `always_cheapest` selects on mean cost across a
+   task's trials using `measured` provenance only, with estimated and
+   measured explicitly non-comparable and insufficiency rather than
+   silent fallback; and `oracle` chooses per `(task, trial)` — the
+   true hindsight bound — rather than after aggregating trials.
+
+5. **[P3] Stale consistency references.** Resolved: this record's
+   deviation 3 no longer describes an `N_tasks × N_profiles` sweep or
+   claims a registry change costs one router run; plan.md decision 6
+   now cites FR-E1-8 and decision 9 now cites decision 6.
+
+## Plan review round 3 (owner) — rev-4 applied
+
+Round 3 confirmed rounds 1–2 were closed correctly and found five
+remaining gaps, all in the cost and reporting path. The owner
+prescribed a single "Cost and reporting contract" section plus a
+spec.md sync; rev-4 applies exactly that.
+
+1. **[P1] Cost field had storage but no producer.** Verified:
+   `BackendResult` (`scripts/benchmark_runner/contracts.py`) carries
+   token counts but no cost, so with `always_cheapest` requiring cost
+   and the control-set gate mandatory, no current backend could
+   produce a report. Resolved: plan.md §Cost and reporting contract
+   names the producers — `measured` from the backend's own reported
+   `total_cost_usd` (the in-tree precedent is `rb_measured_cost` in
+   `scripts/lib/routing-probe.sh`, which already reads exactly that
+   field), `estimated` from tokens × a versioned `price_table: v1`,
+   `unavailable` otherwise — and T1 extends `BackendResult` with
+   `cost_usd` and `cost_provenance`. The plane's mixing gap is closed
+   by **provenance homogeneity**: a comparison declares one
+   `cost_basis`, and every cell used for cost must satisfy it, for
+   selection *and* for the plane, frontier and budget arm alike.
+
+2. **[P1] AIQ required but never defined.** Correct. Resolved by
+   removing it: an AIQ-family scalar integrates a cost-quality
+   *curve*, which presupposes a tunable cost knob tracing a family of
+   operating points. The CCT router is a single operating point under
+   a given registry, so an "AIQ" here would be an invented ratio
+   rather than the published metric. E1 now reports `Q`, cost under
+   the declared basis, and the Pareto frontier — nothing else.
+   Defining AIQ becomes meaningful only if a tunable knob is ever
+   introduced, and is then later work.
+
+3. **[P1] `oracle_budget` mixed two ceiling semantics.** Correct — a
+   per-cell filter does not bound a summed arm cost. Resolved: the
+   ceiling is declared **per-cell and only per-cell**, the test
+   asserts it for every selected cell, and no aggregate-cost invariant
+   is asserted. Global-budget allocation is explicitly out of scope
+   (it is a knapsack problem, not a filter, and #109 does not ask for
+   one).
+
+4. **[P2] Component mask ambiguous during oracle selection.**
+   Correct — per-cell mask derivation would let different cells score
+   under different weightings. Resolved: the mask and its renormalized
+   weights are computed **once** over the complete report matrix
+   before any control selection, and that single mask is used
+   identically everywhere including the oracle's per-cell choice.
+   Per-cell derivation is forbidden.
+
+5. **[P2] spec.md stated pre-revision contracts.** Correct. Resolved:
+   FR-E1-3 now states the declared-`cost_basis` rule and per-`(task,
+   trial)` oracle selection; FR-E1-5 says per-cell rather than
+   per-task; FR-E1-8 drops AIQ and states the homogeneity rule; and
+   the Constraints fingerprint now lists all five components including
+   `registry_digest` and `preset_digest`.
+
+## Plan review round 4 (owner) — rev-5 applied
+
+Round 4 confirmed no architectural issue remains and listed bounded
+consistency and test-ownership corrections. rev-5 applies them, plus
+one conflict found while verifying finding 2.
+
+1. **[P1] `always_cheapest` carried two conflicting rules.** Correct —
+   the §Control selectors paragraph still demanded measured-only cost
+   after §Cost and reporting contract superseded it with provenance
+   homogeneity. Resolved: the duplicated paragraph is deleted and the
+   selector now defers explicitly, adding no provenance rule of its
+   own.
+
+2. **[P2] Measured-cost surface not pinned — and a constraint conflict
+   found while pinning it.** Verified:
+   `test_no_dollar_cost_in_backend_metadata`
+   (`scripts/benchmark_runner/tests/test_claude_code_backend.py`)
+   asserts `total_cost_usd` must NOT reach `backend_metadata`, citing
+   a standing constraint. Tracing it found
+   `specs/benchmark-harness/spec.md` § Constraints: dollar-cost
+   reporting is "permanently out of scope until billing-correlation is
+   solved across providers; no schema slot for cost estimation is
+   added." Rev-4's proposal to add `cost_usd` to `BackendResult` would
+   have silently reversed that cross-spec constraint.
+
+   Resolved without reversing it: E1 adds no cost to `BackendResult`,
+   `backend_metadata`, or any shared harness schema. The
+   `routing_hybrid` scenario reads `total_cost_usd` from the backend
+   transcript into E1's own routing-eval-owned record, which declares
+   its `cost_basis`. The harness constraint, its absent schema slot,
+   and its guarding test all remain intact and unmodified. The file
+   map now names `benchmarks/report/cost_reader.py` instead of
+   `contracts.py`, and T1 carries the three required regressions
+   (valid non-negative value becomes `measured`; invalid or negative
+   does not; missing falls through to the versioned estimator or
+   `unavailable`) plus an assertion that `backend_metadata` still
+   carries no cost.
+
+3. **[P2] #260 described the superseded contract.** Resolved: the
+   issue body is synchronized with rev-5 — AIQ removed, per-`(task,
+   trial)` oracle, five-component fingerprint, per-cell budget
+   semantics, global component mask, and the cost-ownership boundary.
+
+4. **[P3] Stale local summaries.** Resolved: the test strategy now
+   lists all five fingerprint components with one mismatch test each
+   and adds the cost-provenance regressions; this record's working
+   claim and deviation 1 no longer promise an AIQ scalar. Descriptions
+   inside rounds 1–3 retain AIQ deliberately, as history of what those
+   rounds addressed.
+
+## T1 build audit (owner review) — seven findings, all applied
+
+The owner reviewed the first T1 build before commit and found that the
+52 passing tests did not enforce the principal contracts. All findings
+verified in-tree (the validator blindness was reproduced: a mixed
+candidates+arms config and an empty fingerprint both returned zero
+errors) and resolved:
+
+1. **Parser enforcement.** `compare.py:_validate` now refuses a config
+   declaring both `candidates` and `arms`/`scenario` with its own
+   error, and refuses scenario-only configs with a pointer to the
+   routing-eval path instead of silently running them as candidate
+   comparisons. `routing_eval/scenario_config.py` is the executable
+   validator for the scenario shape (closed arm kinds, cct_router
+   requires a registry, cost_basis pattern, trial_seeds length ==
+   trials, budget ceiling if-and-only-if an oracle_budget arm, event
+   stream shapes); the T4 driver will load configs only through it.
+2. **Tests prove rejection.** test_routing_eval_schemas.py ships its
+   own validator covering $ref, oneOf, not, const, pattern, minLength,
+   minItems (with self-checks), and asserts the negatives: mixed
+   configs, empty fingerprints, empty cells, bad cost pairings, and
+   evidence-free verifier rows are all REJECTED, by schema and by the
+   executable parsers. Side-catch: the stricter validator exposed that
+   `cross-language-mini.json` has shipped with one candidate since
+   dfc85c7, violating the schema's own minItems:2 — pinned as a known
+   pre-existing violation (fixing a shipped preset is outside E1).
+3. **measured_cost reads the transcript stream.** It now mirrors
+   rb_measured_cost's selection rule: normalize JSON/JSONL, take the
+   LAST type:"result" record (or the single untyped object), and only
+   then validate the number. An assistant record carrying a
+   total_cost_usd key can no longer forge a measured cost.
+4. **Estimator strictness.** Negative/non-finite/boolean counts and
+   rates refuse the whole estimate; input AND output must both be
+   priced; consumed cache tokens without a cache rate refuse rather
+   than understate. Cost's documented invariants are enforced in
+   __post_init__, so `Cost(None, "measured")` cannot exist and
+   satisfies() never sees a degenerate value.
+5. **Raw executions vs derived arms.** routing-run's `arm` field is
+   replaced by `mode` (profile_sweep | cct_router) + `profile_id`,
+   with a oneOf pairing: a sweep record names its fixed profile, a
+   router record fixes none. The four derived arms are deliberately
+   unrepresentable as executions — a record claiming one is a
+   fabrication and fails validation.
+6. **Invariants encoded, not described.** Cost/provenance pairing is a
+   oneOf in both schemas; verifier evidence_ref is required and a
+   non-empty string; execution_identity requires all seven keys; the
+   matrix requires trial_seeds and cost_basis.
+7. **Stale gate.** This record refresh clears it.
+
+## T1 build audit round 2 (owner) — five findings, all applied
+
+The owner's second pre-commit audit found the executable and persisted
+contracts still fail-open in five places. Each was reproduced in-tree
+before fixing (a single-cct_router-arm config with a typo'd
+`trial_seedz` key and no cost_basis validated cleanly), then closed:
+
+1. **Complete control set at load time.** scenario_config now requires
+   each of `always_best`, `always_cheapest`, `oracle`, `cct_router`
+   exactly once (FR-E1-3), with `oracle_budget` the only optional kind
+   (at most once), and `cost_basis` is mandatory. The schema's `arms`
+   floor rose to minItems 4, with the composition rule enforced by the
+   parser the T4 driver loads through.
+2. **Closed keys + finite numbers.** Unknown top-level, arm, and event
+   keys are refused (`trial_seedz`, `regsitry`, `outcoem` all reject);
+   the budget ceiling refuses NaN/infinity/booleans.
+3. **Evidence containers are required.** routing-run now requires every
+   evidence container — a writer records an empty array, explicit
+   nulls, or an insufficient_evidence entry, never an absent key — so
+   missing evidence is explicit rather than indistinguishable from an
+   incomplete writer. routing_decision requires its full FR-E1-10
+   vocabulary including the new `provisional_outcome` field.
+4. **Estimated cells keep their table identity.** Matrix cell cost
+   gains a required `estimator`: estimated cells must name their price
+   table (a versionless estimated cell rejects), measured/unavailable
+   cells carry null — the artifact can now PROVE its costs came from
+   the declared basis table.
+5. **Reproducibility + robustness.** `Cost` refuses empty estimator
+   inputs (an estimate that cannot be recomputed is not evidence);
+   malformed price-table roots yield `unavailable` instead of an
+   AttributeError, and load_price_table raises a named error on a
+   non-object root.
+
+## T1 build audit round 3 (owner) — three findings, all applied
+
+The owner's third pre-commit audit found the persisted/config contracts
+still fail-open at three seams. All three resolved:
+
+1. **Axes own their fields, both in schema and in code.** Each
+   compare-config oneOf branch now requires its own fields and forbids
+   the other axis's (candidate branch forbids arms/scenario/cost_basis/
+   trials/trial_seeds/event_stream/budget_ceiling_usd; scenario branch
+   requires cost_basis and forbids candidates/runs/
+   attempt_timeout_seconds). compare.py additionally refuses
+   scenario-only keys on a candidate config even when scenario/arms are
+   absent — a cost_basis the author clearly intended is never silently
+   ignored. The test validator gained anyOf support (with self-checks)
+   so these rejections are proven, not described.
+2. **Evidence containers cannot be hollow.** The owner's reproduction
+   (injected_events [{}], considered [{}], empty baseline/
+   quality_gates/tier2, rollbacks [{}], insufficient_evidence {}) now
+   fails per container: injected events share the preset's closed
+   event shape; considered candidates require id/verdict/reason;
+   baseline, quality_gates (through findings_by_severity), and tier2
+   require their fields (explicit nulls, never absent keys); rollbacks
+   require kind and detail; insufficient_evidence is a keyed map whose
+   entries REQUIRE a reason, with an empty object rejected because it
+   asserts neither sufficiency nor insufficiency.
+3. **Estimator inputs are recomputable, not merely non-empty.**
+   The inputs shape is closed: input and output buckets required,
+   cache buckets optional, every present bucket pairing a valid token
+   count with a valid rate_per_million; unknown buckets refuse. A
+   round-trip test proves whatever estimate_cost emits reconstructs to
+   the same value.
+
+## T1 build audit round 4 (owner) — one finding, applied
+
+The last open seam in the cost-reproducibility contract: an estimated
+cost was not bound to its recorded inputs. Both halves of the owner's
+reproduction are closed:
+
+- **Schema**: `$defs/estimate_inputs` pins the closed shape (input and
+  output buckets required, cache optional, every bucket pairing tokens
+  with rate_per_million), and the estimated branch of the cost oneOf
+  references it — `inputs: {"input": {"tokens": 1}}` no longer
+  validates.
+- **Construction**: `Cost.__post_init__` recomputes the total from the
+  recorded inputs and refuses a value that does not equal it
+  (isclose, rel 1e-9). A structurally valid understated cost — the
+  owner reproduced value=1.0 over inputs recomputing to ~0.000002 —
+  can no longer exist to win `always_cheapest`.
+
+## T2 build audit round 1 (owner) — four findings, all applied
+
+The owner's pre-commit audit of T2 found the replay engine could not
+satisfy the real probe contract and was fail-open on scheduling,
+concurrency, and quoting. All four resolved, each now covered by a
+regression the original suite lacked:
+
+1. **The probe replay satisfies the REAL rb_probe.** A declared
+   success event is now pass-mode (answered from the prompt) instead
+   of the canned harness result that failed the nonce; the expected-
+   line extraction matches both rb_prompt forms (the tool-required
+   prompt says "Then reply...", lowercase); and when the prompt names
+   a tool command the replay RUNS that exact command, which writes the
+   marker to CCT_PROBE_TOOL_FILE. Four end-to-end tests drive the
+   unmodified rb_probe: inference-only pass, declared-success pass,
+   tool-required pass (proving the tool canary landed), and an
+   injected auth failure reaching probe_fail through the real
+   classifier.
+2. **at_task_index has a boundary.** events_for_task() is the
+   scheduling filter: an event declared for task 5 never reaches task
+   0's replay, within-task order is declaration order, and
+   materialize_replay documents that it consumes an already-scheduled
+   invocation stream. The T4 driver materializes one replay per task
+   through this filter.
+3. **The event index is claimed atomically.** The unlocked
+   read-modify-write counter (reproduced losing 16 of 40 concurrent
+   increments) is replaced by mkdir-based claims — each invocation
+   owns exactly one index. A 40-way concurrent test asserts all 30
+   events delivered exactly once plus exactly 10 defaults.
+4. **Paths are quoted.** The script resolves its directory from $0 and
+   the returned command is shlex-quoted; a replay directory containing
+   spaces now works and is tested.
+
+## T2 build audit round 2 (owner) — two findings, all applied
+
+Round 2 found two remaining fail-open/fail-unsafe paths in the replay:
+
+1. **Missing declared evidence fails closed.** The materialization now
+   records the stream length, and the script distinguishes four cases
+   in order: explicit pass mode (the .mode file is READ, not inferred
+   from absence); complete .out+.rc evidence; a declared index with
+   missing or corrupt evidence — exit 70 with a stderr message, never
+   success and never a clean provider failure (the owner's repro:
+   deleting an auth-failure transcript had become a nonce pass); and
+   past-the-stream default. Regressions cover a deleted .out, a
+   deleted .rc, and a declared mid-stream pass.
+2. **Prompt text is never executed.** The tool leg validates the
+   request against rb_prompt's CLOSED canary shape — the exact string
+   `printf %s CCT_TOOL_OK > $CCT_PROBE_TOOL_FILE` with the path equal
+   to the exported env var — and writes the marker itself. Any other
+   tool request exits 70 without execution. The owner's injection
+   repro (a `touch` in the expected prompt shape) is now a regression
+   asserting the file is NOT created; the legitimate canary shape is
+   asserted to write the marker and pass, and the end-to-end
+   rb_probe tool test still passes, proving the validated shape is
+   exactly what the real probe emits.
+
+## T2 build audit round 3 (owner) — three findings, all applied
+
+Round 3 found the replay's integrity boundaries still open:
+
+1. **Re-materialization defines the complete stream.** Materialization
+   now cleans every owned artifact (event files, defaults,
+   stream-count, manifest, claims) before writing, and the script
+   consults event files ONLY inside `n < count`. The owner's repro —
+   two events, re-materialize one, stale second failure replayed past
+   stream-count=1 — is a regression asserting the stale event never
+   fires and index 1 gets the default.
+2. **Evidence is digest-bound, not merely readable.** Every sidecar's
+   sha256 is recorded in a manifest, and the manifest's own digest is
+   EMBEDDED in the generated script, so a flipped .rc, an edited
+   transcript, an altered stream-count, and even a self-consistently
+   recomputed manifest over tampered evidence all fail closed (exit
+   70) — each is a regression. stream-count and .rc are additionally
+   syntax-validated as numbers.
+3. **The seam vocabulary is closed.** `REPLAY_SEAMS = ("harness",
+   "probe")`; anything else is refused by name at entry, so a typo'd
+   seam can never silently fall into harness semantics and recreate
+   the canned-reply nonce failure.
+
+## T3 build audit round 1 (owner) — HOLD on one invariant, applied
+
+The owner approved the selector semantics and held T3 on one missing
+invariant: a persisted matrix must PROVE exact Cartesian coverage, not
+merely schema validity — a matrix that lost one expensive trial cell
+would let always_cheapest win on incomplete evidence, and a vanished
+oracle candidate silently lowers the hindsight bound.
+
+Resolved with two structural additions and one shared validator:
+
+- The matrix now DECLARES its task list (`tasks`, schema-required):
+  without it, a fully vanished task is undetectable after load.
+- Every cell carries its `seed` (schema-required), making the cell's
+  canonical identity (task_id, profile_id, trial, seed) and the
+  trial-index/seed pairing verifiable after load.
+- `verify_matrix()` re-establishes the invariant — exactly one cell
+  per declared task x declared profile (the fingerprint's execution
+  identity) x declared (trial, seed); no duplicates; no undeclared
+  cells; seed pairing exact; eligibility never removes the cell
+  requirement. `build_matrix` runs it before returning and EVERY
+  selector runs it before selecting.
+
+Regressions cover each required mutation: the owner's bias fixture
+(alpha $1/$1/$9 vs beta $2/$2/$2 — the complete matrix picks beta, the
+pruned one REFUSES rather than letting alpha win at $1 mean); a removed
+ineligible cell (explicit ineligibility never becomes silence); a
+duplicated identity; a trial carrying another trial's seed; and a
+persistence round-trip whose post-load mutation refuses.
+
+## T3 build audit round 2 (owner, post-commit a0d9694) — two findings + CI
+
+The owner reviewed the T3 commit itself, held T4 narrowly on two
+evidence-integrity gaps, and pinned one T4 design rule. A CI failure
+on PR #262 was fixed in the same round.
+
+1. **Eligibility bound to the registry predicate.** T3's selectors
+   trusted the persisted `Cell.eligible` bit, so flipping
+   `eligible: true` to `false` in the artifact removed a profile from
+   all three controls while the structural invariant still passed —
+   and build_matrix accepted an executor's eligibility bit without
+   checking it against the predicate. Resolved: build_matrix rejects
+   an executor overruling the predicate; verify_matrix accepts the
+   AUTHORITATIVE `eligible(profile, task)` predicate and requires
+   every cell's stored bit to match; every selector forwards it. The
+   owner's flip reproduction is a regression asserting all three
+   selectors refuse; the misleadingly named identity test was renamed
+   to what it actually guards.
+2. **always_cheapest requires every declared trial priced.** The
+   partial mean over "whichever trials happen to be priced" was the
+   same incomplete-evidence bias the coverage HOLD eliminated: alpha
+   at measured $1 + 2x unavailable posted a $1 mean and beat beta's
+   honest $2/$2/$2 with a structurally COMPLETE matrix. Resolved: a
+   profile participates only when basis-satisfying cost exists for
+   ALL declared trials; the owner's discriminator fixture asserts
+   insufficient_evidence ("only 1 of 3 declared trials"), never alpha.
+3. **CI (benchmark-smoke) import convention.** CI discovers with
+   unittest from the tests directory, loading modules top-level; the
+   four routing-eval test modules used relative imports where every
+   sibling uses absolute ones — 12 errors. Converted to the repo's
+   absolute-import convention and verified under CI's exact
+   invocation.
+
+**T4 design rule pinned in tasks.md:** leg completeness must be proven
+from durable routing-run evidence and state transitions — provisional
+work reconciled by Tier-1, recovery SELECTING the preferred profile at
+a task boundary, Tier-1-only controls REFUSING Tier-2 — never from a
+driver-maintained visited-legs list.
+
+## T4 build audit round 1 (owner) — five findings, all applied
+
+The owner's review of T4 part 1 found the verifier accepted its own
+counterexamples and the production path missing. All five resolved:
+
+1. **The production execution path exists (T4 part 2).**
+   supervisor_runner.py shells to the REAL cooldown-supervisor.sh —
+   no fork, no patch — feeding provider behaviour only through the T2
+   replay seam, and HARVESTS routing-run records from the durable
+   outputs (started-N.json attempt records + the events.jsonl
+   journal's per-candidate routing_candidate lines). A live
+   integration test proves the ordinary-run legs end to end: injected
+   quota exhaustion cools the pool in the persisted circuit store,
+   and the NEXT task's harvested decision shows the real selector
+   rejecting the preferred profile in the closed (pool:)cooldown
+   state and selecting the fallback. The live run also surfaced and
+   pinned an increment-B semantic the scenario vocabulary now
+   encodes: the enveloped usage_limit (Retry-After) draws ONE
+   same-profile retry; text-form quota_exhausted is what cools the
+   profile and drives failover — a new closed event outcome with its
+   own classifier-parity regression, and the hybrid preset's failover
+   leg now uses it.
+2. **One ordered witness per trial.** The chain initial preferred <
+   failover < provisional < recovery < reconciliation must hold in
+   strictly increasing record order; the owner's reordered
+   counterexample is a pinned failing regression, and the initial
+   selection is now itself a proven leg.
+3. **Trials verify independently.** Records group by trial; EVERY
+   declared trial must prove the full arc; the owner's cross-trial
+   stitching counterexample now fails both trials. A complete trial 0
+   never covers a silent trial 1.
+4. **Identity binds the evidence.** RecordInvalid refuses records
+   missing required shape, in profile_sweep mode, with foreign
+   preset/registry digests, or undeclared trial indices; the
+   provisional->reconciled join matches BOTH packet_id and
+   packet_digest; and every synthetic verifier fixture is asserted
+   schema-valid (the previous fixtures carried 20 schema errors).
+5. **Closed vocabulary, not prose.** considered[] gains the closed
+   circuit `state` (increment D's seven-state vocabulary) and
+   decisions gain the closed `route_class`; failover is proven by
+   state == cooldown and refusal by route_class == tier1_only. The
+   harvester owns the ONE prose->structure translation, tested
+   against the producer's exact formats, with the owner's traps
+   ("rate" inside "accurate", "tier1 is cheaper") pinned as
+   translating to None and failing their legs.
+
+Live-coverage boundary, stated plainly: the supervisor integration
+exercises initial+failover live; the delegation/recovery/
+reconciliation legs are verified over schema-valid records here and
+owned live by the routing bash suites — the full live arc through one
+supervisor lineage remains future work, and the arc verifier is the
+gate either way.
+
+## T4 build audit round 2 (owner) — five findings, all applied
+
+The owner's second T4 audit found the production path unable to
+produce the required arc and four fail-open seams. All five resolved:
+
+1. **The production runner drives the COMPLETE arc.** SupervisorRunner
+   gains delegate_task (the real --delegate flow, harvesting increment
+   C's provisional entry: packet_id, packet_digest,
+   verified_provisional), reconcile_task (the real --reconcile flow,
+   harvesting the ledger verdict flip to accepted with the reconciler
+   identity and the SAME packet identity, refusing any identity
+   drift), and tick_probe (the real `cct routing tick` with the T2
+   probe seam). The closing integration test drives the UNMODIFIED
+   supervisor + tick CLI through the entire #109 §12 arc — initial
+   preferred build, text-form quota exhaustion with a provider reset
+   instant, task-boundary failover in the closed pool:cooldown state,
+   bounded Tier-2 delegation to verified_provisional, two real probe
+   passes, preferred re-selection, Tier-1 reconciliation of the same
+   packet — and verify_arc proves it complete from the harvested
+   records alone. Live debugging surfaced and pinned two more
+   increment-B/D semantics: retry-after governs rate limits while
+   quota without an authoritative reset cools for the default hour
+   (so the scenario's failover leg carries reset_at), and the
+   reconciler must emit RECONCILE_VERDICT (the mock now does).
+2. **Freshness boundary.** run_task/delegate_task refuse pre-existing
+   evidence directories; a nonzero supervisor exit publishes NO
+   evidence (which immediately caught two fixture gaps the old code
+   silently harvested through); reconcile harvests only journal lines
+   past a pre-invocation offset in its shared ledger.
+3. **Records are bound to their invocation.** run_scenario refuses a
+   record whose (task_id, trial, trial_seed) or injected_events do not
+   match the invocation that returned it; the owner's
+   whole-arc-from-t0 reproduction is a pinned regression, plus wrong
+   seed and false event provenance.
+4. **The full schema gates verification at runtime.** The validator
+   moved from test code into production (record_check.py); verify_arc
+   validates every record against routing-run.schema.json before
+   anything else. The owner's tokens-removed reproduction is a
+   regression. (Side-catch: the schema's own injected_event enum was
+   missing quota_exhausted — the runtime gate caught it on live
+   records immediately.)
+5. **Provenance is honest.** Records carry trial_seed
+   (schema-required) and the exact scheduled injected_events;
+   ordinary-run decisions record increment B's frozen tier1_only
+   route class as a documented definitional translation.
+
+## T4 build audit round 3 (owner) — five findings, all applied
+
+1. **The production orchestration entrypoint exists.**
+   run_hybrid_scenario(config, runner) walks the preset's declared
+   task order: ordinary tasks through run_task, the preset's new
+   delegate_tasks through the real --delegate flow, tick pumping at
+   the first task boundary AFTER the trial's delegated work (exactly
+   where §12 places recovery, bounded and sleep-free), then --reconcile
+   for every pending packet. The integration test invokes THIS
+   entrypoint on a preset-shaped config; the manual sequencing is
+   gone, and the checked-in preset now declares its delegate task.
+2. **Tiers are part of the proof.** The schema, harvester, and
+   verifier carry the ledger's builder_id/builder_tier (non-null iff
+   delegated, oneOf-bound) and reconciler_id/reconciler_tier
+   (required): the Tier-2 leg requires an identified tier2 builder,
+   reconciliation requires an identified tier1 reconciler, and the
+   live test asserts both from the harvested records (the ledger's
+   t2loc/tier2 and preferred/tier1). Contradictory-tier and
+   unknown-builder mutations are pinned regressions. The runtime
+   schema gate immediately caught the ordinary-harvest tier2 block
+   missing the new fields — a live demonstration of round 2's fix.
+3. **The registry digest is computed, never asserted.** The runner
+   field is gone; registry_digest_of(registry_path) hashes the file
+   the subprocess executes under, and a regression asserts records
+   carry exactly that digest with no field left to mislabel.
+4. **No wall-clock dependency.** The provider reset in the arc config
+   is in the PAST, so the pool cools and the probe is due
+   immediately: no sleeps anywhere, and the failover-boundary state is
+   pool:probe_due — still increment D's closed unavailable-pending-
+   recovery vocabulary, to which the verifier's failover evidence set
+   was widened ({cooldown, probe_due, probing}, structured states
+   only, prose traps still refused). A probe_due-variant arc is a
+   pinned regression.
+5. **Non-finite numbers are not JSON evidence.** record_check rejects
+   NaN/inf as type violations (NaN defeats every ordered comparison,
+   so it slid past minimum checks toward T5 selection); regression
+   pinned.
+
+## T4 build audit round 4 (owner) — four findings, all applied
+
+Round 4 targeted the checked-in preset and the multi-trial production
+path:
+
+1. **The preset is deterministic and immediately probeable.** Its
+   quota event now carries a PAST provider reset (2000-01-01), so a
+   real run cools the pool and the probe is due at once — the 2099
+   reset that stranded reconciliation behind
+   routing_no_eligible_profile is gone, and the preset regression pins
+   the past-reset property.
+2. **Trials run in clean execution contexts.** SupervisorRunner
+   gains for_trial(trial): its own routing state, ledger root (and
+   probe ledger), and a fresh worktree git-cloned from the baseline's
+   committed state. The orchestrator uses it per trial, and the
+   full-arc integration now runs TWO trials, asserting each proved the
+   complete arc independently — trial 1 starts from the pristine
+   baseline, never from trial 0's healthy circuit or accepted
+   reconciliation edits.
+3. **Events cannot land on delegated tasks.** Provider events are the
+   Tier-1 seam's vocabulary; config validation refuses an event
+   scheduled onto a delegate task (regression pinned), the orchestrator
+   asserts it defensively, and the checked-in preset no longer
+   schedules one onto python/book-store.
+4. **The cct_router arm's registry binds the runner.** Before any
+   invocation, run_hybrid_scenario resolves the arm's named registry
+   and refuses a runner executing a different document — the owner's
+   registry-A-config/registry-B-runner reproduction is a pinned
+   regression ("the configured policy must be the one measured").
+
+## T4 build audit round 5 (owner) — four findings, all applied
+
+1. **The declared benchmark executes.** SupervisorRunner gains
+   benchmark_id: when set, every ordinary task runs the EXISTING
+   adapter lifecycle around the supervisor — the adapter (resolved
+   through the real registry) prepares the task's starter files before
+   the run, and its verification executes after, recorded as a
+   driver-owned verifier with addressable evidence. An unregistered
+   benchmark or a task the adapter does not expose REFUSES the run
+   rather than silently measuring a hand-built fixture under the
+   declared benchmark's name, and run_hybrid_scenario binds
+   config.benchmark to the runner before any invocation. The full-arc
+   integration registers a fixture adapter through the real
+   registry API (the same protocol Aider Polyglot implements) and
+   asserts every ordinary record carries the adapter's verification.
+2. **Registry paths resolve against the config source.** ScenarioConfig
+   carries source_dir; resolve_registry_path expands ~ (the preset now
+   names the documented operator location
+   ~/.code-copilot-team/routing.toml), passes absolutes, resolves
+   relatives against the CONFIG's directory, and refuses a relative
+   path with no source — one preset means one policy regardless of the
+   caller's cwd.
+3. **Out-of-range event indices are refused** (a phantom event would
+   join the digest yet reach nothing), and an event stream without a
+   declared task list is refused outright. Both pinned.
+4. **The isolation proof is load-bearing.** The two-trial arc test now
+   asserts what an identity for_trial() cannot satisfy: distinct
+   per-trial ledger roots, a pristine baseline worktree (clean git
+   status), and no reconciliation edits (MAGIC markers) in the
+   baseline source.
+
+## T4 build audit round 6 (owner) — five findings, all applied
+
+The adapter execution boundary, closed for real this time:
+
+1. **register_all() is called** — importing _register has no side
+   effect; a fresh-process regression asserts aider-polyglot resolves.
+2. **The routed session executes the adapter task.** Each benchmark
+   task gets a DEDICATED task worktree: adapter.prepare_task at the
+   root the backend works in, adapter.isolation_for ->
+   install_dependencies (run.py's own post-prepare call), and the
+   feature spec GENERATED from adapter.prompt_for — completion means
+   the routed child edited the benchmark task and checked it off, and
+   adapter.verify judges the EXECUTED worktree (the fixture verify now
+   requires the actual solution, and its evidence is asserted). The
+   harness seam defaults to the deterministic replay; launching the
+   profile's real backend CLI is an explicit USE_REAL_BACKEND opt-in.
+3. **Delegation goes through the adapter.** The packet worktree, route
+   metadata (allowed_files from the prepared file set), and FR
+   verifier are GENERATED from the adapter task; packet verification
+   IS the adapter's own verify via a bridge CLI
+   (adapter_verify module) invoked as a generated checks script.
+   Getting there tripped THREE real increment-C guards in sequence —
+   the wrapper-command refusal (bridge became a checks script), the
+   rewrite-fraction thrash control (the fixture task gained realistic
+   multi-line shape), and repeated-failure signatures (the bridge
+   subprocess needed the out-of-tree adapter extension seam,
+   CCT_EXTRA_ADAPTER_MODULE, now a documented production seam) — each
+   a live demonstration that the real machinery, not a shim, is under
+   test. The hand-built packet fixtures are deleted; the arc's
+   baseline worktree is minimal.
+4. **Trial isolation is load-bearing three ways**: distinct per-trial
+   contexts and task worktrees asserted; the baseline pristine; and
+   trial 1's initial decision must see the preferred profile in state
+   'unknown' — under ANY shared state it would arrive 'healthy' from
+   trial 0's successes.
+5. **for_trial refuses pre-existing contexts** (worktree, state,
+   ledger) — a crash between clone and ledger publication can no
+   longer hand the next run a contaminated context that looks clean.
+   Regression pinned.
+
+## T4 build audit round 7 (owner) — four findings, all applied
+
+1. **Replay and live execution compose.** materialize_replay gains a
+   passthrough: declared events replay deterministically, and every
+   attempt past the stream EXECs the real child with the prompt still
+   on stdin. USE_REAL_BACKEND with events now resolves to that
+   composite (real child = the supervisor's own auto-build driver);
+   without events it remains no-override; the deterministic replay
+   stays the default. Unit-pinned at the seam and at the runner's
+   resolution.
+2. **The provisioned lifecycle, in its documented order.**
+   provision_worktree -> prepare_task -> install_dependencies — venv
+   and docker provisioning are no longer skipped. The owner's
+   python/book-store reproduction is a cache-gated regression
+   asserting .venv exists after preparation. .venv is gitignored out
+   of the task history and packet clones.
+3. **Write authority is the adapter's solution boundary.**
+   allowed_files comes from TaskSpec.metadata.solution_files, never
+   from enumerating prepared files; no declared boundary, no
+   delegation (refusal pinned). The owner's go/bowling reproduction is
+   a cache-gated regression asserting the packet grants bowling.go and
+   NOT bowling_test.go, cases_test.go, go.mod, or .venv.
+4. **The adapter prompt is durable and conveyed.** Every task worktree
+   commits specs/<feature>/benchmark-prompt.md with the full
+   adapter.prompt_for text; the packet outcome and the ordinary task
+   line point at it, and the arc test asserts the delegated child's
+   actual stdin references it — a real model now receives the
+   benchmark instructions the adapter defines.
+
+## T4 build audit round 8 (owner) — two verifier invariants, applied
+
+1. **tier1_only controls are a NEGATIVE STREAM INVARIANT.** The
+   refusal witness alone no longer certifies a control: any Tier-2
+   execution evidence anywhere in the control task's records — a
+   delegated/provisional record, a tier2 builder, a decision selecting
+   a Tier-2 profile, a verified_provisional outcome — fails the leg as
+   a CONTAMINATED control, regardless of a valid refusal appearing
+   later. The owner's counterexample (provisional record before the
+   refusal) is pinned, and the mutation check passes: deleting the
+   negative scan makes the counterexample test fail.
+2. **The reconciliation witness proves INDEPENDENCE, mirroring
+   increment C's frozen fail-closed predicate exactly** — never a
+   weaker E1 interpretation: builder and reconciler identities
+   (provider AND model) must both be known (unevaluable is never a
+   successful witness); provider equality is the primary collision;
+   model equality refuses even across distinct providers (the
+   conservative secondary). The schema and harvester now carry
+   builder_provider/builder_model (oneOf-bound to delegation) and
+   reconciler_provider/reconciler_model (required), read from the
+   ledger identities the supervisor already persists. Counterexamples
+   pinned for same-provider, same-model-across-providers, and
+   unknown-identity; the mutation check passes: removing the
+   independence conjunct makes both subtests fail. The live arc
+   remains green — the fixture's local-ollama/qwen-coder builder vs
+   anthropic-subscription/sonnet reconciler is genuinely independent.
+
+## T5 build audit round 1 (owner) — one finding, applied
+
+The owner approved quality_fn v1 (global mask, renormalization,
+aggregate-then-weight vs per-cell projection), the router metric
+reductions, the hard control-set gate, basis-aware cost/frontier
+withholding, the closed metric vocabulary, and the SchemaUnsupported
+fail-closed pin — and held T5 on ONE comparison-integrity gap:
+
+**Router evidence must be fingerprint-compatible with the control
+matrix, not merely preset-compatible.** Same preset + different
+registry means the router and its controls did not run in the same
+routing universe, which invalidates the plane more fundamentally than
+a missing control arm. Resolved by reusing T3's frozen fingerprint
+semantics rather than defining a second check: the gate now compares
+EVERY component durably represented on both sides — preset digest,
+registry digest, task-set revision, toolchain digest — refuses any
+mismatch before any comparative figure exists, and refuses a component
+that cannot be proven (a null toolchain is never silently assumed
+equal). The explicit boundary: execution_identity is matrix-only by
+construction (the router fixes no single profile; its selections live
+in routing_decisions). Discriminating regressions cover all three
+carried components plus the unprovable case, and the owner's mutation
+check passes: reducing the gate to preset-only fails the
+same-preset/different-registry counterexample.
+
+## T6 build (2026-08-27) — the five owner gates, encoded
+
+The owner's GO for T6 pinned five gates; each is implemented as an
+enforced invariant, not a convention:
+
+1. **Scrub before persistence.** `redaction.py` (plan decision 8) owns
+   a closed secret-pattern set (auth headers, key/token/secret
+   assignments, the CCT_CONFIG__*/CCT_CLI_SETS connector-inventory
+   carriers, well-known token shapes, private-key blocks, home-path
+   collapse) applied at every E1 write site: the adapter-verify
+   evidence write and `write_run_records`, the single persistence gate
+   for routing-run artifacts. The decisive adversarial regression
+   seeds a live-shaped credential and proves the counterfactual: the
+   raw-then-scrub-at-read design leaves the secret durable on disk,
+   while the write-time gate never lets it land. Mutation checked:
+   moving the adapter-evidence scrub to read time fails the test.
+2. **Semantic-product diff, environment churn excluded.**
+   `delegated_lines` is increment C's OWN ledger measure
+   (`changed_lines`, computed by the packet evaluator);
+   `reconciliation_diff_lines` is 0 exactly when increment C's
+   digest-derived verdict is `accepted`, else reconstructed from the
+   durable `prestate.patch`/`accepted-N.patch` in a scratch clone and
+   counted over measured paths only (`is_measured_path` excludes
+   venvs, caches, bytecode, VCS, node_modules, .cct runtime noise);
+   binary churn in a measured path yields None, never a guess. Row 6
+   is harvested from increment C's own `packet_scope` journal events —
+   no new detector.
+3. **Contagious insufficiency.** Rows 9-10 aggregate per CELL (the
+   delegate and reconcile legs of one (task, trial) pair without
+   double-counting); a delegated cell missing either count — or
+   carrying conflicting durable evidence — makes both rows
+   `insufficient_evidence` with the reason surfaced in the arm report,
+   never zero rework. `unavailable` cost provenance propagates:
+   `always_cheapest` insufficiency refuses the control-set gate, the
+   router cost axis reports insufficiency, and the Pareto frontier is
+   withheld whole (Q still reported). An `oracle_budget` selection
+   insufficiency is carried into the report with Q withheld — never
+   computed over partial coverage, never silently dropped. Mutation
+   checked twice: rendering missing evidence as zero and reverting to
+   per-record summing each fail their regressions.
+4. **Redaction cannot alter measurement semantics or fingerprints.**
+   `write_run_records` computes the record's measurement view
+   (fingerprints, identities, trial coordinates, costs, states,
+   verdicts, prose-channel COUNTS) before and after the scrub and
+   refuses the whole artifact on any difference; scrubbed records must
+   also re-validate against routing-run.schema.json. Mutation checked:
+   a hostile digest-eating pattern raises RedactionError with the
+   guard present and persists silently with it deleted.
+5. **Reproducibility from identical immutable inputs.** Canonical
+   serialization end-to-end: identical records produce byte-identical
+   artifacts (proven on fabricated records and on the LIVE two-trial
+   arc's harvested records), with evidence references relativized
+   against the artifact root and verified to resolve to readable
+   artifacts.
+
+## T6 build audit round 1 (owner) — one P1, applied
+
+The owner approved the measurement/insufficiency work, the semantic
+diff sourcing, the per-cell rows 9-10 aggregation, the
+measurement-view guard, the single persistence gate, and the sweep's
+host-baseline accounting — and held T6 on ONE redaction-completeness
+gap:
+
+**Recognizable-secret patterns are not the actual-value guarantee.** A
+deliberately boring credential (`correct-horse-X7`) echoed in prose
+with no label, header, or known token shape survives a pattern-only
+scrub. Resolved by adding the dynamic literal-secret pass to the
+writer boundary: known credential VALUES are replaced literally
+(longest-first, regex metacharacters inert, empty values ignored)
+BEFORE any pattern runs, at every E1 write site. The value set is
+resolved from the credential references the executed registry itself
+declares — `credential_env` carries environment-variable NAMES
+(increment A's structural boundary) — so only referenced variables
+are ever read; the environment is never enumerated. The runner
+resolves this set unconditionally on every write, so the persistence
+boundary is independently safe without callers passing anything.
+
+The owner's required regression is in and discriminating both ways:
+the boring credential provably survives the static layer, never
+reaches durable bytes through the writer with the dynamic pass on,
+and DOES leak with the dynamic pass disabled while every static
+pattern stays enabled — proving the dynamic pass, not the regex
+layer, carries the guarantee. The mutation check (gutting
+`_scrub_literals`) fails three regressions.
+
+## T7 closure (2026-08-27) — docs, decision-10 proof, final sweep
+
+The owner's four closure proofs, established together:
+
+1. **Documentation matches the shipped increment.** The operator
+   guide (`benchmarks/README.md` § Routing-quality evaluation)
+   documents the hybrid scenario, the five arms with the hard
+   control-set gate, the outcome matrix and five-component reuse
+   fingerprint, the artifacts and the write-time redaction gate, the
+   `quality_fn: v1` weight table (verified against the code's
+   COMPONENTS table), and how to read the report — including the
+   no-AIQ rule, contagious insufficiency, and the explicit statement
+   that the harness's no-dollar-cost rule for backend metadata stands
+   untouched. CHANGELOG carries the E1 entry; the top-level README
+   points at the section; the Status table records #260. Every claim
+   was audited against the shipped code, and all 14 plan §Files
+   artifacts exist.
+2. **Decision 10 stays executable, not documentary.** All six
+   production routing suites pass UNMODIFIED at exactly their pinned
+   counts — config 167, failover 186, tasks 154, packet 99,
+   delegation 171, recovery 375 (1152/0) — plus cooldown-supervisor
+   37/0, and the T2 diff guard test
+   (TestNoProductionRoutingFileTouched) holds over the branch diff
+   and working tree.
+3. **Test-count pins match reality by execution.** The suites
+   hard-fail on assertion-count drift and none drifted; E1 changed no
+   shell suite, and tests/test-counts.env needed no update.
+4. **The final sweep is honest, host baseline separated.** Full
+   CI-exact discovery: 1019 tests, 4 failures, 1 skipped (superseded
+   by the round-3 rerun on the corrected tree: 1033/4/1). The 4
+   failures are exactly the established host baseline — polyglot ×2
+   (host resolves python2.7 without pytest for the verify path;
+   visible verbatim in the tracebacks) and cli_skeleton ×2 (the
+   untracked benchmarks/.cache inverts the tests' "CI never has the
+   cache" assumption) — each previously reproduced on the pristine T5
+   commit, the cli_skeleton pair via the cache-symlink discriminator.
+   Zero failures are E1 regressions; all routing-eval tests are
+   green (274+5 then; 288 after the closure-audit rounds — see round
+   3).
+
+## T7 closure audit rounds 1-2 (owner) — two P1, two P2, applied
+
+Round 1 held closure on four findings, each verified in-tree before
+fixing (the foreign-cell reproduction confirmed: Q 0.9999999999999999
+accepted). Round 2 tightened the first two:
+
+1. **[P1] Publication was not wired to the production path.**
+   run_hybrid_scenario returned an in-memory artifact; the only
+   write_run_records caller was test code, and secret_values defaulted
+   to empty. Fixed: the production entrypoint PUBLISHES the artifact
+   itself (ledger-rooted routing-runs.jsonl) with the secret set
+   resolved internally from the executed registry, and
+   write_run_records now REQUIRES secret_values — passing () is an
+   explicit declaration, never a default. Docs attribute resolution to
+   the entrypoint, not the writer. The live arc asserts the
+   entrypoint's own publication; the mutation (publication severed)
+   discriminates.
+2. **[P1 → round-2] Controls must be matrix-bound AND
+   selector-exact.** Round 1 added cell membership (foreign,
+   tampered-measures, and ineligible cells refuse; mutation
+   discriminating 3/4). Round 2 closed the sufficiency gap: genuine
+   eligible cells can still omit tasks/trials, name the wrong
+   profile, or hand the oracle a non-optimal cell — so build_report
+   now RECOMPUTES each declared selector (always_best with
+   profile_meta, always_cheapest, oracle under the global mask,
+   oracle_budget under its required ceiling) and refuses any supplied
+   selection that is not exactly the selector's output. Regressions:
+   partial genuine selection, wrong genuine profile, non-optimal
+   genuine oracle cell, oracle_budget without its ceiling — mutation
+   (gate removed) discriminates 4/8. A consequence made explicit: a
+   matrix with an unpriceable profile can no longer produce a report
+   at all (the recomputed always_cheapest is insufficient and the
+   gate is hard); the frontier-withheld-while-Q-reported separation
+   is proven on the router arm.
+3. **[P2] CHANGELOG narrowed**: unreconciled delegation is
+   insufficiency in the sequence-dependent rows (outside quality_fn);
+   the frontier is withheld on Q/cost-basis violations.
+
+   (Along the way, an intermittent live-arc hang was root-caused to
+   the TEST FIXTURE, not production: dmock.sh captured the prompt
+   with a bare `cat` that waits for EOF forever when a supervisor
+   subprocess forked in the race window inherits the prompt pipe's
+   write end — the whole tree parks in wait4. Fixed fixture-side with
+   a bounded stdin read; no production file touched.)
+4. **[P2] Top-level README updated**: E1 (#260) delivered; E2 (#261)
+   named as the remaining increment-E scope.
+
+## T7 closure audit round 3 (owner) — one P1, two P2, applied
+
+1. **[P1] Selector recomputation gained authoritative inputs.**
+   Defaulted profile_meta ({} -> lexical always_best) and eligible
+   (None -> persisted flags trusted bare) let the documented default
+   path accept the wrong profile with Q ~= 1.0 (owner-reproduced).
+   Fixed: build_report REQUIRES a SelectorContext whose
+   registry_digest and preset_digest are verified against the matrix
+   fingerprint before any recomputation; profile tiers/priorities are
+   parsed from the EXECUTED registry's own capability_tier/priority
+   declarations (selector_context_from_registry); every matrix
+   profile must carry a declared tier (no lexical fallback); the
+   eligibility predicate is required and bound to persisted flags via
+   T3's verify_matrix binding (contradiction refuses,
+   MatrixIntegrityError); the oracle_budget ceiling comes from the
+   validated config, and a declared budget arm without its selection
+   refuses. Regressions: the owner's tier reproduction (lexical
+   winner refused, declared winner reports), undeclared-tier refusal,
+   predicate contradiction, foreign registry/preset context digests,
+   silently-dropped budget arm, and the registry-builder parse.
+   Mutations discriminating: authority block deleted (3 failures),
+   profile_meta silently emptied (tier regression fails).
+2. **[P2] Production secret resolution is now load-bearing in the
+   live arc.** The fixture adapter deliberately echoes the
+   registry-referenced credential (a boring, unpatterned value) into
+   its verify output; the live test asserts it appears nowhere in the
+   entrypoint-published artifact nor in any evidence file the
+   artifact references, with a POSITIVE control ("(auth [REDACTED])"
+   must appear — the value flowed and was scrubbed, not absent by
+   accident). The owner's mutation now fails exactly:
+   _secret_values() -> () puts 'hybrid-fixture-secret' into durable
+   adapter evidence and the assertion names it.
+3. **[P2] The final sweep was rerun on the corrected tree.** Full
+   CI-exact discovery: 1033 tests, 4 failures, 1 skipped — the same
+   established host baseline (polyglot x2, cli_skeleton x2), zero E1
+   regressions; the count reconciles as the prior 1019 plus the 14
+   new binding/authority regressions. Focused routing-eval total: 288
+   tests, 0 failures (quality 42).
+
+## T7 closure audit round 4 (owner) — one P1, applied
+
+**The SelectorContext builder must be built FROM production routing
+authority.** Verified: the round-3 builder parsed `[profile.<id>]`
+tables — a shape the production validator rejects by name — and
+returned empty profile_meta for the shipped template, so every real
+report would refuse; and its eligibility predicate was
+caller-supplied, letting a matching registry digest accompany
+fabricated eligibility. Fixed:
+
+- the registry is parsed by the PRODUCTION grammar itself —
+  `routing-config.sh rc_parse`, invoked as the single grammar owner,
+  never a reimplemented lookalike; a grammar violation refuses the
+  context by name (and the once-accepted `[profile.<id>]` shape is
+  now itself the refusal regression);
+- the eligibility predicate is DERIVED from the registry's
+  route-class semantics under the increments' frozen task classes
+  (ordinary work routes `tier1_only`; the validated config's
+  `delegate_tasks` route `tier2_preferred`): a profile is eligible
+  exactly when its declared tier appears in the class's `tier_order`.
+  The `eligible` parameter is gone — nothing is caller-supplied;
+- the owner-required regression runs against the ACTUAL shipped
+  template (`shared/templates/routing/routing.toml.example`):
+  `local-qwen` (tier2) is rejected by the production predicate for
+  ordinary `tier1_only` work and admitted for a declared delegate
+  task; `anthropic-sonnet` parses as tier1/priority 10.
+
+Mutations discriminating: discarding the production parse fails the
+template regression (empty metadata refuses); fabricating eligibility
+(always-True) fails the tier2-rejection assertion. Redaction-test
+registry fixtures aligned to the accepted `[[profiles]]` grammar in
+the same pass.
+
+Final sweep on the round-4 tree: full CI-exact discovery 1034 tests,
+4 failures, 1 skipped — the same established host baseline (polyglot
+x2, cli_skeleton x2), zero E1 regressions; 1033 + the one net new
+quality test. Focused routing-eval: 289 tests, 0 failures (quality
+43, supervisor 16 green inside the sweep).
+
+## T7 closure audit round 5 (owner) — three P1, one P2, applied
+
+1. **[P1] RC_RS array truncation.** `str.splitlines()` treats the
+   array element separator RC_RS (0x1e) as a line boundary, so every
+   multi-element `tier_order`/`roles` value collapsed to its first
+   element. Fixed: newline-only splitting; the template regression
+   pins the COMPLETE `("build", "reconcile", "land")` roles array and
+   the tier1-fallback eligibility that a truncated
+   `tier_order = ["tier2"]` would wrongly deny. Mutation
+   (splitlines reintroduced) discriminates.
+2. **[P1] Eligibility now matches the production selector — both
+   halves.** rt_select rejects any candidate that "does not hold role
+   '<role>'"; tier membership alone admitted profiles the router can
+   never execute. The derived predicate now requires the execution
+   role (`build` for ordinary work, `bounded-build` for delegation)
+   AND tier membership in the class's tier_order. The owner's two
+   reproductions are regressions from a real registry: tier1 +
+   bounded-build IS the delegated fallback; reconcile-only tier2 is
+   NEVER the delegated builder. Mutation (role conjunct dropped)
+   discriminates.
+3. **[P1] Selector authority is derived, never accepted.**
+   build_report no longer takes a SelectorContext — it takes the
+   registry path and validated config and derives the context inside
+   the reporting boundary, so copied digests can never accompany
+   fabricated metadata or a fabricated predicate; the derived digests
+   are then verified against the matrix fingerprint. The entire
+   quality-test fixture layer was rebuilt on REAL declarations:
+   production-valid registry files (rc_validate passes) and config
+   namespaces whose digests the matrix fingerprints carry. Mutation
+   (digest binding removed) discriminates; the forgery itself is now
+   structurally unrepresentable.
+4. **[P2] Full production validation, not grammar only.** The builder
+   runs `rc_validate` — the same call the supervisor makes — not bare
+   `rc_parse`; a grammatically valid profile missing required fields
+   refuses the context. (Implementation note: rc_validate must not
+   run in a command-substitution subshell or RC_PARSED dies with it —
+   violations go to stderr, records are the only stdout.) Mutation
+   (downgraded to rc_parse) discriminates.
+
+Final sweep on the round-5 tree: full CI-exact discovery 1036 tests,
+4 failures, 1 skipped — the same established host baseline (polyglot
+x2, cli_skeleton x2), zero E1 regressions; 1034 + the two net new
+round-5 regressions. Focused routing-eval: 291 tests, 0 failures
+(quality 45; supervisor 16 green inside the sweep).
+
+## Verdict
+
+Verdict: aligned
+Confidence: high
+
+Scope is a strict subset of #109 increment E, with the E1/E2 boundary
+drawn by the owner. The single substantive extension beyond the origin
+text — the control/oracle frame — is additive to #109's authoritative
+metric set and is recorded above for owner review at the plan gate.

@@ -233,6 +233,7 @@ Useful when you want to inspect run-dirs first before producing the comparison.
 | #36 | `./scripts/bench` driver — terse `provider:model[@endpoint]` specs, presets, live stderr progress, per-attempt timeout + skip, safe stub-smoke default | done |
 | #41 | Aider backend + recorded-transcript verification + apples-to-apples leaderboard procedure | done |
 | #34 (A–C) | Calibrated LLM-judge scoring (`judge`), calibration corpus + validation (`calibration-corpus`, `calibrate`; Spearman ρ gate), rich reports (`report --html --csv` + static-SVG charts) | done; epic #34 has remaining sub-issues |
+| #260 | Routing-quality measurement substrate (E1 of #109): hybrid scenario through the unmodified supervisor, control arms + outcome matrix + reuse fingerprint, `quality_fn: v1` report with the control-set gate, write-time redaction | done |
 
 Comparison driver (`./scripts/benchmark compare`) shipped 2026-05-13; the `./scripts/bench` terse wrapper shipped 2026-05-18.
 
@@ -558,6 +559,131 @@ backend_invocation:
 ```
 
 Backends that don't support seeding record `seed: null`. The report flags such comparisons "higher-variance," and the winner-declaration rule (Phase 4) protects against false positives.
+
+## Routing-quality evaluation (E1 of #109, issue #260)
+
+A measurement substrate for CCT's routing arc (#109 increments A–D:
+registry, Tier-1 failover, Tier-2 delegation/reconciliation,
+probe-verified recovery). It answers "does the router earn its keep?"
+with controlled evidence instead of a single uncontrolled number. It
+is **measurement-only** (plan decision 10): no new key the router
+reads, no runtime authority, everything downstream of execution — and
+that boundary is executable, not documentary (the diff guard in
+`test_routing_eval_injection.TestNoProductionRoutingFileTouched`
+fails the suite if routing-eval work touches a production routing
+file).
+
+**The scenario.** `presets/hybrid-routing.json` declares Aider-shaped
+tasks, trials with pinned seeds, a deterministic injected event stream
+(e.g. quota exhaustion at a task boundary), the operator registry, and
+two special task classes: `tier1_only_tasks` (negative controls — any
+Tier-2 execution evidence anywhere in their records fails them as
+contaminated) and `delegate_tasks` (driven through the real
+`--delegate`/`--reconcile` packet flow). The scenario executes through
+the **unmodified** production supervisor and tick CLI
+(`benchmark_runner.routing_eval.scenario.run_hybrid_scenario` +
+`SupervisorRunner`); provider behaviour is injected only through the
+documented test seams, and the #109 §12 arc (initial preference →
+failover → Tier-2 provisional → probe-verified recovery →
+independent Tier-1 reconciliation) is proven per trial by
+`verify_arc` from harvested routing-run records alone — never from a
+driver-maintained checklist. Scenario configs are validated by
+`benchmark_runner.routing_eval.scenario_config`; `benchmark compare`
+refuses them by design (a candidate comparison and a routing-scenario
+comparison are different contracts).
+
+**The arms.** A routing result is meaningless without its controls, so
+the report REFUSES (hard error, not a warning) to emit a `cct_router`
+figure without all three, computed for the same preset from the same
+outcome matrix:
+
+| Arm | What it is |
+|-----|------------|
+| `cct_router` | the real supervised run, with failover/delegation/recovery live |
+| `always_best` | per task, the strongest declared profile (tier, then declared priority) |
+| `always_cheapest` | per task, the cheapest profile under the declared cost basis — every trial priced, or the task is `insufficient_evidence` |
+| `oracle` | per (task, trial), the best outcome actually observed in the matrix — the quality ceiling (it bounds quality, not cost) |
+| `oracle_budget` | optional: the oracle under a per-cell cost ceiling |
+
+Derived arms are selected from the **outcome matrix**
+(`schema/outcome-matrix.schema.json`): the exhaustive
+`task × profile × trial` sweep, integrity-checked for exact Cartesian
+coverage and bound to a five-component reuse fingerprint (registry
+digest, preset digest, execution identity, task-set revision,
+toolchain digest). The router evidence must agree with the matrix on
+every fingerprint component durably carried by both sides before any
+comparative figure exists — and the supplied control selections are
+verified twice over: every selected cell must be identically an
+eligible cell of the declared matrix, and each selection must equal
+the reporting boundary's own recomputation of its declared selector
+(partial, mis-profiled, or non-optimal selections of genuine cells
+are refused, not reported). Selector authority is DERIVED
+inside the reporting boundary, never accepted: `build_report` takes
+the registry path and validated config themselves and builds the
+`SelectorContext` internally (`selector_context_from_registry`), so
+there is nothing a caller could fabricate. The registry passes the
+production validator itself (`rc_validate` — grammar AND semantic
+violations refuse the context), profile tiers/priorities/roles come
+from its own declarations, the eligibility predicate is the
+production selector's (tier membership in the task class's
+`tier_order` — ordinary work routes `tier1_only`, declared delegate
+tasks route `tier2_preferred` — AND the execution role: `build` for
+ordinary work, `bounded-build` for delegation; persisted matrix flags
+are bound to the predicate, never trusted bare), and the
+`oracle_budget` ceiling comes from the validated config. The derived
+registry and preset digests must match the matrix fingerprint — any
+other declarations authorize nothing.
+
+**The artifacts.** Routing-run records
+(`schema/routing-run.schema.json`) are harvested from the
+supervisor's durable outputs and published by the production
+entrypoint itself: `run_hybrid_scenario` resolves the literal
+credential set from the executed registry's `credential_env`
+references and writes through
+`routing_eval.redaction.write_run_records` — the single gate that
+scrubs at write time (known credential values literally first, then
+pattern-based defense in depth), refuses any scrub that would alter
+measurement semantics or fingerprints, re-validates the scrubbed
+record against the schema, relativizes evidence references against
+the artifact root, and writes canonical, byte-reproducible JSONL.
+`write_run_records` does no secret resolution of its own — its
+`secret_values` parameter is required, so a non-production caller
+passing `()` is making an explicit declaration, never falling into a
+default.
+
+**`quality_fn: v1`** is the declared reporting projection — fixed
+weights, reported BESIDE the full metric vector, never in place of
+it:
+
+| Component | Weight |
+|-----------|--------|
+| verifier pass rate (primary) | 0.50 |
+| lint / typecheck / coverage / security regression | 0.075 each |
+| scope violation | 0.10 |
+| repeated repair cycles | 0.05 |
+| human intervention | 0.05 |
+
+One global component mask is computed over the complete matrix before
+any selection: a component unevaluable in ANY executed cell is
+dropped everywhere with the remaining weights renormalized; a missing
+primary outcome withholds Q for the whole comparison. Sequence-
+dependent measures (Tier-2 accepted-unchanged, reconciliation rework
+ratio, rollbacks) exist only along the router's stateful run and are
+`not_applicable` for derived arms.
+
+**Reading the report** (`routing_quality.build_report`): it names its
+`quality_fn` version and included components, then per arm gives `Q`,
+the full metric vector, cost under the comparison's single declared
+`cost_basis`, and an `insufficient` map. `insufficient_evidence` is
+first-class and contagious — never rendered as zero, never silently
+dropped: an unpriced trial withholds the arm's cost, any Q or basis
+violation withholds the Pareto frontier whole (never partially
+drawn), and an insufficient required control refuses the report
+outright. There is **no AIQ scalar** — a single operating point
+traces no curve. Routing-eval cost lives in E1's own artifacts under
+its own provenance rules (`measured` from transcript
+`total_cost_usd`, or `estimated@<price-table>`); the harness's
+no-dollar-cost rule for backend metadata and scores stands untouched.
 
 ## Judge & calibration
 

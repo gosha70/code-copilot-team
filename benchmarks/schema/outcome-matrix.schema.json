@@ -1,0 +1,349 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gosha70/code-copilot-team/benchmarks/schema/outcome-matrix.schema.json",
+  "title": "CCT routing-eval outcome matrix",
+  "description": "The task x profile x trial outcome matrix from which the derived control arms (always_best, always_cheapest, oracle, oracle_budget) are computed. This is the artifact that makes E1 affordable: one sweep yields every control, so only cct_router executes live. It is only VALID as a control source under three constraints, all enforced here \u2014 trials are a dimension rather than an average; derived cells carry only per-task-independent measures; and reuse requires an exact match on every fingerprint component.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "fingerprint",
+    "tasks",
+    "trials",
+    "trial_seeds",
+    "cost_basis",
+    "cells"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "fingerprint": {
+      "$ref": "#/$defs/fingerprint",
+      "description": "All five components are required. A stored matrix may be reused ONLY when every one matches; a mismatch in any single component refuses reuse rather than silently carrying stale cells forward."
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The DECLARED task list. Coverage is an invariant, not an observation: without a declared list, a fully vanished task is undetectable after load, and a selector averaging whatever cells remain can be silently biased (the missing-expensive-trial failure). verify_matrix re-establishes exact Cartesian coverage tasks x profiles x trials against this list."
+    },
+    "trials": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Trial count per (task, profile). Cells are keyed by trial index, never averaged before storage: a single cell per task/profile cannot support multiple trials, and collapsing them here would destroy the dimension the report needs."
+    },
+    "trial_seeds": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      },
+      "description": "Per-trial seeds, paired across arms so every arm sees the same trial under the same conditions. Length equals `trials`. Covered by preset_digest, so a seed change invalidates reuse."
+    },
+    "cost_basis": {
+      "type": "string",
+      "pattern": "^(measured|estimated@[A-Za-z0-9._-]+)$",
+      "description": "The single cost provenance every cost-bearing cell in this matrix satisfies. Cells that cannot meet it carry provenance 'unavailable' and propagate as insufficient_evidence."
+    },
+    "cells": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/cell"
+      },
+      "description": "One entry per (task_id, profile_id, trial). Independent per-task measures only \u2014 see the cell definition."
+    }
+  },
+  "$defs": {
+    "fingerprint": {
+      "type": "object",
+      "required": [
+        "registry_digest",
+        "preset_digest",
+        "execution_identity",
+        "task_set_revision",
+        "toolchain_digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "registry_digest": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The routing registry as parsed. Any registry edit invalidates reuse \u2014 profile identity, eligibility, tools, and endpoints can all move underneath a stored cell."
+        },
+        "preset_digest": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Covers trial count, trial seeds, the injected event stream, and the arm set. Without this, changed seeds could reuse cells keyed by the same trial index."
+        },
+        "execution_identity": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/execution_identity"
+          },
+          "description": "Per-profile execution identity. A model or endpoint that moved is a different execution, whatever the profile id still says."
+        },
+        "task_set_revision": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Pinned task-snapshot revision."
+        },
+        "toolchain_digest": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool and environment fingerprint."
+        }
+      }
+    },
+    "execution_identity": {
+      "type": "object",
+      "required": [
+        "profile_id",
+        "backend",
+        "provider",
+        "requested_model",
+        "effective_model",
+        "tool_profile",
+        "endpoint"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "backend": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requested_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Null means UNVERIFIED \u2014 never assumed equal to requested."
+        },
+        "tool_profile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endpoint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "SANITIZED endpoint identity only."
+        }
+      }
+    },
+    "cell": {
+      "type": "object",
+      "required": [
+        "task_id",
+        "profile_id",
+        "trial",
+        "seed",
+        "eligible"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trial": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "seed": {
+          "type": "integer",
+          "description": "The trial seed this cell ran under (the seed the trial WOULD have used, for ineligible cells). Part of the cell's canonical identity (task_id, profile_id, trial, seed): it makes the trial-index/seed pairing verifiable after load, so a persisted matrix whose seeds drifted from the preset fails closed instead of comparing unlike trials."
+        },
+        "eligible": {
+          "type": "boolean",
+          "description": "Whether this profile was eligible for this task under the registry and the task's route class. Eligibility VARIES BY TASK, which is why a control arm is a per-task selection under a fixed rule rather than a literal matrix column."
+        },
+        "result": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "pass",
+            "fail",
+            "error",
+            "timeout",
+            null
+          ],
+          "description": "Row 1 evidence (final verifier outcome). Null when the cell was not executed."
+        },
+        "regressions": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "lint": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "typecheck": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "coverage": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "security": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "description": "Rows 2-5, already reduced to per-cell regression booleans against this cell's own baseline. Null means the component could not be evaluated and is excluded rather than scored."
+        },
+        "scope_violation": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Row 6."
+        },
+        "repeated_repair": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Row 7: a repair signature occurred more than once in this cell."
+        },
+        "intervention": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Row 8."
+        },
+        "cost": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "measured",
+                "estimated",
+                "unavailable"
+              ]
+            },
+            "estimator": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The price-table version an estimated cell was computed from \u2014 the artifact must be able to PROVE its costs came from the declared cost_basis table, not merely assert provenance 'estimated'. Null exactly for measured/unavailable cells."
+            }
+          },
+          "description": "Row 12 (secondary). Used for cost only when it satisfies the matrix cost_basis.",
+          "required": [
+            "value",
+            "provenance",
+            "estimator"
+          ],
+          "oneOf": [
+            {
+              "properties": {
+                "provenance": {
+                  "const": "measured"
+                },
+                "value": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "estimator": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "provenance": {
+                  "const": "estimated"
+                },
+                "value": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "estimator": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "provenance": {
+                  "const": "unavailable"
+                },
+                "value": {
+                  "type": "null"
+                },
+                "estimator": {
+                  "type": "null"
+                }
+              }
+            }
+          ]
+        },
+        "elapsed_seconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Row 13 (secondary)."
+        },
+        "routing_run_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Addressable reference to the full routing-run record this cell was reduced from, so a cell stays explainable without re-execution."
+        }
+      },
+      "description": "A cell carries ONLY per-task-independent measures. The sequence-dependent measures \u2014 Tier-2 accepted unchanged, reconciliation rework ratio, failback behaviour, switch-induced rollbacks \u2014 exist only along a stateful run and have deliberately NO slot here: derived arms report them as not_applicable, and they are measured for cct_router alone. Giving them a slot would invite a derived arm to appear to have them."
+    }
+  }
+}

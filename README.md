@@ -389,6 +389,7 @@ endpoint and spawns an ephemeral Anthropic↔OpenAI proxy when needed.
 
 - Full harness guide, CLI reference, adapter/backend/judge contracts: [`benchmarks/README.md`](benchmarks/README.md).
 - 60-second quickstart: [`benchmarks/README.md` § 60-second quickstart](benchmarks/README.md#60-second-quickstart).
+- Routing-quality evaluation (measuring CCT's router against control arms, #109 E1): [`benchmarks/README.md` § Routing-quality evaluation](benchmarks/README.md#routing-quality-evaluation-e1-of-109-issue-260).
 - Design rationale: [`specs/benchmark-harness/spec.md`](specs/benchmark-harness/spec.md) and the per-feature spec bundles under [`specs/`](specs/).
 
 ## UI Design Harness
@@ -1103,10 +1104,13 @@ cct routing enable <profile-id>
   automatic wake or failback; it grants no endpoint, credential,
   probe, or execution authority.
 
-What arrives later (#109 increment E): benchmarks, routing-quality
-metrics, and shadow-mode learned routing. The codex execution adapter
-remains its own child increment, reusing the existing result and
-checkpoint contracts.
+Increment E1 (#260) is delivered: the hybrid routing benchmark
+scenario, control arms, outcome matrix, and the `quality_fn: v1`
+routing-quality report — see the [Benchmark Harness](#benchmark-harness)
+section's routing-quality evaluation docs. What remains of increment E
+is E2 (#261): shadow-mode analysis and recommendations over E1's
+evidence contract. The codex execution adapter remains its own child
+increment, reusing the existing result and checkpoint contracts.
 
 ## Four-Phase Workflow
 
