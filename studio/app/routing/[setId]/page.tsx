@@ -1,9 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { useParams } from "next/navigation";
 import {
   api,
   RoutingArm,
+  RoutingArtifactName,
   RoutingDeltaSource,
   RoutingEvidenceLocator,
   RoutingFigureSource,
@@ -204,7 +206,89 @@ function deltaSourceLabel(source: RoutingDeltaSource | null): string {
   return `${sourceLabel(source.lhs)} − ${sourceLabel(source.rhs)}`;
 }
 
-function EvidenceBlock({ rec }: { rec: RoutingRecommendation }) {
+// Resolve one closed locator against its served artifact content — the
+// exact coordinate the reference names, nothing broader.
+function resolveLocator(
+  locator: RoutingEvidenceLocator,
+  content: unknown,
+): unknown {
+  const doc = content as Record<string, any>;
+  if ("cell" in locator) {
+    const c = locator.cell;
+    return (doc.cells as any[])?.find(
+      (cell) =>
+        cell.task_id === c.task &&
+        cell.profile_id === c.profile &&
+        cell.trial === c.trial,
+    );
+  }
+  if ("arm" in locator) return doc.arms?.[locator.arm]?.tasks?.[locator.task];
+  const record = (doc.records as any[])?.[locator.record];
+  return locator.decision !== undefined
+    ? record?.routing_decisions?.[locator.decision]
+    : record;
+}
+
+// One followable evidence reference: clicking the locator fetches the
+// referenced artifact through the closed read-only surface and opens the
+// exact coordinate it names.
+function EvidenceRefRow({
+  setId,
+  artifact,
+  locator,
+}: {
+  setId: string;
+  artifact: string;
+  locator: RoutingEvidenceLocator;
+}) {
+  const [opened, setOpened] = useState<unknown | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const follow = () => {
+    if (opened !== null || error !== null) {
+      setOpened(null);
+      setError(null);
+      return;
+    }
+    api
+      .routingArtifact(setId, artifact as RoutingArtifactName)
+      .then((payload) => {
+        const resolved = resolveLocator(locator, payload.content);
+        if (resolved === undefined)
+          setError("locator does not resolve in the served artifact");
+        else setOpened(resolved);
+      })
+      .catch((e) => setError(String(e)));
+  };
+
+  return (
+    <li className="font-mono text-slate-600">
+      <button
+        type="button"
+        onClick={follow}
+        className="text-left hover:underline"
+        title={`open ${artifact} at this coordinate`}
+      >
+        <span className="text-slate-400">{artifact}</span>{" "}
+        <span className="text-blue-600">{locatorLabel(locator)}</span>
+      </button>
+      {error !== null && <div className="text-rose-600 mt-0.5">{error}</div>}
+      {opened !== null && (
+        <pre className="mt-1 mb-2 bg-slate-50 border border-slate-200 rounded p-2 overflow-x-auto text-[11px] leading-4 whitespace-pre-wrap">
+          {JSON.stringify(opened, null, 1)}
+        </pre>
+      )}
+    </li>
+  );
+}
+
+function EvidenceBlock({
+  setId,
+  rec,
+}: {
+  setId: string;
+  rec: RoutingRecommendation;
+}) {
   return (
     <details className="mt-3 text-xs">
       <summary className="cursor-pointer text-slate-500 font-medium">
@@ -213,10 +297,12 @@ function EvidenceBlock({ rec }: { rec: RoutingRecommendation }) {
       <div className="mt-2 space-y-2">
         <ul className="space-y-0.5">
           {rec.evidence_refs.map((ref, i) => (
-            <li key={i} className="font-mono text-slate-600">
-              <span className="text-slate-400">{ref.artifact}</span>{" "}
-              {locatorLabel(ref.locator)}
-            </li>
+            <EvidenceRefRow
+              key={i}
+              setId={setId}
+              artifact={ref.artifact}
+              locator={ref.locator}
+            />
           ))}
         </ul>
         <div className="text-slate-500">
@@ -236,15 +322,22 @@ function EvidenceBlock({ rec }: { rec: RoutingRecommendation }) {
           ))}
         </div>
         <p className="text-slate-400">
-          Locators address artifacts inside this set (no reference is a served
-          evidence file, so none links to the evidence-file endpoint).
+          Each locator opens its referenced artifact coordinate through the
+          read-only artifact surface. (No reference is a served evidence
+          file, so the evidence-file endpoint does not apply.)
         </p>
       </div>
     </details>
   );
 }
 
-function RecommendationCard({ rec }: { rec: RoutingRecommendation }) {
+function RecommendationCard({
+  setId,
+  rec,
+}: {
+  setId: string;
+  rec: RoutingRecommendation;
+}) {
   const basis = rec.confidence.basis;
   return (
     <Card>
@@ -355,7 +448,7 @@ function RecommendationCard({ rec }: { rec: RoutingRecommendation }) {
           </span>
         )}
       </div>
-      <EvidenceBlock rec={rec} />
+      <EvidenceBlock setId={setId} rec={rec} />
       {basis.insufficiency_refs.length > 0 && (
         <ul className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 space-y-1">
           {basis.insufficiency_refs.map((ref) => (
@@ -430,7 +523,7 @@ export default function RoutingSetPage() {
         </Card>
       ) : (
         recs.data.recommendations.map((rec) => (
-          <RecommendationCard key={rec.task_id} rec={rec} />
+          <RecommendationCard key={rec.task_id} setId={setId} rec={rec} />
         ))
       )}
     </div>

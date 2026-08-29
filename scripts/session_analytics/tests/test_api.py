@@ -296,6 +296,27 @@ class TestRoutingEvidenceApi(RegistryResetTestCase):
         self.assertEqual(refused.status_code, 404)
         self.assertEqual(refused.json()["detail"], "unknown_reference")
 
+    def test_artifact_surface_over_http(self) -> None:
+        # T4 round-2: locators are followable — each validated artifact
+        # serves verbatim through the closed read-only surface
+        set_id = self.published.set_id
+        for artifact in ("report", "routing_runs", "outcome_matrix"):
+            r = self.client.get(
+                f"/api/routing/evidence/{set_id}/artifact/{artifact}")
+            self.assertEqual(r.status_code, 200)
+            body = r.json()
+            self.assertEqual(body["artifact"], artifact)
+            self.assertEqual(body["set_id"], set_id)
+            self.assertNotIn("SENSITIVE-API-ROOT", r.text)
+        records = self.client.get(
+            f"/api/routing/evidence/{set_id}/artifact/routing_runs"
+        ).json()["content"]["records"]
+        self.assertTrue(records and records[0]["routing_decisions"])
+        refused = self.client.get(
+            f"/api/routing/evidence/{set_id}/artifact/manifest")
+        self.assertEqual(refused.status_code, 404)
+        self.assertEqual(refused.json()["detail"], "unknown_reference")
+
     def test_unknown_set_and_empty_root_states(self) -> None:
         r = self.client.get("/api/routing/evidence/" + "0" * 64)
         self.assertEqual(r.status_code, 404)

@@ -658,9 +658,11 @@ class TestApiPayloadBoundary(unittest.TestCase):
 
     def test_no_payload_carries_the_sensitive_root(self) -> None:
         from session_analytics.routing_evidence import (
+            ARTIFACT_SURFACES,
             evidence_detail,
             evidence_index,
             recommendations_payload,
+            serve_artifact,
             serve_evidence_file,
         )
 
@@ -671,6 +673,8 @@ class TestApiPayloadBoundary(unittest.TestCase):
         (loaded,) = entries
         payloads.append(evidence_detail(loaded))
         payloads.append(recommendations_payload(loaded))
+        for artifact in ARTIFACT_SURFACES:
+            payloads.append(serve_artifact(loaded, artifact))
         for ref in loaded.manifest.get("evidence_files") or {}:
             payloads.append(serve_evidence_file(loaded, ref))
         # an invalid variant: tamper a copy and list it too
@@ -1019,6 +1023,82 @@ class TestFigureProvenanceGate(unittest.TestCase):
             for rec in derive_recommendations(loaded)
         ]
         return loaded, records
+
+
+class TestArtifactSurface(unittest.TestCase):
+    """T4 round-2: locators are FOLLOWABLE, not just visible. The
+    closed read-only artifact surface serves each validated artifact
+    verbatim, and every locator the derivation emits resolves against
+    the served content."""
+
+    def _published(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            TestEvidenceLoading._publish_fixture(self, base)
+            (loaded,) = load_evidence_sets([base / "out"])
+            # materialize everything needed before the tempdir dies
+            from session_analytics.routing_evidence import serve_artifact
+
+            served = {
+                artifact: json.loads(json.dumps(serve_artifact(
+                    loaded, artifact)))
+                for artifact in ("report", "routing_runs",
+                                 "outcome_matrix")
+            }
+            recs = [json.loads(json.dumps(r))
+                    for r in derive_recommendations(loaded)]
+            return loaded, served, recs
+
+    def test_artifacts_serve_validated_content_verbatim(self) -> None:
+        from session_analytics.routing_evidence import (
+            EvidenceFileUnavailable,
+            serve_artifact,
+        )
+
+        loaded, served, _recs = self._published()
+        self.assertEqual(served["report"]["content"],
+                         json.loads(json.dumps(loaded.report)))
+        self.assertEqual(served["routing_runs"]["content"]["records"],
+                         json.loads(json.dumps(list(loaded.records))))
+        self.assertEqual(served["outcome_matrix"]["content"],
+                         json.loads(json.dumps(loaded.matrix)))
+        for payload in served.values():
+            self.assertEqual(payload["set_id"], loaded.set_id)
+        with self.assertRaises(EvidenceFileUnavailable) as caught:
+            serve_artifact(loaded, "manifest")
+        self.assertEqual(caught.exception.code, "unknown_reference")
+
+    def test_every_emitted_locator_resolves(self) -> None:
+        _loaded_set, served, recs = self._published()
+        self.assertTrue(recs)
+        records = served["routing_runs"]["content"]["records"]
+        report = served["report"]["content"]
+        cells = served["outcome_matrix"]["content"]["cells"]
+        resolved = 0
+        for rec in recs:
+            for ref in rec["evidence_refs"]:
+                locator = ref["locator"]
+                if "cell" in locator:
+                    c = locator["cell"]
+                    self.assertTrue(any(
+                        cell["task_id"] == c["task"]
+                        and cell["profile_id"] == c["profile"]
+                        and cell["trial"] == c["trial"]
+                        for cell in cells), locator)
+                elif "arm" in locator:
+                    self.assertIn(
+                        locator["task"],
+                        report["arms"][locator["arm"]]["tasks"], locator)
+                else:
+                    record = records[locator["record"]]
+                    if "decision" in locator:
+                        self.assertLess(
+                            locator["decision"],
+                            len(record["routing_decisions"]), locator)
+                resolved += 1
+        self.assertGreater(resolved, 0)
 
 
 class TestAuthorityGuard(unittest.TestCase):

@@ -237,6 +237,34 @@ def serve_evidence_file(
     return {"ref": ref, "content": content.decode("utf-8", "replace")}
 
 
+#: The closed read-only artifact surface (T4 round-2): every locator a
+#: recommendation carries must be FOLLOWABLE from the Studio, so each
+#: validated artifact of a loaded set is served verbatim — content that
+#: already passed the full binding validation and was scrubbed at write
+#: time. The vocabulary is closed; nothing here accepts a path.
+ARTIFACT_SURFACES = ("report", "routing_runs", "outcome_matrix")
+
+
+def serve_artifact(
+    loaded: LoadedEvidenceSet, artifact: str
+) -> Mapping[str, Any]:
+    """Serve ONE validated artifact of a valid set, verbatim: the same
+    parsed content the binding validation accepted (report bytes are
+    the detail payload's report; records and matrix let record/decision
+    and cell locators resolve). An artifact name outside the closed
+    vocabulary refuses with the closed code."""
+    if artifact == "report":
+        content: Any = loaded.report
+    elif artifact == "routing_runs":
+        content = {"records": list(loaded.records)}
+    elif artifact == "outcome_matrix":
+        content = loaded.matrix
+    else:
+        raise EvidenceFileUnavailable("unknown_reference")
+    return {"set_id": loaded.set_id, "artifact": artifact,
+            "content": content}
+
+
 def routing_evidence_settings(config: Any) -> Mapping[str, Any]:
     """The SANITIZED settings shape: whether evidence roots are
     configured and how many — the raw root paths never leave the

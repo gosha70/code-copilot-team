@@ -259,6 +259,18 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
         return dict(recommendations_payload(_routing_set_or_404(set_id)))
 
+    @app.get("/api/routing/evidence/{set_id}/artifact/{artifact}")
+    def routing_artifact(set_id: str, artifact: str) -> dict[str, Any]:
+        from ..routing_evidence import (
+            EvidenceFileUnavailable,
+            serve_artifact,
+        )
+
+        try:
+            return dict(serve_artifact(_routing_set_or_404(set_id), artifact))
+        except EvidenceFileUnavailable as exc:
+            raise HTTPException(status_code=404, detail=exc.code) from None
+
     @app.get("/api/routing/evidence/{set_id}/evidence-file")
     def routing_evidence_file(set_id: str, ref: str) -> dict[str, Any]:
         from ..routing_evidence import (

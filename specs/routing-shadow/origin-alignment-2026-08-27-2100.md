@@ -767,6 +767,42 @@ columns) on EVERY detail state — 10 page loads across 1440px/375px,
 all assertions passing, `npm run build` green, diff additions-only on
 the shared files.
 
+## T4 build audit round 2 (owner, on fde3f1d) — one P1, applied
+
+**[P1] Locators are now FOLLOWABLE, not just visible.** The owner's
+first option implemented: a closed read-only artifact surface —
+`serve_artifact` (`ARTIFACT_SURFACES = report / routing_runs /
+outcome_matrix`) serving each VALIDATED artifact of a valid set
+verbatim (content that already passed the full binding validation
+and was scrubbed at write time), addressed only by opaque set id and
+the closed artifact name; an unknown name refuses with the closed
+`unknown_reference` code. Route:
+`/api/routing/evidence/{set_id}/artifact/{artifact}`. In the Studio,
+every evidence reference is a button: clicking fetches the artifact
+through the typed `routingArtifact` fetcher and opens the EXACT
+coordinate the locator names (`resolveLocator`: record[/decision]
+into the served records, arm×task into the report, cell coordinates
+into the matrix cells) as pretty-printed JSON in place; an
+unresolvable locator renders an inline error, never silently
+nothing. The explanatory sentence now states the follow behavior
+(the evidence-file endpoint remains correctly unrelated, as the
+owner confirmed).
+
+Pinned server-side: `TestArtifactSurface` — each artifact serves
+verbatim (equal to the loaded/validated content), unknown name
+refuses closed; and the followability acceptance
+`test_every_emitted_locator_resolves` — EVERY locator the derivation
+emits resolves against the served artifact content (a derivation
+emitting an unfollowable locator now fails a test, not a user).
+`TestApiPayloadBoundary` sweeps the new surface for the sensitive
+root; the CI-gated HTTP test covers the round trip and the closed
+404. Browser: the runner clicks a `routing_runs` locator (asserts
+the opened record's `"task_id"` renders) and a report locator
+(asserts `"per_trial"` renders) on every detail state at both
+widths — all passing. Suites: routing-evidence 47/47,
+session-analytics discovery 338 OK (35 CI-gated skips),
+`npm run build` green.
+
 ## Verdict
 
 Verdict: aligned

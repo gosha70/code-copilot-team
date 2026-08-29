@@ -297,6 +297,20 @@ export interface RoutingRecommendation {
   }[];
 }
 
+// The closed read-only artifact surface (T4 round-2): every locator is
+// followable — each validated artifact serves verbatim, addressed only by
+// set id and the closed artifact name, never a path.
+export type RoutingArtifactName = "report" | "routing_runs" | "outcome_matrix";
+
+export interface RoutingArtifactPayload {
+  set_id: string;
+  artifact: RoutingArtifactName;
+  content:
+    | RoutingReport
+    | { records: Record<string, unknown>[] }
+    | Record<string, unknown>;
+}
+
 export interface RoutingRecommendationsPayload {
   set_id: string;
   recommendations: RoutingRecommendation[];
@@ -346,5 +360,9 @@ export const api = {
   routingRecommendations: (setId: string) =>
     get<RoutingRecommendationsPayload>(
       `/api/routing/evidence/${encodeURIComponent(setId)}/recommendations`,
+    ),
+  routingArtifact: (setId: string, artifact: RoutingArtifactName) =>
+    get<RoutingArtifactPayload>(
+      `/api/routing/evidence/${encodeURIComponent(setId)}/artifact/${artifact}`,
     ),
 };
