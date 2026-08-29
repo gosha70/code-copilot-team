@@ -192,12 +192,16 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         cfg = load_config()
         # Never leak the raw DSN; report dialect + redaction + sources only.
         dialect = DIALECT_SQLITE if is_sqlite_dsn(dsn) else DIALECT_POSTGRES
+        from ..routing_evidence import routing_evidence_settings
+
         return {
             "dsn_dialect": dialect,
             "kuzu_path": kuzu_path or cfg.kuzu_path,
             "redaction_mode": cfg.redaction_mode,
             "sources": dict(cfg.sources),
             "judge": {"backend": cfg.judge.backend, "model": cfg.judge.model},
+            # routing-shadow (#261): SANITIZED — never the raw roots
+            "routing_evidence": routing_evidence_settings(cfg),
         }
 
     @app.post("/api/settings/test-connection")
@@ -219,6 +223,65 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             return dashboard.effective_redaction_by_project(conn)
         finally:
             conn.close()
+
+    # ── routing evidence (routing-shadow #261, shadow-mode only) ───────
+    # Sets are addressed by opaque id; invalid sets surface with their
+    # closed sanitized state; no payload carries a filesystem path.
+    def _routing_entries():
+        from ..routing_evidence import load_evidence_sets
+
+        return load_evidence_sets(load_config().routing_evidence_roots)
+
+    def _routing_set_or_404(set_id: str):
+        from ..routing_evidence import find_evidence_set
+
+        loaded = find_evidence_set(_routing_entries(), set_id)
+        if loaded is None:
+            raise HTTPException(status_code=404,
+                                detail="unknown evidence set")
+        return loaded
+
+    @app.get("/api/routing/evidence")
+    def routing_evidence_index() -> dict[str, Any]:
+        from ..routing_evidence import evidence_index
+
+        return dict(evidence_index(_routing_entries()))
+
+    @app.get("/api/routing/evidence/{set_id}")
+    def routing_evidence_detail(set_id: str) -> dict[str, Any]:
+        from ..routing_evidence import evidence_detail
+
+        return dict(evidence_detail(_routing_set_or_404(set_id)))
+
+    @app.get("/api/routing/evidence/{set_id}/recommendations")
+    def routing_recommendations(set_id: str) -> dict[str, Any]:
+        from ..routing_evidence import recommendations_payload
+
+        return dict(recommendations_payload(_routing_set_or_404(set_id)))
+
+    @app.get("/api/routing/evidence/{set_id}/artifact/{artifact}")
+    def routing_artifact(set_id: str, artifact: str) -> dict[str, Any]:
+        from ..routing_evidence import (
+            EvidenceFileUnavailable,
+            serve_artifact,
+        )
+
+        try:
+            return dict(serve_artifact(_routing_set_or_404(set_id), artifact))
+        except EvidenceFileUnavailable as exc:
+            raise HTTPException(status_code=404, detail=exc.code) from None
+
+    @app.get("/api/routing/evidence/{set_id}/evidence-file")
+    def routing_evidence_file(set_id: str, ref: str) -> dict[str, Any]:
+        from ..routing_evidence import (
+            EvidenceFileUnavailable,
+            serve_evidence_file,
+        )
+
+        try:
+            return dict(serve_evidence_file(_routing_set_or_404(set_id), ref))
+        except EvidenceFileUnavailable as exc:
+            raise HTTPException(status_code=404, detail=exc.code) from None
 
     # ── dashboard ──────────────────────────────────────────────────────
     @app.get("/api/dashboard/kpis")

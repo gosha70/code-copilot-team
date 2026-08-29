@@ -57,6 +57,7 @@ CCT_PHASES = ("research", "plan", "build", "review")
 
 # ── Config keys (defaults.yaml) ────────────────────────────────────────
 CFG_SOURCES = "sources"
+CFG_ROUTING_EVIDENCE_ROOTS = "routing_evidence_roots"
 CFG_SOURCE_ROOT = "root"
 CFG_DSN = "dsn"
 CFG_KUZU_PATH = "kuzu_path"

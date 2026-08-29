@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import unittest
 
 from session_analytics import constants as C
@@ -211,3 +212,130 @@ class TestApi(RegistryResetTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(_FASTAPI, "fastapi/httpx not installed; API tests skipped (covered in CI)")
+class TestRoutingEvidenceApi(RegistryResetTestCase):
+    """routing-shadow T3: the routing evidence endpoints over HTTP —
+    evidence, recommendations, empty, invalid, and evidence-file
+    states, with the no-path boundary held at the HTTP layer."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        from session_analytics._register import register_all
+        register_all()
+        self.base = Path(tempfile.mkdtemp(prefix="SENSITIVE-API-ROOT."))
+        self.addCleanup(__import__("shutil").rmtree, self.base,
+                        ignore_errors=True)
+        from session_analytics.tests.test_routing_evidence import (
+            TestEvidenceLoading,
+        )
+
+        self.published = TestEvidenceLoading._publish_fixture(self, self.base)
+        self._env = mock.patch.dict(
+            "os.environ",
+            {"CCT_SA_ROUTING_EVIDENCE_ROOTS": str(self.base / "out")},
+        )
+        self._env.start()
+        self.addCleanup(self._env.stop)
+        from fastapi.testclient import TestClient
+
+        from session_analytics.api.server import create_app
+
+        self.client = TestClient(create_app(self.sqlite_dsn()),
+                                 base_url="http://127.0.0.1:8765")
+
+    def test_settings_expose_only_the_sanitized_shape(self) -> None:
+        r = self.client.get("/api/settings")
+        self.assertEqual(r.status_code, 200)
+        shape = r.json()["routing_evidence"]
+        self.assertEqual(shape, {"configured": True, "root_count": 1})
+        self.assertNotIn("SENSITIVE-API-ROOT", r.text)
+
+    def test_evidence_and_recommendation_flow(self) -> None:
+        r = self.client.get("/api/routing/evidence")
+        self.assertEqual(r.status_code, 200)
+        (entry,) = r.json()["sets"]
+        self.assertEqual(entry["state"], "valid")
+        set_id = entry["set_id"]
+        self.assertEqual(set_id, self.published.set_id)
+        self.assertNotIn("SENSITIVE-API-ROOT", r.text)
+
+        detail = self.client.get(f"/api/routing/evidence/{set_id}")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["report"]["schema_version"], 1)
+        self.assertNotIn("SENSITIVE-API-ROOT", detail.text)
+
+        recs = self.client.get(
+            f"/api/routing/evidence/{set_id}/recommendations")
+        self.assertEqual(recs.status_code, 200)
+        for rec in recs.json()["recommendations"]:
+            self.assertEqual(rec["evidence_set_id"], set_id)
+        self.assertNotIn("SENSITIVE-API-ROOT", recs.text)
+
+        refs = sorted(
+            json.loads(
+                (self.published.path / "manifest.json").read_text(
+                    encoding="utf-8")
+            )["evidence_files"]
+        )
+        served = self.client.get(
+            f"/api/routing/evidence/{set_id}/evidence-file",
+            params={"ref": refs[0]},
+        )
+        self.assertEqual(served.status_code, 200)
+        self.assertNotIn("SENSITIVE-API-ROOT", served.text)
+        refused = self.client.get(
+            f"/api/routing/evidence/{set_id}/evidence-file",
+            params={"ref": "../outside"},
+        )
+        self.assertEqual(refused.status_code, 404)
+        self.assertEqual(refused.json()["detail"], "unknown_reference")
+
+    def test_artifact_surface_over_http(self) -> None:
+        # T4 round-2: locators are followable — each validated artifact
+        # serves verbatim through the closed read-only surface
+        set_id = self.published.set_id
+        for artifact in ("report", "routing_runs", "outcome_matrix"):
+            r = self.client.get(
+                f"/api/routing/evidence/{set_id}/artifact/{artifact}")
+            self.assertEqual(r.status_code, 200)
+            body = r.json()
+            self.assertEqual(body["artifact"], artifact)
+            self.assertEqual(body["set_id"], set_id)
+            self.assertNotIn("SENSITIVE-API-ROOT", r.text)
+        records = self.client.get(
+            f"/api/routing/evidence/{set_id}/artifact/routing_runs"
+        ).json()["content"]["records"]
+        self.assertTrue(records and records[0]["routing_decisions"])
+        refused = self.client.get(
+            f"/api/routing/evidence/{set_id}/artifact/manifest")
+        self.assertEqual(refused.status_code, 404)
+        self.assertEqual(refused.json()["detail"], "unknown_reference")
+
+    def test_unknown_set_and_empty_root_states(self) -> None:
+        r = self.client.get("/api/routing/evidence/" + "0" * 64)
+        self.assertEqual(r.status_code, 404)
+        self.assertNotIn("SENSITIVE-API-ROOT", r.text)
+        import os
+        from unittest import mock as _mock
+
+        with _mock.patch.dict(os.environ,
+                              {"CCT_SA_ROUTING_EVIDENCE_ROOTS":
+                               str(self.base / "does-not-exist")}):
+            empty = self.client.get("/api/routing/evidence")
+            self.assertEqual(empty.status_code, 200)
+            self.assertEqual(empty.json()["sets"], [])
+
+    def test_invalid_set_surfaces_over_http(self) -> None:
+        report = self.published.path / "report.json"
+        report.write_text("{not json", encoding="utf-8")
+        r = self.client.get("/api/routing/evidence")
+        self.assertEqual(r.status_code, 200)
+        (entry,) = r.json()["sets"]
+        self.assertEqual(entry["state"], "invalid_evidence")
+        self.assertNotIn("SENSITIVE-API-ROOT", r.text)

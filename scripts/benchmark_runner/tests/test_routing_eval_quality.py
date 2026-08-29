@@ -840,6 +840,174 @@ class TestControlsAreMatrixBound(unittest.TestCase):
             selector_context_from_registry(registry, _config())
 
 
+class TestLifecycleFold(unittest.TestCase):
+    """The labeled E1 correction (routing-shadow decision 3): one
+    metric cell per (task, trial) lifecycle, with process evidence
+    that never launders."""
+
+    def _lifecycle(self):
+        provisional = _router_record("t1", 0, delegated=True,
+                                     delegated_lines=100, diff_lines=None)
+        provisional["verifiers"] = []
+        recon = _router_record("t1", 0, delegated=True,
+                               delegated_lines=100, diff_lines=0)
+        recon["verifiers"] = []
+        recon["reconciliation"] = {
+            "packet_id": "p", "packet_digest": "d", "outcome": "reconciled",
+            "reconciler_id": "rec", "reconciler_tier": "tier1",
+            "reconciler_provider": "other", "reconciler_model": "om",
+        }
+        return provisional, recon
+
+    def test_a_delegated_lifecycle_folds_to_one_cell(self) -> None:
+        provisional, recon = self._lifecycle()
+        cells = router_cells_from_records([provisional, recon])
+        self.assertEqual(len(cells), 1, "one (task, trial), one cell")
+        # the reconciled outcome IS the final verifier evidence:
+        # increment C promotes only after re-running the packet
+        # verifiers green
+        self.assertEqual(cells[0].result, "pass")
+
+    def test_provisional_process_damage_survives_clean_reconciliation(self) -> None:
+        # The owner's laundering counterexample: intervention on the
+        # provisional leg, spotless reconciliation — the folded cell
+        # still carries the intervention, so Q still reflects it.
+        provisional, recon = self._lifecycle()
+        provisional["interventions"] = [{"kind": "manual"}]
+        provisional["scope_violations"] = ["out-of-scope edit"]
+        cells = router_cells_from_records([provisional, recon])
+        self.assertTrue(cells[0].intervention)
+        self.assertTrue(cells[0].scope_violation)
+
+    def test_cross_leg_repeated_signature_is_a_lifecycle_repeat(self) -> None:
+        # The same failed-repair signature once in EACH leg: neither
+        # record alone repeats, the lifecycle does. A
+        # per-leg-reduce-then-OR fold cannot see it.
+        provisional, recon = self._lifecycle()
+        provisional["repair_cycles"] = [{"signature": "sigX"}]
+        recon["repair_cycles"] = [{"signature": "sigX"}]
+        cells = router_cells_from_records([provisional, recon])
+        self.assertTrue(cells[0].repeated_repair)
+
+    def test_cost_sums_across_legs_under_homogeneity(self) -> None:
+        provisional, recon = self._lifecycle()
+        provisional["cost"] = {"value": 0.02, "provenance": "measured",
+                               "estimator": None, "inputs": None}
+        recon["cost"] = {"value": 0.01, "provenance": "measured",
+                         "estimator": None, "inputs": None}
+        cells = router_cells_from_records([provisional, recon])
+        self.assertAlmostEqual(cells[0].cost_value, 0.03)
+        self.assertEqual(cells[0].cost_provenance, "measured")
+        # an unpriced leg makes the trial's cost unavailable — never a
+        # partial sum
+        recon["cost"] = {"value": None, "provenance": "unavailable",
+                         "estimator": None, "inputs": None}
+        cells = router_cells_from_records([provisional, recon])
+        self.assertIsNone(cells[0].cost_value)
+        self.assertEqual(cells[0].cost_provenance, "unavailable")
+
+    def test_duplicate_reconciliations_refuse(self) -> None:
+        provisional, recon = self._lifecycle()
+        recon2 = dict(recon)
+        with self.assertRaisesRegex(ValueError, "duplicate final legs"):
+            router_cells_from_records([provisional, recon, recon2])
+
+    # ── the exactness gate (routing-shadow T1 review, finding 2):
+    # partial coverage is refused, never averaged over ──
+
+    def _exact_matrix(self, tasks=("t1", "t2")):
+        cells = [_cell(t, p, 0) for t in tasks for p in ("alpha", "beta")]
+        return _matrix(cells)
+
+    def test_a_missing_task_refuses_the_report_coverage(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        matrix = self._exact_matrix()
+        # t2's router lifecycle deleted entirely: Q over the smaller
+        # set must never be computed
+        with self.assertRaisesRegex(LifecycleInvalid, "missing.*t2"):
+            router_cells_from_records([_router_record("t1", 0)],
+                                      matrix=matrix)
+
+    def test_an_extra_task_refuses(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        matrix = self._exact_matrix(tasks=("t1",))
+        with self.assertRaisesRegex(LifecycleInvalid, "extra.*t9"):
+            router_cells_from_records(
+                [_router_record("t1", 0), _router_record("t9", 0)],
+                matrix=matrix,
+            )
+
+    def test_a_duplicate_ordinary_record_refuses(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        with self.assertRaisesRegex(LifecycleInvalid, "2 ordinary records"):
+            router_cells_from_records(
+                [_router_record("t1", 0), _router_record("t1", 0)]
+            )
+
+    def test_a_wrong_seed_refuses(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        matrix = self._exact_matrix(tasks=("t1",))
+        record = _router_record("t1", 0)
+        record["trial_seed"] = 999
+        with self.assertRaisesRegex(LifecycleInvalid, "seed"):
+            router_cells_from_records([record], matrix=matrix)
+
+    def test_a_reconciliation_without_its_provisional_leg_refuses(self) -> None:
+        # The laundering mutation the fold exists for: delete the
+        # provisional record and let the clean reconciliation stand
+        # alone — its cost, interventions, and repair signatures would
+        # silently vanish. Refused, never scored.
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        _prov, recon = self._lifecycle()
+        with self.assertRaisesRegex(LifecycleInvalid, "without its "
+                                                      "provisional leg"):
+            router_cells_from_records([recon])
+
+    def test_an_unreconciled_delegation_refuses(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        prov, _recon = self._lifecycle()
+        with self.assertRaisesRegex(LifecycleInvalid, "never reconciled"):
+            router_cells_from_records([prov])
+
+    def test_a_mismatched_packet_digest_refuses(self) -> None:
+        from benchmark_runner.routing_eval.routing_quality import (
+            LifecycleInvalid,
+        )
+
+        prov, recon = self._lifecycle()
+        recon["reconciliation"] = dict(recon["reconciliation"],
+                                       packet_digest="OTHER")
+        with self.assertRaisesRegex(LifecycleInvalid, "different packets"):
+            router_cells_from_records([prov, recon])
+
+    def test_single_record_lifecycles_reduce_as_before(self) -> None:
+        record = _router_record("t1", 0)
+        cell = router_cells_from_records([record])[0]
+        self.assertEqual(cell.result, "pass")
+        self.assertFalse(cell.repeated_repair)
+        record["verifiers"] = []
+        self.assertIsNone(router_cells_from_records([record])[0].result,
+                          "absence of evidence is never a pass")
+
+
 class TestT6ContagiousInsufficiency(unittest.TestCase):
     """T6 (plan decision 9): insufficiency is first-class and
     contagious — never a zero, never a default, never a silently
@@ -911,8 +1079,19 @@ class TestT6ContagiousInsufficiency(unittest.TestCase):
         from benchmark_runner.routing_eval.routing_quality import INSUFFICIENT
 
         _cells, matrix, controls = self._report_fixture()
-        records = [_router_record("t1", 0, delegated=True,
-                                  delegated_lines=100, diff_lines=None)]
+        # a COMPLETE delegated lifecycle (the exactness gate refuses
+        # anything less) whose durable line counts are missing: the
+        # sequence rows are insufficiency, never zero rework
+        provisional = _router_record("t1", 0, delegated=True,
+                                     delegated_lines=None, diff_lines=None)
+        recon = _router_record("t1", 0, delegated=True,
+                               delegated_lines=None, diff_lines=None)
+        recon["reconciliation"] = {
+            "packet_id": "p", "packet_digest": "d", "outcome": "reconciled",
+            "reconciler_id": "rec", "reconciler_tier": "tier1",
+            "reconciler_provider": "other", "reconciler_model": "om",
+        }
+        records = [provisional, recon]
         report = build_report(matrix, controls, records,
                               expected_preset_digest=_PRESET,
                          registry_path=_REGISTRY, config=_CONFIG)
@@ -1008,6 +1187,87 @@ class TestT6ContagiousInsufficiency(unittest.TestCase):
             build_report(matrix, controls, [_router_record("t1", 0)],
                          expected_preset_digest=_PRESET,
                          registry_path=_REGISTRY, config=_CONFIG)
+
+
+class TestReportV1Contract(unittest.TestCase):
+    """Routing-shadow T1: the persisted report contract — versioned,
+    schema'd, task-resolved, and written through the same fail-closed
+    discipline as every other E1 artifact."""
+
+    def _report(self):
+        cells = [
+            _cell("t1", "alpha", 0, cost=0.05),
+            _cell("t1", "beta", 0, result="fail", cost=0.01),
+        ]
+        matrix = _matrix(cells)
+        controls = {
+            "always_best": _selection("always_best", [cells[0]]),
+            "always_cheapest": _selection("always_cheapest", [cells[1]]),
+            "oracle": _selection("oracle", [cells[0]]),
+        }
+        return build_report(matrix, controls, [_router_record("t1", 0)],
+                            expected_preset_digest=_PRESET,
+                            registry_path=_REGISTRY, config=_CONFIG)
+
+    def test_report_carries_version_fingerprint_and_provenance(self) -> None:
+        report = self._report()
+        self.assertEqual(report["schema_version"], 1)
+        fp = report["fingerprint"]
+        self.assertEqual(fp["registry_digest"], _REG_DIGEST)
+        self.assertEqual(fp["preset_digest"], _PRESET)
+        self.assertEqual(len(fp["execution_identity"]), 2)
+        # selection provenance: per-task for flat arms, per-trial for
+        # the oracle; the router selected live — empty.
+        arms = report["arms"]
+        self.assertEqual(arms["always_best"]["selections"], {"t1": "alpha"})
+        self.assertEqual(arms["oracle"]["selections"], {"t1": {"0": "alpha"}})
+        self.assertEqual(arms["cct_router"]["selections"], {})
+        # per-task + per-trial figure tables for every arm incl. router
+        best_t1 = arms["always_best"]["tasks"]["t1"]
+        self.assertAlmostEqual(best_t1["quality"], 1.0)
+        self.assertAlmostEqual(best_t1["cost"], 0.05)
+        self.assertEqual(best_t1["per_trial"][0]["trial"], 0)
+        router_t1 = arms["cct_router"]["tasks"]["t1"]
+        self.assertAlmostEqual(router_t1["quality"], 1.0)
+        self.assertAlmostEqual(router_t1["cost"], 0.02)
+
+    def test_write_report_validates_persists_and_refuses(self) -> None:
+        import json as _json
+        import tempfile
+        from pathlib import Path
+
+        from benchmark_runner.routing_eval.record_check import (
+            load_schema,
+            validate,
+        )
+        from benchmark_runner.routing_eval.routing_quality import (
+            ReportInvalid,
+            write_report,
+        )
+
+        report = self._report()
+        bindings = {"routing_runs_sha256": "sha256:" + "ab" * 32,
+                    "outcome_matrix_sha256": "sha256:" + "cd" * 32}
+        with tempfile.TemporaryDirectory() as tmp:
+            out = write_report(report, Path(tmp) / "report.json",
+                               source_artifacts=bindings)
+            persisted = _json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(validate(persisted, load_schema("report")), [])
+            self.assertEqual(persisted["source_artifacts"], bindings)
+            # byte-reproducible on identical input
+            again = write_report(report, Path(tmp) / "report2.json",
+                                 source_artifacts=bindings)
+            self.assertEqual(out.read_bytes(), again.read_bytes())
+            # freshness refusal
+            with self.assertRaisesRegex(ReportInvalid, "already exists"):
+                write_report(report, out, source_artifacts=bindings)
+            # an unvalidatable report never persists
+            broken = dict(report)
+            broken.pop("fingerprint")
+            with self.assertRaisesRegex(ReportInvalid, "report.schema.json"):
+                write_report(broken, Path(tmp) / "report3.json",
+                             source_artifacts=bindings)
+            self.assertFalse((Path(tmp) / "report3.json").exists())
 
 
 class TestValidatorFailsClosedOnNewKeywords(unittest.TestCase):

@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "evidence-manifest.schema.json",
+  "title": "E1 evidence-set manifest v1 (routing-shadow decision 4)",
+  "description": "The external identity artifact, written LAST in staging: the full fingerprint plus sha256 hashes of the canonical bytes of ALL THREE artifacts and of every referenced evidence file. The evidence-set id is sha256 over this file's canonical bytes \u2014 always recomputed by the loader, never trusted from a directory name. A manifest whose stored fingerprint disagrees with the report/matrix is fingerprint_mismatch even when every artifact hash is genuine.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "fingerprint",
+    "artifacts",
+    "evidence_files"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "fingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry_digest",
+        "preset_digest",
+        "execution_identity",
+        "task_set_revision",
+        "toolchain_digest"
+      ],
+      "properties": {
+        "registry_digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "preset_digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "execution_identity": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "profile_id",
+              "backend",
+              "provider",
+              "requested_model",
+              "effective_model",
+              "tool_profile",
+              "endpoint"
+            ],
+            "properties": {
+              "profile_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "backend": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "requested_model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "effective_model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool_profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "endpoint": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "task_set_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "toolchain_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "routing_runs_sha256",
+        "outcome_matrix_sha256",
+        "report_sha256"
+      ],
+      "properties": {
+        "routing_runs_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "outcome_matrix_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "report_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "evidence_files": {
+      "description": "RELATIVE path -> sha256, one entry per evidence file any routing-run record references. Paths are set-root-relative; absolute paths and '..' segments are refused by the loader and never written by the publisher (enforced in code \u2014 the schema validator's keyword subset excludes propertyNames by design).",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      }
+    }
+  }
+}

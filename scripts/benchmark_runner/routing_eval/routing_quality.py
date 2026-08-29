@@ -173,19 +173,25 @@ def selector_context_from_registry(
         # The PRODUCTION selector's predicate, both halves: the
         # execution ROLE (rt_select rejects any candidate that "does
         # not hold role '<role>'" — ordinary builds select with role
-        # `build`, packet delegation with `bounded-build`) AND tier
-        # membership in the task class's declared tier_order. Tier
-        # alone would admit a reconcile-only profile the router can
-        # never execute for the task.
+        # `build`, packet delegation with `bounded-build`) AND the
+        # route class's TIER semantics. The class tier semantics are
+        # BUILT INTO rt_select's closed vocabulary — tier1_only admits
+        # tier1 only ("increment B routes tier1 only"), tier2_preferred
+        # admits tier2 then tier1 — and are NOT read from the
+        # registry's [route_classes.*] tables at selection time (those
+        # govern task-metadata validation). Mirroring the tables here
+        # instead of the selector would wrongly rule every profile
+        # ineligible under a registry that declares no such table.
         profile = meta.get(profile_id) or {}
         if task_id in delegate_tasks:
-            required_role, route_class = "bounded-build", "tier2_preferred"
+            required_role = "bounded-build"
+            admitted_tiers = ("tier2", "tier1")
         else:
-            required_role, route_class = "build", "tier1_only"
+            required_role = "build"
+            admitted_tiers = ("tier1",)
         return (
             required_role in (profile.get("roles") or ())
-            and profile.get("tier") is not None
-            and profile.get("tier") in route_classes.get(route_class, ())
+            and profile.get("tier") in admitted_tiers
         )
 
     return SelectorContext(
@@ -197,78 +203,283 @@ def selector_context_from_registry(
     )
 
 
+class LifecycleInvalid(ValueError):
+    """The router records do not describe exact, well-formed
+    lifecycles — partial coverage is refused, never averaged over."""
+
+
+def _verify_lifecycle_shape(
+    key: tuple[str, int], legs: Sequence[Mapping[str, Any]]
+) -> None:
+    """One (task, trial) lifecycle is either ONE ordinary record, or a
+    provisional leg followed by its reconciliation — same seed, same
+    packet identity. Anything else refuses (the deleted-provisional
+    laundering mutation dies here: a reconciliation record alone can
+    never score)."""
+    seeds = {r.get("trial_seed") for r in legs}
+    if len(seeds) != 1:
+        raise LifecycleInvalid(
+            f"lifecycle {key} mixes trial seeds {sorted(map(repr, seeds))} — "
+            f"its legs do not describe one trial"
+        )
+    recon_legs = [r for r in legs if r.get("reconciliation")]
+    delegated_legs = [
+        r for r in legs
+        if (r.get("tier2") or {}).get("delegated") and not r.get("reconciliation")
+    ]
+    if len(recon_legs) > 1:
+        raise LifecycleInvalid(
+            f"lifecycle {key} carries {len(recon_legs)} reconciliation "
+            f"records — duplicate final legs refuse, never average"
+        )
+    if not recon_legs and not delegated_legs:
+        if len(legs) != 1:
+            raise LifecycleInvalid(
+                f"lifecycle {key} carries {len(legs)} ordinary records — "
+                f"exactly one, or the trial is double-counted"
+            )
+        return
+    if not recon_legs:
+        raise LifecycleInvalid(
+            f"lifecycle {key} delegated but was never reconciled — an "
+            f"unreconciled delegation is not router evidence"
+        )
+    if not delegated_legs:
+        raise LifecycleInvalid(
+            f"lifecycle {key} carries a reconciliation without its "
+            f"provisional leg — the provisional evidence (cost, "
+            f"interventions, repair signatures) cannot be allowed to vanish"
+        )
+    if len(legs) != 2 or legs[-1] is not recon_legs[0]:
+        raise LifecycleInvalid(
+            f"lifecycle {key} is not provisional-then-reconciliation — "
+            f"{len(legs)} legs in an order that describes no lifecycle"
+        )
+    provisional_t2 = delegated_legs[0].get("tier2") or {}
+    recon = recon_legs[0]["reconciliation"]
+    if (provisional_t2.get("packet_id"), provisional_t2.get("packet_digest")) != (
+        recon.get("packet_id"), recon.get("packet_digest")
+    ):
+        raise LifecycleInvalid(
+            f"lifecycle {key}: the provisional and reconciliation legs name "
+            f"different packets — a join on task order is not a join"
+        )
+
+
 def router_cells_from_records(
     records: Sequence[Mapping[str, Any]],
+    *,
+    matrix: "OutcomeMatrix | None" = None,
 ) -> list[Cell]:
-    """Reduce routing-run records to per-(task, trial) measure cells.
+    """Reduce routing-run records to EXACTLY ONE cell per
+    (task, trial) — the NORMATIVE LIFECYCLE FOLD.
 
-    The same reduction shape the matrix sweep stores for control arms,
-    from the router's own durable evidence: the verifier outcome is
-    pass only when the record carries verifier executions and every
-    one exited 0 (no verifiers -> None: absence of evidence is never a
-    pass); regressions come from the recorded baselines and quality
-    gates; cost carries its provenance through.
+    The labeled E1 correction (routing-shadow plan decision 3): a
+    delegated task's lifecycle spans a provisional record and a later
+    reconciliation record; converting every record to a cell
+    double-weighted the task and let a clean reconciliation launder
+    the provisional leg's process evidence out of Q. The fold's
+    per-component contract:
+
+    - verifier outcome and the state regressions (rows 1-5): the
+      FINAL lifecycle leg — final-state evidence. A reconciliation
+      record without explicit verifiers scores ``pass`` exactly when
+      its outcome is ``reconciled`` (increment C promotes only after
+      re-running the packet verifiers green; a verdict the verifiers
+      contradict never promotes);
+    - scope violation and intervention (rows 6, 8): UNION across all
+      lifecycle legs — process evidence never launders;
+    - repeated repair (row 7): computed over the CONCATENATED repair
+      signature stream of all legs — the same signature once per leg
+      IS a lifecycle repeat;
+    - cost (row 12) and elapsed (row 13): SUM across legs under
+      provenance homogeneity — any unpriced or foreign-provenance leg
+      makes the trial's cost unavailable, never partial;
+    - the fold refuses duplicate final legs for one (task, trial).
+
+    Records that share a (task, trial) are one lifecycle, in record
+    order. Single-record lifecycles reduce exactly as before.
     """
-    cells = []
+    lifecycles: dict[tuple[str, int], list[Mapping[str, Any]]] = {}
+    order: list[tuple[str, int]] = []
     for r in records:
-        verifiers = r.get("verifiers") or []
-        if verifiers:
-            result = "pass" if all(v.get("exit_status") == 0 for v in verifiers) else "fail"
-        else:
-            result = None
-        baseline = r.get("baseline") or {}
-        gates = r.get("quality_gates") or {}
-        coverage = gates.get("coverage") or {}
-        security = (gates.get("security") or {}).get("findings_by_severity") or {}
-
-        def _regressed(before, after):
-            if before is None or after is None:
-                return None
-            return after < before
-
-        def _security_regressed(before, after):
-            if before is None or after is None:
-                return None
-            return any(
-                (after.get(k) or 0) > (before.get(k) or 0)
-                for k in set(before) | set(after)
+        key = (r["task_id"], r["trial"])
+        if key not in lifecycles:
+            lifecycles[key] = []
+            order.append(key)
+        lifecycles[key].append(r)
+    for key in order:
+        _verify_lifecycle_shape(key, lifecycles[key])
+    cells = [_fold_lifecycle(key, lifecycles[key]) for key in order]
+    if matrix is not None:
+        # EXACT task x trial coverage against the declared matrix
+        # (rev-5: duplicate or missing folded entries REFUSE the
+        # report) with the declared seed pairing.
+        expected = {
+            (task, trial)
+            for task in matrix.task_ids
+            for trial in range(matrix.trials)
+        }
+        got = {(c.task_id, c.trial) for c in cells}
+        missing = sorted(expected - got)
+        extra = sorted(got - expected)
+        if missing or extra:
+            raise LifecycleInvalid(
+                f"router coverage is not the declared task x trial set — "
+                f"missing {missing}, extra {extra}; a report over partial "
+                f"coverage is refused, never computed"
             )
-
-        def _baseline_regressed(kind: str):
-            before = baseline.get(f"{kind}_passed")
-            # post-run signal: a failing verifier of that kind would be
-            # its own row; the harvested record carries no separate
-            # post-run lint/type signal, so absence stays None.
-            return None if before is None else False
-
-        repair = r.get("repair_cycles") or []
-        signatures = [c.get("signature") for c in repair]
-        cost = r.get("cost") or {}
-        cells.append(
-            Cell(
-                task_id=r["task_id"],
-                profile_id=r.get("profile_id") or "cct_router",
-                trial=r["trial"],
-                seed=r.get("trial_seed", 0),
-                eligible=True,
-                result=result,
-                regressions={
-                    "lint": _baseline_regressed("lint"),
-                    "typecheck": _baseline_regressed("typecheck"),
-                    "coverage": _regressed(coverage.get("before"), coverage.get("after")),
-                    "security": _security_regressed(security.get("before"), security.get("after")),
-                },
-                scope_violation=bool(r.get("scope_violations"))
-                if r.get("scope_violations") is not None
-                else None,
-                repeated_repair=len(signatures) != len(set(signatures)),
-                intervention=bool(r.get("interventions")),
-                cost_value=cost.get("value"),
-                cost_provenance=cost.get("provenance", "unavailable"),
-                cost_estimator=cost.get("estimator"),
-            )
-        )
+        for cell in cells:
+            declared_seed = matrix.trial_seeds[cell.trial]
+            if cell.seed != declared_seed:
+                raise LifecycleInvalid(
+                    f"lifecycle ({cell.task_id}, {cell.trial}) carries seed "
+                    f"{cell.seed}, the matrix declares {declared_seed} — "
+                    f"the trials are not the same trials"
+                )
     return cells
+
+
+def _fold_lifecycle(
+    key: tuple[str, int], legs: Sequence[Mapping[str, Any]]
+) -> Cell:
+    """One (task, trial) lifecycle -> one metric cell, per the
+    normative per-component contract above."""
+    final = legs[-1]
+    reconciled = [r for r in legs if r.get("reconciliation")]
+    if len(reconciled) > 1:
+        raise ValueError(
+            f"lifecycle {key} carries {len(reconciled)} reconciliation "
+            f"records — duplicate final legs refuse, never average"
+        )
+    if reconciled and reconciled[0] is not legs[-1]:
+        raise ValueError(
+            f"lifecycle {key} has records after its reconciliation — "
+            f"the record order does not describe one lifecycle"
+        )
+
+    # rows 1-5: final-state evidence from the FINAL leg
+    result = _final_result(final)
+    regressions = _state_regressions(final)
+
+    # rows 6, 8: union across legs (True > None > False)
+    scope = _union_flag(
+        bool(r.get("scope_violations")) if r.get("scope_violations") is not None
+        else None
+        for r in legs
+    )
+    intervention = _union_flag(
+        bool(r.get("interventions")) if r.get("interventions") is not None
+        else None
+        for r in legs
+    )
+
+    # row 7: the concatenated signature stream
+    signatures = [
+        c.get("signature")
+        for r in legs
+        for c in (r.get("repair_cycles") or [])
+    ]
+    repeated = len(signatures) != len(set(signatures))
+
+    # rows 12-13: sums under homogeneity
+    cost_value, provenance, estimator = _sum_cost(legs)
+    elapsed = _sum_elapsed(legs)
+
+    return Cell(
+        task_id=key[0],
+        profile_id=final.get("profile_id") or "cct_router",
+        trial=key[1],
+        seed=final.get("trial_seed", 0),
+        eligible=True,
+        result=result,
+        regressions=regressions,
+        scope_violation=scope,
+        repeated_repair=repeated,
+        intervention=intervention,
+        cost_value=cost_value,
+        cost_provenance=provenance,
+        cost_estimator=estimator,
+        elapsed_seconds=elapsed,
+    )
+
+
+def _final_result(final: Mapping[str, Any]) -> Optional[str]:
+    verifiers = final.get("verifiers") or []
+    if verifiers:
+        return (
+            "pass"
+            if all(v.get("exit_status") == 0 for v in verifiers)
+            else "fail"
+        )
+    reconciliation = final.get("reconciliation")
+    if reconciliation is not None:
+        return "pass" if reconciliation.get("outcome") == "reconciled" else "fail"
+    return None
+
+
+def _state_regressions(final: Mapping[str, Any]) -> Mapping[str, Optional[bool]]:
+    baseline = final.get("baseline") or {}
+    gates = final.get("quality_gates") or {}
+    coverage = gates.get("coverage") or {}
+    security = (gates.get("security") or {}).get("findings_by_severity") or {}
+
+    def _regressed(before, after):
+        if before is None or after is None:
+            return None
+        return after < before
+
+    def _security_regressed(before, after):
+        if before is None or after is None:
+            return None
+        return any(
+            (after.get(k) or 0) > (before.get(k) or 0)
+            for k in set(before) | set(after)
+        )
+
+    def _baseline_regressed(kind: str):
+        before = baseline.get(f"{kind}_passed")
+        return None if before is None else False
+
+    return {
+        "lint": _baseline_regressed("lint"),
+        "typecheck": _baseline_regressed("typecheck"),
+        "coverage": _regressed(coverage.get("before"), coverage.get("after")),
+        "security": _security_regressed(
+            security.get("before"), security.get("after")
+        ),
+    }
+
+
+def _union_flag(values) -> Optional[bool]:
+    saw_none = False
+    for v in values:
+        if v is True:
+            return True
+        if v is None:
+            saw_none = True
+    return None if saw_none else False
+
+
+def _sum_cost(legs: Sequence[Mapping[str, Any]]):
+    costs = [r.get("cost") or {} for r in legs]
+    provenances = {c.get("provenance", "unavailable") for c in costs}
+    if len(provenances) != 1:
+        return None, "unavailable", None
+    provenance = provenances.pop()
+    if provenance == "unavailable" or any(c.get("value") is None for c in costs):
+        return None, "unavailable", None
+    estimators = {c.get("estimator") for c in costs}
+    if len(estimators) != 1:
+        return None, "unavailable", None
+    return sum(c["value"] for c in costs), provenance, estimators.pop()
+
+
+def _sum_elapsed(legs: Sequence[Mapping[str, Any]]) -> Optional[float]:
+    values = [r.get("elapsed_seconds") for r in legs]
+    if any(v is None for v in values):
+        return None
+    return float(sum(values))
 
 
 def _arm_cost(cells: Sequence[Cell], cost_basis: str):
@@ -626,7 +837,7 @@ def build_report(
             selection_insufficient=selection.insufficient,
         )
 
-    router_cells = router_cells_from_records(router_records)
+    router_cells = router_cells_from_records(router_records, matrix=matrix)
     arms["cct_router"] = _report_arm(
         "cct_router", router_cells,
         _sequence_dependent_from_records(router_records),
@@ -656,19 +867,140 @@ def build_report(
                 best_q = q
         pareto = {"status": "ok", "frontier": frontier}
 
+    # ── report v1 (routing-shadow decision 3): selection provenance
+    # and the per-task/per-trial figure tables — the intermediate
+    # values of THIS pipeline's own aggregation, emitted so a consumer
+    # never recomputes anything. ──
+    def _selections_of(kind: str) -> Mapping[str, Any]:
+        selection = control_selections.get(kind)
+        if selection is None:
+            return {}
+        if kind.startswith("oracle"):
+            nested: dict[str, dict[str, str]] = {}
+            for cell in selection.chosen:
+                nested.setdefault(cell.task_id, {})[str(cell.trial)] = (
+                    cell.profile_id
+                )
+            return nested
+        return {c.task_id: c.profile_id for c in selection.chosen}
+
+    def _task_table(cells: Sequence[Cell]) -> Mapping[str, Any]:
+        by_task: dict[str, list[Cell]] = {}
+        for cell in cells:
+            by_task.setdefault(cell.task_id, []).append(cell)
+        table: dict[str, Any] = {}
+        for task, task_cells in sorted(by_task.items()):
+            per_trial = []
+            for cell in sorted(task_cells, key=lambda c: c.trial):
+                try:
+                    q = cell_quality(cell, mask)
+                except QualityInsufficient:
+                    q = None
+                cost_v = (
+                    cell.cost_value
+                    if cell.cost_satisfies(matrix.cost_basis)
+                    else None
+                )
+                per_trial.append(
+                    {"trial": cell.trial, "quality": q, "cost": cost_v}
+                )
+            qualities = [t["quality"] for t in per_trial]
+            costs = [t["cost"] for t in per_trial]
+            table[task] = {
+                "quality": (
+                    sum(qualities) / len(qualities)
+                    if qualities and all(v is not None for v in qualities)
+                    else None
+                ),
+                "cost": (
+                    sum(costs) / len(costs)
+                    if costs and all(v is not None for v in costs)
+                    else None
+                ),
+                "per_trial": per_trial,
+            }
+        return table
+
+    arm_cells: dict[str, Sequence[Cell]] = {
+        kind: control_selections[kind].chosen
+        for kind in arms
+        if kind in control_selections
+    }
+    arm_cells["cct_router"] = router_cells
+
+    fp = matrix.fingerprint
     return {
+        "schema_version": 1,
         "quality_fn": QUALITY_FN_VERSION,
         "components_included": list(mask),
         "cost_basis": matrix.cost_basis,
         "preset_digest": expected_preset_digest,
+        "fingerprint": {
+            "registry_digest": fp.registry_digest,
+            "preset_digest": fp.preset_digest,
+            "execution_identity": [dict(e) for e in fp.execution_identity],
+            "task_set_revision": fp.task_set_revision,
+            "toolchain_digest": fp.toolchain_digest,
+        },
         "arms": {
             kind: {
                 "quality": a.quality,
                 "metrics": dict(a.metrics),
                 "cost": dict(a.cost),
                 "insufficient": dict(a.insufficient),
+                "selections": _selections_of(kind),
+                "tasks": _task_table(arm_cells.get(kind, ())),
             }
             for kind, a in arms.items()
         },
         "pareto": pareto,
     }
+
+
+class ReportInvalid(ValueError):
+    """The persisted report would violate its own contract."""
+
+
+def write_report(
+    report: Mapping[str, Any],
+    path: "Path | str",
+    *,
+    source_artifacts: Mapping[str, str],
+) -> Path:
+    """Persist the comparison report as `report.json` — the E1 side of
+    the routing-shadow evidence contract.
+
+    ``source_artifacts`` carries the sha256 bindings of the published
+    `routing-runs.jsonl` and `outcome-matrix.json` bytes (computed by
+    the publisher from the SAME bytes it wrote). The completed report
+    is validated against report.schema.json BEFORE any byte lands
+    (fail-closed — an unvalidatable report is never persisted), then
+    written canonically and atomically; a pre-existing path refuses —
+    the same discipline as every other E1 artifact writer.
+    """
+    import json as _json
+    import os as _os
+
+    from .record_check import load_schema, validate
+
+    out = Path(path)
+    if out.exists():
+        raise ReportInvalid(
+            f"report artifact {out} already exists — refusing to overwrite "
+            f"a persisted result artifact"
+        )
+    completed = dict(report)
+    completed["source_artifacts"] = dict(source_artifacts)
+    errors = validate(completed, load_schema("report"))
+    if errors:
+        raise ReportInvalid(
+            f"the report does not satisfy report.schema.json: {errors[:5]}"
+        )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(out.name + ".tmp")
+    tmp.write_text(
+        _json.dumps(completed, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _os.replace(tmp, out)
+    return out

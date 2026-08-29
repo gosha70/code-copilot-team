@@ -14,6 +14,7 @@ const TABS = [
   { href: "/graph", label: "Knowledge Graph" },
   { href: "/analysis", label: "Analysis" },
   { href: "/benchmark", label: "Benchmark" },
+  { href: "/routing", label: "Routing" },
   { href: "/agents", label: "Agents" },
   { href: "/settings", label: "Settings" },
 ];
@@ -25,8 +26,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="min-h-screen flex flex-col">
           <header className="bg-slate-900 text-white">
             <div className="max-w-7xl mx-auto px-4 flex items-center gap-6 h-14">
-              <span className="font-semibold tracking-tight">⬡ Session Analytics</span>
-              <nav className="flex gap-1 text-sm">
+              <span className="font-semibold tracking-tight whitespace-nowrap shrink-0">⬡ Session Analytics</span>
+              <nav className="flex gap-1 text-sm overflow-x-auto whitespace-nowrap">
                 {TABS.map((t) => (
                   <Link
                     key={t.href}

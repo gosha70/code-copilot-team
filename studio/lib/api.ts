@@ -130,6 +130,192 @@ export interface BenchmarkSummary {
   by_result: BenchmarkResultRow[];
 }
 
+// routing-shadow (#261): shadow-mode routing evidence. The Studio renders
+// E1 evidence sets and derived recommendations READ-ONLY — nothing here
+// carries execution authority, and every figure the API serves is bound to
+// its artifact source server-side. Shapes mirror the server payloads
+// exactly; the Studio never re-derives a figure client-side.
+export interface RoutingEvidenceSettings {
+  configured: boolean;
+  root_count: number;
+}
+
+export interface RoutingEvidenceSetSummary {
+  state: "valid";
+  set_id: string;
+  registry_digest: string;
+  preset_digest: string;
+  task_set_revision: string;
+  // E1 permits a null toolchain identity (report/manifest schemas both
+  // declare ["string","null"]) — consumers must render it, not crash.
+  toolchain_digest: string | null;
+  tasks: string[];
+  arms: string[];
+  pareto_status: string | null;
+  record_count: number;
+}
+
+// A SET-level invalid_evidence state: rendered, never skipped. `label` is
+// the directory basename and `detail` is sanitized server-side — neither
+// ever carries a filesystem path.
+export interface RoutingInvalidEvidenceSet {
+  state: "invalid_evidence";
+  label: string;
+  code: string;
+  artifact: string;
+  detail: string;
+}
+
+export type RoutingEvidenceEntry =
+  RoutingEvidenceSetSummary | RoutingInvalidEvidenceSet;
+
+export interface RoutingPerTrialFigures {
+  trial: number;
+  quality: number | null;
+  cost: number | null;
+}
+
+export interface RoutingTaskFigures {
+  quality: number | null;
+  cost: number | null;
+  per_trial: RoutingPerTrialFigures[];
+}
+
+export interface RoutingArm {
+  quality: number | null;
+  metrics: Record<string, number | string | null>;
+  cost: { value: number | null; status: string; reason: string | null };
+  insufficient: Record<string, string>;
+  selections: Record<string, string | Record<string, string>>;
+  tasks: Record<string, RoutingTaskFigures>;
+}
+
+export type RoutingPareto =
+  | { status: "ok"; frontier: { arm: string; quality: number; cost: number }[] }
+  | { status: "insufficient_evidence"; reason: string };
+
+export interface RoutingReport {
+  schema_version: number;
+  quality_fn: string;
+  components_included: string[];
+  cost_basis: string;
+  preset_digest: string;
+  fingerprint: {
+    registry_digest: string;
+    preset_digest: string;
+    execution_identity: unknown[];
+    task_set_revision: string;
+    toolchain_digest: string | null;
+  };
+  source_artifacts: {
+    routing_runs_sha256: string;
+    outcome_matrix_sha256: string;
+  };
+  arms: Record<string, RoutingArm>;
+  pareto: RoutingPareto;
+}
+
+export interface RoutingEvidenceDetail {
+  set_id: string;
+  report: RoutingReport;
+  record_count: number;
+}
+
+export interface RoutingFigureSource {
+  artifact: "report";
+  pointer: string;
+}
+
+export interface RoutingDeltaSource {
+  operation: "subtract";
+  lhs: RoutingFigureSource;
+  rhs: RoutingFigureSource;
+}
+
+// The closed locator vocabulary (recommendation.schema.json): record
+// indices into routing-runs, arm-by-task report figures, or matrix cell
+// coordinates. No shape is ever a filesystem path.
+export type RoutingEvidenceLocator =
+  | { record: number; decision?: number }
+  | { arm: string; task: string }
+  | { cell: { task: string; profile: string; trial: number } };
+
+export type RoutingOutcome =
+  "switch_profile" | "no_change_recommended" | "insufficient_data";
+
+export interface RoutingRecommendation {
+  schema_version: 1;
+  evidence_set_id: string;
+  task_id: string;
+  actual: {
+    per_trial: {
+      trial: number;
+      chain: string[];
+      delegated: boolean;
+      reconciled: boolean;
+    }[];
+  };
+  suggested: {
+    arm: "always_best" | "always_cheapest";
+    profile_id: string;
+  } | null;
+  oracle_ceiling: {
+    quality: number | null;
+    cost: number | null;
+    sources: {
+      quality: RoutingFigureSource | null;
+      cost: RoutingFigureSource | null;
+    };
+  };
+  divergence: Record<
+    string,
+    {
+      quality_delta: number | null;
+      cost_delta: number | null;
+      cost_basis: string;
+      sources: {
+        quality_delta: RoutingDeltaSource | null;
+        cost_delta: RoutingDeltaSource | null;
+      };
+    }
+  >;
+  outcome: RoutingOutcome;
+  confidence: {
+    grade: "high" | "moderate" | "low";
+    basis: {
+      trials: number;
+      agreement: number | null;
+      components_included: string[];
+      insufficiency_refs: string[];
+      unevaluated_trials?: number[];
+    };
+  };
+  evidence_refs: {
+    evidence_set_id: string;
+    artifact: string;
+    locator: RoutingEvidenceLocator;
+  }[];
+}
+
+// The closed read-only artifact surface (T4 round-2): every locator is
+// followable — each validated artifact serves verbatim, addressed only by
+// set id and the closed artifact name, never a path.
+export type RoutingArtifactName = "report" | "routing_runs" | "outcome_matrix";
+
+export interface RoutingArtifactPayload {
+  set_id: string;
+  artifact: RoutingArtifactName;
+  content:
+    | RoutingReport
+    | { records: Record<string, unknown>[] }
+    | Record<string, unknown>;
+}
+
+export interface RoutingRecommendationsPayload {
+  set_id: string;
+  recommendations: RoutingRecommendation[];
+}
+
 export const api = {
   dashboard: () => get<DashboardKpis>("/api/dashboard/kpis"),
   labels: () => get<{ labels: { label: string; true: number; total: number }[] }>("/api/dashboard/labels"),
@@ -164,4 +350,19 @@ export const api = {
     }>("/api/settings/test-connection", { dsn }),
   analyze: (body: { judge?: string; limit?: number; session_id?: number }) =>
     post<{ judge?: string; by_copilot?: Record<string, unknown> }>("/api/analyze", body),
+  // routing-shadow (#261): read-only shadow-mode surfaces.
+  routingEvidence: () =>
+    get<{ sets: RoutingEvidenceEntry[] }>("/api/routing/evidence"),
+  routingEvidenceSet: (setId: string) =>
+    get<RoutingEvidenceDetail>(
+      `/api/routing/evidence/${encodeURIComponent(setId)}`,
+    ),
+  routingRecommendations: (setId: string) =>
+    get<RoutingRecommendationsPayload>(
+      `/api/routing/evidence/${encodeURIComponent(setId)}/recommendations`,
+    ),
+  routingArtifact: (setId: string, artifact: RoutingArtifactName) =>
+    get<RoutingArtifactPayload>(
+      `/api/routing/evidence/${encodeURIComponent(setId)}/artifact/${artifact}`,
+    ),
 };

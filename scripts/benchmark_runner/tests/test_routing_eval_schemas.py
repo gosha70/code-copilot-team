@@ -487,9 +487,21 @@ class TestRoutingRunRejection(unittest.TestCase):
         errors = validate(minimal, self.schema)
         self.assertTrue(errors, "identity+tokens+cost alone validated")
         for container in ("injected_events", "routing_decisions", "verifiers",
-                          "tier2", "insufficient_evidence"):
+                          "tier2"):
             with self.subTest(container=container):
                 self.assertTrue(any(container in e for e in errors))
+        # insufficient_evidence is the one OPTIONAL container (T1 of
+        # routing-shadow): ABSENT means no explicit insufficiency
+        # entries were recorded — individual channels still express
+        # missing evidence via their own nulls. PRESENT but hollow
+        # still rejects.
+        hollow = dict(self.valid)
+        hollow["insufficient_evidence"] = {}
+        hollow_errors = validate(hollow, self.schema)
+        self.assertTrue(
+            any("insufficient_evidence" in e for e in hollow_errors),
+            "a hollow insufficiency container must still reject",
+        )
 
     def test_hollow_evidence_containers_are_rejected(self) -> None:
         # The owner's reproduction: required containers filled with

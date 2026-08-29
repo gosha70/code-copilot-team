@@ -1,0 +1,337 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "recommendation.schema.json",
+  "title": "Shadow-mode routing recommendation v1 (routing-shadow decisions 5-6)",
+  "description": "One per (evidence set, task): a claim about what routing would have been better, derived ONLY from E1 evidence, carrying addressable evidence references, a confidence grade with its stated basis, and a closed outcome where insufficient_data is structurally distinct from no_change_recommended. It is never applied, never fed back into selection, and carries no execution authority. The availability guard: switch_profile is emitted only when the suggested profile appears admissible in the router's own durable candidate evidence for the task.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_set_id",
+    "task_id",
+    "actual",
+    "suggested",
+    "oracle_ceiling",
+    "divergence",
+    "outcome",
+    "confidence",
+    "evidence_refs"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "evidence_set_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "task_id": { "type": "string", "minLength": 1 },
+    "actual": {
+      "description": "The router's routing evidence, per trial: the ordered selected-profile chain with delegation/reconciliation markers. Display and evidence, never the recommendation trigger.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["per_trial"],
+      "properties": {
+        "per_trial": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["trial", "chain", "delegated", "reconciled"],
+            "properties": {
+              "trial": { "type": "integer", "minimum": 0 },
+              "chain": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "delegated": { "type": "boolean" },
+              "reconciled": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "suggested": {
+      "description": "The dominating executable candidate arm and its per-task profile — null unless outcome is switch_profile.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["arm", "profile_id"],
+          "properties": {
+            "arm": { "enum": ["always_best", "always_cheapest"] },
+            "profile_id": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "oracle_ceiling": {
+      "description": "The hindsight bound, always named separately — never suggested (it is not a policy anyone can run). Each non-null figure names its exact artifact source (decision 9); the pairing is schema-enforced: a null figure carries a null source and a numeric figure carries a figure_source — the four oneOf branches partition the two pairs exhaustively and exclusively.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quality", "cost", "sources"],
+      "properties": {
+        "quality": { "type": ["number", "null"] },
+        "cost": { "type": ["number", "null"] },
+        "sources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["quality", "cost"],
+          "properties": {
+            "quality": {
+              "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/figure_source" }]
+            },
+            "cost": {
+              "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/figure_source" }]
+            }
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "quality": { "type": "number" },
+            "cost": { "type": "number" },
+            "sources": {
+              "properties": {
+                "quality": { "$ref": "#/$defs/figure_source" },
+                "cost": { "$ref": "#/$defs/figure_source" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "quality": { "type": "number" },
+            "cost": { "type": "null" },
+            "sources": {
+              "properties": {
+                "quality": { "$ref": "#/$defs/figure_source" },
+                "cost": { "type": "null" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "quality": { "type": "null" },
+            "cost": { "type": "number" },
+            "sources": {
+              "properties": {
+                "quality": { "type": "null" },
+                "cost": { "$ref": "#/$defs/figure_source" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "quality": { "type": "null" },
+            "cost": { "type": "null" },
+            "sources": {
+              "properties": {
+                "quality": { "type": "null" },
+                "cost": { "type": "null" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "divergence": {
+      "description": "Per executable candidate arm: the declared float64 subtractions (router minus candidate) of the report's served per-task figures. Each non-null delta names its two operand pointers (decision 9); the pairing is schema-enforced by the four exclusive oneOf branches, and the serving resolver recomputes every subtraction and refuses on any difference.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["quality_delta", "cost_delta", "cost_basis", "sources"],
+        "properties": {
+          "quality_delta": { "type": ["number", "null"] },
+          "cost_delta": { "type": ["number", "null"] },
+          "cost_basis": { "type": "string", "minLength": 1 },
+          "sources": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["quality_delta", "cost_delta"],
+            "properties": {
+              "quality_delta": {
+                "oneOf": [
+                  { "type": "null" },
+                  { "$ref": "#/$defs/delta_source" }
+                ]
+              },
+              "cost_delta": {
+                "oneOf": [
+                  { "type": "null" },
+                  { "$ref": "#/$defs/delta_source" }
+                ]
+              }
+            }
+          }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "quality_delta": { "type": "number" },
+              "cost_delta": { "type": "number" },
+              "sources": {
+                "properties": {
+                  "quality_delta": { "$ref": "#/$defs/delta_source" },
+                  "cost_delta": { "$ref": "#/$defs/delta_source" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "quality_delta": { "type": "number" },
+              "cost_delta": { "type": "null" },
+              "sources": {
+                "properties": {
+                  "quality_delta": { "$ref": "#/$defs/delta_source" },
+                  "cost_delta": { "type": "null" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "quality_delta": { "type": "null" },
+              "cost_delta": { "type": "number" },
+              "sources": {
+                "properties": {
+                  "quality_delta": { "type": "null" },
+                  "cost_delta": { "$ref": "#/$defs/delta_source" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "quality_delta": { "type": "null" },
+              "cost_delta": { "type": "null" },
+              "sources": {
+                "properties": {
+                  "quality_delta": { "type": "null" },
+                  "cost_delta": { "type": "null" }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "outcome": {
+      "enum": ["switch_profile", "no_change_recommended", "insufficient_data"]
+    },
+    "confidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grade", "basis"],
+      "properties": {
+        "grade": { "enum": ["high", "moderate", "low"] },
+        "basis": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "trials",
+            "agreement",
+            "components_included",
+            "insufficiency_refs"
+          ],
+          "properties": {
+            "trials": { "type": "integer", "minimum": 1 },
+            "agreement": { "type": ["number", "null"] },
+            "components_included": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "insufficiency_refs": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "unevaluated_trials": {
+              "type": "array",
+              "items": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/evidence_ref" }
+    }
+  },
+  "$defs": {
+    "figure_source": {
+      "description": "The exact source of one served numeric figure (decision 9): a JSON Pointer into ONE named set artifact. The serving resolver parses the artifact once, resolves the pointer, and requires float64 equality with the served figure — no source, an unresolvable pointer, or a differing value refuses the payload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "pointer"],
+      "properties": {
+        "artifact": { "enum": ["report"] },
+        "pointer": { "type": "string", "pattern": "^(/([^/~]|~[01])*)+$" }
+      }
+    },
+    "delta_source": {
+      "description": "A declared delta naming its two operand pointers; the serving resolver recomputes lhs minus rhs in float64 and requires exact equality with the served delta.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "lhs", "rhs"],
+      "properties": {
+        "operation": { "const": "subtract" },
+        "lhs": { "$ref": "#/$defs/figure_source" },
+        "rhs": { "$ref": "#/$defs/figure_source" }
+      }
+    },
+    "evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_set_id", "artifact", "locator"],
+      "properties": {
+        "evidence_set_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "artifact": {
+          "enum": ["routing_runs", "outcome_matrix", "report"]
+        },
+        "locator": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["record"],
+              "properties": {
+                "record": { "type": "integer", "minimum": 0 },
+                "decision": { "type": "integer", "minimum": 0 }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["arm", "task"],
+              "properties": {
+                "arm": { "type": "string", "minLength": 1 },
+                "task": { "type": "string", "minLength": 1 }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["cell"],
+              "properties": {
+                "cell": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["task", "profile", "trial"],
+                  "properties": {
+                    "task": { "type": "string", "minLength": 1 },
+                    "profile": { "type": "string", "minLength": 1 },
+                    "trial": { "type": "integer", "minimum": 0 }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
