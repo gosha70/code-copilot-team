@@ -853,6 +853,31 @@ closes via the follow-up PR's single close keyword.
   untracked and lands on its own follow-up branch after this
   closure.
 
+## T5 review round 1 (owner, on 7c4e459) — two P2 + one P3, applied
+
+Documentation accuracy only — the owner confirmed branch structure,
+closure discipline, gates, diff guard, and cookbook exclusion clean.
+
+1. **[P2] The path-free claim was too broad.** Served evidence-file
+   content can contain path-shaped text the scrub does not touch
+   (only the current user's home prefix collapses; e.g.
+   `/private/tmp/customer/project` survives), and evidence references
+   are set-relative path shapes. The README/CHANGELOG/Studio claims
+   now state the implemented boundary: configured roots and
+   server-side set paths never serialized, opaque set identity,
+   home-prefix collapse + credential scrub at write time — and
+   explicitly that path-shaped text inside published evidence content
+   is served as written.
+2. **[P2] The provenance claim covered unsourced numbers.** "Every
+   served number" narrowed to the decision-9 boundary: recommendation
+   quality/cost figures and their deltas carry pointers; confidence
+   statistics, record counts, and locator indices carry none —
+   confidence is gated by whole-block recomputation instead.
+3. **[P3] "`/api/settings` returns the dialect only" was false** —
+   it returns several sanitized settings groups. Rephrased to "the
+   DSN's dialect rather than the raw DSN (alongside other sanitized
+   settings)".
+
 ## Verdict
 
 Verdict: aligned
