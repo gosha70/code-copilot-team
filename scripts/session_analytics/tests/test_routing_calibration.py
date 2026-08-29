@@ -1143,5 +1143,249 @@ class TestGates(unittest.TestCase):
                     _CURRENT_POLICY, report)
 
 
+from session_analytics.routing_calibration import (  # noqa: E402
+    calibration_payload,
+    evaluation_payload,
+    knn_payload,
+)
+
+
+class TestServedPayloads(unittest.TestCase):
+    """T4 / decision 10: the payload builders. Every state is explicit
+    (no-data, insufficient, gates-mixed, gates-all-pass, stale), the
+    sanitization floor holds over the new payloads, and the evaluation
+    aggregates — agreement included — ride beside the verdicts."""
+
+    def setUp(self) -> None:
+        import shutil
+        import tempfile
+
+        from benchmark_runner.tests.test_routing_eval_quality import (
+            _REGISTRY,
+        )
+
+        self.registry = str(_REGISTRY)
+        # A deliberately identifiable root: the sweep below asserts no
+        # payload ever echoes it (the E2 SENSITIVE-root idiom).
+        self.root = Path(tempfile.mkdtemp(prefix="SENSITIVE-CALIB-ROOT."))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def _cfg(self, **overrides):
+        block = {"policy_source": self.registry, "root": str(self.root)}
+        block.update(overrides)
+        return _config(**block)
+
+    def _healthy(self):
+        """Four labeled sets whose truth switches to a tier-2 profile —
+        the shape that makes a downgrade POSSIBLE, so a passing G4 is a
+        measurement and not a vacuous one."""
+        return [
+            _beta_switch_set("aa" * 32, "n1", file_scope=1),
+            _beta_switch_set("bb" * 32, "n2", file_scope=2),
+            _beta_switch_set("cc" * 32, "n3", file_scope=3),
+            _beta_switch_set("dd" * 32, "n4", file_scope=4),
+        ]
+
+    def _persist(self, corpus, cfg, mutate=None):
+        policy = policy_from_config(cfg)
+        report = dict(evaluate_heldout(corpus, policy,
+                                       load_current_policy(cfg)))
+        if mutate is not None:
+            report = mutate(report)
+        write_evaluation_report(report, self.root)
+        return report
+
+    # ── the five rendered states ──
+    def test_no_data_state(self) -> None:
+        payload = calibration_payload([], self._cfg())
+        self.assertEqual(payload["state"], "report")
+        self.assertFalse(payload["report"]["calibrated"])
+        self.assertEqual(payload["report"]["corpus"]["sets"], 0)
+        self.assertTrue(all(g["status"] == "insufficient_data"
+                            for g in payload["report"]["gates"]))
+        self.assertFalse(payload["evaluation"]["present"])
+        # one shape renders every state: the aggregates exist as nulls
+        for key in ("agreement", "compared", "false_downgrade_rate"):
+            self.assertIsNone(payload["evaluation"][key])
+
+    def test_insufficient_state_when_policy_cannot_be_assembled(self):
+        block = dict(self._cfg().routing_calibration)
+        del block["k"]
+        payload = calibration_payload(
+            self._healthy(), SimpleNamespace(routing_calibration=block))
+        self.assertEqual(payload["state"], "insufficient_data")
+        self.assertIn("'k'", payload["reason"])
+        self.assertIsNone(payload["report"])
+        self.assertIsNone(payload["policy"])
+        self.assertFalse(payload["evaluation"]["present"])
+
+    def test_gates_mixed_state(self) -> None:
+        corpus = self._healthy()
+        cfg = self._cfg()
+        self._persist(corpus, cfg)
+        # an impossible telemetry threshold fails G1 alone
+        payload = calibration_payload(corpus, self._cfg(min_sufficiency=1.1))
+        statuses = {g["id"]: g["status"] for g in payload["report"]["gates"]}
+        self.assertEqual(statuses["telemetry_complete"], "fail")
+        self.assertIn("pass", statuses.values())
+        self.assertFalse(payload["report"]["calibrated"])
+
+    def test_gates_all_pass_state(self) -> None:
+        corpus = self._healthy()
+        cfg = self._cfg()
+        self._persist(corpus, cfg)
+        payload = calibration_payload(corpus, cfg)
+        self.assertTrue(payload["report"]["calibrated"],
+                        [g for g in payload["report"]["gates"]
+                         if g["status"] != "pass"])
+        self.assertTrue(payload["evaluation"]["present"])
+        self.assertFalse(payload["evaluation"]["stale"])
+        self.assertEqual(payload["policy"]["feature_vocabulary"],
+                         FEATURE_VOCABULARY_VERSION)
+
+    def test_stale_state_is_explicit_in_both_payloads(self) -> None:
+        corpus = self._healthy()
+        cfg = self._cfg()
+        self._persist(corpus, cfg, mutate=lambda r: dict(
+            r, corpus_id="ff" * 32, policy_id="ff" * 32))
+        payload = calibration_payload(corpus, cfg)
+        self.assertTrue(payload["evaluation"]["present"])
+        self.assertTrue(payload["evaluation"]["stale"])
+        self.assertEqual(sorted(payload["evaluation"]["stale_reasons"]),
+                         ["corpus_changed", "policy_changed"])
+        # and a stale report satisfies no gate
+        statuses = {g["id"]: g["status"] for g in payload["report"]["gates"]}
+        for gate_id in ("heldout_evaluated", "false_downgrade",
+                        "floors_authoritative"):
+            self.assertEqual(statuses[gate_id], "insufficient_data")
+        self.assertFalse(payload["report"]["calibrated"])
+
+        evaluation = evaluation_payload(corpus, cfg)
+        self.assertEqual(evaluation["state"], "report")
+        self.assertTrue(evaluation["staleness"]["stale"])
+        self.assertEqual(sorted(evaluation["staleness"]["reasons"]),
+                         ["corpus_changed", "policy_changed"])
+
+    # ── agreement beside the verdicts (the T3-review forward note) ──
+    def test_an_inert_recommender_passes_every_gate(self) -> None:
+        """The gates are a SAFETY floor and cannot, by construction,
+        distinguish a useful recommender from one that proposes
+        nothing: a keep-everything recommender makes real
+        recommendations, none of which can be a downgrade, so it earns
+        a truthful 0.0 rate and full coverage. Agreement is the only
+        number that separates them, so it must be ON the payload."""
+        corpus = self._healthy()
+        cfg = self._cfg()
+
+        def inert(report):
+            results = [dict(r, predicted={"outcome": "no_change_recommended",
+                                          "suggested": None},
+                            downgrade_flag=False)
+                       for r in report["results"]]
+            # truth switches for every task here, so an all-keep
+            # recommender agrees with NONE of them
+            self.assertTrue(results, "the fixture must produce results")
+            self.assertTrue(all(r["truth"]["outcome"] == "switch_profile"
+                                for r in results))
+            return dict(report, results=results, agreement=0.0,
+                        false_downgrades=0, false_downgrade_rate=0.0,
+                        compared=len(results), evaluated=len(results),
+                        refused=0, unresolved_tier=0, unevaluable=0,
+                        floor_violations=0)
+
+        self._persist(corpus, cfg, mutate=inert)
+        payload = calibration_payload(corpus, cfg)
+        # every gate passes — this is the honest verdict, not a bug
+        self.assertTrue(payload["report"]["calibrated"])
+        # ...and the payload still shows the operator WHY it is inert
+        self.assertEqual(payload["evaluation"]["agreement"], 0.0)
+        self.assertEqual(payload["evaluation"]["false_downgrade_rate"], 0.0)
+        self.assertEqual(payload["evaluation"]["compared"], 4)
+
+    def test_every_evaluation_aggregate_reaches_the_payload(self) -> None:
+        # a mutation that drops any aggregate from the served summary
+        # must be caught: the promotion decision reads ALL of them
+        corpus = self._healthy()
+        cfg = self._cfg()
+        report = self._persist(corpus, cfg)
+        summary = calibration_payload(corpus, cfg)["evaluation"]
+        for key in ("agreement", "compared", "evaluated", "refused",
+                    "unresolved_tier", "unevaluable", "false_downgrades",
+                    "false_downgrade_rate", "floor_violations"):
+            self.assertIn(key, summary)
+            self.assertEqual(summary[key], report[key], key)
+
+    # ── the sanitization floor over the NEW payloads ──
+    def test_no_payload_echoes_a_configured_path(self) -> None:
+        corpus = self._healthy()
+        cfg = self._cfg()
+        self._persist(corpus, cfg)
+        broken = dict(cfg.routing_calibration)
+        del broken["k"]
+        payloads = [
+            calibration_payload(corpus, cfg),
+            calibration_payload([], cfg),
+            calibration_payload(corpus,
+                                SimpleNamespace(routing_calibration=broken)),
+            evaluation_payload(corpus, cfg),
+            evaluation_payload(corpus, SimpleNamespace(
+                routing_calibration=broken)),
+            knn_payload(corpus, "aa" * 32, cfg),
+            knn_payload(corpus, "aa" * 32,
+                        SimpleNamespace(routing_calibration=broken)),
+        ]
+        for payload in payloads:
+            text = json.dumps(payload, sort_keys=True)
+            self.assertNotIn("SENSITIVE-CALIB-ROOT", text)
+            self.assertNotIn(str(self.root), text)
+            self.assertNotIn(self.registry, text)
+        # the policy echo carries the DIGEST of the source, not a path
+        self.assertEqual(
+            len(calibration_payload(corpus, cfg)["policy"]
+                ["policy_source_digest"]), 64)
+
+    # ── the kNN surface ──
+    def test_knn_payload_covers_every_task_of_the_set(self) -> None:
+        corpus = self._healthy()
+        cfg = self._cfg()
+        payload = knn_payload(corpus, "aa" * 32, cfg)
+        self.assertEqual(payload["state"], "report")
+        self.assertEqual(payload["set_id"], "aa" * 32)
+        tasks = [r["task_id"] for r in payload["recommendations"]]
+        self.assertEqual(tasks, ["n1"])
+        for rec in payload["recommendations"]:
+            self.assertEqual(rec["evidence_set_id"], "aa" * 32)
+            self.assertFalse(validate(rec,
+                                      load_schema("knn-recommendation")))
+
+    def test_knn_payload_refuses_per_task_never_globally(self) -> None:
+        # one undescriptored set beside labeled neighbors: the task
+        # refuses with ITS reason while the payload still serves
+        corpus = self._healthy()
+        corpus.append(replace(_switch_set("ee" * 32, task="bare"),
+                              task_descriptors=None))
+        payload = knn_payload(corpus, "ee" * 32, self._cfg())
+        self.assertEqual(payload["state"], "report")
+        (rec,) = payload["recommendations"]
+        self.assertEqual(rec["outcome"], "insufficient_data")
+        self.assertIn("descriptor", rec["insufficient_reason"])
+
+    def test_knn_payload_insufficient_when_policy_is_unassemblable(self):
+        block = dict(self._cfg().routing_calibration)
+        del block["k_min"]
+        payload = knn_payload(self._healthy(), "aa" * 32,
+                              SimpleNamespace(routing_calibration=block))
+        self.assertEqual(payload["state"], "insufficient_data")
+        self.assertEqual(payload["recommendations"], [])
+
+    # ── the evaluation endpoint's own absent state ──
+    def test_evaluation_payload_without_a_persisted_report(self) -> None:
+        payload = evaluation_payload(self._healthy(), self._cfg())
+        self.assertEqual(payload["state"], "insufficient_data")
+        self.assertIsNone(payload["report"])
+        self.assertIsNone(payload["staleness"])
+        self.assertIn("calibration root", payload["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -950,3 +950,149 @@ def report_staleness(
     if report.get("policy_id") != current_policy_id:
         reasons.append("policy_changed")
     return {"stale": bool(reasons), "reasons": reasons}
+
+
+# ── the served surface (decision 10) ───────────────────────────────────
+#: The closed payload-state vocabulary. ``report`` means a result was
+#: derived; ``insufficient_data`` means one could not be — never a
+#: fabricated or partial verdict, and never a bare error string the
+#: caller has to parse.
+PAYLOAD_STATES = ("report", "insufficient_data")
+
+#: The evaluation aggregates rendered BESIDE the gate verdicts. Every
+#: numeric is None when no report exists, so one shape renders every
+#: state.
+_EVALUATION_FIELDS = (
+    "agreement", "compared", "evaluated", "refused", "unresolved_tier",
+    "unevaluable", "false_downgrades", "false_downgrade_rate",
+    "floor_violations",
+)
+
+
+def _evaluation_summary(
+    report: "Mapping[str, Any] | None",
+    staleness: "Mapping[str, Any] | None",
+) -> Mapping[str, Any]:
+    """The evaluation aggregates the promotion decision needs in view
+    beside the five verdicts.
+
+    ``agreement`` rides here deliberately even though NO gate consumes
+    it. The gates are a safety floor, and a recommender that answers
+    ``no_change_recommended`` for every task clears that floor
+    honestly: it makes real recommendations, none of which can be a
+    downgrade, so it earns a truthful 0.0 rate and full coverage while
+    proposing nothing. That is safe but inert, and per-gate status
+    alone cannot tell the two apart. Agreement is the usefulness
+    reading; an operator holds the promotion call only with both
+    numbers on the surface.
+    """
+    if report is None:
+        return {
+            "present": False, "stale": False, "stale_reasons": [],
+            **{key: None for key in _EVALUATION_FIELDS},
+        }
+    staleness = staleness or {"stale": False, "reasons": []}
+    return {
+        "present": True,
+        "stale": staleness["stale"],
+        "stale_reasons": list(staleness["reasons"]),
+        **{key: report[key] for key in _EVALUATION_FIELDS},
+    }
+
+
+def _persisted_evaluation(config: Any) -> "Mapping[str, Any] | None":
+    block = getattr(config, C.CFG_ROUTING_CALIBRATION, None) or {}
+    return load_evaluation_report(block.get("root"))
+
+
+def calibration_payload(
+    entries: Sequence["LoadedEvidenceSet | InvalidEvidenceSet"],
+    config: Any,
+) -> Mapping[str, Any]:
+    """The live gate report for the current corpus and configuration,
+    or ``insufficient_data`` when the operator configuration cannot
+    yield one at all. The evaluation summary and its stale state are
+    always explicit; the policy echo is the identity document (digests
+    only) — the configured roots and policy-source PATH never leave the
+    server, matching the E2 sanitization floor."""
+    try:
+        policy = policy_from_config(config)
+        current_policy = load_current_policy(config)
+        evaluation = _persisted_evaluation(config)
+        report = compute_gates(entries, config, policy, current_policy,
+                               evaluation)
+    except CalibrationError as exc:
+        return {"state": "insufficient_data", "reason": str(exc),
+                "report": None, "evaluation": _evaluation_summary(None, None),
+                "policy": None}
+    staleness = (
+        report_staleness(evaluation, report["corpus_id"],
+                         report["policy_id"])
+        if evaluation is not None else None
+    )
+    return {
+        "state": "report",
+        "reason": None,
+        "report": report,
+        "evaluation": _evaluation_summary(evaluation, staleness),
+        "policy": policy.as_document(),
+    }
+
+
+def evaluation_payload(
+    entries: Sequence["LoadedEvidenceSet | InvalidEvidenceSet"],
+    config: Any,
+) -> Mapping[str, Any]:
+    """The persisted held-out evaluation report, stale-flagged against
+    the live corpus and policy. An absent, unreadable, or invalid
+    report is ``insufficient_data`` — never partially served."""
+    try:
+        policy = policy_from_config(config)
+    except CalibrationError as exc:
+        return {"state": "insufficient_data", "reason": str(exc),
+                "report": None, "staleness": None}
+    report = _persisted_evaluation(config)
+    if report is None:
+        return {
+            "state": "insufficient_data",
+            "reason": "no readable evaluation report in the configured "
+                      "calibration root",
+            "report": None, "staleness": None,
+        }
+    return {
+        "state": "report",
+        "reason": None,
+        "report": report,
+        "staleness": report_staleness(report, corpus_id(entries),
+                                      policy_id(policy)),
+    }
+
+
+def knn_payload(
+    entries: Sequence["LoadedEvidenceSet | InvalidEvidenceSet"],
+    set_id: str,
+    config: Any,
+) -> Mapping[str, Any]:
+    """Every task of one set's shadow kNN recommendation, served BESIDE
+    the E2 dominance recommendations (never in place of them). Examples
+    are extracted once so all tasks of the set share one deterministic
+    corpus read; a task whose features or neighborhood are unavailable
+    carries its own ``insufficient_data`` with the reason."""
+    try:
+        policy = policy_from_config(config)
+    except CalibrationError as exc:
+        return {"state": "insufficient_data", "reason": str(exc),
+                "set_id": set_id, "recommendations": []}
+    current_policy = load_current_policy(config)
+    examples = extract_examples(entries)
+    return {
+        "state": "report",
+        "reason": None,
+        "set_id": set_id,
+        "recommendations": [
+            knn_recommendation(entries, set_id, example.task_id, policy,
+                               current_policy, _examples=examples)
+            for example in examples
+            if example.evidence_set_id == set_id
+        ],
+    }

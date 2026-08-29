@@ -9,6 +9,7 @@ import unittest
 
 from session_analytics import constants as C
 from session_analytics.ingest.pipeline import ingest
+from session_analytics.routing_calibration import GATE_IDS
 
 from session_analytics.tests.support import CLAUDE_CODE_ROOT, RegistryResetTestCase
 
@@ -339,3 +340,45 @@ class TestRoutingEvidenceApi(RegistryResetTestCase):
         (entry,) = r.json()["sets"]
         self.assertEqual(entry["state"], "invalid_evidence")
         self.assertNotIn("SENSITIVE-API-ROOT", r.text)
+
+    # ── routing-calibration (#266) T4: the three decision-10 routes ──
+    def test_calibration_endpoints_over_http(self) -> None:
+        import os
+        from unittest import mock as _mock
+
+        # Point BOTH calibration paths at identifiable locations: the
+        # sweep below proves neither reaches a payload.
+        with _mock.patch.dict(os.environ, {
+            "CCT_SA_CALIBRATION_ROOT": str(self.base / "SENSITIVE-CALIB"),
+            "CCT_SA_CALIBRATION_POLICY_SOURCE":
+                str(self.base / "SENSITIVE-POLICY.toml"),
+        }):
+            gates = self.client.get("/api/routing/calibration")
+            self.assertEqual(gates.status_code, 200)
+            body = gates.json()
+            self.assertEqual(body["state"], "report")
+            self.assertEqual(
+                sorted(g["id"] for g in body["report"]["gates"]),
+                sorted(GATE_IDS))
+            self.assertFalse(body["report"]["calibrated"])
+            # agreement rides beside the verdicts in every state
+            self.assertIn("agreement", body["evaluation"])
+            self.assertFalse(body["evaluation"]["present"])
+            self.assertNotIn("SENSITIVE", gates.text)
+
+            evaluation = self.client.get(
+                "/api/routing/calibration/evaluation")
+            self.assertEqual(evaluation.status_code, 200)
+            self.assertEqual(evaluation.json()["state"], "insufficient_data")
+            self.assertNotIn("SENSITIVE", evaluation.text)
+
+            knn = self.client.get(
+                f"/api/routing/evidence/{self.published.set_id}/knn")
+            self.assertEqual(knn.status_code, 200)
+            self.assertEqual(knn.json()["set_id"], self.published.set_id)
+            self.assertNotIn("SENSITIVE", knn.text)
+
+            # an unknown set is a 404, never an empty recommendation list
+            unknown = self.client.get(
+                "/api/routing/evidence/" + "0" * 64 + "/knn")
+            self.assertEqual(unknown.status_code, 404)

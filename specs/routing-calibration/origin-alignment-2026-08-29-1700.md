@@ -388,6 +388,99 @@ justification is already there to ratify.
 Suites after the pass: calibration 55 OK, session-analytics discovery
 393 OK (35 CI-gated skips), E1 light suites 95 OK.
 
+## T3 review round 2 (owner, on 9843477) — APPROVED, GO T4
+
+Cleared with independent verification: calibration 55 OK, discovery
+393 OK / 35 skips, spec 2/0, origin aligned/high; the 90/10/2
+arithmetic confirmed pinned at its literal value and the reason string
+confirmed to surface all three exclusions. The reviewer traced two
+invariants I had not stated: the downgrade numerator is a strict
+SUBSET of the denominator (a counted downgrade requires a resolved
+baseline AND a resolved predicted tier — exactly the complement of the
+`unresolved_tier` branch), and `compared` splits cleanly into
+`unresolved_tier + evaluated`, so the four aggregates reconcile
+against `results` without overlap or gap. The
+no_change-with-unresolvable-baseline case correctly STAYS in the
+denominator: a keep recommendation is genuinely judged and genuinely
+cannot be a downgrade. Classification confirmed as sharpening.
+
+Carried forward to T4 (the reviewer's forward note, not a finding):
+with refusals correctly excluded, the gates still cannot distinguish a
+useful recommender from one that predicts `no_change_recommended` for
+everything — that recommender makes real recommendations, none of
+which can be a downgrade, so it earns a truthful 0.0 rate and full
+coverage. This is not a laundering hole (the arithmetic is honest and
+such a recommender IS safe); it is a usefulness question, and
+`agreement` is the field that separates the two. No gate consumes it,
+so the Calibration panel must put it on the surface beside the five
+verdicts.
+
+## T4 build (2026-08-29) — API + Studio surface
+
+Payload builders in `routing_calibration.py` (`calibration_payload`,
+`evaluation_payload`, `knn_payload`) under the E2 sanitization floor,
+three routes (`/api/routing/calibration`,
+`/api/routing/calibration/evaluation`,
+`/api/routing/evidence/{set_id}/knn`), a `CalibrationPanel` on the
+Routing tab, and a labeled kNN section inside each recommendation
+card. No new npm dependencies; `package.json` untouched.
+
+The forward note is implemented as the panel's own contract: the
+served summary carries every evaluation aggregate, `agreement`
+emphasized and labelled "no gate reads this", above a paragraph
+stating why a safety floor cannot see inertness. Two regressions pin
+it — one asserts an inert (keep-everything) recommender passes ALL
+five gates while agreement reads 0.0, and one asserts every aggregate
+reaches the payload with the report's own value.
+
+Self-caught in browser verification, both real defects the unit tests
+could not see:
+
+1. **Gate figures were rounded.** `fmt` used `toFixed(4)`, so a
+   measured rate of 1e-8 would have rendered "0.0000" — a clean pass —
+   and integer-valued rates collapsed to "1" beside a "0.9500"
+   threshold, making a rate indistinguishable from a count. Replaced
+   with the evidence page's own verbatim `String()` rule, which that
+   file's comment already declares normative for decision-bearing
+   figures.
+2. **Stale aggregates read as current.** In the stale state the
+   numbers sat unmarked beneath a banner declaring the report
+   satisfies no gate — precisely the "looks like a pass when it isn't"
+   risk the reviewer named for this task. Stale figures are now muted
+   and struck, under an explicit "void, not merely old" caption.
+
+Verification: seven payload mutations discriminated (agreement dropped
+from the summary; summary always present; staleness never computed;
+raw config block echoed; kNN set filter removed; evaluation payload
+not stale-flagged; unassemblable policy fabricated instead of
+refused). Sanitization swept over all three payloads in both the
+report and insufficient_data states, plus an HTTP sweep with the
+calibration root AND policy source pointed at identifiably-named
+paths; an unknown set is 404 on /knn, never an empty list.
+
+Browser-verified against live published fixtures (four labeled E1
+sets) at 1440: no-data, insufficient, gates-mixed, gates-all-pass, and
+stale (corpus_changed AND policy_changed). Neighbor followability
+proven ACROSS sets — opening a neighbor's `report cct_router × t2` ref
+from t1's card served t2's own figures (cost 0.06), since a neighbor
+ref is addressed by the neighbor's set id.
+
+Verification honesty: `resize_window` in the browser tool moved the OS
+window but left the render viewport pinned at 1440 (`innerWidth`
+stayed 1440 while `outerWidth` became 659), so the mobile pass through
+that path would have been meaningless. Mobile was redone with
+Playwright at a true 375 viewport: `innerWidth` 375 confirmed, no
+page-level horizontal scroll on either surface (the wide gate table
+scrolls inside its own container, as the existing arms table does).
+
+Suites at this state: calibration 67 OK, session-analytics 400 OK / 6
+skips (fastapi+httpx installed locally, so the 29 previously CI-gated
+API tests actually RAN rather than skipping), E1 evidence/quality/
+redaction 106 OK + 43 subtests, `tsc --noEmit` clean, `npm run build`
+(the CI studio gate) green. `next lint` is not a usable gate here —
+the studio ships no ESLint config and the command drops into
+interactive setup.
+
 ## Verdict
 
 Verdict: aligned

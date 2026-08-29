@@ -283,6 +283,31 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         except EvidenceFileUnavailable as exc:
             raise HTTPException(status_code=404, detail=exc.code) from None
 
+    # ── routing calibration (routing-calibration #266, shadow-only) ────
+    # Read-only over the SAME entries the E2 surface loads; no payload
+    # carries the calibration root or the policy-source path, and no
+    # gate result is ever acted upon here.
+    @app.get("/api/routing/calibration")
+    def routing_calibration() -> dict[str, Any]:
+        from ..routing_calibration import calibration_payload
+
+        return dict(calibration_payload(_routing_entries(), load_config()))
+
+    @app.get("/api/routing/calibration/evaluation")
+    def routing_calibration_evaluation() -> dict[str, Any]:
+        from ..routing_calibration import evaluation_payload
+
+        return dict(evaluation_payload(_routing_entries(), load_config()))
+
+    @app.get("/api/routing/evidence/{set_id}/knn")
+    def routing_knn(set_id: str) -> dict[str, Any]:
+        from ..routing_calibration import knn_payload
+
+        # 404 on an unknown set BEFORE deriving, so an unknown id is
+        # never answered with an empty recommendation list.
+        _routing_set_or_404(set_id)
+        return dict(knn_payload(_routing_entries(), set_id, load_config()))
+
     # ── dashboard ──────────────────────────────────────────────────────
     @app.get("/api/dashboard/kpis")
     def dashboard_kpis() -> dict[str, Any]:

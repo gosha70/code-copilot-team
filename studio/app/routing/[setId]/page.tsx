@@ -9,6 +9,7 @@ import {
   RoutingDeltaSource,
   RoutingEvidenceLocator,
   RoutingFigureSource,
+  RoutingKnnRecommendation,
   RoutingRecommendation,
   RoutingReport,
 } from "@/lib/api";
@@ -331,12 +332,100 @@ function EvidenceBlock({
   );
 }
 
+// routing-calibration (#266) T4: the labeled similarity section. It sits
+// BESIDE the dominance recommendation above it, never in place of it —
+// two independent readings of the same evidence, both shadow-only.
+function KnnSection({ knn }: { knn: RoutingKnnRecommendation }) {
+  return (
+    <div className="mt-4 rounded border border-slate-200 bg-slate-50/60 p-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-xs font-semibold text-slate-500">
+          Shadow kNN (similarity)
+        </span>
+        <Badge kind={knn.outcome}>{knn.outcome}</Badge>
+        {knn.suggested && (
+          <span className="text-xs">
+            switch to{" "}
+            <span className="font-mono">{knn.suggested.profile_id}</span>{" "}
+            <span className="text-slate-500">(per {knn.suggested.arm})</span>
+          </span>
+        )}
+        <span className="font-mono text-xs text-slate-400">
+          k={knn.k} (min {knn.k_min}) · {knn.distance_metric}
+        </span>
+      </div>
+
+      {knn.insufficient_reason !== null && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
+          {knn.insufficient_reason}
+        </p>
+      )}
+
+      {knn.neighbors.length > 0 && (
+        <details className="mt-2 text-xs">
+          <summary className="cursor-pointer text-slate-500 font-medium">
+            Neighbors ({knn.neighbors.length}) — who voted, at what distance
+          </summary>
+          <div className="mt-2 space-y-2">
+            {knn.neighbors.map((n, i) => (
+              <div
+                key={`${n.evidence_set_id}-${n.task_id}-${i}`}
+                className="border-b border-slate-200 pb-2 last:border-0"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className="font-mono text-slate-500"
+                    title={n.evidence_set_id}
+                  >
+                    {digest8(n.evidence_set_id)}…
+                  </span>
+                  <span className="font-mono font-semibold">{n.task_id}</span>
+                  <Badge kind={n.label.outcome}>{n.label.outcome}</Badge>
+                  {n.label.suggested && (
+                    <span className="font-mono text-slate-600">
+                      → {n.label.suggested.profile_id}
+                    </span>
+                  )}
+                  <span className="tabular-nums text-slate-500">
+                    d = {fig(n.distance)}
+                  </span>
+                </div>
+                <ul className="mt-1 space-y-0.5">
+                  {n.evidence_refs.map((ref, j) => (
+                    <EvidenceRefRow
+                      key={j}
+                      // A neighbor's evidence lives in the NEIGHBOR's set,
+                      // which is usually not the set being viewed — its own
+                      // id addresses it through the same closed surface.
+                      setId={ref.evidence_set_id}
+                      artifact={ref.artifact}
+                      locator={ref.locator}
+                    />
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      <p className="text-xs text-slate-400 mt-2">
+        Similarity speaks from OTHER tasks&apos; labeled evidence — every
+        example of this task is excluded from the neighbor pool, the same fold
+        the held-out evaluation measures.
+      </p>
+    </div>
+  );
+}
+
 function RecommendationCard({
   setId,
   rec,
+  knn,
 }: {
   setId: string;
   rec: RoutingRecommendation;
+  knn?: RoutingKnnRecommendation;
 }) {
   const basis = rec.confidence.basis;
   return (
@@ -449,6 +538,7 @@ function RecommendationCard({
         )}
       </div>
       <EvidenceBlock setId={setId} rec={rec} />
+      {knn && <KnnSection knn={knn} />}
       {basis.insufficiency_refs.length > 0 && (
         <ul className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 space-y-1">
           {basis.insufficiency_refs.map((ref) => (
@@ -467,6 +557,12 @@ export default function RoutingSetPage() {
   const setId = String(params.setId);
   const detail = useApi(() => api.routingEvidenceSet(setId), [setId]);
   const recs = useApi(() => api.routingRecommendations(setId), [setId]);
+  // The kNN surface is ADDITIVE: if it is unavailable the dominance
+  // recommendations still render in full.
+  const knn = useApi(() => api.routingKnn(setId), [setId]);
+  const knnByTask = new Map(
+    (knn.data?.recommendations ?? []).map((k) => [k.task_id, k]),
+  );
 
   if (detail.loading || recs.loading) return <Loading />;
   if (detail.error || !detail.data)
@@ -523,7 +619,12 @@ export default function RoutingSetPage() {
         </Card>
       ) : (
         recs.data.recommendations.map((rec) => (
-          <RecommendationCard key={rec.task_id} setId={setId} rec={rec} />
+          <RecommendationCard
+            key={rec.task_id}
+            setId={setId}
+            rec={rec}
+            knn={knnByTask.get(rec.task_id)}
+          />
         ))
       )}
     </div>
