@@ -42,10 +42,22 @@ MANDATORY_ARM_KINDS = ("always_best", "always_cheapest", "oracle", "cct_router")
 _TOP_LEVEL_KEYS = frozenset(
     {"benchmark", "scenario", "arms", "cost_basis", "trials", "trial_seeds",
      "event_stream", "budget_ceiling_usd", "task", "tier1_only_tasks",
-     "delegate_tasks"}
+     "delegate_tasks", "task_descriptors"}
 )
 _ARM_KEYS = frozenset({"kind", "name", "registry"})
 _EVENT_KEYS = frozenset({"at_task_index", "outcome", "reset_at", "retry_after_sec"})
+_DESCRIPTOR_KEYS = frozenset({"task_class", "file_scope"})
+
+#: The #109 §12 task-class vocabulary (routing-calibration decision 11)
+#: — closed; a descriptor with any other class is refused.
+TASK_CLASSES = (
+    "one_file",
+    "multi_file_feature",
+    "refactor",
+    "reproduced_bug",
+    "integration",
+    "negative_control",
+)
 
 #: One declared basis per comparison; an unversioned "estimated" is
 #: refused so two price tables are never compared against each other.
@@ -90,6 +102,11 @@ class ScenarioConfig:
     tier1_only_tasks: list[str] = field(default_factory=list)
     #: Tasks delegated as bounded Tier-2 packets — the arc's Tier-2 leg.
     delegate_tasks: list[str] = field(default_factory=list)
+    #: routing-calibration decision 11: OPTIONAL per-task pre-routing
+    #: descriptors (task_class from the closed #109 §12 vocabulary +
+    #: declared file_scope). When absent, published sets carry no
+    #: task-descriptors artifact and E3 treats them as unlabeled.
+    task_descriptors: Optional[dict] = None
     #: The directory the config was loaded from — the base every
     #: relative path in the config resolves against, so a preset means
     #: the same thing regardless of the caller's working directory.
@@ -197,6 +214,10 @@ def validate_scenario_config(
                     f"delegation seam"
                 )
 
+    descriptors = _validate_task_descriptors(
+        raw.get("task_descriptors"), task_filter, source
+    )
+
     return ScenarioConfig(
         benchmark=benchmark,
         scenario=scenario,
@@ -209,8 +230,67 @@ def validate_scenario_config(
         task_filter=task_filter,
         tier1_only_tasks=tier1_only,
         delegate_tasks=delegate,
+        task_descriptors=descriptors,
         source_dir=source_dir,
     )
+
+
+def _validate_task_descriptors(
+    raw: Any, task_filter: "Optional[list[str]]", source: str
+) -> "Optional[dict]":
+    """routing-calibration decision 11: descriptors are optional, but a
+    DECLARED descriptor table is closed and complete — every entry names
+    a declared task, carries exactly the closed keys, and uses the
+    closed #109 §12 class vocabulary. A partial or misdeclared table is
+    refused, never silently narrowed."""
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping) or not raw:
+        raise ScenarioConfigError(
+            f"{source}: 'task_descriptors' must be a non-empty object of "
+            f"task id -> descriptor"
+        )
+    if task_filter is None:
+        raise ScenarioConfigError(
+            f"{source}: 'task_descriptors' requires a declared 'task' list — "
+            f"a descriptor has no meaning without the task it describes"
+        )
+    out: dict = {}
+    for task_id, entry in raw.items():
+        prefix = f"{source}: task_descriptors[{task_id!r}]"
+        if task_id not in task_filter:
+            raise ScenarioConfigError(
+                f"{prefix}: not in the declared 'task' list — a descriptor "
+                f"for an undeclared task would join the preset digest yet "
+                f"describe nothing"
+            )
+        if not isinstance(entry, Mapping):
+            raise ScenarioConfigError(f"{prefix}: must be a JSON object")
+        unknown = set(entry) - _DESCRIPTOR_KEYS
+        if unknown:
+            raise ScenarioConfigError(
+                f"{prefix}: unknown key(s) {sorted(unknown)} — descriptor "
+                f"objects are closed"
+            )
+        task_class = entry.get("task_class")
+        if task_class not in TASK_CLASSES:
+            raise ScenarioConfigError(
+                f"{prefix}: 'task_class' must be one of {list(TASK_CLASSES)}, "
+                f"got {task_class!r}"
+            )
+        file_scope = entry.get("file_scope")
+        if not isinstance(file_scope, int) or isinstance(file_scope, bool)                 or file_scope < 0:
+            raise ScenarioConfigError(
+                f"{prefix}: 'file_scope' must be a non-negative integer"
+            )
+        out[task_id] = {"task_class": task_class, "file_scope": file_scope}
+    missing = [t for t in task_filter if t not in out]
+    if missing:
+        raise ScenarioConfigError(
+            f"{source}: task_descriptors omits declared task(s) {missing} — "
+            f"a declared table describes every task or none"
+        )
+    return out
 
 
 def _validate_arms(raw_arms: Any, source: str) -> list[Arm]:

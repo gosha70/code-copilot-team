@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "profile-policy.schema.json",
+  "title": "Per-profile policy declarations v1 (routing-calibration decision 11)",
+  "description": "A labeled E1 evidence addition: the executed registry's per-profile policy declarations — capability tier and roles — persisted with the evidence set so tier resolution (the false-downgrade safety baseline) reads persisted, source-bound declarations instead of guessing from an opaque registry digest. Derived at publication from the executed registry and bound to it by registry_digest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "registry_digest", "profiles"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "registry_digest": { "type": "string", "minLength": 1 },
+    "profiles": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["capability_tier", "roles"],
+        "properties": {
+          "capability_tier": { "enum": ["tier1", "tier2"] },
+          "roles": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

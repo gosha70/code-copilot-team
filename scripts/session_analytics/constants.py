@@ -58,6 +58,9 @@ CCT_PHASES = ("research", "plan", "build", "review")
 # ── Config keys (defaults.yaml) ────────────────────────────────────────
 CFG_SOURCES = "sources"
 CFG_ROUTING_EVIDENCE_ROOTS = "routing_evidence_roots"
+#: routing-calibration (#266): ONE nested config block; every key
+#: inside is operator policy — no default value lives in Python source.
+CFG_ROUTING_CALIBRATION = "routing_calibration"
 CFG_SOURCE_ROOT = "root"
 CFG_DSN = "dsn"
 CFG_KUZU_PATH = "kuzu_path"

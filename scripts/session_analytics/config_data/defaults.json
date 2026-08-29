@@ -30,62 +30,77 @@
     "first). An empty/absent 'projects' block means every session ingests",
     "with the global redaction_mode \u2014 today's behavior, unchanged."
   ],
-  "sources": {
-    "claude-code": "~/.claude/projects",
-    "aider": "~"
-  },
   "dsn": "",
-  "kuzu_path": "",
-  "redaction_mode": "code",
-  "projects": {},
-  "project_ids": [],
   "judge": {
+    "api_key": "",
+    "base_url": "",
+    "by_copilot": {
+      "aider": {
+        "backend": "ollama",
+        "model": ""
+      },
+      "claude-code": {
+        "backend": "ollama",
+        "model": ""
+      }
+    },
     "default": {
       "backend": "ollama",
       "model": ""
     },
-    "by_copilot": {
-      "claude-code": {
-        "backend": "ollama",
-        "model": ""
-      },
-      "aider": {
-        "backend": "ollama",
-        "model": ""
-      }
-    },
-    "workers": 2,
     "ollama_url": "http://localhost:11434",
-    "base_url": "",
-    "api_key": ""
+    "workers": 2
   },
+  "kuzu_path": "",
   "pricing": {
     "models": {
-      "claude-opus-4-8": {
-        "currency": "USD",
-        "effective_date": "2026-05-01",
-        "input": 15.0,
-        "output": 75.0,
-        "cache_read": 1.5,
-        "cache_write": 18.75
-      },
-      "claude-sonnet-4-8": {
-        "currency": "USD",
-        "effective_date": "2026-05-01",
-        "input": 3.0,
-        "output": 15.0,
-        "cache_read": 0.3,
-        "cache_write": 3.75
-      },
       "claude-haiku-4-8": {
+        "cache_read": 0.08,
+        "cache_write": 1.0,
         "currency": "USD",
         "effective_date": "2026-05-01",
         "input": 0.8,
-        "output": 4.0,
-        "cache_read": 0.08,
-        "cache_write": 1.0
+        "output": 4.0
+      },
+      "claude-opus-4-8": {
+        "cache_read": 1.5,
+        "cache_write": 18.75,
+        "currency": "USD",
+        "effective_date": "2026-05-01",
+        "input": 15.0,
+        "output": 75.0
+      },
+      "claude-sonnet-4-8": {
+        "cache_read": 0.3,
+        "cache_write": 3.75,
+        "currency": "USD",
+        "effective_date": "2026-05-01",
+        "input": 3.0,
+        "output": 15.0
       }
     }
   },
-  "routing_evidence_roots": []
+  "project_ids": [],
+  "projects": {},
+  "redaction_mode": "code",
+  "routing_calibration": {
+    "distance_metric": "l2_v1",
+    "k": 5,
+    "k_min": 3,
+    "max_false_downgrade_rate": 0.05,
+    "min_coverage": 0.8,
+    "min_sets": 3,
+    "min_sufficiency": 0.95,
+    "min_tasks": 10,
+    "min_trials": 3,
+    "policy_source": "",
+    "root": "",
+    "tier_floor": "tier1",
+    "vote_epsilon": 1e-06
+  },
+  "routing_evidence_roots": [],
+  "sources": {
+    "aider": "~",
+    "claude-code": "~/.claude/projects"
+  }
 }

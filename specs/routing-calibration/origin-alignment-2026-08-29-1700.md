@@ -96,6 +96,63 @@ routing is ever proposed for authority, that is a feature-vocabulary
 revision — a `policy_id`-bumping change exactly as decision 3
 anticipates.
 
+## T1 build (2026-08-29) — schemas, identities, configuration, E1 additions
+
+Built per decisions 2, 3, 5, 6, 8, 11:
+
+- **Five schemas** (`calibration-report`, `evaluation-report`,
+  `knn-recommendation`, `task-descriptors`, `profile-policy`), all
+  within the in-repo validator subset; the evidence-manifest schema
+  gains the two OPTIONAL artifact hash keys.
+- **The labeled E1 additions** (decision 11): the scenario config
+  gains an optional, closed, coverage-complete `task_descriptors`
+  table (closed §12 class vocabulary; every declared task described
+  or none; undeclared tasks refused); `derive_task_descriptors`
+  derives route classes STRUCTURALLY from the config's own
+  membership declarations (tier1_only → tier1_only, delegate →
+  tier2_preferred — the class the delegation seam records, verified
+  in-tree); `derive_profile_policy` reads the executed registry
+  through the production parser and refuses a profile without a
+  declared capability_tier. `_publish` writes both as canonical JSON
+  hashed into `manifest.artifacts`; `validate_evidence_set` binds a
+  PRESENT key fully (exists, hash, schema, digest agreement with the
+  manifest fingerprint, exact coverage: descriptor tasks within the
+  matrix; every executed profile in the policy) and loads an ABSENT
+  key as None — pre-addition sets stay valid and unlabeled. The
+  production `publish_evidence_set` derives both; the LIVE arc test
+  pins that the published set carries the profile policy and no
+  fabricated descriptors, and byte-identical republication stays
+  idempotent WITH the additions (the live suite caught the
+  republication call sites omitting them — fixed by carrying the
+  validated docs through).
+- **Identities** (decision 3): `corpus_id` over valid set ids only;
+  `EvaluationPolicy` + `policy_id` over the full policy document;
+  `report_staleness` names its reasons per dimension.
+- **Configuration** (decision 8): ONE nested `routing_calibration`
+  block through the standard layering with per-key
+  `CCT_SA_CALIBRATION_<KEY>` env overrides coerced to the defaults
+  file's types; `policy_from_config` REFUSES a missing key
+  (CalibrationError) — no value is ever completed from code; the
+  defaults file ships every key (pinned).
+- **Regressions**: E1 binding set (published-additions bind+load;
+  pre-addition unlabeled; tampered bytes → hash_mismatch; preset
+  binding → fingerprint_mismatch; unknown task / missing executed
+  profile → reference_mismatch; missing bound artifact →
+  missing_artifact), scenario-config descriptor validation (closed
+  keys, closed classes, omission, undeclared task), corpus identity
+  (order-free, add/remove/invalidate, invalid exclusion), policy
+  identity (all ten dimensions change it, no collisions),
+  policy-source digest byte-tracking, staleness per dimension,
+  config layering + env coercion, schema inverse tests for every new
+  closed vocabulary.
+- **Mutations (all discriminated)**: optional-artifact binding
+  disabled (6 failures); corpus_id counting invalid sets; policy_id
+  dropping tier_floor. Restores verified byte-identical.
+
+Suites: session-analytics discovery 349 OK (35 CI-gated skips); E1
+evidence_set 20/20 including the live arc (with the new pins),
+quality + redaction green.
+
 ## Verdict
 
 Verdict: aligned

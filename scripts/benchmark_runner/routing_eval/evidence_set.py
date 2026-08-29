@@ -68,6 +68,9 @@ ARTIFACT_RUNS = "routing-runs.jsonl"
 ARTIFACT_MATRIX = "outcome-matrix.json"
 ARTIFACT_REPORT = "report.json"
 ARTIFACT_MANIFEST = "manifest.json"
+#: routing-calibration decision 11 — the OPTIONAL labeled additions.
+ARTIFACT_TASK_DESCRIPTORS = "task-descriptors.json"
+ARTIFACT_PROFILE_POLICY = "profile-policy.json"
 _STAGING_PREFIX = ".staging-"
 _PUBLISHER_MARKER = ".publisher"
 #: A stale staging directory is cleaned only when BOTH owner checks
@@ -154,6 +157,73 @@ def _profile_declarations(registry_path: Path) -> Mapping[str, Mapping[str, Any]
             )
         declarations[profile_id] = entry
     return declarations
+
+
+def derive_profile_policy(
+    registry_path: Path, registry_digest: str
+) -> dict:
+    """routing-calibration decision 11: the executed registry's
+    per-profile policy declarations, persisted with the set so tier
+    resolution reads source-bound declarations, never a guess. A
+    profile without a declared capability_tier refuses — a policy
+    document that silently omitted a tier would make the downgrade
+    baseline unresolvable later."""
+    profiles: dict[str, dict] = {}
+    for profile_id, entry in _profile_declarations(registry_path).items():
+        tier = entry.get("capability_tier")
+        if tier not in ("tier1", "tier2"):
+            raise EvidenceSetError(
+                f"profile {profile_id!r} declares no capability_tier — the "
+                f"profile-policy artifact cannot omit the field the "
+                f"false-downgrade baseline resolves from"
+            )
+        profiles[profile_id] = {
+            "capability_tier": tier,
+            "roles": sorted(entry.get("roles") or ()),
+        }
+    if not profiles:
+        raise EvidenceSetError(
+            "the registry declares no profiles — an empty profile-policy "
+            "artifact binds nothing"
+        )
+    return {
+        "schema_version": 1,
+        "registry_digest": registry_digest,
+        "profiles": profiles,
+    }
+
+
+def derive_task_descriptors(config: Any, preset: str) -> "dict | None":
+    """routing-calibration decision 11: the per-task PRE-ROUTING
+    descriptors, derived from the executed scenario configuration.
+    Returns None when the config declares none (the set then carries no
+    descriptor artifact and E3 treats it as unlabeled). Route classes
+    derive STRUCTURALLY from the config's own membership declarations —
+    tier1_only_tasks -> tier1_only, delegate_tasks -> tier2_preferred
+    (the class the delegation seam records), else primary_only."""
+    declared = getattr(config, "task_descriptors", None)
+    if not declared:
+        return None
+    tier1_only = set(getattr(config, "tier1_only_tasks", ()) or ())
+    delegate = set(getattr(config, "delegate_tasks", ()) or ())
+    descriptors = {}
+    for task_id, entry in sorted(declared.items()):
+        if task_id in tier1_only:
+            route_class = "tier1_only"
+        elif task_id in delegate:
+            route_class = "tier2_preferred"
+        else:
+            route_class = "primary_only"
+        descriptors[task_id] = {
+            "task_class": entry["task_class"],
+            "route_class": route_class,
+            "file_scope": entry["file_scope"],
+        }
+    return {
+        "schema_version": 1,
+        "preset_digest": preset,
+        "descriptors": descriptors,
+    }
 
 
 def _profile_block(registry_text: str, profile_id: str) -> str:
@@ -711,13 +781,97 @@ def validate_evidence_set(root: Path) -> Mapping[str, Any]:
                 "a referenced evidence file does not match its manifest hash",
             )
 
+    # routing-calibration decision 11: the OPTIONAL labeled additions.
+    # Absent manifest keys mean a pre-addition (or descriptor-less) set
+    # — valid, loaded with None. A PRESENT key binds fully: file exists,
+    # hash matches, schema validates, digests agree with the manifest
+    # fingerprint, and coverage is exact (descriptor tasks within the
+    # matrix tasks; every executed profile in the policy).
+    task_descriptors_doc = None
+    profile_policy_doc = None
+    if "task_descriptors_sha256" in hashes:
+        task_descriptors_doc = _optional_artifact(
+            root, ARTIFACT_TASK_DESCRIPTORS, "task-descriptors",
+            hashes["task_descriptors_sha256"],
+        )
+        if task_descriptors_doc["preset_digest"] != m_fp.get("preset_digest"):
+            raise EvidenceSetInvalid(
+                "fingerprint_mismatch", ARTIFACT_TASK_DESCRIPTORS,
+                "descriptor preset digest disagrees with the manifest "
+                "fingerprint",
+            )
+        matrix_tasks = set(matrix_doc.get("tasks") or ())
+        unknown = sorted(
+            set(task_descriptors_doc["descriptors"]) - matrix_tasks
+        )
+        if unknown:
+            raise EvidenceSetInvalid(
+                "reference_mismatch", ARTIFACT_TASK_DESCRIPTORS,
+                "descriptors name task(s) outside the outcome matrix",
+            )
+    if "profile_policy_sha256" in hashes:
+        profile_policy_doc = _optional_artifact(
+            root, ARTIFACT_PROFILE_POLICY, "profile-policy",
+            hashes["profile_policy_sha256"],
+        )
+        if profile_policy_doc["registry_digest"] != m_fp.get("registry_digest"):
+            raise EvidenceSetInvalid(
+                "fingerprint_mismatch", ARTIFACT_PROFILE_POLICY,
+                "policy registry digest disagrees with the manifest "
+                "fingerprint",
+            )
+        executed = {
+            e.get("profile_id")
+            for e in m_fp.get("execution_identity") or ()
+        }
+        missing = sorted(executed - set(profile_policy_doc["profiles"]))
+        if missing:
+            raise EvidenceSetInvalid(
+                "reference_mismatch", ARTIFACT_PROFILE_POLICY,
+                "an executed profile is absent from the profile policy",
+            )
+
     return {
         "set_id": set_id_of(raw[ARTIFACT_MANIFEST]),
         "manifest": manifest,
         "report": report,
         "matrix": matrix_doc,
         "records": records,
+        "task_descriptors": task_descriptors_doc,
+        "profile_policy": profile_policy_doc,
     }
+
+
+def _optional_artifact(
+    root: Path, name: str, schema_name: str, expected_hash: str
+) -> dict:
+    p = root / name
+    if not p.is_file():
+        raise EvidenceSetInvalid("missing_artifact", name,
+                                 "manifest-bound artifact absent")
+    try:
+        data = p.read_bytes()
+    except OSError:
+        raise EvidenceSetInvalid("unreadable_artifact", name,
+                                 "artifact could not be read") from None
+    if "sha256:" + hashlib.sha256(data).hexdigest() != expected_hash:
+        raise EvidenceSetInvalid(
+            "hash_mismatch", name,
+            "manifest hash does not match the artifact bytes",
+        )
+    try:
+        doc = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise EvidenceSetInvalid("schema_invalid", name,
+                                 "artifact is not valid JSON") from None
+    errors = validate(doc, load_schema(schema_name))
+    if errors:
+        raise EvidenceSetInvalid(
+            "schema_invalid", name,
+            f"{len(errors)} schema violation(s); first: "
+            f"{_sanitize(errors[0])}",
+        )
+    return doc
 
 
 def _sanitize(text: str) -> str:
@@ -934,6 +1088,10 @@ def publish_evidence_set(
         report=report,
         fingerprint=fingerprint,
         secret_values=secrets,
+        task_descriptors=derive_task_descriptors(config, pdg),
+        profile_policy=derive_profile_policy(
+            registry_path, fingerprint.registry_digest
+        ),
     )
 
 
@@ -994,6 +1152,8 @@ def _publish(
     report: Mapping[str, Any],
     fingerprint: Fingerprint,
     secret_values: Sequence[str],
+    task_descriptors: "Mapping[str, Any] | None" = None,
+    profile_policy: "Mapping[str, Any] | None" = None,
 ) -> PublishedEvidenceSet:
     output_root.mkdir(parents=True, exist_ok=True)
     _clean_stale_staging(output_root)
@@ -1067,12 +1227,32 @@ def _publish(
             report, staging / ARTIFACT_REPORT,
             source_artifacts=source_artifacts,
         )
+        # routing-calibration decision 11: the optional labeled
+        # additions — canonical JSON, hashed into the manifest so the
+        # binding validation covers them like every other artifact.
+        optional_artifacts: dict[str, str] = {}
+        for doc, name, key in (
+            (task_descriptors, ARTIFACT_TASK_DESCRIPTORS,
+             "task_descriptors_sha256"),
+            (profile_policy, ARTIFACT_PROFILE_POLICY,
+             "profile_policy_sha256"),
+        ):
+            if doc is None:
+                continue
+            (staging / name).write_text(
+                json.dumps(doc, sort_keys=True, separators=(",", ":"))
+                + "\n",
+                encoding="utf-8",
+            )
+            optional_artifacts[key] = _sha256_file(staging / name)
+
         manifest = {
             "schema_version": 1,
             "fingerprint": _fingerprint_doc(fingerprint),
             "artifacts": {
                 **source_artifacts,
                 "report_sha256": _sha256_file(staging / ARTIFACT_REPORT),
+                **optional_artifacts,
             },
             "evidence_files": evidence_files,
         }
