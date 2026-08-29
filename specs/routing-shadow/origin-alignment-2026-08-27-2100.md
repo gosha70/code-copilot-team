@@ -719,6 +719,54 @@ T3 approved at 57a8303. T4 built per decision 10's conventions:
   screenshot re-taken with styles verified (css 200) before being
   trusted.
 
+## T4 build audit round 1 (owner, on 9d07507) — three P1 + one P2, applied
+
+1. **[P1] Null toolchain identity renders, never crashes.**
+   `toolchain_digest` typed `string | null` in both the summary and
+   report-fingerprint mirrors (matching the report/manifest schemas);
+   `digest8` renders null as an em dash. Fixture note recorded for
+   review: a LOADER-VALID set cannot carry a null toolchain today —
+   the outcome-matrix schema requires a non-null string and the
+   pairwise fingerprint-equality gate forces all three artifacts
+   equal, and `build_report` itself refuses a null ("comparability is
+   never silently assumed") — so the null lives only in the served
+   report/record contracts. The browser fixture therefore exercises
+   the schema-valid payload class by Playwright response interception
+   on the detail request (real page code, controlled payload):
+   "toolchain —" asserted rendered, no crash.
+2. **[P1] Decision-bearing figures render VERBATIM.** One
+   routing-specific formatter (`fig` — JS `String()`, the shortest
+   round-trip representation) replaced every rounded rendering:
+   quality, costs, per-task figures, Pareto, oracle ceiling,
+   divergence deltas, and agreement. Boundary fixture published
+   through the FULL E1 machinery: router cost `0.01 + 1e-8` vs a
+   0.01 candidate — the 1e-8 delta exceeds the 1e-9 tolerance, IS
+   the switch reason, and the page renders
+   `9.999999999940612e-9` verbatim (asserted: scientific notation
+   present, `0.0000` absent, outcome switch_profile).
+3. **[P1] Recommendation evidence is addressable from the Studio.**
+   Each card gains an "Evidence & sources" block: every
+   `evidence_refs` entry rendered as artifact + typed locator
+   (`RoutingEvidenceLocator` union added to the fetcher types; all
+   three closed shapes labeled), plus the decision-9 source
+   descriptors — oracle figure pointers and each delta's lhs − rhs
+   operand pointers — verbatim. No recommendation reference addresses
+   a served evidence file (the closed locator vocabulary has no file
+   shape), so no evidence-file-endpoint link applies; the block says
+   so explicitly rather than silently omitting links.
+4. **[P2] The COMPLETE metric vector renders.** Arms-table columns =
+   `components_included` in mask order, then every remaining served
+   metric key (the sequence-dependent `tier2_accepted_unchanged`,
+   `reconciliation_rework_ratio`, `rollbacks`) sorted — a stable
+   canonical order over the full union.
+
+Browser re-verification: the boundary set added to the live fixture
+root; the runner now opens every `<details>` before text assertions
+and asserts F3 (locators + pointers) and F4 (sequence-dependent
+columns) on EVERY detail state — 10 page loads across 1440px/375px,
+all assertions passing, `npm run build` green, diff additions-only on
+the shared files.
+
 ## Verdict
 
 Verdict: aligned

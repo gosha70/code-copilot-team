@@ -37,7 +37,7 @@ function ValidSetRow({ set }: { set: RoutingEvidenceSetSummary }) {
       <td className="py-2 pr-4">{set.pareto_status ?? "—"}</td>
       <td
         className="py-2 font-mono text-xs text-slate-500"
-        title={`registry ${set.registry_digest} · preset ${set.preset_digest} · tasks ${set.task_set_revision} · toolchain ${set.toolchain_digest}`}
+        title={`registry ${set.registry_digest} · preset ${set.preset_digest} · tasks ${set.task_set_revision} · toolchain ${set.toolchain_digest ?? "—"}`}
       >
         {digest8(set.registry_digest)} / {digest8(set.preset_digest)}
       </td>

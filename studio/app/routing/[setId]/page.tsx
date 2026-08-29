@@ -4,33 +4,41 @@ import { useParams } from "next/navigation";
 import {
   api,
   RoutingArm,
+  RoutingDeltaSource,
+  RoutingEvidenceLocator,
+  RoutingFigureSource,
   RoutingRecommendation,
   RoutingReport,
 } from "@/lib/api";
-import {
-  Badge,
-  Card,
-  ErrorNote,
-  Loading,
-  Stat,
-  formatCost,
-  useApi,
-} from "@/components/ui";
+import { Badge, Card, ErrorNote, Loading, Stat, useApi } from "@/components/ui";
 
-function digest8(value: string): string {
+// E1 permits a null toolchain identity (a cell the scenario could not
+// fingerprint) — a null digest renders as an em dash, never crashes.
+function digest8(value: string | null): string {
+  if (value === null) return "—";
   return value.replace(/^sha256:/, "").slice(0, 8);
 }
 
-// Figures render EXACTLY as served (the server's figure-provenance gate
-// binds them to the artifact); null means "insufficient", never zero.
-function num(value: number | null | undefined, digits = 4): string {
+// Decision-bearing figures render VERBATIM: String() is JS's shortest
+// round-trip representation, so a 1e-8 delta (above E2's 1e-9 comparison
+// tolerance — it can be WHY a switch was recommended) shows as "1e-8",
+// never as a rounded "0.0000". Null means "insufficient", never zero.
+function fig(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
-  return Number.isInteger(value) ? String(value) : value.toFixed(digits);
+  return String(value);
 }
 
 function ArmsTable({ report }: { report: RoutingReport }) {
   const arms = Object.entries(report.arms) as [string, RoutingArm][];
-  const components = report.components_included;
+  // The COMPLETE metric vector: the quality-function mask first (its
+  // declared order), then every remaining served metric key — the
+  // sequence-dependent measures included — sorted for a stable order.
+  const columns = [...report.components_included];
+  const extra = new Set<string>();
+  for (const [, arm] of arms)
+    for (const key of Object.keys(arm.metrics))
+      if (!columns.includes(key)) extra.add(key);
+  columns.push(...Array.from(extra).sort());
   return (
     <Card
       title={`Arms — quality (${report.quality_fn}) · vector · cost (${report.cost_basis})`}
@@ -41,7 +49,7 @@ function ArmsTable({ report }: { report: RoutingReport }) {
             <tr className="text-left text-slate-500 border-b border-slate-200">
               <th className="py-2 pr-4 font-medium">Arm</th>
               <th className="py-2 pr-4 font-medium text-right">Q</th>
-              {components.map((c) => (
+              {columns.map((c) => (
                 <th key={c} className="py-2 pr-4 font-medium text-right">
                   {c}
                 </th>
@@ -55,12 +63,12 @@ function ArmsTable({ report }: { report: RoutingReport }) {
               <tr key={name} className="border-b border-slate-100">
                 <td className="py-2 pr-4 font-mono text-xs">{name}</td>
                 <td className="py-2 pr-4 text-right tabular-nums">
-                  {num(arm.quality)}
+                  {fig(arm.quality)}
                 </td>
-                {components.map((c) => (
+                {columns.map((c) => (
                   <td key={c} className="py-2 pr-4 text-right tabular-nums">
                     {typeof arm.metrics[c] === "number"
-                      ? num(arm.metrics[c] as number)
+                      ? fig(arm.metrics[c] as number)
                       : (arm.metrics[c] ?? "—")}
                   </td>
                 ))}
@@ -70,7 +78,7 @@ function ArmsTable({ report }: { report: RoutingReport }) {
                 >
                   {arm.cost.value === null
                     ? `— (${arm.cost.status})`
-                    : formatCost(arm.cost.value)}
+                    : fig(arm.cost.value)}
                 </td>
                 <td className="py-2 text-xs text-slate-500">
                   {Object.keys(arm.insufficient).length === 0
@@ -117,11 +125,7 @@ function PerTaskTable({ report }: { report: RoutingReport }) {
                   const cell = report.arms[a].tasks[task];
                   return (
                     <td key={a} className="py-2 pr-4 text-right tabular-nums">
-                      {cell
-                        ? `${num(cell.quality)} / ${
-                            cell.cost === null ? "—" : formatCost(cell.cost)
-                          }`
-                        : "—"}
+                      {cell ? `${fig(cell.quality)} / ${fig(cell.cost)}` : "—"}
                     </td>
                   );
                 })}
@@ -160,11 +164,9 @@ function ParetoCard({ report }: { report: RoutingReport }) {
             <tr key={p.arm} className="border-b border-slate-100">
               <td className="py-2 pr-6 font-mono text-xs">{p.arm}</td>
               <td className="py-2 pr-6 text-right tabular-nums">
-                {num(p.quality)}
+                {fig(p.quality)}
               </td>
-              <td className="py-2 text-right tabular-nums">
-                {formatCost(p.cost)}
-              </td>
+              <td className="py-2 text-right tabular-nums">{fig(p.cost)}</td>
             </tr>
           ))}
         </tbody>
@@ -181,6 +183,66 @@ const OUTCOME_EXPLANATION: Record<RoutingRecommendation["outcome"], string> = {
   insufficient_data:
     "The evidence CANNOT conclude — a declared insufficiency, missing figure, or unavailable suggested profile blocks any recommendation. This is not a keep-current verdict.",
 };
+
+// Every closed locator shape (US3: evidence is addressable), rendered as
+// the coordinates it names — never a filesystem path.
+function locatorLabel(locator: RoutingEvidenceLocator): string {
+  if ("cell" in locator)
+    return `cell ${locator.cell.task} · ${locator.cell.profile} · trial ${locator.cell.trial}`;
+  if ("arm" in locator) return `${locator.arm} × ${locator.task}`;
+  return locator.decision !== undefined
+    ? `record ${locator.record} · decision ${locator.decision}`
+    : `record ${locator.record}`;
+}
+
+function sourceLabel(source: RoutingFigureSource | null): string {
+  return source === null ? "—" : `${source.artifact}${source.pointer}`;
+}
+
+function deltaSourceLabel(source: RoutingDeltaSource | null): string {
+  if (source === null) return "—";
+  return `${sourceLabel(source.lhs)} − ${sourceLabel(source.rhs)}`;
+}
+
+function EvidenceBlock({ rec }: { rec: RoutingRecommendation }) {
+  return (
+    <details className="mt-3 text-xs">
+      <summary className="cursor-pointer text-slate-500 font-medium">
+        Evidence &amp; sources ({rec.evidence_refs.length} refs)
+      </summary>
+      <div className="mt-2 space-y-2">
+        <ul className="space-y-0.5">
+          {rec.evidence_refs.map((ref, i) => (
+            <li key={i} className="font-mono text-slate-600">
+              <span className="text-slate-400">{ref.artifact}</span>{" "}
+              {locatorLabel(ref.locator)}
+            </li>
+          ))}
+        </ul>
+        <div className="text-slate-500">
+          <div className="font-medium mb-0.5">Figure sources (decision 9)</div>
+          <div className="font-mono text-slate-600">
+            oracle quality: {sourceLabel(rec.oracle_ceiling.sources.quality)}
+          </div>
+          <div className="font-mono text-slate-600">
+            oracle cost: {sourceLabel(rec.oracle_ceiling.sources.cost)}
+          </div>
+          {Object.entries(rec.divergence).map(([arm, d]) => (
+            <div key={arm} className="font-mono text-slate-600">
+              {arm} Δquality: {deltaSourceLabel(d.sources.quality_delta)}
+              <br />
+              {arm} Δcost: {deltaSourceLabel(d.sources.cost_delta)}
+            </div>
+          ))}
+        </div>
+        <p className="text-slate-400">
+          Locators address artifacts inside this set (no reference is a served
+          evidence file, so none links to the evidence-file endpoint).
+        </p>
+      </div>
+    </details>
+  );
+}
 
 function RecommendationCard({ rec }: { rec: RoutingRecommendation }) {
   const basis = rec.confidence.basis;
@@ -246,10 +308,8 @@ function RecommendationCard({ rec }: { rec: RoutingRecommendation }) {
             Oracle ceiling (hindsight bound — not a runnable policy)
           </h4>
           <p className="text-sm tabular-nums">
-            Q {num(rec.oracle_ceiling.quality)} ·{" "}
-            {rec.oracle_ceiling.cost === null
-              ? "—"
-              : formatCost(rec.oracle_ceiling.cost)}
+            Q {fig(rec.oracle_ceiling.quality)} · cost{" "}
+            {fig(rec.oracle_ceiling.cost)}
           </p>
           <h4 className="text-xs font-semibold text-slate-500 mt-3 mb-1">
             Divergence (router − candidate)
@@ -267,13 +327,13 @@ function RecommendationCard({ rec }: { rec: RoutingRecommendation }) {
                 <tr key={arm} className="border-b border-slate-100">
                   <td className="py-1 pr-3 font-mono">{arm}</td>
                   <td className="py-1 pr-3 text-right tabular-nums">
-                    {num(d.quality_delta)}
+                    {fig(d.quality_delta)}
                   </td>
                   <td
                     className="py-1 text-right tabular-nums"
                     title={`cost basis: ${d.cost_basis}`}
                   >
-                    {num(d.cost_delta)}
+                    {fig(d.cost_delta)}
                   </td>
                 </tr>
               ))}
@@ -287,19 +347,15 @@ function RecommendationCard({ rec }: { rec: RoutingRecommendation }) {
           {basis.trials} trial{basis.trials === 1 ? "" : "s"}
         </span>
         {" · agreement "}
-        <span className="tabular-nums">
-          {basis.agreement === null ? "—" : basis.agreement.toFixed(2)}
-        </span>
+        <span className="tabular-nums">{fig(basis.agreement)}</span>
         {basis.unevaluated_trials && basis.unevaluated_trials.length > 0 && (
           <span>
             {" · unevaluated trials: "}
             {basis.unevaluated_trials.join(", ")}
           </span>
         )}
-        {" · "}
-        {rec.evidence_refs.length} evidence ref
-        {rec.evidence_refs.length === 1 ? "" : "s"}
       </div>
+      <EvidenceBlock rec={rec} />
       {basis.insufficiency_refs.length > 0 && (
         <ul className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 space-y-1">
           {basis.insufficiency_refs.map((ref) => (

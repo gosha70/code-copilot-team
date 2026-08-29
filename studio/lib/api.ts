@@ -146,7 +146,9 @@ export interface RoutingEvidenceSetSummary {
   registry_digest: string;
   preset_digest: string;
   task_set_revision: string;
-  toolchain_digest: string;
+  // E1 permits a null toolchain identity (report/manifest schemas both
+  // declare ["string","null"]) — consumers must render it, not crash.
+  toolchain_digest: string | null;
   tasks: string[];
   arms: string[];
   pareto_status: string | null;
@@ -203,7 +205,7 @@ export interface RoutingReport {
     preset_digest: string;
     execution_identity: unknown[];
     task_set_revision: string;
-    toolchain_digest: string;
+    toolchain_digest: string | null;
   };
   source_artifacts: {
     routing_runs_sha256: string;
@@ -229,6 +231,14 @@ export interface RoutingDeltaSource {
   lhs: RoutingFigureSource;
   rhs: RoutingFigureSource;
 }
+
+// The closed locator vocabulary (recommendation.schema.json): record
+// indices into routing-runs, arm-by-task report figures, or matrix cell
+// coordinates. No shape is ever a filesystem path.
+export type RoutingEvidenceLocator =
+  | { record: number; decision?: number }
+  | { arm: string; task: string }
+  | { cell: { task: string; profile: string; trial: number } };
 
 export type RoutingOutcome =
   "switch_profile" | "no_change_recommended" | "insufficient_data";
@@ -283,7 +293,7 @@ export interface RoutingRecommendation {
   evidence_refs: {
     evidence_set_id: string;
     artifact: string;
-    locator: unknown;
+    locator: RoutingEvidenceLocator;
   }[];
 }
 
