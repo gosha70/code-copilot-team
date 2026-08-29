@@ -270,6 +270,70 @@ neighbor (deterministic, irrelevant at corpus scale).
 Suites after the pass: calibration 31 OK, E1 calibration-additions
 9/9, session-analytics discovery 369 OK (35 CI-gated skips).
 
+## T2 review round 2 (owner, on f0e0ac8) — APPROVED, GO T3
+
+The reviewer verified the schema `$ref` actually resolves (the in-repo
+validator RAISES on unimplemented keywords rather than skipping, so
+the constraint is real), confirmed `$defs/evidence_ref` is byte-for-
+byte E2's own definition, and reproduced the suites. Classification
+question settled: the trial-count change is PRECISION, not amendment
+— it narrows decision 4 to the single reading it always intended and
+permits nothing new; resolution (b) would have loosened the leakage
+ban and needed justification. One P3 (a defensive branch naming the
+wrong missing field) fixed at the start of T3.
+
+## T3 build (2026-08-29) — held-out evaluation and the five gates
+
+Built per decisions 2, 6, 7:
+
+- **LOTO evaluation** (`evaluate_heldout`): every labeled (set, task)
+  is predicted with EVERY example of that task absent from the
+  neighbor pool. The fold reuses `knn_recommendation` rather than
+  reimplementing exclusion, so serving and evaluation cannot drift —
+  one rule, one implementation, and normalization parity with serving
+  follows by construction (the carried T2 review item).
+- **The downgrade arithmetic** (decision 7, both branches):
+  `baseline_tier` returns the TRUTH's suggested tier when truth
+  switches (so a tier-2 prediction against a within-tier-1 truth
+  switch counts) and the tier the router actually operated at when
+  truth keeps. Recorded determination for review: a chain can name
+  several profiles, so the actual-branch baseline is the LOWEST tier
+  the router actually used — recommending a tier the router already
+  ran at is not a downgrade. Unresolvable tiers count neither way.
+  Truths that are insufficient_data are excluded from the denominator
+  and counted as `unevaluable`.
+- **Durable reports**: schema-validated BEFORE the rename, written
+  atomically into the analytics-owned calibration root (never an
+  evidence root); an absent, unreadable, or invalid report loads as
+  None so gates report insufficient_data rather than partial trust.
+- **The five gates** (`compute_gates`): G1 measures cost +
+  VERIFIED effective-model identity per record (null means
+  unverified, never assumed); G2 counts only DEFINED labels with
+  trials repeating WITHIN a single set — recorded distinction: the
+  gate counts OBSERVED runs (a volume gate measures what actually
+  happened) while features may read only the DECLARED count, the
+  mirror image of the T2 round-1 rule; G3/G4 consume only a CURRENT
+  report (corpus_id AND policy_id both matching); G5 evaluates its
+  three conjuncts with violations SURFACED, never dropped. Missing
+  thresholds refuse rather than defaulting. Nothing acts on a result.
+- **Mutations — six, all discriminated**: leakage (a) held-out task
+  left in the pool (4 failures); bounds fitted on the UNFILTERED
+  pool; the truth-switch baseline branch removed; insufficient truths
+  counted in the denominator; floor violations dropped from G5;
+  staleness ignored by the gates.
+- **Honesty note**: two of those six initially did NOT discriminate,
+  because the tests passed for the wrong reason — the parity test
+  compared evaluation against serving (the mutation moves both
+  together) and the baseline test used a fixture where both branches
+  returned tier1. Both were rebuilt on ABSOLUTE hand-computed
+  assertions (filtered bounds [1,3] giving distances exactly 1.0,
+  0.5, 0.0; a truth-switch-to-tier1 against an actual tier2 leg so
+  the branches provably disagree) and then discriminated. The
+  battery caught weak tests, which is what it is for.
+
+Suites: calibration 51 OK, session-analytics discovery 389 OK (35
+CI-gated skips), E1 calibration-additions + quality + redaction 95 OK.
+
 ## Verdict
 
 Verdict: aligned

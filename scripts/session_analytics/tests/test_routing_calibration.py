@@ -263,6 +263,30 @@ from session_analytics.tests.test_routing_evidence import (  # noqa: E402
 )
 
 
+_PROFILE_POLICY = {
+    "schema_version": 1,
+    "registry_digest": "sha256:reg",
+    "profiles": {
+        "alpha": {"capability_tier": "tier1", "roles": ["build"]},
+        "beta": {"capability_tier": "tier2", "roles": ["build"]},
+        "gamma": {"capability_tier": "tier1", "roles": ["review"]},
+        "router-prof": {"capability_tier": "tier1", "roles": ["build"]},
+    },
+}
+
+
+def _complete(record):
+    """G1's completeness shape: a measured cost and a VERIFIED
+    effective-model identity on every decision. The E2 fixture record
+    carries neither (it exercises the derivation, not telemetry), so
+    calibration fixtures opt in explicitly."""
+    record = json.loads(json.dumps(record))
+    record["cost"] = {"value": 0.01, "provenance": "measured"}
+    for decision in record["routing_decisions"]:
+        decision["effective_model"] = "m"
+    return record
+
+
 def _descriptored(set_id, report, records, descriptors, trials=1):
     base = _loaded_evidence(report, records)
     from dataclasses import replace as _replace
@@ -271,6 +295,7 @@ def _descriptored(set_id, report, records, descriptors, trials=1):
         base, set_id=set_id,
         task_descriptors={"schema_version": 1, "preset_digest": "sha256:p",
                           "trials": trials, "descriptors": descriptors},
+        profile_policy=_PROFILE_POLICY,
     )
 
 
@@ -302,7 +327,7 @@ def _switch_set(set_id, task="t", trials=1, **descriptor):
                      cheapest=(0.4, 0.02)),
         selections=_SELECTIONS,
     ), task)
-    record = _router_record(task, considered=_ADMISSIBLE)
+    record = _complete(_router_record(task, considered=_ADMISSIBLE))
     return _descriptored(set_id, report, [record],
                          {task: _descriptor(**descriptor)}, trials)
 
@@ -314,7 +339,7 @@ def _keep_set(set_id, task="t", trials=1, **descriptor):
                      cheapest=(0.4, 0.02)),
         selections=_SELECTIONS,
     ), task)
-    record = _router_record(task, considered=_ADMISSIBLE)
+    record = _complete(_router_record(task, considered=_ADMISSIBLE))
     return _descriptored(set_id, report, [record],
                          {task: _descriptor(**descriptor)}, trials)
 
@@ -622,6 +647,392 @@ class TestKnnRecommendation(unittest.TestCase):
         schema = load_schema("knn-recommendation")
         for doc in (self._recommend(), self._recommend(current=None)):
             self.assertFalse(validate(doc, schema))
+
+
+# ── T3: held-out evaluation and the five gates ────────────────────────
+from session_analytics.routing_calibration import (  # noqa: E402
+    baseline_tier,
+    compute_gates,
+    evaluate_heldout,
+    is_false_downgrade,
+    load_evaluation_report,
+    write_evaluation_report,
+)
+
+_TIER2_FLOOR = replace(_POLICY, tier_floor="tier2")
+
+
+def _beta_switch_set(set_id, task, trials=1, **descriptor):
+    """A set whose E2 label for ``task`` is switch_profile -> beta
+    (a TIER-2 profile), used to drive downgrade arithmetic."""
+    report = _retask(_report(
+        _figures_for(router=(0.5, 0.05), best=(1.0, 0.01),
+                     cheapest=(0.4, 0.02)),
+        selections={"always_best": {"t": "beta"},
+                    "always_cheapest": {"t": "beta"}},
+    ), task)
+    beta_admissible = (
+        {"id": "beta", "verdict": "selected",
+         "reason": "healthy — selected", "state": "healthy"},
+    )
+    record = _complete(_router_record(task, considered=beta_admissible,
+                                      selected="beta"))
+    return _descriptored(set_id, report, [record],
+                         {task: _descriptor(**descriptor)}, trials)
+
+
+def _config(**overrides):
+    block = {
+        "min_sufficiency": 0.95, "min_tasks": 1, "min_trials": 1,
+        "min_sets": 1, "min_coverage": 0.8,
+        "max_false_downgrade_rate": 0.05, "k": 5, "k_min": 3,
+        "distance_metric": "l2_v1", "vote_epsilon": 1e-6,
+        "tier_floor": "tier1", "policy_source": "",
+    }
+    block.update(overrides)
+    return SimpleNamespace(routing_calibration=block)
+
+
+class TestFalseDowngradeArithmetic(unittest.TestCase):
+    """Decision 7, BOTH baseline branches, hand-checked."""
+
+    def test_baseline_is_the_truth_tier_when_truth_switches(self) -> None:
+        # The two branches must DISAGREE here or the test proves
+        # nothing: truth switches within tier1 while the router
+        # actually ran a tier2 leg, so the truth branch says tier1 and
+        # the actual branch would say tier2.
+        truth = {"outcome": "switch_profile",
+                 "suggested": {"arm": "always_best", "profile_id": "alpha"}}
+        actual = {"per_trial": [{"trial": 0,
+                                 "chain": ["router-prof", "beta"],
+                                 "delegated": True, "reconciled": True}]}
+        self.assertEqual(
+            baseline_tier(truth, actual, _PROFILE_POLICY), "tier1")
+        self.assertEqual(
+            baseline_tier({"outcome": "no_change_recommended",
+                           "suggested": None}, actual, _PROFILE_POLICY),
+            "tier2", "the branches must differ for this to discriminate")
+        # predicting a TIER-2 profile against a within-tier-1 truth
+        # switch IS a false downgrade (the round-1 correction), and
+        # under the actual-tier baseline it would NOT be
+        predicted = {"outcome": "switch_profile",
+                     "suggested": {"arm": "always_best",
+                                   "profile_id": "beta"}}
+        self.assertTrue(is_false_downgrade(
+            predicted, baseline_tier(truth, actual, _PROFILE_POLICY),
+            _PROFILE_POLICY))
+
+    def test_baseline_is_the_actual_tier_when_truth_keeps(self) -> None:
+        truth = {"outcome": "no_change_recommended", "suggested": None}
+        tier1_actual = {"per_trial": [
+            {"trial": 0, "chain": ["router-prof"], "delegated": False,
+             "reconciled": False}]}
+        self.assertEqual(
+            baseline_tier(truth, tier1_actual, _PROFILE_POLICY), "tier1")
+        # the router already operated at tier2 -> recommending tier2 is
+        # NOT a downgrade (multi-leg chains take the lowest tier used)
+        mixed_actual = {"per_trial": [
+            {"trial": 0, "chain": ["router-prof", "beta"],
+             "delegated": True, "reconciled": True}]}
+        self.assertEqual(
+            baseline_tier(truth, mixed_actual, _PROFILE_POLICY), "tier2")
+        predicted = {"outcome": "switch_profile",
+                     "suggested": {"arm": "always_best",
+                                   "profile_id": "beta"}}
+        self.assertTrue(is_false_downgrade(predicted, "tier1",
+                                           _PROFILE_POLICY))
+        self.assertFalse(is_false_downgrade(predicted, "tier2",
+                                            _PROFILE_POLICY))
+
+    def test_unresolvable_tiers_never_count_either_way(self) -> None:
+        truth = {"outcome": "switch_profile",
+                 "suggested": {"arm": "always_best",
+                               "profile_id": "ghost"}}
+        actual = {"per_trial": []}
+        self.assertIsNone(baseline_tier(truth, actual, _PROFILE_POLICY))
+        self.assertIsNone(baseline_tier(
+            {"outcome": "no_change_recommended", "suggested": None},
+            actual, None))
+        predicted = {"outcome": "switch_profile",
+                     "suggested": {"arm": "always_best",
+                                   "profile_id": "beta"}}
+        self.assertFalse(is_false_downgrade(predicted, None,
+                                            _PROFILE_POLICY))
+        self.assertFalse(is_false_downgrade(
+            {"outcome": "no_change_recommended", "suggested": None},
+            "tier1", _PROFILE_POLICY))
+
+
+class TestHeldoutEvaluation(unittest.TestCase):
+    def _downgrade_corpus(self):
+        """Every neighbor is labeled switch->beta (tier2) while each
+        held-out task's own truth is switch->beta as well; with a
+        tier2 floor the predictions land on beta, and the baselines are
+        tier2, so NOTHING is a false downgrade — the arithmetic is
+        exercised without a violation."""
+        return [
+            _beta_switch_set("aa" * 32, "n1", file_scope=1),
+            _beta_switch_set("bb" * 32, "n2", file_scope=2),
+            _beta_switch_set("cc" * 32, "n3", file_scope=3),
+            _beta_switch_set("dd" * 32, "n4", file_scope=4),
+        ]
+
+    def test_report_shape_and_arithmetic(self) -> None:
+        report = evaluate_heldout(self._downgrade_corpus(), _TIER2_FLOOR,
+                                  _CURRENT_POLICY)
+        self.assertEqual(report["split"], "leave_one_task_out")
+        self.assertEqual(report["evaluated"], 4)
+        self.assertEqual(report["unevaluable"], 0)
+        self.assertEqual(report["false_downgrades"], 0)
+        self.assertEqual(report["false_downgrade_rate"], 0.0)
+        self.assertEqual(report["floor_violations"], 0)
+        self.assertEqual(report["agreement"], 1.0)
+        self.assertEqual(report["policy"]["tier_floor"], "tier2")
+
+    def test_downgrade_counted_against_a_tier1_baseline(self) -> None:
+        # three beta (tier2) neighbours outvote nothing, so each held-out
+        # task predicts switch->beta; the ALPHA-truth task's baseline is
+        # tier1, so its prediction IS a false downgrade
+        corpus = self._downgrade_corpus() + [
+            _switch_set("ee" * 32, task="q", file_scope=2),
+        ]
+        report = evaluate_heldout(corpus, _TIER2_FLOOR, _CURRENT_POLICY)
+        flags = {r["task_id"]: r["downgrade_flag"]
+                 for r in report["results"]}
+        self.assertTrue(flags["q"])
+        self.assertEqual(report["false_downgrades"], 1)
+        self.assertEqual(report["evaluated"], 5)
+        self.assertAlmostEqual(report["false_downgrade_rate"], 1 / 5)
+
+    def test_unlabeled_examples_are_unevaluable_not_denominator(self) -> None:
+        corpus = self._downgrade_corpus()
+        plain = _loaded_evidence(
+            _retask(_report(_figures_for(router=(0.5, 0.05),
+                                         best=(1.0, 0.01),
+                                         cheapest=(0.4, 0.02)),
+                            selections=_SELECTIONS), "u1"),
+            [_router_record("u1", considered=_ADMISSIBLE)],
+        )
+        from dataclasses import replace as _replace
+
+        corpus.append(_replace(plain, set_id="ff" * 32))
+        report = evaluate_heldout(corpus, _TIER2_FLOOR, _CURRENT_POLICY)
+        self.assertEqual(report["unevaluable"], 1)
+        self.assertEqual(report["evaluated"], 4)
+        self.assertNotIn("u1", [r["task_id"] for r in report["results"]])
+
+    def test_heldout_task_never_votes_for_itself(self) -> None:
+        # LEAKAGE (a): a same-task example in another set would let the
+        # fold see its own answer. Two sets carry task "q" with
+        # OPPOSITE labels; if the twin voted, the prediction would
+        # follow it. All other neighbours are keep-labeled, so a
+        # leaking implementation predicts switch for the switch twin.
+        corpus = [
+            _keep_set("aa" * 32, task="n1", file_scope=9),
+            _keep_set("bb" * 32, task="n2", file_scope=9),
+            _keep_set("cc" * 32, task="n3", file_scope=9),
+            _switch_set("dd" * 32, task="q", file_scope=1),
+            _switch_set("ee" * 32, task="q", file_scope=1),
+        ]
+        report = evaluate_heldout(corpus, _POLICY, _CURRENT_POLICY)
+        for result in report["results"]:
+            if result["task_id"] == "q":
+                self.assertEqual(result["predicted"]["outcome"],
+                                 "no_change_recommended")
+
+    def test_bounds_fit_on_the_eligibility_filtered_pool(self) -> None:
+        # An INELIGIBLE example with an extreme file_scope must not
+        # stretch the fold's normalization bounds. HAND-COMPUTED:
+        # eligible file_scope = {1, 2, 3} -> bounds [1, 3]; the query
+        # (3) normalizes to 1.0 and the neighbours to 0, 0.5, 1.0, so
+        # the distances are exactly 1.0, 0.5, 0.0. If the tier-2
+        # outlier (10000) stretched the bounds, every distance would
+        # collapse to ~1e-4 — asserting the ABSOLUTE values catches the
+        # mutation, where comparing evaluation to serving cannot
+        # (the mutation moves both together).
+        corpus = [
+            _switch_set("aa" * 32, task="n1", file_scope=1),
+            _switch_set("bb" * 32, task="n2", file_scope=2),
+            _keep_set("cc" * 32, task="n3", file_scope=3),
+            _beta_switch_set("dd" * 32, "outlier", file_scope=10000),
+            _switch_set("ee" * 32, task="q", file_scope=3),
+        ]
+        served = knn_recommendation(corpus, "ee" * 32, "q", _POLICY,
+                                    _CURRENT_POLICY)
+        by_task = {n["task_id"]: n["distance"] for n in served["neighbors"]}
+        self.assertNotIn("outlier", by_task,
+                         "a below-floor example must never be a neighbour")
+        self.assertAlmostEqual(by_task["n3"], 0.0, places=12)
+        self.assertAlmostEqual(by_task["n2"], 0.5, places=12)
+        self.assertAlmostEqual(by_task["n1"], 1.0, places=12)
+        # and the fold reproduces serving exactly
+        report = evaluate_heldout(corpus, _POLICY, _CURRENT_POLICY)
+        evaluated = next(r for r in report["results"]
+                         if r["task_id"] == "q")
+        self.assertEqual(evaluated["predicted"]["outcome"],
+                         served["outcome"])
+
+
+class TestEvaluationReportPersistence(unittest.TestCase):
+    def test_atomic_write_and_reload(self) -> None:
+        import tempfile
+
+        report = evaluate_heldout(_corpus(), _POLICY, _CURRENT_POLICY)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_evaluation_report(report, tmp)
+            self.assertTrue(path.is_file())
+            self.assertFalse(list(Path(tmp).glob("*.tmp")))
+            self.assertEqual(load_evaluation_report(tmp), report)
+
+    def test_absent_or_invalid_reports_load_as_none(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(load_evaluation_report(tmp))
+            self.assertIsNone(load_evaluation_report(None))
+            (Path(tmp) / "evaluation-report.json").write_text(
+                '{"schema_version": 1}', encoding="utf-8")
+            self.assertIsNone(load_evaluation_report(tmp))
+
+    def test_invalid_report_is_never_persisted(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(CalibrationError):
+                write_evaluation_report({"schema_version": 1}, tmp)
+            self.assertFalse(list(Path(tmp).iterdir()))
+
+
+class TestGates(unittest.TestCase):
+    def _gates(self, report, config=None, corpus=None,
+               policy=_TIER2_FLOOR, current=_CURRENT_POLICY):
+        doc = compute_gates(corpus if corpus is not None else _corpus(),
+                            config or _config(), policy, current, report)
+        return {g["id"]: g for g in doc["gates"]}, doc
+
+    def _healthy(self):
+        corpus = [
+            _beta_switch_set("aa" * 32, "n1", file_scope=1),
+            _beta_switch_set("bb" * 32, "n2", file_scope=2),
+            _beta_switch_set("cc" * 32, "n3", file_scope=3),
+            _beta_switch_set("dd" * 32, "n4", file_scope=4),
+        ]
+        policy = replace(_TIER2_FLOOR,
+                         policy_source_digest="ab" * 32)
+        report = evaluate_heldout(corpus, policy, _CURRENT_POLICY)
+        return corpus, policy, report
+
+    def test_all_five_gates_can_pass_together(self) -> None:
+        corpus, policy, report = self._healthy()
+        gates, doc = self._gates(report, corpus=corpus, policy=policy)
+        self.assertEqual(sorted(gates), sorted(GATE_IDS))
+        for gate_id, gate in gates.items():
+            self.assertEqual(gate["status"], "pass",
+                             f"{gate_id}: {gate['reason']}")
+        self.assertTrue(doc["calibrated"])
+
+    def test_missing_report_makes_three_gates_insufficient(self) -> None:
+        corpus, policy, _ = self._healthy()
+        gates, doc = self._gates(None, corpus=corpus, policy=policy)
+        for gate_id in ("heldout_evaluated", "false_downgrade",
+                        "floors_authoritative"):
+            self.assertEqual(gates[gate_id]["status"], "insufficient_data")
+        self.assertFalse(doc["calibrated"])
+
+    def test_stale_corpus_and_stale_policy_are_insufficient(self) -> None:
+        corpus, policy, report = self._healthy()
+        stale_corpus = dict(report, corpus_id="ff" * 32)
+        gates, _ = self._gates(stale_corpus, corpus=corpus, policy=policy)
+        self.assertEqual(gates["heldout_evaluated"]["status"],
+                         "insufficient_data")
+        self.assertIn("corpus_changed",
+                      gates["heldout_evaluated"]["reason"])
+        stale_policy = dict(report, policy_id="ff" * 32)
+        gates, _ = self._gates(stale_policy, corpus=corpus, policy=policy)
+        self.assertEqual(gates["heldout_evaluated"]["status"],
+                         "insufficient_data")
+        self.assertIn("policy_changed",
+                      gates["heldout_evaluated"]["reason"])
+        self.assertEqual(gates["false_downgrade"]["status"],
+                         "insufficient_data")
+
+    def test_g1_measures_telemetry_completeness(self) -> None:
+        corpus, policy, report = self._healthy()
+        gates, _ = self._gates(report, corpus=corpus, policy=policy)
+        self.assertEqual(gates["telemetry_complete"]["measured"], 1.0)
+        # a record whose effective model is UNVERIFIED drops the
+        # fraction below the threshold
+        import copy
+
+        from dataclasses import replace as _replace
+
+        broken = copy.deepcopy(list(corpus[0].records))
+        broken[0]["routing_decisions"][0]["effective_model"] = None
+        corpus = [_replace(corpus[0], records=broken)] + corpus[1:]
+        gates, _ = self._gates(report, corpus=corpus, policy=policy)
+        self.assertEqual(gates["telemetry_complete"]["status"], "fail")
+        self.assertLess(gates["telemetry_complete"]["measured"], 1.0)
+
+    def test_g2_cannot_pass_on_an_unlabeled_corpus(self) -> None:
+        plain = _loaded_evidence(
+            _retask(_report(_figures_for(router=(0.5, 0.05),
+                                         best=(1.0, 0.01),
+                                         cheapest=(0.4, 0.02)),
+                            selections=_SELECTIONS), "u1"),
+            [_router_record("u1", considered=_ADMISSIBLE)],
+        )
+        gates, doc = self._gates(None, corpus=[plain])
+        self.assertEqual(gates["labeled_volume"]["status"],
+                         "insufficient_data")
+        self.assertEqual(doc["corpus"]["labeled_tasks"], 0)
+        self.assertFalse(doc["calibrated"])
+
+    def test_g2_requires_trials_within_one_set(self) -> None:
+        corpus, policy, report = self._healthy()
+        gates, _ = self._gates(report, config=_config(min_trials=2),
+                               corpus=corpus, policy=policy)
+        self.assertEqual(gates["labeled_volume"]["status"], "fail")
+        self.assertEqual(gates["labeled_volume"]["measured"], 0)
+
+    def test_g4_fails_above_the_declared_threshold(self) -> None:
+        corpus, policy, report = self._healthy()
+        downgraded = dict(report, false_downgrades=2, evaluated=4,
+                          false_downgrade_rate=0.5)
+        gates, _ = self._gates(downgraded, corpus=corpus, policy=policy)
+        self.assertEqual(gates["false_downgrade"]["status"], "fail")
+        self.assertEqual(gates["false_downgrade"]["measured"], 0.5)
+
+    def test_g5_three_conjuncts(self) -> None:
+        corpus, policy, report = self._healthy()
+        # (a) no current policy -> insufficient
+        gates, _ = self._gates(report, corpus=corpus, policy=policy,
+                               current=None)
+        self.assertEqual(gates["floors_authoritative"]["status"],
+                         "insufficient_data")
+        # (b) a violation recorded in the report -> fail, never dropped
+        violating = dict(report, floor_violations=1)
+        gates, _ = self._gates(violating, corpus=corpus, policy=policy)
+        self.assertEqual(gates["floors_authoritative"]["status"], "fail")
+        self.assertIn("zero_violations",
+                      gates["floors_authoritative"]["reason"])
+        # (c) the report's policy digest must bind the CURRENT policy
+        unbound = json.loads(json.dumps(report))
+        unbound["policy"]["policy_source_digest"] = "cd" * 32
+        gates, _ = self._gates(unbound, corpus=corpus, policy=policy)
+        self.assertEqual(gates["floors_authoritative"]["status"], "fail")
+        self.assertIn("policy_digest_bound",
+                      gates["floors_authoritative"]["reason"])
+
+    def test_gate_thresholds_are_never_completed_from_code(self) -> None:
+        corpus, policy, report = self._healthy()
+        for key in ("min_sufficiency", "min_tasks", "min_trials",
+                    "min_sets", "min_coverage"):
+            block = dict(_config().routing_calibration)
+            del block[key]
+            with self.assertRaisesRegex(CalibrationError, key):
+                compute_gates(corpus, SimpleNamespace(
+                    routing_calibration=block), policy,
+                    _CURRENT_POLICY, report)
 
 
 if __name__ == "__main__":

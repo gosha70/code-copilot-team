@@ -242,9 +242,12 @@ def extract_examples(
             refs = tuple(rec.get("evidence_refs") or ())
             descriptor = (descriptors or {}).get(task)
             if descriptor is None or declared_trials is None:
-                reason = ("set carries no task descriptors"
-                          if not descriptors
-                          else f"no descriptor for task {task!r}")
+                if not descriptors:
+                    reason = "set carries no task descriptors"
+                elif descriptor is None:
+                    reason = f"no descriptor for task {task!r}"
+                else:
+                    reason = "descriptors artifact declares no trial count"
                 examples.append(Example(entry.set_id, task, None,
                                         reason, label, refs))
                 continue
@@ -453,6 +456,452 @@ def _validated(doc: Mapping[str, Any]) -> Mapping[str, Any]:
             f"{errors[:3]}"
         )
     return doc
+
+
+# ── held-out evaluation (decisions 6-7) ────────────────────────────────
+def _tier_of(
+    profile_id: "str | None", profile_policy: "Mapping[str, Any] | None"
+) -> "str | None":
+    """The capability tier of a profile, resolved ONLY from the set's
+    persisted policy declarations (decision 11). None when the set
+    carries no policy or the profile is not declared — unresolvable is
+    representable, never guessed."""
+    if profile_id is None or not profile_policy:
+        return None
+    entry = (profile_policy.get("profiles") or {}).get(profile_id)
+    return entry["capability_tier"] if entry else None
+
+
+def _actual_profiles(actual: Mapping[str, Any]) -> "list[str]":
+    """Every profile the router actually selected for the task, across
+    trials, in first-seen order."""
+    seen: list[str] = []
+    for trial in actual.get("per_trial") or ():
+        for profile in trial.get("chain") or ():
+            if profile not in seen:
+                seen.append(profile)
+    return seen
+
+
+def baseline_tier(
+    truth: Mapping[str, Any],
+    actual: Mapping[str, Any],
+    profile_policy: "Mapping[str, Any] | None",
+) -> "str | None":
+    """The safety baseline a prediction is judged against (decision 7):
+
+    - truth is switch_profile -> the tier of the TRUTH's suggested
+      profile (so predicting Tier 2 while truth switches WITHIN Tier 1
+      is a downgrade);
+    - truth is no_change_recommended -> the tier the router actually
+      operated at. A chain can name several profiles, so the baseline
+      is the LOWEST tier the router actually used — recommending a
+      tier the router already ran at is not a downgrade. (The plan
+      says "the tier of the router's actual selection", singular; this
+      is the conservative reading for multi-leg chains, recorded for
+      review.)
+
+    None when no tier resolves — the task is then unevaluable for the
+    downgrade metric rather than silently counted either way.
+    """
+    if truth["outcome"] == "switch_profile":
+        return _tier_of((truth["suggested"] or {}).get("profile_id"),
+                        profile_policy)
+    tiers = [
+        t for t in (_tier_of(p, profile_policy)
+                    for p in _actual_profiles(actual))
+        if t is not None
+    ]
+    if not tiers:
+        return None
+    return min(tiers, key=lambda t: _TIER_RANK[t])
+
+
+def is_false_downgrade(
+    predicted: Mapping[str, Any],
+    baseline: "str | None",
+    profile_policy: "Mapping[str, Any] | None",
+) -> bool:
+    """A prediction is a false downgrade iff it recommends switching to
+    a profile of a LOWER capability tier than the safety baseline."""
+    if predicted["outcome"] != "switch_profile" or baseline is None:
+        return False
+    predicted_tier = _tier_of((predicted["suggested"] or {}).get(
+        "profile_id"), profile_policy)
+    if predicted_tier is None:
+        return False
+    return _TIER_RANK[predicted_tier] < _TIER_RANK[baseline]
+
+
+def evaluate_heldout(
+    entries: Sequence["LoadedEvidenceSet | InvalidEvidenceSet"],
+    policy: EvaluationPolicy,
+    current_policy: "Mapping[str, Any] | None",
+) -> Mapping[str, Any]:
+    """Leave-one-task-out evaluation (decision 6). For every labeled
+    (set, task): EVERY example of that task is removed from the
+    neighbor pool across every set, normalization is fitted on the
+    remaining pool, the prediction is compared to the E2 truth, and the
+    decision-7 downgrade arithmetic is accumulated.
+
+    Normalization parity with serving: `knn_recommendation` fits bounds
+    on the eligibility-FILTERED pool, and this evaluation drives the
+    same function, so the folds normalize exactly as serving does —
+    otherwise the measured rate would not describe serving behaviour.
+    """
+    examples = extract_examples(entries)
+    policies = {
+        e.set_id: e.profile_policy
+        for e in entries if isinstance(e, LoadedEvidenceSet)
+    }
+    actuals: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, LoadedEvidenceSet):
+            continue
+        for rec in derive_recommendations(entry):
+            actuals[(entry.set_id, rec["task_id"])] = rec["actual"]
+
+    results: list[Mapping[str, Any]] = []
+    false_downgrades = 0
+    evaluated = 0
+    unevaluable = 0
+    agreements = 0
+    floor_violations = 0
+
+    for example in examples:
+        if example.label is None or example.features is None:
+            unevaluable += 1
+            continue
+        # THE fold: every example of this task leaves the pool.
+        # knn_recommendation already excludes the queried task, so the
+        # fold is the corpus itself — the exclusion is one rule, not
+        # two implementations that can drift.
+        predicted = knn_recommendation(
+            entries, example.evidence_set_id, example.task_id, policy,
+            current_policy, _examples=examples,
+        )
+        truth = example.label
+        profile_policy = policies.get(example.evidence_set_id)
+        base = baseline_tier(
+            truth, actuals.get((example.evidence_set_id,
+                                example.task_id)) or {"per_trial": []},
+            profile_policy,
+        )
+        downgrade = is_false_downgrade(predicted, base, profile_policy)
+        if downgrade:
+            false_downgrades += 1
+        if predicted["outcome"] == truth["outcome"]:
+            agreements += 1
+        if predicted["outcome"] == "switch_profile" and current_policy:
+            if not _eligible_under_policy(predicted["suggested"],
+                                          current_policy,
+                                          policy.tier_floor):
+                # decision 2/G5: a violation reaching the report is a
+                # SURFACED bug, never dropped
+                floor_violations += 1
+        evaluated += 1
+        results.append({
+            "evidence_set_id": example.evidence_set_id,
+            "task_id": example.task_id,
+            "predicted": {"outcome": predicted["outcome"],
+                          "suggested": predicted["suggested"]},
+            "truth": {"outcome": truth["outcome"],
+                      "suggested": truth["suggested"]},
+            "downgrade_flag": downgrade,
+        })
+
+    report = {
+        "schema_version": 1,
+        "corpus_id": corpus_id(entries),
+        "policy_id": policy_id(policy),
+        "policy": dict(policy.as_document()),
+        "split": "leave_one_task_out",
+        "results": results,
+        "agreement": (agreements / evaluated) if evaluated else None,
+        "false_downgrades": false_downgrades,
+        "evaluated": evaluated,
+        "unevaluable": unevaluable,
+        "false_downgrade_rate": (
+            false_downgrades / evaluated if evaluated else None
+        ),
+        "floor_violations": floor_violations,
+    }
+    errors = validate(report, load_schema("evaluation-report"))
+    if errors:
+        raise CalibrationError(
+            f"derived evaluation report violates its own schema: "
+            f"{errors[:3]}"
+        )
+    return report
+
+
+EVALUATION_REPORT_NAME = "evaluation-report.json"
+
+
+def write_evaluation_report(
+    report: Mapping[str, Any], root: "str | Path"
+) -> Path:
+    """Persist atomically into the ANALYTICS-owned calibration root
+    (never an E1 evidence root): schema-validated before the rename, so
+    a partially written or invalid report is never discoverable."""
+    errors = validate(report, load_schema("evaluation-report"))
+    if errors:
+        raise CalibrationError(
+            f"refusing to persist an invalid evaluation report: "
+            f"{errors[:3]}"
+        )
+    out = Path(root)
+    out.mkdir(parents=True, exist_ok=True)
+    target = out / EVALUATION_REPORT_NAME
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(
+        json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(target)
+    return target
+
+
+def load_evaluation_report(
+    root: "str | Path | None",
+) -> "Mapping[str, Any] | None":
+    """The persisted report, or None when absent/unreadable/invalid —
+    an unusable report is ABSENT (gates report insufficient_data),
+    never partially trusted."""
+    if not root:
+        return None
+    target = Path(root) / EVALUATION_REPORT_NAME
+    if not target.is_file():
+        return None
+    try:
+        doc = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if validate(doc, load_schema("evaluation-report")):
+        return None
+    return doc
+
+
+# ── the five calibration gates (decision 2) ────────────────────────────
+def _gate(gate_id, status, measured, threshold, reason, refs=()):
+    return {"id": gate_id, "status": status, "measured": measured,
+            "threshold": threshold, "reason": reason,
+            "evidence_refs": list(refs)}
+
+
+def _record_is_complete(record: Mapping[str, Any]) -> bool:
+    """G1's per-record predicate: a non-insufficient cost AND a
+    VERIFIED effective-model identity on every routing decision (null
+    means unverified — never assumed equal to the requested model)."""
+    if (record.get("cost") or {}).get("value") is None:
+        return False
+    decisions = record.get("routing_decisions") or []
+    if not decisions:
+        return False
+    return all(d.get("effective_model") is not None for d in decisions)
+
+
+def compute_gates(
+    entries: Sequence["LoadedEvidenceSet | InvalidEvidenceSet"],
+    config: Any,
+    policy: EvaluationPolicy,
+    current_policy: "Mapping[str, Any] | None",
+    evaluation_report: "Mapping[str, Any] | None",
+) -> Mapping[str, Any]:
+    """The five #109 §12 conditions as executable results (decision 2).
+    A gate whose inputs do not exist is insufficient_data, never pass;
+    the overall verdict is calibrated only when EVERY gate passes.
+    Nothing here acts on a result."""
+    block = getattr(config, C.CFG_ROUTING_CALIBRATION, None) or {}
+    for key in ("min_sufficiency", "min_tasks", "min_trials", "min_sets",
+                "min_coverage"):
+        if key not in block:
+            raise CalibrationError(
+                f"routing_calibration configuration is missing {key!r} — "
+                f"gate thresholds are operator policy and are never "
+                f"completed from code"
+            )
+
+    valid = [e for e in entries if isinstance(e, LoadedEvidenceSet)]
+    invalid_count = sum(
+        1 for e in entries if isinstance(e, InvalidEvidenceSet)
+    )
+    current_corpus = corpus_id(entries)
+    current_policy_id = policy_id(policy)
+    examples = extract_examples(entries)
+    labeled = [e for e in examples
+               if e.label is not None and e.features is not None]
+    labeled_tasks = sorted({e.task_id for e in labeled})
+
+    gates = []
+
+    # ── G1: telemetry complete and accurate ──
+    records = [r for e in valid for r in e.records]
+    if not records:
+        gates.append(_gate("telemetry_complete", "insufficient_data", None,
+                           block["min_sufficiency"],
+                           "the corpus contains no router records"))
+    else:
+        complete = sum(1 for r in records if _record_is_complete(r))
+        fraction = complete / len(records)
+        status = ("pass" if fraction >= float(block["min_sufficiency"])
+                  else "fail")
+        gates.append(_gate(
+            "telemetry_complete", status, fraction,
+            block["min_sufficiency"],
+            f"{complete}/{len(records)} records carry measured cost and "
+            f"a verified effective-model identity"
+            + (f"; {invalid_count} invalid set(s) excluded from the corpus"
+               if invalid_count else ""),
+            [e.set_id for e in valid],
+        ))
+
+    # ── G2: enough repeated LABELED runs ──
+    # Trials are counted OBSERVED here (a volume gate measures runs that
+    # actually happened) and WITHIN a single set (cross-set aggregation
+    # would mix fingerprints). This is the mirror image of the feature
+    # rule, where only the DECLARED count may be read.
+    observed_trials: dict[tuple[str, str], int] = {}
+    for entry in valid:
+        for rec in derive_recommendations(entry):
+            observed_trials[(entry.set_id, rec["task_id"])] = len(
+                rec["actual"]["per_trial"])
+    min_trials = int(block["min_trials"])
+    qualifying_tasks = sorted({
+        e.task_id for e in labeled
+        if observed_trials.get((e.evidence_set_id, e.task_id), 0)
+        >= min_trials
+    })
+    contributing_sets = sorted({
+        e.evidence_set_id for e in labeled
+        if observed_trials.get((e.evidence_set_id, e.task_id), 0)
+        >= min_trials
+    })
+    if not labeled:
+        gates.append(_gate("labeled_volume", "insufficient_data", 0,
+                           block["min_tasks"],
+                           "no (set, task) pair carries a defined label"))
+    else:
+        enough = (
+            len(qualifying_tasks) >= int(block["min_tasks"])
+            and len(contributing_sets) >= int(block["min_sets"])
+        )
+        gates.append(_gate(
+            "labeled_volume", "pass" if enough else "fail",
+            len(qualifying_tasks), block["min_tasks"],
+            f"{len(qualifying_tasks)} labeled task(s) reached "
+            f"{min_trials} trials within a single set across "
+            f"{len(contributing_sets)} set(s) "
+            f"(min_sets={block['min_sets']})",
+            qualifying_tasks,
+        ))
+
+    # ── G3: evaluated against held-out tasks ──
+    staleness = (report_staleness(evaluation_report, current_corpus,
+                                  current_policy_id)
+                 if evaluation_report else None)
+    if evaluation_report is None:
+        gates.append(_gate("heldout_evaluated", "insufficient_data", None,
+                           block["min_coverage"],
+                           "no evaluation report exists"))
+    elif staleness["stale"]:
+        gates.append(_gate(
+            "heldout_evaluated", "insufficient_data", None,
+            block["min_coverage"],
+            "the evaluation report is stale: "
+            + ", ".join(staleness["reasons"]),
+        ))
+    else:
+        covered = {r["task_id"] for r in evaluation_report["results"]}
+        coverage = (len(covered & set(labeled_tasks)) / len(labeled_tasks)
+                    if labeled_tasks else 0.0)
+        status = ("pass" if labeled_tasks
+                  and coverage >= float(block["min_coverage"]) else "fail")
+        gates.append(_gate(
+            "heldout_evaluated", status, coverage, block["min_coverage"],
+            f"{len(covered & set(labeled_tasks))}/{len(labeled_tasks)} "
+            f"labeled task(s) evaluated held-out",
+            sorted(covered),
+        ))
+
+    # ── G4: false downgrades below the declared threshold ──
+    if evaluation_report is None or staleness["stale"]:
+        gates.append(_gate(
+            "false_downgrade", "insufficient_data", None,
+            policy.max_false_downgrade_rate,
+            "no current evaluation report to measure",
+        ))
+    elif evaluation_report["false_downgrade_rate"] is None:
+        gates.append(_gate(
+            "false_downgrade", "insufficient_data", None,
+            policy.max_false_downgrade_rate,
+            "the evaluation report evaluated no task",
+        ))
+    else:
+        rate = evaluation_report["false_downgrade_rate"]
+        status = ("pass" if rate < policy.max_false_downgrade_rate
+                  else "fail")
+        gates.append(_gate(
+            "false_downgrade", status, rate,
+            policy.max_false_downgrade_rate,
+            f"{evaluation_report['false_downgrades']}/"
+            f"{evaluation_report['evaluated']} evaluated task(s) were "
+            f"false downgrades "
+            f"({evaluation_report['unevaluable']} unevaluable)",
+        ))
+
+    # ── G5: operator floors remain authoritative (three conjuncts) ──
+    if current_policy is None:
+        gates.append(_gate(
+            "floors_authoritative", "insufficient_data", None,
+            policy.tier_floor,
+            "no current policy source is configured or parseable",
+        ))
+    elif evaluation_report is None or staleness["stale"]:
+        gates.append(_gate(
+            "floors_authoritative", "insufficient_data", None,
+            policy.tier_floor,
+            "no current evaluation report to check for violations",
+        ))
+    else:
+        violations = evaluation_report["floor_violations"]
+        digest_bound = (
+            evaluation_report["policy"].get("policy_source_digest")
+            == policy.policy_source_digest
+            and policy.policy_source_digest is not None
+        )
+        conjuncts = {
+            "floor_declared": policy.tier_floor in _TIER_RANK,
+            "zero_violations": violations == 0,
+            "policy_digest_bound": digest_bound,
+        }
+        failed = sorted(k for k, ok in conjuncts.items() if not ok)
+        gates.append(_gate(
+            "floors_authoritative", "pass" if not failed else "fail",
+            violations, policy.tier_floor,
+            "all three conjuncts hold" if not failed
+            else f"unsatisfied conjunct(s): {failed}",
+        ))
+
+    report = {
+        "schema_version": 1,
+        "corpus_id": current_corpus,
+        "policy_id": current_policy_id,
+        "corpus": {
+            "sets": len(valid),
+            "invalid_sets": invalid_count,
+            "labeled_tasks": len(labeled_tasks),
+        },
+        "gates": gates,
+        "calibrated": all(g["status"] == "pass" for g in gates),
+    }
+    errors = validate(report, load_schema("calibration-report"))
+    if errors:
+        raise CalibrationError(
+            f"derived calibration report violates its own schema: "
+            f"{errors[:3]}"
+        )
+    return report
 
 
 def report_staleness(
