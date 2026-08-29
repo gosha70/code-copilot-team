@@ -25,18 +25,21 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   grade carrying its complete basis (trials, per-trial two-axis
   agreement, component mask, unevaluated trials, insufficiency refs)
   that the serving gate re-derives whole from canonical evidence, and
-  figure provenance for every served number (decision 9: direct
-  figures name their exact artifact pointer, deltas name both
-  operands, one identity-bound resolver validates and recomputes
-  before serving). E1 gains the set-atomic publication entrypoint
+  figure provenance for the recommendation quality/cost figures and
+  their deltas (decision 9: direct figures name their exact artifact
+  pointer, deltas name both operands, one identity-bound resolver
+  validates and recomputes before serving; confidence statistics
+  carry no pointers — their gate is the recomputation above). E1 gains the set-atomic publication entrypoint
   (`publish_evidence_set`): stage → validate with the consumer's own
   loader → one atomic rename, with referenced evidence files scrubbed
   at publication and the manifest hashing the scrubbed bytes, the
   manifest bound to exactly the records' canonical reference set, and
   execution-proven per-leg identity. Every evidence locator is
   followable through a closed read-only artifact surface; invalid
-  sets surface with sanitized closed codes, never skipped; no payload
-  carries a filesystem path. **Shadow-only by construction** (plan
+  sets surface with sanitized closed codes, never skipped; configured
+  roots and server-side set paths are never serialized (sets are
+  addressed by opaque content id, home-prefixed paths collapse at
+  write time). **Shadow-only by construction** (plan
   decision 11, inherited from E1's decision 10): no key the router
   reads, no policy surface, no code path that changes a routing
   decision — routing shell suites pass unmodified at their pins and

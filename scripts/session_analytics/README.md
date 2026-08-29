@@ -537,9 +537,14 @@ production routing script references this layer.
 CCT_SA_ROUTING_EVIDENCE_ROOTS=/path/to/eval-artifacts ./scripts/session-analytics serve
 ```
 
-Surfaces (all read-only; sets addressed by opaque content id; no payload
-ever carries a filesystem path — `/api/settings` exposes only
-`{configured, root_count}`):
+Surfaces (all read-only; sets addressed by opaque content id; the
+configured roots and server-side set paths are never serialized —
+`/api/settings` exposes only `{configured, root_count}` — and published
+evidence content has the current user's home prefix collapsed and
+runtime credentials scrubbed at write time; evidence references stay
+set-relative by construction. Other path-shaped *text inside* evidence
+content, e.g. a tool log naming `/private/tmp/...`, is served as
+written):
 
 - `GET /api/routing/evidence` — every discovered set: valid summaries
   plus SET-level `invalid_evidence` entries with their sanitized closed

@@ -29,8 +29,10 @@ NEXT_PUBLIC_API_BASE=http://127.0.0.1:8765 npm run dev
 | **Agents** | Discover / upload / manage agent configs. |
 | **Settings** | Data sources + Test Connection, LLM-Judge config, source roots. |
 
-The raw DSN is never sent to the browser — `/api/settings` returns the dialect
-only. The Routing tab likewise never sees a filesystem path: evidence roots
-surface as `{configured, root_count}`, sets are addressed by opaque content
-id, and decision-bearing figures render in round-trip precision, never
-display-rounded.
+The raw DSN is never sent to the browser — `/api/settings` returns the DSN's
+dialect rather than the raw DSN (alongside other sanitized settings). The
+Routing tab never sees the configured evidence roots or server-side set
+paths: roots surface as `{configured, root_count}`, sets are addressed by
+opaque content id, and decision-bearing figures render in round-trip
+precision, never display-rounded. (Path-shaped text *inside* published
+evidence content renders as written, home prefix collapsed at publication.)
