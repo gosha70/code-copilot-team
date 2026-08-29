@@ -17,11 +17,12 @@ steering artifacts are loaded*.
 ## The lifecycle (both modes)
 
 ```
-GitHub issue (the ORIGIN)
+GitHub issue (the ORIGIN — or a declared internal-origin exemption)
    │
    ▼
 Spec-Driven Development bundle          specs/<feature-id>/
-   spec.md · plan.md · tasks.md         (origin frontmatter cites the issue)
+   plan.md (+ spec.md, tasks.md         (origin frontmatter cites the issue
+   per spec_mode)                        or declares type: internal)
    │        ← plan review rounds until plan.md status: approved
    ▼
 Build, task by task                     feature branch, never master
@@ -31,7 +32,8 @@ Build, task by task                     feature branch, never master
 Closure gates                           suites at their pins, diff guards,
    │                                    full sweeps, origin re-check, docs
    ▼
-PR merge                                ONE close keyword, in the PR body only
+PR merge                                close keywords audited: one intended
+                                        (or zero for a non-issue PR), body only
 ```
 
 ### 1. Origin
@@ -59,12 +61,20 @@ when they disagree with the origin, the origin wins.
 Artifacts live in `specs/<feature-id>/` — **inside the repo**, never in a
 session-local plan store, so any tool or human can discover them.
 
-- `spec.md` — user scenarios + functional requirements.
-- `plan.md` — decisions, files, verification; YAML frontmatter carries
-  `spec_mode` (`full` / `lightweight` / `none` — risk-based, see
-  `shared/skills/spec-workflow/SKILL.md`) and `status` (`draft` →
-  `approved`). **Nothing is built while status is `draft`.**
-- `tasks.md` — the task breakdown (T1…Tn) for `full`-mode features.
+- `plan.md` — decisions, files, verification; written for **every**
+  mode. YAML frontmatter carries `spec_mode` (`full` / `lightweight` /
+  `none` — risk-based, see `shared/skills/spec-workflow/SKILL.md`) and
+  `status` (`draft` → `approved`). **Nothing is built while status is
+  `draft`.**
+- `spec.md` — user scenarios + functional requirements. Required for
+  `full` (all template sections) and `lightweight` (Requirements +
+  Constraints); **must NOT exist** for `none` (the validator rejects
+  it — `none` is plan-only, with its justification in the plan
+  frontmatter).
+- `tasks.md` — the task breakdown (T1…Tn); `full` mode only.
+
+Per mode: `full` = plan + spec + tasks · `lightweight` = plan + spec ·
+`none` = plan only. Validation runs for ALL modes.
 - `origin-alignment-<timestamp>.md` — the running record: every review
   round, every finding, how it was verified and fixed, and the verdict.
 
@@ -119,8 +129,8 @@ Repository-wide gates, for every change:
 - Docs updated: `README.md`, `CHANGELOG.md`, and the component README(s)
   the feature touches (a docs-only change may touch nothing else).
 - `bash scripts/check-origin-alignment.sh <feature-id>` passes;
-  `bash scripts/validate-spec.sh --feature-id <id>` passes (both apply to
-  SDD-tracked features; a `spec_mode: none` change has no bundle to gate);
+  `bash scripts/validate-spec.sh --feature-id <id>` passes — both apply
+  in every `spec_mode` (`none` still has a `plan.md` to gate);
   `git diff --check` clean.
 
 Component-specific gates, when the change affects that component — run the
@@ -154,7 +164,11 @@ silently folded into "green" and never used to excuse a new regression.
     and the PR body with the repository's full regex:
 
   ```bash
+  # commits, before opening the PR:
   git log master..HEAD --format='%B' | grep -niE '(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[0-9]+'
+  # the PR body FILE, before `gh pr create --body-file pr-body.md`:
+  grep -niE '(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[0-9]+' pr-body.md
+  # optionally re-verify the published body afterwards:
   gh pr view <n> --json body -q .body | grep -niE '(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[0-9]+'
   ```
 
@@ -177,7 +191,7 @@ checklist — read them instead of loading them:
 | Stage | You do |
 |---|---|
 | Origin | Read the issue (or declare `origin: { type: internal }` for issue-less work); after writing the bundle + alignment record, run `scripts/check-origin-alignment.sh` yourself before approving the plan and before building. |
-| Spec | Write `specs/<feature-id>/{spec,plan,tasks}.md` by hand from the templates referenced in `shared/skills/spec-workflow/SKILL.md`; run `scripts/validate-spec.sh`. |
+| Spec | Write the mode's artifacts by hand from the templates referenced in `shared/skills/spec-workflow/SKILL.md` — `plan.md` always; `spec.md` for `full`/`lightweight`; `tasks.md` for `full` only — then run `scripts/validate-spec.sh --feature-id <id>`. |
 | Review | Get the plan reviewed (a colleague, or the owner); apply the verify-first / record-every-round discipline manually in the origin-alignment file. |
 | Build | Branch (`--no-track`), edit, and after each change run the relevant suite: shell suites `bash tests/test-<area>.sh` (counts pinned in `tests/test-counts.env`), Python suites `PYTHONPATH=scripts:. python3 -m unittest discover -s scripts/<app>/tests -t .`, studio `cd studio && npm run build`. |
 | UI | Boot the app + a real API fixture; screenshot at 375/1440 and assert rendered text (Playwright — see `shared/templates/ui-harness/`). |
@@ -209,8 +223,11 @@ and across tools:
 
 The working protocol that has proven out on real increments here:
 
-1. **Origin first.** The harness runs the origin-alignment circuit breaker
-   before planning and cites the issue in the spec bundle.
+1. **Origin first.** The harness captures the origin (the issue, or the
+   declared internal exemption) into the bundle's frontmatter, writes the
+   bundle + alignment record, and runs the origin-alignment circuit
+   breaker before plan approval and before build — the same order as
+   § 1 (the gate needs those artifacts to exist).
 2. **Plans are files, not context.** Anything actionable is written to
    disk immediately — conversation context does not survive compaction.
    State another checkout or developer must be able to pick up goes in

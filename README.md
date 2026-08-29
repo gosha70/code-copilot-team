@@ -1243,6 +1243,7 @@ Rule content is written once in `shared/` and adapted per tool via `scripts/gene
 - **[Recommended MCP Servers](adapters/claude-code/docs/recommended-mcp-servers.md)** — Context7, PostgreSQL, Filesystem, and Playwright MCP setup
 
 **Shared (all tools):**
+- **[Developer Cookbook](docs/developer-cookbook.md)** — the project SDLC end to end, in self-development and AI-harness modes
 - **[Alignment Maintenance Checklist](shared/docs/alignment-maintenance.md)** — recurring governance checks to keep framework alignment healthy
 - **[Common Pitfalls](shared/docs/common-pitfalls.md)** — cross-cutting issues and solutions
 - **[Delegation Best Practices](shared/docs/delegation-best-practices.md)** — when and how to delegate to agents
