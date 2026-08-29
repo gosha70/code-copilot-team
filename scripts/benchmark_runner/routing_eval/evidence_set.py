@@ -200,7 +200,11 @@ def derive_task_descriptors(config: Any, preset: str) -> "dict | None":
     descriptor artifact and E3 treats it as unlabeled). Route classes
     derive STRUCTURALLY from the config's own membership declarations —
     tier1_only_tasks -> tier1_only, delegate_tasks -> tier2_preferred
-    (the class the delegation seam records), else primary_only."""
+    (the class the delegation seam records), else primary_only. The
+    scenario's DECLARED trial count rides along as the corpus property
+    the calibration feature vector reads — the observed per-trial
+    record count is an execution OBSERVATION and is never a
+    pre-routing feature."""
     declared = getattr(config, "task_descriptors", None)
     if not declared:
         return None
@@ -219,9 +223,17 @@ def derive_task_descriptors(config: Any, preset: str) -> "dict | None":
             "route_class": route_class,
             "file_scope": entry["file_scope"],
         }
+    trials = int(getattr(config, "trials", 0) or 0)
+    if trials < 1:
+        raise EvidenceSetError(
+            "the scenario declares no trial count — the descriptors "
+            "artifact cannot omit the corpus property the calibration "
+            "feature vector reads"
+        )
     return {
         "schema_version": 1,
         "preset_digest": preset,
+        "trials": trials,
         "descriptors": descriptors,
     }
 

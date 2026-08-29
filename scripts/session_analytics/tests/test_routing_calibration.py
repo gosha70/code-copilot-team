@@ -125,6 +125,17 @@ class TestPolicyFromConfig(unittest.TestCase):
             with self.assertRaisesRegex(CalibrationError, key):
                 policy_from_config(cfg)
 
+    def test_tier_floor_is_a_closed_vocabulary(self) -> None:
+        for bad in ("Tier1", "tier3", "", "TIER2"):
+            cfg = SimpleNamespace(
+                routing_calibration=dict(self._BLOCK, tier_floor=bad))
+            with self.assertRaisesRegex(CalibrationError, "tier_floor"):
+                policy_from_config(cfg)
+        for good in ("tier1", "tier2"):
+            cfg = SimpleNamespace(
+                routing_calibration=dict(self._BLOCK, tier_floor=good))
+            self.assertEqual(policy_from_config(cfg).tier_floor, good)
+
     def test_defaults_file_ships_every_required_key(self) -> None:
         from session_analytics.config import load_config
 
@@ -195,6 +206,7 @@ class TestSchemaVocabularies(unittest.TestCase):
         td = load_schema("task-descriptors")
         good = {
             "schema_version": 1, "preset_digest": "sha256:" + "ab" * 32,
+            "trials": 3,
             "descriptors": {"t": {"task_class": "one_file",
                                   "route_class": "primary_only",
                                   "file_scope": 1}},
@@ -203,6 +215,10 @@ class TestSchemaVocabularies(unittest.TestCase):
         bad = json.loads(json.dumps(good))
         bad["descriptors"]["t"]["task_class"] = "novel"
         self.assertTrue(validate(bad, td))
+        # the DECLARED trial count is required (T2 round-1 P1)
+        no_trials = json.loads(json.dumps(good))
+        del no_trials["trials"]
+        self.assertTrue(validate(no_trials, td))
 
         pp = load_schema("profile-policy")
         good = {
@@ -247,14 +263,14 @@ from session_analytics.tests.test_routing_evidence import (  # noqa: E402
 )
 
 
-def _descriptored(set_id, report, records, descriptors):
+def _descriptored(set_id, report, records, descriptors, trials=1):
     base = _loaded_evidence(report, records)
     from dataclasses import replace as _replace
 
     return _replace(
         base, set_id=set_id,
         task_descriptors={"schema_version": 1, "preset_digest": "sha256:p",
-                          "descriptors": descriptors},
+                          "trials": trials, "descriptors": descriptors},
     )
 
 
@@ -279,7 +295,7 @@ def _retask(report, task):
     return doc
 
 
-def _switch_set(set_id, task="t", **descriptor):
+def _switch_set(set_id, task="t", trials=1, **descriptor):
     """A set whose E2 label for ``task`` is switch_profile -> alpha."""
     report = _retask(_report(
         _figures_for(router=(0.5, 0.05), best=(1.0, 0.01),
@@ -288,10 +304,10 @@ def _switch_set(set_id, task="t", **descriptor):
     ), task)
     record = _router_record(task, considered=_ADMISSIBLE)
     return _descriptored(set_id, report, [record],
-                         {task: _descriptor(**descriptor)})
+                         {task: _descriptor(**descriptor)}, trials)
 
 
-def _keep_set(set_id, task="t", **descriptor):
+def _keep_set(set_id, task="t", trials=1, **descriptor):
     """A set whose E2 label for ``task`` is no_change_recommended."""
     report = _retask(_report(
         _figures_for(router=(1.0, 0.005), best=(0.9, 0.01),
@@ -300,7 +316,7 @@ def _keep_set(set_id, task="t", **descriptor):
     ), task)
     record = _router_record(task, considered=_ADMISSIBLE)
     return _descriptored(set_id, report, [record],
-                         {task: _descriptor(**descriptor)})
+                         {task: _descriptor(**descriptor)}, trials)
 
 
 _CURRENT_POLICY = {
@@ -348,6 +364,51 @@ class TestFeatureExtraction(unittest.TestCase):
         self.assertEqual(switch.features["task_class"], "one_file")
         keep = by_key[("cc" * 32, "n3")]
         self.assertEqual(keep.label["outcome"], "no_change_recommended")
+
+    def test_trial_count_is_the_DECLARED_count_not_the_observed(self) -> None:
+        # T2 round-1 P1: the feature reads the scenario's DECLARED
+        # trials (a pre-routing corpus property persisted in the
+        # descriptors artifact), NEVER the observed per-trial record
+        # count. The fixture makes them differ: 5 declared, 1 recorded.
+        entry = _switch_set("aa" * 32, task="n1", trials=5)
+        self.assertEqual(entry.task_descriptors["trials"], 5)
+        (example,) = extract_examples([entry])
+        self.assertEqual(example.features["trial_count"], 5)
+        # the observed count IS 1 — proving the two differ here, so a
+        # record-sourced implementation cannot pass this test
+        from session_analytics.routing_evidence import (
+            derive_recommendations as _derive,
+        )
+
+        (rec,) = _derive(entry)
+        self.assertEqual(rec["confidence"]["basis"]["trials"], 1)
+
+    def test_declared_trials_change_distances(self) -> None:
+        # the source is load-bearing, not cosmetic: two neighbors that
+        # differ ONLY in declared trials sit at different distances, so
+        # a record-sourced implementation reorders the neighborhood
+        corpus = [
+            _switch_set("aa" * 32, task="n1", file_scope=1, trials=1),
+            _switch_set("bb" * 32, task="n2", file_scope=1, trials=9),
+            _keep_set("cc" * 32, task="n3", file_scope=1, trials=5),
+            _switch_set("dd" * 32, task="q", file_scope=1, trials=9),
+        ]
+        doc = knn_recommendation(corpus, "dd" * 32, "q", _POLICY,
+                                 _CURRENT_POLICY)
+        self.assertEqual([n["task_id"] for n in doc["neighbors"]],
+                         ["n2", "n3", "n1"])
+
+    def test_missing_declared_trials_refuses(self) -> None:
+        # a descriptors artifact without the declared count cannot
+        # produce features — refusal, never a substituted observation
+        entry = _switch_set("aa" * 32, task="n1")
+        artifact = dict(entry.task_descriptors)
+        del artifact["trials"]
+        from dataclasses import replace as _replace
+
+        (example,) = extract_examples(
+            [_replace(entry, task_descriptors=artifact)])
+        self.assertIsNone(example.features)
 
     def test_missing_descriptors_are_refused_not_imputed(self) -> None:
         plain = _loaded_evidence(
@@ -507,22 +568,32 @@ class TestKnnRecommendation(unittest.TestCase):
         self.assertEqual(doc["outcome"], "no_change_recommended")
         self.assertIsNone(doc["suggested"])
 
-    def test_neighbor_refs_resolve_against_served_artifacts(self) -> None:
-        # the E2 followability precedent: every neighbor ref is an
-        # artifact-relative pointer that resolves in that set's served
-        # report
+    def test_neighbor_refs_are_E2_shaped_and_resolve(self) -> None:
+        # T2 round-1 P2: neighbors carry the neighbor's OWN E2 refs in
+        # the closed E2 shape — ONE resolver serves both surfaces — and
+        # every locator resolves against that set's served artifacts.
         doc = self._recommend()
         corpus = {e.set_id: e for e in _corpus()}
         for neighbor in doc["neighbors"]:
             entry = corpus[neighbor["evidence_set_id"]]
+            self.assertTrue(neighbor["evidence_refs"])
+            arms_seen = set()
             for ref in neighbor["evidence_refs"]:
-                artifact, pointer = ref.split("/", 1)
-                self.assertEqual(artifact, "report")
-                node = entry.report
-                for token in pointer.split("/"):
-                    self.assertIn(token, node, ref)
-                    node = node[token]
-                self.assertIn("per_trial", node)
+                self.assertEqual(ref["evidence_set_id"],
+                                 neighbor["evidence_set_id"])
+                locator = ref["locator"]
+                if "arm" in locator:
+                    arms_seen.add(locator["arm"])
+                    self.assertIn(
+                        locator["task"],
+                        entry.report["arms"][locator["arm"]]["tasks"])
+                elif "record" in locator:
+                    self.assertLess(locator["record"], len(entry.records))
+                else:
+                    self.fail(f"unexpected locator {locator}")
+            # not narrowed to cct_router: the neighbor's own refs cover
+            # the compared arms, exactly as E2 attaches them
+            self.assertTrue(arms_seen - {"cct_router"}, arms_seen)
 
     def test_hand_computed_distances_and_outcome(self) -> None:
         # HAND-COMPUTED, not a golden from the implementation. Query

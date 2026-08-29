@@ -151,6 +151,13 @@ def policy_from_config(config: Any) -> EvaluationPolicy:
             f"thresholds and classifier parameters are operator policy "
             f"and are never completed from code"
         )
+    tier_floor = str(block["tier_floor"])
+    if tier_floor not in _TIER_RANK:
+        raise CalibrationError(
+            f"routing_calibration tier_floor {tier_floor!r} is outside the "
+            f"closed vocabulary {sorted(_TIER_RANK)} — a mistyped floor "
+            f"would silently change which profiles are eligible"
+        )
     return EvaluationPolicy(
         feature_vocabulary=FEATURE_VOCABULARY_VERSION,
         k=int(block["k"]),
@@ -158,7 +165,7 @@ def policy_from_config(config: Any) -> EvaluationPolicy:
         distance_metric=str(block["distance_metric"]),
         vote_epsilon=float(block["vote_epsilon"]),
         normalization=NORMALIZATION_SCHEME,
-        tier_floor=str(block["tier_floor"]),
+        tier_floor=tier_floor,
         policy_source_digest=policy_source_digest(block["policy_source"]),
         max_false_downgrade_rate=float(block["max_false_downgrade_rate"]),
     )
@@ -202,6 +209,10 @@ class Example:
     features: "Mapping[str, Any] | None"
     missing: "str | None"
     label: "Mapping[str, Any] | None"
+    #: The E2 record's OWN evidence references (the closed E2 shape) —
+    #: carried verbatim so the kNN surface and the E2 surface resolve
+    #: neighbor provenance through ONE resolver.
+    evidence_refs: "Sequence[Mapping[str, Any]]" = ()
 
 
 def extract_examples(
@@ -216,29 +227,35 @@ def extract_examples(
         (e for e in entries if isinstance(e, LoadedEvidenceSet)),
         key=lambda e: e.set_id,
     ):
-        descriptors = (entry.task_descriptors or {}).get("descriptors")
+        artifact = entry.task_descriptors or {}
+        descriptors = artifact.get("descriptors")
+        # THE pre-routing trial count: the scenario's DECLARED trials,
+        # persisted in the descriptors artifact. The observed per-trial
+        # record count is an execution observation and never a feature.
+        declared_trials = artifact.get("trials")
         for rec in derive_recommendations(entry):
             task = rec["task_id"]
             label = None
             if rec["outcome"] != "insufficient_data":
                 label = {"outcome": rec["outcome"],
                          "suggested": rec["suggested"]}
+            refs = tuple(rec.get("evidence_refs") or ())
             descriptor = (descriptors or {}).get(task)
-            if descriptor is None:
+            if descriptor is None or declared_trials is None:
                 reason = ("set carries no task descriptors"
                           if not descriptors
                           else f"no descriptor for task {task!r}")
                 examples.append(Example(entry.set_id, task, None,
-                                        reason, label))
+                                        reason, label, refs))
                 continue
             features = {
                 "task_class": descriptor["task_class"],
                 "route_class": descriptor["route_class"],
                 "file_scope": descriptor["file_scope"],
-                "trial_count": rec["confidence"]["basis"]["trials"],
+                "trial_count": declared_trials,
             }
             examples.append(Example(entry.set_id, task, features, None,
-                                    label))
+                                    label, refs))
     return examples
 
 
@@ -399,9 +416,7 @@ def knn_recommendation(
             "distance": d,
             "label": {"outcome": e.label["outcome"],
                       "suggested": e.label["suggested"]},
-            "evidence_refs": [
-                f"report/arms/cct_router/tasks/{e.task_id}",
-            ],
+            "evidence_refs": [dict(r) for r in e.evidence_refs],
         })
 
     switch_weight = weights.get("switch_profile", 0.0)

@@ -44,7 +44,11 @@ not restate them.
 - Leave-one-task-out evaluation, the false-downgrade metric, durable
   atomic reports (decisions 6–7); the five gates computed from corpus
   + reports (decision 2).
-- Regressions: pool-leakage AND full-corpus-normalization mutations
+- Normalization parity with serving: LOTO fits bounds on the SAME
+  eligibility-filtered pool the recommender uses (carried from the T2
+  review).
+- Regressions: pool-leakage, full-corpus-normalization, AND
+  filtered-vs-unfiltered bound-fitting mutations
   discriminated; false-downgrade arithmetic vs a hand-computed
   fixture covering BOTH decision-7 baseline branches
   (truth-switch-within-tier-1 predicted-tier-2 counts); tier

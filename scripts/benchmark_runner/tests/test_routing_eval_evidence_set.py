@@ -866,6 +866,7 @@ class TestCalibrationEvidenceAdditions(unittest.TestCase):
         return {
             "schema_version": 1,
             "preset_digest": _PRESET,
+            "trials": 1,
             "descriptors": {
                 "t1": {"task_class": "one_file",
                        "route_class": "primary_only", "file_scope": 1},
@@ -1011,8 +1012,11 @@ class TestCalibrationEvidenceAdditions(unittest.TestCase):
             },
             tier1_only_tasks=["b"],
             delegate_tasks=["c"],
+            trials=3,
         )
         doc = derive_task_descriptors(config, "sha256:p")
+        # the DECLARED trial count rides along (T2 round-1 P1)
+        self.assertEqual(doc["trials"], 3)
         self.assertEqual(doc["descriptors"]["a"]["route_class"],
                          "primary_only")
         self.assertEqual(doc["descriptors"]["b"]["route_class"],
@@ -1020,7 +1024,15 @@ class TestCalibrationEvidenceAdditions(unittest.TestCase):
         self.assertEqual(doc["descriptors"]["c"]["route_class"],
                          "tier2_preferred")
         self.assertIsNone(derive_task_descriptors(
-            SimpleNamespace(task_descriptors=None), "sha256:p"))
+            SimpleNamespace(task_descriptors=None, trials=1), "sha256:p"))
+        # a scenario with no declared trial count cannot produce the
+        # artifact the calibration feature vector reads
+        with self.assertRaisesRegex(EvidenceSetError, "trial count"):
+            derive_task_descriptors(
+                SimpleNamespace(task_descriptors={
+                    "a": {"task_class": "one_file", "file_scope": 1}},
+                    tier1_only_tasks=[], delegate_tasks=[], trials=0),
+                "sha256:p")
 
     def test_scenario_config_descriptor_validation(self) -> None:
         from benchmark_runner.routing_eval.scenario_config import (

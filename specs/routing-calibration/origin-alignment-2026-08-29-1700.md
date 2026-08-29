@@ -217,6 +217,59 @@ Built per decisions 4–5 (+ the serving-parity rule):
 
 Suites: session-analytics discovery 365 OK (35 CI-gated skips).
 
+## T2 review round 1 (owner, on 1ef2316) — one P1 + two P2, applied
+
+The single correction pass. All three verified in-tree first.
+
+1. **[P1] `trial_count` now reads the DECLARED count.** The reviewer
+   traced that `rec["confidence"]["basis"]["trials"]` is
+   `max(len(actual["per_trial"]), 1)` — an execution OBSERVATION, not
+   a pre-routing corpus property — and that the T2 mutation battery
+   could not see it, because the feature name was already blessed in
+   `FEATURE_NAMES` (mutation (b) only catches an UNBLESSED figure).
+   Resolution (a), the reviewer's preference: the scenario's declared
+   `trials` now rides in `task-descriptors.json` (schema-required,
+   preset-digest-bound, refused at derivation when the scenario
+   declares none), and `extract_examples` reads it from the artifact;
+   a descriptors artifact without it yields feature-less examples.
+   THREE regressions pin it: declared-vs-observed divergence (5
+   declared / 1 recorded, with the observed value asserted to differ
+   so a record-sourced implementation cannot pass), declared trials
+   changing neighbor ORDERING (the source is load-bearing, not
+   cosmetic), and missing-declared-trials refusal. New mutation
+   (b2) — source the blessed feature from the observation — fails 2
+   tests. Plan decision 4 and decision 11 reworded to name the
+   declared count explicitly (precision within the approved decision,
+   not an amendment); the Verification list gains (b2) and the
+   normalization-parity item.
+2. **[P2] `tier_floor` is a closed vocabulary** validated where the
+   policy is assembled: `"Tier1"`, `"tier3"`, `""`, `"TIER2"` refuse
+   with `CalibrationError` naming the field, instead of a bare
+   `KeyError` surfacing from inside recommendation at the T4 API
+   boundary. Mutation (check removed) discriminated.
+3. **[P2] Neighbor `evidence_refs` are E2-shaped.** The synthesized
+   slash-path strings are gone: each neighbor carries its own E2
+   record's refs verbatim (the closed `{evidence_set_id, artifact,
+   locator}` shape, `$ref`'d into the kNN schema from
+   recommendation.schema.json), so the T4 card resolves both sources
+   through ONE resolver and the refs are no longer narrowed to
+   `cct_router`. The regression asserts the E2 shape, per-locator
+   resolution, and that non-router arms are covered. Mutation
+   (narrowed synthesized ref) discriminated.
+
+Carried to T3 (recorded in tasks.md): `_fit_bounds` fits on the
+ELIGIBILITY-FILTERED pool, so LOTO must filter identically or the
+measured false-downgrade rate would not describe serving behaviour —
+pinned with a filtered-vs-unfiltered mutation beside leakage (a).
+
+Non-blocking P3s acknowledged, no action this round: the shipped
+`tier_floor: "tier1"` default makes tier2 profiles ineligible (a
+sentence for the T5 operator docs), and `_encode`/`_l2` recompute per
+neighbor (deterministic, irrelevant at corpus scale).
+
+Suites after the pass: calibration 31 OK, E1 calibration-additions
+9/9, session-analytics discovery 369 OK (35 CI-gated skips).
+
 ## Verdict
 
 Verdict: aligned

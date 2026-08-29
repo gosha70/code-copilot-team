@@ -2,20 +2,38 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "task-descriptors.schema.json",
   "title": "Per-task pre-routing descriptors v1 (routing-calibration decision 11)",
-  "description": "A labeled E1 evidence addition: the declared, PRE-ROUTING facts about each task of the executed scenario — the closed #109 §12 task class, the route class derived structurally from the scenario declarations, and the declared file-scope size. Derived at publication from the executed scenario configuration and bound to it by preset_digest. Nothing here is a post-execution outcome; this artifact exists so learned-routing features can never touch the label's ingredients.",
+  "description": "A labeled E1 evidence addition: the declared, PRE-ROUTING facts about each task of the executed scenario \u2014 the closed #109 \u00a712 task class, the route class derived structurally from the scenario declarations, the declared file-scope size, and the scenario's DECLARED trial count (the pre-routing corpus property the trial_count feature reads \u2014 never the observed per-trial record count). Derived at publication from the executed scenario configuration and bound to it by preset_digest. Nothing here is a post-execution outcome; this artifact exists so learned-routing features can never touch the label's ingredients.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "preset_digest", "descriptors"],
+  "required": [
+    "schema_version",
+    "preset_digest",
+    "trials",
+    "descriptors"
+  ],
   "properties": {
-    "schema_version": { "const": 1 },
-    "preset_digest": { "type": "string", "minLength": 1 },
+    "schema_version": {
+      "const": 1
+    },
+    "preset_digest": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trials": {
+      "type": "integer",
+      "minimum": 1
+    },
     "descriptors": {
       "type": "object",
       "minProperties": 1,
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["task_class", "route_class", "file_scope"],
+        "required": [
+          "task_class",
+          "route_class",
+          "file_scope"
+        ],
         "properties": {
           "task_class": {
             "enum": [
@@ -35,7 +53,10 @@
               "tier2_preferred"
             ]
           },
-          "file_scope": { "type": "integer", "minimum": 0 }
+          "file_scope": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       }
     }

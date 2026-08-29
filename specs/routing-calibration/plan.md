@@ -101,10 +101,12 @@ origin:
    post-execution outcome: costs, quality, regressions, reconciliation
    state) are BANNED from the feature vocabulary. The closed,
    versioned feature vector per (set, task) uses only information
-   available before routing, from the E1 additions (decision 11) and
-   the records' pre-routing fields: the declared task class (§12's
-   closed task-class vocabulary), the route class in force, the
-   declared file-scope size, and the trial count as a corpus property.
+   available before routing, ALL of it from the decision-11
+   descriptors artifact: the declared task class (§12's closed
+   task-class vocabulary), the route class in force, the declared
+   file-scope size, and the scenario's DECLARED trial count (the
+   corpus property; the OBSERVED per-trial record count is an
+   execution observation and is never a feature).
    Labels remain E2's own derivation (`derive_recommendations` outcome
    + suggested arm) — single-source ground truth. Feature
    normalization is fitted on each training fold only (decision 6),
@@ -114,7 +116,9 @@ origin:
    implementations cannot disagree.**
    `knn-recommendation.schema.json` (v1) carries `outcome` (the E2
    closed trichotomy), `suggested` (arm+profile or null), `neighbors`
-   (each: evidence_set_id, task, distance, label, evidence_refs), `k`,
+   (each: evidence_set_id, task, distance, label, and the neighbor's
+   OWN evidence_refs in the closed E2 shape — one resolver serves both
+   surfaces), `k`,
    `distance_metric`, and the policy identity. The normative rules:
    - *Encoding*: categorical features (task class, route class)
      one-hot over their closed vocabularies; numeric features min-max
@@ -179,7 +183,10 @@ origin:
    (`min_sufficiency`, `min_tasks`, `min_trials`, `min_sets`,
    `min_coverage`, `max_false_downgrade_rate`), classifier parameters
    (`k`, `k_min`, `distance_metric`, `vote_epsilon`), `tier_floor`,
-   and `policy_source` — the path of the operator's CURRENT routing
+   and `policy_source`. `tier_floor` is a CLOSED vocabulary validated
+   where the policy is assembled (a mistyped floor refuses with
+   CalibrationError, never a KeyError from inside recommendation);
+   `policy_source` is the path of the operator's CURRENT routing
    policy declarations (the registry file or an exported policy
    document) from which per-profile tier/role/security eligibility is
    read and whose canonical digest enters `policy_id`. No default
@@ -213,11 +220,12 @@ origin:
     gain two manifest-bound, schema'd, scrubbed-at-write artifacts,
     derived at publication from the SAME sources the set already
     binds:
-    - `task-descriptors.json`: per task — the declared §12 task class
-      (closed vocabulary: one-file, multi-file feature, refactor,
-      reproduced bug, integration, negative control), the route class
-      in force, and the declared file-scope size; derived from the
-      executed scenario configuration (bound by `preset_digest`).
+    - `task-descriptors.json`: the scenario's declared trial count,
+      plus per task — the declared §12 task class (closed vocabulary:
+      one-file, multi-file feature, refactor, reproduced bug,
+      integration, negative control), the route class in force, and
+      the declared file-scope size; derived from the executed scenario
+      configuration (bound by `preset_digest`).
     - `profile-policy.json`: per profile of the executed registry —
       `capability_tier` and roles; derived from the executed registry
       at publication (bound by `registry_digest`).
@@ -256,8 +264,14 @@ origin:
 
 - Leakage: a mutation that (a) leaves the held-out task's records in
   the neighbor pool, OR (b) adds a post-execution figure to the
-  feature vector, OR (c) fits normalization on the full corpus, must
-  each be discriminated by a pinned regression.
+  feature vector, OR (b2) sources a BLESSED feature from a
+  post-execution observation instead of its declared artifact value,
+  OR (c) fits normalization on the full corpus, must each be
+  discriminated by a pinned regression.
+- Normalization parity: the LOTO evaluation fits bounds on the SAME
+  eligibility-filtered pool serving uses; a mutation that fits on the
+  unfiltered pool must be discriminated, or the measured
+  false-downgrade rate would not describe serving behaviour.
 - Determinism: identical corpus + policy ⇒ byte-identical kNN output,
   gate report, and evaluation report; every classifier rule in
   decision 5 (encoding, filtering order, k_min, vote weights,
