@@ -229,5 +229,329 @@ class TestSchemaVocabularies(unittest.TestCase):
         self.assertTrue(validate(bad, schema))
 
 
+# ── T2: features, labels, and the kNN recommender ─────────────────────
+from session_analytics.routing_calibration import (  # noqa: E402
+    FEATURE_NAMES,
+    Example,
+    extract_examples,
+    knn_recommendation,
+    load_current_policy,
+)
+from session_analytics.tests.test_routing_evidence import (  # noqa: E402
+    _ADMISSIBLE,
+    _SELECTIONS,
+    _loaded as _loaded_evidence,
+    _report,
+    _figures_for,
+    _router_record,
+)
+
+
+def _descriptored(set_id, report, records, descriptors):
+    base = _loaded_evidence(report, records)
+    from dataclasses import replace as _replace
+
+    return _replace(
+        base, set_id=set_id,
+        task_descriptors={"schema_version": 1, "preset_digest": "sha256:p",
+                          "descriptors": descriptors},
+    )
+
+
+def _descriptor(task_class="one_file", route_class="primary_only",
+                file_scope=1):
+    return {"task_class": task_class, "route_class": route_class,
+            "file_scope": file_scope}
+
+
+def _retask(report, task):
+    """The E2 fixture helpers key everything on task "t"; rename the
+    per-task tables to ``task`` so multi-set corpora carry distinct
+    tasks."""
+    doc = json.loads(json.dumps(report))
+    for arm in doc["arms"].values():
+        tasks = arm.get("tasks") or {}
+        if "t" in tasks:
+            arm["tasks"] = {task: tasks["t"]}
+        selections = arm.get("selections") or {}
+        if "t" in selections:
+            arm["selections"] = {task: selections["t"]}
+    return doc
+
+
+def _switch_set(set_id, task="t", **descriptor):
+    """A set whose E2 label for ``task`` is switch_profile -> alpha."""
+    report = _retask(_report(
+        _figures_for(router=(0.5, 0.05), best=(1.0, 0.01),
+                     cheapest=(0.4, 0.02)),
+        selections=_SELECTIONS,
+    ), task)
+    record = _router_record(task, considered=_ADMISSIBLE)
+    return _descriptored(set_id, report, [record],
+                         {task: _descriptor(**descriptor)})
+
+
+def _keep_set(set_id, task="t", **descriptor):
+    """A set whose E2 label for ``task`` is no_change_recommended."""
+    report = _retask(_report(
+        _figures_for(router=(1.0, 0.005), best=(0.9, 0.01),
+                     cheapest=(0.4, 0.02)),
+        selections=_SELECTIONS,
+    ), task)
+    record = _router_record(task, considered=_ADMISSIBLE)
+    return _descriptored(set_id, report, [record],
+                         {task: _descriptor(**descriptor)})
+
+
+_CURRENT_POLICY = {
+    "schema_version": 1,
+    "registry_digest": "current",
+    "profiles": {
+        "alpha": {"capability_tier": "tier1", "roles": ["build"]},
+        "beta": {"capability_tier": "tier2", "roles": ["build"]},
+        "gamma": {"capability_tier": "tier1", "roles": ["review"]},
+    },
+}
+
+
+def _corpus():
+    """Three labeled neighbor sets for task-distinct queries: two
+    switch-labeled, one keep-labeled, distinct tasks so any query task
+    keeps them all in the pool."""
+    return [
+        _switch_set("aa" * 32, task="n1", file_scope=1),
+        _switch_set("bb" * 32, task="n2", file_scope=2),
+        _keep_set("cc" * 32, task="n3", file_scope=8),
+        _switch_set("dd" * 32, task="q", file_scope=1),
+    ]
+
+
+class TestFeatureExtraction(unittest.TestCase):
+    def test_vocabulary_is_closed_and_pre_routing_only(self) -> None:
+        # THE pre-routing ban pin: the encoded vocabulary is exactly
+        # these names — a post-execution figure can only enter by
+        # growing this tuple, which this test refuses.
+        self.assertEqual(FEATURE_NAMES, (
+            "task_class=one_file", "task_class=multi_file_feature",
+            "task_class=refactor", "task_class=reproduced_bug",
+            "task_class=integration", "task_class=negative_control",
+            "route_class=primary_only", "route_class=tier1_only",
+            "route_class=tier2_fallback", "route_class=tier2_preferred",
+            "file_scope", "trial_count",
+        ))
+
+    def test_examples_from_descriptors_and_labels(self) -> None:
+        examples = extract_examples(_corpus())
+        by_key = {(e.evidence_set_id, e.task_id): e for e in examples}
+        switch = by_key[("aa" * 32, "n1")]
+        self.assertEqual(switch.label["outcome"], "switch_profile")
+        self.assertEqual(switch.features["task_class"], "one_file")
+        keep = by_key[("cc" * 32, "n3")]
+        self.assertEqual(keep.label["outcome"], "no_change_recommended")
+
+    def test_missing_descriptors_are_refused_not_imputed(self) -> None:
+        plain = _loaded_evidence(
+            _report(_figures_for(router=(0.5, 0.05), best=(1.0, 0.01),
+                                 cheapest=(0.4, 0.02)),
+                    selections=_SELECTIONS),
+            [_router_record("t", considered=_ADMISSIBLE)],
+        )
+        (example,) = extract_examples([plain])
+        self.assertIsNone(example.features)
+        self.assertIn("no task descriptors", example.missing)
+
+
+class TestCurrentPolicySource(unittest.TestCase):
+    def test_reads_through_the_production_parser(self) -> None:
+        import tempfile
+
+        from benchmark_runner.tests.test_routing_eval_quality import (
+            _REGISTRY,
+        )
+
+        cfg = SimpleNamespace(routing_calibration={
+            "policy_source": str(_REGISTRY)})
+        policy = load_current_policy(cfg)
+        self.assertEqual(policy["profiles"]["alpha"]["capability_tier"],
+                         "tier1")
+        # absent / unparseable sources are None, never fabricated
+        self.assertIsNone(load_current_policy(
+            SimpleNamespace(routing_calibration={"policy_source": ""})))
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp) / "garbage.toml"
+            bad.write_text("not a registry\n", encoding="utf-8")
+            self.assertIsNone(load_current_policy(SimpleNamespace(
+                routing_calibration={"policy_source": str(bad)})))
+
+
+class TestKnnRecommendation(unittest.TestCase):
+    def _recommend(self, corpus=None, policy=_POLICY,
+                   current=_CURRENT_POLICY, set_id="dd" * 32, task="q"):
+        return knn_recommendation(corpus or _corpus(), set_id, task,
+                                  policy, current)
+
+    def test_byte_identical_on_identical_corpus_and_policy(self) -> None:
+        a = self._recommend()
+        b = self._recommend(corpus=list(reversed(_corpus())))
+        self.assertEqual(json.dumps(a, sort_keys=True),
+                         json.dumps(b, sort_keys=True))
+
+    def test_switch_majority_recommends_the_winning_suggestion(self) -> None:
+        doc = self._recommend()
+        self.assertEqual(doc["outcome"], "switch_profile")
+        self.assertEqual(doc["suggested"]["profile_id"], "alpha")
+        self.assertTrue(doc["neighbors"])
+
+    def test_k_min_insufficiency(self) -> None:
+        doc = self._recommend(corpus=[
+            _switch_set("aa" * 32, task="n1"),
+            _switch_set("dd" * 32, task="q"),
+        ])
+        self.assertEqual(doc["outcome"], "insufficient_data")
+        self.assertIn("k_min", doc["insufficient_reason"])
+
+    def test_no_current_policy_is_insufficient(self) -> None:
+        doc = self._recommend(current=None)
+        self.assertEqual(doc["outcome"], "insufficient_data")
+        self.assertIn("policy source", doc["insufficient_reason"])
+
+    def test_query_without_descriptor_is_insufficient(self) -> None:
+        corpus = _corpus()
+        plain_query = _loaded_evidence(
+            _retask(_report(_figures_for(router=(0.5, 0.05),
+                                         best=(1.0, 0.01),
+                                         cheapest=(0.4, 0.02)),
+                            selections=_SELECTIONS), "q2"),
+            [_router_record("q2", considered=_ADMISSIBLE)],
+        )
+        from dataclasses import replace as _replace
+
+        corpus.append(_replace(plain_query, set_id="ee" * 32))
+        doc = self._recommend(corpus=corpus, set_id="ee" * 32, task="q2")
+        self.assertEqual(doc["outcome"], "insufficient_data")
+        self.assertIn("descriptor", doc["insufficient_reason"])
+
+    def test_same_task_examples_never_join_the_pool(self) -> None:
+        # serving parity with leave-one-task-out: another set's example
+        # of the SAME task (whose label derives from that task's own
+        # figures) must not vote
+        corpus = _corpus() + [_switch_set("ee" * 32, task="q")]
+        doc = self._recommend(corpus=corpus)
+        self.assertNotIn("q", [n["task_id"] for n in doc["neighbors"]])
+
+    def test_filter_before_ranking(self) -> None:
+        # the NEAREST neighbor's suggestion names a below-floor profile
+        # (beta = tier2 under a tier1 floor): it must be removed BEFORE
+        # ranking, so the eligible neighbors decide; with k=1 a
+        # filter-after-ranking implementation would instead select the
+        # ineligible nearest and have nothing left to vote
+        report = _retask(_report(
+            _figures_for(router=(0.5, 0.05), best=(1.0, 0.01),
+                         cheapest=(0.4, 0.02)),
+            selections={"always_best": {"t": "beta"},
+                        "always_cheapest": {"t": "beta"}},
+        ), "n1")
+        beta_admissible = (
+            {"id": "beta", "verdict": "selected",
+             "reason": "healthy — selected", "state": "healthy"},
+        )
+        nearest_ineligible = _descriptored(
+            "ab" * 32, report,
+            [_router_record("n1", considered=beta_admissible,
+                            selected="beta")],
+            {"n1": _descriptor(file_scope=1)},
+        )
+        corpus = [
+            nearest_ineligible,
+            _switch_set("cd" * 32, task="n2", file_scope=1),
+            _switch_set("ef" * 32, task="n3", file_scope=1),
+            _keep_set("ff" * 32, task="n4", file_scope=1),
+            _switch_set("dd" * 32, task="q", file_scope=1),
+        ]
+        policy = replace(_POLICY, k=1, k_min=1)
+        doc = self._recommend(corpus=corpus, policy=policy)
+        self.assertEqual(doc["outcome"], "switch_profile")
+        self.assertEqual(doc["suggested"]["profile_id"], "alpha")
+        self.assertNotIn("n1", [n["task_id"] for n in doc["neighbors"]])
+
+    def test_role_ineligible_profile_is_filtered(self) -> None:
+        from session_analytics.routing_calibration import (
+            _eligible_under_policy,
+        )
+
+        self.assertFalse(_eligible_under_policy(
+            {"arm": "always_best", "profile_id": "gamma"},
+            _CURRENT_POLICY, "tier2"))
+        self.assertFalse(_eligible_under_policy(
+            {"arm": "always_best", "profile_id": "ghost"},
+            _CURRENT_POLICY, "tier2"))
+        self.assertTrue(_eligible_under_policy(
+            {"arm": "always_best", "profile_id": "beta"},
+            _CURRENT_POLICY, "tier2"))
+        self.assertFalse(_eligible_under_policy(
+            {"arm": "always_best", "profile_id": "beta"},
+            _CURRENT_POLICY, "tier1"))
+        self.assertTrue(_eligible_under_policy(None, _CURRENT_POLICY,
+                                               "tier1"))
+
+    def test_conservative_tie_never_switches(self) -> None:
+        # one switch voter and one keep voter at IDENTICAL distance:
+        # equal weights, and the tie resolves to no_change
+        corpus = [
+            _switch_set("aa" * 32, task="n1", file_scope=3),
+            _keep_set("bb" * 32, task="n2", file_scope=3),
+            _switch_set("dd" * 32, task="q", file_scope=3),
+        ]
+        policy = replace(_POLICY, k=2, k_min=2)
+        doc = self._recommend(corpus=corpus, policy=policy)
+        self.assertEqual(doc["outcome"], "no_change_recommended")
+        self.assertIsNone(doc["suggested"])
+
+    def test_neighbor_refs_resolve_against_served_artifacts(self) -> None:
+        # the E2 followability precedent: every neighbor ref is an
+        # artifact-relative pointer that resolves in that set's served
+        # report
+        doc = self._recommend()
+        corpus = {e.set_id: e for e in _corpus()}
+        for neighbor in doc["neighbors"]:
+            entry = corpus[neighbor["evidence_set_id"]]
+            for ref in neighbor["evidence_refs"]:
+                artifact, pointer = ref.split("/", 1)
+                self.assertEqual(artifact, "report")
+                node = entry.report
+                for token in pointer.split("/"):
+                    self.assertIn(token, node, ref)
+                    node = node[token]
+                self.assertIn("per_trial", node)
+
+    def test_hand_computed_distances_and_outcome(self) -> None:
+        # HAND-COMPUTED, not a golden from the implementation. Query
+        # fs=9; pool fs = 1, 2, 8 -> fold bounds [1, 8], so the query
+        # normalizes to clamp((9-1)/7) = 1.0 and the pool to 0, 1/7, 1.
+        # trial_count is degenerate (all 1) -> 0.0. Distances: keep-set
+        # n3 at 0.0 (nearest), n2 at 6/7, n1 at 1.0. Distance weighting
+        # makes the adjacent keep voter dominate two farther switch
+        # voters -> no_change (an unweighted count would say switch).
+        corpus = [
+            _switch_set("aa" * 32, task="n1", file_scope=1),
+            _switch_set("bb" * 32, task="n2", file_scope=2),
+            _keep_set("cc" * 32, task="n3", file_scope=8),
+            _switch_set("dd" * 32, task="q", file_scope=9),
+        ]
+        doc = self._recommend(corpus=corpus)
+        self.assertEqual(
+            [n["task_id"] for n in doc["neighbors"]], ["n3", "n2", "n1"])
+        expected = [0.0, 6.0 / 7.0, 1.0]
+        for neighbor, distance in zip(doc["neighbors"], expected):
+            self.assertAlmostEqual(neighbor["distance"], distance,
+                                   places=12)
+        self.assertEqual(doc["outcome"], "no_change_recommended")
+
+    def test_output_is_schema_valid(self) -> None:
+        schema = load_schema("knn-recommendation")
+        for doc in (self._recommend(), self._recommend(current=None)):
+            self.assertFalse(validate(doc, schema))
+
+
 if __name__ == "__main__":
     unittest.main()

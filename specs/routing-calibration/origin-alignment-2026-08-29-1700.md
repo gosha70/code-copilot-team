@@ -153,6 +153,70 @@ Suites: session-analytics discovery 349 OK (35 CI-gated skips); E1
 evidence_set 20/20 including the live arc (with the new pins),
 quality + redaction green.
 
+## T1 review round 1 (owner, on 75dccb1) — APPROVED, GO T2
+
+The reviewer verified the build directly (ran the suites in their own
+container — matching counts — and read the derivations, bindings,
+identities, and config refusals in-tree). No P0/P1 findings. Two P3s
+carried and APPLIED at the start of T2: the decision-3 comment on why
+`policy_from_config` excludes the `min_*` gate thresholds (gates
+apply them live; they never stale reports), and `_coerce_like`'s
+uncoercible-override error now names the offending env key.
+
+## T2 build (2026-08-29) — features, labels, and the kNN recommender
+
+Built per decisions 4–5 (+ the serving-parity rule):
+
+- **Extraction** (`extract_examples`): features ONLY from the
+  persisted descriptors + the E2-derived trial count; labels ONLY
+  from `derive_recommendations` (defined iff outcome is not
+  insufficient_data); a set without descriptors (or a task without
+  one) yields feature-less examples with the reason named — refusal,
+  never imputation.
+- **The closed vocabulary pin**: `FEATURE_NAMES` (6 task-class
+  one-hots + 4 route-class one-hots + file_scope + trial_count) is
+  asserted VERBATIM in a regression — a post-execution figure can
+  only enter by changing the tuple, which is a feature-vocabulary
+  policy change.
+- **The classifier** (`knn_recommendation`): every decision-5 rule as
+  specified — one-hot encoding, fold-fitted min-max with clamping
+  (degenerate min==max features normalize to 0.0, the one
+  implementation-level determinization, recorded here for review),
+  l2, current-policy filtering BEFORE ranking
+  (`_eligible_under_policy`: profile present in the CURRENT
+  declarations, at/above the tier floor, and carrying the `build`
+  role — the concrete role conjunct, recorded here for review),
+  min(k, available) with k_min refusal, 1/(d+ε) weighted voting,
+  conservative ties to no_change, winner resolution by
+  (weight, distance, set id, task id) with the current-policy-miss →
+  insufficient_data belt. Schema-validated before return.
+- **Serving parity with LOTO** (recorded normative choice): the
+  neighbor pool excludes EVERY example of the queried task — a
+  same-task example's label derives from that task's own figures, so
+  letting it vote would be self-matching leakage at serving time.
+- **Current policy source** (`load_current_policy`): read through the
+  E1 production parser; absent, unreadable, or validator-refused
+  sources are None (insufficient_data downstream), never fabricated —
+  the validator-refusal path was caught by a test and widened to
+  `ControlSetIncomplete` honestly.
+- **Regressions** (25 → 29 tests): vocabulary pin; extraction;
+  missing-descriptor refusal both as pool member and as query;
+  byte-identical output under corpus reordering; switch majority;
+  k_min insufficiency; no-current-policy refusal; same-task
+  exclusion; filter-before-ranking (nearest-ineligible fixture);
+  role/tier/absent-profile eligibility table; conservative tie;
+  HAND-COMPUTED distances and outcome (bounds [1,8], query clamped,
+  distances 0, 6/7, 1 — computed on paper, not a golden from the
+  implementation); neighbor refs resolve pointer-by-pointer against
+  the served report; schema validity; policy-source parsing.
+- **Mutations (all discriminated)**: full-corpus normalization
+  (bounds include the query); a post-execution figure
+  (quality_delta) leaking into the vector; filter moved after
+  ranking; tie resolving to switch; unweighted voting. Restores
+  byte-identical.
+
+Suites: session-analytics discovery 365 OK (35 CI-gated skips).
+
 ## Verdict
 
 Verdict: aligned

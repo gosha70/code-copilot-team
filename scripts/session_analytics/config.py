@@ -460,7 +460,15 @@ def load_config(
     for key in list(calibration.keys()):
         ov = env(ENV_CALIBRATION_PREFIX + key.upper())
         if ov is not None:
-            calibration[key] = _coerce_like(calibration[key], ov)
+            try:
+                calibration[key] = _coerce_like(calibration[key], ov)
+            except ValueError:
+                raise ValueError(
+                    f"{ENV_CALIBRATION_PREFIX}{key.upper()}={ov!r} cannot "
+                    f"be coerced to the type of the configured "
+                    f"'{key}' value — refusing a silently mistyped "
+                    f"calibration override"
+                ) from None
 
     # sources (+ optional per-copilot env override CCT_SA_SOURCE_<COPILOT>)
     sources = dict(data.get(C.CFG_SOURCES) or {})
