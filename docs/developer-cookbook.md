@@ -41,10 +41,17 @@ references, and the user's messages are the **origin** — the authoritative
 statement of intent. The working `spec.md`/`plan.md` are *derived* artifacts;
 when they disagree with the origin, the origin wins.
 
-- The origin is cited in the spec bundle's `origin:` frontmatter.
+- The origin is cited in the spec bundle's `origin:` frontmatter. Work
+  with no issue behind it declares `origin: { type: internal, reason: … }`
+  instead — the gate passes by exemption on that path.
 - `bash scripts/check-origin-alignment.sh <feature-id>` is the circuit
-  breaker: exit ≥ 2 means the working artifacts drifted — stop and choose
-  rescope / restart / document divergence
+  breaker — but it checks artifacts, so it needs `plan.md` and an
+  alignment record to exist first (on a fresh feature it exits 5,
+  "inputs missing", by design). The order is: capture the origin →
+  write the bundle + alignment record → run the gate **before plan
+  approval and before build**, then again at closure. Exit ≥ 2 means
+  the working artifacts drifted — stop and choose rescope / restart /
+  document divergence
   (protocol: `shared/skills/origin-confirmation/SKILL.md`).
 
 ### 2. Spec bundle (SDD)
@@ -102,37 +109,58 @@ letting the loop drive scope.
 
 ### 5. Closure gates (before the PR is called done)
 
-- Focused suites green; **pinned suites at their exact counts**
-  (`tests/test-counts.env`) — a changed count is a contract change and must
-  be deliberate.
+Repository-wide gates, for every change:
+
+- Focused suites green for whatever the change touched; **pinned suites at
+  their exact counts** (`tests/test-counts.env`) — a changed count is a
+  contract change and must be deliberate.
 - Diff guards hold: files declared untouched by the plan show an **empty
   diff vs master**.
-- Full CI-exact sweeps (`python3 -m unittest discover` over
-  `scripts/benchmark_runner/tests` and `scripts/session_analytics/tests`),
-  with any **known host-baseline failures reproduced and classified
-  separately** — never silently folded into "green" and never used to
-  excuse a new regression.
 - Docs updated: `README.md`, `CHANGELOG.md`, and the component README(s)
-  the feature touches.
+  the feature touches (a docs-only change may touch nothing else).
 - `bash scripts/check-origin-alignment.sh <feature-id>` passes;
-  `bash scripts/validate-spec.sh --feature-id <id>` passes;
+  `bash scripts/validate-spec.sh --feature-id <id>` passes (both apply to
+  SDD-tracked features; a `spec_mode: none` change has no bundle to gate);
   `git diff --check` clean.
+
+Component-specific gates, when the change affects that component — run the
+CI-exact suites for the surfaces you touched, for example:
+
+- benchmark runner:
+  `PYTHONPATH=scripts:. python3 -m unittest discover -s scripts/benchmark_runner/tests -t .`
+- session analytics:
+  `PYTHONPATH=scripts:. python3 -m unittest discover -s scripts/session_analytics/tests -t .`
+- shell surfaces: the relevant `tests/test-<area>.sh` suites.
+- studio: `cd studio && npm run build` plus browser verification.
+
+Any **known host-baseline failures are reproduced and classified
+separately** (re-prove at the merge base in a pristine worktree) — never
+silently folded into "green" and never used to excuse a new regression.
 
 ### 6. PR and merge
 
 - The PR body states what ships and which gates ran.
-- **Close-keyword discipline**: exactly one close keyword
-  (`Closes #<issue>`) for the issue this PR completes, in the PR body only —
-  never in commit messages. GitHub fires close keywords from *any* commit
-  message or body text on merge, and negation does not help ("does NOT
-  close #174" still fired once). Audit every commit message and body:
+- **Close-keyword discipline**:
+  - a PR that completes an issue carries **exactly one intended close
+    keyword** (`Closes #<issue>`), in the PR body only — never in commit
+    messages;
+  - a PR tied to no issue (docs, chores) carries **zero** close keywords
+    anywhere;
+  - GitHub fires close keywords from *any* commit message or PR-body text
+    on merge, across **nine forms** (`close/closes/closed`,
+    `fix/fixes/fixed`, `resolve/resolves/resolved`, case-insensitive), and
+    neither negation ("does NOT close #174" still fired once) nor
+    backticks/code fences shield them. Audit **both** the commit messages
+    and the PR body with the repository's full regex:
 
   ```bash
-  git log --format=%B master..HEAD | grep -inE "close[sd]? #|fix(e[sd])? #|resolve[sd]? #"
+  git log master..HEAD --format='%B' | grep -niE '(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[0-9]+'
+  gh pr view <n> --json body -q .body | grep -niE '(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[0-9]+'
   ```
 
-  `docs/pre-pr-close-keyword-audit.md` has the full playbook. Say
-  "leaves #N open" for issues intentionally not closed.
+  Every match must be an intended close.
+  `knowledge/wiki/playbooks/pre-pr-close-keyword-audit.md` has the full
+  playbook. Say "leaves #N open" for issues intentionally not closed.
 - A merged PR must **fully address its issue** — no partial/phased PRs
   against one issue; split into per-increment issues instead.
 - Verify the merge in a **separate command** before any cleanup
@@ -148,7 +176,7 @@ checklist — read them instead of loading them:
 
 | Stage | You do |
 |---|---|
-| Origin | Read the issue; run `scripts/check-origin-alignment.sh` yourself before planning. |
+| Origin | Read the issue (or declare `origin: { type: internal }` for issue-less work); after writing the bundle + alignment record, run `scripts/check-origin-alignment.sh` yourself before approving the plan and before building. |
 | Spec | Write `specs/<feature-id>/{spec,plan,tasks}.md` by hand from the templates referenced in `shared/skills/spec-workflow/SKILL.md`; run `scripts/validate-spec.sh`. |
 | Review | Get the plan reviewed (a colleague, or the owner); apply the verify-first / record-every-round discipline manually in the origin-alignment file. |
 | Build | Branch (`--no-track`), edit, and after each change run the relevant suite: shell suites `bash tests/test-<area>.sh` (counts pinned in `tests/test-counts.env`), Python suites `PYTHONPATH=scripts:. python3 -m unittest discover -s scripts/<app>/tests -t .`, studio `cd studio && npm run build`. |
@@ -184,8 +212,11 @@ The working protocol that has proven out on real increments here:
 1. **Origin first.** The harness runs the origin-alignment circuit breaker
    before planning and cites the issue in the spec bundle.
 2. **Plans are files, not context.** Anything actionable is written to
-   `specs/` or `doc_internal/` immediately — conversation context does not
-   survive compaction; disk does.
+   disk immediately — conversation context does not survive compaction.
+   State another checkout or developer must be able to pick up goes in
+   **tracked** locations (`specs/`, committed docs); `doc_internal/` is
+   gitignored, so it survives local compaction but NOT a branch handoff —
+   never park shared handoff state there.
 3. **Owner-in-the-loop review rounds.** Each task is pushed to the PR
    branch for review; the harness verifies each finding in-tree before
    fixing, pins the exact counterexample, runs discriminating mutation
@@ -195,10 +226,13 @@ The working protocol that has proven out on real increments here:
    an invalid verification (a mutation that errored instead of
    discriminating, a screenshot taken from a stale server) is discarded and
    redone, and the redo is recorded.
-5. **Git safety.** The harness never switches branches, force-pushes,
-   bypasses hooks/locks, or pushes without review. When a normal path is
-   blocked (lock files, sandbox), it stops and reports instead of
-   improvising around the block.
+5. **Git safety.** Branch switching and pushing require explicit owner
+   authorization (workflows that create their own isolated feature
+   branch, like auto-build, carry that authorization in their config);
+   force-pushes and safeguard bypasses (hooks, locks, sandbox
+   restrictions, git env-var workarounds) are prohibited
+   unconditionally. When a normal path is blocked, the harness stops and
+   reports instead of improvising around the block.
 6. **Environment quirks are memorized, not rediscovered** (auto-format
    churn on `.ts` files → re-apply surgically; IDE autosync auto-pushing
    local commits → every commit must be mergeable; `gh pr edit` no-op bug →
