@@ -1,7 +1,7 @@
 ---
 spec_mode: full
 feature_id: routing-calibration
-status: draft
+status: approved
 date: 2026-08-29
 risk_category: integration
 justification: >

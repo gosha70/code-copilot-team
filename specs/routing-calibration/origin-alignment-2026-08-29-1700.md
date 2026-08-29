@@ -81,6 +81,21 @@ spec.md (FR-E3-2/3/4, constraints, non-goals) and tasks.md (T1–T3)
 updated to reference the corrected decisions; the two labeled E1
 additions moved from "none anticipated" to declared scope.
 
+## Plan review round 2 (owner, on 8d69e33) — APPROVED
+
+The reviewer verified all seven rev-2 corrections against the tree
+independently and re-ran the gates (spec 2/0, origin aligned/high,
+whitespace clean, no restatement drift). No P0/P1 blockers; plan
+status flipped to `approved`; T1–T5 clear to proceed.
+
+Carried forward, explicitly non-blocking (P3, for the FUTURE
+promotion increment's spec, not E3): "trial count as a corpus
+property" is well-defined for shadow evaluation over published sets
+but would be undefined for a live pre-routing query; if learned
+routing is ever proposed for authority, that is a feature-vocabulary
+revision — a `policy_id`-bumping change exactly as decision 3
+anticipates.
+
 ## Verdict
 
 Verdict: aligned
