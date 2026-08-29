@@ -390,6 +390,7 @@ endpoint and spawns an ephemeral Anthropic↔OpenAI proxy when needed.
 - Full harness guide, CLI reference, adapter/backend/judge contracts: [`benchmarks/README.md`](benchmarks/README.md).
 - 60-second quickstart: [`benchmarks/README.md` § 60-second quickstart](benchmarks/README.md#60-second-quickstart).
 - Routing-quality evaluation (measuring CCT's router against control arms, #109 E1): [`benchmarks/README.md` § Routing-quality evaluation](benchmarks/README.md#routing-quality-evaluation-e1-of-109-issue-260).
+- Shadow-mode routing analysis (consuming E1 evidence sets through session analytics + Studio, #109 E2): [`scripts/session_analytics/README.md` § Routing evidence](scripts/session_analytics/README.md#routing-evidence--shadow-mode-e2-of-109-issue-261).
 - Design rationale: [`specs/benchmark-harness/spec.md`](specs/benchmark-harness/spec.md) and the per-feature spec bundles under [`specs/`](specs/).
 
 ## UI Design Harness

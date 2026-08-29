@@ -803,6 +803,56 @@ widths — all passing. Suites: routing-evidence 47/47,
 session-analytics discovery 338 OK (35 CI-gated skips),
 `npm run build` green.
 
+## T5 — docs, gates, closure (2026-08-29)
+
+T4 approved at 3f52ad0. PR #263 was merged by the owner at that head
+(merge commit 638d035) BEFORE the T5 closure commit existed — T5 was
+deliberately held uncommitted until the full-sweep result was
+classified, per the owner's sequencing instruction — so T5 lands as
+this follow-up (branched from origin/master at 638d035), and #261
+closes via the follow-up PR's single close keyword.
+
+- **Docs**: README operator-docs pointer; CHANGELOG entry for #261
+  (the shadow contract — evidence/confidence/insufficiency — and the
+  calibration-gate stance); `scripts/session_analytics/README.md`
+  § Routing evidence (full surface + contract + env config);
+  `studio/README.md` Routing tab row + no-path note.
+- **Decision-10/11 proof re-run**: production routing files, schemas,
+  and shell suites show an EMPTY diff vs master on the whole branch;
+  all six routing shell suites pass unmodified at their exact pins —
+  config 167, failover 186, tasks 154, packet 99, delegation 171,
+  recovery 375, 0 failed — so `tests/test-counts.env` is untouched.
+  The standing authority-guard / verbatim / redaction-chain tests
+  remain green in the analytics suite.
+- **Full CI-exact sweeps**: session-analytics discovery 338 OK (35
+  CI-gated skips). benchmark_runner full discovery: 1062 tests in
+  ~29 min — 6 failures + 1 skip, ALL classified as the pre-existing
+  host baseline, not regressions: the same six test IDs fail at
+  merge base 97d372c (run in a pristine `git worktree` with the
+  host's `benchmarks/.cache` symlinked in), with per-test failure
+  signatures identical modulo only the checkout-root path prefix.
+  The six: cli_skeleton ×2 (`rc 0 != EXIT_USAGE 2` — populated
+  cache defeats the empty-cache USAGE assumption), polyglot
+  golden ×2 (expected `leap.*` absent from the golden dir), polyglot
+  verify ×2 (`/usr/local/opt/python@2/bin/python2.7: No module named
+  pytest` — host interpreter resolution). The host baseline drifted
+  from 4 (2026-08-27) to 6; the classification run is the proof.
+  Verification-honesty note: the first sweep attempt died with a
+  killed background task and the second silently failed to launch
+  (macOS has no `setsid`) — both produced no result and were
+  discarded; the recorded numbers come from the third, completed,
+  detached run.
+- **Gates**: `check-origin-alignment.sh routing-shadow` aligned/high;
+  `validate-spec.sh --feature-id routing-shadow` 2 passed / 0 failed;
+  `git diff --check` clean.
+- **Close-keyword discipline**: every commit message on the branch
+  audited clean; the follow-up PR body carries exactly ONE close
+  keyword (for #261) and explicitly leaves #109, #248, and #254
+  open.
+- Out of scope, per the owner: `docs/developer-cookbook.md` stays
+  untracked and lands on its own follow-up branch after this
+  closure.
+
 ## Verdict
 
 Verdict: aligned

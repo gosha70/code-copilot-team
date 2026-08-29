@@ -12,6 +12,38 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Shadow-mode routing analysis (#261, E2 of #109)** — session
+  analytics consumes E1's published evidence sets read-only and
+  derives per-task shadow recommendations, served through the
+  analytics API and a Studio **Routing** tab. The recommendation
+  contract: a closed outcome trichotomy (`switch_profile` only under
+  positive two-axis dominance AND the availability guard — the
+  suggested profile must appear admissible in the router's own
+  durable candidate evidence; `no_change_recommended` means the
+  evidence *concluded*; `insufficient_data` means it *cannot
+  conclude* and is never collapsed into no-change), a confidence
+  grade carrying its complete basis (trials, per-trial two-axis
+  agreement, component mask, unevaluated trials, insufficiency refs)
+  that the serving gate re-derives whole from canonical evidence, and
+  figure provenance for every served number (decision 9: direct
+  figures name their exact artifact pointer, deltas name both
+  operands, one identity-bound resolver validates and recomputes
+  before serving). E1 gains the set-atomic publication entrypoint
+  (`publish_evidence_set`): stage → validate with the consumer's own
+  loader → one atomic rename, with referenced evidence files scrubbed
+  at publication and the manifest hashing the scrubbed bytes, the
+  manifest bound to exactly the records' canonical reference set, and
+  execution-proven per-leg identity. Every evidence locator is
+  followable through a closed read-only artifact surface; invalid
+  sets surface with sanitized closed codes, never skipped; no payload
+  carries a filesystem path. **Shadow-only by construction** (plan
+  decision 11, inherited from E1's decision 10): no key the router
+  reads, no policy surface, no code path that changes a routing
+  decision — routing shell suites pass unmodified at their pins and
+  the diff guard holds — and learned/kNN routing remains out until
+  #109's explicit calibration gates are met. See
+  `scripts/session_analytics/README.md` § Routing evidence.
+
 - **Routing-quality measurement substrate (#260, E1 of #109)** — the
   hybrid routing benchmark scenario driven through the UNMODIFIED
   production supervisor and tick CLI, with the #109 §12 arc proven

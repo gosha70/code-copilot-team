@@ -521,6 +521,60 @@ contract has proven itself.
 needs its own opt-in contract), real FTS (B), label correlation + Studio UI
 (C), embeddings (E2's lane), retention/TTL policies.
 
+## Routing evidence — shadow mode (E2 of #109, issue #261)
+
+Read-only consumption of the routing-quality evidence sets that E1
+(`benchmark_runner.routing_eval`) publishes. **Shadow-only by
+construction**: nothing here feeds back into live routing — no key the
+router reads, no policy surface, no code path that changes a routing
+decision — and learned routing stays out entirely until #109's explicit
+calibration gates are met. The standing authority-guard tests prove no
+production routing script references this layer.
+
+```bash
+# Point the API at one or more E1 publication roots
+# (path-separator separated), or set routing_evidence_roots in config:
+CCT_SA_ROUTING_EVIDENCE_ROOTS=/path/to/eval-artifacts ./scripts/session-analytics serve
+```
+
+Surfaces (all read-only; sets addressed by opaque content id; no payload
+ever carries a filesystem path — `/api/settings` exposes only
+`{configured, root_count}`):
+
+- `GET /api/routing/evidence` — every discovered set: valid summaries
+  plus SET-level `invalid_evidence` entries with their sanitized closed
+  failure code (a broken set is rendered, never silently skipped, and
+  produces no recommendations).
+- `GET /api/routing/evidence/{set_id}` — the E1 report **verbatim** (no
+  figure is re-derived, rounded, or re-rendered on the way out).
+- `GET /api/routing/evidence/{set_id}/recommendations` — shadow
+  recommendations per task, derived only from the set's own evidence:
+  - **outcome** is a closed trichotomy: `switch_profile` (an executable
+    candidate arm dominated the router AND its profile appears
+    admissible in the router's own durable candidate evidence — the
+    availability guard), `no_change_recommended` (the evidence
+    *concluded* no candidate dominated), or `insufficient_data` (the
+    evidence *cannot conclude* — never a keep-current verdict, never
+    collapsed into no-change);
+  - **confidence** carries its full basis (trials, two-axis per-trial
+    agreement, component mask, unevaluated trials, insufficiency refs);
+    the serving gate re-derives the entire block from the canonical
+    evidence and refuses on any disagreement;
+  - **every figure carries provenance** (decision 9): direct figures
+    name their exact artifact pointer, deltas name both operand
+    pointers, and one resolver validates identity-bound pointers and
+    recomputes every subtraction before anything is served.
+- `GET /api/routing/evidence/{set_id}/artifact/{report|routing_runs|outcome_matrix}`
+  — the closed read-only artifact surface: each validated artifact
+  verbatim, so every evidence locator a recommendation carries is
+  followable.
+- `GET /api/routing/evidence/{set_id}/evidence-file?ref=...` —
+  manifest-bound referenced evidence files, hash-verified before a byte
+  leaves the server (files are scrubbed at publication; the manifest
+  hashes the scrubbed bytes).
+
+The Studio's **Routing** tab renders all of it (see `studio/README.md`).
+
 ## Tests
 
 ```bash
