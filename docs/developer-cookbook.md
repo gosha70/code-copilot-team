@@ -38,9 +38,10 @@ PR merge                                close keywords audited: one intended
 
 ### 1. Origin
 
-Every feature starts from a GitHub issue. The issue body, its external
-references, and the user's messages are the **origin** — the authoritative
-statement of intent. The working `spec.md`/`plan.md` are *derived* artifacts;
+Every feature starts from a **recoverable origin** — usually a GitHub
+issue; for issue-less work, the declared internal exemption. The issue
+body, its external references, and the user's messages are the origin —
+the authoritative statement of intent. The working `spec.md`/`plan.md` are *derived* artifacts;
 when they disagree with the origin, the origin wins.
 
 - The origin is cited in the spec bundle's `origin:` frontmatter. Work
@@ -86,8 +87,14 @@ elsewhere.
 
 ### 3. Plan review
 
-The plan is reviewed in rounds until approved. Findings come back
-prioritized (P1 blockers, P2 improvements). For each finding, in order:
+The plan gets **one holistic review, then one correction pass** — not a
+stream of small rounds; after the correction pass, **only P0/P1
+implementation blockers hold approval** (something that makes
+implementation ambiguous or unsafe — everything else is resolved against
+working code). This anti-ping-pong boundary exists to prevent serial
+architectural review cycles; the authoritative statement is
+`shared/skills/spec-workflow/plan-review-rules.md`. For each finding, in
+order:
 
 1. **Verify it in-tree first** — reproduce the claim against the actual
    code/spec before changing anything (a reported bug may already be fixed,
@@ -95,23 +102,33 @@ prioritized (P1 blockers, P2 improvements). For each finding, in order:
 2. Fix it.
 3. Record the round in the origin-alignment file.
 
-Only P0/P1 findings block. Review feedback is *input*, not a verdict — if
-findings keep growing the design, stop and re-ask the owner rather than
-letting the loop drive scope.
+Review feedback is *input*, not a verdict — if findings keep growing the
+design, stop and re-ask the owner rather than letting the loop drive
+scope.
 
 ### 4. Build
 
-- Branch first: `git checkout -b feat/<issue>-<slug> --no-track`. Never
-  commit to master; never push to master.
+- Branch first, with the repository's type prefix
+  (`feature/` · `fix/` · `chore/` · `docs/`):
+  `git checkout -b <type>/<issue-or-slug> --no-track` — e.g.
+  `feature/261-routing-shadow` for issue work, `docs/developer-cookbook`
+  for issue-less internal-origin work. Never commit to master; never
+  push to master.
 - Build one task at a time; hold the next task until the current one passes
   review (when the owner is reviewing per-task).
 - **Read before writing; minimal scope; no drive-by refactors.**
-- Every review finding gets the same treatment as in plan review, plus:
+- Every review finding gets the same verify-first/record treatment as in
+  plan review. For findings against **behavior-affecting executable
+  code**, additionally:
   - **pin the reviewer's exact counterexample as a regression test**;
   - **run mutation checks that must discriminate** — re-introduce the bug
     (or delete the guard) and prove the new test fails, then restore and
     prove the suite is green. A mutation that fails for the wrong reason
     (e.g. an import error) proves nothing — redo it honestly.
+
+  Documentation findings have no meaningful mutation: verify them
+  against the facts instead — run the documented commands, check the
+  referenced paths and links, and let the doc-accuracy CI gate hold.
 - Executable artifacts are executed before commit ("build it, run it").
   UI work is verified **in a browser, not only by the compiler**: the
   ui-harness pattern (`shared/templates/ui-harness/`) — Playwright at
