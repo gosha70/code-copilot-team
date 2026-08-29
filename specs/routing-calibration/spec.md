@@ -53,24 +53,34 @@ E3 builds on.
   addressable evidence references; a gate whose inputs are missing or
   stale reports insufficient_data, never pass. The overall verdict is
   calibrated only when every gate passes.
-- FR-E3-2: **Reports bind to the exact corpus** (plan decision 3). Gate
-  and evaluation reports carry the corpus identity (a digest over the
-  sorted ids of the consumed evidence sets); serving compares it to the
-  currently discovered corpus and flags any mismatch as stale —
-  stale reports never render as current.
-- FR-E3-3: **The kNN recommender is shadow-only, deterministic, and
-  provenance-carrying** (plan decisions 4–5). Features and labels
-  derive read-only from validated evidence sets through the same E2
-  loading path; identical corpus bytes yield byte-identical
+- FR-E3-2: **Reports bind to the exact corpus AND the exact policy**
+  (plan decision 3). Gate and evaluation reports carry both the corpus
+  identity and the evaluation-policy identity (classifier parameters,
+  feature version, normalization, floors, and the current
+  security/role policy digest); serving compares both to the live
+  corpus and configuration and flags any mismatch as stale — a stale
+  report never renders as current and satisfies no gate.
+- FR-E3-3: **The kNN recommender is shadow-only, deterministic,
+  leakage-free, and provenance-carrying** (plan decisions 4–5).
+  Features are PRE-ROUTING only — no post-execution figure (the
+  label's ingredients) ever enters the query vector; candidates are
+  filtered against the operator's CURRENT tier/security policy before
+  ranking; the classifier rules (encoding, missing-value refusal,
+  fold-fitted normalization, weighting, conservative ties, suggestion
+  resolution) are normative so two conforming implementations cannot
+  disagree; identical corpus + policy yield byte-identical
   recommendations; every recommendation names its neighbors (set id,
   task, distance, label) as addressable references and is rendered
   beside — never in place of — the E2 dominance recommendation.
 - FR-E3-4: **Held-out evaluation is leakage-free and durable** (plan
   decision 6). Splits are leave-one-task-out with all trials of the
-  held-out task excluded from the neighbor pool; the false-downgrade
-  rate is computed exactly as plan decision 7 defines; results persist
-  as schema'd reports in the analytics-owned output root, atomically,
-  never inside E1 evidence roots.
+  held-out task excluded from the neighbor pool and normalization
+  fitted per training fold; the false-downgrade rate is computed
+  exactly as plan decision 7 defines — against the truth's suggested
+  tier when truth recommends a switch, against the router's actual
+  tier when truth recommends no change; results persist as schema'd
+  reports in the analytics-owned output root, atomically, never
+  inside E1 evidence roots.
 - FR-E3-5: **Thresholds are operator configuration, not code**
   (plan decision 8). Gate thresholds and kNN parameters load through
   the session-analytics config layering (defaults file < user config <
@@ -88,7 +98,12 @@ E3 builds on.
 ## Constraints
 
 - If E3 needs a measure E1 does not emit, that is an E1 change, not an
-  E3 workaround (the E2 rule carries over verbatim).
+  E3 workaround (the E2 rule carries over verbatim). Two such changes
+  are DECLARED and labeled (plan decision 11): per-task pre-routing
+  descriptors and the executed registry's per-profile policy
+  declarations, both manifest-bound artifacts of the evidence set.
+  Sets published before the addition are treated as unlabeled — never
+  guessed at.
 - No new npm dependencies in studio; no new Python service
   dependencies (pure stdlib derivation, like E2).
 - No online learning, embeddings services, or external model calls.
@@ -103,5 +118,6 @@ E3 builds on.
 - Automatic actions of any kind when gates flip.
 - Temporal splits (evidence sets carry no trusted ordering — directory
   names and mtimes are untrusted; leave-one-task-out is the split).
-- New E1 metrics or schema changes (none anticipated; the rule above
-  governs if one is discovered).
+- New E1 METRICS: none. The only E1 changes are the two declared
+  evidence additions of plan decision 11; metric definitions,
+  selectors, and report semantics stay untouched.
