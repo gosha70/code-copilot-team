@@ -25,8 +25,14 @@ NEXT_PUBLIC_API_BASE=http://127.0.0.1:8765 npm run dev
 | **Session Detail** | **Insights** (turn timeline + heuristic badges), **Agent Tuning** (assessment + copy-ready config), **Prompt Coaching** (per-user-turn issues). |
 | **Knowledge Graph** | Cytoscape explorer (tap-to-expand), node counts, read-only Cypher IDE with templates. |
 | **Analysis** | The 5-step pipeline wizard; triggers the LLM-Judge step. |
+| **Routing** | Shadow-mode routing analysis (E2 of #109): E1 evidence sets (valid, `invalid_evidence` with sanitized code, explanatory empty state), the report's arms/metric-vector/cost/per-task figures, Pareto frontier or its withholding reason, and per-task shadow recommendations — actual-vs-suggested with explicit divergence, three visually distinct outcomes (`insufficient_data` is "cannot conclude", never rendered like `no_change_recommended`), confidence grade + full basis, and followable evidence locators that open their referenced artifact coordinate in place. Read-only: nothing feeds back into live routing. |
 | **Agents** | Discover / upload / manage agent configs. |
 | **Settings** | Data sources + Test Connection, LLM-Judge config, source roots. |
 
-The raw DSN is never sent to the browser — `/api/settings` returns the dialect
-only.
+The raw DSN is never sent to the browser — `/api/settings` returns the DSN's
+dialect rather than the raw DSN (alongside other sanitized settings). The
+Routing tab never sees the configured evidence roots or server-side set
+paths: roots surface as `{configured, root_count}`, sets are addressed by
+opaque content id, and decision-bearing figures render in round-trip
+precision, never display-rounded. (Path-shaped text *inside* published
+evidence content renders as written, home prefix collapsed at publication.)
