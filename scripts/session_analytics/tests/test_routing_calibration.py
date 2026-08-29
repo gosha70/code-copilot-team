@@ -697,29 +697,38 @@ class TestFalseDowngradeArithmetic(unittest.TestCase):
     """Decision 7, BOTH baseline branches, hand-checked."""
 
     def test_baseline_is_the_truth_tier_when_truth_switches(self) -> None:
-        # The two branches must DISAGREE here or the test proves
-        # nothing: truth switches within tier1 while the router
-        # actually ran a tier2 leg, so the truth branch says tier1 and
-        # the actual branch would say tier2.
+        # The two branches must DISAGREE or the test proves nothing:
+        # truth switches to a TIER-2 profile while the router ran only
+        # tier1, so the truth branch says tier2 and the actual branch
+        # would say tier1 — and the judgment flips with them.
         truth = {"outcome": "switch_profile",
-                 "suggested": {"arm": "always_best", "profile_id": "alpha"}}
-        actual = {"per_trial": [{"trial": 0,
-                                 "chain": ["router-prof", "beta"],
-                                 "delegated": True, "reconciled": True}]}
+                 "suggested": {"arm": "always_best", "profile_id": "beta"}}
+        actual = {"per_trial": [{"trial": 0, "chain": ["router-prof"],
+                                 "delegated": False, "reconciled": False}]}
         self.assertEqual(
-            baseline_tier(truth, actual, _PROFILE_POLICY), "tier1")
+            baseline_tier(truth, actual, _PROFILE_POLICY), "tier2")
         self.assertEqual(
             baseline_tier({"outcome": "no_change_recommended",
                            "suggested": None}, actual, _PROFILE_POLICY),
-            "tier2", "the branches must differ for this to discriminate")
-        # predicting a TIER-2 profile against a within-tier-1 truth
-        # switch IS a false downgrade (the round-1 correction), and
-        # under the actual-tier baseline it would NOT be
+            "tier1", "the branches must differ for this to discriminate")
         predicted = {"outcome": "switch_profile",
                      "suggested": {"arm": "always_best",
                                    "profile_id": "beta"}}
-        self.assertTrue(is_false_downgrade(
+        # against the TRUTH baseline (tier2) beta is not a downgrade;
+        # under the wrong (actual) baseline it would be flagged
+        self.assertFalse(is_false_downgrade(
             predicted, baseline_tier(truth, actual, _PROFILE_POLICY),
+            _PROFILE_POLICY))
+        self.assertTrue(is_false_downgrade(predicted, "tier1",
+                                           _PROFILE_POLICY))
+        # the round-1 rule still holds: tier2 against a within-tier-1
+        # truth switch IS a downgrade
+        alpha_truth = {"outcome": "switch_profile",
+                       "suggested": {"arm": "always_best",
+                                     "profile_id": "alpha"}}
+        self.assertTrue(is_false_downgrade(
+            predicted,
+            baseline_tier(alpha_truth, actual, _PROFILE_POLICY),
             _PROFILE_POLICY))
 
     def test_baseline_is_the_actual_tier_when_truth_keeps(self) -> None:
@@ -729,18 +738,30 @@ class TestFalseDowngradeArithmetic(unittest.TestCase):
              "reconciled": False}]}
         self.assertEqual(
             baseline_tier(truth, tier1_actual, _PROFILE_POLICY), "tier1")
-        # the router already operated at tier2 -> recommending tier2 is
-        # NOT a downgrade (multi-leg chains take the lowest tier used)
-        mixed_actual = {"per_trial": [
+        # T3 round-1 P1: a chain is a COMPOSITION, not a menu. A
+        # delegated task ran [tier1 orchestrator, tier2 delegate];
+        # recommending the tier2 profile DROPS the tier1 leg, so the
+        # baseline is the HIGHEST tier engaged and the delegated task
+        # remains capable of a false downgrade.
+        delegated_actual = {"per_trial": [
             {"trial": 0, "chain": ["router-prof", "beta"],
              "delegated": True, "reconciled": True}]}
         self.assertEqual(
-            baseline_tier(truth, mixed_actual, _PROFILE_POLICY), "tier2")
+            baseline_tier(truth, delegated_actual, _PROFILE_POLICY),
+            "tier1")
         predicted = {"outcome": "switch_profile",
                      "suggested": {"arm": "always_best",
                                    "profile_id": "beta"}}
-        self.assertTrue(is_false_downgrade(predicted, "tier1",
-                                           _PROFILE_POLICY))
+        self.assertTrue(is_false_downgrade(
+            predicted,
+            baseline_tier(truth, delegated_actual, _PROFILE_POLICY),
+            _PROFILE_POLICY),
+            "a delegated task must still be able to fail the gate")
+        # a router that ran ONLY tier2 is genuinely at tier2
+        self.assertEqual(
+            baseline_tier(truth, {"per_trial": [
+                {"trial": 0, "chain": ["beta"], "delegated": True,
+                 "reconciled": False}]}, _PROFILE_POLICY), "tier2")
         self.assertFalse(is_false_downgrade(predicted, "tier2",
                                             _PROFILE_POLICY))
 
@@ -782,6 +803,9 @@ class TestHeldoutEvaluation(unittest.TestCase):
                                   _CURRENT_POLICY)
         self.assertEqual(report["split"], "leave_one_task_out")
         self.assertEqual(report["evaluated"], 4)
+        self.assertEqual(report["compared"], 4)
+        self.assertEqual(report["refused"], 0)
+        self.assertEqual(report["unresolved_tier"], 0)
         self.assertEqual(report["unevaluable"], 0)
         self.assertEqual(report["false_downgrades"], 0)
         self.assertEqual(report["false_downgrade_rate"], 0.0)
@@ -871,6 +895,90 @@ class TestHeldoutEvaluation(unittest.TestCase):
                          if r["task_id"] == "q")
         self.assertEqual(evaluated["predicted"]["outcome"],
                          served["outcome"])
+
+
+class TestRefusalsAndExclusions(unittest.TestCase):
+    """T3 round-1 P1/P2: a refusal is not a recommendation. It must
+    never dilute the false-downgrade rate nor count as held-out
+    coverage, and a tier comparison that cannot resolve is UNJUDGED,
+    not judged safe."""
+
+    def _gates(self, report, corpus, policy=_POLICY):
+        doc = compute_gates(corpus, _config(), policy, _CURRENT_POLICY,
+                            report)
+        return {g["id"]: g for g in doc["gates"]}, doc
+
+    def test_all_refusing_recommender_cannot_pass(self) -> None:
+        # two labeled examples against k_min=3: every fold refuses
+        corpus = [
+            _switch_set("aa" * 32, task="n1", file_scope=1),
+            _switch_set("bb" * 32, task="n2", file_scope=2),
+        ]
+        report = evaluate_heldout(corpus, _POLICY, _CURRENT_POLICY)
+        self.assertEqual(report["refused"], 2)
+        self.assertEqual(report["compared"], 0)
+        self.assertEqual(report["evaluated"], 0)
+        self.assertIsNone(report["false_downgrade_rate"],
+                          "an all-refusing run has no rate, not 0.0")
+        gates, doc = self._gates(report, corpus)
+        self.assertEqual(gates["false_downgrade"]["status"],
+                         "insufficient_data")
+        self.assertEqual(gates["heldout_evaluated"]["measured"], 0.0)
+        self.assertEqual(gates["heldout_evaluated"]["status"], "fail")
+        self.assertFalse(doc["calibrated"],
+                         "an all-refusing recommender must never "
+                         "reach calibrated")
+
+    def test_refusals_do_not_dilute_the_rate(self) -> None:
+        # the reviewer's arithmetic: 90 refusals + 10 judged
+        # recommendations with 2 false downgrades is 0.20, not 0.02 —
+        # and 0.20 fails the 0.05 threshold that 0.02 would pass.
+        corpus = _corpus()
+        base = evaluate_heldout(corpus, _POLICY, _CURRENT_POLICY)
+        diluted = dict(
+            base, results=[], refused=90, compared=10, evaluated=10,
+            unresolved_tier=0, false_downgrades=2,
+            false_downgrade_rate=2 / 10,
+        )
+        gates, _ = self._gates(diluted, corpus)
+        self.assertEqual(gates["false_downgrade"]["status"], "fail")
+        self.assertAlmostEqual(gates["false_downgrade"]["measured"], 0.2)
+        self.assertIn("90 refused", gates["false_downgrade"]["reason"])
+
+    def test_refusals_are_not_heldout_coverage(self) -> None:
+        corpus = _corpus()
+        report = evaluate_heldout(corpus, _POLICY, _CURRENT_POLICY)
+        refusing = json.loads(json.dumps(report))
+        for result in refusing["results"]:
+            result["predicted"] = {"outcome": "insufficient_data",
+                                   "suggested": None}
+        gates, _ = self._gates(refusing, corpus)
+        self.assertEqual(gates["heldout_evaluated"]["measured"], 0.0)
+        self.assertEqual(gates["heldout_evaluated"]["status"], "fail")
+
+    def test_unresolvable_tiers_leave_the_denominator(self) -> None:
+        # the queried set's persisted policy does not declare the
+        # predicted profile, so the comparison cannot resolve
+        from dataclasses import replace as _replace
+
+        corpus = _corpus()
+        thin_policy = {
+            "schema_version": 1, "registry_digest": "sha256:reg",
+            "profiles": {"router-prof": {"capability_tier": "tier1",
+                                         "roles": ["build"]}},
+        }
+        corpus = [
+            _replace(e, profile_policy=thin_policy)
+            if e.set_id == "dd" * 32 else e
+            for e in corpus
+        ]
+        report = evaluate_heldout(corpus, _POLICY, _CURRENT_POLICY)
+        self.assertGreaterEqual(report["unresolved_tier"], 1)
+        self.assertEqual(
+            report["evaluated"],
+            report["compared"] - report["unresolved_tier"],
+            "tier-unresolved predictions leave the judged denominator")
+        self.assertEqual(report["false_downgrades"], 0)
 
 
 class TestEvaluationReportPersistence(unittest.TestCase):

@@ -494,12 +494,14 @@ def baseline_tier(
       profile (so predicting Tier 2 while truth switches WITHIN Tier 1
       is a downgrade);
     - truth is no_change_recommended -> the tier the router actually
-      operated at. A chain can name several profiles, so the baseline
-      is the LOWEST tier the router actually used — recommending a
-      tier the router already ran at is not a downgrade. (The plan
-      says "the tier of the router's actual selection", singular; this
-      is the conservative reading for multi-leg chains, recorded for
-      review.)
+      operated at. A chain is a COMPOSITION, not a menu: a delegated
+      task's chain is [tier1 orchestrator, tier2 delegate], and
+      recommending the tier2 profile DROPS the tier1 leg. So the
+      baseline is the HIGHEST tier the router engaged — which also
+      restores symmetry with the truth-switch branch (a single
+      profile's own tier). Taking the lowest would make every
+      delegated task structurally incapable of a false downgrade,
+      which is exactly the arc §12 targets.
 
     None when no tier resolves — the task is then unevaluable for the
     downgrade metric rather than silently counted either way.
@@ -514,7 +516,7 @@ def baseline_tier(
     ]
     if not tiers:
         return None
-    return min(tiers, key=lambda t: _TIER_RANK[t])
+    return max(tiers, key=lambda t: _TIER_RANK[t])
 
 
 def is_false_downgrade(
@@ -565,6 +567,9 @@ def evaluate_heldout(
     false_downgrades = 0
     evaluated = 0
     unevaluable = 0
+    refused = 0
+    compared = 0
+    unresolved_tier = 0
     agreements = 0
     floor_violations = 0
 
@@ -590,8 +595,6 @@ def evaluate_heldout(
         downgrade = is_false_downgrade(predicted, base, profile_policy)
         if downgrade:
             false_downgrades += 1
-        if predicted["outcome"] == truth["outcome"]:
-            agreements += 1
         if predicted["outcome"] == "switch_profile" and current_policy:
             if not _eligible_under_policy(predicted["suggested"],
                                           current_policy,
@@ -599,7 +602,27 @@ def evaluate_heldout(
                 # decision 2/G5: a violation reaching the report is a
                 # SURFACED bug, never dropped
                 floor_violations += 1
-        evaluated += 1
+
+        # A REFUSAL is not a recommendation: it can never be a false
+        # downgrade, so leaving it in the rate's denominator would let
+        # an all-refusing recommender report 0.0 and pass G4. Refusals
+        # are their own aggregate, out of the denominator AND out of
+        # G3's coverage. Likewise a switch whose tier comparison cannot
+        # resolve is UNJUDGED, not judged safe.
+        if predicted["outcome"] == "insufficient_data":
+            refused += 1
+        else:
+            compared += 1
+            if predicted["outcome"] == truth["outcome"]:
+                agreements += 1
+            if predicted["outcome"] == "switch_profile" and (
+                base is None
+                or _tier_of((predicted["suggested"] or {}).get(
+                    "profile_id"), profile_policy) is None
+            ):
+                unresolved_tier += 1
+            else:
+                evaluated += 1
         results.append({
             "evidence_set_id": example.evidence_set_id,
             "task_id": example.task_id,
@@ -617,9 +640,12 @@ def evaluate_heldout(
         "policy": dict(policy.as_document()),
         "split": "leave_one_task_out",
         "results": results,
-        "agreement": (agreements / evaluated) if evaluated else None,
+        "agreement": (agreements / compared) if compared else None,
         "false_downgrades": false_downgrades,
         "evaluated": evaluated,
+        "compared": compared,
+        "refused": refused,
+        "unresolved_tier": unresolved_tier,
         "unevaluable": unevaluable,
         "false_downgrade_rate": (
             false_downgrades / evaluated if evaluated else None
@@ -812,7 +838,10 @@ def compute_gates(
             + ", ".join(staleness["reasons"]),
         ))
     else:
-        covered = {r["task_id"] for r in evaluation_report["results"]}
+        # a refusal is not coverage: G3 asks how much of the corpus was
+        # actually EVALUATED against held-out tasks
+        covered = {r["task_id"] for r in evaluation_report["results"]
+                   if r["predicted"]["outcome"] != "insufficient_data"}
         coverage = (len(covered & set(labeled_tasks)) / len(labeled_tasks)
                     if labeled_tasks else 0.0)
         status = ("pass" if labeled_tasks
@@ -845,9 +874,12 @@ def compute_gates(
             "false_downgrade", status, rate,
             policy.max_false_downgrade_rate,
             f"{evaluation_report['false_downgrades']}/"
-            f"{evaluation_report['evaluated']} evaluated task(s) were "
-            f"false downgrades "
-            f"({evaluation_report['unevaluable']} unevaluable)",
+            f"{evaluation_report['evaluated']} judged recommendation(s) "
+            f"were false downgrades "
+            f"({evaluation_report['refused']} refused, "
+            f"{evaluation_report['unresolved_tier']} tier-unresolved, "
+            f"{evaluation_report['unevaluable']} unevaluable — all "
+            f"outside the denominator)",
         ))
 
     # ── G5: operator floors remain authoritative (three conjuncts) ──

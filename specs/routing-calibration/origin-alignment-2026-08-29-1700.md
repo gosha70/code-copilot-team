@@ -334,6 +334,60 @@ Built per decisions 2, 6, 7:
 Suites: calibration 51 OK, session-analytics discovery 389 OK (35
 CI-gated skips), E1 calibration-additions + quality + redaction 95 OK.
 
+## T3 review round 1 (owner, on 4f0fac9) — two P1 + one P2, applied
+
+All three verified in-tree first; all three made G4 easier to pass,
+and none was a coding error — they were wrong rules, faithfully
+implemented.
+
+1. **[P1] The no-change baseline is the HIGHEST tier engaged.** My
+   recorded T3 determination (lowest tier of a multi-leg chain) was
+   wrong in exactly the way that matters: a chain is a COMPOSITION,
+   not a menu — a delegated task's chain is [tier1 orchestrator,
+   tier2 delegate], `min` yields tier2, nothing ranks below it, so NO
+   prediction on any delegated task could ever count as a false
+   downgrade — precisely the arc §12 targets. `max` restores symmetry
+   with the truth-switch branch (a single profile's own tier) and
+   makes delegated tasks failable again. The reviewer's aside is
+   correct and recorded: `min` was the PERMISSIVE reading, not the
+   conservative one I labeled it. Both baseline regressions were
+   rebuilt so the branches provably disagree (truth-switch-to-tier2
+   against a tier1-only chain), and the delegated-composition case is
+   pinned to fail. Mutation (back to `min`) discriminated.
+2. **[P1] Refusals leave the denominator AND coverage.** `evaluated`
+   was unconditional and `is_false_downgrade` returns False for
+   non-switch predictions, so a refusal contributed 0/1: the
+   reviewer's arithmetic (90 refusals + 10 judged with 2 downgrades
+   reporting 0.02 against a 0.05 threshold where the true rate is
+   0.20) held exactly, and an all-refusing recommender could reach
+   `calibrated: true`. The report now carries `compared`, `refused`,
+   and `unresolved_tier` alongside `evaluated`; the rate's
+   denominator is judged recommendations only and is None when
+   nothing was judged; G3 coverage counts only tasks a recommendation
+   was produced for. Pinned: the all-refusing corpus cannot reach
+   calibrated (rate None, coverage 0.0), the 90/10 dilution
+   arithmetic fails the threshold, and refusal-only results give zero
+   coverage. Mutations (refusals in the denominator; refusals as
+   coverage) both discriminated.
+3. **[P2] Tier-unresolved predictions are UNJUDGED.** A switch whose
+   predicted or baseline tier cannot resolve now increments
+   `unresolved_tier` and leaves the denominator instead of sitting in
+   it as a silent non-downgrade. Pinned with a set whose persisted
+   policy omits the predicted profile. Mutation discriminated.
+
+Classification, by the reviewer's own directional test: both P1s
+NARROW what counts — they make the gate strictly harder to pass and
+remove permissive readings decision 7 never intended (its letter
+assumed predictions happen). Nothing is permitted now that was not
+before, so this is sharpening, not amendment; decision 7 was rewritten
+to state the highest-tier rule and the three exclusions explicitly,
+with the reasoning inline so the text carries its own justification
+either way. If the reviewer reads it as an amendment, the
+justification is already there to ratify.
+
+Suites after the pass: calibration 55 OK, session-analytics discovery
+393 OK (35 CI-gated skips), E1 light suites 95 OK.
+
 ## Verdict
 
 Verdict: aligned
