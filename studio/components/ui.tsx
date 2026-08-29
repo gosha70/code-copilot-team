@@ -43,6 +43,18 @@ const BADGE_COLORS: Record<string, string> = {
   fail: "bg-rose-100 text-rose-800",
   error: "bg-amber-100 text-amber-900",
   timeout: "bg-purple-100 text-purple-800",
+  // routing-shadow (#261): the three recommendation outcomes must be
+  // visually DISTINCT — insufficient_data (amber, "cannot conclude") never
+  // renders like no_change_recommended (slate, "concluded: keep") — plus
+  // the confidence grades and the set-level invalid_evidence state.
+  switch_profile: "bg-blue-100 text-blue-800",
+  no_change_recommended: "bg-slate-100 text-slate-700",
+  insufficient_data: "bg-amber-100 text-amber-900",
+  valid: "bg-green-100 text-green-800",
+  high: "bg-green-100 text-green-800",
+  moderate: "bg-yellow-100 text-yellow-800",
+  low: "bg-slate-100 text-slate-700",
+  invalid_evidence: "bg-rose-100 text-rose-800",
 };
 
 export function Badge({ kind, children }: { kind: string; children: React.ReactNode }) {

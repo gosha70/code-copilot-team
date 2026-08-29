@@ -665,6 +665,60 @@ Suites after the round: routing-evidence 45/45, E1
 evidence_set+quality+redaction 97/97, session-analytics discovery
 335 (34 CI-gated skips), all OK.
 
+## T4 build (2026-08-28) — Studio Routing view, browser-verified
+
+T3 approved at 57a8303. T4 built per decision 10's conventions:
+
+- **Typed fetchers** in `studio/lib/api.ts` mirroring the T3 payloads
+  exactly (index entries as a `valid | invalid_evidence` union, the
+  report v1 shape, the recommendation record with its decision-9
+  source descriptors); three `api.routing*` fetchers. The Studio
+  never re-derives a figure client-side.
+- **Routing tab** in the `TABS` nav; index page (valid summaries +
+  set-level invalid_evidence rows with sanitized code/label, never
+  skipped; sanitized `{configured, root_count}` roots note;
+  explanatory empty state pointing at `publish_evidence_set` and
+  `CCT_SA_ROUTING_EVIDENCE_ROOTS`); detail page (fingerprint header,
+  arms table with Q + component vector + cost/status + declared
+  insufficiency, per-task figures, Pareto frontier or withholding
+  reason, and per-task recommendation cards: three visually distinct
+  outcome badges with explanatory copy — insufficient_data amber
+  "cannot conclude", never rendered like no_change slate "concluded:
+  keep" — actual per-trial chain with delegation/reconciliation
+  markers, suggested profile, oracle ceiling labeled a non-runnable
+  hindsight bound, explicit divergence deltas, confidence grade +
+  basis including rendered insufficiency refs).
+- **No new npm dependencies** in the studio; `npm run build` green.
+  Prettier's hook churn on the three touched shared files was
+  reverted and the edits re-applied surgically (additions-only diff).
+- **Browser verification, not compiler-only**: real evidence sets
+  published through the FULL E1 machinery (selector-computed
+  controls) into a live root — one set per outcome (switch_profile
+  via equal-quality-cheaper dominance with the profile admissible;
+  no_change with the router on the frontier; insufficient_data via
+  the availability guard with the alpha-in-cooldown candidate
+  evidence) plus a byte-tampered invalid set — served by the real
+  FastAPI app (scratchpad venv; fastapi is absent on the host) with
+  the real Studio production build. A scratchpad Playwright runner
+  (the ui-harness template's own mechanism; the template is not
+  scaffolded into studio/ — no DESIGN.md exists there — so the
+  harness's runner pattern was reproduced minimally) executed
+  rendered assertions and full-page screenshots at 1440px and 375px
+  for ALL states: empty, index (valid + invalid), and the three
+  outcome details — 58 rendered assertions, all passing, including
+  no-filesystem-path-leak checks on every page.
+- **One shared-layout fix surfaced by the mobile pass** (labeled):
+  the header nav overflowed the 375px viewport (white-on-white,
+  pre-existing but worsened by the added tab) — the nav is now
+  `overflow-x-auto` with a non-wrapping brand, the minimal fix the
+  mobile acceptance itself demanded.
+- Verification-honesty note: one screenshot pass captured an
+  unstyled page — a stale `next-server` still held port 3000 while
+  the build was rewritten under it (CSS 400). The stale process was
+  killed, the studio rebuilt and restarted cleanly, and every
+  screenshot re-taken with styles verified (css 200) before being
+  trusted.
+
 ## Verdict
 
 Verdict: aligned
