@@ -12,6 +12,20 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Codex auto-build execution backend (#109)** — `codex` is now an
+  executable backend, not merely an accepted registry name. Previously
+  `RC_BACKENDS` validated `backend = "codex"` and the router would
+  select such a profile, but neither `auto-build-loop.sh` nor
+  `cooldown-supervisor.sh` had a codex execution path, so that leg of
+  #109's own example priority chain could never run. Adds
+  `run_codex_session` under the same driver contract as the claude and
+  pi backends (JSON result, cost accrual, session id, wall-clock
+  timeout, prompt on **stdin** — never argv, the same ARG_MAX/E2BIG
+  exposure the other backends already fixed), the matching delegate
+  launch path in the supervisor, `--backend codex`, and
+  `subject_provider=codex` propagation to review and analytics. The
+  invocation matches the proven benchmark backend exactly.
+
 - **Calibration gates + shadow kNN recommender (#266, E3 of #109)** —
   the #109 §12 promotion conditions made executable as five gates
   (`telemetry_complete`, `labeled_volume`, `heldout_evaluated`,

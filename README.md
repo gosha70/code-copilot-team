@@ -1124,8 +1124,21 @@ standing authority-guard tests rather than asserted. The gates are a
 proposes nothing clears every gate honestly. See
 [`scripts/session_analytics/README.md` § Calibration gates](scripts/session_analytics/README.md#calibration-gates--shadow-knn-e3-of-109-issue-266).
 
-The codex execution adapter remains its own child increment, reusing
-the existing result and checkpoint contracts.
+The **Codex execution adapter** is delivered: `codex` is a first-class
+auto-build backend (`CCT_AUTOBUILD_BACKEND=codex`, binary via
+`CCT_CODEX_BIN`, optional `CCT_CODEX_MODEL`) and a selectable routing
+profile backend in the cooldown supervisor, reusing the existing
+result and checkpoint contracts. It runs `codex exec --json --sandbox
+workspace-write --skip-git-repo-check -` with the prompt on stdin —
+the same invocation the benchmark harness already drives, with codex's
+own event stream normalized into the shared driver contract.
+
+Scope of what is demonstrated: the adapter is covered by unit tests over
+the recorded codex transcripts and by driver-level tests with a mock
+codex, and the supervisor's launch chains are covered structurally. A
+live end-to-end run against the real codex CLI has **not** been
+performed, and `effective_model` is null for codex attempts because no
+codex event reports the model actually served.
 
 ## Four-Phase Workflow
 

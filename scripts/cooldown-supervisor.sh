@@ -21,7 +21,7 @@
 # Usage:
 #   cooldown-supervisor.sh <feature-id> [options]
 #     --worktree <path>        project/worktree to run in (default: repo root)
-#     --backend <claude|pi>    harness backend (default: claude)
+#     --backend <claude|pi|codex>  harness backend (default: claude)
 #     --profile <name>         unattended posture to pass (default: unattended)
 #     --max-attempts N         cap on total harness launches (default: 20)
 #     --max-cooldowns N        cap on usage-limit cooldowns (default: 12)
@@ -128,7 +128,10 @@ done
 case "$FEATURE_ID" in
   */*|*'\'*|.|..) err "unsafe feature id '$FEATURE_ID'."; exit 64 ;;
 esac
-[[ "$BACKEND" == "claude" || "$BACKEND" == "pi" ]] || { err "backend must be claude|pi."; exit 64; }
+case "$BACKEND" in
+  claude|pi|codex) ;;
+  *) err "backend must be claude|pi|codex."; exit 64 ;;
+esac
 [[ "$ON_INCOMPLETE" == "park" || "$ON_INCOMPLETE" == "relaunch" ]] || { err "--on-incomplete must be park|relaunch."; exit 64; }
 # --delegate/--reconcile are routing-mode surfaces (named refusals)
 if [[ -n "$DELEGATE_TASK" && "$ROUTING" != "1" ]]; then
@@ -461,6 +464,7 @@ rt_launch_env() {
   ep=$(jq -r '.endpoint_ref' <<< "$pj")
   RT_CHILD_BACKEND="claude"
   [[ "$backend" == "pi" ]] && RT_CHILD_BACKEND="pi"
+  [[ "$backend" == "codex" ]] && RT_CHILD_BACKEND="codex"
   RT_ENV_BASE_URL=""; RT_ENV_API_KEY=""
   case "$ep" in
     url:*)    RT_ENV_BASE_URL="${ep#url:}";      names="$names ANTHROPIC_BASE_URL(base_url)" ;;
@@ -1245,6 +1249,10 @@ delegate_run() {
     rt_packet_prompt "$round" "$prompt_file" "${DELEGATE_LAST_FAILURES:--}"
     OUT="$(mktemp)"
     set +e
+    # The profile's model, as --model args, for backends that take one.
+    CX_MODEL_ARGS=()
+    _cxm=$(jq -r '.model // empty' <<< "$pj")
+    [[ -n "$_cxm" ]] && CX_MODEL_ARGS=(--model "$_cxm")
     if [[ -n "${CCT_SUPERVISOR_HARNESS_CMD:-}" ]]; then
       ( cd "$PKT_WT" \
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
@@ -1257,6 +1265,20 @@ delegate_run() {
                ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
                ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
                bash -c "$CCT_SUPERVISOR_HARNESS_CMD" ) < "$prompt_file" >"$OUT" 2>&1
+    elif [[ "$(jq -r '.backend' <<< "$pj")" == "codex" ]]; then
+      # codex exec is non-interactive by construction and bounded by its
+      # own sandbox; prompt on stdin via the trailing `-`, matching the
+      # proven benchmark backend invocation. The profile's MODEL is
+      # passed through: running a different model than the routing
+      # ledger records would make the audit trail false.
+      ( cd "$PKT_WT" \
+        && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
+               ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
+               ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
+               "${CCT_CODEX_BIN:-codex}" exec --json \
+               --sandbox workspace-write --skip-git-repo-check \
+               ${CX_MODEL_ARGS[@]+"${CX_MODEL_ARGS[@]}"} \
+               - ) < "$prompt_file" >"$OUT" 2>"$OUT.stderr"
     elif [[ "$(jq -r '.backend' <<< "$pj")" == "pi" ]]; then
       ( cd "$PKT_WT" \
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
@@ -1275,10 +1297,16 @@ delegate_run() {
     CHILD_CODE=$?
     set -e
     rt_scrub_out "$OUT"
+    # codex's stderr is deliberately NOT part of the parsed stream (#199:
+    # its prompt echo forged a PASS verdict once), but it is still the
+    # only diagnostic a failing codex round leaves — and it carries the
+    # echoed packet, so it gets the SAME scrub as $OUT before anything
+    # persists, and it is never left behind in /tmp.
+    [[ -s "$OUT.stderr" ]] && rt_scrub_out "$OUT.stderr"
     cat "$OUT"
 
     if [[ "$CHILD_CODE" -eq 6 ]]; then
-      rm -f "$OUT"
+      rm -f "$OUT" "$OUT.stderr"
       jq -n --arg id "$attempt_id" '{schema_version:1, attempt_id:$id, outcome:"terminated_policy"}' > "$RT_DIR/result-$attempt_no.json"
       notify "terminated_policy" "policy termination (exit 6) in a packet round — terminal, not rerouted"
       terminate "terminated_policy" 6 "packet child exited terminated_policy (exit 6); terminal by contract"
@@ -1295,7 +1323,11 @@ delegate_run() {
         || rt_refuse "routing_unknown_failure" "the action policy failed to evaluate"
     legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT" 2>/dev/null | tail -1 || true)"
     cp "$OUT" "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
-    rm -f "$OUT"
+    # scrubbed stderr rides with the transcript so a failing codex round
+    # is diagnosable; absent for backends that never wrote one
+    [[ -s "$OUT.stderr" ]] && cat "$OUT.stderr" \
+        >> "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
+    rm -f "$OUT" "$OUT.stderr"
     jq -n --arg id "$attempt_id" --argjson r "$result" --argjson t "$decision_epoch" \
           --argjson d "$decision" --arg legacy "$legacy_hit" \
           '{attempt_id:$id, decision_epoch:$t, result:$r, decision:$d,
@@ -1579,6 +1611,10 @@ reconcile_run() {
     rt_reconcile_prompt "$prompt_file" "$patch_file" "${evid_file:-/dev/null}"
     OUT="$(mktemp)"
     set +e
+    # The profile's model, as --model args, for backends that take one.
+    CX_MODEL_ARGS=()
+    _cxm=$(jq -r '.model // empty' <<< "$pj")
+    [[ -n "$_cxm" ]] && CX_MODEL_ARGS=(--model "$_cxm")
     if [[ -n "${CCT_SUPERVISOR_HARNESS_CMD:-}" ]]; then
       ( cd "$PKT_WT" \
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
@@ -1591,6 +1627,19 @@ reconcile_run() {
                ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
                ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
                bash -c "$CCT_SUPERVISOR_HARNESS_CMD" ) < "$prompt_file" >"$OUT" 2>&1
+    elif [[ "$(jq -r '.backend' <<< "$pj")" == "codex" ]]; then
+      # A codex RECONCILER must run codex. Falling through to the claude
+      # branch launched a different harness than the one recorded as the
+      # reconciler identity, which would rest the independence judgement
+      # on a false record.
+      ( cd "$PKT_WT" \
+        && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
+               ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
+               ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
+               "${CCT_CODEX_BIN:-codex}" exec --json \
+               --sandbox workspace-write --skip-git-repo-check \
+               ${CX_MODEL_ARGS[@]+"${CX_MODEL_ARGS[@]}"} \
+               - ) < "$prompt_file" >"$OUT" 2>"$OUT.stderr"
     elif [[ "$(jq -r '.backend' <<< "$pj")" == "pi" ]]; then
       ( cd "$PKT_WT" \
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
@@ -1609,10 +1658,16 @@ reconcile_run() {
     CHILD_CODE=$?
     set -e
     rt_scrub_out "$OUT"
+    # codex's stderr is deliberately NOT part of the parsed stream (#199:
+    # its prompt echo forged a PASS verdict once), but it is still the
+    # only diagnostic a failing codex round leaves — and it carries the
+    # echoed packet, so it gets the SAME scrub as $OUT before anything
+    # persists, and it is never left behind in /tmp.
+    [[ -s "$OUT.stderr" ]] && rt_scrub_out "$OUT.stderr"
     cat "$OUT"
 
     if [[ "$CHILD_CODE" -eq 6 ]]; then
-      rm -f "$OUT"
+      rm -f "$OUT" "$OUT.stderr"
       jq -n --arg id "$attempt_id" '{schema_version:1, attempt_id:$id, outcome:"terminated_policy"}' > "$RT_DIR/result-$attempt_no.json"
       notify "terminated_policy" "policy termination (exit 6) during reconciliation — terminal"
       terminate "terminated_policy" 6 "reconciler exited terminated_policy (exit 6); terminal by contract"
@@ -1630,7 +1685,11 @@ reconcile_run() {
     local verdict_line
     verdict_line="$(grep -E '^RECONCILE_VERDICT: (accepted|rejected)[[:space:]]*$' "$OUT" | tail -1 || true)"
     cp "$OUT" "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
-    rm -f "$OUT"
+    # scrubbed stderr rides with the transcript so a failing codex round
+    # is diagnosable; absent for backends that never wrote one
+    [[ -s "$OUT.stderr" ]] && cat "$OUT.stderr" \
+        >> "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
+    rm -f "$OUT" "$OUT.stderr"
     jq -n --arg id "$attempt_id" --argjson r "$result" --argjson t "$decision_epoch" \
           --argjson d "$decision" --arg legacy "$legacy_hit" \
           '{attempt_id:$id, decision_epoch:$t, result:$r, decision:$d,

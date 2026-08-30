@@ -230,6 +230,54 @@ CCT_SUPERVISOR_SLEEP=true bash "$SUP" '../escape' --worktree "$(mktemp -d)" >/de
 RC=$?; set -e
 assert_exit "unsafe feature id rejected (exit 64)" 64 "$RC"
 
+# ── #109: the codex execution backend ──
+echo "--- codex backend ---"
+# Assert on the MESSAGE, not the exit code: 64 is the usage code for
+# several conditions (a missing registry among them), so an exit-code
+# assertion here would pass for the wrong reason.
+set +e
+OUT_CX=$(CCT_SUPERVISOR_SLEEP=true bash "$SUP" demo \
+    --worktree "$(mktemp -d)" --backend codex 2>&1)
+set -e
+assert "codex is an accepted --backend (never rejected as unknown)" \
+    "! grep -q 'backend must be' <<< \"\$OUT_CX\""
+set +e
+OUT_BOGUS=$(CCT_SUPERVISOR_SLEEP=true bash "$SUP" demo --worktree "$(mktemp -d)" \
+    --backend cursor 2>&1)
+RC=$?; set -e
+assert_exit "unknown backend still rejected (exit 64)" 64 "$RC"
+assert "rejection names codex among the valid set" \
+    "grep -q 'claude|pi|codex' <<< \"\$OUT_BOGUS\""
+
+# STRUCTURAL assertions on the launch chains. These are weaker than a
+# behavioural test — the delegate/reconcile suites drive the harness via
+# CCT_SUPERVISOR_HARNESS_CMD, which bypasses the backend branches
+# entirely — but each one pins a defect that actually shipped:
+#   * the reconcile chain had NO codex branch, so a codex reconciler ran
+#     claude while being recorded as codex;
+#   * the routed model never reached the harness;
+#   * merging codex stderr forged a PASS verdict once already in this
+#     repo (specs/codex-provider-command/plan.md, captured live).
+CX_BRANCHES=$(grep -c "== \"codex\" \]\]; then" "$SUP")
+assert "both launch chains dispatch codex (delegate + reconcile)" \
+    "[[ $CX_BRANCHES -eq 2 ]]"
+assert "every codex launch invokes CCT_CODEX_BIN" \
+    "[[ \$(grep -c 'CCT_CODEX_BIN:-codex' \"$SUP\") -eq 2 ]]"
+assert "every codex launch passes the routed model" \
+    "[[ \$(grep -c 'CX_MODEL_ARGS\[@\]' \"$SUP\") -eq 2 ]]"
+assert "the routed model is read from the profile at both sites" \
+    "[[ \$(grep -c \"CX_MODEL_ARGS=(--model\" \"$SUP\") -eq 2 ]]"
+assert "no codex launch merges stderr into the parsed stream (#199)" \
+    "[[ \$(grep -A 8 'CCT_CODEX_BIN:-codex' \"$SUP\" | grep -c '2>&1') -eq 0 ]]"
+# The separated stderr must not become an unscrubbed orphan: it carries
+# codex's echoed prompt (the packet + patch on a delegate round).
+assert "separated stderr is scrubbed before it persists" \
+    "[[ \$(grep -c 'rt_scrub_out \"\$OUT.stderr\"' \"$SUP\") -eq 2 ]]"
+assert "separated stderr rides with the transcript (diagnosable)" \
+    "[[ \$(grep -c 'transcript-.attempt_no.log' \"$SUP\") -ge 4 ]]"
+assert "separated stderr is always cleaned up (no /tmp orphans)" \
+    "[[ \$(grep -c 'rm -f \"\$OUT\" \"\$OUT.stderr\"' \"$SUP\") -eq 4 ]]"
+
 echo ""
 echo "========================================="
 echo "  cooldown-supervisor tests: $PASS passed, $FAIL failed"
