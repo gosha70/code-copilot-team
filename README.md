@@ -1251,7 +1251,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh           116 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1037 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1068 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         167 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       186 circuit + action + selection + supervisor + identity tests (#251 B)
