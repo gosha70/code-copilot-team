@@ -771,6 +771,60 @@ OK under pytest; CLI suite 3 OK; the five decision-10 states re-verified
 at 1440 and 375 after the panel text change; `tsc --noEmit` clean;
 `npm run build` green; doc-accuracy clean (76 links, 0 errors).
 
+## T5 closure review round 2 (owner, on 1360c50) — one P1 + one P2, applied
+
+Both reproduced before any fix.
+
+1. **[P1] An empty root set disabled the isolation check.**
+   `evidence_roots` was required syntactically, but `evidence_roots or
+   ()` made an empty sequence pass the containment loop vacuously and
+   return an approval the function never performed. Reproduced
+   directly: a calibration root nested inside an evidence root is
+   refused when the real root is supplied and ACCEPTED when `()` is —
+   and two of my own persistence fixtures were calling the public
+   writer with `()`, so the bypass was not merely reachable, it was
+   exercised.
+
+   This is the THIRD instance of one failure family in this increment,
+   and the sharpest, because the docstring immediately above the bug
+   said "a containment check that silently disables itself when a
+   caller omits an argument is not a check". I enforced the
+   requirement at the SYNTAX level and not at the VALUE level, having
+   just written down the rule it violates. Writing the lesson does not
+   discharge it.
+
+   `assert_write_isolation` now refuses an empty or None root set by
+   name: a caller with no evidence roots has no corpus to evaluate and
+   no business writing a report. Both fixtures were given real,
+   DISJOINT evidence roots, so they exercise the containment check
+   instead of skipping it.
+
+2. **[P2] Configuration errors escaped the CLI's handling.**
+   `load_config()` ran before the `try`, so a malformed override
+   produced a traceback and exit 1 while the docs promised a named
+   EXIT_USAGE refusal. Reproduced:
+   `CCT_SA_CALIBRATION_K=not-an-integer` printed a five-frame
+   traceback. The load now happens inside the handled block and
+   configuration `ValueError` maps to EXIT_USAGE; the message already
+   names the offending key. Verified live: same input now prints one
+   line and exits 2.
+
+   Pinned with REAL CLI regressions that drive `cli.main(["calibrate"])`
+   and assert the exit code, the presence of the offending key in
+   stderr, and the ABSENCE of "Traceback" — for both a malformed
+   override and a corpus condition.
+
+Three mutations discriminated: empty sequence tolerated again; the
+config load moved back outside the try; `ValueError` no longer mapped
+to usage.
+
+Suites after the pass: session_analytics 436 tests OK / 37 skipped
+(`unittest discover`); calibration 96 OK under pytest; the end-to-end
+producer re-run against live fixtures; spec 2/0; origin aligned/high;
+whitespace clean; production diff guard empty. The benchmark_runner
+sweep was NOT re-run — this round touches only session_analytics and
+specs, and its scope is unchanged.
+
 ## Verdict
 
 Verdict: aligned

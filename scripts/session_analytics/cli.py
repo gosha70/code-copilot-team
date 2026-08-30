@@ -841,10 +841,15 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
     analytics-owned artifact and changes no routing decision."""
     from .routing_calibration import CalibrationError, run_evaluation
 
-    cfg = load_config()
     try:
+        # load_config belongs INSIDE the handled block: a malformed
+        # override (e.g. CCT_SA_CALIBRATION_K=not-an-integer) raises
+        # ValueError here, and that is a usage condition with a
+        # message that already names the offending key — never a
+        # traceback.
+        cfg = load_config()
         summary = run_evaluation(cfg)
-    except CalibrationError as exc:
+    except (CalibrationError, ValueError) as exc:
         # a configuration or corpus condition, not a crash — the
         # message names what to fix
         print(f"error: {exc}", file=sys.stderr)

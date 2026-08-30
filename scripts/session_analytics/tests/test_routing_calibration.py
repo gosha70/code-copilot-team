@@ -17,6 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from benchmark_runner.routing_eval.record_check import load_schema, validate
+from session_analytics import constants as C
 from session_analytics.routing_calibration import (
     FEATURE_VOCABULARY_VERSION,
     GATE_IDS,
@@ -1010,7 +1011,13 @@ class TestEvaluationReportPersistence(unittest.TestCase):
 
         report = evaluate_heldout(_corpus(), _POLICY, _CURRENT_POLICY)
         with tempfile.TemporaryDirectory() as tmp:
-            path = write_evaluation_report(report, tmp, ())
+            # a REAL, disjoint evidence root — passing () would make
+            # the isolation check vacuous, which it now refuses
+            evidence = Path(tmp) / "evidence"
+            evidence.mkdir()
+            out = Path(tmp) / "calibration"
+            path = write_evaluation_report(report, out, [evidence])
+            tmp = str(out)
             self.assertTrue(path.is_file())
             self.assertFalse(list(Path(tmp).glob("*.tmp")))
             self.assertEqual(load_evaluation_report(tmp), report)
@@ -1193,6 +1200,12 @@ class TestServedPayloads(unittest.TestCase):
         # payload ever echoes it (the E2 SENSITIVE-root idiom).
         self.root = Path(tempfile.mkdtemp(prefix="SENSITIVE-CALIB-ROOT."))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        # disjoint from the calibration root, so isolation is really
+        # exercised rather than skipped
+        self.evidence_root = Path(
+            tempfile.mkdtemp(prefix="SENSITIVE-EVIDENCE-ROOT."))
+        self.addCleanup(shutil.rmtree, self.evidence_root,
+                        ignore_errors=True)
 
     def _cfg(self, **overrides):
         block = {"policy_source": self.registry, "root": str(self.root)}
@@ -1216,7 +1229,7 @@ class TestServedPayloads(unittest.TestCase):
                                        load_current_policy(cfg)))
         if mutate is not None:
             report = mutate(report)
-        write_evaluation_report(report, self.root, ())
+        write_evaluation_report(report, self.root, [self.evidence_root])
         return report
 
     # ── the five rendered states ──
@@ -1951,6 +1964,29 @@ class TestOperatorEntrypoint(unittest.TestCase):
         with self.assertRaisesRegex(CalibrationError, "no valid evidence"):
             run_evaluation(self._cfg(evidence=[self.base / "nowhere"]))
 
+    def test_an_empty_evidence_root_set_is_not_a_pass(self) -> None:
+        # Requiring the argument SYNTACTICALLY is not enough: an empty
+        # sequence would make the containment loop vacuous and hand
+        # back an approval the check never performed.
+        from session_analytics.routing_calibration import (
+            CalibrationError,
+            assert_write_isolation,
+            write_evaluation_report,
+        )
+
+        for empty in ((), [], None):
+            with self.assertRaises(CalibrationError) as ctx:
+                assert_write_isolation(self.calib, empty)
+            self.assertIn("no routing", str(ctx.exception))
+        # ...and the public writer inherits the refusal, so no caller
+        # can reach the filesystem through the vacuous path
+        report = {"schema_version": 1}
+        with self.assertRaises(CalibrationError):
+            write_evaluation_report(report, self.calib, ())
+        self.assertFalse(
+            (self.calib / "evaluation-report.json").exists(),
+            "refused, but something was still written")
+
     def test_the_cli_exposes_it(self) -> None:
         # the entrypoint is only reachable if the CLI registers it
         from session_analytics import cli
@@ -1959,6 +1995,50 @@ class TestOperatorEntrypoint(unittest.TestCase):
         parser = cli._build_parser()
         args = parser.parse_args(["calibrate"])
         self.assertEqual(args.subcommand, "calibrate")
+
+    def test_a_malformed_override_is_a_named_usage_refusal(self) -> None:
+        """A mistyped configuration override must exit EXIT_USAGE with
+        a message naming the offending key — never a traceback. The
+        config load therefore has to happen INSIDE the handled block."""
+        import contextlib
+        import io
+        import os
+        from unittest import mock
+
+        from session_analytics import cli
+
+        err = io.StringIO()
+        with mock.patch.dict(
+            os.environ, {"CCT_SA_CALIBRATION_K": "not-an-integer"}
+        ), contextlib.redirect_stderr(err):
+            rc = cli.main(["calibrate"])
+
+        self.assertEqual(rc, C.EXIT_USAGE)
+        message = err.getvalue()
+        self.assertIn("CCT_SA_CALIBRATION_K", message)
+        self.assertIn("'k'", message)
+        self.assertNotIn("Traceback", message)
+
+    def test_a_corpus_condition_is_also_a_usage_refusal(self) -> None:
+        import contextlib
+        import io
+        import os
+        from unittest import mock
+
+        from session_analytics import cli
+
+        err = io.StringIO()
+        with mock.patch.dict(
+            os.environ,
+            {"CCT_SA_ROUTING_EVIDENCE_ROOTS": str(self.base / "nowhere"),
+             "CCT_SA_CALIBRATION_ROOT": str(self.calib),
+             "CCT_SA_CALIBRATION_POLICY_SOURCE": self.registry},
+        ), contextlib.redirect_stderr(err):
+            rc = cli.main(["calibrate"])
+
+        self.assertEqual(rc, C.EXIT_USAGE)
+        self.assertIn("no valid evidence", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
 
 
 if __name__ == "__main__":

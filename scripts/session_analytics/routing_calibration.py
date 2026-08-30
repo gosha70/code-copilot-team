@@ -840,13 +840,24 @@ def assert_write_isolation(
     Paths are compared RESOLVED, so a symlink or a `..` cannot walk
     around the check.
 
-    ``evidence_roots`` is required and has no default. A containment
-    check that silently disables itself when a caller omits an argument
-    is not a check — it is the same "asserted, not derived" failure this
-    increment already corrected once.
+    ``evidence_roots`` is required AND must be non-empty. Requiring the
+    argument syntactically is not enough: an empty sequence would make
+    the loop below vacuous and hand back an approval this function never
+    performed, which is the same self-disabling check one level down.
+    A caller with no evidence roots has no corpus to evaluate and no
+    business writing a report.
     """
+    roots = list(evidence_roots or ())
+    if not roots:
+        raise CalibrationError(
+            "refusing to write the calibration report: no routing "
+            "evidence roots were supplied to the isolation check. An "
+            "empty set would make the containment test vacuous — a "
+            "report is only writable relative to the corpus it "
+            "evaluates."
+        )
     out = Path(root).expanduser().resolve()
-    for raw in evidence_roots or ():
+    for raw in roots:
         other = Path(raw).expanduser().resolve()
         overlap = (out == other
                    or _is_within(out, other) or _is_within(other, out))
