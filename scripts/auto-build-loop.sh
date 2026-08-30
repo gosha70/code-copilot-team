@@ -67,11 +67,13 @@ PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 # (BUN_OPTIONS ipv4 fix, project permission tier/hooks, transcript log).
 # claude-code passes -p/--print invocations through to claude headlessly.
 CLAUDE_BIN="${CCT_CLAUDE_BIN:-claude-code}"
-# Agent backend (T10.3): claude (default) or pi. subject_provider tracks it.
+# Agent backend: claude (default), pi, or codex. subject_provider tracks it.
 BACKEND="${CCT_AUTOBUILD_BACKEND:-claude}"
 PI_BIN="${CCT_PI_BIN:-pi-code}"
+CODEX_BIN="${CCT_CODEX_BIN:-codex}"
 SUBJECT_PROVIDER="claude"
 [[ "$BACKEND" == "pi" ]] && SUBJECT_PROVIDER="pi"
+[[ "$BACKEND" == "codex" ]] && SUBJECT_PROVIDER="codex"
 GH_BIN="${CCT_GH_BIN:-gh}"
 AUTOBUILD_ROOT="${CCT_AUTOBUILD_DIR:-.cct/auto-build}"
 # Gate scripts resolve specs relative to their own repo by default; point
@@ -819,6 +821,15 @@ preflight() {
     if [[ "$BACKEND" == "pi" ]]; then
         if ! "$PI_BIN" version &>/dev/null; then
             echo "Error: pi-code not usable: $PI_BIN (override with CCT_PI_BIN)." >&2
+            exit 1
+        fi
+    elif [[ "$BACKEND" == "codex" ]]; then
+        # Preflight the backend that will actually RUN. Falling through to
+        # the claude branch here would pass on a host with claude installed
+        # and no codex, and fail on a host with codex and no claude — in
+        # both cases reporting on a binary this run never invokes.
+        if ! "$CODEX_BIN" --version &>/dev/null; then
+            echo "Error: codex not usable: $CODEX_BIN (override with CCT_CODEX_BIN)." >&2
             exit 1
         fi
     else
@@ -3586,6 +3597,41 @@ check_caps() {
 # element) is #197's own proposal, kept deliberately: it only matters
 # for a result envelope missing its `type` field, and every real
 # non-result tail element lacks subtype:"success" so it still parks.
+# Codex is a FOURTH shape and needs its own normalizer. `codex exec
+# --json` emits thread.started / item.* / turn.completed and NEVER a
+# claude/pi-style `result` envelope, so session_result_obj's `.[-1]`
+# fallback returns the turn.completed event: subtype "unknown",
+# session_id null, cost 0 — which parks every SUCCESSFUL codex phase.
+# Derived from the recorded transcript at
+# scripts/benchmark_runner/tests/fixtures/codex/transcript-success.jsonl,
+# not from an assumed contract.
+#   session_id ← thread.started.thread_id
+#   subtype    ← success only when the turn actually completed and no
+#                error/turn.failed event appeared (fail closed)
+#   cost       ← codex reports TOKEN USAGE, never USD, so cost is left
+#                EMPTY and the caller debits it as an unmetered
+#                invocation rather than fabricating $0. See the caller
+#                for the ESTIMATES_ACTIVE condition that bounds it.
+codex_result_obj() {
+    # codex_result_obj <result-file> [process-exit-code]
+    # Success requires ALL of: the process exited 0, a turn completed, no
+    # error event, and a thread identity. A non-zero exit with a
+    # turn.completed in stdout is still a FAILURE — the process status is
+    # authoritative — and a completed turn with no thread.started yields
+    # a null session id, which cannot be called success either.
+    local rc="${2:-0}"
+    jq -c -s --argjson rc "${rc:-0}" '
+        (map(select(.type? == "thread.started")) | last) as $t
+      | (map(select(.type? == "turn.completed")) | last) as $done
+      | (map(select(.type? == "turn.failed" or .type? == "error")) | length) as $errs
+      | (($rc == 0) and ($errs == 0) and ($done != null)
+         and ($t.thread_id != null)) as $ok
+      | {type: "result",
+         subtype: (if $ok then "success" else "error" end),
+         session_id: ($t.thread_id // null),
+         usage: ($done.usage // null)}' "$1" 2>/dev/null || echo '{}'
+}
+
 session_result_obj() {
     # session_result_obj <result-file> — the result object on stdout ('{}' if none)
     jq -c -s 'map(if type == "array" then .[] else . end)
@@ -3657,9 +3703,96 @@ run_pi_session() {
     SESSION_ID=$(printf '%s' "$result_obj" | jq -r '.session_id // empty' 2>/dev/null || true)
 }
 
+run_codex_session() {
+    # run_codex_session <prompt-file> <result-file> [resume-session-id]
+    # Same driver contract as the claude/pi backends: leaves a JSON result the
+    # driver reads (.total_cost_usd/.subtype/.session_id). Invocation matches
+    # the proven benchmark backend (scripts/benchmark_runner/backends/codex.py):
+    # `codex exec --json --sandbox workspace-write --skip-git-repo-check -`,
+    # prompt on stdin via the trailing `-`. codex exec is inherently
+    # non-interactive; there is NO --ask-for-approval flag on exec.
+    local prompt_file="$1" result_file="$2" resume_id="${3:-}"
+    check_caps
+    # codex exec has NO session-resume flag. A resume id therefore cannot
+    # be honoured: it is journaled and ignored rather than silently
+    # dropped into an unsupported argument. (In practice this is
+    # unreachable — the driver only resumes on error_max_turns, which
+    # codex_result_obj never emits — but an unreachable silent drop is
+    # still worth refusing out loud.)
+    [[ -n "$resume_id" ]] && printf 'codex: --resume is unsupported by codex exec; starting a fresh session (id %s ignored)\n' \
+        "$resume_id" >&2
+    local cx_args=(exec --json --sandbox workspace-write --skip-git-repo-check)
+    # The ROUTED model must reach the harness. CCT_ROUTING_MODEL is what
+    # the router selected for this profile; CCT_CODEX_MODEL is the
+    # operator's direct override. Ignoring the routed value would run a
+    # different model than the routing ledger records.
+    #
+    # LIMITATION, stated rather than implied: this closes the REQUESTED
+    # half only. No codex event carries a model field, so the effective
+    # model cannot be verified from the transcript the way it can for
+    # backends that report one — `effective_model` stays null for codex
+    # attempts, and G1-style telemetry completeness treats null as
+    # UNVERIFIED, never as "equal to requested".
+    # The ROUTED model wins whenever routing selected one. An inherited
+    # CCT_CODEX_MODEL must not silently execute a different model than
+    # the routing ledger records; the direct override applies only when
+    # routing did not select (non-routing runs).
+    local cx_model="${CCT_ROUTING_MODEL:-${CCT_CODEX_MODEL:-}}"
+    [[ -n "$cx_model" ]] && cx_args+=(--model "$cx_model")
+    # Bind the routed PROVIDER too. Without this codex resolves
+    # model_provider from its own config, so a profile recorded as one
+    # provider could execute another — a false audit trail. `-c
+    # key=value` verified against codex-cli 0.147.0.
+    [[ -n "${CCT_ROUTING_PROVIDER:-}" ]] && \
+        cx_args+=(-c "model_provider=$CCT_ROUTING_PROVIDER")
+    cx_args+=(-)
+    local runner=(env CCT_PEER_REVIEW_ENABLED=false CCT_AUTO_BUILD=1 \
+        "$CODEX_BIN" "${cx_args[@]}")
+    local rc=0
+    if command -v timeout &>/dev/null && [[ "${SESSION_TIMEOUT:-0}" -gt 0 ]]; then
+        ( cd "$PROJECT_DIR" && timeout "$SESSION_TIMEOUT" "${runner[@]}" \
+            < "$prompt_file" > "$result_file" 2> "$result_file.stderr" ) || rc=$?
+    else
+        ( cd "$PROJECT_DIR" && "${runner[@]}" \
+            < "$prompt_file" > "$result_file" 2> "$result_file.stderr" ) || rc=$?
+    fi
+    if [[ $rc -eq 124 ]]; then
+        dispose "build_session_timeout" "codex session exceeded ${SESSION_TIMEOUT}s (C-5 budget)" \
+            "$(jq -n --arg f "$result_file.stderr" --argjson t "$SESSION_TIMEOUT" '{stderr: $f, timeout_sec: $t}')"
+    fi
+    if [[ $rc -ne 0 && ! -s "$result_file" ]]; then
+        dispose "build_session_error" "codex exited $rc with no result JSON (see $result_file.stderr)" \
+            "$(jq -n --arg f "$result_file.stderr" '{stderr: $f}')"
+    fi
+    local result_obj
+    result_obj=$(codex_result_obj "$result_file" "$rc")
+    # Codex never reports USD. An empty cost is the ACCOUNTING signal for
+    # an unmetered invocation. NOTE the true extent: debit_invocation_cost
+    # charges the conservative estimate ONLY when ESTIMATES_ACTIVE is set
+    # (profile `unattended`, or a config declaring unattended.budget with
+    # estimate_unmetered not false). Outside those, a codex session
+    # accrues NOTHING against the cap — neither metered nor estimated —
+    # while claude and pi on the same run debit measured cost. Deliberate:
+    # fabricating $0 would silently stop the cap accruing for every
+    # profile, and a token->USD table would put per-model pricing in the
+    # routing engine that #109's non-goals forbid. Recorded as a named
+    # deviation in specs/routing-codex-backend/plan.md.
+    if ! debit_invocation_cost "" "codex session"; then
+        dispose "cost_accounting_failed" \
+            "a codex session's cost could not be recorded in the ledger — refusing to continue with caps that cannot be enforced" \
+            "null"
+    fi
+    SESSION_SUBTYPE=$(printf '%s' "$result_obj" | jq -r '.subtype // "unknown"' 2>/dev/null || echo "unknown")
+    SESSION_ID=$(printf '%s' "$result_obj" | jq -r '.session_id // empty' 2>/dev/null || true)
+}
+
 run_session() {
     # Scheduler invocation contract: dispatch to the configured agent backend.
-    if [[ "$BACKEND" == "pi" ]]; then run_pi_session "$@"; else run_claude_session "$@"; fi
+    case "$BACKEND" in
+        pi)    run_pi_session "$@" ;;
+        codex) run_codex_session "$@" ;;
+        *)     run_claude_session "$@" ;;
+    esac
 }
 
 compose_build_prompt() {

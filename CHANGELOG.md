@@ -12,6 +12,28 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Codex execution backend (#109)** — `codex` is now an executable
+  backend, not merely an accepted registry name. Routed model AND
+  provider are bound (`--model`, `-c model_provider=`), the routed
+  identity outranks any ambient override, and preflight checks the
+  codex binary rather than falling through to the claude branch.
+
+  Codex speaks JSONL while the supervisor's result boundaries are
+  line-anchored plain text, so a codex round keeps TWO views: the raw
+  JSONL drives failure classification and the usage-limit scan (a rate
+  limit appears in an error event, never in the agent message), and a
+  decoded text view drives verdict parsing and the operator transcript.
+  Both are scrubbed; neither replaces the other. Codex stderr is kept
+  out of the parsed stream entirely — this repo captured live that its
+  prompt echo can forge a verdict — and is scrubbed, attached to the
+  attempt transcript, and cleaned via the single EXIT handler.
+
+  Result normalization requires exit 0, a completed turn, no error
+  event, and a thread identity before reporting success; a refused cost
+  debit disposes as `cost_accounting_failed` like every other call
+  site. Recorded deviation and known limitations in
+  `specs/routing-codex-backend/plan.md`.
+
 - **Calibration gates + shadow kNN recommender (#266, E3 of #109)** —
   the #109 §12 promotion conditions made executable as five gates
   (`telemetry_complete`, `labeled_volume`, `heldout_evaluated`,

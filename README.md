@@ -1128,8 +1128,29 @@ standing authority-guard tests rather than asserted. The gates are a
 proposes nothing clears every gate honestly. See
 [`scripts/session_analytics/README.md` § Calibration gates](scripts/session_analytics/README.md#calibration-gates--shadow-knn-e3-of-109-issue-266).
 
-The codex execution adapter remains its own child increment, reusing
-the existing result and checkpoint contracts.
+The **Codex execution adapter** is delivered: `codex` is a first-class
+auto-build backend (`CCT_AUTOBUILD_BACKEND=codex`, binary via
+`CCT_CODEX_BIN`, optional `CCT_CODEX_MODEL`) and a selectable routing
+profile backend in the cooldown supervisor, reusing the existing
+result and checkpoint contracts. It runs `codex exec --json --sandbox
+workspace-write --skip-git-repo-check -` with the prompt on stdin —
+the same invocation the benchmark harness already drives, with codex's
+own event stream normalized into the shared driver contract.
+
+Because codex speaks JSONL while the supervisor's result boundaries are
+line-anchored plain text, a codex round keeps **two views**: the raw
+JSONL drives failure classification and the usage-limit scan (a rate
+limit appears in an error event, never in the agent message), and a
+decoded text view drives verdict parsing and the operator transcript.
+Both are scrubbed; neither replaces the other.
+
+Scope of what is demonstrated: unit tests over recorded codex
+transcripts, driver-level tests with a mock codex, structural coverage
+of the supervisor launch chains, and behavioural tests against a
+transcript captured from codex-cli 0.147.0. What has **not** been run
+is an end-to-end delegate/reconcile round driven by a live codex.
+`effective_model` is null for codex attempts because no codex event
+reports the model actually served.
 
 ## Four-Phase Workflow
 
@@ -1230,7 +1251,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh           116 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1037 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1068 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         167 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       186 circuit + action + selection + supervisor + identity tests (#251 B)

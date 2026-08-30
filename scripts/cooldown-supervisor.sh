@@ -21,7 +21,7 @@
 # Usage:
 #   cooldown-supervisor.sh <feature-id> [options]
 #     --worktree <path>        project/worktree to run in (default: repo root)
-#     --backend <claude|pi>    harness backend (default: claude)
+#     --backend <claude|pi|codex>  harness backend (default: claude)
 #     --profile <name>         unattended posture to pass (default: unattended)
 #     --max-attempts N         cap on total harness launches (default: 20)
 #     --max-cooldowns N        cap on usage-limit cooldowns (default: 12)
@@ -128,7 +128,10 @@ done
 case "$FEATURE_ID" in
   */*|*'\'*|.|..) err "unsafe feature id '$FEATURE_ID'."; exit 64 ;;
 esac
-[[ "$BACKEND" == "claude" || "$BACKEND" == "pi" ]] || { err "backend must be claude|pi."; exit 64; }
+case "$BACKEND" in
+  claude|pi|codex) ;;
+  *) err "backend must be claude|pi|codex."; exit 64 ;;
+esac
 [[ "$ON_INCOMPLETE" == "park" || "$ON_INCOMPLETE" == "relaunch" ]] || { err "--on-incomplete must be park|relaunch."; exit 64; }
 # --delegate/--reconcile are routing-mode surfaces (named refusals)
 if [[ -n "$DELEGATE_TASK" && "$ROUTING" != "1" ]]; then
@@ -222,6 +225,22 @@ run_unlock() {
     rm -rf "$RUN_LOCK" 2>/dev/null || true
   fi
 }
+# ── Temp-file hygiene ──
+# Defined BEFORE the EXIT trap that calls it. The trap fires on every
+# exit, including a routing refusal during startup; an undefined handler
+# there aborts under set -e, which replaces the intended exit code with
+# 127 AND skips run_unlock, leaking the run lock. Reproduced before this
+# ordering was fixed.
+#
+# Codex leaves two siblings beside $OUT (.stderr, .txt); .stderr carries
+# the echoed packet, so an orphan is a disclosure, not just litter.
+RT_TMP_FILES=()
+rt_tmp_track() { RT_TMP_FILES+=("$@"); }
+rt_tmp_cleanup() {
+  local f
+  for f in ${RT_TMP_FILES[@]+"${RT_TMP_FILES[@]}"}; do rm -f "$f"; done
+}
+
 if [[ "$ROUTING" == "1" ]]; then
   if ! mkdir "$RUN_LOCK" 2>/dev/null; then
     RL_OWNER="$(cat "$RUN_LOCK/pid" 2>/dev/null || echo "")"
@@ -244,7 +263,7 @@ if [[ "$ROUTING" == "1" ]]; then
     err "cannot record ownership of the run lock $RUN_LOCK"
     exit 5
   fi
-  trap run_unlock EXIT
+  trap 'rt_tmp_cleanup; run_unlock' EXIT
 fi
 
 START_EPOCH="$(now_epoch)"
@@ -461,6 +480,7 @@ rt_launch_env() {
   ep=$(jq -r '.endpoint_ref' <<< "$pj")
   RT_CHILD_BACKEND="claude"
   [[ "$backend" == "pi" ]] && RT_CHILD_BACKEND="pi"
+  [[ "$backend" == "codex" ]] && RT_CHILD_BACKEND="codex"
   RT_ENV_BASE_URL=""; RT_ENV_API_KEY=""
   case "$ep" in
     url:*)    RT_ENV_BASE_URL="${ep#url:}";      names="$names ANTHROPIC_BASE_URL(base_url)" ;;
@@ -475,6 +495,38 @@ rt_launch_env() {
 # Child output is SECRET-TAINTED before persistence: any wired secret
 # value is scrubbed from the capture so an echoing child can never turn
 # a credential into durable evidence (transcript/result/journal).
+# rt_codex_decode <raw-file> <decoded-out> — derive the PLAIN-TEXT view
+# of a codex JSONL stream WITHOUT destroying the raw one.
+#
+# Two explicit views, because they serve different consumers and the
+# earlier single-file rewrite broke failover:
+#
+#   raw JSONL ($OUT)      — failure classification and evidence.
+#     rr_result and the USAGE_PATTERN scan need the WHOLE stream: a
+#     rate-limit only ever appears in an error event or a command's
+#     output, never inside agent_message.text. Collapsing the file to
+#     the agent message classified a rate-limited round as `unknown`
+#     and defeated the failover this arc exists for.
+#   decoded text ($OUT.txt) — verdict parsing and operator display.
+#     The supervisor's boundary is line-anchored plain text
+#     (^RECONCILE_VERDICT:), which codex wraps inside an
+#     item.completed/agent_message event.
+#
+# Both are scrubbed before anything persists; both are cleaned on every
+# exit path. A stream that is not codex JSONL produces no decoded view.
+
+rt_codex_decode() {
+  local raw="$1" out="$2" decoded
+  [[ -s "$raw" ]] || return 0
+  grep -q '"type":"item.completed"\|"type":"thread.started"' "$raw" 2>/dev/null || return 0
+  decoded="$(jq -r -s '
+      [.[] | select(.type? == "item.completed")
+           | .item | select(.type? == "agent_message") | .text // empty]
+      | join("\n")' "$raw" 2>/dev/null || true)"
+  [[ -n "$decoded" ]] || return 0
+  printf '%s\n' "$decoded" > "$out"
+}
+
 rt_scrub_out() {  # <file>
   [[ -n "${RT_ENV_API_KEY:-}" ]] || return 0
   local content
@@ -1244,7 +1296,19 @@ delegate_run() {
     prompt_file="$RT_DIR/prompt-$attempt_no.txt"
     rt_packet_prompt "$round" "$prompt_file" "${DELEGATE_LAST_FAILURES:--}"
     OUT="$(mktemp)"
+    rt_tmp_track "$OUT" "$OUT.stderr" "$OUT.txt"
     set +e
+    # The profile's model, as --model args, for backends that take one.
+    CX_MODEL_ARGS=()
+    _cxm=$(jq -r '.model // empty' <<< "$pj")
+    [[ -n "$_cxm" ]] && CX_MODEL_ARGS=(--model "$_cxm")
+    # Bind the routed PROVIDER as well. codex otherwise resolves
+    # model_provider from its own config, so a profile RECORDED as one
+    # provider could execute another — and the supervisor uses that
+    # recorded provider for the reconciliation independence judgement.
+    # `-c key=value` verified against codex-cli 0.147.0.
+    _cxp=$(jq -r '.provider // empty' <<< "$pj")
+    [[ -n "$_cxp" ]] && CX_MODEL_ARGS+=(-c "model_provider=$_cxp")
     if [[ -n "${CCT_SUPERVISOR_HARNESS_CMD:-}" ]]; then
       ( cd "$PKT_WT" \
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
@@ -1257,6 +1321,20 @@ delegate_run() {
                ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
                ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
                bash -c "$CCT_SUPERVISOR_HARNESS_CMD" ) < "$prompt_file" >"$OUT" 2>&1
+    elif [[ "$(jq -r '.backend' <<< "$pj")" == "codex" ]]; then
+      # codex exec is non-interactive by construction and bounded by its
+      # own sandbox; prompt on stdin via the trailing `-`, matching the
+      # proven benchmark backend invocation. The profile's MODEL is
+      # passed through: running a different model than the routing
+      # ledger records would make the audit trail false.
+      ( cd "$PKT_WT" \
+        && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
+               ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
+               ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
+               "${CCT_CODEX_BIN:-codex}" exec --json \
+               --sandbox workspace-write --skip-git-repo-check \
+               ${CX_MODEL_ARGS[@]+"${CX_MODEL_ARGS[@]}"} \
+               - ) < "$prompt_file" >"$OUT" 2>"$OUT.stderr"
     elif [[ "$(jq -r '.backend' <<< "$pj")" == "pi" ]]; then
       ( cd "$PKT_WT" \
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
@@ -1274,11 +1352,24 @@ delegate_run() {
     fi
     CHILD_CODE=$?
     set -e
+    # codex speaks JSONL. Derive the plain-text view for the verdict
+    # boundary; $OUT stays the RAW stream so failure classification and
+    # the usage-limit scan still see error events and command output.
+    if [[ "$(jq -r '.backend' <<< "$pj")" == "codex" ]]; then
+      rt_codex_decode "$OUT" "$OUT.txt"
+      [[ -s "$OUT.txt" ]] && rt_scrub_out "$OUT.txt"
+    fi
     rt_scrub_out "$OUT"
+    # codex's stderr is deliberately NOT part of the parsed stream (#199:
+    # its prompt echo forged a PASS verdict once), but it is still the
+    # only diagnostic a failing codex round leaves — and it carries the
+    # echoed packet, so it gets the SAME scrub as $OUT before anything
+    # persists, and it is never left behind in /tmp.
+    [[ -s "$OUT.stderr" ]] && rt_scrub_out "$OUT.stderr"
     cat "$OUT"
 
     if [[ "$CHILD_CODE" -eq 6 ]]; then
-      rm -f "$OUT"
+      rm -f "$OUT" "$OUT.stderr" "$OUT.txt"
       jq -n --arg id "$attempt_id" '{schema_version:1, attempt_id:$id, outcome:"terminated_policy"}' > "$RT_DIR/result-$attempt_no.json"
       notify "terminated_policy" "policy termination (exit 6) in a packet round — terminal, not rerouted"
       terminate "terminated_policy" 6 "packet child exited terminated_policy (exit 6); terminal by contract"
@@ -1295,7 +1386,14 @@ delegate_run() {
         || rt_refuse "routing_unknown_failure" "the action policy failed to evaluate"
     legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT" 2>/dev/null | tail -1 || true)"
     cp "$OUT" "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
-    rm -f "$OUT"
+    # the decoded agent messages, so an operator reads prose not JSONL
+    [[ -s "$OUT.txt" ]] && { printf '\n--- decoded agent messages ---\n'; \
+        cat "$OUT.txt"; } >> "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
+    # scrubbed stderr rides with the transcript so a failing codex round
+    # is diagnosable; absent for backends that never wrote one
+    [[ -s "$OUT.stderr" ]] && cat "$OUT.stderr" \
+        >> "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
+    rm -f "$OUT" "$OUT.stderr" "$OUT.txt"
     jq -n --arg id "$attempt_id" --argjson r "$result" --argjson t "$decision_epoch" \
           --argjson d "$decision" --arg legacy "$legacy_hit" \
           '{attempt_id:$id, decision_epoch:$t, result:$r, decision:$d,
@@ -1578,7 +1676,19 @@ reconcile_run() {
     evid_file=$(ls "$RT_DIR"/verifiers-*.txt.log 2>/dev/null | sort | tail -1 || true)
     rt_reconcile_prompt "$prompt_file" "$patch_file" "${evid_file:-/dev/null}"
     OUT="$(mktemp)"
+    rt_tmp_track "$OUT" "$OUT.stderr" "$OUT.txt"
     set +e
+    # The profile's model, as --model args, for backends that take one.
+    CX_MODEL_ARGS=()
+    _cxm=$(jq -r '.model // empty' <<< "$pj")
+    [[ -n "$_cxm" ]] && CX_MODEL_ARGS=(--model "$_cxm")
+    # Bind the routed PROVIDER as well. codex otherwise resolves
+    # model_provider from its own config, so a profile RECORDED as one
+    # provider could execute another — and the supervisor uses that
+    # recorded provider for the reconciliation independence judgement.
+    # `-c key=value` verified against codex-cli 0.147.0.
+    _cxp=$(jq -r '.provider // empty' <<< "$pj")
+    [[ -n "$_cxp" ]] && CX_MODEL_ARGS+=(-c "model_provider=$_cxp")
     if [[ -n "${CCT_SUPERVISOR_HARNESS_CMD:-}" ]]; then
       ( cd "$PKT_WT" \
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
@@ -1591,6 +1701,19 @@ reconcile_run() {
                ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
                ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
                bash -c "$CCT_SUPERVISOR_HARNESS_CMD" ) < "$prompt_file" >"$OUT" 2>&1
+    elif [[ "$(jq -r '.backend' <<< "$pj")" == "codex" ]]; then
+      # A codex RECONCILER must run codex. Falling through to the claude
+      # branch launched a different harness than the one recorded as the
+      # reconciler identity, which would rest the independence judgement
+      # on a false record.
+      ( cd "$PKT_WT" \
+        && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
+               ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
+               ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
+               "${CCT_CODEX_BIN:-codex}" exec --json \
+               --sandbox workspace-write --skip-git-repo-check \
+               ${CX_MODEL_ARGS[@]+"${CX_MODEL_ARGS[@]}"} \
+               - ) < "$prompt_file" >"$OUT" 2>"$OUT.stderr"
     elif [[ "$(jq -r '.backend' <<< "$pj")" == "pi" ]]; then
       ( cd "$PKT_WT" \
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
@@ -1608,11 +1731,24 @@ reconcile_run() {
     fi
     CHILD_CODE=$?
     set -e
+    # codex speaks JSONL. Derive the plain-text view for the verdict
+    # boundary; $OUT stays the RAW stream so failure classification and
+    # the usage-limit scan still see error events and command output.
+    if [[ "$(jq -r '.backend' <<< "$pj")" == "codex" ]]; then
+      rt_codex_decode "$OUT" "$OUT.txt"
+      [[ -s "$OUT.txt" ]] && rt_scrub_out "$OUT.txt"
+    fi
     rt_scrub_out "$OUT"
+    # codex's stderr is deliberately NOT part of the parsed stream (#199:
+    # its prompt echo forged a PASS verdict once), but it is still the
+    # only diagnostic a failing codex round leaves — and it carries the
+    # echoed packet, so it gets the SAME scrub as $OUT before anything
+    # persists, and it is never left behind in /tmp.
+    [[ -s "$OUT.stderr" ]] && rt_scrub_out "$OUT.stderr"
     cat "$OUT"
 
     if [[ "$CHILD_CODE" -eq 6 ]]; then
-      rm -f "$OUT"
+      rm -f "$OUT" "$OUT.stderr" "$OUT.txt"
       jq -n --arg id "$attempt_id" '{schema_version:1, attempt_id:$id, outcome:"terminated_policy"}' > "$RT_DIR/result-$attempt_no.json"
       notify "terminated_policy" "policy termination (exit 6) during reconciliation — terminal"
       terminate "terminated_policy" 6 "reconciler exited terminated_policy (exit 6); terminal by contract"
@@ -1628,9 +1764,18 @@ reconcile_run() {
         || rt_refuse "routing_unknown_failure" "the action policy failed to evaluate"
     legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT" 2>/dev/null | tail -1 || true)"
     local verdict_line
-    verdict_line="$(grep -E '^RECONCILE_VERDICT: (accepted|rejected)[[:space:]]*$' "$OUT" | tail -1 || true)"
+    # the decoded view for codex; $OUT itself for plain-text backends
+    _vsrc="$OUT"; [[ -s "$OUT.txt" ]] && _vsrc="$OUT.txt"
+    verdict_line="$(grep -E '^RECONCILE_VERDICT: (accepted|rejected)[[:space:]]*$' "$_vsrc" | tail -1 || true)"
     cp "$OUT" "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
-    rm -f "$OUT"
+    # the decoded agent messages, so an operator reads prose not JSONL
+    [[ -s "$OUT.txt" ]] && { printf '\n--- decoded agent messages ---\n'; \
+        cat "$OUT.txt"; } >> "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
+    # scrubbed stderr rides with the transcript so a failing codex round
+    # is diagnosable; absent for backends that never wrote one
+    [[ -s "$OUT.stderr" ]] && cat "$OUT.stderr" \
+        >> "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
+    rm -f "$OUT" "$OUT.stderr" "$OUT.txt"
     jq -n --arg id "$attempt_id" --argjson r "$result" --argjson t "$decision_epoch" \
           --argjson d "$decision" --arg legacy "$legacy_hit" \
           '{attempt_id:$id, decision_epoch:$t, result:$r, decision:$d,

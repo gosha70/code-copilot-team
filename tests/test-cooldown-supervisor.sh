@@ -230,6 +230,151 @@ CCT_SUPERVISOR_SLEEP=true bash "$SUP" '../escape' --worktree "$(mktemp -d)" >/de
 RC=$?; set -e
 assert_exit "unsafe feature id rejected (exit 64)" 64 "$RC"
 
+# ── the EXIT trap must not break early refusals ──
+# The trap installed at lock acquisition calls rt_tmp_cleanup. When that
+# was defined LATER in the file, an early routing refusal exited 127
+# from the undefined handler and skipped run_unlock, leaking the lock.
+echo "--- early-refusal exit path ---"
+ER_W=$(mktemp -d)
+set +e
+ER_OUT=$(CCT_SUPERVISOR_SLEEP=true bash "$SUP" demo --worktree "$ER_W" --routing 2>&1)
+ER_RC=$?
+set -e
+assert_exit "early routing refusal keeps its own exit code (not 127)" 64 "$ER_RC"
+assert "early refusal does not hit an undefined cleanup handler" \
+    "! grep -qi 'command not found' <<< \"\$ER_OUT\""
+assert "early refusal releases the run lock" \
+    "[[ ! -e \"$ER_W/.cct/supervisor/demo/routing-run.lock\" ]]"
+assert "the cleanup function is defined BEFORE the trap installs it" \
+    "[[ \$(grep -n 'RT_TMP_FILES=()' \"$SUP\" | cut -d: -f1) -lt \$(grep -n \"trap 'rt_tmp_cleanup\" \"$SUP\" | cut -d: -f1) ]]"
+rm -rf "$ER_W"
+
+# ── #109: the codex execution backend ──
+echo "--- codex backend ---"
+# Assert on the MESSAGE, not the exit code: 64 is the usage code for
+# several conditions (a missing registry among them), so an exit-code
+# assertion here would pass for the wrong reason.
+set +e
+OUT_CX=$(CCT_SUPERVISOR_SLEEP=true bash "$SUP" demo \
+    --worktree "$(mktemp -d)" --backend codex 2>&1)
+set -e
+assert "codex is an accepted --backend (never rejected as unknown)" \
+    "! grep -q 'backend must be' <<< \"\$OUT_CX\""
+set +e
+OUT_BOGUS=$(CCT_SUPERVISOR_SLEEP=true bash "$SUP" demo --worktree "$(mktemp -d)" \
+    --backend cursor 2>&1)
+RC=$?; set -e
+assert_exit "unknown backend still rejected (exit 64)" 64 "$RC"
+assert "rejection names codex among the valid set" \
+    "grep -q 'claude|pi|codex' <<< \"\$OUT_BOGUS\""
+
+# STRUCTURAL assertions on the launch chains. These are weaker than a
+# behavioural test — the delegate/reconcile suites drive the harness via
+# CCT_SUPERVISOR_HARNESS_CMD, which bypasses the backend branches
+# entirely — but each one pins a defect that actually shipped:
+#   * the reconcile chain had NO codex branch, so a codex reconciler ran
+#     claude while being recorded as codex;
+#   * the routed model never reached the harness;
+#   * merging codex stderr forged a PASS verdict once already in this
+#     repo (specs/codex-provider-command/plan.md, captured live).
+# count the DISPATCH branches (elif), not every mention of codex — the
+# decode call sites legitimately add their own conditionals
+CX_BRANCHES=$(grep -c "elif \[\[ .* == \"codex\" \]\]; then" "$SUP")
+assert "both launch chains dispatch codex (delegate + reconcile)" \
+    "[[ $CX_BRANCHES -eq 2 ]]"
+assert "every codex launch invokes CCT_CODEX_BIN" \
+    "[[ \$(grep -c 'CCT_CODEX_BIN:-codex' \"$SUP\") -eq 2 ]]"
+assert "every codex launch passes the routed model" \
+    "[[ \$(grep -c 'CX_MODEL_ARGS\[@\]' \"$SUP\") -eq 2 ]]"
+assert "the routed model is read from the profile at both sites" \
+    "[[ \$(grep -c \"CX_MODEL_ARGS=(--model\" \"$SUP\") -eq 2 ]]"
+assert "no codex launch merges stderr into the parsed stream (#199)" \
+    "[[ \$(grep -A 8 'CCT_CODEX_BIN:-codex' \"$SUP\" | grep -c '2>&1') -eq 0 ]]"
+# The separated stderr must not become an unscrubbed orphan: it carries
+# codex's echoed prompt (the packet + patch on a delegate round).
+assert "separated stderr is scrubbed before it persists" \
+    "[[ \$(grep -c 'rt_scrub_out \"\$OUT.stderr\"' \"$SUP\") -eq 2 ]]"
+assert "separated stderr rides with the transcript (diagnosable)" \
+    "[[ \$(grep -c 'transcript-.attempt_no.log' \"$SUP\") -ge 4 ]]"
+assert "separated stderr is always cleaned up (no /tmp orphans)" \
+    "[[ \$(grep -c 'rm -f \"\$OUT\" \"\$OUT.stderr\"' \"$SUP\") -eq 4 ]]"
+
+# BEHAVIOURAL, against a transcript captured from the real codex CLI
+# (codex-cli 0.147.0). The structural assertions above bypass the backend
+# branches; this exercises the actual result boundary.
+CXLIVE="$REPO_DIR/tests/fixtures/codex/reconcile-verdict-live.jsonl"
+CXDEC=$(mktemp); cp "$CXLIVE" "$CXDEC"
+# the decoder is the unit under test — source it out of the supervisor
+CXFN=$(mktemp); sed -n '/^rt_codex_decode()/,/^}/p' "$SUP" > "$CXFN"
+# shellcheck source=/dev/null
+source "$CXFN"
+
+assert "live capture: verdict is INVISIBLE before decoding (the bug)" \
+    "! grep -qE '^RECONCILE_VERDICT: (accepted|rejected)[[:space:]]*\$' \"$CXDEC\""
+rt_codex_decode "$CXDEC" "$CXDEC.txt"
+assert "live capture: verdict parses in the decoded view (the fix)" \
+    "grep -qE '^RECONCILE_VERDICT: (accepted|rejected)[[:space:]]*\$' \"$CXDEC.txt\""
+assert "live capture: the RAW stream is preserved in place, not copied aside" \
+    "grep -q 'thread.started' \"$CXDEC\""
+assert "decoder produces no view for a non-codex stream" \
+    "printf 'RECONCILE_VERDICT: accepted\\n' > \"$CXDEC.plain\"; rt_codex_decode \"$CXDEC.plain\" \"$CXDEC.plain.txt\"; [[ ! -e \"$CXDEC.plain.txt\" ]]"
+# the captured stderr carries an ERROR line — proof the #199 hazard is
+# live, and that it must never reach the parsed stream
+assert "live capture: real codex stderr carries noise the parser must not see" \
+    "grep -q 'ERROR' \"$REPO_DIR/tests/fixtures/codex/reconcile-verdict-live.stderr\""
+
+# THE failover regression. A rate limit appears in an error event or a
+# command's output — never inside agent_message.text. An earlier decode
+# collapsed $OUT to the agent message, which classified a rate-limited
+# round as `unknown` and defeated failover. The raw stream must survive
+# decoding intact.
+CXRL=$(mktemp)
+cat > "$CXRL" <<'RLEOF'
+{"type":"thread.started","thread_id":"t1"}
+{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"Working on it."}}
+{"type":"error","message":"rate limit reached; try again later"}
+RLEOF
+CXRL_LINES=$(wc -l < "$CXRL" | tr -d ' ')
+rt_codex_decode "$CXRL" "$CXRL.txt"
+# Drive the SHARED classifier, not a word search: a regression in
+# rr_classify must fail this test, and grepping for "rate limit" would
+# not notice one.
+# shellcheck source=/dev/null
+source "$REPO_DIR/scripts/lib/routing-result.sh" 2>/dev/null || true
+CXRL_CLASS="$(rr_classify 1 "$CXRL" 2>/dev/null | jq -r '.failure_class // "none"' 2>/dev/null || echo classifier_unavailable)"
+assert "failover: rr_classify still returns rate_limited after decoding" \
+    "[[ \"$CXRL_CLASS\" == rate_limited ]]"
+assert "failover: the raw stream is not truncated by decoding" \
+    "[[ \$(wc -l < \"$CXRL\" | tr -d ' ') -eq $CXRL_LINES ]]"
+assert "failover: the decoded view holds only the agent message" \
+    "[[ \$(wc -l < \"$CXRL.txt\" | tr -d ' ') -eq 1 ]] && grep -qx 'Working on it.' \"$CXRL.txt\""
+assert "failover: the decoded view does NOT carry the error text" \
+    "! grep -qiE 'rate limit' \"$CXRL.txt\""
+# the counterfactual: classifying the DECODED view (what the destructive
+# first fix did) loses the class entirely
+CXRL_DECCLASS="$(rr_classify 1 "$CXRL.txt" 2>/dev/null | jq -r '.failure_class // "none"' 2>/dev/null || echo unavailable)"
+assert "failover: classifying the decoded view would LOSE rate_limited" \
+    "[[ \"$CXRL_DECCLASS\" != rate_limited ]]"
+rm -f "$CXRL" "$CXRL.txt"
+
+# the decoded view is a SIBLING, never a replacement
+assert "decoder never mutates the file it reads" \
+    "grep -q 'rt_codex_decode \"\$OUT\" \"\$OUT.txt\"' \"$SUP\""
+assert "both siblings are exit-safe (trap-registered, not just rm'd)" \
+    "grep -q \"trap 'rt_tmp_cleanup; run_unlock' EXIT\" \"$SUP\" && [[ \$(grep -c 'rt_tmp_track \"\$OUT\"' \"$SUP\") -eq 2 ]]"
+# A SECOND `trap ... EXIT` replaces rather than appends. Adding one here
+# silently disabled run_unlock and leaked the run lock — caught by
+# routing-delegation/recovery, not by this suite. Exactly one handler.
+# count STATEMENTS, not prose — a comment mentioning `trap ... EXIT`
+# (including the one explaining this very hazard) is not a trap
+assert "exactly one EXIT trap (a second would silently replace it)" \
+    "[[ \$(grep -cE '^[[:space:]]*trap .* EXIT' \"$SUP\") -eq 1 ]]"
+assert "the single handler still releases the run lock" \
+    "grep -q 'run_unlock' <<< \"\$(grep 'trap .* EXIT' \"$SUP\")\""
+assert "the decoded view is scrubbed before it persists" \
+    "[[ \$(grep -c 'rt_scrub_out \"\$OUT.txt\"' \"$SUP\") -eq 2 ]]"
+rm -f "$CXDEC" "$CXDEC.txt" "$CXDEC.plain" "$CXFN"
+
 echo ""
 echo "========================================="
 echo "  cooldown-supervisor tests: $PASS passed, $FAIL failed"

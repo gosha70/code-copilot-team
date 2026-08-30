@@ -469,6 +469,50 @@ printf '{"type":"result","subtype":"%s","session_id":"pi-session-%s","total_cost
 MOCK
 chmod +x "$MOCK_BIN/pi-code"
 
+# Mock codex (#109 Increment E follow-on): `codex exec --json ... -` reads the
+# prompt from stdin via the trailing `-` and emits JSONL with the result last,
+# matching the real CLI the benchmark backend already drives.
+cat > "$MOCK_BIN/codex" << 'MOCK'
+#!/usr/bin/env bash
+# Emits CODEX's REAL event shape, copied from the recorded transcript at
+# scripts/benchmark_runner/tests/fixtures/codex/transcript-success.jsonl:
+# thread.started / item.completed / turn.completed, and NEVER a
+# claude/pi-style {"type":"result",...} envelope, which codex does not
+# produce. A mock that emitted one would test the contract we wished for
+# instead of the one the harness actually speaks.
+if [[ "${1:-}" == "--version" || "${1:-}" == "version" ]]; then
+    echo "codex-cli 0.130.0"; exit 0
+fi
+if [[ -n "${MOCK_CODEX_ARGV_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_CODEX_ARGV_LOG"; fi
+if [[ -n "${MOCK_CODEX_STDIN_LOG:-}" ]]; then
+    MOCK_STDIN_TMP=$(mktemp)
+    cat > "$MOCK_STDIN_TMP"
+    printf '%s %s\n' "$(wc -c < "$MOCK_STDIN_TMP" | tr -d ' ')" \
+        "$( { shasum -a 256 2>/dev/null || sha256sum; } < "$MOCK_STDIN_TMP" | cut -d' ' -f1)" \
+        >> "$MOCK_CODEX_STDIN_LOG"
+    rm -f "$MOCK_STDIN_TMP"
+else
+    cat > /dev/null
+fi
+COUNTER_FILE="${MOCK_CODEX_COUNTER:-/tmp/mock-codex-count}"
+COUNT=$(( $(cat "$COUNTER_FILE" 2>/dev/null || echo 0) + 1 ))
+echo "$COUNT" > "$COUNTER_FILE"
+export MOCK_SESSION_N="$COUNT"
+if [[ -n "${MOCK_CODEX_SCRIPT:-}" && -f "$MOCK_CODEX_SCRIPT" ]]; then
+    # shellcheck source=/dev/null
+    source "$MOCK_CODEX_SCRIPT"
+fi
+printf '{"type":"thread.started","thread_id":"cx-thread-%s"}\n' "$COUNT"
+printf '{"type":"turn.started"}\n'
+printf '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"phase %s done"}}\n' "$COUNT"
+if [[ "${MOCK_CODEX_FAIL:-0}" == "1" ]]; then
+    # a turn that never completes — codex's real incomplete shape
+    exit 1
+fi
+printf '{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":0,"output_tokens":40,"reasoning_output_tokens":0}}\n'
+MOCK
+chmod +x "$MOCK_BIN/codex"
+
 # ══════════════════════════════════════════════════════════════
 echo "=== US1: preflight rejections ==="
 # ══════════════════════════════════════════════════════════════
@@ -3512,6 +3556,164 @@ assert_eq "#234: the --resume continuation also received its prompt on stdin" "t
 rm -f "$MOCK_CLAUDE_STDIN_LOG" "$RESUME_SCRIPT"; unset MOCK_CLAUDE_STDIN_LOG
 rm -rf "$P"
 
+# ══════════════════════════════════════════════════════════════
+echo "=== #109: the codex execution backend ==="
+# ══════════════════════════════════════════════════════════════
+# #109 lists the Codex backend in its example priority chain, and the
+# registry has always ACCEPTED backend="codex" — but auto-build had no
+# codex execution path, so a codex profile validated and could never run.
+
+PCX=$(setup_project); single_phase "$PCX"
+CXCOUNT=$(mktemp); echo 0 > "$CXCOUNT"
+CXARGV=$(mktemp); CXSTDIN=$(mktemp)
+CLCOUNT2=$(mktemp); echo 0 > "$CLCOUNT2"
+RC=0
+OUTPUT=$(cd "$PCX" && CCT_PROJECT_DIR="$PCX" CCT_AUTOBUILD_BACKEND=codex \
+    CCT_CODEX_BIN="$MOCK_BIN/codex" MOCK_CODEX_COUNTER="$CXCOUNT" \
+    MOCK_CODEX_ARGV_LOG="$CXARGV" MOCK_CODEX_STDIN_LOG="$CXSTDIN" \
+    MOCK_CODEX_SCRIPT="$DEFAULT_SCRIPT" \
+    CCT_CLAUDE_BIN="$MOCK_BIN/claude" MOCK_CLAUDE_COUNTER="$CLCOUNT2" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$DRIVER" demo-feat 2>&1) || RC=$?
+assert_exit "codex backend: single-phase completes (exit 0)" 0 "$RC"
+assert_eq "codex backend: status done" "done" \
+    "$(jq -r '.status' "$PCX/.cct/auto-build/demo-feat/state.json")"
+assert_eq "codex backend: codex was invoked" "1" \
+    "$([[ $(cat "$CXCOUNT") -gt 0 ]] && echo 1 || echo 0)"
+assert_eq "codex backend: claude was NOT invoked" "0" "$(cat "$CLCOUNT2")"
+# Codex reports TOKEN USAGE, never USD. Fabricating $0 would silently
+# stop the cost cap accruing; the driver's accounting rule debits an
+# unmetered invocation instead.
+assert_eq "codex backend: no fabricated metered cost" "0" \
+    "$(jq -r '.totals.cost_usd' "$PCX/.cct/auto-build/demo-feat/state.json")"
+# the proven benchmark invocation, not an invented one
+assert_contains "codex backend: uses \`codex exec --json\`" "$(cat "$CXARGV")" \
+    "exec --json"
+assert_contains "codex backend: sandboxed workspace-write" "$(cat "$CXARGV")" \
+    "sandbox workspace-write"
+assert_contains "codex backend: skips the git-repo check" "$(cat "$CXARGV")" \
+    "skip-git-repo-check"
+# the prompt must arrive on STDIN (trailing `-`), never argv — same
+# ARG_MAX/E2BIG exposure the claude and pi backends already fixed
+assert_eq "codex backend: prompt arrived on stdin" "1" \
+    "$([[ -s "$CXSTDIN" ]] && echo 1 || echo 0)"
+# NOTE: the discriminator for the normalizer fix is "status done" above.
+# With the generic session_result_obj, codex's turn.completed tail yields
+# subtype=unknown and the driver disposes the phase. A grep for the
+# thread id would NOT discriminate — the raw codex stdout under .cct
+# contains it either way. The normalizer's own contract is unit-tested
+# against the recorded fixtures below.
+if grep -rqE '"subject_provider":[[:space:]]*"codex"' "$PCX/.cct" 2>/dev/null; then
+    echo "  PASS: codex backend: review subject_provider=codex"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: codex backend: review subject_provider=codex"; FAIL=$((FAIL + 1))
+fi
+rm -f "$CXCOUNT" "$CXARGV" "$CXSTDIN" "$CLCOUNT2"; rm -rf "$PCX"
+
+# Preflight must check the binary that will RUN. Before the fix a codex
+# run fell through to the claude branch: it passed on a host with claude
+# and no codex, and failed reporting the wrong binary otherwise.
+PCXPRE=$(setup_project)
+RC=0
+OUTPUT=$(cd "$PCXPRE" && CCT_PROJECT_DIR="$PCXPRE" CCT_AUTOBUILD_BACKEND=codex \
+    CCT_CODEX_BIN=/nonexistent-codex-xyz CCT_CLAUDE_BIN="$MOCK_BIN/claude" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$DRIVER" demo-feat 2>&1) || RC=$?
+assert_exit "codex backend: unusable codex rejected" 1 "$RC"
+assert_contains "codex backend: preflight names CODEX, not claude" "$OUTPUT" \
+    "codex not usable"
+rm -rf "$PCXPRE"
+
+# The routed model must reach the harness (routing ledger vs reality).
+PCXM=$(setup_project); single_phase "$PCXM"
+CXARGV2=$(mktemp); CXCOUNT2=$(mktemp); echo 0 > "$CXCOUNT2"
+RC=0
+(cd "$PCXM" && CCT_PROJECT_DIR="$PCXM" CCT_AUTOBUILD_BACKEND=codex \
+    CCT_CODEX_BIN="$MOCK_BIN/codex" MOCK_CODEX_COUNTER="$CXCOUNT2" \
+    MOCK_CODEX_ARGV_LOG="$CXARGV2" MOCK_CODEX_SCRIPT="$DEFAULT_SCRIPT" \
+    CCT_ROUTING_MODEL="gpt-5.6-sol" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$DRIVER" demo-feat >/dev/null 2>&1) || RC=$?
+assert_contains "codex backend: routed model reaches the harness" \
+    "$(cat "$CXARGV2")" "model gpt-5.6-sol"
+rm -f "$CXARGV2" "$CXCOUNT2"; rm -rf "$PCXM"
+
+# The ROUTED model must outrank an ambient CCT_CODEX_MODEL: a host-level
+# override must not execute one model while the ledger records another.
+PCXP=$(setup_project); single_phase "$PCXP"
+CXARGV3=$(mktemp); CXCOUNT3=$(mktemp); echo 0 > "$CXCOUNT3"
+(cd "$PCXP" && CCT_PROJECT_DIR="$PCXP" CCT_AUTOBUILD_BACKEND=codex \
+    CCT_CODEX_BIN="$MOCK_BIN/codex" MOCK_CODEX_COUNTER="$CXCOUNT3" \
+    MOCK_CODEX_ARGV_LOG="$CXARGV3" MOCK_CODEX_SCRIPT="$DEFAULT_SCRIPT" \
+    CCT_ROUTING_MODEL="routed-model" CCT_CODEX_MODEL="ambient-model" \
+    CCT_ROUTING_PROVIDER="routed-provider" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$DRIVER" demo-feat >/dev/null 2>&1) || true
+assert_contains "codex backend: routed model outranks the ambient override" \
+    "$(cat "$CXARGV3")" "model routed-model"
+assert_eq "codex backend: the ambient model never reaches the harness" "0" \
+    "$(grep -c 'ambient-model' "$CXARGV3" 2>/dev/null || true)"
+assert_contains "codex backend: routed provider is bound (-c model_provider)" \
+    "$(cat "$CXARGV3")" "model_provider=routed-provider"
+rm -f "$CXARGV3" "$CXCOUNT3"; rm -rf "$PCXP"
+
+# A REFUSED cost debit must stop the run, exactly as every other
+# invocation site does — not be swallowed by `|| true`.
+assert_contains "codex backend: a refused cost debit disposes, never continues" \
+    "$(grep -A 4 'debit_invocation_cost "" "codex session"' "$DRIVER")" \
+    "cost_accounting_failed"
+assert_eq "codex backend: the debit return is checked, not suppressed" "0" \
+    "$(grep -c 'debit_invocation_cost "" "codex session" || true' "$DRIVER" 2>/dev/null || true)"
+
+# ── codex_result_obj against the RECORDED transcripts (fixture ground
+#    truth: the repo's rule is that a recorded capture, not an assumed
+#    shape, defines the parser's contract) ──
+CXFX="$SCRIPT_DIR/../scripts/benchmark_runner/tests/fixtures/codex"
+# extract the function from the driver and exercise it directly
+CXFN=$(mktemp)
+sed -n '/^codex_result_obj()/,/^}/p' "$DRIVER" > "$CXFN"
+# shellcheck source=/dev/null
+source "$CXFN"
+
+assert_eq "codex_result_obj: success fixture -> subtype success" "success" \
+    "$(codex_result_obj "$CXFX/transcript-success.jsonl" | jq -r '.subtype')"
+assert_eq "codex_result_obj: success fixture -> real thread id" \
+    "019e3913-6f96-7d23-8fef-92cd8d806c8b" \
+    "$(codex_result_obj "$CXFX/transcript-success.jsonl" | jq -r '.session_id')"
+assert_eq "codex_result_obj: no-usage fixture still succeeds" "success" \
+    "$(codex_result_obj "$CXFX/transcript-no-usage.jsonl" | jq -r '.subtype')"
+assert_eq "codex_result_obj: no-usage keeps usage null (absent != zero)" "null" \
+    "$(codex_result_obj "$CXFX/transcript-no-usage.jsonl" | jq -r '.usage')"
+assert_eq "codex_result_obj: zero-usage preserves zeros" "0" \
+    "$(codex_result_obj "$CXFX/transcript-zero-usage.jsonl" | jq -r '.usage.input_tokens')"
+assert_eq "codex_result_obj: NO fixture carries a USD field" "0" \
+    "$(grep -c 'total_cost_usd' "$CXFX"/*.jsonl | awk -F: '{s+=$2} END {print s+0}')"
+# fail-closed halves. turn.failed/error are DEFENSIVE: neither appears in
+# any recorded capture, so these pin our chosen refusal, not an observed
+# codex contract.
+CXTMP=$(mktemp)
+printf '{"type":"thread.started","thread_id":"t9"}\n{"type":"turn.started"}\n' > "$CXTMP"
+assert_eq "codex_result_obj: incomplete turn fails closed" "error" \
+    "$(codex_result_obj "$CXTMP" | jq -r '.subtype')"
+printf '{"type":"thread.started","thread_id":"t9"}\n{"type":"error","message":"boom"}\n{"type":"turn.completed","usage":{}}\n' > "$CXTMP"
+assert_eq "codex_result_obj: error event beats turn.completed" "error" \
+    "$(codex_result_obj "$CXTMP" | jq -r '.subtype')"
+printf 'not json at all\n' > "$CXTMP"
+assert_eq "codex_result_obj: unparseable input fails closed" "error" \
+    "$(codex_result_obj "$CXTMP" | jq -r '.subtype // "error"')"
+# The PROCESS STATUS is authoritative. A non-zero exit with a completed
+# turn in stdout is still a failure — normalizing it to success would
+# launder a crashed run into a passing phase.
+assert_eq "codex_result_obj: nonzero exit is NOT success despite turn.completed" \
+    "error" \
+    "$(codex_result_obj "$CXFX/transcript-success.jsonl" 1 | jq -r '.subtype')"
+assert_eq "codex_result_obj: exit 0 on the same bytes IS success" "success" \
+    "$(codex_result_obj "$CXFX/transcript-success.jsonl" 0 | jq -r '.subtype')"
+# A completed turn with no thread identity cannot be called success —
+# the session id would be null.
+printf '{"type":"turn.completed","usage":{}}\n' > "$CXTMP"
+assert_eq "codex_result_obj: no thread.started -> not success" "error" \
+    "$(codex_result_obj "$CXTMP" 0 | jq -r '.subtype')"
+assert_eq "codex_result_obj: ...and its session id is null, not invented" "null" \
+    "$(codex_result_obj "$CXTMP" 0 | jq -r '.session_id')"
+rm -f "$CXTMP" "$CXFN"
+
 # ── The pi backend has the same exposure and the same fix ──
 PPI=$(setup_project); single_phase "$PPI"
 ARGMAX=$(getconf ARG_MAX 2>/dev/null || echo 1048576)
@@ -5608,7 +5810,10 @@ assert_eq "C2-T6: in-band cost text in the verdict is ignored" "0 2" \
 # with `if !`; anything else would sail past a refused debit.
 assert_eq "C2-T6: no reviewer call site invokes the debit unchecked" "0" \
     "$(grep -nE 'debit_review_costs "' "$DRIVER" | grep -v '||' | grep -v 'if ! debit_review_costs' | wc -l | tr -d ' ')"
-assert_eq "C2-T6: both reviewer paths dispose when the debit fails" "2" \
+# Three now: the two reviewer paths plus the codex SESSION path (#109),
+# which debits an unmetered invocation and must stop the run the same way
+# when the ledger refuses it.
+assert_eq "C2-T6: every debit-failure path refuses to continue" "3" \
     "$(grep -c 'refusing to continue with caps that cannot be enforced' "$DRIVER")"
 # The rc=3 arm must restore ESTIMATES_ACTIVE BEFORE disposing — dispose
 # does not return, so a restore placed after it would never run.
@@ -5620,7 +5825,7 @@ assert_eq "C2-T6: the rc=3 arm restores the estimate flag before disposing" "bef
 # ── Round-18: an unrecorded cost parks under its OWN reason, and that
 #    park can never auto-resolve — cap_exceeded's arm would compare the
 #    understated total against a cap and clear itself instantly. ──
-assert_eq "C2-T6: all four debit failures park as cost_accounting_failed (T8 adds the visual site)" "4" \
+assert_eq "C2-T6: all five debit failures park as cost_accounting_failed (T8 the visual site, #109 the codex session)" "5" \
     "$(grep -cE '(dispose|vg_finish) "cost_accounting_failed"' "$DRIVER" | tr -d ' ')"
 # The dispatcher arm is identified by its own refusal text (the shared
 # predicate now carries a case label of the same name, so a bare grep on
