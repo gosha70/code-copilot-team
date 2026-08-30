@@ -116,8 +116,11 @@ precedent into behaviour observed here.
 
 ## Not demonstrated
 
-An end-to-end delegate/reconcile round driven by a LIVE codex. The
-launch chains are exercised via mocks and structural assertions; the
-decode boundary is exercised against a real captured transcript. This
-is narrower than "no live run at all" and is stated that way in
-plan.md and the README rather than implied by the passing suites.
+Exactly one thing: an end-to-end delegate/reconcile round driven by a
+live codex. The launch chains are exercised via mocks and structural
+assertions.
+
+Everything else about the CLI contract HAS been exercised against the
+real binary — see Live captures above. The decode boundary runs against
+a transcript captured from codex-cli 0.147.0 and committed as a
+fixture. plan.md and the README state the same narrowed scope.
