@@ -66,6 +66,19 @@ These conventions ensure consistent behaviour regardless of which AI tool is dri
 5. Ask when uncertain — do not guess at ambiguous requirements.
 6. Verify before diagnosing — when asked to fix a reported bug, re-run the failing test or reproduce the symptom first. The issue may already be fixed. Do not spend time diagnosing a problem that no longer exists.
 
+## Target Alignment and Complexity Control
+
+Before planning, implementing, or approving agent-produced work:
+
+1. Restate the originating goal and concrete acceptance criteria. Derived plans and agent summaries do not replace the original request.
+2. Map every changed file and each new abstraction, interface, state, dependency, or test layer to a current requirement or a concrete correctness or safety failure. Remove or defer anything without that link.
+3. Prefer the smallest solution that fits the existing architecture. Do not turn narrow work into a framework, generalized engine, speculative state model, broad hardening exercise, or unrelated cleanup.
+4. Keep tests, documentation, and proof proportional to the risk and acceptance criteria. More artifacts are not evidence of better alignment.
+5. Complete the required path before optional improvements. Record useful extras as follow-up work instead of silently expanding scope.
+6. Before approval, ask: **What can be removed without weakening correctness, safety, or the acceptance criteria?**
+
+For a handoff from Claude Code or any other agent, explicitly classify the change as `on-target`, `overcomplicated`, or `off-target`, and explain the evidence. Green tests do not compensate for scope drift. Judge the artifact rather than guessing at a vendor's intent; complexity required by a concrete failure mode is not overengineering when the link is explicit.
+
 ## Single Source of Truth
 
 - The repository is the only authoritative source for conventions and decisions.

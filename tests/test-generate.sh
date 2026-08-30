@@ -83,6 +83,7 @@ assert_contains "contains Prohibited Patterns section" "$AGENTS_MD" "## Prohibit
 assert_contains "contains Cross-Copilot Conventions header" "$AGENTS_MD" "^# Cross-Copilot Conventions"
 assert_contains "contains Core Contract section" "$AGENTS_MD" "## Core Contract"
 assert_contains "contains Git Discipline section" "$AGENTS_MD" "## Git Discipline"
+assert_contains "contains target-alignment rule" "$AGENTS_MD" "## Target Alignment and Complexity Control"
 
 assert_contains "contains Agent Safety Rules header" "$AGENTS_MD" "^# Agent Safety Rules"
 assert_contains "contains Secrets section" "$AGENTS_MD" "## Secrets & Credentials"
@@ -139,6 +140,17 @@ assert_contains "Aider CONVENTIONS.md contains specs/" "$ADAPTERS/aider/CONVENTI
 assert_contains "GH Copilot copilot-instructions.md contains specs/" "$ADAPTERS/github-copilot/.github/copilot-instructions.md" "specs/"
 assert_contains "Codex AGENTS.md contains specs/" "$AGENTS_MD" "specs/"
 assert_contains "Cursor copilot-conventions.mdc contains specs/" "$ADAPTERS/cursor/.cursor/rules/copilot-conventions.mdc" "specs/"
+
+echo ""
+echo "=== Target-alignment rule propagation ==="
+
+ALIGNMENT_HEADING="Target Alignment and Complexity Control"
+assert_contains "source skill carries target-alignment rule" "$SKILLS/copilot-conventions/SKILL.md" "$ALIGNMENT_HEADING"
+assert_contains "Cursor carries target-alignment rule" "$ADAPTERS/cursor/.cursor/rules/copilot-conventions.mdc" "$ALIGNMENT_HEADING"
+assert_contains "GH Copilot carries target-alignment rule" "$ADAPTERS/github-copilot/.github/copilot-instructions.md" "$ALIGNMENT_HEADING"
+assert_contains "Windsurf carries target-alignment rule" "$ADAPTERS/windsurf/.windsurf/rules/rules.md" "$ALIGNMENT_HEADING"
+assert_contains "Aider carries target-alignment rule" "$ADAPTERS/aider/CONVENTIONS.md" "$ALIGNMENT_HEADING"
+assert_contains "Pi carries target-alignment rule" "$ADAPTERS/pi/resources/context/always-context.md" "$ALIGNMENT_HEADING"
 
 # ── Section 5: Codex adapter structure ────────────────────
 
