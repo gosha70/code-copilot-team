@@ -80,6 +80,10 @@ class LoadedEvidenceSet:
     report: Mapping[str, Any]
     matrix: Mapping[str, Any]
     records: Sequence[Mapping[str, Any]]
+    #: routing-calibration decision 11 — None on pre-addition sets
+    #: (such sets are UNLABELED for calibration, never guessed at).
+    task_descriptors: "Mapping[str, Any] | None" = None
+    profile_policy: "Mapping[str, Any] | None" = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +125,8 @@ def load_evidence_sets(
                 report=validated["report"],
                 matrix=validated["matrix"],
                 records=validated["records"],
+                task_descriptors=validated.get("task_descriptors"),
+                profile_policy=validated.get("profile_policy"),
             ))
     return out
 

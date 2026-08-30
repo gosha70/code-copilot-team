@@ -1,0 +1,845 @@
+# Origin alignment — routing-calibration (E3 of #109, issue #266)
+
+## Origin capture (2026-08-29)
+
+The origin is issue #266, itself derived from #109 §12 (the five
+calibration conditions, "initially in shadow mode") and #109 Delivery
+Plan Increment E bullet 5 — the last unshipped E bullet after E1
+(#260) and E2 (#261) merged. The owner's directive: "Continue to the
+next phase of #109" (2026-08-29, after PR #265 merged).
+
+Scope mapping, origin → bundle:
+
+- §12 condition "telemetry complete and accurate" → gate G1
+  (plan decision 2).
+- §12 "enough repeated labeled runs" → G2.
+- §12 "recommendations evaluated against held-out tasks" → G3 + the
+  leave-one-task-out evaluation (decisions 6–7).
+- §12 "false downgrades to Tier 2 below an explicit safety
+  threshold" → G4 with the exact false-downgrade definition
+  (decision 7).
+- §12 "operator-configured security and tier floors remain
+  authoritative" → G5, structural (decision 2) + floor filtering
+  before ranking (decision 5).
+- "initially in shadow mode" + the umbrella acceptance box → the
+  increment boundary: no execution authority, no gate-triggered
+  action, promotion is a future owner-initiated increment.
+
+Explicitly out of scope, from the issue's non-goals: promotion,
+automatic actions, online learning/embeddings, new E1 metrics (the
+"E1 change, not an E3 workaround" rule carries over).
+
+## Plan review round 1 (owner, on 37eb24a) — five P1 + two P2, applied
+
+The single correction pass under the anti-ping-pong rule; all seven
+findings verified against the schemas/registry before editing.
+
+1. **[P1] Target leakage removed** (decisions 4–6): the E2 truth label
+   derives from the post-execution per-arm figures, so those figures —
+   and every post-execution outcome — are now BANNED from the feature
+   vocabulary; features are pre-routing only, and normalization is
+   fitted per training fold. Confirmed in-tree that the frozen records
+   carry only `route_class` pre-routing → the required task
+   descriptors are a DECLARED labeled E1 change (decision 11), exactly
+   as the finding prescribed.
+2. **[P1] Currentness binds policy, not just corpus** (decision 3):
+   `policy_id` — canonical digest over the full evaluation policy
+   including feature version, classifier parameters, normalization,
+   tier floor, and the current security/role policy-source digest —
+   joins `corpus_id` on every report; either mismatch stales the
+   report and no stale report satisfies a gate.
+3. **[P1] The tier mapping is persisted, source-bound** (decision 11):
+   confirmed the frozen artifacts carry only the opaque
+   `registry_digest` — `profile-policy.json` (per-profile
+   capability_tier + roles, derived from the executed registry at
+   publication) becomes a manifest-bound evidence artifact; the
+   false-downgrade metric resolves tiers from it, never from a guess.
+4. **[P1] The security half of the floor gate restored** (decisions 2,
+   5, 8): `policy_source` names the operator's CURRENT policy
+   declarations; the recommender filters candidates against tier AND
+   security/role eligibility BEFORE ranking; G5 gains three conjuncts
+   including the policy-digest binding, so historical admissibility
+   can never substitute for current policy.
+5. **[P1] False-downgrade baseline corrected** (decision 7): the
+   safety baseline is the TRUTH's suggested tier when truth recommends
+   a switch (so predicting Tier 2 while truth switches within Tier 1
+   COUNTS), and the router's actual tier when truth recommends no
+   change; both branches pinned in the verification list.
+6. **[P2] The classifier is fully normative** (decision 5): one-hot
+   encoding over closed vocabularies, missing-value refusal (no
+   imputation), fold-fitted min-max normalization with clamping,
+   l2_v1, filter-before-rank, min(k, available) with k_min refusal,
+   distance-weighted vote with configured epsilon, conservative tie
+   to no_change, highest-weight-neighbor suggestion resolution with
+   the current-policy-miss → insufficient_data rule.
+7. **[P2] G2 counts labeled evidence** (decision 2): only (set, task)
+   pairs with a DEFINED E2 label count; trials must repeat within a
+   single set (never aggregated across fingerprints); an all-
+   insufficient corpus cannot pass.
+
+spec.md (FR-E3-2/3/4, constraints, non-goals) and tasks.md (T1–T3)
+updated to reference the corrected decisions; the two labeled E1
+additions moved from "none anticipated" to declared scope.
+
+## Plan review round 2 (owner, on 8d69e33) — APPROVED
+
+The reviewer verified all seven rev-2 corrections against the tree
+independently and re-ran the gates (spec 2/0, origin aligned/high,
+whitespace clean, no restatement drift). No P0/P1 blockers; plan
+status flipped to `approved`; T1–T5 clear to proceed.
+
+Carried forward, explicitly non-blocking (P3, for the FUTURE
+promotion increment's spec, not E3): "trial count as a corpus
+property" is well-defined for shadow evaluation over published sets
+but would be undefined for a live pre-routing query; if learned
+routing is ever proposed for authority, that is a feature-vocabulary
+revision — a `policy_id`-bumping change exactly as decision 3
+anticipates.
+
+## T1 build (2026-08-29) — schemas, identities, configuration, E1 additions
+
+Built per decisions 2, 3, 5, 6, 8, 11:
+
+- **Five schemas** (`calibration-report`, `evaluation-report`,
+  `knn-recommendation`, `task-descriptors`, `profile-policy`), all
+  within the in-repo validator subset; the evidence-manifest schema
+  gains the two OPTIONAL artifact hash keys.
+- **The labeled E1 additions** (decision 11): the scenario config
+  gains an optional, closed, coverage-complete `task_descriptors`
+  table (closed §12 class vocabulary; every declared task described
+  or none; undeclared tasks refused); `derive_task_descriptors`
+  derives route classes STRUCTURALLY from the config's own
+  membership declarations (tier1_only → tier1_only, delegate →
+  tier2_preferred — the class the delegation seam records, verified
+  in-tree); `derive_profile_policy` reads the executed registry
+  through the production parser and refuses a profile without a
+  declared capability_tier. `_publish` writes both as canonical JSON
+  hashed into `manifest.artifacts`; `validate_evidence_set` binds a
+  PRESENT key fully (exists, hash, schema, digest agreement with the
+  manifest fingerprint, exact coverage: descriptor tasks within the
+  matrix; every executed profile in the policy) and loads an ABSENT
+  key as None — pre-addition sets stay valid and unlabeled. The
+  production `publish_evidence_set` derives both; the LIVE arc test
+  pins that the published set carries the profile policy and no
+  fabricated descriptors, and byte-identical republication stays
+  idempotent WITH the additions (the live suite caught the
+  republication call sites omitting them — fixed by carrying the
+  validated docs through).
+- **Identities** (decision 3): `corpus_id` over valid set ids only;
+  `EvaluationPolicy` + `policy_id` over the full policy document;
+  `report_staleness` names its reasons per dimension.
+- **Configuration** (decision 8): ONE nested `routing_calibration`
+  block through the standard layering with per-key
+  `CCT_SA_CALIBRATION_<KEY>` env overrides coerced to the defaults
+  file's types; `policy_from_config` REFUSES a missing key
+  (CalibrationError) — no value is ever completed from code; the
+  defaults file ships every key (pinned).
+- **Regressions**: E1 binding set (published-additions bind+load;
+  pre-addition unlabeled; tampered bytes → hash_mismatch; preset
+  binding → fingerprint_mismatch; unknown task / missing executed
+  profile → reference_mismatch; missing bound artifact →
+  missing_artifact), scenario-config descriptor validation (closed
+  keys, closed classes, omission, undeclared task), corpus identity
+  (order-free, add/remove/invalidate, invalid exclusion), policy
+  identity (all ten dimensions change it, no collisions),
+  policy-source digest byte-tracking, staleness per dimension,
+  config layering + env coercion, schema inverse tests for every new
+  closed vocabulary.
+- **Mutations (all discriminated)**: optional-artifact binding
+  disabled (6 failures); corpus_id counting invalid sets; policy_id
+  dropping tier_floor. Restores verified byte-identical.
+
+Suites: session-analytics discovery 349 OK (35 CI-gated skips); E1
+evidence_set 20/20 including the live arc (with the new pins),
+quality + redaction green.
+
+## T1 review round 1 (owner, on 75dccb1) — APPROVED, GO T2
+
+The reviewer verified the build directly (ran the suites in their own
+container — matching counts — and read the derivations, bindings,
+identities, and config refusals in-tree). No P0/P1 findings. Two P3s
+carried and APPLIED at the start of T2: the decision-3 comment on why
+`policy_from_config` excludes the `min_*` gate thresholds (gates
+apply them live; they never stale reports), and `_coerce_like`'s
+uncoercible-override error now names the offending env key.
+
+## T2 build (2026-08-29) — features, labels, and the kNN recommender
+
+Built per decisions 4–5 (+ the serving-parity rule):
+
+- **Extraction** (`extract_examples`): features ONLY from the
+  persisted descriptors + the E2-derived trial count; labels ONLY
+  from `derive_recommendations` (defined iff outcome is not
+  insufficient_data); a set without descriptors (or a task without
+  one) yields feature-less examples with the reason named — refusal,
+  never imputation.
+- **The closed vocabulary pin**: `FEATURE_NAMES` (6 task-class
+  one-hots + 4 route-class one-hots + file_scope + trial_count) is
+  asserted VERBATIM in a regression — a post-execution figure can
+  only enter by changing the tuple, which is a feature-vocabulary
+  policy change.
+- **The classifier** (`knn_recommendation`): every decision-5 rule as
+  specified — one-hot encoding, fold-fitted min-max with clamping
+  (degenerate min==max features normalize to 0.0, the one
+  implementation-level determinization, recorded here for review),
+  l2, current-policy filtering BEFORE ranking
+  (`_eligible_under_policy`: profile present in the CURRENT
+  declarations, at/above the tier floor, and carrying the `build`
+  role — the concrete role conjunct, recorded here for review),
+  min(k, available) with k_min refusal, 1/(d+ε) weighted voting,
+  conservative ties to no_change, winner resolution by
+  (weight, distance, set id, task id) with the current-policy-miss →
+  insufficient_data belt. Schema-validated before return.
+- **Serving parity with LOTO** (recorded normative choice): the
+  neighbor pool excludes EVERY example of the queried task — a
+  same-task example's label derives from that task's own figures, so
+  letting it vote would be self-matching leakage at serving time.
+- **Current policy source** (`load_current_policy`): read through the
+  E1 production parser; absent, unreadable, or validator-refused
+  sources are None (insufficient_data downstream), never fabricated —
+  the validator-refusal path was caught by a test and widened to
+  `ControlSetIncomplete` honestly.
+- **Regressions** (25 → 29 tests): vocabulary pin; extraction;
+  missing-descriptor refusal both as pool member and as query;
+  byte-identical output under corpus reordering; switch majority;
+  k_min insufficiency; no-current-policy refusal; same-task
+  exclusion; filter-before-ranking (nearest-ineligible fixture);
+  role/tier/absent-profile eligibility table; conservative tie;
+  HAND-COMPUTED distances and outcome (bounds [1,8], query clamped,
+  distances 0, 6/7, 1 — computed on paper, not a golden from the
+  implementation); neighbor refs resolve pointer-by-pointer against
+  the served report; schema validity; policy-source parsing.
+- **Mutations (all discriminated)**: full-corpus normalization
+  (bounds include the query); a post-execution figure
+  (quality_delta) leaking into the vector; filter moved after
+  ranking; tie resolving to switch; unweighted voting. Restores
+  byte-identical.
+
+Suites: session-analytics discovery 365 OK (35 CI-gated skips).
+
+## T2 review round 1 (owner, on 1ef2316) — one P1 + two P2, applied
+
+The single correction pass. All three verified in-tree first.
+
+1. **[P1] `trial_count` now reads the DECLARED count.** The reviewer
+   traced that `rec["confidence"]["basis"]["trials"]` is
+   `max(len(actual["per_trial"]), 1)` — an execution OBSERVATION, not
+   a pre-routing corpus property — and that the T2 mutation battery
+   could not see it, because the feature name was already blessed in
+   `FEATURE_NAMES` (mutation (b) only catches an UNBLESSED figure).
+   Resolution (a), the reviewer's preference: the scenario's declared
+   `trials` now rides in `task-descriptors.json` (schema-required,
+   preset-digest-bound, refused at derivation when the scenario
+   declares none), and `extract_examples` reads it from the artifact;
+   a descriptors artifact without it yields feature-less examples.
+   THREE regressions pin it: declared-vs-observed divergence (5
+   declared / 1 recorded, with the observed value asserted to differ
+   so a record-sourced implementation cannot pass), declared trials
+   changing neighbor ORDERING (the source is load-bearing, not
+   cosmetic), and missing-declared-trials refusal. New mutation
+   (b2) — source the blessed feature from the observation — fails 2
+   tests. Plan decision 4 and decision 11 reworded to name the
+   declared count explicitly (precision within the approved decision,
+   not an amendment); the Verification list gains (b2) and the
+   normalization-parity item.
+2. **[P2] `tier_floor` is a closed vocabulary** validated where the
+   policy is assembled: `"Tier1"`, `"tier3"`, `""`, `"TIER2"` refuse
+   with `CalibrationError` naming the field, instead of a bare
+   `KeyError` surfacing from inside recommendation at the T4 API
+   boundary. Mutation (check removed) discriminated.
+3. **[P2] Neighbor `evidence_refs` are E2-shaped.** The synthesized
+   slash-path strings are gone: each neighbor carries its own E2
+   record's refs verbatim (the closed `{evidence_set_id, artifact,
+   locator}` shape, `$ref`'d into the kNN schema from
+   recommendation.schema.json), so the T4 card resolves both sources
+   through ONE resolver and the refs are no longer narrowed to
+   `cct_router`. The regression asserts the E2 shape, per-locator
+   resolution, and that non-router arms are covered. Mutation
+   (narrowed synthesized ref) discriminated.
+
+Carried to T3 (recorded in tasks.md): `_fit_bounds` fits on the
+ELIGIBILITY-FILTERED pool, so LOTO must filter identically or the
+measured false-downgrade rate would not describe serving behaviour —
+pinned with a filtered-vs-unfiltered mutation beside leakage (a).
+
+Non-blocking P3s acknowledged, no action this round: the shipped
+`tier_floor: "tier1"` default makes tier2 profiles ineligible (a
+sentence for the T5 operator docs), and `_encode`/`_l2` recompute per
+neighbor (deterministic, irrelevant at corpus scale).
+
+Suites after the pass: calibration 31 OK, E1 calibration-additions
+9/9, session-analytics discovery 369 OK (35 CI-gated skips).
+
+## T2 review round 2 (owner, on f0e0ac8) — APPROVED, GO T3
+
+The reviewer verified the schema `$ref` actually resolves (the in-repo
+validator RAISES on unimplemented keywords rather than skipping, so
+the constraint is real), confirmed `$defs/evidence_ref` is byte-for-
+byte E2's own definition, and reproduced the suites. Classification
+question settled: the trial-count change is PRECISION, not amendment
+— it narrows decision 4 to the single reading it always intended and
+permits nothing new; resolution (b) would have loosened the leakage
+ban and needed justification. One P3 (a defensive branch naming the
+wrong missing field) fixed at the start of T3.
+
+## T3 build (2026-08-29) — held-out evaluation and the five gates
+
+Built per decisions 2, 6, 7:
+
+- **LOTO evaluation** (`evaluate_heldout`): every labeled (set, task)
+  is predicted with EVERY example of that task absent from the
+  neighbor pool. The fold reuses `knn_recommendation` rather than
+  reimplementing exclusion, so serving and evaluation cannot drift —
+  one rule, one implementation, and normalization parity with serving
+  follows by construction (the carried T2 review item).
+- **The downgrade arithmetic** (decision 7, both branches):
+  `baseline_tier` returns the TRUTH's suggested tier when truth
+  switches (so a tier-2 prediction against a within-tier-1 truth
+  switch counts) and the tier the router actually operated at when
+  truth keeps. Recorded determination for review: a chain can name
+  several profiles, so the actual-branch baseline is the LOWEST tier
+  the router actually used — recommending a tier the router already
+  ran at is not a downgrade. Unresolvable tiers count neither way.
+  Truths that are insufficient_data are excluded from the denominator
+  and counted as `unevaluable`.
+- **Durable reports**: schema-validated BEFORE the rename, written
+  atomically into the analytics-owned calibration root (never an
+  evidence root); an absent, unreadable, or invalid report loads as
+  None so gates report insufficient_data rather than partial trust.
+- **The five gates** (`compute_gates`): G1 measures cost +
+  VERIFIED effective-model identity per record (null means
+  unverified, never assumed); G2 counts only DEFINED labels with
+  trials repeating WITHIN a single set — recorded distinction: the
+  gate counts OBSERVED runs (a volume gate measures what actually
+  happened) while features may read only the DECLARED count, the
+  mirror image of the T2 round-1 rule; G3/G4 consume only a CURRENT
+  report (corpus_id AND policy_id both matching); G5 evaluates its
+  three conjuncts with violations SURFACED, never dropped. Missing
+  thresholds refuse rather than defaulting. Nothing acts on a result.
+- **Mutations — six, all discriminated**: leakage (a) held-out task
+  left in the pool (4 failures); bounds fitted on the UNFILTERED
+  pool; the truth-switch baseline branch removed; insufficient truths
+  counted in the denominator; floor violations dropped from G5;
+  staleness ignored by the gates.
+- **Honesty note**: two of those six initially did NOT discriminate,
+  because the tests passed for the wrong reason — the parity test
+  compared evaluation against serving (the mutation moves both
+  together) and the baseline test used a fixture where both branches
+  returned tier1. Both were rebuilt on ABSOLUTE hand-computed
+  assertions (filtered bounds [1,3] giving distances exactly 1.0,
+  0.5, 0.0; a truth-switch-to-tier1 against an actual tier2 leg so
+  the branches provably disagree) and then discriminated. The
+  battery caught weak tests, which is what it is for.
+
+Suites: calibration 51 OK, session-analytics discovery 389 OK (35
+CI-gated skips), E1 calibration-additions + quality + redaction 95 OK.
+
+## T3 review round 1 (owner, on 4f0fac9) — two P1 + one P2, applied
+
+All three verified in-tree first; all three made G4 easier to pass,
+and none was a coding error — they were wrong rules, faithfully
+implemented.
+
+1. **[P1] The no-change baseline is the HIGHEST tier engaged.** My
+   recorded T3 determination (lowest tier of a multi-leg chain) was
+   wrong in exactly the way that matters: a chain is a COMPOSITION,
+   not a menu — a delegated task's chain is [tier1 orchestrator,
+   tier2 delegate], `min` yields tier2, nothing ranks below it, so NO
+   prediction on any delegated task could ever count as a false
+   downgrade — precisely the arc §12 targets. `max` restores symmetry
+   with the truth-switch branch (a single profile's own tier) and
+   makes delegated tasks failable again. The reviewer's aside is
+   correct and recorded: `min` was the PERMISSIVE reading, not the
+   conservative one I labeled it. Both baseline regressions were
+   rebuilt so the branches provably disagree (truth-switch-to-tier2
+   against a tier1-only chain), and the delegated-composition case is
+   pinned to fail. Mutation (back to `min`) discriminated.
+2. **[P1] Refusals leave the denominator AND coverage.** `evaluated`
+   was unconditional and `is_false_downgrade` returns False for
+   non-switch predictions, so a refusal contributed 0/1: the
+   reviewer's arithmetic (90 refusals + 10 judged with 2 downgrades
+   reporting 0.02 against a 0.05 threshold where the true rate is
+   0.20) held exactly, and an all-refusing recommender could reach
+   `calibrated: true`. The report now carries `compared`, `refused`,
+   and `unresolved_tier` alongside `evaluated`; the rate's
+   denominator is judged recommendations only and is None when
+   nothing was judged; G3 coverage counts only tasks a recommendation
+   was produced for. Pinned: the all-refusing corpus cannot reach
+   calibrated (rate None, coverage 0.0), the 90/10 dilution
+   arithmetic fails the threshold, and refusal-only results give zero
+   coverage. Mutations (refusals in the denominator; refusals as
+   coverage) both discriminated.
+3. **[P2] Tier-unresolved predictions are UNJUDGED.** A switch whose
+   predicted or baseline tier cannot resolve now increments
+   `unresolved_tier` and leaves the denominator instead of sitting in
+   it as a silent non-downgrade. Pinned with a set whose persisted
+   policy omits the predicted profile. Mutation discriminated.
+
+Classification, by the reviewer's own directional test: both P1s
+NARROW what counts — they make the gate strictly harder to pass and
+remove permissive readings decision 7 never intended (its letter
+assumed predictions happen). Nothing is permitted now that was not
+before, so this is sharpening, not amendment; decision 7 was rewritten
+to state the highest-tier rule and the three exclusions explicitly,
+with the reasoning inline so the text carries its own justification
+either way. If the reviewer reads it as an amendment, the
+justification is already there to ratify.
+
+Suites after the pass: calibration 55 OK, session-analytics discovery
+393 OK (35 CI-gated skips), E1 light suites 95 OK.
+
+## T3 review round 2 (owner, on 9843477) — APPROVED, GO T4
+
+Cleared with independent verification: calibration 55 OK, discovery
+393 OK / 35 skips, spec 2/0, origin aligned/high; the 90/10/2
+arithmetic confirmed pinned at its literal value and the reason string
+confirmed to surface all three exclusions. The reviewer traced two
+invariants I had not stated: the downgrade numerator is a strict
+SUBSET of the denominator (a counted downgrade requires a resolved
+baseline AND a resolved predicted tier — exactly the complement of the
+`unresolved_tier` branch), and `compared` splits cleanly into
+`unresolved_tier + evaluated`, so the four aggregates reconcile
+against `results` without overlap or gap. The
+no_change-with-unresolvable-baseline case correctly STAYS in the
+denominator: a keep recommendation is genuinely judged and genuinely
+cannot be a downgrade. Classification confirmed as sharpening.
+
+Carried forward to T4 (the reviewer's forward note, not a finding):
+with refusals correctly excluded, the gates still cannot distinguish a
+useful recommender from one that predicts `no_change_recommended` for
+everything — that recommender makes real recommendations, none of
+which can be a downgrade, so it earns a truthful 0.0 rate and full
+coverage. This is not a laundering hole (the arithmetic is honest and
+such a recommender IS safe); it is a usefulness question, and
+`agreement` is the field that separates the two. No gate consumes it,
+so the Calibration panel must put it on the surface beside the five
+verdicts.
+
+## T4 build (2026-08-29) — API + Studio surface
+
+Payload builders in `routing_calibration.py` (`calibration_payload`,
+`evaluation_payload`, `knn_payload`) under the E2 sanitization floor,
+three routes (`/api/routing/calibration`,
+`/api/routing/calibration/evaluation`,
+`/api/routing/evidence/{set_id}/knn`), a `CalibrationPanel` on the
+Routing tab, and a labeled kNN section inside each recommendation
+card. No new npm dependencies; `package.json` untouched.
+
+The forward note is implemented as the panel's own contract: the
+served summary carries every evaluation aggregate, `agreement`
+emphasized and labelled "no gate reads this", above a paragraph
+stating why a safety floor cannot see inertness. Two regressions pin
+it — one asserts an inert (keep-everything) recommender passes ALL
+five gates while agreement reads 0.0, and one asserts every aggregate
+reaches the payload with the report's own value.
+
+Self-caught in browser verification, both real defects the unit tests
+could not see:
+
+1. **Gate figures were rounded.** `fmt` used `toFixed(4)`, so a
+   measured rate of 1e-8 would have rendered "0.0000" — a clean pass —
+   and integer-valued rates collapsed to "1" beside a "0.9500"
+   threshold, making a rate indistinguishable from a count. Replaced
+   with the evidence page's own verbatim `String()` rule, which that
+   file's comment already declares normative for decision-bearing
+   figures.
+2. **Stale aggregates read as current.** In the stale state the
+   numbers sat unmarked beneath a banner declaring the report
+   satisfies no gate — precisely the "looks like a pass when it isn't"
+   risk the reviewer named for this task. Stale figures are now muted
+   and struck, under an explicit "void, not merely old" caption.
+
+Verification: seven payload mutations discriminated (agreement dropped
+from the summary; summary always present; staleness never computed;
+raw config block echoed; kNN set filter removed; evaluation payload
+not stale-flagged; unassemblable policy fabricated instead of
+refused). Sanitization swept over all three payloads in both the
+report and insufficient_data states, plus an HTTP sweep with the
+calibration root AND policy source pointed at identifiably-named
+paths; an unknown set is 404 on /knn, never an empty list.
+
+Browser-verified against live published fixtures (four labeled E1
+sets) at 1440: no-data, insufficient, gates-mixed, gates-all-pass, and
+stale (corpus_changed AND policy_changed). Neighbor followability
+proven ACROSS sets — opening a neighbor's `report cct_router × t2` ref
+from t1's card served t2's own figures (cost 0.06), since a neighbor
+ref is addressed by the neighbor's set id.
+
+Verification honesty: `resize_window` in the browser tool moved the OS
+window but left the render viewport pinned at 1440 (`innerWidth`
+stayed 1440 while `outerWidth` became 659), so the mobile pass through
+that path would have been meaningless. Mobile was redone with
+Playwright at a true 375 viewport: `innerWidth` 375 confirmed, no
+page-level horizontal scroll on either surface (the wide gate table
+scrolls inside its own container, as the existing arms table does).
+
+Suites at this state: calibration 67 OK, session-analytics 400 OK / 6
+skips (fastapi+httpx installed locally, so the 29 previously CI-gated
+API tests actually RAN rather than skipping), E1 evidence/quality/
+redaction 106 OK + 43 subtests, `tsc --noEmit` clean, `npm run build`
+(the CI studio gate) green. `next lint` is not a usable gate here —
+the studio ships no ESLint config and the command drops into
+interactive setup.
+
+## T4 review round 1 (owner, on 6b32d3b) — one P1 + three P2, applied
+
+All four reproduced in-tree before any fix.
+
+1. **[P1] G5 did not enforce the effective task policy.**
+   `_eligible_under_policy` took no query context: reproduced by
+   calling it directly, where a tier-2 build profile was accepted with
+   no route class in the signature at all. Because `floor_violations`
+   shares the predicate, G5 could report zero violations and pass
+   while the recommender proposed profiles the router could never have
+   selected.
+
+   Fixed by deriving eligibility from the SAME authority production
+   selects from. `rc_effective` (routing-config.sh) composes the
+   effective policy — `enabled` as the AND of user and repo blocks,
+   candidates as registry INTERSECTED with repo `allowed_profiles`,
+   and `tier2_delegation_allowed` — and `rt_select`
+   (routing-select.sh) then filters on role and route class:
+   `tier1_only` never reaches tier 2, `primary_only` admits only the
+   total-order-first tier1 candidate (priority ASC, id ASC), and both
+   tier-2 classes require the repository to permit delegation. The
+   predicate now implements exactly that, keyed on the QUERY example's
+   declared route class, and `load_current_policy` composes both
+   layers instead of reading per-profile tier/roles alone. A new
+   `derive_selector_policy` reads what the selector orders by
+   (including `priority`) in ONE validated parser pass; the persisted
+   decision-11 artifact is untouched, so no evidence set is staled by
+   this.
+
+   Two judgement calls, stated rather than buried. (a) `data_policy`
+   and `tool_profile` are deliberately NOT enforced: the production
+   selector carries both on the selected tuple and filters on
+   neither, so enforcing them here would invent policy production does
+   not have — which is its own way of describing something other than
+   production. (b) An UNBOUND repo policy is not permission. Production
+   reads a null restriction as "no restriction", which is correct
+   there because it knows the repo config path; an unconfigured source
+   here means the restriction is unknown, and a safety gate must not
+   read unknown as permitted, so tier-2 suggestions stay ineligible
+   until `repo_policy_source` is bound. That source is a new
+   configuration key and a new `policy_id` dimension, so binding it
+   stales prior reports — correct under decision 3 and pinned.
+
+   Eleven regressions, including the reviewer's reproduction verbatim.
+   Six mutations discriminated: route class ignored; `primary_only`
+   admitting any tier1; `allowed_profiles` ignored; unbound repo
+   policy read as permission; `enabled` ignored; unparseable priority
+   sorting first.
+
+   Fixture fallout worth recording, because it is evidence the fix has
+   teeth: several `_beta_switch_set`/`_switch_set` fixtures declared
+   `primary_only` while suggesting a tier-2 profile — a combination
+   production could never produce. They now declare a delegating route
+   class, and the one test whose subject IS the downgrade arithmetic
+   pins an admissible-but-wrong tier-2 pick, with the primary_only
+   case pinned separately as a REFUSAL (not a downgrade).
+
+2. **[P2] kNN request state was neither surfaced nor scoped.** The
+   page ignored `loading`, `error`, payload `state`/`reason`, and
+   `set_id`, so an outage made the section silently vanish; and
+   `useApi` retains prior data across a deps change, so navigating
+   between sets sharing a task id could attach the PREVIOUS set's
+   recommendation. The payload is now used only when it is a report
+   AND names the current route, with explicit loading / error /
+   insufficient states rendered in the card where the reader is
+   looking. Both paths verified live in the browser: a simulated
+   `/knn` outage renders the notice, and a well-formed payload naming
+   a foreign set is rejected — its `PHANTOM` profile never reaches a
+   card.
+
+3. **[P2] Gate evidence was not addressable.** FR-E3-1 promises
+   addressable evidence; the panel printed opaque strings, G2/G3 refs
+   were bare task ids with no set coordinate, and G4/G5 carried none
+   at all. `evidence_refs` is now a closed structured vocabulary —
+   `evidence_set`, `task`, `evaluation_report`, `evaluation_result` —
+   with exclusive schema branches, and the panel opens each through
+   the existing read-only surfaces. Passing gates are inspectable too:
+   G4 and G5 carry the evaluation report (the denominator, and what
+   the floor check ranged over), so a zero-violation verdict is
+   falsifiable from the surface. Five regressions including a
+   closed-vocabulary inverse test that refuses the OLD bare-string
+   shape. Verified live: all three locator kinds resolve, and a `task`
+   ref opens the exact per-task cell rather than the whole artifact.
+
+4. **[P2] The kNN route read the corpus twice.** The 404 check and the
+   derivation loaded independently, so a set could pass the check and
+   still return an empty report if the roots changed between reads —
+   and the complete loading cost was paid twice. All three calibration
+   routes now take one corpus + configuration snapshot. Pinned by a
+   test that counts `load_evidence_sets` calls through the route.
+
+Suites after the pass: session-analytics 417 OK / 6 skips, E1
+evidence/quality/redaction/matrix 140 OK + 53 subtests, `tsc --noEmit`
+clean, `npm run build` green, spec 2/0, origin aligned/high,
+whitespace clean, production routing shell and shared schemas
+untouched.
+
+## T4 review round 2 (owner, on 1daea84) — APPROVED, GO T5
+
+Verified against the production selector itself rather than against my
+description of it: `rc_effective` composition, `rt_select`'s role
+filter, the `sort_by([priority, id])` total order, `tier1_only`
+rejecting non-tier1 outright, `primary_only` admitting only the
+sort-first tier1 id, and both tier-2 classes gating on
+`tier2_delegation_allowed`. Route class confirmed threaded at all
+three sites, including `floor_violations` — the half that converts
+G5's zero-violation verdict from vacuous to falsifiable.
+
+One apparent divergence chased to ground by the reviewer and resolved:
+jq's `sort_by` places a null priority FIRST while `_primary_candidate`
+sorts it last. Unreachable — `priority` is in `RC_PROFILE_REQUIRED`
+and a non-positive-integer raises a violation, so no registry
+production accepts can carry a null; for a registry production
+rejects, sorting last declines to certify rather than crowning an
+arbitrary primary. Both judgement calls (data_policy/tool_profile not
+enforced; unbound repo policy is not permission) confirmed correct.
+
+## T5 build + closure (2026-08-29/30)
+
+Docs, proofs, and closure. Every documented claim verified against the
+code rather than from memory: all 14 config keys ship in
+defaults.json, the three endpoint paths, the five gate ids,
+`tier_floor: tier1`, the three env-var names, the max-not-min
+baseline, the separate refused/unresolved_tier/unevaluable report
+keys, and that `cct routing validate` is a real command
+(routing-cli.sh:221) before telling operators to run it.
+
+**Authority guard extended (decision 9)**, sharper than E2's because
+E3 legitimately writes: no production routing script can name any of
+nine calibration symbols; the production config reader knows none of
+the shipped keys (asserted by ITERATING defaults.json, so a key added
+later cannot slip past a hardcoded list); and every write lands under
+the analytics-owned calibration root, with the consumed evidence set
+byte-identical after a full derive + evaluate + gate run. Three
+mutations discriminated: a write outside `write_evaluation_report`, a
+shell file referencing calibration, and the production reader learning
+a calibration env key.
+
+**Decision-10 acceptance, redone properly.** The T4 report said
+"browser-verified", but the honest state was five states at 1440 and
+only ONE state at 375, by screenshot. A screenshot cannot fail — it
+requires a human to look and notice, the same weakness as a test that
+passes by construction. Replaced with a harness asserting on RENDERED
+DOM: verdict badge text, per-gate badge counts, required strings, and
+`scrollWidth > innerWidth`, across all five states at BOTH widths. The
+stale state asserts nine struck-through figures rather than trusting
+the caption. Mutating the harness so "stale" is never actually stale
+produced 16 failures — the harness discriminates.
+
+**The closure sweep found an anomaly, and it was my instrument.** The
+sweep reported 10 `benchmark_runner` failures against a documented
+baseline of 6. Chased rather than absorbed: one stale
+`.pytest_cache/lastfailed` entry named a test that no longer exists
+under that name (not in the run), and the four extra failures were
+pytest collecting a FIXTURE exercise's own test file
+(`fixtures/polyglot_mini/.../leap/leap_test.py`), whose `leap.py` is
+an unsolved starter stub. `leap_test.py` matches pytest's
+`*_test.py` but not unittest's `test*.py`; the documented baseline was
+established with `unittest discover`, and my sweep script used pytest
+for convenience. The fixture is untouched by this branch and
+byte-identical to master. The defect was the sweep script, not the
+tree — recorded as lesson 4, and the repo-level absence of any pytest
+collection guard filed as its own issue (#268), deliberately not
+bundled here.
+
+**Canonical sweep — `PYTHONPATH=scripts:. python3 -m unittest
+discover -s scripts/benchmark_runner/tests -t scripts`** (the
+instrument that established the baseline, and the command CI runs):
+
+    Ran 1071 tests in 1672.850s — FAILED (failures=6, skipped=1)
+
+Exactly the documented six, named and attributed:
+
+1. `test_polyglot_adapter.TestVerify.test_python_verify_fails_with_starter`
+2. `test_polyglot_adapter.TestVerify.test_python_verify_passes_with_example_solution`
+   — both: `/usr/local/opt/python@2/bin/python2.7: No module named pytest`
+3. `test_polyglot_adapter.TestGoldenPatch.test_cpp_multifile_golden`
+4. `test_polyglot_adapter.TestGoldenPatch.test_python_golden_renames_example_to_solution`
+   — both: expected golden `leap.*` absent (populated `benchmarks/.cache` state)
+5. `test_cli_skeleton.TestDogfoodCommand.test_dogfood_with_missing_polyglot_cache_returns_usage`
+6. `test_cli_skeleton.TestRunCommand.test_run_empty_adapter_returns_usage_with_fetch_hint`
+   — both: `AssertionError: 0 != 2` (rc 0 != EXIT_USAGE)
+
+These are CLASSIFIED against the previously proven host baseline (six
+identical failures at a pristine merge base, compared per-test earlier
+on 2026-08-29), not re-proven in this session. No failure outside
+those six appeared. Every signature matches the documented cause.
+
+Other components, each with its instrument:
+
+- Routing shell suites, unmodified, at their `tests/test-counts.env`
+  pins with zero failures: routing-config 167, routing-failover 186,
+  routing-tasks 154, routing-packet 99, routing-delegation 171,
+  routing-recovery 375.
+- `session_analytics` — `unittest discover` (system python): 427
+  tests, OK, 37 skipped. Under pytest in a venv carrying
+  fastapi+httpx: 421 passed, 6 skipped. Same 427 collected; the
+  31-test delta is CI-gated API tests one environment can run and the
+  other cannot.
+- `automation-config` 194 passed / 0 failed (at pin); `hooks` 149
+  passed / 38 failed, matching this host's documented hooks baseline
+  and untouched by this branch.
+- `tsc --noEmit` clean; `npm run build` (the CI studio gate) green;
+  doc-accuracy gate clean (76 links OK, 0 errors); spec validation
+  2/0; `git diff --check` clean.
+- Production diff guard EMPTY vs master for `scripts/lib`,
+  `scripts/routing-cli.sh`, `scripts/cooldown-supervisor.sh`,
+  `shared/`, and `adapters/` — in both the committed history and the
+  working tree.
+
+**Verification honesty.** Two measurement failures in this task, both
+of which reported as progress while producing nothing. (1) The first
+`unittest discover` launch never executed its body — no log file was
+ever created — and the waiter polled a non-existent path for the whole
+interval. The lost time was a LAUNCH-VERIFICATION failure, not test
+runtime; the relaunch was confirmed running (artifact present, output
+accumulating, process alive) before being trusted. (2) The pytest /
+unittest instrument mismatch above. Also recorded: the manifest schema
+carried 34 lines of T1 prettier churn that made the closure diff read
+as a schema rewrite; the two keys were re-applied on master's original
+formatting, so against master it is now a pure addition with zero
+deletions (against HEAD it shows 18 deletions — the figures differ by
+base, and each is stated with its base).
+
+## T5 closure review round 1 (owner, on 6c4cc6e) — two P1 + one P2, applied
+
+All three reproduced before any fix.
+
+1. **[P1] No runnable evaluation workflow.** `evaluate_heldout` and
+   `write_evaluation_report` had NO non-test callers, and the CLI had
+   no calibration command — confirmed by grep over `scripts/` excluding
+   tests, and by the subcommand list. So on a fresh installation
+   `heldout_evaluated`, `false_downgrade`, and `floors_authoritative`
+   were structurally unreachable: they read a report nothing in the
+   system could produce. Worse than an omission — the README told
+   operators to "write one with the calibration evaluation" and the
+   panel said the same, instructing an action that could not be
+   performed.
+
+   Added `run_evaluation(config)` and the `session-analytics
+   calibrate` subcommand: loads the corpus from the configured
+   evidence roots, assembles the evaluation policy and the current
+   effective policy, runs leave-one-task-out, and persists the report
+   atomically. It returns a summary carrying corpus/policy ids and the
+   aggregates, and NO filesystem path (pinned). Configuration
+   conditions refuse by name with EXIT_USAGE rather than crashing.
+   Executed end-to-end against live fixtures, not merely written:
+   report absent -> command run -> report present, schema-valid, bound
+   to that corpus. Docs and the panel text now name the real command.
+
+2. **[P1] Write isolation was asserted, not enforced.**
+   `write_evaluation_report` accepted any path and its docstring
+   claimed "never an E1 evidence root" while checking nothing — the
+   exact failure mode this increment recorded as lesson 3 two commits
+   earlier, committed by me in the same increment that wrote the
+   lesson. The authority guard only proved that one test invocation
+   happened to choose a separate directory, and its static scan
+   asserted three hardcoded tokens were absent outside the writer, so
+   a new `write_bytes` or `open(..., "w")` would have passed.
+
+   Both halves fixed. `assert_write_isolation(root, evidence_roots)`
+   refuses overlap in BOTH directions (a calibration root inside
+   evidence writes into evidence; evidence inside the calibration root
+   puts evidence under a directory this layer rewrites), comparing
+   RESOLVED paths so a symlink or `..` cannot walk around it, and
+   `evidence_roots` is a required argument with no default — a
+   containment check that disables itself when a caller omits an
+   argument is not a check. The static guard was rebuilt as an
+   EXHAUSTIVE positional scan: every filesystem-mutating call in the
+   module (14 operation patterns) must fall inside
+   `write_evaluation_report`, and the writer must call the isolation
+   check BEFORE its first write. Verified live that both overlap
+   directions refuse with nothing created on disk.
+
+3. **[P2] Closure record contradicted the artifact it certified.** The
+   verdict block still read "Plan status: draft, pending owner review"
+   while `plan.md` carries `status: approved` (flipped at `fd71d37`).
+   Corrected with a note rather than a silent edit.
+
+Five mutations discriminated: isolation check removed; only one
+containment direction checked; paths compared unresolved; a stray
+write added outside the approved writer; the CLI no longer registering
+the command.
+
+Suites after the pass: session_analytics 433 tests OK / 37 skipped
+(`unittest discover`, +6 entrypoint regressions); calibration suite 93
+OK under pytest; CLI suite 3 OK; the five decision-10 states re-verified
+at 1440 and 375 after the panel text change; `tsc --noEmit` clean;
+`npm run build` green; doc-accuracy clean (76 links, 0 errors).
+
+## T5 closure review round 2 (owner, on 1360c50) — one P1 + one P2, applied
+
+Both reproduced before any fix.
+
+1. **[P1] An empty root set disabled the isolation check.**
+   `evidence_roots` was required syntactically, but `evidence_roots or
+   ()` made an empty sequence pass the containment loop vacuously and
+   return an approval the function never performed. Reproduced
+   directly: a calibration root nested inside an evidence root is
+   refused when the real root is supplied and ACCEPTED when `()` is —
+   and two of my own persistence fixtures were calling the public
+   writer with `()`, so the bypass was not merely reachable, it was
+   exercised.
+
+   This is the THIRD instance of one failure family in this increment,
+   and the sharpest, because the docstring immediately above the bug
+   said "a containment check that silently disables itself when a
+   caller omits an argument is not a check". I enforced the
+   requirement at the SYNTAX level and not at the VALUE level, having
+   just written down the rule it violates. Writing the lesson does not
+   discharge it.
+
+   `assert_write_isolation` now refuses an empty or None root set by
+   name: a caller with no evidence roots has no corpus to evaluate and
+   no business writing a report. Both fixtures were given real,
+   DISJOINT evidence roots, so they exercise the containment check
+   instead of skipping it.
+
+2. **[P2] Configuration errors escaped the CLI's handling.**
+   `load_config()` ran before the `try`, so a malformed override
+   produced a traceback and exit 1 while the docs promised a named
+   EXIT_USAGE refusal. Reproduced:
+   `CCT_SA_CALIBRATION_K=not-an-integer` printed a five-frame
+   traceback. The load now happens inside the handled block and
+   configuration `ValueError` maps to EXIT_USAGE; the message already
+   names the offending key. Verified live: same input now prints one
+   line and exits 2.
+
+   Pinned with REAL CLI regressions that drive `cli.main(["calibrate"])`
+   and assert the exit code, the presence of the offending key in
+   stderr, and the ABSENCE of "Traceback" — for both a malformed
+   override and a corpus condition.
+
+Three mutations discriminated: empty sequence tolerated again; the
+config load moved back outside the try; `ValueError` no longer mapped
+to usage.
+
+Suites after the pass: session_analytics 436 tests OK / 37 skipped
+(`unittest discover`); calibration 96 OK under pytest; the end-to-end
+producer re-run against live fixtures; spec 2/0; origin aligned/high;
+whitespace clean; production diff guard empty. The benchmark_runner
+sweep was NOT re-run — this round touches only session_analytics and
+specs, and its scope is unchanged.
+
+## Verdict
+
+Verdict: aligned
+Confidence: high
+
+The bundle covers exactly the five §12 conditions and the shadow kNN
+bullet, nothing more; the single addition beyond §12's literal text —
+corpus-bound staleness (decision 3) — exists so a gate can never pass
+against evidence it was not computed from, which is the §12 intent
+("evaluated against held-out tasks" of the actual corpus).
+
+Plan status: **approved** (flipped at `fd71d37` after the rev-2 plan
+review; `plan.md` frontmatter carries `status: approved`). This
+verdict block was written during the plan round and its status line
+was not refreshed when the plan was approved — corrected at closure,
+noted rather than silently edited because a closure record that
+contradicts the artifact it certifies is exactly the kind of drift the
+origin gate exists to catch.

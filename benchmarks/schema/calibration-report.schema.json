@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "calibration-report.schema.json",
+  "title": "Calibration-gate report v1 (routing-calibration decision 2)",
+  "description": "The five #109 §12 calibration conditions as executable results. Each gate reports pass / fail / insufficient_data with its measured value, its operator-declared threshold, and addressable evidence; the overall verdict is calibrated only when every gate passes. The report binds to the exact corpus (corpus_id) and the exact evaluation policy (policy_id, decision 3); a report whose bindings do not match the live corpus/configuration is stale and satisfies no gate. Nothing anywhere auto-acts on a gate result.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "corpus_id",
+    "policy_id",
+    "corpus",
+    "gates",
+    "calibrated"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "corpus_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "policy_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "corpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sets", "invalid_sets", "labeled_tasks"],
+      "properties": {
+        "sets": { "type": "integer", "minimum": 0 },
+        "invalid_sets": { "type": "integer", "minimum": 0 },
+        "labeled_tasks": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 5,
+      "items": { "$ref": "#/$defs/gate" }
+    },
+    "calibrated": { "type": "boolean" }
+  },
+  "$defs": {
+    "gate_evidence_ref": {
+      "description": "One addressable coordinate. Same shape discipline as recommendation.schema.json's locator: the branches are exclusive and each closes its own properties, so an unknown kind cannot slip through as a partially-matching object.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "evidence_set_id"],
+          "properties": {
+            "kind": { "const": "evidence_set" },
+            "evidence_set_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "evidence_set_id", "task_id"],
+          "properties": {
+            "kind": { "const": "task" },
+            "evidence_set_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "task_id": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "evaluation_report" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "evidence_set_id", "task_id"],
+          "properties": {
+            "kind": { "const": "evaluation_result" },
+            "evidence_set_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "task_id": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status",
+        "measured",
+        "threshold",
+        "reason",
+        "evidence_refs"
+      ],
+      "properties": {
+        "id": {
+          "enum": [
+            "telemetry_complete",
+            "labeled_volume",
+            "heldout_evaluated",
+            "false_downgrade",
+            "floors_authoritative"
+          ]
+        },
+        "status": { "enum": ["pass", "fail", "insufficient_data"] },
+        "measured": { "type": ["number", "string", "null"] },
+        "threshold": { "type": ["number", "string", "null"] },
+        "reason": { "type": ["string", "null"] },
+        "evidence_refs": {
+          "description": "Structured, ADDRESSABLE locators (FR-E3-1): each names a coordinate a reader can open — an evidence set, a (set, task) pair in that set's report, the held-out evaluation report, or one result within it. Never an opaque string a consumer has to parse, and never a filesystem path.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/gate_evidence_ref" }
+        }
+      }
+    }
+  }
+}

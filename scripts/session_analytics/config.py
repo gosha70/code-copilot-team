@@ -37,6 +37,21 @@ ENV_SOURCE_PREFIX = "CCT_SA_SOURCE_"  # + COPILOT (e.g. CCT_SA_SOURCE_CLAUDE_COD
 # Routing-shadow (#261): evidence roots are SERVER-SIDE configuration —
 # the API never serves the raw paths (only {configured, root_count}).
 ENV_ROUTING_EVIDENCE_ROOTS = "CCT_SA_ROUTING_EVIDENCE_ROOTS"  # os.pathsep-separated
+ENV_CALIBRATION_PREFIX = "CCT_SA_CALIBRATION_"
+
+
+def _coerce_like(template: Any, raw: str) -> Any:
+    """Coerce an env override to the defaults-file value's type — a
+    threshold stays numeric, a path stays a string; an uncoercible
+    override raises rather than silently changing type."""
+    if isinstance(template, bool):
+        return raw.lower() in ("1", "true", "yes")
+    if isinstance(template, int) and not isinstance(template, bool):
+        return int(raw)
+    if isinstance(template, float):
+        return float(raw)
+    return raw
+
 
 # Keys the Studio config page exposes (order = display order). Secret-bearing
 # keys are flagged so the API masks them.
@@ -136,6 +151,12 @@ class AnalyticsConfig:
     #: Routing-shadow (#261): E1 evidence-set roots. Server-side only;
     #: /api/settings exposes a sanitized {configured, root_count} shape.
     routing_evidence_roots: tuple[str, ...] = ()
+    #: routing-calibration (#266): the calibration policy block —
+    #: thresholds, classifier parameters, the analytics-owned output
+    #: root, and the operator's current policy source. Values come from
+    #: the layered config (defaults.json < user config < env), never
+    #: from code.
+    routing_calibration: Mapping[str, Any] = field(default_factory=dict)
 
     def source_root(self, copilot: str) -> Optional[Path]:
         raw = self.sources.get(copilot)
@@ -433,6 +454,22 @@ def load_config(
         roots_raw = [r for r in roots_env.split(os.pathsep) if r]
     routing_evidence_roots = tuple(str(r) for r in roots_raw)
 
+    # routing-calibration (#266): the nested block from the layered
+    # data, with per-key env overrides CCT_SA_CALIBRATION_<KEY>.
+    calibration = dict(data.get(C.CFG_ROUTING_CALIBRATION) or {})
+    for key in list(calibration.keys()):
+        ov = env(ENV_CALIBRATION_PREFIX + key.upper())
+        if ov is not None:
+            try:
+                calibration[key] = _coerce_like(calibration[key], ov)
+            except ValueError:
+                raise ValueError(
+                    f"{ENV_CALIBRATION_PREFIX}{key.upper()}={ov!r} cannot "
+                    f"be coerced to the type of the configured "
+                    f"'{key}' value — refusing a silently mistyped "
+                    f"calibration override"
+                ) from None
+
     # sources (+ optional per-copilot env override CCT_SA_SOURCE_<COPILOT>)
     sources = dict(data.get(C.CFG_SOURCES) or {})
     for copilot in list(sources.keys()):
@@ -479,6 +516,7 @@ def load_config(
     return AnalyticsConfig(
         sources=sources,
         routing_evidence_roots=routing_evidence_roots,
+        routing_calibration=calibration,
         dsn=str(resolved_dsn),
         kuzu_path=str(Path(resolved_kuzu).expanduser()),
         redaction_mode=resolved_redaction,

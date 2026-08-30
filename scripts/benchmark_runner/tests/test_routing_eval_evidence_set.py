@@ -220,6 +220,14 @@ class TestPublishEvidenceSetLive(_EvidenceFixture):
         validated = validate_evidence_set(root)
         self.assertEqual(validated["set_id"], root.name)
         self.assertEqual(published.set_id, root.name)
+        # routing-calibration decision 11: the PRODUCTION path persists
+        # the executed registry's profile policy; the arc config
+        # declares no task descriptors, so that artifact is absent —
+        # never fabricated.
+        self.assertIsNotNone(validated["profile_policy"])
+        self.assertIn("preferred",
+                      validated["profile_policy"]["profiles"])
+        self.assertIsNone(validated["task_descriptors"])
 
         # matrix coverage: 5 tasks x 3 profiles x 1 trial = 15 cells;
         # ordinary tasks execute build-role profiles (preferred,
@@ -312,6 +320,8 @@ class TestPublishEvidenceSetLive(_EvidenceFixture):
             report=report_doc,
             fingerprint=fp,
             secret_values=(),
+            task_descriptors=validated["task_descriptors"],
+            profile_policy=validated["profile_policy"],
         )
         self.assertTrue(again.existed, "byte-identical republication is an "
                                        "idempotent no-op")
@@ -369,6 +379,8 @@ class TestPublishEvidenceSetLive(_EvidenceFixture):
                 report=dict(report_doc),
                 fingerprint=fp,
                 secret_values=(),
+                task_descriptors=validated["task_descriptors"],
+                profile_policy=validated["profile_policy"],
             )
 
         faults = (
@@ -674,7 +686,8 @@ class TestEvidenceReferenceBinding(unittest.TestCase):
     to equal the manifest keys exactly at validation. A relative
     symlink under the evidence root can never import an external file."""
 
-    def _publish_small(self, base: Path, *, repair_ref=None, mutate=None):
+    def _publish_small(self, base: Path, *, repair_ref=None, mutate=None,
+                       **publish_kwargs):
         from benchmark_runner.routing_eval.redaction import write_run_records
         from benchmark_runner.routing_eval.routing_quality import build_report
         from benchmark_runner.tests.test_routing_eval_quality import (
@@ -738,6 +751,7 @@ class TestEvidenceReferenceBinding(unittest.TestCase):
             report=dict(report),
             fingerprint=matrix.fingerprint,
             secret_values=(),
+            **publish_kwargs,
         )
 
     def _rewrite_manifest(self, setdir: Path, manifest: dict) -> None:
@@ -838,6 +852,240 @@ class TestEvidenceReferenceBinding(unittest.TestCase):
                 EvidenceSetError, "outside the evidence root"
             ):
                 self._publish_small(base, mutate=relativize_over_symlink)
+
+
+class TestCalibrationEvidenceAdditions(unittest.TestCase):
+    """routing-calibration T1 (decision 11): the two OPTIONAL labeled
+    evidence artifacts — derived at publication, manifest-bound,
+    schema'd, digest-bound, coverage-exact; pre-addition sets stay
+    valid and load with None."""
+
+    def _descriptors(self):
+        from benchmark_runner.tests.test_routing_eval_quality import _PRESET
+
+        return {
+            "schema_version": 1,
+            "preset_digest": _PRESET,
+            "trials": 1,
+            "descriptors": {
+                "t1": {"task_class": "one_file",
+                       "route_class": "primary_only", "file_scope": 1},
+            },
+        }
+
+    def _policy(self):
+        from benchmark_runner.routing_eval.evidence_set import (
+            derive_profile_policy,
+        )
+        from benchmark_runner.tests.test_routing_eval_quality import (
+            _REG_DIGEST,
+            _REGISTRY,
+        )
+
+        return derive_profile_policy(_REGISTRY, _REG_DIGEST)
+
+    def _publish_with_additions(self, base: Path, **overrides):
+        kwargs = {
+            "task_descriptors": self._descriptors(),
+            "profile_policy": self._policy(),
+        }
+        kwargs.update(overrides)
+        return TestEvidenceReferenceBinding._publish_small(
+            self, base, **kwargs
+        )
+
+    def test_published_additions_bind_and_load(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            published = self._publish_with_additions(base)
+            manifest = json.loads(
+                (published.path / ARTIFACT_MANIFEST).read_text(
+                    encoding="utf-8")
+            )
+            self.assertIn("task_descriptors_sha256", manifest["artifacts"])
+            self.assertIn("profile_policy_sha256", manifest["artifacts"])
+            validated = validate_evidence_set(published.path)
+            self.assertEqual(
+                validated["task_descriptors"]["descriptors"]["t1"]
+                ["task_class"], "one_file")
+            self.assertEqual(
+                validated["profile_policy"]["profiles"]["alpha"]
+                ["capability_tier"], "tier1")
+
+    def test_pre_addition_set_stays_valid_and_unlabeled(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            published = TestEvidenceReferenceBinding._publish_small(
+                self, base)
+            validated = validate_evidence_set(published.path)
+            self.assertIsNone(validated["task_descriptors"])
+            self.assertIsNone(validated["profile_policy"])
+
+    def test_tampered_descriptor_bytes_refuse(self) -> None:
+        import tempfile
+
+        from benchmark_runner.routing_eval.evidence_set import (
+            ARTIFACT_TASK_DESCRIPTORS,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            published = self._publish_with_additions(base)
+            target = published.path / ARTIFACT_TASK_DESCRIPTORS
+            doc = json.loads(target.read_text(encoding="utf-8"))
+            doc["descriptors"]["t1"]["file_scope"] = 99
+            target.write_text(json.dumps(doc, sort_keys=True),
+                              encoding="utf-8")
+            with self.assertRaises(EvidenceSetInvalid) as caught:
+                validate_evidence_set(published.path)
+            self.assertEqual(caught.exception.code, "hash_mismatch")
+
+    def test_descriptor_preset_binding_refuses(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            descriptors = self._descriptors()
+            descriptors["preset_digest"] = "sha256:" + "ab" * 32
+            with self.assertRaises(EvidenceSetInvalid) as caught:
+                self._publish_with_additions(
+                    base, task_descriptors=descriptors)
+            self.assertEqual(caught.exception.code, "fingerprint_mismatch")
+
+    def test_descriptor_for_unknown_task_refuses(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            descriptors = self._descriptors()
+            descriptors["descriptors"]["ghost-task"] = {
+                "task_class": "refactor", "route_class": "primary_only",
+                "file_scope": 3,
+            }
+            with self.assertRaises(EvidenceSetInvalid) as caught:
+                self._publish_with_additions(
+                    base, task_descriptors=descriptors)
+            self.assertEqual(caught.exception.code, "reference_mismatch")
+
+    def test_policy_missing_executed_profile_refuses(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            policy = json.loads(json.dumps(self._policy()))
+            del policy["profiles"]["beta"]
+            with self.assertRaises(EvidenceSetInvalid) as caught:
+                self._publish_with_additions(base, profile_policy=policy)
+            self.assertEqual(caught.exception.code, "reference_mismatch")
+
+    def test_missing_bound_artifact_refuses(self) -> None:
+        import tempfile
+
+        from benchmark_runner.routing_eval.evidence_set import (
+            ARTIFACT_PROFILE_POLICY,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            published = self._publish_with_additions(base)
+            (published.path / ARTIFACT_PROFILE_POLICY).unlink()
+            with self.assertRaises(EvidenceSetInvalid) as caught:
+                validate_evidence_set(published.path)
+            self.assertEqual(caught.exception.code, "missing_artifact")
+
+    def test_derivations(self) -> None:
+        from types import SimpleNamespace
+
+        from benchmark_runner.routing_eval.evidence_set import (
+            derive_task_descriptors,
+        )
+
+        config = SimpleNamespace(
+            task_descriptors={
+                "a": {"task_class": "one_file", "file_scope": 1},
+                "b": {"task_class": "refactor", "file_scope": 2},
+                "c": {"task_class": "integration", "file_scope": 4},
+            },
+            tier1_only_tasks=["b"],
+            delegate_tasks=["c"],
+            trials=3,
+        )
+        doc = derive_task_descriptors(config, "sha256:p")
+        # the DECLARED trial count rides along (T2 round-1 P1)
+        self.assertEqual(doc["trials"], 3)
+        self.assertEqual(doc["descriptors"]["a"]["route_class"],
+                         "primary_only")
+        self.assertEqual(doc["descriptors"]["b"]["route_class"],
+                         "tier1_only")
+        self.assertEqual(doc["descriptors"]["c"]["route_class"],
+                         "tier2_preferred")
+        self.assertIsNone(derive_task_descriptors(
+            SimpleNamespace(task_descriptors=None, trials=1), "sha256:p"))
+        # a scenario with no declared trial count cannot produce the
+        # artifact the calibration feature vector reads
+        with self.assertRaisesRegex(EvidenceSetError, "trial count"):
+            derive_task_descriptors(
+                SimpleNamespace(task_descriptors={
+                    "a": {"task_class": "one_file", "file_scope": 1}},
+                    tier1_only_tasks=[], delegate_tasks=[], trials=0),
+                "sha256:p")
+
+    def test_scenario_config_descriptor_validation(self) -> None:
+        from benchmark_runner.routing_eval.scenario_config import (
+            ScenarioConfigError,
+            validate_scenario_config,
+        )
+
+        from benchmark_runner.tests.test_routing_eval_quality import (
+            _REGISTRY,
+        )
+
+        def config(descriptors):
+            return {
+                "benchmark": "b", "scenario": "hybrid-routing",
+                "cost_basis": "measured",
+                "arms": [
+                    {"kind": "always_best"},
+                    {"kind": "always_cheapest"},
+                    {"kind": "oracle"},
+                    {"kind": "cct_router", "registry": str(_REGISTRY)},
+                ],
+                "task": ["t1", "t2"],
+                "task_descriptors": descriptors,
+            }
+
+        good = {
+            "t1": {"task_class": "one_file", "file_scope": 1},
+            "t2": {"task_class": "refactor", "file_scope": 2},
+        }
+        validated = validate_scenario_config(config(good))
+        self.assertEqual(validated.task_descriptors["t2"]["task_class"],
+                         "refactor")
+        with self.assertRaisesRegex(ScenarioConfigError, "closed"):
+            validate_scenario_config(config({
+                "t1": {"task_class": "one_file", "file_scope": 1,
+                       "extra": True},
+                "t2": {"task_class": "refactor", "file_scope": 2},
+            }))
+        with self.assertRaisesRegex(ScenarioConfigError, "task_class"):
+            validate_scenario_config(config({
+                "t1": {"task_class": "novel-class", "file_scope": 1},
+                "t2": {"task_class": "refactor", "file_scope": 2},
+            }))
+        with self.assertRaisesRegex(ScenarioConfigError, "omits"):
+            validate_scenario_config(config({
+                "t1": {"task_class": "one_file", "file_scope": 1},
+            }))
+        with self.assertRaisesRegex(ScenarioConfigError, "undeclared"):
+            validate_scenario_config(config({
+                "t1": {"task_class": "one_file", "file_scope": 1},
+                "t2": {"task_class": "refactor", "file_scope": 2},
+                "tX": {"task_class": "one_file", "file_scope": 1},
+            }))
 
 
 if __name__ == "__main__":

@@ -55,6 +55,14 @@ const BADGE_COLORS: Record<string, string> = {
   moderate: "bg-yellow-100 text-yellow-800",
   low: "bg-slate-100 text-slate-700",
   invalid_evidence: "bg-rose-100 text-rose-800",
+  // routing-calibration (#266): the overall gate verdict and the stale
+  // state. "not calibrated" is the ordinary resting state of an honest
+  // corpus, not a failure — it stays slate so it never reads as an alarm,
+  // while a stale binding is amber ("cannot conclude"), matching
+  // insufficient_data above.
+  calibrated: "bg-green-100 text-green-800",
+  not_calibrated: "bg-slate-100 text-slate-700",
+  stale: "bg-amber-100 text-amber-900",
 };
 
 export function Badge({ kind, children }: { kind: string; children: React.ReactNode }) {

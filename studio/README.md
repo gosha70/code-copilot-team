@@ -25,7 +25,7 @@ NEXT_PUBLIC_API_BASE=http://127.0.0.1:8765 npm run dev
 | **Session Detail** | **Insights** (turn timeline + heuristic badges), **Agent Tuning** (assessment + copy-ready config), **Prompt Coaching** (per-user-turn issues). |
 | **Knowledge Graph** | Cytoscape explorer (tap-to-expand), node counts, read-only Cypher IDE with templates. |
 | **Analysis** | The 5-step pipeline wizard; triggers the LLM-Judge step. |
-| **Routing** | Shadow-mode routing analysis (E2 of #109): E1 evidence sets (valid, `invalid_evidence` with sanitized code, explanatory empty state), the report's arms/metric-vector/cost/per-task figures, Pareto frontier or its withholding reason, and per-task shadow recommendations — actual-vs-suggested with explicit divergence, three visually distinct outcomes (`insufficient_data` is "cannot conclude", never rendered like `no_change_recommended`), confidence grade + full basis, and followable evidence locators that open their referenced artifact coordinate in place. Read-only: nothing feeds back into live routing. |
+| **Routing** | Shadow-mode routing analysis (E2/E3 of #109). **Calibration panel**: the five §12 gates with per-gate `pass`/`fail`/`insufficient_data`, measured value, operator threshold and openable evidence locators; the overall verdict; an explicit stale banner whose figures render struck-through and labelled void, not merely old; and the evaluation aggregates — with `agreement` beside the verdicts, because no gate consumes it and it is the only number separating a useful recommender from a safe-but-inert one. **Evidence sets**: valid, `invalid_evidence` with sanitized code, explanatory empty state. **Set detail**: the report's arms/metric-vector/cost/per-task figures, Pareto frontier or its withholding reason, and per-task shadow recommendations — actual-vs-suggested with explicit divergence, three visually distinct outcomes (`insufficient_data` is "cannot conclude", never rendered like `no_change_recommended`), confidence grade + full basis, and followable evidence locators that open their referenced artifact coordinate in place — each with a **shadow kNN section beside it** (never in place of it) whose neighbours open their own evidence, including in other sets. Read-only: nothing feeds back into live routing. |
 | **Agents** | Discover / upload / manage agent configs. |
 | **Settings** | Data sources + Test Connection, LLM-Judge config, source roots. |
 
@@ -33,6 +33,9 @@ The raw DSN is never sent to the browser — `/api/settings` returns the DSN's
 dialect rather than the raw DSN (alongside other sanitized settings). The
 Routing tab never sees the configured evidence roots or server-side set
 paths: roots surface as `{configured, root_count}`, sets are addressed by
-opaque content id, and decision-bearing figures render in round-trip
-precision, never display-rounded. (Path-shaped text *inside* published
+opaque content id, and decision-bearing figures — gate measurements
+included — render in round-trip precision, never display-rounded (a
+1e-8 rate must not read as a clean `0.0000`). The Calibration panel
+shows policy *digests*, never the configured calibration root or
+either policy-source path. (Path-shaped text *inside* published
 evidence content renders as written, home prefix collapsed at publication.)

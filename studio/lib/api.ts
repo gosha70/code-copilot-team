@@ -316,6 +316,153 @@ export interface RoutingRecommendationsPayload {
   recommendations: RoutingRecommendation[];
 }
 
+// routing-calibration (#266): the calibration gates and the shadow kNN
+// recommender. Read-only, like everything above it — no surface here
+// changes a routing decision, and no payload carries a filesystem path.
+export type RoutingGateId =
+  | "telemetry_complete"
+  | "labeled_volume"
+  | "heldout_evaluated"
+  | "false_downgrade"
+  | "floors_authoritative";
+
+export type RoutingGateStatus = "pass" | "fail" | "insufficient_data";
+
+// Addressable gate evidence (FR-E3-1): a closed set of coordinates the
+// panel opens through the existing read-only surfaces — never an opaque
+// string, never a path.
+export type RoutingGateEvidenceRef =
+  | { kind: "evidence_set"; evidence_set_id: string }
+  | { kind: "task"; evidence_set_id: string; task_id: string }
+  | { kind: "evaluation_report" }
+  | { kind: "evaluation_result"; evidence_set_id: string; task_id: string };
+
+export interface RoutingGate {
+  id: RoutingGateId;
+  status: RoutingGateStatus;
+  measured: number | string | null;
+  threshold: number | string | null;
+  reason: string | null;
+  evidence_refs: RoutingGateEvidenceRef[];
+}
+
+export interface RoutingCalibrationReport {
+  schema_version: 1;
+  corpus_id: string;
+  policy_id: string;
+  corpus: { sets: number; invalid_sets: number; labeled_tasks: number };
+  gates: RoutingGate[];
+  calibrated: boolean;
+}
+
+// The evaluation aggregates rendered BESIDE the verdicts. `agreement` is
+// here on purpose: no gate consumes it, and a recommender that keeps
+// everything clears every gate honestly while proposing nothing — the
+// gates are the safety reading, agreement is the usefulness one.
+export interface RoutingEvaluationSummary {
+  present: boolean;
+  stale: boolean;
+  stale_reasons: string[];
+  agreement: number | null;
+  compared: number | null;
+  evaluated: number | null;
+  refused: number | null;
+  unresolved_tier: number | null;
+  unevaluable: number | null;
+  false_downgrades: number | null;
+  false_downgrade_rate: number | null;
+  floor_violations: number | null;
+}
+
+export interface RoutingEvaluationPolicy {
+  feature_vocabulary: string;
+  k: number;
+  k_min: number;
+  distance_metric: string;
+  vote_epsilon: number;
+  normalization: string;
+  tier_floor: string;
+  policy_source_digest: string | null;
+  max_false_downgrade_rate: number;
+}
+
+export type RoutingPayloadState = "report" | "insufficient_data";
+
+export interface RoutingCalibrationPayload {
+  state: RoutingPayloadState;
+  reason: string | null;
+  report: RoutingCalibrationReport | null;
+  evaluation: RoutingEvaluationSummary;
+  policy: RoutingEvaluationPolicy | null;
+}
+
+export interface RoutingEvaluationReport {
+  schema_version: 1;
+  corpus_id: string;
+  policy_id: string;
+  policy: RoutingEvaluationPolicy;
+  split: "leave_one_task_out";
+  results: {
+    evidence_set_id: string;
+    task_id: string;
+    predicted: { outcome: RoutingOutcome; suggested: RoutingSuggestion };
+    truth: { outcome: RoutingOutcome; suggested: RoutingSuggestion };
+    downgrade_flag: boolean;
+  }[];
+  agreement: number | null;
+  false_downgrades: number;
+  evaluated: number;
+  unevaluable: number;
+  false_downgrade_rate: number | null;
+  floor_violations: number;
+  compared: number;
+  refused: number;
+  unresolved_tier: number;
+}
+
+export interface RoutingEvaluationPayload {
+  state: RoutingPayloadState;
+  reason: string | null;
+  report: RoutingEvaluationReport | null;
+  staleness: { stale: boolean; reasons: string[] } | null;
+}
+
+export type RoutingSuggestion = {
+  arm: "always_best" | "always_cheapest";
+  profile_id: string;
+} | null;
+
+export interface RoutingKnnRecommendation {
+  schema_version: 1;
+  evidence_set_id: string;
+  task_id: string;
+  policy_id: string;
+  outcome: RoutingOutcome;
+  suggested: RoutingSuggestion;
+  neighbors: {
+    evidence_set_id: string;
+    task_id: string;
+    distance: number;
+    label: { outcome: RoutingOutcome; suggested: RoutingSuggestion };
+    evidence_refs: {
+      evidence_set_id: string;
+      artifact: string;
+      locator: RoutingEvidenceLocator;
+    }[];
+  }[];
+  k: number;
+  k_min: number;
+  distance_metric: string;
+  insufficient_reason: string | null;
+}
+
+export interface RoutingKnnPayload {
+  state: RoutingPayloadState;
+  reason: string | null;
+  set_id: string;
+  recommendations: RoutingKnnRecommendation[];
+}
+
 export const api = {
   dashboard: () => get<DashboardKpis>("/api/dashboard/kpis"),
   labels: () => get<{ labels: { label: string; true: number; total: number }[] }>("/api/dashboard/labels"),
@@ -364,5 +511,15 @@ export const api = {
   routingArtifact: (setId: string, artifact: RoutingArtifactName) =>
     get<RoutingArtifactPayload>(
       `/api/routing/evidence/${encodeURIComponent(setId)}/artifact/${artifact}`,
+    ),
+  // routing-calibration (#266): gates, the held-out evaluation, and the
+  // shadow kNN recommendations served BESIDE the E2 ones.
+  routingCalibration: () =>
+    get<RoutingCalibrationPayload>("/api/routing/calibration"),
+  routingEvaluation: () =>
+    get<RoutingEvaluationPayload>("/api/routing/calibration/evaluation"),
+  routingKnn: (setId: string) =>
+    get<RoutingKnnPayload>(
+      `/api/routing/evidence/${encodeURIComponent(setId)}/knn`,
     ),
 };

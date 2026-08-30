@@ -9,6 +9,7 @@ import {
   RoutingInvalidEvidenceSet,
 } from "@/lib/api";
 import { Badge, Card, ErrorNote, Loading, useApi } from "@/components/ui";
+import { CalibrationPanel } from "@/components/CalibrationPanel";
 
 function digest8(value: string): string {
   // Digests render truncated for scanability; the full value stays in the
@@ -91,6 +92,8 @@ export default function RoutingPage() {
             : "none configured"}
         </p>
       )}
+
+      <CalibrationPanel />
 
       {data.sets.length === 0 ? (
         <Card title="No routing evidence sets yet">

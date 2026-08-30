@@ -580,6 +580,172 @@ written):
 
 The Studio's **Routing** tab renders all of it (see `studio/README.md`).
 
+## Calibration gates + shadow kNN (E3 of #109, issue #266)
+
+The #109 §12 promotion conditions, made **executable**, plus a
+similarity recommender that runs beside the E2 dominance
+recommendations. Still shadow-only: no key the router reads, no policy
+surface, no code path that changes a routing decision. The
+authority-guard tests prove it three ways — no production routing
+script can name any calibration symbol, the production config reader
+knows none of the keys below, and every write this layer performs lands
+under the analytics-owned calibration root (an evidence set is
+byte-identical after a full derive + evaluate + gate run).
+
+```bash
+CCT_SA_CALIBRATION_ROOT=/path/to/calibration \
+CCT_SA_CALIBRATION_POLICY_SOURCE=~/.code-copilot-team/routing.toml \
+CCT_SA_CALIBRATION_REPO_POLICY_SOURCE=.claude/automation.json \
+  ./scripts/session-analytics serve
+```
+
+Every key in the `routing_calibration` config block ships in
+`config_data/defaults.json`; **none has a default in Python source**.
+Thresholds and classifier parameters are operator policy, so a missing
+key is a refusal, never a silently completed value.
+
+### The five gates
+
+| Gate | Asks |
+| --- | --- |
+| `telemetry_complete` | What fraction of router records carry a measured cost AND a *verified* effective-model identity (a null identity is unverified, never assumed equal to the requested model) |
+| `labeled_volume` | Enough labeled tasks, at enough observed trials **within a single set**, across enough sets |
+| `heldout_evaluated` | What fraction of labeled tasks a recommendation was actually produced for (a refusal is not coverage) |
+| `false_downgrade` | Rate of recommending a lower capability tier than the safety baseline, over **judged** recommendations only |
+| `floors_authoritative` | Three conjuncts: the floor is declared, violations are zero, and the report's policy digest binds the current policy |
+
+### Producing the report the gates read
+
+Three of the five gates (`heldout_evaluated`, `false_downgrade`,
+`floors_authoritative`) read a persisted held-out evaluation report,
+and until one exists they all report `insufficient_data`. One command
+produces it:
+
+```bash
+./scripts/session-analytics calibrate
+```
+
+It loads the corpus from the configured evidence roots, assembles the
+evaluation policy and the current effective policy, runs
+leave-one-task-out, and persists the report atomically into
+`routing_calibration.root`. It prints a JSON summary (corpus and
+policy ids, the evaluation aggregates) and **never a filesystem path**.
+Re-run it whenever the corpus or the policy changes — either one
+stales the existing report, and a stale report satisfies no gate.
+
+The write is isolation-checked **before any byte is written**: the
+calibration root must not overlap any routing-evidence root in either
+direction (paths compared resolved, so a symlink or `..` cannot walk
+around it). Analytics output never lands inside evidence it consumes.
+
+Each gate reports `pass` / `fail` / `insufficient_data` — a gate whose
+inputs do not exist is never a pass — with its measured value, its
+operator-declared threshold, and **addressable evidence**: structured
+locators (an evidence set, a `(set, task)` pair, the evaluation report,
+or one result in it) that the Studio opens through the read-only
+surfaces. Passing gates carry them too, so a zero-violation verdict is
+inspectable rather than merely asserted. The overall verdict is
+`calibrated` only when every gate passes, and **nothing acts on it**: a
+calibrated verdict is evidence for a promotion decision an operator
+makes.
+
+**Read `agreement` beside the verdicts.** The gates are a *safety*
+floor and cannot, by construction, distinguish a useful recommender
+from an inert one: a recommender that answers `no_change_recommended`
+for every task makes real recommendations, none of which can be a
+downgrade, so it earns a truthful 0.0 rate and full coverage while
+proposing nothing. Agreement is the usefulness reading, no gate
+consumes it, and the panel therefore renders it beside the five
+verdicts.
+
+### Identities and staleness
+
+Every report binds to a `corpus_id` (the sorted ids of the consumed
+valid sets) and a `policy_id` (the full evaluation policy: feature
+vocabulary, classifier parameters, normalization, tier floor, the
+digests of BOTH policy sources, and the declared threshold). A report
+whose bindings do not match the live corpus and configuration is
+**stale** and satisfies no gate; the panel strikes its figures through
+and labels them void rather than merely old.
+
+### The shadow kNN recommender
+
+Features are **pre-routing only** (task class, route class, declared
+file scope, and the scenario's *declared* trial count — never the
+observed record count, which is an execution outcome). Missing features
+refuse rather than impute. Neighbors are filtered by the current policy
+*before* ranking, every example of the queried task is excluded from
+the pool, ties resolve conservatively to `no_change_recommended`, and
+each neighbor carries its own E2 evidence references so its vote is
+followable — including across sets.
+
+### Eligibility mirrors the production selector
+
+A suggestion is eligible only if the router could actually have
+selected that profile **for a task of that route class**. The rules are
+taken from the production selector, not restated independently:
+`rc_effective` composes the effective policy (routing enabled on both
+layers; candidates = the user registry INTERSECTED with the
+repository's `allowed_profiles`; the repository's tier-2 delegation
+permission) and `rt_select` filters on the build role and the route
+class — `tier1_only` never reaches tier 2, `primary_only` admits only
+the total-order-first tier1 candidate, and both tier-2 classes require
+delegation permission. The calibration `tier_floor` is an additional
+E3-only floor layered on top.
+
+Three consequences worth knowing before reading a verdict:
+
+- **The shipped `tier_floor` is `tier1`**, which makes every tier-2
+  profile ineligible. That is the safe default, not an oversight — set
+  it to `tier2` deliberately if you want tier-2 profiles considered.
+- **An unbound repository policy is not permission.** Production reads
+  an absent restriction as "no restriction" because it knows the repo
+  config path; here an unconfigured `repo_policy_source` means the
+  restriction is *unknown*, and a safety gate must not read unknown as
+  permitted — so tier-2 suggestions stay ineligible until you configure
+  it. Configuring it changes `policy_id`, which correctly stales prior
+  reports.
+- **`data_policy` and `tool_profile` are not enforced here**, because
+  the production selector carries both on the selected tuple and
+  filters on neither. Enforcing them in calibration would invent policy
+  production does not have.
+
+**Known divergence (tracked, not fixed here).** When a repository's
+`allowed_profiles` names a profile the user registry does not define,
+production refuses the whole configuration rather than guessing
+(`routing-config.sh`: "a typo must not silently change policy"). This
+layer instead narrows its candidate set silently. The direction is
+safe — a narrower set can only make the gates stricter — but the gates
+can report green against a configuration production would decline to
+start on. Validate the config with `cct routing validate` before
+trusting a `calibrated` verdict.
+
+### Endpoints
+
+- `GET /api/routing/calibration` — the live gate report for the current
+  corpus and configuration, the evaluation aggregates (agreement
+  included) with their stale state, and the policy identity echo.
+  Digests only: the configured roots and both policy-source paths never
+  leave the server.
+- `GET /api/routing/calibration/evaluation` — the persisted held-out
+  evaluation report, stale-flagged. Absent, unreadable, or invalid is
+  `insufficient_data` — never partially served.
+- `GET /api/routing/evidence/{set_id}/knn` — the shadow kNN
+  recommendation for every task of one set, served **beside** the E2
+  dominance recommendations, never in place of them.
+
+### Held-out evaluation
+
+Leave-one-task-out over the corpus, driving the *same* recommender the
+API serves (so the measured rate describes serving behaviour). The
+false-downgrade denominator is judged recommendations only: refusals,
+tier-unresolved predictions, and unevaluable examples are each counted
+and reported separately, and none dilutes the rate. The safety baseline
+for a no-change truth is the **highest** tier the chain engaged — a
+chain is a composition, not a menu, so recommending a tier-2 profile
+against a `[tier1 orchestrator, tier2 delegate]` chain drops the tier-1
+leg and is a downgrade.
+
 ## Tests
 
 ```bash

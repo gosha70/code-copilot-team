@@ -391,6 +391,7 @@ endpoint and spawns an ephemeral Anthropic↔OpenAI proxy when needed.
 - 60-second quickstart: [`benchmarks/README.md` § 60-second quickstart](benchmarks/README.md#60-second-quickstart).
 - Routing-quality evaluation (measuring CCT's router against control arms, #109 E1): [`benchmarks/README.md` § Routing-quality evaluation](benchmarks/README.md#routing-quality-evaluation-e1-of-109-issue-260).
 - Shadow-mode routing analysis (consuming E1 evidence sets through session analytics + Studio, #109 E2): [`scripts/session_analytics/README.md` § Routing evidence](scripts/session_analytics/README.md#routing-evidence--shadow-mode-e2-of-109-issue-261).
+- Calibration gates + shadow kNN (the #109 §12 promotion conditions made executable, #109 E3): [`scripts/session_analytics/README.md` § Calibration gates](scripts/session_analytics/README.md#calibration-gates--shadow-knn-e3-of-109-issue-266).
 - Design rationale: [`specs/benchmark-harness/spec.md`](specs/benchmark-harness/spec.md) and the per-feature spec bundles under [`specs/`](specs/).
 
 ## UI Design Harness
@@ -1105,13 +1106,26 @@ cct routing enable <profile-id>
   automatic wake or failback; it grants no endpoint, credential,
   probe, or execution authority.
 
-Increment E1 (#260) is delivered: the hybrid routing benchmark
-scenario, control arms, outcome matrix, and the `quality_fn: v1`
-routing-quality report — see the [Benchmark Harness](#benchmark-harness)
-section's routing-quality evaluation docs. What remains of increment E
-is E2 (#261): shadow-mode analysis and recommendations over E1's
-evidence contract. The codex execution adapter remains its own child
-increment, reusing the existing result and checkpoint contracts.
+Increment E is delivered in three parts. E1 (#260) ships the hybrid
+routing benchmark scenario, control arms, outcome matrix, and the
+`quality_fn: v1` routing-quality report — see the
+[Benchmark Harness](#benchmark-harness) section's routing-quality
+evaluation docs. E2 (#261) consumes those evidence sets read-only and
+derives per-task shadow recommendations. E3 (#266) makes the §12
+promotion conditions executable as five calibration gates and adds a
+similarity (kNN) recommender beside the dominance one.
+
+**None of it routes anything.** Learned routing stays out until an
+operator acts on a `calibrated` verdict, and that verdict is evidence
+for a decision a person makes — no key the router reads, no policy
+surface, no code path that changes a routing decision, proven by
+standing authority-guard tests rather than asserted. The gates are a
+*safety* floor: read `agreement` beside them, since a recommender that
+proposes nothing clears every gate honestly. See
+[`scripts/session_analytics/README.md` § Calibration gates](scripts/session_analytics/README.md#calibration-gates--shadow-knn-e3-of-109-issue-266).
+
+The codex execution adapter remains its own child increment, reusing
+the existing result and checkpoint contracts.
 
 ## Four-Phase Workflow
 

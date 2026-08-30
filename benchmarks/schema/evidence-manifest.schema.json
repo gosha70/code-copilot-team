@@ -124,6 +124,16 @@
         "report_sha256": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "task_descriptors_sha256": {
+          "description": "OPTIONAL (routing-calibration decision 11): hash of task-descriptors.json when the executed scenario declared descriptors. Absent on pre-addition sets and on sets whose config declared none.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "profile_policy_sha256": {
+          "description": "OPTIONAL (routing-calibration decision 11): hash of profile-policy.json. Absent on pre-addition sets.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
         }
       }
     },

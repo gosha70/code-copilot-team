@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "evaluation-report.schema.json",
+  "title": "Held-out evaluation report v1 (routing-calibration decisions 6-7)",
+  "description": "One leave-one-task-out evaluation of the shadow kNN recommender over the evidence corpus: the split, per-task predictions vs the E2-derived truth, the false-downgrade accounting (numerator, the JUDGED denominator, and every exclusion reported separately: refusals, tier-unresolved predictions, and unevaluable examples \u2014 a refusal is not a recommendation and never dilutes the rate), floor violations (must be zero \u2014 a violation reaching this report is a surfaced bug), and the full policy echo. Binds to corpus_id + policy_id; written atomically into the analytics-owned calibration root, never into an E1 evidence root.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "corpus_id",
+    "policy_id",
+    "policy",
+    "split",
+    "results",
+    "agreement",
+    "false_downgrades",
+    "evaluated",
+    "unevaluable",
+    "false_downgrade_rate",
+    "floor_violations",
+    "compared",
+    "refused",
+    "unresolved_tier"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "corpus_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "policy_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "policy": {
+      "description": "The full evaluation-policy echo (the exact object whose canonical digest is policy_id).",
+      "type": "object",
+      "minProperties": 1
+    },
+    "split": {
+      "const": "leave_one_task_out"
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evidence_set_id",
+          "task_id",
+          "predicted",
+          "truth",
+          "downgrade_flag"
+        ],
+        "properties": {
+          "evidence_set_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "task_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "predicted": {
+            "$ref": "#/$defs/labeled_outcome"
+          },
+          "truth": {
+            "$ref": "#/$defs/labeled_outcome"
+          },
+          "downgrade_flag": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "agreement": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "false_downgrades": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "evaluated": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unevaluable": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "false_downgrade_rate": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "floor_violations": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "compared": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "refused": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unresolved_tier": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "$defs": {
+    "labeled_outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "suggested"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "switch_profile",
+            "no_change_recommended",
+            "insufficient_data"
+          ]
+        },
+        "suggested": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "arm",
+                "profile_id"
+              ],
+              "properties": {
+                "arm": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "profile_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

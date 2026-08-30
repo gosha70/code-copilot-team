@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "knn-recommendation.schema.json",
+  "title": "Shadow kNN recommendation v1 (routing-calibration decision 5)",
+  "description": "One similarity-based shadow recommendation for a (evidence set, task): the E2 closed outcome trichotomy, the suggested arm/profile (only for switch_profile), and the FULL neighbor provenance \u2014 which sets/tasks voted, at what distance, with what labels \u2014 as addressable references. Rendered beside, never in place of, the E2 dominance recommendation; carries no execution authority. Binds to the evaluation policy via policy_id.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_set_id",
+    "task_id",
+    "policy_id",
+    "outcome",
+    "suggested",
+    "neighbors",
+    "k",
+    "k_min",
+    "distance_metric",
+    "insufficient_reason"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "evidence_set_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "policy_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "outcome": {
+      "enum": [
+        "switch_profile",
+        "no_change_recommended",
+        "insufficient_data"
+      ]
+    },
+    "suggested": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "arm",
+            "profile_id"
+          ],
+          "properties": {
+            "arm": {
+              "type": "string",
+              "minLength": 1
+            },
+            "profile_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "neighbors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evidence_set_id",
+          "task_id",
+          "distance",
+          "label",
+          "evidence_refs"
+        ],
+        "properties": {
+          "evidence_set_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "task_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "distance": {
+            "type": "number",
+            "minimum": 0
+          },
+          "label": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "outcome",
+              "suggested"
+            ],
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "switch_profile",
+                  "no_change_recommended"
+                ]
+              },
+              "suggested": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "arm",
+                      "profile_id"
+                    ],
+                    "properties": {
+                      "arm": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "profile_id": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "evidence_refs": {
+            "description": "The neighbor's OWN E2 evidence references (the same closed shape recommendation.schema.json uses) \u2014 one resolver serves both surfaces.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/evidence_ref"
+            }
+          }
+        }
+      }
+    },
+    "k": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "k_min": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "distance_metric": {
+      "const": "l2_v1"
+    },
+    "insufficient_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_set_id",
+        "artifact",
+        "locator"
+      ],
+      "properties": {
+        "evidence_set_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "artifact": {
+          "enum": [
+            "routing_runs",
+            "outcome_matrix",
+            "report"
+          ]
+        },
+        "locator": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "record"
+              ],
+              "properties": {
+                "record": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "decision": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "arm",
+                "task"
+              ],
+              "properties": {
+                "arm": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "task": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cell"
+              ],
+              "properties": {
+                "cell": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "task",
+                    "profile",
+                    "trial"
+                  ],
+                  "properties": {
+                    "task": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "profile": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "trial": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
