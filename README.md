@@ -1137,12 +1137,20 @@ workspace-write --skip-git-repo-check -` with the prompt on stdin —
 the same invocation the benchmark harness already drives, with codex's
 own event stream normalized into the shared driver contract.
 
-Scope of what is demonstrated: the adapter is covered by unit tests over
-the recorded codex transcripts and by driver-level tests with a mock
-codex, and the supervisor's launch chains are covered structurally. A
-live end-to-end run against the real codex CLI has **not** been
-performed, and `effective_model` is null for codex attempts because no
-codex event reports the model actually served.
+Because codex speaks JSONL while the supervisor's result boundaries are
+line-anchored plain text, a codex round keeps **two views**: the raw
+JSONL drives failure classification and the usage-limit scan (a rate
+limit appears in an error event, never in the agent message), and a
+decoded text view drives verdict parsing and the operator transcript.
+Both are scrubbed; neither replaces the other.
+
+Scope of what is demonstrated: unit tests over recorded codex
+transcripts, driver-level tests with a mock codex, structural coverage
+of the supervisor launch chains, and behavioural tests against a
+transcript captured from codex-cli 0.147.0. What has **not** been run
+is an end-to-end delegate/reconcile round driven by a live codex.
+`effective_model` is null for codex attempts because no codex event
+reports the model actually served.
 
 ## Four-Phase Workflow
 

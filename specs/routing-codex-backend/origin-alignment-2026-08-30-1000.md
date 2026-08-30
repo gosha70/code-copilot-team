@@ -61,7 +61,63 @@ echoed packet.
 All are fixed. The corrections are recorded because the pattern is the
 point: each round found a claim that was broader than its evidence.
 
+## Review rounds 4-6 (implementation)
+
+Round 4 found four blockers on the promised execution path: the generic
+normalizer parsing codex's result shape; the routed model not reaching
+the harness; the reconcile chain launching claude for a codex profile;
+preflight checking the claude binary.
+
+Round 5 found that three of the four "covered" claims were not covered
+— a tautological session-id assertion, fixture verification that
+existed only in a shell session rather than the suite, and an entirely
+untested supervisor half — plus the #199 stderr hazard in both new
+branches.
+
+Round 6 found five more on the real execution path, including that
+codex wraps `RECONCILE_VERDICT` inside an `agent_message` event so
+every successful reconciliation reached `reconcile_verdict_missing`,
+that the profile's provider was never bound, and that a nonzero exit
+could normalize as success.
+
+**Three of the regressions in those rounds were introduced by my own
+fixes, not by the original code:**
+
+1. Fixing the forged-verdict hazard (#199) by separating stderr created
+   an unscrubbed `$OUT.stderr` orphan in /tmp carrying the echoed
+   packet.
+2. Fixing the verdict boundary by decoding `$OUT` in place destroyed
+   the failure-classification signal: a rate-limited round classified
+   as `unknown`, defeating failover — the arc's entire purpose.
+3. Making cleanup exit-safe installed a second `trap ... EXIT`, which
+   REPLACES rather than appends, silently disabling `run_unlock` and
+   leaking the run lock; then relocating it exposed an ordering bug
+   where the handler was called before it was defined, turning an early
+   refusal's exit 64 into 127.
+
+Each was caught in review, not by me, and each was in the FIX rather
+than the code being fixed. The operative lesson is narrower than "test
+more": a fix needs its own review, and a green suite is not evidence
+that it had one. Two supporting instances from the same rounds — three
+assertions used a helper that does not exist in that suite and silently
+never ran (caught only by the assertion-count pin), and `grep -c`
+prints `0` AND exits 1, so `|| echo 0` produced `"0\n0"`.
+
+## Live captures
+
+codex-cli 0.147.0 is present on the development host and was executed
+directly rather than reasoned about. Those captures did real work:
+they confirmed `-c model_provider=` exists before the code depended on
+it, matched the event shape to the recorded fixtures, produced the
+`RECONCILE_VERDICT` transcript the decode test now runs against
+(`tests/fixtures/codex/reconcile-verdict-live.jsonl`), and showed codex
+writing an `ERROR` line to stderr — turning the #199 hazard from cited
+precedent into behaviour observed here.
+
 ## Not demonstrated
 
-A live run against the real codex CLI. Flagged in plan.md and in the
-README rather than implied by the passing suites.
+An end-to-end delegate/reconcile round driven by a LIVE codex. The
+launch chains are exercised via mocks and structural assertions; the
+decode boundary is exercised against a real captured transcript. This
+is narrower than "no live run at all" and is stated that way in
+plan.md and the README rather than implied by the passing suites.

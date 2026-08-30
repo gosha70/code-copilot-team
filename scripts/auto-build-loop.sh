@@ -3613,13 +3613,21 @@ check_caps() {
 #                invocation rather than fabricating $0. See the caller
 #                for the ESTIMATES_ACTIVE condition that bounds it.
 codex_result_obj() {
-    # codex_result_obj <result-file> — driver-contract object on stdout
-    jq -c -s '
+    # codex_result_obj <result-file> [process-exit-code]
+    # Success requires ALL of: the process exited 0, a turn completed, no
+    # error event, and a thread identity. A non-zero exit with a
+    # turn.completed in stdout is still a FAILURE — the process status is
+    # authoritative — and a completed turn with no thread.started yields
+    # a null session id, which cannot be called success either.
+    local rc="${2:-0}"
+    jq -c -s --argjson rc "${rc:-0}" '
         (map(select(.type? == "thread.started")) | last) as $t
       | (map(select(.type? == "turn.completed")) | last) as $done
       | (map(select(.type? == "turn.failed" or .type? == "error")) | length) as $errs
+      | (($rc == 0) and ($errs == 0) and ($done != null)
+         and ($t.thread_id != null)) as $ok
       | {type: "result",
-         subtype: (if ($errs > 0) or ($done == null) then "error" else "success" end),
+         subtype: (if $ok then "success" else "error" end),
          session_id: ($t.thread_id // null),
          usage: ($done.usage // null)}' "$1" 2>/dev/null || echo '{}'
 }
@@ -3725,8 +3733,18 @@ run_codex_session() {
     # backends that report one — `effective_model` stays null for codex
     # attempts, and G1-style telemetry completeness treats null as
     # UNVERIFIED, never as "equal to requested".
-    local cx_model="${CCT_CODEX_MODEL:-${CCT_ROUTING_MODEL:-}}"
+    # The ROUTED model wins whenever routing selected one. An inherited
+    # CCT_CODEX_MODEL must not silently execute a different model than
+    # the routing ledger records; the direct override applies only when
+    # routing did not select (non-routing runs).
+    local cx_model="${CCT_ROUTING_MODEL:-${CCT_CODEX_MODEL:-}}"
     [[ -n "$cx_model" ]] && cx_args+=(--model "$cx_model")
+    # Bind the routed PROVIDER too. Without this codex resolves
+    # model_provider from its own config, so a profile recorded as one
+    # provider could execute another — a false audit trail. `-c
+    # key=value` verified against codex-cli 0.147.0.
+    [[ -n "${CCT_ROUTING_PROVIDER:-}" ]] && \
+        cx_args+=(-c "model_provider=$CCT_ROUTING_PROVIDER")
     cx_args+=(-)
     local runner=(env CCT_PEER_REVIEW_ENABLED=false CCT_AUTO_BUILD=1 \
         "$CODEX_BIN" "${cx_args[@]}")
@@ -3747,7 +3765,7 @@ run_codex_session() {
             "$(jq -n --arg f "$result_file.stderr" '{stderr: $f}')"
     fi
     local result_obj
-    result_obj=$(codex_result_obj "$result_file")
+    result_obj=$(codex_result_obj "$result_file" "$rc")
     # Codex never reports USD. An empty cost is the ACCOUNTING signal for
     # an unmetered invocation. NOTE the true extent: debit_invocation_cost
     # charges the conservative estimate ONLY when ESTIMATES_ACTIVE is set
@@ -3759,7 +3777,11 @@ run_codex_session() {
     # profile, and a token->USD table would put per-model pricing in the
     # routing engine that #109's non-goals forbid. Recorded as a named
     # deviation in specs/routing-codex-backend/plan.md.
-    debit_invocation_cost "" "codex session" || true
+    if ! debit_invocation_cost "" "codex session"; then
+        dispose "cost_accounting_failed" \
+            "a codex session's cost could not be recorded in the ledger — refusing to continue with caps that cannot be enforced" \
+            "null"
+    fi
     SESSION_SUBTYPE=$(printf '%s' "$result_obj" | jq -r '.subtype // "unknown"' 2>/dev/null || echo "unknown")
     SESSION_ID=$(printf '%s' "$result_obj" | jq -r '.session_id // empty' 2>/dev/null || true)
 }

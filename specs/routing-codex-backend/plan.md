@@ -88,6 +88,27 @@ per-model pricing in the routing engine that #109's non-goals forbid.
 The estimate path is the repo's own existing rule for exactly this
 case, so the divergence reuses a contract rather than inventing one.
 
+## Two views of the codex stream
+
+codex speaks JSONL; the supervisor's boundaries are line-anchored plain
+text. Decoding cannot be a rewrite of the stream, because two different
+consumers need two different things:
+
+- **raw JSONL (`$OUT`)** — failure classification and evidence.
+  `rr_classify`/`rr_result` and the usage-limit scan need the WHOLE
+  stream: a rate limit appears in an `error` event or a command's
+  output, never inside `agent_message.text`.
+- **decoded text (`$OUT.txt`)** — verdict parsing and operator display.
+  `^RECONCILE_VERDICT:` exists only inside an
+  `item.completed`/`agent_message` event, so without decoding every
+  successful codex reconciliation reaches `reconcile_verdict_missing`.
+
+Both are scrubbed before anything persists; both are cleaned on every
+exit path via the single EXIT handler. This is recorded because the
+first implementation collapsed `$OUT` to the agent message, which
+classified a rate-limited round as `unknown` and defeated the failover
+this arc exists for — a fix that broke the feature it was part of.
+
 ## Verification
 
 - `codex_result_obj` unit-tested against all three RECORDED transcripts
@@ -106,9 +127,18 @@ case, so the divergence reuses a contract rather than inventing one.
 
 ## Known limitations
 
-- **No live codex run.** Every test uses a mock or a recorded fixture.
-  The #199-class stderr hazard is defended against structurally, but a
-  live capture against the real CLI has not been performed.
+- **No live SUPERVISOR round.** Narrowed from "no live run at all":
+  codex-cli 0.147.0 was executed directly during development, and those
+  captures did real work — they confirmed `-c model_provider=` exists
+  before the code depended on it, matched the event shape to the
+  recorded fixtures, produced the `RECONCILE_VERDICT` transcript the
+  decode test runs against
+  (`tests/fixtures/codex/reconcile-verdict-live.jsonl`), and showed
+  codex writing an `ERROR` line to stderr, which turns the #199 hazard
+  from cited precedent into observed behaviour here. What remains
+  undemonstrated is an end-to-end delegate/reconcile round driven by a
+  live codex: the launch chains are still exercised via mocks and
+  structural assertions.
 - **`effective_model` is null for codex attempts.** No codex event
   carries a model field, so only the REQUESTED model is verifiable.
   Null is treated as unverified, never as equal to requested.

@@ -3635,6 +3635,32 @@ assert_contains "codex backend: routed model reaches the harness" \
     "$(cat "$CXARGV2")" "model gpt-5.6-sol"
 rm -f "$CXARGV2" "$CXCOUNT2"; rm -rf "$PCXM"
 
+# The ROUTED model must outrank an ambient CCT_CODEX_MODEL: a host-level
+# override must not execute one model while the ledger records another.
+PCXP=$(setup_project); single_phase "$PCXP"
+CXARGV3=$(mktemp); CXCOUNT3=$(mktemp); echo 0 > "$CXCOUNT3"
+(cd "$PCXP" && CCT_PROJECT_DIR="$PCXP" CCT_AUTOBUILD_BACKEND=codex \
+    CCT_CODEX_BIN="$MOCK_BIN/codex" MOCK_CODEX_COUNTER="$CXCOUNT3" \
+    MOCK_CODEX_ARGV_LOG="$CXARGV3" MOCK_CODEX_SCRIPT="$DEFAULT_SCRIPT" \
+    CCT_ROUTING_MODEL="routed-model" CCT_CODEX_MODEL="ambient-model" \
+    CCT_ROUTING_PROVIDER="routed-provider" \
+    CCT_PROVIDER_PROFILE="$PASS_PROFILE" bash "$DRIVER" demo-feat >/dev/null 2>&1) || true
+assert_contains "codex backend: routed model outranks the ambient override" \
+    "$(cat "$CXARGV3")" "model routed-model"
+assert_eq "codex backend: the ambient model never reaches the harness" "0" \
+    "$(grep -c 'ambient-model' "$CXARGV3" 2>/dev/null || true)"
+assert_contains "codex backend: routed provider is bound (-c model_provider)" \
+    "$(cat "$CXARGV3")" "model_provider=routed-provider"
+rm -f "$CXARGV3" "$CXCOUNT3"; rm -rf "$PCXP"
+
+# A REFUSED cost debit must stop the run, exactly as every other
+# invocation site does — not be swallowed by `|| true`.
+assert_contains "codex backend: a refused cost debit disposes, never continues" \
+    "$(grep -A 4 'debit_invocation_cost "" "codex session"' "$DRIVER")" \
+    "cost_accounting_failed"
+assert_eq "codex backend: the debit return is checked, not suppressed" "0" \
+    "$(grep -c 'debit_invocation_cost "" "codex session" || true' "$DRIVER" 2>/dev/null || true)"
+
 # ── codex_result_obj against the RECORDED transcripts (fixture ground
 #    truth: the repo's rule is that a recorded capture, not an assumed
 #    shape, defines the parser's contract) ──
@@ -3671,6 +3697,21 @@ assert_eq "codex_result_obj: error event beats turn.completed" "error" \
 printf 'not json at all\n' > "$CXTMP"
 assert_eq "codex_result_obj: unparseable input fails closed" "error" \
     "$(codex_result_obj "$CXTMP" | jq -r '.subtype // "error"')"
+# The PROCESS STATUS is authoritative. A non-zero exit with a completed
+# turn in stdout is still a failure — normalizing it to success would
+# launder a crashed run into a passing phase.
+assert_eq "codex_result_obj: nonzero exit is NOT success despite turn.completed" \
+    "error" \
+    "$(codex_result_obj "$CXFX/transcript-success.jsonl" 1 | jq -r '.subtype')"
+assert_eq "codex_result_obj: exit 0 on the same bytes IS success" "success" \
+    "$(codex_result_obj "$CXFX/transcript-success.jsonl" 0 | jq -r '.subtype')"
+# A completed turn with no thread identity cannot be called success —
+# the session id would be null.
+printf '{"type":"turn.completed","usage":{}}\n' > "$CXTMP"
+assert_eq "codex_result_obj: no thread.started -> not success" "error" \
+    "$(codex_result_obj "$CXTMP" 0 | jq -r '.subtype')"
+assert_eq "codex_result_obj: ...and its session id is null, not invented" "null" \
+    "$(codex_result_obj "$CXTMP" 0 | jq -r '.session_id')"
 rm -f "$CXTMP" "$CXFN"
 
 # ── The pi backend has the same exposure and the same fix ──
@@ -5769,7 +5810,10 @@ assert_eq "C2-T6: in-band cost text in the verdict is ignored" "0 2" \
 # with `if !`; anything else would sail past a refused debit.
 assert_eq "C2-T6: no reviewer call site invokes the debit unchecked" "0" \
     "$(grep -nE 'debit_review_costs "' "$DRIVER" | grep -v '||' | grep -v 'if ! debit_review_costs' | wc -l | tr -d ' ')"
-assert_eq "C2-T6: both reviewer paths dispose when the debit fails" "2" \
+# Three now: the two reviewer paths plus the codex SESSION path (#109),
+# which debits an unmetered invocation and must stop the run the same way
+# when the ledger refuses it.
+assert_eq "C2-T6: every debit-failure path refuses to continue" "3" \
     "$(grep -c 'refusing to continue with caps that cannot be enforced' "$DRIVER")"
 # The rc=3 arm must restore ESTIMATES_ACTIVE BEFORE disposing — dispose
 # does not return, so a restore placed after it would never run.
@@ -5781,7 +5825,7 @@ assert_eq "C2-T6: the rc=3 arm restores the estimate flag before disposing" "bef
 # ── Round-18: an unrecorded cost parks under its OWN reason, and that
 #    park can never auto-resolve — cap_exceeded's arm would compare the
 #    understated total against a cap and clear itself instantly. ──
-assert_eq "C2-T6: all four debit failures park as cost_accounting_failed (T8 adds the visual site)" "4" \
+assert_eq "C2-T6: all five debit failures park as cost_accounting_failed (T8 the visual site, #109 the codex session)" "5" \
     "$(grep -cE '(dispose|vg_finish) "cost_accounting_failed"' "$DRIVER" | tr -d ' ')"
 # The dispatcher arm is identified by its own refusal text (the shared
 # predicate now carries a case label of the same name, so a bare grep on
