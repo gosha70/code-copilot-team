@@ -53,6 +53,10 @@ assert "project config keeps the placeholders" \
   "grep -q '<PROJECT_NAME>' '$P1/docs/CODE_REVIEW_PROJECT.md'"
 assert "managed doc points to the project config" \
   "grep -q 'CODE_REVIEW_PROJECT.md' '$P1/docs/CODE_REVIEW.md'"
+assert "managed doc requires target-alignment classification" \
+  "grep -q 'on-target.*overcomplicated.*off-target' '$P1/docs/CODE_REVIEW.md'"
+assert "managed doc requires a simplification pass" \
+  "grep -q 'What can be removed without weakening' '$P1/docs/CODE_REVIEW.md'"
 assert "creates AGENTS.md when absent" "[[ -f '$P1/AGENTS.md' ]]"
 assert "loader block present with markers" \
   "grep -q 'BEGIN CCT-REVIEWER (codex)' '$P1/AGENTS.md' && grep -q 'END CCT-REVIEWER (codex)' '$P1/AGENTS.md'"
