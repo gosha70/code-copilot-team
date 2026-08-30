@@ -826,19 +826,66 @@ def evaluate_heldout(
 EVALUATION_REPORT_NAME = "evaluation-report.json"
 
 
-def write_evaluation_report(
-    report: Mapping[str, Any], root: "str | Path"
+def assert_write_isolation(
+    root: "str | Path", evidence_roots: "Sequence[str | Path]"
 ) -> Path:
-    """Persist atomically into the ANALYTICS-owned calibration root
-    (never an E1 evidence root): schema-validated before the rename, so
-    a partially written or invalid report is never discoverable."""
+    """FR-E3-4/6, ENFORCED at the write boundary rather than asserted in
+    prose: the calibration root must not overlap any E1 evidence root in
+    either direction.
+
+    Both containments are refused. A calibration root INSIDE an evidence
+    root would write into evidence; an evidence root inside the
+    calibration root would put evidence under a directory this layer
+    creates and rewrites. Equality is the degenerate case of both.
+    Paths are compared RESOLVED, so a symlink or a `..` cannot walk
+    around the check.
+
+    ``evidence_roots`` is required and has no default. A containment
+    check that silently disables itself when a caller omits an argument
+    is not a check — it is the same "asserted, not derived" failure this
+    increment already corrected once.
+    """
+    out = Path(root).expanduser().resolve()
+    for raw in evidence_roots or ():
+        other = Path(raw).expanduser().resolve()
+        overlap = (out == other
+                   or _is_within(out, other) or _is_within(other, out))
+        if overlap:
+            raise CalibrationError(
+                "refusing to write the calibration report: the "
+                "configured calibration root overlaps a routing-evidence "
+                "root. Analytics output must never land inside evidence "
+                "it consumes — configure routing_calibration.root outside "
+                "every routing_evidence_roots entry."
+            )
+    return out
+
+
+def _is_within(inner: Path, outer: Path) -> bool:
+    try:
+        inner.relative_to(outer)
+        return True
+    except ValueError:
+        return False
+
+
+def write_evaluation_report(
+    report: Mapping[str, Any],
+    root: "str | Path",
+    evidence_roots: "Sequence[str | Path]",
+) -> Path:
+    """Persist atomically into the ANALYTICS-owned calibration root:
+    schema-validated before the rename, so a partially written or
+    invalid report is never discoverable, and isolation-checked before
+    a byte is written, so "never an E1 evidence root" is a behaviour
+    rather than a docstring."""
+    out = assert_write_isolation(root, evidence_roots)
     errors = validate(report, load_schema("evaluation-report"))
     if errors:
         raise CalibrationError(
             f"refusing to persist an invalid evaluation report: "
             f"{errors[:3]}"
         )
-    out = Path(root)
     out.mkdir(parents=True, exist_ok=True)
     target = out / EVALUATION_REPORT_NAME
     tmp = target.with_name(target.name + ".tmp")
@@ -1159,6 +1206,75 @@ def report_staleness(
     if report.get("policy_id") != current_policy_id:
         reasons.append("policy_changed")
     return {"stale": bool(reasons), "reasons": reasons}
+
+
+# ── the operator entrypoint ────────────────────────────────────────────
+def run_evaluation(config: Any) -> Mapping[str, Any]:
+    """THE supported way to produce the held-out evaluation report the
+    gates read (FR-E3-4/6). Loads the corpus from the configured
+    routing-evidence roots, assembles the evaluation policy and the
+    current effective policy, runs leave-one-task-out, and persists the
+    report atomically into the analytics-owned calibration root — write
+    isolation enforced before any byte is written.
+
+    Without this, three of the five gates are structurally unreachable
+    on a fresh installation: `heldout_evaluated`, `false_downgrade`,
+    and `floors_authoritative` all report insufficient_data until a
+    report exists, and nothing else in the system can create one.
+
+    Returns a summary; raises CalibrationError when the configuration
+    cannot yield an evaluation at all.
+    """
+    from session_analytics.routing_evidence import load_evidence_sets
+
+    block = getattr(config, C.CFG_ROUTING_CALIBRATION, None) or {}
+    root = block.get("root")
+    if not root:
+        raise CalibrationError(
+            "routing_calibration.root is not configured — there is "
+            "nowhere to persist the evaluation report (set it, or "
+            "CCT_SA_CALIBRATION_ROOT, to an analytics-owned directory "
+            "outside every routing_evidence_roots entry)"
+        )
+    evidence_roots = tuple(
+        getattr(config, "routing_evidence_roots", ()) or ())
+    if not evidence_roots:
+        raise CalibrationError(
+            "no routing_evidence_roots are configured — there is no "
+            "corpus to evaluate"
+        )
+
+    policy = policy_from_config(config)
+    current_policy = load_current_policy(config)
+    entries = load_evidence_sets(evidence_roots)
+    valid = [e for e in entries if isinstance(e, LoadedEvidenceSet)]
+    if not valid:
+        raise CalibrationError(
+            "the configured evidence roots contain no valid evidence "
+            "set — nothing to evaluate"
+        )
+
+    report = evaluate_heldout(entries, policy, current_policy)
+    target = write_evaluation_report(report, root, evidence_roots)
+    return {
+        "written": True,
+        "corpus_id": report["corpus_id"],
+        "policy_id": report["policy_id"],
+        "sets": len(valid),
+        "invalid_sets": len(entries) - len(valid),
+        "compared": report["compared"],
+        "evaluated": report["evaluated"],
+        "refused": report["refused"],
+        "unresolved_tier": report["unresolved_tier"],
+        "unevaluable": report["unevaluable"],
+        "false_downgrades": report["false_downgrades"],
+        "false_downgrade_rate": report["false_downgrade_rate"],
+        "floor_violations": report["floor_violations"],
+        "agreement": report["agreement"],
+        # the report's own location is analytics-owned configuration,
+        # not something a payload may carry — name only the filename
+        "report_name": target.name,
+    }
 
 
 # ── the served surface (decision 10) ───────────────────────────────────

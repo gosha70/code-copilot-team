@@ -43,7 +43,13 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
   every write lands under the analytics-owned calibration root. E1
   gains two optional labeled artifacts (`task-descriptors.json`,
   `profile-policy.json`) derived at publication; pre-addition sets load
-  as unlabeled. `agreement` is rendered beside the five verdicts
+  as unlabeled. A new `session-analytics calibrate` command is the
+  supported way to produce the held-out evaluation report the gates
+  read — without it three of the five gates are structurally
+  unreachable — and its write is isolation-checked before any byte:
+  the calibration root may not overlap a routing-evidence root in
+  either direction, compared resolved so a symlink or `..` cannot walk
+  around it. `agreement` is rendered beside the five verdicts
   because no gate consumes it and it is the only figure separating a
   useful recommender from a safe-but-inert one.
 - **Shadow-mode routing analysis (#261, E2 of #109)** — session

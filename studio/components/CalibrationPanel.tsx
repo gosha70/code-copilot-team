@@ -190,8 +190,8 @@ function EvaluationAggregates({
     return (
       <p className="text-sm text-slate-500 mt-4">
         No held-out evaluation report is bound to this corpus and policy, so
-        three of the five gates cannot conclude. Write one with the calibration
-        evaluation before reading a verdict.
+        three of the five gates cannot conclude. Produce one by running{" "}
+        <code>session-analytics calibrate</code>, then reload.
       </p>
     );
   }

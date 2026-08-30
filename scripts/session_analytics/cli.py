@@ -118,6 +118,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_kpi.add_argument("--dsn", default=None, help="Database DSN (else config).")
     p_kpi.add_argument("--session-id", type=int, default=None, help="Limit to one session id.")
 
+    sub.add_parser(
+        "calibrate",
+        help=(
+            "Run the routing held-out evaluation and persist its report "
+            "(routing-calibration #266; the report three of the five "
+            "gates read)."
+        ),
+    )
+
     p_mcp = sub.add_parser("mcp", help="Run the MCP stdio server over the store.")
     p_mcp.add_argument("--dsn", default=None, help="Database DSN (else config).")
 
@@ -826,6 +835,28 @@ def _cmd_kpis(args: argparse.Namespace) -> int:
     return C.EXIT_OK
 
 
+def _cmd_calibrate(args: argparse.Namespace) -> int:
+    """Produce the held-out evaluation report the calibration gates
+    read. Shadow-only, like everything in this arc: it writes ONE
+    analytics-owned artifact and changes no routing decision."""
+    from .routing_calibration import CalibrationError, run_evaluation
+
+    cfg = load_config()
+    try:
+        summary = run_evaluation(cfg)
+    except CalibrationError as exc:
+        # a configuration or corpus condition, not a crash — the
+        # message names what to fix
+        print(f"error: {exc}", file=sys.stderr)
+        return C.EXIT_USAGE
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("calibrate failed")
+        print(f"error: calibrate failed: {exc}", file=sys.stderr)
+        return C.EXIT_RUNTIME
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return C.EXIT_OK
+
+
 def _cmd_mcp(args: argparse.Namespace) -> int:
     from .mcp import server
 
@@ -876,6 +907,7 @@ _HANDLERS = {
     "graph": _cmd_graph,
     "analyze": _cmd_analyze,
     "kpis": _cmd_kpis,
+    "calibrate": _cmd_calibrate,
     "mcp": _cmd_mcp,
     "serve": _cmd_serve,
     "export": _cmd_export,

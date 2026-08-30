@@ -614,6 +614,30 @@ key is a refusal, never a silently completed value.
 | `false_downgrade` | Rate of recommending a lower capability tier than the safety baseline, over **judged** recommendations only |
 | `floors_authoritative` | Three conjuncts: the floor is declared, violations are zero, and the report's policy digest binds the current policy |
 
+### Producing the report the gates read
+
+Three of the five gates (`heldout_evaluated`, `false_downgrade`,
+`floors_authoritative`) read a persisted held-out evaluation report,
+and until one exists they all report `insufficient_data`. One command
+produces it:
+
+```bash
+./scripts/session-analytics calibrate
+```
+
+It loads the corpus from the configured evidence roots, assembles the
+evaluation policy and the current effective policy, runs
+leave-one-task-out, and persists the report atomically into
+`routing_calibration.root`. It prints a JSON summary (corpus and
+policy ids, the evaluation aggregates) and **never a filesystem path**.
+Re-run it whenever the corpus or the policy changes — either one
+stales the existing report, and a stale report satisfies no gate.
+
+The write is isolation-checked **before any byte is written**: the
+calibration root must not overlap any routing-evidence root in either
+direction (paths compared resolved, so a symlink or `..` cannot walk
+around it). Analytics output never lands inside evidence it consumes.
+
 Each gate reports `pass` / `fail` / `insufficient_data` — a gate whose
 inputs do not exist is never a pass — with its measured value, its
 operator-declared threshold, and **addressable evidence**: structured

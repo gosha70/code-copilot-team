@@ -705,6 +705,72 @@ formatting, so against master it is now a pure addition with zero
 deletions (against HEAD it shows 18 deletions — the figures differ by
 base, and each is stated with its base).
 
+## T5 closure review round 1 (owner, on 6c4cc6e) — two P1 + one P2, applied
+
+All three reproduced before any fix.
+
+1. **[P1] No runnable evaluation workflow.** `evaluate_heldout` and
+   `write_evaluation_report` had NO non-test callers, and the CLI had
+   no calibration command — confirmed by grep over `scripts/` excluding
+   tests, and by the subcommand list. So on a fresh installation
+   `heldout_evaluated`, `false_downgrade`, and `floors_authoritative`
+   were structurally unreachable: they read a report nothing in the
+   system could produce. Worse than an omission — the README told
+   operators to "write one with the calibration evaluation" and the
+   panel said the same, instructing an action that could not be
+   performed.
+
+   Added `run_evaluation(config)` and the `session-analytics
+   calibrate` subcommand: loads the corpus from the configured
+   evidence roots, assembles the evaluation policy and the current
+   effective policy, runs leave-one-task-out, and persists the report
+   atomically. It returns a summary carrying corpus/policy ids and the
+   aggregates, and NO filesystem path (pinned). Configuration
+   conditions refuse by name with EXIT_USAGE rather than crashing.
+   Executed end-to-end against live fixtures, not merely written:
+   report absent -> command run -> report present, schema-valid, bound
+   to that corpus. Docs and the panel text now name the real command.
+
+2. **[P1] Write isolation was asserted, not enforced.**
+   `write_evaluation_report` accepted any path and its docstring
+   claimed "never an E1 evidence root" while checking nothing — the
+   exact failure mode this increment recorded as lesson 3 two commits
+   earlier, committed by me in the same increment that wrote the
+   lesson. The authority guard only proved that one test invocation
+   happened to choose a separate directory, and its static scan
+   asserted three hardcoded tokens were absent outside the writer, so
+   a new `write_bytes` or `open(..., "w")` would have passed.
+
+   Both halves fixed. `assert_write_isolation(root, evidence_roots)`
+   refuses overlap in BOTH directions (a calibration root inside
+   evidence writes into evidence; evidence inside the calibration root
+   puts evidence under a directory this layer rewrites), comparing
+   RESOLVED paths so a symlink or `..` cannot walk around it, and
+   `evidence_roots` is a required argument with no default — a
+   containment check that disables itself when a caller omits an
+   argument is not a check. The static guard was rebuilt as an
+   EXHAUSTIVE positional scan: every filesystem-mutating call in the
+   module (14 operation patterns) must fall inside
+   `write_evaluation_report`, and the writer must call the isolation
+   check BEFORE its first write. Verified live that both overlap
+   directions refuse with nothing created on disk.
+
+3. **[P2] Closure record contradicted the artifact it certified.** The
+   verdict block still read "Plan status: draft, pending owner review"
+   while `plan.md` carries `status: approved` (flipped at `fd71d37`).
+   Corrected with a note rather than a silent edit.
+
+Five mutations discriminated: isolation check removed; only one
+containment direction checked; paths compared unresolved; a stray
+write added outside the approved writer; the CLI no longer registering
+the command.
+
+Suites after the pass: session_analytics 433 tests OK / 37 skipped
+(`unittest discover`, +6 entrypoint regressions); calibration suite 93
+OK under pytest; CLI suite 3 OK; the five decision-10 states re-verified
+at 1440 and 375 after the panel text change; `tsc --noEmit` clean;
+`npm run build` green; doc-accuracy clean (76 links, 0 errors).
+
 ## Verdict
 
 Verdict: aligned
@@ -714,5 +780,12 @@ The bundle covers exactly the five §12 conditions and the shadow kNN
 bullet, nothing more; the single addition beyond §12's literal text —
 corpus-bound staleness (decision 3) — exists so a gate can never pass
 against evidence it was not computed from, which is the §12 intent
-("evaluated against held-out tasks" of the actual corpus). Plan
-status: draft, pending owner review.
+("evaluated against held-out tasks" of the actual corpus).
+
+Plan status: **approved** (flipped at `fd71d37` after the rev-2 plan
+review; `plan.md` frontmatter carries `status: approved`). This
+verdict block was written during the plan round and its status line
+was not refreshed when the plan was approved — corrected at closure,
+noted rather than silently edited because a closure record that
+contradicts the artifact it certifies is exactly the kind of drift the
+origin gate exists to catch.

@@ -1010,7 +1010,7 @@ class TestEvaluationReportPersistence(unittest.TestCase):
 
         report = evaluate_heldout(_corpus(), _POLICY, _CURRENT_POLICY)
         with tempfile.TemporaryDirectory() as tmp:
-            path = write_evaluation_report(report, tmp)
+            path = write_evaluation_report(report, tmp, ())
             self.assertTrue(path.is_file())
             self.assertFalse(list(Path(tmp).glob("*.tmp")))
             self.assertEqual(load_evaluation_report(tmp), report)
@@ -1030,7 +1030,8 @@ class TestEvaluationReportPersistence(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(CalibrationError):
-                write_evaluation_report({"schema_version": 1}, tmp)
+                write_evaluation_report({"schema_version": 1}, tmp,
+                                        ())
             self.assertFalse(list(Path(tmp).iterdir()))
 
 
@@ -1215,7 +1216,7 @@ class TestServedPayloads(unittest.TestCase):
                                        load_current_policy(cfg)))
         if mutate is not None:
             report = mutate(report)
-        write_evaluation_report(report, self.root)
+        write_evaluation_report(report, self.root, ())
         return report
 
     # ── the five rendered states ──
@@ -1769,7 +1770,7 @@ class TestCalibrationAuthorityGuard(unittest.TestCase):
             calib = base / "calibration-root"
             policy = replace(_POLICY, tier_floor="tier2")
             report = evaluate_heldout(entries, policy, _CURRENT_POLICY)
-            write_evaluation_report(report, calib)
+            write_evaluation_report(report, calib, [base / "out"])
             compute_gates(entries, _config(root=str(calib)), policy,
                           _CURRENT_POLICY, report)
 
@@ -1778,26 +1779,186 @@ class TestCalibrationAuthorityGuard(unittest.TestCase):
                 _digest(base / "out"), before,
                 "calibration mutated the evidence set it consumed")
 
-    def test_no_write_targets_an_evidence_root_in_source(self) -> None:
-        # A belt beside the behavioural proof: the module's only write
-        # helper is the report writer, and it is the only place that
-        # can name a destination at all.
+    #: Every filesystem-mutating operation this module could reach.
+    #: The guard below asserts each OCCURRENCE lies inside the single
+    #: approved writer — so adding any new one elsewhere fails, rather
+    #: than only the three tokens someone thought of first.
+    _WRITE_OPS = (
+        r"\.write_text\(", r"\.write_bytes\(", r"\.mkdir\(",
+        r"\.replace\(", r"\.rename\(", r"\.unlink\(",
+        r"\.rmdir\(", r"\.touch\(", r"\.chmod\(",
+        r"\.symlink_to\(", r"\.hardlink_to\(",
+        r"\bopen\([^)]*[\"'][wax]", r"\bos\.(remove|rename|replace|"
+        r"mkdir|makedirs|rmdir|unlink|symlink|link|chmod)\(",
+        r"\bshutil\.(copy\w*|move|rmtree|make_archive)\(",
+    )
+
+    def test_every_write_in_the_module_is_inside_the_one_writer(self):
+        """Not a token count — an EXHAUSTIVE positional check. Every
+        filesystem-mutating call in the module must fall inside
+        `write_evaluation_report`, which is the only function that may
+        touch the filesystem and the only one that runs the isolation
+        check. A new `write_bytes` or `open(..., "w")` anywhere else
+        fails here even though nobody added it to a list."""
         import re as _re
 
-        source = (Path(__file__).resolve().parents[1]
-                  / "routing_calibration.py").read_text(encoding="utf-8")
-        writes = _re.findall(
-            r"(write_text|write_bytes|mkdir|replace\(|open\([^)]*[\"']"
-            r"(?:w|a))", source)
-        self.assertTrue(writes, "the scan must find the known writes")
-        # every write lives inside write_evaluation_report
-        body = source.split("def write_evaluation_report")[1]
-        body = body.split("\ndef ")[0]
-        for token in ("write_text", "mkdir", "tmp.replace"):
-            self.assertIn(token, body)
-            self.assertEqual(
-                source.count(token), body.count(token),
-                f"{token} appears outside write_evaluation_report")
+        module = (Path(__file__).resolve().parents[1]
+                  / "routing_calibration.py")
+        source = module.read_text(encoding="utf-8")
+
+        start = source.index("def write_evaluation_report")
+        rest = source[start:]
+        end = start + (rest.index("\ndef ", 1)
+                       if "\ndef " in rest[1:] else len(rest))
+
+        found = []
+        for pattern in self._WRITE_OPS:
+            for m in _re.finditer(pattern, source):
+                found.append((m.start(), m.group(0)))
+        self.assertTrue(found, "the scan must find the known writes")
+
+        outside = [
+            (source[:pos].count("\n") + 1, op)
+            for pos, op in found
+            if not (start <= pos < end)
+        ]
+        self.assertEqual(
+            outside, [],
+            f"filesystem writes outside write_evaluation_report: "
+            f"{outside} — every write must run behind the isolation "
+            f"check")
+
+        # ...and the approved writer must actually perform the check
+        body = source[start:end]
+        self.assertIn("assert_write_isolation(", body)
+        self.assertLess(body.index("assert_write_isolation("),
+                        body.index(".mkdir("),
+                        "isolation must be checked BEFORE any write")
+
+
+class TestOperatorEntrypoint(unittest.TestCase):
+    """T5 closure review P1: a gate whose input nothing can produce is
+    an unreachable gate. `run_evaluation` is the supported way to make
+    the report, and it enforces write isolation before any byte."""
+
+    def setUp(self) -> None:
+        import shutil
+        import tempfile
+
+        from benchmark_runner.tests.test_routing_eval_quality import (
+            _REGISTRY,
+        )
+        from session_analytics.tests.test_routing_evidence import (
+            TestEvidenceLoading,
+        )
+
+        self.base = Path(tempfile.mkdtemp(prefix="calib-entrypoint."))
+        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
+        TestEvidenceLoading._publish_fixture(self, self.base)
+        self.evidence = self.base / "out"
+        self.calib = self.base / "calibration"
+        self.registry = str(_REGISTRY)
+
+    def _cfg(self, root=None, evidence=None, **over):
+        block = dict(_config().routing_calibration)
+        block.update({"policy_source": self.registry,
+                      "root": str(root if root is not None else self.calib)})
+        block.update(over)
+        return SimpleNamespace(
+            routing_calibration=block,
+            routing_evidence_roots=tuple(
+                str(e) for e in (evidence if evidence is not None
+                                 else [self.evidence])),
+        )
+
+    def test_produces_the_report_the_gates_read(self) -> None:
+        from session_analytics.routing_calibration import (
+            load_evaluation_report,
+            run_evaluation,
+        )
+
+        # before: three gates are structurally unreachable
+        self.assertIsNone(load_evaluation_report(self.calib))
+        summary = run_evaluation(self._cfg())
+        self.assertTrue(summary["written"])
+        # after: the report exists, is valid, and binds to this corpus
+        report = load_evaluation_report(self.calib)
+        self.assertIsNotNone(report)
+        self.assertEqual(report["corpus_id"], summary["corpus_id"])
+        self.assertEqual(report["policy_id"], summary["policy_id"])
+        self.assertEqual(validate(report,
+                                  load_schema("evaluation-report")), [])
+
+    def test_the_summary_carries_no_path(self) -> None:
+        from session_analytics.routing_calibration import run_evaluation
+
+        summary = run_evaluation(self._cfg())
+        text = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(str(self.base), text)
+        self.assertNotIn(str(self.calib), text)
+        self.assertNotIn(self.registry, text)
+
+    def test_refuses_rather_than_writing_into_evidence(self) -> None:
+        from session_analytics.routing_calibration import (
+            CalibrationError,
+            run_evaluation,
+        )
+
+        inside = self.evidence / "nested-calibration"
+        with self.assertRaises(CalibrationError) as ctx:
+            run_evaluation(self._cfg(root=inside))
+        self.assertIn("overlaps", str(ctx.exception))
+        self.assertFalse(inside.exists(),
+                         "refused, but a directory was still created")
+
+        # the other direction: an evidence root inside the calibration
+        # root is equally refused
+        with self.assertRaises(CalibrationError):
+            run_evaluation(self._cfg(root=self.base))
+
+    def test_isolation_resists_symlink_and_dotdot(self) -> None:
+        from session_analytics.routing_calibration import (
+            CalibrationError,
+            assert_write_isolation,
+        )
+
+        # `..` must not walk around the check
+        with self.assertRaises(CalibrationError):
+            assert_write_isolation(
+                self.evidence / "x" / "..", [self.evidence])
+        # nor a symlink pointing into the evidence root
+        link = self.base / "link-to-evidence"
+        try:
+            link.symlink_to(self.evidence)
+        except OSError:                      # pragma: no cover
+            self.skipTest("symlinks unavailable")
+        with self.assertRaises(CalibrationError):
+            assert_write_isolation(link, [self.evidence])
+        # a genuinely separate root is accepted
+        assert_write_isolation(self.calib, [self.evidence])
+
+    def test_refuses_a_configuration_that_cannot_evaluate(self) -> None:
+        from session_analytics.routing_calibration import (
+            CalibrationError,
+            run_evaluation,
+        )
+
+        with self.assertRaisesRegex(CalibrationError, "root"):
+            run_evaluation(self._cfg(root=""))
+        with self.assertRaisesRegex(CalibrationError, "no corpus|no "
+                                    "routing_evidence_roots"):
+            run_evaluation(self._cfg(evidence=[]))
+        with self.assertRaisesRegex(CalibrationError, "no valid evidence"):
+            run_evaluation(self._cfg(evidence=[self.base / "nowhere"]))
+
+    def test_the_cli_exposes_it(self) -> None:
+        # the entrypoint is only reachable if the CLI registers it
+        from session_analytics import cli
+
+        self.assertIn("calibrate", cli._HANDLERS)
+        parser = cli._build_parser()
+        args = parser.parse_args(["calibrate"])
+        self.assertEqual(args.subcommand, "calibrate")
 
 
 if __name__ == "__main__":
