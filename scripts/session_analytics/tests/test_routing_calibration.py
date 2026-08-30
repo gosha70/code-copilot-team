@@ -1680,5 +1680,125 @@ class TestGateEvidenceIsAddressable(unittest.TestCase):
             self.assertNotEqual(validate(doc(bad), schema), [], bad)
 
 
+class TestCalibrationAuthorityGuard(unittest.TestCase):
+    """Decision 9 — no execution authority, PROVEN not asserted.
+
+    E2's guard could simply forbid writes; E3 legitimately writes one
+    thing (the evaluation report), so the proof is sharper: nothing the
+    router executes can reach this layer, and every write this layer
+    performs lands under the ANALYTICS-owned calibration root — never
+    inside an evidence set, never in a production config."""
+
+    _PRODUCTION = (
+        "scripts/routing-cli.sh",
+        "scripts/cooldown-supervisor.sh",
+    )
+
+    #: Every name by which the router could reach calibration.
+    _NEEDLES = (
+        "routing_calibration",
+        "calibration-report",
+        "evaluation-report",
+        "knn-recommendation",
+        "task-descriptors",
+        "profile-policy",
+        "CCT_SA_CALIBRATION",
+        "repo_policy_source",
+        "derive_selector_policy",
+    )
+
+    def test_no_production_routing_script_can_reach_calibration(self):
+        repo = Path(__file__).resolve().parents[3]
+        files = [repo / p for p in self._PRODUCTION]
+        files += sorted((repo / "scripts" / "lib").glob("routing-*.sh"))
+        self.assertTrue(files, "the guard must actually scan something")
+        for f in files:
+            text = f.read_text(encoding="utf-8")
+            for needle in self._NEEDLES:
+                self.assertNotIn(
+                    needle, text,
+                    f"{f.name} references {needle} — the router must not "
+                    f"be able to read calibration machinery")
+
+    def test_the_router_reads_no_key_this_increment_defines(self) -> None:
+        # The inverse of the string scan: every configuration key E3
+        # introduces must be absent from the production config reader,
+        # so no routing decision can be made to depend on one.
+        repo = Path(__file__).resolve().parents[3]
+        reader = (repo / "scripts" / "lib" / "routing-config.sh").read_text(
+            encoding="utf-8")
+        block = json.loads(
+            (Path(__file__).resolve().parents[1] / "config_data"
+             / "defaults.json").read_text(encoding="utf-8")
+        )["routing_calibration"]
+        self.assertTrue(block)
+        for key in block:
+            self.assertNotIn(
+                f"CCT_SA_CALIBRATION_{key.upper()}", reader, key)
+        # ...and the analytics env prefix appears nowhere in it
+        self.assertNotIn("CCT_SA_", reader)
+
+    def test_every_write_lands_under_the_calibration_root(self) -> None:
+        # The module writes exactly ONE artifact. Prove the destination
+        # by writing into an isolated root and asserting that (a) the
+        # report is there and (b) the evidence set is byte-identical.
+        import hashlib
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            from session_analytics.tests.test_routing_evidence import (
+                TestEvidenceLoading,
+            )
+            TestEvidenceLoading._publish_fixture(self, base)
+            from session_analytics.routing_evidence import (
+                load_evidence_sets,
+            )
+            entries = load_evidence_sets([base / "out"])
+            (loaded,) = entries
+
+            def _digest(root):
+                h = hashlib.sha256()
+                for f in sorted(root.rglob("*")):
+                    if f.is_file():
+                        h.update(str(f.relative_to(root)).encode())
+                        h.update(f.read_bytes())
+                return h.hexdigest()
+
+            before = _digest(base / "out")
+            calib = base / "calibration-root"
+            policy = replace(_POLICY, tier_floor="tier2")
+            report = evaluate_heldout(entries, policy, _CURRENT_POLICY)
+            write_evaluation_report(report, calib)
+            compute_gates(entries, _config(root=str(calib)), policy,
+                          _CURRENT_POLICY, report)
+
+            self.assertTrue((calib / "evaluation-report.json").is_file())
+            self.assertEqual(
+                _digest(base / "out"), before,
+                "calibration mutated the evidence set it consumed")
+
+    def test_no_write_targets_an_evidence_root_in_source(self) -> None:
+        # A belt beside the behavioural proof: the module's only write
+        # helper is the report writer, and it is the only place that
+        # can name a destination at all.
+        import re as _re
+
+        source = (Path(__file__).resolve().parents[1]
+                  / "routing_calibration.py").read_text(encoding="utf-8")
+        writes = _re.findall(
+            r"(write_text|write_bytes|mkdir|replace\(|open\([^)]*[\"']"
+            r"(?:w|a))", source)
+        self.assertTrue(writes, "the scan must find the known writes")
+        # every write lives inside write_evaluation_report
+        body = source.split("def write_evaluation_report")[1]
+        body = body.split("\ndef ")[0]
+        for token in ("write_text", "mkdir", "tmp.replace"):
+            self.assertIn(token, body)
+            self.assertEqual(
+                source.count(token), body.count(token),
+                f"{token} appears outside write_evaluation_report")
+
+
 if __name__ == "__main__":
     unittest.main()

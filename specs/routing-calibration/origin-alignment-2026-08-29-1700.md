@@ -578,6 +578,133 @@ clean, `npm run build` green, spec 2/0, origin aligned/high,
 whitespace clean, production routing shell and shared schemas
 untouched.
 
+## T4 review round 2 (owner, on 1daea84) — APPROVED, GO T5
+
+Verified against the production selector itself rather than against my
+description of it: `rc_effective` composition, `rt_select`'s role
+filter, the `sort_by([priority, id])` total order, `tier1_only`
+rejecting non-tier1 outright, `primary_only` admitting only the
+sort-first tier1 id, and both tier-2 classes gating on
+`tier2_delegation_allowed`. Route class confirmed threaded at all
+three sites, including `floor_violations` — the half that converts
+G5's zero-violation verdict from vacuous to falsifiable.
+
+One apparent divergence chased to ground by the reviewer and resolved:
+jq's `sort_by` places a null priority FIRST while `_primary_candidate`
+sorts it last. Unreachable — `priority` is in `RC_PROFILE_REQUIRED`
+and a non-positive-integer raises a violation, so no registry
+production accepts can carry a null; for a registry production
+rejects, sorting last declines to certify rather than crowning an
+arbitrary primary. Both judgement calls (data_policy/tool_profile not
+enforced; unbound repo policy is not permission) confirmed correct.
+
+## T5 build + closure (2026-08-29/30)
+
+Docs, proofs, and closure. Every documented claim verified against the
+code rather than from memory: all 14 config keys ship in
+defaults.json, the three endpoint paths, the five gate ids,
+`tier_floor: tier1`, the three env-var names, the max-not-min
+baseline, the separate refused/unresolved_tier/unevaluable report
+keys, and that `cct routing validate` is a real command
+(routing-cli.sh:221) before telling operators to run it.
+
+**Authority guard extended (decision 9)**, sharper than E2's because
+E3 legitimately writes: no production routing script can name any of
+nine calibration symbols; the production config reader knows none of
+the shipped keys (asserted by ITERATING defaults.json, so a key added
+later cannot slip past a hardcoded list); and every write lands under
+the analytics-owned calibration root, with the consumed evidence set
+byte-identical after a full derive + evaluate + gate run. Three
+mutations discriminated: a write outside `write_evaluation_report`, a
+shell file referencing calibration, and the production reader learning
+a calibration env key.
+
+**Decision-10 acceptance, redone properly.** The T4 report said
+"browser-verified", but the honest state was five states at 1440 and
+only ONE state at 375, by screenshot. A screenshot cannot fail — it
+requires a human to look and notice, the same weakness as a test that
+passes by construction. Replaced with a harness asserting on RENDERED
+DOM: verdict badge text, per-gate badge counts, required strings, and
+`scrollWidth > innerWidth`, across all five states at BOTH widths. The
+stale state asserts nine struck-through figures rather than trusting
+the caption. Mutating the harness so "stale" is never actually stale
+produced 16 failures — the harness discriminates.
+
+**The closure sweep found an anomaly, and it was my instrument.** The
+sweep reported 10 `benchmark_runner` failures against a documented
+baseline of 6. Chased rather than absorbed: one stale
+`.pytest_cache/lastfailed` entry named a test that no longer exists
+under that name (not in the run), and the four extra failures were
+pytest collecting a FIXTURE exercise's own test file
+(`fixtures/polyglot_mini/.../leap/leap_test.py`), whose `leap.py` is
+an unsolved starter stub. `leap_test.py` matches pytest's
+`*_test.py` but not unittest's `test*.py`; the documented baseline was
+established with `unittest discover`, and my sweep script used pytest
+for convenience. The fixture is untouched by this branch and
+byte-identical to master. The defect was the sweep script, not the
+tree — recorded as lesson 4, and the repo-level absence of any pytest
+collection guard filed as its own issue (#268), deliberately not
+bundled here.
+
+**Canonical sweep — `PYTHONPATH=scripts:. python3 -m unittest
+discover -s scripts/benchmark_runner/tests -t scripts`** (the
+instrument that established the baseline, and the command CI runs):
+
+    Ran 1071 tests in 1672.850s — FAILED (failures=6, skipped=1)
+
+Exactly the documented six, named and attributed:
+
+1. `test_polyglot_adapter.TestVerify.test_python_verify_fails_with_starter`
+2. `test_polyglot_adapter.TestVerify.test_python_verify_passes_with_example_solution`
+   — both: `/usr/local/opt/python@2/bin/python2.7: No module named pytest`
+3. `test_polyglot_adapter.TestGoldenPatch.test_cpp_multifile_golden`
+4. `test_polyglot_adapter.TestGoldenPatch.test_python_golden_renames_example_to_solution`
+   — both: expected golden `leap.*` absent (populated `benchmarks/.cache` state)
+5. `test_cli_skeleton.TestDogfoodCommand.test_dogfood_with_missing_polyglot_cache_returns_usage`
+6. `test_cli_skeleton.TestRunCommand.test_run_empty_adapter_returns_usage_with_fetch_hint`
+   — both: `AssertionError: 0 != 2` (rc 0 != EXIT_USAGE)
+
+These are CLASSIFIED against the previously proven host baseline (six
+identical failures at a pristine merge base, compared per-test earlier
+on 2026-08-29), not re-proven in this session. No failure outside
+those six appeared. Every signature matches the documented cause.
+
+Other components, each with its instrument:
+
+- Routing shell suites, unmodified, at their `tests/test-counts.env`
+  pins with zero failures: routing-config 167, routing-failover 186,
+  routing-tasks 154, routing-packet 99, routing-delegation 171,
+  routing-recovery 375.
+- `session_analytics` — `unittest discover` (system python): 427
+  tests, OK, 37 skipped. Under pytest in a venv carrying
+  fastapi+httpx: 421 passed, 6 skipped. Same 427 collected; the
+  31-test delta is CI-gated API tests one environment can run and the
+  other cannot.
+- `automation-config` 194 passed / 0 failed (at pin); `hooks` 149
+  passed / 38 failed, matching this host's documented hooks baseline
+  and untouched by this branch.
+- `tsc --noEmit` clean; `npm run build` (the CI studio gate) green;
+  doc-accuracy gate clean (76 links OK, 0 errors); spec validation
+  2/0; `git diff --check` clean.
+- Production diff guard EMPTY vs master for `scripts/lib`,
+  `scripts/routing-cli.sh`, `scripts/cooldown-supervisor.sh`,
+  `shared/`, and `adapters/` — in both the committed history and the
+  working tree.
+
+**Verification honesty.** Two measurement failures in this task, both
+of which reported as progress while producing nothing. (1) The first
+`unittest discover` launch never executed its body — no log file was
+ever created — and the waiter polled a non-existent path for the whole
+interval. The lost time was a LAUNCH-VERIFICATION failure, not test
+runtime; the relaunch was confirmed running (artifact present, output
+accumulating, process alive) before being trusted. (2) The pytest /
+unittest instrument mismatch above. Also recorded: the manifest schema
+carried 34 lines of T1 prettier churn that made the closure diff read
+as a schema rewrite; the two keys were re-applied on master's original
+formatting, so against master it is now a pure addition with zero
+deletions (against HEAD it shows 18 deletions — the figures differ by
+base, and each is stated with its base).
+
 ## Verdict
 
 Verdict: aligned

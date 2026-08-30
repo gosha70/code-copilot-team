@@ -12,6 +12,40 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Calibration gates + shadow kNN recommender (#266, E3 of #109)** —
+  the #109 §12 promotion conditions made executable as five gates
+  (`telemetry_complete`, `labeled_volume`, `heldout_evaluated`,
+  `false_downgrade`, `floors_authoritative`), each reporting
+  pass / fail / insufficient_data with its measured value, its
+  operator-declared threshold, and *addressable* evidence locators the
+  Studio opens through the existing read-only surfaces; the overall
+  verdict is `calibrated` only when every gate passes, and nothing acts
+  on it. Reports bind to `corpus_id` + `policy_id` (the full evaluation
+  policy, including both policy-source digests), and either mismatch
+  makes a report stale — stale satisfies no gate and renders as void,
+  not merely old. Adds a deterministic similarity (kNN) recommender
+  served **beside** the E2 dominance recommendation: pre-routing
+  features only (the *declared* trial count, never the observed record
+  count), refusal instead of imputation, current-policy filtering
+  before ranking, conservative ties, and full neighbour provenance that
+  resolves across sets. Held-out evaluation is leave-one-task-out
+  through the same recommender the API serves; the false-downgrade
+  denominator counts judged recommendations only, with refusals,
+  tier-unresolved predictions, and unevaluable examples each reported
+  separately so none dilutes the rate, and the safety baseline is the
+  *highest* tier the chain engaged. Eligibility mirrors the production
+  selector — the effective policy composed as `rc_effective` composes
+  it, filtered by role and route class as `rt_select` filters it — so a
+  suggestion is admissible only if the router could have selected that
+  profile for a task of that route class. Shadow-only by construction
+  and proven: no production routing script can name a calibration
+  symbol, the production config reader knows none of the new keys, and
+  every write lands under the analytics-owned calibration root. E1
+  gains two optional labeled artifacts (`task-descriptors.json`,
+  `profile-policy.json`) derived at publication; pre-addition sets load
+  as unlabeled. `agreement` is rendered beside the five verdicts
+  because no gate consumes it and it is the only figure separating a
+  useful recommender from a safe-but-inert one.
 - **Shadow-mode routing analysis (#261, E2 of #109)** — session
   analytics consumes E1's published evidence sets read-only and
   derives per-task shadow recommendations, served through the

@@ -319,3 +319,18 @@ Promotion of learned routing to any authority is OUT. When the gates
 hold, a future increment — separate issue, owner-initiated — may
 propose it; this plan deliberately contains no mechanism that could
 act on a gate result.
+
+## Carried forward (not implemented in E3)
+
+- **Config-validity as a distinct state.** Production refuses a whole
+  configuration when a repository's `allowed_profiles` names a profile
+  the user registry does not define (`routing-config.sh`: "a typo must
+  not silently change policy"). This increment's `_repo_restrictions`
+  instead narrows its candidate set silently. The direction is safe —
+  a narrower candidate set can only make the gates stricter — but the
+  gates can report green against a configuration production would
+  decline to start on. The remedy is a distinct `config_invalid` state
+  carrying the cross-check, which changes what a gate may report and
+  therefore belongs to an increment that can be reviewed as such.
+  Documented in the operator guide meanwhile.
+- **Promotion**, per the boundary above.

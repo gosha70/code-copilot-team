@@ -5,7 +5,12 @@
   "description": "The external identity artifact, written LAST in staging: the full fingerprint plus sha256 hashes of the canonical bytes of ALL THREE artifacts and of every referenced evidence file. The evidence-set id is sha256 over this file's canonical bytes \u2014 always recomputed by the loader, never trusted from a directory name. A manifest whose stored fingerprint disagrees with the report/matrix is fingerprint_mismatch even when every artifact hash is genuine.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "fingerprint", "artifacts", "evidence_files"],
+  "required": [
+    "schema_version",
+    "fingerprint",
+    "artifacts",
+    "evidence_files"
+  ],
   "properties": {
     "schema_version": {
       "const": 1
@@ -49,22 +54,40 @@
                 "minLength": 1
               },
               "backend": {
-                "type": ["string", "null"]
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "provider": {
-                "type": ["string", "null"]
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "requested_model": {
-                "type": ["string", "null"]
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "effective_model": {
-                "type": ["string", "null"]
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "tool_profile": {
-                "type": ["string", "null"]
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "endpoint": {
-                "type": ["string", "null"]
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             }
           }
@@ -74,7 +97,10 @@
           "minLength": 1
         },
         "toolchain_digest": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
