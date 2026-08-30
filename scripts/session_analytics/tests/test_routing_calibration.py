@@ -50,7 +50,8 @@ _POLICY = EvaluationPolicy(
     feature_vocabulary=FEATURE_VOCABULARY_VERSION,
     k=5, k_min=3, distance_metric="l2_v1", vote_epsilon=1e-6,
     normalization="minmax_fold_v1", tier_floor="tier1",
-    policy_source_digest="ab" * 32, max_false_downgrade_rate=0.05,
+    policy_source_digest="ab" * 32, repo_policy_digest="cd" * 32,
+    max_false_downgrade_rate=0.05,
 )
 
 
@@ -106,7 +107,8 @@ class TestPolicyFromConfig(unittest.TestCase):
     _BLOCK = {
         "k": 5, "k_min": 3, "distance_metric": "l2_v1",
         "vote_epsilon": 1e-6, "tier_floor": "tier1",
-        "policy_source": "", "max_false_downgrade_rate": 0.05,
+        "policy_source": "", "repo_policy_source": "",
+        "max_false_downgrade_rate": 0.05,
     }
 
     def test_assembles_from_the_layered_block(self) -> None:
@@ -344,13 +346,22 @@ def _keep_set(set_id, task="t", trials=1, **descriptor):
                          {task: _descriptor(**descriptor)}, trials)
 
 
+#: The CURRENT EFFECTIVE policy, composed as rc_effective composes it
+#: (T4 review P1): enabled + per-profile tier/roles/priority/allowed +
+#: the repository's tier-2 delegation permission.
 _CURRENT_POLICY = {
     "schema_version": 1,
     "registry_digest": "current",
+    "enabled": True,
+    "repo_policy_bound": True,
+    "tier2_delegation_allowed": True,
     "profiles": {
-        "alpha": {"capability_tier": "tier1", "roles": ["build"]},
-        "beta": {"capability_tier": "tier2", "roles": ["build"]},
-        "gamma": {"capability_tier": "tier1", "roles": ["review"]},
+        "alpha": {"capability_tier": "tier1", "roles": ["build"],
+                  "priority": 10, "allowed": True},
+        "beta": {"capability_tier": "tier2", "roles": ["build"],
+                 "priority": 20, "allowed": True},
+        "gamma": {"capability_tier": "tier1", "roles": ["review"],
+                  "priority": 30, "allowed": True},
     },
 }
 
@@ -567,18 +578,18 @@ class TestKnnRecommendation(unittest.TestCase):
 
         self.assertFalse(_eligible_under_policy(
             {"arm": "always_best", "profile_id": "gamma"},
-            _CURRENT_POLICY, "tier2"))
+            _CURRENT_POLICY, "tier2", "tier2_preferred"))
         self.assertFalse(_eligible_under_policy(
             {"arm": "always_best", "profile_id": "ghost"},
-            _CURRENT_POLICY, "tier2"))
+            _CURRENT_POLICY, "tier2", "tier2_preferred"))
         self.assertTrue(_eligible_under_policy(
             {"arm": "always_best", "profile_id": "beta"},
-            _CURRENT_POLICY, "tier2"))
+            _CURRENT_POLICY, "tier2", "tier2_preferred"))
         self.assertFalse(_eligible_under_policy(
             {"arm": "always_best", "profile_id": "beta"},
-            _CURRENT_POLICY, "tier1"))
+            _CURRENT_POLICY, "tier1", "tier2_preferred"))
         self.assertTrue(_eligible_under_policy(None, _CURRENT_POLICY,
-                                               "tier1"))
+                                               "tier1", "tier1_only"))
 
     def test_conservative_tie_never_switches(self) -> None:
         # one switch voter and one keep voter at IDENTICAL distance:
@@ -664,7 +675,12 @@ _TIER2_FLOOR = replace(_POLICY, tier_floor="tier2")
 
 def _beta_switch_set(set_id, task, trials=1, **descriptor):
     """A set whose E2 label for ``task`` is switch_profile -> beta
-    (a TIER-2 profile), used to drive downgrade arithmetic."""
+    (a TIER-2 profile), used to drive downgrade arithmetic. Its
+    descriptor declares a DELEGATING route class: after the T4-review
+    P1 the eligibility filter is query-aware, so a primary_only task
+    could never admit a tier-2 suggestion and the arithmetic these
+    fixtures drive would measure nothing."""
+    descriptor.setdefault("route_class", "tier2_preferred")
     report = _retask(_report(
         _figures_for(router=(0.5, 0.05), best=(1.0, 0.01),
                      cheapest=(0.4, 0.02)),
@@ -688,6 +704,7 @@ def _config(**overrides):
         "max_false_downgrade_rate": 0.05, "k": 5, "k_min": 3,
         "distance_metric": "l2_v1", "vote_epsilon": 1e-6,
         "tier_floor": "tier1", "policy_source": "",
+        "repo_policy_source": "",
     }
     block.update(overrides)
     return SimpleNamespace(routing_calibration=block)
@@ -816,9 +833,15 @@ class TestHeldoutEvaluation(unittest.TestCase):
     def test_downgrade_counted_against_a_tier1_baseline(self) -> None:
         # three beta (tier2) neighbours outvote nothing, so each held-out
         # task predicts switch->beta; the ALPHA-truth task's baseline is
-        # tier1, so its prediction IS a false downgrade
+        # tier1, so its prediction IS a false downgrade. "q" declares a
+        # DELEGATING route class on purpose: the downgrade being
+        # measured is an ADMISSIBLE-but-wrong tier-2 pick. On a
+        # primary_only task the query-aware filter refuses beta
+        # outright, which is a refusal, not a downgrade — a different
+        # (and separately pinned) outcome.
         corpus = self._downgrade_corpus() + [
-            _switch_set("ee" * 32, task="q", file_scope=2),
+            _switch_set("ee" * 32, task="q", file_scope=2,
+                        route_class="tier2_preferred"),
         ]
         report = evaluate_heldout(corpus, _TIER2_FLOOR, _CURRENT_POLICY)
         flags = {r["task_id"]: r["downgrade_flag"]
@@ -1385,6 +1408,276 @@ class TestServedPayloads(unittest.TestCase):
         self.assertIsNone(payload["report"])
         self.assertIsNone(payload["staleness"])
         self.assertIn("calibration root", payload["reason"])
+
+
+class TestQueryAwareEligibility(unittest.TestCase):
+    """T4 review P1: eligibility is answered from the SAME effective
+    policy the production selector consumes, and it is QUERY-AWARE.
+    Each case below mirrors one rule in `rt_select`."""
+
+    def _elig(self, profile, route_class, policy=None, floor="tier2"):
+        from session_analytics.routing_calibration import (
+            _eligible_under_policy,
+        )
+        return _eligible_under_policy(
+            {"arm": "always_best", "profile_id": profile},
+            policy or _CURRENT_POLICY, floor, route_class)
+
+    def test_the_reviewers_reproduction(self) -> None:
+        # THE reported defect, pinned verbatim: a tier-2 build profile
+        # was accepted with no query context at all. It must now be
+        # accepted ONLY under a route class that can reach tier 2.
+        self.assertFalse(self._elig("beta", "tier1_only"))
+        self.assertFalse(self._elig("beta", "primary_only"))
+        self.assertTrue(self._elig("beta", "tier2_preferred"))
+        self.assertTrue(self._elig("beta", "tier2_fallback"))
+
+    def test_unknown_route_class_is_never_certified(self) -> None:
+        for unknown in (None, "", "tier3_only", "TIER1_ONLY"):
+            self.assertFalse(self._elig("beta", unknown), unknown)
+            self.assertFalse(self._elig("alpha", unknown), unknown)
+
+    def test_primary_only_admits_only_the_primary(self) -> None:
+        # rt_select's primary is the total-order-FIRST tier1 candidate,
+        # priority ASC then id ASC. alpha (10) beats delta (20).
+        policy = json.loads(json.dumps(_CURRENT_POLICY))
+        policy["profiles"]["delta"] = {
+            "capability_tier": "tier1", "roles": ["build"],
+            "priority": 20, "allowed": True}
+        self.assertTrue(self._elig("alpha", "primary_only", policy))
+        self.assertFalse(self._elig("delta", "primary_only", policy))
+        # ...and tier1_only admits BOTH — the classes must differ or
+        # this proves nothing
+        self.assertTrue(self._elig("alpha", "tier1_only", policy))
+        self.assertTrue(self._elig("delta", "tier1_only", policy))
+
+    def test_priority_ties_break_on_id_then_unparseable_sorts_last(self):
+        policy = json.loads(json.dumps(_CURRENT_POLICY))
+        policy["profiles"]["aardvark"] = {
+            "capability_tier": "tier1", "roles": ["build"],
+            "priority": 10, "allowed": True}
+        # equal priority -> lexical id wins
+        self.assertTrue(self._elig("aardvark", "primary_only", policy))
+        self.assertFalse(self._elig("alpha", "primary_only", policy))
+        # an unparseable priority must never become the primary
+        policy2 = json.loads(json.dumps(_CURRENT_POLICY))
+        policy2["profiles"]["zzz"] = {
+            "capability_tier": "tier1", "roles": ["build"],
+            "priority": None, "allowed": True}
+        self.assertTrue(self._elig("alpha", "primary_only", policy2))
+        self.assertFalse(self._elig("zzz", "primary_only", policy2))
+
+    def test_repo_allowed_profiles_narrows_the_candidate_set(self) -> None:
+        policy = json.loads(json.dumps(_CURRENT_POLICY))
+        policy["profiles"]["beta"]["allowed"] = False
+        self.assertFalse(self._elig("beta", "tier2_preferred", policy))
+        # ...and the excluded profile also stops being the primary
+        policy["profiles"]["alpha"]["allowed"] = False
+        self.assertFalse(self._elig("alpha", "primary_only", policy))
+
+    def test_tier2_delegation_restriction_is_enforced(self) -> None:
+        policy = json.loads(json.dumps(_CURRENT_POLICY))
+        policy["tier2_delegation_allowed"] = False
+        self.assertFalse(self._elig("beta", "tier2_preferred", policy))
+        self.assertFalse(self._elig("beta", "tier2_fallback", policy))
+        # a tier1 pick is untouched by the tier2 restriction
+        self.assertTrue(self._elig("alpha", "tier2_preferred", policy))
+
+    def test_unbound_repo_policy_is_not_permission(self) -> None:
+        # production reads a null restriction as "no restriction"
+        # because it KNOWS the repo config path; an unconfigured
+        # source here means UNKNOWN, and a safety gate never reads
+        # unknown as permitted
+        policy = json.loads(json.dumps(_CURRENT_POLICY))
+        policy["repo_policy_bound"] = False
+        policy["tier2_delegation_allowed"] = None
+        self.assertFalse(self._elig("beta", "tier2_preferred", policy))
+        self.assertTrue(self._elig("alpha", "tier1_only", policy))
+
+    def test_disabled_routing_admits_nothing(self) -> None:
+        policy = json.loads(json.dumps(_CURRENT_POLICY))
+        policy["enabled"] = False
+        for profile, rclass in (("alpha", "tier1_only"),
+                                ("beta", "tier2_preferred")):
+            self.assertFalse(self._elig(profile, rclass, policy))
+
+    def test_g5_counts_a_route_class_violation(self) -> None:
+        # THE reviewer's consequence: floor_violations shares this
+        # predicate, so a route-class violation must reach the report
+        # and fail G5 rather than passing with zero.
+        corpus = [
+            _beta_switch_set("aa" * 32, "n1", file_scope=1),
+            _beta_switch_set("bb" * 32, "n2", file_scope=2),
+            _beta_switch_set("cc" * 32, "n3", file_scope=3),
+            # a PRIMARY-ONLY task among tier-2-labeled neighbours
+            _switch_set("dd" * 32, task="q", file_scope=1,
+                        route_class="primary_only"),
+        ]
+        report = evaluate_heldout(corpus, _TIER2_FLOOR, _CURRENT_POLICY)
+        by_task = {r["task_id"]: r for r in report["results"]}
+        # beta is inadmissible for a primary_only query, so the
+        # recommender REFUSES rather than proposing an impossible switch
+        self.assertEqual(by_task["q"]["predicted"]["outcome"],
+                         "insufficient_data")
+        self.assertEqual(report["floor_violations"], 0)
+
+    def test_effective_policy_is_composed_from_both_layers(self) -> None:
+        import tempfile
+
+        from benchmark_runner.tests.test_routing_eval_quality import (
+            _REGISTRY,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "automation.json"
+            repo.write_text(json.dumps({"routing": {
+                "allowed_profiles": ["alpha"],
+                "tier2": {"delegation_enabled": False},
+            }}), encoding="utf-8")
+            cfg = SimpleNamespace(routing_calibration={
+                "policy_source": str(_REGISTRY),
+                "repo_policy_source": str(repo)})
+            policy = load_current_policy(cfg)
+            self.assertTrue(policy["repo_policy_bound"])
+            self.assertFalse(policy["tier2_delegation_allowed"])
+            self.assertTrue(policy["profiles"]["alpha"]["allowed"])
+            self.assertFalse(policy["profiles"]["beta"]["allowed"])
+            self.assertIsNotNone(policy["profiles"]["alpha"]["priority"])
+
+        # no repo source configured -> restrictions are UNKNOWN
+        cfg = SimpleNamespace(routing_calibration={
+            "policy_source": str(_REGISTRY), "repo_policy_source": ""})
+        policy = load_current_policy(cfg)
+        self.assertFalse(policy["repo_policy_bound"])
+        self.assertIsNone(policy["tier2_delegation_allowed"])
+        self.assertTrue(policy["profiles"]["beta"]["allowed"])
+
+    def test_repo_policy_is_its_own_identity_dimension(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "automation.json"
+            repo.write_text('{"routing": {}}', encoding="utf-8")
+            unbound = _config().routing_calibration
+            bound = dict(unbound, repo_policy_source=str(repo))
+            self.assertNotEqual(
+                policy_id(policy_from_config(
+                    SimpleNamespace(routing_calibration=unbound))),
+                policy_id(policy_from_config(
+                    SimpleNamespace(routing_calibration=bound))),
+                "binding a repo policy source must stale prior reports")
+
+
+class TestGateEvidenceIsAddressable(unittest.TestCase):
+    """T4 review P2 / FR-E3-1: a gate verdict a reader cannot inspect
+    is an assertion, not evidence. Every reference is a structured
+    coordinate — never a bare task id with no set, and never nothing."""
+
+    _KINDS = ("evidence_set", "task", "evaluation_report",
+              "evaluation_result")
+
+    def _gates(self):
+        corpus = [
+            _beta_switch_set("aa" * 32, "n1", file_scope=1),
+            _beta_switch_set("bb" * 32, "n2", file_scope=2),
+            _beta_switch_set("cc" * 32, "n3", file_scope=3),
+            _beta_switch_set("dd" * 32, "n4", file_scope=4),
+        ]
+        policy = replace(_TIER2_FLOOR, policy_source_digest="ab" * 32)
+        report = evaluate_heldout(corpus, policy, _CURRENT_POLICY)
+        doc = compute_gates(corpus, _config(), policy, _CURRENT_POLICY,
+                            report)
+        return {g["id"]: g for g in doc["gates"]}, report
+
+    def test_every_gate_carries_openable_coordinates(self) -> None:
+        gates, _ = self._gates()
+        for gate_id, gate in gates.items():
+            self.assertTrue(gate["evidence_refs"],
+                            f"{gate_id} carries no inspectable evidence")
+            for ref in gate["evidence_refs"]:
+                self.assertIsInstance(ref, dict, gate_id)
+                self.assertIn(ref["kind"], self._KINDS, gate_id)
+                if ref["kind"] in ("task", "evaluation_result"):
+                    # THE reported defect: a bare task id names no set
+                    self.assertRegex(ref["evidence_set_id"], r"^[0-9a-f]{64}$")
+                    self.assertTrue(ref["task_id"])
+                elif ref["kind"] == "evidence_set":
+                    self.assertRegex(ref["evidence_set_id"], r"^[0-9a-f]{64}$")
+
+    def test_task_refs_resolve_in_the_set_they_name(self) -> None:
+        gates, _ = self._gates()
+        corpus = {e.set_id: e for e in [
+            _beta_switch_set("aa" * 32, "n1", file_scope=1),
+            _beta_switch_set("bb" * 32, "n2", file_scope=2),
+            _beta_switch_set("cc" * 32, "n3", file_scope=3),
+            _beta_switch_set("dd" * 32, "n4", file_scope=4),
+        ]}
+        for ref in gates["labeled_volume"]["evidence_refs"]:
+            entry = corpus[ref["evidence_set_id"]]
+            self.assertIn(
+                ref["task_id"],
+                entry.report["arms"]["cct_router"]["tasks"],
+                "a task ref must resolve at the coordinate it names")
+
+    def test_passing_gates_are_inspectable_too(self) -> None:
+        # a zero-violation / zero-downgrade verdict must still name what
+        # it ranged over, or a pass is unfalsifiable from the surface
+        gates, _ = self._gates()
+        for gate_id in ("false_downgrade", "floors_authoritative"):
+            self.assertEqual(gates[gate_id]["status"], "pass")
+            kinds = {r["kind"] for r in gates[gate_id]["evidence_refs"]}
+            self.assertIn("evaluation_report", kinds, gate_id)
+
+    def test_downgrade_refs_name_the_offending_results(self) -> None:
+        corpus = self._downgrade_shaped()
+        policy = replace(_TIER2_FLOOR, policy_source_digest="ab" * 32)
+        report = evaluate_heldout(corpus, policy, _CURRENT_POLICY)
+        doc = compute_gates(corpus, _config(), policy, _CURRENT_POLICY,
+                            report)
+        gate = {g["id"]: g for g in doc["gates"]}["false_downgrade"]
+        results = [r for r in gate["evidence_refs"]
+                   if r["kind"] == "evaluation_result"]
+        flagged = {(r["evidence_set_id"], r["task_id"])
+                   for r in report["results"] if r["downgrade_flag"]}
+        self.assertEqual(
+            {(r["evidence_set_id"], r["task_id"]) for r in results},
+            flagged)
+        self.assertTrue(flagged, "the fixture must produce a downgrade")
+
+    def _downgrade_shaped(self):
+        return [
+            _beta_switch_set("aa" * 32, "n1", file_scope=1),
+            _beta_switch_set("bb" * 32, "n2", file_scope=2),
+            _beta_switch_set("cc" * 32, "n3", file_scope=3),
+            _switch_set("ee" * 32, task="q", file_scope=2,
+                        route_class="tier2_preferred"),
+        ]
+
+    def test_the_locator_vocabulary_is_closed(self) -> None:
+        schema = load_schema("calibration-report")
+        base = {"schema_version": 1, "corpus_id": "a" * 64,
+                "policy_id": "b" * 64,
+                "corpus": {"sets": 1, "invalid_sets": 0,
+                           "labeled_tasks": 1},
+                "calibrated": False}
+
+        def doc(ref):
+            gate = {"id": "telemetry_complete", "status": "pass",
+                    "measured": 1, "threshold": 1, "reason": "r",
+                    "evidence_refs": [ref]}
+            return dict(base, gates=[dict(gate, id=g) for g in GATE_IDS])
+
+        self.assertEqual(
+            validate(doc({"kind": "evaluation_report"}), schema), [])
+        for bad in (
+            {"kind": "unknown_kind"},
+            {"kind": "task", "task_id": "t"},              # no set
+            {"kind": "evidence_set"},                       # no id
+            {"kind": "evidence_set", "evidence_set_id": "short"},
+            {"kind": "evaluation_report", "task_id": "t"},  # extra key
+            "n1",                                           # the OLD shape
+        ):
+            self.assertNotEqual(validate(doc(bad), schema), [], bad)
 
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from benchmark_runner.routing_eval.evidence_set import (
     EvidenceSetError,
-    derive_profile_policy,
+    derive_selector_policy,
 )
 from benchmark_runner.routing_eval.routing_quality import (
     ControlSetIncomplete,
@@ -103,6 +103,11 @@ class EvaluationPolicy:
     normalization: str
     tier_floor: str
     policy_source_digest: Optional[str]
+    #: Digest of the repository's restriction-only routing config. None
+    #: when no source is configured, which is a DIFFERENT policy from
+    #: one that declares no restriction — hence its own identity
+    #: dimension, so binding a repo source stales every prior report.
+    repo_policy_digest: Optional[str]
     max_false_downgrade_rate: float
 
     def as_document(self) -> Mapping[str, Any]:
@@ -115,6 +120,7 @@ class EvaluationPolicy:
             "normalization": self.normalization,
             "tier_floor": self.tier_floor,
             "policy_source_digest": self.policy_source_digest,
+            "repo_policy_digest": self.repo_policy_digest,
             "max_false_downgrade_rate": self.max_false_downgrade_rate,
         }
 
@@ -143,7 +149,8 @@ def policy_from_config(config: Any) -> EvaluationPolicy:
     # gates apply them LIVE at evaluation time, so changing one changes
     # the gate result immediately without staling evaluation reports.
     required = ("k", "k_min", "distance_metric", "vote_epsilon",
-                "tier_floor", "policy_source", "max_false_downgrade_rate")
+                "tier_floor", "policy_source", "repo_policy_source",
+                "max_false_downgrade_rate")
     missing = [key for key in required if key not in block]
     if missing:
         raise CalibrationError(
@@ -167,6 +174,8 @@ def policy_from_config(config: Any) -> EvaluationPolicy:
         normalization=NORMALIZATION_SCHEME,
         tier_floor=tier_floor,
         policy_source_digest=policy_source_digest(block["policy_source"]),
+        repo_policy_digest=policy_source_digest(
+            block["repo_policy_source"]),
         max_false_downgrade_rate=float(block["max_false_downgrade_rate"]),
     )
 
@@ -262,22 +271,87 @@ def extract_examples(
     return examples
 
 
+def _repo_restrictions(source: "str | None") -> "Mapping[str, Any] | None":
+    """The repository's RESTRICTION-ONLY routing block, read from the
+    configured automation config. None when no source is configured or
+    it does not parse — never guessed, because "no configured source"
+    and "a source that declares no restriction" are different facts
+    and only the second one licenses a tier-2 suggestion."""
+    if not source or not Path(source).is_file():
+        return None
+    try:
+        doc = json.loads(Path(source).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    block = doc.get("routing")
+    return block if isinstance(block, dict) else {}
+
+
 def load_current_policy(config: Any) -> "Mapping[str, Any] | None":
-    """The operator's CURRENT per-profile declarations, read from the
-    configured policy source through the E1 production parser. None
-    when no source is configured, the file is absent, or it does not
-    parse — an absent policy is representable (recommendations report
-    insufficient_data), never fabricated."""
+    """The operator's CURRENT EFFECTIVE routing policy — composed the
+    way ``rc_effective`` composes it for the production selector, so
+    eligibility here is answered from the same authority production
+    selects from rather than from a parallel rulebook.
+
+    Composition (``scripts/lib/routing-config.sh``): ``enabled`` is
+    the AND of the user registry's ``[policy].enabled`` and the repo's
+    ``routing.enabled`` (each defaulting true when absent); the
+    candidate set is the registry's profiles INTERSECTED with the
+    repo's ``allowed_profiles`` (absent = no restriction); and
+    ``tier2_delegation_allowed`` mirrors ``routing.tier2.
+    delegation_enabled``.
+
+    ``repo_policy_bound`` records whether a repo source was actually
+    read. Production treats a null restriction as "no restriction",
+    which is correct there because production KNOWS the repo config
+    path; here an unconfigured source means the restriction is
+    UNKNOWN, and a safety gate must not read unknown as permitted —
+    so tier-2 suggestions stay ineligible until the source is bound.
+
+    None when no registry source is configured, absent, or
+    unparseable — an absent policy is representable (recommendations
+    report insufficient_data), never fabricated."""
     block = getattr(config, C.CFG_ROUTING_CALIBRATION, None) or {}
     source = block.get("policy_source")
     if not source or not Path(source).is_file():
         return None
     try:
-        return derive_profile_policy(Path(source), "current")
+        derived = derive_selector_policy(Path(source))
     except (EvidenceSetError, ControlSetIncomplete, OSError):
         # an unparseable source is an ABSENT policy (recommendations
         # report insufficient_data), never a fabricated one
         return None
+    profiles = dict(derived["profiles"])
+    user_enabled = derived["enabled"]
+
+    repo = _repo_restrictions(block.get("repo_policy_source"))
+    allowed_ids = None
+    repo_enabled = True
+    tier2_allowed: "bool | None" = None
+    if repo is not None:
+        listed = repo.get("allowed_profiles")
+        if isinstance(listed, list) and listed:
+            allowed_ids = {str(i) for i in listed}
+        repo_enabled = repo.get("enabled") is not False
+        declared = (repo.get("tier2") or {}).get("delegation_enabled")
+        # null/absent restricts nothing (production's own reading) —
+        # but only once a source has actually been read
+        tier2_allowed = declared is not False
+
+    for profile_id, entry in profiles.items():
+        entry["allowed"] = (allowed_ids is None
+                            or profile_id in allowed_ids)
+
+    return {
+        "schema_version": 1,
+        "registry_digest": "current",
+        "enabled": bool(user_enabled) and repo_enabled,
+        "repo_policy_bound": repo is not None,
+        "tier2_delegation_allowed": tier2_allowed,
+        "profiles": profiles,
+    }
 
 
 def _fit_bounds(
@@ -317,23 +391,102 @@ def _l2(a: Sequence[float], b: Sequence[float]) -> float:
     return sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
 
 
+def _primary_candidate(
+    profiles: Mapping[str, Any]
+) -> "str | None":
+    """The ``primary_only`` admissible profile: the total-order-FIRST
+    tier1 candidate, ordered priority ASC then id ASC exactly as
+    ``rt_select`` orders it. A profile whose priority did not parse
+    sorts last rather than silently becoming the primary."""
+    ranked = sorted(
+        (pid for pid, p in profiles.items()
+         if p["capability_tier"] == "tier1" and p.get("allowed", True)),
+        key=lambda pid: (
+            profiles[pid].get("priority") is None,
+            profiles[pid].get("priority") or 0,
+            pid,
+        ),
+    )
+    return ranked[0] if ranked else None
+
+
+def _route_class_admits(
+    profile_id: str,
+    profiles: Mapping[str, Any],
+    current_policy: Mapping[str, Any],
+    route_class: "str | None",
+) -> bool:
+    """Route-class admissibility, mirroring ``rt_select``'s own
+    per-class rules (``scripts/lib/routing-select.sh``):
+
+    - ``tier1_only`` — tier2 is NEVER selected;
+    - ``primary_only`` — only the total-order-first tier1 candidate;
+    - ``tier2_fallback`` / ``tier2_preferred`` — tier2 requires the
+      repository to permit delegation.
+
+    Runtime circuit state (cooldown, disabled, probing) and
+    ``tier2_fallback``'s exhaustion precondition are deliberately NOT
+    here: those are execution state, not configured policy, and a
+    static eligibility filter that guessed at them would describe a
+    moment rather than a rule. An UNKNOWN route class is inadmissible
+    — a query whose class cannot be read is never certified."""
+    if route_class not in ROUTE_CLASSES:
+        return False
+    tier = profiles[profile_id]["capability_tier"]
+    if route_class in ("tier1_only", "primary_only"):
+        if tier != "tier1":
+            return False
+        if route_class == "primary_only":
+            return profile_id == _primary_candidate(profiles)
+        return True
+    if tier == "tier2":
+        # production reads null as "no restriction"; an UNBOUND repo
+        # policy is unknown, and unknown is never permission
+        return current_policy.get("tier2_delegation_allowed") is True
+    return True
+
+
 def _eligible_under_policy(
     suggested: "Mapping[str, Any] | None",
     current_policy: Mapping[str, Any],
     tier_floor: str,
+    route_class: "str | None",
 ) -> bool:
-    """The current-policy filter (decisions 5/8): a suggestion naming a
-    profile absent from the CURRENT declarations, below the tier
-    floor, or without the build role is ineligible. A no_change label
-    names no profile and passes."""
+    """The current-policy filter (decisions 5/8), answered from the
+    SAME effective policy the production selector consumes and made
+    QUERY-AWARE: a suggestion is eligible only if the router could
+    actually have selected that profile for a task of this route
+    class.
+
+    In order, mirroring ``rt_select``: routing must be enabled; the
+    profile must be in the effective candidate set (registry
+    INTERSECTED with the repository's ``allowed_profiles``); it must
+    hold the build role; it must clear the calibration tier floor
+    (an E3 policy layered on top); and the route class must admit it.
+
+    Deliberately absent: ``data_policy`` and ``tool_profile``. The
+    production selector carries both on the selected tuple but
+    filters on NEITHER — enforcing them here would invent policy
+    production does not have, which is its own way of describing
+    something other than production.
+
+    A no_change label names no profile and passes."""
     if suggested is None:
         return True
-    profile = current_policy["profiles"].get(suggested["profile_id"])
+    if current_policy.get("enabled") is False:
+        return False
+    profiles = current_policy["profiles"]
+    profile = profiles.get(suggested["profile_id"])
     if profile is None:
+        return False
+    if not profile.get("allowed", True):
         return False
     if _TIER_RANK[profile["capability_tier"]] < _TIER_RANK[tier_floor]:
         return False
-    return "build" in (profile.get("roles") or ())
+    if "build" not in (profile.get("roles") or ()):
+        return False
+    return _route_class_admits(suggested["profile_id"], profiles,
+                               current_policy, route_class)
 
 
 def knn_recommendation(
@@ -381,6 +534,10 @@ def knn_recommendation(
         return _refuse(query.missing or "features unavailable")
     if current_policy is None:
         return _refuse("no current policy source is configured")
+    # THE query context eligibility is answered against (P1 of the T4
+    # review): a route class the router could not have taken makes a
+    # suggestion inadmissible no matter how similar its neighbors are.
+    query_route_class = query.features["route_class"]
 
     # candidate filtering BEFORE ranking (decision 5)
     pool = [
@@ -388,8 +545,10 @@ def knn_recommendation(
         if e.task_id != task_id
         and e.features is not None
         and e.label is not None
+        # the QUERY's route class governs: a neighbor's advice is a
+        # pool candidate only if it could be actionable for THIS task
         and _eligible_under_policy(e.label["suggested"], current_policy,
-                                   policy.tier_floor)
+                                   policy.tier_floor, query_route_class)
     ]
     if len(pool) < policy.k_min:
         return _refuse(
@@ -435,10 +594,12 @@ def knn_recommendation(
         )
         suggested = winner[2].label["suggested"]
         if not _eligible_under_policy(suggested, current_policy,
-                                      policy.tier_floor):
+                                      policy.tier_floor,
+                                      query_route_class):
             return _refuse(
-                "the winning suggestion is not eligible under the "
-                "current policy"
+                f"the winning suggestion is not eligible under the "
+                f"current effective policy for a "
+                f"{query_route_class!r} task"
             )
         doc["outcome"] = "switch_profile"
         doc["suggested"] = dict(suggested)
@@ -598,7 +759,8 @@ def evaluate_heldout(
         if predicted["outcome"] == "switch_profile" and current_policy:
             if not _eligible_under_policy(predicted["suggested"],
                                           current_policy,
-                                          policy.tier_floor):
+                                          policy.tier_floor,
+                                          example.features["route_class"]):
                 # decision 2/G5: a violation reaching the report is a
                 # SURFACED bug, never dropped
                 floor_violations += 1
@@ -715,6 +877,28 @@ def _gate(gate_id, status, measured, threshold, reason, refs=()):
             "evidence_refs": list(refs)}
 
 
+# ── addressable gate evidence (FR-E3-1) ────────────────────────────────
+# A gate verdict a reader cannot inspect is an assertion, not evidence.
+# Each locator below names a coordinate the Studio opens through an
+# existing read-only surface; none is a path, and none is a bare string
+# a consumer would have to parse.
+def _ref_set(set_id: str) -> Mapping[str, Any]:
+    return {"kind": "evidence_set", "evidence_set_id": set_id}
+
+
+def _ref_task(set_id: str, task_id: str) -> Mapping[str, Any]:
+    return {"kind": "task", "evidence_set_id": set_id, "task_id": task_id}
+
+
+def _ref_evaluation() -> Mapping[str, Any]:
+    return {"kind": "evaluation_report"}
+
+
+def _ref_result(set_id: str, task_id: str) -> Mapping[str, Any]:
+    return {"kind": "evaluation_result", "evidence_set_id": set_id,
+            "task_id": task_id}
+
+
 def _record_is_complete(record: Mapping[str, Any]) -> bool:
     """G1's per-record predicate: a non-insufficient cost AND a
     VERIFIED effective-model identity on every routing decision (null
@@ -779,7 +963,7 @@ def compute_gates(
             f"a verified effective-model identity"
             + (f"; {invalid_count} invalid set(s) excluded from the corpus"
                if invalid_count else ""),
-            [e.set_id for e in valid],
+            [_ref_set(e.set_id) for e in valid],
         ))
 
     # ── G2: enough repeated LABELED runs ──
@@ -793,11 +977,12 @@ def compute_gates(
             observed_trials[(entry.set_id, rec["task_id"])] = len(
                 rec["actual"]["per_trial"])
     min_trials = int(block["min_trials"])
-    qualifying_tasks = sorted({
-        e.task_id for e in labeled
+    qualifying_pairs = sorted({
+        (e.evidence_set_id, e.task_id) for e in labeled
         if observed_trials.get((e.evidence_set_id, e.task_id), 0)
         >= min_trials
     })
+    qualifying_tasks = sorted({task for _, task in qualifying_pairs})
     contributing_sets = sorted({
         e.evidence_set_id for e in labeled
         if observed_trials.get((e.evidence_set_id, e.task_id), 0)
@@ -819,7 +1004,7 @@ def compute_gates(
             f"{min_trials} trials within a single set across "
             f"{len(contributing_sets)} set(s) "
             f"(min_sets={block['min_sets']})",
-            qualifying_tasks,
+            [_ref_task(s_id, task) for s_id, task in qualifying_pairs],
         ))
 
     # ── G3: evaluated against held-out tasks ──
@@ -840,8 +1025,9 @@ def compute_gates(
     else:
         # a refusal is not coverage: G3 asks how much of the corpus was
         # actually EVALUATED against held-out tasks
-        covered = {r["task_id"] for r in evaluation_report["results"]
-                   if r["predicted"]["outcome"] != "insufficient_data"}
+        judged = [r for r in evaluation_report["results"]
+                  if r["predicted"]["outcome"] != "insufficient_data"]
+        covered = {r["task_id"] for r in judged}
         coverage = (len(covered & set(labeled_tasks)) / len(labeled_tasks)
                     if labeled_tasks else 0.0)
         status = ("pass" if labeled_tasks
@@ -850,7 +1036,12 @@ def compute_gates(
             "heldout_evaluated", status, coverage, block["min_coverage"],
             f"{len(covered & set(labeled_tasks))}/{len(labeled_tasks)} "
             f"labeled task(s) evaluated held-out",
-            sorted(covered),
+            [_ref_evaluation()] + [
+                _ref_result(r["evidence_set_id"], r["task_id"])
+                for r in sorted(judged,
+                                key=lambda r: (r["evidence_set_id"],
+                                               r["task_id"]))
+            ],
         ))
 
     # ── G4: false downgrades below the declared threshold ──
@@ -880,6 +1071,14 @@ def compute_gates(
             f"{evaluation_report['unresolved_tier']} tier-unresolved, "
             f"{evaluation_report['unevaluable']} unevaluable — all "
             f"outside the denominator)",
+            # the report itself carries the DENOMINATOR; the per-result
+            # refs are the numerator. Zero downgrades still leaves the
+            # report openable, so a passing verdict is inspectable too.
+            [_ref_evaluation()] + [
+                _ref_result(r["evidence_set_id"], r["task_id"])
+                for r in evaluation_report["results"]
+                if r["downgrade_flag"]
+            ],
         ))
 
     # ── G5: operator floors remain authoritative (three conjuncts) ──
@@ -908,11 +1107,21 @@ def compute_gates(
             "policy_digest_bound": digest_bound,
         }
         failed = sorted(k for k, ok in conjuncts.items() if not ok)
+        # every switch the floor check actually examined, so a
+        # zero-violation verdict names what it ranged over
+        examined = [r for r in evaluation_report["results"]
+                    if r["predicted"]["outcome"] == "switch_profile"]
         gates.append(_gate(
             "floors_authoritative", "pass" if not failed else "fail",
             violations, policy.tier_floor,
             "all three conjuncts hold" if not failed
             else f"unsatisfied conjunct(s): {failed}",
+            [_ref_evaluation()] + [
+                _ref_result(r["evidence_set_id"], r["task_id"])
+                for r in sorted(examined,
+                                key=lambda r: (r["evidence_set_id"],
+                                               r["task_id"]))
+            ],
         ))
 
     report = {

@@ -328,13 +328,22 @@ export type RoutingGateId =
 
 export type RoutingGateStatus = "pass" | "fail" | "insufficient_data";
 
+// Addressable gate evidence (FR-E3-1): a closed set of coordinates the
+// panel opens through the existing read-only surfaces — never an opaque
+// string, never a path.
+export type RoutingGateEvidenceRef =
+  | { kind: "evidence_set"; evidence_set_id: string }
+  | { kind: "task"; evidence_set_id: string; task_id: string }
+  | { kind: "evaluation_report" }
+  | { kind: "evaluation_result"; evidence_set_id: string; task_id: string };
+
 export interface RoutingGate {
   id: RoutingGateId;
   status: RoutingGateStatus;
   measured: number | string | null;
   threshold: number | string | null;
   reason: string | null;
-  evidence_refs: string[];
+  evidence_refs: RoutingGateEvidenceRef[];
 }
 
 export interface RoutingCalibrationReport {

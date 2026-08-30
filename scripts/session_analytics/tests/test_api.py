@@ -382,3 +382,28 @@ class TestRoutingEvidenceApi(RegistryResetTestCase):
             unknown = self.client.get(
                 "/api/routing/evidence/" + "0" * 64 + "/knn")
             self.assertEqual(unknown.status_code, 404)
+
+    def test_knn_route_uses_one_corpus_snapshot(self) -> None:
+        # T4 review P2: the existence check and the derivation must read
+        # ONE snapshot, or a set can pass the 404 check and still come
+        # back empty. Counting loads proves it structurally.
+        import os
+        from unittest import mock as _mock
+
+        from session_analytics import routing_evidence
+
+        real = routing_evidence.load_evidence_sets
+        calls = []
+
+        def counting(roots):
+            calls.append(tuple(roots))
+            return real(roots)
+
+        with _mock.patch.dict(os.environ, {
+            "CCT_SA_CALIBRATION_POLICY_SOURCE": "",
+        }), _mock.patch.object(routing_evidence, "load_evidence_sets",
+                               counting):
+            r = self.client.get(
+                f"/api/routing/evidence/{self.published.set_id}/knn")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(calls), 1, calls)

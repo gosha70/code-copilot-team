@@ -1,9 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import {
   api,
   RoutingEvaluationSummary,
   RoutingGate,
+  RoutingGateEvidenceRef,
   RoutingGateId,
 } from "@/lib/api";
 import { Badge, Card, useApi } from "@/components/ui";
@@ -30,6 +32,89 @@ function fmt(value: number | string | null): string {
   return String(value);
 }
 
+function refLabel(ref: RoutingGateEvidenceRef): string {
+  switch (ref.kind) {
+    case "evidence_set":
+      return `set ${ref.evidence_set_id.slice(0, 8)}…`;
+    case "task":
+      return `task ${ref.task_id} @ ${ref.evidence_set_id.slice(0, 8)}…`;
+    case "evaluation_report":
+      return "held-out evaluation report";
+    case "evaluation_result":
+      return `result ${ref.task_id} @ ${ref.evidence_set_id.slice(0, 8)}…`;
+  }
+}
+
+/** Fetch the coordinate a locator NAMES — through the same read-only
+ * surfaces the evidence pages use, so a gate verdict is inspectable
+ * rather than merely asserted. Each branch resolves to the exact
+ * coordinate, not to the whole artifact. */
+async function openRef(ref: RoutingGateEvidenceRef): Promise<unknown> {
+  if (ref.kind === "evidence_set") {
+    const payload = await api.routingArtifact(ref.evidence_set_id, "report");
+    return payload.content;
+  }
+  if (ref.kind === "task") {
+    const payload = await api.routingArtifact(ref.evidence_set_id, "report");
+    const doc = payload.content as {
+      arms?: Record<string, { tasks?: Record<string, unknown> }>;
+    };
+    const cell = doc.arms?.cct_router?.tasks?.[ref.task_id];
+    if (cell === undefined)
+      throw new Error("the task does not resolve in the set it names");
+    return cell;
+  }
+  const payload = await api.routingEvaluation();
+  if (payload.state !== "report" || !payload.report)
+    throw new Error(payload.reason ?? "no evaluation report");
+  if (ref.kind === "evaluation_report") {
+    const { results, ...aggregates } = payload.report;
+    return { ...aggregates, results: results.length };
+  }
+  const hit = payload.report.results.find(
+    (r) =>
+      r.evidence_set_id === ref.evidence_set_id && r.task_id === ref.task_id,
+  );
+  if (hit === undefined)
+    throw new Error("the result is not in the current evaluation report");
+  return hit;
+}
+
+function EvidenceRefButton({ gateRef }: { gateRef: RoutingGateEvidenceRef }) {
+  const [opened, setOpened] = useState<unknown | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const follow = () => {
+    if (opened !== null || error !== null) {
+      setOpened(null);
+      setError(null);
+      return;
+    }
+    openRef(gateRef)
+      .then(setOpened)
+      .catch((e) => setError(String(e)));
+  };
+
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={follow}
+        className="text-left text-blue-600 hover:underline"
+        title="open this coordinate"
+      >
+        {refLabel(gateRef)}
+      </button>
+      {error !== null && <div className="text-rose-600">{error}</div>}
+      {opened !== null && (
+        <pre className="mt-1 mb-2 bg-white border border-slate-200 rounded p-2 overflow-x-auto text-[11px] leading-4 whitespace-pre-wrap">
+          {JSON.stringify(opened, null, 1)}
+        </pre>
+      )}
+    </li>
+  );
+}
+
 function GateRow({ gate }: { gate: RoutingGate }) {
   return (
     <tr className="border-b border-slate-100 align-top">
@@ -48,9 +133,16 @@ function GateRow({ gate }: { gate: RoutingGate }) {
       <td className="py-2 text-slate-600">
         {gate.reason ?? "—"}
         {gate.evidence_refs.length > 0 && (
-          <div className="mt-1 font-mono text-xs text-slate-400">
-            {gate.evidence_refs.join(", ")}
-          </div>
+          <details className="mt-1 text-xs">
+            <summary className="cursor-pointer text-slate-500">
+              Evidence ({gate.evidence_refs.length})
+            </summary>
+            <ul className="mt-1 space-y-0.5 font-mono">
+              {gate.evidence_refs.map((ref, i) => (
+                <EvidenceRefButton key={i} gateRef={ref} />
+              ))}
+            </ul>
+          </details>
         )}
       </td>
     </tr>

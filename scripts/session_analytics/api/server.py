@@ -227,15 +227,18 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     # ── routing evidence (routing-shadow #261, shadow-mode only) ───────
     # Sets are addressed by opaque id; invalid sets surface with their
     # closed sanitized state; no payload carries a filesystem path.
-    def _routing_entries():
+    def _routing_entries(config=None):
         from ..routing_evidence import load_evidence_sets
 
-        return load_evidence_sets(load_config().routing_evidence_roots)
+        cfg = config if config is not None else load_config()
+        return load_evidence_sets(cfg.routing_evidence_roots)
 
-    def _routing_set_or_404(set_id: str):
+    def _routing_set_or_404(set_id: str, entries=None):
         from ..routing_evidence import find_evidence_set
 
-        loaded = find_evidence_set(_routing_entries(), set_id)
+        if entries is None:
+            entries = _routing_entries()
+        loaded = find_evidence_set(entries, set_id)
         if loaded is None:
             raise HTTPException(status_code=404,
                                 detail="unknown evidence set")
@@ -287,26 +290,37 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     # Read-only over the SAME entries the E2 surface loads; no payload
     # carries the calibration root or the policy-source path, and no
     # gate result is ever acted upon here.
+    # Each calibration route reads the corpus and the configuration
+    # ONCE and derives everything from that one snapshot: a payload
+    # composed from two independent reads could describe two different
+    # states of the world.
     @app.get("/api/routing/calibration")
     def routing_calibration() -> dict[str, Any]:
         from ..routing_calibration import calibration_payload
 
-        return dict(calibration_payload(_routing_entries(), load_config()))
+        cfg = load_config()
+        return dict(calibration_payload(_routing_entries(cfg), cfg))
 
     @app.get("/api/routing/calibration/evaluation")
     def routing_calibration_evaluation() -> dict[str, Any]:
         from ..routing_calibration import evaluation_payload
 
-        return dict(evaluation_payload(_routing_entries(), load_config()))
+        cfg = load_config()
+        return dict(evaluation_payload(_routing_entries(cfg), cfg))
 
     @app.get("/api/routing/evidence/{set_id}/knn")
     def routing_knn(set_id: str) -> dict[str, Any]:
         from ..routing_calibration import knn_payload
 
-        # 404 on an unknown set BEFORE deriving, so an unknown id is
-        # never answered with an empty recommendation list.
-        _routing_set_or_404(set_id)
-        return dict(knn_payload(_routing_entries(), set_id, load_config()))
+        # ONE corpus snapshot for both the existence check and the
+        # derivation: two independent loads could straddle a change to
+        # the roots, letting a set pass the 404 check and then return
+        # an empty report — and it would pay the (complete) loading
+        # cost twice.
+        cfg = load_config()
+        entries = _routing_entries(cfg)
+        _routing_set_or_404(set_id, entries)
+        return dict(knn_payload(entries, set_id, cfg))
 
     # ── dashboard ──────────────────────────────────────────────────────
     @app.get("/api/dashboard/kpis")

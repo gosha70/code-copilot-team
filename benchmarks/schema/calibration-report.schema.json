@@ -35,6 +35,46 @@
     "calibrated": { "type": "boolean" }
   },
   "$defs": {
+    "gate_evidence_ref": {
+      "description": "One addressable coordinate. Same shape discipline as recommendation.schema.json's locator: the branches are exclusive and each closes its own properties, so an unknown kind cannot slip through as a partially-matching object.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "evidence_set_id"],
+          "properties": {
+            "kind": { "const": "evidence_set" },
+            "evidence_set_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "evidence_set_id", "task_id"],
+          "properties": {
+            "kind": { "const": "task" },
+            "evidence_set_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "task_id": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "evaluation_report" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "evidence_set_id", "task_id"],
+          "properties": {
+            "kind": { "const": "evaluation_result" },
+            "evidence_set_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "task_id": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
     "gate": {
       "type": "object",
       "additionalProperties": false,
@@ -61,8 +101,9 @@
         "threshold": { "type": ["number", "string", "null"] },
         "reason": { "type": ["string", "null"] },
         "evidence_refs": {
+          "description": "Structured, ADDRESSABLE locators (FR-E3-1): each names a coordinate a reader can open — an evidence set, a (set, task) pair in that set's report, the held-out evaluation report, or one result within it. Never an opaque string a consumer has to parse, and never a filesystem path.",
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": { "$ref": "#/$defs/gate_evidence_ref" }
         }
       }
     }

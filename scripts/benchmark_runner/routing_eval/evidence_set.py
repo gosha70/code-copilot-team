@@ -134,10 +134,16 @@ class EvidenceSetInvalid(ValueError):
 
 
 # ── registry derivation ────────────────────────────────────────────────
-def _profile_declarations(registry_path: Path) -> Mapping[str, Mapping[str, Any]]:
-    """Every profile's declared fields, via the production parser."""
+def _profile_declarations(
+    registry_path: Path, records: "Sequence[tuple] | None" = None
+) -> Mapping[str, Mapping[str, Any]]:
+    """Every profile's declared fields, via the production parser.
+    ``records`` lets a caller that already ran the (subprocess-backed)
+    validator reuse that one pass instead of paying for a second."""
+    if records is None:
+        records = _rc_records(Path(registry_path))
     by_ctx: dict[str, dict[str, tuple[str, str]]] = {}
-    for ctx, key, typ, value in _rc_records(Path(registry_path)):
+    for ctx, key, typ, value in records:
         by_ctx.setdefault(ctx, {})[key] = (typ, value)
     declarations: dict[str, dict[str, Any]] = {}
     for ctx, keys in by_ctx.items():
@@ -148,7 +154,8 @@ def _profile_declarations(registry_path: Path) -> Mapping[str, Mapping[str, Any]
             continue
         entry: dict[str, Any] = {}
         for name in ("backend", "provider", "model", "capability_tier",
-                     "tool_profile", "base_url", "base_url_env"):
+                     "priority", "tool_profile", "base_url",
+                     "base_url_env"):
             if name in keys:
                 entry[name] = keys[name][1]
         if "roles" in keys:
@@ -191,6 +198,57 @@ def derive_profile_policy(
         "registry_digest": registry_digest,
         "profiles": profiles,
     }
+
+
+def derive_selector_policy(registry_path: Path) -> dict:
+    """The user-registry half of the effective policy — ``enabled``
+    plus the per-profile fields the PRODUCTION SELECTOR filters on —
+    read live through the production parser in ONE validated pass.
+
+    Distinct from ``derive_profile_policy`` on purpose: that artifact
+    is persisted per evidence set so a downgrade baseline resolves
+    from source-bound declarations of the EXECUTED registry, and it
+    carries only what tier resolution needs. This one is never
+    persisted — it feeds the current-policy eligibility filter, and so
+    it must carry exactly what ``rt_select`` consults: capability
+    tier, roles, and priority (the ``primary_only`` route class admits
+    only the total-order-first tier1 candidate, ordered priority ASC
+    then id ASC). A profile whose priority does not parse sorts LAST
+    rather than silently becoming the primary.
+    """
+    records = _rc_records(Path(registry_path))
+    by_ctx: dict[str, dict[str, str]] = {}
+    for ctx, key, _typ, value in records:
+        by_ctx.setdefault(ctx, {})[key] = value
+    # rc_effective: an absent [policy].enabled is the user's opt-in
+    enabled = by_ctx.get("policy", {}).get("enabled", "true") == "true"
+
+    profiles: dict[str, dict] = {}
+    for profile_id, entry in _profile_declarations(
+        registry_path, records
+    ).items():
+        tier = entry.get("capability_tier")
+        if tier not in ("tier1", "tier2"):
+            raise EvidenceSetError(
+                f"profile {profile_id!r} declares no capability_tier — "
+                f"eligibility cannot be derived from a policy document "
+                f"that omits the field the selector orders by"
+            )
+        try:
+            priority = int(str(entry.get("priority")))
+        except (TypeError, ValueError):
+            priority = None
+        profiles[profile_id] = {
+            "capability_tier": tier,
+            "roles": sorted(entry.get("roles") or ()),
+            "priority": priority,
+        }
+    if not profiles:
+        raise EvidenceSetError(
+            "the registry declares no profiles — an empty selector "
+            "policy binds nothing"
+        )
+    return {"enabled": enabled, "profiles": profiles}
 
 
 def derive_task_descriptors(config: Any, preset: str) -> "dict | None":

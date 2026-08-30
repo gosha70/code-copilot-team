@@ -94,6 +94,7 @@
     "min_tasks": 10,
     "min_trials": 3,
     "policy_source": "",
+    "repo_policy_source": "",
     "root": "",
     "tier_floor": "tier1",
     "vote_epsilon": 1e-06

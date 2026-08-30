@@ -481,6 +481,103 @@ redaction 106 OK + 43 subtests, `tsc --noEmit` clean, `npm run build`
 the studio ships no ESLint config and the command drops into
 interactive setup.
 
+## T4 review round 1 (owner, on 6b32d3b) — one P1 + three P2, applied
+
+All four reproduced in-tree before any fix.
+
+1. **[P1] G5 did not enforce the effective task policy.**
+   `_eligible_under_policy` took no query context: reproduced by
+   calling it directly, where a tier-2 build profile was accepted with
+   no route class in the signature at all. Because `floor_violations`
+   shares the predicate, G5 could report zero violations and pass
+   while the recommender proposed profiles the router could never have
+   selected.
+
+   Fixed by deriving eligibility from the SAME authority production
+   selects from. `rc_effective` (routing-config.sh) composes the
+   effective policy — `enabled` as the AND of user and repo blocks,
+   candidates as registry INTERSECTED with repo `allowed_profiles`,
+   and `tier2_delegation_allowed` — and `rt_select`
+   (routing-select.sh) then filters on role and route class:
+   `tier1_only` never reaches tier 2, `primary_only` admits only the
+   total-order-first tier1 candidate (priority ASC, id ASC), and both
+   tier-2 classes require the repository to permit delegation. The
+   predicate now implements exactly that, keyed on the QUERY example's
+   declared route class, and `load_current_policy` composes both
+   layers instead of reading per-profile tier/roles alone. A new
+   `derive_selector_policy` reads what the selector orders by
+   (including `priority`) in ONE validated parser pass; the persisted
+   decision-11 artifact is untouched, so no evidence set is staled by
+   this.
+
+   Two judgement calls, stated rather than buried. (a) `data_policy`
+   and `tool_profile` are deliberately NOT enforced: the production
+   selector carries both on the selected tuple and filters on
+   neither, so enforcing them here would invent policy production does
+   not have — which is its own way of describing something other than
+   production. (b) An UNBOUND repo policy is not permission. Production
+   reads a null restriction as "no restriction", which is correct
+   there because it knows the repo config path; an unconfigured source
+   here means the restriction is unknown, and a safety gate must not
+   read unknown as permitted, so tier-2 suggestions stay ineligible
+   until `repo_policy_source` is bound. That source is a new
+   configuration key and a new `policy_id` dimension, so binding it
+   stales prior reports — correct under decision 3 and pinned.
+
+   Eleven regressions, including the reviewer's reproduction verbatim.
+   Six mutations discriminated: route class ignored; `primary_only`
+   admitting any tier1; `allowed_profiles` ignored; unbound repo
+   policy read as permission; `enabled` ignored; unparseable priority
+   sorting first.
+
+   Fixture fallout worth recording, because it is evidence the fix has
+   teeth: several `_beta_switch_set`/`_switch_set` fixtures declared
+   `primary_only` while suggesting a tier-2 profile — a combination
+   production could never produce. They now declare a delegating route
+   class, and the one test whose subject IS the downgrade arithmetic
+   pins an admissible-but-wrong tier-2 pick, with the primary_only
+   case pinned separately as a REFUSAL (not a downgrade).
+
+2. **[P2] kNN request state was neither surfaced nor scoped.** The
+   page ignored `loading`, `error`, payload `state`/`reason`, and
+   `set_id`, so an outage made the section silently vanish; and
+   `useApi` retains prior data across a deps change, so navigating
+   between sets sharing a task id could attach the PREVIOUS set's
+   recommendation. The payload is now used only when it is a report
+   AND names the current route, with explicit loading / error /
+   insufficient states rendered in the card where the reader is
+   looking. Both paths verified live in the browser: a simulated
+   `/knn` outage renders the notice, and a well-formed payload naming
+   a foreign set is rejected — its `PHANTOM` profile never reaches a
+   card.
+
+3. **[P2] Gate evidence was not addressable.** FR-E3-1 promises
+   addressable evidence; the panel printed opaque strings, G2/G3 refs
+   were bare task ids with no set coordinate, and G4/G5 carried none
+   at all. `evidence_refs` is now a closed structured vocabulary —
+   `evidence_set`, `task`, `evaluation_report`, `evaluation_result` —
+   with exclusive schema branches, and the panel opens each through
+   the existing read-only surfaces. Passing gates are inspectable too:
+   G4 and G5 carry the evaluation report (the denominator, and what
+   the floor check ranged over), so a zero-violation verdict is
+   falsifiable from the surface. Five regressions including a
+   closed-vocabulary inverse test that refuses the OLD bare-string
+   shape. Verified live: all three locator kinds resolve, and a `task`
+   ref opens the exact per-task cell rather than the whole artifact.
+
+4. **[P2] The kNN route read the corpus twice.** The 404 check and the
+   derivation loaded independently, so a set could pass the check and
+   still return an empty report if the roots changed between reads —
+   and the complete loading cost was paid twice. All three calibration
+   routes now take one corpus + configuration snapshot. Pinned by a
+   test that counts `load_evidence_sets` calls through the route.
+
+Suites after the pass: session-analytics 417 OK / 6 skips, E1
+evidence/quality/redaction/matrix 140 OK + 53 subtests, `tsc --noEmit`
+clean, `npm run build` green, spec 2/0, origin aligned/high,
+whitespace clean, production routing shell and shared schemas
+untouched.
+
 ## Verdict
 
 Verdict: aligned

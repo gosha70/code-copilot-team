@@ -422,10 +422,12 @@ function RecommendationCard({
   setId,
   rec,
   knn,
+  knnNotice,
 }: {
   setId: string;
   rec: RoutingRecommendation;
   knn?: RoutingKnnRecommendation;
+  knnNotice?: string | null;
 }) {
   const basis = rec.confidence.basis;
   return (
@@ -538,7 +540,16 @@ function RecommendationCard({
         )}
       </div>
       <EvidenceBlock setId={setId} rec={rec} />
-      {knn && <KnnSection knn={knn} />}
+      {knn ? (
+        <KnnSection knn={knn} />
+      ) : (
+        knnNotice && (
+          <p className="mt-4 rounded border border-slate-200 bg-slate-50/60 p-3 text-xs text-slate-500">
+            <span className="font-semibold">Shadow kNN (similarity):</span>{" "}
+            {knnNotice}
+          </p>
+        )
+      )}
       {basis.insufficiency_refs.length > 0 && (
         <ul className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 space-y-1">
           {basis.insufficiency_refs.map((ref) => (
@@ -558,11 +569,30 @@ export default function RoutingSetPage() {
   const detail = useApi(() => api.routingEvidenceSet(setId), [setId]);
   const recs = useApi(() => api.routingRecommendations(setId), [setId]);
   // The kNN surface is ADDITIVE: if it is unavailable the dominance
-  // recommendations still render in full.
+  // recommendations still render in full — but never SILENTLY, and
+  // never with another set's answers.
   const knn = useApi(() => api.routingKnn(setId), [setId]);
+  // useApi keeps the previous data while a new request is in flight, so
+  // navigating between sets that share a task id could otherwise attach
+  // the PREVIOUS set's recommendation to this one's card. The payload
+  // must be a report AND must name this route's set before it is used.
+  const knnReady =
+    knn.data && knn.data.state === "report" && knn.data.set_id === setId
+      ? knn.data
+      : null;
   const knnByTask = new Map(
-    (knn.data?.recommendations ?? []).map((k) => [k.task_id, k]),
+    (knnReady?.recommendations ?? []).map((k) => [k.task_id, k]),
   );
+  const knnNotice: string | null = knnReady
+    ? null
+    : knn.loading
+      ? "Loading the similarity recommendation…"
+      : knn.error
+        ? `Similarity recommendation unavailable: ${knn.error}`
+        : knn.data && knn.data.set_id !== setId
+          ? "Loading the similarity recommendation for this set…"
+          : (knn.data?.reason ??
+            "No similarity recommendation is available for this set.");
 
   if (detail.loading || recs.loading) return <Loading />;
   if (detail.error || !detail.data)
@@ -624,6 +654,7 @@ export default function RoutingSetPage() {
             setId={setId}
             rec={rec}
             knn={knnByTask.get(rec.task_id)}
+            knnNotice={knnNotice}
           />
         ))
       )}
