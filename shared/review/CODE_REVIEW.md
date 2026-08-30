@@ -21,7 +21,8 @@ Your responsibility is to independently determine whether the proposed change is
 3. Complete against its approved requirements
 4. Compatible with the existing architecture and public contracts
 5. Adequately tested
-6. Ready to merge
+6. On target and proportionate to the originating problem
+7. Ready to merge
 
 Do not assume a change is correct because Claude Code, another agent, CI, or a
 previous review declared it complete.
@@ -126,7 +127,24 @@ Read:
 - Every changed file in its surrounding context
 - Existing tests for the affected behavior
 
-### 2. Trace the change
+### 2. Check target alignment and proportionality
+
+Before judging implementation quality:
+
+1. State the originating goal and concrete acceptance criteria in your own words.
+2. Map each changed file and each new abstraction, interface, state, dependency,
+   or test layer to a current requirement or concrete correctness or safety risk.
+3. Classify the change as `on-target`, `overcomplicated`, or `off-target`.
+4. Ask: **What can be removed without weakening correctness, safety, or the
+   acceptance criteria?**
+
+Passing tests do not compensate for scope drift. Treat speculative frameworks,
+generalization, state models, hardening, and unrelated cleanup as unsupported
+unless the current requirements or a concrete failure mode justify them. Do not
+penalize necessary complexity merely for being non-trivial; require the link to
+the problem to be explicit and evidenced.
+
+### 3. Trace the change
 
 Trace affected behavior from entry point to output or persistent side effect.
 
@@ -145,7 +163,7 @@ Check:
 Search for related occurrences across the repository. A fix applied to only one
 of several equivalent paths is a correctness defect.
 
-### 3. Run verification
+### 4. Run verification
 
 Run the smallest relevant set of:
 
@@ -163,7 +181,7 @@ run. If a command cannot run, explain why and identify the resulting uncertainty
 
 Never recommend skipping or weakening a failing quality gate.
 
-### 4. Review the implementation
+### 5. Review the implementation
 
 Evaluate the change for:
 
@@ -226,7 +244,7 @@ real secrets.
 - Missing observability for critical failure paths
 - Deployment or rollback incompatibility
 
-### 5. Check common AI-generated-code failure modes
+### 6. Check common AI-generated-code failure modes
 
 Pay particular attention to:
 
@@ -291,7 +309,8 @@ Return:
 
 - `FAIL` when any P0 or P1 finding remains open, a required deliverable is
   missing, an unresolved specification question exists, or a required
-  verification gate fails.
+  verification gate fails. Also return `FAIL` for material scope drift or
+  unjustified architecture that substantially increases contracts, cost, or risk.
 - `PASS` when no blocking finding remains and required verification succeeds.
 - `INCONCLUSIVE` when essential source, environment, or verification evidence is
   unavailable.
@@ -340,6 +359,14 @@ Never return PASS merely because no defect was obvious from reading the diff.
 
     - `<REQ-ID or requirement>`: `implemented | partial | missing`
     - Evidence: `<code and test references>`
+
+    ## Target Alignment
+
+    - Classification: `on-target | overcomplicated | off-target`
+    - Originating goal: `<one sentence>`
+    - Required scope versus diff: `<assessment>`
+    - Unjustified complexity: `<none or list>`
+    - Removable without weakening acceptance: `<none or list>`
 
     ## Verification
 

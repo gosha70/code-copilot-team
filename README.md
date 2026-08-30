@@ -263,6 +263,10 @@ Complementary to the runner loop above: configure a copilot as the project's
 persistent review rules that apply to every `/review`, `codex review`, or
 GitHub `@codex review` session, with no runner involved.
 
+The reviewer must classify each change as `on-target`, `overcomplicated`, or
+`off-target` against the originating request. Passing tests cannot substitute
+for that scope check, and every review includes an explicit simplification pass.
+
 ```bash
 # Install for a project (Codex first; the dispatch table takes future tools)
 ./scripts/setup-reviewer.sh --codex /path/to/project
@@ -1230,7 +1234,7 @@ code-copilot-team/
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
-│   ├── test-generate.sh                 294 generation + adapter tests
+│   ├── test-generate.sh                 301 generation + adapter tests
 │   ├── test-shared-structure.sh         812 structure + content tests
 │   ├── test-sync.sh                     121 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
@@ -1238,7 +1242,7 @@ code-copilot-team/
 │   ├── test-verification-preset.sh      43 preset resolution tests
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh           116 review loop integration tests
-│   ├── test-setup-reviewer.sh           40 copilot reviewer installer tests
+│   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        1037 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         167 execution-profile registry + result + cli tests

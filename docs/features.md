@@ -42,7 +42,7 @@ On-demand instruction modules the agent loads by phase or when relevant.
 | `auto-build-loop` | Autonomous build driver after SDD spec approval: phase-scoped headless build sessions, driver-owned commits, cross-provider review gates, milestone pauses, and fail-closed escalation — under explicit opt-in autonomy profiles. |
 | `clarification-protocol` | When and how to ask clarifying questions before implementing. Data model review gate and ambiguity resolution rules. |
 | `coding-standards` | Quality gates, prohibited patterns, verification discipline, and self-audit rules for all code generation and review sessions. |
-| `copilot-conventions` | Cross-copilot portable conventions: read before write, minimal changes, git discipline, project structure, and priority rules. |
+| `copilot-conventions` | Cross-copilot portable conventions: target alignment, complexity control, minimal changes, git discipline, and project structure. |
 | `copyright-headers` | Copyright header rules for generated source files. Applies the company name from providers.toml to new files. |
 | `design-system` | Derive a unique, domain-fit design direction and enforce design-token + anti-slop discipline. Read/author DESIGN.md before building any UI; override framework defaults so output is bespoke by construction, not generic. |
 | `environment-setup` | Environment variable patterns, config file validation, and setup verification for new project scaffolding. |
