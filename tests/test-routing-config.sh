@@ -286,7 +286,7 @@ assert_eq "ISO reset time is extracted when present" "2026-08-24T10:00:00Z" \
 # The full composed document conforms to the CLOSED schema shape.
 DOC=$(rr_result 1 "$FX/claude-session-limit.out" "claude-code" "anthropic-subscription" "alpha" "sonnet" "-" "anthropic-subscription" "api.anthropic.com" '{"stderr":"x.log"}')
 assert_eq "rr_result: exact closed key set" \
-    "artifacts backend effective_model evidence exit_code failure_class outcome profile provider quota_pool requested_model reset_at retry_after_sec schema_version upstream_origin" \
+    "artifacts backend context_limit_declared context_limit_effective context_limit_evidence context_limit_observed effective_model evidence exit_code failure_class outcome profile provider quota_pool requested_model reset_at retry_after_sec schema_version upstream_origin" \
     "$(jq -r 'keys | sort | join(" ")' <<< "$DOC")"
 assert_eq "rr_result: unverifiable effective model is null, never assumed" "null" \
     "$(jq -r '.effective_model // "null"' <<< "$DOC")"
@@ -295,6 +295,125 @@ assert_eq "rr_result: identity + pool are distinct fields" "claude-code anthropi
 assert_eq "rr_result: schema_version pinned" "1" "$(jq -r '.schema_version' <<< "$DOC")"
 assert "rr_result: class enum member" \
     jq -e --arg c "$(jq -r '.failure_class' <<< "$DOC")" -n '["quota_exhausted","rate_limited","unavailable","transport","auth","invalid_request","denied","execution","unknown"] | index($c) != null'
+
+# ── #109 increment F: context-limit recording ────────────────────────
+# The numeric ceiling comes from the RECORDED capture, not a
+# hand-written string: vllm-context-overflow.out states 32768.
+assert_eq "F: the explicit numeric maximum is read from the recorded capture" "32768" \
+    "$(rr_context_limit_observed "$FX/vllm-context-overflow.out" invalid_request)"
+# Class-gated: the SAME bytes yield nothing when the class is not
+# invalid_request. A number in an auth failure is not a context limit.
+assert_eq "F: extraction is class-gated, not a free numeric scan" "" \
+    "$(rr_context_limit_observed "$FX/vllm-context-overflow.out" auth)"
+# Vague overflow: no number -> null, and today's behavior is untouched.
+VAGUE="$TMP/f-vague.out"; printf 'Error: prompt is too long for this model.\n' > "$VAGUE"
+assert_eq "F: vague overflow wording still classifies invalid_request" "invalid_request" \
+    "$(rr_classify 1 "$VAGUE" | jq -r '.failure_class')"
+assert_eq "F: ...but records NO observed limit" "" \
+    "$(rr_context_limit_observed "$VAGUE" invalid_request)"
+
+FDOC=$(rr_result 1 "$FX/vllm-context-overflow.out" claude-code local-vllm small qwen - poolF - '{}' 200000)
+assert_eq "F: declared, observed and effective are recorded as three distinct facts" "200000 32768 32768" \
+    "$(jq -r '"\(.context_limit_declared) \(.context_limit_observed) \(.context_limit_effective)"' <<< "$FDOC")"
+assert_eq "F: the evidence source is named whenever a limit was observed" "invalid_request numeric maximum (this attempt)" \
+    "$(jq -r '.context_limit_evidence' <<< "$FDOC")"
+# THE CRUX (FR-F6): an observation is an upper bound seen while
+# FAILING, never a capacity proof. With no declaration there is nothing
+# to narrow, so effective stays null even though 32768 was observed.
+FDOC_UNDECL=$(rr_result 1 "$FX/vllm-context-overflow.out" claude-code local-vllm small qwen - poolF - '{}' -)
+assert_eq "F: an observation WITHOUT a declaration leaves effective null, never substituting for one" "null 32768 null" \
+    "$(jq -r '"\(.context_limit_declared) \(.context_limit_observed) \(.context_limit_effective)"' <<< "$FDOC_UNDECL")"
+# An observation ABOVE the declaration never broadens it.
+FDOC_WIDE=$(rr_result 1 "$FX/vllm-context-overflow.out" claude-code local-vllm small qwen - poolF - '{}' 20000)
+assert_eq "F: an observation above the declaration never broadens it" "20000" \
+    "$(jq -r '.context_limit_effective' <<< "$FDOC_WIDE")"
+# A clean success records the group as all-null, never a fabricated number.
+FDOC_OK=$(rr_result 0 "$FX/success-clean.out" claude-code anthropic big sonnet - poolF - '{}' 200000)
+assert_eq "F: a success observes nothing — no limit is ever fabricated" "null null" \
+    "$(jq -r '"\(.context_limit_observed) \(.context_limit_evidence)"' <<< "$FDOC_OK")"
+
+# Registry validation: positive integer, refused by name otherwise.
+FBAD="$TMP/f-bad.toml"; sed 's/^priority = 10$/priority = 10\ncontext_limit = 0/' "$GOOD" > "$FBAD"
+assert_eq "F: a non-positive context_limit is refused" "1" \
+    "$( ( set +e; rc_validate "$FBAD" >/dev/null 2>&1; echo $? ) )"
+assert "F: ...and the refusal says omission is the way to leave it undeclared" \
+    grep -q "omit the key when the window is undeclared" <<< "$(rc_validate "$FBAD" 2>&1)"
+
+# ── review round 2 ───────────────────────────────────────────────────
+# MISLEADING NUMBERS must never become a durable cap. The loose
+# pattern turned "error 42" into a 42-token ceiling, permanently
+# stranding the profile; it also rejected legitimate small limits.
+fx_num() { local f="$TMP/f-num.out"; printf '%s\n' "$1" > "$f"; rr_context_limit_observed "$f" invalid_request; }
+assert_eq "F: an error CODE after the context phrase is not a limit" "" \
+    "$(fx_num "maximum context length exceeded (error 42)")"
+assert_eq "F: an HTTP code after the context phrase is not a limit" "" \
+    "$(fx_num "maximum context window problem, code 503")"
+assert_eq "F: a connector-form limit IS read" "32768" \
+    "$(fx_num "maximum context length: 32768")"
+assert_eq "F: 'context window of N' is read" "128000" \
+    "$(fx_num "context window of 128000 tokens")"
+assert_eq "F: a single-digit limit is valid and no longer excluded" "8" \
+    "$(fx_num "maximum context length is 8 tokens")"
+
+# PRIOR-OBSERVATION TELEMETRY. An attempt constrained by an earlier
+# identity-bound observation that then SUCCEEDS must not report the
+# declaration as effective — the record would contradict the routing
+# decision it exists to explain.
+FDOC_PRIOR=$(rr_result 0 "$FX/success-clean.out" claude-code local-vllm small qwen - poolF - '{}' 200000 32768)
+assert_eq "F: a SUCCESS under a prior 32768 observation reports 32768 effective, not 200000" "200000 32768 32768" \
+    "$(jq -r '"\(.context_limit_declared) \(.context_limit_observed) \(.context_limit_effective)"' <<< "$FDOC_PRIOR")"
+assert_eq "F: ...and names the prior observation as the source" "prior identity-bound observation" \
+    "$(jq -r '.context_limit_evidence' <<< "$FDOC_PRIOR")"
+# This attempt's own overflow outranks a wider prior one.
+FDOC_TIGHTER=$(rr_result 1 "$FX/vllm-context-overflow.out" claude-code local-vllm small qwen - poolF - '{}' 200000 65536)
+assert_eq "F: this attempt's tighter overflow (32768) outranks a wider prior (65536)" "32768" \
+    "$(jq -r '.context_limit_observed' <<< "$FDOC_TIGHTER")"
+assert_eq "F: ...attributed to this attempt" "invalid_request numeric maximum (this attempt)" \
+    "$(jq -r '.context_limit_evidence' <<< "$FDOC_TIGHTER")"
+
+# NEW records must carry the complete, self-consistent group even
+# though the schema keeps the fields optional for legacy compatibility.
+assert "F: rr_doc_invariant accepts a complete new-form document" \
+    rr_doc_invariant "$FDOC_PRIOR"
+assert_eq "F: ...and REFUSES one missing the context group (legacy shape is not producible)" "1" \
+    "$( ( set +e; rr_doc_invariant "$(jq -c 'del(.context_limit_declared,.context_limit_observed,.context_limit_effective,.context_limit_evidence)' <<< "$FDOC_PRIOR")"; echo $? ) )"
+assert_eq "F: ...and REFUSES an effective limit that contradicts declared+observed" "1" \
+    "$( ( set +e; rr_doc_invariant "$(jq -c '.context_limit_effective = 999999' <<< "$FDOC_PRIOR")"; echo $? ) )"
+assert_eq "F: ...and REFUSES evidence without an observation" "1" \
+    "$( ( set +e; rr_doc_invariant "$(jq -c '.context_limit_observed = null' <<< "$FDOC_PRIOR")"; echo $? ) )"
+
+# ── SCHEMA-VERSION COMPATIBILITY, stated as behaviour ────────────────
+# The decision (plan D6): schema_version stays 1 and the four
+# context_limit_* fields stay OPTIONAL, so records written before F
+# remain valid; completeness is enforced instead at the runtime
+# boundary, which only ever sees documents F itself produced. The two
+# halves are pinned together — either alone would be a silent trap.
+LEGACY_DOC=$(jq -c 'del(.context_limit_declared,.context_limit_observed,.context_limit_effective,.context_limit_evidence)' <<< "$FDOC_PRIOR")
+assert_eq "compat: schema_version is NOT bumped by the additive group" "1" \
+    "$(jq -r '.properties.schema_version.const' "$SCHEMA")"
+assert "compat: the four fields are absent from schema `required` (old records stay valid)" \
+    jq -e '[.required[]] | any(startswith("context_limit")) | not' "$SCHEMA"
+assert "compat: ...and the schema declares them, so new records are not additionalProperties violations" \
+    jq -e '(.properties | has("context_limit_declared")) and (.properties | has("context_limit_effective"))' "$SCHEMA"
+assert "compat: a pre-F record still VALIDATES against the shipped schema" \
+    python3 -c "
+import json,sys
+sch=json.load(open('$SCHEMA')); doc=json.loads(sys.stdin.read())
+req=set(sch['required']); missing=req-set(doc)
+assert not missing, missing
+allowed=set(sch['properties'])
+assert set(doc)<=allowed, set(doc)-allowed
+" <<< "$LEGACY_DOC"
+assert_eq "compat: ...but a pre-F record can never be PRODUCED anew (runtime boundary refuses)" "1" \
+    "$( ( set +e; rr_doc_invariant "$LEGACY_DOC"; echo $? ) )"
+# The FOUR-CASE version matrix, so no reader ever best-guesses a shape
+# it does not understand.
+assert "compat/version: a current-version record is accepted" \
+    rr_doc_invariant "$FDOC_PRIOR"
+assert_eq "compat/version: an UNKNOWN FUTURE schema_version is REFUSED, never read as today's shape" "1" \
+    "$( ( set +e; rr_doc_invariant "$(jq -c '.schema_version = 2' <<< "$FDOC_PRIOR")"; echo $? ) )"
+assert_eq "compat/version: a missing schema_version is refused too" "1" \
+    "$( ( set +e; rr_doc_invariant "$(jq -c 'del(.schema_version)' <<< "$FDOC_PRIOR")"; echo $? ) )"
 
 # The schema artifact itself: parseable with a duplicate-key-rejecting
 # parser, closed, and the frozen taxonomy pinned.

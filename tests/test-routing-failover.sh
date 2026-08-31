@@ -1134,6 +1134,308 @@ assert "identity: the review request carries the builder identity line" \
     grep -q "Builder identity: profile %s" "$REPO_DIR/scripts/review-round-runner.sh"
 assert "identity: the enum gained the independence disposition" \
     bash -c "source '$REPO_DIR/scripts/lib/routing-actions.sh'; ra_terminal_valid routing_reviewer_not_independent"
+
+# ── #109 increment F: context capability (§5 step 4) ─────────────────
+# THE COMPATIBILITY GATE FIRST: with no task requirement, the ladder
+# must be byte-identical to pre-F behavior. Every assertion below only
+# has meaning if this one holds.
+SEL_NOREQ=$(RT "$TMP/sel-clean.json" "$EFF" '[]')
+assert_eq "F compat: absent min_context_tokens leaves selection byte-identical" "$SEL" "$SEL_NOREQ"
+
+FREG="$TMP/f-reg.toml"
+cat > "$FREG" <<'FEOF'
+schema_version = 1
+
+[[profiles]]
+id = "big"
+backend = "claude-code"
+provider = "anthropic"
+model = "sonnet"
+capability_tier = "tier1"
+priority = 10
+quota_pool = "poolF"
+roles = ["build"]
+tool_profile = "full-cct"
+credential_mode = "claude-login"
+data_policy = "approved-cloud"
+context_limit = 200000
+
+[[profiles]]
+id = "small"
+backend = "claude-code"
+provider = "local-vllm"
+model = "qwen"
+capability_tier = "tier1"
+priority = 20
+quota_pool = "poolF"
+roles = ["build"]
+tool_profile = "local-builder-minimal"
+credential_env = "CCT_LOCAL_API_KEY"
+data_policy = "local-only"
+context_limit = 32768
+
+[[profiles]]
+id = "undeclared"
+backend = "pi"
+provider = "anthropic"
+model = "sonnet"
+capability_tier = "tier1"
+priority = 30
+quota_pool = "poolF"
+roles = ["build"]
+tool_profile = "full-cct"
+credential_mode = "claude-login"
+data_policy = "approved-cloud"
+FEOF
+FEFF=$( ( set +e; source "$CLIB"; rc_effective "$FREG" - ) )
+RTC() {  # <state-file> <effective> <attempted> <role> <route-class> <min-context>
+    ( set +e; CCT_ROUTING_STATE="$1"; source "$REPO_DIR/scripts/lib/routing-select.sh"
+      rt_select "$2" "$3" "$4" "$5" "$6" )
+}
+
+assert_eq "F: a registry declaring context_limit still validates" "0" \
+    "$( ( set +e; source "$CLIB"; rc_validate "$FREG" >/dev/null 2>&1; echo $? ) )"
+assert_eq "F: context_limit rides BESIDE the tuple, never inside it" "12" \
+    "$(jq '.candidates[0] | length' <<< "$FEFF")"
+assert_eq "F: declared limits are exposed as an id-keyed map" "200000" \
+    "$(jq -r '.context_limits.big' <<< "$FEFF")"
+assert_eq "F: an undeclared profile is ABSENT from the map, never 0 or null-as-unlimited" "false" \
+    "$(jq -r '.context_limits | has("undeclared")' <<< "$FEFF")"
+
+# D2 row 3: declared, no observation -> declared governs
+FS="$TMP/f-state.json"; : > "$FS"; rm -f "$FS"
+SELF=$(RTC "$FS" "$FEFF" '[]' build tier1_only 150000)
+assert_eq "F: a task requiring 150000 selects the profile declaring 200000" "big" \
+    "$(jq -r '.selected.id' <<< "$SELF")"
+assert_eq "F: ...and the 32768 profile is rejected on capability" "rejected" \
+    "$(verdict_of "$SELF" small)"
+assert "F: ...with both the requirement and the effective limit named" \
+    grep -q "requires 150000 tokens of context; effective limit is 32768" <<< "$(reason_of "$SELF" small)"
+
+# D2 rows 1-2 (FR-F3 + FR-F6): unknown capacity is INELIGIBLE, and an
+# observation alone never makes it eligible.
+assert_eq "F: an undeclared profile is ineligible once a task states a requirement" "rejected" \
+    "$(verdict_of "$SELF" undeclared)"
+assert "F: ...and the reason says capacity is unproven, not 'too small'" \
+    grep -q "declares no context_limit — capacity is unproven" <<< "$(reason_of "$SELF" undeclared)"
+
+# D2 row 4 (FR-F5): an observation NARROWS a declaration.
+FS2="$TMP/f-state-obs.json"; rm -f "$FS2"
+BIG_DG=$(jq -r '.identities.big' <<< "$FEFF")
+( set +e; CCT_ROUTING_STATE="$FS2"; source "$REPO_DIR/scripts/lib/routing-state.sh"
+  rs_record_context_limit "a1" "$BIG_DG" big 32768 "test" >/dev/null 2>&1 )
+SELO=$(RTC "$FS2" "$FEFF" '[]' build tier1_only 150000)
+assert_eq "F: an observed 32768 narrows a declared 200000 — the profile is refused" "rejected" \
+    "$(verdict_of "$SELO" big)"
+assert "F: ...and the reason names the observation as the narrowing source" \
+    grep -q "narrowed by an upper bound seen from this exact execution identity" <<< "$(reason_of "$SELO" big)"
+
+# D2 row 5 (FR-F5): an observation may NEVER broaden a declaration.
+FS3="$TMP/f-state-wide.json"; rm -f "$FS3"
+SMALL_DG=$(jq -r '.identities.small' <<< "$FEFF")
+( set +e; CCT_ROUTING_STATE="$FS3"; source "$REPO_DIR/scripts/lib/routing-state.sh"
+  rs_record_context_limit "a2" "$SMALL_DG" small 400000 "test" >/dev/null 2>&1 )
+SELW=$(RTC "$FS3" "$FEFF" '[]' build tier1_only 150000)
+assert_eq "F: an observation ABOVE the declaration never broadens it" "rejected" \
+    "$(verdict_of "$SELW" small)"
+assert "F: ...the declared 32768 still governs" \
+    grep -q "effective limit is 32768 \[declared\]" <<< "$(reason_of "$SELW" small)"
+
+# FR-F7: identity binding. The SAME observation must not survive a
+# model change, because the digest keys the execution identity.
+FREG2="$TMP/f-reg2.toml"
+sed 's/^model = "sonnet"$/model = "opus"/' "$FREG" > "$FREG2"
+FEFF2=$( ( set +e; source "$CLIB"; rc_effective "$FREG2" - ) )
+assert "F: changing the model changes the execution-identity digest" \
+    test "$(jq -r '.identities.big' <<< "$FEFF2")" != "$BIG_DG"
+SELI=$(RTC "$FS2" "$FEFF2" '[]' build tier1_only 150000)
+assert_eq "F: an observation does NOT carry over to a changed execution identity" "big" \
+    "$(jq -r '.selected.id' <<< "$SELI")"
+
+# A malformed requirement is refused, never silently ignored.
+assert_eq "F: a non-positive min_context_tokens is refused by name" "1" \
+    "$( ( set +e; RTC "$FS" "$FEFF" '[]' build tier1_only 0 >/dev/null 2>&1; echo $? ) )"
+
+# ── review round 2: BEHAVIORAL boundaries ────────────────────────────
+# SEQUENTIAL OBSERVATIONS (FR-F5). The store must keep the TIGHTEST
+# bound ever seen, in EITHER arrival order. Recording 32768 then
+# 200000 previously broadened the cap back to 200000.
+RSQ() {  # <state> <first> <second> -> resulting stored bound
+    rm -f "$1"
+    ( set +e; CCT_ROUTING_STATE="$1"; source "$REPO_DIR/scripts/lib/routing-state.sh"
+      rs_record_context_limit s1 "$BIG_DG" big "$2" t >/dev/null 2>&1
+      rs_record_context_limit s2 "$BIG_DG" big "$3" t >/dev/null 2>&1
+      rs_observed_context_limit "$BIG_DG" )
+}
+assert_eq "F: narrow-then-wide keeps the NARROW bound (an observation never broadens)" "32768" \
+    "$(RSQ "$TMP/f-seq1.json" 32768 200000)"
+assert_eq "F: wide-then-narrow also settles on the narrow bound" "32768" \
+    "$(RSQ "$TMP/f-seq2.json" 200000 32768)"
+assert_eq "F: the narrower of three, whatever the order" "16384" \
+    "$( rm -f "$TMP/f-seq3.json"
+        ( set +e; CCT_ROUTING_STATE="$TMP/f-seq3.json"; source "$REPO_DIR/scripts/lib/routing-state.sh"
+          rs_record_context_limit s1 "$BIG_DG" big 65536 t >/dev/null 2>&1
+          rs_record_context_limit s2 "$BIG_DG" big 16384 t >/dev/null 2>&1
+          rs_record_context_limit s3 "$BIG_DG" big 99999 t >/dev/null 2>&1
+          rs_observed_context_limit "$BIG_DG" ) )"
+# ...and the narrowed bound actually governs a later selection.
+assert_eq "F: a sequentially-narrowed bound still refuses an oversized task" "rejected" \
+    "$(verdict_of "$(RTC "$TMP/f-seq1.json" "$FEFF" '[]' build tier1_only 150000)" big)"
+
+# MALFORMED OBSERVATION STORE fails closed (never falls back to the
+# wider declaration).
+# The fixture is deliberately STRUCTURALLY VALID JSON with a record
+# that is present but missing its required integer cap. That shape
+# reaches the validation boundary cleanly: with the guard in place it
+# is refused by name; with the guard removed it degrades to "absent",
+# the declared 200000 governs, and the profile is SELECTED — the exact
+# widening, provable without any shell arithmetic or parser crash. (A
+# non-numeric string here would instead blow up in bash `-lt` before
+# the boundary got control, proving nothing.)
+BADOBS="$TMP/f-badobs.json"
+printf '{"schema_version":1,"profiles":{},"pools":{},"applied":{},"observations":{"%s":{"profile":"big","evidence":"t","observed_at":1}}}\n' "$BIG_DG" > "$BADOBS"
+# ONE assertion binding the exit status to the guard's OWN reason. An
+# rc-only check was tautological here: a mutated build still exited
+# non-zero, but from a bash arithmetic error on the malformed value
+# rather than from the guard — the right status for the wrong reason.
+assert_eq "F: a malformed observation store refuses selection FROM THE GUARD, never widening to the declaration" "rc=1 guard=yes" \
+    "$( ( set +e
+          err=$(RTC "$BADOBS" "$FEFF" '[]' build tier1_only 150000 2>&1 >/dev/null); rc=$?
+          printf 'rc=%s guard=%s' "$rc" "$(grep -q 'not a safe fallback' <<< "$err" && echo yes || echo no)" ) )"
+
+# RESOLVED-ENDPOINT IDENTITY (FR-F7). The same base_url_env NAME
+# pointing at a different server must NOT reuse the observation.
+EPREG="$TMP/f-ep.toml"
+cat > "$EPREG" <<'EPEOF'
+schema_version = 1
+
+[[profiles]]
+id = "ep"
+backend = "claude-code"
+provider = "local-vllm"
+model = "qwen"
+capability_tier = "tier1"
+priority = 10
+quota_pool = "poolE"
+roles = ["build"]
+tool_profile = "local-builder-minimal"
+base_url_env = "CCT_F_TEST_URL"
+credential_env = "CCT_LOCAL_API_KEY"
+data_policy = "local-only"
+context_limit = 200000
+EPEOF
+DG_A=$( ( set +e; export CCT_F_TEST_URL="http://server-a:8000"; source "$CLIB"; rc_effective "$EPREG" - ) | jq -r '.identities.ep' )
+DG_B=$( ( set +e; export CCT_F_TEST_URL="http://server-b:8000"; source "$CLIB"; rc_effective "$EPREG" - ) | jq -r '.identities.ep' )
+assert "F: the identity digest tracks the RESOLVED endpoint, not just the variable name" \
+    test "$DG_A" != "$DG_B"
+assert "F: ...and both are real digests, not empty" \
+    test -n "$DG_A" -a -n "$DG_B"
+# DETERMINISM: the same resolved endpoint must always yield the same
+# digest, or observations would never match their own identity.
+DG_A2=$( ( set +e; export CCT_F_TEST_URL="http://server-a:8000"; source "$CLIB"; rc_effective "$EPREG" - ) | jq -r '.identities.ep' )
+assert_eq "F: the digest is deterministic for an unchanged resolved endpoint" "$DG_A" "$DG_A2"
+# SECRET SAFETY: the digest is endpoint-sensitive but NOT
+# credential-sensitive. Changing the credential VALUE must not perturb
+# it — the credential never enters the identity, so the durable
+# observation key cannot become a secret-bearing surface. (It is a
+# hash regardless; this pins that the input excludes credentials.)
+DG_CRED=$( ( set +e; export CCT_F_TEST_URL="http://server-a:8000" CCT_LOCAL_API_KEY="rotated-secret-value"
+             source "$CLIB"; rc_effective "$EPREG" - ) | jq -r '.identities.ep' )
+assert_eq "F: rotating the CREDENTIAL value does not change the identity (no secret in the key)" "$DG_A" "$DG_CRED"
+assert "F: the identity is an opaque hex digest, never a URL or a value" \
+    bash -c "[[ '$DG_A' =~ ^[0-9a-f]{64}$ ]]"
+
+# ── review round 2: the fail-closed task lookup, tested DIRECTLY ─────
+# The packet-build validator and the routing_tasks_sha256 provenance
+# check both refuse a malformed source earlier, so the integration
+# test cannot reach this guard. Without a direct test the guard could
+# be deleted and every suite would stay green.
+RTMC() { ( set +e; source "$REPO_DIR/scripts/lib/routing-tasks.sh"
+           source_only=1
+           # the helper is defined in the supervisor; extract and eval
+           # just it, to test the boundary without launching a run
+           eval "$(sed -n '/^rt_task_min_context()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+           rt_task_min_context "$1" "$2"; echo "rc=$?" ) }
+TY="$TMP/f-tasks.yaml"
+cat > "$TY" <<'TEOF'
+schema_version: 1
+tasks:
+  needs-big:
+    route_class: tier1_only
+    outcome: x
+    min_context_tokens: 150000
+  no-req:
+    route_class: tier1_only
+    outcome: x
+TEOF
+assert_eq "F guard: a declared requirement is returned with rc 0" "150000
+rc=0" "$(RTMC "$TY" needs-big)"
+assert_eq "F guard: a genuinely ABSENT key is a definite 'no requirement' (rc 0, empty)" "rc=0" \
+    "$(RTMC "$TY" no-req)"
+BADY="$TMP/f-tasks-bad.yaml"
+printf 'schema_version: 1\ntasks:\n  needs-big:\n      : broken :\n' > "$BADY"
+assert_eq "F guard: an UNPARSEABLE source is INDETERMINATE (rc 1), never 'no requirement'" "rc=1" \
+    "$(RTMC "$BADY" needs-big)"
+assert_eq "F guard: a MISSING source is indeterminate too, never silently unconstrained" "rc=1" \
+    "$(RTMC "$TMP/f-does-not-exist.yaml" needs-big)"
+assert_eq "F guard: an UNKNOWN task id is indeterminate, never treated as unconstrained" "rc=1" \
+    "$(RTMC "$TY" ghost-task)"
+
+# ── RECOVERY IDENTITY: persisted, never re-resolved ─────────────────
+# On a replay the configuration may have moved. Binding evidence to
+# the CURRENT registry would attach an old attempt's observation to a
+# new provider/model/endpoint. rt_started_identity must return what
+# was persisted at launch and must not consult RT_EFFECTIVE at all.
+RSID() { ( set +e
+           RT_DIR="$1"; RT_EFFECTIVE="$2"
+           eval "$(sed -n '/^rt_started_identity()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+           rt_started_identity 1 ) }
+SDIR="$TMP/f-started"; mkdir -p "$SDIR"
+printf '{"attempt_id":"a1","attempt":1,"identity":"%s"}\n' "$DG_A" > "$SDIR/started-1.json"
+# A live configuration that disagrees with the persisted launch identity.
+LIVE_B=$(jq -nc --arg d "$DG_B" '{identities:{ep:$d}}')
+assert_eq "F: recovery reads the PERSISTED launch identity, not the live configuration" "$DG_A" \
+    "$(RSID "$SDIR" "$LIVE_B")"
+assert "F: ...and that persisted value is the endpoint-A identity, not endpoint-B's" \
+    test "$(RSID "$SDIR" "$LIVE_B")" != "$DG_B"
+# A pre-F started record has no identity: empty, never a live fallback.
+printf '{"attempt_id":"a1","attempt":1}\n' > "$SDIR/started-1.json"
+assert_eq "F: a pre-F started record yields NO identity rather than falling back to live config" "" \
+    "$(RSID "$SDIR" "$LIVE_B")"
+# The recording path must consult the persisted value, not the registry.
+assert "F: the observation-recording path binds to the persisted identity" \
+    grep -q 'cl_dg=$(rt_started_identity "$n")' "$REPO_DIR/scripts/cooldown-supervisor.sh"
+
+# ── DURABLE STATE compatibility (plan D5), stated as behaviour ───────
+# `observations` is additive under schema_version 1 and is NOT part of
+# rs_read's shape check, so a state file written before F keeps
+# loading. The three cases are pinned together: absent is a definite
+# "no observation"; present-and-well-formed reads back; present-and-
+# malformed REFUSES (never degrades to absent, which would discard a
+# proven cap).
+PREF="$TMP/f-pre-f-state.json"
+printf '{"schema_version":1,"profiles":{},"pools":{},"applied":{}}\n' > "$PREF"
+RSOBS() { ( set +e; CCT_ROUTING_STATE="$1"; source "$REPO_DIR/scripts/lib/routing-state.sh"
+            out=$(rs_observed_context_limit "$2" 2>/dev/null); echo "rc=$? out=${out:-<empty>}" ) }
+assert_eq "compat: a pre-F state file (no observations key) loads and reads as unobserved" "rc=0 out=<empty>" \
+    "$(RSOBS "$PREF" "$BIG_DG")"
+assert_eq "compat: a well-formed observations store reads back" "rc=0 out=32768" \
+    "$(RSOBS "$TMP/f-seq1.json" "$BIG_DG")"
+assert_eq "compat: a MALFORMED observations store refuses (rc 2), never degrades to absent" "rc=2 out=<empty>" \
+    "$(RSOBS "$BADOBS" "$BIG_DG")"
+# A pre-F state file must also still accept a NEW observation.
+assert_eq "compat: a pre-F state file accepts a first observation without migration" "65536" \
+    "$( ( set +e; CCT_ROUTING_STATE="$PREF"; source "$REPO_DIR/scripts/lib/routing-state.sh"
+          rs_record_context_limit m1 "$BIG_DG" big 65536 t >/dev/null 2>&1
+          rs_observed_context_limit "$BIG_DG" ) )"
+# FOURTH case: an unknown FUTURE state version must be refused
+# explicitly, so today's reader never reinterprets tomorrow's format
+# as today's. (rs_read owns this; pinned here beside the other three
+# so the whole matrix is visible in one place.)
+FUTS="$TMP/f-future-state.json"
+printf '{"schema_version":2,"profiles":{},"pools":{},"applied":{},"observations":{}}\n' > "$FUTS"
+assert_eq "compat: an unknown FUTURE state schema_version is REFUSED (rc 2), never read as today's" "rc=2 out=<empty>" \
+    "$(RSOBS "$FUTS" "$BIG_DG")"
 echo ""
 echo "========================================="
 echo "  routing-failover tests: $PASS passed, $FAIL failed"

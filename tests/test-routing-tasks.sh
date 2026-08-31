@@ -280,6 +280,51 @@ tasks:
     reorderable: maybe'
 assert_reject "non-boolean reorderable refused" "$TMP/case.yaml" "-" "reorderable must be true or false"
 
+# ── #109 increment F: min_context_tokens ─────────────────────────────
+mk 'schema_version: 1
+tasks:
+  a:
+    route_class: tier1_only
+    outcome: x
+    min_context_tokens: 150000'
+assert_accept "F: a positive min_context_tokens is accepted" "$TMP/case.yaml" "-"
+# The supervisor reads the requirement through rk_task_get; pin the
+# READ, not only the validation, so the value the filter receives is
+# proven to come back out of the dialect.
+assert_eq "F: the declared requirement reads back through rk_task_get" "150000" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-tasks.sh"
+          rk_parse "$TMP/case.yaml" >/dev/null 2>&1
+          rk_task_get a min_context_tokens ) )"
+assert_eq "F: a task with no requirement reads back empty, never 0" "" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-tasks.sh"
+          rk_parse "$TMP/case.yaml" >/dev/null 2>&1
+          rk_task_get a nonexistent_key 2>/dev/null ) )"
+
+mk 'schema_version: 1
+tasks:
+  a:
+    route_class: tier1_only
+    outcome: x
+    min_context_tokens: 0'
+assert_reject "F: a zero min_context_tokens is refused" "$TMP/case.yaml" "-" "min_context_tokens must be a positive integer"
+
+mk 'schema_version: 1
+tasks:
+  a:
+    route_class: tier1_only
+    outcome: x
+    min_context_tokens: lots'
+assert_reject "F: a non-numeric min_context_tokens is refused by name" "$TMP/case.yaml" "-" "min_context_tokens must be a positive integer"
+
+# Absence is the norm and must stay valid — this is what keeps every
+# pre-F routing-tasks.yaml working unchanged.
+mk 'schema_version: 1
+tasks:
+  a:
+    route_class: tier1_only
+    outcome: x'
+assert_accept "F: omitting min_context_tokens stays valid (no requirement stated)" "$TMP/case.yaml" "-"
+
 mk 'schema_version: 1
 tasks:
   a:
