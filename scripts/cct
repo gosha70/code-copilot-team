@@ -24,10 +24,14 @@ COMMANDS
                   capability, from their source-of-truth files.
                     cct list            print to the terminal
                     cct list --write    (re)generate docs/features.md
-  routing         Execution-profile routing (#109 increment A — read-only):
-                    cct routing validate [--config automation.json]
+  routing         Execution-profile routing (#109). Pure — read-only:
+                    cct routing validate [--config <automation.json>]
                     cct routing status
                     cct routing explain --route-class <class> [--role <role>]
+                    cct routing explain --feature <id> --task <id>
+                  Impure — these mutate routing state:
+                    cct routing enable <profile-id>
+                    cct routing tick --due --once [--wake]
   doctor          [planned] Check the environment: tools installed, gateway
                   reachable, provider profiles valid, keys + cost cap set.
   config          [planned] Inspect the layered config:

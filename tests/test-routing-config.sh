@@ -549,6 +549,24 @@ assert "purity: the state file is byte-identical after status+explain" \
 assert "cct dispatch: cct routing status works end to end" \
     env CCT_ROUTING_REGISTRY="$GOOD" CCT_ROUTING_STATE="$T5STATE" bash "$REPO_DIR/scripts/cct" routing status
 
+# The top-level help is the A5 surface a user actually reads, and it
+# drifted once already: it advertised routing as "increment A —
+# read-only" long after B-D shipped `enable` and `tick`, both of which
+# MUTATE routing state. A help text that under-reports an impure
+# command is a correctness defect, not cosmetics — pin every shipped
+# subcommand AND the pure/impure split so the next increment cannot
+# extend the surface without extending the help.
+CCT_HELP="$(bash "$REPO_DIR/scripts/cct" help 2>&1)"
+assert_eq "cct help: names every shipped routing subcommand, the task-addressed explain, and the impure split" "ok" \
+    "$( _m=""
+        for _s in validate status explain enable tick; do
+            grep -qE "cct routing $_s\b" <<< "$CCT_HELP" || _m="$_m no-$_s"
+        done
+        grep -qE 'cct routing explain --feature <id> --task <id>' <<< "$CCT_HELP" || _m="$_m no-task-explain"
+        grep -qiE 'impure' <<< "$CCT_HELP" || _m="$_m no-impure-label"
+        grep -qiE 'increment A .*read-only' <<< "$CCT_HELP" && _m="$_m stale-read-only-claim"
+        [[ -z "$_m" ]] && echo ok || echo "drift:$_m" )"
+
 echo ""
 echo "========================================="
 echo "  routing-config tests: $PASS passed, $FAIL failed"
