@@ -36,6 +36,16 @@ set -uo pipefail
 #      CCT_AUTOBUILD_PROFILE, CCT_PROVIDER_PROFILE, CCT_REVIEW_* (passed through)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# ── routed usage channel (#273, increment G of #109) ────────────────
+# The supervisor names the driver-owned evidence artifact via
+# CCT_ROUTING_USAGE_OUT. Capture it into a PRIVATE, non-exported
+# variable and unset the exported one immediately, BEFORE any backend
+# or tool subprocess is launched: an exported path would be inherited
+# by untrusted children, any of which could then write the artifact the
+# supervisor treats as authoritative driver evidence.
+ROUTED_USAGE_OUT="${CCT_ROUTING_USAGE_OUT:-}"
+unset CCT_ROUTING_USAGE_OUT
 # T5: load coverage and preset libraries (used by contract_initialiser).
 # Guard with a file-existence check so test-harness extractions that run
 # from tests/ don't emit noise when the lib dir isn't at tests/lib/.
@@ -3786,6 +3796,61 @@ run_codex_session() {
     SESSION_ID=$(printf '%s' "$result_obj" | jq -r '.session_id // empty' 2>/dev/null || true)
 }
 
+# publish_routed_usage <result-file> — the AUTHORITATIVE usage aggregate
+# for a routed run (#273, increment G of #109).
+#
+# The routing supervisor's main path wraps this driver, so what it
+# captures is this script's console output — a log, not a backend result
+# stream. Scraping that for accounting would either find nothing or, far
+# worse, match accounting-shaped log text. So the driver publishes what
+# it authoritatively parsed, and the supervisor joins it.
+#
+# Emitted ONLY when the supervisor asks. One canonical record per
+# invocation, ALWAYS — including EXPLICIT ABSENCE when the envelope
+# carries no accounting. Publishing silence matters: a missing record
+# would let a partial sum look like a complete run total.
+publish_routed_usage() {
+    local result_file="$1"
+    # The channel is captured PRIVATELY at driver start (see
+    # ROUTED_USAGE_OUT below) and the exported variable is unset before
+    # any backend launches, so a child process can neither see nor
+    # forge the driver-owned artifact.
+    [[ -n "${ROUTED_USAGE_OUT:-}" ]] || return 0
+    # shellcheck source=/dev/null
+    source "$SCRIPT_DIR/lib/routing-usage.sh" 2>/dev/null || {
+        err "routed usage: cannot load the usage reader"; return 1; }
+    local ev toks cost rec
+    # BACKEND-SPECIFIC selection through the SHARED reader — not a
+    # second generic parser. A generic result/turn.completed selector
+    # silently dropped pi, whose authoritative event is `usage`.
+    ev=$(ru_authoritative_event "$result_file" "$BACKEND")
+    toks='{}'; cost='{}'
+    if [[ -n "$ev" ]]; then
+        toks=$(ru_extract_tokens "$result_file" "$BACKEND")
+        local c; c=$(ru_reported_cost "$result_file" "$BACKEND")
+        [[ -n "$c" ]] && cost=$(jq -nc --arg c "$c" '{total_cost_usd:($c|tonumber)}')
+    fi
+    # ONE canonical record per invocation, ALWAYS — including explicit
+    # absence. A missing record would let a partial sum look complete,
+    # so silence is published rather than omitted.
+    rec=$(jq -nc --arg backend "$BACKEND" --argjson t "$toks" --argjson c "$cost" '
+        {type:"cct.routed_usage", backend:$backend}
+        + (if ($t | type) == "object" and ($t.status? == "reported")
+           then ([ {key:"input_tokens", value:$t.input},
+                   {key:"output_tokens", value:$t.output},
+                   {key:"cache_read_input_tokens", value:$t.cache_read},
+                   {key:"cache_creation_input_tokens", value:$t.cache_write} ]
+                 | map(select(.value != null)) | from_entries)
+           else {} end)
+        + $c') || { err "routed usage: could not compose the record"; return 1; }
+    # A requested channel that cannot be written is an ACCOUNTING
+    # FAILURE, not backend silence — the two must stay distinguishable.
+    if ! printf '%s\n' "$rec" >> "$ROUTED_USAGE_OUT"; then
+        err "routed usage: could not write '$ROUTED_USAGE_OUT' — refusing to let a write failure look like absent accounting"
+        return 1
+    fi
+}
+
 run_session() {
     # Scheduler invocation contract: dispatch to the configured agent backend.
     case "$BACKEND" in
@@ -3793,6 +3858,19 @@ run_session() {
         codex) run_codex_session "$@" ;;
         *)     run_claude_session "$@" ;;
     esac
+    # ONE publication point for every backend, so the routed aggregate
+    # cannot drift between dispatch branches.
+    #
+    # A failure here is DISPOSED, not returned: this script does not run
+    # under `set -e` and none of run_session's callers check its status,
+    # so merely returning non-zero would let a successful session
+    # continue with its accounting evidence silently missing — the exact
+    # shape of hole increment G exists to close.
+    if ! publish_routed_usage "${2:-}"; then
+        dispose "cost_accounting_failed" \
+            "the routed usage evidence for this session could not be published — refusing to continue with accounting that cannot be reconstructed" \
+            "null"
+    fi
 }
 
 compose_build_prompt() {

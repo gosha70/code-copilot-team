@@ -88,6 +88,55 @@
         "source_artifact": { "type": ["string", "null"] }
       }
     },
+    "usage": {
+      "description": "Routed usage/cost evidence (#273, increment G of #109 — acceptance criterion C30). Additive and NOT in `required`, on the same compatibility rule as the context_limit_* group: pre-G records stay valid, while newly produced records are held to the full block by ru_doc_invariant at the runtime boundary. THE GOVERNING RULE: unknown stays unknown — no token count is invented, and no USD is claimed because a cost cap or estimate exists.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokens", "cost"],
+      "properties": {
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "input",
+            "output",
+            "cache_read",
+            "cache_write",
+            "status"
+          ],
+          "properties": {
+            "input": { "type": ["integer", "null"], "minimum": 0 },
+            "output": { "type": ["integer", "null"], "minimum": 0 },
+            "cache_read": { "type": ["integer", "null"], "minimum": 0 },
+            "cache_write": { "type": ["integer", "null"], "minimum": 0 },
+            "status": {
+              "description": "`reported` when the backend exposed at least one token count; `unavailable` when it exposes no token accounting at all. `unavailable` carries null for every value — never a zero-fill, which would be a false claim of zero usage.",
+              "enum": ["reported", "unavailable"]
+            }
+          }
+        },
+        "cost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["usd", "basis", "price_version"],
+          "properties": {
+            "usd": {
+              "description": "null whenever the basis is unpriced or unavailable. NEVER 0 for unknown — zero means a genuine zero.",
+              "type": ["number", "null"],
+              "minimum": 0
+            },
+            "basis": {
+              "description": "reported: the backend stated a USD figure for this attempt. computed: derived from observed tokens and the configured price table. unpriced: the model is known but has no price entry. unavailable: nothing to price — no tokens and no reported cost, which is also the honest answer for subscription execution where a per-request marginal cost is not attributable.",
+              "enum": ["reported", "computed", "unpriced", "unavailable"]
+            },
+            "price_version": {
+              "description": "The rate's effective_date. Non-null exactly for `computed`; may be non-null for `reported` when the backend supplies one.",
+              "type": ["string", "null"]
+            }
+          }
+        }
+      }
+    },
     "artifacts": {
       "type": "object",
       "additionalProperties": { "type": "string" }

@@ -22,6 +22,9 @@
 # unknown — it may be quota, credentials, or policy). `denied` requires
 # an AFFIRMATIVE policy-denial signal.
 
+# shellcheck source=/dev/null
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/routing-usage.sh"
+
 RR_CLASSES="quota_exhausted rate_limited unavailable transport auth invalid_request denied execution unknown"
 
 # Each predicate is a named grep -iE pattern (also recorded as
@@ -177,6 +180,7 @@ rr_doc_invariant() {
          else false end)
         and (has("context_limit_declared") and has("context_limit_observed")
              and has("context_limit_effective") and has("context_limit_evidence"))
+        and has("usage")
         # evidence exists exactly when an observation does
         and ((.context_limit_observed == null) == (.context_limit_evidence == null))
         # an observation NEVER substitutes for a declaration (FR-F6)
@@ -187,7 +191,10 @@ rr_doc_invariant() {
                       and .context_limit_observed < .context_limit_declared
                    then .context_limit_observed
                    else .context_limit_declared end)
-             end)' >/dev/null 2>&1 <<< "$1"
+             end)' >/dev/null 2>&1 <<< "$1" || return 1
+    # the usage block's own shape (#273 increment G) — delegated so the
+    # two libraries keep one definition of the contract each
+    ru_doc_invariant "$(jq -c '.usage' <<< "$1")"
 }
 
 # rr_result <exit_code> <output_file> <backend> <provider> <profile>
@@ -215,15 +222,35 @@ rr_result() {
     local rc="$1" file="$2" backend="$3" provider="$4" profile="$5"
     local reqm="$6" effm="$7" pool="$8" origin="${9:--}" artifacts="${10:-{\}}"
     local declared="${11:--}" prior="${12:--}"
+    # The usage SOURCE is separate from the classification source: the
+    # supervisor's main path wraps the auto-build driver, whose stdout
+    # is a console log rather than a backend result stream, so usage
+    # there is joined from the driver's published artifact instead.
+    local ufile="${13:--}" ubackend="${14:--}"
+    [[ "$ufile" == "-" ]] && ufile="$file"
+    [[ "$ubackend" == "-" ]] && ubackend="$backend"
     local cls class this_obs
     cls=$(rr_classify "$rc" "$file") || return 1
     class=$(jq -r '.failure_class // ""' <<< "$cls")
     this_obs=$(rr_context_limit_observed "$file" "$class")
-    jq -n --argjson cls "$cls" --arg backend "$backend" --arg provider "$provider" \
+    # usage/cost evidence (#273, increment G). Composed from THIS
+    # attempt's own capture, and never from the driver's cost cap.
+    # Priced against the EFFECTIVE (served) model ONLY. A requested
+    # model never proves what served the request (#109 C13), so it must
+    # never price one — an unverified identity yields `unavailable`.
+    local usage urc=0
+    usage=$(ru_usage "$ufile" "$ubackend" "${effm:--}") || urc=$?
+    if [[ "$urc" -ne 0 ]]; then
+        echo "routing-result: refusing to compose a result whose usage evidence could not be resolved (exit $urc)" >&2
+        return 1
+    fi
+    local doc
+    doc=$(jq -n -c --argjson cls "$cls" --arg backend "$backend" --arg provider "$provider" \
           --arg profile "$profile" --arg reqm "$reqm" --arg effm "$effm" \
           --arg pool "$pool" --arg origin "$origin" --argjson rc "$rc" \
           --argjson artifacts "$artifacts" \
-          --arg decl "$declared" --arg tobs "$this_obs" --arg pobs "$prior" '
+          --arg decl "$declared" --arg tobs "$this_obs" --arg pobs "$prior" \
+          --argjson usage "$usage" '
         ($decl | if . == "-" or . == "" then null else tonumber end) as $d |
         ($tobs | if . == "" then null else tonumber end) as $t |
         ($pobs | if . == "-" or . == "" then null else tonumber end) as $p |
@@ -247,5 +274,16 @@ rr_result() {
                    elif $t != null and ($p == null or $t <= $p)
                      then "invalid_request numeric maximum (this attempt)"
                    else "prior identity-bound observation" end),
-                artifacts:$artifacts}'
+                usage:$usage,
+                artifacts:$artifacts}')
+    # THE RUNTIME BOUNDARY, actually enforced. Until now rr_doc_invariant
+    # was only ever called by tests, so a malformed block could still be
+    # persisted despite the strict predicate existing. Construct, then
+    # validate, then emit — and REFUSE on failure rather than degrading
+    # to `unavailable`, which would hide the defect as missing evidence.
+    if ! rr_doc_invariant "$doc"; then
+        echo "routing-result: the composed result violates the normalization boundary — refusing to emit it" >&2
+        return 1
+    fi
+    printf '%s\n' "$doc"
 }
