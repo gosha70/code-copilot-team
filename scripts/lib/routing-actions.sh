@@ -30,7 +30,13 @@ RA_UNAVAILABLE_COOLDOWN_SEC=300
 # The CLOSED terminal-reason enum. routing_attempt_indeterminate is
 # deliberately distinct from routing_no_eligible_profile: crash
 # ambiguity is not "no usable candidates".
-RA_TERMINAL_REASONS="routing_pool_exhausted routing_rate_limited routing_provider_unavailable routing_transport_failure routing_auth_failure routing_task_incompatible routing_policy_denied routing_unknown_failure routing_attempt_indeterminate routing_model_identity_mismatch routing_no_eligible_profile routing_reviewer_not_independent"
+#
+# routing_usage_evidence_unresolved (#273, increment G) is likewise its
+# own member: a result whose usage/cost evidence cannot be resolved is
+# neither a provider-availability event nor a task failure, and folding
+# it into routing_unknown_failure would hide a broken price table or a
+# lost evidence channel among genuine provider faults.
+RA_TERMINAL_REASONS="routing_pool_exhausted routing_rate_limited routing_provider_unavailable routing_transport_failure routing_auth_failure routing_task_incompatible routing_policy_denied routing_unknown_failure routing_attempt_indeterminate routing_model_identity_mismatch routing_no_eligible_profile routing_reviewer_not_independent routing_usage_evidence_unresolved"
 
 ra_terminal_valid() {  # <reason> -> 0 iff a member of the closed enum
     local r

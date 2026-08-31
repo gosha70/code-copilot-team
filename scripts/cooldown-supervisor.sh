@@ -1409,7 +1409,7 @@ delegate_run() {
     prompt_file="$RT_DIR/prompt-$attempt_no.txt"
     rt_packet_prompt "$round" "$prompt_file" "${DELEGATE_LAST_FAILURES:--}"
     OUT="$(mktemp)"
-    rt_tmp_track "$OUT" "$OUT.stderr" "$OUT.txt"
+    rt_tmp_track "$OUT" "$OUT.stderr" "$OUT.txt" "$OUT.all"
     set +e
     # The profile's model, as --model args, for backends that take one.
     CX_MODEL_ARGS=()
@@ -1453,7 +1453,7 @@ delegate_run() {
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
                ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
                ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
-               "${CCT_PI_BIN:-pi-code}" --mode json -p ) < "$prompt_file" >"$OUT" 2>&1
+               "${CCT_PI_BIN:-pi-code}" --mode json -p ) < "$prompt_file" >"$OUT" 2>"$OUT.stderr"
     else
       ( cd "$PKT_WT" \
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
@@ -1461,7 +1461,7 @@ delegate_run() {
                ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
                "${CCT_CLAUDE_BIN:-claude-code}" -p --output-format json \
                --permission-mode acceptEdits \
-               --allowedTools "Read Grep Glob Edit Write Bash" ) < "$prompt_file" >"$OUT" 2>&1
+               --allowedTools "Read Grep Glob Edit Write Bash" ) < "$prompt_file" >"$OUT" 2>"$OUT.stderr"
     fi
     CHILD_CODE=$?
     set -e
@@ -1479,10 +1479,27 @@ delegate_run() {
     # echoed packet, so it gets the SAME scrub as $OUT before anything
     # persists, and it is never left behind in /tmp.
     [[ -s "$OUT.stderr" ]] && rt_scrub_out "$OUT.stderr"
+    # $OUT is now STDOUT ONLY for every backend, which is what makes it
+    # a sound usage source: merged stderr let a JSON diagnostic (or an
+    # echoed prompt) carrying type=usage/result masquerade as the
+    # backend's own authoritative event — the #199 hazard, applied to
+    # accounting. Classification still needs everything, so it reads a
+    # COMBINED view; only stdout feeds ru_usage.
+    cat "$OUT" > "$OUT.all"
+    # CODEX STDERR IS EXCLUDED from the classification view, for the
+    # same reason it is excluded from the verdict stream (#199): codex
+    # echoes the prompt there, so packet text could otherwise choose a
+    # failure class — and therefore the routing action. Claude and pi
+    # stderr IS trusted classification evidence; it is where their real
+    # provider failures surface. Codex keeps its stderr scrubbed and
+    # persisted for diagnostics, just never parsed.
+    if [[ "$(jq -r '.backend' <<< "$pj")" != "codex" && -s "$OUT.stderr" ]]; then
+      cat "$OUT.stderr" >> "$OUT.all"
+    fi
     cat "$OUT"
 
     if [[ "$CHILD_CODE" -eq 6 ]]; then
-      rm -f "$OUT" "$OUT.stderr" "$OUT.txt"
+      rm -f "$OUT" "$OUT.stderr" "$OUT.txt" "$OUT.all"
       jq -n --arg id "$attempt_id" '{schema_version:1, attempt_id:$id, outcome:"terminated_policy"}' > "$RT_DIR/result-$attempt_no.json"
       notify "terminated_policy" "policy termination (exit 6) in a packet round — terminal, not rerouted"
       terminate "terminated_policy" 6 "packet child exited terminated_policy (exit 6); terminal by contract"
@@ -1492,13 +1509,16 @@ delegate_run() {
     requested=$(jq -r '.model' <<< "$pj")
     effective=$(rt_effective_model "$OUT")
     decision_epoch=$(now_epoch)
-    result=$(rr_result "$CHILD_CODE" "$OUT" \
+    result=$(rr_result "$CHILD_CODE" "$OUT.all" \
         "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
         "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}' \
-        "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")")
+        "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")" \
+        "$OUT" "$(jq -r '.backend' <<< "$pj")") || \
+        rt_refuse "routing_usage_evidence_unresolved" \
+          "the attempt result could not be composed because its usage/cost evidence did not resolve — a named refusal, never an unhandled status that exits the supervisor"
     decision=$(ra_decide "$result" "$(jq -r --arg id "$id" '.[$id] // 0' <<< "$RT_RETRY_COUNTS")" "$decision_epoch") \
         || rt_refuse "routing_unknown_failure" "the action policy failed to evaluate"
-    legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT" 2>/dev/null | tail -1 || true)"
+    legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT.all" 2>/dev/null | tail -1 || true)"
     cp "$OUT" "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
     # the decoded agent messages, so an operator reads prose not JSONL
     [[ -s "$OUT.txt" ]] && { printf '\n--- decoded agent messages ---\n'; \
@@ -1507,7 +1527,7 @@ delegate_run() {
     # is diagnosable; absent for backends that never wrote one
     [[ -s "$OUT.stderr" ]] && cat "$OUT.stderr" \
         >> "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
-    rm -f "$OUT" "$OUT.stderr" "$OUT.txt"
+    rm -f "$OUT" "$OUT.stderr" "$OUT.txt" "$OUT.all"
     jq -n --arg id "$attempt_id" --argjson r "$result" --argjson t "$decision_epoch" \
           --argjson d "$decision" --arg legacy "$legacy_hit" \
           '{attempt_id:$id, decision_epoch:$t, result:$r, decision:$d,
@@ -1806,7 +1826,7 @@ reconcile_run() {
     evid_file=$(ls "$RT_DIR"/verifiers-*.txt.log 2>/dev/null | sort | tail -1 || true)
     rt_reconcile_prompt "$prompt_file" "$patch_file" "${evid_file:-/dev/null}"
     OUT="$(mktemp)"
-    rt_tmp_track "$OUT" "$OUT.stderr" "$OUT.txt"
+    rt_tmp_track "$OUT" "$OUT.stderr" "$OUT.txt" "$OUT.all"
     set +e
     # The profile's model, as --model args, for backends that take one.
     CX_MODEL_ARGS=()
@@ -1849,7 +1869,7 @@ reconcile_run() {
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
                ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
                ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
-               "${CCT_PI_BIN:-pi-code}" --mode json -p ) < "$prompt_file" >"$OUT" 2>&1
+               "${CCT_PI_BIN:-pi-code}" --mode json -p ) < "$prompt_file" >"$OUT" 2>"$OUT.stderr"
     else
       ( cd "$PKT_WT" \
         && env CCT_PROJECT_DIR="$PKT_WT" CCT_PACKET_ID="$PKT_ID" \
@@ -1857,7 +1877,7 @@ reconcile_run() {
                ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
                "${CCT_CLAUDE_BIN:-claude-code}" -p --output-format json \
                --permission-mode acceptEdits \
-               --allowedTools "Read Grep Glob Edit Write Bash" ) < "$prompt_file" >"$OUT" 2>&1
+               --allowedTools "Read Grep Glob Edit Write Bash" ) < "$prompt_file" >"$OUT" 2>"$OUT.stderr"
     fi
     CHILD_CODE=$?
     set -e
@@ -1875,10 +1895,27 @@ reconcile_run() {
     # echoed packet, so it gets the SAME scrub as $OUT before anything
     # persists, and it is never left behind in /tmp.
     [[ -s "$OUT.stderr" ]] && rt_scrub_out "$OUT.stderr"
+    # $OUT is now STDOUT ONLY for every backend, which is what makes it
+    # a sound usage source: merged stderr let a JSON diagnostic (or an
+    # echoed prompt) carrying type=usage/result masquerade as the
+    # backend's own authoritative event — the #199 hazard, applied to
+    # accounting. Classification still needs everything, so it reads a
+    # COMBINED view; only stdout feeds ru_usage.
+    cat "$OUT" > "$OUT.all"
+    # CODEX STDERR IS EXCLUDED from the classification view, for the
+    # same reason it is excluded from the verdict stream (#199): codex
+    # echoes the prompt there, so packet text could otherwise choose a
+    # failure class — and therefore the routing action. Claude and pi
+    # stderr IS trusted classification evidence; it is where their real
+    # provider failures surface. Codex keeps its stderr scrubbed and
+    # persisted for diagnostics, just never parsed.
+    if [[ "$(jq -r '.backend' <<< "$pj")" != "codex" && -s "$OUT.stderr" ]]; then
+      cat "$OUT.stderr" >> "$OUT.all"
+    fi
     cat "$OUT"
 
     if [[ "$CHILD_CODE" -eq 6 ]]; then
-      rm -f "$OUT" "$OUT.stderr" "$OUT.txt"
+      rm -f "$OUT" "$OUT.stderr" "$OUT.txt" "$OUT.all"
       jq -n --arg id "$attempt_id" '{schema_version:1, attempt_id:$id, outcome:"terminated_policy"}' > "$RT_DIR/result-$attempt_no.json"
       notify "terminated_policy" "policy termination (exit 6) during reconciliation — terminal"
       terminate "terminated_policy" 6 "reconciler exited terminated_policy (exit 6); terminal by contract"
@@ -1887,13 +1924,16 @@ reconcile_run() {
     requested=$(jq -r '.model' <<< "$pj")
     effective=$(rt_effective_model "$OUT")
     decision_epoch=$(now_epoch)
-    result=$(rr_result "$CHILD_CODE" "$OUT" \
+    result=$(rr_result "$CHILD_CODE" "$OUT.all" \
         "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
         "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}' \
-        "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")")
+        "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")" \
+        "$OUT" "$(jq -r '.backend' <<< "$pj")") || \
+        rt_refuse "routing_usage_evidence_unresolved" \
+          "the attempt result could not be composed because its usage/cost evidence did not resolve — a named refusal, never an unhandled status that exits the supervisor"
     decision=$(ra_decide "$result" "$(jq -r --arg id "$id" '.[$id] // 0' <<< "$RT_RETRY_COUNTS")" "$decision_epoch") \
         || rt_refuse "routing_unknown_failure" "the action policy failed to evaluate"
-    legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT" 2>/dev/null | tail -1 || true)"
+    legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT.all" 2>/dev/null | tail -1 || true)"
     local verdict_line
     # the decoded view for codex; $OUT itself for plain-text backends
     _vsrc="$OUT"; [[ -s "$OUT.txt" ]] && _vsrc="$OUT.txt"
@@ -1906,7 +1946,7 @@ reconcile_run() {
     # is diagnosable; absent for backends that never wrote one
     [[ -s "$OUT.stderr" ]] && cat "$OUT.stderr" \
         >> "$RT_DIR/transcript-$attempt_no.log" 2>/dev/null || true
-    rm -f "$OUT" "$OUT.stderr" "$OUT.txt"
+    rm -f "$OUT" "$OUT.stderr" "$OUT.txt" "$OUT.all"
     jq -n --arg id "$attempt_id" --argjson r "$result" --argjson t "$decision_epoch" \
           --argjson d "$decision" --arg legacy "$legacy_hit" \
           '{attempt_id:$id, decision_epoch:$t, result:$r, decision:$d,
@@ -2239,6 +2279,10 @@ routing_iteration() {
 
   local OUT CHILD_CODE
   OUT="$(mktemp)"
+  # The evidence channel, TRACKED IMMEDIATELY so an interrupt between
+  # here and promotion cannot orphan accounting evidence in /tmp.
+  RT_USAGE_TMP="$(mktemp)"
+  rt_tmp_track "$RT_USAGE_TMP"
   set +e
   ( cd "$WORKTREE" \
     && env CCT_PROJECT_DIR="$WORKTREE" \
@@ -2252,10 +2296,28 @@ routing_iteration() {
            CCT_ROUTING_TOOL_PROFILE="$(jq -r '.tool_profile' <<< "$pj")" \
            ${RT_ENV_BASE_URL:+ANTHROPIC_BASE_URL="$RT_ENV_BASE_URL"} \
            ${RT_ENV_API_KEY:+ANTHROPIC_API_KEY="$RT_ENV_API_KEY"} \
+           CCT_ROUTING_USAGE_OUT="$RT_USAGE_TMP" \
            bash -c "${CCT_SUPERVISOR_HARNESS_CMD:-bash \"$REPO_DIR/scripts/auto-build-loop.sh\" \"$FEATURE_ID\" --resume}" ) \
     >"$OUT" 2>&1
   CHILD_CODE=$?
   set -e
+  # The side channel becomes DURABLE only now, after the child has
+  # exited. During the run the authoritative path does not exist, so a
+  # backend cannot append to it — and anything pre-seeded at that path
+  # is REPLACED here rather than merged, so a forged file cannot
+  # survive into the record either.
+  if [[ -s "$RT_USAGE_TMP" ]]; then
+    # A failed promotion is an ACCOUNTING failure with a name, not an
+    # incidental set -e exit: the evidence exists but cannot be made
+    # durable, which is exactly what the closed reason describes.
+    mv -f "$RT_USAGE_TMP" "$RT_DIR/usage-$attempt_no.jsonl" || \
+      rt_refuse "routing_usage_evidence_unresolved" \
+        "the routed usage evidence could not be promoted to '$RT_DIR/usage-$attempt_no.jsonl' — refusing rather than continuing with accounting that cannot be reconstructed"
+  else
+    # No evidence this attempt: clear any stale artifact from a previous
+    # attempt at the same number so it can never be read as this one's.
+    rm -f "$RT_DIR/usage-$attempt_no.jsonl" "$RT_USAGE_TMP" 2>/dev/null || true
+  fi
   rt_scrub_out "$OUT"
   cat "$OUT"
 
@@ -2272,10 +2334,34 @@ routing_iteration() {
   requested=$(jq -r '.model' <<< "$pj")
   effective=$(rt_effective_model "$OUT")
   decision_epoch=$(now_epoch)
+  # THE EVIDENCE CHANNEL, and the LIMIT of what it protects.
+  #
+  # What it does: the durable `usage-N.jsonl` does not exist while the
+  # child runs, its name is not in the child's environment, and the
+  # staged file is promoted by REPLACEMENT after the child exits — so
+  # anything pre-seeded at the durable path is discarded rather than
+  # merged, and the record is written from the driver's own parse.
+  #
+  # What it does NOT do: this is not a security boundary against a
+  # HOSTILE same-user child. The backend inherits TMPDIR and runs as
+  # the same user, so it can enumerate and write files there,
+  # including this one. Defending against that needs a capability the
+  # child cannot name at all (an inherited FD closed in backend
+  # subprocesses) or a separate uid/namespace; neither is available
+  # here. The threat this addresses is accidental collision and
+  # discovery, plus forged content at the predictable durable path —
+  # NOT a determined adversary inside the sandbox.
+  # $OUT here is the DRIVER's console output, not a backend result
+  # stream, so usage is joined from the aggregate the driver published
+  # rather than scraped from log text (which would find nothing, or
+  # worse, match accounting-shaped log lines).
   result=$(rr_result "$CHILD_CODE" "$OUT" \
       "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
       "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}' \
-      "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")")
+      "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")" \
+      "$RT_DIR/usage-$attempt_no.jsonl" driver-aggregate) || \
+      rt_refuse "routing_usage_evidence_unresolved" \
+        "the attempt result could not be composed because its usage/cost evidence did not resolve — a named refusal, never an unhandled status that exits the supervisor"
   decision=$(ra_decide "$result" "$(jq -r --arg id "$id" '.[$id] // 0' <<< "$RT_RETRY_COUNTS")" "$decision_epoch") \
       || rt_refuse "routing_unknown_failure" "the action policy failed to evaluate"
   legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT" 2>/dev/null | tail -1 || true)"

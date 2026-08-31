@@ -286,7 +286,7 @@ assert_eq "ISO reset time is extracted when present" "2026-08-24T10:00:00Z" \
 # The full composed document conforms to the CLOSED schema shape.
 DOC=$(rr_result 1 "$FX/claude-session-limit.out" "claude-code" "anthropic-subscription" "alpha" "sonnet" "-" "anthropic-subscription" "api.anthropic.com" '{"stderr":"x.log"}')
 assert_eq "rr_result: exact closed key set" \
-    "artifacts backend context_limit_declared context_limit_effective context_limit_evidence context_limit_observed effective_model evidence exit_code failure_class outcome profile provider quota_pool requested_model reset_at retry_after_sec schema_version upstream_origin" \
+    "artifacts backend context_limit_declared context_limit_effective context_limit_evidence context_limit_observed effective_model evidence exit_code failure_class outcome profile provider quota_pool requested_model reset_at retry_after_sec schema_version upstream_origin usage" \
     "$(jq -r 'keys | sort | join(" ")' <<< "$DOC")"
 assert_eq "rr_result: unverifiable effective model is null, never assumed" "null" \
     "$(jq -r '.effective_model // "null"' <<< "$DOC")"
@@ -414,6 +414,383 @@ assert_eq "compat/version: an UNKNOWN FUTURE schema_version is REFUSED, never re
     "$( ( set +e; rr_doc_invariant "$(jq -c '.schema_version = 2' <<< "$FDOC_PRIOR")"; echo $? ) )"
 assert_eq "compat/version: a missing schema_version is refused too" "1" \
     "$( ( set +e; rr_doc_invariant "$(jq -c 'del(.schema_version)' <<< "$FDOC_PRIOR")"; echo $? ) )"
+
+# ── #109 increment G (#273): routed usage/cost evidence — C30 ────────
+# Every assertion below is a counterexample to a REPRODUCED defect in
+# the first implementation. Field presence proves nothing here: the
+# first version had all the fields and still recorded forged evidence,
+# zero-filled buckets, and prices from an unverified model.
+gmk() { local f="$TMP/g-$1.out"; printf '%s\n' "$2" > "$f"; printf '%s' "$f"; }
+gusage() { rr_result 0 "$1" "$2" openai gprofile REQ "$3" poolG - '{}' - - | jq -c '.usage'; }
+
+# (1) PROVENANCE — usage is read only from a backend's authoritative
+# result event. A non-authoritative event claiming tokens and USD must
+# contribute NOTHING; the first version recorded 777/12 and $9.99 from
+# a `type=assistant` line.
+FORGED=$(gmk forged '{"type":"assistant","usage":{"input_tokens":777,"output_tokens":12},"total_cost_usd":9.99}')
+assert_eq "G/provenance: a non-authoritative event contributes NO tokens" "null null unavailable" \
+    "$(gusage "$FORGED" claude-code claude-sonnet-4-8 | jq -r '"\(.tokens.input) \(.tokens.output) \(.tokens.status)"')"
+assert_eq "G/provenance: ...and no cost, however loudly it claims one" "null unavailable" \
+    "$(gusage "$FORGED" claude-code claude-sonnet-4-8 | jq -r '"\(.cost.usd) \(.cost.basis)"')"
+# An unknown backend has no authoritative event, so it reports nothing.
+assert_eq "G/provenance: an unknown backend yields no usage rather than a guess" "unavailable" \
+    "$(gusage "$(gmk auth '{"type":"result","usage":{"input_tokens":5},"total_cost_usd":1}')" mystery-backend claude-sonnet-4-8 | jq -r '.tokens.status')"
+
+# (2) COMPLETE BUCKETS — a cost is computed only when every bucket with
+# a non-zero rate is present. The first version zero-filled the rest,
+# so an output-only transcript priced as if input were 0.
+PARTIAL=$(gmk partial '{"type":"turn.completed","usage":{"output_tokens":30}}')
+assert_eq "G/buckets: partial evidence does NOT produce a computed cost" "null unavailable" \
+    "$(gusage "$PARTIAL" codex claude-sonnet-4-8 | jq -r '"\(.cost.usd) \(.cost.basis)"')"
+assert_eq "G/buckets: ...while the partial token evidence is still retained" "30 reported" \
+    "$(gusage "$PARTIAL" codex claude-sonnet-4-8 | jq -r '"\(.tokens.output) \(.tokens.status)"')"
+FULL=$(gmk full '{"type":"turn.completed","usage":{"input_tokens":120,"output_tokens":30,"cached_input_tokens":50,"cache_creation_input_tokens":0}}')
+assert_eq "G/buckets: complete buckets DO compute, with provenance" "computed 2026-05-01" \
+    "$(gusage "$FULL" codex claude-sonnet-4-8 | jq -r '"\(.cost.basis) \(.cost.price_version)"')"
+assert_eq "G/buckets: ...and the figure is derived from the observed tokens" "0.000825" \
+    "$(gusage "$FULL" codex claude-sonnet-4-8 | jq -r '.cost.usd')"
+assert_eq "G/buckets: an unreported bucket stays null, never zero-filled" "null" \
+    "$(gusage "$PARTIAL" codex claude-sonnet-4-8 | jq -r '.tokens.input')"
+
+# (3) VALIDATED PRICING — rates resolve through the existing config
+# loader, so its documented DEEP-MERGE layering and its validation both
+# apply. The first version picked the first file containing
+# `pricing.models` and read it with raw jq: a partial override replaced
+# the defaults, missing rates silently became 0, and the result was
+# still labelled computed.
+GPO="$TMP/g-price-partial.json"
+printf '{"pricing":{"models":{"claude-sonnet-4-8":{"input":99.0}}}}\n' > "$GPO"
+assert_eq "G/pricing: a partial override DEEP-MERGES over the defaults, never replacing them" "99.0 15.0 0.3" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-usage.sh"
+          ru_rate claude-sonnet-4-8 "$GPO" | jq -r '"\(.input) \(.output) \(.cache_read)"' ) )"
+GPC="$TMP/g-price-currency.json"
+printf '{"pricing":{"models":{"claude-sonnet-4-8":{"currency":"EUR","effective_date":"2026-09-01","input":2.5}}}}\n' > "$GPC"
+assert_eq "G/pricing: a table mixing currencies is REFUSED, not silently priced" "" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-usage.sh"
+          ru_rate claude-sonnet-4-8 "$GPC" ) )"
+assert "G/pricing: the shared validator names a missing rate rather than defaulting it to 0" \
+    bash -c "PYTHONPATH='$REPO_DIR/scripts' python3 -c \"
+from session_analytics.config import _load_pricing
+try:
+    _load_pricing({'pricing':{'models':{'m':{'currency':'USD','effective_date':'2026-09-01','input':2.5}}}})
+    raise SystemExit(1)
+except ValueError as e:
+    raise SystemExit(0 if 'missing rate' in str(e) else 1)
+\""
+assert_eq "G/pricing: a verified model with no price entry is unpriced, never 0" "null unpriced" \
+    "$(gusage "$FULL" codex totally-unpriced-model | jq -r '"\(.cost.usd) \(.cost.basis)"')"
+
+# (4) VERIFIED IDENTITY — pricing uses the EFFECTIVE model only. The
+# first version fell back to the requested model, contradicting the
+# merged C13 finding that requested never proves served.
+assert_eq "G/identity: an unverified effective model is never priced" "null unavailable" \
+    "$(rr_result 0 "$FULL" codex openai gprofile claude-sonnet-4-8 - poolG - '{}' - - | jq -r '"\(.usage.cost.usd) \(.usage.cost.basis)"')"
+assert_eq "G/identity: ...while a VERIFIED effective model prices normally" "computed" \
+    "$(rr_result 0 "$FULL" codex openai gprofile REQ claude-sonnet-4-8 poolG - '{}' - - | jq -r '.usage.cost.basis')"
+
+# (5) WRAPPER BOUNDARY — the supervisor's main path wraps the driver,
+# whose stdout is a console log. Accounting-shaped log text must never
+# become evidence; the driver publishes an aggregate instead.
+LOG=$(gmk log '- Cost: metered $12.34, estimated $5.00 (cap $25)
+[auto-build-loop.sh] input_tokens 999 output_tokens 888')
+assert_eq "G/wrapper: accounting-shaped LOG TEXT is never read as evidence" "null unavailable null unavailable" \
+    "$(gusage "$LOG" driver-aggregate claude-sonnet-4-8 | jq -r '"\(.tokens.input) \(.tokens.status) \(.cost.usd) \(.cost.basis)"')"
+AGG=$(gmk agg '{"type":"cct.routed_usage","backend":"claude","input_tokens":120,"output_tokens":30,"cache_read_input_tokens":50,"cache_creation_input_tokens":0,"total_cost_usd":0.75}')
+assert_eq "G/wrapper: the driver-published aggregate IS authoritative" "120 30 0.75 reported" \
+    "$(gusage "$AGG" driver-aggregate claude-sonnet-4-8 | jq -r '"\(.tokens.input) \(.tokens.output) \(.cost.usd) \(.cost.basis)"')"
+assert "G/wrapper: the supervisor joins that artifact instead of the console capture" \
+    grep -q 'usage-\$attempt_no.jsonl" driver-aggregate' "$REPO_DIR/scripts/cooldown-supervisor.sh"
+assert "G/wrapper: ...and the driver publishes it from ONE dispatch point" \
+    grep -q 'publish_routed_usage "\${2:-}"' "$REPO_DIR/scripts/auto-build-loop.sh"
+# BEHAVIOURAL, not structural: run the driver's publisher and read what
+# it actually emits. The function is extracted so this exercises the
+# real code without launching a build.
+# Mirrors the driver's real startup: the supervisor EXPORTS the path,
+# the driver captures it privately and unsets the exported variable
+# before any backend runs. Running the publisher this way means the
+# test exercises that contract rather than assuming it.
+gpub() {  # <result-file-content> <backend> [second-content] -> emitted records
+    ( set +e
+      BACKEND="$2"
+      SCRIPT_DIR="$REPO_DIR/scripts"
+      err() { :; }
+      export CCT_ROUTING_USAGE_OUT="$TMP/g-pub-$RANDOM.jsonl"
+      ROUTED_USAGE_OUT="${CCT_ROUTING_USAGE_OUT:-}"; unset CCT_ROUTING_USAGE_OUT
+      eval "$(sed -n '/^publish_routed_usage()/,/^}/p' "$REPO_DIR/scripts/auto-build-loop.sh")"
+      local rf="$TMP/g-pub-in-$RANDOM.jsonl"; printf '%s\n' "$1" > "$rf"
+      publish_routed_usage "$rf"
+      if [[ -n "${3:-}" ]]; then
+          local rf2="$TMP/g-pub-in2-$RANDOM.jsonl"; printf '%s\n' "$3" > "$rf2"
+          publish_routed_usage "$rf2"
+      fi
+      [[ -f "$ROUTED_USAGE_OUT" ]] && cat "$ROUTED_USAGE_OUT" || true )
+}
+assert_eq "G/wrapper: the publisher emits a cct.routed_usage record from the result envelope" "cct.routed_usage 120 30 0.75" \
+    "$(gpub '{"type":"result","total_cost_usd":0.75,"usage":{"input_tokens":120,"output_tokens":30}}' claude \
+       | jq -r '"\(.type) \(.input_tokens) \(.output_tokens) \(.total_cost_usd)"')"
+# EXPLICIT ABSENCE, not omission: a missing record would let a partial
+# sum look like a complete run total.
+assert_eq "G/wrapper: an invocation with no accounting still publishes an EXPLICIT absence record" "cct.routed_usage claude null null" \
+    "$(gpub '{"type":"result","subtype":"success"}' claude \
+       | jq -r '"\(.type) \(.backend) \(.input_tokens // "null") \(.total_cost_usd // "null")"')"
+# PI: the authoritative event is `usage`, which a generic
+# result/turn.completed selector silently dropped.
+assert_eq "G/wrapper: pi token evidence is published (its authoritative event is `usage`)" "50 7 3" \
+    "$(gpub '{"type":"usage","input_tokens":50,"output_tokens":7,"cache_read_tokens":3}
+{"type":"result","total_cost_usd":0.33}' pi \
+       | jq -r '"\(.input_tokens) \(.output_tokens) \(.cache_read_input_tokens)"')"
+# MULTI-SESSION: two invocations must aggregate to the RUN total, not
+# report only the last.
+MULTI=$(gpub '{"type":"result","total_cost_usd":0.10,"usage":{"input_tokens":10,"output_tokens":2}}' claude \
+              '{"type":"result","total_cost_usd":0.20,"usage":{"input_tokens":20,"output_tokens":3}}')
+assert_eq "G/wrapper: two invocations publish two records" "2" "$(printf '%s\n' "$MULTI" | grep -c cct.routed_usage)"
+assert_eq "G/wrapper: ...and the reader sums them into the RUN total, not the last session" "30 5 0.30000000000000004 reported" \
+    "$( f="$TMP/g-multi.jsonl"; printf '%s\n' "$MULTI" > "$f"
+        ( set +e; source "$REPO_DIR/scripts/lib/routing-usage.sh"
+          ru_usage "$f" driver-aggregate claude-sonnet-4-8 \
+            | jq -r '"\(.tokens.input) \(.tokens.output) \(.cost.usd) \(.cost.basis)"' ) )"
+# CONSERVATIVE: one silent invocation makes the run total unknown
+# rather than an understated partial sum.
+MIXED=$(gpub '{"type":"result","total_cost_usd":0.10,"usage":{"input_tokens":10,"output_tokens":2}}' claude \
+              '{"type":"result","subtype":"success"}')
+assert_eq "G/wrapper: one invocation without accounting makes the run total UNKNOWN, not a partial sum" "null unavailable null unavailable" \
+    "$( f="$TMP/g-mixed.jsonl"; printf '%s\n' "$MIXED" > "$f"
+        ( set +e; source "$REPO_DIR/scripts/lib/routing-usage.sh"
+          ru_usage "$f" driver-aggregate claude-sonnet-4-8 \
+            | jq -r '"\(.tokens.input) \(.tokens.status) \(.cost.usd) \(.cost.basis)"' ) )"
+assert_eq "G/wrapper: ...and its output is consumable end to end by the reader" "120 30 0.75 reported" \
+    "$( f="$TMP/g-pub-rt.jsonl"
+        gpub '{"type":"result","total_cost_usd":0.75,"usage":{"input_tokens":120,"output_tokens":30}}' claude > "$f"
+        ( set +e; source "$REPO_DIR/scripts/lib/routing-usage.sh"
+          ru_usage "$f" driver-aggregate claude-sonnet-4-8 \
+            | jq -r '"\(.tokens.input) \(.tokens.output) \(.cost.usd) \(.cost.basis)"' ) )"
+
+# STREAM SHAPES — the reader must accept every shape the shipped
+# backend parser accepts. The first version split on newlines only, so
+# an ordinary pretty-printed Claude result parsed as nothing.
+PRETTY=$(gmk pretty '{
+  "type": "result",
+  "total_cost_usd": 0.75,
+  "usage": { "input_tokens": 120, "output_tokens": 30 }
+}')
+assert_eq "G/shape: a PRETTY-PRINTED Claude result is parsed" "120 30 0.75 reported" \
+    "$(gusage "$PRETTY" claude-code claude-sonnet-4-8 | jq -r '"\(.tokens.input) \(.tokens.output) \(.cost.usd) \(.cost.basis)"')"
+ARR=$(gmk arr '[{"type":"result","total_cost_usd":0.5,"usage":{"input_tokens":10,"output_tokens":2}}]')
+assert_eq "G/shape: a JSON ARRAY stream is parsed" "10 2 reported" \
+    "$(gusage "$ARR" claude-code claude-sonnet-4-8 | jq -r '"\(.tokens.input) \(.tokens.output) \(.cost.basis)"')"
+JL=$(gmk jl '{"type":"system"}
+{"type":"result","total_cost_usd":0.25,"usage":{"input_tokens":7,"output_tokens":1}}')
+assert_eq "G/shape: JSONL is still parsed, and only the authoritative line counts" "7 1 0.25" \
+    "$(gusage "$JL" claude-code claude-sonnet-4-8 | jq -r '"\(.tokens.input) \(.tokens.output) \(.cost.usd)"')"
+
+# CARDINALITY IS PER BACKEND: the driver aggregate sums every record,
+# but a direct backend takes its LAST authoritative event, matching the
+# shipped parsers. Summing two pi `usage` events would report 30/5
+# where the pi parser keeps 20/3.
+PI2=$(gmk pi2 '{"type":"usage","input_tokens":10,"output_tokens":2}
+{"type":"usage","input_tokens":20,"output_tokens":3}')
+assert_eq "G/cardinality: a direct pi capture takes the LAST usage event, never a sum" "20 3" \
+    "$(gusage "$PI2" pi claude-sonnet-4-8 | jq -r '"\(.tokens.input) \(.tokens.output)"')"
+# LEGACY untyped Claude result — explicitly supported by the shipped
+# parser, and previously read as entirely unavailable.
+LEG="$REPO_DIR/scripts/benchmark_runner/tests/fixtures/claude_code/transcript-openai-shape.json"
+assert_eq "G/shape: the shipped LEGACY untyped Claude result is parsed" "9000 200 reported" \
+    "$(gusage "$LEG" claude-code claude-sonnet-4-8 | jq -r '"\(.tokens.input) \(.tokens.output) \(.tokens.status)"')"
+# ...but the fallback stays constrained: more than one event, or a
+# typed non-authoritative event, must NOT readmit the forgery hole.
+FORGE2=$(gmk forge2 '{"type":"assistant","usage":{"input_tokens":777}}
+{"type":"other"}')
+assert_eq "G/shape: the legacy fallback does not readmit forged multi-event streams" "unavailable" \
+    "$(gusage "$FORGE2" claude-code claude-sonnet-4-8 | jq -r '.tokens.status')"
+
+# DIAGNOSTIC TOLERANCE — direct claude and pi launches merge stderr
+# into the same capture. One warning line must not erase valid usage;
+# the shipped parsers skip unparseable lines, and so must this reader
+# or the two disagree.
+NOISY=$(gmk noisy 'warning: a diagnostic line on stderr
+{"type":"usage","input_tokens":10,"output_tokens":2}
+{"type":"usage","input_tokens":20,"output_tokens":3}')
+assert_eq "G/shape: a stderr diagnostic does not erase valid usage" "20 3 reported" \
+    "$(gusage "$NOISY" pi claude-sonnet-4-8 | jq -r '"\(.tokens.input) \(.tokens.output) \(.tokens.status)"')"
+CLEAN=$(gmk clean2 '{"type":"usage","input_tokens":10,"output_tokens":2}
+{"type":"usage","input_tokens":20,"output_tokens":3}')
+assert_eq "G/shape: ...and matches the clean capture exactly" \
+    "$(gusage "$CLEAN" pi claude-sonnet-4-8 | jq -c '.tokens')" \
+    "$(gusage "$NOISY" pi claude-sonnet-4-8 | jq -c '.tokens')"
+# Tolerance must not readmit forgery: skipping a bad line still leaves
+# the authoritative-event requirement in force.
+NOISYFORGE=$(gmk noisyforge 'warning: noise
+{"type":"assistant","usage":{"input_tokens":777},"total_cost_usd":9.99}')
+assert_eq "G/shape: skipping noise does not readmit a forged event" "unavailable" \
+    "$(gusage "$NOISYFORGE" claude-code claude-sonnet-4-8 | jq -r '.tokens.status')"
+
+# STREAM PROVENANCE — stdout only. Merged stderr let a VALID JSON
+# diagnostic carrying an authoritative type impersonate the backend's
+# own event and, as the last one, override real evidence. Skipping
+# unparseable lines does not help: the forgery is well-formed JSON.
+assert_eq "G/streams: usage is read from STDOUT, and the supervisor keeps them separate (codex+pi+claude, both sites)" "6" \
+    "$(grep -c '2>"\$OUT.stderr"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+# The load-bearing half: the USAGE argument must be stdout, not the
+# combined view. Pinning only the classification argument left the
+# actual forgery surface unguarded.
+assert_eq "G/streams: the USAGE argument is stdout-only, never the combined view" "2" \
+    "$(grep -c '"\$OUT" "\$(jq -r .\.backend. <<< "\$pj")")' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert_eq "G/streams: ...and the combined view is never passed as the usage source" "0" \
+    "$(grep -c '"\$OUT.all" "\$(jq -r .\.backend. <<< "\$pj")")' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert_eq "G/streams: classification reads the COMBINED view, so no diagnostic is lost" "2" \
+    "$(grep -c 'rr_result "\$CHILD_CODE" "\$OUT.all"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert_eq "G/streams: the combined view is tracked for cleanup, never orphaned in /tmp" "2" \
+    "$(grep -c 'rt_tmp_track "\$OUT" "\$OUT.stderr" "\$OUT.txt" "\$OUT.all"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+# Behaviourally: a stdout-only capture is immune to the forgery that a
+# merged capture accepts.
+FORGED_MERGE=$(gmk forgedmerge '{"type":"usage","input_tokens":20,"output_tokens":3}
+{"type":"usage","input_tokens":777,"output_tokens":12}')
+assert_eq "G/streams: a merged stream WOULD be forgeable (why separation is required)" "777" \
+    "$(gusage "$FORGED_MERGE" pi claude-sonnet-4-8 | jq -r '.tokens.input')"
+STDOUT_ONLY=$(gmk stdoutonly '{"type":"usage","input_tokens":20,"output_tokens":3}')
+assert_eq "G/streams: ...while the separated stdout carries only the backend's own event" "20 3" \
+    "$(gusage "$STDOUT_ONLY" pi claude-sonnet-4-8 | jq -r '"\(.tokens.input) \(.tokens.output)"')"
+# And the staged temp must be tracked the moment it exists.
+assert_eq "G/staging: the staged file is tracked for cleanup immediately" "1" \
+    "$(grep -c 'rt_tmp_track "\$RT_USAGE_TMP"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert_eq "G/staging: a failed promotion is a NAMED accounting refusal, not a set -e exit" "1" \
+    "$(grep -c 'could not be promoted to' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+
+# CODEX STDERR MUST NOT REACH CLASSIFICATION. Separating the streams
+# fixed usage provenance but reintroduced the #199 hazard through the
+# combined classification view: codex echoes the prompt on stderr, so
+# packet text could choose a failure class and therefore the routing
+# action. BEHAVIOURAL counterfactual — the launch-redirection
+# assertions cannot see a later concatenation.
+CXO=$(gmk cx-stdout '{"type":"item.completed","item":{"text":"build failed somehow"}}')
+CXE=$(gmk cx-both '{"type":"item.completed","item":{"text":"build failed somehow"}}
+prompt echo: ... please handle the rate limit case ...')
+assert_eq "G/codex: stdout alone classifies on its own evidence" "execution" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"; rr_classify 1 "$CXO" | jq -r '.failure_class' ) )"
+assert_eq "G/codex: an echoed PROMPT on stderr would change the class (why it must be excluded)" "rate_limited" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"; rr_classify 1 "$CXE" | jq -r '.failure_class' ) )"
+# ...so the supervisor must build the codex classification view from
+# stdout ONLY, at both routed-backend sites.
+assert_eq "G/codex: the classification view excludes codex stderr at both sites" "2" \
+    "$(grep -c 'if \[\[ "\$(jq -r ..backend. <<< "\$pj")" != "codex" && -s "\$OUT.stderr" \]\]; then' \
+        "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert_eq "G/codex: ...and no site appends codex stderr unconditionally" "0" \
+    "$(grep -c '^ *\[\[ -s "\$OUT.stderr" \]\] && cat "\$OUT.stderr" >> "\$OUT.all"' \
+        "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+# The legacy usage-pattern scan must read the SAME safe view, or real
+# claude/pi stderr evidence is silently dropped.
+assert_eq "G/codex: the legacy usage scan reads the safe classification view" "2" \
+    "$(grep -c 'grep -iE "\$USAGE_PATTERN" "\$OUT.all"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+
+# RESOLVER FAILURE vs VALID-UNLISTED — a broken price table is an
+# operator error and must never be recorded as `unpriced`, which
+# asserts a valid table that simply lacks the model.
+GBADCFG="$TMP/g-badcfg.json"
+printf '{"pricing":{"models":{"claude-sonnet-4-8":{"currency":"EUR","effective_date":"2026-09-01","input":2.5}}}}\n' > "$GBADCFG"
+assert_eq "G/resolver: a broken price table REFUSES (rc 3), never degrading to unpriced" "3" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-usage.sh"
+          ru_cost '{"input":1,"output":1,"cache_read":1,"cache_write":1,"status":"reported"}' \
+            claude-sonnet-4-8 - "$GBADCFG" >/dev/null 2>&1; echo $? ) )"
+assert_eq "G/resolver: a VALID table lacking the model is unpriced (rc 0)" "0 unpriced" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-usage.sh"
+          out=$(ru_cost '{"input":1,"output":1,"cache_read":1,"cache_write":1,"status":"reported"}' no-such-model - 2>/dev/null); rc=$?
+          printf '%s %s' "$rc" "$(jq -r '.basis' <<< "$out")" ) )"
+assert "G/resolver: a non-USD rate is refused rather than stored in a field named usd" \
+    bash -c "cd '$REPO_DIR' && ! ( source scripts/lib/routing-usage.sh; ru_rate claude-sonnet-4-8 '$GBADCFG' ) >/dev/null 2>&1"
+
+# EVIDENCE-CHANNEL STAGING — and its stated LIMIT. RT_DIR sits inside
+# the backend's worktree and started-N.json reveals the attempt number,
+# so a predictable `usage-N.jsonl` there was both discoverable and
+# appendable while the child runs. Staging elsewhere and promoting
+# after exit removes that. It does NOT make the channel safe from a
+# hostile same-user child, which inherits TMPDIR — the assertions below
+# are named for what they actually prove.
+assert_eq "G/staging: the channel is staged outside the child worktree" "1" \
+    "$(grep -c 'RT_USAGE_TMP="\$(mktemp)"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert_eq "G/staging: the child is handed the staged path, never the durable one" "1" \
+    "$(grep -c 'CCT_ROUTING_USAGE_OUT="\$RT_USAGE_TMP"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert_eq "G/staging: the durable artifact is written only AFTER the child exits" "1" \
+    "$(grep -c 'mv -f "\$RT_USAGE_TMP" "\$RT_DIR/usage-\$attempt_no.jsonl"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+# WRITE ISOLATION, behaviourally: a record forged at the durable path
+# BEFORE the run must not survive into the evidence, because promotion
+# REPLACES rather than merges.
+GISO="$TMP/g-iso"; mkdir -p "$GISO"
+printf '{"type":"cct.routed_usage","backend":"claude","input_tokens":999999,"total_cost_usd":99.99}\n' \
+    > "$GISO/usage-1.jsonl"
+printf '{"type":"cct.routed_usage","backend":"claude","input_tokens":10,"output_tokens":2}\n' \
+    > "$GISO/private.jsonl"
+( set +e; mv -f "$GISO/private.jsonl" "$GISO/usage-1.jsonl" )   # the promotion step
+assert_eq "G/staging: a record forged at the DURABLE path is REPLACED, never merged" "1 10" \
+    "$(printf '%s %s' "$(grep -c cct.routed_usage "$GISO/usage-1.jsonl")" \
+                      "$(jq -r '.input_tokens' < "$GISO/usage-1.jsonl")")"
+assert_eq "G/staging: ...so that forged figure never reaches the reader" "10 2 reported" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-usage.sh"
+          ru_extract_tokens "$GISO/usage-1.jsonl" driver-aggregate \
+            | jq -r '"\(.input) \(.output) \(.status)"' ) )"
+
+# THE BOUNDARY IS PRODUCTION CODE, not a test-only predicate: rr_result
+# must refuse to emit a document that violates it.
+# The price override is an explicit ARGUMENT, never an ambient
+# variable: production must not consult the process environment for it.
+assert_eq "G/resolver: the override is a parameter, not an ambient env var" "0" \
+    "$(grep -c 'RU_PRICE_OVERRIDE' "$REPO_DIR/scripts/lib/routing-usage.sh" "$REPO_DIR/scripts/lib/routing-result.sh" \
+        | awk -F: '{n+=$2} END{print n+0}')"
+# rr_result must REFUSE — not exit, not degrade — when usage cannot be
+# resolved. Injected by stubbing the resolver, so this exercises
+# rr_result's real propagation path.
+assert_eq "G/boundary: rr_result REFUSES to emit when usage cannot be resolved" "1" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          ru_usage() { return 3; }
+          rr_result 0 "$FULL" codex openai p REQ claude-sonnet-4-8 poolG - '{}' - - >/dev/null 2>&1
+          echo $? ) )"
+assert "G/boundary: ...naming unresolved usage evidence rather than failing silently" \
+    bash -c "( set +e; source '$REPO_DIR/scripts/lib/routing-result.sh'
+               ru_usage() { return 3; }
+               rr_result 0 '$FULL' codex openai p REQ claude-sonnet-4-8 poolG - '{}' - - 2>&1 >/dev/null ) | grep -q 'usage evidence could not be resolved'"
+# The supervisor must convert that refusal into a NAMED routing
+# disposition, not an incidental set -e exit.
+assert_eq "G/boundary: rr_result sites plus the promotion step route failure through the named refusal" "4" \
+    "$(grep -c 'routing_usage_evidence_unresolved' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert "G/boundary: ...and that reason is a member of the CLOSED terminal enum" \
+    bash -c "source '$REPO_DIR/scripts/lib/routing-actions.sh'; ra_terminal_valid routing_usage_evidence_unresolved"
+assert "G/boundary: ...and the invariant is invoked by rr_result itself, not only by tests" \
+    grep -q 'if ! rr_doc_invariant "\$doc"; then' "$REPO_DIR/scripts/lib/routing-result.sh"
+
+# A backend-stated USD figure outranks computation.
+REPORTED=$(gmk reported '{"type":"result","total_cost_usd":0.4213,"usage":{"input_tokens":9,"output_tokens":1}}')
+assert_eq "G: a backend-stated USD figure outranks computation" "0.4213 reported" \
+    "$(gusage "$REPORTED" claude-code claude-sonnet-4-8 | jq -r '"\(.cost.usd) \(.cost.basis)"')"
+# The cost CAP is budget control, never observation.
+assert_eq "G: a configured cost cap is NEVER read as usage evidence" "null unavailable" \
+    "$( CAP_COST=25 CCT_COST_CAP_USD=25 bash -c '
+          source "'"$REPO_DIR"'/scripts/lib/routing-usage.sh"
+          jq -r "\"\(.cost.usd) \(.cost.basis)\"" <<< "$(ru_usage "'"$LOG"'" driver-aggregate claude-sonnet-4-8)"' )"
+
+# (6) STRICT RUNTIME INVARIANT — the first version accepted a
+# non-integer token value and a `reported` cost with a null figure.
+GOOD_U=$(gusage "$FULL" codex claude-sonnet-4-8)
+assert "G/invariant: a well-formed block is accepted" ru_doc_invariant "$GOOD_U"
+gbad() { assert_eq "G/invariant: $1" "1" "$( ( set +e; ru_doc_invariant "$2"; echo $? ) )"; }
+gbad "a non-integer token value is refused" \
+    '{"tokens":{"input":"not-an-int","output":null,"cache_read":null,"cache_write":null,"status":"reported"},"cost":{"usd":null,"basis":"reported","price_version":null}}'
+gbad "a reported cost with a null figure is refused" \
+    '{"tokens":{"input":1,"output":1,"cache_read":null,"cache_write":null,"status":"reported"},"cost":{"usd":null,"basis":"reported","price_version":null}}'
+gbad "status=reported with no values is refused (status must match evidence)" \
+    '{"tokens":{"input":null,"output":null,"cache_read":null,"cache_write":null,"status":"reported"},"cost":{"usd":null,"basis":"unavailable","price_version":null}}'
+gbad "a negative token count is refused" \
+    '{"tokens":{"input":-5,"output":1,"cache_read":null,"cache_write":null,"status":"reported"},"cost":{"usd":null,"basis":"unavailable","price_version":null}}'
+gbad "an unexpected key is refused" \
+    '{"tokens":{"input":1,"output":1,"cache_read":null,"cache_write":null,"status":"reported"},"cost":{"usd":1,"basis":"reported","price_version":null},"extra":1}'
+gbad "a computed cost without price_version is refused" \
+    '{"tokens":{"input":1,"output":1,"cache_read":0,"cache_write":0,"status":"reported"},"cost":{"usd":0.5,"basis":"computed","price_version":null}}'
+gbad "an unpriced cost carrying 0 instead of null is refused" \
+    '{"tokens":{"input":1,"output":1,"cache_read":0,"cache_write":0,"status":"reported"},"cost":{"usd":0,"basis":"unpriced","price_version":null}}'
+
+# Boundary + schema compatibility.
+assert_eq "G: a record missing the usage block is refused by the boundary" "1" \
+    "$( ( set +e; rr_doc_invariant "$(jq -c 'del(.usage)' <<< "$(rr_result 0 "$FULL" codex openai gprofile REQ claude-sonnet-4-8 poolG - '{}' - -)")"; echo $? ) )"
+assert "G: schema keeps usage OPTIONAL so pre-G records stay valid" \
+    jq -e '(.required | index("usage")) == null and (.properties | has("usage"))' "$SCHEMA"
 
 # The schema artifact itself: parseable with a duplicate-key-rejecting
 # parser, closed, and the frozen taxonomy pinned.

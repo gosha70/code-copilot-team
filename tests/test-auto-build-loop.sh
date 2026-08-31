@@ -5825,7 +5825,7 @@ assert_eq "C2-T6: the rc=3 arm restores the estimate flag before disposing" "bef
 # ── Round-18: an unrecorded cost parks under its OWN reason, and that
 #    park can never auto-resolve — cap_exceeded's arm would compare the
 #    understated total against a cap and clear itself instantly. ──
-assert_eq "C2-T6: all five debit failures park as cost_accounting_failed (T8 the visual site, #109 the codex session)" "5" \
+assert_eq "C2-T6: all six debit failures park as cost_accounting_failed (T8 the visual site, #109 the codex session, #273 the routed-usage publication)" "6" \
     "$(grep -cE '(dispose|vg_finish) "cost_accounting_failed"' "$DRIVER" | tr -d ' ')"
 # The dispatcher arm is identified by its own refusal text (the shared
 # predicate now carries a case label of the same name, so a bare grep on
@@ -7821,6 +7821,105 @@ assert_eq "routed: exactly the six fields, no more" "6" \
 rm -rf "$P"
 
 echo ""
+
+# ── #273 (increment G of #109): the routed usage channel ────────────
+# BEHAVIOURAL, in the driver's own suite. The publisher's contract has
+# two halves that only this suite can check together: the channel must
+# be captured privately at startup, and an untrusted child must be
+# unable to see or forge the driver-owned artifact.
+G_TMP="$(mktemp -d "${TMPDIR:-/tmp}/cct-g-abl.XXXXXX")"
+assert_eq "G: the driver captures the usage channel into a PRIVATE variable" "1" \
+    "$(grep -c '^ROUTED_USAGE_OUT="\${CCT_ROUTING_USAGE_OUT:-}"' "$DRIVER" | tr -d ' ')"
+assert_eq "G: ...and unsets the exported one before any backend launches" "1" \
+    "$(grep -c '^unset CCT_ROUTING_USAGE_OUT' "$DRIVER" | tr -d ' ')"
+# A child of the driver must not inherit the path. Simulate the exact
+# startup sequence and inspect a real child process's environment.
+G_CHILD_SEES="$( export CCT_ROUTING_USAGE_OUT="$G_TMP/authoritative.jsonl"
+                 bash -c 'ROUTED_USAGE_OUT="${CCT_ROUTING_USAGE_OUT:-}"
+                          unset CCT_ROUTING_USAGE_OUT
+                          # the "backend" child:
+                          bash -c "printf %s \"\${CCT_ROUTING_USAGE_OUT:-<unset>}\""' )"
+assert_eq "G: a backend child cannot SEE the evidence path" "<unset>" "$G_CHILD_SEES"
+# NARROW, and named narrowly: the durable artifact does not exist while
+# the child runs. This is NOT a claim that a hostile same-user child
+# cannot write the staged file — it inherits TMPDIR and runs as the
+# same user, so it can. See the threat-model note in the supervisor.
+assert_eq "G: the durable artifact does not exist during the run (not a hostile-child guarantee)" "absent" \
+    "$( [[ -f "$G_TMP/authoritative.jsonl" ]] && echo present || echo absent )"
+# The publisher, exercised in-process, writes one canonical record per
+# invocation — including explicit absence.
+G_PUBOUT="$G_TMP/pub.jsonl"
+( set +e
+  BACKEND=claude
+  # the driver's SCRIPT_DIR is scripts/; in THIS suite the same name
+  # means tests/, so shadow it or the publisher cannot load the reader
+  SCRIPT_DIR="$(cd "$(dirname "$DRIVER")" && pwd)"
+  ROUTED_USAGE_OUT="$G_PUBOUT"
+  err() { :; }
+  eval "$(sed -n '/^publish_routed_usage()/,/^}/p' "$DRIVER")"
+  printf '%s\n' '{"type":"result","total_cost_usd":0.10,"usage":{"input_tokens":10,"output_tokens":2}}' > "$G_TMP/r1.json"
+  publish_routed_usage "$G_TMP/r1.json"
+  printf '%s\n' '{"type":"result","subtype":"success"}' > "$G_TMP/r2.json"
+  publish_routed_usage "$G_TMP/r2.json" ) >/dev/null 2>&1
+assert_eq "G: the driver publishes one record per invocation, absence included" "2" \
+    "$(grep -c 'cct.routed_usage' "$G_PUBOUT" 2>/dev/null || echo 0)"
+assert_eq "G: the first record carries the observed evidence" "10 2 0.10" \
+    "$(head -1 "$G_PUBOUT" 2>/dev/null | jq -r '"\(.input_tokens) \(.output_tokens) \(.total_cost_usd)"' 2>/dev/null)"
+assert_eq "G: the second records EXPLICIT absence rather than being omitted" "null null" \
+    "$(tail -1 "$G_PUBOUT" 2>/dev/null | jq -r '"\(.input_tokens // "null") \(.total_cost_usd // "null")"' 2>/dev/null)"
+# A write failure on a REQUESTED channel is an accounting failure, not
+# backend silence.
+assert_eq "G: an unwritable evidence channel FAILS rather than looking like absent accounting" "1" \
+    "$( ( set +e
+          BACKEND=claude
+          SCRIPT_DIR="$(cd "$(dirname "$DRIVER")" && pwd)"
+          ROUTED_USAGE_OUT="$G_TMP/nonexistent-dir/out.jsonl"
+          err() { :; }
+          eval "$(sed -n '/^publish_routed_usage()/,/^}/p' "$DRIVER")"
+          printf '%s\n' '{"type":"result","total_cost_usd":0.1,"usage":{"input_tokens":1,"output_tokens":1}}' > "$G_TMP/r3.json"
+          publish_routed_usage "$G_TMP/r3.json" >/dev/null 2>&1; echo $? ) )"
+# THE DISPATCHER CHAIN, in context. The assertions above prove the
+# helper returns 1; they cannot show that anyone acts on it. run_session
+# ignores its callee's status and this script has no `set -e`, so a
+# publication failure would otherwise let a successful session continue
+# with its accounting silently missing. Exercise run_session itself.
+G_CHAIN="$( set +e
+  BACKEND=claude
+  SCRIPT_DIR="$(cd "$(dirname "$DRIVER")" && pwd)"
+  ROUTED_USAGE_OUT="$G_TMP/no-such-dir/out.jsonl"   # a REQUESTED but unwritable channel
+  DISPOSED=""
+  dispose() { DISPOSED="$1"; }
+  err() { :; }
+  run_claude_session() { :; }
+  run_pi_session() { :; }
+  run_codex_session() { :; }
+  eval "$(sed -n '/^publish_routed_usage()/,/^}/p' "$DRIVER")"
+  eval "$(sed -n '/^run_session()/,/^}/p' "$DRIVER")"
+  printf '%s\n' '{"type":"result","total_cost_usd":0.1,"usage":{"input_tokens":1,"output_tokens":1}}' > "$G_TMP/r4.json"
+  run_session "$G_TMP/p.txt" "$G_TMP/r4.json" >/dev/null 2>&1
+  printf '%s' "$DISPOSED" )"
+assert_eq "G: run_session DISPOSES cost_accounting_failed when the requested channel cannot be written" \
+    "cost_accounting_failed" "$G_CHAIN"
+# ...and the happy path does not dispose.
+G_CHAIN_OK="$( set +e
+  BACKEND=claude
+  SCRIPT_DIR="$(cd "$(dirname "$DRIVER")" && pwd)"
+  ROUTED_USAGE_OUT="$G_TMP/ok.jsonl"
+  DISPOSED="none"
+  dispose() { DISPOSED="$1"; }
+  err() { :; }
+  run_claude_session() { :; }
+  run_pi_session() { :; }
+  run_codex_session() { :; }
+  eval "$(sed -n '/^publish_routed_usage()/,/^}/p' "$DRIVER")"
+  eval "$(sed -n '/^run_session()/,/^}/p' "$DRIVER")"
+  printf '%s\n' '{"type":"result","total_cost_usd":0.1,"usage":{"input_tokens":1,"output_tokens":1}}' > "$G_TMP/r5.json"
+  run_session "$G_TMP/p.txt" "$G_TMP/r5.json" >/dev/null 2>&1
+  printf '%s' "$DISPOSED" )"
+assert_eq "G: ...and a writable channel does not dispose" "none" "$G_CHAIN_OK"
+assert_eq "G: ...having actually published through the dispatcher" "1" \
+    "$(grep -c cct.routed_usage "$G_TMP/ok.jsonl" 2>/dev/null | tr -d ' ' || echo 0)"
+rm -rf "$G_TMP"
 
 echo "========================================="
 echo "  Results: $PASS passed, $FAIL failed"
