@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "routing-result",
-  "description": "One normalized backend execution outcome (#248, increment A of #109). failure_class is CAUSE — never provider wording, never routing action; increment B owns the mapping from class to routing behavior, and `unknown` fails closed: no retry or failover semantics may attach to it by default.",
+  "description": "One normalized backend execution outcome (#248, increment A of #109). failure_class is CAUSE — never provider wording, never routing action; increment B owns the mapping from class to routing behavior, and `unknown` fails closed: no retry or failover semantics may attach to it by default. VERSIONING NOTE (#109 increment F): the four context_limit_* fields are additive and are intentionally NOT in `required`. Marking them required would invalidate every version-1 record written before F, and forking to version 2 would split the contract for a purely additive group. Legacy records therefore remain valid without them, while NEWLY PRODUCED records are held to the full group — presence and internal consistency — by rr_doc_invariant in scripts/lib/routing-result.sh, which is the runtime normalization boundary every new document passes through. Read the two together: this file is the compatibility contract, rr_doc_invariant is the production contract.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -56,6 +56,25 @@
     },
     "upstream_origin": {
       "description": "Sanitized upstream endpoint identity (host, never credentials or full URLs with tokens); null when unknown.",
+      "type": ["string", "null"]
+    },
+    "context_limit_declared": {
+      "description": "The operator-declared context window for this profile, in tokens (registry `context_limit`); null when undeclared. Undeclared NEVER means unlimited.",
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "context_limit_observed": {
+      "description": "An explicit numeric server maximum read from this attempt's own overflow evidence; null when the failure stated no number, or was not a context overflow. This is an UPPER BOUND seen while FAILING — it proves the ceiling is at most this value, never that this value works.",
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "context_limit_effective": {
+      "description": "min(declared, observed) — the limit selection enforces. Null whenever context_limit_declared is null, EVEN IF something was observed: an upper bound has nothing to narrow and never substitutes for a declaration (#109 increment F, FR-F6).",
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "context_limit_evidence": {
+      "description": "Source of context_limit_observed; null exactly when context_limit_observed is null.",
       "type": ["string", "null"]
     },
     "evidence": {

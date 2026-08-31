@@ -36,6 +36,34 @@ RR_PAT_UNAVAILABLE="overloaded|service unavailable|internal server error|bad gat
 RR_PAT_TRANSPORT="connection refused|could not resolve host|name or service not known|connection (reset|closed)|timed out|econnrefused|etimedout|network is unreachable|curl: \([0-9]+\)"
 RR_PAT_EXECUTION="tests? failed|assertion(error| failed)|FAIL:|build failed|lint (failed|errors)|type ?check failed|npm err!"
 
+# The EXPLICIT numeric server maximum (#109 increment F, FR-F4/plan
+# D4). Kept separate from RR_PAT_INVALID on purpose: that pattern
+# decides the CLASS, this one extracts a VALUE, and the value is read
+# ONLY from output already classified invalid_request. A number inside
+# an auth or transport failure is not a context limit. Vague overflow
+# wording ("prompt is too long", no number) matches nothing here and
+# records null — which leaves today's attempt-local incompatibility
+# behavior untouched.
+# A CONNECTOR is required between the phrase and the number. The
+# earlier loose form ("context length" + up to 24 non-digits + digits)
+# turned "maximum context length exceeded (error 42)" into a durable
+# 42-token cap and "code 503" into 503 — a misparse that permanently
+# strands a profile. It also demanded two digits, wrongly rejecting a
+# legitimate small limit. Now: the phrase, optional whitespace, one of
+# is/of/=/:/, then the number.
+RR_PAT_CTX_NUM="context (length|window)[[:space:]]*(is|of|=|:)[[:space:]]*[0-9]+"
+
+# rr_context_limit_observed <output_file> <class> — the numeric ceiling
+# on stdout, or empty. Empty is the normal answer.
+rr_context_limit_observed() {
+    [[ "$2" == "invalid_request" ]] || return 0
+    [[ -r "$1" ]] || return 0
+    # take the digits AFTER the connector, never the first number on
+    # the line — the phrase itself may contain one (e.g. "gpt-4").
+    grep -ioE "$RR_PAT_CTX_NUM" "$1" 2>/dev/null | head -1 \
+        | grep -oE '[0-9]+$' | head -1 || true
+}
+
 # Structured Anthropic-style envelope error.type -> class.
 _rr_structured_class() {  # <error.type> -> class or ""
     case "$1" in
@@ -123,33 +151,101 @@ rr_classify() {
 # failed invocation ever needs null). B consumes failure_class to pick
 # an action; a failed document with no cause is internally
 # contradictory and is refused HERE, not guessed at downstream.
+#
+# The context-limit group (#109 increment F) is enforced HERE rather
+# than in the JSON schema, deliberately. Making the four fields
+# `required` in schema version 1 would invalidate every version-1
+# record written before F; introducing version 2 would fork the
+# contract for a purely additive group. So the schema keeps them
+# OPTIONAL for legacy compatibility, and this runtime boundary — which
+# only ever sees documents F itself just produced — requires them to
+# be present and internally consistent. Old records stay readable; new
+# records cannot omit the group or contradict themselves.
+#
+# VERSION BOUNDARY: schema_version must be exactly 1. Today's reader
+# must never interpret a FUTURE, incompatible record as though it were
+# today's shape — a durable record that outlives this code is exactly
+# where that mistake becomes silent data corruption. Unknown version =
+# explicit refusal, never best-effort.
 rr_doc_invariant() {
     jq -e --arg classes "$RR_CLASSES" '
-        if .outcome == "success" then .failure_class == null
-        elif .outcome == "failure" then
-            (.failure_class | type == "string")
-            and ([.failure_class] | inside($classes | split(" ")))
-        else false end' >/dev/null 2>&1 <<< "$1"
+        (.schema_version == 1)
+        and (if .outcome == "success" then .failure_class == null
+         elif .outcome == "failure" then
+             (.failure_class | type == "string")
+             and ([.failure_class] | inside($classes | split(" ")))
+         else false end)
+        and (has("context_limit_declared") and has("context_limit_observed")
+             and has("context_limit_effective") and has("context_limit_evidence"))
+        # evidence exists exactly when an observation does
+        and ((.context_limit_observed == null) == (.context_limit_evidence == null))
+        # an observation NEVER substitutes for a declaration (FR-F6)
+        and (if .context_limit_declared == null
+             then .context_limit_effective == null
+             else .context_limit_effective ==
+                  (if .context_limit_observed != null
+                      and .context_limit_observed < .context_limit_declared
+                   then .context_limit_observed
+                   else .context_limit_declared end)
+             end)' >/dev/null 2>&1 <<< "$1"
 }
 
 # rr_result <exit_code> <output_file> <backend> <provider> <profile>
 #           <requested_model> <effective_model|-> <quota_pool>
-#           [upstream_origin|-] [artifacts_json]
+#           [upstream_origin|-] [artifacts_json] [declared_context_limit|-]
 # Composes the full routing-result document (schema above); the
 # classification comes from rr_classify over the SAME capture.
+#
+# The context-limit group (#109 increment F, FR-F8) records all four
+# facts rather than a single collapsed number: what the operator
+# DECLARED, what the provider was OBSERVED to enforce, which one is
+# EFFECTIVE, and the evidence source. `effective` is null whenever
+# `declared` is null even if something was observed — an overflow
+# ceiling is an upper bound seen while failing, never a proof of
+# capacity (FR-F6), so it has nothing to narrow and cannot stand in
+# for a declaration.
+# The PRIOR argument is the identity-bound observation that governed
+# THIS attempt's selection. Without it the record lies about what was
+# enforced: an attempt constrained to 32768 by an earlier observation
+# that then SUCCEEDS carries no overflow of its own, so a
+# declaration-only computation would report 200000 as effective — the
+# telemetry would contradict the routing decision it is supposed to
+# explain.
 rr_result() {
     local rc="$1" file="$2" backend="$3" provider="$4" profile="$5"
     local reqm="$6" effm="$7" pool="$8" origin="${9:--}" artifacts="${10:-{\}}"
-    local cls
+    local declared="${11:--}" prior="${12:--}"
+    local cls class this_obs
     cls=$(rr_classify "$rc" "$file") || return 1
+    class=$(jq -r '.failure_class // ""' <<< "$cls")
+    this_obs=$(rr_context_limit_observed "$file" "$class")
     jq -n --argjson cls "$cls" --arg backend "$backend" --arg provider "$provider" \
           --arg profile "$profile" --arg reqm "$reqm" --arg effm "$effm" \
           --arg pool "$pool" --arg origin "$origin" --argjson rc "$rc" \
-          --argjson artifacts "$artifacts" '
+          --argjson artifacts "$artifacts" \
+          --arg decl "$declared" --arg tobs "$this_obs" --arg pobs "$prior" '
+        ($decl | if . == "-" or . == "" then null else tonumber end) as $d |
+        ($tobs | if . == "" then null else tonumber end) as $t |
+        ($pobs | if . == "-" or . == "" then null else tonumber end) as $p |
+        # the identity total: tightest of this attempt and any prior
+        (if $t == null then $p
+         elif $p == null then $t
+         elif $t < $p then $t else $p end) as $o |
         $cls + {schema_version:1, backend:$backend, provider:$provider, profile:$profile,
                 requested_model:$reqm,
                 effective_model:(if $effm == "-" then null else $effm end),
                 quota_pool:$pool, exit_code:$rc,
                 upstream_origin:(if $origin == "-" then null else $origin end),
+                context_limit_declared: $d,
+                context_limit_observed: $o,
+                context_limit_effective:
+                  (if $d == null then null
+                   elif $o != null and $o < $d then $o
+                   else $d end),
+                context_limit_evidence:
+                  (if $o == null then null
+                   elif $t != null and ($p == null or $t <= $p)
+                     then "invalid_request numeric maximum (this attempt)"
+                   else "prior identity-bound observation" end),
                 artifacts:$artifacts}'
 }

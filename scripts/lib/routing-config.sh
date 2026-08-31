@@ -54,7 +54,12 @@ RC_MINIMUM_PROFILE_DWELL_SEC_DEFAULT=300
 RC_FAILBACK_DEFAULT="auto"
 
 RC_PROFILE_REQUIRED="id backend provider model capability_tier priority quota_pool roles tool_profile data_policy"
-RC_PROFILE_OPTIONAL="credential_mode credential_env protocol base_url base_url_env"
+# context_limit (#109 increment F, promoted refused->implemented->
+# tested): the operator's DECLARED context window in tokens. Optional;
+# absent means UNDECLARED, never "unlimited" — F's selection filter
+# treats an unknown effective limit as ineligible whenever a task
+# states a requirement (capacity is unproven).
+RC_PROFILE_OPTIONAL="credential_mode credential_env protocol base_url base_url_env context_limit"
 
 # ── parse ─────────────────────────────────────────────────────────────
 # rc_parse <file>
@@ -386,6 +391,9 @@ rc_validate() {
         if v=$(rc_get "$ctx" priority); then
             [[ "$(rc_type "$ctx" priority)" == "int" && "$v" -gt 0 ]] || viol "$label: priority must be a positive integer"
         fi
+        if v=$(rc_get "$ctx" context_limit); then
+            [[ "$(rc_type "$ctx" context_limit)" == "int" && "$v" -gt 0 ]] || viol "$label: context_limit must be a positive integer (tokens); omit the key when the window is undeclared — 0 or a negative value is not 'unlimited'"
+        fi
         if rc_get "$ctx" roles >/dev/null 2>&1; then
             if [[ "$(rc_type "$ctx" roles)" != "array" ]]; then
                 viol "$label: roles must be an array"
@@ -464,6 +472,41 @@ rc_profile_tuple() {
         --arg tool "$(rc_get "$ctx" tool_profile)" --arg dp "$(rc_get "$ctx" data_policy)" \
         --arg cred "$cred" --arg ep "$ep" \
         '[$id, $backend, $provider, $model, $tier, $priority, $pool, $roles, $tool, $dp, $cred, $ep]'
+}
+
+# rc_identity_digest <idx> — sha256 over the canonical tuple bytes.
+#
+# The tuple is the COMPLETE EXECUTABLE IDENTITY, which makes its digest
+# exactly the right KEY for a context-limit observation (#109 increment
+# F, plan decision D1): the digest changes the moment provider, model,
+# endpoint reference, credential reference, backend, tier, pool, roles,
+# tool profile or data policy change, so an observation stops applying
+# BY CONSTRUCTION rather than by a staleness rule someone must
+# remember to write. Note that `context_limit` is deliberately NOT in
+# the tuple — a declared window is a capability attribute, not part of
+# what a profile executes as, and two profiles differing only in a
+# declared window must remain the same identity.
+# The digest binds the RESOLVED endpoint, not merely the
+# environment-variable NAME. `base_url_env = "CCT_LOCAL_URL"` is the
+# same tuple whether that variable points at one vLLM server or
+# another, so a name-only digest would let a context observation made
+# against server A silently govern server B. Resolving it here — and
+# ONLY here, never in rc_profile_tuple — keeps the executable-identity
+# tuple environment-independent (the monotonic subset invariant
+# depends on that) while making the OBSERVATION key environment-aware,
+# which is what FR-F7 actually requires.
+#
+# The resolved value is hashed, never stored or journaled. base_url_env
+# names an endpoint variable, not a credential one; nothing here reads
+# credential_env.
+rc_identity_digest() {
+    local ctx="profiles.$1" epvar epres=""
+    if epvar=$(rc_get "$ctx" base_url_env 2>/dev/null); then
+        eval "epres=\${$epvar-}"
+    fi
+    { rc_profile_tuple "$1"; printf '\x1fresolved_endpoint=%s' "$epres"; } \
+        | { command -v shasum >/dev/null 2>&1 && shasum -a 256 || sha256sum; } \
+        | cut -d' ' -f1
 }
 
 # rc_effective <registry-file> <automation-json-file|->
@@ -545,14 +588,25 @@ rc_effective() {
     fi
     [[ $bad -ne 0 ]] && return 1
 
-    # emit the effective document: full tuples, empty when disabled
-    local out="[]"
+    # emit the effective document: full tuples, empty when disabled.
+    # context_limits (id -> declared tokens) and identities (id ->
+    # execution-identity digest) ride BESIDE the tuples (#109 increment
+    # F, plan decision D1) — the tuple itself is never widened, because
+    # it is the executable identity the monotonic subset invariant
+    # compares. An id absent from context_limits is UNDECLARED.
+    local out="[]" climits="{}" idents="{}"
     if [[ "$enabled" == "true" ]]; then
         i=0
         while [[ $i -lt $RC_PROFILE_COUNT ]]; do
             id=$(rc_get "profiles.$i" id)
             if [[ -z "$repo_ids" ]] || grep -qx "$id" <<< "$repo_ids"; then
                 out=$(jq -c --argjson t "$(rc_profile_tuple "$i")" '. + [$t]' <<< "$out")
+                idents=$(jq -c --arg id "$id" --arg d "$(rc_identity_digest "$i")" \
+                    '. + {($id): $d}' <<< "$idents")
+                local cl
+                if cl=$(rc_get "profiles.$i" context_limit 2>/dev/null); then
+                    climits=$(jq -c --arg id "$id" --argjson v "$cl" '. + {($id): $v}' <<< "$climits")
+                fi
             fi
             i=$((i+1))
         done
@@ -587,10 +641,12 @@ rc_effective() {
           --argjson t2 "$([[ "$t2_allowed" == "true" ]] && echo true || echo false)" \
           --argjson wk "$([[ "$wake_allowed" == "true" ]] && echo true || echo false)" \
           --argjson af "$([[ "$auto_failback_allowed" == "true" ]] && echo true || echo false)" \
+          --argjson cl "$climits" --argjson idm "$idents" \
           '{enabled: $en, candidates: $cands,
             default_task_route: (if $dtr == "" then null else $dtr end),
             tier2_delegation_allowed: $t2, wake_allowed: $wk,
-            auto_failback_allowed: $af}'
+            auto_failback_allowed: $af,
+            context_limits: $cl, identities: $idm}'
 }
 
 # rc_wake_allowed <effective-json> — THE shared read of the promoted

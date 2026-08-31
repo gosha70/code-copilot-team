@@ -43,7 +43,12 @@ RK_US=$'\x1f'
 RK_ROUTE_CLASSES="primary_only tier1_only tier2_fallback tier2_preferred"
 
 # Scalar vs list task keys — the complete key vocabulary (closed).
-RK_SCALAR_KEYS="route_class outcome reorderable"
+# min_context_tokens (#109 increment F, promoted refused->implemented->
+# tested): the task's declared context requirement in tokens. Optional;
+# absent means the task states NO requirement and selection filters
+# nothing, which is what keeps every existing routing-tasks.yaml
+# byte-identical under F.
+RK_SCALAR_KEYS="route_class outcome reorderable min_context_tokens"
 RK_LIST_KEYS="allowed_files fr_refs depends_on forbidden_categories"
 
 # ── the safety floor (plan decision 2) ───────────────────────────────
@@ -457,6 +462,12 @@ rk_validate() {
         reorder=$(rk_task_get "$tid" reorderable 2>/dev/null || echo "")
         if [[ -n "$reorder" && "$reorder" != "true" && "$reorder" != "false" ]]; then
             _rk_v "task '$tid': reorderable must be true or false (got '$reorder')"
+        fi
+
+        local minctx
+        minctx=$(rk_task_get "$tid" min_context_tokens 2>/dev/null || echo "")
+        if [[ -n "$minctx" ]] && ! [[ "$minctx" =~ ^[1-9][0-9]*$ ]]; then
+            _rk_v "task '$tid': min_context_tokens must be a positive integer (tokens); omit the key when the task states no context requirement (got '$minctx')"
         fi
 
         # allowed_files containment: repo-relative, no traversal, at

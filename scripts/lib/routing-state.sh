@@ -284,6 +284,80 @@ rs_mark_success() {
                                           until:null, last_success_at:$__now}) end' --arg p "$2"
 }
 
+# ── context-limit observations (#109 increment F) ────────────────────
+# An observation is keyed by the profile's EXECUTION IDENTITY digest,
+# never by its id: the digest changes the moment provider, model,
+# endpoint reference, credential reference, backend, tier, pool, roles,
+# tool profile or data policy change, so an observation stops applying
+# BY CONSTRUCTION when the thing it was observed from no longer exists
+# (plan D1/FR-F7). The profile id is stored alongside for readable
+# journals and explain output — it is NOT the key.
+#
+# Observations live under a top-level `observations` object that is
+# deliberately ABSENT from rs_read's shape check (plan D5): an existing
+# schema_version-1 state file written before F must keep loading, with
+# absence meaning "no observations". Adding it to the shape check would
+# refuse every live state file on upgrade.
+#
+# The recorded value is an UPPER BOUND observed while FAILING, never a
+# proof of capacity (plan D2). The read side is what enforces that
+# distinction; this primitive only stores what was seen.
+
+# rs_record_context_limit <attempt_id> <identity-digest> <profile> <tokens> <evidence>
+rs_record_context_limit() {
+    local id="$1" digest="$2" profile="$3" tokens="$4" evidence="${5:-invalid_request numeric maximum}"
+    [[ "$tokens" =~ ^[1-9][0-9]*$ ]] || {
+        echo "routing-state: refusing to record a non-positive context observation ('$tokens') — a vague overflow records nothing" >&2
+        return 1
+    }
+    # MONOTONICALLY NARROWING (FR-F5). A later, LARGER observation must
+    # never replace a smaller one: 32768 then 200000 would otherwise
+    # broaden eligibility for an identity already proven to cap at
+    # 32768. The store keeps the tightest bound ever seen for this
+    # identity; a wider later reading is discarded, not averaged and
+    # not trusted as "the provider changed" — a provider that really
+    # did change is a different endpoint, and FR-F7's identity binding
+    # is what expires the old bound.
+    rs_apply "$id" \
+        '(.observations // {}) as $obs
+         | ($obs[$d].context_limit_observed // null) as $prev
+         | ($tok | tonumber) as $new
+         | if $prev != null and $prev <= $new then .
+           else .observations = ($obs + {($d): {context_limit_observed:$new,
+                                                profile:$p, evidence:$ev,
+                                                observed_at:$__now}})
+           end' \
+        --arg d "$digest" --arg p "$profile" --arg tok "$tokens" --arg ev "$evidence"
+}
+
+# rs_observed_context_limit <identity-digest> — the observed token
+# ceiling for THIS execution identity, or empty when none applies.
+# Empty is the normal answer, not an error: no observation, a
+# different identity, or a pre-F state file all read as "unobserved".
+#
+# FAILS CLOSED on a malformed store (rc 2). `observations` is optional
+# — absence is not an error — but when PRESENT it must be an object of
+# well-shaped records. Swallowing a shape error here would silently
+# discard a known narrower cap and let selection fall back to the
+# operator's (wider) declaration, which is the exact widening FR-F5
+# forbids. A caller must never paper over a non-zero return.
+rs_observed_context_limit() {
+    local doc
+    doc=$(rs_read) || return $?
+    if jq -e 'has("observations")' >/dev/null 2>&1 <<< "$doc"; then
+        if ! jq -e '(.observations | type == "object")
+                    and (.observations | to_entries | all(
+                          .value | type == "object"
+                          and (.context_limit_observed | type == "number")
+                          and (.context_limit_observed > 0)))' \
+                >/dev/null 2>&1 <<< "$doc"; then
+            echo "routing-state: $RS_FILE carries a malformed 'observations' store — refusing to fall back to the declared limit, which would silently widen an already-proven cap" >&2
+            return 2
+        fi
+    fi
+    jq -r --arg d "$1" '(.observations // {})[$d].context_limit_observed // empty' <<< "$doc"
+}
+
 # ── probe scheduling + evidence (#257 D T1; plan decisions 1 + 3) ────
 # THREE distinct concepts, never conflated:
 #   scheduling  next_probe_at        (when a probe is due)
