@@ -452,6 +452,12 @@ assert "happy: the runtime namespace is keyed by the FULL digest (all 64 hex —
     bash -c "basename '$DDIR' | grep -Eq '^delegate-[0-9a-f]{64}$'"
 assert "happy: the main worktree is untouched by the packet's edits" \
     bash -c "! grep -q MAGIC1 '$TMP/happy/wr/src/target.py'"
+# #109 increment F: every started record persists the LAUNCH-TIME
+# execution identity. Recovery binds observations to this value, so a
+# null here would silently re-bind evidence to whatever the registry
+# says at replay time.
+assert "F: the started record persists a launch-time execution identity" \
+    bash -c "[[ \"\$(jq -r '.identity // \"null\"' '$DDIR/started-1.json')\" =~ ^[0-9a-f]{64}$ ]]"
 assert "happy: the child received the packet id in its environment" \
     grep -q "packet=dfeat:bounded-fix:" "$TMP/happy/mock/env-t2loc-1"
 assert "happy: prompt renders the packet only (outcome + verbatim verifier)" \
@@ -1003,6 +1009,58 @@ sup_rec rc10 bounded-fix "$DREG_NOREC"
 assert_eq "no reconcile-role profile: refused (exit 5)" "5" "$SUP_RC"
 assert "no reconcile-role profile: names the explicit role requirement" \
     grep -q "requires an explicit reconcile-role profile" "$TMP/rc10/rout.log"
+
+# ── #109 increment F wiring (STRUCTURAL pins, labelled as such) ──────
+# These assert the supervisor WIRING, not the filter behaviour — the
+# filter itself is covered functionally in test-routing-failover.sh.
+# They exist because a correct, fully tested filter that nothing ever
+# calls would leave "enforced" false in production: the library was
+# complete and mutation-proven while every delegate selection still
+# passed four arguments. That gap is exactly what these catch.
+assert_eq "F wiring: BOTH delegate selections pass the task's context requirement" "2" \
+    "$(grep -c 'rt_select "\$RT_EFFECTIVE" "\$selector_attempted" bounded-build "\$PKT_CLASS" "\$PKT_MINCTX"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+# Both paths must go through the fail-closed helper, and both must
+# REFUSE on its rc 1 rather than continuing with an empty minimum.
+# (The helper's own semantics are tested directly in
+# test-routing-failover.sh — an integration test cannot reach it,
+# because packet-build validation refuses a malformed source first.)
+assert_eq "F wiring: both paths resolve the requirement through the fail-closed helper" "2" \
+    "$(grep -c 'if ! PKT_MINCTX=\$(rt_task_min_context ' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert_eq "F wiring: ...and both refuse when it reports INDETERMINATE" "2" \
+    "$(grep -c 'refusing rather than \(proceeding\|reviewing\) as if no requirement were declared' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+# W2 (revised): reconcile IS filtered. FR-F3 attaches the minimum to
+# the TASK, not to a role, so an undeclared or undersized reviewer is
+# ineligible for the same reason a builder is. The earlier exemption
+# was withdrawn: the 18 failures that appeared to justify it were an
+# unbound-variable crash under `set -u`, not a semantic signal.
+assert_eq "F wiring: BOTH reconcile selections carry the task's context requirement" "2" \
+    "$(grep -c 'reconcile tier1_only "\$PKT_MINCTX"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+# The variable must be globally initialized, or `set -u` aborts any
+# path that reaches a selection without deriving one. This is the
+# regression for the crash above.
+assert "F wiring: PKT_MINCTX is initialized globally (set -u safety)" \
+    grep -qE '^PKT_MINCTX=""' "$REPO_DIR/scripts/cooldown-supervisor.sh"
+
+# BEHAVIORAL (not structural): an unreadable task-metadata source must
+# REFUSE, never degrade to "no requirement". A parse error yielding an
+# empty minimum would let a task declaring 200k route to a 32k profile.
+#
+# Observed layering: the PACKET BUILD layer validates routing-tasks.yaml
+# and refuses first, and post-build tampering is caught by
+# routing_tasks_sha256 provenance. The supervisor's own fail-closed
+# guard is therefore defense-in-depth on a path these two already
+# cover — this test pins the OBSERVABLE guarantee (the run refuses and
+# never proceeds unconstrained), not a message only the innermost
+# layer would print.
+delegate_fixture fctx
+printf 'schema_version: 1\ntasks:\n  bounded-fix:\n      : broken indentation :\n' \
+    > "$TMP/fctx/wr/specs/dfeat/routing-tasks.yaml"
+sup_del fctx bounded-fix
+assert_eq "F: corrupt task metadata REFUSES the delegate run (never 'no requirement')" "5" "$SUP_RC"
+assert "F: ...naming task metadata as the cause" \
+    grep -q "the task metadata does not validate at build time" "$TMP/fctx/out.log"
+assert "F: ...and no child was ever launched unconstrained" \
+    bash -c "[[ ! -f '$TMP/fctx/mock/count-t2loc' && ! -f '$TMP/fctx/mock/count-t1main' ]]"
 
 echo ""
 echo "========================================="

@@ -74,6 +74,12 @@ info() { echo "[$PROG] $*"; }
 command -v jq >/dev/null 2>&1 || { err "jq is required."; exit 69; }
 
 # ── Options ─────────────────────────────────────────────────
+# PKT_MINCTX is initialized HERE, not only where it is derived: this
+# script runs under `set -u`, and both the delegate and reconcile
+# selections reference it. A path that reaches rt_select without
+# having derived one must pass "no requirement", not abort on an
+# unbound variable.
+PKT_MINCTX=""
 FEATURE_ID=""
 WORKTREE=""
 BACKEND="claude"
@@ -602,6 +608,64 @@ rt_reviewer_independence() {  # <profile-json>
   journal "routing_reviewer_independence" "independence=independent builder_profile='$bid' builder_provider='$bprov' builder_model='$bmodel' reviewer='$reviewer' reviewer_provider='$rprov' reviewer_model='${rmodel:-unspecified}'"
 }
 
+# rt_declared_context_limit <profile-id> -> tokens, or "-" when the
+# operator declared none (#109 increment F). ONE reader for all three
+# rr_result call sites so the launch chains cannot drift apart.
+rt_declared_context_limit() {
+  jq -r --arg id "$1" '(.context_limits // {})[$id] // "-"' <<< "$RT_EFFECTIVE"
+}
+
+# rt_identity_of_profile <profile-id> -> the CURRENT execution-identity
+# digest. Correct at LAUNCH time only, which is why every started-N
+# record persists its value: recovery must bind evidence to the
+# identity that actually ran, not to whatever the registry says now.
+rt_identity_of_profile() {
+  jq -r --arg id "$1" '(.identities // {})[$id] // ""' <<< "$RT_EFFECTIVE"
+}
+
+# rt_started_identity <attempt_no> -> the PERSISTED identity for that
+# attempt. Empty for a pre-F started record; never falls back to the
+# live configuration, because that fallback is precisely the bug this
+# exists to prevent.
+rt_started_identity() {
+  jq -r '.identity // empty' "$RT_DIR/started-$1.json" 2>/dev/null || true
+}
+
+# rt_prior_observed <attempt_no> -> the identity-bound observation that
+# governed THIS attempt's selection, or empty. Propagates a state-read
+# failure (fail closed) rather than reporting "no observation".
+rt_prior_observed() {
+  local dg; dg=$(rt_started_identity "$1")
+  [[ -n "$dg" ]] || return 0
+  rs_observed_context_limit "$dg"
+}
+
+# rt_task_min_context <routing-tasks.yaml> <task-id>
+#   stdout: the declared minimum, or empty when the task declares none
+#   rc 0:   a definite answer (a value, or a genuine absence)
+#   rc 1:   INDETERMINATE — unreadable or unparseable source
+#
+# A SEPARATE, directly testable function rather than inline code at the
+# two call sites. In the running system the packet-build validator and
+# the routing_tasks_sha256 provenance check both refuse a malformed
+# source before this is reached, so this guard is defense in depth —
+# which is exactly why it needs its own test: an integration test stays
+# green on the earlier guard alone, and would not notice if this one
+# were deleted.
+#
+# The distinction that matters: an ABSENT optional key is a definite
+# "no requirement" (rc 0, empty); an unreadable source is INDETERMINATE
+# (rc 1) and must never be reported as "no requirement", because that
+# would let a task declaring 200k route to a 32k profile.
+rt_task_min_context() {
+  local src="$1" task="$2"
+  [[ -r "$src" ]] || return 1
+  rk_parse "$src" >/dev/null 2>&1 || return 1
+  rk_task_ids | grep -qx "$task" || return 1
+  rk_task_get "$task" min_context_tokens 2>/dev/null || true
+  return 0
+}
+
 rt_effective_model() {
   # Total under pipefail: no transcript identity is a NORMAL outcome
   # (the unverified tri-state), never a shell failure.
@@ -700,6 +764,35 @@ rt_apply_result() {
   fi
   [[ "$recovered" == "0" && -z "$effective" ]] && \
     journal "routing_model_identity" "profile '$id': effective model UNVERIFIED (no transcript identity) — recorded null, never assumed"
+
+  # context-limit observation (#109 increment F). Recorded ONLY from an
+  # explicit numeric server maximum on this attempt's own capture, and
+  # bound to the profile's EXECUTION IDENTITY digest so it stops
+  # applying the moment provider, model or endpoint change. An observed
+  # ceiling is an upper bound seen while FAILING: it can narrow a
+  # declaration, never substitute for one.
+  local cl_obs cl_decl cl_dg
+  cl_obs=$(jq -r '.result.context_limit_observed // empty' <<< "$doc")
+  cl_decl=$(jq -r '.result.context_limit_declared // empty' <<< "$doc")
+  if [[ -n "$cl_obs" ]]; then
+    # The PERSISTED launch-time identity, never the live registry.
+    # On a recovery replay the configuration may have changed since
+    # the attempt ran; deriving the key from RT_EFFECTIVE would attach
+    # this evidence to whatever provider/model/endpoint is configured
+    # NOW, which is the precise mis-binding FR-F7 forbids.
+    cl_dg=$(rt_started_identity "$n")
+    if [[ -n "$cl_dg" ]]; then
+      rt_state_transition "context-limit observation for profile '$id'" \
+        rs_record_context_limit "${attempt_id}-ctxlimit" "$cl_dg" "$id" "$cl_obs" || true
+    fi
+    if [[ -n "$cl_decl" && "$cl_obs" -lt "$cl_decl" ]]; then
+      journal "routing_context_limit" "profile '$id': registry declares ${cl_decl} tokens but the provider enforced ${cl_obs} — the declaration overstates this endpoint; selection uses ${cl_obs} for this execution identity"
+    elif [[ -n "$cl_decl" ]]; then
+      journal "routing_context_limit" "profile '$id': provider stated a ${cl_obs}-token maximum, not below the declared ${cl_decl} — an observation never broadens a declaration, so ${cl_decl} still governs"
+    else
+      journal "routing_context_limit" "profile '$id': provider stated a ${cl_obs}-token maximum but the registry declares no context_limit — an upper bound seen while failing is not a capacity grant, so this profile stays ineligible for tasks that state a requirement"
+    fi
+  fi
 
   journal "routing_decision" "$(jq -r '.journal' <<< "$decision")$( [[ "$recovered" == "1" ]] && printf '%s' " [recovered: applying the RECORDED decision, no relaunch]" )"
   local action kind until reason
@@ -1133,6 +1226,25 @@ delegate_run() {
   PKT_CLASS=$(jq -r '.route_class' <<< "$PKT_JSON")   # IMMUTABLE for this run
   PKT_BASE=$(jq -r '.base_commit' <<< "$PKT_JSON")
   PKT_ART=$(jq -r '.diff_artifact' <<< "$PKT_JSON")
+  # The task's context requirement (#109 increment F, §5 step 4).
+  # Read from routing-tasks.yaml rather than the packet envelope: that
+  # key set is FROZEN and digest-bound, so adding a key would
+  # invalidate every existing packet digest. rp_provenance_check has
+  # just verified routing_tasks_sha256 against this exact file, so
+  # reading it here is equivalent to reading it from the packet — the
+  # bytes are proven identical to the ones the packet was built from.
+  # FAILS CLOSED. Only a genuinely ABSENT optional key yields empty; a
+  # file that cannot be read or parsed is refused. Treating an
+  # unreadable source as "no requirement" would let a task that
+  # declares a 200k minimum route to a 32k profile — a parse error
+  # must never widen policy.
+  PKT_MINCTX=""
+  local _mctx_src="$WORKTREE/specs/$(jq -r '.feature_id' <<< "$PKT_JSON")/routing-tasks.yaml"
+  if ! PKT_MINCTX=$(rt_task_min_context "$_mctx_src" "$DELEGATE_TASK"); then
+    rt_refuse "packet_artifact_invalid" "cannot resolve the task's context requirement from the provenance-verified '$_mctx_src' — refusing rather than proceeding as if no requirement were declared"
+  fi
+  [[ -n "$PKT_MINCTX" ]] && journal "routing_context_requirement" \
+    "task '$DELEGATE_TASK' declares min_context_tokens=${PKT_MINCTX} — profiles whose effective context limit is smaller, or unknown, are ineligible for this unit"
   # The runtime namespace is keyed by the FULL digest — T2's identity
   # contract (digest12 is only a human locator; the full 256-bit
   # digest is authoritative). Two packets can therefore never share
@@ -1235,10 +1347,10 @@ delegate_run() {
     # selection legality: the packet's frozen route class, the
     # bounded-build role (delegation is per-profile opt-in)
     selector_attempted=$(jq -n --argjson a "$RT_EPOCH_ATTEMPTED" --argjson b "$RT_LOCAL_EXCLUDED" '($a + $b) | unique')
-    sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" bounded-build "$PKT_CLASS") || \
+    sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" bounded-build "$PKT_CLASS" "$PKT_MINCTX") || \
       rt_refuse "routing_unknown_failure" "selection failed to evaluate for the packet"
     if rt_recover_due_profiles "$sel"; then
-      sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" bounded-build "$PKT_CLASS") || \
+      sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" bounded-build "$PKT_CLASS" "$PKT_MINCTX") || \
         rt_refuse "routing_unknown_failure" "selection failed after processing due recovery canaries"
     elif [[ "$?" -eq 2 ]]; then
       rt_refuse "routing_no_eligible_profile" "due recovery canaries could not be processed by the live supervisor (details journaled)"
@@ -1277,8 +1389,9 @@ delegate_run() {
 
     # step 1: durable attempt-started BEFORE any launch
     jq -n --arg id "$attempt_id" --argjson n "$attempt_no" --argjson p "$pj" \
-          --argjson t "$(now_epoch)" --arg pid "$PKT_ID" \
-          '{attempt_id:$id, attempt:$n, profile:$p, packet_id:$pid, started_epoch:$t}' \
+          --argjson t "$(now_epoch)" --arg pid "$PKT_ID" --arg idt "$(rt_identity_of_profile "$id")" \
+          '{attempt_id:$id, attempt:$n, profile:$p, packet_id:$pid, started_epoch:$t,
+            identity:(if $idt == "" then null else $idt end)}' \
           > "$RT_DIR/started-$attempt_no.json"
     ATTEMPTS=$((ATTEMPTS + 1))
     local active_now
@@ -1381,7 +1494,8 @@ delegate_run() {
     decision_epoch=$(now_epoch)
     result=$(rr_result "$CHILD_CODE" "$OUT" \
         "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
-        "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}')
+        "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}' \
+        "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")")
     decision=$(ra_decide "$result" "$(jq -r --arg id "$id" '.[$id] // 0' <<< "$RT_RETRY_COUNTS")" "$decision_epoch") \
         || rt_refuse "routing_unknown_failure" "the action policy failed to evaluate"
     legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT" 2>/dev/null | tail -1 || true)"
@@ -1544,6 +1658,21 @@ reconcile_run() {
   while IFS= read -r out; do
     [[ -n "$out" ]] && PKT_ALLOWED+=("$out")
   done <<< "$(jq -r '.allowed_files[]' <<< "$PKT_JSON")"
+  # The task's context requirement also governs RECONCILIATION: FR-F3
+  # and the owner rule attach the minimum to the TASK, not to a role,
+  # so a reviewer that is undeclared or undersized is ineligible for
+  # the same reason a builder would be. Same fail-closed read as the
+  # delegate path.
+  PKT_MINCTX=""
+  # $WORKTREE, not the packet worktree: this is the same
+  # provenance-verified source the delegate path read, and CANON_WT is
+  # not even defined yet at this point in reconcile_run.
+  local _rmctx_src="$WORKTREE/specs/$(jq -r '.feature_id' <<< "$PKT_JSON")/routing-tasks.yaml"
+  if ! PKT_MINCTX=$(rt_task_min_context "$_rmctx_src" "$RECONCILE_TASK"); then
+    rt_refuse "packet_artifact_invalid" "cannot resolve the task's context requirement from '$_rmctx_src' — refusing rather than reviewing as if no requirement were declared"
+  fi
+  [[ -n "$PKT_MINCTX" ]] && journal "routing_context_requirement" \
+    "reconciliation of task '$RECONCILE_TASK' inherits min_context_tokens=${PKT_MINCTX} — an undeclared or undersized reviewer is ineligible"
   DELEGATE_VERIFIER_JSON=$(jq -c '.fr_refs[].tests[]' <<< "$PKT_JSON")
   DELEGATE_VERIFIER_TOKENS=""
   local velem vcmd ntok gerr vscript
@@ -1604,10 +1733,10 @@ reconcile_run() {
       terminate "failed" 5 "wall-clock cap (${MAX_WALL_SEC}s) exceeded during reconciliation"
     fi
     selector_attempted=$(jq -n --argjson a "$RT_EPOCH_ATTEMPTED" --argjson b "$RT_LOCAL_EXCLUDED" '($a + $b) | unique')
-    sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" reconcile tier1_only) || \
+    sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" reconcile tier1_only "$PKT_MINCTX") || \
       rt_refuse "routing_unknown_failure" "reconciler selection failed to evaluate"
     if rt_recover_due_profiles "$sel"; then
-      sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" reconcile tier1_only) || \
+      sel=$(rt_select "$RT_EFFECTIVE" "$selector_attempted" reconcile tier1_only "$PKT_MINCTX") || \
         rt_refuse "routing_unknown_failure" "reconciler selection failed after processing due recovery canaries"
     elif [[ "$?" -eq 2 ]]; then
       rt_refuse "routing_no_eligible_profile" "due reconciler recovery canaries could not be processed by the live supervisor (details journaled)"
@@ -1659,8 +1788,9 @@ reconcile_run() {
     PKT_WT="$RECON_WT"
 
     jq -n --arg id "$attempt_id" --argjson n "$attempt_no" --argjson p "$pj" \
-          --argjson t "$(now_epoch)" --arg pid "$PKT_ID" \
-          '{attempt_id:$id, attempt:$n, profile:$p, packet_id:$pid, reconcile:true, started_epoch:$t}' \
+          --argjson t "$(now_epoch)" --arg pid "$PKT_ID" --arg idt "$(rt_identity_of_profile "$id")" \
+          '{attempt_id:$id, attempt:$n, profile:$p, packet_id:$pid, reconcile:true, started_epoch:$t,
+            identity:(if $idt == "" then null else $idt end)}' \
           > "$RT_DIR/started-$attempt_no.json"
     ATTEMPTS=$((ATTEMPTS + 1))
     local active_now
@@ -1759,7 +1889,8 @@ reconcile_run() {
     decision_epoch=$(now_epoch)
     result=$(rr_result "$CHILD_CODE" "$OUT" \
         "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
-        "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}')
+        "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}' \
+        "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")")
     decision=$(ra_decide "$result" "$(jq -r --arg id "$id" '.[$id] // 0' <<< "$RT_RETRY_COUNTS")" "$decision_epoch") \
         || rt_refuse "routing_unknown_failure" "the action policy failed to evaluate"
     legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT" 2>/dev/null | tail -1 || true)"
@@ -2090,8 +2221,9 @@ routing_iteration() {
 
   # step 1: persist attempt-started BEFORE any launch
   jq -n --arg id "$attempt_id" --argjson n "$attempt_no" --argjson p "$pj" \
-        --argjson t "$(now_epoch)" \
-        '{attempt_id:$id, attempt:$n, profile:$p, started_epoch:$t}' \
+        --argjson t "$(now_epoch)" --arg idt "$(rt_identity_of_profile "$id")" \
+        '{attempt_id:$id, attempt:$n, profile:$p, started_epoch:$t,
+          identity:(if $idt == "" then null else $idt end)}' \
         > "$RT_DIR/started-$attempt_no.json"
 
   ATTEMPTS=$((ATTEMPTS + 1))
@@ -2142,7 +2274,8 @@ routing_iteration() {
   decision_epoch=$(now_epoch)
   result=$(rr_result "$CHILD_CODE" "$OUT" \
       "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
-      "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}')
+      "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}' \
+      "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")")
   decision=$(ra_decide "$result" "$(jq -r --arg id "$id" '.[$id] // 0' <<< "$RT_RETRY_COUNTS")" "$decision_epoch") \
       || rt_refuse "routing_unknown_failure" "the action policy failed to evaluate"
   legacy_hit="$(grep -iE "$USAGE_PATTERN" "$OUT" 2>/dev/null | tail -1 || true)"

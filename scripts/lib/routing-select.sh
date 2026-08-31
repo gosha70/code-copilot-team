@@ -62,8 +62,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/routing-actions.sh"
 # (denied/unknown/identity/independence/crash) are handled ABOVE this
 # oracle by the action table and never re-enter selection as a
 # fallback opportunity.
-rt_select() {  # <effective-json> <attempted-json-array> [role] [route-class]
-    local eff="$1" attempted="${2:-[]}" role="${3:-build}" rclass="${4:-}"
+rt_select() {  # <effective-json> <attempted-json-array> [role] [route-class] [min-context-tokens]
+    local eff="$1" attempted="${2:-[]}" role="${3:-build}" rclass="${4:-}" minctx="${5:-}"
+    if [[ -n "$minctx" ]] && ! [[ "$minctx" =~ ^[1-9][0-9]*$ ]]; then
+        echo "routing-select: min_context_tokens must be a positive integer (got '$minctx')" >&2
+        return 1
+    fi
     case "$rclass" in
         ""|tier1_only|primary_only|tier2_fallback|tier2_preferred) ;;
         *)
@@ -95,6 +99,47 @@ rt_select() {  # <effective-json> <attempted-json-array> [role] [route-class]
         if ! jq -e --arg r "$role" '.[7] | index($r) != null' >/dev/null 2>&1 <<< "$c"; then
             _consider "$id" rejected "does not hold role '$role'"
             return 0
+        fi
+        # context capability (#109 increment F, §5 step 4). Runs ONLY
+        # when the task states a requirement, so an absent
+        # min_context_tokens leaves this ladder byte-identical to
+        # pre-F behavior.
+        #
+        # The effective limit is min(declared, applicable observed),
+        # and an observation may only NARROW the declaration — never
+        # broaden it (FR-F5). Crucially, an observation is an UPPER
+        # BOUND seen while FAILING, not a proof of capacity (FR-F6):
+        # with no declaration there is nothing to narrow, so the
+        # profile stays UNKNOWN and is refused. Treating a bare
+        # observation as the effective limit would let an overflow
+        # FAILURE promote an undeclared profile into eligibility.
+        if [[ -n "$minctx" ]]; then
+            local declared observed effective src
+            declared=$(jq -r --arg id "$id" '(.context_limits // {})[$id] // empty' <<< "$eff")
+            if [[ -z "$declared" ]]; then
+                _consider "$id" rejected "task requires ${minctx} tokens of context; profile declares no context_limit — capacity is unproven, and an unproven capacity is never a grant"
+                return 0
+            fi
+            effective="$declared"; src="declared"
+            local dg
+            dg=$(jq -r --arg id "$id" '(.identities // {})[$id] // empty' <<< "$eff")
+            if [[ -n "$dg" ]]; then
+                # FAIL CLOSED: an unreadable or malformed observation
+                # store must refuse, never fall back to the declared
+                # limit — that fallback would discard a proven narrower
+                # cap and widen eligibility (FR-F5).
+                observed=$(rs_observed_context_limit "$dg") || {
+                    echo "routing-select: refusing to select against an unreadable observation store — the declared limit is not a safe fallback for a cap that may already be proven narrower" >&2
+                    return 1
+                }
+                if [[ -n "$observed" && "$observed" -lt "$effective" ]]; then
+                    effective="$observed"; src="observed (declared ${declared}, narrowed by an upper bound seen from this exact execution identity)"
+                fi
+            fi
+            if [[ "$effective" -lt "$minctx" ]]; then
+                _consider "$id" rejected "task requires ${minctx} tokens of context; effective limit is ${effective} [${src}]"
+                return 0
+            fi
         fi
         if jq -e --arg id "$id" 'index($id) != null' >/dev/null 2>&1 <<< "$attempted"; then
             _consider "$id" rejected "already attempted or incompatible in this unit"
