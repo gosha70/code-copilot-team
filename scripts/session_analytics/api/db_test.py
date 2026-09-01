@@ -281,6 +281,13 @@ def _enforce_read_only(db: Database) -> None:
       does nothing if none is open, so the SESSION default is set instead
       and any implicit transaction is ended first so the new default
       actually governs what follows.
+    - TWO transaction boundaries are required, not one. Under psycopg's
+      default (non-autocommit) behaviour the ``SET`` itself opens a
+      transaction, and that transaction began under the OLD default — so
+      verifying inside it reads the mode of the transaction in flight
+      rather than the default just established. The SET is committed
+      before the check, so the verification runs in a NEW transaction
+      that actually inherits it.
     - swallowing the failure would make the real invariant "read-only if
       it happens to work". The whole point of the database-level guard is
       that a future accidental write is impossible; failing open leaves it
@@ -291,6 +298,8 @@ def _enforce_read_only(db: Database) -> None:
     try:
         db.rollback()  # end any implicit transaction, so the new default applies
         db.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+        db.commit()    # end the SET's OWN transaction, or the check below
+                       # observes that transaction instead of the new default
         row = db.query_one("SELECT current_setting('transaction_read_only')")
     except Exception as exc:  # noqa: BLE001
         raise ReadOnlyUnavailable("could not set a read-only session") from exc

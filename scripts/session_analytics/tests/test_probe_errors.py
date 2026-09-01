@@ -613,17 +613,29 @@ class _FakePgDb:
         self._count_raises = count_raises
         self.executed: list = []
         self.queried: list = []
+        # ONE ordered log across execute/query/commit/rollback: ordering
+        # between a statement and a query is the contract here, and two
+        # separate lists cannot express it.
+        self.log: list = []
         self.closed = False
 
-    def rollback(self): self.executed.append("ROLLBACK")
+    def rollback(self):
+        self.executed.append("ROLLBACK")
+        self.log.append("ROLLBACK")
+
+    def commit(self):
+        self.executed.append("COMMIT")
+        self.log.append("COMMIT")
 
     def execute(self, sql, params=()):
         self.executed.append(sql)
+        self.log.append(sql)
         if self._ro_raises and "READ ONLY" in sql:
             raise RuntimeError("permission denied to set transaction mode")
 
     def query_one(self, sql, params=()):
         self.queried.append(sql)
+        self.log.append(sql)
         if "current_setting" in sql:
             if self._ro_raises:
                 raise RuntimeError("cannot read setting")
@@ -677,13 +689,46 @@ class TestPostgresReadOnlyContract(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error_code"], C.PROBE_ERR_READ_ONLY_UNAVAILABLE)
 
+    def test_the_set_is_committed_before_the_check_reads_it(self) -> None:
+        """TWO boundaries, not one.
+
+        Under psycopg's default non-autocommit behaviour the SET itself
+        opens a transaction that began under the OLD default. Verifying
+        inside it reads the transaction in flight rather than the default
+        just established, so the SET must be committed first and the
+        check must run in a NEW transaction.
+        """
+        db = _FakePgDb()
+        self._probe_with(db)
+        SET = "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"
+        self.assertIn(SET, db.log)
+        set_at = db.log.index(SET)
+        self.assertIn(
+            "COMMIT", db.log[set_at:],
+            "the SET was never committed, so the check below observes the "
+            "SET's own transaction rather than the new session default",
+        )
+        commit_at = set_at + db.log[set_at:].index("COMMIT")
+        checks = [i for i, q in enumerate(db.log) if "current_setting" in q]
+        self.assertTrue(checks, "the read-only state was never verified")
+        check_at = checks[0]
+        self.assertLess(
+            commit_at, check_at,
+            "the read-only check ran inside the SET's own transaction, so it "
+            "observed that transaction rather than the new session default",
+        )
+
     def test_ends_any_open_transaction_before_setting_the_default(self) -> None:
         # SET SESSION CHARACTERISTICS governs SUBSEQUENT transactions, so an
         # implicit one already in flight would not be covered.
         db = _FakePgDb()
         self._probe_with(db)
-        self.assertLess(db.executed.index("ROLLBACK"),
-                        db.executed.index("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"))
+        SET = "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"
+        self.assertIn("ROLLBACK", db.log,
+                      "an implicit transaction was never ended, so the new "
+                      "session default would not govern what follows")
+        self.assertIn(SET, db.log)
+        self.assertLess(db.log.index("ROLLBACK"), db.log.index(SET))
 
 
 class TestPostgresSchemaDetection(unittest.TestCase):
