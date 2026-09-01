@@ -52,6 +52,29 @@ reason** — a single shape check catching all four does not satisfy this
 task. Verified with caches cleared and `ERROR:` checked as well as
 `FAIL:`.
 
+**Status: complete.** `rr_upstream_invariant`
+(`scripts/lib/routing-result.sh`) enforces the state machine with a
+distinct exit code per rule; `rr_doc_invariant` delegates to it, so the
+refusal is at the production boundary rather than in a test-only
+predicate. 34 assertions in `tests/test-routing-config.sh` (pin 294 →
+330). Twelve mutations were run; each was caught, and two produced
+findings rather than confirmations:
+
+- copying the configured origin into `effective_upstream.origin`
+  **aborted the suite** instead of failing an assertion — `set -e` plus
+  a bare `DOC=$(rr_result …)` assignment. The abort surfaced only as a
+  count drift, and every later assertion silently never ran. Both
+  capture sites now use `|| true` with an explicit
+  composition-succeeds assertion.
+- a duplicate `has("effective_upstream")` in `rr_doc_invariant`'s jq
+  predicate proved **unreachable** — `rr_upstream_invariant` already
+  checks presence. Removed rather than left as a second definition.
+
+`upstream_origin_source` is validated WHEN PRESENT (closed vocabulary
+plus the pairing rule); `rr_result` OMITS it when the caller passed no
+classification, because `none` is a positive claim that no origin
+exists. T3 supplies it at every producer and makes presence mandatory.
+
 ---
 
 ## T3 — provenance for the existing configured origin

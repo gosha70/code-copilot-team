@@ -284,9 +284,15 @@ assert_eq "ISO reset time is extracted when present" "2026-08-24T10:00:00Z" \
     "$(rr_classify 1 "$FX/claude-weekly-limit.out" | jq -r '.reset_at')"
 
 # The full composed document conforms to the CLOSED schema shape.
-DOC=$(rr_result 1 "$FX/claude-session-limit.out" "claude-code" "anthropic-subscription" "alpha" "sonnet" "-" "anthropic-subscription" "api.anthropic.com" '{"stderr":"x.log"}')
+# `|| true` plus an explicit assertion instead of a bare assignment:
+# this suite runs under `set -e`, so a defect that makes rr_result
+# REFUSE would abort the file here and every later assertion would
+# simply never run — reported as a count drift rather than as the
+# behaviour that broke. Found by mutation testing during #273 T2.
+DOC=$(rr_result 1 "$FX/claude-session-limit.out" "claude-code" "anthropic-subscription" "alpha" "sonnet" "-" "anthropic-subscription" "api.anthropic.com" '{"stderr":"x.log"}') || true
+assert "rr_result: composing the reference document SUCCEEDS" test -n "$DOC"
 assert_eq "rr_result: exact closed key set" \
-    "artifacts backend context_limit_declared context_limit_effective context_limit_evidence context_limit_observed effective_model evidence exit_code failure_class outcome profile provider quota_pool requested_model reset_at retry_after_sec schema_version upstream_origin usage" \
+    "artifacts backend context_limit_declared context_limit_effective context_limit_evidence context_limit_observed effective_model effective_upstream evidence exit_code failure_class outcome profile provider quota_pool requested_model reset_at retry_after_sec schema_version upstream_origin usage" \
     "$(jq -r 'keys | sort | join(" ")' <<< "$DOC")"
 assert_eq "rr_result: unverifiable effective model is null, never assumed" "null" \
     "$(jq -r '.effective_model // "null"' <<< "$DOC")"
@@ -777,6 +783,174 @@ assert_eq "C30/launch-origin: an unknown origin stays null, not a placeholder" "
     "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
           rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG - '{}' - - \
             | jq -r '.upstream_origin // "null"' ) )"
+
+# ── #109 T2 (#273): the effective-upstream VERIFICATION STATE ────────
+# The configured origin above answers "where was this attempt SENT".
+# It is not evidence of "who ANSWERED", and the arc has already once
+# recorded a reference as an effective endpoint. So the observed fact
+# gets its own field and its own CLOSED TWO-STATE MACHINE, and the
+# assertions below exist to prove the machine actually discriminates —
+# not merely that a field is present.
+RRLIB() { ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"; "$@" ) }
+# <effective_upstream-json> [extra-doc-jq] -> the invariant's exit code
+EUCODE() {
+    ( set +e
+      source "$REPO_DIR/scripts/lib/routing-result.sh"
+      doc=$(rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG - '{}' - -)
+      doc=$(jq -c --argjson eu "$1" '.effective_upstream = $eu' <<< "$doc")
+      [[ -n "${2:-}" ]] && doc=$(jq -c "$2" <<< "$doc")
+      rr_upstream_invariant "$doc" >/dev/null 2>&1
+      echo $? )
+}
+VERIFIED='{"origin":"https://served-by.example:8443","status":"verified","evidence":"provider_reported"}'
+UNVERIF='{"origin":null,"status":"unverifiable","evidence":"none"}'
+
+# BOTH valid states are ACCEPTED. Without this pair the four refusals
+# below would still pass against a mutation that refused everything,
+# which is not a state machine — it is a wall.
+assert_eq "T2/state: the unverifiable state is accepted" "0" "$(EUCODE "$UNVERIF")"
+assert_eq "T2/state: the verified state is accepted (the contract is populated, not merely disallowed)" "0" \
+    "$(EUCODE "$VERIFIED" '.upstream_origin = "https://gw.example" | .upstream_origin_source = "profile_base_url"')"
+
+# THE FOUR OFF-CONTRACT COMBINATIONS. Each has its OWN exit code, so a
+# mutation deleting one rule cannot be caught by another rule's test.
+assert_eq "T2/E7-M1: verified with a null origin is refused" "4" \
+    "$(EUCODE '{"origin":null,"status":"verified","evidence":"provider_reported"}')"
+assert_eq "T2/E7-M2: verified without provider_reported evidence is refused" "5" \
+    "$(EUCODE '{"origin":"https://served-by.example","status":"verified","evidence":"none"}')"
+assert_eq "T2/E7-M3: unverifiable carrying an origin is refused (the relabelling FR-E3 forbids)" "6" \
+    "$(EUCODE '{"origin":"https://gw.example","status":"unverifiable","evidence":"none"}')"
+assert_eq "T2/E7-M4: unverifiable claiming provider_reported evidence is refused" "7" \
+    "$(EUCODE '{"origin":null,"status":"unverifiable","evidence":"provider_reported"}')"
+# ...and the codes are PAIRWISE DISTINCT: four different lies, four
+# different rules. A single collapsed "shape is wrong" check would
+# make this assertion fail.
+assert_eq "T2/state: the four refusals are pairwise distinct rules, not one shape check" "4" \
+    "$( printf '%s\n' "$(EUCODE '{"origin":null,"status":"verified","evidence":"provider_reported"}')" \
+                     "$(EUCODE '{"origin":"https://served-by.example","status":"verified","evidence":"none"}')" \
+                     "$(EUCODE '{"origin":"https://gw.example","status":"unverifiable","evidence":"none"}')" \
+                     "$(EUCODE '{"origin":null,"status":"unverifiable","evidence":"provider_reported"}')" \
+        | sort -u | wc -l | tr -d ' ' )"
+
+# The closed sub-vocabularies, and the field's own presence.
+assert_eq "T2/state: a status outside the closed set is refused" "2" \
+    "$(EUCODE '{"origin":null,"status":"probably","evidence":"none"}')"
+assert_eq "T2/state: an evidence value outside the closed set is refused" "3" \
+    "$(EUCODE '{"origin":null,"status":"unverifiable","evidence":"inferred"}')"
+assert_eq "T2/state: a missing effective_upstream is refused, never treated as unverifiable" "1" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          rr_upstream_invariant "$(rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG - '{}' - - \
+            | jq -c 'del(.effective_upstream)')" >/dev/null 2>&1; echo $? ) )"
+
+# FR-E4 PARITY. `verified` will one day carry a value from outside this
+# tree; a provider-reported string is authoritative about identity,
+# never trusted as safe text.
+assert_eq "T2/sanitizer: a verified origin carrying credentials and a path is refused" "8" \
+    "$(EUCODE '{"origin":"https://user:pw@served.example/v1?k=1","status":"verified","evidence":"provider_reported"}' \
+              '.upstream_origin = "https://gw.example" | .upstream_origin_source = "profile_base_url"')"
+assert_eq "T2/sanitizer: an unnormalized host case is refused (one origin must not record as two)" "8" \
+    "$(EUCODE '{"origin":"https://SERVED.EXAMPLE","status":"verified","evidence":"provider_reported"}' \
+              '.upstream_origin = "https://gw.example" | .upstream_origin_source = "profile_base_url"')"
+assert_eq "T2/sanitizer: a non-http(s) verified origin is refused" "8" \
+    "$(EUCODE '{"origin":"ftp://served.example","status":"verified","evidence":"provider_reported"}' \
+              '.upstream_origin = "https://gw.example" | .upstream_origin_source = "profile_base_url"')"
+# DRIFT PIN: the validator accepts exactly what the real sanitizer
+# emits. The sanitizer stays single-sourced in the supervisor; this
+# feeds its actual output through the predicate rather than restating
+# the grammar in a second place and hoping they agree.
+assert "T2/sanitizer: the validator accepts the real sanitizer's output" \
+    bash -c "cd '$REPO_DIR' && source scripts/lib/routing-result.sh && rr_origin_is_sanitized \"\$(RSO() { eval \"\$(sed -n '/^rt_sanitize_origin()/,/^}/p' scripts/cooldown-supervisor.sh)\"; rt_sanitize_origin \"\$1\"; }; RSO 'https://user:pw@Vllm.Internal:8000/v1?k=1')\""
+assert "T2/sanitizer: ...and rejects the raw URL the sanitizer was given" \
+    bash -c "cd '$REPO_DIR' && source scripts/lib/routing-result.sh && ! rr_origin_is_sanitized 'https://user:pw@Vllm.Internal:8000/v1?k=1'"
+assert "T2/sanitizer: an IPv6 origin round-trips through the validator" \
+    bash -c "cd '$REPO_DIR' && source scripts/lib/routing-result.sh && rr_origin_is_sanitized 'http://[::1]:8000'"
+
+# FR-E9 END TO END, on a REAL composed document: a configured origin is
+# recorded, and the observed field stays empty and unverifiable. This
+# is the assertion that fails if anyone ever "helpfully" copies one
+# into the other.
+# `|| true` is load-bearing, not defensive noise: this suite runs under
+# `set -e`, and a mutation that makes rr_result REFUSE would otherwise
+# abort the whole file here — the discriminating assertions below would
+# never run, and the only symptom would be a count drift. Capture, then
+# assert on the capture.
+EUDOC=$(RRLIB rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG \
+          'https://gateway.internal:8787' '{}' - -) || true
+assert "T2/FR-E9: composing a result with a configured origin SUCCEEDS" \
+    test -n "$EUDOC"
+assert_eq "T2/FR-E9: a configured origin is recorded, and the observed upstream stays unverifiable" \
+    "https://gateway.internal:8787 null unverifiable none" \
+    "$(jq -r '"\(.upstream_origin) \(.effective_upstream.origin // "null") \(.effective_upstream.status) \(.effective_upstream.evidence)"' <<< "$EUDOC")"
+assert_eq "T2/FR-E9: the gateway origin never appears in the observed field" "" \
+    "$(jq -r '.effective_upstream.origin // ""' <<< "$EUDOC" | grep -o 'gateway.internal' || true)"
+assert_eq "T2/FR-E9: ...and that holds for every backend, not one sampled path" \
+    "unverifiable unverifiable unverifiable" \
+    "$( for b in claude-code codex pi; do
+          RRLIB rr_result 0 "$FULL" "$b" openai p REQ claude-sonnet-4-8 poolG - '{}' - - \
+            | jq -r '.effective_upstream.status'
+        done | tr '\n' ' ' | sed 's/ $//' )"
+# A document whose observed state is a lie is REFUSED AT THE BOUNDARY,
+# not merely by the standalone predicate.
+assert_eq "T2/boundary: rr_doc_invariant refuses a forged verified state" "1" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          rr_doc_invariant "$(jq -c '.effective_upstream.status = "verified"' <<< "$EUDOC")" >/dev/null 2>&1
+          echo $? ) )"
+assert_eq "T2/boundary: ...and refuses a document missing the field entirely" "1" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          rr_doc_invariant "$(jq -c 'del(.effective_upstream)' <<< "$EUDOC")" >/dev/null 2>&1
+          echo $? ) )"
+
+# PROVENANCE (FR-E8) — the vocabulary and the pairing rule. T3 owns
+# WHICH value each producer records; what is pinned here is that the
+# field cannot hold anything outside the closed set and cannot
+# contradict the origin beside it.
+assert_eq "T2/provenance: a value outside the closed vocabulary is refused" "9" \
+    "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = "guessed"')"
+assert_eq "T2/provenance: the vague 'configured' the spec rejects is refused by name" "9" \
+    "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = "configured"')"
+assert_eq "T2/provenance: a recorded origin cannot claim provenance 'none'" "10" \
+    "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = "none"')"
+assert_eq "T2/provenance: ...and an absent origin cannot claim a source that implies one" "10" \
+    "$(EUCODE "$UNVERIF" '.upstream_origin = null | .upstream_origin_source = "profile_base_url"')"
+assert_eq "T2/provenance: every member of the closed vocabulary is accepted with a matching origin" "0 0 0 0 0" \
+    "$( for s in profile_base_url profile_base_url_env codex_model_provider backend_default none; do
+          if [[ "$s" == "none" ]]; then
+            EUCODE "$UNVERIF" ".upstream_origin = null | .upstream_origin_source = \"$s\""
+          else
+            EUCODE "$UNVERIF" ".upstream_origin = \"https://gw.example\" | .upstream_origin_source = \"$s\""
+          fi
+        done | tr '\n' ' ' | sed 's/ $//' )"
+# T2 emits the field only when the caller classified one. `none` is a
+# POSITIVE claim that no origin exists; defaulting to it beside a
+# non-null origin would be the first fabricated provenance in a
+# contract built to prevent them.
+assert_eq "T2/provenance: an unclassified caller omits the field rather than guessing 'none'" "false" \
+    "$(jq -r 'has("upstream_origin_source")' <<< "$EUDOC")"
+assert_eq "T2/provenance: a classified caller records exactly what it passed" "profile_base_url_env" \
+    "$(RRLIB rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG \
+         'https://gw.example:8000' '{}' - - - - profile_base_url_env | jq -r '.upstream_origin_source')"
+assert_eq "T2/provenance: a caller passing a contradictory pair is REFUSED, not silently corrected" "1" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG - '{}' - - - - profile_base_url \
+            >/dev/null 2>&1; echo $? ) )"
+
+# SCHEMA COMPATIBILITY, on the rule the additive groups already use:
+# old records stay valid, new ones are held to the full contract.
+assert "T2/compat: the schema declares both new fields" \
+    jq -e '(.properties | has("effective_upstream")) and (.properties | has("upstream_origin_source"))' "$SCHEMA"
+assert 'T2/compat: neither is in schema "required" (pre-T2 records stay valid)' \
+    jq -e '[.required[]] | (any(. == "effective_upstream") or any(. == "upstream_origin_source")) | not' "$SCHEMA"
+assert "T2/compat: the schema pins both closed sub-vocabularies" \
+    jq -e '(.properties.effective_upstream.properties.status.enum | sort) == ["unverifiable","verified"]
+           and (.properties.effective_upstream.properties.evidence.enum | sort) == ["none","provider_reported"]' "$SCHEMA"
+assert_eq "T2/compat: the schema and the library agree on the provenance vocabulary" "same" \
+    "$( a=$(jq -r '.properties.upstream_origin_source.enum | sort | join(" ")' "$SCHEMA")
+        b=$( ( source "$REPO_DIR/scripts/lib/routing-result.sh"
+                printf '%s\n' $RR_ORIGIN_SOURCES | sort | tr '\n' ' ' | sed 's/ $//' ) )
+        [[ "$a" == "$b" ]] && echo same || echo "schema='$a' lib='$b'" )"
+assert_eq "T2/compat: ...but a pre-T2 record can never be PRODUCED anew" "1" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          rr_doc_invariant "$(jq -c 'del(.effective_upstream)' <<< "$EUDOC")" >/dev/null 2>&1; echo $? ) )"
 
 # RESOLVER FAILURE vs VALID-UNLISTED — a broken price table is an
 # operator error and must never be recorded as `unpriced`, which

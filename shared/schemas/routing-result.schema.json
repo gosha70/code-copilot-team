@@ -55,8 +55,38 @@
       "type": ["string", "null"]
     },
     "upstream_origin": {
-      "description": "Sanitized upstream endpoint identity (host, never credentials or full URLs with tokens); null when unknown.",
+      "description": "The sanitized CONFIGURED launch origin (scheme/host/port, never credentials or paths) — the host this attempt was DIRECTED at; null when unknown. NOT evidence about the host that answered: where the configured URL is a gateway, this is the gateway. See effective_upstream for the observed fact.",
       "type": ["string", "null"]
+    },
+    "upstream_origin_source": {
+      "description": "How CCT learned upstream_origin (#273 T2/T3, FR-E8). CLOSED and semantically specific rather than a vague `configured`, so an audit can tell a codex provider entry from a resolved environment variable without reading code. `backend_default` is used ONLY where the default can actually be established — otherwise `none`, because an assumed default is an assumption. Additive and NOT in `required`, on the same compatibility rule as the other additive groups.",
+      "enum": [
+        "profile_base_url",
+        "profile_base_url_env",
+        "codex_model_provider",
+        "backend_default",
+        "none"
+      ]
+    },
+    "effective_upstream": {
+      "description": "The OBSERVED upstream, kept strictly separate from the configured one (#273 T2, FR-E7/E9). A CLOSED TWO-STATE MACHINE: exactly {status:unverifiable, origin:null, evidence:none} — every path that exists today, since CCT shells out to CLI binaries and never sees the HTTP layer — or {status:verified, origin:<sanitized>, evidence:provider_reported}. Every other combination is refused by rr_upstream_invariant at the runtime boundary; JSON Schema cannot express the cross-field rule, so this file states it and that predicate enforces it. `origin` is typed string-or-null rather than always-null deliberately: encoding today's incompleteness as a permanent type would force this contract to change the day a provider-reported signal appears, instead of being populated by it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "status", "evidence"],
+      "properties": {
+        "origin": {
+          "description": "Non-null ONLY in the verified state, and then sanitized by the same origin-only rules as upstream_origin. A provider-reported value is authoritative about identity, never trusted as safe text.",
+          "type": ["string", "null"]
+        },
+        "status": {
+          "description": "verified: an authoritative provider-reported upstream was observed. unverifiable: nothing authoritative was learned — a configured origin, a gateway, a proxy or a backend default can NEVER produce `verified`.",
+          "enum": ["verified", "unverifiable"]
+        },
+        "evidence": {
+          "description": "provider_reported exactly in the verified state; none otherwise.",
+          "enum": ["provider_reported", "none"]
+        }
+      }
     },
     "context_limit_declared": {
       "description": "The operator-declared context window for this profile, in tokens (registry `context_limit`); null when undeclared. Undeclared NEVER means unlimited.",
