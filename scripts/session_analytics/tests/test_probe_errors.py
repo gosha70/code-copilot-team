@@ -556,15 +556,151 @@ class TestProbePayload(unittest.TestCase):
 
         # Since #101 the probe only opens a sqlite file that ALREADY exists,
         # so the operator's real database has to be standing in for it here.
+        # An EMPTY file is connectable but is not a CCT store. This used to
+        # report `sessions: 0` — but only because the probe ran apply_ddl
+        # and created the schema on the spot, which is the very defect the
+        # read-only probe removes. `sessions` is null when there is nothing
+        # to count; 0 would read as an empty CCT store.
         target = os.path.join(tmpdir, "store.db")
         open(target, "wb").close()
 
         result = probe(f"sqlite:///{target}")
         self.assertTrue(result["ok"])
         self.assertEqual(result["dialect"], "sqlite")
-        self.assertEqual(result["sessions"], 0)
+        self.assertFalse(result["schema_present"])
+        self.assertIsNone(result["sessions"])
         self.assertNotIn("error", result)       # success path untouched
         self.assertNotIn("error_code", result)
+
+    def test_initialized_store_reports_its_session_count(self) -> None:
+        """A REAL CCT store still counts, read-only."""
+        tmpdir = tempfile.mkdtemp(prefix="cct-probe-init-")
+        self.addCleanup(shutil.rmtree, tmpdir, ignore_errors=True)
+        target = os.path.join(tmpdir, "store.db")
+
+        from session_analytics.relational.db import Database, apply_ddl
+
+        db = Database.connect(f"sqlite:///{target}")
+        apply_ddl(db)
+        db.close()
+
+        result = probe(f"sqlite:///{target}")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["schema_present"])
+        self.assertEqual(result["sessions"], 0)
+
+
+class TestProbeNeverWrites(unittest.TestCase):
+    """MANDATORY regression (CodeQL py/path-injection, alert 14).
+
+    #101 stopped the probe CREATING a database at a caller-chosen path.
+    It did not stop the probe WRITING to one that already exists:
+    ``SQLITE_MODE_RW`` refuses creation but permits writes, and the probe
+    then ran ``apply_ddl``. Testing a DSN against an unrelated SQLite file
+    therefore added 17 CCT tables to somebody else's database — and
+    returned ok.
+    """
+
+    def _tables(self, path: str) -> list:
+        con = sqlite3.connect(path)
+        try:
+            return sorted(
+                r[0] for r in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+            )
+        finally:
+            con.close()
+
+    def _unrelated_db(self) -> str:
+        tmpdir = tempfile.mkdtemp(prefix="cct-noswrite-")
+        self.addCleanup(shutil.rmtree, tmpdir, ignore_errors=True)
+        target = os.path.join(tmpdir, "someones-notes.db")
+        con = sqlite3.connect(target)
+        con.execute("CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT)")
+        con.execute("INSERT INTO notes(body) VALUES('private user data')")
+        con.commit()
+        con.close()
+        return target
+
+    def test_probing_an_unrelated_database_adds_no_tables(self) -> None:
+        target = self._unrelated_db()
+        before = self._tables(target)
+
+        probe(f"sqlite:///{target}")
+
+        after = self._tables(target)
+        self.assertEqual(
+            before, after,
+            "the probe modified a caller-named database: added "
+            f"{sorted(set(after) - set(before))}",
+        )
+
+    def test_probing_an_unrelated_database_preserves_its_rows(self) -> None:
+        target = self._unrelated_db()
+        probe(f"sqlite:///{target}")
+        con = sqlite3.connect(target)
+        try:
+            rows = list(con.execute("SELECT body FROM notes"))
+        finally:
+            con.close()
+        self.assertEqual(rows, [("private user data",)])
+
+    def test_an_unrelated_database_is_reported_as_having_no_cct_schema(self) -> None:
+        # Honest reporting matters as much as not writing: the operator
+        # must be able to tell "connected, not a CCT store" from
+        # "connected, empty CCT store".
+        result = probe(f"sqlite:///{self._unrelated_db()}")
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["schema_present"])
+        self.assertIsNone(result["sessions"])
+
+    def test_the_probe_opens_read_only(self) -> None:
+        """The PROBE's own open must be read-only, not merely write-free.
+
+        With apply_ddl removed the probe issues only SELECTs, so RW vs RO
+        is invisible to behaviour — which means nothing would notice a
+        revert to RW until someone re-added a write. Observe the mode the
+        probe actually passes.
+        """
+        from unittest import mock
+
+        from session_analytics.relational.db import SQLITE_MODE_RO
+        import session_analytics.api.db_test as dbt
+
+        target = self._unrelated_db()
+        seen = {}
+        real = dbt.Database.connect
+
+        def spy(dsn, sqlite_mode=""):
+            seen["mode"] = sqlite_mode
+            return real(dsn, sqlite_mode=sqlite_mode)
+
+        with mock.patch.object(dbt.Database, "connect", staticmethod(spy)):
+            probe(f"sqlite:///{target}")
+        self.assertEqual(
+            seen.get("mode"), SQLITE_MODE_RO,
+            "the probe opened the caller's database in a writable mode",
+        )
+
+    def test_the_open_itself_is_read_only(self) -> None:
+        """Not merely 'we do not call apply_ddl' — writes are impossible.
+
+        Enforced at the file handle, so a future edit that adds a write
+        cannot silently reintroduce the defect.
+        """
+        from session_analytics.relational.db import (
+            SQLITE_MODE_RO,
+            Database,
+        )
+
+        target = self._unrelated_db()
+        db = Database.connect(f"sqlite:///{target}", sqlite_mode=SQLITE_MODE_RO)
+        try:
+            with self.assertRaises(Exception):
+                db.execute("CREATE TABLE injected(x INTEGER)")
+        finally:
+            db.close()
+        self.assertNotIn("injected", self._tables(target))
 
 
 if __name__ == "__main__":

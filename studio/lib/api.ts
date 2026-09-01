@@ -492,7 +492,12 @@ export const api = {
       ok: boolean;
       error?: string;
       error_code?: string;
-      sessions?: number;
+      // The probe is READ-ONLY: it never creates the CCT schema, so a
+      // connectable target that is not an analytics store reports
+      // schema_present=false and sessions=null. Null is not zero — zero
+      // would read as an empty CCT store.
+      schema_present?: boolean;
+      sessions?: number | null;
       dialect?: string;
     }>("/api/settings/test-connection", { dsn }),
   analyze: (body: { judge?: string; limit?: number; session_id?: number }) =>

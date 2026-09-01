@@ -23,10 +23,12 @@ from urllib.parse import parse_qsl, urlsplit
 
 from .. import constants as C
 from ..relational.db import (
+    DIALECT_POSTGRES,
+    DIALECT_SQLITE,
     SQLITE_MEMORY,
+    SQLITE_MODE_RO,
     SQLITE_MODE_RW,
     Database,
-    apply_ddl,
     is_sqlite_dsn,
     sqlite_target,
 )
@@ -261,6 +263,43 @@ def _failure(exc: Exception, *, phase: str) -> dict[str, Any]:
     return _error_payload(classify_probe_error(exc, phase=phase))
 
 
+def _read_only_session(db: Database) -> None:
+    """Defense in depth for Postgres, where the open carries no mode.
+
+    SQLite is already read-only at the file handle (``SQLITE_MODE_RO``);
+    Postgres has no equivalent at connect, so the session is marked
+    read-only before anything else runs. Best-effort: a server that
+    refuses the statement still cannot be written to by this function,
+    which issues only SELECTs — this closes the gap against a future
+    edit that adds one.
+    """
+    if db.dialect == DIALECT_POSTGRES:
+        try:
+            db.execute("SET TRANSACTION READ ONLY")
+        except Exception:  # noqa: BLE001 — advisory only; never fails the probe
+            _log.debug("could not mark the probe session read-only", exc_info=True)
+
+
+def _cct_schema_present(db: Database) -> bool:
+    """Is the CCT store initialized here? Read-only catalog lookup.
+
+    Asked of the CATALOG rather than by attempting a query and catching
+    the failure: a missing table and a permission error are different
+    facts, and collapsing them would report an inaccessible database as
+    an uninitialized one.
+    """
+    if db.dialect == DIALECT_SQLITE:
+        row = db.query_one(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='copilot_session'"
+        )
+    else:
+        row = db.query_one(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = 'copilot_session' LIMIT 1"
+        )
+    return row is not None
+
+
 def probe(dsn: str, configured_dsns: Sequence[str] = ()) -> dict[str, Any]:
     """Test a DSN. ``configured_dsns`` are the operator's own DSNs, kept
     SEPARATE from the caller-supplied one so policy can tell them apart
@@ -272,16 +311,33 @@ def probe(dsn: str, configured_dsns: Sequence[str] = ()) -> dict[str, Any]:
     if rejection is not None:
         return _error_payload(rejection)
     try:
-        # SQLITE_MODE_RW: the open REFUSES to create, so the existing-file
-        # rule is enforced where the file is actually opened — no TOCTOU
-        # window between the check above and here.
-        db = Database.connect(dsn, sqlite_mode=SQLITE_MODE_RW)
+        # SQLITE_MODE_RO: a connection TEST must never modify the target.
+        # `rw` refuses to CREATE but still permits writes to an existing
+        # file, and the probe used to run apply_ddl — so testing a DSN
+        # against somebody else's database silently added the CCT schema
+        # to it. Read-only is enforced at the OPEN, so no code path below
+        # can write even by mistake.
+        db = Database.connect(dsn, sqlite_mode=SQLITE_MODE_RO)
     except Exception as exc:  # noqa: BLE001 — report any connect failure
         return _failure(exc, phase=PHASE_CONNECT)
     try:
-        apply_ddl(db)
-        row = db.query_one("SELECT COUNT(*) FROM copilot_session")
-        return {"ok": True, "dialect": db.dialect, "sessions": int(row[0]) if row else 0}
+        _read_only_session(db)
+        present = _cct_schema_present(db)
+        sessions = None
+        if present:
+            row = db.query_one("SELECT COUNT(*) FROM copilot_session")
+            sessions = int(row[0]) if row else 0
+        # `schema_present` is reported rather than acted on. Creating the
+        # schema is SETUP's job; doing it here made a read-only-sounding
+        # operation mutate a caller-named database. `sessions` is null when
+        # there is no schema to count — never 0, which would read as an
+        # empty CCT store.
+        return {
+            "ok": True,
+            "dialect": db.dialect,
+            "schema_present": present,
+            "sessions": sessions,
+        }
     except Exception as exc:  # noqa: BLE001
         return _failure(exc, phase=PHASE_SCHEMA)
     finally:
