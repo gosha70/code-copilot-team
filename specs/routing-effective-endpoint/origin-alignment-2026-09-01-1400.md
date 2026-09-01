@@ -111,6 +111,40 @@ taken on the owner's explicit instruction, recorded on #109 rather than
 only here, and required by FR-E6 to be cited in the final audit. No
 deviation is taken on this plan's own authority.
 
+## Correction pass after plan review (PR #280)
+
+The owner reviewed the bundle before implementation and returned two
+contract P1s. Both were documentation defects in this bundle, not
+changes of direction — the decision (O1 + O4, O4 governing) and the
+#109 amendment are untouched.
+
+1. **One provenance vocabulary.** `plan.md` had carried the first
+   draft's `explicit_config` / `backend_config` aliases beside
+   `spec.md`'s closed set, and its test strategy allowed login mode to
+   record "`backend_default` or null" where FR-E8 requires an
+   *establishable* default. `spec.md` is now the single definition;
+   `plan.md` and `tasks.md` reference FR-E7/E8 instead of restating it,
+   the aliases are named as prohibited, and FR-E11 is corrected to
+   `upstream_origin: null` / `upstream_origin_source: none` for login
+   mode — matching what T3 already required.
+
+2. **`effective_upstream` is a closed state machine.** It had been
+   described as three fields with independent vocabularies, with
+   `origin` typed as always `null`. FR-E7 now states exactly two valid
+   states, requires the four off-contract combinations to be refused,
+   and types `origin` as *sanitized origin | null* so a future
+   provider-reported signal populates the contract rather than changing
+   it. Mutations E7-M1…E7-M4 must each fail for a distinct reason.
+
+FR-E12 step 2 additionally gained its missing precondition: the
+top-level `model_provider` fallback applies only when **no launch
+override was issued**. An override naming a provider absent from
+`[model_providers]` resolves to `none` — falling back would record the
+provider codex did not use, which is the same fabrication FR-E12
+exists to prevent.
+
+Still no production code at this point; the bundle remains plan-only.
+
 ## What this record does NOT claim
 
 - No code has been written. The survey is a read of the merged tree at

@@ -28,80 +28,69 @@ C30 line, and the amendment section.
 
 ---
 
+> **This file is a navigation layer.** The contract — the closed
+> provenance vocabulary, the closed `effective_upstream` state machine,
+> the codex resolution order — is defined once in `spec.md`. Tasks
+> point at the requirements they satisfy and name what makes each one
+> *done*; they do not restate the enums, because a second copy is a
+> second thing to drift.
+
 ## T2 — the verification-state contract
 
-Add to the normalized routed result:
+**Implements:** FR-E7 (the two new fields and the closed
+`effective_upstream` state machine), FR-E9 (a configured value is never
+observed).
 
-- `upstream_origin_source` — closed:
-  `profile_base_url` | `profile_base_url_env` | `codex_model_provider`
-  | `backend_default` | `none`
-- `effective_upstream` — `{origin, status, evidence}`, with
-  `status: unverifiable` and `evidence: none` in every path that exists
-  today, since no authoritative provider-reported signal does.
+Add `upstream_origin_source` and `effective_upstream` to the normalized
+routed result. Schema additive and optional for compatibility;
+completeness enforced at the runtime boundary, exactly as increments F
+and G did.
 
-Schema is additive and optional for compatibility; completeness is
-enforced at the runtime boundary, exactly as increments F and G did.
-
-**Discriminators**
-
-- a configured origin — any provenance — never yields
-  `status: verified`;
-- copying `upstream_origin` into `effective_upstream.origin` fails a
-  named test;
-- `verified` without `evidence: provider_reported` fails;
-- removing provenance, or collapsing it to a generic `configured`,
-  fails.
-
-**Not done until** the mutations above fail for their intended reason,
-verified with caches cleared and `ERROR:` checked as well as `FAIL:`.
+**Done when** the five named mutations in `plan.md` fail, and the four
+state-machine mutations E7-M1…E7-M4 each fail **for their own distinct
+reason** — a single shape check catching all four does not satisfy this
+task. Verified with caches cleared and `ERROR:` checked as well as
+`FAIL:`.
 
 ---
 
 ## T3 — provenance for the existing configured origin
 
-Classify what #277 already resolves: a registry `base_url` literal is
-`profile_base_url`; a `base_url_env` is `profile_base_url_env`; no
-origin is `none`.
+**Implements:** FR-E8 (the provenance table), FR-E11 (login mode).
 
-`backend_default` is used ONLY where CCT can positively establish which
-default applied. Where it cannot — which is every login-mode path
-today — the value is `none`. An assumed default is an assumption.
+Classify what #277 already resolves, assigning each path its FR-E8
+value. The load-bearing line is FR-E8's rule that `backend_default`
+requires an *establishable* default.
 
-**Discriminator:** a login-mode profile records `none`, not
-`backend_default`, and a test asserts the distinction rather than
-accepting either.
+**Done when** a login-mode profile records `upstream_origin: null` /
+`upstream_origin_source: none` per FR-E11, and a test asserts that
+distinction rather than accepting `backend_default` as an alternative.
 
 ---
 
 ## T4 — codex configured-origin resolution (the risky one)
 
-Resolve `[model_providers.<id>].base_url` for the provider **codex
-actually selected**:
+**Implements:** FR-E10 (codex resolves its configured origin), FR-E12
+(resolution follows codex's ACTUAL selection), FR-E13 (no raw backend
+configuration becomes evidence).
 
-1. the `model_provider` the supervisor passed for this attempt
-   (`-c model_provider=<id>`, `cooldown-supervisor.sh:1498, 1915`);
-2. otherwise the config's top-level `model_provider`;
-3. otherwise `none`.
+Resolve the `base_url` of the provider codex actually selected, in
+FR-E12's order. The hazard FR-E12 exists to block: `_resolve_codex_config`
+picks **the first key under `[model_providers]`** — arbitrary dict
+order — while the supervisor passes `-c model_provider=<id>`
+(`cooldown-supervisor.sh:1498, 1915`). This task must not reuse that
+selection.
 
-**Never** "the first key under `[model_providers]`". The existing
-`_resolve_codex_config` helper uses that heuristic — arbitrary dict
-order — and with two providers configured it can attribute provider B's
-`base_url` to a run routed through provider A. This task must not reuse
-that selection.
+**Done when**
 
-Only the sanitized origin and the closed provenance value are
-persisted: never the config path, credentials, headers or query
-parameters.
-
-**Discriminators**
-
-- provider A selected, provider B's `base_url` present in config →
-  the recorded origin is A's; a mutation that picks the first key
-  fails;
+- provider A selected with provider B also in config → the recorded
+  origin is A's, and a mutation that picks the first key fails;
+- an override was issued but its provider is absent → `none`, NOT the
+  top-level default (FR-E12 step 2's precondition);
 - resolution raises `upstream_origin` only — `effective_upstream` is
-  untouched and stays `unverifiable`;
+  untouched and stays in the `unverifiable` state;
 - a credential, path or query in the codex `base_url` is stripped by
-  #277's sanitizer, and a non-http(s) scheme is refused;
+  #277's sanitizer and a non-http(s) scheme is refused;
 - an undeterminable provider records `none`, not a guess.
 
 ---

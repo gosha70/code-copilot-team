@@ -70,7 +70,10 @@ effective one.
 **O2 — egress observation through a CCT-owned recording proxy.**
 Backends are pointed at a local proxy CCT runs; it observes the real
 upstream connection and reports it.
-*Buys:* the only option that genuinely answers the gateway case.
+*Buys:* ~~the only option that genuinely answers the gateway case~~
+**SUPERSEDED — this first-draft claim is false.** See "The decision"
+below: the proxy sees only the first hop, so it does not answer the
+gateway case at all.
 *Costs:* changes the execution path for every routed attempt; adds a
 process to the failure surface; interacts with credentials in flight;
 substantial for one telemetry field. Would need its own risk review.
@@ -84,7 +87,10 @@ shows the signal exists.
 **O4 — amend the criterion.**
 Accept the configured origin plus an explicit unverified marker as
 satisfying C30, recorded as a deliberate narrowing of §11.
-*Buys:* closes #109 honestly at the cost of a weaker criterion.
+*Buys:* closes #109 honestly, ~~at the cost of a weaker criterion~~
+**SUPERSEDED — this first-draft framing is wrong.** See "The decision"
+below: the amended contract is STRICTER, not weaker, because it adds a
+verification state a configured value can never satisfy.
 *Requires:* the amendment stated in the audit, not implied.
 
 ## The decision (owner, 2026-09-01)
@@ -129,15 +135,19 @@ model was right.
 1. **Amend #109 first.** C30's endpoint component and the §11 phrasing
    are superseded, with the original preserved and the reason recorded.
    No code lands before the contract it satisfies exists.
-2. **`upstream_origin_source`** — provenance for the configured origin:
-   `explicit_config` | `backend_config` | `backend_default` | `none`.
-3. **`effective_upstream`** — `{origin, status, evidence}`, with
-   `status: unverifiable` and `evidence: none` everywhere today, since
-   no authoritative provider-reported signal exists.
+2. **`upstream_origin_source`** — provenance for the configured origin.
+   The vocabulary is CLOSED and is defined once, in **FR-E7/FR-E8**;
+   this plan does not restate or alias it. No synonym — `explicit_config`,
+   `backend_config`, a generic `configured` — may appear in code, tests
+   or journals.
+3. **`effective_upstream`** — `{origin, status, evidence}`, a closed
+   two-state machine defined in **FR-E7**. Every path that exists today
+   is the `unverifiable` state, since no authoritative provider-reported
+   signal exists.
 4. **Codex configured-origin resolution** — the selected
-   `[model_providers.<id>].base_url`, through #277's sanitizer,
-   recorded as `backend_config`. Removes a `null` without claiming it
-   identifies the inference server.
+   `[model_providers.<id>].base_url`, through #277's sanitizer, recorded
+   with the provenance FR-E8 assigns it (see FR-E10/FR-E12). Removes a
+   `null` without claiming it identifies the inference server.
 5. Schema and runtime-boundary updates for the new fields.
 
 ## The riskiest implementation detail
@@ -160,16 +170,19 @@ launch-time selection, never from that helper's heuristic, and records
 The load-bearing rule is **configured is not observed**, and it is
 mutation-pinned:
 
-- a configured origin — explicit, backend-config or default — never
-  produces `effective_upstream.status: verified`;
+- a configured origin — whatever its FR-E8 provenance — never produces
+  `effective_upstream.status: verified`;
 - relabelling the configured origin into `effective_upstream.origin`
   fails a named test;
-- codex resolves its configured origin with `backend_config`
-  provenance, and that does NOT flip the verification state;
-- login mode records `backend_default` or null, never a fabricated
-  origin, and stays `unverifiable`;
+- codex resolves its configured origin with the FR-E8 provenance for
+  codex (FR-E10), and that does NOT flip the verification state;
+- login mode records `upstream_origin = null` and
+  `upstream_origin_source = none` — never a fabricated origin, and
+  never an assumed default — and stays `unverifiable` (FR-E11);
 - the codex-resolved value passes the same sanitizer: credentials,
-  path, query and fragment stripped, http(s) only.
+  path, query and fragment stripped, http(s) only;
+- the `effective_upstream` state machine is closed: the four
+  off-contract combinations named below are each refused.
 
 Two properties hold regardless of seam: an unlearnable endpoint records
 null with a reason and a test proves the null; and the configured and
@@ -182,9 +195,6 @@ in prose.
 ```text
 configured origin copied into effective_upstream.origin
     -> fails the configured != observed discriminator
-
-effective_upstream.status = verified with no authoritative evidence
-    -> fails
 
 codex provider A selected, provider B base_url persisted
     -> fails the selection-fidelity discriminator
@@ -199,19 +209,32 @@ backend_default recorded where the default cannot be established
     -> fails (the value must be `none`, not an assumption)
 ```
 
+The `effective_upstream` state machine is closed by FR-E7, so each
+off-contract combination gets its own named mutation. All four must
+fail, and each for a DIFFERENT reason — a single "shape is wrong" check
+that catches all of them proves only that something is validated, not
+that the two states are discriminated:
+
+```text
+E7-M1  status=verified, origin=null
+    -> fails: verified asserts an origin was learned
+
+E7-M2  status=verified, evidence=none
+    -> fails: verified without provider-reported evidence is the
+       overclaim this whole contract exists to prevent
+
+E7-M3  status=unverifiable, origin=<non-null>
+    -> fails: an unverified origin in the observed field is exactly the
+       relabelling FR-E3 forbids
+
+E7-M4  status=unverifiable, evidence=provider_reported
+    -> fails: authoritative evidence and an unverifiable verdict cannot
+       coexist
+```
+
 Each is run with `__pycache__` cleared and checked for `ERROR:` as well
 as `FAIL:`, both of which have previously masked a non-discriminating
 mutation in this arc.
-
-
-
-Determined with the seam. Two properties hold regardless:
-
-- an endpoint that cannot be learned records `null` with a reason, and
-  a test proves the null rather than assuming it;
-- the configured origin and any effective value remain distinct fields,
-  with a discriminator that fails if one is relabelled as the other —
-  the exact mistake the first audit made in prose.
 
 ## Not planned
 

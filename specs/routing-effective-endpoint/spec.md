@@ -101,7 +101,7 @@ upstream_origin:         sanitized origin | null
 upstream_origin_source:  profile_base_url | profile_base_url_env
                          | codex_model_provider | backend_default | none
 effective_upstream:
-  origin:   null
+  origin:   sanitized origin | null
   status:   verified | unverifiable
   evidence: provider_reported | none
 ```
@@ -111,6 +111,32 @@ Provenance values are CLOSED and semantically specific. A vague
 be strong: `codex_model_provider` and `profile_base_url_env` are
 different facts with different trust, and an audit must be able to tell
 them apart without reading code.
+
+**`effective_upstream` is a CLOSED state machine with exactly two valid
+states.** The three fields are not independent; only these combinations
+exist, and every other combination is INVALID and refused at the runtime
+boundary:
+
+| `status` | `origin` | `evidence` | Means |
+|---|---|---|---|
+| `unverifiable` | `null` | `none` | nothing authoritative was learned — every path that exists today |
+| `verified` | sanitized origin | `provider_reported` | an authoritative provider-reported upstream was observed |
+
+Consequences that the implementation must honour:
+
+- `origin` is typed *sanitized origin \| null*, NOT "always null". Today
+  no code path produces the `verified` state, but the schema must not
+  encode today's incompleteness as a permanent type — a later
+  opportunistic O3 signal would otherwise have to change the contract
+  rather than populate it.
+- Any origin reaching the `verified` state passes the **same origin-only
+  sanitizer** as `upstream_origin` (FR-E4, and #277's http(s)
+  restriction). A provider-reported value is authoritative about
+  *identity*, never trusted as *safe text*.
+- The four off-contract combinations are separately named mutations
+  (E7-M1…E7-M4 in the plan) and must each fail for a distinct reason.
+  A single shape check that rejects all four proves the record is
+  validated, not that the two states are discriminated.
 
 **FR-E8 — provenance is recorded, not implied.** A configured origin
 carries *how* CCT learned it:
@@ -134,7 +160,11 @@ profile, and that override decides which provider codex uses. Any
 resolution must follow that same selection. Resolution order:
 
 1. the `model_provider` the supervisor passed for THIS attempt;
-2. otherwise the config's top-level `model_provider`;
+2. the config's top-level `model_provider` — **only when no launch
+   override was issued for this attempt**. An override that was issued
+   but whose provider is absent from `[model_providers]` resolves to
+   `none`, never to the top-level default: falling back there would
+   record the provider codex did *not* use;
 3. otherwise `none`.
 
 **"The first key under `[model_providers]`" is not a valid fallback.**
@@ -165,9 +195,14 @@ unnecessary `null` without pretending it identifies the server that
 ultimately handled inference — it improves `upstream_origin` ONLY, and
 never touches `effective_upstream`.
 
-**FR-E11 — login mode is explicit.** Where CCT knows only a backend
-default, either record it as `backend_default` or leave the origin
-null. Either way `effective_upstream.status` stays `unverifiable`.
+**FR-E11 — login mode is explicit.** In login mode no base URL is
+wired and CCT cannot positively establish which default applied, so the
+record is `upstream_origin: null` with `upstream_origin_source: none`.
+Not `backend_default` — per FR-E8 that value requires an
+*establishable* default, and "the backend probably used its own
+default" is an assumption, not an observation. `backend_default` is
+reserved for a future path that can positively establish one.
+`effective_upstream` stays in the `unverifiable` state either way.
 
 ## Constraints
 
