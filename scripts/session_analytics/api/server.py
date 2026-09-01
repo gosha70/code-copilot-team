@@ -106,6 +106,22 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     # IPv6 caveat).
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=C.API_ALLOWED_HOSTS)
 
+    def _internal_error(exc: BaseException, where: str) -> "HTTPException":
+        """THE one place an unexpected route failure becomes a response.
+
+        A route that lets an exception escape hands the caller a stack
+        trace (CodeQL py/stack-trace-exposure) — the same leak the probe's
+        closed error set exists to prevent, where a driver message carried
+        hosts, IPs and usernames. The exception is LOGGED in full; the
+        response carries only a constant.
+
+        Returned rather than raised so the call site reads
+        ``raise _internal_error(...) from None`` — ``from None`` is what
+        suppresses the chained traceback.
+        """
+        _log.exception("unhandled error in %s", where, exc_info=exc)
+        return HTTPException(status_code=500, detail=C.MSG_INTERNAL_ERROR)
+
     def db() -> Database:
         return Database.connect(dsn)
 
@@ -298,15 +314,25 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     def routing_calibration() -> dict[str, Any]:
         from ..routing_calibration import calibration_payload
 
-        cfg = load_config()
-        return dict(calibration_payload(_routing_entries(cfg), cfg))
+        try:
+            cfg = load_config()
+            return dict(calibration_payload(_routing_entries(cfg), cfg))
+        except HTTPException:
+            raise                       # deliberate, already curated
+        except Exception as exc:        # noqa: BLE001
+            raise _internal_error(exc, "routing calibration") from None
 
     @app.get("/api/routing/calibration/evaluation")
     def routing_calibration_evaluation() -> dict[str, Any]:
         from ..routing_calibration import evaluation_payload
 
-        cfg = load_config()
-        return dict(evaluation_payload(_routing_entries(cfg), cfg))
+        try:
+            cfg = load_config()
+            return dict(evaluation_payload(_routing_entries(cfg), cfg))
+        except HTTPException:
+            raise                       # deliberate, already curated
+        except Exception as exc:        # noqa: BLE001
+            raise _internal_error(exc, "routing calibration evaluation") from None
 
     @app.get("/api/routing/evidence/{set_id}/knn")
     def routing_knn(set_id: str) -> dict[str, Any]:
@@ -317,10 +343,15 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         # the roots, letting a set pass the 404 check and then return
         # an empty report — and it would pay the (complete) loading
         # cost twice.
-        cfg = load_config()
-        entries = _routing_entries(cfg)
-        _routing_set_or_404(set_id, entries)
-        return dict(knn_payload(entries, set_id, cfg))
+        try:
+            cfg = load_config()
+            entries = _routing_entries(cfg)
+            _routing_set_or_404(set_id, entries)
+            return dict(knn_payload(entries, set_id, cfg))
+        except HTTPException:
+            raise                       # the 404 above must survive
+        except Exception as exc:        # noqa: BLE001
+            raise _internal_error(exc, "routing knn") from None
 
     # ── dashboard ──────────────────────────────────────────────────────
     @app.get("/api/dashboard/kpis")

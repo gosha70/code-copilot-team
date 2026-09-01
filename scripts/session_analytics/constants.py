@@ -215,6 +215,12 @@ DEFAULT_UI_PORT = 3000  # keep in sync with cli.py's --ui-port default
 # are covered without maintaining a route list.
 ORIGIN_SAFE_METHODS = frozenset({"GET", "HEAD"})
 MSG_ORIGIN_NOT_ALLOWED = "Origin not allowed"
+# The ONE curated 500 detail. A route that lets an unexpected exception
+# escape hands the caller a stack trace (CodeQL py/stack-trace-exposure)
+# — the same class of leak the probe's closed error set exists to
+# prevent, where a driver message carried hosts, IPs and usernames.
+# The exception is LOGGED in full; only this constant is returned.
+MSG_INTERNAL_ERROR = "Internal error. See the server log for details."
 
 
 # ── Connection-probe diagnostics (#100) ────────────────────────────────
