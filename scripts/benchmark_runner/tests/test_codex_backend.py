@@ -298,7 +298,8 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
 
     def test_metadata_has_config_toml_path_not_key(self) -> None:
         # config_toml_path is a filesystem path (not a secret).
-        # provider_id is the config key name (not a secret value).
+        # provider_id is always None as of #281 — see the dedicated
+        # attribution tests below for why.
         out = self._run_backend("transcript-success.jsonl")
         meta = out["result"].backend_metadata
         # These keys must exist (may be None if config absent on test machine).
@@ -344,6 +345,121 @@ class TestBackendEndToEndAgainstFakeCli(unittest.TestCase):
     def test_zero_exit_recorded_as_no_failed_command(self) -> None:
         out = self._run_backend("transcript-success.jsonl", exit_code=0)
         self.assertEqual(out["result"].failed_commands, 0)
+
+    # ── #281: no arbitrary provider attribution survives ──────────────
+    #
+    # This backend passes codex NO provider selection — no
+    # `-c model_provider=<id>`, no `--profile` — so which provider served
+    # a run is unestablished. The previous implementation reported the
+    # FIRST key under [model_providers], in arbitrary dict order, which
+    # recorded a provider the run may never have used.
+    #
+    # The fixture below is built so every plausible guess is a DIFFERENT
+    # name, so a test cannot pass by coincidence: first key, second key,
+    # and the top-level default are three distinct values, and none of
+    # them may appear anywhere in the metadata.
+
+    _MULTI_PROVIDER_CONFIG = """\
+model_provider = "provider_toplevel"
+
+[model_providers.provider_first]
+base_url = "https://first.example/v1"
+env_key = "FIRST_KEY"
+
+[model_providers.provider_second]
+base_url = "https://second.example/v1"
+env_key = "SECOND_KEY"
+
+[model_providers.provider_toplevel]
+base_url = "https://toplevel.example/v1"
+api_key = "sk-should-never-be-read"
+"""
+
+    def _codex_home(self, contents: str | None) -> Path:
+        """A CODEX_HOME dir, with or without a config.toml in it."""
+        home = self._tmp_path / f"codex-home-{len(str(contents))}"
+        home.mkdir(exist_ok=True)
+        if contents is not None:
+            (home / "config.toml").write_text(contents, encoding="utf-8")
+        return home
+
+    def _meta_with_codex_home(self, home: Path) -> dict:
+        out = self._run_backend(
+            "transcript-success.jsonl",
+            env_overrides={"CODEX_HOME": str(home)},
+        )
+        return out["result"].backend_metadata
+
+    def test_281_multiple_providers_attribute_none_of_them(self) -> None:
+        home = self._codex_home(self._MULTI_PROVIDER_CONFIG)
+        meta = self._meta_with_codex_home(home)
+        self.assertIsNone(
+            meta["provider_id"],
+            "with three providers configured and no selection passed to "
+            "codex, which one served the run is unestablished",
+        )
+
+    def test_281_no_configured_provider_name_appears_in_metadata(self) -> None:
+        # The counterexample proper: not merely "provider_id is None",
+        # but that no guess leaked into any other field either.
+        home = self._codex_home(self._MULTI_PROVIDER_CONFIG)
+        meta_str = str(self._meta_with_codex_home(home))
+        for name in ("provider_first", "provider_second", "provider_toplevel"):
+            self.assertNotIn(name, meta_str)
+
+    def test_281_first_key_heuristic_would_have_answered_differently(self) -> None:
+        # Without this, the assertions above would also pass for code that
+        # still used the rejected heuristic but happened to be handed a
+        # single-provider config. Pin that the fixture discriminates.
+        import tomllib
+
+        home = self._codex_home(self._MULTI_PROVIDER_CONFIG)
+        with (home / "config.toml").open("rb") as fh:
+            providers = tomllib.load(fh)["model_providers"]
+        self.assertEqual(next(iter(providers)), "provider_first")
+        self.assertGreater(len(providers), 1)
+
+    def test_281_codex_home_is_honoured_for_the_config_path(self) -> None:
+        # Hardcoding ~/.codex named a file codex may never have read.
+        home = self._codex_home(self._MULTI_PROVIDER_CONFIG)
+        meta = self._meta_with_codex_home(home)
+        self.assertEqual(meta["config_toml_path"], str(home / "config.toml"))
+
+    def test_281_absent_config_records_null_path(self) -> None:
+        # CODEX_HOME pointing at a dir with no config.toml — asserted
+        # rather than depending on whether the test machine has ~/.codex.
+        home = self._codex_home(None)
+        meta = self._meta_with_codex_home(home)
+        self.assertIsNone(meta["config_toml_path"])
+        self.assertIsNone(meta["provider_id"])
+
+    def test_281_present_and_absent_config_stay_distinguishable(self) -> None:
+        # No third field is needed to tell the two cases apart:
+        #   path non-null + provider null -> config exists, provider unestablished
+        #   path null     + provider null -> no base config file
+        present = self._meta_with_codex_home(
+            self._codex_home(self._MULTI_PROVIDER_CONFIG)
+        )
+        absent = self._meta_with_codex_home(self._codex_home(None))
+        self.assertIsNotNone(present["config_toml_path"])
+        self.assertIsNone(absent["config_toml_path"])
+        self.assertIsNone(present["provider_id"])
+        self.assertIsNone(absent["provider_id"])
+
+    def test_281_malformed_config_is_not_parsed_and_does_not_raise(self) -> None:
+        # The file is never opened for parsing, so a config codex itself
+        # would reject cannot break the harness — and there is no parse
+        # path to tempt a future reader back into attribution.
+        home = self._codex_home("this is not = valid toml [[[")
+        meta = self._meta_with_codex_home(home)
+        self.assertEqual(meta["config_toml_path"], str(home / "config.toml"))
+        self.assertIsNone(meta["provider_id"])
+
+    def test_281_no_secret_from_the_config_reaches_metadata(self) -> None:
+        # The fixture's top-level provider carries an api_key literal.
+        home = self._codex_home(self._MULTI_PROVIDER_CONFIG)
+        meta_str = str(self._meta_with_codex_home(home))
+        self.assertNotIn("sk-should-never-be-read", meta_str)
 
 
 if __name__ == "__main__":

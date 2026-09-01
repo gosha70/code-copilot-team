@@ -35,7 +35,6 @@ import shutil
 import signal
 import subprocess
 import time
-import tomllib
 from pathlib import Path
 from typing import Any, Optional
 
@@ -201,33 +200,52 @@ class CodexBackend:
 
 
 def _resolve_codex_config() -> tuple[Optional[str], Optional[str]]:
-    """Resolve the ~/.codex/config.toml path and selected provider id.
+    """Resolve the base user config path; the provider id is UNESTABLISHED.
 
-    Returns (config_toml_path_str_or_None, provider_id_str_or_None).
-    If the config is absent, both are None. If present, provider_id is
-    the first key under [model_providers] (if any).
+    Returns (config_toml_path_str_or_None, None). The second element is
+    always None, and that is the fix for #281 rather than an oversight.
 
-    API keys are NEVER returned — only the key name (provider id).
+    WHY THE PROVIDER ID IS ALWAYS NONE.
+
+    This backend passes no provider selection to codex — no
+    ``-c model_provider=<id>``, no ``--profile`` (see _build_argv). Codex
+    therefore chooses its provider entirely from its own configuration,
+    and this process has NO signal about which one it chose. The previous
+    implementation reported ``next(iter(providers))`` — the first key
+    under ``[model_providers]``, in arbitrary dict order — which with two
+    providers configured recorded a provider the run may never have used.
+
+    That is a fabricated fact in a metadata field that reads as evidence,
+    and benchmark evidence is exactly what later decisions trust. An
+    honest absence is worth more than a plausible attribution.
+
+    Establishing it truthfully would mean reproducing codex's LAYERED
+    configuration resolution — ``--profile`` layers
+    ``$CODEX_HOME/<name>.config.toml`` over the base user config, and
+    ``--ignore-user-config`` drops the base file entirely (codex-cli
+    0.147.0) — so no single file answers the question. That work is
+    deliberately not done here; see #281 and
+    ``specs/routing-effective-endpoint/spec.md`` FR-E10, where the routed
+    side reached the same conclusion and records null/none.
+
+    The two returned values remain distinguishable without a third field:
+    a non-null path with a null provider means "a base config exists, its
+    selected provider is unestablished"; a null path means "no base
+    config file".
+
+    CODEX_HOME is honoured because codex honours it. Hardcoding
+    ``~/.codex`` named a file codex may never have read.
+
+    API keys are NEVER returned, and no provider configuration is read.
     """
-    config_path = Path.home() / ".codex" / "config.toml"
+    codex_home = os.environ.get("CODEX_HOME")
+    base = Path(codex_home) if codex_home else Path.home() / ".codex"
+    config_path = base / "config.toml"
     if not config_path.is_file():
         return None, None
-
-    config_path_str = str(config_path)
-    try:
-        with config_path.open("rb") as fh:
-            config = tomllib.load(fh)
-    except Exception:
-        return config_path_str, None
-
-    # Find the first provider id under [model_providers].
-    providers = config.get("model_providers")
-    if isinstance(providers, dict) and providers:
-        provider_id = next(iter(providers))
-    else:
-        provider_id = None
-
-    return config_path_str, provider_id
+    # The file is NOT parsed. Nothing in it can be attributed to this run,
+    # so opening it would only create the temptation to try.
+    return str(config_path), None
 
 
 def _build_metadata(
@@ -243,8 +261,12 @@ def _build_metadata(
 
     Key invariant: API keys are NEVER recorded. Only:
     - family + model
-    - resolved config.toml path (presence is non-secret; path is not secret)
-    - provider id (the config key name, e.g. "my_openai" — not the key value)
+    - base user config.toml path, honouring CODEX_HOME (presence is
+      non-secret; path is not secret); None when no such file exists
+    - provider id — ALWAYS None (#281). This backend passes codex no
+      provider selection, so which provider served the run is
+      unestablished, and a guess in an evidence field is worse than an
+      honest absence. See _resolve_codex_config.
     - verified CLI version
     - exit code + stderr tail
     """
