@@ -6,8 +6,11 @@ before any of it is written, and because T1 is a gate rather than a
 code change.
 
 Order is load-bearing: **the contract is amended before anything
-records against it**, and **provenance is proven before codex
-resolution uses it**.
+records against it**, and **provenance is proven before T4 evaluates
+whether codex can safely populate it**. That ordering is what let T4
+answer "no" without leaving a hole: the vocabulary and the pairing
+invariant already existed, so `none` was a value with meaning rather
+than an absence.
 
 ---
 
@@ -30,7 +33,7 @@ C30 line, and the amendment section.
 
 > **This file is a navigation layer.** The contract — the closed
 > provenance vocabulary, the closed `effective_upstream` state machine,
-> the codex resolution order — is defined once in `spec.md`. Tasks
+> the (dormant) codex resolution order — is defined once in `spec.md`. Tasks
 > point at the requirements they satisfy and name what makes each one
 > *done*; they do not restate the enums, because a second copy is a
 > second thing to drift.
@@ -82,7 +85,7 @@ never runs JSON Schema, so this predicate IS the enforcement.
 - `has("origin") and has("status") and has("evidence")` accepted a
   FOURTH key. Beside a closed state machine that is a private channel
   carrying a claim the contract refused to make. Now
-  `(keys | sort) == ["evidence","origin","status"]`.
+  `keys == ["evidence","origin","status"]` — jq sorts `keys`.
 - Reading provenance as `.upstream_origin_source // ""` then testing
   `-n` made an explicit `null` and `""` indistinguishable from
   omission, so both skipped validation despite being outside the FR-E8
@@ -136,8 +139,9 @@ unclassified caller ONLY when there is no origin — that value is
 ENTAILED by the pairing invariant rather than assumed — and REFUSES an
 unclassified non-null origin.
 
-Codex still records `none` here; T4 owns `codex_model_provider`, and a
-test pins that no assignment of it exists yet.
+Codex records `none` here, and still does after T4: that task found it
+cannot be established, so `codex_model_provider` stays reserved and a
+test pins that no path assigns it.
 
 Six mutations, each caught: swapped literal/env values; classify from
 the reference form ignoring resolution; login mode assuming
@@ -146,30 +150,34 @@ defaulting an unclassified origin; the boundary reopening the window.
 
 ---
 
-## T4 — codex configured-origin resolution (the risky one)
+## T4 — can codex's configured origin be established at all?
 
-**Implements:** FR-E10 (codex resolves its configured origin), FR-E12
-(resolution follows codex's ACTUAL selection), FR-E13 (no raw backend
-configuration becomes evidence).
+**Implements:** FR-E10 as amended (codex records `null` / `none`),
+FR-E13 (no raw backend configuration becomes evidence). FR-E12 is
+DORMANT — binding on whatever one day implements a resolution, and
+governing nothing that ships.
 
-Resolve the `base_url` of the provider codex actually selected, in
-FR-E12's order. The hazard FR-E12 exists to block: `_resolve_codex_config`
-picks **the first key under `[model_providers]`** — arbitrary dict
-order — while the supervisor passes `-c model_provider=<id>`
-(`cooldown-supervisor.sh:1498, 1915`). This task must not reuse that
-selection.
+The task as originally written was "resolve
+`[model_providers.<id>].base_url` for the provider codex actually
+selected". It was implemented that way, and the answer turned out to be
+that **CCT cannot establish this fact from configuration it can read**.
+The resolver was withdrawn; what T4 delivers is the investigation, the
+withdrawal, and mutation pins that keep a plausible-but-unproven value
+out of the record.
 
 **Done when**
 
-- provider A selected with provider B also in config → the recorded
-  origin is A's, and a mutation that picks the first key fails;
-- an override was issued but its provider is absent → `none`, NOT the
-  top-level default (FR-E12 step 2's precondition);
-- resolution raises `upstream_origin` only — `effective_upstream` is
-  untouched and stays in the `unverifiable` state;
-- a credential, path or query in the codex `base_url` is stripped by
-  #277's sanitizer and a non-http(s) scheme is refused;
-- an undeterminable provider records `none`, not a guess.
+- a codex user config containing a RESOLVABLE provider `base_url` is
+  present, and the routed result still records `upstream_origin: null`
+  / `upstream_origin_source: none`;
+- reintroducing the user-file resolver fails;
+- implementing the first-key `[model_providers]` selection fails;
+- no codex configured data of any kind reaches the record — not a
+  provider host, not a credential, not the config path, not an
+  unrelated config key;
+- `effective_upstream` remains `unverifiable` / `null` / `none`;
+- no path assigns `codex_model_provider`, and the withdrawn resolver is
+  gone rather than merely unused.
 
 **Status: complete — as a WITHDRAWAL.** Codex records
 `upstream_origin: null` / `upstream_origin_source: none`, and under C30

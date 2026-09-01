@@ -145,7 +145,7 @@ exists to prevent.
 
 Still no production code at this point; the bundle remains plan-only.
 
-## The O1 withdrawal (T4 review, 2026-09-02)
+## The O1 withdrawal (T4 review, 2026-09-01)
 
 The hazard this record was created to carry — that
 `_resolve_codex_config` picks the FIRST key under `[model_providers]`
@@ -171,6 +171,28 @@ identified the layering. It is recorded here and in the amended FR-E10
 rather than only in a commit message, and the T5 audit must cite it:
 the audit must state that codex's endpoint is recorded as unestablished
 — never that it was resolved.
+
+## Bundle consistency pass after the withdrawal
+
+The withdrawal was recorded correctly in FR-E10 and in T4's status, but
+`plan.md` and `tasks.md` still carried the PRE-withdrawal T4
+requirements as though active — "the launch override decides which
+provider codex uses", "this feature resolves from the launch-time
+selection", "Done when provider A's origin is recorded". A reader would
+have found two contradictory stories with no marker saying which
+governs.
+
+Those are rewritten to the single governing one: **T4 investigated
+codex configured-origin resolution, proved CCT cannot establish it from
+one configuration layer, withdrew the resolver, and mutation-pins
+`null` / `none` against plausible-but-unproven configuration values.**
+FR-E12 is marked DORMANT rather than deleted — it binds whatever one
+day implements a resolution, and governs nothing that ships.
+
+The amendment dates also read 2026-09-02. The work and its commits
+happened on 2026-09-01, matching this plan's frontmatter; corrected.
+
+Docs only. No production behaviour changed in this pass.
 
 ## What this record does NOT claim
 

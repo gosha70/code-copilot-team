@@ -150,7 +150,7 @@ model was right.
    signal exists.
 4. ~~**Codex configured-origin resolution** — the selected
    `[model_providers.<id>].base_url`, through #277's sanitizer, recorded
-   with the provenance FR-E8 assigns it.~~ **SUPERSEDED 2026-09-02 by
+   with the provenance FR-E8 assigns it.~~ **SUPERSEDED 2026-09-01 by
    the amended FR-E10.** Implemented, then withdrawn during T4 review:
    `${CODEX_HOME:-$HOME/.codex}/config.toml` is ONE LAYER of codex's
    configuration, not the configuration — `--profile` layers over it and
@@ -160,20 +160,34 @@ model was right.
    for a path that reproduces codex's own resolution.
 5. Schema and runtime-boundary updates for the new fields.
 
-## The riskiest implementation detail
+## The riskiest part, and what happened to it
 
-Codex's provider selection. The supervisor passes
-`-c model_provider=<id>` from the routed profile
-(`cooldown-supervisor.sh:1498, 1915`), and that override decides which
-provider codex uses. The existing `_resolve_codex_config` helper
-instead takes **the first key under `[model_providers]`** — arbitrary
-dict order. With two providers configured it can attribute provider
-B's `base_url` to a run routed through provider A.
+**Reading codex configuration at all.** This section originally named
+provider SELECTION as the risk — `_resolve_codex_config` takes the
+first key under `[model_providers]`, arbitrary dict order, so with two
+providers configured it can attribute provider B's `base_url` to a run
+routed through provider A. That risk is real, and T4 was built to avoid
+it by resolving from the launch-time `-c model_provider=<id>` selection.
 
-That would be a fabricated fact wearing a provenance label, which is
-worse than the `null` it replaces. So this feature resolves from the
-launch-time selection, never from that helper's heuristic, and records
-`none` when the selection cannot be determined.
+**T4 then found a larger one and withdrew the feature.** Selecting the
+right provider does not help if the file being read is not codex's
+configuration — and it is not. It is one LAYER of it. Verified against
+codex-cli 0.147.0: `-p, --profile <name>` layers
+`$CODEX_HOME/<name>.config.toml` on top of the base user config, and
+`--ignore-user-config` excludes the base file entirely. A
+higher-precedence layer can redefine `model_providers`.
+
+So the same fabrication survives correct selection: CCT could durably
+record `base_url` X while codex resolved the same selected provider to
+Y. Establishing the configured origin honestly would mean reproducing
+codex's layered resolution for the exact launch context — a second
+codex process and an experimental RPC path, for a field this plan
+recorded as telemetry completion.
+
+**Codex therefore records `null` / `none`** (FR-E10 as amended), which
+under the amended C30 is accurate recording rather than a gap.
+`codex_model_provider` stays reserved in the FR-E8 vocabulary for a
+path that does that resolution.
 
 ## Test strategy
 
@@ -184,12 +198,15 @@ mutation-pinned:
   `effective_upstream.status: verified`;
 - relabelling the configured origin into `effective_upstream.origin`
   fails a named test;
-- codex resolves its configured origin with the FR-E8 provenance for
-  codex (FR-E10), and that does NOT flip the verification state;
+- codex records `upstream_origin = null` / `upstream_origin_source =
+  none` even when a codex user config containing a resolvable
+  provider `base_url` is present (FR-E10 as amended) — the fixture
+  supplies exactly such a config, and no part of it may reach the
+  record;
 - login mode records `upstream_origin = null` and
   `upstream_origin_source = none` — never a fabricated origin, and
   never an assumed default — and stays `unverifiable` (FR-E11);
-- the codex-resolved value passes the same sanitizer: credentials,
+- any origin that IS recorded passes the same sanitizer: credentials,
   path, query and fragment stripped, http(s) only;
 - the `effective_upstream` state machine is closed: the four
   off-contract combinations named below are each refused.
@@ -206,8 +223,15 @@ in prose.
 configured origin copied into effective_upstream.origin
     -> fails the configured != observed discriminator
 
-codex provider A selected, provider B base_url persisted
-    -> fails the selection-fidelity discriminator
+codex user config resolves provider A to base_url X,
+  and X is persisted as the configured execution origin
+    -> fails: one config LAYER is not codex's configuration, so X is
+       plausible-but-unproven (FR-E10 as amended). Both the
+       reinstated user-file resolver and a first-key implementation
+       are caught by this.
+
+codex configured data of any kind leaks into the record
+    -> fails (host, credential, config path, unrelated config key)
 
 credential / path / query survives configured-origin sanitization
     -> fails

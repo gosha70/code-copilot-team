@@ -158,7 +158,7 @@ being recorded as facts.
 Dormant while FR-E10 records `null`; binding on whatever implements it.
 
 The routing supervisor passes `-c model_provider=<id>` from the routed
-profile. **Wording corrected 2026-09-02:** the earlier "that override
+profile. **Wording corrected 2026-09-01:** the earlier "that override
 decides which provider codex uses" and "the provider ACTUALLY selected"
 overstate what configuration evidence can prove. An override names a
 provider in codex's configuration; it does not prove which upstream
@@ -200,7 +200,7 @@ separately with `evidence: provider_reported`.
 **FR-E10 — codex records `null` / `none`, and that is the accurate
 record.** ~~From the `[model_providers.<id>].base_url` of the provider
 selected per FR-E12, sanitized by the same rules as #277, recorded with
-`upstream_origin_source: codex_model_provider`.~~ **AMENDED 2026-09-02,
+`upstream_origin_source: codex_model_provider`.~~ **AMENDED 2026-09-01,
 during T4 review.**
 
 The withdrawn wording assumed `${CODEX_HOME:-$HOME/.codex}/config.toml`
