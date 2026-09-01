@@ -289,10 +289,10 @@ assert_eq "ISO reset time is extracted when present" "2026-08-24T10:00:00Z" \
 # REFUSE would abort the file here and every later assertion would
 # simply never run — reported as a count drift rather than as the
 # behaviour that broke. Found by mutation testing during #273 T2.
-DOC=$(rr_result 1 "$FX/claude-session-limit.out" "claude-code" "anthropic-subscription" "alpha" "sonnet" "-" "anthropic-subscription" "api.anthropic.com" '{"stderr":"x.log"}') || true
+DOC=$(rr_result 1 "$FX/claude-session-limit.out" "claude-code" "anthropic-subscription" "alpha" "sonnet" "-" "anthropic-subscription" "api.anthropic.com" '{"stderr":"x.log"}' - - - - profile_base_url) || true
 assert "rr_result: composing the reference document SUCCEEDS" test -n "$DOC"
 assert_eq "rr_result: exact closed key set" \
-    "artifacts backend context_limit_declared context_limit_effective context_limit_evidence context_limit_observed effective_model effective_upstream evidence exit_code failure_class outcome profile provider quota_pool requested_model reset_at retry_after_sec schema_version upstream_origin usage" \
+    "artifacts backend context_limit_declared context_limit_effective context_limit_evidence context_limit_observed effective_model effective_upstream evidence exit_code failure_class outcome profile provider quota_pool requested_model reset_at retry_after_sec schema_version upstream_origin upstream_origin_source usage" \
     "$(jq -r 'keys | sort | join(" ")' <<< "$DOC")"
 assert_eq "rr_result: unverifiable effective model is null, never assumed" "null" \
     "$(jq -r '.effective_model // "null"' <<< "$DOC")"
@@ -640,9 +640,9 @@ assert_eq "G/streams: usage is read from STDOUT, and the supervisor keeps them s
 # combined view. Pinning only the classification argument left the
 # actual forgery surface unguarded.
 assert_eq "G/streams: the USAGE argument is stdout-only, never the combined view" "2" \
-    "$(grep -c '"\$OUT" "\$(jq -r .\.backend. <<< "\$pj")")' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+    "$(grep -c '"\$OUT" "\$(jq -r .\.backend. <<< "\$pj")"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
 assert_eq "G/streams: ...and the combined view is never passed as the usage source" "0" \
-    "$(grep -c '"\$OUT.all" "\$(jq -r .\.backend. <<< "\$pj")")' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+    "$(grep -c '"\$OUT.all" "\$(jq -r .\.backend. <<< "\$pj")"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
 assert_eq "G/streams: classification reads the COMBINED view, so no diagnostic is lost" "2" \
     "$(grep -c 'rr_result "\$CHILD_CODE" "\$OUT.all"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
 assert_eq "G/streams: the combined view is tracked for cleanup, never orphaned in /tmp" "2" \
@@ -722,19 +722,20 @@ assert_eq "C30/launch-origin: a scheme with no authority is refused" "" "$(RSO '
 # if RT_UPSTREAM_ORIGIN were made `local` inside rt_launch_env, while
 # production recorded null. This runs rt_launch_env for real and reads
 # the value out of a durable result built by rr_result.
-EPFLOW() {  # <backend> <resolved-url> -> the recorded upstream_origin
+EPFLOW() {  # <backend> <resolved-url> [ref-form] [jq-filter] -> the recorded value
     ( set +e
       export CCT_EP_TEST_URL="$2"
-      RT_UPSTREAM_ORIGIN=""
+      RT_UPSTREAM_ORIGIN=""; RT_UPSTREAM_ORIGIN_SOURCE="none"
       journal() { :; }
       eval "$(sed -n '/^rt_sanitize_origin()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
       eval "$(sed -n '/^rt_launch_env()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
-      pj=$(jq -nc --arg b "$1" '{id:"p", backend:$b, credential_ref:"none",
-                                 endpoint_ref:"urlenv:CCT_EP_TEST_URL"}')
+      pj=$(jq -nc --arg b "$1" --arg ep "${3:-urlenv:CCT_EP_TEST_URL}" \
+             '{id:"p", backend:$b, credential_ref:"none", endpoint_ref:$ep}')
       rt_launch_env "$pj"
       source "$REPO_DIR/scripts/lib/routing-result.sh"
       rr_result 0 "$FULL" "$1" prov p REQ claude-sonnet-4-8 pool \
-        "${RT_UPSTREAM_ORIGIN:--}" '{}' - - | jq -r '.upstream_origin // "null"' )
+        "${RT_UPSTREAM_ORIGIN:--}" '{}' - - - - "$RT_UPSTREAM_ORIGIN_SOURCE" \
+        | jq -r "${4:-.upstream_origin // \"null\"}" )
 }
 assert_eq "C30/launch-origin dataflow: rt_launch_env -> rr_result -> durable upstream_origin" "https://real-host:8000" \
     "$(EPFLOW pi 'https://user:pw@real-host:8000/v1?k=1')"
@@ -777,7 +778,7 @@ assert_eq "C30/launch-origin: no site still passes a bare - for the origin" "0" 
 assert_eq "C30/launch-origin: the durable result carries the sanitized origin" "https://vllm.internal:8000" \
     "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
           rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG \
-            "$(RSO 'https://user:pw@vllm.internal:8000/v1')" '{}' - - \
+            "$(RSO 'https://user:pw@vllm.internal:8000/v1')" '{}' - - - - profile_base_url_env \
             | jq -r '.upstream_origin' ) )"
 assert_eq "C30/launch-origin: an unknown origin stays null, not a placeholder" "null" \
     "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
@@ -882,7 +883,7 @@ assert "T2/sanitizer: an IPv6 origin round-trips through the validator" \
 # never run, and the only symptom would be a count drift. Capture, then
 # assert on the capture.
 EUDOC=$(RRLIB rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG \
-          'https://gateway.internal:8787' '{}' - -) || true
+          'https://gateway.internal:8787' '{}' - - - - profile_base_url) || true
 assert "T2/FR-E9: composing a result with a configured origin SUCCEEDS" \
     test -n "$EUDOC"
 assert_eq "T2/FR-E9: a configured origin is recorded, and the observed upstream stays unverifiable" \
@@ -921,14 +922,25 @@ assert_eq "T2/provenance: a value outside the closed vocabulary is refused" "9" 
     "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = "guessed"')"
 assert_eq "T2/provenance: the vague 'configured' the spec rejects is refused by name" "9" \
     "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = "configured"')"
-# THE COMPATIBILITY WINDOW ITSELF, as three distinguished states rather
-# than one "bad provenance is rejected". Reading the field as
-# `.upstream_origin_source // ""` and then testing `-n` made an explicit
-# null and an empty string indistinguishable from omission, so both
-# skipped validation although neither is in the FR-E8 vocabulary or the
-# schema enum. Absence is the ONLY permitted state, and only until T3.
-assert_eq "T2/provenance: an ABSENT field is accepted (the T2 compatibility window)" "0" \
+# THREE DISTINGUISHED STATES rather than one "bad provenance is
+# rejected". Reading the field as `.upstream_origin_source // ""` and
+# then testing `-n` made an explicit null and an empty string
+# indistinguishable from omission, so both skipped validation although
+# neither is in the FR-E8 vocabulary or the schema enum.
+#
+# T2 permitted absence while no producer could classify one. T3 wired
+# every producer, so the window is CLOSED: absence is now its own
+# refusal (11), kept distinct from present-but-invalid (9) so a
+# producer that forgot to classify is not reported as one that
+# classified wrongly.
+assert_eq "T3/provenance: an ABSENT field is now REFUSED — the T2 compatibility window is closed" "11" \
     "$(EUCODE "$UNVERIF" 'del(.upstream_origin_source) | .upstream_origin = "https://gw.example"')"
+assert_eq "T3/provenance: ...and absence is refused for a NULL origin too, not only a recorded one" "11" \
+    "$(EUCODE "$UNVERIF" 'del(.upstream_origin_source) | .upstream_origin = null')"
+assert_eq "T3/provenance: absent (11) and present-but-invalid (9) stay distinct refusals" "2" \
+    "$( printf '%s\n' "$(EUCODE "$UNVERIF" 'del(.upstream_origin_source) | .upstream_origin = null')" \
+                     "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = "guessed"')" \
+        | sort -u | wc -l | tr -d ' ' )"
 assert_eq "T2/provenance: an explicit null is refused, NOT treated as an omission" "9" \
     "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = null')"
 assert_eq "T2/provenance: an empty string is refused, NOT treated as an omission" "9" \
@@ -951,12 +963,18 @@ assert_eq "T2/provenance: every member of the closed vocabulary is accepted with
             EUCODE "$UNVERIF" ".upstream_origin = \"https://gw.example\" | .upstream_origin_source = \"$s\""
           fi
         done | tr '\n' ' ' | sed 's/ $//' )"
-# T2 emits the field only when the caller classified one. `none` is a
-# POSITIVE claim that no origin exists; defaulting to it beside a
-# non-null origin would be the first fabricated provenance in a
-# contract built to prevent them.
-assert_eq "T2/provenance: an unclassified caller omits the field rather than guessing 'none'" "false" \
-    "$(jq -r 'has("upstream_origin_source")' <<< "$EUDOC")"
+# AN UNCLASSIFIED CALLER, in the two cases that differ. With no origin,
+# `none` is ENTAILED — the pairing invariant admits exactly one
+# provenance beside a null origin — so deriving it is not a guess. With
+# an origin, any value would be invented, and an invented provenance is
+# worse than the null it replaces because it reads as evidence.
+assert_eq "T3/provenance: an unclassified caller with NO origin records 'none' (entailed, not guessed)" "null none" \
+    "$( RRLIB rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG - '{}' - - \
+          | jq -r '"\(.upstream_origin // "null") \(.upstream_origin_source)"' )"
+assert_eq "T3/provenance: an unclassified caller WITH an origin is REFUSED, never defaulted" "1" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG 'https://gw.example' '{}' - - \
+            >/dev/null 2>&1; echo $? ) )"
 assert_eq "T2/provenance: a classified caller records exactly what it passed" "profile_base_url_env" \
     "$(RRLIB rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG \
          'https://gw.example:8000' '{}' - - - - profile_base_url_env | jq -r '.upstream_origin_source')"
@@ -982,6 +1000,66 @@ assert_eq "T2/compat: the schema and the library agree on the provenance vocabul
 assert_eq "T2/compat: ...but a pre-T2 record can never be PRODUCED anew" "1" \
     "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
           rr_doc_invariant "$(jq -c 'del(.effective_upstream)' <<< "$EUDOC")" >/dev/null 2>&1; echo $? ) )"
+
+# ── #109 T3 (#273): PROVENANCE for the configured-origin paths ───────
+# Which FR-E8 value each real launch path records, asserted through the
+# actual rt_launch_env -> rr_result dataflow rather than by inspecting
+# the classifier in isolation. A unit test of the case statement would
+# stay green if the value never reached the durable record.
+EPSRC() { EPFLOW "$1" "$2" "$3" '.upstream_origin_source'; }
+assert_eq "T3/dataflow: a registry base_url LITERAL records profile_base_url" "profile_base_url" \
+    "$(EPSRC pi 'unused' 'url:https://literal-host:9000/v1')"
+assert_eq "T3/dataflow: a resolved base_url_env records profile_base_url_env" "profile_base_url_env" \
+    "$(EPSRC pi 'https://env-host:8000/v1' 'urlenv:CCT_EP_TEST_URL')"
+assert_eq "T3/dataflow: claude-code classifies the same way (not a pi-only path)" "profile_base_url_env" \
+    "$(EPSRC claude-code 'https://claude-host/v1' 'urlenv:CCT_EP_TEST_URL')"
+# THE TWO FACTS TRAVEL TOGETHER: same run, origin and its provenance.
+assert_eq "T3/dataflow: the origin and its provenance are recorded from ONE launch" \
+    "https://env-host:8000 profile_base_url_env" \
+    "$(EPFLOW pi 'https://user:pw@env-host:8000/v1?k=1' 'urlenv:CCT_EP_TEST_URL' \
+        '"\(.upstream_origin) \(.upstream_origin_source)"')"
+
+# LOGIN MODE (FR-E11): no base URL is wired, so nothing is established.
+# `none`, NOT `backend_default` — that value is reserved for a default
+# CCT can POSITIVELY establish, and "the backend probably used its own"
+# is an assumption. The assertion names both so it fails if either is
+# accepted, rather than merely checking the field is non-empty.
+assert_eq "T3/FR-E11: login mode records none, NOT backend_default" "none" \
+    "$(EPSRC pi '' 'none')"
+assert_eq "T3/FR-E11: ...and its origin stays null, so the pair is consistent" "null none" \
+    "$(EPFLOW pi '' 'none' '"\(.upstream_origin // "null") \(.upstream_origin_source)"')"
+assert_eq "T3/FR-E11: backend_default is produced by NO path in this tree today" "0" \
+    "$(grep -c 'RT_UPSTREAM_ORIGIN_SOURCE="backend_default"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+
+# PROVENANCE FOLLOWS THE RESOLVED ORIGIN, never the reference form. A
+# `urlenv:` whose variable is unset, or holds something unusable, learns
+# NOTHING — and naming a source there would attribute a fact that was
+# never established.
+assert_eq "T3/resolution: an unset base_url_env records none, not profile_base_url_env" "none" \
+    "$(EPSRC pi '' 'urlenv:CCT_EP_TEST_URL')"
+assert_eq "T3/resolution: a non-http(s) resolved value records none, since no origin was learned" "none" \
+    "$(EPSRC pi 'ftp://provider.example/v1' 'urlenv:CCT_EP_TEST_URL')"
+assert_eq "T3/resolution: an unusable value records none" "none" \
+    "$(EPSRC pi 'not-a-url' 'urlenv:CCT_EP_TEST_URL')"
+# CODEX is deliberately still none: ANTHROPIC_BASE_URL does not route
+# it, so there is no origin to attribute. T4 gives it
+# codex_model_provider when it resolves the provider actually selected.
+assert_eq "T3/codex: codex records none — T4 owns codex_model_provider" "null none" \
+    "$(EPFLOW codex 'https://not-codexs-endpoint/v1' 'urlenv:CCT_EP_TEST_URL' \
+        '"\(.upstream_origin // "null") \(.upstream_origin_source)"')"
+assert_eq "T3/codex: no path ASSIGNS codex_model_provider yet" "0" \
+    "$(grep -c 'RT_UPSTREAM_ORIGIN_SOURCE="codex_model_provider"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+
+# EVERY PRODUCER IS WIRED. Three rr_result sites exist; a fourth added
+# later without provenance would be refused at the boundary rather than
+# silently recording an unattributed origin — but this pins the three
+# that exist, so a regression is caught at review, not at runtime.
+assert_eq "T3/wiring: all three rr_result sites pass the launch-bound provenance" "3" \
+    "$(grep -c '"\$RT_UPSTREAM_ORIGIN_SOURCE"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert "T3/wiring: the supervisor initializes the variable, so set -u cannot trip a producer" \
+    grep -q '^RT_UPSTREAM_ORIGIN_SOURCE="none"$' "$REPO_DIR/scripts/cooldown-supervisor.sh"
+assert "T3/wiring: the journal records the provenance beside the origin" \
+    grep -q 'provenance \$RT_UPSTREAM_ORIGIN_SOURCE' "$REPO_DIR/scripts/cooldown-supervisor.sh"
 
 # RESOLVER FAILURE vs VALID-UNLISTED — a broken price table is an
 # operator error and must never be recorded as `unpriced`, which

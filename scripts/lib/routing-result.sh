@@ -218,10 +218,7 @@ rr_origin_is_sanitized() {
 #   8   a non-null origin that is not sanitizer-shaped
 #   9   upstream_origin_source outside the closed vocabulary
 #  10   provenance and origin disagree on whether an origin exists
-#
-# upstream_origin_source is validated WHEN PRESENT here. T3 owns the
-# classification that decides which value each path records, and makes
-# presence mandatory once every producer can supply one.
+#  11   upstream_origin_source absent from a newly produced record
 rr_upstream_invariant() {
     local doc="$1" eu st ev og src uo
     # The key set is EXACT, not a minimum. `has(...)` three times also
@@ -276,35 +273,42 @@ rr_upstream_invariant() {
         return 8
     fi
 
-    # ABSENT and PRESENT-BUT-INVALID are different things. Collapsing
-    # them — as `.upstream_origin_source // ""` then `[[ -n ]]` did —
-    # let an explicit `null` and an empty string skip validation
-    # entirely, though neither is in the FR-E8 vocabulary. Only true
-    # ABSENCE is permitted, and only until T3 wires every producer.
-    if jq -e 'has("upstream_origin_source")' >/dev/null 2>&1 <<< "$doc"; then
-        # PRESENT — so it is validated, whatever it holds. A null or an
-        # object renders as a string that is not in the vocabulary and
-        # is refused below; no separate type guard, because a mutation
-        # test showed one could not change any outcome.
-        src=$(jq -r '.upstream_origin_source' <<< "$doc")
-        # Membership by exact literal comparison. (The `case " $V " in
-        # *" $src "*)` idiom is also safe here — a quoted expansion in a
-        # case pattern is literal, not a glob — but a reader has to know
-        # that rule to see it; this needs none.)
-        local m ok=1
-        for m in $RR_ORIGIN_SOURCES; do
-            [[ "$src" == "$m" ]] && { ok=0; break; }
-        done
-        if [[ "$ok" -ne 0 ]]; then
-            echo "routing-result: upstream_origin_source '$src' is outside the closed vocabulary" >&2
-            return 9
-        fi
-        uo=$(jq -r '.upstream_origin // ""' <<< "$doc")
-        if { [[ -z "$uo" ]] && [[ "$src" != "none" ]]; } \
-           || { [[ -n "$uo" ]] && [[ "$src" == "none" ]]; }; then
-            echo "routing-result: upstream_origin '${uo:-null}' and provenance '$src' disagree on whether an origin exists" >&2
-            return 10
-        fi
+    # PROVENANCE IS MANDATORY for a newly produced record (#273 T3).
+    # T2 permitted absence while no producer could classify one; every
+    # producer now can, so the compatibility window is CLOSED here
+    # rather than left open indefinitely. The schema keeps the field
+    # optional so pre-T3 records stay readable — the same split the
+    # context_limit and usage groups already use.
+    #
+    # ABSENT and PRESENT-BUT-INVALID stay different things: absence is
+    # its own refusal (11), so a producer that forgot to classify is
+    # not reported as one that classified wrongly.
+    if ! jq -e 'has("upstream_origin_source")' >/dev/null 2>&1 <<< "$doc"; then
+        echo "routing-result: upstream_origin_source is missing — a recorded origin must carry how it was learned" >&2
+        return 11
+    fi
+    # PRESENT — so it is validated, whatever it holds. A null or an
+    # object renders as a string that is not in the vocabulary and is
+    # refused below; no separate type guard, because a mutation test
+    # showed one could not change any outcome.
+    src=$(jq -r '.upstream_origin_source' <<< "$doc")
+    # Membership by exact literal comparison. (The `case " $V " in
+    # *" $src "*)` idiom is also safe here — a quoted expansion in a
+    # case pattern is literal, not a glob — but a reader has to know
+    # that rule to see it; this needs none.)
+    local m ok=1
+    for m in $RR_ORIGIN_SOURCES; do
+        [[ "$src" == "$m" ]] && { ok=0; break; }
+    done
+    if [[ "$ok" -ne 0 ]]; then
+        echo "routing-result: upstream_origin_source '$src' is outside the closed vocabulary" >&2
+        return 9
+    fi
+    uo=$(jq -r '.upstream_origin // ""' <<< "$doc")
+    if { [[ -z "$uo" ]] && [[ "$src" != "none" ]]; } \
+       || { [[ -n "$uo" ]] && [[ "$src" == "none" ]]; }; then
+        echo "routing-result: upstream_origin '${uo:-null}' and provenance '$src' disagree on whether an origin exists" >&2
+        return 10
     fi
 }
 
@@ -399,13 +403,26 @@ rr_result() {
     local ufile="${13:--}" ubackend="${14:--}"
     [[ "$ufile" == "-" ]] && ufile="$file"
     [[ "$ubackend" == "-" ]] && ubackend="$backend"
-    # Provenance for the configured origin (FR-E8). `-` means the
-    # caller has not classified one, and the field is then OMITTED
-    # rather than defaulted: `none` is a positive claim that no origin
-    # exists, and guessing it beside a non-null origin would be the
-    # first fabricated provenance in a contract built to prevent them.
-    # T3 supplies this at every producer and makes it mandatory.
+    # Provenance for the configured origin (FR-E8), MANDATORY as of T3.
+    #
+    # `-` means the caller did not classify one, and what happens then
+    # depends on whether there is anything to classify:
+    #
+    #   no origin  -> `none`. Not a guess: the pairing invariant admits
+    #                 exactly one provenance beside a null origin, so
+    #                 the value is ENTAILED rather than assumed.
+    #   an origin  -> REFUSE. Any value picked here would be invented,
+    #                 and an invented provenance is worse than the null
+    #                 it replaces because it reads as evidence.
     local osrc="${15:--}"
+    if [[ "$osrc" == "-" ]]; then
+        if [[ "$origin" == "-" || -z "$origin" ]]; then
+            osrc="none"
+        else
+            echo "routing-result: refusing to record origin '$origin' with no provenance — how it was learned is part of the fact" >&2
+            return 1
+        fi
+    fi
     local cls class this_obs
     cls=$(rr_classify "$rc" "$file") || return 1
     class=$(jq -r '.failure_class // ""' <<< "$cls")
@@ -453,9 +470,9 @@ rr_result() {
                      then "invalid_request numeric maximum (this attempt)"
                    else "prior identity-bound observation" end),
                 usage:$usage,
+                upstream_origin_source:$osrc,
                 effective_upstream:$eu,
-                artifacts:$artifacts}
-        + (if $osrc == "-" then {} else {upstream_origin_source:$osrc} end)')
+                artifacts:$artifacts}')
     # THE RUNTIME BOUNDARY, actually enforced. Until now rr_doc_invariant
     # was only ever called by tests, so a malformed block could still be
     # persisted despite the strict predicate existing. Construct, then

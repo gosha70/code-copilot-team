@@ -114,6 +114,36 @@ requires an *establishable* default.
 `upstream_origin_source: none` per FR-E11, and a test asserts that
 distinction rather than accepting `backend_default` as an alternative.
 
+**Status: complete.** `rt_launch_env` binds
+`RT_UPSTREAM_ORIGIN_SOURCE` beside the origin and all three
+`rr_result` producers pass it. Two decisions worth stating:
+
+- **Provenance follows the RESOLVED origin, not the reference form.**
+  A `urlenv:` whose variable is unset or holds an unusable value
+  learns nothing, so it records `none` — naming
+  `profile_base_url_env` there would attribute a source to a fact that
+  was never established.
+- **`backend_default` is produced by no path.** Login mode records
+  `none`; a test greps that no assignment of `backend_default` exists,
+  so the value stays reserved for a default CCT can positively
+  establish rather than becoming the habitual answer for "unknown".
+
+The T2 compatibility window is CLOSED: `rr_upstream_invariant` now
+refuses an absent provenance (11), kept distinct from present-but-
+invalid (9) so a producer that forgot to classify is not reported as
+one that classified wrongly. `rr_result` derives `none` for an
+unclassified caller ONLY when there is no origin — that value is
+ENTAILED by the pairing invariant rather than assumed — and REFUSES an
+unclassified non-null origin.
+
+Codex still records `none` here; T4 owns `codex_model_provider`, and a
+test pins that no assignment of it exists yet.
+
+Six mutations, each caught: swapped literal/env values; classify from
+the reference form ignoring resolution; login mode assuming
+`backend_default`; one producer dropping the argument; `rr_result`
+defaulting an unclassified origin; the boundary reopening the window.
+
 ---
 
 ## T4 — codex configured-origin resolution (the risky one)

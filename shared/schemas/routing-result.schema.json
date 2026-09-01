@@ -59,7 +59,7 @@
       "type": ["string", "null"]
     },
     "upstream_origin_source": {
-      "description": "How CCT learned upstream_origin (#273 T2/T3, FR-E8). CLOSED and semantically specific rather than a vague `configured`, so an audit can tell a codex provider entry from a resolved environment variable without reading code. `backend_default` is used ONLY where the default can actually be established — otherwise `none`, because an assumed default is an assumption. Additive and NOT in `required`, on the same compatibility rule as the other additive groups.",
+      "description": "How CCT learned upstream_origin (#273 T2/T3, FR-E8). CLOSED and semantically specific rather than a vague `configured`, so an audit can tell a codex provider entry from a resolved environment variable without reading code. `backend_default` is used ONLY where the default can actually be established — otherwise `none`, because an assumed default is an assumption, and no path in this tree establishes one today. Additive and NOT in `required`, on the same compatibility rule as the other additive groups: pre-T3 records stay valid without it, while NEWLY PRODUCED records must carry it — rr_upstream_invariant refuses an absent value (11) distinctly from an invalid one (9). The origin and its provenance must also agree on whether an origin exists; that cross-field rule is enforced there, not here.",
       "enum": [
         "profile_base_url",
         "profile_base_url_env",

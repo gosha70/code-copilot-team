@@ -84,6 +84,11 @@ PKT_MINCTX=""
 # reference name. Initialized here because this script runs under
 # `set -u` and every rr_result site reads it.
 RT_UPSTREAM_ORIGIN=""
+# HOW that origin was learned (#273 T3, FR-E8). Initialized to the
+# no-origin value rather than empty, because every rr_result site must
+# pass a member of the closed vocabulary and `none` is the only value
+# consistent with the empty origin beside it.
+RT_UPSTREAM_ORIGIN_SOURCE="none"
 FEATURE_ID=""
 WORKTREE=""
 BACKEND="claude"
@@ -565,11 +570,39 @@ rt_launch_env() {
   # therefore the CONFIGURED origin the attempt was directed at — an
   # honest, verifiable fact — and it does not by itself satisfy that
   # part of the criterion for gatewayed or codex profiles.
+  #
+  # PROVENANCE (#273 T3, FR-E8) rides with the origin, because "where
+  # did this come from" is a different fact from "what is it", and an
+  # audit must be able to tell a registry literal from a resolved
+  # environment variable without reading this function.
+  #
+  # It follows the RESOLVED origin, never the reference form alone: a
+  # `urlenv:` whose variable is unset or holds an unusable value yields
+  # NO origin, and claiming `profile_base_url_env` there would name a
+  # source for a fact that was not learned.
+  #
+  # `backend_default` is deliberately never produced here. FR-E8
+  # reserves it for a default CCT can POSITIVELY establish, and login
+  # mode establishes nothing — the backend's own default is not
+  # observable from this process. That path is `none` (FR-E11): an
+  # assumed default is an assumption, and this contract exists to stop
+  # assumptions being recorded as facts.
+  #
+  # codex is `none` for now because its origin is null here; T4 gives
+  # it `codex_model_provider` when it resolves the provider actually
+  # selected.
   RT_UPSTREAM_ORIGIN=""
+  RT_UPSTREAM_ORIGIN_SOURCE="none"
   if [[ "$backend" != "codex" ]]; then
     RT_UPSTREAM_ORIGIN=$(rt_sanitize_origin "$RT_ENV_BASE_URL")
+    if [[ -n "$RT_UPSTREAM_ORIGIN" ]]; then
+      case "$ep" in
+        url:*)    RT_UPSTREAM_ORIGIN_SOURCE="profile_base_url" ;;
+        urlenv:*) RT_UPSTREAM_ORIGIN_SOURCE="profile_base_url_env" ;;
+      esac
+    fi
   fi
-  journal "routing_launch_env" "profile $(jq -r '.id' <<< "$pj"): wired${names:- nothing (backend login mode)}; configured launch origin ${RT_UPSTREAM_ORIGIN:-unknown (backend default, non-routing for this backend, or unusable base URL)}"
+  journal "routing_launch_env" "profile $(jq -r '.id' <<< "$pj"): wired${names:- nothing (backend login mode)}; configured launch origin ${RT_UPSTREAM_ORIGIN:-unknown (backend default, non-routing for this backend, or unusable base URL)} (provenance $RT_UPSTREAM_ORIGIN_SOURCE)"
 }
 
 # Child output is SECRET-TAINTED before persistence: any wired secret
@@ -1587,7 +1620,7 @@ delegate_run() {
         "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
         "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" "${RT_UPSTREAM_ORIGIN:--}" '{}' \
         "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")" \
-        "$OUT" "$(jq -r '.backend' <<< "$pj")") || \
+        "$OUT" "$(jq -r '.backend' <<< "$pj")" "$RT_UPSTREAM_ORIGIN_SOURCE") || \
         rt_refuse "routing_usage_evidence_unresolved" \
           "the attempt result could not be composed because its usage/cost evidence did not resolve — a named refusal, never an unhandled status that exits the supervisor"
     decision=$(ra_decide "$result" "$(jq -r --arg id "$id" '.[$id] // 0' <<< "$RT_RETRY_COUNTS")" "$decision_epoch") \
@@ -2002,7 +2035,7 @@ reconcile_run() {
         "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
         "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" "${RT_UPSTREAM_ORIGIN:--}" '{}' \
         "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")" \
-        "$OUT" "$(jq -r '.backend' <<< "$pj")") || \
+        "$OUT" "$(jq -r '.backend' <<< "$pj")" "$RT_UPSTREAM_ORIGIN_SOURCE") || \
         rt_refuse "routing_usage_evidence_unresolved" \
           "the attempt result could not be composed because its usage/cost evidence did not resolve — a named refusal, never an unhandled status that exits the supervisor"
     decision=$(ra_decide "$result" "$(jq -r --arg id "$id" '.[$id] // 0' <<< "$RT_RETRY_COUNTS")" "$decision_epoch") \
@@ -2433,7 +2466,7 @@ routing_iteration() {
       "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
       "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" "${RT_UPSTREAM_ORIGIN:--}" '{}' \
       "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")" \
-      "$RT_DIR/usage-$attempt_no.jsonl" driver-aggregate) || \
+      "$RT_DIR/usage-$attempt_no.jsonl" driver-aggregate "$RT_UPSTREAM_ORIGIN_SOURCE") || \
       rt_refuse "routing_usage_evidence_unresolved" \
         "the attempt result could not be composed because its usage/cost evidence did not resolve — a named refusal, never an unhandled status that exits the supervisor"
   decision=$(ra_decide "$result" "$(jq -r --arg id "$id" '.[$id] // 0' <<< "$RT_RETRY_COUNTS")" "$decision_epoch") \
