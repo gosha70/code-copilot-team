@@ -75,6 +75,31 @@ plus the pairing rule); `rr_result` OMITS it when the caller passed no
 classification, because `none` is a positive claim that no origin
 exists. T3 supplies it at every producer and makes presence mandatory.
 
+**T2 correction pass (review):** the runtime boundary was less closed
+than the schema it claims to enforce, in two places — and `rr_result`
+never runs JSON Schema, so this predicate IS the enforcement.
+
+- `has("origin") and has("status") and has("evidence")` accepted a
+  FOURTH key. Beside a closed state machine that is a private channel
+  carrying a claim the contract refused to make. Now
+  `(keys | sort) == ["evidence","origin","status"]`.
+- Reading provenance as `.upstream_origin_source // ""` then testing
+  `-n` made an explicit `null` and `""` indistinguishable from
+  omission, so both skipped validation despite being outside the FR-E8
+  vocabulary. Presence is now tested with `has(...)`, and anything
+  present is validated.
+
+Two further findings from mutation-testing the correction itself:
+
+- the `case " $V " in *" $src "*)` membership idiom was NOT the glob
+  bypass this correction first claimed — a quoted expansion inside a
+  case pattern is literal. The literal-comparison loop is kept for
+  legibility, not as a security fix, and the comment says so.
+- a `type == "string"` guard added beside the vocabulary check proved
+  unable to change any outcome (a null renders as `"null"`, which the
+  vocabulary refuses anyway). Removed, on the same rule as the
+  unreachable presence check found earlier.
+
 ---
 
 ## T3 — provenance for the existing configured origin

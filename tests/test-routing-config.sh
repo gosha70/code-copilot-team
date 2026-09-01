@@ -837,6 +837,13 @@ assert_eq "T2/state: a status outside the closed set is refused" "2" \
     "$(EUCODE '{"origin":null,"status":"probably","evidence":"none"}')"
 assert_eq "T2/state: an evidence value outside the closed set is refused" "3" \
     "$(EUCODE '{"origin":null,"status":"unverifiable","evidence":"inferred"}')"
+# The key set is EXACT. `has(x)` three times also admits a fourth key,
+# and the schema's additionalProperties:false does NOT run at the
+# runtime boundary — rr_result never executes JSON Schema. An extra key
+# beside a closed state machine is a private channel carrying a claim
+# the contract refused to make.
+assert_eq "T2/state: an extra key inside effective_upstream is refused at the runtime boundary" "1" \
+    "$(EUCODE '{"origin":null,"status":"unverifiable","evidence":"none","guessed_provider":"deepseek"}')"
 assert_eq "T2/state: a missing effective_upstream is refused, never treated as unverifiable" "1" \
     "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
           rr_upstream_invariant "$(rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG - '{}' - - \
@@ -899,6 +906,12 @@ assert_eq "T2/boundary: ...and refuses a document missing the field entirely" "1
     "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
           rr_doc_invariant "$(jq -c 'del(.effective_upstream)' <<< "$EUDOC")" >/dev/null 2>&1
           echo $? ) )"
+# additionalProperties:false lives in the schema, which rr_result never
+# runs. The BOUNDARY has to refuse the extra key on its own.
+assert_eq "T2/boundary: ...and refuses a smuggled fourth key, which only the schema would otherwise catch" "1" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          rr_doc_invariant "$(jq -c '.effective_upstream.guessed_provider = "deepseek"' <<< "$EUDOC")" >/dev/null 2>&1
+          echo $? ) )"
 
 # PROVENANCE (FR-E8) — the vocabulary and the pairing rule. T3 owns
 # WHICH value each producer records; what is pinned here is that the
@@ -908,6 +921,24 @@ assert_eq "T2/provenance: a value outside the closed vocabulary is refused" "9" 
     "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = "guessed"')"
 assert_eq "T2/provenance: the vague 'configured' the spec rejects is refused by name" "9" \
     "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = "configured"')"
+# THE COMPATIBILITY WINDOW ITSELF, as three distinguished states rather
+# than one "bad provenance is rejected". Reading the field as
+# `.upstream_origin_source // ""` and then testing `-n` made an explicit
+# null and an empty string indistinguishable from omission, so both
+# skipped validation although neither is in the FR-E8 vocabulary or the
+# schema enum. Absence is the ONLY permitted state, and only until T3.
+assert_eq "T2/provenance: an ABSENT field is accepted (the T2 compatibility window)" "0" \
+    "$(EUCODE "$UNVERIF" 'del(.upstream_origin_source) | .upstream_origin = "https://gw.example"')"
+assert_eq "T2/provenance: an explicit null is refused, NOT treated as an omission" "9" \
+    "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = null')"
+assert_eq "T2/provenance: an empty string is refused, NOT treated as an omission" "9" \
+    "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = ""')"
+assert_eq "T2/provenance: a non-string provenance is refused" "9" \
+    "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = 7')"
+# Membership compares LITERALS, so the vocabulary is data and never a
+# pattern the field gets to steer.
+assert_eq "T2/provenance: a glob is refused rather than matching the vocabulary as a pattern" "9" \
+    "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = "*"')"
 assert_eq "T2/provenance: a recorded origin cannot claim provenance 'none'" "10" \
     "$(EUCODE "$UNVERIF" '.upstream_origin = "https://gw.example" | .upstream_origin_source = "none"')"
 assert_eq "T2/provenance: ...and an absent origin cannot claim a source that implies one" "10" \

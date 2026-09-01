@@ -224,11 +224,18 @@ rr_origin_is_sanitized() {
 # presence mandatory once every producer can supply one.
 rr_upstream_invariant() {
     local doc="$1" eu st ev og src uo
+    # The key set is EXACT, not a minimum. `has(...)` three times also
+    # admits a fourth key, and the schema's additionalProperties:false
+    # does not run here — rr_result never executes JSON Schema, so this
+    # predicate IS the production boundary. An extra key beside a
+    # closed state machine is a private channel smuggling a claim the
+    # contract refused to make. (`keys` is sorted by jq, so the
+    # comparison is against the sorted literal.)
     eu=$(jq -c '.effective_upstream // empty' <<< "$doc" 2>/dev/null || true)
     if [[ -z "$eu" ]] || ! jq -e '
-            type == "object" and has("origin") and has("status") and has("evidence")
+            type == "object" and keys == ["evidence", "origin", "status"]
         ' >/dev/null 2>&1 <<< "$eu"; then
-        echo "routing-result: effective_upstream is missing or is not {origin,status,evidence}" >&2
+        echo "routing-result: effective_upstream is missing or is not exactly {origin,status,evidence}" >&2
         return 1
     fi
     st=$(jq -r '.status' <<< "$eu")
@@ -269,12 +276,29 @@ rr_upstream_invariant() {
         return 8
     fi
 
-    src=$(jq -r 'if has("upstream_origin_source") then (.upstream_origin_source // "") else "" end' <<< "$doc")
-    if [[ -n "$src" ]]; then
-        case " $RR_ORIGIN_SOURCES " in
-            *" $src "*) ;;
-            *) echo "routing-result: upstream_origin_source '$src' is outside the closed vocabulary" >&2; return 9 ;;
-        esac
+    # ABSENT and PRESENT-BUT-INVALID are different things. Collapsing
+    # them — as `.upstream_origin_source // ""` then `[[ -n ]]` did —
+    # let an explicit `null` and an empty string skip validation
+    # entirely, though neither is in the FR-E8 vocabulary. Only true
+    # ABSENCE is permitted, and only until T3 wires every producer.
+    if jq -e 'has("upstream_origin_source")' >/dev/null 2>&1 <<< "$doc"; then
+        # PRESENT — so it is validated, whatever it holds. A null or an
+        # object renders as a string that is not in the vocabulary and
+        # is refused below; no separate type guard, because a mutation
+        # test showed one could not change any outcome.
+        src=$(jq -r '.upstream_origin_source' <<< "$doc")
+        # Membership by exact literal comparison. (The `case " $V " in
+        # *" $src "*)` idiom is also safe here — a quoted expansion in a
+        # case pattern is literal, not a glob — but a reader has to know
+        # that rule to see it; this needs none.)
+        local m ok=1
+        for m in $RR_ORIGIN_SOURCES; do
+            [[ "$src" == "$m" ]] && { ok=0; break; }
+        done
+        if [[ "$ok" -ne 0 ]]; then
+            echo "routing-result: upstream_origin_source '$src' is outside the closed vocabulary" >&2
+            return 9
+        fi
         uo=$(jq -r '.upstream_origin // ""' <<< "$doc")
         if { [[ -z "$uo" ]] && [[ "$src" != "none" ]]; } \
            || { [[ -n "$uo" ]] && [[ "$src" == "none" ]]; }; then
