@@ -145,7 +145,7 @@ carries *how* CCT learned it:
 |---|---|
 | `profile_base_url` | a registry `base_url` literal |
 | `profile_base_url_env` | a registry `base_url_env`, resolved |
-| `codex_model_provider` | codex `[model_providers.<id>].base_url` for the provider ACTUALLY selected |
+| `codex_model_provider` | RESERVED (FR-E10 as amended): the `base_url` codex's OWN layered resolution gives for the selected provider. Produced by no path today — the user config file is one layer and cannot stand in for the whole |
 | `backend_default` | a default CCT can positively establish |
 | `none` | no origin |
 
@@ -154,10 +154,20 @@ default applied. Where it cannot, the value is `none` — an assumed
 default is an assumption, and this contract exists to stop assumptions
 being recorded as facts.
 
-**FR-E12 — codex provenance follows codex's ACTUAL selection.** The
-routing supervisor passes `-c model_provider=<id>` from the routed
-profile, and that override decides which provider codex uses. Any
-resolution must follow that same selection. Resolution order:
+**FR-E12 — any future codex resolution follows codex's OWN selection.**
+Dormant while FR-E10 records `null`; binding on whatever implements it.
+
+The routing supervisor passes `-c model_provider=<id>` from the routed
+profile. **Wording corrected 2026-09-02:** the earlier "that override
+decides which provider codex uses" and "the provider ACTUALLY selected"
+overstate what configuration evidence can prove. An override names a
+provider in codex's configuration; it does not prove which upstream
+served the request — account-login mode has been reported to route
+through the account transport regardless of a custom provider
+`base_url`. That gap is exactly why `effective_upstream` is a separate
+field, and it is why no configured value may ever populate it.
+
+A resolution must follow that same selection. Resolution order:
 
 1. the `model_provider` the supervisor passed for THIS attempt;
 2. the config's top-level `model_provider` — **only when no launch
@@ -187,13 +197,44 @@ reference must never be represented as an observed effective upstream.
 provider-reported evidence exists, in which case the origin is recorded
 separately with `evidence: provider_reported`.
 
-**FR-E10 — codex resolves its configured origin.** From the
-`[model_providers.<id>].base_url` of the provider selected per FR-E12,
-sanitized by the same rules as #277, recorded with
-`upstream_origin_source: codex_model_provider`. This removes an
-unnecessary `null` without pretending it identifies the server that
-ultimately handled inference — it improves `upstream_origin` ONLY, and
-never touches `effective_upstream`.
+**FR-E10 — codex records `null` / `none`, and that is the accurate
+record.** ~~From the `[model_providers.<id>].base_url` of the provider
+selected per FR-E12, sanitized by the same rules as #277, recorded with
+`upstream_origin_source: codex_model_provider`.~~ **AMENDED 2026-09-02,
+during T4 review.**
+
+The withdrawn wording assumed `${CODEX_HOME:-$HOME/.codex}/config.toml`
+IS codex's configuration. It is one LAYER of it. Verified against the
+codex-cli 0.147.0 this repo targets:
+
+| Flag | Documented behaviour |
+|---|---|
+| `-p, --profile <name>` | "Layer `$CODEX_HOME/<name>.config.toml` on top of the base user config" |
+| `--ignore-user-config` | "Do not load `$CODEX_HOME/config.toml`" |
+
+A higher-precedence layer can therefore redefine `model_providers`, and
+the user file can be excluded outright. Promoting that one layer to
+"configured execution origin" would let CCT durably record `base_url` X
+while codex resolved the same selected provider to Y — **a fabricated
+attribution wearing a provenance label, which is the precise failure
+this increment exists to prevent.**
+
+CCT therefore records `upstream_origin: null` with
+`upstream_origin_source: none` for codex. Under C30 as amended that is
+ACCURATE RECORDING, not a gap: the field states what CCT established,
+and CCT established nothing.
+
+`codex_model_provider` stays RESERVED in the FR-E8 vocabulary, on the
+same footing as `backend_default`: available to a future path that
+reproduces codex's own layered resolution for the exact launch context
+(`CODEX_HOME`, cwd, and the `-c model_provider=<id>` override), and
+produced by no path today. A test pins that no path assigns it.
+
+**Why not build that resolution now.** It means driving codex's own
+configuration surface — a second codex process and an experimental RPC
+path — for one telemetry field. The decision below recorded O1 as
+telemetry completion, explicitly NOT the thing that makes the amended
+C30 truthful. A correct `null` beats a plausible wrong endpoint.
 
 **FR-E11 — login mode is explicit.** In login mode no base URL is
 wired and CCT cannot positively establish which default applied, so the

@@ -61,11 +61,15 @@ component.
 **O1 — resolve codex's configured endpoint.**
 Read `[model_providers.<id>].base_url` from codex configuration, so
 codex stops recording `null`.
-*Buys:* removes one `null`; small; reuses the existing sanitizer.
+*Buys:* ~~removes one `null`; small; reuses the existing sanitizer~~
+**SUPERSEDED — see item 4 under "What ships".** Small only if the user
+config file is codex's configuration, and it is not: it is one layer,
+which `--profile` layers over and `--ignore-user-config` excludes.
+Doing it correctly means reproducing codex's layered resolution.
 *Does not buy:* still configured. A codex provider pointing at a
 gateway is recorded as the gateway. Does not satisfy §11.
 *Honest framing:* an improvement to the CONFIGURED record, not the
-effective one.
+effective one — and not one this increment ships.
 
 **O2 — egress observation through a CCT-owned recording proxy.**
 Backends are pointed at a local proxy CCT runs; it observes the real
@@ -144,10 +148,16 @@ model was right.
    two-state machine defined in **FR-E7**. Every path that exists today
    is the `unverifiable` state, since no authoritative provider-reported
    signal exists.
-4. **Codex configured-origin resolution** — the selected
+4. ~~**Codex configured-origin resolution** — the selected
    `[model_providers.<id>].base_url`, through #277's sanitizer, recorded
-   with the provenance FR-E8 assigns it (see FR-E10/FR-E12). Removes a
-   `null` without claiming it identifies the inference server.
+   with the provenance FR-E8 assigns it.~~ **SUPERSEDED 2026-09-02 by
+   the amended FR-E10.** Implemented, then withdrawn during T4 review:
+   `${CODEX_HOME:-$HOME/.codex}/config.toml` is ONE LAYER of codex's
+   configuration, not the configuration — `--profile` layers over it and
+   `--ignore-user-config` excludes it, both verified against codex-cli
+   0.147.0. Reading that layer could record X while codex resolved Y.
+   Codex records `null` / `none`; `codex_model_provider` stays reserved
+   for a path that reproduces codex's own resolution.
 5. Schema and runtime-boundary updates for the new fields.
 
 ## The riskiest implementation detail

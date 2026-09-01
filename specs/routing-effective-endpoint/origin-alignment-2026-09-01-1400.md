@@ -145,6 +145,33 @@ exists to prevent.
 
 Still no production code at this point; the bundle remains plan-only.
 
+## The O1 withdrawal (T4 review, 2026-09-02)
+
+The hazard this record was created to carry — that
+`_resolve_codex_config` picks the FIRST key under `[model_providers]`
+— turned out to be the smaller of two problems with reading codex
+configuration.
+
+The larger one: `${CODEX_HOME:-$HOME/.codex}/config.toml` is not
+codex's configuration, it is one LAYER of it. Verified from the shipped
+codex-cli 0.147.0 — `--profile` layers `$CODEX_HOME/<name>.config.toml`
+on top of the base user config, and `--ignore-user-config` excludes the
+base file entirely. Reading that layer could record `base_url` X while
+codex resolved the same selected provider to Y.
+
+**O1 is therefore WITHDRAWN, and FR-E10 amended**: codex records
+`null` / `none`. This is a narrowing of what the increment SHIPS, not
+of what it CLAIMS — the amended C30 asks for accurate recording, and an
+honest `null` is accurate where a plausible endpoint would not be. O4,
+which governs, is unaffected; O1 was recorded from the start as
+telemetry completion rather than as the thing that makes C30 truthful.
+
+The deviation is taken on the owner's explicit instruction, after they
+identified the layering. It is recorded here and in the amended FR-E10
+rather than only in a commit message, and the T5 audit must cite it:
+the audit must state that codex's endpoint is recorded as unestablished
+— never that it was resolved.
+
 ## What this record does NOT claim
 
 - No code has been written. The survey is a read of the merged tree at

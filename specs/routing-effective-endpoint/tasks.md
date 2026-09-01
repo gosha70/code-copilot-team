@@ -171,34 +171,52 @@ selection.
   #277's sanitizer and a non-http(s) scheme is refused;
 - an undeterminable provider records `none`, not a guess.
 
-**Status: complete.** `rt_codex_origin` (`cooldown-supervisor.sh`)
-resolves `[model_providers.<id>].base_url` for the provider the launch
-override named, through `rt_toml_get` — the reader the repo already
-uses for `providers.toml` — and then through #277's sanitizer. It reads
-`.provider` under the SAME non-empty condition the launch uses to
-decide whether to pass `-c model_provider=<id>` at all, so the two
-cannot disagree about whether an override was issued.
+**Status: complete — as a WITHDRAWAL.** Codex records
+`upstream_origin: null` / `upstream_origin_source: none`, and under C30
+as amended that is accurate recording rather than a gap.
 
-The config path follows codex's own rule, `${CODEX_HOME:-$HOME/.codex}`,
-so the resolver and the child read the same file. A mutation that
-hardcodes `$HOME/.codex` fails six tests.
+The resolution described above was implemented and then withdrawn in
+review. It rested on an assumption that does not hold: that
+`${CODEX_HOME:-$HOME/.codex}/config.toml` IS codex's configuration. It
+is one LAYER of it. Verified against the codex-cli 0.147.0 this repo
+targets, by reading the shipped CLI rather than documentation:
 
-**The fixture is built so the rejected heuristic is wrong**:
-`provider_b` is listed first and the profile selects `provider_a`. An
-assertion pins that first-key selection *would* answer `provider_b`
-here — without it, the selection test would pass even for code using
-the heuristic, and the block would prove nothing.
+| Flag | Documented behaviour |
+|---|---|
+| `-p, --profile <name>` | "Layer `$CODEX_HOME/<name>.config.toml` on top of the base user config" |
+| `--ignore-user-config` | "Do not load `$CODEX_HOME/config.toml`" |
 
-Five mutations, each caught: adopting the first-key heuristic; letting
-an unresolvable override fall through to the top-level default;
-skipping the sanitizer (leaks `s3cr3t` into the record, caught by name);
-recording the wrong provenance value; ignoring `CODEX_HOME`.
+A higher-precedence layer can redefine `model_providers`, and the user
+file can be excluded outright — so the withdrawn code could durably
+record `base_url` X while codex resolved the same selected provider to
+Y. That is a fabricated attribution wearing a provenance label, which
+is the exact failure this increment exists to prevent. My T4 claim that
+"the resolver and the child read the same file" was too strong: both
+may read it, but codex reads it as ONE layer.
+
+Doing it correctly means reproducing codex's layered resolution for the
+exact launch context — a second codex process and an experimental RPC
+path, for a telemetry field that the plan's own decision recorded as
+telemetry completion rather than as what makes the amended C30
+truthful. A correct `null` beats a plausible wrong endpoint.
+
+FR-E10 is amended accordingly; `codex_model_provider` stays RESERVED in
+the FR-E8 vocabulary on the same footing as `backend_default`, for a
+future path that reproduces that resolution.
+
+**What the tests now pin** is the review's discriminator: a resolvable
+user config IS present in the fixture, and no part of it reaches the
+record — not the selected provider's host, not the first key's host
+(so a first-key implementation is caught too), not the top-level
+default's host, not a credential, not the config path. Two mutations,
+both caught: reinstating the withdrawn resolver, and implementing the
+first-key heuristic.
 
 Not changed: `_resolve_codex_config` in
-`scripts/benchmark_runner/backends/codex.py` still uses the first-key
-heuristic. It feeds benchmark metadata, not routed results, so it is
-outside this task — but it is the same latent defect and worth its own
-issue.
+`scripts/benchmark_runner/backends/codex.py` still hardcodes
+`~/.codex/config.toml`, ignores `CODEX_HOME`, and takes the first
+provider key. It feeds benchmark metadata rather than routed results,
+so it is outside this task — filed separately rather than folded in.
 
 ---
 

@@ -1253,7 +1253,7 @@ code-copilot-team/
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        1079 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
-│   ├── test-routing-config.sh         372 execution-profile registry + result + cli tests
+│   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)
 │   ├── test-routing-tasks.sh          160 task metadata + floor + task-addressed explain tests (#254 C)
 │   ├── test-routing-packet.sh          99 immutable delegation-packet tests (#254 C T2)

@@ -520,54 +520,6 @@ rt_sanitize_origin() {
   fi
 }
 
-# rt_codex_origin <profile-json> -> sanitized origin, or EMPTY.
-#
-# codex does not route by ANTHROPIC_BASE_URL; it resolves through
-# `model_provider` in codex configuration. #277 therefore recorded null
-# for every codex attempt. This removes that null WITHOUT pretending to
-# identify the server that handled inference (FR-E10) — it improves the
-# CONFIGURED record only, and never touches effective_upstream.
-#
-# SELECTION FIDELITY IS THE WHOLE POINT (FR-E12). The supervisor passes
-# `-c model_provider=<id>` built from the profile's `.provider`, and
-# that override decides which provider codex uses. This resolver reads
-# `.provider` under the SAME condition the launch uses it — non-empty —
-# so the two cannot disagree:
-#
-#   1. the provider the launch override named for THIS attempt;
-#   2. the config's top-level `model_provider`, ONLY when no override
-#      was issued. An override that WAS issued but whose section is
-#      missing or carries no base_url resolves to EMPTY, never to the
-#      top-level default: falling through there would record the
-#      provider codex did NOT use.
-#   3. otherwise empty.
-#
-# "The first key under [model_providers]" is NOT a fallback here. The
-# benchmark backend's _resolve_codex_config uses exactly that heuristic
-# (scripts/benchmark_runner/backends/codex.py) — arbitrary dict order —
-# and with two providers configured it can attribute provider B's
-# base_url to a run routed through provider A. That would be a
-# fabricated fact wearing a provenance label, which is worse than the
-# null it replaces, so this deliberately does not reuse that helper.
-#
-# FR-E13: only the sanitized origin leaves this function. The config
-# path, credentials, headers and query parameters never become
-# evidence — and an inline-table or quoted-key config that rt_toml_get
-# cannot read yields EMPTY, which records `none` rather than a guess.
-rt_codex_origin() {
-  local pj="$1" cfg sel base
-  cfg="${CODEX_HOME:-$HOME/.codex}/config.toml"
-  [[ -r "$cfg" ]] || return 0
-  sel=$(jq -r '.provider // empty' <<< "$pj")
-  if [[ -z "$sel" ]]; then
-    sel=$(rt_toml_get "$cfg" "" "model_provider")
-    [[ -n "$sel" ]] || return 0
-  fi
-  base=$(rt_toml_get "$cfg" "model_providers.$sel" "base_url")
-  [[ -n "$base" ]] || return 0
-  rt_sanitize_origin "$base"
-}
-
 # rt_launch_env: resolves child-only values; journals NAMES only.
 #
 # It also binds RT_UPSTREAM_ORIGIN — the sanitized CONFIGURED LAUNCH
@@ -607,10 +559,10 @@ rt_launch_env() {
   #   codex        resolves its provider through `model_provider` in
   #                codex configuration; ANTHROPIC_BASE_URL does not
   #                determine where it goes, so recording it would name
-  #                an endpoint this attempt may never touch. Its origin
-  #                comes from rt_codex_origin instead — the base_url of
-  #                the provider the launch override actually selected —
-  #                and is NULL whenever that cannot be established.
+  #                an endpoint this attempt may never touch. And the
+  #                user config file is only ONE LAYER of that
+  #                configuration, so it cannot stand in for it either.
+  #                NULL — see the extended note below.
   #   login mode   no base URL is wired at all; the backend's own
   #                default applies and is not observable here. NULL.
   #
@@ -639,15 +591,37 @@ rt_launch_env() {
   # assumed default is an assumption, and this contract exists to stop
   # assumptions being recorded as facts.
   #
-  # codex resolves through its own configuration, so it takes the
-  # separate path in rt_codex_origin (#273 T4, FR-E10/E12) rather than
-  # the base-URL path that does not route it.
+  # CODEX IS null/none, AND THAT IS THE ACCURATE RECORD (#273 T4,
+  # FR-E10 as amended).
+  #
+  # A first implementation read `[model_providers.<id>].base_url` from
+  # ${CODEX_HOME:-$HOME/.codex}/config.toml for the provider the launch
+  # override names, and recorded it as the configured origin. That was
+  # withdrawn: THE USER CONFIG FILE IS NOT CODEX'S EFFECTIVE
+  # CONFIGURATION, it is one layer of it. Verified against the codex-cli
+  # 0.147.0 this repo targets:
+  #
+  #   -p, --profile   "Layer $CODEX_HOME/<name>.config.toml on top of
+  #                    the base user config"
+  #   --ignore-user-config
+  #                   "Do not load $CODEX_HOME/config.toml"
+  #
+  # So a higher-precedence layer can redefine model_providers, and the
+  # user file can be excluded outright. Reading that one layer would let
+  # CCT durably record base_url X while codex resolved the same selected
+  # provider to Y — a fabricated attribution wearing a provenance label,
+  # which is the precise failure this increment exists to prevent.
+  #
+  # Reproducing codex's layered resolution correctly would mean driving
+  # its own configuration surface for the exact launch context. That is
+  # a second codex process and an experimental RPC path for a telemetry
+  # field, and #109's decision recorded O1 as telemetry completion — not
+  # as the thing that makes the amended C30 truthful. A correct null
+  # beats a plausible wrong endpoint, so `none` it is until an effective
+  # resolution exists.
   RT_UPSTREAM_ORIGIN=""
   RT_UPSTREAM_ORIGIN_SOURCE="none"
-  if [[ "$backend" == "codex" ]]; then
-    RT_UPSTREAM_ORIGIN=$(rt_codex_origin "$pj")
-    [[ -n "$RT_UPSTREAM_ORIGIN" ]] && RT_UPSTREAM_ORIGIN_SOURCE="codex_model_provider"
-  else
+  if [[ "$backend" != "codex" ]]; then
     RT_UPSTREAM_ORIGIN=$(rt_sanitize_origin "$RT_ENV_BASE_URL")
     if [[ -n "$RT_UPSTREAM_ORIGIN" ]]; then
       case "$ep" in

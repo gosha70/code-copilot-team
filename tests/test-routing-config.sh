@@ -1066,16 +1066,27 @@ assert "T3/wiring: the supervisor initializes the variable, so set -u cannot tri
 assert "T3/wiring: the journal records the provenance beside the origin" \
     grep -q 'provenance \$RT_UPSTREAM_ORIGIN_SOURCE' "$REPO_DIR/scripts/cooldown-supervisor.sh"
 
-# ── #109 T4 (#273): CODEX configured-origin resolution ───────────────
-# codex resolves through `model_provider` in its own configuration, so
-# #277 recorded null for every codex attempt. T4 removes that null
-# WITHOUT pretending to identify the server that handled inference.
+# ── #109 T4 (#273): CODEX records null/none, ACCURATELY ──────────────
+# A first implementation resolved `[model_providers.<id>].base_url` from
+# ${CODEX_HOME}/config.toml for the provider the launch override names.
+# It was WITHDRAWN under review: that file is one LAYER of codex's
+# configuration, not the configuration. Verified against the codex-cli
+# 0.147.0 this repo targets — `--profile` layers
+# `$CODEX_HOME/<name>.config.toml` on top of it, and
+# `--ignore-user-config` excludes it entirely.
 #
-# The fixture is built so that "the first key under [model_providers]"
-# is the WRONG answer: provider_b is listed first, and the profile
-# selects provider_a. That is the exact heuristic the benchmark
-# backend's _resolve_codex_config uses, and reusing it would attribute
-# provider B's base_url to a run codex routed through provider A.
+# So the fixture below is a config that WOULD resolve, and every
+# assertion demands that none of it reaches the record. This is the
+# discriminator the review named:
+#
+#   user config says provider A -> base_url X
+#   codex's effective config could resolve the same provider to Y
+#   -----------------------------------------------------------------
+#   X must NEVER be persisted as the configured execution origin
+#
+# provider_b is deliberately listed first, so a "first key under
+# [model_providers]" implementation would also be caught — that is the
+# heuristic the benchmark backend's _resolve_codex_config still uses.
 CXH="$TMP/codex-home"; mkdir -p "$CXH"
 cat > "$CXH/config.toml" <<'EOF'
 model_provider = "provider_top"
@@ -1099,71 +1110,44 @@ CXFLOW() {  # <provider> [jq-filter] -> the recorded value for a codex attempt
     CCT_TEST_CODEX_HOME="$CXH" EPFLOW codex '' 'none' "${2:-.upstream_origin // \"null\"}" "$1"
 }
 
-# SELECTION FIDELITY — the discriminator this task exists for.
-assert_eq "T4/selection: the SELECTED provider's base_url is recorded, not the first key in the file" \
-    "https://a-host:9002" "$(CXFLOW provider_a)"
-assert_eq "T4/selection: ...and the first key's host appears nowhere in the record" "" \
+# THE DISCRIMINATOR. A resolvable user config is present, and NOTHING
+# from it may be persisted — because a higher-precedence codex layer
+# could resolve the same selected provider to a different host, and CCT
+# cannot see that from here.
+assert_eq "T4/discriminator: a resolvable user config does NOT become the configured origin" \
+    "null none" "$(CXFLOW provider_a '"\(.upstream_origin // "null") \(.upstream_origin_source)"')"
+assert_eq "T4/discriminator: the selected provider's base_url host appears nowhere in the record" "" \
+    "$(CXFLOW provider_a '.' | grep -o 'a-host' || true)"
+assert_eq "T4/discriminator: nor does the FIRST key's host, so a first-key implementation is caught too" "" \
     "$(CXFLOW provider_a '.' | grep -o 'b-host' || true)"
-assert_eq "T4/selection: selecting the other provider records the other origin" \
-    "https://b-host:9001" "$(CXFLOW provider_b)"
+assert_eq "T4/discriminator: nor does the top-level model_provider's host" "" \
+    "$(CXFLOW '' '.' | grep -o 'top-host' || true)"
+assert_eq "T4/discriminator: ...and that holds for every provider the fixture defines" "null none null none" \
+    "$( for pv in provider_a provider_b; do
+          CXFLOW "$pv" '"\(.upstream_origin // "null") \(.upstream_origin_source)"'
+        done | tr '\n' ' ' | sed 's/ $//' )"
 
-# AN ISSUED OVERRIDE NEVER FALLS THROUGH (FR-E12 step 2's precondition).
-# The config HAS a top-level model_provider with a usable base_url; a
-# selection that cannot be resolved must still record nothing, because
-# the top-level default is the provider codex did NOT use.
-assert_eq "T4/fallthrough: an override naming an absent provider records null, not the top-level default" \
-    "null none" "$(CXFLOW ghost_provider '"\(.upstream_origin // "null") \(.upstream_origin_source)"')"
-assert_eq "T4/fallthrough: ...and the top-level default's host appears nowhere in that record" "" \
-    "$(CXFLOW ghost_provider '.' | grep -o 'top-host' || true)"
-assert_eq "T4/fallthrough: an override whose section carries no base_url records null" "null" \
-    "$(CXFLOW provider_nourl)"
-# The top-level default applies ONLY when no override was issued — the
-# same condition the launch uses to decide whether to pass -c at all.
-assert_eq "T4/fallback: with NO override issued, the top-level model_provider is used" \
-    "https://top-host:9003" "$(CXFLOW '')"
-
-# PROVENANCE and the SANITIZER.
-assert_eq "T4/provenance: a resolved codex origin records codex_model_provider" \
-    "codex_model_provider" "$(CXFLOW provider_a '.upstream_origin_source')"
-assert_eq "T4/sanitizer: credentials, path, query and fragment are stripped and the host normalized" \
-    "https://a-host:9002" "$(CXFLOW provider_a)"
-assert_eq "T4/sanitizer: ...so no secret from codex configuration survives into the record" "" \
+# FR-E13 is now absolute for codex: no part of codex configuration
+# becomes evidence, so a credential in a provider base_url cannot leak
+# even by way of a sanitizer bug.
+assert_eq "T4/FR-E13: no secret from codex configuration reaches the record" "" \
     "$(CXFLOW provider_a '.' | grep -o 's3cr3t' || true)"
-assert_eq "T4/sanitizer: a non-http(s) codex base_url is refused, recording none" "null none" \
-    "$(CXFLOW provider_ftp '"\(.upstream_origin // "null") \(.upstream_origin_source)"')"
-assert_eq "T4/absent: no codex configuration at all records null" "null none" \
-    "$(EPFLOW codex '' 'none' '"\(.upstream_origin // "null") \(.upstream_origin_source)"' provider_a)"
+assert_eq "T4/FR-E13: nor the config path, nor any other config key" "" \
+    "$(CXFLOW provider_nourl '.' | grep -oE 'config[.]toml|some-model' || true)"
 
-# FR-E10: this improves upstream_origin ONLY. A configured origin — however
-# well attributed — is still not an observation.
-assert_eq "T4/FR-E10: a resolved codex origin does NOT flip the verification state" \
-    "https://a-host:9002 codex_model_provider null unverifiable none" \
-    "$(CXFLOW provider_a '"\(.upstream_origin) \(.upstream_origin_source) \(.effective_upstream.origin // "null") \(.effective_upstream.status) \(.effective_upstream.evidence)"')"
-
-# FR-E13: no raw backend configuration becomes evidence.
-assert_eq "T4/FR-E13: the codex config PATH never appears in the record" "" \
-    "$(CXFLOW provider_a '.' | grep -o 'config.toml' || true)"
-assert_eq "T4/FR-E13: nor does the provider's model or any other config key" "" \
-    "$(CXFLOW provider_nourl '.' | grep -o 'some-model' || true)"
-
-# THE FIXTURE ITSELF DISCRIMINATES. If provider_a happened to be the
-# first key, the selection assertion above would pass even for code that
-# used the rejected heuristic, and this whole block would prove nothing.
-# So pin what that heuristic WOULD have answered here.
-assert_eq "T4/selection: the rejected first-key heuristic would answer differently for this fixture" \
-    "provider_b" \
-    "$(python3 -c "
-import tomllib,sys
-with open('$CXH/config.toml','rb') as fh: c=tomllib.load(fh)
-print(next(iter(c['model_providers'])))")"
-# The launch and the resolver must agree on WHEN an override is issued
-# and WHICH field names it: both read a non-empty profile .provider. If
-# one drifted, a run could be attributed to a provider it did not use.
-# Three sites: the resolver plus the two codex launch blocks.
-assert_eq "T4/isolation: resolver and both codex launch sites read the same override field" "3" \
-    "$(grep -c '\.provider // empty. <<< "\$pj"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
-assert "T4/isolation: the resolver is the one that feeds the recorded origin" \
-    grep -q 'RT_UPSTREAM_ORIGIN=$(rt_codex_origin "$pj")' "$REPO_DIR/scripts/cooldown-supervisor.sh"
+# codex_model_provider is RESERVED, exactly as backend_default is: it
+# stays in the closed vocabulary for a future path that reproduces
+# codex's own layered resolution, and is produced by nothing today.
+assert_eq "T4/reserved: no path assigns codex_model_provider" "0" \
+    "$(grep -c 'RT_UPSTREAM_ORIGIN_SOURCE="codex_model_provider"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert_eq "T4/reserved: ...and the withdrawn user-config resolver is gone, not merely unused" "0" \
+    "$(grep -c '^rt_codex_origin()' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert "T4/reserved: the vocabulary still carries it, so a future resolution has a value to record" \
+    bash -c "cd '$REPO_DIR' && source scripts/lib/routing-result.sh && [[ \" \$RR_ORIGIN_SOURCES \" == *' codex_model_provider '* ]]"
+# The verification state is untouched either way.
+assert_eq "T4/FR-E10: codex's effective_upstream stays unverifiable, as for every other backend" \
+    "unverifiable none" \
+    "$(CXFLOW provider_a '"\(.effective_upstream.status) \(.effective_upstream.evidence)"')"
 
 # RESOLVER FAILURE vs VALID-UNLISTED — a broken price table is an
 # operator error and must never be recorded as `unpriced`, which
