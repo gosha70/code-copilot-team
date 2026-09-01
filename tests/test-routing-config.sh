@@ -682,6 +682,102 @@ assert_eq "G/codex: ...and no site appends codex stderr unconditionally" "0" \
 assert_eq "G/codex: the legacy usage scan reads the safe classification view" "2" \
     "$(grep -c 'grep -iE "\$USAGE_PATTERN" "\$OUT.all"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
 
+# ── #109 C30: the CONFIGURED LAUNCH ORIGIN is recorded ───────────────
+# The closure audit found `upstream_origin` null in every routed
+# result: the reference was journaled, nothing else. What is recorded
+# here is the CONFIGURED LAUNCH ORIGIN — the origin this attempt was
+# directed at — which is a verifiable fact and is NOT the same as the
+# effective upstream: a gateway records as the gateway, and codex does
+# not route by this value at all. The distinction that IS closed here:
+# two profiles naming ONE variable can reach different servers.
+RSO() { ( set +e
+          eval "$(sed -n '/^rt_sanitize_origin()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+          rt_sanitize_origin "$1" ) }
+assert_eq "C30/launch-origin: a plain base URL records its origin" "https://api.anthropic.com" \
+    "$(RSO 'https://api.anthropic.com')"
+# CREDENTIALS and PATH must never become durable evidence.
+assert_eq "C30/launch-origin: credentials, path, query and fragment are stripped" "https://vllm.internal:8000" \
+    "$(RSO 'https://user:s3cr3t@vllm.internal:8000/v1/chat?key=abc#f')"
+assert_eq "C30/launch-origin: ...so no secret survives into the origin" "" \
+    "$( RSO 'https://user:s3cr3t@vllm.internal:8000/v1' | grep -o 's3cr3t' || true )"
+assert_eq "C30/launch-origin: an IPv6 literal with a port is preserved" "http://[::1]:8000" \
+    "$(RSO 'http://[::1]:8000/v1')"
+assert_eq "C30/launch-origin: host case is normalized so one origin is not recorded as two" \
+    "$(RSO 'https://api.example.com')" "$(RSO 'HTTPS://API.EXAMPLE.COM/x')"
+# ABSENT or INVALID stays explicit — never the variable NAME, which
+# would look like evidence while identifying nothing.
+assert_eq "C30/launch-origin: an unusable value is empty, never a substitute" "" "$(RSO 'not-a-url')"
+assert_eq "C30/launch-origin: the variable NAME is never recorded as an origin" "" "$(RSO 'CCT_LOCAL_URL')"
+assert_eq "C30/launch-origin: an empty resolution stays empty" "" "$(RSO '')"
+assert_eq "C30/launch-origin: a scheme with no authority is refused" "" "$(RSO 'https://')"
+
+# THE REAL PRODUCER-TO-RESULT DATAFLOW. Everything else here calls the
+# extracted sanitizer or greps a call site; all of it would stay green
+# if RT_UPSTREAM_ORIGIN were made `local` inside rt_launch_env, while
+# production recorded null. This runs rt_launch_env for real and reads
+# the value out of a durable result built by rr_result.
+EPFLOW() {  # <backend> <resolved-url> -> the recorded upstream_origin
+    ( set +e
+      export CCT_EP_TEST_URL="$2"
+      RT_UPSTREAM_ORIGIN=""
+      journal() { :; }
+      eval "$(sed -n '/^rt_sanitize_origin()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+      eval "$(sed -n '/^rt_launch_env()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+      pj=$(jq -nc --arg b "$1" '{id:"p", backend:$b, credential_ref:"none",
+                                 endpoint_ref:"urlenv:CCT_EP_TEST_URL"}')
+      rt_launch_env "$pj"
+      source "$REPO_DIR/scripts/lib/routing-result.sh"
+      rr_result 0 "$FULL" "$1" prov p REQ claude-sonnet-4-8 pool \
+        "${RT_UPSTREAM_ORIGIN:--}" '{}' - - | jq -r '.upstream_origin // "null"' )
+}
+assert_eq "C30/launch-origin dataflow: rt_launch_env -> rr_result -> durable upstream_origin" "https://real-host:8000" \
+    "$(EPFLOW pi 'https://user:pw@real-host:8000/v1?k=1')"
+assert_eq "C30/launch-origin dataflow: claude records its directed origin too" "https://claude-host" \
+    "$(EPFLOW claude-code 'https://claude-host/v1')"
+# CODEX resolves its provider through codex configuration, so
+# ANTHROPIC_BASE_URL does not determine where it goes. Recording it
+# would name an endpoint the attempt may never touch.
+assert_eq "C30/launch-origin dataflow: codex records NULL, not a base URL that does not route it" "null" \
+    "$(EPFLOW codex 'https://not-codexs-endpoint/v1')"
+# LOGIN MODE wires no base URL at all.
+assert_eq "C30/launch-origin dataflow: login mode (no base URL) records null" "null" \
+    "$(EPFLOW pi '')"
+# An environment-derived UNSUPPORTED scheme must not become an origin.
+assert_eq "C30/launch-origin dataflow: an env-derived non-http(s) scheme is refused end to end" "null" \
+    "$(EPFLOW pi 'ftp://provider.example/v1')"
+
+# THE FINDING ITSELF: one endpoint_ref, two resolved hosts, two
+# distinguishable records.
+assert_eq "C30/launch-origin: two profiles sharing one endpoint_ref record DIFFERENT origins" "https://server-a:8000 https://server-b:8000" \
+    "$( a=$(CCT_SHARED_URL='https://server-a:8000/v1' bash -c '
+              eval "$(sed -n "/^rt_sanitize_origin()/,/^}/p" "'"$REPO_DIR"'/scripts/cooldown-supervisor.sh")"
+              rt_sanitize_origin "$CCT_SHARED_URL"')
+        b=$(CCT_SHARED_URL='https://server-b:8000/v1' bash -c '
+              eval "$(sed -n "/^rt_sanitize_origin()/,/^}/p" "'"$REPO_DIR"'/scripts/cooldown-supervisor.sh")"
+              rt_sanitize_origin "$CCT_SHARED_URL"')
+        printf '%s %s' "$a" "$b" )"
+# It must come from the RESOLVED value, not endpoint_ref.
+assert "C30/launch-origin: derived from the resolved base URL, never endpoint_ref" \
+    grep -q 'RT_UPSTREAM_ORIGIN=$(rt_sanitize_origin "$RT_ENV_BASE_URL")' "$REPO_DIR/scripts/cooldown-supervisor.sh"
+# ...and reaches the durable record at ALL THREE wiring sites.
+assert_eq "C30/launch-origin: all three rr_result sites carry the launch-bound origin" "3" \
+    "$(grep -c '"\${RT_UPSTREAM_ORIGIN:--}"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert_eq "C30/launch-origin: no site still passes a bare - for the origin" "0" \
+    "$(grep -c "<<< \"\$pj\")\" - '{}'" "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+# End to end: the value reaches upstream_origin in the durable result.
+# A NON-NULL origin is asserted for a backend that actually routes by
+# this value. codex must never appear here: it resolves elsewhere, so a
+# non-null codex origin would assert something untrue.
+assert_eq "C30/launch-origin: the durable result carries the sanitized origin" "https://vllm.internal:8000" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG \
+            "$(RSO 'https://user:pw@vllm.internal:8000/v1')" '{}' - - \
+            | jq -r '.upstream_origin' ) )"
+assert_eq "C30/launch-origin: an unknown origin stays null, not a placeholder" "null" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          rr_result 0 "$FULL" pi openai p REQ claude-sonnet-4-8 poolG - '{}' - - \
+            | jq -r '.upstream_origin // "null"' ) )"
+
 # RESOLVER FAILURE vs VALID-UNLISTED — a broken price table is an
 # operator error and must never be recorded as `unpriced`, which
 # asserts a valid table that simply lacks the model.
