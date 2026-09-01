@@ -80,6 +80,10 @@ command -v jq >/dev/null 2>&1 || { err "jq is required."; exit 69; }
 # having derived one must pass "no requirement", not abort on an
 # unbound variable.
 PKT_MINCTX=""
+# Bound at launch by rt_launch_env; empty means unknown, never a
+# reference name. Initialized here because this script runs under
+# `set -u` and every rr_result site reads it.
+RT_UPSTREAM_ORIGIN=""
 FEATURE_ID=""
 WORKTREE=""
 BACKEND="claude"
@@ -478,7 +482,44 @@ rt_control_load() {
   RT_CONTROL_APPLIED=$(jq -c '.applied_attempts' "$RT_CONTROL")
 }
 
+# rt_sanitize_origin <url> -> scheme://host[:port], or EMPTY.
+#
+# The ORIGIN only: scheme, host, optional port. Credentials, path,
+# query and fragment are dropped, so a base URL carrying a token or a
+# tenant path can never become durable evidence. Anything that is not a
+# well-formed absolute URL yields EMPTY — the caller records that as
+# unknown rather than substituting something weaker.
+rt_sanitize_origin() {
+  local u="$1" scheme rest authority
+  [[ -n "$u" ]] || return 0
+  [[ "$u" =~ ^([A-Za-z][A-Za-z0-9+.-]*)://(.*)$ ]] || return 0
+  scheme=$(printf '%s' "${BASH_REMATCH[1]}" | tr 'A-Z' 'a-z')
+  rest="${BASH_REMATCH[2]}"
+  rest="${rest%%#*}"          # fragment
+  rest="${rest%%\?*}"         # query
+  authority="${rest%%/*}"     # path
+  authority="${authority##*@}"  # user:password@
+  [[ -n "$authority" ]] || return 0
+  # host[:port], or a bracketed IPv6 literal with an optional port
+  if [[ "$authority" =~ ^\[[0-9A-Fa-f:.]+\](:[0-9]+)?$ ]] \
+     || [[ "$authority" =~ ^[A-Za-z0-9._~-]+(:[0-9]+)?$ ]]; then
+    # Hosts are case-insensitive; normalize so one endpoint cannot be
+    # recorded as two, which would defeat the distinction this exists
+    # to make. Ports are digits and unaffected.
+    printf '%s://%s' "$scheme" "$(printf '%s' "$authority" | tr 'A-Z' 'a-z')"
+  fi
+}
+
 # rt_launch_env: resolves child-only values; journals NAMES only.
+#
+# It also binds RT_UPSTREAM_ORIGIN — the sanitized origin of the
+# endpoint this attempt will ACTUALLY reach, derived from the RESOLVED
+# base URL rather than from endpoint_ref. The reference is not the
+# endpoint: two profiles naming one variable can point at different
+# servers, and #109 asks for the upstream endpoint "not only a loopback
+# proxy". Empty means unknown (backend default, or an unusable value) —
+# never the variable name, which would look like evidence while
+# identifying nothing.
 rt_launch_env() {
   local pj="$1" backend cred ep names=""
   backend=$(jq -r '.backend' <<< "$pj")
@@ -495,7 +536,8 @@ rt_launch_env() {
   case "$cred" in
     env:*)    local c="${cred#env:}"; RT_ENV_API_KEY="${!c:-}"; names="$names ANTHROPIC_API_KEY(env:$c)" ;;
   esac
-  journal "routing_launch_env" "profile $(jq -r '.id' <<< "$pj"): wired${names:- nothing (backend login mode)}"
+  RT_UPSTREAM_ORIGIN=$(rt_sanitize_origin "$RT_ENV_BASE_URL")
+  journal "routing_launch_env" "profile $(jq -r '.id' <<< "$pj"): wired${names:- nothing (backend login mode)}; upstream origin ${RT_UPSTREAM_ORIGIN:-unknown (backend default or unusable base URL)}"
 }
 
 # Child output is SECRET-TAINTED before persistence: any wired secret
@@ -1511,7 +1553,7 @@ delegate_run() {
     decision_epoch=$(now_epoch)
     result=$(rr_result "$CHILD_CODE" "$OUT.all" \
         "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
-        "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}' \
+        "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" "${RT_UPSTREAM_ORIGIN:--}" '{}' \
         "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")" \
         "$OUT" "$(jq -r '.backend' <<< "$pj")") || \
         rt_refuse "routing_usage_evidence_unresolved" \
@@ -1926,7 +1968,7 @@ reconcile_run() {
     decision_epoch=$(now_epoch)
     result=$(rr_result "$CHILD_CODE" "$OUT.all" \
         "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
-        "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}' \
+        "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" "${RT_UPSTREAM_ORIGIN:--}" '{}' \
         "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")" \
         "$OUT" "$(jq -r '.backend' <<< "$pj")") || \
         rt_refuse "routing_usage_evidence_unresolved" \
@@ -2357,7 +2399,7 @@ routing_iteration() {
   # worse, match accounting-shaped log lines).
   result=$(rr_result "$CHILD_CODE" "$OUT" \
       "$(jq -r '.backend' <<< "$pj")" "$(jq -r '.provider' <<< "$pj")" "$id" \
-      "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" - '{}' \
+      "$requested" "${effective:--}" "$(jq -r '.pool' <<< "$pj")" "${RT_UPSTREAM_ORIGIN:--}" '{}' \
       "$(rt_declared_context_limit "$id")" "$(rt_prior_observed "$attempt_no")" \
       "$RT_DIR/usage-$attempt_no.jsonl" driver-aggregate) || \
       rt_refuse "routing_usage_evidence_unresolved" \

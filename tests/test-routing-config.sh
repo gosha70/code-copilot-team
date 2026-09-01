@@ -682,6 +682,61 @@ assert_eq "G/codex: ...and no site appends codex stderr unconditionally" "0" \
 assert_eq "G/codex: the legacy usage scan reads the safe classification view" "2" \
     "$(grep -c 'grep -iE "\$USAGE_PATTERN" "\$OUT.all"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
 
+# ── #109 C30: the EFFECTIVE endpoint is recorded ─────────────────────
+# The closure audit found `upstream_origin` null in every routed
+# result: the reference was journaled, the endpoint never recorded. The
+# distinction is the point — two profiles naming ONE variable can reach
+# different servers.
+RSO() { ( set +e
+          eval "$(sed -n '/^rt_sanitize_origin()/,/^}/p' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+          rt_sanitize_origin "$1" ) }
+assert_eq "C30/endpoint: a plain base URL records its origin" "https://api.anthropic.com" \
+    "$(RSO 'https://api.anthropic.com')"
+# CREDENTIALS and PATH must never become durable evidence.
+assert_eq "C30/endpoint: credentials, path, query and fragment are stripped" "https://vllm.internal:8000" \
+    "$(RSO 'https://user:s3cr3t@vllm.internal:8000/v1/chat?key=abc#f')"
+assert_eq "C30/endpoint: ...so no secret survives into the origin" "" \
+    "$( RSO 'https://user:s3cr3t@vllm.internal:8000/v1' | grep -o 's3cr3t' || true )"
+assert_eq "C30/endpoint: an IPv6 literal with a port is preserved" "http://[::1]:8000" \
+    "$(RSO 'http://[::1]:8000/v1')"
+assert_eq "C30/endpoint: host case is normalized so one endpoint is not recorded as two" \
+    "$(RSO 'https://api.example.com')" "$(RSO 'HTTPS://API.EXAMPLE.COM/x')"
+# ABSENT or INVALID stays explicit — never the variable NAME, which
+# would look like evidence while identifying nothing.
+assert_eq "C30/endpoint: an unusable value is empty, never a substitute" "" "$(RSO 'not-a-url')"
+assert_eq "C30/endpoint: the variable NAME is never recorded as an endpoint" "" "$(RSO 'CCT_LOCAL_URL')"
+assert_eq "C30/endpoint: an empty resolution stays empty" "" "$(RSO '')"
+assert_eq "C30/endpoint: a scheme with no authority is refused" "" "$(RSO 'https://')"
+
+# THE FINDING ITSELF: one endpoint_ref, two resolved hosts, two
+# distinguishable records.
+assert_eq "C30/endpoint: two profiles sharing one endpoint_ref record DIFFERENT origins" "https://server-a:8000 https://server-b:8000" \
+    "$( a=$(CCT_SHARED_URL='https://server-a:8000/v1' bash -c '
+              eval "$(sed -n "/^rt_sanitize_origin()/,/^}/p" "'"$REPO_DIR"'/scripts/cooldown-supervisor.sh")"
+              rt_sanitize_origin "$CCT_SHARED_URL"')
+        b=$(CCT_SHARED_URL='https://server-b:8000/v1' bash -c '
+              eval "$(sed -n "/^rt_sanitize_origin()/,/^}/p" "'"$REPO_DIR"'/scripts/cooldown-supervisor.sh")"
+              rt_sanitize_origin "$CCT_SHARED_URL"')
+        printf '%s %s' "$a" "$b" )"
+# It must come from the RESOLVED value, not endpoint_ref.
+assert "C30/endpoint: it is derived from the resolved base URL, not endpoint_ref" \
+    grep -q 'RT_UPSTREAM_ORIGIN=$(rt_sanitize_origin "$RT_ENV_BASE_URL")' "$REPO_DIR/scripts/cooldown-supervisor.sh"
+# ...and reaches the durable record at ALL THREE wiring sites.
+assert_eq "C30/endpoint: all three rr_result sites carry the launch-bound origin" "3" \
+    "$(grep -c '"\${RT_UPSTREAM_ORIGIN:--}"' "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+assert_eq "C30/endpoint: no site still passes a bare - for the origin" "0" \
+    "$(grep -c "<<< \"\$pj\")\" - '{}'" "$REPO_DIR/scripts/cooldown-supervisor.sh")"
+# End to end: the value reaches upstream_origin in the durable result.
+assert_eq "C30/endpoint: the durable result carries the sanitized origin" "https://vllm.internal:8000" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          rr_result 0 "$FULL" codex openai p REQ claude-sonnet-4-8 poolG \
+            "$(RSO 'https://user:pw@vllm.internal:8000/v1')" '{}' - - \
+            | jq -r '.upstream_origin' ) )"
+assert_eq "C30/endpoint: an unknown endpoint stays null, not a placeholder" "null" \
+    "$( ( set +e; source "$REPO_DIR/scripts/lib/routing-result.sh"
+          rr_result 0 "$FULL" codex openai p REQ claude-sonnet-4-8 poolG - '{}' - - \
+            | jq -r '.upstream_origin // "null"' ) )"
+
 # RESOLVER FAILURE vs VALID-UNLISTED — a broken price table is an
 # operator error and must never be recorded as `unpriced`, which
 # asserts a valid table that simply lacks the model.
