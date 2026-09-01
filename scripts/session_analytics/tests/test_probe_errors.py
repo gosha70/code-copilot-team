@@ -152,6 +152,9 @@ class TestClassification(unittest.TestCase):
             # #101 admission-policy rejections — curated like every other code.
             C.PROBE_ERR_SCHEME_NOT_ALLOWED, C.PROBE_ERR_HOST_NOT_ALLOWED,
             C.PROBE_ERR_SQLITE_FILE_MISSING,
+            # The probe refuses rather than testing a target it cannot
+            # guarantee it is unable to modify.
+            C.PROBE_ERR_READ_ONLY_UNAVAILABLE,
         }
         self.assertEqual(set(C.PROBE_ERROR_MESSAGES), codes)
         self.assertTrue(all(C.PROBE_ERROR_MESSAGES[c] for c in codes))
@@ -588,6 +591,139 @@ class TestProbePayload(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["schema_present"])
         self.assertEqual(result["sessions"], 0)
+
+
+class _FakePgDb:
+    """A PostgreSQL-dialect Database stand-in.
+
+    These boundaries cannot be reached with SQLite (no search_path, no
+    session read-only) and a live server is not available here, so the
+    contract is exercised against a stub that records what the probe
+    actually issues.
+    """
+
+    dialect = "postgres"
+
+    def __init__(self, *, read_only="on", ro_raises=False,
+                 regclass=("copilot_session", "schema_version"),
+                 count_raises=None):
+        self._read_only = read_only
+        self._ro_raises = ro_raises
+        self._regclass = regclass
+        self._count_raises = count_raises
+        self.executed: list = []
+        self.queried: list = []
+        self.closed = False
+
+    def rollback(self): self.executed.append("ROLLBACK")
+
+    def execute(self, sql, params=()):
+        self.executed.append(sql)
+        if self._ro_raises and "READ ONLY" in sql:
+            raise RuntimeError("permission denied to set transaction mode")
+
+    def query_one(self, sql, params=()):
+        self.queried.append(sql)
+        if "current_setting" in sql:
+            if self._ro_raises:
+                raise RuntimeError("cannot read setting")
+            return (self._read_only,)
+        if "to_regclass" in sql:
+            return tuple(self._regclass)
+        if "COUNT(*)" in sql:
+            if self._count_raises:
+                raise self._count_raises
+            return (7,)
+        return None
+
+    def close(self): self.closed = True
+
+
+class TestPostgresReadOnlyContract(unittest.TestCase):
+    """The PostgreSQL half of "a connection test must never modify its
+    target". SQLite gets it at the file open; Postgres must be set AND
+    verified, and must FAIL CLOSED."""
+
+    def _probe_with(self, db):
+        import session_analytics.api.db_test as dbt
+        from unittest import mock
+        with mock.patch.object(dbt.Database, "connect", staticmethod(lambda *a, **k: db)):
+            return dbt.probe("postgresql://localhost/x")
+
+    def test_session_is_set_read_only_before_any_probe_query(self) -> None:
+        db = _FakePgDb()
+        self._probe_with(db)
+        self.assertIn("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY", db.executed)
+        # ...and the very first query is the verification, not a probe query.
+        self.assertIn("current_setting", db.queried[0])
+
+    def test_refuses_when_read_only_cannot_be_established(self) -> None:
+        db = _FakePgDb(ro_raises=True)
+        result = self._probe_with(db)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], C.PROBE_ERR_READ_ONLY_UNAVAILABLE)
+
+    def test_refusal_runs_no_catalog_or_count_query(self) -> None:
+        db = _FakePgDb(ro_raises=True)
+        self._probe_with(db)
+        for sql in db.queried:
+            self.assertNotIn("to_regclass", sql)
+            self.assertNotIn("COUNT(*)", sql)
+
+    def test_refuses_when_read_only_reports_off(self) -> None:
+        """A no-op SET must not pass as protection."""
+        db = _FakePgDb(read_only="off")
+        result = self._probe_with(db)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], C.PROBE_ERR_READ_ONLY_UNAVAILABLE)
+
+    def test_ends_any_open_transaction_before_setting_the_default(self) -> None:
+        # SET SESSION CHARACTERISTICS governs SUBSEQUENT transactions, so an
+        # implicit one already in flight would not be covered.
+        db = _FakePgDb()
+        self._probe_with(db)
+        self.assertLess(db.executed.index("ROLLBACK"),
+                        db.executed.index("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"))
+
+
+class TestPostgresSchemaDetection(unittest.TestCase):
+    """Presence must resolve the SAME way as the query it guards, and must
+    never turn a privilege failure into "absent"."""
+
+    def _probe_with(self, db):
+        import session_analytics.api.db_test as dbt
+        from unittest import mock
+        with mock.patch.object(dbt.Database, "connect", staticmethod(lambda *a, **k: db)):
+            return dbt.probe("postgresql://localhost/x")
+
+    def test_presence_uses_search_path_resolution(self) -> None:
+        db = _FakePgDb()
+        self._probe_with(db)
+        self.assertTrue(any("to_regclass" in q for q in db.queried),
+                        "presence must resolve like the unqualified COUNT query")
+        self.assertFalse(any("information_schema" in q for q in db.queried),
+                         "information_schema matches other schemas and hides "
+                         "unprivileged tables")
+
+    def test_relation_outside_search_path_is_not_reported_present(self) -> None:
+        db = _FakePgDb(regclass=(None, None))
+        result = self._probe_with(db)
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["schema_present"])
+        self.assertIsNone(result["sessions"])
+
+    def test_a_lone_copilot_session_is_not_a_cct_store(self) -> None:
+        # Something merely NAMED copilot_session is not an analytics store.
+        db = _FakePgDb(regclass=("copilot_session", None))
+        self.assertFalse(self._probe_with(db)["schema_present"])
+
+    def test_permission_denied_surfaces_as_an_error_not_as_absent(self) -> None:
+        """THE distinction the old information_schema lookup collapsed."""
+        db = _FakePgDb(count_raises=RuntimeError("permission denied for table copilot_session"))
+        result = self._probe_with(db)
+        self.assertFalse(result["ok"], "an unreadable CCT store was reported as usable")
+        self.assertNotIn("schema_present", result)
+        self.assertIn(result["error_code"], C.PROBE_ERROR_MESSAGES)
 
 
 class TestProbeNeverWrites(unittest.TestCase):

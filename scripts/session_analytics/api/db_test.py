@@ -263,41 +263,77 @@ def _failure(exc: Exception, *, phase: str) -> dict[str, Any]:
     return _error_payload(classify_probe_error(exc, phase=phase))
 
 
-def _read_only_session(db: Database) -> None:
-    """Defense in depth for Postgres, where the open carries no mode.
+class ReadOnlyUnavailable(RuntimeError):
+    """PostgreSQL could not be put into a verified read-only state."""
 
-    SQLite is already read-only at the file handle (``SQLITE_MODE_RO``);
-    Postgres has no equivalent at connect, so the session is marked
-    read-only before anything else runs. Best-effort: a server that
-    refuses the statement still cannot be written to by this function,
-    which issues only SELECTs — this closes the gap against a future
-    edit that adds one.
+
+def _enforce_read_only(db: Database) -> None:
+    """Make writes impossible before ANY probe query runs — or refuse.
+
+    SQLite is already read-only at the file handle (``SQLITE_MODE_RO``).
+    PostgreSQL has no open-time mode, so the session is set read-only and
+    then VERIFIED, and the probe REFUSES if that state cannot be
+    established.
+
+    Two details that make the naive version wrong:
+
+    - ``SET TRANSACTION READ ONLY`` applies to the CURRENT transaction and
+      does nothing if none is open, so the SESSION default is set instead
+      and any implicit transaction is ended first so the new default
+      actually governs what follows.
+    - swallowing the failure would make the real invariant "read-only if
+      it happens to work". The whole point of the database-level guard is
+      that a future accidental write is impossible; failing open leaves it
+      possible on exactly the connections where the guard did not take.
     """
-    if db.dialect == DIALECT_POSTGRES:
-        try:
-            db.execute("SET TRANSACTION READ ONLY")
-        except Exception:  # noqa: BLE001 — advisory only; never fails the probe
-            _log.debug("could not mark the probe session read-only", exc_info=True)
+    if db.dialect != DIALECT_POSTGRES:
+        return
+    try:
+        db.rollback()  # end any implicit transaction, so the new default applies
+        db.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+        row = db.query_one("SELECT current_setting('transaction_read_only')")
+    except Exception as exc:  # noqa: BLE001
+        raise ReadOnlyUnavailable("could not set a read-only session") from exc
+    value = str(row[0]).lower() if row else ""
+    if value not in ("on", "true"):
+        raise ReadOnlyUnavailable(f"read-only session not in effect (got {value!r})")
 
 
 def _cct_schema_present(db: Database) -> bool:
-    """Is the CCT store initialized here? Read-only catalog lookup.
+    """Is the CCT store initialized HERE — under the same name resolution
+    the counting query will use?
 
-    Asked of the CATALOG rather than by attempting a query and catching
-    the failure: a missing table and a permission error are different
-    facts, and collapsing them would report an inaccessible database as
-    an uninitialized one.
+    Two things this must not do:
+
+    - **Resolve differently from the query it guards.** An
+      ``information_schema.tables`` lookup with no ``table_schema`` filter
+      matches any accessible schema, while ``SELECT ... FROM
+      copilot_session`` resolves through ``search_path``. A relation in
+      some other schema would then report the store as present while the
+      count referred to nothing, or to a different table. ``to_regclass``
+      uses the same search-path resolution as the query.
+    - **Turn a permission error into "absent."**
+      ``information_schema.tables`` only lists tables the caller has some
+      privilege on, so a real CCT store the probe user cannot read would
+      have been reported as an uninitialized database and the operator
+      told to run setup. Nothing here catches a privilege failure: an
+      unreadable table surfaces from the COUNT as a genuine schema-phase
+      error.
+
+    Both CCT marker tables are required, so a database that merely happens
+    to contain something named ``copilot_session`` is not mistaken for an
+    analytics store.
     """
     if db.dialect == DIALECT_SQLITE:
         row = db.query_one(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='copilot_session'"
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type='table' AND name IN ('copilot_session', 'schema_version')"
         )
-    else:
-        row = db.query_one(
-            "SELECT 1 FROM information_schema.tables "
-            "WHERE table_name = 'copilot_session' LIMIT 1"
-        )
-    return row is not None
+        return bool(row) and int(row[0]) == 2
+    row = db.query_one(
+        "SELECT to_regclass('copilot_session'), to_regclass('schema_version')"
+    )
+    return bool(row) and row[0] is not None and row[1] is not None
 
 
 def probe(dsn: str, configured_dsns: Sequence[str] = ()) -> dict[str, Any]:
@@ -321,7 +357,9 @@ def probe(dsn: str, configured_dsns: Sequence[str] = ()) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — report any connect failure
         return _failure(exc, phase=PHASE_CONNECT)
     try:
-        _read_only_session(db)
+        # BEFORE any query: refuse rather than probe a target we cannot
+        # guarantee we are unable to modify.
+        _enforce_read_only(db)
         present = _cct_schema_present(db)
         sessions = None
         if present:
@@ -338,6 +376,9 @@ def probe(dsn: str, configured_dsns: Sequence[str] = ()) -> dict[str, Any]:
             "schema_present": present,
             "sessions": sessions,
         }
+    except ReadOnlyUnavailable as exc:
+        _log.warning("test-connection probe refused: %s", exc)
+        return _error_payload(C.PROBE_ERR_READ_ONLY_UNAVAILABLE)
     except Exception as exc:  # noqa: BLE001
         return _failure(exc, phase=PHASE_SCHEMA)
     finally:
