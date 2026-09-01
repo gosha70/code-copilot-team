@@ -68,7 +68,16 @@ export default function SettingsPage() {
     setProbe("Testing…");
     try {
       const r = await api.testConnection(values["CCT_SA_DSN"] || undefined);
-      setProbe(r.ok ? `✓ ${r.dialect} · ${r.sessions} sessions` : `✗ ${r.error}`);
+      // `sessions` is null when the target has no CCT schema: the probe
+      // no longer creates one, so "0 sessions" would misreport a database
+      // that simply is not an analytics store.
+      setProbe(
+        r.ok
+          ? r.schema_present
+            ? `✓ ${r.dialect} · ${r.sessions} sessions`
+            : `✓ ${r.dialect} · connected; no CCT schema (run setup to initialize)`
+          : `✗ ${r.error}`,
+      );
     } catch (e) {
       setProbe(`✗ ${String(e)}`);
     }

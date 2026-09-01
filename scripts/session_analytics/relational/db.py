@@ -30,6 +30,11 @@ SQLITE_MEMORY = ":memory:"
 # creates), so this enforces "must already exist" at the open itself rather
 # than pre-checking and racing (#101).
 SQLITE_MODE_RW = "rw"
+# READ-ONLY open. The probe (#101 / CodeQL py/path-injection) must not be
+# able to write to a caller-named database AT ALL: `rw` refuses to CREATE
+# but still permits writes to an existing file, which let a connection
+# test add the CCT schema to somebody else's database.
+SQLITE_MODE_RO = "ro"
 
 
 def is_sqlite_dsn(dsn: str) -> bool:
@@ -111,8 +116,9 @@ class Database:
     def connect(cls, dsn: str, sqlite_mode: str = "") -> "Database":
         """Open ``dsn``.
 
-        ``sqlite_mode`` is an OPT-IN SQLite open mode (``SQLITE_MODE_RW``)
-        for callers that must not create the database — the probe (#101).
+        ``sqlite_mode`` is an OPT-IN SQLite open mode (``SQLITE_MODE_RW``
+        to refuse creation, ``SQLITE_MODE_RO`` to refuse writing at all)
+        for callers that must not modify the database — the probe.
         The default is unchanged: ingest, tests and setup still auto-create
         a SQLite file, which is how a fresh install gets its store.
         """

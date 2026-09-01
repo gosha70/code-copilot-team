@@ -152,6 +152,9 @@ class TestClassification(unittest.TestCase):
             # #101 admission-policy rejections — curated like every other code.
             C.PROBE_ERR_SCHEME_NOT_ALLOWED, C.PROBE_ERR_HOST_NOT_ALLOWED,
             C.PROBE_ERR_SQLITE_FILE_MISSING,
+            # The probe refuses rather than testing a target it cannot
+            # guarantee it is unable to modify.
+            C.PROBE_ERR_READ_ONLY_UNAVAILABLE,
         }
         self.assertEqual(set(C.PROBE_ERROR_MESSAGES), codes)
         self.assertTrue(all(C.PROBE_ERROR_MESSAGES[c] for c in codes))
@@ -556,15 +559,329 @@ class TestProbePayload(unittest.TestCase):
 
         # Since #101 the probe only opens a sqlite file that ALREADY exists,
         # so the operator's real database has to be standing in for it here.
+        # An EMPTY file is connectable but is not a CCT store. This used to
+        # report `sessions: 0` — but only because the probe ran apply_ddl
+        # and created the schema on the spot, which is the very defect the
+        # read-only probe removes. `sessions` is null when there is nothing
+        # to count; 0 would read as an empty CCT store.
         target = os.path.join(tmpdir, "store.db")
         open(target, "wb").close()
 
         result = probe(f"sqlite:///{target}")
         self.assertTrue(result["ok"])
         self.assertEqual(result["dialect"], "sqlite")
-        self.assertEqual(result["sessions"], 0)
+        self.assertFalse(result["schema_present"])
+        self.assertIsNone(result["sessions"])
         self.assertNotIn("error", result)       # success path untouched
         self.assertNotIn("error_code", result)
+
+    def test_initialized_store_reports_its_session_count(self) -> None:
+        """A REAL CCT store still counts, read-only."""
+        tmpdir = tempfile.mkdtemp(prefix="cct-probe-init-")
+        self.addCleanup(shutil.rmtree, tmpdir, ignore_errors=True)
+        target = os.path.join(tmpdir, "store.db")
+
+        from session_analytics.relational.db import Database, apply_ddl
+
+        db = Database.connect(f"sqlite:///{target}")
+        apply_ddl(db)
+        db.close()
+
+        result = probe(f"sqlite:///{target}")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["schema_present"])
+        self.assertEqual(result["sessions"], 0)
+
+
+class _FakePgDb:
+    """A PostgreSQL-dialect Database stand-in.
+
+    These boundaries cannot be reached with SQLite (no search_path, no
+    session read-only) and a live server is not available here, so the
+    contract is exercised against a stub that records what the probe
+    actually issues.
+    """
+
+    dialect = "postgres"
+
+    def __init__(self, *, read_only="on", ro_raises=False,
+                 regclass=("copilot_session", "schema_version"),
+                 count_raises=None):
+        self._read_only = read_only
+        self._ro_raises = ro_raises
+        self._regclass = regclass
+        self._count_raises = count_raises
+        self.executed: list = []
+        self.queried: list = []
+        # ONE ordered log across execute/query/commit/rollback: ordering
+        # between a statement and a query is the contract here, and two
+        # separate lists cannot express it.
+        self.log: list = []
+        self.closed = False
+
+    def rollback(self):
+        self.executed.append("ROLLBACK")
+        self.log.append("ROLLBACK")
+
+    def commit(self):
+        self.executed.append("COMMIT")
+        self.log.append("COMMIT")
+
+    def execute(self, sql, params=()):
+        self.executed.append(sql)
+        self.log.append(sql)
+        if self._ro_raises and "READ ONLY" in sql:
+            raise RuntimeError("permission denied to set transaction mode")
+
+    def query_one(self, sql, params=()):
+        self.queried.append(sql)
+        self.log.append(sql)
+        if "current_setting" in sql:
+            if self._ro_raises:
+                raise RuntimeError("cannot read setting")
+            return (self._read_only,)
+        if "to_regclass" in sql:
+            return tuple(self._regclass)
+        if "COUNT(*)" in sql:
+            if self._count_raises:
+                raise self._count_raises
+            return (7,)
+        return None
+
+    def close(self): self.closed = True
+
+
+class TestPostgresReadOnlyContract(unittest.TestCase):
+    """The PostgreSQL half of "a connection test must never modify its
+    target". SQLite gets it at the file open; Postgres must be set AND
+    verified, and must FAIL CLOSED."""
+
+    def _probe_with(self, db):
+        import session_analytics.api.db_test as dbt
+        from unittest import mock
+        with mock.patch.object(dbt.Database, "connect", staticmethod(lambda *a, **k: db)):
+            return dbt.probe("postgresql://localhost/x")
+
+    def test_session_is_set_read_only_before_any_probe_query(self) -> None:
+        db = _FakePgDb()
+        self._probe_with(db)
+        self.assertIn("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY", db.executed)
+        # ...and the very first query is the verification, not a probe query.
+        self.assertIn("current_setting", db.queried[0])
+
+    def test_refuses_when_read_only_cannot_be_established(self) -> None:
+        db = _FakePgDb(ro_raises=True)
+        result = self._probe_with(db)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], C.PROBE_ERR_READ_ONLY_UNAVAILABLE)
+
+    def test_refusal_runs_no_catalog_or_count_query(self) -> None:
+        db = _FakePgDb(ro_raises=True)
+        self._probe_with(db)
+        for sql in db.queried:
+            self.assertNotIn("to_regclass", sql)
+            self.assertNotIn("COUNT(*)", sql)
+
+    def test_refuses_when_read_only_reports_off(self) -> None:
+        """A no-op SET must not pass as protection."""
+        db = _FakePgDb(read_only="off")
+        result = self._probe_with(db)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], C.PROBE_ERR_READ_ONLY_UNAVAILABLE)
+
+    def test_the_set_is_committed_before_the_check_reads_it(self) -> None:
+        """TWO boundaries, not one.
+
+        Under psycopg's default non-autocommit behaviour the SET itself
+        opens a transaction that began under the OLD default. Verifying
+        inside it reads the transaction in flight rather than the default
+        just established, so the SET must be committed first and the
+        check must run in a NEW transaction.
+        """
+        db = _FakePgDb()
+        self._probe_with(db)
+        SET = "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"
+        self.assertIn(SET, db.log)
+        set_at = db.log.index(SET)
+        self.assertIn(
+            "COMMIT", db.log[set_at:],
+            "the SET was never committed, so the check below observes the "
+            "SET's own transaction rather than the new session default",
+        )
+        commit_at = set_at + db.log[set_at:].index("COMMIT")
+        checks = [i for i, q in enumerate(db.log) if "current_setting" in q]
+        self.assertTrue(checks, "the read-only state was never verified")
+        check_at = checks[0]
+        self.assertLess(
+            commit_at, check_at,
+            "the read-only check ran inside the SET's own transaction, so it "
+            "observed that transaction rather than the new session default",
+        )
+
+    def test_ends_any_open_transaction_before_setting_the_default(self) -> None:
+        # SET SESSION CHARACTERISTICS governs SUBSEQUENT transactions, so an
+        # implicit one already in flight would not be covered.
+        db = _FakePgDb()
+        self._probe_with(db)
+        SET = "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"
+        self.assertIn("ROLLBACK", db.log,
+                      "an implicit transaction was never ended, so the new "
+                      "session default would not govern what follows")
+        self.assertIn(SET, db.log)
+        self.assertLess(db.log.index("ROLLBACK"), db.log.index(SET))
+
+
+class TestPostgresSchemaDetection(unittest.TestCase):
+    """Presence must resolve the SAME way as the query it guards, and must
+    never turn a privilege failure into "absent"."""
+
+    def _probe_with(self, db):
+        import session_analytics.api.db_test as dbt
+        from unittest import mock
+        with mock.patch.object(dbt.Database, "connect", staticmethod(lambda *a, **k: db)):
+            return dbt.probe("postgresql://localhost/x")
+
+    def test_presence_uses_search_path_resolution(self) -> None:
+        db = _FakePgDb()
+        self._probe_with(db)
+        self.assertTrue(any("to_regclass" in q for q in db.queried),
+                        "presence must resolve like the unqualified COUNT query")
+        self.assertFalse(any("information_schema" in q for q in db.queried),
+                         "information_schema matches other schemas and hides "
+                         "unprivileged tables")
+
+    def test_relation_outside_search_path_is_not_reported_present(self) -> None:
+        db = _FakePgDb(regclass=(None, None))
+        result = self._probe_with(db)
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["schema_present"])
+        self.assertIsNone(result["sessions"])
+
+    def test_a_lone_copilot_session_is_not_a_cct_store(self) -> None:
+        # Something merely NAMED copilot_session is not an analytics store.
+        db = _FakePgDb(regclass=("copilot_session", None))
+        self.assertFalse(self._probe_with(db)["schema_present"])
+
+    def test_permission_denied_surfaces_as_an_error_not_as_absent(self) -> None:
+        """THE distinction the old information_schema lookup collapsed."""
+        db = _FakePgDb(count_raises=RuntimeError("permission denied for table copilot_session"))
+        result = self._probe_with(db)
+        self.assertFalse(result["ok"], "an unreadable CCT store was reported as usable")
+        self.assertNotIn("schema_present", result)
+        self.assertIn(result["error_code"], C.PROBE_ERROR_MESSAGES)
+
+
+class TestProbeNeverWrites(unittest.TestCase):
+    """MANDATORY regression (CodeQL py/path-injection, alert 14).
+
+    #101 stopped the probe CREATING a database at a caller-chosen path.
+    It did not stop the probe WRITING to one that already exists:
+    ``SQLITE_MODE_RW`` refuses creation but permits writes, and the probe
+    then ran ``apply_ddl``. Testing a DSN against an unrelated SQLite file
+    therefore added 17 CCT tables to somebody else's database — and
+    returned ok.
+    """
+
+    def _tables(self, path: str) -> list:
+        con = sqlite3.connect(path)
+        try:
+            return sorted(
+                r[0] for r in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+            )
+        finally:
+            con.close()
+
+    def _unrelated_db(self) -> str:
+        tmpdir = tempfile.mkdtemp(prefix="cct-noswrite-")
+        self.addCleanup(shutil.rmtree, tmpdir, ignore_errors=True)
+        target = os.path.join(tmpdir, "someones-notes.db")
+        con = sqlite3.connect(target)
+        con.execute("CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT)")
+        con.execute("INSERT INTO notes(body) VALUES('private user data')")
+        con.commit()
+        con.close()
+        return target
+
+    def test_probing_an_unrelated_database_adds_no_tables(self) -> None:
+        target = self._unrelated_db()
+        before = self._tables(target)
+
+        probe(f"sqlite:///{target}")
+
+        after = self._tables(target)
+        self.assertEqual(
+            before, after,
+            "the probe modified a caller-named database: added "
+            f"{sorted(set(after) - set(before))}",
+        )
+
+    def test_probing_an_unrelated_database_preserves_its_rows(self) -> None:
+        target = self._unrelated_db()
+        probe(f"sqlite:///{target}")
+        con = sqlite3.connect(target)
+        try:
+            rows = list(con.execute("SELECT body FROM notes"))
+        finally:
+            con.close()
+        self.assertEqual(rows, [("private user data",)])
+
+    def test_an_unrelated_database_is_reported_as_having_no_cct_schema(self) -> None:
+        # Honest reporting matters as much as not writing: the operator
+        # must be able to tell "connected, not a CCT store" from
+        # "connected, empty CCT store".
+        result = probe(f"sqlite:///{self._unrelated_db()}")
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["schema_present"])
+        self.assertIsNone(result["sessions"])
+
+    def test_the_probe_opens_read_only(self) -> None:
+        """The PROBE's own open must be read-only, not merely write-free.
+
+        With apply_ddl removed the probe issues only SELECTs, so RW vs RO
+        is invisible to behaviour — which means nothing would notice a
+        revert to RW until someone re-added a write. Observe the mode the
+        probe actually passes.
+        """
+        from unittest import mock
+
+        from session_analytics.relational.db import SQLITE_MODE_RO
+        import session_analytics.api.db_test as dbt
+
+        target = self._unrelated_db()
+        seen = {}
+        real = dbt.Database.connect
+
+        def spy(dsn, sqlite_mode=""):
+            seen["mode"] = sqlite_mode
+            return real(dsn, sqlite_mode=sqlite_mode)
+
+        with mock.patch.object(dbt.Database, "connect", staticmethod(spy)):
+            probe(f"sqlite:///{target}")
+        self.assertEqual(
+            seen.get("mode"), SQLITE_MODE_RO,
+            "the probe opened the caller's database in a writable mode",
+        )
+
+    def test_the_open_itself_is_read_only(self) -> None:
+        """Not merely 'we do not call apply_ddl' — writes are impossible.
+
+        Enforced at the file handle, so a future edit that adds a write
+        cannot silently reintroduce the defect.
+        """
+        from session_analytics.relational.db import (
+            SQLITE_MODE_RO,
+            Database,
+        )
+
+        target = self._unrelated_db()
+        db = Database.connect(f"sqlite:///{target}", sqlite_mode=SQLITE_MODE_RO)
+        try:
+            with self.assertRaises(Exception):
+                db.execute("CREATE TABLE injected(x INTEGER)")
+        finally:
+            db.close()
+        self.assertNotIn("injected", self._tables(target))
 
 
 if __name__ == "__main__":

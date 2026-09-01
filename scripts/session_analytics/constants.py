@@ -238,6 +238,12 @@ PROBE_ERR_UNKNOWN = "unknown"
 PROBE_ERR_SCHEME_NOT_ALLOWED = "scheme_not_allowed"
 PROBE_ERR_HOST_NOT_ALLOWED = "host_not_allowed"
 PROBE_ERR_SQLITE_FILE_MISSING = "sqlite_file_missing"
+# The probe must never be able to modify the target. SQLite gets that at
+# the file open (mode=ro); PostgreSQL has no open-time mode, so the
+# session is set read-only and VERIFIED. If it cannot be established the
+# probe REFUSES — failing open would leave the database writable exactly
+# on the connections where the protection did not take.
+PROBE_ERR_READ_ONLY_UNAVAILABLE = "read_only_unavailable"
 
 PROBE_ERROR_MESSAGES = {
     PROBE_ERR_DRIVER_MISSING:
@@ -265,6 +271,10 @@ PROBE_ERROR_MESSAGES = {
     PROBE_ERR_SQLITE_FILE_MISSING:
         "That SQLite database file does not exist yet — save the "
         "configuration and run ingest to create it.",
+    PROBE_ERR_READ_ONLY_UNAVAILABLE:
+        "Could not put the connection into read-only mode, so the test was "
+        "refused — a connection test must never be able to modify the "
+        "database.",
 }
 
 # Schemes the probe will attempt at all (#101). Compared case-normalized.
