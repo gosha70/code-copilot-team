@@ -520,6 +520,54 @@ rt_sanitize_origin() {
   fi
 }
 
+# rt_codex_origin <profile-json> -> sanitized origin, or EMPTY.
+#
+# codex does not route by ANTHROPIC_BASE_URL; it resolves through
+# `model_provider` in codex configuration. #277 therefore recorded null
+# for every codex attempt. This removes that null WITHOUT pretending to
+# identify the server that handled inference (FR-E10) — it improves the
+# CONFIGURED record only, and never touches effective_upstream.
+#
+# SELECTION FIDELITY IS THE WHOLE POINT (FR-E12). The supervisor passes
+# `-c model_provider=<id>` built from the profile's `.provider`, and
+# that override decides which provider codex uses. This resolver reads
+# `.provider` under the SAME condition the launch uses it — non-empty —
+# so the two cannot disagree:
+#
+#   1. the provider the launch override named for THIS attempt;
+#   2. the config's top-level `model_provider`, ONLY when no override
+#      was issued. An override that WAS issued but whose section is
+#      missing or carries no base_url resolves to EMPTY, never to the
+#      top-level default: falling through there would record the
+#      provider codex did NOT use.
+#   3. otherwise empty.
+#
+# "The first key under [model_providers]" is NOT a fallback here. The
+# benchmark backend's _resolve_codex_config uses exactly that heuristic
+# (scripts/benchmark_runner/backends/codex.py) — arbitrary dict order —
+# and with two providers configured it can attribute provider B's
+# base_url to a run routed through provider A. That would be a
+# fabricated fact wearing a provenance label, which is worse than the
+# null it replaces, so this deliberately does not reuse that helper.
+#
+# FR-E13: only the sanitized origin leaves this function. The config
+# path, credentials, headers and query parameters never become
+# evidence — and an inline-table or quoted-key config that rt_toml_get
+# cannot read yields EMPTY, which records `none` rather than a guess.
+rt_codex_origin() {
+  local pj="$1" cfg sel base
+  cfg="${CODEX_HOME:-$HOME/.codex}/config.toml"
+  [[ -r "$cfg" ]] || return 0
+  sel=$(jq -r '.provider // empty' <<< "$pj")
+  if [[ -z "$sel" ]]; then
+    sel=$(rt_toml_get "$cfg" "" "model_provider")
+    [[ -n "$sel" ]] || return 0
+  fi
+  base=$(rt_toml_get "$cfg" "model_providers.$sel" "base_url")
+  [[ -n "$base" ]] || return 0
+  rt_sanitize_origin "$base"
+}
+
 # rt_launch_env: resolves child-only values; journals NAMES only.
 #
 # It also binds RT_UPSTREAM_ORIGIN — the sanitized CONFIGURED LAUNCH
@@ -559,7 +607,10 @@ rt_launch_env() {
   #   codex        resolves its provider through `model_provider` in
   #                codex configuration; ANTHROPIC_BASE_URL does not
   #                determine where it goes, so recording it would name
-  #                an endpoint this attempt may never touch. NULL.
+  #                an endpoint this attempt may never touch. Its origin
+  #                comes from rt_codex_origin instead — the base_url of
+  #                the provider the launch override actually selected —
+  #                and is NULL whenever that cannot be established.
   #   login mode   no base URL is wired at all; the backend's own
   #                default applies and is not observable here. NULL.
   #
@@ -588,12 +639,15 @@ rt_launch_env() {
   # assumed default is an assumption, and this contract exists to stop
   # assumptions being recorded as facts.
   #
-  # codex is `none` for now because its origin is null here; T4 gives
-  # it `codex_model_provider` when it resolves the provider actually
-  # selected.
+  # codex resolves through its own configuration, so it takes the
+  # separate path in rt_codex_origin (#273 T4, FR-E10/E12) rather than
+  # the base-URL path that does not route it.
   RT_UPSTREAM_ORIGIN=""
   RT_UPSTREAM_ORIGIN_SOURCE="none"
-  if [[ "$backend" != "codex" ]]; then
+  if [[ "$backend" == "codex" ]]; then
+    RT_UPSTREAM_ORIGIN=$(rt_codex_origin "$pj")
+    [[ -n "$RT_UPSTREAM_ORIGIN" ]] && RT_UPSTREAM_ORIGIN_SOURCE="codex_model_provider"
+  else
     RT_UPSTREAM_ORIGIN=$(rt_sanitize_origin "$RT_ENV_BASE_URL")
     if [[ -n "$RT_UPSTREAM_ORIGIN" ]]; then
       case "$ep" in

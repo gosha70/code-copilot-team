@@ -171,6 +171,35 @@ selection.
   #277's sanitizer and a non-http(s) scheme is refused;
 - an undeterminable provider records `none`, not a guess.
 
+**Status: complete.** `rt_codex_origin` (`cooldown-supervisor.sh`)
+resolves `[model_providers.<id>].base_url` for the provider the launch
+override named, through `rt_toml_get` — the reader the repo already
+uses for `providers.toml` — and then through #277's sanitizer. It reads
+`.provider` under the SAME non-empty condition the launch uses to
+decide whether to pass `-c model_provider=<id>` at all, so the two
+cannot disagree about whether an override was issued.
+
+The config path follows codex's own rule, `${CODEX_HOME:-$HOME/.codex}`,
+so the resolver and the child read the same file. A mutation that
+hardcodes `$HOME/.codex` fails six tests.
+
+**The fixture is built so the rejected heuristic is wrong**:
+`provider_b` is listed first and the profile selects `provider_a`. An
+assertion pins that first-key selection *would* answer `provider_b`
+here — without it, the selection test would pass even for code using
+the heuristic, and the block would prove nothing.
+
+Five mutations, each caught: adopting the first-key heuristic; letting
+an unresolvable override fall through to the top-level default;
+skipping the sanitizer (leaks `s3cr3t` into the record, caught by name);
+recording the wrong provenance value; ignoring `CODEX_HOME`.
+
+Not changed: `_resolve_codex_config` in
+`scripts/benchmark_runner/backends/codex.py` still uses the first-key
+heuristic. It feeds benchmark metadata, not routed results, so it is
+outside this task — but it is the same latent defect and worth its own
+issue.
+
 ---
 
 ## T5 — short C30 re-audit
