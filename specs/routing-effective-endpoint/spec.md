@@ -1,0 +1,266 @@
+# Spec: effective upstream endpoint evidence (final C30 gap)
+
+The last unmet component of #109's acceptance criterion C30.
+
+> "Tokens, costs, failed verifier commands, repair cycles, **effective
+> endpoint**, and effective model are accurately recorded."
+
+Conjunctive. The closure audit at `2af68f0` (PR #276), re-derived from
+merged code, found **5 of 6 met**; the effective endpoint is the sole
+remaining component.
+
+## What is already recorded, and why it is not enough
+
+PR #277 populated `upstream_origin` with the **configured launch
+origin** — sanitized to scheme/host/port, credentials and path stripped
+— and deliberately declined to call it closure:
+
+- a **gateway** URL records the gateway, not the provider behind it,
+  while #109 §11 asks for the upstream "**not only a loopback proxy**";
+- **codex** records `null` — it resolves through `model_provider` in
+  codex configuration, so `ANTHROPIC_BASE_URL` does not route it;
+- **login-mode** records `null` — no base URL is wired.
+
+## The governing finding
+
+A survey of the merged tree establishes that **CCT collects no evidence
+from which the effective upstream can be derived, for any backend**:
+
+| Source | What it holds | Observed? |
+|---|---|---|
+| `backends/claude_code.py` | `os.environ["ANTHROPIC_BASE_URL"]` — the variable the harness itself set | no |
+| `backends/codex.py` | `config_toml_path`, `provider_id` — configuration keys | no |
+| `backends/pi.py` | nothing | — |
+| anywhere | HTTP response headers / served-by signal | **not captured** |
+
+CCT shells out to CLI binaries and never sees the HTTP layer. C30 as
+written therefore requires a **new observation seam**; it cannot be
+satisfied by better use of existing data.
+
+## Requirements
+
+**FR-E1 — the design decision is the first deliverable.** No seam is
+built before the choice among the candidates below is made and recorded
+with its reasoning. Implementing one and discovering afterwards that it
+does not answer the gateway case would repeat, in subtler form, the
+"reference == effective endpoint" mistake this arc already made once.
+
+**FR-E2 — never fabricate observability.** Where the effective upstream
+cannot be learned for a backend or configuration, the record is `null`
+with an explicit reason. A plausible-looking value is worse than an
+honest absence, because it reads as evidence.
+
+**FR-E3 — a configured value is never proof of the effective upstream**
+when a gateway may sit in between. Neither `endpoint_ref` nor the
+configured `upstream_origin` may be relabelled as effective.
+
+**FR-E4 — sanitized evidence only.** Scheme, host, optional port. No
+credentials, path, query or fragment, in any new field or journal line.
+
+**FR-E5 — distinguish the two facts.** If both are recorded, the
+configured origin and the effective upstream are separate fields with
+separate semantics; one must never silently stand in for the other.
+
+**FR-E6 — the amendment is explicit, and is a correction not a
+weakening.** The original C30 endpoint wording is SUPERSEDED, with the
+reason recorded: it requires information outside CCT's observation
+boundary for opaque gateways. The final audit concludes 33/33 against
+the AMENDED contract, citing the amendment and the evidence survey that
+justifies it. It must never state that the original requirement became
+met.
+
+## The decision (owner, 2026-09-01): O1 + O4
+
+**O4 governs; O1 is telemetry completion, not the thing that makes C30
+effective.**
+
+**O2 is REJECTED as architecturally insufficient, not merely
+expensive.** A proxy between CCT's CLI and `localhost:8787` proves the
+CLI connected to `localhost:8787`. It cannot see the *later* hop the
+gateway makes to Anthropic, DeepSeek or OpenAI. Making O2 literal would
+require CCT to instrument the gateway's outbound connection too, which
+for an arbitrary remote gateway is impossible. It is not a general
+solution at any price.
+
+**O3 stays opportunistic.** There is no standardized provider-reported
+effective-upstream signal across these CLIs. It may become available;
+nothing depends on it.
+
+## The amended contract
+
+C30's endpoint component is superseded, because as written it requires
+information outside CCT's observation boundary for opaque gateways. It
+is replaced by a STRONGER truthfulness contract — not by "configured is
+good enough", which would recreate the same semantic mistake under new
+wording.
+
+**FR-E7 — configured fact and observed fact are separate fields.**
+
+```text
+upstream_origin:         sanitized origin | null
+upstream_origin_source:  profile_base_url | profile_base_url_env
+                         | codex_model_provider | backend_default | none
+effective_upstream:
+  origin:   sanitized origin | null
+  status:   verified | unverifiable
+  evidence: provider_reported | none
+```
+
+Provenance values are CLOSED and semantically specific. A vague
+`configured` would make later audits weaker precisely where they need to
+be strong: `codex_model_provider` and `profile_base_url_env` are
+different facts with different trust, and an audit must be able to tell
+them apart without reading code.
+
+**`effective_upstream` is a CLOSED state machine with exactly two valid
+states.** The three fields are not independent; only these combinations
+exist, and every other combination is INVALID and refused at the runtime
+boundary:
+
+| `status` | `origin` | `evidence` | Means |
+|---|---|---|---|
+| `unverifiable` | `null` | `none` | nothing authoritative was learned — every path that exists today |
+| `verified` | sanitized origin | `provider_reported` | an authoritative provider-reported upstream was observed |
+
+Consequences that the implementation must honour:
+
+- `origin` is typed *sanitized origin \| null*, NOT "always null". Today
+  no code path produces the `verified` state, but the schema must not
+  encode today's incompleteness as a permanent type — a later
+  opportunistic O3 signal would otherwise have to change the contract
+  rather than populate it.
+- Any origin reaching the `verified` state passes the **same origin-only
+  sanitizer** as `upstream_origin` (FR-E4, and #277's http(s)
+  restriction). A provider-reported value is authoritative about
+  *identity*, never trusted as *safe text*.
+- The four off-contract combinations are separately named mutations
+  (E7-M1…E7-M4 in the plan) and must each fail for a distinct reason.
+  A single shape check that rejects all four proves the record is
+  validated, not that the two states are discriminated.
+
+**FR-E8 — provenance is recorded, not implied.** A configured origin
+carries *how* CCT learned it:
+
+| Value | Means |
+|---|---|
+| `profile_base_url` | a registry `base_url` literal |
+| `profile_base_url_env` | a registry `base_url_env`, resolved |
+| `codex_model_provider` | RESERVED (FR-E10 as amended): the `base_url` codex's OWN layered resolution gives for the selected provider. Produced by no path today — the user config file is one layer and cannot stand in for the whole |
+| `backend_default` | a default CCT can positively establish |
+| `none` | no origin |
+
+`backend_default` is used ONLY when CCT can actually establish which
+default applied. Where it cannot, the value is `none` — an assumed
+default is an assumption, and this contract exists to stop assumptions
+being recorded as facts.
+
+**FR-E12 — any future codex resolution follows codex's OWN selection.**
+Dormant while FR-E10 records `null`; binding on whatever implements it.
+
+The routing supervisor passes `-c model_provider=<id>` from the routed
+profile. **Wording corrected 2026-09-01:** the earlier "that override
+decides which provider codex uses" and "the provider ACTUALLY selected"
+overstate what configuration evidence can prove. An override names a
+provider in codex's configuration; it does not prove which upstream
+served the request — account-login mode has been reported to route
+through the account transport regardless of a custom provider
+`base_url`. That gap is exactly why `effective_upstream` is a separate
+field, and it is why no configured value may ever populate it.
+
+A resolution must follow that same selection. Resolution order:
+
+1. the `model_provider` the supervisor passed for THIS attempt;
+2. the config's top-level `model_provider` — **only when no launch
+   override was issued for this attempt**. An override that was issued
+   but whose provider is absent from `[model_providers]` resolves to
+   `none`, never to the top-level default: falling back there would
+   record the provider codex did *not* use;
+3. otherwise `none`.
+
+**"The first key under `[model_providers]`" is not a valid fallback.**
+The existing `_resolve_codex_config` helper uses exactly that
+heuristic, and it is arbitrary dict order: with two providers
+configured it can attribute provider B's `base_url` to a run codex
+routed through provider A. That would be a fabricated fact wearing a
+provenance label — the precise failure this increment exists to
+prevent — so this feature must not reuse that helper's selection.
+
+**FR-E13 — no raw backend configuration becomes evidence.** Only the
+sanitized origin and the closed provenance value are persisted. Never
+the config path, credentials, headers, query parameters, or any other
+provider configuration.
+
+**FR-E9 — a configured origin is never an observed upstream.** A
+configured origin, gateway, proxy, backend default or endpoint
+reference must never be represented as an observed effective upstream.
+`effective_upstream.status` is `unverifiable` unless authoritative
+provider-reported evidence exists, in which case the origin is recorded
+separately with `evidence: provider_reported`.
+
+**FR-E10 — codex records `null` / `none`, and that is the accurate
+record.** ~~From the `[model_providers.<id>].base_url` of the provider
+selected per FR-E12, sanitized by the same rules as #277, recorded with
+`upstream_origin_source: codex_model_provider`.~~ **AMENDED 2026-09-01,
+during T4 review.**
+
+The withdrawn wording assumed `${CODEX_HOME:-$HOME/.codex}/config.toml`
+IS codex's configuration. It is one LAYER of it. Verified against the
+codex-cli 0.147.0 this repo targets:
+
+| Flag | Documented behaviour |
+|---|---|
+| `-p, --profile <name>` | "Layer `$CODEX_HOME/<name>.config.toml` on top of the base user config" |
+| `--ignore-user-config` | "Do not load `$CODEX_HOME/config.toml`" |
+
+A higher-precedence layer can therefore redefine `model_providers`, and
+the user file can be excluded outright. Promoting that one layer to
+"configured execution origin" would let CCT durably record `base_url` X
+while codex resolved the same selected provider to Y — **a fabricated
+attribution wearing a provenance label, which is the precise failure
+this increment exists to prevent.**
+
+CCT therefore records `upstream_origin: null` with
+`upstream_origin_source: none` for codex. Under C30 as amended that is
+ACCURATE RECORDING, not a gap: the field states what CCT established,
+and CCT established nothing.
+
+`codex_model_provider` stays RESERVED in the FR-E8 vocabulary, on the
+same footing as `backend_default`: available to a future path that
+reproduces codex's own layered resolution for the exact launch context
+(`CODEX_HOME`, cwd, and the `-c model_provider=<id>` override), and
+produced by no path today. A test pins that no path assigns it.
+
+**Why not build that resolution now.** It means driving codex's own
+configuration surface — a second codex process and an experimental RPC
+path — for one telemetry field. The decision below recorded O1 as
+telemetry completion, explicitly NOT the thing that makes the amended
+C30 truthful. A correct `null` beats a plausible wrong endpoint.
+
+**FR-E11 — login mode is explicit.** In login mode no base URL is
+wired and CCT cannot positively establish which default applied, so the
+record is `upstream_origin: null` with `upstream_origin_source: none`.
+Not `backend_default` — per FR-E8 that value requires an
+*establishable* default, and "the backend probably used its own
+default" is an assumption, not an observation. `backend_default` is
+reserved for a future path that can positively establish one.
+`effective_upstream` stays in the `unverifiable` state either way.
+
+## Constraints
+
+- **Narrow by construction.** Only the endpoint component of C30. No
+  routing-policy change, no #268, no three-backend chain.
+- **Reuse the existing plumbing.** `upstream_origin`, its sanitizer and
+  the three `rr_result` call sites already exist; a second parallel
+  path would be a defect, not a feature.
+- **Sanitizer parity.** Any new value passes the same origin-only
+  sanitization, including the http(s) restriction added in #277.
+- **Backward compatible.** A profile for which nothing new can be
+  learned must behave exactly as it does today.
+
+## Non-goals
+
+- Inferring an endpoint from timing, DNS, or network observation
+  outside a seam explicitly chosen under FR-E1.
+- Making #109 close. Only the re-audit can do that, and only if the
+  endpoint component is genuinely met — or genuinely amended under
+  FR-E6.

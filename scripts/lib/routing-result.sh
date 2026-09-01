@@ -148,6 +148,170 @@ rr_classify() {
                    source_artifact:null}}'
 }
 
+# ── #109 T2 (#273): the effective-upstream verification state ────────
+#
+# TWO facts, never one. `upstream_origin` (#277) is the CONFIGURED
+# launch origin — the host this attempt was DIRECTED at. It is not
+# evidence about the host that ANSWERED: where the configured URL is a
+# gateway, it records the gateway. `effective_upstream` is the second
+# fact, and NOTHING in this tree can populate it today, because CCT
+# shells out to CLI binaries and never sees the HTTP layer (FR-E7/E9).
+# The field exists so that absence is stated rather than implied.
+#
+# It is a CLOSED TWO-STATE MACHINE. The three sub-fields are not
+# independent; exactly these combinations are valid:
+#
+#   status         origin             evidence
+#   unverifiable   null               none               (every path today)
+#   verified       sanitized origin   provider_reported  (no producer yet)
+#
+# Every other combination is refused HERE. The point is not shape
+# validation — it is that a configured value must never be able to
+# wear the observed label. `verified` with no origin, `verified` with
+# no authoritative evidence, an origin parked under `unverifiable`,
+# and `provider_reported` evidence beneath an `unverifiable` verdict
+# are four DIFFERENT lies, so each gets its own rule and its own exit
+# code. A single "the shape is wrong" check would stay green against a
+# mutation that deleted any one of them.
+#
+# `origin` is typed sanitized-origin-or-null rather than always-null
+# on purpose: encoding today's incompleteness as a permanent type
+# would force the contract to CHANGE the day a provider-reported
+# signal appears, instead of being populated by it.
+RR_ORIGIN_SOURCES="profile_base_url profile_base_url_env codex_model_provider backend_default none"
+
+# The grammar rt_sanitize_origin emits: http(s), a lowercase host or a
+# bracketed IPv6 literal, an optional port, nothing else.
+RR_ORIGIN_RE='^https?://(\[[0-9a-f:.]+\]|[a-z0-9._~-]+)(:[0-9]+)?$'
+
+# rr_effective_upstream_unverifiable — the ONLY state anything in this
+# tree can construct. A constructor rather than an inline literal, so
+# that when a real observation seam lands there is one place emitting
+# this block and one obvious place to add its sibling.
+rr_effective_upstream_unverifiable() {
+    jq -nc '{origin:null, status:"unverifiable", evidence:"none"}'
+}
+
+# rr_origin_is_sanitized <value> — TRUE for exactly that grammar.
+#
+# This VALIDATES; it does not sanitize. The sanitizer stays
+# single-sourced in cooldown-supervisor.sh and a test feeds its real
+# output through this predicate so the two cannot drift. A second
+# guard is warranted because `verified` will one day carry a value
+# from OUTSIDE this tree: a provider-reported string is authoritative
+# about IDENTITY, never trusted as safe TEXT (FR-E4).
+rr_origin_is_sanitized() {
+    [[ "$1" =~ $RR_ORIGIN_RE ]]
+}
+
+# rr_upstream_invariant <json-doc> — the closed state machine, with a
+# DISTINCT exit code per rule so a mutation cannot be caught by the
+# wrong assertion:
+#   0   internally consistent
+#   1   effective_upstream missing or not the three-key object
+#   2   status outside the closed set
+#   3   evidence outside the closed set
+#   4   verified with no origin                        (E7-M1)
+#   5   verified without provider_reported evidence    (E7-M2)
+#   6   unverifiable carrying an origin                (E7-M3)
+#   7   unverifiable claiming provider_reported        (E7-M4)
+#   8   a non-null origin that is not sanitizer-shaped
+#   9   upstream_origin_source outside the closed vocabulary
+#  10   provenance and origin disagree on whether an origin exists
+#  11   upstream_origin_source absent from a newly produced record
+rr_upstream_invariant() {
+    local doc="$1" eu st ev og src uo
+    # The key set is EXACT, not a minimum. `has(...)` three times also
+    # admits a fourth key, and the schema's additionalProperties:false
+    # does not run here — rr_result never executes JSON Schema, so this
+    # predicate IS the production boundary. An extra key beside a
+    # closed state machine is a private channel smuggling a claim the
+    # contract refused to make. (`keys` is sorted by jq, so the
+    # comparison is against the sorted literal.)
+    eu=$(jq -c '.effective_upstream // empty' <<< "$doc" 2>/dev/null || true)
+    if [[ -z "$eu" ]] || ! jq -e '
+            type == "object" and keys == ["evidence", "origin", "status"]
+        ' >/dev/null 2>&1 <<< "$eu"; then
+        echo "routing-result: effective_upstream is missing or is not exactly {origin,status,evidence}" >&2
+        return 1
+    fi
+    st=$(jq -r '.status' <<< "$eu")
+    ev=$(jq -r '.evidence' <<< "$eu")
+    og=$(jq -r '.origin // ""' <<< "$eu")
+
+    case "$st" in
+        verified|unverifiable) ;;
+        *) echo "routing-result: effective_upstream.status '$st' is outside the closed set" >&2; return 2 ;;
+    esac
+    case "$ev" in
+        provider_reported|none) ;;
+        *) echo "routing-result: effective_upstream.evidence '$ev' is outside the closed set" >&2; return 3 ;;
+    esac
+
+    if [[ "$st" == "verified" ]]; then
+        if [[ -z "$og" ]]; then
+            echo "routing-result: effective_upstream is 'verified' with no origin — verified asserts an origin was learned" >&2
+            return 4
+        fi
+        if [[ "$ev" != "provider_reported" ]]; then
+            echo "routing-result: effective_upstream is 'verified' on evidence '$ev' — only provider_reported evidence verifies an upstream" >&2
+            return 5
+        fi
+    else
+        if [[ -n "$og" ]]; then
+            echo "routing-result: effective_upstream is 'unverifiable' yet carries origin '$og' — an unverified origin in the observed field is the relabelling FR-E3 forbids" >&2
+            return 6
+        fi
+        if [[ "$ev" != "none" ]]; then
+            echo "routing-result: effective_upstream is 'unverifiable' on evidence '$ev' — authoritative evidence and an unverifiable verdict cannot coexist" >&2
+            return 7
+        fi
+    fi
+
+    if [[ -n "$og" ]] && ! rr_origin_is_sanitized "$og"; then
+        echo "routing-result: effective_upstream.origin '$og' is not a sanitized origin" >&2
+        return 8
+    fi
+
+    # PROVENANCE IS MANDATORY for a newly produced record (#273 T3).
+    # T2 permitted absence while no producer could classify one; every
+    # producer now can, so the compatibility window is CLOSED here
+    # rather than left open indefinitely. The schema keeps the field
+    # optional so pre-T3 records stay readable — the same split the
+    # context_limit and usage groups already use.
+    #
+    # ABSENT and PRESENT-BUT-INVALID stay different things: absence is
+    # its own refusal (11), so a producer that forgot to classify is
+    # not reported as one that classified wrongly.
+    if ! jq -e 'has("upstream_origin_source")' >/dev/null 2>&1 <<< "$doc"; then
+        echo "routing-result: upstream_origin_source is missing — a recorded origin must carry how it was learned" >&2
+        return 11
+    fi
+    # PRESENT — so it is validated, whatever it holds. A null or an
+    # object renders as a string that is not in the vocabulary and is
+    # refused below; no separate type guard, because a mutation test
+    # showed one could not change any outcome.
+    src=$(jq -r '.upstream_origin_source' <<< "$doc")
+    # Membership by exact literal comparison. (The `case " $V " in
+    # *" $src "*)` idiom is also safe here — a quoted expansion in a
+    # case pattern is literal, not a glob — but a reader has to know
+    # that rule to see it; this needs none.)
+    local m ok=1
+    for m in $RR_ORIGIN_SOURCES; do
+        [[ "$src" == "$m" ]] && { ok=0; break; }
+    done
+    if [[ "$ok" -ne 0 ]]; then
+        echo "routing-result: upstream_origin_source '$src' is outside the closed vocabulary" >&2
+        return 9
+    fi
+    uo=$(jq -r '.upstream_origin // ""' <<< "$doc")
+    if { [[ -z "$uo" ]] && [[ "$src" != "none" ]]; } \
+       || { [[ -n "$uo" ]] && [[ "$src" == "none" ]]; }; then
+        echo "routing-result: upstream_origin '${uo:-null}' and provenance '$src' disagree on whether an origin exists" >&2
+        return 10
+    fi
+}
+
 # rr_doc_invariant <json-string> — the frozen normalization boundary,
 # BIDIRECTIONAL: outcome success <=> failure_class null, and a failure
 # must carry one of the nine causes (`unknown` exists precisely so no
@@ -194,12 +358,22 @@ rr_doc_invariant() {
              end)' >/dev/null 2>&1 <<< "$1" || return 1
     # the usage block's own shape (#273 increment G) — delegated so the
     # two libraries keep one definition of the contract each
-    ru_doc_invariant "$(jq -c '.usage' <<< "$1")"
+    ru_doc_invariant "$(jq -c '.usage' <<< "$1")" || return 1
+    # the upstream verification state (#273 T2). PRESENCE is checked
+    # there too, not duplicated in the predicate above: a second copy
+    # of "the field must exist" is a second thing to drift, and a
+    # mutation test proved the duplicate unreachable. Its distinct exit
+    # codes are for tests and for a human reading stderr; the BOUNDARY
+    # answer stays a single uniform 1, so no caller starts branching on
+    # which rule was broken.
+    rr_upstream_invariant "$1" || return 1
 }
 
 # rr_result <exit_code> <output_file> <backend> <provider> <profile>
 #           <requested_model> <effective_model|-> <quota_pool>
 #           [upstream_origin|-] [artifacts_json] [declared_context_limit|-]
+#           [prior_observed|-] [usage_file|-] [usage_backend|-]
+#           [upstream_origin_source|-]
 # Composes the full routing-result document (schema above); the
 # classification comes from rr_classify over the SAME capture.
 #
@@ -229,6 +403,26 @@ rr_result() {
     local ufile="${13:--}" ubackend="${14:--}"
     [[ "$ufile" == "-" ]] && ufile="$file"
     [[ "$ubackend" == "-" ]] && ubackend="$backend"
+    # Provenance for the configured origin (FR-E8), MANDATORY as of T3.
+    #
+    # `-` means the caller did not classify one, and what happens then
+    # depends on whether there is anything to classify:
+    #
+    #   no origin  -> `none`. Not a guess: the pairing invariant admits
+    #                 exactly one provenance beside a null origin, so
+    #                 the value is ENTAILED rather than assumed.
+    #   an origin  -> REFUSE. Any value picked here would be invented,
+    #                 and an invented provenance is worse than the null
+    #                 it replaces because it reads as evidence.
+    local osrc="${15:--}"
+    if [[ "$osrc" == "-" ]]; then
+        if [[ "$origin" == "-" || -z "$origin" ]]; then
+            osrc="none"
+        else
+            echo "routing-result: refusing to record origin '$origin' with no provenance — how it was learned is part of the fact" >&2
+            return 1
+        fi
+    fi
     local cls class this_obs
     cls=$(rr_classify "$rc" "$file") || return 1
     class=$(jq -r '.failure_class // ""' <<< "$cls")
@@ -244,13 +438,14 @@ rr_result() {
         echo "routing-result: refusing to compose a result whose usage evidence could not be resolved (exit $urc)" >&2
         return 1
     fi
-    local doc
+    local doc eu
+    eu=$(rr_effective_upstream_unverifiable)
     doc=$(jq -n -c --argjson cls "$cls" --arg backend "$backend" --arg provider "$provider" \
           --arg profile "$profile" --arg reqm "$reqm" --arg effm "$effm" \
           --arg pool "$pool" --arg origin "$origin" --argjson rc "$rc" \
           --argjson artifacts "$artifacts" \
           --arg decl "$declared" --arg tobs "$this_obs" --arg pobs "$prior" \
-          --argjson usage "$usage" '
+          --argjson usage "$usage" --argjson eu "$eu" --arg osrc "$osrc" '
         ($decl | if . == "-" or . == "" then null else tonumber end) as $d |
         ($tobs | if . == "" then null else tonumber end) as $t |
         ($pobs | if . == "-" or . == "" then null else tonumber end) as $p |
@@ -275,6 +470,8 @@ rr_result() {
                      then "invalid_request numeric maximum (this attempt)"
                    else "prior identity-bound observation" end),
                 usage:$usage,
+                upstream_origin_source:$osrc,
+                effective_upstream:$eu,
                 artifacts:$artifacts}')
     # THE RUNTIME BOUNDARY, actually enforced. Until now rr_doc_invariant
     # was only ever called by tests, so a malformed block could still be
