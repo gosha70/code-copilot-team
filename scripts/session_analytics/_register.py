@@ -32,6 +32,10 @@ def register_all() -> None:
     from .judge import _register as judge_register
     judge_register.register_all_judges()
 
+    # Embedding backends (#285): ollama (local-only default).
+    from .embedding import _register as embedding_register
+    embedding_register.register_all_embeddings()
+
     _REGISTERED = True
 
 
@@ -43,6 +47,11 @@ def unregister_all_for_tests() -> None:
     try:
         from .judge.registry import _reset_for_tests as _reset_judges
         _reset_judges()
+    except ImportError:
+        pass
+    try:
+        from .embedding.registry import _reset_for_tests as _reset_embeddings
+        _reset_embeddings()
     except ImportError:
         pass
     _REGISTERED = False

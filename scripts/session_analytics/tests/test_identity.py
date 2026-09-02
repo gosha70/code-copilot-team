@@ -180,7 +180,7 @@ class TestCliDerivation(unittest.TestCase):
         # A real load_config() against empty overrides would read the host's
         # ~/.cct + repo .env; a minimal hand-built config keeps the test
         # hermetic. Only the identity fields matter here.
-        from session_analytics.config import AnalyticsConfig, JudgeConfig
+        from session_analytics.config import EmbeddingConfig, AnalyticsConfig, JudgeConfig
         from session_analytics.cost import PricingConfig
 
         judge = JudgeConfig(
@@ -198,6 +198,10 @@ class TestCliDerivation(unittest.TestCase):
             kuzu_path="unused",
             redaction_mode="code",
             judge=judge,
+            embedding=EmbeddingConfig(
+                backend="ollama", model="", ollama_url="",
+                input_cap_chars=8000, workers=1,
+            ),
             pricing=PricingConfig(models={}),
             developer_id_env=env_value,
             developer_id_cfg=cfg_value,

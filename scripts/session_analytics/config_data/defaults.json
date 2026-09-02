@@ -51,6 +51,13 @@
     "ollama_url": "http://localhost:11434",
     "workers": 2
   },
+  "embedding": {
+    "backend": "ollama",
+    "input_cap_chars": 8000,
+    "model": "",
+    "ollama_url": "http://localhost:11434",
+    "workers": 1
+  },
   "kuzu_path": "",
   "pricing": {
     "models": {

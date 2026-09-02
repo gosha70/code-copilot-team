@@ -33,6 +33,10 @@ ENV_JUDGE_MODEL = "CCT_SA_JUDGE_MODEL"
 ENV_JUDGE_BASE_URL = "CCT_SA_JUDGE_BASE_URL"
 ENV_JUDGE_API_KEY = "CCT_SA_JUDGE_API_KEY"
 ENV_JUDGE_WORKERS = "CCT_SA_JUDGE_WORKERS"
+ENV_EMBED_BACKEND = "CCT_SA_EMBED_BACKEND"
+ENV_EMBED_MODEL = "CCT_SA_EMBED_MODEL"
+ENV_EMBED_INPUT_CAP = "CCT_SA_EMBED_INPUT_CAP"
+ENV_EMBED_WORKERS = "CCT_SA_EMBED_WORKERS"
 ENV_SOURCE_PREFIX = "CCT_SA_SOURCE_"  # + COPILOT (e.g. CCT_SA_SOURCE_CLAUDE_CODE)
 # Routing-shadow (#261): evidence roots are SERVER-SIDE configuration —
 # the API never serves the raw paths (only {configured, root_count}).
@@ -110,6 +114,22 @@ class JudgeConfig:
 
 
 @dataclass(frozen=True)
+class EmbeddingConfig:
+    """Embedding pass resolution (#285, E2 slice 1).
+
+    ``model == ""`` delegates to the backend's default model — but what
+    the ENVELOPE stores is always the backend-RESOLVED identity, never
+    this configured string (FR-5): a request is not serving evidence.
+    """
+
+    backend: str
+    model: str
+    ollama_url: str
+    input_cap_chars: int
+    workers: int
+
+
+@dataclass(frozen=True)
 class ProjectOverride:
     """One ``projects.<key>`` entry: a per-project redaction/ingest override.
 
@@ -139,6 +159,7 @@ class AnalyticsConfig:
     kuzu_path: str
     redaction_mode: str
     judge: JudgeConfig
+    embedding: "EmbeddingConfig"
     pricing: "PricingConfig"
     projects: Mapping[str, ProjectOverride] = field(default_factory=dict)
     project_id_rules: tuple[ProjectIdRule, ...] = field(default_factory=tuple)
@@ -510,6 +531,58 @@ def load_config(
         api_key=str(env(ENV_JUDGE_API_KEY) or ""),
     )
 
+    # embedding (#285, FR-8): defaults.json is the ONLY source of the
+    # embedding defaults. A structurally missing block or key is
+    # REFUSED — reconstructing packaged defaults here would create a
+    # second normative source beside the data file, which is the exact
+    # config-discipline failure the house rules exist to prevent.
+    #
+    # Per-field precedence, highest first:
+    #   CLI (the embedding block of extra_overrides, kept separately so
+    #        the caller's direct value genuinely wins)
+    #   > real env  > repo .env          (both via env())
+    #   > merged config (defaults.json < ~/.cct/session-analytics.json)
+    #
+    # Values are read by key PRESENCE, never truthiness: model == ""
+    # is a legitimate configured value (backend default model), not an
+    # absence. The URL shares ENV_OLLAMA_URL with the judge: one local
+    # Ollama is the operating assumption.
+    edata = data.get(C.CFG_EMBEDDING)
+    if not isinstance(edata, Mapping):
+        raise ValueError(
+            "config has no 'embedding' block — defaults.json is the single "
+            "source of embedding defaults, and the loader refuses to "
+            "reconstruct them in code"
+        )
+    _embed_required = (
+        C.CFG_EMBEDDING_BACKEND, C.CFG_EMBEDDING_MODEL, C.CFG_OLLAMA_URL,
+        C.CFG_EMBEDDING_INPUT_CAP, C.CFG_EMBEDDING_WORKERS,
+    )
+    _embed_missing = [k for k in _embed_required if k not in edata]
+    if _embed_missing:
+        raise ValueError(
+            f"embedding config is missing {', '.join(_embed_missing)} — "
+            f"defaults.json is the single source of embedding defaults"
+        )
+    _embed_cli = (extra_overrides or {}).get(C.CFG_EMBEDDING)
+    _embed_cli = dict(_embed_cli) if isinstance(_embed_cli, Mapping) else {}
+
+    def _embed_value(key: str, env_key: str) -> Any:
+        if key in _embed_cli:            # CLI — the caller's direct value
+            return _embed_cli[key]
+        ov = env(env_key)                # real env > repo .env
+        if ov is not None:
+            return ov
+        return edata[key]                # merged defaults < user JSON
+
+    embedding = EmbeddingConfig(
+        backend=str(_embed_value(C.CFG_EMBEDDING_BACKEND, ENV_EMBED_BACKEND)),
+        model=str(_embed_value(C.CFG_EMBEDDING_MODEL, ENV_EMBED_MODEL)),
+        ollama_url=str(_embed_value(C.CFG_OLLAMA_URL, ENV_OLLAMA_URL)),
+        input_cap_chars=int(_embed_value(C.CFG_EMBEDDING_INPUT_CAP, ENV_EMBED_INPUT_CAP)),
+        workers=int(_embed_value(C.CFG_EMBEDDING_WORKERS, ENV_EMBED_WORKERS)),
+    )
+
     pricing = _load_pricing(data)
     projects, project_id_rules = _load_projects(data)
 
@@ -521,6 +594,7 @@ def load_config(
         kuzu_path=str(Path(resolved_kuzu).expanduser()),
         redaction_mode=resolved_redaction,
         judge=judge,
+        embedding=embedding,
         pricing=pricing,
         projects=projects,
         project_id_rules=project_id_rules,

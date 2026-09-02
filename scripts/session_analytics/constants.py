@@ -75,6 +75,13 @@ CFG_JUDGE_BASE_URL = "base_url"
 CFG_JUDGE_API_KEY = "api_key"
 CFG_OLLAMA_URL = "ollama_url"
 
+# ── Embedding config keys (#285, E2 slice 1) ─────────────────────────
+CFG_EMBEDDING = "embedding"
+CFG_EMBEDDING_BACKEND = "backend"
+CFG_EMBEDDING_MODEL = "model"
+CFG_EMBEDDING_INPUT_CAP = "input_cap_chars"
+CFG_EMBEDDING_WORKERS = "workers"
+
 # ── Per-project privacy config keys (session-analytics-privacy-granularity) ──
 CFG_PROJECTS = "projects"
 CFG_PROJECT_INGEST = "ingest"
