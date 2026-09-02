@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import unittest
@@ -92,6 +93,24 @@ class TestGrouping(unittest.TestCase):
         g = group_by_space({1: _env(), 2: _env()})
         self.assertEqual(g.dim_conflicts, {})
 
+    def test_grouping_separates_by_provider(self) -> None:
+        # THE GROUPING BOUNDARY discriminator (review round 4: a
+        # provider-dropping mutation inside group_by_space escaped all
+        # 24 tests because the discriminator only covered the
+        # standalone helper). These three pins hit the boundary T2
+        # consumes.
+        g = group_by_space({1: _env(), 2: _env(provider="other")})
+        self.assertEqual(len(g.groups), 2)
+
+    def test_grouping_separates_by_model(self) -> None:
+        g = group_by_space({1: _env(), 2: _env(model="other-model")})
+        self.assertEqual(len(g.groups), 2)
+
+    def test_grouping_separates_by_dim(self) -> None:
+        g = group_by_space({
+            1: _env(), 2: _env(dim=4, vector=(0.1, 0.2, 0.3, 0.4))})
+        self.assertEqual(len(g.groups), 2)
+
     def test_deterministic_partition(self) -> None:
         envs = {i: _env() for i in (5, 1, 3)}
         a, b = group_by_space(envs), group_by_space(dict(reversed(list(envs.items()))))
@@ -118,6 +137,33 @@ class TestCosine(unittest.TestCase):
     def test_dim_mismatch_raises(self) -> None:
         with self.assertRaises(ValueError):
             cosine([1.0], [1.0, 2.0])
+
+    # ── numerical safety: FR-9 bounds finiteness, not magnitude ──────
+    def test_huge_components_do_not_overflow_to_nan(self) -> None:
+        # [1e200, 1e200] passes FR-9 (finite, nonzero); its naive
+        # sum-of-squares is inf and inf/inf is NaN — which top-K would
+        # silently read as "no neighbors". Route through validation
+        # first to prove these are legitimate envelopes, then score.
+        env = _env(dim=2, vector=(1e200, 1e200))
+        self.assertEqual(space_key(env), ("ollama", "nomic-embed-text", 2))
+        s = cosine([1e200, 1e200], [1e200, 1e200])
+        self.assertTrue(math.isfinite(s))
+        self.assertAlmostEqual(s, 1.0)
+
+    def test_tiny_components_do_not_underflow_to_false_zero_norm(self) -> None:
+        # [1e-200, 1e-200] passes FR-9; its naive squares underflow to
+        # 0.0 and the old code raised the "caller bug" zero-norm error
+        # for a perfectly valid vector.
+        env = _env(dim=2, vector=(1e-200, 1e-200))
+        self.assertEqual(space_key(env), ("ollama", "nomic-embed-text", 2))
+        s = cosine([1e-200, 1e-200], [1e-200, 1e-200])
+        self.assertTrue(math.isfinite(s))
+        self.assertAlmostEqual(s, 1.0)
+
+    def test_mixed_magnitudes_stay_finite(self) -> None:
+        s = cosine([1e200, 0.0], [1e-200, 0.0])
+        self.assertTrue(math.isfinite(s))
+        self.assertAlmostEqual(s, 1.0)
 
     def test_zero_norm_is_a_caller_bug_not_a_score(self) -> None:
         # FR-9 refuses zero vectors upstream; reaching cosine with one
@@ -228,6 +274,49 @@ class TestSimilarityConfig(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx:
                 self._load()
         self.assertIn("threshold", str(ctx.exception))
+
+    # ── validation before coercion (review round 4) ──────────────────
+    def test_nan_threshold_refused_via_env(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            self._load(environ={cfgmod.ENV_SIMILARITY_THRESHOLD: "nan"})
+        self.assertIn("similarity.threshold", str(ctx.exception))
+        self.assertIn("finite", str(ctx.exception))
+
+    def test_inf_threshold_refused_via_env(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(environ={cfgmod.ENV_SIMILARITY_THRESHOLD: "inf"})
+
+    def test_out_of_range_threshold_refused(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            self._load(cli={"threshold": 1.5})
+        self.assertIn("[-1.0, 1.0]", str(ctx.exception))
+
+    def test_boolean_threshold_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(cli={"threshold": True})
+
+    def test_fractional_top_k_refused_not_truncated(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            self._load(user_json={"similarity": {"top_k": 1.9}})
+        self.assertIn("similarity.top_k", str(ctx.exception))
+
+    def test_boolean_top_k_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(cli={"top_k": True})
+
+    def test_zero_top_k_refused(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            self._load(cli={"top_k": 0})
+        self.assertIn("positive", str(ctx.exception))
+
+    def test_integral_string_top_k_from_env_accepted(self) -> None:
+        sim = self._load(
+            environ={cfgmod.ENV_SIMILARITY_TOP_K: "4"}).similarity
+        self.assertEqual(sim.top_k, 4)
+
+    def test_non_numeric_threshold_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self._load(environ={cfgmod.ENV_SIMILARITY_THRESHOLD: "high"})
 
     def test_sentinel_flows_from_the_data_file(self) -> None:
         base_defaults = cfgmod._read_defaults()

@@ -36,7 +36,6 @@ from .contracts import (
     FIELD_DIM,
     FIELD_MODEL,
     FIELD_PROVIDER,
-    FIELD_VECTOR,
     validate_envelope,
 )
 
@@ -89,16 +88,14 @@ def group_by_space(envelopes: Mapping[int, Mapping[str, Any]]) -> SpaceGroups:
     groups: dict[SpaceKey, list[int]] = {}
     excluded: dict[int, str] = {}
     for member_id in sorted(envelopes):
-        env = envelopes[member_id]
-        err = validate_envelope(env)
-        if err is not None:
-            excluded[member_id] = err
+        # ONE space-key implementation (D1): the grouping boundary and
+        # the standalone helper cannot drift, because this IS the
+        # helper. Validation rides inside it.
+        try:
+            key = space_key(envelopes[member_id])
+        except ValueError as exc:
+            excluded[member_id] = str(exc)
             continue
-        key = (
-            str(env[FIELD_PROVIDER]),
-            str(env[FIELD_MODEL]),
-            int(env[FIELD_DIM]),
-        )
         groups.setdefault(key, []).append(member_id)
 
     dims_by_name: dict[tuple[str, str], set[int]] = {}
@@ -114,18 +111,32 @@ def group_by_space(envelopes: Mapping[int, Mapping[str, Any]]) -> SpaceGroups:
 
 
 def cosine(a: list[float], b: list[float]) -> float:
-    """Cosine similarity. Zero-norm operands are impossible upstream —
-    FR-9 refuses zero vectors before any write (#285) — so a zero norm
-    here is a caller bug and raises rather than returning a value."""
+    """Cosine similarity, numerically safe for every FR-9-valid vector.
+
+    FR-9 guarantees finite, not-all-zero components — nothing about
+    magnitude. Naive sum-of-squares overflows [1e200, ...] to inf
+    (yielding NaN) and underflows [1e-200, ...] to zero (yielding a
+    false "caller bug" error), so each vector is scaled by its own
+    max-|component| first: cosine is invariant under positive
+    per-vector scaling, the largest scaled component is ±1, so squares
+    can neither overflow nor collectively underflow to zero.
+
+    A TRUE zero vector (max-|component| == 0) still raises — FR-9
+    refuses those at the write boundary, so reaching here with one is
+    a caller bug, not an input case."""
     if len(a) != len(b):
         raise ValueError(f"dimension mismatch: {len(a)} vs {len(b)}")
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0.0 or nb == 0.0:
+    ma = max(abs(x) for x in a)
+    mb = max(abs(y) for y in b)
+    if ma == 0.0 or mb == 0.0:
         raise ValueError(
             "zero-norm vector reached cosine() — FR-9 refuses zero "
             "vectors at the write boundary, so this is a caller bug")
+    sa = [x / ma for x in a]
+    sb = [y / mb for y in b]
+    dot = sum(x * y for x, y in zip(sa, sb))
+    na = math.sqrt(sum(x * x for x in sa))
+    nb = math.sqrt(sum(y * y for y in sb))
     return dot / (na * nb)
 
 

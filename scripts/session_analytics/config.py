@@ -131,6 +131,55 @@ class EmbeddingConfig:
     workers: int
 
 
+def _sim_threshold(value: Any) -> float:
+    """similarity.threshold: a finite number in [-1.0, 1.0] — the
+    range cosine can produce. Booleans and non-finite values refuse."""
+    if isinstance(value, bool):
+        raise ValueError(
+            f"similarity.threshold must be a number, got boolean {value!r}")
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"similarity.threshold {value!r} is not a number") from None
+    import math as _math
+    if not _math.isfinite(f):
+        raise ValueError(
+            f"similarity.threshold {value!r} is not finite — NaN/inf "
+            f"would silently empty or saturate every neighbor set")
+    if not (-1.0 <= f <= 1.0):
+        raise ValueError(
+            f"similarity.threshold {f} is outside [-1.0, 1.0], the "
+            f"range cosine similarity can produce")
+    return f
+
+
+def _sim_top_k(value: Any) -> int:
+    """similarity.top_k: a positive integer. Booleans, fractional
+    values, and non-positive values refuse — int() would silently
+    turn True into 1 and 1.9 into 1."""
+    if isinstance(value, bool):
+        raise ValueError(
+            f"similarity.top_k must be an integer, got boolean {value!r}")
+    if isinstance(value, int):
+        k = value
+    elif isinstance(value, str):
+        try:
+            k = int(value, 10)
+        except ValueError:
+            raise ValueError(
+                f"similarity.top_k {value!r} is not an integer") from None
+    elif isinstance(value, float):
+        raise ValueError(
+            f"similarity.top_k {value!r} has a fractional type — an "
+            f"integer count is required, not truncated")
+    else:
+        raise ValueError(f"similarity.top_k {value!r} is not an integer")
+    if k <= 0:
+        raise ValueError(f"similarity.top_k must be positive, got {k}")
+    return k
+
+
 @dataclass(frozen=True)
 class SimilarityConfig:
     """Similarity pass knobs (#287). Scores at or above ``threshold``
@@ -623,9 +672,16 @@ def load_config(
             return ov
         return sdata[key]
 
+    # Validated BEFORE coercion (#287 T1 review): float()/int() accept
+    # exactly the malformed values these knobs must refuse — "nan" and
+    # "inf" coerce cleanly, int(1.9) truncates, int(True) is 1 — and
+    # T2 will let these settings drive edge reconciliation, so a bad
+    # value must refuse loudly here, naming the setting.
     similarity = SimilarityConfig(
-        threshold=float(_sim_value(C.CFG_SIMILARITY_THRESHOLD, ENV_SIMILARITY_THRESHOLD)),
-        top_k=int(_sim_value(C.CFG_SIMILARITY_TOP_K, ENV_SIMILARITY_TOP_K)),
+        threshold=_sim_threshold(_sim_value(
+            C.CFG_SIMILARITY_THRESHOLD, ENV_SIMILARITY_THRESHOLD)),
+        top_k=_sim_top_k(_sim_value(
+            C.CFG_SIMILARITY_TOP_K, ENV_SIMILARITY_TOP_K)),
     )
 
     pricing = _load_pricing(data)
