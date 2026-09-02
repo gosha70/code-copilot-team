@@ -31,30 +31,44 @@ grouping entry and getting a refusal, not a score).
 
 **Implements:** FR-D (edges), FR-E (strictly local lifecycle).
 
-`embedding/similar_runner.py` + `cli.py similar`: durable state first;
-nothing eligible → zero writes; per-source edge replacement (D3);
-graph addressing per D4 (`missing_graph_node` counted, nodes never
-created); report = written / per-space session counts /
-excluded_invalid (reasons) / dim_conflicts / no_envelope /
-missing_graph_node.
+`embedding/similar_runner.py` + `cli.py similar`: durable state
+first; FULL reconciliation per FR-D/D3 (retire ineligible sources'
+edges, replace eligible sources' edges); zero writes only when there
+are no eligible sources AND no existing edges; graph addressing per
+D4 (`missing_graph_node` counted, nodes never created); report =
+written / retired / per-space session counts / excluded_invalid
+(reasons) / dim_conflicts / no_envelope / missing_graph_node —
+distinguishing "nothing to do" from "retirement ran".
 
 **Done when:** cross-space edges are impossible (named mutation);
-run-twice yields an identical edge set and retired neighbors
-disappear; the pass constructs NO embedding backend (asserted, the
-#285 T4 idiom); an empty store reports truthfully with zero Kùzu
-writes; `failed`-class conditions exit nonzero.
+run-twice yields an identical edge set; a removed TARGET's stale edge
+disappears; a removed SOURCE's outgoing edges are retired; an
+all-ineligible store retires everything and reports it; the pass
+constructs NO embedding backend (asserted, the #285 T4 idiom); a
+truly empty store reports truthfully with zero Kùzu writes;
+`failed`-class conditions exit nonzero.
 
 ## T3 — the MCP surface
 
-**Implements:** FR-F.
+**Implements:** FR-F, including the MCP-to-graph boundary (plan D7).
 
-`mcp/tools.py:similar_sessions(session_id, limit)`; docstring pointer
-from `compare_approaches`.
+`mcp/tools.py:similar_sessions(session_id, limit)`; `build_server`
+gains the configured `kuzu_path` (today it accepts only the DSN and
+`_cmd_mcp` passes `cfg.dsn`); a NON-CREATING graph-read lifecycle for
+the MCP path (`GraphDatabase.connect` mkdirs and opens
+create-capable — the MCP path must not); docstring pointer from
+`compare_approaches`.
 
-**Done when:** results carry `score` + `basis: "embedding"`; a
-session without edges returns the explicit error, never keyword
-results; `compare_approaches` fixtures byte-unchanged; the tool is
-registered beside the existing four.
+**Done when:** results carry `score` + `basis: "embedding"`; an
+edge-less session WITH a validated envelope returns an honest EMPTY
+result and no remedial instruction (healthy outcomes: singleton
+space, below-threshold — and absence of edges cannot prove the pass
+never ran); a session with no validated envelope gets the
+envelope-prerequisite guidance; an absent graph yields "graph absent"
+with ZERO filesystem creation, asserted on the path afterwards; a
+registered-tool test drives the real server factory with a NONDEFAULT
+kuzu_path and reads that graph; `compare_approaches` fixtures
+byte-unchanged; the tool is registered beside the existing four.
 
 ## T4 — closure
 

@@ -27,8 +27,10 @@ order, set by the owner before any design:
    to re-embed onto one model.
 4. **An agent asks over MCP.** A `similar_sessions` tool returns
    neighbors with `basis: "embedding"`; the existing keyword
-   `compare_approaches` keeps returning `basis: "keyword"` — results
-   never masquerade as something stronger than they are.
+   `compare_approaches` keeps its current output shape unchanged
+   (`match_score`, no basis field today) — embedding results carry an
+   explicit basis precisely so they never masquerade as, or get
+   mistaken for, the keyword results.
 
 ## Requirements
 
@@ -46,10 +48,12 @@ are equal:
 - `model` — the server-confirmed name/tag (see FR-B for exactly what
   that means).
 - `dim` — belt beside the name: an equal name with a different
-  dimensionality is PROOF of drift (a re-pulled tag with different
-  geometry), and such a pair is not merely skipped — it is surfaced
-  in the pass report as a `dim_conflict`, because it falsifies the
-  name-equality assumption for that name.
+  dimensionality establishes INCOMPATIBLE DIMENSIONS under one name —
+  the recorded fact. (A re-pulled tag with different geometry is one
+  possible cause, not the established one.) Such a pair is not merely
+  skipped — it is surfaced in the pass report as a `dim_conflict`,
+  because it is direct evidence that name equality alone is not
+  carrying the compatibility weight for that name.
 
 Only FR-9-validated envelopes participate at all: an envelope that
 fails `validate_envelope` on read is excluded and counted with its
@@ -58,21 +62,32 @@ reason, never guessed at.
 ### FR-B — the name/tag-vs-digest fork, decided explicitly
 
 **V1 chooses name/tag equality (within the FR-A triple), and states
-its boundaries.**
+its boundaries — in terms of RECORDED evidence only.**
 
-What the choice GUARANTEES: both vectors were produced by whatever
-model this host's server resolved under that name at each session's
-embed time, with matching dimensionality, through the same backend
-family. On a single host, between pulls, that is one set of weights.
+What the choice GUARANTEES: both envelopes RECORD the same backend
+family, the same server-confirmed model name/tag, and the same
+dimensionality. That is everything the envelope attests; nothing
+more.
 
-What it does NOT guarantee: immutable model-version identity. A
-re-pulled tag — `:latest` above all — may be different weights under
-the same name; the envelope `model` is a server-confirmed NAME/TAG,
-not a content digest (T3 capture, #285). Therefore similarity scores
-are **discovery heuristics over a same-named space**, never proof of
-semantic identity across time or hosts. Mitigations V1 already has:
-`embedded_at` is recorded on every envelope, and `--overwrite`
-re-embedding collapses a library onto one pull.
+What it does NOT guarantee — and V1 names these as UNVERIFIED
+ASSUMPTIONS, not weaker guarantees:
+
+- **Same server.** The envelope does not record the endpoint, and the
+  configured base URL can change between runs — equal triples do not
+  establish that one server produced both vectors.
+- **Unchanged weights.** The `model` field is a name/tag, not a
+  content digest (T3 capture, #285); a re-pulled tag — `:latest`
+  above all — may be different weights under the same name.
+- **One model generation across the library.** `--overwrite`
+  re-embedding is NOT a guarantee here: failed calls preserve their
+  old envelopes by design (#285 FR-6), so a partially failed
+  overwrite pass leaves a mixed-generation library with uniform
+  names.
+
+Therefore similarity scores are **discovery heuristics over a
+same-named space**, never proof of semantic identity across servers,
+weights, or time. What V1 records that a later tightening can use:
+`embedded_at` on every envelope.
 
 **The digest fork is REJECTED for V1**, not ignored: digest
 provenance needs its own recorded capture (Ollama's model-list/show
@@ -98,9 +113,27 @@ The pass writes into the existing
 eligible session, its top-K same-space neighbors with
 `score >= threshold`. Edge `a → b` means "b is among a's top-K"
 (kNN is asymmetric; both directions are written only when each earns
-the other). Writes are idempotent per source session — a re-run over
-unchanged envelopes converges to the same edge set, and a source's
-stale edges from earlier runs are replaced, not accumulated.
+the other).
+
+**Reconciliation covers ALL existing `SIMILAR_TO` edges, not only
+eligible sources.** Every pass:
+
+1. retires the outgoing edges of every source that is no longer
+   eligible (envelope removed, invalidated, or `dim_conflict`-ed) —
+   an eligible-sources-only replacement would preserve exactly the
+   edges whose evidence is gone;
+2. replaces each eligible source's outgoing edges with its fresh
+   top-K (an edge whose TARGET became ineligible retires with the
+   rest);
+3. distinguishes the two zero-write cases: a store with no eligible
+   sources AND no existing edges does nothing; a store with existing
+   edges but nothing eligible performs RETIREMENT — "nothing eligible"
+   never means "preserve stale edges".
+
+A re-run over unchanged envelopes converges to the same edge set.
+**Edge scores describe the last completed `similar` pass** — nothing
+refreshes them implicitly, including `--overwrite` re-embedding in
+#285; the operator re-runs `similar` after re-embedding.
 
 **A cross-space edge must be impossible by construction** — pairs are
 formed inside space groups, never filtered after scoring — and a
@@ -110,20 +143,41 @@ mutation that forms one is caught by a named test.
 
 The `similar` pass touches NO embedding backend: it reads stored
 envelopes, computes, and writes edges. Lifecycle in the FR-6 spirit:
-durable state first; nothing eligible → zero writes and a truthful
-report; the report counts written edges, sessions per space,
-excluded-invalid (with reasons), `dim_conflict`s, and sessions
-without envelopes.
+durable state first; a store with no eligible sources AND no existing
+edges → zero writes; otherwise reconciliation runs per FR-D (which
+may mean retirement-only). The report counts written edges, retired
+edges, sessions per space, excluded-invalid (with reasons),
+`dim_conflict`s, and sessions without envelopes — and distinguishes
+"nothing to do" from "retired stale edges".
 
 ### FR-F — the MCP surface says its basis
 
 V1 adds a `similar_sessions(session_id)` MCP tool over the stored
-vectors/edges, each result carrying `score` and `basis: "embedding"`.
-The existing keyword `compare_approaches` is UNCHANGED except that its
-docstring points here; its results keep meaning what they meant.
+edges, each result carrying `score` and `basis: "embedding"`.
+
+**An empty neighbor set is a HEALTHY answer, not a diagnosis.** A
+singleton space or all-below-threshold scores legitimately produce no
+edges, and absence of edges cannot establish whether the pass ran (V1
+keeps no pass metadata). So the tool returns an honest empty result
+by default, and reserves remedial guidance for prerequisites it can
+INDEPENDENTLY establish: the session has no validated envelope
+(readable from the relational store), or the graph store is absent.
+It never answers "run embed + similar" merely because the neighbor
+list is empty.
+
+The existing keyword `compare_approaches` is UNCHANGED except that
+its docstring points here; its results keep meaning what they meant.
 **Live query-TEXT embedding is out of V1** — it would put a network
 backend call inside the MCP path and require space matching at query
 time; if wanted later it is its own decision.
+
+**The MCP-to-graph boundary is part of this slice.** The MCP server
+today receives only the relational DSN (`build_server(dsn)`;
+`cli._cmd_mcp` passes `cfg.dsn`), and `GraphDatabase.connect` CREATES
+parent directories and opens a create-capable database. The tool
+therefore needs (a) the configured `kuzu_path` plumbed to the server,
+and (b) a NON-CREATING graph-read lifecycle: an absent graph is
+reported as absent, with zero filesystem creation from the MCP path.
 
 ## Non-goals
 

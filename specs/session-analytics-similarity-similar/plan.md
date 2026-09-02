@@ -63,12 +63,19 @@ for that name (FR-A). The pass reports the conflicting name and both
 dims; those sessions are excluded from each other's spaces (they ARE
 distinct spaces by the triple) but the report row is the point.
 
-**D3 — per-source edge replacement.** For each source session the
-pass deletes its outgoing `SIMILAR_TO` edges and writes the fresh
-top-K. Idempotent by construction (same inputs → same edge set), and
-re-embedding under `--overwrite` in #285 cannot leave stale neighbors
-behind. MERGE-with-SET was considered and rejected: it updates scores
-but cannot retire an edge whose target fell out of the top-K.
+**D3 — full reconciliation, not eligible-source replacement.** The
+pass enumerates the sources of ALL existing `SIMILAR_TO` edges (a
+Kùzu read), retires the outgoing edges of every source that is not in
+this pass's eligible set, and replaces each eligible source's edges
+with its fresh top-K. The counter-example that killed the simpler
+design: create A→B, then remove or invalidate A's envelope — an
+eligible-sources-only replacement never visits A again and preserves
+exactly the edge whose evidence is gone; with EVERY envelope
+invalidated it preserves the whole stale graph. Edge scores are a
+snapshot of the last completed pass — nothing refreshes them
+implicitly; the operator re-runs `similar` after re-embedding.
+MERGE-with-SET was considered and rejected: it updates scores but
+cannot retire an edge whose target fell out of the top-K.
 
 **D4 — the graph write path mirrors `graph/builder.py`.** Session
 nodes are addressed by the existing `session_key = "<copilot>:<id>"`;
@@ -78,17 +85,31 @@ counted `missing_graph_node` and skipped — the pass never creates
 Session nodes, that is `graph`'s job; the report tells the operator to
 run `graph` first.
 
-**D5 — MCP reads, never computes embeddings.** `similar_sessions
-(session_id, limit)` returns stored neighbors (edge-backed) with
-`score` and `basis: "embedding"`, falling back to an explicit
-`{"error": "no embedding/edges — run embed + similar"}` rather than a
-silent keyword answer. `compare_approaches` untouched except a
+**D5 — MCP reads, never computes embeddings — and never
+misdiagnoses.** `similar_sessions(session_id, limit)` returns stored
+neighbors (edge-backed) with `score` and `basis: "embedding"`. An
+EMPTY neighbor list is returned as an honest empty result — a
+singleton space or all-below-threshold scores are healthy outcomes,
+and with no pass metadata the tool cannot know whether the pass ran,
+so it must not prescribe one. Remedial guidance is reserved for
+prerequisites it independently establishes: no validated envelope for
+the session (relational read), or an absent graph store. Never a
+silent keyword answer; `compare_approaches` untouched except a
 docstring pointer.
 
 **D6 — no `routing_calibration.py` import.** Its kNN normalizes and
 evaluates leave-one-out over routing evidence; this slice needs plain
 cosine top-K over session vectors. Referenced as prior art in the
 issue; importing it would couple two unrelated evidence domains.
+
+**D7 — the MCP-to-graph boundary.** `build_server` today accepts only
+the relational DSN and `_cmd_mcp` passes `cfg.dsn`; the tool needs
+the configured `kuzu_path` plumbed through as a second parameter.
+And `GraphDatabase.connect` mkdirs parents and opens create-capable
+(`graph/schema.py:34`), so the MCP path gets a NON-CREATING read
+lifecycle: absent path → "graph absent" result with zero filesystem
+creation. The pass (T2) keeps using the existing create-capable
+connect — creation is legitimate there.
 
 ## Test strategy
 
@@ -106,14 +127,25 @@ issue; importing it would couple two unrelated evidence domains.
 - **cosine correctness:** hand-computed fixtures (orthogonal → 0,
   identical → 1, opposite → −1); threshold and top-K respected;
   ties broken deterministically (stable order by session id).
-- **idempotency + retirement:** run twice → identical edge set; drop
-  a neighbor's envelope, re-run → the stale edge is gone.
+- **idempotency + reconciliation:** run twice → identical edge set;
+  drop a TARGET's envelope, re-run → its incoming stale edge is gone;
+  drop a SOURCE's envelope, re-run → its outgoing edges are retired
+  (the counter-example that killed eligible-source-only replacement);
+  invalidate EVERY envelope, re-run → all edges retired, and the
+  report says retirement happened rather than "nothing to do".
 - **strictly local:** the pass performs zero HTTP-level calls — the
   embedding registry is never consulted (pinned by asserting no
   backend construction, the #285 T4 idiom).
-- **MCP basis honesty:** results carry `basis: "embedding"`; a
-  session without edges gets the explicit error, not keyword results;
+- **MCP basis honesty + healthy-empty:** results carry
+  `basis: "embedding"`; an edge-less session WITH a validated envelope
+  gets an honest empty result (no remedial instruction); a session
+  with NO validated envelope gets the envelope-prerequisite guidance;
+  an absent graph store gets "graph absent" with zero filesystem
+  creation (asserted on the path's nonexistence afterwards);
   `compare_approaches` output unchanged byte-for-byte on its fixtures.
+- **MCP wiring:** a registered-tool test drives the real server
+  factory with a NONDEFAULT kuzu_path and proves the tool reads that
+  graph — pinning the config plumbing, not a shortcut around it.
 - **config layering:** threshold/top_k through the five layers (the
   #285 T1 harness pattern, hermetic).
 
