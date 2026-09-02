@@ -385,7 +385,8 @@ drift).** Verified live 2026-05-18. The backend invokes
 `codex exec --json --sandbox workspace-write --skip-git-repo-check
 [--model <ctx.model>] -` with the prompt on **stdin**: (a) `--model`
 is passed only when `ctx.model` is non-empty — otherwise the run
-silently uses the `~/.codex/config.toml` default and the promised
+silently uses codex's own configured default
+(`$CODEX_HOME/config.toml`, else `~/.codex/config.toml`) and the promised
 `--model gpt-5-codex` scenario is unmet; (b) SWE-bench-sized prompts
 exceed sane argv limits — stdin via the trailing `-` (0.130.0 help:
 "if `-` is used, instructions are read from stdin"); (c) `codex exec`

@@ -22,7 +22,7 @@ codex exec --json --sandbox workspace-write --skip-git-repo-check [--model <mode
 
 With the **prompt on stdin** (trailing `-` causes codex to read instructions from
 stdin). The `--model <model>` flag is **included only when the model is non-empty**;
-if omitted, codex uses the `~/.codex/config.toml` default model.
+if omitted, codex uses the default model from its own configuration — `$CODEX_HOME/config.toml` (else `~/.codex/config.toml`). Naming only `~/.codex` here would be wrong on any host that sets `CODEX_HOME`, which is the second defect #281 fixed in the implementation.
 
 ### Flag contract
 
@@ -32,7 +32,7 @@ if omitted, codex uses the `~/.codex/config.toml` default model.
 | `--json` | yes | Emits JSONL events to stdout (required for transcript parsing). |
 | `--sandbox workspace-write` | yes | Permits the model to write files in the working directory while sandboxed. |
 | `--skip-git-repo-check` | yes | The attempt worktrees created by the harness are plain directories, not git repos; without this flag codex aborts with an error. |
-| `--model <id>` | conditional | Passed only when `ctx.model` is non-empty. When absent, codex uses its configured default (from `~/.codex/config.toml`). |
+| `--model <id>` | conditional | Passed only when `ctx.model` is non-empty. When absent, codex uses its configured default, from `$CODEX_HOME/config.toml` when set, else `~/.codex/config.toml`. |
 | `-` (trailing) | yes | Reads instructions from stdin. This avoids shell argument-length limits for large prompts (SWE-bench issue descriptions can be several KB). |
 
 ### Flag NOT present: `--ask-for-approval`
