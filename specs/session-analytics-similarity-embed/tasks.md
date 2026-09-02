@@ -7,6 +7,8 @@ before the Ollama parser is finalized.
 
 ## T1 — contract, registry, config
 
+**Status: complete** (plus one review round: FR-8 — defaults.json as the only source, CLI genuinely highest, five layers tested hermetically).
+
 **Implements:** FR-2 (default posture), FR-8 (config discipline),
 FR-9 (validation).
 
@@ -31,6 +33,8 @@ test; no hardcoded default in any new source file.
 
 ## T2 — deterministic redacted composer
 
+**Status: complete** (plus one review round: duplicate `sequence_num` refused — ties have no defined order, so FR-7 fails closed rather than depending on the query plan).
+
 **Implements:** FR-1, FR-7.
 
 `embedding/composer.py`: role-tagged `content_preview` rows ordered by
@@ -45,6 +49,8 @@ counted; empty-session input reported as unembeddable, not embedded
 as "".
 
 ## T3 — live capture, then the Ollama backend
+
+**Status: complete.** The capture (`verification-ollama-embed.md`) decided: `/api/embed` only (the legacy endpoint has no model identity); `model: ""` refuses pre-wire because Ollama has NO default embedding model — the valid-outcome branch, taken on evidence. One review round: raw scalars now survive to the FR-9 validator (no `float()` laundering), and the registry threads `base_url` so the resolved config reaches the wire.
 
 **Implements:** FR-2, FR-5.
 
@@ -64,6 +70,8 @@ proves a response without a model identity yields no envelope (FR-5);
 network errors surface as failures, not exceptions escaping the pass.
 
 ## T4 — pass runner + CLI
+
+**Status: complete.** FR-6 executed literally and step-numbered in `runner.py`; `embed` CLI with presence-semantics flags through the FR-8 seam; live run against the real Ollama verified embed → idempotent skip → refused empty-model pass with the prior envelope intact.
 
 **Implements:** FR-3, FR-6, D5.
 
@@ -85,6 +93,8 @@ refuses the pass before any write; the report never claims
 model name fails.
 
 ## T5 — suite, README, mutation pass
+
+**Status: complete.** README section (command table row + `## Session embeddings`, including the no-default-Ollama-model requirement, the envelope contract, the name/tag limitation, and the E2-similar pointer). The consolidated 28-mutation ledger re-ran whole at the final HEAD: 28 caught, 0 escaped (`mutation-ledger.md`). Full suite and repo gates green.
 
 **Done when:** `tests/test_embedding.py` covers every discriminator in
 plan.md's test strategy; every discriminator mutation-checked (revert

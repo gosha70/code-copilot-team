@@ -97,12 +97,31 @@ enters the repo.
 
 Still plan-only; no code exists.
 
+## Build outcome (T5 closure)
+
+T1–T5 all landed on PR #286, each through its own review gate; four
+review rounds each produced a real correction (FR-8 config discipline,
+duplicate-sequence determinism, raw-scalar preservation + the registry
+base_url seam). Two capture-driven narrowings deserve permanent note:
+
+- **D2's "backend default model" delegation has nothing to delegate
+  to on Ollama** — `model: ""` is a 404 (recorded). The empty-model
+  case refuses pre-wire with operator guidance; the packaged default
+  stays `""` on FR-8 grounds.
+- **The envelope's `model` is a server-confirmed NAME/TAG, not a
+  content digest.** Name equality is necessary for comparison, not
+  sufficient for model-version equality; digest provenance is
+  E2-similar's decision if ever wanted.
+
+The consolidated mutation ledger re-ran whole at the final HEAD:
+28/28 caught (`mutation-ledger.md`).
+
 ## What this record does NOT claim
 
-- No code exists. The bundle is submitted plan-first, before any
-  implementation, per the gate discipline this repo uses.
-- No live Ollama call has been made. The embeddings endpoint shape is
-  deliberately UNPINNED until T3's recorded capture — asserting it
-  from memory is the mistake the recorded-capture rule exists to
-  prevent.
-- Nothing here closes #65 or #285.
+- (Historical, from the plan stage:) no code existed at submission;
+  the endpoint shape stayed unpinned until T3's capture. Both are now
+  superseded by the build outcome above — kept for the record.
+- Nothing here closes #65 or #285; that is the owner's decision at
+  final PR review.
+- No similarity behaviour exists: `SIMILAR_TO` remains unpopulated and
+  nothing compares vectors. E2-similar is a separate bet.

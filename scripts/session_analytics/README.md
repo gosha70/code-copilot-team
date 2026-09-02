@@ -59,6 +59,7 @@ The zero-install path still works without `setup` — just pass `--dsn`:
 | `correlate` | Link benchmark `run-record.json` session_ids to analytics sessions (E9). |
 | `archive` | Archive full REDACTED trace text for opted-in projects (E10). |
 | `search`  | Substring search over archived trace text (E10; not ranked). |
+| `embed`   | Compute session embeddings into a provenance envelope (E2 slice 1, #285). |
 
 `ingest` flags: `--copilot` (repeatable; default all), `--root`, `--dsn`,
 `--developer-id`, `--redact {none,code,metadata-only}`, `--incremental`
@@ -745,6 +746,68 @@ for a no-change truth is the **highest** tier the chain engaged — a
 chain is a composition, not a menu, so recommending a tier-2 profile
 against a `[tier1 orchestrator, tier2 delegate]` chain drops the tier-1
 leg and is a downgrade.
+
+## Session embeddings (E2 slice 1, issue #285)
+
+`./scripts/session-analytics embed` is an idempotent post-ingest pass
+that computes ONE embedding per session and writes it into
+`copilot_session.session_embedding`. It is slice 1 of E2: the vectors
+only. Similarity itself — populating the `SIMILAR_TO` graph edges,
+semantic `compare_approaches`, any UI — is **E2-similar**, a separate
+gated issue; nothing here compares anything.
+
+```bash
+./scripts/session-analytics embed --model nomic-embed-text
+./scripts/session-analytics embed --overwrite --model nomic-embed-text  # re-embed
+```
+
+**Ollama requires an explicitly configured embedding model.** The
+packaged default is `embedding.model: ""`, and Ollama has NO default
+embedding model (verified capture:
+`specs/session-analytics-similarity-embed/verification-ollama-embed.md`
+— `model ''` is a 404, and generative models refuse embeddings). So the
+pass refuses with guidance until you set `embedding.model` — e.g.
+`ollama pull nomic-embed-text` then `--model nomic-embed-text` or the
+config equivalent. Config knobs (`embedding.*` in the layered config;
+CLI flags win): `backend`, `model`, `ollama_url`, `input_cap_chars`.
+
+**The stored value is a versioned provenance envelope**, never a bare
+vector:
+
+```json
+{"schema_version": 1, "model": "<backend-RESOLVED model>", "dim": 768,
+ "provider": "ollama", "embedded_at": "<iso8601>", "vector": [ ... ]}
+```
+
+- `model` is what the backend reported for the call — never the
+  configured string. A backend that cannot say which model produced
+  the vector embeds nothing: an honest NULL beats a plausible wrong
+  attribution.
+- **Limitation:** `model` is a server-confirmed NAME/TAG, not an
+  immutable content digest. Name equality is necessary for comparing
+  vectors (E2-similar must never compare across names) but not by
+  itself proof of model-version equality; digest provenance, if ever
+  needed, is E2-similar's decision.
+- The whole envelope is validated before the write: empty or all-zero
+  vectors, NaN/±Inf, booleans, dim mismatches, and missing provenance
+  fields are each refused, and the session stays NULL.
+
+**The pass is lifecycle-strict**: it inspects the store first and
+returns with ZERO backend contact when there is no work; existing
+envelopes are never overwritten without `--overwrite`, and a failed
+re-embed preserves the prior envelope; a failed probe refuses the
+whole pass before any write. The report counts
+`embedded / skipped_existing / unembeddable / failed / truncated`,
+with `skipped_existing_models` read from the STORED envelopes only —
+and `failed > 0` exits nonzero so a cron-driven pass cannot rot
+silently.
+
+**Privacy:** the embedding input is composed exclusively from
+`copilot_turn.sequence_num`, `role`, `content_preview` — a strict
+subset of what the judge already reads, all behind the E8 redaction
+boundary. No session metadata, tool I/O, or raw transcript text is
+ever embedded, and the default backend is localhost Ollama, so nothing
+leaves the machine.
 
 ## Tests
 
