@@ -94,17 +94,27 @@ class TestCollectionGuardIsDeclared(unittest.TestCase):
         self.assertIsInstance(
             value, ast.List, "collect_ignore_glob must be a list literal"
         )
-        globs = [
-            el.value
-            for el in value.elts
-            if isinstance(el, ast.Constant) and isinstance(el.value, str)
-        ]
+        # Check the ELEMENTS, do not filter them: a comprehension that
+        # kept only string constants silently discarded any other entry,
+        # so `[expected, f"..."]` (an f-string is ast.JoinedStr) and
+        # `[expected, 123]` both compared equal to the expected list.
+        # The first broadens the exclusion; the second is invalid config.
         self.assertEqual(
-            globs,
-            [_EXPECTED_GLOB],
-            "the exclusion must be exactly one glob, exactly this one — a "
-            "renamed target silently matches nothing, and an extra entry "
-            f"hides real tests. Got: {globs}",
+            len(value.elts),
+            1,
+            f"the exclusion must be exactly one entry; found {len(value.elts)}"
+            " — an extra entry hides real tests",
+        )
+        entry = value.elts[0]
+        self.assertTrue(
+            isinstance(entry, ast.Constant) and isinstance(entry.value, str),
+            f"the entry must be a string literal, got {ast.dump(entry)}",
+        )
+        self.assertEqual(
+            entry.value,
+            _EXPECTED_GLOB,
+            "the exclusion must be exactly this glob — a renamed target "
+            f"silently matches nothing. Got: {entry.value!r}",
         )
 
     def test_the_expected_glob_actually_matches_the_fixture(self) -> None:
