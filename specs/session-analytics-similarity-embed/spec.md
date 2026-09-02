@@ -25,26 +25,37 @@ surfaces) is a separate issue gated on this one.
    the comparison itself is E2-similar.
 2. **An operator runs the pass after ingest.** `cct-sa embed` (name
    settled in T4) embeds every session lacking a vector, reports
-   embedded / skipped / skipped_other_model / failed / truncated
-   counts, and exits nonzero if anything failed. Re-running is free —
-   zero backend calls when nothing changed.
-3. **An operator switches embedding models.** Existing vectors from
-   the old model are untouched; the pass reports them as
-   `skipped_other_model` until the operator explicitly re-embeds with
-   `--overwrite`. Nothing ever compares vectors across models.
+   embedded / skipped_existing / failed / truncated counts, and exits
+   nonzero if anything failed. Re-running with no work contacts the
+   backend zero times.
+3. **An operator switches embedding models.** Existing envelopes —
+   whatever model wrote them — are untouched by an ordinary run and
+   reported as `skipped_existing` with the stored-model distribution;
+   `--overwrite` is the explicit path to re-embed. Nothing ever
+   compares vectors across models (that rule binds E2-similar).
 4. **A privacy-conscious user checks what left the machine.** Nothing:
-   the default backend is localhost Ollama, and the input was already
-   redacted at ingest — the embedding path reads only the same columns
-   the judge reads.
+   the default backend is localhost Ollama, and the embedding input is
+   drawn from an explicit allowlist of already-redacted turn columns —
+   a strict subset of what the judge already reads.
 
 ## Requirements
 
-**FR-1 — redacted input only.** The embedding input is composed
-exclusively from already-stored, already-redacted columns
-(`content_preview` and session metadata already in the store). No
-code path in this feature reads raw transcript files or any
-unredacted column. The E8 boundary sits upstream by construction,
-exactly as it does for the judge.
+**FR-1 — redacted input only, by explicit allowlist.** The embedding
+input is composed exclusively from these `copilot_turn` columns:
+
+```text
+sequence_num | role | content_preview
+```
+
+Nothing else. Not `project_path`, not `benchmark_run_dir`, not any
+`copilot_session` column, not transcript-source fields — "already
+stored" is NOT the boundary, because stored session metadata is not
+behind the E8 text-redaction boundary. The allowlist is a strict
+subset of what the judge reads (`judge/runner.py:_select_turns()`:
+the same three plus `has_tool_use` and `prev_preview`), so E8's
+guarantees transfer. No code path in this feature reads raw
+transcript files or any unredacted column. Widening the allowlist
+requires its own redaction audit, in a new SDD pass.
 
 **FR-2 — local-only default.** The default backend is Ollama on
 localhost, the same posture as the judge. No session content leaves
@@ -78,12 +89,36 @@ model the backend actually reports for the call. If the backend
 cannot report which model produced the vector, the session is NOT
 embedded (FR-3) — an unattributed vector is a fabricated fact.
 
-**FR-6 — idempotent, model-aware pass.** The CLI pass embeds sessions
-whose `session_embedding` is NULL. A session already carrying an
-envelope is skipped — including one from a DIFFERENT model, which is
-neither overwritten nor mixed; `--overwrite` is the explicit path to
-re-embed. Re-running the pass with no changes does zero embedding
-calls.
+**FR-6 — the pass lifecycle is a fixed order.** Executable, not
+aspirational:
+
+1. Inspect durable DB state FIRST: sessions with NULL
+   `session_embedding` (plus, under `--overwrite`, sessions with an
+   envelope).
+2. **No work → return without contacting the backend.** The
+   zero-backend-calls idempotency guarantee binds BEFORE any probe.
+3. Existing non-NULL envelopes are never overwritten without
+   `--overwrite` — regardless of which model wrote them.
+4. Probe the backend only when work exists; unreachable → refuse the
+   pass before any write.
+5. `embed(text)` returns the vector PLUS the authoritative
+   `resolved_model` (FR-5).
+6. Validate the complete envelope (FR-9), then ONE replacement write.
+
+Reporting is truthful about what is knowable: an ordinary run reports
+existing envelopes as `skipped_existing` (with the stored-model
+distribution), NOT `skipped_other_model` — classifying an envelope as
+"other model" requires an authoritative CURRENT resolved identity,
+which an ordinary run that never contacts the backend does not have,
+and which must never be derived from the configured/requested model
+name. If T3's capture proves the backend has a trustworthy
+pre-embedding model-resolution surface, a later pass may use it;
+until then the claim is not made.
+
+**Overwrite preserves the last valid value:** under `--overwrite`, a
+failed backend call for a session leaves its existing envelope
+intact — a failed re-embed must never destroy the last valid
+embedding.
 
 **FR-7 — deterministic input composition.** The text embedded for a
 session is a pure function of its stored rows: ordered by
@@ -91,15 +126,42 @@ session is a pure function of its stored rows: ordered by
 (oldest-first retention, truncation counted in the report). Two runs
 over unchanged rows produce byte-identical input.
 
-**FR-8 — config discipline.** All knobs live in the layered config
-(`defaults.json` → `.env` → env → CLI): backend family, model,
-base URL, input cap, batch/workers. Config keys are constants in
-`constants.py`. No hardcoded defaults in source, per house rules.
+**FR-8 — config discipline, with the loader's ACTUAL precedence.**
+All knobs live in the existing layered config, whose documented order
+(`config.py:8`) is:
 
-**FR-9 — validation before write.** The envelope is validated at the
-write boundary: `dim == len(vector)`, `dim > 0`, all elements finite
-numbers, model non-empty. An envelope failing validation is refused
-(FR-3 counts it as failed), never persisted.
+```text
+defaults.json < ~/.cct/session-analytics.json < repo-root .env
+              < real env vars < CLI args
+```
+
+Knobs: backend family, model, base URL, input cap, workers. Config
+keys are constants in `constants.py`. No hardcoded defaults in
+source, per house rules.
+
+**FR-9 — validation before write, over the WHOLE envelope.** The
+envelope is validated at the write boundary; failing validation is
+refused and counted as failed (FR-3), never persisted. Discriminated
+separately, not as one shape check:
+
+```text
+[]                       -> refuse (no vector)
+[0.0, 0.0, ...]          -> refuse (zero vector: cosine over zero
+                            norm is undefined, and FR-3/#285 promise
+                            "never a zero-vector")
+NaN / ±Inf element       -> refuse
+boolean element          -> refuse (finite REAL numbers only)
+dim != len(vector)       -> refuse
+dim == 0                 -> refuse
+model empty              -> refuse
+provider empty           -> refuse
+schema_version != 1      -> refuse
+embedded_at not ISO-8601 -> refuse
+valid nonzero vector     -> accept
+```
+
+The envelope's "versioned, self-describing" promise is load-bearing,
+so every contract field is validated — not only the vector.
 
 ## Non-goals
 

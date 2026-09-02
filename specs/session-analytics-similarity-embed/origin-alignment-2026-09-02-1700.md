@@ -53,6 +53,50 @@ its own acceptance criteria before any build; this tracker stays open.
 None widens #285's acceptance criteria; D2 narrows behavior in the
 honest direction.
 
+## Correction pass after plan review (PR #286)
+
+The review returned four P1s — contract consistency, not architecture.
+The decision set (envelope-in-TEXT, resolved-model-or-no-write,
+E2/E2-similar split, capture-before-parser) is unchanged.
+
+1. **FR-1 is now an explicit allowlist** — `copilot_turn.sequence_num |
+   role | content_preview`, a strict SUBSET of the judge's selection.
+   The first draft said "content_preview and session metadata already
+   in the store", which is wrong as a boundary: `project_path` and
+   `benchmark_run_dir` are stored but not behind the E8 text-redaction
+   boundary. The discriminator now plants markers in both and proves
+   the allowlist, not just one raw string's absence.
+2. **The zero-vector contradiction is resolved in the strict
+   direction.** The plan's test strategy had said an all-zeros vector
+   is persisted, while #285 and FR-3 say "never a zero-vector". The
+   issue/spec reading wins: FR-9 refuses `[]`, the zero vector, NaN,
+   booleans, and dim mismatches each for its own reason — and now
+   validates the WHOLE envelope (schema_version, provider,
+   embedded_at, model), not only the vector.
+3. **The model-identity lifecycle is now an executable order** (FR-6):
+   DB state first; no work → zero backend contact INCLUDING the probe;
+   existing envelopes never overwritten without `--overwrite`; probe
+   only when work exists; `embed()` returns
+   `EmbeddingResult{vector, resolved_model}`; validate; one
+   replacement write. Three contradictions this fixes: D2's premature
+   "Ollama's response carries the model" (now a T3 capture question);
+   `skipped_other_model` reporting (an ordinary run has no
+   authoritative current identity to classify against — it reports
+   `skipped_existing` with the stored-model distribution); D5's
+   unconditional startup probe vs zero-call idempotency. Added: the
+   overwrite-failure discriminator — a failed re-embed leaves the
+   prior envelope intact.
+4. **FR-8 states the loader's ACTUAL precedence** (`config.py:8`):
+   `defaults.json < ~/.cct/session-analytics.json < repo-root .env <
+   real env < CLI`. The first draft dropped the user-JSON layer; T1's
+   layering discriminator now includes it.
+
+Also adopted from the review: the T3 live capture uses SYNTHETIC fixed
+text, never a real session payload, because the raw request/response
+enters the repo.
+
+Still plan-only; no code exists.
+
 ## What this record does NOT claim
 
 - No code exists. The bundle is submitted plan-first, before any

@@ -62,29 +62,42 @@ storage upgrade (pgvector) has a defined migration source.
 
 **D2 — resolved model identity, or no write.** Config `model: ""`
 delegates to the backend default, but the envelope stores what the
-backend reports. Ollama's response carries the model; if a backend
-cannot say, the session stays NULL. This is the FR-E10 lesson from the
-routing arc applied here: an unattributed value is worse than an
-honest absence.
+backend authoritatively reports. Whether and where Ollama's response
+carries the model id is a T3 capture question, NOT asserted here —
+T1's contract is abstract: `EmbeddingResult{vector, resolved_model}`,
+and a backend that cannot populate `resolved_model` embeds nothing.
+This is the FR-E10 lesson from the routing arc applied here: an
+unattributed value is worse than an honest absence.
 
-**D3 — skip-different-model, never overwrite silently.** The pass
-targets NULL only. An envelope from another model is left standing;
-`--overwrite` re-embeds explicitly. Rationale: mixing two models'
-vectors in one column with no operator decision is the exact "silently
-compared" failure FR-4 exists to prevent. The pass report counts
-`skipped_other_model` separately so drift is visible.
+**D3 — never overwrite silently; report only what is knowable.** The
+pass targets NULL only; ANY existing envelope is left standing without
+`--overwrite`. Rationale: mixing two models' vectors in one column
+with no operator decision is the exact "silently compared" failure
+FR-4 exists to prevent. Reporting: `skipped_existing` with the
+stored-model distribution — NOT `skipped_other_model`, because an
+ordinary run has no authoritative current resolved identity to
+classify against (it may never contact the backend at all), and
+deriving "other model" from the configured name would be a guess
+wearing a report label. Under `--overwrite`, a failed backend call
+leaves the session's existing envelope intact — the last valid value
+is never destroyed by a failed replacement.
 
-**D4 — composer reads the same columns the judge reads.** Input =
-role-tagged `content_preview` rows ordered by `sequence_num`, capped.
-The judge already established that these columns are the redaction-safe
-view; reusing exactly them means E8's guarantees transfer without a
-new audit surface.
+**D4 — composer reads a strict SUBSET of what the judge reads.** The
+FR-1 allowlist is exactly `copilot_turn.sequence_num`, `role`,
+`content_preview` — three of the five columns the judge selects (it
+also reads `has_tool_use` and `prev_preview`; the composer needs
+neither). No `copilot_session` column, no session metadata: stored is
+not the same as redacted, and `project_path` / `benchmark_run_dir`
+are stored but not behind the E8 text boundary. Input = role-tagged
+previews ordered by `sequence_num`, capped.
 
-**D5 — startup probe, then per-session accounting.** The pass probes
-the backend once before embedding anything; an unreachable backend
-refuses the whole pass with a clear error (nothing half-done). During
-the run, per-session failures leave NULL and are counted; the pass
-exits nonzero if `failed > 0`.
+**D5 — DB first, probe only when work exists.** The FR-6 lifecycle
+order governs: inspect durable state first; no work → return with
+ZERO backend contact (the idempotency guarantee binds before any
+probe); only when work exists, probe once — unreachable refuses the
+whole pass before any write. During the run, per-session failures
+leave NULL (or, under `--overwrite`, the prior envelope) and are
+counted; the pass exits nonzero if `failed > 0`.
 
 **D6 — no reuse of `routing_calibration.py` here.** Its kNN operates
 on routing evidence and belongs to E2-similar's design review.
@@ -95,22 +108,35 @@ Referenced to prevent rebuilding, not imported.
 Fake backend shim (the judge-test pattern), stdlib SQLite. The
 load-bearing rules and their discriminators:
 
-- **redacted-only input:** the composer receives a DB whose raw-text
-  fixture differs from `content_preview`; the embedded input must
-  contain the preview text and must not contain the raw marker.
+- **redacted-only input, allowlist-proven:** the fixture DB carries a
+  sensitive marker in `project_path`, another in
+  `benchmark_run_dir`, and a raw-text marker differing from
+  `content_preview`; the payload the shim receives must contain the
+  preview text and NONE of the three markers — proving the allowlist,
+  not merely the absence of one raw string.
 - **NULL on failure:** a shim that errors for one session leaves that
   session NULL and the report counts it; asserting the column value,
   not just the count.
-- **no zero-vector:** a shim returning an all-zeros vector of correct
-  length is still persisted (zeros can be legitimate); but a shim
-  returning an EMPTY vector or NaN is refused by FR-9 validation —
-  discriminated separately.
+- **no zero-vector, and each refusal for its own reason:** shims
+  returning `[]`, an all-zeros vector, a NaN element, a boolean
+  element, and a dim-mismatched vector are each refused by FR-9 —
+  discriminated separately, and the zero vector explicitly (cosine
+  over zero norm is undefined, and #285/FR-3 promise "never a
+  zero-vector"). A valid nonzero vector is accepted.
 - **provenance atomicity:** the stored value parses as the envelope
   with model+dim+vector consistent; a mutation dropping the model from
   the write fails.
-- **model-aware idempotency:** second run = zero backend calls
-  (shim counts invocations); a pre-existing other-model envelope
-  survives an ordinary run and is replaced only under `--overwrite`.
+- **lifecycle idempotency:** a no-work second run performs ZERO
+  backend calls INCLUDING the probe (shim counts every HTTP-level
+  invocation); any pre-existing envelope survives an ordinary run and
+  is replaced only under `--overwrite`.
+- **overwrite preserves the last valid value:** existing valid
+  envelope + `--overwrite` + backend failure for that session → the
+  old envelope is intact afterwards, asserted on the column value.
+- **truthful reporting:** an ordinary run over existing envelopes
+  reports `skipped_existing` with the stored-model distribution; a
+  mutation that labels them `skipped_other_model` from the CONFIGURED
+  model name fails.
 - **determinism:** two composer runs over unchanged rows produce
   byte-identical input.
 - **resolved-model rule:** a shim that reports no model identity
@@ -123,8 +149,10 @@ checked as well as `FAIL:` — house discipline).
 ## Live verification (build-time, recorded)
 
 One live capture against a local Ollama pins the embeddings endpoint,
-request shape, and response fields (including where the model id
-appears). The capture is recorded in the bundle
+request shape, and response fields (including whether and where a
+model id appears). The capture uses SYNTHETIC fixed text — never a
+real session payload — because the raw request/response goes into the
+repo. It is recorded in the bundle
 (`verification-ollama-embed.md`) and the parser/tests derive from it —
 not from memory. Recorded-capture-is-ground-truth is the house rule
 this follows.

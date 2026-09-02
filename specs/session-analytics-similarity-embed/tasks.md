@@ -15,11 +15,19 @@ dataclass + `validate_envelope()`), `embedding/registry.py`,
 `embedding/_register.py`; `embedding` block in
 `config_data/defaults.json`; config-key constants in `constants.py`.
 
+The contract is abstract: `EmbeddingResult{vector, resolved_model}`.
+Whether Ollama can populate `resolved_model` — and from where — is
+T3's capture question, not T1's.
+
 **Done when:** registry resolves `ollama` (stub OK at this point);
-`validate_envelope()` refuses empty vector, dim mismatch, non-finite
-elements, empty model — each with its own test; config layering
-proven by an env-override test; no hardcoded default in any new
-source file.
+`validate_envelope()` refuses each FR-9 case with its own test —
+empty vector, ZERO vector, NaN/±Inf, boolean element, dim mismatch,
+dim 0, empty model, empty provider, wrong schema_version, bad
+embedded_at — and accepts a valid nonzero vector; config layering
+proven against the loader's FULL documented precedence
+(`defaults.json < ~/.cct/session-analytics.json < repo-root .env <
+real env < CLI`, `config.py:8`), including a user-JSON-layer override
+test; no hardcoded default in any new source file.
 
 ## T2 — deterministic redacted composer
 
@@ -28,18 +36,25 @@ source file.
 `embedding/composer.py`: role-tagged `content_preview` rows ordered by
 `sequence_num`, configured char cap, truncation reported.
 
-**Done when:** the redacted-only discriminator passes (raw marker
-absent, preview text present); byte-identical output on repeat; cap
-respected with truncation counted; empty-session input reported as
-unembeddable, not embedded as "".
+**Done when:** the allowlist discriminator passes — sensitive markers
+planted in `project_path`, `benchmark_run_dir`, and raw text all
+absent from the composed payload, preview text present; the composer
+provably selects ONLY `sequence_num`, `role`, `content_preview`;
+byte-identical output on repeat; cap respected with truncation
+counted; empty-session input reported as unembeddable, not embedded
+as "".
 
 ## T3 — live capture, then the Ollama backend
 
 **Implements:** FR-2, FR-5.
 
-FIRST the capture: one live call against local Ollama, recorded as
-`verification-ollama-embed.md` (endpoint, request, response, where the
-model id appears). THEN `embedding/ollama_embed.py` derived from it.
+FIRST the capture: one live call against local Ollama with SYNTHETIC
+fixed text (the raw request/response enters the repo), recorded as
+`verification-ollama-embed.md` (endpoint, request, response, whether
+and where a model id appears). THEN `embedding/ollama_embed.py`
+derived from it. If the capture shows Ollama does NOT authoritatively
+report the serving model, the backend must refuse to embed under
+`model: ""` (FR-5) — surfaced in review, not papered over.
 
 **Done when:** the verification note exists with the raw
 request/response; the backend parses exactly that shape; a shim test
@@ -50,15 +65,22 @@ network errors surface as failures, not exceptions escaping the pass.
 
 **Implements:** FR-3, FR-6, D5.
 
-`embedding/runner.py` + `cli.py embed` subcommand: startup probe,
-NULL-targeting selection, `--overwrite`, per-session accounting
-(embedded / skipped / skipped_other_model / failed / truncated),
-nonzero exit on failures.
+`embedding/runner.py` + `cli.py embed` subcommand implementing the
+FR-6 lifecycle IN ORDER: durable-state inspection first; no work →
+return with zero backend contact; probe only when work exists;
+embed → validate → one replacement write. Accounting: embedded /
+skipped_existing (with stored-model distribution) / failed /
+truncated; nonzero exit on failures.
 
-**Done when:** second run performs zero backend calls (shim counts);
-other-model envelope survives without `--overwrite` and is replaced
-with it; failed session verifiably NULL in the column; unreachable
-backend refuses the pass before any write.
+**Done when:** a no-work second run performs ZERO backend calls
+including the probe (shim counts every HTTP-level invocation); any
+existing envelope survives an ordinary run and is replaced only under
+`--overwrite`; under `--overwrite`, a failed backend call leaves the
+prior envelope intact (asserted on the column value); a failed
+session is verifiably NULL in the column; an unreachable backend
+refuses the pass before any write; the report never claims
+`skipped_other_model` — a mutation deriving it from the configured
+model name fails.
 
 ## T5 — suite, README, mutation pass
 
