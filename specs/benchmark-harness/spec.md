@@ -61,7 +61,7 @@ Two terms with carefully separated meanings (see [`audit-2026-05-08.md`](audit-2
 
 Same provider can serve different backends; same backend can route to different providers. They are orthogonal axes.
 
-The harness *records* which provider a run used (by reading the backend's gateway env vars at run time and writing them into `backend_metadata`). It does **not** set them — provider configuration is the user's responsibility (or, eventually, CCT's standalone provider-config feature in [`specs/provider-config/`](../provider-config/spec.md)).
+The harness *records* which provider a run used (by reading the backend's gateway env vars at run time and writing them into `backend_metadata`). **Where it cannot establish that, it records an honest absence rather than a guess** — for the `codex` backend the provider is unestablished (`provider_id: null`, #281), because that backend passes codex no provider selection and codex resolves its configuration in layers. It does **not** set them — provider configuration is the user's responsibility (or, eventually, CCT's standalone provider-config feature in [`specs/provider-config/`](../provider-config/spec.md)).
 
 ## User Scenarios
 

@@ -182,15 +182,17 @@ field remain (used by nothing else) — inert.
   matching the verification record; `cwd=ctx.worktree`, host env
   forwarded;
   defensive `--json` transcript parse (tokens/tools, null-vs-zero);
-  `backend_metadata` records config.toml path + selected
-  `model_providers.<id>` + version + exit/stderr-tail, never secrets.
+  `backend_metadata` records the base config.toml path +
+  ~~selected `model_providers.<id>`~~ `provider_id: null` + version +
+  exit/stderr-tail, never secrets. **SUPERSEDED 2026-09-01 by #281** — the provider is recorded as UNESTABLISHED (`provider_id: null`) and the config is not parsed; only the BASE user config path is recorded, honouring `CODEX_HOME`. This backend passes codex no provider selection (`-c model_provider` nor `--profile`), and codex resolves its config in LAYERS, so no single file establishes which provider answered.
 - `tests/fixtures/codex/` recorded transcripts +
   `tests/test_codex_backend.py` (fake `codex` shim on PATH echoing the
   fixture + logging argv/stdin/cwd; no live CLI/network) — the
   `claude_code` pattern.
 
 **Acceptance:** `test_codex_backend.py` green offline; `backend_metadata`
-carries provider id + config path, never a key; the recorded fixture
+carries ~~provider id +~~ the base config path and an unestablished
+provider (#281), never a key; the recorded fixture
 shape matches the verification record; a reviewer reading
 `verification/codex.md` can map every documented flag to the backend's
 argv.
@@ -198,8 +200,9 @@ argv.
 **Failure modes considered:** codex `--json` shape drift vs the pinned
 version (the verification record is the contract; a mismatch is a
 documented refresh, not silent acceptance); provider-config absent
-(metadata records "none", backend still runs); secret leakage (test
-asserts only presence/path/id in metadata).
+(metadata records null for both path and provider, backend still runs);
+secret leakage (test asserts only presence and path in metadata; #281
+removed the id).
 
 **Rollback:** remove `codex.py` + fixtures + test + its `register()`
 line + the verification doc; nothing else depends on it.
@@ -209,8 +212,8 @@ line + the verification doc; nothing else depends on it.
 - `_register.py`: add the swe-bench-verified adapter + codex backend
   `register_*` calls (explicit; grep-able).
 - `benchmarks/README.md`: `codex` row in the backend table + its
-  provider-routing section (`~/.codex/config.toml`
-  `[model_providers.<id>]`, recorded path+id); SWE-bench-verified
+  provider-routing section (base config path only — ~~recorded
+  path+id~~ #281 removed the id); SWE-bench-verified
   adapter + `docker` tier section (local-only, multi-GB caveat,
   update procedure).
 - Per-adapter calibration note (SWE-bench leaderboard is per-agent;

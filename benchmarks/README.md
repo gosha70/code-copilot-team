@@ -78,7 +78,7 @@ You have a benchmark (say, Aider Polyglot) and you want to know which LLM does b
 
 ### 1. Make sure your backend is authenticated
 
-The harness *records* which provider an LLM run uses; it never *sets* the provider. Configuration happens through the backend's own gateway env vars. For Claude Code (the only copilot backend in the MVP — see issue #33 for Aider/Codex/GH-Copilot CLI):
+The harness *records* which provider an LLM run uses; it never *sets* the provider. **Where it cannot establish that, it records an honest absence rather than a guess** — for the `codex` backend the provider is unestablished (`provider_id: null`, #281), because that backend passes codex no provider selection and codex resolves its configuration in layers. Configuration happens through the backend's own gateway env vars. For Claude Code (the only copilot backend in the MVP — see issue #33 for Aider/Codex/GH-Copilot CLI):
 
 - **Anthropic API (default)**: `claude login` once, or set `ANTHROPIC_API_KEY` in your shell.
 - **Local LLM via vLLM**: spin up vLLM with its Anthropic-compatible endpoint (`vllm serve <model> --enable-anthropic-api`) and use the `env` block in the compare config to point Claude Code at it.
