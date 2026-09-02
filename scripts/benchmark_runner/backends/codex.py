@@ -8,11 +8,21 @@
 # record — pinned version, real transcript, flag/env contract — lives at:
 #   specs/benchmark-harness/verification/codex.md
 #
-# Provider routing:
-# Codex reads model and provider from ~/.codex/config.toml (the
-# [model_providers.<id>] blocks). The harness records the resolved path
-# and selected provider id in backend_metadata. It does NOT set or
-# rewrite the config — provider configuration is the user's responsibility.
+# Provider routing (CORRECTED by #281):
+# Codex reads model and provider from its own configuration. The harness
+# records the BASE user config path — ``$CODEX_HOME/config.toml``, else
+# ``~/.codex/config.toml`` — and records the provider as UNESTABLISHED
+# (``provider_id: None``).
+#
+# It records no selected provider because it selects none: this backend
+# passes codex neither ``-c model_provider=<id>`` nor ``--profile``, so
+# codex chooses from its own layered configuration and the harness has no
+# signal about which provider answered. The earlier claim that it
+# "records the selected provider id" was untrue — the value came from the
+# first key under ``[model_providers]``, in arbitrary dict order.
+#
+# The config is NOT parsed, and it does NOT set or rewrite it — provider
+# configuration is the user's responsibility.
 #
 # IMPORTANT: codex exec is inherently non-interactive. There is NO
 # --ask-for-approval flag on `exec` in 0.130.0. The earlier spec draft
