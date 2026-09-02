@@ -118,8 +118,10 @@ is the ≥1 additional backend it needs).
 2. **codex backend.** `./scripts/benchmark run --benchmark
    aider-polyglot --backend codex --model gpt-5-codex --runs 1` drives
    `codex exec` headlessly; the run record's `backend_metadata`
-   captures the resolved `~/.codex/config.toml` path + selected
-   provider id (never secrets).
+   captures the BASE user config path (`$CODEX_HOME/config.toml`, else
+   `~/.codex/config.toml`) and ~~selected provider id~~ an
+   UNESTABLISHED provider (`provider_id: null`, **SUPERSEDED by #281**)
+   — never secrets.
 3. **List.** `./scripts/benchmark list` shows `swe-bench-verified`
    among adapters and `codex` among backends.
 4. **CI unchanged.** The stub×stub smoke gate from #32 still runs in
@@ -259,9 +261,11 @@ signature changes.
   set; null-vs-zero preserved). If a future pinned version's surface
   differs, the verification record is refreshed and the backend
   matches it (no silent drift).
-- `backend_metadata` records: family, model, resolved
-  `~/.codex/config.toml` path, selected `model_providers.<id>`,
-  `codex --version`, exit code, stderr tail — **never** API keys.
+- `backend_metadata` records: family, model, the BASE user
+  config.toml path (`$CODEX_HOME/config.toml`, else
+  `~/.codex/config.toml`), ~~selected `model_providers.<id>`~~
+  `provider_id: null`, `codex --version`, exit code, stderr tail —
+  **never** API keys. **SUPERSEDED 2026-09-01 by #281** — the provider is recorded as UNESTABLISHED (`provider_id: null`) and the config is not parsed; only the BASE user config path is recorded, honouring `CODEX_HOME`. This backend passes codex no provider selection (`-c model_provider` nor `--profile`), and codex resolves its config in LAYERS, so no single file establishes which provider answered.
 - Recorded-transcript test: fake `codex` shim on PATH echoing a
   committed fixture + logging argv/stdin/cwd; fixtures under
   `scripts/benchmark_runner/tests/fixtures/codex/`. No live CLI/network.
@@ -270,8 +274,8 @@ signature changes.
 
 `_register.py` gains the two `register_*` calls (explicit, grep-able —
 no auto-discovery). `benchmarks/README.md`: add `codex` to the backend
-table with its provider-routing env story (`~/.codex/config.toml`
-`[model_providers.<id>]`, recorded path+id), and a SWE-bench adapter +
+table with its provider-routing env story (base config path only —
+~~recorded path+id~~, #281 removed the id), and a SWE-bench adapter +
 `docker` tier section (local-only, image-size caveat). Per-adapter
 calibration note (SWE-bench leaderboard is per-agent — comparison
 meaningful only same-agent-both-sides) in the merge commit body or
@@ -381,7 +385,8 @@ drift).** Verified live 2026-05-18. The backend invokes
 `codex exec --json --sandbox workspace-write --skip-git-repo-check
 [--model <ctx.model>] -` with the prompt on **stdin**: (a) `--model`
 is passed only when `ctx.model` is non-empty — otherwise the run
-silently uses the `~/.codex/config.toml` default and the promised
+silently uses codex's own configured default
+(`$CODEX_HOME/config.toml`, else `~/.codex/config.toml`) and the promised
 `--model gpt-5-codex` scenario is unmet; (b) SWE-bench-sized prompts
 exceed sane argv limits — stdin via the trailing `-` (0.130.0 help:
 "if `-` is used, instructions are read from stdin"); (c) `codex exec`
@@ -492,7 +497,8 @@ just faked tests — exactly the infra-verification discipline.
    fetched stdlib-only via the HF datasets-server rows API.
 6. The harness records provider env vars; it never sets them.
 7. No secrets in run records / verification record / metadata
-   (presence booleans + config path + provider id only).
+   (presence booleans + config path only; ~~provider id~~ is null as of
+   #281).
 8. No regression to the #32 stub×stub CI smoke or existing tests.
 
 ## Key Entities

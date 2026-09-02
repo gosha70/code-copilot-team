@@ -316,7 +316,8 @@ here and in `verification/aider.md`:
    `None`; `tool_calls` always `{}` (Aider has no codex tool events).
 3. **Prompt via `--message-file`**, not codex's `-` stdin.
 4. **Provider routing = env-presence booleans**, not codex's
-   `config.toml` path/provider id (Aider routes via env vars).
+   `config.toml` path (Aider routes via env vars). Codex's provider id
+   is not a contrast either: it is unestablished as of #281.
 5. **Extra pinned `--no-auto-commits --no-dirty-commits
    --no-gitignore --no-git`** — no codex analogue; forced by `run.py`'s
    `_write_diff` excluding only `.venv` (commits/`.aider*`/`.git/` in

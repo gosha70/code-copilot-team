@@ -22,7 +22,7 @@ codex exec --json --sandbox workspace-write --skip-git-repo-check [--model <mode
 
 With the **prompt on stdin** (trailing `-` causes codex to read instructions from
 stdin). The `--model <model>` flag is **included only when the model is non-empty**;
-if omitted, codex uses the `~/.codex/config.toml` default model.
+if omitted, codex uses the default model from its own configuration — `$CODEX_HOME/config.toml` (else `~/.codex/config.toml`). Naming only `~/.codex` here would be wrong on any host that sets `CODEX_HOME`, which is the second defect #281 fixed in the implementation.
 
 ### Flag contract
 
@@ -32,7 +32,7 @@ if omitted, codex uses the `~/.codex/config.toml` default model.
 | `--json` | yes | Emits JSONL events to stdout (required for transcript parsing). |
 | `--sandbox workspace-write` | yes | Permits the model to write files in the working directory while sandboxed. |
 | `--skip-git-repo-check` | yes | The attempt worktrees created by the harness are plain directories, not git repos; without this flag codex aborts with an error. |
-| `--model <id>` | conditional | Passed only when `ctx.model` is non-empty. When absent, codex uses its configured default (from `~/.codex/config.toml`). |
+| `--model <id>` | conditional | Passed only when `ctx.model` is non-empty. When absent, codex uses its configured default, from `$CODEX_HOME/config.toml` when set, else `~/.codex/config.toml`. |
 | `-` (trailing) | yes | Reads instructions from stdin. This avoids shell argument-length limits for large prompts (SWE-bench issue descriptions can be several KB). |
 
 ### Flag NOT present: `--ask-for-approval`
@@ -96,10 +96,17 @@ printf 'Write a Python function called add(a, b) that returns the sum of a and b
 
 Exit code: `0`
 
-## Provider routing (`~/.codex/config.toml`)
+## Provider routing (`$CODEX_HOME/config.toml`, else `~/.codex/config.toml`)
 
-Codex reads its model and provider configuration from `~/.codex/config.toml`.
-The file path is recorded in `backend_metadata.config_toml_path` at run time.
+> **CORRECTED 2026-09-01 by #281.** This section previously stated that the
+> harness records `model_providers.<id>` in `backend_metadata.provider_id`.
+> That guarantee is **withdrawn**: the provider is recorded as
+> **unestablished** (`provider_id: null`). See "What the harness records"
+> below.
+
+Codex reads its model and provider configuration from its own layered
+configuration. The BASE user config path is recorded in
+`backend_metadata.config_toml_path` at run time, honouring `CODEX_HOME`.
 A typical config block:
 
 ```toml
@@ -111,9 +118,33 @@ base_url = "https://api.openai.com/v1"
 # api_key is read from the CODEX_HOME/auth.json file, not from config.toml
 ```
 
-The harness records `model_providers.<id>` (the config key, not any key value)
-in `backend_metadata.provider_id`. API keys are **never** recorded — only their
-presence as a boolean or the provider config key name.
+### What the harness records
+
+| Field | Value | Why |
+|---|---|---|
+| `config_toml_path` | `$CODEX_HOME/config.toml`, else `~/.codex/config.toml`; `null` when no such file exists | the BASE user config layer, honouring the same env var codex honours |
+| `provider_id` | **always `null`** | unestablished — see below |
+
+**Why `provider_id` is always null.** This backend passes codex **no
+provider selection** — neither `-c model_provider=<id>` nor `--profile`
+appears in `_build_argv`. Codex therefore chooses from its own
+configuration and the harness has no signal about which provider
+answered. The withdrawn implementation reported the *first key* under
+`[model_providers]`, in arbitrary dict order, which with two providers
+configured recorded a provider the run may never have used.
+
+Establishing it truthfully would require reproducing codex's **layered**
+resolution — `--profile` layers `$CODEX_HOME/<name>.config.toml` over the
+base user config, and `--ignore-user-config` drops the base file entirely
+(codex-cli 0.147.0) — so no single file answers the question. That is
+deliberately not built.
+
+The two fields stay distinguishable without a third: a non-null path with
+a null provider means "a base config exists, its selected provider is
+unestablished"; a null path means "no base config file".
+
+**The config file is not parsed.** API keys are **never** recorded, and
+no provider configuration of any kind is read.
 
 ## Reviewer checklist
 
@@ -126,3 +157,5 @@ A reviewer confirming this record maps to the `codex.py` implementation:
 5. `turn.completed.usage.{input_tokens, cached_input_tokens, output_tokens}` are mapped to `{tokens_input, cache_read_tokens, tokens_output}`.
 6. `agent_message.text` is extracted as the model's text response.
 7. `backend_metadata` carries `config_toml_path` and `provider_id` but **not** any API key value.
+8. (#281) `provider_id` is **always `None`** — `_resolve_codex_config` returns it unconditionally and never parses the config file.
+9. (#281) `config_toml_path` honours `CODEX_HOME` rather than hardcoding `~/.codex`.

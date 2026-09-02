@@ -98,7 +98,7 @@ with primary-source citations. Summary:
 |---|---|---|
 | **Claude Code** | env vars (Anthropic Messages gateway) | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN_present` (bool), `ANTHROPIC_DEFAULT_*_MODEL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` |
 | **Aider** | env vars + YAML config | `OPENAI_API_BASE`, `OLLAMA_API_BASE`, presence of `OPENAI_API_KEY` / `OLLAMA_API_KEY`, the active `--model` arg |
-| **Codex** | `~/.codex/config.toml` | path to config.toml + the active provider id from `[model_providers.<id>]` block + `wire_api` |
+| **Codex** | `$CODEX_HOME/config.toml`, else `~/.codex/config.toml` | path to the BASE user config only. ~~the active provider id from `[model_providers.<id>]` block + `wire_api`~~ **SUPERSEDED by #281** — the backend passes codex no provider selection, and codex resolves its config in LAYERS, so the provider is recorded as unestablished (`provider_id: null`) and the file is not parsed. See T3.2 in `tasks.md`. |
 | **GitHub Copilot CLI** | env vars | `COPILOT_PROVIDER_BASE_URL`, `COPILOT_MODEL`, `COPILOT_PROVIDER_TYPE`, `COPILOT_OFFLINE` (bool) |
 
 Cursor and Windsurf are GUI-only and out of scope as benchmark
@@ -131,10 +131,14 @@ to the same semantic):
 - **Aider** (when shipped): `provider_endpoint = OPENAI_API_BASE` (or
   `OLLAMA_API_BASE`); `provider_auth_token_present` follows whichever
   is in use.
-- **Codex** (when shipped): `provider_endpoint = base_url` from the
+- **Codex** (when shipped): ~~`provider_endpoint = base_url` from the
   active `[model_providers.<id>]` block; `provider_config_source =
-  "toml"` (path to `~/.codex/config.toml` recorded under
-  `backend_metadata.codex_config_path`).
+  "toml"`~~ **SUPERSEDED by #281.** No `provider_endpoint` and no
+  `provider_config_source` are derived: the config is not parsed, the
+  provider is unestablished (`provider_id: null`), and only the BASE
+  user config path is recorded — `$CODEX_HOME/config.toml`, else
+  `~/.codex/config.toml`. The routed side reached the same conclusion in
+  `specs/routing-effective-endpoint/spec.md` FR-E10.
 - **GitHub Copilot CLI** (when shipped): `provider_endpoint =
   COPILOT_PROVIDER_BASE_URL`; `provider_auth_token_present =
   bool(COPILOT_PROVIDER_API_KEY)`.

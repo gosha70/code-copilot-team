@@ -117,20 +117,22 @@ are filed as named follow-up issues (T5.4), not partially built here.
   matching the `codex-cli 0.130.0` verification record;
   `cwd=ctx.worktree`, host env forwarded; defensive `--json`
   transcript parse (tokens/tools, null-vs-zero); `backend_metadata` =
-  family/model/config.toml path/selected
-  `model_providers.<id>`/version/exit/stderr-tail — never secrets.
+  family/model/base config.toml path/~~selected
+  `model_providers.<id>`~~ `provider_id: null`/version/exit/stderr-tail
+  — never secrets. **SUPERSEDED 2026-09-01 by #281** — the provider is recorded as UNESTABLISHED (`provider_id: null`) and the config is not parsed; only the BASE user config path is recorded, honouring `CODEX_HOME`. This backend passes codex no provider selection (`-c model_provider` nor `--profile`), and codex resolves its config in LAYERS, so no single file establishes which provider answered.
 - **Done when:** argv matches the verification record exactly;
   `--model` present iff `ctx.model` non-empty; prompt delivered on
-  stdin; `backend_metadata` carries provider id + config path and no
-  key.
+  stdin; `backend_metadata` carries ~~provider id +~~ the base config
+  path, an unestablished provider, and no key.
 
 ### T4.3 — recorded-transcript test (offline)
 - **Output:** `tests/fixtures/codex/…` recorded transcripts +
   `tests/test_codex_backend.py` (fake `codex` shim on PATH echoing the
   fixture, logging argv/stdin/cwd) — the `claude_code` pattern.
 - **Done when:** test green with no live CLI/network; asserts argv,
-  metadata (provider id/path present, no secret), and parsed
-  tokens/tools incl. the null-vs-zero distinction.
+  metadata (~~provider id/path present~~ base path present and the
+  provider unestablished, no secret — #281), and parsed tokens/tools
+  incl. the null-vs-zero distinction.
 
 ## Phase 5 — registration, docs, calibration, follow-ups
 
@@ -142,8 +144,8 @@ are filed as named follow-up issues (T5.4), not partially built here.
 
 ### T5.2 — README
 - **Output:** `benchmarks/README.md`: `codex` backend-table row +
-  provider-routing section (`~/.codex/config.toml`
-  `[model_providers.<id>]`, recorded path+id); SWE-bench-verified
+  provider-routing section (base config path only — ~~recorded
+  path+id~~ #281 removed the id); SWE-bench-verified
   adapter + `docker` tier section (local-only, multi-GB caveat,
   update procedure).
 - **Done when:** README documents codex env + SWE-bench/docker;

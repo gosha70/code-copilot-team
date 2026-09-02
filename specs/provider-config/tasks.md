@@ -50,8 +50,31 @@ Phased delivery per `plan.md`. Each task is bounded and independently verifiable
 - **Done when:** the aider backend's recording-schema-matrix test passes for all 4 routing states.
 
 ### T3.2 — Codex backend reads `~/.codex/config.toml`
-- **Output:** `scripts/benchmark_runner/backends/codex.py` (when shipped via #33) records the active provider id + path to config.toml + `wire_api`. `provider_config_source = "toml"`.
-- **Done when:** recording-schema test passes; reading a sample config.toml produces the expected `backend_metadata`.
+
+> **SUPERSEDED 2026-09-01 by #281.** The "active provider id" half of this
+> task is withdrawn as **unimplementable from a single config file**, and
+> the shipped backend records `provider_id: null`. Replacement output and
+> done-when below.
+
+- ~~**Output:** `scripts/benchmark_runner/backends/codex.py` (when shipped via #33) records the active provider id + path to config.toml + `wire_api`. `provider_config_source = "toml"`.~~
+- ~~**Done when:** recording-schema test passes; reading a sample config.toml produces the expected `backend_metadata`.~~
+- **Output (amended):** `scripts/benchmark_runner/backends/codex.py` records
+  the BASE user config path — `$CODEX_HOME/config.toml`, else
+  `~/.codex/config.toml` — and records the provider as **unestablished**
+  (`provider_id: null`). The file is not parsed, so no `wire_api` or
+  `provider_config_source` is derived from it.
+- **Done when (amended):** a multi-provider config attributes none of its
+  providers; `CODEX_HOME` decides the recorded path; an absent config
+  records null; a malformed config neither raises nor yields a provider.
+- **Why:** the backend passes codex no provider selection — neither
+  `-c model_provider=<id>` nor `--profile` — so codex chooses from its own
+  LAYERED configuration and the harness has no signal about which
+  provider answered. `--profile` layers `$CODEX_HOME/<name>.config.toml`
+  over the base file and `--ignore-user-config` drops it entirely
+  (codex-cli 0.147.0), so no single file answers the question. The
+  original task assumed one did. Reading a sample config.toml therefore
+  cannot produce a correct `provider_id`, which is why the original
+  done-when could only have been satisfied by a guess.
 
 ### T3.3 — GitHub Copilot CLI backend reads COPILOT_PROVIDER_*
 - **Output:** `scripts/benchmark_runner/backends/github_copilot.py` (when shipped via #33; gated on the verification PR per #33's acceptance criteria) records `COPILOT_PROVIDER_BASE_URL`, `COPILOT_MODEL`, `COPILOT_PROVIDER_TYPE`, `COPILOT_OFFLINE` (bool).
