@@ -104,7 +104,7 @@
     "repo_policy_source": "",
     "root": "",
     "tier_floor": "tier1",
-    "vote_epsilon": 1e-6
+    "vote_epsilon": 1e-06
   },
   "routing_evidence_roots": [],
   "sources": {

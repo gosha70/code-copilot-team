@@ -531,18 +531,56 @@ def load_config(
         api_key=str(env(ENV_JUDGE_API_KEY) or ""),
     )
 
-    # embedding (#285): same layering as everything else — the merged
-    # data (defaults < user JSON < CLI extra_overrides) with .env/env
-    # overrides on top. The URL shares ENV_OLLAMA_URL with the judge:
-    # one local Ollama is the operating assumption, and a split would
-    # need its own justification.
-    edata = dict(data.get(C.CFG_EMBEDDING) or {})
+    # embedding (#285, FR-8): defaults.json is the ONLY source of the
+    # embedding defaults. A structurally missing block or key is
+    # REFUSED — reconstructing packaged defaults here would create a
+    # second normative source beside the data file, which is the exact
+    # config-discipline failure the house rules exist to prevent.
+    #
+    # Per-field precedence, highest first:
+    #   CLI (the embedding block of extra_overrides, kept separately so
+    #        the caller's direct value genuinely wins)
+    #   > real env  > repo .env          (both via env())
+    #   > merged config (defaults.json < ~/.cct/session-analytics.json)
+    #
+    # Values are read by key PRESENCE, never truthiness: model == ""
+    # is a legitimate configured value (backend default model), not an
+    # absence. The URL shares ENV_OLLAMA_URL with the judge: one local
+    # Ollama is the operating assumption.
+    edata = data.get(C.CFG_EMBEDDING)
+    if not isinstance(edata, Mapping):
+        raise ValueError(
+            "config has no 'embedding' block — defaults.json is the single "
+            "source of embedding defaults, and the loader refuses to "
+            "reconstruct them in code"
+        )
+    _embed_required = (
+        C.CFG_EMBEDDING_BACKEND, C.CFG_EMBEDDING_MODEL, C.CFG_OLLAMA_URL,
+        C.CFG_EMBEDDING_INPUT_CAP, C.CFG_EMBEDDING_WORKERS,
+    )
+    _embed_missing = [k for k in _embed_required if k not in edata]
+    if _embed_missing:
+        raise ValueError(
+            f"embedding config is missing {', '.join(_embed_missing)} — "
+            f"defaults.json is the single source of embedding defaults"
+        )
+    _embed_cli = (extra_overrides or {}).get(C.CFG_EMBEDDING)
+    _embed_cli = dict(_embed_cli) if isinstance(_embed_cli, Mapping) else {}
+
+    def _embed_value(key: str, env_key: str) -> Any:
+        if key in _embed_cli:            # CLI — the caller's direct value
+            return _embed_cli[key]
+        ov = env(env_key)                # real env > repo .env
+        if ov is not None:
+            return ov
+        return edata[key]                # merged defaults < user JSON
+
     embedding = EmbeddingConfig(
-        backend=str(env(ENV_EMBED_BACKEND) or edata.get(C.CFG_EMBEDDING_BACKEND) or "ollama"),
-        model=str(env(ENV_EMBED_MODEL) or edata.get(C.CFG_EMBEDDING_MODEL) or ""),
-        ollama_url=str(env(ENV_OLLAMA_URL) or edata.get(C.CFG_OLLAMA_URL) or "http://localhost:11434"),
-        input_cap_chars=int(env(ENV_EMBED_INPUT_CAP) or edata.get(C.CFG_EMBEDDING_INPUT_CAP) or 8000),
-        workers=int(env(ENV_EMBED_WORKERS) or edata.get(C.CFG_EMBEDDING_WORKERS) or 1),
+        backend=str(_embed_value(C.CFG_EMBEDDING_BACKEND, ENV_EMBED_BACKEND)),
+        model=str(_embed_value(C.CFG_EMBEDDING_MODEL, ENV_EMBED_MODEL)),
+        ollama_url=str(_embed_value(C.CFG_OLLAMA_URL, ENV_OLLAMA_URL)),
+        input_cap_chars=int(_embed_value(C.CFG_EMBEDDING_INPUT_CAP, ENV_EMBED_INPUT_CAP)),
+        workers=int(_embed_value(C.CFG_EMBEDDING_WORKERS, ENV_EMBED_WORKERS)),
     )
 
     pricing = _load_pricing(data)

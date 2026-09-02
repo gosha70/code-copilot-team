@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -158,21 +159,29 @@ class TestRegistry(unittest.TestCase):
 
 
 class TestEmbeddingConfig(unittest.TestCase):
-    """FR-8: the loader's FULL precedence, hermetically.
+    """FR-8: the loader's FULL five-layer precedence, hermetically.
 
-    The real ~/.cct/session-analytics.json and repo .env are patched
-    out so the developer's machine cannot leak into assertions.
+    Hermeticity: the real ~/.cct/session-analytics.json is patched to a
+    temp path, the repo .env is replaced by an explicit dict, and every
+    real CCT_SA_* variable is REMOVED from the environment before each
+    test injects only what it intends — so the developer's machine
+    cannot leak into any assertion.
     """
 
-    def _load(self, *, user_json=None, environ=None):
+    def _load(self, *, user_json=None, dotenv=None, environ=None, cli=None):
         tmp = Path(tempfile.mkdtemp())
         user_path = tmp / "session-analytics.json"
         if user_json is not None:
             user_path.write_text(json.dumps(user_json), encoding="utf-8")
+        base = {k: v for k, v in os.environ.items() if not k.startswith("CCT_SA_")}
+        base.update(environ or {})
         with mock.patch.object(cfgmod, "_USER_CONFIG", user_path), \
-             mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", environ or {}, clear=False):
-            return cfgmod.load_config()
+             mock.patch.object(cfgmod, "parse_env_file",
+                               lambda *a, **k: dict(dotenv or {})), \
+             mock.patch.dict("os.environ", base, clear=True):
+            return cfgmod.load_config(
+                extra_overrides={"embedding": cli} if cli is not None else None
+            )
 
     def test_defaults_layer(self) -> None:
         e = self._load().embedding
@@ -182,37 +191,87 @@ class TestEmbeddingConfig(unittest.TestCase):
         )
         self.assertEqual(e.ollama_url, "http://localhost:11434")
 
-    def test_user_json_layer_overrides_defaults(self) -> None:
-        # The layer the first SDD draft dropped — pinned on its own.
+    # ── the full five-layer ladder, per the review's discriminators ──
+    def test_all_five_layers_cli_wins(self) -> None:
         e = self._load(
-            user_json={"embedding": {"model": "from-user-json", "input_cap_chars": 1234}}
+            user_json={"embedding": {"model": "B"}},
+            dotenv={cfgmod.ENV_EMBED_MODEL: "C"},
+            environ={cfgmod.ENV_EMBED_MODEL: "D"},
+            cli={"model": "E"},
         ).embedding
-        self.assertEqual(e.model, "from-user-json")
+        self.assertEqual(e.model, "E")
+
+    def test_without_cli_real_env_wins(self) -> None:
+        e = self._load(
+            user_json={"embedding": {"model": "B"}},
+            dotenv={cfgmod.ENV_EMBED_MODEL: "C"},
+            environ={cfgmod.ENV_EMBED_MODEL: "D"},
+        ).embedding
+        self.assertEqual(e.model, "D")
+
+    def test_without_env_dotenv_wins(self) -> None:
+        e = self._load(
+            user_json={"embedding": {"model": "B"}},
+            dotenv={cfgmod.ENV_EMBED_MODEL: "C"},
+        ).embedding
+        self.assertEqual(e.model, "C")
+
+    def test_without_dotenv_user_json_wins(self) -> None:
+        e = self._load(user_json={"embedding": {"model": "B"}}).embedding
+        self.assertEqual(e.model, "B")
+
+    def test_cli_empty_model_is_a_value_not_an_absence(self) -> None:
+        # "" means 'the backend default model' — presence, not
+        # truthiness, decides whether a layer spoke.
+        e = self._load(
+            environ={cfgmod.ENV_EMBED_MODEL: "D"},
+            cli={"model": ""},
+        ).embedding
+        self.assertEqual(e.model, "")
+
+    def test_unset_keys_keep_lower_layers(self) -> None:
+        e = self._load(
+            user_json={"embedding": {"input_cap_chars": 1234}},
+            cli={"model": "E"},
+        ).embedding
+        self.assertEqual(e.model, "E")
         self.assertEqual(e.input_cap_chars, 1234)
-        self.assertEqual(e.backend, "ollama")  # unset keys keep defaults
+        self.assertEqual(e.backend, "ollama")
 
-    def test_real_env_overrides_user_json(self) -> None:
-        e = self._load(
-            user_json={"embedding": {"model": "from-user-json"}},
-            environ={cfgmod.ENV_EMBED_MODEL: "from-env"},
-        ).embedding
-        self.assertEqual(e.model, "from-env")
+    # ── defaults.json is the ONLY source of defaults (behavioral) ────
+    def test_missing_embedding_block_is_refused_not_reconstructed(self) -> None:
+        base_defaults = cfgmod._read_defaults()
+        stripped = {k: v for k, v in base_defaults.items() if k != "embedding"}
+        with mock.patch.object(cfgmod, "_read_defaults", lambda: stripped):
+            with self.assertRaises(ValueError) as ctx:
+                self._load()
+        self.assertIn("single source of embedding defaults", str(ctx.exception))
 
-    def test_env_backend_and_cap_override(self) -> None:
-        e = self._load(
-            environ={
-                cfgmod.ENV_EMBED_BACKEND: "other",
-                cfgmod.ENV_EMBED_INPUT_CAP: "4321",
-            }
-        ).embedding
-        self.assertEqual(e.backend, "other")
-        self.assertEqual(e.input_cap_chars, 4321)
+    def test_missing_key_is_refused_and_named(self) -> None:
+        base_defaults = cfgmod._read_defaults()
+        crippled = json.loads(json.dumps(base_defaults))
+        del crippled["embedding"]["input_cap_chars"]
+        with mock.patch.object(cfgmod, "_read_defaults", lambda: crippled):
+            with self.assertRaises(ValueError) as ctx:
+                self._load()
+        self.assertIn("input_cap_chars", str(ctx.exception))
 
-    def test_no_hardcoded_default_in_new_source(self) -> None:
-        # The embedding modules define no literal fallback values of
-        # their own — config carries them. (config.py's resolution-line
-        # fallbacks mirror the judge's existing idiom and are the
-        # loader's job, not the modules'.)
+    def test_packaged_default_flows_from_the_data_file(self) -> None:
+        # Replace a packaged default with a sentinel: the loader must
+        # surface the sentinel, proving no Python literal recreates
+        # "ollama"/8000/1 behind the data file's back.
+        base_defaults = cfgmod._read_defaults()
+        sentinel = json.loads(json.dumps(base_defaults))
+        sentinel["embedding"]["backend"] = "sentinel-backend"
+        sentinel["embedding"]["input_cap_chars"] = 4242
+        with mock.patch.object(cfgmod, "_read_defaults", lambda: sentinel):
+            e = self._load().embedding
+        self.assertEqual(e.backend, "sentinel-backend")
+        self.assertEqual(e.input_cap_chars, 4242)
+
+    def test_no_literal_defaults_in_the_embedding_package(self) -> None:
+        # The behavioral pins above are the real guard; this grep keeps
+        # the embedding modules themselves clean too.
         pkg = Path(cfgmod.__file__).parent / "embedding"
         for py in pkg.glob("*.py"):
             text = py.read_text(encoding="utf-8")
