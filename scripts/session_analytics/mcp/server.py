@@ -15,8 +15,14 @@ from . import resources, tools
 SERVER_NAME = "session-analytics"
 
 
-def build_server(dsn: str):
-    """Construct (but do not run) a FastMCP server bound to ``dsn``."""
+def build_server(dsn: str, kuzu_path: str = ""):
+    """Construct (but do not run) a FastMCP server bound to ``dsn``.
+
+    ``kuzu_path`` is the CALLER'S resolved graph path (#287 T3): the
+    ``similar_sessions`` tool reads stored SIMILAR_TO edges from it,
+    non-creating — an empty/absent path yields a prerequisite result,
+    never a freshly created store.
+    """
     from mcp.server.fastmcp import FastMCP  # lazy: only needed to serve
 
     server = FastMCP(SERVER_NAME)
@@ -72,6 +78,18 @@ def build_server(dsn: str):
         finally:
             db.close()
 
+    @server.tool()
+    def similar_sessions(session_id: int, limit: int = 10) -> dict[str, Any]:
+        """Embedding-based neighbors for one session, from stored
+        SIMILAR_TO edges (basis: "embedding"; snapshot of the last
+        completed `similar` pass)."""
+        db = _db()
+        try:
+            return tools.similar_sessions(
+                db, kuzu_path, session_id, limit=limit)
+        finally:
+            db.close()
+
     # ── resources ──────────────────────────────────────────────────────
     @server.resource("history://recent-errors")
     def recent_errors() -> dict[str, Any]:
@@ -100,10 +118,16 @@ def build_server(dsn: str):
     return server
 
 
-def run(dsn: str = "") -> None:
+def run(dsn: str = "", kuzu_path: str = "") -> None:
     """Run the MCP server over stdio."""
-    resolved = dsn or load_config().dsn
+    cfg = None
+    resolved = dsn
+    resolved_kuzu = kuzu_path
+    if not resolved or not resolved_kuzu:
+        cfg = load_config()
+        resolved = resolved or cfg.dsn
+        resolved_kuzu = resolved_kuzu or cfg.kuzu_path
     if not resolved:
         raise ValueError("no DSN configured for the MCP server (see --dsn).")
-    server = build_server(resolved)
+    server = build_server(resolved, resolved_kuzu)
     server.run()  # FastMCP defaults to stdio transport

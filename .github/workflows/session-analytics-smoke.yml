@@ -54,8 +54,10 @@ jobs:
 
       # Install optional deps FIRST so the kuzu/fastapi/pyarrow-gated tests
       # actually run here (they skip when the package is absent).
-      - name: Install psycopg + kuzu + fastapi + pyarrow (Postgres/graph/API/export paths)
-        run: python3 -m pip install "psycopg[binary]>=3.1" "kuzu>=0.6" "fastapi>=0.110" "httpx>=0.27" "pyarrow>=14"
+      - name: Install psycopg + kuzu + fastapi + pyarrow + mcp (Postgres/graph/API/export/MCP paths)
+        # mcp is pinned <2: the server targets FastMCP, which mcp 2.x
+        # renamed (captured while wiring #287 T3).
+        run: python3 -m pip install "psycopg[binary]>=3.1" "kuzu>=0.6" "fastapi>=0.110" "httpx>=0.27" "pyarrow>=14" "mcp>=1.0,<2"
 
       - name: Run unittest suite (graph + API tests included)
         run: |

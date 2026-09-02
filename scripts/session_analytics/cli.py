@@ -1027,7 +1027,7 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
         print("error: no DSN configured (see --dsn).", file=sys.stderr)
         return C.EXIT_USAGE
     try:
-        server.run(cfg.dsn)
+        server.run(cfg.dsn, cfg.kuzu_path)
     except ImportError as exc:
         print(
             f"error: the mcp command needs the 'mcp' package (pip install mcp): {exc}",

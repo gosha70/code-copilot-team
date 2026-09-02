@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from typing import Any, Optional
 
 from ..relational.db import Database
@@ -185,7 +188,9 @@ def compare_approaches(db: Database, task_description: str, *, limit: int = 10) 
     """Find past sessions resembling a task and report their KPIs.
 
     Keyword match over project_path + first user turn; outcomes come from
-    session_kpi when present. (Embedding similarity is the E2 enhancement.)
+    session_kpi when present. For EMBEDDING-based session-to-session
+    similarity see ``similar_sessions`` (#287) — this tool's keyword
+    output shape is unchanged and carries no ``basis`` field.
     """
     terms = [t for t in (task_description or "").lower().split() if len(t) > 3][:6]
     # compare_approaches ranks by task-term match and never reads cost, so
@@ -218,6 +223,120 @@ def compare_approaches(db: Database, task_description: str, *, limit: int = 10) 
             scored.append(s)
     scored.sort(key=lambda x: x["match_score"], reverse=True)
     return scored[:limit]
+
+
+def similar_sessions(
+    db: Database, kuzu_path: str, session_id: int, *, limit: int = 10,
+) -> dict[str, Any]:
+    """Stored-edge similarity neighbors for one session (#287 T3, FR-F).
+
+    READ-ONLY over the graph, and NON-CREATING: the path is checked
+    before any connect, because ``GraphDatabase.connect`` mkdirs and
+    opens create-capable — an MCP read must never create the store it
+    reads (that is ``graph``'s job).
+
+    AN EMPTY NEIGHBOR LIST IS A HEALTHY ANSWER: a singleton space or
+    all-below-threshold scores legitimately produce no edges, and with
+    no pass metadata this tool cannot know whether the pass ran — so
+    it never prescribes one. Remedial guidance is reserved for
+    prerequisites it INDEPENDENTLY establishes: the session has no
+    validated envelope (relational read), the graph store is absent or
+    uninitialized, or the session has no graph node. Scores are a
+    SNAPSHOT of the last completed `similar` pass.
+    """
+    from ..embedding.contracts import validate_envelope
+
+    row = db.query_one(
+        "SELECT copilot, session_id, session_embedding "
+        "FROM copilot_session WHERE id = ?", (session_id,))
+    if row is None:
+        return {"error": f"session {session_id} not found"}
+    copilot, native_id, stored = row
+
+    # prerequisite 1, independently established from the relational
+    # store: a validated envelope.
+    envelope_err = None
+    if stored is None:
+        envelope_err = "no embedding envelope"
+    else:
+        try:
+            env = json.loads(stored)
+        except (json.JSONDecodeError, TypeError):
+            env = None
+        envelope_err = (
+            "unparseable embedding envelope" if env is None
+            else validate_envelope(env))
+    if envelope_err is not None:
+        return {
+            "error": f"session {session_id} has no validated embedding "
+                     f"({envelope_err})",
+            "prerequisite": "embedding",
+            "guidance": "run './scripts/session-analytics embed' first",
+        }
+
+    # prerequisite 2: the graph store — absent is checked BEFORE any
+    # connect (zero filesystem creation from this read path).
+    if not kuzu_path or not Path(kuzu_path).exists():
+        return {
+            "error": f"graph database absent at {kuzu_path or '(unset)'}",
+            "prerequisite": "graph",
+            "guidance": "run './scripts/session-analytics graph' first",
+        }
+
+    from ..embedding.similar_runner import KuzuEdgeStore
+    from ..graph.schema import GraphDatabase
+
+    session_key = f"{copilot}:{native_id}"
+    gdb = GraphDatabase.connect(kuzu_path)
+    try:
+        store = KuzuEdgeStore(gdb)
+        if not store.graph_ready():
+            return {
+                "error": "graph store holds no Session table",
+                "prerequisite": "graph",
+                "guidance": "run './scripts/session-analytics graph' first",
+            }
+        if not store.node_exists(session_key):
+            return {
+                "error": f"session {session_id} has no graph node",
+                "prerequisite": "graph",
+                "guidance": "run './scripts/session-analytics graph' to "
+                            "sync the graph, then 'similar'",
+            }
+        res = gdb.execute(
+            "MATCH (a:Session {session_key: $k})-[r:SIMILAR_TO]->(b:Session) "
+            "RETURN b.session_key, r.score", {"k": session_key})
+        pairs = []
+        while res.has_next():
+            dst, score = res.get_next()
+            pairs.append((str(dst), float(score)))
+    finally:
+        gdb.close()
+
+    pairs.sort(key=lambda p: (-p[1], p[0]))
+    neighbors = []
+    for dst_key, score in pairs[:limit]:
+        dst_copilot, _, dst_native = dst_key.partition(":")
+        info = db.query_one(
+            "SELECT id, project_path, started_at FROM copilot_session "
+            "WHERE copilot = ? AND session_id = ?",
+            (dst_copilot, dst_native))
+        neighbors.append({
+            "session_key": dst_key,
+            "id": info[0] if info else None,
+            "project_path": info[1] if info else None,
+            "started_at": info[2] if info else None,
+            "score": score,
+            "basis": "embedding",
+        })
+    # neighbors == [] is HEALTHY here: every prerequisite held, the
+    # stored snapshot simply contains no edges for this session.
+    return {
+        "session_id": session_id,
+        "basis": "embedding",
+        "scores_are": "a snapshot of the last completed 'similar' pass",
+        "neighbors": neighbors,
+    }
 
 
 def _b(v):

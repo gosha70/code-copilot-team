@@ -819,3 +819,230 @@ class TestSimilarCli(unittest.TestCase):
         rc, _ = self._main(
             [], run_stub=lambda: SimilarStats(excluded_invalid={7: "bad"}))
         self.assertEqual(rc, 3)  # failed-class condition
+
+
+class TestSimilarSessionsTool(unittest.TestCase):
+    """T3 — the MCP tool's prerequisite ladder, kuzu-free: every branch
+    here is independently established from the relational store or the
+    filesystem, BEFORE any graph connect."""
+
+    def setUp(self) -> None:
+        from session_analytics.relational.db import Database, apply_ddl
+
+        self.tmp = Path(tempfile.mkdtemp(prefix="cct-sa-mcp-sim-"))
+        self.db = Database.connect(f"sqlite:///{self.tmp / 'sa.db'}")
+        apply_ddl(self.db)
+        self.addCleanup(self.db.close)
+
+    def _session(self, native_id, envelope):
+        stored = (json.dumps(envelope) if isinstance(envelope, dict)
+                  else envelope)
+        sid = self.db.insert_returning_id(
+            "INSERT INTO copilot_session (copilot, session_id, turn_count, "
+            "session_embedding) VALUES (?, ?, ?, ?) RETURNING id",
+            ("claude-code", native_id, 0, stored))
+        self.db.commit()
+        return sid
+
+    def _tool(self, session_id, kuzu_path=""):
+        from session_analytics.mcp.tools import similar_sessions
+
+        return similar_sessions(self.db, kuzu_path, session_id)
+
+    def test_unknown_session_is_an_error(self) -> None:
+        out = self._tool(999999)
+        self.assertIn("not found", out["error"])
+
+    def test_missing_envelope_gets_embedding_guidance(self) -> None:
+        sid = self._session("a", None)
+        out = self._tool(sid)
+        self.assertEqual(out["prerequisite"], "embedding")
+        self.assertIn("embed", out["guidance"])
+
+    def test_invalid_envelope_gets_embedding_guidance(self) -> None:
+        sid = self._session("a", "not json")
+        out = self._tool(sid)
+        self.assertEqual(out["prerequisite"], "embedding")
+
+    def test_absent_graph_gets_graph_guidance_with_zero_creation(self) -> None:
+        sid = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        missing = self.tmp / "never-created"
+        out = self._tool(sid, kuzu_path=str(missing))
+        self.assertEqual(out["prerequisite"], "graph")
+        self.assertFalse(missing.exists())  # NON-CREATING read path
+
+    def test_unset_kuzu_path_is_graph_prerequisite_not_a_crash(self) -> None:
+        sid = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        out = self._tool(sid, kuzu_path="")
+        self.assertEqual(out["prerequisite"], "graph")
+
+    def test_compare_approaches_output_is_untouched(self) -> None:
+        # FR-F: the keyword tool's shape is unchanged — match_score,
+        # no basis field. Byte-level pin on its fixture output.
+        from session_analytics.mcp.tools import compare_approaches
+
+        self.db.execute(
+            "UPDATE copilot_session SET project_path = ? WHERE 1=1",
+            ("/home/x/login-bug-fix",))
+        self.db.commit()
+        self._session("kw", None)
+        self.db.execute(
+            "UPDATE copilot_session SET project_path = ?",
+            ("/home/x/login-bug-fix",))
+        self.db.commit()
+        out = compare_approaches(self.db, "login bug fix")
+        self.assertTrue(out)
+        for row in out:
+            self.assertIn("match_score", row)
+            self.assertNotIn("basis", row)
+
+
+@unittest.skipUnless(_KUZU, "kuzu not installed; live MCP-tool graph paths skipped (covered where kuzu is present)")
+class TestSimilarSessionsToolLiveKuzu(unittest.TestCase):
+    """T3 — the tool's graph-backed branches against real Kùzu."""
+
+    def _world(self, *, build_graph=True, run_pass=True):
+        from session_analytics.config import SimilarityConfig
+        from session_analytics.embedding.similar_runner import (
+            KuzuEdgeStore, run_similar)
+        from session_analytics.graph import builder
+        from session_analytics.graph.schema import GraphDatabase
+        from session_analytics.relational.db import Database, apply_ddl
+
+        tmp = Path(tempfile.mkdtemp(prefix="cct-sa-mcp-simlive-"))
+        db = Database.connect(f"sqlite:///{tmp / 'sa.db'}")
+        apply_ddl(db)
+        self.addCleanup(db.close)
+        sids = {}
+        for native_id, vec in (("a", (1.0, 0.0, 0.0)),
+                               ("b", (0.9, 0.1, 0.0)),
+                               ("lone", (0.0, 0.0, 1.0))):
+            sids[native_id] = db.insert_returning_id(
+                "INSERT INTO copilot_session (copilot, session_id, "
+                "turn_count, session_embedding) VALUES (?, ?, ?, ?) "
+                "RETURNING id",
+                ("claude-code", native_id, 0,
+                 json.dumps(_env(vector=vec))))
+        db.commit()
+        graph_path = str(tmp / "g")
+        if build_graph:
+            builder.build(db, graph_path)
+            if run_pass:
+                gdb = GraphDatabase.connect(graph_path)
+                try:
+                    run_similar(db, SimilarityConfig(threshold=0.5, top_k=3),
+                                KuzuEdgeStore(gdb))
+                finally:
+                    gdb.close()
+        return db, graph_path, sids, tmp
+
+    def test_neighbors_carry_score_basis_and_snapshot_note(self) -> None:
+        from session_analytics.mcp.tools import similar_sessions
+
+        db, graph_path, sids, _ = self._world()
+        out = similar_sessions(db, graph_path, sids["a"])
+        self.assertEqual(out["basis"], "embedding")
+        self.assertIn("snapshot", out["scores_are"])
+        self.assertEqual(len(out["neighbors"]), 1)
+        n = out["neighbors"][0]
+        self.assertEqual(n["session_key"], "claude-code:b")
+        self.assertEqual(n["basis"], "embedding")
+        self.assertGreater(n["score"], 0.5)
+        self.assertEqual(n["id"], sids["b"])
+
+    def test_healthy_empty_for_a_below_threshold_session(self) -> None:
+        # "lone" is orthogonal to everything: no edges is the HEALTHY
+        # outcome, with no error and no remedial instruction.
+        from session_analytics.mcp.tools import similar_sessions
+
+        db, graph_path, sids, _ = self._world()
+        out = similar_sessions(db, graph_path, sids["lone"])
+        self.assertEqual(out["neighbors"], [])
+        self.assertNotIn("error", out)
+        self.assertNotIn("guidance", out)
+
+    def test_uninitialized_graph_gets_graph_guidance(self) -> None:
+        import kuzu as _kuzu
+
+        from session_analytics.mcp.tools import similar_sessions
+
+        db, _, sids, tmp = self._world(build_graph=False)
+        bare = tmp / "bare"
+        _kuzu.Database(str(bare))  # exists, no schema
+        out = similar_sessions(db, str(bare), sids["a"])
+        self.assertEqual(out["prerequisite"], "graph")
+
+    def test_missing_graph_node_gets_graph_sync_guidance(self) -> None:
+        from session_analytics.mcp.tools import similar_sessions
+        from session_analytics.relational.db import Database
+
+        db, graph_path, sids, tmp = self._world()
+        # a session added AFTER the graph build has no node yet
+        late = db.insert_returning_id(
+            "INSERT INTO copilot_session (copilot, session_id, turn_count, "
+            "session_embedding) VALUES (?, ?, ?, ?) RETURNING id",
+            ("claude-code", "late", 0,
+             json.dumps(_env(vector=(0.5, 0.5, 0.0)))))
+        db.commit()
+        out = similar_sessions(db, graph_path, late)
+        self.assertEqual(out["prerequisite"], "graph")
+        self.assertIn("graph node", out["error"])
+
+
+_MCP_SDK = __import__("importlib").util.find_spec("mcp") is not None
+
+
+@unittest.skipUnless(_KUZU and _MCP_SDK,
+                     "kuzu+mcp not installed; registered-tool test skipped (runs where both are present)")
+class TestRegisteredMcpTool(unittest.TestCase):
+    """T3 — the REAL server factory, with a NONDEFAULT kuzu_path: the
+    config plumbing itself is the test target, not a shortcut around
+    it."""
+
+    def test_registered_tool_reads_the_configured_graph(self) -> None:
+        import anyio
+
+        from session_analytics.config import SimilarityConfig
+        from session_analytics.embedding.similar_runner import (
+            KuzuEdgeStore, run_similar)
+        from session_analytics.graph import builder
+        from session_analytics.graph.schema import GraphDatabase
+        from session_analytics.mcp.server import build_server
+        from session_analytics.relational.db import Database, apply_ddl
+
+        tmp = Path(tempfile.mkdtemp(prefix="cct-sa-mcp-reg-"))
+        dsn = f"sqlite:///{tmp / 'sa.db'}"
+        db = Database.connect(dsn)
+        apply_ddl(db)
+        sid_a = db.insert_returning_id(
+            "INSERT INTO copilot_session (copilot, session_id, turn_count, "
+            "session_embedding) VALUES (?, ?, ?, ?) RETURNING id",
+            ("claude-code", "a", 0, json.dumps(_env(vector=(1.0, 0.0, 0.0)))))
+        db.insert_returning_id(
+            "INSERT INTO copilot_session (copilot, session_id, turn_count, "
+            "session_embedding) VALUES (?, ?, ?, ?) RETURNING id",
+            ("claude-code", "b", 0, json.dumps(_env(vector=(0.9, 0.1, 0.0)))))
+        db.commit()
+        nondefault_graph = str(tmp / "nondefault" / "graph-here")
+        builder.build(db, nondefault_graph)
+        gdb = GraphDatabase.connect(nondefault_graph)
+        try:
+            run_similar(db, SimilarityConfig(threshold=0.5, top_k=3),
+                        KuzuEdgeStore(gdb))
+        finally:
+            gdb.close()
+        db.close()
+
+        server = build_server(dsn, nondefault_graph)
+
+        async def _call():
+            return await server.call_tool(
+                "similar_sessions", {"session_id": sid_a})
+
+        result = anyio.run(_call)
+        # FastMCP returns content blocks; find our payload
+        text = "".join(
+            getattr(block, "text", "") for block in
+            (result if isinstance(result, list) else result[0]))
+        self.assertIn('"basis": "embedding"', text)
+        self.assertIn("claude-code:b", text)
