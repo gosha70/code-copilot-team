@@ -37,6 +37,8 @@ ENV_EMBED_BACKEND = "CCT_SA_EMBED_BACKEND"
 ENV_EMBED_MODEL = "CCT_SA_EMBED_MODEL"
 ENV_EMBED_INPUT_CAP = "CCT_SA_EMBED_INPUT_CAP"
 ENV_EMBED_WORKERS = "CCT_SA_EMBED_WORKERS"
+ENV_SIMILARITY_THRESHOLD = "CCT_SA_SIMILARITY_THRESHOLD"
+ENV_SIMILARITY_TOP_K = "CCT_SA_SIMILARITY_TOP_K"
 ENV_SOURCE_PREFIX = "CCT_SA_SOURCE_"  # + COPILOT (e.g. CCT_SA_SOURCE_CLAUDE_CODE)
 # Routing-shadow (#261): evidence roots are SERVER-SIDE configuration —
 # the API never serves the raw paths (only {configured, root_count}).
@@ -130,6 +132,15 @@ class EmbeddingConfig:
 
 
 @dataclass(frozen=True)
+class SimilarityConfig:
+    """Similarity pass knobs (#287). Scores at or above ``threshold``
+    are edge-eligible; each session keeps its ``top_k`` best."""
+
+    threshold: float
+    top_k: int
+
+
+@dataclass(frozen=True)
 class ProjectOverride:
     """One ``projects.<key>`` entry: a per-project redaction/ingest override.
 
@@ -160,6 +171,7 @@ class AnalyticsConfig:
     redaction_mode: str
     judge: JudgeConfig
     embedding: "EmbeddingConfig"
+    similarity: "SimilarityConfig"
     pricing: "PricingConfig"
     projects: Mapping[str, ProjectOverride] = field(default_factory=dict)
     project_id_rules: tuple[ProjectIdRule, ...] = field(default_factory=tuple)
@@ -583,6 +595,39 @@ def load_config(
         workers=int(_embed_value(C.CFG_EMBEDDING_WORKERS, ENV_EMBED_WORKERS)),
     )
 
+    # similarity (#287): the same discipline as embedding — the data
+    # file is the ONLY source of defaults, presence beats truthiness,
+    # CLI (the similarity block of extra_overrides) is highest.
+    sdata = data.get(C.CFG_SIMILARITY)
+    if not isinstance(sdata, Mapping):
+        raise ValueError(
+            "config has no 'similarity' block — defaults.json is the "
+            "single source of similarity defaults, and the loader refuses "
+            "to reconstruct them in code"
+        )
+    _sim_required = (C.CFG_SIMILARITY_THRESHOLD, C.CFG_SIMILARITY_TOP_K)
+    _sim_missing = [k for k in _sim_required if k not in sdata]
+    if _sim_missing:
+        raise ValueError(
+            f"similarity config is missing {', '.join(_sim_missing)} — "
+            f"defaults.json is the single source of similarity defaults"
+        )
+    _sim_cli = (extra_overrides or {}).get(C.CFG_SIMILARITY)
+    _sim_cli = dict(_sim_cli) if isinstance(_sim_cli, Mapping) else {}
+
+    def _sim_value(key: str, env_key: str) -> Any:
+        if key in _sim_cli:
+            return _sim_cli[key]
+        ov = env(env_key)
+        if ov is not None:
+            return ov
+        return sdata[key]
+
+    similarity = SimilarityConfig(
+        threshold=float(_sim_value(C.CFG_SIMILARITY_THRESHOLD, ENV_SIMILARITY_THRESHOLD)),
+        top_k=int(_sim_value(C.CFG_SIMILARITY_TOP_K, ENV_SIMILARITY_TOP_K)),
+    )
+
     pricing = _load_pricing(data)
     projects, project_id_rules = _load_projects(data)
 
@@ -595,6 +640,7 @@ def load_config(
         redaction_mode=resolved_redaction,
         judge=judge,
         embedding=embedding,
+        similarity=similarity,
         pricing=pricing,
         projects=projects,
         project_id_rules=project_id_rules,

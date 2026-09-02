@@ -82,6 +82,11 @@ CFG_EMBEDDING_MODEL = "model"
 CFG_EMBEDDING_INPUT_CAP = "input_cap_chars"
 CFG_EMBEDDING_WORKERS = "workers"
 
+# ── Similarity config keys (#287, E2 slice 2) ────────────────────────
+CFG_SIMILARITY = "similarity"
+CFG_SIMILARITY_THRESHOLD = "threshold"
+CFG_SIMILARITY_TOP_K = "top_k"
+
 # ── Per-project privacy config keys (session-analytics-privacy-granularity) ──
 CFG_PROJECTS = "projects"
 CFG_PROJECT_INGEST = "ingest"
