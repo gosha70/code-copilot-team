@@ -328,3 +328,317 @@ class TestSimilarityConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FakeEdgeStore:
+    """GraphEdgeStore with REAL transaction semantics: mutations buffer
+    between begin() and commit(); rollback() discards them — so the
+    injected-failure test asserts on actual edge state, not on call
+    sequences."""
+
+    def __init__(self, nodes=(), edges=None):
+        self.nodes = set(nodes)
+        self.edges: dict[tuple[str, str], float] = dict(edges or {})
+        self._tx: dict[tuple[str, str], float] | None = None
+        self.begin_calls = 0
+        self.fail_on_write: int | None = None  # fail the Nth write_edge
+        self._writes = 0
+
+    def _view(self):
+        return self._tx if self._tx is not None else self.edges
+
+    def begin(self):
+        self.begin_calls += 1
+        self._tx = dict(self.edges)
+
+    def commit(self):
+        assert self._tx is not None, "commit outside a transaction"
+        self.edges = self._tx
+        self._tx = None
+
+    def rollback(self):
+        assert self._tx is not None, "rollback outside a transaction"
+        self._tx = None
+
+    def existing_edge_sources(self):
+        return {src for src, _ in self._view()}
+
+    def node_exists(self, session_key):
+        return session_key in self.nodes
+
+    def delete_outgoing(self, session_key):
+        view = self._view()
+        gone = [k for k in view if k[0] == session_key]
+        for k in gone:
+            del view[k]
+        return len(gone)
+
+    def write_edge(self, src_key, dst_key, score):
+        self._writes += 1
+        if self.fail_on_write is not None and self._writes >= self.fail_on_write:
+            raise RuntimeError("injected write failure")
+        self._view()[(src_key, dst_key)] = score
+
+
+class TestSimilarRunner(unittest.TestCase):
+    """T2 — FR-D reconciliation + FR-E lifecycle, against the fake
+    store (kuzu-free); the Kùzu store itself is exercised by the
+    kuzu-marked class below (CI installs kuzu)."""
+
+    def setUp(self) -> None:
+        from session_analytics.config import SimilarityConfig
+        from session_analytics.relational.db import Database, apply_ddl
+
+        tmp = Path(tempfile.mkdtemp(prefix="cct-sa-similar-"))
+        self.db = Database.connect(f"sqlite:///{tmp / 'sa.db'}")
+        apply_ddl(self.db)
+        self.addCleanup(self.db.close)
+        self.cfg = SimilarityConfig(threshold=0.2, top_k=3)
+
+    def _session(self, native_id, envelope):
+        stored = json.dumps(envelope) if isinstance(envelope, dict) else envelope
+        sid = self.db.insert_returning_id(
+            "INSERT INTO copilot_session (copilot, session_id, turn_count, "
+            "session_embedding) VALUES (?, ?, ?, ?) RETURNING id",
+            ("claude-code", native_id, 0, stored),
+        )
+        self.db.commit()
+        return sid, f"claude-code:{native_id}"
+
+    def _run(self, store):
+        from session_analytics.embedding.similar_runner import run_similar
+
+        return run_similar(self.db, self.cfg, store)
+
+    def test_edges_written_within_a_space(self) -> None:
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        _, kb = self._session("b", _env(vector=(0.9, 0.1, 0.0)))
+        store = _FakeEdgeStore(nodes={ka, kb})
+        stats = self._run(store)
+        self.assertEqual(stats.action, "reconciled")
+        self.assertIn((ka, kb), store.edges)
+        self.assertIn((kb, ka), store.edges)
+        self.assertEqual(stats.written_edges, 2)
+
+    def test_cross_space_edges_are_impossible(self) -> None:
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        _, kb = self._session("b", _env(model="other", vector=(1.0, 0.0, 0.0)))
+        store = _FakeEdgeStore(nodes={ka, kb})
+        self._run(store)
+        self.assertEqual(store.edges, {})  # identical vectors, different space
+
+    def test_run_twice_converges(self) -> None:
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        _, kb = self._session("b", _env(vector=(0.9, 0.1, 0.0)))
+        store = _FakeEdgeStore(nodes={ka, kb})
+        self._run(store)
+        first = dict(store.edges)
+        stats2 = self._run(store)
+        self.assertEqual(store.edges, first)
+        self.assertEqual(stats2.written_edges, 2)  # rewritten, same set
+
+    def test_removed_source_edges_are_retired(self) -> None:
+        # THE COUNTER-EXAMPLE from plan review: A→B exists, A's
+        # envelope goes away — A is no longer eligible, and its edge
+        # must retire anyway.
+        sid_a, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        _, kb = self._session("b", _env(vector=(0.9, 0.1, 0.0)))
+        store = _FakeEdgeStore(nodes={ka, kb})
+        self._run(store)
+        self.db.execute(
+            "UPDATE copilot_session SET session_embedding = NULL WHERE id = ?",
+            (sid_a,))
+        self.db.commit()
+        stats = self._run(store)
+        self.assertEqual([k for k in store.edges if k[0] == ka], [])
+        self.assertGreaterEqual(stats.retired_sources, 1)
+
+    def test_all_ineligible_retires_everything_and_says_so(self) -> None:
+        sid_a, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        sid_b, kb = self._session("b", _env(vector=(0.9, 0.1, 0.0)))
+        store = _FakeEdgeStore(nodes={ka, kb})
+        self._run(store)
+        for sid in (sid_a, sid_b):
+            self.db.execute(
+                "UPDATE copilot_session SET session_embedding = NULL "
+                "WHERE id = ?", (sid,))
+        self.db.commit()
+        stats = self._run(store)
+        self.assertEqual(store.edges, {})
+        self.assertEqual(stats.action, "reconciled")  # retirement RAN
+        self.assertEqual(stats.retired_edges, 2)
+
+    def test_truly_empty_store_is_nothing_to_do(self) -> None:
+        store = _FakeEdgeStore()
+        stats = self._run(store)
+        self.assertEqual(stats.action, "nothing-to-do")
+        self.assertEqual(store.begin_calls, 0)  # no tx at all
+
+    def test_missing_graph_node_counted_never_created(self) -> None:
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        _, kb = self._session("b", _env(vector=(0.9, 0.1, 0.0)))
+        store = _FakeEdgeStore(nodes={ka})  # b has no graph node
+        stats = self._run(store)
+        self.assertEqual(stats.missing_graph_node, 1)
+        self.assertEqual(store.edges, {})   # a alone: no neighbors
+        self.assertEqual(store.nodes, {ka})  # nothing created
+
+    def test_invalid_envelope_excluded_and_reported(self) -> None:
+        self._session("bad", "not json")
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        store = _FakeEdgeStore(nodes={ka})
+        stats = self._run(store)
+        self.assertEqual(len(stats.excluded_invalid), 1)
+
+    def test_injected_write_failure_preserves_previous_edge_set(self) -> None:
+        # THE T2 INTEGRATION REQUIREMENT: the mutation phase is
+        # transactional, so a mid-write failure leaves the PREVIOUS
+        # complete edge set intact — scores describe the last COMPLETED
+        # pass.
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        _, kb = self._session("b", _env(vector=(0.9, 0.1, 0.0)))
+        store = _FakeEdgeStore(nodes={ka, kb})
+        self._run(store)
+        previous = dict(store.edges)
+        self.assertTrue(previous)
+        store.fail_on_write = 1  # next pass: first write explodes
+        with self.assertRaises(RuntimeError):
+            self._run(store)
+        self.assertEqual(store.edges, previous)  # rolled back, intact
+
+    def test_no_embedding_backend_is_ever_consulted(self) -> None:
+        # FR-E: strictly local. The embedding registry must not be
+        # touched by this pass under any input.
+        from session_analytics.embedding import registry as embreg
+
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        _, kb = self._session("b", _env(vector=(0.9, 0.1, 0.0)))
+        store = _FakeEdgeStore(nodes={ka, kb})
+
+        def _forbidden(*a, **k):
+            raise AssertionError("embedding backend consulted by `similar`")
+
+        with mock.patch.object(embreg, "get_embedding", _forbidden):
+            stats = self._run(store)
+        self.assertEqual(stats.written_edges, 2)
+
+    def test_threshold_and_top_k_govern_edges(self) -> None:
+        from session_analytics.config import SimilarityConfig
+
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        _, kb = self._session("b", _env(vector=(0.0, 1.0, 0.0)))
+        store = _FakeEdgeStore(nodes={ka, kb})
+        self.cfg = SimilarityConfig(threshold=0.9, top_k=3)
+        stats = self._run(store)
+        self.assertEqual(store.edges, {})  # orthogonal: below threshold
+        self.assertEqual(stats.action, "reconciled")
+
+
+_KUZU = __import__("importlib").util.find_spec("kuzu") is not None
+
+
+@unittest.skipUnless(_KUZU, "kuzu not installed; live graph pass skipped (covered in CI)")
+class TestSimilarRunnerLiveKuzu(unittest.TestCase):
+    """The KuzuEdgeStore against a real Kùzu database (CI)."""
+
+    def _stores(self):
+        from session_analytics.graph import builder
+        from session_analytics.relational.db import Database, apply_ddl
+
+        tmp = Path(tempfile.mkdtemp(prefix="cct-sa-similar-kuzu-"))
+        db = Database.connect(f"sqlite:///{tmp / 'sa.db'}")
+        apply_ddl(db)
+        self.addCleanup(db.close)
+        for native_id, vec in (("a", (1.0, 0.0, 0.0)), ("b", (0.9, 0.1, 0.0))):
+            db.insert_returning_id(
+                "INSERT INTO copilot_session (copilot, session_id, turn_count, "
+                "session_embedding) VALUES (?, ?, ?, ?) RETURNING id",
+                ("claude-code", native_id, 0, json.dumps(_env(vector=vec))),
+            )
+        db.commit()
+        graph_path = str(tmp / "g")
+        builder.build(db, graph_path)  # creates the Session nodes
+        return db, graph_path
+
+    def test_live_pass_writes_and_survives_injected_failure(self) -> None:
+        from session_analytics.config import SimilarityConfig
+        from session_analytics.embedding.similar_runner import (
+            KuzuEdgeStore, run_similar)
+        from session_analytics.graph.schema import GraphDatabase
+
+        db, graph_path = self._stores()
+        cfg = SimilarityConfig(threshold=0.2, top_k=3)
+
+        gdb = GraphDatabase.connect(graph_path)
+        try:
+            store = KuzuEdgeStore(gdb)
+            stats = run_similar(db, cfg, store)
+            self.assertEqual(stats.written_edges, 2)
+            previous = store.existing_edge_sources()
+            self.assertEqual(len(previous), 2)
+
+            # inject a failure on the first edge write of the next pass
+            real_write = store.write_edge
+
+            def poisoned(src, dst, score):
+                raise RuntimeError("injected live failure")
+
+            store.write_edge = poisoned  # type: ignore[method-assign]
+            with self.assertRaises(RuntimeError):
+                run_similar(db, cfg, store)
+            store.write_edge = real_write  # type: ignore[method-assign]
+            # previous edge set intact after rollback
+            self.assertEqual(store.existing_edge_sources(), previous)
+        finally:
+            gdb.close()
+
+
+class TestSimilarCli(unittest.TestCase):
+    """T2 — the CLI seam: flags → extra_overrides → runner; exits."""
+
+    def _main(self, argv, run_stub=None):
+        from session_analytics import cli as climod
+        import session_analytics.embedding.similar_runner as runner_mod
+        from session_analytics.embedding.similar_runner import SimilarStats
+
+        captured = {}
+
+        def fake_run_similar(db, similarity_cfg, store):
+            captured["cfg"] = similarity_cfg
+            return (run_stub or SimilarStats)()
+
+        class _FakeGdb:
+            def close(self):
+                pass
+
+        tmp = Path(tempfile.mkdtemp(prefix="cct-sa-simcli-"))
+        dsn = f"sqlite:///{tmp / 'sa.db'}"
+        base = {k: v for k, v in os.environ.items()
+                if not k.startswith("CCT_SA_")}
+        from session_analytics.graph import schema as schema_mod
+        with mock.patch.object(runner_mod, "run_similar", fake_run_similar), \
+             mock.patch.object(schema_mod.GraphDatabase, "connect",
+                               staticmethod(lambda path: _FakeGdb())), \
+             mock.patch.object(cfgmod, "_USER_CONFIG",
+                               tmp / "session-analytics.json"), \
+             mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", base, clear=True):
+            rc = climod.main(["similar", "--dsn", dsn, *argv])
+        return rc, captured
+
+    def test_cli_flags_reach_the_resolved_config(self) -> None:
+        rc, cap = self._main(["--threshold", "0.8", "--top-k", "2"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(cap["cfg"].threshold, 0.8)
+        self.assertEqual(cap["cfg"].top_k, 2)
+
+    def test_refused_knob_is_usage_error_not_traceback(self) -> None:
+        rc, _ = self._main(["--threshold", "nan"])
+        self.assertEqual(rc, 2)  # EXIT_USAGE, message names the setting
+
+    def test_invalid_envelopes_exit_nonzero(self) -> None:
+        from session_analytics.embedding.similar_runner import SimilarStats
+
+        rc, _ = self._main(
+            [], run_stub=lambda: SimilarStats(excluded_invalid={7: "bad"}))
+        self.assertEqual(rc, 3)  # failed-class condition
