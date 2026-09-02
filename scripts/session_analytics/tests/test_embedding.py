@@ -281,3 +281,158 @@ class TestEmbeddingConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestComposer(unittest.TestCase):
+    """T2 — FR-1 (allowlist) and FR-7 (determinism, truncation).
+
+    The fixture DB plants a sensitive marker in EVERY text-bearing
+    column outside the allowlist that shares a row or session with the
+    composed turns — session metadata, tool I/O, raw-differing
+    preview-adjacent fields — so the assertions prove the allowlist,
+    not the absence of one lucky string.
+    """
+
+    RAW_MARKER = "RAW_TRANSCRIPT_MARKER_9f3"
+    PATH_MARKER = "SECRET_PROJECT_PATH_MARKER_a71"
+    BENCH_MARKER = "BENCH_RUN_DIR_MARKER_c44"
+
+    def setUp(self) -> None:
+        from session_analytics.relational.db import Database, apply_ddl
+
+        tmp = Path(tempfile.mkdtemp(prefix="cct-sa-embed-"))
+        self.db = Database.connect(f"sqlite:///{tmp / 'sa.db'}")
+        apply_ddl(self.db)
+        self.sid = self.db.insert_returning_id(
+            "INSERT INTO copilot_session (copilot, session_id, project_path, "
+            "benchmark_run_dir, turn_count) VALUES (?, ?, ?, ?, ?) RETURNING id",
+            ("claude-code", "sess-1", f"/home/x/{self.PATH_MARKER}",
+             f"/runs/{self.BENCH_MARKER}", 3),
+        )
+        # Turn previews are the ONLY text allowed through. slash_command
+        # and uuid carry the raw marker to prove other copilot_turn
+        # columns are excluded too.
+        for seq, role, preview in (
+            (0, "user", "please fix the login bug"),
+            (1, "assistant", "reading auth.py and the failing test"),
+            (2, "user", ""),          # empty preview: contributes nothing
+            (3, "assistant", None),   # NULL preview: contributes nothing
+            (4, "assistant", "done - added a null check"),
+        ):
+            self.db.execute(
+                "INSERT INTO copilot_turn (session_id, sequence_num, role, "
+                "content_preview, content_length, slash_command, uuid) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (self.sid, seq, role, preview, len(preview or ""),
+                 f"/cmd-{self.RAW_MARKER}", f"uuid-{self.RAW_MARKER}"),
+            )
+        self.db.commit()
+        self.addCleanup(self.db.close)
+
+    def _compose(self, cap=8000):
+        from session_analytics.embedding.composer import compose_input
+
+        return compose_input(self.db, self.sid, cap_chars=cap)
+
+    # ── FR-1: the allowlist, proven on planted markers ───────────────
+    def test_no_marker_reaches_the_composed_text(self) -> None:
+        text = self._compose().text
+        for marker in (self.RAW_MARKER, self.PATH_MARKER, self.BENCH_MARKER):
+            self.assertNotIn(marker, text)
+
+    def test_preview_text_is_present_and_role_tagged(self) -> None:
+        text = self._compose().text
+        self.assertIn("user: please fix the login bug", text)
+        self.assertIn("assistant: reading auth.py and the failing test", text)
+
+    def test_the_query_names_exactly_the_allowlist(self) -> None:
+        # The SQL is generated from COMPOSER_COLUMNS; pin both halves so
+        # the constant and the query cannot drift, and no session join
+        # sneaks in.
+        from session_analytics.embedding import composer
+
+        self.assertEqual(
+            composer.COMPOSER_COLUMNS,
+            ("sequence_num", "role", "content_preview"),
+        )
+        sql = composer._SELECT.lower()
+        self.assertIn("from copilot_turn", sql)
+        self.assertNotIn("join", sql)
+        self.assertNotIn("copilot_session", sql)
+        for forbidden in ("project_path", "benchmark_run_dir", "slash_command",
+                          "uuid", "has_tool_use", "model"):
+            self.assertNotIn(forbidden, sql)
+
+    def test_module_source_references_no_forbidden_column(self) -> None:
+        from session_analytics.embedding import composer
+
+        src = Path(composer.__file__).read_text(encoding="utf-8")
+        # Behaviour is pinned above; this keeps even a second, unused
+        # query from appearing without review: exactly one FROM over
+        # exactly one table, and it is copilot_turn.
+        self.assertEqual(src.lower().count("from copilot_"), 1)
+        self.assertIn("from copilot_turn", src.lower())
+
+    # ── FR-7: determinism, ordering, truncation, emptiness ───────────
+    def test_byte_identical_on_repeat(self) -> None:
+        a, b = self._compose(), self._compose()
+        self.assertEqual(a.text, b.text)
+        self.assertEqual(a, b)
+
+    def test_ordered_by_sequence_num(self) -> None:
+        text = self._compose().text
+        self.assertLess(
+            text.index("please fix"), text.index("reading auth.py"))
+        self.assertLess(
+            text.index("reading auth.py"), text.index("null check"))
+
+    def test_empty_and_null_previews_contribute_nothing(self) -> None:
+        c = self._compose()
+        self.assertEqual(c.turns_used, 3)  # 5 rows, 2 without preview
+
+    def test_truncation_keeps_the_head_and_is_reported(self) -> None:
+        full = self._compose().text
+        c = self._compose(cap=20)
+        self.assertTrue(c.truncated)
+        self.assertEqual(c.text, full[:20])
+        self.assertFalse(self._compose().truncated)
+
+    def test_cap_boundary_is_not_a_truncation(self) -> None:
+        full = self._compose().text
+        c = self._compose(cap=len(full))
+        self.assertFalse(c.truncated)
+        self.assertEqual(c.text, full)
+
+    def test_nonpositive_cap_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self._compose(cap=0)
+
+    def test_empty_session_is_unembeddable_not_empty_string(self) -> None:
+        sid2 = self.db.insert_returning_id(
+            "INSERT INTO copilot_session (copilot, session_id, turn_count) "
+            "VALUES (?, ?, ?) RETURNING id",
+            ("claude-code", "sess-empty", 0),
+        )
+        self.db.commit()
+        from session_analytics.embedding.composer import compose_input
+
+        c = compose_input(self.db, sid2, cap_chars=8000)
+        self.assertTrue(c.unembeddable)
+        self.assertEqual(c.text, "")
+        self.assertEqual(c.turns_used, 0)
+
+    def test_all_blank_previews_are_unembeddable_too(self) -> None:
+        sid3 = self.db.insert_returning_id(
+            "INSERT INTO copilot_session (copilot, session_id, turn_count) "
+            "VALUES (?, ?, ?) RETURNING id",
+            ("claude-code", "sess-blank", 1),
+        )
+        self.db.execute(
+            "INSERT INTO copilot_turn (session_id, sequence_num, role, "
+            "content_preview, content_length) VALUES (?, ?, ?, ?, ?)",
+            (sid3, 0, "user", "", 0),
+        )
+        self.db.commit()
+        from session_analytics.embedding.composer import compose_input
+
+        self.assertTrue(compose_input(self.db, sid3, cap_chars=100).unembeddable)
