@@ -114,6 +114,35 @@ def _build_parser() -> argparse.ArgumentParser:
     p_an.add_argument("--session-id", type=int, default=None, help="Limit to one session id.")
     p_an.add_argument("--limit", type=int, default=None, help="Max turns to label this run.")
 
+    p_emb = sub.add_parser(
+        "embed",
+        help="Compute session embeddings (E2 slice 1, #285) — an "
+             "idempotent post-ingest pass writing the provenance "
+             "envelope into copilot_session.session_embedding.",
+    )
+    p_emb.add_argument("--dsn", default=None, help="Database DSN (else config).")
+    p_emb.add_argument(
+        "--backend", default=None,
+        help="Embedding backend family (else config; packaged default: ollama).")
+    p_emb.add_argument(
+        "--model", default=None,
+        help="Embedding model (else config). Ollama has NO default "
+             "embedding model, so an empty model refuses with guidance.")
+    p_emb.add_argument(
+        "--base-url", default=None,
+        help="Backend base URL (else config ollama_url).")
+    p_emb.add_argument(
+        "--input-cap", type=int, default=None,
+        help="Composer character cap (else config input_cap_chars).")
+    p_emb.add_argument(
+        "--overwrite", action="store_true",
+        help="Re-embed sessions that already carry an envelope. Without "
+             "this, existing envelopes are never touched.")
+    p_emb.add_argument("--session-id", type=int, default=None,
+                       help="Limit to one session id.")
+    p_emb.add_argument("--limit", type=int, default=None,
+                       help="Max sessions to embed this run.")
+
     p_kpi = sub.add_parser("kpis", help="Compute session-level KPI rollups from labels.")
     p_kpi.add_argument("--dsn", default=None, help="Database DSN (else config).")
     p_kpi.add_argument("--session-id", type=int, default=None, help="Limit to one session id.")
@@ -810,6 +839,60 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     return C.EXIT_OK
 
 
+def _cmd_embed(args: argparse.Namespace) -> int:
+    from .embedding.runner import run_embed
+    from .relational.db import Database, apply_ddl
+
+    # CLI flags become the embedding block of extra_overrides — the
+    # highest layer of the proven FR-8 precedence. Only keys the user
+    # actually passed are included (PRESENCE semantics: --model "" is a
+    # value, absence is not).
+    cli_embed: dict = {}
+    if args.backend is not None:
+        cli_embed[C.CFG_EMBEDDING_BACKEND] = args.backend
+    if args.model is not None:
+        cli_embed[C.CFG_EMBEDDING_MODEL] = args.model
+    if args.base_url is not None:
+        cli_embed[C.CFG_OLLAMA_URL] = args.base_url
+    if args.input_cap is not None:
+        cli_embed[C.CFG_EMBEDDING_INPUT_CAP] = args.input_cap
+
+    cfg = load_config(
+        dsn=args.dsn,
+        extra_overrides={C.CFG_EMBEDDING: cli_embed} if cli_embed else None,
+    )
+    if not cfg.dsn:
+        print("error: no DSN configured (see --dsn or run setup).", file=sys.stderr)
+        return C.EXIT_USAGE
+    try:
+        db = Database.connect(cfg.dsn)
+        try:
+            apply_ddl(db)
+            stats = run_embed(
+                db, cfg.embedding,
+                overwrite=args.overwrite,
+                session_id=args.session_id,
+                limit=args.limit,
+            )
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001 — a refused pass (probe,
+        #                       config) is a runtime error, reported
+        #                       plainly with zero writes performed.
+        _log.exception("embed failed")
+        print(f"error: embed failed: {exc}", file=sys.stderr)
+        return C.EXIT_RUNTIME
+    result = {
+        "backend": cfg.embedding.backend,
+        "configured_model": cfg.embedding.model or "(unset)",
+        **stats.as_dict(),
+    }
+    print(json.dumps(result, indent=2))
+    # failed > 0 is a nonzero exit: silent partial success would let a
+    # cron-driven pass rot without anyone noticing.
+    return C.EXIT_RUNTIME if stats.failed > 0 else C.EXIT_OK
+
+
 def _cmd_kpis(args: argparse.Namespace) -> int:
     from .judge.kpis import compute_kpis
     from .judge.rubric import load_rubric
@@ -911,6 +994,7 @@ _HANDLERS = {
     "doctor": _cmd_doctor,
     "graph": _cmd_graph,
     "analyze": _cmd_analyze,
+    "embed": _cmd_embed,
     "kpis": _cmd_kpis,
     "calibrate": _cmd_calibrate,
     "mcp": _cmd_mcp,

@@ -638,3 +638,254 @@ class TestComposer(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             compose_input(self.db, sid5, cap_chars=8000)
+
+
+class _CountingBackend:
+    """T4 shim: counts EVERY call (probe included) and serves canned
+    EmbeddingResults or raises."""
+
+    def __init__(self, results=(), probe_error=None):
+        self.probe_calls = 0
+        self.embed_calls: list[str] = []
+        self._results = list(results)
+        self._probe_error = probe_error
+
+    def probe(self):
+        self.probe_calls += 1
+        if self._probe_error is not None:
+            raise self._probe_error
+
+    def embed(self, text):
+        self.embed_calls.append(text)
+        if not self._results:
+            raise AssertionError("backend shim exhausted")
+        nxt = self._results.pop(0)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+
+def _ok_result(model="nomic-embed-text"):
+    return EmbeddingResult(vector=(0.1, -0.2, 0.3), resolved_model=model)
+
+
+class TestRunner(unittest.TestCase):
+    """T4 — FR-6 executed literally, pinned per lifecycle step."""
+
+    def setUp(self) -> None:
+        from session_analytics.config import EmbeddingConfig
+        from session_analytics.relational.db import Database, apply_ddl
+
+        tmp = Path(tempfile.mkdtemp(prefix="cct-sa-embedrun-"))
+        self.db = Database.connect(f"sqlite:///{tmp / 'sa.db'}")
+        apply_ddl(self.db)
+        self.addCleanup(self.db.close)
+        self.cfg = EmbeddingConfig(
+            backend="counting", model="cfg-model",
+            ollama_url="http://cfg.example:11434",
+            input_cap_chars=8000, workers=1,
+        )
+        from session_analytics.embedding.registry import (
+            _reset_for_tests, register_embedding)
+
+        _reset_for_tests()
+        self.addCleanup(_reset_for_tests)
+        self._backends: list[_CountingBackend] = []
+        self._next = []  # (results, probe_error) for the next construction
+        self._factory_kwargs: list[dict] = []
+
+        def factory(model, *, base_url=""):
+            self._factory_kwargs.append({"model": model, "base_url": base_url})
+            b = _CountingBackend(*self._next[0]) if self._next else _CountingBackend()
+            self._backends.append(b)
+            return b
+
+        register_embedding("counting", factory)
+
+    def _mk_session(self, key, previews=("hello world",), embedding=None):
+        sid = self.db.insert_returning_id(
+            "INSERT INTO copilot_session (copilot, session_id, turn_count, "
+            "session_embedding) VALUES (?, ?, ?, ?) RETURNING id",
+            ("claude-code", key, len(previews), embedding),
+        )
+        for i, p in enumerate(previews):
+            self.db.execute(
+                "INSERT INTO copilot_turn (session_id, sequence_num, role, "
+                "content_preview, content_length) VALUES (?, ?, ?, ?, ?)",
+                (sid, i, "user", p, len(p or "")),
+            )
+        self.db.commit()
+        return sid
+
+    def _stored(self, sid):
+        return self.db.query_one(
+            "SELECT session_embedding FROM copilot_session WHERE id = ?",
+            (sid,))[0]
+
+    def _run(self, **kw):
+        from session_analytics.embedding.runner import run_embed
+
+        return run_embed(self.db, self.cfg, **kw)
+
+    # ── the lifecycle, step by step ──────────────────────────────────
+    def test_happy_path_embeds_and_writes_a_valid_envelope(self) -> None:
+        sid = self._mk_session("s1")
+        self._next = [([_ok_result()], None)]
+        stats = self._run()
+        self.assertEqual(stats.embedded, 1)
+        env = json.loads(self._stored(sid))
+        self.assertIsNone(validate_envelope(env))
+        self.assertEqual(env["model"], "nomic-embed-text")  # resolved, not cfg
+        self.assertEqual(env["provider"], "counting")
+
+    def test_no_work_second_run_contacts_backend_zero_times(self) -> None:
+        self._mk_session("s1")
+        self._next = [([_ok_result()], None)]
+        self._run()
+        first_backend = self._backends[-1]
+        stats2 = self._run()
+        # ZERO backend calls including the probe: no NEW backend was
+        # even constructed, and the first one saw no more calls.
+        self.assertEqual(len(self._backends), 1)
+        self.assertEqual(first_backend.probe_calls, 1)
+        self.assertEqual(len(first_backend.embed_calls), 1)
+        self.assertEqual(stats2.skipped_existing, 1)
+
+    def test_existing_envelope_untouched_without_overwrite(self) -> None:
+        prior = json.dumps(_valid_envelope())
+        sid = self._mk_session("s1", embedding=prior)
+        stats = self._run()
+        self.assertEqual(self._stored(sid), prior)  # byte-identical
+        self.assertEqual(stats.skipped_existing, 1)
+        self.assertEqual(self._backends, [])  # no work -> no backend
+
+    def test_overwrite_failed_embed_preserves_exact_prior_value(self) -> None:
+        prior = json.dumps(_valid_envelope())
+        sid = self._mk_session("s1", embedding=prior)
+        self._next = [([RuntimeError("backend exploded")], None)]
+        stats = self._run(overwrite=True)
+        self.assertEqual(stats.failed, 1)
+        self.assertEqual(self._stored(sid), prior)  # exact value survives
+
+    def test_probe_failure_refuses_the_pass_with_zero_writes(self) -> None:
+        sid = self._mk_session("s1")
+        self._next = [([], RuntimeError("unreachable"))]
+        with self.assertRaises(RuntimeError):
+            self._run()
+        self.assertIsNone(self._stored(sid))
+        self.assertEqual(self._backends[-1].embed_calls, [])
+
+    def test_unembeddable_session_counted_without_calling_embed(self) -> None:
+        sid = self._mk_session("s-empty", previews=("",))
+        self._next = [([], None)]  # probe ok; embed would blow the shim
+        stats = self._run()
+        self.assertEqual(stats.unembeddable, 1)
+        self.assertEqual(self._backends[-1].embed_calls, [])
+        self.assertIsNone(self._stored(sid))
+
+    def test_malformed_backend_result_is_refused_by_fr9_and_nothing_written(self) -> None:
+        sid = self._mk_session("s1")
+        bad = EmbeddingResult(vector=(0.1, True, 0.3), resolved_model="m")
+        self._next = [([bad], None)]
+        stats = self._run()
+        self.assertEqual(stats.failed, 1)
+        self.assertIsNone(self._stored(sid))
+
+    def test_duplicate_sequence_num_fails_that_session_only(self) -> None:
+        sid_bad = self._mk_session("s-dup")
+        self.db.execute(
+            "INSERT INTO copilot_turn (session_id, sequence_num, role, "
+            "content_preview, content_length) VALUES (?, ?, ?, ?, ?)",
+            (sid_bad, 0, "assistant", "tie", 3))
+        self.db.commit()
+        sid_ok = self._mk_session("s-ok")
+        self._next = [([_ok_result()], None)]
+        stats = self._run()
+        self.assertEqual((stats.failed, stats.embedded), (1, 1))
+        self.assertIsNone(self._stored(sid_bad))
+        self.assertIsNotNone(self._stored(sid_ok))
+
+    def test_skipped_distribution_reads_stored_envelopes_only(self) -> None:
+        self._mk_session("a", embedding=json.dumps(_valid_envelope()))
+        self._mk_session("b", embedding=json.dumps(
+            _valid_envelope(model="other-model")))
+        self._mk_session("c", embedding="not json at all")
+        stats = self._run()
+        self.assertEqual(stats.skipped_existing, 3)
+        self.assertEqual(stats.skipped_existing_models, {
+            "nomic-embed-text": 1, "other-model": 1, "(invalid-envelope)": 1,
+        })
+        # and nothing was inferred from the CONFIGURED model:
+        self.assertNotIn("cfg-model", stats.skipped_existing_models)
+
+    def test_truncation_is_counted_and_still_embeds(self) -> None:
+        from dataclasses import replace
+
+        self.cfg = replace(self.cfg, input_cap_chars=4)
+        sid = self._mk_session("s1", previews=("a rather long preview",))
+        self._next = [([_ok_result()], None)]
+        stats = self._run()
+        self.assertEqual((stats.truncated, stats.embedded), (1, 1))
+        self.assertIsNotNone(self._stored(sid))
+
+    def test_backend_is_constructed_with_the_resolved_config(self) -> None:
+        self._mk_session("s1")
+        self._next = [([_ok_result()], None)]
+        self._run()
+        self.assertEqual(self._factory_kwargs, [{
+            "model": "cfg-model", "base_url": "http://cfg.example:11434"}])
+
+
+class TestEmbedCli(unittest.TestCase):
+    """T4 — the CLI seam: flags → extra_overrides → runner; exit codes."""
+
+    def _main(self, argv, run_stub):
+        from session_analytics import cli as climod
+
+        captured = {}
+
+        def fake_run_embed(db, embedding_cfg, **kw):
+            captured["cfg"] = embedding_cfg
+            captured["kw"] = kw
+            return run_stub()
+
+        import session_analytics.embedding.runner as runner_mod
+        tmp = Path(tempfile.mkdtemp(prefix="cct-sa-embedcli-"))
+        dsn = f"sqlite:///{tmp / 'sa.db'}"
+        base = {k: v for k, v in os.environ.items()
+                if not k.startswith("CCT_SA_")}
+        with mock.patch.object(runner_mod, "run_embed", fake_run_embed), \
+             mock.patch.object(cfgmod, "_USER_CONFIG",
+                               tmp / "session-analytics.json"), \
+             mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", base, clear=True):
+            rc = climod.main(["embed", "--dsn", dsn, *argv])
+        return rc, captured
+
+    def test_cli_flags_reach_the_resolved_config(self) -> None:
+        from session_analytics.embedding.runner import EmbedStats
+
+        rc, cap = self._main(
+            ["--model", "cli-model", "--base-url", "http://cli.example:9999",
+             "--input-cap", "1234"],
+            EmbedStats,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(cap["cfg"].model, "cli-model")
+        self.assertEqual(cap["cfg"].ollama_url, "http://cli.example:9999")
+        self.assertEqual(cap["cfg"].input_cap_chars, 1234)
+
+    def test_failed_nonzero_exit(self) -> None:
+        from session_analytics.embedding.runner import EmbedStats
+
+        rc, _ = self._main([], lambda: EmbedStats(failed=1))
+        self.assertNotEqual(rc, 0)
+        rc_ok, _ = self._main([], lambda: EmbedStats(embedded=2))
+        self.assertEqual(rc_ok, 0)
+
+    def test_refused_pass_is_runtime_error_exit(self) -> None:
+        def boom():
+            raise RuntimeError("probe refused")
+
+        rc, _ = self._main([], boom)
+        self.assertEqual(rc, 3)  # EXIT_RUNTIME
