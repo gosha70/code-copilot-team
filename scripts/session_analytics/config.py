@@ -33,6 +33,10 @@ ENV_JUDGE_MODEL = "CCT_SA_JUDGE_MODEL"
 ENV_JUDGE_BASE_URL = "CCT_SA_JUDGE_BASE_URL"
 ENV_JUDGE_API_KEY = "CCT_SA_JUDGE_API_KEY"
 ENV_JUDGE_WORKERS = "CCT_SA_JUDGE_WORKERS"
+ENV_EMBED_BACKEND = "CCT_SA_EMBED_BACKEND"
+ENV_EMBED_MODEL = "CCT_SA_EMBED_MODEL"
+ENV_EMBED_INPUT_CAP = "CCT_SA_EMBED_INPUT_CAP"
+ENV_EMBED_WORKERS = "CCT_SA_EMBED_WORKERS"
 ENV_SOURCE_PREFIX = "CCT_SA_SOURCE_"  # + COPILOT (e.g. CCT_SA_SOURCE_CLAUDE_CODE)
 # Routing-shadow (#261): evidence roots are SERVER-SIDE configuration —
 # the API never serves the raw paths (only {configured, root_count}).
@@ -110,6 +114,22 @@ class JudgeConfig:
 
 
 @dataclass(frozen=True)
+class EmbeddingConfig:
+    """Embedding pass resolution (#285, E2 slice 1).
+
+    ``model == ""`` delegates to the backend's default model — but what
+    the ENVELOPE stores is always the backend-RESOLVED identity, never
+    this configured string (FR-5): a request is not serving evidence.
+    """
+
+    backend: str
+    model: str
+    ollama_url: str
+    input_cap_chars: int
+    workers: int
+
+
+@dataclass(frozen=True)
 class ProjectOverride:
     """One ``projects.<key>`` entry: a per-project redaction/ingest override.
 
@@ -139,6 +159,7 @@ class AnalyticsConfig:
     kuzu_path: str
     redaction_mode: str
     judge: JudgeConfig
+    embedding: "EmbeddingConfig"
     pricing: "PricingConfig"
     projects: Mapping[str, ProjectOverride] = field(default_factory=dict)
     project_id_rules: tuple[ProjectIdRule, ...] = field(default_factory=tuple)
@@ -510,6 +531,20 @@ def load_config(
         api_key=str(env(ENV_JUDGE_API_KEY) or ""),
     )
 
+    # embedding (#285): same layering as everything else — the merged
+    # data (defaults < user JSON < CLI extra_overrides) with .env/env
+    # overrides on top. The URL shares ENV_OLLAMA_URL with the judge:
+    # one local Ollama is the operating assumption, and a split would
+    # need its own justification.
+    edata = dict(data.get(C.CFG_EMBEDDING) or {})
+    embedding = EmbeddingConfig(
+        backend=str(env(ENV_EMBED_BACKEND) or edata.get(C.CFG_EMBEDDING_BACKEND) or "ollama"),
+        model=str(env(ENV_EMBED_MODEL) or edata.get(C.CFG_EMBEDDING_MODEL) or ""),
+        ollama_url=str(env(ENV_OLLAMA_URL) or edata.get(C.CFG_OLLAMA_URL) or "http://localhost:11434"),
+        input_cap_chars=int(env(ENV_EMBED_INPUT_CAP) or edata.get(C.CFG_EMBEDDING_INPUT_CAP) or 8000),
+        workers=int(env(ENV_EMBED_WORKERS) or edata.get(C.CFG_EMBEDDING_WORKERS) or 1),
+    )
+
     pricing = _load_pricing(data)
     projects, project_id_rules = _load_projects(data)
 
@@ -521,6 +556,7 @@ def load_config(
         kuzu_path=str(Path(resolved_kuzu).expanduser()),
         redaction_mode=resolved_redaction,
         judge=judge,
+        embedding=embedding,
         pricing=pricing,
         projects=projects,
         project_id_rules=project_id_rules,

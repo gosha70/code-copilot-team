@@ -23,8 +23,10 @@ surfaces) is a separate issue gated on this one.
    bug phrased differently is invisible. After E2-embed + E2-similar,
    the comparison is semantic. This slice makes the vectors exist;
    the comparison itself is E2-similar.
-2. **An operator runs the pass after ingest.** `cct-sa embed` (name
-   settled in T4) embeds every session lacking a vector, reports
+2. **An operator runs the pass after ingest.**
+   `./scripts/session-analytics embed` (the existing documented
+   executable; no new alias) embeds every session lacking a vector,
+   reports
    embedded / skipped_existing / failed / truncated counts, and exits
    nonzero if anything failed. Re-running with no work contacts the
    backend zero times.

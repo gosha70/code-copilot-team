@@ -53,8 +53,10 @@ fixed text (the raw request/response enters the repo), recorded as
 `verification-ollama-embed.md` (endpoint, request, response, whether
 and where a model id appears). THEN `embedding/ollama_embed.py`
 derived from it. If the capture shows Ollama does NOT authoritatively
-report the serving model, the backend must refuse to embed under
-`model: ""` (FR-5) — surfaced in review, not papered over.
+report the serving model, the backend must refuse to embed AT ALL
+(FR-5) — a configured model string is a request, never authoritative
+serving evidence, so explicit configuration does not soften the
+refusal. Surfaced in review, not papered over.
 
 **Done when:** the verification note exists with the raw
 request/response; the backend parses exactly that shape; a shim test
