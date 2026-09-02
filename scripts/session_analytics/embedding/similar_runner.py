@@ -41,10 +41,17 @@ from ..relational.db import Database
 from .similarity import group_by_space, top_k_neighbors
 
 
+class GraphNotReadyError(RuntimeError):
+    """The graph store exists but holds no Session table — `graph` has
+    never been run against it. A prerequisite failure with guidance,
+    not a torn pass."""
+
+
 @runtime_checkable
 class GraphEdgeStore(Protocol):
     """The graph operations the pass needs — semantic, not Cypher."""
 
+    def graph_ready(self) -> bool: ...
     def begin(self) -> None: ...
     def commit(self) -> None: ...
     def rollback(self) -> None: ...
@@ -59,6 +66,13 @@ class KuzuEdgeStore:
 
     def __init__(self, gdb) -> None:
         self._gdb = gdb
+
+    def graph_ready(self) -> bool:
+        """True iff the Session table exists. Probed via the catalog
+        (`CALL show_tables()`, captured on kuzu 0.11.3 returning [] on
+        a bare database) — never by parsing a Binder error's text."""
+        res = self._gdb.execute("CALL show_tables() RETURN *")
+        return any("Session" in [str(v) for v in row] for row in _rows(res))
 
     def begin(self) -> None:
         self._gdb.execute("BEGIN TRANSACTION")
@@ -146,6 +160,14 @@ def run_similar(
     mutation phase AFTER rolling back — the previous edge set stands."""
     stats = SimilarStats()
 
+    # ── prerequisite: the graph must have been built (D4: this pass
+    #    never creates Session nodes, and an unready graph would turn
+    #    every later read into a Binder error) ─────────────────────────
+    if not store.graph_ready():
+        raise GraphNotReadyError(
+            "the graph store holds no Session table — run "
+            "'./scripts/session-analytics graph' before 'similar'")
+
     # ── durable relational state first ───────────────────────────────
     rows = db.query(
         "SELECT id, copilot, session_id, session_embedding "
@@ -215,8 +237,19 @@ def run_similar(
             for dst, score in planned[src]:
                 store.write_edge(src, dst, score)
                 stats.written_edges += 1
+        # COMMIT is part of the protected phase: a commit failure must
+        # trigger the same cleanup, or the connection is left holding
+        # the pending replacement (visible in-tx — captured on kuzu
+        # 0.11.3).
+        store.commit()
     except Exception:
-        store.rollback()
+        # Kùzu auto-aborts on some in-tx statement failures, and
+        # ROLLBACK then raises "No active transaction" — which must
+        # never REPLACE the original error: the original failure is
+        # the story, the cleanup is best-effort.
+        try:
+            store.rollback()
+        except Exception:
+            pass
         raise
-    store.commit()
     return stats

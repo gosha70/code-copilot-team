@@ -908,7 +908,8 @@ def _cmd_embed(args: argparse.Namespace) -> int:
 
 
 def _cmd_similar(args: argparse.Namespace) -> int:
-    from .embedding.similar_runner import KuzuEdgeStore, run_similar
+    from .embedding.similar_runner import (
+        GraphNotReadyError, KuzuEdgeStore, run_similar)
     from .graph.schema import GraphDatabase
     from .relational.db import Database
 
@@ -930,6 +931,17 @@ def _cmd_similar(args: argparse.Namespace) -> int:
     if not cfg.dsn:
         print("error: no DSN configured (see --dsn or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
+    # ABSENT graph: checked BEFORE connect, because GraphDatabase
+    # .connect mkdirs and creates — `similar` must never create the
+    # store it reconciles (that is `graph`'s job).
+    from pathlib import Path as _Path
+
+    if not _Path(cfg.kuzu_path).exists():
+        print(
+            f"error: graph database absent at {cfg.kuzu_path} — run "
+            f"'./scripts/session-analytics graph' first",
+            file=sys.stderr)
+        return C.EXIT_USAGE
     try:
         db = Database.connect(cfg.dsn)
         try:
@@ -940,6 +952,10 @@ def _cmd_similar(args: argparse.Namespace) -> int:
                 gdb.close()
         finally:
             db.close()
+    except GraphNotReadyError as exc:
+        # exists but uninitialized: a prerequisite, with guidance.
+        print(f"error: {exc}", file=sys.stderr)
+        return C.EXIT_USAGE
     except Exception as exc:  # noqa: BLE001 — a torn pass rolled back;
         #                       the previous edge set stands.
         _log.exception("similar failed")

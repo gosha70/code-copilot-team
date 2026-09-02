@@ -336,13 +336,20 @@ class _FakeEdgeStore:
     injected-failure test asserts on actual edge state, not on call
     sequences."""
 
-    def __init__(self, nodes=(), edges=None):
+    def __init__(self, nodes=(), edges=None, ready=True):
         self.nodes = set(nodes)
         self.edges: dict[tuple[str, str], float] = dict(edges or {})
         self._tx: dict[tuple[str, str], float] | None = None
         self.begin_calls = 0
+        self.rollback_calls = 0
         self.fail_on_write: int | None = None  # fail the Nth write_edge
+        self.fail_on_commit = False
+        self.rollback_raises = None  # simulate kuzu's auto-abort state
+        self._ready = ready
         self._writes = 0
+
+    def graph_ready(self):
+        return self._ready
 
     def _view(self):
         return self._tx if self._tx is not None else self.edges
@@ -353,10 +360,15 @@ class _FakeEdgeStore:
 
     def commit(self):
         assert self._tx is not None, "commit outside a transaction"
+        if self.fail_on_commit:
+            raise RuntimeError("injected commit failure")
         self.edges = self._tx
         self._tx = None
 
     def rollback(self):
+        self.rollback_calls += 1
+        if self.rollback_raises is not None:
+            raise self.rollback_raises
         assert self._tx is not None, "rollback outside a transaction"
         self._tx = None
 
@@ -506,6 +518,47 @@ class TestSimilarRunner(unittest.TestCase):
             self._run(store)
         self.assertEqual(store.edges, previous)  # rolled back, intact
 
+    def test_commit_failure_triggers_rollback_and_preserves_edges(self) -> None:
+        # Review round: commit sat OUTSIDE the try, so a commit failure
+        # triggered zero rollbacks and left the pending replacement
+        # exposed on the live connection. Commit is now part of the
+        # protected phase.
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        _, kb = self._session("b", _env(vector=(0.9, 0.1, 0.0)))
+        store = _FakeEdgeStore(nodes={ka, kb})
+        self._run(store)
+        previous = dict(store.edges)
+        store.fail_on_commit = True
+        with self.assertRaises(RuntimeError):
+            self._run(store)
+        self.assertEqual(store.rollback_calls, 1)
+        self.assertEqual(store.edges, previous)
+
+    def test_cleanup_never_replaces_the_original_error(self) -> None:
+        # Kùzu auto-aborts some in-tx failures; ROLLBACK then raises
+        # "No active transaction". The ORIGINAL failure must propagate,
+        # not the cleanup's.
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        _, kb = self._session("b", _env(vector=(0.9, 0.1, 0.0)))
+        store = _FakeEdgeStore(nodes={ka, kb})
+        store.fail_on_write = 1
+        store.rollback_raises = RuntimeError("No active transaction for ROLLBACK.")
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run(store)
+        self.assertIn("injected write failure", str(ctx.exception))
+        self.assertNotIn("No active transaction", str(ctx.exception))
+
+    def test_unready_graph_is_a_prerequisite_error_before_any_read(self) -> None:
+        from session_analytics.embedding.similar_runner import GraphNotReadyError
+
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        store = _FakeEdgeStore(nodes={ka}, ready=False)
+        with self.assertRaises(GraphNotReadyError) as ctx:
+            self._run(store)
+        self.assertIn("graph", str(ctx.exception))
+        self.assertEqual(store.begin_calls, 0)  # nothing was attempted
+        self.assertEqual(store.nodes, {ka})     # nothing created
+
     def test_no_embedding_backend_is_ever_consulted(self) -> None:
         # FR-E: strictly local. The embedding registry must not be
         # touched by this pass under any input.
@@ -560,6 +613,19 @@ class TestSimilarRunnerLiveKuzu(unittest.TestCase):
         builder.build(db, graph_path)  # creates the Session nodes
         return db, graph_path
 
+    @staticmethod
+    def _all_edges(gdb):
+        """Complete (source, target, score) rows — the comparison the
+        review demanded, not merely the source set."""
+        res = gdb.execute(
+            "MATCH (a:Session)-[r:SIMILAR_TO]->(b:Session) "
+            "RETURN a.session_key, b.session_key, r.score")
+        rows = set()
+        while res.has_next():
+            src, dst, score = res.get_next()
+            rows.add((src, dst, round(float(score), 9)))
+        return rows
+
     def test_live_pass_writes_and_survives_injected_failure(self) -> None:
         from session_analytics.config import SimilarityConfig
         from session_analytics.embedding.similar_runner import (
@@ -574,21 +640,108 @@ class TestSimilarRunnerLiveKuzu(unittest.TestCase):
             store = KuzuEdgeStore(gdb)
             stats = run_similar(db, cfg, store)
             self.assertEqual(stats.written_edges, 2)
-            previous = store.existing_edge_sources()
+            previous = self._all_edges(gdb)
             self.assertEqual(len(previous), 2)
 
-            # inject a failure on the first edge write of the next pass
+            # 1. failure raised by OUR code mid-write: rollback runs.
             real_write = store.write_edge
 
             def poisoned(src, dst, score):
                 raise RuntimeError("injected live failure")
 
             store.write_edge = poisoned  # type: ignore[method-assign]
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(RuntimeError) as ctx:
                 run_similar(db, cfg, store)
+            self.assertIn("injected live failure", str(ctx.exception))
             store.write_edge = real_write  # type: ignore[method-assign]
-            # previous edge set intact after rollback
-            self.assertEqual(store.existing_edge_sources(), previous)
+            self.assertEqual(self._all_edges(gdb), previous)
+
+            # 2. COMMIT failure: commit is in the protected phase, so
+            #    the pending replacement is rolled back, not left open
+            #    on the connection.
+            real_commit = store.commit
+
+            def commit_fails():
+                raise RuntimeError("injected commit failure")
+
+            store.commit = commit_fails  # type: ignore[method-assign]
+            with self.assertRaises(RuntimeError) as ctx:
+                run_similar(db, cfg, store)
+            self.assertIn("injected commit failure", str(ctx.exception))
+            store.commit = real_commit  # type: ignore[method-assign]
+            self.assertEqual(self._all_edges(gdb), previous)
+
+            # 3. a STATEMENT failure kuzu auto-aborts: our rollback
+            #    then raises "No active transaction" — which must be
+            #    suppressed so the ORIGINAL Binder error propagates.
+            def statement_failure(src, dst, score):
+                gdb.execute("MATCH (x:NoSuchTable) RETURN x")
+
+            store.write_edge = statement_failure  # type: ignore[method-assign]
+            with self.assertRaises(RuntimeError) as ctx:
+                run_similar(db, cfg, store)
+            self.assertIn("NoSuchTable", str(ctx.exception))
+            self.assertNotIn("No active transaction", str(ctx.exception))
+            store.write_edge = real_write  # type: ignore[method-assign]
+            self.assertEqual(self._all_edges(gdb), previous)
+        finally:
+            gdb.close()
+
+    def test_live_cli_unready_graph_and_happy_path(self) -> None:
+        # Real CLI, real kuzu, NO mocks on the graph path — the
+        # regressions the review asked for.
+        from session_analytics import cli as climod
+        from session_analytics import config as cfg_mod
+        import kuzu as _kuzu
+
+        tmp = Path(tempfile.mkdtemp(prefix="cct-sa-simcli-live-"))
+        dsn = f"sqlite:///{tmp / 'sa.db'}"
+        from session_analytics.relational.db import Database, apply_ddl
+
+        rdb = Database.connect(dsn)
+        apply_ddl(rdb)
+        for native_id, vec in (("a", (1.0, 0.0, 0.0)), ("b", (0.9, 0.1, 0.0))):
+            rdb.insert_returning_id(
+                "INSERT INTO copilot_session (copilot, session_id, "
+                "turn_count, session_embedding) VALUES (?, ?, ?, ?) "
+                "RETURNING id",
+                ("claude-code", native_id, 0, json.dumps(_env(vector=vec))))
+        rdb.commit()
+        rdb.close()
+
+        base = {k: v for k, v in os.environ.items()
+                if not k.startswith("CCT_SA_")}
+        env_patch = [
+            mock.patch.object(cfg_mod, "_USER_CONFIG",
+                              tmp / "session-analytics.json"),
+            mock.patch.object(cfg_mod, "parse_env_file", lambda *a, **k: {}),
+            mock.patch.dict("os.environ", base, clear=True),
+        ]
+
+        # uninitialized graph: a bare kuzu db with no schema
+        bare = tmp / "bare-graph"
+        _kuzu.Database(str(bare))  # creates, no Session table
+        with env_patch[0], env_patch[1], env_patch[2]:
+            rc = climod.main(
+                ["similar", "--dsn", dsn, "--db-path", str(bare)])
+        self.assertEqual(rc, 2)  # prerequisite guidance, not exit 3
+
+        # happy path: graph built, then similar succeeds end to end
+        from session_analytics.graph import builder
+
+        rdb = Database.connect(dsn)
+        graph2 = str(tmp / "real-graph")
+        builder.build(rdb, graph2)
+        rdb.close()
+        with env_patch[0], env_patch[1], env_patch[2]:
+            rc = climod.main(
+                ["similar", "--dsn", dsn, "--db-path", graph2])
+        self.assertEqual(rc, 0)
+        from session_analytics.graph.schema import GraphDatabase
+
+        gdb = GraphDatabase.connect(graph2)
+        try:
+            self.assertEqual(len(self._all_edges(gdb)), 2)
         finally:
             gdb.close()
 
@@ -613,6 +766,8 @@ class TestSimilarCli(unittest.TestCase):
 
         tmp = Path(tempfile.mkdtemp(prefix="cct-sa-simcli-"))
         dsn = f"sqlite:///{tmp / 'sa.db'}"
+        graph_dir = tmp / "graph"
+        graph_dir.mkdir()  # the absent-path guard is tested separately
         base = {k: v for k, v in os.environ.items()
                 if not k.startswith("CCT_SA_")}
         from session_analytics.graph import schema as schema_mod
@@ -623,7 +778,8 @@ class TestSimilarCli(unittest.TestCase):
                                tmp / "session-analytics.json"), \
              mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
              mock.patch.dict("os.environ", base, clear=True):
-            rc = climod.main(["similar", "--dsn", dsn, *argv])
+            rc = climod.main(
+                ["similar", "--dsn", dsn, "--db-path", str(graph_dir), *argv])
         return rc, captured
 
     def test_cli_flags_reach_the_resolved_config(self) -> None:
@@ -635,6 +791,27 @@ class TestSimilarCli(unittest.TestCase):
     def test_refused_knob_is_usage_error_not_traceback(self) -> None:
         rc, _ = self._main(["--threshold", "nan"])
         self.assertEqual(rc, 2)  # EXIT_USAGE, message names the setting
+
+    def test_absent_graph_path_is_usage_error_with_zero_creation(self) -> None:
+        # Reviewed defect: a fresh --db-path used to be CREATED by
+        # GraphDatabase.connect and then die on the missing Session
+        # table with exit 3. The guard now fires BEFORE connect. No
+        # mocks on the graph here — the real code path runs.
+        from session_analytics import cli as climod
+
+        tmp = Path(tempfile.mkdtemp(prefix="cct-sa-simcli-abs-"))
+        dsn = f"sqlite:///{tmp / 'sa.db'}"
+        missing = tmp / "never-created-graph"
+        base = {k: v for k, v in os.environ.items()
+                if not k.startswith("CCT_SA_")}
+        with mock.patch.object(cfgmod, "_USER_CONFIG",
+                               tmp / "session-analytics.json"), \
+             mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", base, clear=True):
+            rc = climod.main(
+                ["similar", "--dsn", dsn, "--db-path", str(missing)])
+        self.assertEqual(rc, 2)
+        self.assertFalse(missing.exists())  # ZERO filesystem creation
 
     def test_invalid_envelopes_exit_nonzero(self) -> None:
         from session_analytics.embedding.similar_runner import SimilarStats
