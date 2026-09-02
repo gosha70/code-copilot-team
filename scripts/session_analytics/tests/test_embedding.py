@@ -261,6 +261,61 @@ class TestOllamaBackend(unittest.TestCase):
         with self.assertRaises(ollama_embed.EmbeddingBackendError):
             b.embed("x")
 
+    # ── FR-9 evidence must survive the backend uncoerced ─────────────
+    def test_boolean_element_survives_to_the_validator_and_is_refused(self) -> None:
+        # float(True) == 1.0: a coercing backend would launder the
+        # boolean into a valid float BEFORE FR-9 could see it. The raw
+        # scalar must ride through EmbeddingResult and be refused at the
+        # ONE normative validator.
+        b = _ShimOllama(responses=['{"model":"m","embeddings":[[0.1,true,0.3]]}'])
+        r = b.embed("x")
+        self.assertIs(r.vector[1], True)  # retained, not 1.0
+        err = validate_envelope(build_envelope(
+            r, provider="ollama", embedded_at="2026-09-02T18:00:00+00:00"))
+        self.assertIn("boolean", err)
+
+    def test_string_number_survives_to_the_validator_and_is_refused(self) -> None:
+        # float("0.2") parses: same laundering hazard, distinct type.
+        b = _ShimOllama(responses=['{"model":"m","embeddings":[[0.1,"0.2",0.3]]}'])
+        r = b.embed("x")
+        self.assertEqual(r.vector[1], "0.2")  # raw string retained
+        err = validate_envelope(build_envelope(
+            r, provider="ollama", embedded_at="2026-09-02T18:00:00+00:00"))
+        self.assertIn("not a number", err)
+
+    def test_valid_floats_pass_backend_then_validator_end_to_end(self) -> None:
+        # The uncoerced path must still admit good output.
+        b = _ShimOllama(responses=[CAPTURE_OK])
+        r = b.embed("x")
+        self.assertIsNone(validate_envelope(build_envelope(
+            r, provider="ollama", embedded_at="2026-09-02T18:00:00+00:00")))
+
+    # ── FR-8: the configured base URL reaches the wire, via the registry ─
+    def test_registry_backend_uses_the_configured_base_url(self) -> None:
+        # The runner resolves EmbeddingConfig once and hands base_url to
+        # the registry; the backend never reloads config. The pin is on
+        # the REQUEST URL, not a private attribute.
+        _reset_for_tests()
+        self.addCleanup(_reset_for_tests)
+        _register.register_all_embeddings()
+        backend = get_embedding(
+            "ollama", "some-model",
+            base_url="http://configured.example:11434",
+        )
+        seen = []
+
+        def _capture(req, timeout=0):
+            seen.append(req.full_url)
+            raise ollama_embed.EmbeddingBackendError("stop after capture")
+
+        with mock.patch.object(
+            ollama_embed.urllib.request, "urlopen", _capture
+        ):
+            with self.assertRaises(ollama_embed.EmbeddingBackendError):
+                backend.embed("x")
+        self.assertEqual(
+            seen, ["http://configured.example:11434/api/embed"])
+
 
 class TestEmbeddingConfig(unittest.TestCase):
     """FR-8: the loader's FULL five-layer precedence, hermetically.

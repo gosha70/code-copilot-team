@@ -9,7 +9,11 @@ from typing import Callable, Dict
 
 from .contracts import EmbeddingBackend
 
-_EmbeddingFactory = Callable[[str], EmbeddingBackend]
+# A factory takes (model, base_url). Both come from the ALREADY-RESOLVED
+# EmbeddingConfig the caller holds — a backend never calls load_config()
+# itself, because the runner's resolved instance (CLI layer included) is
+# the configuration of record and an independent reload could differ.
+_EmbeddingFactory = Callable[..., EmbeddingBackend]
 
 _BACKENDS: Dict[str, _EmbeddingFactory] = {}
 
@@ -24,7 +28,9 @@ def list_embedding_ids() -> list[str]:
     return sorted(_BACKENDS)
 
 
-def get_embedding(family: str, model: str = "") -> EmbeddingBackend:
+def get_embedding(
+    family: str, model: str = "", *, base_url: str = ""
+) -> EmbeddingBackend:
     try:
         factory = _BACKENDS[family]
     except KeyError:
@@ -32,7 +38,7 @@ def get_embedding(family: str, model: str = "") -> EmbeddingBackend:
         raise UnknownEmbeddingError(
             f"unknown embedding backend: {family!r}; registered: {known}"
         ) from None
-    return factory(model)
+    return factory(model, base_url=base_url)
 
 
 class UnknownEmbeddingError(LookupError):

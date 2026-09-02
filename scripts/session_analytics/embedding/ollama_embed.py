@@ -111,8 +111,13 @@ class OllamaEmbedding:
         if not isinstance(vector, list) or not vector:
             raise EmbeddingBackendError("ollama returned an empty embedding")
 
+        # RAW scalars, deliberately uncoerced: float(True) == 1.0 and
+        # float("0.2") parses, so coercion here would launder exactly
+        # the values FR-9's write-boundary validator exists to refuse.
+        # Shape (exactly one non-empty vector) is this backend's check;
+        # element TYPES are the validator's.
         return EmbeddingResult(
-            vector=tuple(float(x) for x in vector),
+            vector=tuple(vector),
             resolved_model=resolved,
         )
 
@@ -143,5 +148,5 @@ class OllamaEmbedding:
             ) from None
 
 
-def factory(model: str) -> OllamaEmbedding:
-    return OllamaEmbedding(model=model)
+def factory(model: str, *, base_url: str = "") -> OllamaEmbedding:
+    return OllamaEmbedding(model=model, base_url=base_url)

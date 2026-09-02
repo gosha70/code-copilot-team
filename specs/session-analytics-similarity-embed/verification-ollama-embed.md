@@ -135,7 +135,13 @@ that legible.
 ## What this record deliberately does NOT establish
 
 - Anything about non-Ollama backends.
-- Vector determinism across calls, model versions, or hosts — the
-  envelope's `model` field is what makes vectors comparable, not an
-  assumption of stability.
+- Vector determinism across calls, model versions, or hosts. The
+  envelope's `model` field is a server-confirmed model NAME/TAG, not
+  an immutable content digest (Ollama exposes digests separately in
+  its model-list surfaces, which this slice does not read). Equality
+  of that name is NECESSARY for comparing vectors — E2-similar must
+  never compare across names — but not by itself sufficient evidence
+  of immutable model-version equality. If E2-similar needs the
+  stronger guarantee, digest provenance is its decision, not an
+  expansion of this slice.
 - Batch embedding (`input` as a list): not captured, not used.

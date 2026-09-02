@@ -47,9 +47,17 @@ _REQUIRED_FIELDS = (
 @dataclass(frozen=True)
 class EmbeddingResult:
     """One backend call's outcome: the vector plus the AUTHORITATIVE
-    model identity the backend reported for it."""
+    model identity the backend reported for it.
 
-    vector: tuple[float, ...]
+    ``vector`` is UNTRUSTED BACKEND OUTPUT awaiting FR-9 validation —
+    elements keep their raw JSON scalar types. A backend must NOT
+    coerce them (``float(True)`` is 1.0 and ``float("0.2")`` parses),
+    because coercion would launder exactly the malformed values the
+    write-boundary validator exists to refuse. One normative validator:
+    ``validate_envelope``.
+    """
+
+    vector: tuple[Any, ...]
     resolved_model: str
 
 
