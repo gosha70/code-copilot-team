@@ -145,17 +145,121 @@ class TestRegistry(unittest.TestCase):
             get_embedding("no-such-backend")
         self.assertIn("ollama", str(ctx.exception))
 
-    def test_t1_stub_refuses_with_the_t3_contract_named(self) -> None:
-        # T1 ships NO wire code: both methods refuse, and the refusal
-        # names the recorded-capture contract rather than looking like
-        # an outage. This test is DELETED by T3, which replaces it with
-        # capture-derived behaviour.
-        _register.register_all_embeddings()
-        backend = get_embedding("ollama")
-        for call in (backend.probe, lambda: backend.embed("x")):
-            with self.assertRaises(NotImplementedError) as ctx:
-                call()
-            self.assertIn("verification-ollama-embed", str(ctx.exception))
+
+class _ShimOllama(ollama_embed.OllamaEmbedding):
+    """The T3 test transport: canned responses, every call counted.
+
+    Response strings are copied from the RECORDED capture
+    (verification-ollama-embed.md), not invented — the whole point of
+    T3's sequencing is that the parser and its tests share one source.
+    """
+
+    def __init__(self, model="cfg-model", responses=()):
+        super().__init__(model=model, base_url="http://shim.invalid")
+        self.calls: list[dict] = []
+        self._responses = list(responses)
+
+    def _post(self, path, payload):
+        self.calls.append({"path": path, "payload": payload})
+        if not self._responses:
+            raise AssertionError("shim exhausted")
+        nxt = self._responses.pop(0)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+
+# Capture-derived response shapes (vectors shortened; shape identical).
+CAPTURE_OK = (
+    '{"model":"nomic-embed-text","embeddings":[[0.010955912,-0.0087870145,'
+    '-0.18144642]],"total_duration":11804881083,"load_duration":11648089583,'
+    '"prompt_eval_count":29}'
+)
+CAPTURE_LEGACY_NO_MODEL = '{"embedding":[0.211626,-0.169731,-3.50485]}'
+CAPTURE_ERR_NOT_FOUND = (
+    '{"error":"model \\"no-such-model-xyz\\" not found, try pulling it first"}'
+)
+CAPTURE_ERR_NO_EMBED = (
+    '{"error":"This server does not support embeddings. '
+    'Start it with `--embeddings`"}'
+)
+
+
+class TestOllamaBackend(unittest.TestCase):
+    """T3 — the backend parses exactly the captured shape (FR-2/FR-5)."""
+
+    def test_success_parses_the_captured_shape(self) -> None:
+        b = _ShimOllama(responses=[CAPTURE_OK])
+        r = b.embed("some composed text")
+        self.assertEqual(r.resolved_model, "nomic-embed-text")
+        self.assertEqual(len(r.vector), 3)
+        self.assertIsInstance(r.vector, tuple)
+        self.assertEqual(b.calls[0]["path"], "/api/embed")
+        self.assertEqual(b.calls[0]["payload"]["input"], "some composed text")
+
+    def test_resolved_model_is_the_RESPONSE_field_not_the_config(self) -> None:
+        # cfg says one thing, the server reports another: the envelope
+        # identity is the server's (FR-5).
+        b = _ShimOllama(model="configured-name", responses=[CAPTURE_OK])
+        self.assertEqual(b.embed("x").resolved_model, "nomic-embed-text")
+
+    def test_legacy_shape_without_model_identity_is_refused(self) -> None:
+        # The captured /api/embeddings shape: vector but NO model field.
+        # FR-5: no authoritative identity -> no result -- and the
+        # configured name is never substituted.
+        b = _ShimOllama(model="configured-name",
+                        responses=[CAPTURE_LEGACY_NO_MODEL])
+        with self.assertRaises(ollama_embed.EmbeddingBackendError) as ctx:
+            b.embed("x")
+        self.assertIn("no model identity", str(ctx.exception))
+        self.assertNotIn("configured-name", str(ctx.exception).split("—")[0])
+
+    def test_error_key_is_a_failed_call_not_semantics(self) -> None:
+        for resp in (CAPTURE_ERR_NOT_FOUND, CAPTURE_ERR_NO_EMBED):
+            b = _ShimOllama(responses=[resp])
+            with self.assertRaises(ollama_embed.EmbeddingBackendError):
+                b.embed("x")
+
+    def test_empty_configured_model_refuses_before_any_http(self) -> None:
+        # Capture: Ollama has NO default embedding model (`model ''` ->
+        # 404). The refusal happens before the wire and guides the
+        # operator.
+        b = _ShimOllama(model="", responses=[CAPTURE_OK])
+        with self.assertRaises(ollama_embed.EmbeddingBackendError) as ctx:
+            b.embed("x")
+        self.assertEqual(b.calls, [])  # nothing hit the transport
+        self.assertIn("embedding.model", str(ctx.exception))
+
+    def test_wrong_embedding_count_is_refused(self) -> None:
+        for outer in ('[]', '[[0.1],[0.2]]'):
+            b = _ShimOllama(responses=[
+                f'{{"model":"m","embeddings":{outer}}}'])
+            with self.assertRaises(ollama_embed.EmbeddingBackendError):
+                b.embed("x")
+
+    def test_empty_inner_vector_is_refused(self) -> None:
+        b = _ShimOllama(responses=['{"model":"m","embeddings":[[]]}'])
+        with self.assertRaises(ollama_embed.EmbeddingBackendError):
+            b.embed("x")
+
+    def test_non_json_is_refused(self) -> None:
+        b = _ShimOllama(responses=['<html>proxy error</html>'])
+        with self.assertRaises(ollama_embed.EmbeddingBackendError):
+            b.embed("x")
+
+    def test_probe_is_a_real_embed_call(self) -> None:
+        # A tags listing cannot prove embedding capability (captured:
+        # generative models are listed yet refuse), so probe() embeds.
+        b = _ShimOllama(responses=[CAPTURE_OK])
+        b.probe()
+        self.assertEqual(len(b.calls), 1)
+        self.assertEqual(b.calls[0]["path"], "/api/embed")
+
+    def test_transport_failure_surfaces_as_backend_error(self) -> None:
+        b = _ShimOllama(responses=[
+            ollama_embed.EmbeddingBackendError("ollama unreachable at x")])
+        with self.assertRaises(ollama_embed.EmbeddingBackendError):
+            b.embed("x")
 
 
 class TestEmbeddingConfig(unittest.TestCase):
