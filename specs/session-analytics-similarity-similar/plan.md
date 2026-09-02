@@ -119,9 +119,11 @@ connect — creation is legitimate there.
   edges only within each; a mutation forming pairs across groups
   fails a named test (and the structural D1 shape means that mutation
   is the post-filter rewrite).
-- **dim_conflict:** same name, different dim → both sessions
-  reported, neither compared with the other, the conflicted name
-  named in the report.
+- **dim_conflict:** same name, different dim → the conflict is
+  reported with the name and both dims; the cross-dimension pair is
+  never compared; and NEITHER group is disqualified — the
+  three-session case (two valid 768s + one same-named 1024) keeps the
+  768-pair comparable and the 1024 session eligible in its own group.
 - **validated-only:** an invalid stored envelope (bad JSON / failing
   FR-9) is excluded + counted with a reason; never scored.
 - **cosine correctness:** hand-computed fixtures (orthogonal → 0,

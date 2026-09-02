@@ -119,9 +119,13 @@ the other).
 eligible sources.** Every pass:
 
 1. retires the outgoing edges of every source that is no longer
-   eligible (envelope removed, invalidated, or `dim_conflict`-ed) —
-   an eligible-sources-only replacement would preserve exactly the
-   edges whose evidence is gone;
+   eligible (envelope removed or invalidated) — an
+   eligible-sources-only replacement would preserve exactly the edges
+   whose evidence is gone. A `dim_conflict` does NOT disqualify: by
+   the FR-A triple, same-named different-dim sessions are simply
+   DISTINCT SPACES — each stays eligible within its own group, the
+   conflict is reported, and only cross-dimension pairs are
+   prohibited (they never form, since pairs form inside groups);
 2. replaces each eligible source's outgoing edges with its fresh
    top-K (an edge whose TARGET became ineligible retires with the
    rest);

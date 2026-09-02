@@ -23,14 +23,15 @@ almost the same words:
    fork) come before FR-C/FR-D, and tasks.md makes it executable
    (T1 strictly before T2).
 2. **The digest question is an explicit fork.** V1 chooses name/tag
-   equality within the (provider, model, dim) triple and FR-B states
-   precisely what that guarantees (same host, between pulls, one set
-   of weights, matching geometry) and what it does not (immutable
-   model-version identity; cross-time/host comparability). The digest
-   path is REJECTED for V1 with the reason recorded and the upgrade
-   path defined (additive `model_digest` field → quadruple key),
-   so `model == model` never quietly becomes stronger evidence than
-   Ollama provides.
+   equality within the (provider, model, dim) triple, and FR-B (as
+   corrected in review) states its guarantee in RECORDED terms only:
+   both envelopes carry the same backend family, server-confirmed
+   name/tag, and dimensionality — nothing more. Same-server and
+   unchanged-weights are named unverified assumptions, not
+   guarantees. The digest path is REJECTED for V1 with the reason
+   recorded and the upgrade path defined (additive `model_digest`
+   field → quadruple key), so `model == model` never quietly becomes
+   stronger evidence than Ollama provides.
 
 The factual substrate for both comes from #285's recorded capture
 (`verification-ollama-embed.md`): the envelope `model` is a

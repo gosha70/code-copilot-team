@@ -20,7 +20,11 @@ the surface that reads its output (T2 before T3).
 five-layer precedence.
 
 **Done when:** the space-key discriminators pass (equal triple; each
-single component differing); `dim_conflict` is detected and named;
+single component differing); `dim_conflict` is detected and named —
+including the three-session discriminator: two valid 768-dim sessions
+plus one same-named 1024-dim session → the conflict is reported, the
+768-pair REMAINS comparable, and the 1024 session remains eligible in
+its own group (a conflict never disqualifies either whole group);
 cosine matches hand-computed fixtures; config layering proven with
 the #285 T1 hermetic harness; no similarity function accepts an
 unvalidated envelope (they take validated data or a validation error
