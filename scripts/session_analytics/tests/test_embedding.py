@@ -436,3 +436,46 @@ class TestComposer(unittest.TestCase):
         from session_analytics.embedding.composer import compose_input
 
         self.assertTrue(compose_input(self.db, sid3, cap_chars=100).unembeddable)
+
+    def test_duplicate_sequence_num_is_refused(self) -> None:
+        # The schema does not enforce UNIQUE(session_id, sequence_num)
+        # and SQL defines no order among ties — so FR-7's byte-identical
+        # promise fails closed rather than depending on the query plan.
+        sid4 = self.db.insert_returning_id(
+            "INSERT INTO copilot_session (copilot, session_id, turn_count) "
+            "VALUES (?, ?, ?) RETURNING id",
+            ("claude-code", "sess-dup", 2),
+        )
+        for role, preview in (("user", "A"), ("assistant", "B")):
+            self.db.execute(
+                "INSERT INTO copilot_turn (session_id, sequence_num, role, "
+                "content_preview, content_length) VALUES (?, ?, ?, ?, ?)",
+                (sid4, 2, role, preview, 1),
+            )
+        self.db.commit()
+        from session_analytics.embedding.composer import compose_input
+
+        with self.assertRaises(ValueError) as ctx:
+            compose_input(self.db, sid4, cap_chars=8000)
+        self.assertIn("duplicate sequence_num 2", str(ctx.exception))
+
+    def test_duplicate_refused_even_when_one_side_has_no_preview(self) -> None:
+        # The malformation is in the SEQUENCING, not the text: a
+        # preview-less duplicate is refused too, so the check cannot be
+        # weakened to composed rows only.
+        sid5 = self.db.insert_returning_id(
+            "INSERT INTO copilot_session (copilot, session_id, turn_count) "
+            "VALUES (?, ?, ?) RETURNING id",
+            ("claude-code", "sess-dup-null", 2),
+        )
+        for preview in ("real text", None):
+            self.db.execute(
+                "INSERT INTO copilot_turn (session_id, sequence_num, role, "
+                "content_preview, content_length) VALUES (?, ?, ?, ?, ?)",
+                (sid5, 0, "user", preview, len(preview or "")),
+            )
+        self.db.commit()
+        from session_analytics.embedding.composer import compose_input
+
+        with self.assertRaises(ValueError):
+            compose_input(self.db, sid5, cap_chars=8000)

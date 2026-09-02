@@ -19,6 +19,16 @@
 # the configured character cap with OLDEST-FIRST retention. Two calls
 # over unchanged rows produce byte-identical output.
 #
+# A DUPLICATE ``sequence_num`` within a session is REFUSED. The schema
+# does not enforce UNIQUE(session_id, sequence_num), and SQL guarantees
+# nothing about the relative order of ties — so a session carrying one
+# would make "byte-identical" a property of the query plan, not of the
+# rows. Refusal is chosen over a secondary ordering key deliberately:
+# ordering ties by row ``id`` would silently manufacture semantics for
+# malformed sequencing, and ``id`` is outside the FR-1 allowlist anyway.
+# Today's adapters number turns sequentially, so this is a defensive
+# determinism boundary, not evidence of bad ingest.
+#
 # EMPTINESS IS EXPLICIT (feeds FR-3): a session with no usable preview
 # text yields ``unembeddable=True``, never an empty string handed to a
 # backend — embedding "" would fabricate a vector for no content.
@@ -63,7 +73,19 @@ def compose_input(db: Database, session_id: int, *, cap_chars: int) -> ComposedI
     rows = db.query(_SELECT, (session_id,))
 
     parts: list[str] = []
-    for _sequence_num, role, preview in rows:
+    previous_seq = None
+    for sequence_num, role, preview in rows:
+        # Fail closed BEFORE composing: ties have no defined order, so
+        # the FR-7 byte-identical promise cannot be kept over them.
+        # Checked on every row — including preview-less ones — because
+        # the malformation is in the sequencing, not the text.
+        if sequence_num == previous_seq:
+            raise ValueError(
+                f"duplicate sequence_num {sequence_num} for session "
+                f"{session_id} — tie order is undefined, so a "
+                f"deterministic embedding input cannot be composed"
+            )
+        previous_seq = sequence_num
         if preview is None or preview == "":
             continue  # a turn with no preview contributes nothing
         parts.append(f"{role}: {preview}")
