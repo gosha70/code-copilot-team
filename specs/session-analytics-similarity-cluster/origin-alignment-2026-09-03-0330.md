@@ -141,11 +141,15 @@ described it.
 ## What this record does NOT claim
 
 - The bundle was plan-only when first submitted. That is no longer
-  true of the branch: T1 (`embedding/clusters.py`), T2
-  (`embedding/cluster_reader.py` + the `clusters` CLI) and T3
-  (`mcp/tools.py:session_clusters`) are implemented, each through its
-  own review gate. T4 — README, the consolidated mutation ledger,
-  closure — is not done.
+  true of the branch: T1 (`embedding/clusters.py`, `24ceece`), T2
+  (`embedding/cluster_reader.py` + the `clusters` CLI, `299cbfa`), T3
+  (`mcp/tools.py:session_clusters`, `7606daa`) and T4 (this commit) are
+  all implemented, each through its own review gate.
+- T4 closure does NOT close anything: #289 and #65 both stay open, and
+  the PR is not merged. Closure here means the artifacts exist — README
+  section, the 34/34 consolidated mutation ledger re-run whole at final
+  HEAD with zero skips, task statuses, gates — not that the owner has
+  accepted the slice.
 - Nothing here makes E2 complete on #65 — the Studio UI slice remains,
   and E2 completeness is the owner's call.
 - The materialization and algorithm forks are DEFINED, not promised.

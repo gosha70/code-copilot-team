@@ -5,7 +5,7 @@ starts; no merge, no closures without the owner's explicit GO.
 
 ## T1 — pure component library
 
-**Status: pending.**
+**Status: DONE** — `24ceece`, reviewed and approved.
 
 **Implements:** FR-B, FR-C.
 
@@ -24,7 +24,7 @@ dependence anywhere.
 
 ## T2 — snapshot reader + CLI
 
-**Status: pending.**
+**Status: DONE** — `299cbfa`, reviewed and approved.
 
 **Implements:** FR-A, FR-D, FR-E (plan D2, D5, D6).
 
@@ -49,7 +49,7 @@ slice.
 
 ## T3 — the MCP surface
 
-**Status: pending.**
+**Status: DONE** — `7606daa`, reviewed and approved.
 
 **Implements:** FR-F.
 
@@ -72,7 +72,7 @@ byte-unchanged.
 
 ## T4 — closure
 
-**Status: pending.**
+**Status: DONE** — this commit.
 
 README section (transitive-grouping limitation and snapshot semantics
 in the FR-B discipline); consolidated mutation ledger re-run whole at

@@ -61,6 +61,7 @@ The zero-install path still works without `setup` — just pass `--dsn`:
 | `search`  | Substring search over archived trace text (E10; not ranked). |
 | `embed`   | Compute session embeddings into a provenance envelope (E2 slice 1, #285). |
 | `similar` | Populate `SIMILAR_TO` graph edges from stored embeddings (E2 slice 2, #287). |
+| `clusters`| Group the stored `SIMILAR_TO` edges into clusters, read-only (E2 slice 3, #289). |
 
 `ingest` flags: `--copilot` (repeatable; default all), `--root`, `--dsn`,
 `--developer-id`, `--redact {none,code,metadata-only}`, `--incremental`
@@ -864,6 +865,95 @@ call inside the MCP path; if ever wanted it is its own issue.
 
 The `mcp` package is pinned `>=1.0,<2`: the server targets the v1
 FastMCP surface, which mcp 2.x renamed.
+
+## Session clustering (E2 slice 3, issue #289)
+
+`./scripts/session-analytics clusters` groups the stored `SIMILAR_TO`
+edges into clusters. Read-only and computed on read: no new tables, no
+columns, no DDL, and no write statement anywhere in the slice.
+
+```bash
+./scripts/session-analytics graph      # Session nodes
+./scripts/session-analytics embed --model nomic-embed-text
+./scripts/session-analytics similar    # writes SIMILAR_TO
+./scripts/session-analytics clusters   # groups them (read-only)
+```
+
+**A cluster is a transitive DISCOVERY grouping, not a similarity
+claim.** A cluster is a connected component of the undirected view of
+the stored edges, with two or more members. Every pair of members is
+connected by a chain of recorded, above-threshold edges — but A and C
+land together through B even when `score(A, C)` is below the threshold
+or no A–C edge exists at all. Nothing that shows a cluster may imply
+all-pairs similarity. That limitation is the V1 design, stated
+deliberately rather than discovered later; if transitive chaining
+proves too coarse in practice, an algorithm change is its own
+evidence-backed slice (k-means and HDBSCAN need parameters and
+dependencies V1 refuses).
+
+**Grouping is undirected; the count is directed.** `similar` writes
+directed per-source top-K edges, and top-K membership is asymmetric
+while similarity is not. Two sessions are adjacent if an edge exists
+in either direction, so `A→B` and `B→A` form ONE adjacency — but the
+reported `directed_edge_count` is **2**, because that is how many
+stored records back the component. A lone `A→B` counts 1.
+
+**Two inputs, two provenances — the report labels both.** Cluster
+membership comes from the `SIMILAR_TO` edges CURRENTLY stored;
+the unclustered count comes from the CURRENT `Session` node
+inventory. They move independently: an incremental `graph` run adds
+nodes without touching edges, so the unclustered count can change
+while every cluster stays byte-identical. The report never claims the
+whole answer is frozen to one `similar` pass, and it cannot: the store
+attests only its present contents, and `graph --rebuild` drops and
+recreates the relationship tables, so an empty edge set can mean a
+rebuild as easily as a pass that found nothing. Re-run `similar` for
+fresh clusters.
+
+**Unclustered means no incident stored edge** — a session IN the graph
+that no edge touches. It is not "absent from any cluster": a member
+whose only stored edge were a self-loop has an incident edge yet no
+cluster, so it is deliberately neither (`similar` cannot produce that
+shape — it pairs distinct sessions). A relational session with no
+graph node is neither; it is a graph prerequisite, answered with
+"run graph" guidance.
+
+**Clusters are UNNAMED.** One cluster never spans two embedding spaces
+— `similar` forms pairs only inside a space, so clusters inherit that
+structurally, and a discriminator test proves it by driving the real
+producer over two incompatible spaces. But no space triple is printed
+and no per-space grouping is promised: the graph attests no triple,
+and joining against CURRENT envelopes would lie about the HISTORICAL
+space of stored edges, since re-embedding a member under another model
+leaves its old edges untouched. A surface may say members were
+connected under the producer's compatibility rule at production time;
+it may not say they currently share an envelope.
+
+Identity is the lexicographically smallest member key; members sort by
+key; clusters sort by descending size then ascending identity. The
+same `(edges, inventory)` pair always yields byte-identical output —
+no RNG, no iteration-order dependence, no timestamps. There are no
+tunable knobs: threshold and top-K belong to `similar`, where the
+edges are decided.
+
+Exit codes mirror `similar`: an absent graph path or an uninitialized
+store is a usage error with guidance (the absent path is refused
+before any open, creating nothing); a ready graph holding zero edges
+is **exit 0** with a healthy empty report, because absence of clusters
+is a result, not a failure. No DSN is required — nothing here reads
+the relational store.
+
+**MCP:** `session_clusters(session_id=None, limit=10)` returns that
+session's cluster with `outcome: "clustered"`, or `"unclustered"`, or
+`null` for the neither-case above; without a session id it lists
+clusters largest-first bounded by `limit`, while `cluster_count`
+remains the honest total. `limit` must be a non-negative integer —
+non-integers and negatives are refused by name before the graph is
+opened, never coerced. Results carry `basis: "embedding"`, both
+provenance labels, and the limitations above, taken from the same
+constants the CLI uses so the two surfaces cannot drift. The
+prerequisite ladder matches `similar_sessions` and introduces no new
+prerequisite literal for a missing graph node.
 
 ## Tests
 

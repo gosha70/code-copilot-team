@@ -360,6 +360,14 @@ class TestClustersCliLadder(unittest.TestCase):
         self.assertIn("graph database absent", err)
         self.assertIn("graph", err)
         self.assertFalse(ghost.exists(), "the absent path must not be created")
+        # WHICH layer refused matters. The precheck runs BEFORE any open
+        # and says "absent"; the open's own failure says "absent or
+        # unopenable". Without this, deleting the precheck is invisible
+        # whenever kuzu is installed — the read-only open refuses too,
+        # and the assertions above still pass. The precheck is the
+        # guarantee we own; the driver's behaviour is not.
+        self.assertNotIn("unopenable", err,
+                         "the pre-open check must be what refused")
 
     def _with_snapshot(self, snapshot, path):
         """Drive the real CLI against a fake snapshot, kuzu-free.
