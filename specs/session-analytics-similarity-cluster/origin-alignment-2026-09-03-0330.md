@@ -123,11 +123,29 @@ The `graph_ready()` duplication between the read-only `GraphSnapshot`
 and the write-capable `KuzuEdgeStore` is ACCEPTED and recorded in D5 —
 no shared-helper refactor, so a later review does not re-raise it.
 
-Still plan-only; no code exists.
+## Terminology correction during T3 review
+
+The bundle said this slice "introduces no new outcome literal". That
+was imprecise and contradicted the implemented result vocabulary:
+`clustered` / `unclustered` ARE this slice's own result states,
+required by FR-F. The precise rule — now written in spec.md, plan.md,
+tasks.md and `mcp/tools.py` — is:
+
+> no new prerequisite/outcome literal FOR A MISSING GRAPH NODE.
+
+A relational session absent from the graph reuses `similar_sessions`'
+existing `prerequisite: "graph"` answer with graph-sync guidance.
+Nothing about the implemented behaviour changed; only the wording that
+described it.
 
 ## What this record does NOT claim
 
-- Plan-only: no code exists at submission.
+- The bundle was plan-only when first submitted. That is no longer
+  true of the branch: T1 (`embedding/clusters.py`), T2
+  (`embedding/cluster_reader.py` + the `clusters` CLI) and T3
+  (`mcp/tools.py:session_clusters`) are implemented, each through its
+  own review gate. T4 — README, the consolidated mutation ledger,
+  closure — is not done.
 - Nothing here makes E2 complete on #65 — the Studio UI slice remains,
   and E2 completeness is the owner's call.
 - The materialization and algorithm forks are DEFINED, not promised.

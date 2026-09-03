@@ -141,10 +141,38 @@ class ClusterReport:
     clusters: tuple[Cluster, ...]
     unclustered_sessions: int
     graph_sessions: int
+    #: Inventory members with at least one incident stored edge, and
+    #: the inventory itself — BOTH from the same single read as
+    #: `clusters`. Carried so every classification a caller needs comes
+    #: from ONE snapshot: re-reading the store to answer a follow-up
+    #: question can straddle two different inventories and produce an
+    #: internally inconsistent answer. Deliberately NOT in `as_dict()`:
+    #: the report's bytes are a fixed contract.
+    incident_sessions: frozenset[str] = frozenset()
+    inventory_sessions: frozenset[str] = frozenset()
 
     @property
     def clustered_sessions(self) -> int:
         return sum(c.size for c in self.clusters)
+
+    def has_session(self, session_key: str) -> bool:
+        """Whether the graph held this session in THIS snapshot."""
+        return session_key in self.inventory_sessions
+
+    def is_unclustered(self, session_key: str) -> bool:
+        """FR-B's rule, exactly: IN the graph, with no incident edge.
+
+        Both halves matter. A key absent from the inventory is not
+        unclustered — it is not a graph session at all, and answering
+        otherwise would classify something the snapshot never held.
+        And this is NOT `not in any cluster`: a session whose only
+        stored edge is a self-loop has an incident edge (so it is not
+        unclustered) while T1 suppresses its size-one component (so it
+        is not clustered either). It is deliberately neither, and both
+        surfaces must agree on that.
+        """
+        return (session_key in self.inventory_sessions
+                and session_key not in self.incident_sessions)
 
     def as_dict(self) -> dict:
         """A deterministic mapping: identical for the same (edges,
@@ -206,4 +234,8 @@ def run_clusters(snapshot: GraphSnapshot) -> ClusterReport:
         clusters=clusters,
         unclustered_sessions=len(inventory - incident),
         graph_sessions=len(inventory),
+        # only inventory members: an edge endpoint the graph no longer
+        # holds is not a session anyone can ask about.
+        incident_sessions=frozenset(incident & inventory),
+        inventory_sessions=frozenset(inventory),
     )

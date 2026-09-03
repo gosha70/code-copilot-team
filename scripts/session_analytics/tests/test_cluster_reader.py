@@ -144,6 +144,45 @@ class TestUnclusteredIsDefinedByIncidence(unittest.TestCase):
         self.assertEqual(report.unclustered_sessions, 0)
         self.assertEqual(report.graph_sessions, 1)
 
+    def test_is_unclustered_requires_graph_membership(self) -> None:
+        """A key the snapshot never held is NOT unclustered.
+
+        "Unclustered" is a statement about a graph session. Answering
+        it for a key outside the inventory would classify something the
+        snapshot does not describe — and the MCP surface relies on this
+        to keep the missing-graph-node prerequisite distinct.
+        """
+        report = run_clusters(
+            _FakeSnapshot(nodes={"a", "b", "c"}, edges=(("a", "b", 0.9),)))
+        self.assertFalse(report.is_unclustered("ghost"))
+        self.assertFalse(report.has_session("ghost"))
+        self.assertTrue(report.is_unclustered("c"))   # in graph, no edge
+        self.assertFalse(report.is_unclustered("a"))  # in graph, clustered
+
+    def test_inventory_is_read_once_per_run(self) -> None:
+        """One snapshot for every classification.
+
+        Re-reading the inventory to answer a follow-up question can
+        straddle two different reads and produce an internally
+        inconsistent answer, so the report retains what it read.
+        """
+        class _Counting(_FakeSnapshot):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.keys_calls = 0
+
+            def session_keys(self):
+                self.keys_calls += 1
+                return super().session_keys()
+
+        snapshot = _Counting(nodes={"a", "b"}, edges=(("a", "b", 0.9),))
+        report = run_clusters(snapshot)
+        self.assertEqual(snapshot.keys_calls, 1)
+        # and every classification is answerable WITHOUT another read
+        report.has_session("a")
+        report.is_unclustered("b")
+        self.assertEqual(snapshot.keys_calls, 1)
+
     def test_edges_are_read_once_per_run(self) -> None:
         # both the grouping and the incidence set must describe the
         # same rows, so the store is round-tripped exactly once.
@@ -226,6 +265,24 @@ class TestDeterministicReportBytes(unittest.TestCase):
         reversed_ = run_clusters(_FakeSnapshot(
             nodes, [("b", "c", 0.8), ("a", "b", 0.9)])).as_dict()
         self.assertEqual(json.dumps(forward), json.dumps(reversed_))
+
+    def test_report_key_set_is_a_fixed_contract(self) -> None:
+        """The report's shape is a published contract.
+
+        Internal state carried on `ClusterReport` for callers (the
+        incidence set, say) must not leak into the serialized bytes,
+        and a new key may not appear without this test changing.
+        """
+        row = run_clusters(_FakeSnapshot(
+            {"a", "b"}, [("a", "b", 0.9)])).as_dict()
+        self.assertEqual(set(row), {
+            "clusters", "cluster_count", "clustered_sessions",
+            "unclustered_sessions", "graph_sessions", "basis",
+            "membership_basis", "inventory_basis", "limitations",
+        })
+        self.assertEqual(set(row["clusters"][0]), {
+            "identity", "size", "members", "directed_edge_count",
+        })
 
     def test_report_carries_the_directed_edge_count(self) -> None:
         row = run_clusters(_FakeSnapshot(

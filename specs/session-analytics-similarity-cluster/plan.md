@@ -76,9 +76,9 @@ unchanged). Reports label the two distinctly, never claim the whole
 report is frozen to the pass, and determinism (FR-C) is defined over
 BOTH inputs. For session-id lookup, a relational session absent from
 the graph returns `similar_sessions`' existing `prerequisite:
-"graph"` response with graph-sync guidance (#287 discipline retained,
-no new outcome literal), not an edgeless graph member. No snapshot
-storage is added.
+"graph"` response with graph-sync guidance (#287 discipline retained;
+no new prerequisite/outcome literal for a missing graph node), not an
+edgeless graph member. No snapshot storage is added.
 
 ## Design decisions (flagged for review)
 
@@ -143,7 +143,8 @@ storage is added.
   (relational session absent from the graph → `prerequisite ==
   "graph"` with "graph node" in the error, asserted the way
   `test_missing_graph_node_gets_graph_sync_guidance` asserts it for
-  `similar_sessions` — no new outcome literal); prerequisite ladder;
+  `similar_sessions` — no new prerequisite/outcome literal for a
+  missing graph node); prerequisite ladder;
   healthy empty; a registered-tool test driving the real server
   factory with a nondefault `kuzu_path` (gated on kuzu+mcp like #287).
 - **Live Kùzu class:** end-to-end `embed`-fixture → `similar` →

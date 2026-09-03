@@ -60,7 +60,8 @@ in `server.py` beside the existing five, on the plumbed `kuzu_path`.
 space triple) or an honest `"unclustered"`, with a relational
 session ABSENT from the graph getting `similar_sessions`' EXISTING
 `prerequisite: "graph"` response and graph-sync guidance instead of
-either — no new outcome literal is introduced; list mode is
+either — no new prerequisite/outcome literal for a missing graph
+node is introduced; list mode is
 largest-first and bounded by `limit`; results carry
 `basis: "embedding"` + the FR-A provenance
 notes and never imply pairwise similarity; the prerequisite ladder

@@ -180,7 +180,9 @@ One tool, `session_clusters`, registered beside the existing five:
   or masquerade as keyword results.
 - Prerequisite ladder consistent with `similar_sessions` (#287 FR-F),
   reusing its EXISTING response shape — this slice introduces no new
-  outcome literal: unknown session → error; a known relational
+  prerequisite/outcome literal FOR A MISSING GRAPH NODE (the result
+  states `clustered`/`unclustered` are this slice's own contract):
+  unknown session → error; a known relational
   session ABSENT from the graph → `prerequisite: "graph"` with
   graph-sync guidance ("run graph") and "graph node" named in the
   error, exactly as `similar_sessions` answers that condition

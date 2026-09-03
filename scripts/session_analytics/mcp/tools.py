@@ -378,6 +378,155 @@ def similar_sessions(
     }
 
 
+def session_clusters(
+    db: Database,
+    kuzu_path: str,
+    session_id: Optional[int] = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Clusters over the stored SIMILAR_TO snapshot (#289 FR-F).
+
+    With a ``session_id``: that session's cluster, or an honest
+    ``"unclustered"`` outcome. Without one: clusters largest first, up
+    to ``limit``.
+
+    PREREQUISITE LADDER, consistent with ``similar_sessions`` and
+    introducing NO new prerequisite/outcome literal FOR A MISSING
+    GRAPH NODE. A relational session that is
+    absent from the graph gets that tool's EXISTING
+    ``prerequisite: "graph"`` answer with graph-sync guidance and
+    "graph node" named in the error — never the word "unclustered",
+    which is reserved for a session that IS in the graph and has no
+    incident stored edge.
+
+    There is deliberately NO embedding-envelope rung. Clustering reads
+    the graph alone (FR-A), so demanding a current envelope would be a
+    false prerequisite: a graph member with no edges is honestly
+    unclustered, not un-embedded.
+
+    Clusters are reported UNNAMED — no space triple, no per-space
+    grouping — and results carry the same provenance notes and
+    limitations the CLI reports, from one shared source, so the two
+    surfaces cannot drift apart.
+    """
+    from ..embedding.cluster_reader import (
+        BASIS_EMBEDDING,
+        INVENTORY_BASIS_TEXT,
+        LIMITATIONS_TEXT,
+        MEMBERSHIP_BASIS_TEXT,
+        KuzuGraphSnapshot,
+        run_clusters,
+    )
+    from ..embedding.similar_runner import GraphNotReadyError
+    from ..graph.schema import GraphDatabase
+
+    # A negative page size is INVALID INPUT, refused by name before the
+    # graph is touched — never silently reinterpreted as an empty page,
+    # which would look like a successful answer. Zero stays valid: it
+    # asks for no rows and still reports the honest total.
+    # Validated, never COERCED: int(1.5) would silently accept a
+    # fractional page size as 1, and bool is an int subclass so True
+    # would pass as 1 — both contradict the integer-only contract this
+    # very error message promises.
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return {"error": f"limit must be an integer, got {limit!r}"}
+    if limit < 0:
+        return {"error": f"limit must be >= 0, got {limit}"}
+
+    session_key = None
+    if session_id is not None:
+        row = db.query_one(
+            "SELECT copilot, session_id FROM copilot_session WHERE id = ?",
+            (session_id,))
+        if row is None:
+            return {"error": f"session {session_id} not found"}
+        session_key = f"{row[0]}:{row[1]}"
+
+    # The graph store — absent is checked BEFORE any connect, so this
+    # read path creates nothing.
+    if not kuzu_path or not Path(kuzu_path).exists():
+        return {
+            "error": f"graph database absent at {kuzu_path or '(unset)'}",
+            "prerequisite": "graph",
+            "guidance": "run './scripts/session-analytics graph' first",
+        }
+    # The exists() check alone is a TOCTOU: a path that disappears
+    # between check and open must be REFUSED, never recreated.
+    try:
+        gdb = GraphDatabase.connect_read_only(kuzu_path)
+    except RuntimeError:
+        return {
+            "error": f"graph database absent or unopenable at {kuzu_path}",
+            "prerequisite": "graph",
+            "guidance": "run './scripts/session-analytics graph' first",
+        }
+    try:
+        snapshot = KuzuGraphSnapshot(gdb)
+        try:
+            report = run_clusters(snapshot)
+        except GraphNotReadyError:
+            return {
+                "error": "graph store holds no Session table",
+                "prerequisite": "graph",
+                "guidance": "run './scripts/session-analytics graph' first",
+            }
+    finally:
+        gdb.close()
+
+    notes = {
+        "basis": BASIS_EMBEDDING,
+        "membership_basis": MEMBERSHIP_BASIS_TEXT,
+        "inventory_basis": INVENTORY_BASIS_TEXT,
+        "limitations": list(LIMITATIONS_TEXT),
+    }
+
+    if session_key is None:
+        ranked = list(report.clusters)[:limit]
+        return {
+            "clusters": [c.as_dict() for c in ranked],
+            "cluster_count": len(report.clusters),
+            "unclustered_sessions": report.unclustered_sessions,
+            "graph_sessions": report.graph_sessions,
+            **notes,
+        }
+
+    # A relational session with no graph node is a GRAPH prerequisite,
+    # not an "unclustered" answer (#287 discipline retained). Presence
+    # comes from the REPORT, so every classification below describes
+    # the one snapshot `run_clusters` already read — re-reading the
+    # inventory here could straddle two and answer inconsistently.
+    if not report.has_session(session_key):
+        return {
+            "error": f"session {session_id} has no graph node",
+            "prerequisite": "graph",
+            "guidance": "run './scripts/session-analytics graph' to "
+                        "sync the graph, then 'similar'",
+        }
+    for cluster in report.clusters:
+        if session_key in cluster.members:
+            return {
+                "session_id": session_id,
+                "outcome": "clustered",
+                "cluster": cluster.as_dict(),
+                **notes,
+            }
+    # NOT in a cluster. "Unclustered" is decided by FR-B's INCIDENCE
+    # rule, not by cluster membership, so the two surfaces agree: a
+    # session whose only stored edge is a self-loop HAS an incident
+    # edge and is therefore not unclustered, while T1 suppresses its
+    # size-one component so it is not clustered either. It is
+    # deliberately neither, and `outcome` is null rather than a third
+    # literal. #287's producer cannot create that shape; a hand-built
+    # or future edge set can.
+    unclustered = report.is_unclustered(session_key)
+    return {
+        "session_id": session_id,
+        "outcome": "unclustered" if unclustered else None,
+        "cluster": None,
+        **notes,
+    }
+
+
 def _b(v):
     if v is None:
         return None
