@@ -30,10 +30,15 @@ dependence anywhere.
 the prerequisite ladder and exit-code discipline.
 
 **Done when:** the two-space discriminator proves no cluster mixes
-spaces; absent path → usage error with ZERO filesystem creation
-(asserted); unbuilt graph → usage error; ready-but-empty snapshot →
-exit 0 healthy report with the snapshot note; report bytes
-deterministic across runs; no write statement anywhere in the slice.
+spaces; the provenance discriminator proves membership is
+byte-identical while the unclustered count moves when the node
+inventory grows with edges unchanged; the report labels the two
+provenances distinctly, names no space triple, and promises no
+per-space grouping; absent path → usage error with ZERO filesystem
+creation (asserted); unbuilt graph → usage error; ready-but-empty
+snapshot → exit 0 healthy report; report bytes deterministic over
+the same (edges, inventory) pair; no write statement anywhere in the
+slice.
 
 ## T3 — the MCP surface
 
@@ -44,13 +49,16 @@ deterministic across runs; no write statement anywhere in the slice.
 `mcp/tools.py:session_clusters(session_id=None, limit)`; registration
 in `server.py` beside the existing five, on the plumbed `kuzu_path`.
 
-**Done when:** session-id mode returns the cluster or an honest
-`"unclustered"`; list mode is largest-first and bounded by `limit`;
-results carry `basis: "embedding"` + the snapshot note and never
-imply pairwise similarity; the prerequisite ladder matches
-`similar_sessions`; a registered-tool test drives the real server
-factory with a nondefault `kuzu_path`; the disappearing-path race is
-refused, not repaired; existing tools' outputs byte-unchanged.
+**Done when:** session-id mode returns the cluster (unnamed — no
+space triple) or an honest `"unclustered"`, with a relational
+session ABSENT from the graph getting the `missing_graph_node`
+guidance instead of either; list mode is largest-first and bounded
+by `limit`; results carry `basis: "embedding"` + the FR-A provenance
+notes and never imply pairwise similarity; the prerequisite ladder
+matches `similar_sessions`; a registered-tool test drives the real
+server factory with a nondefault `kuzu_path`; the disappearing-path
+race is refused, not repaired; existing tools' outputs
+byte-unchanged.
 
 ## T4 — closure
 

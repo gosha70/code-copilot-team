@@ -54,17 +54,25 @@ all read-only:
   `mcp/tools.py`, registered in `mcp/server.py` beside the existing
   five, taking the already-plumbed `kuzu_path`.
 
-Space attribution: `SIMILAR_TO` carries no space fields, and this
-slice must not read envelopes (spec FR-A snapshot rule). The reader
-reports each cluster's space as the sessions' shared space ONLY if it
-can do so without envelope reads — it cannot, so V1 reports clusters
-WITHOUT naming the space triple and instead guarantees (and tests)
-that no cluster spans spaces. Surfaces say "one embedding space per
-cluster (structural)" rather than printing a triple they cannot
-attest from the graph alone. ← flagged for plan review: if the owner
-wants the triple printed, the honest source is a relational envelope
-read joined by session_key, which widens FR-A; the conservative V1
-does not.
+Space attribution — RESOLVED at plan review (P1): V1 reports
+**unnamed components** with no per-space grouping promise anywhere;
+compatibility is inherited from the similarity producer and asserted
+by the two-space discriminator, never named. The current-envelope
+join is rejected outright, not merely deferred: the reviewer
+reproduced re-embedding a member under another model while its old
+edges remained unchanged — current envelopes cannot attest the
+HISTORICAL space of stored edges, so a joined label would lie.
+
+Two inputs, two provenances — pinned at plan review (P2): the
+reader's `edges()` carries cluster MEMBERSHIP (stored edges, last
+completed `similar` pass); `session_keys()` carries the CURRENT graph
+node inventory, which incremental `graph` runs change independently
+(reproduced: nodes 2→3, unclustered 0→1, edges unchanged). Reports
+label the two distinctly, never claim the whole report is frozen to
+the pass, and determinism (FR-C) is defined over BOTH inputs. For
+session-id lookup, a relational session absent from the graph is a
+`missing_graph_node` prerequisite (#287 discipline retained), not an
+edgeless graph member. No snapshot storage is added.
 
 ## Design decisions (flagged for review)
 
@@ -99,15 +107,20 @@ does not.
   #287 `_FakeEdgeStore` pattern, read-only subset); the two-space
   discriminator (no cluster mixes spaces — seeded via two
   disconnected same-shaped edge groups from a real `similar` run in
-  the live class); unready graph → `GraphNotReadyError`; healthy
-  empty.
+  the live class); the PROVENANCE discriminator (grow the node
+  inventory with the edge set unchanged → membership byte-identical,
+  unclustered count moves — the plan-review reproduction as a
+  regression); unready graph → `GraphNotReadyError`; healthy empty.
 - **CLI:** prerequisite ladder exit codes (absent path → usage, zero
   creation asserted; unbuilt graph → usage; empty snapshot → exit 0);
-  deterministic report bytes.
+  deterministic report bytes over the same (edges, inventory) pair;
+  no space triple anywhere in the output.
 - **MCP:** session-id and list modes; unknown session; unclustered
-  outcome; prerequisite ladder; healthy empty; a registered-tool test
-  driving the real server factory with a nondefault `kuzu_path`
-  (gated on kuzu+mcp like #287).
+  outcome; the missing-graph-node prerequisite distinct from
+  "unclustered" (relational session absent from the graph → "run
+  graph" guidance); prerequisite ladder; healthy empty; a
+  registered-tool test driving the real server factory with a
+  nondefault `kuzu_path` (gated on kuzu+mcp like #287).
 - **Live Kùzu class:** end-to-end `embed`-fixture → `similar` →
   `clusters` over a real store, read-only open verified.
 - **Closure:** consolidated mutation ledger (the #287 driver

@@ -16,15 +16,17 @@ governing order:
 
 1. **"What themes are in my session library?"** An operator runs
    `clusters` after `embed` + `similar` and sees the groups of
-   mutually-reachable similar sessions, per embedding space, largest
-   first — a map of recurring work, from stored evidence only.
+   mutually-reachable similar sessions, largest first — a map of
+   recurring work, from stored evidence only.
 2. **An agent asks for a session's cohort over MCP.** Given a session
    id, the tool returns the cluster that session belongs to — its
-   siblings, with the shared space and `basis: "embedding"` — or an
-   honest "unclustered" when the snapshot holds no edge for it.
+   siblings, with `basis: "embedding"` — or an honest "unclustered"
+   when the stored edges hold none for it.
 3. **A mixed-model library stays honest.** Clusters never span
-   embedding spaces; the report shows clusters grouped by space, so
-   fragmentation from multiple models is visible, never papered over.
+   embedding spaces — inherited structurally from the similarity
+   producer — but this slice reports UNNAMED components and promises
+   no per-space grouping: space fragmentation is `similar`'s report
+   to give (it reads the envelopes; this slice never does).
 4. **A healthy empty answer.** A ready graph whose last `similar`
    pass wrote no edges (singleton spaces, below-threshold scores)
    yields zero clusters with exit 0 — absence of clusters is a
@@ -40,18 +42,30 @@ snapshot** — the edge set written by the last COMPLETED `similar`
 pass (#287 FR-D/FR-E). Consequences, each a requirement and not an
 accident:
 
-- **One space per cluster.** `SIMILAR_TO` edges exist only inside one
-  FR-A space `(provider, model, dim)` — pairs are formed inside
-  groups, structurally (#287 D1) — so no component can span spaces.
-  This slice must still assert it: a discriminator test seeds two
-  spaces with internally-similar sessions and proves no cluster mixes
-  them.
-- **Snapshot semantics.** Clusters describe the last completed
-  `similar` pass. Nothing in this slice reads envelopes, recomputes
-  similarity, or contacts a backend; an operator who wants fresh
-  clusters re-runs `similar` first. Relational changes made after
-  that pass (new sessions, invalidated envelopes) are invisible here
-  until the next pass — by design, and the report says so.
+- **One space per cluster — guaranteed, never named.** `SIMILAR_TO`
+  edges exist only inside one FR-A space `(provider, model, dim)` —
+  pairs are formed inside groups, structurally (#287 D1) — so no
+  component can span spaces. This slice must still assert it: a
+  discriminator test seeds two spaces with internally-similar
+  sessions and proves no cluster mixes them. But components are
+  reported **unnamed** (plan-review decision): the graph attests no
+  triple, and a join against CURRENT envelopes cannot attest the
+  HISTORICAL space of stored edges — re-embedding a member under
+  another model leaves its old edges unchanged (reproduced at plan
+  review), so a current-envelope label would lie about them. No
+  per-space grouping is promised anywhere in this slice.
+- **Two inputs, two provenances — pinned, not blurred.** Cluster
+  MEMBERSHIP derives from the stored edge set — written by the last
+  COMPLETED `similar` pass and untouched by anything else. The
+  UNCLUSTERED count derives from the CURRENT graph node inventory,
+  which incremental `graph` runs change independently of the edges
+  (reproduced at plan review: adding a session and re-running `graph`
+  moved nodes 2→3 and unclustered 0→1 with both edges unchanged). The
+  report must label the two provenances distinctly and may not claim
+  the whole report is frozen to the `similar` pass. Nothing in this
+  slice reads envelopes, recomputes similarity, or contacts a
+  backend; fresh clusters require re-running `similar`, and no
+  snapshot storage is added to change any of this.
 - **Inherited evidence limits.** Cluster membership inherits FR-B's
   name/tag guarantee verbatim: same recorded backend family, served
   name/tag, and geometry — never model-version identity.
@@ -75,9 +89,12 @@ more members.
   **transitive discovery grouping**, not a pairwise-similarity
   guarantee; any surface that shows a cluster must not imply
   all-pairs similarity.
-- Sessions present in the graph with no incident `SIMILAR_TO` edge
-  are **unclustered** — counted and reportable, never padded into
-  singleton "clusters".
+- Sessions present in the CURRENT graph node inventory with no
+  incident stored edge are **unclustered** — counted and reportable
+  (FR-A's second provenance), never padded into singleton
+  "clusters". A relational session ABSENT from the graph is neither
+  clustered nor unclustered — it is a `missing_graph_node`
+  prerequisite (FR-F), the #287 discipline retained.
 
 ### FR-C — deterministic identity and order
 
@@ -86,8 +103,10 @@ more members.
   RNG, no iteration-order dependence, no timestamps.
 - Members are reported sorted by `session_key`; clusters are reported
   in a deterministic order (descending size, then ascending cluster
-  identity). Two runs over the same snapshot must produce
-  byte-identical reports.
+  identity). Two runs over the same PAIR of inputs — stored edge set
+  AND current graph node inventory — must produce byte-identical
+  reports; determinism is defined over both, because the inventory
+  can change while the edges do not (FR-A).
 
 ### FR-D — compute-on-read (the materialization fork, decided)
 
@@ -116,9 +135,12 @@ node/rel tables, no relational columns, no DDL change.
   absent graph path → usage error with "run graph first" guidance;
   ready-but-unbuilt graph (no `Session` table) → usage error; a
   ready graph with zero edges → **exit 0**, healthy empty report.
-- Report: clusters grouped by space — identity, size, members, edge
-  count — plus the unclustered-session count and a snapshot note
-  ("clusters describe the last completed `similar` pass").
+- Report: unnamed clusters — identity, size, members, edge count —
+  plus the unclustered-session count, with the two provenances
+  labeled distinctly: cluster membership describes the stored edges
+  of the last completed `similar` pass; the unclustered count
+  reflects the current graph node inventory. No per-space grouping
+  and no space triple anywhere (FR-A).
 - No new config keys: clustering has no tunable parameters in V1
   (threshold and top-K belong to `similar`, where the edges are
   decided). The CLI must not grow speculative knobs.
@@ -128,16 +150,19 @@ node/rel tables, no relational columns, no DDL change.
 One tool, `session_clusters`, registered beside the existing five:
 
 - `session_clusters(session_id=None, limit=10)`: with a session id,
-  returns that session's cluster (siblings, shared space, edge
-  count) or an honest `"unclustered"` outcome; without one, lists
-  clusters (largest first, up to `limit`).
-- Basis honesty: results carry `basis: "embedding"` and the snapshot
-  note; they must never imply pairwise similarity (FR-B) or
-  masquerade as keyword results.
+  returns that session's cluster (siblings and edge count — unnamed,
+  no space triple) or an honest `"unclustered"` outcome; without
+  one, lists clusters (largest first, up to `limit`).
+- Basis honesty: results carry `basis: "embedding"` and the FR-A
+  provenance notes; they must never imply pairwise similarity (FR-B)
+  or masquerade as keyword results.
 - Prerequisite ladder consistent with `similar_sessions` (#287 FR-F):
-  unknown session → error; absent/unopenable graph → `prerequisite:
-  "graph"` with guidance; unbuilt graph → same; healthy empty (ready
-  graph, no edges) → an honest empty result, no remedial default.
+  unknown session → error; a known relational session ABSENT from
+  the graph → the `missing_graph_node` guidance ("run graph"), NOT
+  "unclustered" — that word is reserved for graph members with no
+  stored edge; absent/unopenable graph → `prerequisite: "graph"`
+  with guidance; unbuilt graph → same; healthy empty (ready graph,
+  no edges) → an honest empty result, no remedial default.
 - The graph open is `connect_read_only` — the MCP read path cannot
   create or mutate the store (#287 T3 capture), and a
   disappearing-path race must be refused, not repaired.
