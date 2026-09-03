@@ -143,6 +143,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p_emb.add_argument("--limit", type=int, default=None,
                        help="Max sessions to embed this run.")
 
+    p_sim = sub.add_parser(
+        "similar",
+        help="Populate SIMILAR_TO graph edges from stored session "
+             "embeddings (E2 slice 2, #287) — strictly local; full "
+             "reconciliation every run.",
+    )
+    p_sim.add_argument("--dsn", default=None, help="Database DSN (else config).")
+    p_sim.add_argument("--db-path", default=None,
+                       help="Kùzu database path (else config kuzu_path).")
+    p_sim.add_argument("--threshold", default=None,
+                       help="Minimum cosine score for an edge (else config).")
+    p_sim.add_argument("--top-k", default=None,
+                       help="Neighbors kept per session (else config).")
+
     p_kpi = sub.add_parser("kpis", help="Compute session-level KPI rollups from labels.")
     p_kpi.add_argument("--dsn", default=None, help="Database DSN (else config).")
     p_kpi.add_argument("--session-id", type=int, default=None, help="Limit to one session id.")
@@ -893,6 +907,66 @@ def _cmd_embed(args: argparse.Namespace) -> int:
     return C.EXIT_RUNTIME if stats.failed > 0 else C.EXIT_OK
 
 
+def _cmd_similar(args: argparse.Namespace) -> int:
+    from .embedding.similar_runner import (
+        GraphNotReadyError, KuzuEdgeStore, run_similar)
+    from .graph.schema import GraphDatabase
+    from .relational.db import Database
+
+    cli_sim: dict = {}
+    if args.threshold is not None:
+        cli_sim[C.CFG_SIMILARITY_THRESHOLD] = args.threshold
+    if args.top_k is not None:
+        cli_sim[C.CFG_SIMILARITY_TOP_K] = args.top_k
+    try:
+        cfg = load_config(
+            dsn=args.dsn, kuzu_path=args.db_path,
+            extra_overrides={C.CFG_SIMILARITY: cli_sim} if cli_sim else None,
+        )
+    except ValueError as exc:
+        # a refused knob (nan threshold, fractional top_k, …) is a
+        # usage error with a named setting — never a traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        return C.EXIT_USAGE
+    if not cfg.dsn:
+        print("error: no DSN configured (see --dsn or run setup).", file=sys.stderr)
+        return C.EXIT_USAGE
+    # ABSENT graph: checked BEFORE connect, because GraphDatabase
+    # .connect mkdirs and creates — `similar` must never create the
+    # store it reconciles (that is `graph`'s job).
+    from pathlib import Path as _Path
+
+    if not _Path(cfg.kuzu_path).exists():
+        print(
+            f"error: graph database absent at {cfg.kuzu_path} — run "
+            f"'./scripts/session-analytics graph' first",
+            file=sys.stderr)
+        return C.EXIT_USAGE
+    try:
+        db = Database.connect(cfg.dsn)
+        try:
+            gdb = GraphDatabase.connect(cfg.kuzu_path)
+            try:
+                stats = run_similar(db, cfg.similarity, KuzuEdgeStore(gdb))
+            finally:
+                gdb.close()
+        finally:
+            db.close()
+    except GraphNotReadyError as exc:
+        # exists but uninitialized: a prerequisite, with guidance.
+        print(f"error: {exc}", file=sys.stderr)
+        return C.EXIT_USAGE
+    except Exception as exc:  # noqa: BLE001 — a torn pass rolled back;
+        #                       the previous edge set stands.
+        _log.exception("similar failed")
+        print(f"error: similar failed: {exc}", file=sys.stderr)
+        return C.EXIT_RUNTIME
+    print(json.dumps(stats.as_dict(), indent=2))
+    # invalid stored envelopes are a failed-class condition: something
+    # wrote garbage where validated envelopes belong. Surface loudly.
+    return C.EXIT_RUNTIME if stats.excluded_invalid else C.EXIT_OK
+
+
 def _cmd_kpis(args: argparse.Namespace) -> int:
     from .judge.kpis import compute_kpis
     from .judge.rubric import load_rubric
@@ -953,10 +1027,12 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
         print("error: no DSN configured (see --dsn).", file=sys.stderr)
         return C.EXIT_USAGE
     try:
-        server.run(cfg.dsn)
+        server.run(cfg.dsn, cfg.kuzu_path)
     except ImportError as exc:
         print(
-            f"error: the mcp command needs the 'mcp' package (pip install mcp): {exc}",
+            f"error: the mcp command needs the 'mcp' package "
+            f"(pip install 'mcp>=1.0,<2' — the server targets the v1 "
+            f"FastMCP surface): {exc}",
             file=sys.stderr,
         )
         return C.EXIT_RUNTIME
@@ -995,6 +1071,7 @@ _HANDLERS = {
     "graph": _cmd_graph,
     "analyze": _cmd_analyze,
     "embed": _cmd_embed,
+    "similar": _cmd_similar,
     "kpis": _cmd_kpis,
     "calibrate": _cmd_calibrate,
     "mcp": _cmd_mcp,

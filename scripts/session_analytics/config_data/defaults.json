@@ -59,6 +59,10 @@
     "workers": 1
   },
   "kuzu_path": "",
+  "similarity": {
+    "threshold": 0.55,
+    "top_k": 5
+  },
   "pricing": {
     "models": {
       "claude-haiku-4-8": {

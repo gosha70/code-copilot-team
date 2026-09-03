@@ -37,6 +37,8 @@ ENV_EMBED_BACKEND = "CCT_SA_EMBED_BACKEND"
 ENV_EMBED_MODEL = "CCT_SA_EMBED_MODEL"
 ENV_EMBED_INPUT_CAP = "CCT_SA_EMBED_INPUT_CAP"
 ENV_EMBED_WORKERS = "CCT_SA_EMBED_WORKERS"
+ENV_SIMILARITY_THRESHOLD = "CCT_SA_SIMILARITY_THRESHOLD"
+ENV_SIMILARITY_TOP_K = "CCT_SA_SIMILARITY_TOP_K"
 ENV_SOURCE_PREFIX = "CCT_SA_SOURCE_"  # + COPILOT (e.g. CCT_SA_SOURCE_CLAUDE_CODE)
 # Routing-shadow (#261): evidence roots are SERVER-SIDE configuration —
 # the API never serves the raw paths (only {configured, root_count}).
@@ -129,6 +131,64 @@ class EmbeddingConfig:
     workers: int
 
 
+def _sim_threshold(value: Any) -> float:
+    """similarity.threshold: a finite number in [-1.0, 1.0] — the
+    range cosine can produce. Booleans and non-finite values refuse."""
+    if isinstance(value, bool):
+        raise ValueError(
+            f"similarity.threshold must be a number, got boolean {value!r}")
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"similarity.threshold {value!r} is not a number") from None
+    import math as _math
+    if not _math.isfinite(f):
+        raise ValueError(
+            f"similarity.threshold {value!r} is not finite — NaN/inf "
+            f"would silently empty or saturate every neighbor set")
+    if not (-1.0 <= f <= 1.0):
+        raise ValueError(
+            f"similarity.threshold {f} is outside [-1.0, 1.0], the "
+            f"range cosine similarity can produce")
+    return f
+
+
+def _sim_top_k(value: Any) -> int:
+    """similarity.top_k: a positive integer. Booleans, fractional
+    values, and non-positive values refuse — int() would silently
+    turn True into 1 and 1.9 into 1."""
+    if isinstance(value, bool):
+        raise ValueError(
+            f"similarity.top_k must be an integer, got boolean {value!r}")
+    if isinstance(value, int):
+        k = value
+    elif isinstance(value, str):
+        try:
+            k = int(value, 10)
+        except ValueError:
+            raise ValueError(
+                f"similarity.top_k {value!r} is not an integer") from None
+    elif isinstance(value, float):
+        raise ValueError(
+            f"similarity.top_k {value!r} has a fractional type — an "
+            f"integer count is required, not truncated")
+    else:
+        raise ValueError(f"similarity.top_k {value!r} is not an integer")
+    if k <= 0:
+        raise ValueError(f"similarity.top_k must be positive, got {k}")
+    return k
+
+
+@dataclass(frozen=True)
+class SimilarityConfig:
+    """Similarity pass knobs (#287). Scores at or above ``threshold``
+    are edge-eligible; each session keeps its ``top_k`` best."""
+
+    threshold: float
+    top_k: int
+
+
 @dataclass(frozen=True)
 class ProjectOverride:
     """One ``projects.<key>`` entry: a per-project redaction/ingest override.
@@ -160,6 +220,7 @@ class AnalyticsConfig:
     redaction_mode: str
     judge: JudgeConfig
     embedding: "EmbeddingConfig"
+    similarity: "SimilarityConfig"
     pricing: "PricingConfig"
     projects: Mapping[str, ProjectOverride] = field(default_factory=dict)
     project_id_rules: tuple[ProjectIdRule, ...] = field(default_factory=tuple)
@@ -583,6 +644,46 @@ def load_config(
         workers=int(_embed_value(C.CFG_EMBEDDING_WORKERS, ENV_EMBED_WORKERS)),
     )
 
+    # similarity (#287): the same discipline as embedding — the data
+    # file is the ONLY source of defaults, presence beats truthiness,
+    # CLI (the similarity block of extra_overrides) is highest.
+    sdata = data.get(C.CFG_SIMILARITY)
+    if not isinstance(sdata, Mapping):
+        raise ValueError(
+            "config has no 'similarity' block — defaults.json is the "
+            "single source of similarity defaults, and the loader refuses "
+            "to reconstruct them in code"
+        )
+    _sim_required = (C.CFG_SIMILARITY_THRESHOLD, C.CFG_SIMILARITY_TOP_K)
+    _sim_missing = [k for k in _sim_required if k not in sdata]
+    if _sim_missing:
+        raise ValueError(
+            f"similarity config is missing {', '.join(_sim_missing)} — "
+            f"defaults.json is the single source of similarity defaults"
+        )
+    _sim_cli = (extra_overrides or {}).get(C.CFG_SIMILARITY)
+    _sim_cli = dict(_sim_cli) if isinstance(_sim_cli, Mapping) else {}
+
+    def _sim_value(key: str, env_key: str) -> Any:
+        if key in _sim_cli:
+            return _sim_cli[key]
+        ov = env(env_key)
+        if ov is not None:
+            return ov
+        return sdata[key]
+
+    # Validated BEFORE coercion (#287 T1 review): float()/int() accept
+    # exactly the malformed values these knobs must refuse — "nan" and
+    # "inf" coerce cleanly, int(1.9) truncates, int(True) is 1 — and
+    # T2 will let these settings drive edge reconciliation, so a bad
+    # value must refuse loudly here, naming the setting.
+    similarity = SimilarityConfig(
+        threshold=_sim_threshold(_sim_value(
+            C.CFG_SIMILARITY_THRESHOLD, ENV_SIMILARITY_THRESHOLD)),
+        top_k=_sim_top_k(_sim_value(
+            C.CFG_SIMILARITY_TOP_K, ENV_SIMILARITY_TOP_K)),
+    )
+
     pricing = _load_pricing(data)
     projects, project_id_rules = _load_projects(data)
 
@@ -595,6 +696,7 @@ def load_config(
         redaction_mode=resolved_redaction,
         judge=judge,
         embedding=embedding,
+        similarity=similarity,
         pricing=pricing,
         projects=projects,
         project_id_rules=project_id_rules,
