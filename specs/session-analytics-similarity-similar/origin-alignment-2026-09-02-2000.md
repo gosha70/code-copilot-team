@@ -123,7 +123,31 @@ three of them against real infrastructure installed to match CI (kuzu
   provenance (the defined upgrade path).
 
 The consolidated mutation ledger re-ran whole at the final HEAD under
-kuzu+mcp with zero skips: 24/24 caught (`mutation-ledger.md`).
+kuzu+mcp with zero skips: 26/26 caught (`mutation-ledger.md`).
+
+## Final correction round (tests and evidence only)
+
+The T4 review found one last P2: the validated-only grouping boundary
+had an ESCAPING mutation — shape-only checks that retain the correct
+provider passed all 75 tests, while a complete envelope carrying
+`[true, 0, 0]` went on to produce two score-1.0 edges through
+`run_similar` (Python's bool-as-int). No design change was needed;
+the boundary itself was correct, only undiscriminated. Applied:
+
+- Complete-but-FR-9-invalid envelope discriminators at BOTH
+  boundaries: grouping (exclusion with the FR-9 reason — boolean
+  element, zero vector) and the pass (exclusion reported in stats,
+  NO edges incident to the invalid session, the valid pair still
+  scored).
+- Ledger T1-M2 split: the old mutation changed validation and
+  provider at once, proving nothing about either alone. T1-M2a
+  (shape-only, provider retained — the review's exact escape) and
+  T1-M2b (validated, provider dropped) now run separately.
+- The hardcoded-default-reconstruction config mutation, missing from
+  the claimed complete consolidation, restored as T1-M9.
+
+Repository code untouched in this round — tests, ledger, and this
+record only.
 
 ## What this record does NOT claim
 

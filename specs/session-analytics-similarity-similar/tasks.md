@@ -82,7 +82,7 @@ byte-unchanged; the tool is registered beside the existing four.
 
 ## T4 — closure
 
-**Status: complete.** README section (name/tag heuristic, last-pass snapshot semantics, and the deferred text-query embedding all explicit); the consolidated 24-mutation ledger re-run whole at the final HEAD under kuzu+mcp with zero test skips — 24 caught, 0 escaped (`mutation-ledger.md`); full suite and repo gates green; origin record refreshed last.
+**Status: complete** (one final review round: the validated-only grouping boundary had an escaping mutation — shape-only checks retaining the correct provider passed all 75 tests while `[true, 0, 0]` produced two score-1.0 edges through `run_similar`; fixed with complete-but-FR-9-invalid envelope discriminators at BOTH the grouping boundary, asserting the exclusion reason, and the pass boundary, asserting no incident edges; ledger T1-M2 split into validation-only and provider-only mutations run separately, and the missing hardcoded-default-reconstruction config mutation restored as T1-M9). README section (name/tag heuristic, last-pass snapshot semantics, and the deferred text-query embedding all explicit); the consolidated 26-mutation ledger re-run whole at the final HEAD under kuzu+mcp with zero test skips (77 tests) — 26 caught, 0 escaped (`mutation-ledger.md`); full suite and repo gates green; origin record refreshed last.
 
 README section (state plainly: scores are discovery heuristics over a
 same-named space, not model-version identity — FR-B's boundary);

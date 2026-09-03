@@ -73,6 +73,22 @@ class TestGrouping(unittest.TestCase):
         self.assertIn("missing fields", g.excluded_invalid[2])
         self.assertEqual(sum(len(v) for v in g.groups.values()), 1)
 
+    def test_complete_but_invalid_envelope_excluded_at_grouping(self) -> None:
+        # THE VALIDATED-ONLY BOUNDARY discriminator (final review): a
+        # COMPLETE envelope — right shape, right provider — whose
+        # vector FR-9 refuses. Shape-only checks that retain the
+        # correct provider satisfy every other fixture; only consulting
+        # the FR-9 validator at the grouping boundary catches these.
+        g = group_by_space({
+            1: _env(),
+            2: _env(vector=(True, 0.0, 0.0)),   # boolean element
+            3: _env(vector=(0.0, 0.0, 0.0)),    # zero vector
+        })
+        self.assertEqual(sorted(g.excluded_invalid), [2, 3])
+        self.assertIn("boolean", g.excluded_invalid[2])
+        self.assertIn("zero vector", g.excluded_invalid[3])
+        self.assertEqual(sum(len(v) for v in g.groups.values()), 1)
+
     def test_dim_conflict_reported_and_nobody_disqualified(self) -> None:
         # THE THREE-SESSION DISCRIMINATOR (review round 3): two valid
         # 3-dim sessions plus one same-named 4-dim session. The
@@ -501,6 +517,23 @@ class TestSimilarRunner(unittest.TestCase):
         store = _FakeEdgeStore(nodes={ka})
         stats = self._run(store)
         self.assertEqual(len(stats.excluded_invalid), 1)
+
+    def test_complete_but_invalid_envelope_yields_no_edges(self) -> None:
+        # THE PASS-BOUNDARY half of the final-review discriminator:
+        # [true, 0, 0] is a COMPLETE envelope FR-9 refuses (boolean
+        # element), yet Python's bool-as-int would score it 1.0
+        # against a parallel valid vector — two score-1.0 edges if a
+        # shape-only grouping ever keys it. The pass must exclude it
+        # WITH the FR-9 reason and write no edge incident to it.
+        sid_bad, kbad = self._session("bad", _env(vector=(True, 0.0, 0.0)))
+        _, ka = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
+        _, kb = self._session("b", _env(vector=(0.9, 0.1, 0.0)))
+        store = _FakeEdgeStore(nodes={kbad, ka, kb})
+        stats = self._run(store)
+        self.assertEqual(sorted(stats.excluded_invalid), [sid_bad])
+        self.assertIn("boolean", stats.excluded_invalid[sid_bad])
+        self.assertEqual([k for k in store.edges if kbad in k], [])
+        self.assertIn((ka, kb), store.edges)  # the valid pair still scored
 
     def test_injected_write_failure_preserves_previous_edge_set(self) -> None:
         # THE T2 INTEGRATION REQUIREMENT: the mutation phase is
