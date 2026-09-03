@@ -157,6 +157,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_sim.add_argument("--top-k", default=None,
                        help="Neighbors kept per session (else config).")
 
+    p_clu = sub.add_parser(
+        "clusters",
+        help="Group the stored SIMILAR_TO snapshot into clusters "
+             "(E2 slice 3, #289) — read-only; computed on read, "
+             "nothing materialized.",
+    )
+    p_clu.add_argument("--dsn", default=None, help="Database DSN (else config).")
+    p_clu.add_argument("--db-path", default=None,
+                       help="Kùzu database path (else config kuzu_path).")
+
     p_kpi = sub.add_parser("kpis", help="Compute session-level KPI rollups from labels.")
     p_kpi.add_argument("--dsn", default=None, help="Database DSN (else config).")
     p_kpi.add_argument("--session-id", type=int, default=None, help="Limit to one session id.")
@@ -967,6 +977,76 @@ def _cmd_similar(args: argparse.Namespace) -> int:
     return C.EXIT_RUNTIME if stats.excluded_invalid else C.EXIT_OK
 
 
+def _cmd_clusters(args: argparse.Namespace) -> int:
+    """Group the stored SIMILAR_TO snapshot into clusters (#289 FR-E).
+
+    READ-ONLY end to end: the absent-path check runs BEFORE any open,
+    and the open itself is `connect_read_only`, so this command can
+    never create the store it reads — that is `graph`'s job. No DSN is
+    required, because nothing here touches the relational store.
+    """
+    from .embedding.cluster_reader import KuzuGraphSnapshot, run_clusters
+    from .embedding.similar_runner import GraphNotReadyError
+    from .graph.schema import GraphDatabase
+
+    try:
+        cfg = load_config(dsn=args.dsn, kuzu_path=args.db_path)
+    except ValueError as exc:
+        # a refused knob (nan threshold, fractional top_k, …) is a
+        # usage error with a named setting — never a traceback. The
+        # graph is not opened at all: configuration is refused first.
+        print(f"error: {exc}", file=sys.stderr)
+        return C.EXIT_USAGE
+    # ABSENT graph: refused BEFORE connect, with zero filesystem
+    # creation. `clusters` must never create the store it reads.
+    from pathlib import Path as _Path
+
+    if not cfg.kuzu_path or not _Path(cfg.kuzu_path).exists():
+        print(
+            f"error: graph database absent at "
+            f"{cfg.kuzu_path or '(unset)'} — run "
+            f"'./scripts/session-analytics graph' first",
+            file=sys.stderr)
+        return C.EXIT_USAGE
+    try:
+        # The exists() check alone is a TOCTOU: a path that disappears
+        # between check and open must be REFUSED, never recreated —
+        # read_only=True raises rather than touching the filesystem.
+        try:
+            gdb = GraphDatabase.connect_read_only(cfg.kuzu_path)
+        except RuntimeError:
+            print(
+                f"error: graph database absent or unopenable at "
+                f"{cfg.kuzu_path} — run "
+                f"'./scripts/session-analytics graph' first",
+                file=sys.stderr)
+            return C.EXIT_USAGE
+        try:
+            report = run_clusters(KuzuGraphSnapshot(gdb))
+        finally:
+            gdb.close()
+    except GraphNotReadyError as exc:
+        # exists but uninitialized: a prerequisite, with guidance.
+        print(f"error: {exc}", file=sys.stderr)
+        return C.EXIT_USAGE
+    except ImportError as exc:
+        print(
+            f"error: the clusters command needs the 'kuzu' package "
+            f"(pip install kuzu): {exc}",
+            file=sys.stderr,
+        )
+        return C.EXIT_RUNTIME
+    except Exception as exc:  # noqa: BLE001 — a read failure is reported,
+        #                      never a traceback; nothing was written.
+        _log.exception("clusters failed")
+        print(f"error: clusters failed: {exc}", file=sys.stderr)
+        return C.EXIT_RUNTIME
+    print(json.dumps(report.as_dict(), indent=2))
+    # Zero clusters is a RESULT, not a failure: a ready graph whose
+    # stored edges group nothing is healthy and exits 0.
+    return C.EXIT_OK
+
+
 def _cmd_kpis(args: argparse.Namespace) -> int:
     from .judge.kpis import compute_kpis
     from .judge.rubric import load_rubric
@@ -1072,6 +1152,7 @@ _HANDLERS = {
     "analyze": _cmd_analyze,
     "embed": _cmd_embed,
     "similar": _cmd_similar,
+    "clusters": _cmd_clusters,
     "kpis": _cmd_kpis,
     "calibrate": _cmd_calibrate,
     "mcp": _cmd_mcp,
