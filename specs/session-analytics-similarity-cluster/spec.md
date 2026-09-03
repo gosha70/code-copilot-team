@@ -38,9 +38,9 @@ governing order:
 ### FR-A — the cluster domain, defined FIRST
 
 Clusters are computed over exactly the **reconciled `SIMILAR_TO`
-snapshot** — the edge set written by the last COMPLETED `similar`
-pass (#287 FR-D/FR-E). Consequences, each a requirement and not an
-accident:
+snapshot** — the `SIMILAR_TO` edges the graph holds at read time,
+which a completed `similar` pass reconciles when it runs (#287
+FR-D/FR-E). Consequences, each a requirement and not an accident:
 
 - **One space per cluster — guaranteed, never named.** `SIMILAR_TO`
   edges exist only inside one FR-A space `(provider, model, dim)` —
@@ -54,9 +54,22 @@ accident:
   another model leaves its old edges unchanged (reproduced at plan
   review), so a current-envelope label would lie about them. No
   per-space grouping is promised anywhere in this slice.
+- **The compatibility claim, stated exactly.** What a cluster surface
+  MAY claim: *its members are connected through stored edges that the
+  similarity producer created under its compatibility rule* — a
+  production-time property of the edges. What it may NOT claim, imply,
+  or let a reader infer: *these members currently share an embedding
+  envelope.* The two come apart the moment any member is re-embedded,
+  and only the first is evidenced by anything this slice reads. Every
+  surface's wording is held to this distinction.
 - **Two inputs, two provenances — pinned, not blurred.** Cluster
-  MEMBERSHIP derives from the stored edge set — written by the last
-  COMPLETED `similar` pass and untouched by anything else. The
+  MEMBERSHIP derives from the edge set CURRENTLY stored in the graph.
+  That set is what a completed `similar` pass last wrote, but the
+  store attests only its present contents, never the pass history:
+  `graph --rebuild` drops and recreates the rel tables
+  (`graph/schema.py:reset_schema`), so an empty stored set can mean a
+  rebuild as easily as a pass that found nothing. Describe the edges
+  as they are; claim no observable sequence of passes behind them. The
   UNCLUSTERED count derives from the CURRENT graph node inventory,
   which incremental `graph` runs change independently of the edges
   (reproduced at plan review: adding a session and re-running `graph`
@@ -80,6 +93,14 @@ more members.
   sessions are adjacent here iff at least one directed edge exists
   between them in either direction (scores are symmetric; top-K
   membership is not — #287).
+- **A cluster's reported `directed_edge_count` is the number of stored
+  DIRECTED edge records internal to the component — not the number of
+  undirected adjacencies.** A→B and B→A count as **two**, though they
+  form one adjacency; a lone A→B counts as one. Grouping uses the
+  undirected view (above); the count reports the stored evidence
+  behind it. The two differ whenever any pair is reciprocal, so the
+  choice is pinned here and asserted in tests, never left to the
+  implementation.
 - **Guaranteed:** every pair of members is connected by a chain of
   recorded, above-threshold edges from one completed pass, entirely
   within one embedding space.
@@ -93,8 +114,8 @@ more members.
   incident stored edge are **unclustered** — counted and reportable
   (FR-A's second provenance), never padded into singleton
   "clusters". A relational session ABSENT from the graph is neither
-  clustered nor unclustered — it is a `missing_graph_node`
-  prerequisite (FR-F), the #287 discipline retained.
+  clustered nor unclustered — it is a graph prerequisite failure
+  (FR-F), the #287 discipline retained.
 
 ### FR-C — deterministic identity and order
 
@@ -135,12 +156,13 @@ node/rel tables, no relational columns, no DDL change.
   absent graph path → usage error with "run graph first" guidance;
   ready-but-unbuilt graph (no `Session` table) → usage error; a
   ready graph with zero edges → **exit 0**, healthy empty report.
-- Report: unnamed clusters — identity, size, members, edge count —
-  plus the unclustered-session count, with the two provenances
-  labeled distinctly: cluster membership describes the stored edges
-  of the last completed `similar` pass; the unclustered count
-  reflects the current graph node inventory. No per-space grouping
-  and no space triple anywhere (FR-A).
+- Report: unnamed clusters — identity, size, members, directed
+  `directed_edge_count` (FR-B) — plus the unclustered-session count,
+  with the
+  two provenances labeled distinctly: cluster membership describes
+  the `SIMILAR_TO` edges currently stored in the graph; the
+  unclustered count reflects the current graph node inventory. No
+  per-space grouping and no space triple anywhere (FR-A).
 - No new config keys: clustering has no tunable parameters in V1
   (threshold and top-K belong to `similar`, where the edges are
   decided). The CLI must not grow speculative knobs.
@@ -150,19 +172,25 @@ node/rel tables, no relational columns, no DDL change.
 One tool, `session_clusters`, registered beside the existing five:
 
 - `session_clusters(session_id=None, limit=10)`: with a session id,
-  returns that session's cluster (siblings and edge count — unnamed,
-  no space triple) or an honest `"unclustered"` outcome; without
-  one, lists clusters (largest first, up to `limit`).
+  returns that session's cluster (siblings and `directed_edge_count`
+  — unnamed, no space triple) or an honest `"unclustered"` outcome;
+  without one, lists clusters (largest first, up to `limit`).
 - Basis honesty: results carry `basis: "embedding"` and the FR-A
   provenance notes; they must never imply pairwise similarity (FR-B)
   or masquerade as keyword results.
-- Prerequisite ladder consistent with `similar_sessions` (#287 FR-F):
-  unknown session → error; a known relational session ABSENT from
-  the graph → the `missing_graph_node` guidance ("run graph"), NOT
+- Prerequisite ladder consistent with `similar_sessions` (#287 FR-F),
+  reusing its EXISTING response shape — this slice introduces no new
+  outcome literal: unknown session → error; a known relational
+  session ABSENT from the graph → `prerequisite: "graph"` with
+  graph-sync guidance ("run graph") and "graph node" named in the
+  error, exactly as `similar_sessions` answers that condition
+  (pinned by `test_missing_graph_node_gets_graph_sync_guidance`), NOT
   "unclustered" — that word is reserved for graph members with no
   stored edge; absent/unopenable graph → `prerequisite: "graph"`
   with guidance; unbuilt graph → same; healthy empty (ready graph,
   no edges) → an honest empty result, no remedial default.
+  (`missing_graph_node` remains what it is in #287 — a counter field
+  on `similar`'s CLI stats — and is not an MCP outcome here.)
 - The graph open is `connect_read_only` — the MCP read path cannot
   create or mutate the store (#287 T3 capture), and a
   disappearing-path race must be refused, not repaired.

@@ -25,8 +25,9 @@ Inherited from the arc and restated in the issue before any design:
    cluster is a transitive discovery grouping — a component links A
    and C through B even when they share no edge — and every surface
    must say so rather than imply pairwise similarity. Snapshot
-   semantics ("clusters describe the last completed `similar` pass")
-   and the inherited name/tag limits are restated, not re-derived.
+   semantics ("clusters describe the `SIMILAR_TO` edges the graph
+   currently holds") and the inherited name/tag limits are restated,
+   not re-derived.
 3. **The materialization question is an explicit fork.** V1 computes
    on read; materialized clusters would be derived state over derived
    state, needing the full #287 reconciliation discipline for zero
@@ -37,7 +38,9 @@ Inherited from the arc and restated in the issue before any design:
 - **D1 components, not parametric clustering** (zero parameters,
   zero dependencies; alternatives recorded in Non-goals).
 - **D2 compute-on-read** (the fork above).
-- **D3 undirected adjacency** over the directed top-K edges.
+- **D3 undirected adjacency** over the directed top-K edges, with the
+  reported count named `directed_edge_count` (A→B and B→A are two
+  records, one adjacency).
 - **D4 size >= 2** — edgeless sessions are "unclustered", never
   singleton clusters.
 - **D5 read-only graph access everywhere**, absent-path prechecks,
@@ -75,8 +78,50 @@ redesign. Both applied across spec, plan, tasks, AND issue #289:
    the current node inventory; the report labels both provenances;
    FR-C determinism is defined over the (edges, inventory) pair; and
    for session-id lookup a relational session absent from the graph
-   is a `missing_graph_node` prerequisite (#287 discipline), never
-   "unclustered". No snapshot storage added.
+   gets `similar_sessions`' existing `prerequisite: "graph"` response
+   (#287 discipline), never "unclustered". No snapshot storage added.
+
+## Second correction pass — re-review of PR #290
+
+A re-review at the owner's request checked the bundle against the
+merged #285/#287 code rather than its own prose. The substrate claims
+verified sound (`GraphNotReadyError`, `connect_read_only`,
+`_FakeEdgeStore`, the `SIMILAR_TO` row shape, the five registered MCP
+tools, `kuzu_path` plumbing). Three bounded corrections, no redesign,
+still plan-only:
+
+3. **The first correction pass's residue removed.** plan.md's Shape
+   still described `run_clusters` as returning "per-space cluster
+   stats" — the exact promise correction 1 deleted everywhere else,
+   surviving in the line a builder reads first. Now: unnamed
+   whole-snapshot component stats.
+4. **No invented MCP outcome.** The bundle used `missing_graph_node`
+   as though it were an MCP response key. In #287 it is only a
+   counter field on `similar`'s CLI stats; the MCP answer to that
+   condition is `prerequisite: "graph"` with "graph node" in the
+   error, pinned by the #287 test
+   `test_missing_graph_node_gets_graph_sync_guidance`. Taken
+   literally the bundle would have introduced a new literal while the
+   same bullet demanded consistency with `similar_sessions`. The real
+   response shape is now named.
+5. **`directed_edge_count` defined as stored DIRECTED records** (A→B
+   and B→A count as two, forming one undirected adjacency), with the
+   reciprocal fixture added to T1's expectations. Grouping stays
+   undirected; only the count is directed. Previously unstated, and
+   the two numbers diverge on every reciprocal pair — an arbitrary
+   implementation choice that T2's deterministic-bytes assertion would
+   have frozen.
+
+Two adjacent wording errors fixed in the same pass, both owner-flagged:
+FR-A no longer claims the stored edges are "untouched by anything
+else" (`graph --rebuild` drops and recreates the rel tables via
+`graph/schema.py:reset_schema`, so the store attests present contents,
+never pass history); and #289's prerequisite-failure list no longer
+includes "no edges", which is the healthy-empty exit-0 case.
+
+The `graph_ready()` duplication between the read-only `GraphSnapshot`
+and the write-capable `KuzuEdgeStore` is ACCEPTED and recorded in D5 —
+no shared-helper refactor, so a later review does not re-raise it.
 
 Still plan-only; no code exists.
 

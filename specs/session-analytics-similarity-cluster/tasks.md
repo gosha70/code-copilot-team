@@ -15,7 +15,10 @@ deterministic ordering, size >= 2 (D4). Pure — no kuzu, no I/O.
 
 **Done when:** the chain fixture (A–B–C, no A–C edge) is pinned as a
 single cluster WITH a test name that says transitive grouping is the
-contract; shuffled input yields byte-identical output; empty and
+contract; the reciprocal fixture `{A→B, B→A}` yields ONE size-2
+cluster with `directed_edge_count == 2` while `{A→B}` alone yields
+`directed_edge_count == 1` — the directed-count rule (FR-B) asserted,
+not inferred; shuffled input yields byte-identical output; empty and
 all-singleton inputs yield zero clusters; no RNG, no dict-order
 dependence anywhere.
 
@@ -29,15 +32,19 @@ dependence anywhere.
 `connect_read_only`; `run_clusters`; CLI `clusters` subcommand with
 the prerequisite ladder and exit-code discipline.
 
-**Done when:** the two-space discriminator proves no cluster mixes
-spaces; the provenance discriminator proves membership is
-byte-identical while the unclustered count moves when the node
-inventory grows with edges unchanged; the report labels the two
-provenances distinctly, names no space triple, and promises no
-per-space grouping; absent path → usage error with ZERO filesystem
+**Done when:** the two-space discriminator — driving the REAL #287
+`similar` producer over two incompatible spaces — proves no cluster
+mixes spaces; no output claims members currently share an envelope
+(FR-A's compatibility claim: production-time evidence only); the
+provenance discriminator proves membership is byte-identical while the
+unclustered count moves when the node inventory grows with edges
+unchanged; the report labels the two provenances distinctly
+(membership = the currently stored edges, no pass-history claim),
+names no space triple, promises no per-space grouping, and carries
+`directed_edge_count`; absent path → usage error with ZERO filesystem
 creation (asserted); unbuilt graph → usage error; ready-but-empty
-snapshot → exit 0 healthy report; report bytes deterministic over
-the same (edges, inventory) pair; no write statement anywhere in the
+snapshot → exit 0 healthy report; report bytes deterministic over the
+same (edges, inventory) pair; no write statement anywhere in the
 slice.
 
 ## T3 — the MCP surface
@@ -51,9 +58,11 @@ in `server.py` beside the existing five, on the plumbed `kuzu_path`.
 
 **Done when:** session-id mode returns the cluster (unnamed — no
 space triple) or an honest `"unclustered"`, with a relational
-session ABSENT from the graph getting the `missing_graph_node`
-guidance instead of either; list mode is largest-first and bounded
-by `limit`; results carry `basis: "embedding"` + the FR-A provenance
+session ABSENT from the graph getting `similar_sessions`' EXISTING
+`prerequisite: "graph"` response and graph-sync guidance instead of
+either — no new outcome literal is introduced; list mode is
+largest-first and bounded by `limit`; results carry
+`basis: "embedding"` + the FR-A provenance
 notes and never imply pairwise similarity; the prerequisite ladder
 matches `similar_sessions`; a registered-tool test drives the real
 server factory with a nondefault `kuzu_path`; the disappearing-path

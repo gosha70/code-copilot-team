@@ -48,8 +48,10 @@ all read-only:
   `graph_ready()`, `session_keys()`, `edges()` returning directed
   (src, dst, score) rows) with a Kùzu implementation over
   `GraphDatabase.connect_read_only`, plus `run_clusters(store)`
-  returning per-space cluster stats. Reuses `GraphNotReadyError`
-  semantics from #287 for the unbuilt-graph prerequisite.
+  returning stats over the WHOLE stored snapshot — unnamed
+  components, no per-space grouping and no space triple (FR-A).
+  Reuses `GraphNotReadyError` semantics from #287 for the
+  unbuilt-graph prerequisite.
 - CLI `clusters` subcommand + MCP `session_clusters` in
   `mcp/tools.py`, registered in `mcp/server.py` beside the existing
   five, taking the already-plumbed `kuzu_path`.
@@ -64,15 +66,19 @@ edges remained unchanged — current envelopes cannot attest the
 HISTORICAL space of stored edges, so a joined label would lie.
 
 Two inputs, two provenances — pinned at plan review (P2): the
-reader's `edges()` carries cluster MEMBERSHIP (stored edges, last
-completed `similar` pass); `session_keys()` carries the CURRENT graph
-node inventory, which incremental `graph` runs change independently
-(reproduced: nodes 2→3, unclustered 0→1, edges unchanged). Reports
-label the two distinctly, never claim the whole report is frozen to
-the pass, and determinism (FR-C) is defined over BOTH inputs. For
-session-id lookup, a relational session absent from the graph is a
-`missing_graph_node` prerequisite (#287 discipline retained), not an
-edgeless graph member. No snapshot storage is added.
+reader's `edges()` carries cluster MEMBERSHIP (the edges currently
+stored, which a completed `similar` pass reconciles when it runs —
+`graph --rebuild` drops the rel tables, so the spec describes present
+contents and asserts no pass history); `session_keys()` carries the
+CURRENT graph node inventory, which incremental `graph` runs change
+independently (reproduced: nodes 2→3, unclustered 0→1, edges
+unchanged). Reports label the two distinctly, never claim the whole
+report is frozen to the pass, and determinism (FR-C) is defined over
+BOTH inputs. For session-id lookup, a relational session absent from
+the graph returns `similar_sessions`' existing `prerequisite:
+"graph"` response with graph-sync guidance (#287 discipline retained,
+no new outcome literal), not an edgeless graph member. No snapshot
+storage is added.
 
 ## Design decisions (flagged for review)
 
@@ -84,43 +90,62 @@ edgeless graph member. No snapshot storage is added.
   over derived state and would need the full FR-D reconciliation
   discipline for zero current value. Upgrade path recorded (spec
   FR-D).
-- **D3 undirected view.** Adjacency = at least one directed edge in
-  either direction (top-K membership is asymmetric; similarity is
-  not).
+- **D3 undirected view, directed count.** Adjacency = at least one
+  directed edge in either direction (top-K membership is asymmetric;
+  similarity is not). GROUPING uses that undirected view; the
+  reported `directed_edge_count` counts the stored DIRECTED records
+  inside the component — A→B and B→A are two, one adjacency (spec
+  FR-B). Pinned because the two numbers diverge on every reciprocal
+  pair.
 - **D4 size >= 2.** Edgeless sessions are "unclustered", counted,
   never singleton clusters.
 - **D5 read-only everywhere.** Every graph open in this slice is
   `connect_read_only`; the CLI absent-path precheck runs before any
   open; tests assert zero filesystem creation (the #287 T3 pattern,
-  including the disappearing-path race).
+  including the disappearing-path race). The read-only `GraphSnapshot`
+  will restate `graph_ready()`, which the write-capable
+  `KuzuEdgeStore` also provides — the duplication is ACCEPTED, not
+  overlooked: a read-only seam that cannot write is worth more than
+  one shared helper, and no shared-helper refactor is in scope.
 - **D6 no new config keys.** Nothing added to defaults.json, env, or
   CLI beyond `--dsn`/`--db-path`.
 
 ## Test strategy
 
-- **Pure (`clusters.py`):** chain components (A–B–C with no A–C
-  edge — the transitive grouping IS the behavior, pinned), directed
-  asymmetric adjacency, deterministic identity and ordering
-  (shuffled input → byte-identical report), size >= 2 rule,
-  empty edge set.
-- **Reader (`cluster_reader.py`):** a fake `GraphSnapshot` (the
-  #287 `_FakeEdgeStore` pattern, read-only subset); the two-space
-  discriminator (no cluster mixes spaces — seeded via two
-  disconnected same-shaped edge groups from a real `similar` run in
-  the live class); the PROVENANCE discriminator (grow the node
-  inventory with the edge set unchanged → membership byte-identical,
-  unclustered count moves — the plan-review reproduction as a
-  regression); unready graph → `GraphNotReadyError`; healthy empty.
+- **Pure (`clusters.py`):** chain components (A–B–C with no A–C edge —
+  the transitive grouping IS the behavior, pinned), directed
+  asymmetric adjacency, deterministic identity and ordering (shuffled
+  input → byte-identical report), size >= 2 rule, empty edge set.
+  **The reciprocal-pair expectation is explicit:** the fixture `{A→B,
+  B→A}` yields ONE cluster of size 2 with `directed_edge_count == 2` —
+  grouping collapses the pair to one adjacency, the count keeps both
+  stored records; `{A→B}` alone yields the same cluster with
+  `directed_edge_count == 1`. A test asserting 1 for the reciprocal
+  case is the defect this pins.
+- **Reader (`cluster_reader.py`):** a fake `GraphSnapshot` (the #287
+  `_FakeEdgeStore` pattern, read-only subset); the two-space
+  discriminator (no cluster mixes spaces — seeded by driving the REAL
+  #287 `similar` producer over two incompatible spaces in the live
+  class, so the test proves the inheritance contract rather than
+  restating graph theory over hand-built groups); the surface-wording
+  assertion (no output claims members currently share an envelope —
+  spec FR-A's compatibility claim); the PROVENANCE discriminator (grow
+  the node inventory with the edge set unchanged → membership
+  byte-identical, unclustered count moves — the plan-review
+  reproduction as a regression); unready graph → `GraphNotReadyError`;
+  healthy empty.
 - **CLI:** prerequisite ladder exit codes (absent path → usage, zero
   creation asserted; unbuilt graph → usage; empty snapshot → exit 0);
   deterministic report bytes over the same (edges, inventory) pair;
   no space triple anywhere in the output.
 - **MCP:** session-id and list modes; unknown session; unclustered
-  outcome; the missing-graph-node prerequisite distinct from
-  "unclustered" (relational session absent from the graph → "run
-  graph" guidance); prerequisite ladder; healthy empty; a
-  registered-tool test driving the real server factory with a
-  nondefault `kuzu_path` (gated on kuzu+mcp like #287).
+  outcome; the graph prerequisite distinct from "unclustered"
+  (relational session absent from the graph → `prerequisite ==
+  "graph"` with "graph node" in the error, asserted the way
+  `test_missing_graph_node_gets_graph_sync_guidance` asserts it for
+  `similar_sessions` — no new outcome literal); prerequisite ladder;
+  healthy empty; a registered-tool test driving the real server
+  factory with a nondefault `kuzu_path` (gated on kuzu+mcp like #287).
 - **Live Kùzu class:** end-to-end `embed`-fixture → `similar` →
   `clusters` over a real store, read-only open verified.
 - **Closure:** consolidated mutation ledger (the #287 driver
