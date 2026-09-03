@@ -36,6 +36,19 @@ class GraphDatabase:
         conn = kuzu.Connection(db)
         return cls(db, conn, path)
 
+    @classmethod
+    def connect_read_only(cls, path: str) -> "GraphDatabase":
+        """A genuinely non-creating open (#287 T3 review): no parent
+        mkdir, and ``read_only=True`` — captured on kuzu 0.11.3, an
+        absent database raises "Cannot create an empty database under
+        READ ONLY mode" without touching the filesystem, and any write
+        through the connection is refused."""
+        import kuzu  # lazy
+
+        db = kuzu.Database(path, read_only=True)
+        conn = kuzu.Connection(db)
+        return cls(db, conn, path)
+
     def execute(self, statement: str, params: Optional[Mapping[str, Any]] = None) -> Any:
         if params:
             return self.conn.execute(statement, parameters=dict(params))

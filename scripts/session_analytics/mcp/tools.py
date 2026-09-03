@@ -255,23 +255,33 @@ def similar_sessions(
 
     # prerequisite 1, independently established from the relational
     # store: a validated envelope.
-    envelope_err = None
+    # MISSING and INVALID are different failures with different
+    # recoveries (T3 review): an ordinary `embed` pass deliberately
+    # skips existing envelopes, so it cannot repair an invalid
+    # non-null one — that takes an explicit targeted overwrite.
     if stored is None:
-        envelope_err = "no embedding envelope"
-    else:
-        try:
-            env = json.loads(stored)
-        except (json.JSONDecodeError, TypeError):
-            env = None
-        envelope_err = (
-            "unparseable embedding envelope" if env is None
-            else validate_envelope(env))
-    if envelope_err is not None:
         return {
-            "error": f"session {session_id} has no validated embedding "
-                     f"({envelope_err})",
+            "error": f"session {session_id} has no embedding envelope",
             "prerequisite": "embedding",
             "guidance": "run './scripts/session-analytics embed' first",
+        }
+    try:
+        env = json.loads(stored)
+    except (json.JSONDecodeError, TypeError):
+        env = None
+    envelope_err = (
+        "unparseable embedding envelope" if env is None
+        else validate_envelope(env))
+    if envelope_err is not None:
+        return {
+            "error": f"session {session_id} has an INVALID embedding "
+                     f"envelope ({envelope_err})",
+            "prerequisite": "embedding",
+            "guidance": (
+                f"an ordinary embed pass skips existing envelopes; "
+                f"replace this one explicitly with "
+                f"'./scripts/session-analytics embed --overwrite "
+                f"--session-id {session_id}'"),
         }
 
     # prerequisite 2: the graph store — absent is checked BEFORE any
@@ -287,7 +297,19 @@ def similar_sessions(
     from ..graph.schema import GraphDatabase
 
     session_key = f"{copilot}:{native_id}"
-    gdb = GraphDatabase.connect(kuzu_path)
+    # READ-ONLY, NON-CREATING at the database open itself (T3 review):
+    # the exists() precheck alone is a TOCTOU — a path that disappears
+    # between check and open must be refused, never recreated. Captured
+    # on kuzu 0.11.3: read_only=True raises on an absent database
+    # without touching the filesystem.
+    try:
+        gdb = GraphDatabase.connect_read_only(kuzu_path)
+    except RuntimeError:
+        return {
+            "error": f"graph database absent or unopenable at {kuzu_path}",
+            "prerequisite": "graph",
+            "guidance": "run './scripts/session-analytics graph' first",
+        }
     try:
         store = KuzuEdgeStore(gdb)
         if not store.graph_ready():
@@ -321,6 +343,22 @@ def similar_sessions(
             "SELECT id, project_path, started_at FROM copilot_session "
             "WHERE copilot = ? AND session_id = ?",
             (dst_copilot, dst_native))
+        # EXISTING KPIs ride along with their rubric identity (spec
+        # scenario 1); honest absence — kpi is null when no row exists,
+        # and nothing is computed here.
+        kpi = None
+        if info:
+            krow = db.query_one(
+                "SELECT rubric_name, correction_rate, rework_rate, "
+                "avg_interaction_quality FROM session_kpi "
+                "WHERE session_id = ? LIMIT 1", (info[0],))
+            if krow:
+                kpi = {
+                    "rubric_name": krow[0],
+                    "correction_rate": krow[1],
+                    "rework_rate": krow[2],
+                    "avg_interaction_quality": krow[3],
+                }
         neighbors.append({
             "session_key": dst_key,
             "id": info[0] if info else None,
@@ -328,6 +366,7 @@ def similar_sessions(
             "started_at": info[2] if info else None,
             "score": score,
             "basis": "embedding",
+            "kpi": kpi,
         })
     # neighbors == [] is HEALTHY here: every prerequisite held, the
     # stored snapshot simply contains no edges for this session.

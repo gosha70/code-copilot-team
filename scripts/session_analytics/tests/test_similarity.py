@@ -859,10 +859,82 @@ class TestSimilarSessionsTool(unittest.TestCase):
         self.assertEqual(out["prerequisite"], "embedding")
         self.assertIn("embed", out["guidance"])
 
-    def test_invalid_envelope_gets_embedding_guidance(self) -> None:
+    def test_invalid_envelope_gets_targeted_overwrite_guidance(self) -> None:
+        # T3 review: an ordinary embed pass SKIPS existing envelopes,
+        # so "run embed" cannot repair an invalid non-null one. The
+        # guidance must name the explicit targeted overwrite.
         sid = self._session("a", "not json")
         out = self._tool(sid)
         self.assertEqual(out["prerequisite"], "embedding")
+        self.assertIn("INVALID", out["error"])
+        self.assertIn("--overwrite", out["guidance"])
+        self.assertIn(f"--session-id {sid}", out["guidance"])
+
+    def test_missing_envelope_guidance_is_plain_embed(self) -> None:
+        sid = self._session("a", None)
+        out = self._tool(sid)
+        self.assertNotIn("--overwrite", out["guidance"])
+
+    def test_advised_recovery_actually_replaces_the_invalid_value(self) -> None:
+        # Follow the guidance end to end: overwrite + session-id
+        # through run_embed replaces the invalid envelope with a valid
+        # one — proving the advice repairs what it claims to.
+        from session_analytics.config import EmbeddingConfig
+        from session_analytics.embedding.contracts import (
+            EmbeddingResult, validate_envelope)
+        from session_analytics.embedding.registry import (
+            _reset_for_tests, register_embedding)
+        from session_analytics.embedding.runner import run_embed
+
+        sid = self._session("bad-recovery", "not json")
+        self.db.execute(
+            "INSERT INTO copilot_turn (session_id, sequence_num, role, "
+            "content_preview, content_length) VALUES (?, ?, ?, ?, ?)",
+            (sid, 0, "user", "some preview text", 17))
+        self.db.commit()
+
+        class _Backend:
+            def probe(self):
+                pass
+
+            def embed(self, text):
+                return EmbeddingResult(
+                    vector=(0.1, 0.2, 0.3), resolved_model="fixed-model")
+
+        _reset_for_tests()
+        self.addCleanup(_reset_for_tests)
+        register_embedding("fixed", lambda model, *, base_url="": _Backend())
+        stats = run_embed(
+            self.db,
+            EmbeddingConfig(backend="fixed", model="m", ollama_url="",
+                            input_cap_chars=8000, workers=1),
+            overwrite=True, session_id=sid)
+        self.assertEqual(stats.embedded, 1)
+        stored = self.db.query_one(
+            "SELECT session_embedding FROM copilot_session WHERE id = ?",
+            (sid,))[0]
+        self.assertIsNone(validate_envelope(json.loads(stored)))
+
+    def test_ordinary_embed_does_not_repair_invalid_envelopes(self) -> None:
+        # The premise of the guidance, pinned: WITHOUT overwrite the
+        # invalid value is skipped_existing and unchanged.
+        from session_analytics.config import EmbeddingConfig
+        from session_analytics.embedding.registry import _reset_for_tests
+        from session_analytics.embedding.runner import run_embed
+
+        sid = self._session("bad-stays", "not json")
+        _reset_for_tests()
+        self.addCleanup(_reset_for_tests)
+        stats = run_embed(
+            self.db,
+            EmbeddingConfig(backend="none-needed", model="m", ollama_url="",
+                            input_cap_chars=8000, workers=1),
+            session_id=sid)
+        self.assertEqual(stats.skipped_existing, 1)
+        stored = self.db.query_one(
+            "SELECT session_embedding FROM copilot_session WHERE id = ?",
+            (sid,))[0]
+        self.assertEqual(stored, "not json")
 
     def test_absent_graph_gets_graph_guidance_with_zero_creation(self) -> None:
         sid = self._session("a", _env(vector=(1.0, 0.0, 0.0)))
@@ -971,6 +1043,50 @@ class TestSimilarSessionsToolLiveKuzu(unittest.TestCase):
         _kuzu.Database(str(bare))  # exists, no schema
         out = similar_sessions(db, str(bare), sids["a"])
         self.assertEqual(out["prerequisite"], "graph")
+
+    def test_neighbor_kpis_included_with_rubric_and_honest_absence(self) -> None:
+        # Spec scenario 1 promises score AND KPIs. Existing KPI rows
+        # ride along with their rubric identity; a neighbor without
+        # one carries kpi: null — nothing is computed here.
+        from session_analytics.mcp.tools import similar_sessions
+
+        db, graph_path, sids, _ = self._world()
+        db.execute(
+            "INSERT INTO session_kpi (session_id, rubric_name, "
+            "labeled_turn_count, correction_rate, rework_rate, "
+            "avg_interaction_quality) VALUES (?, ?, ?, ?, ?, ?)",
+            (sids["b"], "cct-heuristic-v1", 4, 0.25, 0.0, 4.5))
+        db.commit()
+        out = similar_sessions(db, graph_path, sids["a"])
+        kpi = out["neighbors"][0]["kpi"]
+        self.assertEqual(kpi["rubric_name"], "cct-heuristic-v1")
+        self.assertEqual(kpi["correction_rate"], 0.25)
+        # and honest absence from the other direction:
+        out_b = similar_sessions(db, graph_path, sids["b"])
+        self.assertIsNone(out_b["neighbors"][0]["kpi"])
+
+    def test_disappearing_path_is_refused_not_recreated(self) -> None:
+        # T3 review's TOCTOU: the path passes the exists() precheck but
+        # is gone at open time. The read-only open must REFUSE without
+        # creating anything — the precheck alone was the earlier test's
+        # only protection.
+        from session_analytics.mcp import tools as tools_mod
+        from session_analytics.mcp.tools import similar_sessions
+
+        db, _, sids, tmp = self._world(build_graph=False)
+        ghost = tmp / "ghost-graph"
+
+        class _AlwaysThere:
+            def __init__(self, *a):
+                pass
+
+            def exists(self):
+                return True
+
+        with mock.patch.object(tools_mod, "Path", _AlwaysThere):
+            out = similar_sessions(db, str(ghost), sids["a"])
+        self.assertEqual(out["prerequisite"], "graph")
+        self.assertFalse(ghost.exists())  # nothing was created
 
     def test_missing_graph_node_gets_graph_sync_guidance(self) -> None:
         from session_analytics.mcp.tools import similar_sessions

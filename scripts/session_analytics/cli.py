@@ -1030,7 +1030,9 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
         server.run(cfg.dsn, cfg.kuzu_path)
     except ImportError as exc:
         print(
-            f"error: the mcp command needs the 'mcp' package (pip install mcp): {exc}",
+            f"error: the mcp command needs the 'mcp' package "
+            f"(pip install 'mcp>=1.0,<2' — the server targets the v1 "
+            f"FastMCP surface): {exc}",
             file=sys.stderr,
         )
         return C.EXIT_RUNTIME
