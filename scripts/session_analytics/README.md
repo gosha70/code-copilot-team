@@ -60,6 +60,7 @@ The zero-install path still works without `setup` — just pass `--dsn`:
 | `archive` | Archive full REDACTED trace text for opted-in projects (E10). |
 | `search`  | Substring search over archived trace text (E10; not ranked). |
 | `embed`   | Compute session embeddings into a provenance envelope (E2 slice 1, #285). |
+| `similar` | Populate `SIMILAR_TO` graph edges from stored embeddings (E2 slice 2, #287). |
 
 `ingest` flags: `--copilot` (repeatable; default all), `--root`, `--dsn`,
 `--developer-id`, `--redact {none,code,metadata-only}`, `--incremental`
@@ -808,6 +809,61 @@ subset of what the judge already reads, all behind the E8 redaction
 boundary. No session metadata, tool I/O, or raw transcript text is
 ever embedded, and the default backend is localhost Ollama, so nothing
 leaves the machine.
+
+## Session similarity (E2 slice 2, issue #287)
+
+`./scripts/session-analytics similar` computes cosine similarity over
+the stored embedding envelopes and reconciles the Kùzu
+`SIMILAR_TO(Session→Session, score)` edges. Strictly local: no
+embedding backend is contacted — only stored vectors are compared.
+
+```bash
+./scripts/session-analytics graph      # Session nodes must exist first
+./scripts/session-analytics embed --model nomic-embed-text
+./scripts/session-analytics similar    # writes/reconciles SIMILAR_TO
+```
+
+**Compatibility precedes similarity.** Sessions are compared ONLY
+inside one embedding space — equality of the validated envelope triple
+`(provider, model, dim)`. A same-named pair with different dims is a
+`dim_conflict`: reported (it means name equality is not carrying the
+compatibility weight for that name), never compared, and neither group
+is disqualified.
+
+**The name/tag heuristic, stated plainly:** the envelope `model` is a
+server-confirmed name/tag, not a content digest. Equal triples
+guarantee only what the envelopes RECORD — same backend family, same
+served name, same geometry. Same-server and unchanged-weights are
+UNVERIFIED assumptions (a re-pulled `:latest` may be different
+weights), so scores are **discovery heuristics over a same-named
+space**, never proof of semantic identity across servers, weights, or
+time.
+
+**Scores are a snapshot of the last completed `similar` pass.**
+Nothing refreshes them implicitly — re-embedding does not; re-run
+`similar` afterwards. Every pass fully reconciles: sources that lost
+their envelope have their stale edges retired, and the mutation phase
+is transactional, so the graph always holds either the previous
+complete edge set or the new one. Knobs: `similarity.threshold`
+(finite, in [-1, 1]) and `similarity.top_k` (positive integer) in the
+layered config; malformed values refuse with the setting named.
+
+**MCP:** the `similar_sessions(session_id)` tool returns stored
+neighbors with `score`, `basis: "embedding"`, and each neighbor's
+existing `session_kpi` row (or `kpi: null` — nothing is computed). An
+empty neighbor list is a HEALTHY answer (singleton space,
+below-threshold); remedial guidance appears only for independently
+established prerequisites — no validated envelope (an invalid one
+needs `embed --overwrite --session-id <id>`, since an ordinary pass
+skips existing envelopes), or an absent/unbuilt graph. The MCP read
+path opens the graph READ-ONLY and can never create it. The keyword
+`compare_approaches` tool is unchanged and carries no `basis` field.
+**Deferred by decision:** live text-query embedding (embedding the
+QUESTION at ask time) is not in this slice — it would put a backend
+call inside the MCP path; if ever wanted it is its own issue.
+
+The `mcp` package is pinned `>=1.0,<2`: the server targets the v1
+FastMCP surface, which mcp 2.x renamed.
 
 ## Tests
 

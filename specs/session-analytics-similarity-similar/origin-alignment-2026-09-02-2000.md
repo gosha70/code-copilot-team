@@ -99,10 +99,36 @@ eligible → zero writes" would have contradicted retirement).
 
 Still plan-only; no code exists.
 
+## Build outcome (T4 closure)
+
+T1–T4 all landed on PR #288, each task through its own review gate,
+and every review round's findings were reproduced before fixing —
+three of them against real infrastructure installed to match CI (kuzu
+0.11.3; mcp<2). Facts worth permanent note:
+
+- **FR-B holds in recorded terms only**, as corrected in review:
+  equal triples guarantee what the envelopes record; same-server and
+  unchanged-weights are named unverified assumptions, and the README
+  states the name/tag heuristic in exactly those terms.
+- **Edge scores are a snapshot of the last completed pass**, enforced
+  by a transactional mutation phase whose cleanup preserves the
+  original error (kuzu auto-abort captured), and by full
+  reconciliation that retires ineligible sources' edges.
+- **The MCP read path cannot create the graph** — read-only at the
+  database open (`read_only=True` captured refusing an absent store),
+  not merely at a precheck.
+- **mcp is pinned `>=1.0,<2`** everywhere users meet it (CI,
+  requirements.txt, the CLI hint): 2.x renamed FastMCP, captured.
+- **Deferred, explicitly:** live text-query embedding; digest
+  provenance (the defined upgrade path).
+
+The consolidated mutation ledger re-ran whole at the final HEAD under
+kuzu+mcp with zero skips: 24/24 caught (`mutation-ledger.md`).
+
 ## What this record does NOT claim
 
-- No code exists; the bundle is plan-first per the house gate
-  discipline. No cosine has been computed, no edge written.
+- (Historical, from the plan stage:) no code existed at submission.
+  Superseded by the build outcome above — kept for the record.
 - Nothing here makes E2 complete on #65 — that is the owner's call
   after this slice lands and is audited.
 - The digest upgrade path is DEFINED, not promised: it becomes an

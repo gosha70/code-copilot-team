@@ -10,6 +10,8 @@ the surface that reads its output (T2 before T3).
 
 ## T1 — compatibility rule + pure similarity library + config
 
+**Status: complete** (one review round: numerically safe cosine via per-vector max-|component| scaling — FR-9 bounds finiteness, not magnitude; knobs validated before coercion, threshold in [-1,1], top_k a positive non-boolean integer; grouping calls the ONE `space_key`, after the review's provider-dropping mutation escaped the helper-only discriminators).
+
 **Implements:** FR-A (space key), FR-B's V1 choice as code, FR-C
 (cosine, config knobs).
 
@@ -33,6 +35,8 @@ grouping entry and getting a refusal, not a score).
 
 ## T2 — the `similar` pass + CLI
 
+**Status: complete** (one review round: commit moved INTO the protected phase and cleanup preserves the original error — kuzu auto-aborts make unconditional ROLLBACK raise "No active transaction"; the absent/uninitialized graph became an explicit prerequisite, exit 2, zero filesystem creation; live failure tests compare complete (source, target, score) rows).
+
 **Implements:** FR-D (edges), FR-E (strictly local lifecycle).
 
 `embedding/similar_runner.py` + `cli.py similar`: durable state
@@ -53,6 +57,8 @@ truly empty store reports truthfully with zero Kùzu writes;
 `failed`-class conditions exit nonzero.
 
 ## T3 — the MCP surface
+
+**Status: complete** (one review round: non-creation enforced at the OPEN via `connect_read_only` — the exists() precheck alone was a TOCTOU; `mcp>=1.0,<2` pinned in requirements + CLI hint, since 2.x renamed FastMCP; invalid envelopes get the targeted `embed --overwrite --session-id` guidance, with the advised recovery tested end to end; neighbor KPIs included with rubric identity and honest absence). The registered-tool test runs in CI, which now installs mcp<2.
 
 **Implements:** FR-F, including the MCP-to-graph boundary (plan D7).
 
@@ -75,6 +81,8 @@ kuzu_path and reads that graph; `compare_approaches` fixtures
 byte-unchanged; the tool is registered beside the existing four.
 
 ## T4 — closure
+
+**Status: complete.** README section (name/tag heuristic, last-pass snapshot semantics, and the deferred text-query embedding all explicit); the consolidated 24-mutation ledger re-run whole at the final HEAD under kuzu+mcp with zero test skips — 24 caught, 0 escaped (`mutation-ledger.md`); full suite and repo gates green; origin record refreshed last.
 
 README section (state plainly: scores are discovery heuristics over a
 same-named space, not model-version identity — FR-B's boundary);
