@@ -196,6 +196,11 @@ REDACTION_STRICTNESS = (REDACT_NONE, REDACT_CODE, REDACT_METADATA_ONLY)
 # Substring search (documented as NON-ranked): result limits + snippet window.
 SEARCH_DEFAULT_LIMIT = 50
 SEARCH_MAX_LIMIT = 500
+
+#: Upper bound for the read-only similarity/cluster API surfaces
+#: (#293 FR-B). Range-guarding lives at the endpoint signature so an
+#: existing tool contract is not altered by a UI slice.
+SIMILAR_MAX_LIMIT = 100
 SEARCH_SNIPPET_CHARS = 120
 
 # mtime comparison tolerance shared by BOTH incremental walks (ingest_state

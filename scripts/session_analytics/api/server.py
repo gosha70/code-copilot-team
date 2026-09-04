@@ -43,7 +43,7 @@ def studio_origins(ui_port: int = C.DEFAULT_UI_PORT) -> tuple[str, ...]:
 def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     from typing import Awaitable, Callable
 
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, HTTPException, Query, Request
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
     from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -511,5 +511,106 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             )}
         finally:
             conn.close()
+
+    # ── similarity + clustering, READ-ONLY (#293 FR-B) ─────────────────
+    # Deliberately NOT reusing `_graph()` above: that opens with
+    # `GraphDatabase.connect`, which CREATES the store. These endpoints
+    # inherit #289's discipline — an absent path is refused before any
+    # open, the open itself is non-creating, and a path that disappears
+    # between the two is refused rather than repaired.
+
+    def _prerequisite(detail: dict) -> "HTTPException":
+        """A prerequisite answer, in the SAME shape the MCP tools use.
+
+        503 rather than 200: the service cannot answer yet. The body is
+        the tool's own {error, prerequisite, guidance} dict, so a client
+        can tell absent-graph from unbuilt-graph from healthy-empty
+        (#293 FR-C) without parsing prose.
+        """
+        return HTTPException(status_code=503, detail=detail)
+
+    @app.get("/api/clusters")
+    def clusters() -> dict[str, Any]:
+        """Clusters over the stored SIMILAR_TO snapshot (#289 FR-E).
+
+        Wraps `run_clusters` and returns its report VERBATIM — the
+        limitations block, both provenance labels and `basis` included.
+        Nothing is reshaped, renamed or pruned here: FR-E requires those
+        displayed, and a reshaping layer is where they get lost.
+        """
+        from pathlib import Path as _Path
+
+        from ..embedding.cluster_reader import KuzuGraphSnapshot, run_clusters
+        from ..embedding.similar_runner import GraphNotReadyError
+        from ..graph.schema import GraphDatabase
+
+        path = kuzu_path or load_config().kuzu_path
+        if not path or not _Path(path).exists():
+            raise _prerequisite({
+                "error": f"graph database absent at {path or '(unset)'}",
+                "prerequisite": "graph",
+                "guidance": "run './scripts/session-analytics graph' first",
+            })
+        try:
+            gdb = GraphDatabase.connect_read_only(path)
+        except ImportError:
+            raise HTTPException(status_code=503, detail="kuzu not installed")
+        except RuntimeError:
+            # the exists() check alone is a TOCTOU; refuse, never repair
+            raise _prerequisite({
+                "error": f"graph database absent or unopenable at {path}",
+                "prerequisite": "graph",
+                "guidance": "run './scripts/session-analytics graph' first",
+            })
+        try:
+            report = run_clusters(KuzuGraphSnapshot(gdb))
+        except GraphNotReadyError:
+            raise _prerequisite({
+                "error": "graph store holds no Session table",
+                "prerequisite": "graph",
+                "guidance": "run './scripts/session-analytics graph' first",
+            })
+        finally:
+            gdb.close()
+        # Zero clusters is a RESULT, not an error (#289 FR-E): 200.
+        return report.as_dict()
+
+    @app.get("/api/sessions/{session_id}/similar")
+    def session_similar(
+        session_id: int,
+        limit: int = Query(10, ge=1, le=C.SIMILAR_MAX_LIMIT),
+    ) -> dict[str, Any]:
+        """Stored neighbours for one session (#287 FR-F), verbatim.
+
+        `limit` is range-guarded HERE, at the endpoint signature, rather
+        than inside `similar_sessions`. FastAPI already rejects a
+        non-integer from the annotation (422); what was unguarded was
+        RANGE — `similar_sessions` has no range check, so -1, 0 and 1e9
+        all reached the query. Constraining at the signature guards this
+        new public surface without altering an existing tool contract,
+        and FastAPI answers 422, the right code for client input error.
+        """
+        from ..mcp import tools as mcp_tools
+
+        path = kuzu_path or load_config().kuzu_path
+        conn = db()
+        try:
+            result = mcp_tools.similar_sessions(
+                conn, path, session_id, limit=limit)
+        finally:
+            conn.close()
+        if "prerequisite" in result:
+            raise _prerequisite(result)
+        # Map the KNOWN error explicitly. `"error" in result` is not a
+        # synonym for "not found": it is the tool's error CHANNEL, and
+        # collapsing every condition it can carry into 404 is the mirror
+        # of the FR-C failure this slice exists to prevent — N
+        # conditions, one code. Anything unrecognised is a 500, which is
+        # honest, rather than a confident wrong answer.
+        if "error" in result:
+            if "not found" in str(result.get("error", "")):
+                raise HTTPException(status_code=404, detail=result)
+            raise HTTPException(status_code=500, detail=result)
+        return result
 
     return app
