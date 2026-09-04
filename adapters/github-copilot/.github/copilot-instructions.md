@@ -474,6 +474,20 @@ Specific prohibitions:
 
 **Why:** A real incident demonstrated this failure mode — using `GIT_INDEX_FILE` to bypass `.git/index.lock` created a commit with an empty tree that appeared to delete every file in the repository. The copilot pattern-matched "bypass the lock" without reasoning about the consequence (an empty alternate index). The correct move was to explain that the lock file was blocking the commit and ask the user to remove it.
 
+## Published State Is Verified, Not Held
+
+A `PreToolUse` hook sees only the agent's own commands; an external
+publisher can push any commit that exists locally. "Held locally" is
+advisory, not a boundary.
+
+- Never claim a commit can be kept unpublished.
+- Report push status from `git ls-remote`/reflog, not your own log.
+- Bind review/merge/closure to an exact SHA; re-read state first.
+- Prefer a follow-up commit to an amend on a watched branch.
+- Keep every commit review-ready.
+
+Evidence, and the guard not adopted: #291.
+
 ## Secrets & Credentials
 
 - Never hard-code API keys, tokens, passwords, or connection strings in source.
