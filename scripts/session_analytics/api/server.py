@@ -380,8 +380,9 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
     @app.get("/api/search")
     def search(q: str = "", limit: int = C.SEARCH_DEFAULT_LIMIT) -> dict[str, Any]:
-        # E10 Slice A (#98): substring search over archived (redacted) trace
-        # text — documented as NOT ranked; deterministic ordering.
+        # E10 Slice B (#65): tokenized, ranked search over archived
+        # (redacted) trace text; `limit` is a top-N. Degrades to Slice A
+        # substring ordering when the store has no usable index.
         if not q.strip():
             raise HTTPException(status_code=400, detail="empty search query")
         conn = db()

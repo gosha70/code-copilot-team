@@ -267,9 +267,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_srch = sub.add_parser(
         "search",
-        help="Substring search over archived trace text (E10; NOT ranked).",
+        help="Ranked full-text search over archived trace text (E10).",
     )
-    p_srch.add_argument("query", help="Substring to search for (case-insensitive).")
+    p_srch.add_argument(
+        "query",
+        help="Words to search for. Case-insensitive and stemmed; terms may "
+             "appear in any order, anywhere in a turn. Best matches first.",
+    )
     p_srch.add_argument(
         "--limit", type=int, default=C.SEARCH_DEFAULT_LIMIT,
         help=f"Max results (default {C.SEARCH_DEFAULT_LIMIT}, cap {C.SEARCH_MAX_LIMIT}).",

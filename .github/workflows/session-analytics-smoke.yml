@@ -158,6 +158,75 @@ jobs:
           PY
           rm -f ~/.cct/session-analytics.json
 
+      - name: "Ranked trace search under PostgreSQL (E10 Slice B, #65)"
+        run: |
+          mkdir -p ~/.cct
+          cat > ~/.cct/session-analytics.json <<'JSON'
+          {
+            "projects": {
+              "demo-project": { "trace_archive": true }
+            },
+            "project_ids": [
+              { "match": "/repo/demo", "id": "demo-project" }
+            ]
+          }
+          JSON
+          ./scripts/session-analytics archive \
+            --copilot claude-code --root "$FIXTURE_ROOT" \
+            --dsn "$SA_DSN" --full
+          python3 - <<'PY'
+          import os
+          import psycopg
+          conn = psycopg.connect(os.environ["SA_DSN"])
+          cur = conn.cursor()
+          # The tsvector column is GENERATED, so it exists for every row
+          # the archive wrote — no backfill step, and no way for it to
+          # outlive its row.
+          cur.execute("""
+              SELECT count(*) FROM information_schema.columns
+              WHERE table_name = 'trace_document' AND column_name = 'content_tsv'
+          """)
+          assert cur.fetchone() == (1,), "content_tsv column missing"
+          cur.execute("SELECT count(*) FROM trace_document WHERE content_tsv IS NULL")
+          assert cur.fetchone() == (0,), "unindexed archived rows"
+
+          # Terms in any order, across intervening words — the behaviour
+          # the substring path could not deliver on either dialect. Both
+          # words come from ONE document and are queried in REVERSE
+          # document order, so a LIKE-equivalent would score zero here.
+          cur.execute("SELECT content FROM trace_document")
+          probe = ""
+          for (content,) in cur.fetchall():
+              words = [w for w in (content or "").split() if len(w) > 4 and w.isalpha()]
+              if len(words) >= 2:
+                  probe = f"{words[-1]} {words[0]}"
+                  break
+          assert probe, "fixture text too thin to probe"
+          cur.execute(
+              "SELECT count(*) FROM trace_document "
+              "WHERE content_tsv @@ plainto_tsquery('english', %s)",
+              (probe,),
+          )
+          hits = cur.fetchone()[0]
+          assert hits >= 1, f"reversed-order query {probe!r} matched nothing"
+          # And the LIKE path it replaced genuinely cannot answer it.
+          cur.execute(
+              "SELECT count(*) FROM trace_document WHERE LOWER(content) LIKE %s",
+              (f"%{probe.lower()}%",),
+          )
+          assert cur.fetchone() == (0,), "probe was contiguous; not a real test"
+          print("OK ranked search under Postgres:", probe, hits)
+
+          # A purge must take the index with it — the column cannot
+          # survive its row, which is the point of GENERATED here.
+          cur.execute("DELETE FROM trace_document")
+          conn.commit()
+          cur.execute("SELECT count(*) FROM trace_document WHERE content_tsv IS NOT NULL")
+          assert cur.fetchone() == (0,), "index text survived a purge"
+          print("OK purge reaches the index")
+          PY
+          rm -f ~/.cct/session-analytics.json
+
       - name: Build + assert the Kùzu graph
         run: |
           ./scripts/session-analytics graph --rebuild \

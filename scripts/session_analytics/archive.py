@@ -12,11 +12,12 @@
 # redaction floor). No unredacted content is ever written; opted-out and
 # not-opted-in projects produce ZERO rows.
 #
-# Search is deliberately humble (v1): case-insensitive SUBSTRING search via
-# parameterized LIKE with escaped wildcards — portable across sqlite and
-# postgres with one code path, deterministic (session_ref, sequence_num)
-# ordering, and documented as NOT ranked. Real FTS is Slice B, gated on
-# demonstrated pain.
+# Search was deliberately humble in Slice A: case-insensitive SUBSTRING
+# search via parameterized LIKE, deterministic (session_ref, sequence_num)
+# ordering, documented as NOT ranked, with FTS named as Slice B "gated on
+# demonstrated pain". The pain was measured (see search_index) and the
+# gate has fired, so `search_traces` now delegates to that index and keeps
+# the LIKE path only as the fallback for a store without one.
 
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ from .ingest.redaction import redact_text
 from .registry import get_adapter, list_adapter_ids
 from .relational.db import Database, apply_ddl, now_iso
 from .relational import store
+from . import search_index
 
 _log = logging.getLogger(__name__)
 
@@ -112,10 +114,23 @@ def make_snippet(content: str, query: str, *, window: int = C.SEARCH_SNIPPET_CHA
     Falls back to the head of the content if the match is not found (can
     happen when the DB matched but normalization differs — never raises).
     Ellipses mark truncation on either side.
+
+    Under Slice B the whole query is usually NOT present verbatim: the
+    index matches terms in any order, across intervening words, and after
+    stemming. Anchoring on the first term that IS present keeps the
+    excerpt on the match instead of silently showing the head of a
+    document whose relevant passage is 4,000 characters further down.
     """
     idx = content.lower().find(query.lower())
     if idx < 0:
-        idx = 0
+        lowered = content.lower()
+        hits = [
+            at
+            for term in search_index.query_terms(query)
+            for at in (lowered.find(term.lower()),)
+            if at >= 0
+        ]
+        idx = min(hits) if hits else 0
     start = max(0, idx - window)
     end = min(len(content), idx + len(query) + window)
     snippet = content[start:end].strip()
@@ -396,33 +411,54 @@ def _purge_unauthorized(
             )
 
 
-# ── substring search (v1: portable, deterministic, NOT ranked) ──────────
+# ── search (Slice B: tokenized + ranked; Slice A substring as fallback) ─
 
 
 def search_traces(
     db: Database, query: str, *, limit: int = C.SEARCH_DEFAULT_LIMIT
 ) -> list[dict[str, Any]]:
-    """Case-insensitive substring search over archived trace text.
+    """Ranked full-text search over archived trace text (E10 Slice B, #65).
 
-    Portable across sqlite and postgres via LOWER(...) LIKE LOWER(pattern)
-    with escaped wildcards (one code path, no dialect branch). Results are
-    ordered deterministically by (session_ref, sequence_num) — this is
-    SUBSTRING search, not ranked search; no relevance ordering is implied.
+    Terms match in any order and across intervening words, stemmed
+    (English/Porter on both dialects), ordered best-first — ``limit`` is a
+    ranked top-N. See :mod:`session_analytics.search_index`.
+
+    Degrades to the Slice A path — case-insensitive ``LIKE`` with escaped
+    wildcards, ordered by (session_ref, sequence_num), NOT ranked — when
+    the store has no index. Same results shape either way.
+
+    READ-ONLY: this detects the index, it never builds one. Creation
+    belongs to ``apply_ddl``, which every CLI command and the API's
+    startup already run; doing it per query would run DDL on every
+    search. See ``search_index.detect_index``.
     """
     limit = max(1, min(int(limit), C.SEARCH_MAX_LIMIT))
-    pattern = f"%{escape_like(query)}%"
-    rows = db.query(
-        f"""
-        SELECT td.session_ref, td.sequence_num, s.copilot, s.session_id,
-               s.project_path, td.redaction_mode, td.content
-        FROM {C.TBL_TRACE_DOCUMENT} td
-        JOIN copilot_session s ON s.id = td.session_ref
-        WHERE LOWER(td.content) LIKE LOWER(?) ESCAPE '\\'
-        ORDER BY td.session_ref, td.sequence_num
-        LIMIT ?
-        """,
-        (pattern, limit),
-    )
+    terms = search_index.query_terms(query)
+    rows: Optional[list[tuple]] = None
+    if terms:
+        rows = search_index.ranked_rows(
+            db, search_index.detect_index(db), terms, limit
+        )
+    elif query:
+        # Punctuation-only query (`%`, `***`). No term can match it, and
+        # the substring path must not be handed it either: under Slice A
+        # `%` was escaped to a literal, and returning every row here
+        # would be a wildcard escape by the back door.
+        return []
+    if rows is None:
+        pattern = f"%{escape_like(query)}%"
+        rows = db.query(
+            f"""
+            SELECT td.session_ref, td.sequence_num, s.copilot, s.session_id,
+                   s.project_path, td.redaction_mode, td.content
+            FROM {C.TBL_TRACE_DOCUMENT} td
+            JOIN copilot_session s ON s.id = td.session_ref
+            WHERE LOWER(td.content) LIKE LOWER(?) ESCAPE '\\'
+            ORDER BY td.session_ref, td.sequence_num
+            LIMIT ?
+            """,
+            (pattern, limit),
+        )
     return [
         {
             "session_ref": int(r[0]),

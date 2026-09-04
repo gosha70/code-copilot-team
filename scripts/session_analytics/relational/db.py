@@ -90,7 +90,13 @@ _DDL_FILES = (
     "ddl/postgres/004_metadata.sql",
     "ddl/postgres/005_heartbeat.sql",
 )
-_SCHEMA_VERSION = 3  # 3: + local_heartbeat (Slice B1, #187)
+# 3: + local_heartbeat (Slice B1, #187)
+# 4: + trace search index (E10 Slice B, #65). NOTE that apply_ddl creates
+#    what is absent and runs no migration step, so a bump alone would
+#    leave an existing store's index empty and its archived traces
+#    silently unsearchable — search_index.ensure_index backfills, and is
+#    called from apply_ddl for exactly that reason.
+_SCHEMA_VERSION = 4
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",
@@ -220,6 +226,12 @@ def apply_ddl(db: Database) -> None:
             db.execute(stmt)
     _record_version(db)
     db.commit()
+    # Imported here, not at module scope: search_index imports Database
+    # from this module, and the search index is a consumer of the schema
+    # rather than part of it.
+    from ..search_index import ensure_index
+
+    ensure_index(db)
 
 
 def _record_version(db: Database) -> None:
