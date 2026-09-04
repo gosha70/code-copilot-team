@@ -5,7 +5,7 @@ next starts; no merge, no closures without the owner's explicit GO.
 
 ## T1 — the two read-only endpoints
 
-**Status: pending.**
+**Status: DONE** — `85c655f`, reviewed and approved.
 
 **Implements:** FR-B (plan D1, D2, D5).
 
@@ -35,7 +35,7 @@ T3 registration near-miss repeated.
 
 ## T2 — the clusters view
 
-**Status: pending.**
+**Status: DONE** — reviewed and approved with T3.
 
 **Implements:** FR-A, FR-C, FR-D (plan D3, D4, D7).
 
@@ -53,12 +53,12 @@ distinct render branches with distinct copy — prerequisite-missing
 failure), populated; a capped response shows "N of M" using
 `cluster_count`; the transitive-grouping and production-time
 compatibility limitations are DISPLAYED, not merely fetched; no new
-dependency added to `studio/package.json`; `typecheck` and `lint`
-clean.
+dependency added to `studio/package.json`; `typecheck` and
+`next build` clean (see the lint correction below).
 
 ## T3 — the similar-sessions panel
 
-**Status: pending.**
+**Status: DONE** — reviewed and approved with T2.
 
 **Implements:** FR-A, FR-C, FR-E.
 
@@ -69,20 +69,52 @@ A panel on the existing session detail page.
 the graph produce DIFFERENT copy (the second names the graph
 prerequisite, per #289 FR-F); nothing in the panel implies pairwise
 similarity; the snapshot note is shown; the existing session detail
-page's other content is unchanged; `typecheck` and `lint` clean.
+page's other content is unchanged; `typecheck` and `next build` clean.
 
 ## T4 — closure
 
-**Status: pending.**
+**Status: DONE** — this commit.
 
 README section (the two views, the three states, and what the UI
 deliberately does not do); consolidated mutation ledger via the
 committed driver (`scripts/mutation_ledger/`) re-run whole at final
 HEAD with zero skips; full suites under both pythons; Studio
-`typecheck` + `lint`; the eight states asserted by the D8 script, its
+`typecheck` + `next build`; the states asserted by the D8 script, its
 output recorded, and the API suite reported as EXECUTED with its
 environment named; `validate-spec` / origin-alignment (record last) /
 doc-accuracy / `git diff --check`; PR body/table refresh.
+
+## Correction: `lint` was never a runnable gate
+
+The plan's acceptance criteria named `npm run lint`. **That command has
+never been runnable in this repo**: there is no ESLint config under
+`studio/`, so `next lint` drops into an interactive "How would you like
+to configure ESLint?" prompt, and no CI workflow invokes it. The
+criterion was unsatisfiable as written.
+
+Configuring ESLint was refused: it is a new dependency and a repo-wide
+decision, not something a UI feature slice should make on its way past.
+`next build` replaces it — a gate that genuinely typechecks the whole
+app and is what CI would exercise. Corrected here rather than
+reinterpreted silently.
+
+The generalization, recorded because it is a new class: an acceptance
+criterion that names a command should be verified RUNNABLE when the
+plan is written, not when it comes due. This is not an instrument
+reporting a wrong number — it is a gate that was never there.
+
+## Decision: the panel's placement within the session page
+
+The origin claim specifies "a similar-sessions panel on the existing
+session detail page", and that is where it is. Which TAB within that
+page is a sub-choice the spec does not settle; it sits on **Insights**,
+beside the other per-session analysis.
+
+The tradeoff, stated rather than assumed: a user who never opens
+Insights never sees neighbours. That is acceptable for a slice whose
+purpose is to produce evidence about whether this surface is wanted at
+all — the same reasoning that made this (a) rather than (b). If usage
+shows it should be more prominent, moving it is trivial and informed.
 
 ## Out of scope
 

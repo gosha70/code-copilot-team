@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, SessionDetail, TurnRow } from "@/lib/api";
 import { Badge, Card, ErrorNote, Loading, formatCost, useApi } from "@/components/ui";
+import SimilarPanel from "@/components/SimilarPanel";
+import { classifySimilar, type SimilarOutcome } from "@/lib/similarStates";
 
 type Tab = "insights" | "tuning" | "coaching";
 
@@ -42,7 +44,12 @@ export default function SessionDetailPage() {
         ))}
       </div>
 
-      {tab === "insights" && <Insights data={data} />}
+      {tab === "insights" && (
+        <>
+          <Insights data={data} />
+          <Similar id={id} />
+        </>
+      )}
       {tab === "tuning" && <AgentTuning data={data} />}
       {tab === "coaching" && <PromptCoaching data={data} />}
     </div>
@@ -161,4 +168,22 @@ function PromptCoaching({ data }: { data: SessionDetail }) {
       </table>
     </Card>
   );
+}
+
+// #293 T3: fetching only — every rendering decision lives in
+// SimilarPanel, which is pure so the D8 script can render its states.
+function Similar({ id }: { id: number }) {
+  const [state, setState] = useState<SimilarOutcome | null>(null);
+  useEffect(() => {
+    let live = true;
+    api
+      .similar(id)
+      .then((outcome) => live && setState(classifySimilar(outcome)))
+      // A rejected promise is an honest failure, not a prerequisite.
+      .catch((e) => live && setState({ kind: "failed", message: String(e) }));
+    return () => {
+      live = false;
+    };
+  }, [id]);
+  return state === null ? <Loading /> : <SimilarPanel state={state} />;
 }

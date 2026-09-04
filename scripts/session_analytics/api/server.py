@@ -523,9 +523,15 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         """A prerequisite answer, in the SAME shape the MCP tools use.
 
         503 rather than 200: the service cannot answer yet. The body is
-        the tool's own {error, prerequisite, guidance} dict, so a client
-        can tell absent-graph from unbuilt-graph from healthy-empty
-        (#293 FR-C) without parsing prose.
+        the tool's own {error, prerequisite, guidance} dict, ANNOTATED
+        with a `state` discriminator, so a client can tell absent from
+        unopenable from unbuilt (#293 FR-C) without parsing prose.
+
+        Annotating is not reshaping. D2 forbids pruning or renaming what
+        the reader produced; adding what this endpoint authoritatively
+        knows is the opposite — each raise site below knows exactly
+        which state it is in, and encoding that only into English would
+        force the client to reconstruct it with a substring match.
         """
         return HTTPException(status_code=503, detail=detail)
 
@@ -549,6 +555,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             raise _prerequisite({
                 "error": f"graph database absent at {path or '(unset)'}",
                 "prerequisite": "graph",
+                "state": "absent",
                 "guidance": "run './scripts/session-analytics graph' first",
             })
         try:
@@ -560,6 +567,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             raise _prerequisite({
                 "error": f"graph database absent or unopenable at {path}",
                 "prerequisite": "graph",
+                "state": "unopenable",
                 "guidance": "run './scripts/session-analytics graph' first",
             })
         try:
@@ -568,6 +576,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             raise _prerequisite({
                 "error": "graph store holds no Session table",
                 "prerequisite": "graph",
+                "state": "unbuilt",
                 "guidance": "run './scripts/session-analytics graph' first",
             })
         finally:

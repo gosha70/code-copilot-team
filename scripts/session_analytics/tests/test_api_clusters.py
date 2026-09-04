@@ -34,6 +34,53 @@ def _client(kuzu_path: str):
 class TestClustersEndpointPrerequisites(unittest.TestCase):
     """FR-B: #289's ladder, reached over HTTP, creating nothing."""
 
+    def test_each_prerequisite_names_the_state_the_server_determined(self) -> None:
+        """The endpoint knows WHICH state it is in at each raise site.
+
+        Encoding that only into English would force the client to
+        reconstruct it with a substring match on the error text — the
+        signal would be present, discarded, and re-derived. Each of the
+        three sites therefore carries an explicit `state`, and the
+        values must be distinct or the client cannot tell them apart.
+        """
+        from session_analytics.embedding import cluster_reader as cr
+        from session_analytics.graph.schema import GraphDatabase
+        from session_analytics.tests.test_cluster_reader import _FakeSnapshot
+
+        seen = {}
+
+        # absent: refused before any open
+        tmp = Path(tempfile.mkdtemp(prefix="cct-api-state-absent-"))
+        r = _client(str(tmp / "nope")).get("/api/clusters")
+        seen["absent"] = r.json()["detail"]["state"]
+
+        # unopenable: exists(), then the open fails (the TOCTOU race)
+        store = tmp / "vanished"
+        store.mkdir()
+
+        def _vanished(path):
+            raise RuntimeError("READ ONLY mode")
+
+        with mock.patch.object(GraphDatabase, "connect_read_only", _vanished):
+            r = _client(str(store)).get("/api/clusters")
+        seen["unopenable"] = r.json()["detail"]["state"]
+
+        # unbuilt: opens, but holds no Session table
+        gdb = mock.Mock()
+        gdb.close = mock.Mock()
+        with mock.patch.object(GraphDatabase, "connect_read_only",
+                               lambda p: gdb), \
+             mock.patch.object(cr, "KuzuGraphSnapshot",
+                               lambda g: _FakeSnapshot(ready=False)):
+            r = _client(str(store)).get("/api/clusters")
+        seen["unbuilt"] = r.json()["detail"]["state"]
+
+        self.assertEqual(seen, {"absent": "absent",
+                                "unopenable": "unopenable",
+                                "unbuilt": "unbuilt"})
+        self.assertEqual(len(set(seen.values())), 3,
+                         "the three states must be distinguishable")
+
     def test_absent_path_is_a_prerequisite_and_creates_nothing(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="cct-api-clusters-absent-"))
         ghost = tmp / "nope"

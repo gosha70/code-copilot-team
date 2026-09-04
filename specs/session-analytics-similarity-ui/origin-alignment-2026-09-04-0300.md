@@ -79,9 +79,37 @@ mode this arc keeps finding. The API endpoint tests must likewise be
 reported as EXECUTED with the environment named, since they live in
 the `fastapi`-gated suite and would otherwise skip silently.
 
+## Findings that changed the work, recorded at closure
+
+- **The API gap was real and was found before planning** (26 route
+  decorators in `api/server.py`, none exposing similarity or
+  clustering). The slice shipped two read-only endpoints.
+- **`lint` was never a runnable gate.** The plan named
+  `npm run lint`; there is no ESLint config, `next lint` prompts
+  interactively, and no CI job invokes it. Configuring ESLint was
+  refused as a repo-wide decision a feature slice should not make.
+  `next build` replaces it. A new class of finding: not an instrument
+  reporting a wrong number, but a gate that was never there — an
+  acceptance criterion naming a command should be verified RUNNABLE
+  when the plan is written.
+- **A prerequisite discriminator was added** at review. The endpoint
+  knows which of three states it is in at each raise site and was
+  encoding that only into prose, forcing the client to re-derive it
+  with a substring match. Annotating with what the endpoint
+  authoritatively knows is not the reshaping D2 forbids.
+- **T3 needed nothing upstream.** Checked before proposing: the
+  producer already tailors `guidance` per case, and the FR-C
+  distinction the panel needs is structural (200 with an empty list vs
+  503 with a prerequisite). #289's tools stay byte-unchanged.
+- **The panel sits on the Insights tab.** The origin claim specified
+  the session detail page; which tab is a sub-choice recorded with its
+  tradeoff in tasks.md.
+
 ## What this record does NOT claim
 
-- Plan-only: no code exists at submission.
+- The bundle was plan-only when first submitted; the branch now carries
+  T1–T4. T4 closure closes nothing: #293 and #65 stay open, and
+  acceptance is the owner's call.
 - Nothing here makes #65 complete. E2 completes when this slice
   merges; E1 aggregates, E10's deferred half, E3 and E4 remain, and
   #65's completeness is the owner's call.
