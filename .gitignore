@@ -53,6 +53,11 @@ yarn-debug.log*
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks/
 
+# Per-developer Claude Code settings. Personal by convention, and on some
+# machines covered by a personal global ignore that does NOT travel — so the
+# protection has to live in the repo to apply to everyone.
+.claude/settings.local.json
+
 # Generated docs (keep source only)
 README.html
 /doc_internal
