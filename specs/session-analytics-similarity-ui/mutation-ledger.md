@@ -9,11 +9,17 @@
     subtests), green before and re-verified green after the last
     restore. Skips here would be silent: without fastapi the whole file
     is gated out and a "green" run measures nothing.
-  - **UI (19):** driven over `studio/scripts/states-check.mjs`, which
+  - **UI (24):** driven over `studio/scripts/states-check.mjs`, which
     renders each state through `react-dom/server` and asserts on the
     markup. Same apply → run → restore method; baseline green before
     and after.
-- **38 mutations, 38 caught, 0 escaped.**
+- **38 mutations (14 API + 24 UI), 38 caught, 0 escaped.** The two
+  half-counts and the total are stated together deliberately: an
+  earlier revision of this file said "UI (19)" beside a total of 38
+  while enumerating 24 UI rows, so the summary and the table disagreed
+  and neither was obviously wrong on its own. Both halves were then
+  re-run whole in a single pass each — 14/14 and 24/24 — so the total
+  is measured rather than added up across sessions.
 
 ## What the escapes taught, recorded because they were not caught first time
 
