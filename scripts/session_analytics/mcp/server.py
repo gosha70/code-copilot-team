@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from ..config import load_config
 from ..relational.db import Database
@@ -19,9 +19,9 @@ def build_server(dsn: str, kuzu_path: str = ""):
     """Construct (but do not run) a FastMCP server bound to ``dsn``.
 
     ``kuzu_path`` is the CALLER'S resolved graph path (#287 T3): the
-    ``similar_sessions`` tool reads stored SIMILAR_TO edges from it,
-    non-creating — an empty/absent path yields a prerequisite result,
-    never a freshly created store.
+    ``similar_sessions`` and ``session_clusters`` tools read stored
+    SIMILAR_TO edges from it, non-creating — an empty/absent path
+    yields a prerequisite result, never a freshly created store.
     """
     from mcp.server.fastmcp import FastMCP  # lazy: only needed to serve
 
@@ -86,6 +86,22 @@ def build_server(dsn: str, kuzu_path: str = ""):
         db = _db()
         try:
             return tools.similar_sessions(
+                db, kuzu_path, session_id, limit=limit)
+        finally:
+            db.close()
+
+    @server.tool()
+    def session_clusters(
+        session_id: Optional[int] = None, limit: int = 10,
+    ) -> dict[str, Any]:
+        """Clusters of mutually-reachable similar sessions from stored
+        SIMILAR_TO edges (basis: "embedding"). With session_id: that
+        session's cluster, or an honest "unclustered". Without it:
+        clusters largest first. Clusters are UNNAMED and transitive —
+        membership does not assert all-pairs similarity."""
+        db = _db()
+        try:
+            return tools.session_clusters(
                 db, kuzu_path, session_id, limit=limit)
         finally:
             db.close()
