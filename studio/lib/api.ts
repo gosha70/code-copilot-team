@@ -10,6 +10,46 @@ async function get<T>(path: string): Promise<T> {
   return r.json();
 }
 
+// #293 FR-C: the clusters/similar endpoints answer a missing
+// prerequisite with 503 AND a {error, prerequisite, guidance} body. The
+// plain `get` above discards that body — it throws a message carrying
+// only the status — which would force the page to infer the state from
+// text. This variant PRESERVES the body so the mapping stays explicit.
+export interface ApiFailure {
+  ok: false;
+  status: number;
+  detail?: { error: string; prerequisite: string; guidance: string };
+  message: string;
+}
+
+export type ApiOutcome<T> = { ok: true; report: T } | ApiFailure;
+
+async function getOrFailure<T>(path: string): Promise<ApiOutcome<T>> {
+  let r: Response;
+  try {
+    r = await fetch(`${BASE}${path}`, { cache: "no-store" });
+  } catch (e) {
+    return { ok: false, status: 0, message: String(e) };
+  }
+  if (r.ok) return { ok: true, report: (await r.json()) as T };
+  let detail: ApiFailure["detail"];
+  try {
+    const body = await r.json();
+    // FastAPI wraps HTTPException detail; only a fully-shaped
+    // prerequisite counts, so a partial body cannot masquerade as one.
+    const d = body?.detail;
+    if (d && typeof d === "object" && "prerequisite" in d) detail = d;
+  } catch {
+    // non-JSON error body: fall through to the plain failure
+  }
+  return {
+    ok: false,
+    status: r.status,
+    detail,
+    message: `GET ${path} → ${r.status}`,
+  };
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const r = await fetch(`${BASE}${path}`, {
     method: "POST",
@@ -463,6 +503,28 @@ export interface RoutingKnnPayload {
   recommendations: RoutingKnnRecommendation[];
 }
 
+// #293: mirrors the server payloads exactly (the Studio never
+// re-derives a figure — see ClustersView's FR-A note).
+export type { ClusterReport, ClusterRow } from "./clusterStates";
+import type { ClusterReport } from "./clusterStates";
+
+export interface SimilarNeighbor {
+  session_key: string;
+  id: number | null;
+  project_path: string | null;
+  started_at: string | null;
+  score: number;
+  basis: string;
+  kpi: Record<string, unknown> | null;
+}
+
+export interface SimilarResponse {
+  session_id: number;
+  basis: string;
+  scores_are: string;
+  neighbors: SimilarNeighbor[];
+}
+
 export const api = {
   dashboard: () => get<DashboardKpis>("/api/dashboard/kpis"),
   labels: () => get<{ labels: { label: string; true: number; total: number }[] }>("/api/dashboard/labels"),
@@ -474,6 +536,14 @@ export const api = {
     ),
   session: (id: number) => get<SessionDetail>(`/api/sessions/${id}`),
   graphCounts: () => get<GraphCounts>("/api/graph/node-counts"),
+  // #293: read-only similarity + clustering. `clusters` uses the
+  // body-preserving variant because its prerequisite states are the
+  // point (FR-C); a thrown status alone cannot distinguish them.
+  clusters: () => getOrFailure<ClusterReport>("/api/clusters"),
+  similar: (id: number, limit = 10) =>
+    getOrFailure<SimilarResponse>(
+      `/api/sessions/${id}/similar?limit=${limit}`,
+    ),
   graphQuery: (cypher: string) =>
     post<{ rows: Record<string, unknown>[] }>("/api/graph/query", { cypher }),
   settings: () => get<Record<string, unknown>>("/api/settings"),

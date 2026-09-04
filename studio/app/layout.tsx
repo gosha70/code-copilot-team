@@ -12,6 +12,7 @@ const TABS = [
   { href: "/", label: "Dashboard" },
   { href: "/sessions", label: "Sessions" },
   { href: "/graph", label: "Knowledge Graph" },
+  { href: "/clusters", label: "Clusters" },
   { href: "/analysis", label: "Analysis" },
   { href: "/benchmark", label: "Benchmark" },
   { href: "/routing", label: "Routing" },

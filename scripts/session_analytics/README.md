@@ -63,6 +63,9 @@ The zero-install path still works without `setup` — just pass `--dsn`:
 | `similar` | Populate `SIMILAR_TO` graph edges from stored embeddings (E2 slice 2, #287). |
 | `clusters`| Group the stored `SIMILAR_TO` edges into clusters, read-only (E2 slice 3, #289). |
 
+The Studio renders both read-only (E2 slice 4, #293) — see *Studio:
+clusters view + similar panel* below.
+
 `ingest` flags: `--copilot` (repeatable; default all), `--root`, `--dsn`,
 `--developer-id`, `--redact {none,code,metadata-only}`, `--incremental`
 (default) / `--full`.
@@ -954,6 +957,60 @@ provenance labels, and the limitations above, taken from the same
 constants the CLI uses so the two surfaces cannot drift. The
 prerequisite ladder matches `similar_sessions` and introduces no new
 prerequisite literal for a missing graph node.
+
+## Studio: clusters view + similar panel (E2 slice 4, issue #293)
+
+The Studio surfaces the clustering and similarity substrate read-only.
+Two endpoints and two views; nothing here triggers a pipeline.
+
+| Surface | What it shows |
+|---|---|
+| `GET /api/clusters` | the reader's report, verbatim |
+| `GET /api/sessions/{id}/similar` | stored neighbours for one session |
+| **Clusters** tab | groups largest-first, members, `directed_edge_count` |
+| Session detail → **Insights** | that session's stored neighbours |
+
+**The UI renders; it never re-derives.** Ordering is the reader's
+contract — descending size, then ascending identity, members by
+`session_key` — and the pages contain no sort at all. Identity,
+`directed_edge_count` and the counts are displayed verbatim; nothing
+sums, averages or re-counts. A capped response says so ("Showing N of
+M"), because a truncated list rendered silently misrepresents the
+library.
+
+**Empty, absent and unbuilt are different answers.** A ready graph
+holding no edges is a RESULT and reads as one. A missing graph store
+and an uninitialised one name which prerequisite is missing and print
+the command that fixes it. Each state has its own copy — asserted
+mutually exclusive, so two states cannot quietly share a sentence. The
+endpoint annotates which prerequisite it determined (`state`:
+`absent` / `unopenable` / `unbuilt`), so the client reads a field
+rather than pattern-matching prose; a server that omits it gets a
+fourth state that claims nothing and shows the server's own words.
+
+For a single session the same distinction is structural rather than
+textual: no stored neighbours is a healthy 200 with an empty list,
+while a session absent from the graph is a prerequisite, and the panel
+renders the guidance the producer already tailored per case.
+
+**Inherited honesty reaches the screen.** Both provenance labels, the
+limitations block, the neighbour snapshot note and the explicit
+statement that neighbours are not an all-pairs claim are DISPLAYED, not
+merely fetched.
+
+**Deliberately not built:** filtering, drill-down, search and graph
+visualisation. Nobody had looked at a cluster list when this shipped,
+so an explorer would have been designed against imagined usage; this
+slice produces the evidence that would justify one.
+
+**Verification.** The Studio predates the `ui-harness` template, so no
+automated visual gate applies. That is a reason to build the smallest
+thing that can fail, not a licence to check by eye:
+`studio/scripts/states-check.mjs` renders every state through
+`react-dom/server` and asserts on the markup — including that each
+state's marker appears in no other state's render. Run it with
+`node studio/scripts/states-check.mjs`; it needs no dependency the
+Studio does not already have.
 
 ## Tests
 
