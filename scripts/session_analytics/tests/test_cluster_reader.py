@@ -361,11 +361,20 @@ class TestClustersCliLadder(unittest.TestCase):
         self.assertIn("graph", err)
         self.assertFalse(ghost.exists(), "the absent path must not be created")
         # WHICH layer refused matters. The precheck runs BEFORE any open
-        # and says "absent"; the open's own failure says "absent or
-        # unopenable". Without this, deleting the precheck is invisible
-        # whenever kuzu is installed — the read-only open refuses too,
-        # and the assertions above still pass. The precheck is the
-        # guarantee we own; the driver's behaviour is not.
+        # and says "absent at"; the open's own failure says "absent or
+        # unopenable at". Without pinning that, deleting the precheck is
+        # invisible whenever kuzu is installed — the read-only open
+        # refuses too, and the assertions above still pass. The precheck
+        # is the guarantee we own; the driver's behaviour is not.
+        #
+        # BOTH directions, deliberately. The negative alone decays
+        # silently: reword the open path to "absent or cannot be opened"
+        # and it passes vacuously while the escape returns under a green
+        # test. The positive discriminates on its own — "absent or
+        # unopenable at" does not contain "absent at" — and also catches
+        # message drift in either layer.
+        self.assertIn("graph database absent at", err,
+                      "the pre-open check's own message must be what ran")
         self.assertNotIn("unopenable", err,
                          "the pre-open check must be what refused")
 

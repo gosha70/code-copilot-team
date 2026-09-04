@@ -138,6 +138,21 @@ existing `prerequisite: "graph"` answer with graph-sync guidance.
 Nothing about the implemented behaviour changed; only the wording that
 described it.
 
+## Which claims were doubled, and which stand on one measurement
+
+Recorded so a future reader does not have to guess. Verified
+INDEPENDENTLY by the reviewer on the owner's machine: the commit SHAs
+and diffstats, the unpushed state at each gate, `validate-spec`
+152/0, `check-origin-alignment` aligned/high with the record written
+last, `git diff --check`, the task SHAs in tasks.md, and the mutation
+ledger's disclosures (the escape, the miscount, the equivalent
+mutant). Standing on ONE measurement — the build session's, with the
+instruments named: the 686-test suites across python 3.13.2, 3.9.6 and
+the kuzu+mcp venv (those interpreters were not available to the
+reviewer), and `check-doc-accuracy`'s 81-link pass (`lychee` was not
+installed in the reviewing shell, though its count checks ran clean
+there).
+
 ## What this record does NOT claim
 
 - The bundle was plan-only when first submitted. That is no longer
