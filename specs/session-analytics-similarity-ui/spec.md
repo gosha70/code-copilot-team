@@ -180,6 +180,9 @@ not an informal pass.
 - **No new config keys** beyond what `serve` already resolves.
 - Determinism: the same `(edges, inventory)` pair yields the same
   rendered order, because the order is the reader's.
-- Suites green under both pythons; `typecheck` and `lint` clean for the
-  Studio; mutation-ledger evidence at closure per the arc's discipline,
-  using the driver committed in PR #292.
+- Suites green under both pythons; `typecheck` and `next build` clean
+  for the Studio; mutation-ledger evidence at closure per the arc's
+  discipline, using the driver committed in PR #292.
+  (`npm run lint` was named here originally and proved to be a gate
+  that never existed — no ESLint config, an interactive prompt, no CI
+  job. Corrected rather than reinterpreted; see tasks.md.)

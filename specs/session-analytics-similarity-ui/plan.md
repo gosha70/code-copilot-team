@@ -117,8 +117,10 @@ before planning, with the commands recorded in spec FR-B.
   byte-identical to `run_clusters`' order for a fixture whose
   size-descending and identity-ascending orders differ — the test that
   fails if anything sorts on either side.
-- **Studio (`typecheck` + `lint`):** the page compiles and lints under
-  the Studio's existing pipeline.
+- **Studio (`typecheck` + `next build`):** the page compiles and the
+  production build succeeds. `lint` was named here originally and is
+  not a runnable gate in this repo (no ESLint config, interactive
+  prompt, no CI job); `next build` genuinely typechecks the whole app.
 - **The eight states, asserted by the D8 script** (DOM assertions on
   each state's distinguishing copy), not eyeballed — enumerated here
   and recorded in the closure commit:

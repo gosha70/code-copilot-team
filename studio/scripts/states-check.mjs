@@ -179,6 +179,19 @@ try {
       COPY.cap(1, 9)],
     ["uncapped list shows NO cap notice (FR-D)", "populated",
       classify({ ok: true, report: populated }), null],
+    ["graph unopenable (FR-C: distinct from absent AND unbuilt)",
+      "unopenable",
+      classify({ ok: false, status: 503, message: "503",
+        detail: { error: "graph database absent or unopenable at /x",
+          prerequisite: "graph", state: "unopenable",
+          guidance: "run graph first" } }),
+      COPY.unopenableMarker],
+    ["UNRECOGNISED state string (a future server value)", "unnamed",
+      classify({ ok: false, status: 503, message: "503",
+        detail: { error: "graph database is quarantined",
+          prerequisite: "graph", state: "quarantined",
+          guidance: "contact your administrator" } }),
+      COPY.unnamedMarker],
     ["unnamed prerequisite (older server, no `state` field)", "unnamed",
       classify({ ok: false, status: 503, message: "503",
         detail: { error: "graph database absent at /x",
@@ -232,7 +245,9 @@ try {
   // and must still show the server's own error + guidance. A renderer
   // that defaulted to "absent" would pass its own marker check while
   // giving a confident wrong remedy.
-  const unnamed = rendered.get(STATES[6][0]).html;
+  const unnamed = rendered.get(
+    STATES.find((e) => e[0].startsWith("unnamed prerequisite"))[0],
+  ).html;
   if (unnamed.includes(COPY.absentMarker) || unnamed.includes(COPY.unbuiltMarker)) {
     fail("unnamed prerequisite was rendered as a NAMED one");
   } else if (
@@ -242,6 +257,37 @@ try {
     fail("unnamed prerequisite dropped the server's error or guidance");
   } else {
     console.log("  ok  unnamed prerequisite claims nothing, shows what it got");
+  }
+
+  // An UNRECOGNISED state string must not become a confident wrong
+  // diagnosis either. The classifier whitelists the three known values;
+  // anything else claims nothing, exactly like a missing field.
+  const future = rendered.get(
+    STATES.find((e) => e[0].startsWith("UNRECOGNISED"))[0],
+  ).html;
+  if (
+    future.includes(COPY.absentMarker) ||
+    future.includes(COPY.unopenableMarker) ||
+    future.includes(COPY.unbuiltMarker)
+  ) {
+    fail("an UNRECOGNISED state string was rendered as a known one");
+  } else if (!future.includes("quarantined")) {
+    fail("the unrecognised state dropped the server's own error");
+  } else {
+    console.log("  ok  unrecognised state claims nothing");
+  }
+
+  // "unopenable" must NOT invent a remedy: the cause is unknown to the
+  // client (a lock, permissions, a partial write), so no command block.
+  const unopen = rendered.get(
+    STATES.find((e) => e[0].startsWith("graph unopenable"))[0],
+  ).html;
+  if (unopen.includes("<pre")) {
+    fail("unopenable invented a remedy command");
+  } else if (!unopen.includes("could not be opened")) {
+    fail("unopenable did not render its own marker");
+  } else {
+    console.log("  ok  unopenable states the cause, invents no remedy");
   }
 
   // FR-A: the view must not reorder. Rendered identities must appear in

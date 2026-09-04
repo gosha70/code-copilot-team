@@ -67,20 +67,36 @@ function Counts({ report }: { report: ClusterReport }) {
 
 export default function ClustersView({ state }: { state: ClustersState }) {
   if (state.kind === "prerequisite") {
-    // FR-C: absent and unbuilt are DIFFERENT sentences, because they
-    // have different remedies. The branch is on the classified state,
-    // never on message text at this layer.
+    // FR-C: all THREE named states get their own sentence, because
+    // they have different causes. A boolean here would fold
+    // "unopenable" into "absent" and tell the user the store was never
+    // created when the server determined it exists and would not open.
+    const MARKER = {
+      absent: COPY.absentMarker,
+      unopenable: COPY.unopenableMarker,
+      unbuilt: COPY.unbuiltMarker,
+    } as const;
+    // "unopenable" gets NO invented remedy: the cause is unknown to us
+    // (a lock, permissions, a partial write), so the server's own
+    // guidance stands alone rather than a command that may not help.
+    const COMMANDS: Record<string, string | null> = {
+      absent: "./scripts/session-analytics graph",
+      unopenable: null,
+      unbuilt:
+        "./scripts/session-analytics graph\n" +
+        "./scripts/session-analytics similar",
+    };
+    const command = COMMANDS[state.state];
     return (
       <Card title="Clusters unavailable">
-        <p className="text-sm text-slate-700">
-          {state.unbuilt ? COPY.unbuiltMarker : COPY.absentMarker}
-        </p>
-        <p className="text-sm text-slate-500 mt-2">{state.detail.guidance}</p>
-        <pre className="mt-2 bg-slate-100 rounded p-2 text-xs overflow-x-auto">
-          {state.unbuilt
-            ? "./scripts/session-analytics graph\n./scripts/session-analytics similar"
-            : "./scripts/session-analytics graph"}
-        </pre>
+        <p className="text-sm text-slate-700">{MARKER[state.state]}</p>
+        <p className="text-sm text-slate-600 mt-2">{state.detail.error}</p>
+        <p className="text-sm text-slate-500 mt-1">{state.detail.guidance}</p>
+        {command && (
+          <pre className="mt-2 bg-slate-100 rounded p-2 text-xs overflow-x-auto">
+            {command}
+          </pre>
+        )}
       </Card>
     );
   }

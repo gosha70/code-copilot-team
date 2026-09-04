@@ -113,5 +113,7 @@ the `fastapi`-gated suite and would otherwise skip silently.
 - Nothing here makes #65 complete. E2 completes when this slice
   merges; E1 aggregates, E10's deferred half, E3 and E4 remain, and
   #65's completeness is the owner's call.
-- The endpoints are DEFINED, not built. Their prerequisite-ladder
-  fidelity is a T1 acceptance criterion, not an established fact.
+- Nothing here asserts the slice is accepted. The endpoints ARE built
+  and their prerequisite-ladder fidelity is verified (a 14-mutation
+  API ledger on a zero-skip baseline), but verification is not
+  acceptance — that is the owner's call at merge.

@@ -44,16 +44,26 @@ export interface PrerequisiteDetail {
    * lets this client read it instead of re-deriving it from a substring
    * match on the error text.
    */
-  state?: "absent" | "unopenable" | "unbuilt";
+  state?: string;
   guidance: string;
 }
+
+/** The prerequisite states this client knows how to name. */
+export type NamedPrerequisite = "absent" | "unopenable" | "unbuilt";
+
+const NAMED: readonly string[] = ["absent", "unopenable", "unbuilt"];
 
 /** The three FR-C states, plus an honest failure that is none of them. */
 export type ClustersState =
   | { kind: "populated"; report: ClusterReport }
   | { kind: "empty"; report: ClusterReport }
-  // A prerequisite the server NAMED. `state` carries which one.
-  | { kind: "prerequisite"; detail: PrerequisiteDetail; unbuilt: boolean }
+  // A prerequisite the server NAMED. The exact discriminator is
+  // carried through — NOT reduced to a boolean. Compressing three
+  // authoritative values into one flag is how "unopenable" came to be
+  // rendered as "has not been created": the information existed, the
+  // server determined it, and the client threw it away to present a
+  // confident wrong diagnosis.
+  | { kind: "prerequisite"; state: NamedPrerequisite; detail: PrerequisiteDetail }
   // A prerequisite the server did NOT name — an older server that
   // predates the `state` discriminator. Deliberately its own state, not
   // a default into one of the named ones: folding an unknown into a
@@ -74,6 +84,7 @@ export const COPY = {
   populatedMarker: "Clusters of mutually-reachable sessions",
   emptyMarker: "No clusters yet — this is a healthy result",
   absentMarker: "The graph database has not been created",
+  unopenableMarker: "The graph database exists but could not be opened",
   unbuiltMarker: "The graph store exists but holds no sessions",
   failedMarker: "The clusters request did not complete",
   // The server reported a prerequisite but did not say which. Claim
@@ -89,21 +100,31 @@ export const STATE_MARKERS: readonly string[] = [
   COPY.populatedMarker,
   COPY.emptyMarker,
   COPY.absentMarker,
+  COPY.unopenableMarker,
   COPY.unbuiltMarker,
   COPY.unnamedMarker,
   COPY.failedMarker,
 ];
 
-/** Recognises the unbuilt-store case.
+/** The named state, or null when this client does not recognise it.
  *
- * A FIELD READ, not a substring match. Both unbuilt and absent answer
+ * A FIELD READ, not a substring match. All three answer
  * `prerequisite: "graph"` — #289 FR-F forbids a new prerequisite
  * literal for a missing graph node, and that vocabulary is preserved —
- * but the endpoint additionally annotates WHICH state it determined,
- * so this client reads it rather than reconstructing it from prose.
+ * but the endpoint additionally annotates WHICH state it determined.
+ *
+ * WHITELIST, not a default. An unrecognised value is not "absent": a
+ * future server state must not silently become a wrong diagnosis, so
+ * anything outside the known set is treated as unnamed. This is the
+ * runtime half of the type-erasure argument — a required TS field
+ * would make an unknown value unrepresentable only in code we control.
  */
-export function isUnbuilt(detail: PrerequisiteDetail): boolean {
-  return detail.state === "unbuilt";
+export function namedState(
+  detail: PrerequisiteDetail,
+): NamedPrerequisite | null {
+  return detail.state !== undefined && NAMED.includes(detail.state)
+    ? (detail.state as NamedPrerequisite)
+    : null;
 }
 
 /** Classify an API outcome into exactly one state. */
@@ -124,13 +145,13 @@ export function classify(
   }
   const detail = outcome.detail;
   if (detail && detail.prerequisite) {
-    // TypeScript erases at runtime, so a required `state` field would
-    // not make a missing one impossible — only unrepresentable in code
-    // we control. The runtime check is what actually decides.
-    if (detail.state === undefined) {
+    // Missing OR unrecognised claims nothing. The runtime check is
+    // what decides; TypeScript erases.
+    const named = namedState(detail);
+    if (named === null) {
       return { kind: "prerequisiteUnnamed", detail };
     }
-    return { kind: "prerequisite", detail, unbuilt: isUnbuilt(detail) };
+    return { kind: "prerequisite", state: named, detail };
   }
   return { kind: "failed", message: outcome.message };
 }

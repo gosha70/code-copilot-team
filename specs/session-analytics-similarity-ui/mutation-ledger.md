@@ -13,7 +13,7 @@
     renders each state through `react-dom/server` and asserts on the
     markup. Same apply → run → restore method; baseline green before
     and after.
-- **33 mutations, 33 caught, 0 escaped.**
+- **38 mutations, 38 caught, 0 escaped.**
 
 ## What the escapes taught, recorded because they were not caught first time
 
@@ -93,6 +93,11 @@ aborted the run instead of silently dropping the mutation.
 | UI-M17 empty neighbours classified as present | UI |
 | UI-M18 panel drops the remedy (guidance) | UI |
 | UI-M19 panel drops the producer's error text | UI |
+| UI-M20 discriminator compressed back to a boolean | UI |
+| UI-M21 unopenable mapped to the absent sentence | UI |
+| UI-M22 unopenable invents a remedy | UI |
+| UI-M23 whitelist removed (unknown strings pass through) | UI |
+| UI-M24 an unknown state string defaults to absent | UI |
 
 ## Notes on the load-bearing catches
 
@@ -109,3 +114,12 @@ aborted the run instead of silently dropping the mutation.
 - **UI-M18/M19** — the remedy and the producer's own words are what
   make a prerequisite actionable; a marker check alone cannot see their
   absence.
+- **UI-M20–M24 (added at final review)** — the API emitted three
+  authoritative states and the client compressed them into one boolean,
+  so `unopenable` rendered as "The graph database has not been
+  created": the discriminator existed, the server had determined it,
+  and the UI threw it away to present a confident wrong diagnosis. The
+  exact value is now carried through, and the classifier WHITELISTS the
+  three known strings — an unrecognised future value claims nothing
+  rather than defaulting into a known one. `unopenable` deliberately
+  shows no remedy command: its cause is unknown to the client.
