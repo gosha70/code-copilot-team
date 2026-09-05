@@ -35,11 +35,14 @@ class _Base(RegistryResetTestCase):
             (C.COPILOT_CLAUDE_CODE, sid, project, turns, tools, errors, duration),
         )
 
-    def _turn(self, session_ref, seq, cost=None) -> int:
+    def _turn(self, session_ref, seq, cost=None, model="claude-x") -> int:
+        # `model` is what makes a turn price-ELIGIBLE (cost.py returns
+        # NULL without one), so a priced turn must carry one — a priced
+        # model-less turn is a state the pricing path cannot produce.
         return self.db.insert_returning_id(
-            "INSERT INTO copilot_turn (session_id, sequence_num, role, cost_usd)"
-            " VALUES (?, ?, ?, ?) RETURNING id",
-            (session_ref, seq, "assistant", cost),
+            "INSERT INTO copilot_turn (session_id, sequence_num, role, model,"
+            " cost_usd) VALUES (?, ?, ?, ?, ?) RETURNING id",
+            (session_ref, seq, "assistant", model, cost),
         )
 
 
@@ -82,8 +85,14 @@ class TestEffortEstimate(_Base):
         unpriced = self._session("u", turns=1)
         self._turn(unpriced, 0, cost=None)
         est = predict.effort_estimate(self.db)
+        # The unpriced session contributes NO observation — it is not a
+        # $0 session, it is a session whose cost is unknown.
         self.assertEqual(est["cost_usd"]["observations"], predict.MIN_OBSERVATIONS)
         self.assertEqual(est["cost_usd"]["median"], 2.0)
+        self.assertEqual(
+            est["cost_usd_coverage"]["sessions_fully_priced"],
+            predict.MIN_OBSERVATIONS,
+        )
 
     def test_it_does_not_claim_to_be_a_model(self) -> None:
         # The wording is part of the contract: this is a base rate, and
@@ -204,3 +213,140 @@ class TestLabelCorrelation(_Base):
             cl.traces_for_label(self.db, "1=1; DROP TABLE copilot_session--")
         with self.assertRaises(ValueError):
             cl.traces_for_label(self.db, "phase_violation")  # removed in #300
+
+
+class TestReviewFindings(_Base):
+    """The three #304 defects, each reproduced then pinned."""
+
+    def _label(self, turn_id, rubric, **flags) -> None:
+        cols = ["turn_id", "rubric_name"] + list(flags)
+        vals = [turn_id, rubric] + list(flags.values())
+        self.db.execute(
+            f"INSERT INTO {C.TBL_HEURISTIC_LABEL} ({', '.join(cols)})"
+            f" VALUES ({', '.join('?' for _ in cols)})",
+            tuple(vals),
+        )
+
+    def _trace(self, session_ref, seq, content="archived text here") -> None:
+        self.db.execute(
+            f"INSERT INTO {C.TBL_TRACE_DOCUMENT}"
+            " (session_ref, sequence_num, source_kind, content, redaction_mode)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (session_ref, seq, C.SOURCE_KIND_COPILOT_TRANSCRIPT, content,
+             C.REDACT_CODE),
+        )
+
+    def _priced_turn(self, ref, seq, cost, model="claude-x") -> None:
+        self.db.execute(
+            "INSERT INTO copilot_turn (session_id, sequence_num, role, model,"
+            " cost_usd) VALUES (?, ?, ?, ?, ?)",
+            (ref, seq, "assistant", model, cost),
+        )
+
+    # ── one turn, two rubrics, must count once ─────────────────────────
+
+    def test_two_rubrics_on_one_turn_count_as_one_turn(self) -> None:
+        ref = self._session("s")
+        tid = self._turn(ref, 0)
+        self._trace(ref, 0)
+        self._label(tid, "heuristic-v1", rework_detected=True)
+        self._label(tid, "heuristic-v2", rework_detected=True)
+        rep = cl.correlations(self.db)
+        self.assertEqual(rep["coverage"]["labelled_turns"], 1)
+        self.assertEqual(rep["coverage"]["labelled_turns_with_trace"], 1)
+        row = {r["label"]: r for r in rep["labels"]}["rework_detected"]
+        self.assertEqual(row["correlated_turns"], 1)
+        self.assertEqual(row["true_count"], 1)
+
+    def test_double_judging_cannot_cross_the_support_floor(self) -> None:
+        # THE consequence: three turns judged twice would report support
+        # 6 and be marked sufficient on three turns of evidence.
+        ref = self._session("s")
+        for seq in range(3):
+            tid = self._turn(ref, seq)
+            self._trace(ref, seq)
+            self._label(tid, "heuristic-v1", rework_detected=True)
+            self._label(tid, "heuristic-v2", rework_detected=True)
+        row = {r["label"]: r for r in cl.correlations(self.db)["labels"]}
+        self.assertEqual(row["rework_detected"]["correlated_turns"], 3)
+        self.assertFalse(row["rework_detected"]["sufficient"])
+
+    def test_traces_for_label_returns_a_turn_once(self) -> None:
+        ref = self._session("s")
+        tid = self._turn(ref, 0)
+        self._trace(ref, 0)
+        self._label(tid, "heuristic-v1", rework_detected=True)
+        self._label(tid, "heuristic-v2", rework_detected=True)
+        self.assertEqual(len(cl.traces_for_label(self.db, "rework_detected")), 1)
+
+    def test_rubric_can_be_narrowed(self) -> None:
+        ref = self._session("s")
+        tid = self._turn(ref, 0)
+        self._trace(ref, 0)
+        self._label(tid, "heuristic-v1", rework_detected=True)
+        self._label(tid, "heuristic-v2", rework_detected=False)
+        v1 = {r["label"]: r for r in
+              cl.correlations(self.db, rubric_name="heuristic-v1")["labels"]}
+        v2 = {r["label"]: r for r in
+              cl.correlations(self.db, rubric_name="heuristic-v2")["labels"]}
+        self.assertEqual(v1["rework_detected"]["true_count"], 1)
+        self.assertEqual(v2["rework_detected"]["true_count"], 0)
+
+    # ── partial session costs must not be presented as totals ──────────
+
+    def test_partially_priced_sessions_are_excluded_from_cost(self) -> None:
+        # Five sessions, each with one priced and one unpriced eligible
+        # turn. Every total is INCOMPLETE, so there is no cost estimate
+        # — reporting median $2 from partial sums understates real spend
+        # while looking like a real figure.
+        for i in range(5):
+            ref = self._session(f"partial{i}", turns=2)
+            self._priced_turn(ref, 0, 2.0)
+            self._priced_turn(ref, 1, None)
+        est = predict.effort_estimate(self.db)
+        self.assertEqual(est["cost_usd"]["observations"], 0)
+        self.assertFalse(est["cost_usd"]["sufficient"])
+        self.assertIsNone(est["cost_usd"]["median"])
+        cov = est["cost_usd_coverage"]
+        self.assertEqual(cov["sessions_with_any_priced_turn"], 5)
+        self.assertEqual(cov["sessions_fully_priced"], 0)
+
+    def test_fully_priced_sessions_are_estimated(self) -> None:
+        for i in range(5):
+            ref = self._session(f"full{i}", turns=2)
+            self._priced_turn(ref, 0, 1.0)
+            self._priced_turn(ref, 1, 1.0)
+        est = predict.effort_estimate(self.db)
+        self.assertEqual(est["cost_usd"]["observations"], 5)
+        self.assertEqual(est["cost_usd"]["median"], 2.0)
+
+    def test_turns_with_no_model_do_not_block_a_complete_session(self) -> None:
+        # A user turn has no model and is never priceable, so it must
+        # not make an otherwise fully-priced session look partial.
+        for i in range(5):
+            ref = self._session(f"mixed{i}", turns=2)
+            self._priced_turn(ref, 0, 3.0)
+            self._priced_turn(ref, 1, None, model=None)
+        est = predict.effort_estimate(self.db)
+        self.assertEqual(est["cost_usd"]["observations"], 5)
+        self.assertEqual(est["cost_usd"]["median"], 3.0)
+
+    # ── nearest-rank percentile ────────────────────────────────────────
+
+    def test_percentile_is_actually_nearest_rank(self) -> None:
+        # p90 of [1..6] is 6 (ceil(0.9*6)=6th). The previous
+        # round(f*(n-1)) gave 5 — understating the tail a p90 exists
+        # to show.
+        self.assertEqual(predict._percentile([1, 2, 3, 4, 5, 6], 0.9), 6.0)
+        self.assertEqual(predict._percentile([1, 2, 3, 4, 5, 6], 0.5), 3.0)
+        self.assertEqual(predict._percentile([1], 0.9), 1.0)
+        self.assertIsNone(predict._percentile([], 0.5))
+
+    def test_p90_never_understates_the_median(self) -> None:
+        for n in range(1, 12):
+            values = list(range(1, n + 1))
+            self.assertGreaterEqual(
+                predict._percentile(values, 0.9),
+                predict._percentile(values, 0.5),
+                f"n={n}",
+            )

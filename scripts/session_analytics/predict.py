@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Optional, Sequence
 
 from . import constants as C
@@ -32,14 +33,22 @@ MIN_OBSERVATIONS = 5
 def _percentile(values: Sequence[float], fraction: float) -> Optional[float]:
     """Nearest-rank percentile over a sorted copy; None when empty.
 
-    Deliberately not an interpolating percentile: with the small samples
-    this operates on, interpolation invents a value between two real
-    observations and reads as more precise than the data supports.
+    Nearest rank is ``ceil(fraction * n)`` — the SMALLEST observation at
+    or above the requested fraction of the sample. An earlier version
+    used ``round(fraction * (n - 1))``, which is neither nearest-rank nor
+    interpolating: for [1..6] it returned 5 as the p90 when the
+    nearest-rank answer is 6, understating exactly the tail a p90 exists
+    to show.
+
+    Deliberately NOT interpolating: with the small samples this operates
+    on, interpolation invents a value between two real observations and
+    reads as more precise than the data supports.
     """
     if not values:
         return None
     ordered = sorted(values)
-    idx = min(len(ordered) - 1, max(0, int(round(fraction * (len(ordered) - 1)))))
+    rank = math.ceil(fraction * len(ordered))
+    idx = min(len(ordered) - 1, max(0, rank - 1))
     return float(ordered[idx])
 
 
@@ -59,10 +68,17 @@ def _summary(values: Sequence[float]) -> dict[str, Any]:
 def effort_estimate(db: Database, project_path: Optional[str] = None) -> dict[str, Any]:
     """Expected effort for the next session, from comparable past ones.
 
-    Scoped to ``project_path`` when given, else the whole store. Cost is
-    summed per session from priced turns only — unpriced turns are
-    excluded rather than counted as zero, so the estimate describes what
-    is known to have been spent, not a floor pretending to be a total.
+    Scoped to ``project_path`` when given, else the whole store.
+
+    COST USES ONLY SESSIONS WHOSE PRICING IS COMPLETE. A session with
+    some priced turns and some unpriced price-eligible ones has a
+    PARTIAL total, and a median over partial totals understates real
+    spend while looking like a real figure. Eligibility is having a
+    model — the rule `cost.compute_turn_cost` applies — so a session
+    qualifies only when every model-bearing turn in it is priced.
+    ``cost_usd_coverage`` reports how many sessions were complete out of
+    how many had any priced turn, so the exclusion is visible rather
+    than silently shrinking the sample.
     """
     where, params = "", []
     if project_path:
@@ -73,12 +89,23 @@ def effort_estimate(db: Database, project_path: Optional[str] = None) -> dict[st
         SELECT s.turn_count, s.tool_call_count, s.error_count,
                s.duration_seconds,
                (SELECT SUM(t.cost_usd) FROM copilot_turn t
-                 WHERE t.session_id = s.id AND t.cost_usd IS NOT NULL)
+                 WHERE t.session_id = s.id AND t.cost_usd IS NOT NULL),
+               (SELECT COUNT(*) FROM copilot_turn t
+                 WHERE t.session_id = s.id
+                   AND t.model IS NOT NULL AND t.model <> ''),
+               (SELECT COUNT(t.cost_usd) FROM copilot_turn t
+                 WHERE t.session_id = s.id
+                   AND t.model IS NOT NULL AND t.model <> '')
         FROM copilot_session s
         {where}
         """,
         tuple(params),
     )
+    # A session counts toward cost only when it has at least one
+    # priceable turn AND every one of them is priced.
+    priceable = [r for r in rows if (r[5] or 0) > 0]
+    complete = [r for r in priceable if (r[6] or 0) == (r[5] or 0)]
+    any_priced = [r for r in rows if r[4] is not None]
     return {
         "scope": project_path or "(all projects)",
         "sessions": len(rows),
@@ -86,7 +113,12 @@ def effort_estimate(db: Database, project_path: Optional[str] = None) -> dict[st
         "tool_calls": _summary([r[1] for r in rows if r[1] is not None]),
         "errors": _summary([r[2] for r in rows if r[2] is not None]),
         "duration_seconds": _summary([r[3] for r in rows if r[3] is not None]),
-        "cost_usd": _summary([r[4] for r in rows if r[4] is not None]),
+        "cost_usd": _summary([r[4] for r in complete if r[4] is not None]),
+        "cost_usd_coverage": {
+            "sessions_with_any_priced_turn": len(any_priced),
+            "sessions_fully_priced": len(complete),
+            "sessions_with_priceable_turns": len(priceable),
+        },
         "min_observations": MIN_OBSERVATIONS,
         "basis": (
             "Historical distribution of comparable sessions — a base rate, "

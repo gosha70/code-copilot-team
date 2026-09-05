@@ -1056,7 +1056,24 @@ and be worth less. Every payload says so in its `basis` field.
 (`predict.MIN_OBSERVATIONS`, 5). A median over two sessions is not an
 estimate; the count is still reported, so an absent figure is explained
 rather than merely missing. Rates stay `null` rather than becoming
-`0.0` — "no data" is not "never happened".
+`0.0` — "no data" is not "never happened". Percentiles are nearest-rank
+(`ceil(fraction * n)`), so a p90 names a real observation at or above
+that fraction rather than one below it.
+
+**Cost uses only sessions whose pricing is COMPLETE.** A session with
+some priced turns and some unpriced price-eligible ones has a partial
+total, and a median over partial totals understates real spend while
+looking like a real figure. Eligibility is having a model — the rule
+`cost.compute_turn_cost` applies — and `cost_usd_coverage` reports how
+many sessions were complete out of how many had any priced turn, so the
+exclusion is visible rather than silently shrinking the sample.
+
+**Correlation counts turns, not label rows.** `heuristic_label` is
+UNIQUE(turn_id, rubric_name), so a turn judged under two rubrics has two
+rows; counting rows would double the coverage figures and let a label
+cross the support floor on a single turn judged twice. Pass
+`rubric_name` to narrow to one judge's view; unset, a turn counts once
+and is true if any rubric said so.
 
 **Coverage is part of the correlation payload.** The archive is opt-in
 per project and the judge runs separately, so most stores have labels

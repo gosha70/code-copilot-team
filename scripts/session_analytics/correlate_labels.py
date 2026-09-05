@@ -37,16 +37,22 @@ def label_trace_coverage(db: Database) -> dict[str, Any]:
     This is the precondition for every other number here: a label with
     no archived traces cannot be correlated with anything, and saying so
     is more useful than an empty result that looks like a finding.
+
+    COUNTS TURNS, NOT LABEL ROWS. ``heuristic_label`` is UNIQUE(turn_id,
+    rubric_name), so a turn labelled under two rubrics has two rows.
+    Counting rows would report one archived turn as two labelled turns,
+    double the intersection, and — in ``correlations`` — let a label
+    cross the minimum-support floor on a single turn judged twice.
     """
     labelled = db.query_one(
-        f"SELECT COUNT(*) FROM {C.TBL_HEURISTIC_LABEL}"
+        f"SELECT COUNT(DISTINCT turn_id) FROM {C.TBL_HEURISTIC_LABEL}"
     ) or (0,)
     archived = db.query_one(
         f"SELECT COUNT(*) FROM {C.TBL_TRACE_DOCUMENT}"
     ) or (0,)
     both = db.query_one(
         f"""
-        SELECT COUNT(*)
+        SELECT COUNT(DISTINCT h.turn_id)
         FROM {C.TBL_HEURISTIC_LABEL} h
         JOIN copilot_turn t ON t.id = h.turn_id
         JOIN {C.TBL_TRACE_DOCUMENT} td
@@ -61,31 +67,49 @@ def label_trace_coverage(db: Database) -> dict[str, Any]:
     }
 
 
-def correlations(db: Database, *, min_support: int = 5) -> dict[str, Any]:
-    """Per-label counts over turns that have BOTH a label and a trace.
+def correlations(
+    db: Database, *, min_support: int = 5, rubric_name: Optional[str] = None
+) -> dict[str, Any]:
+    """Per-label counts over TURNS that have both a label and a trace.
 
     ``min_support`` is the number of correlated turns below which a
     label's figures are returned but marked ``sufficient=False``. A rate
     computed from one or two turns is noise wearing a percentage sign,
     and the caller must be able to tell the two apart — so the count is
     always reported alongside, never replaced by, the rate.
+
+    Counted per DISTINCT TURN, not per label row: a turn judged under
+    two rubrics would otherwise contribute twice and could cross
+    ``min_support`` on its own. ``rubric_name`` narrows to one rubric
+    when a caller wants a single judge's view; with it unset, a turn
+    counts once and is TRUE if any rubric said so — stated here because
+    "any rubric" is a choice, not an accident.
     """
     coverage = label_trace_coverage(db)
+    rubric_clause = " AND h.rubric_name = ?" if rubric_name else ""
+    params: tuple = (rubric_name,) if rubric_name else ()
     out: list[dict[str, Any]] = []
     for label in _bool_labels():
+        # Collapse to one row per turn FIRST, then aggregate: aggregating
+        # the join directly counts a turn once per rubric row.
         row = db.query_one(
             f"""
-            SELECT COUNT(*),
-                   SUM(CASE WHEN h.{label} THEN 1 ELSE 0 END),
-                   AVG(LENGTH(td.content)),
-                   AVG(h.interaction_quality)
-            FROM {C.TBL_HEURISTIC_LABEL} h
-            JOIN copilot_turn t ON t.id = h.turn_id
-            JOIN {C.TBL_TRACE_DOCUMENT} td
-              ON td.session_ref = t.session_id
-             AND td.sequence_num = t.sequence_num
-            WHERE h.{label} IS NOT NULL
-            """
+            SELECT COUNT(*), SUM(is_true), AVG(chars), AVG(quality)
+            FROM (
+                SELECT t.id,
+                       MAX(CASE WHEN h.{label} THEN 1 ELSE 0 END) AS is_true,
+                       MAX(LENGTH(td.content)) AS chars,
+                       AVG(h.interaction_quality) AS quality
+                FROM {C.TBL_HEURISTIC_LABEL} h
+                JOIN copilot_turn t ON t.id = h.turn_id
+                JOIN {C.TBL_TRACE_DOCUMENT} td
+                  ON td.session_ref = t.session_id
+                 AND td.sequence_num = t.sequence_num
+                WHERE h.{label} IS NOT NULL{rubric_clause}
+                GROUP BY t.id
+            ) per_turn
+            """,
+            params,
         ) or (0, 0, None, None)
         correlated = int(row[0] or 0)
         true_count = int(row[1] or 0)
@@ -104,6 +128,7 @@ def correlations(db: Database, *, min_support: int = 5) -> dict[str, Any]:
     return {
         "coverage": coverage,
         "labels": out,
+        "rubric_name": rubric_name,
         "min_support": min_support,
         "sufficient_labels": sum(1 for r in out if r["sufficient"]),
     }
@@ -129,7 +154,7 @@ def traces_for_label(
     rows = db.query(
         f"""
         SELECT s.copilot, s.session_id, s.project_path, t.sequence_num,
-               t.role, td.redaction_mode, td.content, h.sentiment
+               t.role, td.redaction_mode, td.content, MAX(h.sentiment)
         FROM {C.TBL_HEURISTIC_LABEL} h
         JOIN copilot_turn t ON t.id = h.turn_id
         JOIN copilot_session s ON s.id = t.session_id
@@ -137,6 +162,8 @@ def traces_for_label(
           ON td.session_ref = t.session_id
          AND td.sequence_num = t.sequence_num
         WHERE h.{label} = ?
+        GROUP BY t.id, s.copilot, s.session_id, s.project_path,
+                 t.sequence_num, t.role, td.redaction_mode, td.content
         ORDER BY t.session_id, t.sequence_num
         LIMIT ?
         """,
