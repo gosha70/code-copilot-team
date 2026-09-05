@@ -39,11 +39,18 @@ UNKNOWN = "unknown"      # a phase outside the declared vocabulary
 
 @dataclass(frozen=True)
 class Entry:
-    """One recorded phase occupancy: which phase, for which feature, when."""
+    """One recorded phase occupancy: which phase, for which feature, when.
+
+    ``ends_at`` is filled by :func:`close_intervals` from the NEXT entry
+    on the global timeline — not the next entry for the same feature.
+    A phase stops being active when anything else starts, regardless of
+    which feature that belongs to.
+    """
 
     phase: str
     feature_id: Optional[str]
     at: str
+    ends_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -109,23 +116,50 @@ def _parse_at(value: str) -> Optional[datetime]:
         return None
 
 
-def _occupancy(entries: Sequence[Entry]) -> tuple[Occupancy, ...]:
-    """Time spent in each entry's phase before the next one began.
+def close_intervals(entries: Sequence[Entry]) -> list[Entry]:
+    """Stamp each entry with when it stopped being the active phase.
 
-    The LAST entry has no successor, so its duration is unknown rather
-    than zero — it is the phase still in progress. Same for any pair
-    whose stamps do not parse, or whose stamps run backwards (a clock
-    change should not produce a negative elapsed time).
+    MUST run on the GLOBAL timeline, before grouping by feature. A phase
+    ends when the next transition happens, whichever feature that
+    transition belongs to. Closing intervals per feature instead would
+    charge feature A for every hour another feature was active:
+    A:research@00, B:research@01, A:plan@03 would report three hours in
+    A's research when it stopped being active after one.
+
+    The LAST entry has no successor and keeps an empty ``ends_at`` — it
+    is the phase still in progress, whose duration is unknown, not zero.
+    """
+    out: list[Entry] = []
+    for i, entry in enumerate(entries):
+        ends_at = entries[i + 1].at if i + 1 < len(entries) else ""
+        out.append(
+            Entry(
+                phase=entry.phase,
+                feature_id=entry.feature_id,
+                at=entry.at,
+                ends_at=ends_at,
+            )
+        )
+    return out
+
+
+def _occupancy(entries: Sequence[Entry]) -> tuple[Occupancy, ...]:
+    """Durations from each entry's own closed interval.
+
+    Reads ``ends_at``, which :func:`close_intervals` set globally, so
+    this cannot re-derive a per-feature (and therefore inflated) gap.
+    Unknown when the interval is open, when either stamp fails to parse,
+    or when the stamps run backwards — a clock change must not produce
+    a negative elapsed time.
     """
     out: list[Occupancy] = []
-    for i, entry in enumerate(entries):
+    for entry in entries:
         seconds: Optional[float] = None
-        if i + 1 < len(entries):
-            start, end = _parse_at(entry.at), _parse_at(entries[i + 1].at)
-            if start is not None and end is not None:
-                delta = (end - start).total_seconds()
-                if delta >= 0:
-                    seconds = delta
+        start, end = _parse_at(entry.at), _parse_at(entry.ends_at)
+        if start is not None and end is not None:
+            delta = (end - start).total_seconds()
+            if delta >= 0:
+                seconds = delta
         out.append(Occupancy(phase=entry.phase, seconds=seconds))
     return tuple(out)
 
@@ -301,7 +335,9 @@ def report_for_roots(roots: Iterable[Path]) -> dict:
             })
             continue
         truncated = history_may_be_truncated(state)
-        entries = entries_from_workflow_state(state)
+        # Intervals close on the GLOBAL timeline, BEFORE grouping — see
+        # close_intervals for why per-feature closing inflates durations.
+        entries = close_intervals(entries_from_workflow_state(state))
         features = []
         for feature_id, feature_entries in group_by_feature(entries).items():
             m = metrics_for(feature_entries)

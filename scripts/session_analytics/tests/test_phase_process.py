@@ -163,8 +163,13 @@ class TestOccupancy(unittest.TestCase):
     def _e(self, phase, at):
         return pp.Entry(phase=phase, feature_id="F", at=at)
 
+    def _metrics(self, entries):
+        # close_intervals is the global pass that stamps each entry's
+        # end; metrics_for reads those rather than re-deriving them.
+        return pp.metrics_for(pp.close_intervals(entries))
+
     def test_duration_is_until_the_next_entry(self) -> None:
-        m = pp.metrics_for([
+        m = self._metrics([
             self._e("research", "2026-01-01T00:00:00Z"),
             self._e("plan", "2026-01-01T01:00:00Z"),
             self._e("build", "2026-01-01T01:30:00Z"),
@@ -174,16 +179,16 @@ class TestOccupancy(unittest.TestCase):
     def test_the_active_phase_has_unknown_duration_not_zero(self) -> None:
         # The last entry is the phase still in progress. Reporting 0
         # would say it was entered and left instantly.
-        m = pp.metrics_for([self._e("build", "2026-01-01T00:00:00Z")])
+        m = self._metrics([self._e("build", "2026-01-01T00:00:00Z")])
         self.assertIsNone(m.occupancy[0].seconds)
 
     def test_unparseable_or_backwards_stamps_yield_unknown(self) -> None:
-        garbage = pp.metrics_for([
+        garbage = self._metrics([
             self._e("research", "not-a-date"), self._e("plan", "2026-01-01T00:00:00Z"),
         ])
         self.assertIsNone(garbage.occupancy[0].seconds)
         # A clock change must not produce a negative elapsed time.
-        backwards = pp.metrics_for([
+        backwards = self._metrics([
             self._e("research", "2026-01-02T00:00:00Z"),
             self._e("plan", "2026-01-01T00:00:00Z"),
         ])
@@ -281,3 +286,53 @@ class TestReport(unittest.TestCase):
         blob = _json.dumps(pp.report_for_roots([root]))
         for banned in ("score", "compliance", "violation", "conformance"):
             self.assertNotIn(banned, blob.lower())
+
+
+class TestGlobalIntervalClosing(unittest.TestCase):
+    """Durations must close on the GLOBAL timeline, before grouping."""
+
+    def test_a_feature_is_not_charged_for_another_features_time(self) -> None:
+        # A:research@00, B:research@01, A:plan@03. A stopped being the
+        # active phase at 01 — closing per feature instead would charge
+        # A three hours of research, two of which belonged to B.
+        raw = [
+            pp.Entry("research", "A", "2026-01-01T00:00:00Z"),
+            pp.Entry("research", "B", "2026-01-01T01:00:00Z"),
+            pp.Entry("plan", "A", "2026-01-01T03:00:00Z"),
+        ]
+        grouped = pp.group_by_feature(pp.close_intervals(raw))
+        a = pp.metrics_for(grouped["A"])
+        self.assertEqual(a.occupancy[0].seconds, 3600.0)
+        self.assertIsNone(a.occupancy[-1].seconds)   # still in progress
+        b = pp.metrics_for(grouped["B"])
+        self.assertEqual(b.occupancy[0].seconds, 7200.0)
+
+    def test_grouping_before_closing_would_inflate(self) -> None:
+        # The failure mode stated as an assertion: closing per feature
+        # gives A 10800s. This test documents WHY the order matters.
+        raw = [
+            pp.Entry("research", "A", "2026-01-01T00:00:00Z"),
+            pp.Entry("research", "B", "2026-01-01T01:00:00Z"),
+            pp.Entry("plan", "A", "2026-01-01T03:00:00Z"),
+        ]
+        wrong = pp.metrics_for(pp.close_intervals(pp.group_by_feature(raw)["A"]))
+        self.assertEqual(wrong.occupancy[0].seconds, 10800.0)
+        right = pp.metrics_for(pp.group_by_feature(pp.close_intervals(raw))["A"])
+        self.assertEqual(right.occupancy[0].seconds, 3600.0)
+        self.assertLess(right.occupancy[0].seconds, wrong.occupancy[0].seconds)
+
+    def test_the_report_closes_globally(self) -> None:
+        import json as _json, tempfile as _tf, shutil as _sh
+        base = Path(_tf.mkdtemp())
+        self.addCleanup(_sh.rmtree, base, ignore_errors=True)
+        (base / ".cct").mkdir(parents=True)
+        (base / Path(C.PI_WORKFLOW_REL)).write_text(_json.dumps({
+            "phase": "plan", "featureId": "A", "enteredAt": "2026-01-01T03:00:00Z",
+            "history": [
+                {"phase": "research", "featureId": "A", "at": "2026-01-01T00:00:00Z"},
+                {"phase": "research", "featureId": "B", "at": "2026-01-01T01:00:00Z"},
+            ],
+        }))
+        feats = {f["feature_id"]: f
+                 for f in pp.report_for_roots([base])["projects"][0]["features"]}
+        self.assertEqual(feats["A"]["occupancy_seconds"][0]["seconds"], 3600.0)
