@@ -193,9 +193,32 @@ SOURCE_KIND_COPILOT_TRANSCRIPT = "copilot_transcript"
 # stores under the STRICTER of the config-resolved mode and the mode the
 # session's ingest recorded — never looser.
 REDACTION_STRICTNESS = (REDACT_NONE, REDACT_CODE, REDACT_METADATA_ONLY)
-# Substring search (documented as NON-ranked): result limits + snippet window.
+# Search result limits. With the E10 Slice B index the max is a ranked
+# top-N (best first), not the arbitrary truncation the Slice A ordering
+# gave it; the fallback path keeps the Slice A meaning.
 SEARCH_DEFAULT_LIMIT = 50
 SEARCH_MAX_LIMIT = 500
+
+# ── Trace search index (E10 Slice B, issue #65) ────────────────────────
+# Tokenized + ranked search. The index NEVER holds its own copy of trace
+# text: sqlite uses an FTS5 external-content table (index only, rows read
+# back from trace_document) and postgres a GENERATED column derived from
+# trace_document.content. Both consequences are deliberate — a policy
+# purge of a trace row removes it from the index by the same statement,
+# and no redaction floor can be stale in one store but not the other.
+TBL_TRACE_DOCUMENT_FTS = "trace_document_fts"
+COL_TRACE_CONTENT_TSV = "content_tsv"
+IDX_TRACE_CONTENT_TSV = "idx_trace_content_tsv"
+# Stemming is an explicit choice, not a property of FTS: sqlite's default
+# `unicode61` does NOT stem, and postgres stems per text-search config.
+# These two are chosen to agree (English, Porter) and are asserted to.
+FTS5_TOKENIZER = "porter unicode61"
+PG_TEXT_SEARCH_CONFIG = "english"
+# Which index backs a store, resolved at run time (FTS5 is a compile-time
+# sqlite option and is not guaranteed present).
+SEARCH_INDEX_FTS5 = "fts5"
+SEARCH_INDEX_TSVECTOR = "tsvector"
+SEARCH_INDEX_NONE = "none"
 
 #: Upper bound for the read-only similarity/cluster API surfaces
 #: (#293 FR-B). Range-guarding lives at the endpoint signature so an

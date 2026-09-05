@@ -58,7 +58,7 @@ The zero-install path still works without `setup` — just pass `--dsn`:
 | `watch`   | Loop incremental `ingest()` every `--interval` seconds until Ctrl+C (E6). |
 | `correlate` | Link benchmark `run-record.json` session_ids to analytics sessions (E9). |
 | `archive` | Archive full REDACTED trace text for opted-in projects (E10). |
-| `search`  | Substring search over archived trace text (E10; not ranked). |
+| `search`  | Ranked full-text search over archived trace text (E10). |
 | `embed`   | Compute session embeddings into a provenance envelope (E2 slice 1, #285). |
 | `similar` | Populate `SIMILAR_TO` graph edges from stored embeddings (E2 slice 2, #287). |
 | `clusters`| Group the stored `SIMILAR_TO` edges into clusters, read-only (E2 slice 3, #289). |
@@ -513,11 +513,23 @@ contract has proven itself.
   (project opted out, or `trace_archive` removed/false) have their rows
   **deleted**, counted as `sessions_purged` — the zero-rows guarantee
   holds continuously, not just at write time.
-- **Search is substring search, not ranked search**: case-insensitive,
-  `%`/`_` match literally, deterministic (session, turn) ordering, default
-  limit 50 (cap 500), ±120-char snippets. Also served at
-  `GET /api/search?q=...&limit=...`. Real FTS is a named follow-up (Slice
-  B), gated on demonstrated pain.
+- **Search is tokenized and ranked** (E10 Slice B, #65): terms match in
+  any order and across intervening words, English/Porter stemming on both
+  dialects (sqlite FTS5, postgres `tsvector`), results best-first, default
+  limit 50 and cap 500 — a ranked **top-N**, not arbitrary truncation.
+  ±120-char snippets anchored on a matching term. Also served at
+  `GET /api/search?q=...&limit=...`.
+  - The index never holds a second copy of trace text: sqlite uses an
+    FTS5 *external-content* table, postgres a GENERATED column on
+    `trace_document`. So a revocation purge (above) removes text from the
+    index by the same statement that deletes the row.
+  - Upgrading a Slice A store needs no command: the first open backfills
+    the index for already-archived traces (62k turns ≈ 0.3 s).
+  - **Fallback.** FTS5 is a compile-time sqlite option. A build without
+    it — or a store that cannot be written to create the index — degrades
+    to Slice A behaviour: case-insensitive substring, `%`/`_` literal,
+    deterministic (session, turn) ordering, not ranked. Same result
+    shape; a warning is logged.
 - **Transactions**: one commit per successful run; a failed run persists
   nothing and prints its counters to stderr explicitly labeled
   PROCESSED-only.
