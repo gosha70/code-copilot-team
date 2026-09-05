@@ -135,7 +135,7 @@ def upsert_session_metadata(
     not commit (caller-owned transaction).
     """
     db.execute(
-        "DELETE FROM copilot_session_metadata WHERE session_id = ?", (session_id,)
+        f"DELETE FROM {C.TBL_SESSION_METADATA} WHERE session_id = ?", (session_id,)
     )
     if not metadata:
         return
@@ -151,7 +151,7 @@ def upsert_session_metadata(
                 # so consumers can always json.loads it.
                 value = json.dumps({"_truncated": True, "bytes": len(value)})
         db.execute(
-            "INSERT INTO copilot_session_metadata "
+            f"INSERT INTO {C.TBL_SESSION_METADATA} "
             "(session_id, key, value, value_json) VALUES (?, ?, ?, ?)",
             (session_id, str(key)[:_MAX_METADATA_KEY], value, is_json),
         )

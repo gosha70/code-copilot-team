@@ -146,7 +146,7 @@ class PiAdapter:
         }
         feature_id = checkpoint.get("featureId") if checkpoint else None
         if isinstance(feature_id, str) and feature_id:
-            metadata["feature_id"] = feature_id
+            metadata[C.METADATA_KEY_FEATURE_ID] = feature_id
         phase = checkpoint.get("phase") if checkpoint else None
 
         return RawSession(
