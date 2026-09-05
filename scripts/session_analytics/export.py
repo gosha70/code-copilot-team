@@ -37,7 +37,7 @@ SESSIONS_COLUMNS: tuple[str, ...] = (
     "error_count", "started_at", "ended_at", "duration_seconds", "cost_usd",
     "kpi_rubric_name", "kpi_labeled_turn_count", "kpi_correction_rate",
     "kpi_rework_rate", "kpi_first_attempt_success_rate", "kpi_autonomy_score",
-    "kpi_phase_compliance_score", "kpi_avg_interaction_quality", "kpi_computed_at",
+    "kpi_avg_interaction_quality", "kpi_computed_at",
     C.COL_BENCHMARK_RUN_DIR,
 )
 
@@ -58,7 +58,7 @@ LABELS_COLUMNS: tuple[str, ...] = (
     "id", "turn_id", "rubric_name", "user_corrects_agent", "user_asks_question",
     "user_gives_command", "agent_asks_clarification", "user_changes_approach",
     "agent_changes_approach", "has_misunderstanding", "response_helpful",
-    "rework_detected", "phase_violation", "sentiment", "interaction_quality",
+    "rework_detected", "sentiment", "interaction_quality",
     "judge_id", "judge_model", "parse_status", "created_at",
 )
 
@@ -66,7 +66,7 @@ LABELS_COLUMNS: tuple[str, ...] = (
 KPIS_COLUMNS: tuple[str, ...] = (
     "id", "session_id", "rubric_name", "labeled_turn_count", "correction_rate",
     "rework_rate", "first_attempt_success_rate", "autonomy_score",
-    "phase_compliance_score", "avg_interaction_quality", "computed_at",
+    "avg_interaction_quality", "computed_at",
 )
 
 # One row per benchmark attempt outcome (E9 outcomes, #92) — the stable
@@ -105,7 +105,21 @@ _COLUMNS: dict[str, tuple[str, ...]] = {
 # 0/1 ints; psycopg returns real bools) — normalize to 0/1 so an export looks
 # identical regardless of the backing store.
 _TURNS_BOOL_IDX = (4,)  # has_tool_use
-_LABELS_BOOL_IDX = (3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+# DERIVED from LABELS_COLUMNS by NAME, not hardcoded positions. These
+# indices used to be a literal tuple, and removing one boolean column
+# (#300's phase_violation) silently shifted `sentiment` into the bool
+# range — the normalizer then coerced 'NEUTRAL' to 1 and exported a
+# corrupted column. A positional list that must be re-counted by hand
+# whenever a column moves is a defect waiting for the next edit.
+_LABELS_BOOL_NAMES = (
+    "user_corrects_agent", "user_asks_question", "user_gives_command",
+    "agent_asks_clarification", "user_changes_approach",
+    "agent_changes_approach", "has_misunderstanding", "response_helpful",
+    "rework_detected",
+)
+_LABELS_BOOL_IDX = tuple(
+    LABELS_COLUMNS.index(name) for name in _LABELS_BOOL_NAMES
+)
 _BENCHMARK_RESULTS_BOOL_IDX = (8, 9, 10)  # tests/lint/typecheck _passed
 
 # ── SQL (dialect-agnostic: plain SELECT/JOIN, ``?`` placeholders unused —
@@ -122,13 +136,13 @@ _SESSIONS_SQL = f"""
         s.error_count, s.started_at, s.ended_at, s.duration_seconds,
         (SELECT SUM(t.cost_usd) FROM copilot_turn t WHERE t.session_id = s.id),
         k.rubric_name, k.labeled_turn_count, k.correction_rate, k.rework_rate,
-        k.first_attempt_success_rate, k.autonomy_score, k.phase_compliance_score,
+        k.first_attempt_success_rate, k.autonomy_score,
         k.avg_interaction_quality, k.computed_at, s.{C.COL_BENCHMARK_RUN_DIR}
     FROM copilot_session s
     LEFT JOIN (
         SELECT sk.session_id, sk.rubric_name, sk.labeled_turn_count,
                sk.correction_rate, sk.rework_rate, sk.first_attempt_success_rate,
-               sk.autonomy_score, sk.phase_compliance_score,
+               sk.autonomy_score,
                sk.avg_interaction_quality, sk.computed_at
         FROM session_kpi sk
         WHERE sk.rubric_name = (
@@ -153,7 +167,7 @@ _LABELS_SQL = """
     SELECT id, turn_id, rubric_name, user_corrects_agent, user_asks_question,
            user_gives_command, agent_asks_clarification, user_changes_approach,
            agent_changes_approach, has_misunderstanding, response_helpful,
-           rework_detected, phase_violation, sentiment, interaction_quality,
+           rework_detected, sentiment, interaction_quality,
            judge_id, judge_model, parse_status, created_at
     FROM heuristic_label
     ORDER BY turn_id, rubric_name
@@ -162,7 +176,7 @@ _LABELS_SQL = """
 _KPIS_SQL = """
     SELECT id, session_id, rubric_name, labeled_turn_count, correction_rate,
            rework_rate, first_attempt_success_rate, autonomy_score,
-           phase_compliance_score, avg_interaction_quality, computed_at
+           avg_interaction_quality, computed_at
     FROM session_kpi
     ORDER BY session_id, rubric_name
 """

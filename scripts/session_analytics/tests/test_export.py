@@ -170,6 +170,33 @@ class TestLabelsAndKpisExport(TestExportBase):
         turn_ids = [r["turn_id"] for r in rows]
         self.assertEqual(turn_ids, sorted(turn_ids))
 
+    def test_bool_normalization_indices_track_the_columns(self) -> None:
+        # The bool indices used to be a hardcoded tuple. Removing one
+        # boolean column (#300) shifted `sentiment` into that range and
+        # the normalizer silently rewrote 'NEUTRAL' to 1 — a corrupted
+        # export column that type-checking and the schema both allow.
+        for idx in exp._LABELS_BOOL_IDX:
+            self.assertIn(
+                exp.LABELS_COLUMNS[idx],
+                exp._LABELS_BOOL_NAMES,
+                f"index {idx} is {exp.LABELS_COLUMNS[idx]!r}, not a boolean column",
+            )
+        for name in ("sentiment", "interaction_quality", "judge_id",
+                     "created_at", "id", "turn_id", "rubric_name"):
+            self.assertNotIn(
+                exp.LABELS_COLUMNS.index(name),
+                exp._LABELS_BOOL_IDX,
+                f"{name} would be coerced to 0/1",
+            )
+
+    def test_removed_label_is_absent_from_the_export(self) -> None:
+        # #300: collection stopped and the column is dormant, so it must
+        # not be served — a dormant column that is still exported is a
+        # stale value published as data.
+        self.assertNotIn("phase_violation", exp.LABELS_COLUMNS)
+        self.assertNotIn("phase_compliance_score", exp.KPIS_COLUMNS)
+        self.assertNotIn("kpi_phase_compliance_score", exp.SESSIONS_COLUMNS)
+
     def test_kpis_columns_and_count(self) -> None:
         rows = _rows_as_dicts(exp.KPIS_COLUMNS, list(exp.rows_for(self.db, C.EXPORT_TABLE_KPIS)))
         self.assertEqual(len(rows), 1)

@@ -111,15 +111,14 @@ class TestRunnerAndKpis(RegistryResetTestCase):
             compute_kpis(db, rubric.name)
             row = db.query(
                 "SELECT labeled_turn_count, correction_rate, autonomy_score, "
-                "phase_compliance_score, avg_interaction_quality FROM session_kpi"
+                "avg_interaction_quality FROM session_kpi"
             )[0]
-            labeled, corr, autonomy, phase, avg_q = row
+            labeled, corr, autonomy, avg_q = row
             self.assertEqual(labeled, 6)
             # Only the first user turn contains 'fix' → 1/6.
             self.assertAlmostEqual(corr, 1 / 6, places=4)
             # 3 user (commands) / (3 commands + 0 questions) = 1.0.
             self.assertAlmostEqual(autonomy, 1.0, places=4)
-            self.assertAlmostEqual(phase, 1.0, places=4)
             self.assertAlmostEqual(avg_q, 4.0, places=4)
         finally:
             db.close()

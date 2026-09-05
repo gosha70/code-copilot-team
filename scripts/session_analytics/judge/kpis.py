@@ -34,7 +34,6 @@ def compute_kpis(db: Database, rubric_name: str, *, session_id: Optional[int] = 
                AVG(CASE WHEN h.user_corrects_agent THEN 1.0 ELSE 0.0 END) AS correction_rate,
                AVG(CASE WHEN h.rework_detected THEN 1.0 ELSE 0.0 END) AS rework_rate,
                AVG(CASE WHEN h.response_helpful THEN 1.0 ELSE 0.0 END) AS first_attempt,
-               AVG(CASE WHEN h.phase_violation THEN 0.0 ELSE 1.0 END) AS phase_compliance,
                AVG(h.interaction_quality) AS avg_quality,
                SUM(CASE WHEN h.user_gives_command THEN 1 ELSE 0 END) AS commands,
                SUM(CASE WHEN h.user_asks_question THEN 1 ELSE 0 END) AS questions
@@ -48,7 +47,7 @@ def compute_kpis(db: Database, rubric_name: str, *, session_id: Optional[int] = 
 
     stats = KpiStats()
     for r in rows:
-        (sess_id, labeled, corr, rework, first, phase, avg_q, commands, questions) = r
+        (sess_id, labeled, corr, rework, first, avg_q, commands, questions) = r
         denom = (commands or 0) + (questions or 0)
         autonomy = (commands / denom) if denom else None
         _upsert_kpi(
@@ -58,7 +57,6 @@ def compute_kpis(db: Database, rubric_name: str, *, session_id: Optional[int] = 
             rework_rate=_f(rework),
             first_attempt_success_rate=_f(first),
             autonomy_score=_f(autonomy),
-            phase_compliance_score=_f(phase),
             avg_interaction_quality=_f(avg_q),
         )
         stats.sessions += 1
@@ -73,28 +71,27 @@ def _f(v):
 def _upsert_kpi(
     db: Database, session_id: int, rubric_name: str, *,
     labeled: int, correction_rate, rework_rate, first_attempt_success_rate,
-    autonomy_score, phase_compliance_score, avg_interaction_quality,
+    autonomy_score, avg_interaction_quality,
 ) -> None:
     db.execute(
         """
         INSERT INTO session_kpi
             (session_id, rubric_name, labeled_turn_count, correction_rate,
              rework_rate, first_attempt_success_rate, autonomy_score,
-             phase_compliance_score, avg_interaction_quality, computed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             avg_interaction_quality, computed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (session_id, rubric_name) DO UPDATE SET
             labeled_turn_count=excluded.labeled_turn_count,
             correction_rate=excluded.correction_rate,
             rework_rate=excluded.rework_rate,
             first_attempt_success_rate=excluded.first_attempt_success_rate,
             autonomy_score=excluded.autonomy_score,
-            phase_compliance_score=excluded.phase_compliance_score,
             avg_interaction_quality=excluded.avg_interaction_quality,
             computed_at=excluded.computed_at
         """,
         (
             session_id, rubric_name, labeled, correction_rate, rework_rate,
-            first_attempt_success_rate, autonomy_score, phase_compliance_score,
+            first_attempt_success_rate, autonomy_score,
             avg_interaction_quality, _now_iso(),
         ),
     )
