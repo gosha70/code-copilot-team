@@ -9,7 +9,11 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
 
 from session_analytics import constants as C
 from session_analytics import phase_process as pp
@@ -153,3 +157,127 @@ class TestGrouping(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class TestOccupancy(unittest.TestCase):
+    def _e(self, phase, at):
+        return pp.Entry(phase=phase, feature_id="F", at=at)
+
+    def test_duration_is_until_the_next_entry(self) -> None:
+        m = pp.metrics_for([
+            self._e("research", "2026-01-01T00:00:00Z"),
+            self._e("plan", "2026-01-01T01:00:00Z"),
+            self._e("build", "2026-01-01T01:30:00Z"),
+        ])
+        self.assertEqual([o.seconds for o in m.occupancy], [3600.0, 1800.0, None])
+
+    def test_the_active_phase_has_unknown_duration_not_zero(self) -> None:
+        # The last entry is the phase still in progress. Reporting 0
+        # would say it was entered and left instantly.
+        m = pp.metrics_for([self._e("build", "2026-01-01T00:00:00Z")])
+        self.assertIsNone(m.occupancy[0].seconds)
+
+    def test_unparseable_or_backwards_stamps_yield_unknown(self) -> None:
+        garbage = pp.metrics_for([
+            self._e("research", "not-a-date"), self._e("plan", "2026-01-01T00:00:00Z"),
+        ])
+        self.assertIsNone(garbage.occupancy[0].seconds)
+        # A clock change must not produce a negative elapsed time.
+        backwards = pp.metrics_for([
+            self._e("research", "2026-01-02T00:00:00Z"),
+            self._e("plan", "2026-01-01T00:00:00Z"),
+        ])
+        self.assertIsNone(backwards.occupancy[0].seconds)
+
+
+class TestProjectReader(unittest.TestCase):
+    def _project(self, root, state) -> Path:
+        cct = root / ".cct"
+        cct.mkdir(parents=True, exist_ok=True)
+        (root / Path(C.PI_WORKFLOW_REL)).write_text(json.dumps(state))
+        return root
+
+    def test_reads_a_project_and_finds_it_from_a_parent(self) -> None:
+        base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        proj = self._project(base / "proj", {"phase": "build", "history": []})
+        # base is a PARENT of projects
+        self.assertEqual(pp.find_project_roots(base), [proj])
+        # base IS the project
+        self.assertEqual(pp.find_project_roots(proj), [proj])
+
+    def test_missing_or_corrupt_file_is_none_not_a_crash(self) -> None:
+        base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        self.assertIsNone(pp.read_project_workflow(base))
+        (base / ".cct").mkdir()
+        (base / Path(C.PI_WORKFLOW_REL)).write_text("{not json")
+        self.assertIsNone(pp.read_project_workflow(base))
+
+
+class TestReport(unittest.TestCase):
+    def _root(self, state=None) -> Path:
+        base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        if state is not None:
+            (base / ".cct").mkdir(parents=True)
+            (base / Path(C.PI_WORKFLOW_REL)).write_text(json.dumps(state))
+        return base
+
+    def test_a_clean_run(self) -> None:
+        root = self._root({
+            "phase": "review", "featureId": "F", "enteredAt": "4",
+            "history": [{"phase": p, "featureId": "F", "at": str(i)}
+                        for i, p in enumerate(["research", "plan", "build"], 1)],
+        })
+        feat = pp.report_for_roots([root])["projects"][0]["features"][0]
+        self.assertEqual(feat["oscillations"], 0)
+        self.assertEqual(feat["rework_cycles"], 0)
+        self.assertTrue(feat["review_observed"])
+
+    def test_an_oscillating_run(self) -> None:
+        root = self._root({
+            "phase": "plan", "featureId": "F", "enteredAt": "4",
+            "history": [{"phase": p, "featureId": "F", "at": str(i)}
+                        for i, p in enumerate(["research", "plan", "research"], 1)],
+        })
+        feat = pp.report_for_roots([root])["projects"][0]["features"][0]
+        self.assertGreaterEqual(feat["oscillations"], 1)
+        self.assertFalse(feat["review_observed"])
+
+    def test_a_rework_cycle(self) -> None:
+        root = self._root({
+            "phase": "review", "featureId": "F", "enteredAt": "4",
+            "history": [{"phase": p, "featureId": "F", "at": str(i)}
+                        for i, p in enumerate(["build", "review", "build"], 1)],
+        })
+        feat = pp.report_for_roots([root])["projects"][0]["features"][0]
+        self.assertEqual(feat["rework_cycles"], 1)
+
+    def test_a_capped_history_is_flagged_and_worded_as_a_window(self) -> None:
+        root = self._root({
+            "phase": "build", "featureId": "F", "enteredAt": "x",
+            "history": [{"phase": "build", "featureId": "F", "at": "x"}]
+                       * C.PI_WORKFLOW_HISTORY_CAP,
+        })
+        report = pp.report_for_roots([root])
+        self.assertTrue(report["projects"][0]["history_may_be_truncated"])
+        self.assertTrue(report["any_history_may_be_truncated"])
+        self.assertIn("retained window", report["absence_note"])
+        self.assertNotIn("never", report["absence_note"].split("not evidence")[0])
+
+    def test_no_history_is_reported_not_silently_empty(self) -> None:
+        # A root with no workflow file must SAY so. An empty report that
+        # looks healthy is the failure mode this guards.
+        root = self._root(None)
+        report = pp.report_for_roots([root])
+        self.assertEqual(report["projects_with_history"], 0)
+        self.assertFalse(report["projects"][0]["has_workflow_history"])
+        self.assertEqual(report["projects"][0]["features"], [])
+
+    def test_report_carries_no_score(self) -> None:
+        root = self._root({"phase": "review", "featureId": "F", "history": []})
+        import json as _json
+        blob = _json.dumps(pp.report_for_roots([root]))
+        for banned in ("score", "compliance", "violation", "conformance"):
+            self.assertNotIn(banned, blob.lower())

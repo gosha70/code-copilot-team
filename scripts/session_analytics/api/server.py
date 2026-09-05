@@ -380,6 +380,39 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         finally:
             conn.close()
 
+    @app.get("/api/dashboard/phase-process")
+    def dashboard_phase_process() -> dict[str, Any]:
+        # #301: DESCRIPTIVE metrics over the Pi runtime's recorded
+        # workflow history. No score — E3 (#65) stays open, because the
+        # recorded history cannot contain a violation (the runtime
+        # refuses invalid transitions before persisting them).
+        #
+        # Reads the filesystem, not the DB: the history lives in each
+        # project's .cct/pi-workflow.json and is not ingested.
+        from .. import phase_process as pp
+        from pathlib import Path
+
+        try:
+            cfg = load_config()
+            base = cfg.source_root(C.COPILOT_PI)
+            if base is None or not Path(base).exists():
+                return {
+                    "projects": [],
+                    "projects_with_history": 0,
+                    "retention_cap": C.PI_WORKFLOW_HISTORY_CAP,
+                    "any_history_may_be_truncated": False,
+                    "source_root_configured": base is not None,
+                    "absence_note": (
+                        "No Pi source root is configured or present, so no "
+                        "workflow history could be read."
+                    ),
+                }
+            report = dict(pp.report_for_roots(pp.find_project_roots(Path(base))))
+            report["source_root_configured"] = True
+            return report
+        except Exception as exc:  # noqa: BLE001
+            raise _internal_error(exc, "phase process") from None
+
     @app.get("/api/dashboard/cost")
     def dashboard_cost() -> dict[str, Any]:
         conn = db()

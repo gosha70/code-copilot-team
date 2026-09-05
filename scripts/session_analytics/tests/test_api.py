@@ -63,6 +63,21 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(len(body["developers"]), 1)
         self.assertIn("cost_usd", body["developers"][0])
 
+    def test_dashboard_phase_process(self) -> None:
+        # #301: descriptive only. The fixture store has no Pi source
+        # root, so this also pins the "nothing to read" answer being
+        # explicit rather than an empty-but-healthy-looking payload.
+        r = self.client.get("/api/dashboard/phase-process")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("retention_cap", body)
+        self.assertIn("absence_note", body)
+        self.assertEqual(body["projects_with_history"], 0)
+        # No grading vocabulary may appear in this payload at all.
+        blob = json.dumps(body).lower()
+        for banned in ("compliance", "violation", "conformance"):
+            self.assertNotIn(banned, blob)
+
     def test_dashboard_cost(self) -> None:
         r = self.client.get("/api/dashboard/cost")
         self.assertEqual(r.status_code, 200)

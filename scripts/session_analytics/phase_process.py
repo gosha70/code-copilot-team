@@ -16,7 +16,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
 from . import constants as C
@@ -54,6 +57,19 @@ class Move:
 
 
 @dataclass(frozen=True)
+class Occupancy:
+    """How long one phase was occupied, when that is knowable.
+
+    ``seconds`` is None when it cannot be computed — an unparseable or
+    absent timestamp, or the final entry, which has no successor to
+    measure against. A missing duration is not a zero-length phase.
+    """
+
+    phase: str
+    seconds: Optional[float]
+
+
+@dataclass(frozen=True)
 class ProcessMetrics:
     """Descriptive metrics for ONE feature's recorded timeline.
 
@@ -68,6 +84,7 @@ class ProcessMetrics:
     rework_cycles: int
     review_observed: bool
     phases_seen: tuple[str, ...]
+    occupancy: tuple[Occupancy, ...]
 
 
 def classify(prev: str, curr: str) -> str:
@@ -80,6 +97,37 @@ def classify(prev: str, curr: str) -> str:
     if delta < 0:
         return BACKWARD
     return SAME
+
+
+def _parse_at(value: str) -> Optional[datetime]:
+    """Parse an ISO-8601 stamp, or None. Never raises, never guesses."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _occupancy(entries: Sequence[Entry]) -> tuple[Occupancy, ...]:
+    """Time spent in each entry's phase before the next one began.
+
+    The LAST entry has no successor, so its duration is unknown rather
+    than zero — it is the phase still in progress. Same for any pair
+    whose stamps do not parse, or whose stamps run backwards (a clock
+    change should not produce a negative elapsed time).
+    """
+    out: list[Occupancy] = []
+    for i, entry in enumerate(entries):
+        seconds: Optional[float] = None
+        if i + 1 < len(entries):
+            start, end = _parse_at(entry.at), _parse_at(entries[i + 1].at)
+            if start is not None and end is not None:
+                delta = (end - start).total_seconds()
+                if delta >= 0:
+                    seconds = delta
+        out.append(Occupancy(phase=entry.phase, seconds=seconds))
+    return tuple(out)
 
 
 def _is_oscillation(a: Move, b: Move) -> bool:
@@ -117,6 +165,7 @@ def metrics_for(entries: Sequence[Entry]) -> ProcessMetrics:
         rework_cycles=rework,
         review_observed=any(e.phase == C.PHASE_REVIEW for e in entries),
         phases_seen=tuple(seen),
+        occupancy=_occupancy(entries),
     )
 
 
@@ -175,6 +224,41 @@ def history_may_be_truncated(state: dict) -> bool:
     return isinstance(history, list) and len(history) >= C.PI_WORKFLOW_HISTORY_CAP
 
 
+def read_project_workflow(project_root: Path) -> Optional[dict]:
+    """Parse one project's ``.cct/pi-workflow.json``, or None.
+
+    A missing file is not an error — most projects have never run the Pi
+    workflow. A corrupt one is also None rather than a crash, matching
+    the runtime's own `catch → fresh state` posture; a report about
+    process should not be the thing that fails on a bad byte.
+    """
+    path = project_root / Path(C.PI_WORKFLOW_REL)
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def find_project_roots(base: Path) -> list[Path]:
+    """Projects under ``base`` that carry a Pi workflow file.
+
+    ``base`` may itself be a project or a parent of projects — the same
+    two shapes ``PiAdapter._find_analytics_files`` accepts, so a root
+    configured for ingestion works here without reconfiguration.
+    """
+    rel = Path(C.PI_WORKFLOW_REL)
+    roots: list[Path] = []
+    if (base / rel).is_file():
+        roots.append(base)
+    try:
+        children = sorted(p for p in base.iterdir() if p.is_dir())
+    except OSError:
+        children = []
+    roots.extend(child for child in children if (child / rel).is_file())
+    return roots
+
+
 def group_by_feature(
     entries: Iterable[Entry],
 ) -> dict[Optional[str], list[Entry]]:
@@ -189,3 +273,75 @@ def group_by_feature(
     for entry in entries:
         grouped.setdefault(entry.feature_id, []).append(entry)
     return grouped
+
+
+def report_for_roots(roots: Iterable[Path]) -> dict:
+    """Assemble the descriptive report across Pi project roots.
+
+    Every claim here is bounded by what the runtime retains. `truncated`
+    is surfaced per project and summarised at the top level so a reader
+    cannot mistake the RETAINED WINDOW for the project's whole life:
+    with the history at its cap, an unobserved review may simply have
+    been evicted. That is why the field is `review_observed` and the
+    note says "not observed in the retained window".
+
+    A root with no workflow file is reported as such rather than being
+    silently dropped — "no Pi workflow history here" is an answer, and
+    an empty report that looks healthy is not.
+    """
+    projects: list[dict] = []
+    for root in roots:
+        state = read_project_workflow(root)
+        if state is None:
+            projects.append({
+                "project_path": str(root),
+                "has_workflow_history": False,
+                "features": [],
+                "history_may_be_truncated": False,
+            })
+            continue
+        truncated = history_may_be_truncated(state)
+        entries = entries_from_workflow_state(state)
+        features = []
+        for feature_id, feature_entries in group_by_feature(entries).items():
+            m = metrics_for(feature_entries)
+            features.append({
+                "feature_id": feature_id,
+                "entries": len(feature_entries),
+                "phases_seen": list(m.phases_seen),
+                "moves": [
+                    {"from": mv.from_phase, "to": mv.to_phase,
+                     "kind": mv.kind, "at": mv.at}
+                    for mv in m.moves
+                ],
+                "oscillations": m.oscillations,
+                "rework_cycles": m.rework_cycles,
+                "review_observed": m.review_observed,
+                "occupancy_seconds": [
+                    {"phase": o.phase, "seconds": o.seconds} for o in m.occupancy
+                ],
+            })
+        features.sort(key=lambda f: (f["feature_id"] is None, f["feature_id"] or ""))
+        projects.append({
+            "project_path": str(root),
+            "has_workflow_history": True,
+            "features": features,
+            "history_may_be_truncated": truncated,
+        })
+
+    with_history = [p for p in projects if p["has_workflow_history"]]
+    return {
+        "projects": projects,
+        "projects_with_history": len(with_history),
+        "retention_cap": C.PI_WORKFLOW_HISTORY_CAP,
+        "any_history_may_be_truncated": any(
+            p["history_may_be_truncated"] for p in projects
+        ),
+        # Wording is part of the contract, not decoration: an absence in
+        # a capped window is not evidence that something never happened.
+        "absence_note": (
+            "Phases not listed were not observed in the retained window "
+            f"(the runtime keeps the last {C.PI_WORKFLOW_HISTORY_CAP} "
+            "transitions); this is not evidence they never occurred."
+        ),
+    }
