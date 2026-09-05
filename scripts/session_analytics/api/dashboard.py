@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from .. import constants as C
 from ..relational.db import Database
@@ -173,6 +173,109 @@ def effective_redaction_by_project(db: Database) -> dict[str, Any]:
         })
     projects.sort(key=lambda p: p["session_count"], reverse=True)
     return {"projects": projects}
+
+
+def developer_aggregates(db: Database) -> dict[str, Any]:
+    """E1 (#65): per-developer activity rollup for the team dashboard.
+
+    Grouped on ``copilot_session.developer_id``, which the ingest already
+    resolves (``--developer-id`` > env > config > git email local-part >
+    ``constants.DEFAULT_DEVELOPER_ID``). No new column and no migration.
+
+    Two things this deliberately does NOT do.
+
+    It does not rank developers by volume as if that were performance.
+    Sessions and turns measure how much a copilot was used, not how well
+    anyone works, and a dashboard that sorts people by a productivity-
+    shaped number invites exactly that reading. Rows are ordered by
+    ``developer_id`` — stable and alphabetical, not a leaderboard.
+
+    It does not report unknown cost as zero. ``cost_usd`` is None when a
+    developer has no priced turns, with ``priced_turns`` as the visible
+    denominator; only a real total is a number.
+
+    It does not hide the single-developer case. A store ingested on one
+    machine has one row, and ``is_single_developer`` says so plainly so
+    the UI can explain an empty-looking team view instead of implying
+    the team is idle. ``unattributed_sessions`` counts sessions still on
+    the default id, which is what an unconfigured ``developer_id`` looks
+    like from here — a team that never set it reads as one person.
+    """
+    rows = db.query(
+        """
+        SELECT developer_id,
+               COUNT(*),
+               COALESCE(SUM(turn_count), 0),
+               COALESCE(SUM(tool_call_count), 0),
+               COALESCE(SUM(error_count), 0),
+               COUNT(DISTINCT project_path),
+               MIN(started_at),
+               MAX(started_at)
+        FROM copilot_session
+        GROUP BY developer_id
+        ORDER BY developer_id
+        """
+    )
+    # Cost lives on copilot_turn, so it is a separate grouped read rather
+    # than a join that would multiply the session-level SUMs above.
+    #
+    # A developer with no priced turns gets None, NOT 0.0. NULL cost_usd
+    # means "not priced" and rendering that as $0.00 would report unknown
+    # cost as free — a number someone could budget against. `priced_turns`
+    # is exposed for the same reason `kpis()` exposes `priced_sessions`:
+    # the denominator behind a cost figure has to be visible.
+    cost_by_dev: dict[str, tuple[Optional[float], int]] = {
+        r[0]: (float(r[1]) if r[1] is not None else None, int(r[2] or 0))
+        for r in db.query(
+            """
+            SELECT s.developer_id, SUM(t.cost_usd), COUNT(t.cost_usd)
+            FROM copilot_turn t
+            JOIN copilot_session s ON s.id = t.session_id
+            WHERE t.cost_usd IS NOT NULL
+            GROUP BY s.developer_id
+            """
+        )
+    }
+    # Registered developers may have no sessions yet; the registry is the
+    # source of display names, and a name is only shown if one was set.
+    display_names = {
+        r[0]: r[1]
+        for r in db.query("SELECT developer_id, display_name FROM developer")
+    }
+
+    developers = [
+        {
+            "developer_id": r[0],
+            "display_name": display_names.get(r[0]),
+            "sessions": int(r[1]),
+            "turns": int(r[2]),
+            "tool_calls": int(r[3]),
+            "errors": int(r[4]),
+            "projects": int(r[5]),
+            "first_seen": r[6],
+            "last_seen": r[7],
+            "cost_usd": cost_by_dev.get(r[0], (None, 0))[0],
+            "priced_turns": cost_by_dev.get(r[0], (None, 0))[1],
+        }
+        for r in rows
+    ]
+    unattributed = next(
+        (
+            d["sessions"]
+            for d in developers
+            if d["developer_id"] == C.DEFAULT_DEVELOPER_ID
+        ),
+        0,
+    )
+    return {
+        "developers": developers,
+        "developer_count": len(developers),
+        "is_single_developer": len(developers) <= 1,
+        "unattributed_sessions": unattributed,
+        "registered_without_sessions": sorted(
+            set(display_names) - {d["developer_id"] for d in developers}
+        ),
+    }
 
 
 def benchmark_correlation(db: Database) -> dict[str, Any]:

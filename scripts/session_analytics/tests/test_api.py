@@ -52,6 +52,17 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(r.json()["totals"]["total_cost_usd"], 0.0)
         self.assertEqual(r.json()["totals"]["cost_per_session"], 0.0)
 
+    def test_dashboard_developers(self) -> None:
+        # E1 (#65). The fixture is one machine, so this is also the
+        # single-developer shape every real store returns today.
+        r = self.client.get("/api/dashboard/developers")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["developer_count"], 1)
+        self.assertTrue(body["is_single_developer"])
+        self.assertEqual(len(body["developers"]), 1)
+        self.assertIn("cost_usd", body["developers"][0])
+
     def test_dashboard_cost(self) -> None:
         r = self.client.get("/api/dashboard/cost")
         self.assertEqual(r.status_code, 200)
