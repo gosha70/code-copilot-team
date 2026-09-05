@@ -54,6 +54,28 @@ CFG_DEVELOPER_ID = "developer_id"
 # The CCT workflow phases — mirrors the Pi runtime's PHASE_ORDER (a
 # cross-adapter shared-semantics contract item).
 CCT_PHASES = ("research", "plan", "build", "review")
+#: The review phase by name — referenced by phase-process metrics, which
+#: must not spell it as a literal on the other side of a module boundary.
+PHASE_REVIEW = "review"
+
+#: The Pi runtime's persisted workflow state (#301). Distinct from
+#: PI_SESSION_REL: that file holds only the CURRENT phase/feature, while
+#: this one carries `history[]` — the timestamped, feature-bound record
+#: of phases left behind, capped by the runtime at the last 50 entries.
+PI_WORKFLOW_REL = ".cct/pi-workflow.json"
+#: Retention cap the Pi runtime applies to `history[]` (`.slice(-50)`).
+#: Surfaced in payloads so "not observed" is never read as "never
+#: happened" — an eviction and an absence are different claims.
+PI_WORKFLOW_HISTORY_CAP = 50
+
+#: Adapter-neutral per-session metadata (FU-1), one row per (session, key).
+TBL_SESSION_METADATA = "copilot_session_metadata"
+
+#: `copilot_session_metadata.key` under which the Pi adapter records the
+#: feature a session belongs to. Named here because it crosses a module
+#: boundary — the adapter writes it, phase-process metrics read it — and a
+#: literal on both sides is a silent breakage waiting to happen.
+METADATA_KEY_FEATURE_ID = "feature_id"
 
 # ── Config keys (defaults.yaml) ────────────────────────────────────────
 CFG_SOURCES = "sources"
