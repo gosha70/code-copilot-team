@@ -525,8 +525,36 @@ export interface SimilarResponse {
   neighbors: SimilarNeighbor[];
 }
 
+// E1 (#65): per-developer rollup. `is_single_developer` is not a
+// convenience flag — every real store is single-developer today, so the
+// UI has to explain that rather than render an empty-looking team view.
+export interface DeveloperRow {
+  developer_id: string;
+  display_name: string | null;
+  sessions: number;
+  turns: number;
+  tool_calls: number;
+  errors: number;
+  projects: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  // null = no priced turns. Unknown cost, NOT zero cost — the panel
+  // renders an em dash rather than $0.00.
+  cost_usd: number | null;
+  priced_turns: number;
+}
+
+export interface DeveloperAggregates {
+  developers: DeveloperRow[];
+  developer_count: number;
+  is_single_developer: boolean;
+  unattributed_sessions: number;
+  registered_without_sessions: string[];
+}
+
 export const api = {
   dashboard: () => get<DashboardKpis>("/api/dashboard/kpis"),
+  developers: () => get<DeveloperAggregates>("/api/dashboard/developers"),
   labels: () => get<{ labels: { label: string; true: number; total: number }[] }>("/api/dashboard/labels"),
   costByOutcome: () => get<CostByOutcome>("/api/dashboard/cost"),
   benchmark: () => get<BenchmarkSummary>("/api/dashboard/benchmark"),

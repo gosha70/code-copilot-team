@@ -370,6 +370,16 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         finally:
             conn.close()
 
+    @app.get("/api/dashboard/developers")
+    def dashboard_developers() -> dict[str, Any]:
+        # E1 (#65): per-developer rollup. Read-only, no ranking — see
+        # dashboard.developer_aggregates for why it is ordered by id.
+        conn = db()
+        try:
+            return dashboard.developer_aggregates(conn)
+        finally:
+            conn.close()
+
     @app.get("/api/dashboard/cost")
     def dashboard_cost() -> dict[str, Any]:
         conn = db()

@@ -2,11 +2,15 @@
 
 import { api } from "@/lib/api";
 import { Bar, Card, ErrorNote, Loading, Stat, useApi } from "@/components/ui";
+import DevelopersPanel from "@/components/DevelopersPanel";
 
 const REFRESH_MS = 15000;
 
 export default function DashboardPage() {
   const { data, error, loading } = useApi(() => api.dashboard(), [], REFRESH_MS);
+  // E1 (#65): fetched separately so a failure here cannot blank the
+  // whole dashboard — the panel is additive, not a prerequisite.
+  const devs = useApi(() => api.developers(), [], REFRESH_MS);
   if (loading) return <Loading />;
   if (error || !data) return <ErrorNote error={error || "no data"} />;
 
@@ -78,6 +82,8 @@ export default function DashboardPage() {
           </div>
         </Card>
       </div>
+
+      {devs.data && <DevelopersPanel data={devs.data} />}
     </div>
   );
 }
