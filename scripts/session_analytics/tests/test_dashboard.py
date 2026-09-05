@@ -37,8 +37,15 @@ class TestDashboard(RegistryResetTestCase):
         self.assertEqual(tools, {"bash", "file_read"})
 
     def test_label_distribution_empty_before_judge(self) -> None:
+        from session_analytics.judge.rubric import load_rubric
+
         dist = dashboard.label_distribution(self.db)
-        self.assertEqual(len(dist["labels"]), 10)
+        # Derived from the rubric, not a hardcoded count: the two must not
+        # be able to drift (#300 removed a label and this said 10).
+        self.assertEqual(len(dist["labels"]), len(load_rubric().bool_labels))
+        self.assertNotIn(
+            "phase_violation", [item["label"] for item in dist["labels"]]
+        )
         self.assertTrue(all(item["total"] == 0 for item in dist["labels"]))
 
     def test_effective_redaction_by_project(self) -> None:

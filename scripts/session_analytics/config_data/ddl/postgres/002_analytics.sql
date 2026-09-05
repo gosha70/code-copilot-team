@@ -16,6 +16,11 @@ CREATE TABLE IF NOT EXISTS heuristic_label (
     has_misunderstanding    BOOLEAN,
     response_helpful        BOOLEAN,
     rework_detected         BOOLEAN,
+    -- DORMANT (#300): no longer collected. The judge was never given
+    -- the declared phase, so this could not measure what it was named
+    -- for. Kept (not dropped) for compatibility with existing stores;
+    -- legacy values are NOT served. Re-grounding needs a turn-timestamp
+    -- to phase-interval design, not merely re-adding the rubric key.
     phase_violation         BOOLEAN,
     sentiment            VARCHAR(20),
     interaction_quality  INTEGER,
@@ -35,6 +40,8 @@ CREATE TABLE IF NOT EXISTS session_kpi (
     rework_rate               DOUBLE PRECISION,
     first_attempt_success_rate DOUBLE PRECISION,
     autonomy_score            DOUBLE PRECISION,
+    -- DORMANT (#300): derived from phase_violation above, so no longer
+    -- computed or published. Retained for compatibility.
     phase_compliance_score    DOUBLE PRECISION,
     avg_interaction_quality   DOUBLE PRECISION,
     computed_at               TEXT,
