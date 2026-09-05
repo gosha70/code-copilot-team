@@ -186,6 +186,9 @@ SCORE_FILENAME = "score.json"
 # MALFORMED score (strict-reject, D-parse-strictness), not a new category.
 SCORE_RESULTS = ("pass", "fail", "error", "timeout")
 TBL_BENCHMARK_RESULT = "benchmark_result"
+#: Per-turn judge labels (E10 label correlation reads them alongside
+#: archived traces, so the table name crosses a module boundary).
+TBL_HEURISTIC_LABEL = "heuristic_label"
 # score.json field keys. These cross the benchmark_runner → session_analytics
 # boundary (run.py writes them; correlate.py reads them), so per the repo's
 # constants rule they live here once — same treatment as RUN_RECORD_* above.

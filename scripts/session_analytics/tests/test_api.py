@@ -77,6 +77,27 @@ class TestApi(RegistryResetTestCase):
         blob = json.dumps(body).lower()
         for banned in ("compliance", "violation", "conformance"):
             self.assertNotIn(banned, blob)
+    def test_labels_correlation_and_predict_endpoints(self) -> None:
+        # E10 label correlation + E4 predictions (#65). The fixture store
+        # is tiny, so this also pins the small-sample refusals reaching
+        # the wire: coverage present, estimates withheld, not faked.
+        r = self.client.get("/api/labels/correlation")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("coverage", r.json())
+
+        r = self.client.get("/api/labels/nonexistent_label/traces")
+        self.assertEqual(r.status_code, 404)
+
+        r = self.client.get("/api/predict/effort")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("base rate", body["basis"])
+        self.assertFalse(body["turns"]["sufficient"])   # one fixture session
+        self.assertIsNone(body["turns"]["median"])
+
+        r = self.client.get("/api/predict/outcome")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("sessions_with_outcome", r.json())
 
     def test_dashboard_cost(self) -> None:
         r = self.client.get("/api/dashboard/cost")
