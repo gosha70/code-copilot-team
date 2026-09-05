@@ -83,7 +83,20 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {devs.data && <DevelopersPanel data={devs.data} />}
+      {/* Isolated from the rest of the dashboard, but never silent: a
+          first-load failure says so instead of the panel vanishing, and
+          a failed REFRESH keeps the last good data with a staleness
+          warning rather than presenting it as current. */}
+      {devs.data ? (
+        <DevelopersPanel data={devs.data} stale={devs.error} />
+      ) : devs.error ? (
+        <Card title="Developers">
+          <p className="text-sm text-slate-700">
+            The developer rollup could not be loaded.
+          </p>
+          <p className="text-xs text-slate-500 mt-2">{devs.error}</p>
+        </Card>
+      ) : null}
     </div>
   );
 }

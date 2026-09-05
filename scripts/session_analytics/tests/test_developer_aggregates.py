@@ -48,11 +48,26 @@ class TestDeveloperAggregates(RegistryResetTestCase):
             ),
         )
 
-    def _turn(self, session_ref: int, seq: int, cost: float | None) -> None:
+    def _turn(
+        self,
+        session_ref: int,
+        seq: int,
+        cost: float | None,
+        *,
+        role: str = "assistant",
+        model: str | None = "claude-x",
+        tokens: int | None = 100,
+        cache_tokens: int | None = None,
+    ) -> None:
+        # `model` is what makes a turn a PRICING CANDIDATE — that is the
+        # rule `cost.compute_turn_cost` applies ("no model → NULL"), and
+        # it is independent of which token fields are populated. A user
+        # turn has no model, which is why it can never be in a coverage
+        # denominator; a cache-only assistant turn HAS one and is.
         self.db.execute(
-            "INSERT INTO copilot_turn (session_id, sequence_num, role, cost_usd) "
-            "VALUES (?, ?, ?, ?)",
-            (session_ref, seq, "assistant", cost),
+            "INSERT INTO copilot_turn (session_id, sequence_num, role, cost_usd,"
+            " model, tokens_output, cache_read_tokens) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (session_ref, seq, role, cost, model, tokens, cache_tokens),
         )
 
     def _agg(self) -> dict:
@@ -157,6 +172,68 @@ class TestDeveloperAggregates(RegistryResetTestCase):
         # price. That is still unknown, not free.
         self.assertIsNone(by_id["carol"]["cost_usd"])
         self.assertEqual(by_id["carol"]["priced_turns"], 0)
+
+    def test_coverage_denominator_excludes_turns_that_cannot_be_priced(self) -> None:
+        # A model-less turn is not a pricing candidate — that is the rule
+        # cost.compute_turn_cost applies. Counting them would report a
+        # fully priced developer as permanently partial. Alice's two
+        # model-bearing turns are both priced: 2/2, not 2/4.
+        a1 = self._session("alice", "a1", turns=4)
+        self._turn(a1, 0, None, role="user", model=None, tokens=None)
+        self._turn(a1, 1, 1.0)
+        self._turn(a1, 2, None, role="user", model=None, tokens=None)
+        self._turn(a1, 3, 2.0)
+        dev = self._agg()["developers"][0]
+        self.assertEqual(dev["priced_turns"], 2)
+        self.assertEqual(dev["priceable_turns"], 2)
+        self.assertEqual(dev["turns"], 4)   # the turn count is NOT the denominator
+
+    def test_genuinely_unpriced_eligible_turns_show_partial_coverage(self) -> None:
+        # A turn whose MODEL has no price entry is still a candidate and
+        # stays in the denominator — real missing coverage, not hidden by
+        # the exclusion above. The model is what makes it eligible, so it
+        # must be set here or this test pins the wrong rule.
+        a1 = self._session("alice", "a1", turns=2)
+        self._turn(a1, 0, 1.0, model="claude-priced")
+        self._turn(a1, 1, None, model="claude-unpriced")
+        dev = self._agg()["developers"][0]
+        self.assertEqual(dev["priced_turns"], 1)
+        self.assertEqual(dev["priceable_turns"], 2)
+
+    def test_eligibility_follows_the_model_not_the_token_fields(self) -> None:
+        # The two ways a token-presence proxy diverges from the contract.
+        # Both are zero rows on the corpus this was built against, which
+        # is exactly why the proxy survived a review pass — so they are
+        # pinned here rather than left to the next dataset to discover.
+        # TWO cache-only turns against ONE model-less token turn, so the
+        # two rules disagree on the COUNT and not merely on which rows
+        # they pick. With one of each the totals coincide at 1 while the
+        # membership is exactly inverted, and the assertion would pass
+        # against the rule it exists to reject.
+        a1 = self._session("alice", "a1", turns=3)
+        # Priceable: has a model, and only CACHE tokens. cost.py prices
+        # cache_read/cache_write, so excluding these would undercount the
+        # denominator — and, once priced, drive priced > priceable.
+        self._turn(a1, 0, 0.25, tokens=None, cache_tokens=500)
+        self._turn(a1, 1, 0.25, tokens=None, cache_tokens=700)
+        # NOT priceable: carries tokens but has no model, so it can never
+        # be priced no matter how many tokens it reports.
+        self._turn(a1, 2, None, model=None, tokens=900)
+        dev = self._agg()["developers"][0]
+        self.assertEqual(dev["priceable_turns"], 2)   # token proxy would say 1
+        self.assertEqual(dev["priced_turns"], 2)
+
+    def test_priced_never_exceeds_priceable(self) -> None:
+        # The invariant the proxy could break: a priced cache-only turn
+        # counted in the numerator but not the denominator would render
+        # as "1 / 0".
+        a1 = self._session("alice", "a1", turns=3)
+        self._turn(a1, 0, 0.25, tokens=None, cache_tokens=500)
+        self._turn(a1, 1, 1.0)
+        self._turn(a1, 2, None, role="user", model=None, tokens=None)
+        dev = self._agg()["developers"][0]
+        self.assertLessEqual(dev["priced_turns"], dev["priceable_turns"])
+        self.assertEqual((dev["priced_turns"], dev["priceable_turns"]), (2, 2))
 
     # ── ordering: stable, and deliberately not a leaderboard ───────────
 

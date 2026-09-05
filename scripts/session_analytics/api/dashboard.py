@@ -191,8 +191,9 @@ def developer_aggregates(db: Database) -> dict[str, Any]:
     ``developer_id`` — stable and alphabetical, not a leaderboard.
 
     It does not report unknown cost as zero. ``cost_usd`` is None when a
-    developer has no priced turns, with ``priced_turns`` as the visible
-    denominator; only a real total is a number.
+    developer has no priced turns; only a real total is a number. Cost
+    coverage is ``priced_turns`` out of ``priceable_turns`` — turns that
+    were pricing candidates — never out of every turn.
 
     It does not hide the single-developer case. A store ingested on one
     machine has one row, and ``is_single_developer`` says so plainly so
@@ -224,14 +225,36 @@ def developer_aggregates(db: Database) -> dict[str, Any]:
     # cost as free — a number someone could budget against. `priced_turns`
     # is exposed for the same reason `kpis()` exposes `priced_sessions`:
     # the denominator behind a cost figure has to be visible.
-    cost_by_dev: dict[str, tuple[Optional[float], int]] = {
-        r[0]: (float(r[1]) if r[1] is not None else None, int(r[2] or 0))
+    #
+    # `priceable_turns` is the denominator, and it is NOT the turn count:
+    # a turn with no model is not a pricing candidate, so counting every
+    # turn would report a fully-priced developer as partial forever.
+    #
+    # The eligibility rule is HAVING A MODEL, taken from the pricing
+    # contract itself — `cost.compute_turn_cost` returns NULL for
+    # `not model` and prices everything else, including turns whose only
+    # tokens are cache reads/writes. An earlier version used "has
+    # input/output tokens" as a proxy. It agreed with this rule on every
+    # row of the corpus at hand, which is exactly why the proxy survived
+    # review once: a cache-only turn would be excluded though priceable,
+    # a model-less turn carrying tokens counted though it can never be
+    # priced, and the first of those can drive priced_turns above the
+    # denominator.
+    cost_by_dev: dict[str, tuple[Optional[float], int, int]] = {
+        r[0]: (
+            float(r[1]) if r[1] is not None else None,
+            int(r[2] or 0),
+            int(r[3] or 0),
+        )
         for r in db.query(
             """
-            SELECT s.developer_id, SUM(t.cost_usd), COUNT(t.cost_usd)
+            SELECT s.developer_id,
+                   SUM(t.cost_usd),
+                   COUNT(t.cost_usd),
+                   SUM(CASE WHEN t.model IS NOT NULL AND t.model <> ''
+                            THEN 1 ELSE 0 END)
             FROM copilot_turn t
             JOIN copilot_session s ON s.id = t.session_id
-            WHERE t.cost_usd IS NOT NULL
             GROUP BY s.developer_id
             """
         )
@@ -254,8 +277,9 @@ def developer_aggregates(db: Database) -> dict[str, Any]:
             "projects": int(r[5]),
             "first_seen": r[6],
             "last_seen": r[7],
-            "cost_usd": cost_by_dev.get(r[0], (None, 0))[0],
-            "priced_turns": cost_by_dev.get(r[0], (None, 0))[1],
+            "cost_usd": cost_by_dev.get(r[0], (None, 0, 0))[0],
+            "priced_turns": cost_by_dev.get(r[0], (None, 0, 0))[1],
+            "priceable_turns": cost_by_dev.get(r[0], (None, 0, 0))[2],
         }
         for r in rows
     ]
