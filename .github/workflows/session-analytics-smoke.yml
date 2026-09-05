@@ -130,35 +130,11 @@ jobs:
           print("OK parquet round-trip")
           PY
 
-      - name: "Per-project redaction override survives PostgreSQL (E8, #84)"
-        run: |
-          mkdir -p ~/.cct
-          cat > ~/.cct/session-analytics.json <<'JSON'
-          {
-            "projects": {
-              "demo-project": { "redaction_mode": "metadata-only" }
-            },
-            "project_ids": [
-              { "match": "/repo/demo", "id": "demo-project" }
-            ]
-          }
-          JSON
-          ./scripts/session-analytics ingest \
-            --copilot claude-code --root "$FIXTURE_ROOT" \
-            --dsn "$SA_DSN" --full
-          python3 - <<'PY'
-          import os
-          import psycopg
-          conn = psycopg.connect(os.environ["SA_DSN"])
-          cur = conn.cursor()
-          cur.execute("SELECT redaction_mode FROM copilot_session")
-          rows = cur.fetchall()
-          assert rows == [("metadata-only",)], rows  # per-project override, not the global 'code' default
-          print("OK per-project override under Postgres:", rows)
-          PY
-          rm -f ~/.cct/session-analytics.json
-
       - name: "Ranked trace search under PostgreSQL (E10 Slice B, #65)"
+        # MUST run before the per-project redaction step below. That step
+        # ingests the fixture as `metadata-only`, and the archive stores
+        # under the STRICTER of config and ingest-recorded mode (FR-4
+        # floor) — leaving text with no searchable words in it.
         run: |
           mkdir -p ~/.cct
           cat > ~/.cct/session-analytics.json <<'JSON'
@@ -190,33 +166,60 @@ jobs:
           cur.execute("SELECT count(*) FROM trace_document WHERE content_tsv IS NULL")
           assert cur.fetchone() == (0,), "unindexed archived rows"
 
-          # Terms in any order, across intervening words — the behaviour
-          # the substring path could not deliver on either dialect. Both
-          # words come from ONE document and are queried in REVERSE
-          # document order, so a LIKE-equivalent would score zero here.
-          cur.execute("SELECT content FROM trace_document")
-          probe = ""
-          for (content,) in cur.fetchall():
-              words = [w for w in (content or "").split() if len(w) > 4 and w.isalpha()]
-              if len(words) >= 2:
-                  probe = f"{words[-1]} {words[0]}"
-                  break
-          assert probe, "fixture text too thin to probe"
-          cur.execute(
-              "SELECT count(*) FROM trace_document "
-              "WHERE content_tsv @@ plainto_tsquery('english', %s)",
-              (probe,),
-          )
-          hits = cur.fetchone()[0]
-          assert hits >= 1, f"reversed-order query {probe!r} matched nothing"
-          # And the LIKE path it replaced genuinely cannot answer it.
+          # Two rows with known term densities, so the ordering assertion
+          # below has something to order. Neither holds the query as a
+          # contiguous string, so the substring path scores zero on both.
+          cur.execute("SELECT id FROM copilot_session LIMIT 1")
+          ref = cur.fetchone()[0]
+          # The DENSER document deliberately gets the HIGHER sequence
+          # number. With it at the lower one, the slice A ordering
+          # (session_ref, sequence_num) would return the same first row
+          # as ts_rank and the ordering assertion below could not tell
+          # the two apart — it would pass against the very behaviour it
+          # exists to prove was replaced.
+          for seq, text in (
+              (9001, "alpha appears here with beta far away"),
+              (9002, "alpha and beta appear here and alpha beta again"),
+          ):
+              cur.execute(
+                  "INSERT INTO trace_document (session_ref, sequence_num,"
+                  " source_kind, content, redaction_mode)"
+                  " VALUES (%s, %s, %s, %s, %s)",
+                  (ref, seq, "copilot_transcript", text, "code"),
+              )
+          conn.commit()
           cur.execute(
               "SELECT count(*) FROM trace_document WHERE LOWER(content) LIKE %s",
-              (f"%{probe.lower()}%",),
+              ("%beta alpha%",),
           )
-          assert cur.fetchone() == (0,), "probe was contiguous; not a real test"
-          print("OK ranked search under Postgres:", probe, hits)
+          assert cur.fetchone() == (0,), "probe is contiguous; not a real test"
+          print("OK generated column populated; ranking probe seeded")
+          PY
 
+          # Through the APPLICATION path, not raw SQL: this exercises
+          # search_traces -> detect_index -> the tsvector/ts_rank query.
+          ./scripts/session-analytics search "beta alpha" \
+            --dsn "$SA_DSN" > search.json
+          python3 - <<'PY'
+          import json
+          results = json.load(open("search.json"))["results"]
+          assert results, "ranked search returned nothing through the CLI"
+          seqs = [r["sequence_num"] for r in results]
+          # Reversed word order, with intervening words — unanswerable by
+          # the substring path. And ORDER is the contract: 9002 is the
+          # denser document AND the higher sequence_num, so this passes
+          # only under ts_rank. The slice A ordering would put 9001
+          # first and fail here, which is the point.
+          assert 9001 in seqs and 9002 in seqs, seqs
+          assert seqs[0] == 9002, f"not ranked best-first: {seqs}"
+          print("OK postgres ranked search via the CLI:", seqs)
+          PY
+
+          python3 - <<'PY'
+          import os
+          import psycopg
+          conn = psycopg.connect(os.environ["SA_DSN"])
+          cur = conn.cursor()
           # A purge must take the index with it — the column cannot
           # survive its row, which is the point of GENERATED here.
           cur.execute("DELETE FROM trace_document")
@@ -224,6 +227,34 @@ jobs:
           cur.execute("SELECT count(*) FROM trace_document WHERE content_tsv IS NOT NULL")
           assert cur.fetchone() == (0,), "index text survived a purge"
           print("OK purge reaches the index")
+          PY
+          rm -f ~/.cct/session-analytics.json search.json
+
+      - name: "Per-project redaction override survives PostgreSQL (E8, #84)"
+        run: |
+          mkdir -p ~/.cct
+          cat > ~/.cct/session-analytics.json <<'JSON'
+          {
+            "projects": {
+              "demo-project": { "redaction_mode": "metadata-only" }
+            },
+            "project_ids": [
+              { "match": "/repo/demo", "id": "demo-project" }
+            ]
+          }
+          JSON
+          ./scripts/session-analytics ingest \
+            --copilot claude-code --root "$FIXTURE_ROOT" \
+            --dsn "$SA_DSN" --full
+          python3 - <<'PY'
+          import os
+          import psycopg
+          conn = psycopg.connect(os.environ["SA_DSN"])
+          cur = conn.cursor()
+          cur.execute("SELECT redaction_mode FROM copilot_session")
+          rows = cur.fetchall()
+          assert rows == [("metadata-only",)], rows  # per-project override, not the global 'code' default
+          print("OK per-project override under Postgres:", rows)
           PY
           rm -f ~/.cct/session-analytics.json
 
