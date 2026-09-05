@@ -541,7 +541,12 @@ export interface DeveloperRow {
   // null = no priced turns. Unknown cost, NOT zero cost — the panel
   // renders an em dash rather than $0.00.
   cost_usd: number | null;
+  // Coverage is priced_turns out of priceable_turns — turns that were
+  // pricing candidates (they carry token counts). NOT out of `turns`:
+  // user turns have no model and are never priced, so that ratio would
+  // show a fully-priced developer as permanently partial.
   priced_turns: number;
+  priceable_turns: number;
 }
 
 export interface DeveloperAggregates {

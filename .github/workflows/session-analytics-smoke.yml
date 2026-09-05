@@ -291,3 +291,11 @@ jobs:
         run: |
           npm install
           npm run build
+
+      - name: "Studio states check (renders each state and asserts on it)"
+        # These assertions caught two defects that `tsc` and `next build`
+        # both passed — a payload field nobody rendered, and stale data
+        # shown as current. Type-checking cannot see either, so the check
+        # is only worth having if it actually runs.
+        working-directory: studio
+        run: npm run states-check

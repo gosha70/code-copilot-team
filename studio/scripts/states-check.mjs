@@ -70,6 +70,7 @@ try {
         join(STUDIO, "lib/clusterStates.ts"),
         join(STUDIO, "components/SimilarPanel.tsx"),
         join(STUDIO, "lib/similarStates.ts"),
+        join(STUDIO, "components/DevelopersPanel.tsx"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -427,6 +428,112 @@ try {
     }
   }
   if (!process.exitCode) console.log("  ok  FR-C: prerequisite guidance rendered");
+
+  // ── developers panel (E1, #65) ──────────────────────────────────────
+  // Both assertions below exist because review caught the panel failing
+  // them: the cost denominator was carried in the payload but never
+  // rendered, and a refresh failure left stale figures on screen with
+  // nothing saying so. Type-checking passed in both cases — only
+  // rendering the markup catches "the field exists but nobody shows it".
+  const { default: DevelopersPanel } = await import(
+    pathToFileURL(join(out, "components/DevelopersPanel.js"))
+  );
+  console.log("\ndevelopers panel:");
+
+  // turns (100) is deliberately NOT priceable_turns (60): a developer
+  // whose every eligible turn is priced must not read as partial just
+  // because user turns exist. That distinction is the whole point of
+  // the coverage assertions below.
+  const devRow = (over = {}) => ({
+    developer_id: "alice", display_name: null, sessions: 2, turns: 100,
+    tool_calls: 5, errors: 1, projects: 2, first_seen: "2026-08-01T00:00:00Z",
+    last_seen: "2026-09-01T00:00:00Z", cost_usd: 4.0, priced_turns: 25,
+    priceable_turns: 60,
+    ...over,
+  });
+  const devData = (rows, over = {}) => ({
+    developers: rows, developer_count: rows.length,
+    is_single_developer: rows.length <= 1, unattributed_sessions: 0,
+    registered_without_sessions: [], ...over,
+  });
+  const renderDev = (data, stale) =>
+    renderToStaticMarkup(React.createElement(DevelopersPanel, { data, stale }));
+
+  // Unknown cost must never render as a figure someone could budget on.
+  const unpriced = renderDev(devData([devRow({ cost_usd: null, priced_turns: 0 })]));
+  if (unpriced.includes("$0.00")) {
+    fail("unpriced developer renders $0.00 — unknown cost shown as free");
+  } else if (!unpriced.includes("—")) {
+    fail("unpriced developer renders neither a dash nor a cost");
+  } else {
+    console.log("  ok  unknown cost renders as a dash, not $0.00");
+  }
+
+  // The denominator behind a cost must REACH THE SCREEN, not just the
+  // payload: 25 of 100 turns priced is a materially different claim
+  // from a complete total, and this is the finding review raised.
+  const partial = renderDev(devData([devRow()]));
+  if (partial.includes("25 / 100")) {
+    fail("coverage measured against every turn — user turns are never priceable");
+  } else if (!partial.includes("25 / 60")) {
+    fail("priced_turns is not rendered — cost total looks complete");
+  } else {
+    console.log("  ok  cost coverage is priced/ELIGIBLE turns, not /all turns");
+  }
+
+  // Fully-priced must not read as partial. This is the case the wrong
+  // denominator got backwards: 60/60 eligible, with 40 unpriceable user
+  // turns alongside, is complete coverage and must not be flagged amber.
+  const complete = renderDev(devData([devRow({ priced_turns: 60 })]));
+  if (complete.includes("text-amber-700")) {
+    fail("fully-priced developer flagged as partial coverage");
+  } else {
+    console.log("  ok  fully-priced developer is not flagged partial");
+  }
+
+  // A failed refresh keeps the last good payload (useApi does not clear
+  // it). Showing that as current is the silent-staleness finding.
+  const stale = renderDev(devData([devRow()]), "GET /api/... → 500");
+  if (!stale.includes("last successful load")) {
+    fail("stale data rendered with no staleness warning");
+  } else if (!stale.includes("25 / 60")) {
+    fail("staleness warning replaced the data instead of annotating it");
+  } else {
+    console.log("  ok  stale refresh is annotated, not hidden or blanked");
+  }
+
+  // An EMPTY last-good payload plus a failed refresh. The harness only
+  // covered stale non-empty data at first, and the empty branch
+  // returned before the warning — so the emptiest possible screen was
+  // the one asserting "nothing ingested" as current, unchallenged.
+  const staleEmpty = renderDev(devData([]), "GET /api/... → 500");
+  if (!staleEmpty.includes("last successful load")) {
+    fail("empty stale payload presents 'no sessions' as current");
+  } else if (!staleEmpty.includes("No sessions ingested")) {
+    fail("staleness warning replaced the empty-state explanation");
+  } else {
+    console.log("  ok  empty + stale is annotated, not presented as current");
+  }
+
+  // The single-developer case is what every real store renders today.
+  const single = renderDev(devData([devRow()]));
+  if (!single.includes("single developer")) {
+    fail("single-developer store renders one row with no explanation");
+  } else {
+    console.log("  ok  single-developer store explains itself");
+  }
+
+  // Ordering is the producer's, and deliberately not a leaderboard.
+  const two = renderDev(
+    devData([devRow({ developer_id: "alice" }),
+             devRow({ developer_id: "zoe", sessions: 99, turns: 9999 })]),
+  );
+  const devOrder = [...two.matchAll(/font-mono text-xs">([^<]+)</g)].map((m) => m[1]);
+  if (devOrder.join(",") !== "alice,zoe") {
+    fail(`developers rendered as [${devOrder}] — expected [alice,zoe]`);
+  } else {
+    console.log("  ok  rows rendered as received (busiest not promoted)");
+  }
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {
