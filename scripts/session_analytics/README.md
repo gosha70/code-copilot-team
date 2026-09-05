@@ -1033,3 +1033,40 @@ PYTHONPATH=scripts:. python3 -m unittest discover -s scripts/session_analytics/t
 Runs on SQLite with zero third-party dependencies. The CI smoke gate
 (`.github/workflows/session-analytics-smoke.yml`) also exercises the real
 PostgreSQL dialect via a `postgres:16` service container.
+
+
+## E4 predictive analytics + E10 label correlation (#65)
+
+Both are read-only, both refuse to claim more than the data supports.
+
+| Endpoint | What it answers |
+|---|---|
+| `GET /api/predict/effort?project_path=…` | what comparable past sessions actually cost, in turns / tool calls / errors / duration / dollars |
+| `GET /api/predict/outcome` | historical pass rate over recorded benchmark attempts |
+| `GET /api/labels/correlation` | per-label figures over turns that have BOTH a judge label and archived trace text |
+| `GET /api/labels/{label}/traces` | the archived text of the turns a label fired on |
+
+**These are base rates, not fitted models.** There is no trained
+estimator, no feature engineering and no accuracy claim, because the
+store holds no held-out per-session outcome to validate one against. A
+regression wearing a confidence interval would look more authoritative
+and be worth less. Every payload says so in its `basis` field.
+
+**Every estimate carries its sample size and is withheld below a floor**
+(`predict.MIN_OBSERVATIONS`, 5). A median over two sessions is not an
+estimate; the count is still reported, so an absent figure is explained
+rather than merely missing. Rates stay `null` rather than becoming
+`0.0` — "no data" is not "never happened".
+
+**Coverage is part of the correlation payload.** The archive is opt-in
+per project and the judge runs separately, so most stores have labels
+without traces, traces without labels, or neither. `coverage` reports
+labelled turns, archived turns, and the intersection, so an empty
+correlation is explained instead of looking like a finding.
+
+Labels join traces on `(session, sequence_num)`, **not** on
+`heuristic_label.turn_id`: re-ingest deletes and reinserts turn rows with
+fresh ids, so a stored turn id is not stable across runs while the
+(session, turn-number) pair is. `{label}` is validated against the rubric
+before it reaches SQL — it is interpolated as an identifier, so an
+unchecked value would be an injection point; an unknown label is a 404.

@@ -412,6 +412,58 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             return report
         except Exception as exc:  # noqa: BLE001
             raise _internal_error(exc, "phase process") from None
+    @app.get("/api/labels/correlation")
+    def labels_correlation() -> dict[str, Any]:
+        # E10 label correlation (#65): per-label figures over turns that
+        # have BOTH a judge label and archived trace text. Coverage is
+        # part of the payload — a correlation over a handful of rows is
+        # not a finding, and the caller must be able to see that.
+        from .. import correlate_labels as cl
+
+        conn = db()
+        try:
+            return cl.correlations(conn)
+        finally:
+            conn.close()
+
+    @app.get("/api/labels/{label}/traces")
+    def labels_traces(label: str, limit: int = C.SEARCH_DEFAULT_LIMIT) -> dict[str, Any]:
+        # Read what was actually said on the turns a label fired on.
+        from .. import correlate_labels as cl
+
+        conn = db()
+        try:
+            return {"label": label, "traces": cl.traces_for_label(conn, label, limit=limit)}
+        except ValueError:
+            # Unknown label — a 404 rather than a 500: the rubric is the
+            # closed vocabulary and the caller asked outside it.
+            raise HTTPException(status_code=404, detail="unknown label") from None
+        finally:
+            conn.close()
+
+    @app.get("/api/predict/effort")
+    def predict_effort(project_path: str = "") -> dict[str, Any]:
+        # E4 (#65): base-rate effort estimate, not a fitted model. Every
+        # figure carries its sample size and is withheld below the floor.
+        from .. import predict
+
+        conn = db()
+        try:
+            return predict.effort_estimate(conn, project_path or None)
+        finally:
+            conn.close()
+
+    @app.get("/api/predict/outcome")
+    def predict_outcome() -> dict[str, Any]:
+        # E4 (#65): historical pass rate over recorded benchmark
+        # attempts — the only ground-truth outcome this store holds.
+        from .. import predict
+
+        conn = db()
+        try:
+            return predict.outcome_prediction(conn)
+        finally:
+            conn.close()
 
     @app.get("/api/dashboard/cost")
     def dashboard_cost() -> dict[str, Any]:
