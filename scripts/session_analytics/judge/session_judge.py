@@ -22,6 +22,7 @@ from typing import Optional
 from .contracts import (
     PARSE_BACKEND_ERROR,
     PARSE_TIMEOUT,
+    JudgeTransportError,
     Rubric,
     TurnContext,
     TurnLabels,
@@ -49,14 +50,20 @@ class ClaudeCodeSessionJudge:
         self._cli = cli_executable
 
     def rate_turn(self, ctx: TurnContext, rubric: Rubric) -> TurnLabels:
-        if shutil.which(self._cli) is None:
-            raise ClaudeCliNotFoundError(
-                f"the claude-code judge needs the {self._cli!r} CLI on PATH; "
-                f"install from https://code.claude.com, or use --judge ollama:<model>."
-            )
+        self._require_cli()
         prompt = rubric.prompt_template.format(
             role=ctx.role, prev_text=ctx.prev_text or "", text=ctx.text or ""
         )
+        try:
+            content = self.complete(prompt)
+        except _TimedOut:
+            return _err(rubric, self.judge_id, self._model_label, PARSE_TIMEOUT, "judge timed out")
+        except JudgeTransportError as exc:
+            return _err(rubric, self.judge_id, self._model_label, PARSE_BACKEND_ERROR, str(exc))
+        return parse_labels(content, rubric, judge_id=self.judge_id, judge_model=self._model_label)
+
+    def complete(self, prompt: str, *, timeout: int = _TIMEOUT_SECONDS) -> str:
+        self._require_cli()
         argv = [self._cli, "-p", "--output-format", "json", "--tools", ""]
         if self._model:
             argv += ["--model", self._model]
@@ -71,21 +78,29 @@ class ClaudeCodeSessionJudge:
             start_new_session=True,  # see benchmark claude_code_judge Bug #6
         )
         try:
-            stdout, _stderr = proc.communicate(input=prompt, timeout=_TIMEOUT_SECONDS)
+            stdout, _stderr = proc.communicate(input=prompt, timeout=timeout)
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, OSError):
                 pass
-            return _err(rubric, self.judge_id, self._model_label, PARSE_TIMEOUT, "judge timed out")
+            raise _TimedOut("judge timed out") from None
 
         content = _inner_result(stdout)
         if content is None:
-            return _err(
-                rubric, self.judge_id, self._model_label, PARSE_BACKEND_ERROR,
-                "claude output not parseable",
+            raise JudgeTransportError("claude output not parseable")
+        return content
+
+    def _require_cli(self) -> None:
+        if shutil.which(self._cli) is None:
+            raise ClaudeCliNotFoundError(
+                f"the claude-code judge needs the {self._cli!r} CLI on PATH; "
+                f"install from https://code.claude.com, or use --judge ollama:<model>."
             )
-        return parse_labels(content, rubric, judge_id=self.judge_id, judge_model=self._model_label)
+
+
+class _TimedOut(JudgeTransportError):
+    """A timeout, kept distinct so rate_turn can record PARSE_TIMEOUT."""
 
 
 def _inner_result(stdout: str) -> Optional[str]:

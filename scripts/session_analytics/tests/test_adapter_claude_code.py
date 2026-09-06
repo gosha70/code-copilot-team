@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
 
 from session_analytics import constants as C
 from session_analytics.adapters.claude_code import ClaudeCodeAdapter
@@ -24,6 +27,25 @@ class TestClaudeCodeAdapter(RegistryResetTestCase):
         self.assertEqual(refs[0].native_session_id, "sess-tiny-001")
         self.assertEqual(refs[0].copilot, C.COPILOT_CLAUDE_CODE)
         self.assertGreater(refs[0].latest_mtime, 0)
+
+    def test_resumed_session_files_are_deduplicated_by_uuid(self) -> None:
+        # A resumed Claude Code session writes a SECOND file that repeats
+        # the records it was resumed from. Both files share the sessionId,
+        # so discover() groups them; load() must not count a turn twice.
+        src = next(CLAUDE_CODE_ROOT.glob("*/*.jsonl"))
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        proj = tmp / "project-hash"
+        proj.mkdir()
+        shutil.copy(src, proj / "a.jsonl")
+        shutil.copy(src, proj / "b.jsonl")  # verbatim repeat, as a resume does
+        adapter = ClaudeCodeAdapter()
+        refs = adapter.discover(tmp)
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(len(refs[0].source_files), 2)
+        session = adapter.load(refs[0])
+        self.assertEqual(len(session.turns), 6)
+        self.assertEqual(len({t.uuid for t in session.turns}), 6)
 
     def test_skips_non_conversational_types(self) -> None:
         session, _ = self._load_only_session()

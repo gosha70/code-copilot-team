@@ -78,9 +78,21 @@ class ClaudeCodeAdapter:
     # ── load ───────────────────────────────────────────────────────────
 
     def load(self, ref: SessionRef) -> RawSession:
+        # A session that spans several files (a resumed session writes a
+        # new file that REPEATS the records the resume was loaded from)
+        # carries the same uuid more than once across them. Keep the first
+        # occurrence of each uuid: concatenating the files verbatim doubled
+        # every repeated turn on the page and in every count downstream.
         records: list[dict[str, Any]] = []
+        seen_uuids: set[str] = set()
         for path in ref.source_files:
-            records.extend(_iter_records(path))
+            for rec in _iter_records(path):
+                uid = rec.get("uuid")
+                if isinstance(uid, str) and uid:
+                    if uid in seen_uuids:
+                        continue
+                    seen_uuids.add(uid)
+                records.append(rec)
 
         # Order by timestamp (ISO-8601 sorts lexically); fall back to file
         # order for records missing a timestamp by using a stable index.

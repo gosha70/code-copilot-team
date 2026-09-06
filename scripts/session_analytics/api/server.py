@@ -151,6 +151,10 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         limit: Optional[int] = 50
         session_id: Optional[int] = None
 
+    class SessionAnalysisRequest(BaseModel):
+        judge: Optional[str] = None   # "family:model"; default = configured judge
+        force: bool = False           # re-run even when a parsed result exists
+
     class TestConnRequest(BaseModel):
         dsn: Optional[str] = None
 
@@ -292,7 +296,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         import urllib.request
 
         cfg = load_config()
-        base = (cfg.ollama_url or "http://localhost:11434").rstrip("/")
+        base = (cfg.judge.ollama_url or "http://localhost:11434").rstrip("/")
         try:
             with urllib.request.urlopen(f"{base}/api/tags", timeout=3) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
@@ -301,11 +305,16 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             ]
             return {"reachable": True, "url": base, "models": sorted(models)}
         except Exception as exc:  # noqa: BLE001 — unreachable is an ANSWER
+            # The class name says what kind of failure it was (refused,
+            # timed out, bad body); the message text is logged, not
+            # returned — it can carry resolved hosts and errno detail
+            # (CodeQL py/stack-trace-exposure).
+            _log.info("ollama model list unavailable at %s: %s", base, exc)
             return {
                 "reachable": False,
                 "url": base,
                 "models": [],
-                "error": f"{type(exc).__name__}: {exc}",
+                "error": type(exc).__name__,
             }
 
     # ── pipeline (Analysis tab: run the steps, not just list them) ─────
@@ -731,6 +740,110 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             if "error" in detail:
                 raise HTTPException(status_code=404, detail=detail["error"])
             return detail
+        finally:
+            conn.close()
+
+    # ── session-level analysis (#65 Phase 1) ───────────────────────────
+    def _analysis_judge(conn: Database, session_id: int, spec: str):
+        """The judge for one session: an explicit ``family:model`` if the
+        caller gave one, else the configured judge for the session's
+        copilot — the same resolution the per-turn judge uses."""
+        from ..judge.registry import UnknownJudgeError, get_judge
+
+        # Existence first, whatever the judge spec: an explicit judge must
+        # not skip the check and let a paid backend be invoked for a
+        # session that is not there.
+        row = conn.query_one(
+            "SELECT copilot FROM copilot_session WHERE id = ?", (session_id,)
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"session {session_id} not found")
+        if spec:
+            family, model = (spec.split(":", 1) + [""])[:2]
+        else:
+            family, model = load_config().judge.resolve(str(row[0]))
+        try:
+            judge = get_judge(family, model)
+        except UnknownJudgeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        # Name the model the judge will ACTUALLY call (a blank configured
+        # model means the backend's own default), so the page can say
+        # "Generate with ollama:llama3" — and the user can see when that
+        # model is not the one they have installed.
+        actual = getattr(judge, "_model_label", None) or getattr(judge, "_model", "") or model
+        return judge, f"{family}:{actual or '(default)'}"
+
+    @app.get("/api/sessions/{session_id}/analysis")
+    def session_analysis(session_id: int) -> dict[str, Any]:
+        from ..judge import session_analysis as sa
+
+        conn = db()
+        try:
+            _judge, label = _analysis_judge(conn, session_id, "")
+            archived = conn.query_one(
+                f"SELECT COUNT(*) FROM {C.TBL_TRACE_DOCUMENT} "
+                "WHERE session_ref = ? AND source_kind = ?",
+                (session_id, C.SOURCE_KIND_COPILOT_TRANSCRIPT),
+            )
+            turns = conn.query_one(
+                "SELECT COUNT(*) FROM copilot_turn WHERE session_id = ?", (session_id,)
+            )
+            return {
+                "judge": label,
+                "archive": {
+                    "archived_turns": int((archived or (0,))[0] or 0),
+                    "turns": int((turns or (0,))[0] or 0),
+                },
+                "kinds": sa.all_analyses(conn, session_id),
+                "titles": sa.load_spec().titles,
+            }
+        finally:
+            conn.close()
+
+    @app.post("/api/sessions/{session_id}/analysis/{kind}")
+    def run_session_analysis(
+        session_id: int, kind: str, req: Optional[SessionAnalysisRequest] = None
+    ) -> dict[str, Any]:
+        """Run one analysis SYNCHRONOUSLY. One request, one spinner: the
+        pipeline job table is single-slot per step and would serialise
+        unrelated sessions behind each other. A run is one model call,
+        so the request is as long as the model takes (minutes at most)."""
+        from ..judge import session_analysis as sa
+        from ..judge.contracts import JudgeTransportError
+
+        req = req or SessionAnalysisRequest()
+        if kind not in C.ANALYSIS_KINDS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown analysis kind {kind!r}; known: {', '.join(C.ANALYSIS_KINDS)}",
+            )
+        conn = db()
+        try:
+            judge, label = _analysis_judge(conn, session_id, req.judge or "")
+            try:
+                row = sa.analyze_session(
+                    conn, session_id, kind, judge=judge, force=req.force,
+                )
+            except JudgeTransportError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": f"the judge ({label}) did not answer: {exc}",
+                        "prerequisite": "judge",
+                        "guidance": (
+                            "Check the LLM-as-Judge settings — is the backend "
+                            "running and the model pulled? — then Re-generate."
+                        ),
+                    },
+                )
+            except (RuntimeError, ValueError) as exc:
+                # ClaudeCliNotFoundError / MissingBaseUrlError: a configuration
+                # gap, told in the same prerequisite shape.
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": str(exc), "prerequisite": "judge", "guidance": str(exc)},
+                )
+            return {"judge": label, **row}
         finally:
             conn.close()
 

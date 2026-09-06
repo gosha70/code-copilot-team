@@ -193,6 +193,22 @@ TBL_BENCHMARK_RESULT = "benchmark_result"
 #: Per-turn judge labels (E10 label correlation reads them alongside
 #: archived traces, so the table name crosses a module boundary).
 TBL_HEURISTIC_LABEL = "heuristic_label"
+
+# Session-level LLM analysis (#65 Phase 1). The kind names cross the
+# config-data / API / Studio boundary, so they live here.
+TBL_SESSION_ANALYSIS = "session_analysis"
+ANALYSIS_KIND_TUNING = "tuning"
+ANALYSIS_KIND_COACHING = "coaching"
+ANALYSIS_KIND_EFFICIENCY = "efficiency"
+ANALYSIS_KINDS = (ANALYSIS_KIND_TUNING, ANALYSIS_KIND_COACHING, ANALYSIS_KIND_EFFICIENCY)
+#: What the judge saw: archived full text, content previews only, or both.
+TRANSCRIPT_SOURCE_ARCHIVE = "archive"
+TRANSCRIPT_SOURCE_PREVIEW = "preview"
+TRANSCRIPT_SOURCE_MIXED = "mixed"
+#: Analysis parse statuses beyond the judge's own sentinels.
+ANALYSIS_PARSE_MISSING_KEYS = "missing_keys"
+#: The model answered but hit its output cap before closing the document.
+ANALYSIS_PARSE_ANSWER_TRUNCATED = "answer_truncated"
 # score.json field keys. These cross the benchmark_runner → session_analytics
 # boundary (run.py writes them; correlate.py reads them), so per the repo's
 # constants rule they live here once — same treatment as RUN_RECORD_* above.

@@ -73,3 +73,4 @@ README.html
 # Cross-session collaboration/automation working state (review loop,
 # auto-build ledger). Machine-local; never committed.
 /.cct/
+.playwright-cli/
