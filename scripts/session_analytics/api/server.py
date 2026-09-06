@@ -182,8 +182,45 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             })
         cfg = load_config()
         _b, _m = cfg.judge.resolve(None)
+
+        # READINESS IS A CAPABILITY, NOT A FILE. `is_initialized()` only
+        # asks whether a .env exists, so a perfectly working install
+        # started with `--db` on the command line was reported as "not
+        # configured" while the very same page showed a healthy store
+        # and 132 sessions. Report what the app can actually DO, and let
+        # the UI say precisely which part is missing.
+        store_ok, sessions = False, 0
+        try:
+            _probe = db()
+            try:
+                apply_ddl(_probe)
+                row = _probe.query_one("SELECT COUNT(*) FROM copilot_session")
+                sessions = int((row or (0,))[0] or 0)
+                store_ok = True
+            finally:
+                _probe.close()
+        except Exception:  # noqa: BLE001 — unreachable store == not ready
+            store_ok = False
+
         return {
-            "configured": is_initialized(),
+            # THE STORE THIS APP IS ACTUALLY USING, which is not always
+            # what .env says: a --db on the command line overrides it,
+            # and the Settings page was showing the .env value beside a
+            # session count read from the other store. A settings screen
+            # that cannot be reconciled with the dashboard is worse than
+            # no settings screen.
+            "effective_dsn": dsn,
+            "dsn_overridden": bool(dsn and dsn != (load_config().dsn or "")),
+            # True when the tool can actually be used: a reachable store
+            # holding data. `.env` is reported separately below because
+            # it is a convenience (it saves repeating --db), not a
+            # precondition.
+            "configured": store_ok and sessions > 0,
+            "readiness": {
+                "store_reachable": store_ok,
+                "sessions": sessions,
+                "env_file_present": is_initialized(),
+            },
             "fields": fields,
             "judge_default": f"{_b}:{_m or '(default model)'}",
             "judge_backends": list_judge_ids(),
@@ -239,6 +276,183 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             return dashboard.effective_redaction_by_project(conn)
         finally:
             conn.close()
+
+    @app.get("/api/judge/models")
+    def judge_models() -> dict[str, Any]:
+        """Models the local Ollama ACTUALLY has installed.
+
+        The Analysis page used to offer a hardcoded "ollama:llama3". On a
+        machine without that exact tag every call 404s, 50 turns were
+        written as backend_error, and the UI reported "labelled 50
+        turns". Offering a choice that cannot work is worse than
+        offering none — so the list is read from the server.
+        """
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        cfg = load_config()
+        base = (cfg.ollama_url or "http://localhost:11434").rstrip("/")
+        try:
+            with urllib.request.urlopen(f"{base}/api/tags", timeout=3) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+            models = [
+                m["name"] for m in data.get("models", []) if isinstance(m, dict) and m.get("name")
+            ]
+            return {"reachable": True, "url": base, "models": sorted(models)}
+        except Exception as exc:  # noqa: BLE001 — unreachable is an ANSWER
+            return {
+                "reachable": False,
+                "url": base,
+                "models": [],
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    # ── pipeline (Analysis tab: run the steps, not just list them) ─────
+    @app.get("/api/pipeline/status")
+    def pipeline_status() -> dict[str, Any]:
+        from .. import pipeline_jobs as pj
+
+        # Use the DSN THIS APP WAS BUILT WITH, not a fresh load_config():
+        # create_app already receives the resolved value, so re-reading
+        # config here silently ignored a --db override and reported on a
+        # different store than every other endpoint.
+        return pj.status(dsn, kuzu_path or load_config().kuzu_path)
+
+    def _pipeline_runners():
+        """One definition of what each step DOES, shared by both the
+        single-step and run-all endpoints, so they cannot drift."""
+        from .. import pipeline_jobs as pj
+
+        store = dsn
+        graph_path = kuzu_path or load_config().kuzu_path
+
+        def _ingest() -> str:
+            from .._register import register_all
+            from ..ingest.pipeline import ingest
+
+            register_all()
+            st = ingest(dsn=store, full=False)
+            return f"ingested {getattr(st, 'sessions_ingested', '?')} sessions"
+
+        def _graph() -> str:
+            from ..graph.builder import build
+            from ..relational.db import Database as _DB
+
+            rel = _DB.connect(store)
+            try:
+                st = build(rel, graph_path, rebuild=True)
+            finally:
+                rel.close()
+            return f"graph rebuilt ({st})"
+
+        def _kpis() -> str:
+            from ..judge.kpis import compute_kpis
+            from ..judge.rubric import load_rubric
+            from ..relational.db import Database as _DB
+
+            db_ = _DB.connect(store)
+            try:
+                st = compute_kpis(db_, load_rubric().name)
+            finally:
+                db_.close()
+            return f"kpis computed ({st})"
+
+        return {
+            pj.STEP_INGEST: _ingest,
+            pj.STEP_GRAPH: _graph,
+            pj.STEP_KPIS: _kpis,
+        }
+
+    @app.post("/api/pipeline/run/{step}")
+    def pipeline_run(step: str) -> dict[str, Any]:
+        from .. import pipeline_jobs as pj
+
+        runners = _pipeline_runners()
+        # The judge keeps its existing endpoint: it takes a judge choice
+        # and a limit, which the others do not.
+        if step not in runners:
+            raise HTTPException(status_code=404, detail=f"unknown step: {step}")
+        try:
+            pj.start(step, runners[step])
+        except pj.StepBusyError as exc:
+            # 409, not 500: asking twice is a normal thing a user does,
+            # and the honest answer is "already running", not an error.
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        return {"step": step, "started": True}
+
+    @app.post("/api/pipeline/run-all")
+    def pipeline_run_all(include_judge: bool = False) -> dict[str, Any]:
+        """Run every step in order, as one background sequence.
+
+        Sequential by construction — see pipeline_jobs.start_all. The
+        judge is excluded unless explicitly asked for, because it calls
+        a model per turn and can cost real money.
+        """
+        from .. import pipeline_jobs as pj
+
+        try:
+            pj.start_all(_pipeline_runners(), include_judge=include_judge)
+        except pj.StepBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        return {"started": True, "include_judge": include_judge}
+
+    # ── filesystem browse (settings path pickers) ──────────────────────
+    # A browser CANNOT read a real path: <input type="file"> deliberately
+    # hides it, so a picker has to be served from here. This is therefore
+    # a deliberate, and deliberately NARROW, capability:
+    #
+    #   * READ-ONLY, and only names + is_dir. No file contents, ever.
+    #   * Entry-capped, so a huge directory cannot be used to hang the UI.
+    #   * Permission errors are reported as an empty listing, not raised —
+    #     an unreadable folder is a normal thing to click on.
+    #
+    # It is acceptable only because this API binds 127.0.0.1 and is
+    # already behind the Host + Origin guards above; it must never be
+    # exposed on a routable interface.
+    @app.get("/api/fs/browse")
+    def fs_browse(path: str = "", only_dirs: bool = False) -> dict[str, Any]:
+        from pathlib import Path as _P
+
+        base = _P(path).expanduser() if path else _P.home()
+        try:
+            base = base.resolve()
+        except OSError:
+            base = _P.home()
+        if not base.is_dir():
+            base = base.parent if base.parent.is_dir() else _P.home()
+
+        entries: list[dict[str, Any]] = []
+        try:
+            for child in sorted(
+                base.iterdir(), key=lambda c: (not c.is_dir(), c.name.lower())
+            ):
+                if child.name.startswith(".") and child.name not in (".cct",):
+                    continue          # hidden clutter, but keep ~/.cct
+                is_dir = child.is_dir()
+                if only_dirs and not is_dir:
+                    continue
+                if not is_dir and child.suffix.lower() not in (".db", ".sqlite",
+                                                               ".sqlite3"):
+                    continue          # only stores are selectable
+                entries.append({"name": child.name, "is_dir": is_dir})
+                if len(entries) >= C.FS_BROWSE_MAX_ENTRIES:
+                    break
+        except (OSError, PermissionError):
+            entries = []              # unreadable folder is not an error
+
+        return {
+            "path": str(base),
+            "parent": str(base.parent) if base.parent != base else None,
+            "entries": entries,
+            "truncated": len(entries) >= C.FS_BROWSE_MAX_ENTRIES,
+            # Places a store is actually likely to be, so the common case
+            # is one click rather than a walk from /.
+            "shortcuts": [
+                p for p in (str(_P.home()), str(_P.home() / ".cct"))
+                if _P(p).is_dir()
+            ],
+        }
 
     # ── routing evidence (routing-shadow #261, shadow-mode only) ───────
     # Sets are addressed by opaque id; invalid sets surface with their
@@ -542,9 +756,32 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         try:
             g = _graph()
         except ImportError:
-            raise HTTPException(status_code=503, detail="kuzu not installed")
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "The kuzu package is not installed.",
+                    "prerequisite": "kuzu",
+                    "guidance": "Re-run setup, or `pip install kuzu` in the venv.",
+                },
+            ) from None
         try:
             return {"node_counts": gq.node_counts(g), "tool_failures": gq.tool_failure_stats(g)}
+        except Exception as exc:  # noqa: BLE001
+            # A NEVER-BUILT graph is not an error, and it is NOT the same
+            # as kuzu being missing. kuzu happily opens an empty store,
+            # so the first query fails with "Table Copilot does not
+            # exist" — which surfaced to the user as a 500 and a banner
+            # blaming a package that was installed all along.
+            if "does not exist" in str(exc):
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "The knowledge graph has not been built yet.",
+                        "prerequisite": "graph",
+                        "guidance": "Build it from the Analysis tab, or run `session-analytics graph --rebuild`.",
+                    },
+                ) from None
+            raise _internal_error(exc, "graph node counts") from None
         finally:
             g.close()
 

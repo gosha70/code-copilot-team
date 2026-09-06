@@ -58,6 +58,10 @@ CCT_PHASES = ("research", "plan", "build", "review")
 #: must not spell it as a literal on the other side of a module boundary.
 PHASE_REVIEW = "review"
 
+#: Cap on entries returned by the settings path picker's browse
+#: endpoint — a directory with 100k files must not hang the UI.
+FS_BROWSE_MAX_ENTRIES = 500
+
 #: The Pi runtime's persisted workflow state (#301). Distinct from
 #: PI_SESSION_REL: that file holds only the CURRENT phase/feature, while
 #: this one carries `history[]` — the timestamped, feature-bound record

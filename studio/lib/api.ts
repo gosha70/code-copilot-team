@@ -78,7 +78,19 @@ export interface ConfigField {
 }
 
 export interface ConfigResponse {
+  /** The store the running server is ACTUALLY reading. */
+  effective_dsn?: string;
+  /** True when a --db flag overrides what .env says. */
+  dsn_overridden?: boolean;
+  // True when the tool can actually be USED — a reachable store holding
+  // sessions — not merely when a .env file exists. See readiness below
+  // for which half is missing.
   configured: boolean;
+  readiness?: {
+    store_reachable: boolean;
+    sessions: number;
+    env_file_present: boolean;
+  };
   fields: ConfigField[];
   judge_default: string;
   judge_backends: string[];
@@ -557,7 +569,79 @@ export interface DeveloperAggregates {
   registered_without_sessions: string[];
 }
 
+// The Analysis pipeline (#65 UX): each step reports whether it has been
+// DONE (derived from the store, not a flag) and whether a run is in
+// flight, so the page can be operated rather than merely read.
+export interface PipelineStep {
+  id: string;
+  title: string;
+  blurb: string;
+  done: boolean;
+  optional: boolean;
+  job: { state: "idle" | "running" | "done" | "failed"; message?: string; seconds?: number };
+}
+
+export interface PipelineStatus {
+  steps: PipelineStep[];
+  /** State of the whole-pipeline run, tracked server-side so it
+   *  survives a page reload. */
+  all: { state: "idle" | "running" | "done" | "failed"; message?: string; seconds?: number };
+  counts: {
+    sessions: number;
+    labels: number;
+    /** Rows the judge WROTE but could not parse — attempts, not labels. */
+    label_failures: number;
+    kpis: number;
+    graph_nodes: number;
+  };
+}
+
+// Ranked full-text search over archived trace text (#65 slice B).
+export interface TraceHit {
+  session_ref: number;
+  sequence_num: number;
+  copilot: string;
+  session_id: string;
+  project_path: string | null;
+  redaction_mode: string;
+  snippet: string;
+}
+
+export interface JudgeModels {
+  reachable: boolean;
+  url: string;
+  models: string[];
+  error?: string;
+}
+
 export const api = {
+  pipelineStatus: () => get<PipelineStatus>("/api/pipeline/status"),
+  judgeModels: () => get<JudgeModels>("/api/judge/models"),
+  searchTraces: (q: string, limit = 50) =>
+    get<{ query: string; results: TraceHit[] }>(
+      `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+  runAll: async (includeJudge: boolean) => {
+    const r = await fetch(
+      `${BASE}/api/pipeline/run-all?include_judge=${includeJudge}`,
+      { method: "POST" },
+    );
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.detail || `run-all → ${r.status}`);
+    }
+    return r.json();
+  },
+  runStep: async (step: string) => {
+    const r = await fetch(`${BASE}/api/pipeline/run/${step}`, { method: "POST" });
+    if (!r.ok) {
+      // 409 means "already running" — a normal thing to hit by
+      // double-clicking, so it is surfaced as text, not thrown as a fault.
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.detail || `run ${step} → ${r.status}`);
+    }
+    return r.json();
+  },
   dashboard: () => get<DashboardKpis>("/api/dashboard/kpis"),
   developers: () => get<DeveloperAggregates>("/api/dashboard/developers"),
   labels: () => get<{ labels: { label: string; true: number; total: number }[] }>("/api/dashboard/labels"),

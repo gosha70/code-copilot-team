@@ -130,10 +130,23 @@ class Database:
         """
         if not dsn:
             raise ValueError(
-                "no DSN configured; set --dsn, CCT_SA_DSN, or 'dsn' in config. "
-                "For local dev, docker-compose up brings up Postgres; for tests "
-                "use a sqlite:/// DSN."
+                "no database configured; pass --db, set CCT_SA_DSN, or run "
+                "`session-analytics start` which configures one for you."
             )
+        # A value that is not a database URL fails DEEP inside the driver
+        # otherwise — an operator who passed the SERVER address here got a
+        # psycopg connection error, which names neither the mistake nor the
+        # fix. Catch it at the boundary and say what was expected.
+        if not is_sqlite_dsn(dsn) and "://" in dsn:
+            scheme = dsn.split("://", 1)[0].lower()
+            if scheme in ("http", "https"):
+                raise ValueError(
+                    f"--db expects a DATABASE, not a URL: got {scheme}://…\n"
+                    "  The server address is not configured here; it is always "
+                    "127.0.0.1 (change the port with --api-port).\n"
+                    "  Examples:  sqlite:////absolute/path/to/store.db\n"
+                    "             postgresql://user:pass@localhost:5432/dbname"
+                )
         if is_sqlite_dsn(dsn):
             import sqlite3
 

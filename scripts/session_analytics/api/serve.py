@@ -64,8 +64,11 @@ def _launch_studio(api_port: int, ui_port: int) -> Optional[subprocess.Popen]:
         return None
     if not (_STUDIO_DIR / "node_modules").exists():
         print(
-            f"note: {_STUDIO_DIR}/node_modules missing — run 'npm install' in "
-            f"studio/ first, or pass --no-ui.",
+            f"note: Studio dependencies are not installed, so the API is "
+            f"starting alone.\n"
+            f"      Fix it in one command:  {_STUDIO_DIR.parent}/scripts/"
+            f"session-analytics start\n"
+            f"      (or: cd {_STUDIO_DIR} && npm install)",
             file=sys.stderr,
         )
         return None
@@ -74,7 +77,12 @@ def _launch_studio(api_port: int, ui_port: int) -> Optional[subprocess.Popen]:
     env["PORT"] = str(ui_port)
     _log.info("launching Studio on http://localhost:%d", ui_port)
     return subprocess.Popen(
-        ["npm", "run", "start", "--", "-p", str(ui_port)],
+        # `dev`, NOT `start`: `next start` serves a PRODUCTION build and
+        # fails without a prior `next build` — minutes of work on a first
+        # run, plus a stale-artifact failure mode when .next lags the
+        # source. `next dev` needs no build and starts in seconds, which
+        # is what a local single-user tool actually wants.
+        ["npm", "run", "dev", "--", "-p", str(ui_port)],
         cwd=str(_STUDIO_DIR),
         env=env,
         start_new_session=True,

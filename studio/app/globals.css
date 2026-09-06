@@ -3,7 +3,13 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light dark;
+  /* LIGHT ONLY, and that is not a preference — `body` below hardcodes a
+     light background and dark text, so declaring "light dark" told the
+     browser this page adapts when it does not. On a dark-mode OS the
+     native form controls then rendered dark against a light page:
+     near-black inputs with dark text, effectively unreadable. Declare
+     what is actually true. */
+  color-scheme: light;
 }
 
 body {

@@ -26,13 +26,13 @@ export default function SessionsPage() {
       </div>
       <div className="flex gap-3">
         <input
-          className="border border-slate-300 rounded px-3 py-1.5 text-sm flex-1"
+          className="border border-slate-300 bg-white text-slate-900 rounded px-3 py-1.5 text-sm flex-1"
           placeholder="Search project path / model…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
         <select
-          className="border border-slate-300 rounded px-3 py-1.5 text-sm"
+          className="border border-slate-300 bg-white text-slate-900 rounded px-3 py-1.5 text-sm"
           value={copilot}
           onChange={(e) => setCopilot(e.target.value)}
         >

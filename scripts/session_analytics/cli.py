@@ -44,12 +44,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list", help="List registered copilot adapters.")
 
+    p_start = sub.add_parser(
+        "start",
+        help="One command: install deps, configure, ingest, and open the Studio.",
+    )
+    p_start.add_argument("--api-port", type=int, default=8765)
+    p_start.add_argument("--ui-port", type=int, default=3000)
+    p_start.add_argument(
+        "--no-open", action="store_true", help="Do not open a browser."
+    )
+
     p_setup = sub.add_parser("setup", help="Guided first-run configuration (writes .env).")
     p_setup.add_argument(
         "--non-interactive", action="store_true",
         help="Write defaults without prompting (CI/automation).",
     )
-    p_setup.add_argument("--dsn", default=None, help="Preset the DSN (skips that prompt).")
+    p_setup.add_argument("--db", "--dsn", dest="dsn", default=None, help="Preset the DSN (skips that prompt).")
 
     p_ing = sub.add_parser("ingest", help="Ingest sessions into the relational store.")
     p_ing.add_argument(
@@ -62,7 +72,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--root", type=Path, default=None, help="Override the source root (all copilots)."
     )
     p_ing.add_argument(
-        "--dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+        "--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
     )
     p_ing.add_argument(
         "--developer-id",
@@ -99,10 +109,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ing.add_argument("--since-days", type=int, default=None, help=argparse.SUPPRESS)
 
     p_doc = sub.add_parser("doctor", help="Report store counts + source reachability.")
-    p_doc.add_argument("--dsn", default=None, help="Database DSN (else config).")
+    p_doc.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
 
     p_an = sub.add_parser("analyze", help="Run LLM-as-Judge over un-labeled turns.")
-    p_an.add_argument("--dsn", default=None, help="Database DSN (else config).")
+    p_an.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
     p_an.add_argument(
         "--judge",
         default=None,
@@ -120,7 +130,7 @@ def _build_parser() -> argparse.ArgumentParser:
              "idempotent post-ingest pass writing the provenance "
              "envelope into copilot_session.session_embedding.",
     )
-    p_emb.add_argument("--dsn", default=None, help="Database DSN (else config).")
+    p_emb.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
     p_emb.add_argument(
         "--backend", default=None,
         help="Embedding backend family (else config; packaged default: ollama).")
@@ -149,8 +159,8 @@ def _build_parser() -> argparse.ArgumentParser:
              "embeddings (E2 slice 2, #287) — strictly local; full "
              "reconciliation every run.",
     )
-    p_sim.add_argument("--dsn", default=None, help="Database DSN (else config).")
-    p_sim.add_argument("--db-path", default=None,
+    p_sim.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_sim.add_argument("--graph-path", "--db-path", dest="db_path", default=None,
                        help="Kùzu database path (else config kuzu_path).")
     p_sim.add_argument("--threshold", default=None,
                        help="Minimum cosine score for an edge (else config).")
@@ -163,12 +173,12 @@ def _build_parser() -> argparse.ArgumentParser:
              "(E2 slice 3, #289) — read-only; computed on read, "
              "nothing materialized.",
     )
-    p_clu.add_argument("--dsn", default=None, help="Database DSN (else config).")
-    p_clu.add_argument("--db-path", default=None,
+    p_clu.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_clu.add_argument("--graph-path", "--db-path", dest="db_path", default=None,
                        help="Kùzu database path (else config kuzu_path).")
 
     p_kpi = sub.add_parser("kpis", help="Compute session-level KPI rollups from labels.")
-    p_kpi.add_argument("--dsn", default=None, help="Database DSN (else config).")
+    p_kpi.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
     p_kpi.add_argument("--session-id", type=int, default=None, help="Limit to one session id.")
 
     sub.add_parser(
@@ -181,18 +191,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     p_mcp = sub.add_parser("mcp", help="Run the MCP stdio server over the store.")
-    p_mcp.add_argument("--dsn", default=None, help="Database DSN (else config).")
+    p_mcp.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
 
     p_serve = sub.add_parser("serve", help="Launch the FastAPI + Next.js Studio.")
-    p_serve.add_argument("--dsn", default=None, help="Database DSN (else config).")
-    p_serve.add_argument("--db-path", default=None, help="Kùzu graph dir (else config).")
+    p_serve.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_serve.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu graph dir (else config).")
     p_serve.add_argument("--api-port", type=int, default=8765)
     p_serve.add_argument("--ui-port", type=int, default=3000)
     p_serve.add_argument("--no-ui", action="store_true", help="Serve the API only.")
 
     p_graph = sub.add_parser("graph", help="Build the Kùzu knowledge graph from the store.")
-    p_graph.add_argument("--dsn", default=None, help="Relational DSN (else config).")
-    p_graph.add_argument("--db-path", default=None, help="Kùzu graph dir (else config).")
+    p_graph.add_argument("--db", "--dsn", dest="dsn", default=None, help="Relational DSN (else config).")
+    p_graph.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu graph dir (else config).")
     p_graph.add_argument(
         "--rebuild", action="store_true", help="Drop + recreate all graph tables first."
     )
@@ -207,7 +217,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_exp = sub.add_parser(
         "export", help="Export the relational store to CSV/Parquet (E7)."
     )
-    p_exp.add_argument("--dsn", default=None, help="Database DSN (else config).")
+    p_exp.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
     p_exp.add_argument(
         "--format",
         choices=C.EXPORT_FORMATS,
@@ -242,7 +252,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Benchmark runs root to recursively scan for run-record.json files.",
     )
     p_cor.add_argument(
-        "--dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+        "--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
     )
 
     p_arch = sub.add_parser(
@@ -258,7 +268,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override the source root (all copilots).",
     )
     p_arch.add_argument(
-        "--dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+        "--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
     )
     p_arch.add_argument(
         "--full", action="store_true",
@@ -279,7 +289,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Max results (default {C.SEARCH_DEFAULT_LIMIT}, cap {C.SEARCH_MAX_LIMIT}).",
     )
     p_srch.add_argument(
-        "--dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+        "--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
     )
 
     p_watch = sub.add_parser(
@@ -297,7 +307,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--interval", type=int, default=15, help="Seconds between cycles (default: 15)."
     )
     p_watch.add_argument(
-        "--dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+        "--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
     )
     p_watch.add_argument(
         "--copilots",
@@ -317,6 +327,16 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
     print(json.dumps({"adapters": list_adapter_ids(), "judges": list_judge_ids()}, indent=2))
     return C.EXIT_OK
+
+
+def _cmd_start(args: argparse.Namespace) -> int:
+    from .quickstart import run_start
+
+    return run_start(
+        api_port=args.api_port,
+        ui_port=args.ui_port,
+        open_browser=not args.no_open,
+    )
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
@@ -1149,6 +1169,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
 _HANDLERS = {
     "list": _cmd_list,
+    "start": _cmd_start,
     "setup": _cmd_setup,
     "ingest": _cmd_ingest,
     "doctor": _cmd_doctor,
