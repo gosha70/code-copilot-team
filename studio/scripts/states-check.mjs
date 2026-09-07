@@ -74,6 +74,7 @@ try {
         join(STUDIO, "components/DashboardCards.tsx"),
         join(STUDIO, "lib/paths.ts"),
         join(STUDIO, "lib/docLinks.ts"),
+        join(STUDIO, "components/JudgeQuality.tsx"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -722,6 +723,40 @@ try {
   if (ids !== "title,quick-start,quick-start-1,code-head") fail(`toc ids were ${ids}`);
   else if (lines !== "1,5,6,7") fail(`toc lines were ${lines}`);
   else console.log("  ok  toc skips fenced code, dedupes repeats, and carries source lines");
+
+  // ── #313 judge quality card ────────────────────────────────────────
+  const { default: JudgeQuality } = await import(pathToFileURL(join(out, "components/JudgeQuality.js")));
+  console.log("\njudge quality (#313):");
+  const jq = (props) => renderToStaticMarkup(React.createElement(JudgeQuality, { onSelect: () => {}, error: null, ...props }));
+  const runs2 = {
+    rubrics: [
+      { source: "rubric:heuristic-v1", name: "heuristic-v1", turns: 50, first: null, last: null, judge: "ollama:llama3.2" },
+      { source: "rubric:rerun", name: "rerun", turns: 50, first: null, last: null, judge: "ollama:llama3.2" },
+    ],
+    humans: [], min_pairs: 20,
+  };
+  const one = jq({ runs: { ...runs2, rubrics: runs2.rubrics.slice(0, 1) }, report: null, a: "", b: "" });
+  if (!/One label source so far/.test(one) || !/labels sample/.test(one)) fail("single-source card lacks the how-to");
+  else console.log("  ok  one source → says what to do next");
+  const rep = {
+    a: "rubric:heuristic-v1", b: "rubric:rerun", turns_a: 50, turns_b: 50, turns_shared: 50, min_pairs: 20,
+    labels: [
+      { label: "user_gives_command", n: 50, agreement: 0.9, kappa: 0.71, a_true: 20, b_true: 22, sufficient: true },
+      { label: "user_asks_question", n: 6, agreement: 1.0, kappa: null, a_true: 0, b_true: 0, sufficient: false },
+    ],
+    sentiment: { n: 50, exact: 0.8, sufficient: true },
+    interaction_quality: { n: 50, within_1: 0.95, exact: 0.5, sufficient: true },
+    basis: "b",
+  };
+  const full = jq({ runs: runs2, report: rep, a: rep.a, b: rep.b });
+  if (!/50 turns labelled by both/.test(full)) fail("agreement card lacks the shared-n line");
+  else if (!/not evidence/.test(full)) fail("agreement card lacks the pair-floor note");
+  else if (!/text-slate-400[^>]*title="only 6 pairs/.test(full)) fail("insufficient row not greyed with its n");
+  else if (!/90%/.test(full) || !/0\.71/.test(full)) fail("agreement/kappa not rendered");
+  else console.log("  ok  agreement table: n, %, κ, greyed under-floor rows");
+  const none = jq({ runs: runs2, report: { ...rep, turns_shared: 0, labels: [] }, a: rep.a, b: rep.b });
+  if (!/share no turns/.test(none)) fail("zero shared turns not explained");
+  else console.log("  ok  zero shared turns is explained, not a blank table");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

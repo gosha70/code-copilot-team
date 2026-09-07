@@ -150,6 +150,10 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         workers: Optional[int] = None
         limit: Optional[int] = 50
         session_id: Optional[int] = None
+        # #313: a named run coexists with the packaged one; only_labelled_by
+        # (rubric:<name> | human:<labeler>) makes it cover the same turns.
+        rubric_name: Optional[str] = None
+        only_labelled_by: Optional[str] = None
 
     class SessionAnalysisRequest(BaseModel):
         judge: Optional[str] = None   # "family:model"; default = configured judge
@@ -1006,8 +1010,10 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         from ..judge.rubric import load_rubric
         from ..judge.runner import run_default_by_copilot, run_judge
 
+        from ..judge.label_sources import UnknownLabelSourceError
+
         cfg = load_config()
-        rubric = load_rubric()
+        rubric = load_rubric(req.rubric_name)
         workers = req.workers or cfg.judge.workers
         conn = db()
         try:
@@ -1020,12 +1026,46 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                 stats = run_judge(
                     conn, judge, rubric, workers=workers,
                     session_id=req.session_id, limit=req.limit,
+                    only_labelled_by=req.only_labelled_by,
                 )
-                return {"judge": f"{family}:{model or '(default)'}", **stats.as_dict()}
-            return {"by_copilot": run_default_by_copilot(
-                conn, rubric, cfg, workers=workers,
-                session_id=req.session_id, limit=req.limit,
-            )}
+                return {
+                    "judge": f"{family}:{model or '(default)'}",
+                    "rubric_name": rubric.name, **stats.as_dict(),
+                }
+            return {
+                "rubric_name": rubric.name,
+                "by_copilot": run_default_by_copilot(
+                    conn, rubric, cfg, workers=workers,
+                    session_id=req.session_id, limit=req.limit,
+                    only_labelled_by=req.only_labelled_by,
+                ),
+            }
+        except UnknownLabelSourceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+
+    # ── judge validation (#313) ────────────────────────────────────────
+    @app.get("/api/judge/runs")
+    def judge_runs() -> dict[str, Any]:
+        from ..judge import agreement as agr
+
+        conn = db()
+        try:
+            return agr.label_runs(conn)
+        finally:
+            conn.close()
+
+    @app.get("/api/judge/agreement")
+    def judge_agreement(a: str, b: str) -> dict[str, Any]:
+        from ..judge import agreement as agr
+        from ..judge.label_sources import UnknownLabelSourceError
+
+        conn = db()
+        try:
+            return agr.agreement(conn, a, b)
+        except UnknownLabelSourceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         finally:
             conn.close()
 

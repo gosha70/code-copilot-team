@@ -407,6 +407,36 @@ class TestApi(RegistryResetTestCase):
         self.assertFalse(bad["store_reachable"])
         self.assertEqual(bad["counts"]["sessions"], 0)
 
+    def test_judge_runs_and_agreement_over_http(self) -> None:
+        # #313: a named run through the API, listed, and compared.
+        from session_analytics.judge.registry import register_judge
+        from session_analytics.tests.test_judge_validation import _Judge
+
+        register_judge("fakev", lambda model="": _Judge())
+        r = self.client.post("/api/analyze", json={"judge": "fakev:x", "limit": 50})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["rubric_name"], "heuristic-v1")
+        r = self.client.post("/api/analyze", json={
+            "judge": "fakev:x", "limit": 50, "rubric_name": "rerun",
+            "only_labelled_by": "heuristic-v1",
+        })
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["rubric_name"], r.json()["labeled"]), ("rerun", 4))
+        runs = self.client.get("/api/judge/runs").json()
+        self.assertEqual([x["name"] for x in runs["rubrics"]], ["heuristic-v1", "rerun"])
+        # The funnel counts the packaged rubric's run only — a rerun must
+        # not double "Labelled turns".
+        self.assertEqual(self.client.get("/api/pipeline/status").json()["counts"]["labels"], 4)
+        rep = self.client.get("/api/judge/agreement", params={"a": "heuristic-v1", "b": "rubric:rerun"}).json()
+        self.assertEqual(rep["turns_shared"], 4)
+        self.assertEqual(len(rep["labels"]), 9)
+        self.assertEqual(
+            self.client.get("/api/judge/agreement", params={"a": "robot:x", "b": "rerun"}).status_code, 400
+        )
+        self.assertEqual(
+            self.client.post("/api/analyze", json={"judge": "fakev:x", "only_labelled_by": "robot:x"}).status_code, 400
+        )
+
     def test_dashboard_latency(self) -> None:
         r = self.client.get("/api/dashboard/latency")
         self.assertEqual(r.status_code, 200)

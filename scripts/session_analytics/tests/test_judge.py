@@ -88,17 +88,19 @@ class TestRunnerAndKpis(RegistryResetTestCase):
         db = Database.connect(dsn)
         try:
             apply_ddl(db)
+            # 6 turns, 4 with text — the judge is asked about those 4 only
+            # (#313: an empty tool-result turn has nothing to judge).
             stats = run_judge(db, _FakeJudge(), rubric)
-            self.assertEqual(stats.labeled, 6)
-            self.assertEqual(stats.parse_ok, 6)
+            self.assertEqual(stats.labeled, 4)
+            self.assertEqual(stats.parse_ok, 4)
             n = db.query("SELECT COUNT(*) FROM heuristic_label")[0][0]
-            self.assertEqual(n, 6)
+            self.assertEqual(n, 4)
 
             # Re-running labels nothing new (all turns already labeled).
             again = run_judge(db, _FakeJudge(), rubric)
             self.assertEqual(again.labeled, 0)
             n2 = db.query("SELECT COUNT(*) FROM heuristic_label")[0][0]
-            self.assertEqual(n2, 6)
+            self.assertEqual(n2, 4)
         finally:
             db.close()
 
@@ -114,10 +116,10 @@ class TestRunnerAndKpis(RegistryResetTestCase):
                 "avg_interaction_quality FROM session_kpi"
             )[0]
             labeled, corr, autonomy, avg_q = row
-            self.assertEqual(labeled, 6)
-            # Only the first user turn contains 'fix' → 1/6.
-            self.assertAlmostEqual(corr, 1 / 6, places=4)
-            # 3 user (commands) / (3 commands + 0 questions) = 1.0.
+            self.assertEqual(labeled, 4)
+            # Only the first user turn contains 'fix' → 1/4 of the judged turns.
+            self.assertAlmostEqual(corr, 1 / 4, places=4)
+            # 1 user turn with text (a command) / (1 command + 0 questions) = 1.0.
             self.assertAlmostEqual(autonomy, 1.0, places=4)
             self.assertAlmostEqual(avg_q, 4.0, places=4)
         finally:

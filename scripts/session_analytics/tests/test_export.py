@@ -115,7 +115,7 @@ class TestSessionsExport(TestExportBase):
         self.assertIsNotNone(row["cost_usd"])
         self.assertGreater(row["cost_usd"], 0)
         # session_kpi (LEFT JOIN) columns.
-        self.assertEqual(row["kpi_labeled_turn_count"], 6)
+        self.assertEqual(row["kpi_labeled_turn_count"], 4)   # 4 of 6 turns have text
         self.assertIsNotNone(row["kpi_avg_interaction_quality"])
         self.assertAlmostEqual(row["kpi_avg_interaction_quality"], 4.0, places=4)
 
@@ -164,7 +164,7 @@ class TestTurnsExport(TestExportBase):
 class TestLabelsAndKpisExport(TestExportBase):
     def test_labels_columns_and_count(self) -> None:
         rows = _rows_as_dicts(exp.LABELS_COLUMNS, list(exp.rows_for(self.db, C.EXPORT_TABLE_LABELS)))
-        self.assertEqual(len(rows), 6)
+        self.assertEqual(len(rows), 4)   # 4 of 6 fixture turns have text (#313)
         self.assertTrue(all(r["judge_id"] == "fake" for r in rows))
         self.assertTrue(all(r["sentiment"] == "NEUTRAL" for r in rows))
         turn_ids = [r["turn_id"] for r in rows]
@@ -200,7 +200,7 @@ class TestLabelsAndKpisExport(TestExportBase):
     def test_kpis_columns_and_count(self) -> None:
         rows = _rows_as_dicts(exp.KPIS_COLUMNS, list(exp.rows_for(self.db, C.EXPORT_TABLE_KPIS)))
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["labeled_turn_count"], 6)
+        self.assertEqual(rows[0]["labeled_turn_count"], 4)
 
     def test_csv_header_matches_columns(self) -> None:
         for table, columns in (

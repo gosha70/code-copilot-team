@@ -218,6 +218,13 @@ TRANSCRIPT_SOURCE_MIXED = "mixed"
 ANALYSIS_PARSE_MISSING_KEYS = "missing_keys"
 #: The model answered but hit its output cap before closing the document.
 ANALYSIS_PARSE_ANSWER_TRUNCATED = "answer_truncated"
+
+# Judge validation (#313). A "label source" names where labels come
+# from: `rubric:<rubric_name>` (a judge run) or `human:<labeler>`; a bare
+# name means a rubric. The prefixes cross CLI / API / Studio.
+TBL_HUMAN_LABEL = "human_label"
+LABEL_SOURCE_RUBRIC = "rubric"
+LABEL_SOURCE_HUMAN = "human"
 # score.json field keys. These cross the benchmark_runner → session_analytics
 # boundary (run.py writes them; correlate.py reads them), so per the repo's
 # constants rule they live here once — same treatment as RUN_RECORD_* above.
