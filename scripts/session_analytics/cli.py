@@ -123,6 +123,35 @@ def _build_parser() -> argparse.ArgumentParser:
     p_an.add_argument("--overwrite", action="store_true", help="Re-label already-labeled turns.")
     p_an.add_argument("--session-id", type=int, default=None, help="Limit to one session id.")
     p_an.add_argument("--limit", type=int, default=None, help="Max turns to label this run.")
+    p_an.add_argument(
+        "--rubric-name", default=None,
+        help="Write labels under this rubric_name instead of the packaged one, so a "
+             "second run coexists with the first and the two can be compared (#313).",
+    )
+    p_an.add_argument(
+        "--only-labelled-by", default=None, metavar="SOURCE",
+        help="Only turns already labelled by SOURCE — rubric:<name> or human:<labeler> — "
+             "so this run covers the same turns and agreement can be measured.",
+    )
+
+    p_lab = sub.add_parser("labels", help="Judge validation: human-label sample, import, agreement (#313).")
+    p_lab.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    lab_sub = p_lab.add_subparsers(dest="labels_cmd", required=True)
+    p_ls = lab_sub.add_parser("sample", help="Write a CSV of random turns for a person to label.")
+    p_ls.add_argument("--n", type=int, default=50, help="How many turns (default 50).")
+    p_ls.add_argument("--out", required=True, help="CSV path to write.")
+    p_ls.add_argument("--seed", type=int, default=None, help="Random seed for a repeatable draw.")
+    p_ls.add_argument(
+        "--only-labelled-by", default=None, metavar="SOURCE",
+        help="Draw from turns SOURCE (rubric:<name> or human:<labeler>) already labelled.",
+    )
+    p_li = lab_sub.add_parser("import", help="Read a filled-in sample CSV into human_label.")
+    p_li.add_argument("csv", help="The filled-in CSV.")
+    p_li.add_argument("--labeler", required=True, help="Who labelled it (any short name).")
+    lab_sub.add_parser("runs", help="List rubric runs and human labelers that can be compared.")
+    p_la = lab_sub.add_parser("agreement", help="Per-label agreement between two label sources.")
+    p_la.add_argument("a", help="rubric:<name> (or bare name) | human:<labeler>")
+    p_la.add_argument("b", help="rubric:<name> (or bare name) | human:<labeler>")
 
     p_emb = sub.add_parser(
         "embed",
@@ -860,7 +889,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
         print("error: no DSN configured (see --dsn or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
     workers = args.workers if args.workers is not None else cfg.judge.workers
-    rubric = load_rubric()
+    rubric = load_rubric(args.rubric_name)
     try:
         db = Database.connect(cfg.dsn)
         try:
@@ -872,6 +901,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
                 stats = run_judge(
                     db, judge, rubric, workers=workers, overwrite=args.overwrite,
                     session_id=args.session_id, limit=args.limit,
+                    only_labelled_by=args.only_labelled_by,
                 )
                 result = {"judge": f"{family}:{model or '(default)'}", **stats.as_dict()}
             else:
@@ -880,6 +910,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
                 result = {"by_copilot": run_default_by_copilot(
                     db, rubric, cfg, workers=workers, overwrite=args.overwrite,
                     session_id=args.session_id, limit=args.limit,
+                    only_labelled_by=args.only_labelled_by,
                 )}
         finally:
             db.close()
@@ -890,6 +921,43 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
         _log.exception("analyze failed")
         print(f"error: analyze failed: {exc}", file=sys.stderr)
         return C.EXIT_RUNTIME
+    result["rubric_name"] = rubric.name
+    print(json.dumps(result, indent=2))
+    return C.EXIT_OK
+
+
+def _cmd_labels(args: argparse.Namespace) -> int:
+    from .judge import agreement as agr
+    from .judge import human_labels as hl
+    from .judge.label_sources import UnknownLabelSourceError
+    from .relational.db import Database, apply_ddl
+
+    cfg = load_config(dsn=args.dsn)
+    if not cfg.dsn:
+        print("error: no DSN configured (see --dsn or run setup).", file=sys.stderr)
+        return C.EXIT_USAGE
+    try:
+        db = Database.connect(cfg.dsn)
+        try:
+            apply_ddl(db)
+            if args.labels_cmd == "sample":
+                with open(args.out, "w", newline="", encoding="utf-8") as fp:
+                    n = hl.write_sample(
+                        db, fp, n=args.n, seed=args.seed, only_labelled_by=args.only_labelled_by
+                    )
+                result = {"written": n, "out": args.out, "columns": hl.sample_columns()}
+            elif args.labels_cmd == "import":
+                with open(args.csv, newline="", encoding="utf-8") as fp:
+                    result = hl.import_labels(db, fp, labeler=args.labeler)
+            elif args.labels_cmd == "runs":
+                result = agr.label_runs(db)
+            else:
+                result = agr.agreement(db, args.a, args.b)
+        finally:
+            db.close()
+    except (UnknownLabelSourceError, hl.HumanLabelImportError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return C.EXIT_USAGE
     print(json.dumps(result, indent=2))
     return C.EXIT_OK
 
@@ -1182,6 +1250,7 @@ _HANDLERS = {
     "doctor": _cmd_doctor,
     "graph": _cmd_graph,
     "analyze": _cmd_analyze,
+    "labels": _cmd_labels,
     "embed": _cmd_embed,
     "similar": _cmd_similar,
     "clusters": _cmd_clusters,

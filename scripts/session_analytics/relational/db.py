@@ -90,6 +90,7 @@ _DDL_FILES = (
     "ddl/postgres/004_metadata.sql",
     "ddl/postgres/005_heartbeat.sql",
     "ddl/postgres/006_session_analysis.sql",
+    "ddl/postgres/007_human_label.sql",
 )
 # 3: + local_heartbeat (Slice B1, #187)
 # 4: + trace search index (E10 Slice B, #65). NOTE that apply_ddl creates
@@ -99,7 +100,8 @@ _DDL_FILES = (
 #    called from apply_ddl for exactly that reason.
 # 5: + session_analysis (#65 Phase 1) — a new table, so create-if-absent
 #    is the whole migration.
-_SCHEMA_VERSION = 5
+# 6: + human_label (#313, judge validation) — likewise a new table.
+_SCHEMA_VERSION = 6
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",

@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, JudgeModels, PipelineStatus, PipelineStep } from "@/lib/api";
+import { AgreementReport, JudgeRuns, api, JudgeModels, PipelineStatus, PipelineStep } from "@/lib/api";
 import { Card, Stat, formatCost, useApi } from "@/components/ui";
+import JudgeQuality from "@/components/JudgeQuality";
 
 // THE PIPELINE AS A FLOW, not a list of cards.
 //
@@ -142,6 +143,44 @@ export default function AnalysisPage() {
   // "run everything" button must not spend it without being asked.
   const [includeJudge, setIncludeJudge] = useState(false);
   const { data: kpis } = useApi(() => api.dashboard());
+  // #313 judge validation: named runs + the agreement card.
+  const [runName, setRunName] = useState("");
+  const [onlyLabelledBy, setOnlyLabelledBy] = useState("");
+  const [runs, setRuns] = useState<JudgeRuns | null>(null);
+  const [runsError, setRunsError] = useState<string | null>(null);
+  const [cmp, setCmp] = useState<{ a: string; b: string }>({ a: "", b: "" });
+  const [report, setReport] = useState<AgreementReport | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
+
+  const loadRuns = useCallback(async () => {
+    try {
+      const r = await api.judgeRuns();
+      setRuns(r);
+      setRunsError(null);
+      const sources = [...r.rubrics.map((x) => x.source), ...r.humans.map((x) => x.source)];
+      setCmp((c) => ({
+        a: sources.includes(c.a) ? c.a : sources[0] ?? "",
+        b: sources.includes(c.b) && c.b !== (sources.includes(c.a) ? c.a : sources[0]) ? c.b : sources[1] ?? "",
+      }));
+    } catch (e) {
+      setRunsError(String(e));
+    }
+  }, []);
+  useEffect(() => {
+    loadRuns();
+  }, [loadRuns]);
+  useEffect(() => {
+    if (!cmp.a || !cmp.b) return;
+    let live = true;
+    setReport(null);
+    api
+      .judgeAgreement(cmp.a, cmp.b)
+      .then((r) => live && (setReport(r), setReportError(null)))
+      .catch((e) => live && setReportError(String(e)));
+    return () => {
+      live = false;
+    };
+  }, [cmp]);
 
   const refresh = useCallback(async () => {
     try {
@@ -185,7 +224,12 @@ export default function AnalysisPage() {
     setJudgeRunning(true);
     setNote(null);
     try {
-      const r = await api.analyze({ judge: judge || undefined, limit });
+      const r = await api.analyze({
+        judge: judge || undefined,
+        limit,
+        rubric_name: runName.trim() || undefined,
+        only_labelled_by: onlyLabelledBy || undefined,
+      });
       // A WRITTEN ROW IS NOT A LABEL. The runner reports parse_ok and
       // parse_failed separately; reporting only the row count turned 50
       // backend errors into "Labelled 50 turns" with a green check.
@@ -208,6 +252,7 @@ export default function AnalysisPage() {
         );
       }
       refresh();
+      loadRuns();
     } catch (e) {
       setNote(`${String(e)} — is the judge backend reachable?`);
     } finally {
@@ -367,6 +412,32 @@ export default function AnalysisPage() {
               onChange={(e) => setLimit(Number(e.target.value))}
               className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-20"
             />
+            {/* #313: a run name keeps this run apart from the packaged
+                one; "only turns labelled by" makes it cover the same
+                turns so the two can be compared below. */}
+            <label className="text-xs text-slate-500">Run name</label>
+            <input
+              type="text"
+              value={runName}
+              placeholder="heuristic-v1"
+              onChange={(e) => setRunName(e.target.value)}
+              className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-36"
+              title="Write labels under this rubric name; blank = the packaged rubric"
+            />
+            <label className="text-xs text-slate-500">Only turns labelled by</label>
+            <select
+              value={onlyLabelledBy}
+              onChange={(e) => setOnlyLabelledBy(e.target.value)}
+              className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm"
+            >
+              <option value="">any unlabelled turn</option>
+              {runs?.rubrics.map((r) => (
+                <option key={r.source} value={r.source}>run {r.name}</option>
+              ))}
+              {runs?.humans.map((h) => (
+                <option key={h.source} value={h.source}>human {h.labeler}</option>
+              ))}
+            </select>
           </div>
         )}
 
@@ -427,6 +498,17 @@ export default function AnalysisPage() {
         <p className="text-sm bg-slate-50 border border-slate-200 rounded p-2">
           {note}
         </p>
+      )}
+
+      {step.id === "judge" && (
+        <JudgeQuality
+          runs={runs}
+          report={report}
+          a={cmp.a}
+          b={cmp.b}
+          onSelect={(a, b) => setCmp({ a, b })}
+          error={runsError || reportError}
+        />
       )}
     </div>
   );

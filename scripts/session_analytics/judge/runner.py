@@ -14,6 +14,7 @@ from typing import Optional, Sequence
 
 from ..relational.db import Database
 from .contracts import Rubric, TurnContext, TurnJudge, TurnLabels
+from .label_sources import label_source_join
 
 _log = logging.getLogger(__name__)
 
@@ -38,9 +39,15 @@ def run_judge(
     session_id: Optional[int] = None,
     copilot: Optional[str] = None,
     limit: Optional[int] = None,
+    only_labelled_by: Optional[str] = None,
 ) -> JudgeStats:
+    """``only_labelled_by`` (#313) restricts the run to turns that already
+    carry labels from another source — `rubric:<name>` or
+    `human:<labeler>` — so a second run labels the SAME turns as the
+    first and the two can be compared pair by pair."""
     contexts = _select_turns(
-        db, rubric, overwrite=overwrite, session_id=session_id, copilot=copilot, limit=limit
+        db, rubric, overwrite=overwrite, session_id=session_id, copilot=copilot,
+        limit=limit, only_labelled_by=only_labelled_by,
     )
     stats = JudgeStats()
     if not contexts:
@@ -77,16 +84,26 @@ def _select_turns(
     session_id: Optional[int],
     copilot: Optional[str] = None,
     limit: Optional[int] = None,
+    only_labelled_by: Optional[str] = None,
 ) -> list[TurnContext]:
     where = []
     params: list = [rubric.name]
     join = "LEFT JOIN heuristic_label h ON h.turn_id = t.id AND h.rubric_name = ?"
+    if only_labelled_by:
+        source_join, source_params = label_source_join(only_labelled_by, "t")
+        join += " " + source_join
+        params += list(source_params)
     if copilot is not None:
         join += " JOIN copilot_session s ON s.id = t.session_id"
         where.append("s.copilot = ?")
         params.append(copilot)
     if not overwrite:
         where.append("h.id IS NULL")
+    # A turn with no text (a tool-result turn under redaction) gives the
+    # judge nothing to judge: under the old prompt it answered "false"
+    # for everything, which inflated agreement; under the new one it
+    # answers null. Either way the call is wasted — skip it (#313).
+    where.append("t.content_preview IS NOT NULL AND t.content_preview <> ''")
     if session_id is not None:
         where.append("t.session_id = ?")
         params.append(session_id)
@@ -161,6 +178,7 @@ def run_default_by_copilot(
     overwrite: bool = False,
     session_id: Optional[int] = None,
     limit: Optional[int] = None,
+    only_labelled_by: Optional[str] = None,
 ) -> dict:
     """Route each copilot's turns to its configured judge (the path taken
     when no explicit ``--judge`` is given). The packaged default routes every
@@ -176,7 +194,7 @@ def run_default_by_copilot(
         stats = run_judge(
             db, judge, rubric,
             workers=workers, overwrite=overwrite, session_id=session_id,
-            copilot=copilot, limit=limit,
+            copilot=copilot, limit=limit, only_labelled_by=only_labelled_by,
         )
         out[copilot] = {"judge": f"{backend}:{model or '(default)'}", **stats.as_dict()}
     return out

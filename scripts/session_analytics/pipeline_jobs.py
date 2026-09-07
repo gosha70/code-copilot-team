@@ -28,6 +28,7 @@ from typing import Any, Callable, Optional
 from . import constants as C
 from .config import load_config
 from .judge.contracts import PARSE_OK
+from .judge.rubric import load_rubric
 from .relational.db import Database, apply_ddl
 from .session_filter import keep_clause, noise_clause
 
@@ -223,12 +224,15 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
             # judge was ATTEMPTED, not that anything was labelled.
             # Counting rows made 50 backend failures look like 50
             # labelled turns and put a green check on the step.
+            # The packaged rubric's run only (#313): a validation re-run
+            # under another name must not double the funnel's count.
+            rubric_name = load_rubric().name
             counts["labels"] = int(
                 (
                     db.query_one(
                         f"SELECT COUNT(*) FROM {C.TBL_HEURISTIC_LABEL} "
-                        f"WHERE parse_status = ?",
-                        (PARSE_OK,),
+                        f"WHERE parse_status = ? AND rubric_name = ?",
+                        (PARSE_OK, rubric_name),
                     )
                     or (0,)
                 )[0]
@@ -238,8 +242,8 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
                 (
                     db.query_one(
                         f"SELECT COUNT(*) FROM {C.TBL_HEURISTIC_LABEL} "
-                        f"WHERE parse_status <> ?",
-                        (PARSE_OK,),
+                        f"WHERE parse_status <> ? AND rubric_name = ?",
+                        (PARSE_OK, rubric_name),
                     )
                     or (0,)
                 )[0]

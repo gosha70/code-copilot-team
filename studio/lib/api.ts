@@ -882,6 +882,33 @@ export interface TraceHit {
   snippet: string;
 }
 
+// ── #313 judge validation ─────────────────────────────────────────────
+export interface JudgeRuns {
+  rubrics: { source: string; name: string; turns: number; first: string | null; last: string | null; judge: string }[];
+  humans: { source: string; labeler: string; turns: number; first: string | null; last: string | null }[];
+  min_pairs: number;
+}
+export interface LabelAgreement {
+  label: string;
+  n: number;
+  agreement: number | null;
+  kappa: number | null;
+  a_true: number;
+  b_true: number;
+  sufficient: boolean;
+}
+export interface AgreementReport {
+  a: string;
+  b: string;
+  turns_a: number;
+  turns_b: number;
+  turns_shared: number;
+  min_pairs: number;
+  labels: LabelAgreement[];
+  sentiment: { n: number; exact: number | null; sufficient: boolean };
+  interaction_quality: { n: number; within_1: number | null; exact: number | null; sufficient: boolean };
+  basis: string;
+}
 export interface JudgeModels {
   reachable: boolean;
   url: string;
@@ -993,8 +1020,22 @@ export const api = {
       sessions?: number | null;
       dialect?: string;
     }>("/api/settings/test-connection", { dsn }),
-  analyze: (body: { judge?: string; limit?: number; session_id?: number }) =>
-    post<{ judge?: string; by_copilot?: Record<string, unknown> }>("/api/analyze", body),
+  analyze: (body: {
+    judge?: string;
+    limit?: number;
+    session_id?: number;
+    rubric_name?: string;
+    only_labelled_by?: string;
+  }) =>
+    post<{ judge?: string; rubric_name: string; labeled?: number; by_copilot?: Record<string, unknown> }>(
+      "/api/analyze",
+      body,
+    ),
+  judgeRuns: () => get<JudgeRuns>("/api/judge/runs"),
+  judgeAgreement: (a: string, b: string) =>
+    get<AgreementReport>(
+      `/api/judge/agreement?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`,
+    ),
   // routing-shadow (#261): read-only shadow-mode surfaces.
   routingEvidence: () =>
     get<{ sets: RoutingEvidenceEntry[] }>("/api/routing/evidence"),

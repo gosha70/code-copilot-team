@@ -144,7 +144,7 @@ class TestPerCopilotRouting(RegistryResetTestCase):
             apply_ddl(db)
             result = run_default_by_copilot(db, load_rubric(), cfg)
             self.assertIn("claude-code", result)
-            self.assertEqual(result["claude-code"]["labeled"], 6)
+            self.assertEqual(result["claude-code"]["labeled"], 4)   # 4 of 6 turns have text (#313)
             self.assertTrue(result["claude-code"]["judge"].startswith("claude-code:"))
         finally:
             db.close()

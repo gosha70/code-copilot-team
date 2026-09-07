@@ -441,13 +441,15 @@ def benchmark_outcomes(db: Database) -> dict[str, Any]:
 
 
 def label_distribution(
-    db: Database, rubric_name: str = "heuristic-v1", noise: Optional[NoiseConfig] = None,
+    db: Database, rubric_name: Optional[str] = None, noise: Optional[NoiseConfig] = None,
 ) -> dict[str, Any]:
     """Per-bool-label true-counts across labeled turns of the sessions
-    worth counting (#307)."""
+    worth counting (#307), for one rubric run — the packaged rubric's
+    unless named (#313)."""
     from ..judge.rubric import load_rubric
 
     rubric = load_rubric()
+    rubric_name = rubric_name or rubric.name
     keep_sql, keep_params = keep_clause(noise, "s") if noise else ("1=1", ())
     out = []
     for label in rubric.bool_labels:
