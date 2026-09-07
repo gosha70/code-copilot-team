@@ -54,6 +54,17 @@ class GraphDatabase:
             return self.conn.execute(statement, parameters=dict(params))
         return self.conn.execute(statement)
 
+    def copy_from(self, table: str, csv_path: str) -> None:
+        """Bulk-load ``table`` from a CSV written by ``builder``'s writer:
+        header row, every field quoted, quotes and backslashes escaped
+        with a backslash, no newlines inside fields (Kùzu's parallel
+        reader refuses quoted newlines — captured on 0.11.3). COPY
+        appends, and a duplicate primary key aborts the whole statement,
+        so callers dedupe keys before writing."""
+        path = str(csv_path).replace("'", "''")
+        # The Cypher literal must read ESCAPE='\\' (two characters).
+        self.execute(f"COPY {table} FROM '{path}' (HEADER=true, ESCAPE='\\\\')")
+
     def close(self) -> None:
         # Kùzu releases resources on GC; explicit drop of references helps
         # release the single-writer lock promptly.
