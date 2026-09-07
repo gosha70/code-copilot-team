@@ -147,8 +147,29 @@ and opens the browser:
 ./scripts/session-analytics start
 ```
 
-Stop with Ctrl+C. The API binds to localhost only; the Studio talks to it
-at `http://127.0.0.1:8765` (override with `NEXT_PUBLIC_API_BASE`).
+Stop with Ctrl+C. The API binds to localhost only.
+
+### 4.1 Ports
+
+The defaults are 8765 for the API and 3000 for the Studio. Both are
+flags, and `serve` wires them together: the Studio is told where the
+API is, and the API's origin allowlist is told where the Studio is.
+
+```bash
+./scripts/session-analytics serve --api-port 8766 --ui-port 3001    # then open http://localhost:3001
+./scripts/session-analytics start --api-port 8766 --ui-port 3001    # same flags on start
+```
+
+If `serve` fails with "address already in use", something is holding a
+default port — often an earlier `serve` that was never stopped. See who:
+
+```bash
+lsof -nP -iTCP:8765 -iTCP:3000 -sTCP:LISTEN
+```
+
+Stop it (`kill <pid>`) or start on other ports. Running the Studio by
+hand (`cd studio && npm run dev`) needs `NEXT_PUBLIC_API_BASE` set to the
+API's address when it is not the default.
 
 ---
 
@@ -338,6 +359,7 @@ docker compose -f scripts/session_analytics/docker-compose.yml up -d
 | Timeline says "preview only" | The project is not opted into the archive. | §5.3. |
 | Sessions page is empty but the store has data | Everything matched the noise rule. | Tick **Show excluded**, or relax `CCT_SA_NOISE_*`. |
 | Dashboard "Median agent response" is "—" | No turn carries a timestamp on both sides (Aider transcripts have none per turn). | Expected; the measured-n note says how many turns were measured. |
+| `serve` fails: "address already in use" | A default port is held — usually an earlier `serve` still running. | `lsof -nP -iTCP:8765 -iTCP:3000 -sTCP:LISTEN`, stop it, or `serve --api-port 8766 --ui-port 3001` (§4.1). |
 | Studio pages stuck on "Loading…" after `npm install` | The dev server's cache predates the install. | Restart `serve`. |
 | CodeQL / CI mentions `fs/browse` | The Settings path picker is a deliberate local directory browser, loopback-only. | Nothing; it is by design. |
 
