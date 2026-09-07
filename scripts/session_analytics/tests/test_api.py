@@ -392,6 +392,21 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(detail["prerequisite"], "graph")
         self.assertIn("CCT_SA_KUZU_PATH", detail["guidance"])
 
+    def test_pipeline_status_says_when_the_store_did_not_answer(self) -> None:
+        # Zero counts from an unreachable store are not "0 sessions".
+        from fastapi.testclient import TestClient
+
+        from session_analytics.api.server import create_app
+
+        good = self.client.get("/api/pipeline/status").json()
+        self.assertTrue(good["store_reachable"])
+        bad = TestClient(
+            create_app("sqlite:////nonexistent-dir/for-sure/x.db"),
+            base_url="http://127.0.0.1:8765",
+        ).get("/api/pipeline/status").json()
+        self.assertFalse(bad["store_reachable"])
+        self.assertEqual(bad["counts"]["sessions"], 0)
+
     def test_dashboard_latency(self) -> None:
         r = self.client.get("/api/dashboard/latency")
         self.assertEqual(r.status_code, 200)

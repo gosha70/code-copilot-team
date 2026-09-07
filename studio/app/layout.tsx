@@ -11,7 +11,8 @@ export const metadata: Metadata = {
 // #307: only pages that answer a question a person has. Clusters
 // renders under Graph (its route stays for deep links); Routing is a
 // card on Benchmark (both are benchmark-derived, /routing stays); the
-// client-side Agents stub is gone — a real catalogue lands with Learn.
+// client-side Agents stub is gone — Learn (#309) carries the real
+// catalogue of docs, skills and agents from the repo itself.
 const TABS = [
   { href: "/", label: "Dashboard" },
   { href: "/sessions", label: "Sessions" },
@@ -19,6 +20,7 @@ const TABS = [
   { href: "/graph", label: "Graph" },
   { href: "/analysis", label: "Analysis" },
   { href: "/benchmark", label: "Benchmark" },
+  { href: "/learn", label: "Learn" },
   { href: "/settings", label: "Settings" },
 ];
 

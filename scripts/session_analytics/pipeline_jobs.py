@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import traceback
@@ -29,6 +30,8 @@ from .config import load_config
 from .judge.contracts import PARSE_OK
 from .relational.db import Database, apply_ddl
 from .session_filter import keep_clause, noise_clause
+
+_log = logging.getLogger(__name__)
 
 #: Ordered, because that IS the pipeline: each step consumes what the
 #: previous one produced.
@@ -192,6 +195,9 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
         "sessions": 0, "excluded_noise": 0, "labels": 0, "label_failures": 0,
         "kpis": 0, "graph_nodes": 0,
     }
+    # Zero counts from a store that did not answer are not a measurement.
+    # The flag lets a page say "not reachable" instead of "0 sessions".
+    store_reachable = False
     try:
         db = Database.connect(dsn)
         try:
@@ -242,10 +248,11 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
             counts["kpis"] = int(
                 (db.query_one("SELECT COUNT(*) FROM session_kpi") or (0,))[0] or 0
             )
+            store_reachable = True
         finally:
             db.close()
-    except Exception:  # noqa: BLE001 — an unreachable store means "nothing done"
-        pass
+    except Exception as exc:  # noqa: BLE001 — an unreachable store means "nothing done"
+        _log.warning("pipeline status: store not reachable: %s", exc)
 
     # NEVER OPEN THE GRAPH WHILE IT IS BEING BUILT. Kùzu is
     # single-writer, and this function is polled every couple of seconds
@@ -320,5 +327,6 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
             for step in STEPS
         ],
         "counts": counts,
+        "store_reachable": store_reachable,
         "all": job_state(STEP_ALL),
     }

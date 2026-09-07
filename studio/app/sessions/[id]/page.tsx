@@ -318,6 +318,9 @@ function Analysis({ id, kind }: { id: number; kind: AnalysisKind }) {
   // installed Ollama models as a per-run choice. "" = configured.
   const [models, setModels] = useState<JudgeModels | null>(null);
   const [judge, setJudge] = useState("");
+  // Learn index for the finding → guide links; the panel renders without
+  // it, the badges just stay plain until it arrives.
+  const learn = useApi(() => api.docs(), []);
 
   useEffect(() => {
     api
@@ -413,6 +416,7 @@ function Analysis({ id, kind }: { id: number; kind: AnalysisKind }) {
         state={state}
         judge={judge || meta.judge}
         onRun={run}
+        learnLinks={learn.data?.finding_links}
       />
     </div>
   );

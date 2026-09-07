@@ -11,11 +11,13 @@
     "states-check": "node scripts/states-check.mjs"
   },
   "dependencies": {
+    "cytoscape": "3.30.2",
+    "cytoscape-fcose": "2.2.0",
     "next": "15.5.20",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "cytoscape": "3.30.2",
-    "cytoscape-fcose": "2.2.0"
+    "react-markdown": "9.1.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@types/cytoscape": "3.21.8",

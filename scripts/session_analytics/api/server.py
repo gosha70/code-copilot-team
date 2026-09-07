@@ -875,6 +875,34 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         finally:
             conn.close()
 
+    # ── Learn center (#309): the repo's own docs, from a closed allowlist ─
+    @app.get("/api/docs")
+    def docs_index() -> dict[str, Any]:
+        from . import docs as learn
+
+        return learn.index()
+
+    @app.get("/api/docs/image/{name}")
+    def docs_image(name: str):
+        from starlette.responses import FileResponse
+
+        from . import docs as learn
+
+        try:
+            path, media = learn.image_file(name)
+        except learn.UnknownImageError:
+            raise HTTPException(status_code=404, detail="unknown image") from None
+        return FileResponse(path, media_type=media)
+
+    @app.get("/api/docs/{slug}")
+    def docs_document(slug: str) -> dict[str, Any]:
+        from . import docs as learn
+
+        try:
+            return learn.document(slug)
+        except learn.UnknownDocError:
+            raise HTTPException(status_code=404, detail="unknown document") from None
+
     @app.get("/api/resources/recent-errors")
     def recent_errors() -> dict[str, Any]:
         conn = db()

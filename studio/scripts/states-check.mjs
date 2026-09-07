@@ -73,6 +73,7 @@ try {
         join(STUDIO, "components/DevelopersPanel.tsx"),
         join(STUDIO, "components/DashboardCards.tsx"),
         join(STUDIO, "lib/paths.ts"),
+        join(STUDIO, "lib/docLinks.ts"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -674,6 +675,53 @@ try {
   if (paths.pathFromValue("sqlite:////Users/x/a.db") !== "/Users/x/a.db") fail("pathFromValue does not strip the sqlite scheme");
   else if (paths.pathFromValue("/plain/dir") !== "/plain/dir") fail("pathFromValue changes a plain path");
   else console.log("  ok  picker start path strips the DSN scheme");
+
+  // ── #309 Learn center: link + image resolution over the real link forms
+  const dl = await import(pathToFileURL(join(out, "lib/docLinks.js")));
+  console.log("\nlearn links (#309):");
+  const slugs = {
+    "README.md": "README",
+    "adapters/claude-code/docs/hooks-guide.md": "adapters--claude-code--docs--hooks-guide",
+    "adapters/claude-code/docs/agent-traces.md": "adapters--claude-code--docs--agent-traces",
+    "shared/capabilities/COMPATIBILITY.md": "shared--capabilities--COMPATIBILITY",
+  };
+  const repo = "https://github.com/x/y";
+  const cases = [
+    // [href, from, expected kind, expected href]
+    ["adapters/claude-code/docs/hooks-guide.md", "README.md", "learn", "/learn/adapters--claude-code--docs--hooks-guide"],
+    ["agent-traces.md", "adapters/claude-code/docs/hooks-guide.md", "learn", "/learn/adapters--claude-code--docs--agent-traces"],
+    ["../README.md#quick-start", "docs/developer-cookbook.md", "learn", "/learn/README#quick-start"],
+    ["../../../shared/capabilities/COMPATIBILITY.md", "adapters/pi/docs/quickstart.md", "learn", "/learn/shared--capabilities--COMPATIBILITY"],
+    ["specs/pi-harness-adoption/lessons-learned.md", "README.md", "external", `${repo}/blob/master/specs/pi-harness-adoption/lessons-learned.md`],
+    ["#documentation", "README.md", "anchor", "#documentation"],
+    ["https://example.com/x", "README.md", "external", "https://example.com/x"],
+  ];
+  for (const [href, from, kind, expected] of cases) {
+    const r = dl.resolveDocLink(href, from, slugs, repo, "master");
+    if (r.kind !== kind || r.href !== expected) {
+      fail(`resolveDocLink(${href} from ${from}) → ${r.kind} ${r.href}, expected ${kind} ${expected}`);
+    } else {
+      console.log(`  ok  ${href} from ${from} → ${kind}`);
+    }
+  }
+  const imgCases = [
+    ["images/mapatlas-claude-demo.jpg", "docs/mapatlas-harness-experiment.md", "http://api/api/docs/image/mapatlas-claude-demo.jpg"],
+    ["docs/images/configuration-layers.png", "README.md", "http://api/api/docs/image/configuration-layers.png"],
+    ["/docs/images/CCT_LOGO.png", "README.md", "http://api/api/docs/image/CCT_LOGO.png"],
+    ["shots/x.png", "adapters/pi/docs/quickstart.md", `${repo}/raw/master/adapters/pi/docs/shots/x.png`],
+    ["https://cdn.example/x.png", "README.md", "https://cdn.example/x.png"],
+  ];
+  for (const [src, from, expected] of imgCases) {
+    const got = dl.resolveDocImage(src, from, "http://api", "/api/docs/image/", "docs/images", repo, "master");
+    if (got !== expected) fail(`resolveDocImage(${src} from ${from}) → ${got}, expected ${expected}`);
+    else console.log(`  ok  image ${src} from ${from}`);
+  }
+  const toc = dl.tableOfContents("# Title\n```sh\n# not a heading\n```\n## Quick Start\n## Quick Start\n### `code` head");
+  const ids = toc.map((h) => h.id).join(",");
+  const lines = toc.map((h) => h.line).join(",");
+  if (ids !== "title,quick-start,quick-start-1,code-head") fail(`toc ids were ${ids}`);
+  else if (lines !== "1,5,6,7") fail(`toc lines were ${lines}`);
+  else console.log("  ok  toc skips fenced code, dedupes repeats, and carries source lines");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

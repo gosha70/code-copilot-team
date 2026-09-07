@@ -1,7 +1,7 @@
 // Typed client for the session-analytics FastAPI backend.
 // The Studio is pure presentation — it never touches a DB directly.
 
-const BASE =
+export const BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8765";
 
 async function get<T>(path: string): Promise<T> {
@@ -268,6 +268,37 @@ export interface PhaseProcessReport {
   any_history_may_be_truncated: boolean;
   absence_note: string;
   source_root_configured: boolean;
+}
+// ── #309 Learn center ─────────────────────────────────────────────────
+export interface DocEntry {
+  slug: string;
+  /** Repo-relative POSIX path — the client resolves cross-doc links against it. */
+  path: string;
+  section: string;
+  kind: "doc" | "wiki" | "skill" | "agent";
+  title: string;
+  description: string;
+  page_type: string | null;
+  generated: boolean;
+}
+export interface DocSection {
+  id: string;
+  title: string;
+  kind: DocEntry["kind"];
+  entries: DocEntry[];
+}
+export interface DocsIndex {
+  sections: DocSection[];
+  intents: { id: string; title: string; blurb: string; slug: string }[];
+  /** finding category / lever → slug, or "section:<id>". */
+  finding_links: Record<string, string>;
+  repo_url: string;
+  repo_branch: string;
+  image_route: string;
+}
+export interface DocPayload extends DocEntry {
+  frontmatter: Record<string, string>;
+  body: string;
 }
 export interface GraphExpand {
   label: string;
@@ -835,6 +866,9 @@ export interface PipelineStatus {
     /** Sessions the noise rule excluded from `sessions` (#307). */
     excluded_noise: number;
   };
+  /** False when the store did not answer: the counts above are then
+   *  zeros from a failed measurement, not an empty store. */
+  store_reachable: boolean;
 }
 
 // Ranked full-text search over archived trace text (#65 slice B).
@@ -899,6 +933,8 @@ export const api = {
       `/api/labels/${encodeURIComponent(label)}/traces?limit=${limit}`,
     ),
   health: () => get<{ status: string }>("/api/health"),
+  docs: () => get<DocsIndex>("/api/docs"),
+  doc: (slug: string) => get<DocPayload>(`/api/docs/${encodeURIComponent(slug)}`),
   graphExpand: (label: string, keyField: string, keyValue: string) =>
     get<GraphExpand>(
       `/api/graph/expand?label=${encodeURIComponent(label)}&key_field=${encodeURIComponent(keyField)}&key_value=${encodeURIComponent(keyValue)}`,
