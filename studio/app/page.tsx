@@ -15,6 +15,7 @@ import {
 import DevelopersPanel from "@/components/DevelopersPanel";
 import {
   CostByOutcomeCard,
+  EmptyStore,
   FailedCard,
   LabelDistributionCard,
   LatencyStat,
@@ -36,11 +37,54 @@ export default function DashboardPage() {
   const labels = useApi(() => api.labels(), [], REFRESH_MS);
   const errors = useApi(() => api.recentErrors(), [], REFRESH_MS);
   const phases = useApi(() => api.phaseProcess(), []);
+  // Only read when the store is empty: the ingest step's blurb says which
+  // folders "Load sessions" would read, and store_reachable says whether
+  // zeros are a measurement at all.
+  const status = useApi(() => api.pipelineStatus(), [], REFRESH_MS);
   if (loading) return <Loading />;
   if (error || !data) return <ErrorNote error={error || "no data"} />;
 
   const maxTool = Math.max(1, ...data.tool_usage.map((t) => t.count));
   const maxCopilot = Math.max(1, ...data.by_copilot.map((c) => c.sessions));
+  const empty = data.totals.sessions === 0;
+  const ingestBlurb =
+    status.data?.steps.find((s) => s.id === "ingest")?.blurb.match(/Reading from — [^.]*/)?.[0] ??
+    null;
+
+  if (empty) {
+    // A page of empty charts tells a new user nothing; one card that
+    // says what to do next does. The stat row stays — the zeros and
+    // the "excluded as noise" note are honest — and the charts wait.
+    return (
+      <div className="space-y-6">
+        <div className="flex items-baseline gap-2">
+          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <span className="text-slate-400 text-xs">
+            Auto-refreshing every {REFRESH_MS / 1000}s
+          </span>
+        </div>
+        <EmptyStore
+          excludedNoise={data.totals.excluded_noise}
+          sources={ingestBlurb}
+          storeReachable={status.data ? status.data.store_reachable : null}
+        />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Stat
+            label="Sessions"
+            value={0}
+            note={
+              data.totals.excluded_noise > 0
+                ? `${data.totals.excluded_noise.toLocaleString()} excluded as noise`
+                : undefined
+            }
+          />
+          <Stat label="Turns" value={0} />
+          <Stat label="Tool calls" value={0} />
+          <Stat label="Errors" value={0} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

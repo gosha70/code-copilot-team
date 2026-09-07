@@ -45,6 +45,93 @@ export function FailedCard({ title, error }: { title: string; error: string }) {
   );
 }
 
+// ── "Why is everything zero, and what do I do?" ──────────────────────
+// A new user's first screen. Zero is not a dashboard; it is a doorway,
+// and the doorway must say where it leads. Two different situations
+// look identical as zeros: nothing has been loaded yet, or sessions
+// were loaded and every one of them is excluded as noise.
+export function EmptyStore({
+  excludedNoise,
+  sources,
+  storeReachable,
+}: {
+  excludedNoise: number;
+  /** The ingest step's "Reading from — …" sentence, when known. */
+  sources: string | null;
+  storeReachable: boolean | null;
+}) {
+  if (storeReachable === false) {
+    return (
+      <Card title="Nothing to show yet">
+        <p className="text-sm text-slate-700">
+          The database is not reachable, so these zeros are not a measurement.
+        </p>
+        <p className="text-sm text-slate-600 mt-2">
+          Check the <Link href="/settings" className="text-blue-700 hover:underline">Database setting</Link>{" "}
+          — the API reports which store it is actually using there.
+        </p>
+      </Card>
+    );
+  }
+  if (excludedNoise > 0) {
+    return (
+      <Card title="Nothing to show yet">
+        <p className="text-sm text-slate-700">
+          {excludedNoise.toLocaleString()} session{excludedNoise === 1 ? " is" : "s are"} in the
+          store, but {excludedNoise === 1 ? "it is" : "all of them are"} excluded as noise — a
+          probe run, a temp directory, or too short to mean anything.
+        </p>
+        <ul className="text-sm text-slate-600 mt-2 space-y-1 list-disc pl-5">
+          <li>
+            To see {excludedNoise === 1 ? "it" : "them"} anyway:{" "}
+            <Link href="/sessions" className="text-blue-700 hover:underline">Sessions</Link> →
+            tick <em>Show excluded</em>.
+          </li>
+          <li>
+            To load your real sessions:{" "}
+            <Link href="/analysis" className="text-blue-700 hover:underline">Analysis</Link> →
+            <em> Load sessions</em>
+            {sources ? ` (${sources.replace(/^Reading from — /, "reads ")})` : ""}.
+          </li>
+          <li>
+            If this store is the wrong one: the{" "}
+            <Link href="/settings" className="text-blue-700 hover:underline">Database setting</Link>{" "}
+            names the file the app is reading.
+          </li>
+        </ul>
+      </Card>
+    );
+  }
+  return (
+    <Card title="Nothing to show yet">
+      <p className="text-sm text-slate-700">
+        No sessions have been loaded into this database.
+      </p>
+      <ol className="text-sm text-slate-600 mt-2 space-y-1 list-decimal pl-5">
+        <li>
+          Open <Link href="/analysis" className="text-blue-700 hover:underline">Analysis</Link> and
+          press <em>Load sessions</em>
+          {sources ? ` — it ${sources.replace(/^Reading from — /, "reads ")}` : ""}.
+        </li>
+        <li>
+          Come back here; the numbers fill in as sessions load (this page refreshes itself).
+        </li>
+        <li>
+          Then <em>Build knowledge graph</em> and, optionally, the <em>LLM judge</em> — the same
+          page, in order.
+        </li>
+      </ol>
+      <p className="text-xs text-slate-500 mt-3">
+        Or from a terminal: <code>./scripts/session-analytics ingest</code>. The{" "}
+        <Link href="/learn/docs--session-analytics-cookbook" className="text-blue-700 hover:underline">
+          cookbook
+        </Link>{" "}
+        walks through configuring and using the tool.
+      </p>
+    </Card>
+  );
+}
+
 // ── "How fast does the agent answer?" ────────────────────────────────
 export function LatencyStat({
   data,

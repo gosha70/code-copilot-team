@@ -300,8 +300,11 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
         sources = []
 
     done = {
-        # Ingest HAS run if anything is in the store, noise included.
-        STEP_INGEST: counts["sessions"] + counts["excluded_noise"] > 0,
+        # "Done" means the user has something to look at. A store holding
+        # only noise (a probe run, a demo row) shows "Re-run load sessions"
+        # to someone who has loaded nothing — the step is not done until
+        # a session worth counting is in.
+        STEP_INGEST: counts["sessions"] > 0,
         STEP_GRAPH: graph_built and counts["graph_nodes"] > 0,
         STEP_JUDGE: counts["labels"] > 0,
         STEP_KPIS: counts["kpis"] > 0,

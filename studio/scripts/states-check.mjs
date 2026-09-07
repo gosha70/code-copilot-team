@@ -664,6 +664,20 @@ try {
     else console.log(`  ok  empty ${name} card still annotates a failed refresh`);
   }
 
+  // Empty store: zeros are a doorway, and the card says where it leads —
+  // differently for "nothing loaded", "everything excluded as noise", and
+  // "the store did not answer".
+  const emptyNone = render(cards.EmptyStore, { excludedNoise: 0, sources: "Reading from — claude-code: ~/.claude/projects", storeReachable: true });
+  if (!/No sessions have been loaded/.test(emptyNone) || !/href="\/analysis"/.test(emptyNone)) fail("empty store (nothing loaded) does not point at Analysis → Load sessions");
+  else if (!/reads claude-code/.test(emptyNone)) fail("empty store does not say what Load sessions would read");
+  else console.log("  ok  empty store → Analysis → Load sessions, with the source folders");
+  const emptyNoise = render(cards.EmptyStore, { excludedNoise: 1, sources: null, storeReachable: true });
+  if (!/excluded as noise/.test(emptyNoise) || !/href="\/sessions"/.test(emptyNoise) || !/Show excluded/.test(emptyNoise)) fail("all-noise store does not explain the exclusion or point at the toggle");
+  else console.log("  ok  all-noise store explains the exclusion and points at Show excluded");
+  const emptyDown = render(cards.EmptyStore, { excludedNoise: 0, sources: null, storeReachable: false });
+  if (!/not reachable/.test(emptyDown) || /No sessions have been loaded/.test(emptyDown)) fail("unreachable store presented as an empty one");
+  else console.log("  ok  unreachable store is not presented as empty");
+
   // Helpers (F10, F12, F15).
   const de = ui.describeError;
   if (de(new TypeError("Failed to fetch")) !== "The API is not reachable.") fail("describeError leaks 'Failed to fetch'");

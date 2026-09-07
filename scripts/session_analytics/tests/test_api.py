@@ -327,8 +327,8 @@ class TestApi(RegistryResetTestCase):
         kpis = self.client.get("/api/dashboard/kpis").json()["totals"]
         self.assertEqual(kpis["sessions"], 1)
         self.assertEqual(kpis["excluded_noise"], 1)
-        status = self.client.get("/api/pipeline/status").json()["counts"]
-        self.assertEqual((status["sessions"], status["excluded_noise"]), (1, 1))
+        status = self.client.get("/api/pipeline/status").json()
+        self.assertEqual((status["counts"]["sessions"], status["counts"]["excluded_noise"]), (1, 1))
         effort = self.client.get("/api/predict/effort").json()
         self.assertEqual(effort["sessions"], 1)
         # Every other dashboard source excludes the same session: give the
@@ -367,6 +367,23 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(cost["by_sentiment"], [])
         labels = self.client.get("/api/dashboard/labels").json()["labels"]
         self.assertEqual(sum(l["total"] for l in labels), 0)
+        # A store with only noise is NOT "done" loading: the probe alone
+        # would show "Re-run load sessions" to someone who loaded nothing.
+        from session_analytics.relational.db import Database as _Db
+
+        conn = _Db.connect(self.dsn)
+        try:
+            conn.execute(
+                "UPDATE copilot_session SET project_path = ? WHERE id <> ?",
+                ("/tmp/cct-probe.demo", probe_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        status = self.client.get("/api/pipeline/status").json()
+        ingest = next(s for s in status["steps"] if s["id"] == "ingest")
+        self.assertEqual((status["counts"]["sessions"], status["counts"]["excluded_noise"]), (0, 2))
+        self.assertFalse(ingest["done"])
 
     def test_graph_node_counts_unopenable_store_is_503_with_guidance(self) -> None:
         # A kuzu path that is a directory (a real misconfiguration seen
