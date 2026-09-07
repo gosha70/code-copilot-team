@@ -66,7 +66,7 @@ STEP_BLURBS = {
     # to check before pressing a button that writes to their store.
     STEP_INGEST: "Read copilot transcripts into the database.",
     STEP_GRAPH: "Build the Kùzu graph the Graph and Clusters tabs read.",
-    STEP_JUDGE: "Label each turn with an LLM. Optional — everything else works without it.",
+    STEP_JUDGE: "Label each turn with the judge configured under Settings → LLM-as-Judge.",
     STEP_KPIS: "Roll the labels up into per-session KPIs.",
 }
 
@@ -374,7 +374,9 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
                     )
                 ),
                 "done": done[step],
-                "optional": step == STEP_JUDGE,
+                # Every step is part of the pipeline; the judge is not
+                # marked "optional" — the owner's word: it confused.
+                "optional": False,
                 "job": job_state(step),
             }
             for step in STEPS

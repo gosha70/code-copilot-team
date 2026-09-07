@@ -974,7 +974,11 @@ export interface AgreementReport {
   interaction_quality: { n: number; within_1: number | null; exact: number | null; sufficient: boolean };
   basis: string;
 }
+/** What the configured judge backend serves (Ollama: /api/tags; an
+ *  OpenAI-compatible server such as vLLM: /v1/models), from the SAVED
+ *  configuration. `models` is empty for backends with no catalogue. */
 export interface JudgeModels {
+  backend: string;
   reachable: boolean;
   url: string;
   models: string[];

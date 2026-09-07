@@ -278,12 +278,12 @@ Dashboard's label distribution, the KPIs, and cost-by-sentiment mean
 something. It calls a model **per turn**; the local Ollama default keeps
 that free.
 
-The judge is **configured once, under Settings → LLM-as-Judge**
-(backend, model — for Ollama the Model field offers what is installed —
-workers, URL). **Analysis → step 3, LLM judge** runs it: the default
-choice names that configured judge; the other entries are one-off
-overrides for a single run, e.g. to compare two judges over the same
-turns (§7.1). Set how many turns and run. The step reports as it goes:
+The judge is **configured in one place: Settings → LLM-as-Judge**
+(backend, model, workers, URL). The Model field lists what the saved
+backend URL actually serves; choose *Other…* to type a name it does not
+list. **Analysis → step 3, LLM judge** runs that judge — it shows which
+one and links back to Settings; it is not a second place to choose.
+Set how many turns and run. The step reports as it goes:
 turns done of total, labelled and failed, the rate and time left, and
 the reason for the last failure — a wrong model name or a dead backend
 shows on the first turn, not after fifty. Every label is written as it
@@ -298,6 +298,21 @@ arrives, so a run you stop keeps what it labelled. From the CLI:
 
 Turns with no text (tool-result turns under redaction) are skipped:
 there is nothing to judge.
+
+### 7.0 A judge on another machine (e.g. a DGX Spark)
+
+Both local backends can live on other hardware; the Studio only needs
+its URL.
+
+| You run on the Spark | Settings → LLM-as-Judge |
+|---|---|
+| **Ollama** (`OLLAMA_HOST=0.0.0.0 ollama serve`, then `ollama pull qwen3.6:27b`) | Backend `ollama` · Ollama URL `http://spark.local:11434` · Model from the list |
+| **vLLM** (`vllm serve Qwen/Qwen3.6-27B --port 8000`, or any OpenAI-compatible server) | Backend `openai` · Base URL `http://spark.local:8000/v1` · API key blank (or whatever the server was started with) · Model from the list |
+
+Save, and the Model list refreshes from the new URL. Nothing else
+changes: the judge step, the CLI (`analyze`) and the validation loop
+all use the configured judge. The transcript text goes to that machine
+under the configured redaction level (§3.2); nothing else leaves.
 
 ### 7.1 Is the judge right? (validation)
 

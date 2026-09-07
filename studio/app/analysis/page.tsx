@@ -143,7 +143,6 @@ function Funnel({ counts }: { counts: PipelineStatus["counts"] }) {
 export default function AnalysisPage() {
   const [status, setStatus] = useState<PipelineStatus | null>(null);
   const [current, setCurrent] = useState(0);
-  const [judge, setJudge] = useState("");
   const [limit, setLimit] = useState(50);
   // Real installed models, not a guess. A hardcoded "ollama:llama3"
   // silently 404'd on a machine that had llama3.2 instead.
@@ -251,9 +250,9 @@ export default function AnalysisPage() {
   }, [ingestState]);
 
   const plan = loadPlan(listing, picked, since, loadLimit);
-  // The judge's options: blank judge = the one configured in Settings.
+  // The judge is the one configured in Settings — the only place it is
+  // chosen. These are run options, not a second configuration.
   const judgeOpts = {
-    judge: judge || undefined,
     limit,
     rubric_name: runName.trim() || undefined,
     only_labelled_by: onlyLabelledBy || undefined,
@@ -369,9 +368,6 @@ export default function AnalysisPage() {
               failed
             </span>
           )}
-          {step.optional && (
-            <span className="text-xs text-slate-400">optional</span>
-          )}
         </div>
 
         <p className="text-sm text-slate-600 mt-1">{step.blurb}</p>
@@ -411,12 +407,29 @@ export default function AnalysisPage() {
         )}
 
         {step.id === "judge" && (
+          // The judge is CONFIGURED under Settings, and only there. This
+          // says which one will run and links to where it is changed —
+          // it is not a second place to pick one.
+          <p className="text-sm mt-2">
+            <span className="text-slate-500">Judge:</span>{" "}
+            <span className="font-mono text-slate-800">{judgeChoiceLabel(models?.configured)}</span>
+            {" · "}
+            <a href="/settings" className="text-blue-700 hover:underline">
+              change in Settings
+            </a>
+            {models && models.backend !== "claude-code" && models.url && !models.reachable && (
+              <span className="text-rose-700"> · not reachable at {models.url}</span>
+            )}
+          </p>
+        )}
+
+        {step.id === "judge" && (
           // The cost warning belongs HERE, at the moment of the decision
           // — not in documentation the user has already walked past.
           <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
-            ⚠ Judging calls a model for <em>every turn</em> and can consume
-            significant credits on a large batch. A local backend (Ollama) keeps
-            it free and on this machine — switch it in Settings → LLM-as-Judge.
+            ⚠ Judging calls the model once for <em>every turn</em>; a hosted
+            backend can consume significant credits on a large batch. A local
+            backend (Ollama, or vLLM on your own hardware) keeps it free.
           </div>
         )}
 
@@ -451,32 +464,6 @@ export default function AnalysisPage() {
 
         {step.id === "judge" && (
           <div className="flex items-center gap-2 mt-3 flex-wrap">
-            {/* The judge is CONFIGURED in Settings; this is not a second
-                place to configure it. The default names what Settings
-                says, and the other entries are one-off overrides — the
-                way to compare two judges over the same turns (#313). */}
-            <label className="text-xs text-slate-500" title="Set under Settings → LLM-as-Judge. Pick another model here only for this one run.">
-              Judge
-            </label>
-            <select
-              value={judge}
-              onChange={(e) => setJudge(e.target.value)}
-              className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm"
-            >
-              <option value="">{judgeChoiceLabel(models?.configured)}</option>
-              {models?.models
-                .filter((m) => `ollama:${m}` !== models.configured?.spec)
-                .map((m) => (
-                  <option key={m} value={`ollama:${m}`}>
-                    this run only: ollama:{m}
-                  </option>
-                ))}
-            </select>
-            {models && !models.reachable && (
-              <span className="text-xs text-rose-700">
-                Ollama unreachable at {models.url} — no model list to offer.
-              </span>
-            )}
             <label className="text-xs text-slate-500">Turns</label>
             <input
               type="number"

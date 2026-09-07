@@ -24,11 +24,12 @@ const GROUPS: { title: string; blurb: string; keys: string[] }[] = [
     keys: ["CCT_SA_REDACTION"],
   },
   {
-    title: "LLM-as-Judge (optional)",
+    title: "LLM-as-Judge",
     blurb:
-      "Only needed for the Analysis tab. Ingest, search and the dashboards " +
-      "all work without it. Pick a backend first — the fields below change " +
-      "to match it.",
+      "The model that labels turns on the Analysis tab — configured here " +
+      "and only here. Pick a backend first; the fields below change to " +
+      "match it. Ollama and vLLM can run on another machine (a DGX box): " +
+      "point the URL at it.",
     keys: [
       "CCT_SA_JUDGE_BACKEND", "CCT_SA_JUDGE_MODEL", "CCT_SA_JUDGE_BASE_URL",
       "CCT_SA_JUDGE_API_KEY", "CCT_SA_JUDGE_WORKERS", "CCT_SA_OLLAMA_URL",
@@ -112,16 +113,18 @@ const META: Record<
   CCT_SA_JUDGE_MODEL: {
     label: "Model",
     help:
-      "Which model the backend should use. For Ollama the list is what is " +
-      "installed on this machine (`ollama list`); type any tag to pull " +
-      "one that is not. Examples: llama3, qwen2.5-coder:14b, gpt-4o-mini.",
+      "Which model the backend should use. The list is what the saved " +
+      "backend URL actually serves (Ollama: its installed tags; vLLM/LM " +
+      "Studio: its /v1/models). Save a new URL first, then the list " +
+      "follows it. Choose Other… to type a name that is not listed.",
     placeholder: "the backend's default",
   },
   CCT_SA_JUDGE_BASE_URL: {
     label: "Base URL",
     help:
-      "The OpenAI-compatible endpoint to call. Needed only for the " +
-      "OpenAI-compatible backend; a localhost URL keeps judging local.",
+      "The OpenAI-compatible endpoint to call, ending in /v1 — LM Studio, " +
+      "vLLM (e.g. http://spark.local:8000/v1 on a DGX Spark), or a hosted " +
+      "API. Needed only for the OpenAI-compatible backend.",
     placeholder: "http://localhost:1234/v1",
   },
   CCT_SA_JUDGE_API_KEY: {
@@ -142,7 +145,10 @@ const META: Record<
   },
   CCT_SA_OLLAMA_URL: {
     label: "Ollama URL",
-    help: "Where your Ollama server is listening. Only used by the Ollama backend.",
+    help:
+      "Where Ollama is listening. Only used by the Ollama backend. Another " +
+      "machine works (e.g. http://spark.local:11434) if that Ollama is " +
+      "started with OLLAMA_HOST=0.0.0.0.",
     placeholder: "http://localhost:11434",
   },
   CCT_DEVELOPER_ID: {
@@ -165,8 +171,12 @@ export default function SettingsPage() {
   // Models Ollama actually has, offered on the Model field: a name typed
   // from memory that is not installed 404s on every judge call.
   const [models, setModels] = useState<JudgeModels | null>(null);
-  useEffect(() => {
+  // "Other…" on the Model dropdown: type a name the server does not list.
+  const [modelOther, setModelOther] = useState(false);
+  const loadModels = () =>
     api.judgeModels().then(setModels).catch(() => setModels(null));
+  useEffect(() => {
+    loadModels();
   }, []);
   // ONE open at a time. Help is on demand behind a (?) — permanently
   // rendering every explanation is what made this page unreadable.
@@ -210,6 +220,8 @@ export default function SettingsPage() {
       await api.saveConfig(values);
       setSaved("✓ Saved to .env");
       load();
+      // The model list follows the SAVED backend and URL.
+      loadModels();
     } catch (e) {
       setSaved(`✗ ${String(e)}`);
     }
@@ -238,8 +250,15 @@ export default function SettingsPage() {
   if (!cfg) return <Loading />;
 
   const backend = values["CCT_SA_JUDGE_BACKEND"] || "";
-  // Blank backend = the packaged default, which is Ollama.
-  const ollamaChosen = backend === "" || backend === "ollama";
+  // The Model field is a dropdown when the saved backend serves a
+  // catalogue (Ollama, an OpenAI-compatible server) and the chosen
+  // backend is that same backend; a datalist was tried and rejected —
+  // browsers filter it by what is typed, so with the current model in
+  // the box only that one entry showed and nothing else was pickable.
+  const savedBackend = models?.backend ?? "";
+  const effectiveBackend = backend === "" ? "ollama" : backend;
+  const modelList =
+    models && models.reachable && effectiveBackend === savedBackend ? models.models : null;
   const baseUrl = values["CCT_SA_JUDGE_BASE_URL"] || "";
   const cloudJudge =
     backend === "claude-code" ||
@@ -383,6 +402,29 @@ export default function SettingsPage() {
                       <option key={b} value={b}>{b}</option>
                     ))}
                   </select>
+                ) : f.key === "CCT_SA_JUDGE_MODEL" && modelList && !modelOther ? (
+                  <div className="flex gap-2 items-center">
+                    <select
+                      className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-full font-mono"
+                      value={modelList.includes(values[f.key] || "") ? values[f.key] : ""}
+                      onChange={(e) => {
+                        if (e.target.value === "__other__") setModelOther(true);
+                        else set(f.key, e.target.value);
+                      }}
+                    >
+                      <option value="">the backend&apos;s default</option>
+                      {modelList.map((name) => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                      {values[f.key] && !modelList.includes(values[f.key]) && (
+                        <option value={values[f.key]}>{values[f.key]} (not served)</option>
+                      )}
+                      <option value="__other__">Other…</option>
+                    </select>
+                    <span className="shrink-0 text-xs text-slate-500">
+                      {modelList.length} served at {models?.url}
+                    </span>
+                  </div>
                 ) : (
                   <div className="flex gap-2">
                   <input
@@ -395,23 +437,19 @@ export default function SettingsPage() {
                     }
                     value={values[f.key] || ""}
                     onChange={(e) => set(f.key, e.target.value)}
-                    list={f.key === "CCT_SA_JUDGE_MODEL" && ollamaChosen ? "ollama-models" : undefined}
                   />
-                  {f.key === "CCT_SA_JUDGE_MODEL" && ollamaChosen && (
-                    <>
-                      <datalist id="ollama-models">
-                        {models?.models.map((name) => (
-                          <option key={name} value={name} />
-                        ))}
-                      </datalist>
-                      <span className="shrink-0 self-center text-xs text-slate-500">
-                        {models === null
-                          ? ""
+                  {f.key === "CCT_SA_JUDGE_MODEL" && models && (
+                    <span className="shrink-0 self-center text-xs text-slate-500">
+                      {modelOther
+                        ? "typed name"
+                        : effectiveBackend !== savedBackend
+                          ? "save to list this backend's models"
                           : models.reachable
-                            ? `${models.models.length} installed`
-                            : "Ollama unreachable — no list"}
-                      </span>
-                    </>
+                            ? ""
+                            : models.url
+                              ? `not reachable at ${models.url}`
+                              : ""}
+                    </span>
                   )}
                   {m.browse && (
                     <button

@@ -325,40 +325,50 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
     @app.get("/api/judge/models")
     def judge_models() -> dict[str, Any]:
-        """Models the local Ollama ACTUALLY has installed.
+        """The models the CONFIGURED judge backend actually serves.
 
-        The Analysis page used to offer a hardcoded "ollama:llama3". On a
-        machine without that exact tag every call 404s, 50 turns were
-        written as backend_error, and the UI reported "labelled 50
-        turns". Offering a choice that cannot work is worse than
-        offering none — so the list is read from the server.
+        Settings offers this list on its Model field. A name typed from
+        memory that the server does not have 404s on every call: 50
+        turns written as backend_error and "labelled 50 turns" on the
+        page. Ollama answers at /api/tags; an OpenAI-compatible server
+        (vLLM, LM Studio, a DGX box) at <base_url>/models. The
+        claude-code backend has no list to read. The URLs are the SAVED
+        configuration — save first, then the list follows the new URL.
         """
         import json as _json
-        import urllib.error
         import urllib.request
 
         cfg = load_config()
-        base = (cfg.judge.ollama_url or "http://localhost:11434").rstrip("/")
-        out: dict[str, Any] = {"configured": _configured_judge(cfg)}
+        conf = _configured_judge(cfg)
+        backend = conf["backend"]
+        out: dict[str, Any] = {"configured": conf, "backend": backend, "models": [], "reachable": False, "url": ""}
+        if backend == "ollama":
+            base = (cfg.judge.ollama_url or "http://localhost:11434").rstrip("/")
+            list_url, pick = f"{base}/api/tags", lambda d: [m.get("name") for m in d.get("models", []) if isinstance(m, dict)]
+        elif backend == "openai":
+            base = (cfg.judge.base_url or "").rstrip("/")
+            if not base:
+                out["error"] = "no base URL configured"
+                return out
+            list_url, pick = f"{base}/models", lambda d: [m.get("id") for m in d.get("data", []) if isinstance(m, dict)]
+        else:
+            # claude-code and any other backend: no catalogue to read.
+            return out
+        out["url"] = base
+        req = urllib.request.Request(list_url)
+        if backend == "openai" and cfg.judge.api_key:
+            req.add_header("Authorization", f"Bearer {cfg.judge.api_key}")
         try:
-            with urllib.request.urlopen(f"{base}/api/tags", timeout=3) as resp:
+            with urllib.request.urlopen(req, timeout=3) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
-            models = [
-                m["name"] for m in data.get("models", []) if isinstance(m, dict) and m.get("name")
-            ]
-            out.update({"reachable": True, "url": base, "models": sorted(models)})
+            out.update({"reachable": True, "models": sorted(n for n in pick(data) if n)})
         except Exception as exc:  # noqa: BLE001 — unreachable is an ANSWER
             # The class name says what kind of failure it was (refused,
             # timed out, bad body); the message text is logged, not
             # returned — it can carry resolved hosts and errno detail
             # (CodeQL py/stack-trace-exposure).
-            _log.info("ollama model list unavailable at %s: %s", base, exc)
-            out.update({
-                "reachable": False,
-                "url": base,
-                "models": [],
-                "error": type(exc).__name__,
-            })
+            _log.info("%s model list unavailable at %s: %s", backend, base, exc)
+            out["error"] = type(exc).__name__
         return out
 
     def _configured_judge(cfg) -> dict[str, Any]:
