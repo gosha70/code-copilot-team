@@ -22,7 +22,14 @@ from typing import Any, Mapping, Optional
 from . import constants as C
 
 # Env vars / .env keys (presence-checked, never logged for secrets).
-ENV_DSN = "CCT_SA_DSN"
+# The database key is CCT_SA_DB. It was CCT_SA_DSN until 2026-09 ("what
+# does DSN stand for?" — the owner's first-contact finding); the old name
+# is still READ so an existing .env keeps working, and is rewritten to
+# the new name the next time the file is saved.
+ENV_DB = "CCT_SA_DB"
+ENV_DSN_LEGACY = "CCT_SA_DSN"
+#: Kept as an alias for callers that import the old constant.
+ENV_DSN = ENV_DB
 # Developer identity (Slice B1, #187). Spec-mandated name (not CCT_SA_).
 ENV_DEVELOPER_ID = "CCT_DEVELOPER_ID"
 ENV_KUZU_PATH = "CCT_SA_KUZU_PATH"
@@ -65,7 +72,7 @@ def _coerce_like(template: Any, raw: str) -> Any:
 # Keys the Studio config page exposes (order = display order). Secret-bearing
 # keys are flagged so the API masks them.
 ENV_KEYS = (
-    ENV_DSN, ENV_KUZU_PATH, ENV_REDACTION,
+    ENV_DB, ENV_KUZU_PATH, ENV_REDACTION,
     ENV_JUDGE_BACKEND, ENV_JUDGE_MODEL, ENV_JUDGE_BASE_URL, ENV_JUDGE_API_KEY,
     ENV_JUDGE_WORKERS, ENV_OLLAMA_URL, ENV_DEVELOPER_ID,
 )
@@ -333,6 +340,11 @@ def write_env_file(values: Mapping[str, str], path: Path = ENV_FILE) -> None:
         "# gitignored; do not commit it.",
         "",
     ]
+    # The old database key is folded into the new one, never written back:
+    # two keys naming one store is how a file ends up lying about itself.
+    if ENV_DSN_LEGACY in existing:
+        legacy = existing.pop(ENV_DSN_LEGACY)
+        existing.setdefault(ENV_DB, legacy)
     for key in ENV_KEYS:
         if key in existing:
             lines.append(f"{key}={existing.pop(key)}")
@@ -590,6 +602,19 @@ def load_config(
         v = env_file.get(key)
         return v if v else None
 
+    def env_db() -> Optional[str]:
+        # The new and the old database key are ALIASES within each layer:
+        # a process CCT_SA_DSN still beats a .env CCT_SA_DB, exactly as
+        # a process CCT_SA_DB would. Resolving the new name across both
+        # layers first would let a Settings save redirect a running
+        # legacy-configured command to another store.
+        for layer in (os.environ, env_file):
+            for key in (ENV_DB, ENV_DSN_LEGACY):
+                v = layer.get(key)
+                if v:
+                    return v
+        return None
+
     # routing-shadow evidence roots: config-file list, env override
     # (os.pathsep-separated), CLI extra_overrides via the merged data
     roots_raw = data.get(C.CFG_ROUTING_EVIDENCE_ROOTS) or []
@@ -621,7 +646,7 @@ def load_config(
         if ov:
             sources[copilot] = ov
 
-    resolved_dsn = dsn or env(ENV_DSN) or data.get(C.CFG_DSN) or ""
+    resolved_dsn = dsn or env_db() or data.get(C.CFG_DSN) or ""
     resolved_kuzu = (
         kuzu_path or env(ENV_KUZU_PATH) or data.get(C.CFG_KUZU_PATH)
         or str(Path.home() / ".cct" / "session-analytics-graph")

@@ -19,6 +19,16 @@ from session_analytics.relational.db import Database, apply_ddl
 from session_analytics.tests.support import CLAUDE_CODE_ROOT, RegistryResetTestCase
 
 
+def _parse(path: Path) -> dict[str, str]:
+    """parse_env_file bound to one file, for patching the loader's reader."""
+    out: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, _, v = line.partition("=")
+            out[k.strip()] = v.strip()
+    return out
+
+
 def _judge(override=None, by_copilot=None, default=("claude-code", "")):
     return JudgeConfig(
         override=override, by_copilot=by_copilot or {}, default=default,
@@ -27,6 +37,37 @@ def _judge(override=None, by_copilot=None, default=("claude-code", "")):
 
 
 class TestEnvFileIO(unittest.TestCase):
+    def test_legacy_db_key_is_read_and_rewritten(self) -> None:
+        # A .env from before the rename names the store CCT_SA_DSN: it is
+        # still honoured, and the next write folds it into CCT_SA_DB —
+        # never both keys in one file.
+        d = Path(tempfile.mkdtemp())
+        env = d / ".env"
+        env.write_text("CCT_SA_DSN=sqlite:////old.db\n", encoding="utf-8")
+        parsed = cfgmod.parse_env_file(env)
+        self.assertEqual(parsed[cfgmod.ENV_DSN_LEGACY], "sqlite:////old.db")
+        cfgmod.write_env_file({cfgmod.ENV_REDACTION: "code"}, env)
+        text = env.read_text(encoding="utf-8")
+        self.assertIn("CCT_SA_DB=sqlite:////old.db", text)
+        self.assertNotIn("CCT_SA_DSN", text)
+
+    def test_database_aliases_resolve_within_each_layer(self) -> None:
+        # A process-level CCT_SA_DSN beats a .env CCT_SA_DB: the two names
+        # are aliases inside a layer, and the process layer wins.
+        import os
+        from unittest import mock
+
+        d = Path(tempfile.mkdtemp())
+        env = d / ".env"
+        env.write_text("CCT_SA_DB=sqlite:////file.db\n", encoding="utf-8")
+        base = {k: v for k, v in os.environ.items() if not k.startswith("CCT_SA_")}
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: _parse(env)), \
+             mock.patch.dict("os.environ", {**base, "CCT_SA_DSN": "sqlite:////process.db"}, clear=True):
+            self.assertEqual(cfgmod.load_config().dsn, "sqlite:////process.db")
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: _parse(env)), \
+             mock.patch.dict("os.environ", base, clear=True):
+            self.assertEqual(cfgmod.load_config().dsn, "sqlite:////file.db")
+
     def test_round_trip_and_preserve_unknown(self) -> None:
         d = Path(tempfile.mkdtemp())
         env = d / ".env"
@@ -41,7 +82,7 @@ class TestEnvFileIO(unittest.TestCase):
     def test_parse_ignores_comments_and_quotes(self) -> None:
         d = Path(tempfile.mkdtemp())
         env = d / ".env"
-        env.write_text('# a comment\nCCT_SA_DSN="sqlite:////q.db"\n\n', encoding="utf-8")
+        env.write_text('# a comment\nCCT_SA_DB="sqlite:////q.db"\n\n', encoding="utf-8")
         self.assertEqual(cfgmod.parse_env_file(env)[cfgmod.ENV_DSN], "sqlite:////q.db")
 
 

@@ -135,7 +135,7 @@ class Database:
         """
         if not dsn:
             raise ValueError(
-                "no database configured; pass --db, set CCT_SA_DSN, or run "
+                "no database configured; pass --db, set CCT_SA_DB, or run "
                 "`session-analytics start` which configures one for you."
             )
         # A value that is not a database URL fails DEEP inside the driver

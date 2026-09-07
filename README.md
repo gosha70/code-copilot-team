@@ -1283,6 +1283,7 @@ Rule content is written once in `shared/` and adapted per tool via `scripts/gene
 
 **Shared (all tools):**
 - **[Developer Cookbook](docs/developer-cookbook.md)** — the project SDLC end to end, in self-development and AI-harness modes
+- **[Session Analytics Cookbook](docs/session-analytics-cookbook.md)** — configure, start, load sessions, read a session, run and validate the judge, troubleshoot
 - **[Alignment Maintenance Checklist](shared/docs/alignment-maintenance.md)** — recurring governance checks to keep framework alignment healthy
 - **[Common Pitfalls](shared/docs/common-pitfalls.md)** — cross-cutting issues and solutions
 - **[Delegation Best Practices](shared/docs/delegation-best-practices.md)** — when and how to delegate to agents

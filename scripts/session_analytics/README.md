@@ -26,19 +26,19 @@ See `specs/session-analytics/{spec,plan,tasks}.md` for the full design.
 
 Configuration is a single repo-root `.env` (copy `.env.example`, run `setup`, or
 edit it from the Studio **Settings** page — all three write the same file).
-Prefer PostgreSQL over the default SQLite? Set `CCT_SA_DSN` in `.env`:
+Prefer PostgreSQL over the default SQLite? Set `CCT_SA_DB` in `.env`:
 
 ```bash
 docker compose -f scripts/session_analytics/docker-compose.yml up -d
-# CCT_SA_DSN=postgresql://cct:cct@localhost:5433/session_analytics
+# CCT_SA_DB=postgresql://cct:cct@localhost:5433/session_analytics
 ```
 
-The zero-install path still works without `setup` — just pass `--dsn`:
+The zero-install path still works without `setup` — just pass `--db`:
 
 ```bash
 ./scripts/session-analytics ingest --copilot claude-code \
-  --dsn "sqlite:////tmp/sa.db" --full
-./scripts/session-analytics doctor --dsn "sqlite:////tmp/sa.db"
+  --db "sqlite:////tmp/sa.db" --full
+./scripts/session-analytics doctor --db "sqlite:////tmp/sa.db"
 ```
 
 ## Commands
@@ -66,7 +66,7 @@ The zero-install path still works without `setup` — just pass `--dsn`:
 The Studio renders both read-only (E2 slice 4, #293) — see *Studio:
 clusters view + similar panel* below.
 
-`ingest` flags: `--copilot` (repeatable; default all), `--root`, `--dsn`,
+`ingest` flags: `--copilot` (repeatable; default all), `--root`, `--db`,
 `--developer-id`, `--redact {none,code,metadata-only}`, `--incremental`
 (default) / `--full`.
 
@@ -351,12 +351,12 @@ as `ingest` — on an interval, until you stop it:
 
 ```bash
 ./scripts/session-analytics watch --interval 15
-./scripts/session-analytics watch --interval 15 --dsn "sqlite:////tmp/sa.db" --copilots claude-code
+./scripts/session-analytics watch --interval 15 --db "sqlite:////tmp/sa.db" --copilots claude-code
 ```
 
 - `--interval` (default `15` seconds, minimum `1`) — time between cycles.
-- `--dsn` — same DSN resolution as every other command (else config /
-  `CCT_SA_DSN`).
+- `--db` — same DSN resolution as every other command (else config /
+  `CCT_SA_DB`).
 - `--copilots` — repeatable copilot id to watch (default: all registered).
 
 Each cycle is **incremental** (never `--full` — new/changed sessions only,
@@ -389,7 +389,7 @@ produced, so a session can be traced back to its benchmark attempt directory:
 
 ```bash
 ./scripts/session-analytics correlate --runs-root benchmarks/runs
-./scripts/session-analytics correlate --runs-root benchmarks/runs --dsn "sqlite:////tmp/sa.db"
+./scripts/session-analytics correlate --runs-root benchmarks/runs --db "sqlite:////tmp/sa.db"
 ```
 
 It recursively scans `--runs-root` for `run-record.json` files and, for each

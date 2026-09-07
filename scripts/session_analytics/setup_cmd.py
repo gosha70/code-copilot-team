@@ -58,8 +58,8 @@ def run_setup(
         print("  Press Enter to accept each default.\n")
 
     # ── store ──────────────────────────────────────────────────────────
-    values[cfgmod.ENV_DSN] = overrides.get(cfgmod.ENV_DSN) or (
-        _prompt("Database DSN (SQLite local file, or postgresql://…)", DEFAULT_DSN)
+    values[cfgmod.ENV_DB] = overrides.get(cfgmod.ENV_DB) or (
+        _prompt("Database (SQLite file as sqlite:////abs/path.db, or postgresql://…)", DEFAULT_DSN)
         if interactive else DEFAULT_DSN
     )
     values[cfgmod.ENV_REDACTION] = overrides.get(cfgmod.ENV_REDACTION) or (
@@ -108,7 +108,7 @@ def run_setup(
 def ensure_initialized(dsn_arg: Optional[str]) -> bool:
     """First-run gate used by commands that need config.
 
-    Returns True if good to proceed. If no .env exists and no explicit --dsn was
+    Returns True if good to proceed. If no .env exists and no explicit --db was
     given: run interactive setup when attached to a TTY, else print guidance and
     return False.
     """
@@ -120,7 +120,7 @@ def ensure_initialized(dsn_arg: Optional[str]) -> bool:
         return True
     print(
         "error: not configured. Run `./scripts/session-analytics setup` first, "
-        "or pass --dsn.",
+        "or pass --db.",
         file=sys.stderr,
     )
     return False
