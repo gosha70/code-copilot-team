@@ -800,7 +800,9 @@ class TestSimilarCli(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(prefix="cct-sa-simcli-"))
         dsn = f"sqlite:///{tmp / 'sa.db'}"
         graph_dir = tmp / "graph"
-        graph_dir.mkdir()  # the absent-path guard is tested separately
+        # A store FILE (a directory now resolves to a file inside it);
+        # the absent-path guard is tested separately.
+        graph_dir.touch()
         base = {k: v for k, v in os.environ.items()
                 if not k.startswith("CCT_SA_")}
         from session_analytics.graph import schema as schema_mod

@@ -400,7 +400,7 @@ class TestClustersCliLadder(unittest.TestCase):
         # FR-E: absence of clusters is a RESULT, never a failure.
         tmp = Path(tempfile.mkdtemp(prefix="cct-sa-clusters-empty-"))
         store = tmp / "g"
-        store.mkdir()
+        store.touch()  # a store FILE; a directory now means 'put it in here'
         code, out, _err = self._with_snapshot(
             _FakeSnapshot(nodes={"a", "b"}, edges=()), store)
         self.assertEqual(code, C.EXIT_OK)
@@ -411,7 +411,7 @@ class TestClustersCliLadder(unittest.TestCase):
     def test_populated_graph_exits_zero_and_prints_the_report(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="cct-sa-clusters-full-"))
         store = tmp / "g"
-        store.mkdir()
+        store.touch()  # a store FILE; a directory now means 'put it in here'
         code, out, _err = self._with_snapshot(
             _FakeSnapshot(nodes={"a", "b", "c"},
                           edges=(("a", "b", 0.9), ("b", "a", 0.9))), store)
@@ -424,7 +424,7 @@ class TestClustersCliLadder(unittest.TestCase):
     def test_unbuilt_graph_is_a_usage_error(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="cct-sa-clusters-unbuilt-"))
         store = tmp / "g"
-        store.mkdir()
+        store.touch()  # a store FILE; a directory now means 'put it in here'
         code, _out, err = self._with_snapshot(_FakeSnapshot(ready=False), store)
         self.assertEqual(code, C.EXIT_USAGE)
         self.assertIn("Session table", err)
@@ -464,7 +464,7 @@ class TestClustersCliLadder(unittest.TestCase):
         the discipline `similar` already follows."""
         tmp = Path(tempfile.mkdtemp(prefix="cct-sa-clusters-boom-"))
         store = tmp / "g"
-        store.mkdir()
+        store.touch()  # a store FILE; a directory now means 'put it in here'
 
         class _Exploding:
             def graph_ready(self):
@@ -490,7 +490,7 @@ class TestClustersCliLadder(unittest.TestCase):
 
         tmp = Path(tempfile.mkdtemp(prefix="cct-sa-clusters-race-"))
         ghost = tmp / "vanished"
-        ghost.mkdir()  # exists() passes...
+        ghost.touch()  # exists() passes...
 
         def _vanished(path):  # ...and the open then fails, as in the race
             raise RuntimeError("Cannot create an empty database under "

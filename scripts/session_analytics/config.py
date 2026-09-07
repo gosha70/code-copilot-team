@@ -647,10 +647,16 @@ def load_config(
             sources[copilot] = ov
 
     resolved_dsn = dsn or env_db() or data.get(C.CFG_DSN) or ""
-    resolved_kuzu = (
+    resolved_kuzu = Path(
         kuzu_path or env(ENV_KUZU_PATH) or data.get(C.CFG_KUZU_PATH)
-        or str(Path.home() / ".cct" / "session-analytics-graph")
-    )
+        or str(Path.home() / ".cct" / C.KUZU_STORE_NAME)
+    ).expanduser()
+    # Kùzu refuses a directory ("Database path cannot be a directory"),
+    # and a user who sets CCT_SA_KUZU_PATH=~/.cct means "keep the graph
+    # there". Resolve a directory to the store file inside it instead of
+    # letting the graph step crash.
+    if resolved_kuzu.is_dir():
+        resolved_kuzu = resolved_kuzu / C.KUZU_STORE_NAME
     resolved_redaction = (
         redaction_mode or env(ENV_REDACTION) or data.get(C.CFG_REDACTION) or C.REDACT_CODE
     )
@@ -781,7 +787,7 @@ def load_config(
         routing_evidence_roots=routing_evidence_roots,
         routing_calibration=calibration,
         dsn=str(resolved_dsn),
-        kuzu_path=str(Path(resolved_kuzu).expanduser()),
+        kuzu_path=str(resolved_kuzu),
         redaction_mode=resolved_redaction,
         judge=judge,
         embedding=embedding,

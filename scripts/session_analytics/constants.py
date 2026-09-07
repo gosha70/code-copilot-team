@@ -90,6 +90,9 @@ CFG_ROUTING_CALIBRATION = "routing_calibration"
 CFG_SOURCE_ROOT = "root"
 CFG_DSN = "dsn"
 CFG_KUZU_PATH = "kuzu_path"
+#: The Kùzu store FILE name: the packaged default under ~/.cct, and the
+#: file created inside a directory when kuzu_path points at one.
+KUZU_STORE_NAME = "session-analytics-graph"
 CFG_REDACTION = "redaction_mode"
 CFG_JUDGE = "judge"
 CFG_JUDGE_DEFAULT = "default"

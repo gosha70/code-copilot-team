@@ -190,7 +190,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_sim.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_sim.add_argument("--graph-path", "--db-path", dest="db_path", default=None,
-                       help="Kùzu database path (else config kuzu_path).")
+                       help="Kùzu store file, or a directory to keep it in (else config kuzu_path).")
     p_sim.add_argument("--threshold", default=None,
                        help="Minimum cosine score for an edge (else config).")
     p_sim.add_argument("--top-k", default=None,
@@ -204,7 +204,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_clu.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_clu.add_argument("--graph-path", "--db-path", dest="db_path", default=None,
-                       help="Kùzu database path (else config kuzu_path).")
+                       help="Kùzu store file, or a directory to keep it in (else config kuzu_path).")
 
     p_kpi = sub.add_parser("kpis", help="Compute session-level KPI rollups from labels.")
     p_kpi.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
@@ -224,14 +224,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_serve = sub.add_parser("serve", help="Launch the FastAPI + Next.js Studio.")
     p_serve.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
-    p_serve.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu graph dir (else config).")
+    p_serve.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu store file, or a directory to keep it in (else config kuzu_path).")
     p_serve.add_argument("--api-port", type=int, default=8765)
     p_serve.add_argument("--ui-port", type=int, default=3000)
     p_serve.add_argument("--no-ui", action="store_true", help="Serve the API only.")
 
     p_graph = sub.add_parser("graph", help="Build the Kùzu knowledge graph from the store.")
     p_graph.add_argument("--db", "--dsn", dest="dsn", default=None, help="Relational DSN (else config).")
-    p_graph.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu graph dir (else config).")
+    p_graph.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu store file, or a directory to keep it in (else config kuzu_path).")
     p_graph.add_argument(
         "--rebuild", action="store_true",
         help="Drop + recreate all graph tables first (bulk COPY FROM path).",

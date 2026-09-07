@@ -68,6 +68,25 @@ class TestEnvFileIO(unittest.TestCase):
              mock.patch.dict("os.environ", base, clear=True):
             self.assertEqual(cfgmod.load_config().dsn, "sqlite:////file.db")
 
+    def test_kuzu_path_directory_resolves_to_store_file_inside_it(self) -> None:
+        # CCT_SA_KUZU_PATH=~/.cct (a directory) crashed the graph step
+        # with Kùzu's "Database path cannot be a directory". A directory
+        # now means "keep the store in here"; a file path is used as is.
+        import os
+        from unittest import mock
+
+        d = Path(tempfile.mkdtemp())
+        base = {k: v for k, v in os.environ.items() if not k.startswith("CCT_SA_")}
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {**base, cfgmod.ENV_KUZU_PATH: str(d)}, clear=True):
+            self.assertEqual(cfgmod.load_config().kuzu_path, str(d / C.KUZU_STORE_NAME))
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", base, clear=True):
+            self.assertEqual(
+                cfgmod.load_config(kuzu_path=str(d / "graph.kz")).kuzu_path,
+                str(d / "graph.kz"),
+            )
+
     def test_round_trip_and_preserve_unknown(self) -> None:
         d = Path(tempfile.mkdtemp())
         env = d / ".env"

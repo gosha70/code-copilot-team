@@ -79,7 +79,7 @@ Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.j
 
 | Key | What it does | Default |
 |---|---|---|
-| `CCT_SA_KUZU_PATH` | The Kùzu graph **store file** for the Graph tab, e.g. `~/.cct/kuzu`. A directory is refused. | `~/.cct/session-analytics-graph` |
+| `CCT_SA_KUZU_PATH` | Where the Kùzu graph for the Graph tab lives. A directory such as `~/.cct` works: the store file `session-analytics-graph` is created inside it. A file path is used as given. | `~/.cct/session-analytics-graph` |
 | `CCT_SA_REDACTION` | What is stripped before anything is written: `none`, `code` (strip code blocks and tool inputs, keep prose), `metadata-only` (no text at all). | `code` |
 | `CCT_SA_SOURCE_CLAUDE_CODE`, `CCT_SA_SOURCE_AIDER` | Where each assistant keeps its transcripts. | `~/.claude/projects`, `~` |
 | `CCT_SA_JUDGE_BACKEND` / `CCT_SA_JUDGE_MODEL` | The judge for every copilot: `ollama` (local), `claude-code` (the `claude` CLI on your PATH), or `openai` (any OpenAI-compatible endpoint: LM Studio, vLLM, OpenAI, Azure). Empty model = the backend's default. | `ollama`, `` |
@@ -136,7 +136,7 @@ per-project block in `~/.cct/session-analytics.json`.
 `serve` reads `.env`. To point it elsewhere for one run:
 
 ```bash
-./scripts/session-analytics serve --db sqlite:////Users/you/.cct/sa.db --graph-path /Users/you/.cct/kuzu
+./scripts/session-analytics serve --db sqlite:////Users/you/.cct/sa.db --graph-path /Users/you/.cct
 ```
 
 First time on a machine, `start` does everything in one go — creates the
@@ -351,7 +351,7 @@ docker compose -f scripts/session_analytics/docker-compose.yml up -d
 |---|---|---|
 | `error: no database configured` | No `.env`, no `--db`. | `setup`, or `--db sqlite:////abs/path.db` (four slashes). |
 | Settings says the server uses a different database than the form | `serve` was started with `--db`. | Either is fine; the banner tells you which store every number comes from. |
-| Graph tab: "the graph store … could not be opened" | `CCT_SA_KUZU_PATH` points at a directory, or the store file is corrupt. | Set it to a file path such as `~/.cct/kuzu`, delete a corrupt file, run **Build knowledge graph**. |
+| Graph tab: "the graph store … could not be opened" | The store file at `CCT_SA_KUZU_PATH` is corrupt or locked by a running build. | Delete the corrupt file (`~/.cct/session-analytics-graph` by default), then run **Build knowledge graph**. |
 | Graph tab: "has not been built yet" | Never built. | Analysis → Build knowledge graph. |
 | Session page: `model 'llama3' not found` | The configured judge has no model and Ollama's default is not pulled. | Pick an installed model in the page's judge picker, or set `CCT_SA_JUDGE_MODEL`. |
 | "The judge did not answer … Remote end closed connection" | The model does not fit in memory at the whole-session context size. | Use a smaller model for whole-session analyses. |

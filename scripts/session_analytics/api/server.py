@@ -963,8 +963,8 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                 detail={
                     "error": "The graph store at the configured kuzu path could not be opened.",
                     "prerequisite": "graph",
-                    "guidance": "Check CCT_SA_KUZU_PATH under Settings (it must be the store "
-                                "file, not a directory), then rebuild from the Analysis tab.",
+                    "guidance": "Check CCT_SA_KUZU_PATH under Settings (a corrupt store file "
+                                "can be deleted), then rebuild from the Analysis tab.",
                 },
             ) from None
         try:

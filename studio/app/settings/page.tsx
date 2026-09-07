@@ -85,11 +85,11 @@ const META: Record<
     label: "Knowledge-graph store",
     browse: "dir",
     help:
-      "The Kùzu store FILE for the Graph tab and clustering — a path like " +
-      "~/.cct/kuzu, not a folder (Kùzu refuses a directory). Created by the " +
-      "graph step, which now takes seconds; pick the folder and the file " +
-      "name is added for you.",
-    placeholder: "~/.cct/kuzu",
+      "Where the Kùzu graph for the Graph tab and clustering lives. A " +
+      "folder works: the store file session-analytics-graph is created " +
+      "inside it by the graph step, which takes seconds. A file path is " +
+      "used as given.",
+    placeholder: "~/.cct",
   },
   CCT_SA_REDACTION: {
     label: "Redaction level",
@@ -251,12 +251,9 @@ export default function SettingsPage() {
             // rather than making the user know the sqlite:/// form.
             set(
               picking.key,
-              picking.key === "CCT_SA_DB"
-                ? `sqlite:///${path}`
-                : picking.key === "CCT_SA_KUZU_PATH"
-                  ? // A directory was picked; the store is a FILE in it.
-                    `${path.replace(/\/+$/, "")}/kuzu`
-                  : path,
+              // A picked folder is kept as-is for the graph store: the
+              // store file is resolved inside it by the API.
+              picking.key === "CCT_SA_DB" ? `sqlite:///${path}` : path,
             );
             setPicking(null);
           }}
