@@ -850,7 +850,70 @@ export interface PipelineStep {
   blurb: string;
   done: boolean;
   optional: boolean;
-  job: { state: "idle" | "running" | "done" | "failed"; message?: string; seconds?: number };
+  job: {
+    state: "idle" | "running" | "done" | "failed";
+    message?: string;
+    seconds?: number;
+    /** The judge step reports after every turn (see JudgeProgress). */
+    progress?: JudgeProgress;
+  };
+}
+
+/** Running counts from the judge step: written as each turn is judged. */
+export interface JudgeProgress {
+  total: number;
+  labeled: number;
+  parse_ok: number;
+  parse_failed: number;
+  last_error: string;
+  judge: string;
+}
+
+/** How the judge step runs; `judge` blank = the judge configured in
+ *  Settings. */
+export interface JudgeOptions {
+  judge?: string;
+  workers?: number;
+  limit?: number;
+  rubric_name?: string;
+  only_labelled_by?: string;
+}
+
+/** Per-step options for run/<step> and run-all. */
+export interface PipelineRun {
+  load?: LoadSelection;
+  judge?: JudgeOptions;
+}
+
+/** Which discovered sessions "Load sessions" reads; every field blank
+ *  = everything. `since` is YYYY-MM-DD. */
+export interface LoadSelection {
+  copilots?: string[];
+  since?: string;
+  limit?: number;
+  session_ids?: string[];
+}
+
+/** One discovered session, from its transcript files alone (nothing
+ *  parsed): enough to decide whether to read it. */
+export interface DiscoveredSession {
+  copilot: string;
+  session_id: string;
+  source: string;
+  files: number;
+  bytes: number;
+  modified: string;
+  modified_epoch: number;
+  loaded: boolean;
+}
+
+export interface DiscoveredSessions {
+  sessions: DiscoveredSession[];
+  total: number;
+  total_bytes: number;
+  new: number;
+  new_bytes: number;
+  cap: number;
 }
 
 export interface PipelineStatus {
@@ -911,11 +974,23 @@ export interface AgreementReport {
   interaction_quality: { n: number; within_1: number | null; exact: number | null; sufficient: boolean };
   basis: string;
 }
+/** What the configured judge backend serves (Ollama: /api/tags; an
+ *  OpenAI-compatible server such as vLLM: /v1/models), from the SAVED
+ *  configuration. `models` is empty for backends with no catalogue. */
 export interface JudgeModels {
+  backend: string;
   reachable: boolean;
   url: string;
   models: string[];
   error?: string;
+  /** The judge a run with no explicit choice uses, and where it is set. */
+  configured: {
+    spec: string;
+    backend: string;
+    model: string;
+    source: "settings" | "packaged default";
+    by_copilot: Record<string, string>;
+  };
 }
 
 export const api = {
@@ -925,10 +1000,22 @@ export const api = {
     get<{ query: string; results: TraceHit[] }>(
       `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`,
     ),
-  runAll: async (includeJudge: boolean) => {
+  pipelineSessions: (params: { copilot?: string; since?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params.copilot) q.set("copilot", params.copilot);
+    if (params.since) q.set("since", params.since);
+    if (params.limit) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return get<DiscoveredSessions>(`/api/pipeline/sessions${qs ? `?${qs}` : ""}`);
+  },
+  runAll: async (includeJudge: boolean, opts?: PipelineRun) => {
     const r = await fetch(
       `${BASE}/api/pipeline/run-all?include_judge=${includeJudge}`,
-      { method: "POST" },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(opts ?? null),
+      },
     );
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
@@ -936,8 +1023,12 @@ export const api = {
     }
     return r.json();
   },
-  runStep: async (step: string) => {
-    const r = await fetch(`${BASE}/api/pipeline/run/${step}`, { method: "POST" });
+  runStep: async (step: string, opts?: PipelineRun) => {
+    const r = await fetch(`${BASE}/api/pipeline/run/${step}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(opts ?? null),
+    });
     if (!r.ok) {
       // 409 means "already running" — a normal thing to hit by
       // double-clicking, so it is surfaced as text, not thrown as a fault.

@@ -79,7 +79,7 @@ Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.j
 
 | Key | What it does | Default |
 |---|---|---|
-| `CCT_SA_KUZU_PATH` | The Kùzu graph **store file** for the Graph tab, e.g. `~/.cct/kuzu`. A directory is refused. | `~/.cct/session-analytics-graph` |
+| `CCT_SA_KUZU_PATH` | Where the Kùzu graph for the Graph tab lives. A directory such as `~/.cct` works: the store file `session-analytics-graph` is created inside it. A file path is used as given. | `~/.cct/session-analytics-graph` |
 | `CCT_SA_REDACTION` | What is stripped before anything is written: `none`, `code` (strip code blocks and tool inputs, keep prose), `metadata-only` (no text at all). | `code` |
 | `CCT_SA_SOURCE_CLAUDE_CODE`, `CCT_SA_SOURCE_AIDER` | Where each assistant keeps its transcripts. | `~/.claude/projects`, `~` |
 | `CCT_SA_JUDGE_BACKEND` / `CCT_SA_JUDGE_MODEL` | The judge for every copilot: `ollama` (local), `claude-code` (the `claude` CLI on your PATH), or `openai` (any OpenAI-compatible endpoint: LM Studio, vLLM, OpenAI, Azure). Empty model = the backend's default. | `ollama`, `` |
@@ -136,7 +136,7 @@ per-project block in `~/.cct/session-analytics.json`.
 `serve` reads `.env`. To point it elsewhere for one run:
 
 ```bash
-./scripts/session-analytics serve --db sqlite:////Users/you/.cct/sa.db --graph-path /Users/you/.cct/kuzu
+./scripts/session-analytics serve --db sqlite:////Users/you/.cct/sa.db --graph-path /Users/you/.cct
 ```
 
 First time on a machine, `start` does everything in one go — creates the
@@ -147,8 +147,29 @@ and opens the browser:
 ./scripts/session-analytics start
 ```
 
-Stop with Ctrl+C. The API binds to localhost only; the Studio talks to it
-at `http://127.0.0.1:8765` (override with `NEXT_PUBLIC_API_BASE`).
+Stop with Ctrl+C. The API binds to localhost only.
+
+### 4.1 Ports
+
+The defaults are 8765 for the API and 3000 for the Studio. Both are
+flags, and `serve` wires them together: the Studio is told where the
+API is, and the API's origin allowlist is told where the Studio is.
+
+```bash
+./scripts/session-analytics serve --api-port 8766 --ui-port 3001    # then open http://localhost:3001
+./scripts/session-analytics start --api-port 8766 --ui-port 3001    # same flags on start
+```
+
+If `serve` fails with "address already in use", something is holding a
+default port — often an earlier `serve` that was never stopped. See who:
+
+```bash
+lsof -nP -iTCP:8765 -iTCP:3000 -sTCP:LISTEN
+```
+
+Stop it (`kill <pid>`) or start on other ports. Running the Studio by
+hand (`cd studio && npm run dev`) needs `NEXT_PUBLIC_API_BASE` set to the
+API's address when it is not the default.
 
 ---
 
@@ -167,8 +188,24 @@ Incremental is the default: only new or changed transcripts are read.
 Re-ingesting a session replaces its turns. Archived text, the
 whole-session analyses and your human labels are anchored so they
 survive that; the judge's per-turn labels are dropped with the turns
-and come back on the next judge run. Or press **Load
-sessions** on the Analysis page. `watch` runs ingest in a loop:
+and come back on the next judge run.
+
+**Choose what to load.** Years of copilot history can be gigabytes of
+transcripts; you do not have to read them all at once. Nothing is
+parsed to list them:
+
+```bash
+./scripts/session-analytics ingest --list                          # what would be loaded: newest first, size, loaded/new
+./scripts/session-analytics ingest --since 2026-09-01              # modified on/after a date (or an ISO datetime)
+./scripts/session-analytics ingest --limit 20                      # the newest 20 (after --since)
+./scripts/session-analytics ingest --session-id <id> --session-id <id>   # exactly these (ids from --list)
+```
+
+On the Analysis page the **Load sessions** step shows the same list
+under **Which sessions**: filter by date and count, or tick sessions,
+and the button says what it will read ("Load 3 selected · 12.1 MB").
+**Run all steps** uses the same selection. `watch` runs ingest in a
+loop:
 
 ```bash
 ./scripts/session-analytics watch --interval 15
@@ -241,9 +278,16 @@ Dashboard's label distribution, the KPIs, and cost-by-sentiment mean
 something. It calls a model **per turn**; the local Ollama default keeps
 that free.
 
-From the Studio: **Analysis → step 3, LLM judge**. Choose the backend
-(each copilot's own, or an installed Ollama model), how many turns, and
-run. From the CLI:
+The judge is **configured in one place: Settings → LLM-as-Judge**
+(backend, model, workers, URL). The Model field lists what the saved
+backend URL actually serves; choose *Other…* to type a name it does not
+list. **Analysis → step 3, LLM judge** runs that judge — it shows which
+one and links back to Settings; it is not a second place to choose.
+Set how many turns and run. The step reports as it goes:
+turns done of total, labelled and failed, the rate and time left, and
+the reason for the last failure — a wrong model name or a dead backend
+shows on the first turn, not after fifty. Every label is written as it
+arrives, so a run you stop keeps what it labelled. From the CLI:
 
 ```bash
 ./scripts/session-analytics analyze --limit 200                          # configured judge
@@ -254,6 +298,21 @@ run. From the CLI:
 
 Turns with no text (tool-result turns under redaction) are skipped:
 there is nothing to judge.
+
+### 7.0 A judge on another machine (e.g. a DGX Spark)
+
+Both local backends can live on other hardware; the Studio only needs
+its URL.
+
+| You run on the Spark | Settings → LLM-as-Judge |
+|---|---|
+| **Ollama** (`OLLAMA_HOST=0.0.0.0 ollama serve`, then `ollama pull qwen3.6:27b`) | Backend `ollama` · Ollama URL `http://spark.local:11434` · Model from the list |
+| **vLLM** (`vllm serve Qwen/Qwen3.6-27B --port 8000`, or any OpenAI-compatible server) | Backend `openai` · Base URL `http://spark.local:8000/v1` · API key blank (or whatever the server was started with) · Model from the list |
+
+Save, and the Model list refreshes from the new URL. Nothing else
+changes: the judge step, the CLI (`analyze`) and the validation loop
+all use the configured judge. The transcript text goes to that machine
+under the configured redaction level (§3.2); nothing else leaves.
 
 ### 7.1 Is the judge right? (validation)
 
@@ -330,7 +389,7 @@ docker compose -f scripts/session_analytics/docker-compose.yml up -d
 |---|---|---|
 | `error: no database configured` | No `.env`, no `--db`. | `setup`, or `--db sqlite:////abs/path.db` (four slashes). |
 | Settings says the server uses a different database than the form | `serve` was started with `--db`. | Either is fine; the banner tells you which store every number comes from. |
-| Graph tab: "the graph store … could not be opened" | `CCT_SA_KUZU_PATH` points at a directory, or the store file is corrupt. | Set it to a file path such as `~/.cct/kuzu`, delete a corrupt file, run **Build knowledge graph**. |
+| Graph tab: "the graph store … could not be opened" | The store file at `CCT_SA_KUZU_PATH` is corrupt or locked by a running build. | Delete the corrupt file (`~/.cct/session-analytics-graph` by default), then run **Build knowledge graph**. |
 | Graph tab: "has not been built yet" | Never built. | Analysis → Build knowledge graph. |
 | Session page: `model 'llama3' not found` | The configured judge has no model and Ollama's default is not pulled. | Pick an installed model in the page's judge picker, or set `CCT_SA_JUDGE_MODEL`. |
 | "The judge did not answer … Remote end closed connection" | The model does not fit in memory at the whole-session context size. | Use a smaller model for whole-session analyses. |
@@ -338,6 +397,7 @@ docker compose -f scripts/session_analytics/docker-compose.yml up -d
 | Timeline says "preview only" | The project is not opted into the archive. | §5.3. |
 | Sessions page is empty but the store has data | Everything matched the noise rule. | Tick **Show excluded**, or relax `CCT_SA_NOISE_*`. |
 | Dashboard "Median agent response" is "—" | No turn carries a timestamp on both sides (Aider transcripts have none per turn). | Expected; the measured-n note says how many turns were measured. |
+| `serve` fails: "address already in use" | A default port is held — usually an earlier `serve` still running. | `lsof -nP -iTCP:8765 -iTCP:3000 -sTCP:LISTEN`, stop it, or `serve --api-port 8766 --ui-port 3001` (§4.1). |
 | Studio pages stuck on "Loading…" after `npm install` | The dev server's cache predates the install. | Restart `serve`. |
 | CodeQL / CI mentions `fs/browse` | The Settings path picker is a deliberate local directory browser, loopback-only. | Nothing; it is by design. |
 

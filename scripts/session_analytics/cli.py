@@ -89,6 +89,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Redaction mode (default from config: code).",
     )
+    p_ing.add_argument(
+        "--since", default=None, metavar="DATE",
+        help="Only sessions modified on/after this date (YYYY-MM-DD or ISO datetime).",
+    )
+    p_ing.add_argument(
+        "--limit", type=int, default=None, metavar="N",
+        help="Only the newest N sessions (after --since).",
+    )
+    p_ing.add_argument(
+        "--session-id", action="append", default=None, metavar="ID",
+        help="Only this native session id (repeatable); --list prints the ids.",
+    )
+    p_ing.add_argument(
+        "--list", action="store_true",
+        help="Print what would be loaded under these filters (newest first, with "
+             "sizes and loaded state) and exit without loading anything.",
+    )
     grp = p_ing.add_mutually_exclusive_group()
     grp.add_argument(
         "--incremental",
@@ -190,7 +207,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_sim.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_sim.add_argument("--graph-path", "--db-path", dest="db_path", default=None,
-                       help="Kùzu database path (else config kuzu_path).")
+                       help="Kùzu store file, or a directory to keep it in (else config kuzu_path).")
     p_sim.add_argument("--threshold", default=None,
                        help="Minimum cosine score for an edge (else config).")
     p_sim.add_argument("--top-k", default=None,
@@ -204,7 +221,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_clu.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_clu.add_argument("--graph-path", "--db-path", dest="db_path", default=None,
-                       help="Kùzu database path (else config kuzu_path).")
+                       help="Kùzu store file, or a directory to keep it in (else config kuzu_path).")
 
     p_kpi = sub.add_parser("kpis", help="Compute session-level KPI rollups from labels.")
     p_kpi.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
@@ -224,14 +241,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_serve = sub.add_parser("serve", help="Launch the FastAPI + Next.js Studio.")
     p_serve.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
-    p_serve.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu graph dir (else config).")
+    p_serve.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu store file, or a directory to keep it in (else config kuzu_path).")
     p_serve.add_argument("--api-port", type=int, default=8765)
     p_serve.add_argument("--ui-port", type=int, default=3000)
     p_serve.add_argument("--no-ui", action="store_true", help="Serve the API only.")
 
     p_graph = sub.add_parser("graph", help="Build the Kùzu knowledge graph from the store.")
     p_graph.add_argument("--db", "--dsn", dest="dsn", default=None, help="Relational DSN (else config).")
-    p_graph.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu graph dir (else config).")
+    p_graph.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu store file, or a directory to keep it in (else config kuzu_path).")
     p_graph.add_argument(
         "--rebuild", action="store_true",
         help="Drop + recreate all graph tables first (bulk COPY FROM path).",
@@ -414,9 +431,19 @@ def _derived_developer_id(args: argparse.Namespace, cfg: AnalyticsConfig) -> str
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
     from .ingest.pipeline import ingest
+    from .ingest.selection import IngestSelection, parse_since
     from .setup_cmd import ensure_initialized
 
     if not ensure_initialized(args.dsn):
+        return C.EXIT_USAGE
+    try:
+        selection = IngestSelection(
+            since=parse_since(args.since) if args.since else None,
+            limit=args.limit,
+            session_ids=frozenset(args.session_id or ()),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
@@ -426,6 +453,17 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return C.EXIT_USAGE
+    if args.list:
+        from .ingest.pipeline import discover_sessions
+
+        try:
+            print(json.dumps(discover_sessions(
+                dsn=cfg.dsn, copilots=args.copilot, root=args.root, selection=selection,
+            ), indent=2))
+        except UnknownAdapterError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return C.EXIT_USAGE
+        return C.EXIT_OK
     try:
         stats = ingest(
             dsn=cfg.dsn,
@@ -438,6 +476,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             cli_redaction_override=args.redact,
             projects=cfg.projects,
             project_id_rules=cfg.project_id_rules,
+            selection=selection,
         )
     except UnknownAdapterError as exc:
         print(f"error: {exc}", file=sys.stderr)

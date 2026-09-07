@@ -13,6 +13,26 @@ _AIDER_ROOT = FIXTURES / "aider"
 
 
 class TestAiderAdapter(RegistryResetTestCase):
+    def test_discover_skips_hidden_dependency_and_library_dirs(self) -> None:
+        # The packaged root is HOME; walking every dot-cache, node_modules
+        # and ~/Library took 88 s per load. A history file inside those is
+        # not a project and is not visited; one in a plain subdir is.
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        tmp = Path(tempfile.mkdtemp(prefix="cct-sa-aider-walk-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        src = _AIDER_ROOT / "proj" / ".aider.chat.history.md"
+        for rel in ("work/proj", ".cache/proj", "app/node_modules/pkg", "Library/x"):
+            d = tmp / rel
+            d.mkdir(parents=True)
+            shutil.copy(src, d / ".aider.chat.history.md")
+        refs = AiderAdapter().discover(tmp)
+        self.assertEqual(
+            [str(r.source_files[0].parent.relative_to(tmp)) for r in refs], ["work/proj"]
+        )
+
     def _load(self):
         adapter = AiderAdapter()
         refs = adapter.discover(_AIDER_ROOT)

@@ -1,9 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AgreementReport, JudgeRuns, api, JudgeModels, PipelineStatus, PipelineStep } from "@/lib/api";
+import {
+  AgreementReport,
+  DiscoveredSessions,
+  JudgeRuns,
+  LoadSelection,
+  api,
+  JudgeModels,
+  PipelineStatus,
+  PipelineStep,
+} from "@/lib/api";
 import { Card, Stat, formatCost, useApi } from "@/components/ui";
 import JudgeQuality from "@/components/JudgeQuality";
+import LoadSelectionPanel, { loadPlan } from "@/components/LoadSelection";
+import JudgeProgressBar, { judgeChoiceLabel } from "@/components/JudgeProgress";
 
 // THE PIPELINE AS A FLOW, not a list of cards.
 //
@@ -132,9 +143,7 @@ function Funnel({ counts }: { counts: PipelineStatus["counts"] }) {
 export default function AnalysisPage() {
   const [status, setStatus] = useState<PipelineStatus | null>(null);
   const [current, setCurrent] = useState(0);
-  const [judge, setJudge] = useState("");
   const [limit, setLimit] = useState(50);
-  const [judgeRunning, setJudgeRunning] = useState(false);
   // Real installed models, not a guess. A hardcoded "ollama:llama3"
   // silently 404'd on a machine that had llama3.2 instead.
   const [models, setModels] = useState<JudgeModels | null>(null);
@@ -151,6 +160,30 @@ export default function AnalysisPage() {
   const [cmp, setCmp] = useState<{ a: string; b: string }>({ a: "", b: "" });
   const [report, setReport] = useState<AgreementReport | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
+  // Which sessions to load: the listing under the filters, the filters,
+  // and an explicit pick. The pick wins; otherwise "every new session
+  // under the filters" — see LoadSelection.loadPlan.
+  const [listing, setListing] = useState<DiscoveredSessions | null>(null);
+  const [listingError, setListingError] = useState<string | null>(null);
+  const [since, setSince] = useState("");
+  const [loadLimit, setLoadLimit] = useState("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  const loadListing = useCallback(async () => {
+    try {
+      const r = await api.pipelineSessions({
+        since: since || undefined,
+        limit: Number(loadLimit) > 0 ? Number(loadLimit) : undefined,
+      });
+      setListing(r);
+      setListingError(null);
+      // A pick that the new filters no longer show is dropped, so the
+      // button never loads something the table does not display.
+      setPicked((p) => new Set([...p].filter((id) => r.sessions.some((s) => s.session_id === id))));
+    } catch (e) {
+      setListingError(String(e));
+    }
+  }, [since, loadLimit]);
 
   const loadRuns = useCallback(async () => {
     try {
@@ -200,72 +233,67 @@ export default function AnalysisPage() {
     api.judgeModels().then(setModels).catch(() => setModels(null));
   }, []);
 
+  useEffect(() => {
+    loadListing();
+  }, [loadListing]);
+
+  // When a load finishes, the listing's loaded/new column is stale and
+  // the pick has been served: clear it so the button falls back to
+  // "Load N new" rather than offering the same sessions again.
+  const ingestState = status?.steps[0]?.job.state;
+  useEffect(() => {
+    if (ingestState === "done") {
+      setPicked(new Set());
+      loadListing();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingestState]);
+
+  const plan = loadPlan(listing, picked, since, loadLimit);
+  // The judge is the one configured in Settings — the only place it is
+  // chosen. These are run options, not a second configuration.
+  const judgeOpts = {
+    limit,
+    rubric_name: runName.trim() || undefined,
+    only_labelled_by: onlyLabelledBy || undefined,
+  };
+
   async function runAll() {
     setNote(null);
     try {
-      await api.runAll(includeJudge);
+      // The same selection the Load step shows: "run all" must not
+      // quietly read every transcript the user just narrowed away; and
+      // the judge, when included, runs with the choices made below.
+      await api.runAll(includeJudge, { load: plan.body, judge: judgeOpts });
       refresh();
     } catch (e) {
       setNote(String(e));
     }
   }
 
-  async function run(step: string) {
+  async function run(step: string, load?: LoadSelection) {
     setNote(null);
     try {
-      await api.runStep(step);
+      await api.runStep(step, { load, judge: judgeOpts });
       refresh();
     } catch (e) {
       setNote(String(e));
     }
   }
 
-  async function runJudge() {
-    setJudgeRunning(true);
-    setNote(null);
-    try {
-      const r = await api.analyze({
-        judge: judge || undefined,
-        limit,
-        rubric_name: runName.trim() || undefined,
-        only_labelled_by: onlyLabelledBy || undefined,
-      });
-      // A WRITTEN ROW IS NOT A LABEL. The runner reports parse_ok and
-      // parse_failed separately; reporting only the row count turned 50
-      // backend errors into "Labelled 50 turns" with a green check.
-      const per = r.by_copilot
-        ? Object.values(r.by_copilot as Record<string, any>)
-        : [r as any];
-      const ok = per.reduce((n, s) => n + (s.parse_ok ?? 0), 0);
-      const failed = per.reduce((n, s) => n + (s.parse_failed ?? 0), 0);
-      if (ok === 0 && failed > 0) {
-        setNote(
-          `✗ Nothing was labelled — all ${failed} attempts failed. ` +
-            `The judge backend rejected every call (wrong model name, or ` +
-            `the server is not reachable). Check Backend below.`,
-        );
-      } else {
-        setNote(
-          `Labelled ${ok} turns` +
-            (failed > 0 ? ` · ${failed} failed` : "") +
-            ".",
-        );
-      }
-      refresh();
-      loadRuns();
-    } catch (e) {
-      setNote(`${String(e)} — is the judge backend reachable?`);
-    } finally {
-      setJudgeRunning(false);
-    }
-  }
+  // The judge is a background job like the other steps (it used to run
+  // inside one request with nothing to show until it returned). When it
+  // finishes, the runs list for the quality card is stale.
+  const judgeState = status?.steps[2]?.job.state;
+  useEffect(() => {
+    if (judgeState === "done") loadRuns();
+  }, [judgeState, loadRuns]);
 
   if (!status)
     return <div className="text-slate-400 text-sm py-8">Loading…</div>;
 
   const step = status.steps[current];
-  const running =
-    step.job.state === "running" || (step.id === "judge" && judgeRunning);
+  const running = step.job.state === "running";
   const isLast = current === status.steps.length - 1;
   const allRunning = status.all?.state === "running";
 
@@ -340,12 +368,37 @@ export default function AnalysisPage() {
               failed
             </span>
           )}
-          {step.optional && (
-            <span className="text-xs text-slate-400">optional</span>
-          )}
         </div>
 
         <p className="text-sm text-slate-600 mt-1">{step.blurb}</p>
+
+        {step.id === "ingest" && (
+          <LoadSelectionPanel
+            listing={listing}
+            error={listingError}
+            since={since}
+            limit={loadLimit}
+            picked={picked}
+            running={running}
+            onSince={setSince}
+            onLimit={setLoadLimit}
+            onTogglePick={(id) =>
+              setPicked((p) => {
+                const n = new Set(p);
+                if (n.has(id)) n.delete(id);
+                else n.add(id);
+                return n;
+              })
+            }
+            onPickNew={() =>
+              setPicked(
+                new Set((listing?.sessions ?? []).filter((s) => !s.loaded).map((s) => s.session_id)),
+              )
+            }
+            onClearPicks={() => setPicked(new Set())}
+            onLoad={(body) => run("ingest", body)}
+          />
+        )}
 
         {step.id === "graph" && (
           <p className="text-xs text-amber-700 mt-2">
@@ -354,12 +407,29 @@ export default function AnalysisPage() {
         )}
 
         {step.id === "judge" && (
+          // The judge is CONFIGURED under Settings, and only there. This
+          // says which one will run and links to where it is changed —
+          // it is not a second place to pick one.
+          <p className="text-sm mt-2">
+            <span className="text-slate-500">Judge:</span>{" "}
+            <span className="font-mono text-slate-800">{judgeChoiceLabel(models?.configured)}</span>
+            {" · "}
+            <a href="/settings" className="text-blue-700 hover:underline">
+              change in Settings
+            </a>
+            {models && models.backend !== "claude-code" && models.url && !models.reachable && (
+              <span className="text-rose-700"> · not reachable at {models.url}</span>
+            )}
+          </p>
+        )}
+
+        {step.id === "judge" && (
           // The cost warning belongs HERE, at the moment of the decision
           // — not in documentation the user has already walked past.
           <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
-            ⚠ Judging calls a model for <em>every turn</em> and can consume
-            significant credits on a large batch. A local backend (Ollama) keeps
-            it free and on this machine — switch it in Settings → LLM-as-Judge.
+            ⚠ Judging calls the model once for <em>every turn</em>; a hosted
+            backend can consume significant credits on a large batch. A local
+            backend (Ollama, or vLLM on your own hardware) keeps it free.
           </div>
         )}
 
@@ -370,6 +440,14 @@ export default function AnalysisPage() {
               ? ` · ${Math.round(step.job.seconds)}s elapsed`
               : ""}
           </p>
+        )}
+
+        {step.id === "judge" && step.job.progress && (
+          <JudgeProgressBar
+            progress={step.job.progress}
+            seconds={step.job.seconds}
+            running={running}
+          />
         )}
 
         {step.job.message && (
@@ -386,25 +464,6 @@ export default function AnalysisPage() {
 
         {step.id === "judge" && (
           <div className="flex items-center gap-2 mt-3 flex-wrap">
-            <label className="text-xs text-slate-500">Backend</label>
-            <select
-              value={judge}
-              onChange={(e) => setJudge(e.target.value)}
-              className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm"
-            >
-              <option value="">Each copilot&apos;s own LLM</option>
-              {models?.models.map((m) => (
-                <option key={m} value={`ollama:${m}`}>
-                  ollama:{m}
-                </option>
-              ))}
-            </select>
-            {models && !models.reachable && (
-              <span className="text-xs text-rose-700">
-                Ollama unreachable at {models.url} — only the copilot&apos;s own
-                LLM is available.
-              </span>
-            )}
             <label className="text-xs text-slate-500">Turns</label>
             <input
               type="number"
@@ -442,17 +501,19 @@ export default function AnalysisPage() {
         )}
 
         <div className="flex items-center gap-2 mt-4 flex-wrap">
-          <button
-            onClick={() => (step.id === "judge" ? runJudge() : run(step.id))}
-            disabled={running}
-            className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700 disabled:opacity-50"
-          >
-            {running
-              ? "Running…"
-              : step.done
-                ? `Re-run ${step.title.toLowerCase()}`
-                : `Run ${step.title.toLowerCase()}`}
-          </button>
+          {step.id !== "ingest" && (
+            <button
+              onClick={() => run(step.id)}
+              disabled={running}
+              className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700 disabled:opacity-50"
+            >
+              {running
+                ? "Running…"
+                : step.done
+                  ? `Re-run ${step.title.toLowerCase()}`
+                  : `Run ${step.title.toLowerCase()}`}
+            </button>
+          )}
           <button
             onClick={() => setCurrent(Math.max(0, current - 1))}
             disabled={current === 0}

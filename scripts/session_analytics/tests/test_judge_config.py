@@ -68,6 +68,25 @@ class TestEnvFileIO(unittest.TestCase):
              mock.patch.dict("os.environ", base, clear=True):
             self.assertEqual(cfgmod.load_config().dsn, "sqlite:////file.db")
 
+    def test_kuzu_path_directory_resolves_to_store_file_inside_it(self) -> None:
+        # CCT_SA_KUZU_PATH=~/.cct (a directory) crashed the graph step
+        # with Kùzu's "Database path cannot be a directory". A directory
+        # now means "keep the store in here"; a file path is used as is.
+        import os
+        from unittest import mock
+
+        d = Path(tempfile.mkdtemp())
+        base = {k: v for k, v in os.environ.items() if not k.startswith("CCT_SA_")}
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {**base, cfgmod.ENV_KUZU_PATH: str(d)}, clear=True):
+            self.assertEqual(cfgmod.load_config().kuzu_path, str(d / C.KUZU_STORE_NAME))
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", base, clear=True):
+            self.assertEqual(
+                cfgmod.load_config(kuzu_path=str(d / "graph.kz")).kuzu_path,
+                str(d / "graph.kz"),
+            )
+
     def test_round_trip_and_preserve_unknown(self) -> None:
         d = Path(tempfile.mkdtemp())
         env = d / ".env"
@@ -92,6 +111,23 @@ class TestJudgeResolution(unittest.TestCase):
         # Claude Code → its own LLM (empty model = Claude Code default / Opus 4.8)
         self.assertEqual(j.resolve("claude-code"), ("claude-code", ""))
         self.assertEqual(j.backend, "claude-code")
+
+    def test_model_alone_overrides_for_the_default_backend(self) -> None:
+        # Settings: Backend left at "Packaged default", Model chosen and
+        # saved. The model used to be read only beside an explicit
+        # backend, so the choice resolved to ('ollama', '') — ignored.
+        import os
+        from unittest import mock
+
+        base = {k: v for k, v in os.environ.items() if not k.startswith("CCT_SA_")}
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {**base, cfgmod.ENV_JUDGE_MODEL: "qwen3.6:27b"}, clear=True):
+            j = cfgmod.load_config().judge
+            self.assertEqual(j.resolve("claude-code"), (j.default[0], "qwen3.6:27b"))
+            self.assertEqual(j.resolve(None), (j.default[0], "qwen3.6:27b"))
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", base, clear=True):
+            self.assertIsNone(cfgmod.load_config().judge.override)
 
     def test_override_wins_globally(self) -> None:
         j = _judge(override=("ollama", "llama3"),

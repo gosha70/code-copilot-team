@@ -327,8 +327,8 @@ class TestApi(RegistryResetTestCase):
         kpis = self.client.get("/api/dashboard/kpis").json()["totals"]
         self.assertEqual(kpis["sessions"], 1)
         self.assertEqual(kpis["excluded_noise"], 1)
-        status = self.client.get("/api/pipeline/status").json()["counts"]
-        self.assertEqual((status["sessions"], status["excluded_noise"]), (1, 1))
+        status = self.client.get("/api/pipeline/status").json()
+        self.assertEqual((status["counts"]["sessions"], status["counts"]["excluded_noise"]), (1, 1))
         effort = self.client.get("/api/predict/effort").json()
         self.assertEqual(effort["sessions"], 1)
         # Every other dashboard source excludes the same session: give the
@@ -367,6 +367,23 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(cost["by_sentiment"], [])
         labels = self.client.get("/api/dashboard/labels").json()["labels"]
         self.assertEqual(sum(l["total"] for l in labels), 0)
+        # A store with only noise is NOT "done" loading: the probe alone
+        # would show "Re-run load sessions" to someone who loaded nothing.
+        from session_analytics.relational.db import Database as _Db
+
+        conn = _Db.connect(self.dsn)
+        try:
+            conn.execute(
+                "UPDATE copilot_session SET project_path = ? WHERE id <> ?",
+                ("/tmp/cct-probe.demo", probe_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        status = self.client.get("/api/pipeline/status").json()
+        ingest = next(s for s in status["steps"] if s["id"] == "ingest")
+        self.assertEqual((status["counts"]["sessions"], status["counts"]["excluded_noise"]), (0, 2))
+        self.assertFalse(ingest["done"])
 
     def test_graph_node_counts_unopenable_store_is_503_with_guidance(self) -> None:
         # A kuzu path that is a directory (a real misconfiguration seen
@@ -503,6 +520,116 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.json()["ok"])
         self.assertEqual(r.json()["sessions"], 1)
+
+    def test_pipeline_sessions_lists_what_load_would_read_and_the_pick_narrows_it(self) -> None:
+        # The Analysis page's selection table (the owner's per-session
+        # selection requirement): what is under the source roots, newest
+        # first, with sizes and loaded state; then the same body narrows
+        # what the ingest step reads.
+        import time
+
+        from session_analytics.config import ENV_SOURCE_PREFIX
+
+        with mock.patch.dict(
+            "os.environ", {ENV_SOURCE_PREFIX + "CLAUDE_CODE": str(CLAUDE_CODE_ROOT)}
+        ):
+            listing = self.client.get("/api/pipeline/sessions", params={"copilot": "claude-code"})
+            self.assertEqual(listing.status_code, 200)
+            body = listing.json()
+            self.assertEqual(body["total"], 1)
+            self.assertTrue(body["sessions"][0]["loaded"])  # setUp ingested it
+            self.assertGreater(body["total_bytes"], 0)
+            sid = body["sessions"][0]["session_id"]
+            self.assertEqual(
+                self.client.get("/api/pipeline/sessions", params={"since": "2100-01-01"}).json()["total"], 0
+            )
+            self.assertEqual(
+                self.client.get("/api/pipeline/sessions", params={"since": "soon"}).status_code, 400
+            )
+            # An ingest narrowed to an id that is not there loads nothing and
+            # says why; the pick of the real id loads it.
+            messages = []
+            for pick in ("nope", sid):
+                r = self.client.post(
+                    "/api/pipeline/run/ingest",
+                    json={"load": {"copilots": ["claude-code"], "session_ids": [pick]}},
+                )
+                self.assertEqual(r.status_code, 200, r.text)
+                for _ in range(100):
+                    job = self.client.get("/api/pipeline/status").json()["steps"][0]["job"]
+                    if job["state"] != "running":
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(job["state"], "done", job)
+                messages.append(job["message"])
+            self.assertIn("ingested 0 sessions", messages[0])
+            self.assertIn("1 outside the selection", messages[0])
+            self.assertIn("1 already up to date", messages[1])
+
+    def test_judge_step_runs_as_a_job_with_progress_and_says_why_it_failed(self) -> None:
+        # The judge used to run inside the request with nothing to show
+        # until it returned. It is now a pipeline job: every turn is
+        # written as it arrives, the status carries done/total, ok/failed
+        # and the last failure's reason, and the final message says what
+        # was labelled with which judge.
+        import time
+
+        from session_analytics.judge.contracts import PARSE_BACKEND_ERROR, TurnLabels
+        from session_analytics.judge.registry import register_judge
+
+        class _Flaky:
+            judge_id = "flaky"
+
+            def __init__(self, model: str = "") -> None:
+                self._model = model or "m"
+
+            def rate_turn(self, ctx, rubric):
+                # user turns answer; assistant turns fail like a dead backend
+                if ctx.role == "user":
+                    return TurnLabels(
+                        bool_labels={l: False for l in rubric.bool_labels}, sentiment="NEUTRAL",
+                        interaction_quality=3, judge_id=self.judge_id, judge_model=self._model,
+                    )
+                return TurnLabels(
+                    bool_labels={l: None for l in rubric.bool_labels}, sentiment=None,
+                    interaction_quality=None, parse_status=PARSE_BACKEND_ERROR,
+                    judge_id=self.judge_id, judge_model=self._model,
+                    metadata={"error": "HTTP 404: model 'm' not found"},
+                )
+
+            def complete(self, prompt, *, timeout=120):  # pragma: no cover
+                raise NotImplementedError
+
+        register_judge("flaky", _Flaky)
+        self.assertEqual(
+            self.client.post("/api/pipeline/run/judge", json={"judge": {"judge": "nope:x"}}).status_code,
+            400,
+        )
+        r = self.client.post("/api/pipeline/run/judge", json={"judge": {"judge": "flaky:m", "limit": 4}})
+        self.assertEqual(r.status_code, 200, r.text)
+        for _ in range(200):
+            job = self.client.get("/api/pipeline/status").json()["steps"][2]["job"]
+            if job["state"] != "running":
+                break
+            time.sleep(0.05)
+        self.assertEqual(job["state"], "done", job)
+        prog = job["progress"]
+        self.assertEqual((prog["total"], prog["labeled"]), (4, 4))
+        self.assertEqual(prog["parse_ok"] + prog["parse_failed"], 4)
+        self.assertGreater(prog["parse_failed"], 0)
+        self.assertEqual(prog["last_error"], "HTTP 404: model 'm' not found")
+        self.assertEqual(prog["judge"], "flaky:m")
+        self.assertIn("with flaky:m", job["message"])
+        self.assertIn("of 4 turns", job["message"])
+        self.assertIn("last: HTTP 404", job["message"])
+        # Failed rows are written too (attempted, not labelled), so the
+        # funnel can say "N judge attempts failed" with a reason on hand.
+        counts = self.client.get("/api/pipeline/status").json()["counts"]
+        self.assertEqual(counts["labels"] + counts["label_failures"], 4)
+        # The configured judge is reported once, for both pages to show.
+        conf = self.client.get("/api/judge/models").json()["configured"]
+        self.assertIn(conf["source"], ("settings", "packaged default"))
+        self.assertTrue(conf["spec"])
 
     def test_get_config(self) -> None:
         r = self.client.get("/api/config")

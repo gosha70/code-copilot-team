@@ -75,6 +75,8 @@ try {
         join(STUDIO, "lib/paths.ts"),
         join(STUDIO, "lib/docLinks.ts"),
         join(STUDIO, "components/JudgeQuality.tsx"),
+        join(STUDIO, "components/LoadSelection.tsx"),
+        join(STUDIO, "components/JudgeProgress.tsx"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -664,6 +666,20 @@ try {
     else console.log(`  ok  empty ${name} card still annotates a failed refresh`);
   }
 
+  // Empty store: zeros are a doorway, and the card says where it leads —
+  // differently for "nothing loaded", "everything excluded as noise", and
+  // "the store did not answer".
+  const emptyNone = render(cards.EmptyStore, { excludedNoise: 0, sources: "Reading from — claude-code: ~/.claude/projects", storeReachable: true });
+  if (!/No sessions have been loaded/.test(emptyNone) || !/href="\/analysis"/.test(emptyNone)) fail("empty store (nothing loaded) does not point at Analysis → Load sessions");
+  else if (!/reads claude-code/.test(emptyNone)) fail("empty store does not say what Load sessions would read");
+  else console.log("  ok  empty store → Analysis → Load sessions, with the source folders");
+  const emptyNoise = render(cards.EmptyStore, { excludedNoise: 1, sources: null, storeReachable: true });
+  if (!/excluded as noise/.test(emptyNoise) || !/href="\/sessions"/.test(emptyNoise) || !/Show excluded/.test(emptyNoise)) fail("all-noise store does not explain the exclusion or point at the toggle");
+  else console.log("  ok  all-noise store explains the exclusion and points at Show excluded");
+  const emptyDown = render(cards.EmptyStore, { excludedNoise: 0, sources: null, storeReachable: false });
+  if (!/not reachable/.test(emptyDown) || /No sessions have been loaded/.test(emptyDown)) fail("unreachable store presented as an empty one");
+  else console.log("  ok  unreachable store is not presented as empty");
+
   // Helpers (F10, F12, F15).
   const de = ui.describeError;
   if (de(new TypeError("Failed to fetch")) !== "The API is not reachable.") fail("describeError leaks 'Failed to fetch'");
@@ -757,6 +773,78 @@ try {
   const none = jq({ runs: runs2, report: { ...rep, turns_shared: 0, labels: [] }, a: rep.a, b: rep.b });
   if (!/share no turns/.test(none)) fail("zero shared turns not explained");
   else console.log("  ok  zero shared turns is explained, not a blank table");
+
+  // ── which sessions to load (owner's selection requirement) ──────────
+  console.log("\nload selection:");
+  const ls = await import(pathToFileURL(join(out, "components/LoadSelection.js")));
+  const MB = 1024 * 1024;
+  const disc = {
+    sessions: [
+      { copilot: "claude-code", session_id: "a", source: "-Users-x-proj", files: 1, bytes: 3 * MB, modified: "2026-09-07T10:00:00+00:00", modified_epoch: 3, loaded: false },
+      { copilot: "claude-code", session_id: "b", source: "-Users-x-other", files: 2, bytes: 250 * MB, modified: "2026-09-06T10:00:00+00:00", modified_epoch: 2, loaded: true },
+    ],
+    total: 2, total_bytes: 253 * MB, new: 1, new_bytes: 3 * MB, cap: 500,
+  };
+  const noPick = ls.loadPlan(disc, new Set(), "", "");
+  if (noPick.label !== "Load 1 new session" || noPick.bytes !== 3 * MB || noPick.body.session_ids) fail(`no pick → every new session under the filters; got ${JSON.stringify(noPick)}`);
+  else console.log("  ok  no pick loads the new sessions under the filters");
+  const filtered = ls.loadPlan(disc, new Set(), "2026-09-01", "5");
+  if (filtered.body.since !== "2026-09-01" || filtered.body.limit !== 5) fail("filters do not reach the load body");
+  else console.log("  ok  since/limit reach the load body");
+  const pick = ls.loadPlan(disc, new Set(["b"]), "2026-09-01", "5");
+  if (pick.label !== "Load 1 selected" || pick.bytes !== 250 * MB || !pick.body.session_ids || pick.body.since) fail(`a pick must win over the filters; got ${JSON.stringify(pick)}`);
+  else console.log("  ok  an explicit pick wins over the filters");
+  const nothing = ls.loadPlan({ ...disc, new: 0, new_bytes: 0 }, new Set(), "", "");
+  if (nothing.count !== 0) fail("all-loaded listing still offers a load");
+  else console.log("  ok  all loaded → nothing to load");
+  const panelProps = {
+    listing: disc, error: null, since: "", limit: "", picked: new Set(["b"]), running: false,
+    onSince() {}, onLimit() {}, onTogglePick() {}, onPickNew() {}, onClearPicks() {}, onLoad() {},
+  };
+  const panel = render(ls.default, panelProps);
+  if (!/Load 1 selected/.test(panel) || !/250\.0 MB to read/.test(panel)) fail("panel button does not say what it loads and how much");
+  else if (!/large load/.test(panel)) fail("a 250 MB load carries no size warning");
+  else if (!/>new</.test(panel) || !/>loaded</.test(panel)) fail("rows lack the new/loaded state");
+  else if (!/2 found · 1 new/.test(panel)) fail("listing summary missing");
+  else console.log("  ok  panel: labelled button, size + large-load warning, new/loaded rows");
+  const small = render(ls.default, { ...panelProps, picked: new Set() });
+  if (/large load/.test(small) || !/3\.0 MB to read/.test(small)) fail("small load wrongly warned, or size missing");
+  else console.log("  ok  a small load is not warned");
+  const capped = render(ls.default, { ...panelProps, listing: { ...disc, total: 900 } });
+  if (!/newest 2 of 900/.test(capped)) fail("capped listing does not say so");
+  else console.log("  ok  capped listing says how many are not shown");
+  const empty = render(ls.default, { ...panelProps, listing: { ...disc, sessions: [], total: 0, new: 0, new_bytes: 0, total_bytes: 0 }, picked: new Set() });
+  if (!/No sessions under the source roots match/.test(empty)) fail("empty listing is a blank table");
+  else console.log("  ok  empty listing explains itself");
+  const down = render(ls.default, { ...panelProps, listing: null, error: "could not list sessions: boom" });
+  if (!/could not list sessions/.test(down) || /Listing sessions…/.test(down)) fail("listing error hidden behind a spinner");
+  else console.log("  ok  listing failure is shown");
+
+  // ── judge progress + the judge choice ──────────────────────────────
+  console.log("\njudge progress:");
+  const jp = await import(pathToFileURL(join(out, "components/JudgeProgress.js")));
+  const half = { total: 50, labeled: 25, parse_ok: 24, parse_failed: 1, last_error: "HTTP 404: model 'x' not found", judge: "ollama:x" };
+  const sum = jp.progressSummary(half, 50);
+  if (sum.pct !== 50 || !/25 of 50 turns/.test(sum.line) || !/24 labelled/.test(sum.line) || !/1 failed/.test(sum.line)) fail(`progress line wrong: ${JSON.stringify(sum)}`);
+  else if (!/30\.0 turns\/min/.test(sum.line) || !/about 50s left/.test(sum.eta)) fail(`rate/eta wrong: ${JSON.stringify(sum)}`);
+  else console.log("  ok  progress line: done/total, labelled, failed, rate, time left");
+  const slow = jp.progressSummary({ ...half, labeled: 10, parse_ok: 10, parse_failed: 0, last_error: "" }, 300);
+  if (!/about 20 min left/.test(slow.eta)) fail(`long eta not in minutes: ${slow.eta}`);
+  else console.log("  ok  a long remaining time is in minutes");
+  const bar = render(jp.default, { progress: half, seconds: 50, running: true });
+  if (!/width:50%/.test(bar) || !/Last failure: HTTP 404/.test(bar)) fail("bar or last-failure line missing");
+  else console.log("  ok  bar at 50% and the last failure named");
+  const dead = render(jp.default, { progress: { ...half, labeled: 5, parse_ok: 0, parse_failed: 5 }, seconds: 5, running: true });
+  if (!/Every call is failing/.test(dead) || !/Settings/.test(dead)) fail("all-failing run not called out");
+  else console.log("  ok  every-call-failing is called out with a next step");
+  const fin = render(jp.default, { progress: { ...half, labeled: 50, parse_ok: 49 }, seconds: 100, running: false });
+  if (/left/.test(fin) || !/width:100%/.test(fin)) fail("finished run still shows time left");
+  else console.log("  ok  finished run: full bar, no time left");
+  const conf = { spec: "ollama:qwen3.6:27b", backend: "ollama", model: "qwen3.6:27b", source: "settings", by_copilot: {} };
+  if (jp.judgeChoiceLabel(conf) !== "ollama:qwen3.6:27b (Settings)") fail(`judge choice label: ${jp.judgeChoiceLabel(conf)}`);
+  else if (!/packaged default/.test(jp.judgeChoiceLabel({ ...conf, source: "packaged default" }))) fail("packaged default not named");
+  else if (!/Settings/.test(jp.judgeChoiceLabel(undefined))) fail("no-config label does not point at Settings");
+  else console.log("  ok  the default judge choice names what Settings says and where it is set");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {
