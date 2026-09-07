@@ -109,6 +109,21 @@ def job_state(step: str) -> dict[str, Any]:
     return job
 
 
+def set_progress(step: str, progress: dict[str, Any]) -> None:
+    """Attach a progress payload to a RUNNING step, for the UI to poll.
+
+    The judge calls a model once per turn and a batch can take minutes;
+    a step that only says "running…" the whole time is indistinguishable
+    from a hung one. The runner reports after every turn (done/total,
+    ok/failed, the last failure's reason) and the payload rides on the
+    job so the status endpoint needs no other channel.
+    """
+    with _lock:
+        job = _jobs.get(step)
+        if job is not None and job.get("state") == _STATE_RUNNING:
+            job["progress"] = dict(progress)
+
+
 def _run(step: str, fn: Callable[[], str]) -> None:
     started = time.time()
     try:
@@ -122,6 +137,11 @@ def _run(step: str, fn: Callable[[], str]) -> None:
         traceback.print_exc()
     final["seconds"] = round(time.time() - started, 1)
     with _lock:
+        # The last progress payload stays on the finished job, so the
+        # counts a user watched do not vanish the moment the step ends.
+        progress = (_jobs.get(step) or {}).get("progress")
+        if progress is not None:
+            final["progress"] = progress
         _jobs[step] = final
 
 

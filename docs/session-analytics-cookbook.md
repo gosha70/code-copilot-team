@@ -278,9 +278,16 @@ Dashboard's label distribution, the KPIs, and cost-by-sentiment mean
 something. It calls a model **per turn**; the local Ollama default keeps
 that free.
 
-From the Studio: **Analysis → step 3, LLM judge**. Choose the backend
-(each copilot's own, or an installed Ollama model), how many turns, and
-run. From the CLI:
+The judge is **configured once, under Settings → LLM-as-Judge**
+(backend, model — for Ollama the Model field offers what is installed —
+workers, URL). **Analysis → step 3, LLM judge** runs it: the default
+choice names that configured judge; the other entries are one-off
+overrides for a single run, e.g. to compare two judges over the same
+turns (§7.1). Set how many turns and run. The step reports as it goes:
+turns done of total, labelled and failed, the rate and time left, and
+the reason for the last failure — a wrong model name or a dead backend
+shows on the first turn, not after fifty. Every label is written as it
+arrives, so a run you stop keeps what it labelled. From the CLI:
 
 ```bash
 ./scripts/session-analytics analyze --limit 200                          # configured judge

@@ -8,9 +8,9 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
-from typing import Optional, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from typing import Callable, Optional, Sequence
 
 from ..relational.db import Database
 from .contracts import Rubric, TurnContext, TurnJudge, TurnLabels
@@ -24,9 +24,25 @@ class JudgeStats:
     labeled: int = 0
     parse_ok: int = 0
     parse_failed: int = 0
+    #: How many turns this run set out to label, and the reason the
+    #: most recent failure gave — what a progress display needs.
+    total: int = 0
+    last_error: str = ""
+    judge: str = ""
+    per_copilot: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
-        return {"labeled": self.labeled, "parse_ok": self.parse_ok, "parse_failed": self.parse_failed}
+        out = {
+            "labeled": self.labeled, "parse_ok": self.parse_ok, "parse_failed": self.parse_failed,
+            "total": self.total, "last_error": self.last_error, "judge": self.judge,
+        }
+        if self.per_copilot:
+            out["by_copilot"] = self.per_copilot
+        return out
+
+
+#: Called after every turn is written, with the running stats.
+ProgressFn = Callable[[JudgeStats], None]
 
 
 def run_judge(
@@ -40,39 +56,60 @@ def run_judge(
     copilot: Optional[str] = None,
     limit: Optional[int] = None,
     only_labelled_by: Optional[str] = None,
+    progress: Optional[ProgressFn] = None,
+    stats: Optional[JudgeStats] = None,
 ) -> JudgeStats:
     """``only_labelled_by`` (#313) restricts the run to turns that already
     carry labels from another source — `rubric:<name>` or
     `human:<labeler>` — so a second run labels the SAME turns as the
-    first and the two can be compared pair by pair."""
+    first and the two can be compared pair by pair.
+
+    Each label is written and committed AS IT ARRIVES, and ``progress``
+    is called after each one. The run used to collect every answer
+    before writing any: a 50-turn run that died at turn 49 kept nothing,
+    and nothing could be shown while it ran. ``stats`` lets a caller
+    accumulate across several runs (one per copilot)."""
     contexts = _select_turns(
         db, rubric, overwrite=overwrite, session_id=session_id, copilot=copilot,
         limit=limit, only_labelled_by=only_labelled_by,
     )
-    stats = JudgeStats()
+    stats = stats if stats is not None else JudgeStats()
+    stats.total += len(contexts)
+    stats.judge = f"{getattr(judge, 'judge_id', '')}:{getattr(judge, '_model', '') or ''}".strip(":")
     if not contexts:
+        if progress:
+            progress(stats)
         return stats
+
+    from .contracts import PARSE_OK
 
     def _rate(ctx: TurnContext) -> tuple[TurnContext, TurnLabels]:
         return ctx, judge.rate_turn(ctx, rubric)
 
-    if workers > 1:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            results = list(pool.map(_rate, contexts))
-    else:
-        results = [_rate(c) for c in contexts]
-
-    # DB writes are serialized (single connection is not thread-safe).
-    from .contracts import PARSE_OK
-
-    for ctx, labels in results:
+    def _record(ctx: TurnContext, labels: TurnLabels) -> None:
+        # DB writes are serialized here (one connection, not thread-safe).
         _write_label(db, ctx, rubric, labels)
+        db.commit()
         stats.labeled += 1
         if labels.parse_status == PARSE_OK:
             stats.parse_ok += 1
         else:
             stats.parse_failed += 1
-    db.commit()
+            stats.last_error = str(
+                (labels.metadata or {}).get("error") or labels.parse_status
+            )[:300]
+        if progress:
+            progress(stats)
+
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_rate, c) for c in contexts]
+            for fut in as_completed(futures):
+                ctx, labels = fut.result()
+                _record(ctx, labels)
+    else:
+        for c in contexts:
+            _record(*_rate(c))
     return stats
 
 
@@ -179,24 +216,37 @@ def run_default_by_copilot(
     session_id: Optional[int] = None,
     limit: Optional[int] = None,
     only_labelled_by: Optional[str] = None,
+    progress: Optional[ProgressFn] = None,
+    stats: Optional[JudgeStats] = None,
 ) -> dict:
     """Route each copilot's turns to its configured judge (the path taken
     when no explicit ``--judge`` is given). The packaged default routes every
     copilot to the local-only ollama judge; ``.env``/Settings can opt
-    individual copilots into other judges. Returns a per-copilot stats map."""
+    individual copilots into other judges. Returns a per-copilot stats map;
+    ``stats``/``progress`` accumulate across the copilots."""
     from .registry import get_judge
 
     copilots = _unlabeled_copilots(db, rubric.name, overwrite=overwrite, session_id=session_id)
     out: dict = {}
+    total = stats if stats is not None else JudgeStats()
     for copilot in copilots:
         backend, model = config.judge.resolve(copilot)
         judge = get_judge(backend, model)
-        stats = run_judge(
+        before = (total.labeled, total.parse_ok, total.parse_failed, total.total)
+        run_judge(
             db, judge, rubric,
             workers=workers, overwrite=overwrite, session_id=session_id,
             copilot=copilot, limit=limit, only_labelled_by=only_labelled_by,
+            progress=progress, stats=total,
         )
-        out[copilot] = {"judge": f"{backend}:{model or '(default)'}", **stats.as_dict()}
+        out[copilot] = {
+            "judge": f"{backend}:{model or '(default)'}",
+            "labeled": total.labeled - before[0],
+            "parse_ok": total.parse_ok - before[1],
+            "parse_failed": total.parse_failed - before[2],
+            "total": total.total - before[3],
+        }
+        total.per_copilot = out
     return out
 
 

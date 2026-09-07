@@ -76,6 +76,7 @@ try {
         join(STUDIO, "lib/docLinks.ts"),
         join(STUDIO, "components/JudgeQuality.tsx"),
         join(STUDIO, "components/LoadSelection.tsx"),
+        join(STUDIO, "components/JudgeProgress.tsx"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -818,6 +819,32 @@ try {
   const down = render(ls.default, { ...panelProps, listing: null, error: "could not list sessions: boom" });
   if (!/could not list sessions/.test(down) || /Listing sessions…/.test(down)) fail("listing error hidden behind a spinner");
   else console.log("  ok  listing failure is shown");
+
+  // ── judge progress + the judge choice ──────────────────────────────
+  console.log("\njudge progress:");
+  const jp = await import(pathToFileURL(join(out, "components/JudgeProgress.js")));
+  const half = { total: 50, labeled: 25, parse_ok: 24, parse_failed: 1, last_error: "HTTP 404: model 'x' not found", judge: "ollama:x" };
+  const sum = jp.progressSummary(half, 50);
+  if (sum.pct !== 50 || !/25 of 50 turns/.test(sum.line) || !/24 labelled/.test(sum.line) || !/1 failed/.test(sum.line)) fail(`progress line wrong: ${JSON.stringify(sum)}`);
+  else if (!/30\.0 turns\/min/.test(sum.line) || !/about 50s left/.test(sum.eta)) fail(`rate/eta wrong: ${JSON.stringify(sum)}`);
+  else console.log("  ok  progress line: done/total, labelled, failed, rate, time left");
+  const slow = jp.progressSummary({ ...half, labeled: 10, parse_ok: 10, parse_failed: 0, last_error: "" }, 300);
+  if (!/about 20 min left/.test(slow.eta)) fail(`long eta not in minutes: ${slow.eta}`);
+  else console.log("  ok  a long remaining time is in minutes");
+  const bar = render(jp.default, { progress: half, seconds: 50, running: true });
+  if (!/width:50%/.test(bar) || !/Last failure: HTTP 404/.test(bar)) fail("bar or last-failure line missing");
+  else console.log("  ok  bar at 50% and the last failure named");
+  const dead = render(jp.default, { progress: { ...half, labeled: 5, parse_ok: 0, parse_failed: 5 }, seconds: 5, running: true });
+  if (!/Every call is failing/.test(dead) || !/Settings/.test(dead)) fail("all-failing run not called out");
+  else console.log("  ok  every-call-failing is called out with a next step");
+  const fin = render(jp.default, { progress: { ...half, labeled: 50, parse_ok: 49 }, seconds: 100, running: false });
+  if (/left/.test(fin) || !/width:100%/.test(fin)) fail("finished run still shows time left");
+  else console.log("  ok  finished run: full bar, no time left");
+  const conf = { spec: "ollama:qwen3.6:27b", backend: "ollama", model: "qwen3.6:27b", source: "settings", by_copilot: {} };
+  if (jp.judgeChoiceLabel(conf) !== "ollama:qwen3.6:27b (Settings)") fail(`judge choice label: ${jp.judgeChoiceLabel(conf)}`);
+  else if (!/packaged default/.test(jp.judgeChoiceLabel({ ...conf, source: "packaged default" }))) fail("packaged default not named");
+  else if (!/Settings/.test(jp.judgeChoiceLabel(undefined))) fail("no-config label does not point at Settings");
+  else console.log("  ok  the default judge choice names what Settings says and where it is set");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

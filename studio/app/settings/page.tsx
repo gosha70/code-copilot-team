@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, ConfigResponse, ProjectRedactionRow } from "@/lib/api";
+import { api, ConfigResponse, JudgeModels, ProjectRedactionRow } from "@/lib/api";
 import { Card, ErrorNote, Loading, useApi } from "@/components/ui";
 import PathPicker from "@/components/PathPicker";
 import { pathFromValue } from "@/lib/paths";
@@ -112,8 +112,9 @@ const META: Record<
   CCT_SA_JUDGE_MODEL: {
     label: "Model",
     help:
-      "Which model the backend should use. Examples: llama3, " +
-      "qwen2.5-coder:14b, gpt-4o-mini.",
+      "Which model the backend should use. For Ollama the list is what is " +
+      "installed on this machine (`ollama list`); type any tag to pull " +
+      "one that is not. Examples: llama3, qwen2.5-coder:14b, gpt-4o-mini.",
     placeholder: "the backend's default",
   },
   CCT_SA_JUDGE_BASE_URL: {
@@ -161,6 +162,12 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectRedactionRow[] | null>(null);
   const [projectsError, setProjectsError] = useState<string | null>(null);
+  // Models Ollama actually has, offered on the Model field: a name typed
+  // from memory that is not installed 404s on every judge call.
+  const [models, setModels] = useState<JudgeModels | null>(null);
+  useEffect(() => {
+    api.judgeModels().then(setModels).catch(() => setModels(null));
+  }, []);
   // ONE open at a time. Help is on demand behind a (?) — permanently
   // rendering every explanation is what made this page unreadable.
   const [openHelp, setOpenHelp] = useState<string | null>(null);
@@ -231,6 +238,8 @@ export default function SettingsPage() {
   if (!cfg) return <Loading />;
 
   const backend = values["CCT_SA_JUDGE_BACKEND"] || "";
+  // Blank backend = the packaged default, which is Ollama.
+  const ollamaChosen = backend === "" || backend === "ollama";
   const baseUrl = values["CCT_SA_JUDGE_BASE_URL"] || "";
   const cloudJudge =
     backend === "claude-code" ||
@@ -369,7 +378,7 @@ export default function SettingsPage() {
                     value={values[f.key] || ""}
                     onChange={(e) => set(f.key, e.target.value)}
                   >
-                    <option value="">Default — the copilot’s own model (Claude Code → Opus 4.8)</option>
+                    <option value="">Packaged default — local Ollama</option>
                     {cfg.judge_backends.map((b) => (
                       <option key={b} value={b}>{b}</option>
                     ))}
@@ -386,7 +395,24 @@ export default function SettingsPage() {
                     }
                     value={values[f.key] || ""}
                     onChange={(e) => set(f.key, e.target.value)}
+                    list={f.key === "CCT_SA_JUDGE_MODEL" && ollamaChosen ? "ollama-models" : undefined}
                   />
+                  {f.key === "CCT_SA_JUDGE_MODEL" && ollamaChosen && (
+                    <>
+                      <datalist id="ollama-models">
+                        {models?.models.map((name) => (
+                          <option key={name} value={name} />
+                        ))}
+                      </datalist>
+                      <span className="shrink-0 self-center text-xs text-slate-500">
+                        {models === null
+                          ? ""
+                          : models.reachable
+                            ? `${models.models.length} installed`
+                            : "Ollama unreachable — no list"}
+                      </span>
+                    </>
+                  )}
                   {m.browse && (
                     <button
                       type="button"

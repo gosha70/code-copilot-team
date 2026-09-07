@@ -850,7 +850,39 @@ export interface PipelineStep {
   blurb: string;
   done: boolean;
   optional: boolean;
-  job: { state: "idle" | "running" | "done" | "failed"; message?: string; seconds?: number };
+  job: {
+    state: "idle" | "running" | "done" | "failed";
+    message?: string;
+    seconds?: number;
+    /** The judge step reports after every turn (see JudgeProgress). */
+    progress?: JudgeProgress;
+  };
+}
+
+/** Running counts from the judge step: written as each turn is judged. */
+export interface JudgeProgress {
+  total: number;
+  labeled: number;
+  parse_ok: number;
+  parse_failed: number;
+  last_error: string;
+  judge: string;
+}
+
+/** How the judge step runs; `judge` blank = the judge configured in
+ *  Settings. */
+export interface JudgeOptions {
+  judge?: string;
+  workers?: number;
+  limit?: number;
+  rubric_name?: string;
+  only_labelled_by?: string;
+}
+
+/** Per-step options for run/<step> and run-all. */
+export interface PipelineRun {
+  load?: LoadSelection;
+  judge?: JudgeOptions;
 }
 
 /** Which discovered sessions "Load sessions" reads; every field blank
@@ -947,6 +979,14 @@ export interface JudgeModels {
   url: string;
   models: string[];
   error?: string;
+  /** The judge a run with no explicit choice uses, and where it is set. */
+  configured: {
+    spec: string;
+    backend: string;
+    model: string;
+    source: "settings" | "packaged default";
+    by_copilot: Record<string, string>;
+  };
 }
 
 export const api = {
@@ -964,13 +1004,13 @@ export const api = {
     const qs = q.toString();
     return get<DiscoveredSessions>(`/api/pipeline/sessions${qs ? `?${qs}` : ""}`);
   },
-  runAll: async (includeJudge: boolean, load?: LoadSelection) => {
+  runAll: async (includeJudge: boolean, opts?: PipelineRun) => {
     const r = await fetch(
       `${BASE}/api/pipeline/run-all?include_judge=${includeJudge}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(load ?? null),
+        body: JSON.stringify(opts ?? null),
       },
     );
     if (!r.ok) {
@@ -979,11 +1019,11 @@ export const api = {
     }
     return r.json();
   },
-  runStep: async (step: string, load?: LoadSelection) => {
+  runStep: async (step: string, opts?: PipelineRun) => {
     const r = await fetch(`${BASE}/api/pipeline/run/${step}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(load ?? null),
+      body: JSON.stringify(opts ?? null),
     });
     if (!r.ok) {
       // 409 means "already running" — a normal thing to hit by

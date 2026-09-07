@@ -14,6 +14,7 @@ import {
 import { Card, Stat, formatCost, useApi } from "@/components/ui";
 import JudgeQuality from "@/components/JudgeQuality";
 import LoadSelectionPanel, { loadPlan } from "@/components/LoadSelection";
+import JudgeProgressBar, { judgeChoiceLabel } from "@/components/JudgeProgress";
 
 // THE PIPELINE AS A FLOW, not a list of cards.
 //
@@ -144,7 +145,6 @@ export default function AnalysisPage() {
   const [current, setCurrent] = useState(0);
   const [judge, setJudge] = useState("");
   const [limit, setLimit] = useState(50);
-  const [judgeRunning, setJudgeRunning] = useState(false);
   // Real installed models, not a guess. A hardcoded "ollama:llama3"
   // silently 404'd on a machine that had llama3.2 instead.
   const [models, setModels] = useState<JudgeModels | null>(null);
@@ -251,13 +251,21 @@ export default function AnalysisPage() {
   }, [ingestState]);
 
   const plan = loadPlan(listing, picked, since, loadLimit);
+  // The judge's options: blank judge = the one configured in Settings.
+  const judgeOpts = {
+    judge: judge || undefined,
+    limit,
+    rubric_name: runName.trim() || undefined,
+    only_labelled_by: onlyLabelledBy || undefined,
+  };
 
   async function runAll() {
     setNote(null);
     try {
       // The same selection the Load step shows: "run all" must not
-      // quietly read every transcript the user just narrowed away.
-      await api.runAll(includeJudge, plan.body);
+      // quietly read every transcript the user just narrowed away; and
+      // the judge, when included, runs with the choices made below.
+      await api.runAll(includeJudge, { load: plan.body, judge: judgeOpts });
       refresh();
     } catch (e) {
       setNote(String(e));
@@ -267,59 +275,26 @@ export default function AnalysisPage() {
   async function run(step: string, load?: LoadSelection) {
     setNote(null);
     try {
-      await api.runStep(step, load);
+      await api.runStep(step, { load, judge: judgeOpts });
       refresh();
     } catch (e) {
       setNote(String(e));
     }
   }
 
-  async function runJudge() {
-    setJudgeRunning(true);
-    setNote(null);
-    try {
-      const r = await api.analyze({
-        judge: judge || undefined,
-        limit,
-        rubric_name: runName.trim() || undefined,
-        only_labelled_by: onlyLabelledBy || undefined,
-      });
-      // A WRITTEN ROW IS NOT A LABEL. The runner reports parse_ok and
-      // parse_failed separately; reporting only the row count turned 50
-      // backend errors into "Labelled 50 turns" with a green check.
-      const per = r.by_copilot
-        ? Object.values(r.by_copilot as Record<string, any>)
-        : [r as any];
-      const ok = per.reduce((n, s) => n + (s.parse_ok ?? 0), 0);
-      const failed = per.reduce((n, s) => n + (s.parse_failed ?? 0), 0);
-      if (ok === 0 && failed > 0) {
-        setNote(
-          `✗ Nothing was labelled — all ${failed} attempts failed. ` +
-            `The judge backend rejected every call (wrong model name, or ` +
-            `the server is not reachable). Check Backend below.`,
-        );
-      } else {
-        setNote(
-          `Labelled ${ok} turns` +
-            (failed > 0 ? ` · ${failed} failed` : "") +
-            ".",
-        );
-      }
-      refresh();
-      loadRuns();
-    } catch (e) {
-      setNote(`${String(e)} — is the judge backend reachable?`);
-    } finally {
-      setJudgeRunning(false);
-    }
-  }
+  // The judge is a background job like the other steps (it used to run
+  // inside one request with nothing to show until it returned). When it
+  // finishes, the runs list for the quality card is stale.
+  const judgeState = status?.steps[2]?.job.state;
+  useEffect(() => {
+    if (judgeState === "done") loadRuns();
+  }, [judgeState, loadRuns]);
 
   if (!status)
     return <div className="text-slate-400 text-sm py-8">Loading…</div>;
 
   const step = status.steps[current];
-  const running =
-    step.job.state === "running" || (step.id === "judge" && judgeRunning);
+  const running = step.job.state === "running";
   const isLast = current === status.steps.length - 1;
   const allRunning = status.all?.state === "running";
 
@@ -454,6 +429,14 @@ export default function AnalysisPage() {
           </p>
         )}
 
+        {step.id === "judge" && step.job.progress && (
+          <JudgeProgressBar
+            progress={step.job.progress}
+            seconds={step.job.seconds}
+            running={running}
+          />
+        )}
+
         {step.job.message && (
           <p
             className={
@@ -468,23 +451,30 @@ export default function AnalysisPage() {
 
         {step.id === "judge" && (
           <div className="flex items-center gap-2 mt-3 flex-wrap">
-            <label className="text-xs text-slate-500">Backend</label>
+            {/* The judge is CONFIGURED in Settings; this is not a second
+                place to configure it. The default names what Settings
+                says, and the other entries are one-off overrides — the
+                way to compare two judges over the same turns (#313). */}
+            <label className="text-xs text-slate-500" title="Set under Settings → LLM-as-Judge. Pick another model here only for this one run.">
+              Judge
+            </label>
             <select
               value={judge}
               onChange={(e) => setJudge(e.target.value)}
               className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm"
             >
-              <option value="">Each copilot&apos;s own LLM</option>
-              {models?.models.map((m) => (
-                <option key={m} value={`ollama:${m}`}>
-                  ollama:{m}
-                </option>
-              ))}
+              <option value="">{judgeChoiceLabel(models?.configured)}</option>
+              {models?.models
+                .filter((m) => `ollama:${m}` !== models.configured?.spec)
+                .map((m) => (
+                  <option key={m} value={`ollama:${m}`}>
+                    this run only: ollama:{m}
+                  </option>
+                ))}
             </select>
             {models && !models.reachable && (
               <span className="text-xs text-rose-700">
-                Ollama unreachable at {models.url} — only the copilot&apos;s own
-                LLM is available.
+                Ollama unreachable at {models.url} — no model list to offer.
               </span>
             )}
             <label className="text-xs text-slate-500">Turns</label>
@@ -526,7 +516,7 @@ export default function AnalysisPage() {
         <div className="flex items-center gap-2 mt-4 flex-wrap">
           {step.id !== "ingest" && (
             <button
-              onClick={() => (step.id === "judge" ? runJudge() : run(step.id))}
+              onClick={() => run(step.id)}
               disabled={running}
               className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700 disabled:opacity-50"
             >

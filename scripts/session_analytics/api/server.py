@@ -170,6 +170,21 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         limit: Optional[int] = None
         session_ids: Optional[list[str]] = None
 
+    class JudgeOptions(BaseModel):
+        """How the judge step runs. ``judge`` blank = the judge configured
+        in Settings (the normal case); set it only for a one-off run,
+        e.g. to compare two judges over the same turns (#313)."""
+        judge: Optional[str] = None
+        workers: Optional[int] = None
+        limit: Optional[int] = 50
+        rubric_name: Optional[str] = None
+        only_labelled_by: Optional[str] = None
+
+    class PipelineRun(BaseModel):
+        """Per-step options for run/<step> and run-all; both optional."""
+        load: Optional[LoadSelection] = None
+        judge: Optional[JudgeOptions] = None
+
     class ConfigUpdate(BaseModel):
         values: dict
 
@@ -324,25 +339,55 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
         cfg = load_config()
         base = (cfg.judge.ollama_url or "http://localhost:11434").rstrip("/")
+        out: dict[str, Any] = {"configured": _configured_judge(cfg)}
         try:
             with urllib.request.urlopen(f"{base}/api/tags", timeout=3) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
             models = [
                 m["name"] for m in data.get("models", []) if isinstance(m, dict) and m.get("name")
             ]
-            return {"reachable": True, "url": base, "models": sorted(models)}
+            out.update({"reachable": True, "url": base, "models": sorted(models)})
         except Exception as exc:  # noqa: BLE001 — unreachable is an ANSWER
             # The class name says what kind of failure it was (refused,
             # timed out, bad body); the message text is logged, not
             # returned — it can carry resolved hosts and errno detail
             # (CodeQL py/stack-trace-exposure).
             _log.info("ollama model list unavailable at %s: %s", base, exc)
-            return {
+            out.update({
                 "reachable": False,
                 "url": base,
                 "models": [],
                 "error": type(exc).__name__,
-            }
+            })
+        return out
+
+    def _configured_judge(cfg) -> dict[str, Any]:
+        """The judge a run with no explicit choice will use, and where
+        that came from — so the Analysis page can show "Settings:
+        ollama:qwen3.6:27b" rather than a label that guesses."""
+        from ..judge.registry import get_judge
+
+        def _spec(backend: str, model: str) -> str:
+            # A blank model means the backend's own default; name it.
+            if not model:
+                try:
+                    model = getattr(get_judge(backend, ""), "_model", "") or ""
+                except Exception:  # noqa: BLE001 — an unknown backend still gets reported
+                    model = ""
+            return f"{backend}:{model}" if model else backend
+
+        j = cfg.judge
+        if j.override is not None:
+            backend, model = j.override
+            return {"spec": _spec(backend, model), "backend": backend, "model": model,
+                    "source": "settings", "by_copilot": {}}
+        backend, model = j.default
+        return {
+            "spec": _spec(backend, model), "backend": backend, "model": model,
+            "source": "packaged default",
+            "by_copilot": {c: _spec(b, m) for c, (b, m) in j.by_copilot.items()
+                           if (b, m) != (backend, model)},
+        }
 
     # ── pipeline (Analysis tab: run the steps, not just list them) ─────
     @app.get("/api/pipeline/status")
@@ -392,14 +437,59 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             _log.warning("discover sessions failed: %s", exc)
             raise HTTPException(status_code=503, detail=f"could not list sessions: {exc}") from None
 
-    def _pipeline_runners(load: Optional["LoadSelection"] = None):
+    def _pipeline_runners(opts: Optional["PipelineRun"] = None):
         """One definition of what each step DOES, shared by both the
         single-step and run-all endpoints, so they cannot drift."""
         from .. import pipeline_jobs as pj
+        from ..judge.registry import UnknownJudgeError, get_judge
 
         store = dsn
         graph_path = kuzu_path or load_config().kuzu_path
-        copilots, selection = _load_selection(load)
+        copilots, selection = _load_selection(opts.load if opts else None)
+        judge_opts = (opts.judge if opts else None) or JudgeOptions()
+        # A judge that does not exist is a 400 NOW, not a failed job later.
+        if judge_opts.judge:
+            family, model = (judge_opts.judge.split(":", 1) + [""])[:2]
+            try:
+                get_judge(family, model)
+            except UnknownJudgeError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from None
+
+        def _judge() -> str:
+            from ..judge.runner import JudgeStats, run_default_by_copilot, run_judge
+            from ..judge.rubric import load_rubric
+            from ..relational.db import Database as _DB
+
+            cfg = load_config()
+            rubric = load_rubric(judge_opts.rubric_name)
+            stats = JudgeStats()
+
+            def _progress(st: JudgeStats) -> None:
+                pj.set_progress(pj.STEP_JUDGE, st.as_dict())
+
+            conn = _DB.connect(store)
+            try:
+                kw = dict(
+                    workers=judge_opts.workers or cfg.judge.workers, limit=judge_opts.limit,
+                    only_labelled_by=judge_opts.only_labelled_by, progress=_progress, stats=stats,
+                )
+                if judge_opts.judge:
+                    family, model = (judge_opts.judge.split(":", 1) + [""])[:2]
+                    run_judge(conn, get_judge(family, model), rubric, **kw)
+                else:
+                    run_default_by_copilot(conn, rubric, cfg, **kw)
+            finally:
+                conn.close()
+            # The message is the verdict a person reads after the run:
+            # what was labelled, what failed, and the last reason why.
+            if stats.total == 0:
+                return "nothing to judge: every turn with text is already labelled"
+            msg = f"labelled {stats.parse_ok} of {stats.total} turns with {stats.judge or 'the configured judge'}"
+            if stats.parse_failed:
+                msg += f"; {stats.parse_failed} failed"
+                if stats.last_error:
+                    msg += f" (last: {stats.last_error})"
+            return msg
 
         def _ingest() -> str:
             from .._register import register_all
@@ -440,16 +530,15 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         return {
             pj.STEP_INGEST: _ingest,
             pj.STEP_GRAPH: _graph,
+            pj.STEP_JUDGE: _judge,
             pj.STEP_KPIS: _kpis,
         }
 
     @app.post("/api/pipeline/run/{step}")
-    def pipeline_run(step: str, load: Optional[LoadSelection] = None) -> dict[str, Any]:
+    def pipeline_run(step: str, opts: Optional[PipelineRun] = None) -> dict[str, Any]:
         from .. import pipeline_jobs as pj
 
-        runners = _pipeline_runners(load)
-        # The judge keeps its existing endpoint: it takes a judge choice
-        # and a limit, which the others do not.
+        runners = _pipeline_runners(opts)
         if step not in runners:
             raise HTTPException(status_code=404, detail=f"unknown step: {step}")
         try:
@@ -462,7 +551,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
     @app.post("/api/pipeline/run-all")
     def pipeline_run_all(
-        include_judge: bool = False, load: Optional[LoadSelection] = None,
+        include_judge: bool = False, opts: Optional[PipelineRun] = None,
     ) -> dict[str, Any]:
         """Run every step in order, as one background sequence.
 
@@ -473,7 +562,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         from .. import pipeline_jobs as pj
 
         try:
-            pj.start_all(_pipeline_runners(load), include_judge=include_judge)
+            pj.start_all(_pipeline_runners(opts), include_judge=include_judge)
         except pj.StepBusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
         return {"started": True, "include_judge": include_judge}

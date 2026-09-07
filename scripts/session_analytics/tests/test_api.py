@@ -552,7 +552,7 @@ class TestApi(RegistryResetTestCase):
             for pick in ("nope", sid):
                 r = self.client.post(
                     "/api/pipeline/run/ingest",
-                    json={"copilots": ["claude-code"], "session_ids": [pick]},
+                    json={"load": {"copilots": ["claude-code"], "session_ids": [pick]}},
                 )
                 self.assertEqual(r.status_code, 200, r.text)
                 for _ in range(100):
@@ -565,6 +565,71 @@ class TestApi(RegistryResetTestCase):
             self.assertIn("ingested 0 sessions", messages[0])
             self.assertIn("1 outside the selection", messages[0])
             self.assertIn("1 already up to date", messages[1])
+
+    def test_judge_step_runs_as_a_job_with_progress_and_says_why_it_failed(self) -> None:
+        # The judge used to run inside the request with nothing to show
+        # until it returned. It is now a pipeline job: every turn is
+        # written as it arrives, the status carries done/total, ok/failed
+        # and the last failure's reason, and the final message says what
+        # was labelled with which judge.
+        import time
+
+        from session_analytics.judge.contracts import PARSE_BACKEND_ERROR, TurnLabels
+        from session_analytics.judge.registry import register_judge
+
+        class _Flaky:
+            judge_id = "flaky"
+
+            def __init__(self, model: str = "") -> None:
+                self._model = model or "m"
+
+            def rate_turn(self, ctx, rubric):
+                # user turns answer; assistant turns fail like a dead backend
+                if ctx.role == "user":
+                    return TurnLabels(
+                        bool_labels={l: False for l in rubric.bool_labels}, sentiment="NEUTRAL",
+                        interaction_quality=3, judge_id=self.judge_id, judge_model=self._model,
+                    )
+                return TurnLabels(
+                    bool_labels={l: None for l in rubric.bool_labels}, sentiment=None,
+                    interaction_quality=None, parse_status=PARSE_BACKEND_ERROR,
+                    judge_id=self.judge_id, judge_model=self._model,
+                    metadata={"error": "HTTP 404: model 'm' not found"},
+                )
+
+            def complete(self, prompt, *, timeout=120):  # pragma: no cover
+                raise NotImplementedError
+
+        register_judge("flaky", _Flaky)
+        self.assertEqual(
+            self.client.post("/api/pipeline/run/judge", json={"judge": {"judge": "nope:x"}}).status_code,
+            400,
+        )
+        r = self.client.post("/api/pipeline/run/judge", json={"judge": {"judge": "flaky:m", "limit": 4}})
+        self.assertEqual(r.status_code, 200, r.text)
+        for _ in range(200):
+            job = self.client.get("/api/pipeline/status").json()["steps"][2]["job"]
+            if job["state"] != "running":
+                break
+            time.sleep(0.05)
+        self.assertEqual(job["state"], "done", job)
+        prog = job["progress"]
+        self.assertEqual((prog["total"], prog["labeled"]), (4, 4))
+        self.assertEqual(prog["parse_ok"] + prog["parse_failed"], 4)
+        self.assertGreater(prog["parse_failed"], 0)
+        self.assertEqual(prog["last_error"], "HTTP 404: model 'm' not found")
+        self.assertEqual(prog["judge"], "flaky:m")
+        self.assertIn("with flaky:m", job["message"])
+        self.assertIn("of 4 turns", job["message"])
+        self.assertIn("last: HTTP 404", job["message"])
+        # Failed rows are written too (attempted, not labelled), so the
+        # funnel can say "N judge attempts failed" with a reason on hand.
+        counts = self.client.get("/api/pipeline/status").json()["counts"]
+        self.assertEqual(counts["labels"] + counts["label_failures"], 4)
+        # The configured judge is reported once, for both pages to show.
+        conf = self.client.get("/api/judge/models").json()["configured"]
+        self.assertIn(conf["source"], ("settings", "packaged default"))
+        self.assertTrue(conf["spec"])
 
     def test_get_config(self) -> None:
         r = self.client.get("/api/config")
