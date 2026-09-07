@@ -81,10 +81,19 @@ function Stepper({
 /** How many records survive each stage — and where they stop. */
 function Funnel({ counts }: { counts: PipelineStatus["counts"] }) {
   const cells = [
-    { label: "Sessions", value: counts.sessions },
-    { label: "Graph nodes", value: counts.graph_nodes },
-    { label: "Labelled turns", value: counts.labels },
-    { label: "KPI rows", value: counts.kpis },
+    {
+      label: "Sessions",
+      value: counts.sessions,
+      // #307: the same count the Dashboard and Sessions page show, and
+      // the same exclusion, said in the same words.
+      note:
+        counts.excluded_noise > 0
+          ? `${counts.excluded_noise.toLocaleString()} excluded as noise`
+          : null,
+    },
+    { label: "Graph nodes", value: counts.graph_nodes, note: null },
+    { label: "Labelled turns", value: counts.labels, note: null },
+    { label: "KPI rows", value: counts.kpis, note: null },
   ];
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -102,6 +111,7 @@ function Funnel({ counts }: { counts: PipelineStatus["counts"] }) {
           >
             {c.value.toLocaleString()}
           </span>
+          {c.note && <span className="text-xs text-slate-400">({c.note})</span>}
           {i < cells.length - 1 && (
             <span className="text-slate-300 ml-2">→</span>
           )}

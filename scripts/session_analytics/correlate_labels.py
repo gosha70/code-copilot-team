@@ -154,7 +154,7 @@ def traces_for_label(
     rows = db.query(
         f"""
         SELECT s.copilot, s.session_id, s.project_path, t.sequence_num,
-               t.role, td.redaction_mode, td.content, MAX(h.sentiment)
+               t.role, td.redaction_mode, td.content, MAX(h.sentiment), s.id
         FROM {C.TBL_HEURISTIC_LABEL} h
         JOIN copilot_turn t ON t.id = h.turn_id
         JOIN copilot_session s ON s.id = t.session_id
@@ -181,6 +181,9 @@ def traces_for_label(
             "redaction_mode": r[5],
             "snippet": make_snippet(r[6] or "", ""),
             "sentiment": r[7],
+            # The store's row id, so a page can link to /sessions/{id}
+            # and its #turn-N anchor (#307).
+            "session_ref": int(r[8]),
         }
         for r in rows
     ]

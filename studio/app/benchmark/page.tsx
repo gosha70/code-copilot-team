@@ -1,6 +1,8 @@
 "use client";
 
-import { api } from "@/lib/api";
+import Link from "next/link";
+import { api, RoutingEvidenceEntry } from "@/lib/api";
+import { FailedCard, StaleNote } from "@/components/DashboardCards";
 import {
   Badge,
   Card,
@@ -16,6 +18,11 @@ export default function BenchmarkPage() {
   // D-refresh: one-shot fetch — benchmark data only changes when `correlate`
   // runs, unlike live session ingest (no auto-refresh in this slice).
   const { data, error, loading } = useApi(() => api.benchmark());
+  // #307: the outcome base rate and the routing evidence are both
+  // benchmark-derived, so they live here; each is its own fetch so a
+  // missing one cannot blank the page.
+  const outcome = useApi(() => api.predictOutcome());
+  const routing = useApi(() => api.routingEvidence());
   if (loading) return <Loading />;
   if (error || !data) return <ErrorNote error={error || "no data"} />;
 
@@ -29,6 +36,12 @@ export default function BenchmarkPage() {
         <Stat label="Organic (unlinked) sessions" value={data.sessions_unlinked} />
         <Stat label="Distinct benchmark attempts" value={data.distinct_benchmark_attempts} />
       </div>
+
+      {outcome.data ? (
+        <OutcomeRow data={outcome.data} stale={outcome.error} />
+      ) : outcome.error ? (
+        <FailedCard title="Predicted pass rate by project" error={outcome.error} />
+      ) : null}
 
       {data.by_result.length === 0 ? (
         <Card title="No benchmark outcomes yet">
@@ -86,6 +99,90 @@ export default function BenchmarkPage() {
           </p>
         </Card>
       )}
+      <RoutingCard
+        sets={routing.data?.sets ?? null}
+        error={routing.error}
+      />
     </div>
+  );
+}
+
+// "Will the next attempt pass?" — /api/predict/outcome: per-project pass
+// rates from benchmark results, withheld below the sample floor.
+function OutcomeRow({
+  data,
+  stale,
+}: {
+  data: import("@/lib/api").OutcomePrediction;
+  stale?: string | null;
+}) {
+  const shown = data.projects.filter((p) => p.sufficient);
+  if (data.sessions_with_outcome === 0) return null;
+  return (
+    <Card title="Predicted pass rate by project">
+      <StaleNote error={stale} />
+      {shown.length === 0 ? (
+        <p className="text-sm text-slate-400">
+          {data.sessions_with_outcome.toLocaleString()} sessions carry a
+          benchmark outcome, but no project has {data.min_observations} yet —
+          a rate over fewer would not mean anything.
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {shown.map((p) => (
+            <Stat
+              key={p.project_path || "(none)"}
+              label={p.project_path?.split("/").filter(Boolean).slice(-1)[0] || "(no project)"}
+              value={
+                p.predicted_pass_rate == null
+                  ? "—"
+                  : `${Math.round(p.predicted_pass_rate * 100)}%`
+              }
+              note={`${p.attempts} attempts`}
+            />
+          ))}
+        </div>
+      )}
+      <p className="text-xs text-slate-400 mt-3">{data.basis}</p>
+    </Card>
+  );
+}
+
+// Routing evidence lives on its own page (/routing, with calibration);
+// this card is the doorway, and says when there is nothing behind it.
+function RoutingCard({
+  sets,
+  error,
+}: {
+  sets: RoutingEvidenceEntry[] | null;
+  error: string | null;
+}) {
+  const valid = (sets ?? []).filter((s) => s.state === "valid");
+  const invalid = (sets ?? []).length - valid.length;
+  return (
+    <Card title="Routing evidence">
+      {sets === null ? (
+        <p className="text-sm text-slate-400">
+          {error ? "Routing evidence could not be loaded." : "Loading…"}
+        </p>
+      ) : sets.length === 0 ? (
+        <p className="text-sm text-slate-600">
+          No routing evidence sets published. Point{" "}
+          <code>CCT_SA_ROUTING_EVIDENCE_ROOTS</code> at a publication root to
+          see them here.
+        </p>
+      ) : (
+        <p className="text-sm text-slate-700">
+          {valid.length.toLocaleString()} valid set{valid.length === 1 ? "" : "s"}
+          {invalid > 0 && (
+            <span className="text-rose-700"> · {invalid} invalid</span>
+          )}
+          .
+        </p>
+      )}
+      <Link href="/routing" className="text-sm text-blue-700 hover:underline mt-2 inline-block">
+        Open Routing: evidence sets, recommendations and calibration →
+      </Link>
+    </Card>
   );
 }

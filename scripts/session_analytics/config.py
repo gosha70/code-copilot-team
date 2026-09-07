@@ -37,6 +37,9 @@ ENV_EMBED_BACKEND = "CCT_SA_EMBED_BACKEND"
 ENV_EMBED_MODEL = "CCT_SA_EMBED_MODEL"
 ENV_EMBED_INPUT_CAP = "CCT_SA_EMBED_INPUT_CAP"
 ENV_EMBED_WORKERS = "CCT_SA_EMBED_WORKERS"
+ENV_NOISE_MIN_TURNS = "CCT_SA_NOISE_MIN_TURNS"
+ENV_NOISE_MIN_DURATION = "CCT_SA_NOISE_MIN_DURATION_SECONDS"
+ENV_NOISE_PATH_PATTERNS = "CCT_SA_NOISE_PATH_PATTERNS"   # comma-separated
 ENV_SIMILARITY_THRESHOLD = "CCT_SA_SIMILARITY_THRESHOLD"
 ENV_SIMILARITY_TOP_K = "CCT_SA_SIMILARITY_TOP_K"
 ENV_SOURCE_PREFIX = "CCT_SA_SOURCE_"  # + COPILOT (e.g. CCT_SA_SOURCE_CLAUDE_CODE)
@@ -181,6 +184,19 @@ def _sim_top_k(value: Any) -> int:
 
 
 @dataclass(frozen=True)
+class NoiseConfig:
+    """sessions.noise (#307): what lists and aggregates EXCLUDE by
+    default, decided at query time so a threshold change never needs a
+    re-ingest. A session is noise when it has fewer than ``min_turns``
+    turns, lasted under ``min_duration_seconds``, or its project path
+    contains any of ``path_patterns`` (probe runs in temp dirs)."""
+
+    min_turns: int
+    min_duration_seconds: int
+    path_patterns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class SimilarityConfig:
     """Similarity pass knobs (#287). Scores at or above ``threshold``
     are edge-eligible; each session keeps its ``top_k`` best."""
@@ -221,6 +237,7 @@ class AnalyticsConfig:
     judge: JudgeConfig
     embedding: "EmbeddingConfig"
     similarity: "SimilarityConfig"
+    noise: "NoiseConfig"
     pricing: "PricingConfig"
     projects: Mapping[str, ProjectOverride] = field(default_factory=dict)
     project_id_rules: tuple[ProjectIdRule, ...] = field(default_factory=tuple)
@@ -504,6 +521,51 @@ def _developer_id_cfg(data: Mapping[str, Any]) -> Optional[str]:
     return value
 
 
+def _load_noise(data: Mapping[str, Any], env) -> NoiseConfig:
+    """sessions.noise from the data file, env overrides on top. Same
+    discipline as similarity: the data file is the ONLY source of
+    defaults; a missing block or key refuses loudly, naming itself."""
+    block = data.get(C.CFG_SESSIONS)
+    ndata = block.get(C.CFG_SESSIONS_NOISE) if isinstance(block, Mapping) else None
+    if not isinstance(ndata, Mapping):
+        raise ValueError(
+            "config has no 'sessions.noise' block — defaults.json is the "
+            "single source of noise defaults"
+        )
+    missing = [
+        k for k in (C.CFG_NOISE_MIN_TURNS, C.CFG_NOISE_MIN_DURATION, C.CFG_NOISE_PATH_PATTERNS)
+        if k not in ndata
+    ]
+    if missing:
+        raise ValueError(f"sessions.noise config is missing {', '.join(missing)}")
+
+    def _count(key: str, env_key: str) -> int:
+        raw = env(env_key)
+        value = raw if raw is not None else ndata[key]
+        if isinstance(value, bool):
+            raise ValueError(f"sessions.noise.{key} must be an integer, got boolean {value!r}")
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"sessions.noise.{key} {value!r} is not an integer") from None
+        if n < 0:
+            raise ValueError(f"sessions.noise.{key} must be >= 0, got {n}")
+        return n
+
+    raw_patterns = env(ENV_NOISE_PATH_PATTERNS)
+    if raw_patterns is not None:
+        patterns: Any = [p.strip() for p in raw_patterns.split(",")]
+    else:
+        patterns = ndata[C.CFG_NOISE_PATH_PATTERNS]
+    if not isinstance(patterns, (list, tuple)) or not all(isinstance(p, str) for p in patterns):
+        raise ValueError("sessions.noise.path_patterns must be a list of strings")
+    return NoiseConfig(
+        min_turns=_count(C.CFG_NOISE_MIN_TURNS, ENV_NOISE_MIN_TURNS),
+        min_duration_seconds=_count(C.CFG_NOISE_MIN_DURATION, ENV_NOISE_MIN_DURATION),
+        path_patterns=tuple(p for p in patterns if p),
+    )
+
+
 def load_config(
     *,
     dsn: Optional[str] = None,
@@ -684,6 +746,8 @@ def load_config(
             C.CFG_SIMILARITY_TOP_K, ENV_SIMILARITY_TOP_K)),
     )
 
+    noise = _load_noise(data, env)
+
     pricing = _load_pricing(data)
     projects, project_id_rules = _load_projects(data)
 
@@ -697,6 +761,7 @@ def load_config(
         judge=judge,
         embedding=embedding,
         similarity=similarity,
+        noise=noise,
         pricing=pricing,
         projects=projects,
         project_id_rules=project_id_rules,

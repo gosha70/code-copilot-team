@@ -8,16 +8,17 @@ export const metadata: Metadata = {
   description: "Copilot session analytics & process mining (CCT #63)",
 };
 
+// #307: only pages that answer a question a person has. Clusters
+// renders under Graph (its route stays for deep links); Routing is a
+// card on Benchmark (both are benchmark-derived, /routing stays); the
+// client-side Agents stub is gone — a real catalogue lands with Learn.
 const TABS = [
   { href: "/", label: "Dashboard" },
   { href: "/sessions", label: "Sessions" },
   { href: "/search", label: "Search" },
-  { href: "/graph", label: "Knowledge Graph" },
-  { href: "/clusters", label: "Clusters" },
+  { href: "/graph", label: "Graph" },
   { href: "/analysis", label: "Analysis" },
   { href: "/benchmark", label: "Benchmark" },
-  { href: "/routing", label: "Routing" },
-  { href: "/agents", label: "Agents" },
   { href: "/settings", label: "Settings" },
 ];
 

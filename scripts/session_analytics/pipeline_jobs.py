@@ -25,8 +25,10 @@ import traceback
 from typing import Any, Callable, Optional
 
 from . import constants as C
+from .config import load_config
 from .judge.contracts import PARSE_OK
 from .relational.db import Database, apply_ddl
+from .session_filter import keep_clause, noise_clause
 
 #: Ordered, because that IS the pipeline: each step consumes what the
 #: previous one produced.
@@ -187,15 +189,28 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
     pipeline gets driven.
     """
     counts = {
-        "sessions": 0, "labels": 0, "label_failures": 0,
+        "sessions": 0, "excluded_noise": 0, "labels": 0, "label_failures": 0,
         "kpis": 0, "graph_nodes": 0,
     }
     try:
         db = Database.connect(dsn)
         try:
             apply_ddl(db)
+            # `sessions` is the count worth showing — the same figure the
+            # Dashboard and the Sessions page use — and `excluded_noise`
+            # is what the funnel's first cell says was left out (#307).
+            noise = load_config().noise
+            keep_sql, keep_params = keep_clause(noise, "s")
+            noise_sql, noise_params = noise_clause(noise, "s")
             counts["sessions"] = int(
-                (db.query_one("SELECT COUNT(*) FROM copilot_session") or (0,))[0] or 0
+                (db.query_one(
+                    f"SELECT COUNT(*) FROM copilot_session s WHERE {keep_sql}", keep_params
+                ) or (0,))[0] or 0
+            )
+            counts["excluded_noise"] = int(
+                (db.query_one(
+                    f"SELECT COUNT(*) FROM copilot_session s WHERE {noise_sql}", noise_params
+                ) or (0,))[0] or 0
             )
             # COUNT ONLY LABELS THAT PARSED. A row whose parse_status is
             # an error carries all-NULL labels — it is a record that the
@@ -261,7 +276,6 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
     sources: list[str] = []
     try:
         from ._register import register_all
-        from .config import load_config
         from .registry import list_adapter_ids
         from pathlib import Path as _P
 
@@ -275,7 +289,8 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
         sources = []
 
     done = {
-        STEP_INGEST: counts["sessions"] > 0,
+        # Ingest HAS run if anything is in the store, noise included.
+        STEP_INGEST: counts["sessions"] + counts["excluded_noise"] > 0,
         STEP_GRAPH: graph_built and counts["graph_nodes"] > 0,
         STEP_JUDGE: counts["labels"] > 0,
         STEP_KPIS: counts["kpis"] > 0,

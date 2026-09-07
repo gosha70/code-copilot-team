@@ -1,6 +1,6 @@
 {
   "_comment": [
-    "session_analytics default configuration \u2014 the single source of schema",
+    "session_analytics default configuration — the single source of schema",
     "default values. User configuration lives in the repo-root .env (shared by",
     "the CLI and the Studio config page). Override precedence: defaults.json <",
     ".env < real env vars < CLI flags. See config.py.",
@@ -8,7 +8,7 @@
     "(model:'' = the backend's default model, llama3), so no session content",
     "leaves the machine unless the user explicitly opts in. Pick a cloud judge",
     "per the .env (CCT_SA_JUDGE_BACKEND/MODEL/BASE_URL) or",
-    "`--judge <family>:<model>` \u2014 e.g. claude-code:sonnet for Anthropic via the",
+    "`--judge <family>:<model>` — e.g. claude-code:sonnet for Anthropic via the",
     "local claude CLI, or openai:<model> for LM Studio / vLLM / any",
     "OpenAI-compatible endpoint.",
     "'pricing.models': per-model token rates (E5 cost tracking). Rates are",
@@ -16,7 +16,7 @@
     "'effective_date' (the version stamped onto priced turns). Update this",
     "block (or override it in ~/.cct/session-analytics.json) as list prices",
     "change; a price change never re-prices already-ingested turns (their",
-    "cost_usd + cost_price_version reflect the rate effective at ingest \u2014 see",
+    "cost_usd + cost_price_version reflect the rate effective at ingest — see",
     "specs/session-analytics-cost-tracking/spec.md, D-repricing). A model with",
     "no entry here ingests with cost_usd = NULL (never silently 0), and is",
     "counted + logged as 'unpriced' at the end of ingest. Removing this whole",
@@ -28,9 +28,22 @@
     "rules, tried in order, used to resolve a project key when a session's",
     "cwd isn't a locally-detectable git repo (git toplevel detection is tried",
     "first). An empty/absent 'projects' block means every session ingests",
-    "with the global redaction_mode \u2014 today's behavior, unchanged."
+    "with the global redaction_mode — today's behavior, unchanged.",
+    "'sessions.noise': what the Studio and the dashboard EXCLUDE by default at",
+    "query time (never at ingest, so the thresholds can change without a",
+    "re-ingest): sessions shorter than min_turns, shorter than",
+    "min_duration_seconds, or whose project path contains one of path_patterns",
+    "(probe runs in temp dirs). Session-by-id, trace search and the judge",
+    "always see every session."
   ],
   "dsn": "",
+  "embedding": {
+    "backend": "ollama",
+    "input_cap_chars": 8000,
+    "model": "",
+    "ollama_url": "http://localhost:11434",
+    "workers": 1
+  },
   "judge": {
     "api_key": "",
     "base_url": "",
@@ -51,18 +64,7 @@
     "ollama_url": "http://localhost:11434",
     "workers": 2
   },
-  "embedding": {
-    "backend": "ollama",
-    "input_cap_chars": 8000,
-    "model": "",
-    "ollama_url": "http://localhost:11434",
-    "workers": 1
-  },
   "kuzu_path": "",
-  "similarity": {
-    "threshold": 0.55,
-    "top_k": 5
-  },
   "pricing": {
     "models": {
       "claude-haiku-4-8": {
@@ -111,6 +113,21 @@
     "vote_epsilon": 1e-06
   },
   "routing_evidence_roots": [],
+  "sessions": {
+    "noise": {
+      "min_turns": 3,
+      "min_duration_seconds": 60,
+      "path_patterns": [
+        "/cct-probe",
+        "/private/var/folders/",
+        "/tmp/"
+      ]
+    }
+  },
+  "similarity": {
+    "threshold": 0.55,
+    "top_k": 5
+  },
   "sources": {
     "aider": "~",
     "claude-code": "~/.claude/projects"

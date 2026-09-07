@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { api, ConfigResponse, ProjectRedactionRow } from "@/lib/api";
-import { Card, ErrorNote, Loading } from "@/components/ui";
+import { Card, ErrorNote, Loading, useApi } from "@/components/ui";
 import PathPicker from "@/components/PathPicker";
+import { pathFromValue } from "@/lib/paths";
 
 // Fields are GROUPED BY THE FEATURE THEY CONFIGURE, not listed flat.
 // A flat list gave no signal that the five Judge* keys are one feature
@@ -239,7 +240,9 @@ export default function SettingsPage() {
       {picking && (
         <PathPicker
           mode={picking.mode}
-          startPath={values[picking.key] || ""}
+          // A DSN is not a path: strip the sqlite:/// scheme so the
+          // picker opens where the current value points, not at home.
+          startPath={pathFromValue(values[picking.key] || "")}
           onClose={() => setPicking(null)}
           onPick={(path) => {
             // The Database field takes a DSN, not a bare path — the
@@ -255,6 +258,7 @@ export default function SettingsPage() {
       )}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Settings</h1>
+        <ApiPill />
         {!cfg.configured && (
           // Same defect as the app-wide banner: this fired whenever no
           // .env existed, even with a healthy store visible on the same
@@ -482,5 +486,23 @@ export default function SettingsPage() {
         )}
       </Card>
     </div>
+  );
+}
+
+// Answers the first question a person has on this page when a field
+// misbehaves: is the API even there? Polled, so a restart shows up.
+function ApiPill() {
+  const { data, error } = useApi(() => api.health(), [], 10000);
+  const ok = !!data && !error;
+  return (
+    <span
+      className={
+        "text-xs px-2 py-1 rounded font-medium " +
+        (ok ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800")
+      }
+      title={ok ? "GET /api/health answered" : "GET /api/health did not answer"}
+    >
+      {ok ? "API reachable" : "API not reachable"}
+    </span>
   );
 }

@@ -120,45 +120,55 @@ export function Bar({
   max,
   label,
   color = "bg-blue-500",
+  format = (v: number) => v.toLocaleString(),
 }: {
   value: number;
   max: number;
   label: string;
   color?: string;
+  /** How to print the value (default: locale integer; pass formatCost for money). */
+  format?: (v: number) => string;
 }) {
   const pct = max > 0 ? Math.round((value / max) * 100) : 0;
+  const shown = elideMiddle(label, BAR_LABEL_CHARS);
   return (
     <div className="group relative flex items-center gap-2 text-sm py-0.5">
-      {/* HEAD truncation loses the identifying half of a label. Three
-          different tools all rendered as "mcp__claude-in-…", which makes
-          the chart unable to answer the question it exists for. Keeping
-          the END (direction: rtl) shows the part that differs, and the
-          full name is always available on hover. */}
-      <span
-        className="w-32 truncate text-slate-600 cursor-default"
-        style={{ direction: "rtl", textAlign: "left" }}
-      >
-        {label}
+      {/* A truncated label must keep the part that differs. Three tools
+          all rendered as "mcp__claude-in-…" once; an rtl trick then kept
+          the tail but re-ordered the punctuation. Eliding the MIDDLE in
+          text keeps both the family prefix and the distinguishing tail,
+          in reading order, and the full name is on hover. */}
+      <span className="w-52 shrink-0 text-slate-600 cursor-default whitespace-nowrap overflow-hidden">
+        {shown}
       </span>
-      {/* A truncated label must still be readable SOMEWHERE. The native
-          title attribute is slow and easy to miss, so the full name
-          appears on hover as a real tooltip — and only when it is
-          actually needed. */}
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute left-0 -top-1 z-20 hidden group-hover:block
-                   bg-slate-800 text-white text-xs rounded px-2 py-1 shadow-lg whitespace-nowrap"
-      >
-        {label} — {value.toLocaleString()}
-      </span>
+      {shown !== label && (
+        <span
+          role="tooltip"
+          className="pointer-events-none absolute left-0 -top-1 z-20 hidden group-hover:block
+                     bg-slate-800 text-white text-xs rounded px-2 py-1 shadow-lg whitespace-nowrap"
+        >
+          {label} — {format(value)}
+        </span>
+      )}
       <div className="flex-1 bg-slate-100 rounded h-4 overflow-hidden">
         <div className={`${color} h-full`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="w-16 text-right tabular-nums text-slate-500">
-        {value.toLocaleString()}
+      <span className="w-20 text-right tabular-nums text-slate-500">
+        {format(value)}
       </span>
     </div>
   );
+}
+
+const BAR_LABEL_CHARS = 26;
+
+/** "mcp__claude-in-chrome__navigate" → "mcp__claude-…me__navigate": head
+ *  and tail survive, the middle goes. Unchanged when it fits. */
+export function elideMiddle(label: string, maxChars: number): string {
+  if (label.length <= maxChars) return label;
+  const tail = Math.floor((maxChars - 1) / 2);
+  const head = maxChars - 1 - tail;
+  return `${label.slice(0, head)}…${label.slice(label.length - tail)}`;
 }
 
 /**
@@ -189,7 +199,7 @@ export function useApi<T>(
     const fetchOnce = () => {
       loader()
         .then((d) => live && (setData(d), setError(null)))
-        .catch((e) => live && setError(String(e)))
+        .catch((e) => live && setError(describeError(e)))
         .finally(() => live && setLoading(false));
     };
     setLoading(true);
@@ -238,6 +248,30 @@ export function formatDuration(seconds: number | null | undefined): string {
 
 export function Loading() {
   return <div className="text-slate-400 text-sm py-8">Loading…</div>;
+}
+
+/**
+ * A failure in words a person can act on (F10). "TypeError: Failed to
+ * fetch" is what the browser says when nothing answered; the reader
+ * needs "the API is not reachable". Status codes keep their path so
+ * the failing endpoint is still named.
+ */
+export function describeError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  if (/failed to fetch|networkerror|load failed|fetch failed/i.test(raw)) {
+    return "The API is not reachable.";
+  }
+  const status = /(GET|POST|PUT) (\S+) → (\d{3})/.exec(raw);
+  if (status) {
+    const [, verb, path, code] = status;
+    const why =
+      code === "404" ? "not found" :
+      code === "503" ? "not available yet" :
+      code.startsWith("5") ? "failed on the server" :
+      `answered ${code}`;
+    return `${verb} ${path} ${why}.`;
+  }
+  return raw.replace(/^(Type|Reference|Syntax)?Error:\s*/, "");
 }
 
 export function ErrorNote({ error }: { error: string }) {

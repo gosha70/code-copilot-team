@@ -581,7 +581,19 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     def dashboard_kpis() -> dict[str, Any]:
         conn = db()
         try:
-            return dashboard.kpis(conn)
+            return dashboard.kpis(conn, noise=load_config().noise)
+        finally:
+            conn.close()
+
+    @app.get("/api/dashboard/latency")
+    def dashboard_latency() -> dict[str, Any]:
+        """Agent response time across the store (#307): median / p90 of
+        the gap before each assistant turn, over sessions worth counting,
+        with the measured-n so a median over 12 turns is not read as
+        one over 12,000."""
+        conn = db()
+        try:
+            return dashboard.latency(conn, noise=load_config().noise)
         finally:
             conn.close()
 
@@ -589,7 +601,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     def dashboard_labels() -> dict[str, Any]:
         conn = db()
         try:
-            return dashboard.label_distribution(conn)
+            return dashboard.label_distribution(conn, noise=load_config().noise)
         finally:
             conn.close()
 
@@ -599,7 +611,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         # dashboard.developer_aggregates for why it is ordered by id.
         conn = db()
         try:
-            return dashboard.developer_aggregates(conn)
+            return dashboard.developer_aggregates(conn, noise=load_config().noise)
         finally:
             conn.close()
 
@@ -672,7 +684,9 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
         conn = db()
         try:
-            return predict.effort_estimate(conn, project_path or None)
+            return predict.effort_estimate(
+                conn, project_path or None, noise=load_config().noise
+            )
         finally:
             conn.close()
 
@@ -692,7 +706,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     def dashboard_cost() -> dict[str, Any]:
         conn = db()
         try:
-            return dashboard.cost_by_outcome(conn)
+            return dashboard.cost_by_outcome(conn, noise=load_config().noise)
         finally:
             conn.close()
 
@@ -716,7 +730,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             # E9: correlation coverage (#91) + by-result outcomes (#92) in
             # one payload; both stay independently unit-testable pure fns.
             return {
-                **dashboard.benchmark_correlation(conn),
+                **dashboard.benchmark_correlation(conn, noise=load_config().noise),
                 **dashboard.benchmark_outcomes(conn),
             }
         finally:
@@ -724,11 +738,25 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
     # ── sessions ───────────────────────────────────────────────────────
     @app.get("/api/sessions")
-    def sessions(query: str = "", copilot: str = "", limit: int = 50) -> dict[str, Any]:
+    def sessions(
+        query: str = "", copilot: str = "", limit: int = 50, include_noise: bool = False,
+    ) -> dict[str, Any]:
+        """The list, noise excluded by default (#307); ``excluded_noise``
+        is how many the same filters would add with include_noise=1, so
+        the page's toggle can say "Show excluded (n)"."""
+        noise = load_config().noise
         conn = db()
         try:
-            return {"sessions": mcp_tools.search_sessions(
-                conn, query or None, copilot=copilot or None, limit=limit)}
+            return {
+                "sessions": mcp_tools.search_sessions(
+                    conn, query or None, copilot=copilot or None, limit=limit,
+                    noise=noise, include_noise=include_noise,
+                ),
+                "excluded_noise": mcp_tools.count_noise_sessions(
+                    conn, noise, query or None, copilot=copilot or None,
+                ),
+                "include_noise": include_noise,
+            }
         finally:
             conn.close()
 
@@ -851,7 +879,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     def recent_errors() -> dict[str, Any]:
         conn = db()
         try:
-            return mcp_resources.recent_errors(conn)
+            return mcp_resources.recent_errors(conn, noise=load_config().noise)
         finally:
             conn.close()
 
@@ -875,6 +903,21 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                     "error": "The kuzu package is not installed.",
                     "prerequisite": "kuzu",
                     "guidance": "Re-run setup, or `pip install kuzu` in the venv.",
+                },
+            ) from None
+        except RuntimeError as exc:
+            # An unopenable store (path is a directory, file corrupt,
+            # locked by a build) used to escape as an unhandled 500 —
+            # which carries no CORS headers, so the browser reported
+            # "failed to fetch" and the page blamed the API (F10).
+            _log.warning("graph store could not be opened: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "The graph store at the configured kuzu path could not be opened.",
+                    "prerequisite": "graph",
+                    "guidance": "Check CCT_SA_KUZU_PATH under Settings (it must be the store "
+                                "file, not a directory), then rebuild from the Analysis tab.",
                 },
             ) from None
         try:

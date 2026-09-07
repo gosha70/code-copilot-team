@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { Card } from "@/components/ui";
+import { Card, describeError } from "@/components/ui";
 
 const NODE_COLORS: Record<string, string> = {
   Session: "#3b82f6",
@@ -38,8 +38,17 @@ export default function GraphExplorer() {
     let cancelled = false;
     (async () => {
       try {
-        const data = await api.graphCounts();
+        const outcome = await api.graphCounts();
         if (cancelled) return;
+        if (!outcome.ok) {
+          setErr(
+            outcome.detail
+              ? `${outcome.detail.error} ${outcome.detail.guidance}`
+              : describeError(new Error(outcome.message)),
+          );
+          return;
+        }
+        const data = outcome.report;
         setCounts(data.node_counts);
 
         const [{ default: cytoscape }, fcoseMod] = await Promise.all([
@@ -78,15 +87,20 @@ export default function GraphExplorer() {
         });
         cyRef.current = cy;
 
-        // Tap a node-type bubble to expand sample members of that type.
+        // Tap a node-type bubble to expand sample members of that type;
+        // tap a member to pull its real neighbours (#307, /api/graph/expand).
         cy.on("tap", "node", async (evt: any) => {
           const node = evt.target;
           const label = node.data("type");
           if (!label || label === "Root") return;
-          await expandLabel(cy, label);
+          if (node.data("keyField")) {
+            await expandNode(cy, label, node.data("keyField"), node.data("keyValue"));
+          } else {
+            await expandLabel(cy, label);
+          }
         });
       } catch (e) {
-        if (!cancelled) setErr(String(e));
+        if (!cancelled) setErr(describeError(e));
       }
     })();
     return () => {
@@ -96,8 +110,8 @@ export default function GraphExplorer() {
   }, []);
 
   async function expandLabel(cy: any, label: string) {
-    // Pull a few real nodes of this type and attach them (double-tap-to-
-    // expand gesture; each added node carries its key for further expansion).
+    // Pull a few real nodes of this type and attach them; each added node
+    // carries its key so a tap on it expands its real neighbours.
     const keyField = label === "Session" ? "session_key" : label === "FileNode" ? "path" : null;
     if (!keyField) return;
     try {
@@ -120,6 +134,36 @@ export default function GraphExplorer() {
     }
   }
 
+  // Primary keys per node table (config_data/ddl/kuzu/nodes.cypher), so a
+  // neighbour can itself be expanded on the next tap.
+  const KEY_FIELDS = [
+    "session_key", "turn_key", "tool_key", "developer_id", "path", "name", "error_key",
+  ];
+
+  async function expandNode(cy: any, label: string, keyField: string, keyValue: string) {
+    const sourceId = `${label}:${keyValue}`;
+    try {
+      const res = await api.graphExpand(label, keyField, keyValue);
+      res.neighbors.slice(0, 12).forEach((n) => {
+        const kf = KEY_FIELDS.find((k) => n.node[k] != null);
+        if (!kf) return;
+        const kv = String(n.node[kf]);
+        const id = `${n.label}:${kv}`;
+        if (cy.getElementById(id).length === 0) {
+          cy.add([
+            { data: { id, label: kv.slice(0, 24), type: n.label, keyField: kf, keyValue: kv } },
+          ]);
+        }
+        if (cy.getElementById(`${sourceId}->${id}`).length === 0) {
+          cy.add([{ data: { id: `${sourceId}->${id}`, source: sourceId, target: id } }]);
+        }
+      });
+      cy.layout({ name: "fcose", animate: false } as any).run();
+    } catch (e) {
+      setQueryErr(describeError(e));
+    }
+  }
+
   async function runQuery() {
     setQueryErr(null);
     setRows(null);
@@ -127,7 +171,7 @@ export default function GraphExplorer() {
       const res = await api.graphQuery(cypher);
       setRows(res.rows);
     } catch (e) {
-      setQueryErr(String(e));
+      setQueryErr(describeError(e));
     }
   }
 
@@ -135,9 +179,7 @@ export default function GraphExplorer() {
     <div className="space-y-4">
       {err && (
         <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded p-3 text-sm">
-          Graph unavailable: {err}. Build it with{" "}
-          <code>./scripts/session-analytics graph --rebuild</code> (needs the{" "}
-          <code>kuzu</code> package).
+          Graph unavailable: {err}
         </div>
       )}
 
@@ -148,7 +190,7 @@ export default function GraphExplorer() {
             className="w-full h-[420px] bg-slate-50 rounded border border-slate-200"
           />
           <p className="text-xs text-slate-400 mt-2">
-            Tap a node-type bubble to expand sample members.
+            Tap a node-type bubble for sample members; tap a member for its neighbours.
           </p>
         </Card>
 

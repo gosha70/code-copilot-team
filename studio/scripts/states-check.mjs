@@ -71,6 +71,8 @@ try {
         join(STUDIO, "components/SimilarPanel.tsx"),
         join(STUDIO, "lib/similarStates.ts"),
         join(STUDIO, "components/DevelopersPanel.tsx"),
+        join(STUDIO, "components/DashboardCards.tsx"),
+        join(STUDIO, "lib/paths.ts"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -95,8 +97,21 @@ try {
         return `${pre}${rel}.js${post}`;
       },
     );
-    writeFileSync(file, src);
+    // next/link is a bundler-era ESM entry that plain node cannot
+    // resolve; for a static render a Link IS an anchor, so it is
+    // stubbed as one (href and children survive, which is what the
+    // assertions read).
+    writeFileSync(
+      file,
+      src.replace(/from\s+"next\/link"/g, 'from "./__next_link_stub.js"'),
+    );
   }
+  writeFileSync(
+    join(out, "components/__next_link_stub.js"),
+    'import React from "react";\n' +
+      "export default function Link({ href, children, ...rest }) {\n" +
+      "  return React.createElement(\"a\", { href, ...rest }, children);\n}\n",
+  );
   writeFileSync(join(out, "package.json"), '{"type":"module"}');
 
   const { renderToStaticMarkup } = await import("react-dom/server");
@@ -534,6 +549,131 @@ try {
   } else {
     console.log("  ok  rows rendered as received (busiest not promoted)");
   }
+
+  // ── #307 dashboard cards + helpers ────────────────────────────────
+  const cards = await import(pathToFileURL(join(out, "components/DashboardCards.js")));
+  const ui = await import(pathToFileURL(join(out, "components/ui.js")));
+  const paths = await import(pathToFileURL(join(out, "lib/paths.js")));
+  console.log("\ndashboard cards (#307):");
+  const render = (C, props) => renderToStaticMarkup(React.createElement(C, props));
+
+  // Latency: the measured-n is part of the number, never optional.
+  const lat = render(cards.LatencyStat, {
+    data: { measured_turns: 12, p50: 3, p90: 11.5, max: 54, sessions: 4, by_copilot: [], basis: "" },
+    error: null,
+  });
+  if (!/12 assistant turns in 4 sessions/.test(lat)) {
+    fail("latency stat renders a median without its measured-n");
+  } else if (!/p90/.test(lat)) {
+    fail("latency stat drops the p90");
+  } else {
+    console.log("  ok  median agent response carries measured-n and p90");
+  }
+  const latEmpty = render(cards.LatencyStat, {
+    data: { measured_turns: 0, p50: null, p90: null, max: null, sessions: 0, by_copilot: [], basis: "" },
+    error: null,
+  });
+  if (/\b0s\b|NaN/.test(latEmpty) || !/no turn carries timestamps/.test(latEmpty)) {
+    fail("latency stat with nothing measured does not say so");
+  } else {
+    console.log("  ok  unmeasured latency is stated, not shown as 0s");
+  }
+
+  // Label distribution: every bar is a link to its traces page.
+  const labels = render(cards.LabelDistributionCard, {
+    data: { labels: [
+      { label: "rework_detected", true: 7, total: 40 },
+      { label: "user_corrects_agent", true: 3, total: 40 },
+      { label: "never_fired", true: 0, total: 0 },
+    ] },
+  });
+  const links = [...labels.matchAll(/href="\/labels\/([^"]+)"/g)].map((m) => m[1]);
+  if (links.join(",") !== "rework_detected,user_corrects_agent") {
+    fail(`label distribution links were [${links}] — expected one per label with data`);
+  } else {
+    console.log("  ok  each label with data links to its traces page");
+  }
+  const noLabels = render(cards.LabelDistributionCard, { data: { labels: [] } });
+  if (!/No heuristic labels yet/.test(noLabels)) fail("empty label distribution has no explanation");
+  else console.log("  ok  empty label distribution explains itself");
+
+  // Recent errors: an empty list says so; a full one is capped at 15.
+  const errs = render(cards.RecentErrorsCard, {
+    errors: Array.from({ length: 30 }, (_, i) => ({
+      error_type: "ToolError", tool_name: `t${i}`, message: "m", copilot: "claude-code", project_path: "/a/b/c",
+    })),
+  });
+  if ((errs.match(/<tr class/g) || []).length !== 15) fail("recent errors not capped at 15 rows");
+  else console.log("  ok  recent errors capped at 15 rows");
+  if (!/No tool errors recorded/.test(render(cards.RecentErrorsCard, { errors: [] }))) {
+    fail("empty recent errors has no explanation");
+  } else {
+    console.log("  ok  empty recent errors explains itself");
+  }
+
+  // Cost by outcome: zero rows are not drawn, and money is formatted as money.
+  const cost = render(cards.CostByOutcomeCard, {
+    data: { by_phase: [{ phase: "build", cost_usd: 12.5, sessions: 3 }, { phase: "plan", cost_usd: 0, sessions: 2 }],
+            by_sentiment: [] },
+  });
+  if (!/\$12\.50/.test(cost)) fail("cost by outcome does not format money");
+  else if (/plan \(2\)/.test(cost)) fail("cost by outcome draws a zero-cost phase");
+  else console.log("  ok  cost by outcome formats money and skips zero rows");
+
+  // Phase process renders nothing when no project has history.
+  const noPhases = render(cards.PhaseProcessCard, {
+    data: { projects: [{ project_path: "/p", has_workflow_history: false, features: [], history_may_be_truncated: false }],
+            projects_with_history: 0, retention_cap: 50, any_history_may_be_truncated: false, absence_note: "n", source_root_configured: true },
+  });
+  if (noPhases !== "") fail("phase-process card renders with no history");
+  else console.log("  ok  phase-process card is absent without history");
+
+  // A failed refresh is annotated, never presented as current; a failed
+  // first load leaves a card that says so, not a blank.
+  const staleLabels = render(cards.LabelDistributionCard, {
+    data: { labels: [{ label: "rework_detected", true: 1, total: 2 }] },
+    stale: "GET /api/dashboard/labels failed on the server.",
+  });
+  if (!/last successful load/.test(staleLabels)) fail("stale label card not annotated");
+  else console.log("  ok  stale card is annotated, not presented as current");
+  const failed = render(cards.FailedCard, { title: "Cost by outcome", error: "The API is not reachable." });
+  if (!/could not be loaded/.test(failed) || !/API is not reachable/.test(failed)) fail("failed card lacks its reason");
+  else console.log("  ok  failed first load leaves a card that says why");
+  const staleLat = render(cards.LatencyStat, {
+    data: { measured_turns: 12, p50: 3, p90: 11.5, max: 54, sessions: 4, by_copilot: [], basis: "" },
+    error: "refresh failed",
+  });
+  if (!/last successful load/.test(staleLat)) fail("stale latency stat not annotated");
+  else console.log("  ok  stale latency stat is annotated");
+
+  // Empty + stale: an empty result from the last successful load still
+  // carries the refresh-failed annotation (it was the reviewer's repro).
+  const emptyStale = [
+    ["cost", render(cards.CostByOutcomeCard, { data: { by_phase: [], by_sentiment: [] }, stale: "boom" })],
+    ["labels", render(cards.LabelDistributionCard, { data: { labels: [] }, stale: "boom" })],
+    ["errors", render(cards.RecentErrorsCard, { errors: [], stale: "boom" })],
+    ["latency", render(cards.LatencyStat, {
+      data: { measured_turns: 0, p50: null, p90: null, max: null, sessions: 0, by_copilot: [], basis: "" },
+      error: "boom",
+    })],
+  ];
+  for (const [name, html] of emptyStale) {
+    if (!/last successful load/.test(html)) fail(`empty ${name} card hides a failed refresh`);
+    else console.log(`  ok  empty ${name} card still annotates a failed refresh`);
+  }
+
+  // Helpers (F10, F12, F15).
+  const de = ui.describeError;
+  if (de(new TypeError("Failed to fetch")) !== "The API is not reachable.") fail("describeError leaks 'Failed to fetch'");
+  else if (de(new Error("GET /api/graph/node-counts → 503")) !== "GET /api/graph/node-counts not available yet.") fail(`describeError status mapping: ${de(new Error("GET /api/graph/node-counts → 503"))}`);
+  else console.log("  ok  describeError speaks in words, keeps the path");
+  const el = ui.elideMiddle("mcp__claude-in-chrome__navigate", 26);
+  if (!el.startsWith("mcp__claude") || !el.endsWith("navigate") || !el.includes("…")) fail(`elideMiddle lost an end: ${el}`);
+  else if (ui.elideMiddle("bash", 26) !== "bash") fail("elideMiddle touches a short label");
+  else console.log("  ok  elideMiddle keeps head and tail");
+  if (paths.pathFromValue("sqlite:////Users/x/a.db") !== "/Users/x/a.db") fail("pathFromValue does not strip the sqlite scheme");
+  else if (paths.pathFromValue("/plain/dir") !== "/plain/dir") fail("pathFromValue changes a plain path");
+  else console.log("  ok  picker start path strips the DSN scheme");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

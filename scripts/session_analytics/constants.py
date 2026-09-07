@@ -108,6 +108,15 @@ CFG_EMBEDDING_MODEL = "model"
 CFG_EMBEDDING_INPUT_CAP = "input_cap_chars"
 CFG_EMBEDDING_WORKERS = "workers"
 
+# ── Session noise config keys (#307, Studio Phase 2) ─────────────────
+# Query-time exclusion of probe/temp-dir/too-short sessions from lists
+# and aggregates. Keys cross config-data → config.py → session_filter.
+CFG_SESSIONS = "sessions"
+CFG_SESSIONS_NOISE = "noise"
+CFG_NOISE_MIN_TURNS = "min_turns"
+CFG_NOISE_MIN_DURATION = "min_duration_seconds"
+CFG_NOISE_PATH_PATTERNS = "path_patterns"
+
 # ── Similarity config keys (#287, E2 slice 2) ────────────────────────
 CFG_SIMILARITY = "similarity"
 CFG_SIMILARITY_THRESHOLD = "threshold"

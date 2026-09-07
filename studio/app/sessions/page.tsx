@@ -10,9 +10,13 @@ const REFRESH_MS = 15000;
 export default function SessionsPage() {
   const [query, setQuery] = useState("");
   const [copilot, setCopilot] = useState("");
+  // #307: probe runs and too-short sessions are hidden by default. The
+  // count on the toggle is the server's, from the same filters, so it
+  // equals what appears when the toggle is on.
+  const [showNoise, setShowNoise] = useState(false);
   const { data, error, loading } = useApi(
-    () => api.sessions(query, copilot),
-    [query, copilot],
+    () => api.sessions(query, copilot, showNoise),
+    [query, copilot, showNoise],
     REFRESH_MS
   );
 
@@ -41,6 +45,22 @@ export default function SessionsPage() {
           <option value="aider">Aider</option>
         </select>
       </div>
+      {data && data.excluded_noise > 0 && (
+        <label className="flex items-center gap-2 text-sm text-slate-600">
+          <input
+            type="checkbox"
+            checked={showNoise}
+            onChange={(e) => setShowNoise(e.target.checked)}
+          />
+          Show excluded ({data.excluded_noise.toLocaleString()})
+          <span
+            className="text-xs text-slate-400"
+            title="Sessions under the turn or duration minimum, or in a probe/temp directory (sessions.noise in config)"
+          >
+            probe runs, temp dirs, and sessions too short to mean anything
+          </span>
+        </label>
+      )}
 
       {loading && <Loading />}
       {error && <ErrorNote error={error} />}
@@ -49,14 +69,14 @@ export default function SessionsPage() {
           <table className="w-full text-sm">
             <thead className="text-left text-slate-500 border-b border-slate-200">
               <tr>
-                <th className="py-2">Copilot</th>
-                <th>Project</th>
-                <th>Model</th>
-                <th className="text-right">Turns</th>
-                <th className="text-right">Tools</th>
-                <th className="text-right">Errors</th>
-                <th className="text-right">Cost</th>
-                <th>Started</th>
+                <th className="py-2 pr-3">Copilot</th>
+                <th className="pr-3">Project</th>
+                <th className="pr-3">Model</th>
+                <th className="text-right pr-3">Turns</th>
+                <th className="text-right pr-3">Tools</th>
+                <th className="text-right pr-3">Errors</th>
+                <th className="text-right pr-3">Cost</th>
+                <th className="pl-3">Started</th>
               </tr>
             </thead>
             <tbody>
@@ -67,19 +87,23 @@ export default function SessionsPage() {
                       {s.copilot}
                     </Link>
                   </td>
-                  <td className="truncate max-w-xs">{s.project_path || "—"}</td>
-                  <td>{s.model || "—"}</td>
-                  <td className="text-right tabular-nums">{s.turn_count}</td>
-                  <td className="text-right tabular-nums">{s.tool_call_count}</td>
-                  <td className="text-right tabular-nums">{s.error_count}</td>
-                  <td className="text-right tabular-nums">{formatCost(s.cost_usd)}</td>
-                  <td className="text-slate-500">{(s.started_at || "").slice(0, 19)}</td>
+                  <td className="truncate max-w-xs pr-3" title={s.project_path || undefined}>
+                    {s.project_path || "—"}
+                  </td>
+                  <td className="pr-3">{s.model || "—"}</td>
+                  <td className="text-right tabular-nums pr-3">{s.turn_count}</td>
+                  <td className="text-right tabular-nums pr-3">{s.tool_call_count}</td>
+                  <td className="text-right tabular-nums pr-3">{s.error_count}</td>
+                  <td className="text-right tabular-nums pr-3">{formatCost(s.cost_usd)}</td>
+                  <td className="text-slate-500 pl-3">{(s.started_at || "").slice(0, 19)}</td>
                 </tr>
               ))}
               {data.sessions.length === 0 && (
                 <tr>
                   <td colSpan={8} className="py-6 text-center text-slate-400">
-                    No sessions. Run <code>./scripts/session-analytics ingest</code>.
+                    {data.excluded_noise > 0
+                      ? `No sessions worth showing — ${data.excluded_noise.toLocaleString()} excluded as noise (toggle above).`
+                      : "No sessions. Run the Analysis page's Load sessions step."}
                   </td>
                 </tr>
               )}
