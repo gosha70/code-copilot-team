@@ -853,6 +853,37 @@ export interface PipelineStep {
   job: { state: "idle" | "running" | "done" | "failed"; message?: string; seconds?: number };
 }
 
+/** Which discovered sessions "Load sessions" reads; every field blank
+ *  = everything. `since` is YYYY-MM-DD. */
+export interface LoadSelection {
+  copilots?: string[];
+  since?: string;
+  limit?: number;
+  session_ids?: string[];
+}
+
+/** One discovered session, from its transcript files alone (nothing
+ *  parsed): enough to decide whether to read it. */
+export interface DiscoveredSession {
+  copilot: string;
+  session_id: string;
+  source: string;
+  files: number;
+  bytes: number;
+  modified: string;
+  modified_epoch: number;
+  loaded: boolean;
+}
+
+export interface DiscoveredSessions {
+  sessions: DiscoveredSession[];
+  total: number;
+  total_bytes: number;
+  new: number;
+  new_bytes: number;
+  cap: number;
+}
+
 export interface PipelineStatus {
   steps: PipelineStep[];
   /** State of the whole-pipeline run, tracked server-side so it
@@ -925,10 +956,22 @@ export const api = {
     get<{ query: string; results: TraceHit[] }>(
       `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`,
     ),
-  runAll: async (includeJudge: boolean) => {
+  pipelineSessions: (params: { copilot?: string; since?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params.copilot) q.set("copilot", params.copilot);
+    if (params.since) q.set("since", params.since);
+    if (params.limit) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return get<DiscoveredSessions>(`/api/pipeline/sessions${qs ? `?${qs}` : ""}`);
+  },
+  runAll: async (includeJudge: boolean, load?: LoadSelection) => {
     const r = await fetch(
       `${BASE}/api/pipeline/run-all?include_judge=${includeJudge}`,
-      { method: "POST" },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(load ?? null),
+      },
     );
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
@@ -936,8 +979,12 @@ export const api = {
     }
     return r.json();
   },
-  runStep: async (step: string) => {
-    const r = await fetch(`${BASE}/api/pipeline/run/${step}`, { method: "POST" });
+  runStep: async (step: string, load?: LoadSelection) => {
+    const r = await fetch(`${BASE}/api/pipeline/run/${step}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(load ?? null),
+    });
     if (!r.ok) {
       // 409 means "already running" — a normal thing to hit by
       // double-clicking, so it is surfaced as text, not thrown as a fault.

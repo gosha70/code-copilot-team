@@ -75,6 +75,7 @@ try {
         join(STUDIO, "lib/paths.ts"),
         join(STUDIO, "lib/docLinks.ts"),
         join(STUDIO, "components/JudgeQuality.tsx"),
+        join(STUDIO, "components/LoadSelection.tsx"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -771,6 +772,52 @@ try {
   const none = jq({ runs: runs2, report: { ...rep, turns_shared: 0, labels: [] }, a: rep.a, b: rep.b });
   if (!/share no turns/.test(none)) fail("zero shared turns not explained");
   else console.log("  ok  zero shared turns is explained, not a blank table");
+
+  // ── which sessions to load (owner's selection requirement) ──────────
+  console.log("\nload selection:");
+  const ls = await import(pathToFileURL(join(out, "components/LoadSelection.js")));
+  const MB = 1024 * 1024;
+  const disc = {
+    sessions: [
+      { copilot: "claude-code", session_id: "a", source: "-Users-x-proj", files: 1, bytes: 3 * MB, modified: "2026-09-07T10:00:00+00:00", modified_epoch: 3, loaded: false },
+      { copilot: "claude-code", session_id: "b", source: "-Users-x-other", files: 2, bytes: 250 * MB, modified: "2026-09-06T10:00:00+00:00", modified_epoch: 2, loaded: true },
+    ],
+    total: 2, total_bytes: 253 * MB, new: 1, new_bytes: 3 * MB, cap: 500,
+  };
+  const noPick = ls.loadPlan(disc, new Set(), "", "");
+  if (noPick.label !== "Load 1 new session" || noPick.bytes !== 3 * MB || noPick.body.session_ids) fail(`no pick → every new session under the filters; got ${JSON.stringify(noPick)}`);
+  else console.log("  ok  no pick loads the new sessions under the filters");
+  const filtered = ls.loadPlan(disc, new Set(), "2026-09-01", "5");
+  if (filtered.body.since !== "2026-09-01" || filtered.body.limit !== 5) fail("filters do not reach the load body");
+  else console.log("  ok  since/limit reach the load body");
+  const pick = ls.loadPlan(disc, new Set(["b"]), "2026-09-01", "5");
+  if (pick.label !== "Load 1 selected" || pick.bytes !== 250 * MB || !pick.body.session_ids || pick.body.since) fail(`a pick must win over the filters; got ${JSON.stringify(pick)}`);
+  else console.log("  ok  an explicit pick wins over the filters");
+  const nothing = ls.loadPlan({ ...disc, new: 0, new_bytes: 0 }, new Set(), "", "");
+  if (nothing.count !== 0) fail("all-loaded listing still offers a load");
+  else console.log("  ok  all loaded → nothing to load");
+  const panelProps = {
+    listing: disc, error: null, since: "", limit: "", picked: new Set(["b"]), running: false,
+    onSince() {}, onLimit() {}, onTogglePick() {}, onPickNew() {}, onClearPicks() {}, onLoad() {},
+  };
+  const panel = render(ls.default, panelProps);
+  if (!/Load 1 selected/.test(panel) || !/250\.0 MB to read/.test(panel)) fail("panel button does not say what it loads and how much");
+  else if (!/large load/.test(panel)) fail("a 250 MB load carries no size warning");
+  else if (!/>new</.test(panel) || !/>loaded</.test(panel)) fail("rows lack the new/loaded state");
+  else if (!/2 found · 1 new/.test(panel)) fail("listing summary missing");
+  else console.log("  ok  panel: labelled button, size + large-load warning, new/loaded rows");
+  const small = render(ls.default, { ...panelProps, picked: new Set() });
+  if (/large load/.test(small) || !/3\.0 MB to read/.test(small)) fail("small load wrongly warned, or size missing");
+  else console.log("  ok  a small load is not warned");
+  const capped = render(ls.default, { ...panelProps, listing: { ...disc, total: 900 } });
+  if (!/newest 2 of 900/.test(capped)) fail("capped listing does not say so");
+  else console.log("  ok  capped listing says how many are not shown");
+  const empty = render(ls.default, { ...panelProps, listing: { ...disc, sessions: [], total: 0, new: 0, new_bytes: 0, total_bytes: 0 }, picked: new Set() });
+  if (!/No sessions under the source roots match/.test(empty)) fail("empty listing is a blank table");
+  else console.log("  ok  empty listing explains itself");
+  const down = render(ls.default, { ...panelProps, listing: null, error: "could not list sessions: boom" });
+  if (!/could not list sessions/.test(down) || /Listing sessions…/.test(down)) fail("listing error hidden behind a spinner");
+  else console.log("  ok  listing failure is shown");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

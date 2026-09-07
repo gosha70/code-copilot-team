@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,12 @@ _log = logging.getLogger(__name__)
 
 COPILOT_ID = C.COPILOT_AIDER
 _HISTORY_NAME = ".aider.chat.history.md"
+#: Directories the history walk never descends into. The packaged root
+#: is the HOME directory, and an unpruned walk of it (dot-caches, every
+#: node_modules, ~/Library) took 88 s on the owner's laptop for one
+#: file — on every load and every listing. A project root, where aider
+#: writes its history, is never inside one of these.
+_SKIP_DIRS = frozenset({"node_modules", "Library"})
 _SESSION_RE = re.compile(r"^#\s*aider chat started at\s*(.*)$")
 _USER_PREFIX = "#### "
 
@@ -48,7 +55,7 @@ class AiderAdapter:
         # One logical "session ref" per history file; the file may contain
         # multiple ``aider chat started`` blocks, surfaced as turns grouped
         # under one native id (the file path).
-        for hist in sorted(base.rglob(_HISTORY_NAME)):
+        for hist in _history_files(base):
             refs.append(
                 SessionRef(
                     copilot=self.copilot_id,
@@ -134,6 +141,20 @@ class AiderAdapter:
         if self._default_root is not None:
             return self._default_root
         return load_config().source_root(self.copilot_id)
+
+
+def _history_files(base: Path) -> list[Path]:
+    """Every aider history file under ``base``, skipping hidden and
+    dependency/cache directories (see _SKIP_DIRS); sorted for a stable
+    discover order."""
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [
+            d for d in dirnames if not d.startswith(".") and d not in _SKIP_DIRS
+        ]
+        if _HISTORY_NAME in filenames:
+            found.append(Path(dirpath) / _HISTORY_NAME)
+    return sorted(found)
 
 
 def register() -> None:

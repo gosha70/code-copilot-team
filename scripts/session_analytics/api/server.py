@@ -162,6 +162,14 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     class TestConnRequest(BaseModel):
         dsn: Optional[str] = None
 
+    class LoadSelection(BaseModel):
+        """Which discovered sessions "Load sessions" reads. Every field
+        blank = everything, as before. ``since`` is YYYY-MM-DD or ISO."""
+        copilots: Optional[list[str]] = None
+        since: Optional[str] = None
+        limit: Optional[int] = None
+        session_ids: Optional[list[str]] = None
+
     class ConfigUpdate(BaseModel):
         values: dict
 
@@ -347,21 +355,64 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         # different store than every other endpoint.
         return pj.status(dsn, kuzu_path or load_config().kuzu_path)
 
-    def _pipeline_runners():
+    def _load_selection(sel: Optional["LoadSelection"]):
+        """Request → IngestSelection; a bad ``since`` is a 400, not a
+        failed background job the user reads about later."""
+        from ..ingest.selection import IngestSelection, parse_since
+
+        if sel is None:
+            return None, IngestSelection()
+        try:
+            since = parse_since(sel.since) if sel.since else None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        return sel.copilots or None, IngestSelection(
+            since=since,
+            limit=sel.limit if sel.limit and sel.limit > 0 else None,
+            session_ids=frozenset(sel.session_ids or ()),
+        )
+
+    @app.get("/api/pipeline/sessions")
+    def pipeline_sessions(
+        copilot: Optional[str] = None, since: Optional[str] = None, limit: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """What "Load sessions" would read under these filters — newest
+        first, with sizes and whether each is already loaded — so the
+        user picks BEFORE gigabytes of transcripts are parsed."""
+        from .._register import register_all
+        from ..ingest.pipeline import discover_sessions
+
+        register_all()
+        copilots, selection = _load_selection(
+            LoadSelection(copilots=[copilot] if copilot else None, since=since, limit=limit)
+        )
+        try:
+            return discover_sessions(dsn=dsn, copilots=copilots, selection=selection)
+        except Exception as exc:  # noqa: BLE001 — an unreadable root or store is a 503, not a crash
+            _log.warning("discover sessions failed: %s", exc)
+            raise HTTPException(status_code=503, detail=f"could not list sessions: {exc}") from None
+
+    def _pipeline_runners(load: Optional["LoadSelection"] = None):
         """One definition of what each step DOES, shared by both the
         single-step and run-all endpoints, so they cannot drift."""
         from .. import pipeline_jobs as pj
 
         store = dsn
         graph_path = kuzu_path or load_config().kuzu_path
+        copilots, selection = _load_selection(load)
 
         def _ingest() -> str:
             from .._register import register_all
             from ..ingest.pipeline import ingest
 
             register_all()
-            st = ingest(dsn=store, full=False)
-            return f"ingested {getattr(st, 'sessions_ingested', '?')} sessions"
+            st = ingest(dsn=store, copilots=copilots, full=False, selection=selection)
+            msg = f"ingested {st.sessions_ingested} sessions"
+            if st.sessions_skipped:
+                msg += f", {st.sessions_skipped} already up to date"
+            if st.sessions_not_selected:
+                msg += f", {st.sessions_not_selected} outside the selection"
+            return msg
 
         def _graph() -> str:
             from ..graph.builder import build
@@ -393,10 +444,10 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         }
 
     @app.post("/api/pipeline/run/{step}")
-    def pipeline_run(step: str) -> dict[str, Any]:
+    def pipeline_run(step: str, load: Optional[LoadSelection] = None) -> dict[str, Any]:
         from .. import pipeline_jobs as pj
 
-        runners = _pipeline_runners()
+        runners = _pipeline_runners(load)
         # The judge keeps its existing endpoint: it takes a judge choice
         # and a limit, which the others do not.
         if step not in runners:
@@ -410,7 +461,9 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         return {"step": step, "started": True}
 
     @app.post("/api/pipeline/run-all")
-    def pipeline_run_all(include_judge: bool = False) -> dict[str, Any]:
+    def pipeline_run_all(
+        include_judge: bool = False, load: Optional[LoadSelection] = None,
+    ) -> dict[str, Any]:
         """Run every step in order, as one background sequence.
 
         Sequential by construction — see pipeline_jobs.start_all. The
@@ -420,7 +473,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         from .. import pipeline_jobs as pj
 
         try:
-            pj.start_all(_pipeline_runners(), include_judge=include_judge)
+            pj.start_all(_pipeline_runners(load), include_judge=include_judge)
         except pj.StepBusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
         return {"started": True, "include_judge": include_judge}

@@ -27,6 +27,7 @@ from ..heartbeat import ingest_heartbeats
 from ..relational.db import Database, apply_ddl
 from . import incremental
 from .project_key import ProjectKeyResolver
+from .selection import DISCOVER_LIST_CAP, IngestSelection, describe
 
 _log = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class IngestStats:
     sessions_opted_out: int = 0
     per_project_opt_out: dict = field(default_factory=dict)  # project key -> count
     heartbeats_ingested: int = 0  # Slice B1 (#187): local_heartbeat upserts
+    sessions_not_selected: int = 0  # discovered but outside the selection
 
     def as_dict(self) -> dict:
         return {
@@ -56,6 +58,7 @@ class IngestStats:
             "sessions_opted_out": self.sessions_opted_out,
             "per_project_opt_out": self.per_project_opt_out,
             "heartbeats_ingested": self.heartbeats_ingested,
+            "sessions_not_selected": self.sessions_not_selected,
         }
 
 
@@ -72,6 +75,7 @@ def ingest(
     projects: Optional[Mapping[str, ProjectOverride]] = None,
     project_id_rules: Optional[Sequence[ProjectIdRule]] = None,
     heartbeat_cwd: Optional[Path] = None,
+    selection: Optional[IngestSelection] = None,
 ) -> IngestStats:
     """Run ingestion for the selected copilots into ``dsn``.
 
@@ -94,8 +98,13 @@ def ingest(
     is a HARD boundary — nothing is written for it, not even incremental
     bookkeeping — and that boundary is checked BEFORE redaction precedence,
     so it cannot be overridden by ``cli_redaction_override``.
+
+    ``selection`` narrows WHICH discovered sessions are loaded (modified
+    since, newest N, an explicit pick) before the incremental gate and
+    before any transcript is parsed; ``None`` loads everything found.
     """
     selected = list(copilots) if copilots else list_adapter_ids()
+    selection = selection or IngestSelection()
     stats = IngestStats()
     unpriced = UnpricedStats()
     projects = projects or {}
@@ -142,7 +151,10 @@ def ingest(
                         "pi adapter lacks resolve_root — heartbeat sweep skipped"
                     )
             c_ingested = c_skipped = 0
-            for ref in adapter.discover(root):
+            found = adapter.discover(root)
+            refs = selection.apply(found)
+            stats.sessions_not_selected += len(found) - len(refs)
+            for ref in refs:
                 if not incremental.should_ingest(db, ref, full=full):
                     c_skipped += 1
                     stats.sessions_skipped += 1
@@ -219,3 +231,42 @@ def ingest(
     finally:
         db.close()
     return stats
+
+
+def discover_sessions(
+    *,
+    dsn: str,
+    copilots: Optional[Sequence[str]] = None,
+    root: Optional[Path] = None,
+    selection: Optional[IngestSelection] = None,
+) -> dict:
+    """What "Load sessions" WOULD read, so a person can choose first.
+
+    Every discovered session under the selection, newest first, each with
+    its size and whether the store already has it up to date (the same
+    gate the load uses). Nothing is parsed. The list is capped at
+    DISCOVER_LIST_CAP rows; ``total`` and ``total_bytes`` cover them all.
+    """
+    selected = list(copilots) if copilots else list_adapter_ids()
+    selection = selection or IngestSelection()
+    rows: list[dict] = []
+    db = Database.connect(dsn)
+    try:
+        apply_ddl(db)
+        for copilot in selected:
+            adapter = get_adapter(copilot)
+            for ref in selection.apply(adapter.discover(root)):
+                row = describe(ref)
+                row["loaded"] = not incremental.should_ingest(db, ref, full=False)
+                rows.append(row)
+    finally:
+        db.close()
+    rows.sort(key=lambda r: r["modified_epoch"], reverse=True)
+    return {
+        "sessions": rows[:DISCOVER_LIST_CAP],
+        "total": len(rows),
+        "total_bytes": sum(r["bytes"] for r in rows),
+        "new": sum(1 for r in rows if not r["loaded"]),
+        "new_bytes": sum(r["bytes"] for r in rows if not r["loaded"]),
+        "cap": DISCOVER_LIST_CAP,
+    }

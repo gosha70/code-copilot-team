@@ -521,6 +521,51 @@ class TestApi(RegistryResetTestCase):
         self.assertTrue(r.json()["ok"])
         self.assertEqual(r.json()["sessions"], 1)
 
+    def test_pipeline_sessions_lists_what_load_would_read_and_the_pick_narrows_it(self) -> None:
+        # The Analysis page's selection table (the owner's per-session
+        # selection requirement): what is under the source roots, newest
+        # first, with sizes and loaded state; then the same body narrows
+        # what the ingest step reads.
+        import time
+
+        from session_analytics.config import ENV_SOURCE_PREFIX
+
+        with mock.patch.dict(
+            "os.environ", {ENV_SOURCE_PREFIX + "CLAUDE_CODE": str(CLAUDE_CODE_ROOT)}
+        ):
+            listing = self.client.get("/api/pipeline/sessions", params={"copilot": "claude-code"})
+            self.assertEqual(listing.status_code, 200)
+            body = listing.json()
+            self.assertEqual(body["total"], 1)
+            self.assertTrue(body["sessions"][0]["loaded"])  # setUp ingested it
+            self.assertGreater(body["total_bytes"], 0)
+            sid = body["sessions"][0]["session_id"]
+            self.assertEqual(
+                self.client.get("/api/pipeline/sessions", params={"since": "2100-01-01"}).json()["total"], 0
+            )
+            self.assertEqual(
+                self.client.get("/api/pipeline/sessions", params={"since": "soon"}).status_code, 400
+            )
+            # An ingest narrowed to an id that is not there loads nothing and
+            # says why; the pick of the real id loads it.
+            messages = []
+            for pick in ("nope", sid):
+                r = self.client.post(
+                    "/api/pipeline/run/ingest",
+                    json={"copilots": ["claude-code"], "session_ids": [pick]},
+                )
+                self.assertEqual(r.status_code, 200, r.text)
+                for _ in range(100):
+                    job = self.client.get("/api/pipeline/status").json()["steps"][0]["job"]
+                    if job["state"] != "running":
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(job["state"], "done", job)
+                messages.append(job["message"])
+            self.assertIn("ingested 0 sessions", messages[0])
+            self.assertIn("1 outside the selection", messages[0])
+            self.assertIn("1 already up to date", messages[1])
+
     def test_get_config(self) -> None:
         r = self.client.get("/api/config")
         self.assertEqual(r.status_code, 200)

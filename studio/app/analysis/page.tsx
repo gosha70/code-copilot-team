@@ -1,9 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AgreementReport, JudgeRuns, api, JudgeModels, PipelineStatus, PipelineStep } from "@/lib/api";
+import {
+  AgreementReport,
+  DiscoveredSessions,
+  JudgeRuns,
+  LoadSelection,
+  api,
+  JudgeModels,
+  PipelineStatus,
+  PipelineStep,
+} from "@/lib/api";
 import { Card, Stat, formatCost, useApi } from "@/components/ui";
 import JudgeQuality from "@/components/JudgeQuality";
+import LoadSelectionPanel, { loadPlan } from "@/components/LoadSelection";
 
 // THE PIPELINE AS A FLOW, not a list of cards.
 //
@@ -151,6 +161,30 @@ export default function AnalysisPage() {
   const [cmp, setCmp] = useState<{ a: string; b: string }>({ a: "", b: "" });
   const [report, setReport] = useState<AgreementReport | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
+  // Which sessions to load: the listing under the filters, the filters,
+  // and an explicit pick. The pick wins; otherwise "every new session
+  // under the filters" — see LoadSelection.loadPlan.
+  const [listing, setListing] = useState<DiscoveredSessions | null>(null);
+  const [listingError, setListingError] = useState<string | null>(null);
+  const [since, setSince] = useState("");
+  const [loadLimit, setLoadLimit] = useState("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  const loadListing = useCallback(async () => {
+    try {
+      const r = await api.pipelineSessions({
+        since: since || undefined,
+        limit: Number(loadLimit) > 0 ? Number(loadLimit) : undefined,
+      });
+      setListing(r);
+      setListingError(null);
+      // A pick that the new filters no longer show is dropped, so the
+      // button never loads something the table does not display.
+      setPicked((p) => new Set([...p].filter((id) => r.sessions.some((s) => s.session_id === id))));
+    } catch (e) {
+      setListingError(String(e));
+    }
+  }, [since, loadLimit]);
 
   const loadRuns = useCallback(async () => {
     try {
@@ -200,20 +234,40 @@ export default function AnalysisPage() {
     api.judgeModels().then(setModels).catch(() => setModels(null));
   }, []);
 
+  useEffect(() => {
+    loadListing();
+  }, [loadListing]);
+
+  // When a load finishes, the listing's loaded/new column is stale and
+  // the pick has been served: clear it so the button falls back to
+  // "Load N new" rather than offering the same sessions again.
+  const ingestState = status?.steps[0]?.job.state;
+  useEffect(() => {
+    if (ingestState === "done") {
+      setPicked(new Set());
+      loadListing();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingestState]);
+
+  const plan = loadPlan(listing, picked, since, loadLimit);
+
   async function runAll() {
     setNote(null);
     try {
-      await api.runAll(includeJudge);
+      // The same selection the Load step shows: "run all" must not
+      // quietly read every transcript the user just narrowed away.
+      await api.runAll(includeJudge, plan.body);
       refresh();
     } catch (e) {
       setNote(String(e));
     }
   }
 
-  async function run(step: string) {
+  async function run(step: string, load?: LoadSelection) {
     setNote(null);
     try {
-      await api.runStep(step);
+      await api.runStep(step, load);
       refresh();
     } catch (e) {
       setNote(String(e));
@@ -347,6 +401,34 @@ export default function AnalysisPage() {
 
         <p className="text-sm text-slate-600 mt-1">{step.blurb}</p>
 
+        {step.id === "ingest" && (
+          <LoadSelectionPanel
+            listing={listing}
+            error={listingError}
+            since={since}
+            limit={loadLimit}
+            picked={picked}
+            running={running}
+            onSince={setSince}
+            onLimit={setLoadLimit}
+            onTogglePick={(id) =>
+              setPicked((p) => {
+                const n = new Set(p);
+                if (n.has(id)) n.delete(id);
+                else n.add(id);
+                return n;
+              })
+            }
+            onPickNew={() =>
+              setPicked(
+                new Set((listing?.sessions ?? []).filter((s) => !s.loaded).map((s) => s.session_id)),
+              )
+            }
+            onClearPicks={() => setPicked(new Set())}
+            onLoad={(body) => run("ingest", body)}
+          />
+        )}
+
         {step.id === "graph" && (
           <p className="text-xs text-amber-700 mt-2">
             ⏱ This step can take a long time on a large store.
@@ -442,17 +524,19 @@ export default function AnalysisPage() {
         )}
 
         <div className="flex items-center gap-2 mt-4 flex-wrap">
-          <button
-            onClick={() => (step.id === "judge" ? runJudge() : run(step.id))}
-            disabled={running}
-            className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700 disabled:opacity-50"
-          >
-            {running
-              ? "Running…"
-              : step.done
-                ? `Re-run ${step.title.toLowerCase()}`
-                : `Run ${step.title.toLowerCase()}`}
-          </button>
+          {step.id !== "ingest" && (
+            <button
+              onClick={() => (step.id === "judge" ? runJudge() : run(step.id))}
+              disabled={running}
+              className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700 disabled:opacity-50"
+            >
+              {running
+                ? "Running…"
+                : step.done
+                  ? `Re-run ${step.title.toLowerCase()}`
+                  : `Run ${step.title.toLowerCase()}`}
+            </button>
+          )}
           <button
             onClick={() => setCurrent(Math.max(0, current - 1))}
             disabled={current === 0}

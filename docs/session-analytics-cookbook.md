@@ -188,8 +188,24 @@ Incremental is the default: only new or changed transcripts are read.
 Re-ingesting a session replaces its turns. Archived text, the
 whole-session analyses and your human labels are anchored so they
 survive that; the judge's per-turn labels are dropped with the turns
-and come back on the next judge run. Or press **Load
-sessions** on the Analysis page. `watch` runs ingest in a loop:
+and come back on the next judge run.
+
+**Choose what to load.** Years of copilot history can be gigabytes of
+transcripts; you do not have to read them all at once. Nothing is
+parsed to list them:
+
+```bash
+./scripts/session-analytics ingest --list                          # what would be loaded: newest first, size, loaded/new
+./scripts/session-analytics ingest --since 2026-09-01              # modified on/after a date (or an ISO datetime)
+./scripts/session-analytics ingest --limit 20                      # the newest 20 (after --since)
+./scripts/session-analytics ingest --session-id <id> --session-id <id>   # exactly these (ids from --list)
+```
+
+On the Analysis page the **Load sessions** step shows the same list
+under **Which sessions**: filter by date and count, or tick sessions,
+and the button says what it will read ("Load 3 selected · 12.1 MB").
+**Run all steps** uses the same selection. `watch` runs ingest in a
+loop:
 
 ```bash
 ./scripts/session-analytics watch --interval 15
