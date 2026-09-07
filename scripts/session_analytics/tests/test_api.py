@@ -43,6 +43,121 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["status"], "ok")
 
+    def test_judge_models_answers_even_when_ollama_is_down(self) -> None:
+        # Unreachable is an answer, never a 500: the Analysis page decides
+        # what to offer from `reachable`. (Regression: the handler read the
+        # Ollama URL off the wrong config object and crashed every call.)
+        r = self.client.get("/api/judge/models")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("reachable", body)
+        self.assertIsInstance(body["models"], list)
+        self.assertTrue(body["url"].startswith("http"))
+
+    # ── session-level analysis (#65 Phase 1) ──────────────────────────
+    def _register_fake_judge(self, text: str, *, down: bool = False) -> None:
+        from session_analytics.judge.contracts import JudgeTransportError
+        from session_analytics.judge.registry import register_judge
+
+        class _Fake:
+            judge_id = "fake"
+
+            def __init__(self, model: str = "") -> None:
+                # Like the real backends: a blank model means the
+                # backend's own default, and the label reports THAT.
+                self._model = model or "fake-default"
+
+            def rate_turn(self, ctx, rubric):  # pragma: no cover
+                raise NotImplementedError
+
+            def complete(self, prompt: str, *, timeout: int = 120) -> str:
+                if down:
+                    raise JudgeTransportError("connection refused")
+                return text
+
+        register_judge("fake", _Fake)
+
+    def _session_id(self) -> int:
+        return self.client.get("/api/sessions").json()["sessions"][0]["id"]
+
+    def test_session_analysis_absent_then_generated(self) -> None:
+        self._register_fake_judge(json.dumps({
+            "summary": "ok", "findings": [{
+                "category": "hooks", "severity": "low", "title": "t",
+                "evidence_turns": [1], "explanation": "e", "recommendation": "r",
+                "config_change": None,
+            }],
+        }))
+        sid = self._session_id()
+        r = self.client.get(f"/api/sessions/{sid}/analysis")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(set(body["kinds"]), set(C.ANALYSIS_KINDS))
+        self.assertTrue(all(v is None for v in body["kinds"].values()))
+        self.assertEqual(body["archive"]["archived_turns"], 0)
+        self.assertEqual(body["archive"]["turns"], 6)
+
+        r = self.client.post(
+            f"/api/sessions/{sid}/analysis/tuning", json={"judge": "fake:x"}
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        row = r.json()
+        self.assertEqual(row["parse_status"], "ok")
+        self.assertEqual(row["judge"], "fake:x")
+        self.assertEqual(row["result"]["findings"][0]["category"], "hooks")
+        self.assertEqual(row["transcript_source"], C.TRANSCRIPT_SOURCE_PREVIEW)
+
+        # A judge given without a model is labelled with the model the
+        # backend will actually call, never "(default)".
+        r = self.client.post(
+            f"/api/sessions/{sid}/analysis/efficiency", json={"judge": "fake"}
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["judge"], "fake:fake-default")
+
+        # Persisted: the GET now carries it.
+        body = self.client.get(f"/api/sessions/{sid}/analysis").json()
+        self.assertEqual(body["kinds"]["tuning"]["parse_status"], "ok")
+
+    def test_session_analysis_bad_kind_and_unknown_judge(self) -> None:
+        sid = self._session_id()
+        self.assertEqual(
+            self.client.post(f"/api/sessions/{sid}/analysis/vibes").status_code, 400
+        )
+        r = self.client.post(
+            f"/api/sessions/{sid}/analysis/tuning", json={"judge": "nope:x"}
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(
+            self.client.post("/api/sessions/99999/analysis/tuning").status_code, 404
+        )
+        # An explicit judge must not skip the existence check: a paid
+        # backend would otherwise be invoked before the foreign key fails.
+        self._register_fake_judge("{}")
+        r = self.client.post(
+            "/api/sessions/99999/analysis/tuning", json={"judge": "fake:x"}
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_session_analysis_backend_down_is_503_with_guidance(self) -> None:
+        self._register_fake_judge("", down=True)
+        sid = self._session_id()
+        r = self.client.post(
+            f"/api/sessions/{sid}/analysis/coaching", json={"judge": "fake:x"}
+        )
+        self.assertEqual(r.status_code, 503)
+        detail = r.json()["detail"]
+        self.assertEqual(detail["prerequisite"], "judge")
+        self.assertIn("fake:x", detail["error"])
+        self.assertIn("Re-generate", detail["guidance"])
+
+    def test_session_detail_carries_latency(self) -> None:
+        sid = self._session_id()
+        d = self.client.get(f"/api/sessions/{sid}").json()
+        self.assertIn("latency", d)
+        self.assertIn("latency_seconds", d["turns"][1])
+        self.assertIsNone(d["turns"][0]["content"])
+
     def test_dashboard_kpis(self) -> None:
         r = self.client.get("/api/dashboard/kpis")
         self.assertEqual(r.status_code, 200)

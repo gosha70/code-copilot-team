@@ -50,6 +50,37 @@ async function getOrFailure<T>(path: string): Promise<ApiOutcome<T>> {
   };
 }
 
+// Same body-preserving discipline for POSTs whose failure carries a
+// prerequisite (the session-analysis run: an unreachable judge is a
+// 503 with guidance the page must show verbatim).
+async function postOrFailure<T>(
+  path: string,
+  body: unknown,
+): Promise<ApiOutcome<T>> {
+  let r: Response;
+  try {
+    r = await fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    return { ok: false, status: 0, message: String(e) };
+  }
+  if (r.ok) return { ok: true, report: (await r.json()) as T };
+  let detail: ApiFailure["detail"];
+  let message = `POST ${path} → ${r.status}`;
+  try {
+    const parsed = await r.json();
+    const d = parsed?.detail;
+    if (d && typeof d === "object" && "prerequisite" in d) detail = d;
+    else if (typeof d === "string") message = d;
+  } catch {
+    // non-JSON error body: keep the status-only message
+  }
+  return { ok: false, status: r.status, detail, message };
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const r = await fetch(`${BASE}${path}`, {
     method: "POST",
@@ -78,7 +109,19 @@ export interface ConfigField {
 }
 
 export interface ConfigResponse {
+  /** The store the running server is ACTUALLY reading. */
+  effective_dsn?: string;
+  /** True when a --db flag overrides what .env says. */
+  dsn_overridden?: boolean;
+  // True when the tool can actually be USED — a reachable store holding
+  // sessions — not merely when a .env file exists. See readiness below
+  // for which half is missing.
   configured: boolean;
+  readiness?: {
+    store_reachable: boolean;
+    sessions: number;
+    env_file_present: boolean;
+  };
   fields: ConfigField[];
   judge_default: string;
   judge_backends: string[];
@@ -118,6 +161,8 @@ export interface SessionRow {
   tool_call_count: number;
   error_count: number;
   started_at: string | null;
+  ended_at?: string | null;
+  duration_seconds?: number | null;
   cost_usd: number | null;
 }
 
@@ -125,6 +170,14 @@ export interface TurnRow {
   sequence_num: number;
   role: string;
   content_preview: string | null;
+  /** Full archived text when the project opted into trace_archive; null
+   *  when there is no archive row (distinct from an empty turn). */
+  content: string | null;
+  archived: boolean;
+  timestamp: string | null;
+  /** Seconds since the previous turn; null for the first turn or when a
+   *  timestamp is missing. */
+  latency_seconds: number | null;
   has_tool_use: boolean;
   slash_command: string | null;
   sentiment: string | null;
@@ -133,10 +186,85 @@ export interface TurnRow {
   rework_detected: boolean | null;
 }
 
+export interface SessionLatency {
+  measured_turns: number;
+  p50: number;
+  p90: number;
+  max: number;
+  slowest: { sequence_num: number; seconds: number }[];
+}
+
 export interface SessionDetail extends SessionRow {
   turns: TurnRow[];
   tool_usage: { tool: string; count: number }[];
   errors: { error_type: string; tool_name: string; message: string }[];
+  /** Over assistant turns only; null when no turn carries a timestamp. */
+  latency: SessionLatency | null;
+}
+
+// ── session-level analysis (#65 Phase 1) ──────────────────────────────
+export type AnalysisKind = "tuning" | "coaching" | "efficiency";
+export const ANALYSIS_KINDS: AnalysisKind[] = [
+  "tuning",
+  "coaching",
+  "efficiency",
+];
+
+export interface TuningFinding {
+  category:
+    "steering" | "permissions" | "hooks" | "skills" | "model" | "workflow";
+  severity: "high" | "medium" | "low";
+  title: string;
+  evidence_turns: number[];
+  explanation: string;
+  recommendation: string;
+  config_change: { file: string; diff: string } | null;
+}
+export interface CoachingPrompt {
+  turn: number | null;
+  original: string;
+  issue: string;
+  improved: string;
+}
+export interface Inefficiency {
+  title: string;
+  evidence_turns: number[];
+  wasted_turns: number | null;
+  wasted_seconds: number | null;
+  lever: "SCRIPT" | "HOOK" | "SKILL" | "STEERING";
+  starter: { file: string; content: string } | null;
+}
+export interface AnalysisResult {
+  summary: string;
+  findings?: TuningFinding[];
+  overall_score?: number | null;
+  prompts?: CoachingPrompt[];
+  patterns?: string[];
+  inefficiencies?: Inefficiency[];
+  /** Items the model offered that the contract dropped (bad enum, blank
+   *  coaching row, repeat). An empty list with dropped > 0 is not "clean". */
+  dropped_items?: number;
+}
+export interface AnalysisRow {
+  kind: AnalysisKind;
+  judge_id: string;
+  judge_model: string;
+  prompt_version: string;
+  transcript_source: "archive" | "preview" | "mixed";
+  transcript_chars: number;
+  truncated: boolean;
+  parse_status: string;
+  result: AnalysisResult | null;
+  error: string | null;
+  created_at: string;
+  /** A failed re-run: the earlier parsed result is still stored. */
+  kept_previous?: boolean;
+}
+export interface SessionAnalysisResponse {
+  judge: string;
+  archive: { archived_turns: number; turns: number };
+  kinds: Record<AnalysisKind, AnalysisRow | null>;
+  titles: Record<AnalysisKind, string>;
 }
 
 export interface GraphCounts {
@@ -557,7 +685,79 @@ export interface DeveloperAggregates {
   registered_without_sessions: string[];
 }
 
+// The Analysis pipeline (#65 UX): each step reports whether it has been
+// DONE (derived from the store, not a flag) and whether a run is in
+// flight, so the page can be operated rather than merely read.
+export interface PipelineStep {
+  id: string;
+  title: string;
+  blurb: string;
+  done: boolean;
+  optional: boolean;
+  job: { state: "idle" | "running" | "done" | "failed"; message?: string; seconds?: number };
+}
+
+export interface PipelineStatus {
+  steps: PipelineStep[];
+  /** State of the whole-pipeline run, tracked server-side so it
+   *  survives a page reload. */
+  all: { state: "idle" | "running" | "done" | "failed"; message?: string; seconds?: number };
+  counts: {
+    sessions: number;
+    labels: number;
+    /** Rows the judge WROTE but could not parse — attempts, not labels. */
+    label_failures: number;
+    kpis: number;
+    graph_nodes: number;
+  };
+}
+
+// Ranked full-text search over archived trace text (#65 slice B).
+export interface TraceHit {
+  session_ref: number;
+  sequence_num: number;
+  copilot: string;
+  session_id: string;
+  project_path: string | null;
+  redaction_mode: string;
+  snippet: string;
+}
+
+export interface JudgeModels {
+  reachable: boolean;
+  url: string;
+  models: string[];
+  error?: string;
+}
+
 export const api = {
+  pipelineStatus: () => get<PipelineStatus>("/api/pipeline/status"),
+  judgeModels: () => get<JudgeModels>("/api/judge/models"),
+  searchTraces: (q: string, limit = 50) =>
+    get<{ query: string; results: TraceHit[] }>(
+      `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+  runAll: async (includeJudge: boolean) => {
+    const r = await fetch(
+      `${BASE}/api/pipeline/run-all?include_judge=${includeJudge}`,
+      { method: "POST" },
+    );
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.detail || `run-all → ${r.status}`);
+    }
+    return r.json();
+  },
+  runStep: async (step: string) => {
+    const r = await fetch(`${BASE}/api/pipeline/run/${step}`, { method: "POST" });
+    if (!r.ok) {
+      // 409 means "already running" — a normal thing to hit by
+      // double-clicking, so it is surfaced as text, not thrown as a fault.
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.detail || `run ${step} → ${r.status}`);
+    }
+    return r.json();
+  },
   dashboard: () => get<DashboardKpis>("/api/dashboard/kpis"),
   developers: () => get<DeveloperAggregates>("/api/dashboard/developers"),
   labels: () => get<{ labels: { label: string; true: number; total: number }[] }>("/api/dashboard/labels"),
@@ -568,6 +768,17 @@ export const api = {
       `/api/sessions?query=${encodeURIComponent(query)}&copilot=${encodeURIComponent(copilot)}`,
     ),
   session: (id: number) => get<SessionDetail>(`/api/sessions/${id}`),
+  sessionAnalysis: (id: number) =>
+    get<SessionAnalysisResponse>(`/api/sessions/${id}/analysis`),
+  runSessionAnalysis: (
+    id: number,
+    kind: AnalysisKind,
+    opts: { judge?: string; force?: boolean } = {},
+  ) =>
+    postOrFailure<AnalysisRow & { judge: string }>(
+      `/api/sessions/${id}/analysis/${kind}`,
+      opts,
+    ),
   graphCounts: () => get<GraphCounts>("/api/graph/node-counts"),
   // #293: read-only similarity + clustering. `clusters` uses the
   // body-preserving variant because its prerequisite states are the

@@ -44,6 +44,76 @@ class TestMcpTools(RegistryResetTestCase):
         self.assertEqual(tool_names, {"bash", "file_read"})
         self.assertEqual(len(d["errors"]), 1)
 
+    def test_get_session_details_latency_and_text(self) -> None:
+        d = tools.get_session_details(self.db, self._session_id())
+        turns = d["turns"]
+        # The first turn has no predecessor; every later one has a delta
+        # derived from copilot_turn.timestamp, never negative.
+        self.assertIsNone(turns[0]["latency_seconds"])
+        self.assertTrue(all(t["timestamp"] for t in turns))
+        later = [t["latency_seconds"] for t in turns[1:]]
+        self.assertTrue(all(v is not None and v >= 0 for v in later))
+        # Summary is over assistant turns only.
+        n_assistant = sum(1 for t in turns[1:] if t["role"] == "assistant")
+        self.assertEqual(d["latency"]["measured_turns"], n_assistant)
+        self.assertEqual(d["latency"]["max"], max(
+            t["latency_seconds"] for t in turns if t["role"] == "assistant"
+        ))
+        self.assertLessEqual(len(d["latency"]["slowest"]), 5)
+        # No trace archive in this fixture: content is None, not "".
+        self.assertTrue(all(t["content"] is None and not t["archived"] for t in turns))
+
+    def test_two_rubric_rows_do_not_duplicate_a_turn(self) -> None:
+        # heuristic_label is UNIQUE(turn_id, rubric_name): a turn judged
+        # under two rubrics has two rows. The page must still see ONE
+        # turn, with ONE latency sample, not [.., 3, 3] and a false 0s gap.
+        sid = self._session_id()
+        before = tools.get_session_details(self.db, sid)
+        turn_id = self.db.query_one(
+            "SELECT id FROM copilot_turn WHERE session_id = ? AND role = ? "
+            "ORDER BY sequence_num LIMIT 1 OFFSET 1",
+            (sid, C.ROLE_ASSISTANT),
+        )[0]
+        for rubric in ("a-rubric", "b-rubric"):
+            self.db.execute(
+                "INSERT INTO heuristic_label (turn_id, rubric_name, sentiment) VALUES (?, ?, ?)",
+                (turn_id, rubric, "NEUTRAL"),
+            )
+        self.db.commit()
+        after = tools.get_session_details(self.db, sid)
+        self.assertEqual(
+            [t["sequence_num"] for t in after["turns"]],
+            [t["sequence_num"] for t in before["turns"]],
+        )
+        self.assertEqual(after["latency"], before["latency"])
+        self.assertEqual(sum(1 for t in after["turns"] if t["sentiment"]), 1)
+
+    def test_latency_needs_both_neighbours_stamped(self) -> None:
+        # 00:00, NULL, 00:02 → the third turn's gap is unmeasurable (its
+        # predecessor has no stamp), not "120s since the last stamp".
+        sid = self._session_id()
+        seqs = [
+            r[0] for r in self.db.query(
+                "SELECT sequence_num FROM copilot_turn WHERE session_id = ? "
+                "ORDER BY sequence_num LIMIT 3", (sid,),
+            )
+        ]
+        stamps = ["2026-01-01T00:00:00+00:00", None, "2026-01-01T00:02:00+00:00"]
+        for seq, ts in zip(seqs, stamps):
+            self.db.execute(
+                "UPDATE copilot_turn SET timestamp = ? WHERE session_id = ? AND sequence_num = ?",
+                (ts, sid, seq),
+            )
+        self.db.commit()
+        turns = tools.get_session_details(self.db, sid)["turns"][:3]
+        self.assertEqual([t["latency_seconds"] for t in turns], [None, None, None])
+
+    def test_latency_percentile_is_nearest_rank(self) -> None:
+        # The repository's rule (predict._percentile, #304): ceil(q·n).
+        self.assertEqual(tools._percentile([1, 2, 3, 4, 5, 6], 0.9), 6)
+        self.assertEqual(tools._percentile([1, 2, 3, 4, 5, 6], 0.5), 3)
+        self.assertEqual(tools._percentile([7], 0.9), 7)
+
     def test_get_session_details_missing(self) -> None:
         self.assertIn("error", tools.get_session_details(self.db, 99999))
 

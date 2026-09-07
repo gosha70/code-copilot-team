@@ -76,9 +76,11 @@ class TestOpenAIJudge(unittest.TestCase):
     def test_extract_content(self) -> None:
         from session_analytics.judge import openai_judge
 
-        raw = '{"choices":[{"message":{"content":"{\\"response_helpful\\": true}"}}]}'
-        self.assertEqual(openai_judge._extract_content(raw), '{"response_helpful": true}')
-        self.assertEqual(openai_judge._extract_content("not json"), "not json")
+        raw = '{"choices":[{"message":{"content":"{\\"response_helpful\\": true}"},"finish_reason":"stop"}]}'
+        self.assertEqual(
+            openai_judge._extract_content(raw), ('{"response_helpful": true}', "stop")
+        )
+        self.assertEqual(openai_judge._extract_content("not json"), ("not json", None))
 
     def test_missing_base_url_raises(self) -> None:
         from session_analytics.judge import openai_judge
@@ -86,6 +88,25 @@ class TestOpenAIJudge(unittest.TestCase):
         j = openai_judge.OpenAICompatJudge("m", base_url="", api_key="")
         with self.assertRaises(openai_judge.MissingBaseUrlError):
             j.rate_turn(TurnContext(turn_id=1, role="user", sequence_num=0, text="hi"), load_rubric())
+
+    def test_finish_reason_length_is_a_truncated_answer(self) -> None:
+        # A capped answer is the same outcome as Ollama's done_reason=length:
+        # named, with the partial text, not handed to the parser as if whole.
+        from session_analytics.judge import openai_judge
+        from session_analytics.judge.contracts import JudgeAnswerTruncated
+
+        j = openai_judge.OpenAICompatJudge("m", base_url="http://x", api_key="")
+        j._post = lambda path, payload, *, timeout=0: (  # type: ignore[method-assign]
+            '{"choices":[{"message":{"content":"{\\"summary\\": \\"cut"},'
+            '"finish_reason":"length"}]}'
+        )
+        with self.assertRaises(JudgeAnswerTruncated) as ctx:
+            j.complete("p")
+        self.assertEqual(ctx.exception.partial, '{"summary": "cut')
+        j._post = lambda path, payload, *, timeout=0: (  # type: ignore[method-assign]
+            '{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}]}'
+        )
+        self.assertEqual(j.complete("p"), "{}")
 
 
 class _FakeJudge:

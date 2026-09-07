@@ -28,7 +28,7 @@ def parse_labels(
     judge_id: str,
     judge_model: str,
 ) -> TurnLabels:
-    obj = _extract_json_object(text)
+    obj = extract_json_object(text)
     if obj is None:
         return _empty(rubric, PARSE_INNER_UNPARSEABLE, judge_id, judge_model)
 
@@ -60,7 +60,10 @@ def _empty(rubric: Rubric, status: str, judge_id: str, judge_model: str) -> Turn
     )
 
 
-def _extract_json_object(text: str):
+def extract_json_object(text: str):
+    """The first JSON object in ``text``, or None. Shared with the
+    session-level analysis, whose documents are larger but arrive the
+    same way — sometimes fenced, sometimes wrapped in prose."""
     if not text or not text.strip():
         return None
     # Try the whole string first, then the first {...} span.

@@ -112,6 +112,56 @@ maybe_install_memkernel() {
     fi
 }
 
+# ══════════════════════════════════════════════════════════════
+# session-analytics Python dependencies (#65 entry)
+# ══════════════════════════════════════════════════════════════
+# Installed HERE, at setup time, rather than lazily on first run — a
+# tool whose first command has to install things is a tool that fails
+# at first contact.
+#
+# INTO A VENV, NEVER SYSTEM PIP. On a Homebrew/managed interpreter
+# `pip install` is refused outright (PEP 668), so the guidance that used
+# to be printed on failure was a dead end for the platform most likely
+# to hit it. The venv path is one the `session-analytics` launcher
+# already probes, so the ordinary command works afterwards with no flags.
+install_analytics_deps() {
+    local repo_root="$SCRIPT_DIR/../.."
+    local requirements="$repo_root/scripts/session_analytics/requirements.txt"
+    local venv="$repo_root/.venv"
+
+    if [[ ! -f "$requirements" ]]; then
+        return 0   # not a full checkout; nothing to install
+    fi
+    if ! command -v python3 &>/dev/null; then
+        echo "[WARN] python3 not found — skipping session-analytics dependencies"
+        return 0
+    fi
+
+    if [[ ! -x "$venv/bin/python" ]]; then
+        echo "[..]   Creating Python venv for session-analytics ($venv)"
+        if ! python3 -m venv "$venv"; then
+            echo "[WARN] venv creation failed — session-analytics will need manual setup"
+            return 0
+        fi
+    fi
+
+    # Already satisfied? Skip the network round-trip entirely.
+    if "$venv/bin/python" -c "import fastapi, uvicorn" &>/dev/null; then
+        echo "[ok]   session-analytics dependencies present"
+        return 0
+    fi
+
+    echo "[..]   Installing session-analytics dependencies (about a minute)"
+    if "$venv/bin/python" -m pip install --quiet -r "$requirements"; then
+        echo "[done] session-analytics ready — run: $repo_root/scripts/session-analytics start"
+    else
+        # Never fail the whole setup for this; the rest of the install is
+        # still useful and `start` can retry.
+        echo "[WARN] session-analytics dependency install failed"
+        echo "       Retry with: $repo_root/scripts/session-analytics start"
+    fi
+}
+
 ensure_hook_command() {
     local settings_file="$1"
     local event_name="$2"
@@ -181,6 +231,7 @@ install_helper_scripts() {
 
 if [[ "$SYNC_MODE" == "1" ]]; then
     maybe_install_memkernel
+    install_analytics_deps
     echo "Syncing rules, skills, agents, commands, hooks, and launcher from repo..."
 
     # Global rules (always skills) — from shared/skills/
@@ -443,6 +494,7 @@ if [[ "$PLAYWRIGHT_MODE" == "1" ]]; then
 fi
 
 maybe_install_memkernel
+install_analytics_deps
 
 echo "============================================"
 echo "  Claude Code Project Template Setup v2"

@@ -62,6 +62,29 @@ class TurnLabels:
     metadata: Mapping[str, object] = field(default_factory=dict)
 
 
+class JudgeTransportError(RuntimeError):
+    """The backend could not be reached or did not answer.
+
+    Raised by ``complete`` so a caller that wants raw text (session-level
+    analysis) sees the failure as an exception, while ``rate_turn`` keeps
+    its never-raises contract by converting it into a backend_error row.
+    """
+
+
+class JudgeAnswerTruncated(JudgeTransportError):
+    """The backend answered, but cut the answer off at its output cap.
+
+    Carries the partial text so the caller can store its head: "the
+    model wrote 8k tokens and never closed the JSON" is a different
+    problem from "the model is down", and the fix is different (shorter
+    lists, a stronger model — not a restart).
+    """
+
+    def __init__(self, message: str, partial: str = "") -> None:
+        super().__init__(message)
+        self.partial = partial
+
+
 @runtime_checkable
 class TurnJudge(Protocol):
     """Contract every turn judge must satisfy."""
@@ -69,3 +92,10 @@ class TurnJudge(Protocol):
     judge_id: str
 
     def rate_turn(self, ctx: TurnContext, rubric: Rubric) -> TurnLabels: ...
+
+    def complete(self, prompt: str, *, timeout: int = 120) -> str:
+        """Send one prompt, return the model's text. Raises
+        JudgeTransportError when the backend is unreachable or times out.
+        The same transport ``rate_turn`` uses, exposed so a whole-session
+        prompt can go through the judge the user already configured."""
+        ...

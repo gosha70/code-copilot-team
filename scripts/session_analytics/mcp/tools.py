@@ -7,10 +7,13 @@
 from __future__ import annotations
 
 import json
+import math
+from datetime import datetime
 from pathlib import Path
 
 from typing import Any, Optional
 
+from .. import constants as C
 from ..relational.db import Database
 
 _SESSION_COLS = (
@@ -82,15 +85,23 @@ def get_session_details(db: Database, session_id: int) -> dict[str, Any]:
     session = _session_dict(srow)
 
     turns = db.query(
-        """
+        f"""
         SELECT t.sequence_num, t.role, t.content_preview, t.has_tool_use,
                t.slash_command, h.sentiment, h.interaction_quality,
-               h.user_corrects_agent, h.rework_detected
+               h.user_corrects_agent, h.rework_detected, t.timestamp,
+               td.content
         FROM copilot_turn t
-        LEFT JOIN heuristic_label h ON h.turn_id = t.id
+        LEFT JOIN heuristic_label h
+          ON h.id = (SELECT h2.id FROM heuristic_label h2
+                     WHERE h2.turn_id = t.id
+                     ORDER BY h2.rubric_name LIMIT 1)
+        LEFT JOIN {C.TBL_TRACE_DOCUMENT} td
+          ON td.session_ref = t.session_id
+         AND td.sequence_num = t.sequence_num
+         AND td.source_kind = ?
         WHERE t.session_id = ? ORDER BY t.sequence_num
         """,
-        (session_id,),
+        (C.SOURCE_KIND_COPILOT_TRANSCRIPT, session_id),
     )
     session["turns"] = [
         {
@@ -98,9 +109,16 @@ def get_session_details(db: Database, session_id: int) -> dict[str, Any]:
             "has_tool_use": bool(r[3]), "slash_command": r[4],
             "sentiment": r[5], "interaction_quality": r[6],
             "user_corrects_agent": _b(r[7]), "rework_detected": _b(r[8]),
+            "timestamp": r[9],
+            # Full archived text when the project opted into trace_archive;
+            # None (not "") when there is no archive row, so the page can
+            # say WHY there is no text rather than print "(no content)".
+            "content": r[10],
+            "archived": r[10] is not None,
         }
         for r in turns
     ]
+    _attach_latency(session)
     session["tool_usage"] = [
         {"tool": r[0], "count": int(r[1])}
         for r in db.query(
@@ -531,3 +549,66 @@ def _b(v):
     if v is None:
         return None
     return bool(v)
+
+
+def _attach_latency(session: dict[str, Any]) -> None:
+    """Per-turn latency from copilot_turn.timestamp — read side only.
+
+    ``latency_seconds`` on a turn is the gap since the previous turn. The
+    session-level summary aggregates ASSISTANT turns only: that gap is the
+    agent's response time. A user turn's gap is the person's think time —
+    shown per turn, but not a property of the harness.
+    """
+    prev = None
+    assistant: list[tuple[int, float]] = []
+    for turn in session["turns"]:
+        ts = _parse_ts(turn.get("timestamp"))
+        latency = turn_latency(prev, ts)
+        # The IMMEDIATE predecessor is what the gap is measured from; a
+        # turn without a timestamp makes the next gap unmeasurable, not
+        # "since the last measurable turn".
+        prev = ts
+        turn["latency_seconds"] = latency
+        if latency is not None and turn.get("role") == C.ROLE_ASSISTANT:
+            assistant.append((int(turn["sequence_num"]), latency))
+
+    if not assistant:
+        session["latency"] = None
+        return
+    values = sorted(v for _, v in assistant)
+    slowest = sorted(assistant, key=lambda p: -p[1])[:5]
+    session["latency"] = {
+        "measured_turns": len(values),
+        "p50": _percentile(values, 0.5),
+        "p90": _percentile(values, 0.9),
+        "max": values[-1],
+        "slowest": [{"sequence_num": s, "seconds": v} for s, v in slowest],
+    }
+
+
+def _percentile(sorted_values: list[float], q: float) -> float:
+    """Nearest rank, the repository's rule (see predict._percentile):
+    ceil(q * n) — for [1..6] the p90 is 6, not 5."""
+    if not sorted_values:
+        return 0.0
+    rank = math.ceil(q * len(sorted_values))
+    return sorted_values[min(len(sorted_values) - 1, max(0, rank - 1))]
+
+
+def turn_latency(prev_ts: Optional[datetime], ts: Optional[datetime]) -> Optional[float]:
+    """Seconds from the previous turn to this one; None unless BOTH are
+    stamped and the clock did not go backwards. Shared with the session
+    analysis so the page and the judge see the same numbers."""
+    if ts is None or prev_ts is None:
+        return None
+    delta = round((ts - prev_ts).total_seconds(), 1)
+    return delta if delta >= 0 else None
+
+
+def _parse_ts(value: Any):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None

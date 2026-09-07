@@ -89,6 +89,7 @@ _DDL_FILES = (
     "ddl/postgres/003_indexes.sql",
     "ddl/postgres/004_metadata.sql",
     "ddl/postgres/005_heartbeat.sql",
+    "ddl/postgres/006_session_analysis.sql",
 )
 # 3: + local_heartbeat (Slice B1, #187)
 # 4: + trace search index (E10 Slice B, #65). NOTE that apply_ddl creates
@@ -96,7 +97,9 @@ _DDL_FILES = (
 #    leave an existing store's index empty and its archived traces
 #    silently unsearchable — search_index.ensure_index backfills, and is
 #    called from apply_ddl for exactly that reason.
-_SCHEMA_VERSION = 4
+# 5: + session_analysis (#65 Phase 1) — a new table, so create-if-absent
+#    is the whole migration.
+_SCHEMA_VERSION = 5
 
 _PK_SQL = {
     DIALECT_POSTGRES: "BIGSERIAL PRIMARY KEY",
@@ -130,10 +133,23 @@ class Database:
         """
         if not dsn:
             raise ValueError(
-                "no DSN configured; set --dsn, CCT_SA_DSN, or 'dsn' in config. "
-                "For local dev, docker-compose up brings up Postgres; for tests "
-                "use a sqlite:/// DSN."
+                "no database configured; pass --db, set CCT_SA_DSN, or run "
+                "`session-analytics start` which configures one for you."
             )
+        # A value that is not a database URL fails DEEP inside the driver
+        # otherwise — an operator who passed the SERVER address here got a
+        # psycopg connection error, which names neither the mistake nor the
+        # fix. Catch it at the boundary and say what was expected.
+        if not is_sqlite_dsn(dsn) and "://" in dsn:
+            scheme = dsn.split("://", 1)[0].lower()
+            if scheme in ("http", "https"):
+                raise ValueError(
+                    f"--db expects a DATABASE, not a URL: got {scheme}://…\n"
+                    "  The server address is not configured here; it is always "
+                    "127.0.0.1 (change the port with --api-port).\n"
+                    "  Examples:  sqlite:////absolute/path/to/store.db\n"
+                    "             postgresql://user:pass@localhost:5432/dbname"
+                )
         if is_sqlite_dsn(dsn):
             import sqlite3
 

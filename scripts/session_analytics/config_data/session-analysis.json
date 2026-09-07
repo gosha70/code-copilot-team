@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "Session-level analysis prompts (DATA, not code) — #65 Phase 1.",
+    "Each kind is one whole-transcript prompt; the judge returns a JSON",
+    "object the Studio renders verbatim. Placeholders: {facts} {transcript}.",
+    "Literal braces in the templates are doubled because str.format fills",
+    "them. required_keys is what the parser insists on; everything else is",
+    "coerced or dropped. Bump version when a template changes so stored",
+    "results can be told apart."
+  ],
+  "version": "session-v2",
+  "max_transcript_chars": 60000,
+  "per_turn_cap_chars": 1500,
+  "kinds": {
+    "tuning": {
+      "title": "Agent Tuning",
+      "required_keys": [
+        "summary",
+        "findings"
+      ],
+      "prompt_template": "You are reviewing ONE complete AI coding-assistant session so the developer can improve how they work with the assistant and how their harness (CLAUDE.md steering, permissions, hooks, skills, agents) is configured.\n\nSESSION FACTS\n{facts}\n\nTRANSCRIPT (turns are numbered; '+Ns' is the seconds since the previous turn; [tools: ...] lists tools the assistant called; [ERROR] marks a tool error)\n{transcript}\n\nTASK: find where the assistant's behaviour could be improved by CONFIGURATION rather than by the user. For each finding cite the turn numbers that show it. Prefer few, specific findings over many generic ones: at most 6, the ones that cost the most. Return ONLY a JSON object of this exact shape:\n{{\"summary\": \"2-3 sentences on how the assistant behaved in this session\",\n \"findings\": [{{\"category\": \"steering|permissions|hooks|skills|model|workflow\", \"severity\": \"high|medium|low\", \"title\": \"short\", \"evidence_turns\": [12, 15], \"explanation\": \"what happened and why it hurt\", \"recommendation\": \"what to change\", \"config_change\": {{\"file\": \"CLAUDE.md or .claude/settings.json or .claude/hooks/<name> or .claude/agents/<name>.md\", \"diff\": \"the exact lines to add or change\"}} or null}}]}}\nUse an empty findings list if the session gives no evidence of a configuration problem."
+    },
+    "coaching": {
+      "title": "Prompt Coaching",
+      "required_keys": [
+        "summary",
+        "prompts"
+      ],
+      "prompt_template": "You are reviewing ONE complete AI coding-assistant session so the developer can improve how they work with the assistant and how their harness (CLAUDE.md steering, permissions, hooks, skills, agents) is configured.\n\nSESSION FACTS\n{facts}\n\nTRANSCRIPT (turns are numbered; '+Ns' is the seconds since the previous turn; [tools: ...] lists tools the assistant called; [ERROR] marks a tool error)\n{transcript}\n\nTASK: coach the USER on their prompts. Look only at user turns. Flag prompts that were vague, missing context, contradictory, or that caused rework or a wrong assumption later. Pick at most 8 — the prompts that cost the most rework — and for each quote the original verbatim (at most 300 characters) and write the improved prompt you would have sent instead. Return ONLY a JSON object of this exact shape:\n{{\"summary\": \"2-3 sentences on the user's prompting in this session\", \"overall_score\": 1-5,\n \"prompts\": [{{\"turn\": 3, \"original\": \"verbatim\", \"issue\": \"what was missing or unclear\", \"improved\": \"the better prompt\"}}],\n \"patterns\": [\"...\"]}}\n\"patterns\" lists recurring habits worth changing, one string each; use [] if there are none. Use an empty prompts list if every prompt was clear."
+    },
+    "efficiency": {
+      "title": "Efficiency",
+      "required_keys": [
+        "summary",
+        "inefficiencies"
+      ],
+      "prompt_template": "You are reviewing ONE complete AI coding-assistant session so the developer can improve how they work with the assistant and how their harness (CLAUDE.md steering, permissions, hooks, skills, agents) is configured.\n\nSESSION FACTS\n{facts}\n\nTRANSCRIPT (turns are numbered; '+Ns' is the seconds since the previous turn; [tools: ...] lists tools the assistant called; [ERROR] marks a tool error)\n{transcript}\n\nTASK: find wasted effort — repeated tool calls, retries after errors, the assistant re-discovering the same facts, long detours, manual steps a script or hook would remove. Report at most 6, the most expensive ones. For each, name the lever that would remove it: SCRIPT (a shell/python script), HOOK (a Claude Code hook), SKILL (a reusable skill), or STEERING (a CLAUDE.md rule), and draft a starter file for that lever. Return ONLY a JSON object of this exact shape:\n{{\"summary\": \"2-3 sentences on where time went\",\n \"inefficiencies\": [{{\"title\": \"short\", \"evidence_turns\": [20, 21, 22], \"wasted_turns\": 3, \"wasted_seconds\": 240 or null, \"lever\": \"SCRIPT|HOOK|SKILL|STEERING\", \"starter\": {{\"file\": \"suggested path\", \"content\": \"the starter file content\"}}}}]}}\nUse an empty inefficiencies list if the session was efficient."
+    }
+  }
+}

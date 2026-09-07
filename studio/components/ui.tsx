@@ -19,11 +19,37 @@ export function Card({
   );
 }
 
-export function Stat({ label, value }: { label: string; value: string | number }) {
+export function Stat({
+  label,
+  value,
+  note,
+  tone = "default",
+}: {
+  label: string;
+  value: string | number;
+  /** The denominator or caveat behind the figure. A headline number
+   *  whose basis is not stated invites the wrong reading — e.g. a cost
+   *  averaged over PRICED sessions read as a cost per session. */
+  note?: string;
+  /** "warn" for figures where a high number is bad. Colour carries the
+   *  judgement so the reader does not have to know which way is good. */
+  tone?: "default" | "warn";
+}) {
+  // Raw counts get thousands separators: 90440 and 9044 are hard to
+  // tell apart at a glance, and this is the largest text on the page.
+  const shown = typeof value === "number" ? value.toLocaleString() : value;
   return (
     <Card>
-      <div className="text-3xl font-bold tabular-nums">{value}</div>
+      <div
+        className={
+          "text-3xl font-bold tabular-nums " +
+          (tone === "warn" && value !== 0 ? "text-rose-600" : "")
+        }
+      >
+        {shown}
+      </div>
       <div className="text-sm text-slate-500 mt-1">{label}</div>
+      {note && <div className="text-xs text-slate-400 mt-0.5">{note}</div>}
     </Card>
   );
 }
@@ -70,15 +96,67 @@ export function Badge({ kind, children }: { kind: string; children: React.ReactN
   return <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${cls}`}>{children}</span>;
 }
 
-export function Bar({ value, max, label }: { value: number; max: number; label: string }) {
+//: A categorical palette for charts whose rows are DIFFERENT THINGS.
+//: One colour for every bar makes a chart read as a single quantity
+//: split up, when "bash" and "file_edit" are unrelated categories.
+export const SERIES_COLORS = [
+  "bg-blue-500", "bg-violet-500", "bg-emerald-500", "bg-amber-500",
+  "bg-rose-500", "bg-cyan-500", "bg-indigo-500", "bg-teal-500",
+  "bg-orange-500", "bg-fuchsia-500",
+];
+
+//: SEMANTIC colours, where the value already means good or bad. Errors
+//: are not "just another series" and should not be the same blue as a
+//: session count.
+export const SEMANTIC_COLORS: Record<string, string> = {
+  POSITIVE: "bg-emerald-500",
+  NEUTRAL: "bg-slate-400",
+  NEGATIVE: "bg-orange-500",
+  FRUSTRATED: "bg-rose-500",
+};
+
+export function Bar({
+  value,
+  max,
+  label,
+  color = "bg-blue-500",
+}: {
+  value: number;
+  max: number;
+  label: string;
+  color?: string;
+}) {
   const pct = max > 0 ? Math.round((value / max) * 100) : 0;
   return (
-    <div className="flex items-center gap-2 text-sm py-0.5">
-      <span className="w-32 truncate text-slate-600">{label}</span>
+    <div className="group relative flex items-center gap-2 text-sm py-0.5">
+      {/* HEAD truncation loses the identifying half of a label. Three
+          different tools all rendered as "mcp__claude-in-…", which makes
+          the chart unable to answer the question it exists for. Keeping
+          the END (direction: rtl) shows the part that differs, and the
+          full name is always available on hover. */}
+      <span
+        className="w-32 truncate text-slate-600 cursor-default"
+        style={{ direction: "rtl", textAlign: "left" }}
+      >
+        {label}
+      </span>
+      {/* A truncated label must still be readable SOMEWHERE. The native
+          title attribute is slow and easy to miss, so the full name
+          appears on hover as a real tooltip — and only when it is
+          actually needed. */}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-0 -top-1 z-20 hidden group-hover:block
+                   bg-slate-800 text-white text-xs rounded px-2 py-1 shadow-lg whitespace-nowrap"
+      >
+        {label} — {value.toLocaleString()}
+      </span>
       <div className="flex-1 bg-slate-100 rounded h-4 overflow-hidden">
-        <div className="bg-blue-500 h-full" style={{ width: `${pct}%` }} />
+        <div className={`${color} h-full`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="w-12 text-right tabular-nums text-slate-500">{value}</span>
+      <span className="w-16 text-right tabular-nums text-slate-500">
+        {value.toLocaleString()}
+      </span>
     </div>
   );
 }
@@ -142,11 +220,20 @@ export function formatCost(usd: number | null | undefined): string {
  * otherwise. Lives beside formatCost so duration rendering can't fork
  * per-page. */
 export function formatDuration(seconds: number | null | undefined): string {
+  // The UNIT FOLLOWS THE MAGNITUDE. "2283m 47s" is arithmetically right
+  // and useless — nobody reads thousands of minutes as 38 hours. Two
+  // significant units at every scale, so the number stays legible from
+  // seconds to days.
   if (!seconds || seconds <= 0) return "—";
   const s = Math.round(seconds);
-  if (s === 0) return "<1s";
+  if (s < 1) return "<1s";
   if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m ${s % 60}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
 }
 
 export function Loading() {

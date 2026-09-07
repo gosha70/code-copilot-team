@@ -1,7 +1,17 @@
 "use client";
 
 import { api } from "@/lib/api";
-import { Bar, Card, ErrorNote, Loading, Stat, useApi } from "@/components/ui";
+import {
+  Bar,
+  Card,
+  ErrorNote,
+  Loading,
+  SEMANTIC_COLORS,
+  SERIES_COLORS,
+  Stat,
+  formatDuration,
+  useApi,
+} from "@/components/ui";
 import DevelopersPanel from "@/components/DevelopersPanel";
 
 const REFRESH_MS = 15000;
@@ -30,24 +40,44 @@ export default function DashboardPage() {
         <Stat label="Sessions" value={data.totals.sessions} />
         <Stat label="Turns" value={data.totals.turns} />
         <Stat label="Tool calls" value={data.totals.tool_calls} />
-        <Stat label="Errors" value={data.totals.errors} />
+        {/* Errors are not a neutral tally — the card should read as one
+            glance at whether anything is wrong. */}
+        <Stat label="Errors" value={data.totals.errors} tone="warn" />
+        {/* formatDuration, NOT raw seconds: "137027" was rendered as the
+            biggest number on the page and means 38 hours, which is not a
+            figure anyone recognises as an average session. The shared
+            helper exists so duration rendering cannot fork per page. */}
         <Stat
-          label="Avg duration (s)"
-          value={Math.round(data.totals.avg_duration_seconds)}
+          label="Avg duration"
+          value={formatDuration(data.totals.avg_duration_seconds)}
         />
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
         <Card title="Sessions by copilot">
-          {data.by_copilot.map((c) => (
-            <Bar key={c.copilot} label={c.copilot} value={c.sessions} max={maxCopilot} />
+          {data.by_copilot.map((c, i) => (
+            <Bar
+              key={c.copilot}
+              label={c.copilot}
+              value={c.sessions}
+              max={maxCopilot}
+              color={SERIES_COLORS[i % SERIES_COLORS.length]}
+            />
           ))}
         </Card>
 
         <Card title="Tool usage (top 25)">
           <div className="max-h-72 overflow-y-auto">
-            {data.tool_usage.map((t) => (
-              <Bar key={t.tool} label={t.tool} value={t.count} max={maxTool} />
+            {data.tool_usage.map((t, i) => (
+              <Bar
+                key={t.tool}
+                label={t.tool}
+                value={t.count}
+                max={maxTool}
+                // Rotating palette: these rows are unrelated categories,
+                // not slices of one quantity.
+                color={SERIES_COLORS[i % SERIES_COLORS.length]}
+              />
             ))}
           </div>
         </Card>
@@ -64,6 +94,9 @@ export default function DashboardPage() {
                 label={s.sentiment}
                 value={s.count}
                 max={Math.max(1, ...data.sentiment_distribution.map((x) => x.count))}
+                // Semantic, not decorative: NEGATIVE must not be the same
+                // colour as POSITIVE just because it is the next row.
+                color={SEMANTIC_COLORS[s.sentiment] || "bg-slate-400"}
               />
             ))
           )}
@@ -77,6 +110,10 @@ export default function DashboardPage() {
                 label={d.day}
                 value={d.sessions}
                 max={Math.max(1, ...data.by_day.map((x) => x.sessions))}
+                // ONE colour here on purpose: every row is the same
+                // measure over time, so varying hue would imply a
+                // distinction that does not exist.
+                color="bg-indigo-500"
               />
             ))}
           </div>

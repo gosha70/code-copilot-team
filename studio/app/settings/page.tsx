@@ -3,18 +3,152 @@
 import { useEffect, useState } from "react";
 import { api, ConfigResponse, ProjectRedactionRow } from "@/lib/api";
 import { Card, ErrorNote, Loading } from "@/components/ui";
+import PathPicker from "@/components/PathPicker";
 
-// Friendly labels + hints per .env key. Anything not listed renders as text.
-const META: Record<string, { label: string; help?: string; type?: string }> = {
-  CCT_SA_DSN: { label: "Database (DSN)", help: "SQLite local file (sqlite:////path) or postgresql://user:pass@host/db" },
-  CCT_SA_KUZU_PATH: { label: "Knowledge-graph dir (Kùzu)", help: "Folder for the embedded graph; blank = ~/.cct default" },
-  CCT_SA_REDACTION: { label: "Redaction", type: "redaction" },
-  CCT_SA_JUDGE_BACKEND: { label: "Judge backend", type: "backend" },
-  CCT_SA_JUDGE_MODEL: { label: "Judge model", help: "Blank = the backend's default (Claude Code → Opus 4.8)" },
-  CCT_SA_JUDGE_BASE_URL: { label: "Judge base URL", help: "OpenAI-compatible endpoint, e.g. http://localhost:1234/v1 (LM Studio)" },
-  CCT_SA_JUDGE_API_KEY: { label: "Judge API key", type: "password", help: "For hosted endpoints. Blank keeps the existing key." },
-  CCT_SA_JUDGE_WORKERS: { label: "Parallel judge workers", type: "number" },
-  CCT_SA_OLLAMA_URL: { label: "Ollama URL" },
+// Fields are GROUPED BY THE FEATURE THEY CONFIGURE, not listed flat.
+// A flat list gave no signal that the five Judge* keys are one feature
+// and useless individually — you cannot tell from the page that setting
+// "Judge model" alone does nothing. Groups also let the Judge section
+// show only the fields the CHOSEN backend actually uses, so an operator
+// is never asked for an OpenAI base URL while running Ollama.
+const GROUPS: { title: string; blurb: string; keys: string[] }[] = [
+  {
+    title: "Storage",
+    blurb: "Where analytics data is kept. Required — everything else reads from here.",
+    keys: ["CCT_SA_DSN", "CCT_SA_KUZU_PATH"],
+  },
+  {
+    title: "Privacy",
+    blurb: "Applied before anything is written to the database or sent to a judge.",
+    keys: ["CCT_SA_REDACTION"],
+  },
+  {
+    title: "LLM-as-Judge (optional)",
+    blurb:
+      "Only needed for the Analysis tab. Ingest, search and the dashboards " +
+      "all work without it. Pick a backend first — the fields below change " +
+      "to match it.",
+    keys: [
+      "CCT_SA_JUDGE_BACKEND", "CCT_SA_JUDGE_MODEL", "CCT_SA_JUDGE_BASE_URL",
+      "CCT_SA_JUDGE_API_KEY", "CCT_SA_JUDGE_WORKERS", "CCT_SA_OLLAMA_URL",
+    ],
+  },
+  {
+    title: "Identity",
+    blurb: "Attributes sessions to a developer. Defaults to your git email.",
+    keys: ["CCT_DEVELOPER_ID"],
+  },
+];
+
+// Judge fields that are MEANINGLESS for a given backend are hidden, not
+// merely unexplained — showing an OpenAI base URL to an Ollama user is
+// how a config page teaches the wrong thing.
+const JUDGE_FIELDS_BY_BACKEND: Record<string, string[]> = {
+  "": ["CCT_SA_JUDGE_BACKEND", "CCT_SA_JUDGE_MODEL", "CCT_SA_JUDGE_WORKERS"],
+  "claude-code": ["CCT_SA_JUDGE_BACKEND", "CCT_SA_JUDGE_MODEL", "CCT_SA_JUDGE_WORKERS"],
+  ollama: [
+    "CCT_SA_JUDGE_BACKEND", "CCT_SA_JUDGE_MODEL", "CCT_SA_OLLAMA_URL",
+    "CCT_SA_JUDGE_WORKERS",
+  ],
+};
+const JUDGE_FIELDS_OPENAI = [
+  "CCT_SA_JUDGE_BACKEND", "CCT_SA_JUDGE_MODEL", "CCT_SA_JUDGE_BASE_URL",
+  "CCT_SA_JUDGE_API_KEY", "CCT_SA_JUDGE_WORKERS",
+];
+
+// EVERY field gets: what it is for, and a concrete example. A label
+// alone ("Judge base URL") tells an operator nothing about whether they
+// need it, what shape the value takes, or what happens if it is blank —
+// which is how a settings page becomes a guessing game.
+const META: Record<
+  string,
+  {
+    label: string;
+    help?: string;
+    example?: string;
+    placeholder?: string;
+    type?: string;
+    browse?: "file" | "dir";
+  }
+> = {
+  CCT_SA_DSN: {
+    label: "Database",
+    browse: "file",
+    help:
+      "Where every ingested session, turn and label is stored. This is the " +
+      "one required setting — the CLI and this UI read the same store. " +
+      "SQLite needs no server; Postgres is for a shared team store.",
+    placeholder: "sqlite:////Users/you/.cct/session-analytics.db",
+  },
+  CCT_SA_KUZU_PATH: {
+    label: "Knowledge-graph folder",
+    browse: "dir",
+    help:
+      "Folder for the embedded Kùzu graph, which powers the Graph tab and " +
+      "session clustering. Built by the `graph` command, not by ingest. " +
+      "You rarely need to change this.",
+    placeholder: "~/.cct",
+  },
+  CCT_SA_REDACTION: {
+    label: "Redaction level",
+    help:
+      "What is stripped from session text BEFORE it is written to the " +
+      "database or sent to a judge. `code` (recommended) keeps prose but " +
+      "removes fenced code blocks and tool inputs. `metadata-only` stores " +
+      "no content at all — counts and timestamps only. `none` stores text " +
+      "verbatim, including any secrets it contained.",
+    type: "redaction",
+  },
+  CCT_SA_JUDGE_BACKEND: {
+    label: "Backend",
+    help:
+      "Which model reads your turns and labels them. Default uses the " +
+      "copilot's own model. Ollama keeps everything on this machine. " +
+      "OpenAI-compatible covers LM Studio, vLLM and hosted APIs.",
+    type: "backend",
+  },
+  CCT_SA_JUDGE_MODEL: {
+    label: "Model",
+    help:
+      "Which model the backend should use. Examples: llama3, " +
+      "qwen2.5-coder:14b, gpt-4o-mini.",
+    placeholder: "the backend's default",
+  },
+  CCT_SA_JUDGE_BASE_URL: {
+    label: "Base URL",
+    help:
+      "The OpenAI-compatible endpoint to call. Needed only for the " +
+      "OpenAI-compatible backend; a localhost URL keeps judging local.",
+    placeholder: "http://localhost:1234/v1",
+  },
+  CCT_SA_JUDGE_API_KEY: {
+    label: "API key",
+    help:
+      "Only for hosted endpoints — local servers usually ignore it. " +
+      "Stored in .env and never sent to the browser.",
+    placeholder: "none",
+    type: "password",
+  },
+  CCT_SA_JUDGE_WORKERS: {
+    label: "Parallel workers",
+    help:
+      "How many turns are judged at once. Higher is faster but hits rate " +
+      "limits on hosted APIs and can swamp a local model.",
+    placeholder: "1",
+    type: "number",
+  },
+  CCT_SA_OLLAMA_URL: {
+    label: "Ollama URL",
+    help: "Where your Ollama server is listening. Only used by the Ollama backend.",
+    placeholder: "http://localhost:11434",
+  },
+  CCT_DEVELOPER_ID: {
+    label: "Developer id",
+    help:
+      "Attributes sessions to a person, so a shared store can be broken " +
+      "down per developer.",
+    placeholder: "derived from your git email",
+  },
 };
 
 export default function SettingsPage() {
@@ -25,6 +159,14 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectRedactionRow[] | null>(null);
   const [projectsError, setProjectsError] = useState<string | null>(null);
+  // ONE open at a time. Help is on demand behind a (?) — permanently
+  // rendering every explanation is what made this page unreadable.
+  const [openHelp, setOpenHelp] = useState<string | null>(null);
+  // Fields that name something on THIS machine get a Browse… button —
+  // a path should be findable, not remembered and retyped.
+  const [picking, setPicking] = useState<{ key: string; mode: "file" | "dir" } | null>(
+    null,
+  );
 
   async function load() {
     try {
@@ -94,25 +236,112 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-4 max-w-2xl">
+      {picking && (
+        <PathPicker
+          mode={picking.mode}
+          startPath={values[picking.key] || ""}
+          onClose={() => setPicking(null)}
+          onPick={(path) => {
+            // The Database field takes a DSN, not a bare path — the
+            // picker returns a filesystem path, so convert it here
+            // rather than making the user know the sqlite:/// form.
+            set(
+              picking.key,
+              picking.key === "CCT_SA_DSN" ? `sqlite:///${path}` : path,
+            );
+            setPicking(null);
+          }}
+        />
+      )}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Settings</h1>
         {!cfg.configured && (
+          // Same defect as the app-wide banner: this fired whenever no
+          // .env existed, even with a healthy store visible on the same
+          // screen. It now states the ONE thing that is actually
+          // missing, and what saving will change.
           <span className="text-sm px-2 py-1 rounded bg-amber-100 text-amber-800">
-            Not configured yet — fill this in and Save
+            {cfg.readiness && cfg.readiness.store_reachable
+              ? "Store is reachable — Save to keep these settings for next time"
+              : "Set a Database below and Save — nothing else is required"}
           </span>
         )}
       </div>
 
+      {cfg.dsn_overridden && (
+        // The single most confusing thing this page could do is show a
+        // database that is not the one producing the numbers next door.
+        <div className="text-sm bg-amber-50 border border-amber-200 rounded p-3">
+          <span className="font-medium text-amber-900">
+            The running server is using a different database than the one saved
+            below.
+          </span>
+          <p className="text-xs text-amber-800 mt-1">
+            In use now:{" "}
+            <code className="bg-white border border-amber-200 px-1 rounded font-mono">
+              {cfg.effective_dsn}
+            </code>{" "}
+            — passed with <code>--db</code> when the server started, which wins
+            over the saved value. Every figure in the Dashboard comes from that
+            store, not from the one in this form.
+          </p>
+        </div>
+      )}
+
       <Card title="Configuration (.env — shared with the CLI)">
-        <div className="space-y-3">
-          {cfg.fields.map((f) => {
+        <div className="space-y-6">
+          {GROUPS.map((g) => {
+            const inGroup = cfg.fields.filter((f) => {
+              if (!g.keys.includes(f.key)) return false;
+              // Judge group: show only what the chosen backend uses.
+              if (g.keys.includes("CCT_SA_JUDGE_BACKEND")) {
+                const backend = values["CCT_SA_JUDGE_BACKEND"] || "";
+                const allowed =
+                  JUDGE_FIELDS_BY_BACKEND[backend] || JUDGE_FIELDS_OPENAI;
+                return allowed.includes(f.key);
+              }
+              return true;
+            });
+            if (inGroup.length === 0) return null;
+            return (
+              <fieldset key={g.title} className="border border-slate-200 rounded p-3">
+                <legend className="text-sm font-semibold text-slate-700 px-1">
+                  {g.title}
+                </legend>
+                <p className="text-xs text-slate-500 mb-3">{g.blurb}</p>
+                <div className="space-y-3">
+          {inGroup.map((f) => {
             const m = META[f.key] || { label: f.key };
             return (
               <div key={f.key}>
-                <label className="block text-sm font-medium text-slate-700">{m.label}</label>
+                <div className="flex items-center gap-1.5">
+                  <label className="block text-sm font-medium text-slate-700">
+                    {m.label}
+                  </label>
+                  {(m.help || m.example) && (
+                    <button
+                      type="button"
+                      aria-expanded={openHelp === f.key}
+                      aria-label={`What is ${m.label}?`}
+                      title={`What is ${m.label}?`}
+                      onClick={() =>
+                        setOpenHelp(openHelp === f.key ? null : f.key)
+                      }
+                      className={
+                        "w-4 h-4 shrink-0 rounded-full border text-[10px] leading-none " +
+                        "flex items-center justify-center " +
+                        (openHelp === f.key
+                          ? "border-blue-500 bg-blue-500 text-white"
+                          : "border-slate-300 bg-white text-slate-500 hover:border-slate-400 hover:text-slate-700")
+                      }
+                    >
+                      ?
+                    </button>
+                  )}
+                </div>
                 {m.type === "redaction" ? (
                   <select
-                    className="border border-slate-300 rounded px-2 py-1 text-sm w-full"
+                    className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-full"
                     value={values[f.key] || "code"}
                     onChange={(e) => set(f.key, e.target.value)}
                   >
@@ -122,7 +351,7 @@ export default function SettingsPage() {
                   </select>
                 ) : m.type === "backend" ? (
                   <select
-                    className="border border-slate-300 rounded px-2 py-1 text-sm w-full"
+                    className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-full"
                     value={values[f.key] || ""}
                     onChange={(e) => set(f.key, e.target.value)}
                   >
@@ -132,16 +361,50 @@ export default function SettingsPage() {
                     ))}
                   </select>
                 ) : (
+                  <div className="flex gap-2">
                   <input
                     type={m.type === "password" ? "password" : m.type === "number" ? "number" : "text"}
-                    className="border border-slate-300 rounded px-2 py-1 text-sm w-full font-mono"
-                    placeholder={f.secret && f.has_value ? "•••••• (unchanged)" : ""}
+                    className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-full font-mono"
+                    placeholder={
+                      f.secret && f.has_value
+                        ? "•••••• (unchanged)"
+                        : m.placeholder || ""
+                    }
                     value={values[f.key] || ""}
                     onChange={(e) => set(f.key, e.target.value)}
                   />
+                  {m.browse && (
+                    <button
+                      type="button"
+                      onClick={() => setPicking({ key: f.key, mode: m.browse! })}
+                      className="shrink-0 border border-slate-300 bg-white text-slate-700 text-sm px-3 rounded hover:bg-slate-50"
+                    >
+                      Browse…
+                    </button>
+                  )}
+                  </div>
                 )}
-                {m.help && <p className="text-xs text-slate-400 mt-0.5">{m.help}</p>}
+                {openHelp === f.key && (m.help || m.example) && (
+                  <div className="mt-1 text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded p-2">
+                    {m.help && <p>{m.help}</p>}
+                    {m.example && (
+                      <p className="mt-1">
+                        <span className="text-slate-500">e.g.</span>{" "}
+                        <code className="bg-white border border-slate-200 px-1 rounded font-mono">
+                          {m.example}
+                        </code>
+                      </p>
+                    )}
+                    {/* Defaults are NOT repeated here — the field's own
+                        placeholder shows what applies when it is blank,
+                        which is where you are already looking. */}
+                  </div>
+                )}
               </div>
+            );
+          })}
+                </div>
+              </fieldset>
             );
           })}
         </div>

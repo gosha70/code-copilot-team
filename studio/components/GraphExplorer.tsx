@@ -177,7 +177,7 @@ export default function GraphExplorer() {
       <Card title="Cypher query (read-only)">
         <div className="flex gap-2 mb-2">
           <select
-            className="border border-slate-300 rounded px-2 py-1 text-sm"
+            className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm"
             onChange={(e) => setCypher(e.target.value)}
           >
             {TEMPLATES.map((t) => (
