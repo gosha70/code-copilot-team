@@ -91,28 +91,39 @@ Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.j
 | `CCT_DEVELOPER_ID` | Your id on multi-developer stores. | git `user.email` local part, else `local` |
 
 Per-project settings (redaction override, ingest opt-out, transcript
-archive opt-in) live in `~/.cct/session-analytics.json`:
+archive opt-in) live in `~/.cct/session-analytics.json`. The file is
+strict JSON — no comments — and this example can be copied as is:
 
-```jsonc
+```json
 {
   "projects": {
-    "my-project": { "trace_archive": true },        // keep full (redacted) text for Search + analyses
-    "scratch":    { "ingest": "off" }               // never ingest this project
+    "my-project": { "trace_archive": true },
+    "scratch": { "ingest": "off" }
   },
-  "project_ids": [ { "match": "/repo/my-project", "id": "my-project" } ]
+  "project_ids": [
+    { "match": "/repo/my-project", "id": "my-project" }
+  ]
 }
 ```
 
-A project's key is its git repository name; `project_ids` maps a path
+`trace_archive: true` keeps the full (redacted) text for Search and the
+whole-session analyses; `ingest: "off"` never ingests that project. A
+project's key is its git repository name; `project_ids` maps a path
 fragment to a key when a session's directory is not a git checkout.
 
 ### 3.3 From the Studio instead
 
-**Settings** shows every key above with a `(?)` explanation, a file
-picker for the database and the graph store, a "test connection" probe,
-and a pill saying whether the API is reachable. It also tells you when
-the running server is using a different database than the one saved in
-the form (a `--db` flag on the command line wins over `.env`).
+**Settings** edits the keys a first run needs — the database, the graph
+store, redaction, the judge (backend, model, base URL, API key, workers,
+Ollama URL) and your developer id — each with a `(?)` explanation, a
+file picker for the two paths, a "test connection" probe, and a pill
+saying whether the API is reachable. It also tells you when the running
+server is using a different database than the one saved in the form (a
+`--db` flag on the command line wins over `.env`).
+
+The source roots, the embedding settings and the noise thresholds are
+not in that form: set them in `.env` or the environment, and the
+per-project block in `~/.cct/session-analytics.json`.
 
 ---
 

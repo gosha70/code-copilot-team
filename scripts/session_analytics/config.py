@@ -602,6 +602,19 @@ def load_config(
         v = env_file.get(key)
         return v if v else None
 
+    def env_db() -> Optional[str]:
+        # The new and the old database key are ALIASES within each layer:
+        # a process CCT_SA_DSN still beats a .env CCT_SA_DB, exactly as
+        # a process CCT_SA_DB would. Resolving the new name across both
+        # layers first would let a Settings save redirect a running
+        # legacy-configured command to another store.
+        for layer in (os.environ, env_file):
+            for key in (ENV_DB, ENV_DSN_LEGACY):
+                v = layer.get(key)
+                if v:
+                    return v
+        return None
+
     # routing-shadow evidence roots: config-file list, env override
     # (os.pathsep-separated), CLI extra_overrides via the merged data
     roots_raw = data.get(C.CFG_ROUTING_EVIDENCE_ROOTS) or []
@@ -633,7 +646,7 @@ def load_config(
         if ov:
             sources[copilot] = ov
 
-    resolved_dsn = dsn or env(ENV_DB) or env(ENV_DSN_LEGACY) or data.get(C.CFG_DSN) or ""
+    resolved_dsn = dsn or env_db() or data.get(C.CFG_DSN) or ""
     resolved_kuzu = (
         kuzu_path or env(ENV_KUZU_PATH) or data.get(C.CFG_KUZU_PATH)
         or str(Path.home() / ".cct" / "session-analytics-graph")
