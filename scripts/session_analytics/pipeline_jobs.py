@@ -145,18 +145,34 @@ def _run(step: str, fn: Callable[[], str]) -> None:
         _jobs[step] = final
 
 
+def _running(step: str) -> bool:
+    return (_jobs.get(step) or {}).get("state") == _STATE_RUNNING
+
+
+def _begin(step: str) -> None:
+    """Mark ``step`` running — the ONE transition into that state, so
+    every path (a single step, each step of a run-all) is refused while
+    the step, or a run-all that will reach it, is already running. A
+    run-all used to set the state unconditionally and could start a
+    second judge beside a standalone one: duplicate model calls and two
+    writers on the same rows. Caller holds ``_lock``."""
+    if _running(step):
+        raise StepBusyError(f"{step} is already running")
+    if step != STEP_ALL and _running(STEP_ALL):
+        raise StepBusyError(f"a run of all steps is in progress; {step} is part of it")
+    _jobs[step] = {
+        "state": _STATE_RUNNING,
+        "message": "",
+        "seconds": 0,
+        "started_at": time.time(),
+    }
+
+
 def start(step: str, fn: Callable[[], str]) -> None:
-    """Begin ``step`` in the background. Refuses if it is already running."""
+    """Begin ``step`` in the background. Refuses if it is already running,
+    or a run-all is."""
     with _lock:
-        current = _jobs.get(step) or {}
-        if current.get("state") == _STATE_RUNNING:
-            raise StepBusyError(f"{step} is already running")
-        _jobs[step] = {
-            "state": _STATE_RUNNING,
-            "message": "",
-            "seconds": 0,
-            "started_at": time.time(),
-        }
+        _begin(step)
     threading.Thread(target=_run, args=(step, fn), daemon=True).start()
 
 
@@ -175,6 +191,12 @@ def start_all(runners: dict[str, Callable[[], str]], *, include_judge: bool) -> 
     sequence = list(RUN_ALL_SEQUENCE)
     if include_judge:
         sequence.insert(sequence.index(STEP_KPIS), STEP_JUDGE)
+    # Refused up front if any step it will run is running now — not
+    # discovered mid-sequence after the earlier steps already ran.
+    with _lock:
+        for step in sequence:
+            if step in runners and _running(step):
+                raise StepBusyError(f"{step} is already running; wait for it before running all steps")
 
     def _sequence() -> str:
         done: list[str] = []
@@ -183,6 +205,10 @@ def start_all(runners: dict[str, Callable[[], str]], *, include_judge: bool) -> 
             if fn is None:
                 continue
             with _lock:
+                # A single step started between run-all steps is not
+                # overwritten: the sequence stops and says so.
+                if _running(step):
+                    raise StepBusyError(f"{step} is already running")
                 _jobs[step] = {
                     "state": _STATE_RUNNING, "message": "", "seconds": 0,
                     "started_at": time.time(),

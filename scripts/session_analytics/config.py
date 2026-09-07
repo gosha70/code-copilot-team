@@ -671,9 +671,18 @@ def load_config(
         str(k): _spec_tuple(v, default_spec)
         for k, v in (jdata.get(C.CFG_JUDGE_BY_COPILOT) or {}).items()
     }
-    # An explicit judge backend in .env/env is a GLOBAL override.
+    # An explicit judge backend in .env/env is a GLOBAL override. A model
+    # alone (backend left at the packaged default in Settings) is one
+    # too — for the default backend — or a chosen model would be
+    # silently ignored.
     env_backend = env(ENV_JUDGE_BACKEND)
-    override = (env_backend, env(ENV_JUDGE_MODEL) or "") if env_backend else None
+    env_model = env(ENV_JUDGE_MODEL) or ""
+    if env_backend:
+        override = (env_backend, env_model)
+    elif env_model:
+        override = (default_spec[0], env_model)
+    else:
+        override = None
 
     judge = JudgeConfig(
         override=override,

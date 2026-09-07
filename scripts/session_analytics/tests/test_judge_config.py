@@ -112,6 +112,23 @@ class TestJudgeResolution(unittest.TestCase):
         self.assertEqual(j.resolve("claude-code"), ("claude-code", ""))
         self.assertEqual(j.backend, "claude-code")
 
+    def test_model_alone_overrides_for_the_default_backend(self) -> None:
+        # Settings: Backend left at "Packaged default", Model chosen and
+        # saved. The model used to be read only beside an explicit
+        # backend, so the choice resolved to ('ollama', '') — ignored.
+        import os
+        from unittest import mock
+
+        base = {k: v for k, v in os.environ.items() if not k.startswith("CCT_SA_")}
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {**base, cfgmod.ENV_JUDGE_MODEL: "qwen3.6:27b"}, clear=True):
+            j = cfgmod.load_config().judge
+            self.assertEqual(j.resolve("claude-code"), (j.default[0], "qwen3.6:27b"))
+            self.assertEqual(j.resolve(None), (j.default[0], "qwen3.6:27b"))
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", base, clear=True):
+            self.assertIsNone(cfgmod.load_config().judge.override)
+
     def test_override_wins_globally(self) -> None:
         j = _judge(override=("ollama", "llama3"),
                    by_copilot={"claude-code": ("claude-code", "")})
