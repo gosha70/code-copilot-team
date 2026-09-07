@@ -204,7 +204,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_graph.add_argument("--db", "--dsn", dest="dsn", default=None, help="Relational DSN (else config).")
     p_graph.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu graph dir (else config).")
     p_graph.add_argument(
-        "--rebuild", action="store_true", help="Drop + recreate all graph tables first."
+        "--rebuild", action="store_true",
+        help="Drop + recreate all graph tables first (bulk COPY FROM path).",
+    )
+    p_graph.add_argument(
+        "--exclude-noise", action="store_true",
+        help="Leave out sessions the sessions.noise rule excludes from the Studio "
+             "(probe runs, temp dirs, too-short). Default: every session.",
     )
     p_graph.add_argument(
         "--session-id",
@@ -473,6 +479,7 @@ def _cmd_graph(args: argparse.Namespace) -> int:
                 cfg.kuzu_path,
                 session_ids=args.session_id,
                 rebuild=args.rebuild,
+                noise=cfg.noise if args.exclude_noise else None,
             )
         finally:
             rel.close()
