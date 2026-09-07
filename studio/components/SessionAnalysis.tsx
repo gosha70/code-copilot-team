@@ -53,12 +53,16 @@ export default function SessionAnalysis({
   state,
   judge,
   onRun,
+  learnLinks,
 }: {
   kind: AnalysisKind;
   title: string;
   state: PanelState;
   judge: string;
   onRun: (force: boolean) => void;
+  /** finding category / lever → Learn slug or "section:<id>" (#309);
+   *  absent while the Learn index has not loaded. */
+  learnLinks?: Record<string, string>;
 }) {
   if (state.kind === "absent") {
     return (
@@ -149,6 +153,7 @@ export default function SessionAnalysis({
         <Findings
           items={row.result.findings || []}
           dropped={row.result.dropped_items || 0}
+          learnLinks={learnLinks}
         />
       )}
       {kind === "coaching" && (
@@ -163,6 +168,7 @@ export default function SessionAnalysis({
         <Efficiency
           items={row.result.inefficiencies || []}
           dropped={row.result.dropped_items || 0}
+          learnLinks={learnLinks}
         />
       )}
       <Footer row={row} onRun={onRun} />
@@ -178,6 +184,28 @@ const BLURB: Record<AnalysisKind, string> = {
   efficiency:
     "Where the turns went: retries, re-discovery, detours — and the script, hook, skill or rule that would remove each one.",
 };
+
+/** The href for a finding category or lever, per the Learn index. */
+export function learnHref(value: string, learnLinks?: Record<string, string>): string | null {
+  const target = learnLinks?.[value];
+  if (!target) return null;
+  return target.startsWith("section:")
+    ? `/learn#${target.slice("section:".length)}`
+    : `/learn/${encodeURIComponent(target)}`;
+}
+
+// The category badge doubles as the way out: "hooks" links to the Hooks
+// Guide, "permissions" to the permissions guide — the finding names the
+// problem, the page explains the fix (#309).
+function LearnBadge({ value, learnLinks }: { value: string; learnLinks?: Record<string, string> }) {
+  const href = learnHref(value, learnLinks);
+  if (!href) return <Badge kind="command">{value}</Badge>;
+  return (
+    <a href={href} title={`How to fix this: open the ${value} guide in Learn`} className="hover:underline">
+      <Badge kind="command">{value} ↗</Badge>
+    </a>
+  );
+}
 
 // `turns` may be absent on a row stored before the item contract was
 // enforced server-side; render it as "no turn cited", never crash.
@@ -237,9 +265,11 @@ function EmptyList({ text, dropped }: { text: string; dropped: number }) {
 function Findings({
   items,
   dropped,
+  learnLinks,
 }: {
   items: TuningFinding[];
   dropped: number;
+  learnLinks?: Record<string, string>;
 }) {
   if (!items.length) {
     return (
@@ -257,7 +287,7 @@ function Findings({
             <Badge kind={SEVERITY_BADGE[f.severity] || "NEUTRAL"}>
               {f.severity}
             </Badge>
-            <Badge kind="command">{f.category}</Badge>
+            <LearnBadge value={f.category} learnLinks={learnLinks} />
             <span className="font-medium text-sm">{f.title}</span>
             <span className="ml-auto">
               <TurnChips turns={f.evidence_turns} />
@@ -362,9 +392,11 @@ function Coaching({
 function Efficiency({
   items,
   dropped,
+  learnLinks,
 }: {
   items: Inefficiency[];
   dropped: number;
+  learnLinks?: Record<string, string>;
 }) {
   const [open, setOpen] = useState<number | null>(null);
   if (!items.length) {
@@ -380,7 +412,7 @@ function Efficiency({
       {items.map((x, i) => (
         <div key={i} className="border border-slate-200 rounded p-3">
           <div className="flex flex-wrap items-center gap-2 mb-1">
-            <Badge kind="command">{x.lever}</Badge>
+            <LearnBadge value={x.lever} learnLinks={learnLinks} />
             <span className="font-medium text-sm">{x.title}</span>
             <span className="text-xs text-slate-500">
               {x.wasted_turns != null && `${x.wasted_turns} turns`}

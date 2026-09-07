@@ -1,0 +1,167 @@
+{
+  "_comment": [
+    "Learn center allowlist (DATA, not code) — #309, Studio Phase 3.",
+    "Every markdown file the Studio may serve is named here, either as an",
+    "explicit repo-relative path or by a closed glob under one directory.",
+    "Nothing outside this list is ever read: api/docs.py resolves a slug",
+    "through this registry, checks containment under the repo root, and",
+    "refuses anything else. 'deny' is a belt-and-braces prefix list applied",
+    "to every discovered path (claude_code/ is a stale backward-compat",
+    "wrapper with month-old copies of the real docs; doc_internal/ is",
+    "gitignored working state). 'kind' decides how titles are derived:",
+    "doc = README link text, else the H1; wiki/skill/agent = frontmatter.",
+    "'generated_marker' is the line-3 blockquote the generators stamp, so a",
+    "generated file is rendered with a badge and never mistaken for prose",
+    "someone wrote.",
+    "'titles' overrides a derived title for files whose H1 is not a name (the README's H1 is a logo block)."
+  ],
+  "repo_url": "https://github.com/gosha70/code-copilot-team",
+  "repo_branch": "master",
+  "readme_index_heading": "## Documentation",
+  "generated_marker": "> **GENERATED — do not edit.**",
+  "image_dir": "docs/images",
+  "deny_prefixes": [
+    "claude_code/",
+    "doc_internal/",
+    ".venv/",
+    "node_modules/",
+    "knowledge/wiki/schema/",
+    "knowledge/wiki/scripts/"
+  ],
+  "sections": [
+    {
+      "id": "start",
+      "title": "Start here",
+      "kind": "doc",
+      "paths": [
+        "README.md",
+        "docs/developer-cookbook.md",
+        "docs/features.md",
+        "docs/shape-up-workflow.md",
+        "docs/sdd-vs-code-copilot-team.md"
+      ]
+    },
+    {
+      "id": "claude-code",
+      "title": "Claude Code",
+      "kind": "doc",
+      "globs": [
+        "adapters/claude-code/docs/*.md"
+      ]
+    },
+    {
+      "id": "pi",
+      "title": "Pi",
+      "kind": "doc",
+      "globs": [
+        "adapters/pi/docs/*.md"
+      ]
+    },
+    {
+      "id": "shared",
+      "title": "Shared guides",
+      "kind": "doc",
+      "globs": [
+        "shared/docs/*.md"
+      ]
+    },
+    {
+      "id": "analytics",
+      "title": "Analytics & benchmarks",
+      "kind": "doc",
+      "paths": [
+        "scripts/session_analytics/README.md",
+        "benchmarks/README.md",
+        "knowledge/README.md",
+        "shared/capabilities/COMPATIBILITY.md"
+      ]
+    },
+    {
+      "id": "skills",
+      "title": "Skills",
+      "kind": "skill",
+      "globs": [
+        "shared/skills/*/SKILL.md"
+      ]
+    },
+    {
+      "id": "agents",
+      "title": "Agents",
+      "kind": "agent",
+      "globs": [
+        "adapters/claude-code/.claude/agents/*.md"
+      ]
+    },
+    {
+      "id": "wiki",
+      "title": "Wiki",
+      "kind": "wiki",
+      "paths": [
+        "knowledge/wiki/overview.md",
+        "knowledge/wiki/glossary/index.md"
+      ],
+      "globs": [
+        "knowledge/wiki/playbooks/*.md",
+        "knowledge/wiki/workflows/*.md",
+        "knowledge/wiki/concepts/*.md",
+        "knowledge/wiki/decisions/*.md",
+        "knowledge/wiki/incidents/*.md"
+      ]
+    },
+    {
+      "id": "background",
+      "title": "Background",
+      "kind": "doc",
+      "paths": [
+        "docs/evidence-and-influences.md",
+        "docs/mapatlas-harness-experiment.md",
+        "docs/github-hardening-playbook.md"
+      ]
+    }
+  ],
+  "intents": [
+    {
+      "id": "what",
+      "title": "What is CCT?",
+      "blurb": "The project in one page: what it installs, the three-phase workflow, and why.",
+      "slug": "README"
+    },
+    {
+      "id": "which",
+      "title": "Which adapter or mode?",
+      "blurb": "Claude Code or Pi; interactive, autonomous, or spec-driven.",
+      "slug": "docs--sdd-vs-code-copilot-team"
+    },
+    {
+      "id": "setup",
+      "title": "Set up…",
+      "blurb": "Every configuration option, hooks, permissions, MCP servers.",
+      "slug": "adapters--claude-code--docs--claude-code-setup-cookbook"
+    },
+    {
+      "id": "broken",
+      "title": "Something not working?",
+      "blurb": "Common pitfalls, debugging strategies, and the incident write-ups.",
+      "slug": "shared--docs--common-pitfalls"
+    }
+  ],
+  "finding_links": {
+    "_comment": "Agent Tuning finding category / Efficiency lever → the Learn page that explains the fix.",
+    "steering": "adapters--claude-code--docs--claude-config-guide",
+    "permissions": "adapters--claude-code--docs--permissions-guide",
+    "hooks": "adapters--claude-code--docs--hooks-guide",
+    "skills": "section:skills",
+    "model": "adapters--claude-code--docs--claude-code-setup-cookbook",
+    "workflow": "docs--developer-cookbook",
+    "SCRIPT": "docs--developer-cookbook",
+    "HOOK": "adapters--claude-code--docs--hooks-guide",
+    "SKILL": "section:skills",
+    "STEERING": "adapters--claude-code--docs--claude-config-guide"
+  },
+  "titles": {
+    "README.md": "Code Copilot Team — README",
+    "scripts/session_analytics/README.md": "Session Analytics",
+    "benchmarks/README.md": "Benchmark Harness",
+    "knowledge/README.md": "Knowledge Layer"
+  }
+}
