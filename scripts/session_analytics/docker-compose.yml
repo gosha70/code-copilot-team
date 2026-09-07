@@ -3,7 +3,7 @@
 #   docker compose -f scripts/session_analytics/docker-compose.yml up -d
 #
 # Then point the harness at it:
-#   export CCT_SA_DSN="postgresql://cct:cct@localhost:5433/session_analytics"
+#   export CCT_SA_DB="postgresql://cct:cct@localhost:5433/session_analytics"
 #   ./scripts/session-analytics ingest --copilot claude-code
 #
 # Port 5433 (not 5432) avoids colliding with a host Postgres. Data persists

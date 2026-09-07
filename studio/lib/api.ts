@@ -113,6 +113,8 @@ export interface ConfigResponse {
   effective_dsn?: string;
   /** True when a --db flag overrides what .env says. */
   dsn_overridden?: boolean;
+  /** The .env still names the store with the pre-rename key CCT_SA_DSN. */
+  legacy_db_key?: boolean;
   // True when the tool can actually be USED — a reachable store holding
   // sessions — not merely when a .env file exists. See readiness below
   // for which half is missing.

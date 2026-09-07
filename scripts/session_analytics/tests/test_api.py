@@ -510,7 +510,7 @@ class TestApi(RegistryResetTestCase):
         body = r.json()
         self.assertIn("configured", body)
         keys = {f["key"] for f in body["fields"]}
-        self.assertIn("CCT_SA_DSN", keys)
+        self.assertIn("CCT_SA_DB", keys)
         self.assertIn("CCT_SA_JUDGE_API_KEY", keys)
         # The API-key field is secret → its value is never sent to the browser.
         apikey = next(f for f in body["fields"] if f["key"] == "CCT_SA_JUDGE_API_KEY")
@@ -527,12 +527,12 @@ class TestApi(RegistryResetTestCase):
         with mock.patch("session_analytics.config.write_env_file",
                         side_effect=lambda v, *a, **k: captured.update(v)):
             r = self.client.put("/api/config", json={"values": {
-                "CCT_SA_DSN": "sqlite:////tmp/y.db",
+                "CCT_SA_DB": "sqlite:////tmp/y.db",
                 "CCT_SA_JUDGE_API_KEY": "",      # blank secret = unchanged → dropped
             }})
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.json()["ok"])
-        self.assertIn("CCT_SA_DSN", captured)
+        self.assertIn("CCT_SA_DB", captured)
         self.assertNotIn("CCT_SA_JUDGE_API_KEY", captured)  # not overwritten with blank
 
 

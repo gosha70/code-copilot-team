@@ -27,6 +27,20 @@ def _judge(override=None, by_copilot=None, default=("claude-code", "")):
 
 
 class TestEnvFileIO(unittest.TestCase):
+    def test_legacy_db_key_is_read_and_rewritten(self) -> None:
+        # A .env from before the rename names the store CCT_SA_DSN: it is
+        # still honoured, and the next write folds it into CCT_SA_DB —
+        # never both keys in one file.
+        d = Path(tempfile.mkdtemp())
+        env = d / ".env"
+        env.write_text("CCT_SA_DSN=sqlite:////old.db\n", encoding="utf-8")
+        parsed = cfgmod.parse_env_file(env)
+        self.assertEqual(parsed[cfgmod.ENV_DSN_LEGACY], "sqlite:////old.db")
+        cfgmod.write_env_file({cfgmod.ENV_REDACTION: "code"}, env)
+        text = env.read_text(encoding="utf-8")
+        self.assertIn("CCT_SA_DB=sqlite:////old.db", text)
+        self.assertNotIn("CCT_SA_DSN", text)
+
     def test_round_trip_and_preserve_unknown(self) -> None:
         d = Path(tempfile.mkdtemp())
         env = d / ".env"
@@ -41,7 +55,7 @@ class TestEnvFileIO(unittest.TestCase):
     def test_parse_ignores_comments_and_quotes(self) -> None:
         d = Path(tempfile.mkdtemp())
         env = d / ".env"
-        env.write_text('# a comment\nCCT_SA_DSN="sqlite:////q.db"\n\n', encoding="utf-8")
+        env.write_text('# a comment\nCCT_SA_DB="sqlite:////q.db"\n\n', encoding="utf-8")
         self.assertEqual(cfgmod.parse_env_file(env)[cfgmod.ENV_DSN], "sqlite:////q.db")
 
 

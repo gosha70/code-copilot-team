@@ -70,6 +70,7 @@
       "title": "Analytics & benchmarks",
       "kind": "doc",
       "paths": [
+        "docs/session-analytics-cookbook.md",
         "scripts/session_analytics/README.md",
         "benchmarks/README.md",
         "knowledge/README.md",
@@ -135,7 +136,7 @@
     {
       "id": "setup",
       "title": "Set up…",
-      "blurb": "Every configuration option, hooks, permissions, MCP servers.",
+      "blurb": "Every configuration option, hooks, permissions, MCP servers; and the Session Analytics cookbook.",
       "slug": "adapters--claude-code--docs--claude-code-setup-cookbook"
     },
     {
@@ -162,6 +163,7 @@
     "README.md": "Code Copilot Team — README",
     "scripts/session_analytics/README.md": "Session Analytics",
     "benchmarks/README.md": "Benchmark Harness",
-    "knowledge/README.md": "Knowledge Layer"
+    "knowledge/README.md": "Knowledge Layer",
+    "docs/session-analytics-cookbook.md": "Session Analytics — user cookbook"
   }
 }

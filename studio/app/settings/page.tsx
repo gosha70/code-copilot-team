@@ -16,7 +16,7 @@ const GROUPS: { title: string; blurb: string; keys: string[] }[] = [
   {
     title: "Storage",
     blurb: "Where analytics data is kept. Required — everything else reads from here.",
-    keys: ["CCT_SA_DSN", "CCT_SA_KUZU_PATH"],
+    keys: ["CCT_SA_DB", "CCT_SA_KUZU_PATH"],
   },
   {
     title: "Privacy",
@@ -72,7 +72,7 @@ const META: Record<
     browse?: "file" | "dir";
   }
 > = {
-  CCT_SA_DSN: {
+  CCT_SA_DB: {
     label: "Database",
     browse: "file",
     help:
@@ -82,13 +82,14 @@ const META: Record<
     placeholder: "sqlite:////Users/you/.cct/session-analytics.db",
   },
   CCT_SA_KUZU_PATH: {
-    label: "Knowledge-graph folder",
+    label: "Knowledge-graph store",
     browse: "dir",
     help:
-      "Folder for the embedded Kùzu graph, which powers the Graph tab and " +
-      "session clustering. Built by the `graph` command, not by ingest. " +
-      "You rarely need to change this.",
-    placeholder: "~/.cct",
+      "The Kùzu store FILE for the Graph tab and clustering — a path like " +
+      "~/.cct/kuzu, not a folder (Kùzu refuses a directory). Created by the " +
+      "graph step, which now takes seconds; pick the folder and the file " +
+      "name is added for you.",
+    placeholder: "~/.cct/kuzu",
   },
   CCT_SA_REDACTION: {
     label: "Redaction level",
@@ -210,7 +211,7 @@ export default function SettingsPage() {
   async function testConn() {
     setProbe("Testing…");
     try {
-      const r = await api.testConnection(values["CCT_SA_DSN"] || undefined);
+      const r = await api.testConnection(values["CCT_SA_DB"] || undefined);
       // `sessions` is null when the target has no CCT schema: the probe
       // no longer creates one, so "0 sessions" would misreport a database
       // that simply is not an analytics store.
@@ -240,17 +241,22 @@ export default function SettingsPage() {
       {picking && (
         <PathPicker
           mode={picking.mode}
-          // A DSN is not a path: strip the sqlite:/// scheme so the
-          // picker opens where the current value points, not at home.
+          // A database URL is not a path: strip the sqlite:/// scheme so
+          // the picker opens where the current value points, not at home.
           startPath={pathFromValue(values[picking.key] || "")}
           onClose={() => setPicking(null)}
           onPick={(path) => {
-            // The Database field takes a DSN, not a bare path — the
+            // The Database field takes a URL, not a bare path — the
             // picker returns a filesystem path, so convert it here
             // rather than making the user know the sqlite:/// form.
             set(
               picking.key,
-              picking.key === "CCT_SA_DSN" ? `sqlite:///${path}` : path,
+              picking.key === "CCT_SA_DB"
+                ? `sqlite:///${path}`
+                : picking.key === "CCT_SA_KUZU_PATH"
+                  ? // A directory was picked; the store is a FILE in it.
+                    `${path.replace(/\/+$/, "")}/kuzu`
+                  : path,
             );
             setPicking(null);
           }}
@@ -272,6 +278,13 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {cfg.legacy_db_key && (
+        <p className="text-xs text-slate-500">
+          Your <code>.env</code> names the database with the old key{" "}
+          <code>CCT_SA_DSN</code>; it still works, and Save writes it as{" "}
+          <code>CCT_SA_DB</code>.
+        </p>
+      )}
       {cfg.dsn_overridden && (
         // The single most confusing thing this page could do is show a
         // database that is not the one producing the numbers next door.

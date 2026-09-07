@@ -52,14 +52,14 @@ parses and round-trips, the test suite covers it; to inspect: `cat .env`.
 ### Choose a data store
 
 - **Quick path (zero infra):** SQLite. `setup` defaults to a local SQLite file
-  under `~/.cct`, or pass `--dsn "sqlite:////tmp/sa.db"` (note the **four**
+  under `~/.cct`, or pass `--db "sqlite:////tmp/sa.db"` (note the **four**
   slashes → absolute path `/tmp/sa.db`).
 - **Full path (production dialect):** PostgreSQL via the bundled compose file:
   ```bash
   docker compose -f scripts/session_analytics/docker-compose.yml up -d
-  export CCT_SA_DSN="postgresql://cct:cct@localhost:5433/session_analytics"
+  export CCT_SA_DB="postgresql://cct:cct@localhost:5433/session_analytics"
   ```
-  Then omit `--dsn` (it reads `.env` / `CCT_SA_DSN`).
+  Then omit `--db` (it reads `.env` / `CCT_SA_DB`).
 
 For the rest of this guide, `DSN` means either of the above. Set once:
 ```bash
@@ -84,8 +84,8 @@ export DSN="sqlite:////tmp/sa.db"     # or your Postgres URL
 |---|---|---|---|
 | 2.1 | `./scripts/session-analytics list` | JSON: `adapters: [aider, claude-code]`, `judges: [claude-code, ollama]` | **no `kiro`** present |
 | 2.2 | `./scripts/session-analytics --help` | usage with subcommands `list ingest doctor analyze kpis graph mcp serve` | exit 0 |
-| 2.3 | `./scripts/session-analytics ingest --copilot bogus --dsn "$DSN"` | `error: unknown copilot adapter: 'bogus'…` on stderr | exit code 2 |
-| 2.4 | `./scripts/session-analytics ingest` (no DSN, unset `CCT_SA_DSN`) | `error: no DSN configured…` | exit code 2 |
+| 2.3 | `./scripts/session-analytics ingest --copilot bogus --db "$DSN"` | `error: unknown copilot adapter: 'bogus'…` on stderr | exit code 2 |
+| 2.4 | `./scripts/session-analytics ingest` (no database, unset `CCT_SA_DB`) | `error: no database configured…` | exit code 2 |
 
 ---
 
@@ -93,10 +93,10 @@ export DSN="sqlite:////tmp/sa.db"     # or your Postgres URL
 
 | # | Command | Expected | Pass |
 |---|---|---|---|
-| 3.1 first run | `./scripts/session-analytics ingest --copilot claude-code --dsn "$DSN" --full` | JSON stats; `sessions_ingested` ≈ your real session count (hundreds/thousands) | `sessions_ingested > 0`, no traceback |
+| 3.1 first run | `./scripts/session-analytics ingest --copilot claude-code --db "$DSN" --full` | JSON stats; `sessions_ingested` ≈ your real session count (hundreds/thousands) | `sessions_ingested > 0`, no traceback |
 | 3.2 idempotency | re-run the **exact** 3.1 command | `sessions_ingested` may re-process active sessions, but counts in 3.4 stay stable | no duplicate rows (see 3.4) |
-| 3.3 incremental | `./scripts/session-analytics ingest --copilot claude-code --dsn "$DSN"` (no `--full`) | most sessions reported under `skipped`; only newly-changed re-ingested | `sessions_skipped` ≫ `sessions_ingested` |
-| 3.4 row stability | `./scripts/session-analytics doctor --dsn "$DSN"` before & after 3.2 | identical `sessions`/`turns`/`tool_calls` counts | counts unchanged by re-ingest |
+| 3.3 incremental | `./scripts/session-analytics ingest --copilot claude-code --db "$DSN"` (no `--full`) | most sessions reported under `skipped`; only newly-changed re-ingested | `sessions_skipped` ≫ `sessions_ingested` |
+| 3.4 row stability | `./scripts/session-analytics doctor --db "$DSN"` before & after 3.2 | identical `sessions`/`turns`/`tool_calls` counts | counts unchanged by re-ingest |
 
 **Idempotency deep check (SQLite):**
 ```bash
@@ -110,8 +110,8 @@ Expected: **no rows** (natural key `(copilot, session_id)` is unique).
 
 | # | Command | Expected | Pass |
 |---|---|---|---|
-| 4.1 | `./scripts/session-analytics ingest --copilot aider --dsn "$DSN" --full` | parses any `.aider.chat.history.md` under `~`; `sessions_ingested` ≥ 0, no error | exit 0 |
-| 4.2 fixture | `./scripts/session-analytics ingest --copilot aider --root scripts/session_analytics/tests/fixtures/aider --dsn "sqlite:////tmp/aider.db" --full` | `sessions_ingested: 1` | one session, 6 turns |
+| 4.1 | `./scripts/session-analytics ingest --copilot aider --db "$DSN" --full` | parses any `.aider.chat.history.md` under `~`; `sessions_ingested` ≥ 0, no error | exit 0 |
+| 4.2 fixture | `./scripts/session-analytics ingest --copilot aider --root scripts/session_analytics/tests/fixtures/aider --db "sqlite:////tmp/aider.db" --full` | `sessions_ingested: 1` | one session, 6 turns |
 
 ---
 
@@ -122,7 +122,7 @@ under explicit `--redact none`.
 
 | # | Command | Expected | Pass |
 |---|---|---|---|
-| 5.1 default | `./scripts/session-analytics ingest --copilot claude-code --dsn "sqlite:////tmp/red-code.db" --full` (default `code`) | then probe below | no code/secret bodies |
+| 5.1 default | `./scripts/session-analytics ingest --copilot claude-code --db "sqlite:////tmp/red-code.db" --full` (default `code`) | then probe below | no code/secret bodies |
 | 5.2 metadata | add `--redact metadata-only` → `sqlite:////tmp/red-meta.db` | content previews are markers only | no prose stored |
 | 5.3 none | add `--redact none` → `sqlite:////tmp/red-none.db` | verbatim content stored | opt-in fidelity works |
 
@@ -148,7 +148,7 @@ Pass: `code|1` (and `none` runs show `none|0`).
 
 | # | Command | Expected | Pass |
 |---|---|---|---|
-| 6.1 | `./scripts/session-analytics doctor --dsn "$DSN"` | JSON with `sources` (claude-code/aider reachability) + `store` counts + `dsn_dialect` | `store.sessions` matches §3 |
+| 6.1 | `./scripts/session-analytics doctor --db "$DSN"` | JSON with `sources` (claude-code/aider reachability) + `store` counts + `dsn_dialect` | `store.sessions` matches §3 |
 
 ---
 
@@ -158,7 +158,7 @@ Use the venv interpreter. Pick a graph dir, e.g. `/tmp/sa-graph`.
 
 | # | Command | Expected | Pass |
 |---|---|---|---|
-| 7.1 build | `PYTHONPATH=scripts:. /tmp/sa-venv/bin/python -m session_analytics graph --rebuild --dsn "$DSN" --db-path /tmp/sa-graph` | JSON `built` stats + `node_counts` (Session/Turn/ToolInvocation/FileNode/ErrorNode…) | `node_counts.Session` == store sessions |
+| 7.1 build | `PYTHONPATH=scripts:. /tmp/sa-venv/bin/python -m session_analytics graph --rebuild --db "$DSN" --db-path /tmp/sa-graph` | JSON `built` stats + `node_counts` (Session/Turn/ToolInvocation/FileNode/ErrorNode…) | `node_counts.Session` == store sessions |
 | 7.2 idempotent rebuild | re-run 7.1 | identical `node_counts` | counts unchanged |
 | 7.3 incremental | `… graph --session-id <N> --db-path /tmp/sa-graph` (no `--rebuild`) | updates just that session | exit 0 |
 
@@ -175,18 +175,18 @@ Prereq for the default: `ollama serve` running and a model pulled
 
 | # | Command | Expected | Pass |
 |---|---|---|---|
-| 8.0 default | `… analyze --limit 10 --dsn "$DSN"` (needs Ollama) | `{"by_copilot": {"claude-code": {labeled, judge:"ollama:(default)"…}}}` | routed to local Ollama |
+| 8.0 default | `… analyze --limit 10 --db "$DSN"` (needs Ollama) | `{"by_copilot": {"claude-code": {labeled, judge:"ollama:(default)"…}}}` | routed to local Ollama |
 
 ### 8a. Explicit judge overrides
 
 | # | Command | Expected | Pass |
 |---|---|---|---|
-| 8.1 | `… analyze --judge ollama:llama3 --workers 2 --limit 20 --dsn "$DSN"` | JSON `{judge, labeled, parse_ok, parse_failed}` | `labeled > 0`; `parse_ok` majority |
-| 8.1b LM Studio | `CCT_SA_JUDGE_BASE_URL=http://localhost:1234/v1 … analyze --judge openai:<model> --limit 20 --dsn "$DSN"` | labels written via the OpenAI-compatible endpoint | `labeled > 0` |
-| 8.1c Claude opt-in | `… analyze --judge claude-code: --limit 10 --dsn "$DSN"` (needs the `claude` CLI; sends REDACTED previews to Anthropic) | `{judge:"claude-code:(default)", labeled…}` | `labeled > 0` |
+| 8.1 | `… analyze --judge ollama:llama3 --workers 2 --limit 20 --db "$DSN"` | JSON `{judge, labeled, parse_ok, parse_failed}` | `labeled > 0`; `parse_ok` majority |
+| 8.1b LM Studio | `CCT_SA_JUDGE_BASE_URL=http://localhost:1234/v1 … analyze --judge openai:<model> --limit 20 --db "$DSN"` | labels written via the OpenAI-compatible endpoint | `labeled > 0` |
+| 8.1c Claude opt-in | `… analyze --judge claude-code: --limit 10 --db "$DSN"` (needs the `claude` CLI; sends REDACTED previews to Anthropic) | `{judge:"claude-code:(default)", labeled…}` | `labeled > 0` |
 | 8.2 additive | re-run with no `--overwrite` | `labeled: 0` (already-labeled turns skipped) | turns not re-labeled |
 | 8.3 overwrite | add `--overwrite --limit 5` | re-labels up to 5 turns | `labeled: 5` |
-| 8.4 kpis | `… kpis --dsn "$DSN"` | JSON `{sessions: <n>}`; `session_kpi` rows written | `sessions > 0` |
+| 8.4 kpis | `… kpis --db "$DSN"` | JSON `{sessions: <n>}`; `session_kpi` rows written | `sessions > 0` |
 
 Verify turns were **not mutated** (additive contract):
 ```bash
@@ -205,7 +205,7 @@ judge math itself is covered by `test_judge.py` (fake judge).
 
 | # | Command | Expected | Pass |
 |---|---|---|---|
-| 9.1 starts | `PYTHONPATH=scripts:. /tmp/sa-venv/bin/python -m session_analytics mcp --dsn "$DSN"` | blocks on stdio (no crash); Ctrl-C to stop | starts without error |
+| 9.1 starts | `PYTHONPATH=scripts:. /tmp/sa-venv/bin/python -m session_analytics mcp --db "$DSN"` | blocks on stdio (no crash); Ctrl-C to stop | starts without error |
 | 9.2 client | add to an MCP client (e.g. Claude Code) and call `search_sessions`, `get_session_details`, `analyze_patterns` | JSON results from your store | tools return data |
 
 Quick build check without a client:
@@ -222,7 +222,7 @@ PYTHONPATH=scripts:. /tmp/sa-venv/bin/python -c \
 ### 10a. API only (no browser)
 ```bash
 PYTHONPATH=scripts:. /tmp/sa-venv/bin/python -m session_analytics serve \
-  --dsn "$DSN" --db-path /tmp/sa-graph --no-ui --api-port 8765
+  --db "$DSN" --db-path /tmp/sa-graph --no-ui --api-port 8765
 ```
 In another shell:
 
@@ -240,7 +240,7 @@ In another shell:
 ```bash
 cd studio && npm install && npm run build      # one-time; expect "Compiled successfully"
 cd .. && PYTHONPATH=scripts:. /tmp/sa-venv/bin/python -m session_analytics serve \
-  --dsn "$DSN" --db-path /tmp/sa-graph --api-port 8765 --ui-port 3000
+  --db "$DSN" --db-path /tmp/sa-graph --api-port 8765 --ui-port 3000
 ```
 Open `http://localhost:3000`. Tab checklist:
 

@@ -72,7 +72,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--root", type=Path, default=None, help="Override the source root (all copilots)."
     )
     p_ing.add_argument(
-        "--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+        "--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB)."
     )
     p_ing.add_argument(
         "--developer-id",
@@ -109,10 +109,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ing.add_argument("--since-days", type=int, default=None, help=argparse.SUPPRESS)
 
     p_doc = sub.add_parser("doctor", help="Report store counts + source reachability.")
-    p_doc.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_doc.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
 
     p_an = sub.add_parser("analyze", help="Run LLM-as-Judge over un-labeled turns.")
-    p_an.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_an.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_an.add_argument(
         "--judge",
         default=None,
@@ -135,7 +135,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     p_lab = sub.add_parser("labels", help="Judge validation: human-label sample, import, agreement (#313).")
-    p_lab.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_lab.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     lab_sub = p_lab.add_subparsers(dest="labels_cmd", required=True)
     p_ls = lab_sub.add_parser("sample", help="Write a CSV of random turns for a person to label.")
     p_ls.add_argument("--n", type=int, default=50, help="How many turns (default 50).")
@@ -159,7 +159,7 @@ def _build_parser() -> argparse.ArgumentParser:
              "idempotent post-ingest pass writing the provenance "
              "envelope into copilot_session.session_embedding.",
     )
-    p_emb.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_emb.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_emb.add_argument(
         "--backend", default=None,
         help="Embedding backend family (else config; packaged default: ollama).")
@@ -188,7 +188,7 @@ def _build_parser() -> argparse.ArgumentParser:
              "embeddings (E2 slice 2, #287) — strictly local; full "
              "reconciliation every run.",
     )
-    p_sim.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_sim.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_sim.add_argument("--graph-path", "--db-path", dest="db_path", default=None,
                        help="Kùzu database path (else config kuzu_path).")
     p_sim.add_argument("--threshold", default=None,
@@ -202,12 +202,12 @@ def _build_parser() -> argparse.ArgumentParser:
              "(E2 slice 3, #289) — read-only; computed on read, "
              "nothing materialized.",
     )
-    p_clu.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_clu.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_clu.add_argument("--graph-path", "--db-path", dest="db_path", default=None,
                        help="Kùzu database path (else config kuzu_path).")
 
     p_kpi = sub.add_parser("kpis", help="Compute session-level KPI rollups from labels.")
-    p_kpi.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_kpi.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_kpi.add_argument("--session-id", type=int, default=None, help="Limit to one session id.")
 
     sub.add_parser(
@@ -220,10 +220,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     p_mcp = sub.add_parser("mcp", help="Run the MCP stdio server over the store.")
-    p_mcp.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_mcp.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
 
     p_serve = sub.add_parser("serve", help="Launch the FastAPI + Next.js Studio.")
-    p_serve.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_serve.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_serve.add_argument("--graph-path", "--db-path", dest="db_path", default=None, help="Kùzu graph dir (else config).")
     p_serve.add_argument("--api-port", type=int, default=8765)
     p_serve.add_argument("--ui-port", type=int, default=3000)
@@ -252,7 +252,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_exp = sub.add_parser(
         "export", help="Export the relational store to CSV/Parquet (E7)."
     )
-    p_exp.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config).")
+    p_exp.add_argument("--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_exp.add_argument(
         "--format",
         choices=C.EXPORT_FORMATS,
@@ -287,7 +287,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Benchmark runs root to recursively scan for run-record.json files.",
     )
     p_cor.add_argument(
-        "--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+        "--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB)."
     )
 
     p_arch = sub.add_parser(
@@ -303,7 +303,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override the source root (all copilots).",
     )
     p_arch.add_argument(
-        "--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+        "--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB)."
     )
     p_arch.add_argument(
         "--full", action="store_true",
@@ -324,7 +324,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Max results (default {C.SEARCH_DEFAULT_LIMIT}, cap {C.SEARCH_MAX_LIMIT}).",
     )
     p_srch.add_argument(
-        "--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+        "--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB)."
     )
 
     p_watch = sub.add_parser(
@@ -342,7 +342,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--interval", type=int, default=15, help="Seconds between cycles (default: 15)."
     )
     p_watch.add_argument(
-        "--db", "--dsn", dest="dsn", default=None, help="Database DSN (else config / CCT_SA_DSN env)."
+        "--db", "--dsn", dest="dsn", default=None, help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB)."
     )
     p_watch.add_argument(
         "--copilots",
@@ -379,8 +379,8 @@ def _cmd_setup(args: argparse.Namespace) -> int:
 
     overrides = {}
     if args.dsn:
-        from .config import ENV_DSN
-        overrides[ENV_DSN] = args.dsn
+        from .config import ENV_DB
+        overrides[ENV_DB] = args.dsn
     run_setup(interactive=not args.non_interactive, overrides=overrides)
     return C.EXIT_OK
 
@@ -421,8 +421,8 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
         print(
-            "error: no DSN configured. Run setup, pass --dsn, or set CCT_SA_DSN. "
-            "For a sqlite test run: --dsn sqlite:////tmp/sa.db",
+            "error: no database configured. Run setup, pass --db, or set CCT_SA_DB. "
+            "For a sqlite test run: --db sqlite:////tmp/sa.db",
             file=sys.stderr,
         )
         return C.EXIT_USAGE
@@ -471,7 +471,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001
             report["store"] = {"error": str(exc)}
     else:
-        report["store"] = {"error": "no DSN configured"}
+        report["store"] = {"error": "no database configured"}
     print(json.dumps(report, indent=2))
     return C.EXIT_OK
 
@@ -498,7 +498,7 @@ def _cmd_graph(args: argparse.Namespace) -> int:
 
     cfg = load_config(dsn=args.dsn, kuzu_path=args.db_path)
     if not cfg.dsn:
-        print("error: no relational DSN configured (see --dsn).", file=sys.stderr)
+        print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
     try:
         rel = Database.connect(cfg.dsn)
@@ -566,7 +566,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
 
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
-        print("error: no DSN configured (see --dsn).", file=sys.stderr)
+        print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
 
     try:
@@ -630,8 +630,8 @@ def _cmd_correlate(args: argparse.Namespace) -> int:
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
         print(
-            "error: no DSN configured. Run setup, pass --dsn, or set CCT_SA_DSN. "
-            "For a sqlite test run: --dsn sqlite:////tmp/sa.db",
+            "error: no database configured. Run setup, pass --db, or set CCT_SA_DB. "
+            "For a sqlite test run: --db sqlite:////tmp/sa.db",
             file=sys.stderr,
         )
         return C.EXIT_USAGE
@@ -728,8 +728,8 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
         print(
-            "error: no DSN configured. Run setup, pass --dsn, or set CCT_SA_DSN. "
-            "For a sqlite test run: --dsn sqlite:////tmp/sa.db",
+            "error: no database configured. Run setup, pass --db, or set CCT_SA_DB. "
+            "For a sqlite test run: --db sqlite:////tmp/sa.db",
             file=sys.stderr,
         )
         return C.EXIT_USAGE
@@ -802,7 +802,7 @@ def _cmd_archive(args: argparse.Namespace) -> int:
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
         print(
-            "error: no DSN configured. Run setup, pass --dsn, or set CCT_SA_DSN.",
+            "error: no database configured. Run setup, pass --db, or set CCT_SA_DB.",
             file=sys.stderr,
         )
         return C.EXIT_USAGE
@@ -850,7 +850,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
         print(
-            "error: no DSN configured. Run setup, pass --dsn, or set CCT_SA_DSN.",
+            "error: no database configured. Run setup, pass --db, or set CCT_SA_DB.",
             file=sys.stderr,
         )
         return C.EXIT_USAGE
@@ -886,7 +886,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
 
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
-        print("error: no DSN configured (see --dsn or run setup).", file=sys.stderr)
+        print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
     workers = args.workers if args.workers is not None else cfg.judge.workers
     rubric = load_rubric(args.rubric_name)
@@ -934,7 +934,7 @@ def _cmd_labels(args: argparse.Namespace) -> int:
 
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
-        print("error: no DSN configured (see --dsn or run setup).", file=sys.stderr)
+        print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
     try:
         db = Database.connect(cfg.dsn)
@@ -985,7 +985,7 @@ def _cmd_embed(args: argparse.Namespace) -> int:
         extra_overrides={C.CFG_EMBEDDING: cli_embed} if cli_embed else None,
     )
     if not cfg.dsn:
-        print("error: no DSN configured (see --dsn or run setup).", file=sys.stderr)
+        print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
     try:
         db = Database.connect(cfg.dsn)
@@ -1038,7 +1038,7 @@ def _cmd_similar(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return C.EXIT_USAGE
     if not cfg.dsn:
-        print("error: no DSN configured (see --dsn or run setup).", file=sys.stderr)
+        print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
     # ABSENT graph: checked BEFORE connect, because GraphDatabase
     # .connect mkdirs and creates — `similar` must never create the
@@ -1153,7 +1153,7 @@ def _cmd_kpis(args: argparse.Namespace) -> int:
 
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
-        print("error: no DSN configured (see --dsn).", file=sys.stderr)
+        print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
     rubric = load_rubric()
     try:
@@ -1203,7 +1203,7 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
 
     cfg = load_config(dsn=args.dsn)
     if not cfg.dsn:
-        print("error: no DSN configured (see --dsn).", file=sys.stderr)
+        print("error: no database configured (see --db or run setup).", file=sys.stderr)
         return C.EXIT_USAGE
     try:
         server.run(cfg.dsn, cfg.kuzu_path)

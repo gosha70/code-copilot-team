@@ -174,10 +174,22 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     @app.get("/api/config")
     def get_config() -> dict[str, Any]:
         from .. import constants as C
-        from ..config import ENV_KEYS, SECRET_ENV_KEYS, is_initialized, parse_env_file
+        from ..config import (
+            ENV_DB,
+            ENV_DSN_LEGACY,
+            ENV_KEYS,
+            SECRET_ENV_KEYS,
+            is_initialized,
+            parse_env_file,
+        )
         from ..judge.registry import list_judge_ids
 
         env = parse_env_file()
+        # A .env written before the rename carries CCT_SA_DSN; show it
+        # under the new name (Save writes the new name and drops the old).
+        legacy_db_key = ENV_DSN_LEGACY in env and ENV_DB not in env
+        if legacy_db_key:
+            env[ENV_DB] = env[ENV_DSN_LEGACY]
         fields = []
         for key in ENV_KEYS:
             secret = key in SECRET_ENV_KEYS
@@ -219,6 +231,9 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             # no settings screen.
             "effective_dsn": dsn,
             "dsn_overridden": bool(dsn and dsn != (load_config().dsn or "")),
+            # The .env still uses the pre-rename key CCT_SA_DSN; the page
+            # says so and the next Save rewrites it as CCT_SA_DB.
+            "legacy_db_key": legacy_db_key,
             # True when the tool can actually be used: a reachable store
             # holding data. `.env` is reported separately below because
             # it is a convenience (it saves repeating --db), not a
