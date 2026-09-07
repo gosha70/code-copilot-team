@@ -406,7 +406,9 @@ export default function SettingsPage() {
                   <div className="flex gap-2 items-center">
                     <select
                       className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-full font-mono"
-                      value={modelList.includes(values[f.key] || "") ? values[f.key] : ""}
+                      // The saved value stays selected even when the
+                      // catalogue lacks it — it is what will run.
+                      value={values[f.key] || ""}
                       onChange={(e) => {
                         if (e.target.value === "__other__") setModelOther(true);
                         else set(f.key, e.target.value);

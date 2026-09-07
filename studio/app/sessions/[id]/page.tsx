@@ -312,12 +312,10 @@ function Analysis({ id, kind }: { id: number; kind: AnalysisKind }) {
   const [meta, setMeta] = useState<SessionAnalysisResponse | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [state, setState] = useState<PanelState>({ kind: "absent" });
-  // The configured judge is the default. A blank configured model means
-  // the backend's own default (ollama → llama3), which is often not the
-  // model a machine actually has — so, like the Analysis page, offer the
-  // installed Ollama models as a per-run choice. "" = configured.
+  // The judge is chosen under Settings and only there (the owner's
+  // rule: one place). This page reports whether the configured model
+  // is one its backend serves, so a wrong name is seen before a run.
   const [models, setModels] = useState<JudgeModels | null>(null);
-  const [judge, setJudge] = useState("");
   // Learn index for the finding → guide links; the panel renders without
   // it, the badges just stay plain until it arrives.
   const learn = useApi(() => api.docs(), []);
@@ -352,7 +350,7 @@ function Analysis({ id, kind }: { id: number; kind: AnalysisKind }) {
         state.kind === "done" && state.row.parse_status === "ok";
       setState({ kind: "running" });
       api
-        .runSessionAnalysis(id, kind, { force, judge: judge || undefined })
+        .runSessionAnalysis(id, kind, { force })
         .then((outcome) => {
           if (outcome.ok) {
             const row: AnalysisRow = outcome.report;
@@ -362,20 +360,19 @@ function Analysis({ id, kind }: { id: number; kind: AnalysisKind }) {
           }
         });
     },
-    [id, kind, judge, state],
+    [id, kind, state],
   );
 
   if (metaError) return <ErrorNote error={metaError} />;
   if (!meta) return <Loading />;
 
-  const installed = models?.reachable ? models.models : [];
-  const configuredOllama = meta.judge.startsWith("ollama:")
-    ? meta.judge.slice("ollama:".length)
-    : null;
+  // What the configured backend serves, checked against the configured
+  // model — for any backend with a catalogue (Ollama, vLLM), not Ollama
+  // alone; the model name is the part after the first colon.
+  const served = models?.reachable ? models.models : [];
+  const configuredModel = models?.configured.model || "";
   const configuredMissing =
-    configuredOllama != null &&
-    installed.length > 0 &&
-    !installed.includes(configuredOllama);
+    configuredModel !== "" && served.length > 0 && !served.includes(configuredModel);
 
   return (
     <div className="space-y-3">
@@ -386,35 +383,25 @@ function Analysis({ id, kind }: { id: number; kind: AnalysisKind }) {
           Settings for full-text analysis.
         </p>
       )}
-      {installed.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-          <label htmlFor="analysis-judge">Judge</label>
-          <select
-            id="analysis-judge"
-            value={judge}
-            onChange={(e) => setJudge(e.target.value)}
-            className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm"
-          >
-            <option value="">configured: {meta.judge}</option>
-            {installed.map((m) => (
-              <option key={m} value={`ollama:${m}`}>
-                ollama:{m}
-              </option>
-            ))}
-          </select>
-          {configuredMissing && !judge && (
-            <span className="text-rose-700">
-              {configuredOllama} is not installed on {models?.url} — pick an
-              installed model, or set one under Settings › LLM-as-Judge.
-            </span>
-          )}
-        </div>
-      )}
+      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <span>
+          Judge: <span className="font-mono text-slate-800">{meta.judge}</span>
+        </span>
+        <a href="/settings" className="text-blue-700 hover:underline">
+          change in Settings
+        </a>
+        {configuredMissing && (
+          <span className="text-rose-700">
+            {configuredModel} is not served at {models?.url} — set one that is,
+            under Settings › LLM-as-Judge.
+          </span>
+        )}
+      </div>
       <SessionAnalysis
         kind={kind}
         title={meta.titles[kind]}
         state={state}
-        judge={judge || meta.judge}
+        judge={meta.judge}
         onRun={run}
         learnLinks={learn.data?.finding_links}
       />
