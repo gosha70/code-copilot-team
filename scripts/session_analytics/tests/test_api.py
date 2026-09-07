@@ -6,8 +6,10 @@ from __future__ import annotations
 import importlib.util
 import json
 import unittest
+from unittest import mock
 
 from session_analytics import constants as C
+from session_analytics.config import ENV_NOISE_MIN_DURATION
 from session_analytics.ingest.pipeline import ingest
 from session_analytics.routing_calibration import GATE_IDS
 
@@ -27,6 +29,14 @@ class TestApi(RegistryResetTestCase):
         # real judge backends; create_app also calls register_all idempotently.
         from session_analytics._register import register_all
         register_all()
+        # The fixture session is 5 seconds long, which the default noise
+        # rule (#307) would hide from every list and aggregate. Turn the
+        # duration rule off for this class; the turn-count and path rules
+        # stay on, and test_sessions_exclude_noise_by_default exercises
+        # them against an inserted probe.
+        patcher = mock.patch.dict("os.environ", {ENV_NOISE_MIN_DURATION: "0"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.dsn = self.sqlite_dsn()
         ingest(dsn=self.dsn, copilots=[C.COPILOT_CLAUDE_CODE], root=CLAUDE_CODE_ROOT, full=True)
         from fastapi.testclient import TestClient
@@ -283,6 +293,114 @@ class TestApi(RegistryResetTestCase):
         self.assertIn("cost_usd", r.json())
 
         self.assertEqual(self.client.get("/api/sessions/99999").status_code, 404)
+
+    def _insert_probe(self) -> int:
+        from session_analytics.relational.db import Database
+
+        conn = Database.connect(self.dsn)
+        try:
+            conn.execute(
+                "INSERT INTO copilot_session (copilot, session_id, project_path, turn_count, "
+                "tool_call_count, error_count, duration_seconds, started_at, developer_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (C.COPILOT_CLAUDE_CODE, "probe-1", "/private/var/folders/x/cct-probe.q",
+                 2, 0, 0, 4, "2026-09-01T00:00:00Z", C.DEFAULT_DEVELOPER_ID),
+            )
+            conn.commit()
+            return int(conn.query_one("SELECT MAX(id) FROM copilot_session")[0])
+        finally:
+            conn.close()
+
+    def test_sessions_exclude_noise_by_default(self) -> None:
+        # #307: a probe session is hidden from the list, counted in
+        # excluded_noise, shown with include_noise=1, and still reachable
+        # by id — the filter is for lists and aggregates only.
+        probe_id = self._insert_probe()
+        body = self.client.get("/api/sessions").json()
+        self.assertEqual([s["id"] for s in body["sessions"] if s["id"] == probe_id], [])
+        self.assertEqual(body["excluded_noise"], 1)
+        self.assertFalse(body["include_noise"])
+        shown = self.client.get("/api/sessions", params={"include_noise": "true"}).json()
+        self.assertIn(probe_id, [s["id"] for s in shown["sessions"]])
+        self.assertEqual(self.client.get(f"/api/sessions/{probe_id}").status_code, 200)
+        # Aggregates agree with the list.
+        kpis = self.client.get("/api/dashboard/kpis").json()["totals"]
+        self.assertEqual(kpis["sessions"], 1)
+        self.assertEqual(kpis["excluded_noise"], 1)
+        status = self.client.get("/api/pipeline/status").json()["counts"]
+        self.assertEqual((status["sessions"], status["excluded_noise"]), (1, 1))
+        effort = self.client.get("/api/predict/effort").json()
+        self.assertEqual(effort["sessions"], 1)
+        # Every other dashboard source excludes the same session: give the
+        # probe a developer, an error, a priced turn and a label, and none
+        # of them may surface.
+        from session_analytics.relational.db import Database
+
+        conn = Database.connect(self.dsn)
+        try:
+            conn.execute(
+                "UPDATE copilot_session SET developer_id = ? WHERE id = ?", ("probe-dev", probe_id)
+            )
+            conn.execute(
+                "INSERT INTO copilot_error (session_id, error_type, tool_name, error_message) "
+                "VALUES (?, ?, ?, ?)", (probe_id, "ProbeError", "bash", "boom"),
+            )
+            conn.execute(
+                "INSERT INTO copilot_turn (session_id, sequence_num, role, model, cost_usd) "
+                "VALUES (?, ?, ?, ?, ?)", (probe_id, 0, C.ROLE_USER, "m", 9.5),
+            )
+            turn_id = int(conn.query_one("SELECT MAX(id) FROM copilot_turn")[0])
+            conn.execute(
+                "INSERT INTO heuristic_label (turn_id, rubric_name, sentiment, user_gives_command, "
+                "parse_status) VALUES (?, ?, ?, ?, ?)",
+                (turn_id, "heuristic-v1", "NEUTRAL", True, "ok"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        devs = self.client.get("/api/dashboard/developers").json()
+        self.assertNotIn("probe-dev", [d["developer_id"] for d in devs["developers"]])
+        errors = self.client.get("/api/resources/recent-errors").json()["errors"]
+        self.assertNotIn("ProbeError", [e["error_type"] for e in errors])
+        cost = self.client.get("/api/dashboard/cost").json()
+        self.assertEqual(sum(p["cost_usd"] for p in cost["by_phase"]), 0.0)
+        self.assertEqual(cost["by_sentiment"], [])
+        labels = self.client.get("/api/dashboard/labels").json()["labels"]
+        self.assertEqual(sum(l["total"] for l in labels), 0)
+
+    def test_graph_node_counts_unopenable_store_is_503_with_guidance(self) -> None:
+        # A kuzu path that is a directory (a real misconfiguration seen
+        # on a host) must answer 503 + guidance, never an unhandled 500:
+        # a 500 escapes without CORS headers and the browser reports the
+        # whole API as unreachable (F10).
+        import importlib.util
+        import tempfile
+
+        if importlib.util.find_spec("kuzu") is None:
+            self.skipTest("kuzu not installed")
+        from fastapi.testclient import TestClient
+
+        from session_analytics.api.server import create_app
+
+        client = TestClient(
+            create_app(self.dsn, kuzu_path=tempfile.mkdtemp()),
+            base_url="http://127.0.0.1:8765",
+        )
+        r = client.get("/api/graph/node-counts")
+        self.assertEqual(r.status_code, 503, r.text)
+        detail = r.json()["detail"]
+        self.assertEqual(detail["prerequisite"], "graph")
+        self.assertIn("CCT_SA_KUZU_PATH", detail["guidance"])
+
+    def test_dashboard_latency(self) -> None:
+        r = self.client.get("/api/dashboard/latency")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertGreater(body["measured_turns"], 0)
+        self.assertEqual(body["sessions"], 1)
+        self.assertIsNotNone(body["p50"])
+        self.assertEqual(body["by_copilot"][0]["copilot"], C.COPILOT_CLAUDE_CODE)
+        self.assertIn("basis", body)
 
     def test_search_endpoint(self) -> None:
         # E10 Slice A (#98): substring search over archived trace text.

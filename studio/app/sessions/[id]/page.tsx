@@ -75,6 +75,7 @@ export default function SessionDetailPage() {
           {data.error_count} errors · {formatDuration(data.duration_seconds)} ·{" "}
           {formatCost(data.cost_usd)}
         </p>
+        <ProjectBaseline projectPath={data.project_path} />
       </div>
 
       <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
@@ -99,6 +100,28 @@ export default function SessionDetailPage() {
       )}
       {tab === "similar" && <Similar id={id} />}
     </div>
+  );
+}
+
+// "Is this session unusual for this project?" — the base rate from
+// /api/predict/effort (#307), withheld below the sample floor so five
+// sessions never masquerade as a distribution.
+function ProjectBaseline({ projectPath }: { projectPath: string | null }) {
+  const { data } = useApi(
+    () => api.predictEffort(projectPath || ""),
+    [projectPath],
+  );
+  // No project path means the estimate would be the store-wide one, and
+  // "This project" would be a lie; say nothing rather than mislabel it.
+  if (!projectPath || !data || !data.turns.sufficient) return null;
+  const cost = data.cost_usd.sufficient && data.cost_usd.median != null
+    ? ` · median ${formatCost(data.cost_usd.median)}`
+    : "";
+  return (
+    <p className="text-xs text-slate-400 mt-0.5">
+      This project: median {data.turns.median} turns · p90 {data.turns.p90}
+      {cost} (n={data.sessions})
+    </p>
   );
 }
 

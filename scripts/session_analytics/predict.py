@@ -24,6 +24,8 @@ from typing import Any, Optional, Sequence
 
 from . import constants as C
 from .relational.db import Database
+from .config import NoiseConfig
+from .session_filter import keep_clause
 
 #: Below this many observations an estimate is returned as None with the
 #: count intact, rather than a figure the reader would reasonably trust.
@@ -65,7 +67,9 @@ def _summary(values: Sequence[float]) -> dict[str, Any]:
     }
 
 
-def effort_estimate(db: Database, project_path: Optional[str] = None) -> dict[str, Any]:
+def effort_estimate(
+    db: Database, project_path: Optional[str] = None, noise: Optional[NoiseConfig] = None,
+) -> dict[str, Any]:
     """Expected effort for the next session, from comparable past ones.
 
     Scoped to ``project_path`` when given, else the whole store.
@@ -80,10 +84,17 @@ def effort_estimate(db: Database, project_path: Optional[str] = None) -> dict[st
     how many had any priced turn, so the exclusion is visible rather
     than silently shrinking the sample.
     """
-    where, params = "", []
+    conds: list[str] = []
+    params: list[Any] = []
     if project_path:
-        where = "WHERE s.project_path = ?"
-        params = [project_path]
+        conds.append("s.project_path = ?")
+        params.append(project_path)
+    if noise is not None:
+        # A probe run is not a comparable past session (#307).
+        keep_sql, keep_params = keep_clause(noise, "s")
+        conds.append(keep_sql)
+        params += list(keep_params)
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
     rows = db.query(
         f"""
         SELECT s.turn_count, s.tool_call_count, s.error_count,

@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 
 import ClustersView from "@/components/ClustersView";
-import { Loading } from "@/components/ui";
+import { Loading, describeError } from "@/components/ui";
 import { api } from "@/lib/api";
 import { classify, type ClustersState } from "@/lib/clusterStates";
 
@@ -21,7 +21,7 @@ export default function ClustersPage() {
       .then((outcome) => live && setState(classify(outcome)))
       // A rejected promise is not a prerequisite — it is an honest
       // failure, and FR-C forbids collapsing the two.
-      .catch((e) => live && setState({ kind: "failed", message: String(e) }));
+      .catch((e) => live && setState({ kind: "failed", message: describeError(e) }));
     return () => {
       live = false;
     };

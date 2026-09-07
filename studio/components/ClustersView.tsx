@@ -87,10 +87,12 @@ export default function ClustersView({ state }: { state: ClustersState }) {
         "./scripts/session-analytics similar",
     };
     const command = COMMANDS[state.state];
+    // The marker already names the condition; repeating the server's
+    // own wording under it said the same thing three times (F18). What
+    // is added below is what to DO — the guidance and the command.
     return (
       <Card title="Clusters unavailable">
         <p className="text-sm text-slate-700">{MARKER[state.state]}</p>
-        <p className="text-sm text-slate-600 mt-2">{state.detail.error}</p>
         <p className="text-sm text-slate-500 mt-1">{state.detail.guidance}</p>
         {command && (
           <pre className="mt-2 bg-slate-100 rounded p-2 text-xs overflow-x-auto">

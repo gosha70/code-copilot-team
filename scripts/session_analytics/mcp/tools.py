@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .. import constants as C
+from ..config import NoiseConfig
 from ..relational.db import Database
+from ..session_filter import keep_clause, noise_clause
 
 _SESSION_COLS = (
     "id, copilot, session_id, project_path, model, developer_id, phase, "
@@ -50,8 +52,55 @@ def search_sessions(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     limit: int = 20,
+    noise: Optional[NoiseConfig] = None,
+    include_noise: bool = False,
 ) -> list[dict[str, Any]]:
-    """Find sessions by keyword (project path / model) + optional filters."""
+    """Find sessions by keyword (project path / model) + optional filters.
+
+    With ``noise`` given and ``include_noise`` False, probe/temp-dir/too-
+    short sessions are left out (see session_filter). Use
+    ``count_noise_sessions`` with the same filters to say how many.
+    """
+    where, params = _session_filters(query, copilot, date_from, date_to)
+    if noise is not None and not include_noise:
+        keep_sql, keep_params = keep_clause(noise, "copilot_session")
+        where.append(keep_sql)
+        params += list(keep_params)
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    rows = db.query(
+        f"SELECT {_SESSION_SELECT_COLS} FROM copilot_session{where_sql} "
+        f"ORDER BY started_at DESC LIMIT {int(limit)}",
+        tuple(params),
+    )
+    return [_session_dict(r) for r in rows]
+
+
+def count_noise_sessions(
+    db: Database,
+    noise: NoiseConfig,
+    query: Optional[str] = None,
+    *,
+    copilot: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> int:
+    """How many sessions the same filters would list if noise were shown —
+    the number behind the Sessions page's "Show excluded (n)"."""
+    where, params = _session_filters(query, copilot, date_from, date_to)
+    noise_sql, noise_params = noise_clause(noise, "copilot_session")
+    where.append(noise_sql)
+    params += list(noise_params)
+    row = db.query_one(
+        f"SELECT COUNT(*) FROM copilot_session WHERE {' AND '.join(where)}",
+        tuple(params),
+    )
+    return int((row or (0,))[0] or 0)
+
+
+def _session_filters(
+    query: Optional[str], copilot: Optional[str],
+    date_from: Optional[str], date_to: Optional[str],
+) -> tuple[list[str], list[Any]]:
     where: list[str] = []
     params: list[Any] = []
     if query:
@@ -66,13 +115,7 @@ def search_sessions(
     if date_to:
         where.append("started_at <= ?")
         params.append(date_to)
-    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
-    rows = db.query(
-        f"SELECT {_SESSION_SELECT_COLS} FROM copilot_session{where_sql} "
-        f"ORDER BY started_at DESC LIMIT {int(limit)}",
-        tuple(params),
-    )
-    return [_session_dict(r) for r in rows]
+    return where, params
 
 
 def get_session_details(db: Database, session_id: int) -> dict[str, Any]:

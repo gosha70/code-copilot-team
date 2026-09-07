@@ -5,21 +5,29 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
+from ..config import NoiseConfig
 from ..relational.db import Database
+from ..session_filter import keep_clause
 
 
-def recent_errors(db: Database, limit: int = 50) -> dict[str, Any]:
+def recent_errors(
+    db: Database, limit: int = 50, noise: Optional[NoiseConfig] = None
+) -> dict[str, Any]:
+    # With ``noise`` given, errors from probe sessions are not "recent
+    # errors" — the dashboard shows the same sessions everywhere (#307).
+    keep_sql, keep_params = keep_clause(noise, "s") if noise else ("1=1", ())
     rows = db.query(
-        """
+        f"""
         SELECT e.error_type, e.tool_name, e.error_message,
                s.copilot, s.project_path
         FROM copilot_error e
         JOIN copilot_session s ON s.id = e.session_id
+        WHERE {keep_sql}
         ORDER BY e.id DESC LIMIT ?
         """,
-        (int(limit),),
+        (*keep_params, int(limit)),
     )
     return {
         "errors": [

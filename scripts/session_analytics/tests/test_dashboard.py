@@ -89,3 +89,38 @@ class TestDashboard(RegistryResetTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLatency(RegistryResetTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        claude_code.register()
+        self.dsn = self.sqlite_dsn()
+        ingest(dsn=self.dsn, copilots=[C.COPILOT_CLAUDE_CODE], root=CLAUDE_CODE_ROOT, full=True)
+        self.db = Database.connect(self.dsn)
+
+    def tearDown(self) -> None:
+        self.db.close()
+        super().tearDown()
+
+    def test_latency_over_assistant_turns_with_measured_n(self) -> None:
+        # Fixture stamps are one second apart: every assistant turn after
+        # the first turn measures 1.0s, and the n says how many.
+        body = dashboard.latency(self.db)
+        n_assistant = int(self.db.query_one(
+            "SELECT COUNT(*) FROM copilot_turn WHERE role = ? AND sequence_num > 0",
+            (C.ROLE_ASSISTANT,),
+        )[0])
+        self.assertEqual(body["measured_turns"], n_assistant)
+        self.assertEqual((body["p50"], body["p90"], body["max"]), (1.0, 1.0, 1.0))
+        self.assertEqual(body["sessions"], 1)
+        self.assertEqual(body["by_copilot"][0]["measured_turns"], n_assistant)
+
+    def test_latency_excludes_noise_and_survives_an_empty_store(self) -> None:
+        from session_analytics.config import NoiseConfig
+
+        everything_is_noise = NoiseConfig(min_turns=100, min_duration_seconds=0, path_patterns=())
+        body = dashboard.latency(self.db, noise=everything_is_noise)
+        self.assertEqual(body["measured_turns"], 0)
+        self.assertIsNone(body["p50"])
+        self.assertEqual(body["by_copilot"], [])

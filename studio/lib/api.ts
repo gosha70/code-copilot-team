@@ -139,6 +139,8 @@ export interface DashboardKpis {
     total_cost_usd: number;
     cost_per_session: number;
     priced_sessions: number;
+    /** Sessions the noise rule left out of every figure above (#307). */
+    excluded_noise: number;
   };
   by_copilot: { copilot: string; sessions: number; errors: number }[];
   by_day: { day: string; sessions: number }[];
@@ -149,6 +151,127 @@ export interface DashboardKpis {
 export interface CostByOutcome {
   by_phase: { phase: string; cost_usd: number; sessions: number }[];
   by_sentiment: { sentiment: string; cost_usd: number; turns: number }[];
+}
+
+// ── #307 Studio Phase 2: numbers a person can trust ─────────────────
+export interface LatencySummary {
+  measured_turns: number;
+  p50: number | null;
+  p90: number | null;
+  max: number | null;
+}
+export interface DashboardLatency extends LatencySummary {
+  sessions: number;
+  by_copilot: ({ copilot: string } & LatencySummary)[];
+  basis: string;
+}
+export interface SessionsResponse {
+  sessions: SessionRow[];
+  /** How many the same filters would add with include_noise. */
+  excluded_noise: number;
+  include_noise: boolean;
+}
+export interface RecentError {
+  error_type: string;
+  tool_name: string | null;
+  message: string | null;
+  copilot: string;
+  project_path: string | null;
+}
+export interface LabelDistribution {
+  labels: { label: string; true: number; total: number }[];
+}
+export interface EffortSummary {
+  observations: number;
+  sufficient: boolean;
+  median: number | null;
+  p90: number | null;
+  max: number | null;
+}
+export interface EffortEstimate {
+  scope: string;
+  sessions: number;
+  turns: EffortSummary;
+  tool_calls: EffortSummary;
+  errors: EffortSummary;
+  duration_seconds: EffortSummary;
+  cost_usd: EffortSummary;
+  cost_usd_coverage: {
+    sessions_with_any_priced_turn: number;
+    sessions_fully_priced: number;
+    sessions_with_priceable_turns: number;
+  };
+  min_observations: number;
+  basis: string;
+}
+export interface OutcomePrediction {
+  projects: {
+    project_path: string | null;
+    attempts: number;
+    by_result: Record<string, number>;
+    predicted_pass_rate: number | null;
+    sufficient: boolean;
+  }[];
+  sessions_total: number;
+  sessions_with_outcome: number;
+  min_observations: number;
+  basis: string;
+}
+export interface LabelCorrelation {
+  coverage: {
+    labelled_turns: number;
+    archived_turns: number;
+    labelled_turns_with_trace: number;
+  };
+  labels: {
+    label: string;
+    correlated_turns: number;
+    true_count: number;
+    true_rate: number | null;
+    avg_trace_chars: number | null;
+    avg_interaction_quality: number | null;
+    sufficient: boolean;
+  }[];
+  rubric_name: string | null;
+  min_support: number;
+  sufficient_labels: number;
+}
+export interface LabelTrace {
+  copilot: string;
+  session_id: string;
+  project_path: string | null;
+  sequence_num: number;
+  role: string;
+  redaction_mode: string;
+  snippet: string;
+  sentiment: string | null;
+  /** copilot_session.id — links to /sessions/{session_ref}#turn-N. */
+  session_ref: number;
+}
+export interface PhaseProcessReport {
+  projects: {
+    project_path: string;
+    has_workflow_history: boolean;
+    features: {
+      feature_id: string;
+      entries: number;
+      phases_seen: string[];
+      oscillations: number;
+      rework_cycles: number;
+      review_observed: boolean;
+      occupancy_seconds: { phase: string; seconds: number }[];
+    }[];
+    history_may_be_truncated: boolean;
+  }[];
+  projects_with_history: number;
+  retention_cap: number;
+  any_history_may_be_truncated: boolean;
+  absence_note: string;
+  source_root_configured: boolean;
+}
+export interface GraphExpand {
+  label: string;
+  neighbors: { label: string; node: Record<string, unknown> }[];
 }
 
 export interface SessionRow {
@@ -709,6 +832,8 @@ export interface PipelineStatus {
     label_failures: number;
     kpis: number;
     graph_nodes: number;
+    /** Sessions the noise rule excluded from `sessions` (#307). */
+    excluded_noise: number;
   };
 }
 
@@ -760,12 +885,28 @@ export const api = {
   },
   dashboard: () => get<DashboardKpis>("/api/dashboard/kpis"),
   developers: () => get<DeveloperAggregates>("/api/dashboard/developers"),
-  labels: () => get<{ labels: { label: string; true: number; total: number }[] }>("/api/dashboard/labels"),
+  labels: () => get<LabelDistribution>("/api/dashboard/labels"),
   costByOutcome: () => get<CostByOutcome>("/api/dashboard/cost"),
+  latency: () => get<DashboardLatency>("/api/dashboard/latency"),
+  recentErrors: () => get<{ errors: RecentError[] }>("/api/resources/recent-errors"),
+  phaseProcess: () => get<PhaseProcessReport>("/api/dashboard/phase-process"),
+  predictEffort: (projectPath = "") =>
+    get<EffortEstimate>(`/api/predict/effort?project_path=${encodeURIComponent(projectPath)}`),
+  predictOutcome: () => get<OutcomePrediction>("/api/predict/outcome"),
+  labelCorrelation: () => get<LabelCorrelation>("/api/labels/correlation"),
+  labelTraces: (label: string, limit = 50) =>
+    get<{ label: string; traces: LabelTrace[] }>(
+      `/api/labels/${encodeURIComponent(label)}/traces?limit=${limit}`,
+    ),
+  health: () => get<{ status: string }>("/api/health"),
+  graphExpand: (label: string, keyField: string, keyValue: string) =>
+    get<GraphExpand>(
+      `/api/graph/expand?label=${encodeURIComponent(label)}&key_field=${encodeURIComponent(keyField)}&key_value=${encodeURIComponent(keyValue)}`,
+    ),
   benchmark: () => get<BenchmarkSummary>("/api/dashboard/benchmark"),
-  sessions: (query = "", copilot = "") =>
-    get<{ sessions: SessionRow[] }>(
-      `/api/sessions?query=${encodeURIComponent(query)}&copilot=${encodeURIComponent(copilot)}`,
+  sessions: (query = "", copilot = "", includeNoise = false) =>
+    get<SessionsResponse>(
+      `/api/sessions?query=${encodeURIComponent(query)}&copilot=${encodeURIComponent(copilot)}&include_noise=${includeNoise}`,
     ),
   session: (id: number) => get<SessionDetail>(`/api/sessions/${id}`),
   sessionAnalysis: (id: number) =>
@@ -779,7 +920,9 @@ export const api = {
       `/api/sessions/${id}/analysis/${kind}`,
       opts,
     ),
-  graphCounts: () => get<GraphCounts>("/api/graph/node-counts"),
+  // Body-preserving: an unbuilt or unopenable store answers 503 with
+  // guidance the page must show, not "not available yet".
+  graphCounts: () => getOrFailure<GraphCounts>("/api/graph/node-counts"),
   // #293: read-only similarity + clustering. `clusters` uses the
   // body-preserving variant because its prerequisite states are the
   // point (FR-C); a thrown status alone cannot distinguish them.

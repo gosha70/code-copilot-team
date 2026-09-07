@@ -13,6 +13,14 @@ import {
   useApi,
 } from "@/components/ui";
 import DevelopersPanel from "@/components/DevelopersPanel";
+import {
+  CostByOutcomeCard,
+  FailedCard,
+  LabelDistributionCard,
+  LatencyStat,
+  PhaseProcessCard,
+  RecentErrorsCard,
+} from "@/components/DashboardCards";
 
 const REFRESH_MS = 15000;
 
@@ -21,6 +29,13 @@ export default function DashboardPage() {
   // E1 (#65): fetched separately so a failure here cannot blank the
   // whole dashboard — the panel is additive, not a prerequisite.
   const devs = useApi(() => api.developers(), [], REFRESH_MS);
+  // #307: each additional card is its own fetch for the same reason —
+  // a card that cannot load says so in its own space.
+  const latency = useApi(() => api.latency(), [], REFRESH_MS);
+  const cost = useApi(() => api.costByOutcome(), [], REFRESH_MS);
+  const labels = useApi(() => api.labels(), [], REFRESH_MS);
+  const errors = useApi(() => api.recentErrors(), [], REFRESH_MS);
+  const phases = useApi(() => api.phaseProcess(), []);
   if (loading) return <Loading />;
   if (error || !data) return <ErrorNote error={error || "no data"} />;
 
@@ -36,8 +51,19 @@ export default function DashboardPage() {
         </span>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <Stat label="Sessions" value={data.totals.sessions} />
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+        {/* Every figure on this page is over the SAME sessions; the note
+            says what was left out so the count matches the Sessions
+            page and the Analysis funnel. */}
+        <Stat
+          label="Sessions"
+          value={data.totals.sessions}
+          note={
+            data.totals.excluded_noise > 0
+              ? `${data.totals.excluded_noise.toLocaleString()} excluded as noise`
+              : undefined
+          }
+        />
         <Stat label="Turns" value={data.totals.turns} />
         <Stat label="Tool calls" value={data.totals.tool_calls} />
         {/* Errors are not a neutral tally — the card should read as one
@@ -51,6 +77,7 @@ export default function DashboardPage() {
           label="Avg duration"
           value={formatDuration(data.totals.avg_duration_seconds)}
         />
+        <LatencyStat data={latency.data} error={latency.error} />
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
@@ -101,6 +128,29 @@ export default function DashboardPage() {
             ))
           )}
         </Card>
+
+        {/* Each card: data → render (annotated if the last refresh
+            failed); no data + error → say so; else still loading. */}
+        {cost.data ? (
+          <CostByOutcomeCard data={cost.data} stale={cost.error} />
+        ) : cost.error ? (
+          <FailedCard title="Cost by outcome" error={cost.error} />
+        ) : null}
+        {labels.data ? (
+          <LabelDistributionCard data={labels.data} stale={labels.error} />
+        ) : labels.error ? (
+          <FailedCard title="Label distribution" error={labels.error} />
+        ) : null}
+        {errors.data ? (
+          <RecentErrorsCard errors={errors.data.errors} stale={errors.error} />
+        ) : errors.error ? (
+          <FailedCard title="Recent tool errors" error={errors.error} />
+        ) : null}
+        {phases.data ? (
+          <PhaseProcessCard data={phases.data} stale={phases.error} />
+        ) : phases.error ? (
+          <FailedCard title="Pi workflow phases" error={phases.error} />
+        ) : null}
 
         <Card title="Sessions by day (last 30)">
           <div className="max-h-72 overflow-y-auto">
