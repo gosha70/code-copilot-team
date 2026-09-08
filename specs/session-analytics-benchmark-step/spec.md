@@ -1,6 +1,6 @@
 ---
 feature_id: session-analytics-benchmark-step
-spec_mode: light
+spec_mode: lightweight
 status: approved
 date: 2026-09-08
 issue: none
@@ -42,7 +42,7 @@ contract; the old bundle stays as the history of the first pass.
   session is linked, and — when the last scan's counters are known —
   why, without guessing.
 
-## Functional requirements
+## Requirements
 
 - FR-1 **Setting.** `CCT_SA_BENCHMARK_RUNS_ROOT` / `benchmark_runs_root`
   in `defaults.json`, exposed under Settings → Benchmarks with the
@@ -98,6 +98,16 @@ contract; the old bundle stays as the history of the first pass.
   "outcomes + unmatched > 0 never claims the records lacked session
   ids") and the FR-8 polling transitions; `next build` and
   doc-accuracy green; a real-data walk on the owner's runs folder.
+
+## Constraints
+
+- No new GitHub issue (owner's standing rule); one PR.
+- The correlate contract of #91/#92 is unchanged: Claude Code-only exact
+  join for session links, outcomes stored for every backend.
+- The judge is not involved; nothing here writes outside the scan's
+  single commit.
+- Studio conventions: `useApi`, `Card`, `Loading`/`ErrorNote`; every
+  page state is asserted by `studio/scripts/states-check.mjs`.
 
 ## Out of scope
 

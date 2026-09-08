@@ -1,5 +1,7 @@
 # Origin alignment check — session-analytics-benchmark-step
 
+Re-checked 2026-09-08 16:50 after the bundle gained spec_mode: lightweight and the Requirements/Constraints sections the validator requires; scope unchanged.
+
 Origin: specs/session-analytics-benchmark-step/origin/2026-09-08-owner-directive.md
 (owner messages of 2026-09-08; no GitHub issue by the owner's standing rule)
 

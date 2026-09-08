@@ -1,5 +1,11 @@
 ---
+spec_mode: lightweight
 feature_id: session-analytics-benchmark-step
+risk_category: ui
+justification: |
+  A pipeline step over an already-shipped, tested scan (correlate, #91/#92),
+  one setting, one payload extension and a page rewrite. The behaviour is
+  fully stated by FR-1..FR-10 in spec.md; a full bundle would restate them.
 status: approved
 date: 2026-09-08
 issue: none
