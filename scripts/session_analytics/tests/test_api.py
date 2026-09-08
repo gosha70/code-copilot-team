@@ -631,6 +631,39 @@ class TestApi(RegistryResetTestCase):
         self.assertIn(conf["source"], ("settings", "packaged default"))
         self.assertTrue(conf["spec"])
 
+    def test_judge_test_reports_the_answer_or_the_backends_own_reason(self) -> None:
+        # Settings → "Test judge": one call to the SAVED judge, so a wrong
+        # URL or model is seen before a batch, with the backend's reason.
+        from session_analytics import config as cfgmod
+        from session_analytics.judge.contracts import JudgeTransportError
+        from session_analytics.judge.registry import register_judge
+
+        class _Probe:
+            judge_id = "probe"
+            fail = False
+
+            def __init__(self, model: str = "") -> None:
+                self._model = model or "p"
+
+            def rate_turn(self, ctx, rubric):  # pragma: no cover
+                raise NotImplementedError
+
+            def complete(self, prompt, *, timeout=120):
+                if _Probe.fail:
+                    raise JudgeTransportError("HTTP 404: The model `p` does not exist.")
+                return '{"ok": true}'
+
+        register_judge("probe", _Probe)
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_JUDGE_BACKEND: "probe"}):
+            r = self.client.post("/api/judge/test").json()
+            self.assertTrue(r["ok"], r)
+            self.assertEqual((r["judge"], r["answer"]), ("probe:p", '{"ok": true}'))
+            _Probe.fail = True
+            r = self.client.post("/api/judge/test").json()
+            self.assertFalse(r["ok"])
+            self.assertIn("HTTP 404", r["error"])
+
     def test_get_config(self) -> None:
         r = self.client.get("/api/config")
         self.assertEqual(r.status_code, 200)

@@ -346,7 +346,9 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             base = (cfg.judge.ollama_url or "http://localhost:11434").rstrip("/")
             list_url, pick = f"{base}/api/tags", lambda d: [m.get("name") for m in d.get("models", []) if isinstance(m, dict)]
         elif backend == "openai":
-            base = (cfg.judge.base_url or "").rstrip("/")
+            from ..judge.openai_judge import normalize_base_url
+
+            base = normalize_base_url(cfg.judge.base_url)
             if not base:
                 out["error"] = "no base URL configured"
                 return out
@@ -369,7 +371,43 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             # (CodeQL py/stack-trace-exposure).
             _log.info("%s model list unavailable at %s: %s", backend, base, exc)
             out["error"] = type(exc).__name__
+            out["list_url"] = list_url
         return out
+
+    @app.post("/api/judge/test")
+    def judge_test() -> dict[str, Any]:
+        """One small completion with the SAVED judge, so a person can see
+        "answered in 1.2 s" or the exact refusal before running a batch.
+        The answer text is returned; the failure reason is the backend's
+        own (a wrong model name, a wrong URL, thinking that ate the
+        budget) — never a bare status code."""
+        import time as _time
+
+        from ..judge.contracts import JudgeTransportError
+        from ..judge.registry import UnknownJudgeError, get_judge
+
+        cfg = load_config()
+        conf = _configured_judge(cfg)
+        backend, model = cfg.judge.resolve(None)
+        started = _time.time()
+        try:
+            judge = get_judge(backend, model)
+            # The judges force JSON output (that is what the rubric needs),
+            # so the probe asks for JSON too.
+            answer = judge.complete('Reply with exactly this JSON and nothing else: {"ok": true}', timeout=60)
+        except (UnknownJudgeError, ValueError) as exc:
+            return {"ok": False, "judge": conf["spec"], "error": str(exc)}
+        except JudgeTransportError as exc:
+            return {"ok": False, "judge": conf["spec"], "error": str(exc),
+                    "seconds": round(_time.time() - started, 1)}
+        except Exception as exc:  # noqa: BLE001 — the reason is the answer here
+            _log.warning("judge test failed: %s", exc)
+            return {"ok": False, "judge": conf["spec"], "error": f"{type(exc).__name__}: {exc}"[:300],
+                    "seconds": round(_time.time() - started, 1)}
+        return {
+            "ok": True, "judge": conf["spec"], "seconds": round(_time.time() - started, 1),
+            "answer": (answer or "").strip()[:200],
+        }
 
     def _configured_judge(cfg) -> dict[str, Any]:
         """The judge a run with no explicit choice will use, and where

@@ -983,6 +983,8 @@ export interface JudgeModels {
   url: string;
   models: string[];
   error?: string;
+  /** The exact URL the catalogue was read from, when it failed. */
+  list_url?: string;
   /** The judge a run with no explicit choice uses, and where it is set. */
   configured: {
     spec: string;
@@ -1113,6 +1115,13 @@ export const api = {
       sessions?: number | null;
       dialect?: string;
     }>("/api/settings/test-connection", { dsn }),
+  /** One small completion with the SAVED judge: "answered in 1.2 s"
+   *  or the backend's own refusal, before a batch is run. */
+  testJudge: () =>
+    post<{ ok: boolean; judge: string; seconds?: number; answer?: string; error?: string }>(
+      "/api/judge/test",
+      {},
+    ),
   analyze: (body: {
     judge?: string;
     limit?: number;
