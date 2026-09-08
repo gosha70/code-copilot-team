@@ -334,9 +334,18 @@ export interface SessionTagsInfo {
   analysis_kinds_total: number;
 }
 
+/** Whether the session's cost figure is all of its cost: priced turns
+ *  out of the turns that could be priced (those with a model). */
+export interface CostCoverage {
+  priced_turns: number;
+  priceable_turns: number;
+  complete: boolean;
+}
+
 export interface SessionRow {
   id: number;
   tags: SessionTagsInfo;
+  cost_coverage: CostCoverage;
   copilot: string;
   session_id: string;
   project_path: string | null;

@@ -47,7 +47,15 @@ _ANALYZED_EXPR = (
 _TAG_SELECT_COLS = (
     f"{_FAVORITE_EXPR} AS favorite, {_TODO_EXPR} AS todo, {_ANALYZED_EXPR} AS analyzed_kinds"
 )
-_SESSION_SELECT_COLS = f"{_SESSION_COLS}, {_COST_ROLLUP_SQL}, {_TAG_SELECT_COLS}"
+#: Pricing coverage, with the dashboard's rule: a turn is priceable when
+#: it has a model, priced when cost_usd is set. A session's cost is the
+#: priced subtotal, so a reader must be told when that is not all of it.
+_COST_COVERAGE_COLS = (
+    "(SELECT COUNT(t.cost_usd) FROM copilot_turn t WHERE t.session_id = copilot_session.id) AS priced_turns, "
+    "(SELECT COUNT(*) FROM copilot_turn t WHERE t.session_id = copilot_session.id "
+    "AND t.model IS NOT NULL AND t.model <> '') AS priceable_turns"
+)
+_SESSION_SELECT_COLS = f"{_SESSION_COLS}, {_COST_ROLLUP_SQL}, {_TAG_SELECT_COLS}, {_COST_COVERAGE_COLS}"
 
 #: Columns the sessions list can be ordered by — the CLOSED map from the
 #: API's `sort` value to SQL, so a caller never names a column directly.
@@ -81,7 +89,7 @@ def _session_dict(row, *, has_cost: bool = True) -> dict[str, Any]:
     + the three tags); False = the bare _SESSION_COLS."""
     keys = [c.strip() for c in _SESSION_COLS.split(",")]
     if has_cost:
-        keys = keys + ["cost_usd", "favorite", "todo", "analyzed_kinds"]
+        keys = keys + ["cost_usd", "favorite", "todo", "analyzed_kinds", "priced_turns", "priceable_turns"]
     d = dict(zip(keys, row))
     if d.get("cost_usd") is not None:
         d["cost_usd"] = float(d["cost_usd"])
@@ -91,6 +99,12 @@ def _session_dict(row, *, has_cost: bool = True) -> dict[str, Any]:
             "todo": bool(d.pop("todo")),
             "analyzed_kinds": int(d.pop("analyzed_kinds") or 0),
             "analysis_kinds_total": len(C.ANALYSIS_KINDS),
+        }
+        priced, priceable = int(d.pop("priced_turns") or 0), int(d.pop("priceable_turns") or 0)
+        d["cost_coverage"] = {
+            "priced_turns": priced,
+            "priceable_turns": priceable,
+            "complete": priceable > 0 and priced >= priceable,
         }
     return d
 

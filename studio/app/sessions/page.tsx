@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { SessionSort, SessionTagsInfo, api } from "@/lib/api";
 import SessionTagIcons, { HandTag, TAG_LABEL, TagHeaderIcon } from "@/components/SessionTags";
@@ -26,9 +26,14 @@ export default function SessionsPage() {
     REFRESH_MS
   );
 
-  // A tag toggled in the grid shows at once; the server's answer wins
-  // (it is what the toggle returns), and the next refresh confirms it.
+  // A tag toggled in the grid shows at once (an override on that row)
+  // and the override is dropped when the next server list arrives —
+  // by then the server has it, and a permanent override would hide
+  // every later change (an analysis finishing, a toggle elsewhere).
   const [tagOverrides, setTagOverrides] = useState<Record<number, SessionTagsInfo>>({});
+  useEffect(() => {
+    setTagOverrides({});
+  }, [data]);
   async function toggleTag(id: number, tag: HandTag, on: boolean, current: SessionTagsInfo) {
     setTagOverrides((o) => ({ ...o, [id]: { ...current, [tag]: on } }));
     try {

@@ -675,6 +675,11 @@ class TestApi(RegistryResetTestCase):
         sid = self._session_id()
         row = self.client.get("/api/sessions").json()["sessions"][0]
         self.assertEqual(row["tags"], {"favorite": False, "todo": False, "analyzed_kinds": 0, "analysis_kinds_total": 3})
+        # cost coverage rides on every row so a priced subtotal is never
+        # presented as the whole cost
+        cov = row["cost_coverage"]
+        self.assertEqual(set(cov), {"priced_turns", "priceable_turns", "complete"})
+        self.assertEqual(cov["complete"], cov["priceable_turns"] > 0 and cov["priced_turns"] >= cov["priceable_turns"])
         r = self.client.put(f"/api/sessions/{sid}/tags/favorite", json={"on": True})
         self.assertEqual(r.status_code, 200, r.text)
         self.assertTrue(r.json()["tags"]["favorite"])

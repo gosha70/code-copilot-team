@@ -87,7 +87,19 @@ export default function SessionHeader({
     data.duration_seconds ?? null,
     b?.duration_seconds,
   );
-  const cost = versusProject(data.cost_usd, b?.cost_usd);
+  // A priced SUBTOTAL must not be compared with complete costs: $1 of
+  // priced turns beside unpriced ones is not "0.1× the median", it is
+  // unknown. Only a fully priced session gets the comparison.
+  const cov = data.cost_coverage;
+  const cost = cov?.complete
+    ? versusProject(data.cost_usd, b?.cost_usd)
+    : { note: "", tone: "default" as const };
+  const costNote =
+    data.cost_usd == null
+      ? "no priced turns"
+      : cov && !cov.complete
+        ? `priced turns only — ${cov.priced_turns} of ${cov.priceable_turns}; not compared`
+        : cost.note || undefined;
   const started = data.started_at ? new Date(data.started_at) : null;
   const ended = data.ended_at ? new Date(data.ended_at) : null;
   return (
@@ -159,9 +171,7 @@ export default function SessionHeader({
         <Stat
           label="Cost"
           value={formatCost(data.cost_usd)}
-          note={
-            data.cost_usd == null ? "no priced turns" : cost.note || undefined
-          }
+          note={costNote}
           tone={cost.tone}
         />
       </div>

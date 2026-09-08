@@ -64,7 +64,11 @@ export default function SessionDetailPage() {
   );
   const baseline = projectPath && baselineData && baselineData.turns.sufficient ? baselineData : null;
   // Hand-set tags toggled here show at once; the server's answer wins.
+  // The derived "analyzed" tag is re-read after an analysis completes.
   const [tags, setTags] = useState<SessionTagsInfo | null>(null);
+  const refreshTags = useCallback(() => {
+    api.session(id).then((d) => setTags(d.tags)).catch(() => {});
+  }, [id]);
   async function toggleTag(tag: HandTag, on: boolean) {
     if (!data) return;
     const current = tags ?? data.tags;
@@ -119,7 +123,7 @@ export default function SessionDetailPage() {
 
       {tab === "timeline" && <Timeline data={data} />}
       {ANALYSIS_KINDS.includes(tab as AnalysisKind) && (
-        <Analysis id={id} kind={tab as AnalysisKind} />
+        <Analysis id={id} kind={tab as AnalysisKind} onResult={refreshTags} />
       )}
       {tab === "similar" && <Similar id={id} />}
     </div>
@@ -275,7 +279,17 @@ function TurnCard({ t, highlighted }: { t: TurnRow; highlighted: boolean }) {
 
 // ── Analysis tabs ───────────────────────────────────────────────────────
 
-function Analysis({ id, kind }: { id: number; kind: AnalysisKind }) {
+function Analysis({
+  id,
+  kind,
+  onResult,
+}: {
+  id: number;
+  kind: AnalysisKind;
+  /** Called when an analysis produced a result: the derived "analyzed"
+   *  tag in the header depends on it. */
+  onResult?: () => void;
+}) {
   const [meta, setMeta] = useState<SessionAnalysisResponse | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [state, setState] = useState<PanelState>({ kind: "absent" });
@@ -322,12 +336,13 @@ function Analysis({ id, kind }: { id: number; kind: AnalysisKind }) {
           if (outcome.ok) {
             const row: AnalysisRow = outcome.report;
             setState({ kind: "done", row });
+            onResult?.();
           } else {
             setState({ kind: "failed", failure: outcome, keptPrevious });
           }
         });
     },
-    [id, kind, state],
+    [id, kind, state, onResult],
   );
 
   if (metaError) return <ErrorNote error={metaError} />;

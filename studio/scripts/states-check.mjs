@@ -925,7 +925,7 @@ try {
   else if (sh.versusProject(5, { observations: 3, sufficient: false, median: 4, p90: 9, max: 9 }).note !== "") fail("insufficient baseline must say nothing");
   else if (sh.projectName("/Users/x/dev/repo/code-copilot-team/") !== "code-copilot-team" || sh.projectName(null) !== "(no project path)") fail("project name");
   else console.log("  ok  comparison wording: ×median, near-median, above p90, withheld when insufficient");
-  const detail = { id: 1, tags: { favorite: false, todo: false, analyzed_kinds: 0, analysis_kinds_total: 3 }, copilot: "claude-code", session_id: "abc", project_path: "/Users/x/dev/repo/code-copilot-team", model: "claude-opus-5", turn_count: 4659, tool_call_count: 1543, error_count: 46, started_at: "2026-09-03T11:46:54Z", duration_seconds: 284400, cost_usd: null, turns: [], tool_usage: [], errors: [], latency: null };
+  const detail = { id: 1, tags: { favorite: false, todo: false, analyzed_kinds: 0, analysis_kinds_total: 3 }, cost_coverage: { priced_turns: 0, priceable_turns: 10, complete: false }, copilot: "claude-code", session_id: "abc", project_path: "/Users/x/dev/repo/code-copilot-team", model: "claude-opus-5", turn_count: 4659, tool_call_count: 1543, error_count: 46, started_at: "2026-09-03T11:46:54Z", duration_seconds: 284400, cost_usd: null, turns: [], tool_usage: [], errors: [], latency: null };
   const base = { scope: "project", sessions: 14, turns: es(2114, 6457), tool_calls: es(600, 2000), errors: es(10, 40), duration_seconds: es(100000, 250000), cost_usd: { observations: 0, sufficient: false, median: null, p90: null, max: null }, cost_usd_coverage: { sessions_with_any_priced_turn: 0, sessions_fully_priced: 0, sessions_with_priceable_turns: 0 }, min_observations: 5, basis: "" };
   const head = render(sh.default, { data: detail, baseline: base });
   if (!/<h1[^>]*>code-copilot-team<\/h1>/.test(head)) fail("title is not the project name");
@@ -937,6 +937,12 @@ try {
   const bare = render(sh.default, { data: { ...detail, project_path: null, model: null, started_at: null, duration_seconds: null }, baseline: null });
   if (!/no project path/.test(bare) || !/too few sessions of this project/.test(bare) || /×/.test(bare)) fail("header without a project/baseline still claims a comparison");
   else console.log("  ok  no project path / no baseline: nothing compared, nothing invented");
+  // A priced SUBTOTAL is never compared with complete costs (reviewer P2 on #317).
+  const costBase = { ...base, cost_usd: es(10, 40) };
+  const partCost = render(sh.default, { data: { ...detail, cost_usd: 1, cost_coverage: { priced_turns: 3, priceable_turns: 10, complete: false } }, baseline: costBase });
+  if (/0\.1× the project median/.test(partCost) || !/priced turns only — 3 of 10; not compared/.test(partCost)) fail("partial cost was compared with complete costs");
+  else if (!/1\.0× the project median|about the project median/.test(render(sh.default, { data: { ...detail, cost_usd: 10, cost_coverage: { priced_turns: 10, priceable_turns: 10, complete: true } }, baseline: costBase }))) fail("complete cost not compared");
+  else console.log("  ok  cost: compared only when every priceable turn is priced");
 
   // ── session tags ───────────────────────────────────────────────────
   console.log("\nsession tags:");
