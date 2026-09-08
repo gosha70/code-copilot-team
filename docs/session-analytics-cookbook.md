@@ -482,10 +482,14 @@ each attempt leaves a `run-record.json` and a `score.json` under a runs
 folder (the harness's default is `runs/` at the repository root). Set
 that folder under **Settings → Benchmarks**, then press **Link benchmark
 runs** on the Analysis page — or on the Benchmark page, which offers the
-same step. It matches each record's session id to a loaded session and
-stores the attempt's result; a linked session is never hidden as noise,
-however short it was. With the folder unset the step is skipped by Run
-all, and the Benchmark page says what to set.
+same step. It stores every attempt's result, for every benchmark
+backend, and links Claude Code runs whose run record names a Claude
+Code session that is loaded; a linked session is never hidden as noise,
+however short it was. Older runs whose records carry no session id, or
+name a session you have not loaded, keep their outcomes but link
+nothing — the page says which of those the last scan found. With the
+folder unset the step is skipped by Run all, and the Benchmark page
+says what to set.
 
 ---
 

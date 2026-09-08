@@ -81,7 +81,7 @@ STEP_BLURBS = {
     STEP_INGEST: "Read copilot transcripts into the database.",
     # Completed at runtime with the configured runs root, or the fact
     # that there is none (then Run all skips it and says so).
-    STEP_CORRELATE: "Link the benchmark harness's run records to the sessions they produced, and store each attempt's pass/fail — what the Benchmark tab shows.",
+    STEP_CORRELATE: "Store every benchmark attempt's pass/fail from the harness's run records, and link Claude Code runs whose record names a loaded session — what the Benchmark tab shows.",
     STEP_GRAPH: "Build the Kùzu graph the Graph tab explores — the same sessions the Sessions list shows (noise left out).",
     STEP_EMBED: "Turn each session into a vector with the embedding model configured under Settings → Embeddings, so sessions can be compared by meaning.",
     STEP_SIMILAR: "Link each session to its nearest neighbours in the graph — what the Similar tab on a session page shows.",

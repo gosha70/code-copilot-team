@@ -565,6 +565,22 @@ class TestOutcomesIntegration(RegistryResetTestCase):
         with self.assertRaises(cor.RunsRootError):
             cor.run(self.db, root / "run-a" / "t" / "a-01" / C.SCORE_FILENAME)
 
+    def test_run_reports_live_counters_while_scanning(self) -> None:
+        from unittest import mock
+
+        from session_analytics import correlate as cor
+
+        root = Path(tempfile.mkdtemp(prefix="cct-sa-run-progress-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        rr = {"backend_id": "claude-code", "backend": {"metadata": {"session_id": None}}}
+        for i in range(7):
+            self._make_attempt(root, f"run-{i}/t/a-01", rr, _score_payload())
+        seen: list[int] = []
+        with mock.patch.object(cor, "PROGRESS_EVERY", 3):
+            cor.run(self.db, root, progress=lambda st: seen.append(st.scanned))
+        # Ticks before records 3 and 6, then the final counters.
+        self.assertEqual(seen, [3, 6, 7])
+
     def test_cli_prints_partial_summary_on_failure(self) -> None:
         from unittest import mock
 

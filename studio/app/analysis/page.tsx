@@ -461,6 +461,20 @@ export default function AnalysisPage() {
             running={running}
           />
         )}
+        {step.id === "correlate" && step.job.progress && "scanned" in step.job.progress && (
+          <p className="text-xs text-slate-600 mt-2 tabular-nums">
+            {(step.job.progress.scanned ?? 0).toLocaleString()} run records scanned ·{" "}
+            {(step.job.progress.linked ?? 0).toLocaleString()} sessions linked ·{" "}
+            {(step.job.progress.scores_ingested ?? 0).toLocaleString()} outcomes stored
+            {step.job.progress.unmatched
+              ? ` · ${step.job.progress.unmatched.toLocaleString()} named a session not loaded`
+              : ""}
+            {step.job.progress.null_session_id
+              ? ` · ${step.job.progress.null_session_id.toLocaleString()} without a session id`
+              : ""}
+            {running && step.job.seconds ? ` · ${Math.round(step.job.seconds)}s` : ""}
+          </p>
+        )}
         {step.id === "embed" && step.job.progress && "embedded" in step.job.progress && (
           <EmbedProgressBar
             progress={step.job.progress}

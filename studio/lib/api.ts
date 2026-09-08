@@ -1026,7 +1026,7 @@ export interface PipelineStep {
     seconds?: number;
     /** The judge step reports after every turn (JudgeProgress); the
      *  embed step after every session (EmbedProgress). */
-    progress?: JudgeProgress | EmbedProgress;
+    progress?: JudgeProgress | EmbedProgress | CorrelateProgress;
   };
 }
 
@@ -1066,6 +1066,20 @@ export interface EmbedProgress {
   failed: number;
   unembeddable: number;
   last_error: string;
+}
+
+/** The correlate scan's live counters (CorrelationStats.as_dict()). */
+export interface CorrelateProgress {
+  scanned: number;
+  skipped_run_records: number;
+  out_of_scope: number;
+  with_session_id: number;
+  null_session_id: number;
+  linked: number;
+  unmatched: number;
+  duplicate_session_id: number;
+  scores_ingested: number;
+  scores_missing: number;
 }
 
 export interface EmbedModels {

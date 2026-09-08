@@ -856,15 +856,35 @@ try {
   const bmNotDir = bi.benchmarkIntro({ ...bmBase, runs_root: { path: "/nope", configured: true, is_dir: false } });
   const bmUnlinked = bi.benchmarkIntro({ ...bmBase, runs_root: { path: "/x/runs", configured: true, is_dir: true } });
   const bmLinked = bi.benchmarkIntro({ ...bmBase, sessions_linked: 14, sessions_unlinked: 43, distinct_benchmark_attempts: 9, runs_root: { path: "/x/runs", configured: true, is_dir: true } });
-  const bmOutcomes = bi.benchmarkIntro({ ...bmBase, by_result: [{ result: "fail", attempts: 1131, linked_sessions: 0, total_cost_usd: 0, avg_duration_seconds: 0 }, { result: "pass", attempts: 46, linked_sessions: 0, total_cost_usd: 0, avg_duration_seconds: 0 }], runs_root: { path: "/x/runs", configured: true, is_dir: true } });
+  const bmOutcomesPayload = { ...bmBase, by_result: [{ result: "fail", attempts: 1131, linked_sessions: 0, total_cost_usd: 0, avg_duration_seconds: 0 }, { result: "pass", attempts: 46, linked_sessions: 0, total_cost_usd: 0, avg_duration_seconds: 0 }], runs_root: { path: "/x/runs", configured: true, is_dir: true } };
+  const bmOutcomes = bi.benchmarkIntro(bmOutcomesPayload);
   const bmHeads = [bmUnset, bmNotDir, bmUnlinked, bmOutcomes, bmLinked].map((i) => i.headline);
   if (new Set(bmHeads).size !== 5) fail("benchmark intro states share a headline");
-  else if (bmOutcomes.state !== "outcomes-only" || !/1,177 attempts have an outcome, but none of their run records names a session/.test(bmOutcomes.headline)) fail(`outcomes-only headline: ${bmOutcomes.headline}`);
+  else if (bmOutcomes.state !== "outcomes-only" || !/1,177 attempts have an outcome, but no session is currently linked/.test(bmOutcomes.headline)) fail(`outcomes-only headline: ${bmOutcomes.headline}`);
   else if (bmUnset.canLink || !/Settings → Benchmarks/.test(bmUnset.headline)) fail("bmUnset state must send to Settings, not offer the step");
   else if (bmNotDir.canLink || !/\/nope/.test(bmNotDir.headline)) fail("a root that is not a folder names the path and does not offer the step");
   else if (!bmUnlinked.canLink || bmUnlinked.rootLine !== "/x/runs") fail("a folder with nothing bmLinked offers the step and shows the folder");
-  else if (!/14 of 57 sessions came from 9 benchmark attempts; the other 43 are organic/.test(bmLinked.headline) || !bmLinked.canLink) fail(`bmLinked headline: ${bmLinked.headline}`);
-  else console.log("  ok  unset → Settings; not a folder → named; folder → Link offered; outcomes without session ids → said so; linked → counts as a sentence");
+  else if (!/14 of 57 sessions are linked to 9 benchmark attempts; the other 43 are not linked to a benchmark attempt/.test(bmLinked.headline) || /organic/.test(bmLinked.headline) || !bmLinked.canLink) fail(`linked headline: ${bmLinked.headline}`);
+  else if (/session id/.test(bmOutcomes.headline) || bmOutcomes.cause !== "") fail("outcomes-only must not infer a cause from the counts alone");
+  else console.log("  ok  unset → Settings; not a folder → named; folder → Link offered; outcomes with nothing linked → said neutrally; linked → counts, no 'organic'");
+  // The cause comes ONLY from the last scan's counters, and says what they say.
+  const bmNull = bi.benchmarkIntro({ ...bmOutcomesPayload, link_job: { state: "done", progress: { scanned: 1177, null_session_id: 1174, out_of_scope: 3, unmatched: 0, linked: 0 } } });
+  const bmUnmatched = bi.benchmarkIntro({ ...bmOutcomesPayload, link_job: { state: "done", progress: { scanned: 12, null_session_id: 0, out_of_scope: 0, unmatched: 12, linked: 0 } } });
+  const bmRunning = bi.benchmarkIntro({ ...bmOutcomesPayload, link_job: { state: "running", progress: { scanned: 5, null_session_id: 5, unmatched: 0, out_of_scope: 0, linked: 0 } } });
+  if (!/1,174 carried no session id; 3 came from a backend other than Claude Code/.test(bmNull.cause)) fail(`cause from counters: ${bmNull.cause}`);
+  else if (/no session id/.test(bmUnmatched.cause) || !/12 named a session that is not loaded/.test(bmUnmatched.cause)) fail(`unmatched must not read as missing ids: ${bmUnmatched.cause}`);
+  else if (bmRunning.cause !== "") fail("a scan still running has established nothing yet");
+  else console.log("  ok  the cause is the scan's counters: missing ids, unloaded sessions, other backends — never inferred");
+  // Polling: the stale response held at the press must not end it; the server state does.
+  const bmIdle = { ...bmBase, runs_root: { path: "/x/runs", configured: true, is_dir: true } };
+  const bmRunningResp = { ...bmIdle, link_job: { state: "running", seconds: 2 } };
+  const bmDoneResp = { ...bmIdle, link_job: { state: "done", message: "scanned 3" } };
+  if (!bi.shouldPoll(bmIdle, bmIdle)) fail("after the press, the stale idle response must keep polling on");
+  else if (bi.settleWatch(bmIdle, bmIdle) !== bmIdle) fail("the same object is not a post-press response");
+  else if (bi.settleWatch(bmIdle, bmRunningResp) !== null || !bi.shouldPoll(null, bmRunningResp)) fail("the first post-press response settles the watch; running keeps polling");
+  else if (bi.shouldPoll(null, bmDoneResp)) fail("done stops polling");
+  else if (!bi.shouldPoll(null, bmRunningResp)) fail("a page opened during a scan polls from its first response");
+  else console.log("  ok  polling follows the server's job state; the stale pre-press response cannot end it");
   if (bi.linkJobLine({ state: "running", seconds: 4 }) !== "linking… 4 s" || !/^failed: boom/.test(bi.linkJobLine({ state: "failed", message: "boom" })) || bi.linkJobLine({ state: "idle" }) !== "" || bi.linkJobLine({ state: "done", message: "skipped: no root" }) !== "skipped: no root") fail("link job line");
   else console.log("  ok  the link job reads as one line in every state");
 

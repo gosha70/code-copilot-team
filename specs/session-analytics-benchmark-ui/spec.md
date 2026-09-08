@@ -1,5 +1,12 @@
 # Spec: session-analytics benchmark comparison UI (E9 Studio slice)
 
+> **Superseded 2026-09-08** by `specs/session-analytics-benchmark-step/spec.md`
+> for FR-3 (empty state), FR-4 (backend-free), FR-5 (one-shot fetch) and
+> the Studio-only constraint: the owner asked for explanation and actions
+> on the page, which needs a setting, a pipeline step, a payload change
+> and polling while the step runs. The per-result table (US1, FR-2) is
+> unchanged.
+
 Issue #96, the final E9 slice (tracking #65). Grounding (verified 2026-07-18):
 `GET /api/dashboard/benchmark` (shipped #92/#93, endpoint-tested with FastAPI)
 already returns `{sessions_total, sessions_linked, sessions_unlinked,

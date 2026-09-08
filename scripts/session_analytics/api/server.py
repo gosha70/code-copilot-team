@@ -582,9 +582,13 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             stats = cor.CorrelationStats()
             rel = _DB.connect(store)
             try:
-                # The counters are the progress AND the outcome — the
-                # same numbers the CLI prints.
-                cor.run(rel, _P(root["path"]), stats=stats)
+                # The live counters are the step's progress while it
+                # scans, and the final counters its outcome — the same
+                # numbers the CLI prints.
+                cor.run(
+                    rel, _P(root["path"]), stats=stats,
+                    progress=lambda st: pj.set_progress(pj.STEP_CORRELATE, st.as_dict()),
+                )
             finally:
                 pj.set_progress(pj.STEP_CORRELATE, stats.as_dict())
                 rel.close()

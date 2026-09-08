@@ -1,10 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { api, RoutingEvidenceEntry } from "@/lib/api";
+import { api, BenchmarkSummary, RoutingEvidenceEntry } from "@/lib/api";
 import { FailedCard, StaleNote } from "@/components/DashboardCards";
-import { benchmarkIntro, linkJobLine } from "@/lib/benchmarkIntro";
+import {
+  benchmarkIntro,
+  linkJobLine,
+  settleWatch,
+  shouldPoll,
+} from "@/lib/benchmarkIntro";
 import {
   Badge,
   Card,
@@ -18,35 +23,47 @@ import {
 } from "@/components/ui";
 
 export default function BenchmarkPage() {
-  // The link step runs in the background; while it does, the page polls
-  // so the result appears without a reload (a version key bumps the
-  // fetch after "Link benchmark runs" is pressed).
+  // The link step runs in the background. Polling follows the SERVER's
+  // job state; `pending` covers the gap right after the button is
+  // pressed, while useApi still holds the response from before it (see
+  // lib/benchmarkIntro: shouldPoll / settleWatch).
   const [version, setVersion] = useState(0);
-  const [linking, setLinking] = useState(false);
+  const [pending, setPending] = useState<BenchmarkSummary | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [polling, setPolling] = useState(false);
   const { data, error, loading } = useApi(
     () => api.benchmark(),
     [version],
-    linking ? 1500 : undefined,
+    polling ? 1500 : undefined,
   );
   // #307: the outcome base rate and the routing evidence are both
   // benchmark-derived, so they live here; each is its own fetch so a
   // missing one cannot blank the page.
   const outcome = useApi(() => api.predictOutcome(), [version]);
   const routing = useApi(() => api.routingEvidence());
+  const lastState = useRef<string | null>(null);
 
   useEffect(() => {
-    if (linking && data && data.link_job.state !== "running") {
-      setLinking(false);
+    setPending((p) => settleWatch(p, data));
+  }, [data]);
+  useEffect(() => {
+    setPolling(shouldPoll(pending, data));
+  }, [pending, data]);
+  // When a scan ends, the outcome row (and the page) are refetched once.
+  useEffect(() => {
+    const now = data?.link_job.state ?? null;
+    if (lastState.current === "running" && now !== null && now !== "running") {
       setVersion((v) => v + 1);
     }
-  }, [linking, data]);
+    lastState.current = now;
+  }, [data]);
 
   async function link() {
     setLinkError(null);
     try {
       await api.runStep("correlate");
-      setLinking(true);
+      // Hold the response we had BEFORE the press: its "idle" is stale.
+      setPending(data);
       setVersion((v) => v + 1);
     } catch (e) {
       setLinkError(describeError(e));
@@ -56,7 +73,7 @@ export default function BenchmarkPage() {
   if (loading && !data) return <Loading />;
   if (error || !data) return <ErrorNote error={error || "no data"} />;
   const intro = benchmarkIntro(data);
-  const running = linking || data.link_job.state === "running";
+  const running = polling;
 
   return (
     <div className="space-y-6">
@@ -65,10 +82,11 @@ export default function BenchmarkPage() {
         <p className="text-sm text-slate-500 mt-1">
           Results of this repository&rsquo;s benchmark harness. A run attempts
           tasks from a public benchmark (Aider Polyglot, SWE-bench) with a
-          copilot and scores each attempt pass or fail. Linking those attempts
-          to the sessions they produced tells you what an outcome cost and how
-          long it took. Nothing is here until you run the harness and link its
-          runs.{" "}
+          copilot and scores each attempt pass or fail. Outcomes are imported
+          for every backend; session linking applies to Claude Code runs whose
+          run record names a Claude Code session that is loaded here, and a
+          linked session tells you what its outcome cost and how long it took.
+          Nothing is here until you run the harness and link its runs.{" "}
           <Link href="/learn/benchmarks--README" className="text-blue-700 hover:underline">
             How to run the harness →
           </Link>
@@ -77,6 +95,9 @@ export default function BenchmarkPage() {
 
       <Card>
         <p className="text-sm text-slate-700">{intro.headline}</p>
+        {intro.cause && (
+          <p className="text-sm text-slate-600 mt-1">{intro.cause}</p>
+        )}
         {intro.rootLine && (
           <p className="text-xs text-slate-500 mt-2">
             Runs folder: <span className="font-mono">{intro.rootLine}</span>{" "}
@@ -120,7 +141,7 @@ export default function BenchmarkPage() {
         </div>
         {intro.state !== "linked" && intro.state !== "outcomes-only" && (
           <p className="text-xs text-slate-500 mt-3">
-            Once linked, this page shows attempts by result (pass / fail /
+            Once scanned, this page shows attempts by result (pass / fail /
             error / timeout) with linked sessions, cost and duration, and the
             predicted pass rate per project.
           </p>

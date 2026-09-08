@@ -375,15 +375,23 @@ class RunsRootError(ValueError):
     """The runs root is not an existing directory."""
 
 
+#: How often ``run`` reports its counters while scanning (records).
+PROGRESS_EVERY = 25
+
+
 def run(
     db: Any, runs_root: Path, *, stats: Optional[CorrelationStats] = None,
     ingested_at: Optional[str] = None,
+    progress: Optional[Callable[[CorrelationStats], None]] = None,
 ) -> CorrelationStats:
     """Scan ``runs_root`` and link its run records to the store's
     claude-code sessions, storing every outcome. ONE commit at the end,
     so a failure persists nothing (the counters gathered so far stay on
     ``stats`` for the caller to report). The CLI ``correlate`` command
     and the pipeline's "Link benchmark runs" step both call this.
+
+    ``progress`` is called with the live counters every PROGRESS_EVERY
+    records and once at the end, so a long scan is seen moving.
     """
     from .relational.db import now_iso
     from .relational.store import link_benchmark_run, upsert_benchmark_result
@@ -409,14 +417,24 @@ def run(
             ingested_at=stamp,
         )
 
+    def ticking(records: Iterable[RunRecord]) -> Iterator[RunRecord]:
+        # The counters for a record land after it is yielded and
+        # processed, so the tick before the NEXT record reports them.
+        for i, record in enumerate(records):
+            if progress is not None and i and i % PROGRESS_EVERY == 0:
+                progress(stats)
+            yield record
+
     # Linking is scoped to the claude-code backend: records from other
     # backends are counted out_of_scope, never miscounted as unmatched.
     correlate_links(
-        iter_run_records(runs_root, stats=stats),
+        ticking(iter_run_records(runs_root, stats=stats)),
         link_fn,
         backend_id=C.COPILOT_CLAUDE_CODE,
         store_result_fn=store_result_fn,
         stats=stats,
     )
+    if progress is not None:
+        progress(stats)
     db.commit()
     return stats
