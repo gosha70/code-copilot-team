@@ -867,6 +867,10 @@ try {
     else if (!/plain fence/.test(pres[0]) || !/echo tagged/.test(pres[1])) fail("fenced block text missing");
     else if (!/<code class="bg-slate-100[^"]*">inline<\/code>/.test(page)) fail("inline code lost its style");
     else console.log("  ok  fences with and without a language render as dark blocks; inline code keeps its style");
+    const logo = render(md.default, { doc: docOf('![Logo](/docs/images/x.png "width=250")\n\n# Title\n'), index: { ...index, image_route: "/api/docs/image", repo_url: "", repo_branch: "master" } });
+    if (!/<img[^>]*width="250"/.test(logo) || /title="width=250"/.test(logo)) fail("README logo width not applied (or leaked as a tooltip)");
+    else if (md.imageWidth("hello") !== undefined) fail("a real title mistaken for a width");
+    else console.log("  ok  an HTML <img width> from a README keeps its width");
   } catch (e) {
     fail(`MarkdownDoc could not be rendered: ${e && e.message ? e.message : e}`);
   }

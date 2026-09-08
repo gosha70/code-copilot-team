@@ -67,6 +67,22 @@ class TestRegistry(unittest.TestCase):
         self.assertTrue(by_path["shared/capabilities/COMPATIBILITY.md"]["generated"])
         self.assertFalse(by_path["docs/developer-cookbook.md"]["generated"])
 
+    def test_readme_html_heading_becomes_markdown_and_placeholders_survive(self) -> None:
+        # The README's logo heading is raw HTML; the renderer prints raw
+        # HTML as text ("<h1> <img src=…"). It is converted at the API.
+        # Angle-bracket placeholders and fenced code are untouched — a
+        # raw-HTML renderer would have eaten `<feature-id>`.
+        body = docs.document(docs.slug_for("README.md"))["body"]
+        self.assertNotIn("<h1", body)
+        self.assertNotIn("<img", body)
+        self.assertIn('![Code Copilot Team Logo](/docs/images/CCT_LOGO.png "width=250")', body)
+        self.assertIn("\n# Code Copilot Team\n", body)
+        sample = "see <feature-id> and <dgx-spark-ip>\n```\n<h1>kept</h1>\n```\na<br>b"
+        out = docs.html_to_markdown(sample)
+        self.assertIn("<feature-id> and <dgx-spark-ip>", out)
+        self.assertIn("```\n<h1>kept</h1>\n```", out)
+        self.assertTrue(out.endswith("a  \nb"))
+
     def test_document_by_slug_only(self) -> None:
         d = docs.document("adapters--claude-code--docs--hooks-guide")
         self.assertEqual(d["path"], "adapters/claude-code/docs/hooks-guide.md")

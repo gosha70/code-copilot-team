@@ -252,7 +252,60 @@ def document(slug: str) -> dict[str, Any]:
         raise UnknownDocError(slug)
     text = absolute.read_text(encoding="utf-8", errors="replace")
     meta, body = _frontmatter(text)
-    return {**_entry_payload(entry), "frontmatter": meta, "body": body}
+    return {**_entry_payload(entry), "frontmatter": meta, "body": html_to_markdown(body)}
+
+
+# The renderer shows raw HTML as text — deliberately: a raw-HTML pass
+# would swallow the angle-bracket placeholders the guides are full of
+# (`<feature-id>`, `<dgx-spark-ip>`). The real HTML in the corpus is a
+# handful of GitHub-README constructs, converted here to markdown.
+_FENCE = re.compile(r"```.*?```", re.S)
+_H1_HTML = re.compile(r"<h1[^>]*>(.*?)</h1>", re.S | re.I)
+_IMG_HTML = re.compile(r"<img\b([^>]*?)/?>", re.S | re.I)
+_BR_HTML = re.compile(r"<br\s*/?>", re.I)
+_ATTR = re.compile(r'([a-zA-Z-]+)\s*=\s*"([^"]*)"')
+
+
+#: An <img width="250"> keeps its width as the image title, which the
+#: Studio's image renderer reads (markdown images have no size syntax).
+IMG_WIDTH_TITLE = "width="
+
+
+def _img_md(tag_attrs: str) -> str:
+    attrs = dict(_ATTR.findall(tag_attrs))
+    src = attrs.get("src", "")
+    if not src:
+        return ""
+    width = attrs.get("width", "").strip()
+    title = f' "{IMG_WIDTH_TITLE}{width}"' if width.isdigit() else ""
+    return f"![{attrs.get('alt', '')}]({src}{title})"
+
+
+def html_to_markdown(body: str) -> str:
+    """``<h1><img …/> Title</h1>`` → the image, then ``# Title``; a bare
+    ``<img>`` → ``![alt](src)``; ``<br>`` → a line break. Fenced code is
+    left untouched, and unknown tags are left as they are."""
+    out: list[str] = []
+    pos = 0
+    for m in _FENCE.finditer(body):
+        out.append(_convert_prose(body[pos:m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(_convert_prose(body[pos:]))
+    return "".join(out)
+
+
+def _convert_prose(text: str) -> str:
+    def h1(m: re.Match) -> str:
+        inner = m.group(1)
+        images = [_img_md(a) for a in _IMG_HTML.findall(inner)]
+        title = " ".join(_IMG_HTML.sub("", inner).split())
+        lead = "\n\n".join(i for i in images if i)
+        return (lead + "\n\n" if lead else "") + f"# {title}"
+
+    text = _H1_HTML.sub(h1, text)
+    text = _IMG_HTML.sub(lambda m: _img_md(m.group(1)), text)
+    return _BR_HTML.sub("  \n", text)
 
 
 def image_file(name: str) -> tuple[Path, str]:

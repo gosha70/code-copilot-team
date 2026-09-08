@@ -105,22 +105,33 @@ export default function MarkdownDoc({
         </a>
       );
     },
-    img: ({ src, alt }) => (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={resolveDocImage(
-          String(src || ""),
-          doc.path,
-          BASE,
-          index.image_route,
-          IMAGE_DIR,
-          index.repo_url,
-          index.repo_branch,
-        )}
-        alt={alt || ""}
-        className="max-w-full rounded border border-slate-200 my-3"
-      />
-    ),
+    img: ({ src, alt, title }) => {
+      // An HTML <img width="250"> in a README (the logo) arrives from
+      // the API as a markdown image whose title carries the width.
+      const width = imageWidth(title);
+      return (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={resolveDocImage(
+            String(src || ""),
+            doc.path,
+            BASE,
+            index.image_route,
+            IMAGE_DIR,
+            index.repo_url,
+            index.repo_branch,
+          )}
+          alt={alt || ""}
+          title={width === undefined ? title : undefined}
+          width={width}
+          className={
+            width === undefined
+              ? "max-w-full rounded border border-slate-200 my-3"
+              : "max-w-full my-3"
+          }
+        />
+      );
+    },
     // A fenced block is rendered HERE, from the child's own props, so
     // the inline `code` component below never sees it. It used to be
     // told apart by a language- class, and a fence with no language
@@ -235,6 +246,13 @@ function CodeBlock({
 }
 
 /** The text a React subtree would render — for heading ids and Copy. */
+/** ``width=250`` in an image title (see api/docs.py IMG_WIDTH_TITLE)
+ *  → 250; anything else → undefined. */
+export function imageWidth(title: string | undefined): number | undefined {
+  const m = /^width=(\d+)$/.exec(title || "");
+  return m ? Number(m[1]) : undefined;
+}
+
 export function plainText(node: React.ReactNode): string {
   if (node == null || typeof node === "boolean") return "";
   if (typeof node === "string" || typeof node === "number") return String(node);
