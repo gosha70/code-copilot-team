@@ -871,6 +871,14 @@ try {
     if (!/<img[^>]*width="250"/.test(logo) || /title="width=250"/.test(logo)) fail("README logo width not applied (or leaked as a tooltip)");
     else if (md.imageWidth("hello") !== undefined) fail("a real title mistaken for a width");
     else console.log("  ok  an HTML <img width> from a README keeps its width");
+    const png1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    const embedded = render(md.default, { doc: docOf(`![][shot]\n\n[shot]: <${png1x1}>\n`), index: { ...index, image_route: "/api/docs/image", repo_url: "", repo_branch: "master" } });
+    if (!/<img[^>]*src="data:image\/png;base64,/.test(embedded)) fail("embedded data:image screenshot dropped (empty src)");
+    else if (md.docUrlTransform("javascript:alert(1)") !== "") fail("unsafe URL scheme let through");
+    else console.log("  ok  embedded data:image screenshots render; unsafe schemes still dropped");
+    const noSrc = render(md.default, { doc: docOf("![missing]()\n"), index: { ...index, image_route: "/api/docs/image", repo_url: "", repo_branch: "master" } });
+    if (/<img/.test(noSrc)) fail("an image with no source still rendered an <img>");
+    else console.log("  ok  an image with no source renders no <img>");
   } catch (e) {
     fail(`MarkdownDoc could not be rendered: ${e && e.message ? e.message : e}`);
   }

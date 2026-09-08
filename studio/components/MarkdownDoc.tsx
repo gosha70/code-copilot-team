@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 import { BASE, DocPayload, DocsIndex } from "@/lib/api";
@@ -109,6 +109,9 @@ export default function MarkdownDoc({
       // An HTML <img width="250"> in a README (the logo) arrives from
       // the API as a markdown image whose title carries the width.
       const width = imageWidth(title);
+      // No source, no element: an <img src=""> makes the browser fetch
+      // the page again (React warns), and there is nothing to show.
+      if (!src) return alt ? <span className="text-slate-500">[{alt}]</span> : null;
       return (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -189,7 +192,7 @@ export default function MarkdownDoc({
             generated file — read-only
           </p>
         )}
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={docUrlTransform}>
           {doc.body}
         </ReactMarkdown>
       </article>
@@ -246,6 +249,15 @@ function CodeBlock({
 }
 
 /** The text a React subtree would render — for heading ids and Copy. */
+/** react-markdown's default transform drops `data:` URLs, which left
+ *  an embedded screenshot (`[image1]: <data:image/png;base64,…>` in the
+ *  Claude Code setup cookbook) with an empty src. Embedded IMAGES are
+ *  allowed; everything else keeps the default (safe) treatment. */
+export function docUrlTransform(url: string): string {
+  if (/^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml);base64,/i.test(url)) return url;
+  return defaultUrlTransform(url);
+}
+
 /** ``width=250`` in an image title (see api/docs.py IMG_WIDTH_TITLE)
  *  → 250; anything else → undefined. */
 export function imageWidth(title: string | undefined): number | undefined {
