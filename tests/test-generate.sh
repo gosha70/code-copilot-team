@@ -54,7 +54,8 @@ assert_not_contains() {
 # ── Section 1: Run generator ──────────────────────────────
 
 echo "=== Running generate.sh ==="
-bash "$REPO_DIR/scripts/generate.sh" >/dev/null 2>&1
+GEN_LOG="$(mktemp)"
+bash "$REPO_DIR/scripts/generate.sh" >"$GEN_LOG" 2>&1
 RC=$?
 assert "generate.sh exits 0" "[[ $RC -eq 0 ]]"
 
@@ -67,9 +68,18 @@ AGENTS_MD="$ADAPTERS/codex/AGENTS.md"
 
 assert "AGENTS.md exists" "[[ -f '$AGENTS_MD' ]]"
 
+# The budget is the generator's (#296): project_doc_max_bytes from
+# adapters/codex/config.toml minus the reserve for project AGENTS.md
+# files, read here the same way so the two gates cannot disagree.
 SIZE=$(wc -c < "$AGENTS_MD" | tr -d ' ')
-assert "AGENTS.md under 32 KiB ($SIZE bytes)" "[[ $SIZE -lt 32768 ]]"
+CODEX_DOC_CAP=$(sed -n 's/^project_doc_max_bytes[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ADAPTERS/codex/config.toml" | head -1)
+CODEX_PROJECT_RESERVE=$(sed -n 's/^CODEX_PROJECT_RESERVE=\([0-9][0-9]*\).*/\1/p' "$REPO_DIR/scripts/generate.sh" | head -1)
+assert "cap is read from adapters/codex/config.toml" "[[ -n '$CODEX_DOC_CAP' ]]"
+assert "reserve is declared once in generate.sh" "[[ -n '$CODEX_PROJECT_RESERVE' ]]"
+CODEX_BUDGET=$(( ${CODEX_DOC_CAP:-32768} - ${CODEX_PROJECT_RESERVE:-16384} ))
+assert "AGENTS.md within its budget ($SIZE of $CODEX_BUDGET bytes; cap $CODEX_DOC_CAP, reserve $CODEX_PROJECT_RESERVE)" "[[ $SIZE -le $CODEX_BUDGET ]]"
 assert "AGENTS.md is non-empty" "[[ $SIZE -gt 0 ]]"
+assert "generator prints the headroom" "grep -q 'of the $CODEX_BUDGET-byte budget left' '$GEN_LOG'"
 
 # ── Section 3: AGENTS.md contains all always-on rules ─────
 

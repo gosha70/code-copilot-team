@@ -1242,7 +1242,7 @@ code-copilot-team/
 │   └── setup.sh                         Unified install entry point
 ├── tests/
 │   ├── test-hooks.sh                    186 hook tests
-│   ├── test-generate.sh                 301 generation + adapter tests
+│   ├── test-generate.sh                 304 generation + adapter tests
 │   ├── test-shared-structure.sh         812 structure + content tests
 │   ├── test-sync.sh                     121 sync + init metadata tests
 │   ├── test-litellm-proxy-deps.sh       13 benchmark proxy pin tests (+11 with --online)
