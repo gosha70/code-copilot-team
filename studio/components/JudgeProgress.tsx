@@ -1,6 +1,6 @@
 "use client";
 
-import { JudgeModels, JudgeProgress as Progress } from "@/lib/api";
+import { EmbedProgress, JudgeModels, JudgeProgress as Progress } from "@/lib/api";
 
 // THE JUDGE STEP, WHILE IT RUNS. A model call per turn over a batch
 // takes minutes, and "running…" for minutes is indistinguishable from
@@ -87,6 +87,55 @@ export default function JudgeProgressBar({
           {allFailed
             ? ". Check the judge under Settings → LLM-as-Judge, or pick another model."
             : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Text for the embed step's progress line. Pure. */
+export function embedSummary(p: EmbedProgress, seconds: number | undefined): { pct: number; line: string; eta: string } {
+  const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+  const parts = [`${p.done.toLocaleString()} of ${p.total.toLocaleString()} sessions`, `${p.embedded.toLocaleString()} embedded`];
+  if (p.unembeddable > 0) parts.push(`${p.unembeddable.toLocaleString()} with no text`);
+  if (p.failed > 0) parts.push(`${p.failed.toLocaleString()} failed`);
+  let eta = "";
+  if (seconds && p.done > 0 && p.total > p.done) {
+    const per = seconds / p.done;
+    const left = Math.round(per * (p.total - p.done));
+    eta = left >= 90 ? `about ${Math.round(left / 60)} min left` : `about ${left}s left`;
+  }
+  return { pct, line: parts.join(" · "), eta };
+}
+
+export function EmbedProgressBar({
+  progress,
+  seconds,
+  running,
+}: {
+  progress: EmbedProgress;
+  seconds: number | undefined;
+  running: boolean;
+}) {
+  const { pct, line, eta } = embedSummary(progress, seconds);
+  const allFailed = progress.failed > 0 && progress.embedded === 0 && progress.done >= 3;
+  return (
+    <div className="mt-3">
+      <div className="h-2 w-full rounded bg-slate-100 overflow-hidden">
+        <div
+          className={"h-2 rounded " + (progress.failed > 0 ? "bg-amber-500" : "bg-blue-600")}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <p className="text-xs text-slate-600 mt-1">
+        {line}
+        {running && eta ? ` · ${eta}` : ""}
+      </p>
+      {progress.last_error && (
+        <p className={"text-xs mt-1 " + (allFailed ? "text-rose-700" : "text-amber-800")}>
+          {allFailed ? "Every call is failing — " : "Last failure: "}
+          {progress.last_error}
+          {allFailed ? ". Check the embedding model under Settings → Embeddings." : ""}
         </p>
       )}
     </div>

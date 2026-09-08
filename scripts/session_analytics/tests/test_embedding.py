@@ -677,7 +677,8 @@ class TestRunner(unittest.TestCase):
         from session_analytics.relational.db import Database, apply_ddl
 
         tmp = Path(tempfile.mkdtemp(prefix="cct-sa-embedrun-"))
-        self.db = Database.connect(f"sqlite:///{tmp / 'sa.db'}")
+        self.dsn = f"sqlite:///{tmp / 'sa.db'}"
+        self.db = Database.connect(self.dsn)
         apply_ddl(self.db)
         self.addCleanup(self.db.close)
         self.cfg = EmbeddingConfig(
@@ -737,6 +738,36 @@ class TestRunner(unittest.TestCase):
         self.assertIsNone(validate_envelope(env))
         self.assertEqual(env["model"], "nomic-embed-text")  # resolved, not cfg
         self.assertEqual(env["provider"], "counting")
+
+    def test_progress_after_every_session_and_each_envelope_committed_as_written(self) -> None:
+        # The Analysis page shows "12 of 57"; a run stopped midway keeps
+        # what it embedded (it used to commit once at the end).
+        s1, s2, s3 = self._mk_session("p1"), self._mk_session("p2"), self._mk_session("p3")
+        self._next = [([_ok_result(), RuntimeError("model unloaded"), _ok_result()], None)]
+        seen = []
+
+        def progress(st):
+            seen.append((st.done, st.total, st.embedded, st.failed, st.last_error))
+            if st.done == 1:
+                # observed from ANOTHER connection: the first envelope is
+                # already durable while the run is still going
+                from session_analytics.relational.db import Database as _Db
+
+                other = _Db.connect(self.dsn)
+                try:
+                    self.assertIsNotNone(other.query_one(
+                        "SELECT session_embedding FROM copilot_session WHERE id = ?", (s1,))[0])
+                finally:
+                    other.close()
+
+        stats = self._run(progress=progress)
+        self.assertEqual([(d, t) for d, t, *_ in seen], [(1, 3), (2, 3), (3, 3)])
+        self.assertEqual((stats.embedded, stats.failed, stats.total, stats.done), (2, 1, 3, 3))
+        self.assertIn("model unloaded", stats.last_error)
+        self.assertIn(f"session {s2}", stats.last_error)
+        self.assertEqual(stats.as_dict()["done"], 3)
+        self.assertIsNone(self._stored(s2))
+        self.assertIsNotNone(self._stored(s3))
 
     def test_no_work_second_run_contacts_backend_zero_times(self) -> None:
         self._mk_session("s1")

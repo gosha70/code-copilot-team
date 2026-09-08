@@ -9,6 +9,7 @@ import {
   api,
   JudgeModels,
   SessionAnalysisResponse,
+  PipelineStep,
   SessionDetail,
   SessionTagsInfo,
   TurnRow,
@@ -23,7 +24,7 @@ import {
   useApi,
 } from "@/components/ui";
 import SessionAnalysis, { PanelState } from "@/components/SessionAnalysis";
-import SimilarPanel from "@/components/SimilarPanel";
+import SimilarPanel, { stepsFor } from "@/components/SimilarPanel";
 import ResponseTimeCard from "@/components/ResponseTime";
 import SessionHeader from "@/components/SessionHeader";
 import { HandTag } from "@/components/SessionTags";
@@ -395,7 +396,12 @@ function Analysis({
 // SimilarPanel, which is pure so the D8 script can render its states.
 function Similar({ id }: { id: number }) {
   const [state, setState] = useState<SimilarOutcome | null>(null);
-  useEffect(() => {
+  // The steps in flight after "Embed sessions and find similar" (from
+  // pipeline status, polled), and why a start was refused.
+  const [running, setRunning] = useState<PipelineStep[] | null>(null);
+  const [computeError, setComputeError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
     let live = true;
     api
       .similar(id)
@@ -406,5 +412,52 @@ function Similar({ id }: { id: number }) {
       live = false;
     };
   }, [id]);
-  return state === null ? <Loading /> : <SimilarPanel state={state} />;
+  useEffect(() => load(), [load]);
+
+  async function compute() {
+    if (!state) return;
+    setComputeError(null);
+    // The graph build comes first whenever the graph is not done — the
+    // API names the FIRST missing prerequisite (embedding), and running
+    // "similar" against an unbuilt graph would only fail later.
+    let steps = stepsFor(state.kind === "prerequisite" ? state.detail.prerequisite : "embedding");
+    try {
+      const st = await api.pipelineStatus();
+      const graph = st.steps.find((x) => x.id === "graph");
+      if (graph && !graph.done && !steps.includes("graph")) steps = ["graph", ...steps];
+    } catch {
+      /* status unavailable: run what the prerequisite named */
+    }
+    try {
+      await api.runAll(false, { steps });
+    } catch (e) {
+      setComputeError(String(e));
+      return;
+    }
+    // Poll the pipeline until the run ends, then re-read the neighbours.
+    const poll = async () => {
+      try {
+        const st = await api.pipelineStatus();
+        const mine = st.steps.filter((s) => steps.includes(s.id));
+        setRunning(mine);
+        if (st.all.state === "running") {
+          setTimeout(poll, 2000);
+          return;
+        }
+        if (st.all.state === "failed") setComputeError(st.all.message || "the run failed");
+      } catch (e) {
+        setComputeError(String(e));
+      }
+      setRunning(null);
+      load();
+    };
+    setRunning([]);
+    poll();
+  }
+
+  return state === null ? (
+    <Loading />
+  ) : (
+    <SimilarPanel state={state} onCompute={compute} running={running} computeError={computeError} />
+  );
 }

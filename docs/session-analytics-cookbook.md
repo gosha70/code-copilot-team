@@ -384,7 +384,30 @@ human sample is one command away (`--judge claude-code: --rubric-name heuristic-
 Or press **Build knowledge graph** on the Analysis page. The **Graph**
 tab shows node counts, an explorer (tap a type for members, tap a member
 for its neighbours), read-only Cypher with templates, and the clusters
-below. The **Similar** tab on a session page lists its nearest sessions.
+below.
+
+### 8.1 Similar sessions
+
+The **Similar** tab on a session page lists the sessions closest to it
+by meaning — "have I done this before, and how did it go" — each with
+its score, project, model, tags, and a reason in words: the same
+project, the tools few sessions use that both used, shared error types,
+shared files. It needs two things, both in the Analysis pipeline:
+
+1. **Settings → Embeddings**: choose an embedding model. Ollama has no
+   default one; `nomic-embed-text` is small and enough
+   (`ollama pull nomic-embed-text`, then pick it from the list and
+   Save). **Test embedding** shows the vector size and time.
+2. **Analysis → Embed sessions**, then **Find similar sessions** — or
+   just press the button on the Similar tab, which runs both (and the
+   graph build first if it has not run). Run all steps includes them.
+   Embedding 119 sessions with nomic-embed-text took about 8 seconds
+   on a laptop.
+
+Sessions loaded later are embedded on the next pass; envelopes are
+kept, not recomputed. The list is a snapshot of the last pass, and
+"no neighbours" means no other session scored above the similarity
+threshold — a result, not a failure.
 
 ---
 

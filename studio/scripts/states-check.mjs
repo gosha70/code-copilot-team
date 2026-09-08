@@ -442,16 +442,25 @@ try {
   // The producer tailors `guidance` per case (run embed / run graph /
   // run graph then similar); rendering the marker without it would show
   // a dead end.
-  const preHtml = simRendered.get(SIMILAR_STATES[2][0]).html;
-  for (const [needle, what] of [
-    ["run graph to sync the graph, then similar", "the tailored guidance"],
-    ["has no graph node", "the producer's own error text"],
-  ]) {
-    if (!preHtml.includes(needle)) {
-      fail(`FR-C: ${what} is not rendered in the prerequisite state`);
-    }
-  }
-  if (!process.exitCode) console.log("  ok  FR-C: prerequisite guidance rendered");
+  // The remedy is a BUTTON that runs the producing pipeline steps — not
+  // a CLI command to copy (the owner's rule for every surface). Which
+  // steps depends on which prerequisite is missing.
+  const simMod = await import(pathToFileURL(join(out, "components/SimilarPanel.js")));
+  const preState = SIMILAR_STATES[2][2];
+  const renderSim = (props) => renderToStaticMarkup(React.createElement(simMod.default, props));
+  const preHtml = renderSim({ state: preState, onCompute: () => {} });
+  if (/\.\/scripts\/session-analytics/.test(preHtml)) fail("FR-C: the prerequisite state still tells the user to run a CLI command");
+  else if (!/Build graph, embed and find similar/.test(preHtml)) fail("FR-C: missing graph → the button must run the graph build first");
+  else if (!/Embed sessions and find similar/.test(renderSim({ state: { ...preState, detail: { ...preState.detail, prerequisite: "embedding" } }, onCompute: () => {} }))) fail("FR-C: missing embedding → embed + similar");
+  else if (JSON.stringify(simMod.stepsFor("graph")) !== JSON.stringify(["graph", "embed", "similar"]) || JSON.stringify(simMod.stepsFor("embedding")) !== JSON.stringify(["embed", "similar"])) fail("stepsFor");
+  else console.log("  ok  FR-C: a missing prerequisite is a button that runs the producing steps, never a CLI command");
+  const readOnly = simRendered.get(SIMILAR_STATES[2][0]).html;
+  if (/<button/.test(readOnly)) fail("read-only render (no onCompute) must not offer a button");
+  else console.log("  ok  read-only render offers no button");
+  const reason = simMod.neighbourReason({ shared: { tools: ["Bash", "Read"], common_tools: 2, error_types: ["timeout"], files: ["a.py"], same_project: true } });
+  if (reason !== "same project · shares Bash, Read · same errors: timeout · touches a.py") fail(`reason: ${reason}`);
+  else if (simMod.neighbourReason({ shared: { tools: [], common_tools: 0, error_types: [], files: [], same_project: false } }) !== "similar by transcript meaning only" || !/only the usual tools/.test(simMod.neighbourReason({ shared: { tools: [], common_tools: 3, error_types: [], files: [], same_project: false } }))) fail("empty reason");
+  else console.log("  ok  the neighbour reason is said in checkable words");
 
   // ── developers panel (E1, #65) ──────────────────────────────────────
   // Both assertions below exist because review caught the panel failing

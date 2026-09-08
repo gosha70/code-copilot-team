@@ -425,11 +425,11 @@ def similar_sessions(
     from ..embedding.contracts import validate_envelope
 
     row = db.query_one(
-        "SELECT copilot, session_id, session_embedding "
+        "SELECT copilot, session_id, session_embedding, project_path "
         "FROM copilot_session WHERE id = ?", (session_id,))
     if row is None:
         return {"error": f"session {session_id} not found"}
-    copilot, native_id, stored = row
+    copilot, native_id, stored, src_project = row
 
     # prerequisite 1, independently established from the relational
     # store: a validated envelope.
@@ -514,12 +514,19 @@ def similar_sessions(
         gdb.close()
 
     pairs.sort(key=lambda p: (-p[1], p[0]))
+    # What the SOURCE session used — so each neighbour can say why it is
+    # similar in words a person can check (shared tools, shared errors),
+    # not only a cosine score.
+    src_tools = _session_tool_names(db, session_id)
+    src_errors = _session_error_types(db, session_id)
+    src_files = _session_file_names(db, session_id)
+    prevalence = _tool_prevalence(db)
     neighbors = []
     for dst_key, score in pairs[:limit]:
         dst_copilot, _, dst_native = dst_key.partition(":")
         info = db.query_one(
-            "SELECT id, project_path, started_at FROM copilot_session "
-            "WHERE copilot = ? AND session_id = ?",
+            f"SELECT id, project_path, started_at, model, turn_count, error_count, {_TAG_SELECT_COLS} "
+            "FROM copilot_session WHERE copilot = ? AND session_id = ?",
             (dst_copilot, dst_native))
         # EXISTING KPIs ride along with their rubric identity (spec
         # scenario 1); honest absence — kpi is null when no row exists,
@@ -537,14 +544,39 @@ def similar_sessions(
                     "rework_rate": krow[2],
                     "avg_interaction_quality": krow[3],
                 }
+        shared = None
+        if info:
+            shared_tools = src_tools & _session_tool_names(db, info[0])
+            shared = {
+                # Rarest first: a tool most sessions use says little
+                # about why THESE two are alike; one few sessions use
+                # says a lot. `common_tools` says how many of the shared
+                # ones were the everyday kind, so the reason can say so.
+                "tools": sorted(
+                    (t for t in shared_tools if prevalence.get(t, 0.0) < COMMON_TOOL_SHARE),
+                    key=lambda t: (prevalence.get(t, 0.0), t),
+                )[:8],
+                "common_tools": sum(1 for t in shared_tools if prevalence.get(t, 0.0) >= COMMON_TOOL_SHARE),
+                "error_types": sorted(src_errors & _session_error_types(db, info[0]))[:5],
+                "files": sorted(src_files & _session_file_names(db, info[0]))[:5],
+                "same_project": bool(src_project and info[1] == src_project),
+            }
         neighbors.append({
             "session_key": dst_key,
             "id": info[0] if info else None,
             "project_path": info[1] if info else None,
             "started_at": info[2] if info else None,
+            "model": info[3] if info else None,
+            "turn_count": int(info[4]) if info else None,
+            "error_count": int(info[5]) if info else None,
+            "tags": {
+                "favorite": bool(info[6]), "todo": bool(info[7]),
+                "analyzed_kinds": int(info[8] or 0), "analysis_kinds_total": len(C.ANALYSIS_KINDS),
+            } if info else None,
             "score": score,
             "basis": "embedding",
             "kpi": kpi,
+            "shared": shared,
         })
     # neighbors == [] is HEALTHY here: every prerequisite held, the
     # stored snapshot simply contains no edges for this session.
@@ -553,6 +585,58 @@ def similar_sessions(
         "basis": "embedding",
         "scores_are": "a snapshot of the last completed 'similar' pass",
         "neighbors": neighbors,
+    }
+
+
+def _session_tool_names(db: Database, session_id: int) -> set[str]:
+    return {
+        r[0] for r in db.query(
+            "SELECT DISTINCT c.tool_name FROM copilot_tool_call c "
+            "JOIN copilot_turn t ON t.id = c.turn_id WHERE t.session_id = ?", (session_id,))
+        if r[0]
+    }
+
+
+#: A tool used by at least this share of sessions is "the usual kind":
+#: shared by almost any two sessions, so not a reason they are alike.
+COMMON_TOOL_SHARE = 0.5
+
+
+def _tool_prevalence(db: Database) -> dict[str, float]:
+    """tool → share of TOOL-USING sessions that used it. Sessions with
+    no tool calls (probe runs, two-turn chats) are left out of the
+    denominator, or every tool would look rare."""
+    total = db.query_one(
+        "SELECT COUNT(DISTINCT t.session_id) FROM copilot_tool_call c "
+        "JOIN copilot_turn t ON t.id = c.turn_id"
+    )
+    n = int((total or (0,))[0] or 0)
+    if n == 0:
+        return {}
+    rows = db.query(
+        "SELECT c.tool_name, COUNT(DISTINCT t.session_id) FROM copilot_tool_call c "
+        "JOIN copilot_turn t ON t.id = c.turn_id GROUP BY c.tool_name"
+    )
+    return {r[0]: int(r[1]) / n for r in rows if r[0]}
+
+
+def _session_error_types(db: Database, session_id: int) -> set[str]:
+    """Real error types only: the redaction placeholder is not one."""
+    return {
+        r[0] for r in db.query(
+            "SELECT DISTINCT error_type FROM copilot_error WHERE session_id = ?", (session_id,))
+        if r[0] and r[0].lower() not in ("redacted", "unknown")
+    }
+
+
+def _session_file_names(db: Database, session_id: int) -> set[str]:
+    """Base names only: two sessions on the same repo touch the same
+    files; the full path would also match on the project, which
+    `same_project` already says."""
+    return {
+        r[0].rsplit("/", 1)[-1] for r in db.query(
+            "SELECT DISTINCT file_path FROM copilot_file_access WHERE session_id = ?", (session_id,))
+        if r[0]
     }
 
 

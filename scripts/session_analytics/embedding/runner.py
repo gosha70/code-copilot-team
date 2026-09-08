@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import Callable
 
 from ..config import EmbeddingConfig
 from ..relational.db import Database
@@ -49,6 +50,11 @@ class EmbedStats:
     unembeddable: int = 0
     failed: int = 0
     truncated: int = 0
+    #: For a progress display: how many this pass set out to embed, how
+    #: many it has dealt with, and the most recent failure's reason.
+    total: int = 0
+    done: int = 0
+    last_error: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -59,6 +65,9 @@ class EmbedStats:
             "unembeddable": self.unembeddable,
             "failed": self.failed,
             "truncated": self.truncated,
+            "total": self.total,
+            "done": self.done,
+            "last_error": self.last_error,
         }
 
 
@@ -78,9 +87,15 @@ def run_embed(
     overwrite: bool = False,
     session_id: int | None = None,
     limit: int | None = None,
+    progress: Callable[[EmbedStats], None] | None = None,
 ) -> EmbedStats:
     """The FR-6 pass. Raises on a refused pass (probe failure, empty
-    model with work pending); per-session failures are counted."""
+    model with work pending); per-session failures are counted.
+
+    Each envelope is COMMITTED as it is written and ``progress`` is
+    called after every session, so the Studio can show "12 of 57" and a
+    run that is stopped keeps what it embedded (it used to commit once
+    at the end)."""
     stats = EmbedStats()
 
     # ── 1. durable state FIRST ───────────────────────────────────────
@@ -107,9 +122,12 @@ def run_embed(
                 stats.skipped_existing_models.get(m, 0) + 1)
     if limit is not None:
         work = work[:limit]
+    stats.total = len(work)
 
     # ── 2. no work → ZERO backend contact, probe included ────────────
     if not work:
+        if progress:
+            progress(stats)
         return stats
 
     # ── 4. probe only now, and only once ─────────────────────────────
@@ -122,27 +140,38 @@ def run_embed(
     #                  zero writes — never a half-done pass.
 
     embedded_at = _now_iso()
+
+    def _tick() -> None:
+        stats.done += 1
+        if progress:
+            progress(stats)
+
     for sid in work:
         try:
             composed = compose_input(
                 db, sid, cap_chars=embedding_cfg.input_cap_chars)
-        except ValueError:
+        except ValueError as exc:
             # e.g. duplicate sequence_num (T2): malformed durable state
             # fails closed for this session; the stored value is
             # untouched.
             stats.failed += 1
+            stats.last_error = f"session {sid}: {exc}"[:300]
+            _tick()
             continue
         if composed.unembeddable:
             # counted WITHOUT calling embed; stored value untouched.
             stats.unembeddable += 1
+            _tick()
             continue
         if composed.truncated:
             stats.truncated += 1
         try:
             result = backend.embed(composed.text)
-        except Exception:  # noqa: BLE001 — any backend failure = this
+        except Exception as exc:  # noqa: BLE001 — any backend failure = this
             #               session failed; prior value preserved.
             stats.failed += 1
+            stats.last_error = f"session {sid}: {exc}"[:300]
+            _tick()
             continue
         envelope = build_envelope(
             result, provider=embedding_cfg.backend, embedded_at=embedded_at)
@@ -150,15 +179,18 @@ def run_embed(
         if err is not None:
             # ── 6. FR-9 refusal: nothing is written ──────────────────
             stats.failed += 1
+            stats.last_error = f"session {sid}: {err}"[:300]
+            _tick()
             continue
         # ── 6. the ONE replacement write, after validation ───────────
         db.execute(
             "UPDATE copilot_session SET session_embedding = ? WHERE id = ?",
             (json.dumps(envelope), sid),
         )
+        db.commit()
         stats.embedded += 1
+        _tick()
 
-    db.commit()
     return stats
 
 
