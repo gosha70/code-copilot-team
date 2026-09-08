@@ -188,6 +188,10 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     class ConfigUpdate(BaseModel):
         values: dict
 
+    class TagUpdate(BaseModel):
+        """One hand-set tag on one session: on or off."""
+        on: bool
+
     # ── health + settings ──────────────────────────────────────────────
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -980,6 +984,19 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         finally:
             conn.close()
 
+    @app.put("/api/sessions/{session_id}/tags/{flag}")
+    def session_tag(session_id: int, flag: str, req: TagUpdate) -> dict[str, Any]:
+        """Set or clear a hand-set tag (favorite, todo); returns the
+        session's tags. "analyzed" is derived from the analyses and
+        cannot be set — a 400 says so."""
+        conn = db()
+        try:
+            return {"id": session_id, "tags": mcp_tools.set_session_flag(conn, session_id, flag, req.on)}
+        except ValueError as exc:
+            raise HTTPException(status_code=404 if "no session" in str(exc) else 400, detail=str(exc)) from None
+        finally:
+            conn.close()
+
     @app.get("/api/sessions/{session_id}")
     def session_detail(session_id: int) -> dict[str, Any]:
         conn = db()
@@ -1080,7 +1097,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                         "prerequisite": "judge",
                         "guidance": (
                             "Check the LLM-as-Judge settings — is the backend "
-                            "running and the model pulled? — then Re-generate."
+                            "running and the model pulled? — then run it again."
                         ),
                     },
                 )

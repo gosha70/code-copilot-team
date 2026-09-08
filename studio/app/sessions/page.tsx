@@ -2,7 +2,8 @@
 
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
-import { SessionSort, api } from "@/lib/api";
+import { SessionSort, SessionTagsInfo, api } from "@/lib/api";
+import SessionTagIcons, { HandTag, TAG_LABEL, TagHeaderIcon } from "@/components/SessionTags";
 import { Card, ErrorNote, Loading, formatCost, useApi } from "@/components/ui";
 
 const REFRESH_MS = 15000;
@@ -25,6 +26,19 @@ export default function SessionsPage() {
     REFRESH_MS
   );
 
+  // A tag toggled in the grid shows at once; the server's answer wins
+  // (it is what the toggle returns), and the next refresh confirms it.
+  const [tagOverrides, setTagOverrides] = useState<Record<number, SessionTagsInfo>>({});
+  async function toggleTag(id: number, tag: HandTag, on: boolean, current: SessionTagsInfo) {
+    setTagOverrides((o) => ({ ...o, [id]: { ...current, [tag]: on } }));
+    try {
+      const r = await api.setSessionTag(id, tag, on);
+      setTagOverrides((o) => ({ ...o, [id]: r.tags }));
+    } catch {
+      setTagOverrides((o) => ({ ...o, [id]: current }));
+    }
+  }
+
   function sortBy(column: SessionSort) {
     if (column === sort) setOrder(order === "desc" ? "asc" : "desc");
     else {
@@ -38,10 +52,13 @@ export default function SessionsPage() {
     column,
     children,
     className = "",
+    label,
   }: {
     column: SessionSort;
     children: ReactNode;
     className?: string;
+    /** For an icon header: the words the tooltip and screen reader use. */
+    label?: string;
   }) {
     const active = column === sort;
     return (
@@ -53,7 +70,8 @@ export default function SessionsPage() {
             "inline-flex items-center gap-1 hover:text-slate-800 " +
             (active ? "text-slate-800 font-semibold" : "")
           }
-          title={`Sort by ${String(children)}`}
+          title={`Sort by ${label ?? String(children)}`}
+          aria-label={label ? `Sort by ${label}` : undefined}
           aria-sort={active ? (order === "asc" ? "ascending" : "descending") : undefined}
         >
           {children}
@@ -112,7 +130,10 @@ export default function SessionsPage() {
           <table className="w-full text-sm">
             <thead className="text-left text-slate-500 border-b border-slate-200">
               <tr>
-                <Th column="copilot" className="py-2 pr-3">Copilot</Th>
+                <Th column="favorite" className="py-2 pr-0.5" label={TAG_LABEL.favorite}><TagHeaderIcon tag="favorite" /></Th>
+                <Th column="todo" className="pr-0.5" label={TAG_LABEL.todo}><TagHeaderIcon tag="todo" /></Th>
+                <Th column="analyzed" className="pr-3" label={TAG_LABEL.analyzed}><TagHeaderIcon tag="analyzed" /></Th>
+                <Th column="copilot" className="pr-3">Copilot</Th>
                 <Th column="project_path" className="pr-3">Project</Th>
                 <Th column="model" className="pr-3">Model</Th>
                 <Th column="turn_count" className="text-right pr-3">Turns</Th>
@@ -125,6 +146,12 @@ export default function SessionsPage() {
             <tbody>
               {data.sessions.map((s) => (
                 <tr key={s.id} className="border-b border-slate-100 hover:bg-slate-50">
+                  <td className="py-1 whitespace-nowrap" colSpan={3}>
+                    <SessionTagIcons
+                      tags={tagOverrides[s.id] ?? s.tags}
+                      onToggle={(tag, on) => toggleTag(s.id, tag, on, tagOverrides[s.id] ?? s.tags)}
+                    />
+                  </td>
                   <td className="py-2">
                     <Link href={`/sessions/${s.id}`} className="text-blue-600 hover:underline">
                       {s.copilot}
@@ -143,7 +170,7 @@ export default function SessionsPage() {
               ))}
               {data.sessions.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-6 text-center text-slate-400">
+                  <td colSpan={11} className="py-6 text-center text-slate-400">
                     {data.excluded_noise > 0
                       ? `No sessions worth showing — ${data.excluded_noise.toLocaleString()} excluded as noise (toggle above).`
                       : "No sessions. Run the Analysis page's Load sessions step."}

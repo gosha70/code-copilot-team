@@ -159,7 +159,7 @@ class TestApi(RegistryResetTestCase):
         detail = r.json()["detail"]
         self.assertEqual(detail["prerequisite"], "judge")
         self.assertIn("fake:x", detail["error"])
-        self.assertIn("Re-generate", detail["guidance"])
+        self.assertIn("run it again", detail["guidance"])
 
     def test_session_detail_carries_latency(self) -> None:
         sid = self._session_id()
@@ -670,6 +670,27 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual((r.json()["sort"], r.json()["order"]), ("error_count", "asc"))
         self.assertEqual(self.client.get("/api/sessions", params={"sort": "nope"}).status_code, 400)
         self.assertEqual(self.client.get("/api/sessions", params={"order": "sideways"}).status_code, 400)
+
+    def test_session_tags_are_set_by_hand_shown_in_the_list_and_sortable(self) -> None:
+        sid = self._session_id()
+        row = self.client.get("/api/sessions").json()["sessions"][0]
+        self.assertEqual(row["tags"], {"favorite": False, "todo": False, "analyzed_kinds": 0, "analysis_kinds_total": 3})
+        r = self.client.put(f"/api/sessions/{sid}/tags/favorite", json={"on": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["tags"]["favorite"])
+        self.assertTrue(self.client.get(f"/api/sessions/{sid}").json()["tags"]["favorite"])
+        self.assertEqual(self.client.get("/api/sessions", params={"sort": "favorite"}).status_code, 200)
+        self.assertEqual(self.client.get("/api/sessions", params={"sort": "analyzed"}).status_code, 200)
+        self.assertFalse(
+            self.client.put(f"/api/sessions/{sid}/tags/favorite", json={"on": False}).json()["tags"]["favorite"]
+        )
+        # derived, not settable; unknown session
+        self.assertEqual(self.client.put(f"/api/sessions/{sid}/tags/analyzed", json={"on": True}).status_code, 400)
+        self.assertEqual(self.client.put("/api/sessions/99999/tags/todo", json={"on": True}).status_code, 404)
+        # analyzed follows a parsed analysis
+        self._register_fake_judge(json.dumps({"summary": "ok", "findings": []}))
+        self.client.post(f"/api/sessions/{sid}/analysis/tuning", json={"judge": "fake:x"})
+        self.assertEqual(self.client.get(f"/api/sessions/{sid}").json()["tags"]["analyzed_kinds"], 1)
 
     def test_get_config(self) -> None:
         r = self.client.get("/api/config")

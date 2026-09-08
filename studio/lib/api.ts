@@ -178,7 +178,10 @@ export type SessionSort =
   | "tool_call_count"
   | "error_count"
   | "cost_usd"
-  | "duration_seconds";
+  | "duration_seconds"
+  | "favorite"
+  | "todo"
+  | "analyzed";
 
 export interface SessionsResponse {
   sessions: SessionRow[];
@@ -322,8 +325,18 @@ export interface GraphExpand {
   neighbors: { label: string; node: Record<string, unknown> }[];
 }
 
+/** The three tags on a session: two set by hand, one derived from the
+ *  per-session analyses (how many of the kinds have a parsed result). */
+export interface SessionTagsInfo {
+  favorite: boolean;
+  todo: boolean;
+  analyzed_kinds: number;
+  analysis_kinds_total: number;
+}
+
 export interface SessionRow {
   id: number;
+  tags: SessionTagsInfo;
   copilot: string;
   session_id: string;
   project_path: string | null;
@@ -1089,6 +1102,19 @@ export const api = {
         `&include_noise=${includeNoise}&sort=${sort}&order=${order}`,
     ),
   session: (id: number) => get<SessionDetail>(`/api/sessions/${id}`),
+  /** Set or clear a hand-set tag; returns the session's tags after. */
+  setSessionTag: async (id: number, tag: "favorite" | "todo", on: boolean) => {
+    const r = await fetch(`${BASE}/api/sessions/${id}/tags/${tag}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on }),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.detail || `tag ${tag} → ${r.status}`);
+    }
+    return (await r.json()) as { id: number; tags: SessionTagsInfo };
+  },
   sessionAnalysis: (id: number) =>
     get<SessionAnalysisResponse>(`/api/sessions/${id}/analysis`),
   runSessionAnalysis: (

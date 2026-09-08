@@ -81,6 +81,7 @@ try {
         join(STUDIO, "lib/urls.ts"),
         join(STUDIO, "components/ResponseTime.tsx"),
         join(STUDIO, "components/SessionHeader.tsx"),
+        join(STUDIO, "components/SessionTags.tsx"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -924,7 +925,7 @@ try {
   else if (sh.versusProject(5, { observations: 3, sufficient: false, median: 4, p90: 9, max: 9 }).note !== "") fail("insufficient baseline must say nothing");
   else if (sh.projectName("/Users/x/dev/repo/code-copilot-team/") !== "code-copilot-team" || sh.projectName(null) !== "(no project path)") fail("project name");
   else console.log("  ok  comparison wording: ×median, near-median, above p90, withheld when insufficient");
-  const detail = { id: 1, copilot: "claude-code", session_id: "abc", project_path: "/Users/x/dev/repo/code-copilot-team", model: "claude-opus-5", turn_count: 4659, tool_call_count: 1543, error_count: 46, started_at: "2026-09-03T11:46:54Z", duration_seconds: 284400, cost_usd: null, turns: [], tool_usage: [], errors: [], latency: null };
+  const detail = { id: 1, tags: { favorite: false, todo: false, analyzed_kinds: 0, analysis_kinds_total: 3 }, copilot: "claude-code", session_id: "abc", project_path: "/Users/x/dev/repo/code-copilot-team", model: "claude-opus-5", turn_count: 4659, tool_call_count: 1543, error_count: 46, started_at: "2026-09-03T11:46:54Z", duration_seconds: 284400, cost_usd: null, turns: [], tool_usage: [], errors: [], latency: null };
   const base = { scope: "project", sessions: 14, turns: es(2114, 6457), tool_calls: es(600, 2000), errors: es(10, 40), duration_seconds: es(100000, 250000), cost_usd: { observations: 0, sufficient: false, median: null, p90: null, max: null }, cost_usd_coverage: { sessions_with_any_priced_turn: 0, sessions_fully_priced: 0, sessions_with_priceable_turns: 0 }, min_observations: 5, basis: "" };
   const head = render(sh.default, { data: detail, baseline: base });
   if (!/<h1[^>]*>code-copilot-team<\/h1>/.test(head)) fail("title is not the project name");
@@ -936,6 +937,25 @@ try {
   const bare = render(sh.default, { data: { ...detail, project_path: null, model: null, started_at: null, duration_seconds: null }, baseline: null });
   if (!/no project path/.test(bare) || !/too few sessions of this project/.test(bare) || /×/.test(bare)) fail("header without a project/baseline still claims a comparison");
   else console.log("  ok  no project path / no baseline: nothing compared, nothing invented");
+
+  // ── session tags ───────────────────────────────────────────────────
+  console.log("\nsession tags:");
+  const st = await import(pathToFileURL(join(out, "components/SessionTags.js")));
+  const t0 = { favorite: false, todo: false, analyzed_kinds: 0, analysis_kinds_total: 3 };
+  if (st.analyzedState(t0).state !== "none" || st.analyzedState({ ...t0, analyzed_kinds: 2 }).state !== "partial" || st.analyzedState({ ...t0, analyzed_kinds: 3 }).state !== "all") fail("analyzed state");
+  else if (!/2 of 3/.test(st.analyzedState({ ...t0, analyzed_kinds: 2 }).title) || !/Not analyzed yet/.test(st.analyzedState(t0).title)) fail("analyzed tooltip");
+  else console.log("  ok  analyzed: none / partial (n of total) / all");
+  const ro = render(st.default, { tags: { ...t0, favorite: true } });
+  if (/<button/.test(ro)) fail("read-only icons rendered buttons");
+  else if (!/aria-label="Favorite — click to remove"/.test(ro) || !/aria-label="Mark as to-do"/.test(ro)) fail("tag tooltips");
+  else if ((ro.match(/<svg/g) || []).length !== 3) fail("three icons expected");
+  else console.log("  ok  read-only: three icons, tooltips name the state");
+  const rw = render(st.default, { tags: { ...t0, todo: true }, onToggle: () => {} });
+  if ((rw.match(/<button/g) || []).length !== 2 || !/aria-pressed="true"/.test(rw)) fail("hand-set tags must be two buttons, analyzed never one");
+  else console.log("  ok  toggleable: favorite and to-do are buttons, analyzed is not");
+  const withTags = render(sh.default, { data: { ...detail, tags: { ...t0, favorite: true, analyzed_kinds: 3 } }, baseline: null });
+  if (!/Favorite — click to remove/.test(withTags) || !/all 3 analyses/.test(withTags)) fail("header does not show the tags");
+  else console.log("  ok  header shows the tags");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

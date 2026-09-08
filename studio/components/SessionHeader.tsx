@@ -1,7 +1,8 @@
 "use client";
 
-import { EffortEstimate, EffortSummary, SessionDetail } from "@/lib/api";
+import { EffortEstimate, EffortSummary, SessionDetail, SessionTagsInfo } from "@/lib/api";
 import { Stat, formatCost, formatDuration } from "@/components/ui";
+import SessionTagIcons, { HandTag } from "@/components/SessionTags";
 
 // THE TOP OF A SESSION PAGE. It used to be one grey sentence — path,
 // model, "4659 turns · 46 errors · 3d 7h · —" — with the project's
@@ -69,9 +70,14 @@ function Fact({ label, value, mono = false }: { label: string; value: string; mo
 export default function SessionHeader({
   data,
   baseline,
+  tags,
+  onToggleTag,
 }: {
   data: SessionDetail;
   baseline: EffortEstimate | null;
+  /** The session's tags (may be newer than data.tags after a toggle). */
+  tags?: SessionTagsInfo;
+  onToggleTag?: (tag: HandTag, on: boolean) => void;
 }) {
   const b = baseline && baseline.sessions > 0 ? baseline : null;
   const turns = versusProject(data.turn_count, b?.turns);
@@ -99,6 +105,7 @@ export default function SessionHeader({
               {data.model}
             </span>
           )}
+          <SessionTagIcons tags={tags ?? data.tags} onToggle={onToggleTag} size="md" />
         </div>
         <p
           className="text-xs text-slate-500 font-mono mt-0.5"

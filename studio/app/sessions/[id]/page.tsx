@@ -10,6 +10,7 @@ import {
   JudgeModels,
   SessionAnalysisResponse,
   SessionDetail,
+  SessionTagsInfo,
   TurnRow,
 } from "@/lib/api";
 import {
@@ -25,6 +26,7 @@ import SessionAnalysis, { PanelState } from "@/components/SessionAnalysis";
 import SimilarPanel from "@/components/SimilarPanel";
 import ResponseTimeCard from "@/components/ResponseTime";
 import SessionHeader from "@/components/SessionHeader";
+import { HandTag } from "@/components/SessionTags";
 import { classifySimilar, type SimilarOutcome } from "@/lib/similarStates";
 
 // One session, read the way a person reads it: what was said (Timeline,
@@ -61,6 +63,18 @@ export default function SessionDetailPage() {
     [projectPath],
   );
   const baseline = projectPath && baselineData && baselineData.turns.sufficient ? baselineData : null;
+  // Hand-set tags toggled here show at once; the server's answer wins.
+  const [tags, setTags] = useState<SessionTagsInfo | null>(null);
+  async function toggleTag(tag: HandTag, on: boolean) {
+    if (!data) return;
+    const current = tags ?? data.tags;
+    setTags({ ...current, [tag]: on });
+    try {
+      setTags((await api.setSessionTag(id, tag, on)).tags);
+    } catch {
+      setTags(current);
+    }
+  }
 
   // A turn chip on an analysis tab links to `#turn-N`, which lives on the
   // Timeline. The Timeline is not mounted while another tab is showing,
@@ -80,7 +94,12 @@ export default function SessionDetailPage() {
 
   return (
     <div className="space-y-4">
-      <SessionHeader data={data} baseline={baseline} />
+      <SessionHeader
+        data={data}
+        baseline={baseline}
+        tags={tags ?? data.tags}
+        onToggleTag={(tag, on) => toggleTag(tag, on)}
+      />
 
       <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
         {(["timeline", ...ANALYSIS_KINDS, "similar"] as Tab[]).map((t) => (
