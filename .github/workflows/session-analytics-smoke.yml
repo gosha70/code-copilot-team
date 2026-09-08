@@ -294,11 +294,12 @@ jobs:
                    "/repo/other", "smoke-ben", "plan", None, 1, iso(now - timedelta(hours=3))),
               )
           PY
-          ./scripts/session-analytics team status --dsn "$SA_DSN" --json > team.json
-          ./scripts/session-analytics team status --dsn "$SA_DSN" | tee team.txt
+          ./scripts/session-analytics team status --dsn "$SA_DSN" --json > "$RUNNER_TEMP/team.json"
+          ./scripts/session-analytics team status --dsn "$SA_DSN" | tee "$RUNNER_TEMP/team.txt"
           python3 - <<'PY'
-          import json
-          d = json.load(open("team.json"))
+          import json, os
+          tmp = os.environ["RUNNER_TEMP"]
+          d = json.load(open(f"{tmp}/team.json"))
           assert d["store"] == {"dialect": "postgres", "shared": True}, d["store"]
           by = {x["developer_id"]: x for x in d["developers"]}
           assert by["smoke-ana"]["liveness"] == "active", by["smoke-ana"]
@@ -311,7 +312,7 @@ jobs:
           fixture_dev = next(x for x in d["developers"] if x["developer_id"] not in ("smoke-ana", "smoke-ben"))
           assert fixture_dev["windows"]["30d"] == {"sessions": 0, "turns": 0, "cost_usd": None, "priced_turns": 0, "priceable_turns": 0}, fixture_dev
           assert fixture_dev["liveness"] == "unknown", fixture_dev
-          txt = open("team.txt").read()
+          txt = open(f"{tmp}/team.txt").read()
           assert "shared team store (Postgres)" in txt and "1 of" in txt, txt
           print("OK team status under Postgres:", d["totals"])
           PY
