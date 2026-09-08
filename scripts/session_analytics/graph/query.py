@@ -228,6 +228,10 @@ def run_catalogue(gdb: GraphDatabase, query_id: str, params: Mapping[str, Any]) 
         if spec.get("required") and value in ("", None):
             raise ValueError(f"{entry['name']}: '{spec.get('label', spec['name'])}' is required")
         bound[spec["name"]] = "" if value is None else str(value)
+    # The catalogue is data, and data can be edited: a mistaken entry
+    # must not turn the read-only page into a writer. Same guard as the
+    # freeform editor.
+    assert_readonly(entry["cypher"])
     res = gdb.execute(entry["cypher"], bound or None)
     cols = res.get_column_names() if hasattr(res, "get_column_names") else []
     raw = [{cols[i] if i < len(cols) else str(i): v for i, v in enumerate(row)} for row in _rows(res)]

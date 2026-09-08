@@ -389,19 +389,21 @@ project) at the top:
 
 - **A session** in the middle; around it the workspace, model, copilot
   and developer it ran with (`IN_WORKSPACE`, `USED_MODEL`, `RAN_ON`,
-  `BY_DEVELOPER`); then each tool it called, one bubble per tool sized
-  by calls and ringed red when it errored (`INVOKED`); outside, the
-  files it touched most (`ACCESSED_FILE`) and the sessions most like it
-  with their scores (`SIMILAR_TO`).
-- **Click a tool** for the turns that called it, each linking into the
-  transcript; **click a file** for every session that touched it;
-  **click a similar session** to recentre on it; **click the
-  workspace** (or the breadcrumb) to go up to the project, where the
-  sessions are the bubbles, `SIMILAR_TO` edges run between them, and
-  the models used are the hubs.
+  `BY_DEVELOPER`); then the tools it called most, one bubble per tool
+  sized by calls and ringed red when it errored (`INVOKED`, up to 20);
+  outside, the files it touched most (`ACCESSED_FILE`, up to 12) and the
+  sessions most like it with their scores (`SIMILAR_TO`, up to 8). Every
+  list says "12 of 31" when it is a cut.
+- **Click a tool** for every call of it, by the turn that made it, each
+  linking into the transcript; **click a file** for the sessions that
+  touched it most (up to 40, with the total); **click a similar
+  session** to recentre on it; **click the workspace** (or the
+  breadcrumb) to go up to the project, where the newest sessions (up to
+  60) are the bubbles, `SIMILAR_TO` edges run between them, and each
+  session is linked to the model it ran on, so the models are hubs.
 - **Ask the graph a question** below the picture: a catalogue of
   questions in words — which tools fail most and where, tools that
-  precede an error, retry chains, files touched by the most sessions,
+  precede an error, files touched by the most sessions,
   sessions most similar to one, which model runs the longest sessions,
   sessions per project, similar sessions across projects — grouped as
   *Find*, *One thing*, *Across everything*. Each answers as a table, a
@@ -411,9 +413,13 @@ project) at the top:
   entry. Raw read-only Cypher stays under a fold, with the schema
   beside it.
 
-Clusters are gone: on real data every session fell into one giant
-component, so the grouping said nothing. Similar sessions (§8.1) are
-what survives.
+Clusters are gone. On real data, transitive components were too coarse
+to mean anything: at the default similarity threshold the graph fell
+into a few large components, and raising the threshold to 0.85 gave 11
+clusters (the largest 45 sessions) at the price of 29 sessions in no
+cluster — tuning traded giant components for unclustered sessions
+rather than fixing the abstraction (the threshold table is on #65).
+Similar sessions (§8.1) and the neighbourhoods above are what survives.
 
 ### 8.1 Similar sessions
 

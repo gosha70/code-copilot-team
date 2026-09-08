@@ -29,15 +29,6 @@
       "render": "bar"
     },
     {
-      "id": "retry-chains",
-      "intent": "pattern",
-      "name": "Retry chains of three or more",
-      "question": "Which sessions retried the same tool call three or more times in a row? (RETRIED edges)",
-      "params": [],
-      "cypher": "MATCH (s:Session)-[:HAS_TURN]->(:Turn)-[:INVOKED]->(a:ToolInvocation)-[:RETRIED]->(b:ToolInvocation)-[:RETRIED]->(c:ToolInvocation) RETURN s.session_key AS session, a.tool_name AS tool, count(*) AS chains ORDER BY chains DESC LIMIT 20",
-      "render": "table"
-    },
-    {
       "id": "files-most-sessions",
       "intent": "search",
       "name": "Files touched by the most sessions",

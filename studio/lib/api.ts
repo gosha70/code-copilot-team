@@ -211,7 +211,9 @@ export interface SessionNeighbourhood {
     model: string | null;
     turn_count: number;
   }[];
-  retries: { tool: string; chains: number }[];
+  /** What the capped lists left out: the page says "12 of 31 files". */
+  totals: { tools: number; files: number; similar: number; errors: number };
+  limits: { tools: number; files: number; similar: number };
   relationships: Record<string, string>;
 }
 
@@ -230,13 +232,18 @@ export interface ProjectNeighbourhood {
   models: { model: string; sessions: number }[];
   tools: { tool: string; calls: number; sessions: number }[];
   files: { path: string; sessions: number; accesses: number }[];
+  totals: { sessions: number; tools: number; files: number };
+  limits: { sessions: number; tools: number; files: number };
   relationships: Record<string, string>;
 }
 
+/** One row per CALL of the tool (a turn can call it several times);
+ *  `turns` is how many distinct turns those calls sit in. */
 export interface ToolTurns {
   session_id: number;
   tool: string;
-  turns: { sequence_num: number; is_error: boolean; error_types: string[] }[];
+  calls: { call_key: string; sequence_num: number; is_error: boolean; error_types: string[] }[];
+  turns: number;
 }
 
 export interface FileSessions {
@@ -250,6 +257,8 @@ export interface FileSessions {
     accesses: number;
     access_types: string[];
   }[];
+  total: number;
+  limit: number;
 }
 
 export interface CatalogueEntry {

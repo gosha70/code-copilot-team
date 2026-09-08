@@ -1229,10 +1229,15 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
     # ── graph (lazy Kùzu) ──────────────────────────────────────────────
     def _graph():
+        """The Graph page's opener: READ-ONLY and NON-CREATING. Every
+        route here reads; a create-capable open (the old choice) made a
+        GET on an absent path create an empty store and its parent
+        directory. An absent or unbuilt store raises RuntimeError, which
+        the routes turn into the 503 prerequisite."""
         from ..graph.schema import GraphDatabase
 
         path = kuzu_path or load_config().kuzu_path
-        return GraphDatabase.connect(path)
+        return GraphDatabase.connect_read_only(path)
 
     @app.get("/api/graph/node-counts")
     def graph_node_counts() -> dict[str, Any]:
@@ -1282,21 +1287,6 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                     },
                 ) from None
             raise _internal_error(exc, "graph node counts") from None
-        finally:
-            g.close()
-
-    @app.post("/api/graph/query")
-    def graph_query(q: CypherQuery) -> dict[str, Any]:
-        from ..graph import query as gq
-
-        try:
-            g = _graph()
-        except ImportError:
-            raise HTTPException(status_code=503, detail="kuzu not installed")
-        try:
-            return {"rows": gq.run_readonly(g, q.cypher, q.params)}
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
         finally:
             g.close()
 
@@ -1400,20 +1390,17 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         params = (req.params if req and req.params else {})
         return _with_graph(lambda g: gq.run_catalogue(g, query_id, params))
 
+    @app.post("/api/graph/query")
+    def graph_query(q: CypherQuery) -> dict[str, Any]:
+        from ..graph import query as gq
+
+        return {"rows": _with_graph(lambda g: gq.run_readonly(g, q.cypher, q.params))}
+
     @app.get("/api/graph/expand")
     def graph_expand(label: str, key_field: str, key_value: str) -> dict[str, Any]:
         from ..graph import query as gq
 
-        try:
-            g = _graph()
-        except ImportError:
-            raise HTTPException(status_code=503, detail="kuzu not installed")
-        try:
-            return gq.expand_node(g, label, key_field, key_value)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        finally:
-            g.close()
+        return _with_graph(lambda g: gq.expand_node(g, label, key_field, key_value))
 
     # ── analyze (judge) ────────────────────────────────────────────────
     @app.post("/api/analyze")

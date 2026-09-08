@@ -445,6 +445,13 @@ export default function GraphExplorer() {
   );
 }
 
+/** "12 of 31" when a list was capped, "12" when it holds everything. */
+export function shownOf(shown: number, total: number): string {
+  return total > shown
+    ? `${shown.toLocaleString()} of ${total.toLocaleString()}`
+    : shown.toLocaleString();
+}
+
 function SelectionPanel({
   selection,
   data,
@@ -476,8 +483,7 @@ function SelectionPanel({
             ))}
             <li>
               <span className="font-mono text-slate-400">INVOKED</span>{" "}
-              {data.tools.length} tools;{" "}
-              {data.errors.reduce((n, e) => n + e.count, 0)} errors
+              {shownOf(data.tools.length, data.totals.tools)} tools; {data.totals.errors} errors
               {data.errors.length &&
               data.errors.every((e) => e.error_type === "redacted")
                 ? " (types redacted under the store's redaction level)"
@@ -485,21 +491,15 @@ function SelectionPanel({
             </li>
             <li>
               <span className="font-mono text-slate-400">ACCESSED_FILE</span>{" "}
-              {data.files.length} files shown (most accessed)
+              {shownOf(data.files.length, data.totals.files)} files (most accessed first)
             </li>
             <li>
               <span className="font-mono text-slate-400">SIMILAR_TO</span>{" "}
-              {data.similar.length} neighbours
+              {shownOf(data.similar.length, data.totals.similar)} neighbours
               {data.similar.length === 0
                 ? " — run Embed sessions and Find similar on the Analysis page"
                 : ""}
             </li>
-            {data.retries.length > 0 && (
-              <li>
-                <span className="font-mono text-slate-400">RETRIED</span>{" "}
-                {data.retries.map((r) => `${r.tool} ×${r.chains}`).join(", ")}
-              </li>
-            )}
           </ul>
           <p className="text-xs text-slate-400">Click a bubble for detail.</p>
         </div>
@@ -510,12 +510,12 @@ function SelectionPanel({
         <div className="text-sm space-y-2">
           <p className="text-slate-700">
             <span className="font-medium">{shortName(data.project_path)}</span>{" "}
-            · {data.sessions.length} sessions · {data.similar_edges.length}{" "}
-            similarity links among them
+            · {shownOf(data.sessions.length, data.totals.sessions)} sessions (newest first) ·{" "}
+            {data.similar_edges.length} similarity links among those shown
           </p>
           <div className="text-xs text-slate-600">
             <div className="font-medium text-slate-500 mb-1">
-              Tools across the project
+              Tools across the project ({shownOf(data.tools.length, data.totals.tools)})
             </div>
             <ul className="space-y-0.5">
               {data.tools.slice(0, 8).map((t) => (
@@ -528,7 +528,7 @@ function SelectionPanel({
           </div>
           <div className="text-xs text-slate-600">
             <div className="font-medium text-slate-500 mb-1">
-              Files touched by the most sessions
+              Files touched by the most sessions ({shownOf(data.files.length, data.totals.files)})
             </div>
             <ul className="space-y-0.5">
               {data.files.slice(0, 8).map((f) => (
@@ -548,20 +548,20 @@ function SelectionPanel({
     return (
       <div className="text-sm space-y-2">
         <p className="text-slate-700">
-          <span className="font-mono">{selection.tool}</span> — the turns that
-          called it
+          <span className="font-mono">{selection.tool}</span> — every call, by
+          the turn that made it
         </p>
         {!t ? (
           <p className="text-xs text-slate-400">Loading…</p>
         ) : (
           <>
             <p className="text-xs text-slate-500">
-              {t.turns.length.toLocaleString()} calls ·{" "}
-              {t.turns.filter((x) => x.is_error).length} errored
+              {t.calls.length.toLocaleString()} calls in {t.turns.toLocaleString()} turns ·{" "}
+              {t.calls.filter((x) => x.is_error).length} errored
             </p>
             <ul className="text-xs max-h-72 overflow-auto space-y-0.5">
-              {t.turns.slice(0, 200).map((x) => (
-                <li key={x.sequence_num}>
+              {t.calls.slice(0, 200).map((x) => (
+                <li key={x.call_key}>
                   <Link
                     href={`/sessions/${selection.sessionId}#turn-${x.sequence_num}`}
                     className="text-blue-700 hover:underline font-mono"
@@ -578,9 +578,9 @@ function SelectionPanel({
                   )}
                 </li>
               ))}
-              {t.turns.length > 200 && (
+              {t.calls.length > 200 && (
                 <li className="text-slate-400">
-                  … {t.turns.length - 200} more
+                  … {t.calls.length - 200} more
                 </li>
               )}
             </ul>
@@ -601,7 +601,7 @@ function SelectionPanel({
         ) : (
           <>
             <p className="text-xs text-slate-500">
-              touched by {f.sessions.length} sessions
+              touched by {shownOf(f.sessions.length, f.total)} sessions (most accesses first)
             </p>
             <ul className="text-xs space-y-1 max-h-72 overflow-auto">
               {f.sessions.map((s) => (

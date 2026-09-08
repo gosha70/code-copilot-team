@@ -215,22 +215,29 @@ export function projectView(p: ProjectNeighbourhood): View {
       note: e.score.toFixed(2),
     });
   }
+  // Models are HUBS: each drawn once, and every displayed session is
+  // linked to its own model with the relationship that exists in the
+  // graph (Session -USED_MODEL-> Model). Workspace -USED_MODEL-> Model
+  // was drawn before, and no such relationship exists.
   for (const m of p.models) {
-    const id = `Model:${m.model}`;
     nodes.push({
-      id,
+      id: `Model:${m.model}`,
       label: `${m.model} · ${m.sessions}`,
       type: "Model",
       size: 24,
       ring: 3,
       data: { key: m.model, kind: "Model" },
     });
-    edges.push({
-      source: wsId,
-      target: id,
-      rel: "USED_MODEL",
-      note: `${m.sessions} sessions`,
-    });
+  }
+  const modelIds = new Set(p.models.map((m) => `Model:${m.model}`));
+  for (const s of p.sessions) {
+    if (!s.model) continue;
+    const mid = `Model:${s.model}`;
+    if (!modelIds.has(mid)) {
+      modelIds.add(mid);
+      nodes.push({ id: mid, label: s.model, type: "Model", size: 24, ring: 3, data: { key: s.model, kind: "Model" } });
+    }
+    edges.push({ source: `Session:${s.session_key}`, target: mid, rel: "USED_MODEL" });
   }
   return { nodes, edges };
 }

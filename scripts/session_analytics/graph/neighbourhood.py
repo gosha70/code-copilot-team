@@ -24,6 +24,7 @@ TOP_FILES = 12
 TOP_SIMILAR = 8
 TOP_TOOLS = 20
 PROJECT_SESSIONS = 60
+FILE_SESSIONS = 40
 
 
 def _rows(result) -> list[list]:
@@ -31,6 +32,11 @@ def _rows(result) -> list[list]:
     while result.has_next():
         out.append(list(result.get_next()))
     return out
+
+
+def _count(gdb: GraphDatabase, cypher: str, params: dict) -> int:
+    rows = _rows(gdb.execute(cypher, params))
+    return int(rows[0][0]) if rows and rows[0][0] is not None else 0
 
 
 def _key_of(node: dict) -> str:
@@ -115,13 +121,17 @@ def session_neighbourhood(gdb: GraphDatabase, rel: Database, session_id: int) ->
             "session_key": r[0], "id": other["id"] if other else None, "score": float(r[1]),
             "project_path": r[2], "model": r[3], "turn_count": int(r[4] or 0),
         })
-    retries = [
-        {"tool": r[0], "chains": int(r[1])}
-        for r in _rows(gdb.execute(
-            "MATCH (s:Session {session_key: $k})-[:HAS_TURN]->(:Turn)-[:INVOKED]->(a:ToolInvocation)"
-            "-[:RETRIED]->(:ToolInvocation) RETURN a.tool_name, count(*) ORDER BY count(*) DESC", p,
-        ))
-    ]
+    # Every list above is capped; the totals say what the cap hid, so
+    # the page can say "12 of 31 files", never "the files".
+    totals = {
+        "tools": _count(gdb, "MATCH (s:Session {session_key: $k})-[:HAS_TURN]->(:Turn)-[:INVOKED]->(i:ToolInvocation) "
+                             "RETURN count(DISTINCT i.tool_name)", p),
+        "files": _count(gdb, "MATCH (s:Session {session_key: $k})-[:HAS_TURN]->(:Turn)-[:INVOKED]->(:ToolInvocation)"
+                             "-[:ACCESSED_FILE]->(f:FileNode) RETURN count(DISTINCT f.path)", p),
+        "similar": _count(gdb, "MATCH (s:Session {session_key: $k})-[r:SIMILAR_TO]->(:Session) RETURN count(r)", p),
+        "errors": _count(gdb, "MATCH (s:Session {session_key: $k})-[:HAS_TURN]->(:Turn)-[:INVOKED]->(:ToolInvocation)"
+                              "-[:PRODUCED_ERROR]->(e:ErrorNode) RETURN count(e)", p),
+    }
     return {
         "kind": "session",
         "centre": centre,
@@ -130,14 +140,14 @@ def session_neighbourhood(gdb: GraphDatabase, rel: Database, session_id: int) ->
         "errors": errors,
         "files": files,
         "similar": similar,
-        "retries": retries,
+        "totals": totals,
+        "limits": {"tools": TOP_TOOLS, "files": TOP_FILES, "similar": TOP_SIMILAR},
         "relationships": {
             "context": "the session's one-hop context: IN_WORKSPACE, USED_MODEL, RAN_ON, BY_DEVELOPER, USED_AGENT",
             "tools": "Session -HAS_TURN-> Turn -INVOKED-> ToolInvocation, aggregated per tool name",
             "errors": "ToolInvocation -PRODUCED_ERROR-> ErrorNode, per tool and type",
             "files": "ToolInvocation -ACCESSED_FILE-> FileNode, per file",
             "similar": "Session -SIMILAR_TO-> Session, the last similarity pass's score",
-            "retries": "ToolInvocation -RETRIED-> ToolInvocation, chains per tool",
         },
     }
 
@@ -148,20 +158,26 @@ def tool_turns(gdb: GraphDatabase, rel: Database, session_id: int, tool: str) ->
     key = session_key_for(rel, session_id)
     if key is None:
         return None
+    # One row per CALL (ToolInvocation), not per turn: a turn can call
+    # the same tool several times, and grouping by turn collapsed them
+    # (or split one turn in two when one call errored and another did
+    # not). The turn number is what links into the transcript.
     rows = _rows(gdb.execute(
         "MATCH (s:Session {session_key: $k})-[:HAS_TURN]->(t:Turn)-[:INVOKED]->(i:ToolInvocation {tool_name: $tool}) "
         "OPTIONAL MATCH (i)-[:PRODUCED_ERROR]->(e:ErrorNode) "
-        "RETURN t.sequence_num, i.is_error, collect(e.error_type) ORDER BY t.sequence_num",
+        "RETURN i.tool_key, t.sequence_num, i.is_error, collect(e.error_type) ORDER BY t.sequence_num, i.tool_key",
         {"k": key, "tool": tool},
     ))
+    calls = [
+        {"call_key": r[0], "sequence_num": int(r[1]), "is_error": bool(r[2]),
+         "error_types": sorted({x for x in (r[3] or []) if x})}
+        for r in rows
+    ]
     return {
         "session_id": session_id,
         "tool": tool,
-        "turns": [
-            {"sequence_num": int(r[0]), "is_error": bool(r[1]),
-             "error_types": sorted({x for x in (r[2] or []) if x})}
-            for r in rows
-        ],
+        "calls": calls,
+        "turns": len({c["sequence_num"] for c in calls}),
     }
 
 
@@ -169,9 +185,11 @@ def file_sessions(gdb: GraphDatabase, rel: Database, path: str) -> dict[str, Any
     """Every session that touched one file — the drill-in behind a file."""
     rows = _rows(gdb.execute(
         "MATCH (s:Session)-[:HAS_TURN]->(:Turn)-[:INVOKED]->(:ToolInvocation)-[a:ACCESSED_FILE]->(f:FileNode {path: $p}) "
-        "RETURN s.session_key, count(a), collect(DISTINCT a.access_type) ORDER BY count(a) DESC LIMIT 40",
+        f"RETURN s.session_key, count(a), collect(DISTINCT a.access_type) ORDER BY count(a) DESC LIMIT {FILE_SESSIONS}",
         {"p": path},
     ))
+    total = _count(gdb, "MATCH (s:Session)-[:HAS_TURN]->(:Turn)-[:INVOKED]->(:ToolInvocation)-[:ACCESSED_FILE]->(f:FileNode {path: $p}) "
+                        "RETURN count(DISTINCT s)", {"p": path})
     sessions = []
     for r in rows:
         other = _session_row(rel, r[0])
@@ -182,7 +200,7 @@ def file_sessions(gdb: GraphDatabase, rel: Database, path: str) -> dict[str, Any
             "started_at": other["started_at"] if other else None,
             "accesses": int(r[1]), "access_types": sorted(x for x in (r[2] or []) if x),
         })
-    return {"path": path, "sessions": sessions}
+    return {"path": path, "sessions": sessions, "total": total, "limit": FILE_SESSIONS}
 
 
 def project_neighbourhood(gdb: GraphDatabase, rel: Database, project_path: str) -> dict[str, Any]:
@@ -234,6 +252,14 @@ def project_neighbourhood(gdb: GraphDatabase, rel: Database, project_path: str) 
             f"RETURN f.path, count(DISTINCT s), count(a) ORDER BY count(DISTINCT s) DESC, count(a) DESC LIMIT {TOP_FILES}", p,
         ))
     ]
+    totals = {
+        "sessions": _count(gdb, "MATCH (s:Session)-[:IN_WORKSPACE]->(:Workspace {path: $w}) RETURN count(s)", p),
+        "tools": _count(gdb, "MATCH (s:Session)-[:IN_WORKSPACE]->(:Workspace {path: $w}) "
+                             "MATCH (s)-[:HAS_TURN]->(:Turn)-[:INVOKED]->(i:ToolInvocation) RETURN count(DISTINCT i.tool_name)", p),
+        "files": _count(gdb, "MATCH (s:Session)-[:IN_WORKSPACE]->(:Workspace {path: $w}) "
+                             "MATCH (s)-[:HAS_TURN]->(:Turn)-[:INVOKED]->(:ToolInvocation)-[:ACCESSED_FILE]->(f:FileNode) "
+                             "RETURN count(DISTINCT f.path)", p),
+    }
     return {
         "kind": "project",
         "project_path": project_path,
@@ -242,6 +268,8 @@ def project_neighbourhood(gdb: GraphDatabase, rel: Database, project_path: str) 
         "models": models,
         "tools": tools,
         "files": files,
+        "totals": totals,
+        "limits": {"sessions": PROJECT_SESSIONS, "tools": TOP_TOOLS, "files": TOP_FILES},
         "relationships": {
             "sessions": "Session -IN_WORKSPACE-> Workspace",
             "similar_edges": "Session -SIMILAR_TO-> Session within the project",

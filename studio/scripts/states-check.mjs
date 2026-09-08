@@ -753,7 +753,8 @@ try {
     errors: [{ tool: "bash", error_type: "redacted", count: 58 }],
     files: [{ path: "/Users/x/dev/repo/proj/scripts/auto-build-loop.sh", accesses: 103, access_types: ["read", "write"] }],
     similar: [{ session_key: "claude-code:def", id: 41, score: 0.81, project_path: "/Users/x/dev/repo/proj", model: "deepseek", turn_count: 2114 }],
-    retries: [],
+    totals: { tools: 11, files: 31, similar: 5, errors: 71 },
+    limits: { tools: 20, files: 12, similar: 8 },
     relationships: {},
   };
   const sv = gv.sessionView(sn);
@@ -769,10 +770,15 @@ try {
   if (gv.bubbleSize(0, 100) !== 18 || gv.bubbleSize(100, 100) !== 56 || !(gv.bubbleSize(25, 100) < gv.bubbleSize(100, 100))) fail("bubble sizing");
   else if (!/7 things, 6 relationships/.test(gv.viewSummary(sv)) || !/INVOKED ×2/.test(gv.viewSummary(sv))) fail(`summary: ${gv.viewSummary(sv)}`);
   else console.log("  ok  sizing on a square-root scale; the summary counts relationships by name");
-  const pv = gv.projectView({ kind: "project", project_path: "/Users/x/dev/repo/proj", sessions: [{ session_key: "claude-code:a", id: 1, model: "m", turn_count: 10, error_count: 1, started_at: "2026-09-01T00:00:00Z" }, { session_key: "claude-code:b", id: 2, model: "m", turn_count: 5, error_count: 0, started_at: "2026-09-02T00:00:00Z" }], similar_edges: [{ source: "claude-code:a", target: "claude-code:b", score: 0.9 }, { source: "claude-code:b", target: "claude-code:a", score: 0.9 }, { source: "claude-code:a", target: "claude-code:zzz", score: 0.95 }], models: [{ model: "m", sessions: 2 }], tools: [], files: [], relationships: {} });
+  const pv = gv.projectView({ kind: "project", project_path: "/Users/x/dev/repo/proj", sessions: [{ session_key: "claude-code:a", id: 1, model: "m", turn_count: 10, error_count: 1, started_at: "2026-09-01T00:00:00Z" }, { session_key: "claude-code:b", id: 2, model: "m", turn_count: 5, error_count: 0, started_at: "2026-09-02T00:00:00Z" }, { session_key: "claude-code:c", id: 3, model: "other", turn_count: 5, error_count: 0, started_at: "2026-09-03T00:00:00Z" }], similar_edges: [{ source: "claude-code:a", target: "claude-code:b", score: 0.9 }, { source: "claude-code:b", target: "claude-code:a", score: 0.9 }, { source: "claude-code:a", target: "claude-code:zzz", score: 0.95 }], models: [{ model: "m", sessions: 2 }, { model: "other", sessions: 1 }], tools: [], files: [], totals: { sessions: 3, tools: 0, files: 0 }, limits: { sessions: 60, tools: 20, files: 12 }, relationships: {} });
+  const usedModel = pv.edges.filter((e) => e.rel === "USED_MODEL");
   if (pv.edges.filter((e) => e.rel === "SIMILAR_TO").length !== 1) fail("project view: a pair drawn twice, or an edge to a session not shown");
-  else if (pv.edges.filter((e) => e.rel === "IN_WORKSPACE").length !== 2 || !pv.edges.find((e) => e.rel === "USED_MODEL")) fail("project view edges");
-  else console.log("  ok  project view: sessions in the workspace, one similarity edge per pair, models as hubs");
+  else if (pv.edges.filter((e) => e.rel === "IN_WORKSPACE").length !== 3) fail("project view IN_WORKSPACE edges");
+  // A model is a HUB: one node, and every displayed session linked to ITS model
+  // (Session -USED_MODEL-> Model, the relationship that exists) — never Workspace -> Model.
+  else if (pv.nodes.filter((n) => n.type === "Model").length !== 2) fail("a model drawn more than once");
+  else if (usedModel.length !== 3 || usedModel.some((e) => !e.source.startsWith("Session:")) || usedModel.filter((e) => e.target === "Model:m").length !== 2) fail(`USED_MODEL must run from each session to its model: ${JSON.stringify(usedModel)}`);
+  else console.log("  ok  project view: sessions in the workspace, one similarity edge per pair, models as real hubs (Session -USED_MODEL-> Model)");
   const ev = gv.elementsView({ nodes: [{ id: "Session:claude-code:a", label: "Session", key: "claude-code:a", props: { project_path: "/x/p", turn_count: 3 } }, { id: "Session:claude-code:b", label: "Session", key: "claude-code:b", props: {} }], edges: [{ source: "Session:claude-code:a", target: "Session:claude-code:b", rel: "SIMILAR_TO", props: { score: 0.734 } }] });
   if (ev.nodes[0].label !== "p · 3" || ev.edges[0].note !== "0.73" || ev.nodes[1].data.sessionKey !== "claude-code:b") fail(`elements view: ${JSON.stringify(ev)}`);
   else console.log("  ok  catalogue results with nodes and relationships become a view");
