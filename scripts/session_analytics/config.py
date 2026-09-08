@@ -49,6 +49,7 @@ ENV_NOISE_MIN_TURNS = "CCT_SA_NOISE_MIN_TURNS"
 ENV_NOISE_MIN_DURATION = "CCT_SA_NOISE_MIN_DURATION_SECONDS"
 ENV_NOISE_PATH_PATTERNS = "CCT_SA_NOISE_PATH_PATTERNS"   # comma-separated
 ENV_SIMILARITY_THRESHOLD = "CCT_SA_SIMILARITY_THRESHOLD"
+ENV_TEAM_ACTIVE_WINDOW = "CCT_SA_TEAM_ACTIVE_WINDOW"
 ENV_SIMILARITY_TOP_K = "CCT_SA_SIMILARITY_TOP_K"
 ENV_SOURCE_PREFIX = "CCT_SA_SOURCE_"  # + COPILOT (e.g. CCT_SA_SOURCE_CLAUDE_CODE)
 # Routing-shadow (#261): evidence roots are SERVER-SIDE configuration —
@@ -206,6 +207,15 @@ class NoiseConfig:
 
 
 @dataclass(frozen=True)
+class TeamConfig:
+    """team.* (#174): a heartbeat within ``active_window_seconds`` of now
+    makes a developer "active" on the Team tab — last-seen semantics,
+    never an alive/dead verdict."""
+
+    active_window_seconds: int
+
+
+@dataclass(frozen=True)
 class SimilarityConfig:
     """Similarity pass knobs (#287). Scores at or above ``threshold``
     are edge-eligible; each session keeps its ``top_k`` best."""
@@ -250,6 +260,7 @@ class AnalyticsConfig:
     judge: JudgeConfig
     embedding: "EmbeddingConfig"
     similarity: "SimilarityConfig"
+    team: "TeamConfig"
     noise: "NoiseConfig"
     pricing: "PricingConfig"
     projects: Mapping[str, ProjectOverride] = field(default_factory=dict)
@@ -539,6 +550,20 @@ def _developer_id_cfg(data: Mapping[str, Any]) -> Optional[str]:
     return value
 
 
+def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
+    """team.active_window_seconds from the data file, env on top; a
+    non-positive or non-integer value refuses loudly, naming the key."""
+    block = data.get(C.CFG_TEAM) or {}
+    raw = env(ENV_TEAM_ACTIVE_WINDOW) or block.get(C.CFG_TEAM_ACTIVE_WINDOW)
+    try:
+        window = int(str(raw))
+    except (TypeError, ValueError):
+        raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_ACTIVE_WINDOW} must be an integer, got {raw!r}") from None
+    if window <= 0:
+        raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_ACTIVE_WINDOW} must be positive, got {window}")
+    return TeamConfig(active_window_seconds=window)
+
+
 def _load_noise(data: Mapping[str, Any], env) -> NoiseConfig:
     """sessions.noise from the data file, env overrides on top. Same
     discipline as similarity: the data file is the ONLY source of
@@ -795,6 +820,7 @@ def load_config(
     )
 
     noise = _load_noise(data, env)
+    team = _load_team(data, env)
 
     pricing = _load_pricing(data)
     projects, project_id_rules = _load_projects(data)
@@ -810,6 +836,7 @@ def load_config(
         judge=judge,
         embedding=embedding,
         similarity=similarity,
+        team=team,
         noise=noise,
         pricing=pricing,
         projects=projects,

@@ -180,7 +180,9 @@ class TestCliDerivation(unittest.TestCase):
         # A real load_config() against empty overrides would read the host's
         # ~/.cct + repo .env; a minimal hand-built config keeps the test
         # hermetic. Only the identity fields matter here.
-        from session_analytics.config import EmbeddingConfig, NoiseConfig, SimilarityConfig, AnalyticsConfig, JudgeConfig
+        from session_analytics.config import (
+            AnalyticsConfig, EmbeddingConfig, JudgeConfig, NoiseConfig, SimilarityConfig, TeamConfig,
+        )
         from session_analytics.cost import PricingConfig
 
         judge = JudgeConfig(
@@ -204,6 +206,7 @@ class TestCliDerivation(unittest.TestCase):
                 input_cap_chars=8000, workers=1,
             ),
             similarity=SimilarityConfig(threshold=0.5, top_k=5),
+            team=TeamConfig(active_window_seconds=300),
             noise=NoiseConfig(min_turns=0, min_duration_seconds=0, path_patterns=()),
             pricing=PricingConfig(models={}),
             developer_id_env=env_value,

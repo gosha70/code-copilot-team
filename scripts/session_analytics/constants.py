@@ -124,6 +124,9 @@ CFG_NOISE_PATH_PATTERNS = "path_patterns"
 
 # ── Similarity config keys (#287, E2 slice 2) ────────────────────────
 CFG_SIMILARITY = "similarity"
+#: team.* — the Team tab (#174): how recent a heartbeat counts as active.
+CFG_TEAM = "team"
+CFG_TEAM_ACTIVE_WINDOW = "active_window_seconds"
 CFG_SIMILARITY_THRESHOLD = "threshold"
 CFG_SIMILARITY_TOP_K = "top_k"
 
@@ -232,6 +235,7 @@ TBL_HUMAN_LABEL = "human_label"
 # Session tags (Studio): the two a person sets by hand. "analyzed" is
 # derived from session_analysis and is never stored as a flag.
 TBL_SESSION_FLAG = "session_flag"
+TBL_LOCAL_HEARTBEAT = "local_heartbeat"
 FLAG_FAVORITE = "favorite"
 FLAG_TODO = "todo"
 SESSION_FLAGS = (FLAG_FAVORITE, FLAG_TODO)

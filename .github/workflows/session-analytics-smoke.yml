@@ -274,6 +274,49 @@ jobs:
           print("OK", d)
           PY
 
+      - name: "Team status under Postgres (#174: the shared-store dialect the feature exists for)"
+        run: |
+          python3 - <<'PY'
+          import os, subprocess
+          from datetime import datetime, timedelta, timezone
+          import psycopg
+          dsn = os.environ["SA_DSN"]
+          now = datetime.now(timezone.utc)
+          iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%SZ")
+          # A heartbeat 30 s ago for one developer and 3 h ago for another,
+          # on top of the ingested fixture session.
+          with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+              cur.execute("DELETE FROM local_heartbeat")
+              cur.execute(
+                  "INSERT INTO local_heartbeat (project_path, developer_id, phase, feature_id, checkpoint_count, last_heartbeat_at) "
+                  "VALUES (%s,%s,%s,%s,%s,%s), (%s,%s,%s,%s,%s,%s)",
+                  ("/repo/proj", "smoke-ana", "build", "174", 3, iso(now - timedelta(seconds=30)),
+                   "/repo/other", "smoke-ben", "plan", None, 1, iso(now - timedelta(hours=3))),
+              )
+          PY
+          ./scripts/session-analytics team status --dsn "$SA_DSN" --json > "$RUNNER_TEMP/team.json"
+          ./scripts/session-analytics team status --dsn "$SA_DSN" | tee "$RUNNER_TEMP/team.txt"
+          python3 - <<'PY'
+          import json, os
+          tmp = os.environ["RUNNER_TEMP"]
+          d = json.load(open(f"{tmp}/team.json"))
+          assert d["store"] == {"dialect": "postgres", "shared": True}, d["store"]
+          by = {x["developer_id"]: x for x in d["developers"]}
+          assert by["smoke-ana"]["liveness"] == "active", by["smoke-ana"]
+          assert by["smoke-ana"]["current"]["feature_id"] == "174", by["smoke-ana"]["current"]
+          assert by["smoke-ben"]["liveness"] == "idle", by["smoke-ben"]
+          assert d["totals"]["active_now"] == 1, d["totals"]
+          # the fixture's turns are dated 2026-05-29: outside every window, so
+          # its developer is listed with zero windows — not dropped, not zeroed
+          # into a cost.
+          fixture_dev = next(x for x in d["developers"] if x["developer_id"] not in ("smoke-ana", "smoke-ben"))
+          assert fixture_dev["windows"]["30d"] == {"sessions": 0, "turns": 0, "cost_usd": None, "priced_turns": 0, "priceable_turns": 0}, fixture_dev
+          assert fixture_dev["liveness"] == "unknown", fixture_dev
+          txt = open(f"{tmp}/team.txt").read()
+          assert "shared team store (Postgres)" in txt and "1 of" in txt, txt
+          print("OK team status under Postgres:", d["totals"])
+          PY
+
   studio:
     runs-on: ubuntu-latest
     timeout-minutes: 6

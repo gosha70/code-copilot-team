@@ -1024,6 +1024,23 @@ state's marker appears in no other state's render. Run it with
 `node studio/scripts/states-check.mjs`; it needs no dependency the
 Studio does not already have.
 
+## Team store (#174, Slices B2 + C + E)
+
+`GET /api/team/status[?window=N]` and `session-analytics team status
+[--window N] [--json]` read one payload (`api/team.py`) over the store:
+per developer, `liveness` from the newest `local_heartbeat` row
+(`active` within `team.active_window_seconds`, `idle` past it, `unknown`
+never — last-seen, not a verdict), the current project / phase /
+feature from that heartbeat, and sessions / turns / cost for today,
+7 days and 30 days; the same per project; totals. Windows are bucketed
+by turn timestamp in Python after one 30-day scan, because timestamps
+are ISO text in more than one shape. Cost sums priced turns only, with
+`priced_turns` / `priceable_turns` beside every figure (E5 rule). Noise
+follows the pages; `store.shared` is true on Postgres — the team plane
+is every developer pointing `CCT_SA_DB` at one Postgres (trusted LAN,
+database credentials; no app-level auth — the owner's 2026-09-08
+decision, recorded in `specs/pi-team-controller/plane-shaping.md`).
+
 ## Ask: a question in words, answered from the store
 
 `POST /api/ask` (`{question, history}`) streams NDJSON events — `judge`,

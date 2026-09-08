@@ -83,6 +83,7 @@ try {
         join(STUDIO, "lib/graphView.ts"),
         join(STUDIO, "lib/askView.ts"),
         join(STUDIO, "lib/benchmarkIntro.ts"),
+        join(STUDIO, "lib/teamView.ts"),
         join(STUDIO, "components/GraphCatalogue.tsx"),
         join(STUDIO, "components/GraphExplorer.tsx"),
         join(STUDIO, "global.d.ts"),
@@ -905,6 +906,32 @@ try {
   else console.log("  ok  counters read as processed + commit pending while running, rolled back after a failure, linked/stored only when done");
   if (bi.linkJobLine({ state: "running", seconds: 4 }) !== "linking… 4 s" || !/^failed: boom/.test(bi.linkJobLine({ state: "failed", message: "boom" })) || bi.linkJobLine({ state: "idle" }) !== "" || bi.linkJobLine({ state: "done", message: "skipped: no root" }) !== "skipped: no root") fail("link job line");
   else console.log("  ok  the link job reads as one line in every state");
+
+  // ── the Team tab: liveness, cost cells, the store note ───────────
+  console.log("\nteam view:");
+  const tv = await import(pathToFileURL(join(out, "lib/teamView.js")));
+  const tvRoll = (o) => ({ sessions: 0, turns: 0, cost_usd: null, priced_turns: 0, priceable_turns: 0, ...o });
+  if (tv.costCell(tvRoll({})) !== "—") fail("no priced turn must be an em dash, never $0.00");
+  else if (tv.costCell(tvRoll({ cost_usd: 12.345, priced_turns: 3, priceable_turns: 3 })) !== "$12.35") fail("fully priced cost");
+  else if (tv.costCell(tvRoll({ cost_usd: 12.345, priced_turns: 1, priceable_turns: 3 })) !== "$12.35*") fail("partially priced cost carries *");
+  else if (tv.costCell(tvRoll({ cost_usd: 0, priced_turns: 2, priceable_turns: 2 })) !== "$0.00") fail("a priced zero is $0.00, not a dash");
+  else console.log("  ok  cost cells: dash for unpriced, * for partial, $0.00 only when priced");
+  const tvDev = (o) => ({ developer_id: "ana", display_name: null, liveness: "active", current: null, windows: { today: tvRoll({}), "7d": tvRoll({}), "30d": tvRoll({}) }, ...o });
+  const tvWithBeat = tvDev({ current: { project_path: "/Users/x/tvDev/repo/proj/", phase: "build", feature_id: "174-team", checkpoint_count: 12, at: "2026-09-08T10:00:00Z" } });
+  if (tv.currentWork(tvWithBeat) !== "proj · build · 174-team") fail(`current work: ${tv.currentWork(tvWithBeat)}`);
+  else if (tv.currentWork(tvDev({})) !== "—") fail("no heartbeat → dash");
+  else if (tv.developerName(tvDev({ display_name: "Ana" })) !== "Ana (ana)" || tv.developerName(tvDev({})) !== "ana") fail("developer name");
+  else if (tv.LIVENESS_LABEL.unknown !== "no heartbeat yet" || /online/.test(Object.values(tv.LIVENESS_LABEL).join(" "))) fail("liveness labels are last-seen words, never online");
+  else if (!/heartbeat in the last 5 minutes/.test(tv.activeLegend(300)) || !/not a liveness verdict/.test(tv.activeLegend(300))) fail(`legend: ${tv.activeLegend(300)}`);
+  else console.log("  ok  current work from the heartbeat; last-seen wording; the legend names the window");
+  const tvBase = { now: "", active_window_seconds: 300, developers: [], projects: [], totals: { developers: 0, active_now: 0, windows: { today: tvRoll({}), "7d": tvRoll({}), "30d": tvRoll({}) }, unstamped_turns: 0 } };
+  const tvShared = tv.storeNote({ ...tvBase, store: { dialect: "postgres", shared: true } });
+  const tvLocal = tv.storeNote({ ...tvBase, store: { dialect: "sqlite", shared: false } });
+  if (!/Shared team store \(postgres\)/.test(tvShared)) fail(`shared note: ${tvShared}`);
+  else if (!/Local store \(SQLite\)/.test(tvLocal) || !/one developer/.test(tvLocal) || !/A team store/.test(tvLocal)) fail(`local note: ${tvLocal}`);
+  else if (tv.anyPartial({ ...tvBase, store: { dialect: "sqlite", shared: false } })) fail("no partial pricing → no asterisk note");
+  else if (!tv.anyPartial({ ...tvBase, store: { dialect: "sqlite", shared: false }, developers: [tvDev({ windows: { today: tvRoll({}), "7d": tvRoll({}), "30d": tvRoll({ cost_usd: 1, priced_turns: 1, priceable_turns: 5 }) } })] })) fail("partial pricing → asterisk note");
+  else console.log("  ok  the page says whether the store is shared or one developer's, and explains * only when needed");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

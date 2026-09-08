@@ -104,6 +104,23 @@ a central interface; runaway recursive loops and budget breaches are flagged;
    promote Postgres to the shared team backend (the `db.py` dual-dialect seam
    makes this cheaper).
 
+### Decided (owner, 2026-09-08)
+
+1. **Topology: shared Postgres team store.** Every developer's ingest and
+   watch write to one team Postgres (the shipped compose file); live
+   status is the heartbeat table in that store. No daemon beyond
+   Postgres, no non-loopback session-analytics API.
+2. **Identity/auth: trusted LAN, database credentials only.** `developer_id`
+   stays the derived identity (attribution, not auth); access is whoever
+   holds the team DSN; no app-level login.
+3. Progress liveness: poll (the `watch` poller already sweeps heartbeats);
+   no new emit path. 4. Pi cost stays pass-through. 5. Backend promotion:
+   Postgres is the shared backend; SQLite stays the single-developer default.
+
+Built as `specs/pi-team-plane-b2c/` (B2 + C + E: `/api/team/status`, the
+Team tab, `session-analytics team status`). Slice D (budgets, runaway
+detection, alerting) follows.
+
 ## Rabbit holes / no-gos (initial)
 
 - **No daemon-per-machine / always-on service** unless the topology decision
@@ -114,11 +131,11 @@ a central interface; runaway recursive loops and budget breaches are flagged;
 - **Don't merge the team ledger and the analytics DB** — they're different
   concerns (coordination state vs historical analytics); link, don't fuse.
 
-## Status (2026-08-07)
+## Status (2026-09-08)
 
-Slice A: MERGED (#185 / PR #184). Slice B1: built under #187 / PR #188
-(`specs/pi-team-plane-b1/`) — derived developer identity + `local_heartbeat`
-last-seen state, local-first. B2/C/D/E remain blocked on decisions 1–2.
+Slice A: MERGED (#185 / PR #184). Slice B1: MERGED (#187 / PR #188,
+`specs/pi-team-plane-b1/`). Decisions 1–2 made 2026-09-08 (above);
+B2 + C + E built under `specs/pi-team-plane-b2c/`; D remains.
 
 ## Next step
 
