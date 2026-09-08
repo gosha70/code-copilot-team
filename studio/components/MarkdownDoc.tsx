@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -121,17 +121,22 @@ export default function MarkdownDoc({
         className="max-w-full rounded border border-slate-200 my-3"
       />
     ),
-    pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-    code: ({ className, children }) => {
-      const block = /language-/.test(className || "");
-      return block ? (
-        <code className={className}>{children}</code>
-      ) : (
-        <code className="bg-slate-100 rounded px-1 py-0.5 text-[0.9em]">
-          {children}
-        </code>
-      );
+    // A fenced block is rendered HERE, from the child's own props, so
+    // the inline `code` component below never sees it. It used to be
+    // told apart by a language- class, and a fence with no language
+    // (most of them) got the inline light background inside the dark
+    // block — white bars with invisible text.
+    pre: ({ children }) => {
+      const child = React.Children.only(children) as React.ReactElement<{
+        className?: string;
+        children?: React.ReactNode;
+      }>;
+      const props = React.isValidElement(child) ? child.props : { children };
+      return <CodeBlock className={props.className}>{props.children}</CodeBlock>;
     },
+    code: ({ children }) => (
+      <code className="bg-slate-100 rounded px-1 py-0.5 text-[0.9em]">{children}</code>
+    ),
     table: ({ children }) => (
       <div className="overflow-x-auto my-3">
         <table className="w-full text-sm border-collapse">{children}</table>
@@ -200,13 +205,19 @@ export default function MarkdownDoc({
   );
 }
 
-function CodeBlock({ children }: { children?: React.ReactNode }) {
+function CodeBlock({
+  children,
+  className,
+}: {
+  children?: React.ReactNode;
+  className?: string;
+}) {
   const [copied, setCopied] = useState(false);
   const text = plainText(children);
   return (
     <div className="relative group my-3">
       <pre className="bg-slate-900 text-slate-100 rounded p-3 text-xs overflow-x-auto">
-        {children}
+        <code className={className}>{children}</code>
       </pre>
       <button
         onClick={() => {

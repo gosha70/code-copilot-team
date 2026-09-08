@@ -77,6 +77,8 @@ try {
         join(STUDIO, "components/JudgeQuality.tsx"),
         join(STUDIO, "components/LoadSelection.tsx"),
         join(STUDIO, "components/JudgeProgress.tsx"),
+        join(STUDIO, "components/MarkdownDoc.tsx"),
+        join(STUDIO, "lib/urls.ts"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -845,6 +847,39 @@ try {
   else if (!/packaged default/.test(jp.judgeChoiceLabel({ ...conf, source: "packaged default" }))) fail("packaged default not named");
   else if (!/Settings/.test(jp.judgeChoiceLabel(undefined))) fail("no-config label does not point at Settings");
   else console.log("  ok  the default judge choice names what Settings says and where it is set");
+
+  // ── Learn: fenced code blocks ────────────────────────────────────────
+  console.log("\nlearn code blocks:");
+  try {
+    const md = await import(pathToFileURL(join(out, "components/MarkdownDoc.js")));
+    const index = { sections: [], finding_links: {} };
+    const docOf = (body) => ({
+      slug: "x", path: "docs/x.md", section: "start", kind: "doc", title: "X", description: "",
+      page_type: "doc", generated: false, frontmatter: {}, body,
+    });
+    const page = render(md.default, {
+      doc: docOf("Prose with `inline` code.\n\n```\nplain fence\nline two\n```\n\n```bash\necho tagged\n```\n"),
+      index,
+    });
+    const pres = page.match(/<pre[^>]*>[\s\S]*?<\/pre>/g) || [];
+    if (pres.length !== 2) fail(`expected 2 code blocks, got ${pres.length}`);
+    else if (pres.some((p) => /bg-slate-100/.test(p))) fail("a fenced block carries the inline-code light background (white bars)");
+    else if (!/plain fence/.test(pres[0]) || !/echo tagged/.test(pres[1])) fail("fenced block text missing");
+    else if (!/<code class="bg-slate-100[^"]*">inline<\/code>/.test(page)) fail("inline code lost its style");
+    else console.log("  ok  fences with and without a language render as dark blocks; inline code keeps its style");
+  } catch (e) {
+    fail(`MarkdownDoc could not be rendered: ${e && e.message ? e.message : e}`);
+  }
+
+  // ── which judge URLs count as local ───────────────────────────────
+  console.log("\nlocal judge urls:");
+  const { isPrivateUrl } = await import(pathToFileURL(join(out, "lib/urls.js")));
+  const local = ["http://localhost:1234/v1", "http://127.0.0.1:8001", "http://192.168.1.23:8001/v1", "http://spark-c2e5.local:8001", "http://10.0.0.5:8000", "http://172.20.1.1:8000"];
+  const remote = ["https://api.openai.com/v1", "http://172.32.0.1:8000", "http://8.8.8.8", "not a url"];
+  const wrongLocal = local.filter((u) => !isPrivateUrl(u));
+  const wrongRemote = remote.filter((u) => isPrivateUrl(u));
+  if (wrongLocal.length || wrongRemote.length) fail(`isPrivateUrl wrong for ${JSON.stringify([...wrongLocal, ...wrongRemote])}`);
+  else console.log("  ok  LAN/.local/loopback are local; hosted and public addresses are not");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {
