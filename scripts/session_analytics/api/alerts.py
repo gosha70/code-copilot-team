@@ -40,24 +40,33 @@ def _money(v: Optional[float]) -> str:
 
 def _budget_alert(scope: str, subject: str, window: str, rollup: dict[str, Any], budget: float) -> Optional[dict[str, Any]]:
     spent = rollup.get("cost_usd")
-    if spent is None or (budget <= 0 and spent <= 0):
+    if spent is None:
         # Nothing priced in the window: the bound cannot be judged crossed.
         return None
-    share = spent / budget if budget > 0 else float("inf")
-    if share < C.BUDGET_WARNING_SHARE:
-        return None
-    level = C.ALERT_BREACH if share >= 1 else C.ALERT_WARNING
-    unpriced = max(0, int(rollup.get("priceable_turns", 0)) - int(rollup.get("priced_turns", 0)))
     label = {"team": "the team", "developer": subject, "project": subject.rstrip("/").split("/")[-1] or subject}[scope]
     when = {"today": "today", "30d": "in the last 30 days"}[window]
-    verb = "has passed" if level == C.ALERT_BREACH else "is at"
-    message = f"{label} {verb} {int(round(share * 100))}% of the {_money(budget)} budget {when}: {_money(spent)} spent"
+    unpriced = max(0, int(rollup.get("priceable_turns", 0)) - int(rollup.get("priced_turns", 0)))
+    if budget <= 0:
+        # A zero budget means "no spending": any priced spend is a
+        # breach, and there is no percentage to state.
+        if spent <= 0:
+            return None
+        level, share = C.ALERT_BREACH, None
+        message = f"{label} has spent {_money(spent)} {when} against a {_money(budget)} budget"
+    else:
+        share = spent / budget
+        if share < C.BUDGET_WARNING_SHARE:
+            return None
+        level = C.ALERT_BREACH if share >= 1 else C.ALERT_WARNING
+        verb = "has passed" if level == C.ALERT_BREACH else "is at"
+        message = f"{label} {verb} {int(round(share * 100))}% of the {_money(budget)} budget {when}: {_money(spent)} spent"
     if unpriced:
         message += f"; {unpriced:,} priceable turns had no price, so the true spend is higher"
     return {
         "kind": KIND_BUDGET, "level": level, "scope": scope, "subject": subject, "window": window,
         "message": message + ".",
-        "figures": {"spent_usd": spent, "budget_usd": budget, "share": round(share, 3), "unpriced_turns": unpriced},
+        "figures": {"spent_usd": spent, "budget_usd": budget, "share": None if share is None else round(share, 3),
+                    "unpriced_turns": unpriced},
     }
 
 

@@ -47,6 +47,27 @@ class TestBudgetAlerts(unittest.TestCase):
         s = _status(totals={"windows": {"today": _rollup(None, 0, 40), "7d": _rollup(None, 0, 40), "30d": _rollup(None, 0, 40)}})
         self.assertEqual(A.budget_alerts(s, b), [])   # 40 unpriced turns: no verdict, not a breach
 
+    def test_zero_budget_breaches_at_any_priced_spend_without_a_percentage(self) -> None:
+        # 0 is "no spending", accepted by config (non-negative): any priced
+        # cent is a breach, and the message has no percentage to compute
+        # (the reviewer reproduced an overflow here at 612d03a).
+        b = BudgetsConfig(team_daily_usd=0.0, team_monthly_usd=None, developer_daily_usd=None, project_daily_usd=None)
+        s = _status(totals={"windows": {"today": _rollup(0.5, priced=1, priceable=3), "7d": _rollup(0.5), "30d": _rollup(0.5)}})
+        got = A.budget_alerts(s, b)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["level"], C.ALERT_BREACH)
+        self.assertEqual(got[0]["message"], "the team has spent $0.50 today against a $0.00 budget; 2 priceable turns had no price, so the true spend is higher.")
+        self.assertIsNone(got[0]["figures"]["share"])
+        self.assertNotIn("%", got[0]["message"])
+        # nothing spent (a priced zero) against a zero budget: no alert
+        s = _status(totals={"windows": {"today": _rollup(0.0), "7d": _rollup(0.0), "30d": _rollup(0.0)}})
+        self.assertEqual(A.budget_alerts(s, b), [])
+        # and the whole surface survives it, which is what crashed before
+        A.render_alerts({"alerts": got, "breaches": 1, "warnings": 0, "budgets": {"team_daily_usd": 0.0},
+                         "runaway": {"recent_minutes": 60, "max_turns_recent": 300, "recent_turns": 50,
+                                     "max_error_share": 0.5, "min_turns_for_error_share": 20, "max_cost_recent_usd": 20.0},
+                         "derived": True})
+
     def test_unpriced_turns_are_named_and_scopes_are_separate(self) -> None:
         b = BudgetsConfig(team_daily_usd=None, team_monthly_usd=1000.0, developer_daily_usd=10.0, project_daily_usd=20.0)
         s = _status(
