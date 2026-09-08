@@ -753,6 +753,17 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(m["models"], ["llama3.2:latest", "nomic-embed-text:latest", "qwen3.6:27b"])
         self.assertEqual(m["not_embedding"], [])
 
+    def test_team_status_route(self) -> None:
+        r = self.client.get("/api/team/status")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["store"], {"dialect": "sqlite", "shared": False})
+        self.assertEqual(body["active_window_seconds"], 300)
+        self.assertEqual(body["totals"]["developers"], len(body["developers"]))
+        self.assertTrue(all(d["liveness"] in ("active", "idle", "unknown") for d in body["developers"]))
+        self.assertEqual(self.client.get("/api/team/status", params={"window": 60}).json()["active_window_seconds"], 60)
+        self.assertEqual(self.client.get("/api/team/status", params={"window": 0}).status_code, 400)
+
     def test_ask_streams_steps_and_the_answer_from_the_settings_judge(self) -> None:
         # Ask: the judge in Settings (and only that one) answers a question
         # by calling read-only tools; the page sees every step as NDJSON.

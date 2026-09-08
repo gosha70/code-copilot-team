@@ -1148,6 +1148,53 @@ export interface PipelineStatus {
   store_reachable: boolean;
 }
 
+// Team (#174): the shared store's status — who is active (a heartbeat
+// within the window), what they are on, cost per developer / project /
+// time window. Read-only.
+export interface TeamRollup {
+  sessions: number;
+  turns: number;
+  /** null = no priced turn in the window (never 0). */
+  cost_usd: number | null;
+  priced_turns: number;
+  priceable_turns: number;
+}
+
+export type TeamWindow = "today" | "7d" | "30d";
+
+export interface TeamDeveloper {
+  developer_id: string;
+  display_name: string | null;
+  liveness: "active" | "idle" | "unknown";
+  current: {
+    project_path: string | null;
+    session_id: string | null;
+    phase: string | null;
+    feature_id: string | null;
+    checkpoint_count: number;
+    at: string;
+  } | null;
+  windows: Record<TeamWindow, TeamRollup>;
+}
+
+export interface TeamStatus {
+  store: { dialect: string; shared: boolean };
+  now: string;
+  active_window_seconds: number;
+  developers: TeamDeveloper[];
+  projects: {
+    project_path: string;
+    developers: string[];
+    windows: Record<TeamWindow, TeamRollup>;
+  }[];
+  totals: {
+    developers: number;
+    active_now: number;
+    windows: Record<TeamWindow, TeamRollup>;
+    unstamped_turns: number;
+  };
+}
+
 // Ask: a question in words, answered by the judge in Settings through
 // read-only lookups. POST /api/ask streams one NDJSON event per line.
 export interface AskInfo {
@@ -1291,6 +1338,8 @@ export interface JudgeModels {
 export const api = {
   pipelineStatus: () => get<PipelineStatus>("/api/pipeline/status"),
   judgeModels: () => get<JudgeModels>("/api/judge/models"),
+  teamStatus: (window?: number) =>
+    get<TeamStatus>(`/api/team/status${window ? `?window=${window}` : ""}`),
   askInfo: () => get<AskInfo>("/api/ask"),
   ask: (
     question: string,

@@ -1103,6 +1103,24 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         finally:
             conn.close()
 
+    # ── Team (#174): the shared store's status ──────────────────────────
+    @app.get("/api/team/status")
+    def team_status(window: Optional[int] = None) -> dict[str, Any]:
+        """Who is active (a heartbeat within the window), what they are
+        on, and cost per developer / project / time window. Read-only;
+        the store's dialect says whether it is shared."""
+        from . import team as team_mod
+
+        cfg = load_config()
+        seconds = cfg.team.active_window_seconds if window is None else int(window)
+        if seconds <= 0:
+            raise HTTPException(status_code=400, detail="window must be a positive number of seconds")
+        conn = db()
+        try:
+            return team_mod.team_status(conn, noise=cfg.noise, active_window_seconds=seconds)
+        finally:
+            conn.close()
+
     # ── Ask: a question in words, answered from the store ───────────────
     def _ask_context(conn: Database):
         from ..ask.tools import AskContext

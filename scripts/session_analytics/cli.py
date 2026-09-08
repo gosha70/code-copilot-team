@@ -199,6 +199,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p_emb.add_argument("--limit", type=int, default=None,
                        help="Max sessions to embed this run.")
 
+    p_team = sub.add_parser(
+        "team",
+        help="The team store's status (#174): who is active, what they are "
+             "on, cost per developer and project — the Studio's Team tab, "
+             "in the terminal.",
+    )
+    p_team.add_argument("action", nargs="?", default="status", choices=["status"],
+                        help="status (default).")
+    p_team.add_argument("--db", "--dsn", dest="dsn", default=None,
+                        help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
+    p_team.add_argument("--window", type=int, default=None,
+                        help="Seconds a heartbeat counts as active (else config team.active_window_seconds).")
+    p_team.add_argument("--json", action="store_true", help="Print the payload as JSON.")
+
     p_sim = sub.add_parser(
         "similar",
         help="Populate SIMILAR_TO graph edges from stored session "
@@ -1022,6 +1036,32 @@ def _cmd_embed(args: argparse.Namespace) -> int:
     return C.EXIT_RUNTIME if stats.failed > 0 else C.EXIT_OK
 
 
+def _cmd_team(args: argparse.Namespace) -> int:
+    from .api import team as team_mod
+    from .relational.db import Database, apply_ddl
+
+    cfg = load_config(dsn=args.dsn)
+    if not cfg.dsn:
+        print("error: no database configured (see --db or run setup).", file=sys.stderr)
+        return C.EXIT_USAGE
+    window = cfg.team.active_window_seconds if args.window is None else args.window
+    if window <= 0:
+        print("error: --window must be a positive number of seconds.", file=sys.stderr)
+        return C.EXIT_USAGE
+    db = Database.connect(cfg.dsn)
+    try:
+        apply_ddl(db)
+        status = team_mod.team_status(db, noise=cfg.noise, active_window_seconds=window)
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps(status, indent=2))
+        return C.EXIT_OK
+    for line in team_mod.render_status(status):
+        print(line)
+    return C.EXIT_OK
+
+
 def _cmd_similar(args: argparse.Namespace) -> int:
     from .embedding.similar_runner import (
         GraphNotReadyError, KuzuEdgeStore, run_similar)
@@ -1257,6 +1297,7 @@ _HANDLERS = {
     "graph": _cmd_graph,
     "analyze": _cmd_analyze,
     "labels": _cmd_labels,
+    "team": _cmd_team,
     "embed": _cmd_embed,
     "similar": _cmd_similar,
     "clusters": _cmd_clusters,

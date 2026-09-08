@@ -132,5 +132,8 @@
   "sources": {
     "aider": "~",
     "claude-code": "~/.claude/projects"
+  },
+  "team": {
+    "active_window_seconds": 300
   }
 }

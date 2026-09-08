@@ -32,6 +32,19 @@ class TestCli(RegistryResetTestCase):
         # No DSN configured in the test env → usage error.
         self.assertEqual(code, C.EXIT_USAGE)
 
+    def test_team_status_prints_the_table_and_json(self) -> None:
+        dsn = self.sqlite_dsn()
+        code, out = _run(["team", "status", "--db", dsn])
+        self.assertEqual(code, C.EXIT_OK)
+        self.assertIn("Team status — local store (SQLite)", out)
+        self.assertIn("0 of 0 active", out)
+        code, out = _run(["team", "--db", dsn, "--json", "--window", "60"])
+        self.assertEqual(code, C.EXIT_OK)
+        body = json.loads(out)
+        self.assertEqual((body["active_window_seconds"], body["developers"]), (60, []))
+        code, _ = _run(["team", "status", "--db", dsn, "--window", "0"])
+        self.assertEqual(code, C.EXIT_USAGE)
+
     def test_ingest_then_doctor(self) -> None:
         dsn = self.sqlite_dsn()
         code, out = _run(

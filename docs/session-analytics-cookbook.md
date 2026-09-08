@@ -20,6 +20,7 @@ design decision is `scripts/session_analytics/README.md`; the Studio's
 | **Sessions** | Which sessions are real work (probe runs and two-turn tests are hidden by default; one toggle shows them). |
 | **Session page** | What was said, turn by turn, with the agent's response time — and three analyses a judge writes over the whole transcript: **Agent Tuning** (what to change in your CLAUDE.md, permissions, hooks, skills, with the diff), **Prompt Coaching** (which of your prompts were vague and what to send instead), **Efficiency** (where the turns went, and the script, hook, skill or rule that would remove each detour). |
 | **Ask** | A question about your sessions in words, answered by the judge LLM through read-only lookups (sessions, turn text, analyses, patterns, the graph), each lookup shown so the answer can be checked. |
+| **Team** | Who on the team is active right now (a heartbeat in the last five minutes), what they are on, and what sessions cost per developer, per project and over today / 7 days / 30 days. Reads the shared team store (§8.4); on a local SQLite store it shows one developer. |
 | **Graph** | One session or project and everything it is connected to, every relationship named; a catalogue of questions answered as tables, charts or drawn on the canvas. |
 | **Analysis** | The pipeline as steps — load sessions, build the graph, run the judge, compute KPIs — with a funnel of counts and a **Judge quality** card. |
 | **Benchmark** | What this repository's benchmark harness found: attempts by result with the cost and duration of the sessions they produced, and the predicted pass rate per project. Empty until you run the harness and link its runs (Settings → Benchmarks, then **Link benchmark runs**). |
@@ -86,6 +87,7 @@ Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.j
 | `CCT_SA_OLLAMA_URL` | Ollama's address. | `http://localhost:11434` |
 | `CCT_SA_JUDGE_BASE_URL`, `CCT_SA_JUDGE_API_KEY` | For the `openai` backend only. | |
 | `CCT_SA_JUDGE_WORKERS` | Parallel judge calls. | `2` |
+| `CCT_SA_TEAM_ACTIVE_WINDOW` | Seconds a heartbeat counts as active on the Team tab. | `300` |
 | `CCT_SA_EMBED_BACKEND`, `CCT_SA_EMBED_MODEL` | Embeddings for session similarity (Ollama; `nomic-embed-text` works well). | `ollama`, none |
 | `CCT_SA_NOISE_MIN_TURNS`, `CCT_SA_NOISE_MIN_DURATION_SECONDS`, `CCT_SA_NOISE_PATH_PATTERNS` | What the Studio hides as noise (see §5.2). | `3`, `60`, `/cct-probe,/private/var/folders/,/tmp/` |
 | `CCT_DEVELOPER_ID` | Your id on multi-developer stores. | git `user.email` local part, else `local` |
@@ -492,6 +494,37 @@ name a session you have not loaded, keep their outcomes but link
 nothing — the page says which of those the last scan found. With the
 folder unset the step is skipped by Run all, and the Benchmark page
 says what to set.
+
+### 8.4 A team store
+
+Every page above reads one store, and that store can be shared. The
+plane for a team is one Postgres database that every developer's
+ingest writes to — no daemon beyond Postgres, no login: whoever holds
+the database credentials can read and write, so put it behind your
+LAN or VPN and hand out the DSN accordingly (identity is the derived
+`developer_id`, an attribution, not authentication).
+
+1. Start Postgres once, on a machine the team can reach:
+   `docker compose -f scripts/session_analytics/docker-compose.yml up -d`
+   (or any Postgres 16). Its DSN is the team DSN.
+2. Every developer sets `CCT_SA_DB` to that DSN under Settings →
+   Database (or in `.env`), presses **Test database**, and keeps
+   `./scripts/session-analytics watch` running: sessions and heartbeats
+   land in the shared store at the watch interval.
+3. Open **Team** in anyone's Studio. It says "Shared team store
+   (postgres)", lists every developer with a green dot for a heartbeat
+   in the last five minutes, their current project / phase / feature
+   from the newest heartbeat, and cost and sessions for today, 7 days
+   and 30 days; the Projects table splits the same by repository. In
+   a terminal, `./scripts/session-analytics team status` prints the
+   developers table (`--json` for the payload).
+
+"Active" is last-seen, never a liveness verdict: a heartbeat older
+than the window (`team.active_window_seconds`, default 300, or
+`CCT_SA_TEAM_ACTIVE_WINDOW`) reads as idle, and a developer who has
+never sent one reads as "no heartbeat yet". Costs sum priced turns
+only; a `*` marks a window where some priceable turns had no price,
+and an em dash means nothing in the window was priced.
 
 ---
 
