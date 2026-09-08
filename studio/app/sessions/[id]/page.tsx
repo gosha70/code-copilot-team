@@ -23,6 +23,7 @@ import {
 } from "@/components/ui";
 import SessionAnalysis, { PanelState } from "@/components/SessionAnalysis";
 import SimilarPanel from "@/components/SimilarPanel";
+import ResponseTimeCard from "@/components/ResponseTime";
 import { classifySimilar, type SimilarOutcome } from "@/lib/similarStates";
 
 // One session, read the way a person reads it: what was said (Timeline,
@@ -172,42 +173,7 @@ function Timeline({ data }: { data: SessionDetail }) {
     <div className="space-y-3">
       {data.latency && (
         <Card title="Response time (assistant turns)">
-          <div className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
-            <span>
-              median{" "}
-              <span className="font-medium">
-                {formatDuration(data.latency.p50)}
-              </span>
-            </span>
-            <span>
-              p90{" "}
-              <span className="font-medium">
-                {formatDuration(data.latency.p90)}
-              </span>
-            </span>
-            <span>
-              slowest{" "}
-              <span className="font-medium">
-                {formatDuration(data.latency.max)}
-              </span>
-            </span>
-            <span className="text-slate-500">
-              {data.latency.measured_turns.toLocaleString()} turns measured
-            </span>
-            <span className="text-slate-500">
-              slowest:{" "}
-              {data.latency.slowest.map((s, i) => (
-                <a
-                  key={s.sequence_num}
-                  href={`#turn-${s.sequence_num}`}
-                  className="font-mono text-blue-700 hover:underline"
-                >
-                  #{s.sequence_num} {formatDuration(s.seconds)}
-                  {i < data.latency!.slowest.length - 1 ? ", " : ""}
-                </a>
-              ))}
-            </span>
-          </div>
+          <ResponseTimeCard latency={data.latency} turns={data.turns} />
         </Card>
       )}
       {!anyArchived && (

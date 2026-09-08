@@ -79,6 +79,7 @@ try {
         join(STUDIO, "components/JudgeProgress.tsx"),
         join(STUDIO, "components/MarkdownDoc.tsx"),
         join(STUDIO, "lib/urls.ts"),
+        join(STUDIO, "components/ResponseTime.tsx"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -892,6 +893,24 @@ try {
   const wrongRemote = remote.filter((u) => isPrivateUrl(u));
   if (wrongLocal.length || wrongRemote.length) fail(`isPrivateUrl wrong for ${JSON.stringify([...wrongLocal, ...wrongRemote])}`);
   else console.log("  ok  LAN/.local/loopback are local; hosted and public addresses are not");
+
+  // ── response time card ─────────────────────────────────────────────
+  console.log("\nresponse time:");
+  const rt = await import(pathToFileURL(join(out, "components/ResponseTime.js")));
+  const turn = (seq, role, lat, text = "") => ({ sequence_num: seq, role, latency_seconds: lat, content_preview: text, content: null, archived: false, timestamp: null, has_tool_use: false, slash_command: null, sentiment: null });
+  const turns = [turn(1, "user", null, "q"), turn(2, "assistant", 0.5), turn(3, "assistant", 2), turn(4, "assistant", 45, "running the test suite"), turn(5, "assistant", 964, "reading the whole tree"), turn(6, "user", 3)];
+  const h = rt.latencyBuckets(turns);
+  if (h.measured !== 4 || h.slow !== 2) fail(`measured/slow wrong: ${JSON.stringify(h)}`);
+  else if (h.buckets.map((b) => b.count).join(",") !== "1,1,0,0,1,0,1") fail(`bands wrong: ${h.buckets.map((b) => b.count)}`);
+  else console.log("  ok  histogram counts assistant turns only, into the right bands");
+  if (!/2 of 4 assistant turns \(50%\) took 30 s or longer/.test(rt.latencyVerdict(4, 2))) fail("verdict text");
+  else if (!/under 30 s/.test(rt.latencyVerdict(4, 0)) || !/nothing is measured/.test(rt.latencyVerdict(0, 0))) fail("verdict edge cases");
+  else console.log("  ok  the verdict names the share over 30 s, or says all fast / nothing measured");
+  const card = render(rt.default, { latency: { measured_turns: 4, p50: 2, p90: 45, max: 964, slowest: [{ sequence_num: 5, seconds: 964 }, { sequence_num: 4, seconds: 45 }] }, turns });
+  if (!/Median response/.test(card) || !/16m 4s/.test(card) || !/50%/.test(card)) fail("KPI tiles missing");
+  else if (!/href="#turn-5"/.test(card) || !/reading the whole tree/.test(card)) fail("slowest table lacks the link or the turn text");
+  else if (!/bg-rose-500/.test(card) || !/width:100%/.test(card)) fail("histogram bars missing");
+  else console.log("  ok  card: tiles, bars, slowest-turn table with links and text");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {
