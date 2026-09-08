@@ -544,6 +544,43 @@ class TestOutcomesIntegration(RegistryResetTestCase):
             self.db.query_one(f"SELECT COUNT(*) FROM {C.TBL_BENCHMARK_RESULT}")[0], 2
         )
 
+    def test_run_is_the_one_scan_the_cli_and_the_pipeline_step_share(self) -> None:
+        from session_analytics import correlate as cor
+
+        root = Path(tempfile.mkdtemp(prefix="cct-sa-run-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        rr = lambda sid: {"backend_id": "claude-code", "backend": {"metadata": {"session_id": sid}}}
+        self._make_attempt(root, "run-a/t/a-01", rr(self.session_id), _score_payload())
+        self._make_attempt(root, "run-b/t/a-01", rr("ghost"), _score_payload(result="fail"))
+        stats = cor.run(self.db, root)
+        self.assertEqual((stats.scanned, stats.linked, stats.unmatched, stats.scores_ingested), (2, 1, 1, 2))
+        other = Database.connect(self.dsn)
+        try:
+            self.assertEqual(other.query_one(f"SELECT COUNT(*) FROM {C.TBL_BENCHMARK_RESULT}")[0], 2)
+            self.assertEqual(
+                other.query_one("SELECT COUNT(*) FROM copilot_session WHERE benchmark_run_dir IS NOT NULL")[0], 1
+            )
+        finally:
+            other.close()
+        with self.assertRaises(cor.RunsRootError):
+            cor.run(self.db, root / "run-a" / "t" / "a-01" / C.SCORE_FILENAME)
+
+    def test_run_reports_live_counters_while_scanning(self) -> None:
+        from unittest import mock
+
+        from session_analytics import correlate as cor
+
+        root = Path(tempfile.mkdtemp(prefix="cct-sa-run-progress-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        rr = {"backend_id": "claude-code", "backend": {"metadata": {"session_id": None}}}
+        for i in range(7):
+            self._make_attempt(root, f"run-{i}/t/a-01", rr, _score_payload())
+        seen: list[int] = []
+        with mock.patch.object(cor, "PROGRESS_EVERY", 3):
+            cor.run(self.db, root, progress=lambda st: seen.append(st.scanned))
+        # Ticks before records 3 and 6, then the final counters.
+        self.assertEqual(seen, [3, 6, 7])
+
     def test_cli_prints_partial_summary_on_failure(self) -> None:
         from unittest import mock
 

@@ -46,6 +46,16 @@ const GROUPS: { title: string; blurb: string; keys: string[] }[] = [
     keys: ["CCT_SA_EMBED_BACKEND", "CCT_SA_EMBED_MODEL"],
   },
   {
+    title: "Benchmarks",
+    blurb:
+      "Where this repository's benchmark harness wrote its runs. With it " +
+      "set, Analysis → Link benchmark runs (and Run all) stores every " +
+      "attempt's pass/fail and links Claude Code runs whose run record " +
+      "names a loaded session — what the Benchmark tab shows. Leave it " +
+      "blank if you have not run the harness; the step is then skipped.",
+    keys: ["CCT_SA_BENCHMARK_RUNS_ROOT"],
+  },
+  {
     title: "Identity",
     blurb: "Attributes sessions to a developer. Defaults to your git email.",
     keys: ["CCT_DEVELOPER_ID"],
@@ -174,6 +184,15 @@ const META: Record<
       "model, so this must be set before Embed sessions can run. The list " +
       "is every model the saved Ollama URL serves; pick the embedding one.",
     placeholder: "nomic-embed-text",
+  },
+  CCT_SA_BENCHMARK_RUNS_ROOT: {
+    label: "Benchmark runs folder",
+    browse: "dir",
+    help:
+      "The folder the benchmark harness writes into (each attempt has a " +
+      "run-record.json and a score.json below it). The harness's default " +
+      "is the repository's runs/ folder.",
+    placeholder: "/path/to/code-copilot-team/runs",
   },
   CCT_DEVELOPER_ID: {
     label: "Developer id",

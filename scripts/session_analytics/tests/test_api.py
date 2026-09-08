@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import tempfile
+import time as _time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -633,6 +634,65 @@ class TestApi(RegistryResetTestCase):
         self.assertIn(conf["source"], ("settings", "packaged default"))
         self.assertTrue(conf["spec"])
 
+    def test_benchmark_payload_names_the_runs_root_and_the_link_step_runs_it(self) -> None:
+        # The Benchmark page: with no runs root the page says so; with one,
+        # "Link benchmark runs" is the correlate step, run from the page.
+        from session_analytics import config as cfgmod
+        from session_analytics import pipeline_jobs as pj
+
+        pj._jobs.clear()
+        self.addCleanup(pj._jobs.clear)
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_BENCHMARK_RUNS_ROOT: ""}):
+            body = self.client.get("/api/dashboard/benchmark").json()
+            self.assertEqual(body["runs_root"], {"path": "", "configured": False, "is_dir": False})
+            self.assertEqual(body["link_job"]["state"], "idle")
+            steps = {s["id"]: s for s in self.client.get("/api/pipeline/status").json()["steps"]}
+            self.assertIn("No runs root configured", steps["correlate"]["blurb"])
+            self.assertFalse(steps["correlate"]["done"])
+            self.assertIn(cfgmod.ENV_BENCHMARK_RUNS_ROOT, [f["key"] for f in self.client.get("/api/config").json()["fields"]])
+            # Skipped by configuration: done, not failed, with the reason.
+            self.assertEqual(self.client.post("/api/pipeline/run/correlate", json={}).status_code, 200)
+            for _ in range(100):
+                if pj.job_state(pj.STEP_CORRELATE)["state"] != "running":
+                    break
+                _time.sleep(0.02)
+            job = pj.job_state(pj.STEP_CORRELATE)
+            self.assertEqual((job["state"], job.get("skipped")), ("done", True))
+
+        # A runs root with one record for the fixture session: linked.
+        native = self.client.get("/api/sessions").json()["sessions"][0]["session_id"]
+        root = Path(tempfile.mkdtemp(prefix="cct-sa-runs-"))
+        attempt = root / "run-a" / "task" / "attempt-01"
+        attempt.mkdir(parents=True)
+        (attempt / C.RUN_RECORD_FILENAME).write_text(json.dumps(
+            {"backend_id": "claude-code", "backend": {"metadata": {"session_id": native}}}
+        ))
+        (attempt / C.SCORE_FILENAME).write_text(json.dumps({
+            "schema_version": "1.0", "benchmark_id": "b", "task_id": "t", "backend_id": "claude-code",
+            "run_id": "run-a", "attempt": 1, "result": "pass",
+            "scores": {"tests_passed": True, "lint_passed": True, "typecheck_passed": True},
+            "derived": {"elapsed_seconds": 1.0, "files_changed": 1, "lines_added": 1, "lines_removed": 0},
+        }))
+        pj._jobs.clear()
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_BENCHMARK_RUNS_ROOT: str(root)}):
+            self.assertEqual(self.client.post("/api/pipeline/run/correlate", json={}).status_code, 200)
+            for _ in range(200):
+                if pj.job_state(pj.STEP_CORRELATE)["state"] != "running":
+                    break
+                _time.sleep(0.02)
+            job = pj.job_state(pj.STEP_CORRELATE)
+            self.assertEqual(job["state"], "done", job)
+            self.assertEqual(job["progress"]["linked"], 1)
+            self.assertIn("linked 1 sessions", job["message"])
+            body = self.client.get("/api/dashboard/benchmark").json()
+            self.assertEqual(body["sessions_linked"], 1)
+            self.assertTrue(body["runs_root"]["is_dir"])
+            steps = {s["id"]: s for s in self.client.get("/api/pipeline/status").json()["steps"]}
+            self.assertTrue(steps["correlate"]["done"])
+            self.assertIn(str(root), steps["correlate"]["blurb"])
+
     def test_ask_streams_steps_and_the_answer_from_the_settings_judge(self) -> None:
         # Ask: the judge in Settings (and only that one) answers a question
         # by calling read-only tools; the page sees every step as NDJSON.
@@ -793,7 +853,7 @@ class TestApi(RegistryResetTestCase):
             self.assertFalse(t["ok"])
             self.assertIn("not found", t["error"])
         st = self.client.get("/api/pipeline/status").json()
-        self.assertEqual([s["id"] for s in st["steps"]], ["ingest", "graph", "embed", "similar", "judge", "kpis"])
+        self.assertEqual([s["id"] for s in st["steps"]], ["ingest", "correlate", "graph", "embed", "similar", "judge", "kpis"])
         self.assertIn("embedded", st["counts"])
         self.assertIn("similar_edges", st["counts"])
         # no embedding model → the embed step fails at once with the fix

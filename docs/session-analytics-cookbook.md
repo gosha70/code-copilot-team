@@ -22,7 +22,7 @@ design decision is `scripts/session_analytics/README.md`; the Studio's
 | **Ask** | A question about your sessions in words, answered by the judge LLM through read-only lookups (sessions, turn text, analyses, patterns, the graph), each lookup shown so the answer can be checked. |
 | **Graph** | One session or project and everything it is connected to, every relationship named; a catalogue of questions answered as tables, charts or drawn on the canvas. |
 | **Analysis** | The pipeline as steps — load sessions, build the graph, run the judge, compute KPIs — with a funnel of counts and a **Judge quality** card. |
-| **Benchmark** | Benchmark-linked sessions, predicted pass rates, routing evidence. |
+| **Benchmark** | What this repository's benchmark harness found: attempts by result with the cost and duration of the sessions they produced, and the predicted pass rate per project. Empty until you run the harness and link its runs (Settings → Benchmarks, then **Link benchmark runs**). |
 | **Learn** | The project's own docs, skills, agents and wiki, read in-app; each Agent Tuning finding links to the guide that explains the fix. |
 | **Settings** | The `.env` this tool reads, edited with help text and a path picker. |
 
@@ -475,6 +475,22 @@ about a minute, a small Ollama model in a few. A model that cannot keep
 to the JSON shape ends the exchange with its reply shown, and **Test
 judge LLM** in Settings is the first thing to check.
 
+### 8.3 Benchmark runs
+
+If you run this repository's benchmark harness (`benchmarks/README.md`),
+each attempt leaves a `run-record.json` and a `score.json` under a runs
+folder (the harness's default is `runs/` at the repository root). Set
+that folder under **Settings → Benchmarks**, then press **Link benchmark
+runs** on the Analysis page — or on the Benchmark page, which offers the
+same step. It stores every attempt's result, for every benchmark
+backend, and links Claude Code runs whose run record names a Claude
+Code session that is loaded; a linked session is never hidden as noise,
+however short it was. Older runs whose records carry no session id, or
+name a session you have not loaded, keep their outcomes but link
+nothing — the page says which of those the last scan found. With the
+folder unset the step is skipped by Run all, and the Benchmark page
+says what to set.
+
 ---
 
 ## 9. Everything else
@@ -483,7 +499,7 @@ judge LLM** in Settings is the first thing to check.
 ./scripts/session-analytics search "pricing config" --limit 20   # archived text, ranked
 ./scripts/session-analytics export --table sessions --format csv --out sessions.csv
 ./scripts/session-analytics export --table all --format parquet --out ./export/
-./scripts/session-analytics correlate --runs-root benchmarks/runs  # link benchmark attempts to sessions
+./scripts/session-analytics correlate --runs-root runs             # same as Analysis → Link benchmark runs
 ./scripts/session-analytics mcp                                    # MCP server over the store
 ./scripts/session-analytics list                                   # adapters + judges registered
 ```

@@ -101,8 +101,9 @@ class TestSingleFlight(unittest.TestCase):
         self.assertEqual(pj.job_state(pj.STEP_INGEST)["state"], "idle")
         with self.assertRaises(ValueError):
             pj.start_all(runners, include_judge=False, only=["nope"])
-        # the full run includes embed and similar between graph and kpis
-        self.assertEqual(pj.RUN_ALL_SEQUENCE, ("ingest", "graph", "embed", "similar", "kpis"))
+        # the full run links benchmark runs right after ingest, then
+        # embed and similar between graph and kpis
+        self.assertEqual(pj.RUN_ALL_SEQUENCE, ("ingest", "correlate", "graph", "embed", "similar", "kpis"))
 
     def test_progress_rides_on_the_running_job_and_survives_completion(self) -> None:
         gate = threading.Event()
@@ -121,6 +122,50 @@ class TestSingleFlight(unittest.TestCase):
                 break
             time.sleep(0.02)
         self.assertEqual(pj.job_state(pj.STEP_JUDGE)["progress"], {"labeled": 1, "total": 2})
+
+    def test_a_step_skipped_by_configuration_ends_done_with_the_reason(self) -> None:
+        # "Link benchmark runs" with no runs root: Run all carries on and
+        # the page says why nothing happened — not a failure.
+        def fn() -> str:
+            raise pj.StepSkipped("no benchmark runs root configured")
+
+        pj.start(pj.STEP_CORRELATE, fn)
+        for _ in range(100):
+            if pj.job_state(pj.STEP_CORRELATE)["state"] != "running":
+                break
+            time.sleep(0.02)
+        job = pj.job_state(pj.STEP_CORRELATE)
+        self.assertEqual(job["state"], "done")
+        self.assertTrue(job["skipped"])
+        self.assertIn("no benchmark runs root", job["message"])
+
+    def test_correlate_is_a_step_right_after_ingest(self) -> None:
+        self.assertIn(pj.STEP_CORRELATE, pj.STEPS)
+        seq = list(pj.RUN_ALL_SEQUENCE)
+        self.assertEqual(seq.index(pj.STEP_CORRELATE), seq.index(pj.STEP_INGEST) + 1)
+        self.assertLess(seq.index(pj.STEP_CORRELATE), seq.index(pj.STEP_GRAPH))
+        self.assertIn(pj.STEP_CORRELATE, pj.STEP_TITLES)
+        self.assertIn(pj.STEP_CORRELATE, pj.STEP_BLURBS)
+
+    def test_benchmark_runs_root_states(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        from session_analytics import config as cfgmod
+
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_BENCHMARK_RUNS_ROOT: ""}):
+            self.assertEqual(pj.benchmark_runs_root(), {"path": "", "configured": False, "is_dir": False})
+        d = tempfile.mkdtemp(prefix="cct-sa-runs-")
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_BENCHMARK_RUNS_ROOT: d}):
+            self.assertEqual(pj.benchmark_runs_root(), {"path": d, "configured": True, "is_dir": True})
+        f = Path(d) / "a-file"
+        f.write_text("x")
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_BENCHMARK_RUNS_ROOT: str(f)}):
+            self.assertEqual(pj.benchmark_runs_root()["is_dir"], False)
 
 
 if __name__ == "__main__":

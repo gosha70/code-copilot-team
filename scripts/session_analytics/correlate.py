@@ -366,3 +366,75 @@ def correlate_links(
         else:
             stats.unmatched += 1
     return stats
+
+
+# ── the whole scan against a store (CLI and the pipeline step) ──────────
+
+
+class RunsRootError(ValueError):
+    """The runs root is not an existing directory."""
+
+
+#: How often ``run`` reports its counters while scanning (records).
+PROGRESS_EVERY = 25
+
+
+def run(
+    db: Any, runs_root: Path, *, stats: Optional[CorrelationStats] = None,
+    ingested_at: Optional[str] = None,
+    progress: Optional[Callable[[CorrelationStats], None]] = None,
+) -> CorrelationStats:
+    """Scan ``runs_root`` and link its run records to the store's
+    claude-code sessions, storing every outcome. ONE commit at the end,
+    so a failure persists nothing (the counters gathered so far stay on
+    ``stats`` for the caller to report). The CLI ``correlate`` command
+    and the pipeline's "Link benchmark runs" step both call this.
+
+    ``progress`` is called with the live counters every PROGRESS_EVERY
+    records and once at the end, so a long scan is seen moving.
+    """
+    from .relational.db import now_iso
+    from .relational.store import link_benchmark_run, upsert_benchmark_result
+
+    # An existing DIRECTORY — a plain file would rglob to nothing and
+    # masquerade as an all-zero success.
+    if not runs_root.is_dir():
+        raise RunsRootError(f"runs root is not a directory: {runs_root}")
+    stats = stats if stats is not None else CorrelationStats()
+    stamp = ingested_at or now_iso()
+
+    def link_fn(session_id: str, run_dir: str) -> bool:
+        return link_benchmark_run(db, C.COPILOT_CLAUDE_CODE, session_id, run_dir)
+
+    def store_result_fn(record: RunRecord, in_scope: bool) -> None:
+        # Outcomes are stored for EVERY backend (analytical record);
+        # session_ref only resolves for in-scope records. `in_scope`
+        # comes FROM the core (single source of the scoping policy).
+        upsert_benchmark_result(
+            db, record.run_dir, record.score,
+            copilot=C.COPILOT_CLAUDE_CODE if in_scope else None,
+            session_id=record.session_id if in_scope else None,
+            ingested_at=stamp,
+        )
+
+    def ticking(records: Iterable[RunRecord]) -> Iterator[RunRecord]:
+        # The counters for a record land after it is yielded and
+        # processed, so the tick before the NEXT record reports them.
+        for i, record in enumerate(records):
+            if progress is not None and i and i % PROGRESS_EVERY == 0:
+                progress(stats)
+            yield record
+
+    # Linking is scoped to the claude-code backend: records from other
+    # backends are counted out_of_scope, never miscounted as unmatched.
+    correlate_links(
+        ticking(iter_run_records(runs_root, stats=stats)),
+        link_fn,
+        backend_id=C.COPILOT_CLAUDE_CODE,
+        store_result_fn=store_result_fn,
+        stats=stats,
+    )
+    if progress is not None:
+        progress(stats)
+    db.commit()
+    return stats

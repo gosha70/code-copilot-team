@@ -37,12 +37,16 @@ _log = logging.getLogger(__name__)
 #: Ordered, because that IS the pipeline: each step consumes what the
 #: previous one produced.
 STEP_INGEST = "ingest"
+STEP_CORRELATE = "correlate"
 STEP_GRAPH = "graph"
 STEP_EMBED = "embed"
 STEP_SIMILAR = "similar"
 STEP_JUDGE = "judge"
 STEP_KPIS = "kpis"
-STEPS = (STEP_INGEST, STEP_GRAPH, STEP_EMBED, STEP_SIMILAR, STEP_JUDGE, STEP_KPIS)
+#: correlate sits right after ingest: a benchmark-linked session is
+#: never noise, so links must exist before the graph decides what to
+#: leave out.
+STEPS = (STEP_INGEST, STEP_CORRELATE, STEP_GRAPH, STEP_EMBED, STEP_SIMILAR, STEP_JUDGE, STEP_KPIS)
 
 #: Steps that WRITE the Kùzu store. Kùzu is single-writer: status must
 #: not open the store while one of these runs (it corrupted a build
@@ -57,10 +61,11 @@ STEP_ALL = "all"
 #: consumes what the previous produced, so firing them concurrently
 #: would build a graph from a half-finished ingest — and, given Kùzu is
 #: single-writer, could corrupt the store outright.
-RUN_ALL_SEQUENCE = (STEP_INGEST, STEP_GRAPH, STEP_EMBED, STEP_SIMILAR, STEP_KPIS)
+RUN_ALL_SEQUENCE = (STEP_INGEST, STEP_CORRELATE, STEP_GRAPH, STEP_EMBED, STEP_SIMILAR, STEP_KPIS)
 
 STEP_TITLES = {
     STEP_INGEST: "Load sessions",
+    STEP_CORRELATE: "Link benchmark runs",
     STEP_GRAPH: "Build knowledge graph",
     STEP_EMBED: "Embed sessions",
     STEP_SIMILAR: "Find similar sessions",
@@ -74,6 +79,9 @@ STEP_BLURBS = {
     # transcripts, from where, and that is the first thing anyone wants
     # to check before pressing a button that writes to their store.
     STEP_INGEST: "Read copilot transcripts into the database.",
+    # Completed at runtime with the configured runs root, or the fact
+    # that there is none (then Run all skips it and says so).
+    STEP_CORRELATE: "Store every benchmark attempt's pass/fail from the harness's run records, and link Claude Code runs whose record names a loaded session — what the Benchmark tab shows.",
     STEP_GRAPH: "Build the Kùzu graph the Graph tab explores — the same sessions the Sessions list shows (noise left out).",
     STEP_EMBED: "Turn each session into a vector with the embedding model configured under Settings → Embeddings, so sessions can be compared by meaning.",
     STEP_SIMILAR: "Link each session to its nearest neighbours in the graph — what the Similar tab on a session page shows.",
@@ -100,6 +108,12 @@ def _remember_graph_nodes(n: int, edges: int = 0) -> None:
     global _last_graph_nodes, _last_similar_edges
     _last_graph_nodes = n
     _last_similar_edges = edges
+
+
+class StepSkipped(Exception):
+    """A step that has nothing to do BY CONFIGURATION (no benchmark runs
+    root set): it ends done with the reason as its message, so Run all
+    carries on and the page says why nothing happened."""
 
 
 class StepBusyError(RuntimeError):
@@ -142,6 +156,8 @@ def _run(step: str, fn: Callable[[], str]) -> None:
     try:
         message = fn()
         final = {"state": _STATE_DONE, "message": message}
+    except StepSkipped as exc:
+        final = {"state": _STATE_DONE, "message": f"skipped: {exc}", "skipped": True}
     except Exception as exc:  # noqa: BLE001 — a failed step must not kill the server
         # The full traceback goes to the log; the caller gets the
         # exception text, which is short enough to render and specific
@@ -266,6 +282,20 @@ def start_all(
     start(STEP_ALL, _sequence)
 
 
+def benchmark_runs_root() -> dict[str, Any]:
+    """The configured benchmark runs root and whether it can be read:
+    {path, configured, is_dir}. One reader for the Analysis blurb, the
+    Benchmark page and the step itself."""
+    from pathlib import Path as _P
+
+    path = load_config().benchmark_runs_root
+    return {
+        "path": path,
+        "configured": bool(path),
+        "is_dir": bool(path) and _P(path).is_dir(),
+    }
+
+
 # ── what has actually been done ────────────────────────────────────────
 
 
@@ -280,6 +310,7 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
     counts = {
         "sessions": 0, "excluded_noise": 0, "labels": 0, "label_failures": 0,
         "kpis": 0, "graph_nodes": 0, "embedded": 0, "similar_edges": 0,
+        "benchmark_linked": 0, "benchmark_results": 0,
     }
     # Zero counts from a store that did not answer are not a measurement.
     # The flag lets a page say "not reachable" instead of "0 sessions".
@@ -333,6 +364,14 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
                     or (0,)
                 )[0]
                 or 0
+            )
+            counts["benchmark_linked"] = int(
+                (db.query_one(
+                    f"SELECT COUNT(*) FROM copilot_session s WHERE s.{C.COL_BENCHMARK_RUN_DIR} IS NOT NULL"
+                ) or (0,))[0] or 0
+            )
+            counts["benchmark_results"] = int(
+                (db.query_one(f"SELECT COUNT(*) FROM {C.TBL_BENCHMARK_RESULT}") or (0,))[0] or 0
             )
             counts["kpis"] = int(
                 (db.query_one("SELECT COUNT(*) FROM session_kpi") or (0,))[0] or 0
@@ -400,12 +439,14 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
         # to someone who has loaded nothing — the step is not done until
         # a session worth counting is in.
         STEP_INGEST: counts["sessions"] > 0,
+        STEP_CORRELATE: counts["benchmark_linked"] > 0 or counts["benchmark_results"] > 0,
         STEP_GRAPH: graph_built and counts["graph_nodes"] > 0,
         STEP_EMBED: counts["embedded"] > 0,
         STEP_SIMILAR: graph_built and counts["similar_edges"] > 0,
         STEP_JUDGE: counts["labels"] > 0,
         STEP_KPIS: counts["kpis"] > 0,
     }
+    runs_root = benchmark_runs_root()
     return {
         "steps": [
             {
@@ -422,6 +463,13 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
                         " No copilot session folders found."
                         if step == STEP_INGEST and not sources
                         else ""
+                    )
+                    + (
+                        (f" Runs root: {runs_root['path']}" if runs_root["is_dir"]
+                         else f" Runs root is not a directory: {runs_root['path']}")
+                        if step == STEP_CORRELATE and runs_root["configured"]
+                        else (" No runs root configured (Settings → Benchmarks); Run all skips this step."
+                              if step == STEP_CORRELATE else "")
                     )
                 ),
                 "done": done[step],

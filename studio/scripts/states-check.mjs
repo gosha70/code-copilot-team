@@ -82,6 +82,7 @@ try {
         join(STUDIO, "components/SessionTags.tsx"),
         join(STUDIO, "lib/graphView.ts"),
         join(STUDIO, "lib/askView.ts"),
+        join(STUDIO, "lib/benchmarkIntro.ts"),
         join(STUDIO, "components/GraphCatalogue.tsx"),
         join(STUDIO, "components/GraphExplorer.tsx"),
         join(STUDIO, "global.d.ts"),
@@ -846,6 +847,64 @@ try {
   if (askFailed.running || askFailed.prerequisite !== "judge") fail("a judge error ends the exchange and names the prerequisite");
   else if (!av.stopExchange(av.newExchange("q")).stopped) fail("stop");
   else console.log("  ok  a Settings gap ends the exchange with prerequisite=judge; Stop marks it stopped");
+
+  // ── the Benchmark page's opening card, in its states ─────────────
+  console.log("\nbenchmark intro:");
+  const bi = await import(pathToFileURL(join(out, "lib/benchmarkIntro.js")));
+  const bmBase = { sessions_total: 57, sessions_linked: 0, sessions_unlinked: 57, distinct_benchmark_attempts: 0, by_result: [], link_job: { state: "idle" } };
+  const bmUnset = bi.benchmarkIntro({ ...bmBase, runs_root: { path: "", configured: false, is_dir: false } });
+  const bmNotDir = bi.benchmarkIntro({ ...bmBase, runs_root: { path: "/nope", configured: true, is_dir: false } });
+  const bmUnlinked = bi.benchmarkIntro({ ...bmBase, runs_root: { path: "/x/runs", configured: true, is_dir: true } });
+  const bmLinked = bi.benchmarkIntro({ ...bmBase, sessions_linked: 14, sessions_unlinked: 43, distinct_benchmark_attempts: 9, runs_root: { path: "/x/runs", configured: true, is_dir: true } });
+  const bmOutcomesPayload = { ...bmBase, by_result: [{ result: "fail", attempts: 1131, linked_sessions: 0, total_cost_usd: 0, avg_duration_seconds: 0 }, { result: "pass", attempts: 46, linked_sessions: 0, total_cost_usd: 0, avg_duration_seconds: 0 }], runs_root: { path: "/x/runs", configured: true, is_dir: true } };
+  const bmOutcomes = bi.benchmarkIntro(bmOutcomesPayload);
+  const bmHeads = [bmUnset, bmNotDir, bmUnlinked, bmOutcomes, bmLinked].map((i) => i.headline);
+  if (new Set(bmHeads).size !== 5) fail("benchmark intro states share a headline");
+  else if (bmOutcomes.state !== "outcomes-only" || !/1,177 attempts have an outcome, but no session is currently linked/.test(bmOutcomes.headline)) fail(`outcomes-only headline: ${bmOutcomes.headline}`);
+  else if (bmUnset.canLink || !/Settings → Benchmarks/.test(bmUnset.headline)) fail("bmUnset state must send to Settings, not offer the step");
+  else if (bmNotDir.canLink || !/\/nope/.test(bmNotDir.headline)) fail("a root that is not a folder names the path and does not offer the step");
+  else if (!bmUnlinked.canLink || bmUnlinked.rootLine !== "/x/runs") fail("a folder with nothing bmLinked offers the step and shows the folder");
+  else if (!/14 of 57 sessions are linked to 9 benchmark attempts; the other 43 are not linked to a benchmark attempt/.test(bmLinked.headline) || /organic/.test(bmLinked.headline) || !bmLinked.canLink) fail(`linked headline: ${bmLinked.headline}`);
+  else if (/session id/.test(bmOutcomes.headline) || bmOutcomes.cause !== "") fail("outcomes-only must not infer a cause from the counts alone");
+  else console.log("  ok  unset → Settings; not a folder → named; folder → Link offered; outcomes with nothing linked → said neutrally; linked → counts, no 'organic'");
+  // The cause comes ONLY from the last scan's counters, and says what they say.
+  const bmNull = bi.benchmarkIntro({ ...bmOutcomesPayload, link_job: { state: "done", progress: { scanned: 1177, null_session_id: 1174, out_of_scope: 3, unmatched: 0, linked: 0 } } });
+  const bmUnmatched = bi.benchmarkIntro({ ...bmOutcomesPayload, link_job: { state: "done", progress: { scanned: 12, null_session_id: 0, out_of_scope: 0, unmatched: 12, linked: 0 } } });
+  const bmRunning = bi.benchmarkIntro({ ...bmOutcomesPayload, link_job: { state: "running", progress: { scanned: 5, null_session_id: 5, unmatched: 0, out_of_scope: 0, linked: 0 } } });
+  if (!/1,174 carried no session id; 3 came from a backend other than Claude Code/.test(bmNull.cause)) fail(`cause from counters: ${bmNull.cause}`);
+  else if (/no session id/.test(bmUnmatched.cause) || !/12 named a session that is not loaded/.test(bmUnmatched.cause)) fail(`unmatched must not read as missing ids: ${bmUnmatched.cause}`);
+  else if (bmRunning.cause !== "") fail("a scan still running has established nothing yet");
+  else console.log("  ok  the cause is the scan's counters: missing ids, unloaded sessions, other backends — never inferred");
+  // Polling: the stale response held at the press must not end it; the server state does.
+  const bmIdle = { ...bmBase, runs_root: { path: "/x/runs", configured: true, is_dir: true } };
+  const bmRunningResp = { ...bmIdle, link_job: { state: "running", seconds: 2 } };
+  const bmDoneResp = { ...bmIdle, link_job: { state: "done", message: "scanned 3" } };
+  if (!bi.shouldPoll(bmIdle, bmIdle)) fail("after the press, the stale idle response must keep polling on");
+  else if (bi.settleWatch(bmIdle, bmIdle) !== bmIdle) fail("the same object is not a post-press response");
+  else if (bi.settleWatch(bmIdle, bmRunningResp) !== null || !bi.shouldPoll(null, bmRunningResp)) fail("the first post-press response settles the watch; running keeps polling");
+  else if (bi.shouldPoll(null, bmDoneResp)) fail("done stops polling");
+  else if (!bi.shouldPoll(null, bmRunningResp)) fail("a page opened during a scan polls from its first response");
+  else console.log("  ok  polling follows the server's job state; the stale pre-press response cannot end it");
+  // A scan's end refetches once — whether the page saw it running or not.
+  if (bi.scanCompleted(bmIdle, "idle", bmIdle)) fail("the stale pre-press response is not a completion");
+  else if (!bi.scanCompleted(bmIdle, "idle", bmDoneResp)) fail("a fast scan: idle before the press, first fresh response already done → completion");
+  else if (bi.scanCompleted(bmIdle, "idle", bmRunningResp)) fail("a first fresh response that is running is not a completion");
+  else if (!bi.scanCompleted(null, "running", bmDoneResp)) fail("running → done is a completion");
+  else if (bi.scanCompleted(null, "done", bmDoneResp)) fail("done → done again is not a second completion");
+  else if (bi.scanCompleted(null, "running", bmRunningResp)) fail("still running is not a completion");
+  else console.log("  ok  a scan's end is seen exactly once: fast (first fresh response terminal) or slow (running → terminal)");
+  // Counters by transaction state: one commit at the end, so nothing is
+  // linked or stored until done, and after a failure nothing ever was.
+  const counters = { scanned: 25, linked: 8, scores_ingested: 25, unmatched: 2, null_session_id: 0 };
+  const lineRunning = bi.correlateProgressLine(counters, "running", 7);
+  const lineFailed = bi.correlateProgressLine(counters, "failed");
+  const lineDone = bi.correlateProgressLine(counters, "done");
+  if (/linked|stored/.test(lineRunning) || !/25 records processed · 8 session-link matches · 25 outcomes processed/.test(lineRunning) || !/commit pending · 7s/.test(lineRunning)) fail(`running counters: ${lineRunning}`);
+  else if (/sessions linked|outcomes stored/.test(lineFailed) || !/rolled back: nothing from this scan was stored/.test(lineFailed) || !/25 records processed/.test(lineFailed)) fail(`failed counters must say rolled back: ${lineFailed}`);
+  else if (!/8 sessions linked · 25 outcomes stored · 2 named a session not loaded/.test(lineDone) || /pending|rolled back/.test(lineDone)) fail(`done counters: ${lineDone}`);
+  else console.log("  ok  counters read as processed + commit pending while running, rolled back after a failure, linked/stored only when done");
+  if (bi.linkJobLine({ state: "running", seconds: 4 }) !== "linking… 4 s" || !/^failed: boom/.test(bi.linkJobLine({ state: "failed", message: "boom" })) || bi.linkJobLine({ state: "idle" }) !== "" || bi.linkJobLine({ state: "done", message: "skipped: no root" }) !== "skipped: no root") fail("link job line");
+  else console.log("  ok  the link job reads as one line in every state");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

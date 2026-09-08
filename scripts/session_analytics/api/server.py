@@ -568,6 +568,36 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                 msg += f", {st.sessions_not_selected} outside the selection"
             return msg
 
+        def _correlate() -> str:
+            from pathlib import Path as _P
+
+            from .. import correlate as cor
+            from ..relational.db import Database as _DB
+
+            root = pj.benchmark_runs_root()
+            if not root["configured"]:
+                # Skipped BY CONFIGURATION, not failed: most stores have
+                # no benchmark runs, and Run all must not stop for that.
+                raise pj.StepSkipped("no benchmark runs root configured (Settings → Benchmarks)")
+            stats = cor.CorrelationStats()
+            rel = _DB.connect(store)
+            try:
+                # The live counters are the step's progress while it
+                # scans, and the final counters its outcome — the same
+                # numbers the CLI prints.
+                cor.run(
+                    rel, _P(root["path"]), stats=stats,
+                    progress=lambda st: pj.set_progress(pj.STEP_CORRELATE, st.as_dict()),
+                )
+            finally:
+                pj.set_progress(pj.STEP_CORRELATE, stats.as_dict())
+                rel.close()
+            return (
+                f"scanned {stats.scanned} run records: linked {stats.linked} sessions, "
+                f"{stats.unmatched} unmatched, {stats.scores_ingested} outcomes stored"
+                + (f", {stats.skipped_run_records} unreadable" if stats.skipped_run_records else "")
+            )
+
         def _graph() -> str:
             from ..graph.builder import build
             from ..relational.db import Database as _DB
@@ -660,6 +690,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
         return {
             pj.STEP_INGEST: _ingest,
+            pj.STEP_CORRELATE: _correlate,
             pj.STEP_GRAPH: _graph,
             pj.STEP_EMBED: _embed,
             pj.STEP_SIMILAR: _similar,
@@ -1095,9 +1126,16 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         try:
             # E9: correlation coverage (#91) + by-result outcomes (#92) in
             # one payload; both stay independently unit-testable pure fns.
+            from .. import pipeline_jobs as pj
+
             return {
                 **dashboard.benchmark_correlation(conn, noise=load_config().noise),
                 **dashboard.benchmark_outcomes(conn),
+                # Where runs would be read from, so the page can say
+                # "set it in Settings" or offer the step, without a
+                # second call.
+                "runs_root": pj.benchmark_runs_root(),
+                "link_job": pj.job_state(pj.STEP_CORRELATE),
             }
         finally:
             conn.close()

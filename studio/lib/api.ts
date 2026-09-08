@@ -586,12 +586,28 @@ export interface BenchmarkResultRow {
   avg_duration_seconds: number;
 }
 
+export interface BenchmarkRunsRoot {
+  path: string;
+  configured: boolean;
+  is_dir: boolean;
+}
+
 export interface BenchmarkSummary {
   sessions_total: number;
   sessions_linked: number;
   sessions_unlinked: number;
   distinct_benchmark_attempts: number;
   by_result: BenchmarkResultRow[];
+  /** Where "Link benchmark runs" reads from (Settings → Benchmarks). */
+  runs_root: BenchmarkRunsRoot;
+  /** The link step's job, so the page can show a run in flight. */
+  link_job: {
+    state: "idle" | "running" | "done" | "failed";
+    message?: string;
+    skipped?: boolean;
+    seconds?: number;
+    progress?: Record<string, number>;
+  };
 }
 
 // routing-shadow (#261): shadow-mode routing evidence. The Studio renders
@@ -1005,10 +1021,12 @@ export interface PipelineStep {
   job: {
     state: "idle" | "running" | "done" | "failed";
     message?: string;
+    /** Done with nothing to do BY CONFIGURATION (no benchmark runs root). */
+    skipped?: boolean;
     seconds?: number;
     /** The judge step reports after every turn (JudgeProgress); the
      *  embed step after every session (EmbedProgress). */
-    progress?: JudgeProgress | EmbedProgress;
+    progress?: JudgeProgress | EmbedProgress | CorrelateProgress;
   };
 }
 
@@ -1048,6 +1066,20 @@ export interface EmbedProgress {
   failed: number;
   unembeddable: number;
   last_error: string;
+}
+
+/** The correlate scan's live counters (CorrelationStats.as_dict()). */
+export interface CorrelateProgress {
+  scanned: number;
+  skipped_run_records: number;
+  out_of_scope: number;
+  with_session_id: number;
+  null_session_id: number;
+  linked: number;
+  unmatched: number;
+  duplicate_session_id: number;
+  scores_ingested: number;
+  scores_missing: number;
 }
 
 export interface EmbedModels {
