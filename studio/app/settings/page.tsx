@@ -464,7 +464,7 @@ export default function SettingsPage() {
                       <option value="__other__">Other…</option>
                     </select>
                     <span className="shrink-0 text-xs text-slate-500">
-                      {modelList.length} served at {models?.url}
+                      {modelList.length === 1 ? "1 model" : `${modelList.length} models`} on the server
                     </span>
                   </div>
                 ) : (
@@ -536,39 +536,33 @@ export default function SettingsPage() {
           </p>
         )}
 
-        <div className="mt-4 flex items-center gap-3">
+        {/* Both probes read the SAVED file, not the form: Save first.
+            "Test judge" sends one tiny prompt to the judge the settings
+            resolve to and shows the answer or the backend's own reason. */}
+        <div className="mt-4 flex items-center gap-3 flex-wrap">
           <button onClick={save} className="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">Save</button>
           <button onClick={testConn} className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700">Test database</button>
+          <button onClick={testJudge} className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700">
+            Test judge LLM
+          </button>
           {saved && <span className="text-sm text-slate-600">{saved}</span>}
         </div>
-        <ProbeBox result={probe} />
-      </Card>
-
-      <Card title="Judge in effect">
-        {/* What the SAVED settings resolve to, and one real call to it.
-            Save first: the test and the model list read the saved file,
-            not the form. */}
-        <p className="text-sm">
-          The Analysis tab will judge with{" "}
+        <p className="mt-2 text-xs text-slate-500">
+          Judge in effect:{" "}
           <code className="bg-slate-100 px-1 rounded">{models?.configured.spec ?? cfg.judge_default}</code>
           {models?.configured.source === "settings" ? " (from your saved settings)" : " (the packaged default)"}
           {models && models.url ? (
             models.reachable ? (
-              <span className="text-slate-500"> · {models.models.length} models served at {models.url}</span>
+              <span> · {models.models.length === 1 ? "1 model" : `${models.models.length} models`} on the server at {models.url}</span>
             ) : (
               <span className="text-rose-700">
                 {" "}· could not list models at {models.list_url ?? models.url} ({models.error})
               </span>
             )
           ) : null}
-          .
+          . Both tests use the saved settings — Save first.
         </p>
-        <div className="mt-3 flex items-center gap-3">
-          <button onClick={testJudge} className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700">
-            Test judge
-          </button>
-          <span className="text-xs text-slate-500">Sends one tiny prompt to the saved judge. Save changes above first.</span>
-        </div>
+        <ProbeBox result={probe} />
         <ProbeBox result={judgeProbe} />
       </Card>
 

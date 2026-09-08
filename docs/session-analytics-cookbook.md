@@ -311,7 +311,7 @@ configuration is:
    (with or without `/v1`; it is added when missing), API key blank.
 2. **Save.** The Model dropdown now lists what that server serves —
    pick `qwen38-27b`. Save again.
-3. **Test judge** (under *Judge in effect*, below the form): one tiny
+3. **Test judge LLM** (next to *Test database*): one tiny
    prompt to the saved judge. Expect `openai:qwen38-27b answered in
    0.7s: {"ok": true}`. A failure shows the server's own reason (a
    wrong model name, a wrong port).
@@ -320,7 +320,7 @@ configuration is:
 
 For Ollama on the Spark instead: Backend `ollama`, Ollama URL
 `http://192.168.1.23:11434` (Ollama must be started with
-`OLLAMA_HOST=0.0.0.0`), then the same Save → pick model → Test judge.
+`OLLAMA_HOST=0.0.0.0`), then the same Save → pick model → Test judge LLM.
 
 | You run on the Spark | Settings → LLM-as-Judge |
 |---|---|
