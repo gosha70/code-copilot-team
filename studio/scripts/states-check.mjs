@@ -82,6 +82,8 @@ try {
         join(STUDIO, "components/SessionTags.tsx"),
         join(STUDIO, "lib/graphView.ts"),
         join(STUDIO, "components/GraphCatalogue.tsx"),
+        join(STUDIO, "components/GraphExplorer.tsx"),
+        join(STUDIO, "global.d.ts"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -787,6 +789,26 @@ try {
   if (bars.length !== 2 || bars[0].label !== "bash" || bars[0].value !== 58) fail(`barData: ${JSON.stringify(bars)}`);
   else if (gc.barData(["a"], [{ a: "x" }]).length !== 0) fail("barData with no numeric column must be empty (table instead)");
   else console.log("  ok  bar charts take the first column as label and the first numeric column as value");
+  // The side panel renders EVERY row the API returned — the heading's
+  // "20 of 33" must not sit over a list that shows 8 (a hidden second cap).
+  const ge = await import(pathToFileURL(join(out, "components/GraphExplorer.js")));
+  const bigProject = {
+    kind: "project", project_path: "/Users/x/dev/repo/proj",
+    sessions: Array.from({ length: 16 }, (_, i) => ({ session_key: `c:s${i}`, id: i + 1, model: "m", turn_count: 10 + i, error_count: 0, started_at: "2026-09-01T00:00:00Z" })),
+    similar_edges: [], models: [{ model: "m", sessions: 16 }],
+    tools: Array.from({ length: 20 }, (_, i) => ({ tool: `tool${i}`, calls: 100 - i, sessions: 3 })),
+    files: Array.from({ length: 12 }, (_, i) => ({ path: `/Users/x/dev/repo/proj/file${i}.py`, sessions: 12 - i, accesses: 50 })),
+    totals: { sessions: 16, tools: 33, files: 240 }, limits: { sessions: 60, tools: 20, files: 12 }, relationships: {},
+  };
+  const projPanel = render(ge.SelectionPanel, { selection: null, data: bigProject, onFocusSession: () => {} });
+  const toolRows = (projPanel.match(/tool\d+ · \d+ calls in 3 sessions/g) || []).length;
+  const fileRows = (projPanel.match(/file\d+\.py · \d+ sessions/g) || []).length;
+  if (!/20 of 33/.test(projPanel) || !/12 of 240/.test(projPanel)) fail("project panel headings lack the totals");
+  else if (toolRows !== 20 || fileRows !== 12) fail(`project panel shows ${toolRows} tool rows and ${fileRows} file rows under headings claiming 20 and 12`);
+  else console.log("  ok  the project panel renders every returned row under a heading that says N of M");
+  const sessionPanel = render(ge.SelectionPanel, { selection: null, data: sn, onFocusSession: () => {} });
+  if (!/2 of 11 tools/.test(sessionPanel) || !/1 of 31 files/.test(sessionPanel) || !/1 of 5 neighbours/.test(sessionPanel)) fail(`session panel totals: ${sessionPanel.replace(/<[^>]+>/g, " ").slice(0, 300)}`);
+  else console.log("  ok  the session panel says N of M for tools, files and neighbours");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

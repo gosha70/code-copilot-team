@@ -452,7 +452,7 @@ export function shownOf(shown: number, total: number): string {
     : shown.toLocaleString();
 }
 
-function SelectionPanel({
+export function SelectionPanel({
   selection,
   data,
   onFocusSession,
@@ -518,7 +518,7 @@ function SelectionPanel({
               Tools across the project ({shownOf(data.tools.length, data.totals.tools)})
             </div>
             <ul className="space-y-0.5">
-              {data.tools.slice(0, 8).map((t) => (
+              {data.tools.map((t) => (
                 <li key={t.tool}>
                   {t.tool} · {t.calls.toLocaleString()} calls in {t.sessions}{" "}
                   sessions
@@ -531,7 +531,7 @@ function SelectionPanel({
               Files touched by the most sessions ({shownOf(data.files.length, data.totals.files)})
             </div>
             <ul className="space-y-0.5">
-              {data.files.slice(0, 8).map((f) => (
+              {data.files.map((f) => (
                 <li key={f.path} title={f.path}>
                   {shortName(f.path)} · {f.sessions} sessions
                 </li>
