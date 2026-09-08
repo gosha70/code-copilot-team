@@ -170,6 +170,9 @@ def ask(
     spec = spec or load_spec()
     facts = T.store_facts(ctx)
     steps: list[dict[str, Any]] = []
+    # Every session id a lookup returned. An answer may cite only these:
+    # a citation is evidence-backed or it is not a citation.
+    evidence: list[int] = []
     note = ""
     calls = 0
     while True:
@@ -204,10 +207,16 @@ def ask(
             continue
         note = ""
         if action == EVENT_ANSWER:
+            cited = _session_ids(obj.get("sessions"))
             yield {
                 "event": EVENT_ANSWER,
                 "markdown": str(obj.get("answer") or "").strip(),
-                "sessions": _session_ids(obj.get("sessions")),
+                # Verified: the model named it AND a lookup returned it.
+                "sessions": [i for i in cited if i in evidence],
+                # Named by the model but never seen in a result — shown
+                # as unverified, never linked as a session.
+                "unverified": [i for i in cited if i not in evidence],
+                "evidence": list(evidence),
                 "seconds": seconds,
                 "steps": calls,
             }
@@ -223,14 +232,23 @@ def ask(
             "event": EVENT_STEP, "n": calls, "tool": name, "args": dict(args),
             "why": str(obj.get("why") or "").strip(), "seconds": seconds,
         }
+        started = time.time()
         result, error = _run(ctx, spec, name, args)
         raw = json.dumps(result, ensure_ascii=False, default=str)
         shown, truncated = cap_text(raw, spec.max_result_chars)
         steps.append({"tool": name, "args": dict(args), "result_text": shown})
+        ids = _ids_in(result)
+        for i in ids:
+            if i not in evidence:
+                evidence.append(i)
         yield {
             "event": EVENT_RESULT, "n": calls, "summary": result_summary(result),
             "chars": len(raw), "truncated": truncated, "error": error,
-            "session_ids": _ids_in(result),
+            "session_ids": ids,
+            # EXACTLY what the judge was given for this step, so the page
+            # can show the rows behind the answer, not a count of them.
+            "result_text": shown,
+            "seconds": round(time.time() - started, 2),
         }
 
 
@@ -285,20 +303,25 @@ def _session_ids(value: Any) -> list[int]:
 
 
 def _ids_in(result: Mapping[str, Any]) -> list[int]:
-    """Session ids a tool result names, so the page can link the rows a
-    step touched even before the answer cites them."""
+    """Session ids a tool result names — the evidence set an answer may
+    cite from. Relational rows carry ``id``/``session_id``; a graph
+    Session node carries the ``session_id`` graph_question resolved."""
     ids: list[int] = []
 
     def add(v: Any) -> None:
+        if isinstance(v, bool):
+            return
         if isinstance(v, int) and v > 0 and v not in ids:
             ids.append(v)
 
+    if "error" in result:
+        return ids
     if "session_id" in result:
         add(result["session_id"])
     if "id" in result and "session_key" in result:
         add(result["id"])
-    for key in ("sessions", "hits", "neighbors"):
+    for key in ("sessions", "hits", "neighbors", "nodes"):
         for row in result.get(key) or []:
             if isinstance(row, Mapping):
-                add(row.get("id") if key != "hits" else row.get("session_id"))
-    return ids[:50]
+                add(row.get("id") if key in ("sessions", "neighbors") else row.get("session_id"))
+    return ids

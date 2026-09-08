@@ -36,7 +36,22 @@ SIMILAR_MAX = 20
 ERRORS_SHOWN = 20
 SNIPPET_CHARS = 240
 #: The three tags find_sessions can filter on (the Sessions grid's icons).
-TAGS = (C.FLAG_FAVORITE, C.FLAG_TODO, "analyzed")
+TAGS = tuple(mcp_tools.SESSION_TAG_FILTERS)
+#: How many projects the opening facts name (the exact count is beside them).
+TOP_PROJECTS = 15
+
+#: What a read-only open of the graph store finds.
+GRAPH_READY = "ready"
+GRAPH_ABSENT = "absent"
+GRAPH_UNBUILT = "unbuilt"
+GRAPH_UNOPENABLE = "unopenable"
+GRAPH_NO_KUZU = "kuzu-missing"
+_GRAPH_STATE_MESSAGE = {
+    GRAPH_ABSENT: "the knowledge graph has not been built",
+    GRAPH_UNBUILT: "the knowledge graph has not been built",
+    GRAPH_UNOPENABLE: "the graph store could not be opened",
+    GRAPH_NO_KUZU: "the kuzu package is not installed",
+}
 
 
 @dataclass(frozen=True)
@@ -58,6 +73,62 @@ class BadArgumentsError(ValueError):
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
+
+
+def _keep(ctx: AskContext, alias: str) -> tuple[str, tuple[Any, ...]]:
+    """The pages' noise policy for lists, searches and aggregates: probe
+    and temp-dir sessions are left out. A tool given one session id
+    still reads that session — asking about a thing by name is not a
+    discovery."""
+    return keep_clause(ctx.noise, alias) if ctx.noise else ("1=1", ())
+
+
+def _kept_ids(ctx: AskContext, ids: list[int]) -> set[int]:
+    """Which of ``ids`` are sessions worth counting."""
+    wanted = sorted({int(i) for i in ids})
+    if not wanted:
+        return set()
+    keep_sql, keep_params = _keep(ctx, "copilot_session")
+    marks = ", ".join("?" for _ in wanted)
+    rows = ctx.db.query(
+        f"SELECT id FROM copilot_session WHERE id IN ({marks}) AND {keep_sql}",
+        (*wanted, *keep_params),
+    )
+    return {int(r[0]) for r in rows}
+
+
+def _is_unbuilt(exc: BaseException) -> bool:
+    return "does not exist" in str(exc) or "Binder exception" in str(exc)
+
+
+def _open_graph(ctx: AskContext):
+    """(state, read-only handle or None). Never creates the store."""
+    if not ctx.kuzu_path or not Path(ctx.kuzu_path).exists():
+        return GRAPH_ABSENT, None
+    try:
+        from ..graph.schema import GraphDatabase
+    except ImportError:
+        return GRAPH_NO_KUZU, None
+    try:
+        return GRAPH_READY, GraphDatabase.connect_read_only(ctx.kuzu_path)
+    except RuntimeError:
+        return GRAPH_UNOPENABLE, None
+
+
+def graph_state(ctx: AskContext) -> str:
+    """ready | absent | unbuilt | unopenable | kuzu-missing — from an
+    actual read-only open and a probe of the schema, not from whether a
+    path exists (a path can exist and hold nothing)."""
+    state, g = _open_graph(ctx)
+    if g is None:
+        return state
+    try:
+        g.execute("MATCH (s:Session) RETURN count(s) LIMIT 1")
+    except Exception as exc:  # noqa: BLE001 — an unbuilt store has no tables
+        return GRAPH_UNBUILT if _is_unbuilt(exc) else GRAPH_UNOPENABLE
+    finally:
+        g.close()
+    return GRAPH_READY
 
 
 def _int(args: Mapping[str, Any], name: str, default: Optional[int], *, lo: int, hi: int) -> int:
@@ -106,8 +177,6 @@ def _session_row(s: dict[str, Any]) -> dict[str, Any]:
 def find_sessions(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     sort = _str(args, "sort") or mcp_tools.SESSION_SORT_DEFAULT
     tag = _str(args, "tag")
-    if tag and tag not in TAGS:
-        raise BadArgumentsError(f"tag must be one of {', '.join(TAGS)}")
     limit = _int(args, "limit", 20, lo=1, hi=SESSIONS_MAX)
     try:
         rows = mcp_tools.search_sessions(
@@ -116,17 +185,14 @@ def find_sessions(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
             copilot=_str(args, "copilot") or None,
             date_from=_str(args, "date_from") or None,
             date_to=_str(args, "date_to") or None,
-            # A tag filter is applied on the rows, so fetch the grid's
-            # full page and cut afterwards.
-            limit=SESSIONS_MAX if tag else limit,
+            tag=tag or None,
+            limit=limit,
             noise=ctx.noise,
             sort=sort,
         )
-    except mcp_tools.UnknownSortError as exc:
+    except (mcp_tools.UnknownSortError, mcp_tools.UnknownTagError) as exc:
         raise BadArgumentsError(str(exc)) from None
     sessions = [_session_row(s) for s in rows]
-    if tag:
-        sessions = [s for s in sessions if s["tags"][tag]][:limit]
     return {"sessions": sessions, "count": len(sessions), "sort": sort}
 
 
@@ -200,9 +266,17 @@ def search_text(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     if not query:
         raise BadArgumentsError("query is required")
     limit = _int(args, "limit", 20, lo=1, hi=SEARCH_MAX)
+    keep_sql, keep_params = _keep(ctx, "s")
     hits: list[dict[str, Any]] = []
     seen: set[tuple[int, int]] = set()
-    for h in arch.search_traces(ctx.db, query, limit=limit):
+    archived = arch.search_traces(ctx.db, query, limit=limit)
+    # Same policy as every list on the pages: noise is left out of a
+    # search. The archive search has no noise filter of its own, so its
+    # hits are checked against the kept sessions.
+    kept_refs = _kept_ids(ctx, [h["session_ref"] for h in archived])
+    for h in archived:
+        if h["session_ref"] not in kept_refs:
+            continue
         key = (h["session_ref"], h["sequence_num"])
         seen.add(key)
         hits.append({
@@ -216,13 +290,13 @@ def search_text(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
         # archived still answers "where did I say X".
         like = f"%{arch.escape_like(query)}%"
         rows = ctx.db.query(
-            """
+            f"""
             SELECT t.session_id, t.sequence_num, s.project_path, t.content_preview
             FROM copilot_turn t JOIN copilot_session s ON s.id = t.session_id
-            WHERE LOWER(t.content_preview) LIKE LOWER(?) ESCAPE '\\'
+            WHERE LOWER(t.content_preview) LIKE LOWER(?) ESCAPE '\\' AND {keep_sql}
             ORDER BY t.session_id DESC, t.sequence_num LIMIT ?
             """,
-            (like, limit * 2),
+            (like, *keep_params, limit * 2),
         )
         for sid, seq, project, preview in rows:
             key = (int(sid), int(seq))
@@ -244,6 +318,7 @@ def patterns(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
         workspace=_str(args, "workspace") or None,
         tool=_str(args, "tool") or None,
         error_type=_str(args, "error_type") or None,
+        noise=ctx.noise,
     )
 
 
@@ -270,30 +345,73 @@ def graph_question(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     params = args.get("params") or {}
     if not isinstance(params, Mapping):
         raise BadArgumentsError("params must be an object")
-    if not ctx.kuzu_path or not Path(ctx.kuzu_path).exists():
-        return {"error": "the knowledge graph has not been built", "prerequisite": "graph"}
-    try:
-        from ..graph.schema import GraphDatabase
-    except ImportError:
-        return {"error": "the kuzu package is not installed", "prerequisite": "kuzu"}
-    try:
-        g = GraphDatabase.connect_read_only(ctx.kuzu_path)
-    except RuntimeError as exc:
-        return {"error": f"the graph store could not be opened: {exc}", "prerequisite": "graph"}
+    entry = gq.catalogue_entry(query_id)
+    if entry is None:
+        raise BadArgumentsError(
+            f"unknown catalogue query {query_id!r}; the ids are listed under FACTS"
+        )
+    # The same rule as the top-level arguments: a parameter the model
+    # invents is refused, not silently ignored — otherwise it would
+    # believe it filtered by something the query never saw.
+    declared = [p["name"] for p in entry.get("params", [])]
+    unknown = sorted(set(params) - set(declared))
+    if unknown:
+        raise BadArgumentsError(
+            f"{query_id} does not take {', '.join(unknown)}; its parameters are: "
+            + (", ".join(declared) or "none")
+        )
+    state, g = _open_graph(ctx)
+    if g is None:
+        return {"error": _GRAPH_STATE_MESSAGE[state], "prerequisite": "graph"}
     try:
         try:
             result = gq.run_catalogue(g, query_id, dict(params))
         except ValueError as exc:
             raise BadArgumentsError(str(exc)) from None
         except Exception as exc:  # noqa: BLE001 — an unbuilt graph has no tables
-            if "does not exist" in str(exc) or "Binder exception" in str(exc):
-                return {"error": "the knowledge graph has not been built", "prerequisite": "graph"}
+            if _is_unbuilt(exc):
+                return {"error": _GRAPH_STATE_MESSAGE[GRAPH_UNBUILT], "prerequisite": "graph"}
             raise
     finally:
         g.close()
-    # The canvas elements are for drawing; the model reads rows.
-    result.pop("elements", None)
+    # A graph-rendered answer carries its evidence as nodes and
+    # relationships, not rows; the model gets them in a form it can read.
+    elements = result.pop("elements", None)
+    if elements is not None:
+        # No empty `rows` beside the nodes: a model reads "rows: []" as
+        # "nothing found" and argues with the relationships under it.
+        result.pop("rows", None)
+        result.pop("columns", None)
+        result["shape"] = "graph"
+        result["nodes"] = [
+            {"id": n["id"], **_session_ref(ctx, n), **_brief(n["props"])}
+            for n in elements["nodes"]
+        ]
+        result["relationships"] = [
+            {"from": e["source"], "rel": e["rel"], "to": e["target"], **_brief(e["props"])}
+            for e in elements["edges"]
+        ]
     return result
+
+
+#: Properties worth the model's window on a graph node or edge.
+_BRIEF_PROPS = ("project_path", "model", "turn_count", "error_count", "started_at", "score", "name", "path")
+
+
+def _session_ref(ctx: AskContext, node: Mapping[str, Any]) -> dict[str, Any]:
+    """A Session node's relational id, so the answer can cite it and the
+    page can link it; other nodes get nothing."""
+    if node.get("label") != "Session" or ":" not in str(node.get("key", "")):
+        return {}
+    copilot, native = str(node["key"]).split(":", 1)
+    row = ctx.db.query_one(
+        "SELECT id FROM copilot_session WHERE copilot = ? AND session_id = ?", (copilot, native)
+    )
+    return {"session_id": int(row[0])} if row else {}
+
+
+def _brief(props: Mapping[str, Any]) -> dict[str, Any]:
+    return {k: props[k] for k in _BRIEF_PROPS if k in props and props[k] not in (None, "")}
 
 
 def overview(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
@@ -337,13 +455,14 @@ def call_tool(ctx: AskContext, name: str, args: Mapping[str, Any], *, declared: 
 
 def store_facts(ctx: AskContext) -> dict[str, Any]:
     """What is in the store, so the model does not have to discover it a
-    step at a time: counts, date span, copilots, projects, whether text
-    is archived, which analyses exist, whether the graph is built."""
+    step at a time: counts, date span, copilots, the busiest projects
+    (capped, and the cap is named), whether text is archived, which
+    analyses exist, whether the graph can be read."""
     from ..graph import query as gq
 
     db = ctx.db
     # The same sessions the pages count: probes and temp dirs left out.
-    keep_sql, keep_params = keep_clause(ctx.noise, "copilot_session") if ctx.noise else ("1=1", ())
+    keep_sql, keep_params = _keep(ctx, "copilot_session")
     totals = db.query_one(
         f"SELECT COUNT(*), MIN(started_at), MAX(started_at) FROM copilot_session WHERE {keep_sql}",
         keep_params,
@@ -359,7 +478,7 @@ def store_facts(ctx: AskContext) -> dict[str, Any]:
         {"project_path": r[0], "sessions": int(r[1])}
         for r in db.query(
             f"SELECT project_path, COUNT(*) FROM copilot_session WHERE {keep_sql} "
-            "GROUP BY project_path ORDER BY 2 DESC LIMIT 15",
+            f"GROUP BY project_path ORDER BY 2 DESC LIMIT {TOP_PROJECTS}",
             keep_params,
         )
     ]
@@ -367,16 +486,20 @@ def store_facts(ctx: AskContext) -> dict[str, Any]:
     analysed = db.query_one(
         f"SELECT COUNT(DISTINCT session_ref) FROM {C.TBL_SESSION_ANALYSIS} WHERE parse_status = 'ok'"
     ) or (0,)
-    graph_built = bool(ctx.kuzu_path) and Path(ctx.kuzu_path).exists()
+    project_count = db.query_one(
+        f"SELECT COUNT(DISTINCT project_path) FROM copilot_session WHERE {keep_sql}", keep_params
+    ) or (0,)
     return {
         "sessions": int(totals[0] or 0),
         "first_session": totals[1],
         "last_session": totals[2],
         "copilots": copilots,
-        "projects": projects,
+        "project_count": int(project_count[0] or 0),
+        "top_projects": projects,
+        "top_projects_cap": TOP_PROJECTS,
         "sessions_with_archived_text": int(archived[0] or 0),
         "sessions_with_analyses": int(analysed[0] or 0),
-        "graph_built": graph_built,
+        "graph_state": graph_state(ctx),
         "graph_questions": [
             {"id": q["id"], "question": q["question"], "params": [p["name"] for p in q["params"]]}
             for q in gq.catalogue()

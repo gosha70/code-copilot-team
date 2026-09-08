@@ -18,6 +18,9 @@ export interface AskStep {
   truncated?: boolean;
   error?: string | null;
   sessionIds: number[];
+  /** Exactly what the judge was given for this step: the evidence. */
+  resultText?: string;
+  lookupSeconds?: number;
 }
 
 export interface Exchange {
@@ -26,8 +29,10 @@ export interface Exchange {
   steps: AskStep[];
   /** Markdown, once the answer event arrived. */
   answer: string | null;
-  /** Sessions the answer cited, in the order it named them. */
+  /** Sessions the answer cited that a lookup actually returned. */
   sessions: number[];
+  /** Sessions the answer named that no lookup returned: not evidence. */
+  unverified: number[];
   error: string | null;
   /** The error names a Settings gap (no judge URL, CLI missing). */
   prerequisite: string | null;
@@ -43,6 +48,7 @@ export function newExchange(question: string): Exchange {
     steps: [],
     answer: null,
     sessions: [],
+    unverified: [],
     error: null,
     prerequisite: null,
     running: true,
@@ -82,6 +88,8 @@ export function applyEvent(x: Exchange, ev: AskEvent): Exchange {
                 truncated: ev.truncated,
                 error: ev.error,
                 sessionIds: ev.session_ids,
+                resultText: ev.result_text,
+                lookupSeconds: ev.seconds,
               }
             : s,
         ),
@@ -91,6 +99,7 @@ export function applyEvent(x: Exchange, ev: AskEvent): Exchange {
         ...x,
         answer: ev.markdown,
         sessions: ev.sessions,
+        unverified: ev.unverified,
         running: false,
       };
     case "error":
@@ -107,8 +116,9 @@ export function stopExchange(x: Exchange): Exchange {
   return { ...x, running: false, stopped: true };
 }
 
-/** Sessions worth linking under an exchange: the ones the answer cited
- *  first, then any a lookup returned, without repeats. */
+/** Sessions worth linking under an exchange: the verified citations
+ *  first, then any a lookup returned, without repeats. An id the model
+ *  named but no lookup returned is never here, so it is never linked. */
 export function linkedSessions(x: Exchange, max = 12): number[] {
   const out: number[] = [];
   for (const id of [...x.sessions, ...x.steps.flatMap((s) => s.sessionIds)]) {

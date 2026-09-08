@@ -1125,18 +1125,45 @@ export interface AskInfo {
     first_session: string | null;
     last_session: string | null;
     copilots: { copilot: string; sessions: number }[];
-    projects: { project_path: string; sessions: number }[];
+    /** Exact, over the sessions the pages count. */
+    project_count: number;
+    /** The busiest projects, at most top_projects_cap of them. */
+    top_projects: { project_path: string; sessions: number }[];
+    top_projects_cap: number;
     sessions_with_archived_text: number;
     sessions_with_analyses: number;
-    graph_built: boolean;
+    /** From a read-only open, not a path check. */
+    graph_state: "ready" | "absent" | "unbuilt" | "unopenable" | "kuzu-missing";
   };
 }
 
 export type AskEvent =
   | { event: "judge"; judge: string; source: string }
   | { event: "step"; n: number; tool: string; args: Record<string, unknown>; why: string; seconds: number }
-  | { event: "result"; n: number; summary: string; chars: number; truncated: boolean; error: string | null; session_ids: number[] }
-  | { event: "answer"; markdown: string; sessions: number[]; seconds: number; steps: number }
+  | {
+      event: "result";
+      n: number;
+      summary: string;
+      chars: number;
+      truncated: boolean;
+      error: string | null;
+      session_ids: number[];
+      /** Exactly what the judge was given for this step (capped). */
+      result_text: string;
+      seconds: number;
+    }
+  | {
+      event: "answer";
+      markdown: string;
+      /** Cited by the model AND returned by a lookup. */
+      sessions: number[];
+      /** Cited by the model, never seen in any lookup. */
+      unverified: number[];
+      /** Every session id any lookup returned. */
+      evidence: number[];
+      seconds: number;
+      steps: number;
+    }
   | { event: "error"; error: string; prerequisite?: string };
 
 export interface AskTurn {

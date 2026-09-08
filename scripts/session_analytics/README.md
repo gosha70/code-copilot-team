@@ -1052,6 +1052,19 @@ Ollama, an OpenAI-compatible server, the claude CLI.
 - Results are capped and the cap is stated to the model; a reply that
   is not a JSON action is nudged once, then reported with the reply's
   head; the step cap forces an answer from what was found.
+- **Evidence and trust.** Each `result` event carries the exact capped
+  text the judge was given, so the page shows the rows behind the
+  answer. The loop keeps the set of session ids any lookup returned;
+  the answer's citations are split into `sessions` (cited AND
+  returned) and `unverified` (cited, never seen) — only the former are
+  linked. Graph-rendered catalogue answers reach the model as nodes and
+  relationships, with each Session node's relational id. Noise policy
+  is the pages': lists, searches and aggregates exclude probe/temp
+  sessions; a lookup by session id reads that session. `graph_state`
+  in the opening facts comes from a read-only open plus a schema probe
+  (ready / absent / unbuilt / unopenable / kuzu-missing), not from a
+  path check. Stop on the page stops listening; the running judge call
+  is not cancelled server-side (read-only, so harmless).
 
 ## Tests
 

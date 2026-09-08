@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from session_analytics import constants as C
@@ -656,8 +658,10 @@ class TestApi(RegistryResetTestCase):
                 return replies.pop(0)
 
         register_judge("asker", _Asker)
+        absent = str(Path(tempfile.mkdtemp()) / "no-graph")
         with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
-             mock.patch.dict("os.environ", {cfgmod.ENV_JUDGE_BACKEND: "asker"}):
+             mock.patch.dict("os.environ", {cfgmod.ENV_JUDGE_BACKEND: "asker",
+                                            cfgmod.ENV_KUZU_PATH: absent}):
             info = self.client.get("/api/ask").json()
             self.assertEqual(info["judge"]["spec"], "asker:a")
             self.assertEqual(info["facts"]["sessions"], 1)
@@ -670,7 +674,11 @@ class TestApi(RegistryResetTestCase):
             self.assertEqual(events[0]["judge"], "asker:a")
             self.assertEqual(events[1]["tool"], "session_summary")
             self.assertEqual(events[2]["session_ids"], [sid])
+            self.assertIn('"session_key": "claude-code:', events[2]["result_text"])
             self.assertEqual(events[3]["sessions"], [sid])
+            self.assertEqual(events[3]["unverified"], [])
+            self.assertEqual(info["facts"]["project_count"], 1)
+            self.assertEqual(info["facts"]["graph_state"], "absent")
             r = self.client.post("/api/ask", json={"question": "   "})
             self.assertEqual(r.status_code, 400)
 

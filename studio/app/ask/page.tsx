@@ -165,6 +165,7 @@ function Ask() {
             type="button"
             onClick={stop}
             className="border border-slate-300 bg-white text-slate-700 text-sm px-4 py-2 rounded hover:bg-slate-50 shrink-0"
+            title="Stop listening. A lookup the judge is already working on finishes on its own."
           >
             Stop
           </button>
@@ -182,15 +183,23 @@ function Ask() {
   );
 }
 
+const GRAPH_STATE_LABEL: Record<AskInfo["facts"]["graph_state"], string> = {
+  ready: "graph ready",
+  absent: "graph not built",
+  unbuilt: "graph store empty (not built)",
+  unopenable: "graph store cannot be opened",
+  "kuzu-missing": "graph unavailable (kuzu not installed)",
+};
+
 function Facts({ info }: { info: AskInfo }) {
   const f = info.facts;
   const parts = [
     `${f.sessions.toLocaleString()} sessions`,
-    `${f.projects.length} project${f.projects.length === 1 ? "" : "s"}`,
+    `${f.project_count.toLocaleString()} project${f.project_count === 1 ? "" : "s"}`,
     f.sessions_with_analyses
       ? `analyses on ${f.sessions_with_analyses}`
       : "no analyses yet",
-    f.graph_built ? "graph built" : "graph not built",
+    GRAPH_STATE_LABEL[f.graph_state] ?? f.graph_state,
     f.sessions_with_archived_text
       ? `full text for ${f.sessions_with_archived_text}`
       : "turn previews only",
@@ -240,6 +249,21 @@ function ExchangeView({ x, onStop }: { x: Exchange; onStop: () => void }) {
                   {s.why && (
                     <div className="text-slate-500 italic">{s.why}</div>
                   )}
+                  {s.resultText !== undefined && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-slate-500 hover:text-slate-700">
+                        Result — what the judge was given
+                        {s.chars ? ` (${s.chars.toLocaleString()} chars` : ""}
+                        {s.truncated ? ", cut to fit)" : s.chars ? ")" : ""}
+                        {s.lookupSeconds !== undefined
+                          ? ` · lookup ${s.lookupSeconds.toFixed(2)} s`
+                          : ""}
+                      </summary>
+                      <pre className="mt-1 max-h-72 overflow-auto rounded bg-slate-50 border border-slate-200 p-2 text-[11px] whitespace-pre-wrap break-all">
+                        {s.resultText}
+                      </pre>
+                    </details>
+                  )}
                 </div>
               </li>
             ))}
@@ -262,7 +286,12 @@ function ExchangeView({ x, onStop }: { x: Exchange; onStop: () => void }) {
             </button>
           </p>
         )}
-        {x.stopped && <p className="text-sm text-slate-500">Stopped.</p>}
+        {x.stopped && (
+          <p className="text-sm text-slate-500">
+            Stopped listening. A lookup the judge was already working on
+            finishes on its own; nothing is written.
+          </p>
+        )}
         {x.error && (
           <div className="text-sm bg-rose-50 border border-rose-200 text-rose-800 rounded p-2">
             {x.error}
@@ -290,8 +319,8 @@ function ExchangeView({ x, onStop }: { x: Exchange; onStop: () => void }) {
             </ReactMarkdown>
           </div>
         )}
-        {x.answer !== null && ids.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-3 text-xs">
+        {x.answer !== null && (ids.length > 0 || x.unverified.length > 0) && (
+          <div className="flex flex-wrap gap-1 mt-3 text-xs items-center">
             <span className="text-slate-500 mr-1">Sessions used:</span>
             {ids.map((id) => (
               <Link
@@ -310,6 +339,15 @@ function ExchangeView({ x, onStop }: { x: Exchange; onStop: () => void }) {
               >
                 #{id}
               </Link>
+            ))}
+            {x.unverified.map((id) => (
+              <span
+                key={`u${id}`}
+                className="rounded-full px-2 py-0.5 border border-dashed border-rose-300 bg-rose-50 text-rose-700"
+                title="The answer names this session, but no lookup returned it — treat it as unverified."
+              >
+                #{id} unverified
+              </span>
             ))}
           </div>
         )}
