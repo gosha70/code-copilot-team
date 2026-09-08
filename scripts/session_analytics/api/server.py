@@ -949,18 +949,29 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     @app.get("/api/sessions")
     def sessions(
         query: str = "", copilot: str = "", limit: int = 50, include_noise: bool = False,
+        sort: str = mcp_tools.SESSION_SORT_DEFAULT, order: str = "desc",
     ) -> dict[str, Any]:
         """The list, noise excluded by default (#307); ``excluded_noise``
         is how many the same filters would add with include_noise=1, so
-        the page's toggle can say "Show excluded (n)"."""
+        the page's toggle can say "Show excluded (n)". ``sort``/``order``
+        are the grid's column headers; the limit applies after ordering."""
+        if order not in ("asc", "desc"):
+            raise HTTPException(status_code=400, detail="order must be asc or desc")
         noise = load_config().noise
         conn = db()
         try:
-            return {
-                "sessions": mcp_tools.search_sessions(
+            try:
+                rows = mcp_tools.search_sessions(
                     conn, query or None, copilot=copilot or None, limit=limit,
                     noise=noise, include_noise=include_noise,
-                ),
+                    sort=sort, descending=(order == "desc"),
+                )
+            except mcp_tools.UnknownSortError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from None
+            return {
+                "sessions": rows,
+                "sort": sort,
+                "order": order,
                 "excluded_noise": mcp_tools.count_noise_sessions(
                     conn, noise, query or None, copilot=copilot or None,
                 ),

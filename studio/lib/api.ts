@@ -167,11 +167,26 @@ export interface DashboardLatency extends LatencySummary {
   by_copilot: ({ copilot: string } & LatencySummary)[];
   basis: string;
 }
+/** Columns the sessions list can be ordered by (the grid's headers);
+ *  the server's closed map — anything else is a 400. */
+export type SessionSort =
+  | "started_at"
+  | "copilot"
+  | "project_path"
+  | "model"
+  | "turn_count"
+  | "tool_call_count"
+  | "error_count"
+  | "cost_usd"
+  | "duration_seconds";
+
 export interface SessionsResponse {
   sessions: SessionRow[];
   /** How many the same filters would add with include_noise. */
   excluded_noise: number;
   include_noise: boolean;
+  sort: SessionSort;
+  order: "asc" | "desc";
 }
 export interface RecentError {
   error_type: string;
@@ -1062,9 +1077,16 @@ export const api = {
       `/api/graph/expand?label=${encodeURIComponent(label)}&key_field=${encodeURIComponent(keyField)}&key_value=${encodeURIComponent(keyValue)}`,
     ),
   benchmark: () => get<BenchmarkSummary>("/api/dashboard/benchmark"),
-  sessions: (query = "", copilot = "", includeNoise = false) =>
+  sessions: (
+    query = "",
+    copilot = "",
+    includeNoise = false,
+    sort: SessionSort = "started_at",
+    order: "asc" | "desc" = "desc",
+  ) =>
     get<SessionsResponse>(
-      `/api/sessions?query=${encodeURIComponent(query)}&copilot=${encodeURIComponent(copilot)}&include_noise=${includeNoise}`,
+      `/api/sessions?query=${encodeURIComponent(query)}&copilot=${encodeURIComponent(copilot)}` +
+        `&include_noise=${includeNoise}&sort=${sort}&order=${order}`,
     ),
   session: (id: number) => get<SessionDetail>(`/api/sessions/${id}`),
   sessionAnalysis: (id: number) =>

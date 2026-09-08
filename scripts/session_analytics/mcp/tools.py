@@ -33,6 +33,26 @@ _COST_ROLLUP_SQL = (
 )
 _SESSION_SELECT_COLS = f"{_SESSION_COLS}, {_COST_ROLLUP_SQL}"
 
+#: Columns the sessions list can be ordered by — the CLOSED map from the
+#: API's `sort` value to SQL, so a caller never names a column directly.
+#: `cost_usd` is the rollup alias, so it sorts what the page shows.
+SESSION_SORT_COLUMNS: dict[str, str] = {
+    "started_at": "started_at",
+    "copilot": "copilot",
+    "project_path": "project_path",
+    "model": "model",
+    "turn_count": "turn_count",
+    "tool_call_count": "tool_call_count",
+    "error_count": "error_count",
+    "cost_usd": "cost_usd",
+    "duration_seconds": "duration_seconds",
+}
+SESSION_SORT_DEFAULT = "started_at"
+
+
+class UnknownSortError(ValueError):
+    """The requested sort column is not one the list can order by."""
+
 
 def _session_dict(row, *, has_cost: bool = True) -> dict[str, Any]:
     keys = [c.strip() for c in _SESSION_COLS.split(",")]
@@ -54,22 +74,35 @@ def search_sessions(
     limit: int = 20,
     noise: Optional[NoiseConfig] = None,
     include_noise: bool = False,
+    sort: str = SESSION_SORT_DEFAULT,
+    descending: bool = True,
 ) -> list[dict[str, Any]]:
     """Find sessions by keyword (project path / model) + optional filters.
 
     With ``noise`` given and ``include_noise`` False, probe/temp-dir/too-
     short sessions are left out (see session_filter). Use
     ``count_noise_sessions`` with the same filters to say how many.
+    ``sort`` is one of SESSION_SORT_COLUMNS (the Sessions grid's column
+    headers); the limit applies AFTER ordering, so "top 50 by errors"
+    is what a sort by errors returns.
     """
+    column = SESSION_SORT_COLUMNS.get(sort)
+    if column is None:
+        raise UnknownSortError(
+            f"cannot sort sessions by {sort!r}; one of: {', '.join(SESSION_SORT_COLUMNS)}"
+        )
     where, params = _session_filters(query, copilot, date_from, date_to)
     if noise is not None and not include_noise:
         keep_sql, keep_params = keep_clause(noise, "copilot_session")
         where.append(keep_sql)
         params += list(keep_params)
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    # NULLs (an unpriced cost, a missing model) sort last either way;
+    # started_at breaks ties so the order is stable between polls.
+    direction = "DESC" if descending else "ASC"
     rows = db.query(
         f"SELECT {_SESSION_SELECT_COLS} FROM copilot_session{where_sql} "
-        f"ORDER BY started_at DESC LIMIT {int(limit)}",
+        f"ORDER BY ({column} IS NULL), {column} {direction}, started_at DESC LIMIT {int(limit)}",
         tuple(params),
     )
     return [_session_dict(r) for r in rows]

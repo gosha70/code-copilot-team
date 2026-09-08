@@ -664,6 +664,13 @@ class TestApi(RegistryResetTestCase):
             self.assertFalse(r["ok"])
             self.assertIn("HTTP 404", r["error"])
 
+    def test_sessions_sort_params_are_echoed_and_validated(self) -> None:
+        r = self.client.get("/api/sessions", params={"sort": "error_count", "order": "asc"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual((r.json()["sort"], r.json()["order"]), ("error_count", "asc"))
+        self.assertEqual(self.client.get("/api/sessions", params={"sort": "nope"}).status_code, 400)
+        self.assertEqual(self.client.get("/api/sessions", params={"order": "sideways"}).status_code, 400)
+
     def test_get_config(self) -> None:
         r = self.client.get("/api/config")
         self.assertEqual(r.status_code, 200)

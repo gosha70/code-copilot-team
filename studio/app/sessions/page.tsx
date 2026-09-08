@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
-import { api } from "@/lib/api";
+import { SessionSort, api } from "@/lib/api";
 import { Card, ErrorNote, Loading, formatCost, useApi } from "@/components/ui";
 
 const REFRESH_MS = 15000;
@@ -14,11 +14,54 @@ export default function SessionsPage() {
   // count on the toggle is the server's, from the same filters, so it
   // equals what appears when the toggle is on.
   const [showNoise, setShowNoise] = useState(false);
+  // Sorting is the SERVER's: the list is the top N after ordering, so a
+  // sort by errors shows the sessions with the most errors, not the
+  // newest N reordered.
+  const [sort, setSort] = useState<SessionSort>("started_at");
+  const [order, setOrder] = useState<"asc" | "desc">("desc");
   const { data, error, loading } = useApi(
-    () => api.sessions(query, copilot, showNoise),
-    [query, copilot, showNoise],
+    () => api.sessions(query, copilot, showNoise, sort, order),
+    [query, copilot, showNoise, sort, order],
     REFRESH_MS
   );
+
+  function sortBy(column: SessionSort) {
+    if (column === sort) setOrder(order === "desc" ? "asc" : "desc");
+    else {
+      setSort(column);
+      // Numbers and dates open with the largest first; names A→Z.
+      setOrder(["copilot", "project_path", "model"].includes(column) ? "asc" : "desc");
+    }
+  }
+
+  function Th({
+    column,
+    children,
+    className = "",
+  }: {
+    column: SessionSort;
+    children: ReactNode;
+    className?: string;
+  }) {
+    const active = column === sort;
+    return (
+      <th className={className}>
+        <button
+          type="button"
+          onClick={() => sortBy(column)}
+          className={
+            "inline-flex items-center gap-1 hover:text-slate-800 " +
+            (active ? "text-slate-800 font-semibold" : "")
+          }
+          title={`Sort by ${String(children)}`}
+          aria-sort={active ? (order === "asc" ? "ascending" : "descending") : undefined}
+        >
+          {children}
+          <span className="text-[10px] w-3">{active ? (order === "asc" ? "▲" : "▼") : ""}</span>
+        </button>
+      </th>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -69,14 +112,14 @@ export default function SessionsPage() {
           <table className="w-full text-sm">
             <thead className="text-left text-slate-500 border-b border-slate-200">
               <tr>
-                <th className="py-2 pr-3">Copilot</th>
-                <th className="pr-3">Project</th>
-                <th className="pr-3">Model</th>
-                <th className="text-right pr-3">Turns</th>
-                <th className="text-right pr-3">Tools</th>
-                <th className="text-right pr-3">Errors</th>
-                <th className="text-right pr-3">Cost</th>
-                <th className="pl-3">Started</th>
+                <Th column="copilot" className="py-2 pr-3">Copilot</Th>
+                <Th column="project_path" className="pr-3">Project</Th>
+                <Th column="model" className="pr-3">Model</Th>
+                <Th column="turn_count" className="text-right pr-3">Turns</Th>
+                <Th column="tool_call_count" className="text-right pr-3">Tools</Th>
+                <Th column="error_count" className="text-right pr-3">Errors</Th>
+                <Th column="cost_usd" className="text-right pr-3">Cost</Th>
+                <Th column="started_at" className="pl-3">Started</Th>
               </tr>
             </thead>
             <tbody>
