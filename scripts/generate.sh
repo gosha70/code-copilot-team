@@ -17,6 +17,28 @@ ADAPTERS="$REPO_DIR/adapters"
 # Skills that are always loaded (unconditional, every session)
 ALWAYS_SKILLS="coding-standards copilot-conventions copyright-headers origin-confirmation safety wiki-first-query"
 
+# ── Codex AGENTS.md budget (#296) ───────────────────────────
+# Codex caps the COMBINED size of every AGENTS.md it merges — the
+# global ~/.codex/AGENTS.md (this generator's output, installed by
+# adapters/codex/setup.sh) plus each project's own — at
+# project_doc_max_bytes, and stops adding files once the limit is
+# reached (default 32 KiB; see docs "AGENTS.md" → project_doc_max_bytes).
+# The number lives ONCE, in the adapter's installed config; the
+# generator and tests/test-generate.sh both read it from there. The
+# global file may not take the whole cap: CODEX_PROJECT_RESERVE is
+# kept free for a project's AGENTS.md files.
+CODEX_CONFIG="$ADAPTERS/codex/config.toml"
+CODEX_DEFAULT_DOC_CAP=32768
+CODEX_PROJECT_RESERVE=16384
+# Warn (not fail) below this much headroom, so the wall is seen coming.
+CODEX_LOW_HEADROOM=2048
+
+codex_doc_cap() {
+  local cap
+  cap=$(sed -n 's/^project_doc_max_bytes[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$CODEX_CONFIG" 2>/dev/null | head -1)
+  echo "${cap:-$CODEX_DEFAULT_DOC_CAP}"
+}
+
 echo "=== Generating adapter configs from shared/skills/ ==="
 
 # ── Helpers ─────────────────────────────────────────────────
@@ -115,13 +137,24 @@ mkdir -p "$CODEX_DIR"
   fi
 } > "$AGENTS_MD"
 
-# Verify size limit (32 KiB = 32768 bytes)
+# Verify the budget (#296): cap from the adapter's installed config,
+# minus the reserve for project AGENTS.md files. Exactly the budget
+# passes; tests/test-generate.sh applies the same comparison.
 SIZE=$(wc -c < "$AGENTS_MD" | tr -d ' ')
-if [[ "$SIZE" -gt 32768 ]]; then
-  echo "[codex] WARNING: AGENTS.md is $SIZE bytes (limit: 32768)"
+CODEX_DOC_CAP=$(codex_doc_cap)
+CODEX_BUDGET=$((CODEX_DOC_CAP - CODEX_PROJECT_RESERVE))
+CODEX_HEADROOM=$((CODEX_BUDGET - SIZE))
+if [[ "$SIZE" -gt "$CODEX_BUDGET" ]]; then
+  echo "[codex] ERROR: AGENTS.md is $SIZE bytes, $((SIZE - CODEX_BUDGET)) over its $CODEX_BUDGET-byte budget" \
+       "(cap $CODEX_DOC_CAP from adapters/codex/config.toml, $CODEX_PROJECT_RESERVE reserved for project AGENTS.md files)."
+  echo "[codex] Shorten an always-on skill (ALWAYS_SKILLS), or raise project_doc_max_bytes in adapters/codex/config.toml."
   exit 1
 fi
-echo "[codex] AGENTS.md generated ($SIZE bytes)"
+echo "[codex] AGENTS.md generated ($SIZE bytes; $CODEX_HEADROOM of the $CODEX_BUDGET-byte budget left;" \
+     "cap $CODEX_DOC_CAP from adapters/codex/config.toml, $CODEX_PROJECT_RESERVE reserved for project AGENTS.md files)"
+if [[ "$CODEX_HEADROOM" -lt "$CODEX_LOW_HEADROOM" ]]; then
+  echo "[codex] WARNING: under $CODEX_LOW_HEADROOM bytes of headroom — the next always-on skill edit may not fit."
+fi
 
 # ── Cursor ───────────────────────────────────────────────────
 # Generate .mdc files: always skills get alwaysApply:true, on-demand get false
@@ -405,9 +438,10 @@ echo "[pi] Generated $PI_PROMPT_COUNT prompt templates (stateful commands deferr
 echo "[pi] Wrote resource provenance manifest"
 
 # Always-context bundle: ALWAYS_SKILLS bodies, loaded by the runtime /
-# launcher before task execution. NOTE: the 32 KiB cap above is a
-# Codex-adapter constraint; Pi limits are measured separately (spec C-4) —
-# we report size and warn (not fail) past an advisory threshold.
+# launcher before task execution. NOTE: the AGENTS.md budget above is a
+# Codex-adapter constraint (project_doc_max_bytes); Pi limits are
+# measured separately (spec C-4) — we report size and warn (not fail)
+# past an advisory threshold.
 PI_ALWAYS_MD="$PI_RES/context/always-context.md"
 {
   echo "# Code Copilot Team — Always-On Policy (generated)"

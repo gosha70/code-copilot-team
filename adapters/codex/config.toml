@@ -1,7 +1,11 @@
 # Codex CLI configuration
 # Installed to ~/.codex/config.toml by setup.sh
 
-# Maximum size for project documents (AGENTS.md)
+# Maximum COMBINED size of every AGENTS.md Codex merges: the global
+# ~/.codex/AGENTS.md installed from this adapter plus each project's
+# own. Codex's default is 32768. scripts/generate.sh reads this value
+# and budgets the generated AGENTS.md against it, keeping
+# CODEX_PROJECT_RESERVE bytes free for project files (#296).
 project_doc_max_bytes = 65536
 
 # Model to use (override with CODEX_MODEL env var)
