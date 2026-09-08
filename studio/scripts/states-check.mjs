@@ -80,6 +80,7 @@ try {
         join(STUDIO, "components/MarkdownDoc.tsx"),
         join(STUDIO, "lib/urls.ts"),
         join(STUDIO, "components/ResponseTime.tsx"),
+        join(STUDIO, "components/SessionHeader.tsx"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -911,6 +912,29 @@ try {
   else if (!/href="#turn-5"/.test(card) || !/reading the whole tree/.test(card)) fail("slowest table lacks the link or the turn text");
   else if (!/bg-rose-500/.test(card) || !/width:100%/.test(card)) fail("histogram bars missing");
   else console.log("  ok  card: tiles, bars, slowest-turn table with links and text");
+
+  // ── session header ─────────────────────────────────────────────────
+  console.log("\nsession header:");
+  const sh = await import(pathToFileURL(join(out, "components/SessionHeader.js")));
+  const es = (median, p90) => ({ observations: 14, sufficient: true, median, p90, max: p90 * 2 });
+  const v = sh.versusProject(4659, es(2114, 6457));
+  if (!/2\.2× the project median/.test(v.note) || v.tone !== "default") fail(`versus: ${JSON.stringify(v)}`);
+  else if (sh.versusProject(7000, es(2114, 6457)).tone !== "warn" || !/above its p90/.test(sh.versusProject(7000, es(2114, 6457)).note)) fail("past-p90 not flagged");
+  else if (sh.versusProject(2100, es(2114, 6457)).note !== "about the project median") fail("near-median wording");
+  else if (sh.versusProject(5, { observations: 3, sufficient: false, median: 4, p90: 9, max: 9 }).note !== "") fail("insufficient baseline must say nothing");
+  else if (sh.projectName("/Users/x/dev/repo/code-copilot-team/") !== "code-copilot-team" || sh.projectName(null) !== "(no project path)") fail("project name");
+  else console.log("  ok  comparison wording: ×median, near-median, above p90, withheld when insufficient");
+  const detail = { id: 1, copilot: "claude-code", session_id: "abc", project_path: "/Users/x/dev/repo/code-copilot-team", model: "claude-opus-5", turn_count: 4659, tool_call_count: 1543, error_count: 46, started_at: "2026-09-03T11:46:54Z", duration_seconds: 284400, cost_usd: null, turns: [], tool_usage: [], errors: [], latency: null };
+  const base = { scope: "project", sessions: 14, turns: es(2114, 6457), tool_calls: es(600, 2000), errors: es(10, 40), duration_seconds: es(100000, 250000), cost_usd: { observations: 0, sufficient: false, median: null, p90: null, max: null }, cost_usd_coverage: { sessions_with_any_priced_turn: 0, sessions_fully_priced: 0, sessions_with_priceable_turns: 0 }, min_observations: 5, basis: "" };
+  const head = render(sh.default, { data: detail, baseline: base });
+  if (!/<h1[^>]*>code-copilot-team<\/h1>/.test(head)) fail("title is not the project name");
+  else if (!/claude-opus-5/.test(head) || !/claude-code/.test(head)) fail("copilot/model badges missing");
+  else if (!/2\.2× the project median/.test(head) || !/1\.0 per 100 turns/.test(head) || !/above its p90/.test(head)) fail("tile notes missing");
+  else if (!/compared with 14 other sessions/.test(head) || !/no priced turns/.test(head)) fail("baseline line or cost note missing");
+  else console.log("  ok  header: project title, badges, five tiles with comparisons");
+  const bare = render(sh.default, { data: { ...detail, project_path: null, model: null, started_at: null, duration_seconds: null }, baseline: null });
+  if (!/no project path/.test(bare) || !/no project baseline yet/.test(bare) || /×/.test(bare)) fail("header without a project/baseline still claims a comparison");
+  else console.log("  ok  no project path / no baseline: nothing compared, nothing invented");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {
