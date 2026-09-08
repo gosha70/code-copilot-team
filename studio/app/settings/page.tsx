@@ -222,11 +222,26 @@ export default function SettingsPage() {
   // "Other…" on the Model dropdown: type a name the server does not list.
   const [modelOther, setModelOther] = useState(false);
   const [embedModels, setEmbedModels] = useState<EmbedModels | null>(null);
+  // The embedding list has THREE states the field must tell apart:
+  // loading (a disabled select saying so), failed (a text box plus the
+  // reason and Retry), listed. It used to fall back to a bare text box
+  // in the first two, which read as the dropdown vanishing.
+  const [embedListState, setEmbedListState] = useState<"loading" | "failed" | "ready">("loading");
   const [embedOther, setEmbedOther] = useState(false);
   const [embedProbe, setEmbedProbe] = useState<{ ok: boolean; text: string } | null>(null);
   const loadModels = () => {
     api.judgeModels().then(setModels).catch(() => setModels(null));
-    api.embedModels().then(setEmbedModels).catch(() => setEmbedModels(null));
+    setEmbedListState("loading");
+    api
+      .embedModels()
+      .then((m) => {
+        setEmbedModels(m);
+        setEmbedListState("ready");
+      })
+      .catch(() => {
+        setEmbedModels(null);
+        setEmbedListState("failed");
+      });
   };
   useEffect(() => {
     loadModels();
@@ -519,6 +534,33 @@ export default function SettingsPage() {
                       <option key={b} value={b}>{b}</option>
                     ))}
                   </select>
+                ) : f.key === "CCT_SA_EMBED_MODEL" && !embedOther && embedListState === "loading" ? (
+                  <select
+                    disabled
+                    className="border border-slate-300 bg-slate-50 text-slate-500 rounded px-2 py-1 text-sm w-full font-mono"
+                  >
+                    <option>{values[f.key] ? `${values[f.key]} — listing the server's models…` : "listing the server's models…"}</option>
+                  </select>
+                ) : f.key === "CCT_SA_EMBED_MODEL" && !embedOther && !embedModelList ? (
+                  <div>
+                    <input
+                      type="text"
+                      value={values[f.key] || ""}
+                      onChange={(e) => set(f.key, e.target.value)}
+                      placeholder={m.placeholder}
+                      className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-full font-mono"
+                    />
+                    <p className="text-xs text-rose-700 mt-1">
+                      {embedModels && embedModels.url
+                        ? `Could not list models at ${embedModels.url}${embedModels.error ? ` (${embedModels.error})` : ""}`
+                        : embedModels && embedBackend !== embedModels.backend
+                          ? "The list is for the saved backend — Save, then it refreshes."
+                          : "Could not reach the API to list models."}{" "}
+                      <button type="button" onClick={loadModels} className="text-blue-700 hover:underline">
+                        Retry
+                      </button>
+                    </p>
+                  </div>
                 ) : f.key === "CCT_SA_EMBED_MODEL" && embedModelList && !embedOther ? (
                   <div className="flex gap-2 items-center">
                     <select
