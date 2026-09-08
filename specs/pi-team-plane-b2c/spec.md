@@ -63,7 +63,9 @@ the cost engine prices turns; the Studio auto-refreshes.
   (`team.active_window_seconds`) and returned in the payload; the
   page says "active in the last N minutes", not "online".
 - FR-3 **Windows are by turn timestamp** (`copilot_turn.timestamp`),
-  UTC, computed in SQL on both dialects; a turn without a timestamp
+  UTC, bucketed in Python after one 30-day scan on either dialect
+  (timestamps are ISO text in more than one shape, so a string compare
+  at a boundary would misplace a turn); a turn without a timestamp
   counts in no window and is reported in `totals.unstamped_turns`.
 - FR-4 **Cost honesty (E5 rule).** Cost sums priced turns only;
   `priced_turns` / `priceable_turns` accompany every cost figure; the
@@ -89,8 +91,10 @@ the cost engine prices turns; the Studio auto-refreshes.
 - FR-10 **Verification.** Unit tests for the payload on a seeded
   SQLite store with three developers, heartbeats inside and outside
   the window and none, turns in and out of windows, unpriced turns;
-  the API route; the CLI; states-check for the tab; a Postgres run of
-  the payload through the compose container.
+  the API route; the CLI; states-check for the tab; the Postgres
+  dialect asserted in CI by the smoke job's `postgres:16` service (a
+  heartbeat 30 s old is active, one 3 h old is idle, the store reports
+  itself shared).
 
 ## Constraints
 
