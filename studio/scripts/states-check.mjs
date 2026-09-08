@@ -81,6 +81,7 @@ try {
         join(STUDIO, "components/SessionHeader.tsx"),
         join(STUDIO, "components/SessionTags.tsx"),
         join(STUDIO, "lib/graphView.ts"),
+        join(STUDIO, "lib/askView.ts"),
         join(STUDIO, "components/GraphCatalogue.tsx"),
         join(STUDIO, "components/GraphExplorer.tsx"),
         join(STUDIO, "global.d.ts"),
@@ -809,6 +810,37 @@ try {
   const sessionPanel = render(ge.SelectionPanel, { selection: null, data: sn, onFocusSession: () => {} });
   if (!/2 of 11 tools/.test(sessionPanel) || !/1 of 31 files/.test(sessionPanel) || !/1 of 5 neighbours/.test(sessionPanel)) fail(`session panel totals: ${sessionPanel.replace(/<[^>]+>/g, " ").slice(0, 300)}`);
   else console.log("  ok  the session panel says N of M for tools, files and neighbours");
+
+  // ── the Ask page: one exchange folded from the event stream ──────
+  console.log("\nask exchange:");
+  const av = await import(pathToFileURL(join(out, "lib/askView.js")));
+  let ex = av.newExchange("which sessions errored most?");
+  if (!ex.running || ex.answer !== null) fail("a new exchange is running with no answer");
+  ex = av.applyEvent(ex, { event: "judge", judge: "openai:qwen38-27b", source: "settings" });
+  ex = av.applyEvent(ex, { event: "step", n: 1, tool: "find_sessions", args: { sort: "error_count", limit: 5 }, why: "rank by errors", seconds: 4.2 });
+  if (ex.steps.length !== 1 || ex.steps[0].summary !== undefined) fail("a step in flight has no summary yet");
+  else if (!/find_sessions · running… · 4\.2 s to decide/.test(av.stepLine(ex.steps[0]))) fail(`step line in flight: ${av.stepLine(ex.steps[0])}`);
+  else console.log("  ok  a lookup in flight says running… with the seconds the judge took to decide");
+  ex = av.applyEvent(ex, { event: "result", n: 1, summary: "5 sessions", chars: 9000, truncated: true, error: null, session_ids: [35, 41, 7, 8, 9] });
+  if (!/find_sessions · 5 sessions · result cut to fit \(9,000 chars\)/.test(av.stepLine(ex.steps[0]))) fail(`step line done: ${av.stepLine(ex.steps[0])}`);
+  else if (av.argsLine(ex.steps[0].args) !== 'sort="error_count", limit=5') fail(`args line: ${av.argsLine(ex.steps[0].args)}`);
+  else console.log("  ok  a finished lookup says what it returned, that it was cut, and its arguments");
+  ex = av.applyEvent(ex, { event: "step", n: 2, tool: "session_turns", args: { session_id: 35 }, why: "read", seconds: 3 });
+  ex = av.applyEvent(ex, { event: "result", n: 2, summary: "error: session 35 not found", chars: 40, truncated: false, error: "session 35 not found", session_ids: [] });
+  if (!/error: session 35 not found/.test(av.stepLine(ex.steps[1]))) fail("an errored lookup names the error");
+  else console.log("  ok  a lookup that failed says so on its line");
+  ex = av.applyEvent(ex, { event: "answer", markdown: "Session #35 had 71 errors; see also #41. Not #319 (an issue).", sessions: [35, 41], seconds: 6, steps: 2 });
+  if (ex.running || ex.answer === null) fail("the answer ends the exchange");
+  else if (JSON.stringify(av.linkedSessions(ex)) !== JSON.stringify([35, 41, 7, 8, 9])) fail(`linked sessions: ${av.linkedSessions(ex)}`);
+  else console.log("  ok  the answer's cited sessions come first, then the ones lookups returned, no repeats");
+  const linked = av.linkSessionRefs(ex.answer, av.linkedSessions(ex));
+  if (!linked.includes("[#35](/sessions/35)") || !linked.includes("[#41](/sessions/41)")) fail(`session refs not linked: ${linked}`);
+  else if (linked.includes("[#319]")) fail("an issue number was linked as a session");
+  else console.log("  ok  #id in the answer links to the session only for ids the exchange touched");
+  const askFailed = av.applyEvent(av.newExchange("q"), { event: "error", error: "the openai judge needs a base URL", prerequisite: "judge" });
+  if (askFailed.running || askFailed.prerequisite !== "judge") fail("a judge error ends the exchange and names the prerequisite");
+  else if (!av.stopExchange(av.newExchange("q")).stopped) fail("stop");
+  else console.log("  ok  a Settings gap ends the exchange with prerequisite=judge; Stop marks it stopped");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

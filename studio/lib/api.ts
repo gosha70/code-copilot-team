@@ -1113,15 +1113,69 @@ export interface PipelineStatus {
   store_reachable: boolean;
 }
 
-// Ranked full-text search over archived trace text (#65 slice B).
-export interface TraceHit {
-  session_ref: number;
-  sequence_num: number;
-  copilot: string;
-  session_id: string;
-  project_path: string | null;
-  redaction_mode: string;
-  snippet: string;
+// Ask: a question in words, answered by the judge in Settings through
+// read-only lookups. POST /api/ask streams one NDJSON event per line.
+export interface AskInfo {
+  judge: { spec: string; backend: string; model: string; source: string };
+  examples: string[];
+  tools: { name: string; purpose: string }[];
+  max_steps: number;
+  facts: {
+    sessions: number;
+    first_session: string | null;
+    last_session: string | null;
+    copilots: { copilot: string; sessions: number }[];
+    projects: { project_path: string; sessions: number }[];
+    sessions_with_archived_text: number;
+    sessions_with_analyses: number;
+    graph_built: boolean;
+  };
+}
+
+export type AskEvent =
+  | { event: "judge"; judge: string; source: string }
+  | { event: "step"; n: number; tool: string; args: Record<string, unknown>; why: string; seconds: number }
+  | { event: "result"; n: number; summary: string; chars: number; truncated: boolean; error: string | null; session_ids: number[] }
+  | { event: "answer"; markdown: string; sessions: number[]; seconds: number; steps: number }
+  | { event: "error"; error: string; prerequisite?: string };
+
+export interface AskTurn {
+  question: string;
+  answer: string;
+}
+
+/** Read an NDJSON stream line by line, calling ``onEvent`` per parsed
+ *  line. Resolves when the stream ends; rejects on a non-2xx status or
+ *  when ``signal`` aborts. */
+async function streamNdjson(
+  path: string,
+  body: unknown,
+  onEvent: (ev: AskEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const r = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!r.ok || !r.body) throw new Error(`POST ${path} → ${r.status}`);
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    let nl = buffer.indexOf("\n");
+    while (nl >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (line) onEvent(JSON.parse(line) as AskEvent);
+      nl = buffer.indexOf("\n");
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) onEvent(JSON.parse(buffer.trim()) as AskEvent);
 }
 
 // ── #313 judge validation ─────────────────────────────────────────────
@@ -1175,10 +1229,13 @@ export interface JudgeModels {
 export const api = {
   pipelineStatus: () => get<PipelineStatus>("/api/pipeline/status"),
   judgeModels: () => get<JudgeModels>("/api/judge/models"),
-  searchTraces: (q: string, limit = 50) =>
-    get<{ query: string; results: TraceHit[] }>(
-      `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`,
-    ),
+  askInfo: () => get<AskInfo>("/api/ask"),
+  ask: (
+    question: string,
+    history: AskTurn[],
+    onEvent: (ev: AskEvent) => void,
+    signal?: AbortSignal,
+  ) => streamNdjson("/api/ask", { question, history }, onEvent, signal),
   pipelineSessions: (params: { copilot?: string; since?: string; limit?: number }) => {
     const q = new URLSearchParams();
     if (params.copilot) q.set("copilot", params.copilot);

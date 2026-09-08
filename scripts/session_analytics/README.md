@@ -1024,6 +1024,35 @@ state's marker appears in no other state's render. Run it with
 `node studio/scripts/states-check.mjs`; it needs no dependency the
 Studio does not already have.
 
+## Ask: a question in words, answered from the store
+
+`POST /api/ask` (`{question, history}`) streams NDJSON events — `judge`,
+then `step`/`result` per lookup, then `answer` or `error` — and
+`GET /api/ask` returns the judge that will answer, the example
+questions and the store facts. The loop (`ask/loop.py`) drives the
+configured judge through its existing `complete(prompt) -> JSON`
+transport: each step the model returns one JSON object, a tool call
+`{"tool", "args", "why"}` or the answer `{"answer", "sessions"}`. No
+native tool-calling API, so every backend Settings can name works —
+Ollama, an OpenAI-compatible server, the claude CLI.
+
+- **Everything is data** in `config_data/ask.json`: the prompt, the
+  tool catalogue the model reads (name, purpose, argument names), the
+  step cap, the per-result character cap, the history cap, examples.
+  `ask/tools.py` binds each name to an existing read function
+  (`mcp.tools`, `archive.search_traces`, `graph.query.run_catalogue`,
+  the session analyses, `dashboard.kpis`); an argument the model
+  invents is refused before anything runs, and the refusal is fed back
+  as that step's result.
+- **Read-only by construction**: the graph opens with
+  `connect_read_only`, catalogue Cypher passes `assert_readonly`, and no
+  tool writes. `search_text` searches every session's turn previews as
+  well as archived full text, so it answers on a store with nothing
+  archived (the Search page, which it replaced, could not).
+- Results are capped and the cap is stated to the model; a reply that
+  is not a JSON action is nudged once, then reported with the reply's
+  head; the step cap forces an answer from what was found.
+
 ## Tests
 
 ```bash

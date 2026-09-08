@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   ANALYSIS_KINDS,
@@ -106,7 +107,7 @@ export default function SessionDetailPage() {
         onToggleTag={(tag, on) => toggleTag(tag, on)}
       />
 
-      <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
+      <div className="flex gap-1 border-b border-slate-200 overflow-x-auto items-center">
         {(["timeline", ...ANALYSIS_KINDS, "similar"] as Tab[]).map((t) => (
           <button
             key={t}
@@ -120,6 +121,13 @@ export default function SessionDetailPage() {
             {TAB_LABEL[t]}
           </button>
         ))}
+        <Link
+          href={`/ask?session=${id}`}
+          className="ml-auto text-sm text-blue-700 hover:underline whitespace-nowrap px-2"
+          title="Ask the judge LLM a question about this session"
+        >
+          Ask about this session →
+        </Link>
       </div>
 
       {tab === "timeline" && <Timeline data={data} />}

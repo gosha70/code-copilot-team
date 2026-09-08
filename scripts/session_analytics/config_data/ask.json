@@ -1,0 +1,103 @@
+{
+  "_comment": [
+    "The Ask page's brain, as DATA. The configured judge LLM answers a",
+    "question about the person's own sessions by calling the read-only",
+    "tools listed here, one per step, and then answering from what it",
+    "found. `prompt_template` is rendered once per step with {tools},",
+    "{facts}, {history}, {question}, {steps}. Tool descriptions are what",
+    "the model reads; the Python side binds each name to a read function",
+    "and rejects any argument not listed under `args`."
+  ],
+  "version": "1",
+  "max_steps": 8,
+  "max_result_chars": 6000,
+  "max_history": 6,
+  "step_timeout_seconds": 300,
+  "examples": [
+    "Which of my sessions had the most tool errors, and what went wrong in the worst one?",
+    "What did I work on last week, project by project?",
+    "Which tools fail most across all sessions?",
+    "Find the sessions where I asked about pytest fixtures.",
+    "What does the coaching analysis say I should change in how I prompt?",
+    "Which sessions are most similar to my longest session, and why?"
+  ],
+  "tools": [
+    {
+      "name": "find_sessions",
+      "purpose": "List sessions, newest first, filtered by a project or model keyword, a copilot, a date range or a tag, sorted by one column. Use it to find session ids before asking about one session.",
+      "args": {
+        "query": "keyword matched against project path and model (optional)",
+        "copilot": "claude-code | kiro | aider | ... (optional)",
+        "date_from": "ISO date, inclusive (optional)",
+        "date_to": "ISO date, inclusive (optional)",
+        "tag": "favorite | todo | analyzed (optional)",
+        "sort": "started_at | turn_count | tool_call_count | error_count | cost_usd | duration_seconds (default started_at)",
+        "limit": "1-50 (default 20)"
+      }
+    },
+    {
+      "name": "session_summary",
+      "purpose": "Facts about one session: project, model, turns, tools used with counts, errors, response-time percentiles, which analyses exist. Cheap; call it before reading turns.",
+      "args": {
+        "session_id": "the numeric session id from find_sessions"
+      }
+    },
+    {
+      "name": "session_turns",
+      "purpose": "Read a window of one session's turns as text. EVERY session has this: each turn keeps a preview (its first few hundred characters), and projects that opted into archiving keep the full text. Tools called and errors are marked per turn. Use from_turn/count to page through a long session.",
+      "args": {
+        "session_id": "numeric session id",
+        "from_turn": "first turn number to read (default 1)",
+        "count": "how many turns (default 30, max 80)"
+      }
+    },
+    {
+      "name": "session_analyses",
+      "purpose": "The stored LLM analyses of one session: harness tuning findings, prompt coaching, efficiency levers. Empty when the person has not run them.",
+      "args": {
+        "session_id": "numeric session id"
+      }
+    },
+    {
+      "name": "search_text",
+      "purpose": "Full-text search of what was said in every session — the turn previews every session keeps, plus full archived text where a project opted in. Returns session ids, turn numbers and snippets.",
+      "args": {
+        "query": "words to find",
+        "limit": "1-50 (default 20)"
+      }
+    },
+    {
+      "name": "patterns",
+      "purpose": "Aggregates across sessions: tools by calls and errors, error types by count. Optionally within one workspace path or for one tool.",
+      "args": {
+        "workspace": "substring of a project path (optional)",
+        "tool": "one tool name (optional)",
+        "error_type": "one error type (optional)"
+      }
+    },
+    {
+      "name": "similar_sessions",
+      "purpose": "Sessions most similar to one session by meaning (from the similarity pass), with scores and what they share (tools, error types, files, project).",
+      "args": {
+        "session_id": "numeric session id",
+        "limit": "1-20 (default 8)"
+      }
+    },
+    {
+      "name": "graph_question",
+      "purpose": "Run one question from the knowledge-graph catalogue by id (the list of ids and their parameters is under FACTS). Answers cross-session questions the other tools cannot: tools that precede errors, files touched by the most sessions, similar sessions across projects.",
+      "args": {
+        "id": "catalogue query id",
+        "params": "object of parameter name to value, e.g. {\"session\": \"claude-code:abc\"} or {\"project\": \"/path\"}"
+      }
+    },
+    {
+      "name": "overview",
+      "purpose": "Store-wide totals: sessions, turns, tool calls, errors, cost, sessions per copilot, top tools. Use for 'how much' questions with no session in mind.",
+      "args": {}
+    }
+  ],
+  "prompt_template": "You answer questions about a developer's own AI coding-assistant sessions, using ONLY what the tools return. Never invent a session, a number or a quote: if you have not looked it up, look it up. Session ids are integers; refer to a session as #<id>.\n\nTOOLS (call one per step; arguments are a JSON object with exactly the names listed):\n{tools}\n\nFACTS ABOUT THE STORE (sessions_with_archived_text counts FULL-text sessions; every session still has turn previews, so session_turns and search_text always have text to read)\n{facts}\n\n{history}QUESTION\n{question}\n\nSTEPS SO FAR\n{steps}\n\nRespond with ONE JSON object and nothing else. Either call a tool:\n{{\"tool\": \"<name>\", \"args\": {{...}}, \"why\": \"<one short sentence>\"}}\nor answer, once you have what you need (use plain Markdown; cite the session ids you relied on):\n{{\"answer\": \"<markdown>\", \"sessions\": [<ids>]}}\nWhen a result was truncated, ask a narrower question (a smaller window, a filter) rather than guessing. Prefer few steps; answer as soon as the evidence is in hand.",
+  "force_answer_note": "You have used every step you had. Answer NOW from what is above, saying what you could not check.",
+  "bad_json_note": "Your previous reply was not a single JSON object. Reply with exactly one JSON object of the two shapes given."
+}
