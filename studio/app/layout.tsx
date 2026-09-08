@@ -8,8 +8,9 @@ export const metadata: Metadata = {
   description: "Copilot session analytics & process mining (CCT #63)",
 };
 
-// #307: only pages that answer a question a person has. Clusters
-// renders under Graph (its route stays for deep links); Routing is a
+// #307: only pages that answer a question a person has. Clusters is
+// gone (falsified on real data — one giant component); Graph explores
+// a session or a project and what it is connected to. Routing is a
 // card on Benchmark (both are benchmark-derived, /routing stays); the
 // client-side Agents stub is gone — Learn (#309) carries the real
 // catalogue of docs, skills and agents from the repo itself.

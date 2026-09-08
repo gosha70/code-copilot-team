@@ -20,7 +20,7 @@ design decision is `scripts/session_analytics/README.md`; the Studio's
 | **Sessions** | Which sessions are real work (probe runs and two-turn tests are hidden by default; one toggle shows them). |
 | **Session page** | What was said, turn by turn, with the agent's response time — and three analyses a judge writes over the whole transcript: **Agent Tuning** (what to change in your CLAUDE.md, permissions, hooks, skills, with the diff), **Prompt Coaching** (which of your prompts were vague and what to send instead), **Efficiency** (where the turns went, and the script, hook, skill or rule that would remove each detour). |
 | **Search** | Full-text search over archived transcripts (opt-in per project). |
-| **Graph** | The knowledge graph (sessions, turns, tools, files, errors) and session clusters. |
+| **Graph** | One session or project and everything it is connected to, every relationship named; a catalogue of questions answered as tables, charts or drawn on the canvas. |
 | **Analysis** | The pipeline as steps — load sessions, build the graph, run the judge, compute KPIs — with a funnel of counts and a **Judge quality** card. |
 | **Benchmark** | Benchmark-linked sessions, predicted pass rates, routing evidence. |
 | **Learn** | The project's own docs, skills, agents and wiki, read in-app; each Agent Tuning finding links to the guide that explains the fix. |
@@ -372,19 +372,54 @@ human sample is one command away (`--judge claude-code: --rubric-name heuristic-
 
 ---
 
-## 8. The graph and clusters
+## 8. The graph
 
 ```bash
 ./scripts/session-analytics graph --rebuild        # seconds, even for 100k turns
 ./scripts/session-analytics embed                   # session embeddings (needs an Ollama embedding model)
 ./scripts/session-analytics similar                 # SIMILAR_TO edges from the embeddings
-./scripts/session-analytics clusters                # groups, read-only
 ```
 
-Or press **Build knowledge graph** on the Analysis page. The **Graph**
-tab shows node counts, an explorer (tap a type for members, tap a member
-for its neighbours), read-only Cypher with templates, and the clusters
-below.
+Or press **Build knowledge graph** on the Analysis page (noise sessions
+are left out, the same as everywhere else in the Studio).
+
+The **Graph** tab is a picture of one thing and what it is connected
+to, with the relationship written on every edge. Pick a session (or a
+project) at the top:
+
+- **A session** in the middle; around it the workspace, model, copilot
+  and developer it ran with (`IN_WORKSPACE`, `USED_MODEL`, `RAN_ON`,
+  `BY_DEVELOPER`); then the tools it called most, one bubble per tool
+  sized by calls and ringed red when it errored (`INVOKED`, up to 20);
+  outside, the files it touched most (`ACCESSED_FILE`, up to 12) and the
+  sessions most like it with their scores (`SIMILAR_TO`, up to 8). Every
+  list says "12 of 31" when it is a cut.
+- **Click a tool** for every call of it, by the turn that made it, each
+  linking into the transcript; **click a file** for the sessions that
+  touched it most (up to 40, with the total); **click a similar
+  session** to recentre on it; **click the workspace** (or the
+  breadcrumb) to go up to the project, where the newest sessions (up to
+  60) are the bubbles, `SIMILAR_TO` edges run between them, and each
+  session is linked to the model it ran on, so the models are hubs.
+- **Ask the graph a question** below the picture: a catalogue of
+  questions in words — which tools fail most and where, tools that
+  precede an error, files touched by the most sessions,
+  sessions most similar to one, which model runs the longest sessions,
+  sessions per project, similar sessions across projects — grouped as
+  *Find*, *One thing*, *Across everything*. Each answers as a table, a
+  bar chart, or drawn on the canvas when the answer is nodes and
+  relationships. The catalogue is data
+  (`config_data/graph-queries.json`): add a question by adding an
+  entry. Raw read-only Cypher stays under a fold, with the schema
+  beside it.
+
+Clusters are gone. On real data, transitive components were too coarse
+to mean anything: at the default similarity threshold the graph fell
+into a few large components, and raising the threshold to 0.85 gave 11
+clusters (the largest 45 sessions) at the price of 29 sessions in no
+cluster — tuning traded giant components for unclustered sessions
+rather than fixing the abstraction (the threshold table is on #65).
+Similar sessions (§8.1) and the neighbourhoods above are what survives.
 
 ### 8.1 Similar sessions
 

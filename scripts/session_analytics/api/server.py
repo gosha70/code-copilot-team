@@ -565,9 +565,12 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             from ..graph.builder import build
             from ..relational.db import Database as _DB
 
+            # The same sessions every other page shows: noise (probe
+            # runs, two-turn tests) stays out, or the graph's answers
+            # disagree with the Sessions list and the Dashboard.
             rel = _DB.connect(store)
             try:
-                st = build(rel, graph_path, rebuild=True)
+                st = build(rel, graph_path, rebuild=True, noise=load_config().noise)
             finally:
                 rel.close()
             return f"graph rebuilt ({st})"
@@ -1226,10 +1229,15 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
     # ── graph (lazy Kùzu) ──────────────────────────────────────────────
     def _graph():
+        """The Graph page's opener: READ-ONLY and NON-CREATING. Every
+        route here reads; a create-capable open (the old choice) made a
+        GET on an absent path create an empty store and its parent
+        directory. An absent or unbuilt store raises RuntimeError, which
+        the routes turn into the 503 prerequisite."""
         from ..graph.schema import GraphDatabase
 
         path = kuzu_path or load_config().kuzu_path
-        return GraphDatabase.connect(path)
+        return GraphDatabase.connect_read_only(path)
 
     @app.get("/api/graph/node-counts")
     def graph_node_counts() -> dict[str, Any]:
@@ -1282,35 +1290,117 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         finally:
             g.close()
 
+    # ── neighbourhoods: a session or a project and what it is connected
+    #    to; the drill-ins behind a tool and a file; the catalogue ──────
+    class CatalogueRun(BaseModel):
+        params: Optional[dict] = None
+
+    def _with_graph(fn):
+        """Run ``fn(gdb)`` on the graph store; 503 when kuzu is absent or
+        the store cannot be opened, in the shape the Studio explains."""
+        try:
+            g = _graph()
+        except ImportError:
+            raise HTTPException(status_code=503, detail={"error": "The kuzu package is not installed.",
+                                                         "prerequisite": "kuzu", "guidance": "Re-run setup."})
+        except RuntimeError as exc:
+            _log.warning("graph store could not be opened: %s", exc)
+            raise HTTPException(status_code=503, detail={
+                "error": "The graph store at the configured kuzu path could not be opened.",
+                "prerequisite": "graph",
+                "guidance": "Run Build knowledge graph on the Analysis page.",
+            }) from None
+        try:
+            return fn(g)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        except Exception as exc:  # noqa: BLE001 — an unbuilt graph has no tables
+            if "does not exist" in str(exc) or "Binder exception" in str(exc):
+                raise HTTPException(status_code=503, detail={
+                    "error": "The graph has not been built yet.",
+                    "prerequisite": "graph",
+                    "guidance": "Run Build knowledge graph on the Analysis page.",
+                }) from None
+            raise _internal_error(exc, "graph") from None
+        finally:
+            g.close()
+
+    @app.get("/api/graph/projects")
+    def graph_projects() -> dict[str, Any]:
+        from ..graph import neighbourhood as nb
+
+        return {"projects": _with_graph(lambda g: nb.project_paths(g))}
+
+    @app.get("/api/graph/session/{session_id}")
+    def graph_session(session_id: int) -> dict[str, Any]:
+        from ..graph import neighbourhood as nb
+
+        conn = db()
+        try:
+            out = _with_graph(lambda g: nb.session_neighbourhood(g, conn, session_id))
+        finally:
+            conn.close()
+        if out is None:
+            raise HTTPException(status_code=404, detail=f"no session {session_id}")
+        return out
+
+    @app.get("/api/graph/session/{session_id}/tool/{tool}")
+    def graph_session_tool(session_id: int, tool: str) -> dict[str, Any]:
+        from ..graph import neighbourhood as nb
+
+        conn = db()
+        try:
+            out = _with_graph(lambda g: nb.tool_turns(g, conn, session_id, tool))
+        finally:
+            conn.close()
+        if out is None:
+            raise HTTPException(status_code=404, detail=f"no session {session_id}")
+        return out
+
+    @app.get("/api/graph/file")
+    def graph_file(path: str) -> dict[str, Any]:
+        from ..graph import neighbourhood as nb
+
+        conn = db()
+        try:
+            return _with_graph(lambda g: nb.file_sessions(g, conn, path))
+        finally:
+            conn.close()
+
+    @app.get("/api/graph/project")
+    def graph_project(path: str) -> dict[str, Any]:
+        from ..graph import neighbourhood as nb
+
+        conn = db()
+        try:
+            return _with_graph(lambda g: nb.project_neighbourhood(g, conn, path))
+        finally:
+            conn.close()
+
+    @app.get("/api/graph/catalogue")
+    def graph_catalogue() -> dict[str, Any]:
+        from ..graph import query as gq
+
+        return {"queries": gq.catalogue()}
+
+    @app.post("/api/graph/catalogue/{query_id}")
+    def graph_catalogue_run(query_id: str, req: Optional[CatalogueRun] = None) -> dict[str, Any]:
+        from ..graph import query as gq
+
+        params = (req.params if req and req.params else {})
+        return _with_graph(lambda g: gq.run_catalogue(g, query_id, params))
+
     @app.post("/api/graph/query")
     def graph_query(q: CypherQuery) -> dict[str, Any]:
         from ..graph import query as gq
 
-        try:
-            g = _graph()
-        except ImportError:
-            raise HTTPException(status_code=503, detail="kuzu not installed")
-        try:
-            return {"rows": gq.run_readonly(g, q.cypher, q.params)}
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        finally:
-            g.close()
+        return {"rows": _with_graph(lambda g: gq.run_readonly(g, q.cypher, q.params))}
 
     @app.get("/api/graph/expand")
     def graph_expand(label: str, key_field: str, key_value: str) -> dict[str, Any]:
         from ..graph import query as gq
 
-        try:
-            g = _graph()
-        except ImportError:
-            raise HTTPException(status_code=503, detail="kuzu not installed")
-        try:
-            return gq.expand_node(g, label, key_field, key_value)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        finally:
-            g.close()
+        return _with_graph(lambda g: gq.expand_node(g, label, key_field, key_value))
 
     # ── analyze (judge) ────────────────────────────────────────────────
     @app.post("/api/analyze")

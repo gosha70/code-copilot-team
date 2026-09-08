@@ -3,10 +3,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 
-import ClustersView from "@/components/ClustersView";
-import { Loading, describeError } from "@/components/ui";
 import { api } from "@/lib/api";
-import { classify, type ClustersState } from "@/lib/clusterStates";
 
 // Cytoscape touches the DOM — load the explorer client-only.
 const GraphExplorer = dynamic(() => import("@/components/GraphExplorer"), {
@@ -15,28 +12,33 @@ const GraphExplorer = dynamic(() => import("@/components/GraphExplorer"), {
 });
 
 export default function GraphPage() {
-  // #307: Clusters is a view over the same graph store, so it lives
-  // below the explorer; /clusters stays as a deep link to the same view.
-  const [clusters, setClusters] = useState<ClustersState | null>(null);
+  // Node counts are one line, not a card: the page is judged by what a
+  // person can explore, not by how much schema it shows.
+  const [counts, setCounts] = useState<Record<string, number> | null>(null);
   useEffect(() => {
     let live = true;
     api
-      .clusters()
-      .then((outcome) => live && setClusters(classify(outcome)))
-      .catch((e) => live && setClusters({ kind: "failed", message: describeError(e) }));
+      .graphCounts()
+      .then((o) => live && o.ok && setCounts(o.report.node_counts))
+      .catch(() => {});
     return () => {
       live = false;
     };
   }, []);
-
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Graph</h1>
+    <div className="space-y-4">
+      <div className="flex items-baseline gap-3 flex-wrap">
+        <h1 className="text-2xl font-bold">Graph</h1>
+        {counts && (
+          <span className="text-xs text-slate-500">
+            {Object.entries(counts)
+              .filter(([, n]) => n > 0)
+              .map(([k, n]) => `${n.toLocaleString()} ${k}`)
+              .join(" · ")}
+          </span>
+        )}
+      </div>
       <GraphExplorer />
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Clusters</h2>
-        {clusters === null ? <Loading /> : <ClustersView state={clusters} />}
-      </section>
     </div>
   );
 }

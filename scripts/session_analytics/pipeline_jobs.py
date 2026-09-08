@@ -74,7 +74,7 @@ STEP_BLURBS = {
     # transcripts, from where, and that is the first thing anyone wants
     # to check before pressing a button that writes to their store.
     STEP_INGEST: "Read copilot transcripts into the database.",
-    STEP_GRAPH: "Build the Kùzu graph the Graph and Clusters tabs read.",
+    STEP_GRAPH: "Build the Kùzu graph the Graph tab explores — the same sessions the Sessions list shows (noise left out).",
     STEP_EMBED: "Turn each session into a vector with the embedding model configured under Settings → Embeddings, so sessions can be compared by meaning.",
     STEP_SIMILAR: "Link each session to its nearest neighbours in the graph — what the Similar tab on a session page shows.",
     STEP_JUDGE: "Label each turn with the judge configured under Settings → LLM-as-Judge.",
