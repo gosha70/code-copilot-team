@@ -78,6 +78,16 @@
       ]
     },
     {
+      "id": "dgx-spark",
+      "title": "Judge on a DGX Spark",
+      "kind": "doc",
+      "paths": [
+        "docs/dgx-spark/setup-cookbook.md",
+        "docs/dgx-spark/vllm-qwen38.md",
+        "docs/dgx-spark/runbook-qwen38.md"
+      ]
+    },
+    {
       "id": "skills",
       "title": "Skills",
       "kind": "skill",
@@ -164,6 +174,9 @@
     "scripts/session_analytics/README.md": "Session Analytics",
     "benchmarks/README.md": "Benchmark Harness",
     "knowledge/README.md": "Knowledge Layer",
-    "docs/session-analytics-cookbook.md": "Session Analytics — user cookbook"
+    "docs/session-analytics-cookbook.md": "Session Analytics — user cookbook",
+    "docs/dgx-spark/setup-cookbook.md": "DGX Spark — setup & cookbook (Ollama, vLLM, Open WebUI)",
+    "docs/dgx-spark/vllm-qwen38.md": "DGX Spark + vLLM — Qwen3.8-27B operator manual",
+    "docs/dgx-spark/runbook-qwen38.md": "DGX Spark — Qwen3.8-27B runbook (exact sequence)"
   }
 }
