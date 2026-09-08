@@ -182,7 +182,8 @@ const META: Record<
       "An EMBEDDING model, not a chat model — e.g. nomic-embed-text (after " +
       "`ollama pull nomic-embed-text`). Ollama has no default embedding " +
       "model, so this must be set before Embed sessions can run. The list " +
-      "is every model the saved Ollama URL serves; pick the embedding one.",
+      "holds only the models the saved Ollama URL can embed with; its chat " +
+      "models are left out, because Ollama refuses to embed with them.",
     placeholder: "nomic-embed-text",
   },
   CCT_SA_BENCHMARK_RUNS_ROOT: {
@@ -221,11 +222,26 @@ export default function SettingsPage() {
   // "Other…" on the Model dropdown: type a name the server does not list.
   const [modelOther, setModelOther] = useState(false);
   const [embedModels, setEmbedModels] = useState<EmbedModels | null>(null);
+  // The embedding list has THREE states the field must tell apart:
+  // loading (a disabled select saying so), failed (a text box plus the
+  // reason and Retry), listed. It used to fall back to a bare text box
+  // in the first two, which read as the dropdown vanishing.
+  const [embedListState, setEmbedListState] = useState<"loading" | "failed" | "ready">("loading");
   const [embedOther, setEmbedOther] = useState(false);
   const [embedProbe, setEmbedProbe] = useState<{ ok: boolean; text: string } | null>(null);
   const loadModels = () => {
     api.judgeModels().then(setModels).catch(() => setModels(null));
-    api.embedModels().then(setEmbedModels).catch(() => setEmbedModels(null));
+    setEmbedListState("loading");
+    api
+      .embedModels()
+      .then((m) => {
+        setEmbedModels(m);
+        setEmbedListState("ready");
+      })
+      .catch(() => {
+        setEmbedModels(null);
+        setEmbedListState("failed");
+      });
   };
   useEffect(() => {
     loadModels();
@@ -518,6 +534,33 @@ export default function SettingsPage() {
                       <option key={b} value={b}>{b}</option>
                     ))}
                   </select>
+                ) : f.key === "CCT_SA_EMBED_MODEL" && !embedOther && embedListState === "loading" ? (
+                  <select
+                    disabled
+                    className="border border-slate-300 bg-slate-50 text-slate-500 rounded px-2 py-1 text-sm w-full font-mono"
+                  >
+                    <option>{values[f.key] ? `${values[f.key]} — listing the server's models…` : "listing the server's models…"}</option>
+                  </select>
+                ) : f.key === "CCT_SA_EMBED_MODEL" && !embedOther && !embedModelList ? (
+                  <div>
+                    <input
+                      type="text"
+                      value={values[f.key] || ""}
+                      onChange={(e) => set(f.key, e.target.value)}
+                      placeholder={m.placeholder}
+                      className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-full font-mono"
+                    />
+                    <p className="text-xs text-rose-700 mt-1">
+                      {embedModels && embedModels.url
+                        ? `Could not list models at ${embedModels.url}${embedModels.error ? ` (${embedModels.error})` : ""}`
+                        : embedModels && embedBackend !== embedModels.backend
+                          ? "The list is for the saved backend — Save, then it refreshes."
+                          : "Could not reach the API to list models."}{" "}
+                      <button type="button" onClick={loadModels} className="text-blue-700 hover:underline">
+                        Retry
+                      </button>
+                    </p>
+                  </div>
                 ) : f.key === "CCT_SA_EMBED_MODEL" && embedModelList && !embedOther ? (
                   <div className="flex gap-2 items-center">
                     <select
@@ -533,12 +576,25 @@ export default function SettingsPage() {
                         <option key={name} value={name}>{name}</option>
                       ))}
                       {values[f.key] && !embedModelList.includes(values[f.key]) && (
-                        <option value={values[f.key]}>{values[f.key]} (not served)</option>
+                        <option value={values[f.key]}>
+                          {values[f.key]}
+                          {embedModels?.not_embedding?.includes(values[f.key])
+                            ? " (a chat model — cannot embed)"
+                            : " (not served)"}
+                        </option>
                       )}
                       <option value="__other__">Other…</option>
                     </select>
                     <span className="shrink-0 text-xs text-slate-500">
-                      {embedModelList.length === 1 ? "1 model" : `${embedModelList.length} models`} on the server
+                      {embedModelList.length === 1 ? "1 embedding model" : `${embedModelList.length} embedding models`} on the server
+                      {embedModels?.not_embedding?.length
+                        ? ` · ${embedModels.not_embedding.length} chat model${embedModels.not_embedding.length === 1 ? "" : "s"} left out`
+                        : ""}
+                      {embedModelList.length === 0 && (
+                        <span className="block text-amber-700">
+                          None can embed. Pull one first: <code>ollama pull nomic-embed-text</code>
+                        </span>
+                      )}
                     </span>
                   </div>
                 ) : f.key === "CCT_SA_JUDGE_MODEL" && modelList && !modelOther ? (

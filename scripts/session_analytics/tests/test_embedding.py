@@ -220,6 +220,19 @@ class TestOllamaBackend(unittest.TestCase):
             with self.assertRaises(ollama_embed.EmbeddingBackendError):
                 b.embed("x")
 
+    def test_a_chat_model_is_named_as_the_cause_not_a_server_flag(self) -> None:
+        # The captured refusal is llama.cpp's wording ("start it with
+        # --embeddings"), which no Ollama user can act on; the cause is
+        # the model choice, and the error says so and where to fix it.
+        b = _ShimOllama(responses=[CAPTURE_ERR_NO_EMBED])
+        with self.assertRaises(ollama_embed.EmbeddingBackendError) as cm:
+            b.embed("x")
+        self.assertIn("is a chat model, not an embedding model", str(cm.exception))
+        self.assertIn("Settings → Embeddings", str(cm.exception))
+        self.assertNotIn("--embeddings", str(cm.exception))
+        # Every other error keeps Ollama's own words.
+        self.assertIn("not found, try pulling it first", ollama_embed.explain_ollama_error("m", "model \"m\" not found, try pulling it first"))
+
     def test_empty_configured_model_refuses_before_any_http(self) -> None:
         # Capture: Ollama has NO default embedding model (`model ''` ->
         # 404). The refusal happens before the wire and guides the

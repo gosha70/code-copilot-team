@@ -41,6 +41,56 @@ def studio_origins(ui_port: int = C.DEFAULT_UI_PORT) -> tuple[str, ...]:
     return tuple(f"http://{host}:{ui_port}" for host in C.STUDIO_ORIGIN_HOSTS)
 
 
+#: Ollama listing calls: /api/tags is instant, /api/show can take
+#: seconds while Ollama loads a model into memory.
+_OLLAMA_LIST_TIMEOUT = 5
+#: Capabilities per (base url, model name, digest). A digest names an
+#: immutable model, so its capabilities never change; the cache lives
+#: as long as the process.
+_ollama_caps_cache: dict[tuple[str, str, str], Optional[list[str]]] = {}
+
+
+def _ollama_capabilities(
+    base: str, served: list[tuple[str, str]],
+) -> dict[str, Optional[list[str]]]:
+    """``{name: capabilities}`` for the served models, from ``/api/show``
+    — concurrently, cached per digest, and None (unknown) when a model's
+    show fails or carries no capabilities field."""
+    import json as _json
+    import urllib.request
+    from concurrent.futures import ThreadPoolExecutor
+
+    def show(name: str) -> Optional[list[str]]:
+        req = urllib.request.Request(
+            f"{base}/api/show",
+            data=_json.dumps({"model": name}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=_OLLAMA_LIST_TIMEOUT) as resp:
+                shown = _json.loads(resp.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001 — one model's show failing must not empty the list
+            return None
+        caps = shown.get("capabilities") if isinstance(shown, dict) else None
+        return caps if isinstance(caps, list) else None
+
+    result: dict[str, Optional[list[str]]] = {}
+    pending = [(n, d) for n, d in served if (base, n, d) not in _ollama_caps_cache or not d]
+    for n, d in served:
+        if (base, n, d) in _ollama_caps_cache and d:
+            result[n] = _ollama_caps_cache[(base, n, d)]
+    if pending:
+        with ThreadPoolExecutor(max_workers=min(8, len(pending))) as pool:
+            for (n, d), caps in zip(pending, pool.map(lambda nd: show(nd[0]), pending)):
+                result[n] = caps
+                # Only a KNOWN answer is worth remembering: an unknown
+                # (timeout, old server) is asked again next time.
+                if d and caps is not None:
+                    _ollama_caps_cache[(base, n, d)] = caps
+    return result
+
+
 def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     from typing import Awaitable, Callable
 
@@ -1577,11 +1627,34 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             return out
         base = (cfg.embedding.ollama_url or "http://localhost:11434").rstrip("/")
         out["url"] = base
+        from ..embedding.ollama_embed import CAPABILITY_EMBEDDING
+
         try:
-            with urllib.request.urlopen(f"{base}/api/tags", timeout=3) as resp:
+            with urllib.request.urlopen(f"{base}/api/tags", timeout=_OLLAMA_LIST_TIMEOUT) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
-            names = [m.get("name") for m in data.get("models", []) if isinstance(m, dict)]
-            out.update({"reachable": True, "models": sorted(n for n in names if n)})
+            served = sorted(
+                (str(m.get("name")), str(m.get("digest") or ""))
+                for m in data.get("models", []) if isinstance(m, dict) and m.get("name")
+            )
+            # Only models Ollama itself says can embed (/api/show
+            # capabilities): a chat model in this list is a refused
+            # pass later, with an error that reads like a server flag.
+            # The lookups run concurrently and are remembered per
+            # digest, so the list is one round trip after the first —
+            # a slow Ollama (loading a model) must not leave the page
+            # without its dropdown.
+            caps_by_name = _ollama_capabilities(base, served)
+            embedding: list[str] = []
+            chat: list[str] = []
+            for name, _digest in served:
+                caps = caps_by_name.get(name)
+                # ABSENT is unknown (an older Ollama reports none):
+                # only a present list can say "cannot embed".
+                if caps is None or CAPABILITY_EMBEDDING in caps:
+                    embedding.append(name)
+                else:
+                    chat.append(name)
+            out.update({"reachable": True, "models": embedding, "not_embedding": chat})
         except Exception as exc:  # noqa: BLE001 — unreachable is an answer
             _log.info("embedding model list unavailable at %s: %s", base, exc)
             out["error"] = type(exc).__name__
