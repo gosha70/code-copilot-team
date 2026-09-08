@@ -56,6 +56,18 @@ const GROUPS: { title: string; blurb: string; keys: string[] }[] = [
     keys: ["CCT_SA_BENCHMARK_RUNS_ROOT"],
   },
   {
+    title: "Team",
+    blurb:
+      "The Team tab reads the store every developer writes to. Budgets are " +
+      "USD ceilings the tab and `session-analytics team alerts` check; blank " +
+      "means no budget for that scope. A warning starts at 80%, a breach at " +
+      "100%; unpriced turns are named on every alert, never counted as free.",
+    keys: [
+      "CCT_SA_TEAM_ACTIVE_WINDOW", "CCT_SA_BUDGET_TEAM_DAILY_USD", "CCT_SA_BUDGET_TEAM_MONTHLY_USD",
+      "CCT_SA_BUDGET_DEVELOPER_DAILY_USD", "CCT_SA_BUDGET_PROJECT_DAILY_USD",
+    ],
+  },
+  {
     title: "Identity",
     blurb: "Attributes sessions to a developer. Defaults to your git email.",
     keys: ["CCT_DEVELOPER_ID"],
@@ -194,6 +206,33 @@ const META: Record<
       "run-record.json and a score.json below it). The harness's default " +
       "is the repository's runs/ folder.",
     placeholder: "/path/to/code-copilot-team/runs",
+  },
+  CCT_SA_TEAM_ACTIVE_WINDOW: {
+    label: "Active window (seconds)",
+    help:
+      "A heartbeat within this many seconds makes a developer 'active' on " +
+      "the Team tab — last-seen, not a liveness verdict. Default 300.",
+    placeholder: "300",
+  },
+  CCT_SA_BUDGET_TEAM_DAILY_USD: {
+    label: "Team budget per day (USD)",
+    help: "Priced spend across every developer today. Blank = no budget.",
+    placeholder: "e.g. 50",
+  },
+  CCT_SA_BUDGET_TEAM_MONTHLY_USD: {
+    label: "Team budget per 30 days (USD)",
+    help: "Priced spend across every developer in the last 30 days. Blank = no budget.",
+    placeholder: "e.g. 1000",
+  },
+  CCT_SA_BUDGET_DEVELOPER_DAILY_USD: {
+    label: "Per-developer budget per day (USD)",
+    help: "Checked for each developer separately. Blank = no budget.",
+    placeholder: "e.g. 20",
+  },
+  CCT_SA_BUDGET_PROJECT_DAILY_USD: {
+    label: "Per-project budget per day (USD)",
+    help: "Checked for each repository separately. Blank = no budget.",
+    placeholder: "e.g. 30",
   },
   CCT_DEVELOPER_ID: {
     label: "Developer id",

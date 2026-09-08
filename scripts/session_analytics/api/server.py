@@ -1109,6 +1109,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         """Who is active (a heartbeat within the window), what they are
         on, and cost per developer / project / time window. Read-only;
         the store's dialect says whether it is shared."""
+        from . import alerts as alerts_mod
         from . import team as team_mod
 
         cfg = load_config()
@@ -1117,7 +1118,29 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             raise HTTPException(status_code=400, detail="window must be a positive number of seconds")
         conn = db()
         try:
-            return team_mod.team_status(conn, noise=cfg.noise, active_window_seconds=seconds)
+            status = team_mod.team_status(conn, noise=cfg.noise, active_window_seconds=seconds)
+            # Alerts ride on the status so the tab is one fetch; they are
+            # derived from the same rows, never stored.
+            status["alerts"] = alerts_mod.all_alerts(
+                conn, status, budgets=cfg.team.budgets, runaway=cfg.team.runaway, noise=cfg.noise,
+            )
+            return status
+        finally:
+            conn.close()
+
+    @app.get("/api/team/alerts")
+    def team_alerts() -> dict[str, Any]:
+        """Budget and runaway alerts alone (the cron/CI shape)."""
+        from . import alerts as alerts_mod
+        from . import team as team_mod
+
+        cfg = load_config()
+        conn = db()
+        try:
+            status = team_mod.team_status(conn, noise=cfg.noise, active_window_seconds=cfg.team.active_window_seconds)
+            return alerts_mod.all_alerts(
+                conn, status, budgets=cfg.team.budgets, runaway=cfg.team.runaway, noise=cfg.noise,
+            )
         finally:
             conn.close()
 

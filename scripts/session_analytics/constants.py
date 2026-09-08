@@ -127,6 +127,26 @@ CFG_SIMILARITY = "similarity"
 #: team.* — the Team tab (#174): how recent a heartbeat counts as active.
 CFG_TEAM = "team"
 CFG_TEAM_ACTIVE_WINDOW = "active_window_seconds"
+#: team.budgets — null = no budget for that scope (Slice D of #174).
+CFG_TEAM_BUDGETS = "budgets"
+CFG_BUDGET_TEAM_DAILY = "team_daily_usd"
+CFG_BUDGET_TEAM_MONTHLY = "team_monthly_usd"
+CFG_BUDGET_DEVELOPER_DAILY = "developer_daily_usd"
+CFG_BUDGET_PROJECT_DAILY = "project_daily_usd"
+#: team.runaway — what makes a still-running session a runaway.
+CFG_TEAM_RUNAWAY = "runaway"
+CFG_RUNAWAY_RECENT_MINUTES = "recent_minutes"
+CFG_RUNAWAY_MAX_TURNS_RECENT = "max_turns_recent"
+CFG_RUNAWAY_RECENT_TURNS = "recent_turns"
+CFG_RUNAWAY_MAX_ERROR_SHARE = "max_error_share"
+CFG_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE = "min_turns_for_error_share"
+CFG_RUNAWAY_MAX_COST_RECENT = "max_cost_recent_usd"
+#: Alert levels: a warning is worth a look, a breach is the bound crossed.
+ALERT_WARNING = "warning"
+ALERT_BREACH = "breach"
+ALERT_LEVELS = (ALERT_WARNING, ALERT_BREACH)
+#: A budget alert starts warning at this share of the budget.
+BUDGET_WARNING_SHARE = 0.8
 CFG_SIMILARITY_THRESHOLD = "threshold"
 CFG_SIMILARITY_TOP_K = "top_k"
 

@@ -932,6 +932,17 @@ try {
   else if (tv.anyPartial({ ...tvBase, store: { dialect: "sqlite", shared: false } })) fail("no partial pricing → no asterisk note");
   else if (!tv.anyPartial({ ...tvBase, store: { dialect: "sqlite", shared: false }, developers: [tvDev({ windows: { today: tvRoll({}), "7d": tvRoll({}), "30d": tvRoll({ cost_usd: 1, priced_turns: 1, priceable_turns: 5 }) } })] })) fail("partial pricing → asterisk note");
   else console.log("  ok  the page says whether the store is shared or one developer's, and explains * only when needed");
+  // Alerts (#174 D): the banner states and the empty note.
+  const tvAlerts = (alerts, over = {}) => ({ alerts, breaches: alerts.filter((a) => a.level === "breach").length, warnings: alerts.filter((a) => a.level === "warning").length, budgets: { team_daily_usd: null, team_monthly_usd: null, developer_daily_usd: null, project_daily_usd: null }, runaway: { recent_minutes: 60, max_turns_recent: 300, recent_turns: 50, max_error_share: 0.5, min_turns_for_error_share: 20, max_cost_recent_usd: 20 }, derived: true, ...over });
+  const tvBudget = { kind: "budget", level: "warning", scope: "team", subject: "team", window: "today", message: "the team is at 85% of the $50.00 budget today: $42.50 spent.", figures: {} };
+  const tvRunaway = { kind: "runaway-turns", level: "breach", scope: "session", subject: { session_id: 35, session_key: "claude-code:x", developer_id: "ana", project_path: "/repo/p" }, message: "session #35 (ana in p) produced 412 turns in the last 60 minutes (threshold 300) and is still going.", figures: {} };
+  const tvEmpty = tv.alertsEmptyNote(tvAlerts([]));
+  if (!/^No alerts\. No budgets set \(Settings → Team\): only runaway detection is on\./.test(tvEmpty) || !/past 300 turns or \$20\.00 in 60 minutes, or 50% errors over its last 50 turns/.test(tvEmpty) || !/nothing is stored/.test(tvEmpty)) fail(`empty note: ${tvEmpty}`);
+  else if (!/Budgets: team per day \$50\.00, per developer per day \$20\.00\./.test(tv.alertsEmptyNote(tvAlerts([], { budgets: { team_daily_usd: 50, team_monthly_usd: null, developer_daily_usd: 20, project_daily_usd: null } })))) fail("set budgets are named in the empty note");
+  else if (tv.alertSummary(tvAlerts([tvRunaway, tvBudget])) !== "1 breach, 1 warning" || tv.alertSummary(tvAlerts([])) !== "") fail("alert summary");
+  else if (tv.alertHref(tvRunaway) !== "/sessions/35" || tv.alertHref(tvBudget) !== null) fail("a runaway alert links to its session; a budget alert links nowhere");
+  else if (!/rose/.test(tv.ALERT_STYLE.breach) || !/amber/.test(tv.ALERT_STYLE.warning)) fail("breach is red, warning is amber");
+  else console.log("  ok  alerts: the empty note says what is set and what a runaway is; breaches red, warnings amber; runaway alerts link to the session");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

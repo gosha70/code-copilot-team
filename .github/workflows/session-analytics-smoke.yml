@@ -317,6 +317,32 @@ jobs:
           print("OK team status under Postgres:", d["totals"])
           PY
 
+      - name: "Team alerts under Postgres (#174 D: a runaway session breaches, the exit code says so)"
+        run: |
+          python3 - <<'PY'
+          import os
+          from datetime import datetime, timedelta, timezone
+          import psycopg
+          now = datetime.now(timezone.utc)
+          iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%SZ")
+          with psycopg.connect(os.environ["SA_DSN"]) as conn, conn.cursor() as cur:
+              cur.execute("INSERT INTO copilot_session (copilot, session_id, project_path, developer_id, turn_count, started_at, duration_seconds) "
+                          "VALUES ('claude-code', 'smoke-runaway', '/repo/proj', 'smoke-ana', 400, %s, 3600) RETURNING id", (now.isoformat(),))
+              sid = cur.fetchone()[0]
+              cur.executemany("INSERT INTO copilot_turn (session_id, sequence_num, role, content_preview, timestamp, cost_usd, model) "
+                              "VALUES (%s, %s, 'assistant', '', %s, %s, 'm')",
+                              [(sid, i, iso(now - timedelta(minutes=5)), 0.1) for i in range(1, 402)])
+          PY
+          # pipefail: the CLI's exit code, not tee's, is the one under test.
+          set +e; set -o pipefail
+          ./scripts/session-analytics team alerts --dsn "$SA_DSN" | tee "$RUNNER_TEMP/alerts.txt"; rc=$?
+          set -e
+          test "$rc" -eq 1 || { echo "expected exit 1 on a breach, got $rc"; exit 1; }
+          grep -q "runaway-turns: session #" "$RUNNER_TEMP/alerts.txt"
+          grep -q "runaway-cost: session #" "$RUNNER_TEMP/alerts.txt"
+          ./scripts/session-analytics team alerts --dsn "$SA_DSN" --json > "$RUNNER_TEMP/alerts.json" || true
+          python3 -c 'import json,os; d=json.load(open(os.environ["RUNNER_TEMP"]+"/alerts.json")); assert d["breaches"] >= 2 and d["derived"], d; print("OK team alerts under Postgres:", d["breaches"], "breaches")'
+
   studio:
     runs-on: ubuntu-latest
     timeout-minutes: 6

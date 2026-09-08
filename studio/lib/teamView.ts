@@ -2,7 +2,7 @@
 // assert it: the store note, the liveness legend, a developer's row,
 // a window cell that never prints an unknown cost as zero.
 
-import type { TeamDeveloper, TeamRollup, TeamStatus } from "@/lib/api";
+import type { TeamAlert, TeamAlerts, TeamDeveloper, TeamRollup, TeamStatus } from "@/lib/api";
 
 export const LIVENESS_LABEL: Record<TeamDeveloper["liveness"], string> = {
   active: "active",
@@ -66,4 +66,45 @@ export function anyPartial(status: TeamStatus): boolean {
       (k) => w[k].cost_usd !== null && w[k].priced_turns < w[k].priceable_turns,
     ),
   );
+}
+
+// ── alerts (#174 Slice D) ─────────────────────────────────────────────
+
+export const ALERT_STYLE: Record<TeamAlert["level"], string> = {
+  breach: "border-rose-300 bg-rose-50 text-rose-900",
+  warning: "border-amber-300 bg-amber-50 text-amber-900",
+};
+
+/** Where an alert points: a session page for runaway kinds, nothing
+ *  for a budget scope. */
+export function alertHref(a: TeamAlert): string | null {
+  return typeof a.subject === "object" ? `/sessions/${a.subject.session_id}` : null;
+}
+
+/** "2 breaches, 1 warning" / "1 warning" / "" */
+export function alertSummary(al: TeamAlerts): string {
+  const parts: string[] = [];
+  if (al.breaches) parts.push(`${al.breaches} breach${al.breaches === 1 ? "" : "es"}`);
+  if (al.warnings) parts.push(`${al.warnings} warning${al.warnings === 1 ? "" : "s"}`);
+  return parts.join(", ");
+}
+
+const BUDGET_LABEL: Record<string, string> = {
+  team_daily_usd: "team per day",
+  team_monthly_usd: "team per 30 days",
+  developer_daily_usd: "per developer per day",
+  project_daily_usd: "per project per day",
+};
+
+/** What the empty state says: which budgets are set, which are not,
+ *  and that runaway detection always runs. */
+export function alertsEmptyNote(al: TeamAlerts): string {
+  const set = Object.entries(al.budgets)
+    .filter(([, v]) => v !== null)
+    .map(([k, v]) => `${BUDGET_LABEL[k] ?? k} $${(v as number).toFixed(2)}`);
+  const budgets = set.length
+    ? `Budgets: ${set.join(", ")}.`
+    : "No budgets set (Settings → Team): only runaway detection is on.";
+  const r = al.runaway;
+  return `No alerts. ${budgets} A session is a runaway past ${r.max_turns_recent} turns or $${Number(r.max_cost_recent_usd).toFixed(2)} in ${r.recent_minutes} minutes, or ${Math.round(Number(r.max_error_share) * 100)}% errors over its last ${r.recent_turns} turns. Alerts are derived from the store on every read; nothing is stored.`;
 }

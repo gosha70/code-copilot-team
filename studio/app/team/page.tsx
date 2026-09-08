@@ -3,9 +3,13 @@
 import Link from "next/link";
 import { api, TeamStatus, TeamWindow } from "@/lib/api";
 import {
+  ALERT_STYLE,
   LIVENESS_DOT,
   LIVENESS_LABEL,
   activeLegend,
+  alertHref,
+  alertSummary,
+  alertsEmptyNote,
   anyPartial,
   costCell,
   currentWork,
@@ -54,6 +58,31 @@ export default function TeamPage() {
           )}
         </p>
       </div>
+
+      {data.alerts && (
+        <Card title={`Alerts${alertSummary(data.alerts) ? ` — ${alertSummary(data.alerts)}` : ""}`}>
+          {data.alerts.alerts.length === 0 ? (
+            <p className="text-sm text-slate-600">{alertsEmptyNote(data.alerts)}</p>
+          ) : (
+            <ul className="space-y-2">
+              {data.alerts.alerts.map((a, i) => (
+                <li key={i} className={`border rounded px-3 py-2 text-sm ${ALERT_STYLE[a.level]}`}>
+                  <span className="text-xs uppercase tracking-wide font-semibold mr-2">{a.level}</span>
+                  {a.message}
+                  {alertHref(a) && (
+                    <>
+                      {" "}
+                      <Link href={alertHref(a) as string} className="text-blue-700 hover:underline">
+                        open the session →
+                      </Link>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
 
       <Card title="Developers">
         <Table data={data} />
