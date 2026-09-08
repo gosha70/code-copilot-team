@@ -226,6 +226,13 @@ ANALYSIS_PARSE_ANSWER_TRUNCATED = "answer_truncated"
 # from: `rubric:<rubric_name>` (a judge run) or `human:<labeler>`; a bare
 # name means a rubric. The prefixes cross CLI / API / Studio.
 TBL_HUMAN_LABEL = "human_label"
+
+# Session tags (Studio): the two a person sets by hand. "analyzed" is
+# derived from session_analysis and is never stored as a flag.
+TBL_SESSION_FLAG = "session_flag"
+FLAG_FAVORITE = "favorite"
+FLAG_TODO = "todo"
+SESSION_FLAGS = (FLAG_FAVORITE, FLAG_TODO)
 LABEL_SOURCE_RUBRIC = "rubric"
 LABEL_SOURCE_HUMAN = "human"
 # score.json field keys. These cross the benchmark_runner → session_analytics

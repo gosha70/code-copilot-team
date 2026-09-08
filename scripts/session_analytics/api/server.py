@@ -188,6 +188,10 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     class ConfigUpdate(BaseModel):
         values: dict
 
+    class TagUpdate(BaseModel):
+        """One hand-set tag on one session: on or off."""
+        on: bool
+
     # ── health + settings ──────────────────────────────────────────────
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -346,7 +350,9 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             base = (cfg.judge.ollama_url or "http://localhost:11434").rstrip("/")
             list_url, pick = f"{base}/api/tags", lambda d: [m.get("name") for m in d.get("models", []) if isinstance(m, dict)]
         elif backend == "openai":
-            base = (cfg.judge.base_url or "").rstrip("/")
+            from ..judge.openai_judge import normalize_base_url
+
+            base = normalize_base_url(cfg.judge.base_url)
             if not base:
                 out["error"] = "no base URL configured"
                 return out
@@ -369,7 +375,43 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             # (CodeQL py/stack-trace-exposure).
             _log.info("%s model list unavailable at %s: %s", backend, base, exc)
             out["error"] = type(exc).__name__
+            out["list_url"] = list_url
         return out
+
+    @app.post("/api/judge/test")
+    def judge_test() -> dict[str, Any]:
+        """One small completion with the SAVED judge, so a person can see
+        "answered in 1.2 s" or the exact refusal before running a batch.
+        The answer text is returned; the failure reason is the backend's
+        own (a wrong model name, a wrong URL, thinking that ate the
+        budget) — never a bare status code."""
+        import time as _time
+
+        from ..judge.contracts import JudgeTransportError
+        from ..judge.registry import UnknownJudgeError, get_judge
+
+        cfg = load_config()
+        conf = _configured_judge(cfg)
+        backend, model = cfg.judge.resolve(None)
+        started = _time.time()
+        try:
+            judge = get_judge(backend, model)
+            # The judges force JSON output (that is what the rubric needs),
+            # so the probe asks for JSON too.
+            answer = judge.complete('Reply with exactly this JSON and nothing else: {"ok": true}', timeout=60)
+        except (UnknownJudgeError, ValueError) as exc:
+            return {"ok": False, "judge": conf["spec"], "error": str(exc)}
+        except JudgeTransportError as exc:
+            return {"ok": False, "judge": conf["spec"], "error": str(exc),
+                    "seconds": round(_time.time() - started, 1)}
+        except Exception as exc:  # noqa: BLE001 — the reason is the answer here
+            _log.warning("judge test failed: %s", exc)
+            return {"ok": False, "judge": conf["spec"], "error": f"{type(exc).__name__}: {exc}"[:300],
+                    "seconds": round(_time.time() - started, 1)}
+        return {
+            "ok": True, "judge": conf["spec"], "seconds": round(_time.time() - started, 1),
+            "answer": (answer or "").strip()[:200],
+        }
 
     def _configured_judge(cfg) -> dict[str, Any]:
         """The judge a run with no explicit choice will use, and where
@@ -911,23 +953,47 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     @app.get("/api/sessions")
     def sessions(
         query: str = "", copilot: str = "", limit: int = 50, include_noise: bool = False,
+        sort: str = mcp_tools.SESSION_SORT_DEFAULT, order: str = "desc",
     ) -> dict[str, Any]:
         """The list, noise excluded by default (#307); ``excluded_noise``
         is how many the same filters would add with include_noise=1, so
-        the page's toggle can say "Show excluded (n)"."""
+        the page's toggle can say "Show excluded (n)". ``sort``/``order``
+        are the grid's column headers; the limit applies after ordering."""
+        if order not in ("asc", "desc"):
+            raise HTTPException(status_code=400, detail="order must be asc or desc")
         noise = load_config().noise
         conn = db()
         try:
-            return {
-                "sessions": mcp_tools.search_sessions(
+            try:
+                rows = mcp_tools.search_sessions(
                     conn, query or None, copilot=copilot or None, limit=limit,
                     noise=noise, include_noise=include_noise,
-                ),
+                    sort=sort, descending=(order == "desc"),
+                )
+            except mcp_tools.UnknownSortError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from None
+            return {
+                "sessions": rows,
+                "sort": sort,
+                "order": order,
                 "excluded_noise": mcp_tools.count_noise_sessions(
                     conn, noise, query or None, copilot=copilot or None,
                 ),
                 "include_noise": include_noise,
             }
+        finally:
+            conn.close()
+
+    @app.put("/api/sessions/{session_id}/tags/{flag}")
+    def session_tag(session_id: int, flag: str, req: TagUpdate) -> dict[str, Any]:
+        """Set or clear a hand-set tag (favorite, todo); returns the
+        session's tags. "analyzed" is derived from the analyses and
+        cannot be set — a 400 says so."""
+        conn = db()
+        try:
+            return {"id": session_id, "tags": mcp_tools.set_session_flag(conn, session_id, flag, req.on)}
+        except ValueError as exc:
+            raise HTTPException(status_code=404 if "no session" in str(exc) else 400, detail=str(exc)) from None
         finally:
             conn.close()
 
@@ -1031,7 +1097,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                         "prerequisite": "judge",
                         "guidance": (
                             "Check the LLM-as-Judge settings — is the backend "
-                            "running and the model pulled? — then Re-generate."
+                            "running and the model pulled? — then run it again."
                         ),
                     },
                 )

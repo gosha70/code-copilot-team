@@ -167,11 +167,29 @@ export interface DashboardLatency extends LatencySummary {
   by_copilot: ({ copilot: string } & LatencySummary)[];
   basis: string;
 }
+/** Columns the sessions list can be ordered by (the grid's headers);
+ *  the server's closed map — anything else is a 400. */
+export type SessionSort =
+  | "started_at"
+  | "copilot"
+  | "project_path"
+  | "model"
+  | "turn_count"
+  | "tool_call_count"
+  | "error_count"
+  | "cost_usd"
+  | "duration_seconds"
+  | "favorite"
+  | "todo"
+  | "analyzed";
+
 export interface SessionsResponse {
   sessions: SessionRow[];
   /** How many the same filters would add with include_noise. */
   excluded_noise: number;
   include_noise: boolean;
+  sort: SessionSort;
+  order: "asc" | "desc";
 }
 export interface RecentError {
   error_type: string;
@@ -307,8 +325,27 @@ export interface GraphExpand {
   neighbors: { label: string; node: Record<string, unknown> }[];
 }
 
+/** The three tags on a session: two set by hand, one derived from the
+ *  per-session analyses (how many of the kinds have a parsed result). */
+export interface SessionTagsInfo {
+  favorite: boolean;
+  todo: boolean;
+  analyzed_kinds: number;
+  analysis_kinds_total: number;
+}
+
+/** Whether the session's cost figure is all of its cost: priced turns
+ *  out of the turns that could be priced (those with a model). */
+export interface CostCoverage {
+  priced_turns: number;
+  priceable_turns: number;
+  complete: boolean;
+}
+
 export interface SessionRow {
   id: number;
+  tags: SessionTagsInfo;
+  cost_coverage: CostCoverage;
   copilot: string;
   session_id: string;
   project_path: string | null;
@@ -983,6 +1020,8 @@ export interface JudgeModels {
   url: string;
   models: string[];
   error?: string;
+  /** The exact URL the catalogue was read from, when it failed. */
+  list_url?: string;
   /** The judge a run with no explicit choice uses, and where it is set. */
   configured: {
     spec: string;
@@ -1060,11 +1099,31 @@ export const api = {
       `/api/graph/expand?label=${encodeURIComponent(label)}&key_field=${encodeURIComponent(keyField)}&key_value=${encodeURIComponent(keyValue)}`,
     ),
   benchmark: () => get<BenchmarkSummary>("/api/dashboard/benchmark"),
-  sessions: (query = "", copilot = "", includeNoise = false) =>
+  sessions: (
+    query = "",
+    copilot = "",
+    includeNoise = false,
+    sort: SessionSort = "started_at",
+    order: "asc" | "desc" = "desc",
+  ) =>
     get<SessionsResponse>(
-      `/api/sessions?query=${encodeURIComponent(query)}&copilot=${encodeURIComponent(copilot)}&include_noise=${includeNoise}`,
+      `/api/sessions?query=${encodeURIComponent(query)}&copilot=${encodeURIComponent(copilot)}` +
+        `&include_noise=${includeNoise}&sort=${sort}&order=${order}`,
     ),
   session: (id: number) => get<SessionDetail>(`/api/sessions/${id}`),
+  /** Set or clear a hand-set tag; returns the session's tags after. */
+  setSessionTag: async (id: number, tag: "favorite" | "todo", on: boolean) => {
+    const r = await fetch(`${BASE}/api/sessions/${id}/tags/${tag}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on }),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.detail || `tag ${tag} → ${r.status}`);
+    }
+    return (await r.json()) as { id: number; tags: SessionTagsInfo };
+  },
   sessionAnalysis: (id: number) =>
     get<SessionAnalysisResponse>(`/api/sessions/${id}/analysis`),
   runSessionAnalysis: (
@@ -1113,6 +1172,13 @@ export const api = {
       sessions?: number | null;
       dialect?: string;
     }>("/api/settings/test-connection", { dsn }),
+  /** One small completion with the SAVED judge: "answered in 1.2 s"
+   *  or the backend's own refusal, before a batch is run. */
+  testJudge: () =>
+    post<{ ok: boolean; judge: string; seconds?: number; answer?: string; error?: string }>(
+      "/api/judge/test",
+      {},
+    ),
   analyze: (body: {
     judge?: string;
     limit?: number;

@@ -5,6 +5,7 @@ import { api, ConfigResponse, JudgeModels, ProjectRedactionRow } from "@/lib/api
 import { Card, ErrorNote, Loading, useApi } from "@/components/ui";
 import PathPicker from "@/components/PathPicker";
 import { pathFromValue } from "@/lib/paths";
+import { isPrivateUrl } from "@/lib/urls";
 
 // Fields are GROUPED BY THE FEATURE THEY CONFIGURE, not listed flat.
 // A flat list gave no signal that the five Judge* keys are one feature
@@ -164,7 +165,11 @@ export default function SettingsPage() {
   const [cfg, setCfg] = useState<ConfigResponse | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
-  const [probe, setProbe] = useState<string | null>(null);
+  // Results of the two probes. Each is a box under its own button, in
+  // colour — the DB result used to be a mono span at the end of the
+  // button row, and the owner did not see it.
+  const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
+  const [judgeProbe, setJudgeProbe] = useState<{ ok: boolean; text: string } | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectRedactionRow[] | null>(null);
   const [projectsError, setProjectsError] = useState<string | null>(null);
@@ -228,7 +233,7 @@ export default function SettingsPage() {
   }
 
   async function testConn() {
-    setProbe("Testing…");
+    setProbe({ ok: true, text: "Testing the database…" });
     try {
       const r = await api.testConnection(values["CCT_SA_DB"] || undefined);
       // `sessions` is null when the target has no CCT schema: the probe
@@ -236,14 +241,48 @@ export default function SettingsPage() {
       // that simply is not an analytics store.
       setProbe(
         r.ok
-          ? r.schema_present
-            ? `✓ ${r.dialect} · ${r.sessions} sessions`
-            : `✓ ${r.dialect} · connected; no CCT schema (run setup to initialize)`
-          : `✗ ${r.error}`,
+          ? {
+              ok: true,
+              text: r.schema_present
+                ? `Database reachable: ${r.dialect}, ${r.sessions} sessions.`
+                : `Database reachable: ${r.dialect}; no analytics schema yet (run setup to initialize).`,
+            }
+          : { ok: false, text: `Database not reachable: ${r.error}` },
       );
     } catch (e) {
-      setProbe(`✗ ${String(e)}`);
+      setProbe({ ok: false, text: `Database not reachable: ${String(e)}` });
     }
+  }
+
+  async function testJudge() {
+    setJudgeProbe({ ok: true, text: "Asking the judge for one answer…" });
+    try {
+      const r = await api.testJudge();
+      setJudgeProbe(
+        r.ok
+          ? { ok: true, text: `${r.judge} answered in ${r.seconds}s: ${r.answer}` }
+          : { ok: false, text: `${r.judge} failed${r.seconds ? ` after ${r.seconds}s` : ""}: ${r.error}` },
+      );
+    } catch (e) {
+      setJudgeProbe({ ok: false, text: `Judge test failed: ${String(e)}` });
+    }
+  }
+
+  function ProbeBox({ result }: { result: { ok: boolean; text: string } | null }) {
+    if (!result) return null;
+    return (
+      <div
+        className={
+          "mt-3 text-sm rounded border px-3 py-2 " +
+          (result.ok
+            ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+            : "bg-rose-50 border-rose-200 text-rose-900")
+        }
+        role="status"
+      >
+        {result.text}
+      </div>
+    );
   }
 
   if (error) return <ErrorNote error={error} />;
@@ -260,9 +299,10 @@ export default function SettingsPage() {
   const modelList =
     models && models.reachable && effectiveBackend === savedBackend ? models.models : null;
   const baseUrl = values["CCT_SA_JUDGE_BASE_URL"] || "";
+  // "External" means off this network: a vLLM box on the LAN (a DGX
+  // Spark at 192.168.x, spark.local) is as local as Ollama for privacy.
   const cloudJudge =
-    backend === "claude-code" ||
-    (backend === "openai" && baseUrl.startsWith("http") && !baseUrl.includes("localhost") && !baseUrl.includes("127.0.0.1"));
+    backend === "claude-code" || (backend === "openai" && baseUrl.startsWith("http") && !isPrivateUrl(baseUrl));
 
   return (
     <div className="space-y-4 max-w-2xl">
@@ -424,7 +464,7 @@ export default function SettingsPage() {
                       <option value="__other__">Other…</option>
                     </select>
                     <span className="shrink-0 text-xs text-slate-500">
-                      {modelList.length} served at {models?.url}
+                      {modelList.length === 1 ? "1 model" : `${modelList.length} models`} on the server
                     </span>
                   </div>
                 ) : (
@@ -491,25 +531,39 @@ export default function SettingsPage() {
 
         {cloudJudge && (
           <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-3">
-            ⚠ This judge sends redacted turn previews to an external service. Choose Ollama
-            or a localhost endpoint for a fully-local judge.
+            ⚠ This judge sends redacted turn previews off your network. Choose Ollama, or a
+            server on this machine or your LAN, for a fully-local judge.
           </p>
         )}
 
-        <div className="mt-4 flex items-center gap-3">
+        {/* Both probes read the SAVED file, not the form: Save first.
+            "Test judge" sends one tiny prompt to the judge the settings
+            resolve to and shows the answer or the backend's own reason. */}
+        <div className="mt-4 flex items-center gap-3 flex-wrap">
           <button onClick={save} className="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">Save</button>
-          <button onClick={testConn} className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700">Test Connection</button>
+          <button onClick={testConn} className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700">Test database</button>
+          <button onClick={testJudge} className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700">
+            Test judge LLM
+          </button>
           {saved && <span className="text-sm text-slate-600">{saved}</span>}
-          {probe && <span className="text-sm font-mono">{probe}</span>}
         </div>
-      </Card>
-
-      <Card title="Effective judge">
-        <p className="text-sm">
-          Default judge resolves to{" "}
-          <code className="bg-slate-100 px-1 rounded">{cfg.judge_default}</code>. A blank backend
-          uses each copilot’s own LLM; set a backend above to force one for all sessions.
+        <p className="mt-2 text-xs text-slate-500">
+          Judge in effect:{" "}
+          <code className="bg-slate-100 px-1 rounded">{models?.configured.spec ?? cfg.judge_default}</code>
+          {models?.configured.source === "settings" ? " (from your saved settings)" : " (the packaged default)"}
+          {models && models.url ? (
+            models.reachable ? (
+              <span> · {models.models.length === 1 ? "1 model" : `${models.models.length} models`} on the server at {models.url}</span>
+            ) : (
+              <span className="text-rose-700">
+                {" "}· could not list models at {models.list_url ?? models.url} ({models.error})
+              </span>
+            )
+          ) : null}
+          . Both tests use the saved settings — Save first.
         </p>
+        <ProbeBox result={probe} />
+        <ProbeBox result={judgeProbe} />
       </Card>
 
       <Card title="Effective per-project redaction">

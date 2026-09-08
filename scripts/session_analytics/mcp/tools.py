@@ -31,17 +31,121 @@ _COST_ROLLUP_SQL = (
     "(SELECT SUM(t.cost_usd) FROM copilot_turn t "
     "WHERE t.session_id = copilot_session.id) AS cost_usd"
 )
-_SESSION_SELECT_COLS = f"{_SESSION_COLS}, {_COST_ROLLUP_SQL}"
+#: The three tags the Sessions grid shows as icons. The two hand-set
+#: ones read session_flag; "analyzed" counts the analysis kinds that
+#: produced a parsed result, so the icon can say "2 of 3".
+_FLAG_EXPR = (
+    "(SELECT COUNT(*) FROM " + C.TBL_SESSION_FLAG + " f "
+    "WHERE f.session_ref = copilot_session.id AND f.flag = '{flag}')"
+)
+_FAVORITE_EXPR = _FLAG_EXPR.format(flag=C.FLAG_FAVORITE)
+_TODO_EXPR = _FLAG_EXPR.format(flag=C.FLAG_TODO)
+_ANALYZED_EXPR = (
+    "(SELECT COUNT(DISTINCT a.kind) FROM " + C.TBL_SESSION_ANALYSIS + " a "
+    "WHERE a.session_ref = copilot_session.id AND a.parse_status = 'ok')"
+)
+_TAG_SELECT_COLS = (
+    f"{_FAVORITE_EXPR} AS favorite, {_TODO_EXPR} AS todo, {_ANALYZED_EXPR} AS analyzed_kinds"
+)
+#: Pricing coverage, with the dashboard's rule: a turn is priceable when
+#: it has a model, priced when cost_usd is set. A session's cost is the
+#: priced subtotal, so a reader must be told when that is not all of it.
+_COST_COVERAGE_COLS = (
+    "(SELECT COUNT(t.cost_usd) FROM copilot_turn t WHERE t.session_id = copilot_session.id) AS priced_turns, "
+    "(SELECT COUNT(*) FROM copilot_turn t WHERE t.session_id = copilot_session.id "
+    "AND t.model IS NOT NULL AND t.model <> '') AS priceable_turns"
+)
+_SESSION_SELECT_COLS = f"{_SESSION_COLS}, {_COST_ROLLUP_SQL}, {_TAG_SELECT_COLS}, {_COST_COVERAGE_COLS}"
+
+#: Columns the sessions list can be ordered by — the CLOSED map from the
+#: API's `sort` value to SQL, so a caller never names a column directly.
+#: `cost_usd` is the rollup alias, so it sorts what the page shows.
+#: Values are full SQL expressions, not output aliases: Postgres allows
+#: an alias in ORDER BY only bare, and the NULLS-last wrapper needs an
+#: expression on both dialects.
+SESSION_SORT_COLUMNS: dict[str, str] = {
+    "started_at": "started_at",
+    "copilot": "copilot",
+    "project_path": "project_path",
+    "model": "model",
+    "turn_count": "turn_count",
+    "tool_call_count": "tool_call_count",
+    "error_count": "error_count",
+    "cost_usd": _COST_ROLLUP_SQL.split(" AS ")[0],
+    "duration_seconds": "duration_seconds",
+    "favorite": _FAVORITE_EXPR,
+    "todo": _TODO_EXPR,
+    "analyzed": _ANALYZED_EXPR,
+}
+SESSION_SORT_DEFAULT = "started_at"
+
+
+class UnknownSortError(ValueError):
+    """The requested sort column is not one the list can order by."""
 
 
 def _session_dict(row, *, has_cost: bool = True) -> dict[str, Any]:
+    """``has_cost`` = the row came from _SESSION_SELECT_COLS (cost rollup
+    + the three tags); False = the bare _SESSION_COLS."""
     keys = [c.strip() for c in _SESSION_COLS.split(",")]
     if has_cost:
-        keys = keys + ["cost_usd"]
+        keys = keys + ["cost_usd", "favorite", "todo", "analyzed_kinds", "priced_turns", "priceable_turns"]
     d = dict(zip(keys, row))
     if d.get("cost_usd") is not None:
         d["cost_usd"] = float(d["cost_usd"])
+    if has_cost:
+        d["tags"] = {
+            "favorite": bool(d.pop("favorite")),
+            "todo": bool(d.pop("todo")),
+            "analyzed_kinds": int(d.pop("analyzed_kinds") or 0),
+            "analysis_kinds_total": len(C.ANALYSIS_KINDS),
+        }
+        priced, priceable = int(d.pop("priced_turns") or 0), int(d.pop("priceable_turns") or 0)
+        d["cost_coverage"] = {
+            "priced_turns": priced,
+            "priceable_turns": priceable,
+            "complete": priceable > 0 and priced >= priceable,
+        }
     return d
+
+
+def _now_iso() -> str:
+    from datetime import timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def set_session_flag(db: Database, session_id: int, flag: str, on: bool) -> dict[str, Any]:
+    """Set or clear one hand-set tag; returns the session's tags after.
+    Idempotent both ways. Raises ValueError for a flag that is not one a
+    person sets (``analyzed`` is derived) or a session that is not there."""
+    if flag not in C.SESSION_FLAGS:
+        raise ValueError(f"unknown tag {flag!r}; one of: {', '.join(C.SESSION_FLAGS)}")
+    if db.query_one("SELECT 1 FROM copilot_session WHERE id = ?", (session_id,)) is None:
+        raise ValueError(f"no session {session_id}")
+    if on:
+        exists = db.query_one(
+            f"SELECT 1 FROM {C.TBL_SESSION_FLAG} WHERE session_ref = ? AND flag = ?",
+            (session_id, flag),
+        )
+        if exists is None:
+            db.execute(
+                f"INSERT INTO {C.TBL_SESSION_FLAG} (session_ref, flag, created_at) VALUES (?, ?, ?)",
+                (session_id, flag, _now_iso()),
+            )
+    else:
+        db.execute(
+            f"DELETE FROM {C.TBL_SESSION_FLAG} WHERE session_ref = ? AND flag = ?",
+            (session_id, flag),
+        )
+    db.commit()
+    row = db.query_one(
+        f"SELECT {_TAG_SELECT_COLS} FROM copilot_session WHERE id = ?", (session_id,)
+    )
+    return {
+        "favorite": bool(row[0]), "todo": bool(row[1]),
+        "analyzed_kinds": int(row[2] or 0), "analysis_kinds_total": len(C.ANALYSIS_KINDS),
+    }
 
 
 def search_sessions(
@@ -54,22 +158,35 @@ def search_sessions(
     limit: int = 20,
     noise: Optional[NoiseConfig] = None,
     include_noise: bool = False,
+    sort: str = SESSION_SORT_DEFAULT,
+    descending: bool = True,
 ) -> list[dict[str, Any]]:
     """Find sessions by keyword (project path / model) + optional filters.
 
     With ``noise`` given and ``include_noise`` False, probe/temp-dir/too-
     short sessions are left out (see session_filter). Use
     ``count_noise_sessions`` with the same filters to say how many.
+    ``sort`` is one of SESSION_SORT_COLUMNS (the Sessions grid's column
+    headers); the limit applies AFTER ordering, so "top 50 by errors"
+    is what a sort by errors returns.
     """
+    column = SESSION_SORT_COLUMNS.get(sort)
+    if column is None:
+        raise UnknownSortError(
+            f"cannot sort sessions by {sort!r}; one of: {', '.join(SESSION_SORT_COLUMNS)}"
+        )
     where, params = _session_filters(query, copilot, date_from, date_to)
     if noise is not None and not include_noise:
         keep_sql, keep_params = keep_clause(noise, "copilot_session")
         where.append(keep_sql)
         params += list(keep_params)
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    # NULLs (an unpriced cost, a missing model) sort last either way;
+    # started_at breaks ties so the order is stable between polls.
+    direction = "DESC" if descending else "ASC"
     rows = db.query(
         f"SELECT {_SESSION_SELECT_COLS} FROM copilot_session{where_sql} "
-        f"ORDER BY started_at DESC LIMIT {int(limit)}",
+        f"ORDER BY ({column} IS NULL), {column} {direction}, started_at DESC LIMIT {int(limit)}",
         tuple(params),
     )
     return [_session_dict(r) for r in rows]

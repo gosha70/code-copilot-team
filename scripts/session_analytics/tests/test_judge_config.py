@@ -159,6 +159,60 @@ class TestOpenAIJudge(unittest.TestCase):
         )
         self.assertEqual(openai_judge._extract_content("not json"), ("not json", None))
 
+    def test_base_url_gets_v1_and_the_owners_bare_host_port_works(self) -> None:
+        # The owner's first attempt was the bare host:port; every call then
+        # went to /chat/completions and 404'd, reported as "not reachable".
+        from session_analytics.judge.openai_judge import OpenAICompatJudge, normalize_base_url
+
+        self.assertEqual(normalize_base_url("http://192.168.1.23:8001"), "http://192.168.1.23:8001/v1")
+        self.assertEqual(normalize_base_url("http://h:8001/v1/"), "http://h:8001/v1")
+        # …and the full endpoint pasted from a working curl (the owner's .env).
+        self.assertEqual(
+            normalize_base_url("http://192.168.1.23:8001/v1/chat/completions"), "http://192.168.1.23:8001/v1"
+        )
+        self.assertEqual(normalize_base_url("http://h:8001/chat/completions"), "http://h:8001/v1")
+        self.assertEqual(normalize_base_url("http://h/api/v2"), "http://h/api/v2")
+        self.assertEqual(normalize_base_url(""), "")
+        j = OpenAICompatJudge("m", base_url="http://spark:8001", api_key="")
+        self.assertEqual(j._base_url, "http://spark:8001/v1")
+
+    def test_thinking_is_disabled_and_a_server_that_rejects_the_field_is_asked_again(self) -> None:
+        # Qwen3 thinking spends the answer budget on reasoning; the request
+        # carries chat_template_kwargs.enable_thinking=false (what the
+        # owner's working curl sends). A server that 400s on the unknown
+        # field gets the same request without it.
+        import io
+        import urllib.error
+
+        from session_analytics.judge import openai_judge
+
+        j = openai_judge.OpenAICompatJudge("m", base_url="http://x", api_key="")
+        seen = []
+
+        def fake_post(path, payload, *, timeout=0):
+            seen.append(dict(payload))
+            if "chat_template_kwargs" in payload:
+                raise urllib.error.HTTPError(
+                    "http://x/v1/chat/completions", 400, "Bad Request", {},
+                    io.BytesIO(b'{"error":{"message":"Unrecognized request argument: chat_template_kwargs"}}'),
+                )
+            return '{"choices":[{"message":{"content":"{\\"ok\\": true}"},"finish_reason":"stop"}]}'
+
+        j._post = fake_post  # type: ignore[method-assign]
+        self.assertEqual(j.complete("p"), '{"ok": true}')
+        self.assertEqual(seen[0]["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertNotIn("chat_template_kwargs", seen[1])
+        # Any other HTTP refusal carries the server's reason, not a bare code.
+        def refuse(path, payload, *, timeout=0):
+            raise urllib.error.HTTPError(
+                "http://x/v1/chat/completions", 404, "Not Found", {},
+                io.BytesIO(b'{"error":{"message":"The model `nope` does not exist."}}'),
+            )
+        j._post = refuse  # type: ignore[method-assign]
+        with self.assertRaises(openai_judge.JudgeTransportError) as cm:
+            j.complete("p")
+        self.assertIn("HTTP 404: The model `nope` does not exist.", str(cm.exception))
+
     def test_missing_base_url_raises(self) -> None:
         from session_analytics.judge import openai_judge
 

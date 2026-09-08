@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import Link from "next/link";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 import { BASE, DocPayload, DocsIndex } from "@/lib/api";
@@ -105,33 +105,52 @@ export default function MarkdownDoc({
         </a>
       );
     },
-    img: ({ src, alt }) => (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={resolveDocImage(
-          String(src || ""),
-          doc.path,
-          BASE,
-          index.image_route,
-          IMAGE_DIR,
-          index.repo_url,
-          index.repo_branch,
-        )}
-        alt={alt || ""}
-        className="max-w-full rounded border border-slate-200 my-3"
-      />
-    ),
-    pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-    code: ({ className, children }) => {
-      const block = /language-/.test(className || "");
-      return block ? (
-        <code className={className}>{children}</code>
-      ) : (
-        <code className="bg-slate-100 rounded px-1 py-0.5 text-[0.9em]">
-          {children}
-        </code>
+    img: ({ src, alt, title }) => {
+      // An HTML <img width="250"> in a README (the logo) arrives from
+      // the API as a markdown image whose title carries the width.
+      const width = imageWidth(title);
+      // No source, no element: an <img src=""> makes the browser fetch
+      // the page again (React warns), and there is nothing to show.
+      if (!src) return alt ? <span className="text-slate-500">[{alt}]</span> : null;
+      return (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={resolveDocImage(
+            String(src || ""),
+            doc.path,
+            BASE,
+            index.image_route,
+            IMAGE_DIR,
+            index.repo_url,
+            index.repo_branch,
+          )}
+          alt={alt || ""}
+          title={width === undefined ? title : undefined}
+          width={width}
+          className={
+            width === undefined
+              ? "max-w-full rounded border border-slate-200 my-3"
+              : "max-w-full my-3"
+          }
+        />
       );
     },
+    // A fenced block is rendered HERE, from the child's own props, so
+    // the inline `code` component below never sees it. It used to be
+    // told apart by a language- class, and a fence with no language
+    // (most of them) got the inline light background inside the dark
+    // block — white bars with invisible text.
+    pre: ({ children }) => {
+      const child = React.Children.only(children) as React.ReactElement<{
+        className?: string;
+        children?: React.ReactNode;
+      }>;
+      const props = React.isValidElement(child) ? child.props : { children };
+      return <CodeBlock className={props.className}>{props.children}</CodeBlock>;
+    },
+    code: ({ children }) => (
+      <code className="bg-slate-100 rounded px-1 py-0.5 text-[0.9em]">{children}</code>
+    ),
     table: ({ children }) => (
       <div className="overflow-x-auto my-3">
         <table className="w-full text-sm border-collapse">{children}</table>
@@ -173,7 +192,7 @@ export default function MarkdownDoc({
             generated file — read-only
           </p>
         )}
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={docUrlTransform}>
           {doc.body}
         </ReactMarkdown>
       </article>
@@ -200,13 +219,19 @@ export default function MarkdownDoc({
   );
 }
 
-function CodeBlock({ children }: { children?: React.ReactNode }) {
+function CodeBlock({
+  children,
+  className,
+}: {
+  children?: React.ReactNode;
+  className?: string;
+}) {
   const [copied, setCopied] = useState(false);
   const text = plainText(children);
   return (
     <div className="relative group my-3">
       <pre className="bg-slate-900 text-slate-100 rounded p-3 text-xs overflow-x-auto">
-        {children}
+        <code className={className}>{children}</code>
       </pre>
       <button
         onClick={() => {
@@ -224,6 +249,22 @@ function CodeBlock({ children }: { children?: React.ReactNode }) {
 }
 
 /** The text a React subtree would render — for heading ids and Copy. */
+/** react-markdown's default transform drops `data:` URLs, which left
+ *  an embedded screenshot (`[image1]: <data:image/png;base64,…>` in the
+ *  Claude Code setup cookbook) with an empty src. Embedded IMAGES are
+ *  allowed; everything else keeps the default (safe) treatment. */
+export function docUrlTransform(url: string): string {
+  if (/^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml);base64,/i.test(url)) return url;
+  return defaultUrlTransform(url);
+}
+
+/** ``width=250`` in an image title (see api/docs.py IMG_WIDTH_TITLE)
+ *  → 250; anything else → undefined. */
+export function imageWidth(title: string | undefined): number | undefined {
+  const m = /^width=(\d+)$/.exec(title || "");
+  return m ? Number(m[1]) : undefined;
+}
+
 export function plainText(node: React.ReactNode): string {
   if (node == null || typeof node === "boolean") return "";
   if (typeof node === "string" || typeof node === "number") return String(node);

@@ -91,6 +91,7 @@ _DDL_FILES = (
     "ddl/postgres/005_heartbeat.sql",
     "ddl/postgres/006_session_analysis.sql",
     "ddl/postgres/007_human_label.sql",
+    "ddl/postgres/008_session_flag.sql",
 )
 # 3: + local_heartbeat (Slice B1, #187)
 # 4: + trace search index (E10 Slice B, #65). NOTE that apply_ddl creates

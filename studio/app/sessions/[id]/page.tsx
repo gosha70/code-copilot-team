@@ -10,6 +10,7 @@ import {
   JudgeModels,
   SessionAnalysisResponse,
   SessionDetail,
+  SessionTagsInfo,
   TurnRow,
 } from "@/lib/api";
 import {
@@ -23,6 +24,9 @@ import {
 } from "@/components/ui";
 import SessionAnalysis, { PanelState } from "@/components/SessionAnalysis";
 import SimilarPanel from "@/components/SimilarPanel";
+import ResponseTimeCard from "@/components/ResponseTime";
+import SessionHeader from "@/components/SessionHeader";
+import { HandTag } from "@/components/SessionTags";
 import { classifySimilar, type SimilarOutcome } from "@/lib/similarStates";
 
 // One session, read the way a person reads it: what was said (Timeline,
@@ -49,6 +53,32 @@ export default function SessionDetailPage() {
   const id = Number(params.id);
   const [tab, setTab] = useState<Tab>("timeline");
   const { data, error, loading } = useApi(() => api.session(id), [id]);
+  // "Is this session unusual for this project?" — the base rate from
+  // /api/predict/effort (#307), withheld below the sample floor so five
+  // sessions never masquerade as a distribution. Without a project path
+  // the estimate would be store-wide and "this project" a lie: skipped.
+  const projectPath = data?.project_path || "";
+  const { data: baselineData } = useApi(
+    () => (projectPath ? api.predictEffort(projectPath) : Promise.resolve(null)),
+    [projectPath],
+  );
+  const baseline = projectPath && baselineData && baselineData.turns.sufficient ? baselineData : null;
+  // Hand-set tags toggled here show at once; the server's answer wins.
+  // The derived "analyzed" tag is re-read after an analysis completes.
+  const [tags, setTags] = useState<SessionTagsInfo | null>(null);
+  const refreshTags = useCallback(() => {
+    api.session(id).then((d) => setTags(d.tags)).catch(() => {});
+  }, [id]);
+  async function toggleTag(tag: HandTag, on: boolean) {
+    if (!data) return;
+    const current = tags ?? data.tags;
+    setTags({ ...current, [tag]: on });
+    try {
+      setTags((await api.setSessionTag(id, tag, on)).tags);
+    } catch {
+      setTags(current);
+    }
+  }
 
   // A turn chip on an analysis tab links to `#turn-N`, which lives on the
   // Timeline. The Timeline is not mounted while another tab is showing,
@@ -68,15 +98,12 @@ export default function SessionDetailPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold">{data.copilot} session</h1>
-        <p className="text-sm text-slate-500">
-          {data.project_path} · {data.model} · {data.turn_count} turns ·{" "}
-          {data.error_count} errors · {formatDuration(data.duration_seconds)} ·{" "}
-          {formatCost(data.cost_usd)}
-        </p>
-        <ProjectBaseline projectPath={data.project_path} />
-      </div>
+      <SessionHeader
+        data={data}
+        baseline={baseline}
+        tags={tags ?? data.tags}
+        onToggleTag={(tag, on) => toggleTag(tag, on)}
+      />
 
       <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
         {(["timeline", ...ANALYSIS_KINDS, "similar"] as Tab[]).map((t) => (
@@ -96,34 +123,13 @@ export default function SessionDetailPage() {
 
       {tab === "timeline" && <Timeline data={data} />}
       {ANALYSIS_KINDS.includes(tab as AnalysisKind) && (
-        <Analysis id={id} kind={tab as AnalysisKind} />
+        <Analysis id={id} kind={tab as AnalysisKind} onResult={refreshTags} />
       )}
       {tab === "similar" && <Similar id={id} />}
     </div>
   );
 }
 
-// "Is this session unusual for this project?" — the base rate from
-// /api/predict/effort (#307), withheld below the sample floor so five
-// sessions never masquerade as a distribution.
-function ProjectBaseline({ projectPath }: { projectPath: string | null }) {
-  const { data } = useApi(
-    () => api.predictEffort(projectPath || ""),
-    [projectPath],
-  );
-  // No project path means the estimate would be the store-wide one, and
-  // "This project" would be a lie; say nothing rather than mislabel it.
-  if (!projectPath || !data || !data.turns.sufficient) return null;
-  const cost = data.cost_usd.sufficient && data.cost_usd.median != null
-    ? ` · median ${formatCost(data.cost_usd.median)}`
-    : "";
-  return (
-    <p className="text-xs text-slate-400 mt-0.5">
-      This project: median {data.turns.median} turns · p90 {data.turns.p90}
-      {cost} (n={data.sessions})
-    </p>
-  );
-}
 
 // ── Timeline ────────────────────────────────────────────────────────────
 
@@ -172,42 +178,7 @@ function Timeline({ data }: { data: SessionDetail }) {
     <div className="space-y-3">
       {data.latency && (
         <Card title="Response time (assistant turns)">
-          <div className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
-            <span>
-              median{" "}
-              <span className="font-medium">
-                {formatDuration(data.latency.p50)}
-              </span>
-            </span>
-            <span>
-              p90{" "}
-              <span className="font-medium">
-                {formatDuration(data.latency.p90)}
-              </span>
-            </span>
-            <span>
-              slowest{" "}
-              <span className="font-medium">
-                {formatDuration(data.latency.max)}
-              </span>
-            </span>
-            <span className="text-slate-500">
-              {data.latency.measured_turns.toLocaleString()} turns measured
-            </span>
-            <span className="text-slate-500">
-              slowest:{" "}
-              {data.latency.slowest.map((s, i) => (
-                <a
-                  key={s.sequence_num}
-                  href={`#turn-${s.sequence_num}`}
-                  className="font-mono text-blue-700 hover:underline"
-                >
-                  #{s.sequence_num} {formatDuration(s.seconds)}
-                  {i < data.latency!.slowest.length - 1 ? ", " : ""}
-                </a>
-              ))}
-            </span>
-          </div>
+          <ResponseTimeCard latency={data.latency} turns={data.turns} />
         </Card>
       )}
       {!anyArchived && (
@@ -308,7 +279,17 @@ function TurnCard({ t, highlighted }: { t: TurnRow; highlighted: boolean }) {
 
 // ── Analysis tabs ───────────────────────────────────────────────────────
 
-function Analysis({ id, kind }: { id: number; kind: AnalysisKind }) {
+function Analysis({
+  id,
+  kind,
+  onResult,
+}: {
+  id: number;
+  kind: AnalysisKind;
+  /** Called when an analysis produced a result: the derived "analyzed"
+   *  tag in the header depends on it. */
+  onResult?: () => void;
+}) {
   const [meta, setMeta] = useState<SessionAnalysisResponse | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [state, setState] = useState<PanelState>({ kind: "absent" });
@@ -355,12 +336,13 @@ function Analysis({ id, kind }: { id: number; kind: AnalysisKind }) {
           if (outcome.ok) {
             const row: AnalysisRow = outcome.report;
             setState({ kind: "done", row });
+            onResult?.();
           } else {
             setState({ kind: "failed", failure: outcome, keptPrevious });
           }
         });
     },
-    [id, kind, state],
+    [id, kind, state, onResult],
   );
 
   if (metaError) return <ErrorNote error={metaError} />;

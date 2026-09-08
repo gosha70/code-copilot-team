@@ -98,7 +98,11 @@ elif ! command -v lychee >/dev/null 2>&1; then
     exit 2
 else
     echo "check-doc-accuracy: links (lychee)"
+    # 429 is accepted: a site throttling the checker (docs.vllm.ai does,
+    # PR #317) is not a broken link, and it fails only in CI where the
+    # run is fast enough to trip the limit.
     if ! lychee --no-progress --exclude-all-private --root-dir "$ROOT" \
+            --accept '200..299,429' \
             --exclude 'linkedin\.com' --exclude 'openai\.com' README.md 'docs/**/*.md'; then
         fail "broken links (see lychee output above)"
     fi

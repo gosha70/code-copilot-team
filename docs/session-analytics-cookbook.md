@@ -302,17 +302,42 @@ there is nothing to judge.
 ### 7.0 A judge on another machine (e.g. a DGX Spark)
 
 Both local backends can live on other hardware; the Studio only needs
-its URL.
+its URL. For vLLM serving `qwen38-27b` on a Spark at `192.168.1.23:8001`
+(the setup in the Learn section *Judge on a DGX Spark*), the whole
+configuration is:
+
+1. **Settings → LLM-as-Judge**: Backend `openai` (the OpenAI-compatible
+   backend — vLLM speaks that API), Base URL `http://192.168.1.23:8001`
+   (with or without `/v1`; it is added when missing), API key blank.
+2. **Save.** The Model dropdown now lists what that server serves —
+   pick `qwen38-27b`. Save again.
+3. **Test judge LLM** (next to *Test database*): one tiny
+   prompt to the saved judge. Expect `openai:qwen38-27b answered in
+   0.7s: {"ok": true}`. A failure shows the server's own reason (a
+   wrong model name, a wrong port).
+4. **Analysis → step 3**, Run llm judge. Verified on that Spark: about
+   10 s per turn.
+
+For Ollama on the Spark instead: Backend `ollama`, Ollama URL
+`http://192.168.1.23:11434` (Ollama must be started with
+`OLLAMA_HOST=0.0.0.0`), then the same Save → pick model → Test judge LLM.
 
 | You run on the Spark | Settings → LLM-as-Judge |
 |---|---|
-| **Ollama** (`OLLAMA_HOST=0.0.0.0 ollama serve`, then `ollama pull qwen3.6:27b`) | Backend `ollama` · Ollama URL `http://spark.local:11434` · Model from the list |
-| **vLLM** (`vllm serve Qwen/Qwen3.6-27B --port 8000`, or any OpenAI-compatible server) | Backend `openai` · Base URL `http://spark.local:8000/v1` · API key blank (or whatever the server was started with) · Model from the list |
+| **vLLM** (`vllm serve …`, or any OpenAI-compatible server) | Backend `openai` · Base URL `http://<spark>:8001` · Model from the list |
+| **Ollama** (`OLLAMA_HOST=0.0.0.0 ollama serve`) | Backend `ollama` · Ollama URL `http://<spark>:11434` · Model from the list |
 
-Save, and the Model list refreshes from the new URL. Nothing else
-changes: the judge step, the CLI (`analyze`) and the validation loop
-all use the configured judge. The transcript text goes to that machine
-under the configured redaction level (§3.2); nothing else leaves.
+Qwen3-family models "think" by default and can spend the whole answer
+budget on it; the judge sends `enable_thinking: false` with every
+request (what a working `curl` to vLLM also needs) and falls back to a
+plain request on servers that do not know the field. The transcript
+text goes to that machine under the configured redaction level (§3.2);
+nothing else leaves.
+
+How to stand the Spark up in the first place — Ollama, vLLM in a
+container, Qwen3.8-27B, the exact run sequence — is in Learn under
+**Judge on a DGX Spark** (three pages: setup & cookbook, the vLLM
+operator manual, the runbook).
 
 ### 7.1 Is the judge right? (validation)
 

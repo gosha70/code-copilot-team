@@ -36,6 +36,37 @@ class TestMcpTools(RegistryResetTestCase):
         self.assertEqual(tools.search_sessions(self.db, "nonexistent-xyz"), [])
         self.assertEqual(len(tools.search_sessions(self.db, copilot="claude-code")), 1)
 
+    def test_search_sessions_sorts_server_side_with_a_closed_column_map(self) -> None:
+        # The Sessions grid sorts by clicking a header; the ORDER BY is
+        # the server's (the list is the top N AFTER ordering) and the
+        # column comes from a closed map, never from the caller's text.
+        for sid, turns, errors, started in (("s-many", 500, 9, "2026-01-01T00:00:00Z"),
+                                            ("s-few", 3, 0, "2026-03-01T00:00:00Z")):
+            self.db.execute(
+                "INSERT INTO copilot_session (copilot, session_id, project_path, turn_count, "
+                "tool_call_count, error_count, duration_seconds, started_at, developer_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (C.COPILOT_CLAUDE_CODE, sid, "/w/" + sid, turns, 1, errors, 600, started,
+                 C.DEFAULT_DEVELOPER_ID),
+            )
+        self.db.commit()
+        by_turns = [r["session_id"] for r in tools.search_sessions(self.db, sort="turn_count")]
+        self.assertEqual(by_turns[0], "s-many")
+        self.assertEqual(by_turns[-1], "s-few")
+        asc = [r["session_id"] for r in tools.search_sessions(self.db, sort="turn_count", descending=False)]
+        self.assertEqual(asc[0], "s-few")
+        by_err = [r["session_id"] for r in tools.search_sessions(self.db, sort="error_count")]
+        self.assertEqual(by_err[0], "s-many")
+        newest = [r["session_id"] for r in tools.search_sessions(self.db)]
+        # default: started_at desc, as before (the fixture session is the newest)
+        self.assertEqual(newest.index("s-few") + 1, newest.index("s-many"))
+        # limit applies after ordering: top 1 by turns is the big one
+        self.assertEqual(
+            tools.search_sessions(self.db, sort="turn_count", limit=1)[0]["session_id"], "s-many"
+        )
+        with self.assertRaises(tools.UnknownSortError):
+            tools.search_sessions(self.db, sort="id; DROP TABLE copilot_session")
+
     def test_get_session_details(self) -> None:
         d = tools.get_session_details(self.db, self._session_id())
         self.assertEqual(len(d["turns"]), 6)

@@ -77,6 +77,11 @@ try {
         join(STUDIO, "components/JudgeQuality.tsx"),
         join(STUDIO, "components/LoadSelection.tsx"),
         join(STUDIO, "components/JudgeProgress.tsx"),
+        join(STUDIO, "components/MarkdownDoc.tsx"),
+        join(STUDIO, "lib/urls.ts"),
+        join(STUDIO, "components/ResponseTime.tsx"),
+        join(STUDIO, "components/SessionHeader.tsx"),
+        join(STUDIO, "components/SessionTags.tsx"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -845,6 +850,118 @@ try {
   else if (!/packaged default/.test(jp.judgeChoiceLabel({ ...conf, source: "packaged default" }))) fail("packaged default not named");
   else if (!/Settings/.test(jp.judgeChoiceLabel(undefined))) fail("no-config label does not point at Settings");
   else console.log("  ok  the default judge choice names what Settings says and where it is set");
+
+  // ── Learn: fenced code blocks ────────────────────────────────────────
+  console.log("\nlearn code blocks:");
+  try {
+    const md = await import(pathToFileURL(join(out, "components/MarkdownDoc.js")));
+    const index = { sections: [], finding_links: {} };
+    const docOf = (body) => ({
+      slug: "x", path: "docs/x.md", section: "start", kind: "doc", title: "X", description: "",
+      page_type: "doc", generated: false, frontmatter: {}, body,
+    });
+    const page = render(md.default, {
+      doc: docOf("Prose with `inline` code.\n\n```\nplain fence\nline two\n```\n\n```bash\necho tagged\n```\n"),
+      index,
+    });
+    const pres = page.match(/<pre[^>]*>[\s\S]*?<\/pre>/g) || [];
+    if (pres.length !== 2) fail(`expected 2 code blocks, got ${pres.length}`);
+    else if (pres.some((p) => /bg-slate-100/.test(p))) fail("a fenced block carries the inline-code light background (white bars)");
+    else if (!/plain fence/.test(pres[0]) || !/echo tagged/.test(pres[1])) fail("fenced block text missing");
+    else if (!/<code class="bg-slate-100[^"]*">inline<\/code>/.test(page)) fail("inline code lost its style");
+    else console.log("  ok  fences with and without a language render as dark blocks; inline code keeps its style");
+    const logo = render(md.default, { doc: docOf('![Logo](/docs/images/x.png "width=250")\n\n# Title\n'), index: { ...index, image_route: "/api/docs/image", repo_url: "", repo_branch: "master" } });
+    if (!/<img[^>]*width="250"/.test(logo) || /title="width=250"/.test(logo)) fail("README logo width not applied (or leaked as a tooltip)");
+    else if (md.imageWidth("hello") !== undefined) fail("a real title mistaken for a width");
+    else console.log("  ok  an HTML <img width> from a README keeps its width");
+    const png1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    const embedded = render(md.default, { doc: docOf(`![][shot]\n\n[shot]: <${png1x1}>\n`), index: { ...index, image_route: "/api/docs/image", repo_url: "", repo_branch: "master" } });
+    if (!/<img[^>]*src="data:image\/png;base64,/.test(embedded)) fail("embedded data:image screenshot dropped (empty src)");
+    else if (md.docUrlTransform("javascript:alert(1)") !== "") fail("unsafe URL scheme let through");
+    else console.log("  ok  embedded data:image screenshots render; unsafe schemes still dropped");
+    const noSrc = render(md.default, { doc: docOf("![missing]()\n"), index: { ...index, image_route: "/api/docs/image", repo_url: "", repo_branch: "master" } });
+    if (/<img/.test(noSrc)) fail("an image with no source still rendered an <img>");
+    else console.log("  ok  an image with no source renders no <img>");
+  } catch (e) {
+    fail(`MarkdownDoc could not be rendered: ${e && e.message ? e.message : e}`);
+  }
+
+  // ── which judge URLs count as local ───────────────────────────────
+  console.log("\nlocal judge urls:");
+  const { isPrivateUrl } = await import(pathToFileURL(join(out, "lib/urls.js")));
+  const local = ["http://localhost:1234/v1", "http://127.0.0.1:8001", "http://192.168.1.23:8001/v1", "http://spark-c2e5.local:8001", "http://10.0.0.5:8000", "http://172.20.1.1:8000"];
+  const remote = ["https://api.openai.com/v1", "http://172.32.0.1:8000", "http://8.8.8.8", "not a url"];
+  const wrongLocal = local.filter((u) => !isPrivateUrl(u));
+  const wrongRemote = remote.filter((u) => isPrivateUrl(u));
+  if (wrongLocal.length || wrongRemote.length) fail(`isPrivateUrl wrong for ${JSON.stringify([...wrongLocal, ...wrongRemote])}`);
+  else console.log("  ok  LAN/.local/loopback are local; hosted and public addresses are not");
+
+  // ── response time card ─────────────────────────────────────────────
+  console.log("\nresponse time:");
+  const rt = await import(pathToFileURL(join(out, "components/ResponseTime.js")));
+  const turn = (seq, role, lat, text = "") => ({ sequence_num: seq, role, latency_seconds: lat, content_preview: text, content: null, archived: false, timestamp: null, has_tool_use: false, slash_command: null, sentiment: null });
+  const turns = [turn(1, "user", null, "q"), turn(2, "assistant", 0.5), turn(3, "assistant", 2), turn(4, "assistant", 45, "running the test suite"), turn(5, "assistant", 964, "reading the whole tree"), turn(6, "user", 3)];
+  const h = rt.latencyBuckets(turns);
+  if (h.measured !== 4 || h.slow !== 2) fail(`measured/slow wrong: ${JSON.stringify(h)}`);
+  else if (h.buckets.map((b) => b.count).join(",") !== "1,1,0,0,1,0,1") fail(`bands wrong: ${h.buckets.map((b) => b.count)}`);
+  else console.log("  ok  histogram counts assistant turns only, into the right bands");
+  if (!/2 of 4 assistant turns \(50%\) took 30 s or longer/.test(rt.latencyVerdict(4, 2))) fail("verdict text");
+  else if (!/under 30 s/.test(rt.latencyVerdict(4, 0)) || !/nothing is measured/.test(rt.latencyVerdict(0, 0))) fail("verdict edge cases");
+  else console.log("  ok  the verdict names the share over 30 s, or says all fast / nothing measured");
+  const card = render(rt.default, { latency: { measured_turns: 4, p50: 2, p90: 45, max: 964, slowest: [{ sequence_num: 5, seconds: 964 }, { sequence_num: 4, seconds: 45 }] }, turns });
+  if (!/Median response/.test(card) || !/16m 4s/.test(card) || !/50%/.test(card)) fail("KPI tiles missing");
+  else if (!/href="#turn-5"/.test(card) || !/reading the whole tree/.test(card)) fail("slowest table lacks the link or the turn text");
+  else if (!/bg-rose-500/.test(card) || !/width:100%/.test(card)) fail("histogram bars missing");
+  else console.log("  ok  card: tiles, bars, slowest-turn table with links and text");
+
+  // ── session header ─────────────────────────────────────────────────
+  console.log("\nsession header:");
+  const sh = await import(pathToFileURL(join(out, "components/SessionHeader.js")));
+  const es = (median, p90) => ({ observations: 14, sufficient: true, median, p90, max: p90 * 2 });
+  const v = sh.versusProject(4659, es(2114, 6457));
+  if (!/2\.2× the project median/.test(v.note) || v.tone !== "default") fail(`versus: ${JSON.stringify(v)}`);
+  else if (sh.versusProject(7000, es(2114, 6457)).tone !== "warn" || !/above its p90/.test(sh.versusProject(7000, es(2114, 6457)).note)) fail("past-p90 not flagged");
+  else if (sh.versusProject(2100, es(2114, 6457)).note !== "about the project median") fail("near-median wording");
+  else if (sh.versusProject(5, { observations: 3, sufficient: false, median: 4, p90: 9, max: 9 }).note !== "") fail("insufficient baseline must say nothing");
+  else if (sh.projectName("/Users/x/dev/repo/code-copilot-team/") !== "code-copilot-team" || sh.projectName(null) !== "(no project path)") fail("project name");
+  else console.log("  ok  comparison wording: ×median, near-median, above p90, withheld when insufficient");
+  const detail = { id: 1, tags: { favorite: false, todo: false, analyzed_kinds: 0, analysis_kinds_total: 3 }, cost_coverage: { priced_turns: 0, priceable_turns: 10, complete: false }, copilot: "claude-code", session_id: "abc", project_path: "/Users/x/dev/repo/code-copilot-team", model: "claude-opus-5", turn_count: 4659, tool_call_count: 1543, error_count: 46, started_at: "2026-09-03T11:46:54Z", duration_seconds: 284400, cost_usd: null, turns: [], tool_usage: [], errors: [], latency: null };
+  const base = { scope: "project", sessions: 14, turns: es(2114, 6457), tool_calls: es(600, 2000), errors: es(10, 40), duration_seconds: es(100000, 250000), cost_usd: { observations: 0, sufficient: false, median: null, p90: null, max: null }, cost_usd_coverage: { sessions_with_any_priced_turn: 0, sessions_fully_priced: 0, sessions_with_priceable_turns: 0 }, min_observations: 5, basis: "" };
+  const head = render(sh.default, { data: detail, baseline: base });
+  if (!/<h1[^>]*>code-copilot-team<\/h1>/.test(head)) fail("title is not the project name");
+  else if (!/claude-opus-5/.test(head) || !/claude-code/.test(head)) fail("copilot/model badges missing");
+  else if (!/2\.2× the project median/.test(head) || !/1\.0 per 100 turns/.test(head) || !/above its p90/.test(head)) fail("tile notes missing");
+  else if (!/14 other sessions of this project/.test(head) || !/no priced turns/.test(head)) fail("baseline fact or cost note missing");
+  else if (!/<dt[^>]*>Started<\/dt>/.test(head) || !/<dt[^>]*>Session id<\/dt>/.test(head) || !/>abc</.test(head)) fail("labelled facts (Started, Session id) missing");
+  else console.log("  ok  header: project title, badges, five tiles with comparisons");
+  const bare = render(sh.default, { data: { ...detail, project_path: null, model: null, started_at: null, duration_seconds: null }, baseline: null });
+  if (!/no project path/.test(bare) || !/too few sessions of this project/.test(bare) || /×/.test(bare)) fail("header without a project/baseline still claims a comparison");
+  else console.log("  ok  no project path / no baseline: nothing compared, nothing invented");
+  // A priced SUBTOTAL is never compared with complete costs (reviewer P2 on #317).
+  const costBase = { ...base, cost_usd: es(10, 40) };
+  const partCost = render(sh.default, { data: { ...detail, cost_usd: 1, cost_coverage: { priced_turns: 3, priceable_turns: 10, complete: false } }, baseline: costBase });
+  if (/0\.1× the project median/.test(partCost) || !/priced turns only — 3 of 10; not compared/.test(partCost)) fail("partial cost was compared with complete costs");
+  else if (!/1\.0× the project median|about the project median/.test(render(sh.default, { data: { ...detail, cost_usd: 10, cost_coverage: { priced_turns: 10, priceable_turns: 10, complete: true } }, baseline: costBase }))) fail("complete cost not compared");
+  else console.log("  ok  cost: compared only when every priceable turn is priced");
+
+  // ── session tags ───────────────────────────────────────────────────
+  console.log("\nsession tags:");
+  const st = await import(pathToFileURL(join(out, "components/SessionTags.js")));
+  const t0 = { favorite: false, todo: false, analyzed_kinds: 0, analysis_kinds_total: 3 };
+  if (st.analyzedState(t0).state !== "none" || st.analyzedState({ ...t0, analyzed_kinds: 2 }).state !== "partial" || st.analyzedState({ ...t0, analyzed_kinds: 3 }).state !== "all") fail("analyzed state");
+  else if (!/2 of 3/.test(st.analyzedState({ ...t0, analyzed_kinds: 2 }).title) || !/Not analyzed yet/.test(st.analyzedState(t0).title)) fail("analyzed tooltip");
+  else console.log("  ok  analyzed: none / partial (n of total) / all");
+  const ro = render(st.default, { tags: { ...t0, favorite: true } });
+  if (/<button/.test(ro)) fail("read-only icons rendered buttons");
+  else if (!/aria-label="Favorite — click to remove"/.test(ro) || !/aria-label="Mark as to-do"/.test(ro)) fail("tag tooltips");
+  else if ((ro.match(/<svg/g) || []).length !== 3) fail("three icons expected");
+  else console.log("  ok  read-only: three icons, tooltips name the state");
+  const rw = render(st.default, { tags: { ...t0, todo: true }, onToggle: () => {} });
+  if ((rw.match(/<button/g) || []).length !== 2 || !/aria-pressed="true"/.test(rw)) fail("hand-set tags must be two buttons, analyzed never one");
+  else console.log("  ok  toggleable: favorite and to-do are buttons, analyzed is not");
+  const withTags = render(sh.default, { data: { ...detail, tags: { ...t0, favorite: true, analyzed_kinds: 3 } }, baseline: null });
+  if (!/Favorite — click to remove/.test(withTags) || !/all 3 analyses/.test(withTags)) fail("header does not show the tags");
+  else console.log("  ok  header shows the tags");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {
