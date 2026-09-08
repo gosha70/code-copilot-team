@@ -72,10 +72,10 @@ export default function SessionAnalysis({
           onClick={() => onRun(false)}
           className="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700"
         >
-          Generate with {judge}
+          {ACTION[kind]}
         </button>
         <span className="text-xs text-slate-500 ml-3">
-          One model call over the whole transcript — usually 1–3 minutes.
+          One call to {judge} over the whole transcript — usually 1–3 minutes.
         </span>
       </Card>
     );
@@ -176,6 +176,14 @@ export default function SessionAnalysis({
   );
 }
 
+/** The button says what the analysis DOES, not which model does it —
+ *  the judge is named beside it and configured under Settings. */
+export const ACTION: Record<AnalysisKind, string> = {
+  tuning: "Review agent configuration",
+  coaching: "Review prompts",
+  efficiency: "Find inefficiencies",
+};
+
 const BLURB: Record<AnalysisKind, string> = {
   tuning:
     "Where the assistant's behaviour could be fixed by configuration — steering rules, permissions, hooks, skills — with the exact change to apply.",
@@ -254,7 +262,7 @@ function EmptyList({ text, dropped }: { text: string; dropped: number }) {
     return (
       <p className="text-sm text-amber-700">
         The model offered {dropped} item{dropped === 1 ? "" : "s"} that did not
-        follow the expected format, so none can be shown. Re-generate, or try a
+        follow the expected format, so none can be shown. Run it again, or try a
         stronger model.
       </p>
     );
@@ -490,7 +498,7 @@ function Footer({
         onClick={() => onRun(true)}
         className="ml-auto border border-slate-300 bg-white text-slate-700 rounded px-2 py-0.5 hover:bg-slate-50"
       >
-        Re-generate
+        Run again
       </button>
     </div>
   );
