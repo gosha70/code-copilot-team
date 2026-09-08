@@ -1,6 +1,6 @@
 // Similar-sessions panel (#293 T3; FR-A, FR-C, FR-E), made operable.
 //
-// Pure presentational, like ClustersView, so the D8 states script can
+// Pure presentational, so the D8 states script can
 // render every state without a server.
 //
 // The two states FR-C names for this surface are STRUCTURALLY distinct

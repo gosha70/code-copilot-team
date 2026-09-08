@@ -66,8 +66,6 @@ try {
         paths: { "@/*": ["./*"] },
       },
       include: [
-        join(STUDIO, "components/ClustersView.tsx"),
-        join(STUDIO, "lib/clusterStates.ts"),
         join(STUDIO, "components/SimilarPanel.tsx"),
         join(STUDIO, "lib/similarStates.ts"),
         join(STUDIO, "components/DevelopersPanel.tsx"),
@@ -82,6 +80,8 @@ try {
         join(STUDIO, "components/ResponseTime.tsx"),
         join(STUDIO, "components/SessionHeader.tsx"),
         join(STUDIO, "components/SessionTags.tsx"),
+        join(STUDIO, "lib/graphView.ts"),
+        join(STUDIO, "components/GraphCatalogue.tsx"),
         join(STUDIO, "components/ui.tsx"),
       ],
     }),
@@ -126,242 +126,12 @@ try {
   const { renderToStaticMarkup } = await import("react-dom/server");
   const React = (await import("react")).default;
 
-  const { default: ClustersView } = await import(
-    pathToFileURL(join(out, "components/ClustersView.js"))
-  );
-  const { COPY, STATE_MARKERS, classify } = await import(
-    pathToFileURL(join(out, "lib/clusterStates.js"))
-  );
   const { default: SimilarPanel } = await import(
     pathToFileURL(join(out, "components/SimilarPanel.js"))
   );
   const { SIMILAR_COPY, SIMILAR_MARKERS, classifySimilar } = await import(
     pathToFileURL(join(out, "lib/similarStates.js"))
   );
-
-  const report = (clusters, counts = {}) => ({
-    clusters,
-    cluster_count: counts.total ?? clusters.length,
-    clustered_sessions: counts.clustered ?? 0,
-    unclustered_sessions: counts.unclustered ?? 0,
-    graph_sessions: counts.graph ?? 0,
-    basis: "embedding",
-    membership_basis: "the SIMILAR_TO edges currently stored in the graph",
-    inventory_basis: "the current Session node inventory",
-    limitations: [
-      "a cluster is a transitive discovery grouping",
-      "membership reflects the edges the producer created at production time",
-    ],
-  });
-
-  const cluster = (identity, members, edges) => ({
-    identity,
-    size: members.length,
-    members,
-    directed_edge_count: edges,
-  });
-
-  // THE ORDERING FIXTURE MUST DISCRIMINATE. Identities "m" (size 3) and
-  // "a" (size 2): the reader's order is size-descending → [m, a], while
-  // identity-ascending would be [a, m]. A fixture whose two candidate
-  // orders AGREE cannot detect a client-side sort — the first version
-  // of this script used a=3, p=2, where both orders are [a, p], and a
-  // deliberately-introduced sort escaped it. Same trap as #289's
-  // ordering fixture, and it escaped here until it was mutated.
-  const populated = report(
-    [cluster("m", ["m", "n", "o"], 4), cluster("a", ["a", "b"], 2)],
-    { clustered: 5, unclustered: 1, graph: 6 },
-  );
-
-  // Each entry carries the DISTINCT STATE it exercises. The cap is a
-  // VARIANT of "populated", not a state of its own — tagging that
-  // explicitly is what lets the exclusivity check below compare only
-  // across genuinely different states. (The first run of that check
-  // failed here, by flagging populated-vs-capped: correct behaviour
-  // from the check, and the thing it forced was this precision.)
-  const STATES = [
-    ["populated (FR-A order rendered as received)", "populated",
-      classify({ ok: true, report: populated }), COPY.populatedMarker],
-    ["healthy empty (FR-C: a result, not a failure)", "empty",
-      classify({ ok: true, report: report([], { graph: 2, unclustered: 2 }) }),
-      COPY.emptyMarker],
-    ["graph absent (FR-C prerequisite)", "absent",
-      classify({ ok: false, status: 503, message: "503",
-        detail: { error: "graph database absent at /x",
-          prerequisite: "graph", state: "absent",
-          guidance: "run graph first" } }),
-      COPY.absentMarker],
-    ["graph unbuilt (FR-C: distinct from absent)", "unbuilt",
-      classify({ ok: false, status: 503, message: "503",
-        detail: { error: "graph store holds no Session table",
-          prerequisite: "graph", state: "unbuilt",
-          guidance: "run graph first" } }),
-      COPY.unbuiltMarker],
-    ["capped list (FR-D: N of M)", "populated",
-      classify({ ok: true,
-        report: report([cluster("a", ["a", "b"], 2)],
-          { total: 9, clustered: 2, unclustered: 0, graph: 2 }) }),
-      COPY.cap(1, 9)],
-    ["uncapped list shows NO cap notice (FR-D)", "populated",
-      classify({ ok: true, report: populated }), null],
-    ["graph unopenable (FR-C: distinct from absent AND unbuilt)",
-      "unopenable",
-      classify({ ok: false, status: 503, message: "503",
-        detail: { error: "graph database absent or unopenable at /x",
-          prerequisite: "graph", state: "unopenable",
-          guidance: "run graph first" } }),
-      COPY.unopenableMarker],
-    ["UNRECOGNISED state string (a future server value)", "unnamed",
-      classify({ ok: false, status: 503, message: "503",
-        detail: { error: "graph database is quarantined",
-          prerequisite: "graph", state: "quarantined",
-          guidance: "contact your administrator" } }),
-      COPY.unnamedMarker],
-    ["unnamed prerequisite (older server, no `state` field)", "unnamed",
-      classify({ ok: false, status: 503, message: "503",
-        detail: { error: "graph database absent at /x",
-          prerequisite: "graph", guidance: "run graph first" } }),
-      COPY.unnamedMarker],
-    ["honest failure (not a prerequisite)", "failed",
-      classify({ ok: false, status: 500, message: "GET /api/clusters → 500" }),
-      COPY.failedMarker],
-  ];
-
-  const rendered = new Map();
-  for (const [name, kind, state, marker] of STATES) {
-    const html = renderToStaticMarkup(React.createElement(ClustersView, { state }));
-    rendered.set(name, { kind, html });
-    if (marker === null) {
-      // the negative case: an uncapped list must NOT claim a cap
-      if (/Showing \d+ of \d+ clusters/.test(html)) {
-        fail(`${name}: a cap notice was rendered for an uncapped list`);
-      } else {
-        console.log(`  ok  ${name}`);
-      }
-      continue;
-    }
-    if (!html.includes(marker)) {
-      fail(`${name}: marker not rendered — ${JSON.stringify(marker)}`);
-    } else {
-      console.log(`  ok  ${name}`);
-    }
-  }
-
-  // THE META-ASSERTION: markers must be mutually exclusive, or every
-  // check above could pass while two states were conflated.
-  console.log("\nmarker exclusivity:");
-  for (const [name, kind, , marker] of STATES) {
-    if (marker === null || !STATE_MARKERS.includes(marker)) continue;
-    for (const [otherName, other] of rendered) {
-      // Compare only across DIFFERENT states: two renders of the same
-      // state (populated and its capped variant) share copy by design.
-      if (other.kind === kind) continue;
-      if (other.html.includes(marker)) {
-        fail(
-          `${JSON.stringify(marker)} appears in state "${kind}" and in ` +
-          `"${otherName}" — those two states are not distinguishable`,
-        );
-      }
-    }
-  }
-  if (!process.exitCode) console.log("  ok  every marker is unique to its state");
-
-  // The unnamed prerequisite must claim NOTHING about which one it is,
-  // and must still show the server's own error + guidance. A renderer
-  // that defaulted to "absent" would pass its own marker check while
-  // giving a confident wrong remedy.
-  const unnamed = rendered.get(
-    STATES.find((e) => e[0].startsWith("unnamed prerequisite"))[0],
-  ).html;
-  if (unnamed.includes(COPY.absentMarker) || unnamed.includes(COPY.unbuiltMarker)) {
-    fail("unnamed prerequisite was rendered as a NAMED one");
-  } else if (
-    !unnamed.includes("graph database absent at /x") ||
-    !unnamed.includes("run graph first")
-  ) {
-    fail("unnamed prerequisite dropped the server's error or guidance");
-  } else {
-    console.log("  ok  unnamed prerequisite claims nothing, shows what it got");
-  }
-
-  // An UNRECOGNISED state string must not become a confident wrong
-  // diagnosis either. The classifier whitelists the three known values;
-  // anything else claims nothing, exactly like a missing field.
-  const future = rendered.get(
-    STATES.find((e) => e[0].startsWith("UNRECOGNISED"))[0],
-  ).html;
-  if (
-    future.includes(COPY.absentMarker) ||
-    future.includes(COPY.unopenableMarker) ||
-    future.includes(COPY.unbuiltMarker)
-  ) {
-    fail("an UNRECOGNISED state string was rendered as a known one");
-  } else if (!future.includes("quarantined")) {
-    fail("the unrecognised state dropped the server's own error");
-  } else {
-    console.log("  ok  unrecognised state claims nothing");
-  }
-
-  // "unopenable" must NOT invent a remedy: the cause is unknown to the
-  // client (a lock, permissions, a partial write), so no command block.
-  const unopen = rendered.get(
-    STATES.find((e) => e[0].startsWith("graph unopenable"))[0],
-  ).html;
-  if (unopen.includes("<pre")) {
-    fail("unopenable invented a remedy command");
-  } else if (!unopen.includes("could not be opened")) {
-    fail("unopenable did not render its own marker");
-  } else {
-    console.log("  ok  unopenable states the cause, invents no remedy");
-  }
-
-  // FR-A: the view must not reorder. Rendered identities must appear in
-  // the order the report supplied, which is size-desc then identity-asc
-  // — an order that differs from plain identity-asc, so a sort here
-  // would change the output.
-  const html = rendered.get(STATES[0][0]).html;
-  const order = [...html.matchAll(/class="font-mono text-sm">([^<]+)</g)].map(
-    (m) => m[1],
-  );
-  if (order.join(",") !== "m,a") {
-    fail(
-      `FR-A: identities rendered as [${order}] — expected [m,a] as received. ` +
-      `[a,m] would mean the view sorted by identity.`,
-    );
-  } else {
-    console.log("  ok  FR-A: order rendered as received, no client-side sort");
-  }
-
-  // FR-A extends to MEMBERS: they arrive sorted by session_key and are
-  // rendered as received. Fixture members are m,n,o — a reverse or a
-  // re-sort changes this sequence.
-  const members = [...html.matchAll(/<li>([mnoab])<\/li>/g)].map((m) => m[1]);
-  if (members.join(",") !== "m,n,o,a,b") {
-    fail(
-      `FR-A: members rendered as [${members}] — expected [m,n,o,a,b] ` +
-      `as received, per cluster.`,
-    );
-  } else {
-    console.log("  ok  FR-A: members rendered as received");
-  }
-
-  // FR-E: the limitations block and BOTH provenance labels must be
-  // DISPLAYED, not merely fetched. This is the requirement that stops a
-  // cluster travelling without the two claims #289 refuses.
-  const honesty = [
-    ["transitive discovery grouping", "the transitive-grouping limitation"],
-    ["production time", "the production-time compatibility limitation"],
-    ["SIMILAR_TO edges currently stored", "the membership provenance"],
-    ["current Session node inventory", "the inventory provenance"],
-  ];
-  let honest = true;
-  for (const [needle, what] of honesty) {
-    if (!html.includes(needle)) {
-      fail(`FR-E: ${what} is not rendered (${JSON.stringify(needle)})`);
-      honest = false;
-    }
-  }
-  if (honest) console.log("  ok  FR-E: limitations + both provenances displayed");
 
   // ── T3: the similar-sessions panel ────────────────────────────────
   console.log("\nsimilar panel:");
@@ -971,6 +741,46 @@ try {
   const withTags = render(sh.default, { data: { ...detail, tags: { ...t0, favorite: true, analyzed_kinds: 3 } }, baseline: null });
   if (!/Favorite — click to remove/.test(withTags) || !/all 3 analyses/.test(withTags)) fail("header does not show the tags");
   else console.log("  ok  header shows the tags");
+
+  // ── the Graph page: what gets drawn, as data ─────────────────────
+  console.log("\ngraph views:");
+  const gv = await import(pathToFileURL(join(out, "lib/graphView.js")));
+  const sn = {
+    kind: "session",
+    centre: { id: 35, session_key: "claude-code:abc", project_path: "/Users/x/dev/repo/proj", model: "claude-opus-5", turn_count: 11210, tool_call_count: 3796, error_count: 71, started_at: "2026-08-11T11:38:03Z", copilot: "claude-code" },
+    context: [{ rel: "IN_WORKSPACE", label: "Workspace", key: "/Users/x/dev/repo/proj" }, { rel: "USED_MODEL", label: "Model", key: "claude-opus-5" }],
+    tools: [{ tool: "bash", calls: 2722, errors: 58 }, { tool: "file_read", calls: 107, errors: 0 }],
+    errors: [{ tool: "bash", error_type: "redacted", count: 58 }],
+    files: [{ path: "/Users/x/dev/repo/proj/scripts/auto-build-loop.sh", accesses: 103, access_types: ["read", "write"] }],
+    similar: [{ session_key: "claude-code:def", id: 41, score: 0.81, project_path: "/Users/x/dev/repo/proj", model: "deepseek", turn_count: 2114 }],
+    retries: [],
+    relationships: {},
+  };
+  const sv = gv.sessionView(sn);
+  const rels = sv.edges.map((e) => e.rel);
+  if (sv.nodes.length !== 1 + 2 + 2 + 1 + 1) fail(`session view node count ${sv.nodes.length}`);
+  else if (!["IN_WORKSPACE", "USED_MODEL", "INVOKED", "ACCESSED_FILE", "SIMILAR_TO"].every((r) => rels.includes(r))) fail(`relationships missing: ${rels}`);
+  else if (!sv.nodes.find((n) => n.id === "Tool:bash").errored || sv.nodes.find((n) => n.id === "Tool:file_read").errored) fail("error ring wrong");
+  else if (!(sv.nodes.find((n) => n.id === "Tool:bash").size > sv.nodes.find((n) => n.id === "Tool:file_read").size)) fail("tool bubbles not sized by calls");
+  else if (sv.edges.find((e) => e.rel === "SIMILAR_TO").note !== "0.81" || sv.edges.find((e) => e.rel === "INVOKED").note !== "×2722") fail("edge notes");
+  else if (!/auto-build-loop\.sh/.test(sv.nodes.find((n) => n.type === "File").label) || sv.nodes.find((n) => n.type === "File").data.path !== sn.files[0].path) fail("file label/path");
+  else if (sv.nodes.find((n) => n.centre).ring !== 4 || sv.nodes.find((n) => n.type === "Tool").ring !== 2 || sv.nodes.find((n) => n.type === "File").ring !== 1) fail("rings");
+  else console.log("  ok  session view: every relationship named, tools sized and ringed, files and similar sessions outside");
+  if (gv.bubbleSize(0, 100) !== 18 || gv.bubbleSize(100, 100) !== 56 || !(gv.bubbleSize(25, 100) < gv.bubbleSize(100, 100))) fail("bubble sizing");
+  else if (!/7 things, 6 relationships/.test(gv.viewSummary(sv)) || !/INVOKED ×2/.test(gv.viewSummary(sv))) fail(`summary: ${gv.viewSummary(sv)}`);
+  else console.log("  ok  sizing on a square-root scale; the summary counts relationships by name");
+  const pv = gv.projectView({ kind: "project", project_path: "/Users/x/dev/repo/proj", sessions: [{ session_key: "claude-code:a", id: 1, model: "m", turn_count: 10, error_count: 1, started_at: "2026-09-01T00:00:00Z" }, { session_key: "claude-code:b", id: 2, model: "m", turn_count: 5, error_count: 0, started_at: "2026-09-02T00:00:00Z" }], similar_edges: [{ source: "claude-code:a", target: "claude-code:b", score: 0.9 }, { source: "claude-code:b", target: "claude-code:a", score: 0.9 }, { source: "claude-code:a", target: "claude-code:zzz", score: 0.95 }], models: [{ model: "m", sessions: 2 }], tools: [], files: [], relationships: {} });
+  if (pv.edges.filter((e) => e.rel === "SIMILAR_TO").length !== 1) fail("project view: a pair drawn twice, or an edge to a session not shown");
+  else if (pv.edges.filter((e) => e.rel === "IN_WORKSPACE").length !== 2 || !pv.edges.find((e) => e.rel === "USED_MODEL")) fail("project view edges");
+  else console.log("  ok  project view: sessions in the workspace, one similarity edge per pair, models as hubs");
+  const ev = gv.elementsView({ nodes: [{ id: "Session:claude-code:a", label: "Session", key: "claude-code:a", props: { project_path: "/x/p", turn_count: 3 } }, { id: "Session:claude-code:b", label: "Session", key: "claude-code:b", props: {} }], edges: [{ source: "Session:claude-code:a", target: "Session:claude-code:b", rel: "SIMILAR_TO", props: { score: 0.734 } }] });
+  if (ev.nodes[0].label !== "p · 3" || ev.edges[0].note !== "0.73" || ev.nodes[1].data.sessionKey !== "claude-code:b") fail(`elements view: ${JSON.stringify(ev)}`);
+  else console.log("  ok  catalogue results with nodes and relationships become a view");
+  const gc = await import(pathToFileURL(join(out, "components/GraphCatalogue.js")));
+  const bars = gc.barData(["tool", "errors", "sessions"], [{ tool: "bash", errors: 58, sessions: 13 }, { tool: "edit", errors: 13, sessions: 4 }]);
+  if (bars.length !== 2 || bars[0].label !== "bash" || bars[0].value !== 58) fail(`barData: ${JSON.stringify(bars)}`);
+  else if (gc.barData(["a"], [{ a: "x" }]).length !== 0) fail("barData with no numeric column must be empty (table instead)");
+  else console.log("  ok  bar charts take the first column as label and the first numeric column as value");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

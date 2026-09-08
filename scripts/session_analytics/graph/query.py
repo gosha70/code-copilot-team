@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from typing import Any, Mapping, Optional
 
 from .schema import GraphDatabase, load_node_ddl
@@ -134,8 +135,110 @@ def _node_props(node: Any) -> Any:
 def _jsonable(v: Any) -> Any:
     if isinstance(v, (str, int, float, bool)) or v is None:
         return v
+    if isinstance(v, Decimal):
+        # Kùzu sums come back as Decimal; a chart needs a number, not "58".
+        return int(v) if v == v.to_integral_value() else float(v)
     if isinstance(v, dict):
         return {k: _jsonable(x) for k, x in v.items()}
     if isinstance(v, (list, tuple)):
         return [_jsonable(x) for x in v]
     return str(v)
+
+
+# ── the query catalogue (config_data/graph-queries.json) ──────────────
+
+_CATALOGUE_FILE = "graph-queries.json"
+RENDER_KINDS = ("table", "bar", "graph")
+
+
+def catalogue() -> list[dict[str, Any]]:
+    """The catalogue entries, minus the Cypher (the Studio shows the
+    question and the parameters; the API runs the query by id)."""
+    from ..config import load_map
+
+    return [
+        {k: v for k, v in q.items() if k != "cypher"}
+        for q in load_map(_CATALOGUE_FILE)["queries"]
+    ]
+
+
+def catalogue_entry(query_id: str) -> Optional[dict[str, Any]]:
+    from ..config import load_map
+
+    for q in load_map(_CATALOGUE_FILE)["queries"]:
+        if q["id"] == query_id:
+            return q
+    return None
+
+
+def _node_id(struct: dict) -> str:
+    i = struct.get("_id") or {}
+    return f"{i.get('table')}:{i.get('offset')}"
+
+
+def _key_of(node: dict) -> str:
+    for k in ("session_key", "path", "name", "developer_id", "turn_key", "tool_key", "error_key"):
+        if node.get(k) is not None:
+            return str(node[k])
+    return _node_id(node)
+
+
+def elements_from_rows(rows: list[dict]) -> dict[str, list[dict]]:
+    """Kùzu nodes and relationships in result rows → canvas elements.
+
+    A node struct carries ``_id`` and ``_label``; a relationship struct
+    carries ``_src``/``_dst`` (node ids) and ``_label``. Nodes are keyed
+    by their primary key value so the same thing drawn twice is one
+    bubble; an edge whose ends are not in the rows is dropped."""
+    nodes: dict[str, dict] = {}
+    by_internal: dict[str, str] = {}
+    edges: list[dict] = []
+    rels: list[dict] = []
+    for row in rows:
+        for v in row.values():
+            if not isinstance(v, dict) or "_label" not in v:
+                continue
+            if "_src" in v and "_dst" in v:
+                rels.append(v)
+                continue
+            key = _key_of(v)
+            nid = f"{v['_label']}:{key}"
+            by_internal[_node_id(v)] = nid
+            if nid not in nodes:
+                props = {k: x for k, x in v.items() if not k.startswith("_") and x is not None}
+                nodes[nid] = {"id": nid, "label": v["_label"], "key": key, "props": _jsonable(props)}
+    for r in rels:
+        src = by_internal.get(f"{(r.get('_src') or {}).get('table')}:{(r.get('_src') or {}).get('offset')}")
+        dst = by_internal.get(f"{(r.get('_dst') or {}).get('table')}:{(r.get('_dst') or {}).get('offset')}")
+        if src and dst:
+            props = {k: x for k, x in r.items() if not k.startswith("_") and x is not None}
+            edges.append({"source": src, "target": dst, "rel": r["_label"], "props": _jsonable(props)})
+    return {"nodes": list(nodes.values()), "edges": edges}
+
+
+def run_catalogue(gdb: GraphDatabase, query_id: str, params: Mapping[str, Any]) -> dict[str, Any]:
+    """Run one catalogue query with its parameters bound (never
+    interpolated). Missing required parameters are a ValueError."""
+    entry = catalogue_entry(query_id)
+    if entry is None:
+        raise ValueError(f"unknown catalogue query: {query_id!r}")
+    bound: dict[str, Any] = {}
+    for spec in entry.get("params", []):
+        value = params.get(spec["name"], "")
+        if spec.get("required") and value in ("", None):
+            raise ValueError(f"{entry['name']}: '{spec.get('label', spec['name'])}' is required")
+        bound[spec["name"]] = "" if value is None else str(value)
+    res = gdb.execute(entry["cypher"], bound or None)
+    cols = res.get_column_names() if hasattr(res, "get_column_names") else []
+    raw = [{cols[i] if i < len(cols) else str(i): v for i, v in enumerate(row)} for row in _rows(res)]
+    render = entry.get("render", "table")
+    out: dict[str, Any] = {
+        "id": query_id, "name": entry["name"], "question": entry.get("question", ""),
+        "render": render, "columns": cols, "params": bound,
+    }
+    if render == "graph":
+        out["elements"] = elements_from_rows(raw)
+        out["rows"] = []
+    else:
+        out["rows"] = [{k: _jsonable(v) for k, v in r.items()} for r in raw]
+    return out

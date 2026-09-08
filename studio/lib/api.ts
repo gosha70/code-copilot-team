@@ -184,6 +184,99 @@ export type SessionSort =
   | "todo"
   | "analyzed";
 
+// ── the Graph page ─────────────────────────────────────────────────
+export interface SessionNeighbourhood {
+  kind: "session";
+  centre: {
+    id: number;
+    session_key: string;
+    project_path: string | null;
+    model: string | null;
+    turn_count: number;
+    tool_call_count: number;
+    error_count: number;
+    started_at: string | null;
+    copilot: string;
+  };
+  /** One-hop context, each with the relationship that links it. */
+  context: { rel: string; label: string; key: string }[];
+  tools: { tool: string; calls: number; errors: number }[];
+  errors: { tool: string; error_type: string; count: number }[];
+  files: { path: string; accesses: number; access_types: string[] }[];
+  similar: {
+    session_key: string;
+    id: number | null;
+    score: number;
+    project_path: string | null;
+    model: string | null;
+    turn_count: number;
+  }[];
+  retries: { tool: string; chains: number }[];
+  relationships: Record<string, string>;
+}
+
+export interface ProjectNeighbourhood {
+  kind: "project";
+  project_path: string;
+  sessions: {
+    session_key: string;
+    id: number | null;
+    model: string | null;
+    turn_count: number;
+    error_count: number;
+    started_at: string | null;
+  }[];
+  similar_edges: { source: string; target: string; score: number }[];
+  models: { model: string; sessions: number }[];
+  tools: { tool: string; calls: number; sessions: number }[];
+  files: { path: string; sessions: number; accesses: number }[];
+  relationships: Record<string, string>;
+}
+
+export interface ToolTurns {
+  session_id: number;
+  tool: string;
+  turns: { sequence_num: number; is_error: boolean; error_types: string[] }[];
+}
+
+export interface FileSessions {
+  path: string;
+  sessions: {
+    session_key: string;
+    id: number | null;
+    project_path: string | null;
+    model: string | null;
+    started_at: string | null;
+    accesses: number;
+    access_types: string[];
+  }[];
+}
+
+export interface CatalogueEntry {
+  id: string;
+  intent: "search" | "detail" | "pattern";
+  name: string;
+  question: string;
+  params: { name: string; type: "session" | "project" | "text"; required: boolean; label: string }[];
+  render: "table" | "bar" | "graph";
+}
+
+export interface GraphElements {
+  nodes: { id: string; label: string; key: string; props: Record<string, unknown> }[];
+  edges: { source: string; target: string; rel: string; props: Record<string, unknown> }[];
+}
+
+export interface CatalogueResult {
+  id: string;
+  name: string;
+  question: string;
+  render: "table" | "bar" | "graph";
+  columns: string[];
+  params: Record<string, string>;
+  rows: Record<string, unknown>[];
+  elements?: GraphElements;
+}
+
 export interface SessionsResponse {
   sessions: SessionRow[];
   /** How many the same filters would add with include_noise. */
@@ -826,10 +919,7 @@ export interface RoutingKnnPayload {
 }
 
 // #293: mirrors the server payloads exactly (the Studio never
-// re-derives a figure — see ClustersView's FR-A note).
-export type { ClusterReport, ClusterRow } from "./clusterStates";
-import type { ClusterReport } from "./clusterStates";
-
+// re-derives a figure).
 export interface SimilarNeighbor {
   session_key: string;
   id: number | null;
@@ -1135,6 +1225,18 @@ export const api = {
   health: () => get<{ status: string }>("/api/health"),
   docs: () => get<DocsIndex>("/api/docs"),
   doc: (slug: string) => get<DocPayload>(`/api/docs/${encodeURIComponent(slug)}`),
+  // The Graph page: a session or a project and what it is connected to,
+  // the drill-ins behind a tool and a file, and the query catalogue.
+  graphProjects: () => get<{ projects: { path: string; sessions: number }[] }>("/api/graph/projects"),
+  graphSession: (id: number) => getOrFailure<SessionNeighbourhood>(`/api/graph/session/${id}`),
+  graphSessionTool: (id: number, tool: string) =>
+    get<ToolTurns>(`/api/graph/session/${id}/tool/${encodeURIComponent(tool)}`),
+  graphFile: (path: string) => get<FileSessions>(`/api/graph/file?path=${encodeURIComponent(path)}`),
+  graphProject: (path: string) =>
+    getOrFailure<ProjectNeighbourhood>(`/api/graph/project?path=${encodeURIComponent(path)}`),
+  graphCatalogue: () => get<{ queries: CatalogueEntry[] }>("/api/graph/catalogue"),
+  graphCatalogueRun: (id: string, params: Record<string, string>) =>
+    post<CatalogueResult>(`/api/graph/catalogue/${encodeURIComponent(id)}`, { params }),
   graphExpand: (label: string, keyField: string, keyValue: string) =>
     get<GraphExpand>(
       `/api/graph/expand?label=${encodeURIComponent(label)}&key_field=${encodeURIComponent(keyField)}&key_value=${encodeURIComponent(keyValue)}`,
@@ -1179,10 +1281,9 @@ export const api = {
   // Body-preserving: an unbuilt or unopenable store answers 503 with
   // guidance the page must show, not "not available yet".
   graphCounts: () => getOrFailure<GraphCounts>("/api/graph/node-counts"),
-  // #293: read-only similarity + clustering. `clusters` uses the
-  // body-preserving variant because its prerequisite states are the
-  // point (FR-C); a thrown status alone cannot distinguish them.
-  clusters: () => getOrFailure<ClusterReport>("/api/clusters"),
+  // #293: read-only similarity. The body-preserving variant because
+  // the prerequisite states are the point (FR-C); a thrown status
+  // alone cannot distinguish them.
   similar: (id: number, limit = 10) =>
     getOrFailure<SimilarResponse>(
       `/api/sessions/${id}/similar?limit=${limit}`,

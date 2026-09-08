@@ -1,0 +1,157 @@
+{
+  "_comment": [
+    "The Graph page's query catalogue (DATA, not code). Each entry is a",
+    "question a person brings to the graph, in their words, with the",
+    "Cypher that answers it. Parameters are named $params and bound by",
+    "the API — never interpolated. `render` says how the Studio shows",
+    "the rows: table, bar (first column = label, second = number), or",
+    "graph (rows carry Kùzu nodes/relationships, drawn on the canvas).",
+    "`intent` groups the catalogue the way Kiro Analyzer does:",
+    "search (find things), detail (one thing), pattern (across things)."
+  ],
+  "queries": [
+    {
+      "id": "tools-failing-most",
+      "intent": "pattern",
+      "name": "Which tools fail most, and where",
+      "question": "Across every session, which tool produced the most errors, and in how many sessions?",
+      "params": [],
+      "cypher": "MATCH (s:Session)-[:HAS_TURN]->(:Turn)-[:INVOKED]->(i:ToolInvocation)-[:PRODUCED_ERROR]->(e:ErrorNode) RETURN i.tool_name AS tool, count(e) AS errors, count(DISTINCT s) AS sessions ORDER BY errors DESC LIMIT 20",
+      "render": "bar"
+    },
+    {
+      "id": "tools-before-errors",
+      "intent": "pattern",
+      "name": "Tools that most often precede an error",
+      "question": "When a tool call errored, which tool was called in the turn just before? (FOLLOWED_BY between turns)",
+      "params": [],
+      "cypher": "MATCH (p:Turn)-[:FOLLOWED_BY]->(t:Turn)-[:INVOKED]->(:ToolInvocation)-[:PRODUCED_ERROR]->(:ErrorNode) MATCH (p)-[:INVOKED]->(prev:ToolInvocation) RETURN prev.tool_name AS tool_before, count(*) AS errors_after ORDER BY errors_after DESC LIMIT 20",
+      "render": "bar"
+    },
+    {
+      "id": "retry-chains",
+      "intent": "pattern",
+      "name": "Retry chains of three or more",
+      "question": "Which sessions retried the same tool call three or more times in a row? (RETRIED edges)",
+      "params": [],
+      "cypher": "MATCH (s:Session)-[:HAS_TURN]->(:Turn)-[:INVOKED]->(a:ToolInvocation)-[:RETRIED]->(b:ToolInvocation)-[:RETRIED]->(c:ToolInvocation) RETURN s.session_key AS session, a.tool_name AS tool, count(*) AS chains ORDER BY chains DESC LIMIT 20",
+      "render": "table"
+    },
+    {
+      "id": "files-most-sessions",
+      "intent": "search",
+      "name": "Files touched by the most sessions",
+      "question": "Which files come up in the most sessions — the hot spots of a codebase?",
+      "params": [
+        {
+          "name": "project",
+          "type": "project",
+          "required": false,
+          "label": "Project (blank = all)"
+        }
+      ],
+      "cypher": "MATCH (s:Session)-[:HAS_TURN]->(:Turn)-[:INVOKED]->(:ToolInvocation)-[a:ACCESSED_FILE]->(f:FileNode) WHERE $project = '' OR s.project_path = $project RETURN f.path AS file, count(DISTINCT s) AS sessions, count(a) AS accesses ORDER BY sessions DESC, accesses DESC LIMIT 25",
+      "render": "table"
+    },
+    {
+      "id": "similar-to-session",
+      "intent": "detail",
+      "name": "Sessions most similar to one session",
+      "question": "Which sessions are closest to this one by meaning, with their scores? (SIMILAR_TO)",
+      "params": [
+        {
+          "name": "session",
+          "type": "session",
+          "required": true,
+          "label": "Session"
+        }
+      ],
+      "cypher": "MATCH (s:Session {session_key: $session})-[r:SIMILAR_TO]->(t:Session) RETURN s, r, t ORDER BY r.score DESC LIMIT 10",
+      "render": "graph"
+    },
+    {
+      "id": "session-context",
+      "intent": "detail",
+      "name": "A session and everything it ran on",
+      "question": "The workspace, model, copilot, developer and agents of one session, drawn.",
+      "params": [
+        {
+          "name": "session",
+          "type": "session",
+          "required": true,
+          "label": "Session"
+        }
+      ],
+      "cypher": "MATCH (s:Session {session_key: $session})-[r]->(m) WHERE label(m) IN ['Workspace','Model','Copilot','Developer','Agent'] RETURN s, r, m",
+      "render": "graph"
+    },
+    {
+      "id": "models-longest-sessions",
+      "intent": "pattern",
+      "name": "Which model runs the longest sessions",
+      "question": "Per model: sessions, average turns, average errors.",
+      "params": [],
+      "cypher": "MATCH (s:Session)-[:USED_MODEL]->(m:Model) RETURN m.name AS model, count(s) AS sessions, avg(s.turn_count) AS avg_turns, avg(s.error_count) AS avg_errors ORDER BY avg_turns DESC",
+      "render": "table"
+    },
+    {
+      "id": "sessions-per-workspace",
+      "intent": "search",
+      "name": "Sessions per project",
+      "question": "How much work went where: sessions, turns and errors per workspace.",
+      "params": [],
+      "cypher": "MATCH (s:Session)-[:IN_WORKSPACE]->(w:Workspace) RETURN w.path AS project, count(s) AS sessions, sum(s.turn_count) AS turns, sum(s.error_count) AS errors ORDER BY sessions DESC",
+      "render": "bar"
+    },
+    {
+      "id": "errors-by-tool-in-project",
+      "intent": "detail",
+      "name": "Errors by tool in one project",
+      "question": "Within one project, which tools error and how often?",
+      "params": [
+        {
+          "name": "project",
+          "type": "project",
+          "required": true,
+          "label": "Project"
+        }
+      ],
+      "cypher": "MATCH (s:Session)-[:IN_WORKSPACE]->(:Workspace {path: $project}) MATCH (s)-[:HAS_TURN]->(:Turn)-[:INVOKED]->(i:ToolInvocation)-[:PRODUCED_ERROR]->(e:ErrorNode) RETURN i.tool_name AS tool, count(e) AS errors ORDER BY errors DESC LIMIT 20",
+      "render": "bar"
+    },
+    {
+      "id": "developers-sessions-errors",
+      "intent": "pattern",
+      "name": "Developers by sessions and errors",
+      "question": "Per developer: sessions, turns, errors.",
+      "params": [],
+      "cypher": "MATCH (s:Session)-[:BY_DEVELOPER]->(d:Developer) RETURN d.developer_id AS developer, count(s) AS sessions, sum(s.turn_count) AS turns, sum(s.error_count) AS errors ORDER BY sessions DESC",
+      "render": "table"
+    },
+    {
+      "id": "tools-in-session",
+      "intent": "detail",
+      "name": "What one session called, and what errored",
+      "question": "Every tool one session used, with calls and errors.",
+      "params": [
+        {
+          "name": "session",
+          "type": "session",
+          "required": true,
+          "label": "Session"
+        }
+      ],
+      "cypher": "MATCH (s:Session {session_key: $session})-[:HAS_TURN]->(:Turn)-[:INVOKED]->(i:ToolInvocation) RETURN i.tool_name AS tool, count(i) AS calls, sum(CASE WHEN i.is_error THEN 1 ELSE 0 END) AS errors ORDER BY calls DESC",
+      "render": "bar"
+    },
+    {
+      "id": "similar-across-projects",
+      "intent": "pattern",
+      "name": "Similar sessions across different projects",
+      "question": "Pairs of sessions from different projects that the similarity pass linked — the same kind of work happening in two places.",
+      "params": [],
+      "cypher": "MATCH (a:Session)-[r:SIMILAR_TO]->(b:Session) WHERE a.project_path <> b.project_path RETURN a, r, b ORDER BY r.score DESC LIMIT 15",
+      "render": "graph"
+    }
+  ]
+}
