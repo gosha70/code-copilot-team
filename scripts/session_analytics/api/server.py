@@ -181,9 +181,12 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         only_labelled_by: Optional[str] = None
 
     class PipelineRun(BaseModel):
-        """Per-step options for run/<step> and run-all; both optional."""
+        """Per-step options for run/<step> and run-all; both optional.
+        ``steps`` on run-all runs that ordered subset (the Similar tab
+        runs embed + similar)."""
         load: Optional[LoadSelection] = None
         judge: Optional[JudgeOptions] = None
+        steps: Optional[list[str]] = None
 
     class ConfigUpdate(BaseModel):
         values: dict
@@ -209,6 +212,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             is_initialized,
             parse_env_file,
         )
+        from ..embedding.registry import list_embedding_ids
         from ..judge.registry import list_judge_ids
 
         env = parse_env_file()
@@ -274,6 +278,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             "fields": fields,
             "judge_default": f"{_b}:{_m or '(default model)'}",
             "judge_backends": list_judge_ids(),
+            "embedding_backends": list_embedding_ids(),
             "redaction_modes": list(C.REDACTION_MODES),
         }
 
@@ -567,6 +572,60 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                 rel.close()
             return f"graph rebuilt ({st})"
 
+        def _embed() -> str:
+            from ..embedding.runner import EmbedStats, run_embed
+            from ..relational.db import Database as _DB
+
+            cfg = load_config()
+            if not cfg.embedding.model:
+                # Fail NOW with the fix, not after the probe explains it.
+                raise RuntimeError(
+                    "no embedding model is set — choose one under Settings → Embeddings "
+                    "(e.g. nomic-embed-text, after `ollama pull nomic-embed-text`)"
+                )
+
+            def _progress(st: EmbedStats) -> None:
+                pj.set_progress(pj.STEP_EMBED, st.as_dict())
+
+            conn = _DB.connect(store)
+            try:
+                st = run_embed(conn, cfg.embedding, progress=_progress)
+            finally:
+                conn.close()
+            msg = f"embedded {st.embedded} of {st.total} sessions"
+            if st.skipped_existing:
+                msg += f", {st.skipped_existing} already embedded"
+            if st.unembeddable:
+                msg += f", {st.unembeddable} with no text"
+            if st.failed:
+                msg += f", {st.failed} failed" + (f" (last: {st.last_error})" if st.last_error else "")
+            return msg
+
+        def _similar() -> str:
+            from ..embedding.similar_runner import GraphNotReadyError, KuzuEdgeStore, run_similar
+            from ..graph.schema import GraphDatabase
+            from ..relational.db import Database as _DB
+
+            cfg = load_config()
+            conn = _DB.connect(store)
+            try:
+                gdb = GraphDatabase.connect(graph_path)
+                try:
+                    st = run_similar(conn, cfg.similarity, KuzuEdgeStore(gdb))
+                except GraphNotReadyError as exc:
+                    raise RuntimeError(f"the graph is not built yet — run Build knowledge graph first ({exc})") from None
+                finally:
+                    gdb.close()
+            finally:
+                conn.close()
+            spaces = sum(st.sessions_per_space.values())
+            msg = f"{st.written_edges} similarity links over {spaces} embedded sessions"
+            if st.retired_edges:
+                msg += f", {st.retired_edges} stale links removed"
+            if st.no_envelope:
+                msg += f", {st.no_envelope} sessions not embedded yet"
+            return msg
+
         def _kpis() -> str:
             from ..judge.kpis import compute_kpis
             from ..judge.rubric import load_rubric
@@ -582,6 +641,8 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         return {
             pj.STEP_INGEST: _ingest,
             pj.STEP_GRAPH: _graph,
+            pj.STEP_EMBED: _embed,
+            pj.STEP_SIMILAR: _similar,
             pj.STEP_JUDGE: _judge,
             pj.STEP_KPIS: _kpis,
         }
@@ -614,10 +675,15 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         from .. import pipeline_jobs as pj
 
         try:
-            pj.start_all(_pipeline_runners(opts), include_judge=include_judge)
+            pj.start_all(
+                _pipeline_runners(opts), include_judge=include_judge,
+                only=(opts.steps if opts else None),
+            )
         except pj.StepBusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
-        return {"started": True, "include_judge": include_judge}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        return {"started": True, "include_judge": include_judge, "steps": opts.steps if opts else None}
 
     # ── filesystem browse (settings path pickers) ──────────────────────
     # A browser CANNOT read a real path: <input type="file"> deliberately
@@ -1277,6 +1343,60 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             raise HTTPException(status_code=400, detail=str(exc))
         finally:
             conn.close()
+
+    # ── embeddings (the Similar tab's prerequisite) ───────────────────
+    def _configured_embedding(cfg) -> dict[str, Any]:
+        e = cfg.embedding
+        return {"backend": e.backend, "model": e.model, "spec": f"{e.backend}:{e.model}" if e.model else e.backend,
+                "model_set": bool(e.model)}
+
+    @app.get("/api/embed/models")
+    def embed_models() -> dict[str, Any]:
+        """The models the embedding backend serves (Ollama lists every
+        model; embedding ones are e.g. nomic-embed-text), from the SAVED
+        configuration, plus what is configured now."""
+        import json as _json
+        import urllib.request
+
+        cfg = load_config()
+        out: dict[str, Any] = {"configured": _configured_embedding(cfg), "backend": cfg.embedding.backend,
+                               "models": [], "reachable": False, "url": ""}
+        if cfg.embedding.backend != "ollama":
+            return out
+        base = (cfg.embedding.ollama_url or "http://localhost:11434").rstrip("/")
+        out["url"] = base
+        try:
+            with urllib.request.urlopen(f"{base}/api/tags", timeout=3) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+            names = [m.get("name") for m in data.get("models", []) if isinstance(m, dict)]
+            out.update({"reachable": True, "models": sorted(n for n in names if n)})
+        except Exception as exc:  # noqa: BLE001 — unreachable is an answer
+            _log.info("embedding model list unavailable at %s: %s", base, exc)
+            out["error"] = type(exc).__name__
+        return out
+
+    @app.post("/api/embed/test")
+    def embed_test() -> dict[str, Any]:
+        """Embed one short string with the SAVED embedding settings:
+        the model that answered, the vector size and the time, or the
+        backend's own reason."""
+        import time as _time
+
+        from ..embedding.registry import get_embedding
+
+        cfg = load_config()
+        conf = _configured_embedding(cfg)
+        started = _time.time()
+        try:
+            backend = get_embedding(cfg.embedding.backend, cfg.embedding.model, base_url=cfg.embedding.ollama_url)
+            backend.probe()
+            result = backend.embed("The quick brown fox jumps over the lazy dog.")
+        except Exception as exc:  # noqa: BLE001 — the reason is the answer
+            _log.warning("embedding test failed: %s", exc)
+            return {"ok": False, "embedding": conf["spec"], "error": str(exc)[:300],
+                    "seconds": round(_time.time() - started, 1)}
+        return {"ok": True, "embedding": conf["spec"], "model": getattr(result, "resolved_model", cfg.embedding.model),
+                "dimensions": len(result.vector), "seconds": round(_time.time() - started, 1)}
 
     # ── judge validation (#313) ────────────────────────────────────────
     @app.get("/api/judge/runs")

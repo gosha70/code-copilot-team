@@ -127,6 +127,7 @@ export interface ConfigResponse {
   fields: ConfigField[];
   judge_default: string;
   judge_backends: string[];
+  embedding_backends: string[];
   redaction_modes: string[];
 }
 
@@ -834,9 +835,24 @@ export interface SimilarNeighbor {
   id: number | null;
   project_path: string | null;
   started_at: string | null;
+  model: string | null;
+  turn_count: number | null;
+  error_count: number | null;
+  tags: SessionTagsInfo | null;
   score: number;
   basis: string;
   kpi: Record<string, unknown> | null;
+  /** What this neighbour has in common with the source session, so
+   *  "similar" can be said in words a person can check. */
+  shared: {
+    /** Shared tools that few sessions use, rarest first. */
+    tools: string[];
+    /** How many shared tools were the everyday kind (used by most sessions). */
+    common_tools: number;
+    error_types: string[];
+    files: string[];
+    same_project: boolean;
+  } | null;
 }
 
 export interface SimilarResponse {
@@ -891,8 +907,9 @@ export interface PipelineStep {
     state: "idle" | "running" | "done" | "failed";
     message?: string;
     seconds?: number;
-    /** The judge step reports after every turn (see JudgeProgress). */
-    progress?: JudgeProgress;
+    /** The judge step reports after every turn (JudgeProgress); the
+     *  embed step after every session (EmbedProgress). */
+    progress?: JudgeProgress | EmbedProgress;
   };
 }
 
@@ -916,10 +933,31 @@ export interface JudgeOptions {
   only_labelled_by?: string;
 }
 
-/** Per-step options for run/<step> and run-all. */
+/** Per-step options for run/<step> and run-all; `steps` on run-all
+ *  runs that ordered subset (the Similar tab runs embed + similar). */
 export interface PipelineRun {
   load?: LoadSelection;
   judge?: JudgeOptions;
+  steps?: string[];
+}
+
+/** Running counts from the embed step. */
+export interface EmbedProgress {
+  total: number;
+  done: number;
+  embedded: number;
+  failed: number;
+  unembeddable: number;
+  last_error: string;
+}
+
+export interface EmbedModels {
+  configured: { backend: string; model: string; spec: string; model_set: boolean };
+  backend: string;
+  models: string[];
+  reachable: boolean;
+  url: string;
+  error?: string;
 }
 
 /** Which discovered sessions "Load sessions" reads; every field blank
@@ -960,6 +998,9 @@ export interface PipelineStatus {
   all: { state: "idle" | "running" | "done" | "failed"; message?: string; seconds?: number };
   counts: {
     sessions: number;
+    /** Sessions with an embedding vector, and SIMILAR_TO links in the graph. */
+    embedded: number;
+    similar_edges: number;
     labels: number;
     /** Rows the judge WROTE but could not parse — attempts, not labels. */
     label_failures: number;
@@ -1174,6 +1215,13 @@ export const api = {
     }>("/api/settings/test-connection", { dsn }),
   /** One small completion with the SAVED judge: "answered in 1.2 s"
    *  or the backend's own refusal, before a batch is run. */
+  embedModels: () => get<EmbedModels>("/api/embed/models"),
+  /** Embed one short string with the SAVED embedding settings. */
+  testEmbedding: () =>
+    post<{ ok: boolean; embedding: string; model?: string; dimensions?: number; seconds?: number; error?: string }>(
+      "/api/embed/test",
+      {},
+    ),
   testJudge: () =>
     post<{ ok: boolean; judge: string; seconds?: number; answer?: string; error?: string }>(
       "/api/judge/test",

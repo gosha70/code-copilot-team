@@ -14,7 +14,7 @@ import {
 import { Card, Stat, formatCost, useApi } from "@/components/ui";
 import JudgeQuality from "@/components/JudgeQuality";
 import LoadSelectionPanel, { loadPlan } from "@/components/LoadSelection";
-import JudgeProgressBar, { judgeChoiceLabel } from "@/components/JudgeProgress";
+import JudgeProgressBar, { EmbedProgressBar, judgeChoiceLabel } from "@/components/JudgeProgress";
 
 // THE PIPELINE AS A FLOW, not a list of cards.
 //
@@ -104,6 +104,8 @@ function Funnel({ counts }: { counts: PipelineStatus["counts"] }) {
           : null,
     },
     { label: "Graph nodes", value: counts.graph_nodes, note: null },
+    { label: "Embedded", value: counts.embedded, note: null },
+    { label: "Similarity links", value: counts.similar_edges, note: null },
     { label: "Labelled turns", value: counts.labels, note: null },
     { label: "KPI rows", value: counts.kpis, note: null },
   ];
@@ -442,8 +444,15 @@ export default function AnalysisPage() {
           </p>
         )}
 
-        {step.id === "judge" && step.job.progress && (
+        {step.id === "judge" && step.job.progress && "labeled" in step.job.progress && (
           <JudgeProgressBar
+            progress={step.job.progress}
+            seconds={step.job.seconds}
+            running={running}
+          />
+        )}
+        {step.id === "embed" && step.job.progress && "embedded" in step.job.progress && (
+          <EmbedProgressBar
             progress={step.job.progress}
             seconds={step.job.seconds}
             running={running}

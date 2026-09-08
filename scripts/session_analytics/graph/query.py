@@ -61,6 +61,16 @@ def node_counts(gdb: GraphDatabase) -> dict[str, int]:
     return counts
 
 
+def similar_edge_count(gdb: GraphDatabase) -> int:
+    """How many SIMILAR_TO edges the store holds — the Analysis page's
+    "Find similar sessions" done-check. 0 when the table is absent."""
+    try:
+        rows = _rows(gdb.execute("MATCH ()-[r:SIMILAR_TO]->() RETURN count(r)"))
+    except Exception:  # noqa: BLE001 — an unbuilt graph has no such table
+        return 0
+    return int(rows[0][0]) if rows else 0
+
+
 def tool_failure_stats(gdb: GraphDatabase, limit: int = 25) -> list[dict[str, Any]]:
     """Tools ranked by invocation + error count ("which tools fail most?")."""
     res = gdb.execute(

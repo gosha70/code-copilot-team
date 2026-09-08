@@ -38,9 +38,16 @@ _log = logging.getLogger(__name__)
 #: previous one produced.
 STEP_INGEST = "ingest"
 STEP_GRAPH = "graph"
+STEP_EMBED = "embed"
+STEP_SIMILAR = "similar"
 STEP_JUDGE = "judge"
 STEP_KPIS = "kpis"
-STEPS = (STEP_INGEST, STEP_GRAPH, STEP_JUDGE, STEP_KPIS)
+STEPS = (STEP_INGEST, STEP_GRAPH, STEP_EMBED, STEP_SIMILAR, STEP_JUDGE, STEP_KPIS)
+
+#: Steps that WRITE the Kùzu store. Kùzu is single-writer: status must
+#: not open the store while one of these runs (it corrupted a build
+#: once), and they must never run beside each other.
+GRAPH_WRITING_STEPS = (STEP_GRAPH, STEP_SIMILAR)
 
 #: The whole run, tracked as its own job so the UI can show one overall
 #: state and so a page reload does not lose it.
@@ -50,11 +57,13 @@ STEP_ALL = "all"
 #: consumes what the previous produced, so firing them concurrently
 #: would build a graph from a half-finished ingest — and, given Kùzu is
 #: single-writer, could corrupt the store outright.
-RUN_ALL_SEQUENCE = (STEP_INGEST, STEP_GRAPH, STEP_KPIS)
+RUN_ALL_SEQUENCE = (STEP_INGEST, STEP_GRAPH, STEP_EMBED, STEP_SIMILAR, STEP_KPIS)
 
 STEP_TITLES = {
     STEP_INGEST: "Load sessions",
     STEP_GRAPH: "Build knowledge graph",
+    STEP_EMBED: "Embed sessions",
+    STEP_SIMILAR: "Find similar sessions",
     STEP_JUDGE: "LLM judge",
     STEP_KPIS: "Compute KPIs",
 }
@@ -66,6 +75,8 @@ STEP_BLURBS = {
     # to check before pressing a button that writes to their store.
     STEP_INGEST: "Read copilot transcripts into the database.",
     STEP_GRAPH: "Build the Kùzu graph the Graph and Clusters tabs read.",
+    STEP_EMBED: "Turn each session into a vector with the embedding model configured under Settings → Embeddings, so sessions can be compared by meaning.",
+    STEP_SIMILAR: "Link each session to its nearest neighbours in the graph — what the Similar tab on a session page shows.",
     STEP_JUDGE: "Label each turn with the judge configured under Settings → LLM-as-Judge.",
     STEP_KPIS: "Roll the labels up into per-session KPIs.",
 }
@@ -82,11 +93,13 @@ _jobs: dict[str, dict[str, Any]] = {}
 #: progress display during a build, so the UI never has a reason to open
 #: the graph itself.
 _last_graph_nodes = 0
+_last_similar_edges = 0
 
 
-def _remember_graph_nodes(n: int) -> None:
-    global _last_graph_nodes
+def _remember_graph_nodes(n: int, edges: int = 0) -> None:
+    global _last_graph_nodes, _last_similar_edges
     _last_graph_nodes = n
+    _last_similar_edges = edges
 
 
 class StepBusyError(RuntimeError):
@@ -176,7 +189,9 @@ def start(step: str, fn: Callable[[], str]) -> None:
     threading.Thread(target=_run, args=(step, fn), daemon=True).start()
 
 
-def start_all(runners: dict[str, Callable[[], str]], *, include_judge: bool) -> None:
+def start_all(
+    runners: dict[str, Callable[[], str]], *, include_judge: bool, only: Optional[list[str]] = None,
+) -> None:
     """Run the pipeline end to end, one step at a time.
 
     SEQUENTIAL, not parallel. An earlier client-side version POSTed every
@@ -191,6 +206,13 @@ def start_all(runners: dict[str, Callable[[], str]], *, include_judge: bool) -> 
     sequence = list(RUN_ALL_SEQUENCE)
     if include_judge:
         sequence.insert(sequence.index(STEP_KPIS), STEP_JUDGE)
+    if only:
+        # An ordered SUBSET (the Similar tab runs embed + similar): the
+        # pipeline's order is kept whatever order the caller named.
+        unknown = [s for s in only if s not in STEPS]
+        if unknown:
+            raise ValueError(f"unknown step(s): {', '.join(unknown)}")
+        sequence = [s for s in STEPS if s in only]
     # Refused up front if any step it will run is running now — not
     # discovered mid-sequence after the earlier steps already ran.
     with _lock:
@@ -240,7 +262,7 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
     """
     counts = {
         "sessions": 0, "excluded_noise": 0, "labels": 0, "label_failures": 0,
-        "kpis": 0, "graph_nodes": 0,
+        "kpis": 0, "graph_nodes": 0, "embedded": 0, "similar_edges": 0,
     }
     # Zero counts from a store that did not answer are not a measurement.
     # The flag lets a page say "not reachable" instead of "0 sessions".
@@ -298,6 +320,14 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
             counts["kpis"] = int(
                 (db.query_one("SELECT COUNT(*) FROM session_kpi") or (0,))[0] or 0
             )
+            # Sessions the embed step has a vector for — over the SAME
+            # sessions the funnel counts, so "57 embedded of 57" lines up.
+            counts["embedded"] = int(
+                (db.query_one(
+                    f"SELECT COUNT(*) FROM copilot_session s WHERE {keep_sql} "
+                    "AND s.session_embedding IS NOT NULL", keep_params,
+                ) or (0,))[0] or 0
+            )
             store_reachable = True
         finally:
             db.close()
@@ -310,8 +340,9 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
     # connection against a store mid-rebuild and CORRUPTED it, losing an
     # hour of build. Monitoring must not touch what it is monitoring.
     graph_built = False
-    if job_state(STEP_GRAPH).get("state") == _STATE_RUNNING:
+    if any(job_state(s).get("state") == _STATE_RUNNING for s in GRAPH_WRITING_STEPS):
         counts["graph_nodes"] = _last_graph_nodes
+        counts["similar_edges"] = _last_similar_edges
     else:
         try:
             from .graph.schema import GraphDatabase
@@ -321,10 +352,11 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
             try:
                 nodes = gq.node_counts(g)
                 counts["graph_nodes"] = sum(int(v or 0) for v in nodes.values())
+                counts["similar_edges"] = gq.similar_edge_count(g)
                 graph_built = True
             finally:
                 g.close()
-            _remember_graph_nodes(counts["graph_nodes"])
+            _remember_graph_nodes(counts["graph_nodes"], counts["similar_edges"])
         except Exception:  # noqa: BLE001 — absent, unbuilt or unreadable
             graph_built = False
 
@@ -352,6 +384,8 @@ def status(dsn: str, kuzu_path: str) -> dict[str, Any]:
         # a session worth counting is in.
         STEP_INGEST: counts["sessions"] > 0,
         STEP_GRAPH: graph_built and counts["graph_nodes"] > 0,
+        STEP_EMBED: counts["embedded"] > 0,
+        STEP_SIMILAR: graph_built and counts["similar_edges"] > 0,
         STEP_JUDGE: counts["labels"] > 0,
         STEP_KPIS: counts["kpis"] > 0,
     }

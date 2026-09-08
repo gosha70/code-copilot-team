@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, ConfigResponse, JudgeModels, ProjectRedactionRow } from "@/lib/api";
+import { api, ConfigResponse, EmbedModels, JudgeModels, ProjectRedactionRow } from "@/lib/api";
 import { Card, ErrorNote, Loading, useApi } from "@/components/ui";
 import PathPicker from "@/components/PathPicker";
 import { pathFromValue } from "@/lib/paths";
@@ -35,6 +35,15 @@ const GROUPS: { title: string; blurb: string; keys: string[] }[] = [
       "CCT_SA_JUDGE_BACKEND", "CCT_SA_JUDGE_MODEL", "CCT_SA_JUDGE_BASE_URL",
       "CCT_SA_JUDGE_API_KEY", "CCT_SA_JUDGE_WORKERS", "CCT_SA_OLLAMA_URL",
     ],
+  },
+  {
+    title: "Embeddings",
+    blurb:
+      "The model that turns each session into a vector for the Similar tab " +
+      "(Analysis → Embed sessions, Find similar sessions). A small local " +
+      "embedding model such as nomic-embed-text on Ollama is enough; it " +
+      "shares the Ollama URL above.",
+    keys: ["CCT_SA_EMBED_BACKEND", "CCT_SA_EMBED_MODEL"],
   },
   {
     title: "Identity",
@@ -152,6 +161,20 @@ const META: Record<
       "started with OLLAMA_HOST=0.0.0.0.",
     placeholder: "http://localhost:11434",
   },
+  CCT_SA_EMBED_BACKEND: {
+    label: "Backend",
+    help: "Where embeddings are computed. Ollama is the packaged default and the only local option today.",
+    type: "embed-backend",
+  },
+  CCT_SA_EMBED_MODEL: {
+    label: "Model",
+    help:
+      "An EMBEDDING model, not a chat model — e.g. nomic-embed-text (after " +
+      "`ollama pull nomic-embed-text`). Ollama has no default embedding " +
+      "model, so this must be set before Embed sessions can run. The list " +
+      "is every model the saved Ollama URL serves; pick the embedding one.",
+    placeholder: "nomic-embed-text",
+  },
   CCT_DEVELOPER_ID: {
     label: "Developer id",
     help:
@@ -178,8 +201,13 @@ export default function SettingsPage() {
   const [models, setModels] = useState<JudgeModels | null>(null);
   // "Other…" on the Model dropdown: type a name the server does not list.
   const [modelOther, setModelOther] = useState(false);
-  const loadModels = () =>
+  const [embedModels, setEmbedModels] = useState<EmbedModels | null>(null);
+  const [embedOther, setEmbedOther] = useState(false);
+  const [embedProbe, setEmbedProbe] = useState<{ ok: boolean; text: string } | null>(null);
+  const loadModels = () => {
     api.judgeModels().then(setModels).catch(() => setModels(null));
+    api.embedModels().then(setEmbedModels).catch(() => setEmbedModels(null));
+  };
   useEffect(() => {
     loadModels();
   }, []);
@@ -254,6 +282,20 @@ export default function SettingsPage() {
     }
   }
 
+  async function testEmbedding() {
+    setEmbedProbe({ ok: true, text: "Embedding one short sentence…" });
+    try {
+      const r = await api.testEmbedding();
+      setEmbedProbe(
+        r.ok
+          ? { ok: true, text: `${r.embedding} answered in ${r.seconds}s: ${r.dimensions} dimensions (model ${r.model})` }
+          : { ok: false, text: `${r.embedding} failed${r.seconds ? ` after ${r.seconds}s` : ""}: ${r.error}` },
+      );
+    } catch (e) {
+      setEmbedProbe({ ok: false, text: `Embedding test failed: ${String(e)}` });
+    }
+  }
+
   async function testJudge() {
     setJudgeProbe({ ok: true, text: "Asking the judge for one answer…" });
     try {
@@ -298,6 +340,10 @@ export default function SettingsPage() {
   const effectiveBackend = backend === "" ? "ollama" : backend;
   const modelList =
     models && models.reachable && effectiveBackend === savedBackend ? models.models : null;
+  // Same rule for the embedding model: the SAVED backend's catalogue.
+  const embedBackend = values["CCT_SA_EMBED_BACKEND"] || "ollama";
+  const embedModelList =
+    embedModels && embedModels.reachable && embedBackend === embedModels.backend ? embedModels.models : null;
   const baseUrl = values["CCT_SA_JUDGE_BASE_URL"] || "";
   // "External" means off this network: a vLLM box on the LAN (a DGX
   // Spark at 192.168.x, spark.local) is as local as Ollama for privacy.
@@ -442,6 +488,40 @@ export default function SettingsPage() {
                       <option key={b} value={b}>{b}</option>
                     ))}
                   </select>
+                ) : m.type === "embed-backend" ? (
+                  <select
+                    className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-full"
+                    value={values[f.key] || ""}
+                    onChange={(e) => set(f.key, e.target.value)}
+                  >
+                    <option value="">Packaged default — local Ollama</option>
+                    {cfg.embedding_backends.map((b) => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+                ) : f.key === "CCT_SA_EMBED_MODEL" && embedModelList && !embedOther ? (
+                  <div className="flex gap-2 items-center">
+                    <select
+                      className="border border-slate-300 bg-white text-slate-900 rounded px-2 py-1 text-sm w-full font-mono"
+                      value={values[f.key] || ""}
+                      onChange={(e) => {
+                        if (e.target.value === "__other__") setEmbedOther(true);
+                        else set(f.key, e.target.value);
+                      }}
+                    >
+                      <option value="">— choose an embedding model —</option>
+                      {embedModelList.map((name) => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                      {values[f.key] && !embedModelList.includes(values[f.key]) && (
+                        <option value={values[f.key]}>{values[f.key]} (not served)</option>
+                      )}
+                      <option value="__other__">Other…</option>
+                    </select>
+                    <span className="shrink-0 text-xs text-slate-500">
+                      {embedModelList.length === 1 ? "1 model" : `${embedModelList.length} models`} on the server
+                    </span>
+                  </div>
                 ) : f.key === "CCT_SA_JUDGE_MODEL" && modelList && !modelOther ? (
                   <div className="flex gap-2 items-center">
                     <select
@@ -545,6 +625,9 @@ export default function SettingsPage() {
           <button onClick={testJudge} className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700">
             Test judge LLM
           </button>
+          <button onClick={testEmbedding} className="bg-slate-800 text-white text-sm px-4 py-1.5 rounded hover:bg-slate-700">
+            Test embedding
+          </button>
           {saved && <span className="text-sm text-slate-600">{saved}</span>}
         </div>
         <p className="mt-2 text-xs text-slate-500">
@@ -560,10 +643,15 @@ export default function SettingsPage() {
               </span>
             )
           ) : null}
-          . Both tests use the saved settings — Save first.
+          . Embedding in effect:{" "}
+          <code className="bg-slate-100 px-1 rounded">
+            {embedModels?.configured.model_set ? embedModels.configured.spec : "none — choose an embedding model above"}
+          </code>
+          . All three tests use the saved settings — Save first.
         </p>
         <ProbeBox result={probe} />
         <ProbeBox result={judgeProbe} />
+        <ProbeBox result={embedProbe} />
       </Card>
 
       <Card title="Effective per-project redaction">

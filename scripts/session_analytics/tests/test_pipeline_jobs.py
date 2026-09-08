@@ -58,6 +58,25 @@ class TestSingleFlight(unittest.TestCase):
         # Free again once the run-all has finished.
         pj.start(pj.STEP_KPIS, lambda: "ok")
 
+    def test_run_all_can_run_an_ordered_subset(self) -> None:
+        # The Similar tab runs embed + similar (and graph first when the
+        # graph is not built); the pipeline's order is kept whatever
+        # order the caller named, and an unknown step is refused.
+        ran: list[str] = []
+        runners = {s: (lambda s=s: ran.append(s) or "ok") for s in pj.STEPS}
+        pj.start_all(runners, include_judge=False, only=["similar", "embed", "graph"])
+        for _ in range(100):
+            if pj.job_state(pj.STEP_ALL)["state"] != "running":
+                break
+            time.sleep(0.02)
+        self.assertEqual(ran, ["graph", "embed", "similar"])
+        self.assertEqual(pj.job_state(pj.STEP_ALL)["message"], "completed graph, embed, similar")
+        self.assertEqual(pj.job_state(pj.STEP_INGEST)["state"], "idle")
+        with self.assertRaises(ValueError):
+            pj.start_all(runners, include_judge=False, only=["nope"])
+        # the full run includes embed and similar between graph and kpis
+        self.assertEqual(pj.RUN_ALL_SEQUENCE, ("ingest", "graph", "embed", "similar", "kpis"))
+
     def test_progress_rides_on_the_running_job_and_survives_completion(self) -> None:
         gate = threading.Event()
 

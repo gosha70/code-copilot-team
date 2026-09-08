@@ -608,7 +608,7 @@ class TestApi(RegistryResetTestCase):
         r = self.client.post("/api/pipeline/run/judge", json={"judge": {"judge": "flaky:m", "limit": 4}})
         self.assertEqual(r.status_code, 200, r.text)
         for _ in range(200):
-            job = self.client.get("/api/pipeline/status").json()["steps"][2]["job"]
+            job = next(x for x in self.client.get("/api/pipeline/status").json()["steps"] if x["id"] == "judge")["job"]
             if job["state"] != "running":
                 break
             time.sleep(0.05)
@@ -696,6 +696,54 @@ class TestApi(RegistryResetTestCase):
         self._register_fake_judge(json.dumps({"summary": "ok", "findings": []}))
         self.client.post(f"/api/sessions/{sid}/analysis/tuning", json={"judge": "fake:x"})
         self.assertEqual(self.client.get(f"/api/sessions/{sid}").json()["tags"]["analyzed_kinds"], 1)
+
+    def test_embedding_endpoints_and_the_similar_steps_in_the_pipeline(self) -> None:
+        # Settings → Embeddings: the configured embedding, its model list,
+        # a probe; the pipeline knows embed + similar and their counts.
+        from session_analytics.embedding.contracts import EmbeddingResult
+        from session_analytics.embedding.registry import register_embedding
+
+        class _Fake:
+            def __init__(self, model="", *, base_url=""):
+                self.model = model
+
+            def probe(self):
+                if self.model == "broken":
+                    raise RuntimeError("model 'broken' not found")
+
+            def embed(self, text):
+                return EmbeddingResult(vector=(0.1, 0.2, 0.3), resolved_model=self.model or "fake-default")
+
+        register_embedding("fake", _Fake)
+        from session_analytics import config as cfgmod
+
+        with mock.patch.dict("os.environ", {cfgmod.ENV_EMBED_BACKEND: "fake", cfgmod.ENV_EMBED_MODEL: "tiny"}):
+            m = self.client.get("/api/embed/models").json()
+            self.assertEqual(m["configured"], {"backend": "fake", "model": "tiny", "spec": "fake:tiny", "model_set": True})
+            t = self.client.post("/api/embed/test").json()
+            self.assertTrue(t["ok"], t)
+            self.assertEqual((t["dimensions"], t["model"]), (3, "tiny"))
+        with mock.patch.dict("os.environ", {cfgmod.ENV_EMBED_BACKEND: "fake", cfgmod.ENV_EMBED_MODEL: "broken"}):
+            t = self.client.post("/api/embed/test").json()
+            self.assertFalse(t["ok"])
+            self.assertIn("not found", t["error"])
+        st = self.client.get("/api/pipeline/status").json()
+        self.assertEqual([s["id"] for s in st["steps"]], ["ingest", "graph", "embed", "similar", "judge", "kpis"])
+        self.assertIn("embedded", st["counts"])
+        self.assertIn("similar_edges", st["counts"])
+        # no embedding model → the embed step fails at once with the fix
+        with mock.patch.dict("os.environ", {cfgmod.ENV_EMBED_BACKEND: "fake", cfgmod.ENV_EMBED_MODEL: ""}):
+            self.assertEqual(self.client.post("/api/pipeline/run/embed").status_code, 200)
+            import time as _t
+
+            for _ in range(100):
+                job = next(x for x in self.client.get("/api/pipeline/status").json()["steps"] if x["id"] == "embed")["job"]
+                if job["state"] != "running":
+                    break
+                _t.sleep(0.05)
+            self.assertEqual(job["state"], "failed")
+            self.assertIn("Settings → Embeddings", job["message"])
+        self.assertEqual(self.client.post("/api/pipeline/run-all", json={"steps": ["nope"]}).status_code, 400)
 
     def test_get_config(self) -> None:
         r = self.client.get("/api/config")
