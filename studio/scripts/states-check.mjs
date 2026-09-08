@@ -930,10 +930,11 @@ try {
   if (!/<h1[^>]*>code-copilot-team<\/h1>/.test(head)) fail("title is not the project name");
   else if (!/claude-opus-5/.test(head) || !/claude-code/.test(head)) fail("copilot/model badges missing");
   else if (!/2\.2× the project median/.test(head) || !/1\.0 per 100 turns/.test(head) || !/above its p90/.test(head)) fail("tile notes missing");
-  else if (!/compared with 14 other sessions/.test(head) || !/no priced turns/.test(head)) fail("baseline line or cost note missing");
+  else if (!/14 other sessions of this project/.test(head) || !/no priced turns/.test(head)) fail("baseline fact or cost note missing");
+  else if (!/<dt[^>]*>Started<\/dt>/.test(head) || !/<dt[^>]*>Session id<\/dt>/.test(head) || !/>abc</.test(head)) fail("labelled facts (Started, Session id) missing");
   else console.log("  ok  header: project title, badges, five tiles with comparisons");
   const bare = render(sh.default, { data: { ...detail, project_path: null, model: null, started_at: null, duration_seconds: null }, baseline: null });
-  if (!/no project path/.test(bare) || !/no project baseline yet/.test(bare) || /×/.test(bare)) fail("header without a project/baseline still claims a comparison");
+  if (!/no project path/.test(bare) || !/too few sessions of this project/.test(bare) || /×/.test(bare)) fail("header without a project/baseline still claims a comparison");
   else console.log("  ok  no project path / no baseline: nothing compared, nothing invented");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");

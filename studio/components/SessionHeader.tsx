@@ -55,6 +55,17 @@ export function errorRate(errors: number, turns: number): string {
   return `${((errors / turns) * 100).toFixed(1)} per 100 turns`;
 }
 
+/** One labelled fact: the label small and grey above the value, so a
+ *  row of them reads as facts rather than as a sentence. */
+function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div>
+      <dt className="text-[11px] uppercase tracking-wide text-slate-400">{label}</dt>
+      <dd className={"text-slate-700 " + (mono ? "font-mono text-xs" : "")}>{value}</dd>
+    </div>
+  );
+}
+
 export default function SessionHeader({
   data,
   baseline,
@@ -72,6 +83,7 @@ export default function SessionHeader({
   );
   const cost = versusProject(data.cost_usd, b?.cost_usd);
   const started = data.started_at ? new Date(data.started_at) : null;
+  const ended = data.ended_at ? new Date(data.ended_at) : null;
   return (
     <div className="space-y-3">
       <div>
@@ -94,17 +106,19 @@ export default function SessionHeader({
         >
           {data.project_path || ""}
         </p>
-        <p className="text-sm text-slate-600 mt-1">
-          {started
-            ? `Started ${started.toLocaleString()}`
-            : "Start time unknown"}
-          {data.duration_seconds
-            ? ` · ran ${formatDuration(data.duration_seconds)}`
-            : ""}
-          {b
-            ? ` · compared with ${b.sessions} other session${b.sessions === 1 ? "" : "s"} of this project`
-            : " · no project baseline yet (too few sessions of this project)"}
-        </p>
+        <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+          <Fact label="Started" value={started ? started.toLocaleString() : "unknown"} />
+          <Fact label="Ended" value={ended ? ended.toLocaleString() : "unknown"} />
+          <Fact label="Session id" value={data.session_id} mono />
+          <Fact
+            label="Compared with"
+            value={
+              b
+                ? `${b.sessions} other session${b.sessions === 1 ? "" : "s"} of this project`
+                : "nothing yet — too few sessions of this project"
+            }
+          />
+        </dl>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Stat
