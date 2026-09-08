@@ -1599,7 +1599,13 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                 )
                 try:
                     with urllib.request.urlopen(req, timeout=3) as resp:
-                        caps = _json.loads(resp.read().decode("utf-8")).get("capabilities") or []
+                        shown = _json.loads(resp.read().decode("utf-8"))
+                    # ABSENT is unknown (an older Ollama reports no
+                    # capabilities at all); only a present list can
+                    # say "cannot embed".
+                    caps = shown.get("capabilities") if isinstance(shown, dict) else None
+                    if caps is not None and not isinstance(caps, list):
+                        caps = None
                 except Exception:  # noqa: BLE001 — one model's show failing must not empty the list
                     caps = None
                 # An Ollama too old to report capabilities keeps the

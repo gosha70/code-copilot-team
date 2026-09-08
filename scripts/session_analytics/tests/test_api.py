@@ -733,6 +733,26 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(m["models"], ["nomic-embed-text:latest"])
         self.assertEqual(m["not_embedding"], ["llama3.2:latest", "qwen3.6:27b"])
 
+        # An older Ollama answers /api/show WITHOUT a capabilities field:
+        # unknown is not "cannot embed" — every model stays offered.
+        for name in caps:
+            caps[name] = None
+
+        def fake_urlopen_old(req, timeout=0):
+            url = req if isinstance(req, str) else req.full_url
+            if url.endswith("/api/tags"):
+                return _Resp(json.dumps(tags).encode())
+            if url.endswith("/api/show"):
+                return _Resp(json.dumps({"modelfile": "FROM x"}).encode())
+            raise AssertionError(url)
+
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_EMBED_BACKEND: "ollama", cfgmod.ENV_EMBED_MODEL: ""}), \
+             mock.patch.object(urllib.request, "urlopen", fake_urlopen_old):
+            m = self.client.get("/api/embed/models").json()
+        self.assertEqual(m["models"], ["llama3.2:latest", "nomic-embed-text:latest", "qwen3.6:27b"])
+        self.assertEqual(m["not_embedding"], [])
+
     def test_ask_streams_steps_and_the_answer_from_the_settings_judge(self) -> None:
         # Ask: the judge in Settings (and only that one) answers a question
         # by calling read-only tools; the page sees every step as NDJSON.
