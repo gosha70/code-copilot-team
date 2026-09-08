@@ -47,6 +47,27 @@ class EmbeddingBackendError(RuntimeError):
     stays NULL (FR-3). Never carries a vector."""
 
 
+#: What Ollama (llama.cpp underneath) says when asked to embed with a
+#: model that has no embedding capability. Its wording names a server
+#: flag no Ollama user can set; the real cause is the model choice.
+_NOT_AN_EMBEDDING_MODEL = "does not support embeddings"
+#: Ollama's per-model capability name for embedding (``/api/show``).
+CAPABILITY_EMBEDDING = "embedding"
+
+
+def explain_ollama_error(model: str, error: str) -> str:
+    """Ollama's error text, with the one confusing case translated:
+    "This server does not support embeddings. Start it with
+    `--embeddings`" means the MODEL is a chat model."""
+    if _NOT_AN_EMBEDDING_MODEL in error:
+        return (
+            f"{model} is a chat model, not an embedding model — pick an "
+            "embedding model (e.g. nomic-embed-text) under Settings → "
+            "Embeddings"
+        )
+    return f"ollama error: {error}"
+
+
 class OllamaEmbedding:
     """Local-only Ollama embedding backend (FR-2)."""
 
@@ -88,7 +109,7 @@ class OllamaEmbedding:
                 f"ollama returned a non-object from {_EMBED_PATH}"
             )
         if "error" in data:
-            raise EmbeddingBackendError(f"ollama error: {data['error']}")
+            raise EmbeddingBackendError(explain_ollama_error(self._model, str(data["error"])))
 
         resolved = data.get("model")
         if not isinstance(resolved, str) or not resolved:

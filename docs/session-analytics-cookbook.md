@@ -431,8 +431,10 @@ its score, project, model, tags, and a reason in words: the same
 project, the tools few sessions use that both used, shared error types,
 shared files. It needs two things, both in the Analysis pipeline:
 
-1. **Settings → Embeddings**: choose an embedding model. Ollama has no
-   default one; `nomic-embed-text` is small and enough
+1. **Settings → Embeddings**: choose an embedding model. The list holds
+   only the models your Ollama can embed with — chat models such as
+   qwen3.6 are left out, because Ollama refuses to embed with them.
+   Ollama has no default one; `nomic-embed-text` is small and enough
    (`ollama pull nomic-embed-text`, then pick it from the list and
    Save). **Test embedding** shows the vector size and time.
 2. **Analysis → Embed sessions**, then **Find similar sessions** — or

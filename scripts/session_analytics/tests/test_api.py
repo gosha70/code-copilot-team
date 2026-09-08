@@ -693,6 +693,46 @@ class TestApi(RegistryResetTestCase):
             self.assertTrue(steps["correlate"]["done"])
             self.assertIn(str(root), steps["correlate"]["blurb"])
 
+    def test_embed_models_lists_only_models_that_can_embed(self) -> None:
+        # Ollama reports a capability per model (/api/show); the Settings
+        # dropdown must offer only the ones that embed, or a chat model
+        # picked there refuses the whole pass later.
+        import io
+        import urllib.request
+
+        from session_analytics import config as cfgmod
+
+        tags = {"models": [{"name": "qwen3.6:27b"}, {"name": "nomic-embed-text:latest"}, {"name": "llama3.2:latest"}]}
+        caps = {
+            "qwen3.6:27b": ["completion", "tools", "thinking"],
+            "nomic-embed-text:latest": ["embedding"],
+            "llama3.2:latest": ["completion", "tools"],
+        }
+
+        class _Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=0):
+            url = req if isinstance(req, str) else req.full_url
+            if url.endswith("/api/tags"):
+                return _Resp(json.dumps(tags).encode())
+            if url.endswith("/api/show"):
+                model = json.loads(req.data.decode())["model"]
+                return _Resp(json.dumps({"capabilities": caps[model]}).encode())
+            raise AssertionError(url)
+
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_EMBED_BACKEND: "ollama", cfgmod.ENV_EMBED_MODEL: ""}), \
+             mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+            m = self.client.get("/api/embed/models").json()
+        self.assertTrue(m["reachable"])
+        self.assertEqual(m["models"], ["nomic-embed-text:latest"])
+        self.assertEqual(m["not_embedding"], ["llama3.2:latest", "qwen3.6:27b"])
+
     def test_ask_streams_steps_and_the_answer_from_the_settings_judge(self) -> None:
         # Ask: the judge in Settings (and only that one) answers a question
         # by calling read-only tools; the page sees every step as NDJSON.

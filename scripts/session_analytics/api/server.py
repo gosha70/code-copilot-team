@@ -1577,11 +1577,38 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             return out
         base = (cfg.embedding.ollama_url or "http://localhost:11434").rstrip("/")
         out["url"] = base
+        from ..embedding.ollama_embed import CAPABILITY_EMBEDDING
+
         try:
             with urllib.request.urlopen(f"{base}/api/tags", timeout=3) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
-            names = [m.get("name") for m in data.get("models", []) if isinstance(m, dict)]
-            out.update({"reachable": True, "models": sorted(n for n in names if n)})
+            names = sorted(
+                str(m.get("name")) for m in data.get("models", []) if isinstance(m, dict) and m.get("name")
+            )
+            # Only models Ollama itself says can embed (/api/show
+            # capabilities): a chat model in this list is a refused
+            # pass later, with an error that reads like a server flag.
+            embedding: list[str] = []
+            chat: list[str] = []
+            for name in names:
+                req = urllib.request.Request(
+                    f"{base}/api/show",
+                    data=_json.dumps({"model": name}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                try:
+                    with urllib.request.urlopen(req, timeout=3) as resp:
+                        caps = _json.loads(resp.read().decode("utf-8")).get("capabilities") or []
+                except Exception:  # noqa: BLE001 — one model's show failing must not empty the list
+                    caps = None
+                # An Ollama too old to report capabilities keeps the
+                # whole list rather than hiding everything.
+                if caps is None or CAPABILITY_EMBEDDING in caps:
+                    embedding.append(name)
+                else:
+                    chat.append(name)
+            out.update({"reachable": True, "models": embedding, "not_embedding": chat})
         except Exception as exc:  # noqa: BLE001 — unreachable is an answer
             _log.info("embedding model list unavailable at %s: %s", base, exc)
             out["error"] = type(exc).__name__

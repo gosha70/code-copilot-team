@@ -1085,7 +1085,10 @@ export interface CorrelateProgress {
 export interface EmbedModels {
   configured: { backend: string; model: string; spec: string; model_set: boolean };
   backend: string;
+  /** Only models the server says can embed (Ollama /api/show capabilities). */
   models: string[];
+  /** Served models that cannot embed (chat models), left off the list. */
+  not_embedding?: string[];
   reachable: boolean;
   url: string;
   error?: string;

@@ -182,7 +182,8 @@ const META: Record<
       "An EMBEDDING model, not a chat model — e.g. nomic-embed-text (after " +
       "`ollama pull nomic-embed-text`). Ollama has no default embedding " +
       "model, so this must be set before Embed sessions can run. The list " +
-      "is every model the saved Ollama URL serves; pick the embedding one.",
+      "holds only the models the saved Ollama URL can embed with; its chat " +
+      "models are left out, because Ollama refuses to embed with them.",
     placeholder: "nomic-embed-text",
   },
   CCT_SA_BENCHMARK_RUNS_ROOT: {
@@ -533,12 +534,25 @@ export default function SettingsPage() {
                         <option key={name} value={name}>{name}</option>
                       ))}
                       {values[f.key] && !embedModelList.includes(values[f.key]) && (
-                        <option value={values[f.key]}>{values[f.key]} (not served)</option>
+                        <option value={values[f.key]}>
+                          {values[f.key]}
+                          {embedModels?.not_embedding?.includes(values[f.key])
+                            ? " (a chat model — cannot embed)"
+                            : " (not served)"}
+                        </option>
                       )}
                       <option value="__other__">Other…</option>
                     </select>
                     <span className="shrink-0 text-xs text-slate-500">
-                      {embedModelList.length === 1 ? "1 model" : `${embedModelList.length} models`} on the server
+                      {embedModelList.length === 1 ? "1 embedding model" : `${embedModelList.length} embedding models`} on the server
+                      {embedModels?.not_embedding?.length
+                        ? ` · ${embedModels.not_embedding.length} chat model${embedModels.not_embedding.length === 1 ? "" : "s"} left out`
+                        : ""}
+                      {embedModelList.length === 0 && (
+                        <span className="block text-amber-700">
+                          None can embed. Pull one first: <code>ollama pull nomic-embed-text</code>
+                        </span>
+                      )}
                     </span>
                   </div>
                 ) : f.key === "CCT_SA_JUDGE_MODEL" && modelList && !modelOther ? (
