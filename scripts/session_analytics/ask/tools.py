@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping, Optional
 from .. import archive as arch
 from .. import constants as C
 from ..config import NoiseConfig
+from ..embedding.cluster_reader import KuzuGraphSnapshot
 from ..mcp import tools as mcp_tools
 from ..relational.db import Database
 from ..session_filter import keep_clause
@@ -83,26 +84,10 @@ def _keep(ctx: AskContext, alias: str) -> tuple[str, tuple[Any, ...]]:
     return keep_clause(ctx.noise, alias) if ctx.noise else ("1=1", ())
 
 
-def _kept_ids(ctx: AskContext, ids: list[int]) -> set[int]:
-    """Which of ``ids`` are sessions worth counting."""
-    wanted = sorted({int(i) for i in ids})
-    if not wanted:
-        return set()
-    keep_sql, keep_params = _keep(ctx, "copilot_session")
-    marks = ", ".join("?" for _ in wanted)
-    rows = ctx.db.query(
-        f"SELECT id FROM copilot_session WHERE id IN ({marks}) AND {keep_sql}",
-        (*wanted, *keep_params),
-    )
-    return {int(r[0]) for r in rows}
-
-
-def _is_unbuilt(exc: BaseException) -> bool:
-    return "does not exist" in str(exc) or "Binder exception" in str(exc)
-
-
 def _open_graph(ctx: AskContext):
-    """(state, read-only handle or None). Never creates the store."""
+    """(state, read-only handle or None). Never creates the store, and
+    never reads an error's text: readiness is the catalog's answer
+    (``CALL show_tables()``), the rule the graph substrate settled on."""
     if not ctx.kuzu_path or not Path(ctx.kuzu_path).exists():
         return GRAPH_ABSENT, None
     try:
@@ -110,25 +95,23 @@ def _open_graph(ctx: AskContext):
     except ImportError:
         return GRAPH_NO_KUZU, None
     try:
-        return GRAPH_READY, GraphDatabase.connect_read_only(ctx.kuzu_path)
+        g = GraphDatabase.connect_read_only(ctx.kuzu_path)
     except RuntimeError:
         return GRAPH_UNOPENABLE, None
+    if not KuzuGraphSnapshot(g).graph_ready():
+        g.close()
+        return GRAPH_UNBUILT, None
+    return GRAPH_READY, g
 
 
 def graph_state(ctx: AskContext) -> str:
-    """ready | absent | unbuilt | unopenable | kuzu-missing — from an
-    actual read-only open and a probe of the schema, not from whether a
-    path exists (a path can exist and hold nothing)."""
+    """ready | absent | unbuilt | unopenable | kuzu-missing — from a
+    read-only open and the catalog, not from whether a path exists (a
+    path can exist and hold nothing)."""
     state, g = _open_graph(ctx)
-    if g is None:
-        return state
-    try:
-        g.execute("MATCH (s:Session) RETURN count(s) LIMIT 1")
-    except Exception as exc:  # noqa: BLE001 — an unbuilt store has no tables
-        return GRAPH_UNBUILT if _is_unbuilt(exc) else GRAPH_UNOPENABLE
-    finally:
+    if g is not None:
         g.close()
-    return GRAPH_READY
+    return state
 
 
 def _int(args: Mapping[str, Any], name: str, default: Optional[int], *, lo: int, hi: int) -> int:
@@ -269,14 +252,9 @@ def search_text(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
     keep_sql, keep_params = _keep(ctx, "s")
     hits: list[dict[str, Any]] = []
     seen: set[tuple[int, int]] = set()
-    archived = arch.search_traces(ctx.db, query, limit=limit)
     # Same policy as every list on the pages: noise is left out of a
-    # search. The archive search has no noise filter of its own, so its
-    # hits are checked against the kept sessions.
-    kept_refs = _kept_ids(ctx, [h["session_ref"] for h in archived])
-    for h in archived:
-        if h["session_ref"] not in kept_refs:
-            continue
+    # search — BEFORE the ranked top-N is cut, in the search itself.
+    for h in arch.search_traces(ctx.db, query, limit=limit, noise=ctx.noise):
         key = (h["session_ref"], h["sequence_num"])
         seen.add(key)
         hits.append({
@@ -360,6 +338,8 @@ def graph_question(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
             f"{query_id} does not take {', '.join(unknown)}; its parameters are: "
             + (", ".join(declared) or "none")
         )
+    # Readiness is settled from the catalog before the query runs, so a
+    # failed query is never read for what state the store is in.
     state, g = _open_graph(ctx)
     if g is None:
         return {"error": _GRAPH_STATE_MESSAGE[state], "prerequisite": "graph"}
@@ -368,10 +348,6 @@ def graph_question(ctx: AskContext, args: Mapping[str, Any]) -> dict[str, Any]:
             result = gq.run_catalogue(g, query_id, dict(params))
         except ValueError as exc:
             raise BadArgumentsError(str(exc)) from None
-        except Exception as exc:  # noqa: BLE001 — an unbuilt graph has no tables
-            if _is_unbuilt(exc):
-                return {"error": _GRAPH_STATE_MESSAGE[GRAPH_UNBUILT], "prerequisite": "graph"}
-            raise
     finally:
         g.close()
     # A graph-rendered answer carries its evidence as nodes and
@@ -482,9 +458,18 @@ def store_facts(ctx: AskContext) -> dict[str, Any]:
             keep_params,
         )
     ]
-    archived = db.query_one(f"SELECT COUNT(DISTINCT session_ref) FROM {C.TBL_TRACE_DOCUMENT}") or (0,)
+    # The same universe as the counts above: an archived or analysed
+    # probe must not be counted where the probe itself is not.
+    archived = db.query_one(
+        f"SELECT COUNT(DISTINCT td.session_ref) FROM {C.TBL_TRACE_DOCUMENT} td "
+        f"JOIN copilot_session ON copilot_session.id = td.session_ref WHERE {keep_sql}",
+        keep_params,
+    ) or (0,)
     analysed = db.query_one(
-        f"SELECT COUNT(DISTINCT session_ref) FROM {C.TBL_SESSION_ANALYSIS} WHERE parse_status = 'ok'"
+        f"SELECT COUNT(DISTINCT a.session_ref) FROM {C.TBL_SESSION_ANALYSIS} a "
+        f"JOIN copilot_session ON copilot_session.id = a.session_ref "
+        f"WHERE a.parse_status = 'ok' AND {keep_sql}",
+        keep_params,
     ) or (0,)
     project_count = db.query_one(
         f"SELECT COUNT(DISTINCT project_path) FROM copilot_session WHERE {keep_sql}", keep_params

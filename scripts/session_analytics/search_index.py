@@ -246,9 +246,14 @@ _SELECT_COLUMNS = (
 
 
 def ranked_rows(
-    db: Database, kind: str, terms: list[str], limit: int
+    db: Database, kind: str, terms: list[str], limit: int,
+    *, keep: tuple[str, tuple] = ("1=1", ()),
 ) -> Optional[list[tuple]]:
-    """Ranked matches for ``terms``, or ``None`` if ``kind`` cannot serve."""
+    """Ranked matches for ``terms``, or ``None`` if ``kind`` cannot serve.
+    ``keep`` is a (sql, params) predicate over the joined copilot_session
+    ``s``, applied BEFORE the limit — the noise rule, when the caller has
+    one."""
+    keep_sql, keep_params = keep
     if kind == C.SEARCH_INDEX_FTS5:
         fts = C.TBL_TRACE_DOCUMENT_FTS
         # Every term quoted as a phrase (literal) and ANDed: all terms
@@ -261,11 +266,11 @@ def ranked_rows(
             FROM {fts} f
             JOIN {C.TBL_TRACE_DOCUMENT} td ON td.id = f.rowid
             JOIN copilot_session s ON s.id = td.session_ref
-            WHERE {fts} MATCH ?
+            WHERE {fts} MATCH ? AND {keep_sql}
             ORDER BY bm25({fts}), td.session_ref, td.sequence_num
             LIMIT ?
             """,
-            (match, limit),
+            (match, *keep_params, limit),
         )
     if kind == C.SEARCH_INDEX_TSVECTOR:
         col = C.COL_TRACE_CONTENT_TSV
@@ -277,11 +282,11 @@ def ranked_rows(
             SELECT {_SELECT_COLUMNS}
             FROM {C.TBL_TRACE_DOCUMENT} td
             JOIN copilot_session s ON s.id = td.session_ref
-            WHERE td.{col} @@ plainto_tsquery('{cfg}', ?)
+            WHERE td.{col} @@ plainto_tsquery('{cfg}', ?) AND {keep_sql}
             ORDER BY ts_rank(td.{col}, plainto_tsquery('{cfg}', ?)) DESC,
                      td.session_ref, td.sequence_num
             LIMIT ?
             """,
-            (" ".join(terms), " ".join(terms), limit),
+            (" ".join(terms), *keep_params, " ".join(terms), limit),
         )
     return None

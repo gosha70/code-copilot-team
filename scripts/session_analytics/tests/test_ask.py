@@ -85,6 +85,14 @@ class _AskBase(RegistryResetTestCase):
             (C.COPILOT_CLAUDE_CODE, native),
         )[0])
 
+    def _insert_archive(self, sid: int, seq: int, text: str) -> None:
+        self.db.execute(
+            f"INSERT INTO {C.TBL_TRACE_DOCUMENT} (session_ref, sequence_num, source_kind, content, redaction_mode) "
+            "VALUES (?, ?, ?, ?, 'code')",
+            (sid, seq, C.SOURCE_KIND_COPILOT_TRANSCRIPT, text),
+        )
+        self.db.commit()
+
     def _insert_turn(self, sid: int, seq: int, text: str) -> None:
         self.db.execute(
             "INSERT INTO copilot_turn (session_id, sequence_num, role, content_preview, timestamp) "
@@ -224,15 +232,46 @@ class TestAskTools(_AskBase):
             (probe, "ProbeError", "zebratool", "boom"),
         )
         self.db.commit()
+        # ...and archived text plus a parsed analysis on the probe, which
+        # the opening facts must not count either.
+        self._insert_archive(probe, 1, "zebrafish migration notes in full")
+        self.db.execute(
+            f"INSERT INTO {C.TBL_SESSION_ANALYSIS} (session_ref, kind, parse_status, result_json) "
+            "VALUES (?, ?, 'ok', '{}')",
+            (probe, C.ANALYSIS_KIND_TUNING),
+        )
+        self.db.commit()
         noisy = T.AskContext(db=self.db, kuzu_path=self.ctx.kuzu_path, noise=_NOISE)
         self.assertEqual(T.search_text(self.ctx, {"query": "zebrafish"})["count"], 1)
+        self.assertEqual(T.search_text(self.ctx, {"query": "zebrafish"})["hits"][0]["source"], "archive")
         self.assertEqual(T.search_text(noisy, {"query": "zebrafish"})["count"], 0)
         self.assertNotIn(probe, [r["id"] for r in T.find_sessions(noisy, {})["sessions"]])
         errors = {e["tool"] for e in T.patterns(noisy, {})["errors"]}
         self.assertNotIn("zebratool", errors)
         self.assertIn("zebratool", {e["tool"] for e in T.patterns(self.ctx, {})["errors"]})
-        self.assertEqual(T.store_facts(noisy)["sessions"], 1)
+        facts = T.store_facts(noisy)
+        self.assertEqual(facts["sessions"], 1)
+        self.assertEqual(facts["sessions_with_archived_text"], 0)
+        self.assertEqual(facts["sessions_with_analyses"], 0)
+        everything = T.store_facts(self.ctx)
+        self.assertEqual((everything["sessions_with_archived_text"], everything["sessions_with_analyses"]), (1, 1))
         self.assertEqual(T.session_summary(noisy, {"session_id": probe})["id"], probe)
+
+    def test_archive_search_applies_noise_before_the_ranked_limit(self) -> None:
+        # Twenty-one short probe documents outrank one long real one; a
+        # filter applied after the top-20 cut would lose the real hit.
+        for i in range(21):
+            sid = self._insert_session(f"probe{i}", f"/tmp/cct-probe.{i}", started="2026-09-01T00:00:00Z")
+            self._insert_archive(sid, 1, "zebrafish")
+        real = self._insert_session("real", "/repo/real", started="2026-09-01T00:00:00Z")
+        self._insert_archive(real, 1, "a long note about zebrafish " + "and other fish " * 40)
+        noisy = T.AskContext(db=self.db, kuzu_path=self.ctx.kuzu_path, noise=_NOISE)
+        out = T.search_text(noisy, {"query": "zebrafish", "limit": 20})
+        self.assertEqual([h["session_id"] for h in out["hits"] if h["source"] == "archive"], [real])
+        # Without the rule the probes fill the page and the real one is behind it.
+        every = T.search_text(self.ctx, {"query": "zebrafish", "limit": 20})
+        self.assertEqual(every["count"], 20)
+        self.assertNotIn(real, [h["session_id"] for h in every["hits"]])
 
 
 class TestAskLoop(_AskBase):

@@ -1061,9 +1061,12 @@ Ollama, an OpenAI-compatible server, the claude CLI.
   relationships, with each Session node's relational id. Noise policy
   is the pages': lists, searches and aggregates exclude probe/temp
   sessions; a lookup by session id reads that session. `graph_state`
-  in the opening facts comes from a read-only open plus a schema probe
-  (ready / absent / unbuilt / unopenable / kuzu-missing), not from a
-  path check. Stop on the page stops listening; the running judge call
+  in the opening facts comes from a read-only open plus the catalog
+  (`CALL show_tables()`, the graph substrate's rule — never an error's
+  text): ready / absent / unbuilt / unopenable / kuzu-missing, not a
+  path check. Archived and analysed counts in the facts join the same
+  kept sessions; the archive search takes the noise rule inside its
+  ranked query, before the top-N cut. Stop on the page stops listening; the running judge call
   is not cancelled server-side (read-only, so harmless).
 
 ## Tests
