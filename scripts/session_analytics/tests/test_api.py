@@ -712,6 +712,8 @@ class TestApi(RegistryResetTestCase):
                     raise RuntimeError("model 'broken' not found")
 
             def embed(self, text):
+                if self.model == "dead":
+                    raise RuntimeError("connection refused")
                 return EmbeddingResult(vector=(0.1, 0.2, 0.3), resolved_model=self.model or "fake-default")
 
         register_embedding("fake", _Fake)
@@ -744,6 +746,18 @@ class TestApi(RegistryResetTestCase):
             self.assertEqual(job["state"], "failed")
             self.assertIn("Settings → Embeddings", job["message"])
         self.assertEqual(self.client.post("/api/pipeline/run-all", json={"steps": ["nope"]}).status_code, 400)
+        # a pass in which every embedding failed is a FAILED step that
+        # keeps the reason — not "done: embedded 0 of 1; 1 failed"
+        with mock.patch.dict("os.environ", {cfgmod.ENV_EMBED_BACKEND: "fake", cfgmod.ENV_EMBED_MODEL: "dead"}):
+            self.assertEqual(self.client.post("/api/pipeline/run/embed").status_code, 200)
+            for _ in range(100):
+                job = next(x for x in self.client.get("/api/pipeline/status").json()["steps"] if x["id"] == "embed")["job"]
+                if job["state"] != "running":
+                    break
+                _t.sleep(0.05)
+            self.assertEqual(job["state"], "failed", job)
+            self.assertIn("connection refused", job["message"])
+            self.assertIn("Settings → Embeddings", job["message"])
 
     def test_get_config(self) -> None:
         r = self.client.get("/api/config")

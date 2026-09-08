@@ -599,6 +599,16 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                 msg += f", {st.unembeddable} with no text"
             if st.failed:
                 msg += f", {st.failed} failed" + (f" (last: {st.last_error})" if st.last_error else "")
+            # A pass in which every attempt failed is a FAILED step: the
+            # backend is not working, and "done" would hide the reason
+            # (the Similar tab shows a done step as the prerequisite
+            # again, with nothing about why).
+            if st.failed and st.embedded == 0:
+                raise RuntimeError(
+                    f"no session could be embedded ({st.failed} failed"
+                    + (f"; last: {st.last_error}" if st.last_error else "")
+                    + ") — check the embedding model under Settings → Embeddings"
+                )
             return msg
 
         def _similar() -> str:
