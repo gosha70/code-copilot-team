@@ -33,6 +33,7 @@ ENV_DSN = ENV_DB
 # Developer identity (Slice B1, #187). Spec-mandated name (not CCT_SA_).
 ENV_DEVELOPER_ID = "CCT_DEVELOPER_ID"
 ENV_KUZU_PATH = "CCT_SA_KUZU_PATH"
+ENV_BENCHMARK_RUNS_ROOT = "CCT_SA_BENCHMARK_RUNS_ROOT"
 ENV_REDACTION = "CCT_SA_REDACTION"
 ENV_OLLAMA_URL = "CCT_SA_OLLAMA_URL"
 ENV_JUDGE_BACKEND = "CCT_SA_JUDGE_BACKEND"
@@ -72,7 +73,7 @@ def _coerce_like(template: Any, raw: str) -> Any:
 # Keys the Studio config page exposes (order = display order). Secret-bearing
 # keys are flagged so the API masks them.
 ENV_KEYS = (
-    ENV_DB, ENV_KUZU_PATH, ENV_REDACTION,
+    ENV_DB, ENV_KUZU_PATH, ENV_BENCHMARK_RUNS_ROOT, ENV_REDACTION,
     ENV_JUDGE_BACKEND, ENV_JUDGE_MODEL, ENV_JUDGE_BASE_URL, ENV_JUDGE_API_KEY,
     ENV_JUDGE_WORKERS, ENV_OLLAMA_URL, ENV_EMBED_BACKEND, ENV_EMBED_MODEL,
     ENV_DEVELOPER_ID,
@@ -241,6 +242,10 @@ class AnalyticsConfig:
     sources: Mapping[str, str]
     dsn: str
     kuzu_path: str
+    #: The benchmark harness's runs directory; blank = the "Link
+    #: benchmark runs" step is skipped. Expanded, never validated here
+    #: (the step reports a missing directory as its failure reason).
+    benchmark_runs_root: str
     redaction_mode: str
     judge: JudgeConfig
     embedding: "EmbeddingConfig"
@@ -658,6 +663,8 @@ def load_config(
     # letting the graph step crash.
     if resolved_kuzu.is_dir():
         resolved_kuzu = resolved_kuzu / C.KUZU_STORE_NAME
+    raw_runs_root = env(ENV_BENCHMARK_RUNS_ROOT) or data.get(C.CFG_BENCHMARK_RUNS_ROOT) or ""
+    runs_root = str(Path(raw_runs_root).expanduser()) if raw_runs_root else ""
     resolved_redaction = (
         redaction_mode or env(ENV_REDACTION) or data.get(C.CFG_REDACTION) or C.REDACT_CODE
     )
@@ -798,6 +805,7 @@ def load_config(
         routing_calibration=calibration,
         dsn=str(resolved_dsn),
         kuzu_path=str(resolved_kuzu),
+        benchmark_runs_root=runs_root,
         redaction_mode=resolved_redaction,
         judge=judge,
         embedding=embedding,

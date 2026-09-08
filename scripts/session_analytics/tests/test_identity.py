@@ -196,6 +196,7 @@ class TestCliDerivation(unittest.TestCase):
             sources={},
             dsn="sqlite:///unused",
             kuzu_path="unused",
+            benchmark_runs_root="",
             redaction_mode="code",
             judge=judge,
             embedding=EmbeddingConfig(

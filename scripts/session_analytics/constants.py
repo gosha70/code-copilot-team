@@ -90,6 +90,8 @@ CFG_ROUTING_CALIBRATION = "routing_calibration"
 CFG_SOURCE_ROOT = "root"
 CFG_DSN = "dsn"
 CFG_KUZU_PATH = "kuzu_path"
+#: Where the benchmark harness wrote its runs (Settings → Benchmarks).
+CFG_BENCHMARK_RUNS_ROOT = "benchmark_runs_root"
 #: The Kùzu store FILE name: the packaged default under ~/.cct, and the
 #: file created inside a directory when kuzu_path points at one.
 KUZU_STORE_NAME = "session-analytics-graph"

@@ -65,6 +65,7 @@
     "workers": 2
   },
   "kuzu_path": "",
+  "benchmark_runs_root": "",
   "pricing": {
     "models": {
       "claude-haiku-4-8": {

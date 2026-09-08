@@ -586,12 +586,28 @@ export interface BenchmarkResultRow {
   avg_duration_seconds: number;
 }
 
+export interface BenchmarkRunsRoot {
+  path: string;
+  configured: boolean;
+  is_dir: boolean;
+}
+
 export interface BenchmarkSummary {
   sessions_total: number;
   sessions_linked: number;
   sessions_unlinked: number;
   distinct_benchmark_attempts: number;
   by_result: BenchmarkResultRow[];
+  /** Where "Link benchmark runs" reads from (Settings → Benchmarks). */
+  runs_root: BenchmarkRunsRoot;
+  /** The link step's job, so the page can show a run in flight. */
+  link_job: {
+    state: "idle" | "running" | "done" | "failed";
+    message?: string;
+    skipped?: boolean;
+    seconds?: number;
+    progress?: Record<string, number>;
+  };
 }
 
 // routing-shadow (#261): shadow-mode routing evidence. The Studio renders
@@ -1005,6 +1021,8 @@ export interface PipelineStep {
   job: {
     state: "idle" | "running" | "done" | "failed";
     message?: string;
+    /** Done with nothing to do BY CONFIGURATION (no benchmark runs root). */
+    skipped?: boolean;
     seconds?: number;
     /** The judge step reports after every turn (JudgeProgress); the
      *  embed step after every session (EmbedProgress). */

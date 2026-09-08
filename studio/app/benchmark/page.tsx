@@ -1,41 +1,131 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, RoutingEvidenceEntry } from "@/lib/api";
 import { FailedCard, StaleNote } from "@/components/DashboardCards";
+import { benchmarkIntro, linkJobLine } from "@/lib/benchmarkIntro";
 import {
   Badge,
   Card,
   ErrorNote,
   Loading,
   Stat,
+  describeError,
   formatCost,
   formatDuration,
   useApi,
 } from "@/components/ui";
 
 export default function BenchmarkPage() {
-  // D-refresh: one-shot fetch — benchmark data only changes when `correlate`
-  // runs, unlike live session ingest (no auto-refresh in this slice).
-  const { data, error, loading } = useApi(() => api.benchmark());
+  // The link step runs in the background; while it does, the page polls
+  // so the result appears without a reload (a version key bumps the
+  // fetch after "Link benchmark runs" is pressed).
+  const [version, setVersion] = useState(0);
+  const [linking, setLinking] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const { data, error, loading } = useApi(
+    () => api.benchmark(),
+    [version],
+    linking ? 1500 : undefined,
+  );
   // #307: the outcome base rate and the routing evidence are both
   // benchmark-derived, so they live here; each is its own fetch so a
   // missing one cannot blank the page.
-  const outcome = useApi(() => api.predictOutcome());
+  const outcome = useApi(() => api.predictOutcome(), [version]);
   const routing = useApi(() => api.routingEvidence());
-  if (loading) return <Loading />;
+
+  useEffect(() => {
+    if (linking && data && data.link_job.state !== "running") {
+      setLinking(false);
+      setVersion((v) => v + 1);
+    }
+  }, [linking, data]);
+
+  async function link() {
+    setLinkError(null);
+    try {
+      await api.runStep("correlate");
+      setLinking(true);
+      setVersion((v) => v + 1);
+    } catch (e) {
+      setLinkError(describeError(e));
+    }
+  }
+
+  if (loading && !data) return <Loading />;
   if (error || !data) return <ErrorNote error={error || "no data"} />;
+  const intro = benchmarkIntro(data);
+  const running = linking || data.link_job.state === "running";
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Benchmark</h1>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Stat label="Sessions (total)" value={data.sessions_total} />
-        <Stat label="Benchmark-linked sessions" value={data.sessions_linked} />
-        <Stat label="Organic (unlinked) sessions" value={data.sessions_unlinked} />
-        <Stat label="Distinct benchmark attempts" value={data.distinct_benchmark_attempts} />
+      <div>
+        <h1 className="text-2xl font-bold">Benchmark</h1>
+        <p className="text-sm text-slate-500 mt-1">
+          Results of this repository&rsquo;s benchmark harness. A run attempts
+          tasks from a public benchmark (Aider Polyglot, SWE-bench) with a
+          copilot and scores each attempt pass or fail. Linking those attempts
+          to the sessions they produced tells you what an outcome cost and how
+          long it took. Nothing is here until you run the harness and link its
+          runs.{" "}
+          <Link href="/learn/benchmarks--README" className="text-blue-700 hover:underline">
+            How to run the harness →
+          </Link>
+        </p>
       </div>
+
+      <Card>
+        <p className="text-sm text-slate-700">{intro.headline}</p>
+        {intro.rootLine && (
+          <p className="text-xs text-slate-500 mt-2">
+            Runs folder: <span className="font-mono">{intro.rootLine}</span>{" "}
+            <Link href="/settings" className="text-blue-700 hover:underline">
+              change
+            </Link>
+          </p>
+        )}
+        <div className="flex items-center gap-3 mt-3 flex-wrap">
+          {intro.canLink ? (
+            <button
+              type="button"
+              onClick={link}
+              disabled={running}
+              className="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50"
+            >
+              {running
+                ? "Linking…"
+                : intro.state === "linked" || intro.state === "outcomes-only"
+                  ? "Link benchmark runs again"
+                  : "Link benchmark runs"}
+            </button>
+          ) : (
+            <Link
+              href="/settings"
+              className="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700"
+            >
+              Set the runs folder in Settings
+            </Link>
+          )}
+          {linkJobLine(data.link_job) && (
+            <span
+              className={`text-xs ${
+                data.link_job.state === "failed" ? "text-rose-700" : "text-slate-500"
+              }`}
+            >
+              {linkJobLine(data.link_job)}
+            </span>
+          )}
+          {linkError && <span className="text-xs text-rose-700">{linkError}</span>}
+        </div>
+        {intro.state !== "linked" && intro.state !== "outcomes-only" && (
+          <p className="text-xs text-slate-500 mt-3">
+            Once linked, this page shows attempts by result (pass / fail /
+            error / timeout) with linked sessions, cost and duration, and the
+            predicted pass rate per project.
+          </p>
+        )}
+      </Card>
 
       {outcome.data ? (
         <OutcomeRow data={outcome.data} stale={outcome.error} />
@@ -43,21 +133,7 @@ export default function BenchmarkPage() {
         <FailedCard title="Predicted pass rate by project" error={outcome.error} />
       ) : null}
 
-      {data.by_result.length === 0 ? (
-        <Card title="No benchmark outcomes yet">
-          <p className="text-sm text-slate-600">
-            No benchmark results have been ingested into this store. After a
-            benchmark run, link its artifacts and ingest the outcomes with:
-          </p>
-          <pre className="mt-3 bg-slate-50 border border-slate-200 rounded p-3 text-xs overflow-x-auto">
-            ./scripts/session-analytics correlate --runs-root &lt;benchmark runs dir&gt;
-          </pre>
-          <p className="text-sm text-slate-500 mt-3">
-            Outcomes appear here per result (pass / fail / error / timeout),
-            compared by attempts, linked sessions, cost, and duration.
-          </p>
-        </Card>
-      ) : (
+      {data.by_result.length > 0 && (
         <Card title="Sessions by benchmark result">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

@@ -650,8 +650,7 @@ def _export_one(exp, db, table: str, fmt: str, dest: Path) -> None:
 
 def _cmd_correlate(args: argparse.Namespace) -> int:
     from . import correlate as cor
-    from .relational.db import Database, apply_ddl, now_iso
-    from .relational.store import link_benchmark_run, upsert_benchmark_result
+    from .relational.db import Database, apply_ddl
     from .setup_cmd import ensure_initialized
 
     # Validate the runs-root BEFORE any DB work (FR-1): it must be an existing
@@ -676,47 +675,15 @@ def _cmd_correlate(args: argparse.Namespace) -> int:
         return C.EXIT_USAGE
 
     # Pre-created and passed in so a mid-run exception still has the partial
-    # counters to report (FR-4) — correlate_links mutates it in place.
+    # counters to report (FR-4) — correlate.run mutates it in place.
     stats = cor.CorrelationStats()
-    ingested_at = now_iso()
     try:
         db = Database.connect(cfg.dsn)
         try:
             apply_ddl(db)
-
-            def link_fn(session_id: str, run_dir: str) -> bool:
-                return link_benchmark_run(db, C.COPILOT_CLAUDE_CODE, session_id, run_dir)
-
-            def store_result_fn(record: cor.RunRecord, in_scope: bool) -> None:
-                # Outcomes are stored for EVERY backend (analytical record);
-                # session_ref only resolves for in-scope records. `in_scope`
-                # comes FROM the core (single source of the scoping policy —
-                # this closure never re-derives it).
-                upsert_benchmark_result(
-                    db,
-                    record.run_dir,
-                    record.score,
-                    copilot=C.COPILOT_CLAUDE_CODE if in_scope else None,
-                    session_id=record.session_id if in_scope else None,
-                    ingested_at=ingested_at,
-                )
-
-            # This slice scopes linking to the claude-code backend: records
-            # from other backends are counted out_of_scope, never miscounted
-            # as unmatched claude-code sessions. The benchmark backend id is
-            # the same string as the copilot id.
-            cor.correlate_links(
-                # stats also flows into the walker so unreadable run-records
-                # are a visible skipped_run_records counter, not just a log.
-                cor.iter_run_records(args.runs_root, stats=stats),
-                link_fn,
-                backend_id=C.COPILOT_CLAUDE_CODE,
-                store_result_fn=store_result_fn,
-                stats=stats,
-            )
-            # FR-4: caller-owned transaction — ONE commit per scan, not one
-            # per record (store helpers no longer commit).
-            db.commit()
+            # FR-4: ONE commit per scan, inside correlate.run — the same
+            # function the Analysis page's "Link benchmark runs" step calls.
+            cor.run(db, args.runs_root, stats=stats)
         finally:
             db.close()
     except Exception as exc:  # noqa: BLE001

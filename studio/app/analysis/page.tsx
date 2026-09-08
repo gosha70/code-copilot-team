@@ -242,7 +242,9 @@ export default function AnalysisPage() {
   // When a load finishes, the listing's loaded/new column is stale and
   // the pick has been served: clear it so the button falls back to
   // "Load N new" rather than offering the same sessions again.
-  const ingestState = status?.steps[0]?.job.state;
+  // Steps are found BY ID: an index breaks the moment a step is added
+  // (and the judge index was already wrong — it pointed at embed).
+  const ingestState = status?.steps.find((s) => s.id === "ingest")?.job.state;
   useEffect(() => {
     if (ingestState === "done") {
       setPicked(new Set());
@@ -286,7 +288,7 @@ export default function AnalysisPage() {
   // The judge is a background job like the other steps (it used to run
   // inside one request with nothing to show until it returned). When it
   // finishes, the runs list for the quality card is stale.
-  const judgeState = status?.steps[2]?.job.state;
+  const judgeState = status?.steps.find((s) => s.id === "judge")?.job.state;
   useEffect(() => {
     if (judgeState === "done") loadRuns();
   }, [judgeState, loadRuns]);
@@ -368,6 +370,14 @@ export default function AnalysisPage() {
           {step.job.state === "failed" && (
             <span className="text-xs px-2 py-0.5 rounded bg-rose-100 text-rose-800">
               failed
+            </span>
+          )}
+          {step.job.state === "done" && step.job.skipped && (
+            <span
+              className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800"
+              title={step.job.message}
+            >
+              skipped
             </span>
           )}
         </div>
