@@ -89,10 +89,15 @@ contract; the old bundle stays as the history of the first pass.
   response received after that press — a stale `idle` response held by
   `useApi` must not end polling. A page opened while a scan is running
   polls from its first response. When a scan ends, the page refetches
-  the outcome row.
+  the outcome row exactly once — whether it saw the scan running
+  (running → terminal) or the first response after the press is
+  already terminal (a fast scan).
 - FR-9 **Analysis** finds steps by id, never by index; a skipped step
   shows a badge with the reason; the correlate step shows its live
-  counters while running.
+  counters BY TRANSACTION STATE: "processed … commit pending" while
+  running, "rolled back: nothing from this scan was stored" after a
+  failure (the counters are processed-only, per the CLI's contract),
+  and "linked / stored" only when done.
 - FR-10 **Verification.** Unit tests for FR-2/3/4 and the payload; the
   states script asserts every FR-7 state (including the counterexample
   "outcomes + unmatched > 0 never claims the records lacked session

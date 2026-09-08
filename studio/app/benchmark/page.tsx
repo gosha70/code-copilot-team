@@ -7,6 +7,7 @@ import { FailedCard, StaleNote } from "@/components/DashboardCards";
 import {
   benchmarkIntro,
   linkJobLine,
+  scanCompleted,
   settleWatch,
   shouldPoll,
 } from "@/lib/benchmarkIntro";
@@ -28,9 +29,13 @@ export default function BenchmarkPage() {
   // pressed, while useApi still holds the response from before it (see
   // lib/benchmarkIntro: shouldPoll / settleWatch).
   const [version, setVersion] = useState(0);
-  const [pending, setPending] = useState<BenchmarkSummary | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
+  // The response held when the button was pressed (its "idle" is stale)
+  // and the last job state seen — refs, because both are read and
+  // written inside one effect per response.
+  const pendingRef = useRef<BenchmarkSummary | null>(null);
+  const lastStateRef = useRef<string | null>(null);
   const { data, error, loading } = useApi(
     () => api.benchmark(),
     [version],
@@ -41,21 +46,16 @@ export default function BenchmarkPage() {
   // missing one cannot blank the page.
   const outcome = useApi(() => api.predictOutcome(), [version]);
   const routing = useApi(() => api.routingEvidence());
-  const lastState = useRef<string | null>(null);
 
   useEffect(() => {
-    setPending((p) => settleWatch(p, data));
-  }, [data]);
-  useEffect(() => {
-    setPolling(shouldPoll(pending, data));
-  }, [pending, data]);
-  // When a scan ends, the outcome row (and the page) are refetched once.
-  useEffect(() => {
-    const now = data?.link_job.state ?? null;
-    if (lastState.current === "running" && now !== null && now !== "running") {
-      setVersion((v) => v + 1);
-    }
-    lastState.current = now;
+    // One decision per response: did a scan just finish (fast or slow),
+    // is the press settled, should polling go on. A finished scan
+    // refetches the page and the outcome row exactly once.
+    const completed = scanCompleted(pendingRef.current, lastStateRef.current, data);
+    pendingRef.current = settleWatch(pendingRef.current, data);
+    lastStateRef.current = data?.link_job.state ?? null;
+    setPolling(shouldPoll(pendingRef.current, data));
+    if (completed) setVersion((v) => v + 1);
   }, [data]);
 
   async function link() {
@@ -63,7 +63,8 @@ export default function BenchmarkPage() {
     try {
       await api.runStep("correlate");
       // Hold the response we had BEFORE the press: its "idle" is stale.
-      setPending(data);
+      pendingRef.current = data;
+      setPolling(true);
       setVersion((v) => v + 1);
     } catch (e) {
       setLinkError(describeError(e));

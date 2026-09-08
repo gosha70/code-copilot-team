@@ -10,8 +10,8 @@ export type BenchmarkState =
   | "unset"
   | "not-a-dir"
   | "unlinked"
-  /** Outcomes stored, but no run record named a session (older harness
-   *  runs do not carry one), so nothing is linked. */
+  /** Outcomes stored, but no session is currently linked. WHY is not
+   *  known from the counts; see unlinkedCause. */
   | "outcomes-only"
   | "linked";
 
@@ -126,6 +126,22 @@ export function shouldPoll(
   return pending !== null || data?.link_job.state === "running";
 }
 
+/** The scan finished since the last response: either the first fresh
+ *  response after the press is already terminal (a fast scan the page
+ *  never saw running), or the state went running → terminal. Exactly
+ *  one of the two fires for a scan, so the caller refetches once. */
+export function scanCompleted(
+  pending: BenchmarkSummary | null,
+  previousState: string | null,
+  data: BenchmarkSummary | null,
+): boolean {
+  if (data === null) return false;
+  const now = data.link_job.state;
+  if (now === "running") return false;
+  if (pending !== null && data !== pending) return true;
+  return previousState === "running";
+}
+
 export function settleWatch(
   pending: BenchmarkSummary | null,
   data: BenchmarkSummary | null,
@@ -141,4 +157,51 @@ export function linkJobLine(job: BenchmarkSummary["link_job"]): string {
     return `failed: ${job.message ?? "unknown error"}`;
   if (job.state === "done") return job.message ?? "done";
   return "";
+}
+
+// ── the link step's counters, by transaction state ────────────────────
+//
+// correlate.run commits ONCE at the end. While it runs, the counters
+// count work PROCESSED, none of it persisted yet; after a failure the
+// transaction rolled back and none of it ever was. Only a finished scan
+// may be described as linked / stored.
+
+export interface CorrelateCounters {
+  scanned?: number;
+  linked?: number;
+  unmatched?: number;
+  null_session_id?: number;
+  scores_ingested?: number;
+  skipped_run_records?: number;
+}
+
+export function correlateProgressLine(
+  progress: CorrelateCounters,
+  state: "idle" | "running" | "done" | "failed",
+  seconds?: number,
+): string {
+  const n = (v: number | undefined) => (v ?? 0).toLocaleString();
+  const detail = [
+    progress.unmatched ? `${n(progress.unmatched)} named a session not loaded` : "",
+    progress.null_session_id ? `${n(progress.null_session_id)} without a session id` : "",
+    progress.skipped_run_records ? `${n(progress.skipped_run_records)} unreadable` : "",
+  ].filter(Boolean);
+  if (state === "done") {
+    return [
+      `${n(progress.scanned)} run records scanned`,
+      `${n(progress.linked)} sessions linked`,
+      `${n(progress.scores_ingested)} outcomes stored`,
+      ...detail,
+    ].join(" · ");
+  }
+  const processed = [
+    `${n(progress.scanned)} records processed`,
+    `${n(progress.linked)} session-link matches`,
+    `${n(progress.scores_ingested)} outcomes processed`,
+    ...detail,
+  ];
+  if (state === "failed") {
+    return `${processed.join(" · ")} — rolled back: nothing from this scan was stored`;
+  }
+  return `${processed.join(" · ")} · commit pending${seconds ? ` · ${Math.round(seconds)}s` : ""}`;
 }

@@ -885,6 +885,24 @@ try {
   else if (bi.shouldPoll(null, bmDoneResp)) fail("done stops polling");
   else if (!bi.shouldPoll(null, bmRunningResp)) fail("a page opened during a scan polls from its first response");
   else console.log("  ok  polling follows the server's job state; the stale pre-press response cannot end it");
+  // A scan's end refetches once — whether the page saw it running or not.
+  if (bi.scanCompleted(bmIdle, "idle", bmIdle)) fail("the stale pre-press response is not a completion");
+  else if (!bi.scanCompleted(bmIdle, "idle", bmDoneResp)) fail("a fast scan: idle before the press, first fresh response already done → completion");
+  else if (bi.scanCompleted(bmIdle, "idle", bmRunningResp)) fail("a first fresh response that is running is not a completion");
+  else if (!bi.scanCompleted(null, "running", bmDoneResp)) fail("running → done is a completion");
+  else if (bi.scanCompleted(null, "done", bmDoneResp)) fail("done → done again is not a second completion");
+  else if (bi.scanCompleted(null, "running", bmRunningResp)) fail("still running is not a completion");
+  else console.log("  ok  a scan's end is seen exactly once: fast (first fresh response terminal) or slow (running → terminal)");
+  // Counters by transaction state: one commit at the end, so nothing is
+  // linked or stored until done, and after a failure nothing ever was.
+  const counters = { scanned: 25, linked: 8, scores_ingested: 25, unmatched: 2, null_session_id: 0 };
+  const lineRunning = bi.correlateProgressLine(counters, "running", 7);
+  const lineFailed = bi.correlateProgressLine(counters, "failed");
+  const lineDone = bi.correlateProgressLine(counters, "done");
+  if (/linked|stored/.test(lineRunning) || !/25 records processed · 8 session-link matches · 25 outcomes processed/.test(lineRunning) || !/commit pending · 7s/.test(lineRunning)) fail(`running counters: ${lineRunning}`);
+  else if (/sessions linked|outcomes stored/.test(lineFailed) || !/rolled back: nothing from this scan was stored/.test(lineFailed) || !/25 records processed/.test(lineFailed)) fail(`failed counters must say rolled back: ${lineFailed}`);
+  else if (!/8 sessions linked · 25 outcomes stored · 2 named a session not loaded/.test(lineDone) || /pending|rolled back/.test(lineDone)) fail(`done counters: ${lineDone}`);
+  else console.log("  ok  counters read as processed + commit pending while running, rolled back after a failure, linked/stored only when done");
   if (bi.linkJobLine({ state: "running", seconds: 4 }) !== "linking… 4 s" || !/^failed: boom/.test(bi.linkJobLine({ state: "failed", message: "boom" })) || bi.linkJobLine({ state: "idle" }) !== "" || bi.linkJobLine({ state: "done", message: "skipped: no root" }) !== "skipped: no root") fail("link job line");
   else console.log("  ok  the link job reads as one line in every state");
 

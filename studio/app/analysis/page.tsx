@@ -12,6 +12,7 @@ import {
   PipelineStep,
 } from "@/lib/api";
 import { Card, Stat, formatCost, useApi } from "@/components/ui";
+import { correlateProgressLine } from "@/lib/benchmarkIntro";
 import JudgeQuality from "@/components/JudgeQuality";
 import LoadSelectionPanel, { loadPlan } from "@/components/LoadSelection";
 import JudgeProgressBar, { EmbedProgressBar, judgeChoiceLabel } from "@/components/JudgeProgress";
@@ -462,17 +463,12 @@ export default function AnalysisPage() {
           />
         )}
         {step.id === "correlate" && step.job.progress && "scanned" in step.job.progress && (
-          <p className="text-xs text-slate-600 mt-2 tabular-nums">
-            {(step.job.progress.scanned ?? 0).toLocaleString()} run records scanned ·{" "}
-            {(step.job.progress.linked ?? 0).toLocaleString()} sessions linked ·{" "}
-            {(step.job.progress.scores_ingested ?? 0).toLocaleString()} outcomes stored
-            {step.job.progress.unmatched
-              ? ` · ${step.job.progress.unmatched.toLocaleString()} named a session not loaded`
-              : ""}
-            {step.job.progress.null_session_id
-              ? ` · ${step.job.progress.null_session_id.toLocaleString()} without a session id`
-              : ""}
-            {running && step.job.seconds ? ` · ${Math.round(step.job.seconds)}s` : ""}
+          <p
+            className={`text-xs mt-2 tabular-nums ${
+              step.job.state === "failed" ? "text-rose-700" : "text-slate-600"
+            }`}
+          >
+            {correlateProgressLine(step.job.progress, step.job.state, running ? step.job.seconds : undefined)}
           </p>
         )}
         {step.id === "embed" && step.job.progress && "embedded" in step.job.progress && (
