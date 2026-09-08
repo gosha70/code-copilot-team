@@ -74,9 +74,9 @@ Both floors are real. transformers 4.x cannot load the Qwen3.8 config at all, an
 **The right fix is a container.** vLLM's DGX Spark guidance is explicit that "Spark does not require a bespoke serving interface: it runs through vLLM's standard OpenAI-compatible server", via the published image. No second source build, no torch pin to guess, and the 0.18 venv is never touched:
 
 ```
-8000  ->  Qwen3-Coder-Next   host venv, vLLM 0.18.1rc1   (UNTOUCHED)
-8001  ->  Qwen3.8-27B        container, vLLM >= 0.26
-8787  ->  LiteLLM            Anthropic bridge for Claude Code
+8000  ->  Qwen3-Coder-Next   host venv, vLLM 0.18.1rc1   (UNTOUCHED)
+8001  ->  Qwen3.8-27B        container, vLLM >= 0.26
+8787  ->  LiteLLM            Anthropic bridge for Claude Code
 ```
 
 Use `start-qwen38-27b-docker.sh`. It applies the same version floors *inside the image* before serving, because a nightly tag is a moving target, and prints the resolved digest so you can pin it once the gate passes. `start-qwen38-27b.sh` remains for a second, separate venv if you ever want one — never for an in-place upgrade.
@@ -101,21 +101,21 @@ export VLLM_USE_FLASHINFER_MOE_FP4=0
 export MAX_JOBS=2 NINJA_JOBS=2
 
 python -m vllm.entrypoints.openai.api_server \
-  --model unsloth/Qwen3.8-27B-NVFP4 \
-  --served-model-name qwen38-27b unsloth/Qwen3.8-27B-NVFP4 \
-  --tensor-parallel-size 1 \
-  --trust-remote-code \
-  --max-model-len 262144 \
-  --max-num-seqs 4 \
-  --max-num-batched-tokens 8192 \
-  --gpu-memory-utilization 0.45 \
-  --kv-cache-dtype fp8 \
-  --enable-chunked-prefill \
-  --enable-prefix-caching \
-  --enable-auto-tool-choice \
-  --tool-call-parser qwen3_coder \
-  --reasoning-parser qwen3 \
-  --host 0.0.0.0 --port 8001
+  --model unsloth/Qwen3.8-27B-NVFP4 \
+  --served-model-name qwen38-27b unsloth/Qwen3.8-27B-NVFP4 \
+  --tensor-parallel-size 1 \
+  --trust-remote-code \
+  --max-model-len 262144 \
+  --max-num-seqs 4 \
+  --max-num-batched-tokens 8192 \
+  --gpu-memory-utilization 0.45 \
+  --kv-cache-dtype fp8 \
+  --enable-chunked-prefill \
+  --enable-prefix-caching \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder \
+  --reasoning-parser qwen3 \
+  --host 0.0.0.0 --port 8001
 ```
 
 **MTP is added second, not first**, once §6 passes:
@@ -315,9 +315,9 @@ From the Python API:
 from rlmstudio import interact
 
 r = interact(
-    content, query, mode="rlm",
-    provider="vllm", model="qwen38-27b",
-    api_base="http://<dgx-spark-ip>:8001/v1",
+    content, query, mode="rlm",
+    provider="vllm", model="qwen38-27b",
+    api_base="http://<dgx-spark-ip>:8001/v1",
 )
 ```
 
@@ -363,9 +363,9 @@ In order. Each step removes a variable the next one would otherwise be confounde
 **Do not touch the running Qwen3-Coder-Next server first**, and specifically do not upgrade its venv (§2.1). Bring Qwen3.8 up beside it in a container:
 
 ```
-8000  ->  Qwen3-Coder-Next-NVFP4   (existing, verified, untouched)
-8001  ->  Qwen3.8-27B-NVFP4        (new)
-8787  ->  LiteLLM                  (Anthropic bridge for Claude Code)
+8000  ->  Qwen3-Coder-Next-NVFP4   (existing, verified, untouched)
+8001  ->  Qwen3.8-27B-NVFP4        (new)
+8787  ->  LiteLLM                  (Anthropic bridge for Claude Code)
 ```
 
 **Two servers, one memory pool.** `--gpu-memory-utilization` is a per-instance fraction of *total* memory — vLLM's own docs give two instances at 0.5 each as the canonical example. Summing the fractions therefore tests **budget arithmetic, not fit.** What the arithmetic rules out: Coder-Next at its verified `0.72` plus this at `0.45` is 142.3 GiB on a 121.6 GiB box. That is not a boot failure to debug; it is an impossibility. What the arithmetic does *not* establish: that `0.45 + 0.45` works. It shows the aggregate executor budget is **arithmetically viable (0.90)**; actual co-tenancy must still pass the boot and memory gate on the Spark. On unified memory the same pool carries the OS, page cache, container runtime and every other process, and allocations do not all behave like reserved slices — the published GB10 run at `0.45` reported 28.11 GiB fixed + 27.56 GiB KV = **55.67 GiB against a 54.73 GiB budget**, about 0.94 GiB outside the model, on a single instance. So `start-qwen38-27b.sh` §B is an **aggregate-utilization guard**, not a memory-fit check: it warns above 0.90 and refuses above 0.92, and says so in those words. The fit evidence comes from `record-spark-memory.sh`, run once both servers have loaded and served a request — `MemAvailable`, per-process RSS, and each server's KV-cache line. Until that table is filled in, this document does not say the two-model configuration fits. The estimate that Coder-Next at `0.45` retains ~8.7 GiB of KV ≈ **380K tokens** at 24 KB/token is **derived, not measured**. And KV capacity is not context length: a server with room for 380K KV tokens is still bounded by the `--max-model-len` it was started with and by the window that has actually been verified — 131,072 for Coder-Next. **Check the installed versions rather than assuming them.** The known-good Spark reference is vLLM `0.26.1rc1.dev244`; an independent GB10 NVFP4 benchmark used `0.27.1`. A generic "vLLM 0.6+" statement in an older local document is not evidence about your box: ```bash for v in <coder-next-venv> <qwen38-venv>; do ( source "$v/bin/activate" python - <<'PY' import vllm, transformers print(f" vllm={vllm.__version__} transformers={transformers.__version__}") PY ) done` `` This is also the argument for not mutating the working Coder-Next venv to get Qwen3.8 running.
@@ -373,8 +373,8 @@ In order. Each step removes a variable the next one would otherwise be confounde
 - **Boot at 262,144, YaRN off, MTP off, port 8001, in a container.**
 
 ```
-   VLLM_DRY_RUN=1 bash scripts/dgx-spark/vllm/start-qwen38-27b-docker.sh   # read it first
-   bash scripts/dgx-spark/vllm/start-qwen38-27b-docker.sh
+   VLLM_DRY_RUN=1 bash scripts/dgx-spark/vllm/start-qwen38-27b-docker.sh   # read it first
+   bash scripts/dgx-spark/vllm/start-qwen38-27b-docker.sh
 ```
 
 The image preflight enforces the same floors that stopped the venv run. Record the digest it prints.
@@ -383,7 +383,7 @@ The image preflight enforces the same floors that stopped the venv run. Record t
 - **Run the §6 gate** (7 checks across three transports).
 
 ```
-   bash scripts/dgx-spark/vllm/verify-qwen38-spark.sh <ip> 8001 qwen38-27b
+   bash scripts/dgx-spark/vllm/verify-qwen38-spark.sh <ip> 8001 qwen38-27b
 ```
 
 Gate 6 decides whether Claude Code gets the native Anthropic transport or the LiteLLM bridge. Gate 5 decides whether Codex is usable at all.
@@ -394,7 +394,7 @@ Gate 6 decides whether Claude Code gets the native Anthropic transport or the Li
 - **Run the anchor benchmark** three times in `code-copilot-team`:
 
 ```
-   ./scripts/bench --task python/bowling --runs 3 sonnet vllm:qwen38-27b@http://<ip>:8001
+   ./scripts/bench --task python/bowling --runs 3 sonnet vllm:qwen38-27b@http://<ip>:8001
 ```
 
 Against Sonnet 3/3 @ 141 ± 39 s and Qwen3-Coder-Next 3/3 @ 473 ± 449 s.

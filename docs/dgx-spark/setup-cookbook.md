@@ -31,11 +31,11 @@ Ollama 0.14+ ships an Anthropic-shaped shim and needs no proxy. vLLM serves its 
 ### Current layout on this box
 
 ```
-8000  ->  vLLM   Qwen3-Coder-Next-NVFP4   host venv, vLLM 0.18.1rc1   VERIFIED, DO NOT DISTURB
-8001  ->  vLLM   Qwen3.8-27B-NVFP4        container, vLLM >= 0.26
-8080  ->  Open WebUI
-8787  ->  LiteLLM bridge
-11434 ->  Ollama
+8000  ->  vLLM   Qwen3-Coder-Next-NVFP4   host venv, vLLM 0.18.1rc1   VERIFIED, DO NOT DISTURB
+8001  ->  vLLM   Qwen3.8-27B-NVFP4        container, vLLM >= 0.26
+8080  ->  Open WebUI
+8787  ->  LiteLLM bridge
+11434 ->  Ollama
 ```
 
 ## DGX Spark sanity checks
@@ -49,7 +49,7 @@ free -h
 df -h
 lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL
 ip addr
-hostname -I          # see the warning below — pick the LAN address, not a docker bridge
+hostname -I          # see the warning below — pick the LAN address, not a docker bridge
 ```
 
 ### Pin down <dgx-spark-ip> before anything hardcodes it
@@ -58,7 +58,7 @@ hostname -I          # see the warning below — pick the LAN address, 
 
 ```
 192.168.1.23 172.18.0.1 172.17.0.1
-    ^ LAN        ^ docker bridges — never use these
+    ^ LAN        ^ docker bridges — never use these
 ```
 
 Two hazards specific to this machine:
@@ -72,17 +72,17 @@ Revision 1 skipped this, and the cost was real: the vLLM venv turned out to be e
 
 ```
 for v in ~/dgx-spark-vllm/vllm_env ~/dgx-spark-vllm/qwen38_env; do
-  [ -f "$v/bin/activate" ] || continue
-  ( echo "== $v"; source "$v/bin/activate"
-    python - <<'PY'
+  [ -f "$v/bin/activate" ] || continue
+  ( echo "== $v"; source "$v/bin/activate"
+    python - <<'PY'
 import importlib
 for m in ("torch", "vllm", "transformers"):
-    try: print(f"  {m:14s} {importlib.import_module(m).__version__}")
-    except Exception as e: print(f"  {m:14s} MISSING ({e.__class__.__name__})")
+    try: print(f"  {m:14s} {importlib.import_module(m).__version__}")
+    except Exception as e: print(f"  {m:14s} MISSING ({e.__class__.__name__})")
 PY
-  )
+  )
 done
-docker ps --format '  {{.Names}}\t{{.Image}}\t{{.Ports}}'
+docker ps --format '  {{.Names}}\t{{.Image}}\t{{.Ports}}'
 ```
 
 ## Standalone Ollama on DGX Spark
@@ -125,9 +125,9 @@ sudo ss -lntp | grep 11434
 ### Pull models
 
 ```
-ollama pull qwen3.6:35b-a3b     # current-generation MoE
-ollama pull qwen3.5:27b         # current-generation dense
-ollama pull llama3.2            # tiny — smoke tests only
+ollama pull qwen3.6:35b-a3b     # current-generation MoE
+ollama pull qwen3.5:27b         # current-generation dense
+ollama pull llama3.2            # tiny — smoke tests only
 ollama list
 ollama ps
 ```
@@ -152,21 +152,21 @@ curl http://<dgx-spark-ip>:11434/api/tags
 docker rm -f open-webui 2>/dev/null || true
 
 docker run -d --name open-webui --restart unless-stopped \
-  -p 8080:8080 \
-  -e OLLAMA_BASE_URL=http://<dgx-spark-ip>:11434 \
-  -v open-webui:/app/backend/data \
-  ghcr.io/open-webui/open-webui:main
+  -p 8080:8080 \
+  -e OLLAMA_BASE_URL=http://<dgx-spark-ip>:11434 \
+  -v open-webui:/app/backend/data \
+  ghcr.io/open-webui/open-webui:main
 ```
 
 ### Against a vLLM server instead
 
 ```
 docker run -d --name open-webui --restart unless-stopped \
-  -p 8080:8080 \
-  -e OPENAI_API_BASE_URL=http://<dgx-spark-ip>:8001/v1 \
-  -e OPENAI_API_KEY=dummy \
-  -v open-webui:/app/backend/data \
-  ghcr.io/open-webui/open-webui:main
+  -p 8080:8080 \
+  -e OPENAI_API_BASE_URL=http://<dgx-spark-ip>:8001/v1 \
+  -e OPENAI_API_KEY=dummy \
+  -v open-webui:/app/backend/data \
+  ghcr.io/open-webui/open-webui:main
 ```
 
 ### Integrated mode: Open WebUI + embedded Ollama
@@ -175,10 +175,10 @@ docker run -d --name open-webui --restart unless-stopped \
 docker rm -f open-webui 2>/dev/null || true
 
 docker run -d --name open-webui --restart unless-stopped \
-  --gpus=all -p 8080:8080 \
-  -v open-webui:/app/backend/data \
-  -v open-webui-ollama:/root/.ollama \
-  ghcr.io/open-webui/open-webui:ollama
+  --gpus=all -p 8080:8080 \
+  -v open-webui:/app/backend/data \
+  -v open-webui-ollama:/root/.ollama \
+  ghcr.io/open-webui/open-webui:ollama
 
 docker exec -it open-webui ollama pull qwen3.5:27b
 docker exec -it open-webui ollama list
@@ -192,26 +192,26 @@ vLLM's DGX Spark guidance is explicit: *"Spark does not require a bespoke servin
 
 ```
 docker run -d --name qwen38-27b-8001 --restart unless-stopped \
-  --gpus all --ipc=host \
-  -p 8001:8001 \
-  -v ~/.cache/huggingface:/root/.cache/huggingface \
-  -e VLLM_USE_FLASHINFER_MOE_FP4=0 \
-  vllm/vllm-openai:cu130-nightly \
-    unsloth/Qwen3.8-27B-NVFP4 \
-    --served-model-name qwen38-27b unsloth/Qwen3.8-27B-NVFP4 \
-    --host 0.0.0.0 --port 8001 \
-    --tensor-parallel-size 1 \
-    --trust-remote-code \
-    --max-model-len 262144 \
-    --max-num-seqs 4 \
-    --max-num-batched-tokens 8192 \
-    --gpu-memory-utilization 0.45 \
-    --kv-cache-dtype fp8 \
-    --enable-chunked-prefill \
-    --enable-prefix-caching \
-    --enable-auto-tool-choice \
-    --tool-call-parser qwen3_coder \
-    --reasoning-parser qwen3
+  --gpus all --ipc=host \
+  -p 8001:8001 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e VLLM_USE_FLASHINFER_MOE_FP4=0 \
+  vllm/vllm-openai:cu130-nightly \
+    unsloth/Qwen3.8-27B-NVFP4 \
+    --served-model-name qwen38-27b unsloth/Qwen3.8-27B-NVFP4 \
+    --host 0.0.0.0 --port 8001 \
+    --tensor-parallel-size 1 \
+    --trust-remote-code \
+    --max-model-len 262144 \
+    --max-num-seqs 4 \
+    --max-num-batched-tokens 8192 \
+    --gpu-memory-utilization 0.45 \
+    --kv-cache-dtype fp8 \
+    --enable-chunked-prefill \
+    --enable-prefix-caching \
+    --enable-auto-tool-choice \
+    --tool-call-parser qwen3_coder \
+    --reasoning-parser qwen3
 ```
 
 ### Check the image before serving
@@ -222,8 +222,8 @@ A nightly tag is a compatibility track, not a reproducible reference. Check the 
 docker run --rm -i --entrypoint python3 vllm/vllm-openai:cu130-nightly - <<'PY'
 from packaging.version import Version
 for mod, floor in (("vllm", "0.26.0"), ("transformers", "5.8.0")):
-    v = Version(__import__(mod).__version__.split("+")[0])
-    print(f"{'OK ' if v >= Version(floor) else 'LOW'} {mod} {v} (need >= {floor})")
+    v = Version(__import__(mod).__version__.split("+")[0])
+    print(f"{'OK ' if v >= Version(floor) else 'LOW'} {mod} {v} (need >= {floor})")
 PY
 
 docker image inspect --format '{{index .RepoDigests 0}}' vllm/vllm-openai:cu130-nightly
@@ -253,8 +253,8 @@ docker logs qwen38-27b-8001 2>&1 | grep -iE 'kv.cache|GPU blocks|maximum concurr
 `--gpu-memory-utilization` is a per-instance fraction of **total** memory. Summing the fractions tests budget arithmetic, not fit.
 
 ```
-Coder-Next 0.72 + Qwen3.8 0.45 = 87.6 + 54.7 = 142.3 GiB on 121.6 GiB   IMPOSSIBLE
-Coder-Next 0.45 + Qwen3.8 0.45 = 54.7 + 54.7 = 109.5 GiB                 viable, unproven
+Coder-Next 0.72 + Qwen3.8 0.45 = 87.6 + 54.7 = 142.3 GiB on 121.6 GiB   IMPOSSIBLE
+Coder-Next 0.45 + Qwen3.8 0.45 = 54.7 + 54.7 = 109.5 GiB                 viable, unproven
 ```
 
 Viable is not the same as fits. On unified memory the same pool carries the OS, page cache, container runtime and every other process, and allocations do not all behave like reserved slices — the published GB10 run at 0.45 reported **55.67 GiB against a 54.73 GiB budget**, about 0.94 GiB outside the model, on one instance.
@@ -273,7 +273,7 @@ nvidia-smi --query-compute-apps=pid,used_memory,name --format=csv
 
 ```
 docker rm -f qwen38-27b-8001
-ss -lntp | grep 8001            # confirm what is actually holding a port first
+ss -lntp | grep 8001            # confirm what is actually holding a port first
 ```
 
 ## Agent transports
@@ -281,10 +281,10 @@ ss -lntp | grep 8001            # confirm what is actually holding a 
 One vLLM process serves three protocol surfaces. Different clients speak different ones.
 
 ```
-Codex        -> /v1/responses           direct
-RLM Studio   -> /v1/chat/completions    direct
-Pi           -> /v1/chat/completions    direct
-Claude Code  -> /v1/messages            see the warning below
+Codex        -> /v1/responses           direct
+RLM Studio   -> /v1/chat/completions    direct
+Pi           -> /v1/chat/completions    direct
+Claude Code  -> /v1/messages            see the warning below
 ```
 
 ### Codex
@@ -302,7 +302,7 @@ wire_api = "responses"
 ```
 
 ```
-export VLLM_API_KEY=dummy    # vLLM ignores it; Codex will not start without one
+export VLLM_API_KEY=dummy    # vLLM ignores it; Codex will not start without one
 ```
 
 ### Claude Code — bridge first
@@ -310,15 +310,15 @@ export VLLM_API_KEY=dummy    # vLLM ignores it; Codex will not start without 
 ```
 # ~/.code-copilot-team/litellm-qwen38.yaml
 # model_list:
-#   - model_name: qwen38-27b
-#     litellm_params:
-#       model: hosted_vllm/qwen38-27b     # NOT openai/ — see troubleshooting
-#       api_base: http://<dgx-spark-ip>:8001/v1
-#       api_key: dummy
+#   - model_name: qwen38-27b
+#     litellm_params:
+#       model: hosted_vllm/qwen38-27b     # NOT openai/ — see troubleshooting
+#       api_base: http://<dgx-spark-ip>:8001/v1
+#       api_key: dummy
 
 litellm --config ~/.code-copilot-team/litellm-qwen38.yaml --port 8787
 
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"   # bare origin, NO /v1
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"   # bare origin, NO /v1
 export ANTHROPIC_AUTH_TOKEN="dummy"
 export ANTHROPIC_MODEL="qwen38-27b"
 export ANTHROPIC_DEFAULT_OPUS_MODEL="qwen38-27b"
@@ -336,17 +336,17 @@ Claude Code ≥ 2.1.207 appends agent-registry context as a `system`-role messag
 
 ```
 curl -s http://<dgx-spark-ip>:8001/v1/messages \
-  -H 'Content-Type: application/json' -H 'anthropic-version: 2023-06-01' \
-  -H 'x-api-key: dummy' \
-  -d '{"model":"qwen38-27b","max_tokens":400,
-       "system":"You are a coding agent. Always use the provided tools.",
-       "tools":[{"name":"edit_file","description":"Edit or create a file.",
-         "input_schema":{"type":"object","properties":{"path":{"type":"string"},
-         "content":{"type":"string"}},"required":["path","content"]}}],
-       "messages":[
-         {"role":"user","content":"Use the edit_file tool to create foo.py with a function bar() returning 42."},
-         {"role":"system","content":"<agent-registry>No additional agents.</agent-registry>"}
-       ]}' | jq '{stop_reason, types: [.content[].type]}'
+  -H 'Content-Type: application/json' -H 'anthropic-version: 2023-06-01' \
+  -H 'x-api-key: dummy' \
+  -d '{"model":"qwen38-27b","max_tokens":400,
+       "system":"You are a coding agent. Always use the provided tools.",
+       "tools":[{"name":"edit_file","description":"Edit or create a file.",
+         "input_schema":{"type":"object","properties":{"path":{"type":"string"},
+         "content":{"type":"string"}},"required":["path","content"]}}],
+       "messages":[
+         {"role":"user","content":"Use the edit_file tool to create foo.py with a function bar() returning 42."},
+         {"role":"system","content":"<agent-registry>No additional agents.</agent-registry>"}
+       ]}' | jq '{stop_reason, types: [.content[].type]}'
 ```
 
 - **PASS** — a `tool_use` block is present. The native path is safe on this build; drop the bridge.
@@ -360,29 +360,29 @@ Base models (`facebook/opt-125m`) use `/v1/completions`:
 
 ```
 curl http://<dgx-spark-ip>:8001/v1/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"facebook/opt-125m","prompt":"Say hello in one sentence.","max_tokens":16}'
+  -H "Content-Type: application/json" \
+  -d '{"model":"facebook/opt-125m","prompt":"Say hello in one sentence.","max_tokens":16}'
 ```
 
 Instruct/chat models use `/v1/chat/completions`:
 
 ```
 curl http://<dgx-spark-ip>:8001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"qwen38-27b","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":32}'
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen38-27b","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":32}'
 ```
 
 Tool calling must produce a structured `tool_calls[]`, not XML inside `content`. A model that answers chat correctly but fails this is useless as a coding backend:
 
 ```
 curl -s http://<dgx-spark-ip>:8001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"qwen38-27b","temperature":0,"max_tokens":300,"tool_choice":"auto",
-       "messages":[{"role":"user","content":"Use the tool to create foo.py with bar() returning 42."}],
-       "tools":[{"type":"function","function":{"name":"edit_file","description":"Edit or create a file.",
-         "parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},
-         "required":["path","content"]}}}]}' \
-  | jq '.choices[0].message | {content, tool_calls, reasoning}'
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen38-27b","temperature":0,"max_tokens":300,"tool_choice":"auto",
+       "messages":[{"role":"user","content":"Use the tool to create foo.py with bar() returning 42."}],
+       "tools":[{"type":"function","function":{"name":"edit_file","description":"Edit or create a file.",
+         "parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},
+         "required":["path","content"]}}}]}' \
+  | jq '.choices[0].message | {content, tool_calls, reasoning}'
 ```
 
 ## Memory bands (weights in GB, not parameter count)
@@ -469,7 +469,7 @@ python -c "import torch, vllm, transformers; print(torch.__version__, vllm.__ver
 curl -s http://127.0.0.1:8000/v1/models | jq '.data[] | {id, max_model_len}'
 curl -s http://<dgx-spark-ip>:8001/v1/models | jq '.data[] | {id, max_model_len}'
 curl -s http://<dgx-spark-ip>:8001/v1/responses -H 'Content-Type: application/json' \
-  -d '{"model":"qwen38-27b","input":"Reply with just: ok","max_output_tokens":16}' | jq '.output'
+  -d '{"model":"qwen38-27b","input":"Reply with just: ok","max_output_tokens":16}' | jq '.output'
 ```
 
 ## What changed and why
@@ -514,25 +514,25 @@ Use only when no suitable image exists. This is how the `0.18.1rc1` install happ
 ```
 sudo apt-get update
 sudo apt-get install -y gcc-12 g++-12 build-essential cmake ninja-build git \
-  python3.12-dev python3-dev python3-venv python3-full libnuma-dev numactl
+  python3.12-dev python3-dev python3-venv python3-full libnuma-dev numactl
 
 mkdir -p ~/dgx-spark-vllm && cd ~/dgx-spark-vllm
-python3 -m venv qwen38_env          # a NEW venv — never the Coder-Next one
+python3 -m venv qwen38_env          # a NEW venv — never the Coder-Next one
 source qwen38_env/bin/activate
 pip install --upgrade pip setuptools wheel
 
 pip install --no-cache-dir 'torch==2.10.0+cu130' 'torchvision==0.25.0+cu130' \
-  'torchaudio==2.10.0+cu130' --index-url https://download.pytorch.org/whl/cu130
+  'torchaudio==2.10.0+cu130' --index-url https://download.pytorch.org/whl/cu130
 
 git clone https://github.com/vllm-project/vllm.git && cd vllm
-git checkout v0.27.1                # PIN. Revision 1 omitted this step.
+git checkout v0.27.1                # PIN. Revision 1 omitted this step.
 
 export CUDA_HOME=/usr/local/cuda-13.0
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
 export CC=/usr/bin/gcc-12 CXX=/usr/bin/g++-12 CUDAHOSTCXX=/usr/bin/g++-12
 export TORCH_CUDA_ARCH_LIST="12.1a"
-export MAX_JOBS=8                   # drop to 2 if the JIT OOMs later
+export MAX_JOBS=8                   # drop to 2 if the JIT OOMs later
 
 pip install -r requirements/build.txt
 pip install --no-build-isolation -e .
@@ -550,16 +550,16 @@ from vllm import LLM, SamplingParams
 import torch
 
 def main():
-    print("CUDA available:", torch.cuda.is_available())
-    if torch.cuda.is_available():
-        print("GPU:", torch.cuda.get_device_name(0))
-        print("CUDA version:", torch.version.cuda)
-    llm = LLM(model="facebook/opt-125m", enforce_eager=True)
-    params = SamplingParams(temperature=0.0, max_tokens=16)
-    print(llm.generate(["Hello from DGX Spark"], params)[0].outputs[0].text)
+    print("CUDA available:", torch.cuda.is_available())
+    if torch.cuda.is_available():
+        print("GPU:", torch.cuda.get_device_name(0))
+        print("CUDA version:", torch.version.cuda)
+    llm = LLM(model="facebook/opt-125m", enforce_eager=True)
+    params = SamplingParams(temperature=0.0, max_tokens=16)
+    print(llm.generate(["Hello from DGX Spark"], params)[0].outputs[0].text)
 
 if __name__ == "__main__":
-    main()
+    main()
 ```
 
 This proves the build works. It does **not** prove the server can drive a coding agent — for that, see *Agent transports*.
