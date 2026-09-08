@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from session_analytics import constants as C
@@ -630,6 +632,67 @@ class TestApi(RegistryResetTestCase):
         conf = self.client.get("/api/judge/models").json()["configured"]
         self.assertIn(conf["source"], ("settings", "packaged default"))
         self.assertTrue(conf["spec"])
+
+    def test_ask_streams_steps_and_the_answer_from_the_settings_judge(self) -> None:
+        # Ask: the judge in Settings (and only that one) answers a question
+        # by calling read-only tools; the page sees every step as NDJSON.
+        from session_analytics import config as cfgmod
+        from session_analytics.judge.registry import register_judge
+
+        sid = self.client.get("/api/sessions").json()["sessions"][0]["id"]
+        replies = [
+            json.dumps({"tool": "session_summary", "args": {"session_id": sid}, "why": "look"}),
+            json.dumps({"answer": f"Session #{sid} is the only one.", "sessions": [sid]}),
+        ]
+
+        class _Asker:
+            judge_id = "asker"
+
+            def __init__(self, model: str = "") -> None:
+                self._model = model or "a"
+
+            def rate_turn(self, ctx, rubric):  # pragma: no cover
+                raise NotImplementedError
+
+            def complete(self, prompt, *, timeout=120):
+                return replies.pop(0)
+
+        register_judge("asker", _Asker)
+        absent = str(Path(tempfile.mkdtemp()) / "no-graph")
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_JUDGE_BACKEND: "asker",
+                                            cfgmod.ENV_KUZU_PATH: absent}):
+            info = self.client.get("/api/ask").json()
+            self.assertEqual(info["judge"]["spec"], "asker:a")
+            self.assertEqual(info["facts"]["sessions"], 1)
+            self.assertTrue(info["examples"])
+            r = self.client.post("/api/ask", json={"question": "what is there?", "history": []})
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(r.headers["content-type"].startswith("application/x-ndjson"))
+            events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+            self.assertEqual([e["event"] for e in events], ["judge", "step", "result", "answer"])
+            self.assertEqual(events[0]["judge"], "asker:a")
+            self.assertEqual(events[1]["tool"], "session_summary")
+            self.assertEqual(events[2]["session_ids"], [sid])
+            self.assertIn('"session_key": "claude-code:', events[2]["result_text"])
+            self.assertEqual(events[3]["sessions"], [sid])
+            self.assertEqual(events[3]["unverified"], [])
+            self.assertEqual(info["facts"]["project_count"], 1)
+            self.assertEqual(info["facts"]["graph_state"], "absent")
+            r = self.client.post("/api/ask", json={"question": "   "})
+            self.assertEqual(r.status_code, 400)
+
+    def test_ask_without_a_judge_base_url_is_an_error_event(self) -> None:
+        from session_analytics import config as cfgmod
+
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_JUDGE_BACKEND: "openai",
+                                            cfgmod.ENV_JUDGE_BASE_URL: ""}):
+            r = self.client.post("/api/ask", json={"question": "anything"})
+            events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+            self.assertEqual(events[-1]["event"], "error")
+            self.assertEqual(events[-1]["prerequisite"], "judge")
+            self.assertIn("base URL", events[-1]["error"])
 
     def test_judge_test_reports_the_answer_or_the_backends_own_reason(self) -> None:
         # Settings → "Test judge": one call to the SAVED judge, so a wrong

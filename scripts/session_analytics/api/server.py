@@ -10,6 +10,7 @@
 # the create_app-local models are invisible) and silently demoted to query
 # params → 422.
 
+import json
 import logging
 from typing import Any, Optional
 
@@ -47,7 +48,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
     from starlette.middleware.trustedhost import TrustedHostMiddleware
-    from starlette.responses import JSONResponse, Response
+    from starlette.responses import JSONResponse, Response, StreamingResponse
 
     # Ensure adapters + judges are registered regardless of how the app was
     # constructed (idempotent — no-op if the CLI already registered).
@@ -161,6 +162,12 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
     class TestConnRequest(BaseModel):
         dsn: Optional[str] = None
+
+    class AskRequest(BaseModel):
+        question: str
+        # Prior exchanges, client-held: [{question, answer}]. No server
+        # state — a reload starts a fresh conversation.
+        history: list[dict[str, str]] = []
 
     class LoadSelection(BaseModel):
         """Which discovered sessions "Load sessions" reads. Every field
@@ -1014,6 +1021,73 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             return {"query": q, "results": arch.search_traces(conn, q, limit=limit)}
         finally:
             conn.close()
+
+    # ── Ask: a question in words, answered from the store ───────────────
+    def _ask_context(conn: Database):
+        from ..ask.tools import AskContext
+
+        cfg = load_config()
+        return AskContext(db=conn, kuzu_path=kuzu_path or cfg.kuzu_path, noise=cfg.noise)
+
+    @app.get("/api/ask")
+    def ask_info() -> dict[str, Any]:
+        """What the Ask page opens with: the judge that will answer (the
+        one in Settings — there is no other), example questions, and
+        the store facts the model is told."""
+        from ..ask import loop as ask_loop
+        from ..ask import tools as ask_tools
+
+        spec = ask_loop.load_spec()
+        conn = db()
+        try:
+            facts = ask_tools.store_facts(_ask_context(conn))
+        finally:
+            conn.close()
+        facts.pop("graph_questions", None)
+        return {
+            "judge": _configured_judge(load_config()),
+            "examples": list(spec.examples),
+            "tools": [{"name": t["name"], "purpose": t["purpose"]} for t in spec.tools],
+            "max_steps": spec.max_steps,
+            "facts": facts,
+        }
+
+    @app.post("/api/ask")
+    def ask(req: AskRequest):
+        """Stream the answer as NDJSON events: ``judge`` first, then one
+        ``step`` and one ``result`` per lookup, then ``answer`` or
+        ``error``. Every lookup is read-only. The judge is the one in
+        Settings; a 27B model needs seconds to a minute per step, so the
+        page shows each step as it happens instead of one spinner."""
+        from ..ask import loop as ask_loop
+        from ..judge.registry import UnknownJudgeError, get_judge
+
+        question = (req.question or "").strip()
+        if not question:
+            raise HTTPException(status_code=400, detail="empty question")
+        cfg = load_config()
+        conf = _configured_judge(cfg)
+        backend, model = cfg.judge.resolve(None)
+        try:
+            judge = get_judge(backend, model)
+        except UnknownJudgeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        def events():
+            yield json.dumps({"event": ask_loop.EVENT_JUDGE, "judge": conf["spec"],
+                              "source": conf["source"]}) + "\n"
+            conn = db()
+            try:
+                for ev in ask_loop.ask(_ask_context(conn), judge, question, req.history):
+                    yield json.dumps(ev, ensure_ascii=False, default=str) + "\n"
+            except Exception as exc:  # noqa: BLE001 — the stream must end with a reason
+                _log.exception("ask failed")
+                yield json.dumps({"event": ask_loop.EVENT_ERROR,
+                                  "error": f"{type(exc).__name__}: {exc}"[:300]}) + "\n"
+            finally:
+                conn.close()
+
+        return StreamingResponse(events(), media_type="application/x-ndjson")
 
     @app.get("/api/dashboard/benchmark")
     def dashboard_benchmark() -> dict[str, Any]:

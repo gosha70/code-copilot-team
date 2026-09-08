@@ -78,10 +78,22 @@ SESSION_SORT_COLUMNS: dict[str, str] = {
     "analyzed": _ANALYZED_EXPR,
 }
 SESSION_SORT_DEFAULT = "started_at"
+#: The tag filters a session list can apply IN SQL, so "the favourites"
+#: is a WHERE, not a scan of the first page. Same expressions the grid
+#: sorts by.
+SESSION_TAG_FILTERS: dict[str, str] = {
+    C.FLAG_FAVORITE: f"{_FAVORITE_EXPR} > 0",
+    C.FLAG_TODO: f"{_TODO_EXPR} > 0",
+    "analyzed": f"{_ANALYZED_EXPR} > 0",
+}
 
 
 class UnknownSortError(ValueError):
     """The requested sort column is not one the list can order by."""
+
+
+class UnknownTagError(ValueError):
+    """The requested tag is not one a session can carry."""
 
 
 def _session_dict(row, *, has_cost: bool = True) -> dict[str, Any]:
@@ -160,6 +172,7 @@ def search_sessions(
     include_noise: bool = False,
     sort: str = SESSION_SORT_DEFAULT,
     descending: bool = True,
+    tag: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Find sessions by keyword (project path / model) + optional filters.
 
@@ -176,6 +189,13 @@ def search_sessions(
             f"cannot sort sessions by {sort!r}; one of: {', '.join(SESSION_SORT_COLUMNS)}"
         )
     where, params = _session_filters(query, copilot, date_from, date_to)
+    if tag:
+        tag_sql = SESSION_TAG_FILTERS.get(tag)
+        if tag_sql is None:
+            raise UnknownTagError(
+                f"cannot filter sessions by tag {tag!r}; one of: {', '.join(SESSION_TAG_FILTERS)}"
+            )
+        where.append(tag_sql)
     if noise is not None and not include_noise:
         keep_sql, keep_params = keep_clause(noise, "copilot_session")
         where.append(keep_sql)
@@ -307,13 +327,19 @@ def analyze_patterns(
     workspace: Optional[str] = None,
     tool: Optional[str] = None,
     error_type: Optional[str] = None,
+    noise: Optional[NoiseConfig] = None,
 ) -> dict[str, Any]:
-    """Aggregate pattern analysis across sessions."""
+    """Aggregate pattern analysis across sessions. With ``noise`` given,
+    probe and temp-dir sessions are left out, as on every page."""
     session_filter = ""
     sparams: list[Any] = []
     if workspace:
         session_filter = " AND s.project_path LIKE ?"
         sparams.append(f"%{workspace}%")
+    if noise is not None:
+        keep_sql, keep_params = keep_clause(noise, "s")
+        session_filter += f" AND {keep_sql}"
+        sparams += list(keep_params)
 
     tool_where = ""
     tparams = list(sparams)

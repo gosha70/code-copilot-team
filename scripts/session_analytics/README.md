@@ -1024,6 +1024,51 @@ state's marker appears in no other state's render. Run it with
 `node studio/scripts/states-check.mjs`; it needs no dependency the
 Studio does not already have.
 
+## Ask: a question in words, answered from the store
+
+`POST /api/ask` (`{question, history}`) streams NDJSON events — `judge`,
+then `step`/`result` per lookup, then `answer` or `error` — and
+`GET /api/ask` returns the judge that will answer, the example
+questions and the store facts. The loop (`ask/loop.py`) drives the
+configured judge through its existing `complete(prompt) -> JSON`
+transport: each step the model returns one JSON object, a tool call
+`{"tool", "args", "why"}` or the answer `{"answer", "sessions"}`. No
+native tool-calling API, so every backend Settings can name works —
+Ollama, an OpenAI-compatible server, the claude CLI.
+
+- **Everything is data** in `config_data/ask.json`: the prompt, the
+  tool catalogue the model reads (name, purpose, argument names), the
+  step cap, the per-result character cap, the history cap, examples.
+  `ask/tools.py` binds each name to an existing read function
+  (`mcp.tools`, `archive.search_traces`, `graph.query.run_catalogue`,
+  the session analyses, `dashboard.kpis`); an argument the model
+  invents is refused before anything runs, and the refusal is fed back
+  as that step's result.
+- **Read-only by construction**: the graph opens with
+  `connect_read_only`, catalogue Cypher passes `assert_readonly`, and no
+  tool writes. `search_text` searches every session's turn previews as
+  well as archived full text, so it answers on a store with nothing
+  archived (the Search page, which it replaced, could not).
+- Results are capped and the cap is stated to the model; a reply that
+  is not a JSON action is nudged once, then reported with the reply's
+  head; the step cap forces an answer from what was found.
+- **Evidence and trust.** Each `result` event carries the exact capped
+  text the judge was given, so the page shows the rows behind the
+  answer. The loop keeps the set of session ids any lookup returned;
+  the answer's citations are split into `sessions` (cited AND
+  returned) and `unverified` (cited, never seen) — only the former are
+  linked. Graph-rendered catalogue answers reach the model as nodes and
+  relationships, with each Session node's relational id. Noise policy
+  is the pages': lists, searches and aggregates exclude probe/temp
+  sessions; a lookup by session id reads that session. `graph_state`
+  in the opening facts comes from a read-only open plus the catalog
+  (`CALL show_tables()`, the graph substrate's rule — never an error's
+  text): ready / absent / unbuilt / unopenable / kuzu-missing, not a
+  path check. Archived and analysed counts in the facts join the same
+  kept sessions; the archive search takes the noise rule inside its
+  ranked query, before the top-N cut. Stop on the page stops listening; the running judge call
+  is not cancelled server-side (read-only, so harmless).
+
 ## Tests
 
 ```bash

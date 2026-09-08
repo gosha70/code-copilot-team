@@ -19,7 +19,7 @@ design decision is `scripts/session_analytics/README.md`; the Studio's
 | **Dashboard** | How much have I done, what did it cost, how fast does the agent answer, where did the errors and money go? |
 | **Sessions** | Which sessions are real work (probe runs and two-turn tests are hidden by default; one toggle shows them). |
 | **Session page** | What was said, turn by turn, with the agent's response time — and three analyses a judge writes over the whole transcript: **Agent Tuning** (what to change in your CLAUDE.md, permissions, hooks, skills, with the diff), **Prompt Coaching** (which of your prompts were vague and what to send instead), **Efficiency** (where the turns went, and the script, hook, skill or rule that would remove each detour). |
-| **Search** | Full-text search over archived transcripts (opt-in per project). |
+| **Ask** | A question about your sessions in words, answered by the judge LLM through read-only lookups (sessions, turn text, analyses, patterns, the graph), each lookup shown so the answer can be checked. |
 | **Graph** | One session or project and everything it is connected to, every relationship named; a catalogue of questions answered as tables, charts or drawn on the canvas. |
 | **Analysis** | The pipeline as steps — load sessions, build the graph, run the judge, compute KPIs — with a funnel of counts and a **Judge quality** card. |
 | **Benchmark** | Benchmark-linked sessions, predicted pass rates, routing evidence. |
@@ -106,7 +106,7 @@ strict JSON — no comments — and this example can be copied as is:
 }
 ```
 
-`trace_archive: true` keeps the full (redacted) text for Search and the
+`trace_archive: true` keeps the full (redacted) text for Ask and the
 whole-session analyses; `ingest: "off"` never ingests that project. A
 project's key is its git repository name; `project_ids` maps a path
 fragment to a key when a session's directory is not a git checkout.
@@ -222,12 +222,14 @@ session is noise when it has fewer than `min_turns` turns, lasted under
 `min_duration_seconds`, or its path contains one of `path_patterns`.
 Benchmark-linked sessions are never noise. This is decided at query
 time, so changing the thresholds needs no re-ingest. Opening a session
-by id, Search, and the judge always see everything.
+by id and the judge always see everything; Ask follows the pages —
+its lists, searches and aggregates leave noise out, and a lookup of
+one session by id still reads that session.
 
 ### 5.3 Keep the full text (opt-in)
 
 Ingest keeps a 500-character redacted preview per turn. For the Session
-page's full Timeline, Search, and the whole-session analyses, opt a
+page's full Timeline, Ask, and the whole-session analyses, opt a
 project into the archive (§3.2) and run:
 
 ```bash
@@ -443,6 +445,35 @@ Sessions loaded later are embedded on the next pass; envelopes are
 kept, not recomputed. The list is a snapshot of the last pass, and
 "no neighbours" means no other session scored above the similarity
 threshold — a result, not a failure.
+
+### 8.2 Ask
+
+**Ask** is a chat over your store. Type a question — "which of my
+sessions had the most tool errors, and what went wrong in the worst
+one?", "what did I work on last week, project by project?", "find the
+sessions where I asked about pytest fixtures" — and the judge LLM from
+Settings answers it by looking things up, never by guessing. It has nine
+read-only lookups: list sessions (by project, model, copilot, date, tag,
+sorted), one session's facts, a window of its turns as text, its stored
+analyses, full-text search of what was said, tool and error patterns,
+similar sessions, one of the Graph page's catalogue questions, and the
+store-wide totals. Each lookup appears as it happens — the tool, its
+arguments, a one-line summary, how long the model took to decide — and
+a fold under it holds exactly what the judge was given, so the answer
+can be checked against the rows. A session the answer cites is linked
+only when a lookup returned it; an id the model names that no lookup
+returned is shown as **unverified**. Follow-ups see the earlier
+exchanges. **Stop** stops listening; a lookup the judge is already
+working on finishes on its own (nothing is written either way).
+
+What the model reads is what the analyses read: every turn's redacted
+preview, and the full text where a project opted into the archive
+(§5.3). Nothing is written. The judge is the one in Settings — there is
+no other — and it must be able to follow instructions to answer in
+JSON; the Spark's `qwen38-27b` (§7.0) answers a four-lookup question in
+about a minute, a small Ollama model in a few. A model that cannot keep
+to the JSON shape ends the exchange with its reply shown, and **Test
+judge LLM** in Settings is the first thing to check.
 
 ---
 

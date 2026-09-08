@@ -28,11 +28,12 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from . import constants as C
-from .config import ProjectIdRule, ProjectOverride
+from .config import NoiseConfig, ProjectIdRule, ProjectOverride
 from .contracts import SessionRef
 from .ingest.project_key import ProjectKeyResolver
 from .ingest.redaction import redact_text
 from .registry import get_adapter, list_adapter_ids
+from .session_filter import keep_clause
 from .relational.db import Database, apply_ddl, now_iso
 from .relational import store
 from . import search_index
@@ -415,9 +416,14 @@ def _purge_unauthorized(
 
 
 def search_traces(
-    db: Database, query: str, *, limit: int = C.SEARCH_DEFAULT_LIMIT
+    db: Database, query: str, *, limit: int = C.SEARCH_DEFAULT_LIMIT,
+    noise: Optional[NoiseConfig] = None,
 ) -> list[dict[str, Any]]:
     """Ranked full-text search over archived trace text (E10 Slice B, #65).
+
+    With ``noise`` given, probe/temp-dir sessions are left out BEFORE the
+    ranked top-N is cut, so a real hit ranked behind twenty probe hits is
+    still returned (the same rule as every list on the pages).
 
     Terms match in any order and across intervening words, stemmed
     (English/Porter on both dialects), ordered best-first — ``limit`` is a
@@ -433,11 +439,12 @@ def search_traces(
     search. See ``search_index.detect_index``.
     """
     limit = max(1, min(int(limit), C.SEARCH_MAX_LIMIT))
+    keep = keep_clause(noise, "s") if noise is not None else ("1=1", ())
     terms = search_index.query_terms(query)
     rows: Optional[list[tuple]] = None
     if terms:
         rows = search_index.ranked_rows(
-            db, search_index.detect_index(db), terms, limit
+            db, search_index.detect_index(db), terms, limit, keep=keep
         )
     elif query:
         # Punctuation-only query (`%`, `***`). No term can match it, and
@@ -453,11 +460,11 @@ def search_traces(
                    s.project_path, td.redaction_mode, td.content
             FROM {C.TBL_TRACE_DOCUMENT} td
             JOIN copilot_session s ON s.id = td.session_ref
-            WHERE LOWER(td.content) LIKE LOWER(?) ESCAPE '\\'
+            WHERE LOWER(td.content) LIKE LOWER(?) ESCAPE '\\' AND {keep[0]}
             ORDER BY td.session_ref, td.sequence_num
             LIMIT ?
             """,
-            (pattern, limit),
+            (pattern, *keep[1], limit),
         )
     return [
         {

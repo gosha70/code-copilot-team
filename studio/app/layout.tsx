@@ -10,14 +10,17 @@ export const metadata: Metadata = {
 
 // #307: only pages that answer a question a person has. Clusters is
 // gone (falsified on real data — one giant component); Graph explores
-// a session or a project and what it is connected to. Routing is a
-// card on Benchmark (both are benchmark-derived, /routing stays); the
-// client-side Agents stub is gone — Learn (#309) carries the real
-// catalogue of docs, skills and agents from the repo itself.
+// a session or a project and what it is connected to. Search is gone —
+// it read only archived text, which most stores have none of; Ask
+// answers questions in words through read-only lookups, text search
+// among them. Routing is a card on Benchmark (both are
+// benchmark-derived, /routing stays); the client-side Agents stub is
+// gone — Learn (#309) carries the real catalogue of docs, skills and
+// agents from the repo itself.
 const TABS = [
   { href: "/", label: "Dashboard" },
   { href: "/sessions", label: "Sessions" },
-  { href: "/search", label: "Search" },
+  { href: "/ask", label: "Ask" },
   { href: "/graph", label: "Graph" },
   { href: "/analysis", label: "Analysis" },
   { href: "/benchmark", label: "Benchmark" },
