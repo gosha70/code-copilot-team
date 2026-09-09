@@ -252,6 +252,9 @@ load_provider_config() {
     PROVIDER_MAX_TOKENS=$(toml_get "$PROFILE" "$section" "max_tokens")
     PROVIDER_TEMPERATURE=$(toml_get "$PROFILE" "$section" "temperature")
     PROVIDER_HOST=$(toml_get "$PROFILE" "$section" "host")
+    # disable_thinking = true → the adapter asks a reasoning model for
+    # an answer, not a hidden monologue (#190 run 3).
+    PROVIDER_DISABLE_THINKING=$(toml_get "$PROFILE" "$section" "disable_thinking")
 
     if [[ -z "$PROVIDER_TYPE" ]]; then PROVIDER_TYPE="cli"; fi
     PROVIDER_TIMEOUT="${PROVIDER_TIMEOUT:-300}"
@@ -524,6 +527,7 @@ build_provider_cmd() {
             [[ -n "${PROVIDER_API_KEY_ENV:-}" ]] && cmd="$cmd --api-key-env '$PROVIDER_API_KEY_ENV'"
             [[ -n "${PROVIDER_MAX_TOKENS:-}" ]] && cmd="$cmd --max-tokens '$PROVIDER_MAX_TOKENS'"
             [[ -n "${PROVIDER_TEMPERATURE:-}" ]] && cmd="$cmd --temperature '$PROVIDER_TEMPERATURE'"
+            [[ "${PROVIDER_DISABLE_THINKING:-}" == "true" ]] && cmd="$cmd --no-thinking"
             echo "$cmd"
             ;;
         ollama)

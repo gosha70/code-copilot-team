@@ -109,6 +109,9 @@ version = "cli"
 #   api_key_env  — env var name containing the API key (NOT the key itself)
 #   model        — model name for the chat completion request
 #   max_tokens   — max response tokens (default: 4096)
+#   disable_thinking — true to send chat_template_kwargs.enable_thinking=false
+#                  (Qwen3-family reasoning models on vLLM otherwise spend the
+#                  whole budget on hidden reasoning and return no content)
 #   temperature  — sampling temperature (default: 0.1)
 #
 # Optional fields:
