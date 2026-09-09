@@ -2,7 +2,7 @@
   "schema_version": 2,
   "profile": "unattended",
   "branch": {
-    "name": "feature/team-developer-aliases",
+    "name": "feature/team-developer-aliases-run3",
     "base": "master",
     "remote": "origin"
   },
@@ -23,7 +23,7 @@
   "review": {
     "reviewers": [
       {
-        "provider": "codex",
+        "provider": "spark",
         "specialization": "correctness",
         "scope": "both",
         "gating": true
