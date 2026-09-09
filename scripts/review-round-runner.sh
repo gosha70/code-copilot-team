@@ -360,12 +360,40 @@ PRE_REVIEW_STATUS=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null || echo
 # directory modes until extraction ends. .git is excluded at the source
 # so reviewer git commands act on nothing; a snapshot that cannot be
 # built at all is RUNNER_ERROR, never a verdict.
+#
+# WHAT is copied: the files git knows about (plus untracked files that
+# are not ignored, though the dirty-tree refusal above means a review
+# never sees any) — never what .gitignore excludes. The first real
+# unattended run (#190, 2026-09-09) copied 32 GB of a gitignored
+# benchmark-runs folder, node_modules and a venv for 73 minutes before
+# the reviewer was even invoked, against a 90-minute cap; the reviewer
+# needs the project's sources, not its build products. A tracked file
+# deleted from the working tree is skipped (it has no content to
+# review), never a failure.
 if ! mkdir -p "$SNAPSHOT_DIR/workspace" 2>/dev/null; then
     echo "[review-runner] FATAL: could not create the snapshot workspace -- RUNNER_ERROR (code 4)" >&2
     exit 4
 fi
-if ! tar -C "$PROJECT_DIR" --exclude './.git' --exclude './.git/*' -cf - . 2>/dev/null \
-    | tar -C "$SNAPSHOT_DIR/workspace" -xf - 2>/dev/null; then
+_rr_snapshot_list() {
+    # NUL-separated, existing, non-.git paths: tracked + untracked-unignored.
+    git -C "$PROJECT_DIR" ls-files -z --cached --others --exclude-standard 2>/dev/null \
+        | while IFS= read -r -d '' _p; do
+            [[ "$_p" == .git || "$_p" == .git/* ]] && continue
+            [[ -e "$PROJECT_DIR/$_p" || -L "$PROJECT_DIR/$_p" ]] || continue
+            printf '%s\0' "$_p"
+        done
+}
+_rr_snapshot_ok=true
+if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    _rr_snapshot_list | tar -C "$PROJECT_DIR" --null -T - -cf - 2>/dev/null \
+        | tar -C "$SNAPSHOT_DIR/workspace" -xf - 2>/dev/null || _rr_snapshot_ok=false
+else
+    # Not a repository: there are no ignore rules to honour, so the
+    # whole tree is the project (the pre-#190 behaviour).
+    tar -C "$PROJECT_DIR" --exclude './.git' --exclude './.git/*' -cf - . 2>/dev/null \
+        | tar -C "$SNAPSHOT_DIR/workspace" -xf - 2>/dev/null || _rr_snapshot_ok=false
+fi
+if [[ "$_rr_snapshot_ok" != "true" ]]; then
     echo "[review-runner] FATAL: could not snapshot the project -- RUNNER_ERROR (code 4)" >&2
     exit 4
 fi
