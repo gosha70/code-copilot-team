@@ -1172,6 +1172,48 @@ assert_eq "the PASS summary was published" "PASS" \
     "$(jq -r '.verdict' "$P/.cct/review/loop-summary.json" 2>/dev/null)"
 rm -rf "$P"
 
+# ══════════════════════════════════════════════════════════════
+echo "=== the snapshot carries sources, never what .gitignore excludes ==="
+# ══════════════════════════════════════════════════════════════
+
+# The first real unattended run (#190, 2026-09-09) spent 73 of its 90
+# minutes copying a 42 GB gitignored benchmark-runs folder into the
+# review snapshot. The snapshot is what git knows about: ignored trees
+# and .git are absent, tracked sources are present. The tree is clean —
+# the runner refuses any uncommitted change (untracked files included)
+# before any snapshot, and that refusal is its own contract.
+P=$(setup_project)
+write_state "$P" 0
+mkdir -p "$P/runs/attempt-01" "$P/node_modules/pkg" "$P/src"
+printf 'runs/\nnode_modules/\n' >> "$P/.gitignore"
+echo "huge" > "$P/runs/attempt-01/worktree.bin"
+echo "dep" > "$P/node_modules/pkg/index.js"
+echo "tracked" > "$P/src/tracked.txt"
+git -C "$P" add .gitignore src/tracked.txt && git -C "$P" commit -q -m "sources + ignores"
+SNAP_SPY_DIR=$(mktemp -d)
+# A reviewer that reports what it can see inside the snapshot (its cwd),
+# then answers PASS in the runner's verdict format.
+cat > "$SNAP_SPY_DIR/spy.sh" << SH
+#!/usr/bin/env bash
+ls -d runs node_modules .git src/tracked.txt 2>/dev/null > "$SNAP_SPY_DIR/seen.txt"
+printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'
+SH
+chmod +x "$SNAP_SPY_DIR/spy.sh"
+cat > "$SNAP_SPY_DIR/providers.toml" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "$SNAP_SPY_DIR/spy.sh"
+timeout_sec = 60
+healthcheck = "true"
+TOML
+RC=0; CCT_PROVIDER_PROFILE="$SNAP_SPY_DIR/providers.toml" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "the review ran to a PASS on the trimmed snapshot" 0 "$RC"
+assert_eq "the snapshot holds the tracked sources, never the ignored trees or .git" \
+    "src/tracked.txt" "$(tr '\n' ' ' < "$SNAP_SPY_DIR/seen.txt" 2>/dev/null | sed 's/ $//')"
+rm -rf "$P" "$SNAP_SPY_DIR"
+
 # Snapshot SETUP failure is infrastructure (RUNNER_ERROR 4), never a
 # verdict: a failed mktemp exited 1 under raw set -e, indistinguishable
 # from FAIL. Injected via a mktemp PATH shim (TMPDIR is no vector — BSD
