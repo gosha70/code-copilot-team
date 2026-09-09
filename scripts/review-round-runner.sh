@@ -981,7 +981,13 @@ done
 # #229: generate and validate the replacement before publishing it. A jq
 # failure must leave the previous state intact and exit through RUNNER_ERROR.
 _state_tmp="${STATE_FILE}.tmp.$$"
+# The driver binds the state to its run (run_attempt, phase_num,
+# phase_base — #190 run 2): those keys ride through every rewrite, or
+# the driver's own parked review would read as another run's leftover.
+_state_identity=$(jq -c '{run_attempt, phase_num, phase_base} | with_entries(select(.value != null))' \
+    "$STATE_FILE" 2>/dev/null || echo '{}')
 if ! jq -n \
+    --argjson identity "${_state_identity:-{\}}" \
     --argjson round "$NEXT_ROUND" \
     --argjson attempt "$ATTEMPT" \
     --argjson loop_start "$LOOP_START" \
@@ -1004,7 +1010,7 @@ if ! jq -n \
       review_scope: $review_scope, review_specialization: $review_specialization,
       target_ref: $target_ref,
       last_verdict: $last_verdict, findings: $findings, repeats: $repeats,
-      cost: $cost}' \
+      cost: $cost} + $identity' \
     > "$_state_tmp"; then
     rm -f "$_state_tmp"
     echo "[review-runner] FATAL: could not generate state.json" >&2
