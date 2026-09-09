@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from .. import constants as C
 from ..config import NoiseConfig
@@ -76,13 +76,62 @@ def _empty_windows() -> dict[str, _Rollup]:
     return {w: _Rollup() for w in WINDOWS}
 
 
+def _merged_windows(per_id: list[dict[str, _Rollup]]) -> dict[str, _Rollup]:
+    """One window rollup per window, summed over the folded ids. A cost
+    stays None until one of them has a priced turn — a fold must not
+    turn "nothing priced" into $0.00."""
+    out = _empty_windows()
+    for windows in per_id:
+        for w, r in windows.items():
+            into = out[w]
+            into.sessions |= r.sessions
+            into.turns += r.turns
+            into.priced_turns += r.priced_turns
+            into.priceable_turns += r.priceable_turns
+            if r.cost_usd is not None:
+                into.cost_usd = (into.cost_usd or 0.0) + r.cost_usd
+    return out
+
+
+def _alias_groups(aliases: Optional[Mapping[str, str]]) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """(developer id → display name, display name → its ids in the order
+    the mapping lists them). The first of those ids is the folded row's
+    ``developer_id``, so the row is stable between polls whichever of the
+    ids the store happens to hold."""
+    name_of: dict[str, str] = {}
+    ids_of: dict[str, list[str]] = {}
+    for dev, name in (aliases or {}).items():
+        name_of[dev] = name
+        ids_of.setdefault(name, []).append(dev)
+    return name_of, ids_of
+
+
+def _beat_key(beat: dict[str, Any]) -> float:
+    at = _parse_ts(beat["at"]) if beat.get("at") else None
+    if at is None:
+        return float("-inf")
+    return at.replace(tzinfo=at.tzinfo or timezone.utc).timestamp()
+
+
+def _newest_beat(candidates: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """The most recent of the folded ids' heartbeats, by PARSED time: two
+    ids of one person can carry timestamps in different shapes, which a
+    string comparison would misorder."""
+    return max(candidates, key=_beat_key, default=None)
+
+
 def team_status(
     db: Database,
     *,
     noise: Optional[NoiseConfig],
     active_window_seconds: int,
     now: Optional[datetime] = None,
+    aliases: Optional[Mapping[str, str]] = None,
 ) -> dict[str, Any]:
+    """``aliases`` maps developer id → display name: ids sharing a name
+    are one person and fold into one row (team-developer-aliases). The
+    fold is read-time only — the store keeps every id, and the row names
+    them all in ``merged_ids``."""
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
@@ -148,16 +197,34 @@ def team_status(
     all_devs = set(names) | set(beats) | set(by_dev) | {
         r[0] for r in db.query(f"SELECT DISTINCT s.developer_id FROM copilot_session s WHERE {keep_sql}", keep_params)
     }
+    name_of, ids_of = _alias_groups(aliases)
     developers = []
+    folded_names: set[str] = set()
     for dev in sorted(all_devs):
-        beat = beats.get(dev)
+        alias_name = name_of.get(dev)
+        if alias_name is None:
+            merged_ids, row_id, display_name = [dev], dev, names.get(dev)
+        else:
+            if alias_name in folded_names:   # already emitted for a sibling id
+                continue
+            folded_names.add(alias_name)
+            # Every id the operator listed under this name, present in the
+            # store or not: merged_ids is the attribution, so it must not
+            # depend on which of the ids happens to have rows.
+            merged_ids = ids_of[alias_name]
+            # The configured name beats the developer table's display_name:
+            # that table is per-id, and the fold is what the operator said.
+            row_id, display_name = merged_ids[0], alias_name
+        beat = _newest_beat([beats[i] for i in merged_ids if i in beats])
         state = liveness(beat["at"] if beat else None, now, active_window_seconds)
+        windows = _merged_windows([by_dev[i] for i in merged_ids if i in by_dev])
         developers.append({
-            "developer_id": dev,
-            "display_name": names.get(dev),
+            "developer_id": row_id,
+            "display_name": display_name,
+            "merged_ids": list(merged_ids),
             "liveness": state,
             "current": beat,
-            "windows": {w: r.as_dict() for w, r in by_dev.get(dev, _empty_windows()).items()},
+            "windows": {w: r.as_dict() for w, r in windows.items()},
         })
     # Active first, then the most recently seen, then by id — the
     # people working now at the top, stable between polls.

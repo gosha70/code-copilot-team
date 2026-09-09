@@ -60,6 +60,10 @@ ENV_RUNAWAY_RECENT_TURNS = "CCT_SA_RUNAWAY_RECENT_TURNS"
 ENV_RUNAWAY_MAX_ERROR_SHARE = "CCT_SA_RUNAWAY_MAX_ERROR_SHARE"
 ENV_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE = "CCT_SA_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE"
 ENV_RUNAWAY_MAX_COST_RECENT = "CCT_SA_RUNAWAY_MAX_COST_RECENT_USD"
+#: team.aliases as `id=Name,id2=Name` (team-developer-aliases). Deliberately
+#: NOT in ENV_KEYS/TEAM_ENV_KEYS: editing aliases from the Settings page is
+#: out of scope, so the page must not offer a half-working field.
+ENV_TEAM_ALIASES = "CCT_SA_TEAM_ALIASES"
 #: The Settings page's Team group (env keys the page can edit).
 TEAM_ENV_KEYS = (
     ENV_TEAM_ACTIVE_WINDOW, ENV_BUDGET_TEAM_DAILY, ENV_BUDGET_TEAM_MONTHLY,
@@ -261,11 +265,16 @@ class TeamConfig:
     """team.* (#174): a heartbeat within ``active_window_seconds`` of now
     makes a developer "active" on the Team tab — last-seen semantics,
     never an alive/dead verdict — plus the budgets and runaway
-    thresholds the alerts evaluate."""
+    thresholds the alerts evaluate.
+
+    ``aliases`` maps a developer id to the display name it belongs
+    under; ids sharing a name are one person and fold into one row at
+    read time (team-developer-aliases). The store is never rewritten."""
 
     active_window_seconds: int
     budgets: BudgetsConfig
     runaway: RunawayConfig
+    aliases: Mapping[str, str]
 
 
 @dataclass(frozen=True)
@@ -644,6 +653,41 @@ def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
             raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{name} must be positive, got {raw!r}")
         return value
 
+    def aliases() -> Mapping[str, str]:
+        """team.aliases: the data file's mapping, or the env list on top.
+        A malformed entry refuses loudly, naming the key — an alias that
+        silently vanished would leave one person split across rows with
+        no sign anything was wrong."""
+        where = f"{C.CFG_TEAM}.{C.CFG_TEAM_ALIASES}"
+        raw = env(ENV_TEAM_ALIASES)
+        if raw is None:
+            block_value = block.get(C.CFG_TEAM_ALIASES)
+            if block_value is None:
+                return {}
+            if not isinstance(block_value, Mapping):
+                raise ValueError(
+                    f"{where} must be a mapping of developer id to display "
+                    f"name, got {block_value!r}")
+            out: dict[str, str] = {}
+            for dev, name in block_value.items():
+                if not isinstance(dev, str) or not dev.strip() or not isinstance(name, str) or not name.strip():
+                    raise ValueError(
+                        f"{where}: {dev!r}: {name!r} is not a developer id "
+                        f"mapped to a non-empty display name")
+                out[dev.strip()] = name.strip()
+            return out
+        # The env form is one line: `id=Name,id2=Name`.
+        out = {}
+        for entry in raw.split(","):
+            dev, sep, name = entry.partition("=")
+            dev, name = dev.strip(), name.strip()
+            if not sep or not dev or not name:
+                raise ValueError(
+                    f"{where}: {entry!r} is not 'id=Name' — {ENV_TEAM_ALIASES} "
+                    f"is a comma-separated list of id=Name entries")
+            out[dev] = name
+        return out
+
     share = runaway(C.CFG_RUNAWAY_MAX_ERROR_SHARE, ENV_RUNAWAY_MAX_ERROR_SHARE, float)
     if share > 1:
         raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{C.CFG_RUNAWAY_MAX_ERROR_SHARE} is a share (0–1), got {share}")
@@ -665,6 +709,7 @@ def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
                 C.CFG_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE, ENV_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE, int),
             max_cost_recent_usd=runaway(C.CFG_RUNAWAY_MAX_COST_RECENT, ENV_RUNAWAY_MAX_COST_RECENT, float),
         ),
+        aliases=aliases(),
     )
 
 

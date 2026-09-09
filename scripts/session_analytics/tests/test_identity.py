@@ -211,6 +211,7 @@ class TestCliDerivation(unittest.TestCase):
                 active_window_seconds=300,
                 budgets=BudgetsConfig(None, None, None, None),
                 runaway=RunawayConfig(60, 300, 50, 0.5, 20, 20.0),
+                aliases={},
             ),
             noise=NoiseConfig(min_turns=0, min_duration_seconds=0, path_patterns=()),
             pricing=PricingConfig(models={}),
@@ -299,6 +300,58 @@ class TestEnvFileLayer(unittest.TestCase):
         ):
             cfg = config_mod.load_config(dsn="sqlite:///unused")
         self.assertEqual(cfg.developer_id_env, "from-real-env")
+
+
+class TestTeamAliasesConfig(unittest.TestCase):
+    """FR-1 (team-developer-aliases): `team.aliases` from the config data
+    file with `CCT_SA_TEAM_ALIASES` on top, and a malformed entry refused
+    by name. Identity's other half: which derived ids are one person."""
+
+    @staticmethod
+    def _load(env_value=None, file_aliases=None):
+        from session_analytics import config as config_mod
+
+        # Hermetic: the host's ~/.cct config and repo .env must not decide
+        # the outcome, so both layers are patched away.
+        environ = {} if env_value is None else {config_mod.ENV_TEAM_ALIASES: env_value}
+        overrides = None if file_aliases is None else {
+            C.CFG_TEAM: {C.CFG_TEAM_ALIASES: file_aliases}}
+        with mock.patch.object(config_mod, "_USER_CONFIG", Path("/nonexistent/session-analytics.json")), \
+             mock.patch.object(config_mod, "parse_env_file", return_value={}), \
+             mock.patch.dict("os.environ", environ, clear=False):
+            import os as _os
+
+            if env_value is None:
+                _os.environ.pop(config_mod.ENV_TEAM_ALIASES, None)
+            return config_mod.load_config(dsn="sqlite:///unused", extra_overrides=overrides)
+
+    def test_alias_fr1_defaults_to_an_empty_mapping(self) -> None:
+        self.assertEqual(self._load().team.aliases, {})
+
+    def test_alias_fr1_reads_the_config_data_file(self) -> None:
+        cfg = self._load(file_aliases={"i-am-goga": "Gosha", "local": "Gosha"})
+        self.assertEqual(cfg.team.aliases, {"i-am-goga": "Gosha", "local": "Gosha"})
+
+    def test_alias_fr1_env_parses_id_name_pairs_and_wins(self) -> None:
+        cfg = self._load(
+            env_value=" i-am-goga = Gosha , local=Gosha ",
+            file_aliases={"ignored": "From The File"},
+        )
+        self.assertEqual(cfg.team.aliases, {"i-am-goga": "Gosha", "local": "Gosha"})
+
+    def test_alias_fr1_malformed_entry_refuses_and_names_the_key(self) -> None:
+        for bad in ("i-am-goga", "=Gosha", "i-am-goga=", "a=A,,b=B"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError) as caught:
+                    self._load(env_value=bad)
+                self.assertIn(f"{C.CFG_TEAM}.{C.CFG_TEAM_ALIASES}", str(caught.exception))
+
+    def test_alias_fr1_malformed_file_entry_refuses_and_names_the_key(self) -> None:
+        for bad in ({"i-am-goga": ""}, {"": "Gosha"}, {"i-am-goga": 7}, ["i-am-goga=Gosha"]):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError) as caught:
+                    self._load(file_aliases=bad)
+                self.assertIn(f"{C.CFG_TEAM}.{C.CFG_TEAM_ALIASES}", str(caught.exception))
 
 
 class TestWatchDerivesOnce(unittest.TestCase):
