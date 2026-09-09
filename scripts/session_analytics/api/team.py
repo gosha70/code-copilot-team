@@ -10,12 +10,16 @@
 # because timestamps are ISO text in more than one shape ("2026-09-07
 # 15:27:00" and "2026-09-07T15:27:00.154Z" both occur) and a string
 # comparison at the boundary would misplace a turn.
+#
+# `team.aliases` folds one person's several derived developer ids into a
+# single row at READ time — the store keeps every id it recorded, and
+# `merged_ids` on every row names what was folded into it.
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from .. import constants as C
 from ..config import NoiseConfig
@@ -76,12 +80,48 @@ def _empty_windows() -> dict[str, _Rollup]:
     return {w: _Rollup() for w in WINDOWS}
 
 
+def _summed(rollups: list[_Rollup]) -> _Rollup:
+    """One rollup over several developer ids: counts add, sessions
+    union, and the cost stays None until one of them has a priced
+    turn — an unpriced id must never read as $0.00."""
+    out = _Rollup()
+    for r in rollups:
+        out.sessions |= r.sessions
+        out.turns += r.turns
+        out.priced_turns += r.priced_turns
+        out.priceable_turns += r.priceable_turns
+        if r.cost_usd is not None:
+            out.cost_usd = (out.cost_usd or 0.0) + r.cost_usd
+    return out
+
+
+def _fold(developer_ids: list[str], aliases: Mapping[str, str]) -> list[tuple[str, Optional[str], list[str]]]:
+    """(row id, alias display name, folded ids) per developer row.
+
+    Ids the operator gave the same display name become ONE row, named
+    after the first of them in the mapping's order; every other id keeps
+    its own row. Only ids the store actually has are folded, so
+    ``merged_ids`` never names a developer with nothing behind them."""
+    present = set(developer_ids)
+    groups: dict[str, list[str]] = {}
+    for dev, name in aliases.items():
+        if dev in present:
+            groups.setdefault(name, []).append(dev)
+    folded = {dev: name for name, ids in groups.items() for dev in ids}
+    rows: list[tuple[str, Optional[str], list[str]]] = [
+        (ids[0], name, list(ids)) for name, ids in groups.items()
+    ]
+    rows.extend((dev, None, [dev]) for dev in developer_ids if dev not in folded)
+    return rows
+
+
 def team_status(
     db: Database,
     *,
     noise: Optional[NoiseConfig],
     active_window_seconds: int,
     now: Optional[datetime] = None,
+    aliases: Optional[Mapping[str, str]] = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -149,15 +189,22 @@ def team_status(
         r[0] for r in db.query(f"SELECT DISTINCT s.developer_id FROM copilot_session s WHERE {keep_sql}", keep_params)
     }
     developers = []
-    for dev in sorted(all_devs):
-        beat = beats.get(dev)
+    for dev, alias_name, merged in _fold(sorted(all_devs), aliases or {}):
+        # For a folded row the newest of the folded ids' heartbeats is
+        # the current work, exactly as it is within one id.
+        beat = max(
+            (b for b in (beats.get(i) for i in merged) if b),
+            key=lambda b: b["at"] or "", default=None,
+        )
         state = liveness(beat["at"] if beat else None, now, active_window_seconds)
+        rollups = [by_dev.get(i, _empty_windows()) for i in merged]
         developers.append({
             "developer_id": dev,
-            "display_name": names.get(dev),
+            "display_name": alias_name or names.get(dev),
+            "merged_ids": merged,
             "liveness": state,
             "current": beat,
-            "windows": {w: r.as_dict() for w, r in by_dev.get(dev, _empty_windows()).items()},
+            "windows": {w: _summed([r[w] for r in rollups]).as_dict() for w in WINDOWS},
         })
     # Active first, then the most recently seen, then by id — the
     # people working now at the top, stable between polls.

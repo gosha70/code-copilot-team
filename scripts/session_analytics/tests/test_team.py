@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import unittest
 from contextlib import redirect_stdout
@@ -14,6 +15,11 @@ from session_analytics.config import NoiseConfig
 from session_analytics.relational.db import Database, apply_ddl
 
 from session_analytics.tests.support import RegistryResetTestCase
+
+_FASTAPI = (
+    importlib.util.find_spec("fastapi") is not None
+    and importlib.util.find_spec("httpx") is not None
+)
 
 NOW = datetime(2026, 9, 8, 12, 0, 0, tzinfo=timezone.utc)
 _NOISE = NoiseConfig(min_turns=0, min_duration_seconds=0, path_patterns=("cct-probe",))
@@ -71,8 +77,9 @@ class TestTeamStatus(RegistryResetTestCase):
             (project, dev, phase, feature, count, _iso(at)),
         )
 
-    def _status(self, noise=_NOISE, window=300):
-        return T.team_status(self.db, noise=noise, active_window_seconds=window, now=NOW)
+    def _status(self, noise=_NOISE, window=300, aliases=None):
+        return T.team_status(
+            self.db, noise=noise, active_window_seconds=window, now=NOW, aliases=aliases)
 
     def test_liveness_is_last_seen_never_a_verdict(self) -> None:
         self.assertEqual(T.liveness(_iso(NOW - timedelta(seconds=299)), NOW, 300), "active")
@@ -142,6 +149,93 @@ class TestTeamStatus(RegistryResetTestCase):
         self.assertIn("idle", ben)
         self.assertRegex(ben, r"—\s+—\s+—$")
         self.assertTrue(any("1 turns without a timestamp" in line for line in lines))
+
+    # ── team.aliases: one person's several ids, folded at read time ──
+
+    def test_alias_fr2_folds_ids_sharing_a_name_and_names_merged_ids(self) -> None:
+        s = self._status(aliases={"ben": "Gosha", "ana": "Gosha"})
+        rows = {d["developer_id"]: d for d in s["developers"]}
+        # The row is named after the first id in the MAPPING's order, not
+        # the first alphabetically.
+        self.assertNotIn("ana", rows)
+        self.assertEqual(rows["ben"]["display_name"], "Gosha")
+        self.assertEqual(rows["ben"]["merged_ids"], ["ben", "ana"])
+        # Nothing is hidden: an unaliased row still says what it is made of.
+        self.assertEqual(rows["registered-only"]["merged_ids"], ["registered-only"])
+        self.assertEqual((s["totals"]["developers"], len(s["developers"])), (2, 2))
+
+    def test_alias_fr3_sums_the_windows_and_keeps_the_newest_heartbeat(self) -> None:
+        rows = {d["developer_id"]: d
+                for d in self._status(aliases={"ana": "Gosha", "ben": "Gosha"})["developers"]}
+        folded = rows["ana"]
+        # 30d: ana's three stamped turns (two priced, $3.25) + ben's one
+        # unpriced turn, over both their sessions.
+        self.assertEqual(folded["windows"]["30d"], {
+            "sessions": 2, "turns": 4, "cost_usd": 3.25, "priced_turns": 2, "priceable_turns": 4})
+        self.assertEqual(folded["windows"]["today"]["turns"], 2)   # ben has nothing today
+        # ana's heartbeat is a minute old, ben's two hours: the newest wins.
+        self.assertEqual(folded["liveness"], "active")
+        self.assertEqual(folded["current"]["project_path"], "/repo/proj")
+        self.assertEqual(self._status(aliases={"ana": "Gosha", "ben": "Gosha"})["totals"]["active_now"], 1)
+
+    def test_alias_fr3_cost_is_null_when_no_folded_id_is_priced(self) -> None:
+        rows = {d["developer_id"]: d
+                for d in self._status(aliases={"ben": "Solo", "registered-only": "Solo"})["developers"]}
+        folded = rows["ben"]
+        self.assertEqual(folded["merged_ids"], ["ben", "registered-only"])
+        self.assertIsNone(folded["windows"]["7d"]["cost_usd"])   # never $0.00
+        self.assertEqual(folded["windows"]["7d"]["priceable_turns"], 1)
+        self.assertEqual(folded["liveness"], "idle")             # ben's beat, hours old
+
+    def test_alias_fr4_config_name_beats_the_developer_table(self) -> None:
+        s = self._status(aliases={"ana": "Gosha"})
+        rows = {d["developer_id"]: d for d in s["developers"]}
+        self.assertEqual(rows["ana"]["display_name"], "Gosha")   # not "Ana"
+        self.assertEqual(rows["ana"]["merged_ids"], ["ana"])
+        line = next(line for line in T.render_status(s) if line.startswith("Gosha (ana)"))
+        self.assertIn("$3.25*", line)
+
+
+@unittest.skipUnless(_FASTAPI, "fastapi/httpx not installed; route test skipped (covered in CI)")
+class TestTeamStatusRouteAliases(RegistryResetTestCase):
+    """FR-4 on the API side: /api/team/status folds from the loaded
+    config, so the Team tab shows the same row the CLI prints."""
+
+    def test_alias_fr4_route_folds_from_the_loaded_config(self) -> None:
+        from unittest import mock
+
+        from fastapi.testclient import TestClient
+
+        from session_analytics import config as cfgmod
+        from session_analytics.api.server import create_app
+
+        dsn = self.sqlite_dsn()
+        db = Database.connect(dsn)
+        apply_ddl(db)
+        db.execute("INSERT INTO developer (developer_id, display_name) VALUES (?, ?)", ("i-am-goga", "Ivan"))
+        for native, dev, cost in (("s-1", "i-am-goga", 1.0), ("s-2", "local", 0.5)):
+            db.execute(
+                "INSERT INTO copilot_session (copilot, session_id, project_path, developer_id, turn_count, "
+                "started_at, duration_seconds) VALUES (?, ?, '/repo/proj', ?, 50, ?, 600)",
+                (C.COPILOT_CLAUDE_CODE, native, dev, _iso(NOW)),
+            )
+            sid = int(db.query_one("SELECT id FROM copilot_session WHERE session_id = ?", (native,))[0])
+            db.execute(
+                "INSERT INTO copilot_turn (session_id, sequence_num, role, content_preview, timestamp, "
+                "cost_usd, model) VALUES (?, 1, ?, '', ?, ?, 'm')",
+                (sid, C.ROLE_ASSISTANT, _iso(datetime.now(timezone.utc)), cost),
+            )
+        db.commit()
+        db.close()
+        client = TestClient(create_app(dsn), base_url="http://127.0.0.1:8765")
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_TEAM_ALIASES: "i-am-goga=Gosha,local=Gosha"}):
+            body = client.get("/api/team/status").json()
+        self.assertEqual(len(body["developers"]), 1)
+        row = body["developers"][0]
+        self.assertEqual((row["developer_id"], row["display_name"]), ("i-am-goga", "Gosha"))
+        self.assertEqual(row["merged_ids"], ["i-am-goga", "local"])
+        self.assertEqual(row["windows"]["30d"]["cost_usd"], 1.5)
 
 
 if __name__ == "__main__":

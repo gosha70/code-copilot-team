@@ -85,6 +85,47 @@ class TestCli(RegistryResetTestCase):
             self.assertIn("[WARNING] budget: the team is at 86%", out)
             self.assertEqual(_run(["team", "alerts", "--db", dsn, "--fail-on", "warning"])[0], 1)
 
+    def test_alias_fr4_team_status_folds_the_configured_ids(self) -> None:
+        # FR-4: the CLI applies load_config().team.aliases, so one
+        # person's two derived ids print as one row under the configured
+        # name — which beats the `developer` table's display_name.
+        from datetime import datetime, timezone
+        from unittest import mock
+
+        from session_analytics import config as cfgmod
+        from session_analytics.relational.db import Database, apply_ddl
+
+        dsn = self.sqlite_dsn()
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        db = Database.connect(dsn)
+        apply_ddl(db)
+        db.execute("INSERT INTO developer (developer_id, display_name) VALUES ('i-am-goga', 'Ivan')")
+        for native, dev, cost in (("s-1", "i-am-goga", 1.0), ("s-2", "local", 0.5)):
+            db.execute(
+                "INSERT INTO copilot_session (copilot, session_id, project_path, developer_id, turn_count, "
+                "started_at, duration_seconds) VALUES ('claude-code', ?, '/repo/proj', ?, 50, ?, 600)",
+                (native, dev, now),
+            )
+            sid = int(db.query_one("SELECT id FROM copilot_session WHERE session_id = ?", (native,))[0])
+            db.execute(
+                "INSERT INTO copilot_turn (session_id, sequence_num, role, content_preview, timestamp, "
+                "cost_usd, model) VALUES (?, 1, 'assistant', '', ?, ?, 'm')",
+                (sid, now, cost),
+            )
+        db.commit()
+        db.close()
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_TEAM_ALIASES: "i-am-goga=Gosha,local=Gosha"}):
+            code, out = _run(["team", "status", "--db", dsn])
+            self.assertEqual(code, C.EXIT_OK)
+            self.assertIn("0 of 1 active", out)          # two ids, one developer
+            self.assertTrue(any(line.startswith("Gosha (i-am-goga)") for line in out.splitlines()))
+            self.assertIn("$1.50", out)                  # both ids' priced turns
+            code, out = _run(["team", "status", "--db", dsn, "--json"])
+        self.assertEqual(code, C.EXIT_OK)
+        self.assertEqual(
+            [d["merged_ids"] for d in json.loads(out)["developers"]], [["i-am-goga", "local"]])
+
     def test_ingest_then_doctor(self) -> None:
         dsn = self.sqlite_dsn()
         code, out = _run(

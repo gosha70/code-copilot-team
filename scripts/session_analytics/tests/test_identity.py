@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -211,6 +212,7 @@ class TestCliDerivation(unittest.TestCase):
                 active_window_seconds=300,
                 budgets=BudgetsConfig(None, None, None, None),
                 runaway=RunawayConfig(60, 300, 50, 0.5, 20, 20.0),
+                aliases={},
             ),
             noise=NoiseConfig(min_turns=0, min_duration_seconds=0, path_patterns=()),
             pricing=PricingConfig(models={}),
@@ -352,3 +354,51 @@ class TestWatchDerivesOnce(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(len(derive_calls), 1)  # derived ONCE, not per cycle
         self.assertEqual(ids_seen, ["Team_A", "Team_A", "Team_A"])
+
+
+class TestTeamAliasesConfig(unittest.TestCase):
+    """FR-1 (#174 aliases): `team.aliases` is configuration like every
+    other team key — the data file's mapping with CCT_SA_TEAM_ALIASES
+    layered on top — and a malformed entry refuses loudly, naming the
+    key, rather than dropping a developer id from the fold in silence."""
+
+    @staticmethod
+    def _aliases(env_value=None, data=None):
+        from session_analytics import config as cfgmod
+
+        overrides = {C.CFG_TEAM: {C.CFG_TEAM_ALIASES: data}} if data is not None else None
+        # Hermetic: the host's ~/.cct config and .env must not decide
+        # what this test loads.
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.object(cfgmod, "_USER_CONFIG", Path("/nonexistent/session-analytics.json")), \
+             mock.patch.dict("os.environ", {}):
+            os.environ.pop(cfgmod.ENV_TEAM_ALIASES, None)
+            if env_value is not None:
+                os.environ[cfgmod.ENV_TEAM_ALIASES] = env_value
+            return cfgmod.load_config(extra_overrides=overrides).team.aliases
+
+    def test_alias_fr1_defaults_to_empty(self) -> None:
+        self.assertEqual(self._aliases(), {})
+
+    def test_alias_fr1_data_file_mapping_with_env_on_top(self) -> None:
+        self.assertEqual(self._aliases(data={"i-am-goga": "Gosha"}), {"i-am-goga": "Gosha"})
+        # env entries are trimmed, add to the file's, and win per id
+        got = self._aliases(
+            data={"i-am-goga": "From file", "local": "Gosha"},
+            env_value=" i-am-goga = Gosha , i-am-goga-gmail-com=Gosha ",
+        )
+        self.assertEqual(got, {"i-am-goga": "Gosha", "local": "Gosha", "i-am-goga-gmail-com": "Gosha"})
+        # the operator's order is preserved: the fold names a row after
+        # the first id it sees.
+        self.assertEqual(list(got), ["i-am-goga", "local", "i-am-goga-gmail-com"])
+        self.assertEqual(self._aliases(env_value="a=A,"), {"a": "A"})  # trailing comma is not an entry
+
+    def test_alias_fr1_malformed_entry_refuses_naming_the_key(self) -> None:
+        for bad in ("i-am-goga", "=Gosha", "i-am-goga=", "a=A,=B"):
+            with self.assertRaises(ValueError) as caught:
+                self._aliases(env_value=bad)
+            self.assertIn(f"{C.CFG_TEAM}.{C.CFG_TEAM_ALIASES}", str(caught.exception), bad)
+        for bad_data in ({"i-am-goga": ""}, {"": "Gosha"}, {"i-am-goga": 7}, ["i-am-goga=Gosha"]):
+            with self.assertRaises(ValueError) as caught:
+                self._aliases(data=bad_data)
+            self.assertIn(f"{C.CFG_TEAM}.{C.CFG_TEAM_ALIASES}", str(caught.exception), bad_data)
