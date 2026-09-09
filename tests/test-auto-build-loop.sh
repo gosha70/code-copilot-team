@@ -1295,8 +1295,12 @@ LEDGER="$P/.cct/auto-build/demo-feat/state.json"
 assert_eq "ledger records auto_merge_armed" "true" "$(jq -r '.pr.auto_merge_armed' "$LEDGER")"
 assert_eq "ledger records merge_method" "squash" "$(jq -r '.pr.merge_method' "$LEDGER")"
 assert_eq "gh pr merge --auto invoked exactly once" "1" "$(grep -c '^pr merge .* --auto --squash' "$GH_LOG")"
-# the summary's Outcome line says armed, from the actual result
-assert_contains "summary reports the armed auto-merge" "$(cat "$P/specs/demo-feat/automation-summary.md")" "merge: auto-merge armed (--squash)"
+# the pre-push sentence states intent; only the Outcome line, written
+# after arm_auto_merge succeeded, says "armed"
+F1_SUMMARY=$(cat "$P/specs/demo-feat/automation-summary.md")
+assert_contains "the pre-push sentence states the intent to request auto-merge" "$F1_SUMMARY" "will push branch feature/demo-feat, open a PR and request gated auto-merge (merge.enabled=true"
+assert_contains "the Outcome line reports the armed auto-merge" "$F1_SUMMARY" "merge: auto-merge armed (--squash)"
+assert_eq "…and 'armed' appears only there" "1" "$(echo "$F1_SUMMARY" | grep -c 'armed')"
 rm -rf "$P" "$BARE"; unset GH_BRANCH_PROTECTED
 
 # F1-resume: an already-armed PR is never re-armed (idempotent)
@@ -1325,7 +1329,7 @@ assert_contains "enabled:false still opened a PR" "$(jq -r '.pr.url' "$P/.cct/au
 # what the profile could do — it read "Profile: merge … gated auto-merge"
 # for a run that skipped the merge.
 F2_SUMMARY=$(cat "$P/specs/demo-feat/automation-summary.md")
-assert_contains "summary names the profile as run" "$F2_SUMMARY" "Profile: merge — branch feature/demo-feat pushed; PR opened; merge skipped (merge.enabled=false)"
+assert_contains "summary names the profile as run" "$F2_SUMMARY" "Profile: merge — will push branch feature/demo-feat and open a PR; merge skipped (merge.enabled=false)"
 assert_eq "summary never claims gated auto-merge when merge is disabled" "0" "$(echo "$F2_SUMMARY" | grep -c 'gated auto-merge')"
 assert_contains "the Outcome line records the PR and the skipped merge" "$F2_SUMMARY" "merge: skipped (merge.enabled=false)"
 assert_contains "…with the PR number" "$F2_SUMMARY" "Outcome: PR #"
@@ -1343,6 +1347,12 @@ assert_exit "unprotected base parks (exit 4)" 4 "$RC"
 ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
 assert_eq "park reason merge_blocked" "merge_blocked" "$(jq -r '.reason' "$ESC" 2>/dev/null)"
 assert_eq "no merge attempted on unprotected base" "0" "$(grep -c '^pr merge' "$GH_LOG")"
+# The summary committed before the park states intent only: it must not
+# say the merge was armed (it never was) — the false provenance the
+# review of #332 named.
+F3_SUMMARY=$(cat "$P/specs/demo-feat/automation-summary.md" 2>/dev/null || true)
+assert_eq "a parked-on-protection run's summary never says armed" "0" "$(echo "$F3_SUMMARY" | grep -c 'armed')"
+assert_eq "…and carries no Outcome line" "0" "$(echo "$F3_SUMMARY" | grep -c '^Outcome:')"
 rm -rf "$P" "$BARE"
 
 # F4: pr profile never invokes pr merge (ladder guard)
