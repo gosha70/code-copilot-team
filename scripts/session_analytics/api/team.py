@@ -148,8 +148,12 @@ def team_status(
             "feature_id": feature, "checkpoint_count": int(count or 0), "at": at,
         }
         prev = beats.get(dev)
-        # The newest heartbeat is the developer's current work.
-        if prev is None or (at or "") > (prev["at"] or ""):
+        # The newest heartbeat is the developer's current work — by PARSED
+        # time, the same rule _newest_beat applies across folded ids: the
+        # store holds "2026-09-07 15:27:00" and "2026-09-07T15:27:00.154Z"
+        # side by side, and a string compare orders those wrongly (the
+        # human review of #331 found this; the automated PASS had not).
+        if prev is None or _beat_key(current) > _beat_key(prev):
             beats[dev] = current
 
     # ── turns in the last 30 days, bucketed by window ────────────────

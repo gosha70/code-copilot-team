@@ -250,6 +250,30 @@ class TestTeamAliases(RegistryResetTestCase):
         self.assertEqual(
             {d["developer_id"]: d for d in self._status()["developers"]}["dev-x"]["liveness"], "unknown")
 
+    def test_alias_fr3_newest_heartbeat_within_one_id_is_by_parsed_time_not_text(self) -> None:
+        # Two heartbeats for ONE developer id whose timestamp shapes make
+        # string order and chronological order disagree: the older one is
+        # written "2026-09-08T11:00:00Z" (a 'T' separator), the newer one
+        # "2026-09-08 11:30:00" (a space sorts BEFORE 'T'). The newer must
+        # win, so the fold hands _newest_beat the right heartbeat (FR-3).
+        # Different project paths, because the table's key is (project, id).
+        self.db.execute(
+            f"INSERT INTO {C.TBL_LOCAL_HEARTBEAT} (project_path, developer_id, phase, feature_id, checkpoint_count, "
+            "last_heartbeat_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("/repo/older", "mixed", "plan", "old", 1, (NOW - timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%SZ")),
+        )
+        self.db.execute(
+            f"INSERT INTO {C.TBL_LOCAL_HEARTBEAT} (project_path, developer_id, phase, feature_id, checkpoint_count, "
+            "last_heartbeat_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("/repo/newer", "mixed", "build", "new", 2, (NOW - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        self.db.commit()
+        # Lexically the 'T' row sorts after the space row; chronologically it is older.
+        older, newer = (NOW - timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%SZ"), (NOW - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+        self.assertGreater(older, newer, "the fixture must make string order disagree with time order")
+        mixed = {d["developer_id"]: d for d in self._status(aliases={})["developers"]}["mixed"]
+        self.assertEqual((mixed["current"]["project_path"], mixed["current"]["phase"]), ("/repo/newer", "build"))
+
     def test_alias_fr4_the_alias_name_beats_the_developer_table(self) -> None:
         goga = {d["developer_id"]: d for d in self._status()["developers"]}["i-am-goga"]
         self.assertEqual(goga["display_name"], "Gosha")
