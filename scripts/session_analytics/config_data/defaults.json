@@ -135,6 +135,7 @@
   },
   "team": {
     "active_window_seconds": 300,
+    "aliases": {},
     "budgets": {
       "team_daily_usd": null,
       "team_monthly_usd": null,

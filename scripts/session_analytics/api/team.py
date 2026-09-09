@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from .. import constants as C
 from ..config import NoiseConfig
@@ -62,6 +62,17 @@ class _Rollup:
             self.priced_turns += 1
             self.cost_usd = (self.cost_usd or 0.0) + float(cost)
 
+    def merge(self, other: "_Rollup") -> None:
+        """Fold another id's window into this one (aliases). Sessions are
+        a union — a session belongs to one developer id, so the union IS
+        the sum — and an unpriced window stays null, never 0."""
+        self.sessions |= other.sessions
+        self.turns += other.turns
+        self.priced_turns += other.priced_turns
+        self.priceable_turns += other.priceable_turns
+        if other.cost_usd is not None:
+            self.cost_usd = (self.cost_usd or 0.0) + other.cost_usd
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "sessions": len(self.sessions),
@@ -76,12 +87,33 @@ def _empty_windows() -> dict[str, _Rollup]:
     return {w: _Rollup() for w in WINDOWS}
 
 
+def _fold(aliases: Mapping[str, str], dev_ids) -> list[tuple[str, Optional[str], list[str]]]:
+    """One ``(row id, configured name, folded ids)`` per developer row.
+
+    Ids the operator gave the same name in ``team.aliases`` are one
+    person: they become one row, named by the alias, carrying every
+    folded id in the order the mapping names them. Every other id is its
+    own row with no configured name. Only ids the store actually knows
+    are folded — an alias for someone with no rows is not a developer.
+    """
+    known = set(dev_ids)
+    grouped: dict[str, list[str]] = {}
+    for dev, name in aliases.items():
+        if dev in known:
+            grouped.setdefault(name, []).append(dev)
+    folded = {dev for ids in grouped.values() for dev in ids}
+    rows = [(ids[0], name, list(ids)) for name, ids in grouped.items()]
+    rows += [(dev, None, [dev]) for dev in known - folded]
+    return rows
+
+
 def team_status(
     db: Database,
     *,
     noise: Optional[NoiseConfig],
     active_window_seconds: int,
     now: Optional[datetime] = None,
+    aliases: Optional[Mapping[str, str]] = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -148,16 +180,32 @@ def team_status(
     all_devs = set(names) | set(beats) | set(by_dev) | {
         r[0] for r in db.query(f"SELECT DISTINCT s.developer_id FROM copilot_session s WHERE {keep_sql}", keep_params)
     }
+    # Aliased ids are folded into one row here, at READ time: the store
+    # keeps every id it recorded, and `merged_ids` names them all, so
+    # the fold hides no attribution.
     developers = []
-    for dev in sorted(all_devs):
-        beat = beats.get(dev)
+    for dev, alias_name, merged_ids in _fold(aliases or {}, all_devs):
+        beat = None
+        for member in merged_ids:
+            candidate = beats.get(member)
+            # The newest heartbeat across the folded ids is the person's
+            # current work — the same rule as within one id.
+            if candidate and (beat is None or (candidate["at"] or "") > (beat["at"] or "")):
+                beat = candidate
+        windows = _empty_windows()
+        for member in merged_ids:
+            for w, rollup in by_dev.get(member, _empty_windows()).items():
+                windows[w].merge(rollup)
         state = liveness(beat["at"] if beat else None, now, active_window_seconds)
         developers.append({
             "developer_id": dev,
-            "display_name": names.get(dev),
+            # A configured alias is the operator's own naming: it wins
+            # over whatever the developer table recorded at ingest.
+            "display_name": alias_name if alias_name is not None else names.get(dev),
+            "merged_ids": merged_ids,
             "liveness": state,
             "current": beat,
-            "windows": {w: r.as_dict() for w, r in by_dev.get(dev, _empty_windows()).items()},
+            "windows": {w: r.as_dict() for w, r in windows.items()},
         })
     # Active first, then the most recently seen, then by id — the
     # people working now at the top, stable between polls.

@@ -211,6 +211,7 @@ class TestCliDerivation(unittest.TestCase):
                 active_window_seconds=300,
                 budgets=BudgetsConfig(None, None, None, None),
                 runaway=RunawayConfig(60, 300, 50, 0.5, 20, 20.0),
+                aliases={},
             ),
             noise=NoiseConfig(min_turns=0, min_duration_seconds=0, path_patterns=()),
             pricing=PricingConfig(models={}),
@@ -255,6 +256,71 @@ class TestCliDerivation(unittest.TestCase):
             _developer_id_cfg({"developer_id": {"a": 1}})
         self.assertIsNone(_developer_id_cfg({}))
         self.assertEqual(_developer_id_cfg({"developer_id": "x"}), "x")
+
+
+class TestTeamAliases(unittest.TestCase):
+    """FR-1: ``team.aliases`` in the data file, ``CCT_SA_TEAM_ALIASES``
+    on top, and a malformed entry refused with the key named — an alias
+    that quietly vanished would put one person back on the Team tab as
+    several developers, the bug the setting exists to fix."""
+
+    @staticmethod
+    def _team(block=None, env_value=None):
+        # The real loader over the SHIPPED defaults, with only the team
+        # block overridden: hermetic (no ~/.cct, no repo .env) while
+        # still proving the data-file layer.
+        from session_analytics import config as config_mod
+
+        data = config_mod._read_defaults()
+        team = dict(data[C.CFG_TEAM])
+        if block is not None:
+            team[C.CFG_TEAM_ALIASES] = block
+        return config_mod._load_team(
+            {**data, C.CFG_TEAM: team},
+            lambda key: env_value if key == config_mod.ENV_TEAM_ALIASES else None,
+        )
+
+    def test_alias_fr1_defaults_to_empty(self) -> None:
+        from session_analytics import config as config_mod
+
+        # The default lives in the data file, not in Python source.
+        self.assertEqual(config_mod._read_defaults()[C.CFG_TEAM][C.CFG_TEAM_ALIASES], {})
+        self.assertEqual(self._team().aliases, {})
+
+    def test_alias_fr1_env_parses_pairs_and_trims(self) -> None:
+        team = self._team(env_value=" i-am-goga = Gosha , local=Gosha ")
+        self.assertEqual(team.aliases, {"i-am-goga": "Gosha", "local": "Gosha"})
+        # Order is the order the operator wrote — it picks the row's id.
+        self.assertEqual(list(team.aliases), ["i-am-goga", "local"])
+
+    def test_alias_fr1_env_layers_over_the_data_file(self) -> None:
+        team = self._team(
+            block={"i-am-goga": "Gosha", "local": "Gosha"},
+            env_value="local=Someone Else,ben=Ben",
+        )
+        self.assertEqual(
+            team.aliases,
+            {"i-am-goga": "Gosha", "local": "Someone Else", "ben": "Ben"},
+        )
+
+    def test_alias_fr1_malformed_entry_refuses_naming_team_aliases(self) -> None:
+        for bad in ("nope", "=Gosha", "i-am-goga=", "a=A,broken"):
+            with self.assertRaises(ValueError) as caught:
+                self._team(env_value=bad)
+            self.assertIn(f"{C.CFG_TEAM}.{C.CFG_TEAM_ALIASES}", str(caught.exception))
+        for bad_block in ({"i-am-goga": ""}, {"": "Gosha"}, {"i-am-goga": 7}, ["a=A"]):
+            with self.assertRaises(ValueError) as caught:
+                self._team(block=bad_block)
+            self.assertIn(f"{C.CFG_TEAM}.{C.CFG_TEAM_ALIASES}", str(caught.exception))
+
+    def test_alias_fr1_env_reaches_load_config(self) -> None:
+        from session_analytics import config as config_mod
+
+        with mock.patch.object(config_mod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {config_mod.ENV_TEAM_ALIASES: "i-am-goga=Gosha,local=Gosha"}):
+            cfg = config_mod.load_config(dsn="sqlite:///unused")
+        self.assertEqual(cfg.team.aliases["i-am-goga"], "Gosha")
+        self.assertEqual(cfg.team.aliases["local"], "Gosha")
 
 
 class TestUpsertSqlIsTheRealStatement(unittest.TestCase):

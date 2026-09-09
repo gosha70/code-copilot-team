@@ -45,6 +45,42 @@ class TestCli(RegistryResetTestCase):
         code, _ = _run(["team", "status", "--db", dsn, "--window", "0"])
         self.assertEqual(code, C.EXIT_USAGE)
 
+    def test_alias_fr4_team_status_folds_the_configured_aliases(self) -> None:
+        # FR-4: the CLI applies load_config().team.aliases, so one
+        # person recorded under two ids prints as ONE row.
+        from datetime import datetime, timezone
+        from unittest import mock
+
+        from session_analytics import config as cfgmod
+        from session_analytics.relational.db import Database, apply_ddl
+
+        dsn = self.sqlite_dsn()
+        db = Database.connect(dsn)
+        apply_ddl(db)
+        db.execute("INSERT INTO developer (developer_id, display_name) VALUES ('local', 'Local')")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for dev, native in (("i-am-goga", "a1"), ("local", "a2")):
+            db.execute("INSERT INTO copilot_session (copilot, session_id, project_path, developer_id, "
+                       "turn_count, started_at) VALUES ('claude-code', ?, '/repo/p', ?, 50, ?)", (native, dev, now))
+            sid = int(db.query_one("SELECT id FROM copilot_session WHERE session_id = ?", (native,))[0])
+            db.execute("INSERT INTO copilot_turn (session_id, sequence_num, role, content_preview, timestamp, "
+                       "cost_usd, model) VALUES (?, 1, 'assistant', '', ?, 1.5, 'm')", (sid, now))
+        db.commit(); db.close()
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_TEAM_ALIASES: "i-am-goga=Gosha,local=Gosha",
+                                            cfgmod.ENV_NOISE_MIN_DURATION: "0"}):
+            code, out = _run(["team", "status", "--db", dsn])
+            self.assertEqual(code, C.EXIT_OK)
+            self.assertIn("of 1 active", out)  # two ids, ONE developer row
+            # The alias names the row, beating the developer table's "Local".
+            self.assertTrue(any(line.startswith("Gosha (i-am-goga)") for line in out.splitlines()))
+            self.assertNotIn("Local", out)
+            code, out = _run(["team", "status", "--db", dsn, "--json"])
+        body = json.loads(out)
+        self.assertEqual(len(body["developers"]), 1)
+        self.assertEqual(body["developers"][0]["merged_ids"], ["i-am-goga", "local"])
+        self.assertEqual(body["developers"][0]["windows"]["today"]["cost_usd"], 3.0)
+
     def test_team_alerts_exit_code_is_the_alarm(self) -> None:
         from unittest import mock
 

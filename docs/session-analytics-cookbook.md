@@ -528,6 +528,26 @@ never sent one reads as "no heartbeat yet". Costs sum priced turns
 only; a `*` marks a window where some priceable turns had no price,
 and an em dash means nothing in the window was priced.
 
+One person can appear as several developers: `developer_id` is derived
+at ingest (flag, `CCT_DEVELOPER_ID`, config, git email local-part, then
+`local`), so a machine reconfigured over time writes sessions under
+more than one id. Fold them at read time with `team.aliases` — a
+mapping from developer id to display name, either in
+`~/.cct/session-analytics.json` or as `CCT_SA_TEAM_ALIASES` in `.env`:
+
+```
+CCT_SA_TEAM_ALIASES=i-am-goga=Gosha,i-am-goga-gmail-com=Gosha,local=Gosha
+```
+
+Every id given the same name becomes one row on the Team tab and in
+`team status`, under that name, with sessions and cost added together
+and the newest of their heartbeats as the current work; the name also
+beats whatever the `developer` table recorded. The store is never
+rewritten — the rows keep their own ids, and the payload's
+`merged_ids` names every id folded into the row. A malformed entry
+(no `=`, or an empty id or name) is refused at startup rather than
+dropped.
+
 ### 8.5 Budgets and runaway alerts
 
 The Team tab opens with an **Alerts** card, and `./scripts/session-analytics
