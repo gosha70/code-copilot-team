@@ -3982,17 +3982,41 @@ push_branch() {
 # ── Review integration (FR-9..FR-12) ─────────────────────────
 
 init_review_state() {
-    # init_review_state <phase-base-ref>
+    # init_review_state <phase-base-ref> <phase-num>
+    # The state names the run it belongs to (the ledger's attempt_id),
+    # the phase and the phase base, so a later run can tell its own
+    # parked review from a leftover (see review_state_is_ours).
+    local base_ref="$1" phase_num="${2:-0}" attempt
+    attempt=$(jq -r '.attempt_id // empty' "$STATE" 2>/dev/null || true)
     mkdir -p "$PROJECT_DIR/.cct/review"
     jq -n \
         --arg fid "$FEATURE_ID" --arg peer "$GATING_REVIEWER" --arg tref "$BRANCH_NAME" \
         --arg scope "$GATING_SCOPE" --arg spec "$GATING_SPECIALIZATION" \
         --arg subj "$SUBJECT_PROVIDER" --argjson start "$(now_epoch)" \
+        --arg attempt "$attempt" --argjson pn "$phase_num" --arg pb "$base_ref" \
         '{current_round: 0, attempt: 1, loop_start: $start, feature_id: $fid,
           phase: "build", subject_provider: $subj, peer_provider: $peer,
           review_scope: $scope, review_specialization: $spec,
-          target_ref: $tref, last_verdict: null, findings: {}}' \
+          target_ref: $tref, last_verdict: null, findings: {},
+          run_attempt: $attempt, phase_num: $pn, phase_base: $pb}' \
         > "$PROJECT_DIR/.cct/review/state.json"
+}
+
+review_state_is_ours() {
+    # review_state_is_ours <state-file> <phase-num> <phase-base-ref>
+    # True only when the state was written by THIS ledger attempt for
+    # THIS phase on THIS base. Run 2 of #190 (2026-09-09) inherited run
+    # 1's state because the guard was "does the file exist": the
+    # runner's breaker measured its wall clock from the old loop_start
+    # and tripped before any reviewer was called. A state without a
+    # run_attempt (pre-fix driver) is a leftover too.
+    local file="$1" phase_num="$2" base_ref="$3" mine
+    mine=$(jq -r '.attempt_id // empty' "$STATE" 2>/dev/null || true)
+    [[ -n "$mine" ]] || return 1
+    jq -e --arg fid "$FEATURE_ID" --arg tref "$BRANCH_NAME" --arg attempt "$mine" \
+        --argjson pn "$phase_num" --arg pb "$base_ref" \
+        '.feature_id == $fid and .target_ref == $tref and .run_attempt == $attempt
+         and .phase_num == $pn and .phase_base == $pb' "$file" >/dev/null 2>&1
 }
 
 compose_fix_prompt() {
@@ -4123,9 +4147,17 @@ run_review_loop() {
 
     # Live parked/interrupted review state is reused as-is: a /review-decide
     # retry relies on the existing attempt counter and monotonic round
-    # numbering (FR-4). Fresh phases start a fresh loop.
-    if [[ ! -f "$PROJECT_DIR/.cct/review/state.json" ]]; then
-        init_review_state "$base_ref"
+    # numbering (FR-4). Fresh phases start a fresh loop. Reuse is bound to
+    # THIS attempt, phase and base — a leftover from another run (or an
+    # older driver) is set aside, never inherited.
+    local _rs="$PROJECT_DIR/.cct/review/state.json"
+    if [[ -f "$_rs" ]] && ! review_state_is_ours "$_rs" "$n" "$base_ref"; then
+        local _stale="$PROJECT_DIR/.cct/review-stale-$(now_epoch)"
+        mv "$PROJECT_DIR/.cct/review" "$_stale"
+        journal "review_state_reset" "leftover review state (feature $(jq -r '.feature_id // "?"' "$_stale/state.json" 2>/dev/null), branch $(jq -r '.target_ref // "?"' "$_stale/state.json" 2>/dev/null), attempt $(jq -r '.run_attempt // "none"' "$_stale/state.json" 2>/dev/null)) set aside at ${_stale#$PROJECT_DIR/}; phase $n starts a fresh loop"
+    fi
+    if [[ ! -f "$_rs" ]]; then
+        init_review_state "$base_ref" "$n"
     fi
     local fix_count=0
     while true; do
