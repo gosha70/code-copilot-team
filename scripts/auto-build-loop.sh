@@ -5451,8 +5451,16 @@ set_status "finalizing"
 {
     echo ""
     echo "## Run complete ($(now_iso))"
-    if [[ "$CAN_MERGE" == "true" ]]; then
-        echo "Profile: merge — branch $BRANCH_NAME pushed; PR opened; gated auto-merge per merge.enabled + branch protection (GitHub merges when required checks pass; the driver never merges locally)."
+    # Capability is not action: `unattended` CAN merge, and whether it
+    # WILL is merge.enabled. Run 4 of #190 (2026-09-09) shipped a
+    # summary reading "Profile: merge … gated auto-merge" for an
+    # unattended run with merge.enabled=false. The profile is named as
+    # run, the merge decision from the config; the Outcome line below
+    # is appended after the PR/merge step from what actually happened.
+    if [[ "$CAN_MERGE" == "true" && "$MERGE_ENABLED" == "true" ]]; then
+        echo "Profile: $PROFILE — branch $BRANCH_NAME pushed; PR opened; gated auto-merge armed per merge.enabled=true + branch protection (GitHub merges when required checks pass; the driver never merges locally)."
+    elif [[ "$CAN_MERGE" == "true" ]]; then
+        echo "Profile: $PROFILE — branch $BRANCH_NAME pushed; PR opened; merge skipped (merge.enabled=false) — a human reviews and merges."
     elif [[ "$CAN_OPEN_PR" == "true" ]]; then
         echo "Profile: $PROFILE — branch $BRANCH_NAME pushed to $BRANCH_REMOTE; a pull request tracks the work (the driver never merges)."
     elif [[ -n "${CAPS_DOWNGRADED_CAUSE:-}" ]]; then
@@ -5485,6 +5493,24 @@ if [[ "$CAN_OPEN_PR" == "true" ]]; then
         else
             FINAL_MSG="$FINAL_MSG (merge.enabled=false — PR open, not merged)"
         fi
+    fi
+    # The Outcome line is what actually happened, written after it did:
+    # the PR and whether auto-merge was armed, from the ledger. Its
+    # commit and push are best-effort and journaled (the PR already
+    # tracks the branch; a failure here changes nothing above).
+    {
+        echo ""
+        echo "Outcome: PR #$PR_NUMBER $PR_ACTION ($PR_URL); merge: $(
+            if [[ "$CAN_MERGE" != "true" ]]; then echo "not in this profile ($PROFILE)"
+            elif [[ "$MERGE_ARMED" == "true" ]]; then echo "auto-merge armed (--$MERGE_METHOD)"
+            else echo "skipped (merge.enabled=false)"; fi)."
+    } >> "$SUMMARY_MD"
+    _out_rc=0
+    driver_commit "docs($FEATURE_ID): automation outcome [auto-build]" || _out_rc=$?
+    if [[ $_out_rc -ge 2 ]]; then
+        journal "artifact_skipped" "outcome line not committed (git failure, journaled, not blocking)"
+    elif [[ $_out_rc -eq 0 ]] && ! push_branch soft; then
+        journal "artifact_skipped" "outcome line committed but not pushed (journaled, not blocking)"
     fi
 elif [[ -n "${CAPS_DOWNGRADED_CAUSE:-}" ]]; then
     FINAL_MSG="$FINAL_MSG ($PROFILE, capabilities downgraded: $CAPS_DOWNGRADED_CAUSE — nothing pushed)"
