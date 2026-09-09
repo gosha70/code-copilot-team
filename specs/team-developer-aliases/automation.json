@@ -23,7 +23,7 @@
   "review": {
     "reviewers": [
       {
-        "provider": "codex",
+        "provider": "spark",
         "specialization": "correctness",
         "scope": "both",
         "gating": true
