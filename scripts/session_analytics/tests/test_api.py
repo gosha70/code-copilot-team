@@ -753,6 +753,27 @@ class TestApi(RegistryResetTestCase):
         self.assertEqual(m["models"], ["llama3.2:latest", "nomic-embed-text:latest", "qwen3.6:27b"])
         self.assertEqual(m["not_embedding"], [])
 
+    def test_team_alerts_route_and_alerts_in_status(self) -> None:
+        from session_analytics import config as cfgmod
+
+        body = self.client.get("/api/team/alerts").json()
+        self.assertEqual((body["alerts"], body["breaches"], body["derived"]), ([], 0, True))
+        self.assertIsNone(body["budgets"]["team_daily_usd"])
+        self.assertIn("alerts", self.client.get("/api/team/status").json())
+        # A tiny team budget: the fixture session's cost breaches it —
+        # unless nothing is priced, in which case no alert (honesty).
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_BUDGET_TEAM_MONTHLY: "0.000001"}):
+            body = self.client.get("/api/team/alerts").json()
+        self.assertEqual(body["budgets"]["team_monthly_usd"], 0.000001)
+        status = self.client.get("/api/team/status").json()
+        priced = status["totals"]["windows"]["30d"]["cost_usd"]
+        if priced:
+            self.assertEqual(body["breaches"], 1)
+            self.assertEqual(body["alerts"][0]["scope"], "team")
+        else:
+            self.assertEqual(body["alerts"], [])
+
     def test_team_status_route(self) -> None:
         r = self.client.get("/api/team/status")
         self.assertEqual(r.status_code, 200)

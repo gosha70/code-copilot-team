@@ -20,7 +20,7 @@ design decision is `scripts/session_analytics/README.md`; the Studio's
 | **Sessions** | Which sessions are real work (probe runs and two-turn tests are hidden by default; one toggle shows them). |
 | **Session page** | What was said, turn by turn, with the agent's response time — and three analyses a judge writes over the whole transcript: **Agent Tuning** (what to change in your CLAUDE.md, permissions, hooks, skills, with the diff), **Prompt Coaching** (which of your prompts were vague and what to send instead), **Efficiency** (where the turns went, and the script, hook, skill or rule that would remove each detour). |
 | **Ask** | A question about your sessions in words, answered by the judge LLM through read-only lookups (sessions, turn text, analyses, patterns, the graph), each lookup shown so the answer can be checked. |
-| **Team** | Who on the team is active right now (a heartbeat in the last five minutes), what they are on, and what sessions cost per developer, per project and over today / 7 days / 30 days. Reads the shared team store (§8.4); on a local SQLite store it shows one developer. |
+| **Team** | Who on the team is active right now (a heartbeat in the last five minutes), what they are on, what sessions cost per developer, per project and over today / 7 days / 30 days, and the alerts: budgets passed and runaway sessions (§8.5). Reads the shared team store (§8.4); on a local SQLite store it shows one developer. |
 | **Graph** | One session or project and everything it is connected to, every relationship named; a catalogue of questions answered as tables, charts or drawn on the canvas. |
 | **Analysis** | The pipeline as steps — load sessions, build the graph, run the judge, compute KPIs — with a funnel of counts and a **Judge quality** card. |
 | **Benchmark** | What this repository's benchmark harness found: attempts by result with the cost and duration of the sessions they produced, and the predicted pass rate per project. Empty until you run the harness and link its runs (Settings → Benchmarks, then **Link benchmark runs**). |
@@ -88,6 +88,8 @@ Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.j
 | `CCT_SA_JUDGE_BASE_URL`, `CCT_SA_JUDGE_API_KEY` | For the `openai` backend only. | |
 | `CCT_SA_JUDGE_WORKERS` | Parallel judge calls. | `2` |
 | `CCT_SA_TEAM_ACTIVE_WINDOW` | Seconds a heartbeat counts as active on the Team tab. | `300` |
+| `CCT_SA_BUDGET_TEAM_DAILY_USD`, `CCT_SA_BUDGET_TEAM_MONTHLY_USD`, `CCT_SA_BUDGET_DEVELOPER_DAILY_USD`, `CCT_SA_BUDGET_PROJECT_DAILY_USD` | Budgets the Team tab and `team alerts` check (§8.5); blank = none. | none |
+| `CCT_SA_RUNAWAY_RECENT_MINUTES`, `_MAX_TURNS_RECENT`, `_RECENT_TURNS`, `_MAX_ERROR_SHARE`, `_MIN_TURNS_FOR_ERROR_SHARE`, `_MAX_COST_RECENT_USD` | What makes a still-running session a runaway (§8.5). | `60`, `300`, `50`, `0.5`, `20`, `20` |
 | `CCT_SA_EMBED_BACKEND`, `CCT_SA_EMBED_MODEL` | Embeddings for session similarity (Ollama; `nomic-embed-text` works well). | `ollama`, none |
 | `CCT_SA_NOISE_MIN_TURNS`, `CCT_SA_NOISE_MIN_DURATION_SECONDS`, `CCT_SA_NOISE_PATH_PATTERNS` | What the Studio hides as noise (see §5.2). | `3`, `60`, `/cct-probe,/private/var/folders/,/tmp/` |
 | `CCT_DEVELOPER_ID` | Your id on multi-developer stores. | git `user.email` local part, else `local` |
@@ -525,6 +527,37 @@ than the window (`team.active_window_seconds`, default 300, or
 never sent one reads as "no heartbeat yet". Costs sum priced turns
 only; a `*` marks a window where some priceable turns had no price,
 and an em dash means nothing in the window was priced.
+
+### 8.5 Budgets and runaway alerts
+
+The Team tab opens with an **Alerts** card, and `./scripts/session-analytics
+team alerts` prints the same list. Two kinds:
+
+- **Budgets.** Under **Settings → Team** set any of: team per day, team
+  per 30 days, per developer per day, per project per day (USD; blank
+  = no budget). A scope at 80% of its budget is a *warning*, at 100% a
+  *breach*. Budgets count priced turns only; every alert names how many
+  priceable turns had no price, because the true spend is then higher,
+  and a window with nothing priced never breaches.
+- **Runaway sessions.** Always on. A session whose newest turn is
+  within the last 60 minutes is flagged when it produced more than 300
+  turns in that time, or spent more than $20, or more than half of its
+  last 50 turns errored (given at least 20 of them). Each alert names
+  the developer, the project, the session, the figure and the
+  threshold, and links to the session. Thresholds live under
+  `team.runaway` in the config file (`CCT_SA_RUNAWAY_*` in `.env`).
+
+Alerts are derived from the store on every read; nothing is stored, so
+the audit trail is the rows themselves. Nothing is terminated: a
+runaway is flagged for a person to look at.
+
+**For a cron job or a pipeline step**, the exit code is the alarm:
+
+```bash
+./scripts/session-analytics team alerts               # exit 1 on a breach
+./scripts/session-analytics team alerts --fail-on warning
+./scripts/session-analytics team alerts --json        # the full record
+```
 
 ---
 

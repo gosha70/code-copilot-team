@@ -134,6 +134,20 @@
     "claude-code": "~/.claude/projects"
   },
   "team": {
-    "active_window_seconds": 300
+    "active_window_seconds": 300,
+    "budgets": {
+      "team_daily_usd": null,
+      "team_monthly_usd": null,
+      "developer_daily_usd": null,
+      "project_daily_usd": null
+    },
+    "runaway": {
+      "recent_minutes": 60,
+      "max_turns_recent": 300,
+      "recent_turns": 50,
+      "max_error_share": 0.5,
+      "min_turns_for_error_share": 20,
+      "max_cost_recent_usd": 20
+    }
   }
 }

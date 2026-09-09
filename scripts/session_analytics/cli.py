@@ -205,13 +205,16 @@ def _build_parser() -> argparse.ArgumentParser:
              "on, cost per developer and project — the Studio's Team tab, "
              "in the terminal.",
     )
-    p_team.add_argument("action", nargs="?", default="status", choices=["status"],
-                        help="status (default).")
+    p_team.add_argument("action", nargs="?", default="status", choices=["status", "alerts"],
+                        help="status (default) or alerts — budget breaches and runaway sessions; "
+                             "exits 1 when one is at or above --fail-on, for cron and CI.")
     p_team.add_argument("--db", "--dsn", dest="dsn", default=None,
                         help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
     p_team.add_argument("--window", type=int, default=None,
                         help="Seconds a heartbeat counts as active (else config team.active_window_seconds).")
     p_team.add_argument("--json", action="store_true", help="Print the payload as JSON.")
+    p_team.add_argument("--fail-on", default=C.ALERT_BREACH, choices=list(C.ALERT_LEVELS),
+                        help="alerts: the level that makes the exit code 1 (default breach).")
 
     p_sim = sub.add_parser(
         "similar",
@@ -1052,8 +1055,24 @@ def _cmd_team(args: argparse.Namespace) -> int:
     try:
         apply_ddl(db)
         status = team_mod.team_status(db, noise=cfg.noise, active_window_seconds=window)
+        if args.action == "alerts":
+            from .api import alerts as alerts_mod
+
+            report = alerts_mod.all_alerts(
+                db, status, budgets=cfg.team.budgets, runaway=cfg.team.runaway, noise=cfg.noise,
+            )
     finally:
         db.close()
+    if args.action == "alerts":
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            for line in alerts_mod.render_alerts(report):
+                print(line)
+        worst = alerts_mod.worst_level(report["alerts"])
+        # The exit code IS the alarm: a cron job or a pipeline step
+        # fails on it. 1, not a usage/runtime code — nothing went wrong.
+        return 1 if worst and alerts_mod.at_or_above(worst, args.fail_on) else C.EXIT_OK
     if args.json:
         print(json.dumps(status, indent=2))
         return C.EXIT_OK

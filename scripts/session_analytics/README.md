@@ -1041,6 +1041,21 @@ is every developer pointing `CCT_SA_DB` at one Postgres (trusted LAN,
 database credentials; no app-level auth — the owner's 2026-09-08
 decision, recorded in `specs/pi-team-controller/plane-shaping.md`).
 
+### Budgets, runaway detection, alerts (#174 Slice D)
+
+`api/alerts.py` evaluates the team status against `team.budgets`
+(team/day, team/30 days, developer/day, project/day; warning at
+`BUDGET_WARNING_SHARE` = 0.8, breach at 1.0; a window with no priced
+turn never breaches; unpriced priceable turns are counted on every
+alert) and scans recent turns for runaway sessions (`team.runaway`:
+turns in the last `recent_minutes` > `max_turns_recent`; error share
+over the last `recent_turns` > `max_error_share` with at least
+`min_turns_for_error_share`; priced cost in that time >
+`max_cost_recent_usd`). Alerts are derived on every read, never stored.
+`GET /api/team/alerts`, `alerts` on `/api/team/status`, and
+`session-analytics team alerts [--json] [--fail-on warning|breach]`,
+whose exit code (1 at or above the floor) is the cron/CI alarm.
+
 ## Ask: a question in words, answered from the store
 
 `POST /api/ask` (`{question, history}`) streams NDJSON events — `judge`,

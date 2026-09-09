@@ -50,6 +50,21 @@ ENV_NOISE_MIN_DURATION = "CCT_SA_NOISE_MIN_DURATION_SECONDS"
 ENV_NOISE_PATH_PATTERNS = "CCT_SA_NOISE_PATH_PATTERNS"   # comma-separated
 ENV_SIMILARITY_THRESHOLD = "CCT_SA_SIMILARITY_THRESHOLD"
 ENV_TEAM_ACTIVE_WINDOW = "CCT_SA_TEAM_ACTIVE_WINDOW"
+ENV_BUDGET_TEAM_DAILY = "CCT_SA_BUDGET_TEAM_DAILY_USD"
+ENV_BUDGET_TEAM_MONTHLY = "CCT_SA_BUDGET_TEAM_MONTHLY_USD"
+ENV_BUDGET_DEVELOPER_DAILY = "CCT_SA_BUDGET_DEVELOPER_DAILY_USD"
+ENV_BUDGET_PROJECT_DAILY = "CCT_SA_BUDGET_PROJECT_DAILY_USD"
+ENV_RUNAWAY_RECENT_MINUTES = "CCT_SA_RUNAWAY_RECENT_MINUTES"
+ENV_RUNAWAY_MAX_TURNS_RECENT = "CCT_SA_RUNAWAY_MAX_TURNS_RECENT"
+ENV_RUNAWAY_RECENT_TURNS = "CCT_SA_RUNAWAY_RECENT_TURNS"
+ENV_RUNAWAY_MAX_ERROR_SHARE = "CCT_SA_RUNAWAY_MAX_ERROR_SHARE"
+ENV_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE = "CCT_SA_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE"
+ENV_RUNAWAY_MAX_COST_RECENT = "CCT_SA_RUNAWAY_MAX_COST_RECENT_USD"
+#: The Settings page's Team group (env keys the page can edit).
+TEAM_ENV_KEYS = (
+    ENV_TEAM_ACTIVE_WINDOW, ENV_BUDGET_TEAM_DAILY, ENV_BUDGET_TEAM_MONTHLY,
+    ENV_BUDGET_DEVELOPER_DAILY, ENV_BUDGET_PROJECT_DAILY,
+)
 ENV_SIMILARITY_TOP_K = "CCT_SA_SIMILARITY_TOP_K"
 ENV_SOURCE_PREFIX = "CCT_SA_SOURCE_"  # + COPILOT (e.g. CCT_SA_SOURCE_CLAUDE_CODE)
 # Routing-shadow (#261): evidence roots are SERVER-SIDE configuration —
@@ -75,6 +90,8 @@ def _coerce_like(template: Any, raw: str) -> Any:
 # keys are flagged so the API masks them.
 ENV_KEYS = (
     ENV_DB, ENV_KUZU_PATH, ENV_BENCHMARK_RUNS_ROOT, ENV_REDACTION,
+    ENV_TEAM_ACTIVE_WINDOW, ENV_BUDGET_TEAM_DAILY, ENV_BUDGET_TEAM_MONTHLY,
+    ENV_BUDGET_DEVELOPER_DAILY, ENV_BUDGET_PROJECT_DAILY,
     ENV_JUDGE_BACKEND, ENV_JUDGE_MODEL, ENV_JUDGE_BASE_URL, ENV_JUDGE_API_KEY,
     ENV_JUDGE_WORKERS, ENV_OLLAMA_URL, ENV_EMBED_BACKEND, ENV_EMBED_MODEL,
     ENV_DEVELOPER_ID,
@@ -207,12 +224,48 @@ class NoiseConfig:
 
 
 @dataclass(frozen=True)
+class BudgetsConfig:
+    """team.budgets (#174 D): USD ceilings, None = no budget for that
+    scope. Team/day and team/month over everyone; developer and
+    project per day."""
+
+    team_daily_usd: Optional[float]
+    team_monthly_usd: Optional[float]
+    developer_daily_usd: Optional[float]
+    project_daily_usd: Optional[float]
+
+    def any_set(self) -> bool:
+        return any(v is not None for v in (
+            self.team_daily_usd, self.team_monthly_usd, self.developer_daily_usd, self.project_daily_usd))
+
+
+@dataclass(frozen=True)
+class RunawayConfig:
+    """team.runaway (#174 D): a session whose newest turn is within
+    ``recent_minutes`` is a runaway when its turns in that time exceed
+    ``max_turns_recent``, or its error share over the last
+    ``recent_turns`` turns exceeds ``max_error_share`` (given at least
+    ``min_turns_for_error_share`` of them), or its priced cost in that
+    time exceeds ``max_cost_recent_usd``."""
+
+    recent_minutes: int
+    max_turns_recent: int
+    recent_turns: int
+    max_error_share: float
+    min_turns_for_error_share: int
+    max_cost_recent_usd: float
+
+
+@dataclass(frozen=True)
 class TeamConfig:
     """team.* (#174): a heartbeat within ``active_window_seconds`` of now
     makes a developer "active" on the Team tab — last-seen semantics,
-    never an alive/dead verdict."""
+    never an alive/dead verdict — plus the budgets and runaway
+    thresholds the alerts evaluate."""
 
     active_window_seconds: int
+    budgets: BudgetsConfig
+    runaway: RunawayConfig
 
 
 @dataclass(frozen=True)
@@ -551,17 +604,68 @@ def _developer_id_cfg(data: Mapping[str, Any]) -> Optional[str]:
 
 
 def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
-    """team.active_window_seconds from the data file, env on top; a
-    non-positive or non-integer value refuses loudly, naming the key."""
+    """team.* from the data file, env on top. Every value refuses
+    loudly when malformed, naming the key: a budget that silently
+    became None would never alert."""
     block = data.get(C.CFG_TEAM) or {}
-    raw = env(ENV_TEAM_ACTIVE_WINDOW) or block.get(C.CFG_TEAM_ACTIVE_WINDOW)
-    try:
-        window = int(str(raw))
-    except (TypeError, ValueError):
-        raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_ACTIVE_WINDOW} must be an integer, got {raw!r}") from None
-    if window <= 0:
-        raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_ACTIVE_WINDOW} must be positive, got {window}")
-    return TeamConfig(active_window_seconds=window)
+
+    def positive_int(name: str, raw: Any) -> int:
+        try:
+            value = int(str(raw))
+        except (TypeError, ValueError):
+            raise ValueError(f"{C.CFG_TEAM}.{name} must be an integer, got {raw!r}") from None
+        if value <= 0:
+            raise ValueError(f"{C.CFG_TEAM}.{name} must be positive, got {value}")
+        return value
+
+    def budget(name: str, env_key: str) -> Optional[float]:
+        raw = env(env_key)
+        if raw is None or raw == "":
+            raw = (block.get(C.CFG_TEAM_BUDGETS) or {}).get(name)
+        if raw is None or raw == "":
+            return None
+        try:
+            value = float(str(raw))
+        except ValueError:
+            raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_BUDGETS}.{name} must be a number of USD, got {raw!r}") from None
+        if value != value or value < 0:  # nan or negative
+            raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_BUDGETS}.{name} must be a non-negative number, got {raw!r}")
+        return value
+
+    def runaway(name: str, env_key: str, kind):
+        raw = env(env_key)
+        if raw is None or raw == "":
+            raw = (block.get(C.CFG_TEAM_RUNAWAY) or {}).get(name)
+        try:
+            value = kind(str(raw))
+        except (TypeError, ValueError):
+            raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{name} must be a number, got {raw!r}") from None
+        if value != value or value <= 0:
+            raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{name} must be positive, got {raw!r}")
+        return value
+
+    share = runaway(C.CFG_RUNAWAY_MAX_ERROR_SHARE, ENV_RUNAWAY_MAX_ERROR_SHARE, float)
+    if share > 1:
+        raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{C.CFG_RUNAWAY_MAX_ERROR_SHARE} is a share (0–1), got {share}")
+    return TeamConfig(
+        active_window_seconds=positive_int(
+            C.CFG_TEAM_ACTIVE_WINDOW, env(ENV_TEAM_ACTIVE_WINDOW) or block.get(C.CFG_TEAM_ACTIVE_WINDOW)),
+        budgets=BudgetsConfig(
+            team_daily_usd=budget(C.CFG_BUDGET_TEAM_DAILY, ENV_BUDGET_TEAM_DAILY),
+            team_monthly_usd=budget(C.CFG_BUDGET_TEAM_MONTHLY, ENV_BUDGET_TEAM_MONTHLY),
+            developer_daily_usd=budget(C.CFG_BUDGET_DEVELOPER_DAILY, ENV_BUDGET_DEVELOPER_DAILY),
+            project_daily_usd=budget(C.CFG_BUDGET_PROJECT_DAILY, ENV_BUDGET_PROJECT_DAILY),
+        ),
+        runaway=RunawayConfig(
+            recent_minutes=runaway(C.CFG_RUNAWAY_RECENT_MINUTES, ENV_RUNAWAY_RECENT_MINUTES, int),
+            max_turns_recent=runaway(C.CFG_RUNAWAY_MAX_TURNS_RECENT, ENV_RUNAWAY_MAX_TURNS_RECENT, int),
+            recent_turns=runaway(C.CFG_RUNAWAY_RECENT_TURNS, ENV_RUNAWAY_RECENT_TURNS, int),
+            max_error_share=share,
+            min_turns_for_error_share=runaway(
+                C.CFG_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE, ENV_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE, int),
+            max_cost_recent_usd=runaway(C.CFG_RUNAWAY_MAX_COST_RECENT, ENV_RUNAWAY_MAX_COST_RECENT, float),
+        ),
+    )
 
 
 def _load_noise(data: Mapping[str, Any], env) -> NoiseConfig:

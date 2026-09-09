@@ -181,7 +181,8 @@ class TestCliDerivation(unittest.TestCase):
         # ~/.cct + repo .env; a minimal hand-built config keeps the test
         # hermetic. Only the identity fields matter here.
         from session_analytics.config import (
-            AnalyticsConfig, EmbeddingConfig, JudgeConfig, NoiseConfig, SimilarityConfig, TeamConfig,
+            AnalyticsConfig, BudgetsConfig, EmbeddingConfig, JudgeConfig, NoiseConfig, RunawayConfig,
+            SimilarityConfig, TeamConfig,
         )
         from session_analytics.cost import PricingConfig
 
@@ -206,7 +207,11 @@ class TestCliDerivation(unittest.TestCase):
                 input_cap_chars=8000, workers=1,
             ),
             similarity=SimilarityConfig(threshold=0.5, top_k=5),
-            team=TeamConfig(active_window_seconds=300),
+            team=TeamConfig(
+                active_window_seconds=300,
+                budgets=BudgetsConfig(None, None, None, None),
+                runaway=RunawayConfig(60, 300, 50, 0.5, 20, 20.0),
+            ),
             noise=NoiseConfig(min_turns=0, min_duration_seconds=0, path_patterns=()),
             pricing=PricingConfig(models={}),
             developer_id_env=env_value,

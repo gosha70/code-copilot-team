@@ -1177,8 +1177,33 @@ export interface TeamDeveloper {
   windows: Record<TeamWindow, TeamRollup>;
 }
 
+export interface TeamAlert {
+  kind: "budget" | "runaway-turns" | "runaway-errors" | "runaway-cost";
+  level: "warning" | "breach";
+  scope: "team" | "developer" | "project" | "session";
+  /** A developer id, a project path, "team", or the session (for runaway kinds). */
+  subject:
+    | string
+    | { session_id: number; session_key: string; developer_id: string; project_path: string | null };
+  window?: "today" | "30d";
+  /** One sentence, in words, with the figures and the threshold. */
+  message: string;
+  figures: Record<string, number>;
+}
+
+export interface TeamAlerts {
+  alerts: TeamAlert[];
+  breaches: number;
+  warnings: number;
+  budgets: Record<string, number | null>;
+  runaway: Record<string, number>;
+  /** Always true: alerts are re-derived from the store on every read. */
+  derived: boolean;
+}
+
 export interface TeamStatus {
   store: { dialect: string; shared: boolean };
+  alerts?: TeamAlerts;
   now: string;
   active_window_seconds: number;
   developers: TeamDeveloper[];
@@ -1338,6 +1363,7 @@ export interface JudgeModels {
 export const api = {
   pipelineStatus: () => get<PipelineStatus>("/api/pipeline/status"),
   judgeModels: () => get<JudgeModels>("/api/judge/models"),
+  teamAlerts: () => get<TeamAlerts>("/api/team/alerts"),
   teamStatus: (window?: number) =>
     get<TeamStatus>(`/api/team/status${window ? `?window=${window}` : ""}`),
   askInfo: () => get<AskInfo>("/api/ask"),
