@@ -1239,6 +1239,77 @@ assert_eq "the setup failure names the snapshot" "1" \
 rm -rf "$P" "$MKTEMP_SHIM_DIR"
 
 # ══════════════════════════════════════════════════════════════
+echo "=== openai-compatible adapter: a reasoning model must answer, not think (#190 run 3) ==="
+# ══════════════════════════════════════════════════════════════
+
+# Run 3 reached the reviewer and lost the round to content: null — the
+# Qwen model on vLLM spent the whole budget in its hidden reasoning.
+# A fake OpenAI-compatible server: without chat_template_kwargs it
+# answers like that server did; with the field it answers; a second
+# fake rejects the field with a 400 once, so the adapter's retry
+# without it is exercised.
+ADP="$SCRIPT_DIR/../scripts/provider-adapters/openai-compatible.sh"
+FAKE_DIR=$(mktemp -d)
+cat > "$FAKE_DIR/fake.py" << 'PY'
+import json, os, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+MODE = sys.argv[1]; PORT = int(sys.argv[2]); LOG = sys.argv[3]
+class H(BaseHTTPRequestHandler):
+    seen = 0
+    def log_message(self, *a): pass
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"up")
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        H.seen += 1
+        with open(LOG, "a") as f: f.write(json.dumps(body) + "\n")
+        off = body.get("chat_template_kwargs", {}).get("enable_thinking") is False
+        if MODE == "rejects" and off:
+            self.send_response(400); self.end_headers()
+            self.wfile.write(b'{"error":{"message":"Unexpected field: chat_template_kwargs"}}'); return
+        if MODE == "thinks" and not off:
+            msg = {"role": "assistant", "content": None, "reasoning": "Let me think " * 20}
+            fin = "length"
+        else:
+            msg = {"role": "assistant", "content": "ok"}; fin = "stop"
+        out = {"choices": [{"index": 0, "message": msg, "finish_reason": fin}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
+        self.wfile.write(json.dumps(out).encode())
+HTTPServer(("127.0.0.1", PORT), H).serve_forever()
+PY
+printf 'Reply with exactly: ok\n' > "$FAKE_DIR/req.md"
+fake_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'; }
+# Started detached from the suite's shell (set -e, job control) and
+# awaited on the port, not on a sleep.
+fake_start() {  # fake_start <mode> <port> <log>
+    nohup python3 "$FAKE_DIR/fake.py" "$1" "$2" "$3" > "$FAKE_DIR/fake-$1.err" 2>&1 &
+    FPID=$!
+    local i
+    for i in $(seq 1 50); do
+        curl -s -m 1 -o /dev/null "http://127.0.0.1:$2/" 2>/dev/null && return 0
+        sleep 0.1
+    done
+    echo "  FAIL: fake server ($1) did not come up: $(cat "$FAKE_DIR/fake-$1.err" 2>/dev/null)"; FAIL=$((FAIL + 1))
+}
+FP=$(fake_port); fake_start thinks "$FP" "$FAKE_DIR/thinks.log"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 2>&1) || RC=$?
+assert_exit "a content-less reasoning reply is a failure" 1 "$RC"
+assert_contains "…that names the cause and the setting" "$OUT" "spent its 32-token budget on hidden reasoning"
+assert_contains "…and the fix" "$OUT" "disable_thinking = true"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 --no-thinking 2>&1) || RC=$?
+assert_exit "--no-thinking gets the answer" 0 "$RC"
+assert_eq "…the answer itself" "ok" "$OUT"
+assert_eq "…by sending enable_thinking=false" "1" "$(grep -c '"enable_thinking": false' "$FAKE_DIR/thinks.log" | tr -d ' ')"
+kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+FP=$(fake_port); fake_start rejects "$FP" "$FAKE_DIR/rejects.log"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 --no-thinking 2>&1) || RC=$?
+assert_exit "a server that rejects the field is asked again without it" 0 "$RC"
+assert_eq "…two requests, the second without the field" "2" "$(wc -l < "$FAKE_DIR/rejects.log" | tr -d ' ')"
+assert_eq "…and the second has no chat_template_kwargs" "0" "$(tail -n 1 "$FAKE_DIR/rejects.log" | grep -c chat_template_kwargs | tr -d ' ')"
+kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+rm -rf "$FAKE_DIR"
+
+# ══════════════════════════════════════════════════════════════
 # Summary
 # ══════════════════════════════════════════════════════════════
 
