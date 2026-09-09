@@ -5457,10 +5457,14 @@ set_status "finalizing"
     # unattended run with merge.enabled=false. The profile is named as
     # run, the merge decision from the config; the Outcome line below
     # is appended after the PR/merge step from what actually happened.
+    # This sentence is written BEFORE the push, PR and merge steps, so it
+    # states intent; "armed" is reserved for the Outcome line, appended
+    # after arm_auto_merge succeeded (a run that parks on branch
+    # protection never reaches it, and its summary must not claim it).
     if [[ "$CAN_MERGE" == "true" && "$MERGE_ENABLED" == "true" ]]; then
-        echo "Profile: $PROFILE — branch $BRANCH_NAME pushed; PR opened; gated auto-merge armed per merge.enabled=true + branch protection (GitHub merges when required checks pass; the driver never merges locally)."
+        echo "Profile: $PROFILE — will push branch $BRANCH_NAME, open a PR and request gated auto-merge (merge.enabled=true; requires branch protection; GitHub merges when required checks pass; the driver never merges locally). The Outcome line below records what happened."
     elif [[ "$CAN_MERGE" == "true" ]]; then
-        echo "Profile: $PROFILE — branch $BRANCH_NAME pushed; PR opened; merge skipped (merge.enabled=false) — a human reviews and merges."
+        echo "Profile: $PROFILE — will push branch $BRANCH_NAME and open a PR; merge skipped (merge.enabled=false) — a human reviews and merges. The Outcome line below records what happened."
     elif [[ "$CAN_OPEN_PR" == "true" ]]; then
         echo "Profile: $PROFILE — branch $BRANCH_NAME pushed to $BRANCH_REMOTE; a pull request tracks the work (the driver never merges)."
     elif [[ -n "${CAPS_DOWNGRADED_CAUSE:-}" ]]; then
