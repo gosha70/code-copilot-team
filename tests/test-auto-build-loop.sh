@@ -633,6 +633,42 @@ fi
 echo ""
 
 # ══════════════════════════════════════════════════════════════
+echo "=== #190 run 2: a leftover review state is set aside, never inherited ==="
+# ══════════════════════════════════════════════════════════════
+# The second real unattended run inherited the first run's
+# .cct/review/state.json (the guard was "does the file exist"), and the
+# runner's breaker measured its wall clock from that state's loop_start
+# — 3,884 s against a 600 s bound — and tripped before any reviewer was
+# called. Reuse is bound to the ledger attempt, phase and base: a state
+# from another feature/branch/attempt is moved aside and journaled.
+PSTALE=$(setup_project)
+mkdir -p "$PSTALE/.cct/review"
+STALE_START=$(( $(date +%s) - 3884 ))
+cat > "$PSTALE/.cct/review/state.json" <<JSON
+{"current_round": 1, "attempt": 1, "loop_start": $STALE_START, "feature_id": "other-feat",
+ "phase": "build", "subject_provider": "claude", "peer_provider": "codex", "review_scope": "both",
+ "target_ref": "feature/other-feat", "last_verdict": "INCONCLUSIVE", "findings": {}}
+JSON
+run_driver "$PSTALE"
+assert_exit "the run gets through review despite the leftover (milestone exit 3)" 3 "$RC"
+STALE_EVENTS="$PSTALE/.cct/auto-build/demo-feat/events.jsonl"
+assert_contains "the leftover is journaled as set aside" "$(cat "$STALE_EVENTS")" "review_state_reset"
+assert_contains "…naming whose it was" "$(cat "$STALE_EVENTS")" "feature other-feat, branch feature/other-feat, attempt none"
+if ls -d "$PSTALE"/.cct/review-stale-* >/dev/null 2>&1; then
+    echo "  PASS: the leftover state was moved aside, not deleted"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: no review-stale-* directory"
+    FAIL=$((FAIL + 1))
+fi
+assert_eq "phase 1 review ran to done" "done" "$(jq -r '.phases["1"].status' "$PSTALE/.cct/auto-build/demo-feat/state.json")"
+assert_eq "the archived phase-1 state belongs to this attempt" \
+    "$(jq -r '.attempt_id' "$PSTALE/.cct/auto-build/demo-feat/state.json")" \
+    "$(jq -r '.run_attempt' "$PSTALE/.cct/auto-build/demo-feat/phase-1/review/state.json")"
+assert_eq "…for phase 1" "1" "$(jq -r '.phase_num' "$PSTALE/.cct/auto-build/demo-feat/phase-1/review/state.json")"
+rm -rf "$PSTALE"
+echo ""
+# ══════════════════════════════════════════════════════════════
 echo "=== US2/US3/US4: two-phase advisory happy path ==="
 # ══════════════════════════════════════════════════════════════
 
