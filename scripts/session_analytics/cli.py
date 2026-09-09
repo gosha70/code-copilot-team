@@ -1054,7 +1054,8 @@ def _cmd_team(args: argparse.Namespace) -> int:
     db = Database.connect(cfg.dsn)
     try:
         apply_ddl(db)
-        status = team_mod.team_status(db, noise=cfg.noise, active_window_seconds=window)
+        status = team_mod.team_status(
+            db, noise=cfg.noise, active_window_seconds=window, aliases=cfg.team.aliases)
         if args.action == "alerts":
             from .api import alerts as alerts_mod
 

@@ -1118,7 +1118,8 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             raise HTTPException(status_code=400, detail="window must be a positive number of seconds")
         conn = db()
         try:
-            status = team_mod.team_status(conn, noise=cfg.noise, active_window_seconds=seconds)
+            status = team_mod.team_status(
+                conn, noise=cfg.noise, active_window_seconds=seconds, aliases=cfg.team.aliases)
             # Alerts ride on the status so the tab is one fetch; they are
             # derived from the same rows, never stored.
             status["alerts"] = alerts_mod.all_alerts(
@@ -1137,7 +1138,9 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         cfg = load_config()
         conn = db()
         try:
-            status = team_mod.team_status(conn, noise=cfg.noise, active_window_seconds=cfg.team.active_window_seconds)
+            status = team_mod.team_status(
+                conn, noise=cfg.noise, active_window_seconds=cfg.team.active_window_seconds,
+                aliases=cfg.team.aliases)
             return alerts_mod.all_alerts(
                 conn, status, budgets=cfg.team.budgets, runaway=cfg.team.runaway, noise=cfg.noise,
             )

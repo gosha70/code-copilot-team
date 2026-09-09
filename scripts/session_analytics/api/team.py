@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from .. import constants as C
 from ..config import NoiseConfig
@@ -62,6 +62,16 @@ class _Rollup:
             self.priced_turns += 1
             self.cost_usd = (self.cost_usd or 0.0) + float(cost)
 
+    def merge(self, other: "_Rollup") -> None:
+        """Fold another id's window into this one. An unpriced other
+        leaves the cost as it was — None stays None, never 0.0."""
+        self.sessions |= other.sessions
+        self.turns += other.turns
+        self.priced_turns += other.priced_turns
+        self.priceable_turns += other.priceable_turns
+        if other.cost_usd is not None:
+            self.cost_usd = (self.cost_usd or 0.0) + other.cost_usd
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "sessions": len(self.sessions),
@@ -76,12 +86,35 @@ def _empty_windows() -> dict[str, _Rollup]:
     return {w: _Rollup() for w in WINDOWS}
 
 
+def _fold(developer_ids: set, aliases: Optional[Mapping[str, str]]) -> list[tuple[str, Optional[str], list[str]]]:
+    """One (row id, alias name, folded ids) triple per row.
+
+    Ids sharing a display name in ``aliases`` become one row, in the
+    order the mapping names them; the row's id is the first of them.
+    An alias for an id the store has never seen names nobody and is
+    skipped, so the fold never invents a developer. Everyone else gets
+    a row of their own, with no alias name (``None``) — the developer
+    table's display_name still applies to those.
+    """
+    by_name: dict[str, list[str]] = {}
+    for dev, name in (aliases or {}).items():
+        if dev in developer_ids:
+            by_name.setdefault(name, []).append(dev)
+    folded = {dev for ids in by_name.values() for dev in ids}
+    rows: list[tuple[str, Optional[str], list[str]]] = [
+        (ids[0], name, ids) for name, ids in by_name.items()
+    ]
+    rows.extend((dev, None, [dev]) for dev in sorted(developer_ids - folded))
+    return rows
+
+
 def team_status(
     db: Database,
     *,
     noise: Optional[NoiseConfig],
     active_window_seconds: int,
     now: Optional[datetime] = None,
+    aliases: Optional[Mapping[str, str]] = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -148,16 +181,28 @@ def team_status(
     all_devs = set(names) | set(beats) | set(by_dev) | {
         r[0] for r in db.query(f"SELECT DISTINCT s.developer_id FROM copilot_session s WHERE {keep_sql}", keep_params)
     }
+    # One row per person, not per id: ids the operator listed under one
+    # name in team.aliases are added together here, at read time.
     developers = []
-    for dev in sorted(all_devs):
-        beat = beats.get(dev)
+    for row_id, alias_name, ids in _fold(all_devs, aliases):
+        windows = _empty_windows()
+        beat = None
+        for dev in ids:
+            for w, rollup in by_dev.get(dev, {}).items():
+                windows[w].merge(rollup)
+            seen = beats.get(dev)
+            # The newest heartbeat among the folded ids is the person's
+            # current work — the same rule as between one id's beats.
+            if seen is not None and (beat is None or (seen["at"] or "") > (beat["at"] or "")):
+                beat = seen
         state = liveness(beat["at"] if beat else None, now, active_window_seconds)
         developers.append({
-            "developer_id": dev,
-            "display_name": names.get(dev),
+            "developer_id": row_id,
+            "display_name": alias_name if alias_name is not None else names.get(row_id),
+            "merged_ids": list(ids),
             "liveness": state,
             "current": beat,
-            "windows": {w: r.as_dict() for w, r in by_dev.get(dev, _empty_windows()).items()},
+            "windows": {w: r.as_dict() for w, r in windows.items()},
         })
     # Active first, then the most recently seen, then by id — the
     # people working now at the top, stable between polls.

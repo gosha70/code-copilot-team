@@ -211,6 +211,7 @@ class TestCliDerivation(unittest.TestCase):
                 active_window_seconds=300,
                 budgets=BudgetsConfig(None, None, None, None),
                 runaway=RunawayConfig(60, 300, 50, 0.5, 20, 20.0),
+                aliases={},
             ),
             noise=NoiseConfig(min_turns=0, min_duration_seconds=0, path_patterns=()),
             pricing=PricingConfig(models={}),
@@ -352,3 +353,51 @@ class TestWatchDerivesOnce(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(len(derive_calls), 1)  # derived ONCE, not per cycle
         self.assertEqual(ids_seen, ["Team_A", "Team_A", "Team_A"])
+
+
+class TestTeamAliasesConfig(unittest.TestCase):
+    """FR-1: team.aliases, the data file with CCT_SA_TEAM_ALIASES on top.
+
+    A dropped or silently-ignored alias would leave the two ids the
+    operator meant to join sitting side by side on the Team tab, so a
+    malformed entry refuses loudly and names the key."""
+
+    def _aliases(self, env_value=None, in_file=None):
+        from session_analytics import config as config_mod
+
+        environ = {} if env_value is None else {config_mod.ENV_TEAM_ALIASES: env_value}
+        overrides = None if in_file is None else {C.CFG_TEAM: {C.CFG_TEAM_ALIASES: in_file}}
+        with mock.patch.object(config_mod, "parse_env_file", return_value={}), \
+             mock.patch.object(config_mod, "_USER_CONFIG", Path("/nonexistent/session-analytics.json")), \
+             mock.patch.dict("os.environ", environ, clear=True):
+            cfg = config_mod.load_config(dsn="sqlite:///unused", extra_overrides=overrides)
+        return cfg.team.aliases
+
+    def test_alias_fr1_defaults_to_empty_and_reads_the_data_file(self) -> None:
+        self.assertEqual(self._aliases(), {})
+        self.assertEqual(
+            self._aliases(in_file={"i-am-goga-gmail-com": "Gosha", "local": "Gosha"}),
+            {"i-am-goga-gmail-com": "Gosha", "local": "Gosha"},
+        )
+
+    def test_alias_fr1_env_parses_pairs_and_lands_on_top(self) -> None:
+        self.assertEqual(
+            self._aliases(env_value=" i-am-goga = Gosha , local=Gosha "),
+            {"i-am-goga": "Gosha", "local": "Gosha"},
+        )
+        # env on top of the file: same id renamed, another id added.
+        self.assertEqual(
+            self._aliases(env_value="local=Gosha,ben=Ben", in_file={"local": "From File"}),
+            {"local": "Gosha", "ben": "Ben"},
+        )
+
+    def test_alias_fr1_malformed_entry_refuses_naming_team_aliases(self) -> None:
+        for bad in ("no-equals-sign", "=Gosha", "local=", "local=Gosha,=X"):
+            with self.assertRaises(ValueError) as caught:
+                self._aliases(env_value=bad)
+            self.assertIn(f"{C.CFG_TEAM}.{C.CFG_TEAM_ALIASES}", str(caught.exception), bad)
+        # the data file layer refuses on the same terms
+        for bad_file in ({"local": ""}, {"": "Gosha"}, {"local": 7}, ["local=Gosha"]):
+            with self.assertRaises(ValueError) as caught:
+                self._aliases(in_file=bad_file)
+            self.assertIn(f"{C.CFG_TEAM}.{C.CFG_TEAM_ALIASES}", str(caught.exception), bad_file)

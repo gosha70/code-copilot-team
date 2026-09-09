@@ -127,6 +127,9 @@ CFG_SIMILARITY = "similarity"
 #: team.* — the Team tab (#174): how recent a heartbeat counts as active.
 CFG_TEAM = "team"
 CFG_TEAM_ACTIVE_WINDOW = "active_window_seconds"
+#: team.aliases — developer id → display name; ids sharing a name are
+#: one person, folded into one row at read time (never in the store).
+CFG_TEAM_ALIASES = "aliases"
 #: team.budgets — null = no budget for that scope (Slice D of #174).
 CFG_TEAM_BUDGETS = "budgets"
 CFG_BUDGET_TEAM_DAILY = "team_daily_usd"

@@ -521,6 +521,19 @@ LAN or VPN and hand out the DSN accordingly (identity is the derived
    a terminal, `./scripts/session-analytics team status` prints the
    developers table (`--json` for the payload).
 
+One person can hold several developer ids — the id is derived at
+ingest, and a machine that once had no git email ingested as `local`.
+List the ids that are one person under `team.aliases` (developer id →
+display name) in `~/.cct/session-analytics.json`, or set
+`CCT_SA_TEAM_ALIASES=i-am-goga=Gosha,local=Gosha` in `.env`: the Team
+tab and `team status` then show one row under that name, with every
+alias's sessions and cost added together and its newest heartbeat as
+the current work. The fold is at read time only — the store keeps
+every id exactly as ingested, the payload's `merged_ids` names the
+ids folded into each row, and a name here wins over the `developer`
+table's. A malformed entry (anything that is not `id=Name`) refuses at
+startup rather than quietly leaving the ids apart.
+
 "Active" is last-seen, never a liveness verdict: a heartbeat older
 than the window (`team.active_window_seconds`, default 300, or
 `CCT_SA_TEAM_ACTIVE_WINDOW`) reads as idle, and a developer who has

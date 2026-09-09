@@ -144,5 +144,147 @@ class TestTeamStatus(RegistryResetTestCase):
         self.assertTrue(any("1 turns without a timestamp" in line for line in lines))
 
 
+class TestTeamAliases(RegistryResetTestCase):
+    """FR-2/FR-3/FR-4: ids the operator listed under one name are one
+    row, added together, at read time — the store keeps every id."""
+
+    #: Order matters: the row's id is the FIRST folded id named here.
+    #: "ghost" is an alias for an id the store has never seen.
+    ALIASES = {
+        "i-am-goga": "Gosha",
+        "i-am-goga-gmail-com": "Gosha",
+        "local": "Gosha",
+        "dee-one": "Dee",
+        "dee-two": "Dee",
+        "ghost": "Gosha",
+    }
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.db = Database.connect(self.sqlite_dsn())
+        apply_ddl(self.db)
+        self.addCleanup(self.db.close)
+        # The developer table names one of the folded ids: the alias
+        # name must win over it (FR-4).
+        self.db.execute(
+            "INSERT INTO developer (developer_id, display_name) VALUES (?, ?)",
+            ("i-am-goga", "From The Developer Table"),
+        )
+        goga = self._session("i-am-goga", "/repo/a", "s-goga")
+        gmail = self._session("i-am-goga-gmail-com", "/repo/a", "s-gmail")
+        old = self._session("local", "/repo/b", "s-local")
+        ben = self._session("ben", "/repo/b", "s-ben")
+        d1 = self._session("dee-one", "/repo/c", "s-d1")
+        d2 = self._session("dee-two", "/repo/c", "s-d2")
+        self._turn(goga, 1, NOW - timedelta(hours=1), 1.00, "m")
+        self._turn(goga, 2, NOW - timedelta(minutes=5), None, "m")   # priceable, unpriced
+        self._turn(gmail, 1, NOW - timedelta(hours=2), 0.50, "m")
+        self._turn(old, 1, NOW - timedelta(days=3), None, "m")
+        self._turn(ben, 1, NOW - timedelta(hours=1), 0.25, "m")
+        self._turn(d1, 1, NOW - timedelta(hours=1), None, "m")
+        self._turn(d2, 1, NOW - timedelta(hours=1), None, "m")
+        # The oldest id carries the NEWEST heartbeat: the folded row's
+        # current work must come from it, not from the row's own id.
+        self._beat("/repo/a", "i-am-goga", "build", "old-work", 2, NOW - timedelta(minutes=30))
+        self._beat("/repo/b", "local", "review", "174-team", 7, NOW - timedelta(seconds=60))
+        self.db.commit()
+
+    def _session(self, dev: str, project: str, native: str) -> int:
+        self.db.execute(
+            "INSERT INTO copilot_session (copilot, session_id, project_path, developer_id, turn_count, "
+            "started_at, duration_seconds) VALUES (?, ?, ?, ?, 5, ?, 600)",
+            (C.COPILOT_CLAUDE_CODE, native, project, dev, _iso(NOW)),
+        )
+        return int(self.db.query_one("SELECT id FROM copilot_session WHERE session_id = ?", (native,))[0])
+
+    def _turn(self, sid: int, seq: int, at, cost, model) -> None:
+        self.db.execute(
+            "INSERT INTO copilot_turn (session_id, sequence_num, role, content_preview, timestamp, cost_usd, model) "
+            "VALUES (?, ?, ?, '', ?, ?, ?)",
+            (sid, seq, C.ROLE_ASSISTANT, _iso(at) if at else None, cost, model),
+        )
+
+    def _beat(self, project, dev, phase, feature, count, at) -> None:
+        self.db.execute(
+            f"INSERT INTO {C.TBL_LOCAL_HEARTBEAT} (project_path, developer_id, phase, feature_id, checkpoint_count, "
+            "last_heartbeat_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (project, dev, phase, feature, count, _iso(at)),
+        )
+
+    def _status(self, aliases=None, window=300):
+        return T.team_status(
+            self.db, noise=_NOISE, active_window_seconds=window, now=NOW, aliases=aliases)
+
+    def test_alias_fr2_folds_ids_sharing_a_name_and_lists_merged_ids(self) -> None:
+        rows = {d["developer_id"]: d for d in self._status(self.ALIASES)["developers"]}
+        self.assertEqual(
+            rows["i-am-goga"]["merged_ids"],
+            ["i-am-goga", "i-am-goga-gmail-com", "local"],
+        )
+        self.assertEqual(rows["i-am-goga"]["display_name"], "Gosha")
+        # the folded ids no longer stand on their own
+        self.assertNotIn("i-am-goga-gmail-com", rows)
+        self.assertNotIn("local", rows)
+        # an alias for an id with no rows names nobody
+        self.assertNotIn("ghost", rows)
+        self.assertNotIn("ghost", rows["i-am-goga"]["merged_ids"])
+        # an unaliased id is its own row, and still carries merged_ids
+        self.assertEqual(rows["ben"]["merged_ids"], ["ben"])
+        self.assertIsNone(rows["ben"]["display_name"])
+        self.assertEqual(sorted(rows), ["ben", "dee-one", "i-am-goga"])
+        self.assertEqual(self._status(self.ALIASES)["totals"]["developers"], 3)
+
+    def test_alias_fr2_no_aliases_leaves_every_id_alone(self) -> None:
+        rows = {d["developer_id"]: d for d in self._status()["developers"]}
+        self.assertEqual(
+            sorted(rows),
+            ["ben", "dee-one", "dee-two", "i-am-goga", "i-am-goga-gmail-com", "local"],
+        )
+        self.assertEqual(rows["local"]["merged_ids"], ["local"])
+        self.assertEqual(rows["i-am-goga"]["display_name"], "From The Developer Table")
+
+    def test_alias_fr3_windows_sum_over_the_folded_ids(self) -> None:
+        rows = {d["developer_id"]: d for d in self._status(self.ALIASES)["developers"]}
+        today = rows["i-am-goga"]["windows"]["today"]
+        # 1.00 + unpriced (i-am-goga) + 0.50 (…-gmail-com); "local" is 3 days old
+        self.assertEqual(
+            (today["sessions"], today["turns"], today["cost_usd"],
+             today["priced_turns"], today["priceable_turns"]),
+            (2, 3, 1.50, 2, 3),
+        )
+        week = rows["i-am-goga"]["windows"]["7d"]
+        self.assertEqual((week["sessions"], week["turns"], week["cost_usd"]), (3, 4, 1.50))
+        # the totals are unchanged by the fold — the same turns, regrouped
+        self.assertEqual(self._status(self.ALIASES)["totals"]["windows"]["7d"],
+                         self._status()["totals"]["windows"]["7d"])
+
+    def test_alias_fr3_cost_is_null_when_no_folded_id_is_priced(self) -> None:
+        rows = {d["developer_id"]: d for d in self._status(self.ALIASES)["developers"]}
+        self.assertEqual(rows["dee-one"]["merged_ids"], ["dee-one", "dee-two"])
+        dee = rows["dee-one"]["windows"]["today"]
+        self.assertIsNone(dee["cost_usd"])   # null, never 0.00
+        self.assertEqual((dee["turns"], dee["priced_turns"], dee["priceable_turns"]), (2, 0, 2))
+
+    def test_alias_fr3_the_newest_heartbeat_among_folded_ids_wins(self) -> None:
+        rows = {d["developer_id"]: d for d in self._status(self.ALIASES)["developers"]}
+        goga = rows["i-am-goga"]
+        # "local" beat 60s ago beats "i-am-goga"'s 30 min ago
+        self.assertEqual((goga["current"]["project_path"], goga["current"]["feature_id"],
+                          goga["current"]["checkpoint_count"]),
+                         ("/repo/b", "174-team", 7))
+        self.assertEqual(goga["liveness"], "active")
+        # unfolded, the row's own id is idle — the fold is what makes it active
+        unfolded = {d["developer_id"]: d for d in self._status()["developers"]}
+        self.assertEqual(unfolded["i-am-goga"]["liveness"], "idle")
+
+    def test_alias_fr4_the_alias_name_beats_the_developer_table(self) -> None:
+        rows = {d["developer_id"]: d for d in self._status(self.ALIASES)["developers"]}
+        self.assertEqual(rows["i-am-goga"]["display_name"], "Gosha")
+        line = next(ln for ln in T.render_status(self._status(self.ALIASES))
+                    if ln.startswith("Gosha (i-am-goga)"))
+        self.assertIn("review · 174-team", line)
+        self.assertIn("$1.50*", line)
+
+
 if __name__ == "__main__":
     unittest.main()

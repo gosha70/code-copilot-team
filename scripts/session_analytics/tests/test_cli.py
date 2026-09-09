@@ -85,6 +85,47 @@ class TestCli(RegistryResetTestCase):
             self.assertIn("[WARNING] budget: the team is at 86%", out)
             self.assertEqual(_run(["team", "alerts", "--db", dsn, "--fail-on", "warning"])[0], 1)
 
+    def test_alias_fr4_team_status_folds_the_configured_aliases(self) -> None:
+        from datetime import datetime, timezone
+        from unittest import mock
+
+        from session_analytics import config as cfgmod
+        from session_analytics.relational.db import Database, apply_ddl
+
+        dsn = self.sqlite_dsn()
+        db = Database.connect(dsn)
+        apply_ddl(db)
+        db.execute("INSERT INTO developer (developer_id, display_name) VALUES ('i-am-goga', 'Table Name')")
+        now = datetime.now(timezone.utc)
+        for native, dev, cost in (("a", "i-am-goga", 1.0), ("b", "local", 0.5)):
+            db.execute(
+                "INSERT INTO copilot_session (copilot, session_id, project_path, developer_id, turn_count, "
+                "started_at, duration_seconds) VALUES ('claude-code', ?, '/repo/p', ?, 50, ?, 600)",
+                (native, dev, now.isoformat()),
+            )
+            sid = int(db.query_one("SELECT id FROM copilot_session WHERE session_id = ?", (native,))[0])
+            db.execute(
+                "INSERT INTO copilot_turn (session_id, sequence_num, role, content_preview, timestamp, cost_usd, model) "
+                "VALUES (?, 1, 'assistant', '', ?, ?, 'm')",
+                (sid, now.strftime("%Y-%m-%dT%H:%M:%SZ"), cost),
+            )
+        db.commit(); db.close()
+        with mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_TEAM_ALIASES: "i-am-goga=Gosha,local=Gosha",
+                                            cfgmod.ENV_NOISE_MIN_DURATION: "0"}):
+            code, out = _run(["team", "status", "--db", dsn])
+            self.assertEqual(code, C.EXIT_OK)
+            # one row, under the alias name — not the developer table's
+            self.assertIn("Gosha (i-am-goga)", out)
+            self.assertNotIn("Table Name", out)
+            self.assertFalse([ln for ln in out.splitlines() if ln.startswith("local")])
+            self.assertIn("$1.50", out)          # the two ids' costs, added
+            self.assertIn("of 1 active", out.splitlines()[0])   # one person, not two
+            code, out = _run(["team", "--db", dsn, "--json"])
+            body = json.loads(out)
+            self.assertEqual([(d["developer_id"], d["display_name"], d["merged_ids"]) for d in body["developers"]],
+                             [("i-am-goga", "Gosha", ["i-am-goga", "local"])])
+
     def test_ingest_then_doctor(self) -> None:
         dsn = self.sqlite_dsn()
         code, out = _run(

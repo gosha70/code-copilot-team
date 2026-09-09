@@ -50,6 +50,7 @@ ENV_NOISE_MIN_DURATION = "CCT_SA_NOISE_MIN_DURATION_SECONDS"
 ENV_NOISE_PATH_PATTERNS = "CCT_SA_NOISE_PATH_PATTERNS"   # comma-separated
 ENV_SIMILARITY_THRESHOLD = "CCT_SA_SIMILARITY_THRESHOLD"
 ENV_TEAM_ACTIVE_WINDOW = "CCT_SA_TEAM_ACTIVE_WINDOW"
+ENV_TEAM_ALIASES = "CCT_SA_TEAM_ALIASES"   # id=Name,id2=Name
 ENV_BUDGET_TEAM_DAILY = "CCT_SA_BUDGET_TEAM_DAILY_USD"
 ENV_BUDGET_TEAM_MONTHLY = "CCT_SA_BUDGET_TEAM_MONTHLY_USD"
 ENV_BUDGET_DEVELOPER_DAILY = "CCT_SA_BUDGET_DEVELOPER_DAILY_USD"
@@ -261,11 +262,16 @@ class TeamConfig:
     """team.* (#174): a heartbeat within ``active_window_seconds`` of now
     makes a developer "active" on the Team tab — last-seen semantics,
     never an alive/dead verdict — plus the budgets and runaway
-    thresholds the alerts evaluate."""
+    thresholds the alerts evaluate.
+
+    ``aliases`` maps a developer id to the display name it belongs
+    under: ids sharing a name are one person, folded into one row when
+    the team status is read. The store is never rewritten."""
 
     active_window_seconds: int
     budgets: BudgetsConfig
     runaway: RunawayConfig
+    aliases: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -644,6 +650,28 @@ def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
             raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{name} must be positive, got {raw!r}")
         return value
 
+    def aliases() -> dict[str, str]:
+        """team.aliases from the data file, env entries on top. Refuses
+        loudly: an alias nobody notices is dropped would leave the two
+        ids the operator meant to join sitting side by side."""
+        key = f"{C.CFG_TEAM}.{C.CFG_TEAM_ALIASES}"
+        raw = block.get(C.CFG_TEAM_ALIASES, {})
+        if not isinstance(raw, Mapping) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in raw.items()):
+            raise ValueError(f"{key} must be a mapping of developer id to display name, got {raw!r}")
+        merged = {k.strip(): v.strip() for k, v in raw.items()}
+        if not all(merged) or not all(merged.values()):
+            raise ValueError(f"{key} has an entry with an empty developer id or name")
+        for entry in (env(ENV_TEAM_ALIASES) or "").split(","):
+            if not entry.strip():
+                continue
+            dev, sep, name = entry.partition("=")
+            if not sep or not dev.strip() or not name.strip():
+                raise ValueError(
+                    f"{key}: {ENV_TEAM_ALIASES} entry {entry.strip()!r} is not 'id=Name'")
+            merged[dev.strip()] = name.strip()
+        return merged
+
     share = runaway(C.CFG_RUNAWAY_MAX_ERROR_SHARE, ENV_RUNAWAY_MAX_ERROR_SHARE, float)
     if share > 1:
         raise ValueError(f"{C.CFG_TEAM}.{C.CFG_TEAM_RUNAWAY}.{C.CFG_RUNAWAY_MAX_ERROR_SHARE} is a share (0–1), got {share}")
@@ -665,6 +693,7 @@ def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
                 C.CFG_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE, ENV_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE, int),
             max_cost_recent_usd=runaway(C.CFG_RUNAWAY_MAX_COST_RECENT, ENV_RUNAWAY_MAX_COST_RECENT, float),
         ),
+        aliases=aliases(),
     )
 
 
