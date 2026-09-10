@@ -208,11 +208,15 @@ def _cap_alert(
     if share < C.BUDGET_WARNING_SHARE:
         return None
     label = run.get("feature_id") or "an unnamed feature"
+    # The percentage never contradicts the level: below the cap it is
+    # rounded but held at 99 at most, so 99.9% of a cap reads "99%"
+    # beside a warning, not "100%".
+    pct = min(int(round(share * 100)), 99) if share < 1 else int(round(share * 100))
     return {
         "kind": kind, "level": C.ALERT_BREACH if share >= 1 else C.ALERT_WARNING,
         "scope": "run", "subject": _run_subject(run), "window": None,
         "message": f"auto-build run {label} ({run['key']}) {against} "
-                   f"({int(round(share * 100))}%{aside}) and is still running.",
+                   f"({pct}%{aside}) and is still running.",
         "figures": {**figures, "share": round(share, 2)},
     }
 

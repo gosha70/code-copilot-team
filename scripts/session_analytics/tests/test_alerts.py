@@ -252,6 +252,19 @@ class TestAutoBuildCapAlerts(unittest.TestCase):
             self.assertEqual([a["level"] for a in got], [] if expected is None else [expected], elapsed)
             self.assertEqual([a["kind"] for a in got], [] if expected is None else [A.KIND_AUTO_BUILD_WALL_CLOCK])
 
+    def test_cap_fr2_percent_below_the_cap_never_reads_as_100(self) -> None:
+        # DeepSeek's review of the first revision: 9.99 of 10.00 rounded
+        # to "(100%)" beside level warning. Below the cap the percentage
+        # is rounded but held at 99 at most; at and above it, rounded.
+        alert, = A.auto_build_alerts([_cost(9.99)])
+        self.assertEqual(alert["level"], C.ALERT_WARNING)
+        self.assertIn("(99%)", alert["message"])
+        alert, = A.auto_build_alerts([_cost(10.0)])
+        self.assertEqual(alert["level"], C.ALERT_BREACH)
+        self.assertIn("(100%)", alert["message"])
+        alert, = A.auto_build_alerts([_clock(999)])
+        self.assertIn("(99%)", alert["message"])
+
     def test_cap_fr1_cost_share_counts_the_estimated_portion(self) -> None:
         # The driver's cap is set against metered + estimated, so the
         # alert is too: $5.00 metered alone is 50% and silent, but with
