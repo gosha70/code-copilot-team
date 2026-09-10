@@ -125,6 +125,10 @@
       ]
     }
   },
+  "auto_build": {
+    "ledger_root": ".cct",
+    "active_window_seconds": 900
+  },
   "similarity": {
     "threshold": 0.55,
     "top_k": 5

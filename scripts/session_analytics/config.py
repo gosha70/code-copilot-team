@@ -34,6 +34,10 @@ ENV_DSN = ENV_DB
 ENV_DEVELOPER_ID = "CCT_DEVELOPER_ID"
 ENV_KUZU_PATH = "CCT_SA_KUZU_PATH"
 ENV_BENCHMARK_RUNS_ROOT = "CCT_SA_BENCHMARK_RUNS_ROOT"
+#: auto_build.ledger_root (#190 §12): the .cct directory the auto-build
+#: driver writes ledgers under; relative = against the repository root.
+ENV_AUTO_BUILD_ROOT = "CCT_SA_AUTO_BUILD_ROOT"
+ENV_AUTO_BUILD_ACTIVE_WINDOW = "CCT_SA_AUTO_BUILD_ACTIVE_WINDOW"
 ENV_REDACTION = "CCT_SA_REDACTION"
 ENV_OLLAMA_URL = "CCT_SA_OLLAMA_URL"
 ENV_JUDGE_BACKEND = "CCT_SA_JUDGE_BACKEND"
@@ -93,7 +97,7 @@ def _coerce_like(template: Any, raw: str) -> Any:
 # Keys the Studio config page exposes (order = display order). Secret-bearing
 # keys are flagged so the API masks them.
 ENV_KEYS = (
-    ENV_DB, ENV_KUZU_PATH, ENV_BENCHMARK_RUNS_ROOT, ENV_REDACTION,
+    ENV_DB, ENV_KUZU_PATH, ENV_BENCHMARK_RUNS_ROOT, ENV_AUTO_BUILD_ROOT, ENV_REDACTION,
     ENV_TEAM_ACTIVE_WINDOW, ENV_BUDGET_TEAM_DAILY, ENV_BUDGET_TEAM_MONTHLY,
     ENV_BUDGET_DEVELOPER_DAILY, ENV_BUDGET_PROJECT_DAILY,
     ENV_JUDGE_BACKEND, ENV_JUDGE_MODEL, ENV_JUDGE_BASE_URL, ENV_JUDGE_API_KEY,
@@ -278,6 +282,17 @@ class TeamConfig:
 
 
 @dataclass(frozen=True)
+class AutoBuildConfig:
+    """auto_build.* (#190 §12): where the auto-build driver's ledgers are
+    read from — ``ledger_root`` resolved against the repository root when
+    relative, with ``auto-build/`` and ``auto-build-archive/`` beneath it —
+    and how recent a ``state.json`` write still counts as a live run."""
+
+    ledger_root: str
+    active_window_seconds: int
+
+
+@dataclass(frozen=True)
 class SimilarityConfig:
     """Similarity pass knobs (#287). Scores at or above ``threshold``
     are edge-eligible; each session keeps its ``top_k`` best."""
@@ -325,6 +340,7 @@ class AnalyticsConfig:
     team: "TeamConfig"
     noise: "NoiseConfig"
     pricing: "PricingConfig"
+    auto_build: "AutoBuildConfig"
     projects: Mapping[str, ProjectOverride] = field(default_factory=dict)
     project_id_rules: tuple[ProjectIdRule, ...] = field(default_factory=tuple)
     raw: Mapping[str, Any] = field(default_factory=dict)
@@ -610,6 +626,25 @@ def _developer_id_cfg(data: Mapping[str, Any]) -> Optional[str]:
             f"config '{C.CFG_DEVELOPER_ID}' must be a string, got {type(value).__name__}"
         )
     return value
+
+
+def _load_auto_build(data: Mapping[str, Any], env) -> AutoBuildConfig:
+    """auto_build.* from the data file, env on top. The root is kept as
+    written (expanded, not resolved): the reader resolves a relative
+    root against the repository root and reports a missing directory
+    as a page state, never as a load failure."""
+    block = data.get(C.CFG_AUTO_BUILD) or {}
+    raw_root = env(ENV_AUTO_BUILD_ROOT) or block.get(C.CFG_AUTO_BUILD_LEDGER_ROOT) or ""
+    root = str(Path(str(raw_root)).expanduser()) if raw_root else ""
+    raw_window = env(ENV_AUTO_BUILD_ACTIVE_WINDOW) or block.get(C.CFG_AUTO_BUILD_ACTIVE_WINDOW)
+    try:
+        window = int(str(raw_window))
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{C.CFG_AUTO_BUILD}.{C.CFG_AUTO_BUILD_ACTIVE_WINDOW} must be an integer, got {raw_window!r}") from None
+    if window <= 0:
+        raise ValueError(f"{C.CFG_AUTO_BUILD}.{C.CFG_AUTO_BUILD_ACTIVE_WINDOW} must be positive, got {window}")
+    return AutoBuildConfig(ledger_root=root, active_window_seconds=window)
 
 
 def _load_team(data: Mapping[str, Any], env) -> TeamConfig:
@@ -970,6 +1005,7 @@ def load_config(
 
     noise = _load_noise(data, env)
     team = _load_team(data, env)
+    auto_build = _load_auto_build(data, env)
 
     pricing = _load_pricing(data)
     projects, project_id_rules = _load_projects(data)
@@ -988,6 +1024,7 @@ def load_config(
         team=team,
         noise=noise,
         pricing=pricing,
+        auto_build=auto_build,
         projects=projects,
         project_id_rules=project_id_rules,
         raw=data,

@@ -1201,6 +1201,86 @@ export interface TeamAlerts {
   derived: boolean;
 }
 
+// ── Auto-build runs (#190 §12, auto-build-run-surface) ────────────────
+// One record per ledger the driver wrote, derived on each request. The
+// outcome is the driver's word — "landed", "terminated_policy", or null
+// when it has not concluded — never pass/fail.
+
+export type RunVerdict = "merged_unmodified" | "merged_with_fixes" | "rejected";
+
+export interface RunEvent {
+  ts: string | null;
+  event: string;
+  detail: string | null;
+}
+
+export interface RunPhase {
+  n: number | null;
+  title: string | null;
+  status: string | null;
+  rounds: number | null;
+  review_verdict: string | null;
+  fix_sessions: number;
+  commits: number;
+}
+
+export interface AutoBuildRun {
+  key: string;
+  feature_id: string | null;
+  profile: string | null;
+  branch: string | null;
+  base_ref: string | null;
+  status: string | null;
+  outcome: string | null;
+  disposition: { reason: string | null; detail: string | null; phase: number | null };
+  live: boolean;
+  started_at: string | null;
+  updated_at: string | null;
+  elapsed_sec: number | null;
+  caps: {
+    phases: number | null;
+    fix_sessions_per_phase: number | null;
+    wall_clock_sec: number | null;
+    cost_usd: number | null;
+  };
+  cost: { metered_usd: number; estimated_usd: number };
+  phases: { planned: number | null; done: number; current: number | null; items: RunPhase[] };
+  verifiers: {
+    admission_mapped: number | null;
+    results: { green: number; total: number; frs: { fr: string; green: boolean }[] } | null;
+  };
+  policy_decisions: RunEvent[];
+  escalations: number;
+  /** No ledger writes a score today; null means "no score channel". */
+  scores: null;
+  pr: { number: number | null; url: string | null };
+  ledger: string;
+  verdict: { verdict: RunVerdict; note: string | null; set_at: string | null } | null;
+}
+
+export interface AutoBuildRunDetail extends AutoBuildRun {
+  events: RunEvent[];
+  triage_report: string | null;
+}
+
+export interface AutoBuildRuns {
+  root: { path: string; is_dir: boolean; subdirs: string[] };
+  active_window_seconds: number;
+  runs: AutoBuildRun[];
+  summary: {
+    total: number;
+    live: number;
+    by_outcome: Record<string, number>;
+    no_outcome: number;
+    by_verdict: Record<RunVerdict, number>;
+    unlabelled: number;
+  };
+  skipped: { ledger: string; reason: string }[];
+  duplicates: number;
+  verdicts_without_ledger: number;
+  verdicts: RunVerdict[];
+}
+
 export interface TeamStatus {
   store: { dialect: string; shared: boolean };
   alerts?: TeamAlerts;
@@ -1366,6 +1446,33 @@ export const api = {
   teamAlerts: () => get<TeamAlerts>("/api/team/alerts"),
   teamStatus: (window?: number) =>
     get<TeamStatus>(`/api/team/status${window ? `?window=${window}` : ""}`),
+  autoBuildRuns: () => get<AutoBuildRuns>("/api/runs"),
+  autoBuildRun: (key: string) =>
+    get<AutoBuildRunDetail>(`/api/runs/${encodeURIComponent(key)}`),
+  /** Record the human verdict on a run's PR; returns the run. */
+  setRunVerdict: async (key: string, verdict: RunVerdict, note: string | null) => {
+    const r = await fetch(`${BASE}/api/runs/${encodeURIComponent(key)}/verdict`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ verdict, note }),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.detail || `verdict → ${r.status}`);
+    }
+    return (await r.json()) as AutoBuildRun;
+  },
+  /** Remove the verdict; returns the run. */
+  clearRunVerdict: async (key: string) => {
+    const r = await fetch(`${BASE}/api/runs/${encodeURIComponent(key)}/verdict`, {
+      method: "DELETE",
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.detail || `verdict → ${r.status}`);
+    }
+    return (await r.json()) as AutoBuildRun;
+  },
   askInfo: () => get<AskInfo>("/api/ask"),
   ask: (
     question: string,

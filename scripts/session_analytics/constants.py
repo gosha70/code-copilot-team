@@ -150,6 +150,46 @@ ALERT_BREACH = "breach"
 ALERT_LEVELS = (ALERT_WARNING, ALERT_BREACH)
 #: A budget alert starts warning at this share of the budget.
 BUDGET_WARNING_SHARE = 0.8
+
+# ── Auto-build runs (#190 §12, auto-build-run-surface) ──────────────────
+#: auto_build.* — where the auto-build driver's ledgers are read from and
+#: how recent a state.json write still counts as a live run.
+CFG_AUTO_BUILD = "auto_build"
+CFG_AUTO_BUILD_LEDGER_ROOT = "ledger_root"
+CFG_AUTO_BUILD_ACTIVE_WINDOW = "active_window_seconds"
+#: The two directories read beneath the ledger root: the driver writes
+#: the first (CCT_AUTOBUILD_DIR's default); a person moves finished
+#: ledgers into the second by hand.
+AUTO_BUILD_LIVE_DIR = "auto-build"
+AUTO_BUILD_ARCHIVE_DIR = "auto-build-archive"
+AUTO_BUILD_SUBDIRS = (AUTO_BUILD_LIVE_DIR, AUTO_BUILD_ARCHIVE_DIR)
+#: Ledger files the reader knows (scripts/auto-build-loop.sh writes them).
+LEDGER_STATE_FILE = "state.json"
+LEDGER_EVENTS_FILE = "events.jsonl"
+LEDGER_TERMINATION_FILE = "termination.json"
+LEDGER_TRIAGE_FILE = "triage-report.md"
+LEDGER_VERIFICATION_FILE = "verification-results.json"
+LEDGER_PHASE_DIR_PREFIX = "phase-"
+LEDGER_REVIEW_SUMMARY = "review/loop-summary.json"
+#: Ledger states after which the driver writes nothing more.
+LEDGER_TERMINAL_STATUSES = frozenset({"done", "terminated_policy", "parked", "aborted"})
+#: Journal events that are policy decisions — what the driver DECIDED,
+#: as opposed to progress (status, phase_commit, pushed …).
+POLICY_EVENTS = frozenset({
+    "terminated_policy", "parked", "review_state_reset", "review_bypass_accepted",
+    "artifact_skipped", "artifact_error", "merge_skipped", "merge_armed",
+    "merge_already_armed", "cap_updated", "capability_downgrade", "visual_waiver",
+    "coverage_gate", "verifier_gate", "advisory_skipped", "cost_debit_failed",
+    "max_turns_continuation", "wip_push_failed", "notify_failed",
+})
+#: The human verdict on the PR a run produced (#190 §12). Absence = no
+#: verdict yet; nothing derives one.
+VERDICT_MERGED_UNMODIFIED = "merged_unmodified"
+VERDICT_MERGED_WITH_FIXES = "merged_with_fixes"
+VERDICT_REJECTED = "rejected"
+VERDICTS = (VERDICT_MERGED_UNMODIFIED, VERDICT_MERGED_WITH_FIXES, VERDICT_REJECTED)
+VERDICT_NOTE_MAX_CHARS = 2000
+TBL_AUTO_BUILD_VERDICT = "auto_build_verdict"
 CFG_SIMILARITY_THRESHOLD = "threshold"
 CFG_SIMILARITY_TOP_K = "top_k"
 
