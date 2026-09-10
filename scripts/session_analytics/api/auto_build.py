@@ -150,6 +150,22 @@ def _verifiers(state: dict[str, Any], ledger: Path) -> dict[str, Any]:
     return {"admission_mapped": admission_mapped, "results": results}
 
 
+def _escalation(state: dict[str, Any], ledger: Path) -> dict[str, Any]:
+    """The newest escalation a park recorded (escalations/esc-N.json:
+    reason, detail, phase). The state lists ids in order; an entry that
+    is already a dict is taken as it is."""
+    entries = state.get("escalations") or []
+    if not isinstance(entries, list) or not entries:
+        return {}
+    last = entries[-1]
+    if isinstance(last, dict):
+        return last
+    if not isinstance(last, str) or "/" in last or last in (".", ".."):
+        return {}
+    data = _read_json(ledger / C.LEDGER_ESCALATIONS_DIR / f"{last}.json")
+    return data if isinstance(data, dict) else {}
+
+
 def read_run(ledger: Path, root: Path, *, now: datetime, active_window_seconds: int) -> Optional[dict[str, Any]]:
     """One run record from one ledger directory, or None when its
     state.json is unreadable or names no attempt."""
@@ -165,15 +181,23 @@ def read_run(ledger: Path, root: Path, *, now: datetime, active_window_seconds: 
     totals = state.get("totals") or {}
     caps = state.get("caps") or {}
     started = _aware(_iso(totals.get("started_epoch")))
+    concluded = status in C.LEDGER_TERMINAL_STATUSES
     live = (
-        status not in C.LEDGER_TERMINAL_STATUSES
+        not concluded
         and updated is not None
         and (now - updated).total_seconds() <= active_window_seconds
     )
-    end = now if live else updated
+    # An unconcluded run's clock is still running, whether or not the
+    # driver wrote its state within the window.
+    end = updated if concluded else now
     elapsed = int((end - started).total_seconds()) if (started and end and end >= started) else None
     outcome = state.get("outcome")
-    reason = state.get("disposition_reason") or termination.get("reason")
+    # Where the run said why it stopped: the state and termination.json
+    # for an unattended termination; the newest escalation for a park.
+    stop = termination if termination.get("reason") else {}
+    if not stop and status == "parked":
+        stop = _escalation(state, ledger)
+    reason = state.get("disposition_reason") or stop.get("reason")
     pr = state.get("pr") or {}
     phases = _phases(state, ledger)
     return {
@@ -186,9 +210,15 @@ def read_run(ledger: Path, root: Path, *, now: datetime, active_window_seconds: 
         "outcome": str(outcome) if outcome else None,
         "disposition": {
             "reason": str(reason) if reason else None,
-            "detail": termination.get("detail"),
-            "phase": _int(termination.get("phase")),
+            "detail": stop.get("detail"),
+            "phase": _int(stop.get("phase")),
         },
+        # concluded: the driver writes nothing more (done, terminated,
+        # parked, aborted). live: it wrote within the window. A build
+        # phase can run longer than the window between two state
+        # writes, so an unconcluded run is polled whether or not it is
+        # live — freshness and "still needs watching" are two facts.
+        "concluded": concluded,
         "live": live,
         "started_at": started.isoformat().replace("+00:00", "Z") if started else None,
         "updated_at": state.get("updated"),

@@ -181,24 +181,17 @@ export function scoresLine(run: AutoBuildRun): string {
   return run.scores === null ? "no scores recorded" : "scores recorded";
 }
 
-/** "live — last state write 12s ago" for a run in progress; for a
- *  run that stopped writing without concluding, when it last wrote. */
+/** For a run that has not concluded: "in progress — status building,
+ *  last state write 12s ago". The driver writes its state at status
+ *  transitions, not during a build, so a long phase goes quiet; the
+ *  line says how long, and never calls quiet "stopped". */
 export function liveLine(run: AutoBuildRun, now: Date = new Date()): string {
-  if (run.live) {
-    const ago = run.updated_at
-      ? Math.max(
-          0,
-          Math.round((now.getTime() - Date.parse(run.updated_at)) / 1000),
-        )
-      : null;
-    return ago === null
-      ? "live"
-      : `live — last state write ${duration(ago)} ago`;
-  }
-  if (!run.outcome && run.status && run.status !== "parked") {
-    return `not concluded — status ${run.status}, last state write ${run.updated_at ?? "unknown"}`;
-  }
-  return "";
+  if (run.concluded) return "";
+  const ago = run.updated_at
+    ? Math.max(0, Math.round((now.getTime() - Date.parse(run.updated_at)) / 1000))
+    : null;
+  const write = ago === null ? "no state write recorded" : `last state write ${duration(ago)} ago`;
+  return `in progress — status ${run.status ?? "unknown"}, ${write}`;
 }
 
 export const VERDICT_LABEL: Record<RunVerdict, string> = {
@@ -219,9 +212,12 @@ export function verdictLine(run: AutoBuildRun): string {
   return `${VERDICT_LABEL[v.verdict]}${when}${v.note ? ` · ${v.note}` : ""}`;
 }
 
-/** Poll while any run is live; stop on the first payload where none is. */
+/** Poll while any run has not concluded; stop on the first payload
+ *  where every run has. Freshness (`live`) is not the test: a build
+ *  phase longer than the active window is stale and still running, and
+ *  a page that stopped polling on staleness would never see it end. */
 export function shouldPoll(d: AutoBuildRuns | null): boolean {
-  return !!d && d.runs.some((r) => r.live);
+  return !!d && d.runs.some((r) => !r.concluded);
 }
 
 /** Small print under the list: skipped directories and verdicts whose

@@ -59,9 +59,15 @@ itself: what the human did with the PR.
   `feature_id`, `profile`, `branch`, `base_ref`, `status`, `outcome`
   (verbatim from the state: `landed`, `terminated_policy`, or `null`
   — the driver writes no other value today, and the reader invents
-  none), `disposition {reason, detail, phase}` (state plus
-  `termination.json` when present), `live` (status not terminal and
-  the state's `updated` within `auto_build.active_window_seconds`),
+  none), `disposition {reason, detail, phase}` (the state plus
+  `termination.json` for an unattended termination; for a parked run
+  the newest escalation the state lists, read from
+  `escalations/esc-N.json`), `concluded` (status is one the driver
+  writes nothing after: done, terminated, parked, aborted), `live`
+  (not concluded and the state's `updated` within
+  `auto_build.active_window_seconds` — freshness only: the driver
+  writes its state at status transitions, so a build phase longer than
+  the window is stale and still running),
   `started_at`, `updated_at`, `elapsed_sec`, `caps`, `cost {metered_usd,
   estimated_usd, cap_usd}`, `phases[]` with per-phase `rounds` and
   review verdict from the phase's `review/loop-summary.json` (null when
@@ -109,13 +115,17 @@ itself: what the human did with the PR.
   the root is set), `empty` (root present, no run), `runs`. Score trend:
   today no ledger writes a score, so the page says "no scores recorded"
   per run instead of drawing an empty chart.
-- FR-8 **Polling.** The page polls while any run in the payload is
-  `live`, and stops on the first payload where none is.
+- FR-8 **Polling.** The page polls while any run in the payload has
+  not `concluded`, and stops on the first payload where every run has.
+  Freshness is not the test: a run whose last state write is older
+  than the window is still polled until it concludes, so a long build
+  phase is seen to end.
 - FR-9 **Verification.** Unit tests build ledgers in a temporary root
   from the four real runs' shapes (one landed with a PR, one terminated
   with `termination.json`, one parked, one unreadable, one duplicate)
-  and assert FR-2/3/4/5 including the 404 and 400 paths and the
-  orphaned verdict count; the states script asserts FR-7's three states,
+  and assert FR-2/3/4/5 including the 404 and 400 paths, the orphaned
+  verdict count, a park's disposition from its escalation, and a stale
+  unconcluded run; the states script asserts FR-7's three states,
   the verbatim outcome wording, the estimated-versus-metered cost line
   and FR-8; `next build`, `states-check`, `unittest discover` and the
   smoke job green; a real-data walk over the four ledgers with the

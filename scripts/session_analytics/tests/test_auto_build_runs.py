@@ -108,14 +108,23 @@ class _Ledgers(RegistryResetTestCase):
                 C.LEDGER_TRIAGE_FILE: "# Triage report\n",
             },
         )
-        # An attended run that parked: outcome stays null, status parked.
+        # An attended run that parked: outcome stays null, status parked,
+        # and the reason lives in escalations/esc-N.json (the state lists
+        # the ids), not in termination.json.
         _write_ledger(
             self.root, C.AUTO_BUILD_ARCHIVE_DIR, "other-feature-parked",
             _state(PARKED_KEY, feature_id="other-feature", profile="pr", status="parked", outcome=None,
-                   escalations=[{"reason": "test_failure"}], pr={"number": None, "url": None},
+                   escalations=["esc-1", "esc-2"], pr={"number": None, "url": None},
                    totals={"cost_usd": 1.0, "cost_estimated_usd": 0, "started_epoch": 1788900000},
                    updated="2026-09-08T22:00:00Z", preflight={}),
             events=[("2026-09-08T22:00:00Z", "parked", "test_failure")],
+            extra={
+                f"{C.LEDGER_ESCALATIONS_DIR}/esc-1.json": {"id": "esc-1", "reason": "review_breaker", "detail": "older, resolved",
+                                                          "phase": 1, "resolved": True},
+                f"{C.LEDGER_ESCALATIONS_DIR}/esc-2.json": {"id": "esc-2", "reason": "test_failure",
+                                                          "detail": "test command exited 1 after 2 fix sessions",
+                                                          "phase": 2, "resolved": False},
+            },
         )
         # A copy of run 4 someone left in the archive: same attempt id.
         _write_ledger(self.root, C.AUTO_BUILD_ARCHIVE_DIR, "team-developer-aliases-copy", _state(LANDED_KEY))
@@ -173,13 +182,23 @@ class TestReader(_Ledgers):
         self.assertEqual(run["pr"], {"number": None, "url": None})
         self.assertEqual(run["elapsed_sec"], 5605)
 
-    def test_fr2_parked_run_has_no_outcome_and_is_not_live(self) -> None:
+    def test_fr2_parked_run_has_no_outcome_and_takes_its_disposition_from_the_newest_escalation(self) -> None:
         run = AB.scan_runs(self.root, now=NOW, active_window_seconds=WINDOW).runs[2]
         self.assertIsNone(run["outcome"])
         self.assertEqual(run["status"], "parked")
         self.assertFalse(run["live"])
-        self.assertEqual(run["escalations"], 1)
+        self.assertTrue(run["concluded"])
+        self.assertEqual(run["escalations"], 2)
+        self.assertEqual(run["disposition"], {
+            "reason": "test_failure", "detail": "test command exited 1 after 2 fix sessions", "phase": 2})
         self.assertIsNone(run["verifiers"]["admission_mapped"])
+
+    def test_fr2_a_park_whose_escalation_file_is_missing_still_reads(self) -> None:
+        _write_ledger(self.root, C.AUTO_BUILD_LIVE_DIR, "parked-no-file",
+                      _state("55555-1", status="parked", outcome=None, escalations=["esc-1"]))
+        run = {r["key"]: r for r in AB.scan_runs(self.root, now=NOW, active_window_seconds=WINDOW).runs}["55555-1"]
+        self.assertEqual(run["disposition"], {"reason": None, "detail": None, "phase": None})
+        self.assertEqual(run["escalations"], 1)
 
     def test_fr2_live_rule_is_status_plus_recent_state_write(self) -> None:
         recent = (NOW - timedelta(seconds=WINDOW - 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -189,9 +208,17 @@ class TestReader(_Ledgers):
                                                      "started_epoch": int((NOW - timedelta(minutes=20)).timestamp())}))
         runs = {r["key"]: r for r in AB.scan_runs(self.root, now=NOW, active_window_seconds=WINDOW).runs}
         self.assertTrue(runs[LIVE_KEY]["live"])
+        self.assertFalse(runs[LIVE_KEY]["concluded"])
         self.assertEqual(runs[LIVE_KEY]["elapsed_sec"], 1200)
-        stale = AB.scan_runs(self.root, now=NOW + timedelta(seconds=WINDOW + 5), active_window_seconds=WINDOW).runs
-        self.assertFalse({r["key"]: r for r in stale}[LIVE_KEY]["live"])
+        # A build phase longer than the window: the state is stale, so the
+        # run is not live — but it is not concluded either, its clock is
+        # still running, and the page keeps polling it (FR-8).
+        later = NOW + timedelta(seconds=WINDOW + 5)
+        stale = {r["key"]: r for r in AB.scan_runs(self.root, now=later, active_window_seconds=WINDOW).runs}[LIVE_KEY]
+        self.assertFalse(stale["live"])
+        self.assertFalse(stale["concluded"])
+        self.assertEqual(stale["elapsed_sec"], 1200 + WINDOW + 5)
+        self.assertTrue(all(r["concluded"] for k, r in runs.items() if k != LIVE_KEY))
 
     def test_fr1_only_the_two_fixed_subdirectories_are_read(self) -> None:
         keys = [r["key"] for r in AB.scan_runs(self.root, now=NOW, active_window_seconds=WINDOW).runs]

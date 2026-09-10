@@ -1041,9 +1041,14 @@ nothing from a ledger is stored. The run key is the driver's
 `skipped`, a second directory carrying a key already seen is counted
 under `duplicates`. `outcome` is the driver's value verbatim (`landed`,
 `terminated_policy`, or null) and the summary counts it as such — no
-field maps it onto pass/fail. `live` is "status not terminal and the
-state written within `auto_build.active_window_seconds`" (default
-900); `policy_decisions` are the journal events in `POLICY_EVENTS`.
+field maps it onto pass/fail. A parked run's disposition comes from
+the newest escalation the state lists (`escalations/esc-N.json`).
+`concluded` is "status is one the driver writes nothing after";
+`live` is "not concluded and the state written within
+`auto_build.active_window_seconds`" (default 900) — freshness only,
+since the driver writes state at status transitions and a long build
+phase goes quiet; `policy_decisions` are the journal events in
+`POLICY_EVENTS`.
 
 The one stored fact is the human verdict on the run's PR:
 `auto_build_verdict` (`009_auto_build_verdict.sql`, `run_key` UNIQUE,
@@ -1051,7 +1056,7 @@ The one stored fact is the human verdict on the run's PR:
 `note`, `set_at`). Setting one requires the key to exist among the
 ledgers (404 otherwise); the row outlives the ledger and is counted as
 `verdicts_without_ledger` once the directory is gone. The Studio's
-Runs tab polls while any run is `live` (`lib/runsView.ts`).
+Runs tab polls while any run has not `concluded` (`lib/runsView.ts`).
 
 ## Team store (#174, Slices B2 + C + E)
 

@@ -1233,6 +1233,10 @@ export interface AutoBuildRun {
   status: string | null;
   outcome: string | null;
   disposition: { reason: string | null; detail: string | null; phase: number | null };
+  /** The driver writes nothing more: done, terminated, parked, aborted. */
+  concluded: boolean;
+  /** The state was written within the active window. Freshness only:
+   *  a build phase longer than the window is stale and still running. */
   live: boolean;
   started_at: string | null;
   updated_at: string | null;

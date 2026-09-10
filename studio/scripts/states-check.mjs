@@ -951,7 +951,7 @@ try {
   const rvRun = (o) => ({
     key: "47908-474720888", feature_id: "team-developer-aliases", profile: "unattended",
     branch: "feature/x", base_ref: "f75ebaa5a09e", status: "done", outcome: "landed",
-    disposition: { reason: null, detail: null, phase: null }, live: false,
+    disposition: { reason: null, detail: null, phase: null }, concluded: true, live: false,
     started_at: "2026-09-09T16:22:03Z", updated_at: "2026-09-09T16:31:46Z", elapsed_sec: 583,
     caps: { phases: 2, fix_sessions_per_phase: 2, wall_clock_sec: 5400, cost_usd: 10 },
     cost: { metered_usd: 5.2980335, estimated_usd: 2 },
@@ -967,7 +967,9 @@ try {
   });
   const rvTerminated = rvRun({ key: "83409-56971841", status: "terminated_policy", outcome: "terminated_policy", disposition: { reason: "provider_unavailable", detail: "reviewer 'codex' failed", phase: 1 }, elapsed_sec: 5605, cost: { metered_usd: 4.76, estimated_usd: 0 }, verifiers: { admission_mapped: 4, results: null }, pr: { number: null, url: null } });
   const rvParked = rvRun({ key: "1-1", status: "parked", outcome: null, profile: "pr" });
-  const rvLive = rvRun({ key: "2-2", status: "building", outcome: null, live: true });
+  const rvLive = rvRun({ key: "2-2", status: "building", outcome: null, concluded: false, live: true });
+  // A build phase longer than the active window: stale (not live) and still running.
+  const rvQuiet = rvRun({ key: "3-3", status: "building", outcome: null, concluded: false, live: false, updated_at: "2026-09-09T16:10:00Z" });
   // FR-7: the three page states from the payload alone.
   const rvNoRoot = rvPayload([], { root: { path: ".cct", is_dir: false, subdirs: ["auto-build", "auto-build-archive"] } });
   if (rv.pageState(rvNoRoot) !== "no-root" || !/not a directory/.test(rv.intro(rvNoRoot).body) || !/CCT_SA_AUTO_BUILD_ROOT/.test(rv.intro(rvNoRoot).body)) fail(`no-root: ${rv.intro(rvNoRoot).body}`);
@@ -1010,11 +1012,14 @@ try {
   else if (rv.verdictLine(rvLabelled) !== "merged with fixes · 2026-09-09 · FR-3 fixed by hand") fail(`verdict line: ${rv.verdictLine(rvLabelled)}`);
   else if (rv.VERDICT_OPTIONS.map((o) => o.value).join(",") !== "merged_unmodified,merged_with_fixes,rejected") fail("verdict options are the three of §12");
   else console.log("  ok  the verdict reads as its label, date and note; the three §12 verdicts are the options");
-  // FR-8: polling while any run is live.
-  if (rv.shouldPoll(null) || rv.shouldPoll(rvPayload([rvRun(), rvTerminated]))) fail("no live run → no polling");
+  // FR-8: polling while any run has not concluded — freshness is not the test.
+  if (rv.shouldPoll(null) || rv.shouldPoll(rvPayload([rvRun(), rvTerminated, rvParked]))) fail("every run concluded → no polling");
   else if (!rv.shouldPoll(rvPayload([rvRun(), rvLive]))) fail("a live run → polling");
-  else if (!/^live — last state write /.test(rv.liveLine(rvLive, new Date("2026-09-09T16:32:00Z"))) || rv.liveLine(rvRun()) !== "" || !/not concluded — status building/.test(rv.liveLine(rvRun({ status: "building", outcome: null, live: false })))) fail(`live line: ${rv.liveLine(rvLive)}`);
-  else console.log("  ok  polls while a run is live and stops when none is; a run that stopped writing without concluding says so");
+  else if (!rv.shouldPoll(rvPayload([rvRun(), rvQuiet]))) fail("a stale but unconcluded run (long build phase) → still polling");
+  else if (rv.liveLine(rvLive, new Date("2026-09-09T16:32:00Z")) !== "in progress — status building, last state write 14s ago") fail(`live line: ${rv.liveLine(rvLive, new Date("2026-09-09T16:32:00Z"))}`);
+  else if (rv.liveLine(rvQuiet, new Date("2026-09-09T16:32:00Z")) !== "in progress — status building, last state write 22m 0s ago" || /stopped|not concluded/.test(rv.liveLine(rvQuiet))) fail(`quiet line: ${rv.liveLine(rvQuiet, new Date("2026-09-09T16:32:00Z"))}`);
+  else if (rv.liveLine(rvRun()) !== "" || rv.liveLine(rvParked) !== "" || rv.liveLine(rvTerminated) !== "") fail("a concluded run has no progress line");
+  else console.log("  ok  polls while any run has not concluded (a quiet long build phase included) and stops when all have; the progress line says how long since the last state write");
   const rvFoot = rv.footnotes(rvPayload([rvRun()], { skipped: [{ ledger: "auto-build-archive/broken", reason: "x" }], duplicates: 1, verdicts_without_ledger: 2 }));
   if (rvFoot.length !== 3 || !/broken/.test(rvFoot[0]) || !/already listed/.test(rvFoot[1]) || !/2 verdicts kept/.test(rvFoot[2])) fail(`footnotes: ${rvFoot.join(" | ")}`);
   else if (rv.footnotes(rvPayload([rvRun()])).length !== 0) fail("no footnotes when nothing was skipped");

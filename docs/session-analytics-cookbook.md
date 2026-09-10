@@ -605,9 +605,11 @@ shows, per run:
   keyed by the run's attempt id, so it survives the ledger being
   archived or pruned.
 
-The page polls while a run is live (its state file was written within
-`auto_build.active_window_seconds`, default 15 minutes) and stops when
-none is. No ledger writes a score today, so each run says "no scores
+The page polls while any run has not concluded and stops when every
+run has. A run whose state file was written within
+`auto_build.active_window_seconds` (default 15 minutes) is shown as
+live; one that has gone quiet in a long build phase is still polled,
+with how long since its last state write. No ledger writes a score today, so each run says "no scores
 recorded" rather than drawing an empty chart.
 
 ```bash
