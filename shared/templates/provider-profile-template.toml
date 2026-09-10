@@ -117,6 +117,16 @@ version = "cli"
 #                  (Qwen3-family reasoning models on vLLM otherwise spend the
 #                  whole budget on hidden reasoning and return no content)
 #   temperature  — sampling temperature (default: 0.1)
+#   price_usd_per_mtok_input / price_usd_per_mtok_output
+#                — USD per million tokens. With BOTH set, the adapter prices
+#                  the response's usage and writes it to the cost channel, so
+#                  the auto-build ledger debits a MEASURED figure instead of
+#                  the flat per-invocation estimate. Configure the provider's
+#                  PEAK, cache-miss rates: the result is a conservative
+#                  calculated cost, not the exact bill when caching or
+#                  off-peak discounts apply. Written before the answer is
+#                  judged, so a reply that spent its budget on hidden
+#                  reasoning still records its tokens. Unset = unmetered.
 #
 # Optional fields:
 #   timeout_sec  — max execution time (default: 300)
@@ -131,6 +141,18 @@ version = "cli"
 # max_tokens = 4096
 # temperature = 0.1
 # healthcheck = "curl -sf https://api.openai.com/v1/models"
+
+# [providers.deepseek]
+# type = "openai-compatible"
+# base_url = "https://api.deepseek.com/v1"
+# api_key_env = "DEEPSEEK_API_KEY"
+# model = "deepseek-flash"
+# timeout_sec = 300
+# max_tokens = 32768            # thinking is on by default; give the answer room
+# temperature = 0.1
+# price_usd_per_mtok_input = 0.30   # peak, cache-miss (api-docs.deepseek.com/quick_start/pricing)
+# price_usd_per_mtok_output = 1.20
+# healthcheck = "curl -sf --oauth2-bearer $DEEPSEEK_API_KEY https://api.deepseek.com/v1/models"
 
 # [providers.gdx-spark]
 # type = "openai-compatible"
