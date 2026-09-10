@@ -84,6 +84,7 @@ try {
         join(STUDIO, "lib/askView.ts"),
         join(STUDIO, "lib/benchmarkIntro.ts"),
         join(STUDIO, "lib/teamView.ts"),
+        join(STUDIO, "lib/runsView.ts"),
         join(STUDIO, "components/GraphCatalogue.tsx"),
         join(STUDIO, "components/GraphExplorer.tsx"),
         join(STUDIO, "global.d.ts"),
@@ -943,6 +944,86 @@ try {
   else if (tv.alertHref(tvRunaway) !== "/sessions/35" || tv.alertHref(tvBudget) !== null) fail("a runaway alert links to its session; a budget alert links nowhere");
   else if (!/rose/.test(tv.ALERT_STYLE.breach) || !/amber/.test(tv.ALERT_STYLE.warning)) fail("breach is red, warning is amber");
   else console.log("  ok  alerts: the empty note says what is set and what a runaway is; breaches red, warnings amber; runaway alerts link to the session");
+
+  // ── the Runs tab (#190 §12): outcome verbatim, cost split, polling ──
+  console.log("\nruns view:");
+  const rv = await import(pathToFileURL(join(out, "lib/runsView.js")));
+  const rvRun = (o) => ({
+    key: "47908-474720888", feature_id: "team-developer-aliases", profile: "unattended",
+    branch: "feature/x", base_ref: "f75ebaa5a09e", status: "done", outcome: "landed",
+    disposition: { reason: null, detail: null, phase: null }, concluded: true, live: false,
+    started_at: "2026-09-09T16:22:03Z", updated_at: "2026-09-09T16:31:46Z", elapsed_sec: 583,
+    caps: { phases: 2, fix_sessions_per_phase: 2, wall_clock_sec: 5400, cost_usd: 10 },
+    cost: { metered_usd: 5.2980335, estimated_usd: 2 },
+    phases: { planned: 1, done: 1, current: 1, items: [{ n: 1, title: "US1", status: "done", rounds: 1, review_verdict: "PASS", fix_sessions: 0, commits: 2 }] },
+    verifiers: { admission_mapped: 4, results: { green: 4, total: 4, frs: [] } },
+    policy_decisions: [{ ts: "t", event: "merge_skipped", detail: "merge.enabled=false" }], escalations: 0,
+    scores: null, pr: { number: 331, url: "https://example/pr/331" }, ledger: "auto-build/team-developer-aliases", verdict: null, ...o,
+  });
+  const rvPayload = (runs, o = {}) => ({
+    root: { path: ".cct", is_dir: true, subdirs: ["auto-build", "auto-build-archive"] }, active_window_seconds: 900, runs,
+    summary: { total: runs.length, live: runs.filter((r) => r.live).length, by_outcome: runs.reduce((m, r) => (r.outcome ? { ...m, [r.outcome]: (m[r.outcome] || 0) + 1 } : m), {}), no_outcome: runs.filter((r) => !r.outcome).length, by_verdict: { merged_unmodified: 0, merged_with_fixes: 0, rejected: 0 }, unlabelled: runs.length },
+    skipped: [], duplicates: 0, verdicts_without_ledger: 0, verdicts: ["merged_unmodified", "merged_with_fixes", "rejected"], ...o,
+  });
+  const rvTerminated = rvRun({ key: "83409-56971841", status: "terminated_policy", outcome: "terminated_policy", disposition: { reason: "provider_unavailable", detail: "reviewer 'codex' failed", phase: 1 }, elapsed_sec: 5605, cost: { metered_usd: 4.76, estimated_usd: 0 }, verifiers: { admission_mapped: 4, results: null }, pr: { number: null, url: null } });
+  const rvParked = rvRun({ key: "1-1", status: "parked", outcome: null, profile: "pr" });
+  const rvLive = rvRun({ key: "2-2", status: "building", outcome: null, concluded: false, live: true });
+  // A build phase longer than the active window: stale (not live) and still running.
+  const rvQuiet = rvRun({ key: "3-3", status: "building", outcome: null, concluded: false, live: false, updated_at: "2026-09-09T16:10:00Z" });
+  // FR-7: the three page states from the payload alone.
+  const rvNoRoot = rvPayload([], { root: { path: ".cct", is_dir: false, subdirs: ["auto-build", "auto-build-archive"] } });
+  if (rv.pageState(rvNoRoot) !== "no-root" || !/not a directory/.test(rv.intro(rvNoRoot).body) || !/CCT_SA_AUTO_BUILD_ROOT/.test(rv.intro(rvNoRoot).body)) fail(`no-root: ${rv.intro(rvNoRoot).body}`);
+  else if (rv.pageState(rvPayload([])) !== "empty" || !/holds no ledger/.test(rv.intro(rvPayload([])).body)) fail("empty state");
+  else if (rv.pageState(rvPayload([rvRun()])) !== "runs" || !/^1 run under \.cct/.test(rv.intro(rvPayload([rvRun()])).headline)) fail(`runs state: ${rv.intro(rvPayload([rvRun()])).headline}`);
+  else if (!/what a run is|A run is one attempt/.test(rv.intro(rvPayload([])).body)) fail("the intro says what a run is");
+  else console.log("  ok  three page states from the payload alone; the intro says what a run is and where ledgers come from");
+  // FR-3: the outcome is the driver's word, counted as such, never pass/fail.
+  const rvSummary = rv.outcomeSummary(rvPayload([rvRun(), rvTerminated, rvTerminated, rvParked, rvLive]));
+  if (rvSummary !== "1 landed, 2 terminated_policy; 2 without an outcome yet; 1 live.") fail(`outcome summary: ${rvSummary}`);
+  else if (rv.outcomeLabel(rvRun()) !== "landed" || rv.outcomeLabel(rvTerminated) !== "terminated_policy") fail("outcome label is verbatim");
+  else if (rv.outcomeLabel(rvParked) !== "no outcome yet · parked" || rv.outcomeLabel(rvLive) !== "no outcome yet · building") fail(`no-outcome label: ${rv.outcomeLabel(rvParked)}`);
+  else if (/\bpass\b|\bfail\b/i.test([rvSummary, rv.outcomeLabel(rvRun()), rv.outcomeLabel(rvTerminated), rv.outcomeLabel(rvParked)].join(" "))) fail("outcomes are never collapsed to pass/fail");
+  else if (!/emerald/.test(rv.outcomeStyle(rvRun())) || !/amber/.test(rv.outcomeStyle(rvTerminated)) || !/slate/.test(rv.outcomeStyle(rvParked))) fail("outcome styles");
+  else if (rv.dispositionLine(rvTerminated) !== "provider_unavailable (phase 1) — reviewer 'codex' failed" || rv.dispositionLine(rvRun()) !== "") fail(`disposition: ${rv.dispositionLine(rvTerminated)}`);
+  else console.log("  ok  outcomes verbatim (landed / terminated_policy / no outcome yet · status), never pass/fail; disposition names reason, phase and detail");
+  // FR-7: cost with the estimated part distinct, against the cap.
+  const rvCost = rv.costLine(rvRun());
+  const rvSeg = rv.costSegments(rvRun());
+  if (rvCost !== "metered $5.30 + estimated $2.00 of $10.00 cap (73%)") fail(`cost line: ${rvCost}`);
+  else if (rv.costLine(rvTerminated) !== "metered $4.76 of $10.00 cap (48%)") fail(`cost line without estimate: ${rv.costLine(rvTerminated)}`);
+  else if (!/no cap recorded/.test(rv.costLine(rvRun({ caps: { phases: 2, fix_sessions_per_phase: 2, wall_clock_sec: 5400, cost_usd: null } })))) fail("no cap → said");
+  else if (rvSeg.metered !== 53 || rvSeg.estimated !== 20 || rvSeg.over) fail(`cost segments: ${JSON.stringify(rvSeg)}`);
+  else if (!rv.costSegments(rvRun({ cost: { metered_usd: 9, estimated_usd: 2 } })).over || rv.costSegments(rvRun({ cost: { metered_usd: 9, estimated_usd: 2 } })).metered + rv.costSegments(rvRun({ cost: { metered_usd: 9, estimated_usd: 2 } })).estimated > 100) fail("over-cap segments clamp and flag");
+  else if (rv.wallLine(rvRun()) !== "9m 43s of 1h 30m cap" || rv.wallLine(rvTerminated) !== "1h 33m of 1h 30m cap — over the cap") fail(`wall line: ${rv.wallLine(rvTerminated)}`);
+  else console.log("  ok  cost names metered and estimated separately against the cap; the bar segments clamp and flag over-cap; wall clock says over the cap");
+  // FR-7: phases, verifiers, policy decisions, scores.
+  if (rv.phasesLine(rvRun()) !== "1 of 1 planned phase done (cap 2)") fail(`phases line: ${rv.phasesLine(rvRun())}`);
+  else if (rv.phaseLine(rvRun().phases.items[0]) !== "phase 1: US1 — done; 1 review round, PASS; 0 fix sessions; 2 commits") fail(`phase line: ${rv.phaseLine(rvRun().phases.items[0])}`);
+  else if (!/no review yet/.test(rv.phaseLine({ n: 1, title: "US1", status: "building", rounds: null, review_verdict: null, fix_sessions: 0, commits: 1 }))) fail("a phase without a review says so");
+  else if (rv.verifierLine(rvRun()) !== "4 requirements mapped at admission; 4 of 4 green") fail(`verifier line: ${rv.verifierLine(rvRun())}`);
+  else if (rv.verifierLine(rvTerminated) !== "4 requirements mapped at admission; verifiers not run") fail("verifiers not run is said");
+  else if (rv.verifierLine(rvRun({ verifiers: { admission_mapped: null, results: null } })) !== "no admission contract; verifiers not run") fail("no contract is said");
+  else if (rv.policyLine(rvRun()) !== "1 policy decision" || rv.policyLine(rvRun({ policy_decisions: [] })) !== "no policy decisions recorded") fail("policy line");
+  else if (rv.scoresLine(rvRun()) !== "no scores recorded") fail("scores: absence is said, not drawn as zero");
+  else console.log("  ok  phases, verifiers (incl. not run / no contract), policy decisions and the absent score channel each read as one honest line");
+  // FR-4/FR-7: the verdict control and line.
+  const rvLabelled = rvRun({ verdict: { verdict: "merged_with_fixes", note: "FR-3 fixed by hand", set_at: "2026-09-09T20:00:00Z" } });
+  if (rv.verdictLine(rvRun()) !== "no verdict yet") fail("no verdict → said");
+  else if (rv.verdictLine(rvLabelled) !== "merged with fixes · 2026-09-09 · FR-3 fixed by hand") fail(`verdict line: ${rv.verdictLine(rvLabelled)}`);
+  else if (rv.VERDICT_OPTIONS.map((o) => o.value).join(",") !== "merged_unmodified,merged_with_fixes,rejected") fail("verdict options are the three of §12");
+  else console.log("  ok  the verdict reads as its label, date and note; the three §12 verdicts are the options");
+  // FR-8: polling while any run has not concluded — freshness is not the test.
+  if (rv.shouldPoll(null) || rv.shouldPoll(rvPayload([rvRun(), rvTerminated, rvParked]))) fail("every run concluded → no polling");
+  else if (!rv.shouldPoll(rvPayload([rvRun(), rvLive]))) fail("a live run → polling");
+  else if (!rv.shouldPoll(rvPayload([rvRun(), rvQuiet]))) fail("a stale but unconcluded run (long build phase) → still polling");
+  else if (rv.liveLine(rvLive, new Date("2026-09-09T16:32:00Z")) !== "in progress — status building, last state write 14s ago") fail(`live line: ${rv.liveLine(rvLive, new Date("2026-09-09T16:32:00Z"))}`);
+  else if (rv.liveLine(rvQuiet, new Date("2026-09-09T16:32:00Z")) !== "in progress — status building, last state write 22m 0s ago" || /stopped|not concluded/.test(rv.liveLine(rvQuiet))) fail(`quiet line: ${rv.liveLine(rvQuiet, new Date("2026-09-09T16:32:00Z"))}`);
+  else if (rv.liveLine(rvRun()) !== "" || rv.liveLine(rvParked) !== "" || rv.liveLine(rvTerminated) !== "") fail("a concluded run has no progress line");
+  else console.log("  ok  polls while any run has not concluded (a quiet long build phase included) and stops when all have; the progress line says how long since the last state write");
+  const rvFoot = rv.footnotes(rvPayload([rvRun()], { skipped: [{ ledger: "auto-build-archive/broken", reason: "x" }], duplicates: 1, verdicts_without_ledger: 2 }));
+  if (rvFoot.length !== 3 || !/broken/.test(rvFoot[0]) || !/already listed/.test(rvFoot[1]) || !/2 verdicts kept/.test(rvFoot[2])) fail(`footnotes: ${rvFoot.join(" | ")}`);
+  else if (rv.footnotes(rvPayload([rvRun()])).length !== 0) fail("no footnotes when nothing was skipped");
+  else console.log("  ok  skipped directories, duplicates and orphaned verdicts are said in the footnotes");
 
   if (!process.exitCode) console.log("\nstates-check: all states asserted");
 } finally {

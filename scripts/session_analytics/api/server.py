@@ -252,6 +252,11 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         """One hand-set tag on one session: on or off."""
         on: bool
 
+    class VerdictUpdate(BaseModel):
+        """The human verdict on the PR an auto-build run produced (#190 §12)."""
+        verdict: str
+        note: Optional[str] = None
+
     # ── health + settings ──────────────────────────────────────────────
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -1126,6 +1131,66 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                 conn, status, budgets=cfg.team.budgets, runaway=cfg.team.runaway, noise=cfg.noise,
             )
             return status
+        finally:
+            conn.close()
+
+    # ── Auto-build runs (#190 §12): the ledgers, and the human verdict ──
+    @app.get("/api/runs")
+    def auto_build_runs() -> dict[str, Any]:
+        """Every auto-build run under the ledger root, derived from its
+        ledger on each request, joined with the stored verdicts. The
+        outcome is the driver's word; nothing here collapses it."""
+        from . import auto_build as auto_build_mod
+
+        cfg = load_config()
+        conn = db()
+        try:
+            return auto_build_mod.list_runs(conn, cfg.auto_build)
+        finally:
+            conn.close()
+
+    @app.get("/api/runs/{key}")
+    def auto_build_run(key: str) -> dict[str, Any]:
+        """One run with every ledger event and its triage report."""
+        from . import auto_build as auto_build_mod
+
+        cfg = load_config()
+        conn = db()
+        try:
+            run = auto_build_mod.run_detail(conn, cfg.auto_build, key)
+            if run is None:
+                raise HTTPException(status_code=404, detail=f"no auto-build run {key!r} under the ledger root")
+            return run
+        finally:
+            conn.close()
+
+    @app.put("/api/runs/{key}/verdict")
+    def auto_build_verdict(key: str, req: VerdictUpdate) -> dict[str, Any]:
+        """Record what the human did with the run's PR; returns the run."""
+        from . import auto_build as auto_build_mod
+
+        cfg = load_config()
+        conn = db()
+        try:
+            return auto_build_mod.set_verdict(conn, cfg.auto_build, key, req.verdict, req.note)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        finally:
+            conn.close()
+
+    @app.delete("/api/runs/{key}/verdict")
+    def auto_build_verdict_clear(key: str) -> dict[str, Any]:
+        """Remove the verdict; returns the run."""
+        from . import auto_build as auto_build_mod
+
+        cfg = load_config()
+        conn = db()
+        try:
+            return auto_build_mod.clear_verdict(conn, cfg.auto_build, key)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
         finally:
             conn.close()
 

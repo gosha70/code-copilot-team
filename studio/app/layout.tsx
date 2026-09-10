@@ -21,6 +21,7 @@ const TABS = [
   { href: "/", label: "Dashboard" },
   { href: "/sessions", label: "Sessions" },
   { href: "/team", label: "Team" },
+  { href: "/runs", label: "Runs" },
   { href: "/ask", label: "Ask" },
   { href: "/graph", label: "Graph" },
   { href: "/analysis", label: "Analysis" },

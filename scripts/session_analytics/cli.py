@@ -216,6 +216,24 @@ def _build_parser() -> argparse.ArgumentParser:
     p_team.add_argument("--fail-on", default=C.ALERT_BREACH, choices=list(C.ALERT_LEVELS),
                         help="alerts: the level that makes the exit code 1 (default breach).")
 
+    p_runs = sub.add_parser(
+        "runs",
+        help="Auto-build runs (#190 §12): every ledger under the ledger root "
+             "with its outcome in the driver's own words, why it stopped, "
+             "rounds, cost against cap, verifier state and policy decisions "
+             "— the Studio's Runs tab, in the terminal — and the human "
+             "verdict on the PR a run produced.",
+    )
+    p_runs.add_argument("action", nargs="?", default="list", choices=["list", "show", "label", "unlabel"],
+                        help="list (default); show KEY; label KEY VERDICT [--note]; unlabel KEY.")
+    p_runs.add_argument("key", nargs="?", default=None, help="The run key (the driver's attempt id).")
+    p_runs.add_argument("verdict", nargs="?", default=None, choices=[None, *C.VERDICTS],
+                        help="label: " + " | ".join(C.VERDICTS) + ".")
+    p_runs.add_argument("--note", default=None, help="label: a short note kept with the verdict.")
+    p_runs.add_argument("--db", "--dsn", dest="dsn", default=None,
+                        help="Database: sqlite:////abs/path.db or postgresql://… (else .env CCT_SA_DB).")
+    p_runs.add_argument("--json", action="store_true", help="Print the payload as JSON.")
+
     p_sim = sub.add_parser(
         "similar",
         help="Populate SIMILAR_TO graph edges from stored session "
@@ -1082,6 +1100,50 @@ def _cmd_team(args: argparse.Namespace) -> int:
     return C.EXIT_OK
 
 
+def _cmd_runs(args: argparse.Namespace) -> int:
+    from .api import auto_build as auto_build_mod
+    from .relational.db import Database, apply_ddl
+
+    cfg = load_config(dsn=args.dsn)
+    if not cfg.dsn:
+        print("error: no database configured (see --db or run setup).", file=sys.stderr)
+        return C.EXIT_USAGE
+    if args.action != "list" and not args.key:
+        print(f"error: runs {args.action} needs the run key (see `runs list`).", file=sys.stderr)
+        return C.EXIT_USAGE
+    if args.action == "label" and not args.verdict:
+        print("error: runs label needs a verdict: " + " | ".join(C.VERDICTS) + ".", file=sys.stderr)
+        return C.EXIT_USAGE
+    db = Database.connect(cfg.dsn)
+    try:
+        apply_ddl(db)
+        if args.action == "list":
+            payload = auto_build_mod.list_runs(db, cfg.auto_build)
+            lines = auto_build_mod.render_list(payload)
+        else:
+            try:
+                if args.action == "show":
+                    payload = auto_build_mod.run_detail(db, cfg.auto_build, args.key)
+                    if payload is None:
+                        raise LookupError(f"no auto-build run {args.key!r} under the ledger root")
+                elif args.action == "label":
+                    payload = auto_build_mod.set_verdict(db, cfg.auto_build, args.key, args.verdict, args.note)
+                else:
+                    payload = auto_build_mod.clear_verdict(db, cfg.auto_build, args.key)
+            except (LookupError, ValueError) as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return C.EXIT_USAGE
+            lines = auto_build_mod.render_run(payload)
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return C.EXIT_OK
+    for line in lines:
+        print(line)
+    return C.EXIT_OK
+
+
 def _cmd_similar(args: argparse.Namespace) -> int:
     from .embedding.similar_runner import (
         GraphNotReadyError, KuzuEdgeStore, run_similar)
@@ -1318,6 +1380,7 @@ _HANDLERS = {
     "analyze": _cmd_analyze,
     "labels": _cmd_labels,
     "team": _cmd_team,
+    "runs": _cmd_runs,
     "embed": _cmd_embed,
     "similar": _cmd_similar,
     "clusters": _cmd_clusters,

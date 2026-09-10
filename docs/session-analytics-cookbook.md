@@ -21,6 +21,7 @@ design decision is `scripts/session_analytics/README.md`; the Studio's
 | **Session page** | What was said, turn by turn, with the agent's response time — and three analyses a judge writes over the whole transcript: **Agent Tuning** (what to change in your CLAUDE.md, permissions, hooks, skills, with the diff), **Prompt Coaching** (which of your prompts were vague and what to send instead), **Efficiency** (where the turns went, and the script, hook, skill or rule that would remove each detour). |
 | **Ask** | A question about your sessions in words, answered by the judge LLM through read-only lookups (sessions, turn text, analyses, patterns, the graph), each lookup shown so the answer can be checked. |
 | **Team** | Who on the team is active right now (a heartbeat in the last five minutes), what they are on, what sessions cost per developer, per project and over today / 7 days / 30 days, and the alerts: budgets passed and runaway sessions (§8.5). Reads the shared team store (§8.4); on a local SQLite store it shows one developer. |
+| **Runs** | Every attempt of the auto-build driver recorded on this machine, read from its ledger: the outcome in the driver's own words (`landed`, `terminated_policy`, or none yet — never pass/fail), why it stopped, rounds per phase, cost against the cap with the estimated part distinguished, which requirements had verifiers and went green, the policy decisions taken, the PR — and the human verdict on that PR, set here (§8.6). |
 | **Graph** | One session or project and everything it is connected to, every relationship named; a catalogue of questions answered as tables, charts or drawn on the canvas. |
 | **Analysis** | The pipeline as steps — load sessions, build the graph, run the judge, compute KPIs — with a funnel of counts and a **Judge quality** card. |
 | **Benchmark** | What this repository's benchmark harness found: attempts by result with the cost and duration of the sessions they produced, and the predicted pass rate per project. Empty until you run the harness and link its runs (Settings → Benchmarks, then **Link benchmark runs**). |
@@ -90,6 +91,7 @@ Precedence, lowest to highest: packaged defaults → `~/.cct/session-analytics.j
 | `CCT_SA_TEAM_ACTIVE_WINDOW` | Seconds a heartbeat counts as active on the Team tab. | `300` |
 | `CCT_SA_BUDGET_TEAM_DAILY_USD`, `CCT_SA_BUDGET_TEAM_MONTHLY_USD`, `CCT_SA_BUDGET_DEVELOPER_DAILY_USD`, `CCT_SA_BUDGET_PROJECT_DAILY_USD` | Budgets the Team tab and `team alerts` check (§8.5); blank = none. | none |
 | `CCT_SA_RUNAWAY_RECENT_MINUTES`, `_MAX_TURNS_RECENT`, `_RECENT_TURNS`, `_MAX_ERROR_SHARE`, `_MIN_TURNS_FOR_ERROR_SHARE`, `_MAX_COST_RECENT_USD` | What makes a still-running session a runaway (§8.5). | `60`, `300`, `50`, `0.5`, `20`, `20` |
+| `CCT_SA_AUTO_BUILD_ROOT` | The `.cct` folder the auto-build driver wrote its ledgers under, for the Runs tab (§8.6); relative = from the repository root. | `.cct` |
 | `CCT_SA_EMBED_BACKEND`, `CCT_SA_EMBED_MODEL` | Embeddings for session similarity (Ollama; `nomic-embed-text` works well). | `ollama`, none |
 | `CCT_SA_NOISE_MIN_TURNS`, `CCT_SA_NOISE_MIN_DURATION_SECONDS`, `CCT_SA_NOISE_PATH_PATTERNS` | What the Studio hides as noise (see §5.2). | `3`, `60`, `/cct-probe,/private/var/folders/,/tmp/` |
 | `CCT_DEVELOPER_ID` | Your id on multi-developer stores. | git `user.email` local part, else `local` |
@@ -573,6 +575,53 @@ runaway is flagged for a person to look at.
 ./scripts/session-analytics team alerts --json        # the full record
 ```
 
+### 8.6 Auto-build runs and the human verdict
+
+The auto-build driver (`scripts/auto-build-loop.sh`) leaves a ledger for
+every attempt under `.cct/auto-build/<feature>/`; finished ledgers you
+move aside by hand go under `.cct/auto-build-archive/`. The **Runs** tab
+reads both on every refresh — nothing from a ledger is stored — and
+shows, per run:
+
+- the **outcome as the driver wrote it**: `landed`, `terminated_policy`,
+  or "no outcome yet" with the status. It is never collapsed to
+  pass/fail; a run that stopped at a policy boundary is a different
+  thing from one that failed;
+- **why it stopped**: the disposition reason and detail from
+  `termination.json`;
+- **phases and rounds**: planned, done, review rounds and the
+  reviewer's verdict per phase, fix sessions, commits;
+- **cost against the cap**, with the metered figure and the driver's
+  conservative estimate for an unmetered reviewer named separately
+  (solid and hatched in the bar) and the wall clock against its cap;
+- **verifiers**: how many requirements had a verifier at admission and
+  how many went green — or that they never ran;
+- **policy decisions**: the journal events where the driver decided
+  something (a termination, a park, a review-state reset, a skipped
+  artifact, a merge decision, a cap change, a waiver);
+- the **PR**, and the **human verdict** on it: *merged unmodified*,
+  *merged with fixes*, or *rejected*, with a note. This is the one
+  fact the ledger cannot write. It is stored in the analytics store
+  keyed by the run's attempt id, so it survives the ledger being
+  archived or pruned.
+
+The page polls while any run has not concluded and stops when every
+run has. A run whose state file was written within
+`auto_build.active_window_seconds` (default 15 minutes) is shown as
+live; one that has gone quiet in a long build phase is still polled,
+with how long since its last state write. No ledger writes a score today, so each run says "no scores
+recorded" rather than drawing an empty chart.
+
+```bash
+./scripts/session-analytics runs                       # every run, one line each
+./scripts/session-analytics runs show 47908-474720888  # one run with its events and triage report
+./scripts/session-analytics runs label 47908-474720888 merged_with_fixes --note "FR-3 fixed by hand"
+./scripts/session-analytics runs unlabel 47908-474720888
+```
+
+The ledger root is `CCT_SA_AUTO_BUILD_ROOT` (Settings → Auto-build
+runs); the default is this repository's own `.cct`.
+
 ---
 
 ## 9. Everything else
@@ -582,6 +631,7 @@ runaway is flagged for a person to look at.
 ./scripts/session-analytics export --table sessions --format csv --out sessions.csv
 ./scripts/session-analytics export --table all --format parquet --out ./export/
 ./scripts/session-analytics correlate --runs-root runs             # same as Analysis → Link benchmark runs
+./scripts/session-analytics runs                                   # auto-build runs and their verdicts (§8.6)
 ./scripts/session-analytics mcp                                    # MCP server over the store
 ./scripts/session-analytics list                                   # adapters + judges registered
 ```

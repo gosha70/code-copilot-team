@@ -56,6 +56,15 @@ const GROUPS: { title: string; blurb: string; keys: string[] }[] = [
     keys: ["CCT_SA_BENCHMARK_RUNS_ROOT"],
   },
   {
+    title: "Auto-build runs",
+    blurb:
+      "Where the auto-build driver (scripts/auto-build-loop.sh) writes its " +
+      "ledgers: the .cct folder of the repository it ran in, with auto-build/ " +
+      "and auto-build-archive/ beneath it. The Runs tab reads every ledger " +
+      "there on each refresh. Blank means this repository's own .cct.",
+    keys: ["CCT_SA_AUTO_BUILD_ROOT"],
+  },
+  {
     title: "Team",
     blurb:
       "The Team tab reads the store every developer writes to. Budgets are " +
@@ -206,6 +215,15 @@ const META: Record<
       "run-record.json and a score.json below it). The harness's default " +
       "is the repository's runs/ folder.",
     placeholder: "/path/to/code-copilot-team/runs",
+  },
+  CCT_SA_AUTO_BUILD_ROOT: {
+    label: "Auto-build ledger folder",
+    browse: "dir",
+    help:
+      "The .cct folder the driver ran in (it writes .cct/auto-build/<feature>/; " +
+      "finished ledgers you move to .cct/auto-build-archive/ are read too). " +
+      "A relative path is taken from the repository root.",
+    placeholder: ".cct",
   },
   CCT_SA_TEAM_ACTIVE_WINDOW: {
     label: "Active window (seconds)",

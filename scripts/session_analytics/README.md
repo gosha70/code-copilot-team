@@ -62,6 +62,8 @@ The zero-install path still works without `setup` — just pass `--db`:
 | `embed`   | Compute session embeddings into a provenance envelope (E2 slice 1, #285). |
 | `similar` | Populate `SIMILAR_TO` graph edges from stored embeddings (E2 slice 2, #287). |
 | `clusters`| Group the stored `SIMILAR_TO` edges into clusters, read-only (E2 slice 3, #289). |
+| `team`    | The team store's status and alerts (#174). |
+| `runs`    | Auto-build runs from their ledgers, and the human verdict on each run's PR (#190 §12). |
 
 The Studio renders both read-only (E2 slice 4, #293) — see *Studio:
 clusters view + similar panel* below.
@@ -1023,6 +1025,38 @@ thing that can fail, not a licence to check by eye:
 state's marker appears in no other state's render. Run it with
 `node studio/scripts/states-check.mjs`; it needs no dependency the
 Studio does not already have.
+
+## Auto-build runs (#190 §12, auto-build-run-surface)
+
+`GET /api/runs`, `GET /api/runs/{key}`, `PUT|DELETE /api/runs/{key}/verdict`
+and `session-analytics runs list|show|label|unlabel` share one module,
+`api/auto_build.py`. It reads the ledgers `scripts/auto-build-loop.sh`
+writes — `state.json`, `events.jsonl`, `termination.json`,
+`verification-results.json`, `phase-N/review/loop-summary.json` — under
+the two fixed subdirectories `auto-build/` and `auto-build-archive/` of
+`auto_build.ledger_root` (`CCT_SA_AUTO_BUILD_ROOT`, default `.cct`,
+relative to the repository root). Every record is derived per request;
+nothing from a ledger is stored. The run key is the driver's
+`attempt_id`; a directory without a readable state is listed under
+`skipped`, a second directory carrying a key already seen is counted
+under `duplicates`. `outcome` is the driver's value verbatim (`landed`,
+`terminated_policy`, or null) and the summary counts it as such — no
+field maps it onto pass/fail. A parked run's disposition comes from
+the newest escalation the state lists (`escalations/esc-N.json`).
+`concluded` is "status is one the driver writes nothing after";
+`live` is "not concluded and the state written within
+`auto_build.active_window_seconds`" (default 900) — freshness only,
+since the driver writes state at status transitions and a long build
+phase goes quiet; `policy_decisions` are the journal events in
+`POLICY_EVENTS`.
+
+The one stored fact is the human verdict on the run's PR:
+`auto_build_verdict` (`009_auto_build_verdict.sql`, `run_key` UNIQUE,
+`verdict` in `merged_unmodified | merged_with_fixes | rejected`,
+`note`, `set_at`). Setting one requires the key to exist among the
+ledgers (404 otherwise); the row outlives the ledger and is counted as
+`verdicts_without_ledger` once the directory is gone. The Studio's
+Runs tab polls while any run has not `concluded` (`lib/runsView.ts`).
 
 ## Team store (#174, Slices B2 + C + E)
 
