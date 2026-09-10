@@ -85,6 +85,46 @@ class TestCli(RegistryResetTestCase):
             self.assertIn("[WARNING] budget: the team is at 86%", out)
             self.assertEqual(_run(["team", "alerts", "--db", dsn, "--fail-on", "warning"])[0], 1)
 
+    def test_alias_fr4_team_status_folds_the_configured_aliases(self) -> None:
+        # FR-4 (team-developer-aliases): the CLI table applies
+        # load_config().team.aliases — two derived ids, one person, one row.
+        from datetime import datetime, timezone
+        from pathlib import Path
+        from unittest import mock
+
+        from session_analytics import config as cfgmod
+        from session_analytics.relational.db import Database, apply_ddl
+
+        dsn = self.sqlite_dsn()
+        db = Database.connect(dsn)
+        apply_ddl(db)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for i, dev in enumerate(("i-am-goga", "local")):
+            db.execute(
+                "INSERT INTO copilot_session (copilot, session_id, project_path, developer_id, turn_count, "
+                "started_at, duration_seconds) VALUES ('claude-code', ?, '/repo/p', ?, 5, ?, 600)",
+                (f"s-{i}", dev, now),
+            )
+            sid = int(db.query_one("SELECT id FROM copilot_session WHERE session_id = ?", (f"s-{i}",))[0])
+            db.execute(
+                "INSERT INTO copilot_turn (session_id, sequence_num, role, content_preview, timestamp, "
+                "cost_usd, model) VALUES (?, 1, 'assistant', '', ?, 1.5, 'm')", (sid, now))
+        db.commit(); db.close()
+
+        with mock.patch.object(cfgmod, "_USER_CONFIG", Path("/nonexistent/session-analytics.json")), \
+             mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}), \
+             mock.patch.dict("os.environ", {cfgmod.ENV_TEAM_ALIASES: "i-am-goga=Gosha,local=Gosha"}):
+            code, out = _run(["team", "status", "--db", dsn])
+            self.assertEqual(code, C.EXIT_OK)
+            self.assertIn("Gosha (i-am-goga)", out)
+            # …and no second row for the folded id ("local store (SQLite)"
+            # in the header is why this looks at line starts).
+            self.assertFalse([ln for ln in out.splitlines() if ln.startswith("local")])
+            self.assertIn("$3.00", out)          # both ids' priced turns, summed
+            code, body = _run(["team", "--db", dsn, "--json"])
+            row, = json.loads(body)["developers"]
+            self.assertEqual((row["display_name"], row["merged_ids"]), ("Gosha", ["i-am-goga", "local"]))
+
     def test_ingest_then_doctor(self) -> None:
         dsn = self.sqlite_dsn()
         code, out = _run(

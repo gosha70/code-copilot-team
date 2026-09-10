@@ -133,6 +133,9 @@ CFG_BUDGET_TEAM_DAILY = "team_daily_usd"
 CFG_BUDGET_TEAM_MONTHLY = "team_monthly_usd"
 CFG_BUDGET_DEVELOPER_DAILY = "developer_daily_usd"
 CFG_BUDGET_PROJECT_DAILY = "project_daily_usd"
+#: team.aliases — developer id → display name; ids sharing a name are one
+#: person, folded into one row at READ time (the store keeps every id).
+CFG_TEAM_ALIASES = "aliases"
 #: team.runaway — what makes a still-running session a runaway.
 CFG_TEAM_RUNAWAY = "runaway"
 CFG_RUNAWAY_RECENT_MINUTES = "recent_minutes"
