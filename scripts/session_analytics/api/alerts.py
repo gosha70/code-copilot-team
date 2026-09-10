@@ -9,6 +9,9 @@
 #             warning at BUDGET_WARNING_SHARE, breach at the budget.
 #   runaway — sessions whose newest turn is recent and that are turning
 #             too fast, erroring too often, or spending too fast.
+#   auto-build — a run of scripts/auto-build-loop.sh that has not
+#             concluded and is burning its cost or wall-clock cap;
+#             warning at BUDGET_WARNING_SHARE, breach at the cap.
 #
 # Cost honesty (E5): a window with no priced turn never breaches, and
 # every budget alert names how many priceable turns had no price, so
@@ -30,12 +33,20 @@ KIND_BUDGET = "budget"
 KIND_RUNAWAY_TURNS = "runaway-turns"
 KIND_RUNAWAY_ERRORS = "runaway-errors"
 KIND_RUNAWAY_COST = "runaway-cost"
+KIND_AUTO_BUILD_COST = "auto-build-cost"
+KIND_AUTO_BUILD_WALL_CLOCK = "auto-build-wall-clock"
 
 _LEVEL_ORDER = {C.ALERT_WARNING: 0, C.ALERT_BREACH: 1}
 
 
 def _money(v: Optional[float]) -> str:
     return "—" if v is None else f"${v:.2f}"
+
+
+def _minutes(seconds: Optional[float]) -> str:
+    """A run's clock in the unit its cap is set in conversation ("90
+    minutes"), not the seconds the ledger stores."""
+    return "—" if seconds is None else f"{int(round(seconds / 60)):,} min"
 
 
 def _budget_alert(scope: str, subject: str, window: str, rollup: dict[str, Any], budget: float) -> Optional[dict[str, Any]]:
@@ -177,13 +188,88 @@ def runaway_alerts(
     return out
 
 
+def _run_subject(run: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "key": run["key"], "feature_id": run.get("feature_id"), "ledger": run.get("ledger"),
+        "pr_number": (run.get("pr") or {}).get("number"),
+    }
+
+
+def _cap_alert(
+    run: dict[str, Any], kind: str, value: Optional[float], cap: Optional[float], against: str,
+    figures: dict[str, Any], aside: str = "",
+) -> Optional[dict[str, Any]]:
+    """One cap of one run, or None when the cap cannot be judged crossed:
+    no cap recorded, a cap of zero or less (the driver's "no limit"), or
+    a figure the ledger never wrote."""
+    if cap is None or cap <= 0 or value is None:
+        return None
+    share = value / cap
+    if share < C.BUDGET_WARNING_SHARE:
+        return None
+    label = run.get("feature_id") or "an unnamed feature"
+    return {
+        "kind": kind, "level": C.ALERT_BREACH if share >= 1 else C.ALERT_WARNING,
+        "scope": "run", "subject": _run_subject(run), "window": None,
+        "message": f"auto-build run {label} ({run['key']}) {against} "
+                   f"({int(round(share * 100))}%{aside}) and is still running.",
+        "figures": {**figures, "share": round(share, 2)},
+    }
+
+
+def auto_build_alerts(runs: list[dict[str, Any]], *, now: Optional[datetime] = None) -> list[dict[str, Any]]:
+    """Runs that have not concluded and are at or above
+    BUDGET_WARNING_SHARE of a cap, one alert per run per cap. Pure: every
+    figure is the one api.auto_build.list_runs() derived from the ledger,
+    including the elapsed clock — which that reader already ran against
+    `now`, so `now` is taken here only for symmetry with the other two
+    families and is not a second clock."""
+    del now
+    out: list[dict[str, Any]] = []
+    for run in runs:
+        if run.get("concluded"):
+            continue
+        cost, caps = run.get("cost") or {}, run.get("caps") or {}
+        # The driver's own accounting: what a provider metered plus what
+        # it conservatively estimated for an unmetered reviewer. The cap
+        # is set against the sum, so the alert is too — and the estimated
+        # portion is named, so "part of this is a guess" is said.
+        estimated = cost.get("estimated_usd") or 0.0
+        spent = (cost.get("metered_usd") or 0.0) + estimated
+        cost_cap = caps.get("cost_usd")
+        alert = _cap_alert(
+            run, KIND_AUTO_BUILD_COST, spent, cost_cap,
+            f"has spent {_money(spent)} of its {_money(cost_cap)} cap",
+            {"spent_usd": spent, "estimated_usd": estimated, "cap_usd": cost_cap},
+            aside=f", {_money(estimated)} estimated" if estimated else "",
+        )
+        if alert:
+            out.append(alert)
+        elapsed, clock_cap = run.get("elapsed_sec"), caps.get("wall_clock_sec")
+        alert = _cap_alert(
+            run, KIND_AUTO_BUILD_WALL_CLOCK, elapsed, clock_cap,
+            f"has run {_minutes(elapsed)} of its {_minutes(clock_cap)} wall-clock cap",
+            {"elapsed_sec": elapsed, "cap_sec": clock_cap},
+        )
+        if alert:
+            out.append(alert)
+    return out
+
+
 def all_alerts(
     db: Database, status: dict[str, Any], *, budgets: BudgetsConfig, runaway: RunawayConfig,
     noise: Optional[NoiseConfig], now: Optional[datetime] = None,
+    runs: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Every alert, breaches first, plus what is configured — so a page
-    with no alerts can say whether that is because nothing is set."""
+    with no alerts can say whether that is because nothing is set.
+
+    `runs` is api.auto_build.list_runs()["runs"]; None means the caller
+    did not read the ledgers at all, which the report says rather than
+    passing it off as "no auto-build run is near a cap"."""
     alerts = budget_alerts(status, budgets) + runaway_alerts(db, runaway, noise=noise, now=now)
+    if runs is not None:
+        alerts += auto_build_alerts(runs, now=now)
     alerts.sort(key=lambda a: (-_LEVEL_ORDER[a["level"]], a["kind"], str(a["subject"])))
     return {
         "alerts": alerts,
@@ -202,6 +288,14 @@ def all_alerts(
             C.CFG_RUNAWAY_MAX_ERROR_SHARE: runaway.max_error_share,
             C.CFG_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE: runaway.min_turns_for_error_share,
             C.CFG_RUNAWAY_MAX_COST_RECENT: runaway.max_cost_recent_usd,
+        },
+        C.ALERT_AUTO_BUILD: {
+            C.ALERT_AUTO_BUILD_EVALUATED: runs is not None,
+            # The runs the cap alerts consider: those the driver has not
+            # concluded, whose clock is therefore still running. The
+            # reader's own `live` is the narrower "wrote its state
+            # recently", and a long build phase is not a finished run.
+            C.ALERT_AUTO_BUILD_LIVE_RUNS: sum(1 for r in runs or () if not r.get("concluded")),
         },
         "derived": True,
     }
@@ -236,5 +330,16 @@ def render_alerts(report: dict[str, Any]) -> list[str]:
         f"in {r[C.CFG_RUNAWAY_RECENT_MINUTES]} min, or > {int(round(r[C.CFG_RUNAWAY_MAX_ERROR_SHARE] * 100))}% errors "
         f"over the last {r[C.CFG_RUNAWAY_RECENT_TURNS]} turns (at least {r[C.CFG_RUNAWAY_MIN_TURNS_FOR_ERROR_SHARE]})."
     )
+    # A caller that never read the ledgers must not read as "no run is
+    # near a cap"; the two states are printed differently.
+    ab = report.get(C.ALERT_AUTO_BUILD) or {}
+    if ab.get(C.ALERT_AUTO_BUILD_EVALUATED):
+        live = ab.get(C.ALERT_AUTO_BUILD_LIVE_RUNS, 0)
+        out.append(
+            f"Auto-build: runs evaluated, {live} still running; a run at "
+            f"{int(round(C.BUDGET_WARNING_SHARE * 100))}% of its cost or wall-clock cap warns, at 100% breaches."
+        )
+    else:
+        out.append("Auto-build: runs not evaluated.")
     out.append("Alerts are derived from the store on every read; nothing is stored.")
     return out

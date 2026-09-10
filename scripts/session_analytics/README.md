@@ -1090,6 +1090,16 @@ over the last `recent_turns` > `max_error_share` with at least
 `session-analytics team alerts [--json] [--fail-on warning|breach]`,
 whose exit code (1 at or above the floor) is the cron/CI alarm.
 
+A third family (auto-build-cap-alerts) is fed by the run surface below:
+`auto_build_alerts(runs)` takes `api/auto_build.list_runs()["runs"]` and
+returns `auto-build-cost` / `auto-build-wall-clock` alerts for a run the
+driver has not `concluded`, at the same 0.8 warning / 1.0 breach shares
+of `caps.cost_usd` (metered + estimated) and `caps.wall_clock_sec`; a
+null or non-positive cap yields none. `all_alerts(..., runs=...)` merges
+them; `runs=None` means "the ledgers were not read", which the report's
+`auto_build` block and the rendered configuration line say out loud
+rather than showing a quiet card.
+
 ## Ask: a question in words, answered from the store
 
 `POST /api/ask` (`{question, history}`) streams NDJSON events — `judge`,

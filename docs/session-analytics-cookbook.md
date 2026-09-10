@@ -20,7 +20,7 @@ design decision is `scripts/session_analytics/README.md`; the Studio's
 | **Sessions** | Which sessions are real work (probe runs and two-turn tests are hidden by default; one toggle shows them). |
 | **Session page** | What was said, turn by turn, with the agent's response time — and three analyses a judge writes over the whole transcript: **Agent Tuning** (what to change in your CLAUDE.md, permissions, hooks, skills, with the diff), **Prompt Coaching** (which of your prompts were vague and what to send instead), **Efficiency** (where the turns went, and the script, hook, skill or rule that would remove each detour). |
 | **Ask** | A question about your sessions in words, answered by the judge LLM through read-only lookups (sessions, turn text, analyses, patterns, the graph), each lookup shown so the answer can be checked. |
-| **Team** | Who on the team is active right now (a heartbeat in the last five minutes), what they are on, what sessions cost per developer, per project and over today / 7 days / 30 days, and the alerts: budgets passed and runaway sessions (§8.5). Reads the shared team store (§8.4); on a local SQLite store it shows one developer. |
+| **Team** | Who on the team is active right now (a heartbeat in the last five minutes), what they are on, what sessions cost per developer, per project and over today / 7 days / 30 days, and the alerts: budgets passed, runaway sessions, and auto-build runs burning a cap (§8.5). Reads the shared team store (§8.4); on a local SQLite store it shows one developer. |
 | **Runs** | Every attempt of the auto-build driver recorded on this machine, read from its ledger: the outcome in the driver's own words (`landed`, `terminated_policy`, or none yet — never pass/fail), why it stopped, rounds per phase, cost against the cap with the estimated part distinguished, which requirements had verifiers and went green, the policy decisions taken, the PR — and the human verdict on that PR, set here (§8.6). |
 | **Graph** | One session or project and everything it is connected to, every relationship named; a catalogue of questions answered as tables, charts or drawn on the canvas. |
 | **Analysis** | The pipeline as steps — load sessions, build the graph, run the judge, compute KPIs — with a funnel of counts and a **Judge quality** card. |
@@ -544,10 +544,10 @@ at read time, and each row's `merged_ids` (in `--json` and the API
 payload) names every id folded into it. An entry that is not `id=Name`
 refuses at config load rather than quietly dropping the alias.
 
-### 8.5 Budgets and runaway alerts
+### 8.5 Budgets, runaway and auto-build cap alerts
 
 The Team tab opens with an **Alerts** card, and `./scripts/session-analytics
-team alerts` prints the same list. Two kinds:
+team alerts` prints the same list. Three kinds:
 
 - **Budgets.** Under **Settings → Team** set any of: team per day, team
   per 30 days, per developer per day, per project per day (USD; blank
@@ -562,6 +562,20 @@ team alerts` prints the same list. Two kinds:
   the developer, the project, the session, the figure and the
   threshold, and links to the session. Thresholds live under
   `team.runaway` in the config file (`CCT_SA_RUNAWAY_*` in `.env`).
+- **Auto-build runs burning a cap.** Always on, and read from the same
+  ledgers the **Runs** tab reads (§8.6) — no extra setting. A run the
+  driver has not concluded is flagged at 80% of the cost cap it was
+  admitted with (a *warning*) and again at 100% (a *breach*), and the
+  same two thresholds apply to its wall-clock cap. The alert names the
+  feature, the run's attempt id, and the figure against the cap as a
+  percentage; the cost figure is metered spend plus the driver's
+  estimate for an unmetered reviewer, with the estimated portion named,
+  because that is what the cap is set against. A run with no cap
+  recorded, or a cap of zero, yields no alert. Finished runs never
+  alert — they are history, read on the Runs tab. The last
+  configuration line says whether the ledgers were read at all and how
+  many runs are still running, so a quiet card is never mistaken for an
+  unread one.
 
 Alerts are derived from the store on every read; nothing is stored, so
 the audit trail is the rows themselves. Nothing is terminated: a

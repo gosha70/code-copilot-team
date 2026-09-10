@@ -51,6 +51,13 @@ class TestCli(RegistryResetTestCase):
         from session_analytics import config as cfgmod
 
         dsn = self.sqlite_dsn()
+        # The alerts under test are the store's own; the auto-build caps
+        # are a family with its own test, and this host's real ledger
+        # root — where a live run may well be near its cap — must not
+        # decide this test's output or exit codes.
+        ledgers = mock.patch.dict("os.environ", {cfgmod.ENV_AUTO_BUILD_ROOT: "/nonexistent/cct-ledgers"})
+        ledgers.start()
+        self.addCleanup(ledgers.stop)
         code, out = _run(["team", "alerts", "--db", dsn])
         self.assertEqual((code, out.splitlines()[0]), (C.EXIT_OK, "No alerts."))
         code, out = _run(["team", "alerts", "--db", dsn, "--json"])
@@ -124,6 +131,59 @@ class TestCli(RegistryResetTestCase):
             code, body = _run(["team", "--db", dsn, "--json"])
             row, = json.loads(body)["developers"]
             self.assertEqual((row["display_name"], row["merged_ids"]), ("Gosha", ["i-am-goga", "local"]))
+
+    def test_cap_fr4_team_alerts_reads_the_ledgers_and_the_exit_code_covers_them(self) -> None:
+        # FR-4 (auto-build-cap-alerts): `team alerts` evaluates the
+        # auto-build caps from the ledger root the config names, and
+        # --fail-on applies to them like it does to a budget.
+        import tempfile
+        from datetime import datetime, timedelta, timezone
+        from pathlib import Path
+        from unittest import mock
+
+        from session_analytics import config as cfgmod
+
+        def _root(cost_usd: float) -> str:
+            now = datetime.now(timezone.utc)
+            root = Path(tempfile.mkdtemp(prefix="cct-cli-cap-"))
+            ledger = root / C.AUTO_BUILD_LIVE_DIR / "cap-alerts-fixture"
+            ledger.mkdir(parents=True)
+            (ledger / C.LEDGER_STATE_FILE).write_text(json.dumps({
+                "schema_version": 1, "feature_id": "cap-alerts-fixture", "profile": "unattended",
+                "attempt_id": "47908-474720888", "status": "building", "current_phase": 1, "phases": {},
+                "caps": {"max_wall_clock_sec": 86400, "max_cost_usd": 10.0},
+                "outcome": None, "escalations": [], "pr": {"number": None, "url": None},
+                "totals": {"cost_usd": cost_usd, "cost_estimated_usd": 0,
+                           "started_epoch": int((now - timedelta(seconds=600)).timestamp())},
+                "updated": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }), encoding="utf-8")
+            return str(root)
+
+        dsn = self.sqlite_dsn()
+        base = {cfgmod.ENV_NOISE_MIN_DURATION: "0"}
+        with mock.patch.object(cfgmod, "_USER_CONFIG", Path("/nonexistent/session-analytics.json")), \
+             mock.patch.object(cfgmod, "parse_env_file", lambda *a, **k: {}):
+            with mock.patch.dict("os.environ", {**base, cfgmod.ENV_AUTO_BUILD_ROOT: _root(9.0)}):
+                code, out = _run(["team", "alerts", "--db", dsn])   # 90%: a warning
+                self.assertEqual(code, C.EXIT_OK)
+                self.assertIn("[WARNING] auto-build-cost: auto-build run cap-alerts-fixture "
+                              "(47908-474720888) has spent $9.00 of its $10.00 cap (90%)", out)
+                self.assertIn("Auto-build: runs evaluated, 1 still running", out)
+                self.assertEqual(_run(["team", "alerts", "--db", dsn, "--fail-on", "warning"])[0], 1)
+                report = json.loads(_run(["team", "alerts", "--db", dsn, "--json"])[1])
+                self.assertEqual(report[C.ALERT_AUTO_BUILD][C.ALERT_AUTO_BUILD_LIVE_RUNS], 1)
+                self.assertTrue(report[C.ALERT_AUTO_BUILD][C.ALERT_AUTO_BUILD_EVALUATED])
+                self.assertEqual(_run(["team", "status", "--db", dsn])[0], C.EXIT_OK)
+            with mock.patch.dict("os.environ", {**base, cfgmod.ENV_AUTO_BUILD_ROOT: _root(12.0)}):
+                code, out = _run(["team", "alerts", "--db", dsn])   # 120%: past the cap
+                self.assertEqual(code, 1)
+                self.assertIn("[BREACH ] auto-build-cost:", out)
+            # A ledger root that is not a directory: nothing has run here,
+            # which is a state to report, not an error.
+            with mock.patch.dict("os.environ", {**base, cfgmod.ENV_AUTO_BUILD_ROOT: "/nonexistent/cct-ledgers"}):
+                code, out = _run(["team", "alerts", "--db", dsn])
+                self.assertEqual((code, out.splitlines()[0]), (C.EXIT_OK, "No alerts."))
+                self.assertIn("Auto-build: runs evaluated, 0 still running", out)
 
     def test_ingest_then_doctor(self) -> None:
         dsn = self.sqlite_dsn()

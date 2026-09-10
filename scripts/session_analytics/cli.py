@@ -1076,9 +1076,14 @@ def _cmd_team(args: argparse.Namespace) -> int:
             db, noise=cfg.noise, active_window_seconds=window, aliases=cfg.team.aliases)
         if args.action == "alerts":
             from .api import alerts as alerts_mod
+            from .api import auto_build as auto_build_mod
 
+            # The auto-build caps are read from the ledgers on this run,
+            # like every other alert is read from the store: a root that
+            # is not a directory is zero runs, not an error.
             report = alerts_mod.all_alerts(
                 db, status, budgets=cfg.team.budgets, runaway=cfg.team.runaway, noise=cfg.noise,
+                runs=auto_build_mod.list_runs(db, cfg.auto_build)["runs"],
             )
     finally:
         db.close()
