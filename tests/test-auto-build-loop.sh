@@ -1448,7 +1448,7 @@ echo "=== #191: unattended — fail-closed + terminate-only dispatch ==="
 # (explicit caps + terminate-only dispositions, per the validator).
 unattended_cfg() {
     cfg_set "$1" '.schema_version=2 | .profile="unattended"
-        | .caps={cost_usd:5, wall_clock_sec:3600}
+        | .caps={cost_usd:12, wall_clock_sec:3600}
         | .unattended={on_review_breaker:"terminate", on_stale_finding:"terminate", on_origin_gate:"terminate"}'
 }
 
@@ -1625,7 +1625,7 @@ rm -rf "$P"
 # preflight — the push must not be the first breaker hit.
 P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
 BARE=$(add_remote "$P")
-MOCK_CLAUDE_COST=6 run_driver "$P"
+MOCK_CLAUDE_COST=13 run_driver "$P"
 assert_exit "unattended cost cap terminates (exit 6)" 6 "$RC"
 assert_eq "termination reason cap_exceeded" "cap_exceeded" \
     "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
@@ -1742,7 +1742,7 @@ echo "approved-by: gosha 2026-08-08" >> "$P/specs/demo-feat/automation-summary.m
 run_driver "$P" --resume
 assert_exit "diverged-live resume completes (exit 0)" 0 "$RC"
 assert_contains "resume admission validated the frozen snapshot" "$OUTPUT" "config.snapshot.json"
-assert_eq "the run's caps stayed frozen (snapshot governs)" "5" \
+assert_eq "the run's caps stayed frozen (snapshot governs)" "12" \
     "$(jq -r '.caps.max_cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
@@ -1857,7 +1857,8 @@ GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
 run_driver "$P"
 assert_exit "unattended metered run lands (exit 0)" 0 "$RC"
 LEDGER="$P/.cct/auto-build/demo-feat/state.json"
-assert_eq "one review invocation estimated at \$2" "2" \
+# Two unmetered invocations: the reviewer probe at admission and the round.
+assert_eq "the probe and one review invocation estimated at \$2 each" "4" \
     "$(jq -r '.totals.cost_estimated_usd' "$LEDGER" 2>/dev/null)"
 assert_contains "estimate flagged in the journal" \
     "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "estimated: true"
@@ -1866,8 +1867,67 @@ assert_eq "runner emitted the invocation count" "1" \
     "$(jq -r '.cost.invocations' "$SUMMARY_COST" 2>/dev/null)"
 assert_eq "runner counted the unmetered invocation" "1" \
     "$(jq -r '.cost.unmetered_invocations' "$SUMMARY_COST" 2>/dev/null)"
+# auto-build-reviewer-probe: the landed run carries the probe's answer.
+PROBE_FILE="$P/.cct/auto-build/demo-feat/reviewer-probe.json"
+assert_eq "the reviewer probe's result is in the ledger" "1" "$([[ -f "$PROBE_FILE" ]] && echo 1 || echo 0)"
+assert_eq "…with the verdict the mock gave" "PASS" "$(jq -r '.verdict' "$PROBE_FILE" 2>/dev/null)"
+assert_eq "…naming the provider that answered" "mock" "$(jq -r '.provider' "$PROBE_FILE" 2>/dev/null)"
+assert_contains "the probe is journaled with its verdict" \
+    "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "reviewer_probe"
+assert_contains "…and debited as an invocation" \
+    "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" "reviewer probe (mock)"
+assert_eq "the probe runs before the build session (journal order)" "1" \
+    "$(awk '/reviewer_probe/{p=NR} /"detail":"building"/{b=NR} END{print (p && b && p < b) ? 1 : 0}' \
+        "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)"
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
+
+# auto-build-reviewer-probe: a reviewer whose healthcheck passes but
+# which cannot answer (runs 1 and 3 of 2026-09-09) terminates at
+# admission — before a build session is paid for — and the detail says
+# it was the probe.
+PROSE_PROFILE=$(mktemp)
+cat > "$PROSE_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf 'I am a language model and cannot review code today.\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+PROBE_COUNTER=$(mktemp)
+RC=0
+OUTPUT=$(cd "$P" && CCT_PROJECT_DIR="$P" CCT_CLAUDE_BIN="$MOCK_BIN/claude" MOCK_CLAUDE_COUNTER="$PROBE_COUNTER" \
+    CCT_PROVIDER_PROFILE="$PROSE_PROFILE" bash "$DRIVER" demo-feat 2>&1) || RC=$?
+assert_exit "a reviewer that answers no verdict terminates at admission (exit 6)" 6 "$RC"
+TERM="$P/.cct/auto-build/demo-feat/termination.json"
+assert_eq "…as provider_unavailable" "provider_unavailable" "$(jq -r '.reason' "$TERM" 2>/dev/null)"
+assert_contains "…naming the readiness probe" "$(jq -r '.detail' "$TERM" 2>/dev/null)" "readiness probe"
+assert_contains "…and the reviewer" "$(jq -r '.detail' "$TERM" 2>/dev/null)" "gating reviewer 'mock'"
+assert_eq "…pointing at the probe file" "reviewer-probe.json" "$(jq -r '.history.probe_file' "$TERM" 2>/dev/null)"
+assert_eq "the probe file keeps the answer's tail" "false" \
+    "$(jq -r '.parseable' "$P/.cct/auto-build/demo-feat/reviewer-probe.json" 2>/dev/null)"
+assert_eq "no build session was started" "0" "$(( $(cat "$PROBE_COUNTER" 2>/dev/null || echo 0) + 0 ))"
+assert_eq "the probe's invocation was still debited (estimate)" "2" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+rm -rf "$P" "$PROBE_COUNTER" "$PROSE_PROFILE"
+
+# The probe belongs to the unattended profile: an attended run performs
+# none, and neither does a dry run.
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$PASS_PROFILE" run_driver "$P"
+assert_eq "an attended run performs no reviewer probe" "0" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/reviewer-probe.json" ]] && echo 1 || echo 0)"
+assert_eq "…and journals none" "0" "$(grep -c reviewer_probe "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null | tr -d ' ')"
+rm -rf "$P"
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+run_driver "$P" --dry-run
+assert_exit "unattended dry run still exits 0" 0 "$RC"
+assert_eq "a dry run performs no reviewer probe" "0" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/reviewer-probe.json" ]] && echo 1 || echo 0)"
+rm -rf "$P"
 
 # The cap check runs on the COMBINED total: a cap below the estimate trips
 # cap_exceeded at the next session preflight, and the detail names the
@@ -1924,7 +1984,7 @@ BARE=$(add_remote "$P")
 GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
 REVIEW_PROFILE="$POISON_PROFILE" run_driver "$P"
 assert_exit "poisoned review body still lands (exit 0)" 0 "$RC"
-assert_eq "quoted envelope did NOT suppress the estimate" "2" \
+assert_eq "quoted envelope did NOT suppress the estimate (probe + round)" "4" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 assert_eq "no forged measured debit journaled" "0" \
     "$(grep -c '(measured)' "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null || true)"
@@ -1965,7 +2025,7 @@ REVIEW_PROFILE="$GENUINE_PROFILE" run_driver "$P"
 assert_exit "in-band-envelope review lands (exit 0)" 0 "$RC"
 assert_eq "in-band envelope is NOT measured (text cannot meter)" "0.01" \
     "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
-assert_eq "in-band envelope falls back to the estimate" "2" \
+assert_eq "in-band envelope falls back to the estimate (probe + round)" "4" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
@@ -1995,7 +2055,7 @@ BARE=$(add_remote "$P")
 GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
 REVIEW_PROFILE="$COSTFILE_PROFILE" run_driver "$P"
 assert_exit "cost-file review lands (exit 0)" 0 "$RC"
-assert_eq "adapter-written cost file IS measured (0.01 build + 3.5 review)" "3.51" \
+assert_eq "adapter-written cost file IS measured (0.01 build + 3.5 probe + 3.5 review)" "7.01" \
     "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 assert_eq "no estimate when the channel measured" "0" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
@@ -2028,7 +2088,7 @@ BARE=$(add_remote "$P")
 GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
 REVIEW_PROFILE="$ARRAYCOST_PROFILE" run_driver "$P"
 assert_exit "array-form cost file lands (exit 0)" 0 "$RC"
-assert_eq "array-form cost file IS measured via its result element" "3.51" \
+assert_eq "array-form cost file IS measured via its result element (probe + review)" "7.01" \
     "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 assert_eq "no estimate when the array-form channel measured" "0" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
@@ -2069,7 +2129,7 @@ BARE=$(add_remote "$P")
 GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
 REVIEW_PROFILE="$NDCOST_PROFILE" run_driver "$P"
 assert_exit "multi-cost-document stream lands (exit 0)" 0 "$RC"
-assert_eq "multi-cost stream measures the LAST result (0.01 + 3.5)" "3.51" \
+assert_eq "multi-cost stream measures the LAST result (0.01 + 3.5 probe + 3.5 review)" "7.01" \
     "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 assert_eq "no estimate when the multi-cost stream measured" "0" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
@@ -2116,7 +2176,7 @@ REVIEW_PROFILE="$NORESULT_PROFILE" run_driver "$P"
 assert_exit "result-less cost stream lands (exit 0)" 0 "$RC"
 assert_eq "non-result document is NEVER promoted to a measurement" "0.01" \
     "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
-assert_eq "result-less cost stream falls back to the estimate" "2" \
+assert_eq "result-less cost stream falls back to the estimate (probe + round)" "4" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
@@ -2148,7 +2208,7 @@ REVIEW_PROFILE="$NEGFILE_PROFILE" run_driver "$P"
 assert_exit "negative cost-file review lands (exit 0)" 0 "$RC"
 assert_eq "negative cost file never credits the budget" "0.01" \
     "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
-assert_eq "negative cost file falls back to the estimate" "2" \
+assert_eq "negative cost file falls back to the estimate (probe + round)" "4" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
@@ -2620,7 +2680,7 @@ REVIEW_PROFILE="$NEGATIVE_PROFILE" run_driver "$P"
 assert_exit "negative-envelope review lands (exit 0)" 0 "$RC"
 assert_eq "negative cost never credits the budget" "0.01" \
     "$(jq -r '.totals.cost_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
-assert_eq "negative envelope falls back to the estimate" "2" \
+assert_eq "negative envelope falls back to the estimate (probe + round)" "4" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 unset GH_PR_STATE
 rm -rf "$P" "$BARE"
@@ -2632,7 +2692,7 @@ rm -f "$NEGATIVE_REVIEW" "$NEGATIVE_PROFILE"
 P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
 CCT_REVIEW_MAX_ROUNDS=1 REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
 assert_exit "max-rounds breaker terminates (exit 6)" 6 "$RC"
-assert_eq "only the real invocation was debited (no phantom debit)" "2" \
+assert_eq "only the probe and the real invocation were debited (no phantom debit)" "4" \
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 rm -rf "$P"
 

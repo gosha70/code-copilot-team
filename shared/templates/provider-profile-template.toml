@@ -77,6 +77,10 @@ peer_for.pi = "codex"
 #                           template line parsed as a phantom finding.
 # Failures still surface: codex exits non-zero and the runner turns that into a
 # FAIL verdict; healthcheck catches a missing/broken install before a round.
+# A healthcheck is not proof the reviewer can answer (`codex --version`
+# passed while `codex exec` was broken): an unattended auto-build run also
+# sends the gating reviewer one small review request at admission and
+# requires a parseable verdict (`review-round-runner.sh --probe`).
 [providers.codex]
 type = "cli"
 command = "codex exec --color never -s read-only --skip-git-repo-check - < {review_request} 2>/dev/null"
