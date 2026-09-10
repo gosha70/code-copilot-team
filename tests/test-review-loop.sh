@@ -1310,6 +1310,116 @@ kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
 rm -rf "$FAKE_DIR"
 
 # ══════════════════════════════════════════════════════════════
+echo "=== auto-build-reviewer-probe: --probe is the real path, minus the state ==="
+# ══════════════════════════════════════════════════════════════
+# Runs 1 and 3 of 2026-09-09 passed their healthcheck and then lost the
+# first round to a reviewer that could not answer. The probe sends one
+# small request through the same resolution, adapter, sandbox and
+# parser and requires a parseable verdict.
+
+PROBE_PROFILE=$(mktemp)
+cat > "$PROBE_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["down", "mock"]
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nLooks good.\n\n### Findings\n\n### Verdict\nPASS\n'"
+timeout_sec = 10
+healthcheck = "true"
+[providers.fail]
+type = "cli"
+command = "printf '### Summary\nNo.\n\n### Findings\nFINDING|blocking|correctness|README.md|top|Wrong|Fix\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+[providers.echo]
+type = "cli"
+command = "cat {review_request}"
+timeout_sec = 10
+healthcheck = "true"
+[providers.prose]
+type = "cli"
+command = "printf 'I cannot review this right now.\n'"
+timeout_sec = 10
+healthcheck = "true"
+[providers.down]
+type = "cli"
+command = "true"
+timeout_sec = 10
+healthcheck = "false"
+[providers.slow]
+type = "cli"
+command = "exit 124"
+timeout_sec = 7
+healthcheck = "true"
+TOML
+NOCHAIN_PROFILE=$(mktemp)
+cat > "$NOCHAIN_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "down"
+[providers.down]
+type = "cli"
+command = "true"
+timeout_sec = 10
+healthcheck = "false"
+TOML
+
+probe() {  # probe <profile> <peer> → RC, PROBE_OUT
+    PROBE_OUT=$(mktemp)
+    RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$1" bash "$RUNNER" "$PP" --probe --peer "$2" --subject claude --out "$PROBE_OUT" 2>&1) || RC=$?
+}
+PP=$(mktemp -d); git -C "$PP" init -q   # no .cct/review at all
+
+probe "$PROBE_PROFILE" mock
+assert_exit "probe: a reviewer that answers in format exits 0" 0 "$RC"
+assert_eq "probe: the verdict is recorded as written" "PASS" "$(jq -r '.verdict' "$PROBE_OUT")"
+assert_eq "probe: parseable" "true" "$(jq -r '.parseable' "$PROBE_OUT")"
+assert_eq "probe: the answering provider is named" "mock" "$(jq -r '.provider' "$PROBE_OUT")"
+assert_eq "probe: the requested provider is kept" "mock" "$(jq -r '.requested_provider' "$PROBE_OUT")"
+assert_eq "probe: an unmetered CLI has a null cost" "null" "$(jq -r '.invocation_cost_usd' "$PROBE_OUT")"
+assert_eq "probe: the fingerprint is the round's shape" "64" "$(jq -r '.fingerprint' "$PROBE_OUT" | tr -d '\n' | wc -c | tr -d ' ')"
+assert_eq "probe: it leaves no review state behind" "0" "$([[ -e "$PP/.cct" ]] && echo 1 || echo 0)"
+
+probe "$PROBE_PROFILE" fail
+assert_exit "probe: a FAIL verdict is still a parseable answer (exit 0)" 0 "$RC"
+assert_eq "probe: FAIL recorded as written" "FAIL" "$(jq -r '.verdict' "$PROBE_OUT")"
+
+probe "$PROBE_PROFILE" echo
+assert_exit "probe: a reviewer that echoes the request has no verdict (exit 3)" 3 "$RC"
+assert_eq "probe: echoed request → not parseable" "false" "$(jq -r '.parseable' "$PROBE_OUT")"
+assert_contains "probe: the error says no verdict was parseable" "$(jq -r '.error' "$PROBE_OUT")" "no parseable verdict"
+
+probe "$PROBE_PROFILE" prose
+assert_exit "probe: prose without a verdict exits 3" 3 "$RC"
+assert_eq "probe: the answer's tail is kept for the triage" "I cannot review this right now." \
+    "$(jq -r '.output_tail' "$PROBE_OUT" | tr -d '\n')"
+
+probe "$PROBE_PROFILE" down
+assert_exit "probe: a down primary with a healthy fallback answers (exit 0)" 0 "$RC"
+assert_eq "probe: the fallback that answered is named" "mock" "$(jq -r '.provider' "$PROBE_OUT")"
+assert_eq "probe: the requested primary is still recorded" "down" "$(jq -r '.requested_provider' "$PROBE_OUT")"
+
+probe "$PROBE_PROFILE" slow
+assert_exit "probe: a timed-out reviewer exits 3" 3 "$RC"
+assert_eq "probe: the timeout is named" "timed out after 7s" "$(jq -r '.error' "$PROBE_OUT")"
+assert_eq "probe: the timeout exit code is recorded" "124" "$(jq -r '.exit_code' "$PROBE_OUT")"
+
+probe "$NOCHAIN_PROFILE" down
+assert_exit "probe: nothing healthy in the chain exits 2" 2 "$RC"
+assert_eq "probe: no provider recorded" "null" "$(jq -r '.provider' "$PROBE_OUT")"
+assert_contains "probe: the error names the chain" "$(jq -r '.error' "$PROBE_OUT")" "passed its healthcheck"
+
+RC=0; bash "$RUNNER" "$PP" --probe --out "$PROBE_OUT" >/dev/null 2>&1 || RC=$?
+assert_exit "probe: --peer is required" 1 "$RC"
+RC=0; bash "$RUNNER" "$PP" --bogus >/dev/null 2>&1 || RC=$?
+assert_exit "an unknown runner argument is refused" 1 "$RC"
+# The round's request still carries the same output-format text the
+# probe sends — one function, so the two cannot drift apart.
+assert_eq "one output-format text for rounds and probes" "1" \
+    "$(grep -c '^required_output_format()' "$RUNNER" | tr -d ' ')"
+rm -rf "$PP" "$PROBE_PROFILE" "$NOCHAIN_PROFILE"
+
+# ══════════════════════════════════════════════════════════════
 # Summary
 # ══════════════════════════════════════════════════════════════
 

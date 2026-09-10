@@ -638,6 +638,21 @@ Unmetered reviewer invocations are debited as flagged conservative estimates,
 and the line says so when any estimate is included. The final
 `automation-summary.md` repeats the metered/estimated split.
 
+**The reviewer probe (unattended only).** A healthcheck verifies an install
+or a port — `codex --version` passed while `codex exec` was broken, and
+`/v1/models` answered while the completions carried no content, and each
+cost a real run its first review round. So at admission, after the gating
+reviewer's healthcheck, an unattended run sends it one small review request
+through the real review path (`review-round-runner.sh --probe`: the same
+provider resolution and fallback chain, adapter command, sandbox, timeout
+and verdict parser a round uses) and requires a parseable verdict back —
+any of PASS, FAIL or INCONCLUSIVE, as the model wrote it. No verdict
+terminates `provider_unavailable` before a build session is paid for; the
+answer is kept in `<ledger>/reviewer-probe.json` and journalled as
+`reviewer_probe`. The probe is one invocation and is debited like one:
+metered when the adapter reports a cost, else the same per-invocation
+estimate. It checks readiness, not review quality.
+
 **When the cap is hit** the run parks rather than stopping dead:
 
 ```
@@ -1249,9 +1264,9 @@ code-copilot-team/
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
 │   ├── test-peer-review.sh             58 peer-review runner tests
-│   ├── test-review-loop.sh           127 review loop integration tests
+│   ├── test-review-loop.sh           154 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1096 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1114 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)

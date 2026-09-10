@@ -922,6 +922,16 @@ preflight() {
         dispose "provider_unavailable" "gating reviewer '$GATING_REVIEWER' (or its fallback chain) failed healthcheck" "null"
     fi
 
+    # Reviewer probe (auto-build-reviewer-probe): a healthcheck verifies
+    # an install or a port; runs 1 and 3 of 2026-09-09 passed theirs and
+    # lost the first round to a reviewer that could not answer. Under
+    # unattended, one small request goes through the real review path
+    # before anything is built, and must come back with a parseable
+    # verdict. Debited as the invocation it is.
+    if [[ "$PROFILE" == "unattended" && "$DRY_RUN" != "true" ]]; then
+        reviewer_probe
+    fi
+
     # Advisory panel reviewers (FR-5): health-check each; drop the unhealthy
     # ones (warn + journal). An advisory lens being down never blocks the run.
     if [[ -n "$ADVISORY_REVIEWERS" ]]; then
@@ -3460,6 +3470,39 @@ rollback_fresh_ledger() {
     rmdir "$LEDGER_DIR" 2>/dev/null || true
     [[ "$_lock_mine" == "true" ]] && ledger_lock_release
     return 0
+}
+
+# ── Reviewer probe (auto-build-reviewer-probe) ───────────────
+# reviewer_probe: run the runner's --probe against the gating reviewer,
+# keep its result in the ledger, debit it as one invocation, and dispose
+# provider_unavailable when no parseable verdict came back.
+reviewer_probe() {
+    local out="$LEDGER_DIR/reviewer-probe.json" rc=0
+    mkdir -p "$LEDGER_DIR"
+    ( cd "$PROJECT_DIR" && bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" \
+        --probe --peer "$GATING_REVIEWER" --subject "$SUBJECT_PROVIDER" --out "$out" ) >/dev/null 2>&1 || rc=$?
+    local provider verdict seconds cost error
+    provider=$(jq -r '.provider // empty' "$out" 2>/dev/null || true)
+    verdict=$(jq -r '.verdict // empty' "$out" 2>/dev/null || true)
+    seconds=$(jq -r '.duration_sec // 0' "$out" 2>/dev/null || echo 0)
+    cost=$(jq -r '.invocation_cost_usd // empty' "$out" 2>/dev/null || true)
+    error=$(jq -r '.error // empty' "$out" 2>/dev/null || true)
+    if [[ -n "$provider" ]]; then
+        # The probe ran a provider: an invocation, metered or estimated.
+        # A debit that cannot be persisted is journaled by the rule.
+        debit_invocation_cost "$cost" "reviewer probe ($provider)" || true
+    fi
+    if [[ $rc -eq 0 && -n "$verdict" ]]; then
+        journal "reviewer_probe" "gating reviewer '$provider' answered $verdict in ${seconds}s"
+        return 0
+    fi
+    local detail
+    if [[ $rc -eq 2 ]]; then
+        detail="gating reviewer '$GATING_REVIEWER': ${error:-no provider in the chain passed its healthcheck} (probe)"
+    else
+        detail="gating reviewer '${provider:-$GATING_REVIEWER}' answered the readiness probe with no parseable verdict (exit $rc: ${error:-unknown})"
+    fi
+    dispose "provider_unavailable" "$detail" '{"probe_file": "reviewer-probe.json"}'
 }
 
 # ── Caps (FR-6) ──────────────────────────────────────────────

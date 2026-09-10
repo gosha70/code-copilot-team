@@ -21,9 +21,33 @@ set -euo pipefail
 # ── Guards ────────────────────────────────────────────────────
 
 if [[ $# -lt 1 ]]; then
-    echo "Usage: review-round-runner.sh <project-dir>" >&2
+    echo "Usage: review-round-runner.sh <project-dir> [--probe --peer NAME [--subject NAME] --out FILE]" >&2
     exit 1
 fi
+
+# --probe (auto-build-reviewer-probe): one small request through the
+# same provider resolution, adapter command, sandbox environment,
+# timeout and verdict parser a round uses, requiring a parseable
+# verdict. Readiness, not review quality. Touches no review state.
+PROBE=false
+PROBE_PEER=""
+PROBE_SUBJECT="claude"
+PROBE_OUT=""
+_rr_project_arg="$1"
+shift
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --probe)   PROBE=true; shift ;;
+        --peer)    PROBE_PEER="${2:?--peer requires a provider name}"; shift 2 ;;
+        --subject) PROBE_SUBJECT="${2:?--subject requires a provider name}"; shift 2 ;;
+        --out)     PROBE_OUT="${2:?--out requires a file path}"; shift 2 ;;
+        *)
+            echo "Error: unknown argument: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+set -- "$_rr_project_arg"
 
 # #229: the EXIT trap (line ~335) remaps unexpected exit codes (> 4)
 # to code 4 (RUNNER_ERROR) so the driver has a defined arm for script
@@ -46,7 +70,8 @@ source "$RV_LIB_DIR/lib/review-verdict.sh"
 # default is unchanged.
 REVIEW_DIR="${CCT_REVIEW_DIR:-$PROJECT_DIR/.cct/review}"
 
-if [[ ! -d "$REVIEW_DIR" ]]; then
+# The probe touches no review state, so it needs no state dir.
+if [[ ! -d "$REVIEW_DIR" && "$PROBE" != "true" ]]; then
     echo "Error: No review state dir at $REVIEW_DIR" >&2
     exit 1
 fi
@@ -94,6 +119,284 @@ toml_get_array() {
     if [[ -z "$raw" ]]; then return; fi
     echo "$raw" | tr -d '[]' | tr ',' '\n' | sed 's/^ *"//;s/" *$//'
 }
+
+# ── Load provider config ─────────────────────────────────────
+
+load_provider_config() {
+    local name="$1"
+    local section="providers.$name"
+
+    PROVIDER_TYPE=$(toml_get "$PROFILE" "$section" "type")
+    COMMAND_TEMPLATE=$(toml_get "$PROFILE" "$section" "command")
+    PROVIDER_TIMEOUT=$(toml_get "$PROFILE" "$section" "timeout_sec")
+    HEALTHCHECK=$(toml_get "$PROFILE" "$section" "healthcheck")
+    PROVIDER_MODEL=$(toml_get "$PROFILE" "$section" "model")
+    PROVIDER_BASE_URL=$(toml_get "$PROFILE" "$section" "base_url")
+    PROVIDER_API_KEY_ENV=$(toml_get "$PROFILE" "$section" "api_key_env")
+    PROVIDER_MAX_TOKENS=$(toml_get "$PROFILE" "$section" "max_tokens")
+    PROVIDER_TEMPERATURE=$(toml_get "$PROFILE" "$section" "temperature")
+    PROVIDER_HOST=$(toml_get "$PROFILE" "$section" "host")
+    # disable_thinking = true → the adapter asks a reasoning model for
+    # an answer, not a hidden monologue (#190 run 3).
+    PROVIDER_DISABLE_THINKING=$(toml_get "$PROFILE" "$section" "disable_thinking")
+
+    if [[ -z "$PROVIDER_TYPE" ]]; then PROVIDER_TYPE="cli"; fi
+    PROVIDER_TIMEOUT="${PROVIDER_TIMEOUT:-300}"
+
+    case "$PROVIDER_TYPE" in
+        cli|custom)
+            [[ -z "$COMMAND_TEMPLATE" ]] && { echo "Error: No command for $PROVIDER_TYPE provider '$name'" >&2; return 1; }
+            ;;
+        openai-compatible)
+            [[ -z "$PROVIDER_BASE_URL" ]] && { echo "Error: No base_url for provider '$name'" >&2; return 1; }
+            [[ -z "$PROVIDER_MODEL" ]] && { echo "Error: No model for provider '$name'" >&2; return 1; }
+            ;;
+        ollama)
+            [[ -z "$PROVIDER_MODEL" ]] && { echo "Error: No model for provider '$name'" >&2; return 1; }
+            ;;
+    esac
+    return 0
+}
+
+run_healthcheck() {
+    local hc="$1"
+    if [[ -z "$hc" ]]; then return 0; fi
+    bash -c "$hc" &>/dev/null
+}
+
+# resolve_fallback_provider <subject> — walk the subject's fallback
+# chain; the first provider that loads and passes its healthcheck
+# becomes PEER_PROVIDER (return 0). Nothing healthy: return 1 with
+# PEER_PROVIDER unchanged.
+resolve_fallback_provider() {
+    local subject="$1" chain fallback
+    chain=$(toml_get_array "$PROFILE" "defaults" "fallback_chain.$subject")
+    [[ -z "$chain" ]] && return 1
+    while IFS= read -r fallback; do
+        [[ -z "$fallback" ]] && continue
+        if [[ "$fallback" == "$subject" ]]; then
+            echo "Skipping '$fallback' (same as subject provider)." >&2
+            continue
+        fi
+        if load_provider_config "$fallback" && run_healthcheck "$HEALTHCHECK"; then
+            echo "Using fallback provider '$fallback'." >&2
+            PEER_PROVIDER="$fallback"
+            return 0
+        fi
+    done <<< "$chain"
+    return 1
+}
+
+provider_fingerprint() {
+    local input="$PROVIDER_TYPE:${COMMAND_TEMPLATE:-}:${PROVIDER_BASE_URL:-}:${PROVIDER_MODEL:-}"
+    if command -v shasum &>/dev/null; then
+        echo "$input" | shasum -a 256 | cut -d' ' -f1
+    elif command -v sha256sum &>/dev/null; then
+        echo "$input" | sha256sum | cut -d' ' -f1
+    else
+        echo "unknown"
+    fi
+}
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ADAPTER_DIR="$SCRIPT_DIR/provider-adapters"
+
+build_provider_cmd() {
+    case "$PROVIDER_TYPE" in
+        cli|custom)
+            local cmd="$COMMAND_TEMPLATE"
+            cmd="${cmd//\{review_request\}/$REVIEW_REQUEST}"
+            cmd="${cmd//\{model\}/${PROVIDER_MODEL:-}}"
+            echo "$cmd"
+            ;;
+        openai-compatible)
+            local cmd="'$ADAPTER_DIR/openai-compatible.sh'"
+            cmd="$cmd --base-url '$PROVIDER_BASE_URL'"
+            cmd="$cmd --model '$PROVIDER_MODEL'"
+            cmd="$cmd --input '$REVIEW_REQUEST'"
+            [[ -n "${PROVIDER_API_KEY_ENV:-}" ]] && cmd="$cmd --api-key-env '$PROVIDER_API_KEY_ENV'"
+            [[ -n "${PROVIDER_MAX_TOKENS:-}" ]] && cmd="$cmd --max-tokens '$PROVIDER_MAX_TOKENS'"
+            [[ -n "${PROVIDER_TEMPERATURE:-}" ]] && cmd="$cmd --temperature '$PROVIDER_TEMPERATURE'"
+            [[ "${PROVIDER_DISABLE_THINKING:-}" == "true" ]] && cmd="$cmd --no-thinking"
+            echo "$cmd"
+            ;;
+        ollama)
+            local cmd="'$ADAPTER_DIR/ollama.sh'"
+            cmd="$cmd --model '$PROVIDER_MODEL'"
+            cmd="$cmd --input '$REVIEW_REQUEST'"
+            [[ -n "${PROVIDER_HOST:-}" ]] && cmd="$cmd --host '$PROVIDER_HOST'"
+            echo "$cmd"
+            ;;
+        *)
+            echo "Error: Unknown provider type '$PROVIDER_TYPE'" >&2
+            return 1
+            ;;
+    esac
+}
+
+# The reviewer runs inside the sandbox directory with a read-only env
+# marker. SSH_AUTH_SOCK and GPG_AGENT_INFO are unset to prevent commit
+# signing. Shared by a round and by the probe.
+SANDBOX_ENV="env -u SSH_AUTH_SOCK -u GPG_AGENT_INFO CCT_READ_ONLY=true"
+TIMEOUT_CMD=""
+if command -v timeout &>/dev/null; then
+    TIMEOUT_CMD="timeout"
+elif command -v gtimeout &>/dev/null; then
+    TIMEOUT_CMD="gtimeout"
+fi
+
+# The output-format text every request carries. The verdict shape is
+# described in prose and never instantiated, so a provider that echoes
+# the request cannot forge a verdict (see lib/review-verdict.sh).
+required_output_format() {
+    cat << 'FMT_EOF'
+## Required Output Format
+
+You MUST structure your response with these exact sections.
+
+### Summary
+2-3 sentences summarizing the review.
+
+### Findings
+For each finding, use this exact format (one per line):
+FINDING|<severity>|<category>|<file>|<line_hint>|<description>|<suggested_fix>
+
+Where:
+- severity: blocking, warning, or note
+- category: correctness, security, style, performance, design, testing, documentation
+- file: path relative to project root
+- line_hint: semantic anchor (e.g., "near variable expansion in query function")
+- description: clear description of the issue
+- suggested_fix: actionable fix suggestion
+
+### Verdict
+End your response with a heading line consisting of three hash marks, a
+space, and the word Verdict — nothing else on that line. On the next line
+write exactly one bare word and nothing else: PASS, FAIL, or
+INCONCLUSIVE. A response with no such section is treated as INCONCLUSIVE,
+which fails the gate.
+FMT_EOF
+}
+
+# read_invocation_cost <cost-file> — the ONE reading of the adapter's
+# out-of-band cost file, for a round and for the probe: the result
+# element of a slurped CLI stream, or the purpose-written single
+# {"total_cost_usd": N} object; only a non-negative number is a
+# measurement, anything else is unmetered (empty). See the round's
+# comment block for why no tail fallback exists here.
+read_invocation_cost() {
+    jq -r -s 'map(if type == "array" then .[] else . end)
+           | ([.[] | select(.type? == "result")] | last)
+             // (if (length == 1) and ((.[0] | type) == "object")
+                    and ((.[0] | has("type")) | not)
+                 then .[0] else {} end)
+           | if (type == "object") and ((.total_cost_usd | type) == "number")
+              and (.total_cost_usd >= 0)
+           then .total_cost_usd else empty end' "$1" 2>/dev/null || true
+}
+
+# ── Probe (auto-build-reviewer-probe) ────────────────────────
+# run_probe: the real path — provider resolution with the subject's
+# fallback chain, the adapter command, the sandbox environment, the
+# provider's timeout, the shared verdict parser — over a fixed one-line
+# diff. Exit 0 = a verdict was parsed; 2 = nothing in the chain passed
+# its healthcheck; 3 = a provider ran and no verdict could be parsed.
+run_probe() {
+    local requested="$PROBE_PEER" subject="$PROBE_SUBJECT" out="$PROBE_OUT"
+    if [[ -z "$requested" || -z "$out" ]]; then
+        echo "Error: --probe needs --peer NAME and --out FILE" >&2
+        exit 1
+    fi
+    PEER_PROVIDER="$requested"
+    local resolved=true
+    if ! load_provider_config "$PEER_PROVIDER"; then
+        resolved=false
+    elif ! run_healthcheck "$HEALTHCHECK"; then
+        echo "Healthcheck failed for '$PEER_PROVIDER', trying fallback chain..." >&2
+        resolve_fallback_provider "$subject" || resolved=false
+    fi
+    if [[ "$resolved" != "true" ]]; then
+        jq -n --arg req "$requested" \
+            '{probe: true, requested_provider: $req, provider: null, provider_type: null,
+              fingerprint: null, exit_code: null, verdict: null, parseable: false,
+              duration_sec: 0, invocation_cost_usd: null,
+              error: ("no provider in the chain for " + $req + " passed its healthcheck"),
+              output_tail: ""}' > "$out"
+        echo "Probe: no provider available for '$requested'." >&2
+        exit 2
+    fi
+    local fingerprint
+    fingerprint=$(provider_fingerprint)
+
+    REVIEW_REQUEST=$(mktemp)
+    {
+        cat << 'PROBE_EOF'
+# Reviewer Readiness Probe
+
+This is not a review of real work. Before an unattended auto-build run
+starts, the driver checks that this reviewer can answer a review request
+in the required format. Review the one-line change below and answer in
+the format described. Any verdict is acceptable; the format is what is
+being checked.
+
+## Changes to Review
+
+```diff
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-# Demo
++# Demo project
+```
+
+PROBE_EOF
+        required_output_format
+    } > "$REVIEW_REQUEST"
+
+    local cmd sandbox output="" rc=0 started ended cost_file cost="" verdict error="" tail
+    cmd=$(build_provider_cmd) || { rm -f "$REVIEW_REQUEST"; exit 1; }
+    sandbox=$(mktemp -d)
+    cost_file="$sandbox/invocation-cost.json"
+    export CCT_REVIEW_COST_FILE="$cost_file"
+    started=$(date +%s)
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        output=$(cd "$sandbox" && $TIMEOUT_CMD "$PROVIDER_TIMEOUT" $SANDBOX_ENV bash -c "$cmd" 2>&1) || rc=$?
+    else
+        output=$(cd "$sandbox" && $SANDBOX_ENV bash -c "$cmd" 2>&1) || rc=$?
+    fi
+    ended=$(date +%s)
+    rm -f "$REVIEW_REQUEST"
+    if [[ -f "$cost_file" ]]; then
+        cost=$(read_invocation_cost "$cost_file")
+    fi
+    rm -rf "$sandbox"
+    verdict=$(rv_extract_verdict "$output")
+    if [[ $rc -eq 124 || $rc -eq 143 ]]; then
+        error="timed out after ${PROVIDER_TIMEOUT}s"
+    elif [[ -z "$verdict" ]]; then
+        error="no parseable verdict in the reviewer's answer (exit $rc)"
+    fi
+    tail=$(printf '%s' "$output" | tail -c 400)
+    jq -n --arg req "$requested" --arg prov "$PEER_PROVIDER" --arg type "$PROVIDER_TYPE" \
+        --arg fp "$fingerprint" --argjson rc "$rc" --arg verdict "$verdict" \
+        --argjson dur "$((ended - started))" --arg cost "$cost" --arg err "$error" --arg tail "$tail" \
+        '{probe: true, requested_provider: $req, provider: $prov, provider_type: $type,
+          fingerprint: $fp, exit_code: $rc,
+          verdict: (if $verdict == "" then null else $verdict end),
+          parseable: ($verdict != ""), duration_sec: $dur,
+          invocation_cost_usd: (if $cost == "" then null else ($cost | tonumber) end),
+          error: (if $err == "" then null else $err end), output_tail: $tail}' > "$out"
+    if [[ -n "$verdict" ]]; then
+        echo "Probe: '$PEER_PROVIDER' answered $verdict in $((ended - started))s." >&2
+        exit 0
+    fi
+    echo "Probe: '$PEER_PROVIDER' gave no parseable verdict — $error" >&2
+    exit 3
+}
+
+if [[ "$PROBE" == "true" ]]; then
+    run_probe
+fi
 
 # ── Load or initialize state ─────────────────────────────────
 
@@ -236,72 +539,14 @@ BREAKER_EOF
 
 fi  # end build-phase-only breakers
 
-# ── Load provider config ─────────────────────────────────────
-
-load_provider_config() {
-    local name="$1"
-    local section="providers.$name"
-
-    PROVIDER_TYPE=$(toml_get "$PROFILE" "$section" "type")
-    COMMAND_TEMPLATE=$(toml_get "$PROFILE" "$section" "command")
-    PROVIDER_TIMEOUT=$(toml_get "$PROFILE" "$section" "timeout_sec")
-    HEALTHCHECK=$(toml_get "$PROFILE" "$section" "healthcheck")
-    PROVIDER_MODEL=$(toml_get "$PROFILE" "$section" "model")
-    PROVIDER_BASE_URL=$(toml_get "$PROFILE" "$section" "base_url")
-    PROVIDER_API_KEY_ENV=$(toml_get "$PROFILE" "$section" "api_key_env")
-    PROVIDER_MAX_TOKENS=$(toml_get "$PROFILE" "$section" "max_tokens")
-    PROVIDER_TEMPERATURE=$(toml_get "$PROFILE" "$section" "temperature")
-    PROVIDER_HOST=$(toml_get "$PROFILE" "$section" "host")
-    # disable_thinking = true → the adapter asks a reasoning model for
-    # an answer, not a hidden monologue (#190 run 3).
-    PROVIDER_DISABLE_THINKING=$(toml_get "$PROFILE" "$section" "disable_thinking")
-
-    if [[ -z "$PROVIDER_TYPE" ]]; then PROVIDER_TYPE="cli"; fi
-    PROVIDER_TIMEOUT="${PROVIDER_TIMEOUT:-300}"
-
-    case "$PROVIDER_TYPE" in
-        cli|custom)
-            [[ -z "$COMMAND_TEMPLATE" ]] && { echo "Error: No command for $PROVIDER_TYPE provider '$name'" >&2; return 1; }
-            ;;
-        openai-compatible)
-            [[ -z "$PROVIDER_BASE_URL" ]] && { echo "Error: No base_url for provider '$name'" >&2; return 1; }
-            [[ -z "$PROVIDER_MODEL" ]] && { echo "Error: No model for provider '$name'" >&2; return 1; }
-            ;;
-        ollama)
-            [[ -z "$PROVIDER_MODEL" ]] && { echo "Error: No model for provider '$name'" >&2; return 1; }
-            ;;
-    esac
-    return 0
-}
-
-run_healthcheck() {
-    local hc="$1"
-    if [[ -z "$hc" ]]; then return 0; fi
-    bash -c "$hc" &>/dev/null
-}
-
 # Resolve provider with fallback
 load_provider_config "$PEER_PROVIDER" || exit 1
 
 if ! run_healthcheck "$HEALTHCHECK"; then
     echo "Healthcheck failed for '$PEER_PROVIDER', trying fallback chain..." >&2
-    FALLBACK_CHAIN=$(toml_get_array "$PROFILE" "defaults" "fallback_chain.$SUBJECT_PROVIDER")
     FALLBACK_FOUND=false
-
-    if [[ -n "$FALLBACK_CHAIN" ]]; then
-        while IFS= read -r fallback; do
-            [[ -z "$fallback" ]] && continue
-            if [[ "$fallback" == "$SUBJECT_PROVIDER" ]]; then
-                echo "Skipping '$fallback' (same as subject provider)." >&2
-                continue
-            fi
-            if load_provider_config "$fallback" && run_healthcheck "$HEALTHCHECK"; then
-                echo "Using fallback provider '$fallback'." >&2
-                PEER_PROVIDER="$fallback"
-                FALLBACK_FOUND=true
-                break
-            fi
-        done <<< "$FALLBACK_CHAIN"
+    if resolve_fallback_provider "$SUBJECT_PROVIDER"; then
+        FALLBACK_FOUND=true
     fi
 
     if [[ "$FALLBACK_FOUND" != "true" ]]; then
@@ -325,14 +570,7 @@ BREAKER_EOF
 fi
 
 # Compute fingerprint after provider resolution
-FINGERPRINT_INPUT="$PROVIDER_TYPE:${COMMAND_TEMPLATE:-}:${PROVIDER_BASE_URL:-}:${PROVIDER_MODEL:-}"
-if command -v shasum &>/dev/null; then
-    RUNNER_FINGERPRINT=$(echo "$FINGERPRINT_INPUT" | shasum -a 256 | cut -d' ' -f1)
-elif command -v sha256sum &>/dev/null; then
-    RUNNER_FINGERPRINT=$(echo "$FINGERPRINT_INPUT" | sha256sum | cut -d' ' -f1)
-else
-    RUNNER_FINGERPRINT="unknown"
-fi
+RUNNER_FINGERPRINT=$(provider_fingerprint)
 
 # ── Create snapshot sandbox ──────────────────────────────────
 
@@ -479,85 +717,14 @@ else
     echo "- No spec artifacts found at specs/$FEATURE_ID/"
 fi)
 
-## Required Output Format
-
-You MUST structure your response with these exact sections.
-
-### Summary
-2-3 sentences summarizing the review.
-
-### Findings
-For each finding, use this exact format (one per line):
-FINDING|<severity>|<category>|<file>|<line_hint>|<description>|<suggested_fix>
-
-Where:
-- severity: blocking, warning, or note
-- category: correctness, security, style, performance, design, testing, documentation
-- file: path relative to project root
-- line_hint: semantic anchor (e.g., "near variable expansion in query function")
-- description: clear description of the issue
-- suggested_fix: actionable fix suggestion
-
-### Verdict
-End your response with a heading line consisting of three hash marks, a
-space, and the word Verdict — nothing else on that line. On the next line
-write exactly one bare word and nothing else: PASS, FAIL, or
-INCONCLUSIVE. A response with no such section is treated as INCONCLUSIVE,
-which fails the gate.
+$(required_output_format)
 REVIEW_EOF
 
 # ── Execute provider ─────────────────────────────────────────
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ADAPTER_DIR="$SCRIPT_DIR/provider-adapters"
-
-build_provider_cmd() {
-    case "$PROVIDER_TYPE" in
-        cli|custom)
-            local cmd="$COMMAND_TEMPLATE"
-            cmd="${cmd//\{review_request\}/$REVIEW_REQUEST}"
-            cmd="${cmd//\{model\}/${PROVIDER_MODEL:-}}"
-            echo "$cmd"
-            ;;
-        openai-compatible)
-            local cmd="'$ADAPTER_DIR/openai-compatible.sh'"
-            cmd="$cmd --base-url '$PROVIDER_BASE_URL'"
-            cmd="$cmd --model '$PROVIDER_MODEL'"
-            cmd="$cmd --input '$REVIEW_REQUEST'"
-            [[ -n "${PROVIDER_API_KEY_ENV:-}" ]] && cmd="$cmd --api-key-env '$PROVIDER_API_KEY_ENV'"
-            [[ -n "${PROVIDER_MAX_TOKENS:-}" ]] && cmd="$cmd --max-tokens '$PROVIDER_MAX_TOKENS'"
-            [[ -n "${PROVIDER_TEMPERATURE:-}" ]] && cmd="$cmd --temperature '$PROVIDER_TEMPERATURE'"
-            [[ "${PROVIDER_DISABLE_THINKING:-}" == "true" ]] && cmd="$cmd --no-thinking"
-            echo "$cmd"
-            ;;
-        ollama)
-            local cmd="'$ADAPTER_DIR/ollama.sh'"
-            cmd="$cmd --model '$PROVIDER_MODEL'"
-            cmd="$cmd --input '$REVIEW_REQUEST'"
-            [[ -n "${PROVIDER_HOST:-}" ]] && cmd="$cmd --host '$PROVIDER_HOST'"
-            echo "$cmd"
-            ;;
-        *)
-            echo "Error: Unknown provider type '$PROVIDER_TYPE'" >&2
-            return 1
-            ;;
-    esac
-}
-
 RESOLVED_CMD=$(build_provider_cmd) || exit 1
 
-TIMEOUT_CMD=""
-if command -v timeout &>/dev/null; then
-    TIMEOUT_CMD="timeout"
-elif command -v gtimeout &>/dev/null; then
-    TIMEOUT_CMD="gtimeout"
-fi
-
 echo "Running review round $NEXT_ROUND via '$PEER_PROVIDER' (type: $PROVIDER_TYPE)..." >&2
-
-# Run the reviewer inside the sandbox directory with read-only env marker.
-# SSH_AUTH_SOCK and GPG_AGENT_INFO are unset to prevent commit signing.
-SANDBOX_ENV="env -u SSH_AUTH_SOCK -u GPG_AGENT_INFO CCT_READ_ONLY=true"
 
 # ── #193: out-of-band cost channel (A-precondition 1) ────────
 # Measured cost arrives ONLY via this file, written by the provider
@@ -724,14 +891,7 @@ if [[ -f "$CCT_REVIEW_COST_FILE" ]]; then
     # file carries none — so a lone `{"type":"assistant",...}` element is
     # NOT promoted. Anything else with no result element resolves to {}
     # → unmetered.
-    INVOCATION_COST=$(jq -r -s 'map(if type == "array" then .[] else . end)
-           | ([.[] | select(.type? == "result")] | last)
-             // (if (length == 1) and ((.[0] | type) == "object")
-                    and ((.[0] | has("type")) | not)
-                 then .[0] else {} end)
-           | if (type == "object") and ((.total_cost_usd | type) == "number")
-              and (.total_cost_usd >= 0)
-           then .total_cost_usd else empty end' "$CCT_REVIEW_COST_FILE" 2>/dev/null || true)
+    INVOCATION_COST=$(read_invocation_cost "$CCT_REVIEW_COST_FILE")
     rm -f "$CCT_REVIEW_COST_FILE"
 fi
 COST_STATE=$(jq -c '.cost // {measured_usd: 0, invocations: 0, unmetered_invocations: 0}' \
