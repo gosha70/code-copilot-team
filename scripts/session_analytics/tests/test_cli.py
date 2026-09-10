@@ -173,7 +173,16 @@ class TestCli(RegistryResetTestCase):
                 report = json.loads(_run(["team", "alerts", "--db", dsn, "--json"])[1])
                 self.assertEqual(report[C.ALERT_AUTO_BUILD][C.ALERT_AUTO_BUILD_LIVE_RUNS], 1)
                 self.assertTrue(report[C.ALERT_AUTO_BUILD][C.ALERT_AUTO_BUILD_EVALUATED])
-                self.assertEqual(_run(["team", "status", "--db", dsn])[0], C.EXIT_OK)
+                # `team status` carries the same report, in the terminal
+                # and under "alerts" in --json — as /api/team/status does
+                # (P2 on PR #338: it evaluated nothing before).
+                code, out = _run(["team", "status", "--db", dsn])
+                self.assertEqual(code, C.EXIT_OK)
+                self.assertIn("[WARNING] auto-build-cost: auto-build run cap-alerts-fixture", out)
+                self.assertIn("Auto-build: runs evaluated, 1 still running", out)
+                status = json.loads(_run(["team", "status", "--db", dsn, "--json"])[1])
+                self.assertEqual([a["kind"] for a in status["alerts"]["alerts"]], ["auto-build-cost"])
+                self.assertEqual(status["alerts"][C.ALERT_AUTO_BUILD][C.ALERT_AUTO_BUILD_LIVE_RUNS], 1)
             with mock.patch.dict("os.environ", {**base, cfgmod.ENV_AUTO_BUILD_ROOT: _root(12.0)}):
                 code, out = _run(["team", "alerts", "--db", dsn])   # 120%: past the cap
                 self.assertEqual(code, 1)
