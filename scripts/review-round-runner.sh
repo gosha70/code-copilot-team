@@ -175,13 +175,19 @@ run_healthcheck() {
 # becomes PEER_PROVIDER (return 0). Nothing healthy: return 1 with
 # PEER_PROVIDER unchanged.
 resolve_fallback_provider() {
-    local subject="$1" chain fallback
+    # resolve_fallback_provider <subject> [skip] — `skip` is the provider
+    # that just failed a round; it is never its own fallback.
+    local subject="$1" skip="${2:-}" chain fallback
     chain=$(toml_get_array "$PROFILE" "defaults" "fallback_chain.$subject")
     [[ -z "$chain" ]] && return 1
     while IFS= read -r fallback; do
         [[ -z "$fallback" ]] && continue
         if [[ "$fallback" == "$subject" ]]; then
             echo "Skipping '$fallback' (same as subject provider)." >&2
+            continue
+        fi
+        if [[ -n "$skip" && "$fallback" == "$skip" ]]; then
+            echo "Skipping '$fallback' (the provider that just failed)." >&2
             continue
         fi
         if load_provider_config "$fallback" && run_healthcheck "$HEALTHCHECK"; then
@@ -741,12 +747,77 @@ echo "Running review round $NEXT_ROUND via '$PEER_PROVIDER' (type: $PROVIDER_TYP
 # reviewer's text, which is model-controlled and was demonstrably
 # forgeable. Fresh per invocation; deleted before the provider runs.
 export CCT_REVIEW_COST_FILE="$REVIEW_DIR/invocation-cost.json"
-rm -f "$CCT_REVIEW_COST_FILE"
 
-if [[ -n "$TIMEOUT_CMD" ]]; then
-    REVIEW_OUTPUT=$(cd "$SANDBOX_DIR" && $TIMEOUT_CMD "$PROVIDER_TIMEOUT" $SANDBOX_ENV bash -c "$RESOLVED_CMD" 2>&1) && REVIEW_EXIT=0 || REVIEW_EXIT=$?
-else
-    REVIEW_OUTPUT=$(cd "$SANDBOX_DIR" && $SANDBOX_ENV bash -c "$RESOLVED_CMD" 2>&1) && REVIEW_EXIT=0 || REVIEW_EXIT=$?
+# invoke_reviewer — one invocation of the resolved provider over the
+# round's request: sets REVIEW_OUTPUT and REVIEW_EXIT.
+invoke_reviewer() {
+    rm -f "$CCT_REVIEW_COST_FILE"
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        REVIEW_OUTPUT=$(cd "$SANDBOX_DIR" && $TIMEOUT_CMD "$PROVIDER_TIMEOUT" $SANDBOX_ENV bash -c "$RESOLVED_CMD" 2>&1) && REVIEW_EXIT=0 || REVIEW_EXIT=$?
+    else
+        REVIEW_OUTPUT=$(cd "$SANDBOX_DIR" && $SANDBOX_ENV bash -c "$RESOLVED_CMD" 2>&1) && REVIEW_EXIT=0 || REVIEW_EXIT=$?
+    fi
+}
+
+# provider_failure_message — why a non-zero invocation produced no
+# review: the timeout, else the first non-blank output line, else
+# "no output". `|| true` is load-bearing under pipefail (#204): a
+# provider that fails with NO output makes grep exit 1.
+provider_failure_message() {
+    if [[ $REVIEW_EXIT -eq 124 || $REVIEW_EXIT -eq 143 ]]; then
+        echo "timed out after ${PROVIDER_TIMEOUT}s"
+        return 0
+    fi
+    local first
+    first=$(printf '%s' "$REVIEW_OUTPUT" | grep -v '^[[:space:]]*$' | head -1 | cut -c1-500 || true)
+    echo "${first:-no output}"
+}
+
+invoke_reviewer
+
+# ── Reviewer fallback at round time (#190 increment D1) ─────
+# Three of five real unattended runs (2026-09-09/10) ended here: the
+# provider passed its healthcheck and the probe, then ran on the real
+# request and produced NO review (a broken CLI, a reasoning model with
+# no content left). The fallback chain was consulted only at
+# healthcheck time, so a healthy fallback sat unused. Now: when the
+# provider ran and produced no review, the SAME request is sent once to
+# the next healthy provider in the subject's chain. Bounded to one
+# fallback per round, only when there is no verdict at all (a PASS or
+# FAIL from the first provider is final), never the failed provider
+# itself. Both invocations are recorded — the findings name the
+# provider that answered and the one that failed — and the driver
+# debits both. If the fallback fails too, the round ends exactly as
+# before (exit 3, provider_unavailable) with both errors in the detail.
+# Gating rounds only. An advisory lens (CCT_REVIEW_ADVISORY=true from the
+# driver's run_advisory_pass) or a plan-phase consult gates nothing:
+# the driver debits it as one invocation and files its findings under
+# the provider it configured, so a fallback there would be an extra,
+# unaccounted review under the wrong name (review of PR #339).
+FALLBACK_FROM=""
+FALLBACK_ERROR=""
+FALLBACK_COST=""
+FALLBACK_ELIGIBLE=true
+[[ "${CCT_REVIEW_ADVISORY:-false}" == "true" || "$PHASE" == "plan" ]] && FALLBACK_ELIGIBLE=false
+if [[ $REVIEW_EXIT -ne 0 && "$FALLBACK_ELIGIBLE" == "true" ]]; then
+    _failed_provider="$PEER_PROVIDER"
+    _failed_error=$(provider_failure_message)
+    _failed_cost=""
+    # Read NOW: invoke_reviewer clears the cost file at its start, so a
+    # read placed after the fallback invocation would lose this one.
+    [[ -f "$CCT_REVIEW_COST_FILE" ]] && _failed_cost=$(read_invocation_cost "$CCT_REVIEW_COST_FILE")
+    echo "Provider '$_failed_provider' produced no review (exit $REVIEW_EXIT): $_failed_error — trying the fallback chain for one more attempt..." >&2
+    if resolve_fallback_provider "$SUBJECT_PROVIDER" "$_failed_provider"; then
+        FALLBACK_FROM="$_failed_provider"
+        FALLBACK_ERROR="$_failed_error"
+        FALLBACK_COST="$_failed_cost"
+        RESOLVED_CMD=$(build_provider_cmd) || exit 1
+        RUNNER_FINGERPRINT=$(provider_fingerprint)
+        echo "Running review round $NEXT_ROUND again via fallback '$PEER_PROVIDER' (type: $PROVIDER_TYPE)..." >&2
+        invoke_reviewer
+    else
+        echo "No healthy fallback for '$_failed_provider'; the round ends as a provider failure." >&2
+    fi
 fi
 
 rm -f "$REVIEW_REQUEST"
@@ -861,6 +932,9 @@ if [[ $REVIEW_EXIT -ne 0 ]]; then
         PROVIDER_ERROR=$(printf '%s' "$REVIEW_OUTPUT" | grep -v '^[[:space:]]*$' | head -1 | cut -c1-500 || true)
         PROVIDER_ERROR="${PROVIDER_ERROR:-no output}"
     fi
+    if [[ -n "$FALLBACK_FROM" ]]; then
+        PROVIDER_ERROR="$PROVIDER_ERROR (after '$FALLBACK_FROM' failed first: $FALLBACK_ERROR)"
+    fi
 fi
 
 # ── #193 FR-6: per-invocation cost, out-of-band only ─────────
@@ -909,6 +983,13 @@ COST_STATE=$(echo "$COST_STATE" | jq --arg c "${INVOCATION_COST:-}" \
     '.invocations += 1
      | if ($c | length) > 0 then .measured_usd += ($c | tonumber)
        else .unmetered_invocations += 1 end')
+# A fallback means the round had two invocations: the failed one counts too.
+if [[ -n "$FALLBACK_FROM" ]]; then
+    COST_STATE=$(echo "$COST_STATE" | jq --arg c "${FALLBACK_COST:-}" \
+        '.invocations += 1
+         | if ($c | length) > 0 then .measured_usd += ($c | tonumber)
+           else .unmetered_invocations += 1 end')
+fi
 
 # Parse FINDING| lines into JSON
 FINDINGS_JSON="[]"
@@ -1001,11 +1082,16 @@ if ! jq -n \
     --arg cost "${INVOCATION_COST:-}" \
     --arg perr "${PROVIDER_ERROR:-}" \
     --argjson pexit "${REVIEW_EXIT:-0}" \
+    --arg fb_from "${FALLBACK_FROM:-}" --arg fb_err "${FALLBACK_ERROR:-}" --arg fb_cost "${FALLBACK_COST:-}" \
     '{round: $round, verdict: $verdict, reviewer_provider: $provider,
       invocation_cost_usd: (if ($cost | length) > 0 then ($cost | tonumber) else null end),
       findings: $findings, raw_output: $raw_output}
      + (if ($perr | length) > 0
         then {provider_error: {exit_code: $pexit, message: $perr}}
+        else {} end)
+     + (if ($fb_from | length) > 0
+        then {fallback: {from: $fb_from, error: $fb_err,
+                         invocation_cost_usd: (if ($fb_cost | length) > 0 then ($fb_cost | tonumber) else null end)}}
         else {} end)' > "$FINDINGS_TMP"; then
     rm -f "$RAW_TMP" "$FINDINGS_TMP"
     echo "Error: failed to write $FINDINGS_FILE (jq error). The review round's" >&2

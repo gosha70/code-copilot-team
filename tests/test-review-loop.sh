@@ -1264,10 +1264,20 @@ class H(BaseHTTPRequestHandler):
         H.seen += 1
         with open(LOG, "a") as f: f.write(json.dumps(body) + "\n")
         off = body.get("chat_template_kwargs", {}).get("enable_thinking") is False
+        ds_off = body.get("thinking", {}).get("type") == "disabled"
         if MODE == "rejects" and off:
             self.send_response(400); self.end_headers()
             self.wfile.write(b'{"error":{"message":"Unexpected field: chat_template_kwargs"}}'); return
-        if MODE == "thinks" and not off:
+        if MODE == "rejects-enable" and off:
+            self.send_response(400); self.end_headers()
+            self.wfile.write(b'{"error":{"message":"unexpected field: enable_thinking"}}'); return
+        if MODE == "rejects-thinking" and "thinking" in body:
+            self.send_response(400); self.end_headers()
+            self.wfile.write(b'{"error":{"message":"Unrecognized request argument supplied: thinking"}}'); return
+        if MODE == "deepseek" and not ds_off:
+            msg = {"role": "assistant", "content": None, "reasoning_content": "Let me think " * 20}
+            fin = "length"
+        elif MODE == "thinks" and not off:
             msg = {"role": "assistant", "content": None, "reasoning": "Let me think " * 20}
             fin = "length"
         else:
@@ -1306,12 +1316,39 @@ RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "
 assert_exit "--no-thinking gets the answer" 0 "$RC"
 assert_eq "…the answer itself" "ok" "$OUT"
 assert_eq "…by sending enable_thinking=false" "1" "$(grep -c '"enable_thinking": false' "$FAKE_DIR/thinks.log" | tr -d ' ')"
+assert_eq "…and DeepSeek's thinking.type=disabled in the same request" "1" "$(grep -c '"thinking": {"type": "disabled"}' "$FAKE_DIR/thinks.log" | tr -d ' ')"
+kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+# A DeepSeek-style server reads thinking.type, not chat_template_kwargs
+# (the D1 review lost DeepSeek to 122k characters of reasoning at 32768).
+FP=$(fake_port); fake_start deepseek "$FP" "$FAKE_DIR/deepseek.log"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 2>&1) || RC=$?
+assert_exit "a DeepSeek-style reasoning-only reply is a failure" 1 "$RC"
+assert_contains "…that names both switches" "$OUT" "thinking.type=disabled"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 --no-thinking 2>&1) || RC=$?
+assert_exit "--no-thinking turns a DeepSeek-style server's thinking off too" 0 "$RC"
+assert_eq "…the answer itself" "ok" "$OUT"
+kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+# An OpenAI-style server that rejects the DeepSeek field is asked again
+# without it, keeping the vLLM field.
+FP=$(fake_port); fake_start rejects-thinking "$FP" "$FAKE_DIR/rejects-thinking.log"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 --no-thinking 2>&1) || RC=$?
+assert_exit "a server that rejects thinking.type is asked again without it" 0 "$RC"
+assert_eq "…two requests, the second without the DeepSeek field" "0" "$(tail -n 1 "$FAKE_DIR/rejects-thinking.log" | grep -c '"thinking": {' | tr -d ' ')"
+assert_eq "…and the second still carries the vLLM field" "1" "$(tail -n 1 "$FAKE_DIR/rejects-thinking.log" | grep -c '"enable_thinking": false' | tr -d ' ')"
 kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
 FP=$(fake_port); fake_start rejects "$FP" "$FAKE_DIR/rejects.log"
 RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 --no-thinking 2>&1) || RC=$?
 assert_exit "a server that rejects the field is asked again without it" 0 "$RC"
 assert_eq "…two requests, the second without the field" "2" "$(wc -l < "$FAKE_DIR/rejects.log" | tr -d ' ')"
 assert_eq "…and the second has no chat_template_kwargs" "0" "$(tail -n 1 "$FAKE_DIR/rejects.log" | grep -c chat_template_kwargs | tr -d ' ')"
+assert_eq "…but keeps the DeepSeek field" "1" "$(tail -n 1 "$FAKE_DIR/rejects.log" | grep -c '"thinking": {"type": "disabled"}' | tr -d ' ')"
+kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+# A body that names "enable_thinking" names the vLLM field, not DeepSeek's.
+FP=$(fake_port); fake_start rejects-enable "$FP" "$FAKE_DIR/rejects-enable.log"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 --no-thinking 2>&1) || RC=$?
+assert_exit "a 400 naming enable_thinking drops the vLLM field only" 0 "$RC"
+assert_eq "…the retry has no chat_template_kwargs" "0" "$(tail -n 1 "$FAKE_DIR/rejects-enable.log" | grep -c chat_template_kwargs | tr -d ' ')"
+assert_eq "…and still carries thinking.type=disabled" "1" "$(tail -n 1 "$FAKE_DIR/rejects-enable.log" | grep -c '"thinking": {"type": "disabled"}' | tr -d ' ')"
 kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
 
 # ── Provider pricing: measured tokens at configured rates (2026-09-10) ──
@@ -1502,6 +1539,167 @@ assert_exit "an unknown runner argument is refused" 1 "$RC"
 assert_eq "one output-format text for rounds and probes" "1" \
     "$(grep -c '^required_output_format()' "$RUNNER" | tr -d ' ')"
 rm -rf "$PP" "$PROBE_PROFILE" "$NOCHAIN_PROFILE"
+
+# ══════════════════════════════════════════════════════════════
+echo "=== #190 D1: a round whose provider produced no review falls back once ==="
+# ══════════════════════════════════════════════════════════════
+# Three of five real runs ended with a provider that passed its
+# healthcheck and produced no review on the real request, while a
+# healthy fallback was configured and never asked. The same request now
+# goes once to the next healthy provider in the chain; a verdict from
+# the first provider is final; the failed provider is never its own
+# fallback; both invocations are recorded.
+
+D1_MARK=$(mktemp -u)
+D1_PROFILE=$(mktemp)
+cat > "$D1_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["mock", "spare"]
+[providers.mock]
+type = "cli"
+command = "printf 'Error: the model returned no content: hidden reasoning\n' >&2; exit 1"
+timeout_sec = 10
+healthcheck = "true"
+[providers.spare]
+type = "cli"
+command = "touch $D1_MARK && printf '### Summary\nSpare looked.\n\n### Findings\n\n### Verdict\nPASS\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$D1_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+FR="$P/.cct/review/findings-round-1.json"
+assert_exit "D1: primary produced no review, the fallback answered → the round passes (exit 0)" 0 "$RC"
+assert_eq "D1: the findings name the provider that answered" "spare" "$(jq -r '.reviewer_provider' "$FR")"
+assert_eq "D1: …and the one that failed" "mock" "$(jq -r '.fallback.from' "$FR")"
+assert_contains "D1: …with its error kept" "$(jq -r '.fallback.error' "$FR")" "hidden reasoning"
+assert_eq "D1: the failed invocation is unmetered (null), not free" "null" "$(jq -r '.fallback.invocation_cost_usd' "$FR")"
+assert_eq "D1: the verdict is the fallback's" "PASS" "$(jq -r '.verdict' "$FR")"
+assert_eq "D1: no provider_error on a round the fallback completed" "0" "$(jq -r 'has("provider_error") | if . then 1 else 0 end' "$FR")"
+assert_eq "D1: the round counts both invocations" "2" "$(jq -r '.cost.invocations' "$P/.cct/review/state.json")"
+assert_eq "D1: …both unmetered" "2" "$(jq -r '.cost.unmetered_invocations' "$P/.cct/review/state.json")"
+assert_contains "D1: the console says who failed and who was tried" "$OUTPUT" "Skipping 'mock' (the provider that just failed)"
+assert_contains "D1: …and that the round ran again via the fallback" "$OUTPUT" "again via fallback 'spare'"
+assert_eq "D1: the collaboration artifact names the answering provider" "spare" \
+    "$(grep -m1 '^peer_provider:' "$P/specs/test-feat/collaboration/build-review.md" | awk '{print $2}')"
+rm -rf "$P" "$D1_MARK"
+
+# A verdict from the first provider is final: FAIL never consults the chain.
+D1_FAIL_PROFILE=$(mktemp)
+cat > "$D1_FAIL_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["spare"]
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|src/app.sh|near main|Missing check|Add check\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+[providers.spare]
+type = "cli"
+command = "touch $D1_MARK && printf '### Summary\nSpare.\n\n### Findings\n\n### Verdict\nPASS\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$D1_FAIL_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "D1: a FAIL verdict is final (exit 1)" 1 "$RC"
+assert_eq "D1: …the fallback was never invoked" "0" "$([[ -f "$D1_MARK" ]] && echo 1 || echo 0)"
+assert_eq "D1: …and the findings carry no fallback" "0" "$(jq -r 'has("fallback") | if . then 1 else 0 end' "$P/.cct/review/findings-round-1.json")"
+rm -rf "$P" "$D1_MARK"
+
+# Both fail: the round ends as before (exit 3) and the detail names both.
+D1_BOTH_PROFILE=$(mktemp)
+cat > "$D1_BOTH_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["spare"]
+[providers.mock]
+type = "cli"
+command = "printf 'Error: primary is broken\n' >&2; exit 1"
+timeout_sec = 10
+healthcheck = "true"
+[providers.spare]
+type = "cli"
+command = "exit 124"
+timeout_sec = 7
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$D1_BOTH_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+FR="$P/.cct/review/findings-round-1.json"
+assert_exit "D1: primary and fallback both fail → provider failure (exit 3)" 3 "$RC"
+assert_eq "D1: the failing provider on record is the fallback" "spare" "$(jq -r '.reviewer_provider' "$FR")"
+assert_eq "D1: …its error names the primary's failure too" "timed out after 7s (after 'mock' failed first: Error: primary is broken)" \
+    "$(jq -r '.provider_error.message' "$FR")"
+assert_eq "D1: …and the verdict stays INCONCLUSIVE" "INCONCLUSIVE" "$(jq -r '.verdict' "$FR")"
+rm -rf "$P"
+
+# The suffix is produced for any fallback failure, not only a timeout.
+D1_BOTH2_PROFILE=$(mktemp)
+cat > "$D1_BOTH2_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["spare"]
+[providers.mock]
+type = "cli"
+command = "printf 'Error: primary is broken\n' >&2; exit 1"
+timeout_sec = 10
+healthcheck = "true"
+[providers.spare]
+type = "cli"
+command = "printf 'Error: spare is broken too\n' >&2; exit 1"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$D1_BOTH2_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "D1: a fallback that fails with a plain error is a provider failure (exit 3)" 3 "$RC"
+assert_eq "D1: …and the suffix names the primary's failure" \
+    "Error: spare is broken too (after 'mock' failed first: Error: primary is broken)" \
+    "$(jq -r '.provider_error.message' "$P/.cct/review/findings-round-1.json")"
+rm -rf "$P" "$D1_BOTH2_PROFILE"
+
+# Advisory lenses and plan consults gate nothing and never fall back
+# (review of PR #339): the driver debits them as one invocation and
+# files their findings under the configured provider.
+P=$(setup_project); write_state "$P" 0
+RC=0; CCT_REVIEW_ADVISORY=true CCT_PROVIDER_PROFILE="$D1_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "D1: an advisory run does not fall back (exit 3)" 3 "$RC"
+assert_eq "D1: …the fallback was never invoked for a lens" "0" "$([[ -f "$D1_MARK" ]] && echo 1 || echo 0)"
+assert_eq "D1: …the findings stay under the configured provider" "mock" "$(jq -r '.reviewer_provider' "$P/.cct/review/findings-round-1.json")"
+assert_eq "D1: …with no fallback recorded" "0" "$(jq -r 'has("fallback") | if . then 1 else 0 end' "$P/.cct/review/findings-round-1.json")"
+rm -rf "$P" "$D1_MARK"
+P=$(setup_project); write_state "$P" 0 plan
+RC=0; CCT_PROVIDER_PROFILE="$D1_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_eq "D1: a plan-phase consult does not fall back either" "0" "$([[ -f "$D1_MARK" ]] && echo 1 || echo 0)"
+rm -rf "$P" "$D1_MARK"
+
+# A fallback whose healthcheck fails is skipped; with nothing healthy the
+# round ends as before, with no fallback recorded.
+D1_DOWN_PROFILE=$(mktemp)
+cat > "$D1_DOWN_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["spare"]
+[providers.mock]
+type = "cli"
+command = "exit 1"
+timeout_sec = 10
+healthcheck = "true"
+[providers.spare]
+type = "cli"
+command = "true"
+timeout_sec = 10
+healthcheck = "false"
+TOML
+P=$(setup_project); write_state "$P" 0
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$D1_DOWN_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "D1: an unhealthy fallback is not tried (exit 3)" 3 "$RC"
+assert_eq "D1: …no fallback recorded" "0" "$(jq -r 'has("fallback") | if . then 1 else 0 end' "$P/.cct/review/findings-round-1.json")"
+assert_contains "D1: …and the console says so" "$OUTPUT" "No healthy fallback for 'mock'"
+rm -rf "$P" "$D1_PROFILE" "$D1_FAIL_PROFILE" "$D1_BOTH_PROFILE" "$D1_DOWN_PROFILE"
 
 # ══════════════════════════════════════════════════════════════
 # Summary
