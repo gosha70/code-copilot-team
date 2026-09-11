@@ -139,6 +139,12 @@ load_provider_config() {
     # disable_thinking = true → the adapter asks a reasoning model for
     # an answer, not a hidden monologue (#190 run 3).
     PROVIDER_DISABLE_THINKING=$(toml_get "$PROFILE" "$section" "disable_thinking")
+    # price_usd_per_mtok_input / _output: with both set, the adapter
+    # prices the response's usage and the round is MEASURED (a
+    # conservative calculated cost at peak cache-miss rates) instead of
+    # debited at the driver's flat estimate.
+    PROVIDER_PRICE_INPUT=$(toml_get "$PROFILE" "$section" "price_usd_per_mtok_input")
+    PROVIDER_PRICE_OUTPUT=$(toml_get "$PROFILE" "$section" "price_usd_per_mtok_output")
 
     if [[ -z "$PROVIDER_TYPE" ]]; then PROVIDER_TYPE="cli"; fi
     PROVIDER_TIMEOUT="${PROVIDER_TIMEOUT:-300}"
@@ -218,6 +224,9 @@ build_provider_cmd() {
             [[ -n "${PROVIDER_MAX_TOKENS:-}" ]] && cmd="$cmd --max-tokens '$PROVIDER_MAX_TOKENS'"
             [[ -n "${PROVIDER_TEMPERATURE:-}" ]] && cmd="$cmd --temperature '$PROVIDER_TEMPERATURE'"
             [[ "${PROVIDER_DISABLE_THINKING:-}" == "true" ]] && cmd="$cmd --no-thinking"
+            if [[ -n "${PROVIDER_PRICE_INPUT:-}" || -n "${PROVIDER_PRICE_OUTPUT:-}" ]]; then
+                cmd="$cmd --price-input '${PROVIDER_PRICE_INPUT:-}' --price-output '${PROVIDER_PRICE_OUTPUT:-}'"
+            fi
             echo "$cmd"
             ;;
         ollama)

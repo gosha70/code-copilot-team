@@ -7,10 +7,21 @@ set -euo pipefail
 # endpoint (OpenAI, Azure OpenAI, vLLM, llama.cpp, GDX Spark, LM Studio, etc.).
 #
 # Usage: openai-compatible.sh --base-url URL --model MODEL --input FILE \
-#            [--api-key-env VAR] [--max-tokens N] [--temperature T]
+#            [--api-key-env VAR] [--max-tokens N] [--temperature T] [--no-thinking] \
+#            [--price-input USD_PER_MTOK --price-output USD_PER_MTOK]
 #
 # Output: Assistant response text on stdout.
 # Exit:   0 = success, 1 = error
+#
+# With both --price-* set (providers.toml price_usd_per_mtok_input /
+# price_usd_per_mtok_output) and CCT_REVIEW_COST_FILE in the
+# environment, the response's `usage` token counts are priced at those
+# rates and written to the cost file as a CONSERVATIVE CALCULATED cost
+# — configured peak, cache-miss rates times measured tokens, never the
+# exact bill when caching or off-peak discounts apply. It is written
+# before the answer is judged, so a reply that spent its budget on
+# hidden reasoning still records what it consumed. A response with no
+# usable `usage` writes nothing (the driver's estimate then applies).
 
 # ── Parse arguments ──────────────────────────────────────────
 
@@ -20,6 +31,8 @@ MODEL=""
 MAX_TOKENS="4096"
 TEMPERATURE="0.1"
 INPUT_FILE=""
+PRICE_INPUT=""
+PRICE_OUTPUT=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -30,9 +43,12 @@ while [[ $# -gt 0 ]]; do
         --temperature)  TEMPERATURE="${2:?--temperature requires a value}"; shift 2 ;;
         --input)        INPUT_FILE="${2:?--input requires a file path}"; shift 2 ;;
         --no-thinking)  NO_THINKING=true; shift ;;
+        --price-input)  PRICE_INPUT="${2:?--price-input requires USD per million tokens}"; shift 2 ;;
+        --price-output) PRICE_OUTPUT="${2:?--price-output requires USD per million tokens}"; shift 2 ;;
         -h|--help)
             echo "Usage: openai-compatible.sh --base-url URL --model MODEL --input FILE"
             echo "       [--api-key-env VAR] [--max-tokens N] [--temperature T] [--no-thinking]"
+            echo "       [--price-input USD_PER_MTOK --price-output USD_PER_MTOK]"
             exit 0
             ;;
         *)
@@ -57,6 +73,21 @@ fi
 if [[ -z "$INPUT_FILE" || ! -f "$INPUT_FILE" ]]; then
     echo "Error: --input requires a valid file path" >&2
     exit 1
+fi
+
+# Pricing is all-or-nothing: one rate without the other cannot price a
+# request, and pricing half of it would understate.
+if [[ -n "$PRICE_INPUT" || -n "$PRICE_OUTPUT" ]]; then
+    if [[ -z "$PRICE_INPUT" || -z "$PRICE_OUTPUT" ]]; then
+        echo "Error: --price-input and --price-output must be given together" >&2
+        exit 1
+    fi
+    for _rate in "$PRICE_INPUT" "$PRICE_OUTPUT"; do
+        if ! awk -v v="$_rate" 'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/ && v + 0 >= 0) }'; then
+            echo "Error: a price must be a non-negative number of USD per million tokens, got '$_rate'" >&2
+            exit 1
+        fi
+    done
 fi
 
 # ── Resolve API key ──────────────────────────────────────────
@@ -158,6 +189,35 @@ if [[ "$rc" -ne 0 ]]; then
     fi
 fi
 
+# ── Price the usage (before the answer is judged) ────────────
+
+# #193 out-of-band cost channel: the adapter writes CCT_REVIEW_COST_FILE
+# only when it can derive a REAL figure. With configured rates and the
+# response's usage counts it can: tokens times peak cache-miss rates —
+# a conservative calculated cost, never the exact bill. Written HERE,
+# before the content check, so a reply that spent its whole budget on
+# hidden reasoning still records the tokens it consumed. Unusable usage
+# (absent, non-numeric) writes nothing: the driver's estimate applies.
+if [[ -n "$PRICE_INPUT" && -n "${CCT_REVIEW_COST_FILE:-}" ]]; then
+    PRICED=$(printf '%s' "$RESPONSE" | jq -c --arg pin "$PRICE_INPUT" --arg pout "$PRICE_OUTPUT" '
+        .usage as $u
+        | if ($u | type) == "object"
+             and (($u.prompt_tokens | type) == "number") and ($u.prompt_tokens >= 0)
+             and (($u.completion_tokens | type) == "number") and ($u.completion_tokens >= 0)
+          then {
+            total_cost_usd: (($u.prompt_tokens * ($pin | tonumber) + $u.completion_tokens * ($pout | tonumber)) / 1000000),
+            prompt_tokens: $u.prompt_tokens,
+            completion_tokens: $u.completion_tokens,
+            price_usd_per_mtok_input: ($pin | tonumber),
+            price_usd_per_mtok_output: ($pout | tonumber),
+            basis: "conservative calculated cost: measured tokens at configured peak cache-miss rates"
+          }
+          else empty end' 2>/dev/null || true)
+    if [[ -n "$PRICED" ]]; then
+        printf '%s\n' "$PRICED" > "$CCT_REVIEW_COST_FILE"
+    fi
+fi
+
 # ── Extract response ─────────────────────────────────────────
 
 # Parse the assistant message content from the response
@@ -181,13 +241,8 @@ if [[ -z "$ASSISTANT_CONTENT" ]]; then
     exit 1
 fi
 
-# #193 out-of-band cost channel hook: this adapter writes
-# CCT_REVIEW_COST_FILE only when it can derive a REAL USD figure. The
-# API returns token usage but no price, and inventing a price table
-# here would be false measurement — so today it writes nothing and the
-# invocation is honestly unmetered (the driver debits its conservative
-# estimate). Priced deployments can extend this block with their own
-# usage->USD mapping:
-#   jq -n --argjson usd "$COMPUTED_USD" '{total_cost_usd: $usd}' > "$CCT_REVIEW_COST_FILE"
+# Without configured rates the API's usage has no price, and inventing
+# one here would be false measurement — nothing is written and the
+# invocation is honestly unmetered (the driver debits its estimate).
 
 echo "$ASSISTANT_CONTENT"

@@ -638,6 +638,19 @@ Unmetered reviewer invocations are debited as flagged conservative estimates,
 and the line says so when any estimate is included. The final
 `automation-summary.md` repeats the metered/estimated split.
 
+**Pricing a hosted reviewer.** An OpenAI-compatible provider whose
+`providers.toml` entry carries `price_usd_per_mtok_input` and
+`price_usd_per_mtok_output` (both, in USD per million tokens) is measured
+instead of estimated: the adapter prices the response's `usage` counts at
+those rates and writes the figure to the cost channel, before it judges the
+answer, so a reply that spent its budget on hidden reasoning still records
+its tokens. Configure the provider's peak, cache-miss rates — the result is
+a **conservative calculated cost**, never the exact bill when caching or
+off-peak discounts apply. A response with no usable `usage` writes nothing
+and the estimate applies. The second real unattended run (2026-09-10) was
+the reason: a DeepSeek round billed at under a cent was debited at the $2
+estimate.
+
 **The reviewer probe (unattended only).** A healthcheck verifies an install
 or a port — `codex --version` passed while `codex exec` was broken, and
 `/v1/models` answered while the completions carried no content, and each
@@ -1264,7 +1277,7 @@ code-copilot-team/
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
 │   ├── test-peer-review.sh             58 peer-review runner tests
-│   ├── test-review-loop.sh           154 review loop integration tests
+│   ├── test-review-loop.sh           172 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        1118 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests

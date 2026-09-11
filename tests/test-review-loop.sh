@@ -1273,6 +1273,12 @@ class H(BaseHTTPRequestHandler):
         else:
             msg = {"role": "assistant", "content": "ok"}; fin = "stop"
         out = {"choices": [{"index": 0, "message": msg, "finish_reason": fin}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        if MODE == "priced":
+            out["usage"] = {"prompt_tokens": 20000, "completion_tokens": 8000, "total_tokens": 28000}
+        if MODE == "nousage":
+            del out["usage"]
+        if MODE == "badusage":
+            out["usage"] = {"prompt_tokens": "many", "completion_tokens": 8000}
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
         self.wfile.write(json.dumps(out).encode())
 HTTPServer(("127.0.0.1", PORT), H).serve_forever()
@@ -1307,7 +1313,85 @@ assert_exit "a server that rejects the field is asked again without it" 0 "$RC"
 assert_eq "…two requests, the second without the field" "2" "$(wc -l < "$FAKE_DIR/rejects.log" | tr -d ' ')"
 assert_eq "…and the second has no chat_template_kwargs" "0" "$(tail -n 1 "$FAKE_DIR/rejects.log" | grep -c chat_template_kwargs | tr -d ' ')"
 kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
-rm -rf "$FAKE_DIR"
+
+# ── Provider pricing: measured tokens at configured rates (2026-09-10) ──
+# The second real unattended run's DeepSeek round was debited at the
+# flat $2 estimate for a bill under a cent. With rates configured the
+# adapter prices the response's usage into the #193 cost channel — a
+# conservative calculated cost at peak cache-miss rates — and writes
+# it BEFORE judging the answer, so a reasoning-only reply still
+# records its tokens. No usable usage → nothing written → estimate.
+COST_FILE="$FAKE_DIR/cost.json"
+FP=$(fake_port); fake_start priced "$FP" "$FAKE_DIR/priced.log"
+rm -f "$COST_FILE"
+RC=0; OUT=$(CCT_REVIEW_COST_FILE="$COST_FILE" bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --price-input 0.30 --price-output 1.20 2>&1) || RC=$?
+assert_exit "priced: the answer still comes back" 0 "$RC"
+assert_eq "priced: 20000 in at \$0.30 + 8000 out at \$1.20 per million = \$0.0156" "0.0156" \
+    "$(jq -r '.total_cost_usd' "$COST_FILE" 2>/dev/null)"
+assert_eq "priced: the tokens are recorded beside the figure" "20000 8000" \
+    "$(jq -r '"\(.prompt_tokens) \(.completion_tokens)"' "$COST_FILE" 2>/dev/null)"
+assert_contains "priced: the basis says conservative calculated, not the bill" \
+    "$(jq -r '.basis' "$COST_FILE" 2>/dev/null)" "conservative calculated cost"
+rm -f "$COST_FILE"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --price-input 0.30 --price-output 1.20 2>&1) || RC=$?
+assert_eq "priced: no cost channel in the environment → nothing written" "0" "$([[ -f "$COST_FILE" ]] && echo 1 || echo 0)"
+rm -f "$COST_FILE"
+RC=0; OUT=$(CCT_REVIEW_COST_FILE="$COST_FILE" bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" 2>&1) || RC=$?
+assert_eq "unpriced: no rates → nothing written (unmetered, the estimate applies)" "0" "$([[ -f "$COST_FILE" ]] && echo 1 || echo 0)"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --price-input 0.30 2>&1) || RC=$?
+assert_exit "one rate without the other is refused" 1 "$RC"
+assert_contains "…and the refusal says so" "$OUT" "must be given together"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --price-input 0.30 --price-output -1 2>&1) || RC=$?
+assert_exit "a negative rate is refused" 1 "$RC"
+kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+# The reasoning-only failure: the cost file lands before the rejection.
+FP=$(fake_port); fake_start thinks "$FP" "$FAKE_DIR/thinks2.log"
+rm -f "$COST_FILE"
+RC=0; OUT=$(CCT_REVIEW_COST_FILE="$COST_FILE" bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 --price-input 0.30 --price-output 1.20 2>&1) || RC=$?
+assert_exit "priced reasoning-only reply is still a failure" 1 "$RC"
+assert_eq "…but its tokens were priced before the rejection" "1" "$([[ -f "$COST_FILE" ]] && echo 1 || echo 0)"
+assert_eq "…at the configured rates (1 in + 1 out)" "0.0000015" "$(jq -r '.total_cost_usd' "$COST_FILE" 2>/dev/null)"
+kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+# Missing or malformed usage keeps the estimate fallback, never zero.
+for mode in nousage badusage; do
+    FP=$(fake_port); fake_start "$mode" "$FP" "$FAKE_DIR/$mode.log"
+    rm -f "$COST_FILE"
+    RC=0; OUT=$(CCT_REVIEW_COST_FILE="$COST_FILE" bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --price-input 0.30 --price-output 1.20 2>&1) || RC=$?
+    assert_exit "$mode: the answer still comes back" 0 "$RC"
+    assert_eq "$mode: no usable usage → nothing written, not \$0" "0" "$([[ -f "$COST_FILE" ]] && echo 1 || echo 0)"
+    kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+done
+# The runner hands the profile's rates to the adapter, so a probe (and a
+# round) through a priced provider comes back MEASURED; an unpriced one
+# stays unmetered (null).
+FP=$(fake_port); fake_start priced "$FP" "$FAKE_DIR/priced2.log"
+PRICED_PROFILE=$(mktemp)
+cat > "$PRICED_PROFILE" << TOML
+[defaults]
+peer_for.claude = "priced"
+[providers.priced]
+type = "openai-compatible"
+base_url = "http://127.0.0.1:$FP/v1"
+model = "m"
+price_usd_per_mtok_input = 0.30
+price_usd_per_mtok_output = 1.20
+healthcheck = "true"
+[providers.unpriced]
+type = "openai-compatible"
+base_url = "http://127.0.0.1:$FP/v1"
+model = "m"
+healthcheck = "true"
+TOML
+PP2=$(mktemp -d); git -C "$PP2" init -q
+PROBE_OUT=$(mktemp)
+RC=0; CCT_PROVIDER_PROFILE="$PRICED_PROFILE" bash "$RUNNER" "$PP2" --probe --peer priced --out "$PROBE_OUT" >/dev/null 2>&1 || RC=$?
+assert_eq "the runner hands the profile's rates to the adapter: the probe is measured" "0.0156" \
+    "$(jq -r '.invocation_cost_usd' "$PROBE_OUT" 2>/dev/null)"
+RC=0; CCT_PROVIDER_PROFILE="$PRICED_PROFILE" bash "$RUNNER" "$PP2" --probe --peer unpriced --out "$PROBE_OUT" >/dev/null 2>&1 || RC=$?
+assert_eq "an unpriced provider stays unmetered (null)" "null" \
+    "$(jq -r '.invocation_cost_usd' "$PROBE_OUT" 2>/dev/null)"
+kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+rm -rf "$PP2" "$PRICED_PROFILE" "$FAKE_DIR"
 
 # ══════════════════════════════════════════════════════════════
 echo "=== auto-build-reviewer-probe: --probe is the real path, minus the state ==="
