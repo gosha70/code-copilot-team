@@ -789,10 +789,17 @@ invoke_reviewer
 # provider that answered and the one that failed — and the driver
 # debits both. If the fallback fails too, the round ends exactly as
 # before (exit 3, provider_unavailable) with both errors in the detail.
+# Gating rounds only. An advisory lens (CCT_REVIEW_ADVISORY=true from the
+# driver's run_advisory_pass) or a plan-phase consult gates nothing:
+# the driver debits it as one invocation and files its findings under
+# the provider it configured, so a fallback there would be an extra,
+# unaccounted review under the wrong name (review of PR #339).
 FALLBACK_FROM=""
 FALLBACK_ERROR=""
 FALLBACK_COST=""
-if [[ $REVIEW_EXIT -ne 0 ]]; then
+FALLBACK_ELIGIBLE=true
+[[ "${CCT_REVIEW_ADVISORY:-false}" == "true" || "$PHASE" == "plan" ]] && FALLBACK_ELIGIBLE=false
+if [[ $REVIEW_EXIT -ne 0 && "$FALLBACK_ELIGIBLE" == "true" ]]; then
     _failed_provider="$PEER_PROVIDER"
     _failed_error=$(provider_failure_message)
     _failed_cost=""

@@ -1292,9 +1292,9 @@ code-copilot-team/
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
 │   ├── test-peer-review.sh             58 peer-review runner tests
-│   ├── test-review-loop.sh           208 review loop integration tests
+│   ├── test-review-loop.sh           213 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1124 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1128 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)

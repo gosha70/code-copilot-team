@@ -4119,8 +4119,10 @@ run_advisory_pass() {
               review_scope: $scope, review_specialization: $spec,
               target_ref: $tref, last_verdict: null, findings: {}}' \
             > "$scratch/state.json"
+        # CCT_REVIEW_ADVISORY: no round-time fallback for a lens (#190 D1)
+        # — this pass debits ONE invocation and files findings under $_prov.
         ( cd "$PROJECT_DIR" && CCT_REVIEW_DIR="$scratch" CCT_REVIEW_COLLAB_DIR="$scratch/collab" \
-            CCT_REVIEW_BASE_REF="$base_ref" CCT_REVIEW_MAX_ROUNDS=1 \
+            CCT_REVIEW_BASE_REF="$base_ref" CCT_REVIEW_MAX_ROUNDS=1 CCT_REVIEW_ADVISORY=true \
             bash "$SCRIPT_DIR/review-round-runner.sh" "$PROJECT_DIR" ) >/dev/null 2>&1 || true
         local frf
         frf=$(ls "$scratch"/findings-round-*.json 2>/dev/null | sort -V | tail -1)

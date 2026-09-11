@@ -1661,6 +1661,21 @@ assert_eq "D1: …and the suffix names the primary's failure" \
     "$(jq -r '.provider_error.message' "$P/.cct/review/findings-round-1.json")"
 rm -rf "$P" "$D1_BOTH2_PROFILE"
 
+# Advisory lenses and plan consults gate nothing and never fall back
+# (review of PR #339): the driver debits them as one invocation and
+# files their findings under the configured provider.
+P=$(setup_project); write_state "$P" 0
+RC=0; CCT_REVIEW_ADVISORY=true CCT_PROVIDER_PROFILE="$D1_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "D1: an advisory run does not fall back (exit 3)" 3 "$RC"
+assert_eq "D1: …the fallback was never invoked for a lens" "0" "$([[ -f "$D1_MARK" ]] && echo 1 || echo 0)"
+assert_eq "D1: …the findings stay under the configured provider" "mock" "$(jq -r '.reviewer_provider' "$P/.cct/review/findings-round-1.json")"
+assert_eq "D1: …with no fallback recorded" "0" "$(jq -r 'has("fallback") | if . then 1 else 0 end' "$P/.cct/review/findings-round-1.json")"
+rm -rf "$P" "$D1_MARK"
+P=$(setup_project); write_state "$P" 0 plan
+RC=0; CCT_PROVIDER_PROFILE="$D1_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_eq "D1: a plan-phase consult does not fall back either" "0" "$([[ -f "$D1_MARK" ]] && echo 1 || echo 0)"
+rm -rf "$P" "$D1_MARK"
+
 # A fallback whose healthcheck fails is skipped; with nothing healthy the
 # round ends as before, with no fallback recorded.
 D1_DOWN_PROFILE=$(mktemp)
