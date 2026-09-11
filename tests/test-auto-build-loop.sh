@@ -2245,9 +2245,46 @@ assert_eq "the park message carries the real provider error" "1" \
     "$(jq -r '.detail // ""' "$ESC" 2>/dev/null | grep -c 'skip-git-repo-check' || true)"
 assert_eq "no fix session runs against zero findings" "0" \
     "$(ls "$P"/.cct/auto-build/demo-feat/phase-1/fix-prompt-*.md 2>/dev/null | wc -l | tr -d ' ')"
-assert_eq "a failed invocation is never charged the conservative estimate" "0" \
+assert_eq "an attended run (estimates inactive) records no estimate for the failed invocation" "0" \
     "$(jq -r '.totals.cost_estimated_usd // 0' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 rm -rf "$P"
+
+# Under unattended, a provider-error round IS the invocation it was and
+# is debited by the one rule (owner's decision 2026-09-10: the second real
+# run lost a round to a reviewer that generated 30k characters of
+# reasoning and no answer, and the ledger showed nothing for it). The
+# reviewer here answers the small probe in format and fails the real
+# round: probe $2 + failed round $2.
+PROBE_OK_ROUND_BROKEN=$(mktemp)
+cat > "$PROBE_OK_ROUND_BROKEN" << 'SH'
+#!/usr/bin/env bash
+if grep -q 'Reviewer Readiness Probe' "$1" 2>/dev/null; then
+    printf '### Summary\nFine.\n\n### Findings\n\n### Verdict\nPASS\n'
+    exit 0
+fi
+printf '%s\n' 'Error: the model returned no content: it spent its budget on hidden reasoning' >&2
+exit 1
+SH
+PROBE_OK_PROFILE=$(mktemp)
+cat > "$PROBE_OK_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $PROBE_OK_ROUND_BROKEN {review_request}"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+REVIEW_PROFILE="$PROBE_OK_PROFILE" run_driver "$P"
+assert_exit "unattended: a reviewer that answers the probe and fails the round terminates (exit 6)" 6 "$RC"
+assert_eq "…as provider_unavailable" "provider_unavailable" \
+    "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json" 2>/dev/null)"
+assert_eq "…and the failed round is debited like any invocation (probe + round)" "4" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_eq "…journaled as the gating review's cost" "1" \
+    "$(grep -c '"cost_review".*gating review phase 1 round 1' "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null | tr -d ' ')"
+rm -rf "$P" "$PROBE_OK_ROUND_BROKEN" "$PROBE_OK_PROFILE"
 
 # A SILENT provider failure (non-zero exit, no output) must reach the same
 # park. Under pipefail the runner's error extraction aborted the script, so
@@ -5948,12 +5985,10 @@ assert_eq "C2-T6: no reviewer call site invokes the debit unchecked" "0" \
 # when the ledger refuses it.
 assert_eq "C2-T6: every debit-failure path refuses to continue" "3" \
     "$(grep -c 'refusing to continue with caps that cannot be enforced' "$DRIVER")"
-# The rc=3 arm must restore ESTIMATES_ACTIVE BEFORE disposing — dispose
-# does not return, so a restore placed after it would never run.
-assert_eq "C2-T6: the rc=3 arm restores the estimate flag before disposing" "before" \
-    "$(awk '/_est_save="\$\{ESTIMATES_ACTIVE/,/refusing to continue with caps/' "$DRIVER" \
-        | grep -nE 'ESTIMATES_ACTIVE="\$_est_save"|dispose "cap_exceeded"' | head -2 \
-        | awk -F: 'NR==1 && /_est_save/ {print "before"; found=1} END { if (!found) print "after" }')"
+# A provider-error round is debited by the one rule; no arm switches the
+# estimate flag off around it any more (owner's decision 2026-09-10).
+assert_eq "C2-T6: no debit path toggles ESTIMATES_ACTIVE around a provider error" "0" \
+    "$(grep -c '_est_save' "$DRIVER" | tr -d ' ')"
 
 # ── Round-18: an unrecorded cost parks under its OWN reason, and that
 #    park can never auto-resolve — cap_exceeded's arm would compare the

@@ -4227,23 +4227,19 @@ run_review_loop() {
         # is no invocation to debit, measured or estimated.
         #
         # rc=3 (#204) is a provider failure: the reviewer process ran but
-        # never produced a review. Debit anything the adapter actually
-        # MEASURED, but never fall back to the conservative estimate — a
-        # failed invocation is not an unmetered one, and the observed run
-        # charged $2.0 "estimated" for a reviewer that exited on a usage
-        # error.
+        # never produced a review. It is still the invocation it was —
+        # the second real unattended run of 2026-09-10 lost a round to a
+        # reviewer that generated 30k characters of reasoning and no
+        # answer, and the ledger showed nothing for it. So it is debited
+        # by the one rule: measured when the adapter reported a cost,
+        # else the conservative estimate (owner's decision, 2026-09-10;
+        # an earlier exception for usage-error exits is gone).
         # A debit the ledger REFUSES must stop the run: continuing would
         # process a verdict (and possibly land) against a cost total that
         # never moved, so check_caps would enforce nothing (round-17
-        # finding 1). The rc=3 arm restores the estimate flag FIRST —
-        # dispose does not return.
+        # finding 1).
         local _debit_rc=0
-        if [[ $rc -eq 3 ]]; then
-            local _est_save="${ESTIMATES_ACTIVE:-false}"
-            ESTIMATES_ACTIVE=false
-            debit_review_costs "$post_frf" "gating review phase $n round $round" || _debit_rc=$?
-            ESTIMATES_ACTIVE="$_est_save"
-        elif [[ $rc -ne 2 ]]; then
+        if [[ $rc -ne 2 ]]; then
             debit_review_costs "$post_frf" "gating review phase $n round $round" || _debit_rc=$?
         fi
         if [[ $_debit_rc -ne 0 ]]; then
