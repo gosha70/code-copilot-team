@@ -113,9 +113,12 @@ version = "cli"
 #   api_key_env  — env var name containing the API key (NOT the key itself)
 #   model        — model name for the chat completion request
 #   max_tokens   — max response tokens (default: 4096)
-#   disable_thinking — true to send chat_template_kwargs.enable_thinking=false
-#                  (Qwen3-family reasoning models on vLLM otherwise spend the
-#                  whole budget on hidden reasoning and return no content)
+#   disable_thinking — true to turn a reasoning model's hidden thinking off:
+#                  the adapter sends both vLLM's chat_template_kwargs.enable_thinking=false
+#                  and DeepSeek's thinking.type=disabled (each server ignores the
+#                  other's field; one that rejects a field is asked again without it).
+#                  Otherwise Qwen3 on vLLM and DeepSeek spend the whole budget on
+#                  reasoning and return no content.
 #   temperature  — sampling temperature (default: 0.1)
 #   price_usd_per_mtok_input / price_usd_per_mtok_output
 #                — USD per million tokens. With BOTH set, the adapter prices
@@ -148,7 +151,8 @@ version = "cli"
 # api_key_env = "DEEPSEEK_API_KEY"
 # model = "deepseek-flash"
 # timeout_sec = 300
-# max_tokens = 32768            # thinking is on by default; give the answer room
+# disable_thinking = true       # thinking is on by default and can consume any budget on a review-sized request
+# max_tokens = 16384
 # temperature = 0.1
 # price_usd_per_mtok_input = 0.30   # peak, cache-miss (api-docs.deepseek.com/quick_start/pricing)
 # price_usd_per_mtok_output = 1.20

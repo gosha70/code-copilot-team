@@ -1264,10 +1264,17 @@ class H(BaseHTTPRequestHandler):
         H.seen += 1
         with open(LOG, "a") as f: f.write(json.dumps(body) + "\n")
         off = body.get("chat_template_kwargs", {}).get("enable_thinking") is False
+        ds_off = body.get("thinking", {}).get("type") == "disabled"
         if MODE == "rejects" and off:
             self.send_response(400); self.end_headers()
             self.wfile.write(b'{"error":{"message":"Unexpected field: chat_template_kwargs"}}'); return
-        if MODE == "thinks" and not off:
+        if MODE == "rejects-thinking" and "thinking" in body:
+            self.send_response(400); self.end_headers()
+            self.wfile.write(b'{"error":{"message":"Unrecognized request argument supplied: thinking"}}'); return
+        if MODE == "deepseek" and not ds_off:
+            msg = {"role": "assistant", "content": None, "reasoning_content": "Let me think " * 20}
+            fin = "length"
+        elif MODE == "thinks" and not off:
             msg = {"role": "assistant", "content": None, "reasoning": "Let me think " * 20}
             fin = "length"
         else:
@@ -1306,12 +1313,32 @@ RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "
 assert_exit "--no-thinking gets the answer" 0 "$RC"
 assert_eq "…the answer itself" "ok" "$OUT"
 assert_eq "…by sending enable_thinking=false" "1" "$(grep -c '"enable_thinking": false' "$FAKE_DIR/thinks.log" | tr -d ' ')"
+assert_eq "…and DeepSeek's thinking.type=disabled in the same request" "1" "$(grep -c '"thinking": {"type": "disabled"}' "$FAKE_DIR/thinks.log" | tr -d ' ')"
+kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+# A DeepSeek-style server reads thinking.type, not chat_template_kwargs
+# (the D1 review lost DeepSeek to 122k characters of reasoning at 32768).
+FP=$(fake_port); fake_start deepseek "$FP" "$FAKE_DIR/deepseek.log"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 2>&1) || RC=$?
+assert_exit "a DeepSeek-style reasoning-only reply is a failure" 1 "$RC"
+assert_contains "…that names both switches" "$OUT" "thinking.type=disabled"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 --no-thinking 2>&1) || RC=$?
+assert_exit "--no-thinking turns a DeepSeek-style server's thinking off too" 0 "$RC"
+assert_eq "…the answer itself" "ok" "$OUT"
+kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+# An OpenAI-style server that rejects the DeepSeek field is asked again
+# without it, keeping the vLLM field.
+FP=$(fake_port); fake_start rejects-thinking "$FP" "$FAKE_DIR/rejects-thinking.log"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 --no-thinking 2>&1) || RC=$?
+assert_exit "a server that rejects thinking.type is asked again without it" 0 "$RC"
+assert_eq "…two requests, the second without the DeepSeek field" "0" "$(tail -n 1 "$FAKE_DIR/rejects-thinking.log" | grep -c '"thinking": {' | tr -d ' ')"
+assert_eq "…and the second still carries the vLLM field" "1" "$(tail -n 1 "$FAKE_DIR/rejects-thinking.log" | grep -c '"enable_thinking": false' | tr -d ' ')"
 kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
 FP=$(fake_port); fake_start rejects "$FP" "$FAKE_DIR/rejects.log"
 RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 --no-thinking 2>&1) || RC=$?
 assert_exit "a server that rejects the field is asked again without it" 0 "$RC"
 assert_eq "…two requests, the second without the field" "2" "$(wc -l < "$FAKE_DIR/rejects.log" | tr -d ' ')"
 assert_eq "…and the second has no chat_template_kwargs" "0" "$(tail -n 1 "$FAKE_DIR/rejects.log" | grep -c chat_template_kwargs | tr -d ' ')"
+assert_eq "…but keeps the DeepSeek field" "1" "$(tail -n 1 "$FAKE_DIR/rejects.log" | grep -c '"thinking": {"type": "disabled"}' | tr -d ' ')"
 kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
 
 # ── Provider pricing: measured tokens at configured rates (2026-09-10) ──

@@ -114,20 +114,25 @@ if ! command -v jq &>/dev/null; then
 fi
 
 # --no-thinking (providers.toml `disable_thinking = true`): reasoning
-# models served by vLLM (Qwen3 family) spend the answer budget on hidden
-# reasoning and return content: null — the third real unattended run
-# (#190, 2026-09-09) lost its review round to exactly that. vLLM turns
-# thinking off per request with chat_template_kwargs; a server that
-# rejects the field (400 naming it) is asked again without it.
+# models spend the answer budget on hidden reasoning and return
+# content: null — the third real unattended run (#190, 2026-09-09) lost
+# its review round to Qwen on vLLM that way, and the D1 review
+# (2026-09-11) lost DeepSeek the same way at 32768 tokens. Each server
+# has its own switch: vLLM reads chat_template_kwargs.enable_thinking,
+# DeepSeek reads thinking.type. Both are sent (each server ignores the
+# other's — verified against both on 2026-09-11); a server that rejects
+# a field with a 400 naming it is asked once more without that field.
 NO_THINKING="${NO_THINKING:-false}"
 build_request_body() {
-    local with_thinking_off="$1"
+    # build_request_body <vllm-field: true|false> <deepseek-field: true|false>
+    local with_vllm_off="$1" with_deepseek_off="${2:-$1}"
     jq -n \
         --arg model "$MODEL" \
         --arg content "$CONTENT" \
         --argjson max_tokens "$MAX_TOKENS" \
         --argjson temperature "$TEMPERATURE" \
-        --argjson no_thinking "$with_thinking_off" \
+        --argjson vllm_off "$with_vllm_off" \
+        --argjson deepseek_off "$with_deepseek_off" \
         '{
             model: $model,
             messages: [
@@ -138,9 +143,10 @@ build_request_body() {
             ],
             max_tokens: $max_tokens,
             temperature: $temperature
-        } + (if $no_thinking then {chat_template_kwargs: {enable_thinking: false}} else {} end)'
+        } + (if $vllm_off then {chat_template_kwargs: {enable_thinking: false}} else {} end)
+          + (if $deepseek_off then {thinking: {type: "disabled"}} else {} end)'
 }
-REQUEST_BODY=$(build_request_body "$NO_THINKING")
+REQUEST_BODY=$(build_request_body "$NO_THINKING" "$NO_THINKING")
 
 # ── Send request ─────────────────────────────────────────────
 
@@ -158,9 +164,9 @@ if [[ -n "$AUTH_HEADER" ]]; then
     CURL_ARGS+=(-H "$AUTH_HEADER")
 fi
 
-# -sf hides the body of a 4xx; a 400 that names chat_template_kwargs is
-# the one case worth a second request, so the body is read without -f
-# and the status is judged here.
+# -sf hides the body of a 4xx; a 400 that names one of the thinking
+# fields is the one case worth a second request, so the body is read
+# without -f and the status is judged here.
 send_request() {
     local body="$1" out
     out=$(curl -s -w '\n%{http_code}' -X POST "$ENDPOINT" -H "Content-Type: application/json" \
@@ -175,10 +181,17 @@ send_request() {
 RESPONSE=""; HTTP_STATUS=""
 rc=0; send_request "$REQUEST_BODY" || rc=$?
 if [[ "$rc" -ne 0 ]]; then
-    if [[ "$rc" -eq 2 && "$NO_THINKING" == "true" && "$HTTP_STATUS" == "400" && "$RESPONSE" == *chat_template_kwargs* ]]; then
-        # The server does not know the field: ask without it.
-        REQUEST_BODY=$(build_request_body false)
-        rc=0; send_request "$REQUEST_BODY" || rc=$?
+    if [[ "$rc" -eq 2 && "$NO_THINKING" == "true" && "$HTTP_STATUS" == "400" ]]; then
+        # The server does not know a field: ask once more without the
+        # one(s) it named, keeping the other.
+        keep_vllm=true; keep_deepseek=true
+        [[ "$RESPONSE" == *chat_template_kwargs* ]] && keep_vllm=false
+        [[ "$RESPONSE" == *thinking* && "$RESPONSE" != *chat_template_kwargs* ]] && keep_deepseek=false
+        [[ "$RESPONSE" == *chat_template_kwargs* && "$RESPONSE" == *'"thinking"'* ]] && keep_deepseek=false
+        if [[ "$keep_vllm" == "false" || "$keep_deepseek" == "false" ]]; then
+            REQUEST_BODY=$(build_request_body "$keep_vllm" "$keep_deepseek")
+            rc=0; send_request "$REQUEST_BODY" || rc=$?
+        fi
     fi
     if [[ "$rc" -ne 0 ]]; then
         echo "Error: request to $ENDPOINT failed (HTTP ${HTTP_STATUS:-none})" >&2
@@ -233,7 +246,7 @@ if [[ -z "$ASSISTANT_CONTENT" ]]; then
     elif [[ "${REASONING_CHARS:-0}" -gt 0 ]]; then
         # The model answered — in its hidden reasoning, with nothing
         # left for the answer. Name the cause and the fix.
-        echo "Error: the model returned no content: it spent its ${MAX_TOKENS}-token budget on hidden reasoning (${REASONING_CHARS} chars, finish_reason ${FINISH:-unknown}). Set disable_thinking = true for this provider in providers.toml (sent as chat_template_kwargs.enable_thinking=false), or raise max_tokens." >&2
+        echo "Error: the model returned no content: it spent its ${MAX_TOKENS}-token budget on hidden reasoning (${REASONING_CHARS} chars, finish_reason ${FINISH:-unknown}). Set disable_thinking = true for this provider in providers.toml (sent as chat_template_kwargs.enable_thinking=false and thinking.type=disabled), or raise max_tokens." >&2
     else
         echo "Error: Could not extract response content from API response" >&2
         echo "Raw response: $RESPONSE" >&2
