@@ -1,0 +1,63 @@
+{
+  "schema_version": 2,
+  "profile": "unattended",
+  "branch": {
+    "name": "feature/auto-build-cap-alerts-run1",
+    "base": "master",
+    "remote": "origin"
+  },
+  "phases": {
+    "source": "tasks.md",
+    "milestone_every": 8,
+    "max_phases": 2
+  },
+  "build": {
+    "max_turns": 80,
+    "permission_mode": "acceptEdits",
+    "max_fix_sessions_per_phase": 2
+  },
+  "test": {
+    "command": "env PYTHONPATH=scripts:. python3 -m pytest scripts/session_analytics/tests -q -p no:cacheprovider --deselect scripts/session_analytics/tests/test_cli.py::TestCli::test_ingest_requires_dsn --deselect scripts/session_analytics/tests/test_api.py::TestApi::test_get_config --deselect scripts/session_analytics/tests/test_api.py::TestApi::test_embedding_endpoints_and_the_similar_steps_in_the_pipeline",
+    "timeout_sec": 900
+  },
+  "review": {
+    "reviewers": [
+      {
+        "provider": "deepseek",
+        "specialization": "correctness",
+        "scope": "both",
+        "gating": true
+      }
+    ],
+    "max_rounds": 3,
+    "round_timeout_sec": 900,
+    "loop_timeout_sec": 600
+  },
+  "caps": {
+    "wall_clock_sec": 5400,
+    "cost_usd": 10
+  },
+  "unattended": {
+    "on_review_breaker": "terminate",
+    "on_stale_finding": "terminate",
+    "on_origin_gate": "terminate",
+    "budget": {
+      "meter_all_invocations": true,
+      "estimate_unmetered": true,
+      "estimate_usd_per_invocation": 2.0
+    }
+  },
+  "notify": {
+    "command": ""
+  },
+  "pr": {
+    "closes": [],
+    "title": "feat(session-analytics): cap alerts for auto-build runs [auto-build]"
+  },
+  "merge": {
+    "enabled": false,
+    "require_green_ci": true,
+    "require_branch_protection": true,
+    "method": "squash"
+  }
+}

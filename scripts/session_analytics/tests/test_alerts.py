@@ -1,9 +1,15 @@
-# Tests for budgets, runaway detection and alerts (#174 Slice D).
+# Tests for budgets, runaway detection and alerts (#174 Slice D), and for
+# the auto-build cap alerts (auto-build-cap-alerts FR-1..FR-4): every
+# function named cap_fr<N> is the verifier verification.yaml selects for
+# FR-N with `-k cap_fr<N>`.
 
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from session_analytics import constants as C
 from session_analytics.api import alerts as A
@@ -175,6 +181,264 @@ class TestRunawayAlerts(RegistryResetTestCase):
         self.assertTrue(A.at_or_above(C.ALERT_WARNING, C.ALERT_WARNING))
         self.assertFalse(A.at_or_above(C.ALERT_WARNING, C.ALERT_BREACH))
         self.assertIsNone(A.worst_level([]))
+
+
+# ── auto-build cap alerts (auto-build-cap-alerts) ──────────────────────
+
+RUN_KEY = "47908-474720888"
+
+
+def _run(**over) -> dict:
+    """A run record in the shape api.auto_build.read_run returns: still
+    building, 73% of a $10 cap, 10 minutes into a 90-minute cap."""
+    base = {
+        "key": RUN_KEY, "feature_id": "team-developer-aliases", "profile": "unattended",
+        "status": "building", "outcome": None, "concluded": False, "live": True,
+        "started_at": "2026-09-09T16:22:03Z", "updated_at": "2026-09-09T16:31:46Z", "elapsed_sec": 600,
+        "caps": {"phases": 2, "fix_sessions_per_phase": 2, "wall_clock_sec": 5400, "cost_usd": 10.0},
+        "cost": {"metered_usd": 5.3, "estimated_usd": 2.0},
+        "pr": {"number": 331, "url": "https://github.com/gosha70/code-copilot-team/pull/331"},
+        "ledger": "auto-build/team-developer-aliases",
+    }
+    base.update(over)
+    return base
+
+
+def _cost(spent: float, cap=10.0, estimated=0.0, **over) -> dict:
+    return _run(cost={"metered_usd": spent - estimated, "estimated_usd": estimated},
+                caps={"wall_clock_sec": None, "cost_usd": cap}, **over)
+
+
+def _clock(elapsed, cap=1000, **over) -> dict:
+    return _run(elapsed_sec=elapsed, caps={"wall_clock_sec": cap, "cost_usd": None}, **over)
+
+
+def _live_state(*, cost_usd: float, cap_usd: float, started: datetime, updated: datetime) -> dict:
+    """state.json for a run the driver has not concluded."""
+    return {
+        "schema_version": 1, "feature_id": "cap-alerts-fixture", "profile": "unattended",
+        "attempt_id": RUN_KEY, "status": "building", "current_phase": 1, "phases": {},
+        "branch": "feature/cap-alerts", "branch_base_ref": "0" * 40,
+        "caps": {"max_phases": 2, "max_fix_sessions_per_phase": 2,
+                 "max_wall_clock_sec": 86400, "max_cost_usd": cap_usd},
+        "outcome": None, "escalations": [], "pr": {"number": None, "url": None},
+        "totals": {"cost_usd": cost_usd, "cost_estimated_usd": 0,
+                   "started_epoch": int(started.timestamp())},
+        "updated": updated.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _ledger_root(state: dict) -> Path:
+    root = Path(tempfile.mkdtemp(prefix="cct-cap-alerts-"))
+    ledger = root / C.AUTO_BUILD_LIVE_DIR / "cap-alerts-fixture"
+    ledger.mkdir(parents=True)
+    (ledger / C.LEDGER_STATE_FILE).write_text(json.dumps(state), encoding="utf-8")
+    return root
+
+
+class TestAutoBuildCapAlerts(unittest.TestCase):
+    def test_cap_fr1_cost_and_clock_shares_at_the_boundaries(self) -> None:
+        # 80% of the cap is the warning, the cap itself is the breach —
+        # the same two thresholds a budget uses, so a person reading the
+        # card does not have to hold two rules.
+        for spent, expected in ((7.9, None), (8.0, C.ALERT_WARNING), (9.99, C.ALERT_WARNING),
+                                (10.0, C.ALERT_BREACH), (25.0, C.ALERT_BREACH)):
+            got = A.auto_build_alerts([_cost(spent)])
+            self.assertEqual([a["level"] for a in got], [] if expected is None else [expected], spent)
+            self.assertEqual([a["kind"] for a in got], [] if expected is None else [A.KIND_AUTO_BUILD_COST])
+        for elapsed, expected in ((799, None), (800, C.ALERT_WARNING), (999, C.ALERT_WARNING),
+                                  (1000, C.ALERT_BREACH), (4000, C.ALERT_BREACH)):
+            got = A.auto_build_alerts([_clock(elapsed)])
+            self.assertEqual([a["level"] for a in got], [] if expected is None else [expected], elapsed)
+            self.assertEqual([a["kind"] for a in got], [] if expected is None else [A.KIND_AUTO_BUILD_WALL_CLOCK])
+
+    def test_cap_fr2_percent_below_the_cap_never_reads_as_100(self) -> None:
+        # DeepSeek's review of the first revision: 9.99 of 10.00 rounded
+        # to "(100%)" beside level warning. Below the cap the percentage
+        # is rounded but held at 99 at most; at and above it, rounded.
+        alert, = A.auto_build_alerts([_cost(9.99)])
+        self.assertEqual(alert["level"], C.ALERT_WARNING)
+        self.assertIn("(99%)", alert["message"])
+        alert, = A.auto_build_alerts([_cost(10.0)])
+        self.assertEqual(alert["level"], C.ALERT_BREACH)
+        self.assertIn("(100%)", alert["message"])
+        alert, = A.auto_build_alerts([_clock(999)])
+        self.assertIn("(99%)", alert["message"])
+
+    def test_cap_fr1_cost_share_counts_the_estimated_portion(self) -> None:
+        # The driver's cap is set against metered + estimated, so the
+        # alert is too: $5.00 metered alone is 50% and silent, but with
+        # $3.50 estimated on top it is 85% of the cap.
+        self.assertEqual(A.auto_build_alerts([_cost(5.0)]), [])
+        got = A.auto_build_alerts([_cost(8.5, estimated=3.5)])
+        self.assertEqual([a["level"] for a in got], [C.ALERT_WARNING])
+        self.assertEqual(got[0]["figures"]["spent_usd"], 8.5)
+        self.assertEqual(got[0]["figures"]["estimated_usd"], 3.5)
+
+    def test_cap_fr1_absent_or_non_positive_caps_and_concluded_runs_never_alert(self) -> None:
+        for cap in (None, 0.0, -1.0):
+            self.assertEqual(A.auto_build_alerts([_cost(1e6, cap=cap)]), [], cap)
+            self.assertEqual(A.auto_build_alerts([_clock(1e6, cap=cap)]), [], cap)
+        # A run the driver finished is history, not something to watch —
+        # whatever it spent (the Runs tab is where it is read).
+        for status in ("done", "terminated_policy", "parked"):
+            self.assertEqual(A.auto_build_alerts([_cost(25.0, concluded=True, status=status)]), [], status)
+        # Not live but not concluded either: a build phase longer than the
+        # active window is still a run burning its cap.
+        self.assertEqual(len(A.auto_build_alerts([_cost(25.0, live=False)])), 1)
+        # An empty list is not an error, and neither is a run with no
+        # figures the ledger never wrote.
+        self.assertEqual(A.auto_build_alerts([]), [])
+        self.assertEqual(A.auto_build_alerts([_run(cost={}, elapsed_sec=None)]), [])
+
+    def test_cap_fr1_one_alert_per_run_per_cap(self) -> None:
+        both = _run(cost={"metered_usd": 9.0, "estimated_usd": 0.0}, elapsed_sec=5000)
+        other = _run(key="1-2", feature_id="another", cost={"metered_usd": 0.1, "estimated_usd": 0.0})
+        got = A.auto_build_alerts([both, other])
+        self.assertEqual([(a["kind"], a["subject"]["key"]) for a in got],
+                         [(A.KIND_AUTO_BUILD_COST, RUN_KEY), (A.KIND_AUTO_BUILD_WALL_CLOCK, RUN_KEY)])
+
+    def test_cap_fr2_alert_shape_and_message_name_the_run_and_the_figures(self) -> None:
+        alert, = A.auto_build_alerts([_cost(8.5, estimated=2.0)])
+        self.assertEqual(alert["kind"], "auto-build-cost")
+        self.assertEqual(alert["level"], C.ALERT_WARNING)
+        self.assertEqual(alert["scope"], "run")
+        self.assertIsNone(alert["window"])
+        self.assertEqual(alert["subject"], {"key": RUN_KEY, "feature_id": "team-developer-aliases",
+                                            "ledger": "auto-build/team-developer-aliases", "pr_number": 331})
+        self.assertEqual(alert["figures"], {"spent_usd": 8.5, "estimated_usd": 2.0, "cap_usd": 10.0, "share": 0.85})
+        self.assertEqual(
+            alert["message"],
+            "auto-build run team-developer-aliases (47908-474720888) has spent $8.50 of its $10.00 cap "
+            "(85%, $2.00 estimated) and is still running.")
+        # Nothing estimated: no parenthetical aside about a guess.
+        plain, = A.auto_build_alerts([_cost(8.5)])
+        self.assertEqual(
+            plain["message"],
+            "auto-build run team-developer-aliases (47908-474720888) has spent $8.50 of its $10.00 cap "
+            "(85%) and is still running.")
+
+    def test_cap_fr2_wall_clock_alert_shape_and_message(self) -> None:
+        alert, = A.auto_build_alerts([_clock(4800, cap=5400)])
+        self.assertEqual(alert["kind"], "auto-build-wall-clock")
+        self.assertEqual(alert["level"], C.ALERT_WARNING)
+        self.assertEqual(alert["scope"], "run")
+        self.assertEqual(alert["figures"], {"elapsed_sec": 4800, "cap_sec": 5400, "share": 0.89})
+        self.assertEqual(
+            alert["message"],
+            "auto-build run team-developer-aliases (47908-474720888) has run 80 min of its 90 min "
+            "wall-clock cap (89%) and is still running.")
+        breach, = A.auto_build_alerts([_clock(5583, cap=5400)])
+        self.assertEqual(breach["level"], C.ALERT_BREACH)
+        self.assertIn("has run 93 min of its 90 min wall-clock cap (103%)", breach["message"])
+        # A run whose ledger names no feature is still named by its key.
+        unnamed, = A.auto_build_alerts([_clock(5000, feature_id=None)])
+        self.assertIn(f"auto-build run an unnamed feature ({RUN_KEY})", unnamed["message"])
+
+
+class TestAutoBuildInTheReport(RegistryResetTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.db = Database.connect(self.sqlite_dsn())
+        apply_ddl(self.db)
+        self.addCleanup(self.db.close)
+
+    def _report(self, runs, **over):
+        kwargs = {"budgets": NO_BUDGETS, "runaway": _RUNAWAY, "noise": _NOISE, "now": NOW}
+        kwargs.update(over)
+        return A.all_alerts(self.db, _status(), runs=runs, **kwargs)
+
+    def test_cap_fr3_runs_not_read_is_said_not_passed_off_as_quiet(self) -> None:
+        report = self._report(None)
+        self.assertEqual(report[C.ALERT_AUTO_BUILD],
+                         {C.ALERT_AUTO_BUILD_EVALUATED: False, C.ALERT_AUTO_BUILD_LIVE_RUNS: 0})
+        self.assertEqual(report["alerts"], [])
+        self.assertIn("Auto-build: runs not evaluated.", A.render_alerts(report))
+
+    def test_cap_fr3_report_block_counts_the_runs_still_running(self) -> None:
+        report = self._report([_cost(1.0), _run(concluded=True, status="done"), _cost(9.0, live=False)])
+        self.assertEqual(report[C.ALERT_AUTO_BUILD],
+                         {C.ALERT_AUTO_BUILD_EVALUATED: True, C.ALERT_AUTO_BUILD_LIVE_RUNS: 2})
+        self.assertEqual((report["breaches"], report["warnings"], report["derived"]), (0, 1, True))
+        line = next(ln for ln in A.render_alerts(report) if ln.startswith("Auto-build:"))
+        self.assertEqual(line, "Auto-build: runs evaluated, 2 still running; a run at 80% of its cost "
+                               "or wall-clock cap warns, at 100% breaches.")
+
+    def test_cap_fr3_auto_build_alerts_sort_and_render_with_the_others(self) -> None:
+        status = _status(totals={"windows": {"today": _rollup(85.0), "7d": _rollup(85.0), "30d": _rollup(85.0)}})
+        report = A.all_alerts(
+            self.db, status, budgets=BudgetsConfig(100.0, None, None, None), runaway=_RUNAWAY,
+            noise=_NOISE, now=NOW, runs=[_cost(11.0), _clock(850)])
+        self.assertEqual([a["level"] for a in report["alerts"]],
+                         [C.ALERT_BREACH, C.ALERT_WARNING, C.ALERT_WARNING])
+        self.assertEqual([a["kind"] for a in report["alerts"]],
+                         [A.KIND_AUTO_BUILD_COST, A.KIND_AUTO_BUILD_WALL_CLOCK, A.KIND_BUDGET])
+        self.assertEqual((report["breaches"], report["warnings"]), (1, 2))
+        self.assertEqual(A.worst_level(report["alerts"]), C.ALERT_BREACH)
+        rendered = A.render_alerts(report)
+        self.assertTrue(rendered[0].startswith("[BREACH ] auto-build-cost: auto-build run"))
+        self.assertIn("has spent $11.00 of its $10.00 cap (110%)", rendered[0])
+        self.assertIn("[WARNING] auto-build-wall-clock:", rendered[1])
+        # The existing families keep their lines and their configuration.
+        self.assertIn("[WARNING] budget:", rendered[2])
+        self.assertTrue(any(ln.startswith("Budgets: ") for ln in rendered))
+        self.assertTrue(any(ln.startswith("Runaway: ") for ln in rendered))
+
+
+class TestAutoBuildAlertsOverALedgerRoot(RegistryResetTestCase):
+    """FR-4: the route reads the ledgers with the loaded auto_build config."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.dsn = self.sqlite_dsn()
+        db = Database.connect(self.dsn)
+        apply_ddl(db)
+        db.close()
+        started = datetime.now(timezone.utc) - timedelta(seconds=600)
+        self.root = _ledger_root(_live_state(
+            cost_usd=9.0, cap_usd=10.0, started=started, updated=datetime.now(timezone.utc)))
+
+    def _client(self, root: Path):
+        import importlib.util
+        from unittest import mock
+
+        if importlib.util.find_spec("fastapi") is None or importlib.util.find_spec("httpx") is None:
+            self.skipTest("fastapi/httpx not installed; API test skipped (covered in CI)")
+        from fastapi.testclient import TestClient
+
+        from session_analytics import config as cfgmod
+        from session_analytics._register import register_all
+        from session_analytics.api.server import create_app
+
+        register_all()
+        patches = [
+            mock.patch.object(cfgmod, "_USER_CONFIG", Path("/nonexistent/session-analytics.json")),
+            mock.patch.object(cfgmod, "parse_env_file", return_value={}),
+            mock.patch.dict("os.environ", {cfgmod.ENV_AUTO_BUILD_ROOT: str(root)}),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return TestClient(create_app(self.dsn), base_url="http://127.0.0.1:8765")
+
+    def test_cap_fr4_team_routes_carry_the_cap_alert(self) -> None:
+        client = self._client(self.root)
+        for path in ("/api/team/alerts", "/api/team/status"):
+            body = client.get(path).json()
+            report = body if path.endswith("alerts") else body["alerts"]
+            self.assertEqual(report[C.ALERT_AUTO_BUILD],
+                             {C.ALERT_AUTO_BUILD_EVALUATED: True, C.ALERT_AUTO_BUILD_LIVE_RUNS: 1}, path)
+            alert, = [a for a in report["alerts"] if a["kind"] == A.KIND_AUTO_BUILD_COST]
+            self.assertEqual((alert["level"], alert["subject"]["key"]), (C.ALERT_WARNING, RUN_KEY), path)
+            self.assertIn("has spent $9.00 of its $10.00 cap (90%)", alert["message"])
+
+    def test_cap_fr4_a_root_that_is_not_a_directory_is_zero_runs_not_an_error(self) -> None:
+        client = self._client(self.root / "nowhere")
+        report = client.get("/api/team/alerts").json()
+        self.assertEqual(report[C.ALERT_AUTO_BUILD],
+                         {C.ALERT_AUTO_BUILD_EVALUATED: True, C.ALERT_AUTO_BUILD_LIVE_RUNS: 0})
+        self.assertEqual(report["alerts"], [])
+        self.assertIn("Auto-build: runs evaluated, 0 still running", "\n".join(A.render_alerts(report)))
 
 
 if __name__ == "__main__":

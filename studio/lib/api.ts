@@ -1178,14 +1178,22 @@ export interface TeamDeveloper {
 }
 
 export interface TeamAlert {
-  kind: "budget" | "runaway-turns" | "runaway-errors" | "runaway-cost";
+  kind:
+    | "budget"
+    | "runaway-turns"
+    | "runaway-errors"
+    | "runaway-cost"
+    | "auto-build-cost"
+    | "auto-build-wall-clock";
   level: "warning" | "breach";
-  scope: "team" | "developer" | "project" | "session";
-  /** A developer id, a project path, "team", or the session (for runaway kinds). */
+  scope: "team" | "developer" | "project" | "session" | "run";
+  /** A developer id, a project path, "team", the session (runaway kinds),
+   *  or the auto-build run (auto-build kinds). */
   subject:
     | string
-    | { session_id: number; session_key: string; developer_id: string; project_path: string | null };
-  window?: "today" | "30d";
+    | { session_id: number; session_key: string; developer_id: string; project_path: string | null }
+    | { key: string; feature_id: string | null; ledger: string | null; pr_number: number | null };
+  window?: "today" | "30d" | null;
   /** One sentence, in words, with the figures and the threshold. */
   message: string;
   figures: Record<string, number>;

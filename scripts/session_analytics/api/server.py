@@ -1115,6 +1115,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
         on, and cost per developer / project / time window. Read-only;
         the store's dialect says whether it is shared."""
         from . import alerts as alerts_mod
+        from . import auto_build as auto_build_mod
         from . import team as team_mod
 
         cfg = load_config()
@@ -1126,9 +1127,11 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
             status = team_mod.team_status(
                 conn, noise=cfg.noise, active_window_seconds=seconds, aliases=cfg.team.aliases)
             # Alerts ride on the status so the tab is one fetch; they are
-            # derived from the same rows, never stored.
+            # derived from the same rows, never stored — and, for the
+            # auto-build caps, from the ledgers read on this request.
             status["alerts"] = alerts_mod.all_alerts(
                 conn, status, budgets=cfg.team.budgets, runaway=cfg.team.runaway, noise=cfg.noise,
+                runs=auto_build_mod.list_runs(conn, cfg.auto_build)["runs"],
             )
             return status
         finally:
@@ -1196,8 +1199,9 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
 
     @app.get("/api/team/alerts")
     def team_alerts() -> dict[str, Any]:
-        """Budget and runaway alerts alone (the cron/CI shape)."""
+        """Budget, runaway and auto-build cap alerts alone (the cron/CI shape)."""
         from . import alerts as alerts_mod
+        from . import auto_build as auto_build_mod
         from . import team as team_mod
 
         cfg = load_config()
@@ -1210,6 +1214,7 @@ def create_app(dsn: str, kuzu_path: str = "", ui_port: int = C.DEFAULT_UI_PORT):
                 aliases=cfg.team.aliases)
             return alerts_mod.all_alerts(
                 conn, status, budgets=cfg.team.budgets, runaway=cfg.team.runaway, noise=cfg.noise,
+                runs=auto_build_mod.list_runs(conn, cfg.auto_build)["runs"],
             )
         finally:
             conn.close()

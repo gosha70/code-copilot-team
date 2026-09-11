@@ -148,8 +148,14 @@ CFG_RUNAWAY_MAX_COST_RECENT = "max_cost_recent_usd"
 ALERT_WARNING = "warning"
 ALERT_BREACH = "breach"
 ALERT_LEVELS = (ALERT_WARNING, ALERT_BREACH)
-#: A budget alert starts warning at this share of the budget.
+#: A budget alert starts warning at this share of the budget, and at this
+#: share of an auto-build run's cost or wall-clock cap.
 BUDGET_WARNING_SHARE = 0.8
+#: The auto-build block of the alerts report (auto-build-cap-alerts): was
+#: the ledger root read at all, and how many runs were still running.
+ALERT_AUTO_BUILD = "auto_build"
+ALERT_AUTO_BUILD_EVALUATED = "evaluated"
+ALERT_AUTO_BUILD_LIVE_RUNS = "live_runs"
 
 # ── Auto-build runs (#190 §12, auto-build-run-surface) ──────────────────
 #: auto_build.* — where the auto-build driver's ledgers are read from and

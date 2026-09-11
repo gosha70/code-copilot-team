@@ -76,9 +76,15 @@ export const ALERT_STYLE: Record<TeamAlert["level"], string> = {
 };
 
 /** Where an alert points: a session page for runaway kinds, nothing
- *  for a budget scope. */
+ *  for a budget scope or an auto-build run. Keyed on the KIND, not on
+ *  the subject's shape: an auto-build alert's subject is an object too
+ *  (the run), and DeepSeek's review of the first revision found this
+ *  helper would have sent it to /sessions/undefined. */
 export function alertHref(a: TeamAlert): string | null {
-  return typeof a.subject === "object" ? `/sessions/${a.subject.session_id}` : null;
+  if (!a.kind.startsWith("runaway-")) return null;
+  return typeof a.subject === "object" && "session_id" in a.subject
+    ? `/sessions/${a.subject.session_id}`
+    : null;
 }
 
 /** "2 breaches, 1 warning" / "1 warning" / "" */

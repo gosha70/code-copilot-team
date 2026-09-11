@@ -942,6 +942,7 @@ try {
   else if (!/Budgets: team per day \$50\.00, per developer per day \$20\.00\./.test(tv.alertsEmptyNote(tvAlerts([], { budgets: { team_daily_usd: 50, team_monthly_usd: null, developer_daily_usd: 20, project_daily_usd: null } })))) fail("set budgets are named in the empty note");
   else if (tv.alertSummary(tvAlerts([tvRunaway, tvBudget])) !== "1 breach, 1 warning" || tv.alertSummary(tvAlerts([])) !== "") fail("alert summary");
   else if (tv.alertHref(tvRunaway) !== "/sessions/35" || tv.alertHref(tvBudget) !== null) fail("a runaway alert links to its session; a budget alert links nowhere");
+  else if (tv.alertHref({ kind: "auto-build-cost", level: "warning", scope: "run", subject: { key: "47908-474720888", feature_id: "auto-build-cap-alerts", ledger: "auto-build/auto-build-cap-alerts", pr_number: null }, window: null, message: "auto-build run … has spent $8.50 of its $10.00 cap (85%) and is still running.", figures: {} }) !== null) fail("an auto-build alert's object subject must not become a session link (/sessions/undefined)");
   else if (!/rose/.test(tv.ALERT_STYLE.breach) || !/amber/.test(tv.ALERT_STYLE.warning)) fail("breach is red, warning is amber");
   else console.log("  ok  alerts: the empty note says what is set and what a runaway is; breaches red, warnings amber; runaway alerts link to the session");
 

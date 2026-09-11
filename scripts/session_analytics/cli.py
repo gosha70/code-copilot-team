@@ -1069,17 +1069,24 @@ def _cmd_team(args: argparse.Namespace) -> int:
     if window <= 0:
         print("error: --window must be a positive number of seconds.", file=sys.stderr)
         return C.EXIT_USAGE
+    from .api import alerts as alerts_mod
+    from .api import auto_build as auto_build_mod
+
     db = Database.connect(cfg.dsn)
     try:
         apply_ddl(db)
         status = team_mod.team_status(
             db, noise=cfg.noise, active_window_seconds=window, aliases=cfg.team.aliases)
-        if args.action == "alerts":
-            from .api import alerts as alerts_mod
-
-            report = alerts_mod.all_alerts(
-                db, status, budgets=cfg.team.budgets, runaway=cfg.team.runaway, noise=cfg.noise,
-            )
+        # Both actions evaluate the same report, as /api/team/status does
+        # (the alerts ride on the status): budgets and runaway sessions
+        # from the store, the auto-build caps from the ledgers the config
+        # names — a root that is not a directory is zero runs, not an
+        # error. `team status` without them was FR-4's gap (review of
+        # PR #338).
+        report = alerts_mod.all_alerts(
+            db, status, budgets=cfg.team.budgets, runaway=cfg.team.runaway, noise=cfg.noise,
+            runs=auto_build_mod.list_runs(db, cfg.auto_build)["runs"],
+        )
     finally:
         db.close()
     if args.action == "alerts":
@@ -1092,10 +1099,14 @@ def _cmd_team(args: argparse.Namespace) -> int:
         # The exit code IS the alarm: a cron job or a pipeline step
         # fails on it. 1, not a usage/runtime code — nothing went wrong.
         return 1 if worst and alerts_mod.at_or_above(worst, args.fail_on) else C.EXIT_OK
+    status["alerts"] = report
     if args.json:
         print(json.dumps(status, indent=2))
         return C.EXIT_OK
     for line in team_mod.render_status(status):
+        print(line)
+    print("")
+    for line in alerts_mod.render_alerts(report):
         print(line)
     return C.EXIT_OK
 
