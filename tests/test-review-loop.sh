@@ -1268,6 +1268,9 @@ class H(BaseHTTPRequestHandler):
         if MODE == "rejects" and off:
             self.send_response(400); self.end_headers()
             self.wfile.write(b'{"error":{"message":"Unexpected field: chat_template_kwargs"}}'); return
+        if MODE == "rejects-enable" and off:
+            self.send_response(400); self.end_headers()
+            self.wfile.write(b'{"error":{"message":"unexpected field: enable_thinking"}}'); return
         if MODE == "rejects-thinking" and "thinking" in body:
             self.send_response(400); self.end_headers()
             self.wfile.write(b'{"error":{"message":"Unrecognized request argument supplied: thinking"}}'); return
@@ -1339,6 +1342,13 @@ assert_exit "a server that rejects the field is asked again without it" 0 "$RC"
 assert_eq "…two requests, the second without the field" "2" "$(wc -l < "$FAKE_DIR/rejects.log" | tr -d ' ')"
 assert_eq "…and the second has no chat_template_kwargs" "0" "$(tail -n 1 "$FAKE_DIR/rejects.log" | grep -c chat_template_kwargs | tr -d ' ')"
 assert_eq "…but keeps the DeepSeek field" "1" "$(tail -n 1 "$FAKE_DIR/rejects.log" | grep -c '"thinking": {"type": "disabled"}' | tr -d ' ')"
+kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
+# A body that names "enable_thinking" names the vLLM field, not DeepSeek's.
+FP=$(fake_port); fake_start rejects-enable "$FP" "$FAKE_DIR/rejects-enable.log"
+RC=0; OUT=$(bash "$ADP" --base-url "http://127.0.0.1:$FP/v1" --model m --input "$FAKE_DIR/req.md" --max-tokens 32 --no-thinking 2>&1) || RC=$?
+assert_exit "a 400 naming enable_thinking drops the vLLM field only" 0 "$RC"
+assert_eq "…the retry has no chat_template_kwargs" "0" "$(tail -n 1 "$FAKE_DIR/rejects-enable.log" | grep -c chat_template_kwargs | tr -d ' ')"
+assert_eq "…and still carries thinking.type=disabled" "1" "$(tail -n 1 "$FAKE_DIR/rejects-enable.log" | grep -c '"thinking": {"type": "disabled"}' | tr -d ' ')"
 kill "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null || true
 
 # ── Provider pricing: measured tokens at configured rates (2026-09-10) ──
@@ -1625,6 +1635,31 @@ assert_eq "D1: …its error names the primary's failure too" "timed out after 7s
     "$(jq -r '.provider_error.message' "$FR")"
 assert_eq "D1: …and the verdict stays INCONCLUSIVE" "INCONCLUSIVE" "$(jq -r '.verdict' "$FR")"
 rm -rf "$P"
+
+# The suffix is produced for any fallback failure, not only a timeout.
+D1_BOTH2_PROFILE=$(mktemp)
+cat > "$D1_BOTH2_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["spare"]
+[providers.mock]
+type = "cli"
+command = "printf 'Error: primary is broken\n' >&2; exit 1"
+timeout_sec = 10
+healthcheck = "true"
+[providers.spare]
+type = "cli"
+command = "printf 'Error: spare is broken too\n' >&2; exit 1"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$D1_BOTH2_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "D1: a fallback that fails with a plain error is a provider failure (exit 3)" 3 "$RC"
+assert_eq "D1: …and the suffix names the primary's failure" \
+    "Error: spare is broken too (after 'mock' failed first: Error: primary is broken)" \
+    "$(jq -r '.provider_error.message' "$P/.cct/review/findings-round-1.json")"
+rm -rf "$P" "$D1_BOTH2_PROFILE"
 
 # A fallback whose healthcheck fails is skipped; with nothing healthy the
 # round ends as before, with no fallback recorded.

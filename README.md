@@ -647,7 +647,9 @@ when the provider's invocation exits non-zero, the same request goes once
 to the next healthy provider in the subject's chain (never the failed one)
 and its verdict gates the round. A verdict from the first provider is
 final — the chain exists for "no review", never for a second opinion. Both
-invocations are debited, the findings name who failed and who answered,
+invocations are debited by the same rule as any invocation (measured when
+the adapter reported a cost, else the estimate), the findings name who
+failed and who answered,
 and the driver journals `reviewer_fallback` as a policy decision the Runs
 tab lists. If the fallback fails too, the round ends as before.
 
@@ -1290,7 +1292,7 @@ code-copilot-team/
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
 │   ├── test-peer-review.sh             58 peer-review runner tests
-│   ├── test-review-loop.sh           203 review loop integration tests
+│   ├── test-review-loop.sh           208 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
 │   ├── test-auto-build-loop.sh        1124 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests

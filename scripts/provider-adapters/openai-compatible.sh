@@ -184,10 +184,16 @@ if [[ "$rc" -ne 0 ]]; then
     if [[ "$rc" -eq 2 && "$NO_THINKING" == "true" && "$HTTP_STATUS" == "400" ]]; then
         # The server does not know a field: ask once more without the
         # one(s) it named, keeping the other.
+        # Each field is judged on its own name: the vLLM field by
+        # chat_template_kwargs or its key enable_thinking; DeepSeek's
+        # only by the bare word thinking (a quoted key or a word on its
+        # own), so "enable_thinking" never counts as DeepSeek's
+        # (DeepSeek's review of D1, 2026-09-11).
         keep_vllm=true; keep_deepseek=true
-        [[ "$RESPONSE" == *chat_template_kwargs* ]] && keep_vllm=false
-        [[ "$RESPONSE" == *thinking* && "$RESPONSE" != *chat_template_kwargs* ]] && keep_deepseek=false
-        [[ "$RESPONSE" == *chat_template_kwargs* && "$RESPONSE" == *'"thinking"'* ]] && keep_deepseek=false
+        [[ "$RESPONSE" == *chat_template_kwargs* || "$RESPONSE" == *enable_thinking* ]] && keep_vllm=false
+        if printf '%s' "$RESPONSE" | grep -qE '(^|[^_[:alnum:]])thinking([^_[:alnum:]]|$)'; then
+            keep_deepseek=false
+        fi
         if [[ "$keep_vllm" == "false" || "$keep_deepseek" == "false" ]]; then
             REQUEST_BODY=$(build_request_body "$keep_vllm" "$keep_deepseek")
             rc=0; send_request "$REQUEST_BODY" || rc=$?

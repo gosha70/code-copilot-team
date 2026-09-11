@@ -6,4 +6,4 @@
 | 2 | Driver debits the failed invocation and journals `reviewer_fallback`; the event is a policy decision on the Runs tab (FR-3) | `scripts/auto-build-loop.sh`, `scripts/session_analytics/constants.py` | [x] |
 | 3 | Runner and driver tests; pins (FR-4) | `tests/test-review-loop.sh`, `tests/test-auto-build-loop.sh`, `tests/test-counts.env`, `README.md` | [x] |
 | 4 | README paragraph | `README.md` | [x] |
-| 5 | DeepSeek review round over the branch (owner's request); findings acted on; artifact committed | `specs/auto-build-reviewer-fallback/collaboration/` | [ ] |
+| 5 | DeepSeek review round over the branch (owner's request); findings acted on; artifact committed | `specs/auto-build-reviewer-fallback/collaboration/` | [x] |

@@ -796,6 +796,8 @@ if [[ $REVIEW_EXIT -ne 0 ]]; then
     _failed_provider="$PEER_PROVIDER"
     _failed_error=$(provider_failure_message)
     _failed_cost=""
+    # Read NOW: invoke_reviewer clears the cost file at its start, so a
+    # read placed after the fallback invocation would lose this one.
     [[ -f "$CCT_REVIEW_COST_FILE" ]] && _failed_cost=$(read_invocation_cost "$CCT_REVIEW_COST_FILE")
     echo "Provider '$_failed_provider' produced no review (exit $REVIEW_EXIT): $_failed_error — trying the fallback chain for one more attempt..." >&2
     if resolve_fallback_provider "$SUBJECT_PROVIDER" "$_failed_provider"; then
