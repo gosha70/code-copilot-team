@@ -2440,7 +2440,7 @@ assert_exit "D2: the reviewer fails its round → terminated_policy (exit 6)" 6 
 LEDGER="$P/.cct/auto-build/demo-feat"
 BUILD_SHA=$(jq -r '.phases["1"].commits[-1]' "$LEDGER/state.json")
 assert_eq "D2: the build commit is the branch head" "$BUILD_SHA" "$(git -C "$P" rev-parse feature/demo-feat)"
-assert_contains "D2: the triage report says the reason is resumable" "$(cat "$LEDGER/triage-report.md")" "resumable at the review step"
+assert_contains "D2: the triage report says the reason may be resumable, and on what condition" "$(cat "$LEDGER/triage-report.md")" "MAY be resumable at the review step"
 # The fix is outside the frozen contract: a working reviewer profile.
 C2=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C2" --resume
 assert_exit "D2: --resume after the provider fix lands the run (exit 0)" 0 "$RC"
@@ -2481,8 +2481,22 @@ assert_exit "D2: a reviewer still broken fails the probe at re-admission (exit 6
 LEDGER="$P/.cct/auto-build/demo-feat"
 assert_contains "D2: …as provider_unavailable from the probe" "$(jq -r '.detail' "$LEDGER/termination.json")" "readiness probe"
 assert_eq "D2: …and the first termination is still kept" "1" "$(ls "$LEDGER"/termination-*.json 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "D2: …the status is terminated_policy again, not resumed" "terminated_policy" "$(jq -r '.status' "$LEDGER/state.json")"
+assert_eq "D2: …and the outcome too" "terminated_policy" "$(jq -r '.outcome' "$LEDGER/state.json")"
 assert_eq "D2: no build session ran" "0" "$(( $(cat "$C2" 2>/dev/null || echo 0) + 0 ))"
 rm -rf "$P" "$C1" "$C2" "$D2_STILL_BROKEN"
+
+# A ledger with no frozen base cannot be checked against the head:
+# refused, not silently allowed (DeepSeek's review of D2).
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+C1=$(mktemp); d2_run "$P" "$D2_BROKEN_PROFILE" "$C1"
+assert_exit "D2: termination for the no-base case (exit 6)" 6 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat"
+jq 'del(.branch_base_ref)' "$LEDGER/state.json" > "$LEDGER/state.tmp" && mv "$LEDGER/state.tmp" "$LEDGER/state.json"
+C2=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C2" --resume
+assert_exit "D2: a ledger without a frozen base refuses (exit 1)" 1 "$RC"
+assert_contains "D2: …and says so" "$OUTPUT" "records no frozen base"
+rm -rf "$P" "$C1" "$C2"
 
 # Refusals: the branch moved past the phase's commit; a cap termination.
 P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"

@@ -664,7 +664,9 @@ under dated names, sets the failed round's review state aside, reopens the
 outcome, and runs the review step again over the same commit — never the
 build. Costs accumulate across the termination and the resume against the
 same cap. A cap, an accounting, a runner or an origin termination still
-needs a fresh run; the triage report says which case you have.
+needs a fresh run, as does a ledger that records no frozen base or whose
+branch moved past the phase's commit; the triage report says which case
+you may have, and `--resume` says why when it refuses.
 
 **Pricing a hosted reviewer.** An OpenAI-compatible provider whose
 `providers.toml` entry carries `price_usd_per_mtok_input` and
@@ -1307,7 +1309,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh           213 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1159 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1164 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)

@@ -346,10 +346,11 @@ triage_report() {
         echo "Review the reason and this ledger, then resolve the boundary."
         case "$reason" in
             provider_unavailable|review_breaker)
-                echo "This reason is resumable at the review step (#190 D2): with the"
-                echo "phase's build commit still the branch head, fix the provider or"
-                echo "the breaker's cause outside the frozen contract and rerun with"
-                echo "--resume; admission (the reviewer probe included) runs again first."
+                echo "This reason MAY be resumable at the review step (#190 D2), if the"
+                echo "phase's build commit is still the branch head and the frozen base"
+                echo "its ancestor: fix the provider or the breaker's cause outside the"
+                echo "frozen contract and rerun with --resume; preflight (the reviewer"
+                echo "probe included) runs again first, and --resume says why if it refuses."
                 ;;
             *)
                 echo "This reason ($reason) has no resume arm: a cap, an accounting, a"
@@ -4760,6 +4761,10 @@ terminated_resumable() {
             echo "termination reason '${reason:-unknown}' has no resume arm (a cap, an accounting, a runner or an origin termination needs a fresh run: scripts/auto-build-loop.sh $FEATURE_ID)"
             return 1 ;;
     esac
+    if [[ ! -f "$LEDGER_DIR/termination.json" ]]; then
+        echo "the ledger has no termination.json to resume from; start a fresh run"
+        return 1
+    fi
     history=$(jq -c '.history // null' "$LEDGER_DIR/termination.json" 2>/dev/null || echo null)
     local why
     if ! why=$(escalation_resumable "$reason" "$history"); then
@@ -4772,17 +4777,32 @@ terminated_resumable() {
         echo "phase $phase has no build commit to resume from; start a fresh run"
         return 1
     fi
-    head=$(git -C "$PROJECT_DIR" rev-parse --verify -q "$BRANCH_NAME" 2>/dev/null || echo "")
-    if [[ "$head" != "$last_commit" ]]; then
+    # Both sides canonical full SHAs: the ledger's value and the branch
+    # ref resolved by the same git (DeepSeek's review of D2).
+    last_commit=$(git -C "$PROJECT_DIR" rev-parse --verify -q "${last_commit}^{commit}" 2>/dev/null || echo "")
+    head=$(git -C "$PROJECT_DIR" rev-parse --verify -q "refs/heads/$BRANCH_NAME" 2>/dev/null || echo "")
+    if [[ -z "$last_commit" || -z "$head" || "$head" != "$last_commit" ]]; then
         echo "branch '$BRANCH_NAME' is at ${head:0:12} but phase $phase's last commit is ${last_commit:0:12}; the frozen contract no longer describes the head — start a fresh run"
         return 1
     fi
     base=$(state_get '.branch_base_ref // empty')
-    if [[ -n "$base" ]] && ! git -C "$PROJECT_DIR" merge-base --is-ancestor "$base" "$head" 2>/dev/null; then
+    if [[ -z "$base" ]]; then
+        echo "the ledger records no frozen base (branch_base_ref), so the contract cannot be checked against the head; start a fresh run"
+        return 1
+    fi
+    if ! git -C "$PROJECT_DIR" merge-base --is-ancestor "$base" "$head" 2>/dev/null; then
         echo "the frozen base ${base:0:12} is no longer an ancestor of the branch head; start a fresh run"
         return 1
     fi
     return 0
+}
+
+# unique_sibling <path> — <path> itself, or <path>-<n> when it exists
+# (a second resume within the same second must not collide).
+unique_sibling() {
+    local want="$1" n=1
+    while [[ -e "$want" ]]; do want="$1-$n"; n=$((n + 1)); done
+    printf '%s' "$want"
 }
 
 # resume_terminated — the ledger keeps every artifact of the
@@ -4791,19 +4811,34 @@ terminated_resumable() {
 # round); run_phase then resumes at review because the build commit
 # exists. Journaled as `resumed`, so the Runs tab lists the decision.
 resume_terminated() {
-    local reason stamp
+    # Step 0 decided; branch binding, prerequisites and preflight ran
+    # since. Nothing there moves the branch, but the decision is
+    # re-checked here so the resume never proceeds on a stale one.
+    local why
+    if ! why=$(terminated_resumable); then
+        refuse_resume "the run stopped being resumable between admission and dispatch: $why"
+    fi
+    local reason stamp term triage
     reason=$(state_get '.disposition_reason // empty')
     stamp=$(now_epoch)
-    [[ -f "$LEDGER_DIR/termination.json" ]] && mv "$LEDGER_DIR/termination.json" "$LEDGER_DIR/termination-$stamp.json"
-    [[ -f "$LEDGER_DIR/triage-report.md" ]] && mv "$LEDGER_DIR/triage-report.md" "$LEDGER_DIR/triage-report-$stamp.md"
+    term=$(unique_sibling "$LEDGER_DIR/termination-$stamp.json")
+    mv "$LEDGER_DIR/termination.json" "$term"
+    if [[ -f "$LEDGER_DIR/triage-report.md" ]]; then
+        triage=$(unique_sibling "$LEDGER_DIR/triage-report-$stamp.md")
+        mv "$LEDGER_DIR/triage-report.md" "$triage"
+    fi
     if [[ -d "$PROJECT_DIR/.cct/review" ]]; then
-        local _stale="$PROJECT_DIR/.cct/review-stale-$stamp"
+        local _stale
+        _stale=$(unique_sibling "$PROJECT_DIR/.cct/review-stale-$stamp")
         mv "$PROJECT_DIR/.cct/review" "$_stale"
         journal "review_state_reset" "review state of the terminated round set aside at ${_stale#$PROJECT_DIR/}; the review step starts a fresh loop"
     fi
-    state_set '.status = "resumed" | .outcome = null | .disposition_reason = null | .updated = $t' \
-        --arg t "$(now_iso)"
-    journal "resumed" "after terminated_policy ($reason): the phase's build commit is the branch head and admission passed again — the review step runs again (#190 D2); the termination is kept as termination-$stamp.json"
+    # "resumed" is the driver's in-progress status for a continued run
+    # (the same value the milestone resume uses); the review step that
+    # follows writes terminated_policy again if it must.
+    state_set '.outcome = null | .disposition_reason = null | .updated = $t' --arg t "$(now_iso)"
+    set_status "resumed"
+    journal "resumed" "after terminated_policy ($reason): the phase's build commit is the branch head and admission passed again — the review step runs again (#190 D2); the termination is kept as $(basename "$term")"
     echo "[auto-build] resuming at the review step after terminated_policy ($reason)" >&2
 }
 
