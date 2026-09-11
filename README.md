@@ -653,6 +653,19 @@ failed and who answered,
 and the driver journals `reviewer_fallback` as a policy decision the Runs
 tab lists. If the fallback fails too, the round ends as before.
 
+**Resuming a terminated run at the review step (#190 D2).** Under the
+unattended profile a `terminated_policy` run can be resumed when the fix
+was outside the frozen contract: the reason is `provider_unavailable` or
+`review_breaker`, the phase's build commit is still the branch head, and
+the frozen base is its ancestor. `--resume` then re-enters preflight (the
+frozen admission record is reused, the reviewer probe runs again), keeps
+`termination.json` and the triage report
+under dated names, sets the failed round's review state aside, reopens the
+outcome, and runs the review step again over the same commit — never the
+build. Costs accumulate across the termination and the resume against the
+same cap. A cap, an accounting, a runner or an origin termination still
+needs a fresh run; the triage report says which case you have.
+
 **Pricing a hosted reviewer.** An OpenAI-compatible provider whose
 `providers.toml` entry carries `price_usd_per_mtok_input` and
 `price_usd_per_mtok_output` (both, in USD per million tokens) is measured
@@ -1294,7 +1307,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh           213 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1128 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1159 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)
