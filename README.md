@@ -638,6 +638,19 @@ Unmetered reviewer invocations are debited as flagged conservative estimates,
 and the line says so when any estimate is included. The final
 `automation-summary.md` repeats the metered/estimated split.
 
+**Reviewer fallback at round time (#190 D1).** A reviewer that passes its
+healthcheck and the probe can still produce no review on the real request
+(a broken CLI, a reasoning model with no content left): three of five real
+unattended runs ended there while a healthy fallback sat unused, because
+the profile's `fallback_chain` was consulted only at healthcheck time. Now,
+when the provider's invocation exits non-zero, the same request goes once
+to the next healthy provider in the subject's chain (never the failed one)
+and its verdict gates the round. A verdict from the first provider is
+final — the chain exists for "no review", never for a second opinion. Both
+invocations are debited, the findings name who failed and who answered,
+and the driver journals `reviewer_fallback` as a policy decision the Runs
+tab lists. If the fallback fails too, the round ends as before.
+
 **Pricing a hosted reviewer.** An OpenAI-compatible provider whose
 `providers.toml` entry carries `price_usd_per_mtok_input` and
 `price_usd_per_mtok_output` (both, in USD per million tokens) is measured
@@ -1277,9 +1290,9 @@ code-copilot-team/
 │   ├── test-coverage-parse.sh           46 coverage parser + safety tests
 │   ├── test-verification-preset.sh      43 preset resolution tests
 │   ├── test-peer-review.sh             58 peer-review runner tests
-│   ├── test-review-loop.sh           172 review loop integration tests
+│   ├── test-review-loop.sh           194 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1118 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1124 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)

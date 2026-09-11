@@ -4241,6 +4241,21 @@ run_review_loop() {
         local _debit_rc=0
         if [[ $rc -ne 2 ]]; then
             debit_review_costs "$post_frf" "gating review phase $n round $round" || _debit_rc=$?
+            # #190 D1: the runner fell back once to the next healthy
+            # reviewer after the configured one produced no review. Two
+            # invocations, two debits; the switch is a policy decision
+            # the ledger names — which provider gated this round is never
+            # implicit.
+            if [[ $_debit_rc -eq 0 && -n "${post_frf:-}" ]] && jq -e '.fallback' "$post_frf" >/dev/null 2>&1; then
+                local _fb_from _fb_err _fb_cost _fb_to
+                _fb_from=$(jq -r '.fallback.from // "?"' "$post_frf")
+                _fb_err=$(jq -r '.fallback.error // "no review"' "$post_frf")
+                _fb_to=$(jq -r '.reviewer_provider // "?"' "$post_frf")
+                _fb_cost=$(jq -r 'if ((.fallback.invocation_cost_usd | type) == "number") and (.fallback.invocation_cost_usd >= 0)
+                                  then .fallback.invocation_cost_usd else empty end' "$post_frf" 2>/dev/null)
+                debit_invocation_cost "$_fb_cost" "gating review phase $n round $round, failed invocation of '$_fb_from'" || _debit_rc=$?
+                journal "reviewer_fallback" "phase $n round $round: '$_fb_from' produced no review ($_fb_err) — the same request went to '$_fb_to', which gated the round"
+            fi
         fi
         if [[ $_debit_rc -ne 0 ]]; then
             dispose "cost_accounting_failed" "the gating review's cost could not be recorded in the ledger (phase $n round $round) — refusing to continue with caps that cannot be enforced" "null"

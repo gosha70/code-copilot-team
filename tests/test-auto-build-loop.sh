@@ -2284,7 +2284,48 @@ assert_eq "…and the failed round is debited like any invocation (probe + round
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 assert_eq "…journaled as the gating review's cost" "1" \
     "$(grep -c '"cost_review".*gating review phase 1 round 1' "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null | tr -d ' ')"
-rm -rf "$P" "$PROBE_OK_ROUND_BROKEN" "$PROBE_OK_PROFILE"
+rm -rf "$P"
+
+# #190 D1: the same reviewer with a healthy fallback in the chain — the
+# round goes to the fallback, the run lands, the ledger names the switch
+# as a policy decision and debits all three invocations (probe, the
+# failed one, the one that answered).
+D1_DRIVER_PROFILE=$(mktemp)
+cat > "$D1_DRIVER_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["spare"]
+[providers.mock]
+type = "cli"
+command = "bash $PROBE_OK_ROUND_BROKEN {review_request}"
+timeout_sec = 10
+healthcheck = "true"
+[providers.spare]
+type = "cli"
+command = "printf '### Summary\nSpare looked.\n\n### Findings\n\n### Verdict\nPASS\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$D1_DRIVER_PROFILE" run_driver "$P"
+assert_exit "D1: with a healthy fallback the round completes and the run lands (exit 0)" 0 "$RC"
+EV="$P/.cct/auto-build/demo-feat/events.jsonl"
+assert_contains "D1: the switch is journaled as a policy decision" "$(cat "$EV" 2>/dev/null)" \
+    "\"reviewer_fallback\""
+assert_contains "D1: …naming who failed, why, and who gated the round" "$(cat "$EV" 2>/dev/null)" \
+    "'mock' produced no review (Error: the model returned no content: it spent its budget on hidden reasoning) — the same request went to 'spare', which gated the round"
+assert_eq "D1: probe + failed invocation + answering invocation = three estimates" "6" \
+    "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
+assert_contains "D1: the failed invocation's debit is labelled" "$(cat "$EV" 2>/dev/null)" \
+    "failed invocation of 'mock'"
+assert_eq "D1: the archived round names the answering provider" "spare" \
+    "$(jq -r '.reviewer_provider' "$P/.cct/auto-build/demo-feat/phase-1/review/findings-round-1.json" 2>/dev/null)"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE" "$D1_DRIVER_PROFILE" "$PROBE_OK_ROUND_BROKEN" "$PROBE_OK_PROFILE"
 
 # A SILENT provider failure (non-zero exit, no output) must reach the same
 # park. Under pipefail the runner's error extraction aborted the script, so

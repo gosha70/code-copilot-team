@@ -1504,6 +1504,127 @@ assert_eq "one output-format text for rounds and probes" "1" \
 rm -rf "$PP" "$PROBE_PROFILE" "$NOCHAIN_PROFILE"
 
 # ══════════════════════════════════════════════════════════════
+echo "=== #190 D1: a round whose provider produced no review falls back once ==="
+# ══════════════════════════════════════════════════════════════
+# Three of five real runs ended with a provider that passed its
+# healthcheck and produced no review on the real request, while a
+# healthy fallback was configured and never asked. The same request now
+# goes once to the next healthy provider in the chain; a verdict from
+# the first provider is final; the failed provider is never its own
+# fallback; both invocations are recorded.
+
+D1_MARK=$(mktemp -u)
+D1_PROFILE=$(mktemp)
+cat > "$D1_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["mock", "spare"]
+[providers.mock]
+type = "cli"
+command = "printf 'Error: the model returned no content: hidden reasoning\n' >&2; exit 1"
+timeout_sec = 10
+healthcheck = "true"
+[providers.spare]
+type = "cli"
+command = "touch $D1_MARK && printf '### Summary\nSpare looked.\n\n### Findings\n\n### Verdict\nPASS\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$D1_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+FR="$P/.cct/review/findings-round-1.json"
+assert_exit "D1: primary produced no review, the fallback answered → the round passes (exit 0)" 0 "$RC"
+assert_eq "D1: the findings name the provider that answered" "spare" "$(jq -r '.reviewer_provider' "$FR")"
+assert_eq "D1: …and the one that failed" "mock" "$(jq -r '.fallback.from' "$FR")"
+assert_contains "D1: …with its error kept" "$(jq -r '.fallback.error' "$FR")" "hidden reasoning"
+assert_eq "D1: the failed invocation is unmetered (null), not free" "null" "$(jq -r '.fallback.invocation_cost_usd' "$FR")"
+assert_eq "D1: the verdict is the fallback's" "PASS" "$(jq -r '.verdict' "$FR")"
+assert_eq "D1: no provider_error on a round the fallback completed" "0" "$(jq -r 'has("provider_error") | if . then 1 else 0 end' "$FR")"
+assert_eq "D1: the round counts both invocations" "2" "$(jq -r '.cost.invocations' "$P/.cct/review/state.json")"
+assert_eq "D1: …both unmetered" "2" "$(jq -r '.cost.unmetered_invocations' "$P/.cct/review/state.json")"
+assert_contains "D1: the console says who failed and who was tried" "$OUTPUT" "Skipping 'mock' (the provider that just failed)"
+assert_contains "D1: …and that the round ran again via the fallback" "$OUTPUT" "again via fallback 'spare'"
+assert_eq "D1: the collaboration artifact names the answering provider" "spare" \
+    "$(grep -m1 '^peer_provider:' "$P/specs/test-feat/collaboration/build-review.md" | awk '{print $2}')"
+rm -rf "$P" "$D1_MARK"
+
+# A verdict from the first provider is final: FAIL never consults the chain.
+D1_FAIL_PROFILE=$(mktemp)
+cat > "$D1_FAIL_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["spare"]
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nIssues.\n\n### Findings\nFINDING|blocking|correctness|src/app.sh|near main|Missing check|Add check\n\n### Verdict\nFAIL\n'"
+timeout_sec = 10
+healthcheck = "true"
+[providers.spare]
+type = "cli"
+command = "touch $D1_MARK && printf '### Summary\nSpare.\n\n### Findings\n\n### Verdict\nPASS\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$D1_FAIL_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+assert_exit "D1: a FAIL verdict is final (exit 1)" 1 "$RC"
+assert_eq "D1: …the fallback was never invoked" "0" "$([[ -f "$D1_MARK" ]] && echo 1 || echo 0)"
+assert_eq "D1: …and the findings carry no fallback" "0" "$(jq -r 'has("fallback") | if . then 1 else 0 end' "$P/.cct/review/findings-round-1.json")"
+rm -rf "$P" "$D1_MARK"
+
+# Both fail: the round ends as before (exit 3) and the detail names both.
+D1_BOTH_PROFILE=$(mktemp)
+cat > "$D1_BOTH_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["spare"]
+[providers.mock]
+type = "cli"
+command = "printf 'Error: primary is broken\n' >&2; exit 1"
+timeout_sec = 10
+healthcheck = "true"
+[providers.spare]
+type = "cli"
+command = "exit 124"
+timeout_sec = 7
+healthcheck = "true"
+TOML
+P=$(setup_project); write_state "$P" 0
+RC=0; CCT_PROVIDER_PROFILE="$D1_BOTH_PROFILE" bash "$RUNNER" "$P" >/dev/null 2>&1 || RC=$?
+FR="$P/.cct/review/findings-round-1.json"
+assert_exit "D1: primary and fallback both fail → provider failure (exit 3)" 3 "$RC"
+assert_eq "D1: the failing provider on record is the fallback" "spare" "$(jq -r '.reviewer_provider' "$FR")"
+assert_eq "D1: …its error names the primary's failure too" "timed out after 7s (after 'mock' failed first: Error: primary is broken)" \
+    "$(jq -r '.provider_error.message' "$FR")"
+assert_eq "D1: …and the verdict stays INCONCLUSIVE" "INCONCLUSIVE" "$(jq -r '.verdict' "$FR")"
+rm -rf "$P"
+
+# A fallback whose healthcheck fails is skipped; with nothing healthy the
+# round ends as before, with no fallback recorded.
+D1_DOWN_PROFILE=$(mktemp)
+cat > "$D1_DOWN_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+fallback_chain.claude = ["spare"]
+[providers.mock]
+type = "cli"
+command = "exit 1"
+timeout_sec = 10
+healthcheck = "true"
+[providers.spare]
+type = "cli"
+command = "true"
+timeout_sec = 10
+healthcheck = "false"
+TOML
+P=$(setup_project); write_state "$P" 0
+RC=0; OUTPUT=$(CCT_PROVIDER_PROFILE="$D1_DOWN_PROFILE" bash "$RUNNER" "$P" 2>&1) || RC=$?
+assert_exit "D1: an unhealthy fallback is not tried (exit 3)" 3 "$RC"
+assert_eq "D1: …no fallback recorded" "0" "$(jq -r 'has("fallback") | if . then 1 else 0 end' "$P/.cct/review/findings-round-1.json")"
+assert_contains "D1: …and the console says so" "$OUTPUT" "No healthy fallback for 'mock'"
+rm -rf "$P" "$D1_PROFILE" "$D1_FAIL_PROFILE" "$D1_BOTH_PROFILE" "$D1_DOWN_PROFILE"
+
+# ══════════════════════════════════════════════════════════════
 # Summary
 # ══════════════════════════════════════════════════════════════
 
