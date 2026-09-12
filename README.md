@@ -653,10 +653,22 @@ failed and who answered,
 and the driver journals `reviewer_fallback` as a policy decision the Runs
 tab lists. If the fallback fails too, the round ends as before.
 
+**An inconclusive review stops the round (run 6).** A reviewer that answers
+INCONCLUSIVE with no blocking finding could not judge — it was shown a
+truncated diff, or could not read it — and that is not review feedback.
+The round stops for review recovery (`review_inconclusive`: a park under
+attended profiles, a termination under `unattended`); no fix session is
+run on a verdict that judged nothing, and it never becomes a PASS. Fix the
+cause — the diff the reviewer is shown is capped by
+`CCT_REVIEW_DIFF_MAX_LINES` (default 500 lines), the existing control —
+and `--resume` runs the review again over the same build commit.
+INCONCLUSIVE with a blocking finding still has something to fix and keeps
+the fix session.
+
 **Resuming a terminated run at the review step (#190 D2).** Under the
 unattended profile a `terminated_policy` run can be resumed when the fix
-was outside the frozen contract: the reason is `provider_unavailable` or
-`review_breaker`, the phase's build commit is still the branch head, and
+was outside the frozen contract: the reason is `provider_unavailable`,
+`review_breaker` or `review_inconclusive`, the phase's build commit is still the branch head, and
 the frozen base is its ancestor. `--resume` then re-enters preflight (the
 frozen admission record is reused, the reviewer probe runs again), keeps
 `termination.json` and the triage report
@@ -1309,7 +1321,7 @@ code-copilot-team/
 │   ├── test-peer-review.sh             58 peer-review runner tests
 │   ├── test-review-loop.sh           213 review loop integration tests
 │   ├── test-setup-reviewer.sh           42 copilot reviewer installer tests
-│   ├── test-auto-build-loop.sh        1191 auto-build driver tests
+│   ├── test-auto-build-loop.sh        1206 auto-build driver tests
 │   ├── test-ui-harness.sh              87 visual-harness contract tests
 │   ├── test-routing-config.sh         365 execution-profile registry + result + cli tests
 │   ├── test-routing-failover.sh       227 circuit + action + selection + supervisor + identity tests (#251 B)
