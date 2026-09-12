@@ -96,7 +96,8 @@ model = "qwen38-27b"
 timeout_sec = 900
 max_tokens = 8192
 temperature = 0.1
-disable_thinking = true      # Qwen3 otherwise spends the budget on hidden reasoning
+# Qwen3 otherwise spends the budget on hidden reasoning.
+disable_thinking = true
 healthcheck = "curl -sf http://192.168.1.23:8001/v1/models"
 ```
 
@@ -122,9 +123,16 @@ merge the request into the stream the runner parses.
 
 ```toml
 [defaults]
-peer_for.claude = "deepseek"          # what --peer-review uses with no name
-fallback_chain.claude = ["spark"]     # tried, in order, when the peer fails
+# What --peer-review uses when no name is given.
+peer_for.claude = "deepseek"
+# Tried in order when the peer fails.
+fallback_chain.claude = ["spark"]
 ```
+
+Comments go on their own lines: the profile parser keeps everything
+after `=` as the value, so a trailing `# …` on a value line becomes
+part of the provider name or makes `disable_thinking = true` fail its
+exact comparison.
 
 The chain is consulted twice: when the peer fails its **healthcheck**
 before a round, and — since #190 D1 — when the peer **ran and produced
