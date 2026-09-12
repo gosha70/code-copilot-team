@@ -80,6 +80,47 @@ export function dispositionLine(run: AutoBuildRun): string {
   return d.detail ? `${d.reason}${where} — ${d.detail}` : `${d.reason}${where}`;
 }
 
+/** "deepseek answered PASS in 17s, $0.12" — the readiness probe the
+ *  driver put the gating reviewer through before the first phase. A
+ *  probe that answered nothing still names who was asked and why. */
+export function probeLine(run: AutoBuildRun): string {
+  const p = run.probe;
+  if (!p) return "no reviewer probe recorded";
+  const who = p.provider ?? p.requested_provider ?? "the gating reviewer";
+  const verdict = p.verdict ?? "no parseable verdict";
+  const cost =
+    p.invocation_cost_usd === null ? "unmetered" : usd(p.invocation_cost_usd);
+  // Mirrors _probe_line: an unrecorded duration is said, not shown as 0s.
+  const took =
+    p.duration_sec === null ? "unrecorded time" : `${p.duration_sec}s`;
+  const line = `${who} answered ${verdict} in ${took}, ${cost}`;
+  return p.error ? `${line} — ${p.error}` : line;
+}
+
+/** "landed after 1 earlier termination (provider_unavailable)" — a run
+ *  that was resumed is not read as a plain landing. "" when the run
+ *  survived none. */
+export function earlierTerminationsLine(run: AutoBuildRun): string {
+  const earlier = run.earlier_terminations;
+  if (!earlier.length) return "";
+  const reasons = earlier.map((e) => e.reason ?? "unknown reason").join(", ");
+  const what = run.outcome ?? `still ${run.status ?? "running"}`;
+  return `${what} after ${earlier.length} earlier termination${earlier.length === 1 ? "" : "s"} (${reasons})`;
+}
+
+/** One line per phase whose newest review round changed reviewer
+ *  mid-round: who produced no review, and who gated the round instead. */
+export function fallbackLines(run: AutoBuildRun): string[] {
+  return run.fallbacks.map((f) => {
+    const why = f.error ? ` (${f.error})` : "";
+    return (
+      `phase ${f.phase ?? "?"} round ${f.round ?? "?"}: ` +
+      `${f.from ?? "the reviewer"} produced no review${why}; ` +
+      `${f.to ?? "a fallback"} gated the round`
+    );
+  });
+}
+
 function usd(v: number | null): string {
   return v === null ? "—" : `$${v.toFixed(2)}`;
 }
