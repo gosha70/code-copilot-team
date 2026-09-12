@@ -959,6 +959,7 @@ try {
     phases: { planned: 1, done: 1, current: 1, items: [{ n: 1, title: "US1", status: "done", rounds: 1, review_verdict: "PASS", fix_sessions: 0, commits: 2 }] },
     verifiers: { admission_mapped: 4, results: { green: 4, total: 4, frs: [] } },
     policy_decisions: [{ ts: "t", event: "merge_skipped", detail: "merge.enabled=false" }], escalations: 0,
+    probe: null, earlier_terminations: [], fallbacks: [],
     scores: null, pr: { number: 331, url: "https://example/pr/331" }, ledger: "auto-build/team-developer-aliases", verdict: null, ...o,
   });
   const rvPayload = (runs, o = {}) => ({
@@ -1007,6 +1008,29 @@ try {
   else if (rv.policyLine(rvRun()) !== "1 policy decision" || rv.policyLine(rvRun({ policy_decisions: [] })) !== "no policy decisions recorded") fail("policy line");
   else if (rv.scoresLine(rvRun()) !== "no scores recorded") fail("scores: absence is said, not drawn as zero");
   else console.log("  ok  phases, verifiers (incl. not run / no contract), policy decisions and the absent score channel each read as one honest line");
+  // runs-attempt-history FR-5: the probe, a round-time fallback, and the
+  // terminations a run survived before it landed.
+  const rvProbed = rvRun({ probe: { provider: "deepseek", requested_provider: "codex", verdict: "PASS", parseable: true, duration_sec: 17, invocation_cost_usd: 0.1234, error: null } });
+  const rvUnanswered = rvRun({ probe: { provider: null, requested_provider: "codex", verdict: null, parseable: false, duration_sec: 0, invocation_cost_usd: null, error: "no provider in the chain for codex passed its healthcheck" } });
+  const rvTermination = (reason, created, file) => ({ reason, detail: "the gating reviewer answered nothing", phase: 1, created, file });
+  const rvResumed = rvRun({ earlier_terminations: [rvTermination("provider_unavailable", "2026-09-09T02:00:00Z", "termination-1788900000.json")] });
+  const rvResumedTwice = rvRun({ outcome: null, status: "building", concluded: false, earlier_terminations: [rvTermination("provider_unavailable", "2026-09-09T02:00:00Z", "termination-1788900000.json"), rvTermination("review_breaker", "2026-09-09T05:00:00Z", "termination-1788910000.json")] });
+  const rvFellBack = rvRun({ fallbacks: [{ phase: 1, round: 2, from: "codex", error: "timed out after 900s", to: "deepseek" }] });
+  // The renderer mirrors _probe_line/_fallback_line in api/auto_build.py:
+  // an untimed probe and an unnumbered phase must read the same in both.
+  const rvUntimed = rvRun({ probe: { provider: "deepseek", requested_provider: "codex", verdict: "PASS", parseable: true, duration_sec: null, invocation_cost_usd: null, error: null } });
+  const rvFellBackOddPhase = rvRun({ fallbacks: [{ phase: null, round: 1, from: null, error: null, to: null }] });
+  if (rv.probeLine(rvProbed) !== "deepseek answered PASS in 17s, $0.12") fail(`probe line: ${rv.probeLine(rvProbed)}`);
+  else if (rv.probeLine(rvUntimed) !== "deepseek answered PASS in unrecorded time, unmetered") fail(`untimed probe reads as 0s: ${rv.probeLine(rvUntimed)}`);
+  else if (rv.fallbackLines(rvFellBackOddPhase).join("") !== "phase ? round 1: the reviewer produced no review; a fallback gated the round") fail(`fallback with nothing named: ${rv.fallbackLines(rvFellBackOddPhase).join(" | ")}`);
+  else if (rv.probeLine(rvRun()) !== "no reviewer probe recorded") fail("a run without a probe says so rather than showing nothing");
+  else if (rv.probeLine(rvUnanswered) !== "codex answered no parseable verdict in 0s, unmetered — no provider in the chain for codex passed its healthcheck") fail(`unanswered probe: ${rv.probeLine(rvUnanswered)}`);
+  else if (rv.earlierTerminationsLine(rvResumed) !== "landed after 1 earlier termination (provider_unavailable)") fail(`earlier terminations: ${rv.earlierTerminationsLine(rvResumed)}`);
+  else if (rv.earlierTerminationsLine(rvRun()) !== "" || rv.earlierTerminationsLine(rvTerminated) !== "") fail("a run that survived no termination says nothing");
+  else if (rv.earlierTerminationsLine(rvResumedTwice) !== "still building after 2 earlier terminations (provider_unavailable, review_breaker)") fail(`resumed twice: ${rv.earlierTerminationsLine(rvResumedTwice)}`);
+  else if (rv.fallbackLines(rvFellBack).join("") !== "phase 1 round 2: codex produced no review (timed out after 900s); deepseek gated the round") fail(`fallback lines: ${rv.fallbackLines(rvFellBack).join(" | ")}`);
+  else if (rv.fallbackLines(rvRun()).length !== 0) fail("a run whose rounds never fell back lists no fallback");
+  else console.log("  ok  the probe's answer, the reviewer that gated a fallen-back round, and a landing after an earlier termination each read as one line");
   // FR-4/FR-7: the verdict control and line.
   const rvLabelled = rvRun({ verdict: { verdict: "merged_with_fixes", note: "FR-3 fixed by hand", set_at: "2026-09-09T20:00:00Z" } });
   if (rv.verdictLine(rvRun()) !== "no verdict yet") fail("no verdict → said");

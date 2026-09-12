@@ -96,13 +96,28 @@ def _int(value: Any) -> Optional[int]:
         return None
 
 
+def _str(value: Any) -> Optional[str]:
+    """A string field of the record, or None. A non-string in the ledger
+    is never coerced: the API declares these `string | null`, and the
+    repr of a dict is not a provider name or a verdict."""
+    return value if isinstance(value, str) and value else None
+
+
+def _phase_order(key: str) -> tuple[int, int, str]:
+    """One order for every per-phase list: numeric keys in numeric order,
+    any other key after all of them in name order — a key that is not a
+    number is not phase 0."""
+    n = _int(key)
+    return (1, 0, key) if n is None else (0, n, "")
+
+
 def _phases(state: dict[str, Any], ledger: Path) -> list[dict[str, Any]]:
     """Per-phase facts from the state plus each phase's review summary."""
     out: list[dict[str, Any]] = []
     raw = state.get("phases") or {}
     if not isinstance(raw, dict):
         return out
-    for key in sorted(raw, key=lambda k: _int(k) if _int(k) is not None else 0):
+    for key in sorted(raw, key=_phase_order):
         entry = raw.get(key) or {}
         if not isinstance(entry, dict):
             continue
@@ -166,6 +181,98 @@ def _escalation(state: dict[str, Any], ledger: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _probe(ledger: Path) -> Optional[dict[str, Any]]:
+    """FR-1: the reviewer readiness probe preflight ran (#334), or None
+    when the ledger has no readable reviewer-probe.json — a run from
+    before the probe existed, or one that never reached preflight."""
+    raw = _read_json(ledger / C.LEDGER_PROBE_FILE)
+    if not isinstance(raw, dict):
+        return None
+    return {
+        "provider": _str(raw.get("provider")),
+        "requested_provider": _str(raw.get("requested_provider")),
+        "verdict": _str(raw.get("verdict")),
+        "parseable": bool(raw.get("parseable")),
+        "duration_sec": _int(raw.get("duration_sec")),
+        "invocation_cost_usd": _float(raw.get("invocation_cost_usd")),
+        "error": _str(raw.get("error")),
+    }
+
+
+def _earlier_terminations(ledger: Path) -> list[dict[str, Any]]:
+    """FR-2: the terminations this run already had, oldest first. The
+    driver moves termination.json aside under a dated name when the run
+    is resumed or terminates a second time (#190 D2), so a landing after
+    one of these is not a plain landing. The CURRENT disposition still
+    comes from termination.json; these are the ones before it.
+
+    Ordered by `created` ascending, with the epoch the driver stamped
+    into the file name standing in when a record does not carry one —
+    otherwise a record without `created` sorts before every dated one
+    and reads as the oldest. A file that merely starts with the prefix
+    carries no epoch, is not one of these, and is skipped."""
+    rows: list[tuple[str, int, dict[str, Any]]] = []
+    try:
+        kept = list(ledger.glob(C.LEDGER_KEPT_TERMINATION_GLOB))
+    except OSError:
+        return []
+    for path in kept:
+        epoch = _int(path.stem[len(C.LEDGER_KEPT_TERMINATION_PREFIX):])
+        data = _read_json(path)
+        if epoch is None or not isinstance(data, dict):
+            continue
+        rows.append((_str(data.get("created")) or _iso(epoch) or "", epoch, {
+            "reason": _str(data.get("reason")),
+            "detail": _str(data.get("detail")),
+            "phase": _int(data.get("phase")),
+            "created": _str(data.get("created")),
+            "file": path.name,
+        }))
+    rows.sort(key=lambda row: (row[0], row[1]))
+    return [row[2] for row in rows]
+
+
+def _fallbacks(state: dict[str, Any], ledger: Path) -> list[dict[str, Any]]:
+    """FR-3: per phase, the reviewer fallback its NEWEST review round
+    took (#190 D1) — what the phase ended on, not every fallback it ever
+    took: a later round gated by one reviewer means the phase no longer
+    stands on a fallback. A round that fell back ran twice: `from`
+    produced no review, and `to` — the round's reviewer_provider — gated
+    it. The round number comes from the file name, which the driver
+    writes as findings-round-<n>.json; a name that carries no number is
+    not a round of this phase and is skipped."""
+    out: list[dict[str, Any]] = []
+    raw = state.get("phases") or {}
+    if not isinstance(raw, dict):
+        return out
+    for key in sorted(raw, key=_phase_order):
+        review = ledger / f"{C.LEDGER_PHASE_DIR_PREFIX}{key}" / C.LEDGER_REVIEW_DIR
+        try:
+            candidates = list(review.glob(C.LEDGER_FINDINGS_GLOB))
+        except OSError:
+            continue
+        newest: Optional[int] = None
+        path: Optional[Path] = None
+        for candidate in candidates:
+            n = _int(candidate.stem[len(C.LEDGER_FINDINGS_PREFIX):])
+            if n is not None and (newest is None or n > newest):
+                newest, path = n, candidate
+        if path is None:
+            continue
+        data = _read_json(path)
+        fallback = data.get("fallback") if isinstance(data, dict) else None
+        if not isinstance(fallback, dict):
+            continue
+        out.append({
+            "phase": _int(key),
+            "round": newest,
+            "from": _str(fallback.get("from")),
+            "error": _str(fallback.get("error")),
+            "to": _str(data.get("reviewer_provider")),
+        })
+    return out
+
+
 def read_run(ledger: Path, root: Path, *, now: datetime, active_window_seconds: int) -> Optional[dict[str, Any]]:
     """One run record from one ledger directory, or None when its
     state.json is unreadable or names no attempt."""
@@ -213,6 +320,12 @@ def read_run(ledger: Path, root: Path, *, now: datetime, active_window_seconds: 
             "detail": stop.get("detail"),
             "phase": _int(stop.get("phase")),
         },
+        # What the ledger records about the attempt BEFORE this state:
+        # the preflight probe, the terminations already survived, and the
+        # rounds that changed reviewer mid-round.
+        "probe": _probe(ledger),
+        "earlier_terminations": _earlier_terminations(ledger),
+        "fallbacks": _fallbacks(state, ledger),
         # concluded: the driver writes nothing more (done, terminated,
         # parked, aborted). live: it wrote within the window. A build
         # phase can run longer than the window between two state
@@ -432,6 +545,37 @@ def _verifier_line(run: dict[str, Any]) -> str:
     return head + f"; {res['green']} of {res['total']} green"
 
 
+def _probe_line(run: dict[str, Any]) -> str:
+    """FR-4. A probe that answered nothing still says who was asked and
+    what came back instead — the reason a run never reached phase 1."""
+    p = run["probe"]
+    if p is None:
+        return "probe: none recorded"
+    who = p["provider"] or p["requested_provider"] or "the gating reviewer"
+    verdict = p["verdict"] or "no parseable verdict"
+    # An unrecorded duration is said, not drawn as 0s: "in 0s" reads as
+    # "answered instantly", which is the opposite of "never timed".
+    took = "unrecorded time" if p["duration_sec"] is None else f"{p['duration_sec']}s"
+    cost = "unmetered" if p["invocation_cost_usd"] is None else _usd(p["invocation_cost_usd"])
+    line = f"probe: {who} answered {verdict} in {took}, {cost}"
+    return line + (f" — {p['error']}" if p["error"] else "")
+
+
+def _termination_line(entry: dict[str, Any]) -> str:
+    where = f" (phase {entry['phase']})" if entry["phase"] is not None else ""
+    detail = f" — {entry['detail']}" if entry["detail"] else ""
+    return (f"earlier termination: {entry['reason'] or 'unknown reason'} at "
+            f"{entry['created'] or 'an unrecorded time'}{where}{detail} [{entry['file']}]")
+
+
+def _fallback_line(entry: dict[str, Any]) -> str:
+    error = f" ({entry['error']})" if entry["error"] else ""
+    phase = "?" if entry["phase"] is None else entry["phase"]
+    return (f"fallback in phase {phase} round {entry['round']}: "
+            f"{entry['from'] or 'the reviewer'} produced no review{error}; "
+            f"{entry['to'] or 'a fallback'} gated the round")
+
+
 def render_list(payload: dict[str, Any]) -> list[str]:
     root = payload["root"]
     lines = [f"Auto-build runs under {root['path']} ({', '.join(root['subdirs'])})"]
@@ -444,11 +588,13 @@ def render_list(payload: dict[str, Any]) -> list[str]:
     lines.append(f"  {s['total']} run(s) — " + ", ".join(parts) + f"; live: {s['live']}")
     for run in payload["runs"]:
         verdict = run["verdict"]["verdict"] if run["verdict"] else "no verdict"
+        earlier = len(run["earlier_terminations"])
         lines.append(
             f"  {run['key']}  {run['feature_id']}  {run['profile']}  "
             f"outcome={run['outcome'] or 'none'}  status={run['status']}"
             + (f"  reason={run['disposition']['reason']}" if run["disposition"]["reason"] else "")
             + f"  {_cost_line(run)}  verdict={verdict}"
+            + (f"  resumed after {earlier} termination{'' if earlier == 1 else 's'}" if earlier else "")
         )
     if payload["skipped"]:
         lines.append(f"  skipped {len(payload['skipped'])} director(ies) without a readable state")
@@ -467,6 +613,8 @@ def render_run(run: dict[str, Any]) -> list[str]:
     ]
     if d["detail"]:
         lines.append(f"  detail: {d['detail']}")
+    for entry in run["earlier_terminations"]:
+        lines.append(f"  {_termination_line(entry)}")
     lines.append(f"  started: {run['started_at']}; last update: {run['updated_at']}; "
                  f"elapsed: {run['elapsed_sec']}s of cap {run['caps']['wall_clock_sec']}s" + ("; live" if run["live"] else ""))
     lines.append(f"  cost: {_cost_line(run)}")
@@ -476,6 +624,9 @@ def render_run(run: dict[str, Any]) -> list[str]:
         rounds = f"{p['rounds']} round(s), review {p['review_verdict']}" if p["rounds"] is not None else "no review yet"
         lines.append(f"    phase {p['n']}: {p['title']} — {p['status']}; {rounds}; "
                      f"{p['fix_sessions']} fix session(s); {p['commits']} commit(s)")
+    for entry in run["fallbacks"]:
+        lines.append(f"  {_fallback_line(entry)}")
+    lines.append(f"  {_probe_line(run)}")
     lines.append(f"  verifiers: {_verifier_line(run)}")
     if run["policy_decisions"]:
         lines.append(f"  policy decisions ({len(run['policy_decisions'])}):")
