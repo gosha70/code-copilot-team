@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -206,7 +207,16 @@ def _earlier_terminations(ledger: Path) -> list[dict[str, Any]]:
             "created": data.get("created"),
             "file": path.name,
         })
-    out.sort(key=lambda e: (e["created"] or "", e["file"]))
+    # Oldest first. A record without `created` falls back to the epoch in
+    # its own name (termination-<epoch>[-n].json), so chronology holds
+    # either way (DeepSeek's review of the build commit).
+    def _when(e: dict[str, Any]) -> tuple[str, str]:
+        if e["created"]:
+            return (str(e["created"]), e["file"])
+        m = re.match(r"termination-(\d+)", e["file"])
+        epoch = _iso(m.group(1)) if m else None
+        return (epoch or "", e["file"])
+    out.sort(key=_when)
     return out
 
 
@@ -227,7 +237,10 @@ def _fallbacks(state: dict[str, Any], ledger: Path) -> list[dict[str, Any]]:
         newest: Optional[int] = None
         path: Optional[Path] = None
         for candidate in candidates:
-            n = _int(candidate.stem[len(C.LEDGER_FINDINGS_PREFIX):])
+            # Exactly findings-round-<n>: anything else in the directory
+            # (a tmp file, a variant name) is not a round.
+            tail = candidate.stem[len(C.LEDGER_FINDINGS_PREFIX):]
+            n = _int(tail) if tail.isdigit() else None
             if n is not None and (newest is None or n > newest):
                 newest, path = n, candidate
         if path is None:
@@ -526,9 +539,9 @@ def _probe_line(run: dict[str, Any]) -> str:
         return "probe: none recorded"
     who = p["provider"] or p["requested_provider"] or "the gating reviewer"
     verdict = p["verdict"] or "no parseable verdict"
-    seconds = 0 if p["duration_sec"] is None else p["duration_sec"]
+    took = "" if p["duration_sec"] is None else f" in {p['duration_sec']}s"
     cost = "unmetered" if p["invocation_cost_usd"] is None else _usd(p["invocation_cost_usd"])
-    line = f"probe: {who} answered {verdict} in {seconds}s, {cost}"
+    line = f"probe: {who} answered {verdict}{took}, {cost}"
     return line + (f" — {p['error']}" if p["error"] else "")
 
 

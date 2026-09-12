@@ -90,7 +90,8 @@ export function probeLine(run: AutoBuildRun): string {
   const verdict = p.verdict ?? "no parseable verdict";
   const cost =
     p.invocation_cost_usd === null ? "unmetered" : usd(p.invocation_cost_usd);
-  const line = `${who} answered ${verdict} in ${p.duration_sec ?? 0}s, ${cost}`;
+  const took = p.duration_sec === null ? "" : ` in ${p.duration_sec}s`;
+  const line = `${who} answered ${verdict}${took}, ${cost}`;
   return p.error ? `${line} — ${p.error}` : line;
 }
 
@@ -101,7 +102,7 @@ export function earlierTerminationsLine(run: AutoBuildRun): string {
   const earlier = run.earlier_terminations;
   if (!earlier.length) return "";
   const reasons = earlier.map((e) => e.reason ?? "unknown reason").join(", ");
-  const what = run.outcome ?? `still ${run.status ?? "running"}`;
+  const what = run.outcome || `still ${run.status || "running"}`;
   return `${what} after ${earlier.length} earlier termination${earlier.length === 1 ? "" : "s"} (${reasons})`;
 }
 

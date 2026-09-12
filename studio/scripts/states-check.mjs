@@ -1019,6 +1019,7 @@ try {
   if (rv.probeLine(rvProbed) !== "deepseek answered PASS in 17s, $0.12") fail(`probe line: ${rv.probeLine(rvProbed)}`);
   else if (rv.probeLine(rvRun()) !== "no reviewer probe recorded") fail("a run without a probe says so rather than showing nothing");
   else if (rv.probeLine(rvUnanswered) !== "codex answered no parseable verdict in 0s, unmetered — no provider in the chain for codex passed its healthcheck") fail(`unanswered probe: ${rv.probeLine(rvUnanswered)}`);
+  else if (rv.probeLine(rvRun({ probe: { ...rvUnanswered.probe, duration_sec: null } })) !== "codex answered no parseable verdict, unmetered — no provider in the chain for codex passed its healthcheck") fail("a probe without a duration says nothing about time, not 0s");
   else if (rv.earlierTerminationsLine(rvResumed) !== "landed after 1 earlier termination (provider_unavailable)") fail(`earlier terminations: ${rv.earlierTerminationsLine(rvResumed)}`);
   else if (rv.earlierTerminationsLine(rvRun()) !== "" || rv.earlierTerminationsLine(rvTerminated) !== "") fail("a run that survived no termination says nothing");
   else if (rv.earlierTerminationsLine(rvResumedTwice) !== "still building after 2 earlier terminations (provider_unavailable, review_breaker)") fail(`resumed twice: ${rv.earlierTerminationsLine(rvResumedTwice)}`);

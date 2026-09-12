@@ -455,6 +455,10 @@ class TestAttemptHistory(_Ledgers):
         self.assertIn("probe: codex answered no parseable verdict in 0s, unmetered — "
                       "no provider in the chain for codex passed its healthcheck",
                       "\n".join(AB.render_run(run)))
+        # A probe record without a duration says nothing about time
+        # rather than "0s" (DeepSeek's review of the build commit).
+        run["probe"]["duration_sec"] = None
+        self.assertIn("probe: codex answered no parseable verdict, unmetered — ", "\n".join(AB.render_run(run)))
 
     def test_hist_fr4_render_list_marks_a_run_resumed_after_a_termination(self) -> None:
         self._resumed()
