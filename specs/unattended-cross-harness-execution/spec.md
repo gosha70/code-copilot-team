@@ -150,6 +150,18 @@ Claude Code and Pi harnesses.
 - This feature MUST not claim native Pi compaction hooks, native Pi token-limit
   APIs, or native Pi multi-session memory unless those surfaces are verified.
 
+## Terminal-state contract with the auto-build driver (#190 §8)
+
+Recorded 2026-09-12, describing what `scripts/cooldown-supervisor.sh`
+already does (its header comment and exit-code table): the driver's
+exit 6 (`terminated_policy`) is TERMINAL for the supervisor — it is
+checked before the cooldown/relaunch decision and never relaunched,
+including when the driver was silent. Exit 4 (park) keeps its existing
+resumable semantics. Since #190 D2 a `terminated_policy` run may be
+resumed by an operator at the review step under the driver's own
+conditions; that is an operator action with `--resume`, never a
+supervisor relaunch.
+
 ## Out of Scope
 
 - Creating an OS sandbox or container backend.
