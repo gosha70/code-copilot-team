@@ -1,0 +1,28 @@
+%% Configuration layers — more specific always wins (project overrides global).
+%% Source of truth for docs/images/configuration-layers.svg. No counts here:
+%% the README's "How Configuration Layers Work" tree carries the numbers and
+%% scripts/check-doc-accuracy.sh checks them.
+%% Render: npx -y @mermaid-js/mermaid-cli -i docs/diagrams/configuration-layers.mmd -o docs/images/configuration-layers.svg -b transparent
+flowchart LR
+    classDef base fill:#3b3f8f,stroke:#8b8ff5,color:#fff
+    classDef rules fill:#4a3a8f,stroke:#a98bf5,color:#fff
+    classDef skills fill:#2e4d6b,stroke:#6bb1e0,color:#fff
+    classDef project fill:#8a5a10,stroke:#f5a623,color:#fff
+    classDef commands fill:#0f6b7a,stroke:#23c4d9,color:#fff
+    classDef local fill:#1f6b4a,stroke:#2ecc8f,color:#fff
+
+    subgraph global["Global — ~/.claude/ (base, every project)"]
+        direction LR
+        manifest["CLAUDE.md<br/>agent manifest: base rules for all projects"]:::base
+        rules["rules/*.md<br/>always-loaded rules: standards, safety, conventions"]:::rules
+        skills["skills/*/SKILL.md · agents/*.md · hooks/*.sh<br/>on-demand skills, phase agents, lifecycle hooks"]:::skills
+    end
+    subgraph project_layer["Project — ./ (overrides global)"]
+        direction LR
+        project["CLAUDE.md<br/>stack-specific conventions and agent team"]:::project
+        commands[".claude/commands/*.md<br/>project slash commands"]:::commands
+        local["CLAUDE.local.md<br/>personal overrides (gitignored)"]:::local
+    end
+    manifest --> rules --> skills --> project --> commands --> local
+    base_label(["BASE"]) -.-> manifest
+    local -.-> specific_label(["MOST SPECIFIC — wins"])

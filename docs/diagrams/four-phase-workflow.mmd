@@ -1,0 +1,29 @@
+%% Four-phase agent workflow — Research → Plan → Build → Review.
+%% Source of truth for docs/images/four-phase-workflow.svg. Phase contents
+%% mirror adapters/claude-code/.claude/agents/{research,plan,build,review}.md
+%% and shared/skills/agent-team-protocol/SKILL.md (delegation only in Build).
+%% Render: npx -y @mermaid-js/mermaid-cli -i docs/diagrams/four-phase-workflow.mmd -o docs/images/four-phase-workflow.svg -b transparent
+flowchart LR
+    classDef research fill:#2e4d6b,stroke:#6bb1e0,color:#fff
+    classDef plan fill:#3b3f8f,stroke:#8b8ff5,color:#fff
+    classDef build fill:#8a5a10,stroke:#f5a623,color:#fff
+    classDef review fill:#1f6b4a,stroke:#2ecc8f,color:#fff
+    classDef sub fill:#5c3d0a,stroke:#f5a623,color:#fff
+
+    subgraph R["RESEARCH — single agent"]
+        r["Explore the codebase<br/>Read docs, search the web<br/>No code changes"]:::research
+    end
+    subgraph P["PLAN — single agent"]
+        p["Ask clarifying questions<br/>Write spec, plan, tasks to specs/<br/>Get user approval · no delegation"]:::plan
+    end
+    subgraph B["BUILD — team delegation"]
+        b["Team Lead decomposes the approved plan<br/>The only phase that writes code"]:::build
+        be["BE"]:::sub
+        fe["FE"]:::sub
+        qa["QA"]:::sub
+        b --> be & fe & qa
+    end
+    subgraph V["REVIEW — single agent"]
+        v["Run all tests<br/>Verify consistency and integration<br/>Pass / fail report · no delegation"]:::review
+    end
+    R --> P --> B --> V
