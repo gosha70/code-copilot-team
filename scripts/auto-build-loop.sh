@@ -385,6 +385,18 @@ terminate_policy() {
         write_ledger_skeleton
     fi
     mkdir -p "$LEDGER_DIR"
+    # A termination never destroys an earlier one: a run resumed after a
+    # termination (#190 D2) that terminates again keeps the first record
+    # under a dated name (unique_sibling: one second may hold two).
+    if [[ -f "$LEDGER_DIR/termination.json" ]]; then
+        local _prev_stamp _prev
+        _prev_stamp=$(now_epoch)
+        _prev=$(unique_sibling "$LEDGER_DIR/termination-$_prev_stamp.json")
+        mv "$LEDGER_DIR/termination.json" "$_prev"
+        [[ -f "$LEDGER_DIR/triage-report.md" ]] && \
+            mv "$LEDGER_DIR/triage-report.md" "$(unique_sibling "$LEDGER_DIR/triage-report-$_prev_stamp.md")"
+        journal "termination_kept" "the earlier termination is kept as $(basename "$_prev")"
+    fi
     jq -n \
         --arg reason "$reason" --arg detail "$detail" \
         --arg phase "${CURRENT_PHASE:-0}" --arg created "$(now_iso)" \
@@ -4811,9 +4823,11 @@ unique_sibling() {
 # round); run_phase then resumes at review because the build commit
 # exists. Journaled as `resumed`, so the Runs tab lists the decision.
 resume_terminated() {
-    # Step 0 decided; branch binding, prerequisites and preflight ran
-    # since. Nothing there moves the branch, but the decision is
-    # re-checked here so the resume never proceeds on a stale one.
+    # Called after preflight: step 0 decided, and branch binding,
+    # prerequisites and every preflight gate have passed since. The
+    # decision is re-checked here so the ledger is never reopened on a
+    # stale one. This is the FIRST write; a refusal anywhere earlier
+    # left the termination untouched.
     local why
     if ! why=$(terminated_resumable); then
         refuse_resume "the run stopped being resumable between admission and dispatch: $why"
@@ -5575,8 +5589,11 @@ if [[ "$RESUME" == "true" ]]; then
             resume_parked
             ;;
         terminated_policy)
-            # Step 0 already decided this run is resumable (#190 D2).
-            resume_terminated
+            # Step 0 decided this run is resumable (#190 D2). Nothing is
+            # changed here: preflight still has refusal gates (the clean
+            # worktree, for one) and a refusal must leave the termination
+            # exactly as it was — the ledger is mutated after preflight.
+            RESUME_TERMINATED=true
             ;;
         done)
             echo "Run already complete for '$FEATURE_ID'." >&2
@@ -5614,6 +5631,14 @@ preflight
 # Every ordinary refusal gate has passed — the ledger is now the run's
 # durable record and must survive whatever happens next.
 disarm_ledger_rollback
+
+# #190 D2: only now — past every refusal — is a resumed termination
+# reopened. A refusal in preflight (a dirty worktree) leaves
+# termination.json, the status and the unchanged-head guard in force
+# for the next attempt (review of PR #340).
+if [[ "${RESUME_TERMINATED:-false}" == "true" ]]; then
+    resume_terminated
+fi
 
 preflight_result_channel "$PREFLIGHT_PATH"
 

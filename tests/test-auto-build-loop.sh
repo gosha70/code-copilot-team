@@ -2498,6 +2498,52 @@ assert_exit "D2: a ledger without a frozen base refuses (exit 1)" 1 "$RC"
 assert_contains "D2: …and says so" "$OUTPUT" "records no frozen base"
 rm -rf "$P" "$C1" "$C2"
 
+# A refusal in preflight must leave the termination untouched (P1 on
+# PR #340: a dirty-worktree resume had already archived the termination
+# and set status resumed, so the next attempt skipped the head guard).
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+C1=$(mktemp); d2_run "$P" "$D2_BROKEN_PROFILE" "$C1"
+assert_exit "D2/P1: termination (exit 6)" 6 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat"
+git -C "$P" checkout -q feature/demo-feat
+echo "uncommitted edit" > "$P/hand-edit.txt"
+C2=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C2" --resume
+assert_exit "D2/P1: a dirty worktree refuses the resume (exit 1)" 1 "$RC"
+assert_contains "D2/P1: …for the worktree" "$OUTPUT" "not clean"
+assert_eq "D2/P1: termination.json is untouched" "1" "$([[ -f "$LEDGER/termination.json" ]] && echo 1 || echo 0)"
+assert_eq "D2/P1: no dated termination record was made" "0" "$(ls "$LEDGER"/termination-*.json 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "D2/P1: the status is still terminated_policy" "terminated_policy" "$(jq -r '.status' "$LEDGER/state.json")"
+assert_eq "D2/P1: nothing was journaled as resumed" "0" "$(grep -c '"resumed"' "$LEDGER/events.jsonl" | tr -d ' ')"
+assert_eq "D2/P1: the review state was not set aside" "0" "$(ls -d "$P"/.cct/review-stale-* 2>/dev/null | wc -l | tr -d ' ')"
+# The next attempt still meets the unchanged-head guard: commit the edit
+# by hand and the resume refuses on the head, as it must.
+git -C "$P" add -A && git -C "$P" commit -q -m "a commit by hand"
+C3=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C3" --resume
+assert_exit "D2/P1: after the refusal, a moved head is still refused (exit 1)" 1 "$RC"
+assert_contains "D2/P1: …by the head guard" "$OUTPUT" "no longer describes the head"
+assert_eq "D2/P1: …and no build session ran across the attempts" "0" \
+    "$(( $(cat "$C2" 2>/dev/null || echo 0) + $(cat "$C3" 2>/dev/null || echo 0) ))"
+rm -rf "$P" "$C1" "$C2" "$C3"
+# The clean-tree retry after a dirty refusal resumes normally.
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+C1=$(mktemp); d2_run "$P" "$D2_BROKEN_PROFILE" "$C1"
+assert_exit "D2/P1: termination for the retry case (exit 6)" 6 "$RC"
+git -C "$P" checkout -q feature/demo-feat
+echo "uncommitted edit" > "$P/hand-edit.txt"
+C2=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C2" --resume
+assert_exit "D2/P1: dirty → refused (exit 1)" 1 "$RC"
+rm -f "$P/hand-edit.txt"
+C3=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C3" --resume
+assert_exit "D2/P1: clean again → the resume lands (exit 0)" 0 "$RC"
+assert_eq "D2/P1: …with the outcome landed" "landed" "$(jq -r '.outcome' "$P/.cct/auto-build/demo-feat/state.json")"
+assert_eq "D2/P1: …exactly one dated termination record" "1" "$(ls "$P"/.cct/auto-build/demo-feat/termination-*.json 2>/dev/null | wc -l | tr -d ' ')"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE" "$C1" "$C2" "$C3"
+
 # Refusals: the branch moved past the phase's commit; a cap termination.
 P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
 C1=$(mktemp); d2_run "$P" "$D2_BROKEN_PROFILE" "$C1"
