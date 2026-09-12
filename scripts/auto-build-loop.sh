@@ -424,8 +424,16 @@ terminate_policy() {
     if [[ "${VG_TAINTED:-0}" == "1" ]]; then
         journal "artifact_skipped" "commit/push suppressed — the verifier gate found the checkout mutated (git_anomaly); the mutation must not be committed or pushed"
     elif [[ -n "${BRANCH_NAME:-}" && "$_cur" == "$BRANCH_NAME" ]]; then
-        driver_commit "chore($FEATURE_ID): terminated_policy artifacts [auto-build]" \
-            || journal "artifact_skipped" "termination commit failed (journaled, not blocking)"
+        # Only the feature's spec directory (summary, collaboration
+        # artifacts) is an artifact. Whatever else the aborted session
+        # left in the tree stays uncommitted and is named here.
+        local _left
+        _left=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null | grep -v '^?? \.cct/' | grep -vc "^.. ${SPEC_DIR#$PROJECT_DIR/}" || true)
+        driver_commit "chore($FEATURE_ID): terminated_policy artifacts [auto-build]" "$SPEC_DIR" \
+            || journal "artifact_skipped" "termination commit failed or had nothing to commit (journaled, not blocking)"
+        if [[ "${_left:-0}" -gt 0 ]]; then
+            journal "worktree_left_dirty" "$_left uncommitted change(s) from the aborted session left in the working tree, not committed — inspect before the next run (an ignored ledger does not justify committing other changes)"
+        fi
         if [[ "${CAN_PUSH:-false}" == "true" ]]; then
             if ! push_branch soft; then
                 journal "artifact_skipped" "termination push failed or refused by prechecks"
@@ -3984,13 +3992,21 @@ run_tests() {
 # Sets COMMIT_SHA global; returns 1 on empty diff. Not command substitution
 # so the master/main refusal can park the whole driver.
 driver_commit() {
-    # driver_commit <message>
+    # driver_commit <message> [path…]
     # rc 0: committed. rc 1: nothing to commit (an explicit no-diff — the
     # only failure a caller may tolerate silently). rc 2: a git operation
     # FAILED — previously indistinguishable from rc 1, so a failed commit
     # could "return success" off the trailing rev-parse and leave the tree
     # dirty behind a caller that believed it committed.
+    #
+    # With paths, ONLY those paths are staged. Artifact commits (the
+    # review artifact, the summary, the termination record) pass the
+    # spec directory: run 6 (2026-09-12) terminated during a fix session
+    # and the "terminated_policy artifacts" commit, staging everything,
+    # published 185 lines of the session's unfinished edits. A build or
+    # fix commit passes no paths and stages the session's work as before.
     local msg="$1" cur
+    shift
     COMMIT_SHA=""
     cur=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD)
     if [[ "$cur" == "master" || "$cur" == "main" ]]; then
@@ -3999,7 +4015,14 @@ driver_commit() {
         dispose "git_anomaly" "refusing to commit on '$cur'" "null"
         return 2
     fi
-    if ! git -C "$PROJECT_DIR" add -A; then
+    if [[ $# -gt 0 ]]; then
+        local _p _existing=()
+        for _p in "$@"; do [[ -e "$_p" ]] && _existing+=("$_p"); done
+        if [[ ${#_existing[@]} -gt 0 ]] && ! git -C "$PROJECT_DIR" add -- "${_existing[@]}"; then
+            echo "[auto-build] ERROR: git add failed — tree left as-is" >&2
+            return 2
+        fi
+    elif ! git -C "$PROJECT_DIR" add -A; then
         echo "[auto-build] ERROR: git add failed — tree left as-is" >&2
         return 2
     fi
@@ -4460,7 +4483,7 @@ phase_gate() {
     # git failure and the review artifact is REQUIRED — a run that pushes
     # and lands without it has lost its audit trail. Park, don't proceed.
     local _pg_rc=0
-    driver_commit "docs($FEATURE_ID): phase $n review artifact [auto-build]" || _pg_rc=$?
+    driver_commit "docs($FEATURE_ID): phase $n review artifact [auto-build]" "$SPEC_DIR" || _pg_rc=$?
     if [[ $_pg_rc -ge 2 ]]; then
         dispose "git_anomaly" "phase $n review artifact could not be committed (git failure — see stderr above)" \
             "$(jq -n --arg h "$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")" '{parked_head: $h}')"
@@ -5104,7 +5127,7 @@ resume_parked() {
                 # (a byte-identical artifact) and may continue; a real git
                 # failure (rc >= 2) must leave the escalation unresolved.
                 local _cg_commit_rc=0
-                driver_commit "docs($FEATURE_ID): coverage recovery review artifact [auto-build]" || _cg_commit_rc=$?
+                driver_commit "docs($FEATURE_ID): coverage recovery review artifact [auto-build]" "$SPEC_DIR" || _cg_commit_rc=$?
                 if [[ $_cg_commit_rc -ge 2 ]]; then
                     refuse_resume "could not commit the recovery review artifact (git failure) — the coverage escalation stays unresolved; fix the repository state, then --resume"
                 fi
@@ -5146,7 +5169,7 @@ resume_parked() {
                     run_review_loop "$phase" "$ga_parked" \
                         "$LEDGER_DIR/phase-$phase/artifact-recovery-$(basename "$esc_file" .json)"
                     local _ga_commit_rc=0
-                    driver_commit "docs($FEATURE_ID): artifact recovery review artifact [auto-build]" || _ga_commit_rc=$?
+                    driver_commit "docs($FEATURE_ID): artifact recovery review artifact [auto-build]" "$SPEC_DIR" || _ga_commit_rc=$?
                     if [[ $_ga_commit_rc -ge 2 ]]; then
                         refuse_resume "could not commit the artifact-recovery review (git failure) — the escalation stays unresolved; fix the repository state, then --resume"
                     fi
@@ -5708,7 +5731,7 @@ set_status "finalizing"
 # rc 1 (no diff) is fine; rc 2 (git failure) must not let the run push and
 # report done with its required summary artifact uncommitted.
 _fin_rc=0
-driver_commit "docs($FEATURE_ID): automation summary [auto-build]" || _fin_rc=$?
+driver_commit "docs($FEATURE_ID): automation summary [auto-build]" "$SPEC_DIR" || _fin_rc=$?
 if [[ $_fin_rc -ge 2 ]]; then
     dispose "git_anomaly" "automation summary could not be committed (git failure) — refusing to finalize over it" \
         "$(jq -n --arg h "$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")" '{parked_head: $h}')"
@@ -5739,7 +5762,7 @@ if [[ "$CAN_OPEN_PR" == "true" ]]; then
             else echo "skipped (merge.enabled=false)"; fi)."
     } >> "$SUMMARY_MD"
     _out_rc=0
-    driver_commit "docs($FEATURE_ID): automation outcome [auto-build]" || _out_rc=$?
+    driver_commit "docs($FEATURE_ID): automation outcome [auto-build]" "$SPEC_DIR" || _out_rc=$?
     if [[ $_out_rc -ge 2 ]]; then
         journal "artifact_skipped" "outcome line not committed (git failure, journaled, not blocking)"
     elif [[ $_out_rc -eq 0 ]] && ! push_branch soft; then
