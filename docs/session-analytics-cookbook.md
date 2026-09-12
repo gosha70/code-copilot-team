@@ -603,6 +603,13 @@ shows, per run:
   thing from one that failed;
 - **why it stopped**: the disposition reason and detail from
   `termination.json`;
+- **the reviewer probe, the fallbacks and the earlier terminations**: the
+  readiness probe preflight put the gating reviewer through (who
+  answered, with what verdict, in how long, at what cost), any review
+  round that changed reviewer mid-round (who produced no review, who
+  gated the round instead), and every termination the run already
+  survived before this state — so a run that was resumed and landed
+  reads as "landed after 1 earlier termination", not as a plain landing;
 - **phases and rounds**: planned, done, review rounds and the
   reviewer's verdict per phase, fix sessions, commits;
 - **cost against the cap**, with the metered figure and the driver's

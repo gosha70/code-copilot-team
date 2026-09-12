@@ -1241,6 +1241,36 @@ export interface AutoBuildRun {
   status: string | null;
   outcome: string | null;
   disposition: { reason: string | null; detail: string | null; phase: number | null };
+  /** The reviewer readiness probe preflight ran; null when the ledger
+   *  has no readable reviewer-probe.json. */
+  probe: {
+    provider: string | null;
+    requested_provider: string | null;
+    verdict: string | null;
+    parseable: boolean;
+    duration_sec: number | null;
+    invocation_cost_usd: number | null;
+    error: string | null;
+  } | null;
+  /** Terminations the run already survived, oldest first: the driver
+   *  keeps each under a dated name when the run is resumed or
+   *  terminates again, so a landing after one is not a plain landing. */
+  earlier_terminations: {
+    reason: string | null;
+    detail: string | null;
+    phase: number | null;
+    created: string | null;
+    file: string;
+  }[];
+  /** Per phase, the reviewer fallback its newest review round took:
+   *  `from` produced no review, `to` gated the round. */
+  fallbacks: {
+    phase: number | null;
+    round: number | null;
+    from: string | null;
+    error: string | null;
+    to: string | null;
+  }[];
   /** The driver writes nothing more: done, terminated, parked, aborted. */
   concluded: boolean;
   /** The state was written within the active window. Freshness only:

@@ -8,6 +8,8 @@ import {
   costLine,
   costSegments,
   dispositionLine,
+  earlierTerminationsLine,
+  fallbackLines,
   footnotes,
   intro,
   liveLine,
@@ -17,6 +19,7 @@ import {
   phaseLine,
   phasesLine,
   policyLine,
+  probeLine,
   scoresLine,
   shouldPoll,
   verdictLine,
@@ -113,6 +116,8 @@ function RunCard({
   const [open, setOpen] = useState(false);
   const seg = costSegments(run);
   const disposition = dispositionLine(run);
+  const earlier = earlierTerminationsLine(run);
+  const fallbacks = fallbackLines(run);
   const live = liveLine(run);
   return (
     <Card>
@@ -143,6 +148,7 @@ function RunCard({
       {disposition && (
         <p className="text-sm text-amber-900 mt-2">{disposition}</p>
       )}
+      {earlier && <p className="text-sm text-amber-900 mt-2">{earlier}</p>}
       {live && <p className="text-xs text-slate-600 mt-1">{live}</p>}
 
       <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 mt-3 text-sm">
@@ -201,6 +207,19 @@ function RunCard({
                   >
                     {f.fr} {f.green ? "green" : "red"}
                   </li>
+                ))}
+              </ul>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-slate-500">Reviewer</dt>
+          <dd>
+            {probeLine(run)}
+            {fallbacks.length > 0 && (
+              <ul className="text-xs text-amber-900 mt-1 space-y-0.5">
+                {fallbacks.map((line, i) => (
+                  <li key={i}>{line}</li>
                 ))}
               </ul>
             )}
