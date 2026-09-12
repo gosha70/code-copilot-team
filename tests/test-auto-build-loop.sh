@@ -1589,10 +1589,14 @@ assert_eq "triage report generated on mid-run termination" "1" \
     "$([[ -f "$P/.cct/auto-build/demo-feat/triage-report.md" ]] && echo 1 || echo 0)"
 assert_contains "triage reports the REAL verification.yaml state" \
     "$(cat "$P/.cct/auto-build/demo-feat/triage-report.md" 2>/dev/null)" "verification.yaml: finalized, 2 requirement(s) mapped"
-# terminated_policy is terminal in increment A: --resume is refused.
+# #190 D2: a review_breaker termination is resumable at the review step;
+# with the reviewer unchanged it re-admits, runs the review again and
+# terminates again — and the first termination stays on record.
 run_driver "$P" --resume
-assert_exit "terminated run refuses --resume (exit 1)" 1 "$RC"
-assert_contains "resume refusal names the terminal contract" "$OUTPUT" "terminal"
+assert_exit "terminated run re-admits on --resume and terminates again (exit 6)" 6 "$RC"
+assert_contains "the resume is journaled" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl" 2>/dev/null)" '"resumed"'
+assert_eq "the first termination is kept under a dated name" "1" \
+    "$(ls "$P"/.cct/auto-build/demo-feat/termination-*.json 2>/dev/null | wc -l | tr -d ' ')"
 rm -rf "$P"
 
 # done run resumed from wrong branch → "Run already complete", not branch mismatch.
@@ -1778,8 +1782,11 @@ REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
 assert_exit "counting fixture terminates (exit 6)" 6 "$RC"
 RUNS_AT_TERMINATION=$(wc -l < "$SUITE_COUNTER" | tr -d ' ')
 run_driver "$P" --resume
-assert_exit "terminal resume still refused (exit 1)" 1 "$RC"
-assert_eq "doomed resume never executed the suite" "$RUNS_AT_TERMINATION" \
+assert_exit "a review_breaker termination re-admits on --resume (#190 D2) and terminates again (exit 6)" 6 "$RC"
+# The resume re-admits from the FROZEN admission record (decidable from
+# the ledger alone): the project suite does not run again, the reviewer
+# probe does (asserted in the D2 block), and the review step never builds.
+assert_eq "the resume did not execute the suite again (frozen admission)" "$RUNS_AT_TERMINATION" \
     "$(wc -l < "$SUITE_COUNTER" | tr -d ' ')"
 rm -f "$SUITE_COUNTER"; rm -rf "$P"
 
@@ -2387,6 +2394,176 @@ assert_eq "D1: …debited once: probe + two gating rounds + one advisory invocat
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 unset GH_PR_STATE
 rm -rf "$P" "$BARE" "$D1_ADV_PROFILE" "$D1_ADV_MARK" "$D1_ADV_GATING" "$PROBE_OK_ROUND_BROKEN" "$PROBE_OK_PROFILE"
+
+# ══════════════════════════════════════════════════════════════
+echo "=== #190 D2: a terminated run resumes at the review step ==="
+# ══════════════════════════════════════════════════════════════
+# Run 5 (2026-09-10) terminated at its first review round with a green
+# build commit on the branch, and the recovery that landed it was a
+# review-only round run by hand. --resume now does that: the reason
+# must be one where the fix is outside the frozen contract, the phase's
+# last commit must still be the branch head, admission (probe included)
+# runs again, and the review step runs again over the same commit.
+D2_BROKEN_ROUND=$(mktemp)
+cat > "$D2_BROKEN_ROUND" << 'SH'
+#!/usr/bin/env bash
+if grep -q 'Reviewer Readiness Probe' "$1" 2>/dev/null; then
+    printf '### Summary\nFine.\n\n### Findings\n\n### Verdict\nPASS\n'
+    exit 0
+fi
+printf '%s\n' 'Error: the model returned no content: hidden reasoning' >&2
+exit 1
+SH
+D2_BROKEN_PROFILE=$(mktemp)
+cat > "$D2_BROKEN_PROFILE" << TOML
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "bash $D2_BROKEN_ROUND {review_request}"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+d2_run() {  # d2_run <project> <profile> <counter> [args…]
+    local project="$1" profile="$2" counter="$3"; shift 3
+    RC=0
+    OUTPUT=$(cd "$project" && CCT_PROJECT_DIR="$project" CCT_CLAUDE_BIN="$MOCK_BIN/claude" \
+        MOCK_CLAUDE_COUNTER="$counter" CCT_PROVIDER_PROFILE="$profile" bash "$DRIVER" demo-feat "$@" 2>&1) || RC=$?
+}
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+C1=$(mktemp); d2_run "$P" "$D2_BROKEN_PROFILE" "$C1"
+assert_exit "D2: the reviewer fails its round → terminated_policy (exit 6)" 6 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat"
+BUILD_SHA=$(jq -r '.phases["1"].commits[-1]' "$LEDGER/state.json")
+assert_eq "D2: the build commit is the branch head" "$BUILD_SHA" "$(git -C "$P" rev-parse feature/demo-feat)"
+assert_contains "D2: the triage report says the reason may be resumable, and on what condition" "$(cat "$LEDGER/triage-report.md")" "MAY be resumable at the review step"
+# The fix is outside the frozen contract: a working reviewer profile.
+C2=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C2" --resume
+assert_exit "D2: --resume after the provider fix lands the run (exit 0)" 0 "$RC"
+assert_eq "D2: no build session ran on the resume" "0" "$(( $(cat "$C2" 2>/dev/null || echo 0) + 0 ))"
+assert_contains "D2: the resume says where it resumed" "$OUTPUT" "resuming at the review step after terminated_policy (provider_unavailable)"
+assert_eq "D2: the outcome is re-derived as landed" "landed" "$(jq -r '.outcome' "$LEDGER/state.json")"
+assert_eq "D2: …with no disposition left over" "null" "$(jq -r '.disposition_reason' "$LEDGER/state.json")"
+assert_eq "D2: the termination is kept under a dated name" "1" "$(ls "$LEDGER"/termination-*.json 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "D2: …and termination.json is gone" "0" "$([[ -f "$LEDGER/termination.json" ]] && echo 1 || echo 0)"
+assert_contains "D2: the resume is journaled with its reason" "$(cat "$LEDGER/events.jsonl")" '"resumed"'
+assert_contains "D2: …naming D2 and the kept termination" "$(cat "$LEDGER/events.jsonl")" "#190 D2); the termination is kept as termination-"
+assert_contains "D2: the failed round's review state was set aside, not inherited" "$(cat "$LEDGER/events.jsonl")" "review state of the terminated round set aside"
+assert_eq "D2: the probe ran again at re-admission" "2" "$(grep -c '"reviewer_probe"' "$LEDGER/events.jsonl" | tr -d ' ')"
+assert_eq "D2: the phase's build commit is still the first commit on the branch" "$BUILD_SHA" \
+    "$(jq -r '.phases["1"].commits[0]' "$LEDGER/state.json")"
+assert_eq "D2: costs accumulate across the termination and the resume (2 probes + 2 rounds)" "8" \
+    "$(jq -r '.totals.cost_estimated_usd' "$LEDGER/state.json")"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE" "$C1" "$C2"
+
+# The reviewer still broken on resume: the probe catches it at
+# re-admission and the run terminates again — a second dated record.
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+C1=$(mktemp); d2_run "$P" "$D2_BROKEN_PROFILE" "$C1"
+assert_exit "D2: first termination (exit 6)" 6 "$RC"
+D2_STILL_BROKEN=$(mktemp)
+cat > "$D2_STILL_BROKEN" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf 'still broken' >&2; exit 1"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+C2=$(mktemp); d2_run "$P" "$D2_STILL_BROKEN" "$C2" --resume
+assert_exit "D2: a reviewer still broken fails the probe at re-admission (exit 6)" 6 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat"
+assert_contains "D2: …as provider_unavailable from the probe" "$(jq -r '.detail' "$LEDGER/termination.json")" "readiness probe"
+assert_eq "D2: …and the first termination is still kept" "1" "$(ls "$LEDGER"/termination-*.json 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "D2: …the status is terminated_policy again, not resumed" "terminated_policy" "$(jq -r '.status' "$LEDGER/state.json")"
+assert_eq "D2: …and the outcome too" "terminated_policy" "$(jq -r '.outcome' "$LEDGER/state.json")"
+assert_eq "D2: no build session ran" "0" "$(( $(cat "$C2" 2>/dev/null || echo 0) + 0 ))"
+rm -rf "$P" "$C1" "$C2" "$D2_STILL_BROKEN"
+
+# A ledger with no frozen base cannot be checked against the head:
+# refused, not silently allowed (DeepSeek's review of D2).
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+C1=$(mktemp); d2_run "$P" "$D2_BROKEN_PROFILE" "$C1"
+assert_exit "D2: termination for the no-base case (exit 6)" 6 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat"
+jq 'del(.branch_base_ref)' "$LEDGER/state.json" > "$LEDGER/state.tmp" && mv "$LEDGER/state.tmp" "$LEDGER/state.json"
+C2=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C2" --resume
+assert_exit "D2: a ledger without a frozen base refuses (exit 1)" 1 "$RC"
+assert_contains "D2: …and says so" "$OUTPUT" "records no frozen base"
+rm -rf "$P" "$C1" "$C2"
+
+# A refusal in preflight must leave the termination untouched (P1 on
+# PR #340: a dirty-worktree resume had already archived the termination
+# and set status resumed, so the next attempt skipped the head guard).
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+C1=$(mktemp); d2_run "$P" "$D2_BROKEN_PROFILE" "$C1"
+assert_exit "D2/P1: termination (exit 6)" 6 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat"
+git -C "$P" checkout -q feature/demo-feat
+echo "uncommitted edit" > "$P/hand-edit.txt"
+C2=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C2" --resume
+assert_exit "D2/P1: a dirty worktree refuses the resume (exit 1)" 1 "$RC"
+assert_contains "D2/P1: …for the worktree" "$OUTPUT" "not clean"
+assert_eq "D2/P1: termination.json is untouched" "1" "$([[ -f "$LEDGER/termination.json" ]] && echo 1 || echo 0)"
+assert_eq "D2/P1: no dated termination record was made" "0" "$(ls "$LEDGER"/termination-*.json 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "D2/P1: the status is still terminated_policy" "terminated_policy" "$(jq -r '.status' "$LEDGER/state.json")"
+assert_eq "D2/P1: nothing was journaled as resumed" "0" "$(grep -c '"resumed"' "$LEDGER/events.jsonl" | tr -d ' ')"
+assert_eq "D2/P1: the review state was not set aside" "0" "$(ls -d "$P"/.cct/review-stale-* 2>/dev/null | wc -l | tr -d ' ')"
+# The next attempt still meets the unchanged-head guard: commit the edit
+# by hand and the resume refuses on the head, as it must.
+git -C "$P" add -A && git -C "$P" commit -q -m "a commit by hand"
+C3=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C3" --resume
+assert_exit "D2/P1: after the refusal, a moved head is still refused (exit 1)" 1 "$RC"
+assert_contains "D2/P1: …by the head guard" "$OUTPUT" "no longer describes the head"
+assert_eq "D2/P1: …and no build session ran across the attempts" "0" \
+    "$(( $(cat "$C2" 2>/dev/null || echo 0) + $(cat "$C3" 2>/dev/null || echo 0) ))"
+rm -rf "$P" "$C1" "$C2" "$C3"
+# The clean-tree retry after a dirty refusal resumes normally.
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+C1=$(mktemp); d2_run "$P" "$D2_BROKEN_PROFILE" "$C1"
+assert_exit "D2/P1: termination for the retry case (exit 6)" 6 "$RC"
+git -C "$P" checkout -q feature/demo-feat
+echo "uncommitted edit" > "$P/hand-edit.txt"
+C2=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C2" --resume
+assert_exit "D2/P1: dirty → refused (exit 1)" 1 "$RC"
+rm -f "$P/hand-edit.txt"
+C3=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C3" --resume
+assert_exit "D2/P1: clean again → the resume lands (exit 0)" 0 "$RC"
+assert_eq "D2/P1: …with the outcome landed" "landed" "$(jq -r '.outcome' "$P/.cct/auto-build/demo-feat/state.json")"
+assert_eq "D2/P1: …exactly one dated termination record" "1" "$(ls "$P"/.cct/auto-build/demo-feat/termination-*.json 2>/dev/null | wc -l | tr -d ' ')"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE" "$C1" "$C2" "$C3"
+
+# Refusals: the branch moved past the phase's commit; a cap termination.
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+C1=$(mktemp); d2_run "$P" "$D2_BROKEN_PROFILE" "$C1"
+assert_exit "D2: termination for the branch-moved case (exit 6)" 6 "$RC"
+git -C "$P" checkout -q feature/demo-feat && echo "hand edit" >> "$P/README.md" && git -C "$P" add -A && git -C "$P" commit -q -m "a commit by hand"
+C2=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C2" --resume
+assert_exit "D2: a branch that moved past the phase's commit refuses (exit 1)" 1 "$RC"
+assert_contains "D2: …and says why" "$OUTPUT" "no longer describes the head"
+assert_eq "D2: …touching nothing in the ledger" "1" "$([[ -f "$P/.cct/auto-build/demo-feat/termination.json" ]] && echo 1 || echo 0)"
+rm -rf "$P" "$C1" "$C2"
+P=$(setup_project); unattended_cfg "$P"; admit_project "$P"
+BARE=$(add_remote "$P")
+C1=$(mktemp); MOCK_CLAUDE_COST=13 d2_run "$P" "$PASS_PROFILE" "$C1"
+assert_exit "D2: a cap termination (exit 6)" 6 "$RC"
+assert_eq "D2: …is cap_exceeded" "cap_exceeded" "$(jq -r '.reason' "$P/.cct/auto-build/demo-feat/termination.json")"
+C2=$(mktemp); d2_run "$P" "$PASS_PROFILE" "$C2" --resume
+assert_exit "D2: a cap termination has no resume arm (exit 1)" 1 "$RC"
+assert_contains "D2: …and says so" "$OUTPUT" "has no resume arm"
+assert_contains "D2: the triage report of a cap termination says the same" "$(cat "$P/.cct/auto-build/demo-feat/triage-report.md")" "has no resume arm"
+rm -rf "$P" "$BARE" "$C1" "$C2" "$D2_BROKEN_ROUND" "$D2_BROKEN_PROFILE"
 
 # A SILENT provider failure (non-zero exit, no output) must reach the same
 # park. Under pipefail the runner's error extraction aborted the script, so

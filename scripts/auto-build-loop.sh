@@ -343,10 +343,20 @@ triage_report() {
         echo ""
         echo "The system functioned correctly and deliberately stopped at a"
         echo "defined safety, quality, or budget boundary. Work is preserved."
-        echo "terminated_policy is TERMINAL in #190 increment A: review the"
-        echo "reason and this ledger, resolve the boundary (caps, findings,"
-        echo "origin), then start a fresh attended run. Resume support for"
-        echo "terminated runs arrives with #190 increment D."
+        echo "Review the reason and this ledger, then resolve the boundary."
+        case "$reason" in
+            provider_unavailable|review_breaker)
+                echo "This reason MAY be resumable at the review step (#190 D2), if the"
+                echo "phase's build commit is still the branch head and the frozen base"
+                echo "its ancestor: fix the provider or the breaker's cause outside the"
+                echo "frozen contract and rerun with --resume; preflight (the reviewer"
+                echo "probe included) runs again first, and --resume says why if it refuses."
+                ;;
+            *)
+                echo "This reason ($reason) has no resume arm: a cap, an accounting, a"
+                echo "runner or an origin termination needs a fresh run."
+                ;;
+        esac
         if [[ -d "$LEDGER_DIR/escalations" ]]; then
             echo ""
             echo "Escalation records: $LEDGER_DIR/escalations/"
@@ -375,6 +385,18 @@ terminate_policy() {
         write_ledger_skeleton
     fi
     mkdir -p "$LEDGER_DIR"
+    # A termination never destroys an earlier one: a run resumed after a
+    # termination (#190 D2) that terminates again keeps the first record
+    # under a dated name (unique_sibling: one second may hold two).
+    if [[ -f "$LEDGER_DIR/termination.json" ]]; then
+        local _prev_stamp _prev
+        _prev_stamp=$(now_epoch)
+        _prev=$(unique_sibling "$LEDGER_DIR/termination-$_prev_stamp.json")
+        mv "$LEDGER_DIR/termination.json" "$_prev"
+        [[ -f "$LEDGER_DIR/triage-report.md" ]] && \
+            mv "$LEDGER_DIR/triage-report.md" "$(unique_sibling "$LEDGER_DIR/triage-report-$_prev_stamp.md")"
+        journal "termination_kept" "the earlier termination is kept as $(basename "$_prev")"
+    fi
     jq -n \
         --arg reason "$reason" --arg detail "$detail" \
         --arg phase "${CURRENT_PHASE:-0}" --arg created "$(now_iso)" \
@@ -4729,6 +4751,111 @@ refuse_resume() {
     exit 1
 }
 
+# ── #190 D2: resume a terminated run at the review step ───────
+# Three of five real unattended runs ended terminated_policy at the
+# first review round with a green build commit on the branch, and the
+# recovery that landed run 5 was a review-only round run by hand over
+# that commit. terminated_resumable says whether the driver may do the
+# same: the reason is one where the fix is outside the frozen contract
+# (a provider, a breaker), the history does not refuse (a contract
+# that froze no evaluator cannot gain one), the phase's last commit is
+# still the branch head (nothing was rebuilt or rebased under the
+# contract), and the frozen base is still that commit's ancestor.
+# Admission — the probe included — runs again before anything is paid
+# for. A cap, an accounting, a runner or an origin termination needs a
+# fresh run, as before.
+terminated_resumable() {
+    local reason history phase last_commit head base
+    reason=$(state_get '.disposition_reason // empty')
+    case "$reason" in
+        provider_unavailable|review_breaker) ;;
+        *)
+            echo "termination reason '${reason:-unknown}' has no resume arm (a cap, an accounting, a runner or an origin termination needs a fresh run: scripts/auto-build-loop.sh $FEATURE_ID)"
+            return 1 ;;
+    esac
+    if [[ ! -f "$LEDGER_DIR/termination.json" ]]; then
+        echo "the ledger has no termination.json to resume from; start a fresh run"
+        return 1
+    fi
+    history=$(jq -c '.history // null' "$LEDGER_DIR/termination.json" 2>/dev/null || echo null)
+    local why
+    if ! why=$(escalation_resumable "$reason" "$history"); then
+        printf '%s\n' "$why"
+        return 1
+    fi
+    phase=$(state_get '.current_phase // 0')
+    last_commit=$(state_get ".phases[\"$phase\"].commits[-1] // empty")
+    if [[ -z "$last_commit" ]]; then
+        echo "phase $phase has no build commit to resume from; start a fresh run"
+        return 1
+    fi
+    # Both sides canonical full SHAs: the ledger's value and the branch
+    # ref resolved by the same git (DeepSeek's review of D2).
+    last_commit=$(git -C "$PROJECT_DIR" rev-parse --verify -q "${last_commit}^{commit}" 2>/dev/null || echo "")
+    head=$(git -C "$PROJECT_DIR" rev-parse --verify -q "refs/heads/$BRANCH_NAME" 2>/dev/null || echo "")
+    if [[ -z "$last_commit" || -z "$head" || "$head" != "$last_commit" ]]; then
+        echo "branch '$BRANCH_NAME' is at ${head:0:12} but phase $phase's last commit is ${last_commit:0:12}; the frozen contract no longer describes the head — start a fresh run"
+        return 1
+    fi
+    base=$(state_get '.branch_base_ref // empty')
+    if [[ -z "$base" ]]; then
+        echo "the ledger records no frozen base (branch_base_ref), so the contract cannot be checked against the head; start a fresh run"
+        return 1
+    fi
+    if ! git -C "$PROJECT_DIR" merge-base --is-ancestor "$base" "$head" 2>/dev/null; then
+        echo "the frozen base ${base:0:12} is no longer an ancestor of the branch head; start a fresh run"
+        return 1
+    fi
+    return 0
+}
+
+# unique_sibling <path> — <path> itself, or <path>-<n> when it exists
+# (a second resume within the same second must not collide).
+unique_sibling() {
+    local want="$1" n=1
+    while [[ -e "$want" ]]; do want="$1-$n"; n=$((n + 1)); done
+    printf '%s' "$want"
+}
+
+# resume_terminated — the ledger keeps every artifact of the
+# termination under a dated name; the outcome is reopened; the review
+# loop of the phase starts fresh (its state belonged to the failed
+# round); run_phase then resumes at review because the build commit
+# exists. Journaled as `resumed`, so the Runs tab lists the decision.
+resume_terminated() {
+    # Called after preflight: step 0 decided, and branch binding,
+    # prerequisites and every preflight gate have passed since. The
+    # decision is re-checked here so the ledger is never reopened on a
+    # stale one. This is the FIRST write; a refusal anywhere earlier
+    # left the termination untouched.
+    local why
+    if ! why=$(terminated_resumable); then
+        refuse_resume "the run stopped being resumable between admission and dispatch: $why"
+    fi
+    local reason stamp term triage
+    reason=$(state_get '.disposition_reason // empty')
+    stamp=$(now_epoch)
+    term=$(unique_sibling "$LEDGER_DIR/termination-$stamp.json")
+    mv "$LEDGER_DIR/termination.json" "$term"
+    if [[ -f "$LEDGER_DIR/triage-report.md" ]]; then
+        triage=$(unique_sibling "$LEDGER_DIR/triage-report-$stamp.md")
+        mv "$LEDGER_DIR/triage-report.md" "$triage"
+    fi
+    if [[ -d "$PROJECT_DIR/.cct/review" ]]; then
+        local _stale
+        _stale=$(unique_sibling "$PROJECT_DIR/.cct/review-stale-$stamp")
+        mv "$PROJECT_DIR/.cct/review" "$_stale"
+        journal "review_state_reset" "review state of the terminated round set aside at ${_stale#$PROJECT_DIR/}; the review step starts a fresh loop"
+    fi
+    # "resumed" is the driver's in-progress status for a continued run
+    # (the same value the milestone resume uses); the review step that
+    # follows writes terminated_policy again if it must.
+    state_set '.outcome = null | .disposition_reason = null | .updated = $t' --arg t "$(now_iso)"
+    set_status "resumed"
+    journal "resumed" "after terminated_policy ($reason): the phase's build commit is the branch head and admission passed again — the review step runs again (#190 D2); the termination is kept as $(basename "$term")"
+    echo "[auto-build] resuming at the review step after terminated_policy ($reason)" >&2
+}
+
 # Decisions are single-use: consumed (archived to the escalation dir) the
 # moment they resolve a breaker, so a later breaker can never reuse one.
 consume_review_decision() {
@@ -5305,11 +5432,17 @@ if [[ "$RESUME" == "true" && -f "$STATE" ]]; then
             exit 0
             ;;
         terminated_policy)
-            echo "Error: this run ended terminated_policy — terminal in #190" >&2
-            echo "increment A (no --resume path; recovery arrives with increment D)." >&2
-            echo "Review $LEDGER_DIR/triage-report.md, resolve the boundary, then" >&2
-            echo "start a fresh attended run." >&2
-            exit 1
+            # #190 D2: resumable at the review step when the reason,
+            # the history and the branch head allow it (see
+            # terminated_resumable); admission runs again below.
+            if ! _t4_why=$(terminated_resumable); then
+                echo "Error: this run ended terminated_policy and cannot resume:" >&2
+                echo "$_t4_why" >&2
+                echo "Review $LEDGER_DIR/triage-report.md, resolve the boundary, then" >&2
+                echo "start a fresh run." >&2
+                exit 1
+            fi
+            echo "[auto-build] terminated_policy run is resumable at the review step — re-admitting" >&2
             ;;
     esac
 fi
@@ -5456,11 +5589,11 @@ if [[ "$RESUME" == "true" ]]; then
             resume_parked
             ;;
         terminated_policy)
-            echo "Error: this run ended terminated_policy — terminal in #190" >&2
-            echo "increment A (no --resume path; recovery arrives with increment D)." >&2
-            echo "Review $LEDGER_DIR/triage-report.md, resolve the boundary, then" >&2
-            echo "start a fresh attended run." >&2
-            exit 1
+            # Step 0 decided this run is resumable (#190 D2). Nothing is
+            # changed here: preflight still has refusal gates (the clean
+            # worktree, for one) and a refusal must leave the termination
+            # exactly as it was — the ledger is mutated after preflight.
+            RESUME_TERMINATED=true
             ;;
         done)
             echo "Run already complete for '$FEATURE_ID'." >&2
@@ -5498,6 +5631,14 @@ preflight
 # Every ordinary refusal gate has passed — the ledger is now the run's
 # durable record and must survive whatever happens next.
 disarm_ledger_rollback
+
+# #190 D2: only now — past every refusal — is a resumed termination
+# reopened. A refusal in preflight (a dirty worktree) leaves
+# termination.json, the status and the unchanged-head guard in force
+# for the next attempt (review of PR #340).
+if [[ "${RESUME_TERMINATED:-false}" == "true" ]]; then
+    resume_terminated
+fi
 
 preflight_result_channel "$PREFLIGHT_PATH"
 
