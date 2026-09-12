@@ -104,7 +104,7 @@ export function earlierTerminationsLine(run: AutoBuildRun): string {
   const earlier = run.earlier_terminations;
   if (!earlier.length) return "";
   const reasons = earlier.map((e) => e.reason ?? "unknown reason").join(", ");
-  const what = run.outcome ?? `still ${run.status ?? "running"}`;
+  const what = run.outcome || `still ${run.status || "running"}`;
   return `${what} after ${earlier.length} earlier termination${earlier.length === 1 ? "" : "s"} (${reasons})`;
 }
 
