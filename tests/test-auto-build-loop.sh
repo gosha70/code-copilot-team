@@ -2396,6 +2396,41 @@ unset GH_PR_STATE
 rm -rf "$P" "$BARE" "$D1_ADV_PROFILE" "$D1_ADV_MARK" "$D1_ADV_GATING" "$PROBE_OK_ROUND_BROKEN" "$PROBE_OK_PROFILE"
 
 # ══════════════════════════════════════════════════════════════
+echo "=== run 6: a termination never publishes an aborted session's edits ==="
+# ══════════════════════════════════════════════════════════════
+# Run 6 (2026-09-12) terminated during a fix session; the
+# "terminated_policy artifacts" commit staged everything and pushed 185
+# lines of the session's unfinished edits. Artifact commits now stage
+# only the feature's spec directory; what the aborted session left in
+# the tree stays uncommitted and is journaled.
+R6_SCRIPT=$(mktemp)
+cat > "$R6_SCRIPT" << 'SCRIPTLET'
+if [[ "$MOCK_SESSION_N" == "1" ]]; then
+    printf '#!/usr/bin/env bash\necho ok\n' > demo.sh
+else
+    # The fix session: a half-finished edit, then the turn cap.
+    echo "unfinished" > wip.txt
+    export MOCK_CLAUDE_SUBTYPE=error_max_turns
+fi
+SCRIPTLET
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+BARE=$(add_remote "$P")
+MOCK_CLAUDE_SCRIPT="$R6_SCRIPT" REVIEW_PROFILE="$FAIL_ALWAYS_PROFILE" run_driver "$P"
+assert_exit "run 6: a fix session that hits its turn cap terminates (exit 6)" 6 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat"
+assert_eq "run 6: …as build_session_error" "build_session_error" "$(jq -r '.reason' "$LEDGER/termination.json")"
+assert_eq "run 6: the branch head does not carry the session's unfinished edit" "0" \
+    "$(git -C "$P" ls-tree -r --name-only feature/demo-feat | grep -c '^wip.txt$' | tr -d ' ')"
+assert_eq "run 6: …the edit is still in the working tree, uncommitted" "1" "$([[ -f "$P/wip.txt" ]] && echo 1 || echo 0)"
+assert_contains "run 6: …and the ledger says so" "$(cat "$LEDGER/events.jsonl")" '"worktree_left_dirty"'
+assert_contains "run 6: …with the count and the rule" "$(cat "$LEDGER/events.jsonl")" \
+    "1 uncommitted change(s) from the aborted session left in the working tree, not committed"
+assert_eq "run 6: no termination commit was made from unrelated changes" "$(jq -r '.phases["1"].commits[-1]' "$LEDGER/state.json")" \
+    "$(git -C "$P" rev-parse feature/demo-feat)"
+rm -f "$R6_SCRIPT"; rm -rf "$P" "$BARE"
+
+
+# ══════════════════════════════════════════════════════════════
 echo "=== #190 D2: a terminated run resumes at the review step ==="
 # ══════════════════════════════════════════════════════════════
 # Run 5 (2026-09-10) terminated at its first review round with a green
@@ -5067,6 +5102,9 @@ SUMMARY_MD="$PG_P/summary.md"; SPEC_DIR="$PG_P/specs/dummy"
 CONFIG_SNAPSHOT=/dev/null; DRY_RUN=false
 BRANCH_NAME="feature/x"; BRANCH_BASE="main"; PROFILE="advisory"
 MAX_PHASES=8; MAX_FIX_SESSIONS=2; CAP_WALL_CLOCK=3600; CAP_COST=5; MILESTONE_EVERY=0
+# Artifact commits stage only the spec directory (run 6): give the gate
+# an artifact to stage so the commit path — and its failure — is reached.
+mkdir -p "$SPEC_DIR/collaboration" && echo "# review" > "$SPEC_DIR/collaboration/build-review.md"
 touch "$PG_P/.git/index.lock"
 PG_RC=0
 PG_OUT=$( ( phase_gate 1 "unit" ) 2>&1 ) || PG_RC=$?
@@ -5075,6 +5113,31 @@ assert_exit "T6: phase_gate parks on a real commit failure (exit 4)" 4 "$PG_RC"
 assert_contains "T6: the phase_gate park names the review artifact" "$PG_OUT" \
     "review artifact could not be committed"
 SCRIPT_DIR="$_PG_SAVE_SCRIPT_DIR"
+
+# Review of PR #341 (P1): restricting `git add` is not enough — a plain
+# `git commit` commits the whole index, so a change a session had
+# ALREADY STAGED outside the spec directory rode along. The commit is
+# scoped too. Unit: driver_commit with the artifact present, an
+# unrelated file pre-staged, and an unrelated working-tree edit.
+DC_P=$(mktemp -d); git -C "$DC_P" init -q
+git -C "$DC_P" config user.email t@t && git -C "$DC_P" config user.name t
+echo base > "$DC_P/f" && git -C "$DC_P" add -A && git -C "$DC_P" commit -q -m init
+git -C "$DC_P" checkout -q -b feature/x
+mkdir -p "$DC_P/specs/dummy/collaboration" && echo "# review" > "$DC_P/specs/dummy/collaboration/build-review.md"
+echo staged > "$DC_P/other.txt" && git -C "$DC_P" add other.txt
+echo wip >> "$DC_P/f"
+DC_RC=0
+DC_OUT=$( ( PROJECT_DIR="$DC_P"; SPEC_DIR="$DC_P/specs/dummy"; dispose() { echo "dispose $*"; }; driver_commit "artifact" "$SPEC_DIR"; echo "rc=$?" ) 2>&1 )
+assert_contains "driver_commit(paths): the artifact commit succeeds" "$DC_OUT" "rc=0"
+assert_eq "driver_commit(paths): the commit carries only the spec directory" "specs/dummy/collaboration/build-review.md" \
+    "$(git -C "$DC_P" show --name-only --format= HEAD | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "driver_commit(paths): the pre-staged unrelated file is still staged, not committed" "other.txt" \
+    "$(git -C "$DC_P" diff --cached --name-only | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "driver_commit(paths): the unrelated working-tree edit is untouched" "f" \
+    "$(git -C "$DC_P" diff --name-only | tr '\n' ' ' | sed 's/ $//')"
+DC_OUT=$( ( PROJECT_DIR="$DC_P"; SPEC_DIR="$DC_P/specs/dummy"; dispose() { echo "dispose $*"; }; driver_commit "artifact again" "$SPEC_DIR"; echo "rc=$?" ) 2>&1 )
+assert_contains "driver_commit(paths): nothing new under the paths is rc 1, even with other changes staged" "$DC_OUT" "rc=1"
+rm -rf "$DC_P"
 rm -rf "$PG_P" "$PG_STUB"
 rm -f "$DRIVER_FUNCS"
 

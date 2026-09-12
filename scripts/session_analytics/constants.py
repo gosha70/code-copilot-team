@@ -196,6 +196,7 @@ LEDGER_TERMINAL_STATUSES = frozenset({"done", "terminated_policy", "parked", "ab
 #: as opposed to progress (status, phase_commit, pushed …).
 POLICY_EVENTS = frozenset({
     "terminated_policy", "parked", "review_state_reset", "review_bypass_accepted", "reviewer_fallback",
+    "worktree_left_dirty", "termination_kept",
     "artifact_skipped", "artifact_error", "merge_skipped", "merge_armed",
     "merge_already_armed", "cap_updated", "capability_downgrade", "visual_waiver",
     "coverage_gate", "verifier_gate", "advisory_skipped", "cost_debit_failed",
