@@ -12,6 +12,55 @@ enforced runtime. See `adapters/pi/docs/quickstart.md`.
 
 ### Added
 
+- **Unattended autonomy, run-tested (#190 §12, increment D as the data
+  scoped it, and the fixes six real runs demanded)** — Six real
+  unattended runs (2026-09-09 → 12) on two small features; the engine
+  changed after each. Run surface: the Studio **Runs** tab, `/api/runs`
+  and the `runs` CLI read every auto-build ledger on each request —
+  outcome in the driver's own words (`landed` / `terminated_policy` /
+  none yet, never pass/fail), disposition, rounds, cost against cap with
+  the estimated portion distinct, verifier state, policy decisions — and
+  keep the one fact a ledger cannot write, the **human verdict** on the
+  resulting PR (`auto_build_verdict`: merged unmodified / with fixes /
+  rejected), which outlives the ledger (#333); a resumed run shows its
+  probe answer, any round-time fallback and its earlier terminations
+  (#344/#345). **Reviewer probe at admission** (#334): one small request
+  through the real review path must come back with a parseable verdict
+  before a build is paid for. **Provider pricing** (#337):
+  `price_usd_per_mtok_input/_output` in `providers.toml` make an
+  OpenAI-compatible reviewer *measured* — a conservative calculated
+  cost at peak cache-miss rates written before the answer is judged;
+  missing usage keeps the estimate. **Cap alerts** (#338): a run at 80 %
+  / 100 % of its cost or wall-clock cap shows among the Team tab's
+  alerts and in `team status|alerts`. **Increment D, scoped from the
+  runs, not from §13:** D1 (#339) — a round whose reviewer ran and
+  produced no review is retried once with the next healthy provider in
+  the subject's `fallback_chain` (gating rounds only; a verdict is
+  final; both invocations debited); D2 (#340) — a `terminated_policy`
+  run resumes at the review step when the reason is a provider failure,
+  a review breaker or an inconclusive review, the phase's build commit
+  is still the branch head and the frozen base its ancestor
+  (re-admission incl. the probe; every earlier termination kept under a
+  dated name). Fixes the runs exposed: the review-runner snapshot copies
+  only what git knows about (#327); review state is bound to the
+  attempt, phase and base that wrote it (#329); a reasoning model is
+  asked for an answer, not a hidden monologue — vLLM's and DeepSeek's
+  thinking switches both sent (#330, #339); the summary states intent
+  before the push and the outcome after (#332); a provider-error round
+  is debited like the invocation it was (#336); artifact commits stage
+  and commit only the feature's spec directory, and a termination names
+  what the aborted session left uncommitted rather than publishing it
+  (#341); an INCONCLUSIVE review with no blocking finding stops for
+  review recovery instead of driving a fix session (#342). Deferred
+  under the evidence rules, not rejected: §5 bounded progress, §7
+  per-phase contract drift, §12 calibrated presets, §13 adjudication
+  and builder swap. Decisions recorded: the runtime-conformance
+  evaluator's contract lives in `providers.toml`
+  (`conformance_command`), so no `spec-conformance` agent file and no
+  per-adapter capability declaration were added; per-template coverage
+  floors ship as C1's verification presets. Suites: review-loop 127 →
+  213, driver 1086 → 1206, session-analytics +`test_auto_build_runs`.
+
 - **Codex execution backend (#109)** — `codex` is now an executable
   backend, not merely an accepted registry name. Routed model AND
   provider are bound (`--model`, `-c model_provider=`), the routed
