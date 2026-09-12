@@ -36,6 +36,7 @@
       "paths": [
         "README.md",
         "docs/developer-cookbook.md",
+        "docs/auto-code-review-setup.md",
         "docs/features.md",
         "docs/shape-up-workflow.md",
         "docs/sdd-vs-code-copilot-team.md"
@@ -150,6 +151,12 @@
       "slug": "adapters--claude-code--docs--claude-code-setup-cookbook"
     },
     {
+      "id": "review",
+      "title": "Set up auto code review",
+      "blurb": "A second model reviews your work: the provider entry, the probe that proves it answers, per-session and per-run enabling, cost, the diff limit, where the result lands.",
+      "slug": "docs--auto-code-review-setup"
+    },
+    {
       "id": "broken",
       "title": "Something not working?",
       "blurb": "Common pitfalls, debugging strategies, and the incident write-ups.",
@@ -177,6 +184,7 @@
     "docs/session-analytics-cookbook.md": "Session Analytics — user cookbook",
     "docs/dgx-spark/setup-cookbook.md": "DGX Spark — setup & cookbook (Ollama, vLLM, Open WebUI)",
     "docs/dgx-spark/vllm-qwen38.md": "DGX Spark + vLLM — Qwen3.8-27B operator manual",
-    "docs/dgx-spark/runbook-qwen38.md": "DGX Spark — Qwen3.8-27B runbook (exact sequence)"
+    "docs/dgx-spark/runbook-qwen38.md": "DGX Spark — Qwen3.8-27B runbook (exact sequence)",
+    "docs/auto-code-review-setup.md": "Auto code review — setup cookbook"
   }
 }

@@ -157,6 +157,8 @@ Use Shape-Up for product-shaped work — greenfield, ambiguous problem space, mu
 
 Code Copilot Team supports **dual-copilot peer review** — a second AI provider automatically reviews your work at phase completion. This catches blind spots that a single provider misses, using the same structured collaboration protocol regardless of which providers are involved.
 
+📖 **Ordered setup, verified on real runs:** [docs/auto-code-review-setup.md](docs/auto-code-review-setup.md) — choosing a reviewer (a hosted API such as DeepSeek, a local model such as the DGX Spark, or a CLI), the provider entry, the probe that proves it answers, enabling it per session and per unattended run, cost, the diff limit, and where the result lands. Also served in the Studio's Learn tab.
+
 ### Prerequisites
 
 1. **Install Code Copilot Team** — run `setup.sh --claude-code` (see [Quick Start](#quick-start)). This installs all peer review components:
