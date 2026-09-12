@@ -4016,13 +4016,29 @@ driver_commit() {
         return 2
     fi
     if [[ $# -gt 0 ]]; then
+        # Scoped to the paths at every step — the add, the no-diff check
+        # AND the commit itself. A plain `git commit` commits the whole
+        # index, so anything a session had already staged outside the
+        # paths would ride along (review of PR #341); `git commit -- paths`
+        # commits only those paths and leaves other staged changes staged.
         local _p _existing=()
         for _p in "$@"; do [[ -e "$_p" ]] && _existing+=("$_p"); done
-        if [[ ${#_existing[@]} -gt 0 ]] && ! git -C "$PROJECT_DIR" add -- "${_existing[@]}"; then
+        [[ ${#_existing[@]} -gt 0 ]] || return 1
+        if ! git -C "$PROJECT_DIR" add -- "${_existing[@]}"; then
             echo "[auto-build] ERROR: git add failed — tree left as-is" >&2
             return 2
         fi
-    elif ! git -C "$PROJECT_DIR" add -A; then
+        if git -C "$PROJECT_DIR" diff --cached --quiet -- "${_existing[@]}"; then
+            return 1
+        fi
+        if ! git -C "$PROJECT_DIR" commit -q -m "$msg" -- "${_existing[@]}"; then
+            echo "[auto-build] ERROR: git commit failed — tree left staged" >&2
+            return 2
+        fi
+        COMMIT_SHA=$(git -C "$PROJECT_DIR" rev-parse HEAD)
+        return 0
+    fi
+    if ! git -C "$PROJECT_DIR" add -A; then
         echo "[auto-build] ERROR: git add failed — tree left as-is" >&2
         return 2
     fi

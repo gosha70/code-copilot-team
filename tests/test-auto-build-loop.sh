@@ -2429,6 +2429,7 @@ assert_eq "run 6: no termination commit was made from unrelated changes" "$(jq -
     "$(git -C "$P" rev-parse feature/demo-feat)"
 rm -f "$R6_SCRIPT"; rm -rf "$P" "$BARE"
 
+
 # ══════════════════════════════════════════════════════════════
 echo "=== #190 D2: a terminated run resumes at the review step ==="
 # ══════════════════════════════════════════════════════════════
@@ -5112,6 +5113,31 @@ assert_exit "T6: phase_gate parks on a real commit failure (exit 4)" 4 "$PG_RC"
 assert_contains "T6: the phase_gate park names the review artifact" "$PG_OUT" \
     "review artifact could not be committed"
 SCRIPT_DIR="$_PG_SAVE_SCRIPT_DIR"
+
+# Review of PR #341 (P1): restricting `git add` is not enough — a plain
+# `git commit` commits the whole index, so a change a session had
+# ALREADY STAGED outside the spec directory rode along. The commit is
+# scoped too. Unit: driver_commit with the artifact present, an
+# unrelated file pre-staged, and an unrelated working-tree edit.
+DC_P=$(mktemp -d); git -C "$DC_P" init -q
+git -C "$DC_P" config user.email t@t && git -C "$DC_P" config user.name t
+echo base > "$DC_P/f" && git -C "$DC_P" add -A && git -C "$DC_P" commit -q -m init
+git -C "$DC_P" checkout -q -b feature/x
+mkdir -p "$DC_P/specs/dummy/collaboration" && echo "# review" > "$DC_P/specs/dummy/collaboration/build-review.md"
+echo staged > "$DC_P/other.txt" && git -C "$DC_P" add other.txt
+echo wip >> "$DC_P/f"
+DC_RC=0
+DC_OUT=$( ( PROJECT_DIR="$DC_P"; SPEC_DIR="$DC_P/specs/dummy"; dispose() { echo "dispose $*"; }; driver_commit "artifact" "$SPEC_DIR"; echo "rc=$?" ) 2>&1 )
+assert_contains "driver_commit(paths): the artifact commit succeeds" "$DC_OUT" "rc=0"
+assert_eq "driver_commit(paths): the commit carries only the spec directory" "specs/dummy/collaboration/build-review.md" \
+    "$(git -C "$DC_P" show --name-only --format= HEAD | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "driver_commit(paths): the pre-staged unrelated file is still staged, not committed" "other.txt" \
+    "$(git -C "$DC_P" diff --cached --name-only | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "driver_commit(paths): the unrelated working-tree edit is untouched" "f" \
+    "$(git -C "$DC_P" diff --name-only | tr '\n' ' ' | sed 's/ $//')"
+DC_OUT=$( ( PROJECT_DIR="$DC_P"; SPEC_DIR="$DC_P/specs/dummy"; dispose() { echo "dispose $*"; }; driver_commit "artifact again" "$SPEC_DIR"; echo "rc=$?" ) 2>&1 )
+assert_contains "driver_commit(paths): nothing new under the paths is rc 1, even with other changes staged" "$DC_OUT" "rc=1"
+rm -rf "$DC_P"
 rm -rf "$PG_P" "$PG_STUB"
 rm -f "$DRIVER_FUNCS"
 
