@@ -379,6 +379,19 @@ class TestAttemptHistory(_Ledgers):
         self.assertFalse(run["probe"]["parseable"])
         self.assertIn("healthcheck", run["probe"]["error"])
 
+    def test_hist_fr1_a_non_string_verdict_is_not_a_verdict(self) -> None:
+        """The API declares verdict `string | null`: a malformed file
+        must not leak a Python repr into it."""
+        run = self._resumed(**{C.LEDGER_PROBE_FILE: {
+            "probe": True, "requested_provider": "codex", "provider": "deepseek",
+            "verdict": {"unexpected": "shape"}, "parseable": True,
+            "duration_sec": None, "invocation_cost_usd": None, "error": ["not", "a", "string"],
+        }})
+        self.assertIsNone(run["probe"]["verdict"])
+        self.assertIsNone(run["probe"]["error"])
+        self.assertIsNone(run["probe"]["duration_sec"])
+        self.assertEqual(run["probe"]["provider"], "deepseek")
+
     def test_hist_fr2_earlier_terminations_are_listed_oldest_first(self) -> None:
         run = self._resumed(**{"termination-1788910000.json": {
             "outcome": "terminated_policy", "reason": "review_breaker", "detail": "3 rounds without a PASS",
@@ -389,6 +402,25 @@ class TestAttemptHistory(_Ledgers):
             [("provider_unavailable", "2026-09-09T02:00:00Z", 1, "termination-1788900000.json"),
              ("review_breaker", "2026-09-09T05:00:00Z", 2, "termination-1788910000.json")])
         self.assertIn("readiness probe", run["earlier_terminations"][0]["detail"])
+
+    def test_hist_fr2_ordering_survives_a_record_without_created(self) -> None:
+        """`created` is the order; when a record carries none, the epoch
+        the driver stamped into its name stands in — so it is not read as
+        the oldest. A name that carries no epoch is not one of these."""
+        run = self._resumed(**{
+            # No `created`; its epoch resolves to 2026-09-09T02:13:20Z,
+            # after the dated record below, which is where it belongs.
+            "termination-1788920000.json": {
+                "outcome": "terminated_policy", "reason": "review_breaker",
+                "detail": "3 rounds without a PASS", "phase": 2,
+            },
+            # Neither of these is a termination-<epoch>.json.
+            "termination-2-draft.json": {"reason": "not-a-kept-termination"},
+            "termination-latest.json": {"reason": "not-a-kept-termination"},
+        })
+        self.assertEqual(
+            [(e["reason"], e["created"]) for e in run["earlier_terminations"]],
+            [("provider_unavailable", "2026-09-09T02:00:00Z"), ("review_breaker", None)])
 
     def test_hist_fr2_no_kept_termination_is_an_empty_list(self) -> None:
         runs = {r["key"]: r for r in AB.scan_runs(self.root, now=NOW, active_window_seconds=WINDOW).runs}
@@ -430,6 +462,35 @@ class TestAttemptHistory(_Ledgers):
         self.assertEqual(runs[LANDED_KEY]["fallbacks"], [])
         self.assertEqual(runs[TERMINATED_KEY]["fallbacks"], [])
 
+    def test_hist_fr3_a_phase_key_that_is_not_a_number_is_not_phase_0(self) -> None:
+        """It lists after every numbered phase — the same order the phase
+        list uses — and its line says "phase ?", not "phase None"."""
+        key = "99999-111111111"
+        _write_ledger(
+            self.root, C.AUTO_BUILD_LIVE_DIR, "odd-phase-key",
+            _state(key, phases={
+                "hotfix": {"title": "US?", "status": "done", "commits": [], "fix_sessions": 0},
+                "1": {"title": "US1", "status": "done", "commits": [], "fix_sessions": 0},
+            }),
+            extra={
+                "phase-1/review/findings-round-1.json": {
+                    "round": 1, "verdict": "PASS", "reviewer_provider": "deepseek", "findings": [],
+                    "fallback": {"from": "codex", "error": "timed out after 900s"},
+                },
+                "phase-hotfix/review/findings-round-1.json": {
+                    "round": 1, "verdict": "PASS", "reviewer_provider": "gemini", "findings": [],
+                    "fallback": {"from": "codex", "error": None},
+                },
+            },
+        )
+        run = {r["key"]: r for r in AB.scan_runs(
+            self.root, now=NOW, active_window_seconds=WINDOW).runs}[key]
+        self.assertEqual([(f["phase"], f["to"]) for f in run["fallbacks"]],
+                         [(1, "deepseek"), (None, "gemini")])
+        self.assertEqual([p["n"] for p in run["phases"]["items"]], [1, None])
+        self.assertIn("fallback in phase ? round 1: codex produced no review; "
+                      "gemini gated the round", "\n".join(AB.render_run(run)))
+
     def test_hist_fr4_render_run_says_probe_terminations_and_fallbacks(self) -> None:
         run = self._resumed()
         text = "\n".join(AB.render_run(run))
@@ -455,6 +516,18 @@ class TestAttemptHistory(_Ledgers):
         self.assertIn("probe: codex answered no parseable verdict in 0s, unmetered — "
                       "no provider in the chain for codex passed its healthcheck",
                       "\n".join(AB.render_run(run)))
+
+    def test_hist_fr4_a_probe_that_was_never_timed_does_not_read_as_0s(self) -> None:
+        """A rendered "in 0s" reads as "answered instantly"; an untimed
+        probe says the duration is unrecorded instead."""
+        run = self._resumed(**{C.LEDGER_PROBE_FILE: {
+            "probe": True, "requested_provider": "codex", "provider": "deepseek",
+            "verdict": "PASS", "parseable": True, "duration_sec": None,
+            "invocation_cost_usd": None, "error": None,
+        }})
+        text = "\n".join(AB.render_run(run))
+        self.assertIn("probe: deepseek answered PASS in unrecorded time, unmetered", text)
+        self.assertNotIn("in 0s", text)
 
     def test_hist_fr4_render_list_marks_a_run_resumed_after_a_termination(self) -> None:
         self._resumed()

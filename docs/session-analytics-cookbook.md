@@ -605,11 +605,13 @@ shows, per run:
   `termination.json`;
 - **the reviewer probe, the fallbacks and the earlier terminations**: the
   readiness probe preflight put the gating reviewer through (who
-  answered, with what verdict, in how long, at what cost), any review
-  round that changed reviewer mid-round (who produced no review, who
-  gated the round instead), and every termination the run already
-  survived before this state — so a run that was resumed and landed
-  reads as "landed after 1 earlier termination", not as a plain landing;
+  answered, with what verdict, in how long, at what cost), a phase whose
+  **newest** review round changed reviewer mid-round (who produced no
+  review, who gated the round instead — a phase that ended on a round
+  gated by one reviewer no longer stands on a fallback, so it lists
+  none), and every termination the run already survived before this
+  state — so a run that was resumed and landed reads as "landed after
+  1 earlier termination", not as a plain landing;
 - **phases and rounds**: planned, done, review rounds and the
   reviewer's verdict per phase, fix sessions, commits;
 - **cost against the cap**, with the metered figure and the driver's

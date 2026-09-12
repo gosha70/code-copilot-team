@@ -96,13 +96,28 @@ def _int(value: Any) -> Optional[int]:
         return None
 
 
+def _str(value: Any) -> Optional[str]:
+    """A string field of the record, or None. A non-string in the ledger
+    is never coerced: the API declares these `string | null`, and the
+    repr of a dict is not a provider name or a verdict."""
+    return value if isinstance(value, str) and value else None
+
+
+def _phase_order(key: str) -> tuple[int, int, str]:
+    """One order for every per-phase list: numeric keys in numeric order,
+    any other key after all of them in name order — a key that is not a
+    number is not phase 0."""
+    n = _int(key)
+    return (1, 0, key) if n is None else (0, n, "")
+
+
 def _phases(state: dict[str, Any], ledger: Path) -> list[dict[str, Any]]:
     """Per-phase facts from the state plus each phase's review summary."""
     out: list[dict[str, Any]] = []
     raw = state.get("phases") or {}
     if not isinstance(raw, dict):
         return out
-    for key in sorted(raw, key=lambda k: _int(k) if _int(k) is not None else 0):
+    for key in sorted(raw, key=_phase_order):
         entry = raw.get(key) or {}
         if not isinstance(entry, dict):
             continue
@@ -174,13 +189,13 @@ def _probe(ledger: Path) -> Optional[dict[str, Any]]:
     if not isinstance(raw, dict):
         return None
     return {
-        "provider": raw.get("provider") or None,
-        "requested_provider": raw.get("requested_provider") or None,
-        "verdict": str(raw["verdict"]) if raw.get("verdict") else None,
+        "provider": _str(raw.get("provider")),
+        "requested_provider": _str(raw.get("requested_provider")),
+        "verdict": _str(raw.get("verdict")),
         "parseable": bool(raw.get("parseable")),
         "duration_sec": _int(raw.get("duration_sec")),
         "invocation_cost_usd": _float(raw.get("invocation_cost_usd")),
-        "error": raw.get("error") or None,
+        "error": _str(raw.get("error")),
     }
 
 
@@ -189,36 +204,48 @@ def _earlier_terminations(ledger: Path) -> list[dict[str, Any]]:
     driver moves termination.json aside under a dated name when the run
     is resumed or terminates a second time (#190 D2), so a landing after
     one of these is not a plain landing. The CURRENT disposition still
-    comes from termination.json; these are the ones before it."""
-    out: list[dict[str, Any]] = []
+    comes from termination.json; these are the ones before it.
+
+    Ordered by `created` ascending, with the epoch the driver stamped
+    into the file name standing in when a record does not carry one —
+    otherwise a record without `created` sorts before every dated one
+    and reads as the oldest. A file that merely starts with the prefix
+    carries no epoch, is not one of these, and is skipped."""
+    rows: list[tuple[str, int, dict[str, Any]]] = []
     try:
         kept = list(ledger.glob(C.LEDGER_KEPT_TERMINATION_GLOB))
     except OSError:
-        return out
+        return []
     for path in kept:
+        epoch = _int(path.stem[len(C.LEDGER_KEPT_TERMINATION_PREFIX):])
         data = _read_json(path)
-        if not isinstance(data, dict):
+        if epoch is None or not isinstance(data, dict):
             continue
-        out.append({
-            "reason": str(data["reason"]) if data.get("reason") else None,
-            "detail": data.get("detail"),
+        rows.append((_str(data.get("created")) or _iso(epoch) or "", epoch, {
+            "reason": _str(data.get("reason")),
+            "detail": _str(data.get("detail")),
             "phase": _int(data.get("phase")),
-            "created": data.get("created"),
+            "created": _str(data.get("created")),
             "file": path.name,
-        })
-    out.sort(key=lambda e: (e["created"] or "", e["file"]))
-    return out
+        }))
+    rows.sort(key=lambda row: (row[0], row[1]))
+    return [row[2] for row in rows]
 
 
 def _fallbacks(state: dict[str, Any], ledger: Path) -> list[dict[str, Any]]:
-    """FR-3: per phase, the reviewer fallback its newest review round
-    took (#190 D1). A round that fell back ran twice: `from` produced no
-    review, and `to` — the round's reviewer_provider — gated it."""
+    """FR-3: per phase, the reviewer fallback its NEWEST review round
+    took (#190 D1) — what the phase ended on, not every fallback it ever
+    took: a later round gated by one reviewer means the phase no longer
+    stands on a fallback. A round that fell back ran twice: `from`
+    produced no review, and `to` — the round's reviewer_provider — gated
+    it. The round number comes from the file name, which the driver
+    writes as findings-round-<n>.json; a name that carries no number is
+    not a round of this phase and is skipped."""
     out: list[dict[str, Any]] = []
     raw = state.get("phases") or {}
     if not isinstance(raw, dict):
         return out
-    for key in sorted(raw, key=lambda k: _int(k) if _int(k) is not None else 0):
+    for key in sorted(raw, key=_phase_order):
         review = ledger / f"{C.LEDGER_PHASE_DIR_PREFIX}{key}" / C.LEDGER_REVIEW_DIR
         try:
             candidates = list(review.glob(C.LEDGER_FINDINGS_GLOB))
@@ -239,9 +266,9 @@ def _fallbacks(state: dict[str, Any], ledger: Path) -> list[dict[str, Any]]:
         out.append({
             "phase": _int(key),
             "round": newest,
-            "from": fallback.get("from") or None,
-            "error": fallback.get("error") or None,
-            "to": data.get("reviewer_provider") or None,
+            "from": _str(fallback.get("from")),
+            "error": _str(fallback.get("error")),
+            "to": _str(data.get("reviewer_provider")),
         })
     return out
 
@@ -526,9 +553,11 @@ def _probe_line(run: dict[str, Any]) -> str:
         return "probe: none recorded"
     who = p["provider"] or p["requested_provider"] or "the gating reviewer"
     verdict = p["verdict"] or "no parseable verdict"
-    seconds = 0 if p["duration_sec"] is None else p["duration_sec"]
+    # An unrecorded duration is said, not drawn as 0s: "in 0s" reads as
+    # "answered instantly", which is the opposite of "never timed".
+    took = "unrecorded time" if p["duration_sec"] is None else f"{p['duration_sec']}s"
     cost = "unmetered" if p["invocation_cost_usd"] is None else _usd(p["invocation_cost_usd"])
-    line = f"probe: {who} answered {verdict} in {seconds}s, {cost}"
+    line = f"probe: {who} answered {verdict} in {took}, {cost}"
     return line + (f" — {p['error']}" if p["error"] else "")
 
 
@@ -541,7 +570,8 @@ def _termination_line(entry: dict[str, Any]) -> str:
 
 def _fallback_line(entry: dict[str, Any]) -> str:
     error = f" ({entry['error']})" if entry["error"] else ""
-    return (f"fallback in phase {entry['phase']} round {entry['round']}: "
+    phase = "?" if entry["phase"] is None else entry["phase"]
+    return (f"fallback in phase {phase} round {entry['round']}: "
             f"{entry['from'] or 'the reviewer'} produced no review{error}; "
             f"{entry['to'] or 'a fallback'} gated the round")
 

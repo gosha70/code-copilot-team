@@ -183,10 +183,13 @@ LEDGER_REVIEW_SUMMARY = f"{LEDGER_REVIEW_DIR}/loop-summary.json"
 LEDGER_PROBE_FILE = "reviewer-probe.json"
 #: A termination the driver kept under a dated name because the run was
 #: resumed or terminated a second time (#190 D2): termination-<epoch>.json.
-LEDGER_KEPT_TERMINATION_GLOB = "termination-*.json"
+#: The globs below are prefilters only — the epoch and the round number
+#: are what identify the file, so a reader must still parse them.
+LEDGER_KEPT_TERMINATION_PREFIX = "termination-"
+LEDGER_KEPT_TERMINATION_GLOB = f"{LEDGER_KEPT_TERMINATION_PREFIX}[0-9]*.json"
 #: One review round's findings, written by scripts/review-round-runner.sh.
 LEDGER_FINDINGS_PREFIX = "findings-round-"
-LEDGER_FINDINGS_GLOB = f"{LEDGER_FINDINGS_PREFIX}*.json"
+LEDGER_FINDINGS_GLOB = f"{LEDGER_FINDINGS_PREFIX}[0-9]*.json"
 #: Ledger states after which the driver writes nothing more.
 LEDGER_TERMINAL_STATUSES = frozenset({"done", "terminated_policy", "parked", "aborted"})
 #: Journal events that are policy decisions — what the driver DECIDED,

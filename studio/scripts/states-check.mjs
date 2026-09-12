@@ -1016,7 +1016,13 @@ try {
   const rvResumed = rvRun({ earlier_terminations: [rvTermination("provider_unavailable", "2026-09-09T02:00:00Z", "termination-1788900000.json")] });
   const rvResumedTwice = rvRun({ outcome: null, status: "building", concluded: false, earlier_terminations: [rvTermination("provider_unavailable", "2026-09-09T02:00:00Z", "termination-1788900000.json"), rvTermination("review_breaker", "2026-09-09T05:00:00Z", "termination-1788910000.json")] });
   const rvFellBack = rvRun({ fallbacks: [{ phase: 1, round: 2, from: "codex", error: "timed out after 900s", to: "deepseek" }] });
+  // The renderer mirrors _probe_line/_fallback_line in api/auto_build.py:
+  // an untimed probe and an unnumbered phase must read the same in both.
+  const rvUntimed = rvRun({ probe: { provider: "deepseek", requested_provider: "codex", verdict: "PASS", parseable: true, duration_sec: null, invocation_cost_usd: null, error: null } });
+  const rvFellBackOddPhase = rvRun({ fallbacks: [{ phase: null, round: 1, from: null, error: null, to: null }] });
   if (rv.probeLine(rvProbed) !== "deepseek answered PASS in 17s, $0.12") fail(`probe line: ${rv.probeLine(rvProbed)}`);
+  else if (rv.probeLine(rvUntimed) !== "deepseek answered PASS in unrecorded time, unmetered") fail(`untimed probe reads as 0s: ${rv.probeLine(rvUntimed)}`);
+  else if (rv.fallbackLines(rvFellBackOddPhase).join("") !== "phase ? round 1: the reviewer produced no review; a fallback gated the round") fail(`fallback with nothing named: ${rv.fallbackLines(rvFellBackOddPhase).join(" | ")}`);
   else if (rv.probeLine(rvRun()) !== "no reviewer probe recorded") fail("a run without a probe says so rather than showing nothing");
   else if (rv.probeLine(rvUnanswered) !== "codex answered no parseable verdict in 0s, unmetered — no provider in the chain for codex passed its healthcheck") fail(`unanswered probe: ${rv.probeLine(rvUnanswered)}`);
   else if (rv.earlierTerminationsLine(rvResumed) !== "landed after 1 earlier termination (provider_unavailable)") fail(`earlier terminations: ${rv.earlierTerminationsLine(rvResumed)}`);
