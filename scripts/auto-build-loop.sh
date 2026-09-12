@@ -345,7 +345,7 @@ triage_report() {
         echo "defined safety, quality, or budget boundary. Work is preserved."
         echo "Review the reason and this ledger, then resolve the boundary."
         case "$reason" in
-            provider_unavailable|review_breaker)
+            provider_unavailable|review_breaker|review_inconclusive)
                 echo "This reason MAY be resumable at the review step (#190 D2), if the"
                 echo "phase's build commit is still the branch head and the frozen base"
                 echo "its ancestor: fix the provider or the breaker's cause outside the"
@@ -4335,7 +4335,6 @@ run_review_loop() {
                         "$(jq -n --arg f "$phase_dir" --arg fixes "$fix_count" \
                             '{findings_dir: $f, fix_sessions: ($fixes | tonumber)}')"
                 fi
-                set_status "addressing-findings"
                 local findings="$PROJECT_DIR/.cct/review/findings-round-$round.json"
                 # #209: never compose a fix prompt from an unusable findings
                 # file. A truncated or empty artifact yields a fix session with
@@ -4347,6 +4346,27 @@ run_review_loop() {
                         "findings file for phase $n round $round is missing, empty or not valid JSON ($findings) — refusing to run a fix session with no findings" \
                         "$(jq -n --arg f "$findings" '{findings_file: $f}')"
                 fi
+                # Run 6 (2026-09-12): the reviewer answered INCONCLUSIVE —
+                # "could not judge" (it had been shown a truncated diff) —
+                # with ten findings and no blocking one; the driver ran a
+                # fix session over notes, which spent more than the build
+                # and hit its turn cap. "Could not judge" is not review
+                # feedback: with no blocking finding there is nothing to
+                # fix, and the round stops for review recovery — never a
+                # fix session, never a PASS. (INCONCLUSIVE WITH blocking
+                # findings still has something to fix and keeps this arm.)
+                local _rv_verdict _rv_blocking
+                _rv_verdict=$(jq -r '.verdict // ""' "$findings" 2>/dev/null || echo "")
+                _rv_blocking=$(jq -r '[.findings[]? | select(.severity == "blocking")] | length' "$findings" 2>/dev/null || echo 0)
+                if [[ "$_rv_verdict" == "INCONCLUSIVE" && "${_rv_blocking:-0}" -eq 0 ]]; then
+                    local _rv_prov _rv_n
+                    _rv_prov=$(jq -r '.reviewer_provider // "?"' "$findings" 2>/dev/null || echo "?")
+                    _rv_n=$(jq -r '.findings | length' "$findings" 2>/dev/null || echo 0)
+                    dispose "review_inconclusive" \
+                        "reviewer '$_rv_prov' could not judge phase $n round $round (INCONCLUSIVE, $_rv_n finding(s), none blocking) — fix what kept it from judging (the diff it was shown: CCT_REVIEW_DIFF_MAX_LINES, default 500 lines; the provider; the request) and rerun the review; no fix session is run on a verdict that judged nothing" \
+                        "$(jq -n --arg f "$findings" --arg p "$_rv_prov" '{findings_file: $f, reviewer: $p}')"
+                fi
+                set_status "addressing-findings"
                 local fixp="$phase_dir/fix-prompt-$fix_count.md"
                 local fixr="$phase_dir/fix-result-$fix_count.json"
                 mkdir -p "$phase_dir"
@@ -4768,7 +4788,7 @@ terminated_resumable() {
     local reason history phase last_commit head base
     reason=$(state_get '.disposition_reason // empty')
     case "$reason" in
-        provider_unavailable|review_breaker) ;;
+        provider_unavailable|review_breaker|review_inconclusive) ;;
         *)
             echo "termination reason '${reason:-unknown}' has no resume arm (a cap, an accounting, a runner or an origin termination needs a fresh run: scripts/auto-build-loop.sh $FEATURE_ID)"
             return 1 ;;
@@ -5058,6 +5078,24 @@ resume_parked() {
                     || refuse_resume "gating reviewer chain still unhealthy — fix providers.toml or the provider service, then --resume"
                 resolve_escalation "$esc_file" "reviewer chain healthy again"
             fi
+            ;;
+        review_inconclusive)
+            # The reviewer could not judge (run 6: a truncated diff). The
+            # operator fixes the cause outside the run — the diff limit,
+            # the provider — and resumes; the phase's build commit exists,
+            # so run_phase resumes at review with a fresh loop (the
+            # INCONCLUSIVE round's state is set aside, never continued).
+            local ri_args=(--provider "$GATING_REVIEWER")
+            [[ -n "${CCT_PROVIDER_PROFILE:-}" ]] && ri_args=(--profile "$CCT_PROVIDER_PROFILE" "${ri_args[@]}")
+            bash "$SCRIPT_DIR/providers-health.sh" "${ri_args[@]}" >/dev/null 2>&1 \
+                || refuse_resume "gating reviewer chain unhealthy — fix providers.toml or the provider service, then --resume"
+            if [[ -d "$PROJECT_DIR/.cct/review" ]]; then
+                local _ri_stale
+                _ri_stale=$(unique_sibling "$PROJECT_DIR/.cct/review-stale-$(now_epoch)")
+                mv "$PROJECT_DIR/.cct/review" "$_ri_stale"
+                journal "review_state_reset" "review state of the inconclusive round set aside at ${_ri_stale#$PROJECT_DIR/}; the review runs again"
+            fi
+            resolve_escalation "$esc_file" "reviewer chain healthy; the review runs again over the same build commit (diff limit: CCT_REVIEW_DIFF_MAX_LINES=${CCT_REVIEW_DIFF_MAX_LINES:-500})"
             ;;
         runner_error)
             # A runner crash can leave findings newer than state.json. Do not

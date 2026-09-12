@@ -1514,10 +1514,10 @@ DISPATCH_OK=1
 for r in origin_gate provider_unavailable review_breaker cap_exceeded \
          build_session_error build_session_timeout test_failure git_anomaly \
          pr_error pr_config pr_precheck merge_blocked \
-         coverage_gate conformance_gate cost_accounting_failed; do
+         coverage_gate conformance_gate cost_accounting_failed review_inconclusive; do
     grep -q "dispose \"$r\"" "$DRIVER" || { DISPATCH_OK=0; echo "  (missing dispose for $r)"; }
 done
-assert_eq "all 15 breaker reasons dispatch via dispose()" "1" "$DISPATCH_OK"
+assert_eq "all 16 breaker reasons dispatch via dispose()" "1" "$DISPATCH_OK"
 assert_eq "no breaker call site bypasses dispose()" "0" \
     "$(grep -cE '(^|[^a-zA-Z_"])park "[a-z]' "$DRIVER")"
 assert_eq "termination artifacts add no force-push (prechecks not weakened)" "0" \
@@ -2394,6 +2394,73 @@ assert_eq "D1: …debited once: probe + two gating rounds + one advisory invocat
     "$(jq -r '.totals.cost_estimated_usd' "$P/.cct/auto-build/demo-feat/state.json" 2>/dev/null)"
 unset GH_PR_STATE
 rm -rf "$P" "$BARE" "$D1_ADV_PROFILE" "$D1_ADV_MARK" "$D1_ADV_GATING" "$PROBE_OK_ROUND_BROKEN" "$PROBE_OK_PROFILE"
+
+# ══════════════════════════════════════════════════════════════
+echo "=== run 6: INCONCLUSIVE with no blocking finding stops for review recovery ==="
+# ══════════════════════════════════════════════════════════════
+# Run 6 (2026-09-12): the reviewer, shown a truncated diff, answered
+# INCONCLUSIVE with ten findings and none blocking; the driver ran a
+# fix session over notes that spent more than the build and hit its
+# turn cap. "Could not judge" is not review feedback.
+INCONCLUSIVE_PROFILE=$(mktemp)
+cat > "$INCONCLUSIVE_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nThe diff is truncated; I cannot judge.\n\n### Findings\nFINDING|note|documentation|README.md|top|Diff truncated before the helpers|Show the full diff\nFINDING|warning|correctness|demo.sh|near top|Possible edge case|Check it\n\n### Verdict\nINCONCLUSIVE\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+INCONCLUSIVE_BLOCKING_PROFILE=$(mktemp)
+cat > "$INCONCLUSIVE_BLOCKING_PROFILE" << 'TOML'
+[defaults]
+peer_for.claude = "mock"
+[providers.mock]
+type = "cli"
+command = "printf '### Summary\nOne thing is wrong and the rest I cannot judge.\n\n### Findings\nFINDING|blocking|correctness|demo.sh|near top|Missing check|Add check\n\n### Verdict\nINCONCLUSIVE\n'"
+timeout_sec = 10
+healthcheck = "true"
+TOML
+# Unattended: stops as review_inconclusive, no fix session, the round debited.
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"
+cfg_set "$P" '.pr={closes:[99],title:""}'
+admit_project "$P"
+BARE=$(add_remote "$P")
+GH_PR_STATE=$(mktemp -u); export GH_PR_STATE
+REVIEW_PROFILE="$INCONCLUSIVE_PROFILE" run_driver "$P"
+assert_exit "run 6: INCONCLUSIVE with no blocking finding terminates (exit 6)" 6 "$RC"
+LEDGER="$P/.cct/auto-build/demo-feat"
+assert_eq "run 6: …as review_inconclusive" "review_inconclusive" "$(jq -r '.reason' "$LEDGER/termination.json")"
+assert_contains "run 6: …naming the reviewer and the count" "$(jq -r '.detail' "$LEDGER/termination.json")" \
+    "reviewer 'mock' could not judge phase 1 round 1 (INCONCLUSIVE, 2 finding(s), none blocking)"
+assert_contains "run 6: …and the existing diff-limit control" "$(jq -r '.detail' "$LEDGER/termination.json")" "CCT_REVIEW_DIFF_MAX_LINES"
+assert_eq "run 6: no fix session was run" "0" "$(ls "$LEDGER"/phase-1/fix-prompt-*.md 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "run 6: the status never reached addressing-findings" "0" "$(grep -c '"detail":"addressing-findings"' "$LEDGER/events.jsonl" | tr -d ' ')"
+assert_eq "run 6: the review invocation is still debited (probe + round)" "4" "$(jq -r '.totals.cost_estimated_usd' "$LEDGER/state.json")"
+assert_contains "run 6: the triage report says the reason may be resumable" "$(cat "$LEDGER/triage-report.md")" "MAY be resumable at the review step"
+# …and resumes at the review step once the cause is fixed (D2).
+REVIEW_PROFILE="$PASS_PROFILE" run_driver "$P" --resume
+assert_exit "run 6: --resume with the reviewer able to judge lands (exit 0)" 0 "$RC"
+assert_eq "run 6: …outcome landed" "landed" "$(jq -r '.outcome' "$LEDGER/state.json")"
+unset GH_PR_STATE
+rm -rf "$P" "$BARE"
+# INCONCLUSIVE WITH a blocking finding still has something to fix: the fix session runs.
+P=$(setup_project); single_phase "$P"; unattended_cfg "$P"; admit_project "$P"
+REVIEW_PROFILE="$INCONCLUSIVE_BLOCKING_PROFILE" run_driver "$P"
+assert_eq "run 6: INCONCLUSIVE with a blocking finding still runs a fix session" "1" \
+    "$([[ -f "$P/.cct/auto-build/demo-feat/phase-1/fix-prompt-1.md" ]] && echo 1 || echo 0)"
+rm -rf "$P"
+# Attended: parks as review_inconclusive; --resume re-runs the review.
+P=$(setup_project); single_phase "$P"
+REVIEW_PROFILE="$INCONCLUSIVE_PROFILE" run_driver "$P"
+assert_exit "run 6: attended INCONCLUSIVE parks (exit 4)" 4 "$RC"
+ESC=$(ls "$P"/.cct/auto-build/demo-feat/escalations/esc-*.json 2>/dev/null | head -1)
+assert_eq "run 6: …with reason review_inconclusive" "review_inconclusive" "$(jq -r '.reason' "$ESC")"
+REVIEW_PROFILE="$PASS_PROFILE" run_driver "$P" --resume
+assert_exit "run 6: attended --resume re-runs the review and completes (exit 0)" 0 "$RC"
+assert_contains "run 6: …the inconclusive round's state was set aside" "$(cat "$P/.cct/auto-build/demo-feat/events.jsonl")" "review state of the inconclusive round set aside"
+rm -rf "$P" "$INCONCLUSIVE_PROFILE" "$INCONCLUSIVE_BLOCKING_PROFILE"
 
 # ══════════════════════════════════════════════════════════════
 echo "=== #190 D2: a terminated run resumes at the review step ==="
