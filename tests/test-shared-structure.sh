@@ -987,17 +987,19 @@ for f in "${DOCS_FILES[@]}"; do
 done
 assert_ok "README shared-docs section references every shared docs file" "$rc"
 
-README_CLAUDE_DOCS=(
-  claude-code-setup-cookbook.md
-  claude-config-guide.md
-  hooks-guide.md
-  subagents-guide.md
-  agent-traces.md
-  debugging-strategies.md
-  permissions-guide.md
-  recommended-mcp-servers.md
-)
+# The shipped docs directory is the source of which guides exist; a list
+# retyped here drifts the moment one is added (agent-teams.md and
+# hooks-test-cases.md shipped unlisted until #214 Phase 2.2, and this array
+# still named eight). scripts/check-doc-accuracy.sh enforces the same rule
+# against the README; this asserts the section's shape.
+README_CLAUDE_DOCS=()
+while IFS= read -r f; do
+  README_CLAUDE_DOCS+=("$(basename "$f")")
+done < <(find "$ADAPTER_DIR/docs" -maxdepth 1 -name '*.md' | sort)
 README_CLAUDE_DOCS_EXPECTED_COUNT="${#README_CLAUDE_DOCS[@]}"
+[[ "$README_CLAUDE_DOCS_EXPECTED_COUNT" -gt 0 ]] || {
+  echo "  FAIL: no docs found in $ADAPTER_DIR/docs"; exit 1
+}
 
 README_CLAUDE_DOCS_SECTION=$(
   awk '
