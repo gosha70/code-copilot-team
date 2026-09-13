@@ -335,6 +335,24 @@ for f in catalog pi claude-code; do
 done
 assert "capability registry validates" "bash '$REPO_DIR/scripts/validate-capabilities.sh' >/dev/null 2>&1"
 
+# #214 Phase 2.0: the validator's enum vocabularies come from the JSON schema,
+# not from constants restated in the script. Proof: a schema with one value
+# removed makes the shipped (valid) registry fail; a missing schema is an
+# error, never a silent pass.
+NARROW_SCHEMA="$TMP/capability-narrow.schema.json"
+ruby -rjson -e '
+  s = JSON.parse(File.read(ARGV[0]))
+  s["$defs"]["runtime_status"]["enum"].delete("enabled")
+  File.write(ARGV[1], JSON.generate(s))
+' "$REPO_DIR/shared/schemas/capability.schema.json" "$NARROW_SCHEMA"
+NARROW_RC=0
+bash "$REPO_DIR/scripts/validate-capabilities.sh" "$CAP_DIR" "$NARROW_SCHEMA" >/dev/null 2>&1 || NARROW_RC=$?
+assert "validator enums come from the schema (narrowed schema rejects the registry)" "[[ '$NARROW_RC' == '1' ]]"
+MISSING_RC=0
+bash "$REPO_DIR/scripts/validate-capabilities.sh" "$CAP_DIR" "$TMP/no-such.schema.json" >/dev/null 2>&1 || MISSING_RC=$?
+assert "validator refuses a missing schema (exit 1)" "[[ '$MISSING_RC' == '1' ]]"
+assert "validator restates no enum vocabulary" "! grep -q '%w\[' '$REPO_DIR/scripts/validate-capabilities.sh'"
+
 # T11.2: the generated compatibility doc must not stale — it is a deterministic
 # render of the registry. The guard fails the build if COMPATIBILITY.md differs
 # from a fresh generation (registry changed without regenerating, or hand-edit).

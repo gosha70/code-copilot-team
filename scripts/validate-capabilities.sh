@@ -5,21 +5,30 @@
 #   1. catalog.yaml and every <adapter>.yaml parse and carry schema_version/kind
 #   2. adapter ids all exist in the catalog (no invented capabilities)
 #   3. every catalog id is classified by every adapter (no silent omissions)
-#   4. enum values for implementation_kind / runtime_status / security_level
+#   4. enum values for implementation_kind / runtime_status / security_level,
+#      read from shared/schemas/capability.schema.json so the schema is the
+#      one source of those vocabularies (the validator never restates them)
 #   5. a non-enabled runtime_status always carries a reason (honest reporting)
 #   6. requires/conflicts reference ids that exist
 #
 # Run from the repo root:
-#   bash scripts/validate-capabilities.sh [capabilities-dir]
+#   bash scripts/validate-capabilities.sh [capabilities-dir] [schema-file]
 #
-# The optional directory argument exists so tests can run the same checks
-# against fixtures that are deliberately broken.
+# The optional arguments exist so tests can run the same checks against
+# fixtures that are deliberately broken, or against a schema whose enums
+# differ from the shipped one.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CAP_DIR="${1:-$REPO_DIR/shared/capabilities}"
+SCHEMA_FILE="${2:-$REPO_DIR/shared/schemas/capability.schema.json}"
+
+if [[ ! -f "$SCHEMA_FILE" ]]; then
+  echo "[ERROR] capability schema not found: $SCHEMA_FILE"
+  exit 1
+fi
 
 if ! command -v ruby >/dev/null 2>&1; then
   # A silent skip would let CI report success without validating anything.
@@ -32,8 +41,9 @@ if ! command -v ruby >/dev/null 2>&1; then
   exit 0
 fi
 
-ruby -ryaml -e '
+ruby -ryaml -rjson -e '
 cap_dir = ARGV[0]
+schema_file = ARGV[1]
 fail_count = 0
 pass_count = 0
 
@@ -41,9 +51,21 @@ def err(msg)
   puts "  FAIL: #{msg}"
 end
 
-KINDS = %w[native cct-first-party optional-bridge external-platform]
-STATUSES = %w[enabled disabled unavailable degraded misconfigured unsupported]
-LEVELS = %w[none advisory enforcing critical]
+# The enums live in the JSON schema; a vocabulary restated here would be a
+# second source that drifts the moment the schema changes.
+schema = JSON.parse(File.read(schema_file))
+defs = schema["$defs"] || {}
+def enum_of(defs, name, schema_file)
+  values = defs.dig(name, "enum")
+  unless values.is_a?(Array) && values.any?
+    puts "  FAIL: #{schema_file}: $defs.#{name}.enum is missing or empty"
+    exit 1
+  end
+  values
+end
+KINDS = enum_of(defs, "implementation_kind", schema_file)
+STATUSES = enum_of(defs, "runtime_status", schema_file)
+LEVELS = enum_of(defs, "security_level", schema_file)
 
 catalog_path = File.join(cap_dir, "catalog.yaml")
 unless File.exist?(catalog_path)
@@ -147,4 +169,4 @@ puts "========================================="
 puts "  Capability registry: #{pass_count} passed, #{fail_count} failed"
 puts "========================================="
 exit(fail_count.zero? ? 0 : 1)
-' "$CAP_DIR"
+' "$CAP_DIR" "$SCHEMA_FILE"
