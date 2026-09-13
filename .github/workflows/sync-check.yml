@@ -109,6 +109,15 @@ jobs:
       - name: Check the feature index is not stale
         run: bash scripts/generate-feature-index.sh --check
 
+      # shared/capabilities/COMPATIBILITY.md is a deterministic render of the
+      # capability registry. Until #214 Phase 2.0 this check ran only on
+      # release tags, so a PR could land a stale matrix; it gates PRs now.
+      - name: Check the capability matrix is not stale
+        run: |
+          set -euo pipefail
+          bash scripts/validate-capabilities.sh
+          bash scripts/generate-capability-docs.sh --check
+
       # Offline contract checks only — the --online variant provisions a real
       # venv from PyPI and takes minutes, so it stays opt-in (run it when
       # bumping the pins).
