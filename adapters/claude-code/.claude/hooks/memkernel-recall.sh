@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# memkernel-recall.sh — SessionStart hook: recall MemKernel context (self-guarding; no-op unless MemKernel is installed)
 set -euo pipefail
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"

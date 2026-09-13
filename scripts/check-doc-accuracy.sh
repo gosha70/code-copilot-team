@@ -54,23 +54,28 @@ grab() {
     fi
 }
 
+echo "check-doc-accuracy: generated README blocks"
+if bash "$ROOT/scripts/generate-readme-inserts.sh" --check >/dev/null 2>&1; then
+    ok "README generated blocks are current"
+else
+    fail "README generated blocks are stale — run scripts/generate-readme-inserts.sh"
+fi
+
 echo "check-doc-accuracy: counts"
 
 # ── Sources of truth ──
 SHARED_SKILLS=$(find shared/skills -name SKILL.md | wc -l | tr -d ' ')
-ALWAYS_RULES=$(sed -n 's/.*for name in \([a-z -]*\); do.*/\1/p' adapters/claude-code/setup.sh | head -1 | wc -w | tr -d ' ')
+ALWAYS_RULES=$(sed -n 's/^ALWAYS_RULES="\([^"]*\)".*/\1/p' adapters/claude-code/setup.sh | head -1 | wc -w | tr -d ' ')
 INSTALLED_SKILLS=$((SHARED_SKILLS - ALWAYS_RULES))
 AGENTS=$(ls adapters/claude-code/.claude/agents/*.md | wc -l | tr -d ' ')
 CODEX_SKILLS=$(find adapters/codex -name SKILL.md | wc -l | tr -d ' ')
-[[ "$ALWAYS_RULES" -gt 0 ]] || { echo "could not parse the always-rules list from adapters/claude-code/setup.sh" >&2; exit 2; }
+[[ "$ALWAYS_RULES" -gt 0 ]] || { echo "could not read the ALWAYS_RULES assignment in adapters/claude-code/setup.sh" >&2; exit 2; }
 
 # ── README claims ──
 r_shared=$(grab '[0-9]+ skills \(SKILL\.md format, open Agent Skills spec\)' README.md)
 r_rules=$(grab '[0-9]+ global rules' README.md)
 r_ondemand=$(grab '[0-9]+ on-demand skills' README.md)
-r_tree_ondemand=$(grab 'SKILL\.md format, [0-9]+ skills\)' README.md)
 r_utility=$(grab 'plus [0-9]+ utility agents' README.md)
-r_tree_agents=$(grab 'Phase \+ utility agents \([0-9]+ files\)' README.md)
 r_codex=$(grab 'AGENTS\.md` \+ [0-9]+ skills' README.md)
 
 check() {  # <label> <claimed> <actual>
@@ -79,7 +84,6 @@ check() {  # <label> <claimed> <actual>
 check "shared skills (repo-layout tree)"        "$r_shared"        "$SHARED_SKILLS"
 check "global rules"                            "$r_rules"         "$ALWAYS_RULES"
 check "installed on-demand skills"              "$r_ondemand"      "$INSTALLED_SKILLS"
-check "installed on-demand skills (file tree)"  "$r_tree_ondemand" "$INSTALLED_SKILLS"
 # The utility claim rides through arithmetic (4 phase + N), so a
 # non-numeric grab result (MISSING/CONFLICTING) must fail as drift
 # BEFORE the arithmetic — bash would otherwise crash on it.
@@ -88,8 +92,22 @@ if [[ "$r_utility" =~ ^[0-9]+$ ]]; then
 else
     fail "utility agents (4 phase + N utility): README claim is '$r_utility', source says '$AGENTS' total"
 fi
-check "agents (file tree)"                      "$r_tree_agents"   "$AGENTS"
 check "codex skills"                            "$r_codex"         "$CODEX_SKILLS"
+
+# ── Documentation index completeness ──
+# lychee proves every link resolves; nothing proved the reverse, so a guide
+# could ship unlisted (agent-teams.md and hooks-test-cases.md both did until
+# #214 Phase 2.2). The index itself stays hand-curated — its one-line
+# descriptions are editorial — but every file has to appear in it.
+echo "check-doc-accuracy: documentation index"
+for doc in adapters/claude-code/docs/*.md shared/docs/*.md; do
+    [[ -e "$doc" ]] || continue
+    if grep -qF "($doc)" README.md; then
+        ok "listed: $doc"
+    else
+        fail "$doc ships but is not linked from the README's Documentation index"
+    fi
+done
 
 if [[ "$COUNTS_ONLY" -eq 1 ]]; then
     echo "check-doc-accuracy: link check SKIPPED (--counts-only)"

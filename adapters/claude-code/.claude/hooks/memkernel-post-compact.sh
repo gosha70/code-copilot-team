@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# memkernel-post-compact.sh — PostCompact hook: recover MemKernel context after compaction (self-guarding)
 set -euo pipefail
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"

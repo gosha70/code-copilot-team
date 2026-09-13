@@ -554,61 +554,72 @@ Each template ships a `.github/workflows/` file so CI is wired up the moment the
 
 ## How Configuration Layers Work
 
+<!-- GENERATED BLOCK — do not edit between the markers. Run scripts/generate-readme-inserts.sh
+     after adding a rule, skill, agent or hook. Sources: shared/skills/*/SKILL.md,
+     adapters/claude-code/.claude/{agents,hooks}/, and ALWAYS_RULES in adapters/claude-code/setup.sh.
+     A drift guard (--check) fails the build if this block is stale. -->
+<!-- generated:begin config-layers -->
 ```
 ~/.claude/CLAUDE.md                ← Global agent manifest (base)
 ~/.claude/rules/*.md               ← Global rules (always loaded, 4 files)
-  ├── coding-standards.md          SOLID, quality gates, prohibited patterns
-  ├── copilot-conventions.md       Cross-tool portable conventions
-  ├── safety.md                    Destructive action guards, secrets policy
-  └── copyright-headers.md         Copyright header rules for generated source files
+  ├── coding-standards.md              Quality gates, prohibited patterns, verification discipline…
+  ├── copilot-conventions.md           Cross-copilot portable conventions: target alignment…
+  ├── copyright-headers.md             Copyright header rules for generated source files. Applies…
+  └── safety.md                        Non-negotiable safety constraints: destructive action guards…
 ~/.claude/skills/*/SKILL.md        ← On-demand skills (SKILL.md format, 20 skills)
-  ├── agent-team-protocol/         Phased workflow, delegation rules
-  ├── clarification-protocol/      Ask before implementing ambiguous requirements
-  ├── environment-setup/           Environment and config verification
-  ├── infra-verification/          Infrastructure artifact verification ("build it, run it")
-  ├── integration-testing/         Test integration points early
-  ├── memkernel-memory/            MemKernel persistent memory protocol (self-guarding)
-  ├── opus-4-7-features/           Opus 4.7 optimization (xhigh effort, auto mode, caching)
-  ├── phase-workflow/              Phase transition rules and boundaries
-  ├── provider-collaboration-protocol/  Peer review protocol and collaboration rules
-  ├── ralph-loop/                  Single-agent autonomous iteration loop
-  ├── review-loop/                 Peer review loop with findings and resolutions
-  ├── spec-workflow/               SDD spec gating and artifact management
-  ├── stack-constraints/           Stack version and compatibility guards
-  ├── team-lead-efficiency/        Limit agents, poll frequency, no re-work
-  └── token-efficiency/            Diff-over-rewrite, context economy
+  ├── agent-team-protocol/             Multi-agent delegation rules, three-phase workflow…
+  ├── auto-build-loop/                 Autonomous build driver after SDD spec approval: phase-scoped…
+  ├── clarification-protocol/          When and how to ask clarifying questions before implementing.…
+  ├── design-system/                   Derive a unique, domain-fit design direction and enforce…
+  ├── environment-setup/               Environment variable patterns, config file validation, and…
+  ├── infra-verification/              Infrastructure artifact verification: Docker builds, CI…
+  ├── integration-testing/             Test integration points early. Verify cross-service…
+  ├── memkernel-memory/                MemKernel persistent memory protocol. Self-guarding…
+  ├── opus-4-7-features/               Optional guidance for sessions using Claude Opus 4.7…
+  ├── origin-confirmation/             Origin-confirmation circuit breaker: machine-checkable origin…
+  ├── phase-workflow/                  Phase transition rules, post-phase verification steps, peer…
+  ├── provider-collaboration-protocol/ Cross-provider peer review protocol: session flags, review…
+  ├── ralph-loop/                      Single-agent autonomous iteration loop: PRD-driven…
+  ├── review-loop/                     Agent-driven peer review loop: structured findings…
+  ├── spec-workflow/                   SDD specification protocol: risk-based spec_mode…
+  ├── stack-constraints/               Stack version pinning and dependency compatibility guards.…
+  ├── team-lead-efficiency/            Build team lead efficiency rules: limit sub-agents, polling…
+  ├── token-efficiency/                Token economy rules: diff-over-rewrite, context compression…
+  ├── visual-review/                   Closed visual-review loop for generated UI: render the…
+  └── wiki-first-query/                Wiki-first query convention: consult knowledge/wiki/index.md…
 ~/.claude/agents/*.md              ← Phase + utility agents (14 files)
-  ├── research.md                  Research phase agent
-  ├── plan.md                      Plan phase agent
-  ├── build.md                     Build phase agent
-  ├── review.md                    Review phase agent
-  ├── code-simplifier.md           Simplify recently changed code
-  ├── cooldown-report.md           Cooldown report: fixes shipped + pitches ready
-  ├── cycle-retro.md               Cycle retrospective from pitch, hill, and git log
-  ├── doc-writer.md                Generate and update documentation
-  ├── phase-recap.md               Summarize completed phase
-  ├── pitch-shaper.md              Shape a rough idea into a Shape-Up pitch
-  ├── scope-executor.md            Execute a single scope of an active pitch
-  ├── security-review.md           Scan for security vulnerabilities
-  ├── verify-app.md                End-to-end project verification
-  └── visual-reviewer.md           Visual-review loop for generated UI
+  ├── build.md                         Decomposes approved plans into tasks, delegates to…
+  ├── code-simplifier.md               Reviews recently changed code for unnecessary complexity.…
+  ├── cooldown-report.md               Generates a cooldown report — bug fixes shipped + pitches…
+  ├── cycle-retro.md                   Generates a cycle retrospective from pitch.md, hill.json, and…
+  ├── doc-writer.md                    Generates and updates project documentation after feature…
+  ├── phase-recap.md                   Generates a phase recap document summarizing what was built…
+  ├── pitch-shaper.md                  Takes a rough idea, asks clarifying questions, and produces a…
+  ├── plan.md                          Asks clarifying questions, produces implementation plans with…
+  ├── research.md                      Explores codebase, reads docs, searches the web. No code…
+  ├── review.md                        Holistic review of all changes — correctness, consistency…
+  ├── scope-executor.md                Executes a single scope of an active Shape-Up pitch. Reads…
+  ├── security-review.md               Scans code for common security vulnerabilities. Checks for…
+  ├── verify-app.md                    Runs end-to-end verification of the project. Executes test…
+  └── visual-reviewer.md               Drives the visual-review loop for generated UI — boots the…
 ~/.claude/hooks/*.sh               ← Deterministic lifecycle hooks (always active, 11 files)
-  ├── verify-on-stop.sh            Run test suite when Claude finishes responding
-  ├── verify-after-edit.sh         Run type checker after source file edits
-  ├── auto-format.sh               Auto-format edited files
-  ├── protect-files.sh             Prevent edits to protected files
-  ├── protect-git.sh               Guard destructive git commands (push --force, reset --hard)
-  ├── peer-review-on-stop.sh       Trigger peer review on phase completion
-  ├── reinject-context.sh          Re-inject session context on prompt submit
-  ├── notify.sh                    Desktop notifications (macOS + Linux)
-  ├── memkernel-recall.sh          Recall MemKernel context on session start (self-guarding)
-  ├── memkernel-pre-compact.sh     Save checkpoint before compaction (self-guarding)
-  └── memkernel-post-compact.sh    Recover context after compaction (self-guarding)
+  ├── auto-format.sh                   After a source file is edited, auto-detects and runs the…
+  ├── memkernel-post-compact.sh        PostCompact hook: recover MemKernel context after compaction…
+  ├── memkernel-pre-compact.sh         PreCompact hook: save a MemKernel checkpoint before…
+  ├── memkernel-recall.sh              SessionStart hook: recall MemKernel context (self-guarding…
+  ├── notify.sh                        Sends a workspace-aware notification when Claude Code fires a…
+  ├── peer-review-on-stop.sh           Validates that the review loop completed before the session…
+  ├── protect-files.sh                 Blocks edits to protected files: .env, *.lock, .git/*…
+  ├── protect-git.sh                   Guards git commit and git push. On first attempt, blocks and…
+  ├── reinject-context.sh              After compaction or session start, re-injects critical…
+  ├── verify-after-edit.sh             After a source file is edited, auto-detects and runs the…
+  └── verify-on-stop.sh                When Claude finishes responding, auto-detects and runs the…
 ~/.claude/settings.json            ← Hooks wiring and global settings
 ./CLAUDE.md                        ← Project-level (overrides global)
 ./.claude/commands/*.md            ← Project slash commands
 ./CLAUDE.local.md                  ← Personal overrides (gitignored)
 ```
+<!-- generated:end config-layers -->
 
 Project-level rules override global rules. More specific always wins.
 
@@ -1253,14 +1264,29 @@ All tools share the same rules from `shared/skills/`. Each adapter formats them 
 ## Enforcement Tiers
 
 Adapters fall into two tiers by how the CCT contract is applied. **Enforced**
-adapters run a real gate (a native harness or the Pi runtime extension) that can
-*block*; **Advisory** adapters receive the same rules as content the tool reads
-but cannot mechanically enforce.
+adapters run a real gate (a native harness, the Pi runtime extension, or the
+auto-build driver) that can *block*; **Advisory** adapters receive the same
+rules as content the tool reads but cannot mechanically enforce.
 
-| Tier | Adapters | What it means |
-|---|---|---|
-| **Enforced** | Claude Code (native), **Pi** (runtime extension) | a runtime gate can block (e.g. SDD/phase workflow, permissions, protected paths). Per-capability enforcement varies by adapter — some are `degraded`/`disabled` (e.g. sandbox, verification, review). See the matrix. |
-| **Advisory** | Codex, Cursor, GitHub Copilot, Windsurf, Aider | the same rules as tool-read content; no runtime enforcement |
+An adapter is **Enforced** when at least one feature names it `enforced` in the
+feature catalog, and **Advisory** otherwise. The counts say how far that reach
+goes: `Outside adapters` counts features that run as a script or a web app and
+need nothing from any adapter.
+
+<!-- GENERATED BLOCK — do not edit between the markers. Run scripts/generate-readme-inserts.sh
+     after changing the adapters field in shared/features/catalog.yaml.
+     A drift guard (--check) fails the build if this block is stale. -->
+<!-- generated:begin enforcement-tiers -->
+| Adapter | Tier | Enforced | Advisory | Unsupported | Outside adapters |
+|---|---|---|---|---|---|
+| `aider` | Advisory | 0 | 9 | 6 | 4 |
+| `claude-code` | **Enforced** | 15 | 0 | 0 | 4 |
+| `codex` | **Enforced** | 6 | 9 | 1 | 3 |
+| `cursor` | Advisory | 0 | 9 | 7 | 3 |
+| `github-copilot` | Advisory | 0 | 9 | 7 | 3 |
+| `pi` | **Enforced** | 8 | 6 | 1 | 4 |
+| `windsurf` | Advisory | 0 | 9 | 7 | 3 |
+<!-- generated:end enforcement-tiers -->
 
 Pi is **Enforced** but honest about its boundaries: some capabilities are
 `degraded` where Pi lacks a native primitive (no Stop/compaction event, no
@@ -1347,7 +1373,9 @@ Rule content is written once in `shared/` and adapted per tool via `scripts/gene
 - **[Setup Cookbook](adapters/claude-code/docs/claude-code-setup-cookbook.md)** — deep-dive into every configuration option
 - **[Config Guide](adapters/claude-code/docs/claude-config-guide.md)** — templates, agent teams, output styles, and workflow reference
 - **[Hooks Guide](adapters/claude-code/docs/hooks-guide.md)** — hook installation, customization, and supported stacks
+- **[Hooks — Manual Test Cases](adapters/claude-code/docs/hooks-test-cases.md)** — the by-hand checks that prove each hook fires and blocks
 - **[Sub-Agents Guide](adapters/claude-code/docs/subagents-guide.md)** — sub-agent configuration and usage
+- **[Agent Teams](adapters/claude-code/docs/agent-teams.md)** — Claude Code's experimental multi-session teams, and how they differ from in-session delegation
 - **[Agent Traces](adapters/claude-code/docs/agent-traces.md)** — locating, reading, and archiving agent transcripts
 - **[Debugging Strategies](adapters/claude-code/docs/debugging-strategies.md)** — /doctor, background tasks, Playwright MCP, trace debugging
 - **[Permissions Guide](adapters/claude-code/docs/permissions-guide.md)** — per-stack Allow/Deny wildcard patterns for /permissions

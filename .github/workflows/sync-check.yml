@@ -119,6 +119,16 @@ jobs:
       - name: Check the feature index is not stale
         run: bash scripts/generate-feature-index.sh --check
 
+      # The README's configuration-layers tree and enforcement tiers are
+      # rendered from the skills, agents, hooks and feature catalog; a hand
+      # edit inside a marked block, or a new source file without a
+      # regeneration, fails here (#214 Phase 2.2).
+      - name: Check the README generated blocks are not stale
+        run: bash scripts/generate-readme-inserts.sh --check
+
+      - name: README insert tests
+        run: bash tests/test-readme-inserts.sh
+
       # shared/capabilities/COMPATIBILITY.md is a deterministic render of the
       # capability registry. Until #214 Phase 2.0 this check ran only on
       # release tags, so a PR could land a stale matrix; it gates PRs now.
