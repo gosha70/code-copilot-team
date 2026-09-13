@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# generate-feature-index.sh — render the user-facing feature index (slash
-# commands + skills + capabilities) from their source-of-truth files.
+# generate-feature-index.sh — render the user-facing feature index (features +
+# slash commands + skills + capabilities) from their source-of-truth files.
 #
 # Motivation: dozens of slash commands and skills plus a layered capability
 # catalog are impossible to discover by hand, and hand-maintained counts in the
@@ -10,6 +10,8 @@
 # stale index fails the build, mirroring generate-capability-docs.sh.
 #
 # Sources (only these):
+#   - shared/features/catalog.yaml                  (user-facing features: maturity,
+#                                                    release, adapter support, guide)
 #   - shared/skills/*/SKILL.md                      (name + description frontmatter)
 #   - adapters/claude-code/.claude/commands/*.md    (name = stem, desc = first line)
 #   - shared/capabilities/catalog.yaml              (id + description + default)
@@ -24,6 +26,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKILLS_DIR="$REPO_DIR/shared/skills"
 CMDS_DIR="$REPO_DIR/adapters/claude-code/.claude/commands"
 CATALOG="$REPO_DIR/shared/capabilities/catalog.yaml"
+FEATURES="$REPO_DIR/shared/features/catalog.yaml"
 OUT="$REPO_DIR/docs/features.md"
 DASH="—"
 
@@ -63,10 +66,37 @@ capability_rows() {
   ' "$CATALOG" 2>/dev/null || return 0
 }
 
+# Feature rows from shared/features/catalog.yaml. Unlike capability_rows this
+# does NOT degrade to an empty section: the catalog is the index's headline
+# table, and a render that silently drops it would pass --check while lying.
+# The adapter columns are the adapters/ directory in sorted order, read from
+# the schema-validated catalog, so a new adapter shows up as a column without
+# touching this script.
+feature_adapters() {
+  find "$REPO_DIR/adapters" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort
+}
+
+feature_rows() {
+  [[ -f "$FEATURES" ]] || { echo "[ERROR] $FEATURES not found" >&2; return 1; }
+  command -v ruby >/dev/null 2>&1 || { echo "[ERROR] ruby is required to render the feature table" >&2; return 1; }
+  ruby -ryaml -e '
+    doc = YAML.load_file(ARGV[0])
+    adapters = ARGV[1].split(" ")
+    mark = { "enforced" => "enforced", "advisory" => "advisory", "unsupported" => "—", "neutral" => "n/a" }
+    (doc["features"] || []).each do |f|
+      problem = (f["problem"] || "").gsub(/\s+/, " ").strip
+      guide = f["guide"].to_s
+      cells = adapters.map { |a| mark.fetch((f["adapters"] || {})[a].to_s, "?") }
+      title = guide.empty? ? f["title"] : "[#{f["title"]}](../#{guide})"
+      printf("| %s | %s | %s | %s | %s |\n", title, problem, f["maturity"], f["since"], cells.join(" | "))
+    end
+  ' "$FEATURES" "$(feature_adapters | tr "\n" " ")"
+}
+
 render() {
-  local cmd_count=0 skill_count=0 cap_count=0
-  local cmd_rows="" skill_rows="" cap_rows=""
-  local name desc
+  local cmd_count=0 skill_count=0 cap_count=0 feature_count=0
+  local cmd_rows="" skill_rows="" cap_rows="" feature_rows="" adapter_header="" adapter_sep=""
+  local name desc a
 
   if [[ -d "$CMDS_DIR" ]]; then
     while IFS= read -r -d '' f; do
@@ -89,6 +119,13 @@ render() {
   cap_rows="$(capability_rows)"
   cap_count="$(printf '%s' "$cap_rows" | grep -c '^|' || true)"
 
+  feature_rows="$(feature_rows)" || return 1
+  feature_count="$(printf '%s' "$feature_rows" | grep -c '^|' || true)"
+  while IFS= read -r a; do
+    adapter_header+=" $a |"
+    adapter_sep+="---|"
+  done < <(feature_adapters)
+
   # Strip trailing newline from row blocks (safe outside the heredoc).
   cmd_rows="${cmd_rows%$'\n'}"
   skill_rows="${skill_rows%$'\n'}"
@@ -98,14 +135,26 @@ render() {
 
 > **GENERATED — do not edit.** Run \`scripts/cct list --write\` (or
 > \`scripts/generate-feature-index.sh\`) to regenerate. Sources of truth:
-> \`shared/skills/\`, \`adapters/claude-code/.claude/commands/\`, and
+> \`shared/features/catalog.yaml\`, \`shared/skills/\`,
+> \`adapters/claude-code/.claude/commands/\`, and
 > \`shared/capabilities/catalog.yaml\`. To change an entry, edit the source —
 > a drift guard (\`--check\`) fails the build if this file is stale.
 
-_${cmd_count} slash commands · ${skill_count} skills · ${cap_count} capabilities_
+_${feature_count} features · ${cmd_count} slash commands · ${skill_count} skills · ${cap_count} capabilities_
 
 New here? Start with the [Quick Start](../README.md#quick-start), then browse the
 tables below. In a session, run \`scripts/cct list\` to print this on demand.
+
+## Features
+
+What the harness offers, one row per user-facing feature. The title links to
+the primary guide. Maturity, release state and adapter support are defined in
+[maturity.md](maturity.md); \`—\` is unsupported and \`n/a\` means the feature
+runs outside any adapter.
+
+| Feature | What you get | Maturity | Since |${adapter_header}
+|---------|--------------|----------|-------|${adapter_sep}
+${feature_rows}
 
 ## Slash commands
 
@@ -148,7 +197,11 @@ main() {
       rm -f "$tmp"; echo "[OK] docs/features.md is up to date." >&2 ;;
     --write|write)
       mkdir -p "$(dirname "$OUT")"
-      render >"$OUT"
+      # Render to a temp file first: a render that fails half-way (the
+      # feature table refuses to degrade) must not leave a truncated index.
+      local tmp; tmp="$(mktemp)"
+      render >"$tmp" || { rm -f "$tmp"; exit 1; }
+      mv "$tmp" "$OUT"
       echo "[OK] wrote $OUT" >&2 ;;
     *) echo "usage: generate-feature-index.sh [--stdout|--check|--write]" >&2; exit 2 ;;
   esac

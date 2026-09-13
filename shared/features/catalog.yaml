@@ -1,0 +1,403 @@
+# User-facing feature catalog — the one source for what the harness offers a
+# user, how mature each feature is, which release carries it, how each adapter
+# delivers it, what it needs, and where its guide is (#214 Phase 2.1).
+#
+# Contract: shared/schemas/feature.schema.json (vocabularies live there and in
+# docs/maturity.md; nothing restates them). Validated by
+# scripts/validate-features.sh; rendered into docs/features.md by
+# scripts/generate-feature-index.sh (`scripts/cct list --write`), whose
+# --check gate fails a PR that changes this file without regenerating.
+#
+# Runtime capability semantics stay in shared/capabilities/; entries reference
+# capability ids and never restate them. Every adapter under adapters/ must be
+# classified on every feature — an unclassified adapter is a validation error,
+# not a default.
+schema_version: 1
+kind: features
+features:
+  - id: sdd-workflow
+    title: Spec-driven development
+    problem: >-
+      A feature is specified, planned and task-listed in `specs/<feature-id>/`
+      before any code is written, with an origin-alignment gate that stops
+      the build when the working spec drifts from what the user asked for.
+    maturity: stable
+    since: v1.1.0
+    adapters:
+      claude-code: enforced
+      pi: enforced
+      codex: advisory
+      cursor: advisory
+      github-copilot: advisory
+      windsurf: advisory
+      aider: advisory
+    prerequisites: [git, jq]
+    guide: docs/sdd-vs-code-copilot-team.md
+    commands: [origin-check]
+    skills: [spec-workflow, origin-confirmation]
+    capabilities: [workflow.sdd]
+
+  - id: four-phase-workflow
+    title: Four-phase agent workflow
+    problem: >-
+      Work moves through Research, Plan, Build and Review with a single agent
+      in every phase but Build, where a Team Lead delegates to sub-agents;
+      phase transitions are gated on verification.
+    maturity: stable
+    since: v1.1.0
+    adapters:
+      claude-code: enforced
+      pi: enforced
+      codex: advisory
+      cursor: advisory
+      github-copilot: advisory
+      windsurf: advisory
+      aider: advisory
+    guide: shared/skills/phase-workflow/SKILL.md
+    commands: [phase-complete]
+    skills: [phase-workflow, agent-team-protocol, team-lead-efficiency]
+    capabilities: [workflow.phases, agents.subagents]
+
+  - id: shape-up
+    title: Shape-Up product bets
+    problem: >-
+      Rough ideas become pitches with an appetite, scopes and a circuit
+      breaker; bets run against a hill chart and end in a retrospective and a
+      cooldown report.
+    maturity: stable
+    since: v1.1.0
+    adapters:
+      claude-code: enforced
+      pi: advisory
+      codex: advisory
+      cursor: advisory
+      github-copilot: advisory
+      windsurf: advisory
+      aider: advisory
+    guide: docs/shape-up-workflow.md
+    commands: [shape, bet, cycle-start, hill, retro, cooldown]
+
+  - id: peer-review
+    title: Peer review by a second model
+    problem: >-
+      A second provider reviews the diff in a read-only sandbox and returns a
+      PASS, FAIL or INCONCLUSIVE verdict with findings; the phase cannot
+      complete on a FAIL, and a failed reviewer falls back down a chain.
+    maturity: stable
+    since: v1.1.0
+    adapters:
+      claude-code: enforced
+      pi: advisory
+      codex: advisory
+      cursor: advisory
+      github-copilot: advisory
+      windsurf: advisory
+      aider: advisory
+    prerequisites:
+      - a reviewer provider in ~/.code-copilot-team/providers.toml
+      - the provider's API key exported by name, or a local model server
+    guide: docs/auto-code-review-setup.md
+    commands: [review-submit, review-decide]
+    skills: [provider-collaboration-protocol, review-loop]
+    capabilities: [review.enforcement]
+
+  - id: auto-build
+    title: Unattended auto-build runs
+    problem: >-
+      An approved feature is built phase by phase by a driver outside the
+      session, with a gating reviewer per phase, bounded fix sessions, a
+      cost and wall-clock cap, a ledger, and a PR at the end.
+    maturity: beta
+    since: unreleased
+    adapters:
+      claude-code: enforced
+      pi: enforced
+      codex: enforced
+      cursor: unsupported
+      github-copilot: unsupported
+      windsurf: unsupported
+      aider: unsupported
+    prerequisites:
+      - an approved SDD bundle with automation.json
+      - a gating reviewer that answers the readiness probe
+      - gh authenticated for the PR
+    guide: shared/skills/auto-build-loop/SKILL.md
+    commands: [auto-build]
+    skills: [auto-build-loop]
+    capabilities: [workflow.sdd, workflow.phases, review.enforcement, verification.enforcement]
+
+  - id: auto-build-caps
+    title: Cost and safety caps
+    problem: >-
+      An unattended run stops on its own when spend, wall-clock, review
+      rounds or session turns exceed the caps frozen at admission, and the
+      Studio raises an alert at 80% and 100%.
+    maturity: beta
+    since: unreleased
+    adapters:
+      claude-code: enforced
+      pi: enforced
+      codex: enforced
+      cursor: unsupported
+      github-copilot: unsupported
+      windsurf: unsupported
+      aider: unsupported
+    prerequisites: [auto-build]
+    guide: shared/skills/auto-build-loop/SKILL.md
+    skills: [auto-build-loop]
+
+  - id: auto-build-coverage-contract
+    title: Coverage contract
+    problem: >-
+      A run's verification.yaml binds each requirement to the test that
+      proves it, and the driver refuses a phase whose coverage fell below
+      the frozen contract.
+    maturity: beta
+    since: unreleased
+    adapters:
+      claude-code: enforced
+      pi: enforced
+      codex: enforced
+      cursor: unsupported
+      github-copilot: unsupported
+      windsurf: unsupported
+      aider: unsupported
+    prerequisites: [auto-build]
+    guide: shared/skills/auto-build-loop/SKILL.md
+    skills: [auto-build-loop]
+    capabilities: [verification.enforcement]
+
+  - id: auto-build-conformance-evaluator
+    title: Runtime conformance evaluator
+    problem: >-
+      The built application is started and probed against the contract's
+      runtime criteria before the phase can land, so a green unit suite
+      cannot hide a service that does not come up.
+    maturity: experimental
+    since: unreleased
+    adapters:
+      claude-code: enforced
+      pi: enforced
+      codex: enforced
+      cursor: unsupported
+      github-copilot: unsupported
+      windsurf: unsupported
+      aider: unsupported
+    prerequisites: [auto-build]
+    guide: shared/skills/auto-build-loop/SKILL.md
+    skills: [auto-build-loop, infra-verification]
+    capabilities: [verification.enforcement]
+
+  - id: auto-build-visual-gate
+    title: Visual verification gate
+    problem: >-
+      A UI feature's run captures screenshots against the contract's visual
+      criteria and parks rather than passes when the capture cannot be made.
+    maturity: experimental
+    since: unreleased
+    adapters:
+      claude-code: enforced
+      pi: enforced
+      codex: enforced
+      cursor: unsupported
+      github-copilot: unsupported
+      windsurf: unsupported
+      aider: unsupported
+    prerequisites: [auto-build, Playwright]
+    guide: shared/skills/auto-build-loop/SKILL.md
+    skills: [auto-build-loop, visual-review]
+
+  - id: ralph-loop
+    title: Ralph Loop single-agent iteration
+    problem: >-
+      One agent iterates on a task until the verification command passes or
+      the iteration cap is reached, with no delegation.
+    maturity: stable
+    since: v1.1.0
+    adapters:
+      claude-code: enforced
+      pi: advisory
+      codex: advisory
+      cursor: advisory
+      github-copilot: advisory
+      windsurf: advisory
+      aider: advisory
+    guide: shared/docs/ralph-loop-guide.md
+    commands: [ralph-start]
+    skills: [ralph-loop]
+
+  - id: project-templates
+    title: Project templates and sync
+    problem: >-
+      A new project starts from a stack-specific CLAUDE.md with an agent
+      team, slash commands and CI workflows, and an existing project can be
+      re-synced to the latest template.
+    maturity: stable
+    since: v1.1.0
+    adapters:
+      claude-code: enforced
+      pi: advisory
+      codex: advisory
+      cursor: advisory
+      github-copilot: advisory
+      windsurf: advisory
+      aider: advisory
+    guide: adapters/claude-code/docs/claude-config-guide.md
+    skills: [stack-constraints, environment-setup]
+    capabilities: [config.layered]
+
+  - id: ui-design-harness
+    title: UI design harness
+    problem: >-
+      Generated UI is steered by a committed DESIGN.md and design tokens and
+      gated by a visual-review loop with an accessibility check and an
+      anti-slop rubric.
+    maturity: stable
+    since: v1.1.0
+    adapters:
+      claude-code: enforced
+      pi: advisory
+      codex: advisory
+      cursor: advisory
+      github-copilot: advisory
+      windsurf: advisory
+      aider: advisory
+    prerequisites: [node, Playwright for screenshots (degrades to an HTTP smoke without it)]
+    guide: shared/templates/ui-harness/DESIGN.md
+    skills: [design-system, visual-review]
+
+  - id: wiki-maintainer
+    title: LLM wiki maintainer
+    problem: >-
+      Lessons and decisions are promoted into a curated project wiki that
+      agents consult before re-reading raw sources, with an ingest pipeline
+      and a lint.
+    maturity: stable
+    since: v1.1.0
+    adapters:
+      claude-code: enforced
+      pi: advisory
+      codex: advisory
+      cursor: advisory
+      github-copilot: advisory
+      windsurf: advisory
+      aider: advisory
+    prerequisites: [python3]
+    guide: knowledge/README.md
+    commands: [promote-lesson]
+    skills: [wiki-first-query]
+    capabilities: [memory.promotion]
+
+  - id: benchmark-harness
+    title: Benchmark harness
+    problem: >-
+      Coding agents are run against a task set through pluggable backends
+      and scored with a judge, so a configuration change is measured rather
+      than felt.
+    maturity: beta
+    since: v1.1.0
+    adapters:
+      claude-code: neutral
+      pi: neutral
+      codex: neutral
+      cursor: neutral
+      github-copilot: neutral
+      windsurf: neutral
+      aider: neutral
+    prerequisites: [python3, a judge model (local vLLM or Ollama, or a hosted API)]
+    guide: benchmarks/README.md
+
+  - id: session-analytics
+    title: Session analytics
+    problem: >-
+      Claude Code, Pi and Aider sessions are ingested into a store and
+      queried for cost, turns, tool use, phases, labels and struggle
+      signals from a CLI or an MCP server.
+    maturity: stable
+    since: v1.1.0
+    adapters:
+      claude-code: neutral
+      pi: neutral
+      codex: unsupported
+      cursor: unsupported
+      github-copilot: unsupported
+      windsurf: unsupported
+      aider: neutral
+    prerequisites: [python3, "Postgres (or the SQLite fallback)"]
+    guide: docs/session-analytics-cookbook.md
+
+  - id: studio
+    title: Studio web UI
+    problem: >-
+      The analytics, benchmarks, auto-build runs, team alerts and the
+      project's own documentation are browsed in one local web app with a
+      settings page for the judge and embedding providers.
+    maturity: beta
+    since: unreleased
+    adapters:
+      claude-code: neutral
+      pi: neutral
+      codex: neutral
+      cursor: neutral
+      github-copilot: neutral
+      windsurf: neutral
+      aider: neutral
+    prerequisites: [session-analytics, node]
+    guide: docs/session-analytics-cookbook.md
+
+  - id: llm-routing
+    title: LLM routing profiles
+    problem: >-
+      Auto-build tasks are routed to a backend by route class and role under
+      an execution profile, with validate, status and explain commands and a
+      scheduled tick.
+    maturity: experimental
+    since: unreleased
+    adapters:
+      claude-code: enforced
+      pi: enforced
+      codex: enforced
+      cursor: unsupported
+      github-copilot: unsupported
+      windsurf: unsupported
+      aider: unsupported
+    prerequisites: [auto-build]
+    guide: shared/templates/routing/routing.toml.example
+
+  - id: memkernel-memory
+    title: MemKernel persistent memory
+    problem: >-
+      Session context is recalled at start, checkpointed before compaction
+      and recovered after it by hooks that activate only when MemKernel is
+      installed.
+    maturity: experimental
+    since: v1.1.0
+    adapters:
+      claude-code: enforced
+      pi: unsupported
+      codex: advisory
+      cursor: advisory
+      github-copilot: advisory
+      windsurf: advisory
+      aider: advisory
+    prerequisites: [MemKernel installed]
+    guide: shared/skills/memkernel-memory/SKILL.md
+    skills: [memkernel-memory]
+    capabilities: [memory.session-state]
+
+  - id: cct-cli
+    title: cct command-line front door
+    problem: >-
+      One provider-neutral command lists every slash command, skill and
+      capability and drives routing; doctor and config are planned.
+    maturity: experimental
+    since: unreleased
+    adapters:
+      claude-code: neutral
+      pi: neutral
+      codex: neutral
+      cursor: neutral
+      github-copilot: neutral
+      windsurf: neutral
+      aider: neutral
+    guide: docs/features.md
