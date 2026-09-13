@@ -4,7 +4,7 @@
 # One discoverable entry point for finding and validating everything the
 # harness offers. Add it to PATH (or call scripts/cct) and run `cct help`.
 #
-#   cct list [--write]     browse every slash command, skill, and capability
+#   cct list [--write]     browse every feature, slash command, skill, and capability
 #   cct doctor             (planned) environment + config health check
 #   cct config <...>       (planned) inspect/validate/explain resolved config
 #   cct help               show this help
@@ -20,7 +20,7 @@ USAGE
   cct <command> [options]
 
 COMMANDS
-  list            Print the feature index — every slash command, skill, and
+  list            Print the feature index — every feature, slash command, skill, and
                   capability, from their source-of-truth files.
                     cct list            print to the terminal
                     cct list --write    (re)generate docs/features.md

@@ -106,6 +106,16 @@ jobs:
       # commands dir, and the capability catalog. Adding a command or skill
       # without regenerating leaves the published index lying about what the
       # harness offers, so a stale index fails the build.
+      # shared/features/catalog.yaml is the one source for what the harness
+      # offers a user (maturity, release, adapter support, guide); its schema
+      # holds the vocabularies and the validator resolves every guide path,
+      # command, skill and capability id (#214 Phase 2.1).
+      - name: Validate the feature catalog
+        run: bash scripts/validate-features.sh
+
+      - name: Feature catalog tests
+        run: bash tests/test-features-catalog.sh
+
       - name: Check the feature index is not stale
         run: bash scripts/generate-feature-index.sh --check
 
