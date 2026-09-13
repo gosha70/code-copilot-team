@@ -82,15 +82,28 @@ This structure avoids accidental repetition of *full context* in prompts, saving
 
 Claude Code (Opus 4.5+) supports model selection and prompt scaffolding. Use **prompt modules** — reusable sections — and use *prompt caching* where supported:
 
-\[MODEL CONFIG\]  
-model: Opus 4.5  
-effort: medium  
-context\_chunk: doc\_internal/CONTEXT.md
+Model and effort are real `settings.json` keys (`~/.claude/settings.json`
+globally, `.claude/settings.json` per project); `/model` and `/effort` change
+them for the current session:
 
-\[PROMPT CACHE KEYS\]  
-global\_rules  
-design\_invariants  
-shared\_architecture
+```json
+{
+  "model": "opus",
+  "effortLevel": "medium"
+}
+```
+
+Reusable context is loaded by reference, not re-pasted. `CLAUDE.md` imports a
+file with an `@` line, so the session summary in `doc_internal/CONTEXT.md` is
+read once per session:
+
+```markdown
+@doc_internal/CONTEXT.md
+```
+
+Prompt caching needs no keys: the API caches the stable prefix of each request
+(the system prompt, `CLAUDE.md` and its imports, the rules) automatically. What
+you control is the cache lifetime, below.
 
 **Effort Levels**
 

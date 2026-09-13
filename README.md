@@ -412,14 +412,14 @@ Skills: `design-system`, `visual-review` · Agent: `visual-reviewer` · Template
 
 ## What You Get
 
-![Configuration Layers](docs/images/configuration-layers.png)
+![Configuration layers — more specific always wins](docs/images/configuration-layers.svg)
 
 - **Layered rules** — 4 global rules (`~/.claude/rules/`) auto-load every session; 20 on-demand skills (`~/.claude/skills/*/SKILL.md`) loaded by phase agents when needed.
 - **Phase agents** (`~/.claude/agents/`) — 4 phase agents (research, plan, build, review) plus 10 utility agents (code-simplifier, cooldown-report, cycle-retro, doc-writer, phase-recap, pitch-shaper, scope-executor, security-review, verify-app, visual-reviewer).
 - **Hooks** (`~/.claude/hooks/`) — 11 lifecycle scripts: test verification, type checking, auto-format, file protection, git safety guards, context re-injection, peer review trigger, desktop notifications, plus 3 self-guarding MemKernel hooks (session recall, pre-compact checkpoint, post-compact recovery) that activate only when MemKernel is installed.
 - **11 project templates** — pre-configured `CLAUDE.md` files with stack-specific conventions, slash commands, and agent team roles for each project archetype.
 - **Four-phase workflow** — Research → Plan → Build → Review. Plus **Ralph Loop** for single-agent autonomous iteration.
-![Three - Phase Agent Workflow](docs/images/three-phase-workflow.png)
+![Four-phase agent workflow — Research, Plan, Build, Review](docs/images/four-phase-workflow.svg)
 - **Adaptive launcher** (`claude-code`) — uses `cmux` on macOS, `tmux` elsewhere, with git context display, `--peer-review` flags, and `sync` for keeping projects aligned with template updates.
 
 ## Install options (all tools)
@@ -562,7 +562,7 @@ Each template ships a `.github/workflows/` file so CI is wired up the moment the
   ├── safety.md                    Destructive action guards, secrets policy
   └── copyright-headers.md         Copyright header rules for generated source files
 ~/.claude/skills/*/SKILL.md        ← On-demand skills (SKILL.md format, 20 skills)
-  ├── agent-team-protocol/         Three-phase workflow, delegation rules
+  ├── agent-team-protocol/         Phased workflow, delegation rules
   ├── clarification-protocol/      Ask before implementing ambiguous requirements
   ├── environment-setup/           Environment and config verification
   ├── infra-verification/          Infrastructure artifact verification ("build it, run it")
