@@ -34,11 +34,11 @@ cd code-copilot-team
 ./scripts/setup.sh --pi             # Pi (enforced, provider-neutral) → ~/.code-copilot-team/pi/
 
 # 3. Discover what you just installed
-./scripts/cct list          # every slash command, skill, and capability
+./scripts/cct list          # every feature, slash command, skill, and capability
 ```
 
 **Discover the features:** browse the generated **[Feature Index](docs/features.md)** —
-every slash command, skill, and capability in one place — or run `scripts/cct list`
+every feature (with maturity and adapter support), slash command, skill, and capability in one place — or run `scripts/cct list`
 anytime. More install targets (Cursor, Codex, Copilot, Windsurf, Aider, and the
 Claude Code plugin) are under [Install options](#install-options-all-tools).
 

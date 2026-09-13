@@ -1,0 +1,78 @@
+# Deliberately broken feature catalog for tests/test-features-catalog.sh.
+# Each feature carries exactly one defect named in its title.
+schema_version: 1
+kind: features
+features:
+  - id: dup-id
+    title: duplicate id (first copy is fine)
+    problem: p
+    maturity: stable
+    since: v1.1.0
+    adapters: {aider: advisory, claude-code: enforced, codex: advisory, cursor: advisory, github-copilot: advisory, pi: enforced, windsurf: advisory}
+    guide: README.md
+  - id: dup-id
+    title: duplicate id
+    problem: p
+    maturity: stable
+    since: v1.1.0
+    adapters: {aider: advisory, claude-code: enforced, codex: advisory, cursor: advisory, github-copilot: advisory, pi: enforced, windsurf: advisory}
+    guide: README.md
+  - id: bad-maturity
+    title: maturity outside the schema enum
+    problem: p
+    maturity: alpha
+    since: v1.1.0
+    adapters: {aider: advisory, claude-code: enforced, codex: advisory, cursor: advisory, github-copilot: advisory, pi: enforced, windsurf: advisory}
+    guide: README.md
+  - id: bad-since
+    title: since is neither a tag nor unreleased
+    problem: p
+    maturity: stable
+    since: soon
+    adapters: {aider: advisory, claude-code: enforced, codex: advisory, cursor: advisory, github-copilot: advisory, pi: enforced, windsurf: advisory}
+    guide: README.md
+  - id: missing-adapter
+    title: pi is not classified
+    problem: p
+    maturity: stable
+    since: v1.1.0
+    adapters: {aider: advisory, claude-code: enforced, codex: advisory, cursor: advisory, github-copilot: advisory, windsurf: advisory}
+    guide: README.md
+  - id: unknown-adapter
+    title: an adapter that does not exist
+    problem: p
+    maturity: stable
+    since: v1.1.0
+    adapters: {aider: advisory, claude-code: enforced, codex: advisory, cursor: advisory, github-copilot: advisory, pi: enforced, windsurf: advisory, emacs: advisory}
+    guide: README.md
+  - id: bad-support
+    title: adapter support outside the enum
+    problem: p
+    maturity: stable
+    since: v1.1.0
+    adapters: {aider: advisory, claude-code: mandatory, codex: advisory, cursor: advisory, github-copilot: advisory, pi: enforced, windsurf: advisory}
+    guide: README.md
+  - id: deprecated-orphan
+    title: deprecated without replaced_by
+    problem: p
+    maturity: deprecated
+    since: v1.1.0
+    adapters: {aider: advisory, claude-code: enforced, codex: advisory, cursor: advisory, github-copilot: advisory, pi: enforced, windsurf: advisory}
+    guide: README.md
+  - id: missing-guide
+    title: guide path does not exist
+    problem: p
+    maturity: stable
+    since: v1.1.0
+    adapters: {aider: advisory, claude-code: enforced, codex: advisory, cursor: advisory, github-copilot: advisory, pi: enforced, windsurf: advisory}
+    guide: docs/no-such-guide.md
+  - id: dangling-refs
+    title: command, skill and capability that do not resolve
+    problem: p
+    maturity: stable
+    since: v1.1.0
+    adapters: {aider: advisory, claude-code: enforced, codex: advisory, cursor: advisory, github-copilot: advisory, pi: enforced, windsurf: advisory}
+    guide: README.md
+    commands: [no-such-command]
+    skills: [no-such-skill]
+    capabilities: [no.such-capability]
