@@ -112,7 +112,7 @@ features:
     adapters:
       claude-code: enforced
       pi: enforced
-      codex: unsupported
+      codex: enforced
       cursor: unsupported
       github-copilot: unsupported
       windsurf: unsupported
@@ -137,7 +137,7 @@ features:
     adapters:
       claude-code: enforced
       pi: enforced
-      codex: unsupported
+      codex: enforced
       cursor: unsupported
       github-copilot: unsupported
       windsurf: unsupported
@@ -157,7 +157,7 @@ features:
     adapters:
       claude-code: enforced
       pi: enforced
-      codex: unsupported
+      codex: enforced
       cursor: unsupported
       github-copilot: unsupported
       windsurf: unsupported
@@ -173,12 +173,12 @@ features:
       The built application is started and probed against the contract's
       runtime criteria before the phase can land, so a green unit suite
       cannot hide a service that does not come up.
-    maturity: beta
+    maturity: experimental
     since: unreleased
     adapters:
       claude-code: enforced
       pi: enforced
-      codex: unsupported
+      codex: enforced
       cursor: unsupported
       github-copilot: unsupported
       windsurf: unsupported
@@ -198,7 +198,7 @@ features:
     adapters:
       claude-code: enforced
       pi: enforced
-      codex: unsupported
+      codex: enforced
       cursor: unsupported
       github-copilot: unsupported
       windsurf: unsupported
@@ -356,7 +356,7 @@ features:
     adapters:
       claude-code: enforced
       pi: enforced
-      codex: unsupported
+      codex: enforced
       cursor: unsupported
       github-copilot: unsupported
       windsurf: unsupported
