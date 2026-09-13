@@ -81,21 +81,36 @@ feature_rows() {
   command -v ruby >/dev/null 2>&1 || { echo "[ERROR] ruby is required to render the feature table" >&2; return 1; }
   ruby -ryaml -e '
     doc = YAML.load_file(ARGV[0])
-    adapters = ARGV[1].split(" ")
-    mark = { "enforced" => "enforced", "advisory" => "advisory", "unsupported" => "—", "neutral" => "n/a" }
     (doc["features"] || []).each do |f|
       problem = (f["problem"] || "").gsub(/\s+/, " ").strip
       guide = f["guide"].to_s
-      cells = adapters.map { |a| mark.fetch((f["adapters"] || {})[a].to_s, "?") }
       title = guide.empty? ? f["title"] : "[#{f["title"]}](../#{guide})"
-      printf("| %s | %s | %s | %s | %s |\n", title, problem, f["maturity"], f["since"], cells.join(" | "))
+      printf("| %s | %s | %s | %s |\n", title, problem, f["maturity"], f["since"])
+    end
+  ' "$FEATURES"
+}
+
+# The adapter-support matrix is its own table: one short cell per adapter.
+# Folded into the features table it made an 11-column table whose prose
+# column was squeezed to a sliver and whose last columns needed a horizontal
+# scroll (Studio Learn, 2026-09-13); apart, both tables fit a page.
+feature_support_rows() {
+  [[ -f "$FEATURES" ]] || { echo "[ERROR] $FEATURES not found" >&2; return 1; }
+  command -v ruby >/dev/null 2>&1 || { echo "[ERROR] ruby is required to render the feature table" >&2; return 1; }
+  ruby -ryaml -e '
+    doc = YAML.load_file(ARGV[0])
+    adapters = ARGV[1].split(" ")
+    mark = { "enforced" => "enforced", "advisory" => "advisory", "unsupported" => "—", "neutral" => "n/a" }
+    (doc["features"] || []).each do |f|
+      cells = adapters.map { |a| mark.fetch((f["adapters"] || {})[a].to_s, "?") }
+      printf("| %s | %s |\n", f["title"], cells.join(" | "))
     end
   ' "$FEATURES" "$(feature_adapters | tr "\n" " ")"
 }
 
 render() {
   local cmd_count=0 skill_count=0 cap_count=0 feature_count=0
-  local cmd_rows="" skill_rows="" cap_rows="" feature_rows="" adapter_header="" adapter_sep=""
+  local cmd_rows="" skill_rows="" cap_rows="" feature_rows="" support_rows="" adapter_header="" adapter_sep=""
   local name desc a
 
   if [[ -d "$CMDS_DIR" ]]; then
@@ -120,6 +135,7 @@ render() {
   cap_count="$(printf '%s' "$cap_rows" | grep -c '^|' || true)"
 
   feature_rows="$(feature_rows)" || return 1
+  support_rows="$(feature_support_rows)" || return 1
   feature_count="$(printf '%s' "$feature_rows" | grep -c '^|' || true)"
   while IFS= read -r a; do
     adapter_header+=" $a |"
@@ -148,13 +164,23 @@ tables below. In a session, run \`scripts/cct list\` to print this on demand.
 ## Features
 
 What the harness offers, one row per user-facing feature. The title links to
-the primary guide. Maturity, release state and adapter support are defined in
-[maturity.md](maturity.md); \`—\` is unsupported and \`n/a\` means the feature
-runs outside any adapter.
+the primary guide. Maturity and release state are defined in
+[maturity.md](maturity.md).
 
-| Feature | What you get | Maturity | Since |${adapter_header}
-|---------|--------------|----------|-------|${adapter_sep}
+| Feature | What you get | Maturity | Since |
+|---------|--------------|----------|-------|
 ${feature_rows}
+
+### Adapter support
+
+How each adapter delivers the feature (defined in [maturity.md](maturity.md#adapter-support)):
+\`enforced\` means a runtime gate in that adapter can block, \`advisory\` that it
+receives the feature as content it cannot enforce, \`—\` unsupported, and \`n/a\`
+that the feature runs outside any adapter.
+
+| Feature |${adapter_header}
+|---------|${adapter_sep}
+${support_rows}
 
 ## Slash commands
 

@@ -106,24 +106,33 @@ export default function LearnPage() {
             {s.entries.length === 0 ? (
               <p className="text-sm text-slate-400">Nothing here yet.</p>
             ) : (
-              <ul className="space-y-1.5 text-sm">
+              <ul className="grid grid-cols-[fit-content(16rem)_1fr] gap-x-3 gap-y-1.5 text-sm">
+                {/* One grid per card: the name column is as wide as that
+                    card's longest name, capped at 16rem so a single long
+                    title cannot starve the description column (the Wiki and
+                    Background cards would otherwise leave it ~140px). Names
+                    are one line under the cap and wrap above it; the
+                    description takes the rest and clamps to two lines. */}
                 {s.entries.map((e) => (
-                  <li key={e.slug} className="flex items-baseline gap-2">
-                    <Link
-                      href={`/learn/${encodeURIComponent(e.slug)}`}
-                      className="text-blue-700 hover:underline"
+                  <li key={e.slug} className="contents">
+                    <span className="flex items-baseline gap-2">
+                      <Link
+                        href={`/learn/${encodeURIComponent(e.slug)}`}
+                        className="text-blue-700 hover:underline"
+                      >
+                        {e.title}
+                      </Link>
+                      {e.page_type && e.kind === "wiki" && (
+                        <Badge kind="question">{e.page_type}</Badge>
+                      )}
+                      {e.generated && <Badge kind="NEUTRAL">generated</Badge>}
+                    </span>
+                    <span
+                      className="text-xs text-slate-500 line-clamp-2 min-w-0"
+                      title={e.description || undefined}
                     >
-                      {e.title}
-                    </Link>
-                    {e.page_type && e.kind === "wiki" && (
-                      <Badge kind="question">{e.page_type}</Badge>
-                    )}
-                    {e.generated && <Badge kind="NEUTRAL">generated</Badge>}
-                    {e.description && (
-                      <span className="text-xs text-slate-500 truncate" title={e.description}>
-                        {e.description}
-                      </span>
-                    )}
+                      {e.description || ""}
+                    </span>
                   </li>
                 ))}
               </ul>
