@@ -88,6 +88,19 @@ timeout_sec = 300
 healthcheck = "codex --version"
 version = "cli"
 
+# Claude Code, headless, as the peer for other subjects. `peer_for.codex`
+# below names this entry; without it a Codex session's review resolved a
+# provider that was never declared and failed at invocation rather than at
+# configuration time (found by scripts/validate-providers-profile.sh, #214
+# Phase 2.3). `claude -p` with no positional prompt reads the request on
+# stdin; --permission-mode plan keeps the reviewer read-only.
+[providers.claude]
+type = "cli"
+command = "claude -p --permission-mode plan < {review_request} 2>/dev/null"
+timeout_sec = 600
+healthcheck = "claude --version"
+version = "cli"
+
 # Pi as a read-only peer reviewer (FR-015a/b, T3.1–T3.4). The adapter runs
 # `pi-code --profile peer-reviewer` (non-recursive, read-only) and normalizes the
 # review into the runner's Summary/Findings/Verdict contract. healthcheck is

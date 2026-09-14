@@ -129,6 +129,19 @@ jobs:
       - name: README insert tests
         run: bash tests/test-readme-inserts.sh
 
+      # The provider profile has a schema since #214 Phase 2.3; the shipped
+      # template must satisfy it, and docs/configuration-reference.md is a
+      # render of that schema plus the automation schema and the analytics
+      # defaults.
+      - name: Validate the shipped provider profile template
+        run: bash scripts/validate-providers-profile.sh shared/templates/provider-profile-template.toml
+
+      - name: Check the configuration reference is not stale
+        run: bash scripts/generate-config-reference.sh --check
+
+      - name: Configuration reference tests
+        run: bash tests/test-config-reference.sh
+
       # shared/capabilities/COMPATIBILITY.md is a deterministic render of the
       # capability registry. Until #214 Phase 2.0 this check ran only on
       # release tags, so a PR could land a stale matrix; it gates PRs now.
