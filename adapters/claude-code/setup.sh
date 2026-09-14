@@ -18,6 +18,11 @@
 set -e
 
 CLAUDE_DIR="$HOME/.claude"
+# The always-loaded global rules, named once: both the install and the sync
+# path below iterate this list, and scripts/check-doc-accuracy.sh and
+# scripts/generate-readme-inserts.sh read this assignment as the one source
+# of what "global rules" means for the Claude Code adapter (#214 Phase 2.2).
+ALWAYS_RULES="coding-standards copilot-conventions copyright-headers safety"
 TEMPLATES_DIR="$CLAUDE_DIR/templates"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
 SHARED_DIR="$SCRIPT_DIR/../../shared"
@@ -238,7 +243,7 @@ if [[ "$SYNC_MODE" == "1" ]]; then
     SKILLS_SOURCE="$SHARED_DIR/skills"
     RULES_TARGET="$CLAUDE_DIR/rules"
     mkdir -p "$RULES_TARGET"
-    for name in coding-standards copilot-conventions copyright-headers safety; do
+    for name in $ALWAYS_RULES; do
         if [[ -f "$SKILLS_SOURCE/$name/SKILL.md" ]]; then
             # Remove stale symlinks from pre-SKILL.md layout
             [[ -L "$RULES_TARGET/$name.md" ]] && rm -f "$RULES_TARGET/$name.md"
@@ -985,7 +990,7 @@ RULES_TARGET="$CLAUDE_DIR/rules"
 mkdir -p "$RULES_TARGET"
 
 if [[ -d "$SKILLS_SOURCE" ]]; then
-    for name in coding-standards copilot-conventions copyright-headers safety; do
+    for name in $ALWAYS_RULES; do
         if [[ -f "$SKILLS_SOURCE/$name/SKILL.md" ]]; then
             # Remove stale symlinks from pre-SKILL.md layout
             [[ -L "$RULES_TARGET/$name.md" ]] && rm -f "$RULES_TARGET/$name.md"

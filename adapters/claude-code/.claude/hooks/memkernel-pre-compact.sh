@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# memkernel-pre-compact.sh — PreCompact hook: save a MemKernel checkpoint before compaction (self-guarding)
 set -euo pipefail
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"
