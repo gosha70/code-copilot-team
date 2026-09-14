@@ -13,26 +13,33 @@
       "properties": {
         "company": {
           "type": "string",
-          "minLength": 1,
-          "description": "Company name stamped into the copyright header of generated source files. setup.sh prompts for it on an interactive install."
+          "description": "Company name stamped into the copyright header of generated source files. Empty until setup.sh prompts for it on an interactive install."
         }
       }
     },
     "defaults": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Subject-to-peer pairings. A subject is the provider whose work is reviewed.",
-      "patternProperties": {
-        "^peer_for\\.[a-z][a-z0-9-]*$": {
-          "type": "string",
-          "description": "Provider name that reviews this subject when --peer-review names none."
+      "description": "Subject-to-peer pairings. A subject is the provider whose work is reviewed. TOML parses `peer_for.claude = \"x\"` into a nested table, so these are objects keyed by subject name.",
+      "properties": {
+        "peer_for": {
+          "type": "object",
+          "description": "Subject name to the provider that reviews it when --peer-review names none. Every value must be a declared provider.",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "^fallback_chain\\.[a-z][a-z0-9-]*$": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Providers tried in order when the peer fails its healthcheck, or (since #190 D1) ran and produced no review. Never consulted after a verdict."
+        "fallback_chain": {
+          "type": "object",
+          "description": "Subject name to the providers tried in order when the peer fails its healthcheck, or (since #190 D1) ran and produced no review. Never consulted after a verdict.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
         }
       }
     },

@@ -52,6 +52,11 @@ fails, passes = [], 0
 def fail(msg):
     fails.append(msg)
 
+
+def redacted(value: str) -> str:
+    """Describe a value without reprinting it."""
+    return f"a {len(value)}-character value (redacted)"
+
 try:
     with open(profile_path, "rb") as fh:
         doc = tomllib.load(fh)
@@ -62,15 +67,42 @@ except Exception as exc:                      # noqa: BLE001 - reported, not rai
 
 # A trailing comment on a value line becomes part of the value for the shell
 # parser the runner uses, so it is a defect here even though TOML allows it.
-value_line = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(.+?)\s*$")
+value_line = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_.\"']*)\s*=\s*(.+?)\s*$")
+
+
+def trailing_comment(raw: str) -> bool:
+    """True when a # starts a comment outside quotes and brackets.
+
+    A quoted value may legitimately contain one (a URL fragment, a shell
+    command), so the scan tracks quote and bracket state instead of
+    skipping quoted values wholesale: `peer_for.codex = "claude" # why`
+    parses as TOML but leaves the shell reader with a corrupted value.
+    """
+    quote = ""
+    depth = 0
+    for ch in raw:
+        if quote:
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "\"'":
+            quote = ch
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth = max(0, depth - 1)
+        elif ch == "#" and depth == 0:
+            return True
+    return False
+
+
 for n, line in enumerate(open(profile_path, encoding="utf-8"), 1):
+    if line.lstrip().startswith("#"):
+        continue                               # a whole-line comment is fine
     m = value_line.match(line)
     if not m:
         continue
-    raw = m.group(2)
-    if raw.startswith(('"', "'", "[")):
-        continue                               # quoted/array values may contain #
-    if "#" in raw:
+    if trailing_comment(m.group(2)):
         fail(f"{profile_path}:{n}: `{m.group(1)}` has an inline comment; "
              "the profile parser keeps it as part of the value — move it to its own line")
     else:
@@ -123,10 +155,14 @@ for name, body in providers.items():
         if ok:
             passes += 1
         if key == "api_key_env" and isinstance(value, str):
+            # Never echo the value: a profile that wrongly holds a real key
+            # would otherwise have it reprinted into CI logs and terminals.
             if not re.fullmatch(r"[A-Z][A-Z0-9_]*", value):
-                fail(f"[providers.{name}] api_key_env `{value}` is not a variable NAME")
-            elif value.startswith(("sk-", "sk_")) or len(value) > 64:
-                fail(f"[providers.{name}] api_key_env looks like a key, not a variable name")
+                fail(f"[providers.{name}] api_key_env must be a variable NAME "
+                     f"(A-Z, digits, underscore) — got {redacted(value)}")
+            elif len(value) > 64:
+                fail(f"[providers.{name}] api_key_env looks like a key, not a "
+                     f"variable name — got {redacted(value)}")
             else:
                 passes += 1
     if body.get("type") in ("cli", "custom") and not body.get("command"):
@@ -137,11 +173,14 @@ for name, body in providers.items():
         if ck == "conformance_command" and ck in body and "{review_request}" not in body[ck]:
             fail(f"[providers.{name}] `{ck}` must carry the {{review_request}} placeholder")
 
+defaults_props = schema["properties"]["defaults"]["properties"]
 for key, value in doc.get("defaults", {}).items():
-    if key == "peer_for" and isinstance(value, dict):
-        pairs = [(f"peer_for.{k}", v) for k, v in value.items()]
-    elif key == "fallback_chain" and isinstance(value, dict):
-        pairs = [(f"fallback_chain.{k}", v) for k, v in value.items()]
+    if key not in defaults_props:
+        fail(f"[defaults] unknown key `{key}` "
+             f"(allowed: {', '.join(sorted(defaults_props))})")
+        continue
+    if isinstance(value, dict):
+        pairs = [(f"{key}.{k}", v) for k, v in value.items()]
     else:
         pairs = [(key, value)]
     for flat, val in pairs:
@@ -163,6 +202,28 @@ for key, value in doc.get("defaults", {}).items():
                         passes += 1
         else:
             fail(f"[defaults] unknown key `{flat}`")
+
+# If a JSON Schema validator is installed, run the schema itself over the
+# parsed document — the hand checks above exist because the readers are
+# shell, but a schema nobody validates against drifts from the file it
+# claims to describe (the dotted-key/nested-table mismatch found in review).
+try:
+    import jsonschema
+except ModuleNotFoundError:
+    print("  NOTE: jsonschema not installed — structural checks ran, the schema "
+          "itself was not executed (pip install jsonschema to enable).")
+else:
+    validator = jsonschema.Draft202012Validator(schema)
+    for err in sorted(validator.iter_errors(doc), key=lambda e: list(e.path)):
+        where = ".".join(str(p) for p in err.path) or "(document root)"
+        detail = err.message
+        # The message can quote the offending value; api_key_env is the one
+        # place that value may be a credential.
+        if "api_key_env" in where:
+            detail = f"does not satisfy {err.validator} in the schema"
+        fail(f"schema: {where}: {detail}")
+    if not fails:
+        passes += 1
 
 for msg in fails:
     print(f"  FAIL: {msg}")

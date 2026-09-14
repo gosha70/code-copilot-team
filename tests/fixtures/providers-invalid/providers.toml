@@ -5,8 +5,9 @@
 company = "EGOGE"
 
 [defaults]
-# peer names a provider that is never declared
-peer_for.claude = "ghost"
+# peer names a provider that is never declared, AND carries a trailing
+# comment inside a quoted value
+peer_for.claude = "ghost" # the reviewer that is not there
 # fallback chain names one too
 fallback_chain.claude = ["spark", "phantom"]
 
@@ -39,3 +40,9 @@ conformance_command = "run --conformance"
 # a type outside the enum
 [providers.weird]
 type = "telepathy"
+
+# a quoted value with a trailing comment — TOML-legal, but the shell reader
+# keeps the comment as part of the value
+[providers.quoted-comment]
+type = "cli"
+command = "run - < {review_request}" # why this flag

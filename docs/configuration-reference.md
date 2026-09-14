@@ -122,9 +122,9 @@ it. It also keeps TOML escape sequences literally, so a healthcheck needs
 
 | Key | Type | Required | What it does |
 |---|---|---|---|
-| `[copyright] company` | string |  | Company name stamped into the copyright header of generated source files. setup.sh prompts for it on an interactive install. |
-| `[defaults] peer_for.[a-z][a-z0-9-]*` | string |  | Provider name that reviews this subject when --peer-review names none. |
-| `[defaults] fallback_chain.[a-z][a-z0-9-]*` | array of string |  | Providers tried in order when the peer fails its healthcheck, or (since #190 D1) ran and produced no review. Never consulted after a verdict. |
+| `[copyright] company` | string |  | Company name stamped into the copyright header of generated source files. Empty until setup.sh prompts for it on an interactive install. |
+| `[defaults] peer_for` | object |  | Subject name to the provider that reviews it when --peer-review names none. Every value must be a declared provider. |
+| `[defaults] fallback_chain` | object |  | Subject name to the providers tried in order when the peer fails its healthcheck, or (since #190 D1) ran and produced no review. Never consulted after a verdict. |
 
 ## Session analytics — `~/.cct/session-analytics.json` and the environment
 

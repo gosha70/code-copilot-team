@@ -133,6 +133,12 @@ jobs:
       # template must satisfy it, and docs/configuration-reference.md is a
       # render of that schema plus the automation schema and the analytics
       # defaults.
+      # jsonschema makes the validator run the schema itself over the parsed
+      # TOML, which is what proved the schema had drifted from the file it
+      # describes (#353 review). Without it the structural checks still run.
+      - name: Install jsonschema for schema execution
+        run: python3 -m pip install --quiet jsonschema
+
       - name: Validate the shipped provider profile template
         run: bash scripts/validate-providers-profile.sh shared/templates/provider-profile-template.toml
 

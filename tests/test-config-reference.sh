@@ -51,7 +51,7 @@ assert "invalid fixture is rejected (exit 1)" "[[ '$RC' == '1' ]]"
 for needle in \
   "has an inline comment" \
   "[providers.spark] unknown key \`modle\`" \
-  "api_key_env \`sk-not-a-variable-name\` is not a variable NAME" \
+  "api_key_env must be a variable NAME" \
   "\`timeout_sec\` must be integer" \
   "\`temperature\` must be number" \
   "type cli needs a \`command\` template" \
@@ -61,6 +61,62 @@ for needle in \
   "fallback_chain.claude names \`phantom\`"; do
   assert "fixture defect named: ${needle:0:44}" "grep -qF '$needle' <<<\"\$OUT\""
 done
+
+# ── review follow-ups (#353): redaction, quoted comments, the schema ──
+SENTINEL="$TMP/sentinel.toml"
+cat > "$SENTINEL" <<'TOML'
+[providers.hosted]
+type = "openai-compatible"
+base_url = "https://api.example.com/v1"
+api_key_env = "sk-SENTINELdoNOTprintTHISvalue0000"
+TOML
+RC=0; SOUT=$(bash "$VALIDATE" "$SENTINEL" 2>&1) || RC=$?
+assert "a key-shaped api_key_env is rejected (exit 1)" "[[ '$RC' == '1' ]]"
+assert "the rejected api_key_env value is never echoed" "! grep -q 'SENTINELdoNOTprint' <<<\"\$SOUT\""
+assert "the rejection says what was wrong" "grep -q 'must be a variable NAME' <<<\"\$SOUT\""
+
+# A trailing comment on a QUOTED value is TOML-legal and still corrupts the
+# shell reader, so it must be caught; a # inside the quotes must not be.
+QC="$TMP/quoted-comment.toml"
+printf '[defaults]\nperr = 0\n' > /dev/null
+cat > "$QC" <<'TOML'
+[providers.one]
+type = "cli"
+command = "run - < {review_request}" # why this flag
+TOML
+# Capture first: the validator exits 1 and `set -o pipefail` would make the
+# pipeline fail even when grep found the line.
+QOUT=$(bash "$VALIDATE" "$QC" 2>&1 || true)
+assert "a trailing comment on a quoted value is caught" "grep -q 'has an inline comment' <<<\"\$QOUT\""
+LEGIT="$TMP/legit.toml"
+cat > "$LEGIT" <<'TOML'
+[providers.one]
+type = "cli"
+command = "curl -s https://x.example/api#frag < {review_request}"
+healthcheck = "echo ok"
+TOML
+assert "a # inside quotes is not a false positive" "bash '$VALIDATE' '$LEGIT' >/dev/null 2>&1"
+
+# The schema must describe the document as TOML actually parses it: dotted
+# keys become nested tables, so a patternProperties schema over flat dotted
+# names would reject the shipped template under a real validator.
+if python3 -c 'import jsonschema' >/dev/null 2>&1; then
+  assert "the schema itself accepts the shipped template" \
+    "python3 -c \"
+import json, sys, tomllib, jsonschema
+schema = json.load(open('$SCHEMA'))
+doc = tomllib.load(open('$TEMPLATE', 'rb'))
+jsonschema.Draft202012Validator(schema).validate(doc)
+\""
+  assert "defaults is modelled as nested tables, not dotted keys" \
+    "python3 -c \"
+import json, sys
+d = json.load(open('$SCHEMA'))['properties']['defaults']
+sys.exit(0 if set(d.get('properties', {})) == {'peer_for', 'fallback_chain'} and 'patternProperties' not in d else 1)
+\""
+else
+  echo "  SKIP: jsonschema not installed — schema execution not asserted"
+fi
 
 # ── the schema covers what the readers read ──────────────────
 # A key some script reads but the schema does not declare would be rejected
