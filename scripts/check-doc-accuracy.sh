@@ -75,26 +75,22 @@ CODEX_SKILLS=$(find adapters/codex -name SKILL.md | wc -l | tr -d ' ')
 # The repo-layout tree moved to docs/repo-structure.md in #214 Phase 3.1;
 # the claim is pinned wherever it lives, not wherever it used to.
 r_shared=$(grab '[0-9]+ skills \(SKILL\.md format, open Agent Skills spec\)' docs/repo-structure.md)
-r_rules=$(grab '[0-9]+ global rules' README.md)
-r_ondemand=$(grab '[0-9]+ on-demand skills' README.md)
-r_utility=$(grab 'plus [0-9]+ utility agents' README.md)
-r_codex=$(grab 'AGENTS\.md` \+ [0-9]+ skills' README.md)
+# #214 Phase 3.2 moved these claims out of the README's prose: the counts now
+# live in the generated configuration-layers tree (docs/configuration-layers.md)
+# and in the install guide's per-adapter table. Each is pinned where it lives.
+r_rules=$(grab 'always loaded, [0-9]+ files' docs/configuration-layers.md)
+r_ondemand=$(grab 'SKILL\.md format, [0-9]+ skills' docs/configuration-layers.md)
+r_agents=$(grab 'utility agents \([0-9]+ files\)' docs/configuration-layers.md)
+r_codex=$(grab 'AGENTS\.md` \+ [0-9]+ skills' docs/install.md)
 
 check() {  # <label> <claimed> <actual>
     if [[ "$2" == "$3" ]]; then ok "$1 = $3"; else fail "$1: README says '$2', source says '$3'"; fi
 }
 check "shared skills (repo-layout tree)"        "$r_shared"        "$SHARED_SKILLS"
-check "global rules"                            "$r_rules"         "$ALWAYS_RULES"
-check "installed on-demand skills"              "$r_ondemand"      "$INSTALLED_SKILLS"
-# The utility claim rides through arithmetic (4 phase + N), so a
-# non-numeric grab result (MISSING/CONFLICTING) must fail as drift
-# BEFORE the arithmetic — bash would otherwise crash on it.
-if [[ "$r_utility" =~ ^[0-9]+$ ]]; then
-    check "utility agents (4 phase + N utility)" "$((r_utility + 4))" "$AGENTS"
-else
-    fail "utility agents (4 phase + N utility): README claim is '$r_utility', source says '$AGENTS' total"
-fi
-check "codex skills"                            "$r_codex"         "$CODEX_SKILLS"
+check "global rules (configuration layers)"     "$r_rules"         "$ALWAYS_RULES"
+check "on-demand skills (configuration layers)" "$r_ondemand"      "$INSTALLED_SKILLS"
+check "agents (configuration layers)"           "$r_agents"        "$AGENTS"
+check "codex skills (install guide)"            "$r_codex"         "$CODEX_SKILLS"
 
 # ── Documentation index completeness ──
 # lychee proves every link resolves; nothing proved the reverse, so a guide

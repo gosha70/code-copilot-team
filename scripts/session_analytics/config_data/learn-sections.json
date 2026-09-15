@@ -54,7 +54,9 @@
         "docs/llm-routing.md",
         "docs/project-templates.md",
         "docs/configuration-reference.md",
-        "docs/repo-structure.md"
+        "docs/repo-structure.md",
+        "docs/configuration-layers.md",
+        "docs/install.md"
       ]
     },
     {

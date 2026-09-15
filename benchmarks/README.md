@@ -796,3 +796,61 @@ Either run produces a complete record; the second path's
 > three env exports above for you and probes the endpoint first
 > (Anthropic-shape proxy → used directly; raw OpenAI-only vLLM → an
 > ephemeral LiteLLM proxy is started in front and torn down on exit).
+
+---
+
+## What the harness is for
+
+_Moved here from the project README in #214 Phase 3.2._
+
+`code-copilot-team` ships a benchmark-agnostic harness for evaluating AI
+copilots and LLMs on real coding tasks under reproducible isolation —
+so you can answer "which copilot/model is actually better on this kind
+of work?" with a controlled run record instead of a vibe.
+
+It does **not** author benchmarks; it runs established public ones
+(Aider Polyglot, SWE-bench Verified, BigCodeBench) and custom CCT
+fixtures through one adapter contract. There are two entry points — a
+terse daily-driver wrapper and the underlying harness CLI:
+
+```bash
+# Daily driver — safe by default (no-arg run is a free stub smoke + env detection)
+./scripts/bench                                          # prove the plumbing, no LLM call, no spend
+./scripts/bench sonnet ollama:qwen2.5-coder:7b           # compare two models on a coding task
+./scripts/bench --preset local-vs-cloud --runs 5         # curated comparison preset
+./scripts/bench --list-presets                           # discovery: available presets
+./scripts/bench --list-providers                         # discovery: detected backends/providers
+
+# Underlying harness
+./scripts/benchmark list                                 # adapters + backends + judges
+./scripts/benchmark run --benchmark aider-polyglot \
+    --backend claude-code --model sonnet --runs 3        # one (backend, model) run
+./scripts/benchmark compare --config my-compare.json     # multi-LLM comparison
+./scripts/benchmark report --run-dir runs/<ts>/ --html --csv  # rich report (HTML + SVG charts + CSV)
+```
+
+**What it measures.** Deterministic scoring is the primary signal —
+build/test/lint pass, required files present, elapsed time, token usage
+— with a calibrated winner-declaration rule (`Δ > 2σ AND ≥ threshold`)
+that refuses to call a winner on noise. A **calibrated LLM judge**
+(issue #34) adds a secondary quality signal (idiomaticity, error
+handling, test thoughtfulness, security hygiene), but only after it's
+proven to correlate with human reviewers (Spearman ρ ≥ threshold per
+dimension); it never overrides the deterministic verdict, and a run
+that fails its tests can never win on judge-only criteria. No
+dollar-cost estimates are ever reported.
+
+**Backends** (the agent driving the task): `claude-code`, `codex`,
+`aider`, plus a deterministic `stub` for CI. Local models (vLLM,
+Ollama, LM Studio) are reached as *providers* through the gateway env
+vars — `./scripts/bench sonnet vllm:<model>@<endpoint>` probes the
+endpoint and spawns an ephemeral Anthropic↔OpenAI proxy when needed.
+
+### Operator docs
+
+- Full harness guide, CLI reference, adapter/backend/judge contracts: [`benchmarks/README.md`](README.md).
+- 60-second quickstart: [`benchmarks/README.md` § 60-second quickstart](README.md#60-second-quickstart).
+- Routing-quality evaluation (measuring CCT's router against control arms, #109 E1): [`benchmarks/README.md` § Routing-quality evaluation](README.md#routing-quality-evaluation-e1-of-109-issue-260).
+- Shadow-mode routing analysis (consuming E1 evidence sets through session analytics + Studio, #109 E2): [`scripts/session_analytics/README.md` § Routing evidence](../scripts/session_analytics/README.md#routing-evidence--shadow-mode-e2-of-109-issue-261).
+- Calibration gates + shadow kNN (the #109 §12 promotion conditions made executable, #109 E3): [`scripts/session_analytics/README.md` § Calibration gates](../scripts/session_analytics/README.md#calibration-gates--shadow-knn-e3-of-109-issue-266).
+- Design rationale: [`specs/benchmark-harness/spec.md`](../specs/benchmark-harness/spec.md) and the per-feature spec bundles under [`specs/`](../specs/).

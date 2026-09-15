@@ -123,7 +123,7 @@ jobs:
       # rendered from the skills, agents, hooks and feature catalog; a hand
       # edit inside a marked block, or a new source file without a
       # regeneration, fails here (#214 Phase 2.2).
-      - name: Check the README generated blocks are not stale
+      - name: Check the generated doc blocks are not stale
         run: bash scripts/generate-readme-inserts.sh --check
 
       - name: README insert tests

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# generate-readme-inserts.sh — fill the README's generated blocks from their
-# source-of-truth files (#214 Phase 2.2).
+# generate-readme-inserts.sh — fill the generated blocks in the README and the
+# docs that carry one, from their source-of-truth files (#214 Phase 2.2, 3.2).
 #
 # Motivation: the README carried hand-maintained inventories that drifted —
 # the configuration-layers tree claimed 20 on-demand skills while listing 15,
@@ -14,6 +14,11 @@
 #                      adapters/claude-code/.claude/hooks/*.sh (header comment),
 #                      and ALWAYS_RULES in adapters/claude-code/setup.sh
 #   enforcement-tiers  shared/features/catalog.yaml (the adapters field)
+#   choose-adapter     shared/features/catalog.yaml (adapters + maturity)
+#   feature-summary    shared/features/catalog.yaml (title, maturity, guide)
+#
+# Files scanned for blocks are listed in TARGETS below; a block name may
+# appear in exactly one of them.
 #
 # A block is delimited by:
 #   <!-- generated:begin <name> --> … <!-- generated:end <name> -->
@@ -25,7 +30,11 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-README="$REPO_DIR/README.md"
+TARGETS=(
+  "$REPO_DIR/README.md"
+  "$REPO_DIR/docs/configuration-layers.md"
+  "$REPO_DIR/docs/maturity.md"
+)
 SKILLS_DIR="$REPO_DIR/shared/skills"
 AGENTS_DIR="$REPO_DIR/adapters/claude-code/.claude/agents"
 HOOKS_DIR="$REPO_DIR/adapters/claude-code/.claude/hooks"
@@ -166,20 +175,77 @@ render_enforcement_tiers() {
   ' "$FEATURES"
 }
 
+# "Which adapter should I install?" answered from the catalog rather than
+# from prose: how many features each adapter enforces, and what the rest
+# arrive as. Ordered enforced-first, then by name.
+render_choose_adapter() {
+  command -v ruby >/dev/null 2>&1 || die "ruby is required to read $FEATURES"
+  [[ -f "$FEATURES" ]] || die "$FEATURES not found"
+  # The install flag is the adapter id, and must exist in the installer: a
+  # hand-kept display/flag map shipped `--copilot` for an adapter whose flag
+  # is `--github-copilot`, which is exactly the drift these blocks exist to
+  # stop. Parse the flags the installer accepts and refuse to render a
+  # command it would reject.
+  local flags; flags="$(sed -n 's/^[[:space:]]*--\([a-z-]*\))[[:space:]]*TOOLS+.*/\1/p' "$REPO_DIR/scripts/setup.sh")"
+  [[ -n "$flags" ]] || die "could not read the adapter flags from scripts/setup.sh"
+  ruby -ryaml -e '
+    doc = YAML.load_file(ARGV[0])
+    flags = ARGV[1].split
+    features = doc["features"] || []
+    abort("feature catalog is empty") if features.empty?
+    rows = features.flat_map { |f| (f["adapters"] || {}).keys }.uniq.map do |a|
+      counts = Hash.new(0)
+      features.each { |f| counts[(f["adapters"] || {})[a].to_s] += 1 }
+      abort("scripts/setup.sh has no --#{a} flag for adapter #{a}") unless flags.include?(a)
+      [a, counts]
+    end
+    rows.sort_by! { |a, c| [-c["enforced"], a] }
+    puts "| Tool | What it gives you | Install |"
+    puts "|---|---|---|"
+    rows.each do |a, c|
+      what = if c["enforced"] > 0
+               "**#{c["enforced"]} features enforced** — a gate that can block — and #{c["advisory"]} more as rules it reads"
+             else
+               "#{c["advisory"]} features as rules the tool reads; no runtime gate"
+             end
+      puts format("| `%s` | %s | `./scripts/setup.sh --%s` |", a, what, a)
+    end
+  ' "$FEATURES" "$flags"
+}
+
+# The compact feature catalog the front door shows: name, maturity, guide.
+render_feature_summary() {
+  command -v ruby >/dev/null 2>&1 || die "ruby is required to read $FEATURES"
+  [[ -f "$FEATURES" ]] || die "$FEATURES not found"
+  ruby -ryaml -e '
+    doc = YAML.load_file(ARGV[0])
+    features = doc["features"] || []
+    abort("feature catalog is empty") if features.empty?
+    features.each do |f|
+      guide = f["guide"].to_s
+      title = guide.empty? ? f["title"] : "[#{f["title"]}](#{guide})"
+      label = f["maturity"] == "stable" ? "" : " _(#{f["maturity"]})_"
+      puts "- **#{title}**#{label} — #{(f["problem"] || "").gsub(/\s+/, " ").strip.sub(/\.$/, "")}."
+    end
+  ' "$FEATURES"
+}
+
 render_block() {
   case "$1" in
     config-layers)     render_config_layers ;;
     enforcement-tiers) render_enforcement_tiers ;;
+    choose-adapter)    render_choose_adapter ;;
+    feature-summary)   render_feature_summary ;;
     *) die "unknown block: $1" ;;
   esac
 }
 
-# Rewrite every marked block in the README, leaving all other text alone.
+# Rewrite every marked block in one file, leaving all other text alone.
 rewrite() {
-  local names name tmp
-  names="$(grep -o '<!-- generated:begin [a-z-]* -->' "$README" | sed 's/.*begin \([a-z-]*\).*/\1/')"
-  [[ -n "$names" ]] || die "no generated blocks found in README.md"
-  tmp="$(mktemp)"; cp "$README" "$tmp"
+  local file="$1" names name tmp
+  names="$(grep -o '<!-- generated:begin [a-z-]* -->' "$file" | sed 's/.*begin \([a-z-]*\).*/\1/')"
+  [[ -n "$names" ]] || die "no generated blocks found in $file"
+  tmp="$(mktemp)"; cp "$file" "$tmp"
   for name in $names; do
     grep -q "<!-- generated:end $name -->" "$tmp" || die "block $name has no end marker"
     local body; body="$(render_block "$name")" || { rm -f "$tmp"; exit 1; }
@@ -197,20 +263,28 @@ rewrite() {
 }
 
 main() {
-  local tmp; tmp="$(rewrite)"
-  case "${1:-write}" in
-    --stdout) cat "$tmp"; rm -f "$tmp" ;;
-    --check)
-      if ! diff -u "$README" "$tmp" >/dev/null 2>&1; then
-        echo "[STALE] README.md generated blocks are out of date. Run: scripts/generate-readme-inserts.sh" >&2
-        diff -u "$README" "$tmp" >&2 || true
-        rm -f "$tmp"; exit 1
-      fi
-      rm -f "$tmp"; echo "[OK] README.md generated blocks are up to date." >&2 ;;
-    --write|write)
-      mv "$tmp" "$README"; echo "[OK] wrote README.md" >&2 ;;
-    *) rm -f "$tmp"; echo "usage: generate-readme-inserts.sh [--stdout|--check|--write]" >&2; exit 2 ;;
+  local mode="${1:-write}" file tmp rc=0
+  case "$mode" in --stdout|--check|--write|write) ;;
+    *) echo "usage: generate-readme-inserts.sh [--stdout|--check|--write]" >&2; exit 2 ;;
   esac
+  for file in "${TARGETS[@]}"; do
+    [[ -f "$file" ]] || die "target not found: $file"
+    tmp="$(rewrite "$file")"
+    case "$mode" in
+      --stdout) cat "$tmp"; rm -f "$tmp" ;;
+      --check)
+        if ! diff -u "$file" "$tmp" >/dev/null 2>&1; then
+          echo "[STALE] ${file#"$REPO_DIR/"} generated blocks are out of date. Run: scripts/generate-readme-inserts.sh" >&2
+          diff -u "$file" "$tmp" >&2 || true
+          rc=1
+        fi
+        rm -f "$tmp" ;;
+      --write|write)
+        mv "$tmp" "$file"; echo "[OK] wrote ${file#"$REPO_DIR/"}" >&2 ;;
+    esac
+  done
+  [[ "$rc" -eq 0 ]] || exit 1
+  [[ "$mode" != "--check" ]] || echo "[OK] generated blocks are up to date." >&2
 }
 
 main "${1:-write}"
