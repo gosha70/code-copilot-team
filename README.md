@@ -41,14 +41,23 @@ cd code-copilot-team
 # 2. Install for your tool — see "Choose your tool" below
 ./scripts/setup.sh --claude-code    # Claude Code → ~/.claude/
 
-# 3. See what you just installed
-./scripts/cct list                  # every feature, command, skill and capability
+# 3. Open a project — global rules load automatically
+claude-code ~/projects/my-app
 ```
 
-Then open a project: `claude-code ~/projects/my-app`. Global rules load
-automatically. Every other install path — Pi, Codex, Cursor, Copilot,
-Windsurf, Aider, the Claude Code plugin — is in
-[Install options](docs/install.md).
+Every other install path — Pi, Codex, Cursor, Copilot, Windsurf, Aider, the
+Claude Code plugin — is in [Install options](docs/install.md).
+
+> **Stable versus unreleased.** `v1.1.0` is the latest release and what the
+> Quick Start installs. Some of what this page describes landed after it: the
+> `cct` command-line front door and the generated feature index, the reviewer
+> readiness probe, and unattended auto-build runs. To use those, work from
+> `master` instead — `git checkout master && ./scripts/setup.sh --sync --claude-code` —
+> and read it as in-development. Lines below marked **(master)** need it.
+
+```bash
+./scripts/cct list                  # (master) every feature, command, skill and capability
+```
 
 ## Choose your tool
 
@@ -96,7 +105,8 @@ global rules.
 ### Your first peer review
 
 ```bash
-# Declare a reviewer in ~/.code-copilot-team/providers.toml, then prove it answers:
+# Declare a reviewer in ~/.code-copilot-team/providers.toml, then prove it
+# answers — the probe is a (master) command:
 scripts/review-round-runner.sh . --probe --peer <name> --subject claude --out /tmp/probe.json
 jq '{provider, verdict, duration_sec, error}' /tmp/probe.json
 ```
@@ -106,21 +116,40 @@ jq '{provider, verdict, duration_sec, error}' /tmp/probe.json
 `/review-submit` at the end of a phase.
 **If not:** exit 2 means nothing in the chain passed its healthcheck; exit 3
 means the provider ran and returned no parseable verdict — the answer's tail is
-in the file. The ordered setup is the [auto code review cookbook](docs/auto-code-review-setup.md).
+in the file. On `v1.1.0`, which has no probe, check the provider with
+`scripts/providers-health.sh --provider <name>` instead. The ordered setup is
+the [auto code review cookbook](docs/auto-code-review-setup.md).
 
 ### Your first unattended run
 
+**(master)**, and it has prerequisites: an approved SDD bundle for the feature
+(`spec.md`, `plan.md`, `tasks.md` and a finalized `verification.yaml`), a
+reviewer that answers, and `gh` authenticated for the pull request.
+
 ```bash
-/auto-build my-feature          # in a session: writes automation.json, prints the driver command
-CCT_REVIEW_DIFF_MAX_LINES=4000 scripts/auto-build-loop.sh my-feature
+/auto-build my-feature      # in a session: scaffolds specs/my-feature/automation.json
 ```
 
-**Expect:** the driver admits the run, builds phase by phase, and opens a PR.
+`/auto-build` writes `"profile": "advisory"`, and **advisory publishes
+nothing** — it builds and reports. Choose what the run is allowed to do:
+`pr` pushes the branch and opens a PR, `merge` additionally arms gated
+auto-merge, and `unattended` is the profile that runs without you, which must
+be declared in `automation.json` and pass admission first:
+
+```bash
+scripts/validate-spec.sh --unattended --feature-id my-feature   # the admission bar
+CCT_REVIEW_DIFF_MAX_LINES=4000 scripts/auto-build-loop.sh my-feature --profile unattended
+```
+
+**Expect:** admission passes, the driver builds phase by phase under the caps
+in `automation.json`, and — on `pr`, `merge` or `unattended` — opens a pull
+request at the end.
 **Verify:** `session-analytics runs` (or the Studio's Runs tab) shows the run,
 its cost against the cap, and each phase's review verdict.
-**If not:** the ledger under `.cct/auto-build/<feature>/` says why it stopped —
-`termination.json` names the reason and `triage-report.md` says whether it can
-be resumed. See [unattended auto-build](docs/auto-build.md).
+**If not:** admission prints every failure rather than stopping at the first.
+Once a run has started, the ledger under `.cct/auto-build/<feature>/` says why
+it stopped — `termination.json` names the reason and `triage-report.md` says
+whether it can be resumed. See [unattended auto-build](docs/auto-build.md).
 
 ## Four-Phase Workflow
 
@@ -154,9 +183,10 @@ Sync updates commands and `.claude/` contents but never overwrites your
 
 ## Everything it does
 
-Maturity labels are defined in [feature maturity](docs/maturity.md); the full
-index with adapter support per feature is [docs/features.md](docs/features.md),
-or run `scripts/cct list`.
+Maturity labels are defined in [feature maturity](docs/maturity.md); a feature
+marked `unreleased` is on `master` only. The full index with adapter support
+per feature is [docs/features.md](docs/features.md), or run `scripts/cct list`
+**(master)**.
 
 <!-- GENERATED BLOCK — do not edit between the markers. Run scripts/generate-readme-inserts.sh
      after changing shared/features/catalog.yaml.
