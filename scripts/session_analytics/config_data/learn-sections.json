@@ -39,9 +39,22 @@
         "docs/auto-code-review-setup.md",
         "docs/features.md",
         "docs/maturity.md",
-        "docs/configuration-reference.md",
         "docs/shape-up-workflow.md",
         "docs/sdd-vs-code-copilot-team.md"
+      ]
+    },
+    {
+      "id": "guides",
+      "title": "Feature guides",
+      "kind": "doc",
+      "paths": [
+        "docs/spec-driven-development.md",
+        "docs/peer-review.md",
+        "docs/auto-build.md",
+        "docs/llm-routing.md",
+        "docs/project-templates.md",
+        "docs/configuration-reference.md",
+        "docs/repo-structure.md"
       ]
     },
     {

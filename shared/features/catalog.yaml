@@ -32,7 +32,7 @@ features:
       windsurf: advisory
       aider: advisory
     prerequisites: [git, jq]
-    guide: docs/sdd-vs-code-copilot-team.md
+    guide: docs/spec-driven-development.md
     commands: [origin-check]
     skills: [spec-workflow, origin-confirmation]
     capabilities: [workflow.sdd]
@@ -121,7 +121,7 @@ features:
       - an approved SDD bundle with automation.json
       - a gating reviewer that answers the readiness probe
       - gh authenticated for the PR
-    guide: shared/skills/auto-build-loop/SKILL.md
+    guide: docs/auto-build.md
     commands: [auto-build]
     skills: [auto-build-loop]
     capabilities: [workflow.sdd, workflow.phases, review.enforcement, verification.enforcement]
@@ -143,7 +143,7 @@ features:
       windsurf: unsupported
       aider: unsupported
     prerequisites: [auto-build]
-    guide: shared/skills/auto-build-loop/SKILL.md
+    guide: docs/auto-build.md
     skills: [auto-build-loop]
 
   - id: auto-build-coverage-contract
@@ -163,7 +163,7 @@ features:
       windsurf: unsupported
       aider: unsupported
     prerequisites: [auto-build]
-    guide: shared/skills/auto-build-loop/SKILL.md
+    guide: docs/auto-build.md
     skills: [auto-build-loop]
     capabilities: [verification.enforcement]
 
@@ -184,7 +184,7 @@ features:
       windsurf: unsupported
       aider: unsupported
     prerequisites: [auto-build]
-    guide: shared/skills/auto-build-loop/SKILL.md
+    guide: docs/auto-build.md
     skills: [auto-build-loop, infra-verification]
     capabilities: [verification.enforcement]
 
@@ -204,7 +204,7 @@ features:
       windsurf: unsupported
       aider: unsupported
     prerequisites: [auto-build, Playwright]
-    guide: shared/skills/auto-build-loop/SKILL.md
+    guide: docs/auto-build.md
     skills: [auto-build-loop, visual-review]
 
   - id: ralph-loop
@@ -242,7 +242,7 @@ features:
       github-copilot: advisory
       windsurf: advisory
       aider: advisory
-    guide: adapters/claude-code/docs/claude-config-guide.md
+    guide: docs/project-templates.md
     skills: [stack-constraints, environment-setup]
     capabilities: [config.layered]
 
@@ -362,7 +362,7 @@ features:
       windsurf: unsupported
       aider: unsupported
     prerequisites: [auto-build]
-    guide: shared/templates/routing/routing.toml.example
+    guide: docs/llm-routing.md
 
   - id: memkernel-memory
     title: MemKernel persistent memory

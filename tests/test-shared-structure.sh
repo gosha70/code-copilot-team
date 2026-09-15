@@ -848,74 +848,78 @@ for t in "${TEMPLATE_TYPES[@]}"; do
 done
 
 # ══════════════════════════════════════════════════════════════
-# 18. README claims — test-count lines are current
+# 18. Repo-structure claims — test-count lines are current
 # ══════════════════════════════════════════════════════════════
+#
+# The repo-layout tree moved out of the README into docs/repo-structure.md
+# in #214 Phase 3.1; the claims are pinned wherever the tree lives.
+TEST_COUNT_DOC="$REPO_DIR/docs/repo-structure.md"
 
 echo ""
-echo "=== README test-count claims ==="
+echo "=== repo-structure test-count claims ==="
 
 rc=0
-grep -Eq "test-hooks\\.sh[[:space:]]+${TEST_HOOKS_EXPECTED_PASS} hook tests" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists ${TEST_HOOKS_EXPECTED_PASS} hook tests" "$rc"
+grep -Eq "test-hooks\\.sh[[:space:]]+${TEST_HOOKS_EXPECTED_PASS} hook tests" "$TEST_COUNT_DOC" || rc=1
+assert_ok "repo structure lists ${TEST_HOOKS_EXPECTED_PASS} hook tests" "$rc"
 
 rc=0
-grep -Eq "test-generate\\.sh[[:space:]]+${TEST_GENERATE_EXPECTED_PASS} generation \\+ adapter tests" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists ${TEST_GENERATE_EXPECTED_PASS} generation + adapter tests" "$rc"
+grep -Eq "test-generate\\.sh[[:space:]]+${TEST_GENERATE_EXPECTED_PASS} generation \\+ adapter tests" "$TEST_COUNT_DOC" || rc=1
+assert_ok "repo structure lists ${TEST_GENERATE_EXPECTED_PASS} generation + adapter tests" "$rc"
 
 rc=0
-grep -Eq "test-shared-structure\\.sh[[:space:]]+${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure \\+ content tests" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists ${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure + content tests" "$rc"
+grep -Eq "test-shared-structure\\.sh[[:space:]]+${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure \\+ content tests" "$TEST_COUNT_DOC" || rc=1
+assert_ok "repo structure lists ${TEST_SHARED_STRUCTURE_EXPECTED_PASS} structure + content tests" "$rc"
 
 rc=0
-grep -Eq "test-sync\\.sh[[:space:]]+${TEST_SYNC_EXPECTED_PASS} sync \\+ init metadata tests" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists ${TEST_SYNC_EXPECTED_PASS} sync + init metadata tests" "$rc"
+grep -Eq "test-sync\\.sh[[:space:]]+${TEST_SYNC_EXPECTED_PASS} sync \\+ init metadata tests" "$TEST_COUNT_DOC" || rc=1
+assert_ok "repo structure lists ${TEST_SYNC_EXPECTED_PASS} sync + init metadata tests" "$rc"
 
 rc=0
-grep -Eq "test-peer-review\\.sh[[:space:]]+${TEST_PEER_REVIEW_EXPECTED_PASS} peer-review runner tests" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists ${TEST_PEER_REVIEW_EXPECTED_PASS} peer-review runner tests" "$rc"
+grep -Eq "test-peer-review\\.sh[[:space:]]+${TEST_PEER_REVIEW_EXPECTED_PASS} peer-review runner tests" "$TEST_COUNT_DOC" || rc=1
+assert_ok "repo structure lists ${TEST_PEER_REVIEW_EXPECTED_PASS} peer-review runner tests" "$rc"
 
 rc=0
-grep -Eq "test-review-loop\\.sh[[:space:]]+${TEST_REVIEW_LOOP_EXPECTED_PASS} review loop integration tests" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists ${TEST_REVIEW_LOOP_EXPECTED_PASS} review loop integration tests" "$rc"
+grep -Eq "test-review-loop\\.sh[[:space:]]+${TEST_REVIEW_LOOP_EXPECTED_PASS} review loop integration tests" "$TEST_COUNT_DOC" || rc=1
+assert_ok "repo structure lists ${TEST_REVIEW_LOOP_EXPECTED_PASS} review loop integration tests" "$rc"
 
 rc=0
-grep -Eq "test-auto-build-loop\\.sh[[:space:]]+${TEST_AUTO_BUILD_LOOP_EXPECTED_PASS} auto-build driver tests" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists ${TEST_AUTO_BUILD_LOOP_EXPECTED_PASS} auto-build driver tests" "$rc"
+grep -Eq "test-auto-build-loop\\.sh[[:space:]]+${TEST_AUTO_BUILD_LOOP_EXPECTED_PASS} auto-build driver tests" "$TEST_COUNT_DOC" || rc=1
+assert_ok "repo structure lists ${TEST_AUTO_BUILD_LOOP_EXPECTED_PASS} auto-build driver tests" "$rc"
 
 rc=0
-grep -Eq "test-ui-harness\\.sh[[:space:]]+${TEST_UI_HARNESS_EXPECTED_PASS} visual-harness contract tests" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists ${TEST_UI_HARNESS_EXPECTED_PASS} visual-harness contract tests" "$rc"
+grep -Eq "test-ui-harness\\.sh[[:space:]]+${TEST_UI_HARNESS_EXPECTED_PASS} visual-harness contract tests" "$TEST_COUNT_DOC" || rc=1
+assert_ok "repo structure lists ${TEST_UI_HARNESS_EXPECTED_PASS} visual-harness contract tests" "$rc"
 
 rc=0
-grep -Eq "test-setup-reviewer\\.sh[[:space:]]+${TEST_SETUP_REVIEWER_EXPECTED_PASS} copilot reviewer installer tests" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists ${TEST_SETUP_REVIEWER_EXPECTED_PASS} copilot reviewer installer tests" "$rc"
+grep -Eq "test-setup-reviewer\\.sh[[:space:]]+${TEST_SETUP_REVIEWER_EXPECTED_PASS} copilot reviewer installer tests" "$TEST_COUNT_DOC" || rc=1
+assert_ok "repo structure lists ${TEST_SETUP_REVIEWER_EXPECTED_PASS} copilot reviewer installer tests" "$rc"
 
 rc=0
-grep -Eq "docs/[[:space:]]+${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists ${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$rc"
+grep -Eq "docs/[[:space:]]+${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$TEST_COUNT_DOC" || rc=1
+assert_ok "repo structure lists ${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$rc"
 
 rc=0
 grep -Eq "rules/\*\.md[[:space:]]+.*Global rules" "$REPO_DIR/README.md" || rc=1
 assert_ok "README lists global rules" "$rc"
 
 rc=0
-grep -Eq "skills/[[:space:]]+24 skills" "$REPO_DIR/README.md" || rc=1
+grep -Eq "skills/[[:space:]]+24 skills" "$TEST_COUNT_DOC" || rc=1
 assert_ok "README lists 24 skills" "$rc"
 
 rc=0
-grep -Eq "templates/[[:space:]]+11 stacks" "$REPO_DIR/README.md" || rc=1
+grep -Eq "templates/[[:space:]]+11 stacks" "$TEST_COUNT_DOC" || rc=1
 assert_ok "README lists 11 template stacks" "$rc"
 
 rc=0
-grep -Eq "codex/.*5 skills" "$REPO_DIR/README.md" || rc=1
+grep -Eq "codex/.*5 skills" "$TEST_COUNT_DOC" || rc=1
 assert_ok "README lists 5 codex skills" "$rc"
 
 rc=0
-grep -Eq "\\.github/workflows/sync-check\\.yml[[:space:]]+CI: .*drift" "$REPO_DIR/README.md" || rc=1
+grep -Eq "\\.github/workflows/sync-check\\.yml[[:space:]]+CI: .*drift" "$TEST_COUNT_DOC" || rc=1
 assert_ok "README describes sync-check workflow as drift guard" "$rc"
 
 rc=0
-grep -Eq "\\.github/workflows/sync-check\\.yml[[:space:]]+CI: .*(full gate|gate verification)" "$REPO_DIR/README.md" || rc=1
+grep -Eq "\\.github/workflows/sync-check\\.yml[[:space:]]+CI: .*(full gate|gate verification)" "$TEST_COUNT_DOC" || rc=1
 assert_ok "README describes sync-check workflow as full gate verification" "$rc"
 
 rc=0
