@@ -34,6 +34,7 @@
       "title": "Start here",
       "kind": "doc",
       "paths": [
+        "docs/README.md",
         "README.md",
         "docs/developer-cookbook.md",
         "docs/auto-code-review-setup.md",
@@ -202,6 +203,7 @@
     "docs/dgx-spark/setup-cookbook.md": "DGX Spark — setup & cookbook (Ollama, vLLM, Open WebUI)",
     "docs/dgx-spark/vllm-qwen38.md": "DGX Spark + vLLM — Qwen3.8-27B operator manual",
     "docs/dgx-spark/runbook-qwen38.md": "DGX Spark — Qwen3.8-27B runbook (exact sequence)",
-    "docs/auto-code-review-setup.md": "Auto code review — setup cookbook"
+    "docs/auto-code-review-setup.md": "Auto code review — setup cookbook",
+    "docs/README.md": "Documentation — all of it, grouped"
   }
 }

@@ -238,6 +238,7 @@ and the comparison with other spec-driven tooling is in
 - **[Recommended MCP Servers](adapters/claude-code/docs/recommended-mcp-servers.md)** — Context7, PostgreSQL, Filesystem, and Playwright MCP setup
 
 **Shared (all tools):**
+- **[All documentation](docs/README.md)** — the landing page: every guide, grouped as the Studio groups them
 - **[Install Options](docs/install.md)** — every install path, per tool, and what each adapter writes
 - **[Configuration Layers](docs/configuration-layers.md)** — where each rule, skill, agent and hook is installed, and which layer wins
 - **[Configuration Reference](docs/configuration-reference.md)** — every setting the harness reads, by the file it lives in (generated)

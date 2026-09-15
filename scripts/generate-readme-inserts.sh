@@ -16,6 +16,9 @@
 #   enforcement-tiers  shared/features/catalog.yaml (the adapters field)
 #   choose-adapter     shared/features/catalog.yaml (adapters + maturity)
 #   feature-summary    shared/features/catalog.yaml (title, maturity, guide)
+#   docs-index         scripts/session_analytics/config_data/learn-sections.json
+#                      (the same allowlist the Studio's Learn tab reads, so the
+#                      docs landing page and Learn cannot disagree)
 #
 # Files scanned for blocks are listed in TARGETS below; a block name may
 # appear in exactly one of them.
@@ -34,12 +37,14 @@ TARGETS=(
   "$REPO_DIR/README.md"
   "$REPO_DIR/docs/configuration-layers.md"
   "$REPO_DIR/docs/maturity.md"
+  "$REPO_DIR/docs/README.md"
 )
 SKILLS_DIR="$REPO_DIR/shared/skills"
 AGENTS_DIR="$REPO_DIR/adapters/claude-code/.claude/agents"
 HOOKS_DIR="$REPO_DIR/adapters/claude-code/.claude/hooks"
 SETUP="$REPO_DIR/adapters/claude-code/setup.sh"
 FEATURES="$REPO_DIR/shared/features/catalog.yaml"
+LEARN="$REPO_DIR/scripts/session_analytics/config_data/learn-sections.json"
 DESC_WIDTH=62
 
 die() { echo "[ERROR] $*" >&2; exit 1; }
@@ -230,11 +235,99 @@ render_feature_summary() {
   ' "$FEATURES"
 }
 
+# The docs landing page, grouped exactly as the Studio groups them: the Learn
+# registry is the allowlist of what may be served, so reading it here keeps the
+# page and the app from disagreeing about what documentation exists.
+render_docs_index() {
+  [[ -f "$LEARN" ]] || die "$LEARN not found"
+  python3 - "$LEARN" "$REPO_DIR" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+registry_path, repo = sys.argv[1], Path(sys.argv[2])
+registry = json.loads(Path(registry_path).read_text(encoding="utf-8"))
+titles = registry.get("titles", {})
+sections = [s for s in registry.get("sections", []) if s.get("paths")]
+if not sections:
+    print("[ERROR] no path-listed sections in the Learn registry", file=sys.stderr)
+    raise SystemExit(1)
+
+def title_of(rel: str) -> str:
+    if rel in titles:
+        return titles[rel]
+    text = (repo / rel).read_text(encoding="utf-8") if (repo / rel).is_file() else ""
+    for line in text.split("\n"):
+        if line.startswith("# "):
+            return re.sub(r"\s+", " ", line[2:]).strip()
+    return Path(rel).stem.replace("-", " ").title()
+
+def lead_of(rel: str) -> str:
+    """First prose sentence of a page, or a note that it is generated.
+
+    Fenced code has to be tracked, not merely skipped line by line: a shell
+    comment inside a fence reads exactly like a markdown heading, and the
+    README's first fence opens with `# 1. Clone the latest stable release`.
+    """
+    path = repo / rel
+    if not path.is_file():
+        return ""
+    body = path.read_text(encoding="utf-8").split("\n")
+    if any("GENERATED — do not edit" in line for line in body[:10]):
+        return "generated from its sources; edit the source, not the page"
+    in_fence = in_comment = False
+    open_tags = 0
+    for line in body:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if "<!--" in stripped:
+            in_comment = "-->" not in stripped
+            continue
+        if in_comment:
+            in_comment = "-->" not in stripped
+            continue
+        # An HTML element can span lines, and its text content is markup, not
+        # the page's lead: the README's title is an <h1> block whose middle
+        # lines are attributes and whose text is the project name. Track open
+        # elements by name and skip everything until they close.
+        opened = len([t for t in re.findall(r"<([a-zA-Z][a-zA-Z0-9]*)(?=[\s/>])[^>]*>", line)
+                      if not re.search(rf"<{t}[^>]*/>", line)])
+        closed = len(re.findall(r"</[a-zA-Z][a-zA-Z0-9]*>", line))
+        was_open = open_tags
+        open_tags = max(0, open_tags + opened - closed)
+        if was_open or opened or closed:
+            continue
+        if not stripped or stripped.startswith((">", "#", "|", "<", "!", "-", "*", "_", "=")):
+            continue
+        sentence = re.split(r"(?<=[.;])\s", re.sub(r"\s+", " ", stripped))[0]
+        return sentence.rstrip(".")
+    return ""
+
+out = []
+for section in sections:
+    out.append(f"### {section['title']}")
+    out.append("")
+    for rel in section["paths"]:
+        if not (repo / rel).is_file():
+            print(f"[ERROR] the Learn registry lists a file that does not exist: {rel}", file=sys.stderr)
+            raise SystemExit(1)
+        href = rel[len("docs/"):] if rel.startswith("docs/") else "../" + rel
+        lead = lead_of(rel)
+        out.append(f"- [{title_of(rel)}]({href})" + (f" — {lead}" if lead else ""))
+    out.append("")
+print("\n".join(out).rstrip())
+PY
+}
+
 render_block() {
   case "$1" in
     config-layers)     render_config_layers ;;
     enforcement-tiers) render_enforcement_tiers ;;
     choose-adapter)    render_choose_adapter ;;
+    docs-index)        render_docs_index ;;
     feature-summary)   render_feature_summary ;;
     *) die "unknown block: $1" ;;
   esac

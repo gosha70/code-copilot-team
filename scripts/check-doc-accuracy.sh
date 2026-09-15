@@ -97,6 +97,21 @@ check "codex skills (install guide)"            "$r_codex"         "$CODEX_SKILL
 # could ship unlisted (agent-teams.md and hooks-test-cases.md both did until
 # #214 Phase 2.2). The index itself stays hand-curated — its one-line
 # descriptions are editorial — but every file has to appear in it.
+# Every guide under docs/ must be reachable from the landing page, which is
+# rendered from the Learn registry — so an unregistered guide is invisible in
+# both the docs tree and the Studio (#214 Phase 3.3).
+echo "check-doc-accuracy: docs landing page"
+for doc in docs/*.md; do
+    [[ -e "$doc" ]] || continue
+    [[ "$doc" == "docs/README.md" ]] && continue
+    name="${doc#docs/}"
+    if grep -qF "($name)" docs/README.md; then
+        ok "listed on the landing page: $doc"
+    else
+        fail "$doc ships but the docs landing page does not list it — add it to the Learn registry"
+    fi
+done
+
 echo "check-doc-accuracy: documentation index"
 for doc in adapters/claude-code/docs/*.md shared/docs/*.md; do
     [[ -e "$doc" ]] || continue
