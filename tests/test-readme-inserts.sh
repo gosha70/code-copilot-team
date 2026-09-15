@@ -12,6 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 GEN="$REPO_DIR/scripts/generate-readme-inserts.sh"
 README="$REPO_DIR/README.md"
+LAYERS="$REPO_DIR/docs/configuration-layers.md"
+MATURITY="$REPO_DIR/docs/maturity.md"
 SETUP="$REPO_DIR/adapters/claude-code/setup.sh"
 PASS=0
 FAIL=0
@@ -32,10 +34,18 @@ echo "=== README generated blocks ==="
 # ── the committed README ─────────────────────────────────────
 assert "generator is executable" "[[ -x '$GEN' ]]"
 assert "committed blocks are current" "bash '$GEN' --check >/dev/null 2>&1"
-for m in "generated:begin config-layers" "generated:end config-layers" \
-         "generated:begin enforcement-tiers" "generated:end enforcement-tiers"; do
-  assert "marker present: $m" "grep -qF '<!-- $m -->' '$README'"
+# Each block lives in exactly one file (#214 Phase 3.2 moved two of them out
+# of the README): the front door carries the short forms, the guides the detail.
+assert "README carries the choose-adapter block" "grep -qF '<!-- generated:begin choose-adapter -->' '$README'"
+assert "README carries the feature-summary block" "grep -qF '<!-- generated:begin feature-summary -->' '$README'"
+assert "the configuration-layers guide carries its block" "grep -qF '<!-- generated:begin config-layers -->' '$LAYERS'"
+assert "the maturity guide carries the enforcement tiers" "grep -qF '<!-- generated:begin enforcement-tiers -->' '$MATURITY'"
+for f in "$README" "$LAYERS" "$MATURITY"; do
+  b=$(grep -c '<!-- generated:begin' "$f"); e=$(grep -c '<!-- generated:end' "$f")
+  assert "$(basename "$f"): every block is closed" "[[ '$b' == '$e' ]]"
 done
+assert "no block name appears in two files" \
+  "[[ \$(cat '$README' '$LAYERS' '$MATURITY' | grep -o '<!-- generated:begin [a-z-]*' | sort | uniq -d | wc -l) -eq 0 ]]"
 
 OUT="$(bash "$GEN" --stdout)"
 
@@ -46,14 +56,14 @@ ONDEMAND=$((SKILLS - RULES))
 AGENTS=$(find "$REPO_DIR/adapters/claude-code/.claude/agents" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')
 HOOKS=$(find "$REPO_DIR/adapters/claude-code/.claude/hooks" -maxdepth 1 -name '*.sh' | wc -l | tr -d ' ')
 
-assert "rules headline counts the ALWAYS_RULES list ($RULES)" "grep -q 'always loaded, $RULES files' <<<\"\$OUT\""
-assert "skills headline counts the on-demand skills ($ONDEMAND)" "grep -q 'SKILL.md format, $ONDEMAND skills' <<<\"\$OUT\""
-assert "agents headline counts the agent files ($AGENTS)" "grep -q 'utility agents ($AGENTS files)' <<<\"\$OUT\""
-assert "hooks headline counts the hook scripts ($HOOKS)" "grep -q 'always active, $HOOKS files' <<<\"\$OUT\""
+assert "rules headline counts the ALWAYS_RULES list ($RULES)" "grep -q 'always loaded, $RULES files' '$LAYERS'"
+assert "skills headline counts the on-demand skills ($ONDEMAND)" "grep -q 'SKILL.md format, $ONDEMAND skills' '$LAYERS'"
+assert "agents headline counts the agent files ($AGENTS)" "grep -q 'utility agents ($AGENTS files)' '$LAYERS'"
+assert "hooks headline counts the hook scripts ($HOOKS)" "grep -q 'always active, $HOOKS files' '$LAYERS'"
 
 # The headline used to disagree with the list beneath it: the README claimed
 # 20 on-demand skills and named 15. Every source file must now appear.
-BLOCK="$(awk '/generated:begin config-layers/,/generated:end config-layers/' <<<"$OUT")"
+BLOCK="$(awk '/generated:begin config-layers/,/generated:end config-layers/' "$LAYERS")"
 missing=0
 # An always-rule appears as "<name>.md" under rules/, an on-demand skill as
 # "<name>/" under skills/ — either form counts as listed.
@@ -68,7 +78,7 @@ assert "every rule, skill, agent and hook appears in the tree" "[[ $missing -eq 
 assert "every tree entry carries a description" "! grep -qE '^  (├──|└──) [^ ]+ +$' <<<\"\$BLOCK\""
 
 # ── the tiers table comes from the feature catalog ───────────
-TIERS="$(awk '/generated:begin enforcement-tiers/,/generated:end enforcement-tiers/' <<<"$OUT")"
+TIERS="$(awk '/generated:begin enforcement-tiers/,/generated:end enforcement-tiers/' "$MATURITY")"
 for a in $(find "$REPO_DIR/adapters" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort); do
   assert "tiers table has a row for $a" "grep -q '| \`$a\` |' <<<\"\$TIERS\""
 done
@@ -76,8 +86,8 @@ assert "claude-code is Enforced" "grep -q '| \`claude-code\` | \*\*Enforced\*\* 
 assert "an adapter with no enforced feature is Advisory" "grep -q '| \`cursor\` | Advisory |' <<<\"\$TIERS\""
 
 # ── drift is detected, not silently absorbed ─────────────────
-cp "$README" "$TMP/README.bak"
-python3 - "$README" <<'PY'
+cp "$LAYERS" "$TMP/layers.bak"
+python3 - "$LAYERS" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p).read()
@@ -85,7 +95,7 @@ s = s.replace("always loaded, 4 files", "always loaded, 99 files", 1)
 open(p, "w").write(s)
 PY
 RC=0; bash "$GEN" --check >/dev/null 2>&1 || RC=$?
-cp "$TMP/README.bak" "$README"
+cp "$TMP/layers.bak" "$LAYERS"
 assert "--check fails on an edited block (exit 1)" "[[ '$RC' == '1' ]]"
 
 # A hook with no description must fail the render, not produce a blank row.
@@ -94,6 +104,31 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$REPO_DIR/adapters/claude-code/.claude
 RC=0; bash "$GEN" --stdout >/dev/null 2>&1 || RC=$?
 rm -f "$REPO_DIR/adapters/claude-code/.claude/hooks/zz-undocumented.sh"
 assert "an undescribed hook fails the render (exit 1)" "[[ '$RC' == '1' ]]"
+
+# ── the front door's two blocks ──────────────────────────────
+CHOOSE="$(awk '/generated:begin choose-adapter/,/generated:end choose-adapter/' "$README")"
+SUMMARY="$(awk '/generated:begin feature-summary/,/generated:end feature-summary/' "$README")"
+N_FEATURES=$(ruby -ryaml -e 'puts YAML.load_file(ARGV[0])["features"].size' "$REPO_DIR/shared/features/catalog.yaml")
+assert "every feature has a summary bullet" "[[ \$(grep -c '^- \*\*' <<<\"\$SUMMARY\") -eq $N_FEATURES ]]"
+assert "non-stable features carry their maturity" "grep -q '_(beta)_' <<<\"\$SUMMARY\""
+for a in $(find "$REPO_DIR/adapters" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort); do
+  assert "choose-adapter row for $a" "grep -q '| \`$a\` |' <<<\"\$CHOOSE\""
+  assert "choose-adapter install flag for $a exists in setup.sh" \
+    "grep -qE '^[[:space:]]*--$a\)' '$REPO_DIR/scripts/setup.sh'"
+done
+# A flag the installer does not accept must fail the render, not ship a
+# command that errors: the hand-kept map shipped --copilot for --github-copilot.
+cp "$REPO_DIR/scripts/setup.sh" "$TMP/setup.bak"
+python3 - "$REPO_DIR/scripts/setup.sh" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("    --aider)            TOOLS+=(\"aider\"); shift ;;\n", "", 1)
+open(p, "w").write(s)
+PY
+RC=0; bash "$GEN" --stdout >/dev/null 2>&1 || RC=$?
+cp "$TMP/setup.bak" "$REPO_DIR/scripts/setup.sh"
+assert "an adapter with no installer flag fails the render" "[[ '$RC' == '1' ]]"
 
 # ── one source for the always-rules list ─────────────────────
 assert "ALWAYS_RULES is assigned once in setup.sh" "[[ \$(grep -c '^ALWAYS_RULES=' '$SETUP') -eq 1 ]]"

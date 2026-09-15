@@ -547,3 +547,61 @@ in-wiki decision record.
   + [`wiki/workflows/promote-lesson-to-wiki.md`](wiki/workflows/promote-lesson-to-wiki.md)
 - **Just want to lint?** → `bash knowledge/wiki/scripts/lint-wiki.sh`
 - **Curious about the rules?** → [`wiki/schema/`](wiki/schema/)
+
+---
+
+## The `wiki` CLI at a glance
+
+_Moved here from the project README in #214 Phase 3.2, so the operator
+docs and the command surface live together._
+
+`code-copilot-team` ships a Karpathy-pattern LLM Wiki maintainer that
+turns `knowledge/raw/` into a curated, cited, agent-readable markdown
+layer under `knowledge/wiki/`. Five operations, one CLI:
+
+```bash
+./scripts/wiki ingest <source>          # multi-page write plan against existing wiki state
+./scripts/wiki promote <proposal-dir>   # atomic apply (only writer to the canonical wiki content tree, excluding .audit/)
+./scripts/wiki query "<question>"       # index-first synthesis with citations
+./scripts/wiki query --file-back "..."  # round-trip the answer back into a patch-set
+./scripts/wiki lint                     # structural lint (frontmatter, links, slugs)
+./scripts/wiki lint --health [--strict] # knowledge-health (contradictions, stale claims, weak orphans, missing cross-links)
+./scripts/wiki audit-flush              # commit pending ingest-log lines (reject-only durability)
+./scripts/wiki audit-flush --dry-run    # report count + blob SHA without committing
+```
+
+**Human approval is always gating, and the source-control boundary
+is explicit: the wiki is source-controlled, the proposal workspace
+is not.** `wiki ingest` writes draft proposals to a local-only
+`doc_internal/proposals/` directory (gitignored — proposals are
+working drafts, not canonical state). `wiki promote` is the only
+operation that writes to the canonical `knowledge/wiki/` content tree;
+`wiki ingest` has one additional tracked write: appending to the
+append-only `knowledge/wiki/.audit/ingest-log.md` audit ledger. The
+audit trail under `knowledge/wiki/.audit/` records every `wiki ingest`
+decision (timestamp, source SHA, backend, disposition, reason) in
+`ingest-log.md`, and every accepted proposal's original LLM draft in
+`knowledge/wiki/.audit/proposals/<date>-<slug>/` (applied atomically
+by `wiki promote`). `wiki audit-flush` (shipped in
+[gosha70/code-copilot-team#37](https://github.com/gosha70/code-copilot-team/issues/37))
+closes the reject-only durability gap: run it after a reject-only session
+to commit any pending audit lines in a focused `audit: flush N pending
+ingest-log line(s)` commit. Promotion
+history is traceable via git on `knowledge/wiki/` plus
+`knowledge/wiki/log.md`.
+
+The CLI auto-detects an installed copilot backend in the order
+`claude → codex → cursor`. Override with `--backend <name>` or
+`WIKI_INGEST_BACKEND=<name>`. Use `--backend test` for the
+deterministic stub backend (no LLM call; this is what CI uses).
+
+For the v1 single-source flow, the legacy invocation
+`./scripts/wiki-ingest <source>` is preserved as a backwards-compat
+alias.
+
+### Operator docs
+
+- Full operator workflow: [`knowledge/README.md`](README.md) §5e.
+- Workflow page: [`knowledge/wiki/workflows/run-wiki-ingest.md`](wiki/workflows/run-wiki-ingest.md).
+- Design rationale: [`specs/wiki-ingest-pipeline/spec.md`](../specs/wiki-ingest-pipeline/spec.md).
+- Schema: [`knowledge/wiki/schema/`](wiki/schema/) — page types, ingest rules, citation rules, lint rules, curator persona.

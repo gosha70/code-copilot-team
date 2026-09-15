@@ -899,8 +899,8 @@ grep -Eq "docs/[[:space:]]+${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" 
 assert_ok "repo structure lists ${DOCS_EXPECTED_COUNT} tool-agnostic reference docs" "$rc"
 
 rc=0
-grep -Eq "rules/\*\.md[[:space:]]+.*Global rules" "$REPO_DIR/README.md" || rc=1
-assert_ok "README lists global rules" "$rc"
+grep -Eq "rules/\*\.md[[:space:]]+.*Global rules" "$REPO_DIR/docs/configuration-layers.md" || rc=1
+assert_ok "configuration layers lists global rules" "$rc"
 
 rc=0
 grep -Eq "skills/[[:space:]]+24 skills" "$TEST_COUNT_DOC" || rc=1
@@ -923,47 +923,48 @@ grep -Eq "\\.github/workflows/sync-check\\.yml[[:space:]]+CI: .*(full gate|gate 
 assert_ok "README describes sync-check workflow as full gate verification" "$rc"
 
 rc=0
-grep -q '^## Supported Tools' "$REPO_DIR/README.md" || rc=1
-assert_ok "README has Supported Tools section" "$rc"
+INSTALL_DOC="$REPO_DIR/docs/install.md"
+grep -q '^## What each adapter writes' "$INSTALL_DOC" || rc=1
+assert_ok "install guide has the adapter-output table" "$rc"
 
 README_SUPPORTED_TOOLS_SECTION=$(
   awk '
-    /^## Supported Tools/ {in_section=1; next}
+    /^## What each adapter writes/ {in_section=1; next}
     /^## / && in_section {exit}
     in_section {print}
-  ' "$REPO_DIR/README.md"
+  ' "$INSTALL_DOC"
 )
 
 SUPPORTED_TOOLS_ROW_COUNT=$(echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Ec '^\| \*\*[^|]+\*\* \|')
-assert_eq "README supported-tools table lists 7 tools" "7" "$SUPPORTED_TOOLS_ROW_COUNT"
+assert_eq "install guide lists 7 adapters" "7" "$SUPPORTED_TOOLS_ROW_COUNT"
 
 rc=0
 echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Claude Code** | agents, hooks, commands, settings | `~/.claude/` (global) |' || rc=1
-assert_ok "README supported-tools includes Claude Code row" "$rc"
+assert_ok "install guide includes Claude Code row" "$rc"
 
 rc=0
 echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Pi** | enforcement runtime extension + skills/prompts | `pi install` (advisory) / `pi-code` (enforced) |' || rc=1
-assert_ok "README supported-tools includes Pi row" "$rc"
+assert_ok "install guide includes Pi row" "$rc"
 
 rc=0
 echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **OpenAI Codex** | `AGENTS.md` + 5 skills | `~/.codex/` (global) |' || rc=1
-assert_ok "README supported-tools includes OpenAI Codex row" "$rc"
+assert_ok "install guide includes OpenAI Codex row" "$rc"
 
 rc=0
 echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Cursor** | `.mdc` files with frontmatter | `project/.cursor/rules/` |' || rc=1
-assert_ok "README supported-tools includes Cursor row" "$rc"
+assert_ok "install guide includes Cursor row" "$rc"
 
 rc=0
 echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **GitHub Copilot** | `copilot-instructions.md` + per-rule instructions | `project/.github/` |' || rc=1
-assert_ok "README supported-tools includes GitHub Copilot row" "$rc"
+assert_ok "install guide includes GitHub Copilot row" "$rc"
 
 rc=0
 echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Windsurf** | `rules.md` | `project/.windsurf/rules/` |' || rc=1
-assert_ok "README supported-tools includes Windsurf row" "$rc"
+assert_ok "install guide includes Windsurf row" "$rc"
 
 rc=0
 echo "$README_SUPPORTED_TOOLS_SECTION" | grep -Fq '| **Aider** | `CONVENTIONS.md` | `project/` |' || rc=1
-assert_ok "README supported-tools includes Aider row" "$rc"
+assert_ok "install guide includes Aider row" "$rc"
 
 README_SHARED_DOC_UNIQUE_COUNT=$(grep -Eo 'shared/docs/[A-Za-z0-9._-]+\.md' "$REPO_DIR/README.md" | sort -u | wc -l | tr -d ' ')
 assert_eq "README has ${DOCS_EXPECTED_COUNT} unique shared docs links" "$DOCS_EXPECTED_COUNT" "$README_SHARED_DOC_UNIQUE_COUNT"
