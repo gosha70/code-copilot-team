@@ -72,7 +72,9 @@ CODEX_SKILLS=$(find adapters/codex -name SKILL.md | wc -l | tr -d ' ')
 [[ "$ALWAYS_RULES" -gt 0 ]] || { echo "could not read the ALWAYS_RULES assignment in adapters/claude-code/setup.sh" >&2; exit 2; }
 
 # ── README claims ──
-r_shared=$(grab '[0-9]+ skills \(SKILL\.md format, open Agent Skills spec\)' README.md)
+# The repo-layout tree moved to docs/repo-structure.md in #214 Phase 3.1;
+# the claim is pinned wherever it lives, not wherever it used to.
+r_shared=$(grab '[0-9]+ skills \(SKILL\.md format, open Agent Skills spec\)' docs/repo-structure.md)
 r_rules=$(grab '[0-9]+ global rules' README.md)
 r_ondemand=$(grab '[0-9]+ on-demand skills' README.md)
 r_utility=$(grab 'plus [0-9]+ utility agents' README.md)
